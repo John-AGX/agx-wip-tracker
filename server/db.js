@@ -510,6 +510,51 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_attachments_tags
       ON attachments USING gin (tags jsonb_path_ops);
 
+    -- Editable vector annotations (Phase 1.7). Stores the strokes
+    -- array the markup viewer produces — arrows, text, polylines,
+    -- measurements, etc. — directly on the original attachment row.
+    -- Replaces the previous "rasterize-to-PNG-as-new-attachment"
+    -- pattern. The image stays untouched; the strokes ride alongside
+    -- and can be edited indefinitely. Rasterization only happens at
+    -- report-generation time.
+    --
+    -- Shape (per stroke): { tool, color, lineWidth, startX, startY,
+    --   endX, endY } for shapes; { tool: 'text', x, y, text, fontPx }
+    --   for text; { tool: 'sticker', kind, x, y, size } for stickers;
+    --   { tool: 'measure', ..., measureInches, measureLabel } for
+    --   dimensions. GIN index supports future queries like "find
+    --   photos with measurement strokes".
+    ALTER TABLE attachments ADD COLUMN IF NOT EXISTS annotations JSONB NOT NULL DEFAULT '[]'::jsonb;
+    CREATE INDEX IF NOT EXISTS idx_attachments_annotations
+      ON attachments USING gin (annotations);
+
+    -- Org-level tag catalog (Phase 1.7). Curated master list of tag
+    -- names per organization so users don't retype "roof" / "gutter"
+    -- / "fascia" on every project. The catalog is a hint registry —
+    -- attachments still store tag STRINGS in their JSONB array (no
+    -- FK), but autocomplete is seeded from this table and admins
+    -- can rename / merge / archive globally.
+    --
+    -- use_count is bumped every time a tag string is added to an
+    -- attachment (route-side, best-effort). Drives the
+    -- "most-used first" autocomplete ordering.
+    CREATE TABLE IF NOT EXISTS org_tags (
+      id              BIGSERIAL PRIMARY KEY,
+      organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      name            TEXT NOT NULL,
+      hue             INTEGER,
+      use_count       INTEGER NOT NULL DEFAULT 0,
+      archived_at     TIMESTAMPTZ,
+      created_by      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (organization_id, name)
+    );
+    CREATE INDEX IF NOT EXISTS idx_org_tags_org
+      ON org_tags(organization_id) WHERE archived_at IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_org_tags_use_count
+      ON org_tags(organization_id, use_count DESC) WHERE archived_at IS NULL;
+
     -- Extend the entity_type enum to support clients (business-card photos,
     -- W9s, COIs, etc. attached to a parent management company or property).
     -- The CHECK constraint is named implicitly so we have to drop and re-add

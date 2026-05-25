@@ -228,6 +228,25 @@
     }
   };
 
+  // Org-level tag catalog (Phase 1.7). Curated master list of tag
+  // names per organization — feeds autocomplete across all surfaces.
+  var orgTags = {
+    list: function(opts) {
+      opts = opts || {};
+      var qs = [];
+      if (opts.q) qs.push('q=' + encodeURIComponent(opts.q));
+      if (opts.include_archived) qs.push('include_archived=1');
+      return get('/api/org-tags' + (qs.length ? '?' + qs.join('&') : ''));
+    },
+    suggest: function(q) {
+      var qs = q ? '?q=' + encodeURIComponent(q) : '';
+      return get('/api/org-tags/suggest' + qs);
+    },
+    create: function(payload) { return post('/api/org-tags', payload); },
+    update: function(id, payload) { return patch('/api/org-tags/' + encodeURIComponent(id), payload); },
+    merge: function(payload) { return post('/api/org-tags/merge', payload); }
+  };
+
   var leads = {
     list: function(query) {
       var qs = '';
@@ -471,7 +490,7 @@
 
   window.p86Api = {
     get: get, put: put, post: post, del: del, patch: patch,
-    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, qbCosts: qbCosts, subs: subsApi, schedule: schedule, adminSms: adminSms, messages: messages, weather: weather, projects: projects,
+    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, qbCosts: qbCosts, subs: subsApi, schedule: schedule, adminSms: adminSms, messages: messages, weather: weather, projects: projects, orgTags: orgTags,
     isOffline: isOffline,
     isAuthenticated: function() { return !!getToken() && !isOffline(); }
   };

@@ -46,6 +46,7 @@ const fieldToolsRoutes = require('./routes/field-tools-routes');
 const payloadRoutes = require('./routes/payload-routes');
 const projectRoutes = require('./routes/project-routes');
 const projectPairsRoutes = require('./routes/project-pairs-routes');
+const orgTagsRoutes = require('./routes/org-tags-routes');
 const { storage } = require('./storage');
 
 const app = express();
@@ -105,6 +106,7 @@ app.use('/api/leads', leadRoutes);
 // on the pairs router exposes :projectId from this prefix.
 app.use('/api/projects/:projectId/pairs', projectPairsRoutes);
 app.use('/api/projects', projectRoutes);
+app.use('/api/org-tags', orgTagsRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/attachments', attachmentRoutes);
 // Sessions sidebar routes mount BEFORE the catch-all aiRoutes so they

@@ -96,18 +96,51 @@
 
     function render() {
       var att = attachments[idx];
+      var hasAnnotations = Array.isArray(att.annotations) && att.annotations.length > 0;
       overlay.innerHTML =
         '<button data-lb="close" title="Close (Esc)" style="position:absolute;top:14px;right:18px;background:rgba(255,255,255,0.1);color:#fff;border:1px solid rgba(255,255,255,0.2);border-radius:6px;width:36px;height:36px;font-size:18px;cursor:pointer;">&times;</button>' +
         (attachments.length > 1 ? '<button data-lb="prev" title="Previous (←)" style="position:absolute;left:18px;top:50%;transform:translateY(-50%);background:rgba(255,255,255,0.1);color:#fff;border:1px solid rgba(255,255,255,0.2);border-radius:6px;width:44px;height:64px;font-size:24px;cursor:pointer;">&lsaquo;</button>' : '') +
         (attachments.length > 1 ? '<button data-lb="next" title="Next (→)" style="position:absolute;right:18px;top:50%;transform:translateY(-50%);background:rgba(255,255,255,0.1);color:#fff;border:1px solid rgba(255,255,255,0.2);border-radius:6px;width:44px;height:64px;font-size:24px;cursor:pointer;">&rsaquo;</button>' : '') +
         '<div style="max-width:95%;max-height:88%;display:flex;flex-direction:column;align-items:center;gap:12px;">' +
-          '<img src="' + escapeAttr(att.web_url) + '" alt="' + escapeAttr(att.filename) + '" style="max-width:100%;max-height:78vh;object-fit:contain;border-radius:8px;background:#000;" />' +
+          '<div style="position:relative;display:inline-flex;max-width:100%;max-height:78vh;">' +
+            '<img id="p86-lb-img" src="' + escapeAttr(att.web_url) + '" alt="' + escapeAttr(att.filename) + '" style="max-width:100%;max-height:78vh;object-fit:contain;border-radius:8px;background:#000;display:block;" />' +
+            // Annotation overlay canvas — sized to match the rendered
+            // image. Pointer-events disabled so prev/next click still
+            // works on the corners. Only present when annotations exist.
+            (hasAnnotations
+              ? '<canvas id="p86-lb-anno" style="position:absolute;inset:0;width:100%;height:100%;border-radius:8px;pointer-events:none;"></canvas>'
+              : '') +
+          '</div>' +
           '<div style="display:flex;align-items:center;gap:14px;color:#ddd;font-size:12px;font-family:Arial,sans-serif;">' +
-            '<div>' + escapeHTMLLocal(att.filename) + ' &middot; ' + fmtBytes(att.size_bytes) + (att.width && att.height ? ' &middot; ' + att.width + '×' + att.height : '') + '</div>' +
+            '<div>' + escapeHTMLLocal(att.filename) + ' &middot; ' + fmtBytes(att.size_bytes) + (att.width && att.height ? ' &middot; ' + att.width + '×' + att.height : '') +
+              (hasAnnotations ? ' &middot; ' + att.annotations.length + ' annotation' + (att.annotations.length === 1 ? '' : 's') : '') +
+            '</div>' +
             '<a href="' + escapeAttr(att.original_url) + '" download="' + escapeAttr(att.filename) + '" target="_blank" style="background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);color:#fff;border-radius:6px;padding:6px 12px;text-decoration:none;font-size:11px;">&#x2B07; Download original</a>' +
             '<div style="color:#888;">' + (idx + 1) + ' / ' + attachments.length + '</div>' +
           '</div>' +
         '</div>';
+
+      // Mount the annotation overlay AFTER the img loads so we can
+      // size the canvas to the image's natural dimensions and have
+      // the strokes line up exactly. Strokes were drawn against the
+      // photo at full resolution; we need to render at that scale
+      // and let CSS scale the canvas (along with the img) for
+      // display.
+      if (hasAnnotations) {
+        var img = overlay.querySelector('#p86-lb-img');
+        var canvas = overlay.querySelector('#p86-lb-anno');
+        function paintAnno() {
+          if (!img || !canvas) return;
+          canvas.width = img.naturalWidth || 1;
+          canvas.height = img.naturalHeight || 1;
+          var ctx = canvas.getContext('2d');
+          if (window.p86AnnotationRender && typeof window.p86AnnotationRender.renderAll === 'function') {
+            window.p86AnnotationRender.renderAll(ctx, att.annotations);
+          }
+        }
+        if (img.complete && img.naturalWidth) paintAnno();
+        else img.addEventListener('load', paintAnno, { once: true });
+      }
     }
 
     function next() { idx = (idx + 1) % attachments.length; render(); }

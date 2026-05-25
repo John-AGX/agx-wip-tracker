@@ -36,6 +36,92 @@ function recordProjectActivity(projectId, actorId, kind, detail) {
   }
 }
 
+// Bump the org_tags catalog every time a tag string is added to an
+// attachment. Idempotent via the (organization_id, name) UNIQUE
+// constraint — INSERT ... ON CONFLICT DO UPDATE bumps use_count for
+// existing rows. Best-effort; failures are logged but don't block
+// the tag write that triggered them.
+async function upsertOrgTags(orgId, tagNames, actorUserId) {
+  if (!orgId || !Array.isArray(tagNames) || !tagNames.length) return;
+  // Dedupe + clean inside this function so callers don't have to.
+  const seen = new Set();
+  const clean = [];
+  for (let i = 0; i < tagNames.length; i++) {
+    const v = tagNames[i];
+    if (typeof v !== 'string') continue;
+    const c = v.trim().toLowerCase().slice(0, 32);
+    if (!c || seen.has(c)) continue;
+    seen.add(c);
+    clean.push(c);
+  }
+  if (!clean.length) return;
+  // Single multi-row INSERT for efficiency.
+  const placeholders = clean.map(function(_, i) {
+    return '($1, $' + (i + 3) + ', $2)';
+  }).join(', ');
+  const params = [orgId, actorUserId || null].concat(clean);
+  try {
+    await pool.query(
+      'INSERT INTO org_tags (organization_id, created_by, name) VALUES ' +
+      placeholders +
+      ' ON CONFLICT (organization_id, name) DO UPDATE ' +
+      '   SET use_count = org_tags.use_count + 1, updated_at = NOW()',
+      params
+    );
+  } catch (e) {
+    console.warn('[attachments] org_tags upsert failed:', e.message);
+  }
+}
+// Resolve the org id for an attachment by sniffing its entity. Used
+// in PATCH/POST/bulk-tag so we can route tag writes into the
+// caller's org catalog. Returns null when no org can be inferred
+// (e.g., legacy rows or system-level uploads).
+async function resolveAttachmentOrg(req) {
+  return req.user && req.user.organization_id ? Number(req.user.organization_id) : null;
+}
+
+// Normalize a tags-input from form-data or JSON body. Accepts:
+//   - Array of strings (best — JSON body)
+//   - JSON-stringified array (form-data field)
+//   - Comma-separated string (mobile fallback)
+// Returns a deduped lowercase array, max 20 entries of 32 chars.
+function normalizeTagsInput(raw) {
+  let arr = [];
+  if (Array.isArray(raw)) arr = raw;
+  else if (typeof raw === 'string' && raw) {
+    const trimmed = raw.trim();
+    if (trimmed.startsWith('[')) {
+      try { arr = JSON.parse(trimmed); } catch (e) { arr = []; }
+    } else {
+      arr = trimmed.split(',');
+    }
+  }
+  const seen = new Set();
+  const out = [];
+  for (let i = 0; i < arr.length && out.length < 20; i++) {
+    const v = arr[i];
+    if (typeof v !== 'string') continue;
+    const c = v.trim().toLowerCase().slice(0, 32);
+    if (!c || seen.has(c)) continue;
+    seen.add(c);
+    out.push(c);
+  }
+  return out;
+}
+
+// Normalize an annotations-input. Accepts the array directly (JSON
+// body) or a JSON-stringified array (form-data). Caps at 200 strokes
+// — anything beyond that is almost certainly a bug or DOS attempt.
+function normalizeAnnotationsInput(raw) {
+  let arr = [];
+  if (Array.isArray(raw)) arr = raw;
+  else if (typeof raw === 'string' && raw) {
+    try { arr = JSON.parse(raw); } catch (e) { arr = []; }
+  }
+  if (!Array.isArray(arr)) return [];
+  return arr.filter(function(s) { return s && typeof s === 'object' && typeof s.tool === 'string'; }).slice(0, 200);
+}
+
 // ──────────────────────────────────────────────────────────────────
 // Text extraction pipeline. Runs at upload time so AG can read the
 // content of a doc instead of just its filename. One extractor per
@@ -619,12 +705,15 @@ router.post('/bulk-tag', requireAuth, async (req, res) => {
       return pool.query('UPDATE attachments SET tags = $1::jsonb WHERE id = $2', [u.next, u.id]);
     }));
 
-    // Activity log for project entities.
+    // Activity log for project entities + bump the org_tags catalog
+    // for any newly-added tag values across the batch.
+    const catalogTags = new Set();
     if (firstType === 'project') {
       updates.forEach(function(u) {
         const nextArr = JSON.parse(u.next);
         const addedHere = nextArr.filter(function(t) { return u.prior.indexOf(t) === -1; });
         const removedHere = u.prior.filter(function(t) { return nextArr.indexOf(t) === -1; });
+        addedHere.forEach(function(t) { catalogTags.add(t); });
         if (addedHere.length || removedHere.length) {
           recordProjectActivity(firstId, req.user.id, 'photo_tags_changed', {
             attachment_id: u.id,
@@ -634,6 +723,16 @@ router.post('/bulk-tag', requireAuth, async (req, res) => {
           });
         }
       });
+    } else {
+      // Non-project entities still benefit from catalog discovery.
+      updates.forEach(function(u) {
+        const nextArr = JSON.parse(u.next);
+        nextArr.filter(function(t) { return u.prior.indexOf(t) === -1; })
+               .forEach(function(t) { catalogTags.add(t); });
+      });
+    }
+    if (catalogTags.size) {
+      upsertOrgTags(req.user && req.user.organization_id, Array.from(catalogTags), req.user && req.user.id);
     }
 
     res.json({ ok: true, changed: updates.length, ids: ids2 });
@@ -806,6 +905,17 @@ router.post('/:entityType/:entityId',
           .replace(/[^a-z0-9 _\-]/g, '').replace(/\s+/g, '-') || 'general';
       }
 
+      // Walkthrough upload (Phase 1.7): caller can pre-fill caption /
+      // tags / annotations in the SAME request so a guided upload
+      // doesn't need a follow-up PATCH per field. All three are
+      // optional and validated like their dedicated endpoints.
+      let initialCaption = null;
+      if (req.body && typeof req.body.caption === 'string') {
+        initialCaption = req.body.caption.slice(0, 2000);
+      }
+      const initialTags = (req.body && req.body.tags != null) ? normalizeTagsInput(req.body.tags) : [];
+      const initialAnnotations = (req.body && req.body.annotations != null) ? normalizeAnnotationsInput(req.body.annotations) : [];
+
       const ins = await pool.query(
         `INSERT INTO attachments
          (id, entity_type, entity_id, filename, mime_type, size_bytes,
@@ -813,8 +923,9 @@ router.post('/:entityType/:entityId',
           thumb_url, web_url, original_url,
           thumb_key, web_key, original_key,
           position, uploaded_by, extracted_text, extracted_text_at,
-          markup_of, include_in_proposal, folder)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+          markup_of, include_in_proposal, folder,
+          caption, tags, annotations)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23::jsonb,$24::jsonb)
          RETURNING *`,
         [
           id, entityType, entityId,
@@ -823,7 +934,10 @@ router.post('/:entityType/:entityId',
           thumbUrl, webUrl, originalUrl,
           thumbKey, webKey, originalKey,
           position, req.user.id, extractedText, extractedAt,
-          markupOf, includeInProposal, folder
+          markupOf, includeInProposal, folder,
+          initialCaption,
+          JSON.stringify(initialTags),
+          JSON.stringify(initialAnnotations)
         ]
       );
       res.json({ ok: true, attachment: ins.rows[0] });
@@ -836,8 +950,16 @@ router.post('/:entityType/:entityId',
         recordProjectActivity(entityId, req.user.id, 'photo_added', {
           attachment_id: id,
           filename: req.file.originalname,
-          mime: mime
+          mime: mime,
+          tag_count: initialTags.length,
+          annotation_count: initialAnnotations.length,
+          has_caption: !!initialCaption
         });
+      }
+
+      // Bump the org-level tag catalog for any tags the upload carried.
+      if (initialTags.length) {
+        upsertOrgTags(req.user && req.user.organization_id, initialTags, req.user && req.user.id);
       }
 
       // Eager push to the Anthropic Files cache for image attachments
@@ -951,19 +1073,19 @@ router.put('/:id', requireAuth, async (req, res) => {
     // Per-attachment tags (CompanyCam-style). Normalize identically to
     // project tags: lowercase, trimmed, deduped, max 20 entries of 32
     // chars each. Anything non-string in the array is dropped silently.
+    let nextTagsForCatalog = null;
     if (req.body && Array.isArray(req.body.tags)) {
-      const normTags = [];
-      const seenTags = new Set();
-      for (let i = 0; i < req.body.tags.length && normTags.length < 20; i++) {
-        const v = req.body.tags[i];
-        if (typeof v !== 'string') continue;
-        const clean = v.trim().toLowerCase().slice(0, 32);
-        if (!clean || seenTags.has(clean)) continue;
-        seenTags.add(clean);
-        normTags.push(clean);
-      }
+      const normTags = normalizeTagsInput(req.body.tags);
       sets.push('tags = $' + p++ + '::jsonb');
       params.push(JSON.stringify(normTags));
+      nextTagsForCatalog = normTags;
+    }
+    // Editable vector annotations (Phase 1.7). Stored as-is from the
+    // markup viewer's strokes array. Pre-validated for shape + cap.
+    if (req.body && (Array.isArray(req.body.annotations) || typeof req.body.annotations === 'string')) {
+      const normAnnos = normalizeAnnotationsInput(req.body.annotations);
+      sets.push('annotations = $' + p++ + '::jsonb');
+      params.push(JSON.stringify(normAnnos));
     }
     if (!sets.length) return res.json({ ok: true, unchanged: true });
     params.push(req.params.id);
@@ -999,6 +1121,22 @@ router.put('/:id', requireAuth, async (req, res) => {
           removed: removed
         });
       }
+      // Bump the org-level tag catalog for any newly-added tags.
+      if (added.length) {
+        upsertOrgTags(req.user && req.user.organization_id, added, req.user && req.user.id);
+      }
+    }
+    // Annotation edits get their own activity kind on project photos.
+    if (att.entity_type === 'project' && req.body &&
+        (Array.isArray(req.body.annotations) || typeof req.body.annotations === 'string')) {
+      const normAnnos = normalizeAnnotationsInput(req.body.annotations);
+      const priorCount = Array.isArray(att.annotations) ? att.annotations.length : 0;
+      recordProjectActivity(att.entity_id, req.user.id, 'annotations_changed', {
+        attachment_id: att.id,
+        filename: att.filename,
+        before_count: priorCount,
+        after_count: normAnnos.length
+      });
     }
   } catch (e) {
     console.error('PUT /api/attachments/:id error:', e);

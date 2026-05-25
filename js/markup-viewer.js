@@ -271,7 +271,14 @@
       // stroke also bumped every text label, and you couldn't shrink
       // text without thinning lines.
       fontPx: 28,
-      strokes: [],
+      // Pre-populate from the attachment's existing JSON annotations
+      // so re-opening the editor surfaces every prior stroke as a
+      // selectable, draggable, deletable element. Phase 1.7 ended the
+      // "rasterize to PNG on save" pattern — the strokes ride with
+      // the original attachment and edit in place.
+      strokes: (opts.attachment && Array.isArray(opts.attachment.annotations))
+        ? opts.attachment.annotations.slice()
+        : [],
       currentStroke: null,
       activePolyline: null,    // mid-build polyline (committed on dblclick / Esc / tool switch)
       hoverPoint: null,        // last known canvas-local cursor (for polyline preview + snap)
@@ -413,11 +420,17 @@
       if (!state.strokes.length || confirm('Discard your markup?')) closeOverlay();
     };
     overlay.querySelector('#p86-mk-save').onclick = function() {
-      // Streamlined save (2026-05-25): legacy "Save as new / Replace
-      // original / Attach to proposal" dialog removed. Save always
-      // creates a new markup attachment linked to the original; the
-      // user can delete that attachment to undo. Skipping the dialog
-      // makes the common path one click instead of three.
+      // Phase 1.7 — annotations stay editable. PATCH the attachment's
+      // annotations JSONB column instead of rasterizing to PNG.
+      // The original photo is untouched; strokes ride alongside.
+      // Rasterization only happens at report-generation time.
+      //
+      // Two paths:
+      //   (a) Attachment has an id      → PATCH /api/attachments/:id
+      //                                    with { annotations: [...] }
+      //   (b) No id (pre-upload buffer) → invoke onDone(state.strokes)
+      //                                    and let the upload caller
+      //                                    persist when it POSTs.
       commitPolylineIfActive();
       state.selectedIdx = null;
       redraw();
@@ -426,17 +439,46 @@
       saveBtn.disabled = true;
       saveBtn.textContent = 'Saving…';
       var done = state && state.onDone;
-      runSave('new', false).then(function() {
+      var att = state && state.attachment;
+      var strokes = state.strokes.slice();
+
+      function finish() {
         saveBtn.textContent = 'Saved';
         setTimeout(function() {
           closeOverlay();
-          if (typeof done === 'function') done();
+          if (typeof done === 'function') {
+            try { done({ annotations: strokes }); }
+            catch (e) { /* defensive */ }
+          }
         }, 250);
-      }).catch(function(err) {
+      }
+
+      if (!att || !att.id) {
+        // Pre-upload mode: hand the strokes back to the caller; they
+        // include them in the upload POST or PATCH afterwards.
+        finish();
+        return;
+      }
+
+      // PATCH the live attachment.
+      if (!window.p86Api || !window.p86Api.attachments || !window.p86Api.attachments.update) {
         saveBtn.disabled = false;
         saveBtn.textContent = origLabel;
-        alert('Save failed: ' + (err.message || 'unknown error'));
-      });
+        alert('Save failed: attachments API not available');
+        return;
+      }
+      window.p86Api.attachments.update(att.id, { annotations: strokes })
+        .then(function() {
+          // Also update the live attachment object in memory so the
+          // caller's onDone receives the new strokes.
+          att.annotations = strokes;
+          finish();
+        })
+        .catch(function(err) {
+          saveBtn.disabled = false;
+          saveBtn.textContent = origLabel;
+          alert('Save failed: ' + (err.message || 'unknown error'));
+        });
     };
 
     refreshToolbar(overlay);
@@ -873,7 +915,14 @@
     var hint = overlay.querySelector('#p86-mk-hint');
     if (!hint) return;
     if (state.tool === 'select') {
-      hint.textContent = state.selectedIdx != null ? 'Drag to move · Delete to remove' : 'Click an element to select';
+      if (state.selectedIdx != null) {
+        var sel = state.strokes[state.selectedIdx];
+        var bits = ['Drag to move', 'corner handles to resize', 'Delete to remove'];
+        if (sel) bits.unshift(sel.tool + ' · ' + (sel.lineWidth || '?') + 'px');
+        hint.textContent = bits.join(' · ');
+      } else {
+        hint.textContent = 'Click an element to select · drag corners to resize';
+      }
     } else if (state.tool === 'sticker') {
       hint.textContent = state.stickerKind ? 'Click on the photo to place' : 'Pick a sticker on the left';
     } else if (state.tool === 'text') {
@@ -913,9 +962,21 @@
       var p = localPoint(e);
 
       // Select tool: hit-test top-down to find a stroke under the point.
+      // If a resize handle on the CURRENTLY-selected stroke is hit,
+      // arm a resize drag instead of a move drag.
       if (state.tool === 'select') {
+        var handle = (state.selectedIdx != null) ? hitTestHandle(p, state.selectedIdx) : null;
+        if (handle) {
+          state.dragHandle = handle;
+          state.dragLast = p;
+          state.dragBBoxStart = strokeBBox(state.strokes[state.selectedIdx]);
+          setCursor();
+          return;
+        }
         var idx = hitTestStrokes(p);
         state.selectedIdx = idx;
+        state.dragHandle = null;
+        state.dragBBoxStart = null;
         if (idx != null) {
           state.dragLast = p;
         } else {
@@ -994,6 +1055,15 @@
     canvas.onmousemove = function(e) {
       var p = localPoint(e);
       state.hoverPoint = p;
+      // Resize-drag: corner handle on the selected stroke.
+      if (state.tool === 'select' && state.dragHandle && state.dragLast && state.selectedIdx != null) {
+        var rs = state.strokes[state.selectedIdx];
+        if (rs && state.dragBBoxStart) {
+          resizeStroke(rs, state.dragHandle, state.dragBBoxStart, p);
+          redraw();
+        }
+        return;
+      }
       // Select-drag: move the selected stroke.
       if (state.tool === 'select' && state.dragLast && state.selectedIdx != null) {
         var s = state.strokes[state.selectedIdx];
@@ -1027,7 +1097,12 @@
     };
 
     var endStroke = function() {
-      if (state.tool === 'select') { state.dragLast = null; return; }
+      if (state.tool === 'select') {
+        state.dragLast = null;
+        state.dragHandle = null;
+        state.dragBBoxStart = null;
+        return;
+      }
       if (!state.currentStroke) return;
       // Drop zero-size shapes (just a click, no drag) for arrow/line/rect/ellipse/measure.
       var s = state.currentStroke;
@@ -1175,7 +1250,10 @@
     ctx.drawImage(state.img, 0, 0, canvas.width, canvas.height);
     state.strokes.forEach(function(s, i) {
       drawStroke(ctx, s);
-      if (i === state.selectedIdx) drawSelection(ctx, s);
+      if (i === state.selectedIdx) {
+        drawSelection(ctx, s);
+        drawResizeHandles(ctx, s);
+      }
     });
     if (extra) drawStroke(ctx, extra);
     // Polyline in progress: draw committed points as a polyline plus
@@ -1280,6 +1358,150 @@
     ctx.setLineDash([6, 4]);
     ctx.strokeRect(bb.x - pad, bb.y - pad, bb.w + pad * 2, bb.h + pad * 2);
     ctx.restore();
+  }
+
+  // ── Resize handles ────────────────────────────────────────────────
+  //
+  // When a stroke is selected, draw small grab-able handles the user
+  // can drag to resize. Different shapes get different handles:
+  //   - rect / ellipse / arrow / line / measure → 4 corner handles
+  //   - text / sticker                           → 4 corner handles
+  //                                                  (proportional resize)
+  //   - draw / polyline (freeform shapes)        → endpoints of the path
+  //                                                  + a single bbox-corner
+  //                                                  handle for uniform
+  //                                                  scaling
+  //
+  // Returns the array of handle positions so the mouse handler can
+  // hit-test against them.
+
+  var HANDLE_RADIUS = 7;
+
+  function computeHandles(s) {
+    if (!s) return [];
+    var bb = strokeBBox(s);
+    var pad = 6;
+    var x1 = bb.x - pad, y1 = bb.y - pad;
+    var x2 = x1 + bb.w + pad * 2, y2 = y1 + bb.h + pad * 2;
+    return [
+      { name: 'nw', x: x1, y: y1 },
+      { name: 'ne', x: x2, y: y1 },
+      { name: 'sw', x: x1, y: y2 },
+      { name: 'se', x: x2, y: y2 }
+    ];
+  }
+
+  function drawResizeHandles(ctx, s) {
+    var handles = computeHandles(s);
+    if (!handles.length) return;
+    ctx.save();
+    ctx.fillStyle = '#fff';
+    ctx.strokeStyle = '#4f8cff';
+    ctx.lineWidth = 2;
+    handles.forEach(function(h) {
+      ctx.beginPath();
+      ctx.arc(h.x, h.y, HANDLE_RADIUS, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    });
+    ctx.restore();
+  }
+
+  // Hit-test point against the selected stroke's handles. Returns the
+  // handle object on hit, null on miss.
+  function hitTestHandle(p, strokeIdx) {
+    if (strokeIdx == null) return null;
+    var s = state.strokes[strokeIdx];
+    if (!s) return null;
+    var handles = computeHandles(s);
+    var slop = HANDLE_RADIUS + 4;
+    for (var i = 0; i < handles.length; i++) {
+      var h = handles[i];
+      if (Math.hypot(h.x - p.x, h.y - p.y) <= slop) return h;
+    }
+    return null;
+  }
+
+  // Apply a corner-handle drag to a stroke. Resize semantics:
+  //   - rect / ellipse / arrow / line / measure: move the matching
+  //     endpoint (or the diagonal endpoint for ne/sw).
+  //   - draw / polyline: scale all points around the opposite corner
+  //     so the bbox snaps to the new corner.
+  //   - text / sticker: scale fontPx / size proportional to bbox change;
+  //     the anchor (x, y) moves so the OPPOSITE corner stays put.
+  //
+  // `prior` is the stroke's bbox at the START of the drag (captured on
+  // mousedown). `target` is the new corner position from the cursor.
+  function resizeStroke(s, handle, prior, target) {
+    if (!s || !handle || !prior) return;
+    var pad = 6;
+    // Opposite corner stays anchored.
+    var opp = {
+      nw: { x: prior.x + prior.w + pad, y: prior.y + prior.h + pad },
+      ne: { x: prior.x - pad,           y: prior.y + prior.h + pad },
+      sw: { x: prior.x + prior.w + pad, y: prior.y - pad },
+      se: { x: prior.x - pad,           y: prior.y - pad }
+    }[handle.name];
+    var minSize = 8;
+    var newW = Math.max(minSize, Math.abs(target.x - opp.x) - pad * 2);
+    var newH = Math.max(minSize, Math.abs(target.y - opp.y) - pad * 2);
+    var newX = Math.min(opp.x, target.x) + pad;
+    var newY = Math.min(opp.y, target.y) + pad;
+
+    // Shapes with explicit start/end: re-target endpoints.
+    if (s.startX != null && s.endX != null) {
+      // Where do the start/end fall in the prior bbox? Preserve that
+      // ratio against the new bbox.
+      function remap(coord, axis) {
+        var min = Math.min(s.startX, s.endX);
+        var max = Math.max(s.startX, s.endX);
+        if (axis === 'y') { min = Math.min(s.startY, s.endY); max = Math.max(s.startY, s.endY); }
+        var span = max - min || 1;
+        var ratio = (coord - min) / span;
+        var newMin = axis === 'x' ? newX : newY;
+        var newSpan = axis === 'x' ? newW : newH;
+        return newMin + ratio * newSpan;
+      }
+      var sx = s.startX, sy = s.startY, ex = s.endX, ey = s.endY;
+      s.startX = remap(sx, 'x');
+      s.startY = remap(sy, 'y');
+      s.endX   = remap(ex, 'x');
+      s.endY   = remap(ey, 'y');
+      return;
+    }
+
+    // Draw / polyline — scale all points around the opposite corner.
+    if (s.points && s.points.length) {
+      var oldMinX = prior.x, oldMinY = prior.y;
+      var scaleX = newW / Math.max(1, prior.w);
+      var scaleY = newH / Math.max(1, prior.h);
+      s.points.forEach(function(pt) {
+        pt.x = newX + (pt.x - oldMinX) * scaleX;
+        pt.y = newY + (pt.y - oldMinY) * scaleY;
+      });
+      return;
+    }
+
+    // Text — scale fontPx by the bigger of the two ratios so the type
+    // grows naturally; anchor moves to keep the opposite corner stable.
+    if (s.tool === 'text') {
+      var scale = Math.max(newW / Math.max(1, prior.w), newH / Math.max(1, prior.h));
+      s.fontPx = Math.max(10, Math.min(200, Math.round((s.fontPx || 24) * scale)));
+      // The text's anchor (top-left of glyph baseline area) shifts so
+      // the OPPOSITE corner of the new bbox aligns with where it was.
+      s.x = newX;
+      s.y = newY;
+      return;
+    }
+
+    // Sticker — scale `size` and re-center the anchor on the new bbox.
+    if (s.tool === 'sticker') {
+      var stickerScale = Math.max(newW / Math.max(1, prior.w), newH / Math.max(1, prior.h));
+      s.size = Math.max(12, Math.min(400, Math.round((s.size || 48) * stickerScale)));
+      s.x = newX + newW / 2;
+      s.y = newY + newH / 2;
+      return;
+    }
   }
 
   // Architectural-style dimension line — line between the two
@@ -1667,4 +1889,25 @@
   }
 
   window.p86Markup = { open: open, close: closeOverlay };
+
+  // Public render API — lets the lightbox / tile previews draw the
+  // SAME strokes the markup viewer renders, without needing to open
+  // the viewer or duplicate the drawing pipeline. drawStroke / draw
+  // helpers are private to the IIFE; this is the only way callers
+  // can access them.
+  //
+  //   window.p86AnnotationRender.renderAll(ctx, annotations)
+  //       — iterate strokes and draw onto a 2D canvas context.
+  //   window.p86AnnotationRender.drawStroke(ctx, stroke)
+  //       — single-stroke render (e.g. for selection previews).
+  window.p86AnnotationRender = {
+    drawStroke: drawStroke,
+    renderAll: function(ctx, annotations) {
+      if (!ctx || !Array.isArray(annotations)) return;
+      for (var i = 0; i < annotations.length; i++) {
+        try { drawStroke(ctx, annotations[i]); }
+        catch (e) { /* defensive — bad stroke shouldn't kill the rest */ }
+      }
+    }
+  };
 })();

@@ -82,6 +82,94 @@
     return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
   }
 
+  // Web Speech API helper — wires a mic button to a textarea so the
+  // user can dictate captions. Lifted from ai-panel.js's setupVoiceInput
+  // and trimmed for the upload-preview use case (no send-on-submit
+  // coupling needed). Silently no-ops on browsers without
+  // SpeechRecognition (Firefox without flags).
+  //
+  // Returns a teardown function so the caller can stop dictation
+  // when the modal closes.
+  function wireVoiceInput(textareaEl, micBtnEl) {
+    if (!textareaEl || !micBtnEl) return function() {};
+    var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) {
+      micBtnEl.style.display = 'none';
+      return function() {};
+    }
+    var recognition = null;
+    var listening = false;
+    var silenceTimer = null;
+    var lastResultTs = 0;
+    var SILENCE_TIMEOUT_MS = 5000; // 5s for walkthrough narration
+
+    function setListening(v) {
+      listening = v;
+      micBtnEl.style.background = v ? 'rgba(248,113,113,0.18)' : 'transparent';
+      micBtnEl.style.color = v ? '#f87171' : 'var(--text-dim, #888)';
+      micBtnEl.title = v ? 'Stop dictation' : 'Dictate (voice → text)';
+    }
+
+    function stop() {
+      if (silenceTimer) { clearInterval(silenceTimer); silenceTimer = null; }
+      if (recognition) {
+        try { recognition.stop(); } catch (e) {}
+        recognition = null;
+      }
+      setListening(false);
+    }
+
+    function start() {
+      try {
+        recognition = new SR();
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.lang = navigator.language || 'en-US';
+        var baseValue = '';
+        recognition.onstart = function() {
+          baseValue = textareaEl.value || '';
+          if (baseValue && !/\s$/.test(baseValue)) baseValue += ' ';
+          setListening(true);
+          lastResultTs = Date.now();
+          if (silenceTimer) clearInterval(silenceTimer);
+          silenceTimer = setInterval(function() {
+            if (!listening) return;
+            if (Date.now() - lastResultTs > SILENCE_TIMEOUT_MS) stop();
+          }, 500);
+        };
+        recognition.onresult = function(e) {
+          lastResultTs = Date.now();
+          var allFinal = '', allInterim = '';
+          for (var i = 0; i < e.results.length; i++) {
+            var t = e.results[i][0].transcript;
+            if (e.results[i].isFinal) allFinal += t;
+            else allInterim += t;
+          }
+          textareaEl.value = baseValue + allFinal + allInterim;
+        };
+        recognition.onerror = function(ev) {
+          stop();
+          if (ev && ev.error === 'not-allowed') {
+            alert('Microphone access denied. Allow it in your browser settings to dictate.');
+          }
+        };
+        recognition.onend = function() { stop(); };
+        recognition.start();
+      } catch (e) {
+        alert('Could not start dictation: ' + (e.message || e));
+        stop();
+      }
+    }
+
+    micBtnEl.onclick = function(e) {
+      e.preventDefault();
+      if (listening) stop();
+      else start();
+    };
+
+    return stop;
+  }
+
   function api() { return window.p86Api && window.p86Api.projects; }
   function currentUser() {
     return (window.p86Auth && window.p86Auth.getUser && window.p86Auth.getUser()) || null;
@@ -151,6 +239,16 @@
   // Cache last-known tag suggestions so the editor autocomplete renders
   // immediately on focus (a stale list is better than an empty list).
   var _tagSuggestCache = [];
+  // Walkthrough state — sticky tags persist between photo uploads
+  // until the user clears them. Module-level (not in _detailState)
+  // so they survive a project detail close/reopen within the same
+  // page lifetime. Cleared on full page reload.
+  var _walkthroughTags = [];
+  // "Quick Save" bypass flag — when set within a single batch, the
+  // remaining files in the same uploadFiles() call skip the preview
+  // modal and POST directly with whatever's already in the form.
+  // Reset on every new batch.
+  var _quickSaveThisBatch = false;
 
   // ──────────────────────────────────────────────────────────────────
   // Top-level list view
@@ -693,12 +791,18 @@
       }
 
       // The editor can be pointed at any suggest source — project
-      // tags, attachment tags, etc. Default is the project-tag suggest.
+      // tags, attachment tags, etc. Default (Phase 1.7): the org-wide
+      // tag catalog, so tags shared across projects show up first.
+      // Falls back to the older project-tag suggest if the org
+      // catalog endpoint isn't available (during deploy rollover).
       var suggestFn = opts.suggestFn || function(q) {
-        if (!window.p86Api || !window.p86Api.projects || !window.p86Api.projects.suggestTags) {
-          return Promise.resolve({ tags: [] });
+        if (window.p86Api && window.p86Api.orgTags && window.p86Api.orgTags.suggest) {
+          return window.p86Api.orgTags.suggest(q);
         }
-        return window.p86Api.projects.suggestTags(q);
+        if (window.p86Api && window.p86Api.projects && window.p86Api.projects.suggestTags) {
+          return window.p86Api.projects.suggestTags(q);
+        }
+        return Promise.resolve({ tags: [] });
       };
 
       var fetchTimer;
@@ -895,12 +999,16 @@
         '</div>' +
         '<div class="p86-proj-filter-actions">' +
           '<button class="primary" onclick="document.getElementById(\'projPhotoFileInput\').click();">&#x2795; Upload Photos</button>' +
-          '<input type="file" id="projPhotoFileInput" multiple accept="image/*,application/pdf" style="display:none;" />' +
+          '<input type="file" id="projPhotoFileInput" multiple accept="image/*,application/pdf" capture="environment" style="display:none;" />' +
         '</div>' +
       '</div>' +
 
       // Tag filter chip strip
       '<div id="projTagChipStrip" class="p86-proj-tag-strip"></div>' +
+
+      // Walkthrough sticky tags — persists between photo uploads
+      // (Phase 1.7). Shows only when at least one sticky tag is set.
+      '<div id="projWalkthroughTagStrip" class="p86-walkthrough-strip" style="display:none;"></div>' +
 
       // Photo feed (date-grouped grid; rendered by paintPhotoFeed)
       '<div id="projPhotoFeed" class="p86-proj-photo-feed"></div>' +
@@ -996,6 +1104,7 @@
     }
 
     paintTagChipStrip();
+    paintWalkthroughTagStrip();
     paintPhotoFeed();
     paintActivityFeed();
   }
@@ -1211,22 +1320,25 @@
     var time = fmtTime(att.uploaded_at);
     var tagCount = Array.isArray(att.tags) ? att.tags.length : 0;
     var hasCaption = !!att.caption;
+    var annotationCount = Array.isArray(att.annotations) ? att.annotations.length : 0;
 
-    // CompanyCam-style tile: checkbox top-left, ⋮ menu top-right,
-    // uploader initials bottom-left, tag/caption indicator bottom-right.
-    // Time + uploader name renders below the tile.
+    // CompanyCam-style tile: checkbox top-left, ✏️ + ⋮ top-right,
+    // uploader initials bottom-left, tag/caption/annotation badges
+    // bottom-right. Time + uploader name renders below the tile.
     tile.innerHTML =
       '<div class="p86-proj-photo-tile-visual">' +
         visual +
         '<label class="p86-proj-photo-tile-checkbox" onclick="event.stopPropagation();">' +
           '<input type="checkbox"' + (_detailState.selection.has(att.id) ? ' checked' : '') + ' />' +
         '</label>' +
+        '<button type="button" class="p86-proj-photo-tile-annotate" title="Annotate">&#x270E;</button>' +
         '<button type="button" class="p86-proj-photo-tile-menu" title="More">&#x22EE;</button>' +
         (uploaderInitials
           ? '<span class="p86-proj-photo-tile-uploader" title="' + escapeAttr(att.uploaded_by_name || '') + '">' + escapeHTML(uploaderInitials) + '</span>'
           : '') +
         '<div class="p86-proj-photo-tile-badges">' +
           (hasCaption ? '<span class="p86-proj-photo-tile-badge" title="' + escapeAttr(att.caption) + '">&#x1F4DD;</span>' : '') +
+          (annotationCount ? '<span class="p86-proj-photo-tile-badge" title="' + annotationCount + ' annotation' + (annotationCount === 1 ? '' : 's') + '">&#x1F58D;' + (annotationCount > 1 ? ' ' + annotationCount : '') + '</span>' : '') +
           (tagCount ? '<span class="p86-proj-photo-tile-badge" title="' + escapeAttr((att.tags || []).join(', ')) + '">&#x1F3F7;' + (tagCount > 1 ? ' ' + tagCount : '') + '</span>' : '') +
         '</div>' +
       '</div>' +
@@ -1248,6 +1360,7 @@
     }
     tile.querySelector('.p86-proj-photo-tile-visual').addEventListener('click', function(e) {
       if (e.target.closest('.p86-proj-photo-tile-menu')) return;
+      if (e.target.closest('.p86-proj-photo-tile-annotate')) return;
       if (e.target.closest('.p86-proj-photo-tile-checkbox')) return;
       openPhotoInLightbox(att);
     });
@@ -1255,6 +1368,13 @@
       e.stopPropagation();
       openPhotoMenu(att, tile);
     });
+    var annoBtn = tile.querySelector('.p86-proj-photo-tile-annotate');
+    if (annoBtn) {
+      annoBtn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        openAnnotator(att);
+      });
+    }
 
     return tile;
   }
@@ -1567,8 +1687,14 @@
     if (window.p86Markup && typeof window.p86Markup.open === 'function') {
       window.p86Markup.open({
         attachment: att,
-        onDone: function() {
-          // Refresh — the annotator uploaded a new markup attachment.
+        onDone: function(result) {
+          // Phase 1.7 — annotator now PATCHes annotations onto the
+          // original attachment. Refresh photos so the in-memory
+          // copy + tile badge reflect the new count.
+          if (result && Array.isArray(result.annotations)) {
+            att.annotations = result.annotations;
+            paintPhotoFeed();
+          }
           refreshDetailPhotos();
         }
       });
@@ -1678,7 +1804,7 @@
     host.innerHTML =
       '<div class="p86-proj-upload-row">' +
         '<button class="primary" onclick="document.getElementById(\'projPhotoFileInput\').click();">&#x2795; Upload photos</button>' +
-        '<input type="file" id="projPhotoFileInput" multiple accept="image/*,application/pdf" style="display:none;" />' +
+        '<input type="file" id="projPhotoFileInput" multiple accept="image/*,application/pdf" capture="environment" style="display:none;" />' +
         '<span class="p86-proj-upload-hint">or drag &amp; drop photos onto this area.</span>' +
       '</div>';
     var fileInput = host.querySelector('#projPhotoFileInput');
@@ -1708,18 +1834,27 @@
     }
   }
 
+  // Walkthrough upload — every file goes through a preview modal
+  // (Phase 1.7) where the user can dictate a caption, confirm/edit
+  // sticky tags, and annotate before saving. "Quick Save" inside any
+  // preview bypasses the modal for the REST of THIS batch so heavy
+  // walkthroughs don't drag.
   function uploadFiles(files) {
     var pid = _detailState.projectId;
     if (!pid) return;
+    _quickSaveThisBatch = false;
+    var fileList = Array.from(files);
     var chain = Promise.resolve();
-    Array.from(files).forEach(function(f) {
+    fileList.forEach(function(f) {
       chain = chain.then(function() {
-        return window.p86Api.attachments.upload('project', pid, f).catch(function(err) {
-          alert('Upload failed for "' + f.name + '": ' + (err.message || err));
+        return previewAndUpload(f, pid).catch(function(err) {
+          if (err && err.message === 'cancelled') return; // user cancelled — skip
+          alert('Upload failed for "' + f.name + '": ' + (err && (err.message || err)));
         });
       });
     });
     chain.then(function() {
+      _quickSaveThisBatch = false;
       // Re-fetch photos + activity to surface new uploads.
       Promise.all([
         window.p86Api.attachments.list('project', pid).catch(function() { return { attachments: [] }; }),
@@ -1729,7 +1864,216 @@
         _detailState.activity = (rs[1] && rs[1].activity) || [];
         paintPhotoFeed();
         paintActivityFeed();
+        paintTagChipStrip();
       });
+    });
+  }
+
+  // Per-file preview + upload. Resolves when the file lands on the
+  // server (or is cancelled). Rejects only on real failure — cancel
+  // resolves with rejection of new Error('cancelled') that the
+  // batch-runner ignores.
+  function previewAndUpload(file, projectId) {
+    if (_quickSaveThisBatch) {
+      return doUpload(file, projectId, {
+        caption: null,
+        tags: _walkthroughTags.slice(),
+        annotations: []
+      });
+    }
+    return new Promise(function(resolve, reject) {
+      openUploadPreview(file, projectId, function(action, payload) {
+        if (action === 'cancel') return reject(new Error('cancelled'));
+        if (action === 'quick') {
+          _quickSaveThisBatch = true;
+          return doUpload(file, projectId, {
+            caption: null,
+            tags: _walkthroughTags.slice(),
+            annotations: []
+          }).then(resolve, reject);
+        }
+        // 'save' — payload has caption, tags, annotations
+        doUpload(file, projectId, payload).then(resolve, reject);
+      });
+    });
+  }
+
+  // Actual upload — sends file + caption + tags + annotations in one
+  // FormData POST. The server route accepts those extras and inlines
+  // them on INSERT (no follow-up PATCH needed).
+  function doUpload(file, projectId, payload) {
+    payload = payload || {};
+    var extra = {};
+    if (payload.caption) extra.caption = payload.caption;
+    if (payload.tags && payload.tags.length) extra.tags = JSON.stringify(payload.tags);
+    if (payload.annotations && payload.annotations.length) extra.annotations = JSON.stringify(payload.annotations);
+    return window.p86Api.attachments.upload('project', projectId, file, extra);
+  }
+
+  // Open the preview modal for one file. cb(action, payload) where
+  // action ∈ {'save', 'quick', 'cancel'} and payload ∈ {caption, tags, annotations}.
+  function openUploadPreview(file, projectId, cb) {
+    var prior = document.getElementById('projUploadPreview');
+    if (prior) prior.remove();
+
+    var blobUrl = URL.createObjectURL(file);
+    var isImage = file.type && /^image\//.test(file.type);
+
+    // Per-file pending state — tags pre-seeded from sticky walkthrough
+    // tags so the user doesn't retype them; annotations start empty
+    // (set by the Annotate button below).
+    var pendingTags = _walkthroughTags.slice();
+    var pendingAnnotations = [];
+
+    var modal = document.createElement('div');
+    modal.id = 'projUploadPreview';
+    modal.className = 'modal active';
+    modal.innerHTML =
+      '<div class="modal-content" style="max-width:580px;">' +
+        '<div class="modal-header">' +
+          '<span>Upload preview — ' + escapeHTML(file.name) + '</span>' +
+          '<button class="p86-modal-close" data-close>&times;</button>' +
+        '</div>' +
+        '<div class="p86-proj-create-body">' +
+          (isImage
+            ? '<img src="' + escapeAttr(blobUrl) + '" alt="" class="p86-upload-preview-img" />'
+            : '<div class="p86-upload-preview-doc">' + escapeHTML((file.name.split(".").pop() || "FILE").toUpperCase()) + '</div>') +
+          '<div class="p86-field">' +
+            '<span>Caption</span>' +
+            '<div class="p86-caption-row">' +
+              '<textarea id="upPrevCaption" rows="2" placeholder="Optional. Use 🎤 to dictate."></textarea>' +
+              '<button type="button" id="upPrevMic" class="p86-mic-btn" title="Dictate (voice → text)">&#x1F3A4;</button>' +
+            '</div>' +
+          '</div>' +
+          '<div class="p86-field">' +
+            '<span>Tags <small style="color:var(--text-dim,#888);font-weight:400;text-transform:none;letter-spacing:0;">(sticky — applies to next photo too)</small></span>' +
+            '<div id="upPrevTagsEditor" class="p86-tag-editor"></div>' +
+          '</div>' +
+          '<div class="p86-field">' +
+            '<button type="button" class="ee-btn secondary" id="upPrevAnnotate">&#x270E; Annotate before saving</button>' +
+            '<span id="upPrevAnnoCount" style="font-size:11px;color:var(--text-dim,#888);margin-left:8px;"></span>' +
+          '</div>' +
+        '</div>' +
+        '<div class="modal-footer">' +
+          '<button class="ee-btn secondary" data-close>Cancel</button>' +
+          '<button class="ee-btn secondary" id="upPrevQuick" title="Skip preview for the rest of this batch">&#x26A1; Quick Save</button>' +
+          '<button class="primary" id="upPrevSave">Save</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(modal);
+
+    var stopVoice = wireVoiceInput(modal.querySelector('#upPrevCaption'), modal.querySelector('#upPrevMic'));
+
+    mountTagEditor(modal.querySelector('#upPrevTagsEditor'), {
+      getTags: function() { return pendingTags; },
+      setTags: function(next) { pendingTags = next.slice(); },
+      suggestFn: function(q) {
+        // Prefer the org-level catalog for autocomplete; fallback to
+        // attachment-scoped suggestions for cross-project consistency.
+        if (window.p86Api && window.p86Api.orgTags && window.p86Api.orgTags.suggest) {
+          return window.p86Api.orgTags.suggest(q);
+        }
+        return Promise.resolve({ tags: [] });
+      }
+    });
+
+    function close(action, payload) {
+      try { stopVoice(); } catch (e) {}
+      try { URL.revokeObjectURL(blobUrl); } catch (e) {}
+      modal.remove();
+      cb(action, payload);
+    }
+
+    modal.addEventListener('click', function(e) { if (e.target === modal) close('cancel'); });
+    modal.querySelectorAll('[data-close]').forEach(function(b) {
+      b.addEventListener('click', function() { close('cancel'); });
+    });
+
+    modal.querySelector('#upPrevAnnotate').addEventListener('click', function() {
+      // Open the markup viewer with the blob URL as the image source.
+      // No attachment id yet — the viewer's PATCH path handles that
+      // gracefully and hands the strokes back via onDone().
+      if (!window.p86Markup || typeof window.p86Markup.open !== 'function') {
+        alert('Annotator not loaded.');
+        return;
+      }
+      window.p86Markup.open({
+        attachment: {
+          id: null,
+          original_url: blobUrl,
+          web_url: blobUrl,
+          filename: file.name,
+          entity_type: 'project',
+          entity_id: projectId,
+          annotations: pendingAnnotations
+        },
+        saveTarget: { entityType: 'project', entityId: projectId },
+        onDone: function(result) {
+          if (result && Array.isArray(result.annotations)) {
+            pendingAnnotations = result.annotations;
+            var countEl = modal.querySelector('#upPrevAnnoCount');
+            if (countEl) {
+              countEl.textContent = pendingAnnotations.length
+                ? pendingAnnotations.length + ' annotation' + (pendingAnnotations.length === 1 ? '' : 's') + ' ready'
+                : '';
+            }
+          }
+        }
+      });
+    });
+
+    modal.querySelector('#upPrevSave').addEventListener('click', function() {
+      var caption = (modal.querySelector('#upPrevCaption').value || '').trim();
+      // Sticky-tag update: remember whatever's in the editor as the
+      // new default for subsequent photos in this session.
+      _walkthroughTags = pendingTags.slice();
+      paintWalkthroughTagStrip();
+      close('save', {
+        caption: caption || null,
+        tags: pendingTags.slice(),
+        annotations: pendingAnnotations.slice()
+      });
+    });
+
+    modal.querySelector('#upPrevQuick').addEventListener('click', function() {
+      // Don't update _walkthroughTags here — quick save uses whatever's
+      // already sticky from prior previews. If the user wanted these
+      // tags to stick they'd use Save.
+      close('quick');
+    });
+  }
+
+  // Re-paint the sticky-tag strip above the upload area whenever
+  // _walkthroughTags changes. Lives in the upload row so it's
+  // discoverable next to the Upload Photos button.
+  function paintWalkthroughTagStrip() {
+    var host = document.getElementById('projWalkthroughTagStrip');
+    if (!host) return;
+    if (!_walkthroughTags.length) {
+      host.innerHTML = '';
+      host.style.display = 'none';
+      return;
+    }
+    host.style.display = '';
+    host.innerHTML =
+      '<span class="p86-walkthrough-label">Sticky tags:</span>' +
+      _walkthroughTags.map(function(t) {
+        return '<button class="p86-chip-tag" data-mk-remove-walkthrough="' + escapeAttr(t) + '" style="--h:' + hueFor(t) + ';" title="Click to remove">' +
+          '#' + escapeHTML(t) + ' &times;' +
+        '</button>';
+      }).join('') +
+      '<button class="p86-chip" id="projWalkthroughClear" title="Clear all sticky tags">Clear</button>';
+    host.querySelectorAll('[data-mk-remove-walkthrough]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var tag = btn.getAttribute('data-mk-remove-walkthrough');
+        _walkthroughTags = _walkthroughTags.filter(function(t) { return t !== tag; });
+        paintWalkthroughTagStrip();
+      });
+    });
+    var clearBtn = host.querySelector('#projWalkthroughClear');
+    if (clearBtn) clearBtn.addEventListener('click', function() {
+      _walkthroughTags = [];
+      paintWalkthroughTagStrip();
     });
   }
 
