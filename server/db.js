@@ -520,7 +520,7 @@ async function initSchema() {
     END $$;
     ALTER TABLE attachments
       ADD CONSTRAINT attachments_entity_type_check
-      CHECK (entity_type IN ('lead', 'estimate', 'client', 'job', 'sub', 'user'));
+      CHECK (entity_type IN ('lead', 'estimate', 'client', 'job', 'sub', 'user', 'org', 'project'));
 
     -- Folder grouping (Phase 3). Free-text folder name per attachment;
     -- 'general' is the default catch-all. Users can move files into
@@ -1952,7 +1952,10 @@ async function initSchema() {
       organization_id      INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
       name                 TEXT NOT NULL,
       description          TEXT,
-      cover_attachment_id  INTEGER REFERENCES attachments(id) ON DELETE SET NULL,
+      -- attachments.id is TEXT (prefixed-timestamp id, e.g. att_…)
+      -- so this FK must be TEXT too, not INTEGER. Earlier draft used
+      -- INTEGER and crashed initSchema on first deploy.
+      cover_attachment_id  TEXT REFERENCES attachments(id) ON DELETE SET NULL,
       lead_id              TEXT REFERENCES leads(id) ON DELETE SET NULL,
       job_id               TEXT REFERENCES jobs(id) ON DELETE SET NULL,
       client_id            TEXT REFERENCES clients(id) ON DELETE SET NULL,
