@@ -87,6 +87,25 @@
     if (!pane) return;
     var uid = currentUserId();
     if (!uid) {
+      // Auth race: if the URL restored to /files before p86Auth.init()
+      // finished its async checkSession() roundtrip, getUser() returns
+      // null. Poll for up to ~2s so we don't flash the sign-in stub on
+      // a normal refresh. Only show the stub if there's truly no token.
+      if (localStorage.getItem('p86-auth-token')) {
+        pane.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-dim,#888);">Loading…</div>';
+        var tries = 0;
+        var timer = setInterval(function() {
+          tries++;
+          if (currentUserId()) {
+            clearInterval(timer);
+            renderMyFilesTab();
+          } else if (tries >= 16) { // ~2s @ 125ms
+            clearInterval(timer);
+            pane.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-dim,#888);">Sign in to access your files.</div>';
+          }
+        }, 125);
+        return;
+      }
       pane.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-dim,#888);">Sign in to access your files.</div>';
       return;
     }
