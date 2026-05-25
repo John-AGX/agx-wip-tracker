@@ -1003,7 +1003,9 @@
         getTags: function() { return (_detailState.project.tags || []).slice(); },
         setTags: function(next) {
           _detailState.project.tags = next.slice();
-          api().update(_detailState.project.id, { tags: next }).catch(function(e) {
+          api().update(_detailState.project.id, { tags: next }).then(function() {
+            syncListProjectFromDetail();
+          }).catch(function(e) {
             alert('Tag save failed: ' + (e.message || e));
           });
         }
@@ -1811,6 +1813,7 @@
       p[field] = prior;
       // Roll back any side effects we did optimistically below.
       if (field === 'address_text') refreshInlineMap();
+      syncListProjectFromDetail();
       alert('Save failed for ' + field + ': ' + (e.message || e));
     });
     // Side effect: the inline Google Maps iframe was rendered once at
@@ -1819,6 +1822,29 @@
     // stuck on the old map — making it look like the project has the
     // wrong address. Swap the src so the pin tracks the typed value.
     if (field === 'address_text') refreshInlineMap();
+    // Push the change into the list cache + re-paint the list/map
+    // view behind the overlay. The user sees fresh data the moment
+    // they close the detail — no need to wait for a server roundtrip
+    // race.
+    syncListProjectFromDetail();
+  }
+
+  // Mirror the current _detailState.project values onto the row in
+  // _listState.projects so the list/map view doesn't go stale while
+  // the detail is open. Re-paints the list (still rendered behind
+  // the overlay) so on close the user sees fresh data without a
+  // fetchAll() roundtrip.
+  function syncListProjectFromDetail() {
+    var p = _detailState.project;
+    if (!p || !_listState.host) return;
+    var idx = _listState.projects.findIndex(function(x) { return String(x.id) === String(p.id); });
+    if (idx === -1) return;
+    var prior = _listState.projects[idx];
+    // Merge — keep computed fields (cover_thumb_url, photo_count,
+    // lead_title, etc.) from the list row, override with anything
+    // that's been edited in the detail.
+    _listState.projects[idx] = Object.assign({}, prior, p);
+    try { paintList(); } catch (e) { /* defensive */ }
   }
 
   function refreshInlineMap() {
@@ -1951,6 +1977,7 @@
         _detailState.project = r && r.project;
         modal.remove();
         paintDetail();   // full repaint pulls in the new map iframe src
+        syncListProjectFromDetail();
         refreshLinkedPanels();
       }).catch(function(e) { alert('Save failed: ' + (e.message || e)); });
     });
@@ -1970,6 +1997,7 @@
     api().update(p.id, { status: 'active' }).then(function(r) {
       _detailState.project = r && r.project;
       paintDetail();
+      syncListProjectFromDetail();
     }).catch(function(e) { alert('Unarchive failed: ' + (e.message || e)); });
   }
 
