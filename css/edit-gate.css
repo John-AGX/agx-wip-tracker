@@ -118,12 +118,16 @@
     outline-offset: -1px;
 }
 
-/* Drag handles + delete buttons inside a locked row stay clickable —
- * reordering and removal shouldn't require unlocking first. Opt in
- * via the data-edit-gate-passthrough attribute on the element (or any
- * ancestor inside the row). */
-[data-row-edit-gate] [data-edit-gate-passthrough],
-[data-row-edit-gate] [data-edit-gate-passthrough] * {
+/* Passthrough — elements that should stay interactive even when an
+ * enclosing gate is locked. Originally scoped to row gates (drag
+ * handles + delete buttons inside a row); now also applies to
+ * section gates so a fieldset legend can host a toggle that the user
+ * is expected to flip without first arming the section (e.g. the
+ * report editor's "Include cover page" checkbox lives inside its
+ * fieldset's legend). Made generic — applies to any descendant with
+ * the attribute, regardless of which gate type contains it. */
+[data-edit-gate-passthrough],
+[data-edit-gate-passthrough] * {
     pointer-events: auto !important;
     cursor: inherit;
 }

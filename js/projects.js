@@ -1457,6 +1457,18 @@
     paintPhotoFeed();
     paintActivityFeed();
     paintProjectWeather();
+
+    // Gate the Description fieldset. The textarea already autosaves
+    // on blur via _fieldBlur('description', ...) — the gate just
+    // adds a pencil so a stray tap in the secondary "Project details"
+    // panel can't trigger that autosave commit. Map fieldset has no
+    // editable inputs so it doesn't need a gate.
+    if (window.p86EditGate) {
+      var descFieldset = host.querySelector('#projDescInput');
+      descFieldset = descFieldset && descFieldset.closest('fieldset');
+      if (descFieldset) window.p86EditGate.attachSection(descFieldset, { startUnlocked: false });
+    }
+
     // Paint the current tab's body. Photos tab is wired by paintPhotoFeed
     // above; reports + files paint on demand to avoid round-trips before
     // the user actually clicks the tab.
@@ -1680,6 +1692,52 @@
       return window.p86Api.reports.update('project', p.id, state.report.id, body);
     }
 
+    // Debounced autosave — called from every input handler so the
+    // user no longer has to remember to press Save. 600ms idle is
+    // long enough that a fast typer doesn't trigger a request per
+    // keystroke, short enough that the indicator feels live. The
+    // existing #rptSave button doubles as the status indicator
+    // (Saving… → Saved → Save) so we don't add new chrome. Timer
+    // lives at the paintReportEditor scope so it survives paint()
+    // re-renders.
+    var _autoSaveTimer = null;
+    function debouncedSave() {
+      if (_autoSaveTimer) clearTimeout(_autoSaveTimer);
+      _autoSaveTimer = setTimeout(function() {
+        _autoSaveTimer = null;
+        var btn = overlay.querySelector('#rptSave');
+        if (btn) { btn.disabled = true; btn.textContent = 'Saving…'; }
+        save().then(function() {
+          if (btn) {
+            btn.textContent = 'Saved';
+            setTimeout(function() {
+              // Only restore if another save hasn't taken over.
+              if (btn.textContent === 'Saved') {
+                btn.disabled = false;
+                btn.textContent = 'Save';
+              }
+            }, 1200);
+          }
+          // Sync section counts back to the list — same logic as the
+          // explicit Save click so the reports list reflects the new
+          // title / counts immediately when the editor closes.
+          var listItem = (_detailState.reports || []).find(function(r) { return r.id === state.report.id; });
+          if (listItem) {
+            listItem.title = state.report.title;
+            listItem.section_count = state.sections.length;
+            listItem.photo_count = state.sections.reduce(function(n, s) { return n + s.photo_ids.length; }, 0);
+            listItem.updated_at = new Date().toISOString();
+          }
+        }).catch(function(e) {
+          if (btn) { btn.disabled = false; btn.textContent = 'Save'; }
+          // Don't alert — autosave failures shouldn't interrupt
+          // typing. Log for diagnostics; the explicit Save click
+          // still surfaces failures via its own alert.
+          console.warn('Report autosave failed:', e && e.message ? e.message : e);
+        });
+      }, 600);
+    }
+
     function printReport() {
       // The print view uses CSS @media print; we open a print dialog
       // after triggering a "report-print" mode class so the chrome
@@ -1726,7 +1784,12 @@
         // overrides persist to state.cover.
         '<fieldset class="p86-report-cover-fieldset">' +
           '<legend>' +
-            '<label class="p86-report-cover-toggle">' +
+            // The cover-page toggle lives inside the legend; the
+            // section gate would otherwise lock its checkbox along
+            // with the rest of the inputs. data-edit-gate-passthrough
+            // keeps it interactive so the user can toggle the cover
+            // on/off without first arming the section.
+            '<label class="p86-report-cover-toggle" data-edit-gate-passthrough>' +
               '<input type="checkbox" id="rptCoverEnabled"' + (state.cover.enabled ? ' checked' : '') + ' />' +
               '<span>&#x1F4D1; Include cover page</span>' +
             '</label>' +
@@ -1766,25 +1829,52 @@
           emptyStateHTML +
         '</div>';
 
-      // Title + summary blur-save into state (saved on Save button).
-      host.querySelector('#rptTitle').addEventListener('input', function(e) { state.report.title = e.target.value; });
-      host.querySelector('#rptSummary').addEventListener('input', function(e) { state.report.summary = e.target.value; });
+      // Title + summary autosave — input writes to state and
+      // schedules a debounced PATCH. The Save button still works
+      // as a "save now" flush but is no longer required.
+      host.querySelector('#rptTitle').addEventListener('input', function(e) {
+        state.report.title = e.target.value;
+        debouncedSave();
+      });
+      host.querySelector('#rptSummary').addEventListener('input', function(e) {
+        state.report.summary = e.target.value;
+        debouncedSave();
+      });
 
-      // Cover page wiring.
+      // Cover page wiring — toggle triggers a paint() to show/hide
+      // the inputs AND schedules an autosave so the enabled flag
+      // persists without a manual Save click.
       var coverToggle = host.querySelector('#rptCoverEnabled');
       if (coverToggle) coverToggle.addEventListener('change', function() {
         state.cover.enabled = coverToggle.checked;
+        debouncedSave();
         paint(); // re-paint to show/hide the inputs
       });
       function bindCover(id, key) {
         var el = host.querySelector('#' + id);
-        if (el) el.addEventListener('input', function(e) { state.cover[key] = e.target.value; });
+        if (el) el.addEventListener('input', function(e) {
+          state.cover[key] = e.target.value;
+          debouncedSave();
+        });
       }
       bindCover('cvCompany', 'company_name');
       bindCover('cvSubtitle', 'subtitle');
       bindCover('cvPm', 'pm_name');
       bindCover('cvDate', 'date');
       bindCover('cvAddress', 'address');
+
+      // Gate the cover fieldset. Cover inputs now autosave on input
+      // (via debouncedSave above) so a stray tap could mutate the
+      // company name / PM / date before the user notices. The pencil
+      // in the legend locks the section by default; tap to arm.
+      // The "Include cover page" checkbox is marked passthrough in
+      // the markup so it stays togglable even when the section is
+      // locked — flipping cover on/off isn't an accidental-edit
+      // risk and was always meant to be a one-tap action.
+      if (window.p86EditGate) {
+        var coverFs = host.querySelector('.p86-report-cover-fieldset');
+        if (coverFs) window.p86EditGate.attachSection(coverFs, { startUnlocked: false });
+      }
 
       host.querySelector('#rptClose').addEventListener('click', close);
       host.querySelector('#rptSave').addEventListener('click', function() {
