@@ -1255,7 +1255,12 @@
     state.strokes.forEach(function(s, i) {
       drawStroke(ctx, s);
       if (i === state.selectedIdx) {
-        drawSelection(ctx, s);
+        // Only show the dashed bounding box for text/sticker — those
+        // shapes don't have visible edges of their own, so the box is
+        // the only cue that they're selected. Everything else gets
+        // visible endpoint/vertex/corner handles via drawResizeHandles
+        // alone, which is plenty.
+        if (s.tool === 'text' || s.tool === 'sticker') drawSelection(ctx, s);
         drawResizeHandles(ctx, s);
       }
     });
@@ -1366,33 +1371,69 @@
 
   // ── Resize handles ────────────────────────────────────────────────
   //
-  // When a stroke is selected, draw small grab-able handles the user
-  // can drag to resize. Different shapes get different handles:
-  //   - rect / ellipse / arrow / line / measure → 4 corner handles
-  //   - text / sticker                           → 4 corner handles
-  //                                                  (proportional resize)
-  //   - draw / polyline (freeform shapes)        → endpoints of the path
-  //                                                  + a single bbox-corner
-  //                                                  handle for uniform
-  //                                                  scaling
+  // When a stroke is selected, draw small grab-able handles ON the
+  // shape itself — not on a giant bounding box. Different shapes get
+  // different anchor points:
+  //   - arrow / line / measure  → 2 endpoint handles (start, end)
+  //   - rect / ellipse          → 4 corner handles ON the shape
+  //                                (no bbox padding)
+  //   - polyline                → handle at every vertex
+  //   - draw                    → 2 endpoint handles (path is too
+  //                                dense for per-vertex)
+  //   - text / sticker          → 4 corner handles around the bbox
+  //                                (the shape doesn't have its own
+  //                                visible edges)
   //
-  // Returns the array of handle positions so the mouse handler can
-  // hit-test against them.
+  // Each handle returns { name, x, y, ?index }. resizeStroke() reads
+  // .name (and .index for polyline vertices) to know what to mutate.
 
   var HANDLE_RADIUS = 7;
 
   function computeHandles(s) {
     if (!s) return [];
-    var bb = strokeBBox(s);
-    var pad = 6;
-    var x1 = bb.x - pad, y1 = bb.y - pad;
-    var x2 = x1 + bb.w + pad * 2, y2 = y1 + bb.h + pad * 2;
-    return [
-      { name: 'nw', x: x1, y: y1 },
-      { name: 'ne', x: x2, y: y1 },
-      { name: 'sw', x: x1, y: y2 },
-      { name: 'se', x: x2, y: y2 }
-    ];
+    if (s.tool === 'arrow' || s.tool === 'line' || s.tool === 'measure') {
+      return [
+        { name: 'start', x: s.startX, y: s.startY },
+        { name: 'end',   x: s.endX,   y: s.endY }
+      ];
+    }
+    if (s.tool === 'rect' || s.tool === 'ellipse') {
+      var x1 = Math.min(s.startX, s.endX);
+      var y1 = Math.min(s.startY, s.endY);
+      var x2 = Math.max(s.startX, s.endX);
+      var y2 = Math.max(s.startY, s.endY);
+      return [
+        { name: 'nw', x: x1, y: y1 },
+        { name: 'ne', x: x2, y: y1 },
+        { name: 'sw', x: x1, y: y2 },
+        { name: 'se', x: x2, y: y2 }
+      ];
+    }
+    if (s.tool === 'polyline' && Array.isArray(s.points) && s.points.length) {
+      return s.points.map(function(pt, i) {
+        return { name: 'pt', index: i, x: pt.x, y: pt.y };
+      });
+    }
+    if (s.tool === 'draw' && Array.isArray(s.points) && s.points.length) {
+      var first = s.points[0];
+      var last = s.points[s.points.length - 1];
+      return [
+        { name: 'pt', index: 0, x: first.x, y: first.y },
+        { name: 'pt', index: s.points.length - 1, x: last.x, y: last.y }
+      ];
+    }
+    // Text + sticker — corners of the bbox. No padding so the handles
+    // sit right on the shape's visible extent.
+    if (s.tool === 'text' || s.tool === 'sticker') {
+      var bb = strokeBBox(s);
+      return [
+        { name: 'nw', x: bb.x,         y: bb.y },
+        { name: 'ne', x: bb.x + bb.w,  y: bb.y },
+        { name: 'sw', x: bb.x,         y: bb.y + bb.h },
+        { name: 'se', x: bb.x + bb.w,  y: bb.y + bb.h }
+      ];
+    }
+    return [];
   }
 
   function drawResizeHandles(ctx, s) {
@@ -1426,84 +1467,104 @@
     return null;
   }
 
-  // Apply a corner-handle drag to a stroke. Resize semantics:
-  //   - rect / ellipse / arrow / line / measure: move the matching
-  //     endpoint (or the diagonal endpoint for ne/sw).
-  //   - draw / polyline: scale all points around the opposite corner
-  //     so the bbox snaps to the new corner.
-  //   - text / sticker: scale fontPx / size proportional to bbox change;
-  //     the anchor (x, y) moves so the OPPOSITE corner stays put.
+  // Apply a handle drag to a stroke. Each handle type has its own
+  // semantics — endpoints move directly, polyline vertices move
+  // directly, rect/ellipse corners move the matching endpoint, and
+  // text/sticker corners scale fontPx/size around the opposite
+  // corner.
   //
-  // `prior` is the stroke's bbox at the START of the drag (captured on
-  // mousedown). `target` is the new corner position from the cursor.
+  // `target` is the cursor position. `prior` is unused for most
+  // handle types now — we read live coords off the stroke. Kept in
+  // the signature for the text/sticker scale-from-opposite case
+  // where we need the bbox at drag-start.
   function resizeStroke(s, handle, prior, target) {
-    if (!s || !handle || !prior) return;
-    var pad = 6;
-    // Opposite corner stays anchored.
-    var opp = {
-      nw: { x: prior.x + prior.w + pad, y: prior.y + prior.h + pad },
-      ne: { x: prior.x - pad,           y: prior.y + prior.h + pad },
-      sw: { x: prior.x + prior.w + pad, y: prior.y - pad },
-      se: { x: prior.x - pad,           y: prior.y - pad }
-    }[handle.name];
-    var minSize = 8;
-    var newW = Math.max(minSize, Math.abs(target.x - opp.x) - pad * 2);
-    var newH = Math.max(minSize, Math.abs(target.y - opp.y) - pad * 2);
-    var newX = Math.min(opp.x, target.x) + pad;
-    var newY = Math.min(opp.y, target.y) + pad;
+    if (!s || !handle) return;
 
-    // Shapes with explicit start/end: re-target endpoints.
-    if (s.startX != null && s.endX != null) {
-      // Where do the start/end fall in the prior bbox? Preserve that
-      // ratio against the new bbox.
-      function remap(coord, axis) {
-        var min = Math.min(s.startX, s.endX);
-        var max = Math.max(s.startX, s.endX);
-        if (axis === 'y') { min = Math.min(s.startY, s.endY); max = Math.max(s.startY, s.endY); }
-        var span = max - min || 1;
-        var ratio = (coord - min) / span;
-        var newMin = axis === 'x' ? newX : newY;
-        var newSpan = axis === 'x' ? newW : newH;
-        return newMin + ratio * newSpan;
+    // Direct endpoint drag — arrows, lines, measurements.
+    if (handle.name === 'start') {
+      s.startX = target.x; s.startY = target.y;
+      return;
+    }
+    if (handle.name === 'end') {
+      s.endX = target.x; s.endY = target.y;
+      return;
+    }
+
+    // Polyline / draw vertex drag.
+    if (handle.name === 'pt' && typeof handle.index === 'number' && s.points && s.points[handle.index]) {
+      s.points[handle.index].x = target.x;
+      s.points[handle.index].y = target.y;
+      return;
+    }
+
+    // Rect / ellipse corner drag — move the matching endpoint. We
+    // need to figure out which physical endpoint (startX/Y vs endX/Y)
+    // corresponds to the corner being dragged, since the shape may
+    // have been drawn in any direction.
+    if ((s.tool === 'rect' || s.tool === 'ellipse') && s.startX != null) {
+      var minX = Math.min(s.startX, s.endX), maxX = Math.max(s.startX, s.endX);
+      var minY = Math.min(s.startY, s.endY), maxY = Math.max(s.startY, s.endY);
+      var startIsMinX = s.startX === minX;
+      var startIsMinY = s.startY === minY;
+      function setX(point, val) {
+        if (point === 'min') {
+          if (startIsMinX) s.startX = val; else s.endX = val;
+        } else {
+          if (startIsMinX) s.endX = val;   else s.startX = val;
+        }
       }
-      var sx = s.startX, sy = s.startY, ex = s.endX, ey = s.endY;
-      s.startX = remap(sx, 'x');
-      s.startY = remap(sy, 'y');
-      s.endX   = remap(ex, 'x');
-      s.endY   = remap(ey, 'y');
+      function setY(point, val) {
+        if (point === 'min') {
+          if (startIsMinY) s.startY = val; else s.endY = val;
+        } else {
+          if (startIsMinY) s.endY = val;   else s.startY = val;
+        }
+      }
+      if (handle.name === 'nw') { setX('min', target.x); setY('min', target.y); }
+      else if (handle.name === 'ne') { setX('max', target.x); setY('min', target.y); }
+      else if (handle.name === 'sw') { setX('min', target.x); setY('max', target.y); }
+      else if (handle.name === 'se') { setX('max', target.x); setY('max', target.y); }
       return;
     }
 
-    // Draw / polyline — scale all points around the opposite corner.
-    if (s.points && s.points.length) {
-      var oldMinX = prior.x, oldMinY = prior.y;
-      var scaleX = newW / Math.max(1, prior.w);
-      var scaleY = newH / Math.max(1, prior.h);
-      s.points.forEach(function(pt) {
-        pt.x = newX + (pt.x - oldMinX) * scaleX;
-        pt.y = newY + (pt.y - oldMinY) * scaleY;
-      });
-      return;
-    }
-
-    // Text — scale fontPx by the bigger of the two ratios so the type
-    // grows naturally; anchor moves to keep the opposite corner stable.
-    if (s.tool === 'text') {
+    // Text — corner drag scales fontPx around the opposite corner.
+    if (s.tool === 'text' && prior) {
+      var opp = {
+        nw: { x: prior.x + prior.w, y: prior.y + prior.h },
+        ne: { x: prior.x,           y: prior.y + prior.h },
+        sw: { x: prior.x + prior.w, y: prior.y },
+        se: { x: prior.x,           y: prior.y }
+      }[handle.name];
+      if (!opp) return;
+      var newW = Math.max(8, Math.abs(target.x - opp.x));
+      var newH = Math.max(8, Math.abs(target.y - opp.y));
+      var newX = Math.min(opp.x, target.x);
+      var newY = Math.min(opp.y, target.y);
       var scale = Math.max(newW / Math.max(1, prior.w), newH / Math.max(1, prior.h));
       s.fontPx = Math.max(10, Math.min(200, Math.round((s.fontPx || 24) * scale)));
-      // The text's anchor (top-left of glyph baseline area) shifts so
-      // the OPPOSITE corner of the new bbox aligns with where it was.
       s.x = newX;
       s.y = newY;
       return;
     }
 
-    // Sticker — scale `size` and re-center the anchor on the new bbox.
-    if (s.tool === 'sticker') {
-      var stickerScale = Math.max(newW / Math.max(1, prior.w), newH / Math.max(1, prior.h));
-      s.size = Math.max(12, Math.min(400, Math.round((s.size || 48) * stickerScale)));
-      s.x = newX + newW / 2;
-      s.y = newY + newH / 2;
+    // Sticker — same opposite-corner scale, but adjusts `size` and
+    // re-centers the anchor (sticker x/y is the CENTER).
+    if (s.tool === 'sticker' && prior) {
+      var oppS = {
+        nw: { x: prior.x + prior.w, y: prior.y + prior.h },
+        ne: { x: prior.x,           y: prior.y + prior.h },
+        sw: { x: prior.x + prior.w, y: prior.y },
+        se: { x: prior.x,           y: prior.y }
+      }[handle.name];
+      if (!oppS) return;
+      var nW = Math.max(8, Math.abs(target.x - oppS.x));
+      var nH = Math.max(8, Math.abs(target.y - oppS.y));
+      var nX = Math.min(oppS.x, target.x);
+      var nY = Math.min(oppS.y, target.y);
+      var scaleS = Math.max(nW / Math.max(1, prior.w), nH / Math.max(1, prior.h));
+      s.size = Math.max(12, Math.min(400, Math.round((s.size || 48) * scaleS)));
+      s.x = nX + nW / 2;
+      s.y = nY + nH / 2;
       return;
     }
   }
