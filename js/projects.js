@@ -2402,9 +2402,16 @@
     // CompanyCam-style tile: checkbox top-left, ✏️ + ⋮ top-right,
     // uploader initials bottom-left, tag/caption/annotation badges
     // bottom-right. Time + uploader name renders below the tile.
+    // Annotation strokes (if any) render onto a canvas that sits over
+    // the image — same shared renderer the lightbox uses, so what you
+    // saw in the markup viewer is exactly what you see on the tile.
+    var annoCanvasHTML = (isImg && annotationCount)
+      ? '<canvas class="p86-proj-photo-tile-anno"></canvas>'
+      : '';
     tile.innerHTML =
       '<div class="p86-proj-photo-tile-visual">' +
         visual +
+        annoCanvasHTML +
         '<label class="p86-proj-photo-tile-checkbox" onclick="event.stopPropagation();">' +
           '<input type="checkbox"' + (_detailState.selection.has(att.id) ? ' checked' : '') + ' />' +
         '</label>' +
@@ -2451,6 +2458,49 @@
         e.stopPropagation();
         openAnnotator(att);
       });
+    }
+
+    // Paint annotation strokes onto the overlay canvas. Strokes are
+    // stored at the full-size image's pixel coordinates, so the
+    // canvas's internal width/height matches att.width/height (NOT
+    // the thumb's dimensions) — then CSS scales the whole canvas
+    // down to fit on top of the thumb. Result: arrows / text /
+    // measurements appear in the right spot on the small tile.
+    var annoCanvas = tile.querySelector('.p86-proj-photo-tile-anno');
+    if (annoCanvas && annotationCount && window.p86AnnotationRender) {
+      var natW = Number(att.width) || 0;
+      var natH = Number(att.height) || 0;
+      function paintTileAnno() {
+        var w = natW || annoCanvas.clientWidth || 200;
+        var h = natH || annoCanvas.clientHeight || 200;
+        annoCanvas.width = w;
+        annoCanvas.height = h;
+        var ctx = annoCanvas.getContext('2d');
+        try { window.p86AnnotationRender.renderAll(ctx, att.annotations); }
+        catch (e) { /* defensive — bad stroke shouldn't kill the tile */ }
+      }
+      if (natW && natH) {
+        paintTileAnno();
+      } else {
+        // No stored dimensions — wait for the thumb to load so we can
+        // read its naturalWidth/Height (which is the THUMB's size, not
+        // the original). Strokes drawn in this coord space will be
+        // off; in practice we always have width/height on the row.
+        var thumbImg = tile.querySelector('.p86-proj-photo-tile-img');
+        if (thumbImg) {
+          if (thumbImg.complete && thumbImg.naturalWidth) {
+            natW = thumbImg.naturalWidth;
+            natH = thumbImg.naturalHeight;
+            paintTileAnno();
+          } else {
+            thumbImg.addEventListener('load', function() {
+              natW = thumbImg.naturalWidth;
+              natH = thumbImg.naturalHeight;
+              paintTileAnno();
+            }, { once: true });
+          }
+        }
+      }
     }
 
     return tile;

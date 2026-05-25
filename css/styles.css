@@ -3505,6 +3505,18 @@
   background: #1a1a2e;
 }
 .p86-proj-photo-tile-img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* Annotation overlay canvas — sits directly on top of the thumb,
+   matching the same object-fit:cover rules so strokes line up with
+   what you'd see in the lightbox. pointer-events:none so the tile
+   click still opens the photo. */
+.p86-proj-photo-tile-anno {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  pointer-events: none;
+}
 .p86-proj-photo-tile-doc {
   width: 100%; height: 100%;
   display: flex; align-items: center; justify-content: center;
