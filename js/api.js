@@ -228,6 +228,28 @@
     }
   };
 
+  // Polymorphic reports (Phase 2) — projects (and future leads /
+  // estimates) share the legacy job_reports table via entity_type +
+  // entity_id columns. The legacy /api/jobs/:jobId/reports route
+  // still owns 'job' rows with job-specific photo-source logic.
+  var reports = {
+    list: function(entityType, entityId) {
+      return get('/api/reports/' + encodeURIComponent(entityType) + '/' + encodeURIComponent(entityId));
+    },
+    get: function(entityType, entityId, reportId) {
+      return get('/api/reports/' + encodeURIComponent(entityType) + '/' + encodeURIComponent(entityId) + '/' + encodeURIComponent(reportId));
+    },
+    create: function(entityType, entityId, payload) {
+      return post('/api/reports/' + encodeURIComponent(entityType) + '/' + encodeURIComponent(entityId), payload || {});
+    },
+    update: function(entityType, entityId, reportId, payload) {
+      return patch('/api/reports/' + encodeURIComponent(entityType) + '/' + encodeURIComponent(entityId) + '/' + encodeURIComponent(reportId), payload);
+    },
+    remove: function(entityType, entityId, reportId) {
+      return del('/api/reports/' + encodeURIComponent(entityType) + '/' + encodeURIComponent(entityId) + '/' + encodeURIComponent(reportId));
+    }
+  };
+
   // Org-level tag catalog (Phase 1.7). Curated master list of tag
   // names per organization — feeds autocomplete across all surfaces.
   var orgTags = {
@@ -496,7 +518,7 @@
 
   window.p86Api = {
     get: get, put: put, post: post, del: del, patch: patch,
-    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, qbCosts: qbCosts, subs: subsApi, schedule: schedule, adminSms: adminSms, messages: messages, weather: weather, projects: projects, orgTags: orgTags,
+    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, qbCosts: qbCosts, subs: subsApi, schedule: schedule, adminSms: adminSms, messages: messages, weather: weather, projects: projects, orgTags: orgTags, reports: reports,
     isOffline: isOffline,
     isAuthenticated: function() { return !!getToken() && !isOffline(); }
   };

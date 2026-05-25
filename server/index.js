@@ -42,6 +42,7 @@ const adminSmsRoutes = require('./routes/admin-sms-routes');
 const adminOrganizationsRoutes = require('./routes/admin-organizations-routes');
 const smsRoutes = require('./routes/sms-routes');
 const reportRoutes = require('./routes/report-routes');
+const reportsPolymorphicRoutes = require('./routes/reports-routes');
 const fieldToolsRoutes = require('./routes/field-tools-routes');
 const payloadRoutes = require('./routes/payload-routes');
 const projectRoutes = require('./routes/project-routes');
@@ -86,6 +87,12 @@ app.use('/api/jobs', jobRoutes);
 // Per-job reports nest under /api/jobs/:jobId/reports (mergeParams on
 // the router preserves :jobId from this prefix).
 app.use('/api/jobs/:jobId/reports', reportRoutes);
+// Polymorphic reports for projects (Phase 2). Writes to the same
+// job_reports table the legacy route uses, scoped by entity_type +
+// entity_id. The legacy /api/jobs/:jobId/reports endpoint still
+// handles 'job' rows with its job-specific photo-source logic
+// (buildings, phases, COs).
+app.use('/api/reports', reportsPolymorphicRoutes);
 app.use('/api/field-tools', fieldToolsRoutes);
 // Payload DSL routes — list, file download, reject, apply, CSV import.
 // Mounted before the broad /api/ai handler so /api/payloads claims its

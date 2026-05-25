@@ -88,20 +88,39 @@
     var uid = currentUserId();
     if (!uid) {
       // Auth race: if the URL restored to /files before p86Auth.init()
-      // finished its async checkSession() roundtrip, getUser() returns
-      // null. Poll for up to ~2s so we don't flash the sign-in stub on
-      // a normal refresh. Only show the stub if there's truly no token.
+      // finished its async checkSession() roundtrip (refresh-token +
+      // /me, two sequential requests), getUser() returns null. We
+      // wait for the 'p86:auth-ready' event auth.js dispatches when
+      // currentUser lands, and as a belt-and-suspenders fallback we
+      // also poll for ~8s (cold-Railway start can be slow). Only show
+      // the "Sign in" stub if there's truly no token in localStorage.
       if (localStorage.getItem('p86-auth-token')) {
         pane.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-dim,#888);">Loading…</div>';
+        var settled = false;
+        function onReady() {
+          if (settled) return;
+          settled = true;
+          window.removeEventListener('p86:auth-ready', onReady);
+          if (currentUserId()) renderMyFilesTab();
+        }
+        window.addEventListener('p86:auth-ready', onReady);
         var tries = 0;
         var timer = setInterval(function() {
           tries++;
           if (currentUserId()) {
             clearInterval(timer);
-            renderMyFilesTab();
-          } else if (tries >= 16) { // ~2s @ 125ms
+            if (!settled) {
+              settled = true;
+              window.removeEventListener('p86:auth-ready', onReady);
+              renderMyFilesTab();
+            }
+          } else if (tries >= 64) { // ~8s @ 125ms — generous for cold starts
             clearInterval(timer);
-            pane.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-dim,#888);">Sign in to access your files.</div>';
+            if (!settled) {
+              settled = true;
+              window.removeEventListener('p86:auth-ready', onReady);
+              pane.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-dim,#888);">Sign in to access your files.</div>';
+            }
           }
         }, 125);
         return;

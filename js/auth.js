@@ -257,6 +257,13 @@
     })
     .then(function(data) {
       currentUser = data.user;
+      // Broadcast that auth has settled so deep-linked views (e.g.
+      // /files) that rendered against a null currentUser can re-paint
+      // now that we have one. my-files.js listens for this and calls
+      // its own render fn. Other surfaces can opt in similarly.
+      try {
+        window.dispatchEvent(new CustomEvent('p86:auth-ready', { detail: { user: currentUser } }));
+      } catch (e) { /* IE-style CustomEvent fallback not needed for our targets */ }
       // Sub-portal users land on /portal — never the PM app shell —
       // even if their token cookie is still valid. checkSession runs
       // on every reload of the main app, so this is the catch-all.

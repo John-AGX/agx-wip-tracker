@@ -1111,16 +1111,23 @@
       paintDetailError('API not available');
       return;
     }
+    var reportsPromise = (window.p86Api && window.p86Api.reports)
+      ? window.p86Api.reports.list('project', projectId).catch(function() { return { reports: [] }; })
+      : Promise.resolve({ reports: [] });
     Promise.all([
       api().get(projectId),
       api().pairs.list(projectId).catch(function() { return { pairs: [] }; }),
       api().activity(projectId, { limit: 50 }).catch(function() { return { activity: [] }; }),
-      window.p86Api.attachments.list('project', projectId).catch(function() { return { attachments: [] }; })
+      window.p86Api.attachments.list('project', projectId).catch(function() { return { attachments: [] }; }),
+      reportsPromise
     ]).then(function(results) {
       _detailState.project = results[0] && results[0].project;
       _detailState.pairs = (results[1] && results[1].pairs) || [];
       _detailState.activity = (results[2] && results[2].activity) || [];
       _detailState.photos = (results[3] && results[3].attachments) || [];
+      _detailState.reports = (results[4] && results[4].reports) || [];
+      _detailState.reportsCount = _detailState.reports.length;
+      _detailState.activeTab = _detailState.activeTab || 'photos';
       paintDetail();
     }).catch(function(e) {
       paintDetailError(e.message || 'Failed to load project');
@@ -1230,14 +1237,28 @@
         '</div>' +
       '</div>' +
 
-      // Tab strip (Photos + future) — for now Photos is the only
-      // active tab; Reports + Files are placeholders for the
-      // polymorphic refactor in P2.
-      '<div class="p86-proj-tabs">' +
-        '<button class="p86-proj-tab active">Photos <span class="p86-proj-tab-count">(' + _detailState.photos.length + ')</span></button>' +
-        '<button class="p86-proj-tab disabled" title="Coming in Phase 2">Reports <span class="p86-proj-tab-count">(0)</span></button>' +
-        '<button class="p86-proj-tab disabled" title="Coming soon">Files <span class="p86-proj-tab-count">(0)</span></button>' +
-      '</div>' +
+      // Tab strip. Photos | Reports | Files — all active. Counts are
+      // recomputed each paintDetail() to reflect the current data.
+      (function() {
+        var imageCount = _detailState.photos.filter(function(a) { return a.mime_type && /^image\//.test(a.mime_type); }).length;
+        var fileCount = _detailState.photos.length - imageCount;
+        var reportCount = _detailState.reportsCount || 0;
+        var active = _detailState.activeTab || 'photos';
+        return '<div class="p86-proj-tabs">' +
+          '<button class="p86-proj-tab' + (active === 'photos' ? ' active' : '') + '" onclick="window.p86Projects.switchTab(\'photos\')">Photos <span class="p86-proj-tab-count">(' + imageCount + ')</span></button>' +
+          '<button class="p86-proj-tab' + (active === 'reports' ? ' active' : '') + '" onclick="window.p86Projects.switchTab(\'reports\')">Reports <span class="p86-proj-tab-count">(' + reportCount + ')</span></button>' +
+          '<button class="p86-proj-tab' + (active === 'files' ? ' active' : '') + '" onclick="window.p86Projects.switchTab(\'files\')">Files <span class="p86-proj-tab-count">(' + fileCount + ')</span></button>' +
+        '</div>';
+      })() +
+
+      // Tab content host — only one of photos/reports/files renders
+      // at a time. We always inject all three blocks and toggle CSS
+      // visibility via the active state so switching tabs doesn't
+      // re-fetch attachments.
+      '<div id="projTabContent">' +
+
+      // ===== PHOTOS TAB =====
+      '<div id="projTabPhotos" class="p86-proj-tab-pane"' + ((_detailState.activeTab || 'photos') === 'photos' ? '' : ' style="display:none;"') + '>' +
 
       // Filter toolbar — date range + uploader + view + upload
       '<div class="p86-proj-filter-toolbar">' +
@@ -1264,6 +1285,20 @@
 
       // Photo feed (date-grouped grid; rendered by paintPhotoFeed)
       '<div id="projPhotoFeed" class="p86-proj-photo-feed"></div>' +
+
+      '</div>' + // end #projTabPhotos
+
+      // ===== REPORTS TAB =====
+      '<div id="projTabReports" class="p86-proj-tab-pane"' + (_detailState.activeTab === 'reports' ? '' : ' style="display:none;"') + '>' +
+        '<div id="projReportsHost"><div class="p86-proj-empty-line">Loading reports…</div></div>' +
+      '</div>' +
+
+      // ===== FILES TAB =====
+      '<div id="projTabFiles" class="p86-proj-tab-pane"' + (_detailState.activeTab === 'files' ? '' : ' style="display:none;"') + '>' +
+        '<div id="projFilesHost"></div>' +
+      '</div>' +
+
+      '</div>' + // end #projTabContent
 
       // Secondary zone: description + map + activity. Tucked under
       // the photos because the photos are the point of the page;
@@ -1360,6 +1395,418 @@
     paintPhotoFeed();
     paintActivityFeed();
     paintProjectWeather();
+    // Paint the current tab's body. Photos tab is wired by paintPhotoFeed
+    // above; reports + files paint on demand to avoid round-trips before
+    // the user actually clicks the tab.
+    var activeTab = _detailState.activeTab || 'photos';
+    if (activeTab === 'reports') paintReportsTab();
+    else if (activeTab === 'files') paintFilesTab();
+  }
+
+  // Tab switcher — toggles visibility of the three tab panes and
+  // paints the chosen one on demand. activeTab persists in
+  // _detailState across paintDetail() calls within a single open.
+  function switchTab(name) {
+    if (!['photos', 'reports', 'files'].includes(name)) return;
+    _detailState.activeTab = name;
+    // Toggle pane visibility without a full re-render.
+    var panes = { photos: 'projTabPhotos', reports: 'projTabReports', files: 'projTabFiles' };
+    Object.keys(panes).forEach(function(k) {
+      var el = document.getElementById(panes[k]);
+      if (el) el.style.display = (k === name) ? '' : 'none';
+    });
+    // Refresh the tab strip's active state.
+    document.querySelectorAll('.p86-proj-tab').forEach(function(btn) {
+      btn.classList.remove('active');
+    });
+    var tabs = document.querySelectorAll('.p86-proj-tab');
+    tabs.forEach(function(btn) {
+      var label = btn.textContent.trim().toLowerCase();
+      if (label.indexOf(name) === 0) btn.classList.add('active');
+    });
+    if (name === 'reports') paintReportsTab();
+    else if (name === 'files') paintFilesTab();
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // Reports tab — list + create + delete. Each row links to a
+  // dedicated report editor (a modal overlay; print-to-PDF via
+  // browser print). The full editor surface is render-on-demand
+  // through openReportEditor().
+  // ──────────────────────────────────────────────────────────────────
+  function paintReportsTab() {
+    var host = document.getElementById('projReportsHost');
+    if (!host) return;
+    var p = _detailState.project;
+    if (!p) return;
+    if (!window.p86Api || !window.p86Api.reports) {
+      host.innerHTML = '<div class="p86-proj-empty-line">Reports API not loaded.</div>';
+      return;
+    }
+    host.innerHTML = '<div class="p86-proj-empty-line">Loading reports…</div>';
+    window.p86Api.reports.list('project', p.id).then(function(r) {
+      _detailState.reports = (r && r.reports) || [];
+      _detailState.reportsCount = _detailState.reports.length;
+      paintReportsList();
+      // Refresh the tab strip count.
+      var reportsBtn = Array.from(document.querySelectorAll('.p86-proj-tab')).find(function(b) {
+        return b.textContent.trim().toLowerCase().indexOf('reports') === 0;
+      });
+      if (reportsBtn) {
+        var count = reportsBtn.querySelector('.p86-proj-tab-count');
+        if (count) count.textContent = '(' + _detailState.reportsCount + ')';
+      }
+    }).catch(function(e) {
+      host.innerHTML = '<div class="p86-proj-error" style="padding:14px;color:#f87171;">Failed to load reports: ' + escapeHTML(e.message || e) + '</div>';
+    });
+  }
+
+  function paintReportsList() {
+    var host = document.getElementById('projReportsHost');
+    if (!host) return;
+    var reports = _detailState.reports || [];
+    var html =
+      '<div class="p86-proj-reports-toolbar">' +
+        '<div class="p86-proj-reports-hint">Curated photo collections you can print as a single PDF — Before / During / After by default, but rename or add sections as needed.</div>' +
+        '<button class="primary" onclick="window.p86Projects.createReport()">&#x2795; New Report</button>' +
+      '</div>';
+    if (!reports.length) {
+      html += '<div class="p86-proj-empty-line" style="padding:30px;text-align:center;border:1px dashed var(--border, #333);border-radius:10px;margin-top:8px;">No reports yet. Hit <strong>+ New Report</strong> to draft one.</div>';
+    } else {
+      html += '<div class="p86-proj-reports-grid">' +
+        reports.map(function(r) {
+          return '<div class="p86-proj-report-card" onclick="window.p86Projects.openReport(\'' + escapeAttr(r.id) + '\')">' +
+            '<div class="p86-proj-report-card-title">' + escapeHTML(r.title || 'Untitled report') + '</div>' +
+            '<div class="p86-proj-report-card-stats">' +
+              '&#x1F4F7; ' + Number(r.photo_count || 0) + ' photo' + (r.photo_count === 1 ? '' : 's') +
+              ' &middot; ' + Number(r.section_count || 0) + ' section' + (r.section_count === 1 ? '' : 's') +
+              ' &middot; ' + escapeHTML(fmtRelative(r.updated_at)) +
+            '</div>' +
+            (r.created_by_name ? '<div class="p86-proj-report-card-author">by ' + escapeHTML(r.created_by_name) + '</div>' : '') +
+            '<button class="p86-proj-report-card-menu" title="Delete" onclick="event.stopPropagation(); window.p86Projects.deleteReport(\'' + escapeAttr(r.id) + '\')">&times;</button>' +
+          '</div>';
+        }).join('') +
+      '</div>';
+    }
+    host.innerHTML = html;
+  }
+
+  function createReport() {
+    var p = _detailState.project;
+    if (!p) return;
+    var title = window.prompt('New report title:', p.name + ' — Walkthrough');
+    if (!title) return;
+    window.p86Api.reports.create('project', p.id, { title: title }).then(function(r) {
+      var newR = r && r.report;
+      _detailState.reports = (_detailState.reports || []).concat([{
+        id: newR.id,
+        title: newR.title,
+        summary: newR.summary,
+        section_count: (newR.sections || []).length,
+        photo_count: 0,
+        updated_at: new Date().toISOString()
+      }]);
+      paintReportsList();
+      openReportEditor(newR.id);
+    }).catch(function(e) {
+      alert('Create failed: ' + (e.message || e));
+    });
+  }
+
+  function deleteReport(reportId) {
+    if (!window.confirm('Delete this report? This cannot be undone.')) return;
+    var p = _detailState.project;
+    window.p86Api.reports.remove('project', p.id, reportId).then(function() {
+      _detailState.reports = (_detailState.reports || []).filter(function(r) { return r.id !== reportId; });
+      _detailState.reportsCount = _detailState.reports.length;
+      paintReportsList();
+    }).catch(function(e) { alert('Delete failed: ' + (e.message || e)); });
+  }
+
+  function openReport(reportId) { openReportEditor(reportId); }
+
+  // Report editor — full-screen overlay. Sections + photo picker +
+  // print-to-PDF button. Lightweight: pull all project photos, drag
+  // (well, click) them into sections.
+  function openReportEditor(reportId) {
+    var p = _detailState.project;
+    if (!p) return;
+    var prior = document.getElementById('projReportEditor');
+    if (prior) prior.remove();
+
+    var overlay = document.createElement('div');
+    overlay.id = 'projReportEditor';
+    overlay.className = 'p86-report-overlay';
+    overlay.innerHTML =
+      '<div class="p86-report-host">' +
+        '<div class="p86-report-loading">Loading report…</div>' +
+      '</div>';
+    document.body.appendChild(overlay);
+    document.body.style.overflow = 'hidden';
+
+    window.p86Api.reports.get('project', p.id, reportId).then(function(r) {
+      var report = r && r.report;
+      if (!report) {
+        overlay.querySelector('.p86-report-host').innerHTML = '<div class="p86-report-loading">Report not found.</div>';
+        return;
+      }
+      paintReportEditor(overlay, report);
+    }).catch(function(e) {
+      overlay.querySelector('.p86-report-host').innerHTML = '<div class="p86-report-loading" style="color:#f87171;">Failed to load: ' + escapeHTML(e.message || e) + '</div>';
+    });
+  }
+
+  function paintReportEditor(overlay, report) {
+    var p = _detailState.project;
+    var allPhotos = (_detailState.photos || []).filter(function(a) { return a.mime_type && /^image\//.test(a.mime_type); });
+    // Track sections as mutable state. sections_raw is what we PATCH
+    // back; sections is the hydrated render. We mirror updates to
+    // both so the editor stays consistent during the modal session.
+    var state = {
+      report: report,
+      sections: (report.sections_raw || []).map(function(s) {
+        return {
+          id: s.id,
+          label: s.label || '',
+          photo_ids: (s.photo_ids || []).slice(),
+          captions: Object.assign({}, s.captions || {})
+        };
+      })
+    };
+
+    function close() {
+      overlay.remove();
+      document.body.style.overflow = '';
+      // Refresh the reports list to reflect any saves.
+      paintReportsTab();
+    }
+
+    function save() {
+      var body = {
+        title: state.report.title,
+        summary: state.report.summary || '',
+        sections: state.sections
+      };
+      return window.p86Api.reports.update('project', p.id, state.report.id, body);
+    }
+
+    function printReport() {
+      // The print view uses CSS @media print; we open a print dialog
+      // after triggering a "report-print" mode class so the chrome
+      // hides and the photo blocks expand to full-bleed.
+      overlay.classList.add('p86-report-printing');
+      save().then(function() {
+        setTimeout(function() {
+          window.print();
+          setTimeout(function() { overlay.classList.remove('p86-report-printing'); }, 300);
+        }, 200);
+      }).catch(function() {
+        overlay.classList.remove('p86-report-printing');
+        window.print(); // print anyway with the unsaved state
+      });
+    }
+
+    function paint() {
+      var host = overlay.querySelector('.p86-report-host');
+      host.innerHTML =
+        '<div class="p86-report-topbar">' +
+          '<input id="rptTitle" class="p86-report-title-input" value="' + escapeAttr(state.report.title || '') + '" placeholder="Report title" />' +
+          '<div class="p86-report-topbar-actions">' +
+            '<button class="ee-btn secondary" id="rptPrint">&#x1F5A8; Print / Save PDF</button>' +
+            '<button class="ee-btn secondary" id="rptAddSection">&#x2795; Section</button>' +
+            '<button class="ee-btn secondary" id="rptSave">Save</button>' +
+            '<button class="p86-modal-close" id="rptClose">&times;</button>' +
+          '</div>' +
+        '</div>' +
+        '<textarea id="rptSummary" class="p86-report-summary" rows="2" placeholder="Optional summary at the top of the report">' + escapeHTML(state.report.summary || '') + '</textarea>' +
+        '<div class="p86-report-sections">' +
+          state.sections.map(sectionHTML).join('') +
+        '</div>';
+
+      // Title + summary blur-save into state (saved on Save button).
+      host.querySelector('#rptTitle').addEventListener('input', function(e) { state.report.title = e.target.value; });
+      host.querySelector('#rptSummary').addEventListener('input', function(e) { state.report.summary = e.target.value; });
+
+      host.querySelector('#rptClose').addEventListener('click', close);
+      host.querySelector('#rptSave').addEventListener('click', function() {
+        var btn = host.querySelector('#rptSave');
+        btn.disabled = true; btn.textContent = 'Saving…';
+        save().then(function() {
+          btn.textContent = 'Saved';
+          setTimeout(function() { btn.disabled = false; btn.textContent = 'Save'; }, 800);
+          // Sync section counts back to the list.
+          var listItem = (_detailState.reports || []).find(function(r) { return r.id === state.report.id; });
+          if (listItem) {
+            listItem.title = state.report.title;
+            listItem.section_count = state.sections.length;
+            listItem.photo_count = state.sections.reduce(function(n, s) { return n + s.photo_ids.length; }, 0);
+            listItem.updated_at = new Date().toISOString();
+          }
+        }).catch(function(e) {
+          btn.disabled = false; btn.textContent = 'Save';
+          alert('Save failed: ' + (e.message || e));
+        });
+      });
+      host.querySelector('#rptPrint').addEventListener('click', printReport);
+      host.querySelector('#rptAddSection').addEventListener('click', function() {
+        var label = window.prompt('New section name:', 'Additional Photos');
+        if (!label) return;
+        state.sections.push({ id: 'sec_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6), label: label, photo_ids: [], captions: {} });
+        paint();
+      });
+
+      // Wire section interactions.
+      state.sections.forEach(function(section, sIdx) {
+        var sectionEl = host.querySelector('[data-sec="' + section.id + '"]');
+        if (!sectionEl) return;
+        var labelEl = sectionEl.querySelector('.p86-report-section-label');
+        if (labelEl) labelEl.addEventListener('input', function(e) {
+          state.sections[sIdx].label = e.target.value;
+        });
+        var addBtn = sectionEl.querySelector('.p86-report-section-add');
+        if (addBtn) addBtn.addEventListener('click', function() { openPhotoPicker(sIdx); });
+        var rmSectionBtn = sectionEl.querySelector('.p86-report-section-remove');
+        if (rmSectionBtn) rmSectionBtn.addEventListener('click', function() {
+          if (!window.confirm('Remove this section and its photo references? (Photos themselves are not deleted.)')) return;
+          state.sections.splice(sIdx, 1);
+          paint();
+        });
+        sectionEl.querySelectorAll('[data-rm-photo]').forEach(function(btn) {
+          btn.addEventListener('click', function() {
+            var pid = btn.getAttribute('data-rm-photo');
+            state.sections[sIdx].photo_ids = state.sections[sIdx].photo_ids.filter(function(x) { return x !== pid; });
+            delete state.sections[sIdx].captions[pid];
+            paint();
+          });
+        });
+        sectionEl.querySelectorAll('[data-caption-input]').forEach(function(input) {
+          input.addEventListener('input', function(e) {
+            var pid = input.getAttribute('data-caption-input');
+            state.sections[sIdx].captions[pid] = e.target.value;
+          });
+        });
+      });
+    }
+
+    function sectionHTML(section) {
+      return '<div class="p86-report-section" data-sec="' + escapeAttr(section.id) + '">' +
+        '<div class="p86-report-section-header">' +
+          '<input class="p86-report-section-label" value="' + escapeAttr(section.label) + '" placeholder="Section name" />' +
+          '<div class="p86-report-section-actions">' +
+            '<button class="ee-btn secondary p86-report-section-add">&#x2795; Add photos</button>' +
+            '<button class="ee-btn secondary p86-report-section-remove">Remove</button>' +
+          '</div>' +
+        '</div>' +
+        '<div class="p86-report-section-photos">' +
+          (section.photo_ids.length === 0
+            ? '<div class="p86-proj-empty-line" style="grid-column:1/-1;">No photos in this section yet.</div>'
+            : section.photo_ids.map(function(pid) {
+                var att = allPhotos.find(function(a) { return a.id === pid; });
+                if (!att) return '<div class="p86-report-photo p86-report-photo-missing">(photo deleted)</div>';
+                var caption = section.captions[pid] || '';
+                return '<div class="p86-report-photo">' +
+                  '<img src="' + escapeAttr(att.thumb_url || att.web_url) + '" alt="" />' +
+                  '<input class="p86-report-photo-caption" value="' + escapeAttr(caption) + '" data-caption-input="' + escapeAttr(pid) + '" placeholder="Caption (optional)" />' +
+                  '<button type="button" class="p86-report-photo-remove" data-rm-photo="' + escapeAttr(pid) + '" title="Remove from section">&times;</button>' +
+                '</div>';
+              }).join('')) +
+        '</div>' +
+      '</div>';
+    }
+
+    function openPhotoPicker(targetSectionIdx) {
+      var modal = document.createElement('div');
+      modal.className = 'modal active';
+      modal.id = 'projReportPhotoPicker';
+      var alreadyInSection = new Set(state.sections[targetSectionIdx].photo_ids);
+      modal.innerHTML =
+        '<div class="modal-content" style="max-width:760px;">' +
+          '<div class="modal-header">' +
+            '<span>Add photos to "' + escapeHTML(state.sections[targetSectionIdx].label || 'section') + '"</span>' +
+            '<button class="p86-modal-close" data-close>&times;</button>' +
+          '</div>' +
+          '<div class="p86-proj-create-body">' +
+            (allPhotos.length === 0
+              ? '<div class="p86-proj-empty-line">No photos in this project yet. Upload some first.</div>'
+              : '<div class="p86-report-picker-grid">' +
+                  allPhotos.map(function(att) {
+                    var isAlready = alreadyInSection.has(att.id);
+                    return '<button class="p86-report-picker-tile' + (isAlready ? ' p86-report-picker-tile-added' : '') + '" data-pick="' + escapeAttr(att.id) + '"' + (isAlready ? ' disabled' : '') + '>' +
+                      '<img src="' + escapeAttr(att.thumb_url || att.web_url) + '" alt="" />' +
+                      (isAlready ? '<span class="p86-report-picker-added-badge">Added</span>' : '') +
+                    '</button>';
+                  }).join('') +
+                '</div>') +
+          '</div>' +
+          '<div class="modal-footer">' +
+            '<button class="ee-btn secondary" data-close>Done</button>' +
+          '</div>' +
+        '</div>';
+      document.body.appendChild(modal);
+      modal.addEventListener('click', function(e) { if (e.target === modal) modal.remove(); });
+      modal.querySelectorAll('[data-close]').forEach(function(b) {
+        b.addEventListener('click', function() { modal.remove(); });
+      });
+      modal.querySelectorAll('[data-pick]').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          var pid = btn.getAttribute('data-pick');
+          if (state.sections[targetSectionIdx].photo_ids.indexOf(pid) === -1) {
+            state.sections[targetSectionIdx].photo_ids.push(pid);
+          }
+          btn.classList.add('p86-report-picker-tile-added');
+          btn.disabled = true;
+          if (!btn.querySelector('.p86-report-picker-added-badge')) {
+            var badge = document.createElement('span');
+            badge.className = 'p86-report-picker-added-badge';
+            badge.textContent = 'Added';
+            btn.appendChild(badge);
+          }
+          paint();
+        });
+      });
+    }
+
+    paint();
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // Files tab — non-image attachments (PDFs, docs, etc.)
+  // ──────────────────────────────────────────────────────────────────
+  function paintFilesTab() {
+    var host = document.getElementById('projFilesHost');
+    if (!host) return;
+    var files = (_detailState.photos || []).filter(function(a) { return !(a.mime_type && /^image\//.test(a.mime_type)); });
+    if (!files.length) {
+      host.innerHTML = '<div class="p86-proj-empty-line" style="padding:30px;text-align:center;border:1px dashed var(--border, #333);border-radius:10px;">No documents yet. Upload PDFs / Word / Excel via the Photos tab and they\'ll appear here.</div>';
+      return;
+    }
+    files.sort(function(a, b) {
+      return new Date(b.uploaded_at).getTime() - new Date(a.uploaded_at).getTime();
+    });
+    host.innerHTML = '<div class="p86-proj-files-list">' +
+      files.map(function(f) {
+        var ext = (f.filename || '').split('.').pop().slice(0, 4).toUpperCase() || 'DOC';
+        return '<a class="p86-proj-file-row" href="' + escapeAttr(f.original_url) + '" download="' + escapeAttr(f.filename) + '" target="_blank" rel="noopener">' +
+          '<div class="p86-proj-file-ext">' + escapeHTML(ext) + '</div>' +
+          '<div class="p86-proj-file-meta">' +
+            '<div class="p86-proj-file-name">' + escapeHTML(f.filename) + '</div>' +
+            '<div class="p86-proj-file-sub">' + fmtFileSize(f.size_bytes) +
+              (f.uploaded_by_name ? ' &middot; ' + escapeHTML(f.uploaded_by_name) : '') +
+              ' &middot; ' + escapeHTML(fmtRelative(f.uploaded_at)) +
+            '</div>' +
+          '</div>' +
+          '<span class="p86-proj-file-arrow">&#x2B07;</span>' +
+        '</a>';
+      }).join('') +
+    '</div>';
+  }
+
+  function fmtFileSize(bytes) {
+    var n = Number(bytes);
+    if (!isFinite(n) || !n) return '';
+    if (n < 1024) return n + ' B';
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+    return (n / 1024 / 1024).toFixed(1) + ' MB';
   }
 
   // Render today's forecast in the detail header. Uses the cached
@@ -2749,6 +3196,10 @@
     archive: archive,
     unarchive: unarchive,
     editLinks: editLinks,
+    switchTab: switchTab,
+    createReport: createReport,
+    openReport: openReport,
+    deleteReport: deleteReport,
     _fieldBlur: _fieldBlur
   };
 })();

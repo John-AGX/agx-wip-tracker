@@ -1984,6 +1984,27 @@ async function initSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_job_reports_job ON job_reports(job_id, updated_at DESC);
 
+    -- Polymorphic refactor (Phase 2). Add nullable entity_type +
+    -- entity_id columns alongside the legacy job_id so reports can
+    -- belong to jobs OR projects (and later: leads, estimates).
+    -- entity_type is NULL on existing rows; the backfill below stamps
+    -- them as 'job' / job_id. Once every row has entity_type set,
+    -- the job_id column can be dropped in a future migration. Until
+    -- then both routes (legacy /api/jobs/:jobId/reports AND new
+    -- /api/reports/:entityType/:entityId) work side-by-side.
+    ALTER TABLE job_reports ADD COLUMN IF NOT EXISTS entity_type TEXT;
+    ALTER TABLE job_reports ADD COLUMN IF NOT EXISTS entity_id   TEXT;
+    UPDATE job_reports
+       SET entity_type = 'job', entity_id = job_id
+     WHERE entity_type IS NULL;
+    -- Make job_id nullable so future project-scoped rows can leave it
+    -- empty. Existing rows keep their job_id; new rows only need
+    -- entity_type + entity_id.
+    ALTER TABLE job_reports ALTER COLUMN job_id DROP NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_job_reports_entity
+      ON job_reports(entity_type, entity_id, updated_at DESC)
+      WHERE entity_type IS NOT NULL;
+
     -- ───────────────────────────────────────────────────────────────
     -- Projects — CompanyCam-style first-class entity that buckets
     -- photos + markups + reports around a single physical site /
