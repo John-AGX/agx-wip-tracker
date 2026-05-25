@@ -87,57 +87,40 @@
     return (window.p86Auth && window.p86Auth.getUser && window.p86Auth.getUser()) || null;
   }
 
-  // Pull leads / jobs / clients caches into shape for the link
-  // dropdowns. If the user landed on Projects directly (e.g. via
-  // /files) without visiting the Leads or Clients tabs first,
-  // window.appData.{leads,clients} can be empty. Mirror what the
-  // estimate editor does: prefer the dedicated p86Leads / p86Clients
-  // caches; fall back to a one-shot API fetch; populate appData so
-  // the rest of the app benefits too.
+  // Refresh leads / jobs / clients into window.appData so the project
+  // link dropdowns + the inheritance code (createForEntity, editLinks
+  // Use-linked-entity checkbox) read the CURRENT entity addresses, not
+  // a snapshot from when the page first loaded.
+  //
+  // Previously this only fetched when the cache was empty. That made
+  // the page snappy but caused a stale-data bug: edit a lead's address
+  // in the Leads tab, then come back to Projects and link a project
+  // to that lead — inheritance pulled the PRE-edit address from the
+  // stale cache, leaving the project pointing at the old address.
+  //
+  // The lists are small (single-tenant org-sized) so always-refresh
+  // is cheap. Failures swallow silently — the dropdowns just render
+  // whatever's in the existing cache.
   function ensureEntityCaches() {
     var promises = [];
+    window.appData = window.appData || {};
 
-    // Leads — p86Leads.getCached() if populated, else fetch.
-    var leadsCached = (window.p86Leads && window.p86Leads.getCached && window.p86Leads.getCached()) || [];
-    if (!leadsCached.length && window.p86Api && window.p86Api.leads) {
+    if (window.p86Api && window.p86Api.leads) {
       promises.push(window.p86Api.leads.list().then(function(r) {
         var rows = (r && r.leads) || [];
-        window.appData = window.appData || {};
-        window.appData.leads = rows;
-        // Mirror back into p86Leads if it exposes a cache hook.
-        if (window.p86Leads && typeof window.p86Leads.reload === 'function') {
-          // Don't block on reload — populating appData is enough for
-          // our dropdowns; p86Leads will refresh itself when the
-          // Leads tab activates.
-        }
-      }).catch(function() { /* swallow — render with empty list */ }));
-    } else {
-      window.appData = window.appData || {};
-      window.appData.leads = leadsCached.length ? leadsCached : (window.appData.leads || []);
-    }
-
-    // Clients — p86Clients.ensureLoaded() is the canonical pattern.
-    if (window.p86Clients && typeof window.p86Clients.ensureLoaded === 'function') {
-      promises.push(window.p86Clients.ensureLoaded().then(function(rows) {
-        window.appData = window.appData || {};
-        window.appData.clients = rows || [];
+        if (rows.length || !window.appData.leads) window.appData.leads = rows;
       }).catch(function() {}));
-    } else if (window.p86Api && window.p86Api.clients) {
+    }
+    if (window.p86Api && window.p86Api.clients) {
       promises.push(window.p86Api.clients.list().then(function(r) {
         var rows = (r && r.clients) || [];
-        window.appData = window.appData || {};
-        window.appData.clients = rows;
+        if (rows.length || !window.appData.clients) window.appData.clients = rows;
       }).catch(function() {}));
     }
-
-    // Jobs — fetch via p86Api if appData.jobs is empty. Most users
-    // have visited Jobs at least once so this is usually a no-op.
-    var jobsCached = (window.appData && window.appData.jobs) || [];
-    if (!jobsCached.length && window.p86Api && window.p86Api.jobs) {
+    if (window.p86Api && window.p86Api.jobs) {
       promises.push(window.p86Api.jobs.list().then(function(r) {
         var rows = (r && r.jobs) || [];
-        window.appData = window.appData || {};
-        window.appData.jobs = rows;
+        if (rows.length || !window.appData.jobs) window.appData.jobs = rows;
       }).catch(function() {}));
     }
 
@@ -1947,39 +1930,55 @@
       var newJobId = modal.querySelector('#plJob').value || null;
       var newClientId = modal.querySelector('#plClient').value || null;
       var doInherit = modal.querySelector('#plInherit').checked;
-      var patch = {
-        lead_id: newLeadId,
-        job_id: newJobId,
-        client_id: newClientId
-      };
+      var saveBtn = modal.querySelector('#plSave');
 
-      // Explicit inheritance — only applies when the checkbox is on.
-      // Picks the most-specific entity that has data: job > lead >
-      // client. Always overwrites name + address if the checkbox is
-      // checked, so the user has predictable control. Uncheck to
-      // keep the project's current name/address regardless of links.
-      if (doInherit) {
-        var src = null;
-        if (newJobId)        src = inheritFromEntity('job', newJobId);
-        else if (newLeadId)  src = inheritFromEntity('lead', newLeadId);
-        else if (newClientId) src = inheritFromEntity('client', newClientId);
+      // Disable + label the button so the user can see we're working
+      // through the async refresh before the PATCH lands.
+      saveBtn.disabled = true;
+      var origLabel = saveBtn.textContent;
+      saveBtn.textContent = doInherit ? 'Loading latest…' : 'Saving…';
 
-        if (src) {
-          if (src.name)    patch.name = src.name;
-          if (src.address) patch.address_text = src.address;
-          // Auto-fill client linkage when a lead carries one and the
-          // user didn't explicitly pick a client.
-          if (src.client_id && !newClientId) patch.client_id = src.client_id;
+      // ALWAYS re-fetch the entity caches before reading them for
+      // inheritance, so we never overwrite the project's address
+      // with a stale lead/job value cached from earlier in the
+      // session. Without this, editing a lead's address elsewhere
+      // and then linking a project to it would silently pull in the
+      // pre-edit value.
+      var ensure = doInherit ? ensureEntityCaches() : Promise.resolve();
+
+      ensure.then(function() {
+        var patch = {
+          lead_id: newLeadId,
+          job_id: newJobId,
+          client_id: newClientId
+        };
+
+        if (doInherit) {
+          var src = null;
+          if (newJobId)         src = inheritFromEntity('job', newJobId);
+          else if (newLeadId)   src = inheritFromEntity('lead', newLeadId);
+          else if (newClientId) src = inheritFromEntity('client', newClientId);
+
+          if (src) {
+            if (src.name)    patch.name = src.name;
+            if (src.address) patch.address_text = src.address;
+            if (src.client_id && !newClientId) patch.client_id = src.client_id;
+          }
         }
-      }
 
-      api().update(p.id, patch).then(function(r) {
+        saveBtn.textContent = 'Saving…';
+        return api().update(p.id, patch);
+      }).then(function(r) {
         _detailState.project = r && r.project;
         modal.remove();
         paintDetail();   // full repaint pulls in the new map iframe src
         syncListProjectFromDetail();
         refreshLinkedPanels();
-      }).catch(function(e) { alert('Save failed: ' + (e.message || e)); });
+      }).catch(function(e) {
+        saveBtn.disabled = false;
+        saveBtn.textContent = origLabel;
+        alert('Save failed: ' + (e.message || e));
+      });
     });
   }
 
