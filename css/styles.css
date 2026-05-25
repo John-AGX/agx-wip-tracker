@@ -3113,9 +3113,12 @@
 }
 .p86-projects-unmapped a:hover { text-decoration: underline; }
 
-/* Detail overlay */
+/* Detail overlay — sits BELOW the standard modal layer (z:1000) so
+   child modals (Edit Links, Pair Picker, Create Project) and the
+   markup viewer / photo lightbox can stack on top. The overlay used
+   to be z:9000 which trapped every child modal behind it. */
 .p86-proj-detail-overlay {
-  position: fixed; inset: 0; z-index: 9000;
+  position: fixed; inset: 0; z-index: 999;
   background: rgba(0,0,0,0.85);
   display: none; align-items: stretch; justify-content: center;
   padding: 0;
@@ -3273,7 +3276,7 @@
 .p86-proj-photo-tile:hover .p86-proj-photo-tile-menu { opacity: 1; }
 
 .p86-proj-photo-menu {
-  position: absolute; z-index: 9500;
+  position: absolute; z-index: 1100;
   background: var(--bg, #0a0a14);
   border: 1px solid var(--border, #333);
   border-radius: 6px;
@@ -3345,7 +3348,7 @@
   background: var(--bg, #0a0a14);
   border: 1px solid var(--border, #333);
   border-radius: 6px;
-  z-index: 9600;
+  z-index: 1200;
   max-height: 200px; overflow-y: auto;
   padding: 4px;
   display: flex; flex-wrap: wrap; gap: 4px;
@@ -3511,9 +3514,11 @@
 }
 .p86-pair-tile-menu:hover { color: var(--text, #fff); }
 
-/* Pair lightbox */
+/* Pair lightbox — sits above the project detail overlay (z:999) and
+   the standard modal layer (z:1000) so it can be opened from inside
+   a project detail without getting trapped. */
 .p86-pair-lightbox-overlay {
-  position: fixed; inset: 0; z-index: 9500;
+  position: fixed; inset: 0; z-index: 1100;
   background: rgba(0,0,0,0.92);
   display: flex; flex-direction: column;
   padding: 0;
