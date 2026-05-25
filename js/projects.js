@@ -87,6 +87,63 @@
     return (window.p86Auth && window.p86Auth.getUser && window.p86Auth.getUser()) || null;
   }
 
+  // Pull leads / jobs / clients caches into shape for the link
+  // dropdowns. If the user landed on Projects directly (e.g. via
+  // /files) without visiting the Leads or Clients tabs first,
+  // window.appData.{leads,clients} can be empty. Mirror what the
+  // estimate editor does: prefer the dedicated p86Leads / p86Clients
+  // caches; fall back to a one-shot API fetch; populate appData so
+  // the rest of the app benefits too.
+  function ensureEntityCaches() {
+    var promises = [];
+
+    // Leads — p86Leads.getCached() if populated, else fetch.
+    var leadsCached = (window.p86Leads && window.p86Leads.getCached && window.p86Leads.getCached()) || [];
+    if (!leadsCached.length && window.p86Api && window.p86Api.leads) {
+      promises.push(window.p86Api.leads.list().then(function(r) {
+        var rows = (r && r.leads) || [];
+        window.appData = window.appData || {};
+        window.appData.leads = rows;
+        // Mirror back into p86Leads if it exposes a cache hook.
+        if (window.p86Leads && typeof window.p86Leads.reload === 'function') {
+          // Don't block on reload — populating appData is enough for
+          // our dropdowns; p86Leads will refresh itself when the
+          // Leads tab activates.
+        }
+      }).catch(function() { /* swallow — render with empty list */ }));
+    } else {
+      window.appData = window.appData || {};
+      window.appData.leads = leadsCached.length ? leadsCached : (window.appData.leads || []);
+    }
+
+    // Clients — p86Clients.ensureLoaded() is the canonical pattern.
+    if (window.p86Clients && typeof window.p86Clients.ensureLoaded === 'function') {
+      promises.push(window.p86Clients.ensureLoaded().then(function(rows) {
+        window.appData = window.appData || {};
+        window.appData.clients = rows || [];
+      }).catch(function() {}));
+    } else if (window.p86Api && window.p86Api.clients) {
+      promises.push(window.p86Api.clients.list().then(function(r) {
+        var rows = (r && r.clients) || [];
+        window.appData = window.appData || {};
+        window.appData.clients = rows;
+      }).catch(function() {}));
+    }
+
+    // Jobs — fetch via p86Api if appData.jobs is empty. Most users
+    // have visited Jobs at least once so this is usually a no-op.
+    var jobsCached = (window.appData && window.appData.jobs) || [];
+    if (!jobsCached.length && window.p86Api && window.p86Api.jobs) {
+      promises.push(window.p86Api.jobs.list().then(function(r) {
+        var rows = (r && r.jobs) || [];
+        window.appData = window.appData || {};
+        window.appData.jobs = rows;
+      }).catch(function() {}));
+    }
+
+    return Promise.all(promises);
+  }
+
   // ──────────────────────────────────────────────────────────────────
   // State
   // ──────────────────────────────────────────────────────────────────
@@ -128,6 +185,11 @@
       _listState.error = e.message || 'Failed to load projects';
       paintList();
     });
+    // Warm leads/jobs/clients caches in the background so the
+    // Create-Project / Edit-Links / Pair Picker modals have populated
+    // dropdowns by the time the user clicks. No-op when the caches
+    // are already loaded.
+    ensureEntityCaches();
   }
   window.renderProjectsInto = renderProjectsInto;
 
@@ -346,9 +408,16 @@
     var prior = document.getElementById('projCreateModal');
     if (prior) prior.remove();
 
-    var leads = (window.appData && window.appData.leads) || [];
-    var jobs = (window.appData && window.appData.jobs) || [];
-    var clients = (window.appData && window.appData.clients) || [];
+    // Kick off caches in the background. The modal renders immediately
+    // with whatever's cached today, then we re-paint the dropdowns
+    // once fresh data lands. Users can pick "None" or start typing
+    // the name without waiting.
+    var initialLeads = (window.appData && window.appData.leads) || [];
+    var initialJobs = (window.appData && window.appData.jobs) || [];
+    var initialClients = (window.appData && window.appData.clients) || [];
+    var leads = initialLeads;
+    var jobs = initialJobs;
+    var clients = initialClients;
 
     function options(list, currentId, labelFn) {
       var opts = '<option value="">— None —</option>';
@@ -411,6 +480,27 @@
     modal.addEventListener('click', function(e) { if (e.target === modal) modal.remove(); });
     modal.querySelectorAll('[data-close]').forEach(function(b) {
       b.addEventListener('click', function() { modal.remove(); });
+    });
+
+    // Background-load fresh caches and re-populate the dropdowns
+    // when they arrive. The modal stays interactive throughout.
+    ensureEntityCaches().then(function() {
+      if (!document.body.contains(modal)) return; // user closed before fetch landed
+      var leadsNow = (window.appData && window.appData.leads) || [];
+      var jobsNow = (window.appData && window.appData.jobs) || [];
+      var clientsNow = (window.appData && window.appData.clients) || [];
+      var leadSel = modal.querySelector('#pcLead');
+      var jobSel = modal.querySelector('#pcJob');
+      var clientSel = modal.querySelector('#pcClient');
+      if (leadSel && leadsNow.length !== leads.length) {
+        leadSel.innerHTML = options(leadsNow, prefill.lead_id, function(l) { return l.title || ('Lead ' + l.id); });
+      }
+      if (jobSel && jobsNow.length !== jobs.length) {
+        jobSel.innerHTML = options(jobsNow, prefill.job_id, function(j) { return (j.jobNumber ? '[' + j.jobNumber + '] ' : '') + (j.title || j.name || j.id); });
+      }
+      if (clientSel && clientsNow.length !== clients.length) {
+        clientSel.innerHTML = options(clientsNow, prefill.client_id, function(c) { return c.name || ('Client ' + c.id); });
+      }
     });
 
     // Inline tag editor (in-memory; submits with the form).
@@ -1234,6 +1324,28 @@
     modal.querySelectorAll('[data-close]').forEach(function(b) {
       b.addEventListener('click', function() { modal.remove(); });
     });
+
+    // Refresh dropdowns once cached lists land. If the user opened
+    // Projects directly via /files, leads + clients weren't loaded.
+    ensureEntityCaches().then(function() {
+      if (!document.body.contains(modal)) return;
+      var leadsNow = (window.appData && window.appData.leads) || [];
+      var jobsNow = (window.appData && window.appData.jobs) || [];
+      var clientsNow = (window.appData && window.appData.clients) || [];
+      var leadSel = modal.querySelector('#plLead');
+      var jobSel = modal.querySelector('#plJob');
+      var clientSel = modal.querySelector('#plClient');
+      if (leadSel && leadsNow.length !== leads.length) {
+        leadSel.innerHTML = options(leadsNow, p.lead_id, function(l) { return l.title || ('Lead ' + l.id); });
+      }
+      if (jobSel && jobsNow.length !== jobs.length) {
+        jobSel.innerHTML = options(jobsNow, p.job_id, function(j) { return (j.jobNumber ? '[' + j.jobNumber + '] ' : '') + (j.title || j.name || j.id); });
+      }
+      if (clientSel && clientsNow.length !== clients.length) {
+        clientSel.innerHTML = options(clientsNow, p.client_id, function(c) { return c.name || ('Client ' + c.id); });
+      }
+    });
+
     modal.querySelector('#plSave').addEventListener('click', function() {
       var patch = {
         lead_id:   modal.querySelector('#plLead').value || null,
