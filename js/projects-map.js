@@ -1,24 +1,24 @@
-// Projects map view — Leaflet + OpenStreetMap.
+// Projects map view — Google Maps iframe + clickable project list.
 //
-// CompanyCam's "Project Map" view shows every project pinned on a map
-// with the pin color reflecting status (active recent / active stale /
-// archived). Clicking a pin previews the project; clicking the preview
-// opens the detail overlay.
+// The previous Leaflet/Carto/OSM combo kept missing tiles in the wild
+// (rate limiting, CDN flakes, etc.) and left the user staring at a
+// blank teal background. The lead editor's map widget uses Google
+// Maps' no-API-key iframe embed and never fails — same approach here,
+// scaled up to a list+map pattern so multiple projects fit.
 //
-// We use Leaflet because we want multiple markers with colored pins
-// and popups, which the Google Maps iframe (used elsewhere in the app
-// for single-address embeds) doesn't support without an API key.
-// Leaflet ships ~40kb gzipped and loads from a CDN — see index.html.
+// Layout:
+//   ┌──────────────┬──────────────────────────────────┐
+//   │ Project list │ Google Maps embed                │
+//   │ (scrollable) │ (single iframe, swapped on click)│
+//   │ click a row  │                                  │
+//   │ → map jumps  │                                  │
+//   └──────────────┴──────────────────────────────────┘
 //
-// Public surface:
+// Projects without addresses are listed under "Unmapped" at the
+// bottom of the sidebar.
+//
+// Public surface (unchanged):
 //   window.p86ProjectsMap.render(hostEl, projects, opts)
-//     - hostEl: DOM element to mount into
-//     - projects: array of project rows (must have geocode_lat/lng)
-//     - opts.onPin(projectId): click handler for pin / preview "Open"
-//
-// Returns the Leaflet map instance (caller can keep it for invalidate
-// on container resize). If Leaflet isn't loaded yet, renders a graceful
-// placeholder and bails — caller polls and retries.
 (function() {
   'use strict';
 
@@ -28,143 +28,149 @@
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
+  function escapeAttr(s) {
+    return String(s == null ? '' : s).replace(/"/g, '&quot;').replace(/&/g, '&amp;');
+  }
+  function fmtRelative(s) {
+    if (!s) return '';
+    var d = new Date(s);
+    var diff = (Date.now() - d.getTime()) / 1000;
+    if (diff < 60) return 'just now';
+    if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+    if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+    if (diff < 86400 * 30) return Math.floor(diff / 86400) + 'd ago';
+    return d.toLocaleDateString();
+  }
 
-  // Status → pin color. Active + recent (≤7d) = green; active + stale = yellow;
-  // archived = gray. CompanyCam's convention; readable at a glance.
-  function pinColor(project) {
-    if (project.archived_at) return '#6b7280';     // gray
-    var updated = project.updated_at ? new Date(project.updated_at).getTime() : 0;
+  // Status pin emoji — picked to match the list view's pin-color
+  // convention so the visual language is consistent across views.
+  function statusEmoji(p) {
+    if (p.archived_at) return '⚫';
+    var updated = p.updated_at ? new Date(p.updated_at).getTime() : 0;
     var ageDays = (Date.now() - updated) / 86400000;
-    if (ageDays <= 7) return '#34d399';            // green
-    return '#fbbf24';                              // yellow
+    if (ageDays <= 7) return '🟢';
+    return '🟡';
   }
 
-  // Build a small SVG pin matching the color. Returns a Leaflet
-  // DivIcon spec so we don't need to ship raster pin images.
-  function buildPinIcon(L, color) {
-    var svg =
-      '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="32" viewBox="0 0 24 32">' +
-        '<path d="M12 0C5.4 0 0 5.4 0 12c0 9 12 20 12 20s12-11 12-20C24 5.4 18.6 0 12 0z" fill="' + color + '" stroke="#0a0a14" stroke-width="1.5"/>' +
-        '<circle cx="12" cy="12" r="4" fill="#0a0a14"/>' +
-      '</svg>';
-    return L.divIcon({
-      className: 'p86-proj-pin',
-      html: svg,
-      iconSize: [24, 32],
-      iconAnchor: [12, 32],
-      popupAnchor: [0, -28]
-    });
+  function hasAddress(p) {
+    var a = (p.address_text || '').trim();
+    return !!a;
   }
 
-  function popupHTML(p) {
-    var coverUrl = p.cover_thumb_url || '';
-    var visual = coverUrl
-      ? '<img src="' + escapeHTML(coverUrl) + '" alt="" style="width:100%;height:80px;object-fit:cover;display:block;border-radius:4px;margin-bottom:6px;background:#1a1a2e;" />'
-      : '<div style="height:80px;display:flex;align-items:center;justify-content:center;background:rgba(34,211,238,0.06);color:#22d3ee;font-size:22px;border-radius:4px;margin-bottom:6px;">&#x1F4F8;</div>';
-    var counts = '&#x1F4F7; ' + (p.photo_count || 0) +
-      ' &middot; &#x1F4DD; ' + (p.pair_count || 0);
-    return '<div style="min-width:180px;color:#fff;">' +
-      visual +
-      '<div style="font-size:13px;font-weight:600;margin-bottom:2px;">' + escapeHTML(p.name || '(Untitled)') + '</div>' +
-      '<div style="font-size:10.5px;color:#aaa;margin-bottom:6px;">' + counts + '</div>' +
-      '<button onclick="window.p86ProjectsMap._openFromPopup(\'' + escapeHTML(p.id) + '\')" ' +
-        'style="font-size:11px;padding:5px 10px;background:#4f8cff;color:#fff;border:none;border-radius:4px;cursor:pointer;width:100%;">Open project</button>' +
-    '</div>';
+  function googleEmbedUrl(addressOrCoords) {
+    // q= accepts a free-form address OR a "lat,lng" pair. z=16 is
+    // street-level. output=embed strips chrome.
+    return 'https://www.google.com/maps?q=' + encodeURIComponent(addressOrCoords) + '&output=embed&z=16';
   }
 
-  var _lastOpts = null;
-  function _openFromPopup(projectId) {
-    if (_lastOpts && typeof _lastOpts.onPin === 'function') {
-      _lastOpts.onPin(projectId);
-    } else if (typeof window.openProject === 'function') {
-      window.openProject(projectId);
+  function projectAddr(p) {
+    // Prefer the address_text (what the user can edit) and fall back
+    // to the geocoded coords as a "lat,lng" string when only those
+    // exist. Geocoded coords work fine with Google's q= param.
+    var addr = (p.address_text || '').trim();
+    if (addr) return addr;
+    if (Number.isFinite(Number(p.geocode_lat)) && Number.isFinite(Number(p.geocode_lng))) {
+      return Number(p.geocode_lat) + ',' + Number(p.geocode_lng);
     }
+    return '';
   }
 
   function render(host, projects, opts) {
     if (!host) return null;
     opts = opts || {};
-    _lastOpts = opts;
+    projects = projects || [];
 
-    var L = window.L;
-    if (!L) {
-      host.innerHTML = '<div style="padding:30px;text-align:center;color:var(--text-dim,#888);font-size:12px;">Loading map library…</div>';
-      // Retry once the CDN script lands. Polls every 250ms for up to 5s.
-      var tries = 0;
-      var timer = setInterval(function() {
-        tries++;
-        if (window.L) {
-          clearInterval(timer);
-          render(host, projects, opts);
-        } else if (tries >= 20) {
-          clearInterval(timer);
-          host.innerHTML = '<div style="padding:30px;text-align:center;color:#f87171;font-size:12px;">Map library failed to load. Check the network tab for blocked CDN requests.</div>';
-        }
-      }, 250);
+    var mapped = projects.filter(function(p) { return projectAddr(p); });
+    var unmapped = projects.filter(function(p) { return !projectAddr(p); });
+
+    if (!mapped.length) {
+      host.innerHTML =
+        '<div class="p86-projects-empty">' +
+          'No projects with addresses yet. Add a site address to a project to see it on the map.' +
+          (unmapped.length ? '<br /><span style="font-size:11px;opacity:0.7;">' + unmapped.length + ' project(s) without addresses</span>' : '') +
+        '</div>';
       return null;
     }
 
-    // Mappable subset: only projects with valid lat/lng.
-    var pinnable = (projects || []).filter(function(p) {
-      var lat = Number(p.geocode_lat), lng = Number(p.geocode_lng);
-      return Number.isFinite(lat) && Number.isFinite(lng);
-    });
+    var initial = mapped[0];
+    host.innerHTML =
+      '<div class="p86-projects-map-pane">' +
+        '<div class="p86-projects-map-list" id="p86ProjMapList">' +
+          mapped.map(function(p) {
+            return listRowHTML(p, p.id === initial.id);
+          }).join('') +
+          (unmapped.length
+            ? '<div class="p86-projects-map-unmapped-header">Unmapped (' + unmapped.length + ')</div>' +
+              unmapped.map(function(p) {
+                return '<div class="p86-projects-map-list-row p86-projects-map-list-row-unmapped" data-id="' + escapeAttr(p.id) + '">' +
+                  '<div class="p86-projects-map-list-name">' + escapeHTML(p.name || 'Untitled') + '</div>' +
+                  '<div class="p86-projects-map-list-addr">No address</div>' +
+                '</div>';
+              }).join('')
+            : '') +
+        '</div>' +
+        '<div class="p86-projects-map-frame-wrap">' +
+          '<iframe id="p86ProjMapFrame" class="p86-projects-map-frame" src="' + escapeAttr(googleEmbedUrl(projectAddr(initial))) + '" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>' +
+        '</div>' +
+      '</div>';
 
-    // Need a clean container for Leaflet (it stamps internal DOM into it).
-    host.innerHTML = '';
-    var mapEl = document.createElement('div');
-    mapEl.style.cssText = 'width:100%;height:100%;min-height:400px;border-radius:8px;overflow:hidden;background:#0a0a14;';
-    host.appendChild(mapEl);
+    var listEl = host.querySelector('#p86ProjMapList');
+    var frameEl = host.querySelector('#p86ProjMapFrame');
+    if (!listEl || !frameEl) return null;
 
-    // Initial view: fit to all pins or default to continental US.
-    var map = L.map(mapEl, { zoomControl: true, attributionControl: true });
-    // Carto Dark Matter — free, no API key, matches our dark UI so
-    // pins don't disappear against a bright canvas. Previously we
-    // used OSM's standard tiles, which:
-    //   1. Render light blue/white (doesn't fit our theme)
-    //   2. Have aggressive rate limits on free / unattributed use
-    //      that were resulting in failed tile loads → empty teal map
-    // Carto subhosts {a,b,c,d}.basemaps.cartocdn.com and is the
-    // canonical Leaflet fallback for free dark basemap.
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-      maxZoom: 19,
-      subdomains: 'abcd',
-      attribution: '&copy; OSM &copy; CARTO'
-    }).addTo(map);
-
-    if (!pinnable.length) {
-      // Center on Central Florida (AGX home turf) at a wide zoom so the
-      // user can see "nothing here yet" rather than a useless ocean.
-      map.setView([28.5, -81.5], 7);
-    } else {
-      var bounds = L.latLngBounds([]);
-      pinnable.forEach(function(p) {
-        var lat = Number(p.geocode_lat), lng = Number(p.geocode_lng);
-        bounds.extend([lat, lng]);
-        var marker = L.marker([lat, lng], { icon: buildPinIcon(L, pinColor(p)) }).addTo(map);
-        marker.bindPopup(popupHTML(p), { closeButton: true, maxWidth: 220 });
-      });
-      if (pinnable.length === 1) {
-        // Single pin — center + reasonable zoom; fitBounds on one point
-        // zooms in too far.
-        var only = pinnable[0];
-        map.setView([Number(only.geocode_lat), Number(only.geocode_lng)], 14);
-      } else {
-        map.fitBounds(bounds, { padding: [30, 30] });
+    function focusProject(id) {
+      var p = projects.find(function(x) { return String(x.id) === String(id); });
+      if (!p) return;
+      var addr = projectAddr(p);
+      if (addr) {
+        frameEl.src = googleEmbedUrl(addr);
       }
+      listEl.querySelectorAll('.p86-projects-map-list-row').forEach(function(row) {
+        row.classList.toggle('active', row.getAttribute('data-id') === String(id));
+      });
     }
 
-    // Tile renderer races with the container's final height in some
-    // layouts (modal fade-in, tab switch). One invalidate after a
-    // requestAnimationFrame settles it without measurable lag.
-    requestAnimationFrame(function() { map.invalidateSize(); });
+    listEl.querySelectorAll('.p86-projects-map-list-row').forEach(function(row) {
+      row.addEventListener('click', function() {
+        var id = row.getAttribute('data-id');
+        if (row.classList.contains('p86-projects-map-list-row-unmapped')) {
+          // Unmapped rows can't focus the map, so click → open detail.
+          if (typeof opts.onPin === 'function') opts.onPin(id);
+          else if (typeof window.openProject === 'function') window.openProject(id);
+          return;
+        }
+        focusProject(id);
+      });
+      row.addEventListener('dblclick', function() {
+        var id = row.getAttribute('data-id');
+        if (typeof opts.onPin === 'function') opts.onPin(id);
+        else if (typeof window.openProject === 'function') window.openProject(id);
+      });
+    });
 
-    return map;
+    return { focus: focusProject };
+  }
+
+  function listRowHTML(p, active) {
+    var coverUrl = p.cover_thumb_url || '';
+    var thumb = coverUrl
+      ? '<img src="' + escapeAttr(coverUrl) + '" alt="" class="p86-projects-map-list-thumb" />'
+      : '<div class="p86-projects-map-list-thumb p86-projects-map-list-thumb-empty">📸</div>';
+    return '<div class="p86-projects-map-list-row' + (active ? ' active' : '') + '" data-id="' + escapeAttr(p.id) + '" title="Click to focus map · double-click to open project">' +
+      thumb +
+      '<div class="p86-projects-map-list-body">' +
+        '<div class="p86-projects-map-list-name">' +
+          statusEmoji(p) + ' ' + escapeHTML(p.name || 'Untitled') +
+        '</div>' +
+        '<div class="p86-projects-map-list-addr">' + escapeHTML(p.address_text || '') + '</div>' +
+        '<div class="p86-projects-map-list-meta">📷 ' + Number(p.photo_count || 0) +
+          ' · ' + escapeHTML(fmtRelative(p.updated_at)) +
+        '</div>' +
+      '</div>' +
+    '</div>';
   }
 
   window.p86ProjectsMap = {
-    render: render,
-    _openFromPopup: _openFromPopup,
-    _pinColor: pinColor          // exposed for legend rendering
+    render: render
   };
 })();

@@ -1844,6 +1844,10 @@
         '<label class="p86-field"><span>Lead</span><select id="plLead">' + options(leads, p.lead_id, function(l) { return l.title || ('Lead ' + l.id); }) + '</select></label>' +
         '<label class="p86-field"><span>Job</span><select id="plJob">' + options(jobs, p.job_id, function(j) { return (j.jobNumber ? '[' + j.jobNumber + '] ' : '') + (j.title || j.name || j.id); }) + '</select></label>' +
         '<label class="p86-field"><span>Client</span><select id="plClient">' + options(clients, p.client_id, function(c) { return c.name || ('Client ' + c.id); }) + '</select></label>' +
+        '<label class="p86-field" style="flex-direction:row;align-items:center;gap:8px;margin-top:6px;">' +
+          '<input type="checkbox" id="plInherit" checked style="margin:0;" />' +
+          '<span style="text-transform:none;letter-spacing:0;font-weight:500;font-size:12px;color:var(--text,#fff);">Use linked entity\'s title and address (overwrites current values)</span>' +
+        '</label>' +
         '<div class="modal-footer">' +
           '<button class="ee-btn secondary" data-close>Cancel</button>' +
           '<button class="primary" id="plSave">Save</button>' +
@@ -1880,36 +1884,30 @@
       var newLeadId = modal.querySelector('#plLead').value || null;
       var newJobId = modal.querySelector('#plJob').value || null;
       var newClientId = modal.querySelector('#plClient').value || null;
+      var doInherit = modal.querySelector('#plInherit').checked;
       var patch = {
         lead_id: newLeadId,
         job_id: newJobId,
         client_id: newClientId
       };
 
-      // Inherit title + address from a newly-linked entity. Priority:
-      // job > lead > client (job is the most "final" form of the
-      // project). Only apply when the linkage CHANGED — if the user is
-      // just clearing or re-confirming, we don't stomp their name.
-      var inherit = null;
-      if (newJobId && String(newJobId) !== String(p.job_id || ''))      inherit = inheritFromEntity('job', newJobId);
-      else if (newLeadId && String(newLeadId) !== String(p.lead_id || ''))   inherit = inheritFromEntity('lead', newLeadId);
-      else if (newClientId && String(newClientId) !== String(p.client_id || '')) inherit = inheritFromEntity('client', newClientId);
+      // Explicit inheritance — only applies when the checkbox is on.
+      // Picks the most-specific entity that has data: job > lead >
+      // client. Always overwrites name + address if the checkbox is
+      // checked, so the user has predictable control. Uncheck to
+      // keep the project's current name/address regardless of links.
+      if (doInherit) {
+        var src = null;
+        if (newJobId)        src = inheritFromEntity('job', newJobId);
+        else if (newLeadId)  src = inheritFromEntity('lead', newLeadId);
+        else if (newClientId) src = inheritFromEntity('client', newClientId);
 
-      if (inherit) {
-        if (inherit.name && (!p.name || /^untitled project$/i.test(p.name))) {
-          patch.name = inherit.name;
-        } else if (inherit.name) {
-          // Always update name on explicit link change — that's the
-          // user's intent. Comment out the heuristic above if you
-          // want to be more conservative.
-          patch.name = inherit.name;
-        }
-        if (inherit.address) {
-          patch.address_text = inherit.address;
-        }
-        // Auto-fill the client linkage when a lead carries one.
-        if (inherit.client_id && !newClientId) {
-          patch.client_id = inherit.client_id;
+        if (src) {
+          if (src.name)    patch.name = src.name;
+          if (src.address) patch.address_text = src.address;
+          // Auto-fill client linkage when a lead carries one and the
+          // user didn't explicitly pick a client.
+          if (src.client_id && !newClientId) patch.client_id = src.client_id;
         }
       }
 
