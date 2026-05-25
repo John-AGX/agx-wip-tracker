@@ -2511,33 +2511,43 @@
     if (!p || !api()) return;
     var prior = document.getElementById('projLinksModal');
     if (prior) prior.remove();
-    var leads = (window.appData && window.appData.leads) || [];
-    var jobs = (window.appData && window.appData.jobs) || [];
-    var clients = (window.appData && window.appData.clients) || [];
 
-    function options(list, current, labelFn) {
-      var opts = '<option value="">— None —</option>';
-      list.forEach(function(item) {
-        opts += '<option value="' + escapeAttr(item.id) + '"' + (String(item.id) === String(current || '') ? ' selected' : '') + '>' +
-          escapeHTML(labelFn(item)) +
-        '</option>';
-      });
-      return opts;
-    }
+    // Same chip-and-picker UI as the New Project modal. Stage the
+    // current linkage in pendingLink; let the user remove / replace
+    // via the unified entity picker.
+    var pendingLink = {
+      lead_id: p.lead_id || null,
+      job_id: p.job_id || null,
+      client_id: p.client_id || null
+    };
+    // Track the most-recently-changed linkage so the inherit step
+    // pulls name + address from the entity the user actually just
+    // picked (job-priority is still applied as a fallback below).
+    var lastChanged = null;
+
+    // Warm caches so the picker has fresh data.
+    ensureEntityCaches();
 
     var modal = document.createElement('div');
     modal.id = 'projLinksModal';
     modal.className = 'modal active';
     modal.innerHTML =
       '<div class="modal-content" style="max-width:520px;">' +
-        '<div class="modal-header"><span>Edit project links</span><button class="p86-modal-close" data-close>&times;</button></div>' +
-        '<label class="p86-field"><span>Lead</span><select id="plLead">' + options(leads, p.lead_id, function(l) { return l.title || ('Lead ' + l.id); }) + '</select></label>' +
-        '<label class="p86-field"><span>Job</span><select id="plJob">' + options(jobs, p.job_id, function(j) { return (j.jobNumber ? '[' + j.jobNumber + '] ' : '') + (j.title || j.name || j.id); }) + '</select></label>' +
-        '<label class="p86-field"><span>Client</span><select id="plClient">' + options(clients, p.client_id, function(c) { return c.name || ('Client ' + c.id); }) + '</select></label>' +
-        '<label class="p86-field" style="flex-direction:row;align-items:center;gap:8px;margin-top:6px;">' +
-          '<input type="checkbox" id="plInherit" checked style="margin:0;" />' +
-          '<span style="text-transform:none;letter-spacing:0;font-weight:500;font-size:12px;color:var(--text,#fff);">Use linked entity\'s title and address (overwrites current values)</span>' +
-        '</label>' +
+        '<div class="modal-header">' +
+          '<span>Edit project links</span>' +
+          '<button class="p86-modal-close" data-close>&times;</button>' +
+        '</div>' +
+        '<div class="p86-proj-create-body">' +
+          '<div class="p86-field">' +
+            '<span>Linked to</span>' +
+            '<div id="elLinkChips" class="p86-proj-link-chips"></div>' +
+            '<button type="button" id="elLinkBtn" class="ee-btn secondary p86-proj-link-btn">&#x1F517; Link to lead, job, or client…</button>' +
+          '</div>' +
+          '<label class="p86-field" style="flex-direction:row;align-items:center;gap:8px;margin-top:6px;">' +
+            '<input type="checkbox" id="plInherit" checked style="margin:0;" />' +
+            '<span style="text-transform:none;letter-spacing:0;font-weight:500;font-size:12px;color:var(--text,#fff);">Use linked entity\'s title and address (overwrites current values)</span>' +
+          '</label>' +
+        '</div>' +
         '<div class="modal-footer">' +
           '<button class="ee-btn secondary" data-close>Cancel</button>' +
           '<button class="primary" id="plSave">Save</button>' +
@@ -2549,65 +2559,91 @@
       b.addEventListener('click', function() { modal.remove(); });
     });
 
-    // Refresh dropdowns once cached lists land. If the user opened
-    // Projects directly via /files, leads + clients weren't loaded.
-    ensureEntityCaches().then(function() {
-      if (!document.body.contains(modal)) return;
-      var leadsNow = (window.appData && window.appData.leads) || [];
-      var jobsNow = (window.appData && window.appData.jobs) || [];
-      var clientsNow = (window.appData && window.appData.clients) || [];
-      var leadSel = modal.querySelector('#plLead');
-      var jobSel = modal.querySelector('#plJob');
-      var clientSel = modal.querySelector('#plClient');
-      if (leadSel && leadsNow.length !== leads.length) {
-        leadSel.innerHTML = options(leadsNow, p.lead_id, function(l) { return l.title || ('Lead ' + l.id); });
+    function paintLinkChips() {
+      var host = modal.querySelector('#elLinkChips');
+      if (!host) return;
+      var chips = [];
+      if (pendingLink.lead_id) {
+        var l = ((window.appData && window.appData.leads) || []).find(function(x) { return String(x.id) === String(pendingLink.lead_id); });
+        chips.push({ k: 'Lead', label: (l && l.title) || pendingLink.lead_id, kind: 'lead' });
       }
-      if (jobSel && jobsNow.length !== jobs.length) {
-        jobSel.innerHTML = options(jobsNow, p.job_id, function(j) { return (j.jobNumber ? '[' + j.jobNumber + '] ' : '') + (j.title || j.name || j.id); });
+      if (pendingLink.job_id) {
+        var j = ((window.appData && window.appData.jobs) || []).find(function(x) { return String(x.id) === String(pendingLink.job_id); });
+        chips.push({ k: 'Job', label: (j && (j.title || j.name)) || pendingLink.job_id, kind: 'job' });
       }
-      if (clientSel && clientsNow.length !== clients.length) {
-        clientSel.innerHTML = options(clientsNow, p.client_id, function(c) { return c.name || ('Client ' + c.id); });
+      if (pendingLink.client_id) {
+        var c = ((window.appData && window.appData.clients) || []).find(function(x) { return String(x.id) === String(pendingLink.client_id); });
+        chips.push({ k: 'Client', label: (c && c.name) || pendingLink.client_id, kind: 'client' });
       }
+      if (!chips.length) {
+        host.innerHTML = '<div class="p86-proj-empty-line">Not linked yet.</div>';
+        return;
+      }
+      host.innerHTML = chips.map(function(ch) {
+        return '<span class="p86-proj-link-chip" data-unlink="' + ch.kind + '">' +
+          '<strong>' + escapeHTML(ch.k) + ':</strong> ' + escapeHTML(ch.label) +
+          ' <button type="button" title="Unlink" data-unlink="' + ch.kind + '">&times;</button>' +
+        '</span>';
+      }).join('');
+      host.querySelectorAll('[data-unlink]').forEach(function(el) {
+        if (el.tagName !== 'BUTTON') return;
+        el.addEventListener('click', function() {
+          var kind = el.getAttribute('data-unlink');
+          if (kind === 'lead')   pendingLink.lead_id = null;
+          if (kind === 'job')    pendingLink.job_id = null;
+          if (kind === 'client') pendingLink.client_id = null;
+          paintLinkChips();
+        });
+      });
+    }
+
+    modal.querySelector('#elLinkBtn').addEventListener('click', function() {
+      openLinkPicker(function(picked) {
+        if (!picked) return;
+        if (picked.kind === 'lead')   { pendingLink.lead_id = picked.id;   lastChanged = 'lead'; }
+        if (picked.kind === 'job')    { pendingLink.job_id = picked.id;    lastChanged = 'job'; }
+        if (picked.kind === 'client') { pendingLink.client_id = picked.id; lastChanged = 'client'; }
+        if (picked.kind === 'lead' && picked.client_id) {
+          pendingLink.client_id = picked.client_id;
+        }
+        paintLinkChips();
+      });
     });
 
+    paintLinkChips();
+
     modal.querySelector('#plSave').addEventListener('click', function() {
-      var newLeadId = modal.querySelector('#plLead').value || null;
-      var newJobId = modal.querySelector('#plJob').value || null;
-      var newClientId = modal.querySelector('#plClient').value || null;
       var doInherit = modal.querySelector('#plInherit').checked;
       var saveBtn = modal.querySelector('#plSave');
-
-      // Disable + label the button so the user can see we're working
-      // through the async refresh before the PATCH lands.
       saveBtn.disabled = true;
       var origLabel = saveBtn.textContent;
       saveBtn.textContent = doInherit ? 'Loading latest…' : 'Saving…';
 
-      // ALWAYS re-fetch the entity caches before reading them for
-      // inheritance, so we never overwrite the project's address
-      // with a stale lead/job value cached from earlier in the
-      // session. Without this, editing a lead's address elsewhere
-      // and then linking a project to it would silently pull in the
-      // pre-edit value.
+      // Always re-fetch the entity caches before reading for
+      // inheritance so we don't write a stale address to the project.
       var ensure = doInherit ? ensureEntityCaches() : Promise.resolve();
 
       ensure.then(function() {
         var patch = {
-          lead_id: newLeadId,
-          job_id: newJobId,
-          client_id: newClientId
+          lead_id: pendingLink.lead_id || null,
+          job_id: pendingLink.job_id || null,
+          client_id: pendingLink.client_id || null
         };
 
         if (doInherit) {
+          // Priority: whatever the user JUST picked > job > lead > client.
           var src = null;
-          if (newJobId)         src = inheritFromEntity('job', newJobId);
-          else if (newLeadId)   src = inheritFromEntity('lead', newLeadId);
-          else if (newClientId) src = inheritFromEntity('client', newClientId);
-
+          var order = lastChanged
+            ? [lastChanged].concat(['job', 'lead', 'client'].filter(function(k) { return k !== lastChanged; }))
+            : ['job', 'lead', 'client'];
+          for (var i = 0; i < order.length && !src; i++) {
+            var k = order[i];
+            var id = pendingLink[k + '_id'];
+            if (id) src = inheritFromEntity(k, id);
+          }
           if (src) {
             if (src.name)    patch.name = src.name;
             if (src.address) patch.address_text = src.address;
-            if (src.client_id && !newClientId) patch.client_id = src.client_id;
           }
         }
 
@@ -2616,7 +2652,7 @@
       }).then(function(r) {
         _detailState.project = r && r.project;
         modal.remove();
-        paintDetail();   // full repaint pulls in the new map iframe src
+        paintDetail();
         syncListProjectFromDetail();
         refreshLinkedPanels();
       }).catch(function(e) {
