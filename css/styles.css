@@ -3926,11 +3926,131 @@
 }
 .p86-report-picker-tile:hover { border-color: var(--accent, #4f8cff); }
 .p86-report-picker-tile-added { opacity: 0.55; cursor: default; }
+.p86-report-picker-tile-pending {
+  outline: 2px solid var(--accent, #4f8cff);
+  outline-offset: -2px;
+}
 .p86-report-picker-added-badge {
   position: absolute; top: 6px; right: 6px;
   background: rgba(52,211,153,0.85); color: #0a0a14;
   font-size: 10px; font-weight: 700;
   padding: 2px 6px; border-radius: 10px;
+}
+.p86-report-picker-pending-badge { background: rgba(79,140,255,0.95); color: #fff; }
+.p86-report-picker-hint {
+  font-size: 11px; color: var(--text-dim, #888);
+  margin-bottom: 10px;
+}
+
+/* Cover page editor block — small fieldset above the summary */
+.p86-report-cover-fieldset {
+  border: 1px solid var(--border, #333);
+  border-radius: 8px;
+  padding: 8px 12px 10px;
+  margin: 0 0 12px 0;
+}
+.p86-report-cover-fieldset legend {
+  padding: 0 6px;
+}
+.p86-report-cover-toggle {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; font-weight: 600;
+  color: var(--text, #fff);
+  cursor: pointer;
+}
+.p86-report-cover-toggle input[type="checkbox"] { margin: 0; }
+.p86-report-cover-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 12px;
+  margin-top: 6px;
+}
+.p86-report-cover-grid .p86-field { gap: 3px; }
+.p86-report-cover-addr { grid-column: 1 / -1; }
+
+/* Print-only cover page — the rendered version that shows on the
+   first page when the user hits Print. Hidden in editor view. */
+.print-only { display: none; }
+@media print {
+  .print-only { display: block !important; }
+}
+.p86-report-cover-rendered {
+  /* Even in editor we hide this via .print-only above. Only @media
+     print shows it. Use these styles for both screen preview (if
+     ever toggled visible) and print. */
+}
+@media print {
+  .p86-report-cover-rendered {
+    page-break-after: always;
+    padding: 80px 40px 40px;
+    text-align: center;
+    color: #000;
+  }
+  .p86-report-cover-company {
+    font-size: 14px;
+    font-weight: 700;
+    color: #666 !important;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    margin-bottom: 6px;
+  }
+  .p86-report-cover-subtitle {
+    font-size: 14px;
+    color: #666 !important;
+    margin-bottom: 40px;
+    font-style: italic;
+  }
+  .p86-report-cover-title {
+    font-size: 40px;
+    font-weight: 700;
+    margin: 0 0 24px 0;
+    color: #000 !important;
+  }
+  .p86-report-cover-addr {
+    font-size: 16px;
+    color: #333 !important;
+    margin-bottom: 80px;
+  }
+  .p86-report-cover-meta {
+    display: flex; justify-content: center; gap: 60px;
+    margin-top: 60px;
+    border-top: 1px solid #ccc;
+    padding-top: 24px;
+  }
+  .p86-report-cover-meta div { display: flex; flex-direction: column; }
+  .p86-report-cover-meta .k {
+    font-size: 10px;
+    color: #888 !important;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 4px;
+  }
+  .p86-report-cover-meta .v {
+    font-size: 14px;
+    color: #000 !important;
+    font-weight: 600;
+  }
+}
+
+/* Editor empty state — preset buttons + custom-section CTA */
+.p86-report-empty {
+  border: 1px dashed var(--border, #333);
+  border-radius: 10px;
+  padding: 24px;
+  text-align: center;
+  margin-top: 8px;
+}
+.p86-report-empty-title {
+  font-size: 15px; font-weight: 600;
+  color: var(--text, #fff);
+  margin-bottom: 4px;
+}
+.p86-report-empty-hint {
+  font-size: 12px; color: var(--text-dim, #888);
+  margin-bottom: 18px;
+}
+.p86-report-empty-presets {
+  display: flex; gap: 8px; flex-wrap: wrap; justify-content: center;
 }
 
 /* Print mode for reports — strips the chrome, expands the photo

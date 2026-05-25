@@ -1559,6 +1559,7 @@
   function paintReportEditor(overlay, report) {
     var p = _detailState.project;
     var allPhotos = (_detailState.photos || []).filter(function(a) { return a.mime_type && /^image\//.test(a.mime_type); });
+    var me = currentUser();
     // Track sections as mutable state. sections_raw is what we PATCH
     // back; sections is the hydrated render. We mirror updates to
     // both so the editor stays consistent during the modal session.
@@ -1571,7 +1572,17 @@
           photo_ids: (s.photo_ids || []).slice(),
           captions: Object.assign({}, s.captions || {})
         };
-      })
+      }),
+      // Cover page state — defaults compose from project + current
+      // user + today's date. Stored fields override the defaults.
+      cover: Object.assign({
+        enabled: false,
+        company_name: '',
+        pm_name: (me && me.name) || '',
+        date: new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' }),
+        address: (p && p.address_text) || '',
+        subtitle: ''
+      }, report.cover_page || {})
     };
 
     function close() {
@@ -1585,7 +1596,8 @@
       var body = {
         title: state.report.title,
         summary: state.report.summary || '',
-        sections: state.sections
+        sections: state.sections,
+        cover_page: state.cover
       };
       return window.p86Api.reports.update('project', p.id, state.report.id, body);
     }
@@ -1608,6 +1620,18 @@
 
     function paint() {
       var host = overlay.querySelector('.p86-report-host');
+      var emptyStateHTML = state.sections.length ? '' :
+        '<div class="p86-report-empty">' +
+          '<div class="p86-report-empty-title">Add your first section</div>' +
+          '<div class="p86-report-empty-hint">Sections let you group photos by topic — pick presets below or build your own.</div>' +
+          '<div class="p86-report-empty-presets">' +
+            '<button class="ee-btn secondary" data-preset="bda">&#x1F4F8; Before / During / After</button>' +
+            '<button class="ee-btn secondary" data-preset="walkthrough">&#x1F50D; Walkthrough (Exterior / Roof / Interior)</button>' +
+            '<button class="ee-btn secondary" data-preset="damage">&#x26A0; Damage Assessment</button>' +
+            '<button class="primary" data-preset="custom">&#x2795; Custom Section</button>' +
+          '</div>' +
+        '</div>';
+
       host.innerHTML =
         '<div class="p86-report-topbar">' +
           '<input id="rptTitle" class="p86-report-title-input" value="' + escapeAttr(state.report.title || '') + '" placeholder="Report title" />' +
@@ -1618,14 +1642,71 @@
             '<button class="p86-modal-close" id="rptClose">&times;</button>' +
           '</div>' +
         '</div>' +
+
+        // Cover page block — toggleable. Shows the inputs only when
+        // enabled. Defaults compose from project + user + today,
+        // overrides persist to state.cover.
+        '<fieldset class="p86-report-cover-fieldset">' +
+          '<legend>' +
+            '<label class="p86-report-cover-toggle">' +
+              '<input type="checkbox" id="rptCoverEnabled"' + (state.cover.enabled ? ' checked' : '') + ' />' +
+              '<span>&#x1F4D1; Include cover page</span>' +
+            '</label>' +
+          '</legend>' +
+          (state.cover.enabled
+            ? '<div class="p86-report-cover-grid">' +
+                '<label class="p86-field"><span>Company name</span><input id="cvCompany" type="text" value="' + escapeAttr(state.cover.company_name || '') + '" placeholder="Your company (leave blank to use org name)" /></label>' +
+                '<label class="p86-field"><span>Subtitle</span><input id="cvSubtitle" type="text" value="' + escapeAttr(state.cover.subtitle || '') + '" placeholder="e.g. Walkthrough Report, Damage Assessment" /></label>' +
+                '<label class="p86-field"><span>Prepared by</span><input id="cvPm" type="text" value="' + escapeAttr(state.cover.pm_name || '') + '" placeholder="PM name" /></label>' +
+                '<label class="p86-field"><span>Date</span><input id="cvDate" type="text" value="' + escapeAttr(state.cover.date || '') + '" placeholder="' + new Date().toLocaleDateString() + '" /></label>' +
+                '<label class="p86-field p86-report-cover-addr"><span>Address</span><input id="cvAddress" type="text" value="' + escapeAttr(state.cover.address || '') + '" placeholder="Site address" /></label>' +
+              '</div>'
+            : '') +
+        '</fieldset>' +
+
+        // Print-only cover page render. Always in the DOM (so @media
+        // print can pull it onto the first page) but hidden in the
+        // editor view via the .print-only class. Rendered with the
+        // current state values so what the user sees in the toggle
+        // matches what they get when they hit Print.
+        (state.cover.enabled
+          ? '<div class="p86-report-cover-rendered print-only">' +
+              '<div class="p86-report-cover-company">' + escapeHTML(state.cover.company_name || 'AGX Central Florida') + '</div>' +
+              (state.cover.subtitle ? '<div class="p86-report-cover-subtitle">' + escapeHTML(state.cover.subtitle) + '</div>' : '') +
+              '<h1 class="p86-report-cover-title">' + escapeHTML(state.report.title || 'Project Report') + '</h1>' +
+              (state.cover.address ? '<div class="p86-report-cover-addr">' + escapeHTML(state.cover.address) + '</div>' : '') +
+              '<div class="p86-report-cover-meta">' +
+                (state.cover.pm_name ? '<div><span class="k">Prepared by</span><span class="v">' + escapeHTML(state.cover.pm_name) + '</span></div>' : '') +
+                (state.cover.date ? '<div><span class="k">Date</span><span class="v">' + escapeHTML(state.cover.date) + '</span></div>' : '') +
+              '</div>' +
+            '</div>'
+          : '') +
+
         '<textarea id="rptSummary" class="p86-report-summary" rows="2" placeholder="Optional summary at the top of the report">' + escapeHTML(state.report.summary || '') + '</textarea>' +
         '<div class="p86-report-sections">' +
           state.sections.map(sectionHTML).join('') +
+          emptyStateHTML +
         '</div>';
 
       // Title + summary blur-save into state (saved on Save button).
       host.querySelector('#rptTitle').addEventListener('input', function(e) { state.report.title = e.target.value; });
       host.querySelector('#rptSummary').addEventListener('input', function(e) { state.report.summary = e.target.value; });
+
+      // Cover page wiring.
+      var coverToggle = host.querySelector('#rptCoverEnabled');
+      if (coverToggle) coverToggle.addEventListener('change', function() {
+        state.cover.enabled = coverToggle.checked;
+        paint(); // re-paint to show/hide the inputs
+      });
+      function bindCover(id, key) {
+        var el = host.querySelector('#' + id);
+        if (el) el.addEventListener('input', function(e) { state.cover[key] = e.target.value; });
+      }
+      bindCover('cvCompany', 'company_name');
+      bindCover('cvSubtitle', 'subtitle');
+      bindCover('cvPm', 'pm_name');
+      bindCover('cvDate', 'date');
+      bindCover('cvAddress', 'address');
 
       host.querySelector('#rptClose').addEventListener('click', close);
       host.querySelector('#rptSave').addEventListener('click', function() {
@@ -1648,11 +1729,22 @@
         });
       });
       host.querySelector('#rptPrint').addEventListener('click', printReport);
-      host.querySelector('#rptAddSection').addEventListener('click', function() {
-        var label = window.prompt('New section name:', 'Additional Photos');
-        if (!label) return;
-        state.sections.push({ id: 'sec_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6), label: label, photo_ids: [], captions: {} });
-        paint();
+      host.querySelector('#rptAddSection').addEventListener('click', function() { addCustomSection(); });
+
+      // Empty-state preset buttons.
+      host.querySelectorAll('[data-preset]').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          var preset = btn.getAttribute('data-preset');
+          if (preset === 'bda') {
+            seedSections(['Before', 'During', 'After']);
+          } else if (preset === 'walkthrough') {
+            seedSections(['Exterior', 'Roof', 'Interior']);
+          } else if (preset === 'damage') {
+            seedSections(['Overview', 'Damage Detail', 'Recommended Repairs']);
+          } else if (preset === 'custom') {
+            addCustomSection();
+          }
+        });
       });
 
       // Wire section interactions.
@@ -1688,6 +1780,24 @@
       });
     }
 
+    function seedSections(labels) {
+      labels.forEach(function(label) {
+        state.sections.push({
+          id: 'sec_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+          label: label,
+          photo_ids: [],
+          captions: {}
+        });
+      });
+      paint();
+    }
+
+    function addCustomSection() {
+      var label = window.prompt('Section name:', '');
+      if (!label) return;
+      seedSections([label]);
+    }
+
     function sectionHTML(section) {
       return '<div class="p86-report-section" data-sec="' + escapeAttr(section.id) + '">' +
         '<div class="p86-report-section-header">' +
@@ -1715,10 +1825,79 @@
     }
 
     function openPhotoPicker(targetSectionIdx) {
+      // Photo picker uses LOCAL selection state — picks accumulate
+      // without repainting the editor underneath. Commit + close
+      // happens only when the user clicks "Add N photos" or "Done".
+      // Previously the picker called paint() on every click which
+      // rebuilt the editor and made the picker feel like it was
+      // closing / dancing around.
       var modal = document.createElement('div');
       modal.className = 'modal active';
       modal.id = 'projReportPhotoPicker';
       var alreadyInSection = new Set(state.sections[targetSectionIdx].photo_ids);
+      // Pending picks the user has made in THIS picker session — not
+      // yet pushed to state.sections. Commit on close.
+      var pendingPicks = new Set();
+
+      function commitAndClose() {
+        // Push pending picks into the section in display order.
+        allPhotos.forEach(function(att) {
+          if (!pendingPicks.has(att.id)) return;
+          if (state.sections[targetSectionIdx].photo_ids.indexOf(att.id) === -1) {
+            state.sections[targetSectionIdx].photo_ids.push(att.id);
+          }
+        });
+        modal.remove();
+        paint(); // single repaint of the editor at close time
+      }
+
+      function cancelAndClose() {
+        modal.remove();
+      }
+
+      function repaintPicker() {
+        var grid = modal.querySelector('.p86-report-picker-grid');
+        if (grid) grid.innerHTML = renderPickerGridHTML();
+        wireTiles();
+        updateFooter();
+      }
+
+      function renderPickerGridHTML() {
+        return allPhotos.map(function(att) {
+          var isAlready = alreadyInSection.has(att.id);
+          var isPending = pendingPicks.has(att.id);
+          var stateClass = isAlready ? ' p86-report-picker-tile-added' : (isPending ? ' p86-report-picker-tile-pending' : '');
+          var badge = isAlready ? '<span class="p86-report-picker-added-badge">Added</span>'
+                    : isPending ? '<span class="p86-report-picker-added-badge p86-report-picker-pending-badge">&#x2713; Picked</span>'
+                    : '';
+          return '<button class="p86-report-picker-tile' + stateClass + '" data-pick="' + escapeAttr(att.id) + '"' + (isAlready ? ' disabled' : '') + ' type="button">' +
+            '<img src="' + escapeAttr(att.thumb_url || att.web_url) + '" alt="" />' +
+            badge +
+          '</button>';
+        }).join('');
+      }
+
+      function wireTiles() {
+        modal.querySelectorAll('[data-pick]').forEach(function(btn) {
+          btn.onclick = function() {
+            var pid = btn.getAttribute('data-pick');
+            if (pendingPicks.has(pid)) pendingPicks.delete(pid);
+            else pendingPicks.add(pid);
+            repaintPicker();
+          };
+        });
+      }
+
+      function updateFooter() {
+        var addBtn = modal.querySelector('#rptPickerAdd');
+        if (addBtn) {
+          addBtn.textContent = pendingPicks.size
+            ? 'Add ' + pendingPicks.size + ' photo' + (pendingPicks.size === 1 ? '' : 's')
+            : 'Done';
+          addBtn.disabled = false;
+        }
+      }
+
       modal.innerHTML =
         '<div class="modal-content" style="max-width:760px;">' +
           '<div class="modal-header">' +
@@ -1728,42 +1907,24 @@
           '<div class="p86-proj-create-body">' +
             (allPhotos.length === 0
               ? '<div class="p86-proj-empty-line">No photos in this project yet. Upload some first.</div>'
-              : '<div class="p86-report-picker-grid">' +
-                  allPhotos.map(function(att) {
-                    var isAlready = alreadyInSection.has(att.id);
-                    return '<button class="p86-report-picker-tile' + (isAlready ? ' p86-report-picker-tile-added' : '') + '" data-pick="' + escapeAttr(att.id) + '"' + (isAlready ? ' disabled' : '') + '>' +
-                      '<img src="' + escapeAttr(att.thumb_url || att.web_url) + '" alt="" />' +
-                      (isAlready ? '<span class="p86-report-picker-added-badge">Added</span>' : '') +
-                    '</button>';
-                  }).join('') +
-                '</div>') +
+              : '<div class="p86-report-picker-hint">Click tiles to add them. Repeat to remove. Click <strong>Add N photos</strong> when you\'re done.</div>' +
+                '<div class="p86-report-picker-grid">' + renderPickerGridHTML() + '</div>') +
           '</div>' +
           '<div class="modal-footer">' +
-            '<button class="ee-btn secondary" data-close>Done</button>' +
+            '<button class="ee-btn secondary" data-cancel>Cancel</button>' +
+            '<button class="primary" id="rptPickerAdd">Done</button>' +
           '</div>' +
         '</div>';
       document.body.appendChild(modal);
-      modal.addEventListener('click', function(e) { if (e.target === modal) modal.remove(); });
-      modal.querySelectorAll('[data-close]').forEach(function(b) {
-        b.addEventListener('click', function() { modal.remove(); });
+
+      modal.addEventListener('click', function(e) { if (e.target === modal) cancelAndClose(); });
+      modal.querySelectorAll('[data-close], [data-cancel]').forEach(function(b) {
+        b.addEventListener('click', function() { cancelAndClose(); });
       });
-      modal.querySelectorAll('[data-pick]').forEach(function(btn) {
-        btn.addEventListener('click', function() {
-          var pid = btn.getAttribute('data-pick');
-          if (state.sections[targetSectionIdx].photo_ids.indexOf(pid) === -1) {
-            state.sections[targetSectionIdx].photo_ids.push(pid);
-          }
-          btn.classList.add('p86-report-picker-tile-added');
-          btn.disabled = true;
-          if (!btn.querySelector('.p86-report-picker-added-badge')) {
-            var badge = document.createElement('span');
-            badge.className = 'p86-report-picker-added-badge';
-            badge.textContent = 'Added';
-            btn.appendChild(badge);
-          }
-          paint();
-        });
-      });
+      var addBtn = modal.querySelector('#rptPickerAdd');
+      if (addBtn) addBtn.addEventListener('click', commitAndClose);
+      wireTiles();
+      updateFooter();
     }
 
     paint();

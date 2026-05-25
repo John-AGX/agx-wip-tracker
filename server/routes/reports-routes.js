@@ -199,6 +199,7 @@ router.get('/:entityType/:entityId/:reportId', requireAuth, async (req, res) => 
           summary: r.summary,
           sections: hydrated,
           sections_raw: sections,
+          cover_page: r.cover_page || {},
           created_at: r.created_at,
           updated_at: r.updated_at,
           created_by_name: r.created_by_name
@@ -212,6 +213,11 @@ router.get('/:entityType/:entityId/:reportId', requireAuth, async (req, res) => 
 });
 
 // POST /api/reports/:entityType/:entityId
+// Creates a fresh report — NO default sections. Users add what they
+// need. (The legacy auto-seeded Before/During/After made every
+// report start as a generic walkthrough; in practice users wanted
+// section structures specific to their report type, so blank-by-
+// default is the right ergonomic.)
 router.post('/:entityType/:entityId', requireAuth, async (req, res) => {
   const { entityType, entityId } = req.params;
   if (!entityTypeOk(entityType)) return res.status(400).json({ error: 'Unsupported entity type' });
@@ -227,23 +233,31 @@ router.post('/:entityType/:entityId', requireAuth, async (req, res) => {
       const summary = (req.body && typeof req.body.summary === 'string')
         ? req.body.summary.slice(0, 5000) : '';
       const sections = normalizeSections(req.body && req.body.sections);
-      const seedSections = sections.length ? sections : [
-        { id: newId('sec'), label: 'Before',  photo_ids: [], captions: {} },
-        { id: newId('sec'), label: 'During',  photo_ids: [], captions: {} },
-        { id: newId('sec'), label: 'After',   photo_ids: [], captions: {} }
-      ];
+      const coverPage = normalizeCoverPage(req.body && req.body.cover_page);
       await pool.query(
-        'INSERT INTO job_reports (id, entity_type, entity_id, title, summary, sections, created_by) ' +
-        'VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)',
-        [id, entityType, entityId, title, summary, JSON.stringify(seedSections), req.user.id]
+        'INSERT INTO job_reports (id, entity_type, entity_id, title, summary, sections, cover_page, created_by) ' +
+        'VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8)',
+        [id, entityType, entityId, title, summary, JSON.stringify(sections), JSON.stringify(coverPage), req.user.id]
       );
-      res.json({ report: { id, entity_type: entityType, entity_id: entityId, title, summary, sections: seedSections } });
+      res.json({ report: { id, entity_type: entityType, entity_id: entityId, title, summary, sections, cover_page: coverPage } });
     } catch (e) {
       console.error('POST /api/reports/:entityType/:entityId error:', e);
       res.status(500).json({ error: 'Server error' });
     }
   });
 });
+
+// Cover page normalization — defensive caps + boolean enabled flag.
+function normalizeCoverPage(raw) {
+  if (!raw || typeof raw !== 'object') return { enabled: false };
+  const out = { enabled: !!raw.enabled };
+  ['company_name', 'pm_name', 'date', 'address', 'subtitle'].forEach(function(k) {
+    if (typeof raw[k] === 'string') {
+      out[k] = raw[k].slice(0, 500);
+    }
+  });
+  return out;
+}
 
 // PATCH /api/reports/:entityType/:entityId/:reportId
 router.patch('/:entityType/:entityId/:reportId', requireAuth, async (req, res) => {
@@ -266,6 +280,10 @@ router.patch('/:entityType/:entityId/:reportId', requireAuth, async (req, res) =
       if (Array.isArray(req.body.sections)) {
         sets.push('sections = $' + (p++) + '::jsonb');
         params.push(JSON.stringify(normalizeSections(req.body.sections)));
+      }
+      if (req.body.cover_page && typeof req.body.cover_page === 'object') {
+        sets.push('cover_page = $' + (p++) + '::jsonb');
+        params.push(JSON.stringify(normalizeCoverPage(req.body.cover_page)));
       }
       if (!sets.length) return res.status(400).json({ error: 'Nothing to update' });
       sets.push('updated_at = NOW()');

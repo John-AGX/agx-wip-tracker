@@ -2004,6 +2004,15 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_job_reports_entity
       ON job_reports(entity_type, entity_id, updated_at DESC)
       WHERE entity_type IS NOT NULL;
+    -- Optional cover page (Phase 2). JSONB blob holds the toggle +
+    -- overrides for company name, PM name, date, address. Defaults
+    -- compose from the project + creating user at render time; the
+    -- blob just stores what the user typed over the defaults plus
+    -- the enabled flag.
+    --
+    -- Shape: { enabled: bool, company_name?, pm_name?, date?,
+    --   address?, subtitle? }
+    ALTER TABLE job_reports ADD COLUMN IF NOT EXISTS cover_page JSONB NOT NULL DEFAULT '{}'::jsonb;
 
     -- ───────────────────────────────────────────────────────────────
     -- Projects — CompanyCam-style first-class entity that buckets
