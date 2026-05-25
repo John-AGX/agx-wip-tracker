@@ -501,6 +501,15 @@ async function initSchema() {
     -- attachments use it too (surfaced into the estimate as parent set).
     ALTER TABLE attachments ADD COLUMN IF NOT EXISTS include_in_proposal BOOLEAN NOT NULL DEFAULT FALSE;
 
+    -- Per-attachment tags (CompanyCam-style). JSONB array of lowercase
+    -- strings, capped at 20 per attachment by the route layer. Drives
+    -- the tag filter strip in the Projects photo feed. GIN index on
+    -- jsonb_path_ops supports the @> containment operator we use for
+    -- filtering.
+    ALTER TABLE attachments ADD COLUMN IF NOT EXISTS tags JSONB NOT NULL DEFAULT '[]'::jsonb;
+    CREATE INDEX IF NOT EXISTS idx_attachments_tags
+      ON attachments USING gin (tags jsonb_path_ops);
+
     -- Extend the entity_type enum to support clients (business-card photos,
     -- W9s, COIs, etc. attached to a parent management company or property).
     -- The CHECK constraint is named implicitly so we have to drop and re-add

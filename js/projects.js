@@ -636,27 +636,29 @@
         });
       }
 
+      // The editor can be pointed at any suggest source — project
+      // tags, attachment tags, etc. Default is the project-tag suggest.
+      var suggestFn = opts.suggestFn || function(q) {
+        if (!window.p86Api || !window.p86Api.projects || !window.p86Api.projects.suggestTags) {
+          return Promise.resolve({ tags: [] });
+        }
+        return window.p86Api.projects.suggestTags(q);
+      };
+
       var fetchTimer;
       input.addEventListener('input', function(e) {
         clearTimeout(fetchTimer);
         var q = e.target.value;
         fetchTimer = setTimeout(function() {
-          if (!window.p86Api || !window.p86Api.projects || !window.p86Api.projects.suggestTags) return;
-          window.p86Api.projects.suggestTags(q).then(function(r) {
-            _tagSuggestCache = (r && r.tags) || [];
-            renderSuggest(_tagSuggestCache);
+          suggestFn(q).then(function(r) {
+            renderSuggest((r && r.tags) || []);
           }).catch(function() {});
         }, 150);
       });
       input.addEventListener('focus', function() {
-        // Show cached suggestions immediately if we have them.
-        if (_tagSuggestCache.length) renderSuggest(_tagSuggestCache);
-        else if (window.p86Api && window.p86Api.projects && window.p86Api.projects.suggestTags) {
-          window.p86Api.projects.suggestTags('').then(function(r) {
-            _tagSuggestCache = (r && r.tags) || [];
-            renderSuggest(_tagSuggestCache);
-          }).catch(function() {});
-        }
+        suggestFn('').then(function(r) {
+          renderSuggest((r && r.tags) || []);
+        }).catch(function() {});
       });
       input.addEventListener('blur', function() {
         // Delay hiding so mousedown on a suggestion can fire first.
@@ -765,10 +767,14 @@
     var p = _detailState.project;
     if (!host || !p) return;
 
-    var coverUrl = p.cover_web_url || p.cover_thumb_url || '';
-    var hero = coverUrl
-      ? '<img src="' + escapeAttr(coverUrl) + '" alt="" class="p86-proj-detail-hero" />'
-      : '<div class="p86-proj-detail-hero p86-proj-detail-hero-empty">&#x1F4F8;</div>';
+    // Reset per-paint UI state.
+    _detailState.photoFilter = _detailState.photoFilter || { tag: '', uploader: '', start: '', end: '' };
+    _detailState.selection = _detailState.selection || new Set();
+
+    var coverUrl = p.cover_thumb_url || p.cover_web_url || '';
+    var coverThumb = coverUrl
+      ? '<img src="' + escapeAttr(coverUrl) + '" alt="" class="p86-proj-header-cover-img" />'
+      : '<div class="p86-proj-header-cover-empty">&#x1F4F8;</div>';
 
     var linkBadges = [];
     if (p.lead_id)    linkBadges.push({ k: 'Lead',   v: p.lead_title || p.lead_id });
@@ -776,72 +782,96 @@
     if (p.client_id)  linkBadges.push({ k: 'Client', v: p.client_name || p.client_id });
 
     var addr = (p.address_text || '').trim();
-    var mapBlock = addr
-      ? '<iframe class="p86-proj-detail-map-frame" src="https://www.google.com/maps?q=' + encodeURIComponent(addr) + '&output=embed&z=16" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>'
-      : '<div class="p86-proj-detail-map-empty">Add an address to drop a pin here.</div>';
 
+    // CompanyCam-style compact header: small square cover thumb +
+    // name + address + link badges on the right; action row above.
     host.innerHTML =
-      '<div class="p86-proj-detail-topbar">' +
-        '<div class="p86-proj-detail-title-wrap">' +
-          '<div class="p86-proj-detail-eyebrow">Project</div>' +
-          '<input id="projNameInput" value="' + escapeAttr(p.name) + '" class="p86-proj-detail-name-input" />' +
-          '<div class="p86-proj-detail-meta">' +
-            'Updated ' + escapeHTML(fmtRelative(p.updated_at)) +
-            (p.created_by_name ? ' &middot; created by ' + escapeHTML(p.created_by_name) : '') +
-          '</div>' +
-        '</div>' +
-        '<div class="p86-proj-detail-actions">' +
+      // Top breadcrumb + action row
+      '<div class="p86-proj-detail-breadcrumb">' +
+        '<button class="p86-proj-back-btn" onclick="window.closeProjectDetail()">&lsaquo; Projects</button>' +
+        '<div class="p86-proj-detail-toolbar">' +
           (p.archived_at
             ? '<button class="ee-btn secondary" onclick="window.p86Projects.unarchive()">&#x21BA; Unarchive</button>'
-            : '<button class="ee-btn secondary" onclick="window.p86Projects.archive()">&#x1F5C4; Archive</button>') +
-          '<button class="ee-btn secondary" onclick="window.closeProjectDetail()">&times; Close</button>' +
+            : '<button class="ee-btn secondary" onclick="window.p86Projects.archive()" title="Archive project">&#x1F5C4; Archive</button>') +
+          '<button class="ee-btn secondary" onclick="window.p86Projects.editLinks()">Edit links</button>' +
+          '<button class="p86-proj-icon-btn" onclick="window.closeProjectDetail()" title="Close">&times;</button>' +
         '</div>' +
       '</div>' +
 
-      // Compact 3-column zone: cover (smaller) · inline map · side panel
-      // (linked + address + tags). On mobile this stacks to single col.
-      '<div class="p86-proj-detail-cols">' +
-        '<div class="p86-proj-detail-col-cover">' + hero + '</div>' +
-        '<div class="p86-proj-detail-col-map">' + mapBlock + '</div>' +
-        '<div class="p86-proj-detail-col-side">' +
-          '<fieldset class="p86-proj-fieldset">' +
-            '<legend>Linked to</legend>' +
-            (linkBadges.length
-              ? linkBadges.map(function(b) {
-                  return '<div class="p86-proj-link-row">' +
-                    '<span class="p86-proj-link-k">' + escapeHTML(b.k) + ':</span> ' +
-                    escapeHTML(b.v) +
-                  '</div>';
-                }).join('')
-              : '<div class="p86-proj-empty-line">Not linked yet.</div>') +
-            '<button class="ee-btn secondary p86-proj-edit-links-btn" onclick="window.p86Projects.editLinks()">Edit links</button>' +
-          '</fieldset>' +
-          '<fieldset class="p86-proj-fieldset">' +
-            '<legend>Address</legend>' +
-            '<input id="projAddrInput" value="' + escapeAttr(p.address_text || '') + '" placeholder="Site address" class="p86-proj-input" />' +
-          '</fieldset>' +
-          '<fieldset class="p86-proj-fieldset">' +
-            '<legend>Tags</legend>' +
-            '<div id="projDetailTagsEditor" class="p86-tag-editor p86-tag-editor-inline"></div>' +
-          '</fieldset>' +
+      // Compact header: cover thumb · title + address + tag chips · linkages
+      '<div class="p86-proj-header-row">' +
+        '<div class="p86-proj-header-cover">' + coverThumb + '</div>' +
+        '<div class="p86-proj-header-info">' +
+          '<input id="projNameInput" value="' + escapeAttr(p.name) + '" class="p86-proj-header-name" placeholder="Project name" />' +
+          '<input id="projAddrInput" value="' + escapeAttr(p.address_text || '') + '" placeholder="Site address" class="p86-proj-header-addr" />' +
+          '<div id="projDetailTagsEditor" class="p86-tag-editor p86-tag-editor-header"></div>' +
+        '</div>' +
+        '<div class="p86-proj-header-side">' +
+          (linkBadges.length
+            ? linkBadges.map(function(b) {
+                return '<div class="p86-proj-link-row"><span class="p86-proj-link-k">' + escapeHTML(b.k) + ':</span> ' + escapeHTML(b.v) + '</div>';
+              }).join('')
+            : '<div class="p86-proj-empty-line">Not linked yet.</div>') +
+          '<div class="p86-proj-header-meta">Updated ' + escapeHTML(fmtRelative(p.updated_at)) +
+            (p.created_by_name ? ' &middot; ' + escapeHTML(p.created_by_name) : '') +
+          '</div>' +
         '</div>' +
       '</div>' +
 
-      '<fieldset class="p86-proj-fieldset p86-proj-desc-fieldset">' +
-        '<legend>Description</legend>' +
-        '<textarea id="projDescInput" rows="3" placeholder="Optional notes about the project / walkthrough scope." class="p86-proj-textarea">' + escapeHTML(p.description || '') + '</textarea>' +
-      '</fieldset>' +
+      // Tab strip (Photos + future) — for now Photos is the only
+      // active tab; Reports + Files are placeholders for the
+      // polymorphic refactor in P2.
+      '<div class="p86-proj-tabs">' +
+        '<button class="p86-proj-tab active">Photos <span class="p86-proj-tab-count">(' + _detailState.photos.length + ')</span></button>' +
+        '<button class="p86-proj-tab disabled" title="Coming in Phase 2">Reports <span class="p86-proj-tab-count">(0)</span></button>' +
+        '<button class="p86-proj-tab disabled" title="Coming soon">Files <span class="p86-proj-tab-count">(0)</span></button>' +
+      '</div>' +
 
-      '<fieldset class="p86-proj-fieldset p86-proj-photos-fieldset">' +
-        '<legend>&#x1F4F7; Photos &amp; Pairs <span class="p86-proj-legend-count">(' + (_detailState.photos.length) + ' photos · ' + (_detailState.pairs.length) + ' pairs)</span></legend>' +
-        '<div id="projPhotoFeed" class="p86-proj-photo-feed"></div>' +
-        '<div id="projPhotoUploadHost"></div>' +
-      '</fieldset>' +
+      // Filter toolbar — date range + uploader + view + upload
+      '<div class="p86-proj-filter-toolbar">' +
+        '<div class="p86-proj-filter-group">' +
+          '<input type="date" id="projFilterStart" value="' + escapeAttr(_detailState.photoFilter.start || '') + '" class="p86-proj-filter-date" title="Start date" />' +
+          '<input type="date" id="projFilterEnd" value="' + escapeAttr(_detailState.photoFilter.end || '') + '" class="p86-proj-filter-date" title="End date" />' +
+          '<select id="projFilterUploader" class="p86-proj-filter-select" title="Uploader">' +
+            '<option value="">Users ▾</option>' +
+            buildUploaderOptions() +
+          '</select>' +
+        '</div>' +
+        '<div class="p86-proj-filter-actions">' +
+          '<button class="primary" onclick="document.getElementById(\'projPhotoFileInput\').click();">&#x2795; Upload Photos</button>' +
+          '<input type="file" id="projPhotoFileInput" multiple accept="image/*,application/pdf" style="display:none;" />' +
+        '</div>' +
+      '</div>' +
 
-      // Activity feed: collapsible <details> so the project view
-      // doesn't grow unbounded when a project has months of history.
-      // Default collapsed; click the legend to expand.
-      '<details class="p86-proj-activity-details" id="projActivityDetails">' +
+      // Tag filter chip strip
+      '<div id="projTagChipStrip" class="p86-proj-tag-strip"></div>' +
+
+      // Photo feed (date-grouped grid; rendered by paintPhotoFeed)
+      '<div id="projPhotoFeed" class="p86-proj-photo-feed"></div>' +
+
+      // Secondary zone: description + map + activity. Tucked under
+      // the photos because the photos are the point of the page;
+      // these are reference material.
+      '<details class="p86-proj-secondary" open>' +
+        '<summary class="p86-proj-activity-summary">' +
+          '<span>Project details</span>' +
+          '<span class="p86-proj-activity-chevron">&#x25BE;</span>' +
+        '</summary>' +
+        '<div class="p86-proj-secondary-grid">' +
+          '<fieldset class="p86-proj-fieldset">' +
+            '<legend>Description</legend>' +
+            '<textarea id="projDescInput" rows="4" placeholder="Optional notes about the project / walkthrough scope." class="p86-proj-textarea">' + escapeHTML(p.description || '') + '</textarea>' +
+          '</fieldset>' +
+          '<fieldset class="p86-proj-fieldset" style="padding:0;overflow:hidden;">' +
+            '<legend style="margin-left:8px;">Map</legend>' +
+            (addr
+              ? '<iframe class="p86-proj-detail-map-frame" src="https://www.google.com/maps?q=' + encodeURIComponent(addr) + '&output=embed&z=16" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>'
+              : '<div class="p86-proj-detail-map-empty">Add an address to drop a pin here.</div>') +
+          '</fieldset>' +
+        '</div>' +
+      '</details>' +
+
+      '<details class="p86-proj-activity-details">' +
         '<summary class="p86-proj-activity-summary">' +
           '<span>&#x1F4DC; Activity <span class="p86-proj-legend-count">(' + (_detailState.activity.length) + ')</span></span>' +
           '<span class="p86-proj-activity-chevron">&#x25BE;</span>' +
@@ -857,7 +887,43 @@
     if (addrEl) addrEl.addEventListener('blur', function() { _fieldBlur('address_text', addrEl.value); });
     if (descEl) descEl.addEventListener('blur', function() { _fieldBlur('description', descEl.value); });
 
-    // Tag editor (inline in detail header)
+    // Wire filter inputs.
+    var startEl = host.querySelector('#projFilterStart');
+    var endEl = host.querySelector('#projFilterEnd');
+    var uploaderEl = host.querySelector('#projFilterUploader');
+    if (uploaderEl) uploaderEl.value = _detailState.photoFilter.uploader || '';
+    if (startEl) startEl.addEventListener('change', function() { _detailState.photoFilter.start = startEl.value; paintPhotoFeed(); paintTagChipStrip(); });
+    if (endEl) endEl.addEventListener('change', function() { _detailState.photoFilter.end = endEl.value; paintPhotoFeed(); paintTagChipStrip(); });
+    if (uploaderEl) uploaderEl.addEventListener('change', function() { _detailState.photoFilter.uploader = uploaderEl.value; paintPhotoFeed(); paintTagChipStrip(); });
+
+    // Wire upload input.
+    var fileInput = host.querySelector('#projPhotoFileInput');
+    if (fileInput) {
+      fileInput.addEventListener('change', function(e) {
+        if (e.target.files && e.target.files.length) uploadFiles(e.target.files);
+        fileInput.value = '';
+      });
+    }
+    // Drag-drop on the feed.
+    var feedHost = host.querySelector('#projPhotoFeed');
+    if (feedHost) {
+      feedHost.addEventListener('dragover', function(e) {
+        e.preventDefault();
+        feedHost.classList.add('p86-proj-drop-active');
+      });
+      feedHost.addEventListener('dragleave', function() {
+        feedHost.classList.remove('p86-proj-drop-active');
+      });
+      feedHost.addEventListener('drop', function(e) {
+        e.preventDefault();
+        feedHost.classList.remove('p86-proj-drop-active');
+        if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) {
+          uploadFiles(e.dataTransfer.files);
+        }
+      });
+    }
+
+    // Project-level tag editor in the header row
     var tagsHostEl = host.querySelector('#projDetailTagsEditor');
     if (tagsHostEl) {
       mountTagEditor(tagsHostEl, {
@@ -871,13 +937,99 @@
       });
     }
 
-    // Photo feed: date-grouped, with paired tiles interspersed.
+    paintTagChipStrip();
     paintPhotoFeed();
-    // Activity feed.
     paintActivityFeed();
-    // Upload zone (handled by p86Attachments — keep this slim, no full
-    // grid render; we want our custom feed above to show the photos).
-    mountUploader();
+  }
+
+  // Build the <option> entries for the uploader filter dropdown.
+  // Pulls distinct uploader names from the loaded photos.
+  function buildUploaderOptions() {
+    var byId = {};
+    _detailState.photos.forEach(function(a) {
+      if (a.uploaded_by != null && a.uploaded_by_name) {
+        byId[a.uploaded_by] = a.uploaded_by_name;
+      }
+    });
+    return Object.keys(byId).map(function(id) {
+      return '<option value="' + escapeAttr(id) + '">' + escapeHTML(byId[id]) + '</option>';
+    }).join('');
+  }
+
+  // Per-photo tag chip strip — collects distinct tags across the
+  // currently-filtered photo set, plus an "Untagged" pseudo-chip.
+  // Click a chip to filter to that tag; click again to clear.
+  function paintTagChipStrip() {
+    var host = document.getElementById('projTagChipStrip');
+    if (!host) return;
+    var f = _detailState.photoFilter;
+    var tagCounts = {};
+    var untaggedCount = 0;
+    _detailState.photos.forEach(function(a) {
+      if (!photoMatchesNonTagFilters(a)) return;
+      var ts = Array.isArray(a.tags) ? a.tags : [];
+      if (!ts.length) { untaggedCount++; return; }
+      ts.forEach(function(t) { tagCounts[t] = (tagCounts[t] || 0) + 1; });
+    });
+    var names = Object.keys(tagCounts).sort();
+    if (!names.length && !untaggedCount) {
+      host.innerHTML = '';
+      host.style.display = 'none';
+      return;
+    }
+    host.style.display = '';
+
+    var html = '';
+    // "Untagged" pseudo-chip on the left.
+    if (untaggedCount) {
+      var unActive = f.tag === '__untagged__';
+      html += '<button class="p86-chip-photo-tag' + (unActive ? ' active' : '') + '" data-mk-tag="__untagged__">' +
+        '&#x1F3F7; Untagged <span class="p86-chip-count">' + untaggedCount + '</span>' +
+      '</button>';
+    }
+    names.forEach(function(t) {
+      var active = f.tag === t;
+      html += '<button class="p86-chip-photo-tag' + (active ? ' active' : '') + '" data-mk-tag="' + escapeAttr(t) + '" style="--h:' + hueFor(t) + ';">' +
+        '#' + escapeHTML(t) + ' <span class="p86-chip-count">' + tagCounts[t] + '</span>' +
+      '</button>';
+    });
+    host.innerHTML = html;
+    host.querySelectorAll('[data-mk-tag]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var tag = btn.getAttribute('data-mk-tag');
+        _detailState.photoFilter.tag = (_detailState.photoFilter.tag === tag) ? '' : tag;
+        paintPhotoFeed();
+        paintTagChipStrip();
+      });
+    });
+  }
+
+  // Apply non-tag filters (date range, uploader) to a photo.
+  function photoMatchesNonTagFilters(a) {
+    var f = _detailState.photoFilter;
+    if (f.start) {
+      var s = new Date(f.start + 'T00:00:00').getTime();
+      if (new Date(a.uploaded_at).getTime() < s) return false;
+    }
+    if (f.end) {
+      var e = new Date(f.end + 'T23:59:59').getTime();
+      if (new Date(a.uploaded_at).getTime() > e) return false;
+    }
+    if (f.uploader) {
+      if (String(a.uploaded_by) !== String(f.uploader)) return false;
+    }
+    return true;
+  }
+  function photoMatchesAllFilters(a) {
+    if (!photoMatchesNonTagFilters(a)) return false;
+    var f = _detailState.photoFilter;
+    if (f.tag === '__untagged__') {
+      return !Array.isArray(a.tags) || a.tags.length === 0;
+    }
+    if (f.tag) {
+      return Array.isArray(a.tags) && a.tags.indexOf(f.tag) !== -1;
+    }
+    return true;
   }
 
   function paintPhotoFeed() {
@@ -886,8 +1038,10 @@
     var photos = _detailState.photos.slice();
     var pairs = _detailState.pairs.slice();
 
-    // Photos already paired — exclude their underlying photos from the
-    // regular feed so the same image doesn't render twice.
+    // Apply filters BEFORE the pair exclusion so a paired-photo
+    // doesn't show through when its tags don't match the filter.
+    photos = photos.filter(photoMatchesAllFilters);
+
     var pairedIds = new Set();
     pairs.forEach(function(pair) {
       pairedIds.add(pair.before_attachment_id);
@@ -895,14 +1049,18 @@
     });
     var standalonePhotos = photos.filter(function(a) { return !pairedIds.has(a.id); });
 
-    // Merge: pairs sorted by created_at, photos sorted by uploaded_at,
-    // grouped by day. Each group renders as a date header followed by
-    // a flex/grid of tiles (paired tiles + standalone photo tiles).
+    // Pairs: include only if BOTH underlying photos survived the
+    // filter — otherwise the pair would dangle.
+    var visiblePhotoIds = new Set(photos.map(function(a) { return a.id; }));
+    var visiblePairs = pairs.filter(function(pp) {
+      return visiblePhotoIds.has(pp.before_attachment_id) && visiblePhotoIds.has(pp.after_attachment_id);
+    });
+
     var items = [];
     standalonePhotos.forEach(function(a) {
       items.push({ kind: 'photo', sortKey: a.uploaded_at, data: a });
     });
-    pairs.forEach(function(pp) {
+    visiblePairs.forEach(function(pp) {
       items.push({ kind: 'pair', sortKey: pp.created_at, data: pp });
     });
     items.sort(function(x, y) {
@@ -910,11 +1068,14 @@
     });
 
     if (!items.length) {
-      host.innerHTML = '<div class="p86-proj-empty-line">No photos yet. Drop files below or use the upload control.</div>';
+      var emptyMsg = (_detailState.photoFilter.tag || _detailState.photoFilter.uploader || _detailState.photoFilter.start || _detailState.photoFilter.end)
+        ? 'No photos match the current filter. Clear filters to see all photos.'
+        : 'No photos yet. Drop files here or use the Upload Photos button.';
+      host.innerHTML = '<div class="p86-proj-empty-line">' + escapeHTML(emptyMsg) + '</div>';
+      paintBulkActionBar();
       return;
     }
 
-    // Group by dateGroupLabel.
     var groups = [];
     var byLabel = {};
     items.forEach(function(it) {
@@ -926,15 +1087,33 @@
       byLabel[label].items.push(it);
     });
 
-    // Render. Paired tiles are rendered via the pairs module (it
-    // builds the slider). Standalone tiles are inline HTML so we can
-    // tightly style hover + caption editing.
     host.innerHTML = '';
     groups.forEach(function(g) {
+      var groupBlock = document.createElement('div');
+      groupBlock.className = 'p86-proj-feed-group';
+
+      // Date header with a "select all in group" checkbox.
       var dateHeader = document.createElement('div');
       dateHeader.className = 'p86-proj-feed-date-header';
-      dateHeader.textContent = g.label;
-      host.appendChild(dateHeader);
+      var photoIdsInGroup = g.items.filter(function(it) { return it.kind === 'photo'; }).map(function(it) { return it.data.id; });
+      var allSelected = photoIdsInGroup.length > 0 && photoIdsInGroup.every(function(id) { return _detailState.selection.has(id); });
+      dateHeader.innerHTML =
+        (photoIdsInGroup.length
+          ? '<label class="p86-proj-feed-date-checkbox" title="Select all in group"><input type="checkbox" ' + (allSelected ? 'checked' : '') + ' /></label>'
+          : '') +
+        '<span>' + escapeHTML(g.label) + '</span>';
+      var groupCheckbox = dateHeader.querySelector('input');
+      if (groupCheckbox) {
+        groupCheckbox.addEventListener('change', function() {
+          if (groupCheckbox.checked) {
+            photoIdsInGroup.forEach(function(id) { _detailState.selection.add(id); });
+          } else {
+            photoIdsInGroup.forEach(function(id) { _detailState.selection.delete(id); });
+          }
+          paintPhotoFeed();
+        });
+      }
+      groupBlock.appendChild(dateHeader);
 
       var grid = document.createElement('div');
       grid.className = 'p86-proj-feed-grid';
@@ -948,13 +1127,17 @@
           grid.appendChild(pairTile);
         }
       });
-      host.appendChild(grid);
+      groupBlock.appendChild(grid);
+      host.appendChild(groupBlock);
     });
+
+    paintBulkActionBar();
   }
 
   function buildPhotoTile(att) {
     var tile = document.createElement('div');
     tile.className = 'p86-proj-photo-tile';
+    if (_detailState.selection.has(att.id)) tile.classList.add('selected');
     tile.setAttribute('data-attachment-id', att.id);
 
     var isImg = att.mime_type && /^image\//.test(att.mime_type) && att.thumb_url;
@@ -968,18 +1151,46 @@
 
     var uploaderInitials = att.uploaded_by_name ? initialsOf(att.uploaded_by_name) : '';
     var time = fmtTime(att.uploaded_at);
+    var tagCount = Array.isArray(att.tags) ? att.tags.length : 0;
+    var hasCaption = !!att.caption;
 
+    // CompanyCam-style tile: checkbox top-left, ⋮ menu top-right,
+    // uploader initials bottom-left, tag/caption indicator bottom-right.
+    // Time + uploader name renders below the tile.
     tile.innerHTML =
-      visual +
-      '<div class="p86-proj-photo-tile-overlay">' +
-        '<span class="p86-proj-photo-tile-time">' + escapeHTML(time) + '</span>' +
-        (uploaderInitials ? '<span class="p86-proj-photo-tile-uploader" title="' + escapeAttr(att.uploaded_by_name || '') + '">' + escapeHTML(uploaderInitials) + '</span>' : '') +
+      '<div class="p86-proj-photo-tile-visual">' +
+        visual +
+        '<label class="p86-proj-photo-tile-checkbox" onclick="event.stopPropagation();">' +
+          '<input type="checkbox"' + (_detailState.selection.has(att.id) ? ' checked' : '') + ' />' +
+        '</label>' +
+        '<button type="button" class="p86-proj-photo-tile-menu" title="More">&#x22EE;</button>' +
+        (uploaderInitials
+          ? '<span class="p86-proj-photo-tile-uploader" title="' + escapeAttr(att.uploaded_by_name || '') + '">' + escapeHTML(uploaderInitials) + '</span>'
+          : '') +
+        '<div class="p86-proj-photo-tile-badges">' +
+          (hasCaption ? '<span class="p86-proj-photo-tile-badge" title="' + escapeAttr(att.caption) + '">&#x1F4DD;</span>' : '') +
+          (tagCount ? '<span class="p86-proj-photo-tile-badge" title="' + escapeAttr((att.tags || []).join(', ')) + '">&#x1F3F7;' + (tagCount > 1 ? ' ' + tagCount : '') + '</span>' : '') +
+        '</div>' +
       '</div>' +
-      (att.caption ? '<div class="p86-proj-photo-tile-caption" title="' + escapeAttr(att.caption) + '">' + escapeHTML(att.caption) + '</div>' : '') +
-      '<button type="button" class="p86-proj-photo-tile-menu" title="More">&#x22EE;</button>';
+      '<div class="p86-proj-photo-tile-footer">' +
+        '<span class="p86-proj-photo-tile-time">' + escapeHTML(time) + '</span>' +
+        (att.uploaded_by_name ? '<span class="p86-proj-photo-tile-uploader-name">' + escapeHTML(att.uploaded_by_name) + '</span>' : '') +
+      '</div>';
 
-    tile.addEventListener('click', function(e) {
+    var checkbox = tile.querySelector('.p86-proj-photo-tile-checkbox input');
+    if (checkbox) {
+      checkbox.addEventListener('change', function() {
+        if (checkbox.checked) _detailState.selection.add(att.id);
+        else _detailState.selection.delete(att.id);
+        tile.classList.toggle('selected', checkbox.checked);
+        paintBulkActionBar();
+        // Re-paint date headers' "select all" state — cheap enough.
+        paintPhotoFeed();
+      });
+    }
+    tile.querySelector('.p86-proj-photo-tile-visual').addEventListener('click', function(e) {
       if (e.target.closest('.p86-proj-photo-tile-menu')) return;
+      if (e.target.closest('.p86-proj-photo-tile-checkbox')) return;
       openPhotoInLightbox(att);
     });
     tile.querySelector('.p86-proj-photo-tile-menu').addEventListener('click', function(e) {
@@ -988,6 +1199,182 @@
     });
 
     return tile;
+  }
+
+  // Floating action bar — appears at the bottom of the detail overlay
+  // when one or more photos are checked. Bulk Tag / Pair / Delete /
+  // Clear.
+  function paintBulkActionBar() {
+    var existing = document.getElementById('projBulkBar');
+    if (!_detailState.selection || !_detailState.selection.size) {
+      if (existing) existing.remove();
+      return;
+    }
+    if (!existing) {
+      existing = document.createElement('div');
+      existing.id = 'projBulkBar';
+      existing.className = 'p86-proj-bulk-bar';
+      document.body.appendChild(existing);
+    }
+    var n = _detailState.selection.size;
+    var ids = Array.from(_detailState.selection);
+    // Pair is only valid for exactly 2 image photos.
+    var pairable = false;
+    if (n === 2) {
+      var pickedTwo = _detailState.photos.filter(function(a) { return _detailState.selection.has(a.id); });
+      pairable = pickedTwo.length === 2 && pickedTwo.every(function(a) { return a.mime_type && /^image\//.test(a.mime_type); });
+    }
+    existing.innerHTML =
+      '<span class="p86-proj-bulk-count">' + n + ' selected</span>' +
+      '<button class="p86-proj-bulk-btn" data-act="tag">&#x1F3F7; Tag</button>' +
+      (pairable ? '<button class="p86-proj-bulk-btn" data-act="pair">&#x1F500; Create Pair</button>' : '') +
+      '<button class="p86-proj-bulk-btn danger" data-act="delete">&#x1F5D1; Delete</button>' +
+      '<button class="p86-proj-bulk-btn p86-proj-bulk-clear" data-act="clear">&times;</button>';
+    existing.querySelectorAll('[data-act]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var act = btn.getAttribute('data-act');
+        if (act === 'clear') {
+          _detailState.selection.clear();
+          paintPhotoFeed();
+        } else if (act === 'tag') {
+          openBulkTagModal(ids);
+        } else if (act === 'pair') {
+          if (ids.length !== 2) return;
+          // First selected = before; second = after (by selection order
+          // is approximate; users can fine-tune in the picker if needed).
+          var picked = _detailState.photos.filter(function(a) { return _detailState.selection.has(a.id); });
+          // Sort by uploaded_at so "before" = earlier photo.
+          picked.sort(function(x, y) { return new Date(x.uploaded_at).getTime() - new Date(y.uploaded_at).getTime(); });
+          api().pairs.create(_detailState.project.id, {
+            before_attachment_id: picked[0].id,
+            after_attachment_id: picked[1].id,
+            label: null
+          }).then(function(r) {
+            _detailState.pairs.unshift(r.pair);
+            _detailState.selection.clear();
+            paintPhotoFeed();
+            paintActivityFeed();
+          }).catch(function(e) { alert('Pair create failed: ' + (e.message || e)); });
+        } else if (act === 'delete') {
+          if (!window.confirm('Delete ' + n + ' photo' + (n === 1 ? '' : 's') + '? This cannot be undone.')) return;
+          Promise.all(ids.map(function(id) {
+            return window.p86Api.attachments.remove(id).catch(function() { return null; });
+          })).then(function() {
+            _detailState.photos = _detailState.photos.filter(function(a) { return !_detailState.selection.has(a.id); });
+            _detailState.selection.clear();
+            // Re-fetch pairs in case any of the deleted photos were paired.
+            return api().pairs.list(_detailState.project.id);
+          }).then(function(r) {
+            _detailState.pairs = (r && r.pairs) || [];
+            paintPhotoFeed();
+            paintTagChipStrip();
+          });
+        }
+      });
+    });
+  }
+
+  // Bulk tag modal — pick tags to ADD or REMOVE across all selected
+  // photos. Uses the existing tag editor pattern plus a small
+  // "remove" pill list driven by tags currently present on any of
+  // the selected photos.
+  function openBulkTagModal(ids) {
+    var prior = document.getElementById('projBulkTagModal');
+    if (prior) prior.remove();
+
+    var picked = _detailState.photos.filter(function(a) { return ids.indexOf(a.id) !== -1; });
+    var existingTagCounts = {};
+    picked.forEach(function(a) {
+      (a.tags || []).forEach(function(t) { existingTagCounts[t] = (existingTagCounts[t] || 0) + 1; });
+    });
+
+    var modal = document.createElement('div');
+    modal.id = 'projBulkTagModal';
+    modal.className = 'modal active';
+    modal.innerHTML =
+      '<div class="modal-content" style="max-width:520px;">' +
+        '<div class="modal-header"><span>Tag ' + ids.length + ' photo' + (ids.length === 1 ? '' : 's') + '</span><button class="p86-modal-close" data-close>&times;</button></div>' +
+        '<div class="p86-proj-create-body">' +
+          '<div class="p86-field">' +
+            '<span>Add tags</span>' +
+            '<div id="btAddEditor" class="p86-tag-editor"></div>' +
+          '</div>' +
+          (Object.keys(existingTagCounts).length
+            ? '<div class="p86-field">' +
+                '<span>Remove tags (click to mark)</span>' +
+                '<div id="btRemoveChips" class="p86-tag-editor-chips">' +
+                  Object.keys(existingTagCounts).sort().map(function(t) {
+                    return '<button class="p86-chip-tag" data-mk-remove="' + escapeAttr(t) + '" style="--h:' + hueFor(t) + ';">' +
+                      '#' + escapeHTML(t) + ' <span class="p86-chip-count">' + existingTagCounts[t] + '/' + ids.length + '</span>' +
+                    '</button>';
+                  }).join('') +
+                '</div>' +
+              '</div>'
+            : '') +
+        '</div>' +
+        '<div class="modal-footer">' +
+          '<button class="ee-btn secondary" data-close>Cancel</button>' +
+          '<button class="primary" id="btApply">Apply</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(modal);
+    modal.addEventListener('click', function(e) { if (e.target === modal) modal.remove(); });
+    modal.querySelectorAll('[data-close]').forEach(function(b) {
+      b.addEventListener('click', function() { modal.remove(); });
+    });
+
+    var pendingAdd = [];
+    mountTagEditor(modal.querySelector('#btAddEditor'), {
+      getTags: function() { return pendingAdd; },
+      setTags: function(next) { pendingAdd = next.slice(); }
+    });
+
+    var pendingRemove = new Set();
+    modal.querySelectorAll('[data-mk-remove]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var t = btn.getAttribute('data-mk-remove');
+        if (pendingRemove.has(t)) {
+          pendingRemove.delete(t);
+          btn.classList.remove('p86-chip-remove-active');
+        } else {
+          pendingRemove.add(t);
+          btn.classList.add('p86-chip-remove-active');
+        }
+      });
+    });
+
+    modal.querySelector('#btApply').addEventListener('click', function() {
+      if (!pendingAdd.length && !pendingRemove.size) {
+        modal.remove();
+        return;
+      }
+      window.p86Api.attachments.bulkTag({
+        ids: ids,
+        add: pendingAdd,
+        remove: Array.from(pendingRemove)
+      }).then(function() {
+        // Apply locally for instant feedback (avoid waiting for a
+        // re-fetch round-trip).
+        _detailState.photos.forEach(function(a) {
+          if (ids.indexOf(a.id) === -1) return;
+          var s = new Set(Array.isArray(a.tags) ? a.tags : []);
+          pendingAdd.forEach(function(t) { s.add(t); });
+          pendingRemove.forEach(function(t) { s.delete(t); });
+          a.tags = Array.from(s);
+        });
+        modal.remove();
+        _detailState.selection.clear();
+        paintPhotoFeed();
+        paintTagChipStrip();
+        // Activity feed will refresh on next detail open; quietly refetch in background.
+        api().activity(_detailState.project.id, { limit: 50 }).then(function(r) {
+          _detailState.activity = (r && r.activity) || [];
+          paintActivityFeed();
+        }).catch(function() {});
+      }).catch(function(e) {
+        alert('Bulk tag failed: ' + (e.message || e));
+      });
+    });
   }
 
   function openPhotoInLightbox(att) {
@@ -1007,6 +1394,7 @@
     menu.className = 'p86-proj-photo-menu';
     menu.innerHTML =
       '<button data-act="caption">Edit caption</button>' +
+      '<button data-act="tags">Edit tags…</button>' +
       '<button data-act="cover">Set as cover</button>' +
       '<button data-act="pair">Pair with…</button>' +
       '<button data-act="annotate">Annotate</button>' +
@@ -1026,11 +1414,68 @@
         var act = btn.getAttribute('data-act');
         close();
         if (act === 'caption') editCaption(att);
+        else if (act === 'tags') editPhotoTags(att);
         else if (act === 'cover') setCover(att);
         else if (act === 'pair') openPairPicker(att);
         else if (act === 'annotate') openAnnotator(att);
         else if (act === 'delete') deletePhoto(att);
       });
+    });
+  }
+
+  // Per-photo tag editor — single-photo variant of the bulk modal.
+  // Edits the att.tags array in place + persists via the attachments
+  // PATCH route (which already supports the tags field).
+  function editPhotoTags(att) {
+    var prior = document.getElementById('projPhotoTagModal');
+    if (prior) prior.remove();
+
+    var modal = document.createElement('div');
+    modal.id = 'projPhotoTagModal';
+    modal.className = 'modal active';
+    modal.innerHTML =
+      '<div class="modal-content" style="max-width:460px;">' +
+        '<div class="modal-header"><span>Photo tags</span><button class="p86-modal-close" data-close>&times;</button></div>' +
+        '<div class="p86-proj-create-body">' +
+          '<div class="p86-field">' +
+            '<span>Tags on this photo</span>' +
+            '<div id="ptTagsEditor" class="p86-tag-editor"></div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="modal-footer">' +
+          '<button class="ee-btn secondary" data-close>Done</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(modal);
+    modal.addEventListener('click', function(e) { if (e.target === modal) modal.remove(); });
+    modal.querySelectorAll('[data-close]').forEach(function(b) {
+      b.addEventListener('click', function() { modal.remove(); });
+    });
+
+    var current = Array.isArray(att.tags) ? att.tags.slice() : [];
+    mountTagEditor(modal.querySelector('#ptTagsEditor'), {
+      getTags: function() { return current; },
+      setTags: function(next) {
+        current = next.slice();
+        att.tags = current;
+        // Persist on each tag change (debounced via async resolution).
+        window.p86Api.attachments.update(att.id, { tags: current }).then(function() {
+          paintPhotoFeed();
+          paintTagChipStrip();
+        }).catch(function(e) {
+          alert('Tag save failed: ' + (e.message || e));
+        });
+      },
+      // Scope autocomplete to this entity's existing tags so users see
+      // the project's vocabulary instead of the org-wide firehose.
+      suggestFn: function(q) {
+        if (!window.p86Api || !window.p86Api.attachments || !window.p86Api.attachments.tagsSuggest) {
+          return Promise.resolve({ tags: [] });
+        }
+        return window.p86Api.attachments.tagsSuggest({
+          entity_type: 'project', entity_id: _detailState.project.id, q: q
+        });
+      }
     });
   }
 

@@ -210,6 +210,21 @@
     recent: function(limit) {
       var q = limit ? '?limit=' + encodeURIComponent(limit) : '';
       return get('/api/attachments/recent' + q);
+    },
+    // Tag suggestions scoped to one entity's attachments.
+    // opts: { entity_type, entity_id, q? }
+    tagsSuggest: function(opts) {
+      opts = opts || {};
+      var qs = [];
+      if (opts.entity_type) qs.push('entity_type=' + encodeURIComponent(opts.entity_type));
+      if (opts.entity_id)   qs.push('entity_id=' + encodeURIComponent(opts.entity_id));
+      if (opts.q)           qs.push('q=' + encodeURIComponent(opts.q));
+      return get('/api/attachments/tags/suggest' + (qs.length ? '?' + qs.join('&') : ''));
+    },
+    // Bulk add/remove tags across many attachments. All ids must
+    // share the same entity. payload = { ids:[], add:[], remove:[] }
+    bulkTag: function(payload) {
+      return post('/api/attachments/bulk-tag', payload);
     }
   };
 

@@ -496,6 +496,153 @@ router.get('/:entityType/:entityId',
   }
 );
 
+// GET /api/attachments/tags/suggest?entity_type=project&entity_id=<id>&q=<prefix>
+// Autocomplete for the photo tag editor. Returns distinct tags across
+// the entity's attachments matching the prefix. Scoped to the entity
+// so the user sees a relevant tag history rather than the org-wide
+// firehose.
+router.get('/tags/suggest', requireAuth, async (req, res) => {
+  try {
+    const entityType = String(req.query.entity_type || '').trim();
+    const entityId = String(req.query.entity_id || '').trim();
+    if (!entityType || !entityId) {
+      return res.status(400).json({ error: 'entity_type and entity_id are required' });
+    }
+    if (!entityTypeOk(entityType)) {
+      return res.status(400).json({ error: 'Invalid entity_type' });
+    }
+    // Same capability gate as the per-entity attachments list — if
+    // you can see the attachments, you can see their tags.
+    const cap = readCapForEntity(entityType);
+    if (cap !== '__owner__' && cap !== '__org_member__') {
+      const ok = await hasCapability(req.user, cap);
+      if (!ok) return res.status(403).json({ error: 'Forbidden' });
+    }
+    const q = String(req.query.q || '').trim().toLowerCase();
+    const sql =
+      'SELECT DISTINCT t AS tag ' +
+      '  FROM attachments a, jsonb_array_elements_text(a.tags) AS t ' +
+      ' WHERE a.entity_type = $1 AND a.entity_id = $2 ' +
+      (q ? '   AND t ILIKE $3 ' : '') +
+      ' ORDER BY tag ' +
+      ' LIMIT 30';
+    const params = q ? [entityType, entityId, q + '%'] : [entityType, entityId];
+    const { rows } = await pool.query(sql, params);
+    res.json({ tags: rows.map(function(r) { return r.tag; }) });
+  } catch (e) {
+    console.error('GET /api/attachments/tags/suggest error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /api/attachments/bulk-tag
+// Body: { ids: [string], add?: [string], remove?: [string] }
+// Apply tag adds/removes to many attachments in one round-trip. All
+// ids must belong to the SAME entity (entity_type + entity_id) — we
+// enforce capability + ownership via the first row's entity then
+// confirm the rest match it. Caps each attachment to 20 tags.
+router.post('/bulk-tag', requireAuth, async (req, res) => {
+  try {
+    const body = req.body || {};
+    const ids = Array.isArray(body.ids) ? body.ids.filter(function(x) { return typeof x === 'string' && x; }) : [];
+    if (!ids.length) return res.status(400).json({ error: 'ids required' });
+    if (ids.length > 200) return res.status(400).json({ error: 'too many ids (max 200)' });
+
+    function clean(arr) {
+      if (!Array.isArray(arr)) return [];
+      const seen = new Set();
+      const out = [];
+      for (let i = 0; i < arr.length && out.length < 20; i++) {
+        const v = arr[i];
+        if (typeof v !== 'string') continue;
+        const c = v.trim().toLowerCase().slice(0, 32);
+        if (!c || seen.has(c)) continue;
+        seen.add(c);
+        out.push(c);
+      }
+      return out;
+    }
+    const add = clean(body.add);
+    const remove = clean(body.remove);
+    if (!add.length && !remove.length) return res.status(400).json({ error: 'nothing to do' });
+
+    const { rows } = await pool.query(
+      'SELECT id, entity_type, entity_id, tags, filename FROM attachments WHERE id = ANY($1::text[])',
+      [ids]
+    );
+    if (rows.length !== ids.length) {
+      return res.status(404).json({ error: 'One or more attachments not found' });
+    }
+    // All must share the same entity for the cap check.
+    const firstType = rows[0].entity_type;
+    const firstId = rows[0].entity_id;
+    for (let i = 0; i < rows.length; i++) {
+      if (rows[i].entity_type !== firstType || rows[i].entity_id !== firstId) {
+        return res.status(400).json({ error: 'All attachments must belong to the same entity' });
+      }
+    }
+
+    const cap = writeCapForEntity(firstType);
+    if (cap === '__owner__') {
+      if (!ensureUserAttachmentOwner(req, firstId)) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+    } else {
+      const ok = await hasCapability(req.user, cap);
+      if (!ok) return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    // Apply per-row: union of (prior + add) - remove, capped at 20.
+    const updates = [];
+    for (let i = 0; i < rows.length; i++) {
+      const prior = Array.isArray(rows[i].tags) ? rows[i].tags : [];
+      const next = [];
+      const seen = new Set();
+      function push(t) {
+        if (!t || seen.has(t) || next.length >= 20) return;
+        if (remove.indexOf(t) !== -1) return;
+        seen.add(t);
+        next.push(t);
+      }
+      prior.forEach(push);
+      add.forEach(push);
+      const priorJson = JSON.stringify(prior);
+      const nextJson = JSON.stringify(next);
+      if (priorJson === nextJson) continue;
+      updates.push({ id: rows[i].id, next: nextJson, prior: prior, filename: rows[i].filename });
+    }
+    if (!updates.length) return res.json({ ok: true, changed: 0 });
+
+    // Single query with CASE — avoids N round-trips.
+    const ids2 = updates.map(function(u) { return u.id; });
+    await Promise.all(updates.map(function(u) {
+      return pool.query('UPDATE attachments SET tags = $1::jsonb WHERE id = $2', [u.next, u.id]);
+    }));
+
+    // Activity log for project entities.
+    if (firstType === 'project') {
+      updates.forEach(function(u) {
+        const nextArr = JSON.parse(u.next);
+        const addedHere = nextArr.filter(function(t) { return u.prior.indexOf(t) === -1; });
+        const removedHere = u.prior.filter(function(t) { return nextArr.indexOf(t) === -1; });
+        if (addedHere.length || removedHere.length) {
+          recordProjectActivity(firstId, req.user.id, 'photo_tags_changed', {
+            attachment_id: u.id,
+            filename: u.filename,
+            added: addedHere,
+            removed: removedHere
+          });
+        }
+      });
+    }
+
+    res.json({ ok: true, changed: updates.length, ids: ids2 });
+  } catch (e) {
+    console.error('POST /api/attachments/bulk-tag error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // GET /api/attachments/recent?limit=10
 // Cross-entity recent uploads — drives the "Recent Files" summary
 // widget. Returns the most recently uploaded attachments any
@@ -801,13 +948,30 @@ router.put('/:id', requireAuth, async (req, res) => {
       sets.push('folder = $' + p++);
       params.push(folder);
     }
+    // Per-attachment tags (CompanyCam-style). Normalize identically to
+    // project tags: lowercase, trimmed, deduped, max 20 entries of 32
+    // chars each. Anything non-string in the array is dropped silently.
+    if (req.body && Array.isArray(req.body.tags)) {
+      const normTags = [];
+      const seenTags = new Set();
+      for (let i = 0; i < req.body.tags.length && normTags.length < 20; i++) {
+        const v = req.body.tags[i];
+        if (typeof v !== 'string') continue;
+        const clean = v.trim().toLowerCase().slice(0, 32);
+        if (!clean || seenTags.has(clean)) continue;
+        seenTags.add(clean);
+        normTags.push(clean);
+      }
+      sets.push('tags = $' + p++ + '::jsonb');
+      params.push(JSON.stringify(normTags));
+    }
     if (!sets.length) return res.json({ ok: true, unchanged: true });
     params.push(req.params.id);
     // SAFE: column names are hardcoded conditionals above (caption / position / include_in_proposal / folder); no user-keys loop.
     await pool.query(`UPDATE attachments SET ${sets.join(', ')} WHERE id = $${p}`, params);
     res.json({ ok: true });
 
-    // Log caption edits on project photos. Other PUT mutations
+    // Log caption + tag edits on project photos. Other PUT mutations
     // (position, include_in_proposal, folder) aren't worth a feed
     // entry — they're UI plumbing, not user-meaningful changes.
     if (att.entity_type === 'project' &&
@@ -817,6 +981,24 @@ router.put('/:id', requireAuth, async (req, res) => {
         attachment_id: att.id,
         filename: att.filename
       });
+    }
+    if (att.entity_type === 'project' &&
+        req.body && Array.isArray(req.body.tags)) {
+      // Diff against the prior tags JSONB to write a focused activity
+      // row. att.tags came back from the SELECT above as a parsed
+      // array.
+      const priorTags = Array.isArray(att.tags) ? att.tags : [];
+      const nextTagsRaw = req.body.tags.filter(function(v) { return typeof v === 'string'; }).map(function(v) { return v.trim().toLowerCase(); });
+      const added = nextTagsRaw.filter(function(t) { return t && priorTags.indexOf(t) === -1; });
+      const removed = priorTags.filter(function(t) { return nextTagsRaw.indexOf(t) === -1; });
+      if (added.length || removed.length) {
+        recordProjectActivity(att.entity_id, req.user.id, 'photo_tags_changed', {
+          attachment_id: att.id,
+          filename: att.filename,
+          added: added,
+          removed: removed
+        });
+      }
     }
   } catch (e) {
     console.error('PUT /api/attachments/:id error:', e);
