@@ -18,6 +18,24 @@ const { requireAuth, requireCapability, isAdminish } = require('../auth');
 const { storage } = require('../storage');
 const { eagerUploadAttachmentById, deleteAnthropicFile } = require('../anthropic-files');
 
+// Project activity logging (lazy-required to avoid any startup-time
+// circular require risk; project-routes exports recordActivity as a
+// fire-and-forget helper). We only invoke this when an attachment's
+// entity_type is 'project', so the existing non-project upload paths
+// pay no overhead.
+function recordProjectActivity(projectId, actorId, kind, detail) {
+  try {
+    const projectRoutes = require('./project-routes');
+    if (projectRoutes && typeof projectRoutes.recordActivity === 'function') {
+      projectRoutes.recordActivity(projectId, actorId, kind, detail);
+    }
+  } catch (e) {
+    // Activity logging is best-effort. Never block the parent
+    // mutation on a logging hiccup.
+    console.warn('[attachments] project activity log failed (' + kind + '):', e.message);
+  }
+}
+
 // ──────────────────────────────────────────────────────────────────
 // Text extraction pipeline. Runs at upload time so AG can read the
 // content of a doc instead of just its filename. One extractor per
@@ -458,10 +476,16 @@ router.get('/:entityType/:entityId',
   async (req, res) => {
     try {
       const { entityType, entityId } = req.params;
+      // LEFT JOIN users so the client can render the uploader's name
+      // (initials chip on photo tiles in the Projects feed). Existing
+      // callers were spreading the attachment row directly; the new
+      // uploaded_by_name column is additive — no consumer breakage.
       const { rows } = await pool.query(
-        `SELECT * FROM attachments
-         WHERE entity_type = $1 AND entity_id = $2
-         ORDER BY position ASC, uploaded_at ASC`,
+        `SELECT a.*, u.name AS uploaded_by_name
+           FROM attachments a
+           LEFT JOIN users u ON u.id = a.uploaded_by
+          WHERE a.entity_type = $1 AND a.entity_id = $2
+          ORDER BY a.position ASC, a.uploaded_at ASC`,
         [entityType, entityId]
       );
       res.json({ attachments: rows });
@@ -657,6 +681,18 @@ router.post('/:entityType/:entityId',
       );
       res.json({ ok: true, attachment: ins.rows[0] });
 
+      // Project activity: log every new photo so the timeline reflects
+      // it. detail.filename + count let the feed render "John added 3
+      // photos" instead of three separate rows when the renderer
+      // collapses bursts.
+      if (entityType === 'project') {
+        recordProjectActivity(entityId, req.user.id, 'photo_added', {
+          attachment_id: id,
+          filename: req.file.originalname,
+          mime: mime
+        });
+      }
+
       // Eager push to the Anthropic Files cache for image attachments
       // so 86's first chat reference doesn't pay an upload latency
       // hit. Runs AFTER the response is sent so the upload-confirm
@@ -712,6 +748,13 @@ router.delete('/:id', requireAuth, async (req, res) => {
 
     await pool.query('DELETE FROM attachments WHERE id = $1', [req.params.id]);
     res.json({ ok: true });
+
+    if (att.entity_type === 'project') {
+      recordProjectActivity(att.entity_id, req.user.id, 'photo_removed', {
+        attachment_id: att.id,
+        filename: att.filename
+      });
+    }
   } catch (e) {
     console.error('DELETE /api/attachments/:id error:', e);
     res.status(500).json({ error: 'Server error: ' + e.message });
@@ -763,6 +806,18 @@ router.put('/:id', requireAuth, async (req, res) => {
     // SAFE: column names are hardcoded conditionals above (caption / position / include_in_proposal / folder); no user-keys loop.
     await pool.query(`UPDATE attachments SET ${sets.join(', ')} WHERE id = $${p}`, params);
     res.json({ ok: true });
+
+    // Log caption edits on project photos. Other PUT mutations
+    // (position, include_in_proposal, folder) aren't worth a feed
+    // entry — they're UI plumbing, not user-meaningful changes.
+    if (att.entity_type === 'project' &&
+        req.body && typeof req.body.caption === 'string' &&
+        req.body.caption !== att.caption) {
+      recordProjectActivity(att.entity_id, req.user.id, 'caption_edited', {
+        attachment_id: att.id,
+        filename: att.filename
+      });
+    }
   } catch (e) {
     console.error('PUT /api/attachments/:id error:', e);
     res.status(500).json({ error: 'Server error: ' + e.message });

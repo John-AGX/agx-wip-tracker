@@ -45,6 +45,7 @@ const reportRoutes = require('./routes/report-routes');
 const fieldToolsRoutes = require('./routes/field-tools-routes');
 const payloadRoutes = require('./routes/payload-routes');
 const projectRoutes = require('./routes/project-routes');
+const projectPairsRoutes = require('./routes/project-pairs-routes');
 const { storage } = require('./storage');
 
 const app = express();
@@ -99,6 +100,10 @@ app.use('/api/estimates', estimateRoutes);
 app.use('/api/roles', roleRoutes);
 app.use('/api/clients', clientRoutes);
 app.use('/api/leads', leadRoutes);
+// Project pairs (before/after) mount BEFORE the parent /api/projects
+// router so the more-specific path is matched first. mergeParams=true
+// on the pairs router exposes :projectId from this prefix.
+app.use('/api/projects/:projectId/pairs', projectPairsRoutes);
 app.use('/api/projects', projectRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/attachments', attachmentRoutes);

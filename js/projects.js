@@ -1,30 +1,26 @@
 // Projects — CompanyCam-style first-class entity for site photos +
-// walkthroughs. A project buckets photos, descriptions, markups, and
-// (eventually) reports around one physical site. Links to a lead
-// (during sales), a job (once sold), and a client (the buyer).
+// walkthroughs. A project buckets photos, descriptions, markups,
+// tags, before/after pairs, and (eventually) reports around one
+// physical site. Links to a lead, a job, and a client.
 //
-// This module owns two views:
-//   1. List   — grid of project cards (cover photo + name + links +
-//                photo count + filter chips).
-//   2. Detail — hero photo + name + description + linkage strip +
-//                photo grid (reuses window.p86Attachments).
+// Phase 1.5: full UI upgrade — date-grouped photo feed, tag editor +
+// filter chips, activity timeline, grid/map view toggle, before/after
+// pair creation with slider. AI auto-tagging deferred to later phase.
 //
 // Mount points:
-//   window.renderProjectsInto(hostEl)       — top-level list inside
-//                                              My Files → Projects.
-//   window.renderLinkedProjectsPanel(host, ctx)
-//                                            — compact list of projects
-//                                              linked to a given entity
-//                                              (lead/job/estimate). Used
-//                                              by the lead/job/estimate
-//                                              editors. ctx shape:
-//                                              { kind: 'lead'|'job'|'client',
-//                                                id: '<entity id>' }.
-//   window.openProject(projectId)            — open the detail view in
-//                                              a full-screen overlay.
+//   window.renderProjectsInto(hostEl)
+//   window.renderLinkedProjectsPanel(host, { kind, id })
+//   window.openProject(projectId)
+//
+// Companion modules:
+//   js/projects-map.js   → map view (Leaflet)
+//   js/projects-pairs.js → before/after slider widget
 (function() {
   'use strict';
 
+  // ──────────────────────────────────────────────────────────────────
+  // Small utilities
+  // ──────────────────────────────────────────────────────────────────
   function escapeHTML(s) {
     if (typeof window.escapeHTML === 'function') return window.escapeHTML(s);
     return String(s == null ? '' : s)
@@ -48,32 +44,85 @@
     if (diff < 86400 * 30) return Math.floor(diff / 86400) + 'd ago';
     return d.toLocaleDateString();
   }
+  // "Today" / "Yesterday" / explicit date — used to group the photo feed.
+  function dateGroupLabel(s) {
+    if (!s) return 'Undated';
+    var d = new Date(s);
+    var now = new Date();
+    var midnightToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    var midnightDate = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+    var diffDays = Math.round((midnightToday - midnightDate) / 86400000);
+    if (diffDays === 0) return 'Today';
+    if (diffDays === 1) return 'Yesterday';
+    if (diffDays > 0 && diffDays < 7) return d.toLocaleDateString(undefined, { weekday: 'long' });
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: now.getFullYear() === d.getFullYear() ? undefined : 'numeric' });
+  }
+  function fmtTime(s) {
+    if (!s) return '';
+    try {
+      return new Date(s).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+    } catch (e) { return ''; }
+  }
+  // Deterministic hue from a string — used to color tag chips
+  // consistently across renders.
+  function hueFor(str) {
+    var s = String(str || '');
+    var h = 0;
+    for (var i = 0; i < s.length; i++) {
+      h = ((h << 5) - h) + s.charCodeAt(i);
+      h |= 0;
+    }
+    return Math.abs(h) % 360;
+  }
+  function initialsOf(name) {
+    var s = String(name || '').trim();
+    if (!s) return '?';
+    var parts = s.split(/\s+/);
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  }
 
-  // List state — survives across re-renders within the page lifetime.
-  // Resets on next mount.
+  function api() { return window.p86Api && window.p86Api.projects; }
+  function currentUser() {
+    return (window.p86Auth && window.p86Auth.getUser && window.p86Auth.getUser()) || null;
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // State
+  // ──────────────────────────────────────────────────────────────────
   var _listState = {
-    filter: 'all',        // 'all' | 'mine' | 'linked-lead' | 'linked-job' | 'archived'
+    filter: 'all',
     q: '',
+    tag: '',
+    view: 'grid',          // 'grid' | 'map'
     projects: [],
     loading: false,
     error: null,
-    host: null            // most-recent host element for re-renders
+    host: null
   };
-
-  // Detail overlay state.
   var _detailState = {
     projectId: null,
-    project: null
+    project: null,
+    pairs: [],
+    activity: [],
+    photos: []             // hydrated by the attachments fetch
   };
-
-  function api() { return window.p86Api && window.p86Api.projects; }
+  var _linkedPanels = [];  // [{ host, ctx }]
+  // Cache last-known tag suggestions so the editor autocomplete renders
+  // immediately on focus (a stale list is better than an empty list).
+  var _tagSuggestCache = [];
 
   // ──────────────────────────────────────────────────────────────────
-  // Top-level list view (mounts into the My Files Projects pane).
+  // Top-level list view
   // ──────────────────────────────────────────────────────────────────
   function renderProjectsInto(host) {
     if (!host) return;
     _listState.host = host;
+    // Restore last-used view from sessionStorage so refresh sticks.
+    try {
+      var stored = sessionStorage.getItem('p86-projects-view');
+      if (stored === 'map' || stored === 'grid') _listState.view = stored;
+    } catch (e) {}
     paintList();
     fetchAll().then(paintList).catch(function(e) {
       _listState.error = e.message || 'Failed to load projects';
@@ -89,6 +138,7 @@
     if (_listState.filter === 'archived') opts.status = 'archived';
     else opts.status = 'active';
     if (_listState.q) opts.q = _listState.q;
+    if (_listState.tag) opts.tag = _listState.tag;
     return api().list(opts).then(function(r) {
       _listState.projects = (r && r.projects) || [];
       _listState.error = null;
@@ -99,13 +149,10 @@
   function paintList() {
     var host = _listState.host;
     if (!host) return;
-
-    var me = (window.p86Auth && window.p86Auth.getUser && window.p86Auth.getUser()) || null;
+    var me = currentUser();
     var myId = me ? me.id : null;
     var projects = _listState.projects.slice();
 
-    // Client-side filter chips. Server already filters by status; this
-    // is the "mine" / "linked-lead" / "linked-job" refinement.
     if (_listState.filter === 'mine' && myId != null) {
       projects = projects.filter(function(p) { return Number(p.created_by) === Number(myId); });
     } else if (_listState.filter === 'linked-lead') {
@@ -122,54 +169,80 @@
       { id: 'archived',     label: 'Archived' }
     ];
 
+    // Surface tag chips from the loaded projects so users can drill in
+    // without leaving the list view.
+    var tagsInList = {};
+    _listState.projects.forEach(function(p) {
+      (p.tags || []).forEach(function(t) {
+        tagsInList[t] = (tagsInList[t] || 0) + 1;
+      });
+    });
+    var tagChips = Object.keys(tagsInList).sort().slice(0, 30);
+
     var html =
-      '<div>' +
-        // Header — title + actions
-        '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;flex-wrap:wrap;">' +
-          '<div>' +
-            '<h2 style="margin:0;font-size:18px;font-weight:600;color:var(--text,#fff);">Projects</h2>' +
-            '<div style="font-size:12px;color:var(--text-dim,#888);margin-top:2px;">' +
-              'Photo + walkthrough buckets for sites. Link to a lead during sales; the job inherits once sold.' +
-            '</div>' +
+      '<div class="p86-projects-root">' +
+        '<div class="p86-projects-header">' +
+          '<div class="p86-projects-header-text">' +
+            '<h2>Projects</h2>' +
+            '<div class="p86-projects-subtitle">Photo + walkthrough buckets for sites. Link to a lead during sales; the job inherits once sold.</div>' +
           '</div>' +
-          '<div style="display:flex;gap:6px;align-items:center;">' +
-            '<input id="projSearch" type="search" placeholder="Search projects…" value="' + escapeAttr(_listState.q) + '" ' +
-              'style="padding:6px 10px;font-size:12px;background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:6px;color:var(--text,#fff);width:180px;" />' +
-            '<button class="primary" onclick="window.p86Projects.createPrompt()" ' +
-              'style="font-size:13px;padding:7px 14px;">&#x2795; New Project</button>' +
+          '<div class="p86-projects-header-actions">' +
+            '<input id="projSearch" type="search" placeholder="Search projects…" value="' + escapeAttr(_listState.q) + '" class="p86-projects-search" />' +
+            '<button class="primary p86-projects-new-btn" onclick="window.p86Projects.openCreate()">&#x2795; New Project</button>' +
           '</div>' +
         '</div>' +
 
-        // Filter chips
-        '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px;">' +
-          chips.map(function(c) {
-            var active = c.id === _listState.filter;
-            return '<button onclick="window.p86Projects.setFilter(\'' + c.id + '\')" ' +
-              'style="font-size:11px;padding:4px 10px;border-radius:14px;border:1px solid ' +
-              (active ? 'var(--accent,#22d3ee)' : 'var(--border,#333)') + ';' +
-              'background:' + (active ? 'rgba(34,211,238,0.10)' : 'transparent') + ';' +
-              'color:' + (active ? 'var(--accent,#22d3ee)' : 'var(--text-dim,#aaa)') + ';' +
-              'cursor:pointer;font-weight:' + (active ? '600' : '400') + ';">' +
-              escapeHTML(c.label) +
-            '</button>';
-          }).join('') +
+        '<div class="p86-projects-toolbar">' +
+          '<div class="p86-projects-view-toggle">' +
+            '<button class="' + (_listState.view === 'grid' ? 'active' : '') + '" onclick="window.p86Projects.setView(\'grid\')">&#x25A6; Grid</button>' +
+            '<button class="' + (_listState.view === 'map' ? 'active' : '') + '" onclick="window.p86Projects.setView(\'map\')">&#x1F5FA; Map</button>' +
+          '</div>' +
+          '<div class="p86-projects-filter-chips">' +
+            chips.map(function(c) {
+              var active = c.id === _listState.filter;
+              return '<button class="p86-chip' + (active ? ' active' : '') + '" onclick="window.p86Projects.setFilter(\'' + c.id + '\')">' +
+                escapeHTML(c.label) +
+              '</button>';
+            }).join('') +
+          '</div>' +
         '</div>' +
 
-        // Loading / error / empty / grid
+        (tagChips.length
+          ? '<div class="p86-projects-tag-row">' +
+              (_listState.tag
+                ? '<button class="p86-chip active p86-chip-tag" style="--h:' + hueFor(_listState.tag) + ';" onclick="window.p86Projects.setTagFilter(\'\')">#' + escapeHTML(_listState.tag) + ' &times;</button>'
+                : tagChips.map(function(t) {
+                    return '<button class="p86-chip p86-chip-tag" style="--h:' + hueFor(t) + ';" onclick="window.p86Projects.setTagFilter(\'' + escapeAttr(t) + '\')">#' + escapeHTML(t) + ' <span class="p86-chip-count">' + tagsInList[t] + '</span></button>';
+                  }).join('')
+              ) +
+            '</div>'
+          : '') +
+
         (_listState.loading
-          ? '<div style="padding:30px;text-align:center;color:var(--text-dim,#888);font-size:13px;">Loading…</div>'
+          ? '<div class="p86-projects-empty">Loading…</div>'
           : _listState.error
-            ? '<div style="padding:14px;background:rgba(248,113,113,0.1);border:1px solid rgba(248,113,113,0.3);border-radius:8px;color:#f87171;font-size:13px;">' + escapeHTML(_listState.error) + '</div>'
+            ? '<div class="p86-projects-error">' + escapeHTML(_listState.error) + '</div>'
             : projects.length === 0
-              ? '<div style="padding:36px;text-align:center;color:var(--text-dim,#888);font-size:13px;border:1px dashed var(--border,#333);border-radius:10px;">' +
-                  'No projects yet. Hit <strong>+ New Project</strong> to create one — or open a lead and create one from there.' +
-                '</div>'
-              : renderProjectGrid(projects)) +
+              ? '<div class="p86-projects-empty">No projects yet. Hit <strong>+ New Project</strong> to create one — or open a lead and create one from there.</div>'
+              : _listState.view === 'map'
+                ? '<div id="p86ProjMapHost" class="p86-projects-map-host"></div>' +
+                  (function() {
+                    var unmapped = projects.filter(function(p) {
+                      return !(Number.isFinite(Number(p.geocode_lat)) && Number.isFinite(Number(p.geocode_lng)));
+                    });
+                    if (!unmapped.length) return '';
+                    return '<div class="p86-projects-unmapped"><strong>Unmapped (' + unmapped.length + ')</strong> · ' +
+                      unmapped.map(function(p) {
+                        return '<a href="#" onclick="window.openProject(\'' + escapeAttr(p.id) + '\'); return false;">' + escapeHTML(p.name) + '</a>';
+                      }).join(' · ') +
+                    '</div>';
+                  })()
+                : renderProjectGrid(projects)) +
       '</div>';
 
     host.innerHTML = html;
 
-    // Wire search input — debounced re-fetch.
+    // Search debounce.
     var s = host.querySelector('#projSearch');
     if (s) {
       var t;
@@ -185,10 +258,22 @@
         }, 250);
       });
     }
+
+    // Mount the map after the host element is in the DOM.
+    if (_listState.view === 'map' && projects.length) {
+      var mapHost = host.querySelector('#p86ProjMapHost');
+      if (mapHost && window.p86ProjectsMap && typeof window.p86ProjectsMap.render === 'function') {
+        window.p86ProjectsMap.render(mapHost, projects, {
+          onPin: function(projectId) { openProject(projectId); }
+        });
+      } else if (mapHost) {
+        mapHost.innerHTML = '<div class="p86-projects-empty">Map module not loaded.</div>';
+      }
+    }
   }
 
   function renderProjectGrid(projects) {
-    return '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px;">' +
+    return '<div class="p86-projects-grid">' +
       projects.map(projectCardHTML).join('') +
     '</div>';
   }
@@ -196,77 +281,325 @@
   function projectCardHTML(p) {
     var coverUrl = p.cover_thumb_url || p.cover_web_url || '';
     var visual = coverUrl
-      ? '<img src="' + escapeAttr(coverUrl) + '" alt="" style="width:100%;height:140px;object-fit:cover;display:block;background:#1a1a2e;" />'
-      : '<div style="height:140px;display:flex;align-items:center;justify-content:center;background:rgba(34,211,238,0.06);color:var(--accent,#22d3ee);font-size:32px;">&#x1F4F8;</div>';
+      ? '<img src="' + escapeAttr(coverUrl) + '" alt="" class="p86-proj-card-cover" />'
+      : '<div class="p86-proj-card-cover p86-proj-card-cover-empty">&#x1F4F8;</div>';
 
     var badges = [];
-    if (p.lead_title)   badges.push('Lead: ' + p.lead_title);
-    if (p.job_name)     badges.push('Job: ' + p.job_name);
-    if (p.client_name)  badges.push('Client: ' + p.client_name);
-    var badgesHtml = badges.length
-      ? '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:6px;">' +
-          badges.map(function(b) {
-            return '<span style="font-size:9.5px;padding:2px 6px;border:1px solid var(--border,#333);border-radius:8px;color:var(--text-dim,#aaa);">' + escapeHTML(b) + '</span>';
-          }).join('') +
-        '</div>'
-      : '';
+    if (p.lead_title)   badges.push({ k: 'Lead',    v: p.lead_title });
+    if (p.job_name)     badges.push({ k: 'Job',     v: p.job_name });
+    if (p.client_name)  badges.push({ k: 'Client',  v: p.client_name });
 
-    return '<div onclick="window.openProject(\'' + escapeAttr(p.id) + '\')" ' +
-      'style="border:1px solid var(--border,#333);border-radius:10px;overflow:hidden;background:var(--card-bg,#0f0f1e);cursor:pointer;transition:border-color 0.12s,transform 0.12s;display:flex;flex-direction:column;" ' +
-      'onmouseover="this.style.borderColor=\'rgba(79,140,255,0.5)\';" onmouseout="this.style.borderColor=\'var(--border,#333)\';">' +
+    var tags = (p.tags || []).slice(0, 3);
+    var extraTags = Math.max(0, (p.tags || []).length - tags.length);
+
+    return '<div class="p86-proj-card" onclick="window.openProject(\'' + escapeAttr(p.id) + '\')">' +
       visual +
-      '<div style="padding:8px 10px;flex:1;">' +
-        '<div style="font-size:13px;font-weight:600;color:var(--text,#fff);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(p.name) + '</div>' +
-        '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:6px;margin-top:3px;font-size:10.5px;color:var(--text-dim,#888);">' +
-          '<span>&#x1F4F7; ' + Number(p.photo_count || 0) + ' photo' + (p.photo_count === 1 ? '' : 's') + '</span>' +
-          '<span>' + escapeHTML(fmtRelative(p.updated_at)) + '</span>' +
+      '<div class="p86-proj-card-body">' +
+        '<div class="p86-proj-card-name">' + escapeHTML(p.name) + '</div>' +
+        '<div class="p86-proj-card-stats">' +
+          '<span>&#x1F4F7; ' + Number(p.photo_count || 0) + '</span>' +
+          (Number(p.pair_count || 0) ? '<span>&#x1F500; ' + Number(p.pair_count) + '</span>' : '') +
+          '<span class="p86-proj-card-updated">' + escapeHTML(fmtRelative(p.updated_at)) + '</span>' +
         '</div>' +
-        badgesHtml +
+        (tags.length
+          ? '<div class="p86-proj-card-tags">' +
+              tags.map(function(t) {
+                return '<span class="p86-chip-tag-mini" style="--h:' + hueFor(t) + ';">#' + escapeHTML(t) + '</span>';
+              }).join('') +
+              (extraTags ? '<span class="p86-chip-tag-mini p86-chip-tag-more">+' + extraTags + '</span>' : '') +
+            '</div>'
+          : '') +
+        (badges.length
+          ? '<div class="p86-proj-card-badges">' +
+              badges.map(function(b) {
+                return '<span class="p86-proj-card-badge"><span class="p86-proj-card-badge-k">' + escapeHTML(b.k) + ':</span> ' + escapeHTML(b.v) + '</span>';
+              }).join('') +
+            '</div>'
+          : '') +
       '</div>' +
     '</div>';
   }
 
   function setFilter(id) {
     _listState.filter = id;
-    // 'archived' needs a server refetch; the rest are pure client-side.
     if (id === 'archived' || _listState.projects.length === 0) {
       fetchAll().then(paintList);
     } else {
       paintList();
     }
   }
-
-  function createPrompt(prefill) {
-    prefill = prefill || {};
-    var name = window.prompt('Project name', prefill.name || '');
-    if (name == null) return Promise.resolve(null);
-    name = String(name).trim();
-    if (!name) return Promise.resolve(null);
-    if (!api()) return Promise.reject(new Error('API not available'));
-    var body = { name: name };
-    if (prefill.lead_id)    body.lead_id = prefill.lead_id;
-    if (prefill.job_id)     body.job_id = prefill.job_id;
-    if (prefill.client_id)  body.client_id = prefill.client_id;
-    if (prefill.address_text) body.address_text = prefill.address_text;
-    return api().create(body).then(function(r) {
-      var p = r && r.project;
-      // Refresh whatever list is visible — list view + any open
-      // Linked-Projects panels.
-      if (_listState.host) fetchAll().then(paintList);
-      _linkedPanels.forEach(function(panel) { try { renderLinkedProjectsPanel(panel.host, panel.ctx); } catch(e) {} });
-      // Open the new project immediately so the user can start adding
-      // photos / description.
-      if (p && p.id) openProject(p.id);
-      return p;
-    });
+  function setView(view) {
+    _listState.view = view === 'map' ? 'map' : 'grid';
+    try { sessionStorage.setItem('p86-projects-view', _listState.view); } catch (e) {}
+    paintList();
+  }
+  function setTagFilter(tag) {
+    _listState.tag = String(tag || '');
+    fetchAll().then(paintList);
   }
 
   // ──────────────────────────────────────────────────────────────────
-  // Detail view — full-screen overlay over the current page.
+  // Create-Project modal — replaces window.prompt
+  // ──────────────────────────────────────────────────────────────────
+  function openCreate(prefill) {
+    prefill = prefill || {};
+    var prior = document.getElementById('projCreateModal');
+    if (prior) prior.remove();
+
+    var leads = (window.appData && window.appData.leads) || [];
+    var jobs = (window.appData && window.appData.jobs) || [];
+    var clients = (window.appData && window.appData.clients) || [];
+
+    function options(list, currentId, labelFn) {
+      var opts = '<option value="">— None —</option>';
+      list.forEach(function(item) {
+        opts += '<option value="' + escapeAttr(item.id) + '"' + (String(item.id) === String(currentId || '') ? ' selected' : '') + '>' +
+          escapeHTML(labelFn(item)) +
+        '</option>';
+      });
+      return opts;
+    }
+
+    var modal = document.createElement('div');
+    modal.id = 'projCreateModal';
+    modal.className = 'modal active p86-proj-create-modal';
+    modal.innerHTML =
+      '<div class="modal-content" style="max-width:560px;">' +
+        '<div class="modal-header">' +
+          '<span>New Project</span>' +
+          '<button class="p86-modal-close" data-close>&times;</button>' +
+        '</div>' +
+        '<div class="p86-proj-create-body">' +
+          '<label class="p86-field">' +
+            '<span>Name *</span>' +
+            '<input id="pcName" type="text" value="' + escapeAttr(prefill.name || '') + '" placeholder="e.g. Indigo West Roof Inspection" autofocus />' +
+          '</label>' +
+          '<label class="p86-field">' +
+            '<span>Address</span>' +
+            '<input id="pcAddress" type="text" value="' + escapeAttr(prefill.address_text || '') + '" placeholder="Site address (powers map view + weather)" />' +
+          '</label>' +
+          '<label class="p86-field">' +
+            '<span>Description</span>' +
+            '<textarea id="pcDesc" rows="3" placeholder="Scope / context (optional)">' + escapeHTML(prefill.description || '') + '</textarea>' +
+          '</label>' +
+          '<div class="p86-field-row">' +
+            '<label class="p86-field">' +
+              '<span>Link to Lead</span>' +
+              '<select id="pcLead">' + options(leads, prefill.lead_id, function(l) { return l.title || ('Lead ' + l.id); }) + '</select>' +
+            '</label>' +
+            '<label class="p86-field">' +
+              '<span>Link to Job</span>' +
+              '<select id="pcJob">' + options(jobs, prefill.job_id, function(j) { return (j.jobNumber ? '[' + j.jobNumber + '] ' : '') + (j.title || j.name || j.id); }) + '</select>' +
+            '</label>' +
+            '<label class="p86-field">' +
+              '<span>Link to Client</span>' +
+              '<select id="pcClient">' + options(clients, prefill.client_id, function(c) { return c.name || ('Client ' + c.id); }) + '</select>' +
+            '</label>' +
+          '</div>' +
+          '<div class="p86-field">' +
+            '<span>Tags</span>' +
+            '<div id="pcTagsEditor" class="p86-tag-editor"></div>' +
+          '</div>' +
+        '</div>' +
+        '<div class="modal-footer">' +
+          '<button class="ee-btn secondary" data-close>Cancel</button>' +
+          '<button class="primary" id="pcCreate">Create</button>' +
+        '</div>' +
+      '</div>';
+
+    document.body.appendChild(modal);
+    modal.addEventListener('click', function(e) { if (e.target === modal) modal.remove(); });
+    modal.querySelectorAll('[data-close]').forEach(function(b) {
+      b.addEventListener('click', function() { modal.remove(); });
+    });
+
+    // Inline tag editor (in-memory; submits with the form).
+    var tagsHostEl = modal.querySelector('#pcTagsEditor');
+    var pendingTags = (prefill.tags || []).slice();
+    mountTagEditor(tagsHostEl, {
+      getTags: function() { return pendingTags; },
+      setTags: function(next) { pendingTags = next.slice(); }
+    });
+
+    modal.querySelector('#pcCreate').addEventListener('click', function() {
+      var name = (modal.querySelector('#pcName').value || '').trim();
+      if (!name) {
+        modal.querySelector('#pcName').focus();
+        return;
+      }
+      var body = {
+        name: name,
+        address_text: (modal.querySelector('#pcAddress').value || '').trim() || null,
+        description: (modal.querySelector('#pcDesc').value || '').trim() || null,
+        lead_id: modal.querySelector('#pcLead').value || null,
+        job_id: modal.querySelector('#pcJob').value || null,
+        client_id: modal.querySelector('#pcClient').value || null,
+        tags: pendingTags
+      };
+      if (!api()) { alert('API not available'); return; }
+      api().create(body).then(function(r) {
+        var p = r && r.project;
+        modal.remove();
+        if (_listState.host) fetchAll().then(paintList);
+        refreshLinkedPanels();
+        if (p && p.id) openProject(p.id);
+      }).catch(function(err) {
+        alert('Create failed: ' + (err.message || err));
+      });
+    });
+  }
+
+  // Backwards-compat — older call sites use createPrompt / createForEntity.
+  function createPrompt(prefill) { openCreate(prefill); return Promise.resolve(null); }
+  function createForEntity(kind, id) {
+    var prefill = {};
+    if (kind === 'lead') {
+      var l = ((window.appData && window.appData.leads) || []).find(function(x) { return String(x.id) === String(id); });
+      if (l) { prefill.name = l.title || ''; prefill.lead_id = id; if (l.client_id) prefill.client_id = l.client_id; }
+      else prefill.lead_id = id;
+    } else if (kind === 'job') {
+      var j = ((window.appData && window.appData.jobs) || []).find(function(x) { return String(x.id) === String(id); });
+      if (j) { prefill.name = j.title || j.name || ''; prefill.job_id = id; }
+      else prefill.job_id = id;
+    } else if (kind === 'client') {
+      var c = ((window.appData && window.appData.clients) || []).find(function(x) { return String(x.id) === String(id); });
+      if (c) { prefill.name = c.name || ''; prefill.client_id = id; }
+      else prefill.client_id = id;
+    }
+    openCreate(prefill);
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // Tag editor (reusable — works for create modal and detail header).
+  //   opts.getTags() → string[]
+  //   opts.setTags(string[]) → void  (parent persists)
+  // ──────────────────────────────────────────────────────────────────
+  function mountTagEditor(host, opts) {
+    if (!host) return;
+    function paint() {
+      var tags = opts.getTags();
+      host.innerHTML =
+        '<div class="p86-tag-editor-chips">' +
+          tags.map(function(t, i) {
+            return '<span class="p86-chip-tag" style="--h:' + hueFor(t) + ';">' +
+              '#' + escapeHTML(t) +
+              '<button type="button" class="p86-tag-remove" data-idx="' + i + '">&times;</button>' +
+            '</span>';
+          }).join('') +
+        '</div>' +
+        '<div class="p86-tag-editor-input-wrap">' +
+          '<input type="text" class="p86-tag-editor-input" placeholder="+ Add tag…" />' +
+          '<div class="p86-tag-suggest" style="display:none;"></div>' +
+        '</div>';
+
+      host.querySelectorAll('.p86-tag-remove').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          var idx = Number(btn.getAttribute('data-idx'));
+          var next = opts.getTags().slice();
+          next.splice(idx, 1);
+          opts.setTags(next);
+          paint();
+        });
+      });
+
+      var input = host.querySelector('.p86-tag-editor-input');
+      var suggestEl = host.querySelector('.p86-tag-suggest');
+
+      function commit(value) {
+        var clean = String(value || '').trim().toLowerCase().slice(0, 32);
+        if (!clean) return;
+        var current = opts.getTags();
+        if (current.indexOf(clean) !== -1) return;
+        if (current.length >= 20) {
+          alert('Up to 20 tags per project.');
+          return;
+        }
+        opts.setTags(current.concat([clean]));
+        paint();
+        // Keep focus in the input so users can add multiple in a row.
+        var newInput = host.querySelector('.p86-tag-editor-input');
+        if (newInput) newInput.focus();
+      }
+
+      function renderSuggest(list) {
+        if (!list || !list.length) {
+          suggestEl.style.display = 'none';
+          return;
+        }
+        var current = opts.getTags();
+        var filtered = list.filter(function(t) { return current.indexOf(t) === -1; }).slice(0, 8);
+        if (!filtered.length) {
+          suggestEl.style.display = 'none';
+          return;
+        }
+        suggestEl.innerHTML = filtered.map(function(t) {
+          return '<button type="button" class="p86-tag-suggest-row" data-tag="' + escapeAttr(t) + '" style="--h:' + hueFor(t) + ';">#' + escapeHTML(t) + '</button>';
+        }).join('');
+        suggestEl.style.display = 'block';
+        suggestEl.querySelectorAll('.p86-tag-suggest-row').forEach(function(b) {
+          b.addEventListener('mousedown', function(e) {
+            // mousedown (not click) so the input doesn't lose focus first
+            e.preventDefault();
+            commit(b.getAttribute('data-tag'));
+            suggestEl.style.display = 'none';
+          });
+        });
+      }
+
+      var fetchTimer;
+      input.addEventListener('input', function(e) {
+        clearTimeout(fetchTimer);
+        var q = e.target.value;
+        fetchTimer = setTimeout(function() {
+          if (!window.p86Api || !window.p86Api.projects || !window.p86Api.projects.suggestTags) return;
+          window.p86Api.projects.suggestTags(q).then(function(r) {
+            _tagSuggestCache = (r && r.tags) || [];
+            renderSuggest(_tagSuggestCache);
+          }).catch(function() {});
+        }, 150);
+      });
+      input.addEventListener('focus', function() {
+        // Show cached suggestions immediately if we have them.
+        if (_tagSuggestCache.length) renderSuggest(_tagSuggestCache);
+        else if (window.p86Api && window.p86Api.projects && window.p86Api.projects.suggestTags) {
+          window.p86Api.projects.suggestTags('').then(function(r) {
+            _tagSuggestCache = (r && r.tags) || [];
+            renderSuggest(_tagSuggestCache);
+          }).catch(function() {});
+        }
+      });
+      input.addEventListener('blur', function() {
+        // Delay hiding so mousedown on a suggestion can fire first.
+        setTimeout(function() { suggestEl.style.display = 'none'; }, 150);
+      });
+      input.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter' || e.key === ',') {
+          e.preventDefault();
+          commit(input.value);
+          input.value = '';
+          suggestEl.style.display = 'none';
+        } else if (e.key === 'Backspace' && !input.value) {
+          var current = opts.getTags();
+          if (current.length) {
+            var next = current.slice(0, -1);
+            opts.setTags(next);
+            paint();
+          }
+        }
+      });
+    }
+    paint();
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // Detail overlay
   // ──────────────────────────────────────────────────────────────────
   function openProject(projectId) {
     _detailState.projectId = projectId;
     _detailState.project = null;
+    _detailState.pairs = [];
+    _detailState.activity = [];
+    _detailState.photos = [];
     var overlay = ensureDetailOverlay();
     overlay.style.display = 'flex';
     document.body.style.overflow = 'hidden';
@@ -275,8 +608,16 @@
       paintDetailError('API not available');
       return;
     }
-    api().get(projectId).then(function(r) {
-      _detailState.project = r && r.project;
+    Promise.all([
+      api().get(projectId),
+      api().pairs.list(projectId).catch(function() { return { pairs: [] }; }),
+      api().activity(projectId, { limit: 50 }).catch(function() { return { activity: [] }; }),
+      window.p86Api.attachments.list('project', projectId).catch(function() { return { attachments: [] }; })
+    ]).then(function(results) {
+      _detailState.project = results[0] && results[0].project;
+      _detailState.pairs = (results[1] && results[1].pairs) || [];
+      _detailState.activity = (results[2] && results[2].activity) || [];
+      _detailState.photos = (results[3] && results[3].attachments) || [];
       paintDetail();
     }).catch(function(e) {
       paintDetailError(e.message || 'Failed to load project');
@@ -290,10 +631,8 @@
     var overlay = document.getElementById('projDetailOverlay');
     if (overlay) overlay.style.display = 'none';
     document.body.style.overflow = '';
-    // Re-fetch list so cover photo / photo count refresh after any
-    // upload / markup that happened inside detail.
     if (_listState.host) fetchAll().then(paintList);
-    _linkedPanels.forEach(function(panel) { try { renderLinkedProjectsPanel(panel.host, panel.ctx); } catch(e) {} });
+    refreshLinkedPanels();
   }
   window.closeProjectDetail = closeDetail;
 
@@ -302,10 +641,8 @@
     if (el) return el;
     el = document.createElement('div');
     el.id = 'projDetailOverlay';
-    el.style.cssText = 'position:fixed;inset:0;z-index:9000;background:rgba(0,0,0,0.85);display:none;align-items:stretch;justify-content:center;padding:0;';
-    el.innerHTML = '<div id="projDetailHost" style="background:var(--bg,#0a0a14);width:min(1100px,100%);max-height:100vh;overflow-y:auto;border-left:1px solid var(--border,#333);border-right:1px solid var(--border,#333);padding:18px 22px;"></div>';
-    // Click backdrop to close (but not when clicking inside the
-    // content panel).
+    el.className = 'p86-proj-detail-overlay';
+    el.innerHTML = '<div id="projDetailHost" class="p86-proj-detail-host"></div>';
     el.addEventListener('click', function(e) {
       if (e.target === el) closeDetail();
     });
@@ -317,9 +654,9 @@
     var host = document.getElementById('projDetailHost');
     if (!host) return;
     host.innerHTML =
-      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">' +
-        '<div style="font-size:14px;color:var(--text-dim,#888);">Loading project…</div>' +
-        '<button class="ee-btn secondary" onclick="window.closeProjectDetail()" style="font-size:12px;">&times; Close</button>' +
+      '<div class="p86-proj-detail-header">' +
+        '<div style="color:var(--text-dim,#888);">Loading project…</div>' +
+        '<button class="ee-btn secondary" onclick="window.closeProjectDetail()">&times; Close</button>' +
       '</div>';
   }
 
@@ -327,9 +664,9 @@
     var host = document.getElementById('projDetailHost');
     if (!host) return;
     host.innerHTML =
-      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;">' +
-        '<div style="font-size:14px;color:#f87171;">' + escapeHTML(msg) + '</div>' +
-        '<button class="ee-btn secondary" onclick="window.closeProjectDetail()" style="font-size:12px;">&times; Close</button>' +
+      '<div class="p86-proj-detail-header">' +
+        '<div style="color:#f87171;">' + escapeHTML(msg) + '</div>' +
+        '<button class="ee-btn secondary" onclick="window.closeProjectDetail()">&times; Close</button>' +
       '</div>';
   }
 
@@ -340,117 +677,512 @@
 
     var coverUrl = p.cover_web_url || p.cover_thumb_url || '';
     var hero = coverUrl
-      ? '<img src="' + escapeAttr(coverUrl) + '" alt="" style="width:100%;height:200px;object-fit:cover;display:block;border-radius:10px;background:#1a1a2e;" />'
-      : '<div style="height:200px;display:flex;align-items:center;justify-content:center;background:rgba(34,211,238,0.06);color:var(--accent,#22d3ee);font-size:54px;border-radius:10px;">&#x1F4F8;</div>';
+      ? '<img src="' + escapeAttr(coverUrl) + '" alt="" class="p86-proj-detail-hero" />'
+      : '<div class="p86-proj-detail-hero p86-proj-detail-hero-empty">&#x1F4F8;</div>';
 
     var linkBadges = [];
-    if (p.lead_id)     linkBadges.push({ k: 'Lead',    v: p.lead_title || p.lead_id,        href: null });
-    if (p.job_id)      linkBadges.push({ k: 'Job',     v: p.job_name || p.job_id,           href: null });
-    if (p.client_id)   linkBadges.push({ k: 'Client',  v: p.client_name || p.client_id,     href: null });
+    if (p.lead_id)    linkBadges.push({ k: 'Lead',   v: p.lead_title || p.lead_id });
+    if (p.job_id)     linkBadges.push({ k: 'Job',    v: p.job_name || p.job_id });
+    if (p.client_id)  linkBadges.push({ k: 'Client', v: p.client_name || p.client_id });
 
-    var html =
-      '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:10px;margin-bottom:12px;">' +
-        '<div style="min-width:0;">' +
-          '<div style="font-size:11px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.6px;margin-bottom:3px;">Project</div>' +
-          '<input id="projNameInput" value="' + escapeAttr(p.name) + '" ' +
-            'style="font-size:20px;font-weight:700;color:var(--text,#fff);background:transparent;border:1px solid transparent;padding:2px 4px;width:100%;max-width:600px;border-radius:4px;" ' +
-            'onfocus="this.style.borderColor=\'var(--border,#333)\';" ' +
-            'onblur="window.p86Projects._fieldBlur(\'name\', this.value); this.style.borderColor=\'transparent\';" />' +
-          '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:4px;">' +
+    host.innerHTML =
+      '<div class="p86-proj-detail-topbar">' +
+        '<div class="p86-proj-detail-title-wrap">' +
+          '<div class="p86-proj-detail-eyebrow">Project</div>' +
+          '<input id="projNameInput" value="' + escapeAttr(p.name) + '" class="p86-proj-detail-name-input" />' +
+          '<div class="p86-proj-detail-meta">' +
             'Updated ' + escapeHTML(fmtRelative(p.updated_at)) +
             (p.created_by_name ? ' &middot; created by ' + escapeHTML(p.created_by_name) : '') +
           '</div>' +
         '</div>' +
-        '<div style="display:flex;gap:6px;align-items:center;flex-shrink:0;">' +
+        '<div class="p86-proj-detail-actions">' +
           (p.archived_at
-            ? '<button class="ee-btn secondary" onclick="window.p86Projects.unarchive()" style="font-size:12px;">&#x21BA; Unarchive</button>'
-            : '<button class="ee-btn secondary" onclick="window.p86Projects.archive()" style="font-size:12px;">&#x1F5C4; Archive</button>') +
-          '<button class="ee-btn secondary" onclick="window.closeProjectDetail()" style="font-size:12px;">&times; Close</button>' +
+            ? '<button class="ee-btn secondary" onclick="window.p86Projects.unarchive()">&#x21BA; Unarchive</button>'
+            : '<button class="ee-btn secondary" onclick="window.p86Projects.archive()">&#x1F5C4; Archive</button>') +
+          '<button class="ee-btn secondary" onclick="window.closeProjectDetail()">&times; Close</button>' +
         '</div>' +
       '</div>' +
 
-      // Hero + linkage strip
-      '<div style="display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:14px;margin-bottom:14px;">' +
-        '<div>' + hero + '</div>' +
-        '<div style="display:flex;flex-direction:column;gap:8px;">' +
-          '<fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:6px 10px 8px;">' +
-            '<legend style="font-size:10px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.6px;padding:0 5px;">Linked to</legend>' +
+      '<div class="p86-proj-detail-tags-row">' +
+        '<div id="projDetailTagsEditor" class="p86-tag-editor p86-tag-editor-inline"></div>' +
+      '</div>' +
+
+      '<div class="p86-proj-detail-cols">' +
+        '<div class="p86-proj-detail-col-main">' +
+          hero +
+        '</div>' +
+        '<div class="p86-proj-detail-col-side">' +
+          '<fieldset class="p86-proj-fieldset">' +
+            '<legend>Linked to</legend>' +
             (linkBadges.length
               ? linkBadges.map(function(b) {
-                  return '<div style="font-size:12px;padding:3px 0;color:var(--text,#fff);">' +
-                    '<span style="color:var(--text-dim,#888);font-size:10.5px;text-transform:uppercase;letter-spacing:0.4px;margin-right:5px;">' + escapeHTML(b.k) + ':</span>' +
+                  return '<div class="p86-proj-link-row">' +
+                    '<span class="p86-proj-link-k">' + escapeHTML(b.k) + ':</span> ' +
                     escapeHTML(b.v) +
                   '</div>';
                 }).join('')
-              : '<div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;padding:3px 0;">Not linked yet. Use the editor below to attach this project to a lead, job, or client.</div>'
-            ) +
-            '<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;">' +
-              '<button class="ee-btn secondary" onclick="window.p86Projects.editLinks()" style="font-size:11px;padding:4px 8px;">Edit links</button>' +
-            '</div>' +
+              : '<div class="p86-proj-empty-line">Not linked yet.</div>') +
+            '<button class="ee-btn secondary p86-proj-edit-links-btn" onclick="window.p86Projects.editLinks()">Edit links</button>' +
           '</fieldset>' +
-          '<fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:6px 10px 8px;">' +
-            '<legend style="font-size:10px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.6px;padding:0 5px;">Address</legend>' +
-            '<input id="projAddrInput" value="' + escapeAttr(p.address_text || '') + '" placeholder="Site address" ' +
-              'style="width:100%;padding:5px 7px;font-size:12px;background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:4px;color:var(--text,#fff);" ' +
-              'onblur="window.p86Projects._fieldBlur(\'address_text\', this.value);" />' +
+          '<fieldset class="p86-proj-fieldset">' +
+            '<legend>Address</legend>' +
+            '<input id="projAddrInput" value="' + escapeAttr(p.address_text || '') + '" placeholder="Site address" class="p86-proj-input" />' +
           '</fieldset>' +
         '</div>' +
       '</div>' +
 
-      // Description
-      '<fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:6px 10px 8px;margin-bottom:14px;">' +
-        '<legend style="font-size:10px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.6px;padding:0 5px;">Description</legend>' +
-        '<textarea id="projDescInput" rows="3" placeholder="Optional notes about the project / walkthrough scope." ' +
-          'style="width:100%;padding:6px 8px;font-size:12px;background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:4px;color:var(--text,#fff);resize:vertical;font-family:inherit;" ' +
-          'onblur="window.p86Projects._fieldBlur(\'description\', this.value);">' + escapeHTML(p.description || '') + '</textarea>' +
+      '<fieldset class="p86-proj-fieldset p86-proj-desc-fieldset">' +
+        '<legend>Description</legend>' +
+        '<textarea id="projDescInput" rows="3" placeholder="Optional notes about the project / walkthrough scope." class="p86-proj-textarea">' + escapeHTML(p.description || '') + '</textarea>' +
       '</fieldset>' +
 
-      // Photos
-      '<fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:6px 10px 8px;margin-bottom:14px;">' +
-        '<legend style="font-size:10px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.6px;padding:0 5px;">' +
-          '&#x1F4F7; Photos (' + Number(p.photo_count || 0) + ')' +
-        '</legend>' +
-        '<div id="projPhotosHost" style="min-height:60px;"></div>' +
+      '<fieldset class="p86-proj-fieldset p86-proj-photos-fieldset">' +
+        '<legend>&#x1F4F7; Photos &amp; Pairs <span class="p86-proj-legend-count">(' + (_detailState.photos.length) + ' photos · ' + (_detailState.pairs.length) + ' pairs)</span></legend>' +
+        '<div id="projPhotoFeed" class="p86-proj-photo-feed"></div>' +
+        '<div id="projPhotoUploadHost"></div>' +
+      '</fieldset>' +
+
+      '<fieldset class="p86-proj-fieldset p86-proj-activity-fieldset">' +
+        '<legend>&#x1F4DC; Activity <span class="p86-proj-legend-count">(' + (_detailState.activity.length) + ')</span></legend>' +
+        '<div id="projActivityHost"></div>' +
       '</fieldset>';
 
-    host.innerHTML = html;
+    // Wire blur-save for name / address / description.
+    var nameEl = host.querySelector('#projNameInput');
+    var addrEl = host.querySelector('#projAddrInput');
+    var descEl = host.querySelector('#projDescInput');
+    if (nameEl) nameEl.addEventListener('blur', function() { _fieldBlur('name', nameEl.value); });
+    if (addrEl) addrEl.addEventListener('blur', function() { _fieldBlur('address_text', addrEl.value); });
+    if (descEl) descEl.addEventListener('blur', function() { _fieldBlur('description', descEl.value); });
 
-    // Mount the standard attachments widget into the photos fieldset.
-    // entity_type='project' is wired up server-side; the widget handles
-    // upload, drag-drop, lightbox, captions out of the box.
-    var photosHost = host.querySelector('#projPhotosHost');
-    if (photosHost && window.p86Attachments && typeof window.p86Attachments.mount === 'function') {
-      window.p86Attachments.mount(photosHost, {
-        entityType: 'project',
-        entityId: p.id,
-        canEdit: true,
-        onChange: function() {
-          // Re-fetch the project so photo_count + cover refresh.
-          if (!api()) return;
-          api().get(p.id).then(function(r) {
-            _detailState.project = r && r.project;
-            // Don't full repaint — just update the legend counter so
-            // we don't tear down the attachments widget mid-render.
-            var legend = host.querySelector('fieldset:last-of-type legend');
-            if (legend && _detailState.project) {
-              legend.innerHTML = '&#x1F4F7; Photos (' + Number(_detailState.project.photo_count || 0) + ')';
-            }
-          }).catch(function() {});
+    // Tag editor (inline in detail header)
+    var tagsHostEl = host.querySelector('#projDetailTagsEditor');
+    if (tagsHostEl) {
+      mountTagEditor(tagsHostEl, {
+        getTags: function() { return (_detailState.project.tags || []).slice(); },
+        setTags: function(next) {
+          _detailState.project.tags = next.slice();
+          api().update(_detailState.project.id, { tags: next }).catch(function(e) {
+            alert('Tag save failed: ' + (e.message || e));
+          });
         }
       });
-    } else if (photosHost) {
-      photosHost.innerHTML = '<div style="padding:14px;color:var(--text-dim,#888);font-size:12px;">Photos widget not loaded.</div>';
+    }
+
+    // Photo feed: date-grouped, with paired tiles interspersed.
+    paintPhotoFeed();
+    // Activity feed.
+    paintActivityFeed();
+    // Upload zone (handled by p86Attachments — keep this slim, no full
+    // grid render; we want our custom feed above to show the photos).
+    mountUploader();
+  }
+
+  function paintPhotoFeed() {
+    var host = document.getElementById('projPhotoFeed');
+    if (!host) return;
+    var photos = _detailState.photos.slice();
+    var pairs = _detailState.pairs.slice();
+
+    // Photos already paired — exclude their underlying photos from the
+    // regular feed so the same image doesn't render twice.
+    var pairedIds = new Set();
+    pairs.forEach(function(pair) {
+      pairedIds.add(pair.before_attachment_id);
+      pairedIds.add(pair.after_attachment_id);
+    });
+    var standalonePhotos = photos.filter(function(a) { return !pairedIds.has(a.id); });
+
+    // Merge: pairs sorted by created_at, photos sorted by uploaded_at,
+    // grouped by day. Each group renders as a date header followed by
+    // a flex/grid of tiles (paired tiles + standalone photo tiles).
+    var items = [];
+    standalonePhotos.forEach(function(a) {
+      items.push({ kind: 'photo', sortKey: a.uploaded_at, data: a });
+    });
+    pairs.forEach(function(pp) {
+      items.push({ kind: 'pair', sortKey: pp.created_at, data: pp });
+    });
+    items.sort(function(x, y) {
+      return (new Date(y.sortKey).getTime() || 0) - (new Date(x.sortKey).getTime() || 0);
+    });
+
+    if (!items.length) {
+      host.innerHTML = '<div class="p86-proj-empty-line">No photos yet. Drop files below or use the upload control.</div>';
+      return;
+    }
+
+    // Group by dateGroupLabel.
+    var groups = [];
+    var byLabel = {};
+    items.forEach(function(it) {
+      var label = dateGroupLabel(it.sortKey);
+      if (!byLabel[label]) {
+        byLabel[label] = { label: label, key: it.sortKey, items: [] };
+        groups.push(byLabel[label]);
+      }
+      byLabel[label].items.push(it);
+    });
+
+    // Render. Paired tiles are rendered via the pairs module (it
+    // builds the slider). Standalone tiles are inline HTML so we can
+    // tightly style hover + caption editing.
+    host.innerHTML = '';
+    groups.forEach(function(g) {
+      var dateHeader = document.createElement('div');
+      dateHeader.className = 'p86-proj-feed-date-header';
+      dateHeader.textContent = g.label;
+      host.appendChild(dateHeader);
+
+      var grid = document.createElement('div');
+      grid.className = 'p86-proj-feed-grid';
+      g.items.forEach(function(it) {
+        if (it.kind === 'photo') {
+          grid.appendChild(buildPhotoTile(it.data));
+        } else if (it.kind === 'pair' && window.p86ProjectsPairs) {
+          var pairTile = window.p86ProjectsPairs.renderTile(it.data, {
+            onDelete: function(pair) { deletePair(pair.id); }
+          });
+          grid.appendChild(pairTile);
+        }
+      });
+      host.appendChild(grid);
+    });
+  }
+
+  function buildPhotoTile(att) {
+    var tile = document.createElement('div');
+    tile.className = 'p86-proj-photo-tile';
+    tile.setAttribute('data-attachment-id', att.id);
+
+    var isImg = att.mime_type && /^image\//.test(att.mime_type) && att.thumb_url;
+    var visual;
+    if (isImg) {
+      visual = '<img src="' + escapeAttr(att.thumb_url) + '" alt="" class="p86-proj-photo-tile-img" />';
+    } else {
+      var ext = (att.filename || '').split('.').pop().slice(0, 4).toUpperCase() || 'DOC';
+      visual = '<div class="p86-proj-photo-tile-doc">' + escapeHTML(ext) + '</div>';
+    }
+
+    var uploaderInitials = att.uploaded_by_name ? initialsOf(att.uploaded_by_name) : '';
+    var time = fmtTime(att.uploaded_at);
+
+    tile.innerHTML =
+      visual +
+      '<div class="p86-proj-photo-tile-overlay">' +
+        '<span class="p86-proj-photo-tile-time">' + escapeHTML(time) + '</span>' +
+        (uploaderInitials ? '<span class="p86-proj-photo-tile-uploader" title="' + escapeAttr(att.uploaded_by_name || '') + '">' + escapeHTML(uploaderInitials) + '</span>' : '') +
+      '</div>' +
+      (att.caption ? '<div class="p86-proj-photo-tile-caption" title="' + escapeAttr(att.caption) + '">' + escapeHTML(att.caption) + '</div>' : '') +
+      '<button type="button" class="p86-proj-photo-tile-menu" title="More">&#x22EE;</button>';
+
+    tile.addEventListener('click', function(e) {
+      if (e.target.closest('.p86-proj-photo-tile-menu')) return;
+      openPhotoInLightbox(att);
+    });
+    tile.querySelector('.p86-proj-photo-tile-menu').addEventListener('click', function(e) {
+      e.stopPropagation();
+      openPhotoMenu(att, tile);
+    });
+
+    return tile;
+  }
+
+  function openPhotoInLightbox(att) {
+    // Use the existing global lightbox. Pass the full photo list so
+    // swipe nav works.
+    if (window.p86Attachments && typeof window.p86Attachments.openLightbox === 'function') {
+      var idx = _detailState.photos.findIndex(function(x) { return x.id === att.id; });
+      window.p86Attachments.openLightbox(_detailState.photos, Math.max(0, idx));
     }
   }
 
-  // Blur-save a single field. Mirrors the lead-editor pattern:
-  // optimistic local update + server PATCH. Errors revert + alert.
+  function openPhotoMenu(att, anchor) {
+    var prior = document.getElementById('p86-photo-menu');
+    if (prior) prior.remove();
+    var menu = document.createElement('div');
+    menu.id = 'p86-photo-menu';
+    menu.className = 'p86-proj-photo-menu';
+    menu.innerHTML =
+      '<button data-act="caption">Edit caption</button>' +
+      '<button data-act="cover">Set as cover</button>' +
+      '<button data-act="pair">Pair with…</button>' +
+      '<button data-act="annotate">Annotate</button>' +
+      '<button data-act="delete" class="danger">Delete</button>';
+    document.body.appendChild(menu);
+
+    var rect = anchor.getBoundingClientRect();
+    menu.style.top = (rect.bottom + window.scrollY) + 'px';
+    menu.style.left = Math.max(8, rect.right - menu.offsetWidth + window.scrollX) + 'px';
+
+    function close() { menu.remove(); document.removeEventListener('click', onOutside); }
+    function onOutside(e) { if (!menu.contains(e.target)) close(); }
+    setTimeout(function() { document.addEventListener('click', onOutside); }, 0);
+
+    menu.querySelectorAll('button').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var act = btn.getAttribute('data-act');
+        close();
+        if (act === 'caption') editCaption(att);
+        else if (act === 'cover') setCover(att);
+        else if (act === 'pair') openPairPicker(att);
+        else if (act === 'annotate') openAnnotator(att);
+        else if (act === 'delete') deletePhoto(att);
+      });
+    });
+  }
+
+  function editCaption(att) {
+    var v = window.prompt('Caption for this photo', att.caption || '');
+    if (v == null) return;
+    window.p86Api.attachments.update(att.id, { caption: v }).then(function() {
+      att.caption = v;
+      paintPhotoFeed();
+    }).catch(function(e) { alert('Save failed: ' + (e.message || e)); });
+  }
+  function setCover(att) {
+    api().update(_detailState.project.id, { cover_attachment_id: att.id }).then(function(r) {
+      _detailState.project = r && r.project || _detailState.project;
+      paintDetail();
+    }).catch(function(e) { alert('Set cover failed: ' + (e.message || e)); });
+  }
+  function deletePhoto(att) {
+    if (!window.confirm('Delete this photo? This cannot be undone.')) return;
+    window.p86Api.attachments.remove(att.id).then(function() {
+      _detailState.photos = _detailState.photos.filter(function(x) { return x.id !== att.id; });
+      paintPhotoFeed();
+      // Refresh pairs in case this photo was paired.
+      api().pairs.list(_detailState.project.id).then(function(r) {
+        _detailState.pairs = (r && r.pairs) || [];
+        paintPhotoFeed();
+      }).catch(function() {});
+    }).catch(function(e) { alert('Delete failed: ' + (e.message || e)); });
+  }
+  function openAnnotator(att) {
+    if (window.p86Markup && typeof window.p86Markup.open === 'function') {
+      window.p86Markup.open({
+        attachment: att,
+        onDone: function() {
+          // Refresh — the annotator uploaded a new markup attachment.
+          refreshDetailPhotos();
+        }
+      });
+    } else {
+      alert('Annotator not loaded.');
+    }
+  }
+
+  function refreshDetailPhotos() {
+    if (!_detailState.projectId) return;
+    window.p86Api.attachments.list('project', _detailState.projectId).then(function(r) {
+      _detailState.photos = (r && r.attachments) || [];
+      paintPhotoFeed();
+    }).catch(function() {});
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // Pair picker — opens a modal listing all other project photos and
+  // lets the user pick the "after" photo to pair with the source.
+  // ──────────────────────────────────────────────────────────────────
+  function openPairPicker(beforeAtt) {
+    var prior = document.getElementById('projPairPicker');
+    if (prior) prior.remove();
+
+    var candidates = _detailState.photos.filter(function(a) {
+      if (a.id === beforeAtt.id) return false;
+      // Only image attachments can pair.
+      if (!a.mime_type || !/^image\//.test(a.mime_type)) return false;
+      return true;
+    });
+
+    var modal = document.createElement('div');
+    modal.id = 'projPairPicker';
+    modal.className = 'modal active';
+    modal.innerHTML =
+      '<div class="modal-content" style="max-width:720px;">' +
+        '<div class="modal-header">' +
+          '<span>Pair with… &nbsp;<small style="font-weight:400;color:var(--text-dim,#888);">Pick the AFTER photo</small></span>' +
+          '<button class="p86-modal-close" data-close>&times;</button>' +
+        '</div>' +
+        '<div class="p86-pair-picker-before">' +
+          '<img src="' + escapeAttr(beforeAtt.thumb_url || beforeAtt.web_url || '') + '" alt="" />' +
+          '<div><strong>BEFORE</strong><div style="font-size:11px;color:var(--text-dim,#888);">' + escapeHTML(beforeAtt.filename || '') + '</div></div>' +
+        '</div>' +
+        '<label class="p86-field" style="margin:10px 0;">' +
+          '<span>Label (optional)</span>' +
+          '<input id="ppLabel" type="text" placeholder="e.g. Northwest fascia" />' +
+        '</label>' +
+        '<div class="p86-pair-picker-grid">' +
+          (candidates.length
+            ? candidates.map(function(a) {
+                return '<button class="p86-pair-picker-tile" data-id="' + escapeAttr(a.id) + '">' +
+                  '<img src="' + escapeAttr(a.thumb_url || '') + '" alt="" />' +
+                  '<div class="p86-pair-picker-tile-meta">' +
+                    fmtTime(a.uploaded_at) + ' · ' + fmtRelative(a.uploaded_at) +
+                  '</div>' +
+                '</button>';
+              }).join('')
+            : '<div class="p86-proj-empty-line" style="grid-column:1/-1;">No other photos in this project to pair with. Upload another photo first.</div>') +
+        '</div>' +
+        '<div class="modal-footer">' +
+          '<button class="ee-btn secondary" data-close>Cancel</button>' +
+        '</div>' +
+      '</div>';
+
+    document.body.appendChild(modal);
+    modal.addEventListener('click', function(e) { if (e.target === modal) modal.remove(); });
+    modal.querySelectorAll('[data-close]').forEach(function(b) {
+      b.addEventListener('click', function() { modal.remove(); });
+    });
+    modal.querySelectorAll('.p86-pair-picker-tile').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var afterId = btn.getAttribute('data-id');
+        var label = (modal.querySelector('#ppLabel').value || '').trim();
+        api().pairs.create(_detailState.project.id, {
+          before_attachment_id: beforeAtt.id,
+          after_attachment_id: afterId,
+          label: label || null
+        }).then(function(r) {
+          _detailState.pairs.unshift(r.pair);
+          modal.remove();
+          paintPhotoFeed();
+          paintActivityFeed();
+        }).catch(function(e) {
+          alert('Pair creation failed: ' + (e.message || e));
+        });
+      });
+    });
+  }
+
+  function deletePair(pairId) {
+    api().pairs.remove(_detailState.project.id, pairId).then(function() {
+      _detailState.pairs = _detailState.pairs.filter(function(pp) { return pp.id !== pairId; });
+      paintPhotoFeed();
+      paintActivityFeed();
+    }).catch(function(e) {
+      alert('Delete pair failed: ' + (e.message || e));
+    });
+  }
+
+  // Lightweight uploader — just the drop zone + upload button. Photos
+  // refresh after upload. The big grid render is handled by our custom
+  // feed above.
+  function mountUploader() {
+    var host = document.getElementById('projPhotoUploadHost');
+    if (!host) return;
+    host.innerHTML =
+      '<div class="p86-proj-upload-row">' +
+        '<button class="primary" onclick="document.getElementById(\'projPhotoFileInput\').click();">&#x2795; Upload photos</button>' +
+        '<input type="file" id="projPhotoFileInput" multiple accept="image/*,application/pdf" style="display:none;" />' +
+        '<span class="p86-proj-upload-hint">or drag &amp; drop photos onto this area.</span>' +
+      '</div>';
+    var fileInput = host.querySelector('#projPhotoFileInput');
+    if (fileInput) {
+      fileInput.addEventListener('change', function(e) {
+        if (e.target.files && e.target.files.length) uploadFiles(e.target.files);
+        fileInput.value = '';
+      });
+    }
+    // Drag-drop on the entire fieldset.
+    var fieldset = host.closest('fieldset');
+    if (fieldset) {
+      fieldset.addEventListener('dragover', function(e) {
+        e.preventDefault();
+        fieldset.classList.add('p86-proj-drop-active');
+      });
+      fieldset.addEventListener('dragleave', function() {
+        fieldset.classList.remove('p86-proj-drop-active');
+      });
+      fieldset.addEventListener('drop', function(e) {
+        e.preventDefault();
+        fieldset.classList.remove('p86-proj-drop-active');
+        if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) {
+          uploadFiles(e.dataTransfer.files);
+        }
+      });
+    }
+  }
+
+  function uploadFiles(files) {
+    var pid = _detailState.projectId;
+    if (!pid) return;
+    var chain = Promise.resolve();
+    Array.from(files).forEach(function(f) {
+      chain = chain.then(function() {
+        return window.p86Api.attachments.upload('project', pid, f).catch(function(err) {
+          alert('Upload failed for "' + f.name + '": ' + (err.message || err));
+        });
+      });
+    });
+    chain.then(function() {
+      // Re-fetch photos + activity to surface new uploads.
+      Promise.all([
+        window.p86Api.attachments.list('project', pid).catch(function() { return { attachments: [] }; }),
+        api().activity(pid, { limit: 50 }).catch(function() { return { activity: [] }; })
+      ]).then(function(rs) {
+        _detailState.photos = (rs[0] && rs[0].attachments) || [];
+        _detailState.activity = (rs[1] && rs[1].activity) || [];
+        paintPhotoFeed();
+        paintActivityFeed();
+      });
+    });
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // Activity feed
+  // ──────────────────────────────────────────────────────────────────
+  function activityRow(a) {
+    var icon = '&#x2728;'; // sparkles default
+    var verb = a.kind;
+    var detail = '';
+    var d = a.detail || {};
+    if (a.kind === 'created')           { icon = '&#x1F195;'; verb = 'created the project'; }
+    else if (a.kind === 'photo_added')  { icon = '&#x1F4F7;'; verb = 'added a photo'; detail = d.filename || ''; }
+    else if (a.kind === 'photo_removed'){ icon = '&#x1F5D1;'; verb = 'removed a photo'; detail = d.filename || ''; }
+    else if (a.kind === 'caption_edited'){ icon = '&#x270F;'; verb = 'edited a caption'; detail = d.filename || ''; }
+    else if (a.kind === 'tags_changed') {
+      icon = '&#x1F3F7;';
+      var parts = [];
+      if (d.added && d.added.length) parts.push('added ' + d.added.map(function(t) { return '#' + t; }).join(', '));
+      if (d.removed && d.removed.length) parts.push('removed ' + d.removed.map(function(t) { return '#' + t; }).join(', '));
+      verb = parts.join(' / ') || 'updated tags';
+    }
+    else if (a.kind === 'cover_set')     { icon = '&#x1F3DE;'; verb = 'set a new cover photo'; }
+    else if (a.kind === 'link_changed')  { icon = '&#x1F517;'; verb = 'changed project links'; }
+    else if (a.kind === 'status_changed'){ icon = (d.after === 'archived' ? '&#x1F5C4;' : '&#x21BA;'); verb = (d.after === 'archived' ? 'archived' : 'unarchived') + ' the project'; }
+    else if (a.kind === 'renamed')       { icon = '&#x270F;'; verb = 'renamed the project'; }
+    else if (a.kind === 'description_edited'){ icon = '&#x270F;'; verb = 'edited the description'; }
+    else if (a.kind === 'address_edited'){ icon = '&#x1F4CD;'; verb = 'edited the address'; }
+    else if (a.kind === 'pair_created')  { icon = '&#x1F500;'; verb = 'created a before/after pair'; detail = d.label || ''; }
+    else if (a.kind === 'pair_deleted')  { icon = '&#x1F5D1;'; verb = 'deleted a before/after pair'; }
+
+    return '<div class="p86-proj-activity-row">' +
+      '<span class="p86-proj-activity-icon">' + icon + '</span>' +
+      '<span class="p86-proj-activity-actor">' + escapeHTML(a.actor_name || 'Someone') + '</span>' +
+      '<span class="p86-proj-activity-verb">' + verb + '</span>' +
+      (detail ? '<span class="p86-proj-activity-detail">' + escapeHTML(detail) + '</span>' : '') +
+      '<span class="p86-proj-activity-time">' + escapeHTML(fmtRelative(a.created_at)) + '</span>' +
+    '</div>';
+  }
+
+  function paintActivityFeed() {
+    var host = document.getElementById('projActivityHost');
+    if (!host) return;
+    if (!_detailState.activity.length) {
+      host.innerHTML = '<div class="p86-proj-empty-line">No activity yet.</div>';
+      return;
+    }
+    host.innerHTML = _detailState.activity.map(activityRow).join('');
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // Field blur-save (name / address / description)
+  // ──────────────────────────────────────────────────────────────────
   function _fieldBlur(field, value) {
     var p = _detailState.project;
     if (!p || !api()) return;
     var prior = p[field];
     var clean = (value == null) ? '' : String(value);
-    // No-op when nothing changed.
     if (String(prior == null ? '' : prior) === clean) return;
     p[field] = clean;
     var patch = {};
@@ -461,11 +1193,12 @@
     });
   }
 
+  // ──────────────────────────────────────────────────────────────────
+  // Link / archive / unarchive
+  // ──────────────────────────────────────────────────────────────────
   function editLinks() {
     var p = _detailState.project;
     if (!p || !api()) return;
-    // Lightweight modal: three dropdowns (lead/job/client) populated
-    // from window.appData. Each can be set to '' to clear.
     var prior = document.getElementById('projLinksModal');
     if (prior) prior.remove();
     var leads = (window.appData && window.appData.leads) || [];
@@ -487,31 +1220,11 @@
     modal.className = 'modal active';
     modal.innerHTML =
       '<div class="modal-content" style="max-width:520px;">' +
-        '<div class="modal-header">Edit project links</div>' +
-        '<div style="display:flex;flex-direction:column;gap:10px;">' +
-          '<div>' +
-            '<label style="font-size:11px;color:var(--text-dim,#aaa);text-transform:uppercase;letter-spacing:0.4px;font-weight:600;display:block;margin-bottom:4px;">Lead</label>' +
-            '<select id="plLead" style="width:100%;padding:7px 10px;font-size:13px;">' +
-              options(leads, p.lead_id, function(l) { return l.title || ('Lead ' + l.id); }) +
-            '</select>' +
-          '</div>' +
-          '<div>' +
-            '<label style="font-size:11px;color:var(--text-dim,#aaa);text-transform:uppercase;letter-spacing:0.4px;font-weight:600;display:block;margin-bottom:4px;">Job</label>' +
-            '<select id="plJob" style="width:100%;padding:7px 10px;font-size:13px;">' +
-              options(jobs, p.job_id, function(j) {
-                var n = (j.jobNumber ? '[' + j.jobNumber + '] ' : '') + (j.title || j.name || j.id);
-                return n;
-              }) +
-            '</select>' +
-          '</div>' +
-          '<div>' +
-            '<label style="font-size:11px;color:var(--text-dim,#aaa);text-transform:uppercase;letter-spacing:0.4px;font-weight:600;display:block;margin-bottom:4px;">Client</label>' +
-            '<select id="plClient" style="width:100%;padding:7px 10px;font-size:13px;">' +
-              options(clients, p.client_id, function(c) { return c.name || ('Client ' + c.id); }) +
-            '</select>' +
-          '</div>' +
-        '</div>' +
-        '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;">' +
+        '<div class="modal-header"><span>Edit project links</span><button class="p86-modal-close" data-close>&times;</button></div>' +
+        '<label class="p86-field"><span>Lead</span><select id="plLead">' + options(leads, p.lead_id, function(l) { return l.title || ('Lead ' + l.id); }) + '</select></label>' +
+        '<label class="p86-field"><span>Job</span><select id="plJob">' + options(jobs, p.job_id, function(j) { return (j.jobNumber ? '[' + j.jobNumber + '] ' : '') + (j.title || j.name || j.id); }) + '</select></label>' +
+        '<label class="p86-field"><span>Client</span><select id="plClient">' + options(clients, p.client_id, function(c) { return c.name || ('Client ' + c.id); }) + '</select></label>' +
+        '<div class="modal-footer">' +
           '<button class="ee-btn secondary" data-close>Cancel</button>' +
           '<button class="primary" id="plSave">Save</button>' +
         '</div>' +
@@ -531,10 +1244,8 @@
         _detailState.project = r && r.project;
         modal.remove();
         paintDetail();
-        _linkedPanels.forEach(function(panel) { try { renderLinkedProjectsPanel(panel.host, panel.ctx); } catch(e) {} });
-      }).catch(function(e) {
-        alert('Save failed: ' + (e.message || e));
-      });
+        refreshLinkedPanels();
+      }).catch(function(e) { alert('Save failed: ' + (e.message || e)); });
     });
   }
 
@@ -542,11 +1253,10 @@
     var p = _detailState.project;
     if (!p || !api()) return;
     if (!window.confirm('Archive this project? Its photos stay attached; archived projects hide from the default list.')) return;
-    api().update(p.id, { status: 'archived' }).then(function() {
-      closeDetail();
-    }).catch(function(e) { alert('Archive failed: ' + (e.message || e)); });
+    api().update(p.id, { status: 'archived' }).then(closeDetail).catch(function(e) {
+      alert('Archive failed: ' + (e.message || e));
+    });
   }
-
   function unarchive() {
     var p = _detailState.project;
     if (!p || !api()) return;
@@ -557,21 +1267,16 @@
   }
 
   // ──────────────────────────────────────────────────────────────────
-  // Linked-Projects panel — embedded inside lead / job / client
-  // editors. Lists projects whose lead_id / job_id / client_id matches
-  // the host entity. Includes a "+ New Project" button that pre-links
-  // to the host entity.
+  // Linked-Projects panel (embedded in lead / job / client editors)
   // ──────────────────────────────────────────────────────────────────
-  var _linkedPanels = []; // registry so we can re-render after changes
   function renderLinkedProjectsPanel(host, ctx) {
     if (!host || !ctx || !ctx.kind || !ctx.id) return;
-    // De-dup the registry — overwrite any prior entry for this host.
     _linkedPanels = _linkedPanels.filter(function(p) { return p.host !== host; });
     _linkedPanels.push({ host: host, ctx: ctx });
 
-    host.innerHTML = '<div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;padding:6px 0;">Loading projects…</div>';
+    host.innerHTML = '<div class="p86-proj-empty-line">Loading projects…</div>';
     if (!api()) {
-      host.innerHTML = '<div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;padding:6px 0;">Projects API not loaded.</div>';
+      host.innerHTML = '<div class="p86-proj-empty-line">Projects API not loaded.</div>';
       return;
     }
     var opts = { status: 'active' };
@@ -581,26 +1286,26 @@
 
     api().list(opts).then(function(r) {
       var rows = (r && r.projects) || [];
-      var newBtn = '<button class="ee-btn secondary" onclick="window.p86Projects.createForEntity(\'' + escapeAttr(ctx.kind) + '\', \'' + escapeAttr(ctx.id) + '\')" ' +
-        'style="font-size:11px;padding:4px 8px;width:100%;margin-top:6px;">&#x2795; New Project</button>';
+      var newBtn = '<button class="ee-btn secondary p86-proj-linked-newbtn" onclick="window.p86Projects.createForEntity(\'' + escapeAttr(ctx.kind) + '\', \'' + escapeAttr(ctx.id) + '\')">&#x2795; New Project</button>';
       if (!rows.length) {
         host.innerHTML =
-          '<div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;padding:6px 0;">No projects linked yet.</div>' +
+          '<div class="p86-proj-empty-line">No projects linked yet.</div>' +
           newBtn;
         return;
       }
       host.innerHTML = rows.map(function(p) {
         var coverUrl = p.cover_thumb_url || '';
         var thumb = coverUrl
-          ? '<img src="' + escapeAttr(coverUrl) + '" alt="" style="width:44px;height:44px;object-fit:cover;border-radius:4px;flex-shrink:0;background:#1a1a2e;" />'
-          : '<div style="width:44px;height:44px;display:flex;align-items:center;justify-content:center;background:rgba(34,211,238,0.06);color:var(--accent,#22d3ee);font-size:18px;border-radius:4px;flex-shrink:0;">&#x1F4F8;</div>';
-        return '<div onclick="window.openProject(\'' + escapeAttr(p.id) + '\')" ' +
-          'style="display:flex;gap:8px;align-items:center;padding:6px;border:1px solid var(--border,#333);border-radius:6px;margin-bottom:5px;cursor:pointer;background:rgba(255,255,255,0.02);transition:border-color 0.12s;" ' +
-          'onmouseover="this.style.borderColor=\'rgba(79,140,255,0.5)\';" onmouseout="this.style.borderColor=\'var(--border,#333)\';">' +
+          ? '<img src="' + escapeAttr(coverUrl) + '" alt="" class="p86-proj-linked-thumb" />'
+          : '<div class="p86-proj-linked-thumb p86-proj-linked-thumb-empty">&#x1F4F8;</div>';
+        return '<div class="p86-proj-linked-row" onclick="window.openProject(\'' + escapeAttr(p.id) + '\')">' +
           thumb +
-          '<div style="min-width:0;flex:1;">' +
-            '<div style="font-size:12px;font-weight:600;color:var(--text,#fff);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(p.name) + '</div>' +
-            '<div style="font-size:10.5px;color:var(--text-dim,#888);">' + Number(p.photo_count || 0) + ' photo' + (p.photo_count === 1 ? '' : 's') + ' &middot; ' + escapeHTML(fmtRelative(p.updated_at)) + '</div>' +
+          '<div class="p86-proj-linked-row-body">' +
+            '<div class="p86-proj-linked-name">' + escapeHTML(p.name) + '</div>' +
+            '<div class="p86-proj-linked-meta">' + Number(p.photo_count || 0) + ' photo' + (p.photo_count === 1 ? '' : 's') +
+              (Number(p.pair_count || 0) ? ' · ' + Number(p.pair_count) + ' pair' + (p.pair_count === 1 ? '' : 's') : '') +
+              ' · ' + escapeHTML(fmtRelative(p.updated_at)) +
+            '</div>' +
           '</div>' +
         '</div>';
       }).join('') + newBtn;
@@ -610,28 +1315,21 @@
   }
   window.renderLinkedProjectsPanel = renderLinkedProjectsPanel;
 
-  function createForEntity(kind, id) {
-    var prefill = {};
-    // Best-effort default name from the host entity's title.
-    if (kind === 'lead') {
-      var l = ((window.appData && window.appData.leads) || []).find(function(x) { return String(x.id) === String(id); });
-      if (l) { prefill.name = l.title || ''; prefill.lead_id = id; if (l.client_id) prefill.client_id = l.client_id; }
-      else prefill.lead_id = id;
-    } else if (kind === 'job') {
-      var j = ((window.appData && window.appData.jobs) || []).find(function(x) { return String(x.id) === String(id); });
-      if (j) { prefill.name = j.title || j.name || ''; prefill.job_id = id; }
-      else prefill.job_id = id;
-    } else if (kind === 'client') {
-      var c = ((window.appData && window.appData.clients) || []).find(function(x) { return String(x.id) === String(id); });
-      if (c) { prefill.name = c.name || ''; prefill.client_id = id; }
-      else prefill.client_id = id;
-    }
-    return createPrompt(prefill);
+  function refreshLinkedPanels() {
+    _linkedPanels.forEach(function(panel) {
+      try { renderLinkedProjectsPanel(panel.host, panel.ctx); } catch (e) {}
+    });
   }
 
+  // ──────────────────────────────────────────────────────────────────
+  // Public surface
+  // ──────────────────────────────────────────────────────────────────
   window.p86Projects = {
     setFilter: setFilter,
-    createPrompt: createPrompt,
+    setView: setView,
+    setTagFilter: setTagFilter,
+    openCreate: openCreate,
+    createPrompt: createPrompt,     // legacy alias
     createForEntity: createForEntity,
     archive: archive,
     unarchive: unarchive,

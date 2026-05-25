@@ -1976,6 +1976,59 @@ async function initSchema() {
       ON projects(job_id) WHERE job_id IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_projects_client
       ON projects(client_id) WHERE client_id IS NOT NULL;
+
+    -- Per-project tags. JSONB array of lowercase strings, capped at 20
+    -- by the route layer. GIN index supports the @> containment filter
+    -- (find projects tagged 'roof', etc.). jsonb_path_ops is the
+    -- smaller index variant that's faster on the containment operator
+    -- we actually use; if we later need ? / ?| / ?& we'd swap to the
+    -- default jsonb_ops opclass.
+    ALTER TABLE projects ADD COLUMN IF NOT EXISTS tags JSONB NOT NULL DEFAULT '[]'::jsonb;
+    CREATE INDEX IF NOT EXISTS idx_projects_tags
+      ON projects USING gin (tags jsonb_path_ops) WHERE archived_at IS NULL;
+
+    -- Before/After pairs — CompanyCam-style paired photos. Each row
+    -- couples two attachments (both must have entity_type='project'
+    -- and entity_id=<this row's project_id>; route layer enforces).
+    -- ON DELETE CASCADE from either side intentionally drops the pair
+    -- — same posture as job_reports' missing-photo handling: if a
+    -- source photo is removed, the comparison loses meaning, so the
+    -- pair silently disappears rather than rendering broken.
+    CREATE TABLE IF NOT EXISTS project_pairs (
+      id                    TEXT PRIMARY KEY,
+      project_id            TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      before_attachment_id  TEXT NOT NULL REFERENCES attachments(id) ON DELETE CASCADE,
+      after_attachment_id   TEXT NOT NULL REFERENCES attachments(id) ON DELETE CASCADE,
+      label                 TEXT,
+      created_by            INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_project_pairs_project
+      ON project_pairs(project_id, created_at DESC);
+
+    -- Activity log for the project detail's timeline feed. One row
+    -- per material mutation (photo added/removed, caption edited,
+    -- tag changed, linkage changed, cover set, pair created/deleted,
+    -- status changed, description/address edited). detail is a free
+    -- JSONB payload whose shape is convention-defined per kind and
+    -- rendered by the client. We don't enforce the shape with a
+    -- CHECK constraint — kinds may evolve over time and a strict
+    -- check would force migration coupling.
+    --
+    -- BIGSERIAL because at scale (many photos × many projects ×
+    -- multiple edits each) this is the highest-volume table in the
+    -- projects feature. INDEX is on (project_id, created_at DESC) to
+    -- match the "show me the last N events for this project" query.
+    CREATE TABLE IF NOT EXISTS project_activity (
+      id              BIGSERIAL PRIMARY KEY,
+      project_id      TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+      actor_user_id   INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      kind            TEXT NOT NULL,
+      detail          JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_project_activity_project
+      ON project_activity(project_id, created_at DESC);
   `);
 
   // ── Performance indexes: 86's read-tool surface (2026-05-23) ──────

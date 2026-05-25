@@ -397,13 +397,40 @@
       if (opts.lead_id) qs.push('lead_id=' + encodeURIComponent(opts.lead_id));
       if (opts.job_id) qs.push('job_id=' + encodeURIComponent(opts.job_id));
       if (opts.client_id) qs.push('client_id=' + encodeURIComponent(opts.client_id));
+      if (opts.tag) qs.push('tag=' + encodeURIComponent(opts.tag));
+      if (opts.has_pair) qs.push('has_pair=1');
       if (opts.limit) qs.push('limit=' + encodeURIComponent(opts.limit));
       return get('/api/projects' + (qs.length ? '?' + qs.join('&') : ''));
     },
     get: function(id) { return get('/api/projects/' + encodeURIComponent(id)); },
     create: function(payload) { return post('/api/projects', payload); },
     update: function(id, payload) { return patch('/api/projects/' + encodeURIComponent(id), payload); },
-    archive: function(id) { return del('/api/projects/' + encodeURIComponent(id)); }
+    archive: function(id) { return del('/api/projects/' + encodeURIComponent(id)); },
+    // Activity feed for the detail timeline.
+    activity: function(id, opts) {
+      opts = opts || {};
+      var qs = [];
+      if (opts.limit) qs.push('limit=' + encodeURIComponent(opts.limit));
+      if (opts.before) qs.push('before=' + encodeURIComponent(opts.before));
+      return get('/api/projects/' + encodeURIComponent(id) + '/activity' + (qs.length ? '?' + qs.join('&') : ''));
+    },
+    // Tag autocomplete source.
+    suggestTags: function(q) {
+      var qs = q ? '?q=' + encodeURIComponent(q) : '';
+      return get('/api/projects/tags/suggest' + qs);
+    },
+    // Before/After pair sub-API.
+    pairs: {
+      list: function(projectId) {
+        return get('/api/projects/' + encodeURIComponent(projectId) + '/pairs');
+      },
+      create: function(projectId, payload) {
+        return post('/api/projects/' + encodeURIComponent(projectId) + '/pairs', payload);
+      },
+      remove: function(projectId, pairId) {
+        return del('/api/projects/' + encodeURIComponent(projectId) + '/pairs/' + encodeURIComponent(pairId));
+      }
+    }
   };
 
   // Per-job weather lookup for the schedule. Server geocodes the job's
