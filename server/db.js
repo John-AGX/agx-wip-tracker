@@ -1929,6 +1929,50 @@ async function initSchema() {
       updated_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
     CREATE INDEX IF NOT EXISTS idx_job_reports_job ON job_reports(job_id, updated_at DESC);
+
+    -- ───────────────────────────────────────────────────────────────
+    -- Projects — CompanyCam-style first-class entity that buckets
+    -- photos + markups + reports around a single physical site /
+    -- walkthrough. A project links to a lead (during sales), to a
+    -- job (once sold), and to a client (the buyer). All three FKs
+    -- are nullable so a project can exist before any of those exist
+    -- and gets linked as the lifecycle progresses.
+    --
+    -- Cover photo: cover_attachment_id points at an attachments row
+    -- (entity_type='project', entity_id=this project's id). If null,
+    -- the UI falls back to the most-recent photo in the project.
+    --
+    -- Geocoding is denormalized onto the project so the projects map
+    -- view can plot pins without fanning out to lead/job/client.
+    -- address_text is the human-entered address; lat/lng are filled
+    -- by the existing Census geocoder when the address is set or
+    -- when the linked entity changes.
+    CREATE TABLE IF NOT EXISTS projects (
+      id                   TEXT PRIMARY KEY,
+      organization_id      INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      name                 TEXT NOT NULL,
+      description          TEXT,
+      cover_attachment_id  INTEGER REFERENCES attachments(id) ON DELETE SET NULL,
+      lead_id              TEXT REFERENCES leads(id) ON DELETE SET NULL,
+      job_id               TEXT REFERENCES jobs(id) ON DELETE SET NULL,
+      client_id            TEXT REFERENCES clients(id) ON DELETE SET NULL,
+      address_text         TEXT,
+      geocode_lat          NUMERIC,
+      geocode_lng          NUMERIC,
+      status               TEXT NOT NULL DEFAULT 'active',
+      created_by           INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      archived_at          TIMESTAMPTZ
+    );
+    CREATE INDEX IF NOT EXISTS idx_projects_org
+      ON projects(organization_id, updated_at DESC) WHERE archived_at IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_projects_lead
+      ON projects(lead_id) WHERE lead_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_projects_job
+      ON projects(job_id) WHERE job_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_projects_client
+      ON projects(client_id) WHERE client_id IS NOT NULL;
   `);
 
   // ── Performance indexes: 86's read-tool surface (2026-05-23) ──────

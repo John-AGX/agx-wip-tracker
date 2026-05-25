@@ -766,11 +766,29 @@
   function renderLeadEditorRightPanels(lead) {
     var addr = _composeLeadAddress();
     var leadId = lead && lead.id;
-    // Order matches the DOM: Map -> Estimates -> Photos -> Weather.
+    // Order matches the DOM: Map -> Estimates -> Projects -> Photos -> Weather.
     renderLeadMap(addr);
     renderLeadEstimatesCompact(leadId);
+    renderLeadProjects(leadId);
     renderLeadAttachments(leadId);
     renderLeadWeather(addr);
+  }
+
+  // Linked Projects panel — defers to window.renderLinkedProjectsPanel
+  // (from js/projects.js). Shows nothing if the lead hasn't been
+  // saved yet (no id to link against).
+  function renderLeadProjects(leadId) {
+    var host = document.getElementById('leadEditor_projectsHost');
+    if (!host) return;
+    if (!leadId) {
+      host.innerHTML = '<div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;padding:8px 0;">Save the lead first to attach a project.</div>';
+      return;
+    }
+    if (typeof window.renderLinkedProjectsPanel === 'function') {
+      window.renderLinkedProjectsPanel(host, { kind: 'lead', id: leadId });
+    } else {
+      host.innerHTML = '<div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;padding:8px 0;">Projects module not loaded.</div>';
+    }
   }
 
   // ── Blur-save (auto-save on field exit) ──────────────────────

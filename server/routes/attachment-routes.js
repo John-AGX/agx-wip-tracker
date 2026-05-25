@@ -165,7 +165,11 @@ const MAX_FILE_BYTES = 50 * 1024 * 1024; // 50MB — fits most drawings, big PDF
 // The entity_id for an org-type attachment is the stringified
 // organizations.id; uploads here become part of the org-wide context
 // that 86's search_org_kb tool draws from.
-const VALID_ENTITY_TYPES = new Set(['lead', 'estimate', 'client', 'job', 'sub', 'user', 'org']);
+// 'project' is the CompanyCam-style photo bucket. entity_id is the
+// projects.id string; reads are allowed for any user in the project's
+// org, writes follow LEADS_EDIT (projects belong to the sales/job
+// lifecycle and edit rights track that, not a separate capability).
+const VALID_ENTITY_TYPES = new Set(['lead', 'estimate', 'client', 'job', 'sub', 'user', 'org', 'project']);
 
 // Lightweight MIME detection — sharp only handles raster images, so
 // anything outside this set bypasses the resize pipeline.
@@ -297,6 +301,10 @@ function readCapForEntity(entityType) {
   // ensureOrgAttachmentScope below) keeps tenants isolated. Writes
   // are gated separately by writeCapForEntity.
   if (entityType === 'org')      return '__org_member__';
+  // Projects are sales/job-lifecycle buckets — reads follow the same
+  // posture as leads (anyone on the team can see; org isolation is
+  // enforced by the project's row org_id elsewhere).
+  if (entityType === 'project')  return 'LEADS_VIEW';
   return 'LEADS_VIEW';
 }
 function writeCapForEntity(entityType) {
@@ -317,6 +325,11 @@ function writeCapForEntity(entityType) {
   // (via the __org_member__ sentinel on the read side) but the
   // bucket is curated by admins so it doesn\'t accumulate noise.
   if (entityType === 'org')      return 'USERS_MANAGE ROLES_MANAGE SYSTEM_ADMIN';
+  // Project uploads — anyone with lead-edit capability can drop photos
+  // into a project. This is a sales/walk-through bucket; gating it
+  // tighter (e.g. behind a per-project ACL) was considered overkill
+  // for the v1 ship.
+  if (entityType === 'project')  return 'LEADS_EDIT';
   return 'LEADS_EDIT';
 }
 

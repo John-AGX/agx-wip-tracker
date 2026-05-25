@@ -385,6 +385,27 @@
     remove: function(id) { return del('/api/schedule/' + encodeURIComponent(id)); }
   };
 
+  // Projects — CompanyCam-style first-class entity that buckets photos
+  // + markups + reports around one walkthrough. See
+  // server/routes/project-routes.js for the data shape.
+  var projects = {
+    list: function(opts) {
+      opts = opts || {};
+      var qs = [];
+      if (opts.q) qs.push('q=' + encodeURIComponent(opts.q));
+      if (opts.status) qs.push('status=' + encodeURIComponent(opts.status));
+      if (opts.lead_id) qs.push('lead_id=' + encodeURIComponent(opts.lead_id));
+      if (opts.job_id) qs.push('job_id=' + encodeURIComponent(opts.job_id));
+      if (opts.client_id) qs.push('client_id=' + encodeURIComponent(opts.client_id));
+      if (opts.limit) qs.push('limit=' + encodeURIComponent(opts.limit));
+      return get('/api/projects' + (qs.length ? '?' + qs.join('&') : ''));
+    },
+    get: function(id) { return get('/api/projects/' + encodeURIComponent(id)); },
+    create: function(payload) { return post('/api/projects', payload); },
+    update: function(id, payload) { return patch('/api/projects/' + encodeURIComponent(id), payload); },
+    archive: function(id) { return del('/api/projects/' + encodeURIComponent(id)); }
+  };
+
   // Per-job weather lookup for the schedule. Server geocodes the job's
   // address (cached on the row), pulls the NWS 7-day forecast (cached
   // in-memory by rounded coords), classifies risk, and returns one

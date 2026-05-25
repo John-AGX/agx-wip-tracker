@@ -44,6 +44,7 @@ const smsRoutes = require('./routes/sms-routes');
 const reportRoutes = require('./routes/report-routes');
 const fieldToolsRoutes = require('./routes/field-tools-routes');
 const payloadRoutes = require('./routes/payload-routes');
+const projectRoutes = require('./routes/project-routes');
 const { storage } = require('./storage');
 
 const app = express();
@@ -98,6 +99,7 @@ app.use('/api/estimates', estimateRoutes);
 app.use('/api/roles', roleRoutes);
 app.use('/api/clients', clientRoutes);
 app.use('/api/leads', leadRoutes);
+app.use('/api/projects', projectRoutes);
 app.use('/api/settings', settingsRoutes);
 app.use('/api/attachments', attachmentRoutes);
 // Sessions sidebar routes mount BEFORE the catch-all aiRoutes so they

@@ -1652,6 +1652,23 @@ function renderJobsMain() {
                 window.p86Weather.renderJobWidget(wxMount, jobId);
             }
 
+            // ── Linked Projects panel ──
+            // CompanyCam-style photo + walkthrough buckets attached to
+            // this job via projects.job_id. Surfaces in the overview so
+            // PMs see field photos without diving into My Files.
+            if (typeof window.renderLinkedProjectsPanel === 'function') {
+                var projWrap = document.createElement('fieldset');
+                projWrap.style.cssText = 'border:1px solid var(--border,#333);border-radius:8px;padding:6px 10px 8px;margin:0 0 14px 0;';
+                projWrap.innerHTML =
+                    '<legend style="font-size:10px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.6px;padding:0 5px;">&#x1F4F8; Projects</legend>' +
+                    '<div id="job-overview-projects-host"></div>';
+                container.appendChild(projWrap);
+                var projHost = projWrap.querySelector('#job-overview-projects-host');
+                if (projHost) {
+                    window.renderLinkedProjectsPanel(projHost, { kind: 'job', id: jobId });
+                }
+            }
+
             // ── Building cards ──
             const buildings = appData.buildings.filter(b => b.jobId === jobId);
             if (buildings.length > 0) {

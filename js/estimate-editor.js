@@ -415,6 +415,23 @@
           mountEl.innerHTML = '<div style="padding:18px;color:var(--yellow,#fbbf24);font-size:12px;">Attachments widget not loaded — refresh the page.</div>';
           console.warn('[estimate-editor] window.p86Attachments not available; can not mount photos tab');
         }
+
+        // ── Linked Projects panel ──
+        // Estimates inherit project context from their parent lead.
+        // If the estimate has a lead_id, show projects linked to that
+        // lead; otherwise show a stub explaining why the panel is
+        // empty.
+        var projMount = document.getElementById('ee-projects-mount');
+        if (projMount && typeof window.renderLinkedProjectsPanel === 'function') {
+          var est2 = getEstimate();
+          if (est2 && est2.lead_id) {
+            window.renderLinkedProjectsPanel(projMount, { kind: 'lead', id: est2.lead_id });
+          } else if (est2 && est2.client_id) {
+            window.renderLinkedProjectsPanel(projMount, { kind: 'client', id: est2.client_id });
+          } else {
+            projMount.innerHTML = '<div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;padding:6px 0;">Link this estimate to a lead or client to surface projects.</div>';
+          }
+        }
       }
     } catch (e) {
       console.warn('[estimate-editor] switchEstimateEditorTab(' + name + ') renderer threw:', e);

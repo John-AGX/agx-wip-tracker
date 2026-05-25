@@ -120,19 +120,31 @@
     });
     if (!folders.length) folders = ['general'];
 
-    // Pin the virtual "Tools" folder at the bottom. It doesn't store
-    // files — when selected, the right pane renders field tools
-    // instead of the file grid + upload zone. The double underscore
-    // sentinel ensures it can never collide with a real folder name
+    // Pin the virtual folders at the bottom. They don't store files —
+    // when selected, the right pane renders a special view instead of
+    // the file grid + upload zone. The double-underscore sentinel
+    // ensures these can never collide with real folder names
     // (sanitizeFolder strips underscores at the edges).
+    //
+    //   __projects__ — CompanyCam-style photo + walkthrough buckets
+    //                  with markups + reports. Owned by js/projects.js.
+    //   __tools__    — field tools grid (calculators / take-offs etc).
+    //                  Owned by js/field-tools.js.
+    //
+    // Future phases will add __reports__ (P2) and __takeoffs__ (P4)
+    // pivots here.
+    var PROJECTS_FOLDER = '__projects__';
     var TOOLS_FOLDER = '__tools__';
+    if (folders.indexOf(PROJECTS_FOLDER) === -1) folders.push(PROJECTS_FOLDER);
     if (folders.indexOf(TOOLS_FOLDER) === -1) folders.push(TOOLS_FOLDER);
 
     if (folders.indexOf(_state.activeFolder) === -1) {
       _state.activeFolder = folders[0];
     }
+    var isProjectsFolder = _state.activeFolder === PROJECTS_FOLDER;
     var isToolsFolder = _state.activeFolder === TOOLS_FOLDER;
-    var activeFiles = isToolsFolder ? [] : (bucket[_state.activeFolder] || []);
+    var isVirtualFolder = isProjectsFolder || isToolsFolder;
+    var activeFiles = isVirtualFolder ? [] : (bucket[_state.activeFolder] || []);
 
     var html =
       '<div style="max-width:1200px;margin:0 auto;padding:24px 16px;">' +
@@ -143,8 +155,8 @@
             '<p style="margin:0;color:var(--text-dim,#888);font-size:12px;">Your personal files. Drag any file into a job or estimate when needed.</p>' +
           '</div>' +
           '<div style="display:flex;align-items:center;gap:8px;">' +
-            (isToolsFolder
-              ? '' // Tools folder owns its own "+ Add tool" / "↻ Refresh" controls inside the pane
+            (isVirtualFolder
+              ? '' // Virtual folders (Projects, Tools) own their own controls inside the pane
               : (
                   '<button class="ee-btn secondary" onclick="window.myFiles.newFolder()" style="font-size:12px;padding:6px 12px;">&#x1F4C1; New Folder</button>' +
                   '<button class="primary" onclick="document.getElementById(\'mfFileInput\').click();" style="font-size:13px;padding:7px 14px;">&#x2795; Upload</button>' +
@@ -164,16 +176,24 @@
           // Folders rail
           '<div style="border:1px solid var(--border,#333);border-radius:10px;background:var(--card-bg,#0f0f1e);overflow:hidden;">' +
             '<div style="padding:8px 12px;border-bottom:1px solid var(--border,#333);font-size:10px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.4px;">Folders</div>' +
-            folders.map(function(f) {
+            folders.map(function(f, idx) {
               var active = f === _state.activeFolder;
+              var isProjects = f === PROJECTS_FOLDER;
               var isTools = f === TOOLS_FOLDER;
-              // Tools row: pinned at the bottom with a divider above and
-              // a wrench icon instead of the folder glyph so it reads as
-              // a distinct section rather than another folder.
-              var icon = isTools ? '&#x1F527;' : '&#x1F4C1;';
-              var label = isTools ? 'Tools' : prettyFolder(f);
-              var n = isTools ? '' : (bucket[f] || []).length;
-              var divider = isTools ? 'border-top:1px solid var(--border,#333);margin-top:4px;padding-top:8px;' : '';
+              var isVirtual = isProjects || isTools;
+              // Virtual rows: pinned at the bottom with a divider above
+              // (only the FIRST virtual row gets the divider so they
+              // group as one section) and a custom icon.
+              var icon = isProjects ? '&#x1F4F8;' : (isTools ? '&#x1F527;' : '&#x1F4C1;');
+              var label = isProjects ? 'Projects' : (isTools ? 'Tools' : prettyFolder(f));
+              var n = isVirtual ? '' : (bucket[f] || []).length;
+              // First virtual folder gets the divider line above; subsequent
+              // virtual folders sit flush against the previous one.
+              var prev = folders[idx - 1];
+              var prevIsVirtual = prev === PROJECTS_FOLDER || prev === TOOLS_FOLDER;
+              var divider = (isVirtual && !prevIsVirtual)
+                ? 'border-top:1px solid var(--border,#333);margin-top:4px;padding-top:8px;'
+                : '';
               return '<button class="mf-folder-row" data-folder="' + escapeAttr(f) + '" onclick="window.myFiles.selectFolder(\'' + escapeAttr(f) + '\')" ' +
                 'style="display:flex;width:100%;align-items:center;justify-content:space-between;gap:8px;padding:7px 12px;background:' + (active ? 'rgba(34,211,238,0.10)' : 'transparent') + ';border:none;border-bottom:1px solid var(--border,#222);color:' + (active ? 'var(--accent,#22d3ee)' : 'var(--text,#fff)') + ';font-size:12px;font-weight:' + (active ? '600' : '400') + ';cursor:pointer;text-align:left;' + divider + '">' +
                 '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + icon + ' ' + escapeHTML(label) + '</span>' +
@@ -182,28 +202,41 @@
             }).join('') +
           '</div>' +
 
-          // Right pane — files for normal folders, field tools grid
-          // for the virtual Tools folder. The host element gets a
-          // stable id so renderFieldToolsInto can find it.
+          // Right pane — files for normal folders, virtual-pane host
+          // for Projects / Tools. The host element gets a stable id so
+          // the owning module can find it.
           '<div>' +
-            (isToolsFolder
-              ? '<div id="mfToolsHost" style="min-height:100px;"></div>'
-              : (
-                  '<div id="mfDropZone" data-mf-drop="1" style="border:2px dashed var(--border,#444);border-radius:10px;padding:14px;text-align:center;background:rgba(79,140,255,0.04);margin-bottom:14px;cursor:pointer;font-size:12px;color:var(--text-dim,#888);">' +
-                    'Drop files here or <strong style="color:var(--accent,#22d3ee);">click Upload</strong> &middot; Files land in <strong>' + escapeHTML(prettyFolder(_state.activeFolder)) + '</strong>' +
-                  '</div>' +
-                  (activeFiles.length === 0
-                    ? '<div style="padding:30px;text-align:center;color:var(--text-dim,#888);font-size:12px;border:1px dashed var(--border,#333);border-radius:10px;">' +
-                      'No files in this folder yet.' +
-                    '</div>'
-                    : renderFileGrid(activeFiles))
-                )
+            (isProjectsFolder
+              ? '<div id="mfProjectsHost" style="min-height:100px;"></div>'
+              : isToolsFolder
+                ? '<div id="mfToolsHost" style="min-height:100px;"></div>'
+                : (
+                    '<div id="mfDropZone" data-mf-drop="1" style="border:2px dashed var(--border,#444);border-radius:10px;padding:14px;text-align:center;background:rgba(79,140,255,0.04);margin-bottom:14px;cursor:pointer;font-size:12px;color:var(--text-dim,#888);">' +
+                      'Drop files here or <strong style="color:var(--accent,#22d3ee);">click Upload</strong> &middot; Files land in <strong>' + escapeHTML(prettyFolder(_state.activeFolder)) + '</strong>' +
+                    '</div>' +
+                    (activeFiles.length === 0
+                      ? '<div style="padding:30px;text-align:center;color:var(--text-dim,#888);font-size:12px;border:1px dashed var(--border,#333);border-radius:10px;">' +
+                        'No files in this folder yet.' +
+                      '</div>'
+                      : renderFileGrid(activeFiles))
+                  )
             ) +
           '</div>' +
         '</div>' +
       '</div>';
 
     pane.innerHTML = html;
+
+    // Projects folder: hand off the right pane to js/projects.js.
+    if (isProjectsFolder) {
+      var projectsHost = pane.querySelector('#mfProjectsHost');
+      if (projectsHost && typeof window.renderProjectsInto === 'function') {
+        window.renderProjectsInto(projectsHost);
+      } else if (projectsHost) {
+        projectsHost.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);">Projects module not loaded.</div>';
+      }
+      return; // skip drop-zone wiring — not relevant in Projects mode
+    }
 
     // Tools folder: hand off the right pane to field-tools.js.
     if (isToolsFolder) {
