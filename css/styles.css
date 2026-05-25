@@ -3795,6 +3795,24 @@
 }
 .p86-proj-report-card-menu:hover { background: rgba(248,113,113,0.15); color: #f87171; }
 
+/* Reports grid mobile + tablet — match the Projects grid's
+   phone-friendly 2-col layout. Without these rules the desktop
+   minmax(280px, 1fr) produced 1 cramped desktop-styled card on
+   iPhone and an awkward 2-cramped-cards zone on portrait tablets.
+   The tablet bridge (641-768) keeps a comfortable 220px floor so
+   the layout doesn't snap from 4-col desktop straight to 2-col
+   phone with nothing in between. */
+@media (max-width: 640px) {
+  .p86-proj-reports-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; }
+  .p86-proj-report-card        { padding: 10px 12px; }
+  .p86-proj-report-card-title  { font-size: 13px; padding-right: 28px; }
+  .p86-proj-report-card-stats  { font-size: 10.5px; }
+  .p86-proj-report-card-author { font-size: 10px; }
+}
+@media (min-width: 641px) and (max-width: 768px) {
+  .p86-proj-reports-grid { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); }
+}
+
 /* Report editor — full-screen overlay */
 .p86-report-overlay {
   position: fixed; inset: 0; z-index: 1050;
@@ -4566,8 +4584,15 @@
   .p86-proj-header-cover { width: 64px; height: 64px; }
   .p86-proj-header-row { grid-template-columns: 64px 1fr; gap: 10px; }
   .p86-proj-header-name { font-size: 18px; }
-  .p86-projects-grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 8px; }
+  /* Phone-friendly card sizing — drop minmax floor to 150px so 2
+     cards reliably fit on iPhone widths (375 - 20 page padding - 10
+     gap)/2 = 172px, while the bumped font/padding below restore
+     readability lost to the smaller card. */
+  .p86-projects-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
   .p86-proj-card-cover { height: 120px; }
+  .p86-proj-card-body  { padding: 10px 12px; gap: 6px; }
+  .p86-proj-card-name  { font-size: 14px; }
+  .p86-proj-card-stats { font-size: 11.5px; }
   .p86-proj-feed-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
   .p86-field-row { grid-template-columns: 1fr; }
   .p86-projects-map-host { height: 400px; }
