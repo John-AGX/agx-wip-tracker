@@ -417,8 +417,12 @@
       }
     };
     overlay.querySelector('#p86-mk-cancel').onclick = function() {
-      if (!state.strokes.length || confirm('Discard your markup?')) closeOverlay();
+      if (!state.strokes.length || confirm('Discard your markup?')) closeWithBack();
     };
+
+    // Android back / browser back closes the markup viewer instead
+    // of navigating the whole tab away.
+    wireBackButton();
     overlay.querySelector('#p86-mk-save').onclick = function() {
       // Phase 1.7 — annotations stay editable. PATCH the attachment's
       // annotations JSONB column instead of rasterizing to PNG.
@@ -445,7 +449,7 @@
       function finish() {
         saveBtn.textContent = 'Saved';
         setTimeout(function() {
-          closeOverlay();
+          closeWithBack();
           if (typeof done === 'function') {
             try { done({ annotations: strokes }); }
             catch (e) { /* defensive */ }
@@ -1880,6 +1884,43 @@
     var overlay = document.getElementById('p86-markup-overlay');
     if (overlay) overlay.remove();
     state = null;
+    // Drop our popstate listener — only one markup overlay at a time
+    // and we don't want stale listeners hanging around.
+    if (_popstateHandler) {
+      window.removeEventListener('popstate', _popstateHandler);
+      _popstateHandler = null;
+    }
+  }
+
+  // Android back / browser back closes the annotator instead of
+  // navigating away from the page. Push a history entry on open;
+  // when popstate fires (back pressed), close the viewer. The
+  // close button + Cancel route through closeWithBack() so the
+  // history entry pops cleanly too.
+  var _popstateHandler = null;
+  function wireBackButton() {
+    try {
+      history.pushState({ p86Markup: true }, '');
+    } catch (e) { /* defensive */ }
+    _popstateHandler = function() {
+      // Don't call history.back() here — popstate already happened.
+      // Just remove the overlay.
+      var overlay = document.getElementById('p86-markup-overlay');
+      if (overlay) overlay.remove();
+      state = null;
+      window.removeEventListener('popstate', _popstateHandler);
+      _popstateHandler = null;
+    };
+    window.addEventListener('popstate', _popstateHandler);
+  }
+  function closeWithBack() {
+    // If our history entry is still on the stack, trigger Back so
+    // the popstate handler closes us. Else just close directly.
+    if (_popstateHandler) {
+      try { history.back(); } catch (e) { closeOverlay(); }
+    } else {
+      closeOverlay();
+    }
   }
 
   function escapeHTML(s) {

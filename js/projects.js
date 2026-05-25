@@ -236,6 +236,47 @@
     photos: []             // hydrated by the attachments fetch
   };
   var _linkedPanels = [];  // [{ host, ctx }]
+
+  // ──────────────────────────────────────────────────────────────────
+  // Overlay history stack — wires Android (and browser) Back button
+  // to close the topmost project overlay instead of navigating away.
+  //
+  // When an overlay opens, push a state entry + register its close fn.
+  // popstate (fired by Android back, browser back, or programmatic
+  // history.back()) pops the close fn and runs it. Close buttons in
+  // each overlay route through closeTop() so the history stack stays
+  // balanced with the visible overlays.
+  // ──────────────────────────────────────────────────────────────────
+  var _overlayStack = [];
+
+  function pushOverlay(closeFn) {
+    try {
+      history.pushState({ p86OverlayDepth: _overlayStack.length + 1 }, '');
+    } catch (e) { /* defensive — pushState can throw in restricted iframes */ }
+    _overlayStack.push(closeFn);
+  }
+  function closeTopOverlay() {
+    if (!_overlayStack.length) return;
+    // Trigger popstate so the back button + the X button both go
+    // through the same close pipeline. popstate handler pops + runs.
+    try { history.back(); } catch (e) {
+      var fn = _overlayStack.pop();
+      try { fn(); } catch (_) {}
+    }
+  }
+  function clearOverlayStack() {
+    // Drop our entries from the stack WITHOUT navigating back. Used
+    // when the user navigates away via a non-back action (tab switch,
+    // logout, etc.). Doesn't actually pop history entries — those
+    // become inert because the closes are gone.
+    _overlayStack = [];
+  }
+
+  window.addEventListener('popstate', function() {
+    if (!_overlayStack.length) return;
+    var fn = _overlayStack.pop();
+    try { fn(); } catch (e) { /* defensive */ }
+  });
   // Cache last-known tag suggestions so the editor autocomplete renders
   // immediately on focus (a stale list is better than an empty list).
   var _tagSuggestCache = [];
@@ -1106,6 +1147,9 @@
     var overlay = ensureDetailOverlay();
     overlay.style.display = 'flex';
     document.body.style.overflow = 'hidden';
+    // Register close handler so Android back / browser back closes
+    // this overlay instead of navigating away from the page.
+    pushOverlay(closeDetailImpl);
     paintDetailLoading();
     if (!api()) {
       paintDetailError('API not available');
@@ -1135,7 +1179,25 @@
   }
   window.openProject = openProject;
 
+  // Public close — routed through the overlay stack so Android back +
+  // X-button + backdrop-click all flow through the same code path.
+  // Distinguish "I'm closing because the user pressed back (popstate
+  // already fired)" from "I'm closing because the user clicked X
+  // (need to fire history.back())" using _overlayStack membership.
   function closeDetail() {
+    // If our close is the top of the overlay stack, popstate is the
+    // natural exit — calling closeTopOverlay() runs history.back()
+    // which fires popstate which removes the DOM.
+    var hasOurClose = _overlayStack.indexOf(closeDetailImpl) !== -1;
+    if (hasOurClose) {
+      closeTopOverlay();
+    } else {
+      closeDetailImpl();
+    }
+  }
+  // DOM-side close. Idempotent — running it twice is a no-op.
+  function closeDetailImpl() {
+    if (!_detailState.projectId) return;
     _detailState.projectId = null;
     _detailState.project = null;
     var overlay = document.getElementById('projDetailOverlay');
@@ -1585,12 +1647,28 @@
       }, report.cover_page || {})
     };
 
-    function close() {
+    // Idempotent DOM-side close — safe to run from popstate OR from
+    // a button click. We mark the overlay with a closed flag so the
+    // second call is a no-op.
+    function closeImpl() {
+      if (overlay._p86Closed) return;
+      overlay._p86Closed = true;
       overlay.remove();
       document.body.style.overflow = '';
-      // Refresh the reports list to reflect any saves.
       paintReportsTab();
     }
+    function close() {
+      // If our close is on the overlay stack, route through Back
+      // so the history entry pops; popstate runs closeImpl. Else
+      // call closeImpl directly.
+      var hasOurClose = _overlayStack.indexOf(closeImpl) !== -1;
+      if (hasOurClose) closeTopOverlay();
+      else closeImpl();
+    }
+
+    // Register with the overlay stack so Android back closes the
+    // report editor instead of navigating away.
+    pushOverlay(closeImpl);
 
     function save() {
       var body = {

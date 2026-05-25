@@ -3925,6 +3925,11 @@
   object-fit: cover;
 }
 .p86-report-picker-tile:hover { border-color: var(--accent, #4f8cff); }
+/* Photo picker modal — sits ABOVE the report editor overlay (z:1050).
+   Default .modal.active is z:1000 which would hide the picker
+   behind the editor. */
+#projReportPhotoPicker.modal.active { z-index: 1100; }
+
 .p86-report-picker-tile-added { opacity: 0.55; cursor: default; }
 .p86-report-picker-tile-pending {
   outline: 2px solid var(--accent, #4f8cff);
@@ -3942,23 +3947,41 @@
   margin-bottom: 10px;
 }
 
-/* Cover page editor block — small fieldset above the summary */
+/* Cover page editor block — small fieldset above the summary.
+   IMPORTANT: override the upstream .p86-proj-fieldset legend rule
+   that forces uppercase + letter-spacing — the toggle label needs
+   to be a readable sentence, not a yelling acronym. */
 .p86-report-cover-fieldset {
   border: 1px solid var(--border, #333);
   border-radius: 8px;
-  padding: 8px 12px 10px;
+  padding: 10px 14px 12px;
   margin: 0 0 12px 0;
 }
 .p86-report-cover-fieldset legend {
-  padding: 0 6px;
+  /* Reset every typographic transform the project fieldset legend
+     defaults to — we want the toggle to render like a normal
+     control label. */
+  padding: 0 6px !important;
+  text-transform: none !important;
+  letter-spacing: 0 !important;
+  font-size: 13px !important;
+  font-weight: 600 !important;
+  color: var(--text, #fff) !important;
 }
 .p86-report-cover-toggle {
-  display: inline-flex; align-items: center; gap: 6px;
-  font-size: 12px; font-weight: 600;
+  display: inline-flex; align-items: center; gap: 8px;
+  font-size: 13px; font-weight: 600;
   color: var(--text, #fff);
   cursor: pointer;
+  white-space: nowrap;
+  text-transform: none;
+  letter-spacing: 0;
 }
-.p86-report-cover-toggle input[type="checkbox"] { margin: 0; }
+.p86-report-cover-toggle input[type="checkbox"] {
+  margin: 0;
+  width: 16px; height: 16px;
+  accent-color: var(--accent, #4f8cff);
+}
 .p86-report-cover-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
