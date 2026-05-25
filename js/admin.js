@@ -3293,7 +3293,8 @@
     { key: 'templates', label: '\u{1F4DD} Templates',    desc: 'Proposal templates + email templates for this org. Buildertrend cost-code mapping is platform-wide and lives in System.' },
     { key: 'materials', label: '\u{1F9F1} Materials',    desc: 'This org\'s materials catalog — SKUs, average / last / min / max pricing from purchase history.' },
     { key: 'jobs',      label: '\u{1F4CB} Job Assignments', desc: 'PM / crew / role assignments per job for this org.' },
-    { key: 'sms',       label: '\u{1F4F1} SMS',              desc: 'SMS scheduling-agent observability for this org (send log, delivery stats). Global Twilio provider config lives in System.' }
+    { key: 'sms',       label: '\u{1F4F1} SMS',              desc: 'SMS scheduling-agent observability for this org (send log, delivery stats). Global Twilio provider config lives in System.' },
+    { key: 'tags',      label: '\u{1F3F7} Tag Catalog',      desc: 'Curated master list of photo tags used across projects. Rename to propagate everywhere; merge to consolidate duplicates; archive to hide from autocomplete. New tags auto-add when a user types one on any photo.' }
   ];
 
   var _orgActiveTab = (function() {
@@ -3381,6 +3382,12 @@
     else if (_orgActiveTab === 'packs') bodyHTML = renderOrgPacksTabHTML();
     else if (_orgActiveTab === 'refs') bodyHTML = renderOrgRefsTabHTML();
     else if (_orgActiveTab === 'mcp')  bodyHTML = renderOrgMcpTabHTML();
+    else if (_orgActiveTab === 'tags') {
+      // Tag catalog renders into a host div, then fetches+paints
+      // asynchronously (similar to skill packs / refs / mcp).
+      bodyHTML = '<div id="admin-org-tags-host"><div style="color:var(--text-dim,#888);font-style:italic;font-size:12px;padding:20px 0;">Loading tag catalog…</div></div>';
+      setTimeout(renderOrgTagCatalog, 0);
+    }
     else if (_orgActiveTab === 'templates' || _orgActiveTab === 'materials' || _orgActiveTab === 'sms') {
       // Phase F / G nested tabs — these render functions paint into
       // their OWN panes (#admin-subtab-templates, -materials, -sms).
@@ -3607,6 +3614,188 @@
       +   '</div>'
       + '</fieldset>';
   }
+
+  // Phase 1.7 — Tag Catalog inner pill on the Organization tab.
+  // Renders into #admin-org-tags-host; fetches on demand. Provides
+  // inline rename, archive toggle, multi-select merge.
+  var _tagCatalogState = {
+    tags: [],
+    selected: new Set(),
+    q: '',
+    loading: false
+  };
+
+  function renderOrgTagCatalog() {
+    var host = document.getElementById('admin-org-tags-host');
+    if (!host) return;
+    if (!window.p86Api || !window.p86Api.orgTags) {
+      host.innerHTML = '<div style="color:#e74c3c;padding:14px;">Tag catalog API not available.</div>';
+      return;
+    }
+    _tagCatalogState.loading = true;
+    paintOrgTagCatalog();
+    window.p86Api.orgTags.list({ include_archived: 1 }).then(function(r) {
+      _tagCatalogState.tags = (r && r.tags) || [];
+      _tagCatalogState.loading = false;
+      paintOrgTagCatalog();
+    }).catch(function(e) {
+      host.innerHTML = '<div style="color:#e74c3c;padding:14px;">Failed to load tag catalog: ' + escapeHTML(e.message || e) + '</div>';
+    });
+  }
+
+  function paintOrgTagCatalog() {
+    var host = document.getElementById('admin-org-tags-host');
+    if (!host) return;
+    if (_tagCatalogState.loading) {
+      host.innerHTML = '<div style="color:var(--text-dim,#888);font-style:italic;padding:14px;">Loading tag catalog…</div>';
+      return;
+    }
+    var rows = _tagCatalogState.tags;
+    var q = _tagCatalogState.q.trim().toLowerCase();
+    if (q) {
+      rows = rows.filter(function(t) { return t.name.indexOf(q) !== -1; });
+    }
+    var selCount = _tagCatalogState.selected.size;
+
+    var html =
+      '<fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:14px;">' +
+        '<legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Tag Catalog</legend>' +
+        '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap;">' +
+          '<input id="tagCatalogSearch" type="search" placeholder="Search…" value="' + escapeHTML(_tagCatalogState.q) + '" style="padding:6px 10px;font-size:12px;background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:6px;color:var(--text,#fff);width:200px;" />' +
+          '<button class="ee-btn primary" onclick="window.adminTagCatalog.openCreate()" style="font-size:12px;">&#x2795; New tag</button>' +
+          (selCount >= 2
+            ? '<button class="ee-btn secondary" onclick="window.adminTagCatalog.openMerge()" style="font-size:12px;">&#x21AA; Merge ' + selCount + ' selected…</button>'
+            : '') +
+          '<span style="color:var(--text-dim,#888);font-size:11px;margin-left:auto;">' + rows.length + ' tag' + (rows.length === 1 ? '' : 's') + '</span>' +
+        '</div>' +
+        '<table style="width:100%;border-collapse:collapse;font-size:12px;">' +
+          '<thead><tr style="border-bottom:1px solid var(--border,#333);text-align:left;">' +
+            '<th style="padding:6px 4px;width:24px;"></th>' +
+            '<th style="padding:6px 4px;">Tag</th>' +
+            '<th style="padding:6px 4px;width:80px;">Uses</th>' +
+            '<th style="padding:6px 4px;width:90px;">Status</th>' +
+            '<th style="padding:6px 4px;width:200px;text-align:right;">Actions</th>' +
+          '</tr></thead>' +
+          '<tbody>' +
+            (rows.length === 0
+              ? '<tr><td colspan="5" style="padding:30px;text-align:center;color:var(--text-dim,#888);font-style:italic;">No tags yet. Tags are auto-added when users tag photos.</td></tr>'
+              : rows.map(tagCatalogRowHTML).join('')) +
+          '</tbody>' +
+        '</table>' +
+      '</fieldset>';
+
+    host.innerHTML = html;
+    // Wire search.
+    var s = host.querySelector('#tagCatalogSearch');
+    if (s) {
+      var t;
+      s.addEventListener('input', function(e) {
+        clearTimeout(t);
+        var v = e.target.value;
+        t = setTimeout(function() {
+          _tagCatalogState.q = v;
+          paintOrgTagCatalog();
+        }, 150);
+      });
+    }
+    // Wire checkbox toggles via delegation so re-renders don't drop
+    // listeners (and so the search filter result rows pick it up too).
+    host.querySelectorAll('[data-tag-sel]').forEach(function(cb) {
+      cb.addEventListener('change', function() {
+        var id = Number(cb.getAttribute('data-tag-sel'));
+        if (cb.checked) _tagCatalogState.selected.add(id);
+        else _tagCatalogState.selected.delete(id);
+        // Only the header row needs to repaint for the "Merge N" button
+        // to appear/disappear. Re-paint everything for simplicity.
+        paintOrgTagCatalog();
+      });
+    });
+  }
+
+  function tagCatalogRowHTML(t) {
+    var checked = _tagCatalogState.selected.has(t.id) ? 'checked' : '';
+    var archived = !!t.archived_at;
+    return '<tr style="border-bottom:1px solid var(--border,#222);' + (archived ? 'opacity:0.55;' : '') + '">' +
+      '<td style="padding:6px 4px;"><input type="checkbox" data-tag-sel="' + t.id + '" ' + checked + ' /></td>' +
+      '<td style="padding:6px 4px;">' +
+        '<span class="p86-chip-tag" style="--h:' + (t.hue != null ? t.hue : hueFromName(t.name)) + ';">#' + escapeHTML(t.name) + '</span>' +
+      '</td>' +
+      '<td style="padding:6px 4px;color:var(--text-dim,#aaa);">' + Number(t.use_count || 0) + '</td>' +
+      '<td style="padding:6px 4px;color:' + (archived ? '#888' : '#34d399') + ';font-size:11px;">' + (archived ? 'Archived' : 'Active') + '</td>' +
+      '<td style="padding:6px 4px;text-align:right;">' +
+        '<button class="ee-btn secondary" onclick="window.adminTagCatalog.openRename(' + t.id + ')" style="font-size:11px;padding:4px 8px;">Rename</button> ' +
+        '<button class="ee-btn secondary" onclick="window.adminTagCatalog.toggleArchive(' + t.id + ')" style="font-size:11px;padding:4px 8px;">' + (archived ? 'Unarchive' : 'Archive') + '</button>' +
+      '</td>' +
+    '</tr>';
+  }
+
+  // Deterministic hue from a tag name — used when t.hue is null so
+  // the displayed color stays consistent with the rest of the app.
+  function hueFromName(s) {
+    var n = String(s || '');
+    var h = 0;
+    for (var i = 0; i < n.length; i++) {
+      h = ((h << 5) - h) + n.charCodeAt(i);
+      h |= 0;
+    }
+    return Math.abs(h) % 360;
+  }
+
+  // Public actions for the tag catalog (inline onclicks).
+  window.adminTagCatalog = {
+    openCreate: function() {
+      var name = window.prompt('New tag name:');
+      if (!name) return;
+      window.p86Api.orgTags.create({ name: name }).then(function() {
+        renderOrgTagCatalog();
+      }).catch(function(e) { alert('Create failed: ' + (e.message || e)); });
+    },
+    openRename: function(id) {
+      var t = _tagCatalogState.tags.find(function(x) { return Number(x.id) === Number(id); });
+      if (!t) return;
+      var newName = window.prompt('Rename tag "' + t.name + '" to:', t.name);
+      if (!newName || newName === t.name) return;
+      window.p86Api.orgTags.update(id, { name: newName }).then(function() {
+        renderOrgTagCatalog();
+      }).catch(function(e) {
+        if (e && /already exists/.test(e.message || '')) {
+          alert('A tag with that name already exists. Use the Merge action to combine them.');
+        } else {
+          alert('Rename failed: ' + (e.message || e));
+        }
+      });
+    },
+    toggleArchive: function(id) {
+      var t = _tagCatalogState.tags.find(function(x) { return Number(x.id) === Number(id); });
+      if (!t) return;
+      var nextArchived = !t.archived_at;
+      window.p86Api.orgTags.update(id, { archived: nextArchived }).then(function() {
+        renderOrgTagCatalog();
+      }).catch(function(e) { alert('Archive toggle failed: ' + (e.message || e)); });
+    },
+    openMerge: function() {
+      var ids = Array.from(_tagCatalogState.selected);
+      if (ids.length < 2) return;
+      var tags = ids.map(function(id) {
+        return _tagCatalogState.tags.find(function(x) { return Number(x.id) === Number(id); });
+      }).filter(Boolean);
+      // Ask which one to MERGE INTO.
+      var names = tags.map(function(t) { return '#' + t.name; }).join(', ');
+      var into = window.prompt('Merge ' + names + ' into which tag name? Type the exact tag name:');
+      if (!into) return;
+      into = into.trim().toLowerCase().replace(/^#/, '');
+      var target = tags.find(function(t) { return t.name === into; });
+      if (!target) {
+        alert('That tag isn\'t one of the selected tags. Type the name of the tag that should remain.');
+        return;
+      }
+      var from_ids = tags.filter(function(t) { return t.id !== target.id; }).map(function(t) { return t.id; });
+      window.p86Api.orgTags.merge({ from_ids: from_ids, into_id: target.id }).then(function() {
+        _tagCatalogState.selected.clear();
+        renderOrgTagCatalog();
+      }).catch(function(e) { alert('Merge failed: ' + (e.message || e)); });
+    }
+  };
 
   // Phase D — Reference Links inner pill on the Organization tab.
   // The view is rendered on demand by `renderReferenceLinksView` (shared

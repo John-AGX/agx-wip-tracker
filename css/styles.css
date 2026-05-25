@@ -3090,6 +3090,47 @@
   display:flex; gap:10px; font-size:10.5px; color: var(--text-dim, #888);
 }
 .p86-proj-card-updated { margin-left: auto; }
+.p86-proj-card-wx {
+  font-size: 10.5px;
+  color: var(--text, #fff);
+  background: rgba(79,140,255,0.10);
+  border: 1px solid rgba(79,140,255,0.25);
+  padding: 1px 5px;
+  border-radius: 8px;
+}
+
+/* Detail header weather block — small 3-day strip beside linkage */
+.p86-proj-detail-weather { margin-top: 4px; }
+.p86-proj-detail-weather-loading {
+  font-size: 10.5px;
+  color: var(--text-dim, #888);
+  font-style: italic;
+}
+.p86-proj-detail-weather-grid {
+  display: flex; gap: 6px;
+  margin-top: 4px;
+}
+.p86-proj-detail-weather-cell {
+  flex: 1;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--border, #333);
+  border-radius: 6px;
+  padding: 4px 6px;
+  text-align: center;
+  min-width: 0;
+}
+.p86-proj-detail-weather-emoji { font-size: 18px; line-height: 1.1; }
+.p86-proj-detail-weather-temp {
+  font-size: 13px; font-weight: 700;
+  color: var(--text, #fff);
+}
+.p86-proj-detail-weather-label {
+  font-size: 9px;
+  color: var(--text-dim, #888);
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 .p86-proj-card-tags { display:flex; flex-wrap:wrap; gap:3px; }
 .p86-proj-card-badges { display:flex; flex-wrap:wrap; gap:4px; }
 .p86-proj-card-badge {
@@ -3597,6 +3638,110 @@
   border-color: #f87171 !important;
   color: #fecaca !important;
   text-decoration: line-through;
+}
+
+/* New Project — single "Link to..." button + chips below it */
+.p86-proj-link-btn {
+  align-self: flex-start;
+  font-size: 12px;
+}
+.p86-proj-link-chips {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  min-height: 18px;
+  margin-bottom: 4px;
+}
+.p86-proj-link-chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  background: rgba(79,140,255,0.10);
+  border: 1px solid rgba(79,140,255,0.4);
+  color: var(--text, #fff);
+  font-size: 12px;
+  padding: 3px 8px;
+  border-radius: 14px;
+}
+.p86-proj-link-chip strong {
+  color: var(--accent, #4f8cff);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  margin-right: 2px;
+}
+.p86-proj-link-chip button {
+  background: transparent;
+  border: 0;
+  color: var(--text-dim, #aaa);
+  font-size: 14px;
+  padding: 0 2px;
+  cursor: pointer;
+  margin-left: 2px;
+}
+.p86-proj-link-chip button:hover { color: #f87171; }
+
+/* Link picker modal — searchable list of leads / jobs / clients */
+.p86-link-picker-tab {
+  background: transparent;
+  border: 0;
+  color: var(--text-dim, #aaa);
+  padding: 8px 14px;
+  font-size: 12px; font-weight: 600;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+}
+.p86-link-picker-tab.active {
+  color: var(--accent, #4f8cff);
+  border-bottom-color: var(--accent, #4f8cff);
+}
+.p86-link-picker-search {
+  width: 100%;
+  padding: 8px 10px; font-size: 13px;
+  background: var(--card-bg, #0f0f1e);
+  border: 1px solid var(--border, #333);
+  border-radius: 6px;
+  color: var(--text, #fff);
+  margin-bottom: 10px;
+}
+.p86-link-picker-results {
+  max-height: 360px;
+  overflow-y: auto;
+}
+.p86-link-picker-row {
+  display: flex; align-items: center;
+  width: 100%;
+  padding: 8px 10px;
+  background: transparent;
+  border: 1px solid var(--border, #333);
+  border-radius: 6px;
+  margin-bottom: 4px;
+  cursor: pointer;
+  text-align: left;
+  color: var(--text, #fff);
+  transition: border-color 0.12s, background 0.12s;
+}
+.p86-link-picker-row:hover {
+  border-color: var(--accent, #4f8cff);
+  background: rgba(79,140,255,0.05);
+}
+.p86-link-picker-row-main { flex: 1; min-width: 0; }
+.p86-link-picker-row-label {
+  font-size: 13px; font-weight: 600;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.p86-link-picker-row-sub {
+  font-size: 11px; color: var(--text-dim, #aaa);
+  margin-top: 1px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.p86-link-picker-row-addr {
+  font-size: 10.5px; color: var(--text-dim, #888);
+  margin-top: 2px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.p86-link-picker-row-arrow {
+  color: var(--text-dim, #888);
+  font-size: 16px;
+  flex-shrink: 0;
+  margin-left: 8px;
 }
 
 /* Walkthrough sticky-tag strip (above the photo feed) */

@@ -239,6 +239,39 @@
   // Cache last-known tag suggestions so the editor autocomplete renders
   // immediately on focus (a stale list is better than an empty list).
   var _tagSuggestCache = [];
+  // Weather cache — keyed by project id. Populated lazily by the
+  // list / detail painters. TTL is short-lived: refresh on each
+  // open of the projects view; the server caches at the NWS layer
+  // for an hour so repeat hits are cheap.
+  var _weatherCache = {};
+
+  // Pick a small emoji + label from one of the day-forecast entries
+  // the NWS route returns. Keep this conservative — NWS includes
+  // generic strings like "Partly Cloudy", "Showers Likely", etc.
+  function weatherEmoji(day) {
+    if (!day) return null;
+    var sf = String(day.shortForecast || '').toLowerCase();
+    if (!sf) return null;
+    if (sf.indexOf('thunder') !== -1) return '⛈';
+    if (sf.indexOf('snow') !== -1) return '❄️';
+    if (sf.indexOf('rain') !== -1 || sf.indexOf('shower') !== -1) return '🌧';
+    if (sf.indexOf('fog') !== -1 || sf.indexOf('mist') !== -1 || sf.indexOf('haze') !== -1) return '🌫';
+    if (sf.indexOf('cloud') !== -1 && sf.indexOf('partly') !== -1) return '⛅';
+    if (sf.indexOf('cloud') !== -1 || sf.indexOf('overcast') !== -1) return '☁️';
+    if (sf.indexOf('clear') !== -1 || sf.indexOf('sunny') !== -1) return '☀️';
+    if (sf.indexOf('wind') !== -1) return '💨';
+    return '🌡';
+  }
+
+  // Find today's daytime entry. NWS returns alternating day/night
+  // periods; day.isDaytime distinguishes them. Falls back to the
+  // first period if labels are missing.
+  function todayForecast(weather) {
+    if (!weather || weather.status !== 'ok' || !Array.isArray(weather.days) || !weather.days.length) return null;
+    var today = weather.days.find(function(d) { return d.isDaytime; });
+    return today || weather.days[0];
+  }
+
   // Walkthrough state — sticky tags persist between photo uploads
   // until the user clears them. Module-level (not in _detailState)
   // so they survive a project detail close/reopen within the same
@@ -402,6 +435,26 @@
       });
     }
 
+    // Batch-fetch weather for any addressed projects we haven't
+    // cached yet. The chip renders empty until the response lands;
+    // a second paintList() fills the chips. Skipped on the map view
+    // since the sidebar already shows addresses + status pins.
+    if (_listState.view === 'grid' && window.p86Api && window.p86Api.weather && window.p86Api.weather.projects) {
+      var needsWeather = projects
+        .filter(function(p) { return p.address_text && !_weatherCache[p.id]; })
+        .map(function(p) { return p.id; });
+      if (needsWeather.length) {
+        window.p86Api.weather.projects(needsWeather).then(function(r) {
+          var w = (r && r.weather) || {};
+          var changed = false;
+          Object.keys(w).forEach(function(id) {
+            if (w[id] && w[id].status === 'ok') { _weatherCache[id] = w[id]; changed = true; }
+          });
+          if (changed && _listState.host) paintList();
+        }).catch(function() {});
+      }
+    }
+
     // Mount the map after the host element is in the DOM.
     if (_listState.view === 'map' && projects.length) {
       var mapHost = host.querySelector('#p86ProjMapHost');
@@ -435,6 +488,15 @@
     var tags = (p.tags || []).slice(0, 3);
     var extraTags = Math.max(0, (p.tags || []).length - tags.length);
 
+    // Optional weather chip on the card. Renders only when weather
+    // data has been fetched for this project (lazy populated by
+    // paintList after the project list lands).
+    var wx = _weatherCache[p.id];
+    var wxToday = wx ? todayForecast(wx) : null;
+    var wxChip = wxToday
+      ? '<span class="p86-proj-card-wx" title="' + escapeAttr(wxToday.shortForecast || '') + '">' + weatherEmoji(wxToday) + ' ' + escapeHTML(String(wxToday.temperature || '')) + '°</span>'
+      : '';
+
     return '<div class="p86-proj-card" onclick="window.openProject(\'' + escapeAttr(p.id) + '\')">' +
       visual +
       '<div class="p86-proj-card-body">' +
@@ -442,6 +504,7 @@
         '<div class="p86-proj-card-stats">' +
           '<span>&#x1F4F7; ' + Number(p.photo_count || 0) + '</span>' +
           (Number(p.pair_count || 0) ? '<span>&#x1F500; ' + Number(p.pair_count) + '</span>' : '') +
+          (wxChip ? wxChip : '') +
           '<span class="p86-proj-card-updated">' + escapeHTML(fmtRelative(p.updated_at)) + '</span>' +
         '</div>' +
         (tags.length
@@ -489,26 +552,19 @@
     var prior = document.getElementById('projCreateModal');
     if (prior) prior.remove();
 
-    // Kick off caches in the background. The modal renders immediately
-    // with whatever's cached today, then we re-paint the dropdowns
-    // once fresh data lands. Users can pick "None" or start typing
-    // the name without waiting.
-    var initialLeads = (window.appData && window.appData.leads) || [];
-    var initialJobs = (window.appData && window.appData.jobs) || [];
-    var initialClients = (window.appData && window.appData.clients) || [];
-    var leads = initialLeads;
-    var jobs = initialJobs;
-    var clients = initialClients;
-
-    function options(list, currentId, labelFn) {
-      var opts = '<option value="">— None —</option>';
-      list.forEach(function(item) {
-        opts += '<option value="' + escapeAttr(item.id) + '"' + (String(item.id) === String(currentId || '') ? ' selected' : '') + '>' +
-          escapeHTML(labelFn(item)) +
-        '</option>';
-      });
-      return opts;
-    }
+    // Phase 1.7b — single "Link to…" picker replaces the three
+    // separate Lead / Job / Client dropdowns. Picking an entity
+    // auto-fills name + address from that entity, so the create
+    // path mirrors the Edit Links path. The user can still type
+    // over the values before hitting Create.
+    var pendingLink = {
+      lead_id: prefill.lead_id || null,
+      job_id: prefill.job_id || null,
+      client_id: prefill.client_id || null
+    };
+    // Kick off caches in the background so the entity picker has
+    // fresh data the moment the user clicks "Link to…".
+    ensureEntityCaches();
 
     var modal = document.createElement('div');
     modal.id = 'projCreateModal';
@@ -525,26 +581,17 @@
             '<input id="pcName" type="text" value="' + escapeAttr(prefill.name || '') + '" placeholder="e.g. Indigo West Roof Inspection" autofocus />' +
           '</label>' +
           '<label class="p86-field">' +
-            '<span>Address</span>' +
-            '<input id="pcAddress" type="text" value="' + escapeAttr(prefill.address_text || '') + '" placeholder="Site address (powers map view + weather)" />' +
+            '<span>Site address</span>' +
+            '<textarea id="pcAddress" rows="2" placeholder="Street, City, State ZIP — powers map view, weather, and reports">' + escapeHTML(prefill.address_text || '') + '</textarea>' +
           '</label>' +
           '<label class="p86-field">' +
             '<span>Description</span>' +
             '<textarea id="pcDesc" rows="3" placeholder="Scope / context (optional)">' + escapeHTML(prefill.description || '') + '</textarea>' +
           '</label>' +
-          '<div class="p86-field-row">' +
-            '<label class="p86-field">' +
-              '<span>Link to Lead</span>' +
-              '<select id="pcLead">' + options(leads, prefill.lead_id, function(l) { return l.title || ('Lead ' + l.id); }) + '</select>' +
-            '</label>' +
-            '<label class="p86-field">' +
-              '<span>Link to Job</span>' +
-              '<select id="pcJob">' + options(jobs, prefill.job_id, function(j) { return (j.jobNumber ? '[' + j.jobNumber + '] ' : '') + (j.title || j.name || j.id); }) + '</select>' +
-            '</label>' +
-            '<label class="p86-field">' +
-              '<span>Link to Client</span>' +
-              '<select id="pcClient">' + options(clients, prefill.client_id, function(c) { return c.name || ('Client ' + c.id); }) + '</select>' +
-            '</label>' +
+          '<div class="p86-field">' +
+            '<span>Link to</span>' +
+            '<div id="pcLinkChips" class="p86-proj-link-chips"></div>' +
+            '<button type="button" id="pcLinkBtn" class="ee-btn secondary p86-proj-link-btn">&#x1F517; Link to lead, job, or client…</button>' +
           '</div>' +
           '<div class="p86-field">' +
             '<span>Tags</span>' +
@@ -563,34 +610,78 @@
       b.addEventListener('click', function() { modal.remove(); });
     });
 
-    // Background-load fresh caches and re-populate the dropdowns
-    // when they arrive. The modal stays interactive throughout.
-    ensureEntityCaches().then(function() {
-      if (!document.body.contains(modal)) return; // user closed before fetch landed
-      var leadsNow = (window.appData && window.appData.leads) || [];
-      var jobsNow = (window.appData && window.appData.jobs) || [];
-      var clientsNow = (window.appData && window.appData.clients) || [];
-      var leadSel = modal.querySelector('#pcLead');
-      var jobSel = modal.querySelector('#pcJob');
-      var clientSel = modal.querySelector('#pcClient');
-      if (leadSel && leadsNow.length !== leads.length) {
-        leadSel.innerHTML = options(leadsNow, prefill.lead_id, function(l) { return l.title || ('Lead ' + l.id); });
-      }
-      if (jobSel && jobsNow.length !== jobs.length) {
-        jobSel.innerHTML = options(jobsNow, prefill.job_id, function(j) { return (j.jobNumber ? '[' + j.jobNumber + '] ' : '') + (j.title || j.name || j.id); });
-      }
-      if (clientSel && clientsNow.length !== clients.length) {
-        clientSel.innerHTML = options(clientsNow, prefill.client_id, function(c) { return c.name || ('Client ' + c.id); });
-      }
-    });
-
-    // Inline tag editor (in-memory; submits with the form).
-    var tagsHostEl = modal.querySelector('#pcTagsEditor');
     var pendingTags = (prefill.tags || []).slice();
-    mountTagEditor(tagsHostEl, {
+    mountTagEditor(modal.querySelector('#pcTagsEditor'), {
       getTags: function() { return pendingTags; },
       setTags: function(next) { pendingTags = next.slice(); }
     });
+
+    // Paint the current link chips below the Link button. Click a chip
+    // to remove that linkage.
+    function paintLinkChips() {
+      var host = modal.querySelector('#pcLinkChips');
+      if (!host) return;
+      var chips = [];
+      if (pendingLink.lead_id) {
+        var l = ((window.appData && window.appData.leads) || []).find(function(x) { return String(x.id) === String(pendingLink.lead_id); });
+        chips.push({ k: 'Lead', label: (l && l.title) || pendingLink.lead_id, kind: 'lead' });
+      }
+      if (pendingLink.job_id) {
+        var j = ((window.appData && window.appData.jobs) || []).find(function(x) { return String(x.id) === String(pendingLink.job_id); });
+        chips.push({ k: 'Job', label: (j && (j.title || j.name)) || pendingLink.job_id, kind: 'job' });
+      }
+      if (pendingLink.client_id) {
+        var c = ((window.appData && window.appData.clients) || []).find(function(x) { return String(x.id) === String(pendingLink.client_id); });
+        chips.push({ k: 'Client', label: (c && c.name) || pendingLink.client_id, kind: 'client' });
+      }
+      if (!chips.length) {
+        host.innerHTML = '<div class="p86-proj-empty-line">Not linked yet.</div>';
+        return;
+      }
+      host.innerHTML = chips.map(function(ch) {
+        return '<span class="p86-proj-link-chip" data-unlink="' + ch.kind + '">' +
+          '<strong>' + escapeHTML(ch.k) + ':</strong> ' + escapeHTML(ch.label) +
+          ' <button type="button" title="Unlink" data-unlink="' + ch.kind + '">&times;</button>' +
+        '</span>';
+      }).join('');
+      host.querySelectorAll('[data-unlink]').forEach(function(el) {
+        if (el.tagName !== 'BUTTON') return;
+        el.addEventListener('click', function() {
+          var kind = el.getAttribute('data-unlink');
+          if (kind === 'lead')   pendingLink.lead_id = null;
+          if (kind === 'job')    pendingLink.job_id = null;
+          if (kind === 'client') pendingLink.client_id = null;
+          paintLinkChips();
+        });
+      });
+    }
+
+    modal.querySelector('#pcLinkBtn').addEventListener('click', function() {
+      openLinkPicker(function(picked) {
+        if (!picked) return;
+        // Apply the picked linkage + auto-fill name + address.
+        if (picked.kind === 'lead')   pendingLink.lead_id = picked.id;
+        if (picked.kind === 'job')    pendingLink.job_id = picked.id;
+        if (picked.kind === 'client') pendingLink.client_id = picked.id;
+
+        // If a lead carries a client_id, link the client too — same
+        // posture as the Edit Links inherit behavior.
+        if (picked.kind === 'lead' && picked.client_id) {
+          pendingLink.client_id = picked.client_id;
+        }
+
+        // Auto-fill name + address from the picked entity if those
+        // fields are still empty. If the user already typed values,
+        // leave them — explicit input wins.
+        var nameEl = modal.querySelector('#pcName');
+        var addrEl = modal.querySelector('#pcAddress');
+        if (nameEl && !nameEl.value && picked.name) nameEl.value = picked.name;
+        if (addrEl && !addrEl.value && picked.address) addrEl.value = picked.address;
+        paintLinkChips();
+      });
+    });
+
+    paintLinkChips();
 
     modal.querySelector('#pcCreate').addEventListener('click', function() {
       var name = (modal.querySelector('#pcName').value || '').trim();
@@ -602,9 +693,9 @@
         name: name,
         address_text: (modal.querySelector('#pcAddress').value || '').trim() || null,
         description: (modal.querySelector('#pcDesc').value || '').trim() || null,
-        lead_id: modal.querySelector('#pcLead').value || null,
-        job_id: modal.querySelector('#pcJob').value || null,
-        client_id: modal.querySelector('#pcClient').value || null,
+        lead_id: pendingLink.lead_id || null,
+        job_id: pendingLink.job_id || null,
+        client_id: pendingLink.client_id || null,
         tags: pendingTags
       };
       if (!api()) { alert('API not available'); return; }
@@ -618,6 +709,166 @@
         alert('Create failed: ' + (err.message || err));
       });
     });
+  }
+
+  // Unified entity picker — searchable list of leads + jobs + clients.
+  // Called from the New Project modal (and could be reused by the
+  // Edit Links modal). cb(picked) where picked = { kind, id, name, address, client_id? }
+  function openLinkPicker(cb) {
+    var prior = document.getElementById('projLinkPicker');
+    if (prior) prior.remove();
+
+    // Pull caches; ensureEntityCaches has already fired from openCreate
+    // so the data should be warm. Use whatever's cached + refresh in
+    // the background.
+    var leadList = (window.appData && window.appData.leads) || [];
+    var jobList = (window.appData && window.appData.jobs) || [];
+    var clientList = (window.appData && window.appData.clients) || [];
+
+    var state = { kind: 'lead', q: '' };
+
+    var modal = document.createElement('div');
+    modal.id = 'projLinkPicker';
+    modal.className = 'modal active';
+    modal.innerHTML =
+      '<div class="modal-content" style="max-width:680px;">' +
+        '<div class="modal-header">' +
+          '<span>Link to lead, job, or client</span>' +
+          '<button class="p86-modal-close" data-close>&times;</button>' +
+        '</div>' +
+        '<div class="p86-proj-create-body" style="padding-top:0;">' +
+          '<div style="display:flex;gap:6px;margin-bottom:10px;border-bottom:1px solid var(--border, #333);">' +
+            '<button class="p86-link-picker-tab active" data-kind="lead">Leads</button>' +
+            '<button class="p86-link-picker-tab" data-kind="job">Jobs</button>' +
+            '<button class="p86-link-picker-tab" data-kind="client">Clients</button>' +
+          '</div>' +
+          '<input id="lpSearch" type="search" placeholder="Search…" class="p86-link-picker-search" autofocus />' +
+          '<div id="lpResults" class="p86-link-picker-results"></div>' +
+        '</div>' +
+        '<div class="modal-footer">' +
+          '<button class="ee-btn secondary" data-close>Cancel</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(modal);
+
+    modal.addEventListener('click', function(e) { if (e.target === modal) close(null); });
+    modal.querySelectorAll('[data-close]').forEach(function(b) {
+      b.addEventListener('click', function() { close(null); });
+    });
+
+    function close(picked) {
+      modal.remove();
+      cb(picked);
+    }
+
+    function paint() {
+      modal.querySelectorAll('.p86-link-picker-tab').forEach(function(btn) {
+        btn.classList.toggle('active', btn.getAttribute('data-kind') === state.kind);
+      });
+      var results = modal.querySelector('#lpResults');
+      var q = state.q.trim().toLowerCase();
+      var rows;
+      if (state.kind === 'lead') {
+        rows = leadList.filter(function(l) {
+          if (!q) return true;
+          return ((l.title || '') + ' ' + (l.street_address || '') + ' ' + (l.city || '')).toLowerCase().indexOf(q) !== -1;
+        }).slice(0, 100);
+        results.innerHTML = rows.length
+          ? rows.map(function(l) {
+              var addr = composeLeadAddress(l);
+              return linkPickerRowHTML('lead', l.id, l.title || ('Lead ' + l.id), addr, '');
+            }).join('')
+          : '<div class="p86-proj-empty-line">No leads match.</div>';
+      } else if (state.kind === 'job') {
+        rows = jobList.filter(function(j) {
+          if (!q) return true;
+          var label = (j.title || j.name || '') + ' ' + (j.jobNumber || '');
+          return label.toLowerCase().indexOf(q) !== -1;
+        }).slice(0, 100);
+        results.innerHTML = rows.length
+          ? rows.map(function(j) {
+              var label = (j.jobNumber ? '[' + j.jobNumber + '] ' : '') + (j.title || j.name || j.id);
+              return linkPickerRowHTML('job', j.id, label, composeJobAddress(j), '');
+            }).join('')
+          : '<div class="p86-proj-empty-line">No jobs match.</div>';
+      } else {
+        rows = clientList.filter(function(c) {
+          if (!q) return true;
+          return ((c.name || '') + ' ' + (c.company_name || '') + ' ' + (c.community_name || '')).toLowerCase().indexOf(q) !== -1;
+        }).slice(0, 100);
+        results.innerHTML = rows.length
+          ? rows.map(function(c) {
+              return linkPickerRowHTML('client', c.id, c.name || ('Client ' + c.id), composeClientAddress(c), c.company_name || c.community_name || '');
+            }).join('')
+          : '<div class="p86-proj-empty-line">No clients match.</div>';
+      }
+      results.querySelectorAll('[data-pick]').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          var kind = btn.getAttribute('data-pick-kind');
+          var id = btn.getAttribute('data-pick');
+          var picked = { kind: kind, id: id };
+          if (kind === 'lead') {
+            var lead = leadList.find(function(x) { return String(x.id) === String(id); });
+            if (lead) {
+              picked.name = lead.title || '';
+              picked.address = composeLeadAddress(lead);
+              picked.client_id = lead.client_id || null;
+            }
+          } else if (kind === 'job') {
+            var job = jobList.find(function(x) { return String(x.id) === String(id); });
+            if (job) {
+              picked.name = job.title || job.name || '';
+              picked.address = composeJobAddress(job);
+            }
+          } else if (kind === 'client') {
+            var client = clientList.find(function(x) { return String(x.id) === String(id); });
+            if (client) {
+              picked.name = client.name || '';
+              picked.address = composeClientAddress(client);
+            }
+          }
+          close(picked);
+        });
+      });
+    }
+
+    modal.querySelectorAll('.p86-link-picker-tab').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        state.kind = btn.getAttribute('data-kind');
+        paint();
+      });
+    });
+    var searchEl = modal.querySelector('#lpSearch');
+    var t;
+    searchEl.addEventListener('input', function(e) {
+      clearTimeout(t);
+      t = setTimeout(function() {
+        state.q = e.target.value;
+        paint();
+      }, 100);
+    });
+
+    paint();
+
+    // Refresh caches in the background; re-paint when fresh data lands.
+    ensureEntityCaches().then(function() {
+      if (!document.body.contains(modal)) return;
+      leadList = (window.appData && window.appData.leads) || [];
+      jobList = (window.appData && window.appData.jobs) || [];
+      clientList = (window.appData && window.appData.clients) || [];
+      paint();
+    });
+  }
+
+  function linkPickerRowHTML(kind, id, label, address, sublabel) {
+    return '<button class="p86-link-picker-row" data-pick="' + escapeAttr(id) + '" data-pick-kind="' + kind + '" type="button">' +
+      '<div class="p86-link-picker-row-main">' +
+        '<div class="p86-link-picker-row-label">' + escapeHTML(label) + '</div>' +
+        (sublabel ? '<div class="p86-link-picker-row-sub">' + escapeHTML(sublabel) + '</div>' : '') +
+        (address ? '<div class="p86-link-picker-row-addr">' + escapeHTML(address) + '</div>' : '') +
+      '</div>' +
+      '<span class="p86-link-picker-row-arrow">&rsaquo;</span>' +
+    '</button>';
   }
 
   // Backwards-compat — older call sites use createPrompt / createForEntity.
@@ -972,6 +1223,7 @@
                 return '<div class="p86-proj-link-row"><span class="p86-proj-link-k">' + escapeHTML(b.k) + ':</span> ' + escapeHTML(b.v) + '</div>';
               }).join('')
             : '<div class="p86-proj-empty-line">Not linked yet.</div>') +
+          '<div id="projDetailWeather" class="p86-proj-detail-weather"></div>' +
           '<div class="p86-proj-header-meta">Updated ' + escapeHTML(fmtRelative(p.updated_at)) +
             (p.created_by_name ? ' &middot; ' + escapeHTML(p.created_by_name) : '') +
           '</div>' +
@@ -1107,6 +1359,55 @@
     paintWalkthroughTagStrip();
     paintPhotoFeed();
     paintActivityFeed();
+    paintProjectWeather();
+  }
+
+  // Render today's forecast in the detail header. Uses the cached
+  // weather row from _weatherCache; fetches on demand if absent.
+  function paintProjectWeather() {
+    var host = document.getElementById('projDetailWeather');
+    if (!host || !_detailState.project) return;
+    var p = _detailState.project;
+    if (!(p.address_text || '').trim()) {
+      host.innerHTML = '';
+      return;
+    }
+    var cached = _weatherCache[p.id];
+    if (cached && cached.status === 'ok') {
+      host.innerHTML = renderProjectWeatherHTML(cached);
+      return;
+    }
+    host.innerHTML = '<div class="p86-proj-detail-weather-loading">Loading weather…</div>';
+    if (!window.p86Api || !window.p86Api.weather || !window.p86Api.weather.projects) return;
+    window.p86Api.weather.projects([p.id]).then(function(r) {
+      var w = r && r.weather && r.weather[p.id];
+      if (w && w.status === 'ok') {
+        _weatherCache[p.id] = w;
+        host.innerHTML = renderProjectWeatherHTML(w);
+      } else {
+        host.innerHTML = '<div class="p86-proj-detail-weather-loading">Weather unavailable.</div>';
+      }
+    }).catch(function() {
+      host.innerHTML = '';
+    });
+  }
+
+  function renderProjectWeatherHTML(w) {
+    // Show today + the next two days in a compact 3-cell strip.
+    var days = (w && Array.isArray(w.days)) ? w.days.filter(function(d) { return d.isDaytime; }).slice(0, 3) : [];
+    if (!days.length) return '';
+    var html = '<div class="p86-proj-detail-weather-grid">';
+    days.forEach(function(d, i) {
+      var emoji = weatherEmoji(d);
+      var label = i === 0 ? 'Today' : (d.name || '');
+      html += '<div class="p86-proj-detail-weather-cell" title="' + escapeAttr(d.shortForecast || '') + '">' +
+        '<div class="p86-proj-detail-weather-emoji">' + emoji + '</div>' +
+        '<div class="p86-proj-detail-weather-temp">' + escapeHTML(String(d.temperature || '')) + '°</div>' +
+        '<div class="p86-proj-detail-weather-label">' + escapeHTML(label) + '</div>' +
+      '</div>';
+    });
+    html += '</div>';
+    return html;
   }
 
   // Build the <option> entries for the uploader filter dropdown.

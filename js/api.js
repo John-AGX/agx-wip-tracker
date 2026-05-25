@@ -479,6 +479,12 @@
       var qs = 'ids=' + encodeURIComponent(ids.join(','));
       return get('/api/weather/jobs?' + qs);
     },
+    projects: function(projectIds) {
+      var ids = (projectIds || []).filter(Boolean);
+      if (!ids.length) return Promise.resolve({ weather: {} });
+      var qs = 'ids=' + encodeURIComponent(ids.join(','));
+      return get('/api/weather/projects?' + qs);
+    },
     // Direct lat/lng forecast — used by the header weather chip
     // when the browser hands us geolocation coords. Skips the
     // job-geocode round-trip the .jobs() endpoint goes through.

@@ -184,6 +184,99 @@ router.get('/jobs', async function(req, res) {
   res.json({ weather: out });
 });
 
+// GET /api/weather/projects?ids=a,b,c
+// Batch weather lookup keyed by project id. Same shape as
+// /api/weather/jobs — { weather: { [projectId]: { status, days?, ... } } }
+// — so the client can render uniform chips across both surfaces.
+// Projects carry their own address_text + geocode_lat/lng columns
+// (geocoded by the projects routes during create/update). We use
+// those directly without falling through to a linked client because
+// project addresses are explicit by design (CompanyCam pattern).
+router.get('/projects', async function(req, res) {
+  const idsRaw = String(req.query.ids || '').trim();
+  if (!idsRaw) return res.json({ weather: {} });
+  const ids = idsRaw.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+  if (!ids.length) return res.json({ weather: {} });
+
+  let rows;
+  try {
+    const result = await pool.query(
+      'SELECT id, name, address_text, geocode_lat, geocode_lng, geocode_status, geocode_address ' +
+      '  FROM projects WHERE id = ANY($1::text[])',
+      [ids]
+    );
+    rows = result.rows;
+  } catch (e) {
+    console.error('[weather] project lookup failed:', e.message);
+    return res.status(500).json({ error: 'Project lookup failed: ' + e.message });
+  }
+
+  const out = {};
+  ids.forEach(function(id) { out[id] = { status: 'unknown_project' }; });
+
+  const queue = rows.slice();
+  async function worker() {
+    while (queue.length) {
+      const row = queue.shift();
+      try {
+        // Reuse the job-style geocode caching by adapting the row
+        // shape — ensureGeocode reads geocode_status / lat / lng /
+        // address from the row object and writes back to the same
+        // columns. projects already has those columns so the
+        // UPDATE in ensureGeocode targets the projects table when
+        // we pass the right shape.
+        const geoSource = {
+          id: row.id,
+          data: { address: row.address_text || null },
+          geocode_lat: row.geocode_lat,
+          geocode_lng: row.geocode_lng,
+          geocode_status: row.geocode_status,
+          geocode_address: row.geocode_address,
+          client_id: null
+        };
+        // Hand-rolled mini-version of ensureGeocode so the UPDATE
+        // targets `projects` instead of `jobs`. Same caching rules.
+        const address = (row.address_text || '').trim();
+        if (!address) {
+          out[row.id] = { status: 'no_address' };
+          continue;
+        }
+        let lat = Number(row.geocode_lat), lng = Number(row.geocode_lng);
+        if (!(row.geocode_status === 'ok' &&
+              Number.isFinite(lat) && Number.isFinite(lng) &&
+              row.geocode_address === address)) {
+          if (row.geocode_status === 'failed' && row.geocode_address === address) {
+            out[row.id] = { status: 'failed', address: address };
+            continue;
+          }
+          const { geocodeAddress } = require('../geocoder');
+          const result = await geocodeAddress(address);
+          if (!result) {
+            await pool.query(
+              'UPDATE projects SET geocode_status=$1, geocode_address=$2 WHERE id=$3',
+              ['failed', address, row.id]
+            );
+            out[row.id] = { status: 'failed', address: address };
+            continue;
+          }
+          lat = result.lat; lng = result.lng;
+          await pool.query(
+            'UPDATE projects SET geocode_lat=$1, geocode_lng=$2, geocode_status=$3, geocode_address=$4 WHERE id=$5',
+            [lat, lng, 'ok', address, row.id]
+          );
+        }
+        const days = await getDailyForecast(lat, lng);
+        out[row.id] = { status: 'ok', lat: lat, lng: lng, address: address, days: days };
+      } catch (e) {
+        console.warn('[weather] forecast failed for project ' + row.id + ':', e.message);
+        out[row.id] = { status: 'error', error: e.message };
+      }
+    }
+  }
+  await Promise.all([worker(), worker(), worker(), worker()]);
+  res.json({ weather: out });
+});
+
 // GET /api/weather/coords?lat=X&lng=Y
 // Direct lat/lng forecast lookup — used by the header weather chip
 // (the user's actual location via browser geolocation), and any
