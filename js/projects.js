@@ -1809,8 +1809,44 @@
     patch[field] = clean;
     api().update(p.id, patch).catch(function(e) {
       p[field] = prior;
+      // Roll back any side effects we did optimistically below.
+      if (field === 'address_text') refreshInlineMap();
       alert('Save failed for ' + field + ': ' + (e.message || e));
     });
+    // Side effect: the inline Google Maps iframe was rendered once at
+    // paintDetail time with the address that was there then. If the
+    // user edits the address, the input updates but the iframe stays
+    // stuck on the old map — making it look like the project has the
+    // wrong address. Swap the src so the pin tracks the typed value.
+    if (field === 'address_text') refreshInlineMap();
+  }
+
+  function refreshInlineMap() {
+    var p = _detailState.project;
+    if (!p) return;
+    var frame = document.querySelector('.p86-proj-detail-map-frame');
+    var emptyEl = document.querySelector('.p86-proj-detail-map-empty');
+    var addr = (p.address_text || '').trim();
+    if (!frame && !emptyEl) return;
+    if (addr) {
+      if (frame) {
+        frame.src = 'https://www.google.com/maps?q=' + encodeURIComponent(addr) + '&output=embed&z=16';
+      } else if (emptyEl) {
+        // Empty stub was rendered — swap it for a live iframe.
+        var iframe = document.createElement('iframe');
+        iframe.className = 'p86-proj-detail-map-frame';
+        iframe.loading = 'lazy';
+        iframe.setAttribute('referrerpolicy', 'no-referrer-when-downgrade');
+        iframe.src = 'https://www.google.com/maps?q=' + encodeURIComponent(addr) + '&output=embed&z=16';
+        emptyEl.parentNode.replaceChild(iframe, emptyEl);
+      }
+    } else if (frame) {
+      // Address was cleared — swap iframe back to the "add an address" stub.
+      var stub = document.createElement('div');
+      stub.className = 'p86-proj-detail-map-empty';
+      stub.textContent = 'Add an address to drop a pin here.';
+      frame.parentNode.replaceChild(stub, frame);
+    }
   }
 
   // ──────────────────────────────────────────────────────────────────
@@ -1914,7 +1950,7 @@
       api().update(p.id, patch).then(function(r) {
         _detailState.project = r && r.project;
         modal.remove();
-        paintDetail();
+        paintDetail();   // full repaint pulls in the new map iframe src
         refreshLinkedPanels();
       }).catch(function(e) { alert('Save failed: ' + (e.message || e)); });
     });
