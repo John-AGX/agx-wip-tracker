@@ -775,6 +775,11 @@
     if (p.job_id)     linkBadges.push({ k: 'Job',    v: p.job_name || p.job_id });
     if (p.client_id)  linkBadges.push({ k: 'Client', v: p.client_name || p.client_id });
 
+    var addr = (p.address_text || '').trim();
+    var mapBlock = addr
+      ? '<iframe class="p86-proj-detail-map-frame" src="https://www.google.com/maps?q=' + encodeURIComponent(addr) + '&output=embed&z=16" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>'
+      : '<div class="p86-proj-detail-map-empty">Add an address to drop a pin here.</div>';
+
     host.innerHTML =
       '<div class="p86-proj-detail-topbar">' +
         '<div class="p86-proj-detail-title-wrap">' +
@@ -793,14 +798,11 @@
         '</div>' +
       '</div>' +
 
-      '<div class="p86-proj-detail-tags-row">' +
-        '<div id="projDetailTagsEditor" class="p86-tag-editor p86-tag-editor-inline"></div>' +
-      '</div>' +
-
+      // Compact 3-column zone: cover (smaller) · inline map · side panel
+      // (linked + address + tags). On mobile this stacks to single col.
       '<div class="p86-proj-detail-cols">' +
-        '<div class="p86-proj-detail-col-main">' +
-          hero +
-        '</div>' +
+        '<div class="p86-proj-detail-col-cover">' + hero + '</div>' +
+        '<div class="p86-proj-detail-col-map">' + mapBlock + '</div>' +
         '<div class="p86-proj-detail-col-side">' +
           '<fieldset class="p86-proj-fieldset">' +
             '<legend>Linked to</legend>' +
@@ -818,6 +820,10 @@
             '<legend>Address</legend>' +
             '<input id="projAddrInput" value="' + escapeAttr(p.address_text || '') + '" placeholder="Site address" class="p86-proj-input" />' +
           '</fieldset>' +
+          '<fieldset class="p86-proj-fieldset">' +
+            '<legend>Tags</legend>' +
+            '<div id="projDetailTagsEditor" class="p86-tag-editor p86-tag-editor-inline"></div>' +
+          '</fieldset>' +
         '</div>' +
       '</div>' +
 
@@ -832,10 +838,16 @@
         '<div id="projPhotoUploadHost"></div>' +
       '</fieldset>' +
 
-      '<fieldset class="p86-proj-fieldset p86-proj-activity-fieldset">' +
-        '<legend>&#x1F4DC; Activity <span class="p86-proj-legend-count">(' + (_detailState.activity.length) + ')</span></legend>' +
-        '<div id="projActivityHost"></div>' +
-      '</fieldset>';
+      // Activity feed: collapsible <details> so the project view
+      // doesn't grow unbounded when a project has months of history.
+      // Default collapsed; click the legend to expand.
+      '<details class="p86-proj-activity-details" id="projActivityDetails">' +
+        '<summary class="p86-proj-activity-summary">' +
+          '<span>&#x1F4DC; Activity <span class="p86-proj-legend-count">(' + (_detailState.activity.length) + ')</span></span>' +
+          '<span class="p86-proj-activity-chevron">&#x25BE;</span>' +
+        '</summary>' +
+        '<div id="projActivityHost" class="p86-proj-activity-body"></div>' +
+      '</details>';
 
     // Wire blur-save for name / address / description.
     var nameEl = host.querySelector('#projNameInput');

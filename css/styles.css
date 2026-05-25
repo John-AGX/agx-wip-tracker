@@ -3150,24 +3150,51 @@
 .p86-proj-detail-meta { font-size: 11px; color: var(--text-dim, #888); margin-top: 4px; }
 .p86-proj-detail-actions { display: flex; gap: 6px; align-items: center; flex-shrink: 0; }
 
-.p86-proj-detail-tags-row { margin-bottom: 12px; }
-
+/* Compact 3-column header zone: cover · map · side panel. Each
+   column has the same fixed height so the row reads as one band
+   instead of a ragged grid. On mobile (≤700px) this collapses to
+   single-column stack. */
 .p86-proj-detail-cols {
   display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
-  gap: 14px; margin-bottom: 14px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.2fr);
+  gap: 10px; margin-bottom: 12px;
+  align-items: stretch;
 }
-.p86-proj-detail-col-main { display: flex; flex-direction: column; gap: 10px; }
-.p86-proj-detail-col-side { display: flex; flex-direction: column; gap: 8px; }
+.p86-proj-detail-col-cover, .p86-proj-detail-col-map {
+  height: 200px;
+  border-radius: 8px; overflow: hidden;
+  background: #1a1a2e;
+}
+.p86-proj-detail-col-side {
+  display: flex; flex-direction: column; gap: 6px;
+  min-width: 0;
+}
+.p86-proj-detail-col-side .p86-proj-fieldset {
+  margin: 0; padding: 4px 8px 6px;
+}
+.p86-proj-detail-col-side .p86-proj-fieldset legend {
+  padding: 0 4px;
+}
 .p86-proj-detail-hero {
-  width: 100%; max-height: 320px; object-fit: cover;
-  display: block; border-radius: 10px; background: #1a1a2e;
+  width: 100%; height: 100%; object-fit: cover;
+  display: block;
 }
 .p86-proj-detail-hero-empty {
-  height: 220px;
+  width: 100%; height: 100%;
   display: flex; align-items: center; justify-content: center;
   background: rgba(34,211,238,0.06); color: var(--accent, #4f8cff);
-  font-size: 54px; border-radius: 10px;
+  font-size: 44px;
+}
+.p86-proj-detail-map-frame {
+  border: 0; width: 100%; height: 100%; display: block;
+}
+.p86-proj-detail-map-empty {
+  width: 100%; height: 100%;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(255,255,255,0.02);
+  color: var(--text-dim, #888);
+  font-size: 11px; font-style: italic; text-align: center;
+  padding: 14px;
 }
 
 .p86-proj-fieldset {
@@ -3303,6 +3330,41 @@
 }
 .p86-proj-upload-hint { font-size: 11px; color: var(--text-dim, #888); }
 .p86-proj-drop-active { background: rgba(34,211,238,0.06); border-color: var(--accent, #4f8cff); }
+
+/* Activity feed — collapsible <details>. Default collapsed; the
+   summary doubles as a clickable header. We hide the default browser
+   marker and render our own chevron that rotates on [open]. */
+.p86-proj-activity-details {
+  border: 1px solid var(--border, #333);
+  border-radius: 8px;
+  background: rgba(255,255,255,0.01);
+  margin: 0 0 14px 0;
+}
+.p86-proj-activity-summary {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 8px 12px;
+  cursor: pointer;
+  list-style: none;
+  font-size: 10px; font-weight: 700;
+  color: var(--text-dim, #888);
+  text-transform: uppercase; letter-spacing: 0.6px;
+  user-select: none;
+}
+.p86-proj-activity-summary::-webkit-details-marker { display: none; }
+.p86-proj-activity-summary::marker { content: ''; }
+.p86-proj-activity-summary:hover { background: rgba(79,140,255,0.04); }
+.p86-proj-activity-chevron {
+  transition: transform 0.15s;
+  font-size: 12px;
+}
+.p86-proj-activity-details[open] .p86-proj-activity-chevron {
+  transform: rotate(180deg);
+}
+.p86-proj-activity-body {
+  padding: 4px 12px 10px;
+  border-top: 1px solid var(--border, #333);
+  max-height: 360px; overflow-y: auto;
+}
 
 /* Activity feed */
 .p86-proj-activity-row {
@@ -3586,13 +3648,22 @@
 }
 
 /* Responsive — mobile */
+@media (max-width: 900px) {
+  /* Two-column intermediate: cover + map side-by-side, side panel
+     drops below. Saves vertical scroll on tablets. */
+  .p86-proj-detail-cols { grid-template-columns: 1fr 1fr; }
+  .p86-proj-detail-col-side { grid-column: 1 / -1; }
+}
 @media (max-width: 700px) {
   .p86-projects-header { gap: 8px; }
   .p86-projects-search { width: 100%; max-width: none; }
   .p86-projects-header-actions { width: 100%; }
   .p86-proj-detail-host { padding: 12px; }
   .p86-proj-detail-topbar { flex-direction: column; align-items: stretch; }
+  /* Single column — cover, map, side stack vertically. */
   .p86-proj-detail-cols { grid-template-columns: 1fr; }
+  .p86-proj-detail-col-side { grid-column: auto; }
+  .p86-proj-detail-col-cover, .p86-proj-detail-col-map { height: 160px; }
   .p86-projects-grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 8px; }
   .p86-proj-card-cover { height: 120px; }
   .p86-proj-feed-grid { grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); }
@@ -3605,5 +3676,4 @@
   .p86-projects-header h2 { font-size: 16px; }
   .p86-proj-detail-host { padding: 10px; }
   .p86-proj-detail-name-input { font-size: 17px; }
-  .p86-proj-detail-hero, .p86-proj-detail-hero-empty { max-height: 220px; }
 }
