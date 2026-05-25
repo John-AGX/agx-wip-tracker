@@ -234,6 +234,12 @@
     if (!opts.attachment) { alert('No attachment supplied.'); return; }
     if (state) closeOverlay();
     _numberCounter = 1;
+    // Reset auto-save bookkeeping so the next session has a clean
+    // slate. _autoSaveLastJson is seeded from the initial strokes so
+    // the first redraw doesn't auto-fire on an unchanged snapshot.
+    if (_autoSaveTimer) { clearTimeout(_autoSaveTimer); _autoSaveTimer = null; }
+    _autoSaveInFlight = false;
+    _autoSaveLastJson = JSON.stringify((opts.attachment && Array.isArray(opts.attachment.annotations)) ? opts.attachment.annotations : []);
     state = {
       attachment: opts.attachment,
       // Where the saved markup uploads to. Defaults to the source
@@ -285,7 +291,11 @@
       selectedIdx: null,
       dragLast: null,
       img: null,
-      naturalSize: { w: 0, h: 0 }
+      naturalSize: { w: 0, h: 0 },
+      // Stash the full opts object so deep callers (requestClose,
+      // auto-save, etc.) can read flags like hostManagedHistory +
+      // onRequestClose without each plumbing them through.
+      opts: opts
     };
     buildOverlay();
   }
@@ -304,6 +314,7 @@
       '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;background:rgba(15,15,30,0.95);border:1px solid #2a2a3a;border-radius:10px;padding:8px 14px;">' +
         '<strong style="color:#fff;font-size:13px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(state.attachment.filename || 'Photo') + '</strong>' +
         '<span id="p86-mk-hint" style="color:#aaa;font-size:11px;margin-right:8px;"></span>' +
+        '<span id="p86-mk-save-chip" style="display:none;background:rgba(255,255,255,0.06);border:1px solid #444;color:#aaa;border-radius:999px;padding:3px 10px;font-size:10.5px;letter-spacing:0.3px;"></span>' +
         '<button id="p86-mk-cancel" style="background:rgba(255,255,255,0.06);color:#aaa;border:1px solid #444;border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;">Cancel</button>' +
         '<button id="p86-mk-save" style="background:#4f8cff;color:#fff;border:0;border-radius:6px;padding:6px 16px;font-size:12px;font-weight:700;cursor:pointer;">Save</button>' +
       '</div>' +
@@ -417,12 +428,16 @@
       }
     };
     overlay.querySelector('#p86-mk-cancel').onclick = function() {
-      if (!state.strokes.length || confirm('Discard your markup?')) closeWithBack();
+      if (!state.strokes.length || confirm('Discard your markup?')) requestClose();
     };
 
     // Android back / browser back closes the markup viewer instead
-    // of navigating the whole tab away.
-    wireBackButton();
+    // of navigating the whole tab away. Skipped when the host (e.g.
+    // projects.js) is managing the back-button stack for us — in that
+    // mode requestClose() defers to opts.onRequestClose, which routes
+    // through the host's overlay stack so we don't pop two history
+    // entries on a single back press.
+    if (!(state.opts && state.opts.hostManagedHistory)) wireBackButton();
     overlay.querySelector('#p86-mk-save').onclick = function() {
       // Phase 1.7 — annotations stay editable. PATCH the attachment's
       // annotations JSONB column instead of rasterizing to PNG.
@@ -449,7 +464,7 @@
       function finish() {
         saveBtn.textContent = 'Saved';
         setTimeout(function() {
-          closeWithBack();
+          requestClose();
           if (typeof done === 'function') {
             try { done({ annotations: strokes }); }
             catch (e) { /* defensive */ }
@@ -597,6 +612,40 @@
     dot.style.background = state.color || '#ddd';
   }
 
+  // Close any open tool config popups (thickness / text size). Used
+  // when the selection is cleared, or to make room for opening a
+  // different one when selecting a different stroke type.
+  function closeAllToolPopups() {
+    var t = document.getElementById('p86-mk-thickness-popup');
+    if (t) t.remove();
+    var x = document.getElementById('p86-mk-textsize-popup');
+    if (x) x.remove();
+  }
+
+  // When a stroke is selected, slide out the matching tool config
+  // popup so color / thickness / text size are immediately editable.
+  //   text                  → text size popup
+  //   arrow / line / rect / ellipse / measure / draw / polyline
+  //                         → thickness popup
+  //   sticker               → no popup (the sticker picker would be
+  //                            intrusive; toolbar color buttons still
+  //                            re-color the selected sticker)
+  function openToolPopupForSelected(overlay) {
+    if (state.selectedIdx == null) return;
+    var s = state.strokes[state.selectedIdx];
+    if (!s) return;
+    closeAllToolPopups();
+    if (s.tool === 'text') {
+      openTextSizePopup(overlay);
+    } else if (
+      s.tool === 'arrow' || s.tool === 'line' || s.tool === 'rect' ||
+      s.tool === 'ellipse' || s.tool === 'measure' || s.tool === 'draw' ||
+      s.tool === 'polyline'
+    ) {
+      openThicknessPopup(overlay);
+    }
+  }
+
   // Thickness popup — three preset circles + a close X. Click a preset
   // to apply, click outside or X to close.
   function openThicknessPopup(overlay) {
@@ -642,10 +691,14 @@
         popup.remove();
       };
     });
-    // Click-outside-to-close (next click on overlay).
+    // Click-outside-to-close — but keep the popup open if the click
+    // landed on the canvas, so the user can click around to re-select
+    // strokes and immediately tweak their thickness/color from this
+    // same popup. Toolbar / outside clicks still dismiss.
     setTimeout(function() {
       function onAway(e) {
         if (popup.contains(e.target)) return;
+        if (e.target && e.target.id === 'p86-mk-canvas') return;
         popup.remove();
         document.removeEventListener('mousedown', onAway, true);
       }
@@ -737,6 +790,7 @@
     setTimeout(function() {
       function onAway(e) {
         if (popup.contains(e.target)) return;
+        if (e.target && e.target.id === 'p86-mk-canvas') return;
         popup.remove();
         document.removeEventListener('mousedown', onAway, true);
       }
@@ -978,6 +1032,7 @@
           return;
         }
         var idx = hitTestStrokes(p);
+        var prevIdx = state.selectedIdx;
         state.selectedIdx = idx;
         state.dragHandle = null;
         state.dragBBoxStart = null;
@@ -989,6 +1044,16 @@
         setCursor();
         var overlay = document.getElementById('p86-markup-overlay');
         if (overlay) updateHint(overlay);
+        // When a stroke gets newly selected, slide out the relevant
+        // tool config popup so color / thickness / text size are one
+        // click away — no hunting through the toolbar to recolor an
+        // arrow you just picked.
+        if (idx != null && idx !== prevIdx && overlay) {
+          openToolPopupForSelected(overlay);
+        } else if (idx == null) {
+          // Deselected — close any popups so they don't linger.
+          closeAllToolPopups();
+        }
         redraw();
         return;
       }
@@ -1252,6 +1317,11 @@
     var ctx = canvas.getContext('2d');
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(state.img, 0, 0, canvas.width, canvas.height);
+    // Every redraw is a chance to detect a real stroke mutation and
+    // kick off auto-save. The helper short-circuits if the JSON
+    // signature hasn't actually changed (e.g. when redraw fired just
+    // to update the selection ring), so this isn't a hot loop.
+    scheduleAutoSave();
     state.strokes.forEach(function(s, i) {
       drawStroke(ctx, s);
       if (i === state.selectedIdx) {
@@ -1982,6 +2052,94 @@
     } else {
       closeOverlay();
     }
+  }
+  // Auto-save the annotations to the server 1.5 seconds after the
+  // last stroke change. Also caches to localStorage immediately so a
+  // page-reload (or browser crash) doesn't drop in-progress work. The
+  // status chip in the top bar reflects state: Saving… / Saved /
+  // Unsaved / Save failed.
+  var _autoSaveTimer = null;
+  var _autoSaveLastJson = null;
+  var _autoSaveInFlight = false;
+  function localStorageKeyForAuto(att) {
+    if (!att || !att.id) return null;
+    return 'p86-mk-anno-draft:' + att.id;
+  }
+  function setSaveChip(label, color) {
+    var chip = document.getElementById('p86-mk-save-chip');
+    if (!chip) return;
+    if (!label) { chip.style.display = 'none'; return; }
+    chip.textContent = label;
+    chip.style.display = '';
+    chip.style.color = color || '#aaa';
+    chip.style.borderColor = color === '#34d399' ? '#34d39955' :
+                              color === '#ef4444' ? '#ef444455' : '#444';
+  }
+  function scheduleAutoSave() {
+    if (!state || !state.strokes) return;
+    var json = JSON.stringify(state.strokes);
+    if (json === _autoSaveLastJson) return;          // no real change
+    _autoSaveLastJson = json;
+    var att = state.attachment;
+    // Local-storage cache: always written, regardless of whether we
+    // have a server target. Survives reloads.
+    var k = localStorageKeyForAuto(att);
+    if (k) {
+      try { localStorage.setItem(k, json); } catch (e) { /* quota / private mode */ }
+    }
+    // Pre-upload mode (no id): can't PATCH yet. Just show a "Local"
+    // chip so the user knows the strokes are buffered.
+    if (!att || !att.id) { setSaveChip('Local draft', '#aaa'); return; }
+    if (!window.p86Api || !window.p86Api.attachments || !window.p86Api.attachments.update) return;
+    setSaveChip('Unsaved', '#aaa');
+    if (_autoSaveTimer) clearTimeout(_autoSaveTimer);
+    _autoSaveTimer = setTimeout(function() {
+      _autoSaveTimer = null;
+      if (_autoSaveInFlight) {
+        // A save is already in flight; reschedule immediately for once
+        // it finishes so we don't lose the latest version.
+        scheduleAutoSave();
+        return;
+      }
+      _autoSaveInFlight = true;
+      setSaveChip('Saving…', '#aaa');
+      var snap = state.strokes.slice();
+      window.p86Api.attachments.update(att.id, { annotations: snap })
+        .then(function() {
+          att.annotations = snap;
+          setSaveChip('Saved', '#34d399');
+          // Clear the local draft once the server has the truth.
+          if (k) { try { localStorage.removeItem(k); } catch (e) {} }
+          setTimeout(function() {
+            // Fade the chip back to neutral after a moment — only if
+            // no further edits happened in the meantime.
+            if (JSON.stringify(state.strokes) === JSON.stringify(snap)) setSaveChip('');
+          }, 1500);
+        })
+        .catch(function() {
+          setSaveChip('Save failed', '#ef4444');
+        })
+        .then(function() { _autoSaveInFlight = false; });
+    }, 1500);
+  }
+
+  // requestClose — the "the user wants out" entry point. Picks the
+  // right close strategy based on which back-button mode the viewer
+  // was opened in:
+  //   - host-managed   → defer to opts.onRequestClose so the caller's
+  //                      overlay stack consumes the history entry
+  //   - self-managed   → closeWithBack() as before (own popstate)
+  function requestClose() {
+    if (state && state.opts && state.opts.hostManagedHistory) {
+      if (typeof state.opts.onRequestClose === 'function') {
+        try { state.opts.onRequestClose(); }
+        catch (e) { closeOverlay(); }
+      } else {
+        closeOverlay();
+      }
+      return;
+    }
+    closeWithBack();
   }
 
   function escapeHTML(s) {

@@ -2378,6 +2378,23 @@
     paintBulkActionBar();
   }
 
+  // Returns the dimensions of the WEB variant for an attachment, given
+  // its ORIGINAL dimensions (att.width / att.height). Mirrors the
+  // sharp pipeline in attachment-routes.js: resize(1600, 1600, { fit:
+  // 'inside', withoutEnlargement: true }) — i.e. longest edge maxes
+  // at 1600, aspect ratio preserved, never upscaled. Strokes drawn in
+  // the markup viewer live in THIS coord space; using the original
+  // dimensions would offset/scale them incorrectly.
+  function webVariantDims(origW, origH) {
+    var w = Number(origW) || 0;
+    var h = Number(origH) || 0;
+    if (!w || !h) return null;
+    var max = Math.max(w, h);
+    if (max <= 1600) return { w: w, h: h };
+    var s = 1600 / max;
+    return { w: Math.round(w * s), h: Math.round(h * s) };
+  }
+
   function buildPhotoTile(att) {
     var tile = document.createElement('div');
     tile.className = 'p86-proj-photo-tile';
@@ -2460,46 +2477,24 @@
       });
     }
 
-    // Paint annotation strokes onto the overlay canvas. Strokes are
-    // stored at the full-size image's pixel coordinates, so the
-    // canvas's internal width/height matches att.width/height (NOT
-    // the thumb's dimensions) — then CSS scales the whole canvas
-    // down to fit on top of the thumb. Result: arrows / text /
-    // measurements appear in the right spot on the small tile.
+    // Paint annotation strokes onto the overlay canvas. CRITICAL:
+    // strokes are drawn in the markup viewer against the WEB variant
+    // (1600px max edge, see attachment-routes.js sharp pipeline) — NOT
+    // the original full-resolution image. So canvas internal dims
+    // need to match the web variant's dimensions; using att.width /
+    // att.height (which are the ORIGINAL dims for a phone photo, e.g.
+    // 4032×3024) would shrink the strokes into the top-left ~40% of
+    // the canvas. CSS then scales the canvas via object-fit:cover so
+    // it overlays the thumb pixel-for-pixel.
     var annoCanvas = tile.querySelector('.p86-proj-photo-tile-anno');
     if (annoCanvas && annotationCount && window.p86AnnotationRender) {
-      var natW = Number(att.width) || 0;
-      var natH = Number(att.height) || 0;
-      function paintTileAnno() {
-        var w = natW || annoCanvas.clientWidth || 200;
-        var h = natH || annoCanvas.clientHeight || 200;
-        annoCanvas.width = w;
-        annoCanvas.height = h;
+      var dims = webVariantDims(att.width, att.height);
+      if (dims) {
+        annoCanvas.width = dims.w;
+        annoCanvas.height = dims.h;
         var ctx = annoCanvas.getContext('2d');
         try { window.p86AnnotationRender.renderAll(ctx, att.annotations); }
         catch (e) { /* defensive — bad stroke shouldn't kill the tile */ }
-      }
-      if (natW && natH) {
-        paintTileAnno();
-      } else {
-        // No stored dimensions — wait for the thumb to load so we can
-        // read its naturalWidth/Height (which is the THUMB's size, not
-        // the original). Strokes drawn in this coord space will be
-        // off; in practice we always have width/height on the row.
-        var thumbImg = tile.querySelector('.p86-proj-photo-tile-img');
-        if (thumbImg) {
-          if (thumbImg.complete && thumbImg.naturalWidth) {
-            natW = thumbImg.naturalWidth;
-            natH = thumbImg.naturalHeight;
-            paintTileAnno();
-          } else {
-            thumbImg.addEventListener('load', function() {
-              natW = thumbImg.naturalWidth;
-              natH = thumbImg.naturalHeight;
-              paintTileAnno();
-            }, { once: true });
-          }
-        }
       }
     }
 
@@ -2811,23 +2806,43 @@
     }).catch(function(e) { alert('Delete failed: ' + (e.message || e)); });
   }
   function openAnnotator(att) {
-    if (window.p86Markup && typeof window.p86Markup.open === 'function') {
-      window.p86Markup.open({
-        attachment: att,
-        onDone: function(result) {
-          // Phase 1.7 — annotator now PATCHes annotations onto the
-          // original attachment. Refresh photos so the in-memory
-          // copy + tile badge reflect the new count.
-          if (result && Array.isArray(result.annotations)) {
-            att.annotations = result.annotations;
-            paintPhotoFeed();
-          }
-          refreshDetailPhotos();
-        }
-      });
-    } else {
+    if (!window.p86Markup || typeof window.p86Markup.open !== 'function') {
       alert('Annotator not loaded.');
+      return;
     }
+    // Coordinate the back-button stack with the markup viewer so the
+    // user only goes ONE level up on save/cancel — not "back out of
+    // the whole project". We push a close fn into OUR overlay stack
+    // (which also pushes a history entry), and ask the markup viewer
+    // to skip its own pushState. When the viewer calls onRequestClose,
+    // we run closeTopOverlay() which fires history.back() → popstate
+    // → pops our entry → calls the close fn → removes the viewer.
+    var registered = true;
+    pushOverlay(function() {
+      registered = false;
+      if (window.p86Markup && typeof window.p86Markup.close === 'function') {
+        window.p86Markup.close();
+      }
+    });
+    window.p86Markup.open({
+      attachment: att,
+      hostManagedHistory: true,
+      onRequestClose: function() {
+        if (registered) {
+          closeTopOverlay();
+        }
+      },
+      onDone: function(result) {
+        // Phase 1.7 — annotator now PATCHes annotations onto the
+        // original attachment. Refresh photos so the in-memory
+        // copy + tile badge reflect the new count.
+        if (result && Array.isArray(result.annotations)) {
+          att.annotations = result.annotations;
+          paintPhotoFeed();
+        }
+        refreshDetailPhotos();
+      }
+    });
   }
 
   function refreshDetailPhotos() {
@@ -3579,6 +3594,10 @@
     createReport: createReport,
     openReport: openReport,
     deleteReport: deleteReport,
-    _fieldBlur: _fieldBlur
+    _fieldBlur: _fieldBlur,
+    // Shared back-button stack — other modules (markup-viewer, etc.)
+    // hook into this so a single popstate consumes a single entry.
+    pushOverlay: pushOverlay,
+    closeTopOverlay: closeTopOverlay
   };
 })();
