@@ -1,0 +1,298 @@
+/* ─────────────────────────────────────────────────────────────────
+   Report style packs — visual themes scoped to
+   [data-style-pack="<id>"] on the report editor host.
+
+   Each pack overrides typography + color + chrome on the cover page,
+   section header, and photo card. Body sections stay close to neutral
+   so the photos read clearly; the cover is the dramatic surface.
+
+   The 'clean' pack is the historical default — no overrides needed.
+   The four named packs below each define their identity:
+
+     classic-corporate   serif, navy + gold accent, letterhead-style cover
+     modern-bold         big display sans, color-block section headers
+     field-notebook      off-white paper, monospace dates, dashed dividers
+     inspection-pro      severity color rail, data-table feel, gridlines
+
+   Print-only rules sit inside @media print so the editor preview
+   matches the printed PDF.
+   ───────────────────────────────────────────────────────────────── */
+
+/* ── Classic Corporate ─────────────────────────────────────────── */
+.p86-report-host[data-style-pack="classic-corporate"] {
+  --pack-bg: #fcfaf5;
+  --pack-accent: #1e3a5f;
+  --pack-rule: #b8941f;
+  --pack-text: #1a1a1a;
+}
+.p86-report-host[data-style-pack="classic-corporate"] .p86-report-title-input,
+.p86-report-host[data-style-pack="classic-corporate"] .p86-report-section-label {
+  font-family: Georgia, 'Times New Roman', Cambria, serif;
+}
+.p86-report-host[data-style-pack="classic-corporate"] .p86-report-section {
+  border-top: 2px solid var(--pack-accent);
+  padding-top: 12px;
+  margin-top: 16px;
+  position: relative;
+}
+.p86-report-host[data-style-pack="classic-corporate"] .p86-report-section::before {
+  content: '';
+  position: absolute;
+  top: -2px; left: 0;
+  width: 60px;
+  height: 2px;
+  background: var(--pack-rule);
+}
+.p86-report-host[data-style-pack="classic-corporate"] .p86-report-section-label {
+  font-size: 17px;
+  letter-spacing: 0.3px;
+}
+@media print {
+  .p86-report-host[data-style-pack="classic-corporate"] .p86-report-cover-rendered {
+    background: #fcfaf5;
+    border-top: 4px double #1e3a5f;
+    border-bottom: 4px double #1e3a5f;
+    padding: 100px 60px;
+  }
+  .p86-report-host[data-style-pack="classic-corporate"] .p86-report-cover-title {
+    font-family: Georgia, 'Times New Roman', serif !important;
+    color: #1e3a5f !important;
+    letter-spacing: 0.5px;
+  }
+  .p86-report-host[data-style-pack="classic-corporate"] .p86-report-cover-subtitle {
+    font-family: Georgia, serif !important;
+    color: #b8941f !important;
+    letter-spacing: 1px;
+  }
+  .p86-report-host[data-style-pack="classic-corporate"] .p86-report-cover-meta {
+    border-top: 1px solid #b8941f !important;
+  }
+}
+
+/* ── Modern Bold ───────────────────────────────────────────────── */
+.p86-report-host[data-style-pack="modern-bold"] {
+  --pack-accent: #4f8cff;
+  --pack-accent-deep: #1e293b;
+}
+.p86-report-host[data-style-pack="modern-bold"] .p86-report-title-input {
+  font-size: 28px;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+}
+.p86-report-host[data-style-pack="modern-bold"] .p86-report-section {
+  margin-top: 28px;
+}
+.p86-report-host[data-style-pack="modern-bold"] .p86-report-section-header {
+  background: var(--pack-accent-deep, #1e293b);
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+}
+.p86-report-host[data-style-pack="modern-bold"] .p86-report-section-label {
+  color: #fff !important;
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: -0.2px;
+}
+.p86-report-host[data-style-pack="modern-bold"] .p86-report-photo,
+.p86-report-host[data-style-pack="modern-bold"] .p86-report-photo-single,
+.p86-report-host[data-style-pack="modern-bold"] .p86-report-photo.has-sidedesc .p86-report-photo-mainstack,
+.p86-report-host[data-style-pack="modern-bold"] .p86-report-photo-single.has-sidedesc .p86-report-photo-mainstack {
+  border: 0;
+  border-radius: 0;
+}
+@media print {
+  .p86-report-host[data-style-pack="modern-bold"] .p86-report-cover-rendered {
+    background: #fff;
+    padding: 60px 50px;
+    text-align: left;
+  }
+  .p86-report-host[data-style-pack="modern-bold"] .p86-report-cover-title {
+    font-size: 64px !important;
+    font-weight: 900 !important;
+    letter-spacing: -2px;
+    line-height: 1 !important;
+    margin-top: 60px !important;
+  }
+  .p86-report-host[data-style-pack="modern-bold"] .p86-report-cover-subtitle {
+    color: #4f8cff !important;
+    font-weight: 700 !important;
+    font-style: normal !important;
+    letter-spacing: 3px;
+  }
+  .p86-report-host[data-style-pack="modern-bold"] .p86-report-cover-meta {
+    justify-content: flex-start !important;
+    gap: 40px !important;
+  }
+}
+
+/* ── Field Notebook ────────────────────────────────────────────── */
+.p86-report-host[data-style-pack="field-notebook"] {
+  --pack-paper: #f8f4e8;
+  --pack-ink: #3a3528;
+  --pack-faded: #8a7f5e;
+}
+.p86-report-host[data-style-pack="field-notebook"] .p86-report-host,
+.p86-report-host[data-style-pack="field-notebook"] {
+  background: var(--pack-paper);
+}
+.p86-report-host[data-style-pack="field-notebook"] .p86-report-title-input {
+  color: var(--pack-ink);
+}
+.p86-report-host[data-style-pack="field-notebook"] .p86-report-section {
+  border-top: 1px dashed var(--pack-faded);
+  padding-top: 14px;
+  margin-top: 18px;
+}
+.p86-report-host[data-style-pack="field-notebook"] .p86-report-section-label {
+  color: var(--pack-ink);
+  font-weight: 700;
+}
+.p86-report-host[data-style-pack="field-notebook"] .p86-report-photo,
+.p86-report-host[data-style-pack="field-notebook"] .p86-report-photo-single,
+.p86-report-host[data-style-pack="field-notebook"] .p86-report-photo.has-sidedesc .p86-report-photo-mainstack,
+.p86-report-host[data-style-pack="field-notebook"] .p86-report-photo-single.has-sidedesc .p86-report-photo-mainstack {
+  border: 1px dashed var(--pack-faded);
+  background: #fff;
+}
+.p86-report-host[data-style-pack="field-notebook"] .p86-report-photo-caption {
+  font-family: 'SF Mono', 'Fira Code', Consolas, monospace;
+  font-size: 11px;
+  color: var(--pack-faded);
+}
+.p86-report-host[data-style-pack="field-notebook"] .p86-report-photo-sidetag-text {
+  font-family: 'SF Mono', 'Fira Code', Consolas, monospace;
+  font-size: 12px;
+}
+@media print {
+  .p86-report-host[data-style-pack="field-notebook"] .p86-report-cover-rendered {
+    background: #f8f4e8;
+    padding: 80px 50px;
+    text-align: left;
+    background-image: linear-gradient(to bottom, transparent 47px, #d6cdb1 48px, transparent 49px);
+    background-size: 100% 48px;
+  }
+  .p86-report-host[data-style-pack="field-notebook"] .p86-report-cover-title {
+    color: #3a3528 !important;
+    font-family: Georgia, serif !important;
+    border-bottom: 2px dashed #8a7f5e;
+    padding-bottom: 12px;
+  }
+  .p86-report-host[data-style-pack="field-notebook"] .p86-report-cover-meta {
+    border-top: 1px dashed #8a7f5e !important;
+    font-family: 'Courier New', monospace !important;
+  }
+  .p86-report-host[data-style-pack="field-notebook"] .p86-report-cover-meta .v {
+    font-family: 'Courier New', monospace !important;
+  }
+}
+
+/* ── Inspection Pro ────────────────────────────────────────────── */
+.p86-report-host[data-style-pack="inspection-pro"] {
+  --pack-accent: #0f172a;
+  --pack-good: #10b981;
+  --pack-warn: #f59e0b;
+  --pack-bad: #ef4444;
+}
+.p86-report-host[data-style-pack="inspection-pro"] .p86-report-title-input {
+  border-bottom: 3px solid var(--pack-accent);
+  padding-bottom: 6px;
+  border-radius: 0;
+}
+.p86-report-host[data-style-pack="inspection-pro"] .p86-report-section {
+  border: 1px solid var(--border, #cbd5e1);
+  border-left: 4px solid var(--pack-accent);
+  padding: 12px 14px;
+  margin-top: 16px;
+  border-radius: 0 4px 4px 0;
+}
+.p86-report-host[data-style-pack="inspection-pro"] .p86-report-section-label {
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  font-size: 13px;
+  font-weight: 700;
+}
+.p86-report-host[data-style-pack="inspection-pro"] .p86-report-photo,
+.p86-report-host[data-style-pack="inspection-pro"] .p86-report-photo-single,
+.p86-report-host[data-style-pack="inspection-pro"] .p86-report-photo.has-sidedesc .p86-report-photo-mainstack,
+.p86-report-host[data-style-pack="inspection-pro"] .p86-report-photo-single.has-sidedesc .p86-report-photo-mainstack {
+  border: 1px solid #94a3b8;
+  border-radius: 2px;
+}
+.p86-report-host[data-style-pack="inspection-pro"] .p86-report-photo-sidetag-icon {
+  color: var(--pack-warn);
+}
+@media print {
+  .p86-report-host[data-style-pack="inspection-pro"] .p86-report-cover-rendered {
+    background: #fff;
+    padding: 60px 50px;
+    border-top: 10px solid #0f172a;
+    text-align: left;
+  }
+  .p86-report-host[data-style-pack="inspection-pro"] .p86-report-cover-title {
+    color: #0f172a !important;
+    font-weight: 800 !important;
+    border-bottom: 2px solid #0f172a;
+    padding-bottom: 12px;
+    margin-top: 30px !important;
+  }
+  .p86-report-host[data-style-pack="inspection-pro"] .p86-report-cover-subtitle {
+    color: #475569 !important;
+    text-transform: uppercase;
+    letter-spacing: 3px;
+    font-style: normal !important;
+  }
+  .p86-report-host[data-style-pack="inspection-pro"] .p86-report-cover-meta {
+    background: #f1f5f9;
+    padding: 16px !important;
+    border: 1px solid #cbd5e1;
+    border-top-width: 4px !important;
+    border-top-color: #0f172a !important;
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────
+   Style picker — gallery modal
+   ───────────────────────────────────────────────────────────────── */
+.p86-report-style-gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 14px;
+  padding: 12px 18px 18px;
+}
+.p86-report-style-card {
+  border: 1px solid var(--border, #333);
+  border-radius: 10px;
+  padding: 8px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--card-bg, #0f0f1e);
+  transition: border-color 0.12s, transform 0.12s;
+}
+.p86-report-style-card:hover {
+  border-color: var(--accent, #4f8cff);
+  transform: translateY(-1px);
+}
+.p86-report-style-card.active {
+  border-color: var(--accent, #4f8cff);
+  box-shadow: 0 0 0 2px rgba(79,140,255,0.35);
+}
+.p86-report-style-card-preview {
+  width: 100%;
+  aspect-ratio: 4/3;
+  overflow: hidden;
+  border-radius: 6px;
+  background: #e2e8f0;
+}
+.p86-report-style-card-label {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text, #fff);
+}
+.p86-report-style-card-desc {
+  font-size: 11.5px;
+  color: var(--text-dim, #888);
+  line-height: 1.4;
+}

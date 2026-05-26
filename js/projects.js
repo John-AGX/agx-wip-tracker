@@ -1772,6 +1772,54 @@
   // Template picker modal — grid of 8 tiles (icon + label + blurb).
   // Click a tile to commit the choice; the modal closes and the
   // create flow continues. Cancel = no-op.
+  // Visual style picker — opens a gallery modal with each registered
+  // style pack as a card (label + description + mini preview swatch).
+  // Clicking a card invokes the callback with the pack id and closes
+  // the modal. Active card pulses the accent border so the user sees
+  // which pack is current at-a-glance.
+  function openStyleGallery(state, onPick) {
+    var prior = document.getElementById('projStyleGallery');
+    if (prior) prior.remove();
+    var packs = (window.p86ReportStylePacks && window.p86ReportStylePacks.list)
+      ? window.p86ReportStylePacks.list()
+      : [];
+    var currentId = (state && state.stylePack) || 'clean';
+    var modal = document.createElement('div');
+    modal.id = 'projStyleGallery';
+    modal.className = 'modal active';
+    modal.innerHTML =
+      '<div class="modal-content" style="max-width:760px;">' +
+        '<div class="modal-header">' +
+          '<span>Choose a report style</span>' +
+          '<button class="p86-modal-close" data-close>&times;</button>' +
+        '</div>' +
+        '<div class="p86-report-style-gallery">' +
+          packs.map(function(pk) {
+            var active = (pk.id === currentId) ? ' active' : '';
+            var preview = (window.p86ReportStylePacks && window.p86ReportStylePacks.previewHTML)
+              ? window.p86ReportStylePacks.previewHTML(pk)
+              : '';
+            return '<button type="button" class="p86-report-style-card' + active + '" data-pack-id="' + escapeAttr(pk.id) + '">' +
+              '<div class="p86-report-style-card-preview">' + preview + '</div>' +
+              '<div class="p86-report-style-card-label">' + escapeHTML(pk.label) + '</div>' +
+              '<div class="p86-report-style-card-desc">' + escapeHTML(pk.description || '') + '</div>' +
+            '</button>';
+          }).join('') +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(modal);
+    function close() { modal.remove(); }
+    modal.addEventListener('click', function(e) { if (e.target === modal) close(); });
+    modal.querySelectorAll('[data-close]').forEach(function(b) { b.addEventListener('click', close); });
+    modal.querySelectorAll('[data-pack-id]').forEach(function(card) {
+      card.addEventListener('click', function() {
+        var id = card.getAttribute('data-pack-id');
+        if (typeof onPick === 'function') onPick(id);
+        close();
+      });
+    });
+  }
+
   function openTemplatePicker(cb) {
     var existing = document.getElementById('projTemplatePicker');
     if (existing) existing.remove();
@@ -1902,7 +1950,11 @@
         date: new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' }),
         address: (p && p.address_text) || '',
         subtitle: ''
-      }, report.cover_page || {})
+      }, report.cover_page || {}),
+      // Visual style pack — orthogonal to template_type. 'clean' is
+      // the original look (no overrides). Other packs each define
+      // typography + chrome scoped via data-style-pack on the host.
+      stylePack: report.style_pack || 'clean'
     };
 
     // Idempotent DOM-side close — safe to run from popstate OR from
@@ -1933,7 +1985,8 @@
         title: state.report.title,
         summary: state.report.summary || '',
         sections: state.sections,
-        cover_page: state.cover
+        cover_page: state.cover,
+        style_pack: state.stylePack || 'clean'
       };
       return window.p86Api.reports.update('project', p.id, state.report.id, body);
     }
@@ -2088,10 +2141,18 @@
           '</div>' +
         '</div>';
 
+      // Apply the visual style pack at the host level so all the
+      // scoped CSS rules in css/report-style-packs.css can find their
+      // theme via [data-style-pack="…"]. Editor view + the @media
+      // print rendering both pick up the same attribute, so PDFs
+      // come out matching what the user sees in the editor.
+      host.setAttribute('data-style-pack', state.stylePack || 'clean');
+
       host.innerHTML =
         '<div class="p86-report-topbar">' +
           '<input id="rptTitle" class="p86-report-title-input" value="' + escapeAttr(state.report.title || '') + '" placeholder="Report title" />' +
           '<div class="p86-report-topbar-actions">' +
+            '<button class="ee-btn secondary" id="rptDesign" title="Choose a visual style for this report">&#x1F3A8; Design</button>' +
             '<button class="ee-btn secondary" id="rptPrint">&#x1F5A8; Print / Save PDF</button>' +
             '<button class="ee-btn secondary" id="rptAddSection">&#x2795; Section</button>' +
             '<button class="ee-btn secondary" id="rptSave">Save</button>' +
@@ -2195,6 +2256,17 @@
       });
       host.querySelector('#rptPrint').addEventListener('click', printReport);
       host.querySelector('#rptAddSection').addEventListener('click', function() { addCustomSection(); });
+      // Design button — opens the visual style-pack gallery. Picking
+      // a card mutates state.stylePack, swaps the data attribute,
+      // and debounce-saves. No paint() re-run needed; the CSS
+      // overrides take effect from the attribute change alone.
+      host.querySelector('#rptDesign').addEventListener('click', function() {
+        openStyleGallery(state, function(nextId) {
+          state.stylePack = nextId;
+          host.setAttribute('data-style-pack', nextId);
+          debouncedSave();
+        });
+      });
 
       // Empty-state preset buttons.
       host.querySelectorAll('[data-preset]').forEach(function(btn) {

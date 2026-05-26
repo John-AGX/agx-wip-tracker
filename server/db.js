@@ -2027,6 +2027,14 @@ async function initSchema() {
     -- 'walkthrough' (matches the prior single-template behavior).
     ALTER TABLE job_reports ADD COLUMN IF NOT EXISTS template_type TEXT NOT NULL DEFAULT 'walkthrough';
 
+    -- Visual style pack — orthogonal to template_type. template_type
+    -- picks the CONTENT (which sections seed); style_pack picks the
+    -- VISUAL THEME (fonts / colors / borders / cover treatment).
+    -- Whitelisted IDs live in js/report-style-packs.js + server-side
+    -- in normalizeStylePack. Existing rows backfill to 'clean'
+    -- (matches the original look — no visual change for old reports).
+    ALTER TABLE job_reports ADD COLUMN IF NOT EXISTS style_pack TEXT NOT NULL DEFAULT 'clean';
+
     -- ───────────────────────────────────────────────────────────────
     -- Projects — CompanyCam-style first-class entity that buckets
     -- photos + markups + reports around a single physical site /

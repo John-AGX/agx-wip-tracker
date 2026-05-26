@@ -62,6 +62,22 @@ function normalizeTemplateType(raw) {
   return TEMPLATE_TYPES.has(raw) ? raw : 'walkthrough';
 }
 
+// Visual style packs — orthogonal to template_type. Same allowlist
+// shape; bad/missing values clamp to 'clean' (the original look, no
+// CSS overrides). Keep this in lockstep with the client registry in
+// js/report-style-packs.js.
+const STYLE_PACKS = new Set([
+  'clean',
+  'classic-corporate',
+  'modern-bold',
+  'field-notebook',
+  'inspection-pro'
+]);
+function normalizeStylePack(raw) {
+  if (typeof raw !== 'string') return 'clean';
+  return STYLE_PACKS.has(raw) ? raw : 'clean';
+}
+
 // Wave B3 section layout enum — kept in lockstep with the client
 // LAYOUT_OPTIONS in js/projects.js. Bad/missing values clamp to
 // 'photo-grid' (the historical default).
@@ -278,6 +294,7 @@ router.get('/:entityType/:entityId/:reportId', requireAuth, async (req, res) => 
           title: r.title,
           summary: r.summary,
           template_type: r.template_type || 'walkthrough',
+          style_pack: r.style_pack || 'clean',
           sections: hydrated,
           sections_raw: sections,
           cover_page: r.cover_page || {},
@@ -316,12 +333,13 @@ router.post('/:entityType/:entityId', requireAuth, async (req, res) => {
       const sections = normalizeSections(req.body && req.body.sections);
       const coverPage = normalizeCoverPage(req.body && req.body.cover_page);
       const templateType = normalizeTemplateType(req.body && req.body.template_type);
+      const stylePack = normalizeStylePack(req.body && req.body.style_pack);
       await pool.query(
-        'INSERT INTO job_reports (id, entity_type, entity_id, title, summary, sections, cover_page, template_type, created_by) ' +
-        'VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9)',
-        [id, entityType, entityId, title, summary, JSON.stringify(sections), JSON.stringify(coverPage), templateType, req.user.id]
+        'INSERT INTO job_reports (id, entity_type, entity_id, title, summary, sections, cover_page, template_type, style_pack, created_by) ' +
+        'VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9, $10)',
+        [id, entityType, entityId, title, summary, JSON.stringify(sections), JSON.stringify(coverPage), templateType, stylePack, req.user.id]
       );
-      res.json({ report: { id, entity_type: entityType, entity_id: entityId, title, summary, template_type: templateType, sections, cover_page: coverPage } });
+      res.json({ report: { id, entity_type: entityType, entity_id: entityId, title, summary, template_type: templateType, style_pack: stylePack, sections, cover_page: coverPage } });
     } catch (e) {
       console.error('POST /api/reports/:entityType/:entityId error:', e);
       res.status(500).json({ error: 'Server error' });
@@ -395,6 +413,12 @@ router.patch('/:entityType/:entityId/:reportId', requireAuth, async (req, res) =
       if (typeof req.body.template_type === 'string') {
         sets.push('template_type = $' + (p++));
         params.push(normalizeTemplateType(req.body.template_type));
+      }
+      // style_pack is the visual theme — orthogonal to template_type.
+      // Whitelisted; bad values clamp to 'clean'.
+      if (typeof req.body.style_pack === 'string') {
+        sets.push('style_pack = $' + (p++));
+        params.push(normalizeStylePack(req.body.style_pack));
       }
       if (!sets.length) return res.status(400).json({ error: 'Nothing to update' });
       sets.push('updated_at = NOW()');
