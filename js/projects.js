@@ -221,7 +221,9 @@
   var _listState = {
     filter: 'all',
     q: '',
-    tag: '',
+    // (project-level `tag` filter removed — projects don't carry
+    // their own tags any more. Use the photo-tag chip strip inside
+    // a project for tag-based drill-in.)
     view: 'grid',          // 'grid' | 'map'
     projects: [],
     loading: false,
@@ -355,7 +357,6 @@
     if (_listState.filter === 'archived') opts.status = 'archived';
     else opts.status = 'active';
     if (_listState.q) opts.q = _listState.q;
-    if (_listState.tag) opts.tag = _listState.tag;
     return api().list(opts).then(function(r) {
       _listState.projects = (r && r.projects) || [];
       _listState.error = null;
@@ -386,15 +387,9 @@
       { id: 'archived',     label: 'Archived' }
     ];
 
-    // Surface tag chips from the loaded projects so users can drill in
-    // without leaving the list view.
-    var tagsInList = {};
-    _listState.projects.forEach(function(p) {
-      (p.tags || []).forEach(function(t) {
-        tagsInList[t] = (tagsInList[t] || 0) + 1;
-      });
-    });
-    var tagChips = Object.keys(tagsInList).sort().slice(0, 30);
+    // (Project-level tag chip strip removed — projects don't carry
+    // their own tags. Photo tags live inside each project's detail
+    // view via #projTagChipStrip.)
 
     var html =
       '<div class="p86-projects-root">' +
@@ -423,17 +418,6 @@
             }).join('') +
           '</div>' +
         '</div>' +
-
-        (tagChips.length
-          ? '<div class="p86-projects-tag-row">' +
-              (_listState.tag
-                ? '<button class="p86-chip active p86-chip-tag" style="--h:' + hueFor(_listState.tag) + ';" onclick="window.p86Projects.setTagFilter(\'\')">#' + escapeHTML(_listState.tag) + ' &times;</button>'
-                : tagChips.map(function(t) {
-                    return '<button class="p86-chip p86-chip-tag" style="--h:' + hueFor(t) + ';" onclick="window.p86Projects.setTagFilter(\'' + escapeAttr(t) + '\')">#' + escapeHTML(t) + ' <span class="p86-chip-count">' + tagsInList[t] + '</span></button>';
-                  }).join('')
-              ) +
-            '</div>'
-          : '') +
 
         (_listState.loading
           ? '<div class="p86-projects-empty">Loading…</div>'
@@ -580,10 +564,7 @@
     try { sessionStorage.setItem('p86-projects-view', _listState.view); } catch (e) {}
     paintList();
   }
-  function setTagFilter(tag) {
-    _listState.tag = String(tag || '');
-    fetchAll().then(paintList);
-  }
+  // (setTagFilter removed — project-level tag filter is gone.)
 
   // ──────────────────────────────────────────────────────────────────
   // Create-Project modal — replaces window.prompt
@@ -634,10 +615,8 @@
             '<div id="pcLinkChips" class="p86-proj-link-chips"></div>' +
             '<button type="button" id="pcLinkBtn" class="ee-btn secondary p86-proj-link-btn">&#x1F517; Link to lead, job, or client…</button>' +
           '</div>' +
-          '<div class="p86-field">' +
-            '<span>Tags</span>' +
-            '<div id="pcTagsEditor" class="p86-tag-editor"></div>' +
-          '</div>' +
+          // (Tags field removed — projects don't carry their own
+          // tags. Use photo tags inside the project for taxonomy.)
         '</div>' +
         '<div class="modal-footer">' +
           '<button class="ee-btn secondary" data-close>Cancel</button>' +
@@ -651,11 +630,8 @@
       b.addEventListener('click', function() { modal.remove(); });
     });
 
-    var pendingTags = (prefill.tags || []).slice();
-    mountTagEditor(modal.querySelector('#pcTagsEditor'), {
-      getTags: function() { return pendingTags; },
-      setTags: function(next) { pendingTags = next.slice(); }
-    });
+    // (Tag editor for the create modal removed alongside the field
+    // above — projects don't carry their own tags.)
 
     // Paint the current link chips below the Link button. Click a chip
     // to remove that linkage.
@@ -736,8 +712,7 @@
         description: (modal.querySelector('#pcDesc').value || '').trim() || null,
         lead_id: pendingLink.lead_id || null,
         job_id: pendingLink.job_id || null,
-        client_id: pendingLink.client_id || null,
-        tags: pendingTags
+        client_id: pendingLink.client_id || null
       };
       if (!api()) { alert('API not available'); return; }
       api().create(body).then(function(r) {
@@ -1278,13 +1253,15 @@
         '</div>' +
       '</div>' +
 
-      // Compact header: cover thumb · title + address + tag chips · linkages
+      // Compact header: cover thumb · title + address · linkages.
+      // (Project-level tag editor removed — projects don't carry
+      // their own tags any more. Description covers that role; photo
+      // tags inside the project handle taxonomy / drill-in.)
       '<div class="p86-proj-header-row">' +
         '<div class="p86-proj-header-cover">' + coverThumb + '</div>' +
         '<div class="p86-proj-header-info">' +
           '<input id="projNameInput" value="' + escapeAttr(p.name) + '" class="p86-proj-header-name" placeholder="Project name" />' +
           '<input id="projAddrInput" value="' + escapeAttr(p.address_text || '') + '" placeholder="Site address" class="p86-proj-header-addr" />' +
-          '<div id="projDetailTagsEditor" class="p86-tag-editor p86-tag-editor-header"></div>' +
         '</div>' +
         '<div class="p86-proj-header-side">' +
           (linkBadges.length
@@ -1467,21 +1444,8 @@
       });
     }
 
-    // Project-level tag editor in the header row
-    var tagsHostEl = host.querySelector('#projDetailTagsEditor');
-    if (tagsHostEl) {
-      mountTagEditor(tagsHostEl, {
-        getTags: function() { return (_detailState.project.tags || []).slice(); },
-        setTags: function(next) {
-          _detailState.project.tags = next.slice();
-          api().update(_detailState.project.id, { tags: next }).then(function() {
-            syncListProjectFromDetail();
-          }).catch(function(e) {
-            alert('Tag save failed: ' + (e.message || e));
-          });
-        }
-      });
-    }
+    // (Project-level tag editor wiring removed alongside its markup
+    // and the create-modal field above.)
 
     paintTagChipStrip();
     paintWalkthroughTagStrip();
@@ -3662,7 +3626,6 @@
   window.p86Projects = {
     setFilter: setFilter,
     setView: setView,
-    setTagFilter: setTagFilter,
     openCreate: openCreate,
     createPrompt: createPrompt,     // legacy alias
     createForEntity: createForEntity,
