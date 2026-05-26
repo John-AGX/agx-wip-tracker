@@ -3630,7 +3630,11 @@
   font-size: 16px; font-weight: 700; letter-spacing: 0.6px;
 }
 .p86-proj-photo-tile-checkbox {
-  position: absolute; top: 6px; left: 6px;
+  /* Anchor far enough in from the tile corner that the parent's
+     border-radius: 8px (overflow: hidden) doesn't clip the
+     checkbox's top-left edge. At 6px the curve was biting into the
+     square. 10px puts the checkbox cleanly inside the safe zone. */
+  position: absolute; top: 10px; left: 10px;
   /* Square affordance to read as "checkbox / multi-select", distinct
      from the round action buttons (annotate pencil, menu ⋮) on the
      other corners. box-sizing:border-box so the explicit width/height
