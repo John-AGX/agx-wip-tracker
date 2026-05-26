@@ -1534,30 +1534,68 @@
     var host = document.getElementById('projReportsHost');
     if (!host) return;
     var reports = _detailState.reports || [];
+    // Long-card list — replaces the prior .p86-proj-reports-grid. Each
+    // row is a full-width card with a thumbnail (first photo of the
+    // first section that has one), title (bold), date, ⋯ menu. Click
+    // the row body to open the editor; click the menu for delete.
     var html =
       '<div class="p86-proj-reports-toolbar">' +
-        '<div class="p86-proj-reports-hint">Curated photo collections you can print as a single PDF — Before / During / After by default, but rename or add sections as needed.</div>' +
-        '<button class="primary" onclick="window.p86Projects.createReport()">&#x2795; New Report</button>' +
+        '<input type="search" class="p86-proj-reports-search" placeholder="Find a report…" id="projReportsSearch" />' +
+        '<button class="primary" onclick="window.p86Projects.createReport()">' +
+          '<span class="p86-proj-reports-plus">&#x2295;</span> Create Report' +
+        '</button>' +
       '</div>';
     if (!reports.length) {
-      html += '<div class="p86-proj-empty-line" style="padding:30px;text-align:center;border:1px dashed var(--border, #333);border-radius:10px;margin-top:8px;">No reports yet. Hit <strong>+ New Report</strong> to draft one.</div>';
+      html += '<div class="p86-proj-empty-line" style="padding:30px;text-align:center;border:1px dashed var(--border, #333);border-radius:10px;margin-top:8px;">No reports yet. Hit <strong>Create Report</strong> to draft one.</div>';
     } else {
-      html += '<div class="p86-proj-reports-grid">' +
+      html += '<div class="p86-proj-reports-list" id="projReportsListBody">' +
         reports.map(function(r) {
-          return '<div class="p86-proj-report-card" onclick="window.p86Projects.openReport(\'' + escapeAttr(r.id) + '\')">' +
-            '<div class="p86-proj-report-card-title">' + escapeHTML(r.title || 'Untitled report') + '</div>' +
-            '<div class="p86-proj-report-card-stats">' +
-              '&#x1F4F7; ' + Number(r.photo_count || 0) + ' photo' + (r.photo_count === 1 ? '' : 's') +
-              ' &middot; ' + Number(r.section_count || 0) + ' section' + (r.section_count === 1 ? '' : 's') +
-              ' &middot; ' + escapeHTML(fmtRelative(r.updated_at)) +
+          // Thumbnail — server doesn't (yet) return a cover image
+          // per report, so fall back to the empty placeholder. When
+          // the future "cover photo" field lands this swaps in the
+          // actual image URL with no other changes.
+          var thumbHTML = r.cover_thumb_url
+            ? '<img class="p86-proj-report-row-thumb-img" src="' + escapeAttr(r.cover_thumb_url) + '" alt="" />'
+            : '<div class="p86-proj-report-row-thumb-empty">&#x1F5BC;</div>';
+          var date = '';
+          if (r.updated_at) {
+            var d = new Date(r.updated_at);
+            if (!isNaN(d.getTime())) {
+              date = d.toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+            }
+          }
+          return '<div class="p86-proj-report-row" data-report-id="' + escapeAttr(r.id) + '" onclick="window.p86Projects.openReport(\'' + escapeAttr(r.id) + '\')">' +
+            '<div class="p86-proj-report-row-thumb">' + thumbHTML + '</div>' +
+            '<div class="p86-proj-report-row-body">' +
+              '<div class="p86-proj-report-row-title">' + escapeHTML(r.title || 'Untitled report') + '</div>' +
+              '<div class="p86-proj-report-row-date">' + escapeHTML(date) + '</div>' +
             '</div>' +
-            (r.created_by_name ? '<div class="p86-proj-report-card-author">by ' + escapeHTML(r.created_by_name) + '</div>' : '') +
-            '<button class="p86-proj-report-card-menu" title="Delete" onclick="event.stopPropagation(); window.p86Projects.deleteReport(\'' + escapeAttr(r.id) + '\')">&times;</button>' +
+            '<button class="p86-proj-report-row-menu" title="Delete" onclick="event.stopPropagation(); window.p86Projects.deleteReport(\'' + escapeAttr(r.id) + '\')">&hellip;</button>' +
           '</div>';
         }).join('') +
       '</div>';
     }
     host.innerHTML = html;
+
+    // Find-a-report filter — client-side on the title, hides
+    // non-matching rows without re-fetching. Debounced to 120ms
+    // so each keystroke doesn't thrash the DOM.
+    var search = host.querySelector('#projReportsSearch');
+    if (search) {
+      var t;
+      search.addEventListener('input', function() {
+        clearTimeout(t);
+        t = setTimeout(function() {
+          var q = String(search.value || '').toLowerCase().trim();
+          var list = host.querySelector('#projReportsListBody');
+          if (!list) return;
+          list.querySelectorAll('.p86-proj-report-row').forEach(function(row) {
+            var title = (row.querySelector('.p86-proj-report-row-title') || {}).textContent || '';
+            row.style.display = (!q || title.toLowerCase().indexOf(q) >= 0) ? '' : 'none';
+          });
+        }, 120);
+      });
+    }
   }
 
   function createReport() {
