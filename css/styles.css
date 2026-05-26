@@ -3569,8 +3569,13 @@
 }
 .p86-proj-photo-tile-checkbox {
   position: absolute; top: 6px; left: 6px;
+  /* Square affordance to read as "checkbox / multi-select", distinct
+     from the round action buttons (annotate pencil, menu ⋮) on the
+     other corners. box-sizing:border-box so the explicit width/height
+     hold even when the inner input adds intrinsic dimensions. */
   width: 24px; height: 24px;
-  border-radius: 50%;
+  box-sizing: border-box;
+  border-radius: 5px;
   background: rgba(255,255,255,0.85);
   border: 0;
   display: flex; align-items: center; justify-content: center;
