@@ -4687,6 +4687,12 @@
    Default .modal.active is z:1000 which would hide the picker
    behind the editor. */
 #projReportPhotoPicker.modal.active { z-index: 1100; }
+/* Style gallery modal (Design button) — same z-index issue: opens
+   from inside the report editor (z:1050), so the gallery has to
+   sit on top. Without this you'd click Design, the gallery would
+   open at z:1000 BEHIND the editor, and the click would feel like
+   it did nothing. */
+#projStyleGallery.modal.active { z-index: 1100; }
 
 .p86-report-picker-tile-added { opacity: 0.55; cursor: default; }
 .p86-report-picker-tile-pending {
