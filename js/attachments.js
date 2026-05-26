@@ -378,48 +378,57 @@
       '</div>';
     }
 
-    // The panel's body is split: a parent-entity header at the top
-    // (read-only) and an editable info block below (uploader, tags,
-    // description, comments). renderPanelHTML returns the whole
-    // panel innerHTML; renderPanel() is the in-place updater used
-    // when comments load or a tag PATCH lands.
+    // The panel is split into TWO regions so the parent-entity
+    // header (project name + address) can sit fixed at the top while
+    // the body (uploader / tags / description / comments) scrolls
+    // independently. The previous single-flow layout used negative
+    // margins on the header to bleed it to the panel edges, but
+    // those negative margins broke the flex gap calculation and made
+    // the avatar render on top of the address text. The
+    // header-then-scrollable-body split sidesteps the issue and also
+    // keeps the project context visible when reading a long comment
+    // thread.
     function renderPanelHTML(a) {
       var uploader = userNameFor(a.uploaded_by);
       var when = fmtRelativeTime(a.uploaded_at);
       var caption = a.caption || '';
       return (state.parentLabel
           ? '<header class="p86-pv-parent">' +
-              '<div class="p86-pv-parent-name">' + escapeHTMLLocal(state.parentLabel) + '</div>' +
+              '<div class="p86-pv-parent-top">' +
+                '<div class="p86-pv-parent-name">' + escapeHTMLLocal(state.parentLabel) + '</div>' +
+                '<button class="p86-pv-close-panel" data-pv="close" title="Close">&times;</button>' +
+              '</div>' +
               (state.parentSubtitle ? '<div class="p86-pv-parent-sub">' + escapeHTMLLocal(state.parentSubtitle) + '</div>' : '') +
             '</header>'
-          : '') +
-        '<button class="p86-pv-close-panel" data-pv="close" title="Close">&times;</button>' +
-        '<div class="p86-pv-uploader">' +
-          '<div class="p86-pv-avatar">' + escapeHTMLLocal(initialsFor(uploader)) + '</div>' +
-          '<div class="p86-pv-uploader-meta">' +
-            '<div class="p86-pv-uploader-name">' + escapeHTMLLocal(uploader) + '</div>' +
-            '<div class="p86-pv-uploader-when">' + escapeHTMLLocal(when) + '</div>' +
+          : '<button class="p86-pv-close-panel p86-pv-close-panel-floating" data-pv="close" title="Close">&times;</button>') +
+        '<div class="p86-pv-body">' +
+          '<div class="p86-pv-uploader">' +
+            '<div class="p86-pv-avatar">' + escapeHTMLLocal(initialsFor(uploader)) + '</div>' +
+            '<div class="p86-pv-uploader-meta">' +
+              '<div class="p86-pv-uploader-name">' + escapeHTMLLocal(uploader) + '</div>' +
+              '<div class="p86-pv-uploader-when">' + escapeHTMLLocal(when) + '</div>' +
+            '</div>' +
           '</div>' +
-        '</div>' +
-        '<section class="p86-pv-section">' +
-          '<div class="p86-pv-section-label">Tags</div>' +
-          '<div class="p86-pv-tags-host"></div>' +
-        '</section>' +
-        '<section class="p86-pv-section">' +
-          '<div class="p86-pv-section-label">Description</div>' +
-          '<fieldset class="p86-pv-desc-fs" data-edit-gate="locked">' +
-            '<legend class="p86-pv-desc-legend">&nbsp;</legend>' +
-            '<textarea class="p86-pv-desc-input" placeholder="Add a description (caption)…">' + escapeHTMLLocal(caption) + '</textarea>' +
-          '</fieldset>' +
-        '</section>' +
-        '<section class="p86-pv-section p86-pv-comments-section">' +
-          '<div class="p86-pv-section-label">Comments</div>' +
-          '<div class="p86-pv-comments-list"></div>' +
-          '<div class="p86-pv-composer">' +
-            '<textarea class="p86-pv-composer-input" rows="2" placeholder="Add a comment…"></textarea>' +
-            '<button class="p86-pv-composer-post" type="button">Post</button>' +
-          '</div>' +
-        '</section>';
+          '<section class="p86-pv-section">' +
+            '<div class="p86-pv-section-label">Tags</div>' +
+            '<div class="p86-pv-tags-host"></div>' +
+          '</section>' +
+          '<section class="p86-pv-section">' +
+            '<div class="p86-pv-section-label">Description</div>' +
+            '<fieldset class="p86-pv-desc-fs" data-edit-gate="locked">' +
+              '<legend class="p86-pv-desc-legend">&nbsp;</legend>' +
+              '<textarea class="p86-pv-desc-input" placeholder="Add a description (caption)…">' + escapeHTMLLocal(caption) + '</textarea>' +
+            '</fieldset>' +
+          '</section>' +
+          '<section class="p86-pv-section p86-pv-comments-section">' +
+            '<div class="p86-pv-section-label">Comments</div>' +
+            '<div class="p86-pv-comments-list"></div>' +
+            '<div class="p86-pv-composer">' +
+              '<textarea class="p86-pv-composer-input" rows="2" placeholder="Add a comment…"></textarea>' +
+              '<button class="p86-pv-composer-post" type="button">Post</button>' +
+            '</div>' +
+          '</section>' +
+        '</div>';
     }
 
     function renderPanel() {

@@ -1033,27 +1033,69 @@
       }
 
       function renderSuggest(list) {
-        if (!list || !list.length) {
-          suggestEl.style.display = 'none';
-          return;
-        }
         var current = opts.getTags();
-        var filtered = list.filter(function(t) { return current.indexOf(t) === -1; }).slice(0, 8);
-        if (!filtered.length) {
+        var typed = String(input.value || '').trim().toLowerCase().slice(0, 32);
+        // Suggestions from the catalog, minus anything already on
+        // this entity. orgTags.suggest returns them in use_count DESC
+        // order — most-used first — so the visible list IS the
+        // favorites list.
+        var filtered = (list || []).filter(function(t) {
+          return current.indexOf(t) === -1;
+        }).slice(0, 8);
+        // "Create" entry — only when the user has typed something
+        // that isn't already on this entity AND isn't already an
+        // exact-match suggestion AND looks like a valid tag. Gives
+        // the user a single-click way to mint a brand-new tag
+        // without having to know about the Enter/comma shortcut.
+        var canCreate = !!typed
+          && current.indexOf(typed) === -1
+          && filtered.indexOf(typed) === -1;
+        if (!filtered.length && !canCreate) {
           suggestEl.style.display = 'none';
           return;
         }
-        suggestEl.innerHTML = filtered.map(function(t) {
-          return '<button type="button" class="p86-tag-suggest-row" data-tag="' + escapeAttr(t) + '" style="--h:' + hueFor(t) + ';">#' + escapeHTML(t) + '</button>';
-        }).join('');
+        var html = '';
+        if (canCreate) {
+          html += '<div class="p86-tag-suggest-create-row">' +
+            '<button type="button" class="p86-tag-suggest-create" data-create="' + escapeAttr(typed) + '">' +
+              '<span class="p86-tag-suggest-create-plus">&#x2295;</span>' +
+              '<span>Create <strong>#' + escapeHTML(typed) + '</strong></span>' +
+            '</button>' +
+          '</div>';
+        }
+        if (filtered.length) {
+          // Only show the "Favorites" / "Top tags" header when the
+          // input is empty (focus dropdown). When the user is
+          // typing, the same list is filtered matches, not favorites
+          // — labeling it "Favorites" would be misleading.
+          if (!typed) {
+            html += '<div class="p86-tag-suggest-header">Favorites &middot; tap to add</div>';
+          }
+          html += '<div class="p86-tag-suggest-rows">' +
+            filtered.map(function(t) {
+              return '<button type="button" class="p86-tag-suggest-row" data-tag="' + escapeAttr(t) + '" style="--h:' + hueFor(t) + ';">#' + escapeHTML(t) + '</button>';
+            }).join('') +
+          '</div>';
+        }
+        suggestEl.innerHTML = html;
         suggestEl.style.display = 'block';
+        // Wire both the existing-tag rows and the new Create row to
+        // the same commit path. mousedown (not click) so the input
+        // doesn't lose focus before the handler fires.
         suggestEl.querySelectorAll('.p86-tag-suggest-row').forEach(function(b) {
           b.addEventListener('mousedown', function(e) {
-            // mousedown (not click) so the input doesn't lose focus first
             e.preventDefault();
             commit(b.getAttribute('data-tag'));
+            input.value = '';
             suggestEl.style.display = 'none';
           });
+        });
+        var createBtn = suggestEl.querySelector('.p86-tag-suggest-create');
+        if (createBtn) createBtn.addEventListener('mousedown', function(e) {
+          e.preventDefault();
+          commit(createBtn.getAttribute('data-create'));
+          input.value = '';
+          suggestEl.style.display = 'none';
         });
       }
 
@@ -1072,19 +1114,30 @@
         return Promise.resolve({ tags: [] });
       };
 
+      // Cache the most recently fetched suggestion list so the
+      // dropdown can re-render the "Create '<typed>'" row instantly
+      // on every keystroke while the actual catalog query stays
+      // debounced. Without the cache the Create row would lag the
+      // input by 150ms — feels broken.
       var fetchTimer;
+      var lastSuggestList = [];
       input.addEventListener('input', function(e) {
+        // Re-render synchronously with the cached list so the Create
+        // row updates immediately.
+        renderSuggest(lastSuggestList);
         clearTimeout(fetchTimer);
         var q = e.target.value;
         fetchTimer = setTimeout(function() {
           suggestFn(q).then(function(r) {
-            renderSuggest((r && r.tags) || []);
+            lastSuggestList = (r && r.tags) || [];
+            renderSuggest(lastSuggestList);
           }).catch(function() {});
         }, 150);
       });
       input.addEventListener('focus', function() {
         suggestFn('').then(function(r) {
-          renderSuggest((r && r.tags) || []);
+          lastSuggestList = (r && r.tags) || [];
+          renderSuggest(lastSuggestList);
         }).catch(function() {});
       });
       input.addEventListener('blur', function() {
