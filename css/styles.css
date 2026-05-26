@@ -4478,16 +4478,20 @@
 }
 /* Side description — pure typography, no box. Padding only on the
    inside edge (closest to the photo) so the text breathes away
-   from the image. */
+   from the image. Description text + metadata list stack with a
+   small gap so the structure reads cleanly. */
 .p86-report-photo-sidedesc {
   padding: 4px 6px;
   font-size: 13px;
   line-height: 1.5;
   color: var(--text, #fff);
-  white-space: pre-wrap;
   background: transparent;
   border: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
 }
+.p86-report-photo-sidedesc-text { white-space: pre-wrap; }
 /* Side-column tags — render as plain "🏷 tagname" lines, no pill
    chrome. CompanyCam-style: each tag stacks on its own line
    alongside the description, with just an icon prefix and plain
@@ -4498,7 +4502,7 @@
   display: flex;
   flex-direction: column;
   gap: 3px;
-  margin-top: 8px;
+  /* spacing from description handled by the parent .sidedesc flex gap */
 }
 .p86-report-photo-sidetag {
   display: inline-flex;

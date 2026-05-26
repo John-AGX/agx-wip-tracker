@@ -2622,15 +2622,49 @@
       if (!att) return '';
       var hasDesc = !!att.caption;
       var hasTags = Array.isArray(att.tags) && att.tags.length > 0;
-      if (!hasDesc && !hasTags) return '';
+      var hasUploader = !!att.uploaded_by_name;
+      var hasUploadedAt = !!att.uploaded_at;
+      // The side column is shown when at least one piece of metadata
+      // is available — never blocks plain photos from rendering
+      // compact.
+      if (!hasDesc && !hasTags && !hasUploader && !hasUploadedAt) return '';
       var html = '<div class="p86-report-photo-sidedesc">';
-      if (hasDesc) html += escapeHTML(att.caption);
+      if (hasDesc) html += '<div class="p86-report-photo-sidedesc-text">' + escapeHTML(att.caption) + '</div>';
+      // CompanyCam-style metadata list — each item is an icon + the
+      // value, stacked vertically. No pill chrome (handled by the
+      // shared .p86-report-photo-sidetag styles, which are now plain
+      // icon+text lines). Date format matches the reference
+      // ("May 19, 2026, 3:01 PM").
+      var metaItems = [];
+      if (hasUploader) {
+        metaItems.push({ icon: '\u{1F464}', text: att.uploaded_by_name });   // 👤
+      }
+      if (hasUploadedAt) {
+        var d = new Date(att.uploaded_at);
+        var when = '';
+        if (!isNaN(d.getTime())) {
+          try {
+            when = d.toLocaleString(undefined, {
+              year: 'numeric', month: 'long', day: 'numeric',
+              hour: 'numeric', minute: '2-digit'
+            });
+          } catch (e) {
+            when = d.toLocaleString();
+          }
+        }
+        if (when) metaItems.push({ icon: '\u{1F4C5}', text: when });          // 📅
+      }
       if (hasTags) {
+        att.tags.forEach(function(t) {
+          metaItems.push({ icon: '\u{1F3F7}', text: t });                     // 🏷
+        });
+      }
+      if (metaItems.length) {
         html += '<div class="p86-report-photo-sidetags">' +
-          att.tags.map(function(t) {
+          metaItems.map(function(m) {
             return '<span class="p86-report-photo-sidetag">' +
-              '<span class="p86-report-photo-sidetag-icon" aria-hidden="true">&#x1F3F7;</span>' +
-              '<span class="p86-report-photo-sidetag-text">' + escapeHTML(t) + '</span>' +
+              '<span class="p86-report-photo-sidetag-icon" aria-hidden="true">' + m.icon + '</span>' +
+              '<span class="p86-report-photo-sidetag-text">' + escapeHTML(m.text) + '</span>' +
             '</span>';
           }).join('') +
         '</div>';
@@ -2648,9 +2682,16 @@
     }
     // Does this attachment carry anything that would render in the
     // side column? Used to apply the .has-sidedesc grid class only
-    // when something is actually there.
+    // when something is actually there. Includes uploader name and
+    // upload date now (CompanyCam-style metadata list), so virtually
+    // every photo gets the side column — that's the intended look.
     function attHasSideContent(att) {
-      return !!(att && (att.caption || (Array.isArray(att.tags) && att.tags.length)));
+      if (!att) return false;
+      if (att.caption) return true;
+      if (Array.isArray(att.tags) && att.tags.length) return true;
+      if (att.uploaded_by_name) return true;
+      if (att.uploaded_at) return true;
+      return false;
     }
     // Tile-level affordances: drag handle (top-left, hover-only) +
     // existing remove button. The whole card is draggable so users
