@@ -4163,6 +4163,7 @@
   max-height: 60vh;
   object-fit: contain;
   background: #000;
+  cursor: zoom-in;
 }
 
 /* Before / After layout: two photos side-by-side. Stacks on mobile. */
@@ -4314,11 +4315,62 @@
   overflow: hidden;
   background: var(--card-bg, #0f0f1e);
 }
+/* When the underlying attachment has a description (att.caption set
+   via the photo viewer), the card grows a side column to show it
+   beside the image. Plain photos keep the compact stacked layout. */
+.p86-report-photo.has-sidedesc,
+.p86-report-photo-single.has-sidedesc {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  align-items: stretch;
+}
+.p86-report-photo-mainstack {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.p86-report-photo-sidedesc {
+  padding: 8px 10px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text, #fff);
+  background: rgba(79, 140, 255, 0.04);
+  border-left: 1px solid var(--border, #333);
+  white-space: pre-wrap;
+  overflow-y: auto;
+  max-height: 100%;
+}
+/* Drag handle — top-left corner, visible on hover. */
+.p86-report-photo-drag,
+.p86-report-photo-single .p86-report-photo-drag {
+  position: absolute;
+  top: 5px; left: 5px;
+  z-index: 2;
+  width: 22px; height: 22px;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 4px;
+  background: rgba(0,0,0,0.5);
+  color: #fff;
+  font-size: 12px;
+  cursor: grab;
+  opacity: 0;
+  transition: opacity 0.12s;
+  user-select: none;
+}
+.p86-report-photo:hover .p86-report-photo-drag,
+.p86-report-photo-single:hover .p86-report-photo-drag { opacity: 1; }
+.p86-report-photo-drag:active { cursor: grabbing; }
+.p86-report-photo-dragging { opacity: 0.5; }
+.p86-report-photo-dragover {
+  outline: 2px dashed var(--accent, #4f8cff);
+  outline-offset: -2px;
+}
 .p86-report-photo img {
   display: block;
   width: 100%; aspect-ratio: 4/3;
   object-fit: cover;
   background: #1a1a2e;
+  cursor: zoom-in;
 }
 .p86-report-photo-caption {
   width: 100%;

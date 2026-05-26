@@ -169,6 +169,13 @@
     function close() {
       document.removeEventListener('keydown', onKey);
       if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+      // Let the caller refresh their UI to reflect anything the user
+      // changed in the viewer — annotations saved, description edited,
+      // tags added. Mutations happen in-place on the att objects, so
+      // the caller usually just needs to re-render with the same data.
+      if (typeof opts.onClose === 'function') {
+        try { opts.onClose(); } catch (e) { /* defensive */ }
+      }
     }
     function onKey(e) {
       // Don't hijack arrow keys while typing in the panel.

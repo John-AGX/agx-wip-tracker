@@ -2203,6 +2203,80 @@
             debouncedSave();
           });
         });
+
+        // Click the photo image → open the full photo viewer panel.
+        // Sends ONLY this section's photo set so prev/next paginates
+        // within the section (not the whole project library). Mutations
+        // the user makes in the viewer — annotations, description,
+        // tags — happen on the same att objects allPhotos points at,
+        // so repainting on viewer close picks them up automatically.
+        sectionEl.querySelectorAll('[data-open-photo]').forEach(function(img) {
+          img.addEventListener('click', function(e) {
+            e.preventDefault();
+            var pid = img.getAttribute('data-open-photo');
+            var ids = state.sections[sIdx].photo_ids;
+            var atts = ids.map(function(id) {
+              return allPhotos.find(function(a) { return a.id === id; });
+            }).filter(Boolean);
+            var startIdx = Math.max(0, atts.findIndex(function(a) { return a.id === pid; }));
+            if (window.p86Attachments && typeof window.p86Attachments.openLightbox === 'function') {
+              window.p86Attachments.openLightbox(atts, startIdx, {
+                onClose: function() {
+                  // Description / annotations may have changed in the
+                  // viewer — repaint so the side-description column +
+                  // any future tile overlays reflect the new state.
+                  paint();
+                }
+              });
+            }
+          });
+        });
+
+        // Drag-and-drop reorder within the section. HTML5 DnD is dead
+        // simple for this: dragstart stashes the source id; dragover on
+        // a sibling card visually marks it as the target; drop swaps
+        // them in photo_ids and repaints. Works for both photo-grid
+        // and single-photo layouts (both use draggable cards).
+        var dragSrcId = null;
+        sectionEl.querySelectorAll('[data-photo-id][draggable="true"]').forEach(function(card) {
+          card.addEventListener('dragstart', function(e) {
+            dragSrcId = card.getAttribute('data-photo-id');
+            card.classList.add('p86-report-photo-dragging');
+            try { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', dragSrcId); } catch (_) {}
+          });
+          card.addEventListener('dragend', function() {
+            card.classList.remove('p86-report-photo-dragging');
+            sectionEl.querySelectorAll('.p86-report-photo-dragover').forEach(function(el) {
+              el.classList.remove('p86-report-photo-dragover');
+            });
+            dragSrcId = null;
+          });
+          card.addEventListener('dragover', function(e) {
+            // Allow drop AND give a visible insert target.
+            e.preventDefault();
+            try { e.dataTransfer.dropEffect = 'move'; } catch (_) {}
+            if (card.getAttribute('data-photo-id') !== dragSrcId) {
+              card.classList.add('p86-report-photo-dragover');
+            }
+          });
+          card.addEventListener('dragleave', function() {
+            card.classList.remove('p86-report-photo-dragover');
+          });
+          card.addEventListener('drop', function(e) {
+            e.preventDefault();
+            card.classList.remove('p86-report-photo-dragover');
+            var targetId = card.getAttribute('data-photo-id');
+            if (!dragSrcId || dragSrcId === targetId) return;
+            var ids = state.sections[sIdx].photo_ids;
+            var fromIdx = ids.indexOf(dragSrcId);
+            var toIdx = ids.indexOf(targetId);
+            if (fromIdx < 0 || toIdx < 0) return;
+            ids.splice(fromIdx, 1);
+            ids.splice(toIdx, 0, dragSrcId);
+            paint();
+            debouncedSave();
+          });
+        });
         // Text-block layout: textarea writes back into state.text_body.
         var textInput = sectionEl.querySelector('.p86-report-section-text-input');
         if (textInput) textInput.addEventListener('input', function(e) {
@@ -2370,17 +2444,41 @@
       '</div>';
     }
 
+    // Renders the photo's OWN description (att.caption) as a side
+    // panel next to the image. The bottom-of-card input remains for
+    // the report-section caption (figure-reference style). Only shown
+    // when the photo actually has a description, so plain photos stay
+    // compact.
+    function photoSideDescHTML(att) {
+      if (!att || !att.caption) return '';
+      return '<div class="p86-report-photo-sidedesc" title="Photo description (from the viewer panel)">' +
+        escapeHTML(att.caption) +
+      '</div>';
+    }
+    // Tile-level affordances: drag handle (top-left, hover-only) +
+    // existing remove button. The whole card is draggable so users
+    // can grab anywhere; the handle is a visual cue.
+    function photoDragHandleHTML() {
+      return '<span class="p86-report-photo-drag" title="Drag to reorder">&#x2630;</span>';
+    }
+
     function sectionPhotoGridBodyHTML(section) {
       return '<div class="p86-report-section-photos">' +
         (section.photo_ids.length === 0
           ? '<div class="p86-proj-empty-line" style="grid-column:1/-1;">No photos in this section yet.</div>'
-          : section.photo_ids.map(function(pid) {
+          : section.photo_ids.map(function(pid, idx) {
               var att = allPhotos.find(function(a) { return a.id === pid; });
               if (!att) return '<div class="p86-report-photo p86-report-photo-missing">(photo deleted)</div>';
               var caption = section.captions[pid] || '';
-              return '<div class="p86-report-photo">' +
-                '<img src="' + escapeAttr(att.thumb_url || att.web_url) + '" alt="" />' +
-                '<input class="p86-report-photo-caption" value="' + escapeAttr(caption) + '" data-caption-input="' + escapeAttr(pid) + '" placeholder="Caption (optional)" />' +
+              var hasDesc = !!(att.caption);
+              return '<div class="p86-report-photo' + (hasDesc ? ' has-sidedesc' : '') +
+                  '" draggable="true" data-photo-id="' + escapeAttr(pid) + '" data-photo-idx="' + idx + '">' +
+                photoDragHandleHTML() +
+                '<div class="p86-report-photo-mainstack">' +
+                  '<img src="' + escapeAttr(att.thumb_url || att.web_url) + '" alt="" data-open-photo="' + escapeAttr(pid) + '" />' +
+                  '<input class="p86-report-photo-caption" value="' + escapeAttr(caption) + '" data-caption-input="' + escapeAttr(pid) + '" placeholder="Caption (optional)" />' +
+                '</div>' +
+                photoSideDescHTML(att) +
                 '<button type="button" class="p86-report-photo-remove" data-rm-photo="' + escapeAttr(pid) + '" title="Remove from section">&times;</button>' +
               '</div>';
             }).join('')) +
@@ -2393,13 +2491,19 @@
       return '<div class="p86-report-section-singles">' +
         (section.photo_ids.length === 0
           ? '<div class="p86-proj-empty-line">No photos yet — tap "+ Add photos".</div>'
-          : section.photo_ids.map(function(pid) {
+          : section.photo_ids.map(function(pid, idx) {
               var att = allPhotos.find(function(a) { return a.id === pid; });
               if (!att) return '<div class="p86-report-photo-single p86-report-photo-missing">(photo deleted)</div>';
               var caption = section.captions[pid] || '';
-              return '<div class="p86-report-photo-single">' +
-                '<img src="' + escapeAttr(att.web_url || att.thumb_url) + '" alt="" />' +
-                '<input class="p86-report-photo-caption" value="' + escapeAttr(caption) + '" data-caption-input="' + escapeAttr(pid) + '" placeholder="Caption (optional)" />' +
+              var hasDesc = !!(att.caption);
+              return '<div class="p86-report-photo-single' + (hasDesc ? ' has-sidedesc' : '') +
+                  '" draggable="true" data-photo-id="' + escapeAttr(pid) + '" data-photo-idx="' + idx + '">' +
+                photoDragHandleHTML() +
+                '<div class="p86-report-photo-mainstack">' +
+                  '<img src="' + escapeAttr(att.web_url || att.thumb_url) + '" alt="" data-open-photo="' + escapeAttr(pid) + '" />' +
+                  '<input class="p86-report-photo-caption" value="' + escapeAttr(caption) + '" data-caption-input="' + escapeAttr(pid) + '" placeholder="Caption (optional)" />' +
+                '</div>' +
+                photoSideDescHTML(att) +
                 '<button type="button" class="p86-report-photo-remove" data-rm-photo="' + escapeAttr(pid) + '" title="Remove">&times;</button>' +
               '</div>';
             }).join('')) +
