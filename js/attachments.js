@@ -947,7 +947,7 @@
             if (photoGroups.length > 1 || g.folder !== 'general') {
               html += folderHeader(g.folder, g.items.length);
             }
-            html += '<div data-att-grid="1" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;margin-bottom:18px;">';
+            html += '<div class="p86-proj-feed-grid p86-att-tile-grid" data-att-grid="1" style="margin-bottom:18px;">';
             g.items.forEach(function(att) {
               html += renderPhotoTile(att, photosOrdered.length, false);
               photosOrdered.push(att);
@@ -963,7 +963,7 @@
         // edits separately from raw uploads.
         if (markups.length) {
           html += sectionHeader('✏ Markups', markups.length);
-          html += '<div data-att-grid-markups="1" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;margin-bottom:18px;">';
+          html += '<div class="p86-proj-feed-grid p86-att-tile-grid" data-att-grid-markups="1" style="margin-bottom:18px;">';
           markups.forEach(function(att, i) {
             html += renderPhotoTile(att, i, true);
           });
@@ -1019,18 +1019,9 @@
             ('From ' + (parentEntity && parentEntity.entityType ? parentEntity.entityType : 'parent'));
           if (parentPhotos.length) {
             html += sectionHeader('📷 ' + parentLabel + ' — Photos', parentPhotos.length);
-            html += '<div data-att-grid-parent="1" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;margin-bottom:18px;opacity:0.92;">';
+            html += '<div class="p86-proj-feed-grid p86-att-tile-grid" data-att-grid-parent="1" style="margin-bottom:18px;opacity:0.95;">';
             parentPhotos.forEach(function(att, i) {
-              html += '<div class="att-thumb-tile" style="position:relative;border:1px solid rgba(79,140,255,0.35);border-radius:8px;overflow:hidden;background:#000;aspect-ratio:1/1;">' +
-                '<img data-att-thumb-parent="' + i + '" src="' + escapeAttr(att.thumb_url) + '" alt="' + escapeAttr(att.filename) + '" onerror="this.parentNode.classList.add(\'att-thumb-broken\')" style="width:100%;height:100%;object-fit:cover;cursor:zoom-in;display:block;" />' +
-                // Top-left: entity-source badge ("LEAD")
-                '<div style="position:absolute;top:4px;left:4px;background:rgba(79,140,255,0.85);color:#fff;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;padding:2px 5px;border-radius:3px;z-index:2;">' + escapeHTMLLocal((parentEntity && parentEntity.entityType) || 'parent') + '</div>' +
-                // Top-right: Mark-up button. Result uploads into the
-                // CURRENT entity (not the parent's), with markup_of
-                // pointing back at this parent attachment.
-                (canEdit ? '<button data-att-markup-parent="' + escapeAttr(att.id) + '" title="Mark up — saves into this ' + escapeAttr(entityType) + '" style="position:absolute;top:4px;right:4px;background:rgba(0,0,0,0.7);color:#fbbf24;border:none;border-radius:4px;padding:3px 6px;font-size:10px;font-weight:700;cursor:pointer;z-index:2;">&#x270F; MARK</button>' : '') +
-                '<div style="position:absolute;bottom:0;left:0;right:0;background:linear-gradient(transparent,rgba(0,0,0,0.7));color:#fff;font-size:10px;padding:14px 6px 4px;font-family:Arial,sans-serif;pointer-events:none;z-index:1;">' + escapeHTMLLocal(att.filename) + '</div>' +
-              '</div>';
+              html += renderParentPhotoTile(att, i);
             });
             html += '</div>';
           }
@@ -1086,63 +1077,83 @@
         };
       }
       // Photo click → lightbox; index is into the photos sub-array
-      container.querySelectorAll('[data-att-thumb]').forEach(function(img) {
-        img.onclick = function() {
-          var i = parseInt(img.getAttribute('data-att-thumb'), 10);
-          openLightbox(photos, i);
-        };
-      });
-      container.querySelectorAll('[data-att-thumb-markup]').forEach(function(img) {
-        img.onclick = function() {
-          var i = parseInt(img.getAttribute('data-att-thumb-markup'), 10);
-          openLightbox(markups, i);
-        };
-      });
-      container.querySelectorAll('[data-att-del-photo]').forEach(function(btn) {
-        btn.onclick = function(e) {
-          e.stopPropagation();
-          deleteAttachment(btn.getAttribute('data-att-del-photo'), 'photo');
-        };
-      });
-      // Mark-up button on a photo — opens the canvas markup viewer.
-      // On Save the viewer either replaces the original or uploads a
-      // new attachment with markup_of set; in both cases we re-fetch.
-      container.querySelectorAll('[data-att-markup]').forEach(function(btn) {
-        btn.onclick = function(e) {
-          e.stopPropagation();
-          if (!window.p86Markup || typeof window.p86Markup.open !== 'function') {
-            alert('Markup viewer not loaded — refresh the page.');
-            return;
-          }
-          var attId = btn.getAttribute('data-att-markup');
-          var att = state.attachments.find(function(a) { return a.id === attId; });
-          if (!att) return;
-          window.p86Markup.open({
-            attachment: att,
-            onDone: fetchList
+      // Unified click delegation on every photo tile (owned + markup +
+      // parent). Each tile carries data-att-tile-id + data-att-tile-kind
+      // + data-att-tile-idx; clicks on .p86-proj-photo-tile-visual open
+      // the new photo viewer, clicks on .p86-proj-photo-tile-annotate
+      // open markup-viewer, clicks on .p86-proj-photo-tile-menu open
+      // the context menu (pin / move / delete). One handler per grid
+      // instead of per-tile wiring — re-renders don't leak listeners
+      // because container.innerHTML wipes the old grid entirely.
+      container.querySelectorAll('.p86-proj-photo-tile').forEach(function(tile) {
+        var id = tile.getAttribute('data-att-tile-id');
+        var kind = tile.getAttribute('data-att-tile-kind');
+        var idx = parseInt(tile.getAttribute('data-att-tile-idx'), 10);
+        var att = (kind === 'parent')
+          ? state.parentAttachments.find(function(a) { return a.id === id; })
+          : state.attachments.find(function(a) { return a.id === id; });
+        if (!att) return;
+
+        var visualEl = tile.querySelector('.p86-proj-photo-tile-visual');
+        if (visualEl) {
+          visualEl.addEventListener('click', function(e) {
+            // Skip clicks on action buttons inside the visual area.
+            if (e.target.closest('[data-att-action]')) return;
+            if (kind === 'parent') {
+              openLightbox(parentPhotos, idx, parentLightboxOpts());
+            } else if (kind === 'markup') {
+              openLightbox(markups, idx);
+            } else {
+              openLightbox(photos, idx);
+            }
           });
-        };
-      });
-      // Pin (include_in_proposal) toggle — fires a PUT to flip the flag.
-      // Optimistic: update local state + re-render so the icon flips
-      // immediately; rollback on server failure.
-      container.querySelectorAll('[data-att-pin]').forEach(function(btn) {
-        btn.onclick = function(e) {
+        }
+        var annotateBtn = tile.querySelector('[data-att-action="annotate"]');
+        if (annotateBtn) annotateBtn.addEventListener('click', function(e) {
           e.stopPropagation();
-          var attId = btn.getAttribute('data-att-pin');
-          var att = state.attachments.find(function(a) { return a.id === attId; });
-          if (!att) return;
-          var next = !att.include_in_proposal;
-          att.include_in_proposal = next;
-          render();
-          window.p86Api.attachments.update(attId, { include_in_proposal: next })
-            .catch(function(err) {
-              att.include_in_proposal = !next; // rollback
-              render();
-              alert('Failed to update: ' + (err.message || ''));
-            });
-        };
+          openMarkupForOwned(att);
+        });
+        var menuBtn = tile.querySelector('[data-att-action="menu"]');
+        if (menuBtn) menuBtn.addEventListener('click', function(e) {
+          e.stopPropagation();
+          openTileContextMenu(menuBtn, att);
+        });
+        var markupParentBtn = tile.querySelector('[data-att-action="markup-parent"]');
+        if (markupParentBtn) markupParentBtn.addEventListener('click', function(e) {
+          e.stopPropagation();
+          openMarkupForParent(att);
+        });
       });
+
+      // Render annotation strokes onto every tile that opted in (the
+      // tiles already painted a <canvas class="p86-proj-photo-tile-anno">
+      // for any attachment with strokes). Mirrors the projects feed
+      // behavior so what you saw in the markup viewer shows on the
+      // thumbnail too.
+      container.querySelectorAll('[data-att-anno-canvas]').forEach(function(canvas) {
+        var id = canvas.getAttribute('data-att-anno-canvas');
+        var att = state.attachments.find(function(a) { return a.id === id; })
+               || state.parentAttachments.find(function(a) { return a.id === id; });
+        if (!att || !Array.isArray(att.annotations) || !att.annotations.length) return;
+        var img = canvas.parentNode.querySelector('.p86-proj-photo-tile-img');
+        if (!img) return;
+        function paintAnno() {
+          canvas.width = img.naturalWidth || 1;
+          canvas.height = img.naturalHeight || 1;
+          var ctx = canvas.getContext('2d');
+          if (window.p86AnnotationRender && typeof window.p86AnnotationRender.renderAll === 'function') {
+            window.p86AnnotationRender.renderAll(ctx, att.annotations);
+          }
+        }
+        if (img.complete && img.naturalWidth) paintAnno();
+        else img.addEventListener('load', paintAnno, { once: true });
+      });
+
+      function parentLightboxOpts() {
+        var label = parentLabel || ((parentEntity && parentEntity.entityType) || '');
+        return { parentLabel: label };
+      }
+
       container.querySelectorAll('[data-att-del-doc]').forEach(function(btn) {
         btn.onclick = function(e) {
           e.stopPropagation();
@@ -1188,36 +1199,10 @@
           }
         };
       });
-      // Parent (read-only) sections — same lightbox / PDF viewer
-      // wiring as the owned set, but indexed against parentPhotos and
-      // scoped to the parent entity for the viewer's "Ask AI" context.
-      container.querySelectorAll('[data-att-thumb-parent]').forEach(function(img) {
-        img.onclick = function() {
-          var i = parseInt(img.getAttribute('data-att-thumb-parent'), 10);
-          openLightbox(parentPhotos, i);
-        };
-      });
-      // Mark-up on a parent (e.g. lead) photo — opens the markup
-      // viewer with saveTarget pointing at the CURRENT entity so the
-      // saved markup lands here, with markup_of pointing back at the
-      // parent. Original parent attachment is left untouched.
-      container.querySelectorAll('[data-att-markup-parent]').forEach(function(btn) {
-        btn.onclick = function(e) {
-          e.stopPropagation();
-          if (!window.p86Markup || typeof window.p86Markup.open !== 'function') {
-            alert('Markup viewer not loaded — refresh the page.');
-            return;
-          }
-          var attId = btn.getAttribute('data-att-markup-parent');
-          var att = state.parentAttachments.find(function(a) { return a.id === attId; });
-          if (!att) return;
-          window.p86Markup.open({
-            attachment: att,
-            saveTarget: { entityType: entityType, entityId: entityId },
-            onDone: fetchList
-          });
-        };
-      });
+      // Parent-photo click + markup wiring is now handled by the
+      // unified .p86-proj-photo-tile loop above — left here are just
+      // the document (non-photo) parent rows that still use the
+      // legacy data-attrs.
       container.querySelectorAll('[data-att-view-parent]').forEach(function(btn) {
         btn.onclick = function(e) {
           e.stopPropagation();
@@ -1254,34 +1239,225 @@
       '</div>';
     }
 
-    // Render a single photo thumbnail tile. `isMarkup` flips a small
-    // accent so users can tell markup tiles apart from the originals
-    // at a glance. The Mark-up button + Attach-to-proposal pin are
-    // overlaid on hover via inline corners.
+    // Render a single photo thumbnail tile. Mirrors the projects-style
+    // tile (.p86-proj-photo-tile in styles.css) so every photo grid
+    // across the app — lead editor, estimate editor, sub editor, job
+    // attachments — has the same look + click target. Tile click
+    // opens the new photo viewer with the tags / description /
+    // comments side panel. The annotate pencil opens markup-viewer.
+    // The ⋮ menu hosts contextual actions (pin to proposal, move
+    // folder, delete) instead of crowding the top of the tile with
+    // overlay buttons.
+    //
+    // The selection checkbox from the projects tile is intentionally
+    // omitted — there's no bulk-action surface in mount() today, so
+    // adding a checkbox would just be visual noise.
+    //
+    // isMarkup=true tiles get a small yellow "MARK" badge top-left
+    // to distinguish annotated copies from originals at a glance.
     function renderPhotoTile(att, idx, isMarkup) {
-      var indexAttr = isMarkup ? 'data-att-thumb-markup="' + idx + '"' : 'data-att-thumb="' + idx + '"';
-      var border = isMarkup ? '1px solid rgba(251,191,36,0.5)' : '1px solid var(--border,#333)';
       var pinActive = !!att.include_in_proposal;
-      var pinTitle = pinActive ? 'In proposal — click to remove' : 'Attach to proposal';
-      var pinColor = pinActive ? '#34d399' : '#aaa';
-      var pinBg = pinActive ? 'rgba(52,211,153,0.18)' : 'rgba(0,0,0,0.7)';
-      return '<div class="att-thumb-tile" style="position:relative;border:' + border + ';border-radius:8px;overflow:hidden;background:#000;aspect-ratio:1/1;">' +
-        '<img ' + indexAttr + ' src="' + escapeAttr(att.thumb_url) + '" alt="' + escapeAttr(att.filename) + '" onerror="this.parentNode.classList.add(\'att-thumb-broken\')" style="width:100%;height:100%;object-fit:cover;cursor:zoom-in;display:block;" />' +
-        // Top-left: Mark-up button (only on photos, edit mode).
-        (canEdit ? '<button data-att-markup="' + escapeAttr(att.id) + '" title="Mark up this photo" style="position:absolute;top:4px;left:4px;background:rgba(0,0,0,0.7);color:#fbbf24;border:none;border-radius:4px;padding:3px 6px;font-size:10px;font-weight:700;cursor:pointer;z-index:2;">&#x270F; MARK</button>' : '') +
-        // Top-right: Pin (proposal toggle) + Move + Delete.
-        (canEdit ?
-          '<div style="position:absolute;top:4px;right:4px;display:flex;gap:3px;z-index:2;">' +
-            '<button data-att-pin="' + escapeAttr(att.id) + '" title="' + escapeAttr(pinTitle) + '" style="background:' + pinBg + ';color:' + pinColor + ';border:none;border-radius:4px;width:24px;height:24px;font-size:12px;cursor:pointer;line-height:1;">&#x1F4CC;</button>' +
-            '<button data-att-move="' + escapeAttr(att.id) + '" title="Move to folder" style="background:rgba(0,0,0,0.7);color:#a5b4fc;border:none;border-radius:4px;width:24px;height:24px;font-size:12px;cursor:pointer;line-height:1;">&#x1F4C1;</button>' +
-            '<button data-att-del-photo="' + escapeAttr(att.id) + '" title="Delete" style="background:rgba(0,0,0,0.7);color:#f87171;border:none;border-radius:4px;width:24px;height:24px;font-size:13px;cursor:pointer;line-height:1;">&times;</button>' +
-          '</div>' : '') +
-        // Bottom: filename + (if pinned) "In proposal" badge.
-        '<div style="position:absolute;bottom:0;left:0;right:0;background:linear-gradient(transparent,rgba(0,0,0,0.7));color:#fff;font-size:10px;padding:14px 6px 4px;font-family:Arial,sans-serif;pointer-events:none;z-index:1;">' +
-          escapeHTMLLocal(att.filename) +
-          (pinActive ? '<div style="color:#34d399;font-size:9px;font-weight:700;margin-top:1px;">&#x1F4CC; IN PROPOSAL</div>' : '') +
+      var uploaderName = att.uploaded_by_name || '';
+      var uploaderInitials = uploaderName ? initialsForName(uploaderName) : '';
+      var uploadedWhen = att.uploaded_at ? fmtRelativeTime(att.uploaded_at) : '';
+      var tagCount = Array.isArray(att.tags) ? att.tags.length : 0;
+      var hasCaption = !!att.caption;
+      var annotationCount = Array.isArray(att.annotations) ? att.annotations.length : 0;
+      var hasAnno = annotationCount > 0;
+
+      var visualHTML = '<img class="p86-proj-photo-tile-img" src="' + escapeAttr(att.thumb_url) + '" alt="" onerror="this.parentNode.classList.add(\'att-thumb-broken\')" />' +
+        (hasAnno ? '<canvas class="p86-proj-photo-tile-anno" data-att-anno-canvas="' + escapeAttr(att.id) + '"></canvas>' : '');
+
+      return '<div class="p86-proj-photo-tile" data-att-tile-id="' + escapeAttr(att.id) + '"' +
+                  ' data-att-tile-kind="' + (isMarkup ? 'markup' : 'photo') + '"' +
+                  ' data-att-tile-idx="' + idx + '"' +
+                  (pinActive ? ' data-att-tile-pinned="1"' : '') + '>' +
+        '<div class="p86-proj-photo-tile-visual">' +
+          visualHTML +
+          // Markup badge — top-left. Replaces the old top-overlay row;
+          // tells the user at a glance "this is an annotated copy."
+          (isMarkup
+            ? '<span class="p86-att-tile-markup-badge" title="Marked-up copy">&#x270F; MARK</span>'
+            : '') +
+          // Annotate + menu — top-right. Annotate goes straight to the
+          // markup viewer; menu opens the context menu (pin / move /
+          // delete). Edit-only — read-only callers (e.g. mount with
+          // canEdit:false) don't see either.
+          (canEdit
+            ? '<button type="button" class="p86-proj-photo-tile-annotate" data-att-action="annotate" title="Annotate">&#x270E;</button>' +
+              '<button type="button" class="p86-proj-photo-tile-menu" data-att-action="menu" title="More">&#x22EE;</button>'
+            : '') +
+          // Bottom-left: uploader avatar (initials in a chip).
+          (uploaderInitials
+            ? '<span class="p86-proj-photo-tile-uploader" title="' + escapeAttr(uploaderName) + '">' + escapeHTMLLocal(uploaderInitials) + '</span>'
+            : '') +
+          // Bottom-right: feature badges (caption / annotations /
+          // tags / proposal-pin). Mirrors the projects feed badge row.
+          '<div class="p86-proj-photo-tile-badges">' +
+            (hasCaption ? '<span class="p86-proj-photo-tile-badge" title="' + escapeAttr(att.caption) + '">&#x1F4DD;</span>' : '') +
+            (hasAnno ? '<span class="p86-proj-photo-tile-badge" title="' + annotationCount + ' annotation' + (annotationCount === 1 ? '' : 's') + '">&#x1F58D;' + (annotationCount > 1 ? ' ' + annotationCount : '') + '</span>' : '') +
+            (tagCount ? '<span class="p86-proj-photo-tile-badge" title="' + escapeAttr((att.tags || []).join(', ')) + '">&#x1F3F7;' + (tagCount > 1 ? ' ' + tagCount : '') + '</span>' : '') +
+            (pinActive ? '<span class="p86-proj-photo-tile-badge" title="In proposal" style="color:#34d399;">&#x1F4CC;</span>' : '') +
+          '</div>' +
+        '</div>' +
+        '<div class="p86-proj-photo-tile-footer">' +
+          '<span class="p86-proj-photo-tile-time">' + escapeHTMLLocal(att.filename || uploadedWhen) + '</span>' +
+          (uploaderName ? '<span class="p86-proj-photo-tile-uploader-name">' + escapeHTMLLocal(uploaderName) + '</span>' : '') +
         '</div>' +
       '</div>';
+    }
+
+    // Read-only tile for the parent-record attachments band ("From
+    // lead", "From estimate"). Same look as the editable tile so the
+    // grid feels uniform, but the only action is the MARK button —
+    // it opens markup-viewer with saveTarget pointing at the CURRENT
+    // entity, so the resulting markup lands here, not on the parent.
+    function renderParentPhotoTile(att, idx) {
+      var label = (parentEntity && parentEntity.entityType) || 'parent';
+      var uploaderName = att.uploaded_by_name || '';
+      var uploaderInitials = uploaderName ? initialsForName(uploaderName) : '';
+      var annotationCount = Array.isArray(att.annotations) ? att.annotations.length : 0;
+      var hasAnno = annotationCount > 0;
+      var tagCount = Array.isArray(att.tags) ? att.tags.length : 0;
+
+      return '<div class="p86-proj-photo-tile p86-att-tile-parent" data-att-tile-id="' + escapeAttr(att.id) + '"' +
+                  ' data-att-tile-kind="parent"' +
+                  ' data-att-tile-idx="' + idx + '">' +
+        '<div class="p86-proj-photo-tile-visual">' +
+          '<img class="p86-proj-photo-tile-img" src="' + escapeAttr(att.thumb_url) + '" alt="" onerror="this.parentNode.classList.add(\'att-thumb-broken\')" />' +
+          (hasAnno ? '<canvas class="p86-proj-photo-tile-anno" data-att-anno-canvas="' + escapeAttr(att.id) + '"></canvas>' : '') +
+          // Parent-source badge — top-left. "LEAD" / "ESTIMATE" /
+          // etc. so it's obvious this attachment isn't owned here.
+          '<span class="p86-att-tile-parent-badge">' + escapeHTMLLocal(label) + '</span>' +
+          // Markup affordance — top-right. Save lands on the CURRENT
+          // entity (handled by the click wiring below).
+          (canEdit
+            ? '<button type="button" class="p86-proj-photo-tile-annotate" data-att-action="markup-parent" title="Mark up — saves into this ' + escapeAttr(entityType) + '">&#x270E;</button>'
+            : '') +
+          (uploaderInitials
+            ? '<span class="p86-proj-photo-tile-uploader" title="' + escapeAttr(uploaderName) + '">' + escapeHTMLLocal(uploaderInitials) + '</span>'
+            : '') +
+          '<div class="p86-proj-photo-tile-badges">' +
+            (hasAnno ? '<span class="p86-proj-photo-tile-badge" title="' + annotationCount + ' annotation' + (annotationCount === 1 ? '' : 's') + '">&#x1F58D;' + (annotationCount > 1 ? ' ' + annotationCount : '') + '</span>' : '') +
+            (tagCount ? '<span class="p86-proj-photo-tile-badge" title="' + escapeAttr((att.tags || []).join(', ')) + '">&#x1F3F7;' + (tagCount > 1 ? ' ' + tagCount : '') + '</span>' : '') +
+          '</div>' +
+        '</div>' +
+        '<div class="p86-proj-photo-tile-footer">' +
+          '<span class="p86-proj-photo-tile-time">' + escapeHTMLLocal(att.filename) + '</span>' +
+          (uploaderName ? '<span class="p86-proj-photo-tile-uploader-name">' + escapeHTMLLocal(uploaderName) + '</span>' : '') +
+        '</div>' +
+      '</div>';
+    }
+
+    // Tiny initials helper — mirrors initialsFor at the top of this
+    // file (which already serves the photo viewer's uploader avatar).
+    // Kept local because the top-of-file helper isn't in this scope.
+    function initialsForName(name) {
+      if (!name) return '?';
+      var parts = String(name).trim().split(/\s+/);
+      if (!parts.length) return '?';
+      if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+      return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+    }
+
+    // Context menu for an owned tile — pops near the menu button and
+    // offers the actions that used to live in the top-right overlay
+    // (pin to proposal, move folder, delete). Clicking outside or
+    // hitting Esc closes; clicking an action runs it and closes.
+    function openTileContextMenu(anchorBtn, att) {
+      var prior = document.getElementById('p86-att-tile-menu');
+      if (prior) prior.remove();
+      var menu = document.createElement('div');
+      menu.id = 'p86-att-tile-menu';
+      menu.className = 'p86-att-tile-menu';
+      var pinActive = !!att.include_in_proposal;
+      menu.innerHTML =
+        '<button type="button" data-act="annotate">' +
+          '<span class="p86-att-tile-menu-icon">&#x270E;</span>Annotate' +
+        '</button>' +
+        '<button type="button" data-act="pin">' +
+          '<span class="p86-att-tile-menu-icon">&#x1F4CC;</span>' +
+          (pinActive ? 'Remove from proposal' : 'Add to proposal') +
+        '</button>' +
+        '<button type="button" data-act="move">' +
+          '<span class="p86-att-tile-menu-icon">&#x1F4C1;</span>Move to folder…' +
+        '</button>' +
+        '<button type="button" data-act="delete" class="p86-att-tile-menu-danger">' +
+          '<span class="p86-att-tile-menu-icon">&#x1F5D1;</span>Delete' +
+        '</button>';
+      document.body.appendChild(menu);
+      // Position the menu under the anchor (the ⋮ button on the tile).
+      var rect = anchorBtn.getBoundingClientRect();
+      menu.style.top = (rect.bottom + window.scrollY + 4) + 'px';
+      var left = Math.max(8, rect.right + window.scrollX - menu.offsetWidth);
+      menu.style.left = left + 'px';
+      function close() {
+        if (menu.parentNode) menu.parentNode.removeChild(menu);
+        document.removeEventListener('mousedown', onOutside, true);
+        document.removeEventListener('keydown', onKey, true);
+      }
+      function onOutside(e) {
+        if (!menu.contains(e.target)) close();
+      }
+      function onKey(e) {
+        if (e.key === 'Escape') close();
+      }
+      document.addEventListener('mousedown', onOutside, true);
+      document.addEventListener('keydown', onKey, true);
+      menu.querySelectorAll('button[data-act]').forEach(function(b) {
+        b.addEventListener('click', function() {
+          var act = b.getAttribute('data-act');
+          close();
+          if (act === 'annotate') openMarkupForOwned(att);
+          else if (act === 'pin') togglePin(att);
+          else if (act === 'move') moveAttachmentFolder(att);
+          else if (act === 'delete') deleteAttachment(att.id, 'photo');
+        });
+      });
+    }
+
+    function openMarkupForOwned(att) {
+      if (!window.p86Markup || typeof window.p86Markup.open !== 'function') {
+        alert('Markup viewer not loaded — refresh the page.');
+        return;
+      }
+      window.p86Markup.open({ attachment: att, onDone: fetchList });
+    }
+    function openMarkupForParent(att) {
+      if (!window.p86Markup || typeof window.p86Markup.open !== 'function') {
+        alert('Markup viewer not loaded — refresh the page.');
+        return;
+      }
+      window.p86Markup.open({
+        attachment: att,
+        saveTarget: { entityType: entityType, entityId: entityId },
+        onDone: fetchList
+      });
+    }
+    function togglePin(att) {
+      var next = !att.include_in_proposal;
+      att.include_in_proposal = next;
+      render();
+      window.p86Api.attachments.update(att.id, { include_in_proposal: next })
+        .catch(function(err) {
+          att.include_in_proposal = !next; // rollback
+          render();
+          alert('Failed to update: ' + (err.message || ''));
+        });
+    }
+    function moveAttachmentFolder(att) {
+      var current = att.folder || 'general';
+      var prompt = 'Move "' + (att.filename || 'file') + '" to folder:\n\n' +
+        'Folder name (e.g. photos, rfp, contracts) — letters, numbers, spaces, dashes.';
+      var next = window.prompt(prompt, current);
+      if (next == null) return;
+      var folder = sanitizeFolder(next);
+      if (folder === current) return;
+      window.p86Api.attachments.update(att.id, { folder: folder })
+        .then(fetchList)
+        .catch(function(err) {
+          alert('Move failed: ' + (err.message || ''));
+        });
     }
 
     fetchList();

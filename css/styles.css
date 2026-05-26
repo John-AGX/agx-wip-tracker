@@ -5669,3 +5669,110 @@
   .p86-pv-tag-modal-content { width: 100vw; max-height: 92vh; border-radius: 0; }
   .p86-pv-tag-modal-list { max-height: 60vh; }
 }
+
+/* ──────────────────────────────────────────────────────────────────
+   Standardized photo-tile grid for the mount() widget.
+   Uses the projects-style .p86-proj-photo-tile classes for the tile
+   itself; the rules below only add the bits unique to the mount
+   widget (markup badge, parent-source badge, context menu, touch-
+   friendly annotate visibility).
+   ────────────────────────────────────────────────────────────────── */
+
+/* Annotate button — visible on hover on desktop (matches projects)
+   but always visible on touch devices so mobile users can find it
+   without a hover state. */
+@media (hover: none) {
+  .p86-proj-photo-tile-annotate { opacity: 1; }
+}
+
+/* Markup badge — top-left corner of a marked-up copy. Yellow tint
+   matches the prior "MARK" overlay button so the visual is
+   recognizable from the previous design. */
+.p86-att-tile-markup-badge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  background: rgba(0,0,0,0.7);
+  color: #fbbf24;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  z-index: 2;
+  pointer-events: none;
+}
+
+/* Parent-source badge — same corner as the markup badge, but blue
+   tint to read as "read-only / belongs elsewhere." */
+.p86-att-tile-parent-badge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  background: rgba(79,140,255,0.85);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  padding: 3px 6px;
+  border-radius: 4px;
+  z-index: 2;
+  pointer-events: none;
+}
+
+/* Parent tile gets a faint blue outline so it stays visually
+   distinct from owned tiles even when scrolled past the section
+   header. */
+.p86-att-tile-parent {
+  border: 1px solid rgba(79,140,255,0.35) !important;
+}
+
+/* Tile context menu — popped open from the ⋮ button. Position is
+   set inline by JS (under the anchor); the rest of the chrome lives
+   here so it stays consistent with the rest of the popover styling. */
+.p86-att-tile-menu {
+  position: absolute;
+  z-index: 9000;
+  min-width: 200px;
+  background: #1d1d28;
+  border: 1px solid #353545;
+  border-radius: 8px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+}
+.p86-att-tile-menu button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  color: var(--text, #fff);
+  font-size: 13px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.p86-att-tile-menu button:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+.p86-att-tile-menu-icon {
+  width: 18px;
+  text-align: center;
+  font-size: 13px;
+  opacity: 0.8;
+  flex: 0 0 18px;
+}
+.p86-att-tile-menu-danger { color: #f87171; }
+.p86-att-tile-menu-danger:hover { background: rgba(248, 113, 113, 0.12); }
+
+/* Tile grid in the mount widget. Uses the projects .p86-proj-feed-grid
+   for layout (auto-fill 170px tiles, 10px gap). The .p86-att-tile-grid
+   class is a hook for future per-context overrides if needed. */
+.p86-att-tile-grid {
+  /* No overrides today — reserved class so future tweaks (e.g. tighter
+     spacing inside the estimate editor) have a stable selector. */
+}
