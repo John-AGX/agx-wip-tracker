@@ -3629,30 +3629,59 @@
   color: var(--accent, #4f8cff);
   font-size: 16px; font-weight: 700; letter-spacing: 0.6px;
 }
+/* Photo-tile select checkbox. Used to render as a white-background
+   wrapper div around a native <input type="checkbox"> — visually
+   that gave you a square-inside-a-square (one for the wrapper, one
+   for the native input's own border). The wrapper now contributes
+   only positioning + hit target; the native input itself is styled
+   as the visible square via appearance:none. Result: one clean
+   rounded square that switches to the accent color when checked. */
 .p86-proj-photo-tile-checkbox {
   /* Anchor far enough in from the tile corner that the parent's
      border-radius: 8px (overflow: hidden) doesn't clip the
-     checkbox's top-left edge. At 6px the curve was biting into the
-     square. 10px puts the checkbox cleanly inside the safe zone. */
+     checkbox's top-left edge. */
   position: absolute; top: 10px; left: 10px;
-  /* Square affordance to read as "checkbox / multi-select", distinct
-     from the round action buttons (annotate pencil, menu ⋮) on the
-     other corners. box-sizing:border-box so the explicit width/height
-     hold even when the inner input adds intrinsic dimensions. */
-  width: 24px; height: 24px;
+  width: 22px; height: 22px;
   box-sizing: border-box;
-  border-radius: 5px;
-  background: rgba(255,255,255,0.85);
-  border: 0;
   display: flex; align-items: center; justify-content: center;
+  background: transparent;
+  border: 0;
+  padding: 0;
   cursor: pointer;
   z-index: 2;
-  transition: background 0.12s;
 }
 .p86-proj-photo-tile-checkbox input {
-  width: 18px; height: 18px;
+  appearance: none;
+  -webkit-appearance: none;
+  width: 22px; height: 22px;
+  margin: 0;
+  box-sizing: border-box;
+  border-radius: 5px;
+  background: rgba(255,255,255,0.92);
+  border: 1.5px solid rgba(0,0,0,0.45);
   cursor: pointer;
-  accent-color: var(--accent, #4f8cff);
+  position: relative;
+  transition: background 0.12s, border-color 0.12s;
+}
+.p86-proj-photo-tile-checkbox input:hover {
+  border-color: rgba(0,0,0,0.7);
+}
+.p86-proj-photo-tile-checkbox input:checked {
+  background: var(--accent, #4f8cff);
+  border-color: var(--accent, #4f8cff);
+}
+/* Render the check glyph ourselves via a CSS-drawn tick so the
+   appearance:none input still shows checked state. */
+.p86-proj-photo-tile-checkbox input:checked::after {
+  content: '';
+  position: absolute;
+  left: 6px;
+  top: 2px;
+  width: 6px;
+  height: 11px;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
 }
 .p86-proj-photo-tile-menu {
   position: absolute; top: 6px; right: 6px;
