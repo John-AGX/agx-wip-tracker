@@ -721,10 +721,20 @@
     _state.entries = loadCachedEntries();
 
     root.innerHTML =
-      '<div class="sch-page">' +
+      '<div class="sch-page" id="schPage">' +
         '<aside class="sch-sidebar" id="schSidebar"></aside>' +
+        // Mobile backdrop — only visible when .sch-sidebar-open is
+        // on the page wrapper (CSS handles the show/hide). Click to
+        // close the drawer.
+        '<div class="sch-sidebar-backdrop" id="schSidebarBackdrop"></div>' +
         '<section class="sch-cal-wrap" id="schCalWrap"></section>' +
       '</div>';
+
+    // Wire the mobile backdrop close. The sidebar-toggle button is
+    // added in renderCalendar() as part of the toolbar; both
+    // toggles flip the same .sch-sidebar-open class on #schPage.
+    var backdrop = document.getElementById('schSidebarBackdrop');
+    if (backdrop) backdrop.addEventListener('click', closeMobileSidebar);
 
     renderSidebar();
     renderCalendar();
@@ -893,6 +903,10 @@
       // overlay here.
       '<div class="sch-cal-toolbar">' +
         '<div class="sch-cal-nav">' +
+          // Mobile-only hamburger that slides the sidebar drawer
+          // in/out. Hidden on desktop via the .sch-mobile-only
+          // class in schedule.css.
+          '<button class="sch-btn sch-btn-icon sch-mobile-only" id="schSidebarToggle" title="Filters / jobs" aria-label="Toggle filters">&#9776;</button>' +
           '<button class="sch-btn sch-btn-icon" id="schPrev" title="Previous month">&lsaquo;</button>' +
           '<div class="sch-cal-month" id="schMonth">' + MONTH_NAMES[cur.getMonth()] + ' ' + cur.getFullYear() + '</div>' +
           '<button class="sch-btn sch-btn-icon" id="schNext" title="Next month">&rsaquo;</button>' +
@@ -936,8 +950,23 @@
     document.getElementById('schAddEntry').addEventListener('click', function() {
       openEntryEditor(null, toISODate(new Date()));
     });
+    // Mobile sidebar toggle — flips .sch-sidebar-open on #schPage
+    // so CSS slides the drawer in/out. Closing also handled by the
+    // backdrop click handler (wired in renderSchedule).
+    var toggleBtn = document.getElementById('schSidebarToggle');
+    if (toggleBtn) toggleBtn.addEventListener('click', toggleMobileSidebar);
 
     renderGrid();
+  }
+
+  // ── Mobile sidebar drawer helpers ─────────────────────────
+  function toggleMobileSidebar() {
+    var page = document.getElementById('schPage');
+    if (page) page.classList.toggle('sch-sidebar-open');
+  }
+  function closeMobileSidebar() {
+    var page = document.getElementById('schPage');
+    if (page) page.classList.remove('sch-sidebar-open');
   }
 
   function stepMonth(delta) {

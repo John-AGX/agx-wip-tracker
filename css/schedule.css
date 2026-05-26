@@ -1188,3 +1188,222 @@ body.light-mode .sch-cal-day.sch-weekend {
   background: #fafbfd;
 }
 body.light-mode .sch-cal-grid { background: #d6dae3; }
+
+/* ==========================================================
+   Mobile redesign (Wave M1) — ≤768px and ≤414px polish.
+   Goal: make Schedule actually usable on a phone. The
+   sidebar (280px fixed) is the structural blocker on
+   desktop; on phones it slides in from the left as an
+   off-canvas drawer, while the calendar takes the whole
+   viewport. The hamburger toggle (#schSidebarToggle) lives
+   in the toolbar's nav cluster — added by schedule.js's
+   renderCalendar() but hidden on desktop via the
+   .sch-mobile-only class.
+   ========================================================== */
+
+/* Hamburger toggle button — added to the toolbar by JS.
+   Desktop hides it via the .sch-mobile-only class. */
+.sch-mobile-only { display: none; }
+
+/* Sidebar backdrop — only inserted into the DOM when the
+   drawer opens. Click to close. */
+.sch-sidebar-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 99;
+  display: none;
+}
+
+@media (max-width: 768px) {
+  /* Show the hamburger toggle on mobile. */
+  .sch-mobile-only { display: inline-flex; }
+
+  /* Drop the fixed-row layout — calendar takes the whole
+     viewport. The sidebar shifts to fixed-positioned drawer
+     overlaid on top. */
+  .sch-page {
+    display: block;
+    height: calc(100vh - 90px);
+    gap: 0;
+  }
+
+  /* Sidebar becomes an off-canvas drawer. Closed by default
+     (translateX(-100%) hides it off the left edge); the
+     toolbar hamburger toggles .sch-sidebar-open on the page
+     to slide it in. */
+  .sch-sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 86vw;
+    max-width: 320px;
+    flex: none;
+    z-index: 100;
+    border-radius: 0;
+    border-left: 0;
+    border-top: 0;
+    border-bottom: 0;
+    transform: translateX(-100%);
+    transition: transform 0.22s ease;
+    box-shadow: 4px 0 20px rgba(0, 0, 0, 0.5);
+  }
+  .sch-page.sch-sidebar-open .sch-sidebar {
+    transform: translateX(0);
+  }
+  .sch-page.sch-sidebar-open .sch-sidebar-backdrop {
+    display: block;
+  }
+
+  /* Calendar wrap takes full width. */
+  .sch-cal-wrap {
+    width: 100%;
+    height: 100%;
+    min-width: 0;
+  }
+
+  /* Toolbar: wrap the controls so they don't fight for space.
+     Nav (hamburger / prev / month / next / today) stays on
+     row 1; week-summary chips drop to row 2; right-side
+     buttons (toggle weekends, + Schedule entry) wrap to
+     row 3 on the narrowest phones. */
+  .sch-cal-toolbar {
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 8px 10px;
+  }
+  .sch-cal-nav {
+    flex: 1 1 auto;
+    gap: 4px;
+  }
+  .sch-cal-month {
+    font-size: 14px;
+    min-width: 0;
+  }
+  .sch-toolbar-spacer { display: none; }
+  .sch-week-summary {
+    flex: 1 1 100%;
+    order: 3;
+    min-width: 0;
+  }
+  .sch-week-summary-pin {
+    /* Bump from 22px → 32px so it clears Apple HIG without
+       being a tap-target nuisance. Still small enough not
+       to dominate the summary row. */
+    width: 32px !important;
+    height: 32px !important;
+  }
+
+  /* Buttons in the toolbar bump to a tap-target safe size. */
+  .sch-btn,
+  .sch-btn-icon,
+  .sch-btn-toggle,
+  .sch-btn-primary {
+    min-height: 36px;
+    padding: 6px 12px;
+  }
+  .sch-btn-icon {
+    min-width: 36px;
+    width: 36px;
+  }
+
+  /* Calendar grid — tighten cells so the days fit. The
+     desktop minmax(78px, 1fr) stays for ≥769px; here we
+     drop to 36px floor and shrink font sizes. */
+  .sch-cal-grid {
+    gap: 0;
+  }
+  .sch-cal-week-row {
+    grid-template-columns: repeat(7, minmax(36px, 1fr));
+    gap: 0;
+  }
+  .sch-cal-day {
+    min-height: 56px;
+    padding: 2px 3px;
+    font-size: 10px;
+  }
+  .sch-cal-day-num {
+    font-size: 11px;
+  }
+  .sch-cal-day-wx {
+    /* Weather chip in day-cell corner: icon-only on mobile;
+       hide the temp text so it doesn't overlap the day
+       number. */
+    font-size: 10px;
+    padding: 1px 3px;
+  }
+  .sch-cal-day-wx .sch-wx-icon { font-size: 11px; }
+  .sch-cal-day-wx-text { display: none; }
+
+  /* DoW header row — shrink the labels (Mo/Tu/We/Th/Fr/Sa/Su
+     instead of "Monday"). The JS picks 2-char labels at
+     this width if available. */
+  .sch-cal-dow {
+    font-size: 10px;
+    padding: 4px 2px;
+  }
+
+  /* Day-at-glance sheet (modal) — 3-column stats become
+     vertical so labels + numbers are readable. */
+  .sch-day-sheet {
+    width: 96vw;
+    max-width: 96vw;
+  }
+  .sch-day-stats {
+    flex-direction: column;
+    gap: 0;
+  }
+  .sch-day-stat {
+    border-left: 0 !important;
+    border-top: 1px solid var(--border, #2e3346);
+    padding: 8px 10px;
+    text-align: left;
+  }
+  .sch-day-stat:first-child {
+    border-top: 0;
+  }
+}
+
+/* Tightest-phone polish — iPhone SE 1st gen + display-
+   scaling-up users. Drops minimum cell width further and
+   collapses the toolbar even more aggressively. */
+@media (max-width: 414px) {
+  .sch-cal-toolbar {
+    padding: 6px 8px;
+    gap: 6px;
+  }
+  .sch-cal-month {
+    font-size: 13px;
+  }
+  .sch-btn,
+  .sch-btn-icon,
+  .sch-btn-toggle,
+  .sch-btn-primary {
+    font-size: 11px;
+    padding: 5px 9px;
+  }
+  .sch-btn-primary {
+    /* "+ Schedule entry" becomes "+ Entry" by trimming inline
+       text via the JS (handled separately if needed). For
+       now just shrink the button so the label fits. */
+    padding: 5px 10px;
+  }
+  /* Calendar cells minimum 32px wide — fits 7 cols at 320px
+     viewport with no horizontal scroll (224px of cells, ~96px
+     of page padding + chrome). */
+  .sch-cal-week-row {
+    grid-template-columns: repeat(7, minmax(32px, 1fr));
+  }
+  .sch-cal-day {
+    min-height: 50px;
+    padding: 1px 2px;
+  }
+  .sch-cal-day-num {
+    font-size: 10px;
+  }
+  /* Hide the entry preview text inside cells — just show
+     colored bars so the layout doesn't blow out. Tap a day
+     to see the full list in the day-at-glance sheet. */
+  .sch-cal-day-entry-text { display: none; }
+}
