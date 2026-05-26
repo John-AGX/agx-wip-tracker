@@ -2706,10 +2706,17 @@
 
   function openPhotoInLightbox(att) {
     // Use the existing global lightbox. Pass the full photo list so
-    // swipe nav works.
+    // swipe nav works. Wave A added a third arg for the side panel's
+    // parent-header band — supply the project's name + address so the
+    // viewer can render "Saddlebrook Resort / 5700 …" like the
+    // CompanyCam screenshot the spec was modeled on.
     if (window.p86Attachments && typeof window.p86Attachments.openLightbox === 'function') {
       var idx = _detailState.photos.findIndex(function(x) { return x.id === att.id; });
-      window.p86Attachments.openLightbox(_detailState.photos, Math.max(0, idx));
+      var p = _detailState.project || {};
+      window.p86Attachments.openLightbox(_detailState.photos, Math.max(0, idx), {
+        parentLabel: p.name || '',
+        parentSubtitle: p.address_text || ''
+      });
     }
   }
 
@@ -3627,6 +3634,11 @@
     setFilter: setFilter,
     setView: setView,
     openCreate: openCreate,
+    // Exposed for cross-module reuse — the new attachments.js photo
+    // viewer side panel uses this to render the tag chip editor with
+    // the same org-tag autocomplete + chip styling as the per-photo
+    // tag modal.
+    mountTagEditor: mountTagEditor,
     createPrompt: createPrompt,     // legacy alias
     createForEntity: createForEntity,
     archive: archive,

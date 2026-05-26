@@ -82,89 +82,478 @@
   }
 
   // ──────────────────────────────────────────────────────────────────
-  // Lightbox — fixed-position overlay with prev/next arrows + download
-  // original button. Click backdrop or Esc to close.
+  // Photo viewer — CompanyCam-style two-column layout. Left: image
+  // stage with nav arrows + toolbar (annotate / zoom / download /
+  // delete). Right: side panel with project header, uploader, tags
+  // editor, description (caption), and a comments thread. Mobile
+  // collapses the panel to a bottom drawer.
+  //
+  // Kept the public name `openLightbox` and the (attachments, idx)
+  // signature so every existing caller (projects.js photo grid,
+  // estimate/lead attachment widgets) gets the new viewer without
+  // any callsite changes.
   // ──────────────────────────────────────────────────────────────────
 
-  function openLightbox(attachments, startIndex) {
+  // Tiny relative-time formatter, duplicated from projects.js so the
+  // viewer doesn't have to reach across module boundaries for a
+  // 12-line helper.
+  function fmtRelativeTime(iso) {
+    if (!iso) return '';
+    var t = new Date(iso).getTime();
+    if (!isFinite(t)) return '';
+    var diff = Math.max(0, Date.now() - t);
+    var s = Math.floor(diff / 1000);
+    if (s < 60) return 'just now';
+    var m = Math.floor(s / 60);
+    if (m < 60) return m + ' min ago';
+    var h = Math.floor(m / 60);
+    if (h < 24) return h + ' hr ago';
+    var d = Math.floor(h / 24);
+    if (d < 7) return d + ' day' + (d === 1 ? '' : 's') + ' ago';
+    return new Date(iso).toLocaleDateString();
+  }
+
+  function initialsFor(name) {
+    if (!name) return '?';
+    var parts = String(name).trim().split(/\s+/);
+    if (!parts.length) return '?';
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  }
+
+  function userNameFor(userId) {
+    if (!userId) return 'Unknown';
+    if (window.p86Admin && typeof window.p86Admin.findUserById === 'function') {
+      var u = window.p86Admin.findUserById(userId);
+      if (u && u.name) return u.name;
+    }
+    return 'User ' + userId;
+  }
+
+  function openLightbox(attachments, startIndex, opts) {
     if (!attachments || !attachments.length) return;
-    var idx = Math.max(0, Math.min(startIndex || 0, attachments.length - 1));
+    opts = opts || {};
+    var state = {
+      attachments: attachments.slice(),
+      idx: Math.max(0, Math.min(startIndex || 0, attachments.length - 1)),
+      zoom: 1,
+      fullscreen: false,
+      panelOpen: true, // mobile drawer open/closed
+      comments: null,  // null = not yet loaded; array once loaded
+      commentsLoading: false,
+      commentsError: null,
+      parentLabel: opts.parentLabel || '',
+      parentSubtitle: opts.parentSubtitle || ''
+    };
 
     var overlay = document.createElement('div');
-    overlay.className = 'p86-lightbox';
-    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:9999;display:flex;align-items:center;justify-content:center;padding:30px;';
+    overlay.className = 'p86-photo-viewer';
+    document.body.appendChild(overlay);
 
+    function att() { return state.attachments[state.idx]; }
+
+    function next() {
+      state.idx = (state.idx + 1) % state.attachments.length;
+      state.zoom = 1;
+      state.comments = null;
+      render();
+      fetchComments();
+    }
+    function prev() {
+      state.idx = (state.idx - 1 + state.attachments.length) % state.attachments.length;
+      state.zoom = 1;
+      state.comments = null;
+      render();
+      fetchComments();
+    }
+    function close() {
+      document.removeEventListener('keydown', onKey);
+      if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+    }
+    function onKey(e) {
+      // Don't hijack arrow keys while typing in the panel.
+      var tag = e.target && e.target.tagName;
+      var typing = tag === 'INPUT' || tag === 'TEXTAREA' || (e.target && e.target.isContentEditable);
+      if (e.key === 'Escape') {
+        if (state.fullscreen) { state.fullscreen = false; render(); return; }
+        close();
+        return;
+      }
+      if (typing) return;
+      if (e.key === 'ArrowRight') next();
+      else if (e.key === 'ArrowLeft') prev();
+    }
+    document.addEventListener('keydown', onKey);
+
+    // Optimistic local patch — caller-supplied attachment array is the
+    // source of truth for what the viewer paints, so mutate it in
+    // place AND fire the API. Failures bubble back via the toast.
+    function updateAtt(patch) {
+      var a = att();
+      var prior = {};
+      Object.keys(patch).forEach(function(k) { prior[k] = a[k]; });
+      Object.keys(patch).forEach(function(k) { a[k] = patch[k]; });
+      return window.p86Api.attachments.update(a.id, patch).catch(function(e) {
+        // Roll back the optimistic write so the panel re-renders
+        // with the prior value.
+        Object.keys(prior).forEach(function(k) { a[k] = prior[k]; });
+        alert('Save failed: ' + (e.message || e));
+        render();
+      });
+    }
+
+    function fetchComments() {
+      var a = att();
+      if (!a || !a.id) { state.comments = []; return; }
+      if (!window.p86Api || !window.p86Api.messages) { state.comments = []; renderPanel(); return; }
+      state.commentsLoading = true;
+      state.commentsError = null;
+      renderPanel();
+      var key = 'attachment:' + a.id;
+      window.p86Api.messages.thread(key).then(function(r) {
+        // Only commit if the user hasn't paged to a different photo
+        // mid-fetch (guards against late responses overwriting a
+        // newer photo's panel).
+        if (att().id !== a.id) return;
+        state.comments = (r && r.messages) || [];
+        state.commentsLoading = false;
+        renderPanel();
+      }).catch(function(e) {
+        if (att().id !== a.id) return;
+        state.commentsLoading = false;
+        state.commentsError = e.message || 'Failed to load comments';
+        state.comments = [];
+        renderPanel();
+      });
+    }
+
+    function postComment(body) {
+      var a = att();
+      if (!a || !a.id || !body || !body.trim()) return Promise.resolve();
+      var key = 'attachment:' + a.id;
+      return window.p86Api.messages.post(key, body.trim()).then(function() {
+        fetchComments();
+      });
+    }
+
+    function deleteComment(msgId) {
+      if (!window.confirm('Delete this comment?')) return;
+      window.p86Api.messages.remove(msgId).then(fetchComments).catch(function(e) {
+        alert('Delete failed: ' + (e.message || e));
+      });
+    }
+
+    function downloadCurrent() {
+      var a = att();
+      if (!a) return;
+      var url = a.original_url || a.web_url;
+      if (!url) return;
+      var link = document.createElement('a');
+      link.href = url;
+      link.download = a.filename || 'attachment';
+      link.target = '_blank';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    }
+
+    function deleteCurrent() {
+      var a = att();
+      if (!a || !a.id) return;
+      if (!window.confirm('Delete "' + (a.filename || 'this photo') + '"? This cannot be undone.')) return;
+      window.p86Api.attachments.remove(a.id).then(function() {
+        state.attachments.splice(state.idx, 1);
+        if (!state.attachments.length) { close(); return; }
+        if (state.idx >= state.attachments.length) state.idx = state.attachments.length - 1;
+        state.zoom = 1;
+        state.comments = null;
+        render();
+        fetchComments();
+      }).catch(function(e) {
+        alert('Delete failed: ' + (e.message || e));
+      });
+    }
+
+    function openAnnotator() {
+      var a = att();
+      if (!a) return;
+      if (!window.p86Markup || typeof window.p86Markup.open !== 'function') {
+        alert('Annotator not loaded.');
+        return;
+      }
+      window.p86Markup.open({
+        attachment: a,
+        saveTarget: { entityType: a.entity_type, entityId: a.entity_id },
+        onDone: function(result) {
+          if (result && Array.isArray(result.annotations)) {
+            a.annotations = result.annotations;
+            render();
+          }
+        }
+      });
+    }
+
+    function toggleFullscreen() {
+      state.fullscreen = !state.fullscreen;
+      render();
+    }
+
+    function setZoom(delta) {
+      // Stepped: 1 → 1.5 → 2 → 3 → back to 1. Min 1.
+      var steps = [1, 1.5, 2, 3];
+      var cur = steps.indexOf(state.zoom);
+      if (cur < 0) cur = 0;
+      var next = Math.max(0, Math.min(steps.length - 1, cur + delta));
+      state.zoom = steps[next];
+      var imgEl = overlay.querySelector('.p86-pv-img');
+      var canvasEl = overlay.querySelector('.p86-pv-anno');
+      if (imgEl) imgEl.style.transform = 'scale(' + state.zoom + ')';
+      if (canvasEl) canvasEl.style.transform = 'scale(' + state.zoom + ')';
+    }
+
+    // Render the whole viewer (stage + panel). Called on photo change
+    // and on fullscreen toggle. renderPanel() handles in-place panel
+    // updates (comments load / tag change) without re-rendering the
+    // stage, so the image doesn't flash.
     function render() {
-      var att = attachments[idx];
-      var hasAnnotations = Array.isArray(att.annotations) && att.annotations.length > 0;
-      overlay.innerHTML =
-        '<button data-lb="close" title="Close (Esc)" style="position:absolute;top:14px;right:18px;background:rgba(255,255,255,0.1);color:#fff;border:1px solid rgba(255,255,255,0.2);border-radius:6px;width:36px;height:36px;font-size:18px;cursor:pointer;">&times;</button>' +
-        (attachments.length > 1 ? '<button data-lb="prev" title="Previous (←)" style="position:absolute;left:18px;top:50%;transform:translateY(-50%);background:rgba(255,255,255,0.1);color:#fff;border:1px solid rgba(255,255,255,0.2);border-radius:6px;width:44px;height:64px;font-size:24px;cursor:pointer;">&lsaquo;</button>' : '') +
-        (attachments.length > 1 ? '<button data-lb="next" title="Next (→)" style="position:absolute;right:18px;top:50%;transform:translateY(-50%);background:rgba(255,255,255,0.1);color:#fff;border:1px solid rgba(255,255,255,0.2);border-radius:6px;width:44px;height:64px;font-size:24px;cursor:pointer;">&rsaquo;</button>' : '') +
-        '<div style="max-width:95%;max-height:88%;display:flex;flex-direction:column;align-items:center;gap:12px;">' +
-          '<div style="position:relative;display:inline-flex;max-width:100%;max-height:78vh;">' +
-            '<img id="p86-lb-img" src="' + escapeAttr(att.web_url) + '" alt="' + escapeAttr(att.filename) + '" style="max-width:100%;max-height:78vh;object-fit:contain;border-radius:8px;background:#000;display:block;" />' +
-            // Annotation overlay canvas — sized to match the rendered
-            // image. Pointer-events disabled so prev/next click still
-            // works on the corners. Only present when annotations exist.
-            (hasAnnotations
-              ? '<canvas id="p86-lb-anno" style="position:absolute;inset:0;width:100%;height:100%;border-radius:8px;pointer-events:none;"></canvas>'
-              : '') +
-          '</div>' +
-          '<div style="display:flex;align-items:center;gap:14px;color:#ddd;font-size:12px;font-family:Arial,sans-serif;">' +
-            '<div>' + escapeHTMLLocal(att.filename) + ' &middot; ' + fmtBytes(att.size_bytes) + (att.width && att.height ? ' &middot; ' + att.width + '×' + att.height : '') +
-              (hasAnnotations ? ' &middot; ' + att.annotations.length + ' annotation' + (att.annotations.length === 1 ? '' : 's') : '') +
-            '</div>' +
-            '<a href="' + escapeAttr(att.original_url) + '" download="' + escapeAttr(att.filename) + '" target="_blank" style="background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);color:#fff;border-radius:6px;padding:6px 12px;text-decoration:none;font-size:11px;">&#x2B07; Download original</a>' +
-            '<div style="color:#888;">' + (idx + 1) + ' / ' + attachments.length + '</div>' +
-          '</div>' +
-        '</div>';
+      var a = att();
+      if (!a) { close(); return; }
+      var hasAnnotations = Array.isArray(a.annotations) && a.annotations.length > 0;
+      var multi = state.attachments.length > 1;
+      var isImage = a.mime_type && a.mime_type.indexOf('image/') === 0;
+      var fs = state.fullscreen ? ' p86-pv-fullscreen' : '';
 
-      // Mount the annotation overlay AFTER the img loads so we can
-      // size the canvas to the image's natural dimensions and have
-      // the strokes line up exactly. Strokes were drawn against the
-      // photo at full resolution; we need to render at that scale
-      // and let CSS scale the canvas (along with the img) for
-      // display.
-      if (hasAnnotations) {
-        var img = overlay.querySelector('#p86-lb-img');
-        var canvas = overlay.querySelector('#p86-lb-anno');
+      overlay.className = 'p86-photo-viewer' + fs;
+      overlay.innerHTML =
+        '<div class="p86-pv-stage">' +
+          '<button class="p86-pv-close" title="Close (Esc)" data-pv="close">&times;</button>' +
+          (multi
+            ? '<button class="p86-pv-nav p86-pv-prev" title="Previous (←)" data-pv="prev">&lsaquo;</button>' +
+              '<button class="p86-pv-nav p86-pv-next" title="Next (→)" data-pv="next">&rsaquo;</button>'
+            : '') +
+          '<div class="p86-pv-img-wrap">' +
+            (isImage
+              ? '<img class="p86-pv-img" src="' + escapeAttr(a.web_url || a.original_url) + '" alt="' + escapeAttr(a.filename) + '" style="transform:scale(' + state.zoom + ');" />' +
+                (hasAnnotations ? '<canvas class="p86-pv-anno" style="transform:scale(' + state.zoom + ');"></canvas>' : '')
+              : '<div class="p86-pv-doc">' + fileIconFor(a.filename, a.mime_type) + '<div class="p86-pv-doc-name">' + escapeHTMLLocal(a.filename) + '</div></div>') +
+          '</div>' +
+          renderToolbarHTML(a, hasAnnotations) +
+          (multi ? '<div class="p86-pv-counter">' + (state.idx + 1) + ' / ' + state.attachments.length + '</div>' : '') +
+        '</div>' +
+        '<aside class="p86-pv-panel">' + renderPanelHTML(a) + '</aside>';
+
+      // Annotation canvas paint — only when image exists and has strokes.
+      if (isImage && hasAnnotations) {
+        var img = overlay.querySelector('.p86-pv-img');
+        var canvas = overlay.querySelector('.p86-pv-anno');
         function paintAnno() {
           if (!img || !canvas) return;
           canvas.width = img.naturalWidth || 1;
           canvas.height = img.naturalHeight || 1;
           var ctx = canvas.getContext('2d');
           if (window.p86AnnotationRender && typeof window.p86AnnotationRender.renderAll === 'function') {
-            window.p86AnnotationRender.renderAll(ctx, att.annotations);
+            window.p86AnnotationRender.renderAll(ctx, a.annotations);
           }
         }
         if (img.complete && img.naturalWidth) paintAnno();
         else img.addEventListener('load', paintAnno, { once: true });
       }
+
+      wireStage();
+      wirePanel(a);
     }
 
-    function next() { idx = (idx + 1) % attachments.length; render(); }
-    function prev() { idx = (idx - 1 + attachments.length) % attachments.length; render(); }
-    function close() {
-      document.removeEventListener('keydown', onKey);
-      if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+    function renderToolbarHTML(a, hasAnnotations) {
+      var canAnnotate = a.mime_type && a.mime_type.indexOf('image/') === 0;
+      var btn = function(act, icon, title) {
+        return '<button class="p86-pv-tbtn" data-pv="' + act + '" title="' + escapeAttr(title) + '">' + icon + '</button>';
+      };
+      return '<div class="p86-pv-toolbar">' +
+        (canAnnotate ? btn('annotate', '&#9998;', 'Annotate' + (hasAnnotations ? ' (' + a.annotations.length + ')' : '')) : '') +
+        btn('fullscreen', state.fullscreen ? '&#x2922;' : '&#x26F6;', state.fullscreen ? 'Show panel' : 'Hide panel') +
+        (canAnnotate ? btn('zoomout', '&minus;', 'Zoom out') : '') +
+        (canAnnotate ? btn('zoomin', '&plus;', 'Zoom in') : '') +
+        btn('download', '&#x2B07;', 'Download') +
+        btn('delete', '&#x1F5D1;', 'Delete') +
+      '</div>';
     }
-    function onKey(e) {
-      if (e.key === 'Escape') close();
-      else if (e.key === 'ArrowRight') next();
-      else if (e.key === 'ArrowLeft') prev();
+
+    // The panel's body is split: a parent-entity header at the top
+    // (read-only) and an editable info block below (uploader, tags,
+    // description, comments). renderPanelHTML returns the whole
+    // panel innerHTML; renderPanel() is the in-place updater used
+    // when comments load or a tag PATCH lands.
+    function renderPanelHTML(a) {
+      var uploader = userNameFor(a.uploaded_by);
+      var when = fmtRelativeTime(a.uploaded_at);
+      var caption = a.caption || '';
+      return (state.parentLabel
+          ? '<header class="p86-pv-parent">' +
+              '<div class="p86-pv-parent-name">' + escapeHTMLLocal(state.parentLabel) + '</div>' +
+              (state.parentSubtitle ? '<div class="p86-pv-parent-sub">' + escapeHTMLLocal(state.parentSubtitle) + '</div>' : '') +
+            '</header>'
+          : '') +
+        '<button class="p86-pv-close-panel" data-pv="close" title="Close">&times;</button>' +
+        '<div class="p86-pv-uploader">' +
+          '<div class="p86-pv-avatar">' + escapeHTMLLocal(initialsFor(uploader)) + '</div>' +
+          '<div class="p86-pv-uploader-meta">' +
+            '<div class="p86-pv-uploader-name">' + escapeHTMLLocal(uploader) + '</div>' +
+            '<div class="p86-pv-uploader-when">' + escapeHTMLLocal(when) + '</div>' +
+          '</div>' +
+        '</div>' +
+        '<section class="p86-pv-section">' +
+          '<div class="p86-pv-section-label">Tags</div>' +
+          '<div class="p86-pv-tags-host"></div>' +
+        '</section>' +
+        '<section class="p86-pv-section">' +
+          '<div class="p86-pv-section-label">Description</div>' +
+          '<fieldset class="p86-pv-desc-fs" data-edit-gate="locked">' +
+            '<legend class="p86-pv-desc-legend">&nbsp;</legend>' +
+            '<textarea class="p86-pv-desc-input" placeholder="Add a description (caption)…">' + escapeHTMLLocal(caption) + '</textarea>' +
+          '</fieldset>' +
+        '</section>' +
+        '<section class="p86-pv-section p86-pv-comments-section">' +
+          '<div class="p86-pv-section-label">Comments</div>' +
+          '<div class="p86-pv-comments-list"></div>' +
+          '<div class="p86-pv-composer">' +
+            '<textarea class="p86-pv-composer-input" rows="2" placeholder="Add a comment…"></textarea>' +
+            '<button class="p86-pv-composer-post" type="button">Post</button>' +
+          '</div>' +
+        '</section>';
     }
-    overlay.addEventListener('click', function(e) {
-      var t = e.target;
-      var act = t && t.getAttribute && t.getAttribute('data-lb');
-      if (act === 'close') close();
-      else if (act === 'next') next();
-      else if (act === 'prev') prev();
-      else if (t === overlay) close(); // backdrop click
-    });
-    document.addEventListener('keydown', onKey);
-    document.body.appendChild(overlay);
+
+    function renderPanel() {
+      var a = att();
+      var aside = overlay.querySelector('.p86-pv-panel');
+      if (!aside) return;
+      aside.innerHTML = renderPanelHTML(a);
+      wirePanel(a);
+    }
+
+    function wireStage() {
+      overlay.querySelector('.p86-pv-stage').addEventListener('click', function(e) {
+        var t = e.target.closest('[data-pv]');
+        if (!t) return;
+        var act = t.getAttribute('data-pv');
+        if (act === 'close') close();
+        else if (act === 'prev') prev();
+        else if (act === 'next') next();
+        else if (act === 'annotate') openAnnotator();
+        else if (act === 'fullscreen') toggleFullscreen();
+        else if (act === 'zoomin') setZoom(1);
+        else if (act === 'zoomout') setZoom(-1);
+        else if (act === 'download') downloadCurrent();
+        else if (act === 'delete') deleteCurrent();
+      });
+    }
+
+    function wirePanel(a) {
+      // Panel close (mobile drawer X).
+      var closeBtn = overlay.querySelector('.p86-pv-close-panel');
+      if (closeBtn) closeBtn.addEventListener('click', close);
+
+      // Tags editor — reuse projects.js mountTagEditor for chip styling
+      // + org-tag autocomplete. Falls back to a plain message if the
+      // helper isn't loaded (e.g. attachments.js used on a screen
+      // that doesn't load projects.js).
+      var tagsHost = overlay.querySelector('.p86-pv-tags-host');
+      if (tagsHost) {
+        if (window.p86Projects && typeof window.p86Projects.mountTagEditor === 'function') {
+          window.p86Projects.mountTagEditor(tagsHost, {
+            getTags: function() { return Array.isArray(a.tags) ? a.tags.slice() : []; },
+            setTags: function(next) {
+              updateAtt({ tags: next.slice() });
+            }
+          });
+        } else {
+          tagsHost.innerHTML = '<div style="font-size:11px;color:#888;">Tag editor unavailable.</div>';
+        }
+      }
+
+      // Description textarea — gated by the edit-gate pencil so a
+      // stray tap can't trigger the on-blur PATCH. Saves on blur once
+      // the section is unlocked.
+      var descFs = overlay.querySelector('.p86-pv-desc-fs');
+      var descInput = overlay.querySelector('.p86-pv-desc-input');
+      if (window.p86EditGate && descFs) {
+        window.p86EditGate.attachSection(descFs, { startUnlocked: false });
+      }
+      if (descInput) {
+        descInput.addEventListener('blur', function() {
+          var v = descInput.value || '';
+          if ((a.caption || '') === v) return; // no change
+          updateAtt({ caption: v });
+        });
+      }
+
+      // Comments list + composer.
+      var commentsList = overlay.querySelector('.p86-pv-comments-list');
+      var composerInput = overlay.querySelector('.p86-pv-composer-input');
+      var composerPost = overlay.querySelector('.p86-pv-composer-post');
+      if (commentsList) paintComments(commentsList);
+      if (composerPost && composerInput) {
+        composerPost.addEventListener('click', function() {
+          var body = composerInput.value || '';
+          if (!body.trim()) return;
+          composerPost.disabled = true;
+          composerPost.textContent = 'Posting…';
+          postComment(body).then(function() {
+            composerInput.value = '';
+          }).catch(function(e) {
+            alert('Post failed: ' + (e.message || e));
+          }).then(function() {
+            composerPost.disabled = false;
+            composerPost.textContent = 'Post';
+          });
+        });
+        // Cmd/Ctrl+Enter = post (mobile keyboards send the same event).
+        composerInput.addEventListener('keydown', function(e) {
+          if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+            e.preventDefault();
+            composerPost.click();
+          }
+        });
+      }
+    }
+
+    function paintComments(host) {
+      if (state.commentsLoading) {
+        host.innerHTML = '<div class="p86-pv-comments-empty">Loading…</div>';
+        return;
+      }
+      if (state.commentsError) {
+        host.innerHTML = '<div class="p86-pv-comments-empty" style="color:#f87171;">' + escapeHTMLLocal(state.commentsError) + '</div>';
+        return;
+      }
+      if (!state.comments || !state.comments.length) {
+        host.innerHTML = '<div class="p86-pv-comments-empty">No comments yet.</div>';
+        return;
+      }
+      var me = (window.p86Auth && typeof window.p86Auth.getUser === 'function') ? window.p86Auth.getUser() : null;
+      var myId = me && me.id;
+      host.innerHTML = state.comments.map(function(m) {
+        var name = userNameFor(m.user_id);
+        var mine = myId && Number(m.user_id) === Number(myId);
+        return '<div class="p86-pv-comment">' +
+          '<div class="p86-pv-comment-avatar">' + escapeHTMLLocal(initialsFor(name)) + '</div>' +
+          '<div class="p86-pv-comment-body">' +
+            '<div class="p86-pv-comment-meta">' +
+              '<span class="p86-pv-comment-name">' + escapeHTMLLocal(name) + '</span>' +
+              '<span class="p86-pv-comment-when">' + escapeHTMLLocal(fmtRelativeTime(m.created_at)) + '</span>' +
+              (mine ? '<button class="p86-pv-comment-del" data-msg-id="' + escapeAttr(m.id) + '" title="Delete">&times;</button>' : '') +
+            '</div>' +
+            '<div class="p86-pv-comment-text">' + escapeHTMLLocal(m.body) + '</div>' +
+          '</div>' +
+        '</div>';
+      }).join('');
+      host.querySelectorAll('.p86-pv-comment-del').forEach(function(btn) {
+        btn.addEventListener('click', function() { deleteComment(btn.getAttribute('data-msg-id')); });
+      });
+    }
+
+    // First paint + kick off the initial comments fetch.
     render();
+    fetchComments();
   }
 
   // ──────────────────────────────────────────────────────────────────

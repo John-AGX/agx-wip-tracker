@@ -54,7 +54,10 @@ function genId() {
 function isValidThreadKey(key) {
   if (typeof key !== 'string' || !key) return false;
   if (key.length > 200) return false;
-  if (/^(job|lead|estimate):[a-zA-Z0-9_:-]+$/.test(key)) return true;
+  // `attachment:<id>` keys back the per-photo comments thread that
+  // the new photo viewer side panel renders. Same regex shape as
+  // the other entity prefixes.
+  if (/^(job|lead|estimate|attachment):[a-zA-Z0-9_:-]+$/.test(key)) return true;
   if (/^dm:\d+:\d+$/.test(key)) return true;
   return false;
 }
@@ -98,6 +101,17 @@ async function describeThread(key) {
       const { rows } = await pool.query('SELECT id, name, email FROM users WHERE id = ANY($1::int[])', [otherIds]);
       const names = rows.map(r => r.name || r.email).join(' ↔ ');
       return { kind: 'dm', label: names || 'Direct message' };
+    }
+    if (key.startsWith('attachment:')) {
+      const id = key.slice('attachment:'.length);
+      const { rows } = await pool.query(
+        'SELECT filename, entity_type FROM attachments WHERE id = $1',
+        [id]
+      );
+      if (rows.length) {
+        return { kind: 'attachment', label: rows[0].filename || ('Photo ' + id) };
+      }
+      return { kind: 'attachment', label: 'Photo ' + id };
     }
   } catch (e) { /* fallthrough */ }
   return { kind: 'thread', label: key };

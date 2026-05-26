@@ -4666,3 +4666,366 @@
   .p86-proj-detail-host { padding: 10px; }
   .p86-proj-feed-grid { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
 }
+
+/* ──────────────────────────────────────────────────────────────────
+   Photo viewer — CompanyCam-style two-column overlay. Stage left
+   (image + nav + toolbar), info panel right (parent header + tags +
+   description + comments). Replaces the bare-bones .p86-lightbox.
+   Mobile (≤768px) collapses the panel below the image as a drawer
+   that occupies the bottom 50vh.
+   ────────────────────────────────────────────────────────────────── */
+.p86-photo-viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  background: #050510;
+  display: flex;
+  align-items: stretch;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+  color: #e6e6e6;
+}
+.p86-photo-viewer.p86-pv-fullscreen .p86-pv-panel { display: none; }
+
+/* ── STAGE (left column) ────────────────────────────────────────── */
+.p86-pv-stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  background: #000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+.p86-pv-img-wrap {
+  position: relative;
+  max-width: 100%;
+  max-height: 100%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.p86-pv-img {
+  max-width: 92vw;
+  max-height: 92vh;
+  object-fit: contain;
+  display: block;
+  transform-origin: center center;
+  transition: transform 0.15s ease;
+}
+.p86-pv-anno {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  transform-origin: center center;
+  transition: transform 0.15s ease;
+}
+.p86-pv-doc {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  color: #888;
+  font-size: 48px;
+}
+.p86-pv-doc-name { font-size: 14px; color: #ccc; max-width: 70vw; text-align: center; overflow-wrap: break-word; }
+
+/* ── Stage chrome (close, nav, counter, toolbar) ────────────────── */
+.p86-pv-close {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.12);
+  border: 1px solid rgba(255,255,255,0.18);
+  color: #fff;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.p86-pv-close:hover { background: rgba(255,255,255,0.22); }
+.p86-pv-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 44px;
+  height: 64px;
+  background: rgba(255,255,255,0.08);
+  border: 1px solid rgba(255,255,255,0.16);
+  color: #fff;
+  font-size: 26px;
+  border-radius: 8px;
+  cursor: pointer;
+  z-index: 4;
+}
+.p86-pv-nav:hover { background: rgba(255,255,255,0.2); }
+.p86-pv-prev { left: 18px; }
+.p86-pv-next { right: 18px; }
+.p86-pv-counter {
+  position: absolute;
+  bottom: 14px;
+  right: 18px;
+  color: #aaa;
+  font-size: 11px;
+  background: rgba(0,0,0,0.4);
+  padding: 4px 8px;
+  border-radius: 6px;
+}
+.p86-pv-toolbar {
+  position: absolute;
+  bottom: 14px;
+  left: 18px;
+  display: flex;
+  gap: 6px;
+  z-index: 4;
+}
+.p86-pv-tbtn {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.12);
+  border: 1px solid rgba(255,255,255,0.18);
+  color: #fff;
+  cursor: pointer;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.p86-pv-tbtn:hover { background: rgba(255,255,255,0.22); }
+
+/* ── PANEL (right rail) ─────────────────────────────────────────── */
+.p86-pv-panel {
+  flex: 0 0 360px;
+  background: #0f0f1e;
+  border-left: 1px solid #2a2a3a;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  position: relative;
+  padding: 18px 18px 18px 18px;
+  gap: 14px;
+}
+.p86-pv-close-panel {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  background: transparent;
+  border: 0;
+  color: #888;
+  font-size: 20px;
+  cursor: pointer;
+  line-height: 1;
+  padding: 4px;
+}
+.p86-pv-close-panel:hover { color: #fff; }
+
+/* Parent entity header (project name + address). Read-only band. */
+.p86-pv-parent {
+  margin: -18px -18px 0 -18px;
+  padding: 14px 18px 12px 18px;
+  border-bottom: 1px solid #2a2a3a;
+  background: #14142a;
+}
+.p86-pv-parent-name {
+  font-size: 16px;
+  font-weight: 700;
+  color: #fff;
+  margin-bottom: 2px;
+  padding-right: 28px;  /* space for close-X */
+}
+.p86-pv-parent-sub {
+  font-size: 12px;
+  color: #9aa;
+}
+
+/* Uploader row */
+.p86-pv-uploader {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.p86-pv-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--accent, #4f8cff);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.3px;
+  flex: 0 0 32px;
+}
+.p86-pv-uploader-meta { flex: 1; min-width: 0; }
+.p86-pv-uploader-name { font-size: 13px; font-weight: 600; color: #fff; }
+.p86-pv-uploader-when { font-size: 11px; color: #888; }
+
+/* Generic panel section */
+.p86-pv-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.p86-pv-section-label {
+  font-size: 10px;
+  font-weight: 700;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+}
+
+/* Description fieldset — uses the global edit-gate pencil. The
+   legend is empty (pencil only) so the section heading above carries
+   the label visually. */
+.p86-pv-desc-fs {
+  border: 1px solid #2a2a3a;
+  border-radius: 8px;
+  padding: 8px 10px;
+  margin: 0;
+}
+.p86-pv-desc-legend {
+  padding: 0 4px;
+  font-size: 0; /* legend hosts only the pencil — no text */
+}
+.p86-pv-desc-input {
+  width: 100%;
+  background: transparent;
+  border: 0;
+  color: #e6e6e6;
+  font-size: 13px;
+  font-family: inherit;
+  resize: vertical;
+  min-height: 56px;
+  outline: none;
+  padding: 4px 0;
+}
+
+/* Comments thread */
+.p86-pv-comments-section { gap: 10px; }
+.p86-pv-comments-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 280px;
+  overflow-y: auto;
+}
+.p86-pv-comments-empty {
+  font-size: 12px;
+  color: #666;
+  font-style: italic;
+  padding: 6px 0;
+}
+.p86-pv-comment {
+  display: flex;
+  gap: 8px;
+}
+.p86-pv-comment-avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: #2a2a3a;
+  color: #ccc;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  flex: 0 0 26px;
+}
+.p86-pv-comment-body { flex: 1; min-width: 0; }
+.p86-pv-comment-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+.p86-pv-comment-name { font-size: 12px; font-weight: 600; color: #ddd; }
+.p86-pv-comment-when { font-size: 10px; color: #888; }
+.p86-pv-comment-del {
+  margin-left: auto;
+  background: transparent;
+  border: 0;
+  color: #666;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.p86-pv-comment-del:hover { color: #f87171; }
+.p86-pv-comment-text {
+  font-size: 13px;
+  color: #ddd;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+.p86-pv-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-top: 1px solid #2a2a3a;
+  padding-top: 10px;
+}
+.p86-pv-composer-input {
+  width: 100%;
+  background: #14142a;
+  border: 1px solid #2a2a3a;
+  border-radius: 6px;
+  color: #e6e6e6;
+  font-size: 13px;
+  font-family: inherit;
+  padding: 8px 10px;
+  resize: vertical;
+  outline: none;
+}
+.p86-pv-composer-input:focus { border-color: var(--accent, #4f8cff); }
+.p86-pv-composer-post {
+  align-self: flex-end;
+  background: var(--accent, #4f8cff);
+  color: #fff;
+  border: 0;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 14px;
+  cursor: pointer;
+}
+.p86-pv-composer-post:hover { filter: brightness(1.1); }
+.p86-pv-composer-post:disabled { opacity: 0.6; cursor: default; }
+
+/* Tag editor inside the panel — the mounted .p86-tag-editor wrapper
+   keeps its own internal styling; just make sure the chips wrap. */
+.p86-pv-tags-host .p86-tag-editor-chips { flex-wrap: wrap; }
+
+/* ── Mobile drawer (≤768px) ─────────────────────────────────────── */
+@media (max-width: 768px) {
+  .p86-photo-viewer {
+    flex-direction: column;
+  }
+  .p86-pv-stage {
+    flex: 1 1 50vh;
+    min-height: 50vh;
+  }
+  .p86-pv-panel {
+    flex: 1 1 auto;
+    border-left: 0;
+    border-top: 1px solid #2a2a3a;
+    max-height: 50vh;
+  }
+  .p86-pv-nav { width: 40px; height: 50px; font-size: 22px; }
+  .p86-pv-toolbar { bottom: 8px; left: 10px; }
+  .p86-pv-tbtn { width: 32px; height: 32px; }
+  .p86-pv-counter { bottom: 8px; right: 10px; }
+  .p86-pv-close { top: 8px; left: 8px; width: 32px; height: 32px; }
+  .p86-pv-parent { margin: -18px -18px 0 -18px; }
+}
