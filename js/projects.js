@@ -2077,6 +2077,12 @@
       // print rendering both pick up the same attribute, so PDFs
       // come out matching what the user sees in the editor.
       host.setAttribute('data-style-pack', state.stylePack || 'clean');
+      // Cover-enabled flag — surfaces state.cover.enabled into CSS so
+      // the @media print rule can hide the editor's plain title input
+      // (the styled cover already shows the title in big display
+      // type — letting both render duplicates the headline on the
+      // printed page).
+      host.setAttribute('data-cover-enabled', state.cover.enabled ? 'true' : 'false');
 
       host.innerHTML =
         '<div class="p86-report-topbar">' +

@@ -4788,10 +4788,22 @@
     font-style: italic;
   }
   .p86-report-cover-title {
-    font-size: 40px;
+    /* Auto-scale the title down for long names so it doesn't wrap
+       to three lines on a US-letter page. 28px floor keeps short
+       titles big and dramatic; 40px ceiling is the original size.
+       The 7.5vw middle term shrinks as the page gets narrower or
+       the title gets longer (vw measures the print viewport). */
+    font-size: clamp(28px, 7.5vw, 40px);
+    line-height: 1.15;
     font-weight: 700;
     margin: 0 0 24px 0;
     color: #000 !important;
+    /* Distribute characters across wrapped lines so a 2-line title
+       splits cleanly instead of orphan-ing a single short word on
+       the second line. Supported in Chrome 114+, Safari 17.4+,
+       Firefox 121+ — older browsers ignore and fall back to default
+       greedy wrap. */
+    text-wrap: balance;
   }
   .p86-report-cover-addr {
     font-size: 16px;
@@ -4861,6 +4873,22 @@
   .p86-report-section-actions,
   .p86-report-photo-remove,
   .p86-modal-close { display: none !important; }
+  /* In print, the editor's cover-page form fieldset is just UI
+     chrome — the actual cover page renders below it via the
+     .p86-report-cover-rendered.print-only block, which gets the
+     styled treatment per active style pack. Hiding the form
+     fieldset cleans up the printed PDF so the user doesn't see
+     "COMPANY NAME / SUBTITLE / …" labels above their cover. */
+  .p86-report-cover-fieldset { display: none !important; }
+  /* When the cover is enabled, the styled cover renders the report
+     title in big display type — leaving the editor's plain
+     .p86-report-title-input visible at the top would duplicate it.
+     The host carries data-cover-enabled when state.cover.enabled is
+     true; only hide the editor title in that case. With cover off,
+     the editor title stays as the printed-report header. */
+  .p86-report-host[data-cover-enabled="true"] .p86-report-title-input {
+    display: none !important;
+  }
   .p86-report-title-input,
   .p86-report-section-label,
   .p86-report-summary,
