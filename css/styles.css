@@ -4362,22 +4362,26 @@
   background: var(--card-bg, #0f0f1e);
 }
 /* When the underlying attachment has a description (att.caption set
-   via the photo viewer) OR tags, the card grows a side column to
-   show them beside the image. Plain photos keep the compact stacked
-   layout. The side column reads as flowing body text — no card
-   background, just a 1px divider between image + text. */
+   via the photo viewer) OR tags, the card grows a side column. The
+   side column has NO chrome — no divider, no background, no border.
+   It's just text floating beside the image, the way CompanyCam
+   presents photo metadata. The parent card also drops its own
+   border + background so the photo edge IS the boundary. */
 .p86-report-photo.has-sidedesc,
 .p86-report-photo-single.has-sidedesc {
   display: grid;
-  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
-  align-items: stretch;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  align-items: start;
+  gap: 18px;
+  border: 0;
+  background: transparent;
+  overflow: visible;
 }
 /* When descSide is 'left', flip the grid so the description renders
-   on the LEFT of the photo. Both the column order and the divider
-   side flip together. */
+   on the LEFT of the photo. */
 .p86-report-photo.has-sidedesc.desc-left,
 .p86-report-photo-single.has-sidedesc.desc-left {
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
 }
 .p86-report-photo.has-sidedesc.desc-left .p86-report-photo-mainstack,
 .p86-report-photo-single.has-sidedesc.desc-left .p86-report-photo-mainstack {
@@ -4386,23 +4390,38 @@
 .p86-report-photo.has-sidedesc.desc-left .p86-report-photo-sidedesc,
 .p86-report-photo-single.has-sidedesc.desc-left .p86-report-photo-sidedesc {
   order: 1;
-  border-left: 0;
-  border-right: 1px solid var(--border, #333);
+  text-align: right;
+}
+/* The image side keeps its rounded edge + caption input pinned at
+   the bottom, but no longer needs a card border (the outer card
+   dropped its border on .has-sidedesc cards). Give the img + caption
+   their own rounded box visually. */
+.p86-report-photo.has-sidedesc .p86-report-photo-mainstack,
+.p86-report-photo-single.has-sidedesc .p86-report-photo-mainstack {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border: 1px solid var(--border, #333);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--card-bg, #0f0f1e);
 }
 .p86-report-photo-mainstack {
   display: flex;
   flex-direction: column;
   min-width: 0;
 }
+/* Side description — pure typography, no box. Padding only on the
+   inside edge (closest to the photo) so the text breathes away
+   from the image. */
 .p86-report-photo-sidedesc {
-  padding: 6px 12px;
-  font-size: 12.5px;
+  padding: 4px 6px;
+  font-size: 13px;
   line-height: 1.5;
   color: var(--text, #fff);
-  border-left: 1px solid var(--border, #333);
   white-space: pre-wrap;
-  overflow-y: auto;
-  max-height: 100%;
+  background: transparent;
+  border: 0;
 }
 /* Side-column tag chips — sit under the description text. Colored
    per-tag via inline hue var (matches hueFor() in projects.js). No
@@ -4411,12 +4430,12 @@
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
-  margin-top: 6px;
+  margin-top: 8px;
 }
 .p86-report-photo-sidetag {
-  font-size: 10.5px;
+  font-size: 11px;
   font-weight: 600;
-  padding: 1px 7px;
+  padding: 2px 8px;
   border-radius: 999px;
   background: hsl(var(--h, 200), 70%, 88%);
   color: hsl(var(--h, 200), 70%, 22%);
