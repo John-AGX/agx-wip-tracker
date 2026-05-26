@@ -1352,11 +1352,15 @@
       // ===== PHOTOS TAB =====
       '<div id="projTabPhotos" class="p86-proj-tab-pane"' + ((_detailState.activeTab || 'photos') === 'photos' ? '' : ' style="display:none;"') + '>' +
 
-      // Filter toolbar — date range + uploader + view + upload
+      // Filter toolbar — date range + uploader + view + upload.
+      // The date range is collapsed behind a single "Date" pill with
+      // preset shortcuts (Today / Last 7 / Last 30 / Custom). Custom
+      // reveals the two date inputs inline. The presets cover ~95%
+      // of real usage so the toolbar isn't dominated by two empty
+      // mm/dd/yyyy boxes.
       '<div class="p86-proj-filter-toolbar">' +
         '<div class="p86-proj-filter-group">' +
-          '<input type="date" id="projFilterStart" value="' + escapeAttr(_detailState.photoFilter.start || '') + '" class="p86-proj-filter-date" title="Start date" />' +
-          '<input type="date" id="projFilterEnd" value="' + escapeAttr(_detailState.photoFilter.end || '') + '" class="p86-proj-filter-date" title="End date" />' +
+          dateFilterPillHTML(_detailState.photoFilter) +
           '<select id="projFilterUploader" class="p86-proj-filter-select" title="Uploader">' +
             '<option value="">Users ▾</option>' +
             buildUploaderOptions() +
@@ -1453,9 +1457,71 @@
     var endEl = host.querySelector('#projFilterEnd');
     var uploaderEl = host.querySelector('#projFilterUploader');
     if (uploaderEl) uploaderEl.value = _detailState.photoFilter.uploader || '';
-    if (startEl) startEl.addEventListener('change', function() { _detailState.photoFilter.start = startEl.value; paintPhotoFeed(); paintTagChipStrip(); });
-    if (endEl) endEl.addEventListener('change', function() { _detailState.photoFilter.end = endEl.value; paintPhotoFeed(); paintTagChipStrip(); });
+    if (startEl) startEl.addEventListener('change', function() {
+      _detailState.photoFilter.start = startEl.value;
+      _detailState.photoFilter.datePreset = 'custom';
+      paintPhotoFeed(); paintTagChipStrip(); _refreshDateFilterLabel();
+    });
+    if (endEl) endEl.addEventListener('change', function() {
+      _detailState.photoFilter.end = endEl.value;
+      _detailState.photoFilter.datePreset = 'custom';
+      paintPhotoFeed(); paintTagChipStrip(); _refreshDateFilterLabel();
+    });
     if (uploaderEl) uploaderEl.addEventListener('change', function() { _detailState.photoFilter.uploader = uploaderEl.value; paintPhotoFeed(); paintTagChipStrip(); });
+
+    // Date-filter pill: trigger toggles the menu open/closed; menu
+    // closes when the user clicks outside. Preset buttons set the
+    // filter range and close the menu (except "Custom" which reveals
+    // the inline mm/dd/yyyy inputs).
+    var datePill = host.querySelector('#projFilterDate');
+    var dateTrigger = host.querySelector('#projFilterDateTrigger');
+    var dateMenu = host.querySelector('#projFilterDateMenu');
+    if (dateTrigger && dateMenu) {
+      dateTrigger.addEventListener('click', function(e) {
+        e.stopPropagation();
+        var open = dateMenu.style.display !== 'none';
+        dateMenu.style.display = open ? 'none' : 'block';
+      });
+      // Outside-click closes the menu. Bound to document but ignores
+      // clicks that landed inside the pill.
+      document.addEventListener('click', function onAwayDate(e) {
+        if (!datePill.isConnected) {
+          document.removeEventListener('click', onAwayDate);
+          return;
+        }
+        if (datePill.contains(e.target)) return;
+        dateMenu.style.display = 'none';
+      });
+      // Preset buttons.
+      dateMenu.querySelectorAll('[data-date-preset]').forEach(function(btn) {
+        btn.addEventListener('click', function(e) {
+          e.stopPropagation();
+          var preset = btn.getAttribute('data-date-preset');
+          _detailState.photoFilter.datePreset = preset;
+          var range = _applyDatePreset(preset);
+          if (range) {
+            _detailState.photoFilter.start = range.start;
+            _detailState.photoFilter.end = range.end;
+          }
+          // Update active-button state without a full re-paint.
+          dateMenu.querySelectorAll('[data-date-preset]').forEach(function(b) {
+            b.classList.toggle('active', b === btn);
+          });
+          // Show/hide the inline custom inputs.
+          var customRow = dateMenu.querySelector('.p86-proj-filter-date-custom');
+          if (customRow) customRow.style.display = (preset === 'custom') ? '' : 'none';
+          // Refresh the date inputs' values to match the preset.
+          if (startEl) startEl.value = _detailState.photoFilter.start || '';
+          if (endEl)   endEl.value   = _detailState.photoFilter.end   || '';
+          _refreshDateFilterLabel();
+          paintPhotoFeed();
+          paintTagChipStrip();
+          // Close the menu unless they picked Custom (they're likely
+          // about to type a date).
+          if (preset !== 'custom') dateMenu.style.display = 'none';
+        });
+      });
+    }
 
     // Tile-size picker click handler. Delegated so the three
     // buttons share one listener; reads the data-tile-size attribute
@@ -2939,6 +3005,96 @@
     return Object.keys(byId).map(function(id) {
       return '<option value="' + escapeAttr(id) + '">' + escapeHTML(byId[id]) + '</option>';
     }).join('');
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // Date filter pill — collapses the two mm/dd/yyyy date inputs
+  // behind a dropdown with preset shortcuts. Today / Last 7 / Last
+  // 30 cover the common cases; "Custom" reveals the two date inputs
+  // inline so power users can still set arbitrary ranges. The label
+  // on the pill summarizes whatever's currently active so the user
+  // sees the range without opening the menu.
+  // ──────────────────────────────────────────────────────────────────
+  // Returns YYYY-MM-DD in LOCAL time for a Date object — matches the
+  // format <input type="date"> serializes, so the existing photo
+  // filter math (which compares date prefixes) keeps working.
+  function _ymdLocal(d) {
+    var pad = function(n) { return n < 10 ? '0' + n : '' + n; };
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+  }
+  function _datePresetLabel(filter) {
+    var preset = filter && filter.datePreset;
+    if (preset === 'today') return 'Today';
+    if (preset === 'last7') return 'Last 7 days';
+    if (preset === 'last30') return 'Last 30 days';
+    if (preset === 'custom' && (filter.start || filter.end)) {
+      // Format both ends as M/D (year only if it differs from current).
+      var fmt = function(s) {
+        if (!s) return '…';
+        var parts = s.split('-');
+        if (parts.length !== 3) return s;
+        return Number(parts[1]) + '/' + Number(parts[2]);
+      };
+      return fmt(filter.start) + ' – ' + fmt(filter.end);
+    }
+    return 'Any date';
+  }
+  function dateFilterPillHTML(filter) {
+    filter = filter || {};
+    var preset = filter.datePreset || (filter.start || filter.end ? 'custom' : 'any');
+    var label = _datePresetLabel(filter);
+    var showCustom = (preset === 'custom');
+    function optBtn(id, text) {
+      var active = (id === preset) ? ' active' : '';
+      return '<button type="button" class="p86-proj-filter-date-opt' + active + '" data-date-preset="' + id + '">' + text + '</button>';
+    }
+    return '<div class="p86-proj-filter-date-pill" id="projFilterDate">' +
+      '<button type="button" class="p86-proj-filter-date-trigger" id="projFilterDateTrigger" title="Filter by upload date">' +
+        '<span class="p86-proj-filter-date-icon">&#x1F4C5;</span>' +
+        '<span class="p86-proj-filter-date-label">' + escapeHTML(label) + '</span>' +
+        '<span class="p86-proj-filter-date-caret">&#x25BE;</span>' +
+      '</button>' +
+      '<div class="p86-proj-filter-date-menu" id="projFilterDateMenu" style="display:none;">' +
+        optBtn('any',    'Any date') +
+        optBtn('today',  'Today') +
+        optBtn('last7',  'Last 7 days') +
+        optBtn('last30', 'Last 30 days') +
+        optBtn('custom', 'Custom…') +
+        '<div class="p86-proj-filter-date-custom"' + (showCustom ? '' : ' style="display:none;"') + '>' +
+          '<input type="date" id="projFilterStart" value="' + escapeAttr(filter.start || '') + '" class="p86-proj-filter-date" title="Start date" />' +
+          '<input type="date" id="projFilterEnd" value="' + escapeAttr(filter.end || '') + '" class="p86-proj-filter-date" title="End date" />' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  }
+  // Sync the visible label on the pill trigger to whatever's currently
+  // in the filter state. Cheaper than re-running paintHost() just to
+  // update one span.
+  function _refreshDateFilterLabel() {
+    var labelEl = document.querySelector('#projFilterDateTrigger .p86-proj-filter-date-label');
+    if (labelEl) labelEl.textContent = _datePresetLabel(_detailState.photoFilter);
+  }
+  // Map a preset id to an {start, end} YYYY-MM-DD pair (or nulls for
+  // "any" / "custom" — custom carries over whatever the user typed).
+  function _applyDatePreset(presetId) {
+    var today = new Date();
+    var todayStr = _ymdLocal(today);
+    if (presetId === 'today') {
+      return { start: todayStr, end: todayStr };
+    }
+    if (presetId === 'last7') {
+      var s7 = new Date(today); s7.setDate(s7.getDate() - 6);
+      return { start: _ymdLocal(s7), end: todayStr };
+    }
+    if (presetId === 'last30') {
+      var s30 = new Date(today); s30.setDate(s30.getDate() - 29);
+      return { start: _ymdLocal(s30), end: todayStr };
+    }
+    if (presetId === 'any') {
+      return { start: '', end: '' };
+    }
+    // 'custom' — keep whatever's currently set
+    return null;
   }
 
   // Per-photo tag chip strip — collects distinct tags across the

@@ -3373,6 +3373,68 @@
   padding: 6px 8px;
   border-radius: 6px;
 }
+/* Date-filter pill + dropdown menu. Collapses two date inputs
+   behind a single button with preset shortcuts; "Custom…" reveals
+   the inline date inputs. */
+.p86-proj-filter-date-pill { position: relative; display: inline-block; }
+.p86-proj-filter-date-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: var(--card-bg, #0f0f1e);
+  border: 1px solid var(--border, #333);
+  color: var(--text, #fff);
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.p86-proj-filter-date-trigger:hover { border-color: var(--accent, #4f8cff); }
+.p86-proj-filter-date-icon { font-size: 13px; line-height: 1; }
+.p86-proj-filter-date-label { font-weight: 600; }
+.p86-proj-filter-date-caret { color: var(--text-dim, #888); font-size: 10px; }
+.p86-proj-filter-date-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 30;
+  min-width: 200px;
+  background: var(--card-bg, #0f0f1e);
+  border: 1px solid var(--border, #333);
+  border-radius: 8px;
+  box-shadow: 0 6px 20px var(--shadow, rgba(0,0,0,0.3));
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.p86-proj-filter-date-opt {
+  text-align: left;
+  background: transparent;
+  border: 0;
+  color: var(--text, #fff);
+  font-size: 12px;
+  padding: 7px 10px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.p86-proj-filter-date-opt:hover { background: var(--overlay-light, rgba(255,255,255,0.06)); }
+.p86-proj-filter-date-opt.active {
+  background: rgba(79,140,255,0.12);
+  color: var(--accent, #4f8cff);
+  font-weight: 600;
+}
+.p86-proj-filter-date-custom {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 4px 2px 4px;
+  margin-top: 4px;
+  border-top: 1px solid var(--border, #333);
+}
+.p86-proj-filter-date-custom .p86-proj-filter-date { width: 100%; }
 
 /* Photo tag chip strip (filters the feed) */
 .p86-proj-tag-strip {
