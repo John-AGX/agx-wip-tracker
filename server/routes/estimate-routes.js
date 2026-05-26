@@ -70,6 +70,19 @@ router.put('/bulk/save', requireAuth, requireCapability('ESTIMATES_EDIT'), async
         //     __totals payload may shift by a fraction-of-a-cent between
         //     renders).
         delete blob.__totals;
+        // Canonical column-derived metadata — the server hydrates these
+        // onto the response from the dedicated columns (see GET /
+        // above), and the client mirrors them into the in-memory
+        // estimate object. If we let them ride along inside the JSONB
+        // blob, every save's stored blob carries a slightly different
+        // `updated_at` from the next round-trip's blob, the upsert's
+        // `IS DISTINCT FROM` fires on the timestamp drift alone, and
+        // `updated_at` resets to NOW() on every save. That's the
+        // bug behind every Estimates-list row showing today's date.
+        // Strip them so the comparison only sees real edits.
+        delete blob.updated_at;
+        delete blob.created_at;
+        delete blob.owner_id;
         // Only bump updated_at when the JSONB actually differs from what's
         // stored. The frontend bulk-save sends EVERY estimate on every
         // save, so without this gate, opening any one estimate would

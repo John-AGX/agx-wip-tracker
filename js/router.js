@@ -363,6 +363,20 @@
         var origEstSub = window.switchEstimatesSubTab.__p86RouterOrig || window.switchEstimatesSubTab;
         origEstSub(route.estSub);
       }
+      // Drive the virtual-tab highlight so the right sibling lights up
+      // on refresh. switchTab() above always activates the FIRST
+      // [data-tab="estimates"] button (Leads, since it's first in the
+      // DOM) — click handlers correct this via markVirtualTabActive,
+      // but the router replay never called it. Mapping is per-estSub
+      // since each Estimates sub-page has its own virtual-tab id.
+      if (route.top === 'estimates' && typeof window.markVirtualTabActive === 'function') {
+        var virtual;
+        if (route.estSub === 'leads') virtual = 'leads';
+        else if (route.estSub === 'clients') virtual = 'clients';
+        else if (route.estSub === 'subs') virtual = 'subs';
+        else virtual = 'estimates';   // covers estSub='list' and undefined
+        window.markVirtualTabActive(virtual);
+      }
       if (route.top === 'admin' && route.adSub && typeof window.switchAdminSubTab === 'function') {
         var origAdSub = window.switchAdminSubTab.__p86RouterOrig || window.switchAdminSubTab;
         origAdSub(route.adSub);

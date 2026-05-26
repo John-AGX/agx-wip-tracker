@@ -438,6 +438,12 @@
             const target = document.querySelector('[data-virtual-tab="' + virtual + '"]');
             if (target) target.classList.add('active');
         }
+        // Expose so the URL router (js/router.js) can drive the virtual-
+        // tab highlight on deep-link / refresh — switchTab() alone always
+        // lights up the FIRST [data-tab="estimates"] sibling (Leads),
+        // which is wrong when the user refreshed on Estimates / Clients /
+        // Subs. Click handlers already call this; the router didn't.
+        window.markVirtualTabActive = markVirtualTabActive;
 
         // Dismiss any open header popover. `except` keeps one open
         // (used when toggling so the click that just opened it isn't
