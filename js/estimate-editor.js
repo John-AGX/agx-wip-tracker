@@ -857,22 +857,26 @@
     return { subtotal: subtotal, markedUp: markedUp };
   }
 
-  // Target-margin override. When est.targetMarginLocked is true and
-  // est.targetMargin is a sane percent (0–99), the proposal abandons
-  // bottom-up markup math and back-computes the marked-up subtotal so
-  // gross margin lands exactly on the target:
+  // Target-margin override. When est.targetMargin is a sane percent
+  // (>0 and <100), the proposal abandons bottom-up markup math and
+  // back-computes the marked-up subtotal so gross margin lands
+  // exactly on the target:
   //
   //     markedUp = subtotal / (1 - targetMargin / 100)
   //
-  // Per-line + per-section markups are still stored (so unlocking
-  // restores them), they just don't drive the total while locked.
-  // Each INCLUDED group's markedUp scales to the same target so the
-  // group breakdown stays consistent (sum of group markedUps equals
-  // the override total). Excluded groups aren't part of the proposal,
-  // so they keep their own line-driven markup for reference.
+  // Per-line + per-section markups are still stored (so clearing
+  // restores them) — they just don't drive the total while a target
+  // is set. Each INCLUDED group's markedUp scales to the same target
+  // so the group breakdown stays consistent (sum of group markedUps
+  // equals the override total). Excluded groups keep their own
+  // line-driven markup for reference.
+  //
+  // The legacy `targetMarginLocked` flag is no longer read — presence
+  // of a non-zero `targetMargin` is the single source of truth. We
+  // still WRITE the flag for compat with older versions of the editor
+  // that might still check it; clearing the value clears both.
   function targetMarginActive(est) {
     if (!est) return false;
-    if (!est.targetMarginLocked) return false;
     var m = num(est.targetMargin);
     return m > 0 && m < 100;
   }
@@ -993,105 +997,125 @@
     renderPricingBreakdown();
   }
 
-  // The Margin chip. Two modes:
-  //   Unlocked (🔓, default): margin = computed from line markups,
-  //                            input is read-only display.
-  //   Locked   (🔒, gold):    target margin, input editable, total
-  //                            back-computed so margin lands here.
-  // Click the lock icon to toggle. When locking for the first time we
-  // seed the target with the currently-displayed computed margin so
-  // there's no jarring price jump on the first click.
+  // The Margin chip — uses the global edit-gate pencil pattern (same
+  // affordance as project/lead/job fieldsets). Two visual states
+  // driven by whether a target margin is set:
+  //
+  //   No target set (default): chip is GREEN, shows computed margin
+  //     from line markups. Input is read-only until pencil tap.
+  //   Target set:              chip is GOLD, shows the user's target
+  //     %. Input is read-only until pencil tap. Total back-computed.
+  //
+  // Pencil acts as a UX guard only — taps unlock the input for typing,
+  // taps again re-lock it. Clearing the input (or typing 0) drops back
+  // to the computed-margin state. So users "play with the %" until
+  // they're happy, then the pencil lock makes it stick.
   function renderMarginChip(t, computedMarginPct) {
-    var locked = !!t.targetMarginLocked;
-    // Seed the input value:
-    //  - Locked: show est.targetMargin (1 decimal)
-    //  - Unlocked: show the computed margin %
-    var displayPct = locked
-      ? (Number(t.targetMargin || 0).toFixed(1))
+    var hasTarget = !!t.targetMarginLocked; // == targetMargin > 0 from computeTotals
+    var displayPct = hasTarget
+      ? Number(t.targetMargin || 0).toFixed(1)
       : (computedMarginPct == null ? '' : computedMarginPct.toFixed(1));
-    var lockEmoji = locked ? '&#x1F512;' : '&#x1F513;';   // 🔒 / 🔓
-    var lockColor = locked ? '#fbbf24' : 'var(--text-dim,#888)';
-    var lockTitle = locked
-      ? 'Locked to target margin — click to release and use line markups'
-      : 'Click to lock a target margin and back-calculate markup';
-    var inputColor = locked ? '#fbbf24' : 'var(--green,#34d399)';
-    var inputBg = locked ? 'rgba(251,191,36,0.06)' : 'transparent';
-    var inputBorder = locked ? '1px solid rgba(251,191,36,0.4)' : '1px solid transparent';
-    var readonlyAttr = locked ? '' : ' readonly';
+    var accent = hasTarget ? '#fbbf24' : 'var(--green,#34d399)';
+    var ringRGBA = hasTarget ? 'rgba(251,191,36,0.4)' : 'rgba(52,211,153,0.35)';
+    var label = hasTarget ? 'Target Margin' : 'Margin';
     var placeholder = (displayPct === '') ? '—' : '';
-    return '<div style="background:rgba(255,255,255,0.03);border:1px solid var(--border,#333);border-radius:6px;padding:6px 12px;min-width:120px;">' +
+    var pencilIcon = (typeof window.p86Icon === 'function') ? window.p86Icon('edit') : '&#x270E;';
+    return '<div id="ee-margin-chip" data-edit-gate="locked" data-has-target="' + (hasTarget ? '1' : '0') +
+        '" style="background:rgba(255,255,255,0.03);border:1px solid var(--border,#333);border-radius:6px;padding:6px 12px;min-width:120px;">' +
       '<div style="display:flex;align-items:center;justify-content:space-between;gap:6px;">' +
         '<div style="font-size:9px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;">' +
-          (locked ? 'Target Margin' : 'Margin') +
+          label +
         '</div>' +
-        '<button type="button" id="ee-margin-lock" title="' + lockTitle + '" ' +
-          'style="background:transparent;border:0;cursor:pointer;font-size:13px;color:' + lockColor + ';padding:0;line-height:1;">' +
-          lockEmoji +
+        '<button type="button" id="ee-margin-pencil" class="edit-gate-toggle" ' +
+          'aria-pressed="false" title="Edit target margin" ' +
+          'style="background:transparent;border:0;cursor:pointer;padding:2px;line-height:1;display:inline-flex;align-items:center;color:var(--text-dim,#888);">' +
+          pencilIcon +
         '</button>' +
       '</div>' +
       '<div style="display:flex;align-items:baseline;gap:2px;margin-top:2px;">' +
-        // displayPct is always a numeric string (or empty) — no need
-        // to escape; it can never contain HTML special chars.
-        '<input id="ee-margin-input" type="text" inputmode="decimal" value="' + displayPct + '" placeholder="' + placeholder + '"' + readonlyAttr +
-          ' style="width:60px;background:' + inputBg + ';border:' + inputBorder + ';color:' + inputColor +
+        // displayPct is always a numeric string (or empty) — no need to
+        // escape; it can never contain HTML special chars. The input
+        // starts readonly; the pencil toggles it on demand.
+        '<input id="ee-margin-input" type="text" inputmode="decimal" value="' + displayPct + '" placeholder="' + placeholder + '" readonly' +
+          ' style="width:60px;background:transparent;border:1px solid transparent;color:' + accent +
           ';font-size:14px;font-weight:700;font-family:\'SF Mono\',\'Fira Code\',monospace;border-radius:4px;padding:1px 4px;outline:none;text-align:right;" />' +
-        '<span style="color:' + inputColor + ';font-size:14px;font-weight:700;font-family:\'SF Mono\',\'Fira Code\',monospace;">%</span>' +
+        '<span style="color:' + accent + ';font-size:14px;font-weight:700;font-family:\'SF Mono\',\'Fira Code\',monospace;">%</span>' +
       '</div>' +
+      // Inline scoped style for the unlocked state — gives the input a
+      // soft outline ring + matching caret so it visually signals "this
+      // is editable now."
+      '<style>' +
+        '#ee-margin-chip[data-edit-gate="unlocked"] #ee-margin-input { ' +
+          'background:rgba(255,255,255,0.03); ' +
+          'border-color:' + ringRGBA + '; ' +
+          'caret-color:' + accent + '; ' +
+        '}' +
+        '#ee-margin-chip[data-edit-gate="unlocked"] #ee-margin-pencil { color:' + accent + '; }' +
+      '</style>' +
     '</div>';
   }
 
   function wireMarginChip() {
-    var lockBtn = document.getElementById('ee-margin-lock');
+    var chip = document.getElementById('ee-margin-chip');
+    var pencil = document.getElementById('ee-margin-pencil');
     var input = document.getElementById('ee-margin-input');
-    if (lockBtn) {
-      lockBtn.onclick = function() {
-        var est = getEstimate();
-        if (!est) return;
-        if (est.targetMarginLocked) {
-          // Unlock — line markups drive math again. Keep the target
-          // value so re-locking instantly restores it.
-          est.targetMarginLocked = false;
-        } else {
-          // Lock — seed target with the current computed margin if
-          // the user hasn't set one yet, so prices don't jump.
-          if (!est.targetMargin || num(est.targetMargin) <= 0) {
-            var t = computeTotals();
-            var seed = (t.markedUp > 0)
-              ? (((t.markedUp - t.subtotal) / t.markedUp) * 100)
-              : 0;
-            est.targetMargin = +seed.toFixed(1);
-          }
-          est.targetMarginLocked = true;
-        }
-        renderTotals();
-        debouncedSave();
-      };
+    if (!chip || !pencil || !input) return;
+
+    function setUnlocked(unlocked) {
+      chip.setAttribute('data-edit-gate', unlocked ? 'unlocked' : 'locked');
+      pencil.setAttribute('aria-pressed', unlocked ? 'true' : 'false');
+      pencil.title = unlocked ? 'Lock target margin' : 'Edit target margin';
+      input.readOnly = !unlocked;
+      if (unlocked) {
+        // Focus + select-all on the next tick so the user can start
+        // typing immediately. Mobile keyboards open on focus.
+        setTimeout(function() {
+          try { input.focus(); input.select(); } catch (e) {}
+        }, 0);
+      }
     }
-    if (input && !input.readOnly) {
-      input.oninput = function() {
-        var est = getEstimate();
-        if (!est) return;
-        var v = parseFloat(input.value);
-        if (!isFinite(v)) v = 0;
-        if (v < 0) v = 0;
-        if (v > 99) v = 99;
-        est.targetMargin = v;
-        // Re-render totals + breakdown WITHOUT re-rendering the chip
-        // input (which would steal focus from the user mid-type).
-        renderTotalsExceptMargin();
-        debouncedSave();
-      };
-      input.onblur = function() {
-        // On blur, re-render fully so the input's value is normalized
-        // (e.g. typing "35." → "35.0").
+
+    pencil.onclick = function(e) {
+      e.preventDefault();
+      e.stopPropagation();
+      var isLocked = chip.getAttribute('data-edit-gate') !== 'unlocked';
+      if (isLocked) {
+        // Unlocking — just flip the state, no re-render needed (it
+        // would destroy the focus we're about to grab).
+        setUnlocked(true);
+      } else {
+        // Locking — re-render the chip so the green/gold accent
+        // reflects whether the user actually entered a target.
         renderTotals();
-      };
-      // Select all on focus so typing replaces the previous value
-      // immediately — matches the feel of a single-tap edit.
-      input.onfocus = function() {
-        try { input.select(); } catch (e) {}
-      };
-    }
+      }
+    };
+
+    // Input handler — fires while typing (only meaningful when
+    // unlocked since readOnly is set otherwise). Updates est.targetMargin
+    // and live-updates the proposal total without re-rendering the
+    // chip (which would steal focus from the input mid-type).
+    input.oninput = function() {
+      var est = getEstimate();
+      if (!est) return;
+      var raw = input.value.trim();
+      var v = parseFloat(raw);
+      if (!isFinite(v) || raw === '') v = 0;
+      if (v < 0) v = 0;
+      if (v > 99) v = 99;
+      est.targetMargin = v;
+      // Keep legacy flag in sync so older code paths that still read
+      // it don't drift; targetMarginActive() ignores it now.
+      est.targetMarginLocked = v > 0;
+      renderTotalsExceptMargin();
+      debouncedSave();
+    };
+
+    // No auto-lock on blur. The pencil is the SOLE lock/unlock
+    // toggle (matches the rest of the edit-gate pattern). Blurring
+    // the input — including by clicking the pencil to lock — would
+    // otherwise re-render the chip mid-click and leave the user's
+    // tap landing on a destroyed element. Re-render to refresh the
+    // green/gold accent happens on pencil click, not on blur.
   }
 
   // Partial refresh that updates every chip EXCEPT the margin input
