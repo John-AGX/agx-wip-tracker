@@ -4504,16 +4504,19 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  font-size: 12.5px;
-  line-height: 1.4;
+  font-size: 13.5px;
+  line-height: 1.5;
   color: var(--text, #fff);
   background: transparent;
   border: 0;
   padding: 0;
 }
+/* Icon scales WITH the text — 1.3em sits visually proportional to
+   the tag wording (emoji glyphs render ~80% of declared font-size,
+   so the multiplier gives the icon real weight next to the text). */
 .p86-report-photo-sidetag-icon {
-  font-size: 13px;
-  opacity: 0.65;
+  font-size: 1.3em;
+  opacity: 0.7;
   line-height: 1;
   flex: 0 0 auto;
 }
