@@ -2187,6 +2187,13 @@
   //       — iterate strokes and draw onto a 2D canvas context.
   //   window.p86AnnotationRender.drawStroke(ctx, stroke)
   //       — single-stroke render (e.g. for selection previews).
+  //   window.p86AnnotationRender.webVariantDims(origW, origH)
+  //       — returns the WEB variant's pixel dimensions given the
+  //         original image's dimensions. Mirrors the sharp pipeline
+  //         (max-edge 1600, fit:inside, no upscale). Strokes are
+  //         drawn against the WEB variant, so any caller painting
+  //         a tile overlay needs to size its canvas to THIS, not to
+  //         the thumbnail's naturalWidth/Height (which is 200×200).
   window.p86AnnotationRender = {
     drawStroke: drawStroke,
     renderAll: function(ctx, annotations) {
@@ -2195,6 +2202,15 @@
         try { drawStroke(ctx, annotations[i]); }
         catch (e) { /* defensive — bad stroke shouldn't kill the rest */ }
       }
+    },
+    webVariantDims: function(origW, origH) {
+      var w = Number(origW) || 0;
+      var h = Number(origH) || 0;
+      if (!w || !h) return null;
+      var max = Math.max(w, h);
+      if (max <= 1600) return { w: w, h: h };
+      var s = 1600 / max;
+      return { w: Math.round(w * s), h: Math.round(h * s) };
     }
   };
 })();

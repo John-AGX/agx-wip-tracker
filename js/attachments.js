@@ -1137,23 +1137,28 @@
       // for any attachment with strokes). Mirrors the projects feed
       // behavior so what you saw in the markup viewer shows on the
       // thumbnail too.
+      //
+      // CRITICAL: the canvas's internal bitmap has to match the WEB
+      // variant's pixel space (max-edge 1600), NOT the thumbnail's
+      // 200×200 natural dimensions. Strokes are drawn in the markup
+      // viewer against the web variant, so a 200×200 canvas would
+      // crop everything to the top-left quadrant. webVariantDims()
+      // (in the shared annotation-render API) computes the right
+      // bitmap size from att.width / att.height.
       container.querySelectorAll('[data-att-anno-canvas]').forEach(function(canvas) {
         var id = canvas.getAttribute('data-att-anno-canvas');
         var att = state.attachments.find(function(a) { return a.id === id; })
                || state.parentAttachments.find(function(a) { return a.id === id; });
         if (!att || !Array.isArray(att.annotations) || !att.annotations.length) return;
-        var img = canvas.parentNode.querySelector('.p86-proj-photo-tile-img');
-        if (!img) return;
-        function paintAnno() {
-          canvas.width = img.naturalWidth || 1;
-          canvas.height = img.naturalHeight || 1;
-          var ctx = canvas.getContext('2d');
-          if (window.p86AnnotationRender && typeof window.p86AnnotationRender.renderAll === 'function') {
-            window.p86AnnotationRender.renderAll(ctx, att.annotations);
-          }
-        }
-        if (img.complete && img.naturalWidth) paintAnno();
-        else img.addEventListener('load', paintAnno, { once: true });
+        if (!window.p86AnnotationRender || typeof window.p86AnnotationRender.renderAll !== 'function') return;
+        var dims = (typeof window.p86AnnotationRender.webVariantDims === 'function')
+          ? window.p86AnnotationRender.webVariantDims(att.width, att.height)
+          : null;
+        if (!dims) return;
+        canvas.width = dims.w;
+        canvas.height = dims.h;
+        try { window.p86AnnotationRender.renderAll(canvas.getContext('2d'), att.annotations); }
+        catch (e) { /* defensive — bad stroke shouldn't kill the tile */ }
       });
 
       function parentLightboxOpts() {
