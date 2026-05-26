@@ -3437,7 +3437,10 @@
     });
     tile.querySelector('.p86-proj-photo-tile-menu').addEventListener('click', function(e) {
       e.stopPropagation();
-      openPhotoMenu(att, tile);
+      // Anchor the menu on the ⋮ button itself, not the whole tile.
+      // Passing the tile made the menu drop below the entire image
+      // instead of right under the button.
+      openPhotoMenu(att, e.currentTarget);
     });
     var annoBtn = tile.querySelector('.p86-proj-photo-tile-annotate');
     if (annoBtn) {
