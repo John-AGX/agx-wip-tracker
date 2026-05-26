@@ -82,92 +82,22 @@
     return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
   }
 
-  // Web Speech API helper — wires a mic button to a textarea so the
-  // user can dictate captions. Lifted from ai-panel.js's setupVoiceInput
-  // and trimmed for the upload-preview use case (no send-on-submit
-  // coupling needed). Silently no-ops on browsers without
-  // SpeechRecognition (Firefox without flags).
-  //
+  // Voice helper — delegates to the shared js/voice-input.js module
+  // so the walkthrough upload modal + 86 chat composer use ONE
+  // implementation. Was previously duplicated here; that drift was
+  // the root cause of the "double-speak on mobile" complaint.
   // Returns a teardown function so the caller can stop dictation
-  // when the modal closes.
+  // when the modal closes. Silently no-ops on unsupported browsers.
   function wireVoiceInput(textareaEl, micBtnEl) {
-    if (!textareaEl || !micBtnEl) return function() {};
-    var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) {
-      micBtnEl.style.display = 'none';
-      return function() {};
+    if (!window.p86VoiceInput || typeof window.p86VoiceInput.wire !== 'function') {
+      // Defensive — module load failed somehow. Hide the mic button
+      // so the user doesn't tap a dead control.
+      if (micBtnEl) micBtnEl.style.display = 'none';
+      return function () {};
     }
-    var recognition = null;
-    var listening = false;
-    var silenceTimer = null;
-    var lastResultTs = 0;
-    var SILENCE_TIMEOUT_MS = 5000; // 5s for walkthrough narration
-
-    function setListening(v) {
-      listening = v;
-      micBtnEl.style.background = v ? 'rgba(248,113,113,0.18)' : 'transparent';
-      micBtnEl.style.color = v ? '#f87171' : 'var(--text-dim, #888)';
-      micBtnEl.title = v ? 'Stop dictation' : 'Dictate (voice → text)';
-    }
-
-    function stop() {
-      if (silenceTimer) { clearInterval(silenceTimer); silenceTimer = null; }
-      if (recognition) {
-        try { recognition.stop(); } catch (e) {}
-        recognition = null;
-      }
-      setListening(false);
-    }
-
-    function start() {
-      try {
-        recognition = new SR();
-        recognition.continuous = true;
-        recognition.interimResults = true;
-        recognition.lang = navigator.language || 'en-US';
-        var baseValue = '';
-        recognition.onstart = function() {
-          baseValue = textareaEl.value || '';
-          if (baseValue && !/\s$/.test(baseValue)) baseValue += ' ';
-          setListening(true);
-          lastResultTs = Date.now();
-          if (silenceTimer) clearInterval(silenceTimer);
-          silenceTimer = setInterval(function() {
-            if (!listening) return;
-            if (Date.now() - lastResultTs > SILENCE_TIMEOUT_MS) stop();
-          }, 500);
-        };
-        recognition.onresult = function(e) {
-          lastResultTs = Date.now();
-          var allFinal = '', allInterim = '';
-          for (var i = 0; i < e.results.length; i++) {
-            var t = e.results[i][0].transcript;
-            if (e.results[i].isFinal) allFinal += t;
-            else allInterim += t;
-          }
-          textareaEl.value = baseValue + allFinal + allInterim;
-        };
-        recognition.onerror = function(ev) {
-          stop();
-          if (ev && ev.error === 'not-allowed') {
-            alert('Microphone access denied. Allow it in your browser settings to dictate.');
-          }
-        };
-        recognition.onend = function() { stop(); };
-        recognition.start();
-      } catch (e) {
-        alert('Could not start dictation: ' + (e.message || e));
-        stop();
-      }
-    }
-
-    micBtnEl.onclick = function(e) {
-      e.preventDefault();
-      if (listening) stop();
-      else start();
-    };
-
-    return stop;
+    return window.p86VoiceInput.wire(textareaEl, micBtnEl, {
+      silenceTimeoutMs: 5000   // 5s for walkthrough narration (vs 3s for chat)
+    });
   }
 
   function api() { return window.p86Api && window.p86Api.projects; }
@@ -4142,7 +4072,9 @@
             '<span>Caption</span>' +
             '<div class="p86-caption-row">' +
               '<textarea id="upPrevCaption" rows="2" placeholder="Optional. Use 🎤 to dictate."></textarea>' +
-              '<button type="button" id="upPrevMic" class="p86-mic-btn" title="Dictate (voice → text)">&#x1F3A4;</button>' +
+              '<button type="button" id="upPrevMic" class="p86-mic-btn" title="Dictate (voice → text)">' +
+                (typeof window.p86Icon === 'function' ? window.p86Icon('composer-mic') : '&#x1F3A4;') +
+              '</button>' +
             '</div>' +
           '</div>' +
           '<div class="p86-field">' +

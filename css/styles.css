@@ -4964,6 +4964,16 @@
   flex-shrink: 0;
 }
 .p86-mic-btn:hover { color: var(--accent, #4f8cff); border-color: var(--accent, #4f8cff); }
+/* Active "recording" state — applied by the shared js/voice-input.js
+   module via classList.toggle('listening', …). Matches the chat
+   composer's #ai-mic.listening visual so both surfaces signal
+   recording the same way. */
+.p86-mic-btn.listening,
+#ai-mic.listening {
+  background: rgba(248,113,113,0.18);
+  color: #f87171;
+  border-color: rgba(248,113,113,0.4);
+}
 
 .p86-proj-photo-menu {
   position: absolute; z-index: 1100;
