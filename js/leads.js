@@ -1250,22 +1250,32 @@
   // fallback mirrors how the estimate editor itself computes blended
   // markup so this view stays consistent with the editor's reality.
   function _computeEstimateCostMargin(est) {
+    // Delegate to the canonical computeEstimateTotals in estimates.js
+    // so the lead-side row matches the estimate-editor totals exactly
+    // (alternates inclusion + target-margin override + fees + tax +
+    // rounding). The old standalone math here didn't honor any of
+    // that, so the right-rail card on the lead drifted from what the
+    // user saw inside the estimate.
+    if (typeof window.computeEstimateTotals === 'function') {
+      var t = window.computeEstimateTotals(est);
+      return {
+        baseCost: t.baseCost,
+        clientPrice: t.clientPrice,     // proposal total (incl. fees + tax + round)
+        // The label on the panel says "Markup" — match the editor's
+        // blended markup % rather than the gross-margin %.
+        margin: t.blendedMarkup,
+        lineCount: t.lineCount
+      };
+    }
+    // Defensive fallback for the unlikely case estimates.js failed to
+    // load (e.g. CSP block) — uses a stripped-down line walk.
     var lines = ((window.appData && appData.estimateLines) || []).filter(function(l) { return l.estimateId === est.id; });
     var baseCost = 0, markedUp = 0;
-    lines.forEach(function(l, idx) {
+    lines.forEach(function(l) {
       if (l.section === '__section_header__') return;
       var ext = (Number(l.qty) || 0) * (Number(l.unitCost) || 0);
       baseCost += ext;
       var m = (l.markup === '' || l.markup == null) ? null : Number(l.markup);
-      if (m == null) {
-        for (var i = idx - 1; i >= 0; i--) {
-          var L = lines[i];
-          if (L && L.section === '__section_header__') {
-            if (L.markup !== '' && L.markup != null) m = Number(L.markup);
-            break;
-          }
-        }
-      }
       if (m == null && est.defaultMarkup != null && est.defaultMarkup !== '') m = Number(est.defaultMarkup);
       if (m == null) m = 0;
       markedUp += ext * (1 + m / 100);

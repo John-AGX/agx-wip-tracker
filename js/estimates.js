@@ -7,60 +7,136 @@ var _estimatesSort = { key: 'updated_at', dir: 'desc' };
 // Pre-compute the totals + line count once per estimate. Used both by
 // the row renderer and the sort comparator so sorting by Base Cost /
 // Client Price doesn't recalculate on every comparison.
+//
+// IMPORTANT: this needs to MATCH the math in estimate-editor.js'
+// computeTotals(), so the number a user sees in the editor matches
+// the number on the list. The editor honors:
+//   - Per-alternate (group) inclusion via alt.excludeFromTotal
+//   - Target-margin override (est.targetMargin > 0 back-computes the
+//     marked-up subtotal: markedUp = subtotal / (1 - target/100))
+//   - Flat + percentage fees
+//   - Tax %
+//   - Round-up to nearest est.roundTo
+// Earlier this helper only summed line markups and ignored everything
+// else, so a user who set a target margin or had excluded alternates
+// saw drifted numbers between the list and the editor.
 function computeEstimateTotals(est) {
-    var allLines = (appData.estimateLines || []).filter(function(l) { return l.estimateId === est.id; });
+    var num = function(v) { var n = Number(v); return isFinite(n) ? n : 0; };
     var lineCount = 0;
     var sectionCount = 0;
-    var baseCost = 0;
-    var markedUp = 0;
+    var allLines = (appData.estimateLines || []).filter(function(l) { return l.estimateId === est.id; });
 
-    // Helper: find the enclosing section header for a line index.
-    function sectionHeaderForIdx(idx) {
+    // Same helpers the editor uses, scoped to a single alternate.
+    function sectionHeaderForIdx(lines, idx) {
         for (var i = idx - 1; i >= 0; i--) {
-            var L = allLines[i];
+            var L = lines[i];
             if (L && L.section === '__section_header__') return L;
         }
         return null;
     }
-
-    allLines.forEach(function(l, idx) {
-        if (l.section === '__section_header__') {
-            sectionCount++;
-            // Dollar-mode section: tack on the flat amount once.
-            if (l.markupMode === 'dollar' && l.markup !== '' && l.markup != null) {
-                markedUp += Number(l.markup) || 0;
+    function markedUpForGroup(alt) {
+        if (!alt) return { subtotal: 0, markedUp: 0 };
+        var lines = allLines.filter(function(l) { return l.alternateId === alt.id; });
+        var subtotal = 0, markedUp = 0;
+        lines.forEach(function(l, idx) {
+            if (l.section === '__section_header__') {
+                sectionCount++;
+                if (l.markupMode === 'dollar' && l.markup !== '' && l.markup != null) {
+                    markedUp += num(l.markup);
+                }
+                return;
             }
-            return;
+            lineCount++;
+            var ext = num(l.qty) * num(l.unitCost);
+            subtotal += ext;
+            var section = sectionHeaderForIdx(lines, idx);
+            var inDollar = section && section.markupMode === 'dollar';
+            var m;
+            if (section && section.overrideLineMarkups) {
+                m = inDollar ? 0 : ((section.markup === '' || section.markup == null) ? null : num(section.markup));
+            } else {
+                m = (l.markup === '' || l.markup == null) ? null : num(l.markup);
+                if (m == null && !inDollar && section && section.markup !== '' && section.markup != null) m = num(section.markup);
+            }
+            if (m == null && !inDollar && est.defaultMarkup != null && est.defaultMarkup !== '') m = num(est.defaultMarkup);
+            if (m == null) m = 0;
+            markedUp += ext * (1 + m / 100);
+        });
+        return { subtotal: subtotal, markedUp: markedUp };
+    }
+
+    // Sum across every INCLUDED alternate. Legacy estimates without an
+    // alternates[] array effectively have one implicit group containing
+    // all lines — handled by the fallback below.
+    var targetActive = (num(est.targetMargin) > 0 && num(est.targetMargin) < 100);
+    var subtotal = 0;
+    var markedUp = 0;
+    var alts = Array.isArray(est.alternates) ? est.alternates : [];
+    if (alts.length) {
+        alts.forEach(function(alt) {
+            var per = markedUpForGroup(alt);
+            if (alt.excludeFromTotal) return;
+            if (targetActive) {
+                per = { subtotal: per.subtotal, markedUp: per.subtotal / (1 - num(est.targetMargin) / 100) };
+            }
+            subtotal += per.subtotal;
+            markedUp += per.markedUp;
+        });
+    } else {
+        // No alternates array — treat ALL lines as one group. Lines
+        // would have undefined alternateId so the alt-id filter above
+        // wouldn't match; do a quick one-pass straight over allLines.
+        allLines.forEach(function(l, idx) {
+            if (l.section === '__section_header__') {
+                sectionCount++;
+                if (l.markupMode === 'dollar' && l.markup !== '' && l.markup != null) {
+                    markedUp += num(l.markup);
+                }
+                return;
+            }
+            lineCount++;
+            var ext = num(l.qty) * num(l.unitCost);
+            subtotal += ext;
+            var section = sectionHeaderForIdx(allLines, idx);
+            var inDollar = section && section.markupMode === 'dollar';
+            var m;
+            if (section && section.overrideLineMarkups) {
+                m = inDollar ? 0 : ((section.markup === '' || section.markup == null) ? null : num(section.markup));
+            } else {
+                m = (l.markup === '' || l.markup == null) ? null : num(l.markup);
+                if (m == null && !inDollar && section && section.markup !== '' && section.markup != null) m = num(section.markup);
+            }
+            if (m == null && !inDollar && est.defaultMarkup != null && est.defaultMarkup !== '') m = num(est.defaultMarkup);
+            if (m == null) m = 0;
+            markedUp += ext * (1 + m / 100);
+        });
+        if (targetActive && subtotal > 0) {
+            markedUp = subtotal / (1 - num(est.targetMargin) / 100);
         }
-        lineCount++;
-        var ext = (l.qty || 0) * (l.unitCost || 0);
-        baseCost += ext;
-        var section = sectionHeaderForIdx(idx);
-        var inDollar = section && section.markupMode === 'dollar';
-        var m;
-        if (section && section.overrideLineMarkups) {
-            // Override on: per-line markup ignored. % mode forces section's %;
-            // $ mode forces 0 per line (section flat $ added separately above).
-            m = inDollar ? 0 : ((section.markup === '' || section.markup == null) ? null : Number(section.markup));
-        } else {
-            // Override off: per-line markup honored. In $ mode, the section
-            // does NOT provide a per-line default — lines without their own
-            // % render at raw ext.
-            m = (l.markup === '' || l.markup == null) ? null : Number(l.markup);
-            if (m == null && !inDollar && section && section.markup !== '' && section.markup != null) m = Number(section.markup);
-        }
-        if (m == null && !inDollar && est.defaultMarkup != null && est.defaultMarkup !== '') m = Number(est.defaultMarkup);
-        if (m == null) m = 0;
-        markedUp += ext * (1 + m / 100);
-    });
-    var blendedMarkup = baseCost > 0 ? (markedUp / baseCost - 1) * 100 : 0;
+    }
+
+    var feeFlat = num(est.feeFlat);
+    var feePctAmount = markedUp * num(est.feePct) / 100;
+    var preTax = markedUp + feeFlat + feePctAmount;
+    var taxAmount = preTax * num(est.taxPct) / 100;
+    var beforeRound = preTax + taxAmount;
+    var roundTo = num(est.roundTo);
+    var total = beforeRound;
+    if (roundTo > 0) total = Math.ceil(beforeRound / roundTo) * roundTo;
+
+    var blendedMarkup = subtotal > 0 ? (markedUp / subtotal - 1) * 100 : 0;
     return {
-        baseCost: baseCost,
+        baseCost: subtotal,
         markedUp: markedUp,
         blendedMarkup: blendedMarkup,
-        clientPrice: markedUp,
+        clientPrice: total,            // matches Proposal Total in the editor
+        proposalTotal: total,
+        feeFlat: feeFlat,
+        feePctAmount: feePctAmount,
+        taxAmount: taxAmount,
         lineCount: lineCount,
-        sectionCount: sectionCount
+        sectionCount: sectionCount,
+        targetMarginActive: targetActive
     };
 }
 
@@ -72,8 +148,11 @@ function compareEstimates(a, b, key, dir) {
     else if (key === 'markup') { av = ta.blendedMarkup || 0; bv = tb.blendedMarkup || 0; }
     else if (key === 'clientPrice') { av = ta.clientPrice || 0; bv = tb.clientPrice || 0; }
     else if (key === 'margin') {
-        av = (ta.clientPrice || 0) > 0 ? ((ta.clientPrice - ta.baseCost) / ta.clientPrice) : 0;
-        bv = (tb.clientPrice || 0) > 0 ? ((tb.clientPrice - tb.baseCost) / tb.clientPrice) : 0;
+        // Gross margin = (markedUp - baseCost) / markedUp — same
+        // formula the editor's Margin chip uses (BEFORE fees + tax,
+        // since those are pass-throughs to the customer).
+        av = (ta.markedUp || 0) > 0 ? ((ta.markedUp - ta.baseCost) / ta.markedUp) : 0;
+        bv = (tb.markedUp || 0) > 0 ? ((tb.markedUp - tb.baseCost) / tb.markedUp) : 0;
     }
     else if (key === 'lines') { av = ta.lineCount || 0; bv = tb.lineCount || 0; }
     else if (key === 'updated_at') {
@@ -199,11 +278,13 @@ function renderEstimatesList() {
                 const titleSuffix = titleSubBits.length
                     ? '<span style="font-size:11px;color:var(--text-dim,#888);font-weight:normal;margin-left:6px;">' + titleSubBits.join(' · ') + '</span>'
                     : '';
-                // Margin % = (clientPrice − baseCost) / clientPrice × 100.
-                // Markup is already shown in its own column; margin is
-                // the complementary "what % of revenue stays as profit"
-                // figure the user wanted after the price column.
-                const margin = t.clientPrice > 0 ? ((t.clientPrice - t.baseCost) / t.clientPrice) * 100 : 0;
+                // Gross margin % — matches the editor's Margin chip
+                // formula: (markedUp − baseCost) / markedUp × 100.
+                // Computed BEFORE fees + tax (those are pass-throughs
+                // to the customer, not profit). The Price column shows
+                // the full proposal total INCLUDING fees + tax + round
+                // — same as the editor's Proposal Total chip.
+                const margin = t.markedUp > 0 ? ((t.markedUp - t.baseCost) / t.markedUp) * 100 : 0;
                 const marginColor = margin >= 30 ? '#34d399' : margin >= 15 ? '#fbbf24' : '#f87171';
                 return '<tr style="cursor:pointer;border-bottom:1px solid var(--border,#2a2a3a);" onclick="editEstimate(\'' + est.id + '\')">' +
                     '<td style="padding:8px 10px;">' +
