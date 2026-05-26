@@ -439,6 +439,240 @@
       wirePanel(a);
     }
 
+    // ── Tags strip + Buildertrend-style picker modal ─────────────────
+    // Renders the current attachment's tags as removable chips with
+    // a single "+ Add Tag" pill that opens the picker modal. The
+    // modal lets the user scroll the org's existing tag catalog and
+    // tap to add — instead of having to type to find the tag first.
+    // Live re-render after every modal change so the panel always
+    // shows fresh chips.
+    function renderTagsStrip(host, a) {
+      var tags = Array.isArray(a.tags) ? a.tags.slice() : [];
+      var chipsHTML = tags.map(function(t) {
+        return '<span class="p86-pv-tag-chip" style="--h:' + (window.p86Projects && window.p86Projects.mountTagEditor ? hueForLocal(t) : 200) + ';">' +
+          '#' + escapeHTMLLocal(t) +
+          '<button type="button" class="p86-pv-tag-chip-rm" data-rm-tag="' + escapeAttr(t) + '" title="Remove">&times;</button>' +
+        '</span>';
+      }).join('');
+      host.innerHTML =
+        '<div class="p86-pv-tags-strip">' +
+          chipsHTML +
+          '<button type="button" class="p86-pv-tags-add" data-add-tag>' +
+            '<span class="p86-pv-tags-add-icon">&#x1F3F7;</span>' +
+            '<span>Add Tag</span>' +
+          '</button>' +
+        '</div>';
+      // Wire chip removes — PATCH on each click; optimistic update
+      // already in updateAtt.
+      host.querySelectorAll('[data-rm-tag]').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          var t = btn.getAttribute('data-rm-tag');
+          var next = (a.tags || []).filter(function(x) { return x !== t; });
+          updateAtt({ tags: next });
+          renderTagsStrip(host, a); // re-render immediately (optimistic)
+        });
+      });
+      // "+ Add Tag" → open the picker modal.
+      var addBtn = host.querySelector('[data-add-tag]');
+      if (addBtn) addBtn.addEventListener('click', function() {
+        openTagSelectModal(a, function() {
+          // Picker mutated a.tags via updateAtt; re-render the strip.
+          renderTagsStrip(host, a);
+        });
+      });
+    }
+
+    // Lightweight stable hue per tag string so chips stay the same
+    // color across renders. Mirrors the hueFor helper in projects.js
+    // (kept local so attachments.js doesn't have to reach for it).
+    function hueForLocal(s) {
+      var str = String(s || '');
+      var h = 0;
+      for (var i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) | 0;
+      return Math.abs(h) % 360;
+    }
+
+    function openTagSelectModal(a, onChange) {
+      var prior = document.getElementById('p86PvTagModal');
+      if (prior) prior.remove();
+      var modal = document.createElement('div');
+      modal.id = 'p86PvTagModal';
+      modal.className = 'modal active p86-pv-tag-modal';
+      // Local picker state — selected starts as a copy of the live
+      // attachment.tags, and we PATCH on every change so the user
+      // sees the chips appear in the photo panel beneath the modal.
+      var selected = Array.isArray(a.tags) ? a.tags.slice() : [];
+      var lastCatalog = [];   // last fetched suggest list
+      var query = '';
+
+      function commitSelection(next) {
+        selected = next.slice();
+        a.tags = selected; // optimistic mirror so panel re-renders see fresh
+        updateAtt({ tags: selected });
+        paint();
+        if (onChange) onChange();
+      }
+
+      function fetchCatalog() {
+        var fn = function(q) {
+          if (window.p86Api && window.p86Api.orgTags && window.p86Api.orgTags.suggest) {
+            return window.p86Api.orgTags.suggest(q);
+          }
+          return Promise.resolve({ tags: [] });
+        };
+        return fn(query).then(function(r) {
+          lastCatalog = (r && r.tags) || [];
+          paintList();
+        }).catch(function() {
+          lastCatalog = [];
+          paintList();
+        });
+      }
+
+      function visibleCatalog() {
+        var q = query.trim().toLowerCase();
+        // Filter against the typed query AND already-selected tags.
+        return lastCatalog.filter(function(t) {
+          if (selected.indexOf(t) !== -1) return false;
+          if (!q) return true;
+          return t.toLowerCase().indexOf(q) >= 0;
+        });
+      }
+
+      function canCreate() {
+        var q = query.trim().toLowerCase().slice(0, 32);
+        if (!q) return false;
+        if (selected.indexOf(q) !== -1) return false;
+        if (lastCatalog.indexOf(q) !== -1) return false;
+        return true;
+      }
+
+      function paint() {
+        var chipsHTML = selected.map(function(t) {
+          return '<span class="p86-pv-tag-modal-chip" style="--h:' + hueForLocal(t) + ';">' +
+            '#' + escapeHTMLLocal(t) +
+            '<button type="button" class="p86-pv-tag-modal-chip-rm" data-rm-modal-chip="' + escapeAttr(t) + '">&times;</button>' +
+          '</span>';
+        }).join('');
+        modal.innerHTML =
+          '<div class="modal-content p86-pv-tag-modal-content">' +
+            '<div class="modal-header">' +
+              '<span>Select Tags</span>' +
+              '<button type="button" class="p86-modal-close" data-close>&times;</button>' +
+            '</div>' +
+            '<div class="p86-pv-tag-modal-body">' +
+              '<div class="p86-pv-tag-combobox">' +
+                '<div class="p86-pv-tag-combobox-chips">' + chipsHTML + '</div>' +
+                '<input type="text" class="p86-pv-tag-combobox-input" placeholder="' + (selected.length ? 'Add another…' : 'Search or create…') + '" value="' + escapeAttr(query) + '" />' +
+              '</div>' +
+              '<div class="p86-pv-tag-modal-list"></div>' +
+            '</div>' +
+            '<div class="modal-footer">' +
+              '<button type="button" class="primary" data-close>Done</button>' +
+            '</div>' +
+          '</div>';
+        wirePaint();
+        paintList();
+      }
+
+      function paintList() {
+        var listEl = modal.querySelector('.p86-pv-tag-modal-list');
+        if (!listEl) return;
+        var vis = visibleCatalog();
+        var html = '';
+        if (canCreate()) {
+          html += '<button type="button" class="p86-pv-tag-modal-row p86-pv-tag-modal-create" data-create-tag="' + escapeAttr(query.trim().toLowerCase().slice(0, 32)) + '">' +
+            '<span class="p86-pv-tag-modal-create-plus">&#x2295;</span>' +
+            '<span>Create <strong>#' + escapeHTMLLocal(query.trim().toLowerCase().slice(0, 32)) + '</strong></span>' +
+          '</button>';
+        }
+        if (!vis.length && !canCreate()) {
+          html += '<div class="p86-pv-tag-modal-empty">No tags found.</div>';
+        } else {
+          html += vis.map(function(t) {
+            return '<button type="button" class="p86-pv-tag-modal-row" data-pick-tag="' + escapeAttr(t) + '" style="--h:' + hueForLocal(t) + ';">' +
+              '<span class="p86-pv-tag-modal-row-tag">#' + escapeHTMLLocal(t) + '</span>' +
+            '</button>';
+          }).join('');
+        }
+        listEl.innerHTML = html;
+        listEl.querySelectorAll('[data-pick-tag]').forEach(function(btn) {
+          btn.addEventListener('click', function() {
+            var t = btn.getAttribute('data-pick-tag');
+            if (selected.indexOf(t) !== -1) return;
+            commitSelection(selected.concat([t]));
+          });
+        });
+        var createBtn = listEl.querySelector('[data-create-tag]');
+        if (createBtn) createBtn.addEventListener('click', function() {
+          var t = createBtn.getAttribute('data-create-tag');
+          if (!t || selected.indexOf(t) !== -1) return;
+          commitSelection(selected.concat([t]));
+          // Clear the query so the freshly-created tag appears as a
+          // chip and the user can immediately start typing the next.
+          query = '';
+        });
+      }
+
+      function wirePaint() {
+        modal.querySelectorAll('[data-close]').forEach(function(b) {
+          b.addEventListener('click', function() { modal.remove(); });
+        });
+        modal.querySelectorAll('[data-rm-modal-chip]').forEach(function(b) {
+          b.addEventListener('click', function() {
+            var t = b.getAttribute('data-rm-modal-chip');
+            commitSelection(selected.filter(function(x) { return x !== t; }));
+          });
+        });
+        var input = modal.querySelector('.p86-pv-tag-combobox-input');
+        if (input) {
+          // Focus + cursor at end. setTimeout because the DOM was
+          // just rewritten and the input needs a tick to mount.
+          setTimeout(function() {
+            try { input.focus({ preventScroll: true }); } catch (e) { input.focus(); }
+            var v = input.value;
+            input.value = '';
+            input.value = v;
+          }, 0);
+          var debounceTimer;
+          input.addEventListener('input', function(e) {
+            query = String(e.target.value || '');
+            paintList(); // re-render the list (and Create row) instantly
+            clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(fetchCatalog, 200);
+          });
+          input.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') {
+              e.preventDefault();
+              // Enter commits the typed value as a Create OR picks
+              // the first list row if Create isn't applicable.
+              if (canCreate()) {
+                var newTag = query.trim().toLowerCase().slice(0, 32);
+                commitSelection(selected.concat([newTag]));
+                query = '';
+              } else {
+                var first = visibleCatalog()[0];
+                if (first) commitSelection(selected.concat([first]));
+              }
+            } else if (e.key === 'Escape') {
+              e.preventDefault();
+              modal.remove();
+            }
+          });
+        }
+      }
+
+      // Click outside the modal-content closes — same pattern as the
+      // rest of the codebase's modals.
+      modal.addEventListener('click', function(e) {
+        if (e.target === modal) modal.remove();
+      });
+
+      document.body.appendChild(modal);
+      paint();
+      fetchCatalog();
+    }
+
     function wireStage() {
       overlay.querySelector('.p86-pv-stage').addEventListener('click', function(e) {
         var t = e.target.closest('[data-pv]');
@@ -461,23 +695,16 @@
       var closeBtn = overlay.querySelector('.p86-pv-close-panel');
       if (closeBtn) closeBtn.addEventListener('click', close);
 
-      // Tags editor — reuse projects.js mountTagEditor for chip styling
-      // + org-tag autocomplete. Falls back to a plain message if the
-      // helper isn't loaded (e.g. attachments.js used on a screen
-      // that doesn't load projects.js).
+      // Tags strip — Buildertrend-style. Renders existing tags as
+      // chips (with × to remove individually) and a single "+ Add
+      // Tag" pill that opens a modal picker. The modal lists every
+      // org tag in a scrollable searchable list, plus a "Create
+      // '<typed>'" affordance when nothing matches. Replaces the
+      // prior inline mountTagEditor — that one looked like a search
+      // input by default, which made the "Add Tag" affordance
+      // ambiguous.
       var tagsHost = overlay.querySelector('.p86-pv-tags-host');
-      if (tagsHost) {
-        if (window.p86Projects && typeof window.p86Projects.mountTagEditor === 'function') {
-          window.p86Projects.mountTagEditor(tagsHost, {
-            getTags: function() { return Array.isArray(a.tags) ? a.tags.slice() : []; },
-            setTags: function(next) {
-              updateAtt({ tags: next.slice() });
-            }
-          });
-        } else {
-          tagsHost.innerHTML = '<div style="font-size:11px;color:#888;">Tag editor unavailable.</div>';
-        }
-      }
+      if (tagsHost) renderTagsStrip(tagsHost, a);
 
       // Description textarea — gated by the edit-gate pencil so a
       // stray tap can't trigger the on-blur PATCH. Saves on blur once

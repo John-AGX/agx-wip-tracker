@@ -5485,3 +5485,187 @@
   .p86-pv-body { padding: 12px 14px 14px 14px; gap: 12px; }
   .p86-pv-parent { padding: 10px 14px 8px 14px; }
 }
+
+/* ──────────────────────────────────────────────────────────────────
+   Photo viewer — tags strip + Buildertrend-style picker modal.
+   The strip lives inline in the panel: existing tags render as
+   removable chips and an "+ Add Tag" pill at the end opens the
+   modal. The modal lets the user scroll the org's tag catalog and
+   tap to add, or type to create a new one.
+   ────────────────────────────────────────────────────────────────── */
+.p86-pv-tags-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.p86-pv-tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 4px 4px 10px;
+  border-radius: 14px;
+  border: 1px solid hsla(var(--h, 200), 60%, 55%, 0.4);
+  background: hsla(var(--h, 200), 60%, 45%, 0.14);
+  color: hsl(var(--h, 200), 70%, 78%);
+  line-height: 1;
+}
+.p86-pv-tag-chip-rm {
+  background: transparent;
+  border: 0;
+  color: inherit;
+  opacity: 0.7;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 4px;
+  border-radius: 50%;
+}
+.p86-pv-tag-chip-rm:hover { opacity: 1; background: rgba(0,0,0,0.25); }
+
+/* "+ Add Tag" pill — icon + label, sits at the end of the chip
+   row. Outlined accent style so it reads as an action rather than
+   as another chip. */
+.p86-pv-tags-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 5px 12px 5px 10px;
+  border-radius: 16px;
+  border: 1px dashed rgba(79, 140, 255, 0.55);
+  background: rgba(79, 140, 255, 0.08);
+  color: var(--accent, #4f8cff);
+  cursor: pointer;
+  line-height: 1.2;
+}
+.p86-pv-tags-add:hover {
+  background: rgba(79, 140, 255, 0.18);
+  border-style: solid;
+}
+.p86-pv-tags-add-icon { font-size: 13px; line-height: 1; }
+
+/* ── Picker modal ──────────────────────────────────────────────── */
+.p86-pv-tag-modal-content {
+  max-width: 520px;
+  width: 96vw;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+.p86-pv-tag-modal-body {
+  padding: 14px 18px 6px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* Search combobox — chips + free-text input, styled to look like a
+   single search-field rectangle. Resembles the Buildertrend modal. */
+.p86-pv-tag-combobox {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--border, #333);
+  border-radius: 8px;
+  background: var(--card-bg, #0f0f1e);
+}
+.p86-pv-tag-combobox:focus-within { border-color: var(--accent, #4f8cff); }
+.p86-pv-tag-combobox-chips {
+  display: contents; /* let chips wrap inline with the input */
+}
+.p86-pv-tag-modal-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 4px 3px 9px;
+  border-radius: 12px;
+  border: 1px solid hsla(var(--h, 200), 60%, 55%, 0.45);
+  background: hsla(var(--h, 200), 60%, 45%, 0.18);
+  color: hsl(var(--h, 200), 70%, 80%);
+  line-height: 1;
+}
+.p86-pv-tag-modal-chip-rm {
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0 4px;
+  opacity: 0.7;
+  border-radius: 50%;
+  line-height: 1;
+}
+.p86-pv-tag-modal-chip-rm:hover { opacity: 1; background: rgba(0,0,0,0.25); }
+.p86-pv-tag-combobox-input {
+  flex: 1;
+  min-width: 100px;
+  background: transparent;
+  border: 0;
+  outline: none;
+  color: var(--text, #fff);
+  font-size: 13px;
+  padding: 2px 4px;
+}
+
+/* Scrollable list of available tags */
+.p86-pv-tag-modal-list {
+  flex: 1 1 auto;
+  min-height: 200px;
+  max-height: 50vh;
+  overflow-y: auto;
+  border: 1px solid var(--border, #333);
+  border-radius: 8px;
+  background: var(--card-bg, #0f0f1e);
+  display: flex;
+  flex-direction: column;
+}
+.p86-pv-tag-modal-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+  padding: 10px 14px;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+  color: var(--text, #fff);
+  font-size: 13px;
+  cursor: pointer;
+}
+.p86-pv-tag-modal-row:last-child { border-bottom: 0; }
+.p86-pv-tag-modal-row:hover { background: rgba(79, 140, 255, 0.08); }
+.p86-pv-tag-modal-row-tag {
+  color: hsl(var(--h, 200), 70%, 78%);
+  font-weight: 600;
+}
+.p86-pv-tag-modal-create {
+  background: rgba(79, 140, 255, 0.10);
+  color: var(--accent, #4f8cff);
+  font-weight: 600;
+  border-bottom: 1px solid var(--border, #333);
+}
+.p86-pv-tag-modal-create:hover { background: rgba(79, 140, 255, 0.18); }
+.p86-pv-tag-modal-create strong { color: var(--accent, #4f8cff); font-weight: 700; }
+.p86-pv-tag-modal-create-plus { font-size: 15px; line-height: 1; }
+.p86-pv-tag-modal-empty {
+  padding: 24px 14px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--text-dim, #888);
+  font-style: italic;
+}
+
+@media (max-width: 640px) {
+  .p86-pv-tag-modal-content { width: 100vw; max-height: 92vh; border-radius: 0; }
+  .p86-pv-tag-modal-list { max-height: 60vh; }
+}
