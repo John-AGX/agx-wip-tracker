@@ -5394,10 +5394,14 @@
 .p86-pv-tbtn:hover { background: rgba(255,255,255,0.22); }
 
 /* ── PANEL (right rail) ─────────────────────────────────────────── */
+/* The stage (image area) stays dark regardless of theme — that's a
+   gallery convention. Only the PANEL (right rail with description,
+   tags, comments) follows the app's light/dark mode via CSS vars. */
 .p86-pv-panel {
   flex: 0 0 360px;
-  background: #0f0f1e;
-  border-left: 1px solid #2a2a3a;
+  background: var(--card-bg, #0f0f1e);
+  border-left: 1px solid var(--border, #2a2a3a);
+  color: var(--text, #e6e6e6);
   display: flex;
   flex-direction: column;
   /* Panel itself is non-scrolling — the header band stays put and
@@ -5410,7 +5414,7 @@
 .p86-pv-close-panel {
   background: transparent;
   border: 0;
-  color: #888;
+  color: var(--text-dim, #888);
   font-size: 20px;
   cursor: pointer;
   line-height: 1;
@@ -5423,7 +5427,7 @@
   justify-content: center;
   border-radius: 50%;
 }
-.p86-pv-close-panel:hover { color: #fff; background: rgba(255,255,255,0.06); }
+.p86-pv-close-panel:hover { color: var(--text, #fff); background: var(--overlay-light, rgba(255,255,255,0.06)); }
 /* When there's no parent band, the close-X floats absolutely in the
    panel's top-right corner. With a parent band, it lives inside
    that band's flex row. */
@@ -5441,8 +5445,8 @@
 .p86-pv-parent {
   flex: 0 0 auto;
   padding: 12px 18px 10px 18px;
-  border-bottom: 1px solid #2a2a3a;
-  background: #14142a;
+  border-bottom: 1px solid var(--border, #2a2a3a);
+  background: var(--surface2, #14142a);
 }
 .p86-pv-parent-top {
   display: flex;
@@ -5454,14 +5458,14 @@
   min-width: 0;
   font-size: 15px;
   font-weight: 700;
-  color: #fff;
+  color: var(--text, #fff);
   line-height: 1.3;
   overflow-wrap: break-word;
 }
 .p86-pv-parent-sub {
   margin-top: 2px;
   font-size: 12px;
-  color: #9aa;
+  color: var(--text-dim, #9aa);
   line-height: 1.35;
   overflow-wrap: break-word;
 }
@@ -5498,8 +5502,8 @@
   flex: 0 0 32px;
 }
 .p86-pv-uploader-meta { flex: 1; min-width: 0; }
-.p86-pv-uploader-name { font-size: 13px; font-weight: 600; color: #fff; }
-.p86-pv-uploader-when { font-size: 11px; color: #888; }
+.p86-pv-uploader-name { font-size: 13px; font-weight: 600; color: var(--text, #fff); }
+.p86-pv-uploader-when { font-size: 11px; color: var(--text-dim, #888); }
 
 /* Generic panel section */
 .p86-pv-section {
@@ -5510,7 +5514,7 @@
 .p86-pv-section-label {
   font-size: 10px;
   font-weight: 700;
-  color: #888;
+  color: var(--text-dim, #888);
   text-transform: uppercase;
   letter-spacing: 0.6px;
 }
@@ -5519,7 +5523,7 @@
    legend is empty (pencil only) so the section heading above carries
    the label visually. */
 .p86-pv-desc-fs {
-  border: 1px solid #2a2a3a;
+  border: 1px solid var(--border, #2a2a3a);
   border-radius: 8px;
   padding: 8px 10px;
   margin: 0;
@@ -5532,8 +5536,8 @@
   width: 100%;
   background: transparent;
   border: 0;
-  color: #e6e6e6;
-  caret-color: #e6e6e6;
+  color: var(--text, #e6e6e6);
+  caret-color: var(--text, #e6e6e6);
   font-size: 13px;
   font-family: inherit;
   resize: vertical;
@@ -5541,7 +5545,7 @@
   outline: none;
   padding: 4px 0;
 }
-.p86-pv-desc-input::placeholder { color: #888; }
+.p86-pv-desc-input::placeholder { color: var(--text-dim, #888); }
 
 /* Comments thread */
 .p86-pv-comments-section { gap: 10px; }
@@ -5554,7 +5558,7 @@
 }
 .p86-pv-comments-empty {
   font-size: 12px;
-  color: #666;
+  color: var(--text-dim, #666);
   font-style: italic;
   padding: 6px 0;
 }
@@ -5566,8 +5570,8 @@
   width: 26px;
   height: 26px;
   border-radius: 50%;
-  background: #2a2a3a;
-  color: #ccc;
+  background: var(--surface2, #2a2a3a);
+  color: var(--text-dim, #ccc);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -5582,21 +5586,21 @@
   gap: 8px;
   margin-bottom: 2px;
 }
-.p86-pv-comment-name { font-size: 12px; font-weight: 600; color: #ddd; }
-.p86-pv-comment-when { font-size: 10px; color: #888; }
+.p86-pv-comment-name { font-size: 12px; font-weight: 600; color: var(--text, #ddd); }
+.p86-pv-comment-when { font-size: 10px; color: var(--text-dim, #888); }
 .p86-pv-comment-del {
   margin-left: auto;
   background: transparent;
   border: 0;
-  color: #666;
+  color: var(--text-dim, #666);
   font-size: 14px;
   cursor: pointer;
   padding: 0 4px;
 }
-.p86-pv-comment-del:hover { color: #f87171; }
+.p86-pv-comment-del:hover { color: var(--red, #f87171); }
 .p86-pv-comment-text {
   font-size: 13px;
-  color: #ddd;
+  color: var(--text, #ddd);
   white-space: pre-wrap;
   overflow-wrap: break-word;
 }
@@ -5604,21 +5608,22 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
-  border-top: 1px solid #2a2a3a;
+  border-top: 1px solid var(--border, #2a2a3a);
   padding-top: 10px;
 }
 .p86-pv-composer-input {
   width: 100%;
-  background: #14142a;
-  border: 1px solid #2a2a3a;
+  background: var(--input-bg, #14142a);
+  border: 1px solid var(--border, #2a2a3a);
   border-radius: 6px;
-  color: #e6e6e6;
+  color: var(--text, #e6e6e6);
   font-size: 13px;
   font-family: inherit;
   padding: 8px 10px;
   resize: vertical;
   outline: none;
 }
+.p86-pv-composer-input::placeholder { color: var(--text-dim, #888); }
 .p86-pv-composer-input:focus { border-color: var(--accent, #4f8cff); }
 .p86-pv-composer-post {
   align-self: flex-end;
@@ -5650,7 +5655,7 @@
   .p86-pv-panel {
     flex: 1 1 auto;
     border-left: 0;
-    border-top: 1px solid #2a2a3a;
+    border-top: 1px solid var(--border, #2a2a3a);
     max-height: 50vh;
   }
   /* Body keeps scrolling inside the drawer; the parent band stays
@@ -5689,6 +5694,19 @@
   background: hsla(var(--h, 200), 60%, 45%, 0.14);
   color: hsl(var(--h, 200), 70%, 78%);
   line-height: 1;
+}
+/* Light-mode chip flip: the hsl 78%/80% lightness is unreadable on
+   white. Use a more saturated bg + dark text so the chips read like
+   colored labels. */
+body.light-mode .p86-pv-tag-chip {
+  background: hsl(var(--h, 200), 70%, 92%);
+  border-color: hsl(var(--h, 200), 60%, 70%);
+  color: hsl(var(--h, 200), 70%, 26%);
+}
+body.light-mode .p86-pv-tag-modal-chip {
+  background: hsl(var(--h, 200), 70%, 92%);
+  border-color: hsl(var(--h, 200), 60%, 70%);
+  color: hsl(var(--h, 200), 70%, 26%);
 }
 .p86-pv-tag-chip-rm {
   background: transparent;
