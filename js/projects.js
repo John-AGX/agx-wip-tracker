@@ -2561,15 +2561,19 @@
               var sideClasses = '';
               if (hasSide) sideClasses += ' has-sidedesc';
               if (hasSide && descSide === 'left') sideClasses += ' desc-left';
+              // Drag handle + remove X live INSIDE the mainstack so
+              // they anchor to the image corners — not the outer card.
+              // When the side description widens the outer card via
+              // grid, the X would otherwise float in the side column.
               return '<div class="p86-report-photo' + sideClasses +
                   '" draggable="true" data-photo-id="' + escapeAttr(pid) + '" data-photo-idx="' + idx + '">' +
-                photoDragHandleHTML() +
                 '<div class="p86-report-photo-mainstack">' +
+                  photoDragHandleHTML() +
                   '<img src="' + escapeAttr(att.thumb_url || att.web_url) + '" alt="" data-open-photo="' + escapeAttr(pid) + '" />' +
+                  '<button type="button" class="p86-report-photo-remove" data-rm-photo="' + escapeAttr(pid) + '" title="Remove from section">&times;</button>' +
                   '<input class="p86-report-photo-caption" value="' + escapeAttr(caption) + '" data-caption-input="' + escapeAttr(pid) + '" placeholder="Caption (optional)" />' +
                 '</div>' +
                 photoSideColumnHTML(att) +
-                '<button type="button" class="p86-report-photo-remove" data-rm-photo="' + escapeAttr(pid) + '" title="Remove from section">&times;</button>' +
               '</div>';
             }).join('')) +
       '</div>';
@@ -2595,13 +2599,13 @@
               if (hasSide && descSide === 'left') sideClasses += ' desc-left';
               return '<div class="p86-report-photo-single size-' + escapeAttr(size) + sideClasses +
                   '" draggable="true" data-photo-id="' + escapeAttr(pid) + '" data-photo-idx="' + idx + '">' +
-                photoDragHandleHTML() +
                 '<div class="p86-report-photo-mainstack">' +
+                  photoDragHandleHTML() +
                   '<img src="' + escapeAttr(att.web_url || att.thumb_url) + '" alt="" data-open-photo="' + escapeAttr(pid) + '" />' +
+                  '<button type="button" class="p86-report-photo-remove" data-rm-photo="' + escapeAttr(pid) + '" title="Remove">&times;</button>' +
                   '<input class="p86-report-photo-caption" value="' + escapeAttr(caption) + '" data-caption-input="' + escapeAttr(pid) + '" placeholder="Caption (optional)" />' +
                 '</div>' +
                 photoSideColumnHTML(att) +
-                '<button type="button" class="p86-report-photo-remove" data-rm-photo="' + escapeAttr(pid) + '" title="Remove">&times;</button>' +
               '</div>';
             }).join('')) +
       '</div>';

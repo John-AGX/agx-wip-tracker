@@ -4407,6 +4407,7 @@
   background: var(--card-bg, #0f0f1e);
 }
 .p86-report-photo-mainstack {
+  position: relative;
   display: flex;
   flex-direction: column;
   min-width: 0;
