@@ -6459,3 +6459,82 @@ body.light-mode .p86-pv-tag-modal-chip {
   /* No overrides today — reserved class so future tweaks (e.g. tighter
      spacing inside the estimate editor) have a stable selector. */
 }
+
+/* ──────────────────────────────────────────────────────────────────
+   Tiny-phone safety net (≤414px). Catches iPhone SE 1st gen,
+   small Androids, and display-scaling-up users. Most surfaces
+   have 640px polish already; this layer catches the remaining
+   cramping at the very smallest realistic widths.
+
+   Strategy: don't touch fonts globally (already shrunk at 640px) —
+   instead, fix the two structural offenders:
+     1. Inline `grid-template-columns: 1fr 1fr` patterns in form
+        editors (lead, client, sub, etc.) — collapse to one column.
+     2. Modal padding still too generous on 320-414px viewports.
+        Tighten so dense forms don't truncate.
+   The selectors are deliberately broad (attribute matchers on inline
+   styles) so the rules catch every editor without me having to chase
+   each one individually. The fallback specificity (!important on the
+   grid override) is needed because the source declarations are
+   inline styles.
+   ────────────────────────────────────────────────────────────────── */
+
+@media (max-width: 414px) {
+  /* Collapse every inline 1fr-1fr / 1fr-1fr-1fr grid to a single
+     column so dense form sections don't crush their inputs. The
+     attribute matchers cover both the spaced and unspaced inline
+     variants used across the editor markup. */
+  [style*="grid-template-columns: 1fr 1fr"],
+  [style*="grid-template-columns:1fr 1fr"] {
+    grid-template-columns: 1fr !important;
+  }
+
+  /* Modal padding tightens further than the 640px block. Width to
+     98vw so the modal fills the viewport (no awkward outer margins
+     wasting precious horizontal space). */
+  .modal-content {
+    padding: 8px 10px;
+    width: 98vw;
+    max-width: 98vw;
+  }
+  .modal-header {
+    font-size: 13px;
+    padding-bottom: 5px;
+  }
+  .modal-footer {
+    padding: 6px 8px;
+    gap: 4px;
+  }
+
+  /* Header chrome — tighter. The 640px layer already shrinks icon
+     buttons + avatar to 32px; here we trim padding further so the
+     header strip doesn't eat as much vertical. */
+  header {
+    padding: 4px 8px;
+  }
+  .header-content {
+    gap: 3px 6px;
+  }
+  .header-icon-btn,
+  .header-avatar {
+    width: 28px;
+    height: 28px;
+  }
+
+  /* Action-bar buttons — make sure tap targets stay ≥36px even when
+     a row gets crowded. The padding shrinks at small widths
+     elsewhere; this floors the height. */
+  .action-buttons button,
+  .action-buttons input[type="search"],
+  .action-buttons input[type="text"] {
+    min-height: 36px;
+  }
+
+  /* Fieldset legend padding — the lead/client editor fieldsets have
+     extra padding-left on the legend that pushes the label off-
+     screen. Trim. */
+  fieldset > legend {
+    padding-left: 4px !important;
+    padding-right: 4px !important;
+  }
+}
