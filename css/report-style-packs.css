@@ -252,6 +252,148 @@
 }
 
 /* ─────────────────────────────────────────────────────────────────
+   Preview overlay — style pack cover rules mirrored so the in-app
+   preview shows the same typography + chrome the PDF will get.
+   The @media print blocks above target .p86-report-host (the
+   editor). These selectors target .p86-report-preview-paper (the
+   preview overlay's content container) — same rules, different
+   scope. Duplicated rather than abstracted because @media queries
+   can't be combined with selectors in plain CSS.
+   ───────────────────────────────────────────────────────────────── */
+
+/* Classic Corporate — preview */
+.p86-report-preview-paper[data-style-pack="classic-corporate"] .p86-report-cover-rendered {
+  background: #fcfaf5;
+  border-top: 4px double #1e3a5f;
+  border-bottom: 4px double #1e3a5f;
+  padding: 100px 60px;
+}
+.p86-report-preview-paper[data-style-pack="classic-corporate"] .p86-report-cover-title {
+  font-family: Georgia, 'Times New Roman', serif;
+  color: #1e3a5f;
+  letter-spacing: 0.5px;
+}
+.p86-report-preview-paper[data-style-pack="classic-corporate"] .p86-report-cover-subtitle {
+  font-family: Georgia, serif;
+  color: #b8941f;
+  letter-spacing: 1px;
+}
+.p86-report-preview-paper[data-style-pack="classic-corporate"] .p86-report-cover-meta {
+  border-top: 1px solid #b8941f;
+}
+
+/* Modern Bold — preview */
+.p86-report-preview-paper[data-style-pack="modern-bold"] .p86-report-cover-rendered {
+  background: #fff;
+  padding: 60px 50px;
+  text-align: left;
+}
+.p86-report-preview-paper[data-style-pack="modern-bold"] .p86-report-cover-title {
+  font-size: clamp(40px, 9vw, 64px);
+  font-weight: 900;
+  letter-spacing: -1.5px;
+  line-height: 1.05;
+  margin-top: 60px;
+}
+.p86-report-preview-paper[data-style-pack="modern-bold"] .p86-report-cover-subtitle {
+  color: #4f8cff;
+  font-weight: 700;
+  font-style: normal;
+  letter-spacing: 3px;
+}
+.p86-report-preview-paper[data-style-pack="modern-bold"] .p86-report-cover-meta {
+  justify-content: flex-start;
+  gap: 40px;
+}
+.p86-report-preview-paper[data-style-pack="modern-bold"] .p86-report-preview-section-label {
+  background: #1e293b;
+  color: #fff;
+  padding: 10px 14px;
+  border-radius: 6px;
+  font-size: 18px;
+  font-weight: 800;
+}
+
+/* Field Notebook — preview */
+.p86-report-preview-paper[data-style-pack="field-notebook"] {
+  background: #f8f4e8;
+}
+.p86-report-preview-paper[data-style-pack="field-notebook"] .p86-report-cover-rendered {
+  background: #f8f4e8;
+  padding: 80px 50px;
+  text-align: left;
+  background-image: linear-gradient(to bottom, transparent 47px, #d6cdb1 48px, transparent 49px);
+  background-size: 100% 48px;
+}
+.p86-report-preview-paper[data-style-pack="field-notebook"] .p86-report-cover-title {
+  color: #3a3528;
+  font-family: Georgia, serif;
+  border-bottom: 2px dashed #8a7f5e;
+  padding-bottom: 12px;
+}
+.p86-report-preview-paper[data-style-pack="field-notebook"] .p86-report-cover-meta {
+  border-top: 1px dashed #8a7f5e;
+  font-family: 'Courier New', monospace;
+}
+.p86-report-preview-paper[data-style-pack="field-notebook"] .p86-report-cover-meta .v {
+  font-family: 'Courier New', monospace;
+}
+.p86-report-preview-paper[data-style-pack="field-notebook"] .p86-report-preview-section {
+  border-top: 1px dashed #8a7f5e;
+  padding-top: 14px;
+}
+.p86-report-preview-paper[data-style-pack="field-notebook"] .p86-report-preview-photo-cap {
+  font-family: 'SF Mono', 'Fira Code', Consolas, monospace;
+  background: transparent;
+  border: 0;
+  border-top: 1px dashed #8a7f5e;
+  color: #8a7f5e;
+}
+.p86-report-preview-paper[data-style-pack="field-notebook"] .p86-report-preview-photo-img-wrap {
+  border: 1px dashed #8a7f5e;
+}
+
+/* Inspection Pro — preview */
+.p86-report-preview-paper[data-style-pack="inspection-pro"] .p86-report-cover-rendered {
+  background: #fff;
+  padding: 60px 50px;
+  border-top: 10px solid #0f172a;
+  text-align: left;
+}
+.p86-report-preview-paper[data-style-pack="inspection-pro"] .p86-report-cover-title {
+  color: #0f172a;
+  font-weight: 800;
+  border-bottom: 2px solid #0f172a;
+  padding-bottom: 12px;
+  margin-top: 30px;
+}
+.p86-report-preview-paper[data-style-pack="inspection-pro"] .p86-report-cover-subtitle {
+  color: #475569;
+  text-transform: uppercase;
+  letter-spacing: 3px;
+  font-style: normal;
+}
+.p86-report-preview-paper[data-style-pack="inspection-pro"] .p86-report-cover-meta {
+  background: #f1f5f9;
+  padding: 16px;
+  border: 1px solid #cbd5e1;
+  border-top-width: 4px;
+  border-top-color: #0f172a;
+}
+.p86-report-preview-paper[data-style-pack="inspection-pro"] .p86-report-preview-section {
+  border: 1px solid #cbd5e1;
+  border-left: 4px solid #0f172a;
+  padding: 12px 14px;
+  border-radius: 0 4px 4px 0;
+  margin-bottom: 18px;
+}
+.p86-report-preview-paper[data-style-pack="inspection-pro"] .p86-report-preview-section-label {
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  font-size: 13px;
+}
+
+/* ─────────────────────────────────────────────────────────────────
    Style picker — gallery modal
    ───────────────────────────────────────────────────────────────── */
 .p86-report-style-gallery {

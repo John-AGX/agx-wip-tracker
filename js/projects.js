@@ -1983,6 +1983,141 @@
       });
     }
 
+    // Preview overlay — paper-styled full-screen modal that renders
+    // EXACTLY what the printed PDF would look like with the current
+    // style pack applied. Reuses renderPrintCoverHTML for the cover
+    // and renders sections in read-only form (no toggle buttons, no
+    // remove ×, no editable inputs — just photos, captions as text,
+    // and metadata). Top bar has a "Print / Save PDF" so users can
+    // commit directly from the preview without going back to the
+    // editor.
+    function openReportPreview() {
+      var prior = document.getElementById('projReportPreview');
+      if (prior) prior.remove();
+
+      var preview = document.createElement('div');
+      preview.id = 'projReportPreview';
+      preview.className = 'p86-report-preview-overlay';
+
+      // Read-only section render — strips the editor chrome but keeps
+      // the photo grid / stack / before-after / text / file-list body
+      // layouts intact. For photo cards we drop the drag handle, the
+      // remove ×, the side-swap button, the annotate ✏ — readers
+      // shouldn't see any of those affordances.
+      function previewSectionHTML(section) {
+        var layout = section.layout || 'photo-grid';
+        var label = section.label || '';
+        var bodyHTML = '';
+        if (layout === 'text-block') {
+          bodyHTML = '<div class="p86-report-preview-text">' + escapeHTML(section.text_body || '') + '</div>';
+        } else if (layout === 'attachment-list') {
+          var ids = Array.isArray(section.attachment_ids) ? section.attachment_ids : [];
+          var allFiles = (_detailState.photos || []).filter(function(a) { return a && a.mime_type && a.mime_type.indexOf('image/') !== 0; });
+          bodyHTML = '<div class="p86-report-preview-files">' +
+            ids.map(function(aid) {
+              var att = allFiles.find(function(a) { return a.id === aid; });
+              if (!att) return '';
+              var ext = (att.filename || '').split('.').pop().toUpperCase();
+              return '<div class="p86-report-preview-file-row">' +
+                '<span class="p86-report-preview-file-ext">' + escapeHTML(ext) + '</span>' +
+                '<span class="p86-report-preview-file-name">' + escapeHTML(att.filename || '') + '</span>' +
+              '</div>';
+            }).join('') +
+          '</div>';
+        } else {
+          // photo-grid / single-photo / before-after — same render but
+          // without the edit chrome.
+          var size = section.photoSize || 'small';
+          var photoIds = section.photo_ids || [];
+          if (!photoIds.length) {
+            bodyHTML = '<div class="p86-report-preview-empty">No photos in this section.</div>';
+          } else {
+            var photoCardsHTML = photoIds.map(function(pid) {
+              var att = allPhotos.find(function(a) { return a.id === pid; });
+              if (!att) return '';
+              var caption = section.captions[pid] || '';
+              var photoSide = (typeof descSideFor === 'function') ? descSideFor(section, pid) : 'right';
+              var sideClass = attHasSideContent(att) ? ' has-sidedesc' + (photoSide === 'left' ? ' desc-left' : '') : '';
+              var imgSrc = att.web_url || att.thumb_url;
+              return '<div class="p86-report-preview-photo' + sideClass + '">' +
+                '<div class="p86-report-preview-photo-img-wrap">' +
+                  '<img src="' + escapeAttr(imgSrc) + '" alt="" />' +
+                  // Inline annotation canvas (drawn after DOM mounts)
+                  (Array.isArray(att.annotations) && att.annotations.length
+                    ? '<canvas class="p86-report-preview-photo-anno" data-anno-photo="' + escapeAttr(pid) + '"></canvas>'
+                    : '') +
+                '</div>' +
+                (caption ? '<div class="p86-report-preview-photo-cap">' + escapeHTML(caption) + '</div>' : '') +
+                photoSideColumnHTML(att) +
+              '</div>';
+            }).join('');
+            var sectionCls = (layout === 'single-photo')
+              ? 'p86-report-preview-section-stack size-' + escapeAttr(size)
+              : 'p86-report-preview-section-grid size-' + escapeAttr(size);
+            bodyHTML = '<div class="' + sectionCls + '">' + photoCardsHTML + '</div>';
+          }
+        }
+        return '<section class="p86-report-preview-section">' +
+          (label ? '<h2 class="p86-report-preview-section-label">' + escapeHTML(label) + '</h2>' : '') +
+          bodyHTML +
+        '</section>';
+      }
+
+      // Build the overlay's full HTML — top bar + paper. The paper
+      // gets the data-style-pack attribute so the existing style-pack
+      // CSS scoped via that selector applies inside the preview too.
+      preview.innerHTML =
+        '<div class="p86-report-preview-bar">' +
+          '<button type="button" class="p86-report-preview-close" data-preview-close>&#x2190; Back to editor</button>' +
+          '<div class="p86-report-preview-bar-title">Preview</div>' +
+          '<button type="button" class="p86-report-preview-print">&#x1F5A8; Print / Save PDF</button>' +
+        '</div>' +
+        '<div class="p86-report-preview-paper" data-style-pack="' + escapeAttr(state.stylePack || 'clean') + '">' +
+          (state.cover.enabled ? renderPrintCoverHTML() : '') +
+          (state.report.summary ? '<div class="p86-report-preview-summary">' + escapeHTML(state.report.summary) + '</div>' : '') +
+          state.sections.map(previewSectionHTML).join('') +
+        '</div>';
+
+      document.body.appendChild(preview);
+
+      // Paint annotation strokes on each photo (same coord-space
+      // trick the project feed + report editor use — canvas internal
+      // dims = web variant, CSS scales the canvas to the img).
+      preview.querySelectorAll('[data-anno-photo]').forEach(function(canvas) {
+        var pid = canvas.getAttribute('data-anno-photo');
+        var att = allPhotos.find(function(a) { return a.id === pid; });
+        if (!att || !window.p86AnnotationRender) return;
+        var dims = (typeof window.p86AnnotationRender.webVariantDims === 'function')
+          ? window.p86AnnotationRender.webVariantDims(att.width, att.height)
+          : null;
+        if (!dims) return;
+        canvas.width = dims.w;
+        canvas.height = dims.h;
+        try { window.p86AnnotationRender.renderAll(canvas.getContext('2d'), att.annotations); }
+        catch (e) { /* defensive */ }
+      });
+
+      function close() { preview.remove(); }
+      preview.querySelectorAll('[data-preview-close]').forEach(function(b) {
+        b.addEventListener('click', close);
+      });
+      preview.querySelector('.p86-report-preview-print').addEventListener('click', function() {
+        // Use the same path as the editor's Print button so the
+        // saved-state guarantee + the printing CSS class both fire.
+        close();
+        printReport();
+      });
+      // Esc closes the preview — matches the markup viewer + photo
+      // viewer escape behavior.
+      function onKey(e) {
+        if (e.key === 'Escape') {
+          close();
+          document.removeEventListener('keydown', onKey);
+        }
+      }
+      document.addEventListener('keydown', onKey);
+    }
+
     // Wave B4 helpers — cover-page polymorphism. The active template
     // (looked up from state.report.template_type) decides which
     // fields the cover fieldset surfaces and which fields the print
@@ -2089,6 +2224,7 @@
           '<input id="rptTitle" class="p86-report-title-input" value="' + escapeAttr(state.report.title || '') + '" placeholder="Report title" />' +
           '<div class="p86-report-topbar-actions">' +
             '<button class="ee-btn secondary" id="rptDesign" title="Choose a visual style for this report">&#x1F3A8; Design</button>' +
+            '<button class="ee-btn secondary" id="rptPreview" title="See what this report will look like when printed">&#x1F441;&#xFE0F; Preview</button>' +
             '<button class="ee-btn secondary" id="rptPrint">&#x1F5A8; Print / Save PDF</button>' +
             '<button class="ee-btn secondary" id="rptAddSection">&#x2795; Section</button>' +
             '<button class="ee-btn secondary" id="rptSave">Save</button>' +
@@ -2202,6 +2338,14 @@
           host.setAttribute('data-style-pack', nextId);
           debouncedSave();
         });
+      });
+      // Preview button — opens a paper-styled overlay showing exactly
+      // what the printed PDF will look like with the current style
+      // pack applied. No editor chrome. Print/Save PDF can be
+      // triggered from inside the overlay so users can review then
+      // commit without going back to the editor.
+      host.querySelector('#rptPreview').addEventListener('click', function() {
+        openReportPreview(state);
       });
 
       // Empty-state preset buttons.
