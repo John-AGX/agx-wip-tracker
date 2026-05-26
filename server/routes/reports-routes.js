@@ -62,14 +62,35 @@ function normalizeTemplateType(raw) {
   return TEMPLATE_TYPES.has(raw) ? raw : 'walkthrough';
 }
 
+// Wave B3 section layout enum — kept in lockstep with the client
+// LAYOUT_OPTIONS in js/projects.js. Bad/missing values clamp to
+// 'photo-grid' (the historical default).
+const SECTION_LAYOUTS = new Set([
+  'photo-grid',
+  'single-photo',
+  'before-after',
+  'text-block',
+  'attachment-list'
+]);
+function normalizeLayout(raw) {
+  return (typeof raw === 'string' && SECTION_LAYOUTS.has(raw)) ? raw : 'photo-grid';
+}
+
 function normalizeSections(raw) {
   if (!Array.isArray(raw)) return [];
   return raw.map(function(s) {
     if (!s || typeof s !== 'object') return null;
     const id = typeof s.id === 'string' ? s.id : newId('sec');
     const label = typeof s.label === 'string' ? s.label.slice(0, 120) : '';
+    const layout = normalizeLayout(s.layout);
+    // before-after caps at 2 photos. Other photo layouts allow up
+    // to 200. Text-block / attachment-list layouts still accept a
+    // photo_ids array for cheap layout switching (data isn't lost
+    // — just hidden — until the user confirms the switch).
+    let photoLimit = 200;
+    if (layout === 'before-after') photoLimit = 2;
     const photoIds = Array.isArray(s.photo_ids)
-      ? s.photo_ids.filter(function(x) { return typeof x === 'string'; }).slice(0, 200)
+      ? s.photo_ids.filter(function(x) { return typeof x === 'string'; }).slice(0, photoLimit)
       : [];
     const captionsIn = (s.captions && typeof s.captions === 'object') ? s.captions : {};
     const captions = {};
@@ -77,7 +98,19 @@ function normalizeSections(raw) {
       const c = captionsIn[pid];
       if (typeof c === 'string') captions[pid] = c.slice(0, 500);
     });
-    return { id: id, label: label, photo_ids: photoIds, captions: captions };
+    const textBody = (typeof s.text_body === 'string') ? s.text_body.slice(0, 20000) : '';
+    const attachmentIds = Array.isArray(s.attachment_ids)
+      ? s.attachment_ids.filter(function(x) { return typeof x === 'string'; }).slice(0, 50)
+      : [];
+    return {
+      id: id,
+      label: label,
+      layout: layout,
+      photo_ids: photoIds,
+      captions: captions,
+      text_body: textBody,
+      attachment_ids: attachmentIds
+    };
   }).filter(Boolean).slice(0, 50);
 }
 
@@ -122,7 +155,18 @@ async function hydrateSections(sections) {
         };
       })
       .filter(Boolean);
-    return { id: s.id, label: s.label, photos: photos };
+    // Wave B3: layout + text_body + attachment_ids ride through to
+    // the client so the editor can render the right body for each
+    // section type. The print view also reads layout off these
+    // hydrated entries.
+    return {
+      id: s.id,
+      label: s.label,
+      layout: s.layout || 'photo-grid',
+      photos: photos,
+      text_body: s.text_body || '',
+      attachment_ids: Array.isArray(s.attachment_ids) ? s.attachment_ids : []
+    };
   });
 }
 

@@ -4139,6 +4139,174 @@
   grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
   gap: 10px;
 }
+
+/* Wave B3 layout variants — body styles for non-photo-grid sections.
+   The header (label + layout dropdown + add/remove buttons) is
+   shared; only the body changes per layout. */
+
+/* Single-photo layout: one photo per row, full editor width. */
+.p86-report-section-singles {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.p86-report-photo-single {
+  position: relative;
+  border: 1px solid var(--border, #333);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--card-bg, #0f0f1e);
+}
+.p86-report-photo-single img {
+  display: block;
+  width: 100%;
+  max-height: 60vh;
+  object-fit: contain;
+  background: #000;
+}
+
+/* Before / After layout: two photos side-by-side. Stacks on mobile. */
+.p86-report-section-pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.p86-report-photo-pair {
+  position: relative;
+  border: 1px solid var(--border, #333);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--card-bg, #0f0f1e);
+}
+.p86-report-photo-pair img {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4/3;
+  object-fit: cover;
+}
+.p86-report-photo-pair-empty {
+  border: 1px dashed var(--border, #333);
+  border-radius: 8px;
+  padding: 30px 14px;
+  color: var(--text-dim, #888);
+  text-align: center;
+  font-size: 12px;
+  background: rgba(255,255,255,0.02);
+}
+.p86-report-photo-pair-empty span { font-style: italic; color: var(--text-dim, #666); }
+
+@media (max-width: 640px) {
+  .p86-report-section-pair { grid-template-columns: 1fr; }
+}
+
+/* Text-block layout: full-width textarea, serif-ish font for the
+   "this reads like prose, not a form" feel. */
+.p86-report-section-text {
+  padding: 4px 0;
+}
+.p86-report-section-text-input {
+  width: 100%;
+  min-height: 140px;
+  background: var(--card-bg, #0f0f1e);
+  border: 1px solid var(--border, #333);
+  border-radius: 8px;
+  padding: 12px 14px;
+  color: var(--text, #fff);
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 14px;
+  line-height: 1.55;
+  resize: vertical;
+  outline: none;
+}
+.p86-report-section-text-input:focus { border-color: var(--accent, #4f8cff); }
+
+/* Attachment-list layout: download rows for non-image files
+   (PDFs, Excel, etc.). Each row mirrors the Files-tab styling. */
+.p86-report-section-files {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.p86-report-file-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border, #333);
+  border-radius: 6px;
+  background: var(--card-bg, #0f0f1e);
+}
+.p86-report-file-ext {
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+  border-radius: 6px;
+  background: rgba(79, 140, 255, 0.12);
+  color: var(--accent, #4f8cff);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+}
+.p86-report-file-meta { flex: 1; min-width: 0; }
+.p86-report-file-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text, #fff);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.p86-report-file-size {
+  font-size: 11px;
+  color: var(--text-dim, #888);
+}
+
+/* Attachment picker modal (Wave B3) — multi-select file picker
+   for the attachment-list layout. */
+.p86-report-file-picker-body {
+  padding: 14px 18px;
+  max-height: 60vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.p86-report-file-pick {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border, #333);
+  border-radius: 6px;
+  background: var(--card-bg, #0f0f1e);
+  cursor: pointer;
+  text-align: left;
+  color: var(--text, #fff);
+  transition: border-color 0.12s, background 0.12s;
+}
+.p86-report-file-pick:hover { border-color: rgba(79, 140, 255, 0.5); }
+.p86-report-file-pick.pending {
+  border-color: var(--accent, #4f8cff);
+  background: rgba(79, 140, 255, 0.08);
+}
+.p86-report-file-pick.added {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* Layout-select dropdown in the section header. Compact pill. */
+.p86-report-section-layout {
+  background: var(--card-bg, #0f0f1e);
+  border: 1px solid var(--border, #333);
+  color: var(--text, #fff);
+  font-size: 12px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
 .p86-report-photo {
   position: relative;
   border: 1px solid var(--border, #333);

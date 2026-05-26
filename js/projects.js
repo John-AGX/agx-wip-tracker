@@ -1753,8 +1753,14 @@
         return {
           id: s.id,
           label: s.label || '',
+          // Wave B3 — layout + text_body + attachment_ids hydrate
+          // onto the in-memory section so the editor can render the
+          // right body. Older reports default to photo-grid.
+          layout: s.layout || 'photo-grid',
           photo_ids: (s.photo_ids || []).slice(),
-          captions: Object.assign({}, s.captions || {})
+          captions: Object.assign({}, s.captions || {}),
+          text_body: s.text_body || '',
+          attachment_ids: Array.isArray(s.attachment_ids) ? s.attachment_ids.slice() : []
         };
       }),
       // Cover page state — defaults compose from project + current
@@ -2033,13 +2039,49 @@
         if (labelEl) labelEl.addEventListener('input', function(e) {
           state.sections[sIdx].label = e.target.value;
         });
+        // Layout switcher — confirm before clearing if the section
+        // has content the new layout can't represent (e.g. switching
+        // a photo-grid with 5 photos to text-block).
+        var layoutSel = sectionEl.querySelector('.p86-report-section-layout');
+        if (layoutSel) layoutSel.addEventListener('change', function(e) {
+          var prevLayout = state.sections[sIdx].layout || 'photo-grid';
+          var nextLayout = e.target.value;
+          if (prevLayout === nextLayout) return;
+          // Detect "would lose content" cases. Switching INTO text-block
+          // or attachment-list from a photo layout loses photos; vice
+          // versa loses the text body. Bail with a confirm.
+          var hasPhotos = (state.sections[sIdx].photo_ids || []).length > 0;
+          var hasText = !!(state.sections[sIdx].text_body || '').trim();
+          var hasAttachments = (state.sections[sIdx].attachment_ids || []).length > 0;
+          var losingContent =
+            (prevLayout !== 'text-block' && prevLayout !== 'attachment-list' && (nextLayout === 'text-block' || nextLayout === 'attachment-list') && hasPhotos) ||
+            (prevLayout === 'text-block' && nextLayout !== 'text-block' && hasText) ||
+            (prevLayout === 'attachment-list' && nextLayout !== 'attachment-list' && hasAttachments);
+          if (losingContent && !window.confirm('Switching layouts will clear the current ' + (prevLayout === 'text-block' ? 'text' : (prevLayout === 'attachment-list' ? 'file list' : 'photos')) + ' in this section. Continue?')) {
+            // Revert the dropdown.
+            e.target.value = prevLayout;
+            return;
+          }
+          state.sections[sIdx].layout = nextLayout;
+          // before-after caps to 2 photos.
+          if (nextLayout === 'before-after' && (state.sections[sIdx].photo_ids || []).length > 2) {
+            state.sections[sIdx].photo_ids = state.sections[sIdx].photo_ids.slice(0, 2);
+          }
+          paint();
+          debouncedSave();
+        });
         var addBtn = sectionEl.querySelector('.p86-report-section-add');
-        if (addBtn) addBtn.addEventListener('click', function() { openPhotoPicker(sIdx); });
+        if (addBtn) addBtn.addEventListener('click', function() {
+          var layout = state.sections[sIdx].layout || 'photo-grid';
+          if (layout === 'attachment-list') openAttachmentPicker(sIdx);
+          else openPhotoPicker(sIdx);
+        });
         var rmSectionBtn = sectionEl.querySelector('.p86-report-section-remove');
         if (rmSectionBtn) rmSectionBtn.addEventListener('click', function() {
-          if (!window.confirm('Remove this section and its photo references? (Photos themselves are not deleted.)')) return;
+          if (!window.confirm('Remove this section? (Underlying photos / files are not deleted.)')) return;
           state.sections.splice(sIdx, 1);
           paint();
+          debouncedSave();
         });
         sectionEl.querySelectorAll('[data-rm-photo]').forEach(function(btn) {
           btn.addEventListener('click', function() {
@@ -2047,15 +2089,108 @@
             state.sections[sIdx].photo_ids = state.sections[sIdx].photo_ids.filter(function(x) { return x !== pid; });
             delete state.sections[sIdx].captions[pid];
             paint();
+            debouncedSave();
           });
         });
         sectionEl.querySelectorAll('[data-caption-input]').forEach(function(input) {
           input.addEventListener('input', function(e) {
             var pid = input.getAttribute('data-caption-input');
             state.sections[sIdx].captions[pid] = e.target.value;
+            debouncedSave();
+          });
+        });
+        // Text-block layout: textarea writes back into state.text_body.
+        var textInput = sectionEl.querySelector('.p86-report-section-text-input');
+        if (textInput) textInput.addEventListener('input', function(e) {
+          state.sections[sIdx].text_body = e.target.value;
+          debouncedSave();
+        });
+        // Attachment-list layout: per-row remove button.
+        sectionEl.querySelectorAll('[data-rm-att]').forEach(function(btn) {
+          btn.addEventListener('click', function() {
+            var aid = btn.getAttribute('data-rm-att');
+            state.sections[sIdx].attachment_ids = (state.sections[sIdx].attachment_ids || []).filter(function(x) { return x !== aid; });
+            paint();
+            debouncedSave();
           });
         });
       });
+    }
+
+    // Attachment picker for attachment-list sections. Lists every
+    // non-image file already on the project (PDFs, Excel, Word,
+    // drawings). Multi-select; commit on close.
+    function openAttachmentPicker(targetSectionIdx) {
+      var modal = document.createElement('div');
+      modal.className = 'modal active';
+      modal.id = 'projReportAttachmentPicker';
+      var allFiles = (_detailState.photos || []).filter(function(a) {
+        return a && a.mime_type && a.mime_type.indexOf('image/') !== 0;
+      });
+      var already = new Set(state.sections[targetSectionIdx].attachment_ids || []);
+      var pending = new Set();
+
+      function commitAndClose() {
+        var ids = state.sections[targetSectionIdx].attachment_ids || [];
+        allFiles.forEach(function(a) {
+          if (pending.has(a.id) && ids.indexOf(a.id) === -1) ids.push(a.id);
+        });
+        state.sections[targetSectionIdx].attachment_ids = ids;
+        modal.remove();
+        paint();
+        debouncedSave();
+      }
+
+      function rowsHTML() {
+        if (!allFiles.length) {
+          return '<div class="p86-proj-empty-line">No files in this project yet. Upload some via the Files tab first.</div>';
+        }
+        return allFiles.map(function(a) {
+          var isAlready = already.has(a.id);
+          var isPending = pending.has(a.id);
+          var ext = (a.filename || '').split('.').pop().toUpperCase();
+          return '<button type="button" class="p86-report-file-pick' + (isAlready ? ' added' : (isPending ? ' pending' : '')) + '" data-pick="' + escapeAttr(a.id) + '"' + (isAlready ? ' disabled' : '') + '>' +
+            '<div class="p86-report-file-ext">' + escapeHTML(ext.slice(0, 4)) + '</div>' +
+            '<div class="p86-report-file-meta">' +
+              '<div class="p86-report-file-name">' + escapeHTML(a.filename || '(untitled)') + '</div>' +
+              '<div class="p86-report-file-size">' + (a.size_bytes ? Math.round(a.size_bytes / 1024) + ' KB' : '') + (isAlready ? ' · already in this section' : (isPending ? ' · picked' : '')) + '</div>' +
+            '</div>' +
+          '</button>';
+        }).join('');
+      }
+
+      modal.innerHTML =
+        '<div class="modal-content" style="max-width:680px;">' +
+          '<div class="modal-header">' +
+            '<span>Attach files to "' + escapeHTML(state.sections[targetSectionIdx].label || 'section') + '"</span>' +
+            '<button class="p86-modal-close" data-close>&times;</button>' +
+          '</div>' +
+          '<div class="p86-report-file-picker-body">' + rowsHTML() + '</div>' +
+          '<div class="modal-footer">' +
+            '<button class="ee-btn secondary" data-close>Cancel</button>' +
+            '<button class="primary" data-add>Add selected</button>' +
+          '</div>' +
+        '</div>';
+      document.body.appendChild(modal);
+      modal.addEventListener('click', function(e) { if (e.target === modal) modal.remove(); });
+      modal.querySelectorAll('[data-close]').forEach(function(b) {
+        b.addEventListener('click', function() { modal.remove(); });
+      });
+      function repaint() {
+        modal.querySelector('.p86-report-file-picker-body').innerHTML = rowsHTML();
+        wirePicks();
+      }
+      function wirePicks() {
+        modal.querySelectorAll('[data-pick]').forEach(function(btn) {
+          btn.addEventListener('click', function() {
+            var id = btn.getAttribute('data-pick');
+            if (pending.has(id)) pending.delete(id); else pending.add(id);
+            repaint();
+          });
+        });
+      }
+      wirePicks();
+      modal.querySelector('[data-add]').addEventListener('click', commitAndClose);
     }
 
     function seedSections(labels) {
@@ -2063,8 +2198,11 @@
         state.sections.push({
           id: 'sec_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
           label: label,
+          layout: 'photo-grid',
           photo_ids: [],
-          captions: {}
+          captions: {},
+          text_body: '',
+          attachment_ids: []
         });
       });
       paint();
@@ -2076,30 +2214,145 @@
       seedSections([label]);
     }
 
+    // Wave B3 — section schema now carries a `layout` field. Five
+    // options: photo-grid (default — what we always rendered),
+    // single-photo (one large photo per row, full width),
+    // before-after (two photos side-by-side), text-block (narrative
+    // only, no photos), attachment-list (download rows for PDFs).
+    // sectionHTML dispatches on layout; each layout has its own
+    // body renderer. The shared header carries a dropdown so the
+    // user can switch any section after creation.
+    var LAYOUT_OPTIONS = [
+      { id: 'photo-grid',      label: 'Photo grid' },
+      { id: 'single-photo',    label: 'One photo per row' },
+      { id: 'before-after',    label: 'Before / After' },
+      { id: 'text-block',      label: 'Text only' },
+      { id: 'attachment-list', label: 'File attachments' }
+    ];
+
     function sectionHTML(section) {
-      return '<div class="p86-report-section" data-sec="' + escapeAttr(section.id) + '">' +
+      var layout = section.layout || 'photo-grid';
+      var layoutSelect = '<select class="p86-report-section-layout" title="Section layout">' +
+        LAYOUT_OPTIONS.map(function(o) {
+          return '<option value="' + escapeAttr(o.id) + '"' + (o.id === layout ? ' selected' : '') + '>' + escapeHTML(o.label) + '</option>';
+        }).join('') +
+      '</select>';
+
+      var addBtn = '';
+      if (layout === 'photo-grid' || layout === 'single-photo' || layout === 'before-after') {
+        var addLabel = layout === 'before-after' ? '+ Pick 2 photos' : '+ Add photos';
+        addBtn = '<button class="ee-btn secondary p86-report-section-add">' + addLabel + '</button>';
+      } else if (layout === 'attachment-list') {
+        addBtn = '<button class="ee-btn secondary p86-report-section-add">+ Attach files</button>';
+      }
+
+      var body;
+      if (layout === 'text-block') body = sectionTextBlockBodyHTML(section);
+      else if (layout === 'attachment-list') body = sectionAttachmentListBodyHTML(section);
+      else if (layout === 'single-photo') body = sectionSinglePhotoBodyHTML(section);
+      else if (layout === 'before-after') body = sectionBeforeAfterBodyHTML(section);
+      else body = sectionPhotoGridBodyHTML(section);
+
+      return '<div class="p86-report-section layout-' + escapeAttr(layout) + '" data-sec="' + escapeAttr(section.id) + '">' +
         '<div class="p86-report-section-header">' +
           '<input class="p86-report-section-label" value="' + escapeAttr(section.label) + '" placeholder="Section name" />' +
           '<div class="p86-report-section-actions">' +
-            '<button class="ee-btn secondary p86-report-section-add">&#x2795; Add photos</button>' +
+            layoutSelect +
+            addBtn +
             '<button class="ee-btn secondary p86-report-section-remove">Remove</button>' +
           '</div>' +
         '</div>' +
-        '<div class="p86-report-section-photos">' +
-          (section.photo_ids.length === 0
-            ? '<div class="p86-proj-empty-line" style="grid-column:1/-1;">No photos in this section yet.</div>'
-            : section.photo_ids.map(function(pid) {
-                var att = allPhotos.find(function(a) { return a.id === pid; });
-                if (!att) return '<div class="p86-report-photo p86-report-photo-missing">(photo deleted)</div>';
-                var caption = section.captions[pid] || '';
-                return '<div class="p86-report-photo">' +
-                  '<img src="' + escapeAttr(att.thumb_url || att.web_url) + '" alt="" />' +
-                  '<input class="p86-report-photo-caption" value="' + escapeAttr(caption) + '" data-caption-input="' + escapeAttr(pid) + '" placeholder="Caption (optional)" />' +
-                  '<button type="button" class="p86-report-photo-remove" data-rm-photo="' + escapeAttr(pid) + '" title="Remove from section">&times;</button>' +
-                '</div>';
-              }).join('')) +
-        '</div>' +
+        body +
       '</div>';
+    }
+
+    function sectionPhotoGridBodyHTML(section) {
+      return '<div class="p86-report-section-photos">' +
+        (section.photo_ids.length === 0
+          ? '<div class="p86-proj-empty-line" style="grid-column:1/-1;">No photos in this section yet.</div>'
+          : section.photo_ids.map(function(pid) {
+              var att = allPhotos.find(function(a) { return a.id === pid; });
+              if (!att) return '<div class="p86-report-photo p86-report-photo-missing">(photo deleted)</div>';
+              var caption = section.captions[pid] || '';
+              return '<div class="p86-report-photo">' +
+                '<img src="' + escapeAttr(att.thumb_url || att.web_url) + '" alt="" />' +
+                '<input class="p86-report-photo-caption" value="' + escapeAttr(caption) + '" data-caption-input="' + escapeAttr(pid) + '" placeholder="Caption (optional)" />' +
+                '<button type="button" class="p86-report-photo-remove" data-rm-photo="' + escapeAttr(pid) + '" title="Remove from section">&times;</button>' +
+              '</div>';
+            }).join('')) +
+      '</div>';
+    }
+
+    function sectionSinglePhotoBodyHTML(section) {
+      // One photo per row, full width. Reuses the caption input
+      // pattern so the existing wiring keeps working.
+      return '<div class="p86-report-section-singles">' +
+        (section.photo_ids.length === 0
+          ? '<div class="p86-proj-empty-line">No photos yet — tap "+ Add photos".</div>'
+          : section.photo_ids.map(function(pid) {
+              var att = allPhotos.find(function(a) { return a.id === pid; });
+              if (!att) return '<div class="p86-report-photo-single p86-report-photo-missing">(photo deleted)</div>';
+              var caption = section.captions[pid] || '';
+              return '<div class="p86-report-photo-single">' +
+                '<img src="' + escapeAttr(att.web_url || att.thumb_url) + '" alt="" />' +
+                '<input class="p86-report-photo-caption" value="' + escapeAttr(caption) + '" data-caption-input="' + escapeAttr(pid) + '" placeholder="Caption (optional)" />' +
+                '<button type="button" class="p86-report-photo-remove" data-rm-photo="' + escapeAttr(pid) + '" title="Remove">&times;</button>' +
+              '</div>';
+            }).join('')) +
+      '</div>';
+    }
+
+    function sectionBeforeAfterBodyHTML(section) {
+      // Pair display: two photos side-by-side. The picker enforces
+      // a max of 2 picks; the first picked is "Before", the second
+      // is "After". Caption inputs sit under each photo for label
+      // overrides ("Before — Apr 2024").
+      var pair = section.photo_ids.slice(0, 2);
+      var slot = function(pid, fallbackLabel) {
+        if (!pid) {
+          return '<div class="p86-report-photo-pair-empty">' + escapeHTMLLocal(fallbackLabel) + '<br/><span>No photo selected</span></div>';
+        }
+        var att = allPhotos.find(function(a) { return a.id === pid; });
+        if (!att) return '<div class="p86-report-photo-pair p86-report-photo-missing">(photo deleted)</div>';
+        var caption = section.captions[pid] || fallbackLabel;
+        return '<div class="p86-report-photo-pair">' +
+          '<img src="' + escapeAttr(att.web_url || att.thumb_url) + '" alt="" />' +
+          '<input class="p86-report-photo-caption" value="' + escapeAttr(caption) + '" data-caption-input="' + escapeAttr(pid) + '" placeholder="' + escapeAttr(fallbackLabel) + '" />' +
+          '<button type="button" class="p86-report-photo-remove" data-rm-photo="' + escapeAttr(pid) + '" title="Remove">&times;</button>' +
+        '</div>';
+      };
+      return '<div class="p86-report-section-pair">' +
+        slot(pair[0], 'Before') +
+        slot(pair[1], 'After') +
+      '</div>';
+    }
+
+    function sectionTextBlockBodyHTML(section) {
+      var body = section.text_body || '';
+      return '<div class="p86-report-section-text">' +
+        '<textarea class="p86-report-section-text-input" rows="6" placeholder="Type your narrative here…">' + escapeHTML(body) + '</textarea>' +
+      '</div>';
+    }
+
+    function sectionAttachmentListBodyHTML(section) {
+      var ids = Array.isArray(section.attachment_ids) ? section.attachment_ids : [];
+      var allFiles = (_detailState.photos || []).filter(function(a) { return a.mime_type && a.mime_type.indexOf('image/') !== 0; });
+      var rowsHTML = ids.length === 0
+        ? '<div class="p86-proj-empty-line">No files attached. Tap "+ Attach files" to choose from the project Files tab.</div>'
+        : ids.map(function(aid) {
+            var att = allFiles.find(function(a) { return a.id === aid; });
+            if (!att) return '<div class="p86-report-file-row p86-report-photo-missing" data-rm-att="' + escapeAttr(aid) + '">(file removed)<button type="button">&times;</button></div>';
+            var ext = (att.filename || '').split('.').pop().toUpperCase();
+            return '<div class="p86-report-file-row">' +
+              '<div class="p86-report-file-ext">' + escapeHTML(ext.slice(0, 4)) + '</div>' +
+              '<div class="p86-report-file-meta">' +
+                '<div class="p86-report-file-name">' + escapeHTML(att.filename || '(untitled)') + '</div>' +
+                '<div class="p86-report-file-size">' + (att.size_bytes ? Math.round(att.size_bytes / 1024) + ' KB' : '') + '</div>' +
+              '</div>' +
+              '<button type="button" class="p86-report-photo-remove" data-rm-att="' + escapeAttr(aid) + '" title="Remove">&times;</button>' +
+            '</div>';
+          }).join('');
+      return '<div class="p86-report-section-files">' + rowsHTML + '</div>';
     }
 
     function openPhotoPicker(targetSectionIdx) {
@@ -2125,8 +2378,16 @@
             state.sections[targetSectionIdx].photo_ids.push(att.id);
           }
         });
+        // Wave B3: before-after sections only render the first 2
+        // photos. Cap here so the picker enforces the constraint
+        // visibly rather than silently dropping extras at render.
+        var layout = state.sections[targetSectionIdx].layout || 'photo-grid';
+        if (layout === 'before-after') {
+          state.sections[targetSectionIdx].photo_ids = state.sections[targetSectionIdx].photo_ids.slice(0, 2);
+        }
         modal.remove();
         paint(); // single repaint of the editor at close time
+        debouncedSave();
       }
 
       function cancelAndClose() {
