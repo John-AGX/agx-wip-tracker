@@ -71,7 +71,10 @@ const STYLE_PACKS = new Set([
   'classic-corporate',
   'modern-bold',
   'field-notebook',
-  'inspection-pro'
+  'inspection-pro',
+  'blueprint',
+  'editorial-spread',
+  'polaroid-journal'
 ]);
 function normalizeStylePack(raw) {
   if (typeof raw !== 'string') return 'clean';

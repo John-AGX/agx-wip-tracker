@@ -251,6 +251,166 @@
   }
 }
 
+/* ── Blueprint ─────────────────────────────────────────────────── */
+.p86-report-host[data-style-pack="blueprint"] {
+  --pack-navy: #0e2a4a;
+  --pack-cyan: #67e8f9;
+  --pack-grid: rgba(103, 232, 249, 0.18);
+}
+.p86-report-host[data-style-pack="blueprint"] .p86-report-section {
+  border-top: 1px solid var(--pack-grid);
+  padding-top: 12px;
+  margin-top: 18px;
+}
+.p86-report-host[data-style-pack="blueprint"] .p86-report-section-label {
+  font-family: 'Futura', 'Trebuchet MS', sans-serif;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  font-size: 15px;
+  color: var(--pack-navy);
+}
+@media print {
+  .p86-report-host[data-style-pack="blueprint"] .p86-report-cover-rendered {
+    background: #0e2a4a;
+    color: #f0f9ff !important;
+    padding: 80px 50px;
+    background-image:
+      linear-gradient(rgba(103,232,249,0.12) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(103,232,249,0.12) 1px, transparent 1px);
+    background-size: 24px 24px;
+  }
+  .p86-report-host[data-style-pack="blueprint"] .p86-report-cover-company,
+  .p86-report-host[data-style-pack="blueprint"] .p86-report-cover-subtitle,
+  .p86-report-host[data-style-pack="blueprint"] .p86-report-cover-addr {
+    color: #67e8f9 !important;
+  }
+  .p86-report-host[data-style-pack="blueprint"] .p86-report-cover-title {
+    color: #fff !important;
+    font-family: 'Futura', 'Trebuchet MS', sans-serif !important;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    font-weight: 600 !important;
+  }
+  .p86-report-host[data-style-pack="blueprint"] .p86-report-cover-meta {
+    border-top: 1px solid #67e8f9 !important;
+  }
+  .p86-report-host[data-style-pack="blueprint"] .p86-report-cover-meta .k {
+    color: #67e8f9 !important;
+  }
+  .p86-report-host[data-style-pack="blueprint"] .p86-report-cover-meta .v {
+    color: #fff !important;
+  }
+}
+
+/* ── Editorial Spread ──────────────────────────────────────────── */
+.p86-report-host[data-style-pack="editorial-spread"] {
+  --pack-ink: #0a0a0a;
+}
+.p86-report-host[data-style-pack="editorial-spread"] .p86-report-title-input {
+  font-size: 32px;
+  font-weight: 900;
+  letter-spacing: -0.8px;
+  line-height: 1;
+}
+.p86-report-host[data-style-pack="editorial-spread"] .p86-report-section {
+  margin-top: 50px;
+}
+.p86-report-host[data-style-pack="editorial-spread"] .p86-report-section-label {
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 22px;
+  font-weight: 700;
+  font-style: italic;
+}
+@media print {
+  .p86-report-host[data-style-pack="editorial-spread"] .p86-report-cover-rendered {
+    background: #fff;
+    padding: 100px 80px;
+    text-align: left;
+  }
+  .p86-report-host[data-style-pack="editorial-spread"] .p86-report-cover-title {
+    font-size: clamp(48px, 11vw, 88px) !important;
+    line-height: 0.95 !important;
+    letter-spacing: -2.5px;
+    font-weight: 900 !important;
+    margin-top: 100px !important;
+  }
+  .p86-report-host[data-style-pack="editorial-spread"] .p86-report-cover-subtitle {
+    font-family: Georgia, serif !important;
+    font-style: italic !important;
+    font-size: 18px !important;
+    color: #333 !important;
+    letter-spacing: 0 !important;
+  }
+  .p86-report-host[data-style-pack="editorial-spread"] .p86-report-cover-addr {
+    margin-bottom: 120px !important;
+    font-size: 14px !important;
+    color: #555 !important;
+  }
+  .p86-report-host[data-style-pack="editorial-spread"] .p86-report-cover-meta {
+    justify-content: flex-start !important;
+    gap: 40px !important;
+    border-top: 2px solid #000 !important;
+  }
+}
+
+/* ── Polaroid Journal ──────────────────────────────────────────── */
+.p86-report-host[data-style-pack="polaroid-journal"] {
+  --pack-paper: #e8d9b8;
+  --pack-ink: #2e1f0d;
+}
+.p86-report-host[data-style-pack="polaroid-journal"] {
+  background: var(--pack-paper);
+}
+.p86-report-host[data-style-pack="polaroid-journal"] .p86-report-title-input {
+  font-family: 'Caveat', 'Patrick Hand', 'Bradley Hand', cursive;
+  font-size: 32px;
+  font-weight: 700;
+  color: var(--pack-ink);
+}
+.p86-report-host[data-style-pack="polaroid-journal"] .p86-report-section-label {
+  font-family: 'Caveat', 'Patrick Hand', 'Bradley Hand', cursive;
+  font-size: 22px;
+  font-weight: 600;
+}
+.p86-report-host[data-style-pack="polaroid-journal"] .p86-report-photo,
+.p86-report-host[data-style-pack="polaroid-journal"] .p86-report-photo-single,
+.p86-report-host[data-style-pack="polaroid-journal"] .p86-report-photo.has-sidedesc .p86-report-photo-mainstack,
+.p86-report-host[data-style-pack="polaroid-journal"] .p86-report-photo-single.has-sidedesc .p86-report-photo-mainstack {
+  background: #fff;
+  border: 0;
+  padding: 6px 6px 22px 6px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+}
+.p86-report-host[data-style-pack="polaroid-journal"] .p86-report-photo-caption {
+  font-family: 'Caveat', 'Patrick Hand', cursive;
+  font-size: 14px;
+  background: transparent;
+  border: 0;
+  color: var(--pack-ink);
+  padding: 6px 0 0 0;
+}
+@media print {
+  .p86-report-host[data-style-pack="polaroid-journal"] .p86-report-cover-rendered {
+    background: #e8d9b8;
+    padding: 80px 50px;
+    text-align: center;
+  }
+  .p86-report-host[data-style-pack="polaroid-journal"] .p86-report-cover-title {
+    font-family: 'Caveat', 'Patrick Hand', 'Bradley Hand', cursive !important;
+    color: #2e1f0d !important;
+    font-weight: 700 !important;
+  }
+  .p86-report-host[data-style-pack="polaroid-journal"] .p86-report-cover-subtitle {
+    font-family: 'Caveat', cursive !important;
+    color: #6b4f2a !important;
+    font-style: normal !important;
+  }
+  .p86-report-host[data-style-pack="polaroid-journal"] .p86-report-cover-meta {
+    border-top: 1px dashed #6b4f2a !important;
+  }
+}
+
 /* ─────────────────────────────────────────────────────────────────
    Preview overlay — style pack cover rules mirrored so the in-app
    preview shows the same typography + chrome the PDF will get.
@@ -391,6 +551,127 @@
   text-transform: uppercase;
   letter-spacing: 0.6px;
   font-size: 13px;
+}
+
+/* Blueprint — preview */
+.p86-report-preview-paper[data-style-pack="blueprint"] .p86-report-cover-rendered {
+  background: #0e2a4a;
+  color: #f0f9ff;
+  padding: 80px 50px;
+  background-image:
+    linear-gradient(rgba(103,232,249,0.12) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(103,232,249,0.12) 1px, transparent 1px);
+  background-size: 24px 24px;
+  border-bottom: 0;
+}
+.p86-report-preview-paper[data-style-pack="blueprint"] .p86-report-cover-company,
+.p86-report-preview-paper[data-style-pack="blueprint"] .p86-report-cover-subtitle,
+.p86-report-preview-paper[data-style-pack="blueprint"] .p86-report-cover-addr {
+  color: #67e8f9;
+}
+.p86-report-preview-paper[data-style-pack="blueprint"] .p86-report-cover-title {
+  color: #fff;
+  font-family: 'Futura', 'Trebuchet MS', sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  font-weight: 600;
+}
+.p86-report-preview-paper[data-style-pack="blueprint"] .p86-report-cover-meta {
+  border-top: 1px solid #67e8f9;
+}
+.p86-report-preview-paper[data-style-pack="blueprint"] .p86-report-cover-meta .k {
+  color: #67e8f9;
+}
+.p86-report-preview-paper[data-style-pack="blueprint"] .p86-report-cover-meta .v {
+  color: #fff;
+}
+.p86-report-preview-paper[data-style-pack="blueprint"] .p86-report-preview-section-label {
+  font-family: 'Futura', 'Trebuchet MS', sans-serif;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: #0e2a4a;
+}
+
+/* Editorial Spread — preview */
+.p86-report-preview-paper[data-style-pack="editorial-spread"] .p86-report-cover-rendered {
+  background: #fff;
+  padding: 100px 80px;
+  text-align: left;
+  border-bottom: 0;
+}
+.p86-report-preview-paper[data-style-pack="editorial-spread"] .p86-report-cover-title {
+  font-size: clamp(48px, 11vw, 88px);
+  line-height: 0.95;
+  letter-spacing: -2.5px;
+  font-weight: 900;
+  margin-top: 100px;
+}
+.p86-report-preview-paper[data-style-pack="editorial-spread"] .p86-report-cover-subtitle {
+  font-family: Georgia, serif;
+  font-style: italic;
+  font-size: 18px;
+  color: #333;
+  letter-spacing: 0;
+}
+.p86-report-preview-paper[data-style-pack="editorial-spread"] .p86-report-cover-addr {
+  margin-bottom: 120px;
+  font-size: 14px;
+  color: #555;
+}
+.p86-report-preview-paper[data-style-pack="editorial-spread"] .p86-report-cover-meta {
+  justify-content: flex-start;
+  gap: 40px;
+  border-top: 2px solid #000;
+}
+.p86-report-preview-paper[data-style-pack="editorial-spread"] .p86-report-preview-section-label {
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: 22px;
+  font-weight: 700;
+  font-style: italic;
+}
+
+/* Polaroid Journal — preview */
+.p86-report-preview-paper[data-style-pack="polaroid-journal"] {
+  background: #e8d9b8;
+}
+.p86-report-preview-paper[data-style-pack="polaroid-journal"] .p86-report-cover-rendered {
+  background: #e8d9b8;
+  padding: 80px 50px;
+  text-align: center;
+  border-bottom: 0;
+}
+.p86-report-preview-paper[data-style-pack="polaroid-journal"] .p86-report-cover-title {
+  font-family: 'Caveat', 'Patrick Hand', 'Bradley Hand', cursive;
+  color: #2e1f0d;
+  font-weight: 700;
+}
+.p86-report-preview-paper[data-style-pack="polaroid-journal"] .p86-report-cover-subtitle {
+  font-family: 'Caveat', cursive;
+  color: #6b4f2a;
+  font-style: normal;
+}
+.p86-report-preview-paper[data-style-pack="polaroid-journal"] .p86-report-cover-meta {
+  border-top: 1px dashed #6b4f2a;
+}
+.p86-report-preview-paper[data-style-pack="polaroid-journal"] .p86-report-preview-section-label {
+  font-family: 'Caveat', 'Patrick Hand', cursive;
+  font-size: 24px;
+  font-weight: 600;
+}
+.p86-report-preview-paper[data-style-pack="polaroid-journal"] .p86-report-preview-photo-img-wrap {
+  background: #fff;
+  border: 0;
+  padding: 6px 6px 22px 6px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+  border-radius: 2px;
+}
+.p86-report-preview-paper[data-style-pack="polaroid-journal"] .p86-report-preview-photo-cap {
+  font-family: 'Caveat', cursive;
+  font-size: 16px;
+  background: transparent;
+  border: 0;
+  color: #2e1f0d;
 }
 
 /* ─────────────────────────────────────────────────────────────────

@@ -4525,6 +4525,15 @@
   gap: 14px;
 }
 .p86-report-photo-sidedesc-text { white-space: pre-wrap; }
+/* Tools row at the top of the side description column — currently
+   just the side-swap button. Right-aligned so the affordance sits
+   in the corner near the description's outer edge. */
+.p86-report-photo-sidedesc-tools {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  margin-bottom: -8px;   /* tuck under the description's top padding */
+}
 /* Side-column tags — render as plain "🏷 tagname" lines, no pill
    chrome. CompanyCam-style: each tag stacks on its own line
    alongside the description, with just an icon prefix and plain
@@ -4563,29 +4572,37 @@
    bottom-right corner (when a side description/tags column is
    rendered). Click flips just THIS photo's descSide so users can
    stagger left/right within the same section. Visible on hover. */
+/* Side-swap button. Anchors to the side-description column itself
+   (top-right corner of the text block) instead of the photo card.
+   Reasons:
+   - The button controls THIS photo's descSide — putting it next to
+     the description it's about to move makes the affordance obvious
+   - Hover-only on the photo's bottom-right made it invisible on
+     touch devices (no :hover state on mobile) and easy to miss
+     on desktop. Always-visible now.
+   - The earlier bottom:36px / right:5px coords were also occluded by
+     the caption input + drag handle that share the photo card. */
 .p86-report-photo-sideswap {
-  position: absolute;
-  bottom: 36px;  /* sit above the caption input which is ~30px tall */
-  right: 5px;
-  width: 26px;
-  height: 26px;
+  align-self: flex-start;
+  margin-left: auto;     /* push to the far edge of the side column */
+  width: 24px;
+  height: 24px;
   border-radius: 50%;
   border: 0;
-  background: rgba(0,0,0,0.55);
-  color: #fff;
-  font-size: 12px;
+  background: rgba(0,0,0,0.08);
+  color: var(--text-dim, #555);
+  font-size: 11px;
   line-height: 1;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  opacity: 0;
-  transition: opacity 0.12s;
-  z-index: 3;
+  flex: 0 0 24px;
 }
-.p86-report-photo:hover .p86-report-photo-sideswap,
-.p86-report-photo-single:hover .p86-report-photo-sideswap { opacity: 1; }
-.p86-report-photo-sideswap:hover { background: rgba(79,140,255,0.85); }
+.p86-report-photo-sideswap:hover {
+  background: var(--accent, #4f8cff);
+  color: #fff;
+}
 /* Drag handle — top-left corner, visible on hover. */
 .p86-report-photo-drag,
 .p86-report-photo-single .p86-report-photo-drag {

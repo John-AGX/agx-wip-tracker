@@ -114,6 +114,60 @@
             '</div>' +
           '</div>';
       }
+    },
+    {
+      id: 'blueprint',
+      label: 'Blueprint',
+      description: 'Navy + cyan accents, faint grid, condensed sans. Technical drawing feel.',
+      preview: function () {
+        return '' +
+          '<div style="width:100%;height:100%;background:#0e2a4a;border-radius:6px;padding:8px;box-sizing:border-box;display:flex;flex-direction:column;gap:4px;background-image:linear-gradient(rgba(255,255,255,0.08) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,0.08) 1px,transparent 1px);background-size:10px 10px;">' +
+            '<div style="height:9px;background:#67e8f9;border-radius:1px;width:65%;"></div>' +
+            '<div style="height:3px;background:#67e8f9;width:40%;opacity:0.6;"></div>' +
+            '<div style="flex:1;display:grid;grid-template-columns:1fr 1fr;gap:3px;margin-top:3px;">' +
+              '<div style="background:rgba(255,255,255,0.1);border:1px solid #67e8f9;"></div>' +
+              '<div style="background:rgba(255,255,255,0.1);border:1px solid #67e8f9;"></div>' +
+            '</div>' +
+          '</div>';
+      }
+    },
+    {
+      id: 'editorial-spread',
+      label: 'Editorial Spread',
+      description: 'Magazine layout — huge display title, generous whitespace, numbered sections.',
+      preview: function () {
+        return '' +
+          '<div style="width:100%;height:100%;background:#fff;border-radius:6px;padding:10px 6px;box-sizing:border-box;display:flex;flex-direction:column;gap:3px;">' +
+            '<div style="height:18px;background:#000;width:90%;letter-spacing:-1px;"></div>' +
+            '<div style="display:flex;gap:5px;margin-top:4px;align-items:flex-start;">' +
+              '<div style="font-size:18px;font-weight:900;color:#000;line-height:1;">01</div>' +
+              '<div style="flex:1;display:flex;flex-direction:column;gap:2px;">' +
+                '<div style="height:3px;background:#000;width:80%;"></div>' +
+                '<div style="height:3px;background:#888;width:60%;"></div>' +
+              '</div>' +
+            '</div>' +
+            '<div style="flex:1;background:#e2e8f0;border-radius:2px;margin-top:3px;"></div>' +
+          '</div>';
+      }
+    },
+    {
+      id: 'polaroid-journal',
+      label: 'Polaroid Journal',
+      description: 'Kraft paper, slightly rotated photos, handwritten-style captions.',
+      preview: function () {
+        return '' +
+          '<div style="width:100%;height:100%;background:#d6c5a3;border-radius:6px;padding:8px;box-sizing:border-box;display:flex;flex-direction:column;gap:3px;">' +
+            '<div style="height:10px;background:#3a2817;border-radius:1px;width:55%;font-family:cursive;"></div>' +
+            '<div style="flex:1;display:flex;gap:4px;margin-top:3px;">' +
+              '<div style="flex:1;background:#fff;padding:3px 3px 8px;transform:rotate(-2deg);box-shadow:1px 1px 3px rgba(0,0,0,0.2);">' +
+                '<div style="background:#94a3b8;width:100%;height:80%;"></div>' +
+              '</div>' +
+              '<div style="flex:1;background:#fff;padding:3px 3px 8px;transform:rotate(1.5deg);box-shadow:1px 1px 3px rgba(0,0,0,0.2);">' +
+                '<div style="background:#94a3b8;width:100%;height:80%;"></div>' +
+              '</div>' +
+            '</div>' +
+          '</div>';
+      }
     }
   ];
 

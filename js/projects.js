@@ -2770,7 +2770,7 @@
     // reference and stays where it is. The report layout uses NEUTRAL
     // tag chips (no hue color) so reports print clean — colored chips
     // stay in the project feed / photo viewer / filter strips.
-    function photoSideColumnHTML(att) {
+    function photoSideColumnHTML(att, currentSide) {
       if (!att) return '';
       var hasDesc = !!att.caption;
       var hasTags = Array.isArray(att.tags) && att.tags.length > 0;
@@ -2781,6 +2781,20 @@
       // compact.
       if (!hasDesc && !hasTags && !hasUploader && !hasUploadedAt) return '';
       var html = '<div class="p86-report-photo-sidedesc">';
+      // Side-swap button — top of the column, always visible (no
+      // hover gate so mobile users can find it). Click flips THIS
+      // photo's descSide between left/right.
+      var swapBtn = '';
+      if (typeof currentSide === 'string') {
+        var nextSide = (currentSide === 'left') ? 'right' : 'left';
+        var glyph = (currentSide === 'left') ? '&#x25B6;' : '&#x25C0;';
+        swapBtn = '<button type="button" class="p86-report-photo-sideswap" data-side-swap="' + nextSide + '" title="Move description to the other side">' + glyph + '</button>';
+      }
+      // Put the swap button in a small row at the top of the side
+      // column. If there's no metadata above, the row stands alone;
+      // if there's a description, the row sits flush to the right
+      // of the first line.
+      if (swapBtn) html += '<div class="p86-report-photo-sidedesc-tools">' + swapBtn + '</div>';
       if (hasDesc) html += '<div class="p86-report-photo-sidedesc-text">' + escapeHTML(att.caption) + '</div>';
       // CompanyCam-style metadata list — each item is an icon + the
       // value, stacked vertically. No pill chrome (handled by the
@@ -2887,11 +2901,10 @@
                   photoDragHandleHTML() +
                   '<img src="' + escapeAttr(att.thumb_url || att.web_url) + '" alt="" data-open-photo="' + escapeAttr(pid) + '" />' +
                   photoAnnotationCanvasHTML(att, pid) +
-                  (hasSide ? photoSideSwapHTML(photoSide) : '') +
                   '<button type="button" class="p86-report-photo-remove" data-rm-photo="' + escapeAttr(pid) + '" title="Remove from section">&times;</button>' +
                   '<input class="p86-report-photo-caption" value="' + escapeAttr(caption) + '" data-caption-input="' + escapeAttr(pid) + '" placeholder="Caption (optional)" />' +
                 '</div>' +
-                photoSideColumnHTML(att) +
+                photoSideColumnHTML(att, hasSide ? photoSide : null) +
               '</div>';
             }).join('')) +
       '</div>';
@@ -2921,11 +2934,10 @@
                   photoDragHandleHTML() +
                   '<img src="' + escapeAttr(att.web_url || att.thumb_url) + '" alt="" data-open-photo="' + escapeAttr(pid) + '" />' +
                   photoAnnotationCanvasHTML(att, pid) +
-                  (hasSide ? photoSideSwapHTML(photoSide) : '') +
                   '<button type="button" class="p86-report-photo-remove" data-rm-photo="' + escapeAttr(pid) + '" title="Remove">&times;</button>' +
                   '<input class="p86-report-photo-caption" value="' + escapeAttr(caption) + '" data-caption-input="' + escapeAttr(pid) + '" placeholder="Caption (optional)" />' +
                 '</div>' +
-                photoSideColumnHTML(att) +
+                photoSideColumnHTML(att, hasSide ? photoSide : null) +
               '</div>';
             }).join('')) +
       '</div>';
