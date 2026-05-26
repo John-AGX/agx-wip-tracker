@@ -1668,6 +1668,8 @@
           id: 'sec_' + Date.now() + '_' + i,
           label: s.label || 'Section',
           layout: s.layout || 'photo-grid',
+          photoSize: s.photoSize || 'small',
+          descSide:  s.descSide  || 'right',
           photo_ids: [],
           captions: {},
           text_body: '',
@@ -1810,6 +1812,13 @@
           // onto the in-memory section so the editor can render the
           // right body. Older reports default to photo-grid.
           layout: s.layout || 'photo-grid',
+          // Presentation knobs — photoSize controls grid columns (S=4
+          // M=3 L=2) or stack-mode photo max-width (S=50% M=70%
+          // L=100%). descSide picks which side the description + tags
+          // read on when a photo has either. Defaults preserve the
+          // pre-toggle behavior so existing reports look identical.
+          photoSize: s.photoSize || 'small',
+          descSide:  s.descSide  || 'right',
           photo_ids: (s.photo_ids || []).slice(),
           captions: Object.assign({}, s.captions || {}),
           text_body: s.text_body || '',
@@ -2143,36 +2152,43 @@
         if (labelEl) labelEl.addEventListener('input', function(e) {
           state.sections[sIdx].label = e.target.value;
         });
-        // Layout switcher — confirm before clearing if the section
-        // has content the new layout can't represent (e.g. switching
-        // a photo-grid with 5 photos to text-block).
-        var layoutSel = sectionEl.querySelector('.p86-report-section-layout');
-        if (layoutSel) layoutSel.addEventListener('change', function(e) {
-          var prevLayout = state.sections[sIdx].layout || 'photo-grid';
-          var nextLayout = e.target.value;
-          if (prevLayout === nextLayout) return;
-          // Detect "would lose content" cases. Switching INTO text-block
-          // or attachment-list from a photo layout loses photos; vice
-          // versa loses the text body. Bail with a confirm.
-          var hasPhotos = (state.sections[sIdx].photo_ids || []).length > 0;
-          var hasText = !!(state.sections[sIdx].text_body || '').trim();
-          var hasAttachments = (state.sections[sIdx].attachment_ids || []).length > 0;
-          var losingContent =
-            (prevLayout !== 'text-block' && prevLayout !== 'attachment-list' && (nextLayout === 'text-block' || nextLayout === 'attachment-list') && hasPhotos) ||
-            (prevLayout === 'text-block' && nextLayout !== 'text-block' && hasText) ||
-            (prevLayout === 'attachment-list' && nextLayout !== 'attachment-list' && hasAttachments);
-          if (losingContent && !window.confirm('Switching layouts will clear the current ' + (prevLayout === 'text-block' ? 'text' : (prevLayout === 'attachment-list' ? 'file list' : 'photos')) + ' in this section. Continue?')) {
-            // Revert the dropdown.
-            e.target.value = prevLayout;
-            return;
-          }
-          state.sections[sIdx].layout = nextLayout;
-          // before-after caps to 2 photos.
-          if (nextLayout === 'before-after' && (state.sections[sIdx].photo_ids || []).length > 2) {
-            state.sections[sIdx].photo_ids = state.sections[sIdx].photo_ids.slice(0, 2);
-          }
-          paint();
-          debouncedSave();
+        // Section toggle buttons — three groups (layout / photoSize /
+        // descSide). Each click is mutually exclusive within its group.
+        // The layout group preserves the old content-loss confirm.
+        sectionEl.querySelectorAll('.p86-report-section-iconbtn').forEach(function(btn) {
+          btn.addEventListener('click', function() {
+            var group = btn.getAttribute('data-toggle');
+            var value = btn.getAttribute('data-value');
+            if (!group || !value) return;
+
+            if (group === 'layout') {
+              var prevLayout = state.sections[sIdx].layout || 'photo-grid';
+              if (prevLayout === value) return;
+              var hasPhotos = (state.sections[sIdx].photo_ids || []).length > 0;
+              var hasText = !!(state.sections[sIdx].text_body || '').trim();
+              var hasAttachments = (state.sections[sIdx].attachment_ids || []).length > 0;
+              var losingContent =
+                (prevLayout !== 'text-block' && prevLayout !== 'attachment-list' && (value === 'text-block' || value === 'attachment-list') && hasPhotos) ||
+                (prevLayout === 'text-block' && value !== 'text-block' && hasText) ||
+                (prevLayout === 'attachment-list' && value !== 'attachment-list' && hasAttachments);
+              if (losingContent && !window.confirm('Switching layouts will clear the current ' + (prevLayout === 'text-block' ? 'text' : (prevLayout === 'attachment-list' ? 'file list' : 'photos')) + ' in this section. Continue?')) {
+                return;
+              }
+              state.sections[sIdx].layout = value;
+              // before-after caps to 2 photos.
+              if (value === 'before-after' && (state.sections[sIdx].photo_ids || []).length > 2) {
+                state.sections[sIdx].photo_ids = state.sections[sIdx].photo_ids.slice(0, 2);
+              }
+            } else if (group === 'photoSize') {
+              state.sections[sIdx].photoSize = value;
+            } else if (group === 'descSide') {
+              state.sections[sIdx].descSide = value;
+            } else {
+              return;
+            }
+            paint();
+            debouncedSave();
+          });
         });
         var addBtn = sectionEl.querySelector('.p86-report-section-add');
         if (addBtn) addBtn.addEventListener('click', function() {
@@ -2377,6 +2393,8 @@
           id: 'sec_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
           label: label,
           layout: 'photo-grid',
+          photoSize: 'small',
+          descSide:  'right',
           photo_ids: [],
           captions: {},
           text_body: '',
@@ -2400,24 +2418,72 @@
     // sectionHTML dispatches on layout; each layout has its own
     // body renderer. The shared header carries a dropdown so the
     // user can switch any section after creation.
-    var LAYOUT_OPTIONS = [
-      { id: 'photo-grid',      label: 'Photo grid' },
-      { id: 'single-photo',    label: 'One photo per row' },
-      { id: 'before-after',    label: 'Before / After' },
-      { id: 'text-block',      label: 'Text only' },
-      { id: 'attachment-list', label: 'File attachments' }
+    // Layout-type buttons (replaces the old <select>). Each entry
+    // pairs a layout id with the glyph + short label shown on the
+    // icon button. Mutually exclusive — clicking one swaps the
+    // section's layout (with the same content-loss confirm the
+    // dropdown's change handler used).
+    var LAYOUT_BUTTONS = [
+      { id: 'photo-grid',      glyph: '⊞', label: 'Grid'  },  // ⊞
+      { id: 'single-photo',    glyph: '☰', label: 'Stack' },  // ☰
+      { id: 'before-after',    glyph: '⇆', label: 'B/A'   },  // ⇆
+      { id: 'text-block',      glyph: '¶', label: 'Text'  },  // ¶
+      { id: 'attachment-list', glyph: '\u{1F4CE}', label: 'Files' } // 📎
     ];
+    var SIZE_BUTTONS = [
+      { id: 'small',  label: 'S' },
+      { id: 'medium', label: 'M' },
+      { id: 'large',  label: 'L' }
+    ];
+    var DESC_SIDE_BUTTONS = [
+      { id: 'left',  glyph: '◀' },  // ◀
+      { id: 'right', glyph: '▶' }   // ▶
+    ];
+
+    function isPhotoLayout(layout) {
+      return layout === 'photo-grid' || layout === 'single-photo' || layout === 'before-after';
+    }
+    // Does this section actually have anything (description or tags)
+    // that would render in a side column? If not, hide the descSide
+    // toggle — picking a side for nothing is noise.
+    function sectionHasSideContent(section) {
+      var ids = section.photo_ids || [];
+      for (var i = 0; i < ids.length; i++) {
+        var att = allPhotos.find(function(a) { return a.id === ids[i]; });
+        if (att && (att.caption || (Array.isArray(att.tags) && att.tags.length))) return true;
+      }
+      return false;
+    }
+
+    function toggleGroupHTML(name, buttons, activeId) {
+      return '<div class="p86-report-section-toggles" data-toggle-group="' + name + '">' +
+        buttons.map(function(b) {
+          var active = (b.id === activeId) ? ' active' : '';
+          var inner = '';
+          if (b.glyph) inner += '<span class="p86-report-section-iconbtn-glyph">' + b.glyph + '</span>';
+          if (b.label) inner += '<span class="p86-report-section-iconbtn-label">' + escapeHTML(b.label) + '</span>';
+          return '<button type="button" class="p86-report-section-iconbtn' + active + '" data-toggle="' + name + '" data-value="' + escapeAttr(b.id) + '" title="' + escapeAttr(b.label || b.id) + '">' +
+            inner +
+          '</button>';
+        }).join('') +
+      '</div>';
+    }
 
     function sectionHTML(section) {
       var layout = section.layout || 'photo-grid';
-      var layoutSelect = '<select class="p86-report-section-layout" title="Section layout">' +
-        LAYOUT_OPTIONS.map(function(o) {
-          return '<option value="' + escapeAttr(o.id) + '"' + (o.id === layout ? ' selected' : '') + '>' + escapeHTML(o.label) + '</option>';
-        }).join('') +
-      '</select>';
+      var photoSize = section.photoSize || 'small';
+      var descSide  = section.descSide  || 'right';
+
+      var layoutToggles = toggleGroupHTML('layout', LAYOUT_BUTTONS, layout);
+      var sizeToggles = isPhotoLayout(layout)
+        ? toggleGroupHTML('photoSize', SIZE_BUTTONS, photoSize)
+        : '';
+      var descToggles = (isPhotoLayout(layout) && sectionHasSideContent(section))
+        ? toggleGroupHTML('descSide', DESC_SIDE_BUTTONS, descSide)
+        : '';
 
       var addBtn = '';
-      if (layout === 'photo-grid' || layout === 'single-photo' || layout === 'before-after') {
+      if (isPhotoLayout(layout)) {
         var addLabel = layout === 'before-after' ? '+ Pick 2 photos' : '+ Add photos';
         addBtn = '<button class="ee-btn secondary p86-report-section-add">' + addLabel + '</button>';
       } else if (layout === 'attachment-list') {
@@ -2435,7 +2501,9 @@
         '<div class="p86-report-section-header">' +
           '<input class="p86-report-section-label" value="' + escapeAttr(section.label) + '" placeholder="Section name" />' +
           '<div class="p86-report-section-actions">' +
-            layoutSelect +
+            layoutToggles +
+            sizeToggles +
+            descToggles +
             addBtn +
             '<button class="ee-btn secondary p86-report-section-remove">Remove</button>' +
           '</div>' +
@@ -2444,16 +2512,33 @@
       '</div>';
     }
 
-    // Renders the photo's OWN description (att.caption) as a side
-    // panel next to the image. The bottom-of-card input remains for
-    // the report-section caption (figure-reference style). Only shown
-    // when the photo actually has a description, so plain photos stay
-    // compact.
-    function photoSideDescHTML(att) {
-      if (!att || !att.caption) return '';
-      return '<div class="p86-report-photo-sidedesc" title="Photo description (from the viewer panel)">' +
-        escapeHTML(att.caption) +
-      '</div>';
+    // Renders the photo's OWN description (att.caption) + tags into
+    // a side column. Only emitted when at least one of the two has
+    // content, so plain photos keep the compact stacked layout. The
+    // bottom-of-card caption input is the report-section figure
+    // reference and stays where it is.
+    function photoSideColumnHTML(att) {
+      if (!att) return '';
+      var hasDesc = !!att.caption;
+      var hasTags = Array.isArray(att.tags) && att.tags.length > 0;
+      if (!hasDesc && !hasTags) return '';
+      var html = '<div class="p86-report-photo-sidedesc">';
+      if (hasDesc) html += escapeHTML(att.caption);
+      if (hasTags) {
+        html += '<div class="p86-report-photo-sidetags">' +
+          att.tags.map(function(t) {
+            return '<span class="p86-report-photo-sidetag" style="--h:' + hueFor(t) + ';">' + escapeHTML(t) + '</span>';
+          }).join('') +
+        '</div>';
+      }
+      html += '</div>';
+      return html;
+    }
+    // Does this attachment carry anything that would render in the
+    // side column? Used to apply the .has-sidedesc grid class only
+    // when something is actually there.
+    function attHasSideContent(att) {
+      return !!(att && (att.caption || (Array.isArray(att.tags) && att.tags.length)));
     }
     // Tile-level affordances: drag handle (top-left, hover-only) +
     // existing remove button. The whole card is draggable so users
@@ -2463,22 +2548,27 @@
     }
 
     function sectionPhotoGridBodyHTML(section) {
-      return '<div class="p86-report-section-photos">' +
+      var size = section.photoSize || 'small';
+      var descSide = section.descSide || 'right';
+      return '<div class="p86-report-section-photos size-' + escapeAttr(size) + '">' +
         (section.photo_ids.length === 0
           ? '<div class="p86-proj-empty-line" style="grid-column:1/-1;">No photos in this section yet.</div>'
           : section.photo_ids.map(function(pid, idx) {
               var att = allPhotos.find(function(a) { return a.id === pid; });
               if (!att) return '<div class="p86-report-photo p86-report-photo-missing">(photo deleted)</div>';
               var caption = section.captions[pid] || '';
-              var hasDesc = !!(att.caption);
-              return '<div class="p86-report-photo' + (hasDesc ? ' has-sidedesc' : '') +
+              var hasSide = attHasSideContent(att);
+              var sideClasses = '';
+              if (hasSide) sideClasses += ' has-sidedesc';
+              if (hasSide && descSide === 'left') sideClasses += ' desc-left';
+              return '<div class="p86-report-photo' + sideClasses +
                   '" draggable="true" data-photo-id="' + escapeAttr(pid) + '" data-photo-idx="' + idx + '">' +
                 photoDragHandleHTML() +
                 '<div class="p86-report-photo-mainstack">' +
                   '<img src="' + escapeAttr(att.thumb_url || att.web_url) + '" alt="" data-open-photo="' + escapeAttr(pid) + '" />' +
                   '<input class="p86-report-photo-caption" value="' + escapeAttr(caption) + '" data-caption-input="' + escapeAttr(pid) + '" placeholder="Caption (optional)" />' +
                 '</div>' +
-                photoSideDescHTML(att) +
+                photoSideColumnHTML(att) +
                 '<button type="button" class="p86-report-photo-remove" data-rm-photo="' + escapeAttr(pid) + '" title="Remove from section">&times;</button>' +
               '</div>';
             }).join('')) +
@@ -2486,8 +2576,12 @@
     }
 
     function sectionSinglePhotoBodyHTML(section) {
-      // One photo per row, full width. Reuses the caption input
-      // pattern so the existing wiring keeps working.
+      // One photo per row. Reuses the caption input pattern so the
+      // existing wiring keeps working. photoSize controls each
+      // card's max-width (S=50%, M=70%, L=100%) so the section can
+      // leave room for descriptions or pack photos tighter.
+      var size = section.photoSize || 'small';
+      var descSide = section.descSide || 'right';
       return '<div class="p86-report-section-singles">' +
         (section.photo_ids.length === 0
           ? '<div class="p86-proj-empty-line">No photos yet — tap "+ Add photos".</div>'
@@ -2495,15 +2589,18 @@
               var att = allPhotos.find(function(a) { return a.id === pid; });
               if (!att) return '<div class="p86-report-photo-single p86-report-photo-missing">(photo deleted)</div>';
               var caption = section.captions[pid] || '';
-              var hasDesc = !!(att.caption);
-              return '<div class="p86-report-photo-single' + (hasDesc ? ' has-sidedesc' : '') +
+              var hasSide = attHasSideContent(att);
+              var sideClasses = '';
+              if (hasSide) sideClasses += ' has-sidedesc';
+              if (hasSide && descSide === 'left') sideClasses += ' desc-left';
+              return '<div class="p86-report-photo-single size-' + escapeAttr(size) + sideClasses +
                   '" draggable="true" data-photo-id="' + escapeAttr(pid) + '" data-photo-idx="' + idx + '">' +
                 photoDragHandleHTML() +
                 '<div class="p86-report-photo-mainstack">' +
                   '<img src="' + escapeAttr(att.web_url || att.thumb_url) + '" alt="" data-open-photo="' + escapeAttr(pid) + '" />' +
                   '<input class="p86-report-photo-caption" value="' + escapeAttr(caption) + '" data-caption-input="' + escapeAttr(pid) + '" placeholder="Caption (optional)" />' +
                 '</div>' +
-                photoSideDescHTML(att) +
+                photoSideColumnHTML(att) +
                 '<button type="button" class="p86-report-photo-remove" data-rm-photo="' + escapeAttr(pid) + '" title="Remove">&times;</button>' +
               '</div>';
             }).join('')) +

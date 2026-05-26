@@ -4133,12 +4133,58 @@
   border-radius: 4px;
 }
 .p86-report-section-label:focus { border-color: var(--border, #333); outline: none; }
-.p86-report-section-actions { display: flex; gap: 6px; }
+.p86-report-section-actions { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+/* Icon-toggle button row replaces the old layout <select>. Buttons
+   are grouped into segmented bars: layout type / photo size / desc
+   side. Active button highlights with the yellow accent so the
+   current state is unambiguous. */
+.p86-report-section-toggles {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border, #333);
+  border-radius: 6px;
+  background: rgba(255,255,255,0.02);
+}
+.p86-report-section-iconbtn {
+  background: transparent;
+  border: 0;
+  color: var(--text-dim, #aaa);
+  padding: 4px 8px;
+  font-size: 12px;
+  line-height: 1;
+  border-radius: 4px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: inherit;
+}
+.p86-report-section-iconbtn:hover { color: var(--text, #fff); background: rgba(255,255,255,0.04); }
+.p86-report-section-iconbtn.active {
+  background: rgba(251,191,36,0.12);
+  color: #fbbf24;
+  box-shadow: inset 0 0 0 1px rgba(251,191,36,0.35);
+}
+.p86-report-section-iconbtn-glyph { font-size: 13px; }
+.p86-report-section-iconbtn-label { font-size: 11px; font-weight: 600; letter-spacing: 0.3px; }
 .p86-report-section-photos {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
   gap: 10px;
 }
+/* Photo size modifiers — columns per row in grid mode. Mobile
+   breakpoint below collapses these to fewer columns regardless. */
+.p86-report-section-photos.size-small  { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.p86-report-section-photos.size-medium { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.p86-report-section-photos.size-large  { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+/* Stack mode photo size — controls max-width so users can leave
+   room for the side description. The card stays centered when
+   smaller than 100%. */
+.p86-report-photo-single.size-small  { max-width: 50%; }
+.p86-report-photo-single.size-medium { max-width: 70%; }
+.p86-report-photo-single.size-large  { max-width: 100%; }
 
 /* Wave B3 layout variants — body styles for non-photo-grid sections.
    The header (label + layout dropdown + add/remove buttons) is
@@ -4316,13 +4362,32 @@
   background: var(--card-bg, #0f0f1e);
 }
 /* When the underlying attachment has a description (att.caption set
-   via the photo viewer), the card grows a side column to show it
-   beside the image. Plain photos keep the compact stacked layout. */
+   via the photo viewer) OR tags, the card grows a side column to
+   show them beside the image. Plain photos keep the compact stacked
+   layout. The side column reads as flowing body text — no card
+   background, just a 1px divider between image + text. */
 .p86-report-photo.has-sidedesc,
 .p86-report-photo-single.has-sidedesc {
   display: grid;
   grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
   align-items: stretch;
+}
+/* When descSide is 'left', flip the grid so the description renders
+   on the LEFT of the photo. Both the column order and the divider
+   side flip together. */
+.p86-report-photo.has-sidedesc.desc-left,
+.p86-report-photo-single.has-sidedesc.desc-left {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+}
+.p86-report-photo.has-sidedesc.desc-left .p86-report-photo-mainstack,
+.p86-report-photo-single.has-sidedesc.desc-left .p86-report-photo-mainstack {
+  order: 2;
+}
+.p86-report-photo.has-sidedesc.desc-left .p86-report-photo-sidedesc,
+.p86-report-photo-single.has-sidedesc.desc-left .p86-report-photo-sidedesc {
+  order: 1;
+  border-left: 0;
+  border-right: 1px solid var(--border, #333);
 }
 .p86-report-photo-mainstack {
   display: flex;
@@ -4330,15 +4395,32 @@
   min-width: 0;
 }
 .p86-report-photo-sidedesc {
-  padding: 8px 10px;
-  font-size: 12px;
-  line-height: 1.45;
+  padding: 6px 12px;
+  font-size: 12.5px;
+  line-height: 1.5;
   color: var(--text, #fff);
-  background: rgba(79, 140, 255, 0.04);
   border-left: 1px solid var(--border, #333);
   white-space: pre-wrap;
   overflow-y: auto;
   max-height: 100%;
+}
+/* Side-column tag chips — sit under the description text. Colored
+   per-tag via inline hue var (matches hueFor() in projects.js). No
+   leading "#" so they read as plain labels. */
+.p86-report-photo-sidetags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+.p86-report-photo-sidetag {
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: hsl(var(--h, 200), 70%, 88%);
+  color: hsl(var(--h, 200), 70%, 22%);
+  white-space: nowrap;
 }
 /* Drag handle — top-left corner, visible on hover. */
 .p86-report-photo-drag,
