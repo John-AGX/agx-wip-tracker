@@ -857,6 +857,32 @@
     return { subtotal: subtotal, markedUp: markedUp };
   }
 
+  // Target-margin override. When est.targetMarginLocked is true and
+  // est.targetMargin is a sane percent (0–99), the proposal abandons
+  // bottom-up markup math and back-computes the marked-up subtotal so
+  // gross margin lands exactly on the target:
+  //
+  //     markedUp = subtotal / (1 - targetMargin / 100)
+  //
+  // Per-line + per-section markups are still stored (so unlocking
+  // restores them), they just don't drive the total while locked.
+  // Each INCLUDED group's markedUp scales to the same target so the
+  // group breakdown stays consistent (sum of group markedUps equals
+  // the override total). Excluded groups aren't part of the proposal,
+  // so they keep their own line-driven markup for reference.
+  function targetMarginActive(est) {
+    if (!est) return false;
+    if (!est.targetMarginLocked) return false;
+    var m = num(est.targetMargin);
+    return m > 0 && m < 100;
+  }
+  function applyTargetMargin(subtotal, est) {
+    var m = num(est.targetMargin);
+    var divisor = 1 - m / 100;
+    if (divisor <= 0) return subtotal; // sanity guard
+    return subtotal / divisor;
+  }
+
   function computeTotals() {
     var est = getEstimate();
     if (!est) return {};
@@ -867,8 +893,15 @@
     var markedUp = 0;
     var includedGroups = [];
     var excludedGroups = [];
+    var targetMode = targetMarginActive(est);
     (est.alternates || []).forEach(function(alt) {
       var per = markedUpForGroup(est, alt);
+      // While target-margin is locked, every included group's markedUp
+      // gets rebuilt off subtotal so the per-group breakdown sums to
+      // the override total. Excluded groups keep their natural markup.
+      if (targetMode && !alt.excludeFromTotal) {
+        per = { subtotal: per.subtotal, markedUp: applyTargetMargin(per.subtotal, est) };
+      }
       if (alt.excludeFromTotal) {
         excludedGroups.push({ alt: alt, subtotal: per.subtotal, markedUp: per.markedUp });
       } else {
@@ -894,6 +927,9 @@
     }).length;
     var activeAlt = getActiveAlternate();
     var activePer = activeAlt ? markedUpForGroup(est, activeAlt) : { subtotal: 0, markedUp: 0 };
+    if (targetMode && activeAlt && !activeAlt.excludeFromTotal) {
+      activePer = { subtotal: activePer.subtotal, markedUp: applyTargetMargin(activePer.subtotal, est) };
+    }
     return {
       subtotal: subtotal,
       markupAmount: markedUp - subtotal,
@@ -909,7 +945,9 @@
       includedGroups: includedGroups,
       excludedGroups: excludedGroups,
       activeGroupSubtotal: activePer.markedUp,
-      activeGroupExcluded: !!(activeAlt && activeAlt.excludeFromTotal)
+      activeGroupExcluded: !!(activeAlt && activeAlt.excludeFromTotal),
+      targetMarginLocked: targetMode,
+      targetMargin: num(est.targetMargin)
     };
   }
 
@@ -936,16 +974,154 @@
     var marginPct = (t.markedUp > 0)
       ? (((t.markedUp - t.subtotal) / t.markedUp) * 100)
       : null;
-    var marginText = (marginPct == null) ? '—' : marginPct.toFixed(1) + '%';
+    // The Margin chip is interactive: lock icon toggles between
+    // "computed from line markups" (open lock, read-only) and "target
+    // locked" (closed gold lock, editable input that back-calculates
+    // markup to hit the target). When locked, the input is typeable
+    // and bound to est.targetMargin via debounced save.
+    var marginChipHTML = renderMarginChip(t, marginPct);
     totalsEl.innerHTML =
       groupCountChip +
       chip('Subtotal', fmtCurrency(t.subtotal), 'var(--text,#fff)') +
       chip('Markup', fmtCurrency(t.markupAmount), 'var(--yellow,#fbbf24)') +
       chip('Tax + Fees', fmtCurrency(t.feeFlat + t.feePctAmount + t.taxAmount), 'var(--accent,#60a5fa)') +
       chip('Proposal Total', fmtCurrency(t.total), null, 'ee-grand-total') +
-      chip('Margin', marginText, 'var(--green,#34d399)') +
+      marginChipHTML +
       chip('Lines', t.lineCount, 'var(--text-dim,#888)');
+    wireMarginChip();
     // Also refresh the detailed breakdown card under the line items.
+    renderPricingBreakdown();
+  }
+
+  // The Margin chip. Two modes:
+  //   Unlocked (🔓, default): margin = computed from line markups,
+  //                            input is read-only display.
+  //   Locked   (🔒, gold):    target margin, input editable, total
+  //                            back-computed so margin lands here.
+  // Click the lock icon to toggle. When locking for the first time we
+  // seed the target with the currently-displayed computed margin so
+  // there's no jarring price jump on the first click.
+  function renderMarginChip(t, computedMarginPct) {
+    var locked = !!t.targetMarginLocked;
+    // Seed the input value:
+    //  - Locked: show est.targetMargin (1 decimal)
+    //  - Unlocked: show the computed margin %
+    var displayPct = locked
+      ? (Number(t.targetMargin || 0).toFixed(1))
+      : (computedMarginPct == null ? '' : computedMarginPct.toFixed(1));
+    var lockEmoji = locked ? '&#x1F512;' : '&#x1F513;';   // 🔒 / 🔓
+    var lockColor = locked ? '#fbbf24' : 'var(--text-dim,#888)';
+    var lockTitle = locked
+      ? 'Locked to target margin — click to release and use line markups'
+      : 'Click to lock a target margin and back-calculate markup';
+    var inputColor = locked ? '#fbbf24' : 'var(--green,#34d399)';
+    var inputBg = locked ? 'rgba(251,191,36,0.06)' : 'transparent';
+    var inputBorder = locked ? '1px solid rgba(251,191,36,0.4)' : '1px solid transparent';
+    var readonlyAttr = locked ? '' : ' readonly';
+    var placeholder = (displayPct === '') ? '—' : '';
+    return '<div style="background:rgba(255,255,255,0.03);border:1px solid var(--border,#333);border-radius:6px;padding:6px 12px;min-width:120px;">' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;gap:6px;">' +
+        '<div style="font-size:9px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;">' +
+          (locked ? 'Target Margin' : 'Margin') +
+        '</div>' +
+        '<button type="button" id="ee-margin-lock" title="' + lockTitle + '" ' +
+          'style="background:transparent;border:0;cursor:pointer;font-size:13px;color:' + lockColor + ';padding:0;line-height:1;">' +
+          lockEmoji +
+        '</button>' +
+      '</div>' +
+      '<div style="display:flex;align-items:baseline;gap:2px;margin-top:2px;">' +
+        // displayPct is always a numeric string (or empty) — no need
+        // to escape; it can never contain HTML special chars.
+        '<input id="ee-margin-input" type="text" inputmode="decimal" value="' + displayPct + '" placeholder="' + placeholder + '"' + readonlyAttr +
+          ' style="width:60px;background:' + inputBg + ';border:' + inputBorder + ';color:' + inputColor +
+          ';font-size:14px;font-weight:700;font-family:\'SF Mono\',\'Fira Code\',monospace;border-radius:4px;padding:1px 4px;outline:none;text-align:right;" />' +
+        '<span style="color:' + inputColor + ';font-size:14px;font-weight:700;font-family:\'SF Mono\',\'Fira Code\',monospace;">%</span>' +
+      '</div>' +
+    '</div>';
+  }
+
+  function wireMarginChip() {
+    var lockBtn = document.getElementById('ee-margin-lock');
+    var input = document.getElementById('ee-margin-input');
+    if (lockBtn) {
+      lockBtn.onclick = function() {
+        var est = getEstimate();
+        if (!est) return;
+        if (est.targetMarginLocked) {
+          // Unlock — line markups drive math again. Keep the target
+          // value so re-locking instantly restores it.
+          est.targetMarginLocked = false;
+        } else {
+          // Lock — seed target with the current computed margin if
+          // the user hasn't set one yet, so prices don't jump.
+          if (!est.targetMargin || num(est.targetMargin) <= 0) {
+            var t = computeTotals();
+            var seed = (t.markedUp > 0)
+              ? (((t.markedUp - t.subtotal) / t.markedUp) * 100)
+              : 0;
+            est.targetMargin = +seed.toFixed(1);
+          }
+          est.targetMarginLocked = true;
+        }
+        renderTotals();
+        debouncedSave();
+      };
+    }
+    if (input && !input.readOnly) {
+      input.oninput = function() {
+        var est = getEstimate();
+        if (!est) return;
+        var v = parseFloat(input.value);
+        if (!isFinite(v)) v = 0;
+        if (v < 0) v = 0;
+        if (v > 99) v = 99;
+        est.targetMargin = v;
+        // Re-render totals + breakdown WITHOUT re-rendering the chip
+        // input (which would steal focus from the user mid-type).
+        renderTotalsExceptMargin();
+        debouncedSave();
+      };
+      input.onblur = function() {
+        // On blur, re-render fully so the input's value is normalized
+        // (e.g. typing "35." → "35.0").
+        renderTotals();
+      };
+      // Select all on focus so typing replaces the previous value
+      // immediately — matches the feel of a single-tap edit.
+      input.onfocus = function() {
+        try { input.select(); } catch (e) {}
+      };
+    }
+  }
+
+  // Partial refresh that updates every chip EXCEPT the margin input
+  // (so the input doesn't lose focus while the user is typing). Used
+  // by the margin-input handler to live-update the proposal total.
+  function renderTotalsExceptMargin() {
+    var totalsEl = document.getElementById('ee-totals');
+    if (!totalsEl) return;
+    var t = computeTotals();
+    // Update each non-margin chip by querying the DOM. The Margin chip
+    // is rebuilt on lock toggle / blur; mid-input we only update what
+    // the user can see CHANGE because of their typing.
+    var chips = totalsEl.children;
+    // Order matters; matches renderTotals layout: [groupCount?] subtotal,
+    // markup, tax+fees, total, margin, lines.
+    var i = 0;
+    var hasGroupCount = (t.includedGroups && t.includedGroups.length > 1);
+    if (hasGroupCount) i++;
+    // i=subtotal, i+1=markup, i+2=tax+fees, i+3=total, i+4=margin, i+5=lines
+    function setChipValue(idx, value, cls) {
+      var c = chips[idx];
+      if (!c) return;
+      var v = c.children[1] || c.querySelector('div:nth-child(2)');
+      if (v) v.textContent = value;
+      if (cls) v.className = cls;
+    }
+    setChipValue(i + 1, fmtCurrency(t.markupAmount));
+    setChipValue(i + 2, fmtCurrency(t.feeFlat + t.feePctAmount + t.taxAmount));
+    setChipValue(i + 3, fmtCurrency(t.total));
+    // Skip i+4 (margin chip — user is typing in its input).
     renderPricingBreakdown();
   }
 
@@ -991,6 +1167,16 @@
       html += '<div style="border-top:1px solid var(--border,#333);margin:8px 0;"></div>';
     }
     html += row('Subtotal (cost, all included groups)', t.subtotal);
+    // When target-margin is locked, the Markup row is BACK-CALCULATED
+    // to hit the target — not summed from line markups. Surface that
+    // so the user sees why the markup number is what it is.
+    if (t.targetMarginLocked) {
+      var pct = Number(t.targetMargin || 0).toFixed(1);
+      html += '<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;font-size:11px;color:#fbbf24;">' +
+        '<span>&#x1F512; Target margin locked &middot; <strong>' + pct + '%</strong></span>' +
+        '<span style="font-family:\'SF Mono\',monospace;">markup back-computed</span>' +
+      '</div>';
+    }
     html += row('Markup', t.markupAmount, { color: 'var(--yellow,#fbbf24)' });
     html += row('Marked-Up Subtotal', t.markedUp, { divider: true });
     if (t.feeFlat) html += row('+ Flat Fee', t.feeFlat, { color: 'var(--accent,#60a5fa)' });
