@@ -4174,16 +4174,18 @@
   grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
   gap: 10px;
 }
-/* Photo size modifiers — columns per row in grid mode. Mobile
-   breakpoint below collapses these to fewer columns regardless. */
-.p86-report-section-photos.size-small  { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-.p86-report-section-photos.size-medium { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.p86-report-section-photos.size-large  { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+/* Photo size modifiers — columns per row in grid mode. Reduced
+   from 4/3/2 to 3/2/1 so S and M render noticeably larger; L is
+   effectively a single-column grid (use Stack for the same look
+   with a max-width). Mobile breakpoint below collapses further. */
+.p86-report-section-photos.size-small  { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.p86-report-section-photos.size-medium { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.p86-report-section-photos.size-large  { grid-template-columns: 1fr; }
 /* Stack mode photo size — controls max-width so users can leave
-   room for the side description. The card stays centered when
-   smaller than 100%. */
-.p86-report-photo-single.size-small  { max-width: 50%; }
-.p86-report-photo-single.size-medium { max-width: 70%; }
+   room for the side description. Bumped S+M up so the photo isn't
+   so cramped at narrower widths. */
+.p86-report-photo-single.size-small  { max-width: 65%; }
+.p86-report-photo-single.size-medium { max-width: 80%; }
 .p86-report-photo-single.size-large  { max-width: 100%; }
 
 /* Wave B3 layout variants — body styles for non-photo-grid sections.
@@ -4424,24 +4426,63 @@
   background: transparent;
   border: 0;
 }
-/* Side-column tag chips — sit under the description text. Colored
-   per-tag via inline hue var (matches hueFor() in projects.js). No
-   leading "#" so they read as plain labels. */
+/* Side-column tag chips — sit under the description text. The
+   report layout intentionally uses NEUTRAL chips (no hue color) so
+   reports print clean and don't carry over the in-app filter strip
+   look. A small tag-emoji icon leads each chip. Colored tag chips
+   stay on the project feed / photo viewer / filter strips. */
 .p86-report-photo-sidetags {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: 6px;
   margin-top: 8px;
 }
 .p86-report-photo-sidetag {
-  font-size: 11px;
-  font-weight: 600;
-  padding: 2px 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11.5px;
+  font-weight: 500;
+  padding: 2px 9px;
   border-radius: 999px;
-  background: hsl(var(--h, 200), 70%, 88%);
-  color: hsl(var(--h, 200), 70%, 22%);
+  background: var(--surface2, rgba(255,255,255,0.06));
+  color: var(--text, #fff);
+  border: 1px solid var(--border, #333);
   white-space: nowrap;
 }
+.p86-report-photo-sidetag-icon {
+  font-size: 10.5px;
+  opacity: 0.7;
+  line-height: 1;
+}
+
+/* Per-photo "swap side" button — small icon button on the photo's
+   bottom-right corner (when a side description/tags column is
+   rendered). Click flips just THIS photo's descSide so users can
+   stagger left/right within the same section. Visible on hover. */
+.p86-report-photo-sideswap {
+  position: absolute;
+  bottom: 36px;  /* sit above the caption input which is ~30px tall */
+  right: 5px;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 0;
+  background: rgba(0,0,0,0.55);
+  color: #fff;
+  font-size: 12px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s;
+  z-index: 3;
+}
+.p86-report-photo:hover .p86-report-photo-sideswap,
+.p86-report-photo-single:hover .p86-report-photo-sideswap { opacity: 1; }
+.p86-report-photo-sideswap:hover { background: rgba(79,140,255,0.85); }
 /* Drag handle — top-left corner, visible on hover. */
 .p86-report-photo-drag,
 .p86-report-photo-single .p86-report-photo-drag {

@@ -1670,6 +1670,7 @@
           layout: s.layout || 'photo-grid',
           photoSize: s.photoSize || 'small',
           descSide:  s.descSide  || 'right',
+          descSides: {},
           photo_ids: [],
           captions: {},
           text_body: '',
@@ -1812,13 +1813,14 @@
           // onto the in-memory section so the editor can render the
           // right body. Older reports default to photo-grid.
           layout: s.layout || 'photo-grid',
-          // Presentation knobs — photoSize controls grid columns (S=4
-          // M=3 L=2) or stack-mode photo max-width (S=50% M=70%
-          // L=100%). descSide picks which side the description + tags
-          // read on when a photo has either. Defaults preserve the
-          // pre-toggle behavior so existing reports look identical.
+          // Presentation knobs — photoSize controls grid columns
+          // (S=3 M=2 L=1 per row) or stack-mode photo max-width
+          // (S=65% M=80% L=100%). descSide is the SECTION DEFAULT
+          // side; descSides[pid] overrides per-photo so users can
+          // stagger left/right within a section.
           photoSize: s.photoSize || 'small',
           descSide:  s.descSide  || 'right',
+          descSides: (s.descSides && typeof s.descSides === 'object') ? Object.assign({}, s.descSides) : {},
           photo_ids: (s.photo_ids || []).slice(),
           captions: Object.assign({}, s.captions || {}),
           text_body: s.text_body || '',
@@ -2152,9 +2154,10 @@
         if (labelEl) labelEl.addEventListener('input', function(e) {
           state.sections[sIdx].label = e.target.value;
         });
-        // Section toggle buttons — three groups (layout / photoSize /
-        // descSide). Each click is mutually exclusive within its group.
-        // The layout group preserves the old content-loss confirm.
+        // Section toggle buttons — two groups (layout / photoSize).
+        // Each click is mutually exclusive within its group. The
+        // layout group preserves the old content-loss confirm. The
+        // per-photo descSide swap button is handled separately below.
         sectionEl.querySelectorAll('.p86-report-section-iconbtn').forEach(function(btn) {
           btn.addEventListener('click', function() {
             var group = btn.getAttribute('data-toggle');
@@ -2181,11 +2184,30 @@
               }
             } else if (group === 'photoSize') {
               state.sections[sIdx].photoSize = value;
-            } else if (group === 'descSide') {
-              state.sections[sIdx].descSide = value;
             } else {
               return;
             }
+            paint();
+            debouncedSave();
+          });
+        });
+
+        // Per-photo "swap side" button — flips just THIS photo's
+        // description side between left/right. Stored on
+        // section.descSides[pid] so each photo carries its own
+        // preference, allowing users to stagger.
+        sectionEl.querySelectorAll('[data-side-swap]').forEach(function(btn) {
+          btn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            var newSide = btn.getAttribute('data-side-swap');
+            var card = btn.closest('[data-photo-id]');
+            if (!card) return;
+            var pid = card.getAttribute('data-photo-id');
+            if (!pid) return;
+            if (!state.sections[sIdx].descSides || typeof state.sections[sIdx].descSides !== 'object') {
+              state.sections[sIdx].descSides = {};
+            }
+            state.sections[sIdx].descSides[pid] = (newSide === 'left') ? 'left' : 'right';
             paint();
             debouncedSave();
           });
@@ -2413,6 +2435,7 @@
           layout: 'photo-grid',
           photoSize: 'small',
           descSide:  'right',
+          descSides: {},
           photo_ids: [],
           captions: {},
           text_body: '',
@@ -2453,24 +2476,18 @@
       { id: 'medium', label: 'M' },
       { id: 'large',  label: 'L' }
     ];
-    var DESC_SIDE_BUTTONS = [
-      { id: 'left',  glyph: '◀' },  // ◀
-      { id: 'right', glyph: '▶' }   // ▶
-    ];
-
     function isPhotoLayout(layout) {
       return layout === 'photo-grid' || layout === 'single-photo' || layout === 'before-after';
     }
-    // Does this section actually have anything (description or tags)
-    // that would render in a side column? If not, hide the descSide
-    // toggle — picking a side for nothing is noise.
-    function sectionHasSideContent(section) {
-      var ids = section.photo_ids || [];
-      for (var i = 0; i < ids.length; i++) {
-        var att = allPhotos.find(function(a) { return a.id === ids[i]; });
-        if (att && (att.caption || (Array.isArray(att.tags) && att.tags.length))) return true;
-      }
-      return false;
+    // Per-photo descSide lookup. section.descSides is a map keyed by
+    // photo id; missing entries fall back to the section default
+    // (section.descSide) and ultimately to 'right'. Users can stagger
+    // photos by flipping individual ones from a tiny swap button on
+    // each card.
+    function descSideFor(section, pid) {
+      var m = section.descSides;
+      if (m && (m[pid] === 'left' || m[pid] === 'right')) return m[pid];
+      return (section.descSide === 'left') ? 'left' : 'right';
     }
 
     function toggleGroupHTML(name, buttons, activeId) {
@@ -2490,15 +2507,14 @@
     function sectionHTML(section) {
       var layout = section.layout || 'photo-grid';
       var photoSize = section.photoSize || 'small';
-      var descSide  = section.descSide  || 'right';
 
       var layoutToggles = toggleGroupHTML('layout', LAYOUT_BUTTONS, layout);
       var sizeToggles = isPhotoLayout(layout)
         ? toggleGroupHTML('photoSize', SIZE_BUTTONS, photoSize)
         : '';
-      var descToggles = (isPhotoLayout(layout) && sectionHasSideContent(section))
-        ? toggleGroupHTML('descSide', DESC_SIDE_BUTTONS, descSide)
-        : '';
+      // descSide moved to per-photo (a small swap button on each
+      // photo card) so users can stagger left/right within a section.
+      // The section header no longer carries that toggle.
 
       var addBtn = '';
       if (isPhotoLayout(layout)) {
@@ -2521,7 +2537,6 @@
           '<div class="p86-report-section-actions">' +
             layoutToggles +
             sizeToggles +
-            descToggles +
             addBtn +
             '<button class="ee-btn secondary p86-report-section-remove">Remove</button>' +
           '</div>' +
@@ -2534,7 +2549,9 @@
     // a side column. Only emitted when at least one of the two has
     // content, so plain photos keep the compact stacked layout. The
     // bottom-of-card caption input is the report-section figure
-    // reference and stays where it is.
+    // reference and stays where it is. The report layout uses NEUTRAL
+    // tag chips (no hue color) so reports print clean — colored chips
+    // stay in the project feed / photo viewer / filter strips.
     function photoSideColumnHTML(att) {
       if (!att) return '';
       var hasDesc = !!att.caption;
@@ -2545,12 +2562,23 @@
       if (hasTags) {
         html += '<div class="p86-report-photo-sidetags">' +
           att.tags.map(function(t) {
-            return '<span class="p86-report-photo-sidetag" style="--h:' + hueFor(t) + ';">' + escapeHTML(t) + '</span>';
+            return '<span class="p86-report-photo-sidetag">' +
+              '<span class="p86-report-photo-sidetag-icon" aria-hidden="true">&#x1F3F7;</span>' +
+              '<span class="p86-report-photo-sidetag-text">' + escapeHTML(t) + '</span>' +
+            '</span>';
           }).join('') +
         '</div>';
       }
       html += '</div>';
       return html;
+    }
+    // Per-photo "swap side" button — appears on the photo when a
+    // side description/tags exist. Click flips THIS photo's descSide
+    // between left/right so users can stagger placement.
+    function photoSideSwapHTML(currentSide) {
+      var nextSide = (currentSide === 'left') ? 'right' : 'left';
+      var glyph = (currentSide === 'left') ? '&#x25B6;' : '&#x25C0;'; // ▶ / ◀
+      return '<button type="button" class="p86-report-photo-sideswap" data-side-swap="' + nextSide + '" title="Move description to the other side">' + glyph + '</button>';
     }
     // Does this attachment carry anything that would render in the
     // side column? Used to apply the .has-sidedesc grid class only
@@ -2578,7 +2606,6 @@
 
     function sectionPhotoGridBodyHTML(section) {
       var size = section.photoSize || 'small';
-      var descSide = section.descSide || 'right';
       return '<div class="p86-report-section-photos size-' + escapeAttr(size) + '">' +
         (section.photo_ids.length === 0
           ? '<div class="p86-proj-empty-line" style="grid-column:1/-1;">No photos in this section yet.</div>'
@@ -2587,19 +2614,21 @@
               if (!att) return '<div class="p86-report-photo p86-report-photo-missing">(photo deleted)</div>';
               var caption = section.captions[pid] || '';
               var hasSide = attHasSideContent(att);
+              var photoSide = descSideFor(section, pid);
               var sideClasses = '';
               if (hasSide) sideClasses += ' has-sidedesc';
-              if (hasSide && descSide === 'left') sideClasses += ' desc-left';
+              if (hasSide && photoSide === 'left') sideClasses += ' desc-left';
               // Drag handle + remove X live INSIDE the mainstack so
               // they anchor to the image corners — not the outer card.
-              // When the side description widens the outer card via
-              // grid, the X would otherwise float in the side column.
+              // The per-photo side-swap button only appears when a
+              // side column is actually rendered.
               return '<div class="p86-report-photo' + sideClasses +
                   '" draggable="true" data-photo-id="' + escapeAttr(pid) + '" data-photo-idx="' + idx + '">' +
                 '<div class="p86-report-photo-mainstack">' +
                   photoDragHandleHTML() +
                   '<img src="' + escapeAttr(att.thumb_url || att.web_url) + '" alt="" data-open-photo="' + escapeAttr(pid) + '" />' +
                   photoAnnotationCanvasHTML(att, pid) +
+                  (hasSide ? photoSideSwapHTML(photoSide) : '') +
                   '<button type="button" class="p86-report-photo-remove" data-rm-photo="' + escapeAttr(pid) + '" title="Remove from section">&times;</button>' +
                   '<input class="p86-report-photo-caption" value="' + escapeAttr(caption) + '" data-caption-input="' + escapeAttr(pid) + '" placeholder="Caption (optional)" />' +
                 '</div>' +
@@ -2612,10 +2641,9 @@
     function sectionSinglePhotoBodyHTML(section) {
       // One photo per row. Reuses the caption input pattern so the
       // existing wiring keeps working. photoSize controls each
-      // card's max-width (S=50%, M=70%, L=100%) so the section can
-      // leave room for descriptions or pack photos tighter.
+      // card's max-width so the section can leave room for
+      // descriptions or pack photos tighter.
       var size = section.photoSize || 'small';
-      var descSide = section.descSide || 'right';
       return '<div class="p86-report-section-singles">' +
         (section.photo_ids.length === 0
           ? '<div class="p86-proj-empty-line">No photos yet — tap "+ Add photos".</div>'
@@ -2624,15 +2652,17 @@
               if (!att) return '<div class="p86-report-photo-single p86-report-photo-missing">(photo deleted)</div>';
               var caption = section.captions[pid] || '';
               var hasSide = attHasSideContent(att);
+              var photoSide = descSideFor(section, pid);
               var sideClasses = '';
               if (hasSide) sideClasses += ' has-sidedesc';
-              if (hasSide && descSide === 'left') sideClasses += ' desc-left';
+              if (hasSide && photoSide === 'left') sideClasses += ' desc-left';
               return '<div class="p86-report-photo-single size-' + escapeAttr(size) + sideClasses +
                   '" draggable="true" data-photo-id="' + escapeAttr(pid) + '" data-photo-idx="' + idx + '">' +
                 '<div class="p86-report-photo-mainstack">' +
                   photoDragHandleHTML() +
                   '<img src="' + escapeAttr(att.web_url || att.thumb_url) + '" alt="" data-open-photo="' + escapeAttr(pid) + '" />' +
                   photoAnnotationCanvasHTML(att, pid) +
+                  (hasSide ? photoSideSwapHTML(photoSide) : '') +
                   '<button type="button" class="p86-report-photo-remove" data-rm-photo="' + escapeAttr(pid) + '" title="Remove">&times;</button>' +
                   '<input class="p86-report-photo-caption" value="' + escapeAttr(caption) + '" data-caption-input="' + escapeAttr(pid) + '" placeholder="Caption (optional)" />' +
                 '</div>' +

@@ -103,18 +103,25 @@ function normalizeSections(raw) {
       ? s.attachment_ids.filter(function(x) { return typeof x === 'string'; }).slice(0, 50)
       : [];
     // Presentation knobs (per-section). photoSize controls grid
-    // columns (S=4/M=3/L=2) or stack-mode photo max-width (S=50%/
-    // M=70%/L=100%). descSide picks which side the side description
-    // + tag chips read on when a photo carries either. Defaults
-    // preserve the original photo-grid look.
+    // columns (S=3/M=2/L=1 per row) or stack-mode photo max-width
+    // (S=65%/M=80%/L=100%). descSide is the SECTION default side;
+    // descSides[pid] overrides per photo so users can stagger
+    // left/right within a section.
     const photoSize = (s.photoSize === 'medium' || s.photoSize === 'large') ? s.photoSize : 'small';
     const descSide  = (s.descSide  === 'left') ? 'left' : 'right';
+    const descSidesIn = (s.descSides && typeof s.descSides === 'object') ? s.descSides : {};
+    const descSides = {};
+    photoIds.forEach(function(pid) {
+      const v = descSidesIn[pid];
+      if (v === 'left' || v === 'right') descSides[pid] = v;
+    });
     return {
       id: id,
       label: label,
       layout: layout,
       photoSize: photoSize,
       descSide: descSide,
+      descSides: descSides,
       photo_ids: photoIds,
       captions: captions,
       text_body: textBody,
