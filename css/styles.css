@@ -3937,6 +3937,75 @@
     font-size: 16px;
   }
 }
+
+/* Template picker modal — grid of 8 tiles. Each tile is a card with
+   an icon, a bold label, and a one-line description. Click a tile
+   to commit; clicking the modal backdrop or Cancel closes without
+   creating anything. */
+.p86-tplpicker-modal {
+  max-width: 920px;
+  width: 96vw;
+}
+.p86-tplpicker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+  padding: 18px 18px 6px 18px;
+}
+.p86-tplpicker-tile {
+  text-align: left;
+  background: var(--card-bg, #0f0f1e);
+  border: 1px solid var(--border, #333);
+  border-radius: 10px;
+  padding: 14px 14px;
+  cursor: pointer;
+  color: var(--text, #fff);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: border-color 0.12s, transform 0.12s, box-shadow 0.12s;
+}
+.p86-tplpicker-tile:hover {
+  border-color: rgba(79, 140, 255, 0.55);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+}
+.p86-tplpicker-tile-icon {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent, #4f8cff);
+  margin-bottom: 4px;
+}
+.p86-tplpicker-tile-icon .p86-icon {
+  width: 24px;
+  height: 24px;
+}
+.p86-tplpicker-tile-label {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text, #fff);
+}
+.p86-tplpicker-tile-desc {
+  font-size: 12px;
+  color: var(--text-dim, #888);
+  line-height: 1.4;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+}
+
+@media (max-width: 640px) {
+  .p86-tplpicker-grid {
+    grid-template-columns: 1fr;
+    padding: 12px;
+    gap: 8px;
+  }
+  .p86-tplpicker-tile { padding: 10px 12px; }
+}
 .p86-proj-reports-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));

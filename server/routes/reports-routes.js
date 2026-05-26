@@ -43,6 +43,25 @@ function newId(prefix) {
   return prefix + '_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
 }
 
+// Wave B template registry. Keep this in lockstep with the client
+// registry in js/report-templates.js — both lists drive the
+// template-specific cover schema + section seeding in the editor.
+// 'walkthrough' is the historical default and the safe fallback.
+const TEMPLATE_TYPES = new Set([
+  'walkthrough',
+  'daily-log',
+  'weekly-progress',
+  'engineers-report',
+  'submittal-package',
+  'punch-list',
+  'pre-con-survey',
+  'change-order'
+]);
+function normalizeTemplateType(raw) {
+  if (typeof raw !== 'string') return 'walkthrough';
+  return TEMPLATE_TYPES.has(raw) ? raw : 'walkthrough';
+}
+
 function normalizeSections(raw) {
   if (!Array.isArray(raw)) return [];
   return raw.map(function(s) {
@@ -137,7 +156,7 @@ router.get('/:entityType/:entityId', requireAuth, async (req, res, next) => {
       }
       const { rows } = await pool.query(
         'SELECT r.id, r.title, r.summary, r.sections, r.entity_type, r.entity_id, ' +
-        '       r.created_at, r.updated_at, u.name AS created_by_name ' +
+        '       r.template_type, r.created_at, r.updated_at, u.name AS created_by_name ' +
         '  FROM job_reports r ' +
         '  LEFT JOIN users u ON u.id = r.created_by ' +
         ' WHERE r.entity_type = $1 AND r.entity_id = $2 ' +
@@ -155,6 +174,7 @@ router.get('/:entityType/:entityId', requireAuth, async (req, res, next) => {
           entity_id: r.entity_id,
           title: r.title,
           summary: r.summary,
+          template_type: r.template_type || 'walkthrough',
           section_count: sections.length,
           photo_count: photoCount,
           created_at: r.created_at,
@@ -197,6 +217,7 @@ router.get('/:entityType/:entityId/:reportId', requireAuth, async (req, res) => 
           entity_id: r.entity_id,
           title: r.title,
           summary: r.summary,
+          template_type: r.template_type || 'walkthrough',
           sections: hydrated,
           sections_raw: sections,
           cover_page: r.cover_page || {},
@@ -234,12 +255,13 @@ router.post('/:entityType/:entityId', requireAuth, async (req, res) => {
         ? req.body.summary.slice(0, 5000) : '';
       const sections = normalizeSections(req.body && req.body.sections);
       const coverPage = normalizeCoverPage(req.body && req.body.cover_page);
+      const templateType = normalizeTemplateType(req.body && req.body.template_type);
       await pool.query(
-        'INSERT INTO job_reports (id, entity_type, entity_id, title, summary, sections, cover_page, created_by) ' +
-        'VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8)',
-        [id, entityType, entityId, title, summary, JSON.stringify(sections), JSON.stringify(coverPage), req.user.id]
+        'INSERT INTO job_reports (id, entity_type, entity_id, title, summary, sections, cover_page, template_type, created_by) ' +
+        'VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9)',
+        [id, entityType, entityId, title, summary, JSON.stringify(sections), JSON.stringify(coverPage), templateType, req.user.id]
       );
-      res.json({ report: { id, entity_type: entityType, entity_id: entityId, title, summary, sections, cover_page: coverPage } });
+      res.json({ report: { id, entity_type: entityType, entity_id: entityId, title, summary, template_type: templateType, sections, cover_page: coverPage } });
     } catch (e) {
       console.error('POST /api/reports/:entityType/:entityId error:', e);
       res.status(500).json({ error: 'Server error' });
@@ -248,10 +270,32 @@ router.post('/:entityType/:entityId', requireAuth, async (req, res) => {
 });
 
 // Cover page normalization — defensive caps + boolean enabled flag.
+// Wave B made the schema per-template (daily-log uses crew + weather,
+// engineer's report uses license_number + signed_date, etc.) so the
+// whitelist below covers every field across all 8 templates. Unknown
+// keys are silently dropped to keep the JSONB from growing unbounded.
+const COVER_PAGE_KEYS = [
+  // Walkthrough (default)
+  'company_name', 'pm_name', 'date', 'address', 'subtitle',
+  // Daily Log
+  'crew', 'weather', 'hours_on_site',
+  // Weekly Progress
+  'week_ending', 'project_phase', 'schedule_status',
+  // Engineer's Report
+  'stamped_by', 'license_number', 'signed_date',
+  // Submittal Package
+  'submittal_number', 'spec_section', 'supplier', 'approval_block',
+  // Punch List
+  'walkthrough_date', 'walkthrough_with',
+  // Pre-Construction Survey
+  'survey_date', 'surveyed_by', 'building',
+  // Change Order Justification
+  'co_number', 'co_amount', 'requested_by'
+];
 function normalizeCoverPage(raw) {
   if (!raw || typeof raw !== 'object') return { enabled: false };
   const out = { enabled: !!raw.enabled };
-  ['company_name', 'pm_name', 'date', 'address', 'subtitle'].forEach(function(k) {
+  COVER_PAGE_KEYS.forEach(function(k) {
     if (typeof raw[k] === 'string') {
       out[k] = raw[k].slice(0, 500);
     }
@@ -284,6 +328,13 @@ router.patch('/:entityType/:entityId/:reportId', requireAuth, async (req, res) =
       if (req.body.cover_page && typeof req.body.cover_page === 'object') {
         sets.push('cover_page = $' + (p++) + '::jsonb');
         params.push(JSON.stringify(normalizeCoverPage(req.body.cover_page)));
+      }
+      // template_type can change post-create (user picks the wrong
+      // template; switching converts the editor's cover schema + the
+      // section seed). Whitelisted; bad values clamp to walkthrough.
+      if (typeof req.body.template_type === 'string') {
+        sets.push('template_type = $' + (p++));
+        params.push(normalizeTemplateType(req.body.template_type));
       }
       if (!sets.length) return res.status(400).json({ error: 'Nothing to update' });
       sets.push('updated_at = NOW()');

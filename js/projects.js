@@ -1601,22 +1601,99 @@
   function createReport() {
     var p = _detailState.project;
     if (!p) return;
-    var title = window.prompt('New report title:', p.name + ' — Walkthrough');
-    if (!title) return;
-    window.p86Api.reports.create('project', p.id, { title: title }).then(function(r) {
-      var newR = r && r.report;
-      _detailState.reports = (_detailState.reports || []).concat([{
-        id: newR.id,
-        title: newR.title,
-        summary: newR.summary,
-        section_count: (newR.sections || []).length,
-        photo_count: 0,
-        updated_at: new Date().toISOString()
-      }]);
-      paintReportsList();
-      openReportEditor(newR.id);
-    }).catch(function(e) {
-      alert('Create failed: ' + (e.message || e));
+    // Wave B: show the template picker modal instead of a plain
+    // prompt. User picks a template tile → we seed sections + cover
+    // defaults from the template's recipe, then open the editor.
+    openTemplatePicker(function(templateId) {
+      if (!templateId) return;
+      var tpl = (window.p86ReportTemplates && window.p86ReportTemplates.get)
+        ? window.p86ReportTemplates.get(templateId)
+        : { label: 'Untitled', seed_sections: [], cover_defaults: function() { return {}; } };
+      var me = currentUser();
+      var seeds = (tpl.seed_sections || []).map(function(s, i) {
+        return {
+          id: 'sec_' + Date.now() + '_' + i,
+          label: s.label || 'Section',
+          layout: s.layout || 'photo-grid',
+          photo_ids: [],
+          captions: {},
+          text_body: '',
+          attachment_ids: []
+        };
+      });
+      var cover = Object.assign({ enabled: false }, tpl.cover_defaults(p, me) || {});
+      var body = {
+        title: tpl.label + ' — ' + (p.name || 'Project'),
+        template_type: templateId,
+        sections: seeds,
+        cover_page: cover
+      };
+      window.p86Api.reports.create('project', p.id, body).then(function(r) {
+        var newR = r && r.report;
+        _detailState.reports = (_detailState.reports || []).concat([{
+          id: newR.id,
+          title: newR.title,
+          summary: newR.summary,
+          template_type: newR.template_type,
+          section_count: (newR.sections || []).length,
+          photo_count: 0,
+          updated_at: new Date().toISOString()
+        }]);
+        paintReportsList();
+        openReportEditor(newR.id);
+      }).catch(function(e) {
+        alert('Create failed: ' + (e.message || e));
+      });
+    });
+  }
+
+  // Template picker modal — grid of 8 tiles (icon + label + blurb).
+  // Click a tile to commit the choice; the modal closes and the
+  // create flow continues. Cancel = no-op.
+  function openTemplatePicker(cb) {
+    var existing = document.getElementById('projTemplatePicker');
+    if (existing) existing.remove();
+    var templates = (window.p86ReportTemplates && window.p86ReportTemplates.list)
+      ? window.p86ReportTemplates.list()
+      : [{ id: 'walkthrough', label: 'Photo Walkthrough', icon: 'photos', description: '' }];
+    var modal = document.createElement('div');
+    modal.id = 'projTemplatePicker';
+    modal.className = 'modal active';
+    modal.innerHTML =
+      '<div class="modal-content p86-tplpicker-modal">' +
+        '<div class="modal-header">' +
+          '<span>Choose a report template</span>' +
+          '<button class="p86-modal-close" data-close>&times;</button>' +
+        '</div>' +
+        '<div class="p86-tplpicker-grid">' +
+          templates.map(function(t) {
+            return '<button type="button" class="p86-tplpicker-tile" data-tpl-id="' + escapeAttr(t.id) + '">' +
+              '<div class="p86-tplpicker-tile-icon" data-p86-icon="' + escapeAttr(t.icon || 'edit') + '"></div>' +
+              '<div class="p86-tplpicker-tile-label">' + escapeHTML(t.label) + '</div>' +
+              '<div class="p86-tplpicker-tile-desc">' + escapeHTML(t.description || '') + '</div>' +
+            '</button>';
+          }).join('') +
+        '</div>' +
+        '<div class="modal-footer">' +
+          '<button class="ee-btn secondary" data-close>Cancel</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(modal);
+    // Decorate any data-p86-icon attributes (the agx-icons helper
+    // walks the subtree and inlines SVGs).
+    if (window.p86IconDecorate) window.p86IconDecorate(modal);
+    modal.addEventListener('click', function(e) {
+      if (e.target === modal) modal.remove();
+    });
+    modal.querySelectorAll('[data-close]').forEach(function(b) {
+      b.addEventListener('click', function() { modal.remove(); });
+    });
+    modal.querySelectorAll('[data-tpl-id]').forEach(function(tile) {
+      tile.addEventListener('click', function() {
+        var id = tile.getAttribute('data-tpl-id');
+        modal.remove();
+        cb(id);
+      });
     });
   }
 

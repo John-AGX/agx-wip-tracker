@@ -2012,7 +2012,20 @@ async function initSchema() {
     --
     -- Shape: { enabled: bool, company_name?, pm_name?, date?,
     --   address?, subtitle? }
+    -- (Per-template cover field schemas — daily-log, weekly-progress,
+    --  engineer's-report, submittal-package — are stored in this same
+    --  JSONB without schema changes. The client decides which fields
+    --  to surface based on template_type below.)
     ALTER TABLE job_reports ADD COLUMN IF NOT EXISTS cover_page JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+    -- Template type (Wave B). A short string id picking one of the
+    -- baked-in report templates: walkthrough, daily-log,
+    -- weekly-progress, engineers-report, submittal-package,
+    -- punch-list, pre-con-survey, change-order. Drives section
+    -- seeding on create + which cover fields the editor surfaces
+    -- + print stylesheet selectors. Existing rows backfill to
+    -- 'walkthrough' (matches the prior single-template behavior).
+    ALTER TABLE job_reports ADD COLUMN IF NOT EXISTS template_type TEXT NOT NULL DEFAULT 'walkthrough';
 
     -- ───────────────────────────────────────────────────────────────
     -- Projects — CompanyCam-style first-class entity that buckets
