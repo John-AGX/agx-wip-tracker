@@ -2220,6 +2220,24 @@
           });
         });
 
+        // Paint annotation strokes onto any canvas we emitted next to
+        // a photo. Same coord-space trick as the project-feed tiles:
+        // the canvas's internal bitmap matches the WEB variant
+        // (1600px max edge, see attachment-routes.js sharp pipeline);
+        // CSS scales it to overlay the thumb img with object-fit:
+        // cover. Skips photos without annotations entirely.
+        sectionEl.querySelectorAll('[data-anno-photo]').forEach(function(canvas) {
+          var pid = canvas.getAttribute('data-anno-photo');
+          var att = allPhotos.find(function(a) { return a.id === pid; });
+          if (!att || !window.p86AnnotationRender) return;
+          var dims = webVariantDims(att.width, att.height);
+          if (!dims) return;
+          canvas.width = dims.w;
+          canvas.height = dims.h;
+          try { window.p86AnnotationRender.renderAll(canvas.getContext('2d'), att.annotations); }
+          catch (e) { /* defensive — bad stroke shouldn't kill the section */ }
+        });
+
         // Click the photo image → open the full photo viewer panel.
         // Sends ONLY this section's photo set so prev/next paginates
         // within the section (not the whole project library). Mutations
@@ -2547,6 +2565,17 @@
       return '<span class="p86-report-photo-drag" title="Drag to reorder">&#x2630;</span>';
     }
 
+    // Inline canvas overlay for the photo — emitted only when the
+    // attachment carries annotation strokes. Same trick used by the
+    // photo tiles in the project feed: the canvas's internal bitmap
+    // matches the WEB-variant pixel coords (the coord space the
+    // strokes live in), then CSS scales it to overlay the thumb img.
+    // Painted in wireSectionAnnotationCanvases() once the DOM is up.
+    function photoAnnotationCanvasHTML(att, pid) {
+      if (!att || !Array.isArray(att.annotations) || !att.annotations.length) return '';
+      return '<canvas class="p86-report-photo-anno" data-anno-photo="' + escapeAttr(pid) + '"></canvas>';
+    }
+
     function sectionPhotoGridBodyHTML(section) {
       var size = section.photoSize || 'small';
       var descSide = section.descSide || 'right';
@@ -2570,6 +2599,7 @@
                 '<div class="p86-report-photo-mainstack">' +
                   photoDragHandleHTML() +
                   '<img src="' + escapeAttr(att.thumb_url || att.web_url) + '" alt="" data-open-photo="' + escapeAttr(pid) + '" />' +
+                  photoAnnotationCanvasHTML(att, pid) +
                   '<button type="button" class="p86-report-photo-remove" data-rm-photo="' + escapeAttr(pid) + '" title="Remove from section">&times;</button>' +
                   '<input class="p86-report-photo-caption" value="' + escapeAttr(caption) + '" data-caption-input="' + escapeAttr(pid) + '" placeholder="Caption (optional)" />' +
                 '</div>' +
@@ -2602,6 +2632,7 @@
                 '<div class="p86-report-photo-mainstack">' +
                   photoDragHandleHTML() +
                   '<img src="' + escapeAttr(att.web_url || att.thumb_url) + '" alt="" data-open-photo="' + escapeAttr(pid) + '" />' +
+                  photoAnnotationCanvasHTML(att, pid) +
                   '<button type="button" class="p86-report-photo-remove" data-rm-photo="' + escapeAttr(pid) + '" title="Remove">&times;</button>' +
                   '<input class="p86-report-photo-caption" value="' + escapeAttr(caption) + '" data-caption-input="' + escapeAttr(pid) + '" placeholder="Caption (optional)" />' +
                 '</div>' +

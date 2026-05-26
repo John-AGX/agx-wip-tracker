@@ -4474,6 +4474,28 @@
   background: #1a1a2e;
   cursor: zoom-in;
 }
+/* Annotation strokes overlay the image — internal bitmap is sized
+   to the web-variant pixel coords (the strokes' native space); CSS
+   stretches it over the img with object-fit:cover so the strokes
+   land on the same pixels they would in the viewer / markup tool.
+   pointer-events:none so clicks pass through to the image (which
+   opens the viewer). */
+.p86-report-photo-anno,
+.p86-report-photo-single .p86-report-photo-anno {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  pointer-events: none;
+}
+/* In stack mode the img isn't aspect-ratio'd to 4:3 — it's object-
+   fit:contain. Override the canvas object-fit to contain so the
+   strokes match. */
+.p86-report-photo-single .p86-report-photo-anno {
+  object-fit: contain;
+  background: transparent;
+}
 .p86-report-photo-caption {
   width: 100%;
   padding: 5px 8px;
@@ -5511,6 +5533,7 @@
   background: transparent;
   border: 0;
   color: #e6e6e6;
+  caret-color: #e6e6e6;
   font-size: 13px;
   font-family: inherit;
   resize: vertical;
@@ -5518,6 +5541,7 @@
   outline: none;
   padding: 4px 0;
 }
+.p86-pv-desc-input::placeholder { color: #888; }
 
 /* Comments thread */
 .p86-pv-comments-section { gap: 10px; }
@@ -5703,6 +5727,10 @@
 .p86-pv-tags-add-icon { font-size: 13px; line-height: 1; }
 
 /* ── Picker modal ──────────────────────────────────────────────── */
+/* The photo viewer sits at z-index 9999, so the base .modal.active
+   (z:1000) would render BEHIND the viewer and never receive clicks.
+   Hoist the tag picker modal above the viewer. */
+.p86-pv-tag-modal.modal.active { z-index: 10000; }
 .p86-pv-tag-modal-content {
   max-width: 520px;
   width: 96vw;
