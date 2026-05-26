@@ -1870,6 +1870,80 @@
       });
     }
 
+    // Wave B4 helpers — cover-page polymorphism. The active template
+    // (looked up from state.report.template_type) decides which
+    // fields the cover fieldset surfaces and which fields the print
+    // render shows. Defined inside paintReportEditor's closure so
+    // they see `state` directly.
+    function currentTemplate() {
+      var id = (state.report && state.report.template_type) || 'walkthrough';
+      if (window.p86ReportTemplates && window.p86ReportTemplates.get) {
+        return window.p86ReportTemplates.get(id);
+      }
+      // Fallback when the registry script failed to load — preserve
+      // the legacy 5-field walkthrough shape so the editor still
+      // works in a broken state.
+      return {
+        id: 'walkthrough',
+        label: 'Photo Walkthrough',
+        cover_schema: ['company_name', 'subtitle', 'pm_name', 'date', 'address']
+      };
+    }
+    function currentCoverSchema() {
+      var tpl = currentTemplate();
+      return Array.isArray(tpl.cover_schema) ? tpl.cover_schema : [];
+    }
+    function cvFieldId(key) {
+      // Stable id prefix for cover inputs. Used by both the field
+      // render below and the bind-event loop in paint().
+      return 'cv_' + key;
+    }
+    function coverFieldMeta(key) {
+      if (window.p86ReportTemplates && window.p86ReportTemplates.coverFieldMeta) {
+        return window.p86ReportTemplates.coverFieldMeta(key);
+      }
+      return { label: key, type: 'text', placeholder: '' };
+    }
+    function renderCoverFieldsHTML() {
+      var schema = currentCoverSchema();
+      if (!schema.length) return '';
+      return '<div class="p86-report-cover-grid">' +
+        schema.map(function(key) {
+          var meta = coverFieldMeta(key);
+          var val = state.cover[key] != null ? String(state.cover[key]) : '';
+          var input;
+          if (meta.type === 'textarea') {
+            input = '<textarea id="' + cvFieldId(key) + '" rows="2" placeholder="' + escapeAttr(meta.placeholder || '') + '">' + escapeHTML(val) + '</textarea>';
+          } else {
+            input = '<input id="' + cvFieldId(key) + '" type="text" value="' + escapeAttr(val) + '" placeholder="' + escapeAttr(meta.placeholder || '') + '" />';
+          }
+          return '<label class="p86-field"><span>' + escapeHTML(meta.label || key) + '</span>' + input + '</label>';
+        }).join('') +
+      '</div>';
+    }
+    function renderPrintCoverHTML() {
+      var tpl = currentTemplate();
+      var schema = currentCoverSchema();
+      var rows = schema.map(function(key) {
+        var v = state.cover[key];
+        if (!v) return '';
+        var meta = coverFieldMeta(key);
+        // Title row gets special treatment — render larger and
+        // centered. The "company_name", "subtitle", "address" keys
+        // also get their own positions; everything else falls into
+        // the meta key-value list.
+        if (key === 'company_name' || key === 'subtitle' || key === 'address') return '';
+        return '<div><span class="k">' + escapeHTML(meta.label) + '</span><span class="v">' + escapeHTML(String(v)) + '</span></div>';
+      }).filter(Boolean).join('');
+      return '<div class="p86-report-cover-rendered print-only">' +
+        '<div class="p86-report-cover-company">' + escapeHTML(state.cover.company_name || 'AGX Central Florida') + '</div>' +
+        (state.cover.subtitle ? '<div class="p86-report-cover-subtitle">' + escapeHTML(state.cover.subtitle) + '</div>' : '') +
+        '<h1 class="p86-report-cover-title">' + escapeHTML(state.report.title || tpl.label || 'Project Report') + '</h1>' +
+        (state.cover.address ? '<div class="p86-report-cover-addr">' + escapeHTML(state.cover.address) + '</div>' : '') +
+        (rows ? '<div class="p86-report-cover-meta">' + rows + '</div>' : '') +
+      '</div>';
+    }
+
     function paint() {
       var host = overlay.querySelector('.p86-report-host');
       var emptyStateHTML = state.sections.length ? '' :
@@ -1895,49 +1969,27 @@
           '</div>' +
         '</div>' +
 
-        // Cover page block — toggleable. Shows the inputs only when
-        // enabled. Defaults compose from project + user + today,
-        // overrides persist to state.cover.
+        // Wave B4: cover-page fieldset is now dynamic. The set of
+        // fields rendered comes from the active template's
+        // cover_schema, looked up via window.p86ReportTemplates.
+        // Each schema field's label / placeholder / input type comes
+        // from p86ReportTemplates.coverFieldMeta. The print-only
+        // rendered cover below mirrors the schema so what the user
+        // edits matches what prints.
         '<fieldset class="p86-report-cover-fieldset">' +
           '<legend>' +
-            // The cover-page toggle lives inside the legend; the
-            // section gate would otherwise lock its checkbox along
-            // with the rest of the inputs. data-edit-gate-passthrough
-            // keeps it interactive so the user can toggle the cover
-            // on/off without first arming the section.
             '<label class="p86-report-cover-toggle" data-edit-gate-passthrough>' +
               '<input type="checkbox" id="rptCoverEnabled"' + (state.cover.enabled ? ' checked' : '') + ' />' +
               '<span>&#x1F4D1; Include cover page</span>' +
             '</label>' +
           '</legend>' +
-          (state.cover.enabled
-            ? '<div class="p86-report-cover-grid">' +
-                '<label class="p86-field"><span>Company name</span><input id="cvCompany" type="text" value="' + escapeAttr(state.cover.company_name || '') + '" placeholder="Your company (leave blank to use org name)" /></label>' +
-                '<label class="p86-field"><span>Subtitle</span><input id="cvSubtitle" type="text" value="' + escapeAttr(state.cover.subtitle || '') + '" placeholder="e.g. Walkthrough Report, Damage Assessment" /></label>' +
-                '<label class="p86-field"><span>Prepared by</span><input id="cvPm" type="text" value="' + escapeAttr(state.cover.pm_name || '') + '" placeholder="PM name" /></label>' +
-                '<label class="p86-field"><span>Date</span><input id="cvDate" type="text" value="' + escapeAttr(state.cover.date || '') + '" placeholder="' + new Date().toLocaleDateString() + '" /></label>' +
-                '<label class="p86-field p86-report-cover-addr"><span>Address</span><input id="cvAddress" type="text" value="' + escapeAttr(state.cover.address || '') + '" placeholder="Site address" /></label>' +
-              '</div>'
-            : '') +
+          (state.cover.enabled ? renderCoverFieldsHTML() : '') +
         '</fieldset>' +
 
-        // Print-only cover page render. Always in the DOM (so @media
-        // print can pull it onto the first page) but hidden in the
-        // editor view via the .print-only class. Rendered with the
-        // current state values so what the user sees in the toggle
-        // matches what they get when they hit Print.
-        (state.cover.enabled
-          ? '<div class="p86-report-cover-rendered print-only">' +
-              '<div class="p86-report-cover-company">' + escapeHTML(state.cover.company_name || 'AGX Central Florida') + '</div>' +
-              (state.cover.subtitle ? '<div class="p86-report-cover-subtitle">' + escapeHTML(state.cover.subtitle) + '</div>' : '') +
-              '<h1 class="p86-report-cover-title">' + escapeHTML(state.report.title || 'Project Report') + '</h1>' +
-              (state.cover.address ? '<div class="p86-report-cover-addr">' + escapeHTML(state.cover.address) + '</div>' : '') +
-              '<div class="p86-report-cover-meta">' +
-                (state.cover.pm_name ? '<div><span class="k">Prepared by</span><span class="v">' + escapeHTML(state.cover.pm_name) + '</span></div>' : '') +
-                (state.cover.date ? '<div><span class="k">Date</span><span class="v">' + escapeHTML(state.cover.date) + '</span></div>' : '') +
-              '</div>' +
-            '</div>'
-          : '') +
+        // Print-only cover page render. Always in the DOM (so
+        // @media print pulls it onto the first page) but hidden
+        // in the editor view via the .print-only class.
+        (state.cover.enabled ? renderPrintCoverHTML() : '') +
 
         '<textarea id="rptSummary" class="p86-report-summary" rows="2" placeholder="Optional summary at the top of the report">' + escapeHTML(state.report.summary || '') + '</textarea>' +
         '<div class="p86-report-sections">' +
@@ -1966,18 +2018,17 @@
         debouncedSave();
         paint(); // re-paint to show/hide the inputs
       });
-      function bindCover(id, key) {
-        var el = host.querySelector('#' + id);
-        if (el) el.addEventListener('input', function(e) {
+      // Schema-driven cover wiring (Wave B4). Walk the active
+      // template's cover_schema and bind every rendered input to
+      // its key on state.cover.
+      currentCoverSchema().forEach(function(key) {
+        var el = host.querySelector('#' + cvFieldId(key));
+        if (!el) return;
+        el.addEventListener('input', function(e) {
           state.cover[key] = e.target.value;
           debouncedSave();
         });
-      }
-      bindCover('cvCompany', 'company_name');
-      bindCover('cvSubtitle', 'subtitle');
-      bindCover('cvPm', 'pm_name');
-      bindCover('cvDate', 'date');
-      bindCover('cvAddress', 'address');
+      });
 
       // Gate the cover fieldset. Cover inputs now autosave on input
       // (via debouncedSave above) so a stray tap could mutate the
