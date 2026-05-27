@@ -2945,13 +2945,16 @@
       if (swapBtn) html += '<div class="p86-report-photo-sidedesc-tools">' + swapBtn + '</div>';
       if (hasDesc) html += '<div class="p86-report-photo-sidedesc-text">' + escapeHTML(att.caption) + '</div>';
       // CompanyCam-style metadata list — each item is an icon + the
-      // value, stacked vertically. No pill chrome (handled by the
-      // shared .p86-report-photo-sidetag styles, which are now plain
-      // icon+text lines). Date format matches the reference
-      // ("May 19, 2026, 3:01 PM").
+      // value, stacked vertically. Icons are Heroicons-style filled
+      // SVGs (currentColor) so they pick up the side-column text color
+      // and render crisp at any zoom. Tag icon is the classic diagonal
+      // price-tag shape.
+      var ICON_USER     = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 12a5 5 0 1 0 0-10 5 5 0 0 0 0 10Zm0 2c-4.418 0-8 2.91-8 6.5V22h16v-1.5c0-3.59-3.582-6.5-8-6.5Z"/></svg>';
+      var ICON_CALENDAR = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 2a1 1 0 0 1 1 1v1h8V3a1 1 0 1 1 2 0v1h1a3 3 0 0 1 3 3v12a3 3 0 0 1-3 3H5a3 3 0 0 1-3-3V7a3 3 0 0 1 3-3h1V3a1 1 0 0 1 1-1Zm14 7H3v10a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V9Z"/></svg>';
+      var ICON_TAG      = '<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path fill-rule="evenodd" d="M5.5 3A2.5 2.5 0 0 0 3 5.5v5.379a2.5 2.5 0 0 0 .732 1.768l8.121 8.121a2.5 2.5 0 0 0 3.536 0l5.379-5.379a2.5 2.5 0 0 0 0-3.536L12.647 3.732A2.5 2.5 0 0 0 10.879 3H5.5Zm2 5a1.5 1.5 0 1 0 0-3 1.5 1.5 0 0 0 0 3Z" clip-rule="evenodd"/></svg>';
       var metaItems = [];
       if (hasUploader) {
-        metaItems.push({ icon: '\u{1F464}', text: att.uploaded_by_name });   // 👤
+        metaItems.push({ icon: ICON_USER, text: att.uploaded_by_name });
       }
       if (hasUploadedAt) {
         var d = new Date(att.uploaded_at);
@@ -2966,11 +2969,11 @@
             when = d.toLocaleString();
           }
         }
-        if (when) metaItems.push({ icon: '\u{1F4C5}', text: when });          // 📅
+        if (when) metaItems.push({ icon: ICON_CALENDAR, text: when });
       }
       if (hasTags) {
         att.tags.forEach(function(t) {
-          metaItems.push({ icon: '\u{1F3F7}', text: t });                     // 🏷
+          metaItems.push({ icon: ICON_TAG, text: t });
         });
       }
       if (metaItems.length) {

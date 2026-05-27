@@ -4673,22 +4673,31 @@
 .p86-report-photo-sidetag {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  font-size: 13.5px;
-  line-height: 1.5;
+  gap: 7px;
+  font-size: 12.5px;
+  line-height: 1.45;
   color: var(--text, #fff);
   background: transparent;
   border: 0;
   padding: 0;
 }
-/* Icon scales WITH the text — 1.3em sits visually proportional to
-   the tag wording (emoji glyphs render ~80% of declared font-size,
-   so the multiplier gives the icon real weight next to the text). */
+/* Filled SVG hero-icons, sized to sit visually flush with the text.
+   `currentColor` paths inherit the row's text color; opacity 0.8 keeps
+   them present without competing with the value text. */
 .p86-report-photo-sidetag-icon {
-  font-size: 1.3em;
-  opacity: 0.7;
-  line-height: 1;
-  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  opacity: 0.8;
+  flex: 0 0 14px;
+  color: inherit;
+}
+.p86-report-photo-sidetag-icon svg {
+  width: 100%;
+  height: 100%;
+  display: block;
 }
 .p86-report-photo-sidetag-text { font-weight: 400; }
 
