@@ -312,12 +312,31 @@
     }
   }
 
+  // Lift uploader initials + clock-time formatting locally so the My
+  // Files tile mirrors the project tile's footer exactly without
+  // depending on projects.js being loaded first.
+  function initialsOf(name) {
+    if (!name) return '';
+    var parts = String(name).trim().split(/\s+/).filter(Boolean);
+    if (!parts.length) return '';
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  }
+  function fmtTime(d) {
+    if (!d) return '';
+    try {
+      return new Date(d).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+    } catch (e) { return ''; }
+  }
+
   function renderFileGrid(files) {
-    // Use the same .p86-proj-photo-tile styling the project detail grid
-    // uses so My Files reads as part of the same visual system. The
-    // `.mf-tile` modifier extends it with the filename/meta block + a
-    // 4-button action bar (download / send / copy / delete) that My Files
-    // needs but project tiles don't.
+    // Render the EXACT same .p86-proj-photo-tile structure the project
+    // photo grid uses: visual on top, checkbox top-left, ⋮ menu
+    // top-right, uploader initials + badges bottom-corners, then a
+    // "time · uploader" footer. The four My Files actions
+    // (download / send / copy / delete) live INSIDE the ⋮ menu rather
+    // than a separate button strip, matching the project tile's
+    // single-source-of-truth menu pattern.
     var html = '<div class="mf-grid">';
     files.forEach(function(a) {
       var isImg = isImage(a);
@@ -328,19 +347,27 @@
         var ext = (a.filename || '').split('.').pop().slice(0, 4).toUpperCase() || 'DOC';
         visual = '<div class="p86-proj-photo-tile-doc">' + escapeHTML(ext) + '</div>';
       }
+      var uploaderName = a.uploaded_by_name || '';
+      var uploaderInitials = uploaderName ? initialsOf(uploaderName) : '';
+      var time = fmtTime(a.uploaded_at);
       html += '<div class="p86-proj-photo-tile mf-tile" data-file-id="' + escapeAttr(a.id) + '" data-is-image="' + (isImg ? '1' : '0') + '">' +
         '<div class="p86-proj-photo-tile-visual mf-tile-visual" title="' + (isImg ? 'Click to open' : 'Click to download') + '">' +
           visual +
+          // Checkbox kept as a structural placeholder so the visual
+          // matches the project tile spacing. Selection-based bulk
+          // ops aren't wired up here yet, but the slot reads as a
+          // future affordance and avoids a layout shift later.
+          '<label class="p86-proj-photo-tile-checkbox" onclick="event.stopPropagation();">' +
+            '<input type="checkbox" class="mf-tile-checkbox" />' +
+          '</label>' +
+          '<button type="button" class="p86-proj-photo-tile-menu mf-tile-menu" title="More">&#x22EE;</button>' +
+          (uploaderInitials
+            ? '<span class="p86-proj-photo-tile-uploader" title="' + escapeAttr(uploaderName) + '">' + escapeHTML(uploaderInitials) + '</span>'
+            : '') +
         '</div>' +
-        '<div class="mf-tile-meta">' +
-          '<div class="mf-tile-name" title="' + escapeAttr(a.filename) + '">' + escapeHTML(a.filename) + '</div>' +
-          '<div class="mf-tile-sub">' + fmtBytes(a.size_bytes) + ' &middot; ' + escapeHTML(fmtDate(a.uploaded_at)) + '</div>' +
-        '</div>' +
-        '<div class="mf-tile-actions">' +
-          '<a href="' + escapeAttr(a.original_url) + '" download="' + escapeAttr(a.filename) + '" target="_blank" rel="noopener" title="Download" class="mf-tile-act">&#x2B07;</a>' +
-          '<button onclick="window.myFiles.openSendPicker(\'' + escapeAttr(a.id) + '\', \'move\')" title="Send to a job / estimate (move)" class="mf-tile-act">&#x27A4;</button>' +
-          '<button onclick="window.myFiles.openSendPicker(\'' + escapeAttr(a.id) + '\', \'copy\')" title="Copy to a job / estimate" class="mf-tile-act">&#x2398;</button>' +
-          '<button onclick="window.myFiles.deleteFile(\'' + escapeAttr(a.id) + '\')" title="Delete" class="mf-tile-act mf-tile-act-danger">&times;</button>' +
+        '<div class="p86-proj-photo-tile-footer">' +
+          '<span class="p86-proj-photo-tile-time">' + escapeHTML(time) + '</span>' +
+          (uploaderName ? '<span class="p86-proj-photo-tile-uploader-name">' + escapeHTML(uploaderName) + '</span>' : '') +
         '</div>' +
       '</div>';
     });
@@ -348,19 +375,31 @@
     return html;
   }
 
-  // Click anywhere on a tile's visual area → open the file. Images go
-  // through the shared p86Attachments lightbox (with the full My Files
-  // list so swipe nav works); non-images open the original_url in a
-  // new tab as a fallback download/view. Delegated so newly-rendered
-  // tiles inherit the binding without re-wiring after each paint().
+  // Delegated tile click handler. Splits the surface into three
+  // concerns: ⋮ menu (open the My Files action menu anchored to the
+  // button), checkbox (no-op for now — kept for visual parity with
+  // project tiles), and the visual area (open file via lightbox /
+  // new tab).
   function wireTileClicks(pane) {
     if (!pane) return;
     pane.addEventListener('click', function(e) {
+      // ⋮ menu wins regardless of where in the tile it landed.
+      var menuBtn = e.target.closest('.mf-tile-menu');
+      if (menuBtn) {
+        e.stopPropagation();
+        var tileForMenu = menuBtn.closest('.mf-tile');
+        var fileForMenu = tileForMenu
+          ? (_state.files || []).find(function(x) { return String(x.id) === String(tileForMenu.getAttribute('data-file-id')); })
+          : null;
+        if (fileForMenu) openFileMenu(fileForMenu, menuBtn);
+        return;
+      }
+      // Checkbox container — let the native click toggle the box but
+      // don't open the file.
+      if (e.target.closest('.p86-proj-photo-tile-checkbox')) return;
+      // Otherwise: click on the image opens it.
       var visual = e.target.closest('.mf-tile-visual');
       if (!visual) return;
-      // Don't hijack clicks on the action-bar buttons that share the
-      // tile container.
-      if (e.target.closest('.mf-tile-actions')) return;
       var tile = visual.closest('.mf-tile');
       if (!tile) return;
       var fileId = tile.getAttribute('data-file-id');
@@ -386,6 +425,44 @@
         // display PDFs inline, prompt download for everything else.
         window.open(file.original_url, '_blank', 'noopener');
       }
+    });
+  }
+
+  // Floating action menu anchored to the ⋮ button. Mirrors the project
+  // photo tile's menu pattern but with My Files-specific actions
+  // (download / send / copy / delete) instead of caption/tags/cover.
+  function openFileMenu(file, anchor) {
+    var prior = document.getElementById('mf-file-menu');
+    if (prior) prior.remove();
+    var menu = document.createElement('div');
+    menu.id = 'mf-file-menu';
+    menu.className = 'p86-proj-photo-menu mf-file-menu';
+    menu.innerHTML =
+      '<a href="' + escapeAttr(file.original_url) + '" download="' + escapeAttr(file.filename) + '" target="_blank" rel="noopener" data-act="download">&#x2B07; Download</a>' +
+      '<button data-act="send">&#x27A4; Send to job / estimate</button>' +
+      '<button data-act="copy">&#x2398; Copy to job / estimate</button>' +
+      '<button data-act="delete" class="danger">&times; Delete</button>';
+    document.body.appendChild(menu);
+
+    var rect = anchor.getBoundingClientRect();
+    menu.style.top = (rect.bottom + window.scrollY + 4) + 'px';
+    menu.style.left = Math.max(8, rect.right - menu.offsetWidth + window.scrollX) + 'px';
+
+    function close() { menu.remove(); document.removeEventListener('click', onOutside); }
+    function onOutside(e) { if (!menu.contains(e.target)) close(); }
+    setTimeout(function() { document.addEventListener('click', onOutside); }, 0);
+
+    menu.querySelectorAll('[data-act]').forEach(function(el) {
+      el.addEventListener('click', function(e) {
+        var act = el.getAttribute('data-act');
+        // Download — let the native <a download> handle it, then just close.
+        if (act === 'download') { close(); return; }
+        e.preventDefault();
+        if (act === 'send') openSendPicker(file.id, 'move');
+        else if (act === 'copy') openSendPicker(file.id, 'copy');
+        else if (act === 'delete') deleteFile(file.id);
+        close();
+      });
     });
   }
 
