@@ -154,28 +154,57 @@
   // -> + flat fee -> + percent fee -> + tax -> round-up -> total.
   // Sums across every INCLUDED group so a multi-group estimate's proposal
   // total reflects the union of every group whose toggle is on.
+  // Target-margin override matches estimate-editor's computeTotals:
+  // when est.targetMargin is a sane percent (>0 and <100), every
+  // INCLUDED group's marked-up total gets back-computed from its raw
+  // subtotal so the gross-margin result lands exactly on the target.
+  // Without this branch the proposal preview ignored target-margin
+  // mode entirely and printed the raw subtotal (or per-line markup
+  // total), which disagreed with the PROPOSAL TOTAL chip on the
+  // editor toolbar.
+  function targetMarginActive(est) {
+    if (!est) return false;
+    var m = parseFloat(est.targetMargin);
+    return !isNaN(m) && m > 0 && m < 100;
+  }
+  function applyTargetMargin(subtotal, est) {
+    var m = parseFloat(est.targetMargin) || 0;
+    var divisor = 1 - m / 100;
+    if (divisor <= 0) return subtotal;
+    return subtotal / divisor;
+  }
+
   function computeTotal(estimate) {
     if (!estimate) return 0;
     var includedIds = includedGroupIds(estimate);
-    var subtotal = 0;
+    var targetMode = targetMarginActive(estimate);
     var markedUp = 0;
     includedIds.forEach(function(gid) {
       var groupLines = (window.appData.estimateLines || []).filter(function(l) {
         return l.estimateId === estimate.id && l.alternateId === gid;
       });
+      var groupSubtotal = 0;
+      var groupMarkedUp = 0;
       groupLines.forEach(function(l) {
         if (l.section === '__section_header__') {
           // Dollar-mode section: flat $ added once.
           if (l.markupMode === 'dollar' && l.markup !== '' && l.markup != null) {
-            markedUp += parseFloat(l.markup) || 0;
+            groupMarkedUp += parseFloat(l.markup) || 0;
           }
           return;
         }
         var ext = (parseFloat(l.qty) || 0) * (parseFloat(l.unitCost) || 0);
-        subtotal += ext;
+        groupSubtotal += ext;
         var m = effectiveMarkup(l, groupLines, estimate);
-        markedUp += ext * (1 + m / 100);
+        groupMarkedUp += ext * (1 + m / 100);
       });
+      // While target-margin is locked, rebuild this group's marked-up
+      // total off its own subtotal so the per-group sum still equals
+      // the override total (mirrors estimate-editor.js exactly).
+      if (targetMode) {
+        groupMarkedUp = applyTargetMargin(groupSubtotal, estimate);
+      }
+      markedUp += groupMarkedUp;
     });
     var feeFlat = parseFloat(estimate.feeFlat) || 0;
     var feePct = (parseFloat(estimate.feePct) || 0) / 100;
@@ -720,6 +749,11 @@
       return l.estimateId === estimate.id && l.alternateId === alternateId;
     });
     if (!lines.length) return 0;
+    // If this group is excluded from the proposal total, don't apply
+    // the target-margin override to it — its standalone marked-up
+    // total stays line-driven (matches estimate-editor.js behavior).
+    var alt = (estimate.alternates || []).find(function(a) { return a.id === alternateId; });
+    var thisAltExcluded = !!(alt && alt.excludeFromTotal);
     function sectionHeaderForIdx(idx) {
       for (var i = idx - 1; i >= 0; i--) {
         var L = lines[i];
@@ -727,6 +761,7 @@
       }
       return null;
     }
+    var subtotal = 0;
     var markedUp = 0;
     lines.forEach(function(l, idx) {
       if (l.section === '__section_header__') {
@@ -736,6 +771,7 @@
         return;
       }
       var ext = (l.qty || 0) * (l.unitCost || 0);
+      subtotal += ext;
       var section = sectionHeaderForIdx(idx);
       var inDollar = section && section.markupMode === 'dollar';
       var m;
@@ -749,6 +785,9 @@
       if (m == null) m = 0;
       markedUp += ext * (1 + m / 100);
     });
+    if (targetMarginActive(estimate) && !thisAltExcluded) {
+      markedUp = applyTargetMargin(subtotal, estimate);
+    }
     return markedUp;
   }
 
