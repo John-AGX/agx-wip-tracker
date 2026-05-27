@@ -7486,3 +7486,31 @@ body.light-mode .p86-pv-tag-modal-chip {
   .p86-co-line-tbl th.unit,
   .p86-co-line-tbl th.markup { width: 80px; }
 }
+
+/* ──────────────────────────────────────────────────────────────────
+   Client picker (mountSearchablePicker in js/clients.js) — mobile
+   containment. On desktop the picker is an inline dropdown anchored
+   under the select; on mobile (≤640px) the inline-styled popup
+   inherits the form field's width which feels wrong (sometimes
+   spans the whole screen with no breathing room, sometimes clips
+   off-viewport if the field is near the right edge). Lift it to a
+   centered fixed overlay so it always fits + reads as deliberate.
+
+   The picker's markup uses inline styles set by clients.js
+   (position:absolute; left:0; right:0; etc.) — these rules override
+   with !important since we don't own the source declarations.
+   ────────────────────────────────────────────────────────────────── */
+@media (max-width: 640px) {
+  .p86-cli-picker-pop {
+    position: fixed !important;
+    top: 10vh !important;
+    left: 12px !important;
+    right: 12px !important;
+    bottom: auto !important;
+    width: auto !important;
+    max-width: none !important;
+    max-height: 70vh !important;
+    z-index: 9500 !important;
+    box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6) !important;
+  }
+}
