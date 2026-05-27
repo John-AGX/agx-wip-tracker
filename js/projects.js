@@ -2256,7 +2256,18 @@
 
         '<textarea id="rptSummary" class="p86-report-summary" rows="2" placeholder="Optional summary at the top of the report">' + escapeHTML(state.report.summary || '') + '</textarea>' +
         '<div class="p86-report-sections">' +
-          state.sections.map(sectionHTML).join('') +
+          // Interleave "+ insert section here" rows BETWEEN every
+          // pair of sections + above the first + below the last so
+          // users can drop a new section at any precise position
+          // without scrolling to the topbar's "+ Section" button.
+          // Skipped entirely when there are no sections yet — the
+          // empty-state preset buttons handle that case.
+          (state.sections.length
+            ? (insertRowHTML(0) +
+               state.sections.map(function(s, i) {
+                 return sectionHTML(s) + insertRowHTML(i + 1);
+               }).join(''))
+            : '') +
           emptyStateHTML +
         '</div>';
 
@@ -2346,6 +2357,21 @@
       // commit without going back to the editor.
       host.querySelector('#rptPreview').addEventListener('click', function() {
         openReportPreview(state);
+      });
+
+      // Inter-section "+" insert buttons. Delegated to host so a
+      // single listener handles every row (and survives paint()
+      // re-renders since paint reuses the host element). Click opens
+      // a small popover with the 5 section-type choices.
+      host.addEventListener('click', function(e) {
+        var btn = e.target.closest('.p86-report-insert-btn');
+        if (!btn || !host.contains(btn)) return;
+        e.stopPropagation();
+        var row = btn.closest('.p86-report-insert-row');
+        if (!row) return;
+        var idx = parseInt(row.getAttribute('data-insert-at'), 10);
+        if (isNaN(idx)) return;
+        openInsertMenu(btn, idx);
       });
 
       // Empty-state preset buttons.
@@ -2645,20 +2671,27 @@
       modal.querySelector('[data-add]').addEventListener('click', commitAndClose);
     }
 
+    // Factory for fresh section objects. Used by seedSections,
+    // addCustomSection, AND the new inter-section insert popover.
+    // Single source of truth for the field shape so adding a new
+    // section field anywhere only requires one edit here.
+    function _makeSection(label, layout) {
+      return {
+        id: 'sec_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+        label: label || '',
+        layout: layout || 'photo-grid',
+        photoSize: 'small',
+        descSide:  'right',
+        descSides: {},
+        photo_ids: [],
+        captions: {},
+        text_body: '',
+        attachment_ids: []
+      };
+    }
     function seedSections(labels) {
       labels.forEach(function(label) {
-        state.sections.push({
-          id: 'sec_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
-          label: label,
-          layout: 'photo-grid',
-          photoSize: 'small',
-          descSide:  'right',
-          descSides: {},
-          photo_ids: [],
-          captions: {},
-          text_body: '',
-          attachment_ids: []
-        });
+        state.sections.push(_makeSection(label, 'photo-grid'));
       });
       paint();
     }
@@ -2667,6 +2700,27 @@
       var label = window.prompt('Section name:', '');
       if (!label) return;
       seedSections([label]);
+    }
+
+    // Insert a section at the given index with the given layout type.
+    // Used by the inter-section "+" popover. before-after's
+    // before/after image picker is configured via the layout id
+    // alone; everything else just gets a blank shell the user fills
+    // in. Pre-named so the user doesn't have to type a name first
+    // (they can rename in-place via the section header input).
+    function insertSectionAt(index, layout) {
+      var defaultLabel = ({
+        'photo-grid': 'New Section',
+        'single-photo': 'New Stack',
+        'before-after': 'Before / After',
+        'text-block': 'Notes',
+        'attachment-list': 'Attachments'
+      })[layout] || 'New Section';
+      var sec = _makeSection(defaultLabel, layout);
+      var i = Math.max(0, Math.min(index, state.sections.length));
+      state.sections.splice(i, 0, sec);
+      paint();
+      debouncedSave();
     }
 
     // Wave B3 — section schema now carries a `layout` field. Five
@@ -2689,10 +2743,38 @@
       { id: 'text-block',      glyph: '¶', label: 'Text'  },  // ¶
       { id: 'attachment-list', glyph: '\u{1F4CE}', label: 'Files' } // 📎
     ];
+    // Photos-per-page mapping. Small = 4/page (2x2 grid), Medium =
+    // 3/page (1x3 row), Large = 2/page (1x2 row of big photos). Used
+    // by the page-break injection in the body templates so the print
+    // PDF splits at every Nth photo, and by the section-header size
+    // toggle to label each button with its photos-per-page count.
+    var PER_PAGE = { small: 4, medium: 3, large: 2 };
+    // Tiny inline SVGs depicting the grid shape each size produces.
+    // currentColor inheritance lets the toggle's active state recolor
+    // them via the existing .p86-report-section-iconbtn rules.
+    function sizeGlyphSVG(rows, cols) {
+      var W = 16, H = 12, gap = 1.4;
+      var cellW = (W - gap * (cols + 1)) / cols;
+      var cellH = (H - gap * (rows + 1)) / rows;
+      var rects = '';
+      for (var r = 0; r < rows; r++) {
+        for (var c = 0; c < cols; c++) {
+          var x = gap + c * (cellW + gap);
+          var y = gap + r * (cellH + gap);
+          rects += '<rect x="' + x.toFixed(2) + '" y="' + y.toFixed(2) +
+            '" width="' + cellW.toFixed(2) + '" height="' + cellH.toFixed(2) +
+            '" rx="0.6" fill="currentColor" />';
+        }
+      }
+      return '<svg viewBox="0 0 ' + W + ' ' + H + '" width="16" height="12" aria-hidden="true">' + rects + '</svg>';
+    }
     var SIZE_BUTTONS = [
-      { id: 'small',  label: 'S' },
-      { id: 'medium', label: 'M' },
-      { id: 'large',  label: 'L' }
+      // Small = 4/page rendered as a 2x2 grid icon
+      { id: 'small',  glyph: sizeGlyphSVG(2, 2), title: '4 photos per page (2 × 2)' },
+      // Medium = 3/page as a 1x3 row icon
+      { id: 'medium', glyph: sizeGlyphSVG(1, 3), title: '3 photos per page (row)' },
+      // Large = 2/page as a 1x2 row icon
+      { id: 'large',  glyph: sizeGlyphSVG(1, 2), title: '2 photos per page (large)' }
     ];
     function isPhotoLayout(layout) {
       return layout === 'photo-grid' || layout === 'single-photo' || layout === 'before-after';
@@ -2715,11 +2797,77 @@
           var inner = '';
           if (b.glyph) inner += '<span class="p86-report-section-iconbtn-glyph">' + b.glyph + '</span>';
           if (b.label) inner += '<span class="p86-report-section-iconbtn-label">' + escapeHTML(b.label) + '</span>';
-          return '<button type="button" class="p86-report-section-iconbtn' + active + '" data-toggle="' + name + '" data-value="' + escapeAttr(b.id) + '" title="' + escapeAttr(b.label || b.id) + '">' +
+          // Tooltip: prefer explicit b.title (for icon-only buttons
+          // where label is intentionally empty), else fall back to
+          // the visible label, else the id as a last resort.
+          var tip = b.title || b.label || b.id;
+          return '<button type="button" class="p86-report-section-iconbtn' + active + '" data-toggle="' + name + '" data-value="' + escapeAttr(b.id) + '" title="' + escapeAttr(tip) + '">' +
             inner +
           '</button>';
         }).join('') +
       '</div>';
+    }
+
+    // CompanyCam-style "insert section here" affordance. Renders a
+    // horizontal line + circular "+" button at every gap between
+    // sections (and above the first, below the last). Click "+"
+    // opens a popover with the 5 section types — pick one, the new
+    // section drops in at this index.
+    function insertRowHTML(atIndex) {
+      return '<div class="p86-report-insert-row" data-insert-at="' + atIndex + '">' +
+        '<div class="p86-report-insert-line"></div>' +
+        '<button type="button" class="p86-report-insert-btn" title="Insert section here">+</button>' +
+        '<div class="p86-report-insert-line"></div>' +
+      '</div>';
+    }
+
+    // Popover for the "+" button. Positioned absolute next to the
+    // clicked button. Click a layout option → insertSectionAt fires
+    // → re-paint shows the new section in place. Click outside or
+    // press Esc to dismiss without inserting.
+    function openInsertMenu(anchorBtn, atIndex) {
+      var prior = document.getElementById('p86ReportInsertMenu');
+      if (prior) prior.remove();
+      var menu = document.createElement('div');
+      menu.id = 'p86ReportInsertMenu';
+      menu.className = 'p86-report-insert-menu';
+      menu.innerHTML = LAYOUT_BUTTONS.map(function(b) {
+        return '<button type="button" data-insert-layout="' + escapeAttr(b.id) + '">' +
+          '<span class="p86-report-insert-menu-glyph">' + b.glyph + '</span>' +
+          '<span>' + escapeHTML(b.label) + '</span>' +
+        '</button>';
+      }).join('');
+      document.body.appendChild(menu);
+      // Position the menu just below the + button, anchored to its
+      // left edge but clamped to viewport.
+      var rect = anchorBtn.getBoundingClientRect();
+      menu.style.top = (rect.bottom + window.scrollY + 6) + 'px';
+      menu.style.left = Math.max(8, Math.min(rect.left + window.scrollX, window.innerWidth - menu.offsetWidth - 8)) + 'px';
+
+      function close() {
+        if (menu.parentNode) menu.parentNode.removeChild(menu);
+        document.removeEventListener('mousedown', onAway, true);
+        document.removeEventListener('keydown', onKey);
+      }
+      function onAway(e) {
+        if (menu.contains(e.target)) return;
+        close();
+      }
+      function onKey(e) {
+        if (e.key === 'Escape') close();
+      }
+      setTimeout(function() {
+        document.addEventListener('mousedown', onAway, true);
+        document.addEventListener('keydown', onKey);
+      }, 0);
+
+      menu.querySelectorAll('[data-insert-layout]').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          var layout = btn.getAttribute('data-insert-layout');
+          close();
+          insertSectionAt(atIndex, layout);
+        });
+      });
     }
 
     function sectionHTML(section) {
@@ -2879,8 +3027,10 @@
 
     function sectionPhotoGridBodyHTML(section) {
       var size = section.photoSize || 'small';
+      var perPage = PER_PAGE[size] || 4;
+      var photoCount = section.photo_ids.length;
       return '<div class="p86-report-section-photos size-' + escapeAttr(size) + '">' +
-        (section.photo_ids.length === 0
+        (photoCount === 0
           ? '<div class="p86-proj-empty-line" style="grid-column:1/-1;">No photos in this section yet.</div>'
           : section.photo_ids.map(function(pid, idx) {
               var att = allPhotos.find(function(a) { return a.id === pid; });
@@ -2895,7 +3045,7 @@
               // they anchor to the image corners — not the outer card.
               // The per-photo side-swap button only appears when a
               // side column is actually rendered.
-              return '<div class="p86-report-photo' + sideClasses +
+              var cardHTML = '<div class="p86-report-photo' + sideClasses +
                   '" draggable="true" data-photo-id="' + escapeAttr(pid) + '" data-photo-idx="' + idx + '">' +
                 '<div class="p86-report-photo-mainstack">' +
                   photoDragHandleHTML() +
@@ -2906,6 +3056,15 @@
                 '</div>' +
                 photoSideColumnHTML(att, hasSide ? photoSide : null) +
               '</div>';
+              // Inject a page-break separator after every Nth photo
+              // (skip the last position — no trailing break needed).
+              // grid-column:1/-1 in CSS makes the separator span all
+              // columns, splitting the grid into per-page rows.
+              if ((idx + 1) % perPage === 0 && idx < photoCount - 1) {
+                var pageNum = Math.floor((idx + 1) / perPage) + 1;
+                cardHTML += '<div class="p86-report-page-break" data-label="Page ' + pageNum + '"></div>';
+              }
+              return cardHTML;
             }).join('')) +
       '</div>';
     }
@@ -2916,8 +3075,10 @@
       // card's max-width so the section can leave room for
       // descriptions or pack photos tighter.
       var size = section.photoSize || 'small';
+      var perPage = PER_PAGE[size] || 4;
+      var photoCount = section.photo_ids.length;
       return '<div class="p86-report-section-singles">' +
-        (section.photo_ids.length === 0
+        (photoCount === 0
           ? '<div class="p86-proj-empty-line">No photos yet — tap "+ Add photos".</div>'
           : section.photo_ids.map(function(pid, idx) {
               var att = allPhotos.find(function(a) { return a.id === pid; });
@@ -2928,7 +3089,7 @@
               var sideClasses = '';
               if (hasSide) sideClasses += ' has-sidedesc';
               if (hasSide && photoSide === 'left') sideClasses += ' desc-left';
-              return '<div class="p86-report-photo-single size-' + escapeAttr(size) + sideClasses +
+              var cardHTML = '<div class="p86-report-photo-single size-' + escapeAttr(size) + sideClasses +
                   '" draggable="true" data-photo-id="' + escapeAttr(pid) + '" data-photo-idx="' + idx + '">' +
                 '<div class="p86-report-photo-mainstack">' +
                   photoDragHandleHTML() +
@@ -2939,6 +3100,13 @@
                 '</div>' +
                 photoSideColumnHTML(att, hasSide ? photoSide : null) +
               '</div>';
+              // Page-break separator every Nth photo — same logic as
+              // the grid layout but rendered inline in the flex column.
+              if ((idx + 1) % perPage === 0 && idx < photoCount - 1) {
+                var pageNum = Math.floor((idx + 1) / perPage) + 1;
+                cardHTML += '<div class="p86-report-page-break" data-label="Page ' + pageNum + '"></div>';
+              }
+              return cardHTML;
             }).join('')) +
       '</div>';
     }

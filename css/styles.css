@@ -4269,13 +4269,14 @@
   grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
   gap: 10px;
 }
-/* Photo size modifiers — columns per row in grid mode. Reduced
-   from 4/3/2 to 3/2/1 so S and M render noticeably larger; L is
-   effectively a single-column grid (use Stack for the same look
-   with a max-width). Mobile breakpoint below collapses further. */
-.p86-report-section-photos.size-small  { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.p86-report-section-photos.size-medium { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.p86-report-section-photos.size-large  { grid-template-columns: 1fr; }
+/* Photo size modifiers — now mean PHOTOS PER PAGE, not column count.
+   The page-break markers (.p86-report-page-break) injected every Nth
+   photo split the section into print pages. Column counts chosen so
+   each "page" reads as a complete unit (S = 2x2 grid, M = 1x3 row,
+   L = 1x2 row of big photos). */
+.p86-report-section-photos.size-small  { grid-template-columns: repeat(2, minmax(0, 1fr)); }  /* 4/page = 2x2 */
+.p86-report-section-photos.size-medium { grid-template-columns: repeat(3, minmax(0, 1fr)); }  /* 3/page = 1x3 */
+.p86-report-section-photos.size-large  { grid-template-columns: repeat(2, minmax(0, 1fr)); }  /* 2/page = 1x2 */
 /* Stack mode photo size — controls max-width so users can leave
    room for the side description. Bumped S+M up so the photo isn't
    so cramped at narrower widths. */
@@ -4457,6 +4458,129 @@
   border-radius: 6px;
   overflow: hidden;
   background: var(--card-bg, #0f0f1e);
+  page-break-inside: avoid;
+}
+.p86-report-photo-single { page-break-inside: avoid; }
+
+/* Page-break separator — injected every Nth photo by the section
+   body templates (N = photos per page from photoSize). In the editor
+   it's a visible dashed line + "PAGE 2" label so users see where the
+   print will split. In @media print the label hides and the
+   separator triggers a real page-break-after. */
+.p86-report-page-break {
+  grid-column: 1 / -1;   /* span all columns when inside a CSS grid */
+  border-top: 1.5px dashed var(--accent, #4f8cff);
+  margin: 14px 0 8px;
+  text-align: center;
+  position: relative;
+  height: 18px;
+  pointer-events: none;
+}
+.p86-report-page-break::before {
+  content: '\2014 ' attr(data-label) ' \2014';
+  background: var(--bg, #0a0a14);
+  color: var(--accent, #4f8cff);
+  padding: 0 10px;
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  position: absolute;
+  top: -8px;
+  left: 50%;
+  transform: translateX(-50%);
+}
+@media print {
+  .p86-report-page-break {
+    page-break-after: always;
+    border: 0;
+    height: 0;
+    margin: 0;
+    visibility: hidden;
+  }
+  .p86-report-page-break::before { display: none; }
+}
+
+/* Inter-section insert row — CompanyCam-style "+" between sections.
+   A faded horizontal line + a circular + button. Hover lifts opacity
+   so the affordance is clear without dominating the layout when
+   you're not looking for it. Click opens the section-type popover. */
+.p86-report-insert-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+  opacity: 0.4;
+  transition: opacity 0.15s;
+}
+.p86-report-insert-row:hover { opacity: 1; }
+.p86-report-insert-line {
+  flex: 1;
+  height: 1px;
+  background: var(--border, #333);
+}
+.p86-report-insert-btn {
+  width: 28px; height: 28px;
+  border-radius: 50%;
+  border: 1px dashed var(--border, #333);
+  background: var(--card-bg, #0f0f1e);
+  color: var(--text-dim, #888);
+  cursor: pointer;
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 28px;
+  padding: 0;
+}
+.p86-report-insert-row:hover .p86-report-insert-btn,
+.p86-report-insert-btn:hover {
+  border-color: var(--accent, #4f8cff);
+  color: var(--accent, #4f8cff);
+  border-style: solid;
+}
+
+/* Insert popover — opens above/below the + button when clicked.
+   Sits at z:1100 (above the editor at 1050). Same shape as the
+   photo menu popovers elsewhere in projects.js. */
+.p86-report-insert-menu {
+  position: absolute;
+  background: var(--bg, #0a0a14);
+  border: 1px solid var(--border, #333);
+  border-radius: 8px;
+  padding: 6px;
+  box-shadow: 0 8px 24px var(--shadow, rgba(0,0,0,0.4));
+  z-index: 1100;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 190px;
+}
+.p86-report-insert-menu button {
+  text-align: left;
+  background: transparent;
+  border: 0;
+  color: var(--text, #fff);
+  padding: 8px 12px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 12.5px;
+  font-family: inherit;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.p86-report-insert-menu button:hover { background: var(--overlay-light, rgba(255,255,255,0.06)); }
+.p86-report-insert-menu-glyph {
+  font-size: 14px;
+  flex: 0 0 18px;
+  text-align: center;
+}
+@media print {
+  .p86-report-insert-row,
+  .p86-report-insert-menu { display: none !important; }
 }
 /* When the underlying attachment has a description (att.caption set
    via the photo viewer) OR tags, the card grows a side column. The
