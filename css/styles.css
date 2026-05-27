@@ -4667,31 +4667,36 @@
 .p86-report-photo-sidetags {
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  /* spacing from description handled by the parent .sidedesc flex gap */
+  gap: 2px;
+  /* Extra buffer above the meta block so it reads as secondary info,
+     separated from the description body. Hairline rule on top reinforces
+     the divide without adding visual weight. */
+  margin-top: 6px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255,255,255,0.06);
 }
 .p86-report-photo-sidetag {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  font-size: 12.5px;
-  line-height: 1.45;
-  color: var(--text, #fff);
+  gap: 6px;
+  font-size: 10.5px;
+  line-height: 1.4;
+  color: var(--text-dim, #aaa);
+  opacity: 0.75;
   background: transparent;
   border: 0;
   padding: 0;
 }
-/* Filled SVG hero-icons, sized to sit visually flush with the text.
-   `currentColor` paths inherit the row's text color; opacity 0.8 keeps
-   them present without competing with the value text. */
+/* Filled SVG hero-icons, intentionally subdued so they sit quietly
+   beside the value text and don't pull focus from the description. */
 .p86-report-photo-sidetag-icon {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 14px;
-  height: 14px;
-  opacity: 0.8;
-  flex: 0 0 14px;
+  width: 11px;
+  height: 11px;
+  opacity: 0.85;
+  flex: 0 0 11px;
   color: inherit;
 }
 .p86-report-photo-sidetag-icon svg {
@@ -5083,10 +5088,14 @@
   flex-direction: column;
   gap: 14px;
 }
-.p86-report-preview-paper .p86-report-photo-sidetag {
-  color: #333;
+.p86-report-preview-paper .p86-report-photo-sidetags {
+  border-top-color: rgba(0,0,0,0.08);
 }
-.p86-report-preview-paper .p86-report-photo-sidetag-icon { color: #777; }
+.p86-report-preview-paper .p86-report-photo-sidetag {
+  color: #666;
+  opacity: 1;
+}
+.p86-report-preview-paper .p86-report-photo-sidetag-icon { color: #999; }
 
 /* Files list inside preview (attachment-list layout) */
 .p86-report-preview-files {
