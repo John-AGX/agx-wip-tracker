@@ -97,7 +97,7 @@
     })();
     </script>
 
-    <link rel="stylesheet" href="css/styles.css?v=137">
+    <link rel="stylesheet" href="css/styles.css?v=138">
     <link rel="stylesheet" href="css/report-style-packs.css?v=3">
     <link rel="stylesheet" href="css/workspace-layout.css?v=56b">
     <link rel="stylesheet" href="css/workspace.css?v=37b">
@@ -967,11 +967,18 @@
 
                                 <div style="display:flex;flex-direction:column;gap:16px;">
                                     <div class="action-buttons" style="margin-bottom:0;">
-                                        <button class="primary" onclick="addEstimateLineFromEditor()">&#x2795; Line Item</button>
-                                        <button class="secondary" onclick="addEstimateSectionFromEditor()">&#x2795; Subgroup</button>
-                                        <button class="ghost" onclick="addStandardSectionsFromEditor()" title="Add the four BT-aligned subgroups (Materials / Labor / GC / Subs)">&#x2795; Standard Subgroups</button>
-                                        <button class="ghost" onclick="window.MaterialsDrawer && window.MaterialsDrawer.toggle()" title="Search the materials catalog (real Project 86 purchase history) and drop lines into the active group">&#x1F9F1; Materials Catalog</button>
-                                        <button class="ghost" onclick="window.openScopeModal && window.openScopeModal()" title="Open the scope of work as a quick-edit popup" style="margin-left:auto;">&#x1F4DD; Scope</button>
+                                        <button class="ee-btn primary" onclick="addEstimateLineFromEditor()">+ Line Item</button>
+                                        <!-- Add-Section dropdown — replaces the old "+ Subgroup" +
+                                             "+ Standard Subgroups" pair. Click opens a small popover
+                                             listing the four BT-aligned standard subgroups + a "Custom
+                                             section…" entry. Picking a standard one inserts it (if
+                                             not already present); custom prompts for a name. -->
+                                        <div class="ee-add-section-wrap" style="position:relative;display:inline-block;">
+                                            <button class="ee-btn secondary" onclick="window.toggleAddSectionMenu()" id="ee-add-section-btn">+ Section ▾</button>
+                                            <div id="ee-add-section-menu" class="ee-add-section-menu" hidden></div>
+                                        </div>
+                                        <button class="ee-btn ghost" onclick="window.MaterialsDrawer && window.MaterialsDrawer.toggle()" title="Search the materials catalog (real Project 86 purchase history) and drop lines into the active group">&#x1F9F1; Materials Catalog</button>
+                                        <button class="ee-btn ghost" onclick="window.openScopeModal && window.openScopeModal()" title="Open the scope of work as a quick-edit popup" style="margin-left:auto;">&#x1F4DD; Scope</button>
                                     </div>
                                     <div id="ee-lines-container"></div>
                                     <div style="font-size:11px;color:var(--text-dim,#888);">Edits autosave on blur. Drag the &#x2630; handle to reorder. Per-line markup overrides the default.</div>
@@ -2481,7 +2488,7 @@
     <script src="js/jobs.js?v=81"></script>
     <script src="js/estimates.js?v=37"></script>
     <script src="js/proposal.js?v=25"></script>
-    <script src="js/estimate-editor.js?v=48"></script>
+    <script src="js/estimate-editor.js?v=49"></script>
     <!-- Change Order editor — overlay opened from the job detail's
          Change Orders tab. Loads after pricing-pipeline (which it
          consumes via window.p86Pricing) and after api.js (which

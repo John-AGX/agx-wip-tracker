@@ -7197,6 +7197,111 @@ body.light-mode .p86-pv-tag-modal-chip {
 .p86-totals-chip.info .p86-totals-chip-value { color: var(--accent, #60a5fa); }
 .p86-totals-chip.dim  .p86-totals-chip-value { color: var(--text-dim, #c4c8d8); }
 
+/* Estimate editor line table — column header row + cleaner input
+   styling so the table reads more like the CO editor's clean grid.
+   The row structures themselves (rendered by renderLineItemRow /
+   renderSectionHeaderRow in estimate-editor.js) keep their inline
+   styles for backwards compat; these rules just lift the
+   presentation. */
+.ee-line-tbl .ee-line-tbl-head {
+  display: flex;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.03);
+  border-bottom: 1px solid var(--border, #333);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--text-dim, #c4c8d8);
+  padding: 8px 10px;
+}
+.ee-line-tbl-head .ee-th-handle { flex: 0 0 28px; }
+.ee-line-tbl-head .ee-th-desc   { flex: 2 1 200px; padding: 0 8px; }
+.ee-line-tbl-head .ee-th-num    { flex: 1; min-width: 80px; padding: 0 8px; text-align: right; }
+.ee-line-tbl-head .ee-th-del    { flex: 0 0 40px; }
+/* Mobile: collapse the header label row — inputs are self-labeled by
+   placeholders on small screens. */
+@media (max-width: 600px) {
+  .ee-line-tbl .ee-line-tbl-head { display: none; }
+}
+/* Tighten the input styling inside line rows so they don't look like
+   form fields stacked on form fields. Targets only inputs inside
+   data-row-edit-gate rows so section headers keep their own chrome. */
+.ee-line-tbl [data-row-edit-gate] input,
+.ee-line-tbl [data-row-edit-gate] textarea {
+  background: transparent !important;
+  border-color: transparent !important;
+  transition: border-color 0.12s, background 0.12s;
+}
+.ee-line-tbl [data-row-edit-gate] input:focus,
+.ee-line-tbl [data-row-edit-gate] textarea:focus {
+  background: var(--input-bg, #0f1117) !important;
+  border-color: var(--border, #2e3346) !important;
+  outline: none;
+}
+.ee-line-tbl [data-row-edit-gate][data-editing="true"] input,
+.ee-line-tbl [data-row-edit-gate][data-editing="true"] textarea {
+  border-color: var(--border, #2e3346) !important;
+}
+
+/* "+ Section" dropdown on the estimate editor toolbar. Replaces the
+   old "+ Subgroup" + "+ Standard Subgroups" pair with a single button
+   that opens a popover listing the four BT-aligned presets + a
+   "Custom section…" option. Items disable themselves when their
+   btCategory is already present in the active alternate, with a
+   muted hint so the PM knows why. */
+.ee-add-section-menu[hidden] { display: none; }
+.ee-add-section-menu {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 1100;
+  min-width: 260px;
+  background: var(--surface, #1a1d27);
+  border: 1px solid var(--border, #2e3346);
+  border-radius: 8px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.5);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ee-add-section-menu button {
+  text-align: left;
+  background: transparent;
+  border: 0;
+  color: var(--text, #fff);
+  padding: 9px 12px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-family: inherit;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.ee-add-section-menu button:hover:not(:disabled) {
+  background: var(--overlay-light, rgba(255, 255, 255, 0.06));
+}
+.ee-add-section-menu button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.ee-add-section-menu button strong {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text, #fff);
+}
+.ee-add-section-menu button small {
+  font-size: 11px;
+  color: var(--text-dim, #c4c8d8);
+  font-weight: 400;
+}
+.ee-add-section-menu-divider {
+  height: 1px;
+  background: var(--border, #2e3346);
+  margin: 4px 2px;
+}
+
 /* Body — side panel + line table */
 .p86-co-body {
   display: grid;

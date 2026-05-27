@@ -1152,7 +1152,25 @@
       return;
     }
 
-    var html = bannerHtml + '<div class="ee-line-table" style="border:1px solid var(--border,#333);border-radius:8px;overflow:hidden;">';
+    // Column headers at the top of the table — matches the CO editor's
+    // line table look (uppercase muted labels, sticky alignment).
+    // .ee-line-tbl is the class that drives the cleaner row styling;
+    // the existing inline styles still apply per-row for backwards-
+    // compat. The header row sits OUTSIDE the row flex so the drag
+    // handle column doesn't get a header label (the rows still align
+    // because both use the same flex widths via the helper functions).
+    var headerHTML =
+      '<div class="ee-line-tbl-head">' +
+        '<div class="ee-th-handle"></div>' +
+        '<div class="ee-th-desc">Description</div>' +
+        '<div class="ee-th-num">Qty</div>' +
+        '<div class="ee-th-num">Unit Cost</div>' +
+        '<div class="ee-th-num">Ext.</div>' +
+        '<div class="ee-th-num">Markup %</div>' +
+        '<div class="ee-th-num">Marked-Up</div>' +
+        '<div class="ee-th-del"></div>' +
+      '</div>';
+    var html = bannerHtml + '<div class="ee-line-table ee-line-tbl" style="border:1px solid var(--border,#333);border-radius:8px;overflow:hidden;">' + headerHTML;
 
     // Group rendering: walk lines in order, render section headers + lines
     // + per-section subtotals. Markup is now per-section — every line
@@ -1242,14 +1260,18 @@
     var isDollar = mode === 'dollar';
     var prefix = isDollar ? '$' : '';
     var suffix = isDollar ? '' : '%';
+    // Section header row — yellow/amber accent (matches the CO editor's
+    // section row) so subgroups stand out clearly from line items. Soft
+    // amber tint background instead of the old blue so it doesn't fight
+    // with the per-line blue focus rings.
     return '<div data-section-id="' + idAttr + '" data-line-id="' + idAttr + '" ' +
         'ondragover="onLineDragOver(event)" ondragleave="onLineDragLeave(event)" ' +
         'ondrop="onLineDrop(event, \'' + idAttr + '\')" ' +
-        'style="display:flex;align-items:center;flex-wrap:wrap;background:rgba(79,140,255,0.06);border-bottom:1px solid var(--border,#333);padding:6px 10px;gap:8px;">' +
+        'style="display:flex;align-items:center;flex-wrap:wrap;background:rgba(251,191,36,0.05);border-top:1px solid rgba(251,191,36,0.15);border-bottom:1px solid rgba(251,191,36,0.15);padding:6px 10px;gap:8px;">' +
       dragHandleHTML(line.id) +
       '<input type="text" value="' + escapeHTML(line.description || '') + '" placeholder="Section name" ' +
         'oninput="updateSectionName(\'' + idAttr + '\', this.value)" ' +
-        'style="flex:1;min-width:140px;font-size:13px;font-weight:700;background:transparent;border:1px solid transparent;border-radius:4px;padding:4px 8px;color:#4f8cff;text-transform:uppercase;letter-spacing:0.5px;" ' +
+        'style="flex:1;min-width:140px;font-size:13px;font-weight:700;background:transparent;border:1px solid transparent;border-radius:4px;padding:4px 8px;color:#fbbf24;text-transform:uppercase;letter-spacing:0.5px;" ' +
         'onfocus="this.style.borderColor=\'var(--border,#333)\';" onblur="this.style.borderColor=\'transparent\';" />' +
       // Section markup pill — number input + $/% toggle + override checkbox.
       // Slider was removed; the number input alone is the source of truth.
@@ -1630,6 +1652,98 @@
     renderLineItems();
     renderTotals();
   }
+
+  // Insert a single standard subgroup by btCategory id. Used by the new
+  // "+ Section" dropdown — picks one from the preset list instead of
+  // adding all four at once. Returns true if added, false if a section
+  // with that btCategory already exists in the active alternate.
+  function addStandardSectionByCategory(btCategory) {
+    var est = getEstimate();
+    if (!est) return false;
+    var preset = STANDARD_SECTIONS_PRESET.find(function(p) { return p.btCategory === btCategory; });
+    if (!preset) return false;
+    var altId = est.activeAlternateId;
+    var dupe = (appData.estimateLines || []).find(function(l) {
+      return l.estimateId === est.id && l.alternateId === altId &&
+             l.section === '__section_header__' && l.btCategory === btCategory;
+    });
+    if (dupe) {
+      alert('"' + preset.name + '" is already in this group.');
+      return false;
+    }
+    appData.estimateLines.push({
+      id: 's' + Date.now(),
+      estimateId: est.id,
+      alternateId: altId,
+      section: '__section_header__',
+      description: preset.name,
+      btCategory: preset.btCategory,
+      markup: preset.markup
+    });
+    debouncedSave();
+    renderLineItems();
+    renderTotals();
+    return true;
+  }
+  window.addStandardSectionByCategory = addStandardSectionByCategory;
+
+  // Toggle the "+ Section" dropdown menu. Built lazily on first open so
+  // the preset list reflects current STANDARD_SECTIONS_PRESET state and
+  // existing-section dedup is computed against the active alternate.
+  function toggleAddSectionMenu() {
+    var menu = document.getElementById('ee-add-section-menu');
+    if (!menu) return;
+    if (!menu.hasAttribute('hidden')) {
+      menu.setAttribute('hidden', '');
+      return;
+    }
+    var est = getEstimate();
+    var altId = est && est.activeAlternateId;
+    var existingCats = {};
+    (appData.estimateLines || []).forEach(function(l) {
+      if (l.estimateId === est.id && l.alternateId === altId &&
+          l.section === '__section_header__' && l.btCategory) {
+        existingCats[l.btCategory] = true;
+      }
+    });
+    var items = STANDARD_SECTIONS_PRESET.map(function(p) {
+      var disabled = !!existingCats[p.btCategory];
+      var note = disabled ? '<small>already in this group</small>' : '';
+      return '<button type="button" data-bt="' + p.btCategory + '"' + (disabled ? ' disabled' : '') + '>' +
+        '<strong>' + p.name + '</strong>' + note +
+      '</button>';
+    }).join('');
+    menu.innerHTML = items +
+      '<div class="ee-add-section-menu-divider"></div>' +
+      '<button type="button" data-bt="__custom__"><strong>Custom section…</strong><small>name it yourself</small></button>';
+    menu.removeAttribute('hidden');
+
+    function close() {
+      menu.setAttribute('hidden', '');
+      document.removeEventListener('click', onOutside, true);
+    }
+    function onOutside(e) {
+      var btn = document.getElementById('ee-add-section-btn');
+      if (!menu.contains(e.target) && !(btn && btn.contains(e.target))) close();
+    }
+    // Defer so the current click that opened the menu doesn't immediately close it.
+    setTimeout(function() { document.addEventListener('click', onOutside, true); }, 0);
+
+    menu.querySelectorAll('[data-bt]').forEach(function(btn) {
+      btn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        var cat = btn.getAttribute('data-bt');
+        close();
+        if (cat === '__custom__') {
+          // Reuse the existing custom-section flow (prompts for name).
+          addEstimateSectionFromEditor();
+        } else {
+          addStandardSectionByCategory(cat);
+        }
+      });
+    });
+  }
+  window.toggleAddSectionMenu = toggleAddSectionMenu;
 
   // ──────────────────────────────────────────────────────────────────
   // Drag-reorder — native HTML5 D&D. Each line / section row is a drop
