@@ -1902,23 +1902,35 @@
                 grid-template-columns: 1fr;
             }
 
-            /* Mobile fallback — stack header content into two rows.
-               Bumps the height to ~84px on phones, but the trade-off
-               is each control gets a tappable target. The new
-               single-row layout would crush at <600px otherwise. */
+            /* Mobile header — single-row layout. Logo + PROJECT 86
+               wordmark on the left, icon cluster (files / bell /
+               directory / avatar) on the right, all on one line.
+               The top tabs hide entirely (bottom nav owns navigation
+               on phones) so we don't have to budget room for them. */
             header {
-                padding: 8px 16px;
+                padding: 6px 12px;
                 height: auto;
             }
             .header-content {
-                flex-wrap: wrap;
-                gap: 8px 14px;
+                flex-wrap: nowrap;
+                gap: 6px;
             }
+            .header-brand { gap: 8px; min-width: 0; flex: 0 1 auto; }
+            .header-logo { height: 28px; }
             .header-user-menu {
-                margin-left: 0;
-                flex: 1 1 100%;
+                margin-left: auto;
+                flex: 0 0 auto;
+                gap: 4px;
                 justify-content: flex-end;
             }
+            /* Slim icon buttons + avatar so the full row fits on a
+               390px viewport even with PROJECT 86 visible. */
+            .header-icon-btn { width: 30px; height: 30px; }
+            .header-avatar { width: 30px; height: 30px; font-size: 11px; }
+            /* Hide the weather chip on mobile — it's a nice-to-have
+               that eats horizontal room. The bottom nav has more
+               important things to do with the user's tap surface. */
+            .header-weather { display: none !important; }
             nav.tabs {
                 flex: 1 1 100%;
                 height: 36px;
@@ -1952,7 +1964,17 @@
                nav owns navigation duty. */
             nav.tabs { display: none !important; }
             .p86-ask86-badge.floating { display: none !important; }
-            .header-wordmark { display: none; }
+            /* Keep the PROJECT 86 wordmark visible on mobile (was
+               hidden previously) but shrink it so logo + wordmark +
+               icon cluster all fit on a single 390px row. */
+            .header-wordmark {
+                font-size: 12px;
+                letter-spacing: 1.6px;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+                min-width: 0;
+            }
             /* Reserve room at the bottom of the page so content
                doesn't get hidden behind the fixed nav. 64px nav
                + iPhone safe-area for the home indicator. */
@@ -2020,22 +2042,45 @@
                 color: currentColor;
             }
             /* Center "86" button — visually lifted accent. The icon
-               sits in a 48px cyan circle that pops above the bar so
-               86 reads as the primary action even at a glance. The
-               negative margin floats it; the box-shadow gives depth. */
+               sits in a 52px circle that pops above the bar so 86
+               reads as the primary action even at a glance. The
+               negative margin floats it; the box-shadow gives depth.
+               Background is a deep navy so the cyan cube logo (now
+               rendered inside via .p86-mobile-nav-icon-logo) reads
+               with maximum contrast — the old cyan gradient washed
+               the logo out. */
             .p86-mobile-nav-btn-primary { position: relative; }
             .p86-mobile-nav-btn-primary .p86-mobile-nav-icon {
-                width: 48px; height: 48px;
-                background: linear-gradient(135deg, #22d3ee 0%, #4f8cff 100%);
+                width: 52px; height: 52px;
+                background: radial-gradient(circle at 30% 30%, #1e293b 0%, #0b1226 75%);
+                border: 1.5px solid rgba(34, 211, 238, 0.55);
                 border-radius: 50%;
-                box-shadow: 0 6px 14px rgba(34, 211, 238, 0.45),
-                            0 2px 6px rgba(0, 0, 0, 0.4);
-                margin-top: -22px;
+                box-shadow: 0 6px 14px rgba(34, 211, 238, 0.35),
+                            0 2px 6px rgba(0, 0, 0, 0.45);
+                margin-top: -24px;
                 color: #fff;
+                /* Belt-and-suspenders centering: align-items+justify
+                   on the parent + a fixed-size img with no margin so
+                   the cube sits dead-center inside the circle. */
+                align-items: center;
+                justify-content: center;
+                overflow: hidden;
             }
             .p86-mobile-nav-btn-primary .p86-mobile-nav-icon svg {
-                width: 26px; height: 26px;
-                color: #fff;
+                width: 28px; height: 28px;
+                color: #22d3ee;
+            }
+            /* Cube logo inside the primary 86 button — sized + centered
+               so it sits visually balanced in the circle. The SVG's
+               internal padding already leaves breathing room around
+               the cube, so 32px reads well inside the 52px circle. */
+            .p86-mobile-nav-btn-primary .p86-mobile-nav-icon-logo img {
+                width: 32px;
+                height: 32px;
+                display: block;
+                /* Drop-shadow so the cyan strokes stay readable against
+                   the dark interior gradient even on cheap screens. */
+                filter: drop-shadow(0 1px 2px rgba(0,0,0,0.4));
             }
             .p86-mobile-nav-btn-primary .p86-mobile-nav-label {
                 color: #22d3ee;

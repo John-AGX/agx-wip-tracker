@@ -97,7 +97,7 @@
     })();
     </script>
 
-    <link rel="stylesheet" href="css/styles.css?v=129">
+    <link rel="stylesheet" href="css/styles.css?v=130">
     <link rel="stylesheet" href="css/report-style-packs.css?v=3">
     <link rel="stylesheet" href="css/workspace-layout.css?v=56b">
     <link rel="stylesheet" href="css/workspace.css?v=37b">
@@ -2644,7 +2644,13 @@
       <button type="button" class="p86-mobile-nav-btn p86-mobile-nav-btn-primary" data-mobile-nav="ask86"
               aria-label="Ask 86"
               onclick="if(window.p86AI&amp;&amp;window.p86AI.open)window.p86AI.open({entityType:'ask86'});">
-        <span class="p86-mobile-nav-icon" data-p86-icon="dna"></span>
+        <!-- Cyan cube logo (the same one used in the PWA icons) gives
+             the Ask 86 button its own brand identity instead of the
+             generic DNA glyph. Wrapped in .p86-mobile-nav-icon-logo so
+             the lift / circle / shadow still come from the parent. -->
+        <span class="p86-mobile-nav-icon p86-mobile-nav-icon-logo" aria-hidden="true">
+          <img src="images/project-86-icon.svg" alt="" draggable="false" />
+        </span>
         <span class="p86-mobile-nav-label">86</span>
       </button>
       <button type="button" class="p86-mobile-nav-btn" data-mobile-nav="schedule"
