@@ -287,6 +287,30 @@ async function initSchema() {
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );
 
+    -- Job-scoped Change Orders. Same JSONB-blob shape as estimates so
+    -- the line-item editor + pricing pipeline can share code, but the
+    -- canonical job_id / status / approved_at columns sit outside the
+    -- blob so we can query "all approved COs for this job" efficiently
+    -- in the WIP rollup path without parsing JSONB. Lines live inside
+    -- data.lines[] (same __section_header__ sentinel convention as
+    -- estimateLines). linked_node_id is nullable until the user wires
+    -- the CO to a nodegraph CO node.
+    CREATE TABLE IF NOT EXISTS job_change_orders (
+      id TEXT PRIMARY KEY,
+      job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+      owner_id INTEGER REFERENCES users(id),
+      status TEXT NOT NULL DEFAULT 'draft',
+      co_number TEXT,
+      data JSONB NOT NULL DEFAULT '{}'::jsonb,
+      approved_at TIMESTAMPTZ,
+      approved_by INTEGER REFERENCES users(id),
+      linked_node_id TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_job_change_orders_job ON job_change_orders(job_id);
+    CREATE INDEX IF NOT EXISTS idx_job_change_orders_status ON job_change_orders(status);
+
     -- Role definitions. users.role is a TEXT FK by name (no schema change to
     -- users), so existing 'admin'/'corporate'/'pm' values keep working as
     -- soon as the matching rows are seeded below. capabilities is a JSONB

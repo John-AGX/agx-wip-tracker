@@ -19,6 +19,7 @@ const { setRolePool, refreshRoleCache } = require('./auth');
 const authRoutes = require('./routes/auth-routes');
 const jobRoutes = require('./routes/job-routes');
 const estimateRoutes = require('./routes/estimate-routes');
+const changeOrderRoutes = require('./routes/change-order-routes');
 const roleRoutes = require('./routes/role-routes');
 const clientRoutes = require('./routes/client-routes');
 const leadRoutes = require('./routes/lead-routes');
@@ -105,6 +106,10 @@ app.use('/api/recipes', payloadRoutes.recipes);
 // ROLES_MANAGE inside the sub-router.
 app.use('/api/admin/payloads', payloadRoutes.admin);
 app.use('/api/estimates', estimateRoutes);
+// Change Orders use two URL families (/api/jobs/:jobId/change-orders
+// and /api/change-orders/:id) so we mount the router at /api and let
+// it define both shapes internally.
+app.use('/api', changeOrderRoutes);
 app.use('/api/roles', roleRoutes);
 app.use('/api/clients', clientRoutes);
 app.use('/api/leads', leadRoutes);
