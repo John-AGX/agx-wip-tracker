@@ -6374,18 +6374,168 @@
    keeps its own internal styling; just make sure the chips wrap. */
 .p86-pv-tags-host .p86-tag-editor-chips { flex-wrap: wrap; }
 
+/* ── My Files: layout + sidebar rail ─────────────────────────────────
+   Blends Claude's sidebar typography (small uppercase section heads,
+   quiet item rows, a single primary action at the top) with the node
+   graph library's dark Project 86 palette (#0d1019 surface, #1c2236
+   dividers, cyan accent). Plain HTML buttons + lists so it stays
+   keyboard / screen-reader friendly. */
+.mf-layout {
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  gap: 22px;
+  align-items: flex-start;
+}
+.mf-rail {
+  background: var(--card-bg, #0d1019);
+  border: 1px solid var(--border, #1c2236);
+  border-radius: 12px;
+  padding: 10px 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-family: inherit;
+}
+/* Top quick-action: New Folder. Reads like Claude's "+ New session"
+   button — full-width, subtle hover lift, dashed plus glyph. */
+.mf-rail-action {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 10px;
+  background: transparent;
+  border: 1px dashed var(--border, #2e3346);
+  border-radius: 8px;
+  color: var(--text, #fff);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+  margin-bottom: 4px;
+}
+.mf-rail-action:hover {
+  background: rgba(34, 211, 238, 0.06);
+  border-color: var(--accent, #22d3ee);
+  color: var(--accent, #22d3ee);
+}
+.mf-rail-action-icon {
+  width: 18px; height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  line-height: 1;
+  border-radius: 4px;
+  color: var(--accent, #22d3ee);
+}
+/* Small section headers — Claude/nodegraph style: 10px caps, tracked
+   out, muted. Vertical padding keeps them clearly separated. */
+.mf-rail-section-head {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-dim, #6a7090);
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  padding: 12px 10px 4px;
+}
+.mf-rail-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.mf-rail-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 10px;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  color: var(--text, #e4e6f0);
+  font-size: 13px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+.mf-rail-row:hover {
+  background: var(--overlay-light, rgba(255, 255, 255, 0.04));
+  color: var(--text, #fff);
+}
+.mf-rail-row.active {
+  background: rgba(34, 211, 238, 0.10);
+  color: var(--accent, #22d3ee);
+  font-weight: 600;
+}
+.mf-rail-row-glyph {
+  flex: 0 0 16px;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--text-dim, #8899bb);
+}
+.mf-rail-row.active .mf-rail-row-glyph { color: var(--accent, #22d3ee); }
+.mf-rail-row-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mf-rail-row-count {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim, #6a7090);
+  padding: 1px 7px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+}
+.mf-rail-row.active .mf-rail-row-count {
+  color: var(--accent, #22d3ee);
+  background: rgba(34, 211, 238, 0.14);
+}
+
 /* ── My Files grid ──────────────────────────────────────────────────
-   Pure CompanyCam-style tiles — same .p86-proj-photo-tile structure
-   the project photo grid uses. The visual fills the card; checkbox
-   + ⋮ menu live in the top corners; uploader initials + clock-time
-   footer wrap the bottom. Actions (download / send / copy / delete)
-   come from the ⋮ menu, so no separate button bar is needed.
-   Anchors inside .p86-proj-photo-menu render like the buttons so
-   the Download link reads as part of the same menu. */
+   CompanyCam-style tiles built on .p86-proj-photo-tile. The footer
+   is enriched with a 2-line meta block (filename + "date · time · by")
+   that My Files needs but the project tile doesn't — those tiles live
+   inside a project where filename context is implicit. */
 .mf-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
   gap: 12px;
+}
+.mf-tile-footer {
+  flex-direction: column;
+  align-items: stretch !important;
+  gap: 2px !important;
+  padding: 7px 9px 8px !important;
+}
+.mf-tile-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text, #fff);
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mf-tile-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 10.5px;
+  color: var(--text-dim, #c4c8d8);
+  line-height: 1.3;
+}
+.mf-tile-when { white-space: nowrap; }
+.mf-tile-by {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
 }
 .mf-file-menu a[data-act] {
   display: block;
@@ -6402,6 +6552,19 @@
 }
 .mf-file-menu a[data-act]:hover {
   background: var(--overlay-light, rgba(255,255,255,0.06));
+}
+
+/* Mobile: stack rail above the grid. The rail collapses to a
+   horizontal scroll so folders stay reachable without eating
+   half the screen. */
+@media (max-width: 768px) {
+  .mf-layout {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+  .mf-rail {
+    padding: 8px 6px 10px;
+  }
 }
 
 /* ── Mobile drawer (≤768px) ─────────────────────────────────────── */

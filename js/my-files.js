@@ -196,8 +196,11 @@
             (isVirtualFolder
               ? '' // Virtual folders (Projects, Tools) own their own controls inside the pane
               : (
-                  '<button class="ee-btn secondary" onclick="window.myFiles.newFolder()" style="font-size:12px;padding:6px 12px;">&#x1F4C1; New Folder</button>' +
-                  '<button class="primary" onclick="document.getElementById(\'mfFileInput\').click();" style="font-size:13px;padding:7px 14px;">&#x2795; Upload</button>' +
+                  // "New Folder" lives in the sidebar rail action now —
+                  // keep the header focused on the single primary action
+                  // (Upload). In-house .ee-btn.primary style matches the
+                  // Summary / Lead editor button language.
+                  '<button class="ee-btn primary" data-p86-icon="plus" onclick="document.getElementById(\'mfFileInput\').click();">Upload</button>' +
                   '<input type="file" id="mfFileInput" multiple style="display:none;" onchange="window.myFiles.handleUpload(this.files); this.value=\'\';" />'
                 )
             ) +
@@ -209,36 +212,46 @@
           ? '<div style="padding:14px;background:rgba(248,113,113,0.1);border:1px solid rgba(248,113,113,0.3);border-radius:8px;color:#f87171;font-size:13px;margin-bottom:14px;">' + escapeHTML(_state.error) + '</div>'
           : '') +
 
-        // Two-col: folder list (left) + file grid (right)
-        '<div style="display:grid;grid-template-columns:200px minmax(0,1fr);gap:18px;align-items:flex-start;">' +
-          // Folders rail
-          '<div style="border:1px solid var(--border,#333);border-radius:10px;background:var(--card-bg,#0f0f1e);overflow:hidden;">' +
-            '<div style="padding:8px 12px;border-bottom:1px solid var(--border,#333);font-size:10px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.4px;">Folders</div>' +
-            folders.map(function(f, idx) {
-              var active = f === _state.activeFolder;
-              var isProjects = f === PROJECTS_FOLDER;
-              var isTools = f === TOOLS_FOLDER;
-              var isVirtual = isProjects || isTools;
-              // Virtual rows: pinned at the bottom with a divider above
-              // (only the FIRST virtual row gets the divider so they
-              // group as one section) and a custom icon.
-              var icon = isProjects ? '&#x1F4F8;' : (isTools ? '&#x1F527;' : '&#x1F4C1;');
-              var label = isProjects ? 'Projects' : (isTools ? 'Tools' : prettyFolder(f));
-              var n = isVirtual ? '' : (bucket[f] || []).length;
-              // First virtual folder gets the divider line above; subsequent
-              // virtual folders sit flush against the previous one.
-              var prev = folders[idx - 1];
-              var prevIsVirtual = prev === PROJECTS_FOLDER || prev === TOOLS_FOLDER;
-              var divider = (isVirtual && !prevIsVirtual)
-                ? 'border-top:1px solid var(--border,#333);margin-top:4px;padding-top:8px;'
-                : '';
-              return '<button class="mf-folder-row" data-folder="' + escapeAttr(f) + '" onclick="window.myFiles.selectFolder(\'' + escapeAttr(f) + '\')" ' +
-                'style="display:flex;width:100%;align-items:center;justify-content:space-between;gap:8px;padding:7px 12px;background:' + (active ? 'rgba(34,211,238,0.10)' : 'transparent') + ';border:none;border-bottom:1px solid var(--border,#222);color:' + (active ? 'var(--accent,#22d3ee)' : 'var(--text,#fff)') + ';font-size:12px;font-weight:' + (active ? '600' : '400') + ';cursor:pointer;text-align:left;' + divider + '">' +
-                '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + icon + ' ' + escapeHTML(label) + '</span>' +
-                (n !== '' ? '<span style="font-size:10px;color:var(--text-dim,#888);">' + n + '</span>' : '') +
-              '</button>';
-            }).join('') +
-          '</div>' +
+        // Two-col: sidebar (left) + file grid (right). The sidebar
+        // blends Claude's clean section structure (small uppercase
+        // headers, quiet item rows, top-aligned quick action) with
+        // the node-graph library's dark Project 86 palette and
+        // typography. CSS lives under .mf-rail / .mf-rail-*.
+        '<div class="mf-layout">' +
+          // Sidebar rail
+          '<aside class="mf-rail">' +
+            '<button class="mf-rail-action" onclick="window.myFiles.newFolder()" title="Create a new folder">' +
+              '<span class="mf-rail-action-icon">+</span>' +
+              '<span class="mf-rail-action-label">New folder</span>' +
+            '</button>' +
+
+            '<div class="mf-rail-section-head">Folders</div>' +
+            '<div class="mf-rail-list">' +
+              folders.filter(function(f) { return f !== PROJECTS_FOLDER && f !== TOOLS_FOLDER; }).map(function(f) {
+                var active = f === _state.activeFolder;
+                var n = (bucket[f] || []).length;
+                return '<button class="mf-rail-row' + (active ? ' active' : '') + '" data-folder="' + escapeAttr(f) + '" onclick="window.myFiles.selectFolder(\'' + escapeAttr(f) + '\')">' +
+                  '<span class="mf-rail-row-glyph">&#x1F4C1;</span>' +
+                  '<span class="mf-rail-row-label">' + escapeHTML(prettyFolder(f)) + '</span>' +
+                  '<span class="mf-rail-row-count">' + n + '</span>' +
+                '</button>';
+              }).join('') +
+            '</div>' +
+
+            '<div class="mf-rail-section-head">Views</div>' +
+            '<div class="mf-rail-list">' +
+              [PROJECTS_FOLDER, TOOLS_FOLDER].filter(function(f) { return folders.indexOf(f) !== -1; }).map(function(f) {
+                var active = f === _state.activeFolder;
+                var isProjects = f === PROJECTS_FOLDER;
+                var glyph = isProjects ? '&#x1F4F8;' : '&#x1F527;';
+                var label = isProjects ? 'Projects' : 'Tools';
+                return '<button class="mf-rail-row' + (active ? ' active' : '') + '" data-folder="' + escapeAttr(f) + '" onclick="window.myFiles.selectFolder(\'' + escapeAttr(f) + '\')">' +
+                  '<span class="mf-rail-row-glyph">' + glyph + '</span>' +
+                  '<span class="mf-rail-row-label">' + escapeHTML(label) + '</span>' +
+                '</button>';
+              }).join('') +
+            '</div>' +
+          '</aside>' +
 
           // Right pane — files for normal folders, virtual-pane host
           // for Projects / Tools. The host element gets a stable id so
@@ -350,6 +363,7 @@
       var uploaderName = a.uploaded_by_name || '';
       var uploaderInitials = uploaderName ? initialsOf(uploaderName) : '';
       var time = fmtTime(a.uploaded_at);
+      var dateStr = fmtDate(a.uploaded_at);
       html += '<div class="p86-proj-photo-tile mf-tile" data-file-id="' + escapeAttr(a.id) + '" data-is-image="' + (isImg ? '1' : '0') + '">' +
         '<div class="p86-proj-photo-tile-visual mf-tile-visual" title="' + (isImg ? 'Click to open' : 'Click to download') + '">' +
           visual +
@@ -365,9 +379,15 @@
             ? '<span class="p86-proj-photo-tile-uploader" title="' + escapeAttr(uploaderName) + '">' + escapeHTML(uploaderInitials) + '</span>'
             : '') +
         '</div>' +
-        '<div class="p86-proj-photo-tile-footer">' +
-          '<span class="p86-proj-photo-tile-time">' + escapeHTML(time) + '</span>' +
-          (uploaderName ? '<span class="p86-proj-photo-tile-uploader-name">' + escapeHTML(uploaderName) + '</span>' : '') +
+        // Two-line footer: filename on top (the "title" the user asked
+        // for), then a meta row with date · time · uploader. Filename
+        // ellipses cleanly when long so the tile keeps its grid shape.
+        '<div class="p86-proj-photo-tile-footer mf-tile-footer">' +
+          '<div class="mf-tile-title" title="' + escapeAttr(a.filename) + '">' + escapeHTML(a.filename) + '</div>' +
+          '<div class="mf-tile-meta">' +
+            '<span class="mf-tile-when">' + escapeHTML(dateStr) + (time ? ' &middot; ' + escapeHTML(time) : '') + '</span>' +
+            (uploaderName ? '<span class="mf-tile-by">' + escapeHTML(uploaderName) + '</span>' : '') +
+          '</div>' +
         '</div>' +
       '</div>';
     });
