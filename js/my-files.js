@@ -302,38 +302,91 @@
         if (e.target === drop) document.getElementById('mfFileInput').click();
       };
     }
+
+    // Delegated tile-click handler — opens the lightbox for images,
+    // a new tab for non-images. Idempotent: a flag on the pane keeps
+    // us from stacking listeners across re-paints.
+    if (!pane.dataset.mfClicksWired) {
+      wireTileClicks(pane);
+      pane.dataset.mfClicksWired = '1';
+    }
   }
 
   function renderFileGrid(files) {
-    var html = '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px;">';
+    // Use the same .p86-proj-photo-tile styling the project detail grid
+    // uses so My Files reads as part of the same visual system. The
+    // `.mf-tile` modifier extends it with the filename/meta block + a
+    // 4-button action bar (download / send / copy / delete) that My Files
+    // needs but project tiles don't.
+    var html = '<div class="mf-grid">';
     files.forEach(function(a) {
+      var isImg = isImage(a);
       var visual;
-      if (isImage(a)) {
-        visual = '<img src="' + escapeAttr(a.thumb_url) + '" alt="" style="width:100%;height:120px;object-fit:cover;display:block;" />';
+      if (isImg) {
+        visual = '<img src="' + escapeAttr(a.thumb_url) + '" alt="" class="p86-proj-photo-tile-img" />';
       } else {
         var ext = (a.filename || '').split('.').pop().slice(0, 4).toUpperCase() || 'DOC';
-        visual = '<div style="height:120px;display:flex;align-items:center;justify-content:center;background:rgba(34,211,238,0.06);font-size:14px;font-weight:700;color:var(--accent,#22d3ee);letter-spacing:0.5px;">' + escapeHTML(ext) + '</div>';
+        visual = '<div class="p86-proj-photo-tile-doc">' + escapeHTML(ext) + '</div>';
       }
-      html += '<div class="mf-file-tile" style="border:1px solid var(--border,#333);border-radius:8px;overflow:hidden;background:var(--card-bg,#0f0f1e);display:flex;flex-direction:column;">' +
-        visual +
-        '<div style="padding:6px 8px;flex:1;min-height:50px;">' +
-          '<div title="' + escapeAttr(a.filename) + '" style="font-size:11px;color:var(--text,#fff);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-bottom:2px;">' + escapeHTML(a.filename) + '</div>' +
-          '<div style="font-size:10px;color:var(--text-dim,#888);">' + fmtBytes(a.size_bytes) + ' &middot; ' + escapeHTML(fmtDate(a.uploaded_at)) + '</div>' +
+      html += '<div class="p86-proj-photo-tile mf-tile" data-file-id="' + escapeAttr(a.id) + '" data-is-image="' + (isImg ? '1' : '0') + '">' +
+        '<div class="p86-proj-photo-tile-visual mf-tile-visual" title="' + (isImg ? 'Click to open' : 'Click to download') + '">' +
+          visual +
         '</div>' +
-        '<div style="display:flex;gap:0;border-top:1px solid var(--border,#222);">' +
-          '<a href="' + escapeAttr(a.original_url) + '" download="' + escapeAttr(a.filename) + '" target="_blank" rel="noopener" title="Download" ' +
-            'style="flex:1;text-align:center;padding:6px 4px;font-size:10px;color:var(--accent,#22d3ee);text-decoration:none;border-right:1px solid var(--border,#222);">&#x2B07;</a>' +
-          '<button onclick="window.myFiles.openSendPicker(\'' + escapeAttr(a.id) + '\', \'move\')" title="Send to a job / estimate (move)" ' +
-            'style="flex:1;background:transparent;border:none;border-right:1px solid var(--border,#222);padding:6px 4px;font-size:10px;color:var(--text-dim,#aaa);cursor:pointer;">&#x27A4;</button>' +
-          '<button onclick="window.myFiles.openSendPicker(\'' + escapeAttr(a.id) + '\', \'copy\')" title="Copy to a job / estimate" ' +
-            'style="flex:1;background:transparent;border:none;border-right:1px solid var(--border,#222);padding:6px 4px;font-size:10px;color:var(--text-dim,#aaa);cursor:pointer;">&#x2398;</button>' +
-          '<button onclick="window.myFiles.deleteFile(\'' + escapeAttr(a.id) + '\')" title="Delete" ' +
-            'style="flex:1;background:transparent;border:none;padding:6px 4px;font-size:10px;color:#f87171;cursor:pointer;">&times;</button>' +
+        '<div class="mf-tile-meta">' +
+          '<div class="mf-tile-name" title="' + escapeAttr(a.filename) + '">' + escapeHTML(a.filename) + '</div>' +
+          '<div class="mf-tile-sub">' + fmtBytes(a.size_bytes) + ' &middot; ' + escapeHTML(fmtDate(a.uploaded_at)) + '</div>' +
+        '</div>' +
+        '<div class="mf-tile-actions">' +
+          '<a href="' + escapeAttr(a.original_url) + '" download="' + escapeAttr(a.filename) + '" target="_blank" rel="noopener" title="Download" class="mf-tile-act">&#x2B07;</a>' +
+          '<button onclick="window.myFiles.openSendPicker(\'' + escapeAttr(a.id) + '\', \'move\')" title="Send to a job / estimate (move)" class="mf-tile-act">&#x27A4;</button>' +
+          '<button onclick="window.myFiles.openSendPicker(\'' + escapeAttr(a.id) + '\', \'copy\')" title="Copy to a job / estimate" class="mf-tile-act">&#x2398;</button>' +
+          '<button onclick="window.myFiles.deleteFile(\'' + escapeAttr(a.id) + '\')" title="Delete" class="mf-tile-act mf-tile-act-danger">&times;</button>' +
         '</div>' +
       '</div>';
     });
     html += '</div>';
     return html;
+  }
+
+  // Click anywhere on a tile's visual area → open the file. Images go
+  // through the shared p86Attachments lightbox (with the full My Files
+  // list so swipe nav works); non-images open the original_url in a
+  // new tab as a fallback download/view. Delegated so newly-rendered
+  // tiles inherit the binding without re-wiring after each paint().
+  function wireTileClicks(pane) {
+    if (!pane) return;
+    pane.addEventListener('click', function(e) {
+      var visual = e.target.closest('.mf-tile-visual');
+      if (!visual) return;
+      // Don't hijack clicks on the action-bar buttons that share the
+      // tile container.
+      if (e.target.closest('.mf-tile-actions')) return;
+      var tile = visual.closest('.mf-tile');
+      if (!tile) return;
+      var fileId = tile.getAttribute('data-file-id');
+      var file = (_state.files || []).find(function(x) { return String(x.id) === String(fileId); });
+      if (!file) return;
+      if (tile.getAttribute('data-is-image') === '1') {
+        if (window.p86Attachments && typeof window.p86Attachments.openLightbox === 'function') {
+          // Pass only the images so swipe doesn't land on a PDF tile.
+          var images = (_state.files || []).filter(isImage);
+          var idx = images.findIndex(function(x) { return String(x.id) === String(fileId); });
+          window.p86Attachments.openLightbox(images, Math.max(0, idx), {
+            parentLabel: 'My Files',
+            parentSubtitle: _state.activeFolder
+              ? (_state.activeFolder.charAt(0).toUpperCase() + _state.activeFolder.slice(1))
+              : ''
+          });
+        } else {
+          // Fallback if attachments.js isn't loaded — just open original.
+          window.open(file.original_url, '_blank', 'noopener');
+        }
+      } else {
+        // Non-image: open the original file in a new tab. Browsers will
+        // display PDFs inline, prompt download for everything else.
+        window.open(file.original_url, '_blank', 'noopener');
+      }
+    });
   }
 
   // ──────────────────────────────────────────────────────────────────
