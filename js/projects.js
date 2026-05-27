@@ -1466,11 +1466,20 @@
       });
     }
 
-    // Wire upload input.
+    // Wire upload input. Walkthrough-loop heuristic mirrors the
+    // photos-tab handler: single image file from a touch device =
+    // camera capture, so keep the camera open after each save.
     var fileInput = host.querySelector('#projPhotoFileInput');
     if (fileInput) {
       fileInput.addEventListener('change', function(e) {
-        if (e.target.files && e.target.files.length) uploadFiles(e.target.files);
+        if (e.target.files && e.target.files.length) {
+          var f = e.target.files[0];
+          var isImage = f && f.type && /^image\//.test(f.type);
+          var oneFile = e.target.files.length === 1;
+          var touch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+          if (oneFile && isImage && touch) _walkthroughKeepOpen = true;
+          uploadFiles(e.target.files);
+        }
         fileInput.value = '';
       });
     }
@@ -4267,7 +4276,22 @@
     var fileInput = host.querySelector('#projPhotoFileInput');
     if (fileInput) {
       fileInput.addEventListener('change', function(e) {
-        if (e.target.files && e.target.files.length) uploadFiles(e.target.files);
+        if (e.target.files && e.target.files.length) {
+          // Walkthrough loop heuristic: if a SINGLE image file was
+          // returned (the OS camera always returns exactly one) on a
+          // touch-capable device, treat this as a walkthrough capture
+          // so the camera re-opens after the user saves. Multi-file
+          // returns or non-image files are clearly the gallery picker
+          // — don't engage the loop in that case.
+          var f = e.target.files[0];
+          var isImage = f && f.type && /^image\//.test(f.type);
+          var oneFile = e.target.files.length === 1;
+          var touch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+          if (oneFile && isImage && touch) {
+            _walkthroughKeepOpen = true;
+          }
+          uploadFiles(e.target.files);
+        }
         fileInput.value = '';
       });
     }
@@ -4296,6 +4320,12 @@
   // sticky tags, and annotate before saving. "Quick Save" inside any
   // preview bypasses the modal for the REST of THIS batch so heavy
   // walkthroughs don't drag.
+  //
+  // Walkthrough mode (PWA / mobile): once the user takes the first
+  // photo with the device camera, _walkthroughKeepOpen stays true so
+  // the camera re-opens after each save until they explicitly tap
+  // "Done" inside the preview modal. This matches the CompanyCam
+  // capture loop where you tap once and snap a dozen photos.
   function uploadFiles(files) {
     var pid = _detailState.projectId;
     if (!pid) return;
@@ -4323,8 +4353,23 @@
         paintActivityFeed();
         paintTagChipStrip();
       });
+      // Walkthrough loop — after the chain finishes, if the user
+      // is still in walkthrough mode (i.e. they didn't tap Done),
+      // re-open the camera so they can keep snapping. setTimeout
+      // gives the modal-close transition a beat before the camera
+      // pops up — feels less jarring on iOS.
+      if (_walkthroughKeepOpen) {
+        setTimeout(function() {
+          var inp = document.getElementById('projPhotoFileInput');
+          if (inp) inp.click();
+        }, 220);
+      }
     });
   }
+  // Walkthrough-mode flag — set true once the user takes their first
+  // mobile camera photo (input.capture="environment"); cleared when
+  // they tap Done inside the preview modal.
+  var _walkthroughKeepOpen = false;
 
   // Per-file preview + upload. Resolves when the file lands on the
   // server (or is cancelled). Rejects only on real failure — cancel
@@ -4421,6 +4466,10 @@
         '</div>' +
         '<div class="modal-footer">' +
           '<button class="ee-btn secondary" data-close>Cancel</button>' +
+          // "Done" appears only in walkthrough mode — saves the
+          // current photo AND exits the capture loop so the camera
+          // doesn't pop back up after this save.
+          '<button class="ee-btn secondary" id="upPrevDone" style="display:none;" title="Save this photo and stop the walkthrough capture loop">&#x2714;&#xFE0F; Done</button>' +
           '<button class="ee-btn secondary" id="upPrevQuick" title="Skip preview for the rest of this batch">&#x26A1; Quick Save</button>' +
           '<button class="primary" id="upPrevSave">Save</button>' +
         '</div>' +
@@ -4499,6 +4548,25 @@
         annotations: pendingAnnotations.slice()
       });
     });
+
+    // Done button — visible only when walkthrough capture is active.
+    // Saves THIS photo AND clears the keep-camera-open flag so the
+    // chain doesn't re-trigger the file input after this save.
+    var doneBtn = modal.querySelector('#upPrevDone');
+    if (doneBtn) {
+      if (_walkthroughKeepOpen) doneBtn.style.display = '';
+      doneBtn.addEventListener('click', function() {
+        var caption = (modal.querySelector('#upPrevCaption').value || '').trim();
+        _walkthroughTags = pendingTags.slice();
+        paintWalkthroughTagStrip();
+        _walkthroughKeepOpen = false;
+        close('save', {
+          caption: caption || null,
+          tags: pendingTags.slice(),
+          annotations: pendingAnnotations.slice()
+        });
+      });
+    }
 
     modal.querySelector('#upPrevQuick').addEventListener('click', function() {
       // Don't update _walkthroughTags here — quick save uses whatever's

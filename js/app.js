@@ -628,10 +628,22 @@
                         '</h1>' +
                         '<p style="margin:0;color:var(--text-dim,#888);font-size:13px;">Pick up where the team is.</p>' +
                     '</div>' +
-                    '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">' +
+                    '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;max-width:100%;">' +
                         // Global Ask 86 badge in the dashboard header.
                         '<span class="p86-ask86-mount"></span>' +
-                        '<button class="success" onclick="' + estsClick + '" style="font-size:13px;padding:7px 14px;">&#x2795; New Estimate</button>' +
+                        // Step 1: a new lead is the entry to the whole
+                        // pipeline. Open the new-lead modal.
+                        '<button class="primary" onclick="if(typeof openNewLeadModal===\'function\')openNewLeadModal();" style="font-size:13px;padding:7px 14px;white-space:nowrap;">' +
+                            '<span style="margin-right:6px;">&#x2795;</span>New Lead' +
+                        '</button>' +
+                        // Step "in the field": start a walkthrough — open
+                        // the project create modal which carries the
+                        // walkthrough templates (daily log, etc.) so the
+                        // user lands inside a fresh project with the
+                        // photo feed ready to receive captures.
+                        '<button class="success" onclick="if(window.p86Projects&amp;&amp;window.p86Projects.openCreate)window.p86Projects.openCreate();" style="font-size:13px;padding:7px 14px;white-space:nowrap;" title="Start a walkthrough — opens project templates">' +
+                            '<span style="margin-right:6px;">&#x1F4F7;</span>New Walkthrough' +
+                        '</button>' +
                     '</div>' +
                 '</div>' +
 

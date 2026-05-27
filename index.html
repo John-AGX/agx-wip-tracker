@@ -97,7 +97,7 @@
     })();
     </script>
 
-    <link rel="stylesheet" href="css/styles.css?v=130">
+    <link rel="stylesheet" href="css/styles.css?v=131">
     <link rel="stylesheet" href="css/report-style-packs.css?v=3">
     <link rel="stylesheet" href="css/workspace-layout.css?v=56b">
     <link rel="stylesheet" href="css/workspace.css?v=37b">
@@ -2460,7 +2460,7 @@
     <script src="js/qb-costs-view.js?v=11"></script>
     <script src="js/insights.js?v=7"></script>
     <script src="js/schedule.js?v=29"></script>
-    <script src="js/app.js?v=61"></script>
+    <script src="js/app.js?v=62"></script>
     <script src="js/messaging.js?v=1b"></script>
     <script src="js/my-files.js?v=6"></script>
     <script src="js/projects-map.js?v=3"></script>
@@ -2472,7 +2472,7 @@
          calls into window.p86ReportTemplates. -->
     <script src="js/report-templates.js?v=1"></script>
     <script src="js/report-style-packs.js?v=2"></script>
-    <script src="js/projects.js?v=42"></script>
+    <script src="js/projects.js?v=43"></script>
     <script src="js/jobs.js?v=80"></script>
     <script src="js/estimates.js?v=37"></script>
     <script src="js/proposal.js?v=25"></script>
@@ -2632,12 +2632,12 @@
          touch targets get crushed at iPhone width). -->
     <nav id="p86-mobile-nav" class="p86-mobile-nav" aria-label="Primary navigation">
       <button type="button" class="p86-mobile-nav-btn" data-mobile-nav="leads" data-cap="LEADS_VIEW"
-              onclick="if(window.switchTab){window.switchTab('estimates');if(window.switchEstSubTab)window.switchEstSubTab('leads');}">
+              onclick="if(window.switchTab){window.switchTab('estimates');if(window.switchEstimatesSubTab)window.switchEstimatesSubTab('leads');if(window.markVirtualTabActive)window.markVirtualTabActive('leads');}">
         <span class="p86-mobile-nav-icon" data-p86-icon="leads"></span>
         <span class="p86-mobile-nav-label">Leads</span>
       </button>
       <button type="button" class="p86-mobile-nav-btn" data-mobile-nav="estimates" data-cap="ESTIMATES_VIEW"
-              onclick="if(window.switchTab){window.switchTab('estimates');if(window.switchEstSubTab)window.switchEstSubTab('list');}">
+              onclick="if(window.switchTab){window.switchTab('estimates');if(window.switchEstimatesSubTab)window.switchEstimatesSubTab('list');if(window.markVirtualTabActive)window.markVirtualTabActive('estimates');}">
         <span class="p86-mobile-nav-icon" data-p86-icon="estimates"></span>
         <span class="p86-mobile-nav-label">Estimates</span>
       </button>
@@ -2649,7 +2649,7 @@
              generic DNA glyph. Wrapped in .p86-mobile-nav-icon-logo so
              the lift / circle / shadow still come from the parent. -->
         <span class="p86-mobile-nav-icon p86-mobile-nav-icon-logo" aria-hidden="true">
-          <img src="images/project-86-icon.svg" alt="" draggable="false" />
+          <img src="images/pwa/icon-192.png?v=2" alt="" draggable="false" />
         </span>
         <span class="p86-mobile-nav-label">86</span>
       </button>

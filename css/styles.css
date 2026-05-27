@@ -1902,6 +1902,26 @@
                 grid-template-columns: 1fr;
             }
 
+            /* Summary dashboard mobile clamp — the dashboard root is
+               built inline by renderSummaryDashboard() with several
+               grid wrappers that don't include min-width:0 on grid
+               children, so wide tiles (sales pipeline, attention
+               cards, file rows with long names) push the row past
+               the viewport. Belt-and-suspenders fix: every direct
+               child of #summary-root stays within the viewport. */
+            #summary-root { max-width: 100%; overflow-x: hidden; padding: 16px 12px !important; }
+            #summary-root > div > div { min-width: 0; }
+            #summary-root [style*="grid-template-columns"] { grid-template-columns: 1fr !important; }
+            #summary-root .summary-card { min-width: 0; }
+            /* Force the dashboard's two-column main grid down to one
+               column so the rail (agenda, pipeline, files, inbox)
+               stacks below the recent-activity feed instead of getting
+               crushed beside it. */
+            #summary-root > div[style*="minmax(300px"],
+            #summary-root > div[style*="minmax(0,1fr) minmax(300px"] {
+                grid-template-columns: 1fr !important;
+            }
+
             /* Mobile header — single-row layout. Logo + PROJECT 86
                wordmark on the left, icon cluster (files / bell /
                directory / avatar) on the right, all on one line.
@@ -2070,17 +2090,24 @@
                 width: 28px; height: 28px;
                 color: #22d3ee;
             }
-            /* Cube logo inside the primary 86 button — sized + centered
-               so it sits visually balanced in the circle. The SVG's
-               internal padding already leaves breathing room around
-               the cube, so 32px reads well inside the 52px circle. */
+            /* Cube logo inside the primary 86 button — uses the PNG
+               variant (icon-192.png) rather than the SVG because the
+               PNG has visibly thicker strokes that don't disappear at
+               small sizes. Pumped up to 38px inside a 52px circle so
+               the cube is the clear focal point. */
+            .p86-mobile-nav-btn-primary .p86-mobile-nav-icon-logo {
+                /* Override the generic .p86-mobile-nav-icon flex defaults
+                   so the img sits cleanly centered. */
+                padding: 0 !important;
+            }
             .p86-mobile-nav-btn-primary .p86-mobile-nav-icon-logo img {
-                width: 32px;
-                height: 32px;
+                width: 38px;
+                height: 38px;
                 display: block;
-                /* Drop-shadow so the cyan strokes stay readable against
-                   the dark interior gradient even on cheap screens. */
-                filter: drop-shadow(0 1px 2px rgba(0,0,0,0.4));
+                object-fit: contain;
+                /* Subtle drop-shadow + slight glow so the cyan strokes
+                   stay legible on cheap screens. */
+                filter: drop-shadow(0 1px 2px rgba(0,0,0,0.45));
             }
             .p86-mobile-nav-btn-primary .p86-mobile-nav-label {
                 color: #22d3ee;
