@@ -7146,8 +7146,12 @@ body.light-mode .p86-pv-tag-modal-chip {
 .p86-co-save-status.saved  { color: #34d399; }
 .p86-co-save-status.error  { color: #f87171; }
 
-/* Totals chip bar */
-.p86-co-totals {
+/* Totals chip bar — shared between the CO editor and the estimate
+   editor. .p86-totals-chip is the canonical class; .p86-co-chip is
+   kept as an alias so existing CO markup still works. Same with the
+   container (.p86-co-totals stays for backwards-compat). */
+.p86-co-totals,
+.p86-totals-strip {
   display: flex;
   gap: 8px;
   padding: 12px 18px;
@@ -7155,7 +7159,8 @@ body.light-mode .p86-pv-tag-modal-chip {
   border-bottom: 1px solid var(--border, #2e3346);
   overflow-x: auto;
 }
-.p86-co-chip {
+.p86-co-chip,
+.p86-totals-chip {
   background: rgba(255,255,255,0.03);
   border: 1px solid var(--border, #2e3346);
   border-radius: 8px;
@@ -7163,11 +7168,13 @@ body.light-mode .p86-pv-tag-modal-chip {
   min-width: 110px;
   flex: 0 0 auto;
 }
-.p86-co-chip.accent {
+.p86-co-chip.accent,
+.p86-totals-chip.accent {
   background: rgba(52, 211, 153, 0.08);
   border-color: rgba(52, 211, 153, 0.35);
 }
-.p86-co-chip-label {
+.p86-co-chip-label,
+.p86-totals-chip-label {
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.5px;
@@ -7175,12 +7182,20 @@ body.light-mode .p86-pv-tag-modal-chip {
   color: var(--text-dim, #c4c8d8);
   margin-bottom: 4px;
 }
-.p86-co-chip-value {
+.p86-co-chip-value,
+.p86-totals-chip-value {
   font-size: 14px;
   font-weight: 700;
   color: var(--text, #fff);
 }
-.p86-co-chip.accent .p86-co-chip-value { color: #34d399; }
+.p86-co-chip.accent .p86-co-chip-value,
+.p86-totals-chip.accent .p86-totals-chip-value { color: #34d399; }
+/* Yellow accent (markup chip on estimates) + blue accent (tax+fees)
+   modifiers — used by the estimate totals where the multi-color
+   chips help PMs scan for what's driving the total. */
+.p86-totals-chip.warn .p86-totals-chip-value { color: var(--yellow, #fbbf24); }
+.p86-totals-chip.info .p86-totals-chip-value { color: var(--accent, #60a5fa); }
+.p86-totals-chip.dim  .p86-totals-chip-value { color: var(--text-dim, #c4c8d8); }
 
 /* Body — side panel + line table */
 .p86-co-body {

@@ -873,18 +873,19 @@
     var t = computeTotals();
     var totalsEl = document.getElementById('ee-totals');
     if (!totalsEl) return;
-    function chip(label, value, color, cls) {
-      // Optional cls hoists color out of inline style and into a class
-      // so light mode can flip green amounts to plain text.
-      var clsAttr = cls ? ' class="' + cls + '"' : '';
-      var colorStyle = cls ? '' : ('color:' + color + ';');
-      return '<div style="background:rgba(255,255,255,0.03);border:1px solid var(--border,#333);border-radius:6px;padding:6px 12px;min-width:120px;">' +
-        '<div style="font-size:9px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;">' + label + '</div>' +
-        '<div' + clsAttr + ' style="font-size:14px;font-weight:700;' + colorStyle + 'font-family:\'SF Mono\',\'Fira Code\',monospace;">' + value + '</div>' +
+    // Shared chip classes (.p86-totals-chip) — same look the CO editor
+    // uses. `modifier` is one of '' | 'accent' | 'warn' | 'info' |
+    // 'dim' and controls the value color. The label is always uppercase
+    // muted; the value is bold and color-shifted by modifier.
+    function chip(label, value, modifier) {
+      var cls = 'p86-totals-chip' + (modifier ? ' ' + modifier : '');
+      return '<div class="' + cls + '">' +
+        '<div class="p86-totals-chip-label">' + label + '</div>' +
+        '<div class="p86-totals-chip-value">' + value + '</div>' +
       '</div>';
     }
     var groupCountChip = (t.includedGroups && t.includedGroups.length > 1)
-      ? chip('Active Group', fmtCurrency(t.activeGroupSubtotal) + (t.activeGroupExcluded ? ' (excluded)' : ''), t.activeGroupExcluded ? 'var(--text-dim,#888)' : 'var(--accent,#60a5fa)')
+      ? chip('Active Group', fmtCurrency(t.activeGroupSubtotal) + (t.activeGroupExcluded ? ' (excluded)' : ''), t.activeGroupExcluded ? 'dim' : 'info')
       : '';
     // Gross margin % — markup as a share of the proposal total, the
     // figure most estimators care about. Falls back to '—' when there's
@@ -900,12 +901,12 @@
     var marginChipHTML = renderMarginChip(t, marginPct);
     totalsEl.innerHTML =
       groupCountChip +
-      chip('Subtotal', fmtCurrency(t.subtotal), 'var(--text,#fff)') +
-      chip('Markup', fmtCurrency(t.markupAmount), 'var(--yellow,#fbbf24)') +
-      chip('Tax + Fees', fmtCurrency(t.feeFlat + t.feePctAmount + t.taxAmount), 'var(--accent,#60a5fa)') +
-      chip('Proposal Total', fmtCurrency(t.total), null, 'ee-grand-total') +
+      chip('Subtotal', fmtCurrency(t.subtotal)) +
+      chip('Markup', fmtCurrency(t.markupAmount), 'warn') +
+      chip('Tax + Fees', fmtCurrency(t.feeFlat + t.feePctAmount + t.taxAmount), 'info') +
+      chip('Proposal Total', fmtCurrency(t.total), 'accent') +
       marginChipHTML +
-      chip('Lines', t.lineCount, 'var(--text-dim,#888)');
+      chip('Lines', t.lineCount, 'dim');
     wireMarginChip();
     // Also refresh the detailed breakdown card under the line items.
     renderPricingBreakdown();
@@ -934,26 +935,25 @@
     var label = hasTarget ? 'Target Margin' : 'Margin';
     var placeholder = (displayPct === '') ? '—' : '';
     var pencilIcon = (typeof window.p86Icon === 'function') ? window.p86Icon('edit') : '&#x270E;';
-    return '<div id="ee-margin-chip" data-edit-gate="locked" data-has-target="' + (hasTarget ? '1' : '0') +
-        '" style="background:rgba(255,255,255,0.03);border:1px solid var(--border,#333);border-radius:6px;padding:6px 12px;min-width:120px;">' +
-      '<div style="display:flex;align-items:center;justify-content:space-between;gap:6px;">' +
-        '<div style="font-size:9px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;">' +
-          label +
-        '</div>' +
+    // Wraps the shared .p86-totals-chip chassis so the margin chip lines
+    // up with the others, then overrides the value row with an inline
+    // editable input + % suffix (the pencil unlocks it).
+    return '<div id="ee-margin-chip" class="p86-totals-chip" data-edit-gate="locked" data-has-target="' + (hasTarget ? '1' : '0') + '">' +
+      '<div class="p86-totals-chip-label" style="display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:4px;">' +
+        '<span>' + label + '</span>' +
         '<button type="button" id="ee-margin-pencil" class="edit-gate-toggle" ' +
           'aria-pressed="false" title="Edit target margin" ' +
-          'style="background:transparent;border:0;cursor:pointer;padding:2px;line-height:1;display:inline-flex;align-items:center;color:var(--text-dim,#888);">' +
+          'style="background:transparent;border:0;cursor:pointer;padding:0;line-height:1;display:inline-flex;align-items:center;color:var(--text-dim,#c4c8d8);">' +
           pencilIcon +
         '</button>' +
       '</div>' +
-      '<div style="display:flex;align-items:baseline;gap:2px;margin-top:2px;">' +
+      '<div class="p86-totals-chip-value" style="display:flex;align-items:baseline;gap:2px;color:' + accent + ';">' +
         // displayPct is always a numeric string (or empty) — no need to
         // escape; it can never contain HTML special chars. The input
         // starts readonly; the pencil toggles it on demand.
         '<input id="ee-margin-input" type="text" inputmode="decimal" value="' + displayPct + '" placeholder="' + placeholder + '" readonly' +
-          ' style="width:60px;background:transparent;border:1px solid transparent;color:' + accent +
-          ';font-size:14px;font-weight:700;font-family:\'SF Mono\',\'Fira Code\',monospace;border-radius:4px;padding:1px 4px;outline:none;text-align:right;" />' +
-        '<span style="color:' + accent + ';font-size:14px;font-weight:700;font-family:\'SF Mono\',\'Fira Code\',monospace;">%</span>' +
+          ' style="width:54px;background:transparent;border:1px solid transparent;color:inherit;font-size:14px;font-weight:700;border-radius:4px;padding:0 4px;outline:none;text-align:right;font-family:inherit;" />' +
+        '<span>%</span>' +
       '</div>' +
       // Inline scoped style for the unlocked state — gives the input a
       // soft outline ring + matching caret so it visually signals "this
