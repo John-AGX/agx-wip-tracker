@@ -787,104 +787,28 @@
   // Walk back from a given line to find its enclosing section header and
   // return that section's markup. Per-line `markup` overrides the section.
   // For legacy estimates that still carry an estimate-wide `defaultMarkup`,
-  // fall through to it so existing data keeps pricing the same until the
-  // user assigns explicit section markups.
-  // Returns the section header (line with section === '__section_header__')
-  // that encloses the given line, or null if the line precedes any header.
-  function sectionHeaderFor(line, allLines) {
-    if (!allLines || !allLines.length) return null;
-    var idx = allLines.indexOf(line);
-    if (idx < 0) idx = allLines.length;
-    for (var i = idx - 1; i >= 0; i--) {
-      var L = allLines[i];
-      if (L && L.section === '__section_header__') return L;
-    }
-    return null;
-  }
+  // Pricing helpers — delegated to window.p86Pricing (js/pricing-pipeline.js)
+  // so the math used by the editor, the proposal preview, and the
+  // change-order editor all comes from a single module. Local thin
+  // wrappers preserve the names the rest of this file already calls.
+  // See js/pricing-pipeline.js for the full markup/fee/tax pipeline doc.
+  var _P = window.p86Pricing;
+  function sectionHeaderFor(line, allLines)     { return _P.sectionHeaderFor(line, allLines); }
+  function sectionMarkupForLine(line, allLines, est) { return _P.sectionMarkupForLine(line, allLines, est); }
+  function effectiveMarkupForLine(line, allLines, est) { return _P.effectiveMarkupForLine(line, allLines, est); }
+  function targetMarginActive(est)              { return _P.targetMarginActive(est); }
+  function applyTargetMargin(subtotal, est)     { return _P.applyTargetMargin(subtotal, est); }
 
-  function effectiveMarkupForLine(line, allLines, est) {
-    var section = sectionHeaderFor(line, allLines);
-    // Override-on: per-line markup is ignored. In $ mode the line gets
-    // 0% (section flat $ adds at section level); in % mode the section
-    // value is forced.
-    if (section && section.overrideLineMarkups) {
-      if (section.markupMode === 'dollar') return 0;
-      return sectionMarkupForLine(line, allLines, est);
-    }
-    // No override: per-line markup wins. If the line has none, fall back
-    // to the section default — but only in % mode. In $ mode the section
-    // doesn't supply a per-line default; lines without their own %
-    // render at raw extension cost.
-    if (line && line.markup !== '' && line.markup != null) return num(line.markup);
-    if (section && section.markupMode === 'dollar') return 0;
-    return sectionMarkupForLine(line, allLines, est);
-  }
-  // The section-derived percent markup for a line, ignoring any per-line
-  // override. Used to populate the placeholder on the per-line markup
-  // field so the user knows what they'd be overriding if they typed a
-  // value. Dollar-mode sections still return their numeric value here
-  // for the placeholder UI's sake — but math callers should branch on
-  // section.markupMode and skip applying it as a percentage.
-  function sectionMarkupForLine(line, allLines, est) {
-    var section = sectionHeaderFor(line, allLines);
-    if (section && section.markup !== '' && section.markup != null) return num(section.markup);
-    if (est && est.defaultMarkup != null && est.defaultMarkup !== '') return num(est.defaultMarkup);
-    return 0;
-  }
-
-  // Helper: marked-up subtotal for a single group (alternate). Used by the
-  // active-group subtotal display and by the cross-group sum below.
-  // Section dollar markups are added once per dollar-mode section header.
+  // Marked-up subtotal for a single alternate (group). The estimate
+  // model still owns the alternate concept — COs are flat — so we
+  // build the per-alternate line slice here, then hand it off to the
+  // shared computeForLines helper.
   function markedUpForGroup(est, alt) {
     if (!est || !alt) return { subtotal: 0, markedUp: 0 };
     var lines = (appData.estimateLines || []).filter(function(l) {
       return l.estimateId === est.id && l.alternateId === alt.id;
     });
-    var subtotal = 0, markedUp = 0;
-    lines.forEach(function(l) {
-      if (l.section === '__section_header__') {
-        // Dollar-mode section adds its flat amount once to the marked-up total.
-        if (l.markupMode === 'dollar' && l.markup !== '' && l.markup != null) {
-          markedUp += num(l.markup);
-        }
-        return;
-      }
-      var ext = num(l.qty) * num(l.unitCost);
-      subtotal += ext;
-      var m = effectiveMarkupForLine(l, lines, est);
-      markedUp += ext * (1 + m / 100);
-    });
-    return { subtotal: subtotal, markedUp: markedUp };
-  }
-
-  // Target-margin override. When est.targetMargin is a sane percent
-  // (>0 and <100), the proposal abandons bottom-up markup math and
-  // back-computes the marked-up subtotal so gross margin lands
-  // exactly on the target:
-  //
-  //     markedUp = subtotal / (1 - targetMargin / 100)
-  //
-  // Per-line + per-section markups are still stored (so clearing
-  // restores them) — they just don't drive the total while a target
-  // is set. Each INCLUDED group's markedUp scales to the same target
-  // so the group breakdown stays consistent (sum of group markedUps
-  // equals the override total). Excluded groups keep their own
-  // line-driven markup for reference.
-  //
-  // The legacy `targetMarginLocked` flag is no longer read — presence
-  // of a non-zero `targetMargin` is the single source of truth. We
-  // still WRITE the flag for compat with older versions of the editor
-  // that might still check it; clearing the value clears both.
-  function targetMarginActive(est) {
-    if (!est) return false;
-    var m = num(est.targetMargin);
-    return m > 0 && m < 100;
-  }
-  function applyTargetMargin(subtotal, est) {
-    var m = num(est.targetMargin);
-    var divisor = 1 - m / 100;
-    if (divisor <= 0) return subtotal; // sanity guard
-    return subtotal / divisor;
+    return _P.computeForLines(est, lines);
   }
 
   function computeTotals() {
@@ -914,18 +838,8 @@
         markedUp += per.markedUp;
       }
     });
-    var feeFlat = est ? num(est.feeFlat) : 0;
-    var feePctAmount = markedUp * (est ? num(est.feePct) : 0) / 100;
-    var preTax = markedUp + feeFlat + feePctAmount;
-    var taxAmount = preTax * (est ? num(est.taxPct) : 0) / 100;
-    var beforeRound = preTax + taxAmount;
-    var roundTo = est ? num(est.roundTo) : 0;
-    var total = beforeRound;
-    var rounded = 0;
-    if (roundTo > 0) {
-      total = Math.ceil(beforeRound / roundTo) * roundTo;
-      rounded = total - beforeRound;
-    }
+    // Fees + tax + round → shared p86Pricing.applyFeesAndTax
+    var fees = _P.applyFeesAndTax(markedUp, est);
     var lineCount = (appData.estimateLines || []).filter(function(l) {
       return l.estimateId === est.id && l.section !== '__section_header__';
     }).length;
@@ -938,13 +852,13 @@
       subtotal: subtotal,
       markupAmount: markedUp - subtotal,
       markedUp: markedUp,
-      feeFlat: feeFlat,
-      feePctAmount: feePctAmount,
-      preTax: preTax,
-      taxAmount: taxAmount,
-      beforeRound: beforeRound,
-      rounded: rounded,
-      total: total,
+      feeFlat: fees.feeFlat,
+      feePctAmount: fees.feePctAmount,
+      preTax: fees.preTax,
+      taxAmount: fees.taxAmount,
+      beforeRound: fees.beforeRound,
+      rounded: fees.rounded,
+      total: fees.total,
       lineCount: lineCount,
       includedGroups: includedGroups,
       excludedGroups: excludedGroups,

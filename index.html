@@ -2473,12 +2473,16 @@
     <script src="js/report-templates.js?v=1"></script>
     <script src="js/report-style-packs.js?v=2"></script>
     <script src="js/projects.js?v=44"></script>
+    <!-- Shared pricing pipeline — math used by estimate-editor +
+         estimate-preview + the upcoming change-order-editor. Loads
+         BEFORE any of them so window.p86Pricing is ready. -->
+    <script src="js/pricing-pipeline.js?v=1"></script>
     <script src="js/jobs.js?v=80"></script>
     <script src="js/estimates.js?v=37"></script>
     <script src="js/proposal.js?v=25"></script>
-    <script src="js/estimate-editor.js?v=46"></script>
+    <script src="js/estimate-editor.js?v=47"></script>
     <script src="js/materials-drawer.js?v=5"></script>
-    <script src="js/estimate-preview.js?v=13"></script>
+    <script src="js/estimate-preview.js?v=14"></script>
     <script src="js/bt-export.js?v=6b"></script>
     <!-- Payload DSL UI components (used by ai-panel.js). Must load
          BEFORE ai-panel.js so window.PayloadArtifact and

@@ -115,64 +115,16 @@
     return included.map(function(a) { return a.id; });
   }
 
-  function sectionHeaderFor(line, allLines) {
-    var idx = allLines.indexOf(line);
-    if (idx < 0) idx = allLines.length;
-    for (var i = idx - 1; i >= 0; i--) {
-      var L = allLines[i];
-      if (L && L.section === '__section_header__') return L;
-    }
-    return null;
-  }
-
-  // Walk back from a line to find its enclosing section header's markup.
-  // Honors the section's markupMode (percent/dollar) and overrideLineMarkups
-  // flag. Returns the percent value to multiply line ext by; for dollar-mode
-  // sections the function returns 0 (the flat amount is added at section
-  // level by the caller).
-  function effectiveMarkup(line, allLines, estimate) {
-    var section = sectionHeaderFor(line, allLines);
-    var inDollar = section && section.markupMode === 'dollar';
-    if (section && section.overrideLineMarkups) {
-      // Override on: ignore per-line markup. $ mode → 0. % mode → section's %.
-      if (inDollar) return 0;
-      if (section.markup !== '' && section.markup != null) return parseFloat(section.markup) || 0;
-      if (estimate && estimate.defaultMarkup != null && estimate.defaultMarkup !== '') return parseFloat(estimate.defaultMarkup) || 0;
-      return 0;
-    }
-    // Override off: per-line markup wins.
-    if (line && line.markup !== '' && line.markup != null) return parseFloat(line.markup) || 0;
-    // No per-line value: $ mode supplies no per-line default; % mode falls
-    // back to the section then est.defaultMarkup.
-    if (inDollar) return 0;
-    if (section && section.markup !== '' && section.markup != null) return parseFloat(section.markup) || 0;
-    if (estimate && estimate.defaultMarkup != null && estimate.defaultMarkup !== '') return parseFloat(estimate.defaultMarkup) || 0;
-    return 0;
-  }
-
-  // Mirrors estimate-editor's pricing pipeline. Subtotal -> per-line markup
-  // -> + flat fee -> + percent fee -> + tax -> round-up -> total.
-  // Sums across every INCLUDED group so a multi-group estimate's proposal
-  // total reflects the union of every group whose toggle is on.
-  // Target-margin override matches estimate-editor's computeTotals:
-  // when est.targetMargin is a sane percent (>0 and <100), every
-  // INCLUDED group's marked-up total gets back-computed from its raw
-  // subtotal so the gross-margin result lands exactly on the target.
-  // Without this branch the proposal preview ignored target-margin
-  // mode entirely and printed the raw subtotal (or per-line markup
-  // total), which disagreed with the PROPOSAL TOTAL chip on the
-  // editor toolbar.
-  function targetMarginActive(est) {
-    if (!est) return false;
-    var m = parseFloat(est.targetMargin);
-    return !isNaN(m) && m > 0 && m < 100;
-  }
-  function applyTargetMargin(subtotal, est) {
-    var m = parseFloat(est.targetMargin) || 0;
-    var divisor = 1 - m / 100;
-    if (divisor <= 0) return subtotal;
-    return subtotal / divisor;
-  }
+  // Pricing helpers — delegated to window.p86Pricing. Same module
+  // the estimate editor uses; ensures the preview's printed total
+  // matches the editor's PROPOSAL TOTAL chip exactly (the bug behind
+  // last week's $1,433 vs $2,605.45 mismatch was these two files
+  // drifting apart). See js/pricing-pipeline.js for the math.
+  var _P = window.p86Pricing;
+  function sectionHeaderFor(line, allLines)        { return _P.sectionHeaderFor(line, allLines); }
+  function effectiveMarkup(line, allLines, est)    { return _P.effectiveMarkupForLine(line, allLines, est); }
+  function targetMarginActive(est)                 { return _P.targetMarginActive(est); }
+  function applyTargetMargin(subtotal, est)        { return _P.applyTargetMargin(subtotal, est); }
 
   function computeTotal(estimate) {
     if (!estimate) return 0;
@@ -183,37 +135,16 @@
       var groupLines = (window.appData.estimateLines || []).filter(function(l) {
         return l.estimateId === estimate.id && l.alternateId === gid;
       });
-      var groupSubtotal = 0;
-      var groupMarkedUp = 0;
-      groupLines.forEach(function(l) {
-        if (l.section === '__section_header__') {
-          // Dollar-mode section: flat $ added once.
-          if (l.markupMode === 'dollar' && l.markup !== '' && l.markup != null) {
-            groupMarkedUp += parseFloat(l.markup) || 0;
-          }
-          return;
-        }
-        var ext = (parseFloat(l.qty) || 0) * (parseFloat(l.unitCost) || 0);
-        groupSubtotal += ext;
-        var m = effectiveMarkup(l, groupLines, estimate);
-        groupMarkedUp += ext * (1 + m / 100);
-      });
-      // While target-margin is locked, rebuild this group's marked-up
+      var per = _P.computeForLines(estimate, groupLines);
+      var groupMarkedUp = per.markedUp;
+      // Target-margin override: back-compute this group's marked-up
       // total off its own subtotal so the per-group sum still equals
-      // the override total (mirrors estimate-editor.js exactly).
-      if (targetMode) {
-        groupMarkedUp = applyTargetMargin(groupSubtotal, estimate);
-      }
+      // the override total. Mirrors estimate-editor exactly.
+      if (targetMode) groupMarkedUp = applyTargetMargin(per.subtotal, estimate);
       markedUp += groupMarkedUp;
     });
-    var feeFlat = parseFloat(estimate.feeFlat) || 0;
-    var feePct = (parseFloat(estimate.feePct) || 0) / 100;
-    var taxPct = (parseFloat(estimate.taxPct) || 0) / 100;
-    var roundTo = parseFloat(estimate.roundTo) || 0;
-    var preTax = markedUp + feeFlat + (markedUp * feePct);
-    var total = preTax + (preTax * taxPct);
-    if (roundTo > 0) total = Math.ceil(total / roundTo) * roundTo;
-    return total;
+    var fees = _P.applyFeesAndTax(markedUp, estimate);
+    return fees.total;
   }
 
   // Build a context object the placeholder-filler reads from. Salutation +
@@ -754,39 +685,10 @@
     // total stays line-driven (matches estimate-editor.js behavior).
     var alt = (estimate.alternates || []).find(function(a) { return a.id === alternateId; });
     var thisAltExcluded = !!(alt && alt.excludeFromTotal);
-    function sectionHeaderForIdx(idx) {
-      for (var i = idx - 1; i >= 0; i--) {
-        var L = lines[i];
-        if (L && L.section === '__section_header__') return L;
-      }
-      return null;
-    }
-    var subtotal = 0;
-    var markedUp = 0;
-    lines.forEach(function(l, idx) {
-      if (l.section === '__section_header__') {
-        if (l.markupMode === 'dollar' && l.markup !== '' && l.markup != null) {
-          markedUp += Number(l.markup) || 0;
-        }
-        return;
-      }
-      var ext = (l.qty || 0) * (l.unitCost || 0);
-      subtotal += ext;
-      var section = sectionHeaderForIdx(idx);
-      var inDollar = section && section.markupMode === 'dollar';
-      var m;
-      if (section && section.overrideLineMarkups) {
-        m = inDollar ? 0 : ((section.markup === '' || section.markup == null) ? null : Number(section.markup));
-      } else {
-        m = (l.markup === '' || l.markup == null) ? null : Number(l.markup);
-        if (m == null && !inDollar && section && section.markup !== '' && section.markup != null) m = Number(section.markup);
-      }
-      if (m == null && !inDollar && estimate.defaultMarkup != null && estimate.defaultMarkup !== '') m = Number(estimate.defaultMarkup);
-      if (m == null) m = 0;
-      markedUp += ext * (1 + m / 100);
-    });
+    var per = _P.computeForLines(estimate, lines);
+    var markedUp = per.markedUp;
     if (targetMarginActive(estimate) && !thisAltExcluded) {
-      markedUp = applyTargetMargin(subtotal, estimate);
+      markedUp = applyTargetMargin(per.subtotal, estimate);
     }
     return markedUp;
   }
