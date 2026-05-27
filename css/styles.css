@@ -5275,6 +5275,12 @@
    blocks for a clean letter-page output. Browser's "Save as PDF"
    captures this directly. */
 @media print {
+  /* Tight letter margins so the photo grid fills as much of the
+     printable area as possible. Browser default is ~0.5"-0.75" per
+     side which makes photos render noticeably smaller than they
+     looked in the editor. 0.4" gives plenty of bleed for printers
+     while keeping the photo cells close to editor-size. */
+  @page { size: letter portrait; margin: 0.4in; }
   body * { visibility: hidden; }
   .p86-report-overlay,
   .p86-report-overlay * { visibility: visible; }
@@ -5314,11 +5320,36 @@
   .p86-report-photo-caption {
     background: transparent !important; color: #000 !important; border: 0 !important;
   }
+  /* Strip the editor's section card chrome in print — the box border
+     and inner padding were sized for on-screen reading where the dark
+     bg needs a frame; in print every pixel of padding eats photo
+     real estate. Killing padding gives the photo grid the full
+     @page printable width. */
   .p86-report-section {
     page-break-inside: avoid;
     border: 0;
     background: transparent;
+    padding: 0;
+    margin-bottom: 12px;
   }
+  /* Drop the editor's topbar (Design / Preview / Save buttons + the
+     "Custom Section" label area) from print — it's all UI chrome. */
+  .p86-report-topbar { display: none !important; }
+  /* Tighten the grid gap in print — 10px on screen becomes a lot of
+     wasted page space when the page is only ~7.7" wide. */
+  .p86-report-section-photos { gap: 6px; }
+  /* Stack mode in print — let the photo use the full printable width
+     instead of being capped at 65/80% which made it dramatically
+     smaller than the editor preview. */
+  .p86-report-photo-single.size-small,
+  .p86-report-photo-single.size-medium,
+  .p86-report-photo-single.size-large { max-width: 100% !important; }
+  /* Photo image — make it stretch to fill its cell width so the
+     printed photo matches the editor's render. Without this an
+     img with intrinsic dimensions may render at its natural size
+     rather than the cell width. */
+  .p86-report-photo img,
+  .p86-report-photo-single img { width: 100%; height: auto; display: block; }
   .p86-report-photo { border: 1px solid #ccc; }
 }
 
