@@ -499,8 +499,9 @@
   // ──────────────────────────────────────────────────────────────────
   // Create-Project modal — replaces window.prompt
   // ──────────────────────────────────────────────────────────────────
-  function openCreate(prefill) {
+  function openCreate(prefill, options) {
     prefill = prefill || {};
+    options = options || {};
     var prior = document.getElementById('projCreateModal');
     if (prior) prior.remove();
 
@@ -650,7 +651,15 @@
         modal.remove();
         if (_listState.host) fetchAll().then(paintList);
         refreshLinkedPanels();
-        if (p && p.id) openProject(p.id);
+        if (p && p.id) {
+          openProject(p.id);
+          // Optional follow-up hook — used by the "New Report" summary
+          // flow so the chosen template auto-creates a report inside
+          // the brand-new project once openProject finishes painting.
+          if (typeof options.afterCreate === 'function') {
+            options.afterCreate(p.id);
+          }
+        }
       }).catch(function(err) {
         alert('Create failed: ' + (err.message || err));
       });
@@ -1664,33 +1673,47 @@
     // defaults from the template's recipe, then open the editor.
     openTemplatePicker(function(templateId) {
       if (!templateId) return;
-      var tpl = (window.p86ReportTemplates && window.p86ReportTemplates.get)
-        ? window.p86ReportTemplates.get(templateId)
-        : { label: 'Untitled', seed_sections: [], cover_defaults: function() { return {}; } };
-      var me = currentUser();
-      var seeds = (tpl.seed_sections || []).map(function(s, i) {
-        return {
-          id: 'sec_' + Date.now() + '_' + i,
-          label: s.label || 'Section',
-          layout: s.layout || 'photo-grid',
-          photoSize: s.photoSize || 'small',
-          descSide:  s.descSide  || 'right',
-          descSides: {},
-          photo_ids: [],
-          captions: {},
-          text_body: '',
-          attachment_ids: []
-        };
-      });
-      var cover = Object.assign({ enabled: false }, tpl.cover_defaults(p, me) || {});
-      var body = {
-        title: tpl.label + ' — ' + (p.name || 'Project'),
-        template_type: templateId,
-        sections: seeds,
-        cover_page: cover
+      createReportFor(p, templateId);
+    });
+  }
+
+  // Build + POST a report under the given project using the chosen
+  // template. Pulled out of createReport so the summary "New Report"
+  // flow (where the project is brand-new, not pre-loaded into
+  // _detailState) can call it directly with a fetched project record.
+  function createReportFor(project, templateId) {
+    if (!project || !templateId) return;
+    var tpl = (window.p86ReportTemplates && window.p86ReportTemplates.get)
+      ? window.p86ReportTemplates.get(templateId)
+      : { label: 'Untitled', seed_sections: [], cover_defaults: function() { return {}; } };
+    var me = currentUser();
+    var seeds = (tpl.seed_sections || []).map(function(s, i) {
+      return {
+        id: 'sec_' + Date.now() + '_' + i,
+        label: s.label || 'Section',
+        layout: s.layout || 'photo-grid',
+        photoSize: s.photoSize || 'small',
+        descSide:  s.descSide  || 'right',
+        descSides: {},
+        photo_ids: [],
+        captions: {},
+        text_body: '',
+        attachment_ids: []
       };
-      window.p86Api.reports.create('project', p.id, body).then(function(r) {
-        var newR = r && r.report;
+    });
+    var cover = Object.assign({ enabled: false }, tpl.cover_defaults(project, me) || {});
+    var body = {
+      title: tpl.label + ' — ' + (project.name || 'Project'),
+      template_type: templateId,
+      sections: seeds,
+      cover_page: cover
+    };
+    return window.p86Api.reports.create('project', project.id, body).then(function(r) {
+      var newR = r && r.report;
+      // Only update the in-memory detail-state cache if we're sitting
+      // ON this project's detail page; otherwise the summary flow has
+      // already navigated into it via openProject, which will refetch.
+      if (_detailState.project && String(_detailState.project.id) === String(project.id)) {
         _detailState.reports = (_detailState.reports || []).concat([{
           id: newR.id,
           title: newR.title,
@@ -1701,10 +1724,46 @@
           updated_at: new Date().toISOString()
         }]);
         paintReportsList();
-        openReportEditor(newR.id);
-      }).catch(function(e) {
-        alert('Create failed: ' + (e.message || e));
-      });
+      }
+      openReportEditor(newR.id);
+    }).catch(function(e) {
+      alert('Create failed: ' + (e.message || e));
+    });
+  }
+
+  // Summary-page "New Report" entrypoint. Flow:
+  //   1. Template picker — user picks Walkthrough / Daily Log / etc.
+  //   2. New-Project create modal pre-filled with template name + today.
+  //      Modal still has the Link-to picker so the user can attach the
+  //      report's project to a lead / job / client at create time.
+  //   3. On project create → openProject paints the detail view AND
+  //      afterCreate fires createReportFor → openReportEditor lands
+  //      the user inside the brand-new report ready to take photos.
+  function openCreateReport() {
+    openTemplatePicker(function(templateId) {
+      if (!templateId) return;
+      var tpl = (window.p86ReportTemplates && window.p86ReportTemplates.get)
+        ? window.p86ReportTemplates.get(templateId)
+        : { label: 'Report' };
+      var today = new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+      openCreate(
+        { name: tpl.label + ' — ' + today },
+        {
+          afterCreate: function(projectId) {
+            // openProject is async; wait for _detailState.project to
+            // be populated before we POST the report. Polling beats
+            // refactoring openProject to return a promise here.
+            var tries = 0;
+            (function waitForProject() {
+              if (_detailState.project && String(_detailState.project.id) === String(projectId)) {
+                createReportFor(_detailState.project, templateId);
+              } else if (tries++ < 60) {
+                setTimeout(waitForProject, 100);
+              }
+            })();
+          }
+        }
+      );
     });
   }
 
@@ -4997,6 +5056,7 @@
     editLinks: editLinks,
     switchTab: switchTab,
     createReport: createReport,
+    openCreateReport: openCreateReport,
     openReport: openReport,
     deleteReport: deleteReport,
     _fieldBlur: _fieldBlur,

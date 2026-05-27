@@ -632,18 +632,19 @@
                         // Global Ask 86 badge in the dashboard header.
                         '<span class="p86-ask86-mount"></span>' +
                         // Step 1: a new lead is the entry to the whole
-                        // pipeline. Open the new-lead modal.
-                        '<button class="primary" onclick="if(typeof openNewLeadModal===\'function\')openNewLeadModal();" style="font-size:13px;padding:7px 14px;white-space:nowrap;">' +
-                            '<span style="margin-right:6px;">&#x2795;</span>New Lead' +
-                        '</button>' +
-                        // Step "in the field": start a walkthrough — open
-                        // the project create modal which carries the
-                        // walkthrough templates (daily log, etc.) so the
-                        // user lands inside a fresh project with the
-                        // photo feed ready to receive captures.
-                        '<button class="success" onclick="if(window.p86Projects&amp;&amp;window.p86Projects.openCreate)window.p86Projects.openCreate();" style="font-size:13px;padding:7px 14px;white-space:nowrap;" title="Start a walkthrough — opens project templates">' +
-                            '<span style="margin-right:6px;">&#x1F4F7;</span>New Walkthrough' +
-                        '</button>' +
+                        // pipeline. Uses the in-house .ee-btn.primary
+                        // styling (subtle blue outline, no chunky fill)
+                        // so it reads as part of the dashboard chrome
+                        // rather than a marketing CTA.
+                        '<button class="ee-btn primary" data-p86-icon="plus" onclick="if(typeof openNewLeadModal===\'function\')openNewLeadModal();" title="Start a new lead — step 1 of the pipeline">New Lead</button>' +
+                        // "New Report" — opens the report-template picker
+                        // (Photo Walkthrough / Daily Log / etc.), then the
+                        // new-project modal pre-filled with the template
+                        // label so the user can link it to a lead / job /
+                        // client at creation time. After save the user
+                        // lands directly in the report editor ready to
+                        // take photos.
+                        '<button class="ee-btn success" data-p86-icon="reports" onclick="if(window.p86Projects&amp;&amp;window.p86Projects.openCreateReport)window.p86Projects.openCreateReport();" title="Start a new report — Walkthrough, Daily Log, etc.">New Report</button>' +
                     '</div>' +
                 '</div>' +
 
