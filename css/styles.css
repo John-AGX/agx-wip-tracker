@@ -6979,3 +6979,390 @@ body.light-mode .p86-pv-tag-modal-chip {
     padding-right: 4px !important;
   }
 }
+
+/* ── Change Order editor (overlay) ──────────────────────────────────
+   Full-screen overlay opened from the job detail's Change Orders tab.
+   Layout: sticky top bar (title + status pill + save indicator), a
+   totals chip strip, then a two-pane body — side panel (scope, margin,
+   fees) on the left and the editable line table on the right.
+   Mirrors the estimate editor's color tokens + spacing language so
+   the two surfaces feel like the same product. */
+.p86-co-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1080;
+  background: rgba(0, 0, 0, 0.78);
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  overflow-y: auto;
+  font-family: inherit;
+}
+.p86-co-host {
+  width: min(1280px, 100%);
+  min-height: 100vh;
+  background: var(--bg, #0f1117);
+  display: flex;
+  flex-direction: column;
+}
+
+/* Top bar */
+.p86-co-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: var(--surface, #1a1d27);
+  border-bottom: 1px solid var(--border, #2e3346);
+  padding: 10px 18px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.p86-co-topbar-left {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+.p86-co-conumber {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  color: var(--accent, #4f8cff);
+  background: rgba(79, 140, 255, 0.10);
+  border: 1px solid rgba(79, 140, 255, 0.35);
+  padding: 4px 9px;
+  border-radius: 5px;
+  flex: 0 0 auto;
+}
+.p86-co-title-input {
+  flex: 1;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text, #fff);
+  font-size: 18px;
+  font-weight: 600;
+  padding: 6px 10px;
+  border-radius: 6px;
+  min-width: 0;
+}
+.p86-co-title-input:focus {
+  border-color: var(--border, #2e3346);
+  outline: none;
+}
+.p86-co-topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+}
+
+/* Status pill */
+.p86-co-status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 6px 12px;
+  border-radius: 14px;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+  cursor: pointer;
+  user-select: none;
+  border: 1px solid transparent;
+  transition: filter 0.12s;
+}
+.p86-co-status-pill:hover { filter: brightness(1.08); }
+.p86-co-status-pill .dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  display: inline-block;
+  background: currentColor;
+}
+.p86-co-status-pill .caret {
+  font-size: 9px;
+  opacity: 0.6;
+  margin-left: 2px;
+}
+.p86-co-status-pill.status-draft {
+  background: rgba(148, 163, 184, 0.12);
+  border-color: rgba(148, 163, 184, 0.35);
+  color: #cbd5e1;
+}
+.p86-co-status-pill.status-approved {
+  background: rgba(52, 211, 153, 0.14);
+  border-color: rgba(52, 211, 153, 0.45);
+  color: #34d399;
+}
+.p86-co-status-pill.status-applied {
+  background: rgba(79, 140, 255, 0.14);
+  border-color: rgba(79, 140, 255, 0.45);
+  color: #4f8cff;
+}
+
+/* Status transition menu (anchored under the pill) */
+.p86-co-status-menu {
+  position: absolute;
+  z-index: 1100;
+  background: var(--surface, #1a1d27);
+  border: 1px solid var(--border, #2e3346);
+  border-radius: 8px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.5);
+  min-width: 280px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.p86-co-status-menu button {
+  text-align: left;
+  background: transparent;
+  border: 0;
+  color: var(--text, #fff);
+  padding: 10px 12px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.p86-co-status-menu button strong { display: block; font-size: 13px; }
+.p86-co-status-menu button small {
+  display: block;
+  font-size: 11px;
+  color: var(--text-dim, #c4c8d8);
+  margin-top: 3px;
+  line-height: 1.4;
+}
+.p86-co-status-menu button:hover { background: var(--overlay-light, rgba(255,255,255,0.06)); }
+
+/* Save-status indicator */
+.p86-co-save-status {
+  font-size: 11px;
+  color: var(--text-dim, #c4c8d8);
+  font-weight: 500;
+}
+.p86-co-save-status.dirty  { color: #fbbf24; }
+.p86-co-save-status.saving { color: var(--accent, #4f8cff); }
+.p86-co-save-status.saved  { color: #34d399; }
+.p86-co-save-status.error  { color: #f87171; }
+
+/* Totals chip bar */
+.p86-co-totals {
+  display: flex;
+  gap: 8px;
+  padding: 12px 18px;
+  background: rgba(255,255,255,0.02);
+  border-bottom: 1px solid var(--border, #2e3346);
+  overflow-x: auto;
+}
+.p86-co-chip {
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--border, #2e3346);
+  border-radius: 8px;
+  padding: 8px 14px;
+  min-width: 110px;
+  flex: 0 0 auto;
+}
+.p86-co-chip.accent {
+  background: rgba(52, 211, 153, 0.08);
+  border-color: rgba(52, 211, 153, 0.35);
+}
+.p86-co-chip-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--text-dim, #c4c8d8);
+  margin-bottom: 4px;
+}
+.p86-co-chip-value {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text, #fff);
+}
+.p86-co-chip.accent .p86-co-chip-value { color: #34d399; }
+
+/* Body — side panel + line table */
+.p86-co-body {
+  display: grid;
+  grid-template-columns: 300px minmax(0, 1fr);
+  gap: 18px;
+  padding: 18px;
+  flex: 1;
+  min-height: 0;
+}
+.p86-co-side {
+  background: var(--card-bg, #0f0f1e);
+  border: 1px solid var(--border, #2e3346);
+  border-radius: 10px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-self: flex-start;
+  position: sticky;
+  top: 64px;
+}
+.p86-co-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.p86-co-field > span {
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim, #c4c8d8);
+}
+.p86-co-field input,
+.p86-co-field textarea {
+  background: var(--input-bg, #0f1117);
+  border: 1px solid var(--border, #2e3346);
+  color: var(--text, #fff);
+  border-radius: 6px;
+  padding: 7px 9px;
+  font-size: 13px;
+  font-family: inherit;
+  resize: vertical;
+}
+.p86-co-field input:focus,
+.p86-co-field textarea:focus {
+  border-color: var(--accent, #4f8cff);
+  outline: none;
+}
+.p86-co-field-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.p86-co-link-chip {
+  margin-top: 4px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+.p86-co-link-chip .p86-co-link-on {
+  color: #34d399;
+  background: rgba(52, 211, 153, 0.10);
+  display: block;
+  padding: 6px 8px;
+  border-radius: 5px;
+  border: 1px solid rgba(52, 211, 153, 0.25);
+}
+.p86-co-link-chip .p86-co-link-off {
+  color: var(--text-dim, #c4c8d8);
+  display: block;
+  font-style: italic;
+}
+
+/* Line table */
+.p86-co-lines {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+.p86-co-lines-toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.p86-co-lines-empty {
+  border: 1px dashed var(--border, #2e3346);
+  border-radius: 10px;
+  padding: 30px;
+  text-align: center;
+  color: var(--text-dim, #c4c8d8);
+  font-size: 13px;
+}
+.p86-co-line-tbl {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--card-bg, #0f0f1e);
+  border: 1px solid var(--border, #2e3346);
+  border-radius: 10px;
+  overflow: hidden;
+  font-size: 13px;
+}
+.p86-co-line-tbl thead th {
+  background: rgba(255,255,255,0.03);
+  padding: 9px 10px;
+  text-align: left;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--text-dim, #c4c8d8);
+  border-bottom: 1px solid var(--border, #2e3346);
+}
+.p86-co-line-tbl th.ext,
+.p86-co-line-tbl td.ext { text-align: right; }
+.p86-co-line-tbl th.qty,
+.p86-co-line-tbl th.unit,
+.p86-co-line-tbl th.markup { width: 110px; }
+.p86-co-line-tbl th.ext { width: 130px; }
+.p86-co-line-tbl th.del,
+.p86-co-line-tbl td.del { width: 36px; text-align: center; }
+.p86-co-line-tbl tbody td {
+  padding: 6px 10px;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.p86-co-line-tbl tbody tr:last-child td { border-bottom: 0; }
+.p86-co-line-tbl input {
+  width: 100%;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text, #fff);
+  padding: 5px 7px;
+  border-radius: 4px;
+  font-family: inherit;
+  font-size: 13px;
+}
+.p86-co-line-tbl input:focus {
+  border-color: var(--border, #2e3346);
+  background: var(--input-bg, #0f1117);
+  outline: none;
+}
+.p86-co-line-tbl td.ext { color: #34d399; font-weight: 600; font-variant-numeric: tabular-nums; }
+.p86-co-section-row td {
+  background: rgba(251, 191, 36, 0.05);
+  border-top: 1px solid rgba(251, 191, 36, 0.15) !important;
+  border-bottom: 1px solid rgba(251, 191, 36, 0.15) !important;
+}
+.p86-co-section-row .p86-co-section-label {
+  font-weight: 700;
+  color: #fbbf24;
+}
+.p86-co-line-del {
+  background: transparent;
+  border: 0;
+  color: var(--text-dim, #888);
+  font-size: 16px;
+  cursor: pointer;
+  width: 24px; height: 24px;
+  border-radius: 4px;
+  line-height: 1;
+}
+.p86-co-line-del:hover { color: #f87171; background: rgba(248, 113, 113, 0.10); }
+
+/* Mobile */
+@media (max-width: 768px) {
+  .p86-co-body {
+    grid-template-columns: 1fr;
+    gap: 12px;
+    padding: 12px;
+  }
+  .p86-co-side {
+    position: static;
+    top: auto;
+  }
+  .p86-co-title-input { font-size: 15px; }
+  .p86-co-conumber { font-size: 10px; }
+  .p86-co-line-tbl { font-size: 12px; }
+  .p86-co-line-tbl th.qty,
+  .p86-co-line-tbl th.unit,
+  .p86-co-line-tbl th.markup { width: 80px; }
+}

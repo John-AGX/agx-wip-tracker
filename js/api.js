@@ -228,6 +228,36 @@
     }
   };
 
+  // Job-scoped Change Orders. Two URL families share the wrapper:
+  //   listForJob(jobId)            → GET /api/jobs/:jobId/change-orders
+  //   create(jobId, payload)        → POST /api/jobs/:jobId/change-orders
+  //   get/update/remove/setStatus/linkNode → /api/change-orders/:id
+  // The server-side router (server/routes/change-order-routes.js)
+  // mounts both prefixes inside a single Express router at /api.
+  var changeOrders = {
+    listForJob: function(jobId) {
+      return get('/api/jobs/' + encodeURIComponent(jobId) + '/change-orders');
+    },
+    create: function(jobId, payload) {
+      return post('/api/jobs/' + encodeURIComponent(jobId) + '/change-orders', payload || {});
+    },
+    get: function(id) {
+      return get('/api/change-orders/' + encodeURIComponent(id));
+    },
+    update: function(id, payload) {
+      return put('/api/change-orders/' + encodeURIComponent(id), payload);
+    },
+    setStatus: function(id, status) {
+      return post('/api/change-orders/' + encodeURIComponent(id) + '/status', { status: status });
+    },
+    linkNode: function(id, nodeId) {
+      return post('/api/change-orders/' + encodeURIComponent(id) + '/link-node', { node_id: nodeId });
+    },
+    remove: function(id) {
+      return del('/api/change-orders/' + encodeURIComponent(id));
+    }
+  };
+
   // Polymorphic reports (Phase 2) — projects (and future leads /
   // estimates) share the legacy job_reports table via entity_type +
   // entity_id columns. The legacy /api/jobs/:jobId/reports route
@@ -518,7 +548,7 @@
 
   window.p86Api = {
     get: get, put: put, post: post, del: del, patch: patch,
-    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, qbCosts: qbCosts, subs: subsApi, schedule: schedule, adminSms: adminSms, messages: messages, weather: weather, projects: projects, orgTags: orgTags, reports: reports,
+    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, qbCosts: qbCosts, subs: subsApi, schedule: schedule, adminSms: adminSms, messages: messages, weather: weather, projects: projects, orgTags: orgTags, reports: reports, changeOrders: changeOrders,
     isOffline: isOffline,
     isAuthenticated: function() { return !!getToken() && !isOffline(); }
   };
