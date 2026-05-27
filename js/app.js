@@ -1452,6 +1452,12 @@
             appData.buildings = [];
             appData.phases = [];
             appData.changeOrders = [];
+            // Phase 4 — server-side job_change_orders rows live here.
+            // Loaded lazily on job-detail open via loadChangeOrdersForJob(jobId).
+            // Indexed by job_id; the legacy appData.changeOrders array is
+            // kept for backwards-compat with the old localStorage scalars
+            // until the migration phase runs.
+            appData.jobChangeOrders = appData.jobChangeOrders || [];
             appData.subs = [];
             appData.purchaseOrders = [];
             appData.invoices = [];

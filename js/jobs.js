@@ -340,6 +340,149 @@ function renderJobsMain() {
         }
 
         // ==================== CHANGE ORDERS ====================
+        // ── Phase 4: server-backed CO list on the job detail ──
+        // Fetches /api/jobs/:jobId/change-orders and caches the response
+        // into appData.jobChangeOrders. Refreshes the rendered list
+        // when complete. Safe to call multiple times; in-flight fetches
+        // are tracked per-job so re-opening doesn't dup-fetch.
+        var _coFetchInflight = {};
+        function loadChangeOrdersForJob(jobId) {
+            if (!jobId || !window.p86Api || !window.p86Api.changeOrders) return Promise.resolve([]);
+            if (_coFetchInflight[jobId]) return _coFetchInflight[jobId];
+            _coFetchInflight[jobId] = window.p86Api.changeOrders.listForJob(jobId)
+                .then(function(r) {
+                    var list = (r && r.change_orders) || [];
+                    // Replace this job's rows in the cache.
+                    if (!Array.isArray(appData.jobChangeOrders)) appData.jobChangeOrders = [];
+                    appData.jobChangeOrders = appData.jobChangeOrders
+                        .filter(function(c) { return c.job_id !== jobId; })
+                        .concat(list);
+                    delete _coFetchInflight[jobId];
+                    return list;
+                })
+                .catch(function(e) {
+                    delete _coFetchInflight[jobId];
+                    console.warn('loadChangeOrdersForJob failed:', e);
+                    return [];
+                });
+            return _coFetchInflight[jobId];
+        }
+        window.loadChangeOrdersForJob = loadChangeOrdersForJob;
+
+        // Render the server-side CO list into a job's overview panel.
+        // Mounts an inline-styled section with a "+ New Change Order"
+        // button, a count badge, and a clickable row per CO. Re-paints
+        // after each loadChangeOrdersForJob.
+        function renderJobChangeOrdersInto(container, jobId) {
+            var mount = document.createElement('div');
+            mount.id = 'job-overview-change-orders';
+            mount.style.cssText = 'margin-top:14px;';
+            container.appendChild(mount);
+            paintJobChangeOrdersInto(mount, jobId);
+            // Kick off a fresh fetch so the list updates after first
+            // load. If the cache already has rows for this job, the
+            // first paint above already shows them.
+            loadChangeOrdersForJob(jobId).then(function() {
+                paintJobChangeOrdersInto(mount, jobId);
+            });
+        }
+        function paintJobChangeOrdersInto(mount, jobId) {
+            if (!mount) return;
+            var rows = (appData.jobChangeOrders || []).filter(function(c) { return c.job_id === jobId; });
+            // Sort newest first so freshly-created COs are visible
+            // without scrolling on a long job.
+            rows.sort(function(a, b) {
+                return new Date(b.updated_at || 0) - new Date(a.updated_at || 0);
+            });
+            function statusBadge(s) {
+                var color = s === 'approved' ? 'var(--green,#34d399)'
+                          : s === 'applied' ? 'var(--accent,#4f8cff)'
+                          : '#cbd5e1';
+                var bg = s === 'approved' ? 'rgba(52,211,153,0.12)'
+                       : s === 'applied' ? 'rgba(79,140,255,0.12)'
+                       : 'rgba(148,163,184,0.12)';
+                var label = s === 'draft' ? 'Draft' : s === 'approved' ? 'Approved' : 'Applied';
+                return '<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;letter-spacing:0.4px;text-transform:uppercase;color:' + color + ';background:' + bg + ';">' + label + '</span>';
+            }
+            function coTotal(c) {
+                // Lines live in the data blob (spread on top of the row by
+                // the server's shapeRow). Use the shared pricing pipeline
+                // so totals match what the editor shows.
+                if (!window.p86Pricing) return 0;
+                var lines = Array.isArray(c.lines) ? c.lines : [];
+                var per = window.p86Pricing.computeForLines(c, lines);
+                var markedUp = per.markedUp;
+                if (window.p86Pricing.targetMarginActive(c)) {
+                    markedUp = window.p86Pricing.applyTargetMargin(per.subtotal, c);
+                }
+                return window.p86Pricing.applyFeesAndTax(markedUp, c).total;
+            }
+            var bodyHTML;
+            if (!rows.length) {
+                bodyHTML =
+                    '<div style="padding:20px;border:1px dashed var(--border,#333);border-radius:10px;text-align:center;color:var(--text-dim,#888);font-size:12px;">' +
+                        'No change orders yet. Click <strong>+ New Change Order</strong> to start one.' +
+                    '</div>';
+            } else {
+                var rowsHTML = rows.map(function(c) {
+                    var total = coTotal(c);
+                    return '<tr class="overview-row" style="cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.04);" data-co-open="' + escapeHTML(c.id) + '" title="Click to open">' +
+                        '<td style="white-space:nowrap;padding:8px 10px;"><strong style="color:var(--text,#fff);font-size:13px;">' + escapeHTML(c.co_number || 'CO') + '</strong></td>' +
+                        '<td style="padding:8px 10px;font-size:12.5px;color:var(--text,#fff);">' + escapeHTML(c.title || '(untitled)') + '</td>' +
+                        '<td style="white-space:nowrap;padding:8px 10px;">' + statusBadge(c.status || 'draft') + '</td>' +
+                        '<td class="num" style="text-align:right;white-space:nowrap;padding:8px 10px;font-family:\'SF Mono\',monospace;font-size:13px;color:var(--green,#34d399);font-weight:600;">' + formatCurrency(total) + '</td>' +
+                        '<td style="white-space:nowrap;padding:8px 10px;font-size:11px;color:var(--text-dim,#888);">' + (c.linked_node_id ? '⛓ Linked' : '—') + '</td>' +
+                    '</tr>';
+                }).join('');
+                bodyHTML =
+                    '<div style="border:1px solid var(--border,#333);border-radius:10px;overflow-x:auto;background:var(--card-bg,#0f0f1e);">' +
+                        '<table style="width:100%;border-collapse:collapse;">' +
+                            '<thead style="background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border,#333);"><tr>' +
+                                thCell('CO #', 'left') +
+                                thCell('Title', 'left') +
+                                thCell('Status', 'left') +
+                                thCell('Total', 'right') +
+                                thCell('Graph', 'left') +
+                            '</tr></thead>' +
+                            '<tbody>' + rowsHTML + '</tbody>' +
+                        '</table>' +
+                    '</div>';
+            }
+            mount.innerHTML =
+                '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">' +
+                    '<h3 style="font-size:13px;margin:0;">&#x1F4DD; Change Orders (' + rows.length + ')</h3>' +
+                    '<button class="ee-btn primary" data-co-new="' + escapeHTML(jobId) + '" style="font-size:12px;">+ New Change Order</button>' +
+                '</div>' +
+                bodyHTML;
+            // Wire row clicks → open editor
+            mount.querySelectorAll('[data-co-open]').forEach(function(tr) {
+                tr.addEventListener('click', function() {
+                    var id = tr.getAttribute('data-co-open');
+                    if (window.p86ChangeOrders && window.p86ChangeOrders.open) {
+                        window.p86ChangeOrders.open(id);
+                    }
+                });
+            });
+            // Wire "+ New" → create draft + open editor. The editor
+            // refreshes its in-memory record from the server, so the
+            // list re-paint here will pick up the new row.
+            var newBtn = mount.querySelector('[data-co-new]');
+            if (newBtn) newBtn.addEventListener('click', function() {
+                if (window.p86ChangeOrders && window.p86ChangeOrders.openNew) {
+                    window.p86ChangeOrders.openNew(jobId);
+                    // After the editor closes the user may have created
+                    // a row. Best-effort refresh after a short delay so
+                    // the list shows it. The editor doesn't currently
+                    // emit a close-event, so this is the simplest hook.
+                    setTimeout(function() {
+                        loadChangeOrdersForJob(jobId).then(function() {
+                            paintJobChangeOrdersInto(mount, jobId);
+                        });
+                    }, 500);
+                }
+            });
+        }
+
         // ── CO Allocation Helpers ──
         function getCOAllocations(co) {
             if (co.allocations) return co.allocations;
@@ -1700,7 +1843,13 @@ function renderJobsMain() {
                 container.appendChild(subsSection);
             }
 
-            // ── Change Orders summary ──
+            // ── Change Orders (Phase 4 — server-backed with line items + status) ──
+            // Renders ABOVE the legacy summary so the new flow is the
+            // primary surface. Legacy localStorage COs still show below
+            // until the migration phase runs.
+            renderJobChangeOrdersInto(container, jobId);
+
+            // ── Change Orders summary (legacy — pre-Phase 4) ──
             const cos = appData.changeOrders.filter(c => c.jobId === jobId);
             if (cos.length > 0) {
                 const coSection = document.createElement('div');
