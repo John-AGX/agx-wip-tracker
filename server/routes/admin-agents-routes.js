@@ -2292,6 +2292,12 @@ function customToolsFor(agentKey, opts) {
       'view_attachment_image', // look at photos
       // ── Memory (4) ──
       'remember', 'recall', 'list_memories', 'forget',
+      // ── Project inline (3, Wave T3) ──
+      // Real-time/inline tools that don't fit the payload primitive:
+      // photo comments are conversational (post-and-go); schedule
+      // read is a pure lookup. Schedule WRITES still use
+      // emit_payload_file with schedule.blocks ops.
+      'read_photo_comments', 'add_photo_comment', 'read_schedule_blocks',
       // ── Navigation (1) ──
       'navigate',
       // ── The ONE write (1) ──
@@ -2311,7 +2317,9 @@ function customToolsFor(agentKey, opts) {
       // alongside everything else.
       ...(aiInternals.payloadTools ? aiInternals.payloadTools() : []),
       // C18 — universal read surface (read_entity + search_entities).
-      ...(aiInternals.readTools ? aiInternals.readTools() : [])
+      ...(aiInternals.readTools ? aiInternals.readTools() : []),
+      // Wave T3 — inline tools (photo comments, schedule read).
+      ...(aiInternals.projectInlineTools ? aiInternals.projectInlineTools() : [])
     ].forEach(t => {
       if (!t || !t.name || seen.has(t.name)) return;
       if (!ROUTER_TOOL_NAMES.has(t.name)) return;

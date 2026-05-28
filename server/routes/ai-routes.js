@@ -6042,7 +6042,76 @@ const SUBTASK_TOOLS = [];
 // another org. Within a tenant, scope='user' is private to the user
 // who saved it; scope='org' is shared across all users in the org
 // (useful for "the company standardized on PT 2x4s for porch framing").
+// ══════════════════════════════════════════════════════════════════
+// PROJECT INLINE TOOLS — Wave T3
+// ══════════════════════════════════════════════════════════════════
+// Three real-time read/write tools that DON'T fit the payload primitive:
+//   - Photo comments are conversational (1-second posts, not bulk
+//     structural mutations). Forcing them through emit_payload_file
+//     + drag-to-dropbox would be friction-without-value.
+//   - Schedule reads are pure lookups (no write).
 //
+// All three are auto-tier (no approval card). For schedule WRITES,
+// 86 uses emit_payload_file with the existing `schedule.blocks` op
+// vocabulary — those DO benefit from preview + audit.
+
+const PROJECT_INLINE_TOOLS = [
+  {
+    name: 'read_photo_comments',
+    tier: 'auto',
+    description:
+      'Read the comment thread on a photo (attachment). Returns the messages array — id, user_name, body, created_at — oldest first. Use to fetch what teammates have already said about a photo before adding your own comment or referencing it in conversation.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['attachment_id'],
+      properties: {
+        attachment_id: {
+          type: 'string',
+          description: 'The attachment id (e.g. "att_..."). Resolves to the messages thread keyed by "attachment:<id>".',
+        },
+      },
+    },
+  },
+  {
+    name: 'add_photo_comment',
+    tier: 'auto',
+    description:
+      'Post a comment to the thread on a photo (attachment). Auto-tier — no approval card. Use sparingly; conversational text only. Skip for structural mutations (use emit_payload_file with photo metadata ops instead).',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      required: ['attachment_id', 'body'],
+      properties: {
+        attachment_id: {
+          type: 'string',
+          description: 'The attachment id (e.g. "att_..."). Posts to messages thread "attachment:<id>".',
+        },
+        body: {
+          type: 'string',
+          description: 'The comment text. Max 5000 chars; trimmed of leading/trailing whitespace.',
+        },
+      },
+    },
+  },
+  {
+    name: 'read_schedule_blocks',
+    tier: 'auto',
+    description:
+      'Read schedule entries (production blocks) for the caller\'s org. Filters by date range and/or job_id. Returns each entry: id, job_id, start_date, days, crew (user ids), status, notes. Default range: this week + next week if neither from_date nor to_date is provided. Use to answer "what\'s scheduled this week" / "is job X on the calendar".',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        from_date: { type: 'string', description: 'YYYY-MM-DD inclusive lower bound. Default: today.' },
+        to_date: { type: 'string', description: 'YYYY-MM-DD inclusive upper bound. Default: 14 days from today.' },
+        job_id: { type: 'string', description: 'Optional — restrict to one job.' },
+        limit: { type: 'number', description: 'Cap results. Default 200.' },
+      },
+    },
+  },
+];
+
 // Auto-tier — same as subtask tools, no approval card. The user is
 // already opting in by talking to 86; making them approve every save
 // would feel adversarial.
@@ -9641,6 +9710,8 @@ function make86OnCustomToolUse(userId, parentSession, turnContextText) {
           result = await execMemoryTool(name, input, { userId });
         } else if (WATCH_EXECUTOR_TOOLS.has(name)) {
           result = await execWatchTool(name, input, { userId });
+        } else if (PROJECT_INLINE_EXECUTOR_TOOLS.has(name)) {
+          result = await execProjectInlineTool(name, input, { userId });
         } else {
           result = await execStaffTool(name, input, { userId });
         }
@@ -10312,7 +10383,113 @@ function tierFor(toolName) {
   return TALK_THROUGH_TOOLS.has(toolName) ? 'talk_through' : 'approval';
 }
 
+// ── Project inline tools executor (Wave T3) ─────────────────────
+// read_photo_comments / add_photo_comment / read_schedule_blocks
+// share one executor since they're all small + tightly related.
+async function execProjectInlineTool(name, input, ctx) {
+  const { userId } = ctx;
+  if (!userId) throw new Error('userId required');
+
+  if (name === 'read_photo_comments') {
+    const attId = String(input.attachment_id || '').trim();
+    if (!attId) throw new Error('attachment_id is required');
+    const r = await pool.query(
+      `SELECT m.id, m.user_id, u.name AS user_name, m.body, m.created_at
+         FROM messages m
+         LEFT JOIN users u ON u.id = m.user_id
+        WHERE m.thread_key = $1
+        ORDER BY m.created_at ASC
+        LIMIT 500`,
+      [`attachment:${attId}`]
+    );
+    if (!r.rows.length) return `No comments on attachment ${attId} yet.`;
+    return `${r.rows.length} comment(s) on attachment ${attId}:\n` +
+      r.rows.map((m) => `[${new Date(m.created_at).toISOString()}] ${m.user_name || ('User ' + m.user_id)}: ${m.body}`).join('\n');
+  }
+
+  if (name === 'add_photo_comment') {
+    const attId = String(input.attachment_id || '').trim();
+    const body = String(input.body || '').trim().slice(0, 5000);
+    if (!attId) throw new Error('attachment_id is required');
+    if (!body) throw new Error('body is required (non-empty)');
+    // Confirm the attachment exists (helps 86 fail loud if it
+    // hallucinated the id rather than silently posting to a stub
+    // thread).
+    const attChk = await pool.query('SELECT id FROM attachments WHERE id = $1', [attId]);
+    if (!attChk.rows.length) throw new Error(`Attachment ${attId} not found.`);
+
+    const msgId = 'msg_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+    await pool.query(
+      `INSERT INTO messages (id, thread_key, user_id, body) VALUES ($1, $2, $3, $4)`,
+      [msgId, `attachment:${attId}`, userId, body]
+    );
+    // Auto-mark read for the poster (mirrors message-routes.js POST
+    // handler — keeps 86's own posts from showing as unread to the
+    // user).
+    await pool.query(
+      `INSERT INTO message_reads (thread_key, user_id, last_read_at)
+       VALUES ($1, $2, NOW())
+       ON CONFLICT (thread_key, user_id) DO UPDATE SET last_read_at = EXCLUDED.last_read_at`,
+      [`attachment:${attId}`, userId]
+    );
+    return `Comment posted on attachment ${attId} (id: ${msgId}).`;
+  }
+
+  if (name === 'read_schedule_blocks') {
+    const orgRow = await pool.query('SELECT organization_id FROM users WHERE id = $1', [userId]);
+    const orgId = orgRow.rows[0] && orgRow.rows[0].organization_id;
+    if (!orgId) throw new Error('User has no organization');
+    const today = new Date().toISOString().slice(0, 10);
+    const fromDate = (input.from_date && /^\d{4}-\d{2}-\d{2}$/.test(input.from_date)) ? input.from_date : today;
+    let toDate = (input.to_date && /^\d{4}-\d{2}-\d{2}$/.test(input.to_date)) ? input.to_date : null;
+    if (!toDate) {
+      const t = new Date(today);
+      t.setDate(t.getDate() + 14);
+      toDate = t.toISOString().slice(0, 10);
+    }
+    const limit = Math.max(1, Math.min(500, Number(input.limit) || 200));
+    const params = [orgId, fromDate, toDate];
+    let where = 'u.organization_id = $1 AND s.start_date >= $2::date AND s.start_date <= $3::date';
+    if (input.job_id) {
+      params.push(String(input.job_id));
+      where += ` AND s.job_id = $${params.length}`;
+    }
+    const r = await pool.query(
+      `SELECT s.id, s.job_id, s.start_date, s.days, s.crew, s.includes_weekends, s.status, s.notes,
+              COALESCE(j.data->>'jobNumber', '') AS job_number,
+              COALESCE(j.data->>'title', '')     AS job_title
+         FROM schedule_entries s
+         JOIN jobs j ON j.id = s.job_id
+         JOIN users u ON u.id = j.owner_id
+        WHERE ${where}
+        ORDER BY s.start_date ASC, s.id ASC
+        LIMIT ${limit}`,
+      params
+    );
+    if (!r.rows.length) {
+      return `No schedule entries between ${fromDate} and ${toDate}` +
+        (input.job_id ? ` for job ${input.job_id}` : '') + '.';
+    }
+    return `${r.rows.length} schedule entries between ${fromDate} and ${toDate}:\n` +
+      r.rows.map((e) => {
+        const crewN = Array.isArray(e.crew) ? e.crew.length : 0;
+        const lbl = e.job_number ? `[${e.job_number}] ${e.job_title}` : e.job_title || e.job_id;
+        const dateStr = (e.start_date instanceof Date) ? e.start_date.toISOString().slice(0, 10) : String(e.start_date).slice(0, 10);
+        return `${dateStr} · ${lbl} · ${e.days}d · ${crewN} crew · ${e.status}` + (e.notes ? ` · ${e.notes}` : '');
+      }).join('\n');
+  }
+
+  throw new Error(`Unknown project-inline tool: ${name}`);
+}
+const PROJECT_INLINE_EXECUTOR_TOOLS = new Set([
+  'read_photo_comments', 'add_photo_comment', 'read_schedule_blocks',
+]);
+
 const ALLOWED_AUTO_TIER_TOOLS = new Set([
+  // Wave T3 — inline real-time tools (executor: execProjectInlineTool).
+  // Photo comments + schedule reads that don't belong in the payload
+  // primitive (conversational + pure-read respectively).
+  'read_photo_comments', 'add_photo_comment', 'read_schedule_blocks',
   // C18 — universal read surface. Replaces ~15 narrow reads via two
   // tools (read_entity + search_entities). Routed through
   // execConsolidatedRead → existing narrow handlers.
@@ -10531,6 +10708,8 @@ router.post('/exec-tool', requireAuth, requireCapability('ESTIMATES_VIEW'), asyn
       summary = await execFieldToolRead(name, input);
     } else if (CLIENT_EXECUTOR_TOOLS.has(name)) {
       summary = await execClientDirectoryTool(name, input);
+    } else if (PROJECT_INLINE_EXECUTOR_TOOLS.has(name)) {
+      summary = await execProjectInlineTool(name, input, { userId: req.user.id });
     } else {
       summary = await execStaffTool(name, input, { userId: req.user.id });
     }
@@ -11335,6 +11514,10 @@ module.exports.internals = {
   subtaskTools:  () => [],
   // Phase 4 — long-term semantic memory tools.
   memoryTools:   () => MEMORY_TOOLS.map(({ tier, ...t }) => t),
+  // Wave T3 — inline real-time tools (photo comments, schedule read).
+  // Auto-tier; routed through execProjectInlineTool. Surfaces in the
+  // Principal's tool set via ROUTER_TOOL_NAMES in admin-agents-routes.
+  projectInlineTools: () => PROJECT_INLINE_TOOLS.map(({ tier, ...t }) => t),
   // Phase 5 — proactive watching tools (3 of 4 are auto; the writes
   // are approval-tier and surface as cards).
   watchTools:    () => WATCH_TOOLS.map(({ tier, ...t }) => t),
