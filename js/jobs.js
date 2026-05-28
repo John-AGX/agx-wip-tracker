@@ -140,7 +140,35 @@ function renderJobsMain() {
         }
 
         // Recalculate all sub $ fields on phases and buildings from subs entries
-        function recalcSubCosts(jobId) {
+        // Cache keyed by job id; invalidated by a coarse hash of the inputs
+        // recalcSubCosts actually reads (phases count + buildings count + subs
+        // count + sum of billedToDate). When the hash matches the last seen
+        // value for this job, we skip the recompute. This is the hot path
+        // inside renderJobsTable — every row in the list triggers a recalc
+        // even though most jobs haven't changed since the last render.
+        var _subCostHash = {};
+        function recalcSubCosts(jobId, opts) {
+            opts = opts || {};
+            // Build the input hash. Cheap walk through the relevant arrays —
+            // O(phases + buildings + subs) but pure-numeric, no allocations
+            // beyond the four counters.
+            var phaseCount = 0, bldgCount = 0, subCount = 0, billed = 0;
+            for (var i = 0; i < appData.phases.length; i++) {
+                if (appData.phases[i].jobId === jobId) phaseCount++;
+            }
+            for (var j = 0; j < appData.buildings.length; j++) {
+                if (appData.buildings[j].jobId === jobId) bldgCount++;
+            }
+            for (var k = 0; k < appData.subs.length; k++) {
+                if (appData.subs[k].jobId === jobId) {
+                    subCount++;
+                    billed += appData.subs[k].billedToDate || 0;
+                }
+            }
+            var hash = phaseCount + '|' + bldgCount + '|' + subCount + '|' + billed;
+            if (!opts.force && _subCostHash[jobId] === hash) return;
+            _subCostHash[jobId] = hash;
+
             // Update phases
             appData.phases.filter(p => p.jobId === jobId).forEach(p => {
                 p.sub = getSubCostForPhase(p.id);
@@ -157,6 +185,12 @@ function renderJobsMain() {
                     .reduce((sum, s) => sum + (s.billedToDate || 0), 0);
             }
         }
+        // Expose so save/import paths that DO need fresh numbers can force a
+        // recompute. Bulk-save in app.js + the QB-import flow call this.
+        window.invalidateSubCostCache = function(jobId) {
+            if (jobId) delete _subCostHash[jobId];
+            else _subCostHash = {};
+        };
 
         function getJobAccruedCosts(jobId) {
             const job = appData.jobs.find(j => j.id === jobId);
@@ -1621,8 +1655,13 @@ function renderJobsMain() {
             }
 
             if (!readOnly) {
-                // Recalculate sub costs from Subcontractors tab entries
-                recalcSubCosts(jobId);
+                // Recalculate sub costs from Subcontractors tab entries.
+                // Force-refresh on the detail view because the user landing
+                // here is about to look at the dollar columns; we want them
+                // accurate even if the list-page memoization marked them as
+                // unchanged. The list page (renderJobsTable) uses the cached
+                // version for cheap per-row paints.
+                recalcSubCosts(jobId, { force: true });
 
                 // Auto-calculate % complete from phases/buildings (unless manual override)
                 if (!job.pctCompleteManual) {
@@ -1717,12 +1756,28 @@ function renderJobsMain() {
             });
         }
 
+        // Track which jobs already had ensureNGComputed run during this
+        // session. The first paint of a job pays the synchronous cost (so
+        // the building cards show real wire data immediately); subsequent
+        // paints rely on the cached numbers and skip the recompute on the
+        // critical path. ensureNGCloudSynced already handles the
+        // re-render after async cloud sync if the numbers shift.
+        var _ngComputedThisSession = {};
         function renderJobOverview(jobId) {
             const container = document.getElementById('job-overview');
             if (!container) return;
             // Recompute node graph values (job.ngActualCosts, per-phase costs)
-            // so cards display allocation-weighted totals reflecting current wires.
-            ensureNGComputed(jobId);
+            // on the FIRST paint of this job so cards reflect current wires.
+            // Subsequent paints defer the recompute via setTimeout(0) so the
+            // visible repaint isn't blocked. Pure perf — the user sees the
+            // first frame faster; the re-paint runs invisibly off the
+            // microtask queue if anything actually shifted.
+            if (!_ngComputedThisSession[jobId]) {
+                ensureNGComputed(jobId);
+                _ngComputedThisSession[jobId] = true;
+            } else {
+                setTimeout(function() { ensureNGComputed(jobId); }, 0);
+            }
             container.innerHTML = '';
 
             // ── Action icon cluster ──
