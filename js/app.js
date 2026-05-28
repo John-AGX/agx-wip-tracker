@@ -482,34 +482,18 @@
         // Counters + activity sourced synchronously from window.appData;
         // schedule rail loads async via p86Api.schedule and replaces a
         // placeholder when ready so the page never blocks on the network.
-        // ── Summary sub-tab router (Wave M2) ─────────────────────────
-        // Summary is now a two-pane surface: a "Today" pane (the
-        // existing greeting / Needs Attention / Recent Activity /
-        // rail) and a "System Map" pane (manifest-driven discoverability
-        // surface). renderSummaryDashboard() paints the sub-tab strip
-        // + two empty pane hosts into #summary-root, then dispatches
-        // to paintSummaryToday() (always) and paintSummarySystemMap()
-        // (lazy on first click). Active sub-tab persists in
-        // localStorage so refreshing keeps the user on their pane.
-        var _summarySubTab = null;
-        function _loadSummarySubTab() {
-            if (_summarySubTab) return _summarySubTab;
-            try {
-                var v = localStorage.getItem('p86-summary-subtab');
-                _summarySubTab = (v === 'systemmap') ? 'systemmap' : 'today';
-            } catch (e) { _summarySubTab = 'today'; }
-            return _summarySubTab;
-        }
-        function _saveSummarySubTab(t) {
-            _summarySubTab = t;
-            try { localStorage.setItem('p86-summary-subtab', t); } catch (e) {}
-        }
-
-        // Shared manifest fetch + 60s cache. Both panes consume from
-        // here so opening Summary + clicking System Map don't trigger
-        // two round-trips. Returns a Promise that resolves to the
-        // manifest JSON. Failure resolves to null (panes degrade
-        // gracefully — Today's snapshot just doesn't paint).
+        // Shared manifest fetch + 60s cache. Powers the Today pane's
+        // System Snapshot row AND the Help overlay (opened from the
+        // avatar dropdown). Returns a Promise resolving to the
+        // manifest JSON; failure resolves to null so callers degrade
+        // gracefully.
+        //
+        // The old System Map sub-tab on the Summary page (and its
+        // entity-card grid) was retired — that surface was clutter
+        // for the day-to-day workflow. The Features catalog + What's
+        // New list it carried now live in the Help overlay
+        // (openHelpOverlay), reached from the avatar dropdown's
+        // "Help & What's New" item.
         var _manifestCache = { data: null, at: 0 };
         function fetchManifest() {
             var TTL = 60 * 1000;
@@ -527,136 +511,75 @@
                 .catch(function () { return null; });
         }
 
+        // Summary page entry point. Used to host a sub-tab strip
+        // (Today | System Map); collapsed back to a single Today pane
+        // since the System Map content moved to the Help overlay.
         function renderSummaryDashboard() {
             var root = document.getElementById('summary-root');
             if (!root) return;
-
-            var sub = _loadSummarySubTab();
-
-            // Read the unread What's New count from a localStorage
-            // marker (last-acknowledged ship date). On first ever
-            // load this is empty, so every entry counts as "new"
-            // until the user opens System Map.
-            var lastAck = '';
-            try { lastAck = localStorage.getItem('p86-whatsnew-last-ack') || ''; } catch (e) {}
-
-            root.innerHTML =
-                // Sub-tab strip — Today | System Map. Pattern mirrors
-                // the .ws-right-tabs row used by the admin tab.
-                '<div class="p86-summary-subtabs">' +
-                    '<button type="button" class="p86-summary-subtab' + (sub === 'today' ? ' active' : '') + '" data-sub="today">Today</button>' +
-                    '<button type="button" class="p86-summary-subtab' + (sub === 'systemmap' ? ' active' : '') + '" data-sub="systemmap">' +
-                        'System Map' +
-                        '<span class="p86-summary-subtab-badge" id="summary-whatsnew-badge" hidden>0</span>' +
-                    '</button>' +
-                '</div>' +
-                '<div id="summary-tab-today" class="p86-summary-pane"' + (sub === 'today' ? '' : ' hidden') + '></div>' +
-                '<div id="summary-tab-systemmap" class="p86-summary-pane"' + (sub === 'systemmap' ? '' : ' hidden') + '></div>';
-
-            // Wire the sub-tab switcher.
-            root.querySelectorAll('[data-sub]').forEach(function (btn) {
-                btn.addEventListener('click', function () {
-                    var next = btn.getAttribute('data-sub');
-                    if (next === _summarySubTab) return;
-                    _saveSummarySubTab(next);
-                    // Toggle active classes + pane visibility without a
-                    // full re-paint (preserves any inline state in the
-                    // pane being switched away from).
-                    root.querySelectorAll('[data-sub]').forEach(function (b) {
-                        b.classList.toggle('active', b.getAttribute('data-sub') === next);
-                    });
-                    document.getElementById('summary-tab-today').hidden = (next !== 'today');
-                    document.getElementById('summary-tab-systemmap').hidden = (next !== 'systemmap');
-                    if (next === 'systemmap') {
-                        paintSummarySystemMap(document.getElementById('summary-tab-systemmap'));
-                        // Opening System Map = acknowledge what's new.
-                        try { localStorage.setItem('p86-whatsnew-last-ack', new Date().toISOString()); } catch (e) {}
-                        var badge = document.getElementById('summary-whatsnew-badge');
-                        if (badge) badge.hidden = true;
-                    }
-                });
-            });
-
-            // Always paint Today (default pane). It's cheap and lets
-            // the user switch back instantly.
-            paintSummaryToday(document.getElementById('summary-tab-today'));
-
-            // Lazy-paint SystemMap if it's the active pane on load
-            // (user refreshed while on it).
-            if (sub === 'systemmap') {
-                paintSummarySystemMap(document.getElementById('summary-tab-systemmap'));
-            }
-
-            // Compute the What's New badge count in the background.
-            fetchManifest().then(function (m) {
-                if (!m || !Array.isArray(m.whats_new)) return;
-                var unread = m.whats_new.filter(function (w) {
-                    return !lastAck || (w.shipped && w.shipped > lastAck);
-                }).length;
-                var badge = document.getElementById('summary-whatsnew-badge');
-                if (badge && unread > 0 && sub !== 'systemmap') {
-                    badge.textContent = unread;
-                    badge.hidden = false;
-                }
-            });
+            paintSummaryToday(root);
         }
+        window.renderSummaryDashboard = renderSummaryDashboard;
 
-        // ── System Map pane (Wave M4) ─────────────────────────────────
-        // Three vertical sections rendered from the shared manifest:
-        // Entities (per-type drill-down), Features (the full matrix
-        // from server/feature-catalog.js), and What's New (newest
-        // shipped items). Loading state if the manifest hasn't landed.
-        function paintSummarySystemMap(host) {
-            if (!host) return;
-            host.innerHTML = '<div class="p86-sysmap-loading">Loading system map…</div>';
+        // ── Help overlay (opened from avatar dropdown) ────────────────
+        // Modal that surfaces the Features catalog + What's New list
+        // from the org manifest. No entity cards — this is purely the
+        // "what's in the app + where do I find it" reference + the
+        // "what changed lately" log. Reuses fetchManifest() above so
+        // a single network round-trip covers both the Today snapshot
+        // and the Help content.
+        function openHelpOverlay() {
+            var prior = document.getElementById('p86-help-overlay');
+            if (prior) prior.remove();
+            var overlay = document.createElement('div');
+            overlay.id = 'p86-help-overlay';
+            overlay.className = 'p86-help-overlay';
+            overlay.innerHTML =
+                '<div class="p86-help-card" role="dialog" aria-labelledby="p86-help-title">' +
+                    '<div class="p86-help-header">' +
+                        '<div>' +
+                            '<div id="p86-help-title" class="p86-help-title">Help &amp; What\'s New</div>' +
+                            '<div class="p86-help-subtitle">Every capability in the system + where to find it.</div>' +
+                        '</div>' +
+                        '<button type="button" class="p86-help-close" aria-label="Close">&times;</button>' +
+                    '</div>' +
+                    '<div class="p86-help-body">' +
+                        '<div class="p86-help-loading">Loading help&hellip;</div>' +
+                    '</div>' +
+                '</div>';
+            document.body.appendChild(overlay);
+            document.body.style.overflow = 'hidden';
+
+            function close() {
+                overlay.remove();
+                document.body.style.overflow = '';
+                document.removeEventListener('keydown', onEsc);
+            }
+            function onEsc(e) { if (e.key === 'Escape') close(); }
+            overlay.addEventListener('click', function (e) { if (e.target === overlay) close(); });
+            overlay.querySelector('.p86-help-close').addEventListener('click', close);
+            document.addEventListener('keydown', onEsc);
+
+            // Ack "What's New" the moment the help overlay opens — the
+            // badge on the avatar (future hook) can clear from this.
+            try { localStorage.setItem('p86-whatsnew-last-ack', new Date().toISOString()); } catch (e) {}
+
             fetchManifest().then(function (m) {
+                var body = overlay.querySelector('.p86-help-body');
+                if (!body) return;
                 if (!m) {
-                    host.innerHTML = '<div class="p86-sysmap-loading p86-sysmap-error">Could not load manifest. Try refreshing.</div>';
+                    body.innerHTML = '<div class="p86-help-loading p86-help-error">Could not load help content. Try again later.</div>';
                     return;
                 }
-                host.innerHTML = renderSystemMapHTML(m);
-                wireSystemMapClicks(host);
+                body.innerHTML = renderHelpContentHTML(m);
             });
         }
+        window.openHelpOverlay = openHelpOverlay;
 
-        function renderSystemMapHTML(m) {
-            var ent = m.entities || {};
-            var refreshAt = m.generated_at ? new Date(m.generated_at).toLocaleTimeString() : '';
-
-            // ── Entities section — per-type drill-down blocks ───────
-            var entitiesHTML = '<div class="p86-sysmap-section">' +
-                '<div class="p86-sysmap-section-header">' +
-                    '<h3>Entities</h3>' +
-                    '<button class="ee-btn ghost small" data-sm-refresh title="Refresh manifest">Refresh</button>' +
-                '</div>' +
-                '<div class="p86-sysmap-entity-grid">' +
-                    sysmapEntityCard('Jobs', [
-                        ['Active', ent.jobs && ent.jobs.active],
-                        ['Completed', ent.jobs && ent.jobs.completed],
-                        ['Last 7 days', ent.jobs && ent.jobs.last_7d_created],
-                    ], "window.switchTab('jobs');") +
-                    sysmapEntityCard('Leads', leadsHistogram(ent.leads), "window.switchTab('estimates'); if(window.switchEstimatesSubTab)window.switchEstimatesSubTab('leads');") +
-                    sysmapEntityCard('Estimates', estimatesHistogram(ent.estimates), "window.switchTab('estimates'); if(window.switchEstimatesSubTab)window.switchEstimatesSubTab('list');") +
-                    sysmapEntityCard('Projects', [
-                        ['Total', ent.projects && ent.projects.total],
-                        ['With photos', ent.projects && ent.projects.with_photos],
-                        ['Last 7 days', ent.projects && ent.projects.last_7d_created],
-                    ], "window.switchTab('my-files');") +
-                    sysmapEntityCard('Reports', reportsHistogram(ent.reports), "window.switchTab('my-files');") +
-                    sysmapEntityCard('Change Orders', cosHistogram(ent.change_orders), "window.switchTab('jobs');") +
-                    sysmapEntityCard('Photos', [
-                        ['Total', ent.photos && ent.photos.total],
-                        ['With annotations', ent.photos && ent.photos.with_annotations],
-                        ['With tags', ent.photos && ent.photos.with_tags],
-                        ['Last 7 days', ent.photos && ent.photos.last_7d_uploaded],
-                    ], "window.switchTab('my-files');") +
-                    sysmapEntityCard('Schedule', [
-                        ['This week', ent.schedule && ent.schedule.entries_this_week],
-                        ['Next week', ent.schedule && ent.schedule.entries_next_week],
-                    ], "window.switchTab('schedule');") +
-                '</div>' +
-            '</div>';
-
+        // Features + What's New rendering for the Help overlay. Lifted
+        // from the old System Map pane with the entity-card section
+        // stripped out.
+        function renderHelpContentHTML(m) {
             // ── Features section — group by area, render as rows. ───
             var features = m.features || [];
             var areas = {};
@@ -666,20 +589,20 @@
                 areas[a].push(f);
             });
             var areaOrder = ['Photos', 'Reports', 'Schedule', 'Estimating', 'Jobs', 'Org', 'AI', 'Mobile', 'Other'];
-            var featuresHTML = '<div class="p86-sysmap-section">' +
-                '<div class="p86-sysmap-section-header"><h3>Features</h3>' +
-                    '<div class="p86-sysmap-section-sub">What\'s in the system + where to find each thing.</div>' +
+            var featuresHTML = '<div class="p86-help-section">' +
+                '<div class="p86-help-section-header"><h3>Features</h3>' +
+                    '<div class="p86-help-section-sub">What\'s in the system + where to find each thing.</div>' +
                 '</div>' +
                 areaOrder.filter(function (a) { return areas[a]; }).map(function (area) {
-                    return '<div class="p86-sysmap-area">' +
-                        '<div class="p86-sysmap-area-label">' + escapeHTML(area) + '</div>' +
-                        '<div class="p86-sysmap-feature-list">' +
+                    return '<div class="p86-help-area">' +
+                        '<div class="p86-help-area-label">' + escapeHTML(area) + '</div>' +
+                        '<div class="p86-help-feature-list">' +
                             areas[area].map(function (f) {
-                                return '<div class="p86-sysmap-feature">' +
-                                    '<div class="p86-sysmap-feature-label">' + escapeHTML(f.label) + '</div>' +
-                                    '<div class="p86-sysmap-feature-blurb">' + escapeHTML(f.blurb) + '</div>' +
-                                    '<div class="p86-sysmap-feature-path">' +
-                                        '<span class="p86-sysmap-feature-path-icon">📍</span> ' +
+                                return '<div class="p86-help-feature">' +
+                                    '<div class="p86-help-feature-label">' + escapeHTML(f.label) + '</div>' +
+                                    '<div class="p86-help-feature-blurb">' + escapeHTML(f.blurb) + '</div>' +
+                                    '<div class="p86-help-feature-path">' +
+                                        '<span class="p86-help-feature-path-icon">📍</span> ' +
                                         escapeHTML(f.access_path) +
                                     '</div>' +
                                 '</div>';
@@ -691,87 +614,24 @@
 
             // ── What's New section ───────────────────────────────────
             var whatsNew = m.whats_new || [];
-            var whatsNewHTML = '<div class="p86-sysmap-section">' +
-                '<div class="p86-sysmap-section-header"><h3>What\'s New</h3>' +
-                    '<div class="p86-sysmap-section-sub">Recently shipped — newest first.</div>' +
+            var whatsNewHTML = '<div class="p86-help-section">' +
+                '<div class="p86-help-section-header"><h3>What\'s New</h3>' +
+                    '<div class="p86-help-section-sub">Recently shipped — newest first.</div>' +
                 '</div>' +
                 (whatsNew.length === 0
-                    ? '<div class="p86-sysmap-empty">Nothing shipped yet.</div>'
-                    : '<div class="p86-sysmap-whatsnew">' +
+                    ? '<div class="p86-help-empty">Nothing shipped yet.</div>'
+                    : '<div class="p86-help-whatsnew">' +
                         whatsNew.map(function (w) {
-                            return '<div class="p86-sysmap-whatsnew-row">' +
-                                '<div class="p86-sysmap-whatsnew-row-label">' + escapeHTML(w.label) + '</div>' +
-                                '<div class="p86-sysmap-whatsnew-row-blurb">' + escapeHTML(w.blurb) + '</div>' +
-                                (w.shipped ? '<div class="p86-sysmap-whatsnew-row-date">shipped ' + escapeHTML(w.shipped) + '</div>' : '') +
+                            return '<div class="p86-help-whatsnew-row">' +
+                                '<div class="p86-help-whatsnew-row-label">' + escapeHTML(w.label) + '</div>' +
+                                '<div class="p86-help-whatsnew-row-blurb">' + escapeHTML(w.blurb) + '</div>' +
+                                (w.shipped ? '<div class="p86-help-whatsnew-row-date">shipped ' + escapeHTML(w.shipped) + '</div>' : '') +
                             '</div>';
                         }).join('') +
                     '</div>') +
             '</div>';
 
-            return '<div class="p86-sysmap-root">' +
-                '<div class="p86-sysmap-meta">Generated at ' + escapeHTML(refreshAt) + '</div>' +
-                entitiesHTML + featuresHTML + whatsNewHTML +
-            '</div>';
-        }
-
-        function sysmapEntityCard(label, rows, onClick) {
-            var rowsHTML = rows.map(function (r) {
-                var k = r[0], v = (r[1] == null) ? '—' : r[1];
-                return '<div class="p86-sysmap-entity-row">' +
-                    '<span class="p86-sysmap-entity-row-k">' + escapeHTML(k) + '</span>' +
-                    '<span class="p86-sysmap-entity-row-v">' + escapeHTML(String(v)) + '</span>' +
-                '</div>';
-            }).join('');
-            return '<button class="p86-sysmap-entity-card" onclick="' + onClick + '">' +
-                '<div class="p86-sysmap-entity-card-label">' + escapeHTML(label) + '</div>' +
-                rowsHTML +
-            '</button>';
-        }
-
-        function leadsHistogram(leads) {
-            if (!leads) return [['No data', '—']];
-            var out = [];
-            ['new', 'in_progress', 'sent', 'sold', 'lost'].forEach(function (s) {
-                if (leads[s] != null) out.push([s.replace('_', ' '), leads[s]]);
-            });
-            if (leads.last_7d_created != null) out.push(['Last 7 days', leads.last_7d_created]);
-            return out.length ? out : [['No data', '—']];
-        }
-        function estimatesHistogram(est) {
-            if (!est) return [['No data', '—']];
-            var out = [];
-            ['pending', 'draft', 'sent', 'submitted', 'accepted'].forEach(function (s) {
-                if (est[s] != null) out.push([s, est[s]]);
-            });
-            if (est.last_7d_created != null) out.push(['Last 7 days', est.last_7d_created]);
-            return out.length ? out : [['No data', '—']];
-        }
-        function cosHistogram(cos) {
-            if (!cos) return [['No data', '—']];
-            var out = [];
-            ['draft', 'approved', 'applied', 'rejected'].forEach(function (s) {
-                if (cos[s] != null) out.push([s, cos[s]]);
-            });
-            if (cos.last_7d_created != null) out.push(['Last 7 days', cos.last_7d_created]);
-            return out.length ? out : [['No data', '—']];
-        }
-        function reportsHistogram(reports) {
-            if (!reports) return [['No data', '—']];
-            var out = [['Total', reports.total || 0]];
-            var byTpl = reports.by_template || {};
-            Object.keys(byTpl).slice(0, 3).forEach(function (tpl) {
-                out.push([tpl.replace(/-/g, ' '), byTpl[tpl]]);
-            });
-            if (reports.last_7d_created != null) out.push(['Last 7 days', reports.last_7d_created]);
-            return out;
-        }
-
-        function wireSystemMapClicks(host) {
-            var refreshBtn = host.querySelector('[data-sm-refresh]');
-            if (refreshBtn) refreshBtn.addEventListener('click', function () {
-                _manifestCache = { data: null, at: 0 };
-                paintSummarySystemMap(host);
-            });
+            return whatsNewHTML + featuresHTML;
         }
 
         function paintSummaryToday(root) {

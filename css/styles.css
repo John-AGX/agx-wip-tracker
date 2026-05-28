@@ -7549,51 +7549,11 @@ body.light-mode .p86-pv-tag-modal-chip {
 }
 
 /* ──────────────────────────────────────────────────────────────────
-   Summary sub-tabs (Wave M2) — Today | System Map strip at the top
-   of the Summary page. Pattern mirrors the .ws-right-tabs row used
-   by the admin tab but lighter (no panel chrome, just text).
+   The old Summary sub-tab strip (Today | System Map) was retired —
+   the Features catalog + What's New content it carried moved into
+   the Help overlay (.p86-help-overlay, opened from the avatar
+   dropdown). The Summary page is back to a single Today pane.
    ────────────────────────────────────────────────────────────────── */
-.p86-summary-subtabs {
-  display: flex;
-  gap: 4px;
-  border-bottom: 1px solid var(--border, #2e3346);
-  margin-bottom: 18px;
-}
-.p86-summary-subtab {
-  background: transparent;
-  border: 0;
-  color: var(--text-dim, #888);
-  font-size: 13px;
-  font-weight: 600;
-  padding: 10px 16px;
-  cursor: pointer;
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-}
-.p86-summary-subtab:hover { color: var(--text, #fff); }
-.p86-summary-subtab.active {
-  color: var(--accent, #4f8cff);
-  border-bottom-color: var(--accent, #4f8cff);
-}
-.p86-summary-subtab-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 18px;
-  height: 18px;
-  padding: 0 5px;
-  font-size: 10px;
-  font-weight: 700;
-  color: #fff;
-  background: var(--accent, #4f8cff);
-  border-radius: 9px;
-}
-
-.p86-summary-pane { /* layout host; no chrome */ }
-.p86-summary-pane[hidden] { display: none; }
 
 /* ── System Snapshot (Wave M3) — four big counters on the Today
    pane below Needs Attention. */
@@ -7642,115 +7602,155 @@ body.light-mode .p86-pv-tag-modal-chip {
   color: var(--text-dim, #888);
 }
 
-/* ── System Map deep-dive (Wave M4) — Entities + Features + What's New */
-.p86-sysmap-root {
+/* ──────────────────────────────────────────────────────────────────
+   Help & What's New overlay — opened from the avatar dropdown.
+   Carries the Features catalog + What's New list that used to live
+   on the Summary page's "System Map" sub-tab (now retired). Same
+   data source (the /api/org/manifest endpoint) — just relocated to
+   a modal so it's there when you need it and out of the way when
+   you don't.
+   ────────────────────────────────────────────────────────────────── */
+.p86-help-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1090;
+  background: rgba(0, 0, 0, 0.78);
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  overflow-y: auto;
+  font-family: inherit;
+}
+.p86-help-card {
+  background: var(--bg, #0f1117);
+  border: 1px solid var(--border, #2e3346);
+  border-radius: 12px;
+  width: min(960px, calc(100% - 32px));
+  max-height: calc(100vh - 64px);
+  margin: 32px auto;
   display: flex;
   flex-direction: column;
-  gap: 24px;
+  overflow: hidden;
+  box-shadow: 0 16px 60px rgba(0, 0, 0, 0.6);
 }
-.p86-sysmap-loading {
-  padding: 40px;
-  text-align: center;
-  color: var(--text-dim, #888);
-  font-size: 12px;
-  font-style: italic;
-}
-.p86-sysmap-error { color: #f87171; font-style: normal; }
-.p86-sysmap-meta {
-  font-size: 10.5px;
-  color: var(--text-dim, #666);
-  text-align: right;
-}
-
-.p86-sysmap-section {
+.p86-help-header {
   display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.p86-sysmap-section-header {
-  display: flex;
-  align-items: baseline;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 10px;
-  flex-wrap: wrap;
+  gap: 16px;
+  padding: 18px 22px;
+  background: var(--surface, #1a1d27);
+  border-bottom: 1px solid var(--border, #2e3346);
 }
-.p86-sysmap-section-header h3 {
-  margin: 0;
+.p86-help-title {
   font-size: 16px;
   font-weight: 700;
   color: var(--text, #fff);
 }
-.p86-sysmap-section-sub {
-  font-size: 11.5px;
-  color: var(--text-dim, #888);
-  flex: 1;
+.p86-help-subtitle {
+  font-size: 12px;
+  color: var(--text-dim, #c4c8d8);
+  margin-top: 3px;
 }
+.p86-help-close {
+  background: transparent;
+  border: 0;
+  color: var(--text-dim, #c4c8d8);
+  font-size: 22px;
+  line-height: 1;
+  padding: 4px 10px;
+  cursor: pointer;
+  border-radius: 6px;
+  flex: 0 0 auto;
+  transition: background 0.12s, color 0.12s;
+}
+.p86-help-close:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text, #fff);
+}
+.p86-help-body {
+  padding: 20px 22px 24px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+.p86-help-loading {
+  padding: 40px;
+  text-align: center;
+  color: var(--text-dim, #c4c8d8);
+  font-size: 12px;
+  font-style: italic;
+}
+.p86-help-error { color: #f87171; font-style: normal; }
 
-.p86-sysmap-empty {
+/* Section blocks — Features + What's New share this header pattern */
+.p86-help-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.p86-help-section-header h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text, #fff);
+}
+.p86-help-section-sub {
+  font-size: 11.5px;
+  color: var(--text-dim, #c4c8d8);
+  margin-top: 2px;
+}
+.p86-help-empty {
   padding: 24px;
   text-align: center;
-  color: var(--text-dim, #888);
+  color: var(--text-dim, #c4c8d8);
   font-size: 12px;
   border: 1px dashed var(--border, #333);
   border-radius: 8px;
 }
 
-/* Entities grid — clickable cards with a label + 2-4 metric rows. */
-.p86-sysmap-entity-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: 12px;
-}
-.p86-sysmap-entity-card {
-  text-align: left;
-  background: var(--card-bg, #0f0f1e);
-  border: 1px solid var(--border, #333);
-  border-radius: 10px;
-  padding: 14px 16px;
-  cursor: pointer;
+/* What's New rows — pinned at the top of the overlay (renderHelpContentHTML
+   emits whatsNew before features) so changelog items are the first thing
+   the user sees. */
+.p86-help-whatsnew {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  transition: border-color 0.12s, transform 0.12s;
+  gap: 8px;
 }
-.p86-sysmap-entity-card:hover {
-  border-color: rgba(79, 140, 255, 0.45);
-  transform: translateY(-1px);
+.p86-help-whatsnew-row {
+  padding: 10px 14px;
+  background: var(--card-bg, #0f0f1e);
+  border: 1px solid var(--border, #2a2a3a);
+  border-left: 3px solid var(--accent, #4f8cff);
+  border-radius: 8px;
 }
-.p86-sysmap-entity-card-label {
-  font-size: 11px;
+.p86-help-whatsnew-row-label {
+  font-size: 13px;
   font-weight: 700;
   color: var(--text, #fff);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  padding-bottom: 4px;
-  border-bottom: 1px solid var(--border, #2a2a3a);
-  margin-bottom: 4px;
 }
-.p86-sysmap-entity-row {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  font-size: 12px;
+.p86-help-whatsnew-row-blurb {
+  font-size: 11.5px;
+  color: var(--text-dim, #c4c8d8);
+  line-height: 1.45;
+  margin-top: 2px;
 }
-.p86-sysmap-entity-row-k {
+.p86-help-whatsnew-row-date {
+  font-size: 10.5px;
   color: var(--text-dim, #888);
-  text-transform: capitalize;
-}
-.p86-sysmap-entity-row-v {
-  color: var(--text, #fff);
-  font-weight: 600;
+  margin-top: 4px;
   font-variant-numeric: tabular-nums;
 }
 
 /* Features section — grouped by area (Photos / Reports / etc.) */
-.p86-sysmap-area {
+.p86-help-area {
   display: flex;
   flex-direction: column;
   gap: 6px;
   margin-bottom: 14px;
 }
-.p86-sysmap-area-label {
+.p86-help-area-label {
   font-size: 10px;
   font-weight: 700;
   text-transform: uppercase;
@@ -7758,12 +7758,12 @@ body.light-mode .p86-pv-tag-modal-chip {
   color: var(--accent, #4f8cff);
   margin-bottom: 2px;
 }
-.p86-sysmap-feature-list {
+.p86-help-feature-list {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 8px;
 }
-.p86-sysmap-feature {
+.p86-help-feature {
   padding: 10px 12px;
   background: var(--card-bg, #0f0f1e);
   border: 1px solid var(--border, #2a2a3a);
@@ -7772,60 +7772,30 @@ body.light-mode .p86-pv-tag-modal-chip {
   flex-direction: column;
   gap: 4px;
 }
-.p86-sysmap-feature-label {
+.p86-help-feature-label {
   font-size: 13px;
   font-weight: 600;
   color: var(--text, #fff);
 }
-.p86-sysmap-feature-blurb {
+.p86-help-feature-blurb {
   font-size: 11.5px;
-  color: var(--text-dim, #aaa);
+  color: var(--text-dim, #c4c8d8);
   line-height: 1.45;
 }
-.p86-sysmap-feature-path {
+.p86-help-feature-path {
   font-size: 10.5px;
-  color: var(--text-dim, #777);
+  color: var(--text-dim, #888);
   font-style: italic;
 }
-.p86-sysmap-feature-path-icon { font-style: normal; opacity: 0.7; }
+.p86-help-feature-path-icon { font-style: normal; opacity: 0.7; }
 
-/* What's New rows — newest first */
-.p86-sysmap-whatsnew {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-.p86-sysmap-whatsnew-row {
-  padding: 10px 14px;
-  background: var(--card-bg, #0f0f1e);
-  border: 1px solid var(--border, #2a2a3a);
-  border-left: 3px solid var(--accent, #4f8cff);
-  border-radius: 8px;
-}
-.p86-sysmap-whatsnew-row-label {
-  font-size: 13px;
-  font-weight: 700;
-  color: var(--text, #fff);
-}
-.p86-sysmap-whatsnew-row-blurb {
-  font-size: 11.5px;
-  color: var(--text-dim, #aaa);
-  line-height: 1.45;
-  margin-top: 2px;
-}
-.p86-sysmap-whatsnew-row-date {
-  font-size: 10.5px;
-  color: var(--text-dim, #666);
-  margin-top: 4px;
-  font-variant-numeric: tabular-nums;
-}
-
-/* Mobile: tighten the System Map content stack. */
+/* Mobile: full-bleed help card + tighter snapshot row + single-column
+   feature grid. */
 @media (max-width: 640px) {
-  .p86-summary-subtab { font-size: 12px; padding: 8px 12px; }
+  .p86-help-card { margin: 12px auto; max-height: calc(100vh - 24px); width: calc(100% - 16px); }
+  .p86-help-header { padding: 14px 16px; }
+  .p86-help-body { padding: 14px 16px 18px; }
   .p86-snapshot-card { padding: 10px 12px; min-height: 70px; }
   .p86-snapshot-card-count { font-size: 22px; }
-  .p86-sysmap-section-header h3 { font-size: 14px; }
-  .p86-sysmap-entity-grid { grid-template-columns: 1fr; gap: 8px; }
-  .p86-sysmap-feature-list { grid-template-columns: 1fr; }
+  .p86-help-feature-list { grid-template-columns: 1fr; }
 }

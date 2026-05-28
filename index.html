@@ -97,7 +97,7 @@
     })();
     </script>
 
-    <link rel="stylesheet" href="css/styles.css?v=141">
+    <link rel="stylesheet" href="css/styles.css?v=142">
     <link rel="stylesheet" href="css/report-style-packs.css?v=3">
     <link rel="stylesheet" href="css/workspace-layout.css?v=56b">
     <link rel="stylesheet" href="css/workspace.css?v=37b">
@@ -273,6 +273,17 @@
                                 data-cap="USERS_MANAGE ROLES_MANAGE ADMIN_METRICS SYSTEM_ADMIN"
                                 onclick="if (typeof window.switchTab === 'function') { window.switchTab('admin'); if (typeof window.switchAdminSubTab === 'function') window.switchAdminSubTab('organization'); }">
                             &#x1F3E2; Org Settings
+                        </button>
+                        <!-- Help & What's New — opens an overlay rendered from
+                             the org manifest (features catalog + recent
+                             shipments). Replaces the old System Map sub-tab
+                             on the Summary page, which carried the same
+                             content but read as clutter for the day-to-day
+                             workflow. -->
+                        <button type="button" id="help-btn" class="header-popover-item"
+                                onclick="if (typeof window.openHelpOverlay === 'function') window.openHelpOverlay();"
+                                title="Help & What's New">
+                            &#x2754; Help &amp; What&rsquo;s New
                         </button>
                         <button type="button" id="theme-toggle" class="theme-toggle header-popover-item" title="Toggle light/dark mode"><span id="theme-toggle-label">Light / Dark mode</span></button>
                         <button type="button" id="logout-btn"  class="header-popover-item">&#x21AA; Logout</button>
@@ -2480,7 +2491,7 @@
     <script src="js/qb-costs-view.js?v=11"></script>
     <script src="js/insights.js?v=7"></script>
     <script src="js/schedule.js?v=29"></script>
-    <script src="js/app.js?v=65"></script>
+    <script src="js/app.js?v=66"></script>
     <script src="js/messaging.js?v=1b"></script>
     <script src="js/my-files.js?v=9"></script>
     <script src="js/projects-map.js?v=3"></script>
