@@ -29,7 +29,7 @@
 // BUMP CACHE_VERSION whenever this SW's behavior changes so existing
 // users pick up the new strategy on their next visit.
 
-const CACHE_VERSION = 'p86-shell-v11';
+const CACHE_VERSION = 'p86-shell-v12';
 
 // NOTE: /index.html and / are deliberately NOT in this list. HTML
 // goes through the network-first handler below; pre-caching it with
@@ -69,6 +69,17 @@ self.addEventListener('activate', function (event) {
       );
     }).then(function () { return self.clients.claim(); })
   );
+});
+
+// Message handler for the "Relaunch" toast in index.html. When a new
+// SW is in "waiting" state (a new version installed but the old SW
+// still controls the page), the page posts SKIP_WAITING to it. We
+// call self.skipWaiting() to take over immediately; the page's
+// controllerchange listener then reloads to pick up the new code.
+self.addEventListener('message', function (event) {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
 });
 
 self.addEventListener('fetch', function (event) {

@@ -8559,3 +8559,94 @@ body.light-mode .p86-pv-tag-modal-chip {
     font-size: 12px;
   }
 }
+
+/* ── PWA update toast ──────────────────────────────────────────────
+   Floating banner that appears when a new SW version installs while
+   the user has the app open. Click "Relaunch" → SKIP_WAITING + reload.
+   Sits ABOVE the mobile bottom-nav (which is at z:150) and the iPhone
+   home-indicator safe area. Slides in on the next animation frame
+   after append, slides out on dismiss. The DOM + behavior are wired
+   in index.html's SW-registration block; this just paints them. */
+.p86-update-toast {
+  position: fixed;
+  left: 50%;
+  bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+  transform: translate(-50%, 24px);
+  opacity: 0;
+  z-index: 9000;
+  background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+  border: 1px solid rgba(34, 211, 238, 0.45);
+  border-radius: 999px;
+  padding: 8px 8px 8px 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+  color: var(--text, #fff);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(0, 0, 0, 0.6);
+  font-family: inherit;
+  max-width: calc(100vw - 24px);
+  transition: transform 0.22s ease-out, opacity 0.22s ease-out;
+}
+.p86-update-toast-show {
+  transform: translate(-50%, 0);
+  opacity: 1;
+}
+.p86-update-toast-text {
+  white-space: nowrap;
+  color: var(--text, #fff);
+  font-weight: 500;
+}
+.p86-update-toast-btn {
+  background: linear-gradient(135deg, #22d3ee 0%, #4f8cff 100%);
+  color: #fff;
+  border: 0;
+  border-radius: 999px;
+  padding: 6px 14px;
+  font-size: 12.5px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  cursor: pointer;
+  font-family: inherit;
+  box-shadow: 0 2px 8px rgba(34, 211, 238, 0.35);
+  flex: 0 0 auto;
+  transition: filter 0.12s;
+}
+.p86-update-toast-btn:hover { filter: brightness(1.1); }
+.p86-update-toast-btn:active { filter: brightness(0.95); }
+.p86-update-toast-close {
+  background: transparent;
+  border: 0;
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  transition: color 0.12s, background 0.12s;
+}
+.p86-update-toast-close:hover {
+  color: var(--text, #fff);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/* Desktop: no mobile-nav offset, sits closer to the bottom edge. */
+@media (min-width: 769px) {
+  .p86-update-toast { bottom: 28px; }
+}
+
+/* Tiny phones (<360px): let the toast take the full width with
+   wrapping if needed so the Relaunch button never gets cut off. */
+@media (max-width: 360px) {
+  .p86-update-toast {
+    left: 12px;
+    right: 12px;
+    transform: translate(0, 24px);
+    max-width: none;
+    border-radius: 14px;
+    flex-wrap: wrap;
+  }
+  .p86-update-toast-show { transform: translate(0, 0); }
+  .p86-update-toast-text { white-space: normal; flex: 1 1 100%; }
+}
