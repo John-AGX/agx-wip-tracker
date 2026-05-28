@@ -502,9 +502,16 @@
       var clients = (window.p86Clients && window.p86Clients.getCached && window.p86Clients.getCached()) || [];
       var c = clients.find(function(x) { return x.id === est.client_id; });
       if (c) {
+        // Show only the leaf client name. The old code appended
+        // " · community_name" when it differed from c.name, but AGX
+        // client records frequently store the community in both
+        // fields (name="PAC - Indigo West Apartments",
+        // community_name="Indigo West Apartments"), which printed
+        // the same information twice. The leaf name already carries
+        // the parent/property-management prefix; PMs who need the
+        // disambiguation have the full client editor a click away.
         html += '<span style="display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:14px;background:rgba(79,140,255,0.12);color:#4f8cff;font-size:11px;font-weight:600;">' +
           '<span>&#x1F465;</span>' + escapeHTML(c.name) +
-          (c.community_name && c.community_name !== c.name ? ' · ' + escapeHTML(c.community_name) : '') +
         '</span>';
       } else {
         // Client isn't in the local cache yet (estimate was opened

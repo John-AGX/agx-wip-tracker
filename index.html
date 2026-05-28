@@ -97,7 +97,7 @@
     })();
     </script>
 
-    <link rel="stylesheet" href="css/styles.css?v=140">
+    <link rel="stylesheet" href="css/styles.css?v=141">
     <link rel="stylesheet" href="css/report-style-packs.css?v=3">
     <link rel="stylesheet" href="css/workspace-layout.css?v=56b">
     <link rel="stylesheet" href="css/workspace.css?v=37b">
@@ -918,23 +918,35 @@
                              with linked lead/client chips + live totals; body
                              splits into Line Items, Details, Preview tabs. -->
                         <div id="estimate-editor-view" style="display: none;">
-                            <!-- Sticky header -->
-                            <div id="ee-header" style="position:sticky;top:0;z-index:50;background:var(--bg,#0a0a0f);border-bottom:1px solid var(--border,#333);padding:14px 4px;margin-bottom:14px;box-shadow:0 4px 12px rgba(0,0,0,0.4);">
-                                <div class="ee-header-row" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:8px;">
-                                    <button class="ee-btn secondary" onclick="closeEstimateEditor()">&larr; Back</button>
-                                    <input id="ee-title" type="text" placeholder="Estimate title" style="flex:1;min-width:200px;font-size:17px;font-weight:600;padding:5px 10px;background:transparent;border:1px solid transparent;border-radius:6px;color:var(--text,#fff);" onfocus="this.style.borderColor='var(--border,#333)'" onblur="this.style.borderColor='transparent'" />
-                                    <button class="ee-btn success" onclick="exportEstimateToBuildertrend()" title="Download Buildertrend-format xlsx">&#x1F4E4; Export</button>
-                                    <button class="ee-btn ee-icon-btn danger" onclick="deleteEstimateFromEditor()" title="Delete this estimate (cannot be undone)" aria-label="Delete estimate">&#x1F5D1;</button>
-                                    <span class="p86-ask86-mount"></span>
-                                </div>
-                                <!-- Linked-lead chips on the left, save state right-aligned. The
-                                     per-page Ask AI button was retired — the global 86 badge in
-                                     the page corner is the single entry point now. -->
-                                <div class="ee-action-row" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
+                            <!-- Sticky header — collapsed from two rows to one.
+                                 Back / title / linked chips / save state / icon actions / 86 badge
+                                 all on a single line. The icon buttons (Export / Save / Delete)
+                                 use the existing .header-icon-btn pattern from the top-of-page
+                                 header, with data-p86-icon attributes that agx-icons.js auto-
+                                 decorates into inline SVGs. -->
+                            <div id="ee-header" style="position:sticky;top:0;z-index:50;background:var(--bg,#0a0a0f);border-bottom:1px solid var(--border,#333);padding:10px 4px;margin-bottom:12px;box-shadow:0 4px 12px rgba(0,0,0,0.4);">
+                                <div class="ee-header-row ee-header-row-compact" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+                                    <!-- Back: text-only with transparent chrome, matches the
+                                         overlay-close pattern used elsewhere. -->
+                                    <button onclick="closeEstimateEditor()" class="ee-header-back" title="Back to estimates list">&larr; Back</button>
+                                    <input id="ee-title" type="text" placeholder="Estimate title" style="flex:1;min-width:160px;font-size:15px;font-weight:600;padding:5px 10px;background:transparent;border:1px solid transparent;border-radius:6px;color:var(--text,#fff);" onfocus="this.style.borderColor='var(--border,#333)'" onblur="this.style.borderColor='transparent'" />
+                                    <!-- Linked-lead/client chips. -->
                                     <div id="ee-linked-chips" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
-                                    <div style="flex:1;"></div>
-                                    <span id="ee-save-indicator" style="font-size:11px;color:var(--text-dim,#888);padding:0 6px;display:flex;align-items:center;font-weight:500;cursor:pointer;" onclick="saveEstimateNow()" title="Click to save now"><span style="font-weight:700;margin-right:5px;">&#x25CB;</span>No changes</span>
-                                    <button class="ee-btn" onclick="saveEstimateNow()" title="Save the estimate now (also auto-saves on edit)">&#x1F4BE; Save</button>
+                                    <!-- Save-state indicator. Same text + colored states as before
+                                         (No changes / Unsaved / Saving… / ✓ Saved / Retrying / Error).
+                                         Clicking forces an immediate save. -->
+                                    <span id="ee-save-indicator" style="font-size:11px;color:var(--text-dim,#888);padding:0 4px;display:flex;align-items:center;font-weight:500;cursor:pointer;white-space:nowrap;" onclick="saveEstimateNow()" title="Click to save now"><span style="font-weight:700;margin-right:5px;">&#x25CB;</span>No changes</span>
+                                    <!-- Icon action cluster — Export / Save / Delete. Borderless
+                                         circles using the .header-icon-btn class (32px transparent
+                                         at rest, faint ring on hover). Decorated with Heroicons
+                                         via data-p86-icon. Delete keeps a danger tint via a
+                                         scoped class so it reads as destructive. -->
+                                    <div class="ee-header-icons" style="display:inline-flex;align-items:center;gap:2px;">
+                                        <button class="header-icon-btn" data-p86-icon="exports" onclick="exportEstimateToBuildertrend()" title="Export Buildertrend xlsx" aria-label="Export"></button>
+                                        <button class="header-icon-btn" data-p86-icon="save" onclick="saveEstimateNow()" title="Save (auto-saves on edit)" aria-label="Save"></button>
+                                        <button class="header-icon-btn ee-header-icon-danger" data-p86-icon="delete" onclick="deleteEstimateFromEditor()" title="Delete this estimate" aria-label="Delete estimate"></button>
+                                    </div>
+                                    <span class="p86-ask86-mount"></span>
                                 </div>
                                 <!-- Live totals strip — uses the shared .p86-totals-strip
                                      chassis (same band you see in the CO editor) so the
@@ -2488,7 +2500,7 @@
     <script src="js/jobs.js?v=81"></script>
     <script src="js/estimates.js?v=37"></script>
     <script src="js/proposal.js?v=25"></script>
-    <script src="js/estimate-editor.js?v=49"></script>
+    <script src="js/estimate-editor.js?v=50"></script>
     <!-- Change Order editor — overlay opened from the job detail's
          Change Orders tab. Loads after pricing-pipeline (which it
          consumes via window.p86Pricing) and after api.js (which
