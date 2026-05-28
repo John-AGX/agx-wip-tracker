@@ -8481,3 +8481,72 @@ body.light-mode .p86-pv-tag-modal-chip {
 .p86-bldg-co-row:hover { border-color: var(--accent); }
 .p86-bldg-co-row-meta { color: var(--text-dim, #c4c8d8); }
 .p86-bldg-co-row-meta b { color: var(--green); }
+
+/* ── Jobs page — mobile pass (Pass D, ≤640px) ──────────────────────
+   Walks the jobs list + detail at 390px and tightens anything that
+   wraps badly. The big things: sub-tab nav becomes horizontal-scroll
+   (5+ tabs don't fit on one line at iPhone width); the compact
+   job-detail header gets explicit wrap behavior (icons + status
+   fall to a second line if the title is long); jobs-action-tabs
+   wrap; and the legacy .job-detail-header column-stack rule from
+   the 768px block is overridden so it doesn't fight the compact
+   single-row layout. */
+@media (max-width: 640px) {
+  /* Sub-tab nav: horizontal scroll instead of wrapping (preserves
+     the bottom-border underline as a single straight rule). */
+  .sub-tabs {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+    scrollbar-width: thin;
+  }
+  .sub-tabs button {
+    white-space: nowrap;
+    padding: 8px 12px;
+    font-size: 13px;
+    flex: 0 0 auto;
+  }
+  /* The 768px block flips .job-detail-header to column-stack.
+     The new compact header is designed to wrap horizontally, not
+     stack, so undo the column override here. The title still
+     takes its own row when content is too wide thanks to flex-wrap. */
+  .job-detail-header,
+  .job-detail-header-compact {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+  .job-detail-header-compact .job-detail-title {
+    font-size: 17px;
+    flex: 1 1 100%;
+    /* Title gets its own row on mobile so chips + icons have room. */
+  }
+  .job-detail-header-compact .job-detail-status-pill {
+    order: 1;
+  }
+  .job-detail-header-compact .ee-header-icons {
+    order: 2;
+    margin-left: auto;
+  }
+  /* Jobs list action row: wrap. Add Job stays prominent first. */
+  .jobs-action-tabs {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .jobs-action-tabs .ee-btn {
+    font-size: 12px;
+    padding: 6px 10px;
+  }
+  /* Action icon row inside Overview: compact gap. */
+  .jobs-action-row .ee-btn { font-size: 12px; padding: 6px 10px; }
+  /* Buildings table cells: tighter padding. The wrapper already has
+     overflow-x:auto so wide tables scroll horizontally on phones. */
+  .p86-bldg-cell,
+  .p86-bldg-th {
+    padding: 5px 6px;
+  }
+  .p86-bldg-cell-num,
+  .p86-bldg-cell-num.dim {
+    font-size: 12px;
+  }
+}
