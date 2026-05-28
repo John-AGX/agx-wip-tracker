@@ -97,7 +97,7 @@
     })();
     </script>
 
-    <link rel="stylesheet" href="css/styles.css?v=146">
+    <link rel="stylesheet" href="css/styles.css?v=147">
     <link rel="stylesheet" href="css/report-style-packs.css?v=3">
     <link rel="stylesheet" href="css/workspace-layout.css?v=56b">
     <link rel="stylesheet" href="css/workspace.css?v=37b">
@@ -472,36 +472,43 @@
                             </div>
                         </div>
 
-                        <div class="summary-grid">
-                            <div class="summary-card">
-                                <div class="summary-card-label">Total Income</div>
-                                <div class="summary-card-value" id="job-summary-totalincome">$0.00</div>
-                                <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;" id="job-summary-income-breakdown"></div>
+                        <!-- WIP chip strip — same .p86-totals-strip / .p86-totals-chip
+                             chassis the estimate + CO editors use, so the at-a-glance
+                             metrics on a job read identically to the at-a-glance
+                             metrics on an estimate. IDs are unchanged so the JS in
+                             renderJobDetail (lines ~1673-1684) keeps painting values
+                             into them without any code edit on its side. -->
+                        <div class="p86-totals-strip job-totals-strip">
+                            <div class="p86-totals-chip accent">
+                                <div class="p86-totals-chip-label">Total Income</div>
+                                <div class="p86-totals-chip-value" id="job-summary-totalincome">$0.00</div>
+                                <div class="job-totals-chip-sub" id="job-summary-income-breakdown"></div>
                             </div>
-                            <div class="summary-card">
-                                <div class="summary-card-label">Actual Costs</div>
-                                <div class="summary-card-value" id="job-summary-cost">$0.00</div>
+                            <div class="p86-totals-chip warn">
+                                <div class="p86-totals-chip-label">Actual Costs</div>
+                                <div class="p86-totals-chip-value" id="job-summary-cost">$0.00</div>
                             </div>
-                            <div class="summary-card">
-                                <div class="summary-card-label">Accrued Costs</div>
-                                <div class="summary-card-value" id="job-summary-accrued" style="color: #f0ad4e;">$0.00</div>
-                                <div style="font-size: 11px; color: var(--text-dim); margin-top: 2px;" id="job-summary-accrued-note"></div>
+                            <div class="p86-totals-chip warn">
+                                <div class="p86-totals-chip-label">Accrued Costs</div>
+                                <div class="p86-totals-chip-value" id="job-summary-accrued">$0.00</div>
+                                <div class="job-totals-chip-sub" id="job-summary-accrued-note"></div>
                             </div>
-                            <div class="summary-card">
-                                <div class="summary-card-label">% Complete</div>
-                                <div class="summary-card-value" id="job-summary-pctcomplete">0%</div>
+                            <div class="p86-totals-chip">
+                                <div class="p86-totals-chip-label">% Complete</div>
+                                <div class="p86-totals-chip-value" id="job-summary-pctcomplete">0%</div>
                             </div>
-                            <div class="summary-card">
-                                <div class="summary-card-label">Revenue Earned</div>
-                                <div class="summary-card-value" id="job-summary-revenue">$0.00</div>
+                            <div class="p86-totals-chip info">
+                                <div class="p86-totals-chip-label">Revenue Earned</div>
+                                <div class="p86-totals-chip-value" id="job-summary-revenue">$0.00</div>
                             </div>
-                            <div class="summary-card">
-                                <div class="summary-card-label">Gross Profit</div>
-                                <div class="summary-card-value" id="job-summary-profit">$0.00</div>
+                            <div class="p86-totals-chip">
+                                <div class="p86-totals-chip-label">Gross Profit</div>
+                                <!-- color set inline by renderJobDetail based on positive/negative -->
+                                <div class="p86-totals-chip-value" id="job-summary-profit">$0.00</div>
                             </div>
-                            <div class="summary-card">
-                                <div class="summary-card-label">Margin %</div>
-                                <div class="summary-card-value" id="job-summary-margin">0%</div>
+                            <div class="p86-totals-chip">
+                                <div class="p86-totals-chip-label">Margin %</div>
+                                <div class="p86-totals-chip-value" id="job-summary-margin">0%</div>
                             </div>
                         </div>
 

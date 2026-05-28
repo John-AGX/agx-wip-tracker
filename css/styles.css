@@ -8212,3 +8212,35 @@ body.light-mode .p86-pv-tag-modal-chip {
   body.ft-printing .ft-receipt-kv-section { page-break-inside: avoid; }
   body.ft-printing .ft-receipt-foot { page-break-inside: avoid; }
 }
+
+/* ──────────────────────────────────────────────────────────────────
+   Jobs page (post-2026-05 redesign)
+   Brings the Jobs detail header in line with the estimate / Change
+   Order / Summary chassis. Reuses .p86-totals-strip + .p86-totals-chip
+   (defined ~line 7551) for the WIP metrics row; the overrides below
+   just relax the editor-header banded chrome since this strip sits
+   inline with content cards instead of inside a sticky topbar.
+   ────────────────────────────────────────────────────────────────── */
+.job-totals-strip {
+  background: transparent;
+  border-bottom: 0;
+  padding: 0;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+}
+/* Inline sub-text inside a chip — used for the "Contract + CO" income
+   breakdown under Total Income, and the "Earned but unbilled" note
+   under Accrued Costs. Stays muted so the chip's primary value still
+   reads as the dominant number. */
+.job-totals-chip-sub {
+  font-size: 10.5px;
+  color: var(--text-dim, #c4c8d8);
+  margin-top: 3px;
+  line-height: 1.3;
+}
+/* Mobile: keep the chips wrapping rather than scrolling. */
+@media (max-width: 640px) {
+  .job-totals-strip { gap: 6px; margin-bottom: 12px; }
+  .job-totals-strip .p86-totals-chip { min-width: calc(50% - 4px); padding: 6px 10px; }
+  .job-totals-strip .p86-totals-chip-value { font-size: 13px; }
+}
