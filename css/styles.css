@@ -8602,8 +8602,11 @@ body.light-mode .p86-pv-tag-modal-chip {
   color: #fff;
   border: 0;
   border-radius: 999px;
-  padding: 6px 14px;
-  font-size: 12.5px;
+  /* Bumped to 9px/18px to give the tap target real estate. Was 6/14
+     which was too small for reliable touch on phones — users reported
+     taps registering visually but the click handler never firing. */
+  padding: 9px 18px;
+  font-size: 13px;
   font-weight: 700;
   letter-spacing: 0.3px;
   cursor: pointer;
@@ -8611,9 +8614,20 @@ body.light-mode .p86-pv-tag-modal-chip {
   box-shadow: 0 2px 8px rgba(34, 211, 238, 0.35);
   flex: 0 0 auto;
   transition: filter 0.12s;
+  /* min-height: 36px puts the tap target above iOS's 44px
+     recommendation comfortably with surrounding flex gap. */
+  min-height: 36px;
+  /* Suppress the iOS tap-highlight + double-tap zoom. */
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+  user-select: none;
 }
 .p86-update-toast-btn:hover { filter: brightness(1.1); }
-.p86-update-toast-btn:active { filter: brightness(0.95); }
+.p86-update-toast-btn:active { filter: brightness(0.85); transform: translateY(1px); }
+.p86-update-toast-btn:disabled { opacity: 0.85; cursor: default; }
+/* "Relaunching…" busy state — fades the dismiss X so the user can't
+   cancel mid-reload. */
+.p86-update-toast-busy .p86-update-toast-close { opacity: 0.4; pointer-events: none; }
 .p86-update-toast-close {
   background: transparent;
   border: 0;

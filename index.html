@@ -108,14 +108,46 @@
             // Slide-in on the next frame so the CSS transition fires.
             requestAnimationFrame(function () { t.classList.add('p86-update-toast-show'); });
 
-            t.querySelector('.p86-update-toast-btn').addEventListener('click', function () {
+            // Relaunch handler. Defense-in-depth because the
+            // postMessage → SKIP_WAITING → controllerchange → reload
+            // chain has known flakiness on iOS Safari and on PWAs
+            // in standalone mode (controllerchange sometimes never
+            // fires even though the SW actually activated). The
+            // belt-and-suspenders fix: ALWAYS reload after a short
+            // timeout regardless of whether controllerchange fires.
+            // touchend + click both wired so taps on iOS don't get
+            // dropped by the 300ms click-delay heuristic.
+            function relaunchNow() {
+              if (relaunchNow._fired) return;
+              relaunchNow._fired = true;
+              console.log('[sw] Relaunch tapped');
               _reloadOnControllerChange = true;
-              if (waitingWorker) {
-                try { waitingWorker.postMessage({ type: 'SKIP_WAITING' }); }
-                catch (e) { location.reload(); /* fallback */ }
-              } else {
-                location.reload();
-              }
+              // Try to wake the waiting worker. If anything fails or
+              // controllerchange never fires, the timeout below
+              // reloads anyway.
+              try {
+                if (waitingWorker && waitingWorker.postMessage) {
+                  waitingWorker.postMessage({ type: 'SKIP_WAITING' });
+                }
+              } catch (e) { console.warn('[sw] postMessage failed:', e); }
+              // Visible "Relaunching…" affordance so the user knows
+              // the tap registered while we wait for the SW dance.
+              t.classList.add('p86-update-toast-busy');
+              var btn = t.querySelector('.p86-update-toast-btn');
+              if (btn) { btn.textContent = 'Relaunching…'; btn.disabled = true; }
+              // Force-reload after 800ms no matter what. controllerchange
+              // usually fires within ~50-200ms; the timeout is the
+              // safety net for browsers that don't fire it at all.
+              setTimeout(function () { location.reload(); }, 800);
+            }
+            var relaunchBtn = t.querySelector('.p86-update-toast-btn');
+            relaunchBtn.addEventListener('click', relaunchNow);
+            // iOS Safari occasionally drops the click event on the
+            // pseudo-modal toast layer. touchend fires reliably; we
+            // de-dupe via relaunchNow._fired so we don't double-fire.
+            relaunchBtn.addEventListener('touchend', function (e) {
+              e.preventDefault();
+              relaunchNow();
             });
             t.querySelector('.p86-update-toast-close').addEventListener('click', function () {
               t.classList.remove('p86-update-toast-show');
@@ -183,7 +215,7 @@
     })();
     </script>
 
-    <link rel="stylesheet" href="css/styles.css?v=152">
+    <link rel="stylesheet" href="css/styles.css?v=153">
     <link rel="stylesheet" href="css/report-style-packs.css?v=3">
     <link rel="stylesheet" href="css/workspace-layout.css?v=56b">
     <link rel="stylesheet" href="css/workspace.css?v=37b">
