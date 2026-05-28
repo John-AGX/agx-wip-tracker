@@ -2702,9 +2702,14 @@
 
       // Photo-map section mounts. Find every freshly-painted
       // .p86-report-section-map element and boot a Google Map into
-      // it with markers for the picked photos. Each remount kills any
-      // map already attached so the user can switch tabs / change
-      // photo picks without leaking listeners.
+      // it with markers for the picked photos.
+      //
+      // Idempotency: paint() fires on every keystroke in any input,
+      // so we don't want to rebuild Google Maps unless the photo
+      // selection (or any photo's lat/lng) actually changed. We
+      // fingerprint the photo IDs + their coords into a string and
+      // stash it on mapEl.dataset.mapFingerprint. If it matches on
+      // the next paint, skip the rebuild entirely.
       host.querySelectorAll('[data-photo-map="1"]').forEach(function(mapEl) {
         if (!window.p86Maps || !window.p86Maps.ready) return;
         var ids = [];
@@ -2713,9 +2718,26 @@
           return (_detailState.photos || []).find(function(a) { return a.id === pid; });
         }).filter(Boolean);
         if (!pickedPhotos.length) return;
+        // Fingerprint = ids + coords; if any photo's coords get
+        // backfilled later (server-side EXIF extraction completes
+        // after the upload returns), the fingerprint changes and
+        // we re-render to pick up the new pin.
+        var fingerprint = pickedPhotos.map(function(p) {
+          return p.id + ':' + Number(p.lat).toFixed(6) + ',' + Number(p.lng).toFixed(6);
+        }).join('|');
+        if (mapEl.dataset.mapFingerprint === fingerprint) return;  // unchanged → skip
+        mapEl.dataset.mapFingerprint = fingerprint;
+        // Clear any prior mount (Google Maps doesn't leak listeners
+        // when its host node gets emptied — pin markers GC with the
+        // old Map instance).
+        mapEl.innerHTML = '';
         window.p86Maps.ready().then(function(maps) {
           // Bail if user navigated away mid-load.
           if (!mapEl.isConnected) return;
+          // Re-check the fingerprint — paint() may have fired again
+          // while we were awaiting the SDK; the most-recent paint's
+          // fingerprint is the one that wins.
+          if (mapEl.dataset.mapFingerprint !== fingerprint) return;
           var first = pickedPhotos[0];
           var center = { lat: Number(first.lat), lng: Number(first.lng) };
           var map = new maps.Map(mapEl, {
@@ -2946,7 +2968,8 @@
       { id: 'large',  glyph: sizeGlyphSVG(1, 2), title: '2 photos per page (large)' }
     ];
     function isPhotoLayout(layout) {
-      return layout === 'photo-grid' || layout === 'single-photo' || layout === 'before-after';
+      return layout === 'photo-grid' || layout === 'single-photo'
+          || layout === 'before-after' || layout === 'photo-map';
     }
     // Per-photo descSide lookup. section.descSides is a map keyed by
     // photo id; missing entries fall back to the section default
@@ -3321,6 +3344,19 @@
     // Google Map instead of a tile grid. Only photos with lat/lng
     // appear as pins; the rest get a small "no location" footer.
     // Each pin uses the tag-icon registry from js/tag-icons.js.
+    //
+    // Two map elements get rendered for every photo-map section:
+    //   - Interactive Google Maps div (.p86-report-section-map) —
+    //     shown on screen, hidden on print
+    //   - Print-only <img> with a Google Static Maps URL — hidden on
+    //     screen, shown on print. Paper reports get a real snapshot
+    //     of the map instead of a blank rectangle
+    //
+    // Pickers: the section header's standard "+ Add photos" button
+    // (rendered by sectionHTML's addBtn branch) is the canonical
+    // entry point. isPhotoLayout('photo-map') is true so the wiring
+    // at paint() lines ~2565 binds it to openPhotoPicker(sIdx)
+    // automatically. We don't render a duplicate picker here.
     function sectionPhotoMapBodyHTML(section) {
       var ids = Array.isArray(section.photo_ids) ? section.photo_ids : [];
       var picked = ids.map(function(pid) {
@@ -3334,15 +3370,38 @@
       });
 
       var emptyHelp = picked.length === 0
-        ? '<div class="p86-report-section-empty">Pick photos below — those with location data plot as pins.</div>'
+        ? '<div class="p86-report-section-empty">Use <strong>+ Add photos</strong> in the section header to pick photos. Those with GPS data plot as pins on the map.</div>'
         : (withCoords.length === 0
           ? '<div class="p86-report-section-empty">None of the picked photos have location data. Photos taken with location services on get GPS tags automatically.</div>'
           : '');
 
       var mapId = 'reportMap_' + section.id;
+      var coordIds = withCoords.map(function(p){return p.id;});
       var mapBody = withCoords.length
-        ? '<div class="p86-report-section-map" id="' + escapeAttr(mapId) + '" data-photo-map="1" data-photo-ids="' + escapeAttr(JSON.stringify(withCoords.map(function(p){return p.id;}))) + '"></div>'
+        ? '<div class="p86-report-section-map" id="' + escapeAttr(mapId) + '" data-photo-map="1" data-photo-ids="' + escapeAttr(JSON.stringify(coordIds)) + '"></div>'
         : '';
+
+      // Print fallback — Static Maps URL with one marker per photo.
+      // Color of each marker matches the tag-icon registry. URL length
+      // caps at ~8KB so we cap at 60 pins (Google's own soft limit
+      // is around that) — anything beyond that, the map still prints
+      // but only the first 60 pins show.
+      var staticImg = '';
+      if (withCoords.length && window.p86Maps && typeof window.p86Maps.getKey === 'function') {
+        var key = window.p86Maps.getKey();
+        if (key) {
+          var markerStrs = withCoords.slice(0, 60).map(function(p) {
+            var icon = window.p86TagIcons ? window.p86TagIcons.forPhoto(p) : null;
+            var color = (icon && icon.bg) ? icon.bg.replace('#', '0x') : '0xef4444';
+            return 'markers=color:' + color + '%7C' + Number(p.lat) + ',' + Number(p.lng);
+          });
+          var url = 'https://maps.googleapis.com/maps/api/staticmap'
+            + '?size=640x360&maptype=hybrid&scale=2'
+            + '&' + markerStrs.join('&')
+            + '&key=' + encodeURIComponent(key);
+          staticImg = '<img class="p86-report-section-map-print" alt="Photo locations" src="' + escapeAttr(url) + '" />';
+        }
+      }
 
       var unmapped = withoutCoords.length
         ? '<div class="p86-report-section-map-unmapped">' +
@@ -3350,16 +3409,11 @@
           '</div>'
         : '';
 
-      // Picker reuses the same +/− tile picker as photo-grid so the
-      // user picks photos identically; the layout switch just
-      // changes how the picks render.
-      var pickerHtml = '<button type="button" class="p86-report-section-add-photos" data-pick="' + escapeAttr(section.id) + '">+ Pick photos</button>';
-
       return '<div class="p86-report-section-map-wrap">' +
         emptyHelp +
         mapBody +
+        staticImg +
         unmapped +
-        pickerHtml +
       '</div>';
     }
 

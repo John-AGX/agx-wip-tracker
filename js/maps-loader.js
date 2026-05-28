@@ -28,15 +28,26 @@
   if (window.p86Maps) return;  // idempotent
 
   var _loadPromise = null;
+  // Cached API key once fetched. Stays in memory for the lifetime of
+  // the tab so getKey() can return synchronously after the first
+  // ready() call. Used by Static Maps URLs in print-mode <img> tags
+  // where we can't await a promise.
+  var _cachedKey = null;
 
   function isAvailable() {
     return !!(window.google && window.google.maps);
   }
 
+  // Synchronous accessor — returns the cached key, or null if ready()
+  // hasn't completed at least once. Print-path callers should await
+  // ready() first to guarantee the key is loaded.
+  function getKey() { return _cachedKey; }
+
   function fetchKey() {
     return window.p86Api.get('/api/config/maps-key').then(function(r) {
       var k = r && r.key;
       if (!k) throw new Error('Google Maps API key not configured on the server.');
+      _cachedKey = k;
       return k;
     });
   }
@@ -92,6 +103,7 @@
 
   window.p86Maps = {
     ready: ready,
-    isAvailable: isAvailable
+    isAvailable: isAvailable,
+    getKey: getKey
   };
 })();

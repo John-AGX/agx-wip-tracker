@@ -27,15 +27,101 @@
     <link rel="icon" type="image/svg+xml" href="/images/project-86-icon.svg">
     <script>
       // Register the service worker after the page has loaded so it
-      // never blocks first-paint. Sw.js itself uses skipWaiting +
-      // clients.claim to take control on first install / activation.
-      // Quietly logs failures — no service worker = web app still
-      // works, just no install affordance + no offline shell.
+      // never blocks first-paint. sw.js itself uses skipWaiting +
+      // clients.claim so the first install takes over the page
+      // without a reload.
+      //
+      // For subsequent UPDATES (user has the app open when we deploy
+      // a new version), we show a floating "Relaunch" toast — the
+      // same affordance Claude / GitHub / etc. use. Without this,
+      // mobile PWA users were stuck on the old build until they
+      // killed the app and reopened it (the SW that controls the
+      // page is the OLD one; a new SW installs to "waiting" but
+      // can't take over while the old SW has clients). The toast
+      // fires a SKIP_WAITING message to the waiting SW, which calls
+      // self.skipWaiting() → controllerchange fires here → we
+      // reload the page to pick up the new code.
       if ('serviceWorker' in navigator) {
         window.addEventListener('load', function () {
           navigator.serviceWorker.register('/sw.js')
-            .then(function (reg) { console.log('[sw] registered, scope:', reg.scope); })
+            .then(function (reg) {
+              console.log('[sw] registered, scope:', reg.scope);
+
+              // If there's already a waiting worker when the page
+              // loads (user came back to a tab that had been sitting
+              // open during a deploy), surface the toast immediately.
+              if (reg.waiting && navigator.serviceWorker.controller) {
+                showUpdateToast(reg.waiting);
+              }
+
+              // Watch for a new SW being installed.
+              reg.addEventListener('updatefound', function () {
+                var newWorker = reg.installing;
+                if (!newWorker) return;
+                newWorker.addEventListener('statechange', function () {
+                  // "installed" + controller present = old SW is
+                  // currently in control AND a new one is ready.
+                  // That's the "update available" condition.
+                  if (newWorker.state === 'installed' &&
+                      navigator.serviceWorker.controller) {
+                    showUpdateToast(newWorker);
+                  }
+                });
+              });
+
+              // Periodic update check — every 60s while the tab is
+              // visible. Catches deploys that happen while the user
+              // sits on a single page for hours.
+              setInterval(function () {
+                if (document.visibilityState === 'visible') {
+                  reg.update().catch(function () { /* ignore */ });
+                }
+              }, 60 * 1000);
+            })
             .catch(function (err) { console.warn('[sw] register failed:', err.message); });
+
+          // When the active controller changes (because the new SW
+          // just took over after SKIP_WAITING), reload to pick up
+          // the new code. Guard against an infinite reload loop on
+          // first install — we only want this AFTER the user has
+          // confirmed the relaunch.
+          var _reloadOnControllerChange = false;
+          navigator.serviceWorker.addEventListener('controllerchange', function () {
+            if (_reloadOnControllerChange) location.reload();
+          });
+
+          // Renders the "An update is available — Relaunch" toast.
+          // Idempotent — if it's already on screen, no-op. Click the
+          // button → message the waiting SW + flip the reload flag
+          // so controllerchange triggers the page reload.
+          window.showUpdateToast = function (waitingWorker) {
+            if (document.getElementById('p86-update-toast')) return;
+            var t = document.createElement('div');
+            t.id = 'p86-update-toast';
+            t.className = 'p86-update-toast';
+            t.setAttribute('role', 'status');
+            t.innerHTML =
+              '<span class="p86-update-toast-text">A new version is available.</span>' +
+              '<button class="p86-update-toast-btn" type="button">Relaunch</button>' +
+              '<button class="p86-update-toast-close" type="button" aria-label="Dismiss">&times;</button>';
+            document.body.appendChild(t);
+            // Slide-in on the next frame so the CSS transition fires.
+            requestAnimationFrame(function () { t.classList.add('p86-update-toast-show'); });
+
+            t.querySelector('.p86-update-toast-btn').addEventListener('click', function () {
+              _reloadOnControllerChange = true;
+              if (waitingWorker) {
+                try { waitingWorker.postMessage({ type: 'SKIP_WAITING' }); }
+                catch (e) { location.reload(); /* fallback */ }
+              } else {
+                location.reload();
+              }
+            });
+            t.querySelector('.p86-update-toast-close').addEventListener('click', function () {
+              t.classList.remove('p86-update-toast-show');
+              setTimeout(function () { t.remove(); }, 200);
+            });
+          };
         });
       }
     </script>
@@ -97,7 +183,7 @@
     })();
     </script>
 
-    <link rel="stylesheet" href="css/styles.css?v=150">
+    <link rel="stylesheet" href="css/styles.css?v=151">
     <link rel="stylesheet" href="css/report-style-packs.css?v=3">
     <link rel="stylesheet" href="css/workspace-layout.css?v=56b">
     <link rel="stylesheet" href="css/workspace.css?v=37b">
@@ -2515,7 +2601,7 @@
     <!-- Google Maps JS API loader + tag-icon registry for photo pins.
          Both load before projects-map.js so the map renderer can
          reference window.p86Maps + window.p86TagIcons. -->
-    <script src="js/maps-loader.js?v=1"></script>
+    <script src="js/maps-loader.js?v=2"></script>
     <script src="js/tag-icons.js?v=1"></script>
     <script src="js/projects-map.js?v=4"></script>
     <script src="js/projects-pairs.js?v=1"></script>
@@ -2526,7 +2612,7 @@
          calls into window.p86ReportTemplates. -->
     <script src="js/report-templates.js?v=1"></script>
     <script src="js/report-style-packs.js?v=2"></script>
-    <script src="js/projects.js?v=46"></script>
+    <script src="js/projects.js?v=47"></script>
     <!-- Shared pricing pipeline — math used by estimate-editor +
          estimate-preview + the upcoming change-order-editor. Loads
          BEFORE any of them so window.p86Pricing is ready. -->

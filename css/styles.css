@@ -3409,14 +3409,23 @@
   color: var(--text-dim, #888);
   padding: 4px 2px;
 }
+/* Print fallback — Static Maps API image. Hidden on screen, shown
+   on print since the interactive Google Maps div can't render in a
+   PDF. The print path emits this <img> next to the interactive div
+   with a pre-baked URL pointing at maps.googleapis.com/maps/api/staticmap. */
+.p86-report-section-map-print {
+  display: none;
+  width: 100%;
+  height: auto;
+  border-radius: 6px;
+  background: #f5f5f5;
+}
 @media print {
-  /* On print, the Google Map iframe doesn't render. Hide the
-     interactive map host and let the section's print template
-     (built from Static Maps URL) render in its place. The print
-     path is handled by the existing print preview code; this just
-     ensures the screen-mode map div doesn't waste a page. */
   .p86-report-section.layout-photo-map .p86-report-section-map {
     display: none !important;
+  }
+  .p86-report-section.layout-photo-map .p86-report-section-map-print {
+    display: block !important;
   }
 }
 .p86-projects-map-loading {
