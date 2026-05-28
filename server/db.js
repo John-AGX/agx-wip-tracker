@@ -984,6 +984,28 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_field_tools_category ON field_tools(category);
     CREATE INDEX IF NOT EXISTS idx_field_tools_updated ON field_tools(updated_at DESC);
 
+    -- Field tool printouts — one row per saved run. The user clicks
+    -- "Save Printout" inside a field tool modal; the tool's HTML
+    -- posts a {type:'p86-field-tool-result', inputs, outputs} message
+    -- to the parent which then saves a row here. inputs / outputs
+    -- are tool-shape-agnostic JSONB so each tool defines its own
+    -- field structure. notes is a user-typed label
+    -- ("for Johnson property"). The receipt-style print view in
+    -- My Files renders this row as a paper-style document so the
+    -- user can reference past calculations.
+    CREATE TABLE IF NOT EXISTS field_tool_runs (
+      id              TEXT PRIMARY KEY,
+      field_tool_id   TEXT NOT NULL REFERENCES field_tools(id) ON DELETE CASCADE,
+      user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      inputs          JSONB NOT NULL DEFAULT '{}'::jsonb,
+      outputs         JSONB NOT NULL DEFAULT '{}'::jsonb,
+      notes           TEXT,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_field_tool_runs_tool ON field_tool_runs(field_tool_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_field_tool_runs_user ON field_tool_runs(user_id, created_at DESC);
+
     CREATE TABLE IF NOT EXISTS qb_cost_lines (
       id TEXT PRIMARY KEY,
       job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,

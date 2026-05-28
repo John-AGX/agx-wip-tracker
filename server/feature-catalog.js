@@ -189,12 +189,36 @@ const features = [
     area: 'AI',
     shipped: '2026-05-26',
   },
+
+  // ── Field tools ─────────────────────────────────────────────
+  {
+    id: 'field-tools',
+    label: 'Field Tools',
+    blurb: 'Self-contained calculators, lookups, and forms the team uses on phones. 86 can spin one up on demand.',
+    access_path: 'My Files → Tools',
+    area: 'Mobile',
+    shipped: '2026-05-12',
+  },
+  {
+    id: 'field-tool-printouts',
+    label: 'Field Tool Printouts',
+    blurb: 'Save any field-tool calculation as a receipt-style record. Print or reference from My Files → Printouts.',
+    access_path: 'Open a field tool → 💾 Save Printout',
+    area: 'Mobile',
+    shipped: '2026-05-27',
+  },
 ];
 
 // Newest first — the order this array appears IS the order What's New
 // renders. Drop the bottom entries once they age out (>30 days) but
 // keep the feature in the `features` array above forever.
 const whats_new = [
+  {
+    id: 'field-tool-printouts',
+    label: 'Field Tool Printouts',
+    blurb: 'Save any field-tool calculation as a printable receipt. Lives under My Files → Printouts.',
+    shipped: '2026-05-27',
+  },
   {
     id: 'report-style-packs',
     label: 'Report style packs',

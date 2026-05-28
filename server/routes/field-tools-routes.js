@@ -53,20 +53,6 @@ router.get('/', requireAuth, async (req, res) => {
   }
 });
 
-// GET /api/field-tools/:id — full record incl. html_body.
-router.get('/:id', requireAuth, async (req, res) => {
-  try {
-    const id = String(req.params.id || '').trim();
-    if (!id) return res.status(400).json({ error: 'id is required' });
-    const r = await pool.query(`SELECT * FROM field_tools WHERE id = $1`, [id]);
-    if (!r.rows.length) return res.status(404).json({ error: 'Not found' });
-    res.json({ tool: r.rows[0] });
-  } catch (e) {
-    console.error('GET /api/field-tools/:id error:', e);
-    res.status(500).json({ error: e.message });
-  }
-});
-
 // POST /api/field-tools — create.
 // Body: { name, description?, category?, html_body }
 router.post('/', requireAuth, async (req, res) => {
@@ -108,6 +94,182 @@ router.post('/', requireAuth, async (req, res) => {
     }
   } catch (e) {
     console.error('POST /api/field-tools error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ──────────────────────────────────────────────────────────────────
+// PRINTOUTS — field_tool_runs CRUD
+//
+// One row per saved tool run. Captures inputs/outputs the tool
+// posted via window.parent.postMessage({type:'p86-field-tool-result',
+// inputs, outputs}) at the moment the user clicked Save Printout in
+// the modal chrome. Surfaces under My Files → Printouts and renders
+// receipt-style on print.
+//
+//   GET    /api/field-tools/runs              — list (filtered by caller's user_id; ?tool_id= optional)
+//   GET    /api/field-tools/runs/:id          — single printout for the receipt view
+//   POST   /api/field-tools/runs              — save a new printout
+//   PATCH  /api/field-tools/runs/:id          — edit notes (only the author)
+//   DELETE /api/field-tools/runs/:id          — remove (only the author)
+//
+// IMPORTANT: These routes MUST be declared BEFORE the /:id routes —
+// otherwise Express matches `GET /runs` as `GET /:id` with id="runs"
+// (routes match in declaration order).
+// ──────────────────────────────────────────────────────────────────
+
+function newRunId() {
+  return 'ftrun_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+}
+
+// GET /api/field-tools/runs
+// Query params: ?tool_id=ftxxx (optional), ?limit=N (default 100, max 500).
+router.get('/runs', requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const toolId = req.query.tool_id ? String(req.query.tool_id) : null;
+    const limit = Math.max(1, Math.min(500, Number(req.query.limit) || 100));
+
+    const params = [userId];
+    let where = 'r.user_id = $1';
+    if (toolId) {
+      params.push(toolId);
+      where += ` AND r.field_tool_id = $${params.length}`;
+    }
+    const rows = (await pool.query(
+      `SELECT r.id, r.field_tool_id, r.user_id, r.notes, r.inputs, r.outputs,
+              r.created_at, r.updated_at,
+              t.name AS field_tool_name,
+              t.category AS field_tool_category,
+              u.name AS user_name
+         FROM field_tool_runs r
+         JOIN field_tools t ON t.id = r.field_tool_id
+         LEFT JOIN users u  ON u.id = r.user_id
+        WHERE ${where}
+        ORDER BY r.created_at DESC
+        LIMIT ${limit}`,
+      params
+    )).rows;
+    res.json({ runs: rows });
+  } catch (e) {
+    console.error('GET /api/field-tools/runs error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// GET /api/field-tools/runs/:id
+router.get('/runs/:id', requireAuth, async (req, res) => {
+  try {
+    const id = String(req.params.id || '').trim();
+    if (!id) return res.status(400).json({ error: 'id is required' });
+    const r = await pool.query(
+      `SELECT r.*, t.name AS field_tool_name, t.category AS field_tool_category,
+              t.description AS field_tool_description, u.name AS user_name
+         FROM field_tool_runs r
+         JOIN field_tools t ON t.id = r.field_tool_id
+         LEFT JOIN users u  ON u.id = r.user_id
+        WHERE r.id = $1`,
+      [id]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'Not found' });
+    res.json({ run: r.rows[0] });
+  } catch (e) {
+    console.error('GET /api/field-tools/runs/:id error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/field-tools/runs
+// Body: { field_tool_id, inputs, outputs, notes }
+router.post('/runs', requireAuth, async (req, res) => {
+  try {
+    const body = req.body || {};
+    const fieldToolId = String(body.field_tool_id || '').trim();
+    if (!fieldToolId) return res.status(400).json({ error: 'field_tool_id is required' });
+
+    // Verify the tool exists (avoid orphan rows pointing at deleted tools).
+    const toolChk = await pool.query('SELECT id FROM field_tools WHERE id = $1', [fieldToolId]);
+    if (!toolChk.rows.length) return res.status(404).json({ error: 'field_tool not found' });
+
+    const inputs = (body.inputs && typeof body.inputs === 'object') ? body.inputs : {};
+    const outputs = (body.outputs && typeof body.outputs === 'object') ? body.outputs : {};
+    const notes = (typeof body.notes === 'string' && body.notes.trim())
+      ? body.notes.slice(0, 2000) : null;
+
+    const id = newRunId();
+    const r = await pool.query(
+      `INSERT INTO field_tool_runs (id, field_tool_id, user_id, inputs, outputs, notes)
+       VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6)
+       RETURNING *`,
+      [id, fieldToolId, req.user.id, JSON.stringify(inputs), JSON.stringify(outputs), notes]
+    );
+    res.json({ run: r.rows[0] });
+  } catch (e) {
+    console.error('POST /api/field-tools/runs error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// PATCH /api/field-tools/runs/:id — author-only edits to notes.
+router.patch('/runs/:id', requireAuth, async (req, res) => {
+  try {
+    const id = String(req.params.id || '').trim();
+    if (!id) return res.status(400).json({ error: 'id is required' });
+    const body = req.body || {};
+    const own = await pool.query('SELECT user_id FROM field_tool_runs WHERE id = $1', [id]);
+    if (!own.rows.length) return res.status(404).json({ error: 'Not found' });
+    if (own.rows[0].user_id !== req.user.id) return res.status(403).json({ error: 'Only the author can edit this printout' });
+
+    const sets = [];
+    const params = [];
+    let p = 1;
+    if (typeof body.notes === 'string') {
+      sets.push(`notes = $${p++}`);
+      params.push(body.notes.slice(0, 2000));
+    }
+    if (!sets.length) return res.json({ ok: true, unchanged: true });
+    sets.push('updated_at = NOW()');
+    params.push(id);
+    await pool.query(`UPDATE field_tool_runs SET ${sets.join(', ')} WHERE id = $${params.length}`, params);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('PATCH /api/field-tools/runs/:id error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// DELETE /api/field-tools/runs/:id — author-only removal.
+router.delete('/runs/:id', requireAuth, async (req, res) => {
+  try {
+    const id = String(req.params.id || '').trim();
+    if (!id) return res.status(400).json({ error: 'id is required' });
+    const own = await pool.query('SELECT user_id FROM field_tool_runs WHERE id = $1', [id]);
+    if (!own.rows.length) return res.status(404).json({ error: 'Not found' });
+    if (own.rows[0].user_id !== req.user.id) return res.status(403).json({ error: 'Only the author can delete this printout' });
+
+    await pool.query('DELETE FROM field_tool_runs WHERE id = $1', [id]);
+    res.json({ ok: true, id });
+  } catch (e) {
+    console.error('DELETE /api/field-tools/runs/:id error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ──────────────────────────────────────────────────────────────────
+// FIELD TOOL CRUD by :id
+// (Declared AFTER /runs routes — see note above.)
+// ──────────────────────────────────────────────────────────────────
+
+// GET /api/field-tools/:id — full record incl. html_body.
+router.get('/:id', requireAuth, async (req, res) => {
+  try {
+    const id = String(req.params.id || '').trim();
+    if (!id) return res.status(400).json({ error: 'id is required' });
+    const r = await pool.query(`SELECT * FROM field_tools WHERE id = $1`, [id]);
+    if (!r.rows.length) return res.status(404).json({ error: 'Not found' });
+    res.json({ tool: r.rows[0] });
+  } catch (e) {
+    console.error('GET /api/field-tools/:id error:', e);
     res.status(500).json({ error: e.message });
   }
 });

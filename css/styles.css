@@ -7799,3 +7799,56 @@ body.light-mode .p86-pv-tag-modal-chip {
   .p86-snapshot-card-count { font-size: 22px; }
   .p86-help-feature-list { grid-template-columns: 1fr; }
 }
+
+/* ──────────────────────────────────────────────────────────────────
+   Field Tool Printouts — receipt view + print-friendly styling
+   ──────────────────────────────────────────────────────────────────
+   When the receipt modal is open we tag <body class="ft-printing">.
+   On print we hide everything OUTSIDE the .mf-printout-viewer modal
+   and strip the modal's own dark chrome so the printer sees a clean
+   white receipt. The hover row also gets a subtle bg on hover for
+   the list view. */
+.mf-printout-row:hover {
+  background: #1a1a1a !important;
+  border-color: #333 !important;
+}
+
+@media print {
+  /* When the receipt viewer is up, suppress every other tree under
+     <body> and lift the receipt to the page. The viewer wrapper
+     (.mf-printout-viewer) is the only direct body child we keep
+     visible; inside it we strip the dark overlay so the receipt
+     prints clean. */
+  body.ft-printing > *:not(.mf-printout-viewer) {
+    display: none !important;
+  }
+  body.ft-printing .mf-printout-viewer {
+    position: static !important;
+    background: #fff !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    display: block !important;
+  }
+  body.ft-printing .ft-receipt {
+    box-shadow: none !important;
+    width: 100% !important;
+    max-width: none !important;
+    border-radius: 0 !important;
+  }
+  body.ft-printing .ft-receipt-chrome {
+    display: none !important;
+  }
+  body.ft-printing .ft-receipt-body {
+    padding: 16px 20px !important;
+  }
+  /* Force solid black text everywhere on the receipt for max
+     printer contrast — dark-mode overrides can leak through. */
+  body.ft-printing .ft-receipt,
+  body.ft-printing .ft-receipt * {
+    color: #000 !important;
+    background: transparent !important;
+  }
+  body.ft-printing .ft-receipt table {
+    page-break-inside: avoid;
+  }
+}

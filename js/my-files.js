@@ -164,24 +164,28 @@
     // ensures these can never collide with real folder names
     // (sanitizeFolder strips underscores at the edges).
     //
-    //   __projects__ — CompanyCam-style photo + walkthrough buckets
-    //                  with markups + reports. Owned by js/projects.js.
-    //   __tools__    — field tools grid (calculators / take-offs etc).
-    //                  Owned by js/field-tools.js.
+    //   __projects__  — CompanyCam-style photo + walkthrough buckets
+    //                   with markups + reports. Owned by js/projects.js.
+    //   __tools__     — field tools grid (calculators / take-offs etc).
+    //                   Owned by js/field-tools.js.
+    //   __printouts__ — saved field-tool runs (receipts). Owned by
+    //                   this file, calls /api/field-tools/runs.
     //
-    // Future phases will add __reports__ (P2) and __takeoffs__ (P4)
-    // pivots here.
+    // Future phases will add __takeoffs__ (P4) pivots here.
     var PROJECTS_FOLDER = '__projects__';
     var TOOLS_FOLDER = '__tools__';
+    var PRINTOUTS_FOLDER = '__printouts__';
     if (folders.indexOf(PROJECTS_FOLDER) === -1) folders.push(PROJECTS_FOLDER);
     if (folders.indexOf(TOOLS_FOLDER) === -1) folders.push(TOOLS_FOLDER);
+    if (folders.indexOf(PRINTOUTS_FOLDER) === -1) folders.push(PRINTOUTS_FOLDER);
 
     if (folders.indexOf(_state.activeFolder) === -1) {
       _state.activeFolder = folders[0];
     }
     var isProjectsFolder = _state.activeFolder === PROJECTS_FOLDER;
     var isToolsFolder = _state.activeFolder === TOOLS_FOLDER;
-    var isVirtualFolder = isProjectsFolder || isToolsFolder;
+    var isPrintoutsFolder = _state.activeFolder === PRINTOUTS_FOLDER;
+    var isVirtualFolder = isProjectsFolder || isToolsFolder || isPrintoutsFolder;
     var activeFiles = isVirtualFolder ? [] : (bucket[_state.activeFolder] || []);
 
     var html =
@@ -240,11 +244,12 @@
 
             '<div class="mf-rail-section-head">Views</div>' +
             '<div class="mf-rail-list">' +
-              [PROJECTS_FOLDER, TOOLS_FOLDER].filter(function(f) { return folders.indexOf(f) !== -1; }).map(function(f) {
+              [PROJECTS_FOLDER, TOOLS_FOLDER, PRINTOUTS_FOLDER].filter(function(f) { return folders.indexOf(f) !== -1; }).map(function(f) {
                 var active = f === _state.activeFolder;
-                var isProjects = f === PROJECTS_FOLDER;
-                var glyph = isProjects ? '&#x1F4F8;' : '&#x1F527;';
-                var label = isProjects ? 'Projects' : 'Tools';
+                var glyph, label;
+                if (f === PROJECTS_FOLDER) { glyph = '&#x1F4F8;'; label = 'Projects'; }
+                else if (f === TOOLS_FOLDER) { glyph = '&#x1F527;'; label = 'Tools'; }
+                else { glyph = '&#x1F9FE;'; label = 'Printouts'; }
                 return '<button class="mf-rail-row' + (active ? ' active' : '') + '" data-folder="' + escapeAttr(f) + '" onclick="window.myFiles.selectFolder(\'' + escapeAttr(f) + '\')">' +
                   '<span class="mf-rail-row-glyph">' + glyph + '</span>' +
                   '<span class="mf-rail-row-label">' + escapeHTML(label) + '</span>' +
@@ -254,13 +259,16 @@
           '</aside>' +
 
           // Right pane — files for normal folders, virtual-pane host
-          // for Projects / Tools. The host element gets a stable id so
-          // the owning module can find it.
+          // for Projects / Tools / Printouts. The host element gets a
+          // stable id so the owning module (or this file, for
+          // Printouts) can find it.
           '<div>' +
             (isProjectsFolder
               ? '<div id="mfProjectsHost" style="min-height:100px;"></div>'
               : isToolsFolder
                 ? '<div id="mfToolsHost" style="min-height:100px;"></div>'
+                : isPrintoutsFolder
+                ? '<div id="mfPrintoutsHost" style="min-height:100px;"></div>'
                 : (
                     '<div id="mfDropZone" data-mf-drop="1" style="border:2px dashed var(--border,#444);border-radius:10px;padding:14px;text-align:center;background:rgba(79,140,255,0.04);margin-bottom:14px;cursor:pointer;font-size:12px;color:var(--text-dim,#888);">' +
                       'Drop files here or <strong style="color:var(--accent,#22d3ee);">click Upload</strong> &middot; Files land in <strong>' + escapeHTML(prettyFolder(_state.activeFolder)) + '</strong>' +
@@ -298,6 +306,14 @@
         toolsHost.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);">Field tools module not loaded.</div>';
       }
       return; // skip drop-zone wiring — not relevant in Tools mode
+    }
+
+    // Printouts folder: render the saved field-tool runs list. Click
+    // a row → open the receipt-style viewer (print-friendly).
+    if (isPrintoutsFolder) {
+      var printoutsHost = pane.querySelector('#mfPrintoutsHost');
+      if (printoutsHost) renderPrintoutsList(printoutsHost);
+      return;
     }
 
     // Wire drop zone
@@ -635,11 +651,216 @@
     });
   }
 
+  // ──────────────────────────────────────────────────────────────────
+  // Printouts — saved field-tool runs (receipts)
+  //
+  // The right pane lists every run the current user has saved, grouped
+  // by tool. Each row shows the tool name, when it was run, the notes
+  // preview, and a "View" button that pops a print-friendly receipt
+  // modal (header + inputs/outputs tables + notes + footer). Print uses
+  // a dedicated @media print block in styles.css so the receipt drops
+  // out clean of all chrome.
+  // ──────────────────────────────────────────────────────────────────
+  var _printoutsCache = { runs: null, loadedAt: 0 };
+
+  function fetchPrintouts() {
+    return window.p86Api.get('/api/field-tools/runs')
+      .then(function(resp) {
+        _printoutsCache = {
+          runs: (resp && resp.runs) || [],
+          loadedAt: Date.now()
+        };
+      })
+      .catch(function(err) {
+        _printoutsCache = { runs: null, loadedAt: 0, error: err.message || 'Failed to load' };
+      });
+  }
+
+  function renderPrintoutsList(host) {
+    host.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);font-size:13px;">Loading printouts…</div>';
+    fetchPrintouts().then(function() { paintPrintoutsList(host); });
+  }
+
+  function paintPrintoutsList(host) {
+    if (_printoutsCache.error) {
+      host.innerHTML = '<div style="padding:20px;color:#e74c3c;">' + escapeHTML(_printoutsCache.error) + '</div>';
+      return;
+    }
+    var runs = _printoutsCache.runs || [];
+    var header =
+      '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:14px;flex-wrap:wrap;">' +
+        '<div>' +
+          '<h2 style="margin:0;font-size:18px;font-weight:600;">Printouts</h2>' +
+          '<div style="font-size:12px;color:var(--text-dim,#888);margin-top:2px;">' +
+            'Saved snapshots of field-tool runs. Open one and print for a paper receipt.' +
+          '</div>' +
+        '</div>' +
+        '<button type="button" class="ee-btn secondary" onclick="window.myFiles.refreshPrintouts()">↻ Refresh</button>' +
+      '</div>';
+
+    if (!runs.length) {
+      host.innerHTML = header +
+        '<div style="padding:30px;text-align:center;color:var(--text-dim,#888);font-size:12px;border:1px dashed var(--border,#333);border-radius:10px;">' +
+          'No printouts yet. Open a field tool, run a calculation, then click <strong>💾 Save Printout</strong>.' +
+        '</div>';
+      return;
+    }
+
+    // Group by tool so a busy user can scan-by-purpose.
+    var groups = {};
+    runs.forEach(function(r) {
+      var k = r.field_tool_id;
+      if (!groups[k]) groups[k] = { name: r.field_tool_name || 'Tool ' + k, runs: [] };
+      groups[k].runs.push(r);
+    });
+
+    var html = header;
+    Object.keys(groups).forEach(function(toolId) {
+      var g = groups[toolId];
+      html += '<div style="margin-bottom:20px;">' +
+        '<div style="font-size:12px;text-transform:uppercase;letter-spacing:1px;color:var(--text-dim,#888);margin-bottom:6px;font-weight:600;">' +
+          escapeHTML(g.name) + ' <span style="color:#555;">(' + g.runs.length + ')</span>' +
+        '</div>' +
+        '<div style="display:flex;flex-direction:column;gap:6px;">';
+      g.runs.forEach(function(r) {
+        var date = fmtDate(r.created_at);
+        var time = fmtTime(r.created_at);
+        var preview = r.notes ? escapeHTML(String(r.notes).slice(0, 120)) : '<span style="color:#555;">no notes</span>';
+        var io = [];
+        if (r.inputs && Object.keys(r.inputs).length) io.push(Object.keys(r.inputs).length + ' input' + (Object.keys(r.inputs).length === 1 ? '' : 's'));
+        if (r.outputs && Object.keys(r.outputs).length) io.push(Object.keys(r.outputs).length + ' output' + (Object.keys(r.outputs).length === 1 ? '' : 's'));
+        var ioLabel = io.length ? io.join(' · ') : 'no captured data';
+        html += '<div class="mf-printout-row" style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:#141414;border:1px solid #222;border-radius:6px;cursor:pointer;" onclick="window.myFiles.openPrintout(\'' + escapeAttr(r.id) + '\')">' +
+          '<div style="flex:1;min-width:0;">' +
+            '<div style="font-size:13px;color:var(--text,#e8e0d0);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + preview + '</div>' +
+            '<div style="font-size:10px;color:var(--text-dim,#666);margin-top:2px;">' +
+              escapeHTML(date) + (time ? ' · ' + escapeHTML(time) : '') + ' · ' + escapeHTML(ioLabel) +
+              (r.user_name ? ' · ' + escapeHTML(r.user_name) : '') +
+            '</div>' +
+          '</div>' +
+          '<button type="button" class="ee-btn secondary" style="font-size:11px;flex-shrink:0;" onclick="event.stopPropagation();window.myFiles.openPrintout(\'' + escapeAttr(r.id) + '\')">View</button>' +
+          '<button type="button" class="ee-btn secondary" style="font-size:11px;flex-shrink:0;" title="Delete" onclick="event.stopPropagation();window.myFiles.deletePrintout(\'' + escapeAttr(r.id) + '\')">×</button>' +
+        '</div>';
+      });
+      html += '</div></div>';
+    });
+    host.innerHTML = html;
+  }
+
+  // Receipt viewer — print-friendly. Header is the tool name + date +
+  // who ran it; body is two key/value tables (Inputs / Outputs); notes
+  // come last. The .ft-receipt-print class is what @media print
+  // styles target, so the chrome (close button, etc.) gets hidden on
+  // paper.
+  function openPrintout(id) {
+    if (!id) return;
+    window.p86Api.get('/api/field-tools/runs/' + encodeURIComponent(id)).then(function(resp) {
+      if (!resp || !resp.run) { alert('Printout not found.'); return; }
+      var r = resp.run;
+      var modal = document.createElement('div');
+      modal.className = 'mf-printout-viewer';
+      modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);display:flex;align-items:flex-start;justify-content:center;z-index:10000;overflow:auto;padding:20px;';
+      var inputs = r.inputs || {};
+      var outputs = r.outputs || {};
+      var date = '';
+      try { date = new Date(r.created_at).toLocaleString(); } catch (e) {}
+
+      modal.innerHTML =
+        '<div class="ft-receipt" style="background:#fff;color:#111;width:560px;max-width:95vw;border-radius:8px;padding:0;display:flex;flex-direction:column;box-shadow:0 12px 40px rgba(0,0,0,0.6);">' +
+          // Header chrome (hidden on print)
+          '<div class="ft-receipt-chrome" style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 14px;background:#0a0a0a;color:#fff;border-radius:8px 8px 0 0;">' +
+            '<div style="font-size:13px;">Printout · ' + escapeHTML(date) + '</div>' +
+            '<div style="display:flex;gap:6px;">' +
+              '<button type="button" class="ee-btn primary" onclick="window.print()">🖨 Print</button>' +
+              '<button type="button" class="ee-btn secondary" id="ftReceiptClose">Close</button>' +
+            '</div>' +
+          '</div>' +
+          // Receipt body
+          '<div class="ft-receipt-body" style="padding:24px 28px;font-family:\'Inter\',-apple-system,sans-serif;">' +
+            '<div style="text-align:center;border-bottom:2px dashed #999;padding-bottom:14px;margin-bottom:16px;">' +
+              '<div style="font-size:11px;text-transform:uppercase;letter-spacing:2px;color:#666;">Field Tool Receipt</div>' +
+              '<div style="font-size:18px;font-weight:700;margin-top:4px;color:#111;">' + escapeHTML(r.field_tool_name || 'Field Tool') + '</div>' +
+              (r.field_tool_category ? '<div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#888;margin-top:2px;">' + escapeHTML(r.field_tool_category) + '</div>' : '') +
+              (r.field_tool_description ? '<div style="font-size:12px;color:#666;margin-top:6px;">' + escapeHTML(r.field_tool_description) + '</div>' : '') +
+            '</div>' +
+            '<div style="display:flex;justify-content:space-between;font-size:11px;color:#666;margin-bottom:14px;">' +
+              '<div>Run on: <strong style="color:#111;">' + escapeHTML(date) + '</strong></div>' +
+              (r.user_name ? '<div>By: <strong style="color:#111;">' + escapeHTML(r.user_name) + '</strong></div>' : '') +
+            '</div>' +
+            buildReceiptKV('Inputs', inputs) +
+            buildReceiptKV('Outputs', outputs) +
+            (r.notes
+              ? '<div style="margin-top:16px;border-top:1px solid #ddd;padding-top:10px;">' +
+                  '<div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#888;margin-bottom:4px;">Notes</div>' +
+                  '<div style="font-size:12px;color:#222;white-space:pre-wrap;">' + escapeHTML(r.notes) + '</div>' +
+                '</div>'
+              : '') +
+            '<div style="text-align:center;border-top:2px dashed #999;padding-top:10px;margin-top:18px;font-size:10px;color:#999;">' +
+              'Saved to My Files · Printout #' + escapeHTML(String(r.id || '')) +
+            '</div>' +
+          '</div>' +
+        '</div>';
+      document.body.appendChild(modal);
+      // Add the class to body so @media print can selectively show the
+      // receipt and hide everything else.
+      document.body.classList.add('ft-printing');
+
+      function close() {
+        document.body.classList.remove('ft-printing');
+        modal.remove();
+      }
+      modal.querySelector('#ftReceiptClose').onclick = close;
+      modal.addEventListener('click', function(e) { if (e.target === modal) close(); });
+    }).catch(function(err) {
+      alert('Failed to open printout: ' + (err && err.message || 'unknown'));
+    });
+  }
+
+  function buildReceiptKV(label, obj) {
+    var keys = Object.keys(obj || {});
+    if (!keys.length) return '';
+    var rows = keys.map(function(k) {
+      var v = obj[k];
+      var disp;
+      if (v == null) disp = '—';
+      else if (typeof v === 'object') disp = JSON.stringify(v);
+      else disp = String(v);
+      return '<tr>' +
+        '<td style="padding:5px 8px;color:#555;border-bottom:1px dotted #ccc;width:42%;vertical-align:top;">' + escapeHTML(k) + '</td>' +
+        '<td style="padding:5px 8px;color:#111;border-bottom:1px dotted #ccc;font-weight:600;text-align:right;">' + escapeHTML(disp) + '</td>' +
+      '</tr>';
+    }).join('');
+    return '<div style="margin-bottom:14px;">' +
+      '<div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#888;margin-bottom:4px;">' + escapeHTML(label) + '</div>' +
+      '<table style="width:100%;border-collapse:collapse;font-size:12px;">' + rows + '</table>' +
+    '</div>';
+  }
+
+  function deletePrintout(id) {
+    if (!id) return;
+    if (!confirm('Delete this printout? This cannot be undone.')) return;
+    window.p86Api.del('/api/field-tools/runs/' + encodeURIComponent(id))
+      .then(fetchPrintouts)
+      .then(function() {
+        var host = document.querySelector('#mfPrintoutsHost');
+        if (host) paintPrintoutsList(host);
+      })
+      .catch(function(err) { alert('Delete failed: ' + (err.message || err)); });
+  }
+
+  function refreshPrintouts() {
+    var host = document.querySelector('#mfPrintoutsHost');
+    if (host) renderPrintoutsList(host);
+  }
+
   window.myFiles = {
     selectFolder: selectFolder,
     newFolder: newFolder,
     handleUpload: handleUpload,
     deleteFile: deleteFile,
-    openSendPicker: openSendPicker
+    openSendPicker: openSendPicker,
+    openPrintout: openPrintout,
+    deletePrintout: deletePrintout,
+    refreshPrintouts: refreshPrintouts
   };
 })();
