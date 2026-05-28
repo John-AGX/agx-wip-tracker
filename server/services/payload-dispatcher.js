@@ -148,7 +148,58 @@ const PAYLOAD_OPS_SCHEMAS = Object.freeze({
       'watch_ops', 'skill_pack_ops', 'field_tool_ops', 'link_ops', 'staff_agent_ops',
     ]),
   },
+  report: {
+    // Polymorphic report (job_reports table). Currently supports
+    // entity_type='project' parent only; the legacy job-scoped
+    // reports route remains separate.
+    //
+    // op: 'create' | 'update' (defaults: create when entity_id missing,
+    //                          else update)
+    //
+    // Create-only:
+    //   template_type   one of REPORT_TEMPLATE_IDS (walkthrough,
+    //                   daily-log, weekly-progress, engineers-report,
+    //                   submittal-package, punch-list, pre-con-survey,
+    //                   change-order). Stored on the row.
+    //   parent_type     'project' (only supported value today)
+    //   parent_id       UUID of the project this report belongs to.
+    //   title           Initial title string.
+    //
+    // Create + update:
+    //   cover_page      Object of cover fields per template_type (see
+    //                   server/routes/reports-routes.js COVER_PAGE_KEYS
+    //                   for the full whitelist). Replaces existing on
+    //                   update; partial replaces NOT supported (provide
+    //                   the full cover_page or omit).
+    //   sections        Full sections array. Replaces existing on update.
+    //                   Each section: {id?, label, layout, photo_ids?,
+    //                   captions?, text_body?, attachment_ids?}
+    //
+    // Update-only granular ops (use INSTEAD of full sections replace
+    // when you want a precise change):
+    //   section_adds    [{label, layout, ...}] appended to existing.
+    //   section_updates [{id, label?, layout?, text_body?, ...}]
+    //   section_deletes ['<section_id>', ...]
+    allowedTopKeys: new Set([
+      'op',
+      'template_type', 'parent_type', 'parent_id', 'title',
+      'cover_page', 'sections',
+      'section_adds', 'section_updates', 'section_deletes',
+    ]),
+  },
 });
+
+// Mirror of the client-side template registry (js/report-templates.js)
+// and the server-side TEMPLATE_TYPES set in reports-routes.js. Used
+// by the report dispatcher to validate template_type on create.
+const REPORT_TEMPLATE_IDS = new Set([
+  'walkthrough', 'daily-log', 'weekly-progress', 'engineers-report',
+  'submittal-package', 'punch-list', 'pre-con-survey', 'change-order',
+]);
+
+const REPORT_SECTION_LAYOUTS = new Set([
+  'photo-grid', 'single-photo', 'before-after', 'text-block', 'attachment-list',
+]);
 
 // ──────────────────────────────────────────────────────────────────
 // validateOps — light shape check raised before any SQL runs.
@@ -274,6 +325,50 @@ function validateOps(entityType, ops) {
     for (const k of ['watch_ops', 'skill_pack_ops', 'field_tool_ops', 'link_ops', 'staff_agent_ops']) {
       if (ops[k] != null && !Array.isArray(ops[k])) {
         throw new Error(`system.ops.${k} must be an array`);
+      }
+    }
+  }
+  if (entityType === 'report') {
+    const op = ops.op || 'update';
+    if (!['create', 'update'].includes(op)) {
+      throw new Error(`report.ops.op must be create|update, got: ${op}`);
+    }
+    if (op === 'create') {
+      if (!ops.template_type) {
+        throw new Error('report.ops.template_type required for op=create');
+      }
+      if (!REPORT_TEMPLATE_IDS.has(ops.template_type)) {
+        throw new Error(
+          `report.ops.template_type invalid: '${ops.template_type}'. Valid: ${[...REPORT_TEMPLATE_IDS].sort().join(', ')}.`
+        );
+      }
+      if (!ops.parent_id) {
+        throw new Error('report.ops.parent_id required for op=create (the project id)');
+      }
+      // parent_type defaults to 'project' (the only supported value
+      // for new reports created via payload). Validate explicit ones.
+      if (ops.parent_type && ops.parent_type !== 'project') {
+        throw new Error(
+          `report.ops.parent_type must be 'project' (got '${ops.parent_type}'). ` +
+          `Job-scoped reports use the legacy /api/jobs/:jobId/reports route, not the payload primitive.`
+        );
+      }
+    }
+    if (ops.sections && !Array.isArray(ops.sections)) {
+      throw new Error('report.ops.sections must be an array');
+    }
+    for (const k of ['section_adds', 'section_updates', 'section_deletes']) {
+      if (ops[k] != null && !Array.isArray(ops[k])) {
+        throw new Error(`report.ops.${k} must be an array`);
+      }
+    }
+    // Layout validation across every section + section_add.
+    const allSections = [].concat(ops.sections || [], ops.section_adds || []);
+    for (const s of allSections) {
+      if (s && s.layout && !REPORT_SECTION_LAYOUTS.has(s.layout)) {
+        throw new Error(
+          `report section layout invalid: '${s.layout}'. Valid: ${[...REPORT_SECTION_LAYOUTS].sort().join(', ')}.`
+        );
       }
     }
   }
@@ -1753,6 +1848,228 @@ async function dispatchSystem(dbClient, target, refTable, ctx) {
 // dispatchOps — main switch by entity_type.
 // ──────────────────────────────────────────────────────────────────
 
+// ──────────────────────────────────────────────────────────────────
+// dispatchReport — polymorphic report writes (job_reports table).
+//
+// Supports:
+//   - op:'create'  → INSERT a new project-scoped report with
+//                    template_type, optional cover_page, optional
+//                    sections array. Returns the new report id.
+//   - op:'update'  → UPDATE existing row. Either pass `sections`
+//                    (full replace) OR use granular ops
+//                    (section_adds / section_updates / section_deletes).
+//                    cover_page is replaced wholesale if provided.
+//
+// Mirrors the shape of /api/reports/:entityType/:entityId routes
+// in server/routes/reports-routes.js but skips that route's auth +
+// org-scope checks (the payload apply path runs in the user's
+// session so authn is already established; org-scope is enforced
+// at the project lookup below).
+// ──────────────────────────────────────────────────────────────────
+
+function newReportId() {
+  return 'rpt_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+}
+
+function newReportSectionId() {
+  return 'sec_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+}
+
+function normalizeReportSection(s) {
+  if (!s || typeof s !== 'object') return null;
+  const layout = (s.layout && REPORT_SECTION_LAYOUTS.has(s.layout)) ? s.layout : 'photo-grid';
+  const photoLimit = (layout === 'before-after') ? 2 : 200;
+  const photoIds = Array.isArray(s.photo_ids)
+    ? s.photo_ids.filter((x) => typeof x === 'string').slice(0, photoLimit)
+    : [];
+  const captionsIn = (s.captions && typeof s.captions === 'object') ? s.captions : {};
+  const captions = {};
+  photoIds.forEach((pid) => {
+    const c = captionsIn[pid];
+    if (typeof c === 'string') captions[pid] = c.slice(0, 500);
+  });
+  return {
+    id: typeof s.id === 'string' ? s.id : newReportSectionId(),
+    label: typeof s.label === 'string' ? s.label.slice(0, 120) : '',
+    layout,
+    photo_ids: photoIds,
+    captions,
+    text_body: typeof s.text_body === 'string' ? s.text_body.slice(0, 20000) : '',
+    attachment_ids: Array.isArray(s.attachment_ids)
+      ? s.attachment_ids.filter((x) => typeof x === 'string').slice(0, 50)
+      : [],
+  };
+}
+
+function normalizeReportCoverPage(raw) {
+  // Mirror of server/routes/reports-routes.js COVER_PAGE_KEYS.
+  const KEYS = [
+    'company_name', 'pm_name', 'date', 'address', 'subtitle',
+    'crew', 'weather', 'hours_on_site',
+    'week_ending', 'project_phase', 'schedule_status',
+    'stamped_by', 'license_number', 'signed_date',
+    'submittal_number', 'spec_section', 'supplier', 'approval_block',
+    'walkthrough_date', 'walkthrough_with',
+    'survey_date', 'surveyed_by', 'building',
+    'co_number', 'co_amount', 'requested_by',
+  ];
+  if (!raw || typeof raw !== 'object') return { enabled: false };
+  const out = { enabled: !!raw.enabled };
+  KEYS.forEach((k) => {
+    if (typeof raw[k] === 'string') out[k] = raw[k].slice(0, 500);
+  });
+  return out;
+}
+
+async function dispatchReport(dbClient, target, refTable, ctx) {
+  const ops = target.ops || {};
+  resolveRefsInOps(ops, refTable);
+
+  const explicitOp = ops.op || (target.entity_id ? 'update' : 'create');
+
+  if (explicitOp === 'create') {
+    const projectId = resolveRef(ops.parent_id, refTable);
+    if (!projectId) throw new Error('report.create requires parent_id (project id)');
+
+    // Confirm the project exists + is in the caller's org (lightweight
+    // scope check; mirrors the route's ensureEntityVisible).
+    const projChk = await dbClient.query(
+      'SELECT id, organization_id FROM projects WHERE id = $1',
+      [projectId]
+    );
+    if (!projChk.rows.length) throw new Error(`report.create: project ${projectId} not found`);
+    if (ctx.organizationId && Number(projChk.rows[0].organization_id) !== Number(ctx.organizationId)) {
+      throw new Error(`report.create: project ${projectId} not in caller's org`);
+    }
+
+    const id = (target.entity_id && !isRef(target.entity_id)) ? target.entity_id : newReportId();
+    const title = (typeof ops.title === 'string' && ops.title.trim())
+      ? ops.title.slice(0, 200)
+      : 'Untitled report';
+    const sections = Array.isArray(ops.sections)
+      ? ops.sections.map(normalizeReportSection).filter(Boolean).slice(0, 50)
+      : [];
+    const coverPage = normalizeReportCoverPage(ops.cover_page);
+
+    await dbClient.query(
+      `INSERT INTO job_reports
+         (id, entity_type, entity_id, title, summary, sections, cover_page, template_type, created_by)
+       VALUES ($1, 'project', $2, $3, '', $4::jsonb, $5::jsonb, $6, $7)`,
+      [
+        id, projectId, title,
+        JSON.stringify(sections), JSON.stringify(coverPage),
+        ops.template_type, ctx.userId || null,
+      ]
+    );
+
+    if (isRef(target.entity_id)) refTable[target.entity_id] = id;
+
+    return {
+      entity_type: 'report',
+      entity_id: id,
+      op: 'create',
+      summary: `Report created (template=${ops.template_type}, ${sections.length} section(s))`,
+    };
+  }
+
+  // UPDATE path
+  const reportId = resolveRef(target.entity_id, refTable);
+  if (!reportId) throw new Error('report.update requires target.entity_id');
+
+  // Fetch the existing report (need current sections for granular ops).
+  const existing = await dbClient.query(
+    'SELECT id, entity_type, entity_id, sections, cover_page FROM job_reports WHERE id = $1',
+    [reportId]
+  );
+  if (!existing.rows.length) throw new Error(`report.update: ${reportId} not found`);
+  const row = existing.rows[0];
+
+  // Org-scope check: if it's a project-scoped report, verify the
+  // parent project is in the caller's org.
+  if (row.entity_type === 'project' && ctx.organizationId) {
+    const p = await dbClient.query(
+      'SELECT organization_id FROM projects WHERE id = $1',
+      [row.entity_id]
+    );
+    if (p.rows.length && Number(p.rows[0].organization_id) !== Number(ctx.organizationId)) {
+      throw new Error(`report.update: ${reportId} parent project not in caller's org`);
+    }
+  }
+
+  const sets = [];
+  const params = [];
+  let p = 1;
+
+  if (typeof ops.title === 'string') {
+    sets.push(`title = $${p++}`);
+    params.push(ops.title.slice(0, 200));
+  }
+  if (ops.cover_page && typeof ops.cover_page === 'object') {
+    sets.push(`cover_page = $${p++}::jsonb`);
+    params.push(JSON.stringify(normalizeReportCoverPage(ops.cover_page)));
+  }
+
+  // Sections — either full replace (ops.sections) or granular ops
+  // (section_adds / section_updates / section_deletes). Granular ops
+  // operate on the CURRENT sections from the row.
+  let nextSections = null;
+  if (Array.isArray(ops.sections)) {
+    nextSections = ops.sections.map(normalizeReportSection).filter(Boolean).slice(0, 50);
+  } else if (ops.section_adds || ops.section_updates || ops.section_deletes) {
+    nextSections = Array.isArray(row.sections) ? row.sections.slice() : [];
+    if (Array.isArray(ops.section_deletes)) {
+      const delSet = new Set(ops.section_deletes);
+      nextSections = nextSections.filter((s) => !delSet.has(s.id));
+    }
+    if (Array.isArray(ops.section_updates)) {
+      const upMap = new Map(ops.section_updates.filter((s) => s && s.id).map((s) => [s.id, s]));
+      nextSections = nextSections.map((s) => {
+        const u = upMap.get(s.id);
+        return u ? normalizeReportSection(Object.assign({}, s, u)) : s;
+      });
+    }
+    if (Array.isArray(ops.section_adds)) {
+      ops.section_adds.forEach((s) => {
+        const norm = normalizeReportSection(s);
+        if (norm) nextSections.push(norm);
+      });
+    }
+    nextSections = nextSections.slice(0, 50);
+  }
+  if (nextSections != null) {
+    sets.push(`sections = $${p++}::jsonb`);
+    params.push(JSON.stringify(nextSections));
+  }
+
+  if (!sets.length) {
+    return {
+      entity_type: 'report',
+      entity_id: reportId,
+      op: 'update',
+      summary: `Report ${reportId}: no-op`,
+    };
+  }
+
+  sets.push('updated_at = NOW()');
+  params.push(reportId);
+  await dbClient.query(
+    `UPDATE job_reports SET ${sets.join(', ')} WHERE id = $${params.length}`,
+    params
+  );
+
+  const summaryBits = [];
+  if (ops.title) summaryBits.push('title');
+  if (ops.cover_page) summaryBits.push('cover');
+  if (nextSections != null) summaryBits.push(`${nextSections.length} section(s)`);
+
+  return {
+    entity_type: 'report',
+    entity_id: reportId,
+    op: 'update',
+    summary: `Report ${reportId} updated (${summaryBits.join(', ') || 'no-op'})`,
+  };
+}
+
 const DISPATCHERS = {
   client: dispatchClient,
   estimate: dispatchEstimate,
@@ -1760,6 +2077,7 @@ const DISPATCHERS = {
   lead: dispatchLead,
   schedule: dispatchSchedule,
   system: dispatchSystem,
+  report: dispatchReport,
 };
 
 async function dispatchTarget(dbClient, target, refTable, ctx) {

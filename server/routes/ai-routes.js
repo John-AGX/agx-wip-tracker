@@ -6350,17 +6350,32 @@ const PAYLOAD_TOOLS = [
     description:
       'Emit a .p86.json payload file with fully-resolved targets and ops. ' +
       'This is your ONE write primitive — use it for every field update, ' +
-      'line item change, phase update, lead create, etc. The user reviews ' +
-      'the resulting file artifact in chat and drags it into the universal ' +
-      'dropbox to apply. Plan in conversation first; emit ONE file per turn. ' +
-      'Resolve target entity_ids via reads before emitting. ' +
+      'line item change, phase update, lead create, report create, etc. ' +
+      'The user reviews the resulting file artifact in chat and drags it ' +
+      'into the universal dropbox to apply. Plan in conversation first; ' +
+      'emit ONE file per turn. Resolve target entity_ids via reads before ' +
+      'emitting. ' +
       'Per-entity_type op vocabulary: ' +
       'client: {op,fields,notes}. ' +
       'estimate: {op,scope,field_updates,sections,groups,line_adds,line_edits,line_deletes}. ' +
-      'job: {field_updates,phase_updates,node_values,wire_updates,qb_assignments,change_orders,purchase_orders,invoices,notes,graph}. ' +
+      'job: {field_updates,phase_updates,node_values,wire_updates,qb_assignments,change_orders,purchase_orders,invoices,notes,graph} ' +
+      '— note change_orders/purchase_orders/invoices are array ops with ' +
+      '{op:create|update|delete, *_id?, fields:{...}}; use op:create to ' +
+      'open a brand-new change order on a job (fields: description, income, ' +
+      'estimated_costs, building_id?, co_number?, notes?). ' +
       'lead: {op,fields,notes}. ' +
-      'schedule: {blocks}. ' +
-      'system: {skill_pack_ops,watch_ops,field_tool_ops,staff_agent_ops}. ' +
+      'schedule: {blocks} — array of {op:create|update|delete, entry_id?, ' +
+      'jobId, startDate, days, crew, includesWeekends, status, notes} for ' +
+      'all schedule entry writes (no separate create tool needed). ' +
+      'report: {op,template_type,parent_id,title,cover_page,sections, ' +
+      'section_adds,section_updates,section_deletes} — op:create needs ' +
+      'template_type (one of walkthrough|daily-log|weekly-progress| ' +
+      'engineers-report|submittal-package|punch-list|pre-con-survey| ' +
+      'change-order) and parent_id (a project id); op:update can take ' +
+      'sections (full replace) OR granular section_adds/updates/deletes. ' +
+      'Section layout is one of photo-grid|single-photo|before-after| ' +
+      'text-block|attachment-list. ' +
+      'system: {skill_pack_ops,watch_ops,field_tool_ops,link_ops,staff_agent_ops}. ' +
       'Cross-entity refs ($new_id syntax) resolve at apply time. ' +
       'Do NOT pre-narrate the file.',
     tier: 'auto',
@@ -6382,7 +6397,7 @@ const PAYLOAD_TOOLS = [
             properties: {
               entity_type: {
                 type: 'string',
-                enum: ['estimate', 'job', 'lead', 'client', 'schedule', 'system'],
+                enum: ['estimate', 'job', 'lead', 'client', 'schedule', 'system', 'report'],
               },
               entity_id: {
                 type: 'string',
