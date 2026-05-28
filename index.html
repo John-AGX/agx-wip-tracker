@@ -2495,7 +2495,12 @@
     <script src="js/app.js?v=66"></script>
     <script src="js/messaging.js?v=1b"></script>
     <script src="js/my-files.js?v=11"></script>
-    <script src="js/projects-map.js?v=3"></script>
+    <!-- Google Maps JS API loader + tag-icon registry for photo pins.
+         Both load before projects-map.js so the map renderer can
+         reference window.p86Maps + window.p86TagIcons. -->
+    <script src="js/maps-loader.js?v=1"></script>
+    <script src="js/tag-icons.js?v=1"></script>
+    <script src="js/projects-map.js?v=4"></script>
     <script src="js/projects-pairs.js?v=1"></script>
     <!-- Report template registry (Wave B). Eight construction report
          templates (walkthrough, daily-log, weekly-progress, etc.)

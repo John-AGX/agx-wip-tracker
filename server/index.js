@@ -124,6 +124,9 @@ app.use('/api/org-tags', orgTagsRoutes);
 // entity counts, the feature catalog, and recent activity in a
 // single round-trip. See server/routes/org-manifest-routes.js.
 app.use('/api/org', require('./routes/org-manifest-routes'));
+// Public client config — Google Maps API key etc. Auth-gated so
+// unauth'd scrapers can't grab it. See server/routes/config-routes.js.
+app.use('/api/config', require('./routes/config-routes'));
 app.use('/api/settings', settingsRoutes);
 app.use('/api/attachments', attachmentRoutes);
 // Sessions sidebar routes mount BEFORE the catch-all aiRoutes so they
