@@ -13,6 +13,7 @@
 const express = require('express');
 const multer = require('multer');
 const sharp = require('sharp');
+const exifr = require('exifr');
 const { pool } = require('../db');
 const { requireAuth, requireCapability, isAdminish } = require('../auth');
 const { storage } = require('../storage');
@@ -34,6 +35,111 @@ function recordProjectActivity(projectId, actorId, kind, detail) {
     // mutation on a logging hiccup.
     console.warn('[attachments] project activity log failed (' + kind + '):', e.message);
   }
+}
+
+// ── Photo geolocation helpers ──────────────────────────────────────
+//
+// extractExifGps(buf, mime) — reads EXIF GPS + DateTimeOriginal from
+// raw image bytes. Returns { lat, lng, taken_at } or null if any
+// piece is missing. Uses exifr — more robust than sharp's metadata
+// for the GPS subtag tree, and handles the various wonky vendor
+// extensions iPhones + Androids emit. Failures degrade silently —
+// the photo still saves; it just has no geo data.
+//
+// pickGeoSource(client, exif) — reconciliation when both upload paths
+// produced coords. Rules:
+//   - Client-posted coords win when accuracy ≤ 50m (real-time fix
+//     from the device is usually fresher than what the JPEG embedded)
+//   - Otherwise pick whichever has the smaller accuracy
+//   - If only one source has coords, use that one
+//   - Returns { lat, lng, geo_accuracy, geo_source } or null
+//
+// Both helpers normalize lat to [-90, 90] and lng to [-180, 180].
+// Out-of-range or NaN inputs produce null.
+async function extractExifGps(buf, mime) {
+  if (!buf || !mime || !/^image\//i.test(mime)) return null;
+  try {
+    // Whitelist exactly the EXIF tags we care about so exifr doesn't
+    // walk the whole IFD tree (faster + smaller memory).
+    const data = await exifr.parse(buf, {
+      pick: ['GPSLatitude', 'GPSLongitude', 'GPSLatitudeRef', 'GPSLongitudeRef',
+             'GPSHPositioningError', 'DateTimeOriginal', 'CreateDate']
+    });
+    if (!data) return null;
+    // exifr.parse returns lat/lng already in decimal degrees when the
+    // GPS subtags are present + reference is parseable. Some camera
+    // apps drop the GPS sub-IFD entirely; data.GPSLatitude will be
+    // undefined and we bail.
+    let lat = (typeof data.latitude === 'number') ? data.latitude
+            : (typeof data.GPSLatitude === 'number') ? data.GPSLatitude : null;
+    let lng = (typeof data.longitude === 'number') ? data.longitude
+            : (typeof data.GPSLongitude === 'number') ? data.GPSLongitude : null;
+    // The cleaner shortcut — exifr exposes `latitude`/`longitude` as
+    // decimal-degree convenience props on top of the raw GPSLatitude
+    // arrays. Use it when present.
+    if (lat == null || lng == null) {
+      const gps = await exifr.gps(buf).catch(() => null);
+      if (gps && Number.isFinite(gps.latitude) && Number.isFinite(gps.longitude)) {
+        lat = gps.latitude;
+        lng = gps.longitude;
+      }
+    }
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;
+    const accuracy = Number.isFinite(data.GPSHPositioningError) ? Number(data.GPSHPositioningError) : null;
+    let takenAt = null;
+    const d = data.DateTimeOriginal || data.CreateDate;
+    if (d) {
+      const t = (d instanceof Date) ? d : new Date(d);
+      if (!isNaN(t.getTime())) takenAt = t;
+    }
+    return { lat, lng, geo_accuracy: accuracy, taken_at: takenAt };
+  } catch (e) {
+    // EXIF parse failures are normal — many images don't have GPS, or
+    // exifr's parser doesn't understand a vendor tag. Don't log every
+    // one; only log when something unexpected (not "no GPS found")
+    // bubbles up.
+    if (e && e.message && !/gps/i.test(e.message)) {
+      console.warn('[attachments] EXIF parse failed:', e.message);
+    }
+    return null;
+  }
+}
+
+function pickGeoSource(client, exif) {
+  const hasClient = client && Number.isFinite(client.lat) && Number.isFinite(client.lng);
+  const hasExif = exif && Number.isFinite(exif.lat) && Number.isFinite(exif.lng);
+  if (!hasClient && !hasExif) return null;
+  if (hasClient && !hasExif) {
+    return { lat: client.lat, lng: client.lng, geo_accuracy: client.geo_accuracy, geo_source: 'device' };
+  }
+  if (!hasClient && hasExif) {
+    return { lat: exif.lat, lng: exif.lng, geo_accuracy: exif.geo_accuracy, geo_source: 'exif' };
+  }
+  // Both present — client wins if its accuracy is good (≤50m), else
+  // whichever has the smaller accuracy.
+  if (Number.isFinite(client.geo_accuracy) && client.geo_accuracy <= 50) {
+    return { lat: client.lat, lng: client.lng, geo_accuracy: client.geo_accuracy, geo_source: 'device' };
+  }
+  const cA = Number.isFinite(client.geo_accuracy) ? client.geo_accuracy : Infinity;
+  const eA = Number.isFinite(exif.geo_accuracy) ? exif.geo_accuracy : Infinity;
+  if (eA < cA) {
+    return { lat: exif.lat, lng: exif.lng, geo_accuracy: exif.geo_accuracy, geo_source: 'exif' };
+  }
+  return { lat: client.lat, lng: client.lng, geo_accuracy: client.geo_accuracy, geo_source: 'device' };
+}
+
+// Parse the upload body's client-posted geo fields. The mobile
+// upload form sends these as form-data strings; the JSON copy/move
+// path sends them as numbers. Either way, normalize to numbers.
+function readClientGeoFromBody(body) {
+  if (!body) return null;
+  const lat = Number(body.lat);
+  const lng = Number(body.lng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;
+  const acc = Number(body.geo_accuracy);
+  return { lat, lng, geo_accuracy: Number.isFinite(acc) ? acc : null };
 }
 
 // Sanitize a folder name / path. Allows `/` as a subfolder separator
@@ -882,6 +988,22 @@ router.post('/:entityType/:entityId',
         console.warn('[attachment-routes] extraction dispatcher threw:', e.message);
       }
 
+      // Photo geolocation — reconcile EXIF GPS (server-extracted from
+      // the original bytes BEFORE the EXIF-stripping resize pipeline
+      // runs) with any device coords the client posted in the upload
+      // body. See extractExifGps + pickGeoSource at the top of the
+      // file for the reconciliation rules.
+      const exifGeo = await extractExifGps(buf, mime);
+      const clientGeo = readClientGeoFromBody(req.body);
+      const geo = pickGeoSource(clientGeo, exifGeo);
+      const lat = geo ? geo.lat : null;
+      const lng = geo ? geo.lng : null;
+      const geoAccuracy = geo ? geo.geo_accuracy : null;
+      const geoSource = geo ? geo.geo_source : null;
+      // taken_at: prefer EXIF DateTimeOriginal if present, else null
+      // (will fall back to uploaded_at in the GET response shape).
+      const takenAt = (exifGeo && exifGeo.taken_at) ? exifGeo.taken_at : null;
+
       // Position = current count so new uploads append to the end of the list.
       const position = countRes.rows[0].c;
 
@@ -938,8 +1060,9 @@ router.post('/:entityType/:entityId',
           thumb_key, web_key, original_key,
           position, uploaded_by, extracted_text, extracted_text_at,
           markup_of, include_in_proposal, folder,
-          caption, tags, annotations)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23::jsonb,$24::jsonb)
+          caption, tags, annotations,
+          lat, lng, geo_accuracy, geo_source, taken_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23::jsonb,$24::jsonb,$25,$26,$27,$28,$29)
          RETURNING *`,
         [
           id, entityType, entityId,
@@ -951,7 +1074,8 @@ router.post('/:entityType/:entityId',
           markupOf, includeInProposal, folder,
           initialCaption,
           JSON.stringify(initialTags),
-          JSON.stringify(initialAnnotations)
+          JSON.stringify(initialAnnotations),
+          lat, lng, geoAccuracy, geoSource, takenAt
         ]
       );
       res.json({ ok: true, attachment: ins.rows[0] });

@@ -195,8 +195,33 @@
     list: function(entityType, entityId) {
       return get('/api/attachments/' + encodeURIComponent(entityType) + '/' + encodeURIComponent(entityId));
     },
+    // Upload a single file. Auto-attaches the user's geolocation when
+    // uploading an image and p86Geo is loaded (silent — no prompt if
+    // permission was denied or never granted). Callers can override
+    // by passing lat/lng directly in `extra`, or pass `extra.geo:false`
+    // to skip auto-capture entirely (e.g. for bulk PDF uploads).
     upload: function(entityType, entityId, file, extra) {
-      return uploadFile('/api/attachments/' + encodeURIComponent(entityType) + '/' + encodeURIComponent(entityId), file, extra);
+      var path = '/api/attachments/' + encodeURIComponent(entityType) + '/' + encodeURIComponent(entityId);
+      extra = extra || {};
+      var skipGeo = extra.geo === false;
+      var alreadyHasGeo = (extra.lat != null && extra.lng != null);
+      var looksLikeImage = file && file.type && /^image\//i.test(file.type);
+      if (skipGeo || alreadyHasGeo || !looksLikeImage || !window.p86Geo) {
+        delete extra.geo;
+        return uploadFile(path, file, extra);
+      }
+      // Best-effort geo capture. If it returns null (denied/timeout/
+      // unsupported), we proceed without — the server-side EXIF
+      // extractor still has a shot.
+      return window.p86Geo.get(60000).then(function(g) {
+        if (g) {
+          extra.lat = g.lat;
+          extra.lng = g.lng;
+          if (g.accuracy != null) extra.geo_accuracy = g.accuracy;
+        }
+        delete extra.geo;
+        return uploadFile(path, file, extra);
+      });
     },
     update: function(id, payload) { return put('/api/attachments/' + encodeURIComponent(id), payload); },
     remove: function(id) { return del('/api/attachments/' + encodeURIComponent(id)); },

@@ -552,6 +552,34 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_attachments_annotations
       ON attachments USING gin (annotations);
 
+    -- ── Photo geolocation ─────────────────────────────────────────
+    -- Per-photo GPS coords for the field map view. Populated at upload
+    -- time from two sources, server-side reconciled:
+    --   - 'device': browser navigator.geolocation, posted by the client
+    --              in the upload body (always real-time = "where am I now")
+    --   - 'exif':   GPSLatitude/GPSLongitude embedded in the JPEG by
+    --              the camera. Survives Camera-Roll uploads only when
+    --              the platform doesn't strip EXIF on share.
+    --   - 'manual': user dropped the pin on the map (edit flow)
+    --
+    -- Priority when both sources exist: 'device' if its accuracy
+    -- (geo_accuracy in meters) <= 50m, else whichever has the smaller
+    -- accuracy value. NULL if neither source provided coords.
+    --
+    -- taken_at: from EXIF DateTimeOriginal when present, so the map
+    -- timeline can show "shots taken on day X" even if the upload
+    -- happened later. Falls back to uploaded_at when null.
+    --
+    -- (lat, lng) index supports "give me every photo within bbox" for
+    -- the entity map view's pin layer.
+    ALTER TABLE attachments ADD COLUMN IF NOT EXISTS lat REAL;
+    ALTER TABLE attachments ADD COLUMN IF NOT EXISTS lng REAL;
+    ALTER TABLE attachments ADD COLUMN IF NOT EXISTS geo_accuracy REAL;
+    ALTER TABLE attachments ADD COLUMN IF NOT EXISTS geo_source TEXT;
+    ALTER TABLE attachments ADD COLUMN IF NOT EXISTS taken_at TIMESTAMPTZ;
+    CREATE INDEX IF NOT EXISTS idx_attachments_geo
+      ON attachments (lat, lng) WHERE lat IS NOT NULL AND lng IS NOT NULL;
+
     -- Org-level tag catalog (Phase 1.7). Curated master list of tag
     -- names per organization so users don't retype "roof" / "gutter"
     -- / "fascia" on every project. The catalog is a hint registry —

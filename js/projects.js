@@ -337,6 +337,7 @@
         '<div class="p86-projects-toolbar">' +
           '<div class="p86-projects-view-toggle">' +
             '<button class="' + (_listState.view === 'grid' ? 'active' : '') + '" onclick="window.p86Projects.setView(\'grid\')">&#x25A6; Grid</button>' +
+            '<button class="' + (_listState.view === 'list' ? 'active' : '') + '" onclick="window.p86Projects.setView(\'list\')">&#x2261; List</button>' +
             '<button class="' + (_listState.view === 'map' ? 'active' : '') + '" onclick="window.p86Projects.setView(\'map\')">&#x1F5FA; Map</button>' +
           '</div>' +
           '<div class="p86-projects-filter-chips">' +
@@ -368,7 +369,9 @@
                       }).join(' · ') +
                     '</div>';
                   })()
-                : renderProjectGrid(projects)) +
+                : _listState.view === 'list'
+                  ? renderProjectList(projects)
+                  : renderProjectGrid(projects)) +
       '</div>';
 
     host.innerHTML = html;
@@ -426,6 +429,40 @@
   function renderProjectGrid(projects) {
     return '<div class="p86-projects-grid">' +
       projects.map(projectCardHTML).join('') +
+    '</div>';
+  }
+
+  // List view — same row style as the Map view's sidebar, lifted out
+  // so users can browse by row without needing the map. Click any row
+  // to open the project. The visual language matches CompanyCam's
+  // project list: thumb + status dot + name + address + photo count.
+  function renderProjectList(projects) {
+    return '<div class="p86-projects-list">' +
+      projects.map(projectListRowHTML).join('') +
+    '</div>';
+  }
+
+  function projectListRowHTML(p) {
+    var coverUrl = p.cover_thumb_url || p.cover_web_url || '';
+    var thumb = coverUrl
+      ? '<img src="' + escapeAttr(coverUrl) + '" alt="" class="p86-projects-list-thumb" />'
+      : '<div class="p86-projects-list-thumb p86-projects-list-thumb-empty">📁</div>';
+    // Status dot mirrors the Map view's coloring rules so users can
+    // scan-by-color across views (green: active <7d, yellow: stale,
+    // black: archived).
+    var dot = '🟢';
+    if (p.archived_at) dot = '⚫';
+    else {
+      var updated = p.updated_at ? new Date(p.updated_at).getTime() : 0;
+      if (((Date.now() - updated) / 86400000) > 7) dot = '🟡';
+    }
+    return '<div class="p86-projects-list-row" onclick="window.openProject(\'' + escapeAttr(p.id) + '\')" title="Open project">' +
+      thumb +
+      '<div class="p86-projects-list-body">' +
+        '<div class="p86-projects-list-name">' + dot + ' ' + escapeHTML(p.name || 'Untitled') + '</div>' +
+        (p.address_text ? '<div class="p86-projects-list-addr">' + escapeHTML(p.address_text) + '</div>' : '') +
+        '<div class="p86-projects-list-meta">📷 ' + Number(p.photo_count || 0) + ' · ' + escapeHTML(fmtRelative(p.updated_at)) + '</div>' +
+      '</div>' +
     '</div>';
   }
 
@@ -490,7 +527,8 @@
     }
   }
   function setView(view) {
-    _listState.view = view === 'map' ? 'map' : 'grid';
+    var allowed = ['grid', 'list', 'map'];
+    _listState.view = (allowed.indexOf(view) >= 0) ? view : 'grid';
     try { sessionStorage.setItem('p86-projects-view', _listState.view); } catch (e) {}
     paintList();
   }
