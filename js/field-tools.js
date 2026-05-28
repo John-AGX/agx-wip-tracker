@@ -111,6 +111,88 @@
     });
   }
 
+  // ─── Auto-instrument script ────────────────────────────────────
+  // Injected into every field tool's iframe srcdoc before render.
+  // Sniffs <input>/<select>/<textarea> values + any element tagged
+  // with [data-ft-output] (or class/id matching result|output|total|
+  // sum|cost|sqft|hours heuristic) and posts a snapshot to the
+  // parent on every input/change event + after any button click.
+  //
+  // This makes printouts work zero-config for tools that don't
+  // explicitly call postMessage. Tools that DO call postMessage
+  // override the auto-snapshot (same message type, parent keeps the
+  // most-recent payload). Marked with `_auto: true` so the Save
+  // Printout dialog can drop the "no data captured" warning.
+  var FT_AUTO_INSTRUMENT_SRC =
+'(function(){' +
+  'if(window.__p86FtAuto)return;window.__p86FtAuto=true;' +
+  'function labelFor(el){' +
+    'if(el.id){var lab=document.querySelector(\'label[for="\'+el.id+\'"]\');if(lab&&lab.textContent.trim())return lab.textContent.trim().replace(/[:*]\\s*$/,"");}' +
+    'var p=el.closest&&el.closest("label");' +
+    'if(p){var c=p.cloneNode(true);Array.prototype.forEach.call(c.querySelectorAll("input,select,textarea,button"),function(n){n.remove();});var t=c.textContent.trim().replace(/[:*]\\s*$/,"");if(t)return t;}' +
+    'return el.name||el.id||el.placeholder||"field";' +
+  '}' +
+  'function readVal(el){' +
+    'if(el.type==="checkbox")return el.checked;' +
+    'if(el.type==="radio")return el.checked?el.value:null;' +
+    'return el.value;' +
+  '}' +
+  'function snapshot(){' +
+    'var inputs={},outputs={},seen={};' +
+    'Array.prototype.forEach.call(document.querySelectorAll("input,select,textarea"),function(el){' +
+      'if(el.type==="submit"||el.type==="button"||el.type==="reset"||el.type==="hidden")return;' +
+      'if(el.type==="radio"&&!el.checked)return;' +
+      'var k=labelFor(el),b=k,n=2;while(seen[k]){k=b+" ("+(n++)+")";}seen[k]=true;' +
+      'var v=readVal(el);if(v==null||v==="")return;' +
+      'inputs[k]=v;' +
+    '});' +
+    'Array.prototype.forEach.call(document.querySelectorAll("[data-ft-output]"),function(el){' +
+      'var k=el.getAttribute("data-ft-output")||el.id||"output";' +
+      'var v=(el.value!==undefined&&el.value!=="")?el.value:(el.textContent||"").trim();' +
+      'if(v)outputs[k]=v;' +
+    '});' +
+    'if(Object.keys(outputs).length===0){' +
+      'var rx=/result|output|total|sum|cost|gallons|hours|sqft|amount|estimate|labor|price/i;' +
+      'Array.prototype.forEach.call(document.querySelectorAll("[id],[class]"),function(el){' +
+        'var sig=(el.id||"")+" "+(el.className||"");if(!rx.test(sig))return;' +
+        'var tag=el.tagName.toLowerCase();' +
+        'if(["input","button","form","label","select","textarea","script","style","html","body"].indexOf(tag)!==-1)return;' +
+        'if(el.children.length>3)return;' +
+        'var v=(el.textContent||"").trim();' +
+        'if(v&&v.length<200){var key=el.id||(el.className||"output").split(/\\s+/)[0];outputs[key]=v;}' +
+      '});' +
+    '}' +
+    'return{inputs:inputs,outputs:outputs};' +
+  '}' +
+  'var lastSent=null;' +
+  'function post(){' +
+    'try{' +
+      'var s=snapshot();var j=JSON.stringify(s);if(j===lastSent)return;lastSent=j;' +
+      'window.parent.postMessage({type:"p86-field-tool-result",inputs:s.inputs,outputs:s.outputs,_auto:true},"*");' +
+    '}catch(e){}' +
+  '}' +
+  'var t=null;function debounced(){if(t)clearTimeout(t);t=setTimeout(post,250);}' +
+  'document.addEventListener("input",debounced,true);' +
+  'document.addEventListener("change",debounced,true);' +
+  'document.addEventListener("click",function(e){' +
+    'if(e.target&&e.target.closest&&e.target.closest(\'button,[role="button"],input[type="button"],input[type="submit"]\')){setTimeout(post,120);}' +
+  '},true);' +
+  'if(document.readyState==="loading"){document.addEventListener("DOMContentLoaded",function(){setTimeout(post,80);});}' +
+  'else{setTimeout(post,80);}' +
+'})();';
+
+  // Inject the auto-instrumenter into a tool's HTML body so even
+  // tools that don't call postMessage explicitly can be captured.
+  // Strategy: append a <script> tag right before </body> (case-
+  // insensitive), or at the end of the document if no body tag.
+  function instrumentHtml(html) {
+    var script = '\n<script>/*p86-field-tool-auto*/' + FT_AUTO_INSTRUMENT_SRC + '</script>\n';
+    if (/<\/body>/i.test(html)) {
+      return html.replace(/<\/body>/i, script + '</body>');
+    }
+    return html + script;
+  }
+
   // Render the selected tool in a full-screen iframe modal. Sandbox
   // attribute restricts the tool's JS — no top-frame access, no form
   // submit to parent origin, no popups. allow-scripts is the one
@@ -130,12 +212,16 @@
   //   clicks "Save Printout" in the modal chrome, we POST that cached
   //   payload to /api/field-tools/runs along with the field_tool_id +
   //   any notes the user typed in the save dialog. Tools that don't
-  //   opt in get a Save Printout button that warns "no data captured
-  //   — the tool needs to post via window.parent.postMessage".
+  //   opt in get auto-instrumented (see FT_AUTO_INSTRUMENT_SRC above)
+  //   so most printouts work zero-config.
   //
   //   Tools should re-post on every meaningful state change (input
   //   blur, calculate-button click) — we only keep the most recent
   //   message, so stale posts are harmless.
+  //
+  //   Tools opting in can also mark their result elements with
+  //   [data-ft-output="label"] to give the auto-instrumenter clean
+  //   keys without needing a full postMessage block.
   window.openFieldTool = function(id) {
     if (!id) return;
     window.p86Api.get('/api/field-tools/' + encodeURIComponent(id)).then(function(resp) {
@@ -162,14 +248,21 @@
       var iframe = modal.querySelector('iframe');
       // Inject the HTML via srcdoc — sandboxed iframe has no same-
       // origin context. srcdoc keeps it offline-safe (no network).
-      iframe.srcdoc = t.html_body || '';
+      // We also inject the auto-instrumenter so tools that haven't
+      // wired postMessage still produce printout data automatically.
+      iframe.srcdoc = instrumentHtml(t.html_body || '');
 
       // Cache the latest payload posted from inside the iframe so
       // Save Printout can snapshot it on click. We accept ANY
       // postMessage that comes through (sandboxed iframes can only
       // talk to their direct parent), filter by the agreed type, and
       // ignore everything else.
-      var latestPayload = null;
+      //
+      // explicitPayload wins over autoPayload — if the tool both
+      // posts explicitly AND gets auto-instrumented, the explicit
+      // post is the source of truth.
+      var explicitPayload = null;
+      var autoPayload = null;
       function onMessage(ev) {
         // Verify the source is OUR iframe before trusting the payload.
         // Other postMessage chatter (extensions, embedded iframes
@@ -177,13 +270,16 @@
         if (ev.source !== iframe.contentWindow) return;
         var d = ev.data || {};
         if (d && d.type === 'p86-field-tool-result') {
-          latestPayload = {
+          var p = {
             inputs: (d.inputs && typeof d.inputs === 'object') ? d.inputs : {},
             outputs: (d.outputs && typeof d.outputs === 'object') ? d.outputs : {}
           };
+          if (d._auto) autoPayload = p;
+          else explicitPayload = p;
         }
       }
       window.addEventListener('message', onMessage);
+      function latestPayload() { return explicitPayload || autoPayload; }
 
       function closeModal() {
         window.removeEventListener('message', onMessage);
@@ -192,7 +288,7 @@
       modal.querySelector('.ft-close').addEventListener('click', closeModal);
 
       modal.querySelector('.ft-save-printout').addEventListener('click', function() {
-        openSavePrintoutDialog(t, latestPayload, function() {
+        openSavePrintoutDialog(t, latestPayload(), function() {
           // Successful save — leave the modal open so the user can
           // keep iterating; the receipt is reachable from My Files →
           // Printouts.
