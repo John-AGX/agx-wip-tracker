@@ -6528,6 +6528,25 @@
   color: var(--accent, #22d3ee);
   background: rgba(34, 211, 238, 0.14);
 }
+/* Expand/collapse caret for folders that have subfolders. Sits at
+   the left of the row, before the glyph. Empty caret reserves the
+   space so leaf and parent rows line up under each other. */
+.mf-rail-caret {
+  flex: 0 0 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 16px;
+  font-size: 10px;
+  color: var(--text-dim, #6a7090);
+  background: transparent;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  border-radius: 3px;
+}
+.mf-rail-caret:hover { color: var(--text, #fff); background: rgba(255, 255, 255, 0.06); }
+.mf-rail-caret-empty { cursor: default; visibility: hidden; }
 
 /* ── My Files grid ──────────────────────────────────────────────────
    CompanyCam-style tiles built on .p86-proj-photo-tile. The footer
@@ -7801,27 +7820,261 @@ body.light-mode .p86-pv-tag-modal-chip {
 }
 
 /* ──────────────────────────────────────────────────────────────────
-   Field Tool Printouts — receipt view + print-friendly styling
+   Field Tool Printouts — list rows + paper-receipt viewer
    ──────────────────────────────────────────────────────────────────
-   When the receipt modal is open we tag <body class="ft-printing">.
-   On print we hide everything OUTSIDE the .mf-printout-viewer modal
-   and strip the modal's own dark chrome so the printer sees a clean
-   white receipt. The hover row also gets a subtle bg on hover for
-   the list view. */
+   List rows: subtle hover on the dark surface.
+   Receipt modal: a white paper-feel card centered on a dim backdrop;
+   serif title, monospace numbers, dashed dividers, leader-dot K/V
+   rows. On print, we suppress everything outside the modal and
+   strip the dark chrome so the printer sees a clean receipt only. */
+
 .mf-printout-row:hover {
   background: #1a1a1a !important;
   border-color: #333 !important;
 }
 
+/* ── Viewer overlay ─────────────────────────────────────────────── */
+.mf-printout-viewer {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.78);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  z-index: 10000;
+  overflow: auto;
+  padding: 24px 16px;
+}
+
+.ft-receipt {
+  width: 540px;
+  max-width: 95vw;
+  display: flex;
+  flex-direction: column;
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.55);
+  background: #fdfcf8;          /* warm off-white — looks like card stock */
+  color: #1a1a1a;
+}
+
+/* Dark chrome bar above the paper — hidden on print */
+.ft-receipt-chrome {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 14px;
+  background: #0a0a0a;
+  color: #fff;
+}
+.ft-receipt-chrome-title {
+  font-size: 12px;
+  font-family: 'SF Mono', ui-monospace, 'Menlo', monospace;
+  letter-spacing: 0.5px;
+  color: #d4d0c0;
+}
+.ft-receipt-chrome-actions { display: flex; gap: 6px; }
+.ft-receipt-btn {
+  background: transparent;
+  color: #e8e0d0;
+  border: 1px solid #333;
+  padding: 6px 12px;
+  font-size: 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: 500;
+}
+.ft-receipt-btn:hover { background: #1a1a1a; border-color: #555; }
+.ft-receipt-btn.primary {
+  background: #fff;
+  color: #0a0a0a;
+  border-color: #fff;
+  font-weight: 600;
+}
+.ft-receipt-btn.primary:hover { background: #e8e0d0; }
+
+/* The paper itself */
+.ft-receipt-paper {
+  padding: 28px 32px 22px;
+  font-family: 'Inter', -apple-system, 'Segoe UI', sans-serif;
+  position: relative;
+}
+
+/* Brand strip — top of the receipt */
+.ft-receipt-brand {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  border-bottom: 1px solid #cdc6b3;
+  padding-bottom: 8px;
+  margin-bottom: 18px;
+}
+.ft-receipt-org {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: #1a1a1a;
+  text-transform: uppercase;
+}
+.ft-receipt-eyebrow {
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  color: #8c8470;
+  font-weight: 600;
+}
+
+/* Title block */
+.ft-receipt-title-block {
+  text-align: center;
+  margin-bottom: 18px;
+}
+.ft-receipt-title {
+  font-family: 'Georgia', 'Cambria', serif;
+  font-size: 22px;
+  font-weight: 700;
+  color: #111;
+  line-height: 1.25;
+  letter-spacing: -0.2px;
+}
+.ft-receipt-subtitle {
+  font-size: 12px;
+  color: #6b6450;
+  margin-top: 4px;
+  font-style: italic;
+}
+
+/* Meta row — Ref / Date / By / Type, two columns on wide screens */
+.ft-receipt-meta {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 18px;
+  margin: 0 0 16px;
+  padding: 0;
+}
+.ft-receipt-meta > div {
+  display: flex;
+  gap: 8px;
+  font-size: 11.5px;
+  align-items: baseline;
+}
+.ft-receipt-meta dt {
+  margin: 0;
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: #8c8470;
+  font-weight: 600;
+  min-width: 32px;
+}
+.ft-receipt-meta dd {
+  margin: 0;
+  color: #1a1a1a;
+  font-weight: 500;
+}
+
+/* Dashed divider — paper-receipt feel */
+.ft-receipt-divider {
+  border: 0;
+  border-top: 1px dashed #b5ad97;
+  margin: 14px 0;
+  height: 0;
+}
+
+/* Section heading inside the paper */
+.ft-receipt-section-head {
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  color: #8c8470;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+/* K/V rows with leader dots between key and value */
+.ft-receipt-kv-section { margin-bottom: 4px; }
+.ft-receipt-kv-list { display: flex; flex-direction: column; gap: 5px; }
+.ft-receipt-kv-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.ft-receipt-kv-key {
+  color: #4a4636;
+  flex-shrink: 0;
+  max-width: 55%;
+}
+.ft-receipt-kv-dots {
+  flex: 1;
+  border-bottom: 1px dotted #c9c1ac;
+  transform: translateY(-3px);
+  min-width: 12px;
+}
+.ft-receipt-kv-val {
+  color: #1a1a1a;
+  font-weight: 500;
+  text-align: right;
+  flex-shrink: 0;
+  max-width: 55%;
+  word-break: break-word;
+}
+.ft-receipt-kv-row.emph .ft-receipt-kv-val {
+  font-family: 'SF Mono', ui-monospace, 'Menlo', monospace;
+  font-weight: 700;
+  font-size: 13.5px;
+  color: #0a0a0a;
+}
+
+/* Notes block */
+.ft-receipt-notes-section { padding-top: 4px; }
+.ft-receipt-notes-body {
+  font-size: 12.5px;
+  color: #2a2620;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  font-style: italic;
+  padding-left: 12px;
+  border-left: 2px solid #cdc6b3;
+}
+
+/* Footer */
+.ft-receipt-foot {
+  text-align: center;
+  border-top: 1px dashed #b5ad97;
+  padding-top: 14px;
+  margin-top: 18px;
+}
+.ft-receipt-foot-thanks {
+  font-family: 'Georgia', 'Cambria', serif;
+  font-style: italic;
+  font-size: 14px;
+  color: #1a1a1a;
+}
+.ft-receipt-foot-sub {
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  color: #8c8470;
+  margin-top: 4px;
+}
+
+/* Mobile — drop padding, full width */
+@media (max-width: 480px) {
+  .mf-printout-viewer { padding: 12px 8px; }
+  .ft-receipt { width: 100%; }
+  .ft-receipt-paper { padding: 22px 18px 18px; }
+  .ft-receipt-title { font-size: 19px; }
+  .ft-receipt-meta { grid-template-columns: 1fr; gap: 4px; }
+  .ft-receipt-kv-key, .ft-receipt-kv-val { max-width: 48%; }
+}
+
+/* Print — hide everything OUTSIDE the receipt modal, strip dark
+   chrome, force max contrast. */
 @media print {
-  /* When the receipt viewer is up, suppress every other tree under
-     <body> and lift the receipt to the page. The viewer wrapper
-     (.mf-printout-viewer) is the only direct body child we keep
-     visible; inside it we strip the dark overlay so the receipt
-     prints clean. */
-  body.ft-printing > *:not(.mf-printout-viewer) {
-    display: none !important;
-  }
+  body.ft-printing > *:not(.mf-printout-viewer) { display: none !important; }
   body.ft-printing .mf-printout-viewer {
     position: static !important;
     background: #fff !important;
@@ -7834,21 +8087,20 @@ body.light-mode .p86-pv-tag-modal-chip {
     width: 100% !important;
     max-width: none !important;
     border-radius: 0 !important;
+    background: #fff !important;
   }
-  body.ft-printing .ft-receipt-chrome {
-    display: none !important;
-  }
-  body.ft-printing .ft-receipt-body {
-    padding: 16px 20px !important;
-  }
-  /* Force solid black text everywhere on the receipt for max
-     printer contrast — dark-mode overrides can leak through. */
+  body.ft-printing .ft-receipt-chrome { display: none !important; }
+  body.ft-printing .ft-receipt-paper { padding: 18px 24px !important; }
   body.ft-printing .ft-receipt,
   body.ft-printing .ft-receipt * {
-    color: #000 !important;
     background: transparent !important;
   }
-  body.ft-printing .ft-receipt table {
-    page-break-inside: avoid;
+  body.ft-printing .ft-receipt-divider {
+    border-top-color: #888 !important;
   }
+  body.ft-printing .ft-receipt-kv-dots {
+    border-bottom-color: #999 !important;
+  }
+  body.ft-printing .ft-receipt-kv-section { page-break-inside: avoid; }
+  body.ft-printing .ft-receipt-foot { page-break-inside: avoid; }
 }

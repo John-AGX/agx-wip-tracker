@@ -45,9 +45,12 @@
 
   // Per-tab UI state. Re-built on every paint so refresh is consistent;
   // selected folder survives across re-renders within the same session.
+  // expandedFolders: Set of folder paths whose subfolder children are
+  // visible. Defaults to expanded for the chain leading to activeFolder.
   var _state = {
     files: [],
     activeFolder: 'general',
+    expandedFolders: {},
     loading: false,
     error: null
   };
@@ -57,15 +60,46 @@
     return u ? u.id : null;
   }
 
-  // Sanitize a folder name to match the server's regex. Empty → 'general'.
+  // Sanitize a folder name / path. Allows `/` as a subfolder
+  // separator (max 3 levels deep). Each segment is trimmed of bad
+  // chars, spaces collapse to hyphens, and empty segments drop.
+  // Empty → 'general'.
+  //
+  // Examples:
+  //   "Jobs / Smith / Photos"   → "jobs/smith/photos"
+  //   "/general/temp/"          → "general/temp"
+  //   "foo//bar"                → "foo/bar"
   function sanitizeFolder(name) {
-    return String(name || '').trim().slice(0, 60).toLowerCase()
-      .replace(/[^a-z0-9 _\-]/g, '').replace(/\s+/g, '-') || 'general';
+    var raw = String(name || '').trim().slice(0, 180);
+    var segs = raw.split('/').map(function(s) {
+      return s.trim().slice(0, 60).toLowerCase()
+        .replace(/[^a-z0-9 _\-]/g, '').replace(/\s+/g, '-');
+    }).filter(Boolean).slice(0, 3);  // cap depth at 3
+    return segs.join('/') || 'general';
   }
 
+  // Pretty-display a single folder segment OR a full path. For a path,
+  // each segment gets title-cased; the caller decides whether to show
+  // the full path or only the leaf (depends on context — sidebar tree
+  // shows leaves, breadcrumbs show full path).
+  function prettyFolderSegment(seg) {
+    if (!seg || seg === 'general') return 'General';
+    return String(seg).replace(/-/g, ' ').replace(/\b\w/g, function(c) { return c.toUpperCase(); });
+  }
   function prettyFolder(f) {
-    if (!f || f === 'general') return 'General';
-    return String(f).replace(/-/g, ' ').replace(/\b\w/g, function(c) { return c.toUpperCase(); });
+    return String(f || '').split('/').map(prettyFolderSegment).join(' / ');
+  }
+  function folderLeaf(f) {
+    var parts = String(f || '').split('/');
+    return prettyFolderSegment(parts[parts.length - 1]);
+  }
+  function folderParent(f) {
+    var parts = String(f || '').split('/');
+    parts.pop();
+    return parts.join('/');
+  }
+  function folderDepth(f) {
+    return String(f || '').split('/').length - 1;
   }
 
   // Group files by folder; returns { folderName: [items] } sorted.
@@ -77,6 +111,78 @@
       bucket[f].push(a);
     });
     return bucket;
+  }
+
+  // Build a recursive list of buttons representing the folder tree.
+  // Children render only when their parent path is in
+  // _state.expandedFolders. Counts on parent rows roll up (sum of own
+  // files + all descendant files) so collapsing doesn't hide info.
+  function renderFolderTree(allFolders, bucket) {
+    // Build parent → [child] map keyed by full path.
+    var childrenOf = {};   // parentPath → [childPath]
+    var allPaths = {};
+    allFolders.forEach(function(f) {
+      allPaths[f] = true;
+      // Walk up ensuring every ancestor exists in the tree even if
+      // there are no files in it (intermediate folders).
+      var cur = f;
+      while (cur) {
+        var p = folderParent(cur);
+        if (!childrenOf[p]) childrenOf[p] = [];
+        if (childrenOf[p].indexOf(cur) === -1) childrenOf[p].push(cur);
+        allPaths[cur] = true;
+        cur = p;
+      }
+    });
+    // Sort each child array; 'general' pins first at root.
+    Object.keys(childrenOf).forEach(function(p) {
+      childrenOf[p].sort(function(a, b) {
+        if (p === '' && a === 'general') return -1;
+        if (p === '' && b === 'general') return 1;
+        return folderLeaf(a).localeCompare(folderLeaf(b));
+      });
+    });
+
+    // Sum descendant file counts including self for parent count display.
+    function totalCount(path) {
+      var n = (bucket[path] || []).length;
+      (childrenOf[path] || []).forEach(function(c) { n += totalCount(c); });
+      return n;
+    }
+
+    // Auto-expand the chain leading to the active folder so a deep
+    // selection isn't hidden.
+    if (_state.activeFolder && _state.activeFolder.indexOf('/') !== -1) {
+      var p = folderParent(_state.activeFolder);
+      while (p) {
+        _state.expandedFolders[p] = true;
+        p = folderParent(p);
+      }
+    }
+
+    function buildRow(path, depth) {
+      var kids = childrenOf[path] || [];
+      var active = path === _state.activeFolder;
+      var expanded = !!_state.expandedFolders[path];
+      var ownCount = (bucket[path] || []).length;
+      var n = totalCount(path);
+      var caret = kids.length
+        ? '<button type="button" class="mf-rail-caret" onclick="event.stopPropagation();window.myFiles.toggleFolder(\'' + escapeAttr(path) + '\')" aria-label="' + (expanded ? 'Collapse' : 'Expand') + '">' + (expanded ? '&#x25BE;' : '&#x25B8;') + '</button>'
+        : '<span class="mf-rail-caret mf-rail-caret-empty"></span>';
+      var html = '<button class="mf-rail-row' + (active ? ' active' : '') + '" style="padding-left:' + (8 + depth * 14) + 'px;" data-folder="' + escapeAttr(path) + '" onclick="window.myFiles.selectFolder(\'' + escapeAttr(path) + '\')">' +
+        caret +
+        '<span class="mf-rail-row-glyph">' + (kids.length ? (expanded ? '&#x1F4C2;' : '&#x1F4C1;') : '&#x1F4C1;') + '</span>' +
+        '<span class="mf-rail-row-label">' + escapeHTML(folderLeaf(path) || prettyFolder(path)) + '</span>' +
+        '<span class="mf-rail-row-count">' + n + (kids.length && n !== ownCount ? '' : '') + '</span>' +
+      '</button>';
+      if (expanded && kids.length) {
+        html += kids.map(function(c) { return buildRow(c, depth + 1); }).join('');
+      }
+      return html;
+    }
+
+    var roots = childrenOf[''] || [];
+    return roots.map(function(r) { return buildRow(r, 0); }).join('');
   }
 
   // ──────────────────────────────────────────────────────────────────
@@ -231,15 +337,12 @@
 
             '<div class="mf-rail-section-head">Folders</div>' +
             '<div class="mf-rail-list">' +
-              folders.filter(function(f) { return f !== PROJECTS_FOLDER && f !== TOOLS_FOLDER; }).map(function(f) {
-                var active = f === _state.activeFolder;
-                var n = (bucket[f] || []).length;
-                return '<button class="mf-rail-row' + (active ? ' active' : '') + '" data-folder="' + escapeAttr(f) + '" onclick="window.myFiles.selectFolder(\'' + escapeAttr(f) + '\')">' +
-                  '<span class="mf-rail-row-glyph">&#x1F4C1;</span>' +
-                  '<span class="mf-rail-row-label">' + escapeHTML(prettyFolder(f)) + '</span>' +
-                  '<span class="mf-rail-row-count">' + n + '</span>' +
-                '</button>';
-              }).join('') +
+              renderFolderTree(
+                folders.filter(function(f) {
+                  return f !== PROJECTS_FOLDER && f !== TOOLS_FOLDER && f !== PRINTOUTS_FOLDER;
+                }),
+                bucket
+              ) +
             '</div>' +
 
             '<div class="mf-rail-section-head">Views</div>' +
@@ -510,14 +613,42 @@
     paint(document.getElementById('my-files'));
   }
 
+  // Create a new folder. If the user is currently viewing a real
+  // folder (not virtual / not 'general'), the new folder is created as
+  // a CHILD of it. From 'general' or a virtual folder, the new folder
+  // is a top-level entry. The user can override by entering a path
+  // with `/` directly (e.g. "jobs/smith").
   function newFolder() {
-    var name = window.prompt('New folder name', '');
+    var cur = _state.activeFolder;
+    var isVirtual = cur === '__projects__' || cur === '__tools__' || cur === '__printouts__';
+    var asChildOf = (!isVirtual && cur && cur !== 'general') ? cur : '';
+    var promptLabel = asChildOf
+      ? 'New folder under "' + prettyFolder(asChildOf) + '"\n(or use a/b/c for deeper paths)'
+      : 'New folder name\n(use a/b for subfolders, e.g. "jobs/smith")';
+    var name = window.prompt(promptLabel, '');
     if (name == null) return;
-    var folder = sanitizeFolder(name);
+    var raw = String(name).trim();
+    if (!raw) return;
+    // If the user already wrote a slash, treat the input as an
+    // absolute path. Otherwise prefix with the current folder.
+    var pathInput = (raw.indexOf('/') !== -1 || !asChildOf) ? raw : (asChildOf + '/' + raw);
+    var folder = sanitizeFolder(pathInput);
     if (!folder || folder === 'general') return;
     _state.activeFolder = folder;
+    // Pre-expand the path so the new folder is visible immediately.
+    var p = folderParent(folder);
+    while (p) {
+      _state.expandedFolders[p] = true;
+      p = folderParent(p);
+    }
     // No row to insert until a file lands; just preselect so the next
     // upload goes into this folder.
+    paint(document.getElementById('my-files'));
+  }
+
+  function toggleFolder(path) {
+    if (_state.expandedFolders[path]) delete _state.expandedFolders[path];
+    else _state.expandedFolders[path] = true;
     paint(document.getElementById('my-files'));
   }
 
@@ -747,62 +878,93 @@
     host.innerHTML = html;
   }
 
-  // Receipt viewer — print-friendly. Header is the tool name + date +
-  // who ran it; body is two key/value tables (Inputs / Outputs); notes
-  // come last. The .ft-receipt-print class is what @media print
-  // styles target, so the chrome (close button, etc.) gets hidden on
-  // paper.
+  // Receipt viewer — print-friendly. Styled to look like a real
+  // construction-services receipt: serif-leaning headline, monospace
+  // numbers, dashed dividers like a paper receipt. All markup lives
+  // under CSS classes so styles.css owns the look; this function
+  // only assembles the data.
   function openPrintout(id) {
     if (!id) return;
     window.p86Api.get('/api/field-tools/runs/' + encodeURIComponent(id)).then(function(resp) {
       if (!resp || !resp.run) { alert('Printout not found.'); return; }
       var r = resp.run;
-      var modal = document.createElement('div');
-      modal.className = 'mf-printout-viewer';
-      modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);display:flex;align-items:flex-start;justify-content:center;z-index:10000;overflow:auto;padding:20px;';
       var inputs = r.inputs || {};
       var outputs = r.outputs || {};
-      var date = '';
-      try { date = new Date(r.created_at).toLocaleString(); } catch (e) {}
+
+      var d = null;
+      try { d = new Date(r.created_at); } catch (e) {}
+      var dateStr = d ? d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }) : '';
+      var timeStr = d ? d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : '';
+
+      // Org name — pull from the auth user; fall back gracefully.
+      var orgName = '';
+      try {
+        var u = window.p86Auth && window.p86Auth.getUser && window.p86Auth.getUser();
+        orgName = (u && (u.organization_name || u.org_name)) || '';
+      } catch (e) {}
+
+      // Short reference code derived from the run id — looks
+      // intentional ("FT-1234567") instead of a long random slug.
+      var refCode = 'FT-' + String(r.id || '').replace(/[^0-9]/g, '').slice(-7).padStart(7, '0');
+
+      var modal = document.createElement('div');
+      modal.className = 'mf-printout-viewer';
 
       modal.innerHTML =
-        '<div class="ft-receipt" style="background:#fff;color:#111;width:560px;max-width:95vw;border-radius:8px;padding:0;display:flex;flex-direction:column;box-shadow:0 12px 40px rgba(0,0,0,0.6);">' +
-          // Header chrome (hidden on print)
-          '<div class="ft-receipt-chrome" style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 14px;background:#0a0a0a;color:#fff;border-radius:8px 8px 0 0;">' +
-            '<div style="font-size:13px;">Printout · ' + escapeHTML(date) + '</div>' +
-            '<div style="display:flex;gap:6px;">' +
-              '<button type="button" class="ee-btn primary" onclick="window.print()">🖨 Print</button>' +
-              '<button type="button" class="ee-btn secondary" id="ftReceiptClose">Close</button>' +
+        '<div class="ft-receipt">' +
+          // Dark chrome bar — hidden on print
+          '<div class="ft-receipt-chrome">' +
+            '<div class="ft-receipt-chrome-title">Printout · ' + escapeHTML(refCode) + '</div>' +
+            '<div class="ft-receipt-chrome-actions">' +
+              '<button type="button" class="ft-receipt-btn primary" id="ftReceiptPrint">' +
+                '<span style="margin-right:4px;">🖨</span>Print' +
+              '</button>' +
+              '<button type="button" class="ft-receipt-btn" id="ftReceiptClose">Close</button>' +
             '</div>' +
           '</div>' +
-          // Receipt body
-          '<div class="ft-receipt-body" style="padding:24px 28px;font-family:\'Inter\',-apple-system,sans-serif;">' +
-            '<div style="text-align:center;border-bottom:2px dashed #999;padding-bottom:14px;margin-bottom:16px;">' +
-              '<div style="font-size:11px;text-transform:uppercase;letter-spacing:2px;color:#666;">Field Tool Receipt</div>' +
-              '<div style="font-size:18px;font-weight:700;margin-top:4px;color:#111;">' + escapeHTML(r.field_tool_name || 'Field Tool') + '</div>' +
-              (r.field_tool_category ? '<div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#888;margin-top:2px;">' + escapeHTML(r.field_tool_category) + '</div>' : '') +
-              (r.field_tool_description ? '<div style="font-size:12px;color:#666;margin-top:6px;">' + escapeHTML(r.field_tool_description) + '</div>' : '') +
+          // The actual paper-feel receipt
+          '<div class="ft-receipt-paper">' +
+            // Brand strip
+            '<div class="ft-receipt-brand">' +
+              (orgName
+                ? '<div class="ft-receipt-org">' + escapeHTML(orgName) + '</div>'
+                : '') +
+              '<div class="ft-receipt-eyebrow">Field-Tool Record</div>' +
             '</div>' +
-            '<div style="display:flex;justify-content:space-between;font-size:11px;color:#666;margin-bottom:14px;">' +
-              '<div>Run on: <strong style="color:#111;">' + escapeHTML(date) + '</strong></div>' +
-              (r.user_name ? '<div>By: <strong style="color:#111;">' + escapeHTML(r.user_name) + '</strong></div>' : '') +
+            // Title block
+            '<div class="ft-receipt-title-block">' +
+              '<div class="ft-receipt-title">' + escapeHTML(r.field_tool_name || 'Field Tool') + '</div>' +
+              (r.field_tool_description
+                ? '<div class="ft-receipt-subtitle">' + escapeHTML(r.field_tool_description) + '</div>'
+                : '') +
             '</div>' +
+            // Meta row — ref / date / by
+            '<dl class="ft-receipt-meta">' +
+              '<div><dt>Ref</dt><dd>' + escapeHTML(refCode) + '</dd></div>' +
+              '<div><dt>Date</dt><dd>' + escapeHTML(dateStr) + (timeStr ? '  ·  ' + escapeHTML(timeStr) : '') + '</dd></div>' +
+              (r.user_name ? '<div><dt>By</dt><dd>' + escapeHTML(r.user_name) + '</dd></div>' : '') +
+              (r.field_tool_category ? '<div><dt>Type</dt><dd>' + escapeHTML(r.field_tool_category) + '</dd></div>' : '') +
+            '</dl>' +
+            '<div class="ft-receipt-divider"></div>' +
             buildReceiptKV('Inputs', inputs) +
-            buildReceiptKV('Outputs', outputs) +
+            (Object.keys(outputs).length ? '<div class="ft-receipt-divider"></div>' : '') +
+            buildReceiptKV('Results', outputs, true) +
             (r.notes
-              ? '<div style="margin-top:16px;border-top:1px solid #ddd;padding-top:10px;">' +
-                  '<div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#888;margin-bottom:4px;">Notes</div>' +
-                  '<div style="font-size:12px;color:#222;white-space:pre-wrap;">' + escapeHTML(r.notes) + '</div>' +
+              ? '<div class="ft-receipt-divider"></div>' +
+                '<div class="ft-receipt-notes-section">' +
+                  '<div class="ft-receipt-section-head">Notes</div>' +
+                  '<div class="ft-receipt-notes-body">' + escapeHTML(r.notes) + '</div>' +
                 '</div>'
               : '') +
-            '<div style="text-align:center;border-top:2px dashed #999;padding-top:10px;margin-top:18px;font-size:10px;color:#999;">' +
-              'Saved to My Files · Printout #' + escapeHTML(String(r.id || '')) +
+            // Foot
+            '<div class="ft-receipt-foot">' +
+              '<div class="ft-receipt-foot-thanks">Thank you.</div>' +
+              '<div class="ft-receipt-foot-sub">Saved to My Files · Printouts</div>' +
             '</div>' +
           '</div>' +
         '</div>';
+
       document.body.appendChild(modal);
-      // Add the class to body so @media print can selectively show the
-      // receipt and hide everything else.
       document.body.classList.add('ft-printing');
 
       function close() {
@@ -810,29 +972,33 @@
         modal.remove();
       }
       modal.querySelector('#ftReceiptClose').onclick = close;
+      modal.querySelector('#ftReceiptPrint').onclick = function() { window.print(); };
       modal.addEventListener('click', function(e) { if (e.target === modal) close(); });
     }).catch(function(err) {
       alert('Failed to open printout: ' + (err && err.message || 'unknown'));
     });
   }
 
-  function buildReceiptKV(label, obj) {
+  // K/V section for the receipt. `emphasize` adds a heavier weight +
+  // monospace font for outputs/results so numbers line up cleanly.
+  function buildReceiptKV(label, obj, emphasize) {
     var keys = Object.keys(obj || {});
     if (!keys.length) return '';
     var rows = keys.map(function(k) {
       var v = obj[k];
       var disp;
-      if (v == null) disp = '—';
+      if (v == null || v === '') disp = '—';
       else if (typeof v === 'object') disp = JSON.stringify(v);
       else disp = String(v);
-      return '<tr>' +
-        '<td style="padding:5px 8px;color:#555;border-bottom:1px dotted #ccc;width:42%;vertical-align:top;">' + escapeHTML(k) + '</td>' +
-        '<td style="padding:5px 8px;color:#111;border-bottom:1px dotted #ccc;font-weight:600;text-align:right;">' + escapeHTML(disp) + '</td>' +
-      '</tr>';
+      return '<div class="ft-receipt-kv-row' + (emphasize ? ' emph' : '') + '">' +
+        '<div class="ft-receipt-kv-key">' + escapeHTML(k) + '</div>' +
+        '<div class="ft-receipt-kv-dots"></div>' +
+        '<div class="ft-receipt-kv-val">' + escapeHTML(disp) + '</div>' +
+      '</div>';
     }).join('');
-    return '<div style="margin-bottom:14px;">' +
-      '<div style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#888;margin-bottom:4px;">' + escapeHTML(label) + '</div>' +
-      '<table style="width:100%;border-collapse:collapse;font-size:12px;">' + rows + '</table>' +
+    return '<div class="ft-receipt-kv-section">' +
+      '<div class="ft-receipt-section-head">' + escapeHTML(label) + '</div>' +
+      '<div class="ft-receipt-kv-list">' + rows + '</div>' +
     '</div>';
   }
 
@@ -856,6 +1022,7 @@
   window.myFiles = {
     selectFolder: selectFolder,
     newFolder: newFolder,
+    toggleFolder: toggleFolder,
     handleUpload: handleUpload,
     deleteFile: deleteFile,
     openSendPicker: openSendPicker,

@@ -46,11 +46,16 @@
 
   // Sanitize a free-text folder name to the same shape the server
   // applies on PUT/move: lowercased, kebab-cased, alnum + underscore +
-  // dash only, max 60 chars. Empty → 'general'.
+  // dash only, max 60 chars per segment. Supports `/`-delimited
+  // subfolder paths (max 3 levels deep). Empty → 'general'.
+  // Mirror of server/routes/attachment-routes.js sanitizeFolderPath.
   function sanitizeFolder(s) {
-    return String(s == null ? '' : s)
-      .trim().slice(0, 60).toLowerCase()
-      .replace(/[^a-z0-9 _\-]/g, '').replace(/\s+/g, '-') || 'general';
+    var raw = String(s == null ? '' : s).trim().slice(0, 180);
+    var segs = raw.split('/').map(function(seg) {
+      return seg.trim().slice(0, 60).toLowerCase()
+        .replace(/[^a-z0-9 _\-]/g, '').replace(/\s+/g, '-');
+    }).filter(Boolean).slice(0, 3);
+    return segs.join('/') || 'general';
   }
 
   // Bucket a list of attachments by their `folder` field. Returns an

@@ -36,6 +36,20 @@ function recordProjectActivity(projectId, actorId, kind, detail) {
   }
 }
 
+// Sanitize a folder name / path. Allows `/` as a subfolder separator
+// (max 3 levels deep, segments max 60 chars). Empty → 'general'.
+// Mirror of js/my-files.js sanitizeFolder — keep these in lockstep
+// so a client-built path is never rejected server-side.
+function sanitizeFolderPath(raw) {
+  const str = String(raw || '').trim().slice(0, 180);
+  const segs = str.split('/')
+    .map(s => s.trim().slice(0, 60).toLowerCase()
+      .replace(/[^a-z0-9 _\-]/g, '').replace(/\s+/g, '-'))
+    .filter(Boolean)
+    .slice(0, 3);
+  return segs.join('/') || 'general';
+}
+
 // Bump the org_tags catalog every time a tag string is added to an
 // attachment. Idempotent via the (organization_id, name) UNIQUE
 // constraint — INSERT ... ON CONFLICT DO UPDATE bumps use_count for
@@ -899,10 +913,10 @@ router.post('/:entityType/:entityId',
 
       // Optional folder — same sanitize rules as the PUT/move handlers.
       // Falls back to the column default ('general') when absent.
+      // Supports `/`-delimited subfolder paths (max 3 levels deep).
       let folder = 'general';
       if (req.body && typeof req.body.folder === 'string' && req.body.folder.trim()) {
-        folder = req.body.folder.trim().slice(0, 60).toLowerCase()
-          .replace(/[^a-z0-9 _\-]/g, '').replace(/\s+/g, '-') || 'general';
+        folder = sanitizeFolderPath(req.body.folder);
       }
 
       // Walkthrough upload (Phase 1.7): caller can pre-fill caption /
@@ -1062,11 +1076,10 @@ router.put('/:id', requireAuth, async (req, res) => {
       params.push(req.body.include_in_proposal);
     }
     // Phase 3 — folder rename (within the same entity). Free-text up
-    // to 60 chars; sanitized to match what the UI displays. Empty
-    // string normalizes back to 'general'.
+    // to 60 chars per segment, supports `/`-delimited subfolder paths
+    // (max 3 levels deep). Empty string normalizes back to 'general'.
     if (req.body && typeof req.body.folder === 'string') {
-      const folder = (req.body.folder || '').trim().slice(0, 60).toLowerCase()
-        .replace(/[^a-z0-9 _\-]/g, '').replace(/\s+/g, '-') || 'general';
+      const folder = sanitizeFolderPath(req.body.folder);
       sets.push('folder = $' + p++);
       params.push(folder);
     }
@@ -1185,8 +1198,7 @@ router.post('/:id/move', requireAuth, async (req, res) => {
     const startPos = (posR.rows[0] && posR.rows[0].max_pos != null) ? Number(posR.rows[0].max_pos) + 1 : 0;
 
     const folderRaw = (req.body && typeof req.body.folder === 'string') ? req.body.folder : 'general';
-    const folder = folderRaw.trim().slice(0, 60).toLowerCase()
-      .replace(/[^a-z0-9 _\-]/g, '').replace(/\s+/g, '-') || 'general';
+    const folder = sanitizeFolderPath(folderRaw);
 
     await pool.query(
       `UPDATE attachments
@@ -1257,8 +1269,7 @@ router.post('/:id/copy', requireAuth, async (req, res) => {
     }
 
     const folderRaw = (req.body && typeof req.body.folder === 'string') ? req.body.folder : 'general';
-    const folder = folderRaw.trim().slice(0, 60).toLowerCase()
-      .replace(/[^a-z0-9 _\-]/g, '').replace(/\s+/g, '-') || 'general';
+    const folder = sanitizeFolderPath(folderRaw);
 
     const posR = await pool.query(
       'SELECT COALESCE(MAX(position), -1) AS max_pos FROM attachments WHERE entity_type = $1 AND entity_id = $2',
