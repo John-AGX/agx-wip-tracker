@@ -7514,3 +7514,285 @@ body.light-mode .p86-pv-tag-modal-chip {
     box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6) !important;
   }
 }
+
+/* ──────────────────────────────────────────────────────────────────
+   Summary sub-tabs (Wave M2) — Today | System Map strip at the top
+   of the Summary page. Pattern mirrors the .ws-right-tabs row used
+   by the admin tab but lighter (no panel chrome, just text).
+   ────────────────────────────────────────────────────────────────── */
+.p86-summary-subtabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--border, #2e3346);
+  margin-bottom: 18px;
+}
+.p86-summary-subtab {
+  background: transparent;
+  border: 0;
+  color: var(--text-dim, #888);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 10px 16px;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.p86-summary-subtab:hover { color: var(--text, #fff); }
+.p86-summary-subtab.active {
+  color: var(--accent, #4f8cff);
+  border-bottom-color: var(--accent, #4f8cff);
+}
+.p86-summary-subtab-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #fff;
+  background: var(--accent, #4f8cff);
+  border-radius: 9px;
+}
+
+.p86-summary-pane { /* layout host; no chrome */ }
+.p86-summary-pane[hidden] { display: none; }
+
+/* ── System Snapshot (Wave M3) — four big counters on the Today
+   pane below Needs Attention. */
+.p86-snapshot-placeholder {
+  padding: 14px;
+  background: var(--card-bg, #0f0f1e);
+  border: 1px dashed var(--border, #333);
+  border-radius: 10px;
+  color: var(--text-dim, #888);
+  font-size: 12px;
+  text-align: center;
+  grid-column: 1 / -1;
+}
+.p86-snapshot-card {
+  text-align: left;
+  background: var(--card-bg, #0f0f1e);
+  border: 1px solid var(--border, #333);
+  border-radius: 10px;
+  padding: 14px 16px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 80px;
+  transition: border-color 0.12s, transform 0.12s;
+}
+.p86-snapshot-card:hover {
+  border-color: rgba(79, 140, 255, 0.45);
+  transform: translateY(-1px);
+}
+.p86-snapshot-card-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim, #888);
+  font-weight: 700;
+}
+.p86-snapshot-card-count {
+  font-size: 28px;
+  font-weight: 700;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.p86-snapshot-card-sub {
+  font-size: 10.5px;
+  color: var(--text-dim, #888);
+}
+
+/* ── System Map deep-dive (Wave M4) — Entities + Features + What's New */
+.p86-sysmap-root {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+.p86-sysmap-loading {
+  padding: 40px;
+  text-align: center;
+  color: var(--text-dim, #888);
+  font-size: 12px;
+  font-style: italic;
+}
+.p86-sysmap-error { color: #f87171; font-style: normal; }
+.p86-sysmap-meta {
+  font-size: 10.5px;
+  color: var(--text-dim, #666);
+  text-align: right;
+}
+
+.p86-sysmap-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.p86-sysmap-section-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.p86-sysmap-section-header h3 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text, #fff);
+}
+.p86-sysmap-section-sub {
+  font-size: 11.5px;
+  color: var(--text-dim, #888);
+  flex: 1;
+}
+
+.p86-sysmap-empty {
+  padding: 24px;
+  text-align: center;
+  color: var(--text-dim, #888);
+  font-size: 12px;
+  border: 1px dashed var(--border, #333);
+  border-radius: 8px;
+}
+
+/* Entities grid — clickable cards with a label + 2-4 metric rows. */
+.p86-sysmap-entity-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+.p86-sysmap-entity-card {
+  text-align: left;
+  background: var(--card-bg, #0f0f1e);
+  border: 1px solid var(--border, #333);
+  border-radius: 10px;
+  padding: 14px 16px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  transition: border-color 0.12s, transform 0.12s;
+}
+.p86-sysmap-entity-card:hover {
+  border-color: rgba(79, 140, 255, 0.45);
+  transform: translateY(-1px);
+}
+.p86-sysmap-entity-card-label {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text, #fff);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  padding-bottom: 4px;
+  border-bottom: 1px solid var(--border, #2a2a3a);
+  margin-bottom: 4px;
+}
+.p86-sysmap-entity-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+}
+.p86-sysmap-entity-row-k {
+  color: var(--text-dim, #888);
+  text-transform: capitalize;
+}
+.p86-sysmap-entity-row-v {
+  color: var(--text, #fff);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Features section — grouped by area (Photos / Reports / etc.) */
+.p86-sysmap-area {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+.p86-sysmap-area-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--accent, #4f8cff);
+  margin-bottom: 2px;
+}
+.p86-sysmap-feature-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 8px;
+}
+.p86-sysmap-feature {
+  padding: 10px 12px;
+  background: var(--card-bg, #0f0f1e);
+  border: 1px solid var(--border, #2a2a3a);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.p86-sysmap-feature-label {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text, #fff);
+}
+.p86-sysmap-feature-blurb {
+  font-size: 11.5px;
+  color: var(--text-dim, #aaa);
+  line-height: 1.45;
+}
+.p86-sysmap-feature-path {
+  font-size: 10.5px;
+  color: var(--text-dim, #777);
+  font-style: italic;
+}
+.p86-sysmap-feature-path-icon { font-style: normal; opacity: 0.7; }
+
+/* What's New rows — newest first */
+.p86-sysmap-whatsnew {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.p86-sysmap-whatsnew-row {
+  padding: 10px 14px;
+  background: var(--card-bg, #0f0f1e);
+  border: 1px solid var(--border, #2a2a3a);
+  border-left: 3px solid var(--accent, #4f8cff);
+  border-radius: 8px;
+}
+.p86-sysmap-whatsnew-row-label {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text, #fff);
+}
+.p86-sysmap-whatsnew-row-blurb {
+  font-size: 11.5px;
+  color: var(--text-dim, #aaa);
+  line-height: 1.45;
+  margin-top: 2px;
+}
+.p86-sysmap-whatsnew-row-date {
+  font-size: 10.5px;
+  color: var(--text-dim, #666);
+  margin-top: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Mobile: tighten the System Map content stack. */
+@media (max-width: 640px) {
+  .p86-summary-subtab { font-size: 12px; padding: 8px 12px; }
+  .p86-snapshot-card { padding: 10px 12px; min-height: 70px; }
+  .p86-snapshot-card-count { font-size: 22px; }
+  .p86-sysmap-section-header h3 { font-size: 14px; }
+  .p86-sysmap-entity-grid { grid-template-columns: 1fr; gap: 8px; }
+  .p86-sysmap-feature-list { grid-template-columns: 1fr; }
+}
