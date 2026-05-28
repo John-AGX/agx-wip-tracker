@@ -89,7 +89,9 @@ const SECTION_LAYOUTS = new Set([
   'single-photo',
   'before-after',
   'text-block',
-  'attachment-list'
+  'attachment-list',
+  'photo-map'  // Wave 2 maps work — renders selected photos as pins
+               // on a Google Map. Pin icons driven by tag-icons.js.
 ]);
 function normalizeLayout(raw) {
   return (typeof raw === 'string' && SECTION_LAYOUTS.has(raw)) ? raw : 'photo-grid';

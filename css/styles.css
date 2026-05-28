@@ -3390,6 +3390,35 @@
   min-height: 400px;
   background: #1a1a2e;
 }
+
+/* Report photo-map section body — fixed height so the map gets real
+   dimensions for fitBounds. Slightly shorter than the page-level
+   Projects map since reports stack vertically. */
+.p86-report-section-map-wrap {
+  display: flex; flex-direction: column; gap: 8px;
+}
+.p86-report-section-map {
+  width: 100%;
+  height: 360px;
+  border-radius: 6px;
+  overflow: hidden;
+  background: #1a1a2e;
+}
+.p86-report-section-map-unmapped {
+  font-size: 11px;
+  color: var(--text-dim, #888);
+  padding: 4px 2px;
+}
+@media print {
+  /* On print, the Google Map iframe doesn't render. Hide the
+     interactive map host and let the section's print template
+     (built from Static Maps URL) render in its place. The print
+     path is handled by the existing print preview code; this just
+     ensures the screen-mode map div doesn't waste a page. */
+  .p86-report-section.layout-photo-map .p86-report-section-map {
+    display: none !important;
+  }
+}
 .p86-projects-map-loading {
   position: absolute;
   inset: 0;

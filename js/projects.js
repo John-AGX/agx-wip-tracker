@@ -2699,6 +2699,68 @@
           });
         });
       });
+
+      // Photo-map section mounts. Find every freshly-painted
+      // .p86-report-section-map element and boot a Google Map into
+      // it with markers for the picked photos. Each remount kills any
+      // map already attached so the user can switch tabs / change
+      // photo picks without leaking listeners.
+      host.querySelectorAll('[data-photo-map="1"]').forEach(function(mapEl) {
+        if (!window.p86Maps || !window.p86Maps.ready) return;
+        var ids = [];
+        try { ids = JSON.parse(mapEl.getAttribute('data-photo-ids') || '[]'); } catch (e) {}
+        var pickedPhotos = ids.map(function(pid) {
+          return (_detailState.photos || []).find(function(a) { return a.id === pid; });
+        }).filter(Boolean);
+        if (!pickedPhotos.length) return;
+        window.p86Maps.ready().then(function(maps) {
+          // Bail if user navigated away mid-load.
+          if (!mapEl.isConnected) return;
+          var first = pickedPhotos[0];
+          var center = { lat: Number(first.lat), lng: Number(first.lng) };
+          var map = new maps.Map(mapEl, {
+            center: center,
+            zoom: 16,
+            mapTypeControl: false,
+            streetViewControl: false,
+            fullscreenControl: true,
+            mapTypeId: maps.MapTypeId.HYBRID,  // satellite + roads — best for site walkthrough context
+            gestureHandling: 'cooperative'
+          });
+          var bounds = new maps.LatLngBounds();
+          pickedPhotos.forEach(function(photo) {
+            var pos = { lat: Number(photo.lat), lng: Number(photo.lng) };
+            var icon = window.p86TagIcons ? window.p86TagIcons.forPhoto(photo) : { bg:'#6b7280', fg:'#fff', glyph:'●' };
+            var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28">' +
+              '<defs><filter id="ms"><feDropShadow dx="0" dy="1" stdDeviation="1.5" flood-opacity="0.5"/></filter></defs>' +
+              '<circle cx="14" cy="14" r="11" fill="' + icon.bg + '" stroke="white" stroke-width="2.5" filter="url(#ms)"/>' +
+              '<text x="14" y="18" text-anchor="middle" font-size="13" font-family="Arial,sans-serif" font-weight="bold" fill="' + icon.fg + '">' + icon.glyph + '</text>' +
+            '</svg>';
+            var marker = new maps.Marker({
+              position: pos,
+              map: map,
+              icon: {
+                url: 'data:image/svg+xml;utf8,' + encodeURIComponent(svg),
+                anchor: new maps.Point(14, 28),
+                scaledSize: new maps.Size(28, 28)
+              },
+              title: photo.caption || photo.filename || 'Photo'
+            });
+            bounds.extend(pos);
+            marker.addListener('click', function() {
+              if (window.p86Attachments && window.p86Attachments.openLightbox) {
+                var idx = pickedPhotos.findIndex(function(p) { return p.id === photo.id; });
+                window.p86Attachments.openLightbox(pickedPhotos, Math.max(0, idx), { parentLabel: 'Report map', parentSubtitle: '' });
+              } else if (photo.original_url) {
+                window.open(photo.original_url, '_blank', 'noopener');
+              }
+            });
+          });
+          if (pickedPhotos.length > 1) map.fitBounds(bounds, 48);
+        }).catch(function(err) {
+          mapEl.innerHTML = '<div class="p86-projects-empty">Map unavailable: ' + (err && err.message || 'unknown') + '</div>';
+        });
+      });
     }
 
     // Attachment picker for attachment-list sections. Lists every
@@ -2847,7 +2909,8 @@
       { id: 'single-photo',    glyph: '☰', label: 'Stack' },  // ☰
       { id: 'before-after',    glyph: '⇆', label: 'B/A'   },  // ⇆
       { id: 'text-block',      glyph: '¶', label: 'Text'  },  // ¶
-      { id: 'attachment-list', glyph: '\u{1F4CE}', label: 'Files' } // 📎
+      { id: 'attachment-list', glyph: '\u{1F4CE}', label: 'Files' }, // 📎
+      { id: 'photo-map',       glyph: '\u{1F5FA}', label: 'Map'  }  // 🗺
     ];
     // Photos-per-page mapping. Small = 4/page (2x2 grid), Medium =
     // 3/page (1x3 row), Large = 2/page (1x2 row of big photos). Used
@@ -3001,6 +3064,7 @@
       else if (layout === 'attachment-list') body = sectionAttachmentListBodyHTML(section);
       else if (layout === 'single-photo') body = sectionSinglePhotoBodyHTML(section);
       else if (layout === 'before-after') body = sectionBeforeAfterBodyHTML(section);
+      else if (layout === 'photo-map') body = sectionPhotoMapBodyHTML(section);
       else body = sectionPhotoGridBodyHTML(section);
 
       return '<div class="p86-report-section layout-' + escapeAttr(layout) + '" data-sec="' + escapeAttr(section.id) + '">' +
@@ -3249,6 +3313,53 @@
       var body = section.text_body || '';
       return '<div class="p86-report-section-text">' +
         '<textarea class="p86-report-section-text-input" rows="6" placeholder="Type your narrative here…">' + escapeHTML(body) + '</textarea>' +
+      '</div>';
+    }
+
+    // Photo Map layout — picks the same way photo-grid does (photo_ids
+    // array on the section), but renders selected photos as pins on a
+    // Google Map instead of a tile grid. Only photos with lat/lng
+    // appear as pins; the rest get a small "no location" footer.
+    // Each pin uses the tag-icon registry from js/tag-icons.js.
+    function sectionPhotoMapBodyHTML(section) {
+      var ids = Array.isArray(section.photo_ids) ? section.photo_ids : [];
+      var picked = ids.map(function(pid) {
+        return allPhotos.find(function(a) { return a.id === pid; });
+      }).filter(Boolean);
+      var withCoords = picked.filter(function(p) {
+        return Number.isFinite(Number(p.lat)) && Number.isFinite(Number(p.lng));
+      });
+      var withoutCoords = picked.filter(function(p) {
+        return !Number.isFinite(Number(p.lat)) || !Number.isFinite(Number(p.lng));
+      });
+
+      var emptyHelp = picked.length === 0
+        ? '<div class="p86-report-section-empty">Pick photos below — those with location data plot as pins.</div>'
+        : (withCoords.length === 0
+          ? '<div class="p86-report-section-empty">None of the picked photos have location data. Photos taken with location services on get GPS tags automatically.</div>'
+          : '');
+
+      var mapId = 'reportMap_' + section.id;
+      var mapBody = withCoords.length
+        ? '<div class="p86-report-section-map" id="' + escapeAttr(mapId) + '" data-photo-map="1" data-photo-ids="' + escapeAttr(JSON.stringify(withCoords.map(function(p){return p.id;}))) + '"></div>'
+        : '';
+
+      var unmapped = withoutCoords.length
+        ? '<div class="p86-report-section-map-unmapped">' +
+            '<strong>' + withoutCoords.length + '</strong> picked photo' + (withoutCoords.length === 1 ? '' : 's') + ' without location data.' +
+          '</div>'
+        : '';
+
+      // Picker reuses the same +/− tile picker as photo-grid so the
+      // user picks photos identically; the layout switch just
+      // changes how the picks render.
+      var pickerHtml = '<button type="button" class="p86-report-section-add-photos" data-pick="' + escapeAttr(section.id) + '">+ Pick photos</button>';
+
+      return '<div class="p86-report-section-map-wrap">' +
+        emptyHelp +
+        mapBody +
+        unmapped +
+        pickerHtml +
       '</div>';
     }
 
