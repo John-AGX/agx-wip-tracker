@@ -1648,7 +1648,11 @@ function renderJobsMain() {
             document.getElementById('job-detail-title').textContent = (job.jobNumber ? job.jobNumber + ' — ' : '') + job.title;
             const detailStatusClass = job.status === 'On Hold' ? 'at-risk' : job.status === 'Completed' ? 'on-track' : job.status === 'Archived' ? 'not-started' : 'on-track';
             document.getElementById('job-detail-status').innerHTML = `<span class="badge ${detailStatusClass}">${escapeHTML(job.status)}</span>`;
-            document.getElementById('job-detail-contract').textContent = `Total Income: ${formatCurrency(w.totalIncome)}`;
+            // job-detail-contract used to live in the header meta row but was
+            // removed when the header collapsed — Total Income now reads off
+            // the chip strip. Guard the access so older HTML caches don't crash.
+            const contractEl = document.getElementById('job-detail-contract');
+            if (contractEl) contractEl.textContent = `Total Income: ${formatCurrency(w.totalIncome)}`;
 
             document.getElementById('job-info-number').textContent = job.jobNumber || '—';
             document.getElementById('job-info-title').textContent = job.title;
@@ -1721,19 +1725,26 @@ function renderJobsMain() {
             ensureNGComputed(jobId);
             container.innerHTML = '';
 
-            // ── Action buttons ──
+            // ── Action icon cluster ──
+            // 6 add buttons (Building / Phase / Sub / CO / PO / Invoice)
+            // render as a tight row of .header-icon-btn glyphs. Hover
+            // tooltips carry the labels. Matches the icon-cluster pattern
+            // we ship on the estimate editor (Export / Save / Delete) so
+            // a job detail's chrome feels like the same product. Sharing
+            // + Link Client still render as full-text buttons below
+            // because they're contextual (visible only to admin/owner +
+            // depend on link state).
             const btnRow = document.createElement('div');
-            btnRow.style.cssText = 'display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap;';
-            // Note: Close Week was retired in favor of automatic daily
-            // snapshots (3 AM EST) plus a manual Capture Now on the Admin →
-            // Metrics tab. The legacy weekly snapshots remain visible in
-            // Insights history but no new ones get captured here.
-            btnRow.innerHTML = '<button class="ee-btn secondary" onclick="openAddBuildingToJobModal()">&#x1F3D7; Building</button>' +
-                '<button class="ee-btn secondary" onclick="openAddPhaseToJobModal()">&#x1F4CB; Phase</button>' +
-                '<button class="ee-btn secondary" onclick="openAddSubToJobModal()">&#x1F477; Sub</button>' +
-                '<button class="ee-btn secondary" onclick="openAddChangeOrderModal()">&#x1F4DD; Change Order</button>' +
-                '<button class="ee-btn secondary" onclick="openAddPOModal()">&#x1F4C4; Purchase Order</button>' +
-                '<button class="ee-btn secondary" onclick="openAddInvoiceModal()">&#x1F4B3; Invoice</button>';
+            btnRow.className = 'jobs-action-row';
+            btnRow.innerHTML =
+                '<div class="jobs-action-icons">' +
+                    '<button class="header-icon-btn" data-p86-icon="buildings" onclick="openAddBuildingToJobModal()" title="Add Building" aria-label="Add Building"></button>' +
+                    '<button class="header-icon-btn" data-p86-icon="phases" onclick="openAddPhaseToJobModal()" title="Add Phase" aria-label="Add Phase"></button>' +
+                    '<button class="header-icon-btn" data-p86-icon="subs" onclick="openAddSubToJobModal()" title="Add Sub" aria-label="Add Sub"></button>' +
+                    '<button class="header-icon-btn" data-p86-icon="add" onclick="openAddChangeOrderModal()" title="Add Change Order" aria-label="Add Change Order"></button>' +
+                    '<button class="header-icon-btn" data-p86-icon="briefcase" onclick="openAddPOModal()" title="Add Purchase Order" aria-label="Add Purchase Order"></button>' +
+                    '<button class="header-icon-btn" data-p86-icon="banknotes" onclick="openAddInvoiceModal()" title="Add Invoice" aria-label="Add Invoice"></button>' +
+                '</div>';
 
             // Sharing button — visible only to admin or the job owner. Renders
             // a tiny inline indicator with the share count, and opens the

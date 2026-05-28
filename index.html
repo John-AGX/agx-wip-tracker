@@ -97,7 +97,7 @@
     })();
     </script>
 
-    <link rel="stylesheet" href="css/styles.css?v=147">
+    <link rel="stylesheet" href="css/styles.css?v=148">
     <link rel="stylesheet" href="css/report-style-packs.css?v=3">
     <link rel="stylesheet" href="css/workspace-layout.css?v=56b">
     <link rel="stylesheet" href="css/workspace.css?v=37b">
@@ -321,13 +321,19 @@
                 <!-- JOBS TAB -->
                 <div id="jobs" class="tab-content active">
                     <div id="jobs-main-view">
+                        <!-- Jobs list action row — restyled to the .ee-btn system.
+                             "Add Job" is the primary action and gets the filled
+                             primary chrome; everything else is .ee-btn.ghost so
+                             the row is dominated by Add Job, not by Import / Export
+                             / Print which are utilities. Ask 86 badge stays
+                             right-aligned. -->
                         <div class="jobs-action-tabs">
-                            <button class="jobs-action-tab" onclick="openAddJobModal()">+ Add Job</button>
-                            <button class="jobs-action-tab" onclick="document.getElementById('qb-costs-import-file').click()" title="Import a QuickBooks weekly Detailed Job Costs xlsx">&#x1F4E5; Import QB Costs</button>
+                            <button class="ee-btn primary" data-p86-icon="plus" onclick="openAddJobModal()" title="Add a new job">Add Job</button>
+                            <button class="ee-btn ghost" data-p86-icon="import" onclick="document.getElementById('qb-costs-import-file').click()" title="Import a QuickBooks weekly Detailed Job Costs xlsx">Import QB Costs</button>
                             <input type="file" id="qb-costs-import-file" accept=".xlsx" style="display:none;" onchange="handleQBCostsFile(event)" />
-                            <button class="jobs-action-tab" onclick="exportJobsToCSV()">Export CSV</button>
-                            <button class="jobs-action-tab" onclick="window.print()">Print Report</button>
-                            <button class="jobs-action-tab" onclick="showArchivedJobs()">Archived</button>
+                            <button class="ee-btn ghost" data-p86-icon="exports" onclick="exportJobsToCSV()" title="Export the job list as CSV">Export CSV</button>
+                            <button class="ee-btn ghost" onclick="window.print()" title="Print the job list">Print</button>
+                            <button class="ee-btn ghost" onclick="showArchivedJobs()" title="Show archived jobs">Archived</button>
                             <span class="p86-ask86-mount" style="margin-left:auto;"></span>
                         </div>
 
@@ -400,25 +406,29 @@
                         <div id="job-detail-readonly-banner" style="display:none;background:rgba(251,191,36,0.12);border:1px solid rgba(251,191,36,0.4);color:#fbbf24;padding:10px 14px;border-radius:8px;margin-bottom:14px;font-size:13px;">
                             <strong>View only.</strong> <span id="job-detail-readonly-msg">This job is assigned to another PM. You can review the data but changes won&apos;t save.</span>
                         </div>
-                        <div class="job-detail-header">
-                            <button class="secondary small" onclick="backToJobsMain()">&larr; Back to Jobs</button>
+                        <!-- Tighter single-row job-detail header. Mirrors the
+                             estimate-editor header pattern shipped earlier:
+                             borderless Back button on the left, title takes the
+                             middle, status pill + icon-only Edit / Archive /
+                             Delete actions on the right. The contract-amount
+                             meta text was removed because it now lives in the
+                             chip strip below as "Total Income". -->
+                        <div class="job-detail-header job-detail-header-compact">
+                            <button class="ee-header-back" onclick="backToJobsMain()" title="Back to jobs list">&larr; Back</button>
                             <div class="job-detail-info">
                                 <div class="job-detail-title" id="job-detail-title"></div>
-                                <div class="job-detail-meta">
-                                    <span id="job-detail-status"></span>
-                                    <span id="job-detail-contract"></span>
-                                </div>
+                            </div>
+                            <span id="job-detail-status" class="job-detail-status-pill"></span>
+                            <div class="ee-header-icons" style="display:inline-flex;align-items:center;gap:2px;">
+                                <button class="header-icon-btn" data-p86-icon="edit" onclick="toggleEditJobInfo()" id="edit-job-info-btn" title="Edit job info" aria-label="Edit job info"></button>
+                                <button class="header-icon-btn" data-p86-icon="folder" onclick="archiveCurrentJob()" id="archive-job-btn" title="Archive job" aria-label="Archive job"></button>
+                                <button class="header-icon-btn ee-header-icon-danger" data-p86-icon="delete" onclick="deleteCurrentJob()" title="Delete job" aria-label="Delete job"></button>
                             </div>
                         </div>
 
                         <div class="card" id="job-info-card">
-                            <div style="display: flex; justify-content: space-between; align-items: start; flex-wrap: wrap; gap: 10px; margin-bottom: 15px;">
-                                <h3 style="margin: 0;">Job Information</h3>
-                                <div style="display: flex; gap: 8px;">
-                                    <button class="ee-btn primary" onclick="toggleEditJobInfo()" id="edit-job-info-btn">&#x270F;&#xFE0F; Edit Job</button>
-                                    <button class="ee-btn secondary" onclick="archiveCurrentJob()" id="archive-job-btn">&#x1F4E6; Archive Job</button>
-                                    <button class="ee-btn danger" onclick="deleteCurrentJob()">&#x1F5D1; Delete Job</button>
-                                </div>
+                            <div style="margin-bottom: 12px;">
+                                <h3 style="margin: 0; font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-dim, #c4c8d8);">Job Information</h3>
                             </div>
                             <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 15px;">
                                 <div>
@@ -2521,7 +2531,7 @@
          estimate-preview + the upcoming change-order-editor. Loads
          BEFORE any of them so window.p86Pricing is ready. -->
     <script src="js/pricing-pipeline.js?v=1"></script>
-    <script src="js/jobs.js?v=81"></script>
+    <script src="js/jobs.js?v=82"></script>
     <script src="js/estimates.js?v=37"></script>
     <script src="js/proposal.js?v=25"></script>
     <script src="js/estimate-editor.js?v=50"></script>

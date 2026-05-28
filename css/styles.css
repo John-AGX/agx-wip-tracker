@@ -8244,3 +8244,63 @@ body.light-mode .p86-pv-tag-modal-chip {
   .job-totals-strip .p86-totals-chip { min-width: calc(50% - 4px); padding: 6px 10px; }
   .job-totals-strip .p86-totals-chip-value { font-size: 13px; }
 }
+
+/* Compact job-detail header — Back | Title | Status pill | Icons.
+   Replaces the older two-row layout that wasted vertical space on
+   "Total Income" meta text (now in the chip strip). Mirrors the
+   estimate-editor header shipped in be3b7ea. */
+.job-detail-header-compact {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+}
+.job-detail-header-compact .job-detail-info {
+  flex: 1;
+  min-width: 160px;
+}
+.job-detail-header-compact .job-detail-title {
+  font-size: 20px;
+  font-weight: 700;
+  margin: 0;
+  line-height: 1.2;
+}
+/* Status sits as a sibling of the title now (not in .job-detail-meta),
+   so it lines up with the icon cluster on the same row. The .badge
+   styles inside it still drive the color tokens — we just give the
+   wrapping span its own anchor class for layout. */
+.job-detail-status-pill {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+}
+
+/* Action row at the top of the job Overview pane. Holds the
+   icon cluster (Building / Phase / Sub / CO / PO / Invoice) and
+   any contextual full-text buttons (Sharing, Link Client). The
+   contextual buttons use margin-left:auto to pin to the right
+   edge — same pattern as the existing Link Client setup. */
+.jobs-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+/* Tight icon row — borderless 32px circles separated by 2px.
+   Hovering each icon lifts the same ring as .header-icon-btn so
+   the action language matches the page header. */
+.jobs-action-icons {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border, #2e3346);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.02);
+}
+@media (max-width: 640px) {
+  .jobs-action-row { gap: 6px; }
+  .jobs-action-icons { gap: 0; }
+}
