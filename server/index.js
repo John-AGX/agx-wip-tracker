@@ -119,6 +119,11 @@ app.use('/api/leads', leadRoutes);
 app.use('/api/projects/:projectId/pairs', projectPairsRoutes);
 app.use('/api/projects', projectRoutes);
 app.use('/api/org-tags', orgTagsRoutes);
+// Org manifest — one read-only endpoint that powers the Summary
+// page's System Snapshot block + the System Map sub-tab. Returns
+// entity counts, the feature catalog, and recent activity in a
+// single round-trip. See server/routes/org-manifest-routes.js.
+app.use('/api/org', require('./routes/org-manifest-routes'));
 app.use('/api/settings', settingsRoutes);
 app.use('/api/attachments', attachmentRoutes);
 // Sessions sidebar routes mount BEFORE the catch-all aiRoutes so they
