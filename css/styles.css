@@ -8304,3 +8304,180 @@ body.light-mode .p86-pv-tag-modal-chip {
   .jobs-action-row { gap: 6px; }
   .jobs-action-icons { gap: 0; }
 }
+
+/* ── Buildings table (renderJobBuildings) ──────────────────────────
+   Pulls ~40 inline style="…" attrs out of the rendering loop and
+   into shared classes. The table renders identically; the JS just
+   emits modifier classes for the dynamic bits (variance positive/
+   negative, scope chip color, phase-% color). */
+.p86-bldg-table-wrap {
+  border: 1px solid var(--border, #333);
+  border-radius: 10px;
+  overflow-x: auto;
+  background: var(--card-bg, #0f0f1e);
+}
+.p86-bldg-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: auto;
+}
+.p86-bldg-thead {
+  background: rgba(255, 255, 255, 0.02);
+  border-bottom: 1px solid var(--border, #333);
+}
+.p86-bldg-th {
+  padding: 8px 10px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  font-weight: 700;
+  color: var(--text-dim, #c4c8d8);
+}
+.p86-bldg-th.l { text-align: left; }
+.p86-bldg-th.r { text-align: right; }
+
+/* Summary row (always visible) */
+.p86-bldg-row {
+  cursor: pointer;
+  user-select: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+.p86-bldg-row:hover { background: rgba(255, 255, 255, 0.02); }
+.p86-bldg-cell {
+  white-space: nowrap;
+  padding: 6px 10px;
+}
+.p86-bldg-cell-actions { text-align: right; }
+.p86-bldg-cell-num {
+  text-align: right;
+  font-family: 'SF Mono', monospace;
+  font-size: 13px;
+  font-weight: 600;
+}
+.p86-bldg-cell-num.accent   { color: var(--accent); }
+.p86-bldg-cell-num.positive { color: var(--green); }
+.p86-bldg-cell-num.negative { color: var(--red); }
+.p86-bldg-cell-num.pct      { color: var(--green); font-weight: 700; }
+.p86-bldg-cell-num.dim      { color: var(--text-dim, #c4c8d8); font-family: inherit; font-size: 12px; font-weight: 500; }
+.p86-bldg-arrow {
+  font-size: 10px;
+  color: var(--text-dim);
+  display: inline-block;
+  width: 10px;
+}
+.p86-bldg-name {
+  color: var(--text, #fff);
+  font-size: 13px;
+}
+.p86-bldg-addr {
+  font-size: 11px;
+  color: var(--text-dim, #c4c8d8);
+  font-weight: normal;
+  margin-left: 6px;
+}
+.p86-bldg-co-tag {
+  font-size: 10px;
+  color: var(--green);
+  margin-left: 4px;
+}
+.p86-bldg-scope {
+  font-size: 10px;
+  padding: 1px 8px;
+  border-radius: 8px;
+  background: rgba(79, 140, 255, 0.10);
+  font-weight: 600;
+  text-transform: capitalize;
+}
+.p86-bldg-scope.scope-inhouse { color: var(--accent); }
+.p86-bldg-scope.scope-sub     { color: var(--purple); background: rgba(167, 139, 250, 0.12); }
+.p86-bldg-scope.scope-both    { color: #f59e0b; background: rgba(245, 158, 11, 0.12); }
+.p86-bldg-edit-btn {
+  font-size: 11px;
+  padding: 3px 8px;
+}
+
+/* Expandable body row (hidden by default; toggled by the JS click) */
+.p86-bldg-body {
+  display: none;
+}
+.p86-bldg-body > td {
+  padding: 10px 12px;
+  background: var(--surface2);
+  border-bottom: 1px solid var(--border, #333);
+}
+.p86-bldg-cost-row {
+  display: flex;
+  gap: 10px;
+  font-size: 11px;
+  color: var(--text-dim, #c4c8d8);
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+.p86-bldg-cost-row b { color: var(--text); }
+.p86-bldg-cost-meta { margin-left: auto; }
+.p86-bldg-section-head {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim, #c4c8d8);
+  margin-top: 8px;
+  margin-bottom: 4px;
+}
+.p86-bldg-section-empty {
+  font-size: 11px;
+  color: var(--text-dim, #c4c8d8);
+  font-style: italic;
+  margin-bottom: 6px;
+}
+.p86-bldg-chip-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.p86-bldg-phase-chip {
+  font-size: 10px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  white-space: nowrap;
+  cursor: pointer;
+  color: var(--text);
+  font-family: inherit;
+}
+.p86-bldg-phase-chip:hover { border-color: var(--accent); }
+.p86-bldg-phase-chip b.done { color: var(--green); }
+.p86-bldg-phase-chip b.mid  { color: #f59e0b; }
+.p86-bldg-phase-chip b.dim  { color: var(--text-dim); }
+.p86-bldg-add-phase-btn {
+  font-size: 10px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: var(--surface);
+  border: 1px dashed var(--border);
+  cursor: pointer;
+  color: var(--text-dim, #c4c8d8);
+  margin-bottom: 8px;
+  font-family: inherit;
+}
+.p86-bldg-add-phase-btn:hover { border-color: var(--accent); color: var(--text); }
+.p86-bldg-co-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-bottom: 6px;
+}
+.p86-bldg-co-row {
+  cursor: pointer;
+  font-size: 11px;
+  padding: 4px 8px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+.p86-bldg-co-row:hover { border-color: var(--accent); }
+.p86-bldg-co-row-meta { color: var(--text-dim, #c4c8d8); }
+.p86-bldg-co-row-meta b { color: var(--green); }

@@ -2534,85 +2534,91 @@ function renderJobsMain() {
                 const bldgPct = totalBudget > 0 ? ((building.budget || 0) / totalBudget * 100).toFixed(1) : '—';
                 const pctComplete = calcBuildingPctComplete(building.id, jobId).toFixed(1);
                 const scope = building.workScope || 'in-house';
-                const scopeColor = scope === 'sub' ? 'var(--purple)' : scope === 'both' ? '#f59e0b' : 'var(--accent)';
+                // Scope chip color modifier: 'in-house' (accent blue) / 'sub'
+                // (purple) / 'both' (yellow). Painted via CSS class so light
+                // mode + theme tweaks just work.
+                const scopeMod = scope === 'sub' ? 'scope-sub' : scope === 'both' ? 'scope-both' : 'scope-inhouse';
 
                 const cosWired = getCOsConnectedTo('t1', building.id);
                 const uid = 'bldg-grp-' + building.id.replace(/\W/g, '_');
                 const ARROW_RIGHT = '\u25B6';
                 const ARROW_DOWN = '\u25BC';
                 const arrowId = uid + '-arrow';
+                const varMod = variance >= 0 ? 'positive' : 'negative';
                 const summaryRow =
-                    '<tr class="bldg-row" style="cursor:pointer;user-select:none;border-bottom:1px solid rgba(255,255,255,0.04);" ' +
-                        'onclick="(function(){var d=document.getElementById(\'' + uid + '\');var a=document.getElementById(\'' + arrowId + '\');var closed=d.style.display===\'none\';d.style.display=closed?\'table-row\':\'none\';var open=closed;a.textContent=open?\'' + ARROW_DOWN + '\':\'' + ARROW_RIGHT + '\';})()">' +
-                        '<td style="white-space:nowrap;padding:6px 10px;">' +
-                            '<span id="' + arrowId + '" style="font-size:10px;color:var(--text-dim);display:inline-block;width:10px;">' + ARROW_RIGHT + '</span> ' +
-                            '<strong style="color:var(--text,#fff);font-size:13px;">' + escapeHTML(building.name) + '</strong>' +
-                            (building.address ? '<span style="font-size:11px;color:var(--text-dim,#888);font-weight:normal;margin-left:6px;">' + escapeHTML(building.address) + '</span>' : '') +
+                    '<tr class="p86-bldg-row" ' +
+                        'onclick="(function(){var d=document.getElementById(\'' + uid + '\');var a=document.getElementById(\'' + arrowId + '\');var closed=d.style.display===\'none\';d.style.display=closed?\'table-row\':\'none\';a.textContent=closed?\'' + ARROW_DOWN + '\':\'' + ARROW_RIGHT + '\';})()">' +
+                        '<td class="p86-bldg-cell p86-bldg-cell-name">' +
+                            '<span id="' + arrowId + '" class="p86-bldg-arrow">' + ARROW_RIGHT + '</span> ' +
+                            '<strong class="p86-bldg-name">' + escapeHTML(building.name) + '</strong>' +
+                            (building.address ? '<span class="p86-bldg-addr">' + escapeHTML(building.address) + '</span>' : '') +
                         '</td>' +
-                        '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-family:\'SF Mono\',monospace;font-size:13px;color:var(--accent);font-weight:600;">' +
+                        '<td class="p86-bldg-cell p86-bldg-cell-num accent">' +
                             formatCurrency(building.budget) +
-                            (building.coBudget ? '<span style="font-size:10px;color:var(--green);margin-left:4px;">+' + formatCurrency(building.coBudget) + '</span>' : '') +
+                            (building.coBudget ? '<span class="p86-bldg-co-tag">+' + formatCurrency(building.coBudget) + '</span>' : '') +
                         '</td>' +
-                        '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-family:\'SF Mono\',monospace;font-size:13px;color:var(--accent);font-weight:600;">' +
+                        '<td class="p86-bldg-cell p86-bldg-cell-num accent">' +
                             formatCurrency(buildingCost) +
                         '</td>' +
-                        '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-family:\'SF Mono\',monospace;font-size:13px;font-weight:600;color:' + (variance >= 0 ? 'var(--green)' : 'var(--red)') + ';">' +
+                        '<td class="p86-bldg-cell p86-bldg-cell-num ' + varMod + '">' +
                             formatCurrency(variance) +
                         '</td>' +
-                        '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-family:\'SF Mono\',monospace;font-size:13px;font-weight:700;color:var(--green);">' +
+                        '<td class="p86-bldg-cell p86-bldg-cell-num pct">' +
                             pctComplete + '%' +
                         '</td>' +
-                        '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-size:12px;color:var(--text-dim,#aaa);">' +
+                        '<td class="p86-bldg-cell p86-bldg-cell-num dim">' +
                             bldgPct + '%' +
                         '</td>' +
-                        '<td style="white-space:nowrap;padding:6px 10px;">' +
-                            '<span style="font-size:10px;padding:1px 8px;border-radius:8px;background:rgba(79,140,255,0.1);color:' + scopeColor + ';font-weight:600;text-transform:capitalize;">' + escapeHTML(scope) + '</span>' +
+                        '<td class="p86-bldg-cell">' +
+                            '<span class="p86-bldg-scope ' + scopeMod + '">' + escapeHTML(scope) + '</span>' +
                         '</td>' +
-                        '<td style="white-space:nowrap;padding:6px 10px;text-align:right;">' +
-                            '<button class="ee-btn ghost" style="font-size:11px;padding:3px 8px;" onclick="event.stopPropagation();editBuilding(\'' + escapeHTML(building.id) + '\')">&#x270F;&#xFE0F; Edit</button>' +
+                        '<td class="p86-bldg-cell p86-bldg-cell-actions">' +
+                            '<button class="ee-btn ghost p86-bldg-edit-btn" onclick="event.stopPropagation();editBuilding(\'' + escapeHTML(building.id) + '\')">&#x270F;&#xFE0F; Edit</button>' +
                         '</td>' +
                     '</tr>';
 
-                let body = '<tr id="' + uid + '" class="bldg-body" style="display:none;"><td colspan="8" style="padding:10px 12px;background:var(--surface2);border-bottom:1px solid var(--border,#333);">';
+                let body = '<tr id="' + uid + '" class="p86-bldg-body"><td colspan="8">';
 
                 // Cost breakdown
-                body += '<div style="display:flex;gap:10px;font-size:11px;color:var(--text-dim);margin-bottom:8px;flex-wrap:wrap;">' +
-                    '<span>Mat: <b style="color:var(--text);">' + formatCurrency(bMat) + '</b></span>' +
-                    '<span>Lab: <b style="color:var(--text);">' + formatCurrency(bLab) + '</b></span>' +
-                    '<span>Sub: <b style="color:var(--text);">' + formatCurrency(bSub) + '</b></span>' +
-                    '<span>Equip: <b style="color:var(--text);">' + formatCurrency(bEquip) + '</b></span>' +
-                    ((building.hoursTotal || building.rate) ? '<span style="margin-left:auto;">' + (building.hoursTotal || 0) + 'hrs' + (building.hoursWeek ? ' (' + building.hoursWeek + '/wk)' : '') + ' @ ' + formatCurrency(building.rate || 40) + '/hr</span>' : '') +
+                body += '<div class="p86-bldg-cost-row">' +
+                    '<span>Mat: <b>' + formatCurrency(bMat) + '</b></span>' +
+                    '<span>Lab: <b>' + formatCurrency(bLab) + '</b></span>' +
+                    '<span>Sub: <b>' + formatCurrency(bSub) + '</b></span>' +
+                    '<span>Equip: <b>' + formatCurrency(bEquip) + '</b></span>' +
+                    ((building.hoursTotal || building.rate) ? '<span class="p86-bldg-cost-meta">' + (building.hoursTotal || 0) + 'hrs' + (building.hoursWeek ? ' (' + building.hoursWeek + '/wk)' : '') + ' @ ' + formatCurrency(building.rate || 40) + '/hr</span>' : '') +
                     '</div>';
 
                 // Phases (from node graph wiring)
-                body += '<div style="font-size:11px;font-weight:600;color:var(--text-dim);margin-top:8px;margin-bottom:4px;">PHASES (' + wiredPhases.length + ')</div>';
+                body += '<div class="p86-bldg-section-head">PHASES (' + wiredPhases.length + ')</div>';
                 if (wiredPhases.length === 0) {
-                    body += '<div style="font-size:11px;color:var(--text-dim);font-style:italic;margin-bottom:6px;">No phases wired to this building in the node graph</div>';
+                    body += '<div class="p86-bldg-section-empty">No phases wired to this building in the node graph</div>';
                 } else {
-                    body += '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px;">';
+                    body += '<div class="p86-bldg-chip-list">';
                     wiredPhases.forEach(function(wp) {
                         var p = wp.phase;
                         var pCost = ((p.materials || 0) + (p.labor || 0) + (p.sub || 0) + (p.equipment || 0)) * wp.allocPct / 100;
-                        var pColor = p.pctComplete >= 100 ? 'var(--green)' : p.pctComplete >= 50 ? '#f59e0b' : 'var(--text-dim)';
+                        // Phase completion color modifier (paints just the %,
+                        // not the whole chip): done (green) / mid (amber) / dim.
+                        var pMod = p.pctComplete >= 100 ? 'done' : p.pctComplete >= 50 ? 'mid' : 'dim';
                         var allocStr = wp.allocPct !== 100 ? ' (' + fmtAllocPct(wp.allocPct) + '%)' : '';
-                        body += '<button onclick="event.stopPropagation();editPhase(\'' + escapeHTML(p.id) + '\')" style="font-size:10px;padding:3px 8px;border-radius:6px;background:var(--surface);border:1px solid var(--border);white-space:nowrap;cursor:pointer;color:var(--text);">' +
-                            escapeHTML(p.phase) + allocStr + ' <b style="color:' + pColor + ';">' + (p.pctComplete || 0) + '%</b> ' + formatCurrency(pCost) + '</button>';
+                        body += '<button class="p86-bldg-phase-chip" onclick="event.stopPropagation();editPhase(\'' + escapeHTML(p.id) + '\')">' +
+                            escapeHTML(p.phase) + allocStr + ' <b class="' + pMod + '">' + (p.pctComplete || 0) + '%</b> ' + formatCurrency(pCost) + '</button>';
                     });
                     body += '</div>';
                 }
-                body += '<button onclick="event.stopPropagation();openAddPhaseToJobModal(\'' + escapeHTML(building.id) + '\')" style="font-size:10px;padding:3px 8px;border-radius:6px;background:var(--surface);border:1px dashed var(--border);cursor:pointer;color:var(--text-dim);margin-bottom:8px;">+ Phase</button>';
+                body += '<button class="p86-bldg-add-phase-btn" onclick="event.stopPropagation();openAddPhaseToJobModal(\'' + escapeHTML(building.id) + '\')">+ Phase</button>';
 
                 // Change Orders wired to this building
-                body += '<div style="font-size:11px;font-weight:600;color:var(--text-dim);margin-top:8px;margin-bottom:4px;">CHANGE ORDERS (' + cosWired.length + ')</div>';
+                body += '<div class="p86-bldg-section-head">CHANGE ORDERS (' + cosWired.length + ')</div>';
                 if (cosWired.length === 0) {
-                    body += '<div style="font-size:11px;color:var(--text-dim);font-style:italic;margin-bottom:6px;">No COs wired to this building</div>';
+                    body += '<div class="p86-bldg-section-empty">No COs wired to this building</div>';
                 } else {
-                    body += '<div style="display:flex;flex-direction:column;gap:3px;margin-bottom:6px;">';
+                    body += '<div class="p86-bldg-co-list">';
                     cosWired.forEach(function(item) {
                         const c = item.co;
-                        body += '<div onclick="event.stopPropagation();editCO(\'' + escapeHTML(c.id) + '\')" style="cursor:pointer;font-size:11px;padding:4px 8px;background:var(--surface);border:1px solid var(--border);border-radius:4px;display:flex;justify-content:space-between;gap:8px;">' +
+                        body += '<div class="p86-bldg-co-row" onclick="event.stopPropagation();editCO(\'' + escapeHTML(c.id) + '\')">' +
                             '<span><b>' + escapeHTML(c.coNumber || 'CO') + '</b> ' + escapeHTML((c.description || '').substring(0, 60)) + '</span>' +
-                            '<span style="color:var(--text-dim);">Inc: <b style="color:var(--green);">' + formatCurrency((c.income || 0) * item.allocPct / 100) + '</b> (' + fmtAllocPct(item.allocPct) + '%)</span>' +
+                            '<span class="p86-bldg-co-row-meta">Inc: <b>' + formatCurrency((c.income || 0) * item.allocPct / 100) + '</b> (' + fmtAllocPct(item.allocPct) + '%)</span>' +
                             '</div>';
                     });
                     body += '</div>';
@@ -2623,9 +2629,9 @@ function renderJobsMain() {
             }).join('');
 
             container.innerHTML =
-                '<div style="border:1px solid var(--border,#333);border-radius:10px;overflow-x:auto;background:var(--card-bg,#0f0f1e);">' +
-                    '<table style="width:100%;border-collapse:collapse;table-layout:auto;">' +
-                        '<thead style="background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border,#333);"><tr>' +
+                '<div class="p86-bldg-table-wrap">' +
+                    '<table class="p86-bldg-table">' +
+                        '<thead class="p86-bldg-thead"><tr>' +
                             thCell('Building', 'left') +
                             thCell('Budget', 'right') +
                             thCell('Spent', 'right') +
@@ -2640,8 +2646,13 @@ function renderJobsMain() {
                 '</div>';
         }
 
+        // Shared <th> renderer used by renderJobBuildings AND a handful
+        // of other tables in this file (POs, Invoices, COs). Outputs a
+        // .p86-bldg-th cell with .l / .r modifier for left/right align;
+        // the actual styling lives in css/styles.css under the Jobs
+        // page block.
         function thCell(label, align) {
-            return '<th style="text-align:' + (align || 'left') + ';padding:8px 10px;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;font-weight:700;color:var(--text-dim,#888);">' + label + '</th>';
+            return '<th class="p86-bldg-th ' + (align === 'right' ? 'r' : 'l') + '">' + label + '</th>';
         }
 
         function lookupConnDetails(item) {
