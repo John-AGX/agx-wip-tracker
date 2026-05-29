@@ -284,6 +284,205 @@
 .sch-cal-grid.sch-no-weekends {
   grid-template-columns: 0fr 1fr 1fr 1fr 1fr 1fr 0fr;
 }
+
+/* ── Fisheye lens scroll model (post-2026-05) ───────────────────────
+   The calendar is now a continuous vertical scroll. The week nearest
+   the viewport center auto-expands; weeks above/below shrink as they
+   move away. Driven by a data-lens attribute set by the JS focus
+   engine in renderGrid + attachFocusObserver.
+
+   Layering:
+     .sch-cal-scroll   — scroll container (overflow-y: auto)
+       .sch-cal-dow-row — sticky day-of-week labels
+       .sch-cal-stack    — vertical column of week rows + month dividers
+         .sch-month-header — orientation divider, "June 2026"
+         .sch-cal-week-row[data-lens="..."] — height tier driven by lens
+*/
+.sch-cal-scroll {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  background: var(--bg, #0f1117);
+  /* Smooth iOS scroll on the touch-flick. */
+  -webkit-overflow-scrolling: touch;
+}
+.sch-cal-dow-row {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: grid;
+  grid-template-columns: 0.5fr 1fr 1fr 1fr 1fr 1fr 0.5fr;
+  background: var(--card-bg, #0f0f1e);
+  border-bottom: 1px solid var(--border, #2e3346);
+  flex: 0 0 auto;
+}
+.sch-cal-dow-row.sch-no-weekends {
+  grid-template-columns: 0fr 1fr 1fr 1fr 1fr 1fr 0fr;
+}
+.sch-cal-stack {
+  display: flex;
+  flex-direction: column;
+  flex: 1 0 auto;
+  background: var(--border, #2e3346);
+}
+.sch-cal-stack.sch-no-weekends .sch-cal-week-row {
+  grid-template-columns: 0fr 1fr 1fr 1fr 1fr 1fr 0fr;
+}
+
+/* Month-header orientation dividers. Renders between weeks whenever
+   the month changes (using the ISO-week midpoint as the "owning"
+   month). Quiet typography — they help locate yourself without
+   stealing attention from the focused week below. */
+.sch-month-header {
+  background: var(--bg, #0f1117);
+  color: var(--text-dim, #c4c8d8);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  padding: 14px 16px 8px;
+  border-bottom: 1px solid var(--border, #2e3346);
+}
+
+/* Lens tiers — height + content visibility per state. Transitions on
+   min-height + max-height so the row smoothly grows/shrinks as it
+   passes through the focused band. Day cells stay positioned via
+   the grid; the absolutely-positioned entry-bar overlay scales with
+   the row because its top is offset from the cell's top. */
+.sch-cal-week-row[data-lens] {
+  min-height: 0;
+  transition: min-height 0.3s ease, max-height 0.3s ease, opacity 0.3s ease;
+  overflow: hidden;
+}
+.sch-cal-week-row[data-lens="focused"] {
+  min-height: 280px;
+  max-height: 360px;
+  background: linear-gradient(180deg, rgba(34,211,238,0.04) 0%, rgba(34,211,238,0.02) 100%), var(--border, #2e3346);
+}
+.sch-cal-week-row[data-lens="near"] {
+  min-height: 80px;
+  max-height: 96px;
+}
+.sch-cal-week-row[data-lens="mid"] {
+  min-height: 48px;
+  max-height: 48px;
+}
+.sch-cal-week-row[data-lens="far"] {
+  min-height: 28px;
+  max-height: 28px;
+  opacity: 0.55;
+}
+
+/* Day-cell content visibility per lens. By default ALL four content
+   variants render in the DOM (per-day cards, dot strip, bars overlay,
+   plain date number). CSS hides what each tier doesn't need. Render
+   everything once + toggle display means scroll-tick reclassification
+   stays at zero JS render cost. */
+.sch-cal-day-jobs { display: none; }
+.sch-cal-day-dots { display: none; }
+.sch-cal-week-row[data-lens="focused"] .sch-cal-day-jobs { display: flex; }
+.sch-cal-week-row[data-lens="focused"] .sch-cal-bars { display: none; }
+.sch-cal-week-row[data-lens="mid"] .sch-cal-day-dots { display: flex; }
+.sch-cal-week-row[data-lens="mid"] .sch-cal-bars { display: none; }
+.sch-cal-week-row[data-lens="mid"] .sch-cal-day-num { font-size: 10px; }
+.sch-cal-week-row[data-lens="mid"] .sch-cal-day-wx { display: none; }
+.sch-cal-week-row[data-lens="far"] .sch-cal-day-num,
+.sch-cal-week-row[data-lens="far"] .sch-cal-day-wx { display: none; }
+/* Far tier shows just the bars at compressed height — gives the
+   user a one-glance "is anything scheduled this week" hint. */
+.sch-cal-week-row[data-lens="far"] .sch-cal-bars .sch-entry-bar-label,
+.sch-cal-week-row[data-lens="far"] .sch-cal-bars .sch-entry-bar-meta,
+.sch-cal-week-row[data-lens="far"] .sch-cal-bars .sch-entry-bar-handle,
+.sch-cal-week-row[data-lens="far"] .sch-cal-bars .sch-entry-bar-wx-icon { display: none; }
+.sch-cal-week-row[data-lens="far"] .sch-entry-bar {
+  height: 4px !important;
+  top: 12px !important;
+  border-radius: 1px;
+}
+
+/* Per-day job cards inside focused weeks. Each is a chip-style
+   button that opens the entry editor on tap. --job-color is set
+   inline by the JS based on colorForJob. */
+.sch-cal-day-jobs {
+  flex-direction: column;
+  gap: 4px;
+  padding: 4px;
+  align-items: stretch;
+  overflow-y: auto;
+  max-height: 240px;
+}
+.sch-day-job-card {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 8px;
+  font-size: 11px;
+  background: var(--job-color, var(--accent, #4f8cff));
+  color: #fff;
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  line-height: 1.2;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  transition: filter 0.12s;
+  flex: 0 0 auto;
+}
+.sch-day-job-card:hover { filter: brightness(1.1); }
+.sch-day-job-card.sch-day-job-done    { filter: grayscale(0.5); opacity: 0.7; }
+.sch-day-job-card.sch-day-job-rolled  { background: repeating-linear-gradient(45deg, var(--job-color), var(--job-color) 8px, rgba(255,255,255,0.15) 8px, rgba(255,255,255,0.15) 12px); }
+.sch-day-job-label {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.sch-day-job-crew {
+  font-size: 10px;
+  opacity: 0.9;
+  flex: 0 0 auto;
+}
+.sch-day-job-cont {
+  font-size: 10px;
+  opacity: 0.7;
+  flex: 0 0 auto;
+}
+
+/* Mid-tier dots: one tinted circle per entry in the day. Compact —
+   the week is only 48px tall and the date number takes most of the
+   vertical real estate. */
+.sch-cal-day-dots {
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 0 4px 2px;
+  align-items: flex-end;
+  min-height: 0;
+}
+.sch-cal-day-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+}
+
+/* Mobile: shorter focused row + tighter near/mid/far so the lens
+   effect still feels distinct on a phone where vertical space is
+   precious. */
+@media (max-width: 640px) {
+  .sch-cal-week-row[data-lens="focused"] { min-height: 240px; max-height: 320px; }
+  .sch-cal-week-row[data-lens="near"]    { min-height: 60px; max-height: 72px; }
+  .sch-cal-week-row[data-lens="mid"]     { min-height: 36px; max-height: 36px; }
+  .sch-cal-week-row[data-lens="far"]     { min-height: 22px; max-height: 22px; }
+  .sch-cal-day-jobs { max-height: 200px; padding: 3px; }
+  .sch-day-job-card { font-size: 10.5px; padding: 4px 6px; }
+  .sch-month-header { padding: 10px 12px 6px; font-size: 10px; }
+}
 .sch-cal-dow {
   background: var(--card-bg, #0f0f1e);
   font-size: 9px;

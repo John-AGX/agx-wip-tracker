@@ -890,40 +890,21 @@
   function renderCalendar() {
     var el = document.getElementById('schCalWrap');
     if (!el) return;
-    var cur = _state.cursor;
     var showW = !!_state.settings.showWeekends;
 
     el.innerHTML =
-      // Toolbar layout: nav on the left, week summary inline in the
-      // middle (Expected Revenue + Jobs — the Days tile got dropped
-      // because "scheduled work-days summed across jobs" wasn't a
-      // useful PM metric), then the weekend toggle + Schedule entry
-      // button on the right. The summary used to live in a floating,
-      // draggable widget but it overlapped day cells — inline beats
-      // overlay here.
       '<div class="sch-cal-toolbar">' +
         '<div class="sch-cal-nav">' +
-          // Mobile-only hamburger that slides the sidebar drawer
-          // in/out. Hidden on desktop via the .sch-mobile-only
-          // class in schedule.css.
           '<button class="sch-btn sch-btn-icon sch-mobile-only" id="schSidebarToggle" title="Filters / jobs" aria-label="Toggle filters">&#9776;</button>' +
           '<button class="sch-btn sch-btn-icon" id="schPrev" title="Previous month">&lsaquo;</button>' +
-          '<div class="sch-cal-month" id="schMonth">' + MONTH_NAMES[cur.getMonth()] + ' ' + cur.getFullYear() + '</div>' +
+          '<div class="sch-cal-month" id="schMonth">…</div>' +
           '<button class="sch-btn sch-btn-icon" id="schNext" title="Next month">&rsaquo;</button>' +
           '<button class="sch-btn" id="schToday" style="margin-left:6px;">Today</button>' +
         '</div>' +
         '<div class="sch-week-summary" id="schWeekSummary">' +
-          // Body painted by refreshWeekSummary (kept as a single source
-          // of truth so subsequent updates don't have to know the markup).
           '<div class="sch-week-summary-loading">…</div>' +
         '</div>' +
         '<div class="sch-toolbar-spacer"></div>' +
-        // Weekend toggle compacted to an icon button — the bulky
-        // "Show Sat/Sun columns" label was eating header space.
-        // Tooltip carries the explanation.
-        // Global Ask 86 badge embeds right before the calendar
-        // controls so it sits in the month-header strip instead of
-        // floating in the corner.
         '<span class="p86-ask86-mount"></span>' +
         '<button class="sch-btn sch-btn-toggle' + (showW ? ' active' : '') + '" id="schWeekendToggle" ' +
           'title="' + (showW ? 'Hide' : 'Show') + ' weekend columns. Display only — does not change how production days are counted on entries.">' +
@@ -931,17 +912,17 @@
         '</button>' +
         '<button class="sch-btn sch-btn-primary" id="schAddEntry">+ Schedule entry</button>' +
       '</div>' +
-      '<div class="sch-cal-grid" id="schGrid"></div>';
+      // Fisheye scroll container. Sticky day-of-week header rides
+      // at the top; the week stack below scrolls continuously.
+      '<div class="sch-cal-scroll" id="schCalScroll">' +
+        '<div class="sch-cal-dow-row" id="schDowRow"></div>' +
+        '<div class="sch-cal-stack" id="schStack"></div>' +
+      '</div>';
     refreshWeekSummary();
 
-    document.getElementById('schPrev').addEventListener('click', function() { stepMonth(-1); });
-    document.getElementById('schNext').addEventListener('click', function() { stepMonth(1); });
-    document.getElementById('schToday').addEventListener('click', function() {
-      _state.cursor = startOfMonth(new Date());
-      _state.settings.viewMonth = toISODate(_state.cursor);
-      saveSettings(_state.settings);
-      renderCalendar();
-    });
+    document.getElementById('schPrev').addEventListener('click', function() { scrollToMonth(-1); });
+    document.getElementById('schNext').addEventListener('click', function() { scrollToMonth(1); });
+    document.getElementById('schToday').addEventListener('click', function() { scrollToToday(); });
     document.getElementById('schWeekendToggle').addEventListener('click', function() {
       _state.settings.showWeekends = !_state.settings.showWeekends;
       saveSettings(_state.settings);
@@ -950,9 +931,6 @@
     document.getElementById('schAddEntry').addEventListener('click', function() {
       openEntryEditor(null, toISODate(new Date()));
     });
-    // Mobile sidebar toggle — flips .sch-sidebar-open on #schPage
-    // so CSS slides the drawer in/out. Closing also handled by the
-    // backdrop click handler (wired in renderSchedule).
     var toggleBtn = document.getElementById('schSidebarToggle');
     if (toggleBtn) toggleBtn.addEventListener('click', toggleMobileSidebar);
 
@@ -969,49 +947,220 @@
     if (page) page.classList.remove('sch-sidebar-open');
   }
 
-  function stepMonth(delta) {
-    _state.cursor = new Date(_state.cursor.getFullYear(), _state.cursor.getMonth() + delta, 1);
-    _state.settings.viewMonth = toISODate(_state.cursor);
-    saveSettings(_state.settings);
-    renderCalendar();
-  }
+  // ── Fisheye lens scroll model ─────────────────────────────
+  // The calendar is now a continuous vertical scroll through ~6
+  // months stacked under each other. The week nearest the scroll
+  // container's vertical center auto-promotes to data-lens="focused"
+  // (tall row with per-day job cards); neighbors are "near" (regular
+  // height with bar overlay); mid weeks shrink; far weeks compress
+  // to a density strip. _state.cursor is no longer a discrete
+  // "viewed month" — instead it's the date whose week is currently
+  // most centered. The Today button and Prev/Next buttons smooth-
+  // scroll to the right week.
+
+  // Range we initially render around today. Lazy-extend kicks in if
+  // the user scrolls within 2 weeks of either edge.
+  var MONTHS_BEHIND = 3;
+  var MONTHS_AHEAD = 3;
+  var _io = null;            // IntersectionObserver instance
+  var _focusedWeekStart = null; // ISO date of the currently-focused week
 
   function renderGrid() {
-    var grid = document.getElementById('schGrid');
-    if (!grid) return;
-    // Toggle the no-weekends class so the CSS grid collapses the
-    // Sun/Sat columns to 0fr without re-rendering header labels.
-    grid.classList.toggle('sch-no-weekends', !_state.settings.showWeekends);
-    var first = _state.cursor;
-    var firstDow = first.getDay(); // 0=Sun … 6=Sat
-    // Sun-start grid: walk back firstDow days to reach the Sunday
-    // before (or equal to) the 1st of the month.
-    var leadingDays = firstDow;
-    var gridStart = addDays(first, -leadingDays);
+    var stack = document.getElementById('schStack');
+    var dowRow = document.getElementById('schDowRow');
+    var scrollEl = document.getElementById('schCalScroll');
+    if (!stack || !dowRow || !scrollEl) return;
+    var showW = !!_state.settings.showWeekends;
 
-    // Always render 6 weeks (42 cells) so the grid has a stable shape
-    // — Outlook does the same. Trailing/leading days from sibling
-    // months get dimmed.
-    var html = '';
-
-    // Day-of-week header row.
+    // Day-of-week header.
+    var dowHtml = '';
     DOW_LABELS.forEach(function(d) {
-      html += '<div class="sch-cal-dow">' + d + '</div>';
+      dowHtml += '<div class="sch-cal-dow">' + d + '</div>';
     });
+    dowRow.innerHTML = dowHtml;
+    dowRow.classList.toggle('sch-no-weekends', !showW);
 
+    // Build the stack: walk from (today - MONTHS_BEHIND months, snapped
+    // to its containing Sunday) to (today + MONTHS_AHEAD months, snapped
+    // to the end of its last week). Emit a month-header divider whenever
+    // the week crosses into a new month.
     var today = new Date();
+    var firstDate = new Date(today.getFullYear(), today.getMonth() - MONTHS_BEHIND, 1);
+    var lastDate  = new Date(today.getFullYear(), today.getMonth() + MONTHS_AHEAD + 1, 0);
+    var rangeStart = startOfWeek(firstDate);
+    var rangeEnd = addDays(lastDate, 6 - lastDate.getDay()); // pad to Saturday
 
-    // Per-week rendering — a week is its own positioned container so
-    // entry bars can span multiple day columns continuously.
-    for (var w = 0; w < 6; w++) {
-      var weekStart = addDays(gridStart, w * 7);
-      html += renderWeekRow(weekStart, first, today);
+    var html = '';
+    var lastMonth = -1, lastYear = -1;
+    for (var d = new Date(rangeStart); d <= rangeEnd; d = addDays(d, 7)) {
+      var weekStart = new Date(d);
+      // Month-header divider whenever the FIRST in-month day of this
+      // week is a new month. We test the THURSDAY (midpoint) which
+      // gives the month label that "owns" this week — the same
+      // convention ISO weeks use.
+      var midWeek = addDays(weekStart, 3);
+      if (midWeek.getMonth() !== lastMonth || midWeek.getFullYear() !== lastYear) {
+        html += '<div class="sch-month-header" data-month="' +
+                midWeek.getFullYear() + '-' + (midWeek.getMonth() + 1) + '">' +
+                MONTH_NAMES[midWeek.getMonth()] + ' ' + midWeek.getFullYear() + '</div>';
+        lastMonth = midWeek.getMonth();
+        lastYear = midWeek.getFullYear();
+      }
+      html += renderWeekRow(weekStart, midWeek, today);
     }
+    stack.innerHTML = html;
+    stack.classList.toggle('sch-no-weekends', !showW);
 
-    grid.innerHTML = html;
-    wireGridDrop(grid);
-    wireGridClicks(grid);
+    wireGridDrop(stack);
+    wireGridClicks(stack);
+
+    // Set the initial focused week (today's week) BEFORE the IO
+    // attaches so the user lands on a fully-painted focused state
+    // instead of a brief flicker.
+    var todayWeekIso = toISODate(startOfWeek(today));
+    var todayRow = stack.querySelector('[data-week-start="' + todayWeekIso + '"]');
+    if (todayRow) {
+      todayRow.setAttribute('data-lens', 'focused');
+      _focusedWeekStart = todayWeekIso;
+    }
+    // Set decay lens states on rows above/below so the initial
+    // paint already shows the fisheye shape, not a wall of equal
+    // rows that animates after IO ticks.
+    setLensAround(stack, todayRow);
+
+    // Position scroll so today's week is centered in the viewport.
+    // requestAnimationFrame so we measure AFTER the new layout has
+    // committed, not against the previous one.
+    requestAnimationFrame(function() {
+      if (todayRow && todayRow.scrollIntoView) {
+        // 'auto' (not 'smooth') so initial paint doesn't animate.
+        todayRow.scrollIntoView({ block: 'center', behavior: 'auto' });
+      }
+      attachFocusObserver(scrollEl, stack);
+      updateMonthLabel();
+    });
   }
+
+  // Assign data-lens to every row in the stack based on its
+  // distance from `centerRow`. Used for the initial paint AND when
+  // the IntersectionObserver decides the focused row changed.
+  // This avoids the IO having to fire 30 ticks just to set the
+  // starting state.
+  function setLensAround(stack, centerRow) {
+    if (!centerRow) return;
+    var rows = stack.querySelectorAll('.sch-cal-week-row');
+    var centerIdx = -1;
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i] === centerRow) { centerIdx = i; break; }
+    }
+    if (centerIdx < 0) return;
+    for (var j = 0; j < rows.length; j++) {
+      var dist = Math.abs(j - centerIdx);
+      var lens = 'far';
+      if (dist === 0) lens = 'focused';
+      else if (dist === 1) lens = 'near';
+      else if (dist === 2) lens = 'mid';
+      rows[j].setAttribute('data-lens', lens);
+    }
+  }
+
+  // IntersectionObserver-driven focus engine. Watches each
+  // .sch-cal-week-row. On scroll we find the row whose center is
+  // nearest the scroll container's vertical center and promote it
+  // to data-lens="focused"; neighbors get "near" / "mid" / "far"
+  // based on row-count distance.
+  function attachFocusObserver(scrollEl, stack) {
+    if (_io) { _io.disconnect(); _io = null; }
+    var raf = 0;
+    var pending = false;
+    function tick() {
+      pending = false;
+      raf = 0;
+      var containerRect = scrollEl.getBoundingClientRect();
+      var containerCenter = containerRect.top + containerRect.height / 2;
+      var rows = stack.querySelectorAll('.sch-cal-week-row');
+      if (!rows.length) return;
+      // Find the row whose vertical center is closest to the
+      // container's center. O(n) per scroll tick — fine for ~30 rows.
+      var bestIdx = 0, bestDist = Infinity;
+      var rowRects = [];
+      for (var i = 0; i < rows.length; i++) {
+        var r = rows[i].getBoundingClientRect();
+        rowRects.push(r);
+        var rowCenter = r.top + r.height / 2;
+        var dist = Math.abs(rowCenter - containerCenter);
+        if (dist < bestDist) { bestDist = dist; bestIdx = i; }
+      }
+      var focusedIso = rows[bestIdx].getAttribute('data-week-start');
+      if (focusedIso === _focusedWeekStart) return; // no change
+      _focusedWeekStart = focusedIso;
+      // Apply new lens states based on row-count distance.
+      for (var k = 0; k < rows.length; k++) {
+        var distRows = Math.abs(k - bestIdx);
+        var lens = 'far';
+        if (distRows === 0) lens = 'focused';
+        else if (distRows === 1) lens = 'near';
+        else if (distRows === 2) lens = 'mid';
+        if (rows[k].getAttribute('data-lens') !== lens) {
+          rows[k].setAttribute('data-lens', lens);
+        }
+      }
+      updateMonthLabel();
+    }
+    function schedule() {
+      if (pending) return;
+      pending = true;
+      raf = requestAnimationFrame(tick);
+    }
+    scrollEl.addEventListener('scroll', schedule, { passive: true });
+    // First tick so we get accurate lens states even if the user
+    // doesn't scroll right away (the initial center-scroll might
+    // move us off the row we set as focused above).
+    schedule();
+  }
+
+  // Sync the month label in the toolbar with whichever week is
+  // currently focused — gives the user a stable orientation as
+  // they scroll between months.
+  function updateMonthLabel() {
+    var label = document.getElementById('schMonth');
+    if (!label || !_focusedWeekStart) return;
+    var midWeek = addDays(parseISODate(_focusedWeekStart), 3);
+    label.textContent = MONTH_NAMES[midWeek.getMonth()] + ' ' + midWeek.getFullYear();
+  }
+
+  // Smooth-scroll the calendar so today's week lands centered.
+  function scrollToToday() {
+    var stack = document.getElementById('schStack');
+    if (!stack) return;
+    var iso = toISODate(startOfWeek(new Date()));
+    var row = stack.querySelector('[data-week-start="' + iso + '"]');
+    if (row && row.scrollIntoView) {
+      row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
+  }
+  // Smooth-scroll to the first week of (focused month + delta).
+  function scrollToMonth(delta) {
+    var stack = document.getElementById('schStack');
+    if (!stack) return;
+    var base = _focusedWeekStart ? parseISODate(_focusedWeekStart) : new Date();
+    var target = new Date(base.getFullYear(), base.getMonth() + delta, 1);
+    var iso = toISODate(startOfWeek(target));
+    var row = stack.querySelector('[data-week-start="' + iso + '"]');
+    // If we scrolled off the rendered range, snap to the closest
+    // edge week. Lazy-extend will be added later; for now we just
+    // make sure the button does *something* visible.
+    if (!row) {
+      var rows = stack.querySelectorAll('.sch-cal-week-row');
+      row = delta < 0 ? rows[0] : rows[rows.length - 1];
+    }
+    if (row && row.scrollIntoView) {
+      row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
+  }
+  // Legacy entry point kept so callers (e.g. callbacks that used to
+  // hop months) still work. Maps to scrollToMonth.
+  function stepMonth(delta) { scrollToMonth(delta); }
 
   // Render a single week row. Day cells form a 7-column sub-grid;
   // entry bars layer on top using grid-column spans so a multi-day
@@ -1151,9 +1300,55 @@
           (wxTemp ? '<span class="sch-cal-day-wx-temp">' + escapeHTML(wxTemp) + '</span>' : '') +
         '</span>';
       }
+      // Per-day job-card list, shown only when the parent week is
+      // focused. We always emit the list so toggling lens states
+      // doesn't require re-rendering — CSS just shows/hides via
+      // display rules on .sch-cal-week-row[data-lens="focused"].
+      var dayEntries = entriesOnDay(d.iso);
+      var dayCardsHtml = '';
+      if (dayEntries.length) {
+        dayCardsHtml = '<div class="sch-cal-day-jobs">';
+        dayEntries.forEach(function(e) {
+          var job = jobById(e.jobId);
+          var color = colorForJob(e.jobId);
+          var label = job ? (job.jobNumber || job.title || 'Job') : 'Job';
+          var span = entrySpanDays(e);
+          // Continuation arrows: ← if this isn't the entry's first day;
+          // → if it isn't its last. Helps the user see at a glance
+          // that the entry spans more than the cell they're looking at.
+          var continueLeft = span.length > 1 && span.indexOf(d.iso) > 0 ? '<span class="sch-day-job-cont">←</span> ' : '';
+          var continueRight = span.length > 1 && span.indexOf(d.iso) < span.length - 1 ? ' <span class="sch-day-job-cont">→</span>' : '';
+          var statusCls = '';
+          if (e.status === 'done') statusCls = ' sch-day-job-done';
+          else if (e.status === 'rolled-over') statusCls = ' sch-day-job-rolled';
+          var crew = (e.crew && e.crew.length) ? '<span class="sch-day-job-crew">' + e.crew.length + '👷</span>' : '';
+          dayCardsHtml += '<button type="button" class="sch-day-job-card' + statusCls + '" ' +
+            'data-entry-id="' + escapeAttr(e.id) + '" ' +
+            'style="--job-color:' + color + ';" ' +
+            'title="' + escapeAttr(jobLabel(job)) + (e.notes ? ' — ' + escapeAttr(e.notes) : '') + '">' +
+            continueLeft +
+            '<span class="sch-day-job-label">' + escapeHTML(label) + '</span>' +
+            continueRight +
+            crew +
+          '</button>';
+        });
+        dayCardsHtml += '</div>';
+      }
+      // Mid-state dot strip — one colored dot per entry on this day.
+      // CSS shows this only when the parent week is data-lens="mid".
+      var dotsHtml = '';
+      if (dayEntries.length) {
+        dotsHtml = '<div class="sch-cal-day-dots">';
+        dayEntries.forEach(function(e) {
+          dotsHtml += '<span class="sch-cal-day-dot" style="background:' + colorForJob(e.jobId) + ';"></span>';
+        });
+        dotsHtml += '</div>';
+      }
       html += '<div class="' + cls + '" data-date="' + d.iso + '">' +
         '<span class="sch-cal-day-num">' + d.date.getDate() + '</span>' +
         wxHtml +
+        dotsHtml +
+        dayCardsHtml +
       '</div>';
     });
 
@@ -1275,9 +1470,21 @@
         if (entry) openEntryEditor(entry, entry.startDate, entry.jobId);
       });
     });
+    // Per-day job cards inside focused weeks. Tap → open entry editor.
+    // Wired BEFORE the day-cell catch-all so the card click doesn't
+    // bubble up and re-open the day sheet on top of the editor.
+    grid.querySelectorAll('.sch-day-job-card[data-entry-id]').forEach(function(card) {
+      card.addEventListener('click', function(e) {
+        e.stopPropagation();
+        var id = card.getAttribute('data-entry-id');
+        var entry = _state.entries.find(function(x) { return x.id === id; });
+        if (entry) openEntryEditor(entry, entry.startDate, entry.jobId);
+      });
+    });
     grid.querySelectorAll('.sch-cal-day[data-date]').forEach(function(cell) {
       cell.addEventListener('click', function(e) {
         if (e.target.closest('.sch-entry-bar')) return;
+        if (e.target.closest('.sch-day-job-card')) return;
         if (e.target.closest('.sch-week-focus-rail')) return;
         var date = cell.getAttribute('data-date');
         // New behavior: clicking an empty day opens a "day at a
