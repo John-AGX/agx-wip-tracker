@@ -26,21 +26,23 @@
 //   • clients.claim() takes control of open tabs on activation so
 //     users don't have to refresh to see the new build.
 //
-// BUMP CACHE_VERSION whenever:
-//   • This SW's behavior changes (caching strategy, fetch handling), OR
-//   • A user-facing release has shipped and you want the "An update
-//     is available — Relaunch" toast to fire on the next page load.
+// CACHE_VERSION below is the BASE version; the server's GET /sw.js
+// route (in server/index.js) appends Railway's per-deploy short git
+// SHA to it before serving — so EVERY production deploy produces a
+// distinct sw.js, which is what triggers the "An update is available
+// — Relaunch" toast in the PWA via the SW install/waiting/active
+// lifecycle. You no longer need to manually bump this constant on
+// release; the deploy SHA does it automatically.
 //
-// The toast is wired to the SW install/waiting/active lifecycle. If
-// sw.js doesn't change bytes, the browser never installs a new SW
-// and the toast never fires — even if every asset has a new cache
-// buster. The network-first HTML strategy still delivers fresh code
-// on the NEXT navigation, but users who keep a PWA open for hours
-// won't see updates land until they close + reopen.
+// You SHOULD still bump it manually when:
+//   • This SW's own logic changes (caching strategy, fetch handling,
+//     install hooks) — because the change should be visible across
+//     all environments including local dev where no SHA is stamped.
+//   • You want a clean "reset" of the version namespace (e.g. v13 →
+//     v14 to mark a significant client-side rewrite).
 //
-// In short: bump on every release of meaningful client code, not
-// only on SW-internal changes. The version suffix is opaque — just
-// increment.
+// Local dev (no Railway env var) → sw.js is served byte-for-byte
+// from this file, so the base version below IS the active version.
 
 const CACHE_VERSION = 'p86-shell-v13';
 

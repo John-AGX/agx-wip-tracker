@@ -186,6 +186,48 @@ app.get('/portal', (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'portal.html'));
 });
 
+// Dynamic /sw.js — stamp the cache version with the current Railway
+// deployment SHA so EVERY deploy produces a different sw.js, which is
+// what triggers the "An update is available — Relaunch" toast in the
+// PWA. The toast's wiring is tied to the SW install/waiting/active
+// lifecycle; a new SW only installs when the bytes of sw.js change.
+// Without stamping we'd have to manually bump a constant in sw.js on
+// every release. With it, Railway's per-deploy git SHA does the work.
+//
+// Behavior:
+//   • On Railway (RAILWAY_GIT_COMMIT_SHA set) → append the short SHA
+//     to the existing CACHE_VERSION constant. Every deploy gets a
+//     unique value → new sw.js bytes → new SW install → toast fires.
+//   • Local dev (no env var) → serve sw.js as-is. The manual constant
+//     in the file still works as the version, and you don't get a
+//     toast on every page reload (which would be obnoxious).
+//
+// Cache-Control: no-cache so the browser always revalidates sw.js
+// instead of serving it from its HTTP cache. Without this, a fresh
+// deploy could be invisible for up to a day on aggressive proxies.
+//
+// Must be registered BEFORE express.static below so this route wins.
+const SW_PATH = path.join(__dirname, '..', 'sw.js');
+const DEPLOY_SHA = (process.env.RAILWAY_GIT_COMMIT_SHA ||
+                    process.env.RAILWAY_DEPLOYMENT_ID || '').slice(0, 8);
+app.get('/sw.js', (req, res) => {
+  let content;
+  try {
+    content = require('fs').readFileSync(SW_PATH, 'utf8');
+  } catch (e) {
+    return res.status(500).type('application/javascript').send('// sw.js read failed');
+  }
+  if (DEPLOY_SHA) {
+    content = content.replace(
+      /(const CACHE_VERSION = ')([^']*)(';)/,
+      '$1$2-' + DEPLOY_SHA + '$3'
+    );
+  }
+  res.set('Cache-Control', 'no-cache, no-store, must-revalidate');
+  res.set('Content-Type', 'application/javascript; charset=utf-8');
+  res.send(content);
+});
+
 // Serve static frontend files
 app.use(express.static(path.join(__dirname, '..')));
 
