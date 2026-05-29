@@ -2621,6 +2621,17 @@
           debouncedSave();
         });
 
+        // Pin-style dropdown — changes section.pin_style and forces
+        // a paint so the markers re-render in the chosen style.
+        var styleSel = sectionEl.querySelector('.p86-report-section-pinstyle');
+        if (styleSel) styleSel.addEventListener('change', function() {
+          var v = styleSel.value;
+          var ALLOWED = ['tag', 'numbered', 'lettered', 'photo', 'dot'];
+          state.sections[sIdx].pin_style = ALLOWED.indexOf(v) >= 0 ? v : 'tag';
+          paint();
+          debouncedSave();
+        });
+
         // Map-toolbar Fit-all button — sits inside the map host as a
         // small chrome strip. Re-fits the map bounds around all pins
         // so the user can recover after panning/zooming.
@@ -2833,23 +2844,22 @@
           // handler-attaching code (in paint()) listens for, so we
           // don't have to capture sIdx in this closure.
           var infoWin = new maps.InfoWindow();
-          pickedPhotos.forEach(function(photo) {
+          // Pin style for this section. Read off the closest section
+          // wrap element so the choice persists across paint()s
+          // without us threading it through every closure.
+          var sectionWrap = mapEl.closest('.p86-report-section');
+          var sectionId = sectionWrap ? sectionWrap.getAttribute('data-sec') : null;
+          var sectionRow = sectionId ? state.sections.find(function(s) { return s.id === sectionId; }) : null;
+          var pinStyle = (sectionRow && sectionRow.pin_style) || 'tag';
+          pickedPhotos.forEach(function(photo, pinIdx) {
             var pos = { lat: Number(photo.lat), lng: Number(photo.lng) };
-            var icon = window.p86TagIcons ? window.p86TagIcons.forPhoto(photo) : { bg:'#6b7280', fg:'#fff', glyph:'●' };
-            var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28">' +
-              '<defs><filter id="ms"><feDropShadow dx="0" dy="1" stdDeviation="1.5" flood-opacity="0.5"/></filter></defs>' +
-              '<circle cx="14" cy="14" r="11" fill="' + icon.bg + '" stroke="white" stroke-width="2.5" filter="url(#ms)"/>' +
-              '<text x="14" y="18" text-anchor="middle" font-size="13" font-family="Arial,sans-serif" font-weight="bold" fill="' + icon.fg + '">' + icon.glyph + '</text>' +
-            '</svg>';
+            var markerSpec = buildPinMarker(maps, photo, pinIdx, pinStyle);
             var marker = new maps.Marker({
               position: pos,
               map: map,
-              icon: {
-                url: 'data:image/svg+xml;utf8,' + encodeURIComponent(svg),
-                anchor: new maps.Point(14, 28),
-                scaledSize: new maps.Size(28, 28)
-              },
-              title: photo.caption || photo.filename || 'Photo'
+              icon: markerSpec.icon,
+              title: photo.caption || photo.filename || 'Photo',
+              label: markerSpec.label || undefined
             });
             bounds.extend(pos);
             marker.addListener('click', function() {
@@ -2919,19 +2929,8 @@
           // to the interactive map so the print preview always has
           // a fallback image, regardless of paint() timing.
           try {
-            var key = window.p86Maps && window.p86Maps.getKey && window.p86Maps.getKey();
-            if (key) {
-              var markerStrs = pickedPhotos.slice(0, 60).map(function(p) {
-                var ic = window.p86TagIcons ? window.p86TagIcons.forPhoto(p) : null;
-                var color = (ic && ic.bg) ? ic.bg.replace('#', '0x') : '0xef4444';
-                return 'markers=color:' + color + '%7C' + Number(p.lat) + ',' + Number(p.lng);
-              });
-              var url = 'https://maps.googleapis.com/maps/api/staticmap'
-                + '?size=640x360&maptype=hybrid&scale=2'
-                + '&' + markerStrs.join('&')
-                + '&key=' + encodeURIComponent(key);
-              // Find the section wrap and either update an existing
-              // .p86-report-section-map-print or insert a fresh one.
+            var url = buildStaticMapsUrl(pickedPhotos, pinStyle);
+            if (url) {
               var wrap = mapEl.parentElement;
               if (wrap) {
                 var existing = wrap.querySelector('.p86-report-section-map-print');
@@ -3256,14 +3255,29 @@
       // Auto-pin is always available so the user can refresh after
       // taking new geotagged photos. Unpin only renders when the
       // section has any picks.
+      //
+      // Pin-style picker lives next to them — a select with five
+      // visual treatments (tag / numbered / lettered / photo / dot).
+      // Default 'tag' matches the existing color+glyph behavior so
+      // existing reports look unchanged after this commit.
       var mapBtns = '';
       if (layout === 'photo-map') {
         var pickCount = Array.isArray(section.photo_ids) ? section.photo_ids.length : 0;
+        var pinStyle = section.pin_style || 'tag';
+        var pinStyleSelect =
+          '<select class="p86-report-section-pinstyle" title="Pin style">' +
+            '<option value="tag"' + (pinStyle === 'tag' ? ' selected' : '') + '>Tag colors</option>' +
+            '<option value="numbered"' + (pinStyle === 'numbered' ? ' selected' : '') + '>Numbered</option>' +
+            '<option value="lettered"' + (pinStyle === 'lettered' ? ' selected' : '') + '>Lettered</option>' +
+            '<option value="photo"' + (pinStyle === 'photo' ? ' selected' : '') + '>Photo thumb</option>' +
+            '<option value="dot"' + (pinStyle === 'dot' ? ' selected' : '') + '>Plain dot</option>' +
+          '</select>';
         mapBtns =
           '<button class="ee-btn secondary p86-report-section-autopin" title="Add every project photo that has GPS data">&#x1F4CD; Auto-pin all</button>' +
           (pickCount
             ? '<button class="ee-btn secondary p86-report-section-unpin" title="Remove all photos from this map section">Unpin all</button>'
-            : '');
+            : '') +
+          pinStyleSelect;
       }
 
       var body;
@@ -3542,6 +3556,157 @@
     // entry point. isPhotoLayout('photo-map') is true so the wiring
     // at paint() lines ~2565 binds it to openPhotoPicker(sIdx)
     // automatically. We don't render a duplicate picker here.
+    // Pin renderer for photo-map markers. Returns { icon, label }
+    // shaped for google.maps.Marker. The `icon` field carries the
+    // SVG data URL + anchor + scaledSize; the `label` field (when
+    // returned non-null) draws crisp text on top using Google's
+    // built-in label rendering — cheaper than embedding text in
+    // SVG and avoids font-loading quirks.
+    //
+    //   tag      — colored circle + glyph from tag-icons.js
+    //   numbered — circle with the 1-based index, palette = accent
+    //   lettered — circle with A, B, ... (Z → AA → BB, etc.)
+    //   photo    — round thumbnail of the actual photo (uses
+    //              attachment.thumb_url; falls back to a tag pin if
+    //              the photo has no thumb yet)
+    //   dot      — plain colored circle, no glyph
+    //
+    // The function uses the lettering helper for the lettered style
+    // so we can serialize index → A, B, ... Z, AA, BB, etc.
+    // Build the Static Maps API URL for a photo-map section's print
+    // fallback. The Static Maps API only supports a small subset of
+    // what the JS API can show — single-digit/letter labels per
+    // marker, hex color, no thumbnails. So:
+    //   tag / dot:   color from tag-icons → 0xRRGGBB
+    //   numbered:    1-9 use Static labels; 10+ fall back to colored
+    //                dots (Static can't render multi-char labels)
+    //   lettered:    A-Z labels; AA+ fall back to colored dots
+    //   photo:       no thumb support → colored dots
+    // Returns '' (empty string) when no key is cached or no photos
+    // have coords; callers should skip injecting the <img> in that
+    // case.
+    function buildStaticMapsUrl(pickedPhotos, pinStyle) {
+      if (!pickedPhotos || !pickedPhotos.length) return '';
+      var key = (window.p86Maps && window.p86Maps.getKey && window.p86Maps.getKey()) || '';
+      if (!key) return '';
+      var markerStrs = pickedPhotos.slice(0, 60).map(function(p, idx) {
+        var color = '0xef4444';
+        var label = '';
+        if (pinStyle === 'numbered') {
+          var n = idx + 1;
+          if (n <= 9) { label = String(n); color = '0x4f8cff'; }
+          else        { color = '0x4f8cff'; }
+        } else if (pinStyle === 'lettered') {
+          var letters = indexToLetters(idx);
+          if (letters.length === 1) { label = letters; color = '0x22d3ee'; }
+          else                       { color = '0x22d3ee'; }
+        } else if (pinStyle === 'dot' || pinStyle === 'photo') {
+          var tagIcon = window.p86TagIcons ? window.p86TagIcons.forPhoto(p) : null;
+          color = (tagIcon && tagIcon.bg) ? tagIcon.bg.replace('#', '0x') : '0x6b7280';
+        } else {
+          // tag (default)
+          var ti = window.p86TagIcons ? window.p86TagIcons.forPhoto(p) : null;
+          color = (ti && ti.bg) ? ti.bg.replace('#', '0x') : '0xef4444';
+        }
+        var parts = ['color:' + color];
+        if (label) parts.push('label:' + label);
+        return 'markers=' + parts.join('%7C') + '%7C' + Number(p.lat) + ',' + Number(p.lng);
+      });
+      return 'https://maps.googleapis.com/maps/api/staticmap'
+        + '?size=640x360&maptype=hybrid&scale=2'
+        + '&' + markerStrs.join('&')
+        + '&key=' + encodeURIComponent(key);
+    }
+
+    function indexToLetters(n) {
+      // 0→A, 1→B, ..., 25→Z, 26→AA, 27→BB, etc.
+      var letters = '';
+      n = Math.max(0, n);
+      while (true) {
+        letters = String.fromCharCode(65 + (n % 26)) + letters;
+        if (n < 26) break;
+        n = Math.floor(n / 26) - 1;
+      }
+      return letters;
+    }
+    function buildPinMarker(maps, photo, pinIdx, pinStyle) {
+      // Standard 28px circle + drop shadow, varied per style.
+      var bg, fg, glyph;
+      if (pinStyle === 'numbered') {
+        bg = '#4f8cff'; fg = '#fff'; glyph = String(pinIdx + 1);
+      } else if (pinStyle === 'lettered') {
+        bg = '#22d3ee'; fg = '#0a0a0a'; glyph = indexToLetters(pinIdx);
+      } else if (pinStyle === 'dot') {
+        var icon = window.p86TagIcons ? window.p86TagIcons.forPhoto(photo) : null;
+        bg = (icon && icon.bg) || '#6b7280'; fg = '#fff'; glyph = '';
+      } else if (pinStyle === 'photo') {
+        // Photo-thumb pins: a circular clipped img. We can't put an
+        // <img> inside an SVG data URL reliably across all map
+        // renderers, so we use an SVG <image href="…"> referencing
+        // the photo's thumb_url. Browsers + Google Maps handle it.
+        var thumb = photo.thumb_url || photo.web_url || '';
+        if (thumb) {
+          var svg = '<svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" viewBox="0 0 36 36">' +
+            '<defs>' +
+              '<clipPath id="pclip"><circle cx="18" cy="18" r="15"/></clipPath>' +
+              '<filter id="psh" x="-20%" y="-20%" width="140%" height="140%">' +
+                '<feDropShadow dx="0" dy="1" stdDeviation="1.5" flood-opacity="0.5"/>' +
+              '</filter>' +
+            '</defs>' +
+            '<circle cx="18" cy="18" r="17" fill="white" filter="url(#psh)"/>' +
+            '<image href="' + thumb + '" x="3" y="3" width="30" height="30" clip-path="url(#pclip)" preserveAspectRatio="xMidYMid slice"/>' +
+            '<circle cx="18" cy="18" r="15" fill="none" stroke="white" stroke-width="2"/>' +
+          '</svg>';
+          return {
+            icon: {
+              url: 'data:image/svg+xml;utf8,' + encodeURIComponent(svg),
+              anchor: new maps.Point(18, 36),
+              scaledSize: new maps.Size(36, 36)
+            },
+            label: null
+          };
+        }
+        // Fallback to tag style when the photo has no thumbnail.
+        pinStyle = 'tag';
+      }
+      if (pinStyle === 'tag' || !bg) {
+        var tagIcon = window.p86TagIcons ? window.p86TagIcons.forPhoto(photo) : { bg: '#6b7280', fg: '#fff', glyph: '●' };
+        bg = tagIcon.bg; fg = tagIcon.fg; glyph = tagIcon.glyph;
+      }
+      // Standard circle SVG used by all glyph-based styles. Glyph
+      // text rendered server-side in the SVG for tag/dot (single
+      // char) and via maps.Label for numbered/lettered (clean text
+      // without font baking).
+      var hasInlineGlyph = (pinStyle === 'tag' || pinStyle === 'dot') && glyph;
+      var glyphMarkup = hasInlineGlyph
+        ? '<text x="14" y="18" text-anchor="middle" font-size="13" font-family="Arial,sans-serif" font-weight="bold" fill="' + fg + '">' + glyph + '</text>'
+        : '';
+      var pinSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28">' +
+        '<defs><filter id="ms"><feDropShadow dx="0" dy="1" stdDeviation="1.5" flood-opacity="0.5"/></filter></defs>' +
+        '<circle cx="14" cy="14" r="11" fill="' + bg + '" stroke="white" stroke-width="2.5" filter="url(#ms)"/>' +
+        glyphMarkup +
+      '</svg>';
+      var label = null;
+      if (!hasInlineGlyph && glyph) {
+        // Numbered / lettered get a Google Maps label — clean type,
+        // automatic centering, fewer font headaches than SVG <text>.
+        label = {
+          text: String(glyph),
+          color: fg,
+          fontSize: glyph.length >= 3 ? '10px' : '12px',
+          fontWeight: '700'
+        };
+      }
+      return {
+        icon: {
+          url: 'data:image/svg+xml;utf8,' + encodeURIComponent(pinSvg),
+          anchor: new maps.Point(14, 28),
+          scaledSize: new maps.Size(28, 28)
+        },
+        label: label
+      };
+    }
+
     function sectionPhotoMapBodyHTML(section) {
       var ids = Array.isArray(section.photo_ids) ? section.photo_ids : [];
       var picked = ids.map(function(pid) {
@@ -3566,27 +3731,17 @@
         ? '<div class="p86-report-section-map" id="' + escapeAttr(mapId) + '" data-photo-map="1" data-photo-ids="' + escapeAttr(JSON.stringify(coordIds)) + '"></div>'
         : '';
 
-      // Print fallback — Static Maps URL with one marker per photo.
-      // Color of each marker matches the tag-icon registry. URL length
-      // caps at ~8KB so we cap at 60 pins (Google's own soft limit
-      // is around that) — anything beyond that, the map still prints
-      // but only the first 60 pins show.
-      var staticImg = '';
-      if (withCoords.length && window.p86Maps && typeof window.p86Maps.getKey === 'function') {
-        var key = window.p86Maps.getKey();
-        if (key) {
-          var markerStrs = withCoords.slice(0, 60).map(function(p) {
-            var icon = window.p86TagIcons ? window.p86TagIcons.forPhoto(p) : null;
-            var color = (icon && icon.bg) ? icon.bg.replace('#', '0x') : '0xef4444';
-            return 'markers=color:' + color + '%7C' + Number(p.lat) + ',' + Number(p.lng);
-          });
-          var url = 'https://maps.googleapis.com/maps/api/staticmap'
-            + '?size=640x360&maptype=hybrid&scale=2'
-            + '&' + markerStrs.join('&')
-            + '&key=' + encodeURIComponent(key);
-          staticImg = '<img class="p86-report-section-map-print" alt="Photo locations" src="' + escapeAttr(url) + '" />';
-        }
-      }
+      // Print fallback — Static Maps URL with one marker per photo,
+      // styled per section.pin_style (see buildStaticMapsUrl).
+      // URL length caps at ~8KB so we cap at 60 pins (Google's own
+      // soft limit). On the very first paint of a saved report the
+      // URL is empty (key not yet cached); the photo-map mount loop
+      // re-injects it post-mount.
+      var pinStyleBody = section.pin_style || 'tag';
+      var staticUrl = buildStaticMapsUrl(withCoords, pinStyleBody);
+      var staticImg = staticUrl
+        ? '<img class="p86-report-section-map-print" alt="Photo locations" src="' + escapeAttr(staticUrl) + '" />'
+        : '';
 
       var unmapped = withoutCoords.length
         ? '<div class="p86-report-section-map-unmapped">' +

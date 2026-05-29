@@ -136,6 +136,17 @@ function normalizeSections(raw) {
       const v = descSidesIn[pid];
       if (v === 'left' || v === 'right') descSides[pid] = v;
     });
+    // pin_style — photo-map section visual treatment for each marker.
+    // 'tag' (default): colored circle + glyph from photo's primary tag
+    // 'numbered': circle with 1, 2, 3… in pick order
+    // 'lettered': circle with A, B, C… (Z wraps to AA, BB etc.)
+    // 'photo':    round thumbnail of the actual photo
+    // 'dot':      plain colored circle, no glyph
+    // Whitelisted enum — anything else clamps to 'tag'. Only
+    // meaningful when layout === 'photo-map' but stored unconditionally
+    // so switching layouts doesn't lose the user's choice.
+    const PIN_STYLES = ['tag', 'numbered', 'lettered', 'photo', 'dot'];
+    const pinStyle = PIN_STYLES.indexOf(s.pin_style) >= 0 ? s.pin_style : 'tag';
     return {
       id: id,
       label: label,
@@ -146,7 +157,8 @@ function normalizeSections(raw) {
       photo_ids: photoIds,
       captions: captions,
       text_body: textBody,
-      attachment_ids: attachmentIds
+      attachment_ids: attachmentIds,
+      pin_style: pinStyle
     };
   }).filter(Boolean).slice(0, 50);
 }

@@ -3437,6 +3437,21 @@
   background: rgba(255, 255, 255, 0.05);
   border-color: #555;
 }
+/* Pin-style picker in the section header. Sized to match the .ee-btn
+   secondary buttons next to it so the row reads as one toolbar. */
+.p86-report-section-pinstyle {
+  background: #141414;
+  color: var(--text, #e8e0d0);
+  border: 1px solid var(--border, #333);
+  border-radius: 4px;
+  padding: 5px 8px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.p86-report-section-pinstyle:focus {
+  outline: 1px solid var(--accent, #4f8cff);
+  outline-offset: 1px;
+}
 /* Print fallback — Static Maps API image. Hidden on screen, shown
    on print since the interactive Google Maps div can't render in a
    PDF. The print path emits this <img> next to the interactive div
