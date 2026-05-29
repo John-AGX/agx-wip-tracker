@@ -600,19 +600,37 @@ function renderNodes(){
           h+='</div></div>';
         }
       }
-      // T1 (Building) keeps the original simpler shared Actual+Accrued
-      // rows; t2 rendered them inside the metric stack above already.
-      if(n.type==='t1'){
-        h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Actual <span style="color:#34d399;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(tActual)+'</span></div>';
-        h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Accrued <span style="color:#fbbf24;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(tAccrued)+'</span></div>';
-      }
-      // T1 (Building): show allocated revenue from connected phases
+      // T1 (Building): full mini P&L matching the CO and t2 node
+      // metric stacks, with one conceptual twist — every value on
+      // this node is DERIVED (rolled up from connected phases/COs)
+      // rather than entered. Revenue isn't click-to-edit, and the
+      // ∑ glyph beside its label cues "this is a sum, not a field".
+      // The Connected breakdown table below the stack stays as the
+      // source-of-truth detail ("here's where this revenue came
+      // from"); the standalone "Rev Allocated" row that used to
+      // render here is dropped — Revenue in the stack is the same
+      // number.
       if(n.type==='t1'){
         var bRev=E.getBuildingAllocatedRevenue(n);
-        if(bRev>0){
-          h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Rev Allocated <span style="color:#4f8cff;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(bRev)+'</span></div>';
-        }
-        // Connected phases + COs breakdown
+        var bldgPctComp=E.getT1WeightedPct(n);
+        var bldgRevEarned=bRev*(bldgPctComp/100);
+        var bldgGP=bldgRevEarned-(tActual+tAccrued);
+        var bldgGpColor=bldgGP>=0?'#34d399':'#f87171';
+        var bldgPctColor=bldgPctComp>=100?'#34d399':bldgPctComp>=50?'#fbbf24':'#4f8cff';
+        // Metric stack — same row shape and color coding as the CO
+        // and t2 stacks. Revenue/% Complete intentionally have NO
+        // cursor:pointer because both are rollups; the small "∑"
+        // glyph in the label tells the user this value is summed
+        // from the connected sources below, not editable here.
+        h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;" title="Sum of revenue allocated from connected phases and COs">∑ Revenue <span style="color:#34d399;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(bRev)+'</span></div>';
+        h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;" title="Income-weighted % complete across connected sources">∑ % Complete <span style="color:'+bldgPctColor+';font-weight:600;font-family:\'Courier New\',monospace;">'+bldgPctComp.toFixed(1)+'%</span></div>';
+        h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Rev. Earned <span style="color:#4f8cff;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(bldgRevEarned)+'</span></div>';
+        h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Actual <span style="color:#f87171;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(tActual)+'</span></div>';
+        h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Accrued <span style="color:#fbbf24;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(tAccrued)+'</span></div>';
+        h+='<div style="display:flex;justify-content:space-between;padding:3px 0 2px;border-top:1px solid var(--ng-border2);margin-top:2px;color:#6a7090;font-weight:600;">Gross Profit <span style="color:'+bldgGpColor+';font-weight:700;font-family:\'Courier New\',monospace;">'+E.fmtC(bldgGP)+'</span></div>';
+        // Connected phases + COs breakdown — source-of-truth detail
+        // for where the Revenue + Actual + Accrued numbers above
+        // came from. Unchanged from the previous implementation.
         var t1Conns=[];
         E.wires().forEach(function(w){
           if(w.toNode!==n.id) return;
