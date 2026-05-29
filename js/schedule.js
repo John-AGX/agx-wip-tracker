@@ -1332,7 +1332,10 @@
       // focused. We always emit the list so toggling lens states
       // doesn't require re-rendering — CSS just shows/hides via
       // display rules on .sch-cal-week-row[data-lens="focused"].
-      var dayEntries = entriesOnDay(d.iso);
+      // entriesOnDay() expects a Date, NOT an ISO string — passing
+      // d.iso was the bug behind "[schedule] renderGrid failed:
+      // TypeError: d.getFullYear is not a function".
+      var dayEntries = entriesOnDay(d.date);
       var dayCardsHtml = '';
       if (dayEntries.length) {
         dayCardsHtml = '<div class="sch-cal-day-jobs">';
