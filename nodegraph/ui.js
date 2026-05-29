@@ -536,11 +536,33 @@ function renderNodes(){
       var tActual=E.getActual(n);
       var tAccrued=E.getAccrued(n);
       h+='<div style="padding:4px 10px 6px;font-size:12px;">';
-      // T2 (Phase): editable revenue + per-building allocation breakdown
+      // T2 (Phase): full mini P&L mirroring the CO node — revenue,
+      // % complete, revenue earned, actual, accrued, gross profit,
+      // followed by the per-building allocation table. Phase doesn't
+      // carry an items[] array like CO does, so we skip CO's bottom
+      // line-item table; the allocation table fills the same
+      // orientation role ("where does this phase's money go").
+      //
+      // All numbers use the same colors as the CO block so a phase
+      // and a CO node paint identically when they sit side-by-side
+      // on the graph. Helpers (getT2WeightedPct, getActual, getAccrued)
+      // already work on t2 — see comments in engine.js.
       if(n.type==='t2'){
         var phaseRev=n.revenue||0;
-        h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Revenue <span class="ng-phase-rev" data-phase-rev="'+n.id+'" title="Click to edit" style="color:#4f8cff;font-weight:600;font-family:\'Courier New\',monospace;cursor:pointer;">'+E.fmtC(phaseRev)+'</span></div>';
-        // Allocation breakdown per connected building
+        var phasePctComp=E.getT2WeightedPct(n);
+        var phaseRevEarned=phaseRev*(phasePctComp/100);
+        var phaseGP=phaseRevEarned-(tActual+tAccrued);
+        var gpColor=phaseGP>=0?'#34d399':'#f87171';
+        var phasePctColor=phasePctComp>=100?'#34d399':phasePctComp>=50?'#fbbf24':'#4f8cff';
+        // Metric stack — same row shape and color coding as the CO
+        // metric stack above so the two read identically.
+        h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Revenue <span class="ng-phase-rev" data-phase-rev="'+n.id+'" title="Click to edit" style="color:#34d399;font-weight:600;font-family:\'Courier New\',monospace;cursor:pointer;">'+E.fmtC(phaseRev)+'</span></div>';
+        h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">% Complete <span style="color:'+phasePctColor+';font-weight:600;font-family:\'Courier New\',monospace;">'+phasePctComp.toFixed(1)+'%</span></div>';
+        h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Rev. Earned <span style="color:#4f8cff;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(phaseRevEarned)+'</span></div>';
+        h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Actual <span style="color:#f87171;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(tActual)+'</span></div>';
+        h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Accrued <span style="color:#fbbf24;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(tAccrued)+'</span></div>';
+        h+='<div style="display:flex;justify-content:space-between;padding:3px 0 2px;border-top:1px solid var(--ng-border2);margin-top:2px;color:#6a7090;font-weight:600;">Gross Profit <span style="color:'+gpColor+';font-weight:700;font-family:\'Courier New\',monospace;">'+E.fmtC(phaseGP)+'</span></div>';
+        // Allocation breakdown per connected building (unchanged)
         var aw=E.getPhaseAllocWires(n.id);
         if(aw.length){
           E.rebalancePhaseAllocations(n.id);
@@ -577,10 +599,13 @@ function renderNodes(){
           h+='<span style="color:'+warnColor+';font-family:\'Courier New\',monospace;">'+totalPct.toFixed(1)+'% '+(pctOk?'\u2713':'\u26a0')+'</span>';
           h+='</div></div>';
         }
-        h+='<div style="margin-top:4px;padding-top:4px;border-top:1px solid var(--ng-border2);">';
       }
-      h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Actual <span style="color:#34d399;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(tActual)+'</span></div>';
-      h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Accrued <span style="color:#fbbf24;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(tAccrued)+'</span></div>';
+      // T1 (Building) keeps the original simpler shared Actual+Accrued
+      // rows; t2 rendered them inside the metric stack above already.
+      if(n.type==='t1'){
+        h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Actual <span style="color:#34d399;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(tActual)+'</span></div>';
+        h+='<div style="display:flex;justify-content:space-between;padding:2px 0;color:#6a7090;">Accrued <span style="color:#fbbf24;font-weight:600;font-family:\'Courier New\',monospace;">'+E.fmtC(tAccrued)+'</span></div>';
+      }
       // T1 (Building): show allocated revenue from connected phases
       if(n.type==='t1'){
         var bRev=E.getBuildingAllocatedRevenue(n);
@@ -662,7 +687,6 @@ function renderNodes(){
           h+='</div></div>';
         }
       }
-      if(n.type==='t2') h+='</div>';
       h+='</div>';
     }
 
