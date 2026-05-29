@@ -23,50 +23,52 @@
 //       Returns true if SpeechRecognition (native or webkit-prefixed)
 //       exists. Callers should hide their mic UI when false.
 //
-// Mobile-specific defenses baked in:
-//   1. Index-tracked finals (committedFinals[resultIndex] = transcript).
-//      The Web Speech API gives each SpeechRecognitionResult a stable
-//      position in e.results. Mobile engines have three documented
-//      quirks the spec doesn't acknowledge but real browsers exhibit:
-//        a. Same-index re-emission — every onresult re-sends the same
-//           result at the same index (idempotent when index-tracked).
-//        b. Whole-buffer re-emission — Android Chrome silently
-//           restarts the mic stream when the network blips. The
-//           restart re-emits the WHOLE buffer at higher indices —
-//           [F:"hello", F:"world"] becomes [F:"hello", F:"world",
-//           F:"hello", F:"world"]. Adjacent-only dedup misses this
-//           because the two "hello"s are separated by a "world".
-//           Indexing by position can't help with the doubled tail,
-//           so we add an adjacent-byte-equal safety net below it.
-//        c. Index-shrink on restart — some restarts trim the array
-//           back, then grow it again. We trim committedFinals to
-//           e.results.length on each tick so stale entries don't
-//           re-append.
-//   2. Consecutive-duplicate final de-dupe (safety net) — iOS in
-//      particular can classify a single utterance as two separate
-//      final results with identical transcripts at adjacent indices.
-//      Drop a final if its trimmed transcript byte-equals the
-//      previous pushed final's. True user-repetition usually arrives
-//      with different transcripts (timing, punctuation, casing) so
-//      this is safe in practice.
-//   3. baseValue captured ONCE per user tap (not per onstart). Android
-//      Chrome silently re-fires onstart when the engine restarts
-//      mid-session — re-reading the textarea then would baseline
-//      onto already-dictated text and the next onresult would append
-//      on top, doubling. Captured in start() before recognition.start()
-//      and never touched again.
-//   4. Silence watchdog — Web Speech's continuous:true keeps the
-//      mic open across pauses. UX-wise we stop after N ms of no
-//      new results so users don't have to remember to toggle off.
-//   5. Idempotent textarea write — if the recomputed value equals
-//      the textarea's current value, skip the write + input event.
-//      Avoids triggering autoGrow / autosave listeners on no-op
-//      ticks and keeps the cursor stable.
+// Algorithm: ARCHAEOLOGY-DRIVEN REVERT to Version A.
+//
+// The chat composer's original pre-consolidation inline mic (in
+// js/ai-panel.js at commit 80705bb^) used a naive full-rescan
+// approach with no dedup — and the user reports that version worked
+// cleanly on his phone during real walkthroughs. Three subsequent
+// "improvements" (the consolidation's iOS adjacent-final dedup, the
+// engine-restart baseValue fix, and the index-tracked algorithm)
+// each tried to solve a theoretical mobile-engine quirk and each
+// left residual doubling behind. The empirical conclusion: the
+// theoretical quirks aren't happening for John in practice, and
+// every defense layered on top of A was solving phantoms while
+// adding new edge cases.
+//
+// So we're back to Version A:
+//
+//   onresult(e) {
+//     var allFinal = '', allInterim = '';
+//     for (var i = 0; i < e.results.length; i++) {
+//       if (e.results[i].isFinal) allFinal += transcript;
+//       else allInterim += transcript;
+//     }
+//     textarea.value = baseValue + allFinal + allInterim;
+//   }
+//
+// Why this is idempotent: every onresult event rebuilds allFinal +
+// allInterim from scratch and replaces textarea.value entirely.
+// Same e.results in → same string out. No state accumulates across
+// events (allFinal is a fresh local var per call). The only thing
+// that persists between events is baseValue (the textarea content
+// at session start) — captured in onstart so a "send between
+// dictations" cleanly clears the baseline.
+//
+// What we kept from the consolidation, because they're not algorithm
+// behavior:
+//   - The wire(textarea, button, opts) wrapper so chat + walkthrough
+//     share one implementation
+//   - Silence watchdog that stops the mic after N ms of quiet
+//   - Optional onChange callback (no consumer uses it yet — kept
+//     for API stability)
 //
 // Diagnostic: set window._p86VoiceDebug = true in devtools and the
 // helper will log every e.results snapshot + the resolved textarea
-// value to console. Use when a NEW mobile quirk surfaces so the
-// fix can be driven by a real transcript instead of speculation.
+// value to console. If a doubling pattern reappears, the log will
+// show the actual engine emission so the next fix can be targeted
+// at a real quirk instead of speculation.
 (function () {
   'use strict';
 
@@ -111,22 +113,17 @@
         recognition.continuous = true;
         recognition.interimResults = true;
         recognition.lang = navigator.language || 'en-US';
-        // baseValue captured ONCE per user click — see header comment
-        // (defense #3). Engine restarts re-fire onstart; we ignore
-        // them there.
-        var baseValue = textareaEl.value || '';
-        if (baseValue && !/\s$/.test(baseValue)) baseValue += ' ';
-
-        // committedFinals[i] = transcript of the SpeechRecognitionResult
-        // at index i. Sparse array keyed by result-list position, NOT
-        // a flat list of pushed entries. This is the core of the
-        // dedup defense — see header comment (#1).
-        var committedFinals = [];
-
+        // baseValue captured fresh on each onstart. This mirrors the
+        // original chat-composer inline algorithm (pre-consolidation,
+        // pre-80705bb) that was empirically known to work on John's
+        // mobile setup. Re-capturing in onstart correctly handles the
+        // "user sent the chat between dictations" case — the new
+        // session starts from the now-empty textarea instead of
+        // baselining onto stale pre-send text.
+        var baseValue = '';
         recognition.onstart = function () {
-          // Don't touch baseValue or committedFinals here — see
-          // header comment. Only update listening state + reset
-          // the silence watchdog.
+          baseValue = textareaEl.value || '';
+          if (baseValue && !/\s$/.test(baseValue)) baseValue += ' ';
           setListening(true);
           lastResultTs = Date.now();
           if (silenceTimer) clearInterval(silenceTimer);
@@ -136,62 +133,29 @@
           }, 500);
         };
         recognition.onresult = function (e) {
+          // Reset the silence countdown on every result (interim too)
+          // so the mic stays open while mid-sentence.
           lastResultTs = Date.now();
-
-          // If the engine restarted and shrank e.results, drop the
-          // stale tail so it doesn't re-append on the next paint.
-          if (committedFinals.length > e.results.length) {
-            committedFinals.length = e.results.length;
-          }
-
-          // Single pass: write final transcripts into their index
-          // slot (idempotent — same transcript at same index is a
-          // no-op; engine-corrected text replaces in place); collect
-          // interims into a parallel sparse array.
-          var interimByIndex = [];
+          // Iterate the FULL e.results array, not e.resultIndex onward.
+          // Mobile Safari + Chrome on Android don't advance
+          // resultIndex reliably — reconstructing from scratch is
+          // idempotent: no matter how many times this fires for the
+          // same logical utterance, input.value lands at the right
+          // text. Same-content re-emission writes the same string
+          // and is a no-op effectively.
+          var allFinal = '';
+          var allInterim = '';
           for (var i = 0; i < e.results.length; i++) {
             var t = (e.results[i][0] && e.results[i][0].transcript) || '';
-            if (e.results[i].isFinal) {
-              committedFinals[i] = t;
-            } else if (t) {
-              interimByIndex[i] = t;
-            }
+            if (e.results[i].isFinal) allFinal += t;
+            else allInterim += t;
           }
+          var nextValue = baseValue + allFinal + allInterim;
 
-          // Compose finals with adjacent-byte-equal safety net.
-          // Whole-buffer re-emissions land repeated content at NEW
-          // indices ([..., F:"hello", F:"world", F:"hello", F:"world"])
-          // — the indexed memo can't catch that on its own because
-          // each index is its own slot. The adjacent-equal check
-          // catches the doubled tail because the re-emitted "hello"
-          // immediately follows the original "world" in iteration
-          // order and byte-equals the engine's prior emission — but
-          // ONLY when the re-emission is byte-equal, which is the
-          // engine-artifact signature. Legit repetition ("very very
-          // nice") usually differs in transcript metadata.
-          var finalsText = '';
-          var lastPushed = '';
-          for (var j = 0; j < committedFinals.length; j++) {
-            var cf = committedFinals[j] || '';
-            if (!cf) continue;
-            var trimmed = cf.trim();
-            if (trimmed && trimmed === lastPushed.trim()) continue;
-            finalsText += cf;
-            lastPushed = cf;
-          }
-
-          // Concat interims in index order — typically just one
-          // (the trailing in-progress utterance), but a sparse fill
-          // is handled gracefully.
-          var interimText = '';
-          for (var k = 0; k < interimByIndex.length; k++) {
-            if (interimByIndex[k]) interimText += interimByIndex[k];
-          }
-
-          var nextValue = baseValue + finalsText + interimText;
-
-          // Diagnostic — see header comment. Enable from devtools
-          // with `window._p86VoiceDebug = true`.
+          // Diagnostic — set window._p86VoiceDebug = true in devtools
+          // to log every e.results snapshot + the resolved value. Use
+          // when a mobile quirk surfaces so the fix can be driven by
+          // a real transcript instead of speculation.
           if (window._p86VoiceDebug) {
             try {
               var raw = [];
@@ -204,12 +168,15 @@
             } catch (_) { /* defensive */ }
           }
 
-          // Idempotent write — skip the input event when nothing
-          // changed (avoids redundant autosave/autoGrow ticks and
-          // keeps the cursor stable on no-op re-emissions).
-          if (nextValue === textareaEl.value) return;
+          // Write unconditionally + use a NON-BUBBLING input event
+          // to match the original chat-composer behavior exactly
+          // (Version A — empirically known to work on John's phone).
+          // A bubbling event could reach a parent listener and trip
+          // an unknown side-effect path; the original used
+          // `new Event('input')` (bubbles defaults to false) and
+          // never had this class of bug.
           textareaEl.value = nextValue;
-          try { textareaEl.dispatchEvent(new Event('input', { bubbles: true })); }
+          try { textareaEl.dispatchEvent(new Event('input')); }
           catch (_) { /* defensive — older browsers may throw */ }
           if (onChange) {
             try { onChange(nextValue); } catch (_) { /* defensive */ }
