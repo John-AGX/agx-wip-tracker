@@ -1014,27 +1014,38 @@
     wireGridDrop(stack);
     wireGridClicks(stack);
 
-    // Set the initial focused week (today's week) BEFORE the IO
-    // attaches so the user lands on a fully-painted focused state
-    // instead of a brief flicker.
+    // Pick the week to center on. Preserve the previously-focused
+    // week across re-renders (entry save/delete, filter changes,
+    // weekend toggle) so the user isn't snapped back to today every
+    // time data updates. _focusedWeekStart is null only on the very
+    // first render or after a full re-mount.
     var todayWeekIso = toISODate(startOfWeek(today));
-    var todayRow = stack.querySelector('[data-week-start="' + todayWeekIso + '"]');
-    if (todayRow) {
-      todayRow.setAttribute('data-lens', 'focused');
-      _focusedWeekStart = todayWeekIso;
+    var centerIso = _focusedWeekStart || todayWeekIso;
+    var centerRow = stack.querySelector('[data-week-start="' + centerIso + '"]');
+    // Fallback if the preserved week scrolled out of the rendered
+    // range (e.g. the user was viewing 5 months out and the new
+    // render window doesn't include it). Just snap to today.
+    if (!centerRow) {
+      centerRow = stack.querySelector('[data-week-start="' + todayWeekIso + '"]');
+      centerIso = todayWeekIso;
     }
-    // Set decay lens states on rows above/below so the initial
-    // paint already shows the fisheye shape, not a wall of equal
-    // rows that animates after IO ticks.
-    setLensAround(stack, todayRow);
+    if (centerRow) {
+      centerRow.setAttribute('data-lens', 'focused');
+      _focusedWeekStart = centerIso;
+    }
+    // Set decay lens states on rows above/below so the initial paint
+    // already shows the fisheye shape, not a wall of equal rows that
+    // animates after the first IO tick.
+    setLensAround(stack, centerRow);
 
-    // Position scroll so today's week is centered in the viewport.
+    // Position scroll so the center row lands centered in the viewport.
     // requestAnimationFrame so we measure AFTER the new layout has
-    // committed, not against the previous one.
+    // committed, not against the previous one. 'auto' (not 'smooth')
+    // for re-renders so the user doesn't see an animation every time
+    // they edit an entry.
     requestAnimationFrame(function() {
-      if (todayRow && todayRow.scrollIntoView) {
-        // 'auto' (not 'smooth') so initial paint doesn't animate.
-        todayRow.scrollIntoView({ block: 'center', behavior: 'auto' });
+      if (centerRow && centerRow.scrollIntoView) {
+        centerRow.scrollIntoView({ block: 'center', behavior: 'auto' });
       }
       attachFocusObserver(scrollEl, stack);
       updateMonthLabel();
