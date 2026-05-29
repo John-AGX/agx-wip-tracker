@@ -88,10 +88,22 @@
         recognition.continuous = true;
         recognition.interimResults = true;
         recognition.lang = navigator.language || 'en-US';
-        var baseValue = '';
+        // baseValue MUST be captured here, ONCE per user click — NOT
+        // inside onstart. Android Chrome (and some iOS Safari builds)
+        // silently restart the recognition engine mid-session during
+        // continuous:true mode whenever there's a brief audio gap or
+        // a network reconnect. Each restart re-fires onstart. If we
+        // reset baseValue there, the second onstart captures the
+        // already-dictated text as the new baseline, then the very
+        // next onresult rebuilds `baseValue + finals + lastInterim`
+        // — appending the in-flight finals onto a baseline that
+        // ALREADY contained them. That's the residual "double speak"
+        // the v1 dedup couldn't catch.
+        var baseValue = textareaEl.value || '';
+        if (baseValue && !/\s$/.test(baseValue)) baseValue += ' ';
         recognition.onstart = function () {
-          baseValue = textareaEl.value || '';
-          if (baseValue && !/\s$/.test(baseValue)) baseValue += ' ';
+          // Don't touch baseValue here — see comment above. Only
+          // update listening state + reset the silence watchdog.
           setListening(true);
           lastResultTs = Date.now();
           if (silenceTimer) clearInterval(silenceTimer);

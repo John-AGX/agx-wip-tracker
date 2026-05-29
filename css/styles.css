@@ -5136,7 +5136,13 @@
 .p86-report-preview-paper {
   background: #fff;
   color: #000;
-  width: min(900px, 100%);
+  /* Letter portrait minus the 0.4in @page margins = 7.7in printable.
+     Sized in px against a 96dpi baseline (7.7 * 96 ≈ 739px). Plus
+     the 50px horizontal padding on each side = ~839px total. We
+     used to render at 900px which made the in-overlay line wraps
+     diverge from print. Sizing to actual print width fixes the
+     "preview line breaks don't match print" mismatch. */
+  width: min(839px, 100%);
   margin: 32px auto;
   padding: 60px 50px;
   box-shadow: 0 8px 40px rgba(0,0,0,0.6);
@@ -5241,9 +5247,14 @@
   display: grid;
   gap: 12px;
 }
-.p86-report-preview-section-grid.size-small  { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.p86-report-preview-section-grid.size-medium { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-.p86-report-preview-section-grid.size-large  { grid-template-columns: 1fr; }
+/* These MUST match .p86-report-section-photos.size-* in the editor
+   (lines ~4502–4504). Previously preview used 3/2/1 columns while
+   the editor + print used 2/3/2 — so the preview line wraps didn't
+   line up with what actually printed. Now both render identical
+   column counts: S = 2x2 / page, M = 1x3, L = 1x2. */
+.p86-report-preview-section-grid.size-small  { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.p86-report-preview-section-grid.size-medium { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.p86-report-preview-section-grid.size-large  { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .p86-report-preview-section-stack {
   display: flex;
   flex-direction: column;
@@ -5581,6 +5592,14 @@
   /* Tighten the grid gap in print — 10px on screen becomes a lot of
      wasted page space when the page is only ~7.7" wide. */
   .p86-report-section-photos { gap: 6px; }
+  /* Re-assert the per-size grid templates inside print mode so they
+     can't be overridden by mobile-print viewport rules or other
+     cascading defaults. Without this, mobile browsers sometimes
+     collapsed the multi-column grid to a single column on print,
+     which was the root cause of the "one photo per page" complaint. */
+  .p86-report-section-photos.size-small  { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
+  .p86-report-section-photos.size-medium { grid-template-columns: repeat(3, minmax(0, 1fr)) !important; }
+  .p86-report-section-photos.size-large  { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
   /* Stack mode in print — let the photo use the full printable width
      instead of being capped at 65/80% which made it dramatically
      smaller than the editor preview. */
@@ -5588,12 +5607,32 @@
   .p86-report-photo-single.size-medium,
   .p86-report-photo-single.size-large { max-width: 100% !important; }
   /* Photo image — make it stretch to fill its cell width so the
-     printed photo matches the editor's render. Without this an
-     img with intrinsic dimensions may render at its natural size
-     rather than the cell width. */
+     printed photo matches the editor's render. CRITICAL: also drop
+     the 4:3 aspect-ratio so portrait images don't force themselves
+     to a fixed tall box. And cap max-height so even when the image's
+     intrinsic ratio is tall, multiple rows still fit on a page
+     instead of one photo eating the whole sheet. 2.4in matches
+     about a 1/3 page slot, so a 2x2 grid leaves room for the section
+     header + summary; 1.6in for size-medium (1x3) lets three rows
+     stack; 2.8in for size-large (1x2). */
   .p86-report-photo img,
-  .p86-report-photo-single img { width: 100%; height: auto; display: block; }
-  .p86-report-photo { border: 1px solid #ccc; }
+  .p86-report-photo-single img {
+    width: 100%;
+    height: auto;
+    display: block;
+    aspect-ratio: auto !important;
+    object-fit: cover;
+  }
+  .p86-report-section-photos.size-small  .p86-report-photo img { max-height: 2.4in; }
+  .p86-report-section-photos.size-medium .p86-report-photo img { max-height: 1.7in; }
+  .p86-report-section-photos.size-large  .p86-report-photo img { max-height: 2.8in; }
+  /* Don't let a single photo card claim a whole page — break-inside
+     avoid is fine on the photo card itself (don't split an image
+     across pages), but the parent section can break across pages
+     freely so a 6-photo size-small section flows naturally over
+     two pages instead of being shoved entirely onto page 2. */
+  .p86-report-photo { border: 1px solid #ccc; break-inside: avoid; page-break-inside: avoid; }
+  .p86-report-section { page-break-inside: auto !important; }
 }
 
 /* Files tab — vertical list of non-image attachments */
