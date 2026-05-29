@@ -552,10 +552,18 @@
       }
 
       function canCreate() {
-        var q = query.trim().toLowerCase().slice(0, 32);
+        // Preserve case for the new tag, but check existence
+        // case-insensitively so the user can't accidentally create
+        // "Trim" when "trim" is already in the catalog/selection.
+        var q = query.trim().slice(0, 32);
         if (!q) return false;
-        if (selected.indexOf(q) !== -1) return false;
-        if (lastCatalog.indexOf(q) !== -1) return false;
+        var qLower = q.toLowerCase();
+        for (var i = 0; i < selected.length; i++) {
+          if (String(selected[i]).toLowerCase() === qLower) return false;
+        }
+        for (var j = 0; j < lastCatalog.length; j++) {
+          if (String(lastCatalog[j]).toLowerCase() === qLower) return false;
+        }
         return true;
       }
 
@@ -593,9 +601,12 @@
         var vis = visibleCatalog();
         var html = '';
         if (canCreate()) {
-          html += '<button type="button" class="p86-pv-tag-modal-row p86-pv-tag-modal-create" data-create-tag="' + escapeAttr(query.trim().toLowerCase().slice(0, 32)) + '">' +
+          // Preserve the user's typed case — "Trim Carpentry" stays
+          // "Trim Carpentry", not "trim carpentry".
+          var rawCreate = query.trim().slice(0, 32);
+          html += '<button type="button" class="p86-pv-tag-modal-row p86-pv-tag-modal-create" data-create-tag="' + escapeAttr(rawCreate) + '">' +
             '<span class="p86-pv-tag-modal-create-plus">&#x2295;</span>' +
-            '<span>Create <strong>#' + escapeHTMLLocal(query.trim().toLowerCase().slice(0, 32)) + '</strong></span>' +
+            '<span>Create <strong>#' + escapeHTMLLocal(rawCreate) + '</strong></span>' +
           '</button>';
         }
         if (!vis.length && !canCreate()) {
@@ -659,7 +670,8 @@
               // Enter commits the typed value as a Create OR picks
               // the first list row if Create isn't applicable.
               if (canCreate()) {
-                var newTag = query.trim().toLowerCase().slice(0, 32);
+                // Preserve case — see canCreate() comment.
+                var newTag = query.trim().slice(0, 32);
                 commitSelection(selected.concat([newTag]));
                 query = '';
               } else {

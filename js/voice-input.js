@@ -103,23 +103,42 @@
         recognition.onresult = function (e) {
           lastResultTs = Date.now();
           // Full rescan + consecutive-duplicate de-dupe.
+          //
+          // Mobile Safari + Chrome on Android sometimes re-emit the
+          // same interim phrase across multiple onresult events
+          // without advancing e.resultIndex — which used to give us
+          // "double speak" (the in-progress phrase appended onto
+          // itself on every tick). Fix: take only the LATEST interim
+          // for the trailing in-progress utterance, not the sum of
+          // every interim across the whole results list. The earlier
+          // interim entries have already been promoted to `isFinal`
+          // (or replaced by their final form), so cumulatively adding
+          // them re-says everything you've already said.
+          //
+          // Finals are still deduped against the immediate predecessor
+          // (same iOS dup behavior on finalized utterances).
           var finals = [];
-          var allInterim = '';
+          var lastInterim = '';
           for (var i = 0; i < e.results.length; i++) {
             var t = (e.results[i][0] && e.results[i][0].transcript) || '';
             if (e.results[i].isFinal) {
-              // Drop a final that's byte-equal to its predecessor —
-              // iOS sometimes emits the same utterance twice as two
-              // independent finals.
               var trimmed = t.trim();
               if (trimmed && (!finals.length || finals[finals.length - 1].trim() !== trimmed)) {
                 finals.push(t);
               }
+              // Reset interim — once a final lands, any earlier
+              // in-progress text for the same utterance is now stale.
+              lastInterim = '';
             } else if (t) {
-              allInterim += t;
+              // OVERWRITE, don't concatenate. The interim of the
+              // trailing utterance replaces whatever the previous tick
+              // had. If multiple non-final results show up in the same
+              // event (rare but possible), the last one wins because
+              // it's the most recently spoken.
+              lastInterim = t;
             }
           }
-          var nextValue = baseValue + finals.join('') + allInterim;
+          var nextValue = baseValue + finals.join('') + lastInterim;
           textareaEl.value = nextValue;
           // Surface a native input event so framework listeners (the
           // chat composer's debouncedSave equivalents) see the change.

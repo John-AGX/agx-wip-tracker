@@ -44,11 +44,13 @@ async function requireAdmin(req, res, next) {
 }
 
 // Normalize a tag name to the same shape attachment-routes uses:
-// trimmed, lowercased, max 32 chars. Returns null when the input
-// would normalize to empty.
+// trimmed, max 32 chars, case PRESERVED. Dedup happens via the
+// case-insensitive expression index in db.js, so "Trim Carpentry"
+// and "trim carpentry" can't both exist as separate rows but the
+// user's input case is what's stored and displayed.
 function normTagName(raw) {
   if (typeof raw !== 'string') return null;
-  const c = raw.trim().toLowerCase().slice(0, 32);
+  const c = raw.trim().slice(0, 32);
   return c || null;
 }
 

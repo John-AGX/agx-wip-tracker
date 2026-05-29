@@ -606,6 +606,15 @@ async function initSchema() {
       ON org_tags(organization_id) WHERE archived_at IS NULL;
     CREATE INDEX IF NOT EXISTS idx_org_tags_use_count
       ON org_tags(organization_id, use_count DESC) WHERE archived_at IS NULL;
+    -- Case-insensitive uniqueness so "Trim Carpentry" and "trim
+    -- carpentry" can't both exist as separate org-tag rows. We keep
+    -- the case-sensitive UNIQUE(organization_id, name) above as well
+    -- — this expression index just adds the case-fold check.
+    -- ON CONFLICT in attachment-routes.js targets this expression
+    -- index so case-preserved new entries fold into existing rows
+    -- of any case rather than spawning duplicates.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_org_tags_ci_name
+      ON org_tags(organization_id, (LOWER(name)));
 
     -- Extend the entity_type enum to support clients (business-card photos,
     -- W9s, COIs, etc. attached to a parent management company or property).

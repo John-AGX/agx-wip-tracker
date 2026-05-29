@@ -164,18 +164,28 @@ function sanitizeFolderPath(raw) {
 async function upsertOrgTags(orgId, tagNames, actorUserId) {
   if (!orgId || !Array.isArray(tagNames) || !tagNames.length) return;
   // Dedupe + clean inside this function so callers don't have to.
+  // Preserve case but dedup case-insensitively so a user can't bloat
+  // the catalog with "trim", "Trim", "TRIM".
   const seen = new Set();
   const clean = [];
   for (let i = 0; i < tagNames.length; i++) {
     const v = tagNames[i];
     if (typeof v !== 'string') continue;
-    const c = v.trim().toLowerCase().slice(0, 32);
-    if (!c || seen.has(c)) continue;
-    seen.add(c);
+    const c = v.trim().slice(0, 32);
+    if (!c) continue;
+    const key = c.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
     clean.push(c);
   }
   if (!clean.length) return;
-  // Single multi-row INSERT for efficiency.
+  // Single multi-row INSERT for efficiency. ON CONFLICT targets the
+  // case-insensitive expression index (idx_org_tags_ci_name in
+  // db.js) so "Trim Carpentry" entered when "trim carpentry" already
+  // exists bumps the existing row's use_count rather than creating a
+  // dup. The pre-existing case-sensitive UNIQUE(org_id, name) on
+  // org_tags also prevents exact dups; the expression index just
+  // adds the case-insensitive layer on top.
   const placeholders = clean.map(function(_, i) {
     return '($1, $' + (i + 3) + ', $2)';
   }).join(', ');
@@ -184,7 +194,7 @@ async function upsertOrgTags(orgId, tagNames, actorUserId) {
     await pool.query(
       'INSERT INTO org_tags (organization_id, created_by, name) VALUES ' +
       placeholders +
-      ' ON CONFLICT (organization_id, name) DO UPDATE ' +
+      ' ON CONFLICT (organization_id, (LOWER(name))) DO UPDATE ' +
       '   SET use_count = org_tags.use_count + 1, updated_at = NOW()',
       params
     );
@@ -216,14 +226,20 @@ function normalizeTagsInput(raw) {
       arr = trimmed.split(',');
     }
   }
+  // Preserve the user's input case ("Trim Carpentry" stays "Trim
+  // Carpentry", not "trim carpentry"). Dedup is case-INSENSITIVE so
+  // ["Foo", "foo"] still collapses to one entry — keeping whichever
+  // case showed up first.
   const seen = new Set();
   const out = [];
   for (let i = 0; i < arr.length && out.length < 20; i++) {
     const v = arr[i];
     if (typeof v !== 'string') continue;
-    const c = v.trim().toLowerCase().slice(0, 32);
-    if (!c || seen.has(c)) continue;
-    seen.add(c);
+    const c = v.trim().slice(0, 32);
+    if (!c) continue;
+    const key = c.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
     out.push(c);
   }
   return out;
@@ -1247,9 +1263,14 @@ router.put('/:id', requireAuth, async (req, res) => {
       // row. att.tags came back from the SELECT above as a parsed
       // array.
       const priorTags = Array.isArray(att.tags) ? att.tags : [];
-      const nextTagsRaw = req.body.tags.filter(function(v) { return typeof v === 'string'; }).map(function(v) { return v.trim().toLowerCase(); });
-      const added = nextTagsRaw.filter(function(t) { return t && priorTags.indexOf(t) === -1; });
-      const removed = priorTags.filter(function(t) { return nextTagsRaw.indexOf(t) === -1; });
+      // Preserve case in the activity log — diff comparison is
+      // case-insensitive so re-saving "Trim" when the prior was "trim"
+      // doesn't show up as an added+removed pair.
+      const nextTagsRaw = req.body.tags.filter(function(v) { return typeof v === 'string'; }).map(function(v) { return v.trim(); }).filter(Boolean);
+      const priorLower = priorTags.map(function(t) { return String(t).toLowerCase(); });
+      const nextLower = nextTagsRaw.map(function(t) { return t.toLowerCase(); });
+      const added = nextTagsRaw.filter(function(t, i) { return priorLower.indexOf(nextLower[i]) === -1; });
+      const removed = priorTags.filter(function(t) { return nextLower.indexOf(String(t).toLowerCase()) === -1; });
       if (added.length || removed.length) {
         recordProjectActivity(att.entity_id, req.user.id, 'photo_tags_changed', {
           attachment_id: att.id,
