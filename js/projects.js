@@ -2568,6 +2568,82 @@
           if (layout === 'attachment-list') openAttachmentPicker(sIdx);
           else openPhotoPicker(sIdx);
         });
+
+        // Photo-map header actions — only render when layout is
+        // photo-map (see sectionHTML mapBtns block). Both update
+        // state.sections[sIdx].photo_ids and fire a paint + autosave.
+        var autoBtn = sectionEl.querySelector('.p86-report-section-autopin');
+        if (autoBtn) autoBtn.addEventListener('click', function() {
+          // Scope: photos attached to THIS project that have GPS
+          // coords. _detailState.photos is the project's full photo
+          // list; filter to images with lat/lng AND not already in
+          // the section.
+          var existing = new Set((state.sections[sIdx].photo_ids || []).map(String));
+          var candidates = (_detailState.photos || []).filter(function(p) {
+            if (!p || existing.has(String(p.id))) return false;
+            if (!(p.mime_type && /^image\//i.test(p.mime_type))) return false;
+            return Number.isFinite(Number(p.lat)) && Number.isFinite(Number(p.lng));
+          });
+          if (!candidates.length) {
+            // Distinguish "everything's already pinned" from "no
+            // geotagged photos exist" so the user knows what to do.
+            var totalWithCoords = (_detailState.photos || []).filter(function(p) {
+              return p && p.mime_type && /^image\//i.test(p.mime_type)
+                && Number.isFinite(Number(p.lat)) && Number.isFinite(Number(p.lng));
+            }).length;
+            if (totalWithCoords === 0) {
+              window.alert('No project photos have location data yet. Photos uploaded with the geolocation permission granted, or that have GPS in their EXIF, will appear here.');
+            } else {
+              window.alert('All ' + totalWithCoords + ' photo' + (totalWithCoords === 1 ? '' : 's') + ' with location data are already pinned.');
+            }
+            return;
+          }
+          // Soft confirm for large fills so the user doesn't
+          // accidentally drop 100 pins on a section.
+          if (candidates.length > 20) {
+            if (!window.confirm('Add ' + candidates.length + ' photos to this map section?')) return;
+          }
+          var ids = state.sections[sIdx].photo_ids || [];
+          candidates.forEach(function(p) { ids.push(p.id); });
+          state.sections[sIdx].photo_ids = ids;
+          paint();
+          debouncedSave();
+        });
+
+        var unpinBtn = sectionEl.querySelector('.p86-report-section-unpin');
+        if (unpinBtn) unpinBtn.addEventListener('click', function() {
+          var count = (state.sections[sIdx].photo_ids || []).length;
+          if (!count) return;
+          if (!window.confirm('Remove all ' + count + ' photo' + (count === 1 ? '' : 's') + ' from this map section? (Photos themselves are not deleted.)')) return;
+          state.sections[sIdx].photo_ids = [];
+          state.sections[sIdx].captions = {};
+          paint();
+          debouncedSave();
+        });
+
+        // Map-toolbar Fit-all button — sits inside the map host as a
+        // small chrome strip. Re-fits the map bounds around all pins
+        // so the user can recover after panning/zooming.
+        var fitBtn = sectionEl.querySelector('.p86-report-section-map-fit');
+        if (fitBtn) fitBtn.addEventListener('click', function() {
+          var fitMapEl = sectionEl.querySelector('[data-photo-map="1"]');
+          if (!fitMapEl || !fitMapEl._p86RefitFn) return;
+          fitMapEl._p86RefitFn();
+        });
+
+        // InfoWindow "Remove" button dispatches p86-photomap-remove
+        // from the map host. Catch it here and drop the photo from
+        // section.photo_ids. paint() refreshes the map (no pin) and
+        // updates the count in the toolbar.
+        sectionEl.addEventListener('p86-photomap-remove', function(ev) {
+          var pid = ev && ev.detail && ev.detail.photoId;
+          if (!pid) return;
+          state.sections[sIdx].photo_ids = (state.sections[sIdx].photo_ids || []).filter(function(x) { return x !== pid; });
+          if (state.sections[sIdx].captions) delete state.sections[sIdx].captions[pid];
+          paint();
+          debouncedSave();
+        });
+
         var rmSectionBtn = sectionEl.querySelector('.p86-report-section-remove');
         if (rmSectionBtn) rmSectionBtn.addEventListener('click', function() {
           if (!window.confirm('Remove this section? (Underlying photos / files are not deleted.)')) return;
@@ -2750,6 +2826,13 @@
             gestureHandling: 'cooperative'
           });
           var bounds = new maps.LatLngBounds();
+          // Single InfoWindow reused across markers — opening a
+          // second pin closes the first naturally. Holds thumbnail
+          // + caption + Open + Remove buttons. The Remove button
+          // dispatches a custom event on mapEl that the section's
+          // handler-attaching code (in paint()) listens for, so we
+          // don't have to capture sIdx in this closure.
+          var infoWin = new maps.InfoWindow();
           pickedPhotos.forEach(function(photo) {
             var pos = { lat: Number(photo.lat), lng: Number(photo.lng) };
             var icon = window.p86TagIcons ? window.p86TagIcons.forPhoto(photo) : { bg:'#6b7280', fg:'#fff', glyph:'●' };
@@ -2770,15 +2853,62 @@
             });
             bounds.extend(pos);
             marker.addListener('click', function() {
-              if (window.p86Attachments && window.p86Attachments.openLightbox) {
-                var idx = pickedPhotos.findIndex(function(p) { return p.id === photo.id; });
-                window.p86Attachments.openLightbox(pickedPhotos, Math.max(0, idx), { parentLabel: 'Report map', parentSubtitle: '' });
-              } else if (photo.original_url) {
-                window.open(photo.original_url, '_blank', 'noopener');
-              }
+              var thumb = photo.thumb_url || photo.web_url || '';
+              var cap = photo.caption || photo.filename || 'Photo';
+              var safeCap = String(cap).replace(/</g, '&lt;').replace(/>/g, '&gt;');
+              // Use onclick on the buttons since InfoWindow content
+              // is created in a sub-DOM; pointing at IDs is simpler
+              // than wrangling event delegation across the boundary.
+              var html =
+                '<div style="min-width:200px;max-width:260px;font-family:system-ui,sans-serif;">' +
+                  (thumb ? '<img src="' + thumb + '" style="width:100%;max-height:140px;object-fit:cover;border-radius:4px;display:block;margin-bottom:8px;" alt="" />' : '') +
+                  '<div style="font-size:12px;font-weight:600;color:#111;margin-bottom:8px;word-break:break-word;">' + safeCap + '</div>' +
+                  '<div style="display:flex;gap:6px;">' +
+                    '<button id="p86InfoOpen" style="flex:1;font-size:12px;padding:6px 8px;border-radius:4px;border:1px solid #ccc;background:#fff;color:#111;font-weight:600;cursor:pointer;">Open</button>' +
+                    '<button id="p86InfoRemove" style="flex:1;font-size:12px;padding:6px 8px;border-radius:4px;border:1px solid #ddd;background:#fff;color:#dc2626;font-weight:600;cursor:pointer;">Remove</button>' +
+                  '</div>' +
+                '</div>';
+              infoWin.setContent(html);
+              infoWin.open(map, marker);
+              // Defer button wiring to next tick so the InfoWindow
+              // DOM is in place. Both buttons close the window after
+              // firing.
+              setTimeout(function() {
+                var openBtn = document.getElementById('p86InfoOpen');
+                var rmBtn = document.getElementById('p86InfoRemove');
+                if (openBtn) openBtn.addEventListener('click', function() {
+                  infoWin.close();
+                  if (window.p86Attachments && window.p86Attachments.openLightbox) {
+                    var idx = pickedPhotos.findIndex(function(p) { return p.id === photo.id; });
+                    window.p86Attachments.openLightbox(pickedPhotos, Math.max(0, idx), { parentLabel: 'Report map', parentSubtitle: '' });
+                  } else if (photo.original_url) {
+                    window.open(photo.original_url, '_blank', 'noopener');
+                  }
+                });
+                if (rmBtn) rmBtn.addEventListener('click', function() {
+                  infoWin.close();
+                  // Bubble a custom event to the section handler.
+                  // detail.photoId carries which photo to drop.
+                  mapEl.dispatchEvent(new CustomEvent('p86-photomap-remove', {
+                    detail: { photoId: photo.id },
+                    bubbles: true
+                  }));
+                });
+              }, 0);
             });
           });
           if (pickedPhotos.length > 1) map.fitBounds(bounds, 48);
+          // Stash a re-fit closure so the Fit-all toolbar button
+          // can call it (the button handler in paint() runs in a
+          // different scope and doesn't have access to `map` or
+          // `bounds` directly).
+          mapEl._p86RefitFn = function() {
+            if (pickedPhotos.length > 1) map.fitBounds(bounds, 48);
+            else if (pickedPhotos.length === 1) {
+              map.panTo({ lat: Number(pickedPhotos[0].lat), lng: Number(pickedPhotos[0].lng) });
+              map.setZoom(16);
+            }
+          };
 
           // Print-path img injection. The body's synchronous attempt
           // at building the Static Maps URL fails on the very first
@@ -3120,6 +3250,22 @@
         addBtn = '<button class="ee-btn secondary p86-report-section-add">+ Attach files</button>';
       }
 
+      // Photo-map gets two extra header buttons: Auto-pin all (one-
+      // shot fill with every project photo that has GPS, skipping
+      // already-picked) and Unpin all (clears section.photo_ids).
+      // Auto-pin is always available so the user can refresh after
+      // taking new geotagged photos. Unpin only renders when the
+      // section has any picks.
+      var mapBtns = '';
+      if (layout === 'photo-map') {
+        var pickCount = Array.isArray(section.photo_ids) ? section.photo_ids.length : 0;
+        mapBtns =
+          '<button class="ee-btn secondary p86-report-section-autopin" title="Add every project photo that has GPS data">&#x1F4CD; Auto-pin all</button>' +
+          (pickCount
+            ? '<button class="ee-btn secondary p86-report-section-unpin" title="Remove all photos from this map section">Unpin all</button>'
+            : '');
+      }
+
       var body;
       if (layout === 'text-block') body = sectionTextBlockBodyHTML(section);
       else if (layout === 'attachment-list') body = sectionAttachmentListBodyHTML(section);
@@ -3135,6 +3281,7 @@
             layoutToggles +
             sizeToggles +
             addBtn +
+            mapBtns +
             '<button class="ee-btn secondary p86-report-section-remove">Remove</button>' +
           '</div>' +
         '</div>' +
@@ -3447,8 +3594,22 @@
           '</div>'
         : '';
 
+      // Chrome strip above the map — pin count + Fit-all button.
+      // Hidden on print via the existing photo-map @media print
+      // rules (only the static <img> shows on paper). Only renders
+      // when we actually have a map to operate on.
+      var toolbar = withCoords.length
+        ? '<div class="p86-report-section-map-toolbar">' +
+            '<span class="p86-report-section-map-count">' +
+              withCoords.length + ' pin' + (withCoords.length === 1 ? '' : 's') +
+            '</span>' +
+            '<button type="button" class="p86-report-section-map-fit" title="Re-fit the map around all pins">&#x26F6; Fit all</button>' +
+          '</div>'
+        : '';
+
       return '<div class="p86-report-section-map-wrap">' +
         emptyHelp +
+        toolbar +
         mapBody +
         staticImg +
         unmapped +
