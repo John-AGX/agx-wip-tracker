@@ -299,13 +299,18 @@
          .sch-cal-week-row[data-lens="..."] — height tier driven by lens
 */
 .sch-cal-scroll {
-  flex: 1;
+  flex: 1 1 0;
   display: flex;
   flex-direction: column;
-  min-height: 0;
+  min-height: 300px;
   overflow-y: auto;
   overflow-x: hidden;
-  background: var(--bg, #0f1117);
+  /* Match the parent .sch-cal-wrap surface so the calendar reads as
+     one continuous panel. Using --bg directly would punch a hole of
+     darker page background through the wrap on dark mode AND make
+     the calendar bright on light mode (where --bg is light gray).
+     --surface matches the wrap chrome in both modes. */
+  background: var(--surface, #181820);
   /* Smooth iOS scroll on the touch-flick. */
   -webkit-overflow-scrolling: touch;
 }
@@ -327,6 +332,8 @@
   flex-direction: column;
   flex: 1 0 auto;
   background: var(--border, #2e3346);
+  position: relative;
+  min-height: 200px;
 }
 .sch-cal-stack.sch-no-weekends .sch-cal-week-row {
   grid-template-columns: 0fr 1fr 1fr 1fr 1fr 1fr 0fr;
@@ -337,7 +344,7 @@
    month). Quiet typography — they help locate yourself without
    stealing attention from the focused week below. */
 .sch-month-header {
-  background: var(--bg, #0f1117);
+  background: var(--surface, #181820);
   color: var(--text-dim, #c4c8d8);
   font-size: 11px;
   font-weight: 700;

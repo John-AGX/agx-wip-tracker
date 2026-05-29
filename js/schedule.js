@@ -966,6 +966,23 @@
   var _focusedWeekStart = null; // ISO date of the currently-focused week
 
   function renderGrid() {
+    try { renderGridInner(); }
+    catch (e) {
+      console.error('[schedule] renderGrid failed:', e);
+      // Visible failure note inside the scroll container so the user
+      // doesn't just see a blank panel. Lets us tell at a glance
+      // whether the calendar is empty because of no data or because
+      // the code blew up.
+      var stack = document.getElementById('schStack');
+      if (stack) {
+        stack.innerHTML = '<div style="padding:24px;color:#f87171;font-size:13px;">' +
+          'Schedule render error: ' + (e && e.message ? e.message : String(e)) +
+          ' &mdash; check the browser console for details.' +
+        '</div>';
+      }
+    }
+  }
+  function renderGridInner() {
     var stack = document.getElementById('schStack');
     var dowRow = document.getElementById('schDowRow');
     var scrollEl = document.getElementById('schCalScroll');
