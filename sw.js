@@ -26,10 +26,23 @@
 //   • clients.claim() takes control of open tabs on activation so
 //     users don't have to refresh to see the new build.
 //
-// BUMP CACHE_VERSION whenever this SW's behavior changes so existing
-// users pick up the new strategy on their next visit.
+// BUMP CACHE_VERSION whenever:
+//   • This SW's behavior changes (caching strategy, fetch handling), OR
+//   • A user-facing release has shipped and you want the "An update
+//     is available — Relaunch" toast to fire on the next page load.
+//
+// The toast is wired to the SW install/waiting/active lifecycle. If
+// sw.js doesn't change bytes, the browser never installs a new SW
+// and the toast never fires — even if every asset has a new cache
+// buster. The network-first HTML strategy still delivers fresh code
+// on the NEXT navigation, but users who keep a PWA open for hours
+// won't see updates land until they close + reopen.
+//
+// In short: bump on every release of meaningful client code, not
+// only on SW-internal changes. The version suffix is opaque — just
+// increment.
 
-const CACHE_VERSION = 'p86-shell-v12';
+const CACHE_VERSION = 'p86-shell-v13';
 
 // NOTE: /index.html and / are deliberately NOT in this list. HTML
 // goes through the network-first handler below; pre-caching it with
