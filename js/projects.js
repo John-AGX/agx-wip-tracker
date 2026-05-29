@@ -2779,6 +2779,44 @@
             });
           });
           if (pickedPhotos.length > 1) map.fitBounds(bounds, 48);
+
+          // Print-path img injection. The body's synchronous attempt
+          // at building the Static Maps URL fails on the very first
+          // render of a saved report because window.p86Maps.getKey()
+          // returns null before ready() resolves at least once. By
+          // the time we get HERE, the key IS cached (ready() just
+          // resolved). Build the URL now and inject the <img> next
+          // to the interactive map so the print preview always has
+          // a fallback image, regardless of paint() timing.
+          try {
+            var key = window.p86Maps && window.p86Maps.getKey && window.p86Maps.getKey();
+            if (key) {
+              var markerStrs = pickedPhotos.slice(0, 60).map(function(p) {
+                var ic = window.p86TagIcons ? window.p86TagIcons.forPhoto(p) : null;
+                var color = (ic && ic.bg) ? ic.bg.replace('#', '0x') : '0xef4444';
+                return 'markers=color:' + color + '%7C' + Number(p.lat) + ',' + Number(p.lng);
+              });
+              var url = 'https://maps.googleapis.com/maps/api/staticmap'
+                + '?size=640x360&maptype=hybrid&scale=2'
+                + '&' + markerStrs.join('&')
+                + '&key=' + encodeURIComponent(key);
+              // Find the section wrap and either update an existing
+              // .p86-report-section-map-print or insert a fresh one.
+              var wrap = mapEl.parentElement;
+              if (wrap) {
+                var existing = wrap.querySelector('.p86-report-section-map-print');
+                if (existing) {
+                  if (existing.getAttribute('src') !== url) existing.setAttribute('src', url);
+                } else {
+                  var img = document.createElement('img');
+                  img.className = 'p86-report-section-map-print';
+                  img.alt = 'Photo locations';
+                  img.src = url;
+                  mapEl.insertAdjacentElement('afterend', img);
+                }
+              }
+            }
+          } catch (e) { /* print-path img is best-effort */ }
         }).catch(function(err) {
           mapEl.innerHTML = '<div class="p86-projects-empty">Map unavailable: ' + (err && err.message || 'unknown') + '</div>';
         });
