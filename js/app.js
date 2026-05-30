@@ -813,6 +813,13 @@
                     '<div data-summary-workflow-card>' +
                       attentionCard('My Open RFIs/Subs', '<span data-workflow-mine-count>0</span>', '#fbbf24', "window.switchTab('jobs');", '<span data-workflow-mine-sub>Loading…</span>') +
                     '</div>' +
+                    // Wave 3 — compliance expiring card. Same hydration
+                    // pattern via fetchComplianceAttentionCounts.
+                    // Click routes to the directory until a dedicated
+                    // compliance review page exists.
+                    '<div data-summary-compliance-card>' +
+                      attentionCard('Certs Expiring', '<span data-compliance-expiring-count>0</span>', '#f87171', "window.switchTab('directory');", '<span data-compliance-expiring-sub>Loading…</span>') +
+                    '</div>' +
                 '</div>' +
 
                 // ── System Snapshot (Wave M3) ──────────────────────
@@ -877,6 +884,7 @@
             renderSummaryInbox();
             paintSnapshotRow();
             fetchWorkflowAttentionCounts();
+            fetchComplianceAttentionCounts();
         }
         window.renderSummaryDashboard = renderSummaryDashboard;
 
@@ -908,6 +916,38 @@
                         subEl.textContent = 'Open items needing your action';
                     } else {
                         subEl.textContent = 'All caught up';
+                    }
+                }
+            }).catch(function() { /* silent — non-critical */ });
+        }
+
+        // Wave 3 — hydrate the "Certs Expiring" attention card. Same
+        // shape as fetchWorkflowAttentionCounts but reads
+        // /api/compliance-items/expiring (30-day default) +
+        // /api/compliance-items/expired. The big number is
+        // expiring-soon; the subtitle escalates to "N already expired"
+        // when anything is past-due (red text auto-applies because
+        // the attentionCard color is already #f87171).
+        function fetchComplianceAttentionCounts() {
+            var card = document.querySelector('[data-summary-compliance-card]');
+            if (!card || !window.p86Api) return;
+            Promise.all([
+                window.p86Api.get('/api/compliance-items/expiring?days=30').catch(function() { return { items: [] }; }),
+                window.p86Api.get('/api/compliance-items/expired').catch(function() { return { items: [] }; })
+            ]).then(function (results) {
+                if (!card.isConnected) return;
+                var expiring = (results[0] && results[0].items) || [];
+                var expired = (results[1] && results[1].items) || [];
+                var countEl = card.querySelector('[data-compliance-expiring-count]');
+                var subEl = card.querySelector('[data-compliance-expiring-sub]');
+                if (countEl) countEl.textContent = String(expiring.length);
+                if (subEl) {
+                    if (expired.length) {
+                        subEl.textContent = '⚠ ' + expired.length + ' already expired';
+                    } else if (expiring.length) {
+                        subEl.textContent = 'Within next 30 days';
+                    } else {
+                        subEl.textContent = 'All current';
                     }
                 }
             }).catch(function() { /* silent — non-critical */ });
