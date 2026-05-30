@@ -806,6 +806,13 @@
                     attentionCard('Open Leads',       openLeads,   '#22d3ee', leadsClick,                   'New + working') +
                     attentionCard('Pending Estimates', pendingEsts,'#fbbf24', estsClick,                    'Draft / not sent') +
                     attentionCard('Active Jobs',      activeJobs,  '#34d399', "window.switchTab('jobs');",   'Open + in progress') +
+                    // Wave 3 — workflow items card. Counts hydrate async
+                    // after first paint via fetchWorkflowAttentionCounts;
+                    // the placeholders render as 0 so the card lays out
+                    // immediately. Click → routes to the user's jobs.
+                    '<div data-summary-workflow-card>' +
+                      attentionCard('My Open RFIs/Subs', '<span data-workflow-mine-count>0</span>', '#fbbf24', "window.switchTab('jobs');", '<span data-workflow-mine-sub>Loading…</span>') +
+                    '</div>' +
                 '</div>' +
 
                 // ── System Snapshot (Wave M3) ──────────────────────
@@ -869,8 +876,42 @@
             renderSummaryRecentFiles();
             renderSummaryInbox();
             paintSnapshotRow();
+            fetchWorkflowAttentionCounts();
         }
         window.renderSummaryDashboard = renderSummaryDashboard;
+
+        // Wave 3 — hydrate the "My Open RFIs/Subs" attention card after
+        // first paint. Two parallel fetches (mine + overdue) feed:
+        //   • The big number in the card (count of items where I'm the
+        //     responsible party with status still open)
+        //   • The subtitle text (e.g. "3 overdue org-wide" if any, else
+        //     "All caught up" when zero of both)
+        // No-op if the user has no /api/workflow-items endpoints
+        // available (e.g. pre-deploy of the Wave 3 backend).
+        function fetchWorkflowAttentionCounts() {
+            var card = document.querySelector('[data-summary-workflow-card]');
+            if (!card || !window.p86Api) return;
+            Promise.all([
+                window.p86Api.get('/api/workflow-items/mine').catch(function() { return { items: [] }; }),
+                window.p86Api.get('/api/workflow-items/overdue').catch(function() { return { items: [] }; })
+            ]).then(function (results) {
+                if (!card.isConnected) return;
+                var mine = (results[0] && results[0].items) || [];
+                var overdue = (results[1] && results[1].items) || [];
+                var countEl = card.querySelector('[data-workflow-mine-count]');
+                var subEl = card.querySelector('[data-workflow-mine-sub]');
+                if (countEl) countEl.textContent = String(mine.length);
+                if (subEl) {
+                    if (overdue.length) {
+                        subEl.textContent = overdue.length + ' overdue org-wide';
+                    } else if (mine.length) {
+                        subEl.textContent = 'Open items needing your action';
+                    } else {
+                        subEl.textContent = 'All caught up';
+                    }
+                }
+            }).catch(function() { /* silent — non-critical */ });
+        }
 
         // ── System Snapshot row (Wave M3) ────────────────────────────
         // Lightweight 4-counter row on the Today pane: Active Jobs,
