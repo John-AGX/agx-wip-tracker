@@ -109,8 +109,10 @@ router.post('/', requireAuth, requireCapability('LEADS_EDIT'), async (req, res) 
     if (!fields.status) fields.status = 'new';
 
     const id = (req.body && req.body.id) || ('lead_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8));
-    const cols = ['id', 'created_by'].concat(Object.keys(fields));
-    const vals = [id, req.user.id].concat(Object.keys(fields).map(k => fields[k]));
+    // Wave 1.A — include organization_id on new leads so org-filtering
+    // (next commit) finds them. Prepended to the cols/vals arrays.
+    const cols = ['id', 'created_by', 'organization_id'].concat(Object.keys(fields));
+    const vals = [id, req.user.id, req.user.organization_id].concat(Object.keys(fields).map(k => fields[k]));
     const placeholders = cols.map((_, i) => '$' + (i + 1)).join(', ');
     await pool.query(
       `INSERT INTO leads (${cols.join(', ')}) VALUES (${placeholders})`,

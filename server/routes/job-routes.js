@@ -115,8 +115,12 @@ router.post('/', requireAuth, requireRole('admin', 'pm'), async (req, res) => {
       if (!rows.length) return res.status(400).json({ error: 'Invalid owner_id' });
       ownerId = req.body.owner_id;
     }
-    await pool.query('INSERT INTO jobs (id, owner_id, data) VALUES ($1, $2, $3)',
-      [id, ownerId, JSON.stringify(req.body)]);
+    // Wave 1.A — include organization_id on every new write so the
+    // org-filtering routes (next commit) find this row immediately.
+    await pool.query(
+      'INSERT INTO jobs (id, owner_id, data, organization_id) VALUES ($1, $2, $3, $4)',
+      [id, ownerId, JSON.stringify(req.body), req.user.organization_id]
+    );
 
     // Notify the new owner if the saving client opted in. Skip when
     // the owner == the creator (you don't need an email saying "you

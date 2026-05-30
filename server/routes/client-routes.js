@@ -72,8 +72,10 @@ router.post('/', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req, r
       if (parentId === id) return res.status(400).json({ error: 'A client cannot be its own parent' });
     }
 
-    const cols = ['id', 'parent_client_id'].concat(Object.keys(fields));
-    const vals = [id, parentId].concat(Object.keys(fields).map(k => fields[k]));
+    // Wave 1.A — include organization_id on new clients so org-filtering
+    // (next commit) finds them. Prepended to the cols/vals arrays.
+    const cols = ['id', 'parent_client_id', 'organization_id'].concat(Object.keys(fields));
+    const vals = [id, parentId, req.user.organization_id].concat(Object.keys(fields).map(k => fields[k]));
     const placeholders = cols.map((_, i) => '$' + (i + 1)).join(', ');
     await pool.query(
       `INSERT INTO clients (${cols.join(', ')}) VALUES (${placeholders})`,

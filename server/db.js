@@ -266,6 +266,100 @@ async function initSchema() {
     ALTER TABLE jobs ADD COLUMN IF NOT EXISTS geocode_address TEXT;
     ALTER TABLE jobs ADD COLUMN IF NOT EXISTS geocode_at TIMESTAMPTZ;
 
+    -- ──────────────────────────────────────────────────────────────────
+    -- Wave 1.A Phase 1 — multi-tenancy completion for the four core
+    -- anchor tables (jobs / estimates / leads / clients). Adds
+    -- organization_id as a NULLABLE column for now + backfills from
+    -- owner-user joins. Routes don't filter by this yet; that's the
+    -- next commit. NOT NULL tightening comes in a separate later
+    -- commit once we've verified zero NULLs slip through new writes.
+    --
+    -- Why nullable first: zero-downtime migration on a live system.
+    -- The deploy can land, the backfill runs, then a follow-up commit
+    -- makes new writes set the column, then a follow-up tightens to
+    -- NOT NULL. Adding NOT NULL on a populated table is fine in PG
+    -- but it briefly takes an AccessExclusiveLock — better in the
+    -- maintenance commit.
+    --
+    -- Single-tenant fallback: rows that can't be traced to a user
+    -- (clients with no creator-trail, leads with no salesperson, etc.)
+    -- get backfilled with the org id of the most-active user — see
+    -- the COALESCE branches in the UPDATE statements. In practice
+    -- Project 86 runs as one org today, so this is a safe default.
+    -- ──────────────────────────────────────────────────────────────────
+    ALTER TABLE jobs      ADD COLUMN IF NOT EXISTS organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE;
+    ALTER TABLE estimates ADD COLUMN IF NOT EXISTS organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE;
+    ALTER TABLE leads     ADD COLUMN IF NOT EXISTS organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE;
+    ALTER TABLE clients   ADD COLUMN IF NOT EXISTS organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE;
+
+    -- Indexes to power the upcoming per-org route filters. Partial
+    -- index where archived/deleted_at is NULL would be cleaner but
+    -- these tables don't all have consistent soft-delete columns,
+    -- so a plain btree on the FK is fine.
+    CREATE INDEX IF NOT EXISTS idx_jobs_org      ON jobs (organization_id)      WHERE organization_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_estimates_org ON estimates (organization_id) WHERE organization_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_leads_org     ON leads (organization_id)     WHERE organization_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_clients_org   ON clients (organization_id)   WHERE organization_id IS NOT NULL;
+
+    -- Backfills. Each WHERE organization_id IS NULL guard makes the
+    -- UPDATE idempotent — running schema init twice is safe.
+    --
+    -- jobs.owner_id is NOT NULL, so the join always finds a user.
+    UPDATE jobs j
+       SET organization_id = u.organization_id
+      FROM users u
+     WHERE u.id = j.owner_id
+       AND j.organization_id IS NULL;
+
+    -- estimates.owner_id is NULLABLE. The NOT NULL guard on u skips
+    -- estimates without an owner; those stay NULL until the follow-up
+    -- single-org fallback below.
+    UPDATE estimates e
+       SET organization_id = u.organization_id
+      FROM users u
+     WHERE u.id = e.owner_id
+       AND e.organization_id IS NULL
+       AND u.organization_id IS NOT NULL;
+
+    -- leads.salesperson_id is NULLABLE. Same shape as estimates.
+    UPDATE leads l
+       SET organization_id = u.organization_id
+      FROM users u
+     WHERE u.id = l.salesperson_id
+       AND l.organization_id IS NULL
+       AND u.organization_id IS NOT NULL;
+
+    -- clients has NO owner column. Backfill from the most-recent
+    -- user's organization — a safe default for a single-tenant
+    -- install. If Project 86 ever onboards a second org BEFORE this
+    -- backfill runs, the per-client assignment will need a manual
+    -- pass (admin UI) before opening the second tenant.
+    UPDATE clients c
+       SET organization_id = (
+         SELECT u.organization_id FROM users u
+          WHERE u.organization_id IS NOT NULL
+          ORDER BY u.id ASC
+          LIMIT 1
+       )
+     WHERE c.organization_id IS NULL;
+
+    -- Single-tenant fallback for remaining nulls on jobs/estimates/leads
+    -- (e.g. legacy rows where owner_id pointed to a deleted user).
+    -- Same source as the clients backfill — pick a stable org from the
+    -- first user. Idempotent via the NULL guard.
+    UPDATE jobs SET organization_id = (
+      SELECT u.organization_id FROM users u
+       WHERE u.organization_id IS NOT NULL ORDER BY u.id ASC LIMIT 1
+    ) WHERE organization_id IS NULL;
+    UPDATE estimates SET organization_id = (
+      SELECT u.organization_id FROM users u
+       WHERE u.organization_id IS NOT NULL ORDER BY u.id ASC LIMIT 1
+    ) WHERE organization_id IS NULL;
+    UPDATE leads SET organization_id = (
+      SELECT u.organization_id FROM users u
+       WHERE u.organization_id IS NOT NULL ORDER BY u.id ASC LIMIT 1
+    ) WHERE organization_id IS NULL;
+
     CREATE TABLE IF NOT EXISTS job_access (
       job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,

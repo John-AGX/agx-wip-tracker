@@ -89,15 +89,18 @@ router.put('/bulk/save', requireAuth, requireCapability('ESTIMATES_EDIT'), async
         // refresh the Updated column for the entire list. Postgres'
         // JSONB equality is normalized (key order / whitespace
         // independent), so IS DISTINCT FROM correctly catches real edits.
+        // Wave 1.A — include organization_id on new estimates so the
+        // org-filtering routes (next commit) find them. Existing rows
+        // keep their backfilled value through the ON CONFLICT path.
         await client.query(
-          `INSERT INTO estimates (id, owner_id, data) VALUES ($1, $2, $3)
+          `INSERT INTO estimates (id, owner_id, data, organization_id) VALUES ($1, $2, $3, $4)
            ON CONFLICT (id) DO UPDATE
              SET data = EXCLUDED.data,
                  updated_at = CASE
                    WHEN estimates.data IS DISTINCT FROM EXCLUDED.data THEN NOW()
                    ELSE estimates.updated_at
                  END`,
-          [est.id, req.user.id, JSON.stringify(blob)]
+          [est.id, req.user.id, JSON.stringify(blob), req.user.organization_id]
         );
       }
       await client.query('COMMIT');
