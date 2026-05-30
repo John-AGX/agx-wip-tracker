@@ -92,6 +92,29 @@ router.get('/jobs/:jobId/change-orders', requireAuth, async (req, res) => {
   }
 });
 
+// GET /api/change-orders/summary — org-wide rollup for the Summary
+// page attention card. Counts open COs (status='draft' or 'approved')
+// and rough total dollar value across all active jobs. Org-scoped via
+// the job join's organization_id filter (Wave 1.A).
+router.get('/change-orders/summary', requireAuth, async (req, res) => {
+  try {
+    const orgId = req.user.organization_id;
+    const r = await pool.query(`
+      SELECT
+        COUNT(*) FILTER (WHERE co.status = 'draft')::int     AS draft_count,
+        COUNT(*) FILTER (WHERE co.status = 'approved')::int  AS approved_count,
+        COUNT(*) FILTER (WHERE co.status IN ('draft', 'approved'))::int AS open_count
+      FROM job_change_orders co
+      JOIN jobs j ON j.id = co.job_id
+      WHERE (j.organization_id = $1 OR j.organization_id IS NULL)
+    `, [orgId]);
+    res.json(r.rows[0] || { draft_count: 0, approved_count: 0, open_count: 0 });
+  } catch (err) {
+    console.error('GET /api/change-orders/summary error:', err);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // GET /api/change-orders/:id
 router.get('/change-orders/:id', requireAuth, async (req, res) => {
   try {

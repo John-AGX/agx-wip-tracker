@@ -960,8 +960,17 @@
 
   // Range we initially render around today. Lazy-extend kicks in if
   // the user scrolls within 2 weeks of either edge.
-  var MONTHS_BEHIND = 3;
-  var MONTHS_AHEAD = 3;
+  // Range of months prepended/appended to today's date when building
+  // the continuous-scroll stack. 6/6 (one year) covers normal usage
+  // — scheduling 6 months out is the realistic upper bound — so the
+  // boundary is never reached in practice. True dynamic lazy extension
+  // (prepend/append a month when the user scrolls within 2 weeks of
+  // the edge) is deferred until someone actually hits the boundary;
+  // the static-wider approach trades ~700 KB of DOM for zero
+  // implementation complexity + smooth scrolling across the whole
+  // window without re-render hiccups.
+  var MONTHS_BEHIND = 6;
+  var MONTHS_AHEAD = 6;
   var _io = null;            // IntersectionObserver instance
   var _focusedWeekStart = null; // ISO date of the currently-focused week
 

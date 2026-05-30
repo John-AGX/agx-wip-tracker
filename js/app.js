@@ -820,6 +820,13 @@
                     '<div data-summary-compliance-card>' +
                       attentionCard('Certs Expiring', '<span data-compliance-expiring-count>0</span>', '#f87171', "if(window.p86ComplianceReview)window.p86ComplianceReview.open();", '<span data-compliance-expiring-sub>Loading…</span>') +
                     '</div>' +
+                    // CO Phase 6 — open change orders quick-count card.
+                    // Hydrates from /api/change-orders/summary after
+                    // first paint. Click routes to the jobs tab where
+                    // CO management lives.
+                    '<div data-summary-co-card>' +
+                      attentionCard('Open Change Orders', '<span data-co-open-count>0</span>', '#22d3ee', "window.switchTab('jobs');", '<span data-co-open-sub>Loading…</span>') +
+                    '</div>' +
                 '</div>' +
 
                 // ── System Snapshot (Wave M3) ──────────────────────
@@ -885,6 +892,7 @@
             paintSnapshotRow();
             fetchWorkflowAttentionCounts();
             fetchComplianceAttentionCounts();
+            fetchChangeOrderAttentionCounts();
         }
         window.renderSummaryDashboard = renderSummaryDashboard;
 
@@ -928,6 +936,29 @@
         // expiring-soon; the subtitle escalates to "N already expired"
         // when anything is past-due (red text auto-applies because
         // the attentionCard color is already #f87171).
+        // CO Phase 6 — hydrate the "Open Change Orders" card. Single
+        // org-wide aggregate from /api/change-orders/summary returns
+        // {draft_count, approved_count, open_count}. Big number is the
+        // total open; subtitle breaks down draft vs approved so the
+        // user sees the pipeline split at a glance.
+        function fetchChangeOrderAttentionCounts() {
+            var card = document.querySelector('[data-summary-co-card]');
+            if (!card || !window.p86Api) return;
+            window.p86Api.get('/api/change-orders/summary').then(function (sum) {
+                if (!card.isConnected) return;
+                var draft = (sum && sum.draft_count) || 0;
+                var approved = (sum && sum.approved_count) || 0;
+                var open = (sum && sum.open_count) || 0;
+                var countEl = card.querySelector('[data-co-open-count]');
+                var subEl = card.querySelector('[data-co-open-sub]');
+                if (countEl) countEl.textContent = String(open);
+                if (subEl) {
+                    if (open === 0) subEl.textContent = 'No COs in flight';
+                    else subEl.textContent = draft + ' draft · ' + approved + ' approved';
+                }
+            }).catch(function() { /* silent */ });
+        }
+
         function fetchComplianceAttentionCounts() {
             var card = document.querySelector('[data-summary-compliance-card]');
             if (!card || !window.p86Api) return;
