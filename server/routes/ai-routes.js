@@ -6485,6 +6485,53 @@ const READ_TOOLS = [
   },
 ];
 
+// Wave 3 — workflow + compliance read tools. Auto-tier so 86 can
+// answer "what RFIs are open on this job" or "any COIs expiring
+// soon" without prompting the user. Writes still flow through
+// emit_payload_file once payload schema support lands (next
+// commit).
+const WAVE3_TOOLS = [
+  {
+    name: 'list_workflow_items',
+    tier: 'auto',
+    description:
+      'List RFIs / submittals / transmittals for a job. Use when the user asks "what RFIs are still open on this job", ' +
+      '"any overdue submittals", "what transmittals went out last week", or to look up an item before proposing a follow-up. ' +
+      'Each returned item shows id, number (RFI-01, SUB-02, etc.), type, subject, status, due_date, responsible_user_id, ' +
+      'and the type-specific metadata blob. ' +
+      'Without a job_id, returns "items assigned to the current user" across all jobs.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        job_id: { type: 'string', description: 'Job ID. Omit to list items assigned to the current user.' },
+        type:   { type: 'string', enum: ['rfi', 'submittal', 'transmittal'], description: 'Filter by type. Omit to see all.' },
+        status: { type: 'string', description: 'Filter by status — open|answered|closed for rfi, etc.' }
+      },
+      required: []
+    }
+  },
+  {
+    name: 'list_compliance_expiring',
+    tier: 'auto',
+    description:
+      'List compliance items expiring soon — client COIs, license renewals, lien waivers, WC certs. Use when ' +
+      'the user asks "what COIs are expiring", "any expired insurance", "what needs renewal this month", ' +
+      'or to compile a renewal worklist. Returns items with their expiration_date, days_until_expiry (negative = ' +
+      'already past due), entity (client / sub / user / job) the cert applies to, and the type-specific metadata ' +
+      '(carrier / policy_number / amount / etc.).',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        days: { type: 'integer', minimum: 1, maximum: 365, description: 'Look-ahead window in days (default 30). 0 = expired only.' },
+        include_expired: { type: 'boolean', description: 'When true, returns expired items in addition to upcoming. Default true.' }
+      },
+      required: []
+    }
+  }
+];
+
 const PAYLOAD_TOOLS = [
   {
     name: 'emit_payload_file',
@@ -9446,6 +9493,105 @@ async function execMemoryTool(name, input, ctx) {
   throw new Error('Unknown memory tool: ' + name);
 }
 
+// Wave 3 — auto-tier read handler for workflow + compliance items.
+// Same pattern as execMemoryTool: called from make86OnCustomToolUse
+// when 86 emits list_workflow_items or list_compliance_expiring.
+async function execWave3Tool(name, input, ctx) {
+  const { userId } = ctx;
+  const orgRow = await pool.query(`SELECT organization_id FROM users WHERE id = $1`, [userId]);
+  const orgId = orgRow.rows[0] && orgRow.rows[0].organization_id;
+  if (!orgId) throw new Error('User has no organization — cannot use Wave 3 tools.');
+
+  if (name === 'list_workflow_items') {
+    const params = [orgId];
+    const conds = ['(organization_id = $1 OR organization_id IS NULL)', 'archived_at IS NULL'];
+    let p = 2;
+    if (input && input.job_id) {
+      conds.push('job_id = $' + p); params.push(String(input.job_id)); p++;
+    } else {
+      // No job_id → "mine" semantics: items where this user is responsible.
+      conds.push('responsible_user_id = $' + p); params.push(userId); p++;
+      conds.push('closed_at IS NULL');
+    }
+    if (input && input.type) {
+      conds.push('type = $' + p); params.push(String(input.type).toLowerCase()); p++;
+    }
+    if (input && input.status) {
+      conds.push('status = $' + p); params.push(String(input.status).toLowerCase()); p++;
+    }
+    const r = await pool.query(
+      `SELECT id, type, number, subject, body, status, due_date,
+              responsible_user_id, job_id, metadata, created_at
+         FROM job_workflow_items
+        WHERE ${conds.join(' AND ')}
+        ORDER BY (CASE WHEN due_date < CURRENT_DATE AND closed_at IS NULL THEN 0 ELSE 1 END),
+                 due_date ASC NULLS LAST,
+                 created_at DESC
+        LIMIT 50`,
+      params
+    );
+    if (!r.rows.length) {
+      return input && input.job_id
+        ? 'No workflow items on this job (filtered).'
+        : 'No open workflow items assigned to you.';
+    }
+    const lines = r.rows.map(row => {
+      const due = row.due_date ? (row.due_date.toISOString ? row.due_date.toISOString().slice(0, 10) : String(row.due_date).slice(0, 10)) : '—';
+      const overdue = row.due_date && !row.closed_at && new Date(row.due_date) < new Date(new Date().toDateString()) ? ' ⚠ OVERDUE' : '';
+      return '── ' + row.number + ' [' + row.type + '/' + row.status + '] "' + row.subject + '"' +
+        '\n   due: ' + due + overdue + (input && !input.job_id ? '  · job: ' + row.job_id : '') +
+        (row.body ? '\n   ' + String(row.body).slice(0, 200) : '');
+    });
+    return 'Workflow items (' + r.rows.length + '):\n\n' + lines.join('\n\n');
+  }
+
+  if (name === 'list_compliance_expiring') {
+    const days = Math.max(0, Math.min(365, Number(input && input.days) || 30));
+    const includeExpired = !(input && input.include_expired === false);
+    const conds = [
+      '(organization_id = $1 OR organization_id IS NULL)',
+      'archived_at IS NULL',
+      'expiration_date IS NOT NULL',
+      "status NOT IN ('archived')"
+    ];
+    const params = [orgId];
+    if (includeExpired) {
+      conds.push('expiration_date <= CURRENT_DATE + ($2 || \' days\')::interval');
+      params.push(String(days));
+    } else {
+      conds.push('expiration_date BETWEEN CURRENT_DATE AND CURRENT_DATE + ($2 || \' days\')::interval');
+      params.push(String(days));
+    }
+    const r = await pool.query(
+      `SELECT id, entity_type, entity_id, type, status, title,
+              expiration_date,
+              (expiration_date - CURRENT_DATE) AS days_until_expiry,
+              metadata
+         FROM compliance_items
+        WHERE ${conds.join(' AND ')}
+        ORDER BY expiration_date ASC
+        LIMIT 100`,
+      params
+    );
+    if (!r.rows.length) {
+      return 'No compliance items in the next ' + days + ' days.';
+    }
+    const lines = r.rows.map(row => {
+      const days_left = Number(row.days_until_expiry);
+      const status = days_left < 0 ? '⚠ EXPIRED ' + Math.abs(days_left) + 'd ago' : days_left + 'd remaining';
+      const meta = row.metadata && Object.keys(row.metadata).length
+        ? '\n   ' + Object.keys(row.metadata).map(k => k + '=' + String(row.metadata[k]).slice(0, 50)).join(' · ')
+        : '';
+      return '── ' + row.id + ' [' + row.type + '] "' + row.title + '" (' + row.entity_type + ':' + row.entity_id + ')' +
+        '\n   expires: ' + (row.expiration_date.toISOString ? row.expiration_date.toISOString().slice(0, 10) : String(row.expiration_date).slice(0, 10)) +
+        '  · ' + status + meta;
+    });
+    return 'Compliance items (' + r.rows.length + '):\n\n' + lines.join('\n\n');
+  }
+
+  throw new Error('Unknown Wave 3 tool: ' + name);
+}
+
 // Phase 5 — auto-tier read handlers for watches. Same pattern as
 // execMemoryTool: called from make86OnCustomToolUse when 86 emits
 // list_watches or read_recent_watch_runs. ctx = { userId }.
@@ -9865,6 +10011,8 @@ function make86OnCustomToolUse(userId, parentSession, turnContextText) {
           result = await execMemoryTool(name, input, { userId });
         } else if (WATCH_EXECUTOR_TOOLS.has(name)) {
           result = await execWatchTool(name, input, { userId });
+        } else if (WAVE3_EXECUTOR_TOOLS.has(name)) {
+          result = await execWave3Tool(name, input, { userId });
         } else if (PROJECT_INLINE_EXECUTOR_TOOLS.has(name)) {
           result = await execProjectInlineTool(name, input, { userId });
         } else {
@@ -10746,6 +10894,8 @@ const FIELD_TOOLS_EXECUTOR_TOOLS = new Set(['read_field_tools']);
 const MEMORY_EXECUTOR_TOOLS = new Set(['remember', 'recall', 'list_memories', 'forget']);
 // Phase 5 — watch READS route to execWatchTool (writes stay approval-tier).
 const WATCH_EXECUTOR_TOOLS = new Set(['list_watches', 'read_recent_watch_runs']);
+// Wave 3 — RFI / submittal / transmittal + compliance reads.
+const WAVE3_EXECUTOR_TOOLS = new Set(['list_workflow_items', 'list_compliance_expiring']);
 
 // ════════════════════════════════════════════════════════════════════
 // Unified-86 Phase 2 — surface-aware tool availability
@@ -11694,6 +11844,9 @@ module.exports.internals = {
   // dispatch through execConsolidatedRead to the existing narrow
   // handlers (no behavior change, just a tighter tool surface).
   readTools: () => READ_TOOLS.map(({ tier, ...t }) => t),
+  // Wave 3 — workflow + compliance read tools (RFI, submittal,
+  // transmittal, COIs, license renewals).
+  wave3Tools: () => WAVE3_TOOLS.map(({ tier, ...t }) => t),
   defaultModel: () => MODEL,
   maxTokens: () => MAX_TOKENS,
   // Resolve the effort string for a given model. Caller passes the

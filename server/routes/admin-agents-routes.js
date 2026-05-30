@@ -2302,6 +2302,9 @@ function customToolsFor(agentKey, opts) {
       'navigate',
       // ── The ONE write (1) ──
       'emit_payload_file',
+      // ── Wave 3 (2) ── RFI/sub/trans + compliance reads
+      'list_workflow_items',
+      'list_compliance_expiring',
     ]);
     const seen = new Set();
     const merged = [];
@@ -2318,6 +2321,8 @@ function customToolsFor(agentKey, opts) {
       ...(aiInternals.payloadTools ? aiInternals.payloadTools() : []),
       // C18 — universal read surface (read_entity + search_entities).
       ...(aiInternals.readTools ? aiInternals.readTools() : []),
+      // Wave 3 — workflow + compliance reads.
+      ...(aiInternals.wave3Tools ? aiInternals.wave3Tools() : []),
       // Wave T3 — inline tools (photo comments, schedule read).
       ...(aiInternals.projectInlineTools ? aiInternals.projectInlineTools() : [])
     ].forEach(t => {
