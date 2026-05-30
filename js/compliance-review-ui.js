@@ -144,16 +144,19 @@
       var v = meta[k];
       return k + ': ' + String(v).slice(0, 30);
     }).join(' · ');
-    var html = '<div data-compliance-row="' + esc(it.id) + '" style="padding:10px 12px;background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#2e3346);border-radius:6px;margin-bottom:6px;cursor:pointer;' +
+    var html = '<div data-compliance-row="' + esc(it.id) + '" class="cmp-row" style="padding:10px 12px;background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#2e3346);border-radius:6px;margin-bottom:6px;cursor:pointer;' +
       (STATE.expandedId === it.id ? 'border-color:#4f8cff;' : '') + '">';
-    html += '<div style="display:grid;grid-template-columns:30px 1fr 100px 90px;gap:10px;align-items:center;">';
-    html += '<div style="font-size:18px;">' + tm.glyph + '</div>';
-    html += '<div>';
+    // Grid: on desktop, 4 columns (icon · title · date · days). On
+    // narrow phones (<640px), CSS reflows this to 2 rows via the
+    // .cmp-row-grid class so the long title row doesn't truncate.
+    html += '<div class="cmp-row-grid" style="display:grid;grid-template-columns:30px 1fr 100px 90px;gap:10px;align-items:center;">';
+    html += '<div class="cmp-row-icon" style="font-size:18px;">' + tm.glyph + '</div>';
+    html += '<div class="cmp-row-body">';
     html += '<div style="font-size:13px;font-weight:600;color:var(--text,#fff);">' + esc(it.title) + '</div>';
     html += '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:2px;">' + esc(tm.label) + ' · ' + esc(it.entity_type) + ':' + esc(it.entity_id) + (metaSnippet ? ' · ' + esc(metaSnippet) : '') + '</div>';
     html += '</div>';
-    html += '<div style="font-size:11px;color:var(--text-dim,#aaa);text-align:right;">' + esc(fmtDate(it.expiration_date)) + '</div>';
-    html += '<div style="font-size:11px;text-align:right;color:' + (it._days_left < 0 ? '#f87171' : '#fbbf24') + ';font-weight:600;">' + esc(days_str) + '</div>';
+    html += '<div class="cmp-row-date" style="font-size:11px;color:var(--text-dim,#aaa);text-align:right;">' + esc(fmtDate(it.expiration_date)) + '</div>';
+    html += '<div class="cmp-row-days" style="font-size:11px;text-align:right;color:' + (it._days_left < 0 ? '#f87171' : '#fbbf24') + ';font-weight:600;">' + esc(days_str) + '</div>';
     html += '</div>';
     if (STATE.expandedId === it.id) {
       html += renderEditPanel(it);

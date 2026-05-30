@@ -130,22 +130,26 @@
       STATE.items.forEach(function(item, i) {
         var ss = STATUS_STYLE[item.status] || { bg: 'rgba(106,112,144,0.2)', fg: '#6a7090', label: item.status };
         var overdue = isOverdue(item.due_date, item.status);
-        html += '<div data-workflow-row="' + esc(item.id) + '" style="' +
+        // Row grid: desktop 4-col (number · subject · due · status).
+        // Phone (<640px) reflows via the .wf-row-grid class so the
+        // subject + meta stay readable instead of truncating.
+        html += '<div data-workflow-row="' + esc(item.id) + '" class="wf-row" style="' +
           'padding:12px 14px;' +
           'border-bottom:' + (i < STATE.items.length - 1 ? '1px solid var(--ng-border2,#2e3346)' : '0') + ';' +
-          'cursor:pointer;display:grid;grid-template-columns:60px 1fr 130px 110px;gap:12px;align-items:center;' +
+          'cursor:pointer;' +
           (STATE.expandedId === item.id ? 'background:rgba(79,140,255,0.06);' : '') + '">';
-        html += '<div style="font-size:11px;font-weight:700;color:var(--text-dim,#888);font-family:\'Courier New\',monospace;">' + esc(item.number || '') + '</div>';
-        html += '<div><div style="font-size:13px;font-weight:600;color:var(--text,#fff);">' + esc(item.subject) + '</div>';
+        html += '<div class="wf-row-grid" style="display:grid;grid-template-columns:60px 1fr 130px 110px;gap:12px;align-items:center;">';
+        html += '<div class="wf-row-num" style="font-size:11px;font-weight:700;color:var(--text-dim,#888);font-family:\'Courier New\',monospace;">' + esc(item.number || '') + '</div>';
+        html += '<div class="wf-row-body"><div style="font-size:13px;font-weight:600;color:var(--text,#fff);">' + esc(item.subject) + '</div>';
         if (item.body) {
           html += '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:600px;">' + esc(item.body.slice(0, 120)) + '</div>';
         }
         html += '</div>';
-        html += '<div style="font-size:11px;color:' + (overdue ? '#f87171' : 'var(--text-dim,#aaa)') + ';">';
+        html += '<div class="wf-row-due" style="font-size:11px;color:' + (overdue ? '#f87171' : 'var(--text-dim,#aaa)') + ';">';
         if (item.due_date) html += (overdue ? '⚠ Overdue: ' : 'Due ') + esc(fmtDate(item.due_date));
         html += '</div>';
-        html += '<div><span style="display:inline-block;background:' + ss.bg + ';color:' + ss.fg + ';padding:3px 10px;border-radius:10px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;">' + esc(ss.label) + '</span></div>';
-        html += '</div>';
+        html += '<div class="wf-row-status"><span style="display:inline-block;background:' + ss.bg + ';color:' + ss.fg + ';padding:3px 10px;border-radius:10px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;">' + esc(ss.label) + '</span></div>';
+        html += '</div></div>';
 
         // Inline edit panel when expanded.
         if (STATE.expandedId === item.id) {

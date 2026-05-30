@@ -3410,6 +3410,89 @@
   overflow: hidden;
   background: #1a1a2e;
 }
+/* Mobile: shorter map so it doesn't eat 75% of a portrait phone
+   viewport. 280px is enough to read pins without crowding the rest
+   of the section out. */
+@media (max-width: 640px) {
+  .p86-report-section-map,
+  .p86-report-section-map-wrap {
+    height: 280px;
+    min-height: 280px;
+    flex-basis: 280px;
+  }
+  .p86-report-section-pinstyle {
+    font-size: 11px;
+    padding: 4px 6px;
+  }
+  .p86-report-section-map-count {
+    font-size: 10.5px;
+  }
+}
+
+/* Compliance Review rows — reflow 4-column grid to 2 rows on phones
+   so the title doesn't get squeezed by the 100px date + 90px days
+   columns (combined 190px of fixed width leaves <150px for the
+   title at 375px viewport, causing truncation). On phone:
+   - Row 1: icon + title block
+   - Row 2: expiration date + days-left chip aligned right */
+@media (max-width: 640px) {
+  .cmp-row-grid {
+    grid-template-columns: 28px 1fr !important;
+    grid-template-areas:
+      'icon body'
+      'icon meta';
+    row-gap: 6px;
+  }
+  .cmp-row-icon { grid-area: icon; }
+  .cmp-row-body { grid-area: body; }
+  .cmp-row-date {
+    grid-area: meta;
+    text-align: left !important;
+    grid-column: 2;
+  }
+  .cmp-row-days {
+    grid-area: meta;
+    text-align: right !important;
+    grid-column: 2;
+  }
+  /* Stack date and days on the same row via a sub-flex */
+  .cmp-row-grid > .cmp-row-date {
+    display: inline-block;
+    margin-right: auto;
+  }
+}
+
+/* Job Workflow rows — same reflow strategy as compliance. The
+   subject column was being squeezed by 130px due-date + 110px
+   status (combined 240px fixed width on a 375px phone left
+   ~110px for the subject, which is unreadable for any real job
+   item). On phone:
+   - Row 1: number + subject block
+   - Row 2: due date (left) + status pill (right) */
+@media (max-width: 640px) {
+  .wf-row-grid {
+    grid-template-columns: 50px 1fr !important;
+    grid-template-areas:
+      'num body'
+      'num meta';
+    row-gap: 6px;
+  }
+  .wf-row-num { grid-area: num; }
+  .wf-row-body { grid-area: body; }
+  .wf-row-due {
+    grid-area: meta;
+    grid-column: 2;
+  }
+  .wf-row-status {
+    grid-area: meta;
+    grid-column: 2;
+    text-align: right;
+  }
+  .wf-row-grid > .wf-row-due {
+    display: inline-block;
+    margin-right: auto;
+  }
+}
 .p86-report-section-map-unmapped {
   font-size: 11px;
   color: var(--text-dim, #888);

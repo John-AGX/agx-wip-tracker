@@ -2945,13 +2945,16 @@
           // the parent layout grew (e.g. flex layout finished
           // calculating). resize causes Google Maps to re-read the
           // host's dimensions and re-tile if needed. Re-fit after
-          // resize so the viewport still frames the pins.
+          // resize so the viewport still frames the pins. Also
+          // re-applies zoom 16 on single-pin maps so they don't
+          // get stuck at whatever level the previous paint left.
           setTimeout(function() {
             if (!mapEl.isConnected) return;
             maps.event.trigger(map, 'resize');
             if (pickedPhotos.length > 1) map.fitBounds(bounds, 48);
             else if (pickedPhotos.length === 1) {
               map.setCenter({ lat: Number(pickedPhotos[0].lat), lng: Number(pickedPhotos[0].lng) });
+              map.setZoom(16);
             }
           }, 200);
 
@@ -2980,6 +2983,7 @@
                 if (pickedPhotos.length > 1) map.fitBounds(bounds, 48);
                 else if (pickedPhotos.length === 1) {
                   map.setCenter({ lat: Number(pickedPhotos[0].lat), lng: Number(pickedPhotos[0].lng) });
+                  map.setZoom(16);
                 }
               });
               obs.observe(mapEl);
@@ -3332,12 +3336,12 @@
         var pickCount = Array.isArray(section.photo_ids) ? section.photo_ids.length : 0;
         var pinStyle = section.pin_style || 'tag';
         var pinStyleSelect =
-          '<select class="p86-report-section-pinstyle" title="Pin style">' +
-            '<option value="tag"' + (pinStyle === 'tag' ? ' selected' : '') + '>Tag colors</option>' +
-            '<option value="numbered"' + (pinStyle === 'numbered' ? ' selected' : '') + '>Numbered</option>' +
-            '<option value="lettered"' + (pinStyle === 'lettered' ? ' selected' : '') + '>Lettered</option>' +
-            '<option value="photo"' + (pinStyle === 'photo' ? ' selected' : '') + '>Photo thumb</option>' +
-            '<option value="dot"' + (pinStyle === 'dot' ? ' selected' : '') + '>Plain dot</option>' +
+          '<select class="p86-report-section-pinstyle" title="Pin style — how each photo appears on the map">' +
+            '<option value="tag"' + (pinStyle === 'tag' ? ' selected' : '') + '>📍 Tag colors</option>' +
+            '<option value="numbered"' + (pinStyle === 'numbered' ? ' selected' : '') + '>📍 Numbered</option>' +
+            '<option value="lettered"' + (pinStyle === 'lettered' ? ' selected' : '') + '>📍 Lettered</option>' +
+            '<option value="photo"' + (pinStyle === 'photo' ? ' selected' : '') + '>📍 Photo thumb</option>' +
+            '<option value="dot"' + (pinStyle === 'dot' ? ' selected' : '') + '>📍 Plain dot</option>' +
           '</select>';
         mapBtns =
           '<button class="ee-btn secondary p86-report-section-autopin" title="Add every project photo that has GPS data">&#x1F4CD; Auto-pin all</button>' +
@@ -3810,11 +3814,22 @@
         ? '<img class="p86-report-section-map-print" alt="Photo locations" src="' + escapeAttr(staticUrl) + '" />'
         : '';
 
-      var unmapped = withoutCoords.length
+      // Footer lines under the map: photos without GPS coords, plus
+      // a heads-up if we'd hit the Static Maps 60-pin URL-length cap
+      // on print. Both are advisory — the live interactive map shows
+      // every pin regardless of count.
+      var truncatedOnPrint = withCoords.length > 60;
+      var unmappedNote = withoutCoords.length
         ? '<div class="p86-report-section-map-unmapped">' +
             '<strong>' + withoutCoords.length + '</strong> picked photo' + (withoutCoords.length === 1 ? '' : 's') + ' without location data.' +
           '</div>'
         : '';
+      var truncNote = truncatedOnPrint
+        ? '<div class="p86-report-section-map-unmapped">' +
+            'Print snapshot shows the first <strong>60</strong> pins (' + (withCoords.length - 60) + ' more on the live map).' +
+          '</div>'
+        : '';
+      var unmapped = unmappedNote + truncNote;
 
       // Chrome strip above the map — pin count + Fit-all button.
       // Hidden on print via the existing photo-map @media print
