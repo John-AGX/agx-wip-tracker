@@ -202,10 +202,17 @@
     // place AND fire the API. Failures bubble back via the toast.
     function updateAtt(patch) {
       var a = att();
+      // skip_catalog is a metadata-only flag — strip it from the local
+      // mirror BEFORE applying so a doesn't accumulate the flag on its
+      // canonical fields. It's forwarded to the server as-is in the
+      // PATCH body, where it controls the org_tags upsert decision.
+      var sendPatch = Object.assign({}, patch);
+      var localPatch = Object.assign({}, patch);
+      delete localPatch.skip_catalog;
       var prior = {};
-      Object.keys(patch).forEach(function(k) { prior[k] = a[k]; });
-      Object.keys(patch).forEach(function(k) { a[k] = patch[k]; });
-      return window.p86Api.attachments.update(a.id, patch).catch(function(e) {
+      Object.keys(localPatch).forEach(function(k) { prior[k] = a[k]; });
+      Object.keys(localPatch).forEach(function(k) { a[k] = localPatch[k]; });
+      return window.p86Api.attachments.update(a.id, sendPatch).catch(function(e) {
         // Roll back the optimistic write so the panel re-renders
         // with the prior value.
         Object.keys(prior).forEach(function(k) { a[k] = prior[k]; });
@@ -520,7 +527,15 @@
       function commitSelection(next) {
         selected = next.slice();
         a.tags = selected; // optimistic mirror so panel re-renders see fresh
-        updateAtt({ tags: selected });
+        // Wave walkthrough — when the user has toggled "Tag privately"
+        // in the picker, pass skip_catalog so the server keeps any
+        // newly-introduced tags out of the org_tags suggestion pool.
+        var skipCatalog = false;
+        var cb = modal && modal.querySelector('[data-tag-skip-catalog]');
+        if (cb && cb.checked) skipCatalog = true;
+        var patch = { tags: selected };
+        if (skipCatalog) patch.skip_catalog = true;
+        updateAtt(patch);
         paint();
         if (onChange) onChange();
       }
@@ -585,6 +600,13 @@
                 '<div class="p86-pv-tag-combobox-chips">' + chipsHTML + '</div>' +
                 '<input type="text" class="p86-pv-tag-combobox-input" placeholder="' + (selected.length ? 'Add another…' : 'Search or create…') + '" value="' + escapeAttr(query) + '" />' +
               '</div>' +
+              // Walkthrough request — give the user a choice about whether
+              // a brand-new tag joins the org catalog or stays private to
+              // these attachments. Defaults to "share" (current behavior).
+              '<label class="p86-pv-tag-modal-scope" style="display:flex;align-items:center;gap:8px;padding:8px 12px;margin:8px 0 4px;background:rgba(34,211,238,0.04);border:1px solid rgba(34,211,238,0.15);border-radius:6px;font-size:11px;color:var(--text-dim,#aaa);cursor:pointer;">' +
+                '<input type="checkbox" data-tag-skip-catalog style="margin:0;cursor:pointer;">' +
+                '<span><strong>Tag privately</strong> — don\'t add new tags to the org\'s suggestion catalog. Useful for job-specific or per-property tags you don\'t want polluting the global list.</span>' +
+              '</label>' +
               '<div class="p86-pv-tag-modal-list"></div>' +
             '</div>' +
             '<div class="modal-footer">' +

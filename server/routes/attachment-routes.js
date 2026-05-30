@@ -867,7 +867,10 @@ router.post('/bulk-tag', requireAuth, async (req, res) => {
                .forEach(function(t) { catalogTags.add(t); });
       });
     }
-    if (catalogTags.size) {
+    // Bulk-tag also honors skip_catalog. When set, every tag in this
+    // batch stays local to the attachments and doesn't pollute the
+    // org-wide suggestion catalog.
+    if (catalogTags.size && !req.body.skip_catalog) {
       upsertOrgTags(req.user && req.user.organization_id, Array.from(catalogTags), req.user && req.user.id);
     }
 
@@ -1279,8 +1282,13 @@ router.put('/:id', requireAuth, async (req, res) => {
           removed: removed
         });
       }
-      // Bump the org-level tag catalog for any newly-added tags.
-      if (added.length) {
+      // Bump the org-level tag catalog for any newly-added tags
+      // UNLESS the caller passed skip_catalog: true. That's the
+      // "tag this attachment privately — don't share with the org"
+      // path requested from the walkthrough flow. The tag still
+      // saves to attachments.tags so it's searchable on this row;
+      // it just doesn't pollute the suggestion catalog.
+      if (added.length && !req.body.skip_catalog) {
         upsertOrgTags(req.user && req.user.organization_id, added, req.user && req.user.id);
       }
     }
