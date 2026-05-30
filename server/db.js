@@ -360,6 +360,117 @@ async function initSchema() {
        WHERE u.organization_id IS NOT NULL ORDER BY u.id ASC LIMIT 1
     ) WHERE organization_id IS NULL;
 
+    -- ──────────────────────────────────────────────────────────────────
+    -- Wave 1.A Phase 3 — multi-tenancy completion for the remaining
+    -- transactional tables. Each picks the cheapest backfill path:
+    --   • Job-anchored (5 tables): join job_id → jobs.organization_id.
+    --     Cheap because jobs.organization_id is already populated
+    --     from Phase 1.
+    --   • Sub-anchored (sub_certificates): join sub_id → subs once
+    --     subs is backfilled.
+    --   • Polymorphic (attachments, ai_messages, reports): fall back
+    --     to the row's user_id → users.organization_id; a per-entity-
+    --     type backfill could resolve more rows but adds complexity
+    --     not justified at the current data volume.
+    --   • messages: user_id → users.organization_id (direct).
+    --   • subs: no parent — first-user fallback (same pattern as
+    --     clients in Phase 1).
+    -- All ALTER + UPDATE statements are idempotent.
+    -- ──────────────────────────────────────────────────────────────────
+
+    -- Schema migrations: add the column on all 10 tables.
+    ALTER TABLE node_graphs       ADD COLUMN IF NOT EXISTS organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE;
+    ALTER TABLE job_change_orders ADD COLUMN IF NOT EXISTS organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE;
+    ALTER TABLE schedule_entries  ADD COLUMN IF NOT EXISTS organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE;
+    ALTER TABLE qb_cost_lines     ADD COLUMN IF NOT EXISTS organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE;
+    ALTER TABLE job_subs          ADD COLUMN IF NOT EXISTS organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE;
+    ALTER TABLE attachments       ADD COLUMN IF NOT EXISTS organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE;
+    ALTER TABLE ai_messages       ADD COLUMN IF NOT EXISTS organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE;
+    ALTER TABLE messages          ADD COLUMN IF NOT EXISTS organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE;
+    ALTER TABLE subs              ADD COLUMN IF NOT EXISTS organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE;
+    ALTER TABLE sub_certificates  ADD COLUMN IF NOT EXISTS organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE;
+    -- reports (was job_reports — completed task #88 renamed). Guard so
+    -- migration is no-op if the table doesn't exist yet on a fresh DB.
+    DO $$ BEGIN
+      IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'reports') THEN
+        ALTER TABLE reports ADD COLUMN IF NOT EXISTS organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE;
+      END IF;
+    END $$;
+
+    -- Indexes (partial — only on populated rows).
+    CREATE INDEX IF NOT EXISTS idx_node_graphs_org       ON node_graphs       (organization_id) WHERE organization_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_jco_org               ON job_change_orders (organization_id) WHERE organization_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_schedule_entries_org  ON schedule_entries  (organization_id) WHERE organization_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_qb_cost_lines_org     ON qb_cost_lines     (organization_id) WHERE organization_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_job_subs_org          ON job_subs          (organization_id) WHERE organization_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_attachments_org       ON attachments       (organization_id) WHERE organization_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_ai_messages_org       ON ai_messages       (organization_id) WHERE organization_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_messages_org          ON messages          (organization_id) WHERE organization_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_subs_org              ON subs              (organization_id) WHERE organization_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_sub_certificates_org  ON sub_certificates  (organization_id) WHERE organization_id IS NOT NULL;
+
+    -- Job-anchored backfills (5 tables). jobs.organization_id is already
+    -- populated from Phase 1.
+    UPDATE node_graphs n SET organization_id = j.organization_id
+      FROM jobs j WHERE j.id = n.job_id AND n.organization_id IS NULL AND j.organization_id IS NOT NULL;
+    UPDATE job_change_orders c SET organization_id = j.organization_id
+      FROM jobs j WHERE j.id = c.job_id AND c.organization_id IS NULL AND j.organization_id IS NOT NULL;
+    UPDATE schedule_entries s SET organization_id = j.organization_id
+      FROM jobs j WHERE j.id = s.job_id AND s.organization_id IS NULL AND j.organization_id IS NOT NULL;
+    UPDATE qb_cost_lines q SET organization_id = j.organization_id
+      FROM jobs j WHERE j.id = q.job_id AND q.organization_id IS NULL AND j.organization_id IS NOT NULL;
+    UPDATE job_subs js SET organization_id = j.organization_id
+      FROM jobs j WHERE j.id = js.job_id AND js.organization_id IS NULL AND j.organization_id IS NOT NULL;
+
+    -- Polymorphic + user-anchored backfills.
+    -- attachments has uploaded_by (not uploaded_by_user_id — caught
+    -- via direct schema inspection); ai_messages has user_id; messages
+    -- has user_id. All resolve via users.organization_id.
+    UPDATE attachments a SET organization_id = u.organization_id
+      FROM users u WHERE u.id = a.uploaded_by
+        AND a.organization_id IS NULL AND u.organization_id IS NOT NULL;
+    UPDATE ai_messages m SET organization_id = u.organization_id
+      FROM users u WHERE u.id = m.user_id
+        AND m.organization_id IS NULL AND u.organization_id IS NOT NULL;
+    UPDATE messages m SET organization_id = u.organization_id
+      FROM users u WHERE u.id = m.user_id
+        AND m.organization_id IS NULL AND u.organization_id IS NOT NULL;
+
+    -- subs: no parent. First-user fallback (matches clients pattern).
+    UPDATE subs SET organization_id = (
+      SELECT u.organization_id FROM users u
+       WHERE u.organization_id IS NOT NULL ORDER BY u.id ASC LIMIT 1
+    ) WHERE organization_id IS NULL;
+
+    -- sub_certificates: anchor on the parent sub (subs is now backfilled).
+    UPDATE sub_certificates sc SET organization_id = s.organization_id
+      FROM subs s WHERE s.id = sc.sub_id
+        AND sc.organization_id IS NULL AND s.organization_id IS NOT NULL;
+
+    -- reports (job_reports rename). Polymorphic; fall back via uploaded_by
+    -- if present, else first-user fallback. Guarded so it's a no-op if
+    -- the reports table doesn't exist yet.
+    DO $$ BEGIN
+      IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'reports') THEN
+        EXECUTE 'UPDATE reports r SET organization_id = (
+          SELECT u.organization_id FROM users u
+           WHERE u.organization_id IS NOT NULL ORDER BY u.id ASC LIMIT 1
+        ) WHERE organization_id IS NULL';
+      END IF;
+    END $$;
+
+    -- Final single-tenant fallback for any remaining nulls across these
+    -- 10 tables (orphaned rows where the parent has no org_id, etc.).
+    UPDATE node_graphs       SET organization_id = (SELECT u.organization_id FROM users u WHERE u.organization_id IS NOT NULL ORDER BY u.id ASC LIMIT 1) WHERE organization_id IS NULL;
+    UPDATE job_change_orders SET organization_id = (SELECT u.organization_id FROM users u WHERE u.organization_id IS NOT NULL ORDER BY u.id ASC LIMIT 1) WHERE organization_id IS NULL;
+    UPDATE schedule_entries  SET organization_id = (SELECT u.organization_id FROM users u WHERE u.organization_id IS NOT NULL ORDER BY u.id ASC LIMIT 1) WHERE organization_id IS NULL;
+    UPDATE qb_cost_lines     SET organization_id = (SELECT u.organization_id FROM users u WHERE u.organization_id IS NOT NULL ORDER BY u.id ASC LIMIT 1) WHERE organization_id IS NULL;
+    UPDATE job_subs          SET organization_id = (SELECT u.organization_id FROM users u WHERE u.organization_id IS NOT NULL ORDER BY u.id ASC LIMIT 1) WHERE organization_id IS NULL;
+    UPDATE attachments       SET organization_id = (SELECT u.organization_id FROM users u WHERE u.organization_id IS NOT NULL ORDER BY u.id ASC LIMIT 1) WHERE organization_id IS NULL;
+    UPDATE ai_messages       SET organization_id = (SELECT u.organization_id FROM users u WHERE u.organization_id IS NOT NULL ORDER BY u.id ASC LIMIT 1) WHERE organization_id IS NULL;
+    UPDATE messages          SET organization_id = (SELECT u.organization_id FROM users u WHERE u.organization_id IS NOT NULL ORDER BY u.id ASC LIMIT 1) WHERE organization_id IS NULL;
+    UPDATE sub_certificates  SET organization_id = (SELECT u.organization_id FROM users u WHERE u.organization_id IS NOT NULL ORDER BY u.id ASC LIMIT 1) WHERE organization_id IS NULL;
+
     CREATE TABLE IF NOT EXISTS job_access (
       job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
       user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
