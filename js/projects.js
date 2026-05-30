@@ -2838,15 +2838,15 @@
         }).then(function(maps) {
           if (!maps || !mapEl.isConnected) return;
           if (mapEl.dataset.mapFingerprint !== fingerprint) return;
-          // Final safety: if the host still has 0 dimensions (rare,
-          // but happens when the parent is collapsed/hidden), bail
-          // gracefully — a later paint will retry once visibility
-          // returns.
-          if (mapEl.offsetWidth < 50 || mapEl.offsetHeight < 50) {
-            // Clear the fingerprint so the next paint() retries.
-            delete mapEl.dataset.mapFingerprint;
-            return;
-          }
+          // No bail-on-tiny-size check anymore. Google Maps actually
+          // handles 0×0 mounts fine as long as we trigger resize
+          // when the host grows. The previous bail was preventing
+          // mount entirely if the parent flex layout hadn't
+          // committed yet — and since paint() only fires on user
+          // input, the map would stay blank until the user typed.
+          // Instead we mount immediately and use ResizeObserver
+          // (below) to trigger Google's resize event when the host
+          // dimensions change.
           var first = pickedPhotos[0];
           var center = { lat: Number(first.lat), lng: Number(first.lng) };
           var map = new maps.Map(mapEl, {
@@ -2954,6 +2954,38 @@
               map.setCenter({ lat: Number(pickedPhotos[0].lat), lng: Number(pickedPhotos[0].lng) });
             }
           }, 200);
+
+          // ResizeObserver — the real fix for cases where the host
+          // mounts at 0×0 (modal animations, lazy CSS, parent flex
+          // still computing). Whenever the host dimensions change,
+          // fire Google Maps' resize event so the map re-tiles into
+          // the new viewport. Also re-fits the bounds so pins stay
+          // framed. The observer is stored on mapEl so subsequent
+          // re-mounts can disconnect it before creating a new one.
+          try {
+            if (mapEl._p86ResizeObs) {
+              try { mapEl._p86ResizeObs.disconnect(); } catch (e2) {}
+            }
+            if (typeof ResizeObserver !== 'undefined') {
+              var lastW = 0, lastH = 0;
+              var obs = new ResizeObserver(function(entries) {
+                var rect = entries[0] && entries[0].contentRect;
+                if (!rect) return;
+                var w = Math.round(rect.width);
+                var h = Math.round(rect.height);
+                if (w === lastW && h === lastH) return;
+                lastW = w; lastH = h;
+                if (w < 10 || h < 10) return;
+                maps.event.trigger(map, 'resize');
+                if (pickedPhotos.length > 1) map.fitBounds(bounds, 48);
+                else if (pickedPhotos.length === 1) {
+                  map.setCenter({ lat: Number(pickedPhotos[0].lat), lng: Number(pickedPhotos[0].lng) });
+                }
+              });
+              obs.observe(mapEl);
+              mapEl._p86ResizeObs = obs;
+            }
+          } catch (e3) { /* ResizeObserver not available — fall back to the setTimeout above */ }
 
           // Print-path img injection. The body's synchronous attempt
           // at building the Static Maps URL fails on the very first

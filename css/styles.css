@@ -3393,13 +3393,19 @@
 
 /* Report photo-map section body — fixed height so the map gets real
    dimensions for fitBounds. Slightly shorter than the page-level
-   Projects map since reports stack vertically. */
+   Projects map since reports stack vertically.
+   The wrap gets min-height + explicit flex: 0 0 360px on the map
+   child so flex parents above can't squeeze the map to 0 height
+   (which was causing Google Maps to render into a blank 0×0
+   viewport that never recovered). */
 .p86-report-section-map-wrap {
   display: flex; flex-direction: column; gap: 8px;
+  min-height: 360px;
 }
 .p86-report-section-map {
   width: 100%;
   height: 360px;
+  flex: 0 0 360px;
   border-radius: 6px;
   overflow: hidden;
   background: #1a1a2e;
