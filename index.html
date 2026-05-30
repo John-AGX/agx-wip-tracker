@@ -654,6 +654,8 @@
                             <button class="sub-tab-btn-job" data-subtab="job-invoices" data-p86-icon="exports">Invoices</button>
                             <button class="sub-tab-btn-job" data-subtab="job-buildings" data-p86-icon="buildings">Buildings</button>
                             <button class="sub-tab-btn-job" data-subtab="job-labor" data-p86-icon="subs">Labor / Burden</button>
+                            <!-- Wave 3 — RFIs / submittals / transmittals tab -->
+                            <button class="sub-tab-btn-job" data-subtab="job-workflow" data-p86-icon="phases">Workflow</button>
                         </div>
 
                         <!-- Job Overview -->
@@ -914,6 +916,13 @@
                             <div id="job-reports-content"></div>
                         </div>
 
+
+                        <!-- Wave 3 — RFIs / Submittals / Transmittals.
+                             The pane body is painted on-tab-activation by
+                             js/job-workflow-ui.js (window.p86JobWorkflowUI.mount). -->
+                        <div id="job-workflow" class="sub-tab-content-job">
+                            <div id="job-workflow-content"></div>
+                        </div>
 
                         <!-- Job Labor & Burden -->
                         <div id="job-labor" class="sub-tab-content-job">
@@ -2657,6 +2666,7 @@
          BEFORE any of them so window.p86Pricing is ready. -->
     <script src="js/pricing-pipeline.js?v=1"></script>
     <script src="js/jobs.js?v=84"></script>
+    <script src="js/job-workflow-ui.js?v=1"></script>
     <script src="js/estimates.js?v=37"></script>
     <script src="js/proposal.js?v=25"></script>
     <script src="js/estimate-editor.js?v=50"></script>

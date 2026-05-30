@@ -1489,6 +1489,10 @@
             else if (subtabName === 'job-purchaseorders') renderPurchaseOrders(currentJobId);
             else if (subtabName === 'job-invoices') renderInvoices(currentJobId);
             else if (subtabName === 'job-labor') renderJobLabor(currentJobId);
+            // Wave 3 — RFI / submittal / transmittal pane.
+            else if (subtabName === 'job-workflow' && window.p86JobWorkflowUI) {
+                window.p86JobWorkflowUI.mount(currentJobId);
+            }
 
             // Re-apply read-only button guard after the new sub-tab content renders.
             // setTimeout 0 lets the synchronous render finish first.
