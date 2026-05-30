@@ -158,6 +158,9 @@ app.use('/api/admin/context-registry', contextRegistryRoutes);
 const jobWorkflowRoutes = require('./routes/job-workflow-routes');
 app.use('/api/workflow-items', jobWorkflowRoutes);
 app.use('/api/jobs/:jobId', jobWorkflowRoutes.jobNested);
+// Wave 3 — compliance tracking (client COIs, license renewals,
+// lien waivers, WC certs).
+app.use('/api/compliance-items', require('./routes/compliance-routes'));
 app.use('/api/admin/batch', adminBatchRoutes);
 app.use('/api/admin/files', adminFilesRoutes);
 app.use('/api/admin/anthropic', adminAnthropicRoutes);

@@ -2029,6 +2029,67 @@ async function initSchema() {
     --   • Fire-and-forget inserts — see server/services/context-registry.js
     --     for the helper. Logging failures must never break a tool
     --     call, so the helper swallows errors.
+    -- Wave 3 — compliance_items.
+    -- Unified table for client COIs, license renewals, lien waivers,
+    -- and any other "thing that expires and needs renewal" workflow.
+    -- Same shape as job_workflow_items but anchored on a flexible
+    -- entity (client / sub / employee / job) with an expiration date
+    -- as the primary scanning key.
+    --
+    -- type ∈ ('client_coi' | 'license' | 'lien_waiver' | 'wc_cert' | 'other')
+    -- status ∈ ('active' | 'pending' | 'expired' | 'archived')
+    --   active   — in force, not yet expiring within 30 days
+    --   pending  — uploaded but awaiting approval
+    --   expired  — past expiration_date (auto-set by lookup/scan)
+    --   archived — soft-deleted; not surfaced anywhere
+    --
+    -- entity_type / entity_id reference what the cert is FOR:
+    --   client_coi      → entity_type='client', entity_id=clients.id
+    --   license         → entity_type='sub' or 'user' (for employees)
+    --   lien_waiver     → entity_type='job', entity_id=jobs.id (with
+    --                     metadata: {sub_id, amount, period_through})
+    --   wc_cert         → entity_type='sub' or 'client'
+    --
+    -- metadata JSONB carries type-specific detail:
+    --   client_coi:   {carrier, policy_number, holder_name, liability_amount}
+    --   license:      {license_number, issuing_state, license_type}
+    --   lien_waiver:  {sub_id, amount, period_through, waiver_type}
+    --   wc_cert:      {carrier, policy_number, holder_name, exp_modifier}
+    --
+    -- file_attachment_id links to the uploaded PDF (an attachments row).
+    -- Reminder cadence is computed on the fly from days-until-expiration.
+    CREATE TABLE IF NOT EXISTS compliance_items (
+      id TEXT PRIMARY KEY,
+      organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      entity_type TEXT NOT NULL CHECK (entity_type IN ('client', 'sub', 'user', 'job')),
+      entity_id TEXT NOT NULL,
+      type TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      title TEXT NOT NULL,
+      effective_date DATE,
+      expiration_date DATE,
+      file_attachment_id TEXT REFERENCES attachments(id) ON DELETE SET NULL,
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      notes TEXT,
+      created_by_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+      archived_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    -- Per-entity list (e.g. all COIs on this client).
+    CREATE INDEX IF NOT EXISTS idx_compliance_entity
+      ON compliance_items (organization_id, entity_type, entity_id)
+      WHERE archived_at IS NULL;
+    -- Expiration scanning — "show me everything expiring in the next
+    -- 30 days". Partial index on the open items with a date.
+    CREATE INDEX IF NOT EXISTS idx_compliance_expiring
+      ON compliance_items (organization_id, expiration_date)
+      WHERE archived_at IS NULL AND expiration_date IS NOT NULL;
+    -- Type rollup for org-wide reporting.
+    CREATE INDEX IF NOT EXISTS idx_compliance_type
+      ON compliance_items (organization_id, type, status)
+      WHERE archived_at IS NULL;
+
     -- Wave 3 — job_workflow_items.
     -- One unified table for RFIs, submittals, and transmittals
     -- (construction-trade workflows that all share the same shape:
