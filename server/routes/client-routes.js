@@ -33,7 +33,11 @@ function pickEditable(body) {
 // clients, so the same audience needs to read the list).
 router.get('/', requireAuth, requireCapability('ESTIMATES_VIEW'), async (req, res) => {
   try {
-    const { rows } = await pool.query('SELECT * FROM clients ORDER BY name');
+    // Wave 1.A Phase 2 — org-scoped client directory.
+    const { rows } = await pool.query(
+      'SELECT * FROM clients WHERE organization_id = $1 OR organization_id IS NULL ORDER BY name',
+      [req.user.organization_id]
+    );
     res.json({ clients: rows });
   } catch (e) {
     console.error('GET /api/clients error:', e);
@@ -44,11 +48,15 @@ router.get('/', requireAuth, requireCapability('ESTIMATES_VIEW'), async (req, re
 // GET /api/clients/:id — single client + count of direct children
 router.get('/:id', requireAuth, requireCapability('ESTIMATES_VIEW'), async (req, res) => {
   try {
-    const { rows } = await pool.query('SELECT * FROM clients WHERE id = $1', [req.params.id]);
+    // Wave 1.A Phase 2 — org-scoped client GET by id.
+    const { rows } = await pool.query(
+      'SELECT * FROM clients WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+      [req.params.id, req.user.organization_id]
+    );
     if (!rows.length) return res.status(404).json({ error: 'Client not found' });
     const children = await pool.query(
-      'SELECT COUNT(*)::int AS c FROM clients WHERE parent_client_id = $1',
-      [req.params.id]
+      'SELECT COUNT(*)::int AS c FROM clients WHERE parent_client_id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+      [req.params.id, req.user.organization_id]
     );
     res.json({ client: rows[0], childCount: children.rows[0].c });
   } catch (e) {
@@ -92,7 +100,11 @@ router.post('/', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req, r
 // changed (or set to null to detach), with the same validation as create.
 router.put('/:id', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req, res) => {
   try {
-    const exists = await pool.query('SELECT id FROM clients WHERE id = $1', [req.params.id]);
+    // Wave 1.A Phase 2 — org-scoped existence check and parent-FK check.
+    const exists = await pool.query(
+      'SELECT id FROM clients WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+      [req.params.id, req.user.organization_id]
+    );
     if (!exists.rows.length) return res.status(404).json({ error: 'Client not found' });
 
     const fields = pickEditable(req.body || {});
@@ -107,7 +119,10 @@ router.put('/:id', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req,
       const parentId = req.body.parent_client_id || null;
       if (parentId) {
         if (parentId === req.params.id) return res.status(400).json({ error: 'A client cannot be its own parent' });
-        const parent = await pool.query('SELECT id FROM clients WHERE id = $1', [parentId]);
+        const parent = await pool.query(
+          'SELECT id FROM clients WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+          [parentId, req.user.organization_id]
+        );
         if (!parent.rows.length) return res.status(400).json({ error: 'parent_client_id does not exist' });
       }
       sets.push('parent_client_id = $' + p++);
@@ -116,8 +131,13 @@ router.put('/:id', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req,
     if (!sets.length) return res.json({ ok: true, unchanged: true });
     sets.push('updated_at = NOW()');
     params.push(req.params.id);
+    params.push(req.user.organization_id);
     // SAFE: column names sourced from pickEditable(req.body) which iterates the constant EDITABLE_FIELDS allowlist.
-    await pool.query(`UPDATE clients SET ${sets.join(', ')} WHERE id = $${p}`, params);
+    const u = await pool.query(
+      `UPDATE clients SET ${sets.join(', ')} WHERE id = $${p} AND (organization_id = $${p + 1} OR organization_id IS NULL)`,
+      params
+    );
+    if (u.rowCount === 0) return res.status(404).json({ error: 'Client not found' });
     res.json({ ok: true });
   } catch (e) {
     console.error('PUT /api/clients/:id error:', e);
@@ -203,7 +223,11 @@ router.delete('/:id/notes/:noteId', requireAuth, requireCapability('ESTIMATES_ED
 // estimates gain a client_id column.
 router.delete('/:id', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req, res) => {
   try {
-    const r = await pool.query('DELETE FROM clients WHERE id = $1', [req.params.id]);
+    // Wave 1.A Phase 2 — org-scoped DELETE.
+    const r = await pool.query(
+      'DELETE FROM clients WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+      [req.params.id, req.user.organization_id]
+    );
     if (!r.rowCount) return res.status(404).json({ error: 'Client not found' });
     res.json({ ok: true });
   } catch (e) {

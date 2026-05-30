@@ -8,8 +8,11 @@ const router = express.Router();
 // per-user/per-job permissions come later when we move estimates into the ERP layer)
 router.get('/', requireAuth, async (req, res) => {
   try {
+    // Wave 1.A Phase 2 — org-scoped list. NULL org_id retained for
+    // unbackfilled legacy until NOT NULL tightening.
     const { rows } = await pool.query(
-      'SELECT id, owner_id, data, created_at, updated_at FROM estimates ORDER BY updated_at DESC'
+      'SELECT id, owner_id, data, created_at, updated_at FROM estimates WHERE organization_id = $1 OR organization_id IS NULL ORDER BY updated_at DESC',
+      [req.user.organization_id]
     );
     // Surface created_at/updated_at on the returned estimate so the
     // list view can sort/display them. Spread data first so any
@@ -120,12 +123,19 @@ router.put('/bulk/save', requireAuth, requireCapability('ESTIMATES_EDIT'), async
 // DELETE /api/estimates/:id - admin or owner only
 router.delete('/:id', requireAuth, async (req, res) => {
   try {
-    const { rows } = await pool.query('SELECT owner_id FROM estimates WHERE id = $1', [req.params.id]);
+    // Wave 1.A Phase 2 — org-scoped read + delete. Cross-org 404.
+    const { rows } = await pool.query(
+      'SELECT owner_id FROM estimates WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+      [req.params.id, req.user.organization_id]
+    );
     if (!rows.length) return res.status(404).json({ error: 'Not found' });
     if (req.user.role !== 'admin' && rows[0].owner_id !== req.user.id) {
       return res.status(403).json({ error: 'No delete access' });
     }
-    await pool.query('DELETE FROM estimates WHERE id = $1', [req.params.id]);
+    await pool.query(
+      'DELETE FROM estimates WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+      [req.params.id, req.user.organization_id]
+    );
     res.json({ ok: true });
   } catch (e) {
     console.error('DELETE /api/estimates/:id error:', e);

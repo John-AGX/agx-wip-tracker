@@ -62,6 +62,11 @@ router.get('/', requireAuth, requireCapability('LEADS_VIEW'), async (req, res) =
       filters.push('l.client_id = $' + p++);
       params.push(req.query.client_id);
     }
+    // Wave 1.A Phase 2 — org filter on the list. NULL allowed for
+    // unbackfilled legacy rows until NOT NULL tightening.
+    filters.push('(l.organization_id = $' + p + ' OR l.organization_id IS NULL)');
+    params.push(req.user.organization_id);
+    p++;
     const where = filters.length ? 'WHERE ' + filters.join(' AND ') : '';
     const { rows } = await pool.query(`
       SELECT
@@ -84,6 +89,7 @@ router.get('/', requireAuth, requireCapability('LEADS_VIEW'), async (req, res) =
 // GET /api/leads/:id — single lead with the same joined labels.
 router.get('/:id', requireAuth, requireCapability('LEADS_VIEW'), async (req, res) => {
   try {
+    // Wave 1.A Phase 2 — org-scoped GET by id.
     const { rows } = await pool.query(`
       SELECT
         l.*,
@@ -92,8 +98,8 @@ router.get('/:id', requireAuth, requireCapability('LEADS_VIEW'), async (req, res
       FROM leads l
       LEFT JOIN clients c ON c.id = l.client_id
       LEFT JOIN users u ON u.id = l.salesperson_id
-      WHERE l.id = $1
-    `, [req.params.id]);
+      WHERE l.id = $1 AND (l.organization_id = $2 OR l.organization_id IS NULL)
+    `, [req.params.id, req.user.organization_id]);
     if (!rows.length) return res.status(404).json({ error: 'Lead not found' });
     res.json({ lead: rows[0] });
   } catch (e) {
@@ -130,9 +136,10 @@ router.put('/:id', requireAuth, requireCapability('LEADS_EDIT'), async (req, res
     // Fetch the prior status (and salesperson_id) so we can detect a
     // status transition after the UPDATE — drives lead_status_sold /
     // lead_status_lost notification triggers.
+    // Wave 1.A Phase 2 — org-scoped read for prior-status check.
     const prior = await pool.query(
-      'SELECT status, salesperson_id FROM leads WHERE id = $1',
-      [req.params.id]
+      'SELECT status, salesperson_id FROM leads WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+      [req.params.id, req.user.organization_id]
     );
     if (!prior.rows.length) return res.status(404).json({ error: 'Lead not found' });
     const oldStatus = prior.rows[0].status;
@@ -148,8 +155,14 @@ router.put('/:id', requireAuth, requireCapability('LEADS_EDIT'), async (req, res
     if (!sets.length) return res.json({ ok: true, unchanged: true });
     sets.push('updated_at = NOW()');
     params.push(req.params.id);
+    // Wave 1.A Phase 2 — org filter on the UPDATE WHERE.
+    params.push(req.user.organization_id);
     // SAFE: column names sourced from pickEditable(req.body) which iterates the constant EDITABLE_FIELDS allowlist.
-    await pool.query(`UPDATE leads SET ${sets.join(', ')} WHERE id = $${p}`, params);
+    const u = await pool.query(
+      `UPDATE leads SET ${sets.join(', ')} WHERE id = $${p} AND (organization_id = $${p + 1} OR organization_id IS NULL)`,
+      params
+    );
+    if (u.rowCount === 0) return res.status(404).json({ error: 'Lead not found' });
     res.json({ ok: true });
 
     // Fire status-change notifications (gated by isEventEnabled).
@@ -302,7 +315,11 @@ router.post('/import', requireAuth, requireCapability('LEADS_EDIT'), async (req,
 
 router.delete('/:id', requireAuth, requireCapability('LEADS_EDIT'), async (req, res) => {
   try {
-    const r = await pool.query('DELETE FROM leads WHERE id = $1', [req.params.id]);
+    // Wave 1.A Phase 2 — org-scoped DELETE.
+    const r = await pool.query(
+      'DELETE FROM leads WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+      [req.params.id, req.user.organization_id]
+    );
     if (!r.rowCount) return res.status(404).json({ error: 'Lead not found' });
     res.json({ ok: true });
   } catch (e) {

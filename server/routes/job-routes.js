@@ -62,12 +62,16 @@ async function canEdit(userId, userRole, jobId) {
 // jobs from its bulk-save payload.
 router.get('/', requireAuth, async (req, res) => {
   try {
+    // Wave 1.A Phase 2 — list scoped to caller's org. Rows with NULL
+    // organization_id (unbackfilled legacy) are included so existing
+    // data remains visible until the NOT NULL tightening commit.
     const { rows } = await pool.query(`
       SELECT j.id, j.data, j.owner_id, j.created_at, j.updated_at,
              COALESCE(ja.access_level, '') AS access_level
       FROM jobs j
       LEFT JOIN job_access ja ON ja.job_id = j.id AND ja.user_id = $1
-    `, [req.user.id]);
+      WHERE j.organization_id = $2 OR j.organization_id IS NULL
+    `, [req.user.id, req.user.organization_id]);
     const result = rows.map(j => {
       let canEdit = false;
       if (isAdminish(req.user)) canEdit = true;
@@ -93,7 +97,12 @@ router.get('/:id', requireAuth, async (req, res) => {
     if (!(await canAccess(req.user.id, req.user.role, req.params.id))) {
       return res.status(403).json({ error: 'Access denied' });
     }
-    const { rows } = await pool.query('SELECT * FROM jobs WHERE id = $1', [req.params.id]);
+    // Wave 1.A Phase 2 — org filter at the SQL layer. Cross-org access
+    // returns 404 (not 403) so we don't leak existence info.
+    const { rows } = await pool.query(
+      'SELECT * FROM jobs WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+      [req.params.id, req.user.organization_id]
+    );
     if (!rows.length) return res.status(404).json({ error: 'Job not found' });
     // Same shape rule as the list endpoint: spread the JSONB first so
     // the canonical column values override anything stale in the blob.
@@ -147,8 +156,13 @@ router.put('/:id', requireAuth, async (req, res) => {
     if (!(await canEdit(req.user.id, req.user.role, req.params.id))) {
       return res.status(403).json({ error: 'No edit access' });
     }
-    await pool.query("UPDATE jobs SET data = $1, updated_at = NOW() WHERE id = $2",
-      [JSON.stringify(req.body), req.params.id]);
+    // Wave 1.A Phase 2 — org-scoped UPDATE. Returns affected row count
+    // so we can 404 cross-org writes instead of silently no-op'ing.
+    const u = await pool.query(
+      "UPDATE jobs SET data = $1, updated_at = NOW() WHERE id = $2 AND (organization_id = $3 OR organization_id IS NULL)",
+      [JSON.stringify(req.body), req.params.id, req.user.organization_id]
+    );
+    if (u.rowCount === 0) return res.status(404).json({ error: 'Job not found' });
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: 'Server error' });
@@ -166,12 +180,22 @@ router.put('/:id/owner', requireAuth, requireRole('admin'), async (req, res) => 
     if (!ownerId) return res.status(400).json({ error: 'ownerId required' });
     const userCheck = await pool.query('SELECT id FROM users WHERE id = $1 AND active = true', [ownerId]);
     if (!userCheck.rows.length) return res.status(400).json({ error: 'Invalid or inactive user' });
-    const jobCheck = await pool.query('SELECT id, owner_id, data FROM jobs WHERE id = $1', [req.params.id]);
+    // Wave 1.A Phase 2 — org-scoped owner reassignment. Both the read
+    // and the write are filtered. Also reject reassignment to a user
+    // in a DIFFERENT org (would orphan the job into the wrong tenant).
+    const jobCheck = await pool.query(
+      'SELECT id, owner_id, data FROM jobs WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+      [req.params.id, req.user.organization_id]
+    );
     if (!jobCheck.rows.length) return res.status(404).json({ error: 'Job not found' });
+    const newOwnerOrg = await pool.query('SELECT organization_id FROM users WHERE id = $1', [ownerId]);
+    if (!newOwnerOrg.rows.length || newOwnerOrg.rows[0].organization_id !== req.user.organization_id) {
+      return res.status(400).json({ error: 'Cannot reassign job to a user in a different organization' });
+    }
     const priorOwnerId = jobCheck.rows[0].owner_id;
     await pool.query(
-      'UPDATE jobs SET owner_id = $1, updated_at = NOW() WHERE id = $2',
-      [ownerId, req.params.id]
+      'UPDATE jobs SET owner_id = $1, updated_at = NOW() WHERE id = $2 AND (organization_id = $3 OR organization_id IS NULL)',
+      [ownerId, req.params.id, req.user.organization_id]
     );
 
     // Notify the new owner of the reassignment when the client opted
@@ -196,7 +220,12 @@ router.put('/:id/owner', requireAuth, requireRole('admin'), async (req, res) => 
 // DELETE /api/jobs/:id (admin only)
 router.delete('/:id', requireAuth, requireRole('admin'), async (req, res) => {
   try {
-    await pool.query('DELETE FROM jobs WHERE id = $1', [req.params.id]);
+    // Wave 1.A Phase 2 — org-scoped DELETE. 404 cross-org.
+    const d = await pool.query(
+      'DELETE FROM jobs WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+      [req.params.id, req.user.organization_id]
+    );
+    if (d.rowCount === 0) return res.status(404).json({ error: 'Job not found' });
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: 'Server error' });
