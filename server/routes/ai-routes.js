@@ -9502,6 +9502,23 @@ async function execWave3Tool(name, input, ctx) {
   const orgId = orgRow.rows[0] && orgRow.rows[0].organization_id;
   if (!orgId) throw new Error('User has no organization — cannot use Wave 3 tools.');
 
+  // Wave 1.B Phase 2 — log Wave 3 tool invocations into the context
+  // registry so the admin can see what 86's been hitting.
+  try {
+    logContextLoad(pool, {
+      organization_id: orgId,
+      user_id: userId,
+      layer: 'wave3',
+      item_id: name,
+      item_name: name,
+      item_meta: {
+        job_id: input && input.job_id ? String(input.job_id) : null,
+        type: input && input.type ? String(input.type) : null,
+        days: input && input.days != null ? Number(input.days) : null
+      }
+    });
+  } catch (_) { /* observation, not load-bearing */ }
+
   if (name === 'list_workflow_items') {
     const params = [orgId];
     const conds = ['(organization_id = $1 OR organization_id IS NULL)', 'archived_at IS NULL'];

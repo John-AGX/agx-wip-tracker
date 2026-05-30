@@ -50,7 +50,8 @@
     entity_search:  { label: 'Entity Search', glyph: '🔍', desc: 'search_entities calls (with filters)' },
     skill:          { label: 'Skill',      glyph: '🎯', desc: 'Skill-pack invocations (when Anthropic reports them)' },
     watch:          { label: 'Watch',      glyph: '⏰', desc: 'Background watcher fires' },
-    turn_context:   { label: 'Turn Context', glyph: '📋', desc: 'Bundled context per turn' }
+    turn_context:   { label: 'Turn Context', glyph: '📋', desc: 'Bundled context per turn' },
+    wave3:          { label: 'Wave 3',    glyph: '📝', desc: 'RFI / submittal / transmittal / compliance reads' }
   };
 
   function loadAll() {
