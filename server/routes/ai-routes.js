@@ -57,7 +57,8 @@ function getAnthropic() {
   //   - files-api-2025-04-14 unlocks {source:{type:'file',file_id:'…'}}
   //     image blocks so the chat path can reference pre-uploaded
   //     photos by id instead of re-base64-encoding the bytes every
-  //     turn.
+  //     turn. Also handles file artifacts produced by code_execution
+  //     coming back as chat attachments.
   //   - compact-2026-01-12 enables server-side session compaction.
   //     Once a session's context approaches the trigger threshold
   //     (~150k input tokens by default) Anthropic auto-summarizes
@@ -65,10 +66,24 @@ function getAnthropic() {
   //     run indefinitely without context-window blow-up. Phase 4c
   //     of the unified-86 cutover relies on this — without it, a
   //     long-lived user-thread session would die at ~1M tokens.
+  //   - code-execution-2025-08-25 enables Anthropic's server-hosted
+  //     Python sandbox. 86 can write code that runs in an isolated
+  //     container with the standard PyData stack (openpyxl, pandas,
+  //     matplotlib, reportlab, weasyprint, etc.) and emit real file
+  //     artifacts — xlsx, csv, pdf, png — that surface in the chat
+  //     as downloadable attachments. Combined with the context
+  //     layers (memory + read_entity + skills) the workflow is
+  //     "pull data into prompt → write Python that uses it →
+  //     produce a project-aware artifact." User drops the artifact
+  //     into the workspace import (existing surface), and the
+  //     workspace renders it. Zero Project 86 backend changes
+  //     for generation — the runtime IS Anthropic's sandbox.
   if (!_anthropicClient || _anthropicKey !== key) {
     _anthropicClient = new Anthropic({
       apiKey: key,
-      defaultHeaders: { 'anthropic-beta': 'files-api-2025-04-14,compact-2026-01-12' }
+      defaultHeaders: {
+        'anthropic-beta': 'files-api-2025-04-14,compact-2026-01-12,code-execution-2025-08-25'
+      }
     });
     _anthropicKey = key;
   }

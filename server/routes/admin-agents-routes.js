@@ -2305,6 +2305,8 @@ function customToolsFor(agentKey, opts) {
       // ── Wave 3 (2) ── RFI/sub/trans + compliance reads
       'list_workflow_items',
       'list_compliance_expiring',
+      // ── Server-hosted runtime (1) ── Anthropic Python sandbox
+      'code_execution',
     ]);
     const seen = new Set();
     const merged = [];
@@ -2331,6 +2333,29 @@ function customToolsFor(agentKey, opts) {
       seen.add(t.name);
       merged.push(t);
     });
+    // Anthropic server-hosted code execution sandbox (beta
+    // code-execution-2025-08-25). Appended AFTER the name-based merge
+    // filter because server-hosted tools have only {type: '...'} in
+    // the request — no `name` field, which would otherwise trip the
+    // `if (!t.name) return` gate above.
+    //
+    // What this unlocks: 86 can run Python in an Anthropic-hosted
+    // sandbox with the full PyData stack (openpyxl, pandas,
+    // matplotlib, reportlab, weasyprint, PIL, numpy, ...) and emit
+    // real file artifacts (xlsx, csv, pdf, png) that surface in the
+    // chat as downloadable attachments via the files-api beta.
+    //
+    // Compounded with the existing context layers (memory + skill
+    // packs + read_entity + turn_context) the loop closes: 86 pulls
+    // project data into prompt, writes Python that operates on that
+    // data, and produces a project-aware artifact the user can drop
+    // into the workspace import or anywhere else attachments flow.
+    //
+    // Zero Project 86 backend changes for generation — Anthropic
+    // runs the runtime. Token cost only (sandbox stdout + file
+    // references). Sandbox CANNOT reach Project 86's DB or
+    // attachments — 86 must read first, then compute.
+    merged.push({ type: 'code_execution_20250825' });
     // C7 — sync handoffs retired. The Principal no longer fans out to
     // staff sub-sessions; staff agents are repurposed as async
     // background watchers (C10) that emit their findings as payloads
