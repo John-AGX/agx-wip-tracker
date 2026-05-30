@@ -1802,6 +1802,48 @@ async function initSchema() {
       ON ai_memories (organization_id, user_id, topic)
       WHERE archived_at IS NULL;
 
+    -- context_load_events — Wave 1.B context registry / observability.
+    --
+    -- One row per "piece of context that loaded for the AI". The point
+    -- is to make the layered context model auditable: which memories
+    -- got recalled, which entities got read, which skills attached,
+    -- which turn_context bundles fired. Today we ship many layers but
+    -- can only observe a couple of them; this is the cross-layer event
+    -- log that powers the admin Context Registry page.
+    --
+    -- Design notes:
+    --   • Layer is free text instead of an enum so we can add new
+    --     layers (skill, watch, etc.) without a schema migration. The
+    --     admin UI groups by this column.
+    --   • item_id is TEXT because different layers reference different
+    --     entities — memory ids and entity ids are both strings, skill
+    --     names too. Don't enforce a foreign key.
+    --   • item_meta JSONB carries layer-specific context (e.g. memory
+    --     kind+importance, entity depth, search filter). Keep it small;
+    --     it's read every time the registry view renders.
+    --   • Fire-and-forget inserts — see server/services/context-registry.js
+    --     for the helper. Logging failures must never break a tool
+    --     call, so the helper swallows errors.
+    CREATE TABLE IF NOT EXISTS context_load_events (
+      id BIGSERIAL PRIMARY KEY,
+      organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      layer TEXT NOT NULL,
+      item_id TEXT,
+      item_name TEXT,
+      item_meta JSONB,
+      loaded_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    -- Primary access pattern: "what loaded for org X in the last N
+    -- days, grouped by layer". Index covers org_id + loaded_at DESC.
+    CREATE INDEX IF NOT EXISTS idx_context_load_events_org_time
+      ON context_load_events (organization_id, loaded_at DESC);
+    -- Secondary pattern: "show me every event for this specific item"
+    -- (e.g. for a memory's use count over time).
+    CREATE INDEX IF NOT EXISTS idx_context_load_events_item
+      ON context_load_events (organization_id, layer, item_id, loaded_at DESC)
+      WHERE item_id IS NOT NULL;
+
     -- ai_watches — Phase 5 (proactive watching).
     -- A watch is a recurring instruction 86 runs on its own (without a
     -- user prompt). cadence + time_of_day_utc define when. The runner

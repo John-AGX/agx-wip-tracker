@@ -24,6 +24,9 @@ const { pool } = require('../db');
 const { requireAuth, requireCapability, hasCapability, requireOrg } = require('../auth');
 const { storage } = require('../storage');
 const { aiChatLimiter, aiChatHourlyLimiter } = require('../rate-limit');
+// Wave 1.B context registry — fire-and-forget event logger for
+// memory recalls, entity reads, and any other layer we observe.
+const { logContextLoad } = require('../services/context-registry');
 
 const router = express.Router();
 
@@ -6640,6 +6643,51 @@ async function dispatchReadTool(name, input, ctx) {
 async function execConsolidatedRead(name, input, ctx) {
   const inp = input || {};
 
+  // Wave 1.B — log entity reads/searches into context_load_events so
+  // the registry can show which entities the AI is leaning on. One
+  // org-id lookup per call; the helper itself is fire-and-forget.
+  try {
+    const userId = ctx && ctx.userId;
+    if (userId) {
+      const orgRow = await pool.query(`SELECT organization_id FROM users WHERE id = $1`, [userId]);
+      const orgId = orgRow.rows[0] && orgRow.rows[0].organization_id;
+      if (orgId) {
+        const et = String(inp.entity_type || '').toLowerCase();
+        if (name === 'search_entities') {
+          // Capture the filter set as the "items" — each filter becomes
+          // one row. For single-filter calls this is exactly one row.
+          const filtersArr = Array.isArray(inp.filters) ? inp.filters : [];
+          const singleFilter = inp.filter || inp.q || '';
+          const queries = filtersArr.length ? filtersArr : (singleFilter ? [singleFilter] : ['(no filter)']);
+          logContextLoad(pool, {
+            organization_id: orgId,
+            user_id: userId,
+            layer: 'entity_search',
+            items: queries.map(q => ({
+              item_id: et,
+              item_name: String(q),
+              item_meta: { entity_type: et, sort_by: inp.sort_by || null, limit: inp.limit || null }
+            }))
+          });
+        } else {
+          // read_entity — log entity_type + id as the item.
+          logContextLoad(pool, {
+            organization_id: orgId,
+            user_id: userId,
+            layer: 'entity_read',
+            item_id: String(inp.id || inp.entity_id || ''),
+            item_name: et,
+            item_meta: {
+              entity_type: et,
+              depth: inp.depth || 'summary',
+              include: Array.isArray(inp.include) ? inp.include : []
+            }
+          });
+        }
+      }
+    }
+  } catch (_) { /* observation, not load-bearing */ }
+
   if (name === 'search_entities') {
     const et = String(inp.entity_type || '').toLowerCase();
     const limit = inp.limit;
@@ -9234,6 +9282,27 @@ async function execMemoryTool(name, input, ctx) {
       `UPDATE ai_memories SET last_recalled_at = NOW() WHERE id = ANY($1)`,
       [hitIds]
     );
+
+    // Wave 1.B — register every recalled memory as a context-load
+    // event so the admin Context Registry can show recall frequency
+    // per memory + per-org rollup. Fire-and-forget; failures don't
+    // block the tool result.
+    logContextLoad(pool, {
+      organization_id: orgId,
+      user_id: userId,
+      layer: 'memory',
+      items: r.rows.map(row => ({
+        item_id: row.id,
+        item_name: row.topic,
+        item_meta: {
+          kind: row.kind,
+          scope: row.scope,
+          importance: row.importance,
+          score: Number(row.score) || 0,
+          query: query
+        }
+      }))
+    });
 
     const lines = r.rows.map(row => {
       return '── ' + row.id + ' [' + row.kind + '/' + row.scope + '/imp:' + row.importance + '] "' + row.topic + '"\n' + row.body;

@@ -2825,6 +2825,28 @@
           // while we were awaiting the SDK; the most-recent paint's
           // fingerprint is the one that wins.
           if (mapEl.dataset.mapFingerprint !== fingerprint) return;
+          // Defer one animation frame so the section's flex layout
+          // has time to compute. Without this, Google Maps reads
+          // mapEl.offsetWidth/Height at construction time, sees 0×0
+          // (the parent .p86-report-section-map-wrap is still
+          // settling), and renders a blank map that never recovers
+          // unless we manually trigger a resize. With the rAF, the
+          // layout is committed before construction.
+          return new Promise(function(resolve) {
+            requestAnimationFrame(function() { resolve(maps); });
+          });
+        }).then(function(maps) {
+          if (!maps || !mapEl.isConnected) return;
+          if (mapEl.dataset.mapFingerprint !== fingerprint) return;
+          // Final safety: if the host still has 0 dimensions (rare,
+          // but happens when the parent is collapsed/hidden), bail
+          // gracefully — a later paint will retry once visibility
+          // returns.
+          if (mapEl.offsetWidth < 50 || mapEl.offsetHeight < 50) {
+            // Clear the fingerprint so the next paint() retries.
+            delete mapEl.dataset.mapFingerprint;
+            return;
+          }
           var first = pickedPhotos[0];
           var center = { lat: Number(first.lat), lng: Number(first.lng) };
           var map = new maps.Map(mapEl, {
