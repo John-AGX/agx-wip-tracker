@@ -129,6 +129,7 @@ router.get('/', requireAuth, requireOrg, async (req, res) => {
     const r = await pool.query(
       `SELECT id, source, emitting_agent_key, filename, title, summary, rationale,
               targets, template_id, status, applied_at, apply_summary, apply_error,
+              apply_error_detail,
               created_at, expires_at, session_id, parent_message_id
          FROM payloads
         WHERE ${conds.join(' AND ')}
@@ -155,7 +156,8 @@ router.get('/:id', requireAuth, requireOrg, async (req, res) => {
     const r = await pool.query(
       `SELECT id, source, emitting_agent_key, filename, file_content, targets,
               title, summary, rationale, template_id, status, applied_at,
-              apply_summary, apply_error, created_at, expires_at, session_id,
+              apply_summary, apply_error, apply_error_detail,
+              created_at, expires_at, session_id,
               parent_message_id, user_id
          FROM payloads
         WHERE id = $1
@@ -301,22 +303,32 @@ router.post('/:id/apply', requireAuth, requireOrg, async (req, res) => {
       });
     } catch (err) {
       // Validation-style errors are descriptive; surface as 422 unless
-      // we know they're 5xx-shaped.
+      // we know they're 5xx-shaped. Wave 1.C: PayloadValidationError
+      // carries a structured `detail` object — persist it into
+      // apply_error_detail alongside the human message so 86 (and the
+      // UI) can read field_path / expected / received without parsing
+      // the message text.
       const msg = err && err.message || String(err);
-      const isValidation = /not yet implemented|requires|must be|not found|Unknown|blocked key|Unresolved ref|cannot be its own/i.test(msg);
+      const isStructured = err && err.name === 'PayloadValidationError' && err.detail;
+      const isValidation = isStructured ||
+        /not yet implemented|requires|must be|not found|Unknown|blocked key|Unresolved ref|cannot be its own/i.test(msg);
       console.error('[payloads] apply failed:', err && err.stack || err);
       // Mark the row as failed only for real apply runs (not dry runs).
       if (!dryRun) {
         try {
           await pool.query(
             `UPDATE payloads
-                SET status = 'failed', apply_error = $1
-              WHERE id = $2 AND status = 'ready'`,
-            [msg.slice(0, 1000), payload.id]
+                SET status = 'failed',
+                    apply_error = $1,
+                    apply_error_detail = $2::jsonb
+              WHERE id = $3 AND status = 'ready'`,
+            [msg.slice(0, 1000), isStructured ? JSON.stringify(err.detail) : null, payload.id]
           );
         } catch (_) {}
       }
-      return res.status(isValidation ? 422 : 500).json({ error: msg });
+      const body = { error: msg };
+      if (isStructured) body.detail = err.detail;
+      return res.status(isValidation ? 422 : 500).json(body);
     }
 
     // Persist status on successful real applies. Dry runs keep status='ready'
@@ -476,6 +488,7 @@ adminRouter.get('/audit',
         `SELECT p.id, p.source, p.emitting_agent_key, p.filename,
                 p.title, p.summary, p.rationale, p.targets,
                 p.status, p.applied_at, p.apply_summary, p.apply_error,
+                p.apply_error_detail,
                 p.created_at, p.expires_at, p.session_id, p.template_id,
                 p.user_id, u.name AS user_name, u.email AS user_email
            FROM payloads p

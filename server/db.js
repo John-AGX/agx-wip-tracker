@@ -1824,6 +1824,24 @@ async function initSchema() {
     --   • Fire-and-forget inserts — see server/services/context-registry.js
     --     for the helper. Logging failures must never break a tool
     --     call, so the helper swallows errors.
+    -- payloads.apply_error_detail — Wave 1.C structured-error capture.
+    -- Existing apply_error column stays as the human-readable string;
+    -- this JSONB column captures the structured shape the dispatcher
+    -- can throw via PayloadValidationError so 86 (and the UI) can
+    -- self-correct without parsing the message text. Shape:
+    --   {op_index, target_index, code, field_path, expected, received, suggestion}
+    -- Nullable; only populated when the dispatcher throws a
+    -- PayloadValidationError. Plain Error throws still land in
+    -- apply_error and leave this null.
+    DO $$ BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+         WHERE table_name = 'payloads' AND column_name = 'apply_error_detail'
+      ) THEN
+        ALTER TABLE payloads ADD COLUMN apply_error_detail JSONB;
+      END IF;
+    END $$;
+
     CREATE TABLE IF NOT EXISTS context_load_events (
       id BIGSERIAL PRIMARY KEY,
       organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,

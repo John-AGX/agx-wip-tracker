@@ -17,6 +17,32 @@
 const { pool } = require('../db');
 
 // ──────────────────────────────────────────────────────────────────
+// Wave 1.C — PayloadValidationError carries the structured shape
+// 86 (and the UI) need to self-correct on rejection. Existing throws
+// of plain Error still work — the route handler treats them as
+// generic validation/dispatch failures and leaves apply_error_detail
+// null. Throw THIS class when you can name the field path the
+// error happened at, what was expected, and what was received.
+//
+// Usage:
+//   throw new PayloadValidationError(
+//     'estimate.ops.line_adds[2].unitCost is required',
+//     { code: 'missing_field', field_path: 'line_adds[2].unitCost',
+//       expected: 'number', received: typeof value }
+//   );
+//
+// The route's catch handler reads err.detail and persists it into
+// payloads.apply_error_detail alongside the human message.
+// ──────────────────────────────────────────────────────────────────
+class PayloadValidationError extends Error {
+  constructor(message, detail) {
+    super(message);
+    this.name = 'PayloadValidationError';
+    this.detail = detail && typeof detail === 'object' ? detail : {};
+  }
+}
+
+// ──────────────────────────────────────────────────────────────────
 // PAYLOAD_OPS_SCHEMAS — per-entity_type allowed-op vocabulary.
 //
 // Lightweight: not a JSON Schema validator; just an allowlist of top-
@@ -242,18 +268,31 @@ function validateOps(entityType, ops) {
   }
   if (entityType === 'estimate') {
     if (ops.field_updates && typeof ops.field_updates !== 'object') {
-      throw new Error('estimate.ops.field_updates must be an object');
+      throw new PayloadValidationError(
+        'estimate.ops.field_updates must be an object',
+        { code: 'wrong_type', field_path: 'estimate.ops.field_updates',
+          expected: 'object', received: typeof ops.field_updates }
+      );
     }
     if (ops.field_updates) {
       for (const k of Object.keys(ops.field_updates)) {
         if (ESTIMATE_BLOCKED_FIELDS.has(k)) {
-          throw new Error(`estimate.ops.field_updates blocked key: '${k}'`);
+          throw new PayloadValidationError(
+            `estimate.ops.field_updates blocked key: '${k}'`,
+            { code: 'blocked_field', field_path: `estimate.ops.field_updates.${k}`,
+              received: k, expected: [...ESTIMATE_BLOCKED_FIELDS],
+              suggestion: 'This field is not user-writable via payload. Edit it through the proper proposal flow.' }
+          );
         }
       }
     }
     for (const k of ['sections', 'groups', 'line_adds', 'line_edits', 'line_deletes']) {
       if (ops[k] != null && !Array.isArray(ops[k])) {
-        throw new Error(`estimate.ops.${k} must be an array`);
+        throw new PayloadValidationError(
+          `estimate.ops.${k} must be an array`,
+          { code: 'wrong_type', field_path: `estimate.ops.${k}`,
+            expected: 'array', received: typeof ops[k] }
+        );
       }
     }
   }
@@ -292,15 +331,31 @@ function validateOps(entityType, ops) {
       const bad = Object.keys(ops.fields).filter(k => !LEAD_EDITABLE_FIELDS.has(k));
       if (bad.length) {
         const validList = [...LEAD_EDITABLE_FIELDS].sort().join(', ');
-        throw new Error(
+        throw new PayloadValidationError(
           `lead.ops.fields contains non-editable column(s): ${bad.map(k => `'${k}'`).join(', ')}. ` +
           `Valid lead fields are: ${validList}. ` +
-          `Contact info (name/email/phone) lives on the client, not the lead — link via client_id.`
+          `Contact info (name/email/phone) lives on the client, not the lead — link via client_id.`,
+          {
+            code: 'unknown_field',
+            field_path: 'lead.ops.fields',
+            received: bad,
+            expected: [...LEAD_EDITABLE_FIELDS],
+            suggestion: 'Contact info (name/email/phone) lives on the client. Use client.ops.fields with client_id from the lead.'
+          }
         );
       }
       if (ops.fields.status && !LEAD_VALID_STATUSES.has(ops.fields.status)) {
         const validStatuses = [...LEAD_VALID_STATUSES].sort().join(', ');
-        throw new Error(`lead.ops.fields.status invalid: '${ops.fields.status}'. Valid statuses: ${validStatuses}.`);
+        throw new PayloadValidationError(
+          `lead.ops.fields.status invalid: '${ops.fields.status}'. Valid statuses: ${validStatuses}.`,
+          {
+            code: 'invalid_enum',
+            field_path: 'lead.ops.fields.status',
+            received: ops.fields.status,
+            expected: [...LEAD_VALID_STATUSES],
+            suggestion: 'Pick a status from the expected list (typically "new" or "qualified" for fresh leads).'
+          }
+        );
       }
     }
     if (ops.notes && !Array.isArray(ops.notes)) {
@@ -2225,6 +2280,7 @@ function newPayloadId() {
 
 module.exports = {
   PAYLOAD_OPS_SCHEMAS,
+  PayloadValidationError,
   validateOps,
   applyPayload,
   generateFilename,
