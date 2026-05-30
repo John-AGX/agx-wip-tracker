@@ -2530,6 +2530,53 @@ async function buildTurnContext({ entityType, entityId, clientContext, aiPhase, 
     } catch (e) {
       console.warn('[buildTurnContext] recent_applied_payloads inject failed:', e.message);
     }
+
+    // Wave 1.D — feedback loop. Parallel block for payloads that
+    // FAILED with structured detail. If the user just dragged a file
+    // and it bounced for a known field-shape reason, surface the
+    // detail to 86 on its next turn so it can:
+    //   1. Acknowledge what went wrong without re-asking the user
+    //   2. Propose a remember() call so the next attempt avoids the
+    //      same trap (closes the manual rejection→memory loop)
+    // 1 hour window is wider than the applied block (10 min) because
+    // a failure is more likely to span turns while the user explains
+    // / debugs with 86.
+    try {
+      const failures = await pool.query(
+        `SELECT id, filename, title, summary, apply_error, apply_error_detail, created_at
+           FROM payloads
+          WHERE user_id = $1
+            AND status = 'failed'
+            AND apply_error_detail IS NOT NULL
+            AND created_at > NOW() - INTERVAL '1 hour'
+          ORDER BY created_at DESC
+          LIMIT 3`,
+        [userId]
+      );
+      if (failures.rows.length) {
+        const lines = ['<recent_failed_payloads>'];
+        lines.push(
+          'These payloads bounced on validation in the last hour. Each carries a STRUCTURED detail object — you can read field_path / expected / received / suggestion to self-correct without asking the user to clarify. If the failure pattern matches something worth remembering for future turns (a field name convention, a per-client quirk, a workflow rule), call remember() with kind=fact, importance=8+ to encode it. Do NOT call remember on transient single-instance typos.'
+        );
+        failures.rows.forEach((r, i) => {
+          const ago = Math.round((Date.now() - new Date(r.created_at).getTime()) / 60000);
+          const det = r.apply_error_detail || {};
+          lines.push('  ' + (i + 1) + '. ' + (r.title || r.filename) + '  (' + ago + 'm ago)');
+          lines.push('     code: ' + (det.code || 'unknown'));
+          if (det.field_path) lines.push('     field_path: ' + det.field_path);
+          if (det.received != null) lines.push('     received: ' + JSON.stringify(det.received).slice(0, 200));
+          if (det.expected != null) lines.push('     expected: ' + JSON.stringify(det.expected).slice(0, 200));
+          if (det.suggestion) lines.push('     suggestion: ' + det.suggestion);
+        });
+        lines.push('</recent_failed_payloads>');
+        const block = lines.join('\n');
+        turnContextText = turnContextText
+          ? turnContextText + '\n\n' + block
+          : block;
+      }
+    } catch (e) {
+      console.warn('[buildTurnContext] recent_failed_payloads inject failed:', e.message);
+    }
   }
 
   // Wave 1.B Phase 2 — log the turn_context bundle as one event so
