@@ -2941,6 +2941,19 @@
               map.setZoom(16);
             }
           };
+          // Belt-and-braces: trigger a resize after a tick in case
+          // the parent layout grew (e.g. flex layout finished
+          // calculating). resize causes Google Maps to re-read the
+          // host's dimensions and re-tile if needed. Re-fit after
+          // resize so the viewport still frames the pins.
+          setTimeout(function() {
+            if (!mapEl.isConnected) return;
+            maps.event.trigger(map, 'resize');
+            if (pickedPhotos.length > 1) map.fitBounds(bounds, 48);
+            else if (pickedPhotos.length === 1) {
+              map.setCenter({ lat: Number(pickedPhotos[0].lat), lng: Number(pickedPhotos[0].lng) });
+            }
+          }, 200);
 
           // Print-path img injection. The body's synchronous attempt
           // at building the Static Maps URL fails on the very first
