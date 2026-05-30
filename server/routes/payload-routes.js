@@ -686,11 +686,70 @@ recipeRouter.post('/:id/pin', requireAuth, requireOrg, async (req, res) => {
   }
 });
 
+// Wave 2 — parameter substitution helper. Walks the ops_template
+// recursively replacing every `{{paramName}}` marker in string values
+// with parameter_values[paramName]. Non-string values pass through.
+// Missing values surface as a structured error (caller returns 422 +
+// the list of missing param names so the client can prompt for them).
+//
+// Substitution policy:
+//   - "{{foo}}"               → exact replacement (preserves type if
+//                                the param value is a number/object)
+//   - "prefix-{{foo}}-suffix" → string concat (param value coerced to
+//                                string)
+//   - "{{a}}{{b}}"            → multiple markers, each substituted
+//   - "{{foo}}"  where foo unset → recorded in `missing` and left as-is
+//
+// Returns: { substituted, missing }
+function substituteParameters(node, paramValues) {
+  const missing = new Set();
+  function walk(v) {
+    if (v === null || v === undefined) return v;
+    if (typeof v === 'string') {
+      // Exact-match marker → preserve the original parameter type
+      // (number stays number, object stays object). This is the case
+      // for fields like `qty: "{{quantity}}"`.
+      const exact = /^\{\{\s*([a-zA-Z0-9_]+)\s*\}\}$/.exec(v);
+      if (exact) {
+        const key = exact[1];
+        if (paramValues && Object.prototype.hasOwnProperty.call(paramValues, key)) {
+          return paramValues[key];
+        }
+        missing.add(key);
+        return v;
+      }
+      // Embedded markers → string-replace each one
+      return v.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_match, key) => {
+        if (paramValues && Object.prototype.hasOwnProperty.call(paramValues, key)) {
+          const pv = paramValues[key];
+          return pv == null ? '' : String(pv);
+        }
+        missing.add(key);
+        return _match;
+      });
+    }
+    if (Array.isArray(v)) return v.map(walk);
+    if (typeof v === 'object') {
+      const out = {};
+      for (const k of Object.keys(v)) out[k] = walk(v[k]);
+      return out;
+    }
+    return v;
+  }
+  return { substituted: walk(node), missing: [...missing] };
+}
+
 // POST /api/recipes/:id/clone
-//   Produce a fresh payload from a template. Body: { parameter_values? }.
-//   v1: parameters[] is empty, so this just copies ops_template into a
-//   new payload row with status='ready'. Future versions substitute
-//   {{placeholder}} markers using parameter_values.
+//   Instantiate a recipe — substitute parameters into ops_template,
+//   create a new payload row in status='ready', return the payload_id
+//   so the client can POST to /apply.
+//   Body: { parameter_values?: { paramName: value, ... } }
+//
+// Wave 2 — was a v0 stub that copied ops_template verbatim; now
+// substitutes {{placeholder}} markers using parameter_values.
+// Validates that every parameter declared on the template is present
+// in the body and surfaces missing ones as a 422 with structured
+// detail so the caller (UI or 86) can prompt for them.
 recipeRouter.post('/:id/clone', requireAuth, requireOrg, async (req, res) => {
   try {
     const orgId = req.user.organization_id;
@@ -698,14 +757,36 @@ recipeRouter.post('/:id/clone', requireAuth, requireOrg, async (req, res) => {
     const dispatcher = require('../services/payload-dispatcher');
 
     const r = await pool.query(
-      `SELECT id, name, description, ops_template
+      `SELECT id, name, description, ops_template, parameters
          FROM payload_templates
         WHERE id = $1 AND organization_id = $2 AND archived = false`,
       [req.params.id, orgId]
     );
     if (!r.rows.length) return res.status(404).json({ error: 'Recipe not found' });
     const tpl = r.rows[0];
-    const opsTemplate = tpl.ops_template || {};
+    const paramValues = (req.body && req.body.parameter_values) || {};
+    const opsTemplateRaw = tpl.ops_template || {};
+
+    // Substitute parameters in the WHOLE ops_template (so title /
+    // summary / rationale / targets / nested ops all get markers
+    // replaced together). If any required markers are missing,
+    // surface them as a structured 422.
+    const { substituted: opsTemplate, missing } = substituteParameters(opsTemplateRaw, paramValues);
+    if (missing.length) {
+      const declared = Array.isArray(tpl.parameters) ? tpl.parameters.map(p => p.name) : [];
+      return res.status(422).json({
+        error: 'Missing required parameter values: ' + missing.join(', '),
+        detail: {
+          code: 'missing_parameters',
+          field_path: 'parameter_values',
+          received: Object.keys(paramValues),
+          expected: declared.length ? declared : missing,
+          missing,
+          suggestion: 'Pass each {{marker}} in the recipe\'s ops_template as a key under parameter_values.'
+        }
+      });
+    }
+
     const targets = Array.isArray(opsTemplate.targets) ? opsTemplate.targets : [];
     if (!targets.length) {
       return res.status(422).json({ error: 'Recipe has no targets to clone' });
