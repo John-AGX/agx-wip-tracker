@@ -2029,6 +2029,65 @@ async function initSchema() {
     --   • Fire-and-forget inserts — see server/services/context-registry.js
     --     for the helper. Logging failures must never break a tool
     --     call, so the helper swallows errors.
+    -- Wave 3 — job_workflow_items.
+    -- One unified table for RFIs, submittals, and transmittals
+    -- (construction-trade workflows that all share the same shape:
+    -- a job-scoped item with status, due date, responsible party, and
+    -- type-specific detail in JSONB). Treating them as one table:
+    --   • Cuts CRUD surface by 3× (one route file, one UI page)
+    --   • Mirrors how field reports already work (polymorphic via type)
+    --   • Per-type validation lives in the route layer where it can
+    --     evolve without schema migrations
+    --
+    -- type ∈ ('rfi' | 'submittal' | 'transmittal')
+    -- status (validated per type at route layer):
+    --   rfi:         'open' | 'answered' | 'closed'
+    --   submittal:   'submitted' | 'approved' | 'revise_resubmit' | 'rejected' | 'closed'
+    --   transmittal: 'pending' | 'sent' | 'received'
+    --
+    -- metadata JSONB carries type-specific fields:
+    --   rfi:         {question, response, response_by_user_id, response_at}
+    --   submittal:   {category, spec_section, response, response_by_user_id, response_at}
+    --   transmittal: {recipient_name, recipient_email, method, document_ids[]}
+    --
+    -- number is auto-assigned per (job, type) — RFI-01, RFI-02, SUB-01,
+    -- TRX-01, etc. The route handler computes it at INSERT.
+    CREATE TABLE IF NOT EXISTS job_workflow_items (
+      id TEXT PRIMARY KEY,
+      organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+      type TEXT NOT NULL CHECK (type IN ('rfi', 'submittal', 'transmittal')),
+      number TEXT,
+      subject TEXT NOT NULL,
+      body TEXT,
+      status TEXT NOT NULL,
+      due_date DATE,
+      responsible_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_by_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+      closed_at TIMESTAMPTZ,
+      archived_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    -- Primary access pattern: list by (job, type, open-status).
+    CREATE INDEX IF NOT EXISTS idx_jwi_job_type_status
+      ON job_workflow_items (job_id, type, status)
+      WHERE archived_at IS NULL;
+    -- "My open items" — list by responsible user.
+    CREATE INDEX IF NOT EXISTS idx_jwi_responsible
+      ON job_workflow_items (responsible_user_id, status)
+      WHERE archived_at IS NULL AND responsible_user_id IS NOT NULL;
+    -- Overdue scanning — partial index on still-open items with a due
+    -- date in the past. Cheap rollup for the "needs attention" widget.
+    CREATE INDEX IF NOT EXISTS idx_jwi_due_open
+      ON job_workflow_items (organization_id, due_date)
+      WHERE archived_at IS NULL AND closed_at IS NULL AND due_date IS NOT NULL;
+    -- Org-scoped list (admin overview).
+    CREATE INDEX IF NOT EXISTS idx_jwi_org
+      ON job_workflow_items (organization_id, type, status, created_at DESC)
+      WHERE archived_at IS NULL;
+
     -- payloads.apply_error_detail — Wave 1.C structured-error capture.
     -- Existing apply_error column stays as the human-readable string;
     -- this JSONB column captures the structured shape the dispatcher

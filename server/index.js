@@ -152,6 +152,12 @@ app.use('/api/weather', weatherRoutes);
 app.use('/api/email', emailRoutes);
 app.use('/api/admin/agents', adminAgentsRoutes);
 app.use('/api/admin/context-registry', contextRegistryRoutes);
+// Wave 3 — RFI / submittal / transmittal workflow items.
+// Two mounts: global endpoints at /api/workflow-items/* and nested
+// job-scoped endpoints at /api/jobs/:jobId/workflow-items.
+const jobWorkflowRoutes = require('./routes/job-workflow-routes');
+app.use('/api/workflow-items', jobWorkflowRoutes);
+app.use('/api/jobs/:jobId', jobWorkflowRoutes.jobNested);
 app.use('/api/admin/batch', adminBatchRoutes);
 app.use('/api/admin/files', adminFilesRoutes);
 app.use('/api/admin/anthropic', adminAnthropicRoutes);
