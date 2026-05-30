@@ -144,15 +144,18 @@
       html += '</div>';
     } else {
       html += '<div style="background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#2e3346);border-radius:6px;overflow:hidden;">';
-      html += '<div style="display:grid;grid-template-columns:1fr 80px 80px 100px;gap:8px;padding:8px 12px;background:rgba(124,58,237,0.08);border-bottom:1px solid var(--border,#2e3346);font-size:10px;color:var(--text-dim,#aaa);text-transform:uppercase;letter-spacing:0.5px;">';
-      html += '<div>Memory</div><div>Kind</div><div style="text-align:right;">Imp</div><div style="text-align:right;">Last recall</div>';
+      html += '<div style="display:grid;grid-template-columns:1fr 70px 50px 90px 60px;gap:8px;padding:8px 12px;background:rgba(124,58,237,0.08);border-bottom:1px solid var(--border,#2e3346);font-size:10px;color:var(--text-dim,#aaa);text-transform:uppercase;letter-spacing:0.5px;">';
+      html += '<div>Memory</div><div>Kind</div><div style="text-align:right;">Imp</div><div style="text-align:right;">Last recall</div><div></div>';
       html += '</div>';
       stale.forEach(function(m) {
-        html += '<div style="display:grid;grid-template-columns:1fr 80px 80px 100px;gap:8px;padding:8px 12px;border-bottom:1px solid var(--ng-border2,#2e3346);font-size:11px;color:var(--text,#fff);">';
+        html += '<div style="display:grid;grid-template-columns:1fr 70px 50px 90px 60px;gap:8px;padding:8px 12px;border-bottom:1px solid var(--ng-border2,#2e3346);font-size:11px;color:var(--text,#fff);align-items:center;">';
         html += '<div><span style="font-weight:600;">' + esc(m.topic) + '</span><span style="color:var(--text-dim,#888);font-size:10px;"> [' + esc(m.scope) + ']</span></div>';
         html += '<div style="color:var(--text-dim,#aaa);">' + esc(m.kind) + '</div>';
         html += '<div style="text-align:right;color:#fbbf24;font-family:\'Courier New\',monospace;">' + m.importance + '</div>';
         html += '<div style="text-align:right;color:var(--text-dim,#888);">' + fmtAgo(m.last_recalled_at) + '</div>';
+        html += '<div style="text-align:right;">';
+        html += '<button data-archive-memory="' + esc(m.id) + '" data-archive-topic="' + esc(m.topic) + '" title="Archive this memory — it stops surfacing on recall" style="background:transparent;border:1px solid var(--border,#2e3346);color:#f87171;padding:3px 8px;border-radius:4px;font-size:10px;cursor:pointer;">Archive</button>';
+        html += '</div>';
         html += '</div>';
       });
       html += '</div>';
@@ -188,11 +191,102 @@
         );
       });
     }
-    // Click on a layer card → future drilldown (Phase 2).
+    // Click on a layer card → open drilldown modal with recent events.
     host.querySelectorAll('[data-layer-card]').forEach(function(card) {
       card.addEventListener('mouseenter', function() { card.style.borderColor = '#4f8cff'; });
       card.addEventListener('mouseleave', function() { card.style.borderColor = ''; });
+      card.addEventListener('click', function() {
+        var layer = card.getAttribute('data-layer-card');
+        openLayerDrilldown(layer);
+      });
     });
+
+    // Archive buttons on dormant memories.
+    host.querySelectorAll('[data-archive-memory]').forEach(function(btn) {
+      btn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        var id = btn.getAttribute('data-archive-memory');
+        var topic = btn.getAttribute('data-archive-topic');
+        if (!confirm('Archive memory "' + topic + '"? It stops surfacing on recall.')) return;
+        btn.disabled = true; btn.textContent = '…';
+        window.p86Api.post('/api/admin/context-registry/memory/' + encodeURIComponent(id) + '/archive', {})
+          .then(function() { loadAll(); })
+          .catch(function(err) {
+            alert('Archive failed: ' + (err && err.message || err));
+            btn.disabled = false; btn.textContent = 'Archive';
+          });
+      });
+    });
+  }
+
+  // Drilldown modal — recent events + per-item rollup for one layer.
+  // Reads /items?layer=X&days=N. Closes on backdrop click or Esc.
+  function openLayerDrilldown(layer) {
+    var meta = LAYER_LABELS[layer] || { label: layer, glyph: '•' };
+    var prior = document.getElementById('contextDrilldown');
+    if (prior) prior.remove();
+
+    var modal = document.createElement('div');
+    modal.id = 'contextDrilldown';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
+    modal.innerHTML =
+      '<div style="background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#2e3346);border-radius:10px;max-width:780px;width:100%;max-height:85vh;display:flex;flex-direction:column;overflow:hidden;">' +
+        '<div style="padding:14px 18px;border-bottom:1px solid var(--border,#2e3346);display:flex;align-items:center;gap:12px;">' +
+          '<span style="font-size:22px;">' + meta.glyph + '</span>' +
+          '<div style="flex:1;"><div style="font-size:14px;font-weight:700;color:var(--text,#fff);">' + esc(meta.label) + ' — drilldown</div>' +
+          '<div style="font-size:11px;color:var(--text-dim,#888);">Recent load events in the last ' + _state.days + ' days</div></div>' +
+          '<button data-context-modal-close style="background:transparent;border:none;color:var(--text-dim,#888);font-size:24px;cursor:pointer;line-height:1;">&times;</button>' +
+        '</div>' +
+        '<div data-drilldown-body style="flex:1;overflow-y:auto;padding:14px 18px;">Loading…</div>' +
+      '</div>';
+    document.body.appendChild(modal);
+
+    function close() { modal.remove(); document.removeEventListener('keydown', onKey); }
+    function onKey(e) { if (e.key === 'Escape') close(); }
+    document.addEventListener('keydown', onKey);
+    modal.addEventListener('click', function(e) { if (e.target === modal) close(); });
+    modal.querySelector('[data-context-modal-close]').addEventListener('click', close);
+
+    var body = modal.querySelector('[data-drilldown-body]');
+    window.p86Api.get('/api/admin/context-registry/items?layer=' + encodeURIComponent(layer) + '&days=' + _state.days + '&limit=200')
+      .then(function(resp) {
+        var events = (resp && resp.events) || [];
+        if (!events.length) {
+          body.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-dim,#888);font-style:italic;">No events for this layer in the window.</div>';
+          return;
+        }
+        var html = '<table style="width:100%;border-collapse:collapse;font-size:11px;">';
+        html += '<thead><tr style="color:var(--text-dim,#aaa);text-transform:uppercase;font-size:9px;letter-spacing:0.5px;">';
+        html += '<th style="text-align:left;padding:6px 4px;border-bottom:1px solid var(--border,#2e3346);">When</th>';
+        html += '<th style="text-align:left;padding:6px 4px;border-bottom:1px solid var(--border,#2e3346);">Item</th>';
+        html += '<th style="text-align:left;padding:6px 4px;border-bottom:1px solid var(--border,#2e3346);">User</th>';
+        html += '<th style="text-align:left;padding:6px 4px;border-bottom:1px solid var(--border,#2e3346);">Meta</th>';
+        html += '</tr></thead><tbody>';
+        events.forEach(function(e) {
+          var metaSnippet = '';
+          if (e.item_meta && typeof e.item_meta === 'object') {
+            try {
+              metaSnippet = Object.keys(e.item_meta).map(function(k) {
+                var v = e.item_meta[k];
+                if (v == null) return null;
+                if (typeof v === 'object') v = JSON.stringify(v);
+                return k + '=' + String(v).slice(0, 30);
+              }).filter(Boolean).join(' · ');
+            } catch (_) {}
+          }
+          html += '<tr style="color:var(--text,#fff);">';
+          html += '<td style="padding:6px 4px;border-bottom:1px solid var(--ng-border2,#1e2233);color:var(--text-dim,#aaa);white-space:nowrap;" title="' + esc(fmtTs(e.loaded_at)) + '">' + esc(fmtAgo(e.loaded_at)) + '</td>';
+          html += '<td style="padding:6px 4px;border-bottom:1px solid var(--ng-border2,#1e2233);"><span style="font-weight:600;">' + esc(e.item_name || e.item_id || '(no name)') + '</span></td>';
+          html += '<td style="padding:6px 4px;border-bottom:1px solid var(--ng-border2,#1e2233);color:var(--text-dim,#aaa);">' + esc(e.user_email || '—') + '</td>';
+          html += '<td style="padding:6px 4px;border-bottom:1px solid var(--ng-border2,#1e2233);color:var(--text-dim,#888);font-size:10px;">' + esc(metaSnippet) + '</td>';
+          html += '</tr>';
+        });
+        html += '</tbody></table>';
+        body.innerHTML = html;
+      })
+      .catch(function(err) {
+        body.innerHTML = '<div style="padding:24px;color:#f87171;">Failed to load: ' + esc(err && err.message || err) + '</div>';
+      });
   }
 
   // Expose to admin.js dispatch.

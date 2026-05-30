@@ -2532,6 +2532,28 @@ async function buildTurnContext({ entityType, entityId, clientContext, aiPhase, 
     }
   }
 
+  // Wave 1.B Phase 2 — log the turn_context bundle as one event so
+  // the registry's Turn Context card lights up. item_meta records
+  // size + entity for later "which entities cost the most context"
+  // analysis.
+  try {
+    if (organization && organization.id && userId) {
+      logContextLoad(pool, {
+        organization_id: organization.id,
+        user_id: userId,
+        layer: 'turn_context',
+        item_id: entityType || 'global',
+        item_name: entityType ? (entityType + (entityId ? ':' + entityId : '')) : 'global',
+        item_meta: {
+          entity_type: entityType || null,
+          entity_id: entityId || null,
+          size_chars: turnContextText.length,
+          photo_block_count: photoBlocks.length
+        }
+      });
+    }
+  } catch (_) { /* observation, not load-bearing */ }
+
   return { turnContextText, photoBlocks };
 }
 
@@ -9385,6 +9407,23 @@ async function execWatchTool(name, input, ctx) {
   const orgRow = await pool.query(`SELECT organization_id FROM users WHERE id = $1`, [userId]);
   const orgId = orgRow.rows[0] && orgRow.rows[0].organization_id;
   if (!orgId) throw new Error('User has no organization — cannot use watch tools.');
+
+  // Wave 1.B Phase 2 — log every watch-tool invocation so the
+  // registry's Watch card lights up. Pre-tool log so failures still
+  // record the attempt.
+  try {
+    logContextLoad(pool, {
+      organization_id: orgId,
+      user_id: userId,
+      layer: 'watch',
+      item_id: name,
+      item_name: name,
+      item_meta: {
+        watch_id: input && input.watch_id ? String(input.watch_id) : null,
+        limit: input && input.limit ? Number(input.limit) : null
+      }
+    });
+  } catch (_) { /* observation, not load-bearing */ }
 
   if (name === 'list_watches') {
     const includeArchived = input && input.include_archived === true;

@@ -235,4 +235,29 @@ router.get('/item/:layer/:itemId/timeline', async (req, res) => {
   }
 });
 
+// POST /memory/:id/archive — admin-driven memory archive. Soft delete
+// matching the `forget` AI tool's semantics so it surfaces in the
+// same audit trail. Org-scoped; returns 404 if the memory belongs to
+// a different org or doesn't exist.
+router.post('/memory/:id/archive', async (req, res) => {
+  const id = String(req.params.id);
+  const orgId = req.user.organization_id;
+  try {
+    const r = await pool.query(
+      `UPDATE ai_memories
+          SET archived_at = NOW()
+        WHERE id = $1 AND organization_id = $2 AND archived_at IS NULL
+        RETURNING id, topic`,
+      [id, orgId]
+    );
+    if (!r.rows.length) {
+      return res.status(404).json({ error: 'Memory not found or already archived' });
+    }
+    res.json({ ok: true, archived: r.rows[0] });
+  } catch (err) {
+    console.error('[context-registry] archive failed:', err.message);
+    res.status(500).json({ error: 'Failed to archive memory' });
+  }
+});
+
 module.exports = router;
