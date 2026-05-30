@@ -1078,6 +1078,7 @@
     else if (name === 'metrics') renderAdminMetrics();
     else if (name === 'roles') renderAdminRoles();
     else if (name === 'agents') renderAdminAgents();
+    else if (name === 'context' && window.renderAdminContextRegistry) renderAdminContextRegistry();
     else if (name === 'organization') renderAdminOrganization();
     else if (name === 'system') renderAdminSystem();
     // Persist nav state so a refresh lands back on this admin sub-tab.

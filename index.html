@@ -1296,6 +1296,8 @@
                         <button class="ws-right-tab" data-admin-subtab="organization" data-p86-icon="briefcase" onclick="switchAdminSubTab('organization')">Organization</button>
                         <!-- AI / Agents -->
                         <button class="ws-right-tab" data-admin-subtab="agents" data-p86-icon="discord" onclick="switchAdminSubTab('agents')">Agents</button>
+                        <!-- Context Registry (Wave 1.B observability) -->
+                        <button class="ws-right-tab" data-admin-subtab="context" data-p86-icon="brain" onclick="switchAdminSubTab('context')">Context</button>
                         <!-- Observability -->
                         <button class="ws-right-tab" data-admin-subtab="metrics" data-p86-icon="insights" onclick="switchAdminSubTab('metrics')">Metrics</button>
 
@@ -1387,6 +1389,10 @@
                          Their static markup (when needed) is injected inline
                          by renderOrgHTML in admin.js. -->
                     <div id="admin-subtab-agents" class="admin-subtab-content" style="display:none;"></div>
+                    <!-- Context Registry (Wave 1.B). Renderer in
+                         js/admin-context-registry.js paints into this
+                         container on tab activation. -->
+                    <div id="admin-subtab-context" class="admin-subtab-content" style="display:none;"></div>
                 </div>
 
             </div>
@@ -2616,7 +2622,8 @@
     <script src="js/attachments.js?v=20"></script>
     <script src="js/markup-viewer.js?v=24"></script>
     <script src="js/pdf-viewer.js?v=3b"></script>
-    <script src="js/admin.js?v=84"></script>
+    <script src="js/admin.js?v=85"></script>
+    <script src="js/admin-context-registry.js?v=1"></script>
     <script src="js/field-tools.js?v=4"></script>
     <script src="js/clients.js?v=16e"></script>
     <script src="js/subs.js?v=8b"></script>
