@@ -813,12 +813,12 @@
                     '<div data-summary-workflow-card>' +
                       attentionCard('My Open RFIs/Subs', '<span data-workflow-mine-count>0</span>', '#fbbf24', "window.switchTab('jobs');", '<span data-workflow-mine-sub>Loading…</span>') +
                     '</div>' +
-                    // Wave 3 — compliance expiring card. Same hydration
-                    // pattern via fetchComplianceAttentionCounts.
-                    // Click routes to the directory until a dedicated
-                    // compliance review page exists.
+                    // Wave 3 — compliance expiring card. Click opens the
+                    // dedicated compliance review drawer
+                    // (window.p86ComplianceReview.open). Falls back to a
+                    // no-op if the script hasn't loaded yet.
                     '<div data-summary-compliance-card>' +
-                      attentionCard('Certs Expiring', '<span data-compliance-expiring-count>0</span>', '#f87171', "window.switchTab('directory');", '<span data-compliance-expiring-sub>Loading…</span>') +
+                      attentionCard('Certs Expiring', '<span data-compliance-expiring-count>0</span>', '#f87171', "if(window.p86ComplianceReview)window.p86ComplianceReview.open();", '<span data-compliance-expiring-sub>Loading…</span>') +
                     '</div>' +
                 '</div>' +
 
