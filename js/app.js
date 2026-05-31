@@ -382,10 +382,31 @@
                     e.stopPropagation();
                     const open = !avatarMenu.hasAttribute('hidden');
                     closeAllPopovers({ except: 'avatar' });
+                    // Header avatar (mobile) → default top-right anchoring.
+                    avatarMenu.classList.remove('from-sidebar');
                     if (open) avatarMenu.setAttribute('hidden', '');
                     else avatarMenu.removeAttribute('hidden');
                 });
                 avatarMenu.addEventListener('click', (e) => e.stopPropagation());
+            }
+
+            // Sidebar footer account button (desktop). Opens the SAME
+            // #user-avatar-menu popover, but flagged `from-sidebar` so CSS
+            // repositions it to pop UP from the footer (fixed, bottom-left).
+            const sidebarAccountBtn = document.getElementById('sidebar-account-btn');
+            if (sidebarAccountBtn && avatarMenu) {
+                sidebarAccountBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const open = !avatarMenu.hasAttribute('hidden');
+                    closeAllPopovers({ except: 'avatar' });
+                    if (open) {
+                        avatarMenu.setAttribute('hidden', '');
+                        avatarMenu.classList.remove('from-sidebar');
+                    } else {
+                        avatarMenu.classList.add('from-sidebar');
+                        avatarMenu.removeAttribute('hidden');
+                    }
+                });
             }
 
             // Notifications bell. Panel is empty by default; future

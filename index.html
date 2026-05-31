@@ -215,9 +215,9 @@
     })();
     </script>
 
-    <link rel="stylesheet" href="css/styles.css?v=160">
+    <link rel="stylesheet" href="css/styles.css?v=161">
     <link rel="stylesheet" href="css/report-style-packs.css?v=3">
-    <link rel="stylesheet" href="css/workspace-layout.css?v=59">
+    <link rel="stylesheet" href="css/workspace-layout.css?v=60">
     <link rel="stylesheet" href="css/workspace.css?v=37b">
     <link rel="stylesheet" href="css/schedule.css?v=22">
     <!-- Accidental-edit protection layer. Two attribute-driven gates
@@ -251,17 +251,11 @@
              this fits everything on one ~46px row to give the workspace
              below more vertical real estate. Mobile breaks back to a
              stacked fallback in the @media block. -->
-        <!-- Floating global "Ask 86" badge — fixed top-right, just under
-             the avatar. Visible on every page; clicking opens the unified
-             86 chat panel which auto-detects what entity is currently
-             open via current_context. Replaces the per-page mount slots
-             (those still resolve via the script below but are hidden via
-             CSS so we don't render duplicate badges). -->
-        <button id="floating-ask86-btn" class="p86-ask86-badge floating" type="button"
-                title="Ask 86 — global AI surface" aria-label="Ask 86"
-                data-p86-icon="dna-86"
-                style="position:fixed;top:54px;right:18px;z-index:60;width:60px;height:60px;padding:0;border-radius:50%;border:0;overflow:visible;background:radial-gradient(circle at 50% 50%, rgba(15,23,42,0.96), rgba(15,23,42,0.84));"
-                onclick="if (window.p86AI && window.p86AI.open) window.p86AI.open({ entityType: 'ask86' });"></button>
+        <!-- Global "Ask 86" entry point now lives inline in the header's
+             right cluster (#header-ask86-btn), taking the slot the account
+             avatar used to occupy on desktop. The per-page mount slots
+             below still resolve via the script but stay hidden via CSS so
+             we don't render duplicate badges. -->
         <!-- Legacy per-page badge slots — the script below still mounts
              into <span class="p86-ask86-mount"></span> placeholders for
              back-compat, but CSS hides them so the floating button is
@@ -357,14 +351,23 @@
                          is a utility, not a page, so it doesn't appear
                          in nav.tabs anymore. -->
                     <button id="header-directory-btn" class="header-icon-btn" type="button" title="Directory" aria-haspopup="true" aria-expanded="false" data-p86-icon="clients"></button>
-                    <!-- Ask 86 was here; moved to a floating top-right
-                         element (#floating-ask86-btn) above the sticky
-                         header so the badge can be larger and more
-                         readable without expanding the header strip. -->
-                    <!-- Initials avatar replaces the previous full-name +
-                         role pill + Account / Logout buttons. Clicking
-                         opens #user-avatar-menu which holds the actual
-                         actions. -->
+                    <!-- Global "Ask 86" — the primary AI entry point, now
+                         inline in the header right cluster (was a floating
+                         fixed-position badge). It occupies the slot the
+                         account avatar used to hold on desktop; the avatar
+                         + account menu moved to the sidebar footer. Hidden
+                         on mobile, where the bottom-nav center slot owns
+                         the Ask 86 entry point. -->
+                    <button id="header-ask86-btn" class="p86-ask86-badge in-header" type="button"
+                            title="Ask 86 — global AI surface" aria-label="Ask 86"
+                            data-p86-icon="dna-86"
+                            onclick="if (window.p86AI &amp;&amp; window.p86AI.open) window.p86AI.open({ entityType: 'ask86' });"></button>
+                    <!-- Initials avatar — account menu trigger. On DESKTOP
+                         this is hidden (CSS) because the sidebar footer owns
+                         the account surface; it stays visible on MOBILE,
+                         where the sidebar (and its footer) are hidden, so it
+                         remains the account/logout entry point there.
+                         Clicking opens #user-avatar-menu. -->
                     <button id="user-avatar" class="header-avatar" type="button" title="Account" aria-haspopup="true" aria-expanded="false">JT</button>
                     <span id="user-name" hidden></span>
                     <span id="user-role-badge" hidden></span>
@@ -471,6 +474,30 @@
                         <button class="tab-btn" data-tab="admin" data-p86-icon="admin" data-admin-only style="display:none;" title="Admin"><span class="app-nav-label">Admin</span></button>
                     </div>
                 </nav>
+                <!-- Account footer — pinned to the bottom of the sidebar
+                     (margin-top:auto). Uses the dead space below the nav
+                     to surface who's signed in. Clicking opens the SAME
+                     #user-avatar-menu popover used by the header avatar;
+                     a `from-sidebar` class repositions that popover to pop
+                     UP from this footer (fixed, so it's never clipped by
+                     the sidebar's overflow). auth.js#updateUserMenu keeps
+                     the avatar/name/role in sync. Hidden on mobile with
+                     the rest of the sidebar. -->
+                <div class="app-sidebar-foot">
+                    <button id="sidebar-account-btn" class="sidebar-account" type="button"
+                            aria-haspopup="true" aria-expanded="false" title="Account">
+                        <span id="sidebar-account-avatar" class="sidebar-account-avatar">JT</span>
+                        <span class="sidebar-account-meta">
+                            <span id="sidebar-account-name" class="sidebar-account-name">&mdash;</span>
+                            <span id="sidebar-account-role" class="sidebar-account-role">&mdash;</span>
+                        </span>
+                        <svg class="sidebar-account-caret" viewBox="0 0 24 24" fill="none"
+                             stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                             stroke-linejoin="round" width="14" height="14" aria-hidden="true">
+                            <polyline points="6 15 12 9 18 15"></polyline>
+                        </svg>
+                    </button>
+                </div>
             </aside>
             <div class="app-content-col">
         <main>
@@ -2673,7 +2700,7 @@
     </script>
 
     <script src="js/modal-drag.js?v=1b"></script>
-    <script src="js/auth.js?v=15"></script>
+    <script src="js/auth.js?v=16"></script>
     <script src="js/dialogs.js?v=1b"></script>
     <script src="js/geolocation.js?v=1"></script>
     <script src="js/api.js?v=35"></script>
@@ -2695,7 +2722,7 @@
     <script src="js/qb-costs-view.js?v=11"></script>
     <script src="js/insights.js?v=7"></script>
     <script src="js/schedule.js?v=34"></script>
-    <script src="js/app.js?v=70"></script>
+    <script src="js/app.js?v=71"></script>
     <script src="js/compliance-review-ui.js?v=2"></script>
     <script src="js/messaging.js?v=1b"></script>
     <script src="js/my-files.js?v=11"></script>
@@ -2740,7 +2767,7 @@
     <script src="js/tab-slider.js?v=1b"></script>
 
     <script src="js/workspace.js?v=44"></script>
-    <script src="js/workspace-layout.js?v=67"></script>
+    <script src="js/workspace-layout.js?v=68"></script>
 
     <!-- URL router — pathname-based navigation. Loads last so all
          top-level nav functions (switchTab, editJob, etc.) exist

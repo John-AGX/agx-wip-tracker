@@ -96,6 +96,11 @@
     var avatar = document.getElementById('user-avatar');
     var avatarName = document.getElementById('avatar-menu-name');
     var avatarRole = document.getElementById('avatar-menu-role');
+    // Sidebar footer account block (desktop account surface). Mirrors
+    // the avatar initials + shows the name/role inline in the footer.
+    var footAvatar = document.getElementById('sidebar-account-avatar');
+    var footName = document.getElementById('sidebar-account-name');
+    var footRole = document.getElementById('sidebar-account-role');
 
     var name, role, roleLabel;
     if (isOffline) {
@@ -120,6 +125,9 @@
     }
     if (avatarName) avatarName.textContent = name || '—';
     if (avatarRole) avatarRole.textContent = roleLabel || '—';
+    if (footAvatar) footAvatar.textContent = computeInitials(name);
+    if (footName) footName.textContent = name || '—';
+    if (footRole) footRole.textContent = roleLabel || '—';
     applyRoleVisibility();
   }
 

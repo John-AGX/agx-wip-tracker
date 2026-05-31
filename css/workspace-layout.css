@@ -231,7 +231,7 @@
    main nav's .app-nav-group-label so the contextual sidebar reads as a
    sibling of the primary nav. */
 .app-jobnav-section-label {
-  padding: 4px 11px;
+  padding: 3px 11px;
   font-size: 10px;
   font-weight: 700;
   text-transform: uppercase;
@@ -263,10 +263,10 @@
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  gap: 12px;
+  gap: 11px;
   width: 100%;
   flex: 0 0 auto;
-  padding: 9px 11px;
+  padding: 7px 11px;
   border-radius: 8px;
   text-align: left;
   font-size: 13.5px;
@@ -287,8 +287,8 @@
   content: "";
   position: absolute;
   left: 0;
-  top: 7px;
-  bottom: 7px;
+  top: 6px;
+  bottom: 6px;
   width: 3px;
   border-radius: 0 3px 3px 0;
   background: var(--accent, #4f8cff);
@@ -298,8 +298,8 @@
   flex: 0 0 auto;
 }
 .app-jobnav .ws-right-tab .p86-icon {
-  width: 20px;
-  height: 20px;
+  width: 19px;
+  height: 19px;
 }
 /* Accent-tint the active subtab's icon to match the main nav. */
 .app-jobnav .ws-right-tab.active .p86-icon {

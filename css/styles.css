@@ -567,6 +567,61 @@
             pointer-events: none;
             transition: opacity 0.18s ease;
         }
+        /* In-header variant — the global Ask 86 entry point now sits
+           inline in the header's right cluster (it took the account
+           avatar's old desktop slot). Sized to sit among the 32px icon
+           buttons while still reading as the primary AI CTA: a touch
+           larger, brand-blue back-glow, with the dna-86 icon's own
+           baked-in ring as the visible boundary (same Variant-C
+           overflow relationship the floating badge used). */
+        .p86-ask86-badge.in-header {
+            position: relative;
+            width: 38px;
+            height: 38px;
+            padding: 0;
+            line-height: 0;
+            border-radius: 50%;
+            border: 0;
+            overflow: visible;
+            background: radial-gradient(circle at 50% 50%, rgba(15, 23, 42, 0.96), rgba(15, 23, 42, 0.84));
+            filter: drop-shadow(0 0 4px rgba(79, 140, 255, 0.55))
+                    drop-shadow(0 0 10px rgba(79, 140, 255, 0.30));
+            animation: p86-ask86-back-glow 3s ease-in-out infinite;
+        }
+        .p86-ask86-badge.in-header:hover { transform: scale(1.08); }
+        .p86-ask86-badge.in-header .p86-icon-slot {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 100%;
+            height: 100%;
+            margin: 0;
+        }
+        .p86-ask86-badge.in-header .p86-icon {
+            width: 40px;
+            height: 40px;
+            display: block;
+            animation: none;
+            filter: none;
+        }
+        body.light-mode .p86-ask86-badge.in-header {
+            background: radial-gradient(circle at 50% 50%, rgba(248, 250, 252, 0.96), rgba(232, 240, 254, 0.88));
+            animation-name: p86-ask86-back-glow-light;
+        }
+        @media (prefers-reduced-motion: reduce) {
+            .p86-ask86-badge.in-header {
+                animation: none;
+                filter: drop-shadow(0 0 5px rgba(79, 140, 255, 0.65))
+                        drop-shadow(0 0 12px rgba(79, 140, 255, 0.35));
+            }
+        }
+        /* Desktop: the account avatar moved to the sidebar footer, so
+           hide the header avatar here. It re-appears on mobile (where
+           the sidebar — and its footer — are hidden) as the account
+           entry point; see the max-width:768px block. */
+        @media (min-width: 769px) {
+            #user-avatar { display: none !important; }
+        }
         .p86-ask86-badge {
             width: 64px;
             height: 64px;
@@ -925,7 +980,7 @@
             display: flex;
             flex-direction: column;
             gap: 2px;
-            padding: 6px 8px 12px;
+            padding: 4px 8px 8px;
         }
         /* Each destination — full-width row: icon + label. The .app-nav
            descendant combinator outranks the generic
@@ -935,9 +990,9 @@
         .app-nav .tab-btn {
             display: flex;
             align-items: center;
-            gap: 12px;
+            gap: 11px;
             width: 100%;
-            padding: 9px 11px;
+            padding: 7px 11px;
             border: none;
             border-radius: 8px;
             background: transparent;
@@ -965,8 +1020,8 @@
             content: "";
             position: absolute;
             left: 0;
-            top: 7px;
-            bottom: 7px;
+            top: 6px;
+            bottom: 6px;
             width: 3px;
             border-radius: 0 3px 3px 0;
             background: var(--accent);
@@ -978,8 +1033,8 @@
             flex: 0 0 auto;
         }
         .app-nav .tab-btn .p86-icon {
-            width: 20px;
-            height: 20px;
+            width: 19px;
+            height: 19px;
         }
         .app-nav-label {
             flex: 1 1 auto;
@@ -1005,10 +1060,10 @@
             gap: 2px;
         }
         .app-nav-group + .app-nav-group {
-            margin-top: 12px;
+            margin-top: 10px;
         }
         .app-nav-group-label {
-            padding: 4px 11px;
+            padding: 3px 11px;
             font-size: 10px;
             font-weight: 700;
             text-transform: uppercase;
@@ -1050,6 +1105,111 @@
            top of the rail with nothing above it — drop it. */
         .app-sidebar.collapsed .app-nav-group:first-child .app-nav-group-label {
             display: none;
+        }
+
+        /* ── Account footer ───────────────────────────────────────────
+           Pinned to the bottom of the sidebar via margin-top:auto (the
+           sidebar is a flex column). Surfaces the signed-in user in the
+           dead space below the nav; clicking opens the shared
+           #user-avatar-menu popover, repositioned to pop UP from here
+           via the .from-sidebar modifier. */
+        .app-sidebar-foot {
+            margin-top: auto;
+            padding: 8px;
+            border-top: 1px solid var(--border);
+            position: relative;
+        }
+        .sidebar-account {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            width: 100%;
+            padding: 7px 8px;
+            border: 1px solid transparent;
+            border-radius: 10px;
+            background: transparent;
+            color: var(--text);
+            cursor: pointer;
+            text-align: left;
+            transition: background 0.12s, border-color 0.12s;
+        }
+        .sidebar-account:hover {
+            background: var(--surface2);
+            border-color: var(--border);
+        }
+        .sidebar-account-avatar {
+            flex: 0 0 auto;
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            border: 1.5px solid rgba(34, 211, 238, 0.55);
+            background: transparent;
+            color: #F8FAFC;
+            font-size: 11px;
+            font-weight: 600;
+            letter-spacing: 0.3px;
+            text-transform: uppercase;
+            line-height: 1;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .sidebar-account-meta {
+            flex: 1 1 auto;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 1px;
+            overflow: hidden;
+        }
+        .sidebar-account-name {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .sidebar-account-role {
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-dim);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .sidebar-account-caret {
+            flex: 0 0 auto;
+            color: var(--text-dim);
+        }
+        /* Collapsed rail (56px) — show just the avatar, centered. */
+        .app-sidebar.collapsed .app-sidebar-foot {
+            padding: 8px 0;
+        }
+        .app-sidebar.collapsed .sidebar-account {
+            justify-content: center;
+            padding: 7px 0;
+            gap: 0;
+        }
+        .app-sidebar.collapsed .sidebar-account-meta,
+        .app-sidebar.collapsed .sidebar-account-caret {
+            display: none;
+        }
+        /* The shared account popover, when opened from the footer, pops
+           UP from the bottom-left. position:fixed makes it viewport-
+           anchored, so the sidebar's overflow:auto never clips it and
+           its DOM home (the header cluster) is irrelevant. */
+        .header-popover.from-sidebar {
+            position: fixed;
+            top: auto;
+            right: auto;
+            bottom: 60px;
+            left: 8px;
+            width: 196px;
+            min-width: 0;
+            max-width: none;
         }
 
         /* Read-only mode for job detail when the current PM doesn't own the job. */
@@ -2221,6 +2381,11 @@
                just the content column (flex:1) so nothing reflows. */
             .app-sidebar { display: none !important; }
             .p86-ask86-badge.floating { display: none !important; }
+            /* The in-header Ask 86 button is redundant on mobile — the
+               bottom-nav center slot owns the Ask 86 entry point. The
+               account avatar re-appears in the header here (it's the
+               account surface since the sidebar footer is hidden). */
+            .p86-ask86-badge.in-header { display: none !important; }
             /* Keep the PROJECT 86 wordmark visible on mobile (was
                hidden previously) but shrink it so logo + wordmark +
                icon cluster all fit on a single 390px row. */
