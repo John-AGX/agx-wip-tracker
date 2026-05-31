@@ -250,18 +250,33 @@
     };
 
     // ---- Metrics strip ----
+    // The strip now renders the same flat ".p86-totals-chip" cards used by
+    // the job-overview financial totals, instead of the old glowing
+    // node-graph-style tiles, so the pinned top strip matches the clean
+    // chip aesthetic the rest of the job page uses. The semantic tone
+    // (income/cost/gain/...) maps onto the chip's color modifier so income
+    // reads green, costs read yellow, gains read blue, neutral stays white —
+    // mirroring the overview totals' color coding.
+    var TONE_TO_CHIP = {
+      income: 'accent',   // green — money in
+      gain:   'info',     // blue  — revenue earned / profit / margin
+      cost:   'warn',     // yellow — money out
+      amber:  'warn',     // yellow — accrued
+      neutral: ''         // plain white value
+    };
     var strip = document.createElement("div");
     strip.className = "jh-metrics-strip";
     metricsData.forEach(function(m) {
       var card = document.createElement("div");
-      card.className = "jh-strip-card";
       var tone = METRIC_TONE[m.label] || 'neutral';
+      var mod = TONE_TO_CHIP[tone] || '';
+      card.className = "p86-totals-chip" + (mod ? " " + mod : "");
       card.setAttribute('data-tone', tone);
       var lbl = document.createElement("div");
-      lbl.className = "jh-strip-label";
+      lbl.className = "p86-totals-chip-label";
       lbl.textContent = m.label;
       var val = document.createElement("div");
-      val.className = "jh-strip-value";
+      val.className = "p86-totals-chip-value";
       val.textContent = m.value;
       card.appendChild(lbl);
       card.appendChild(val);
@@ -335,9 +350,9 @@
       'Margin JTD': w.jtdMargin.toFixed(1) + '%',
       'Backlog': formatCurrency(w.backlog)
     };
-    strip.querySelectorAll('.jh-strip-card').forEach(function (card) {
-      var lbl = card.querySelector('.jh-strip-label');
-      var val = card.querySelector('.jh-strip-value');
+    strip.querySelectorAll('.p86-totals-chip').forEach(function (card) {
+      var lbl = card.querySelector('.p86-totals-chip-label');
+      var val = card.querySelector('.p86-totals-chip-value');
       if (lbl && val && map[lbl.textContent]) val.textContent = map[lbl.textContent];
     });
     // Also update job title + status in job bar

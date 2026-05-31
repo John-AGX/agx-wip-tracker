@@ -408,14 +408,17 @@ header .jh-job-info ~ #user-menu {
   flex: 0 0 auto;
   width: 100%;
   padding: 10px 30px;
-  background: linear-gradient(180deg, var(--bg-dark, #0a0c12) 0%, var(--bg, #0f1117) 100%);
-  border-top: 1px solid rgba(255,255,255,0.03);
-  border-bottom: 1px solid rgba(255,255,255,0.06);
+  /* Flat subtle band (matches the canonical .p86-totals-strip surface)
+     so the pinned strip reads as the same clean chip bar used on the
+     job overview, rather than the old dark glowing gradient. */
+  background: rgba(255,255,255,0.02);
+  border-top: 1px solid var(--border, #2e3346);
+  border-bottom: 1px solid var(--border, #2e3346);
   box-sizing: border-box;
 }
 body.light-mode #jh-strip-detached {
-  background: linear-gradient(180deg, var(--surface2, #e8eaef) 0%, var(--bg, #f0f2f5) 100%);
-  border-top-color: rgba(0,0,0,0.04);
+  background: rgba(0,0,0,0.015);
+  border-top-color: rgba(0,0,0,0.06);
   border-bottom-color: rgba(0,0,0,0.06);
 }
 /* The inner strip stays within the 1600px content max-width so the
@@ -428,6 +431,25 @@ body.light-mode #jh-strip-detached {
 }
 .jh-metrics-strip::-webkit-scrollbar { height: 4px; }
 .jh-metrics-strip::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 2px; }
+
+/* The pinned strip reuses the flat .p86-totals-chip cards (see
+   workspace-layout.js), but where the overview totals wrap, the pinned
+   strip stays a single row: each chip shares the width equally
+   (flex:1 1 0) and can shrink below its 110px default. Long values get
+   ellipsized rather than forcing a horizontal scroll on normal widths;
+   overflow-x:auto on the container is the safety net for very narrow
+   screens. */
+.jh-metrics-strip .p86-totals-chip {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+}
+.jh-metrics-strip .p86-totals-chip-label,
+.jh-metrics-strip .p86-totals-chip-value {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 /* Card backgrounds tuned to feel raised (not punched-out) against the
    page bg (#0f1117). Old gradient ran #05→#0e→#0a, all DARKER than
