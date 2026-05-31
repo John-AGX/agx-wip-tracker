@@ -2666,8 +2666,13 @@
       var photoNote = m.photos_included
         ? '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:4px;text-align:right;">' + m.photos_included + ' photo' + (m.photos_included === 1 ? '' : 's') + ' attached</div>'
         : '';
+      // Accent-tinted fill + hairline border so the "you" bubble reads as
+      // a defined bubble on BOTH the dark surface and the light-mode white
+      // panel (a plain white-alpha fill vanished on the light theme). The
+      // theme drives the text color via its own override, so the bubble
+      // stays legible either way.
       return '<div style="display:flex;justify-content:flex-end;">' +
-        '<div style="max-width:80%;background:rgba(255,255,255,0.07);color:var(--text,#fff);border-radius:16px;padding:10px 15px;font-size:13px;line-height:1.5;white-space:pre-wrap;">' +
+        '<div style="max-width:80%;background:rgba(79,140,255,0.13);border:1px solid rgba(79,140,255,0.22);color:var(--text,#fff);border-radius:16px;padding:10px 15px;font-size:13px;line-height:1.5;white-space:pre-wrap;">' +
           escapeHTMLLocal(m.content) +
           photoNote +
         '</div>' +
