@@ -215,7 +215,7 @@
     })();
     </script>
 
-    <link rel="stylesheet" href="css/styles.css?v=164">
+    <link rel="stylesheet" href="css/styles.css?v=165">
     <link rel="stylesheet" href="css/report-style-packs.css?v=3">
     <link rel="stylesheet" href="css/workspace-layout.css?v=60">
     <link rel="stylesheet" href="css/workspace.css?v=37b">
@@ -467,6 +467,28 @@
                                 data-p86-icon="estimates"
                                 onclick="if(typeof window.openNewEstimateForm==='function')window.openNewEstimateForm();">New Estimate</button>
                     </div>
+                </div>
+                <!-- Global search — server-backed (js/search.js → GET
+                     /api/search). Searches jobs / estimates / leads /
+                     clients directly in the DB, so it finds entities even
+                     when appData hasn't loaded them. Results render in a
+                     dropdown below the input; clicking one reopens it via
+                     window.p86Router.navigate(). Collapses to just the
+                     magnifier glyph on the icon rail (clicking it expands
+                     the sidebar). -->
+                <div class="app-sidebar-search" id="app-sidebar-search">
+                    <div class="sidebar-search-box">
+                        <svg class="sidebar-search-icon" viewBox="0 0 24 24" fill="none"
+                             stroke="currentColor" stroke-width="2" stroke-linecap="round"
+                             stroke-linejoin="round" width="16" height="16" aria-hidden="true">
+                            <circle cx="11" cy="11" r="7"></circle>
+                            <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                        </svg>
+                        <input id="sidebar-search-input" class="sidebar-search-input" type="text"
+                               placeholder="Search" autocomplete="off" spellcheck="false"
+                               aria-label="Search jobs, estimates, leads and clients" />
+                    </div>
+                    <div id="sidebar-search-results" class="sidebar-search-results" role="listbox" hidden></div>
                 </div>
                 <nav class="app-nav" aria-label="Primary">
                     <!-- Destinations are grouped under uppercase section
@@ -2816,6 +2838,12 @@
          editEstimate / openEditLeadModal / openEditClientModal and reopen
          via window.p86Router.navigate(). -->
     <script src="js/recents.js?v=1"></script>
+
+    <!-- Sidebar Global search — server-backed search across jobs /
+         estimates / leads / clients (GET /api/search). Loads after
+         router.js so result clicks can reopen via p86Router.navigate(),
+         and after api.js for the p86Api.get() fetch helper. -->
+    <script src="js/search.js?v=1"></script>
 
     <!-- Copy-to-clipboard helper. Auto-attaches a 📋 button to every
          <input type=email> and any element marked data-p86-copy. -->

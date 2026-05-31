@@ -1072,6 +1072,155 @@
             width: 180px;
         }
 
+        /* ── Global search ─────────────────────────────────────────────
+           Server-backed search box under the "+ New" button. The results
+           dropdown is absolutely positioned so it floats over the nav
+           rather than pushing it down. Collapsed rail shows just the
+           magnifier; clicking it expands the sidebar (js/search.js). */
+        .app-sidebar-search {
+            position: relative;
+            padding: 0 8px 8px;
+        }
+        .sidebar-search-box {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 7px 10px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--surface2);
+            transition: border-color 0.12s, background 0.12s;
+        }
+        .sidebar-search-box:focus-within {
+            border-color: var(--accent);
+            background: var(--surface);
+        }
+        .sidebar-search-icon {
+            flex: 0 0 auto;
+            color: var(--text-dim);
+            opacity: 0.8;
+        }
+        .sidebar-search-input {
+            flex: 1 1 auto;
+            min-width: 0;
+            border: none;
+            background: transparent;
+            color: var(--text);
+            font-size: 13px;
+            font-family: inherit;
+            outline: none;
+            padding: 0;
+        }
+        .sidebar-search-input::placeholder {
+            color: var(--text-dim);
+            opacity: 0.8;
+        }
+        /* Results dropdown — floats over the nav below the box. */
+        .sidebar-search-results {
+            position: absolute;
+            top: calc(100% - 4px);
+            left: 8px;
+            right: 8px;
+            z-index: 50;
+            max-height: 320px;
+            overflow-y: auto;
+            overflow-x: hidden;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+            padding: 4px;
+            display: flex;
+            flex-direction: column;
+            gap: 1px;
+        }
+        .sidebar-search-results[hidden] {
+            display: none;
+        }
+        .sidebar-search-group-label {
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.4px;
+            color: var(--text-dim);
+            opacity: 0.7;
+            padding: 6px 10px 3px;
+        }
+        .sidebar-search-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            width: 100%;
+            padding: 7px 10px;
+            border: none;
+            border-radius: 6px;
+            background: transparent;
+            color: var(--text);
+            font-size: 13px;
+            font-weight: 500;
+            text-align: left;
+            cursor: pointer;
+            transition: background 0.12s;
+        }
+        .sidebar-search-item:hover,
+        .sidebar-search-item.active {
+            background: var(--surface2);
+        }
+        .sidebar-search-item .p86-icon-slot {
+            display: inline-flex;
+            align-items: center;
+            flex: 0 0 auto;
+        }
+        .sidebar-search-item .p86-icon {
+            width: 16px;
+            height: 16px;
+            opacity: 0.8;
+        }
+        .sidebar-search-item-text {
+            flex: 1 1 auto;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 1px;
+        }
+        .sidebar-search-item-name {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .sidebar-search-item-sub {
+            font-size: 11px;
+            color: var(--text-dim);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .sidebar-search-empty {
+            padding: 12px 10px;
+            font-size: 12px;
+            color: var(--text-dim);
+            text-align: center;
+        }
+        /* Collapsed rail — just the magnifier, centered. Clicking expands
+           the sidebar (handled in js/search.js). Hide input + results. */
+        .app-sidebar.collapsed .app-sidebar-search {
+            padding-left: 0;
+            padding-right: 0;
+        }
+        .app-sidebar.collapsed .sidebar-search-box {
+            justify-content: center;
+            padding: 8px 0;
+            gap: 0;
+            border-color: transparent;
+            background: transparent;
+        }
+        .app-sidebar.collapsed .sidebar-search-input {
+            display: none;
+        }
+        .app-sidebar.collapsed .sidebar-search-results {
+            display: none;
+        }
+
         /* Nav list */
         .app-nav {
             display: flex;
