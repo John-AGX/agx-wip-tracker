@@ -62,9 +62,34 @@
   // editing / formula functions read from. switchSheet keeps the two
   // in sync.
   let workbook = {
-    jobId: null,
+    // Pre-Phase-0, the workbook keyed off jobId only — both the
+    // localStorage slot and the QB-Costs embedded view used it
+    // directly. Phase 0 generalizes to (entityType, entityId) so the
+    // estimate editor can host its own workbook alongside line items
+    // / details / attachments, and so 86 has a server-readable
+    // address for the workbook independent of which side hosts it.
+    //
+    // jobId is kept as a derived back-compat field: when entityType
+    // is 'job', it equals entityId; otherwise null. Callers that
+    // still read workbook.jobId (e.g. the QB-Costs renderer) keep
+    // working without modification.
+    entityType: null,   // 'job' | 'estimate'
+    entityId: null,
+    get jobId() {
+      return this.entityType === 'job' ? this.entityId : null;
+    },
+    set jobId(v) {
+      // Legacy assignment site — treat any set as the job side.
+      this.entityType = v == null ? null : 'job';
+      this.entityId = v;
+    },
     activeSheetId: null,
     sheets: [],        // [{ id, name, rows, cols, cells, colWidths, links, merges }, ...]
+    // Workbook-scoped named ranges: { NAME: { ref, sheetId?, comment? } }.
+    // `ref` is an A1 reference ("Sheet1!A1", "A1:B5", or bare "A1"/"A1:B5"
+    // that resolves against the sheet named in `sheetId`, falling back to
+    // the active sheet). Names are case-insensitive (stored upper-cased).
+    namedRanges: {},
     dirty: false
   };
 
@@ -204,6 +229,14 @@
     if (cell.value === '' || cell.value === null || cell.value === undefined) return '';
     if (cell.error) return cell.error;
     if (typeof cell.value === 'number') {
+      // Phase 2: a custom Excel-style format string (cell.numFmt) wins
+      // over the quick-button enum (cell.fmt). The user sets it via the
+      // Number-format editor; it also round-trips to .xlsx as the `z`
+      // code so Excel renders it identically.
+      if (cell.numFmt) {
+        var out = applyExcelNumFmt(cell.value, cell.numFmt);
+        if (out != null) return out;
+      }
       // Decimal count comes from cell.decimals when explicitly set
       // (the increase/decrease-decimal buttons write that field), else
       // each format has a sensible default (currency=2, percent=1,
@@ -222,6 +255,192 @@
       return cell.value.toLocaleString('en-US');
     }
     return String(cell.value);
+  }
+
+  /** Escape a string for safe insertion into innerHTML. */
+  function escapeHTML(s) {
+    return String(s == null ? '' : s).replace(/[&<>"]/g, function (ch) {
+      return ch === '&' ? '&amp;' : ch === '<' ? '&lt;' : ch === '>' ? '&gt;' : '&quot;';
+    });
+  }
+
+  /**
+   * The HTML that renders inside a cell's <td>. Plain values are escaped
+   * (so cell content can never inject markup); a cell carrying a
+   * hyperlink renders as a clickable anchor instead.
+   */
+  function cellInnerHTML(cell) {
+    if (!cell) return '';
+    var caret = (cell.validation && cell.validation.type === 'list')
+      ? '<span class="ws-validation-caret" data-ws-vcaret="1" title="Pick from list">&#x25BE;</span>'
+      : '';
+    if (cell.hyperlink && cell.hyperlink.url) {
+      var base = displayVal(cell);
+      var disp = (base !== '' && base != null) ? base : (cell.hyperlink.display || cell.hyperlink.url);
+      return '<a class="ws-hyperlink" data-ws-link="1" href="' + escapeHTML(cell.hyperlink.url) +
+             '" target="_blank" rel="noopener noreferrer" title="' + escapeHTML(cell.hyperlink.url) + '">' +
+             escapeHTML(disp) + '</a>' + caret;
+    }
+    return escapeHTML(displayVal(cell)) + caret;
+  }
+
+  /**
+   * Minimal Excel custom-number-format renderer. Supports the common
+   * subset that covers ~all real construction-workbook needs:
+   *   digit placeholders  0  #  ?
+   *   thousands grouping  ,        decimal point  .
+   *   percent             %        literal $ and text
+   *   quoted literals     "USD"    escaped char  \x
+   *   positive;negative[;zero] sections (negatives can use parens/color)
+   * Date codes (m/d/y/h/s) are recognized when the format looks like a
+   * date pattern and the value is a plausible Excel serial date.
+   * Returns null when it can't render (caller falls back to defaults).
+   */
+  function applyExcelNumFmt(value, fmt) {
+    if (typeof value !== 'number' || !isFinite(value)) return null;
+    if (typeof fmt !== 'string' || !fmt.trim()) return null;
+    var f = fmt.trim();
+
+    // General → default rendering.
+    if (/^general$/i.test(f)) return null;
+
+    // Date/time formats — detect by date tokens not inside quotes.
+    var stripped = f.replace(/"[^"]*"/g, '').replace(/\[[^\]]*\]/g, '');
+    if (/[ymdhs]/i.test(stripped) && !/[#0]/.test(stripped)) {
+      return formatExcelDate(value, f);
+    }
+
+    // Numeric: split into positive;negative;zero sections.
+    var sections = f.split(';');
+    var section;
+    if (value > 0) section = sections[0];
+    else if (value < 0) section = sections[1] != null ? sections[1] : sections[0];
+    else section = sections[2] != null ? sections[2] : sections[0];
+    if (section == null) section = sections[0];
+
+    var negativeHandledBySection = value < 0 && sections[1] != null;
+    // Always format the magnitude — the sign is conveyed by either the
+    // dedicated negative section's literals (parens/minus) or the manual
+    // '-' prefix we add below when falling back to the positive section.
+    var abs = value < 0 ? Math.abs(value) : value;
+
+    try {
+      var rendered = renderNumericSection(abs, section);
+      if (rendered == null) return null;
+      // If we used the positive section for a negative number and the
+      // section had no explicit sign handling, prefix a minus.
+      if (value < 0 && !negativeHandledBySection && !/^[^0-9#]*-/.test(rendered)) {
+        rendered = '-' + rendered;
+      }
+      return rendered;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function renderNumericSection(value, section) {
+    if (section == null) return null;
+
+    // Pull out quoted literals + escaped chars FIRST so a quoted "%" or
+    // "$" isn't mistaken for a percent multiplier / format code. Each
+    // literal becomes a single sentinel, restored in order later.
+    var literals = [];
+    var work = section.replace(/"([^"]*)"/g, function (m, t) { literals.push(t); return '\u0000'; });
+    work = work.replace(/\\(.)/g, function (m, ch) { literals.push(ch); return '\u0000'; });
+
+    // Strip color/condition brackets like [Red] [>=100].
+    work = work.replace(/\[[^\]]*\]/g, '');
+
+    // A bare (unquoted) % multiplies the value by 100. A quoted "%" was
+    // already pulled into a literal above, so it won't trigger this.
+    var isPercent = work.indexOf('%') !== -1;
+    var v = isPercent ? value * 100 : value;
+
+    // Locate the numeric mask (the run containing 0 # ? . ,). Everything
+    // before it is a prefix ($, etc.); everything after is a suffix (%).
+    var maskMatch = work.match(/[#0?][#0?,]*(\.[#0?]*)?|\.[#0?]+/);
+    if (!maskMatch) {
+      // No numeric placeholders — pure text section. Restore literals.
+      return restoreLiterals(work, literals);
+    }
+    var mask = maskMatch[0];
+    var prefix = work.slice(0, maskMatch.index);
+    var suffix = work.slice(maskMatch.index + mask.length);
+
+    var hasComma = mask.indexOf(',') !== -1;
+    var dotIdx = mask.indexOf('.');
+    var intMask = dotIdx === -1 ? mask : mask.slice(0, dotIdx);
+    var decMask = dotIdx === -1 ? '' : mask.slice(dotIdx + 1);
+    intMask = intMask.replace(/,/g, '');
+    var decimals = (decMask.match(/[0#?]/g) || []).length;
+
+    var num = v.toLocaleString('en-US', {
+      minimumFractionDigits: (decMask.match(/0/g) || []).length,
+      maximumFractionDigits: decimals,
+      useGrouping: hasComma
+    });
+    // Pad leading zeros to satisfy required integer digits (0 placeholders).
+    var reqIntDigits = (intMask.match(/0/g) || []).length;
+    if (reqIntDigits > 1) {
+      var parts = num.split('.');
+      var digitsOnly = parts[0].replace(/[^0-9]/g, '');
+      if (digitsOnly.length < reqIntDigits) {
+        parts[0] = '0'.repeat(reqIntDigits - digitsOnly.length) + parts[0];
+      }
+      num = parts.join('.');
+    }
+
+    return restoreLiterals(prefix, literals) + num + restoreLiterals(suffix, literals);
+  }
+
+  function restoreLiterals(str, literals) {
+    return String(str).replace(/\u0000/g, function () { return literals.length ? literals.shift() : ""; });
+  }
+
+  // Excel serial-date → formatted string. Excel day 1 = 1900-01-01,
+  // with the legacy 1900-leap-year bug (serial 60 = fictional Feb 29).
+  function excelSerialToDate(serial) {
+    var utcDays = Math.floor(serial) - 25569; // 25569 = days from 1970 epoch to 1900 base
+    var ms = utcDays * 86400 * 1000;
+    var frac = serial - Math.floor(serial);
+    ms += Math.round(frac * 86400) * 1000;
+    return new Date(ms);
+  }
+
+  function formatExcelDate(value, fmt) {
+    // Only treat as a date when the value is in a plausible serial range
+    // (roughly year 1900–2200). Otherwise let the default renderer win.
+    if (value < 1 || value > 110000) return null;
+    var d = excelSerialToDate(value);
+    if (isNaN(d.getTime())) return null;
+    var MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    var MONF = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+    var DAY = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+    var DAYF = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+    var h24 = d.getUTCHours();
+    var h12 = h24 % 12; if (h12 === 0) h12 = 12;
+    var pad = function (n) { return n < 10 ? '0' + n : '' + n; };
+    var ampm = /am\/pm|a\/p/i.test(fmt);
+    // Order matters — match longer tokens first.
+    return fmt
+      .replace(/"([^"]*)"/g, '$1')
+      .replace(/\[[^\]]*\]/g, '')
+      .replace(/yyyy/gi, d.getUTCFullYear())
+      .replace(/yy/gi, String(d.getUTCFullYear()).slice(-2))
+      .replace(/mmmm/gi, MONF[d.getUTCMonth()])
+      .replace(/mmm/gi, MON[d.getUTCMonth()])
+      .replace(/dddd/gi, DAYF[d.getUTCDay()])
+      .replace(/ddd/gi, DAY[d.getUTCDay()])
+      .replace(/dd/gi, pad(d.getUTCDate()))
+      .replace(/\bd\b/gi, d.getUTCDate())
+      .replace(/mm/g, pad(d.getUTCMonth() + 1))
+      .replace(/\bm\b/g, d.getUTCMonth() + 1)
+      .replace(/hh/gi, pad(ampm ? h12 : h24))
+      .replace(/\bh\b/gi, (ampm ? h12 : h24))
+      .replace(/ss/gi, pad(d.getUTCSeconds()))
+      .replace(/am\/pm/gi, h24 < 12 ? 'AM' : 'PM')
+      .replace(/a\/p/gi, h24 < 12 ? 'A' : 'P')
+      .replace(/d(?![a-z])/gi, d.getUTCDate());
   }
 
   // ── Reference Mode & Highlighting ─────────────────────────
@@ -1036,6 +1255,82 @@
     }
   }
 
+  // ── Named ranges (Phase 2.7) ───────────────────────────────
+  // A named range maps a friendly identifier to an A1 reference. The
+  // reference may be a single cell ("B2"), a range ("A1:A10"), or a
+  // sheet-qualified form ("Sheet2!A1:A10"). Names are workbook-scoped
+  // and case-insensitive (stored upper-cased on write).
+
+  // Compute the reference string a name expands to, qualified with its
+  // owning sheet when one is recorded and the stored ref isn't already
+  // sheet-qualified. Quotes sheet names that contain spaces so the
+  // cross-sheet regex passes match.
+  function _namedRangeEffectiveRef(nr) {
+    if (!nr || typeof nr.ref !== 'string') return null;
+    var ref = nr.ref.trim();
+    if (!ref) return null;
+    if (ref.indexOf('!') !== -1) return ref;        // already qualified
+    if (nr.sheetId) {
+      var sh = workbook.sheets.find(function (s) { return s.id === nr.sheetId; });
+      if (sh) {
+        var nm = /\s/.test(sh.name) ? "'" + sh.name + "'" : sh.name;
+        return nm + '!' + ref;
+      }
+    }
+    return ref;   // bare ref — resolves against the active sheet
+  }
+
+  // Substitute every named-range token in a formula body with its
+  // effective reference, BEFORE any cell/range resolution runs. Skips
+  // tokens that are function calls (followed by "(") or part of a
+  // sheet-qualified ref (preceded by "!"). Wraps single-cell refs in
+  // parens so adjacent operators stay well-formed; range refs (with
+  // ":") are left bare so range-aware functions like SUM() see them.
+  function applyNamedRanges(expr) {
+    var names = workbook.namedRanges;
+    if (!names) return expr;
+    var keys = Object.keys(names);
+    if (!keys.length) return expr;
+    return expr.replace(/\b[A-Za-z_\\][A-Za-z0-9_.\\]*\b/g, function (token, offset, full) {
+      var up = token.toUpperCase();
+      if (!Object.prototype.hasOwnProperty.call(names, up)) return token;
+      // Skip if this looks like a function call: next non-space char is "(".
+      var after = full.slice(offset + token.length);
+      if (/^\s*\(/.test(after)) return token;
+      // Skip if the token is actually a sheet name in a qualified ref:
+      //   Sheet1!A1   → token "Sheet1" followed by "!"
+      //   'Sheet1'!A1 → token "Sheet1" wrapped in quotes
+      if (/^\s*!/.test(after) || after.charAt(0) === "'") return token;
+      var before = full.slice(0, offset);
+      // Skip if preceded by "!" (part of a Sheet!Ref token) or by an
+      // opening quote (inside a quoted sheet name).
+      if (/!$/.test(before) || before.charAt(before.length - 1) === "'") return token;
+      var eff = _namedRangeEffectiveRef(names[up]);
+      if (!eff) return token;
+      // Bare-cell ref (no ":" and no "!") → wrap so "Rate2" vs "Rate*2"
+      // arithmetic stays correct. Ranges / qualified refs pass through.
+      if (eff.indexOf(':') === -1 && eff.indexOf('!') === -1) return '(' + eff + ')';
+      return eff;
+    });
+  }
+
+  // Validate a proposed name against Excel-ish rules. Returns an error
+  // string, or null when valid. Used by the named-ranges editor.
+  function validateRangeName(name) {
+    if (!name) return 'Name is required.';
+    var n = String(name).trim();
+    if (!n) return 'Name is required.';
+    if (n.length > 255) return 'Name is too long.';
+    if (!/^[A-Za-z_\\][A-Za-z0-9_.\\]*$/.test(n)) {
+      return 'Use letters, digits, period, underscore; must start with a letter or underscore.';
+    }
+    // Must not look like a cell reference (e.g. "A1", "AB12").
+    if (/^[A-Za-z]{1,3}[0-9]+$/.test(n)) return 'Name cannot look like a cell reference.';
+    // Reserved single-letter column/row helpers Excel disallows.
+    if (/^[RrCc]$/.test(n)) return '"R" and "C" are reserved.';
+    return null;
+  }
+
   /** Evaluate a cell's raw value; detect formulas starting with '=' */
   function evaluate(raw) {
     if (typeof raw !== 'string' || !raw.startsWith('=')) {
@@ -1051,6 +1346,11 @@
       // resolves its own ranges; tokens MUST NOT leak across formulas.
       xrRegistry = [];
 
+      // Named-range expansion runs FIRST so a name resolves to its
+      // (possibly sheet-qualified) A1 ref before the cross-sheet and
+      // same-sheet reference passes see it.
+      var expandedExpr = applyNamedRanges(expr);
+
       // Cross-sheet RANGES first: `Sheet2!A1:B10` or `'Sheet Two'!A1:B10`.
       // We replace each one with a sentinel token (`__XR<n>__`) and
       // stash the resolved 2D values in xrRegistry. Range helpers
@@ -1058,7 +1358,7 @@
       // token and return registered values. Must run BEFORE the
       // single-cell cross-sheet pass — otherwise that pass would
       // match `Sheet2!A1` and leave `:B10` dangling.
-      var resolved = expr.replace(
+      var resolved = expandedExpr.replace(
         /(?:'([^']+)'|([A-Za-z_][A-Za-z0-9_ ]*))!([A-Z]+\d+):([A-Z]+\d+)/gi,
         function (match, quotedName, bareName, a1, a2) {
           var sheetName = quotedName || bareName;
@@ -1630,30 +1930,180 @@
     }
   }
 
+  // Composite localStorage key for the new (entityType, entityId) model.
+  // Format: `${entityType}:${entityId}` — keeps job-side and estimate-side
+  // workbooks separated even if a jobId and estimateId ever collide.
+  function _wsLocalKey(entityType, entityId) {
+    return entityType + ':' + entityId;
+  }
+  // Legacy localStorage shape used plain jobId as the slot key on the
+  // top-level `p86-workspaces` object. Detect + migrate on first load.
+  function _wsLegacyLookup(allWs, entityType, entityId) {
+    if (entityType !== 'job' || entityId == null) return null;
+    // The legacy slot is the bare jobId (no prefix). If both the
+    // composite and the legacy slots exist, prefer the composite (it's
+    // newer); the legacy is the cold backup.
+    return allWs[entityId] || null;
+  }
+
+  // Debounced server PUT. Fires 500ms after the last save call so a
+  // burst of keystrokes only POSTs once. The first call goes out
+  // immediately so the very first edit on a brand-new workspace lands
+  // server-side even if the user closes the tab right after.
+  let _wsServerSaveTimer = null;
+  let _wsServerSaveInFlight = false;
+  let _wsServerSavePending = false;
+  function _wsServerSave(entityType, entityId, payload) {
+    if (entityType !== 'job' && entityType !== 'estimate') return;
+    if (entityId == null) return;
+    if (_wsServerSaveInFlight) {
+      // Coalesce: mark pending and let the in-flight save's .finally
+      // re-trigger with the latest payload (closure capture below).
+      _wsServerSavePending = true;
+      _wsServerSavePendingPayload = payload;
+      _wsServerSavePendingEntity = { entityType, entityId };
+      return;
+    }
+    _wsServerSaveInFlight = true;
+    var url = '/api/' + (entityType === 'job' ? 'jobs' : 'estimates') + '/' + encodeURIComponent(entityId) + '/workbook';
+    fetch(url, {
+      method: 'PUT',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    }).catch(function(e) {
+      // Non-fatal — localStorage already has the bytes; next save
+      // will retry. Just log.
+      console.warn('[workspace] server save failed:', e && e.message);
+    }).finally(function() {
+      _wsServerSaveInFlight = false;
+      if (_wsServerSavePending) {
+        _wsServerSavePending = false;
+        var p = _wsServerSavePendingPayload;
+        var ent = _wsServerSavePendingEntity;
+        _wsServerSavePendingPayload = null;
+        _wsServerSavePendingEntity = null;
+        // Trampoline to flush the pending save (latest payload).
+        _wsServerSave(ent.entityType, ent.entityId, p);
+      }
+    });
+  }
+  var _wsServerSavePendingPayload = null;
+  var _wsServerSavePendingEntity = null;
+
   function saveWorkspace() {
-    if (!workbook.jobId) return;
+    if (!workbook.entityType || workbook.entityId == null) return;
     syncGridToActiveSheet();
     const data = {
       // Versioned shape so the next migration knows what it's reading.
       version: 2,
       activeSheetId: workbook.activeSheetId,
       sheets: workbook.sheets,
+      // Workbook-scoped named ranges (Phase 2.7).
+      namedRanges: workbook.namedRanges || {},
       // Per-workbook-group "last active inner sheet" so clicking a
       // workbook tab returns to the same sheet across reloads.
       workbookGroupActive: workbook.workbookGroupActive || {}
     };
+    // Write-through to localStorage immediately — that's the offline
+    // cache + the safety net if the server PUT fails.
     const allWs = safeLoadJSON('p86-workspaces', {});
-    allWs[workbook.jobId] = data;
+    allWs[_wsLocalKey(workbook.entityType, workbook.entityId)] = data;
+    // Preserve legacy slot writes for 'job' so a browser that hasn't
+    // run loadWorkspace yet still sees the pre-Phase-0 shape. Cheap
+    // belt-and-suspenders during the migration window; can drop in a
+    // future cleanup pass.
+    if (workbook.entityType === 'job') {
+      allWs[workbook.entityId] = data;
+    }
     localStorage.setItem('p86-workspaces', JSON.stringify(allWs));
     workbook.dirty = false;
     grid.dirty = false;
+    // Debounced server PUT — coalesces bursts of edits into one round-trip.
+    if (_wsServerSaveTimer) clearTimeout(_wsServerSaveTimer);
+    _wsServerSaveTimer = setTimeout(function() {
+      _wsServerSaveTimer = null;
+      _wsServerSave(workbook.entityType, workbook.entityId, data);
+    }, 500);
   }
 
-  function loadWorkspace(jobId) {
-    const allWs = safeLoadJSON('p86-workspaces', {});
-    const saved = allWs[jobId];
+  // loadWorkspace is async — it fetches the server-side workbook first,
+  // falls back to localStorage if the server slot is empty, and back-
+  // fills the server from localStorage on first load (so legacy job-
+  // side workbooks become visible to 86 + other devices without any
+  // user action). Callers don't have to await — they fire it and let
+  // the render loop catch up; initWorkspace renders after it resolves.
+  //
+  // Signature: loadWorkspace(entityType, entityId)
+  // Back-compat: loadWorkspace(jobId) — single-arg form treated as
+  // entityType='job'.
+  async function loadWorkspace(entityTypeOrJobId, entityId) {
+    var entityType;
+    if (entityId === undefined) {
+      // Legacy 1-arg form — bare jobId.
+      entityType = 'job';
+      entityId = entityTypeOrJobId;
+    } else {
+      entityType = entityTypeOrJobId;
+    }
+    workbook.entityType = entityType;
+    workbook.entityId = entityId;
+    grid.jobId = entityType === 'job' ? entityId : null;
 
-    workbook.jobId = jobId;
+    // 1. Try the server. Estimates + jobs only — the entity types we
+    //    have endpoints for.
+    var serverWb = null;
+    if (entityType === 'job' || entityType === 'estimate') {
+      try {
+        var url = '/api/' + (entityType === 'job' ? 'jobs' : 'estimates') + '/' + encodeURIComponent(entityId) + '/workbook';
+        var res = await fetch(url, { credentials: 'include' });
+        if (res.ok) {
+          var json = await res.json();
+          serverWb = json && json.workbook ? json.workbook : null;
+        }
+      } catch (e) {
+        // Network failure — fall through to localStorage path. Don't
+        // surface the error; offline use should still work.
+        console.warn('[workspace] server load failed, falling back to localStorage:', e && e.message);
+      }
+    }
+
+    // 2. localStorage — composite key first, then legacy plain jobId.
+    const allWs = safeLoadJSON('p86-workspaces', {});
+    const localWb = allWs[_wsLocalKey(entityType, entityId)]
+      || _wsLegacyLookup(allWs, entityType, entityId)
+      || null;
+
+    // 3. Pick the source. Server wins if non-empty. localStorage is
+    //    the fallback. If neither: brand new.
+    var saved = serverWb || localWb;
+    var shouldBackfillServer = !serverWb && !!localWb;
+
+    _hydrateWorkbookFromSaved(saved);
+
+    // 4. If the server slot was empty but localStorage had data,
+    //    backfill the server with what we found so 86 + cross-device
+    //    can read it. One-shot; fire-and-forget.
+    if (shouldBackfillServer && (entityType === 'job' || entityType === 'estimate')) {
+      try {
+        const data = {
+          version: 2,
+          activeSheetId: workbook.activeSheetId,
+          sheets: workbook.sheets,
+          namedRanges: workbook.namedRanges || {},
+          workbookGroupActive: workbook.workbookGroupActive || {}
+        };
+        _wsServerSave(entityType, entityId, data);
+      } catch (e) {
+        console.warn('[workspace] backfill skipped:', e && e.message);
+      }
+    }
+  }
+
+  // Extracted from the old loadWorkspace body — given a `saved` object
+  // (from server OR localStorage), hydrate workbook.sheets +
+  // activeSheetId. Same shape rules either way.
+  function _hydrateWorkbookFromSaved(saved) {
 
     if (saved && Array.isArray(saved.sheets) && saved.sheets.length) {
       // v2+ shape — already a workbook with sheets
@@ -1680,9 +2130,20 @@
         // tab strip can find them on re-open.
         workbookGroupId: s.workbookGroupId || null,
         workbookGroupName: s.workbookGroupName || null,
+        // Phase 0 — sheets snapshotted from an estimate at job-creation
+        // time carry these so the bottom tab strip can render a
+        // "from estimate" chip + tooltip. Set by the estimate→job
+        // inheritance hook in leads.js (follow-up turn). Null on any
+        // sheet created or imported on the host entity directly.
+        sourceEstimateId: s.sourceEstimateId || null,
+        sourceEstimateName: s.sourceEstimateName || null,
         // Hidden sheets stay in the workbook (so cross-sheet formulas
         // keep resolving) but disappear from the tab strips.
-        hidden: !!s.hidden
+        hidden: !!s.hidden,
+        // Phase 2.4 — AutoFilter state lives on the sheet: header row,
+        // column span, and per-column allowed-value filters. Round-trips
+        // as a plain object.
+        autoFilter: (s.autoFilter && typeof s.autoFilter === 'object') ? s.autoFilter : null
       }));
       workbook.activeSheetId = saved.activeSheetId && workbook.sheets.find(s => s.id === saved.activeSheetId)
         ? saved.activeSheetId
@@ -1718,15 +2179,46 @@
     // Auto-inject permanent built-in views (idempotent — appended at
     // the end of the tab strip, never duplicated). Pinned so
     // rename/delete is blocked from the context menu.
-    if (!workbook.sheets.some(s => s.id === QB_COSTS_SHEET_ID)) {
+    //
+    // Phase 0 gate: QB Costs is a job-side feature (reads
+    // jobs.qb_cost_lines for the active jobId). On the estimate side
+    // there's no QB job costs to embed, so we suppress the tab there.
+    // Attachments works on either side (attachments are polymorphic).
+    var isJobSide = workbook.entityType === 'job';
+    if (isJobSide && !workbook.sheets.some(s => s.id === QB_COSTS_SHEET_ID)) {
       workbook.sheets.push(makeQBCostsSheet());
     }
     if (!workbook.sheets.some(s => s.id === ATTACHMENTS_SHEET_ID)) {
       workbook.sheets.push(makeAttachmentsSheet());
     }
+    // Defensive — if a previously-saved estimate-side workbook ever
+    // somehow accumulated a QB Costs sheet, strip it on load so the
+    // tab strip doesn't render a broken view.
+    if (!isJobSide) {
+      workbook.sheets = workbook.sheets.filter(s => s.id !== QB_COSTS_SHEET_ID);
+    }
+
+    // Phase 2.7 — restore workbook-scoped named ranges. Keys are
+    // upper-cased on write; normalize again here defensively in case an
+    // older save stored mixed case. Drop any entry without a string ref.
+    workbook.namedRanges = {};
+    if (saved && saved.namedRanges && typeof saved.namedRanges === 'object') {
+      Object.keys(saved.namedRanges).forEach(function(k) {
+        var nr = saved.namedRanges[k];
+        if (nr && typeof nr.ref === 'string' && nr.ref.trim()) {
+          workbook.namedRanges[String(k).toUpperCase()] = {
+            name: nr.name || String(k),
+            ref: nr.ref.trim(),
+            sheetId: nr.sheetId || null,
+            comment: nr.comment || ''
+          };
+        }
+      });
+    }
 
     workbook.dirty = false;
-    grid.jobId = jobId;
+    // grid.jobId set in loadWorkspace before this helper runs — kept
+    // for back-compat with the QB-Costs renderer that reads it.
     grid.dirty = false;
     loadSheetIntoGrid(workbook.sheets.find(s => s.id === workbook.activeSheetId));
     migrateLinks();
@@ -1979,6 +2471,9 @@
         syncGridToActiveSheet();
         const baseName = file.name.replace(/\.[^.]+$/, '');
         let added = 0;
+        // Map source sheet name → new AGX sheet id, so workbook-level
+        // defined names (named ranges) can be re-linked after import.
+        const srcNameToSheetId = {};
         // Multi-sheet xlsx imports are now grouped under one workbook
         // entry — single tab in the bottom bar, with the inner sheets
         // accessible via a secondary tab strip above the grid.
@@ -2022,6 +2517,7 @@
             workbook.sheets.splice(insertAt, 0, sheet);
             insertAt++;
             added++;
+            srcNameToSheetId[srcName] = sheet.id;
           }
         });
         if (!added) {
@@ -2033,11 +2529,48 @@
         const firstNew = workbook.sheets[workbook.sheets.length - added];
         workbook.activeSheetId = firstNew.id;
         loadSheetIntoGrid(firstNew);
+
+        // Import workbook-level defined names (named ranges) from the
+        // source file. Skips Excel built-ins (_xlnm.*), invalid names,
+        // and clashes with names already defined in this workbook.
+        if (wb.Workbook && Array.isArray(wb.Workbook.Names)) {
+          if (!workbook.namedRanges) workbook.namedRanges = {};
+          wb.Workbook.Names.forEach(function(dn) {
+            if (!dn || !dn.Name || !dn.Ref) return;
+            if (/^_xlnm\./i.test(dn.Name)) return;
+            var nm = String(dn.Name);
+            if (validateRangeName(nm)) return;
+            if (workbook.namedRanges[nm.toUpperCase()]) return;
+            // Defined names may list multiple comma-separated areas —
+            // we only model a single rectangular ref, so take the first.
+            var ref = String(dn.Ref).split(',')[0].trim();
+            var sheetId = null, bare = ref;
+            var bang = ref.lastIndexOf('!');
+            if (bang !== -1) {
+              var sn = ref.slice(0, bang).replace(/^'|'$/g, '').replace(/''/g, "'");
+              bare = ref.slice(bang + 1);
+              if (srcNameToSheetId[sn]) sheetId = srcNameToSheetId[sn];
+              else { var sh = findSheetByName(sn); if (sh) sheetId = sh.id; }
+            } else if (typeof dn.Sheet === 'number' && wb.SheetNames[dn.Sheet]) {
+              var sn2 = wb.SheetNames[dn.Sheet];
+              if (srcNameToSheetId[sn2]) sheetId = srcNameToSheetId[sn2];
+            }
+            bare = bare.replace(/\$/g, '');
+            var parts = bare.split(':');
+            var a = parseAddr(parts[0].toUpperCase());
+            if (!a) return;
+            workbook.namedRanges[nm.toUpperCase()] = {
+              name: nm, ref: bare, sheetId: sheetId, comment: ''
+            };
+          });
+        }
+
         workbook.dirty = true;
         recalcAll();
         renderGrid();
         renderSheetTabs();
         selectCell(0, 0);
+        saveWorkspace();
       } catch (err) {
         console.error('xlsx import failed:', err);
         alert('Import failed: ' + (err.message || err));
@@ -2115,6 +2648,20 @@
             out.fmt = 'comma';
             out.decimals = decimals;
           }
+          // Preserve the original Excel format string so the custom
+          // number-format editor round-trips it on re-export.
+          if (z && z !== 'General') out.numFmt = z;
+        }
+        // Hyperlink import — SheetJS `.l` = { Target, Tooltip }.
+        if (cell.l && cell.l.Target) {
+          out.hyperlink = { url: cell.l.Target };
+          if (cell.l.Tooltip) out.hyperlink.display = cell.l.Tooltip;
+        }
+        // Comment import — SheetJS `.c` = [{ a: author, t: text }, ...].
+        if (cell.c && cell.c.length) {
+          var noteText = cell.c.map(function(cm) { return cm && cm.t ? cm.t : ''; })
+                                .filter(Boolean).join('\n');
+          if (noteText) out.note = noteText;
         }
         cells[ourAddr] = out;
       }
@@ -2340,7 +2887,7 @@
            kept as its own row above the ribbon so it gets full width
            and the long formula text isn't crowded by buttons. -->
       <div class="ws-toolbar">
-        <div class="ws-cell-ref" id="wsCellRef">A1</div>
+        <input type="text" class="ws-cell-ref" id="wsCellRef" value="A1" spellcheck="false" title="Name Box — type a cell (A1), range (A1:B5), or named range to go there; type a new name to define one for the selection" />
         <input type="text" class="ws-formula-bar" id="wsFormulaBar" placeholder="Enter value or formula (e.g. =A1+B1)" spellcheck="false" />
       </div>
 
@@ -2350,6 +2897,22 @@
            All button IDs / data-attrs preserved from the previous
            flat layout so the wiring code keeps working unchanged. -->
       <div class="ws-ribbon" id="wsToolbarFmt">
+
+        <!-- File — Phase 1 round-trip + find/replace.
+             The job side has Import/Save in the floating header (Quick
+             Access Toolbar) and these are redundant there but harmless;
+             the estimate side has no floating shell so these are the
+             only way to import / export / find on that side. -->
+        <div class="ws-ribbon-group">
+          <div class="ws-ribbon-controls">
+            <button class="ws-btn ws-btn-icon" id="wsImportXlsxBtn" title="Import .xlsx / .xls / .csv as new sheets">&#x1F4E5;</button>
+            <input type="file" id="wsImportXlsxInput" accept=".xlsx,.xls,.csv" style="display:none;" />
+            <button class="ws-btn ws-btn-icon" id="wsExportXlsxBtn" onclick="window.wsExportXlsx()" title="Export workbook to .xlsx (preserves formulas, merges, column widths, frozen panes)">&#x1F4E4;</button>
+            <button class="ws-btn ws-btn-icon" id="wsExportCsvBtn" onclick="window.wsExportCsv()" title="Export active sheet to .csv">&#x1F4DD;</button>
+            <button class="ws-btn ws-btn-icon" id="wsFindReplaceBtn" onclick="window.wsOpenFindReplace()" title="Find / Replace (Ctrl+F)">&#x1F50D;</button>
+          </div>
+          <div class="ws-ribbon-label">File</div>
+        </div>
 
         <!-- History -->
         <div class="ws-ribbon-group">
@@ -2416,6 +2979,7 @@
             <button class="ws-btn ws-btn-fmt" data-fmt="comma" title="Comma format (1,234.56)">,</button>
             <button class="ws-btn ws-btn-icon" id="wsIncDecBtn" onclick="window.wsIncDecimal()" title="Increase decimal places">&larr;.0</button>
             <button class="ws-btn ws-btn-icon" id="wsDecDecBtn" onclick="window.wsDecDecimal()" title="Decrease decimal places">.0&rarr;</button>
+            <button class="ws-btn ws-btn-icon" id="wsNumFmtBtn" onclick="window.wsOpenNumFmt()" title="More number formats (custom)">&#x1F522;</button>
             <button class="ws-btn ws-btn-fmt" data-fmt="null" title="Clear number format">&times;</button>
           </div>
           <div class="ws-ribbon-label">Number</div>
@@ -2465,6 +3029,19 @@
             <button class="ws-btn ws-btn-icon" id="wsMakeTableBtn" onclick="window.wsMakeTable()" title="Convert selected range into a styled table">&#x1F5C2;</button>
           </div>
           <div class="ws-ribbon-label">Cells</div>
+        </div>
+
+        <!-- Data group — validation, filter, comments, hyperlinks,
+             named ranges (Phase 2 Excel-parity tools). -->
+        <div class="ws-ribbon-group">
+          <div class="ws-ribbon-controls">
+            <button class="ws-btn ws-btn-icon" id="wsDataValidationBtn" onclick="window.wsOpenDataValidation()" title="Data validation (dropdown list / rules)">&#x2714;&#xFE0F;</button>
+            <button class="ws-btn ws-btn-icon" id="wsAutoFilterBtn" onclick="window.wsToggleAutoFilter()" title="Toggle AutoFilter on the selected header row">&#x1F53D;</button>
+            <button class="ws-btn ws-btn-icon" id="wsCommentBtn" onclick="window.wsOpenComment()" title="Insert / edit cell comment (Shift+F2)">&#x1F4AC;</button>
+            <button class="ws-btn ws-btn-icon" id="wsHyperlinkBtn" onclick="window.wsOpenHyperlink()" title="Insert hyperlink (Ctrl+K)">&#x1F517;</button>
+            <button class="ws-btn ws-btn-icon" id="wsNamedRangeBtn" onclick="window.wsOpenNamedRanges()" title="Define / manage named ranges">&#x1F3F7;&#xFE0F;</button>
+          </div>
+          <div class="ws-ribbon-label">Data</div>
         </div>
 
         <!-- Spacer pushes the Editing group to the far right of the
@@ -2587,11 +3164,24 @@
         icon = '<span class="ws-sheet-tab-icon" aria-hidden="true">&#x1F4CE;</span> ';
         kindCls = ' ws-sheet-tab-attachments';
       }
+      // Phase 0 — sheets inherited from an estimate at the moment a
+      // job was created get a small "📋" chip + a "From estimate"
+      // tooltip so the PM can see at a glance which tabs were the
+      // estimator's takeoff vs. tabs they built post-conversion.
+      // sourceEstimateId/Name are stamped at conversion time (see the
+      // estimate→job inheritance hook, follow-up turn).
+      var sourceChip = '';
+      var tabTitle = s.name;
+      if (s.sourceEstimateId) {
+        sourceChip = '<span class="ws-sheet-tab-source-chip" aria-hidden="true" style="margin-left:4px;opacity:0.7;font-size:10px;">&#x1F4CB;</span>';
+        tabTitle = s.name + ' — From estimate' + (s.sourceEstimateName ? (' ' + s.sourceEstimateName) : '');
+      }
       html += '<div class="ws-sheet-tab' + (active ? ' active' : '') +
         (s.pinned ? ' ws-sheet-tab-pinned' : '') + kindCls + '" data-sheet-id="' +
-        s.id + '" title="' + escapeAttr(s.name) + '">' +
+        s.id + '" title="' + escapeAttr(tabTitle) + '">' +
         icon +
         '<span class="ws-sheet-tab-name">' + escapeHTML(s.name) + '</span>' +
+        sourceChip +
       '</div>';
     });
     html += '<button class="ws-sheet-tab-add" id="wsAddSheetBtn" title="Add sheet">+</button>';
@@ -2868,6 +3458,8 @@
     if (isEmbedSheet(activeSheet())) return;
 
     var hidden = buildHiddenSet();
+    var filterHiddenRows = computeFilterHiddenRows();
+    var af = getAutoFilter();
 
     let html = '<thead><tr><th class="ws-corner"></th>';
     for (let c = 0; c < grid.cols; c++) {
@@ -2878,7 +3470,9 @@
 
     for (let r = 0; r < grid.rows; r++) {
       const rh = grid.rowHeights && grid.rowHeights[r];
-      const trStyle = rh ? ` style="height:${rh}px;"` : '';
+      let trStyleInner = rh ? `height:${rh}px;` : '';
+      if (filterHiddenRows[r]) trStyleInner += 'display:none;';
+      const trStyle = trStyleInner ? ` style="${trStyleInner}"` : '';
       // Row header carries data-row so the resize-handle hit test below
       // knows which row it's on. Resize handle is the bottom-edge strip.
       html += `<tr${trStyle}><td class="ws-row-header" data-row="${r}">${r + 1}<div class="ws-row-resize" data-row="${r}"></div></td>`;
@@ -2888,7 +3482,7 @@
 
         const key = addr(r, c);
         const cell = grid.cells[key] || { raw: '', value: '', fmt: null, style: {} };
-        const val = displayVal(cell);
+        const val = cellInnerHTML(cell);
         const isSelected = grid.selection && grid.selection.r === r && grid.selection.c === c;
         const isRangeSelected = !isSelected && inRange(r, c);
         const rng = getSelRange();
@@ -2912,6 +3506,8 @@
         if (tableStyle) cls += ' ws-table-cell ws-table-' + tableStyle.style + ' ws-table-' + tableStyle.role;
         if (typeof cell.value === 'number' && !(cell.style && cell.style.align)) cls += ' ws-number';
         if (cell.note) cls += ' ws-has-note';
+        if (cell.validation && cell.validation.type === 'list') cls += ' ws-has-validation';
+        if (cell.validation && cell.validation._invalid) cls += ' ws-validation-invalid';
 
         // Merge attributes
         var span = getMergeSpan(r, c);
@@ -2931,7 +3527,16 @@
         if (linkObj && linkObj.field) titleParts.push('\u{1F517} ' + getLinkLabel(linkObj));
         var titleAttr = titleParts.length ? ' title="' + titleParts.join('\n').replace(/"/g, '&amp;quot;') + '"' : '';
 
-        html += `<td class="${cls}" data-r="${r}" data-c="${c}" style="${st}"${attrs}${titleAttr}>${val}</td>`;
+        // AutoFilter dropdown button on the header-row cells in range.
+        var filterBtn = '';
+        if (af && r === af.r1 && c >= af.c1 && c <= af.c2) {
+          var isFiltered = af.filters && af.filters[c];
+          cls += ' ws-filter-header' + (isFiltered ? ' ws-filter-active' : '');
+          filterBtn = '<span class="ws-filter-btn" data-ws-filter="1" title="Filter / sort this column">' +
+                      (isFiltered ? '&#x1F53D;' : '&#x25BE;') + '</span>';
+        }
+
+        html += `<td class="${cls}" data-r="${r}" data-c="${c}" style="${st}"${attrs}${titleAttr}>${val}${filterBtn}</td>`;
       }
       html += '</tr>';
     }
@@ -2944,7 +3549,7 @@
     if (!td) return;
     const key = addr(r, c);
     const cell = grid.cells[key] || { raw: '', value: '', fmt: null, style: {} };
-    td.textContent = displayVal(cell);
+    td.innerHTML = cellInnerHTML(cell);
 
     td.className = 'ws-cell';
     if (grid.selection && grid.selection.r === r && grid.selection.c === c) td.classList.add('ws-selected');
@@ -2953,6 +3558,8 @@
     if (typeof cell.raw === 'string' && cell.raw.startsWith('=')) td.classList.add('ws-formula');
     if (typeof cell.value === 'number' && !(cell.style && cell.style.align)) td.classList.add('ws-number');
     if (cell.note) td.classList.add('ws-has-note');
+    if (cell.validation && cell.validation.type === 'list') td.classList.add('ws-has-validation');
+    if (cell.validation && cell.validation._invalid) td.classList.add('ws-validation-invalid');
     if (getMergeSpan(r, c)) td.classList.add('ws-merged');
     var titleParts = [];
     if (cell.note) titleParts.push(cell.note);
@@ -3172,12 +3779,17 @@
     const key = addr(r, c);
     if (formulaBar && !grid.refMode) formulaBar.value = getCell(r, c).raw || '';
     const refEl = document.getElementById('wsCellRef');
-    if (refEl) {
+    if (refEl && document.activeElement !== refEl) {
       var rng = getSelRange();
-      if (grid.selEnd && (rng.r1 !== rng.r2 || rng.c1 !== rng.c2)) {
-        refEl.textContent = addr(rng.r1, rng.c1) + ':' + addr(rng.r2, rng.c2);
+      // If the selection's anchor cell matches a named range exactly,
+      // show the name instead of the raw address (Excel behavior).
+      var nameForCell = _nameForCurrentSelection(rng);
+      if (nameForCell) {
+        refEl.value = nameForCell;
+      } else if (grid.selEnd && (rng.r1 !== rng.r2 || rng.c1 !== rng.c2)) {
+        refEl.value = addr(rng.r1, rng.c1) + ':' + addr(rng.r2, rng.c2);
       } else {
-        refEl.textContent = key;
+        refEl.value = key;
       }
     }
 
@@ -3234,6 +3846,9 @@
     // Recalculate
     recalcAll();
 
+    // Re-validate against any data-validation rule on this cell.
+    refreshCellValidity(r, c);
+
     // Re-render all cells (formulas may reference this cell)
     renderGrid();
     selectCell(r, c);
@@ -3261,7 +3876,7 @@
       td.contentEditable = false;
       td.classList.remove('ws-editing');
       const cell = getCell(r, c);
-      td.textContent = displayVal(cell);
+      td.innerHTML = cellInnerHTML(cell);
     }
     grid.editing = null;
     exitRefMode();
@@ -3579,6 +4194,9 @@
         tr.classList.toggle('ws-row-fullselected', !!(inRange && fullRow));
       });
     }
+
+    // Drag-to-fill handle on the selection's bottom-right corner.
+    positionFillHandle(rng);
   }
 
   // ── Merge Helpers ──────────────────────────────────────────
@@ -3662,6 +4280,252 @@
       if (r < 1 || c < 0) return '#REF!';
       return colLetter(c) + r;
     });
+  }
+
+  // ── Fill Handle / Drag-to-Fill (Phase 2.1) ─────────────────
+  //
+  // Excel-style fill: drag the small square on the selection's bottom-
+  // right corner to extend a series down/up/right/left. Detects numeric
+  // arithmetic series, month/weekday name sequences, "Item 1"→"Item 2"
+  // text patterns, and copies anything else. Formula cells have their
+  // relative references adjusted by the per-cell offset.
+
+  var FILL_MONTHS_FULL = ['january','february','march','april','may','june','july','august','september','october','november','december'];
+  var FILL_MONTHS_ABBR = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+  var FILL_DAYS_FULL = ['sunday','monday','tuesday','wednesday','thursday','friday','saturday'];
+  var FILL_DAYS_ABBR = ['sun','mon','tue','wed','thu','fri','sat'];
+
+  function fillListByName(name) {
+    return name === 'MF' ? FILL_MONTHS_FULL : name === 'MA' ? FILL_MONTHS_ABBR :
+           name === 'DF' ? FILL_DAYS_FULL : FILL_DAYS_ABBR;
+  }
+
+  /** Detect a month/weekday name; returns { list, idx } or null. */
+  function fillMatchSequenceWord(text) {
+    var t = String(text == null ? '' : text).trim().toLowerCase();
+    if (!t) return null;
+    var i;
+    if ((i = FILL_MONTHS_FULL.indexOf(t)) !== -1) return { list: 'MF', idx: i };
+    if ((i = FILL_MONTHS_ABBR.indexOf(t)) !== -1) return { list: 'MA', idx: i };
+    if ((i = FILL_DAYS_FULL.indexOf(t)) !== -1) return { list: 'DF', idx: i };
+    if ((i = FILL_DAYS_ABBR.indexOf(t)) !== -1) return { list: 'DA', idx: i };
+    return null;
+  }
+
+  /** Re-apply the capitalization style of `sample` to `word`. */
+  function fillApplyCase(sample, word) {
+    var s = String(sample);
+    if (s && s === s.toUpperCase() && s !== s.toLowerCase()) return word.toUpperCase();
+    if (s && s.charAt(0) === s.charAt(0).toUpperCase()) return word.charAt(0).toUpperCase() + word.slice(1);
+    return word;
+  }
+
+  /** "Item 12" → { prefix:'Item ', num:12, pad:2, suffix:'' }; null if no trailing int. */
+  function fillSplitTrailingNumber(text) {
+    var m = String(text == null ? '' : text).match(/^(.*?)(\d+)(\D*)$/);
+    if (!m) return null;
+    return { prefix: m[1], num: parseInt(m[2], 10), pad: m[2].length, suffix: m[3] };
+  }
+
+  /** Numeric value of a cell for series detection, or null. */
+  function fillCellNumeric(cell) {
+    if (!cell) return null;
+    if (typeof cell.value === 'number' && isFinite(cell.value)) return cell.value;
+    var raw = cell.raw;
+    if (raw == null || raw === '' || String(raw).indexOf('=') === 0) return null;
+    var s = String(raw).replace(/[$,%\s]/g, '');
+    if (s === '' || isNaN(Number(s))) return null;
+    return Number(s);
+  }
+
+  function fillFormatNumber(v) {
+    var r = Math.round(v * 1e10) / 1e10;
+    return String(r);
+  }
+
+  /**
+   * Given the source cells along one fill line (in natural order) and the
+   * number of target cells to produce, return an array of { raw, srcIndex }
+   * describing each successive target in fill order. dir ∈ down|up|right|left.
+   */
+  function computeFillCells(srcCells, count, dir) {
+    var n = srcCells.length;
+    var raws = srcCells.map(function (c) { return (c && c.raw != null) ? String(c.raw) : ''; });
+    var down = (dir === 'down' || dir === 'right');
+    var rowAxis = (dir === 'down' || dir === 'up');
+    var out = new Array(count);
+    function srcIndexFor(k) { return down ? (k % n) : ((n - 1) - (k % n)); }
+
+    // 1) All formulas → adjust relative refs by the per-block offset.
+    var allFormula = n > 0 && raws.every(function (s) { return s.indexOf('=') === 0; });
+    if (allFormula) {
+      for (var k = 0; k < count; k++) {
+        var si = srcIndexFor(k);
+        var blockNum = Math.floor(k / n) + 1;
+        var d = (down ? 1 : -1) * blockNum * n;
+        out[k] = { raw: rowAxis ? adjustFormulaRefs(raws[si], d, 0) : adjustFormulaRefs(raws[si], 0, d), srcIndex: si };
+      }
+      return out;
+    }
+
+    // 2) All numeric → arithmetic series (single value copies).
+    var nums = srcCells.map(fillCellNumeric);
+    var allNumeric = n > 0 && nums.every(function (v) { return v !== null; });
+    if (allNumeric) {
+      if (n === 1) {
+        for (var k1 = 0; k1 < count; k1++) out[k1] = { raw: raws[0], srcIndex: 0 };
+      } else {
+        var step = (nums[n - 1] - nums[0]) / (n - 1);
+        var base = down ? nums[n - 1] : nums[0];
+        for (var k2 = 0; k2 < count; k2++) {
+          var val = down ? (base + step * (k2 + 1)) : (base - step * (k2 + 1));
+          out[k2] = { raw: fillFormatNumber(val), srcIndex: srcIndexFor(k2) };
+        }
+      }
+      return out;
+    }
+
+    // 3) Month/weekday name sequence.
+    var seq = raws.map(fillMatchSequenceWord);
+    var allSeq = n > 0 && seq.every(function (m, i) { return m && (i === 0 || m.list === seq[0].list); });
+    if (allSeq) {
+      var list = fillListByName(seq[0].list);
+      var L = list.length;
+      var sStep = (n >= 2) ? (seq[1].idx - seq[0].idx) : 1;
+      if (sStep === 0) sStep = 1;
+      var anchorIdx = down ? seq[n - 1].idx : seq[0].idx;
+      var sample = down ? raws[n - 1] : raws[0];
+      for (var k3 = 0; k3 < count; k3++) {
+        var ni = down ? (anchorIdx + sStep * (k3 + 1)) : (anchorIdx - sStep * (k3 + 1));
+        ni = ((ni % L) + L) % L;
+        out[k3] = { raw: fillApplyCase(sample, list[ni]), srcIndex: srcIndexFor(k3) };
+      }
+      return out;
+    }
+
+    // 4) Text with a trailing integer ("Week 1" → "Week 2").
+    var tn = raws.map(fillSplitTrailingNumber);
+    var allText = n > 0 && tn.every(function (t, i) {
+      return t && (i === 0 || (t.prefix === tn[0].prefix && t.suffix === tn[0].suffix));
+    });
+    if (allText) {
+      var tStep = (n >= 2) ? (tn[n - 1].num - tn[0].num) : 1;
+      if (tStep === 0) tStep = 1;
+      var pad = tn[0].pad, pre = tn[0].prefix, suf = tn[0].suffix;
+      var tBase = down ? tn[n - 1].num : tn[0].num;
+      for (var k4 = 0; k4 < count; k4++) {
+        var nv = down ? (tBase + tStep * (k4 + 1)) : (tBase - tStep * (k4 + 1));
+        var ns = String(Math.abs(nv));
+        while (ns.length < pad) ns = '0' + ns;
+        out[k4] = { raw: pre + (nv < 0 ? '-' : '') + ns + suf, srcIndex: srcIndexFor(k4) };
+      }
+      return out;
+    }
+
+    // 5) Fallback: copy (cycle through the source block).
+    for (var k5 = 0; k5 < count; k5++) {
+      var si5 = srcIndexFor(k5);
+      out[k5] = { raw: raws[si5], srcIndex: si5 };
+    }
+    return out;
+  }
+
+  /** Write one filled cell, copying presentation from its source cell. */
+  function applyFilledCell(r, c, fill, srcCells) {
+    if (!fill) return;
+    var cell = getCell(r, c);
+    cell.raw = fill.raw;
+    var srcCell = srcCells[fill.srcIndex] || srcCells[0];
+    if (srcCell) {
+      cell.fmt = srcCell.fmt != null ? srcCell.fmt : null;
+      if (srcCell.numFmt != null) cell.numFmt = srcCell.numFmt; else delete cell.numFmt;
+      if (srcCell.decimals != null) cell.decimals = srcCell.decimals; else delete cell.decimals;
+      if (srcCell.validation != null) cell.validation = JSON.parse(JSON.stringify(srcCell.validation)); else delete cell.validation;
+      cell.style = srcCell.style ? JSON.parse(JSON.stringify(srcCell.style)) : {};
+    }
+  }
+
+  /** Apply a completed fill drag: src block → dst (extended) range. */
+  function applyFill(src, dst, dir) {
+    if (!src || !dst || !dir) return;
+    var vertical = (dir === 'down' || dir === 'up');
+    var count;
+    if (vertical) count = (dir === 'down') ? (dst.r2 - src.r2) : (src.r1 - dst.r1);
+    else count = (dir === 'right') ? (dst.c2 - src.c2) : (src.c1 - dst.c1);
+    if (count <= 0) return;
+    pushUndo();
+    if (vertical) {
+      for (var c = src.c1; c <= src.c2; c++) {
+        var col = [];
+        for (var r = src.r1; r <= src.r2; r++) col.push(getCell(r, c));
+        var fills = computeFillCells(col, count, dir);
+        for (var k = 0; k < count; k++) {
+          var tr = (dir === 'down') ? (src.r2 + 1 + k) : (src.r1 - 1 - k);
+          applyFilledCell(tr, c, fills[k], col);
+        }
+      }
+    } else {
+      for (var rr = src.r1; rr <= src.r2; rr++) {
+        var row = [];
+        for (var cc = src.c1; cc <= src.c2; cc++) row.push(getCell(rr, cc));
+        var fills2 = computeFillCells(row, count, dir);
+        for (var k2 = 0; k2 < count; k2++) {
+          var tc = (dir === 'right') ? (src.c2 + 1 + k2) : (src.c1 - 1 - k2);
+          applyFilledCell(rr, tc, fills2[k2], row);
+        }
+      }
+    }
+    grid.dirty = true;
+    recalcAll();
+    renderGrid();
+    grid.selection = { r: dst.r1, c: dst.c1 };
+    grid.selEnd = { r: dst.r2, c: dst.c2 };
+    selectCell(dst.r1, dst.c1, true);
+    pushLinkedValues();
+    saveWorkspace();
+  }
+
+  // Fill-drag preview helpers (operate on module-level `filling`).
+  function clearFillPreview() {
+    if (!wsTable) return;
+    wsTable.querySelectorAll('.ws-fill-preview').forEach(function (el) { el.classList.remove('ws-fill-preview'); });
+  }
+
+  function updateFillPreview(r, c) {
+    if (!filling) return;
+    var src = filling.src;
+    var below = r - src.r2, above = src.r1 - r, right = c - src.c2, left = src.c1 - c;
+    var vMax = Math.max(below, above, 0), hMax = Math.max(right, left, 0);
+    if (vMax === 0 && hMax === 0) { clearFillPreview(); filling.dst = null; filling.dir = null; return; }
+    var dir, dst;
+    if (vMax >= hMax) {
+      if (below >= above) { dir = 'down'; dst = { r1: src.r1, c1: src.c1, r2: r, c2: src.c2 }; }
+      else { dir = 'up'; dst = { r1: r, c1: src.c1, r2: src.r2, c2: src.c2 }; }
+    } else {
+      if (right >= left) { dir = 'right'; dst = { r1: src.r1, c1: src.c1, r2: src.r2, c2: c }; }
+      else { dir = 'left'; dst = { r1: src.r1, c1: c, r2: src.r2, c2: src.c2 }; }
+    }
+    filling.dst = dst; filling.dir = dir;
+    clearFillPreview();
+    wsTable.querySelectorAll('td.ws-cell').forEach(function (td) {
+      var tr = parseInt(td.dataset.r), tc = parseInt(td.dataset.c);
+      var inDst = tr >= dst.r1 && tr <= dst.r2 && tc >= dst.c1 && tc <= dst.c2;
+      var inSrc = tr >= src.r1 && tr <= src.r2 && tc >= src.c1 && tc <= src.c2;
+      if (inDst && !inSrc) td.classList.add('ws-fill-preview');
+    });
+  }
+
+  /** Place the drag-to-fill handle on the bottom-right corner of a range. */
+  function positionFillHandle(rng) {
+    if (!wsTable) return;
+    var old = wsTable.querySelector('.ws-fill-handle');
+    if (old) old.parentNode.removeChild(old);
+    if (!rng || grid.editing) return;
+    var td = wsTable.querySelector('td.ws-cell[data-r="' + rng.r2 + '"][data-c="' + rng.c2 + '"]');
+    if (!td) return;
+    var h = document.createElement('div');
+    h.className = 'ws-fill-handle';
+    td.appendChild(h);
   }
 
   // ── Row / Column Insert & Delete ──────────────────────────
@@ -3769,23 +4633,103 @@
     }
   }
 
-  // ── Cell Notes ─────────────────────────────────────────────
+  // ── Cell Comments / Notes (Phase 2.5) ──────────────────────
+  // A cell's comment is stored on cell.note (kept as the field name for
+  // backward compatibility with existing saved workbooks + the red-triangle
+  // indicator + hover title). The editor below replaces the old window.prompt
+  // with an inline modal: multi-line, positioned near the cell, with
+  // Save / Delete / Cancel.
 
-  function promptNote(r, c) {
-    var cell = getCell(r, c);
-    var text = prompt('Cell note:', cell.note || '');
-    if (text === null) return; // cancelled
-    pushUndo();
-    if (text) {
-      cell.note = text;
-    } else {
-      delete cell.note;
+  var _commentEditorEl = null;
+  function closeCommentEditor() {
+    if (_commentEditorEl && _commentEditorEl.parentNode) _commentEditorEl.parentNode.removeChild(_commentEditorEl);
+    _commentEditorEl = null;
+    document.removeEventListener('mousedown', _commentOutsideHandler, true);
+  }
+  function _commentOutsideHandler(e) {
+    if (_commentEditorEl && !_commentEditorEl.contains(e.target)) {
+      // Click outside saves whatever's typed (Excel-like), then closes.
+      var ta = _commentEditorEl.querySelector('textarea');
+      if (ta && _commentEditorEl._target) {
+        _saveCommentValue(_commentEditorEl._target.r, _commentEditorEl._target.c, ta.value);
+      }
+      closeCommentEditor();
     }
+  }
+  function _saveCommentValue(r, c, text) {
+    var cell = getCell(r, c);
+    var trimmed = (text || '').trim();
+    var prev = cell.note || '';
+    if (trimmed === prev) return; // no change → skip undo churn
+    pushUndo();
+    if (trimmed) cell.note = trimmed; else delete cell.note;
     grid.dirty = true;
     renderGrid();
     selectCell(r, c);
     saveWorkspace();
   }
+
+  function promptNote(r, c) {
+    closeCommentEditor();
+    var cell = getCell(r, c);
+    var td = wsTable.querySelector(`td[data-r="${r}"][data-c="${c}"]`);
+    var pop = document.createElement('div');
+    pop.className = 'ws-comment-editor';
+    pop._target = { r: r, c: c };
+    pop.style.cssText = 'position:fixed;background:var(--surface,#181820);border:1px solid var(--border,#333);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.5);z-index:1600;width:260px;padding:10px;font-size:12px;';
+    pop.innerHTML =
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">' +
+        '<strong style="font-size:12px;">Cell Comment</strong>' +
+        '<span style="font-size:11px;color:var(--text-dim,#aaa);">' + addr(r, c) + '</span>' +
+      '</div>' +
+      '<textarea class="ws-comment-text" rows="4" placeholder="Type a comment…" style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid var(--grid-border);border-radius:4px;background:var(--card-bg,#0c0c14);color:var(--text);resize:vertical;font-family:inherit;">' +
+        escapeHTML(cell.note || '') +
+      '</textarea>' +
+      '<div style="display:flex;gap:6px;justify-content:flex-end;margin-top:8px;">' +
+        '<button class="ws-btn" data-act="delete" style="padding:3px 8px;">Delete</button>' +
+        '<button class="ws-btn" data-act="cancel" style="padding:3px 8px;">Cancel</button>' +
+        '<button class="ws-btn ws-btn-primary" data-act="save" style="padding:3px 8px;">Save</button>' +
+      '</div>';
+    document.body.appendChild(pop);
+    if (td) {
+      var rect = td.getBoundingClientRect();
+      var left = Math.min(rect.right + 4, window.innerWidth - 270);
+      pop.style.left = Math.max(4, left) + 'px';
+      pop.style.top = Math.min(rect.top, window.innerHeight - 180) + 'px';
+    } else {
+      pop.style.left = '40%';
+      pop.style.top = '120px';
+    }
+    _commentEditorEl = pop;
+    var ta = pop.querySelector('textarea');
+    ta.focus();
+    ta.setSelectionRange(ta.value.length, ta.value.length);
+    pop.querySelector('[data-act="save"]').addEventListener('click', function () {
+      _saveCommentValue(r, c, ta.value);
+      closeCommentEditor();
+    });
+    pop.querySelector('[data-act="cancel"]').addEventListener('click', function () {
+      closeCommentEditor();
+    });
+    pop.querySelector('[data-act="delete"]').addEventListener('click', function () {
+      _saveCommentValue(r, c, '');
+      closeCommentEditor();
+    });
+    ta.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape') { e.preventDefault(); closeCommentEditor(); }
+      // Ctrl/Cmd+Enter saves.
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        e.preventDefault(); _saveCommentValue(r, c, ta.value); closeCommentEditor();
+      }
+    });
+    setTimeout(function () { document.addEventListener('mousedown', _commentOutsideHandler, true); }, 0);
+  }
+
+  // Ribbon entry point — edit the active cell's comment.
+  window.wsOpenComment = function () {
+    if (!grid || !grid.selection) return;
+    promptNote(grid.selection.r, grid.selection.c);
+  };
 
   function deleteNote(r, c) {
     var cell = getCell(r, c);
@@ -3796,6 +4740,108 @@
     refreshCell(r, c);
     saveWorkspace();
   }
+
+  // ── Hyperlinks (Phase 2.6) ─────────────────────────────────
+  // cell.hyperlink = { url, display }. The anchor rendering + click
+  // styling live in cellInnerHTML / CSS; this is the Ctrl+K editor that
+  // sets/clears the link on the active cell.
+
+  var _hyperlinkEditorEl = null;
+  function closeHyperlinkEditor() {
+    if (_hyperlinkEditorEl && _hyperlinkEditorEl.parentNode) _hyperlinkEditorEl.parentNode.removeChild(_hyperlinkEditorEl);
+    _hyperlinkEditorEl = null;
+  }
+  function _normalizeUrl(u) {
+    u = (u || '').trim();
+    if (!u) return '';
+    // Allow mailto:, tel:, anchors, and protocol-relative; otherwise
+    // default bare domains to https://.
+    if (/^(https?:|mailto:|tel:|ftp:|\/\/|#|\/)/i.test(u)) return u;
+    if (/^[\w.-]+@[\w.-]+\.\w+$/.test(u)) return 'mailto:' + u;
+    return 'https://' + u;
+  }
+
+  function openHyperlinkEditor(r, c) {
+    closeHyperlinkEditor();
+    var cell = getCell(r, c);
+    var existing = cell.hyperlink || null;
+    var td = wsTable.querySelector(`td[data-r="${r}"][data-c="${c}"]`);
+    var pop = document.createElement('div');
+    pop.className = 'ws-hyperlink-editor';
+    pop.style.cssText = 'position:fixed;background:var(--surface,#181820);border:1px solid var(--border,#333);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.5);z-index:1600;width:300px;padding:12px;font-size:12px;';
+    var curText = existing ? (existing.display || '') : (displayVal(cell) || '');
+    pop.innerHTML =
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">' +
+        '<strong style="font-size:13px;">Insert Hyperlink</strong>' +
+        '<span style="font-size:11px;color:var(--text-dim,#aaa);">' + addr(r, c) + '</span>' +
+      '</div>' +
+      '<label style="font-size:11px;color:var(--text-dim,#aaa);">Address (URL)' +
+        '<input type="text" id="wsHlUrl" placeholder="https://example.com" style="width:100%;box-sizing:border-box;margin-top:3px;padding:6px 10px;border:1px solid var(--grid-border);border-radius:4px;background:var(--card-bg,#0c0c14);color:var(--text);" />' +
+      '</label>' +
+      '<label style="font-size:11px;color:var(--text-dim,#aaa);display:block;margin-top:8px;">Text to display' +
+        '<input type="text" id="wsHlText" placeholder="(optional)" style="width:100%;box-sizing:border-box;margin-top:3px;padding:6px 10px;border:1px solid var(--grid-border);border-radius:4px;background:var(--card-bg,#0c0c14);color:var(--text);" />' +
+      '</label>' +
+      '<div style="display:flex;gap:6px;justify-content:flex-end;margin-top:10px;">' +
+        '<button class="ws-btn" data-act="remove" style="padding:3px 8px;">Remove</button>' +
+        '<button class="ws-btn" data-act="cancel" style="padding:3px 8px;">Cancel</button>' +
+        '<button class="ws-btn ws-btn-primary" data-act="ok" style="padding:3px 8px;">OK</button>' +
+      '</div>';
+    document.body.appendChild(pop);
+    if (td) {
+      var rect = td.getBoundingClientRect();
+      pop.style.left = Math.max(4, Math.min(rect.left, window.innerWidth - 310)) + 'px';
+      pop.style.top = Math.min(rect.bottom + 4, window.innerHeight - 200) + 'px';
+    } else { pop.style.left = '40%'; pop.style.top = '120px'; }
+    _hyperlinkEditorEl = pop;
+    var urlInput = pop.querySelector('#wsHlUrl');
+    var textInput = pop.querySelector('#wsHlText');
+    urlInput.value = existing ? existing.url : '';
+    textInput.value = curText;
+    urlInput.focus();
+
+    function applyHl() {
+      var url = _normalizeUrl(urlInput.value);
+      if (!url) { closeHyperlinkEditor(); return; }
+      var display = textInput.value.trim();
+      pushUndo();
+      var tgt = getCell(r, c);
+      tgt.hyperlink = { url: url };
+      if (display) tgt.hyperlink.display = display;
+      // If the cell is empty, show the display text (or the URL) so the
+      // link is visible and clickable.
+      var hasValue = (tgt.raw !== '' && tgt.raw != null);
+      if (!hasValue) { tgt.raw = display || url; }
+      grid.dirty = true;
+      recalcAll();
+      renderGrid();
+      selectCell(r, c);
+      saveWorkspace();
+      closeHyperlinkEditor();
+    }
+    pop.querySelector('[data-act="ok"]').addEventListener('click', applyHl);
+    pop.querySelector('[data-act="cancel"]').addEventListener('click', closeHyperlinkEditor);
+    pop.querySelector('[data-act="remove"]').addEventListener('click', function () {
+      pushUndo();
+      var tgt = getCell(r, c);
+      delete tgt.hyperlink;
+      grid.dirty = true;
+      renderGrid();
+      selectCell(r, c);
+      saveWorkspace();
+      closeHyperlinkEditor();
+    });
+    [urlInput, textInput].forEach(function (inp) {
+      inp.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter') { e.preventDefault(); applyHl(); }
+        if (e.key === 'Escape') { e.preventDefault(); closeHyperlinkEditor(); }
+      });
+    });
+  }
+
+  window.wsOpenHyperlink = function () {
+    if (!grid || !grid.selection) return;
+    openHyperlinkEditor(grid.selection.r, grid.selection.c);
+  };
 
   // ── Context Menu ──────────────────────────────────────────
 
@@ -3852,6 +4898,7 @@
   // ── Mouse selection state ──
   var dragging = false;
   var moving = null; // { startR, startC, rng } when edge-dragging to move cells
+  var filling = null; // { src, dst, dir } when drag-to-fill is in progress
 
   /** Check if mouse is near the edge of the selected cell/range */
   function isOnSelectionEdge(td, e) {
@@ -3921,6 +4968,48 @@
   }
 
   function handleCellMouseDown(e) {
+    // Grab the drag-to-fill handle (it lives inside the corner cell).
+    if (e.target && e.target.classList && e.target.classList.contains('ws-fill-handle')) {
+      if (grid.editing) commitEdit(grid.editing.r, grid.editing.c);
+      e.preventDefault();
+      filling = { src: getSelRange(), dst: null, dir: null };
+      document.body.style.cursor = 'crosshair';
+      return;
+    }
+    // Data-validation dropdown caret — open the list picker for this cell.
+    if (e.target && e.target.classList && e.target.classList.contains('ws-validation-caret')) {
+      var vtd = e.target.closest('td.ws-cell');
+      if (vtd) {
+        e.preventDefault();
+        e.stopPropagation();
+        var vr = parseInt(vtd.dataset.r), vc = parseInt(vtd.dataset.c);
+        selectCell(vr, vc);
+        openValidationDropdown(vr, vc, vtd);
+      }
+      return;
+    }
+    // AutoFilter dropdown button on a header cell — open the column filter.
+    if (e.target && e.target.classList && e.target.classList.contains('ws-filter-btn')) {
+      var ftd = e.target.closest('td.ws-cell');
+      if (ftd) {
+        e.preventDefault();
+        e.stopPropagation();
+        openFilterPopup(parseInt(ftd.dataset.c), e.target);
+      }
+      return;
+    }
+    // Hyperlink anchor click — select the cell but let the anchor's default
+    // navigation (target="_blank") fire; do NOT preventDefault, do NOT start a drag.
+    if (e.target && e.target.classList && e.target.classList.contains('ws-hyperlink')) {
+      var htd = e.target.closest('td.ws-cell');
+      if (htd) {
+        var hr = parseInt(htd.dataset.r), hc = parseInt(htd.dataset.c);
+        var hmerge = getMerge(hr, hc);
+        if (hmerge) { hr = hmerge.r1; hc = hmerge.c1; }
+        selectCell(hr, hc);
+      }
+      return;
+    }
     var td = e.target.closest('td.ws-cell');
     if (!td) return;
     var r = parseInt(td.dataset.r), c = parseInt(td.dataset.c);
@@ -3962,6 +5051,12 @@
   function handleCellMouseMove(e) {
     var td = e.target.closest('td.ws-cell');
 
+    // Drag-to-fill in progress — preview the series extent.
+    if (filling) {
+      if (td) updateFillPreview(parseInt(td.dataset.r), parseInt(td.dataset.c));
+      return;
+    }
+
     // Show move cursor when hovering selection edge
     if (!dragging && !moving && td && !grid.editing && !grid.refMode) {
       td.style.cursor = isOnSelectionEdge(td, e) ? 'move' : '';
@@ -3986,12 +5081,19 @@
       renderSelectionClasses();
       var rng = getSelRange();
       var refEl = document.getElementById('wsCellRef');
-      if (refEl && rng) refEl.textContent = addr(rng.r1, rng.c1) + ':' + addr(rng.r2, rng.c2);
+      if (refEl && rng && document.activeElement !== refEl) refEl.value = addr(rng.r1, rng.c1) + ':' + addr(rng.r2, rng.c2);
       updateQuickCalc();
     }
   }
 
   function handleCellMouseUp(e) {
+    if (filling) {
+      if (filling.dst && filling.dir) applyFill(filling.src, filling.dst, filling.dir);
+      clearFillPreview();
+      filling = null;
+      document.body.style.cursor = '';
+      return;
+    }
     if (moving) {
       var td = e.target.closest ? e.target.closest('td.ws-cell') : null;
       if (td) {
@@ -4040,6 +5142,7 @@
       if (e.key === 'b' || e.key === 'B') { e.preventDefault(); toggleStyleOnSelection('bold'); return; }
       if (e.key === 'i' || e.key === 'I') { e.preventDefault(); toggleStyleOnSelection('italic'); return; }
       if (e.key === 'u' || e.key === 'U') { e.preventDefault(); toggleStyleOnSelection('underline'); return; }
+      if (e.key === 'k' || e.key === 'K') { e.preventDefault(); if (grid.selection) openHyperlinkEditor(grid.selection.r, grid.selection.c); return; }
     }
 
     // If editing a cell
@@ -4095,6 +5198,24 @@
     if (!grid.selection) return;
 
     const { r, c } = grid.selection;
+
+    // Shift+F2 — add / edit the active cell's comment (Excel parity)
+    if (e.shiftKey && e.key === 'F2') {
+      e.preventDefault();
+      promptNote(r, c);
+      return;
+    }
+
+    // Alt+Down — open the data-validation dropdown on a list cell (Excel parity)
+    if (e.altKey && (e.key === 'ArrowDown' || e.key === 'Down')) {
+      const dvCell = grid.cells[addr(r, c)];
+      if (dvCell && dvCell.validation && dvCell.validation.type === 'list') {
+        e.preventDefault();
+        const dvTd = wsTable.querySelector(`td[data-r="${r}"][data-c="${c}"]`);
+        if (dvTd) openValidationDropdown(r, c, dvTd);
+        return;
+      }
+    }
 
     // Arrow key navigation in ref mode (if formula bar has focus with operator at end)
     if (grid.refMode && formulaBar === document.activeElement && e.key.match(/^Arrow/)) {
@@ -4763,6 +5884,237 @@
     saveWorkspace();
   }
 
+  // ── AutoFilter (Phase 2.4) ─────────────────────────────────
+  // sheet.autoFilter = { r1, r2, c1, c2, filters: { <col>: [allowed strings] } }
+  //   r1   header row index (gets the filter dropdown buttons)
+  //   r2   last data row
+  //   c1,c2 column span
+  //   filters[col] present → only rows whose display value in that col is
+  //   in the allowed list stay visible. Absent → column unfiltered.
+
+  function getAutoFilter() {
+    var sheet = activeSheet();
+    return (sheet && sheet.autoFilter) ? sheet.autoFilter : null;
+  }
+
+  // Bounding box of all non-empty cells — used when AutoFilter is toggled
+  // on a single-cell selection (mirror Excel's "current region" guess).
+  function computeUsedRange() {
+    var r1 = Infinity, c1 = Infinity, r2 = -1, c2 = -1;
+    Object.keys(grid.cells).forEach(function (a) {
+      var cell = grid.cells[a];
+      var hasContent = cell && (cell.raw !== '' && cell.raw != null);
+      if (!hasContent) return;
+      var ref = parseAddr(a);
+      if (!ref) return;
+      if (ref.r < r1) r1 = ref.r;
+      if (ref.c < c1) c1 = ref.c;
+      if (ref.r > r2) r2 = ref.r;
+      if (ref.c > c2) c2 = ref.c;
+    });
+    if (r2 < 0) return null;
+    return { r1: r1, c1: c1, r2: r2, c2: c2 };
+  }
+
+  // Compute the set of data rows hidden by the active filters.
+  function computeFilterHiddenRows() {
+    var af = getAutoFilter();
+    var hidden = {};
+    if (!af || !af.filters) return hidden;
+    var cols = Object.keys(af.filters);
+    if (!cols.length) return hidden;
+    for (var r = af.r1 + 1; r <= af.r2; r++) {
+      var show = true;
+      for (var i = 0; i < cols.length; i++) {
+        var col = parseInt(cols[i], 10);
+        var allowed = af.filters[cols[i]];
+        if (!Array.isArray(allowed)) continue;
+        var cell = grid.cells[addr(r, col)];
+        var v = cell ? String(displayVal(cell)) : '';
+        if (allowed.indexOf(v) === -1) { show = false; break; }
+      }
+      if (!show) hidden[r] = true;
+    }
+    return hidden;
+  }
+
+  window.wsToggleAutoFilter = function () {
+    var sheet = activeSheet();
+    if (!sheet || isEmbedSheet(sheet)) return;
+    if (sheet.autoFilter) {
+      // Turn off — drop filters and unhide everything.
+      delete sheet.autoFilter;
+      grid.dirty = true;
+      renderGrid();
+      if (grid.selection) selectCell(grid.selection.r, grid.selection.c, !!grid.selEnd);
+      saveWorkspace();
+      return;
+    }
+    // Turn on — span the selection, or the used range for a 1×1 selection.
+    var rng = getSelRange();
+    if (rng && (rng.r1 !== rng.r2 || rng.c1 !== rng.c2)) {
+      sheet.autoFilter = { r1: rng.r1, r2: rng.r2, c1: rng.c1, c2: rng.c2, filters: {} };
+    } else {
+      var used = computeUsedRange();
+      if (!used) { alert('Nothing to filter — the sheet is empty.'); return; }
+      sheet.autoFilter = { r1: used.r1, r2: used.r2, c1: used.c1, c2: used.c2, filters: {} };
+    }
+    grid.dirty = true;
+    renderGrid();
+    if (grid.selection) selectCell(grid.selection.r, grid.selection.c, !!grid.selEnd);
+    saveWorkspace();
+  };
+
+  // Filter dropdown popup for one column.
+  var _filterPopupEl = null;
+  function closeFilterPopup() {
+    if (_filterPopupEl && _filterPopupEl.parentNode) _filterPopupEl.parentNode.removeChild(_filterPopupEl);
+    _filterPopupEl = null;
+    document.removeEventListener('mousedown', _filterOutsideHandler, true);
+  }
+  function _filterOutsideHandler(e) {
+    if (_filterPopupEl && !_filterPopupEl.contains(e.target) &&
+        !(e.target.classList && e.target.classList.contains('ws-filter-btn'))) {
+      closeFilterPopup();
+    }
+  }
+  function openFilterPopup(col, btnEl) {
+    closeFilterPopup();
+    var af = getAutoFilter();
+    if (!af) return;
+    // Collect unique display values for this column across the data rows.
+    var seen = {};
+    var uniques = [];
+    for (var r = af.r1 + 1; r <= af.r2; r++) {
+      var cell = grid.cells[addr(r, col)];
+      var v = cell ? String(displayVal(cell)) : '';
+      if (!(v in seen)) { seen[v] = true; uniques.push(v); }
+    }
+    uniques.sort(function (a, b) {
+      var an = Number(a), bn = Number(b);
+      if (!isNaN(an) && !isNaN(bn) && a !== '' && b !== '') return an - bn;
+      return String(a).localeCompare(String(b));
+    });
+    var current = af.filters[col]; // array of allowed, or undefined = all
+    var pop = document.createElement('div');
+    pop.className = 'ws-filter-popup';
+    pop.style.cssText = 'position:fixed;background:var(--surface,#181820);border:1px solid var(--border,#333);border-radius:6px;box-shadow:0 8px 24px rgba(0,0,0,0.5);z-index:1600;width:220px;font-size:12px;padding:8px;';
+    var optsHtml = uniques.map(function (v, i) {
+      var checked = !current || current.indexOf(v) !== -1;
+      var label = (v === '') ? '(Blanks)' : escapeHTML(v);
+      return '<label style="display:flex;align-items:center;gap:6px;padding:3px 4px;cursor:pointer;">' +
+        '<input type="checkbox" class="ws-filter-opt" data-val="' + escapeHTML(v) + '"' + (checked ? ' checked' : '') + ' /> ' +
+        '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + label + '</span></label>';
+    }).join('');
+    pop.innerHTML =
+      '<div style="display:flex;gap:6px;margin-bottom:6px;">' +
+        '<button class="ws-btn" id="wsFilterSortAsc" style="flex:1;padding:3px 6px;">A→Z</button>' +
+        '<button class="ws-btn" id="wsFilterSortDesc" style="flex:1;padding:3px 6px;">Z→A</button>' +
+      '</div>' +
+      '<label style="display:flex;align-items:center;gap:6px;padding:3px 4px;border-bottom:1px solid var(--grid-border);margin-bottom:4px;cursor:pointer;font-weight:600;">' +
+        '<input type="checkbox" id="wsFilterAll" checked /> (Select All)</label>' +
+      '<div id="wsFilterOpts" style="max-height:200px;overflow-y:auto;">' + optsHtml + '</div>' +
+      '<div style="display:flex;gap:6px;justify-content:flex-end;margin-top:8px;">' +
+        '<button class="ws-btn" id="wsFilterClear" style="padding:3px 8px;">Clear</button>' +
+        '<button class="ws-btn ws-btn-primary" id="wsFilterApply" style="padding:3px 8px;">OK</button>' +
+      '</div>';
+    document.body.appendChild(pop);
+    var rect = btnEl.getBoundingClientRect();
+    var left = Math.min(rect.left, window.innerWidth - 230);
+    pop.style.left = Math.max(4, left) + 'px';
+    pop.style.top = rect.bottom + 'px';
+    _filterPopupEl = pop;
+
+    function syncAll() {
+      var boxes = pop.querySelectorAll('.ws-filter-opt');
+      var all = pop.querySelector('#wsFilterAll');
+      var checkedCount = 0;
+      boxes.forEach(function (b) { if (b.checked) checkedCount++; });
+      all.checked = checkedCount === boxes.length;
+      all.indeterminate = checkedCount > 0 && checkedCount < boxes.length;
+    }
+    pop.querySelector('#wsFilterAll').addEventListener('change', function (e) {
+      pop.querySelectorAll('.ws-filter-opt').forEach(function (b) { b.checked = e.target.checked; });
+    });
+    pop.querySelectorAll('.ws-filter-opt').forEach(function (b) {
+      b.addEventListener('change', syncAll);
+    });
+    syncAll();
+
+    pop.querySelector('#wsFilterApply').addEventListener('click', function () {
+      var boxes = pop.querySelectorAll('.ws-filter-opt');
+      var allowed = [];
+      boxes.forEach(function (b) { if (b.checked) allowed.push(b.dataset.val); });
+      if (allowed.length === uniques.length) {
+        delete af.filters[col]; // all selected = no filter
+      } else {
+        af.filters[col] = allowed;
+      }
+      grid.dirty = true;
+      renderGrid();
+      if (grid.selection) selectCell(grid.selection.r, grid.selection.c, !!grid.selEnd);
+      saveWorkspace();
+      closeFilterPopup();
+    });
+    pop.querySelector('#wsFilterClear').addEventListener('click', function () {
+      delete af.filters[col];
+      grid.dirty = true;
+      renderGrid();
+      if (grid.selection) selectCell(grid.selection.r, grid.selection.c, !!grid.selEnd);
+      saveWorkspace();
+      closeFilterPopup();
+    });
+    pop.querySelector('#wsFilterSortAsc').addEventListener('click', function () {
+      _sortAutoFilterRange(col, 'asc');
+      closeFilterPopup();
+    });
+    pop.querySelector('#wsFilterSortDesc').addEventListener('click', function () {
+      _sortAutoFilterRange(col, 'desc');
+      closeFilterPopup();
+    });
+    setTimeout(function () { document.addEventListener('mousedown', _filterOutsideHandler, true); }, 0);
+  }
+
+  // Sort the AutoFilter data rows by one column, keeping the header fixed.
+  function _sortAutoFilterRange(col, direction) {
+    var af = getAutoFilter();
+    if (!af) return;
+    var startRow = af.r1 + 1;
+    if (startRow >= af.r2) return;
+    pushUndo();
+    var rows = [];
+    for (var r = startRow; r <= af.r2; r++) {
+      var row = [];
+      for (var c = af.c1; c <= af.c2; c++) {
+        var a = addr(r, c);
+        row.push(grid.cells[a] ? Object.assign({}, grid.cells[a]) : null);
+      }
+      rows.push(row);
+    }
+    var colRel = col - af.c1;
+    rows.sort(function (a, b) {
+      var av = a[colRel] ? a[colRel].value : '';
+      var bv = b[colRel] ? b[colRel].value : '';
+      var an = Number(av), bn = Number(bv);
+      var bothNum = !isNaN(an) && !isNaN(bn) && av !== '' && bv !== '';
+      var cmp = bothNum ? (an - bn) : String(av).localeCompare(String(bv));
+      return direction === 'desc' ? -cmp : cmp;
+    });
+    for (var i = 0; i < rows.length; i++) {
+      var rr = startRow + i;
+      for (var cIdx = 0; cIdx < rows[i].length; cIdx++) {
+        var cc = af.c1 + cIdx;
+        var aa = addr(rr, cc);
+        if (rows[i][cIdx]) grid.cells[aa] = rows[i][cIdx];
+        else delete grid.cells[aa];
+      }
+    }
+    grid.dirty = true;
+    recalcAll();
+    renderGrid();
+    saveWorkspace();
+  }
+
   // ── AutoSum ───────────────────────────────────────────────
   // Inserts =SUM(...) at the active cell, auto-detecting a contiguous
   // range of numeric cells immediately above (preferred) or to the left.
@@ -4925,6 +6277,755 @@
     const status = document.getElementById('wsFindStatus');
     if (status) status.textContent = 'Replaced ' + count + ' match' + (count === 1 ? '' : 'es') + '.';
     _findState.matches = [];
+  };
+
+  // ── Custom Number Format editor ───────────────────────────
+  // Excel-style "Format Cells → Number" dialog. Presets cover the common
+  // cases; a custom box accepts any format string our applyExcelNumFmt
+  // renderer understands (sections, digit placeholders, color brackets,
+  // date tokens). Writes cell.numFmt onto every cell in the selection and
+  // clears the legacy cell.fmt enum so the two systems never fight.
+  var NUMFMT_PRESETS = [
+    { label: 'General',           code: '' },
+    { label: 'Number',            code: '#,##0.00' },
+    { label: 'Number (no comma)', code: '0.00' },
+    { label: 'Currency',          code: '"$"#,##0.00' },
+    { label: 'Currency (red −)',  code: '"$"#,##0.00;[Red]-"$"#,##0.00' },
+    { label: 'Accounting',        code: '_("$"* #,##0.00_);_("$"* (#,##0.00);_("$"* "-"??_)' },
+    { label: 'Percent',           code: '0.00%' },
+    { label: 'Percent (0 dp)',    code: '0%' },
+    { label: 'Thousands',         code: '#,##0' },
+    { label: 'Scientific',        code: '0.00E+00' },
+    { label: 'Short Date',        code: 'm/d/yyyy' },
+    { label: 'Long Date',         code: 'mmmm d, yyyy' },
+    { label: 'Time',              code: 'h:mm:ss AM/PM' },
+    { label: 'Date & Time',       code: 'm/d/yyyy h:mm' }
+  ];
+
+  function _numFmtSampleValue() {
+    // Prefer the active cell's numeric value so the preview is meaningful;
+    // otherwise fall back to a representative number.
+    if (grid && grid.selection) {
+      var c = getCell(grid.selection.r, grid.selection.c);
+      if (c && typeof c.value === 'number' && isFinite(c.value)) return c.value;
+    }
+    return 1234.567;
+  }
+
+  function _numFmtRenderPreview() {
+    var input = document.getElementById('wsNumFmtCode');
+    var out = document.getElementById('wsNumFmtPreview');
+    if (!input || !out) return;
+    var code = input.value || '';
+    var sample = _numFmtSampleValue();
+    var shown;
+    if (!code) {
+      shown = (typeof sample === 'number') ? String(sample) : String(sample || '');
+    } else {
+      try {
+        var r = applyExcelNumFmt(sample, code);
+        shown = (r == null) ? '(invalid format)' : r;
+      } catch (e) {
+        shown = '(invalid format)';
+      }
+    }
+    out.textContent = shown;
+  }
+
+  function openNumFmtEditor() {
+    var existing = document.getElementById('wsNumFmt');
+    if (existing) { existing.style.display = 'block'; }
+    else {
+      var pop = document.createElement('div');
+      pop.id = 'wsNumFmt';
+      pop.style.cssText = 'position:fixed;top:80px;right:30px;background:var(--surface,#181820);border:1px solid var(--border,#333);border-radius:8px;padding:14px 16px;z-index:1500;box-shadow:0 8px 24px rgba(0,0,0,0.5);width:320px;font-size:12px;';
+      var presetOpts = NUMFMT_PRESETS.map(function(p, i) {
+        return '<option value="' + i + '">' + escapeHTML(p.label) + '</option>';
+      }).join('');
+      pop.innerHTML =
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">' +
+          '<strong style="font-size:13px;">Number Format</strong>' +
+          '<button class="ws-btn" onclick="document.getElementById(\'wsNumFmt\').style.display=\'none\';" style="padding:2px 8px;">×</button>' +
+        '</div>' +
+        '<div style="display:flex;flex-direction:column;gap:8px;">' +
+          '<label style="font-size:11px;color:var(--text-dim,#aaa);">Preset' +
+            '<select id="wsNumFmtPreset" style="width:100%;margin-top:3px;padding:6px 8px;border:1px solid var(--grid-border);border-radius:4px;background:var(--card-bg,#0c0c14);color:var(--text);">' +
+              presetOpts +
+            '</select>' +
+          '</label>' +
+          '<label style="font-size:11px;color:var(--text-dim,#aaa);">Format code' +
+            '<input type="text" id="wsNumFmtCode" placeholder="e.g. #,##0.00" style="width:100%;margin-top:3px;padding:6px 10px;border:1px solid var(--grid-border);border-radius:4px;background:var(--card-bg,#0c0c14);color:var(--text);font-family:monospace;" />' +
+          '</label>' +
+          '<div style="font-size:11px;color:var(--text-dim,#aaa);">Preview</div>' +
+          '<div id="wsNumFmtPreview" style="padding:8px 10px;border:1px dashed var(--grid-border);border-radius:4px;background:var(--card-bg,#0c0c14);color:var(--text);min-height:18px;font-family:monospace;text-align:right;">—</div>' +
+          '<div style="display:flex;gap:6px;justify-content:flex-end;margin-top:4px;">' +
+            '<button class="ws-btn" onclick="window.wsClearNumFmt()">Clear</button>' +
+            '<button class="ws-btn ws-btn-primary" onclick="window.wsApplyNumFmt()">Apply</button>' +
+          '</div>' +
+        '</div>';
+      document.body.appendChild(pop);
+      var presetSel = document.getElementById('wsNumFmtPreset');
+      var codeInput = document.getElementById('wsNumFmtCode');
+      presetSel.addEventListener('change', function() {
+        var p = NUMFMT_PRESETS[parseInt(presetSel.value, 10)];
+        if (p) codeInput.value = p.code;
+        _numFmtRenderPreview();
+      });
+      codeInput.addEventListener('input', _numFmtRenderPreview);
+    }
+    // Seed the code box from the active cell's current numFmt (if any).
+    var codeBox = document.getElementById('wsNumFmtCode');
+    if (codeBox && grid && grid.selection) {
+      var cell = getCell(grid.selection.r, grid.selection.c);
+      codeBox.value = (cell && cell.numFmt) ? cell.numFmt : '';
+    }
+    _numFmtRenderPreview();
+    if (codeBox) codeBox.focus();
+  }
+
+  window.wsOpenNumFmt = openNumFmtEditor;
+
+  window.wsApplyNumFmt = function() {
+    var input = document.getElementById('wsNumFmtCode');
+    if (!input) return;
+    var code = (input.value || '').trim();
+    var rng = getSelRange();
+    if (!rng) return;
+    pushUndo();
+    for (var r = rng.r1; r <= rng.r2; r++) {
+      for (var c = rng.c1; c <= rng.c2; c++) {
+        var cell = getCell(r, c);
+        if (code) {
+          cell.numFmt = code;
+          // The custom string supersedes the legacy enum + decimals.
+          if (cell.fmt) delete cell.fmt;
+          if (cell.decimals != null) delete cell.decimals;
+        } else {
+          // Empty code === General: strip any custom format.
+          if (cell.numFmt) delete cell.numFmt;
+        }
+      }
+    }
+    grid.dirty = true;
+    renderGrid();
+    if (grid.selection) selectCell(grid.selection.r, grid.selection.c, !!grid.selEnd);
+    saveWorkspace();
+  };
+
+  window.wsClearNumFmt = function() {
+    var rng = getSelRange();
+    if (!rng) return;
+    pushUndo();
+    for (var r = rng.r1; r <= rng.r2; r++) {
+      for (var c = rng.c1; c <= rng.c2; c++) {
+        var cell = getCell(r, c);
+        if (cell.numFmt) delete cell.numFmt;
+      }
+    }
+    var box = document.getElementById('wsNumFmtCode');
+    if (box) box.value = '';
+    _numFmtRenderPreview();
+    grid.dirty = true;
+    renderGrid();
+    if (grid.selection) selectCell(grid.selection.r, grid.selection.c, !!grid.selEnd);
+    saveWorkspace();
+  };
+
+  // ── Named Ranges editor (Phase 2.7) ───────────────────────
+  // A floating manager: lists every workbook-scoped name with its ref,
+  // owning sheet, and optional comment; lets you add a new name (seeded
+  // from the current selection) and delete existing ones. Names resolve
+  // inside formulas via applyNamedRanges() (see evaluate()).
+
+  // Build an A1 reference string for the current selection, qualified
+  // with the active sheet name so the name still resolves if the user
+  // is on a different sheet when the formula recalculates.
+  function _selectionRefString() {
+    var rng = getSelRange();
+    if (!rng) return '';
+    var a = colLetter(rng.c1) + (rng.r1 + 1);
+    var ref = (rng.r1 === rng.r2 && rng.c1 === rng.c2)
+      ? a
+      : a + ':' + colLetter(rng.c2) + (rng.r2 + 1);
+    var sh = activeSheet();
+    if (sh) {
+      var nm = /\s/.test(sh.name) ? "'" + sh.name + "'" : sh.name;
+      return nm + '!' + ref;
+    }
+    return ref;
+  }
+
+  // Parse a bare A1 ref ("B2" or "A1:C5") into a normalized bounding
+  // box {r1,c1,r2,c2}, or null if unparseable.
+  function _refToBox(refStr) {
+    if (!refStr) return null;
+    var parts = String(refStr).replace(/\$/g, '').split(':');
+    var a = parseAddr(parts[0].toUpperCase());
+    if (!a) return null;
+    var b = parts[1] ? parseAddr(parts[1].toUpperCase()) : a;
+    if (!b) return null;
+    return {
+      r1: Math.min(a.r, b.r), c1: Math.min(a.c, b.c),
+      r2: Math.max(a.r, b.r), c2: Math.max(a.c, b.c)
+    };
+  }
+
+  // If the current selection on the active sheet exactly matches a named
+  // range, return that name (original casing) for display in the Name Box.
+  function _nameForCurrentSelection(rng) {
+    if (!rng) return null;
+    var names = workbook.namedRanges;
+    if (!names) return null;
+    var activeId = workbook.activeSheetId;
+    var keys = Object.keys(names);
+    for (var i = 0; i < keys.length; i++) {
+      var nr = names[keys[i]];
+      var nrSheet = nr.sheetId || activeId;
+      if (nrSheet !== activeId) continue;
+      var box = _refToBox(nr.ref);
+      if (!box) continue;
+      if (box.r1 === rng.r1 && box.c1 === rng.c1 && box.r2 === rng.r2 && box.c2 === rng.c2) {
+        return nr.name || keys[i];
+      }
+    }
+    return null;
+  }
+
+  // Handle Enter in the Name Box: navigate to a cell/range/named range,
+  // or define a new name for the current selection when the typed token
+  // is a fresh, valid name. Mirrors Excel's Name Box behavior.
+  function _handleNameBoxEntry(rawVal) {
+    var val = (rawVal || '').trim();
+    if (!val) return;
+    var names = workbook.namedRanges || {};
+    // 1. Existing named range → go to it.
+    if (Object.prototype.hasOwnProperty.call(names, val.toUpperCase())) {
+      window.wsGotoNamedRange(encodeURIComponent(val.toUpperCase()));
+      return;
+    }
+    // 2. Sheet-qualified or bare A1 cell / range → navigate.
+    var sheetId = null, bareRef = val;
+    var bang = val.lastIndexOf('!');
+    if (bang !== -1) {
+      var sheetName = val.slice(0, bang).replace(/^'|'$/g, '');
+      bareRef = val.slice(bang + 1);
+      var sh = findSheetByName(sheetName);
+      if (sh) { sheetId = sh.id; }
+    }
+    var box = _refToBox(bareRef);
+    if (box) {
+      if (sheetId && sheetId !== workbook.activeSheetId) switchSheet(sheetId);
+      selectCell(box.r1, box.c1);
+      if (box.r2 !== box.r1 || box.c2 !== box.c1) {
+        grid.selEnd = { r: box.r2, c: box.c2 };
+        renderSelectionClasses();
+        updateQuickCalc();
+      }
+      return;
+    }
+    // 3. A fresh, valid name → define it for the current selection.
+    if (!validateRangeName(val)) {
+      if (!workbook.namedRanges) workbook.namedRanges = {};
+      workbook.namedRanges[val.toUpperCase()] = {
+        name: val,
+        ref: _selectionRefStringBare(),
+        sheetId: workbook.activeSheetId,
+        comment: ''
+      };
+      recalcAll();
+      renderGrid();
+      if (grid.selection) selectCell(grid.selection.r, grid.selection.c, !!grid.selEnd);
+      saveWorkspace();
+      return;
+    }
+    // Otherwise: nothing matched — restore the box to the current address.
+    if (grid.selection) selectCell(grid.selection.r, grid.selection.c, !!grid.selEnd);
+  }
+
+  // Like _selectionRefString but without the sheet prefix (the name
+  // stores sheetId separately, so the ref stays bare).
+  function _selectionRefStringBare() {
+    var rng = getSelRange();
+    if (!rng) return 'A1';
+    var a = colLetter(rng.c1) + (rng.r1 + 1);
+    return (rng.r1 === rng.r2 && rng.c1 === rng.c2)
+      ? a
+      : a + ':' + colLetter(rng.c2) + (rng.r2 + 1);
+  }
+
+  // Re-render just the list portion (called after add/delete so the
+  // modal updates in place without a full reopen).
+  function _renderNamedRangesList() {
+    var listEl = document.getElementById('wsNRList');
+    if (!listEl) return;
+    var names = workbook.namedRanges || {};
+    var keys = Object.keys(names).sort();
+    if (!keys.length) {
+      listEl.innerHTML = '<div style="padding:10px;color:var(--text-dim,#aaa);text-align:center;font-style:italic;">No named ranges yet.</div>';
+      return;
+    }
+    listEl.innerHTML = keys.map(function(k) {
+      var nr = names[k];
+      var displayName = nr.name || k;
+      var sheetLabel = '';
+      if (nr.sheetId) {
+        var sh = workbook.sheets.find(function(s){ return s.id === nr.sheetId; });
+        if (sh) sheetLabel = sh.name;
+      }
+      var refDisplay = escapeHTML(nr.ref) + (sheetLabel ? ' <span style="color:var(--text-dim,#888);">(' + escapeHTML(sheetLabel) + ')</span>' : '');
+      return '<div style="display:flex;align-items:center;gap:8px;padding:5px 4px;border-bottom:1px solid var(--grid-border);">' +
+        '<div style="flex:0 0 34%;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escapeHTML(displayName) + (nr.comment ? ' — ' + escapeHTML(nr.comment) : '') + '">' + escapeHTML(displayName) + '</div>' +
+        '<div style="flex:1;font-family:monospace;font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escapeHTML(nr.ref) + '">' + refDisplay + '</div>' +
+        '<button class="ws-btn" title="Go to" onclick="window.wsGotoNamedRange(\'' + encodeURIComponent(k) + '\')" style="padding:1px 7px;">&#x2197;</button>' +
+        '<button class="ws-btn" title="Delete" onclick="window.wsDeleteNamedRange(\'' + encodeURIComponent(k) + '\')" style="padding:1px 7px;">×</button>' +
+      '</div>';
+    }).join('');
+  }
+
+  function openNamedRangesEditor() {
+    var existing = document.getElementById('wsNamedRanges');
+    if (existing) { existing.style.display = 'block'; }
+    else {
+      var pop = document.createElement('div');
+      pop.id = 'wsNamedRanges';
+      pop.style.cssText = 'position:fixed;top:80px;right:30px;background:var(--surface,#181820);border:1px solid var(--border,#333);border-radius:8px;padding:14px 16px;z-index:1500;box-shadow:0 8px 24px rgba(0,0,0,0.5);width:380px;font-size:12px;';
+      pop.innerHTML =
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">' +
+          '<strong style="font-size:13px;">Named Ranges</strong>' +
+          '<button class="ws-btn" onclick="document.getElementById(\'wsNamedRanges\').style.display=\'none\';" style="padding:2px 8px;">×</button>' +
+        '</div>' +
+        '<div id="wsNRList" style="max-height:200px;overflow:auto;margin-bottom:12px;border:1px solid var(--grid-border);border-radius:4px;"></div>' +
+        '<div style="font-size:11px;color:var(--text-dim,#aaa);margin-bottom:4px;">New name</div>' +
+        '<div style="display:flex;flex-direction:column;gap:8px;">' +
+          '<input type="text" id="wsNRName" placeholder="e.g. TaxRate" autocomplete="off" style="width:100%;padding:6px 10px;border:1px solid var(--grid-border);border-radius:4px;background:var(--card-bg,#0c0c14);color:var(--text);" />' +
+          '<div style="display:flex;gap:6px;align-items:center;">' +
+            '<input type="text" id="wsNRRef" placeholder="Sheet1!A1:A10" style="flex:1;padding:6px 10px;border:1px solid var(--grid-border);border-radius:4px;background:var(--card-bg,#0c0c14);color:var(--text);font-family:monospace;" />' +
+            '<button class="ws-btn" title="Use current selection" onclick="window.wsNRUseSelection()" style="white-space:nowrap;">Use selection</button>' +
+          '</div>' +
+          '<input type="text" id="wsNRComment" placeholder="Comment (optional)" style="width:100%;padding:6px 10px;border:1px solid var(--grid-border);border-radius:4px;background:var(--card-bg,#0c0c14);color:var(--text);" />' +
+          '<div id="wsNRError" style="color:#e06c6c;font-size:11px;min-height:14px;"></div>' +
+          '<div style="display:flex;gap:6px;justify-content:flex-end;">' +
+            '<button class="ws-btn ws-btn-primary" onclick="window.wsAddNamedRange()">Add</button>' +
+          '</div>' +
+        '</div>';
+      document.body.appendChild(pop);
+      var nameInput = document.getElementById('wsNRName');
+      if (nameInput) {
+        nameInput.addEventListener('keydown', function(e) {
+          if (e.key === 'Enter') { e.preventDefault(); window.wsAddNamedRange(); }
+        });
+      }
+    }
+    // Seed the ref box with the current selection each open.
+    var refBox = document.getElementById('wsNRRef');
+    if (refBox && !refBox.value) refBox.value = _selectionRefString();
+    _renderNamedRangesList();
+    var nb = document.getElementById('wsNRName');
+    if (nb) nb.focus();
+  }
+
+  window.wsOpenNamedRanges = openNamedRangesEditor;
+
+  window.wsNRUseSelection = function() {
+    var refBox = document.getElementById('wsNRRef');
+    if (refBox) refBox.value = _selectionRefString();
+  };
+
+  window.wsAddNamedRange = function() {
+    var nameEl = document.getElementById('wsNRName');
+    var refEl = document.getElementById('wsNRRef');
+    var commentEl = document.getElementById('wsNRComment');
+    var errEl = document.getElementById('wsNRError');
+    if (!nameEl || !refEl) return;
+    var name = (nameEl.value || '').trim();
+    var ref = (refEl.value || '').trim();
+    var comment = commentEl ? (commentEl.value || '').trim() : '';
+    function showErr(msg) { if (errEl) errEl.textContent = msg; }
+    var nameErr = validateRangeName(name);
+    if (nameErr) { showErr(nameErr); return; }
+    if (!ref) { showErr('Reference is required.'); return; }
+    // If the ref carries a sheet prefix, split it off and resolve to a
+    // sheetId so the name still works after a sheet rename.
+    var sheetId = null;
+    var bareRef = ref;
+    var bang = ref.lastIndexOf('!');
+    if (bang !== -1) {
+      var sheetName = ref.slice(0, bang).replace(/^'|'$/g, '');
+      bareRef = ref.slice(bang + 1);
+      var sh = findSheetByName(sheetName);
+      if (!sh) { showErr('Unknown sheet: ' + sheetName); return; }
+      sheetId = sh.id;
+    }
+    // Validate the A1 portion (single cell or range).
+    var parts = bareRef.replace(/\$/g, '').split(':');
+    var a = parseAddr(parts[0].toUpperCase());
+    var b = parts[1] ? parseAddr(parts[1].toUpperCase()) : a;
+    if (!a || !b) { showErr('Invalid reference: ' + ref); return; }
+    if (!workbook.namedRanges) workbook.namedRanges = {};
+    workbook.namedRanges[name.toUpperCase()] = {
+      name: name,
+      ref: bareRef.replace(/\$/g, ''),
+      sheetId: sheetId,
+      comment: comment
+    };
+    showErr('');
+    nameEl.value = '';
+    if (commentEl) commentEl.value = '';
+    _renderNamedRangesList();
+    recalcAll();
+    renderGrid();
+    if (grid.selection) selectCell(grid.selection.r, grid.selection.c, !!grid.selEnd);
+    saveWorkspace();
+  };
+
+  window.wsDeleteNamedRange = function(encKey) {
+    var key = decodeURIComponent(encKey);
+    if (workbook.namedRanges && workbook.namedRanges[key]) {
+      delete workbook.namedRanges[key];
+      _renderNamedRangesList();
+      recalcAll();
+      renderGrid();
+      if (grid.selection) selectCell(grid.selection.r, grid.selection.c, !!grid.selEnd);
+      saveWorkspace();
+    }
+  };
+
+  // Jump to a named range: switch to its sheet (if qualified) and select
+  // the referenced cell/range.
+  window.wsGotoNamedRange = function(encKey) {
+    var key = decodeURIComponent(encKey);
+    var nr = workbook.namedRanges && workbook.namedRanges[key];
+    if (!nr) return;
+    if (nr.sheetId && nr.sheetId !== workbook.activeSheetId) {
+      var sh = workbook.sheets.find(function(s){ return s.id === nr.sheetId; });
+      if (sh) switchSheet(sh.id);
+    }
+    var parts = String(nr.ref).replace(/\$/g, '').split(':');
+    var a = parseAddr(parts[0].toUpperCase());
+    if (!a) return;
+    var b = parts[1] ? parseAddr(parts[1].toUpperCase()) : a;
+    selectCell(a.r, a.c);
+    if (b && (b.r !== a.r || b.c !== a.c)) {
+      grid.selEnd = { r: b.r, c: b.c };
+      renderSelectionClasses();
+    }
+  };
+
+  // ── Data Validation (Phase 2.3) ───────────────────────────
+  // Each validated cell carries cell.validation:
+  //   { type:'list', values:[...] }            explicit dropdown options
+  //   { type:'list', source:'A1:A10' }          options pulled from a range
+  //   { type:'whole'|'decimal', op, min, max }  numeric rule
+  //   { type:'textLength', op, min, max }        length rule
+  //   { type:'date', op, min, max }              date rule (ISO strings)
+  // A failing entry sets cell.validation._invalid (red box) but is NOT
+  // rejected — Excel's "Warning"/"Information" style, which is the least
+  // destructive for an estimator typing fast.
+
+  // Resolve a list validation's options to an array of display strings,
+  // pulling from an explicit values[] array or a range source like A1:A10.
+  function resolveValidationOptions(validation) {
+    if (!validation) return [];
+    if (Array.isArray(validation.values) && validation.values.length) {
+      return validation.values.slice();
+    }
+    if (validation.source) {
+      var m = String(validation.source).trim().replace(/\$/g, '');
+      var parts = m.split(':');
+      var a = parseAddr(parts[0]);
+      var b = parts[1] ? parseAddr(parts[1]) : a;
+      if (!a || !b) return [];
+      var r1 = Math.min(a.r, b.r), r2 = Math.max(a.r, b.r);
+      var c1 = Math.min(a.c, b.c), c2 = Math.max(a.c, b.c);
+      var out = [];
+      for (var r = r1; r <= r2; r++) {
+        for (var c = c1; c <= c2; c++) {
+          var cell = grid.cells[addr(r, c)];
+          var v = cell ? displayVal(cell) : '';
+          if (v !== '' && v != null) out.push(String(v));
+        }
+      }
+      return out;
+    }
+    return [];
+  }
+
+  // Validate a raw/typed value against a cell's validation rule.
+  // Returns true when valid (or when there's no rule).
+  function validateCellValue(validation, rawValue, numericValue) {
+    if (!validation || !validation.type) return true;
+    var t = validation.type;
+    if (t === 'list') {
+      var opts = resolveValidationOptions(validation);
+      if (!opts.length) return true; // nothing to check against
+      var s = String(rawValue == null ? '' : rawValue).trim();
+      if (s === '') return true; // empty is allowed; use a separate "required" if needed
+      return opts.some(function (o) { return String(o).trim() === s; });
+    }
+    var num = (typeof numericValue === 'number' && isFinite(numericValue))
+      ? numericValue
+      : parseFloat(rawValue);
+    if (t === 'whole' || t === 'decimal') {
+      if (isNaN(num)) return false;
+      if (t === 'whole' && Math.floor(num) !== num) return false;
+      return _checkNumericRule(validation, num);
+    }
+    if (t === 'textLength') {
+      var len = String(rawValue == null ? '' : rawValue).length;
+      return _checkNumericRule(validation, len);
+    }
+    if (t === 'date') {
+      var d = Date.parse(rawValue);
+      if (isNaN(d)) return false;
+      var lo = validation.min != null ? Date.parse(validation.min) : null;
+      var hi = validation.max != null ? Date.parse(validation.max) : null;
+      return _checkRangeRule(validation.op, d, lo, hi);
+    }
+    return true;
+  }
+
+  function _checkNumericRule(validation, n) {
+    var lo = validation.min != null ? parseFloat(validation.min) : null;
+    var hi = validation.max != null ? parseFloat(validation.max) : null;
+    return _checkRangeRule(validation.op, n, lo, hi);
+  }
+  function _checkRangeRule(op, n, lo, hi) {
+    switch (op) {
+      case 'between':    return (lo == null || n >= lo) && (hi == null || n <= hi);
+      case 'notBetween': return !((lo == null || n >= lo) && (hi == null || n <= hi));
+      case 'eq':  return lo == null || n === lo;
+      case 'ne':  return lo == null || n !== lo;
+      case 'gt':  return lo == null || n > lo;
+      case 'gte': return lo == null || n >= lo;
+      case 'lt':  return lo == null || n < lo;
+      case 'lte': return lo == null || n <= lo;
+      default:    return true;
+    }
+  }
+
+  // Re-evaluate a cell's _invalid flag after its value changes.
+  function refreshCellValidity(r, c) {
+    var cell = grid.cells[addr(r, c)];
+    if (!cell || !cell.validation) return;
+    var ok = validateCellValue(cell.validation, cell.raw, cell.value);
+    if (ok) { if (cell.validation._invalid) delete cell.validation._invalid; }
+    else cell.validation._invalid = true;
+  }
+
+  // Floating dropdown list for list-type validations.
+  var _validationDropdownEl = null;
+  function closeValidationDropdown() {
+    if (_validationDropdownEl && _validationDropdownEl.parentNode) {
+      _validationDropdownEl.parentNode.removeChild(_validationDropdownEl);
+    }
+    _validationDropdownEl = null;
+  }
+  function openValidationDropdown(r, c, td) {
+    closeValidationDropdown();
+    var cell = grid.cells[addr(r, c)];
+    if (!cell || !cell.validation || cell.validation.type !== 'list') return;
+    var opts = resolveValidationOptions(cell.validation);
+    if (!opts.length) return;
+    var cur = displayVal(cell);
+    var list = document.createElement('div');
+    list.className = 'ws-validation-list';
+    opts.forEach(function (o) {
+      var item = document.createElement('div');
+      item.className = 'ws-validation-opt' + (String(o) === String(cur) ? ' ws-vl-active' : '');
+      item.textContent = o;
+      item.addEventListener('mousedown', function (ev) {
+        ev.preventDefault();
+        ev.stopPropagation();
+        pushUndo();
+        var tgt = getCell(r, c);
+        tgt.raw = String(o);
+        delete tgt.formula;
+        grid.dirty = true;
+        recalcAll();
+        refreshCellValidity(r, c);
+        renderGrid();
+        selectCell(r, c);
+        pushLinkedValues();
+        saveWorkspace();
+        closeValidationDropdown();
+      });
+      list.appendChild(item);
+    });
+    document.body.appendChild(list);
+    var rect = td.getBoundingClientRect();
+    list.style.left = rect.left + 'px';
+    list.style.top = rect.bottom + 'px';
+    list.style.minWidth = rect.width + 'px';
+    _validationDropdownEl = list;
+    // Dismiss on outside click / escape.
+    setTimeout(function () {
+      document.addEventListener('mousedown', _validationOutsideHandler, true);
+      document.addEventListener('keydown', _validationKeyHandler, true);
+    }, 0);
+  }
+  function _validationOutsideHandler(e) {
+    if (_validationDropdownEl && !_validationDropdownEl.contains(e.target) &&
+        !(e.target.classList && e.target.classList.contains('ws-validation-caret'))) {
+      closeValidationDropdown();
+      document.removeEventListener('mousedown', _validationOutsideHandler, true);
+      document.removeEventListener('keydown', _validationKeyHandler, true);
+    }
+  }
+  function _validationKeyHandler(e) {
+    if (e.key === 'Escape') {
+      closeValidationDropdown();
+      document.removeEventListener('mousedown', _validationOutsideHandler, true);
+      document.removeEventListener('keydown', _validationKeyHandler, true);
+    }
+  }
+
+  // Data Validation editor modal.
+  function openDataValidationEditor() {
+    var existing = document.getElementById('wsDataValidation');
+    if (existing) { existing.style.display = 'block'; }
+    else {
+      var pop = document.createElement('div');
+      pop.id = 'wsDataValidation';
+      pop.style.cssText = 'position:fixed;top:80px;right:30px;background:var(--surface,#181820);border:1px solid var(--border,#333);border-radius:8px;padding:14px 16px;z-index:1500;box-shadow:0 8px 24px rgba(0,0,0,0.5);width:330px;font-size:12px;';
+      pop.innerHTML =
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">' +
+          '<strong style="font-size:13px;">Data Validation</strong>' +
+          '<button class="ws-btn" onclick="document.getElementById(\'wsDataValidation\').style.display=\'none\';" style="padding:2px 8px;">×</button>' +
+        '</div>' +
+        '<div style="display:flex;flex-direction:column;gap:8px;">' +
+          '<label style="font-size:11px;color:var(--text-dim,#aaa);">Allow' +
+            '<select id="wsDvType" style="width:100%;margin-top:3px;padding:6px 8px;border:1px solid var(--grid-border);border-radius:4px;background:var(--card-bg,#0c0c14);color:var(--text);">' +
+              '<option value="list">List (dropdown)</option>' +
+              '<option value="whole">Whole number</option>' +
+              '<option value="decimal">Decimal</option>' +
+              '<option value="textLength">Text length</option>' +
+              '<option value="date">Date</option>' +
+            '</select>' +
+          '</label>' +
+          '<div id="wsDvListWrap">' +
+            '<label style="font-size:11px;color:var(--text-dim,#aaa);">Options — comma-separated, or a range like A1:A10' +
+              '<input type="text" id="wsDvList" placeholder="Yes, No, Maybe   (or)   A1:A10" style="width:100%;margin-top:3px;padding:6px 10px;border:1px solid var(--grid-border);border-radius:4px;background:var(--card-bg,#0c0c14);color:var(--text);" />' +
+            '</label>' +
+          '</div>' +
+          '<div id="wsDvRuleWrap" style="display:none;flex-direction:column;gap:8px;">' +
+            '<label style="font-size:11px;color:var(--text-dim,#aaa);">Condition' +
+              '<select id="wsDvOp" style="width:100%;margin-top:3px;padding:6px 8px;border:1px solid var(--grid-border);border-radius:4px;background:var(--card-bg,#0c0c14);color:var(--text);">' +
+                '<option value="between">between</option>' +
+                '<option value="notBetween">not between</option>' +
+                '<option value="eq">equal to</option>' +
+                '<option value="ne">not equal to</option>' +
+                '<option value="gt">greater than</option>' +
+                '<option value="gte">greater than or equal to</option>' +
+                '<option value="lt">less than</option>' +
+                '<option value="lte">less than or equal to</option>' +
+              '</select>' +
+            '</label>' +
+            '<div style="display:flex;gap:8px;">' +
+              '<label style="font-size:11px;color:var(--text-dim,#aaa);flex:1;"><span id="wsDvMinLabel">Minimum</span>' +
+                '<input type="text" id="wsDvMin" style="width:100%;margin-top:3px;padding:6px 10px;border:1px solid var(--grid-border);border-radius:4px;background:var(--card-bg,#0c0c14);color:var(--text);" />' +
+              '</label>' +
+              '<label style="font-size:11px;color:var(--text-dim,#aaa);flex:1;" id="wsDvMaxWrap"><span id="wsDvMaxLabel">Maximum</span>' +
+                '<input type="text" id="wsDvMax" style="width:100%;margin-top:3px;padding:6px 10px;border:1px solid var(--grid-border);border-radius:4px;background:var(--card-bg,#0c0c14);color:var(--text);" />' +
+              '</label>' +
+            '</div>' +
+          '</div>' +
+          '<div style="display:flex;gap:6px;justify-content:flex-end;margin-top:4px;">' +
+            '<button class="ws-btn" onclick="window.wsClearDataValidation()">Clear</button>' +
+            '<button class="ws-btn ws-btn-primary" onclick="window.wsApplyDataValidation()">Apply</button>' +
+          '</div>' +
+        '</div>';
+      document.body.appendChild(pop);
+      var typeSel = document.getElementById('wsDvType');
+      var opSel = document.getElementById('wsDvOp');
+      function syncDvUi() {
+        var t = typeSel.value;
+        document.getElementById('wsDvListWrap').style.display = (t === 'list') ? 'block' : 'none';
+        document.getElementById('wsDvRuleWrap').style.display = (t === 'list') ? 'none' : 'flex';
+        var op = opSel.value;
+        var twoArg = (op === 'between' || op === 'notBetween');
+        document.getElementById('wsDvMaxWrap').style.display = twoArg ? 'block' : 'none';
+        document.getElementById('wsDvMinLabel').textContent = twoArg ? 'Minimum' : 'Value';
+      }
+      typeSel.addEventListener('change', syncDvUi);
+      opSel.addEventListener('change', syncDvUi);
+      syncDvUi();
+    }
+    // Seed from the active cell's existing rule.
+    if (grid && grid.selection) {
+      var cell = grid.cells[addr(grid.selection.r, grid.selection.c)];
+      var v = cell && cell.validation;
+      if (v) {
+        document.getElementById('wsDvType').value = v.type || 'list';
+        if (v.type === 'list') {
+          document.getElementById('wsDvList').value = v.source || (Array.isArray(v.values) ? v.values.join(', ') : '');
+        } else {
+          if (v.op) document.getElementById('wsDvOp').value = v.op;
+          document.getElementById('wsDvMin').value = (v.min != null ? v.min : '');
+          document.getElementById('wsDvMax').value = (v.max != null ? v.max : '');
+        }
+      }
+      var ev = new Event('change');
+      document.getElementById('wsDvType').dispatchEvent(ev);
+    }
+    document.getElementById('wsDvType').focus();
+  }
+  window.wsOpenDataValidation = openDataValidationEditor;
+
+  window.wsApplyDataValidation = function () {
+    var rng = getSelRange();
+    if (!rng) return;
+    var t = document.getElementById('wsDvType').value;
+    var validation;
+    if (t === 'list') {
+      var raw = (document.getElementById('wsDvList').value || '').trim();
+      if (!raw) { alert('Enter dropdown options or a range.'); return; }
+      // A bare range like A1:A10 → source; otherwise treat as comma list.
+      if (/^[A-Za-z]+\$?\d+(:\$?[A-Za-z]+\$?\d+)?$/.test(raw)) {
+        validation = { type: 'list', source: raw.toUpperCase() };
+      } else {
+        var values = raw.split(',').map(function (s) { return s.trim(); }).filter(function (s) { return s !== ''; });
+        validation = { type: 'list', values: values };
+      }
+    } else {
+      var op = document.getElementById('wsDvOp').value;
+      var min = (document.getElementById('wsDvMin').value || '').trim();
+      var max = (document.getElementById('wsDvMax').value || '').trim();
+      validation = { type: t, op: op };
+      if (min !== '') validation.min = min;
+      if (max !== '') validation.max = max;
+    }
+    pushUndo();
+    for (var r = rng.r1; r <= rng.r2; r++) {
+      for (var c = rng.c1; c <= rng.c2; c++) {
+        var cell = getCell(r, c);
+        cell.validation = JSON.parse(JSON.stringify(validation));
+        refreshCellValidity(r, c);
+      }
+    }
+    grid.dirty = true;
+    renderGrid();
+    if (grid.selection) selectCell(grid.selection.r, grid.selection.c, !!grid.selEnd);
+    saveWorkspace();
+    var modal = document.getElementById('wsDataValidation');
+    if (modal) modal.style.display = 'none';
+  };
+
+  window.wsClearDataValidation = function () {
+    var rng = getSelRange();
+    if (!rng) return;
+    pushUndo();
+    for (var r = rng.r1; r <= rng.r2; r++) {
+      for (var c = rng.c1; c <= rng.c2; c++) {
+        var cell = getCell(r, c);
+        if (cell.validation) delete cell.validation;
+      }
+    }
+    grid.dirty = true;
+    renderGrid();
+    if (grid.selection) selectCell(grid.selection.r, grid.selection.c, !!grid.selEnd);
+    saveWorkspace();
+    var modal = document.getElementById('wsDataValidation');
+    if (modal) modal.style.display = 'none';
   };
 
   // ── Freeze Panes ──────────────────────────────────────────
@@ -5090,6 +7191,333 @@
     if (!file) return;
     handleXlsxImport(file);
   };
+
+  // ─────────────────────────────────────────────────────────────────
+  // Phase 1 — XLSX / CSV export
+  //
+  // Round-trips the workbook out to Excel via SheetJS (the same lib
+  // that powers import). Closes the "data hostage" gap the audit
+  // flagged: PMs can now take their workspace into Excel desktop,
+  // hand it off to a sub or a homeowner, or attach it to an email
+  // without retyping.
+  //
+  // What's preserved:
+  //   - Cell values + formulas (formulas as SheetJS `f`, values as `v`)
+  //   - Column widths (sheet.colWidths → ws['!cols'])
+  //   - Row heights (sheet.rowHeights → ws['!rows'])
+  //   - Merged ranges (sheet.merges → ws['!merges'])
+  //   - Frozen panes (sheet.frozen → ws['!freeze'])
+  //   - Number format hints (cell.fmt → SheetJS `z` format strings)
+  //
+  // What's NOT preserved (SheetJS Community Edition limitation):
+  //   - Full style fidelity (font color, fill color, borders) — SheetJS
+  //     writes a `s` style object but Excel desktop's adoption of these
+  //     is unreliable without the SheetJS Pro xlsx-style fork. Cell
+  //     formatting will largely come through as plain text unless the
+  //     user has the Pro fork loaded. The takeoff numbers + formulas
+  //     are the load-bearing content for an estimating workflow; style
+  //     drift on the round-trip is a known cosmetic gap, not a data loss.
+  //
+  // What's deliberately skipped:
+  //   - Embedded sheets (QB Costs, Attachments) — those are live views
+  //     of server data, not authored sheets. Exporting them as static
+  //     bytes would be misleading.
+  //   - Hidden sheets — excluded so the export matches what's visible.
+  // ─────────────────────────────────────────────────────────────────
+  function _buildSheetJSWorksheetFromAgxSheet(sheet) {
+    if (typeof XLSX === 'undefined') return null;
+    const rowCount = sheet.rows || MIN_ROWS;
+    const colCount = sheet.cols || MIN_COLS;
+    // Build aoa (array of arrays) for the value layer. SheetJS uses
+    // this as the seed; we then overlay formulas + format strings on
+    // individual cells after.
+    const aoa = [];
+    for (let r = 0; r < rowCount; r++) {
+      const row = [];
+      for (let c = 0; c < colCount; c++) {
+        const ref = addr(r, c);
+        const cell = sheet.cells[ref];
+        if (!cell) { row.push(null); continue; }
+        // Prefer the evaluated value (so a formula export reads as
+        // its computed number in Excel); the formula gets layered on
+        // top in the second pass.
+        const isFormula = typeof cell.raw === 'string' && cell.raw.startsWith('=');
+        if (isFormula) {
+          const v = cell.value;
+          if (v == null || v === '' || (typeof v === 'number' && isNaN(v))) {
+            row.push(null);
+          } else {
+            row.push(v);
+          }
+        } else {
+          // Plain content — numbers stay numeric, strings stay strings.
+          if (cell.raw == null || cell.raw === '') {
+            row.push(null);
+          } else {
+            const n = Number(cell.raw);
+            row.push(!isNaN(n) && String(n) === String(cell.raw).trim() ? n : String(cell.raw));
+          }
+        }
+      }
+      aoa.push(row);
+    }
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+
+    // Second pass — attach formulas + number format strings to the
+    // SheetJS cell objects we just built. SheetJS skips empty cells;
+    // we have to materialize them when we want to add a formula or
+    // format that has no corresponding aoa value (rare).
+    for (let r = 0; r < rowCount; r++) {
+      for (let c = 0; c < colCount; c++) {
+        const ref = addr(r, c);
+        const cell = sheet.cells[ref];
+        if (!cell) continue;
+        const sjsRef = XLSX.utils.encode_cell({ r: r, c: c });
+        let sjsCell = ws[sjsRef];
+        // Formula attach. SheetJS `f` is the formula text WITHOUT
+        // the leading `=` — strip it before assigning.
+        if (typeof cell.raw === 'string' && cell.raw.startsWith('=')) {
+          if (!sjsCell) {
+            sjsCell = { t: 'n', v: cell.value != null ? cell.value : 0 };
+            ws[sjsRef] = sjsCell;
+          }
+          sjsCell.f = cell.raw.slice(1);
+        }
+        // Hyperlink (.l) and comment (.c) need a materialized cell object
+        // even when the value is empty — SheetJS skips blank cells in the
+        // aoa pass. Create a stub so the metadata has somewhere to live.
+        if (!sjsCell && (cell.hyperlink || cell.note)) {
+          sjsCell = { t: 's', v: cell.value != null ? cell.value : '' };
+          ws[sjsRef] = sjsCell;
+        }
+        // Hyperlink — SheetJS `.l` = { Target, Tooltip }.
+        if (cell.hyperlink && cell.hyperlink.url && sjsCell) {
+          sjsCell.l = { Target: cell.hyperlink.url };
+          if (cell.hyperlink.display) sjsCell.l.Tooltip = cell.hyperlink.display;
+        }
+        // Comment / note — SheetJS `.c` = [{ a: author, t: text }].
+        if (cell.note && sjsCell) {
+          sjsCell.c = [{ a: 'AGX', t: String(cell.note) }];
+          sjsCell.c.hidden = true;
+        }
+        // Number-format hint. A custom Excel format string (cell.numFmt)
+        // always wins — it round-trips verbatim into the .z slot. Otherwise
+        // our `fmt` enum maps onto Excel format strings — currency, percent,
+        // comma. Custom fmt strings flow through unchanged.
+        if (cell.numFmt && sjsCell) {
+          sjsCell.z = cell.numFmt;
+        } else if (cell.fmt && sjsCell) {
+          let z = null;
+          const dec = Number.isFinite(cell.decimals) ? cell.decimals : 2;
+          const decStr = dec > 0 ? '.' + Array(dec + 1).join('0') : '';
+          if (cell.fmt === 'currency') z = '"$"#,##0' + decStr;
+          else if (cell.fmt === 'percent') z = '0' + decStr + '%';
+          else if (cell.fmt === 'comma') z = '#,##0' + decStr;
+          else if (typeof cell.fmt === 'string') z = cell.fmt; // custom string
+          if (z) sjsCell.z = z;
+        }
+      }
+    }
+
+    // Column widths — SheetJS uses `wpx` (pixels). Our colWidths map
+    // is `{c: px}`. Build a dense array sized to the column count.
+    if (sheet.colWidths && Object.keys(sheet.colWidths).length) {
+      const cols = [];
+      for (let c = 0; c < colCount; c++) {
+        const w = sheet.colWidths[c];
+        cols.push(w ? { wpx: w } : { wpx: 100 });
+      }
+      ws['!cols'] = cols;
+    }
+
+    // Row heights — sparse array; missing rows get Excel's default.
+    if (sheet.rowHeights && Object.keys(sheet.rowHeights).length) {
+      const rows = [];
+      Object.keys(sheet.rowHeights).forEach(function(r) {
+        const h = sheet.rowHeights[r];
+        if (h) rows[Number(r)] = { hpx: h };
+      });
+      if (rows.length) ws['!rows'] = rows;
+    }
+
+    // Merged ranges.
+    if (sheet.merges && sheet.merges.length) {
+      ws['!merges'] = sheet.merges.map(function(m) {
+        return {
+          s: { r: m.r1, c: m.c1 },
+          e: { r: m.r2, c: m.c2 }
+        };
+      });
+    }
+
+    // Frozen panes — SheetJS `!freeze` is a view-state hint with
+    // `xSplit` / `ySplit` (number of frozen cols / rows).
+    if (sheet.frozen) {
+      const fz = {};
+      if (sheet.frozen === 'row' || sheet.frozen === 'both') fz.ySplit = 1;
+      if (sheet.frozen === 'col' || sheet.frozen === 'both') fz.xSplit = 1;
+      if (fz.xSplit || fz.ySplit) ws['!freeze'] = fz;
+    }
+
+    return ws;
+  }
+
+  // Sanitize an Excel sheet-tab name. Excel rejects: > 31 chars,
+  // these characters: \ / ? * [ ]. Also rejects empty names.
+  function _sanitizeSheetName(name, fallback) {
+    let s = String(name || fallback || 'Sheet').replace(/[\\/?*\[\]]/g, ' ').trim();
+    if (!s) s = fallback || 'Sheet';
+    if (s.length > 31) s = s.slice(0, 31);
+    return s;
+  }
+
+  // De-duplicate sheet names within the export (Excel disallows
+  // duplicates after sanitization). Appends ' (2)', ' (3)', etc. as
+  // needed, respecting the 31-char ceiling.
+  function _uniqueSheetName(name, used) {
+    let candidate = name;
+    let n = 2;
+    while (used.has(candidate)) {
+      const suffix = ' (' + n + ')';
+      candidate = name.slice(0, 31 - suffix.length) + suffix;
+      n++;
+      if (n > 999) { candidate = name.slice(0, 26) + '_' + Date.now().toString(36).slice(-4); break; }
+    }
+    used.add(candidate);
+    return candidate;
+  }
+
+  window.wsExportXlsx = function() {
+    if (typeof XLSX === 'undefined') {
+      alert('Excel library is still loading. Try again in a moment.');
+      return;
+    }
+    syncGridToActiveSheet();
+    // Real sheets only — drop embedded views (QB Costs, Attachments)
+    // and hidden sheets, since the user wants what they see + Excel
+    // can't usefully render a live server-data view.
+    const realSheets = workbook.sheets.filter(function(s) {
+      return !s.hidden
+          && !s.pinned
+          && (!s.kind || s.kind === 'grid');
+    });
+    if (!realSheets.length) {
+      alert('No grid sheets to export — add a sheet or import one first.');
+      return;
+    }
+    const wb = XLSX.utils.book_new();
+    const usedNames = new Set();
+    const sheetIdToExportName = {};
+    realSheets.forEach(function(sheet, i) {
+      const ws = _buildSheetJSWorksheetFromAgxSheet(sheet);
+      if (!ws) return;
+      const sanitized = _sanitizeSheetName(sheet.name, 'Sheet' + (i + 1));
+      const finalName = _uniqueSheetName(sanitized, usedNames);
+      sheetIdToExportName[sheet.id] = finalName;
+      XLSX.utils.book_append_sheet(wb, ws, finalName);
+    });
+
+    // Workbook-scoped named ranges → SheetJS defined names. Each Ref is
+    // qualified with the exported sheet name and made absolute ($A$1).
+    // Names whose owning sheet wasn't exported (e.g. it pointed at an
+    // embedded view) are skipped so the file stays valid.
+    var nrKeys = Object.keys(workbook.namedRanges || {});
+    if (nrKeys.length) {
+      var defined = [];
+      var activeExportName = sheetIdToExportName[workbook.activeSheetId] || null;
+      var _abs = function(part) {
+        var m = parseAddr(String(part).replace(/\$/g, '').toUpperCase());
+        if (!m) return null;
+        return '$' + colLetter(m.c) + '$' + (m.r + 1);
+      };
+      nrKeys.forEach(function(k) {
+        var nr = workbook.namedRanges[k];
+        if (!nr || !nr.ref) return;
+        // Resolve the sheet name this name points at.
+        var sheetExportName = nr.sheetId ? sheetIdToExportName[nr.sheetId] : activeExportName;
+        var bare = nr.ref;
+        var bang = nr.ref.lastIndexOf('!');
+        if (bang !== -1) {
+          var sn = nr.ref.slice(0, bang).replace(/^'|'$/g, '');
+          var sh = findSheetByName(sn);
+          if (sh && sheetIdToExportName[sh.id]) sheetExportName = sheetIdToExportName[sh.id];
+          bare = nr.ref.slice(bang + 1);
+        }
+        if (!sheetExportName) return;  // owning sheet not exported
+        var parts = bare.replace(/\$/g, '').split(':');
+        var a = _abs(parts[0]);
+        if (!a) return;
+        var refBody = parts[1] ? (a + ':' + _abs(parts[1])) : a;
+        if (/null/.test(refBody)) return;
+        var qName = /\s/.test(sheetExportName) ? "'" + sheetExportName + "'" : sheetExportName;
+        defined.push({ Name: (nr.name || k), Ref: qName + '!' + refBody });
+      });
+      if (defined.length) {
+        wb.Workbook = wb.Workbook || {};
+        wb.Workbook.Names = (wb.Workbook.Names || []).concat(defined);
+      }
+    }
+    // Filename — workspace-{estimate|job}-{id}-YYYY-MM-DD.xlsx
+    const entityLabel = workbook.entityType || 'workspace';
+    const idStr = workbook.entityId == null ? 'unknown' : String(workbook.entityId);
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const filename = 'workspace-' + entityLabel + '-' + idStr + '-' + dateStr + '.xlsx';
+    try {
+      XLSX.writeFile(wb, filename);
+      const status = document.getElementById('wsStatus');
+      if (status) {
+        status.textContent = '✓ Exported ' + realSheets.length + ' sheet(s)';
+        setTimeout(function() { status.textContent = 'Ready'; }, 2500);
+      }
+    } catch (e) {
+      console.error('[workspace] xlsx export failed:', e);
+      alert('Export failed: ' + (e && e.message ? e.message : e));
+    }
+  };
+
+  // CSV export — active sheet only (CSV is single-sheet by definition).
+  // SheetJS writes UTF-8 with BOM by default; Excel desktop opens it
+  // cleanly without prompting for encoding.
+  window.wsExportCsv = function() {
+    if (typeof XLSX === 'undefined') {
+      alert('Excel library is still loading. Try again in a moment.');
+      return;
+    }
+    syncGridToActiveSheet();
+    const sheet = activeSheet();
+    if (!sheet) { alert('No active sheet.'); return; }
+    if (isEmbedSheet(sheet)) {
+      alert('Switch to a grid sheet to export CSV — the "' + sheet.name + '" tab is a live view, not a sheet.');
+      return;
+    }
+    const ws = _buildSheetJSWorksheetFromAgxSheet(sheet);
+    if (!ws) { alert('Failed to build CSV.'); return; }
+    let csv;
+    try {
+      csv = XLSX.utils.sheet_to_csv(ws);
+    } catch (e) {
+      console.error('[workspace] csv conversion failed:', e);
+      alert('CSV conversion failed: ' + (e && e.message ? e.message : e));
+      return;
+    }
+    // UTF-8 BOM so Excel desktop reads accented characters correctly.
+    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const dateStr = new Date().toISOString().slice(0, 10);
+    const safeName = String(sheet.name || 'sheet').replace(/[^A-Za-z0-9._-]+/g, '_');
+    a.download = safeName + '-' + dateStr + '.csv';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function() { URL.revokeObjectURL(url); }, 250);
+    const status = document.getElementById('wsStatus');
+    if (status) {
+      status.textContent = '✓ CSV downloaded';
+      setTimeout(function() { status.textContent = 'Ready'; }, 2500);
+    }
+  };
   // Switch to a sheet by id from outside this module — used by the
   // attachments embed after an xlsx import to land the user on the
   // freshly-imported sheet.
@@ -5103,20 +7531,28 @@
 
   // ── Public Init ────────────────────────────────────────────
 
-  function initWorkspace(containerId, jobId) {
+  // initWorkspace(containerId, entityType, entityId)
+  // Back-compat: initWorkspace(containerId, jobId) — single trailing
+  // arg is treated as a jobId (entityType='job'). All existing job-
+  // side call sites use that form.
+  async function initWorkspace(containerId, entityTypeOrJobId, entityId) {
     wsContainer = document.getElementById(containerId);
     if (!wsContainer) return;
 
-    loadWorkspace(jobId);
+    // Render the shell IMMEDIATELY so the user sees the workspace UI
+    // even while the server-side workbook fetch is in flight. The
+    // grid renders empty/default first, then the active sheet
+    // re-renders when loadWorkspace resolves.
     wsContainer.innerHTML = buildWorkspaceHTML();
+    wsTable = document.getElementById('wsGrid');
+    formulaBar = document.getElementById('wsFormulaBar');
+
+    await loadWorkspace(entityTypeOrJobId, entityId);
     // Excel theme application is sheet-aware — actual grid sheets get
     // the white Excel palette; Detailed Costs / Attachments embedded
     // views opt out and use the app's light/dark mode instead. Run
     // after innerHTML is set so the class lands on the live container.
     applyExcelThemeForActiveSheet();
-
-    wsTable = document.getElementById('wsGrid');
-    formulaBar = document.getElementById('wsFormulaBar');
 
     renderActiveSheet();
     renderSheetTabs();
@@ -5140,6 +7576,25 @@
     wsContainer.addEventListener('keydown', handleKeyDown);
     formulaBar.addEventListener('focus', handleFormulaBarFocus);
     formulaBar.addEventListener('input', handleFormulaBarInput);
+
+    // Name Box (the cell-reference input): Enter navigates to a cell,
+    // range, or named range — or defines a new name for the selection.
+    var nameBoxEl = document.getElementById('wsCellRef');
+    if (nameBoxEl) {
+      nameBoxEl.addEventListener('focus', function() { nameBoxEl.select(); });
+      nameBoxEl.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          _handleNameBoxEntry(nameBoxEl.value);
+          nameBoxEl.blur();
+          if (wsContainer) wsContainer.focus();
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          nameBoxEl.blur();
+          if (grid.selection) selectCell(grid.selection.r, grid.selection.c, !!grid.selEnd);
+        }
+      });
+    }
 
     // Column resize
     wsTable.addEventListener('mousedown', handleColResizeStart);
@@ -5265,6 +7720,19 @@
       });
     }
 
+    // Phase 1 — duplicate wiring for the embedded ribbon button so the
+    // estimate side (which has no floating shell) can also import.
+    // The two buttons share semantics; click either, same handler.
+    const importBtn2 = document.getElementById('wsImportXlsxBtn');
+    const importInput2 = document.getElementById('wsImportXlsxInput');
+    if (importBtn2 && importInput2) {
+      importBtn2.addEventListener('click', function() { importInput2.value = ''; importInput2.click(); });
+      importInput2.addEventListener('change', function(e) {
+        const file = e.target.files && e.target.files[0];
+        if (file) handleXlsxImport(file);
+      });
+    }
+
     // Toolbar buttons
     document.getElementById('wsLinkBtn').addEventListener('click', () => {
       const panel = document.getElementById('wsLinkPanel');
@@ -5306,15 +7774,26 @@
       });
     }
 
-    // Format buttons
+    // Format buttons — apply the enum format across the whole selection.
+    // A custom numFmt (from the Number Format editor) would otherwise mask
+    // the enum in displayVal, so clear it here so the quick buttons win.
     wsContainer.querySelectorAll('.ws-btn-fmt').forEach(btn => {
       btn.addEventListener('click', () => {
         if (!grid.selection) return;
-        const cell = getCell(grid.selection.r, grid.selection.c);
         const fmt = btn.dataset.fmt;
-        cell.fmt = fmt === 'null' ? null : fmt;
+        const rng = getSelRange();
+        if (!rng) return;
+        pushUndo();
+        for (let r = rng.r1; r <= rng.r2; r++) {
+          for (let c = rng.c1; c <= rng.c2; c++) {
+            const cell = getCell(r, c);
+            cell.fmt = fmt === 'null' ? null : fmt;
+            if (cell.numFmt) delete cell.numFmt;
+          }
+        }
         grid.dirty = true;
-        refreshCell(grid.selection.r, grid.selection.c);
+        renderGrid();
+        selectCell(grid.selection.r, grid.selection.c, !!grid.selEnd);
         saveWorkspace();
       });
     });

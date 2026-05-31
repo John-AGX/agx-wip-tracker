@@ -101,7 +101,12 @@
     if (jobId !== currentJobId) {
       currentJobId = jobId;
       if (typeof initWorkspace === 'function') {
-        initWorkspace('wsWorkspaceContainer', jobId);
+        // Phase 0: initWorkspace now takes (containerId, entityType,
+        // entityId). The single-arg legacy form (jobId only) still
+        // works, but pass 'job' explicitly so the call site is
+        // self-documenting and grep-able when we audit which side
+        // owns which workbook.
+        initWorkspace('wsWorkspaceContainer', 'job', jobId);
       }
     }
   }

@@ -120,6 +120,65 @@ router.put('/bulk/save', requireAuth, requireCapability('ESTIMATES_EDIT'), async
   }
 });
 
+// ──────────────────────────────────────────────────────────────────
+// Workspace persistence — surgical jsonb_set on data.workbook
+//
+// The legacy bulk-save endpoint replaces the entire data blob, which
+// races with workbook saves and forces the client to ship the whole
+// estimate every keystroke. These endpoints touch ONLY the workbook
+// slot under data, so the editor can save independently from the
+// line-items grid and 86 can read the workbook without pulling the
+// rest of the estimate's payload.
+//
+// Shape on the wire: the workbook JSON the client serializes is a
+// versioned object { version, activeSheetId, sheets, workbookGroupActive }
+// — see workspace.js saveWorkspace(). Server-side we don't interpret
+// the shape, just store it as a JSONB sub-tree.
+// ──────────────────────────────────────────────────────────────────
+
+// GET /api/estimates/:id/workbook — returns null when the slot is empty.
+router.get('/:id/workbook', requireAuth, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT data->'workbook' AS workbook
+         FROM estimates
+        WHERE id = $1
+          AND (organization_id = $2 OR organization_id IS NULL)`,
+      [req.params.id, req.user.organization_id]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Estimate not found' });
+    res.json({ workbook: rows[0].workbook || null });
+  } catch (e) {
+    console.error('GET /api/estimates/:id/workbook error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// PUT /api/estimates/:id/workbook — body is the workbook JSON itself,
+// not wrapped. ESTIMATES_EDIT-gated because the workbook is part of
+// the estimate's takeoff data, not a separate object.
+router.put('/:id/workbook', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req, res) => {
+  try {
+    const wb = req.body;
+    if (!wb || typeof wb !== 'object') {
+      return res.status(400).json({ error: 'workbook body required' });
+    }
+    const u = await pool.query(
+      `UPDATE estimates
+          SET data = jsonb_set(COALESCE(data, '{}'::jsonb), '{workbook}', $1::jsonb, true),
+              updated_at = NOW()
+        WHERE id = $2
+          AND (organization_id = $3 OR organization_id IS NULL)`,
+      [JSON.stringify(wb), req.params.id, req.user.organization_id]
+    );
+    if (u.rowCount === 0) return res.status(404).json({ error: 'Estimate not found' });
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('PUT /api/estimates/:id/workbook error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // DELETE /api/estimates/:id - admin or owner only
 router.delete('/:id', requireAuth, async (req, res) => {
   try {

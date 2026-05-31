@@ -1113,6 +1113,7 @@
                                     <button class="ws-right-tab" data-ee-tab="details" onclick="switchEstimateEditorTab('details')">Details</button>
                                     <button class="ws-right-tab" data-ee-tab="scope" onclick="switchEstimateEditorTab('scope')">&#x1F4DD; Scope</button>
                                     <button class="ws-right-tab" data-ee-tab="photos" onclick="switchEstimateEditorTab('photos')">&#x1F4CE; Attachments</button>
+                                    <button class="ws-right-tab" data-ee-tab="workspace" onclick="switchEstimateEditorTab('workspace')">&#x1F4CA; Workspace</button>
                                     <button class="ws-right-tab" data-ee-tab="preview" onclick="switchEstimateEditorTab('preview')">Preview</button>
                                 </div>
                             </div>
@@ -1181,6 +1182,16 @@
                                 </fieldset>
                                 <div id="ee-photos-mount"></div>
                             </div>
+
+                            <!-- Workspace tab — Phase 0. Embeds the shared workspace
+                                 engine (js/workspace.js) inline. On show,
+                                 switchEstimateEditorTab('workspace') reinjects a host
+                                 div and calls initWorkspace('ee-workspace-host',
+                                 'estimate', estimateId). Storage routes through
+                                 PUT /api/estimates/:id/workbook (surgical jsonb_set
+                                 on data.workbook) so it doesn't race with line-item
+                                 bulk saves. -->
+                            <div id="ee-tab-workspace" class="ee-tab-content" style="display:none;min-height:600px;"></div>
 
                             <!-- Preview tab — populated on demand by js/estimate-preview.js -->
                             <div id="ee-tab-preview" class="ee-tab-content" style="display:none;"></div>

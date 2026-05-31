@@ -169,6 +169,65 @@ router.put('/:id', requireAuth, async (req, res) => {
   }
 });
 
+// ──────────────────────────────────────────────────────────────────
+// Workspace persistence — surgical jsonb_set on data.workbook
+//
+// Mirrors the estimates side. Without these endpoints, saving the
+// workbook would require either round-tripping the entire job data
+// blob (lossy + racy with non-workbook edits) or staying on
+// localStorage (which 86 can't read and which doesn't survive a
+// device switch). These touch ONLY data.workbook.
+//
+// Auth: canEdit gate — same as PUT /:id. Reads only require canAccess.
+// ──────────────────────────────────────────────────────────────────
+
+// GET /api/jobs/:id/workbook
+router.get('/:id/workbook', requireAuth, async (req, res) => {
+  try {
+    if (!(await canAccess(req.user.id, req.user.role, req.params.id))) {
+      return res.status(403).json({ error: 'No access' });
+    }
+    const { rows } = await pool.query(
+      `SELECT data->'workbook' AS workbook
+         FROM jobs
+        WHERE id = $1
+          AND (organization_id = $2 OR organization_id IS NULL)`,
+      [req.params.id, req.user.organization_id]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Job not found' });
+    res.json({ workbook: rows[0].workbook || null });
+  } catch (e) {
+    console.error('GET /api/jobs/:id/workbook error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// PUT /api/jobs/:id/workbook — body is the workbook JSON itself.
+router.put('/:id/workbook', requireAuth, async (req, res) => {
+  try {
+    if (!(await canEdit(req.user.id, req.user.role, req.params.id))) {
+      return res.status(403).json({ error: 'No edit access' });
+    }
+    const wb = req.body;
+    if (!wb || typeof wb !== 'object') {
+      return res.status(400).json({ error: 'workbook body required' });
+    }
+    const u = await pool.query(
+      `UPDATE jobs
+          SET data = jsonb_set(COALESCE(data, '{}'::jsonb), '{workbook}', $1::jsonb, true),
+              updated_at = NOW()
+        WHERE id = $2
+          AND (organization_id = $3 OR organization_id IS NULL)`,
+      [JSON.stringify(wb), req.params.id, req.user.organization_id]
+    );
+    if (u.rowCount === 0) return res.status(404).json({ error: 'Job not found' });
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('PUT /api/jobs/:id/workbook error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // PUT /api/jobs/:id/owner — reassign job to a different PM/admin (admin only)
 // Existing job_access entries are kept intact, so anyone who had explicit
 // edit/view access still has it after a reassignment. The previous owner

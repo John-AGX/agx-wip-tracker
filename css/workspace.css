@@ -577,7 +577,16 @@
   border-radius: 3px;
   padding: 4px 8px;
   min-width: 44px;
+  width: 96px;
+  flex: 0 0 auto;
   text-align: center;
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+}
+.ws-cell-ref:focus {
+  border-color: var(--accent, #107C41);
+  box-shadow: 0 0 0 2px rgba(16, 124, 65, 0.25);
 }
 
 .ws-formula-bar {
@@ -1510,3 +1519,130 @@ body.light-mode .ee-grand-total {
     max-height: 200px;
   }
 }
+
+/* ═══════════════════════════════════════════════════════════
+   Phase 2 — Excel parity features
+   ═══════════════════════════════════════════════════════════ */
+
+/* ── Drag-to-fill handle (Phase 2.1) ─────────────────────── */
+.ws-fill-handle {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 8px;
+  height: 8px;
+  background: var(--accent, #107C41);
+  border: 1px solid #fff;
+  border-top-left-radius: 2px;
+  cursor: crosshair;
+  z-index: 6;
+  box-sizing: border-box;
+}
+
+/* Cells previewed during a fill drag */
+.ws-cell.ws-fill-preview {
+  outline: 1px dashed var(--accent, #107C41) !important;
+  outline-offset: -1px;
+  background: rgba(16, 124, 65, 0.07) !important;
+}
+
+/* ── Hyperlinks (Phase 2.6) ──────────────────────────────── */
+.ws-hyperlink {
+  color: #2563eb;
+  text-decoration: underline;
+  cursor: pointer;
+}
+.ws-hyperlink:hover { color: #1d4ed8; }
+
+/* ── Primary action button (modal Apply buttons) ─────────── */
+.ws-btn.ws-btn-primary {
+  background: var(--accent, #107C41);
+  border-color: var(--accent, #107C41);
+  color: #fff;
+}
+.ws-btn.ws-btn-primary:hover {
+  background: var(--accent-dim, #185F3D);
+  border-color: var(--accent-dim, #185F3D);
+}
+
+/* ── Data validation dropdown caret (Phase 2.3) ──────────── */
+.ws-cell.ws-has-validation { position: relative; }
+.ws-validation-caret {
+  position: absolute;
+  right: 1px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 15px;
+  height: 15px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  line-height: 1;
+  color: #fff;
+  background: var(--accent, #107C41);
+  border-radius: 2px;
+  cursor: pointer;
+  z-index: 5;
+  user-select: none;
+}
+.ws-validation-caret:hover { background: var(--accent-dim, #185F3D); }
+
+/* Dropdown list popup for data-validation list cells */
+.ws-validation-list {
+  position: fixed;
+  background: var(--surface, #181820);
+  border: 1px solid var(--border, #333);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  z-index: 1600;
+  max-height: 240px;
+  overflow-y: auto;
+  min-width: 120px;
+  padding: 4px 0;
+  font-size: 12px;
+}
+.ws-validation-list .ws-validation-opt {
+  padding: 5px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  color: var(--text, #e7e7ea);
+}
+.ws-validation-list .ws-validation-opt:hover,
+.ws-validation-list .ws-validation-opt.ws-vl-active {
+  background: var(--accent, #107C41);
+  color: #fff;
+}
+.ws-cell.ws-validation-invalid {
+  box-shadow: inset 0 0 0 2px #dc2626;
+}
+
+/* ── AutoFilter (Phase 2.4) ──────────────────────────────── */
+.ws-cell.ws-filter-header { padding-right: 18px; }
+.ws-filter-btn {
+  position: absolute;
+  right: 1px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 15px;
+  height: 15px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 8px;
+  line-height: 1;
+  color: var(--text, #e7e7ea);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--grid-border, #333);
+  border-radius: 2px;
+  cursor: pointer;
+  z-index: 5;
+  user-select: none;
+}
+.ws-filter-btn:hover { background: var(--accent, #107C41); color: #fff; }
+.ws-cell.ws-filter-active .ws-filter-btn {
+  background: var(--accent, #107C41);
+  color: #fff;
+  border-color: var(--accent, #107C41);
+}
+.ws-filter-popup .ws-btn { font-size: 11px; }

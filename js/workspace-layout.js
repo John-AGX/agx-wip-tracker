@@ -1367,7 +1367,8 @@
     if (jobId !== currentJobId) {
       currentJobId = jobId;
       if (typeof initWorkspace === 'function') {
-        initWorkspace('wsWorkspaceContainer', jobId);
+        // Phase 0: explicit entity type — see workspace-inject.js
+        initWorkspace('wsWorkspaceContainer', 'job', jobId);
       }
     }
   }

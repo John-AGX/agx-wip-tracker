@@ -386,6 +386,30 @@
         // since pulling the template is async (one network round-trip
         // the first time).
         window.renderEstimatePreview();
+      } else if (name === 'workspace') {
+        // Phase 0 — estimate-side workspace. Mount the shared
+        // workspace engine (js/workspace.js) into the tab's content
+        // host. initWorkspace is async — the shell renders
+        // immediately, the workbook fetches in the background, then
+        // the grid re-renders when load resolves. We re-init every
+        // time the tab is shown so switching between estimates picks
+        // up the new entityId without a stale workbook lingering.
+        var wsMount = document.getElementById('ee-tab-workspace');
+        if (!wsMount) {
+          console.warn('[estimate-editor] workspace mount point missing');
+        } else if (!_currentId) {
+          wsMount.innerHTML = '<div style="padding:18px;color:var(--text-dim,#888);font-size:12px;font-style:italic;">No estimate loaded.</div>';
+        } else if (typeof window.initWorkspace === 'function') {
+          // Container needs an id the workspace engine can query —
+          // re-use the tab content div itself by giving it a stable
+          // child container. Reset the children first so a previous
+          // estimate's workspace DOM doesn't leak into this one.
+          wsMount.innerHTML = '<div id="ee-workspace-host" style="height:100%;min-height:600px;"></div>';
+          window.initWorkspace('ee-workspace-host', 'estimate', _currentId);
+        } else {
+          wsMount.innerHTML = '<div style="padding:18px;color:var(--yellow,#fbbf24);font-size:12px;">Workspace engine not loaded — refresh the page.</div>';
+          console.warn('[estimate-editor] window.initWorkspace not available; can not mount workspace tab');
+        }
       } else if (name === 'photos') {
         var mountEl = document.getElementById('ee-photos-mount');
         if (!mountEl) {
