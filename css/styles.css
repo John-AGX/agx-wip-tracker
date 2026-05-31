@@ -1029,6 +1029,11 @@
             flex-direction: column;
             gap: 2px;
         }
+        /* The author display:flex above overrides the UA [hidden] rule, so
+           the menu would stay visible. Re-assert display:none when hidden. */
+        .sidebar-new-menu[hidden] {
+            display: none;
+        }
         .sidebar-new-item {
             display: flex;
             align-items: center;
