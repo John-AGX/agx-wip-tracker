@@ -6858,11 +6858,7 @@ const PAYLOAD_TOOLS = [
       'text-block|attachment-list. ' +
       'system: {skill_pack_ops,watch_ops,field_tool_ops,link_ops,staff_agent_ops} ' +
       '— link_ops includes {op:attach_files, attachment_ids[], target_entity_type, target_entity_id} to link existing files to an entity. ' +
-      'workbook: {host:estimate|job, sheet?, cell_ops[], sheet_ops[], named_range_ops[]} ' +
-      '— authors the Excel-style workspace ON an estimate/job. entity_id is the host id, host says which table. ' +
-      'cell_ops:[{addr:"B7", raw?, value?, numFmt?, validation?, hyperlink?, note?, clear?}] — raw starting with "=" is a formula (recomputed on load), a bare value writes a literal, clear:true deletes. ' +
-      'sheet_ops:[{op:add|rename|delete, name, new_name?}]; named_range_ops:[{op:set|delete, name, ref?, sheet?, comment?}]. ' +
-      'Read the sheet first with read_workspace_sheet_full to get exact addresses/sheet names. ' +
+      'To populate an estimate/job workspace, do NOT use a payload — build an .xlsx with code_execution and the user drops it into the workspace (it auto-imports as sheets), or edit the sheet directly in the workspace UI. ' +
       'TARGET FORMS (siblings of entity_type/ops, work on any entity_type): ' +
       'conditional — add condition:"if_exists"|"if_missing"|"upsert" to a target (upsert needs no pre-check; if_exists/if_missing need a concrete entity_id). ' +
       'bulk — {entity_type, bulk:{items:[{entity_id?, ops}, ...]}} applies the same dispatcher N times. ' +
@@ -6892,11 +6888,11 @@ const PAYLOAD_TOOLS = [
             properties: {
               entity_type: {
                 type: 'string',
-                enum: ['estimate', 'job', 'lead', 'client', 'schedule', 'system', 'report', 'workbook'],
+                enum: ['estimate', 'job', 'lead', 'client', 'schedule', 'system', 'report'],
               },
               entity_id: {
                 type: 'string',
-                description: 'Real id for updates, or $new_<name> placeholder for creates referenced elsewhere in this bundle. Omit for one-off creates. For workbook targets this is the host estimate/job id.',
+                description: 'Real id for updates, or $new_<name> placeholder for creates referenced elsewhere in this bundle. Omit for one-off creates.',
               },
               entity_display: {
                 type: 'string',
@@ -8771,8 +8767,7 @@ async function execStaffTool(name, input, ctx) {
       }
       // Named ranges live at the workbook level, not per-sheet. Surface the
       // ones anchored to THIS sheet (plus any global ones) so 86 can refer
-      // to them by name instead of raw A1 refs — and so it knows they
-      // exist before authoring a workbook payload that references them.
+      // to them by name instead of raw A1 refs when reasoning about the sheet.
       if (workbook && workbook.namedRanges && typeof workbook.namedRanges === 'object') {
         const nrEntries = Object.values(workbook.namedRanges).filter(Boolean);
         const relevant = nrEntries.filter(nr => !nr.sheetId || nr.sheetId === sheet.id);
