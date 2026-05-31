@@ -26,7 +26,13 @@ const router = express.Router();
 // Cost ($/1M tokens) — input, output. Mirrors what's listed in
 // the public model pricing tables. Only used for friendly display
 // math; not persisted.
+//
+// IMPORTANT: keep this in lock-step with the live default model in
+// ai-routes.js (process.env.AI_MODEL || 'claude-opus-4-8'). If the
+// default model isn't listed here, costFor() falls back to the
+// current Opus tier instead of silently reporting $0 — see below.
 const MODEL_COSTS = {
+  'claude-opus-4-8':   { in: 5,    out: 25  },
   'claude-opus-4-7':   { in: 5,    out: 25  },
   'claude-opus-4-6':   { in: 5,    out: 25  },
   'claude-opus-4-5':   { in: 15,   out: 75  },
@@ -34,6 +40,13 @@ const MODEL_COSTS = {
   'claude-sonnet-4-5': { in: 3,    out: 15  },
   'claude-haiku-4-5':  { in: 1,    out: 5   }
 };
+
+// Fallback price for any model not in the table above. Mirrors the
+// current Opus tier so a newer model rev (e.g. a future opus-4-9)
+// never makes live cost metrics silently collapse to $0 — the bug
+// that hid all opus-4-8 spend until 2026-05. Conservative on the
+// high side by design: an estimated number beats a missing one.
+const DEFAULT_MODEL_COST = { in: 5, out: 25 };
 
 // Friendly labels mirror the front-end AGENT_LABELS. Emojis stay
 // here because these are server-rendered strings used in admin
@@ -67,11 +80,32 @@ function entityTypeToAgent(entityType) {
 }
 
 function costFor(model, inputTokens, outputTokens) {
-  const p = MODEL_COSTS[model];
-  if (!p) return null;
+  // Unknown / newer models fall back to the current Opus tier rather
+  // than returning null — a live cost metric should never silently
+  // read $0 just because the pricing table lags a model release.
+  const p = MODEL_COSTS[model] || DEFAULT_MODEL_COST;
   const inCost  = (Number(inputTokens  || 0) / 1_000_000) * p.in;
   const outCost = (Number(outputTokens || 0) / 1_000_000) * p.out;
   return inCost + outCost;
+}
+
+// SQL fragment that computes $ cost from a message row's model + token
+// columns, using the SAME pricing as costFor() so a live per-thread
+// cost computed in Postgres never diverges from the JS display math.
+// Generated from MODEL_COSTS (single source of truth) — not hand-typed.
+// `alias` is the table alias of the row carrying model/input_tokens/
+// output_tokens (e.g. 'm' for `ai_messages m`). The model values are
+// fixed table keys, never user input — safe to interpolate.
+function sqlCostExpr(alias) {
+  const a = alias ? alias + '.' : '';
+  const caseFor = (field) => {
+    const whens = Object.entries(MODEL_COSTS)
+      .map(([m, p]) => `WHEN '${m}' THEN ${p[field]}`)
+      .join(' ');
+    return `CASE ${a}model ${whens} ELSE ${DEFAULT_MODEL_COST[field]} END`;
+  };
+  return `(COALESCE(${a}input_tokens, 0)  / 1000000.0) * (${caseFor('in')}) + ` +
+         `(COALESCE(${a}output_tokens, 0) / 1000000.0) * (${caseFor('out')})`;
 }
 
 // GET /api/admin/agents/metrics?range=7d|30d
@@ -227,7 +261,16 @@ router.get('/metrics',
     }));
     const totalCost = models.reduce((s, m) => s + (m.cost_usd || 0), 0);
     const subtaskCost = 0; // Phase 3 subtasks retired — fan-out replaced by native parallel tool calls.
-    const watchCost = costFor('claude-opus-4-7', watchRuns.input_tokens, watchRuns.output_tokens);
+    // Watch runs execute on the live default model — price them with it
+    // (not a pinned version) so the cost tracks model upgrades. aiInternals
+    // is lazily required (it isn't in scope in this handler); fall back to
+    // the current default string if the internals module isn't wired.
+    let watchModel = 'claude-opus-4-8';
+    try {
+      const ai = require('./ai-routes-internals');
+      if (ai && typeof ai.defaultModel === 'function') watchModel = ai.defaultModel();
+    } catch (_) { /* keep fallback */ }
+    const watchCost = costFor(watchModel, watchRuns.input_tokens, watchRuns.output_tokens);
 
     const cacheReads = Number(agg.cache_read_tokens || 0);
     const directInputs = Number(agg.input_tokens || 0);
@@ -357,7 +400,20 @@ router.get('/user-threads',
             s.last_used_at,
             s.last_compacted_at,
             s.turn_count,
-            s.total_cost_usd,
+            -- Live per-thread cost. The stored ai_sessions.total_cost_usd
+            -- column was never populated at write time (always its DEFAULT
+            -- 0), so the Threads view showed $0 for threads with real
+            -- turns. Compute it live from this thread's ai_messages instead
+            -- — keyed the same way the /conversations rollup keys messages
+            -- (entity_type + estimate_id=entity_id + user_id). Priced via
+            -- sqlCostExpr() so it tracks MODEL_COSTS exactly.
+            COALESCE((
+              SELECT SUM(${sqlCostExpr('m')})
+                FROM ai_messages m
+               WHERE m.entity_type = s.entity_type
+                 AND m.estimate_id = s.entity_id
+                 AND m.user_id     = s.user_id
+            ), 0) AS total_cost_usd,
             EXTRACT(EPOCH FROM (NOW() - s.created_at))   / 3600 AS age_hours,
             EXTRACT(EPOCH FROM (NOW() - s.last_used_at)) / 3600 AS idle_hours
            FROM ai_sessions s
@@ -2530,7 +2586,7 @@ async function ensureManagedAgent(agentKey, organization) {
   }
 
   const aiInternals = require('./ai-routes-internals');
-  const model = aiInternals && aiInternals.defaultModel ? aiInternals.defaultModel() : 'claude-sonnet-4-6';
+  const model = aiInternals && aiInternals.defaultModel ? aiInternals.defaultModel() : 'claude-opus-4-8';
   const skills = await collectSkillsFor(agentKey, organization);
   const customTools = customToolsFor(agentKey, inheritFromKey ? { inheritFromKey } : undefined);
   const builtinTools = builtinToolsetFor(agentKey);
@@ -2742,7 +2798,7 @@ router.post('/managed/reregister', requireAuth, requireCapability('ROLES_MANAGE'
     const baseline = AGENT_SYSTEM_BASELINE[key];
 
     const aiInternals = require('./ai-routes-internals');
-    const model = aiInternals && aiInternals.defaultModel ? aiInternals.defaultModel() : 'claude-sonnet-4-6';
+    const model = aiInternals && aiInternals.defaultModel ? aiInternals.defaultModel() : 'claude-opus-4-8';
     const skills = await collectSkillsFor(key);
     const customTools = customToolsFor(key);
     const builtinTools = builtinToolsetFor(key);
@@ -4017,7 +4073,7 @@ router.get('/managed/:agentKey/anthropic-state', requireAuth, requireCapability(
     // canonical push path.
     const baseline = AGENT_SYSTEM_BASELINE[agentKey] || '';
     const aiInternals = require('./ai-routes-internals');
-    const localModel = aiInternals && aiInternals.defaultModel ? aiInternals.defaultModel() : 'claude-sonnet-4-6';
+    const localModel = aiInternals && aiInternals.defaultModel ? aiInternals.defaultModel() : 'claude-opus-4-8';
     let localOrg = null;
     if (row.organization_id) {
       const orgRow = await pool.query('SELECT * FROM organizations WHERE id = $1', [row.organization_id]);
@@ -4156,7 +4212,7 @@ router.post('/managed/:agentKey/sync',
 
     const baseline = AGENT_SYSTEM_BASELINE[agentKey] || '';
     const aiInternals = require('./ai-routes-internals');
-    const model = aiInternals && aiInternals.defaultModel ? aiInternals.defaultModel() : 'claude-sonnet-4-6';
+    const model = aiInternals && aiInternals.defaultModel ? aiInternals.defaultModel() : 'claude-opus-4-8';
     const skills = await collectSkillsFor(agentKey, req.organization);
     const customTools = customToolsFor(agentKey);
     const builtinTools = builtinToolsetFor(agentKey);
@@ -4315,7 +4371,7 @@ router.post('/managed/sync-all',
     }
 
     const aiInternals = require('./ai-routes-internals');
-    const model = aiInternals && aiInternals.defaultModel ? aiInternals.defaultModel() : 'claude-sonnet-4-6';
+    const model = aiInternals && aiInternals.defaultModel ? aiInternals.defaultModel() : 'claude-opus-4-8';
     const summary = [];
 
     for (const row of reg.rows) {
