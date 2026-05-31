@@ -215,7 +215,7 @@
     })();
     </script>
 
-    <link rel="stylesheet" href="css/styles.css?v=163">
+    <link rel="stylesheet" href="css/styles.css?v=164">
     <link rel="stylesheet" href="css/report-style-packs.css?v=3">
     <link rel="stylesheet" href="css/workspace-layout.css?v=60">
     <link rel="stylesheet" href="css/workspace.css?v=37b">
@@ -495,6 +495,22 @@
                         <button class="tab-btn" data-tab="admin" data-p86-icon="admin" data-admin-only style="display:none;" title="Admin"><span class="app-nav-label">Admin</span></button>
                     </div>
                 </nav>
+                <!-- Recents — client-side (localStorage) list of recently
+                     opened jobs / estimates / leads / clients. Populated by
+                     js/recents.js, which wraps the canonical open functions
+                     to capture each entity and renders rows that reopen via
+                     window.p86Router.navigate(). Starts hidden; shown once
+                     there's at least one recent. Sits between the nav and
+                     the account footer so it fills the dead space without
+                     pushing the footer off the bottom. -->
+                <div id="app-sidebar-recents" class="app-sidebar-recents" hidden>
+                    <div class="app-sidebar-recents-head">
+                        <span class="app-nav-group-label">Recent</span>
+                        <button id="sidebar-recents-clear" class="sidebar-recents-clear"
+                                type="button" title="Clear recents" aria-label="Clear recents">Clear</button>
+                    </div>
+                    <div id="sidebar-recents-list" class="sidebar-recents-list"></div>
+                </div>
                 <!-- Account footer — pinned to the bottom of the sidebar
                      (margin-top:auto). Uses the dead space below the nav
                      to surface who's signed in. Clicking opens the SAME
@@ -2794,6 +2810,12 @@
          top-level nav functions (switchTab, editJob, etc.) exist
          before the router wraps them. -->
     <script src="js/router.js?v=9"></script>
+
+    <!-- Sidebar Recents — client-side recently-opened list. Loads after
+         router.js + the entity-open modules so it can wrap editJob /
+         editEstimate / openEditLeadModal / openEditClientModal and reopen
+         via window.p86Router.navigate(). -->
+    <script src="js/recents.js?v=1"></script>
 
     <!-- Copy-to-clipboard helper. Auto-attaches a 📋 button to every
          <input type=email> and any element marked data-p86-copy. -->
