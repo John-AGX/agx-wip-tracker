@@ -460,10 +460,16 @@
       // placeJobSubnav() locates it via getElementById, so a detached
       // element would be invisible to it — the desktop branch would bail
       // at `if (!jobnav) return` and the subtabs would stay stranded in
-      // the page column. Append once here; placeJobSubnav() then decides
-      // whether it (and the tabs) are shown for the current viewport.
+      // the page column. Insert it in the .app-nav slot (so the job
+      // context reads near the top, with Recents and the account footer
+      // below it) rather than appending to the very end of the sidebar.
+      // placeJobSubnav() then decides whether it is shown for the viewport.
       var sb = document.getElementById('app-sidebar');
-      if (sb) sb.appendChild(jobnav);
+      if (sb) {
+        var sbNav = sb.querySelector('.app-nav');
+        if (sbNav) sb.insertBefore(jobnav, sbNav);
+        else sb.appendChild(jobnav);
+      }
     }
     // (Re)populate identity from the current job.
     if (job) {
@@ -499,7 +505,10 @@
     }
     // Desktop: relocate tabs into the sidebar jobnav; hide main nav.
     if (!jobnav) return;
-    if (jobnav.parentNode !== sidebar) sidebar.appendChild(jobnav);
+    if (jobnav.parentNode !== sidebar) {
+      if (appNav) sidebar.insertBefore(jobnav, appNav);
+      else sidebar.appendChild(jobnav);
+    }
     if (tabs.parentNode !== jobnav) jobnav.appendChild(tabs);
     jobnav.style.display = '';
     if (appNav) appNav.style.display = 'none';
