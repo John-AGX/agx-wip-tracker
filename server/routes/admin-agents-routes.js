@@ -402,17 +402,22 @@ router.get('/user-threads',
             s.turn_count,
             -- Live per-thread cost. The stored ai_sessions.total_cost_usd
             -- column was never populated at write time (always its DEFAULT
-            -- 0), so the Threads view showed $0 for threads with real
-            -- turns. Compute it live from this thread's ai_messages instead
-            -- — keyed the same way the /conversations rollup keys messages
-            -- (entity_type + estimate_id=entity_id + user_id). Priced via
+            -- 0), so the Threads view showed $0 for threads with real turns.
+            -- Compute it live instead. NOTE on the join key: a user_thread
+            -- row is anchored entity_type='general'/entity_id='global', but
+            -- its messages are written with the PER-TURN surface
+            -- (turnEntityType/turnEntityId — job/estimate/lead/etc.) and
+            -- ai_messages has no session_id. Under FLAG_UNIFIED_USER_THREAD
+            -- every turn for a user routes to their one rolling thread, so
+            -- the thread's cost is all of that user's message cost since the
+            -- thread was minted. Key on user_id + created_at>=mint, not the
+            -- entity tuple (which would never match). Priced via
             -- sqlCostExpr() so it tracks MODEL_COSTS exactly.
             COALESCE((
               SELECT SUM(${sqlCostExpr('m')})
                 FROM ai_messages m
-               WHERE m.entity_type = s.entity_type
-                 AND m.estimate_id = s.entity_id
-                 AND m.user_id     = s.user_id
+               WHERE m.user_id    = s.user_id
+                 AND m.created_at >= s.created_at
             ), 0) AS total_cost_usd,
             EXTRACT(EPOCH FROM (NOW() - s.created_at))   / 3600 AS age_hours,
             EXTRACT(EPOCH FROM (NOW() - s.last_used_at)) / 3600 AS idle_hours
