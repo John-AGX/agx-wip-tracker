@@ -970,6 +970,18 @@ async function initSchema() {
     -- conversation (capped by MAX_HISTORY_PAIRS).
     ALTER TABLE ai_messages ADD COLUMN IF NOT EXISTS inline_image_blocks JSONB;
 
+    -- output_files: code_execution artifacts (xlsx, csv, pdf, png, etc.)
+    -- produced by Anthropic's server-hosted Python sandbox during this
+    -- assistant turn. Persisted from runV2SessionStream's
+    -- harvestOutputFiles helper — each entry is
+    --   { file_id, filename, mime, size, url }
+    -- where url points to our own storage (Anthropic's session
+    -- container is ephemeral, so we re-host the bytes locally). The
+    -- chat history rebuilder can read this column to render download
+    -- chips on a page refresh; the live SSE stream emits a chat_file
+    -- event for the same files in real time.
+    ALTER TABLE ai_messages ADD COLUMN IF NOT EXISTS output_files JSONB;
+
     -- Materials catalog — Project 86's purchase history (Home Depot to start;
     -- vendor column makes Lowe's / Sherwin Williams / etc. a config
     -- addition later, not a schema change). One row per unique

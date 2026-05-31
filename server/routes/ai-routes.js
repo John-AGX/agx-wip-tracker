@@ -82,7 +82,13 @@ function getAnthropic() {
     _anthropicClient = new Anthropic({
       apiKey: key,
       defaultHeaders: {
-        'anthropic-beta': 'files-api-2025-04-14,compact-2026-01-12,code-execution-2025-08-25'
+        // managed-agents-2026-04-01 is required for files.list({scope_id})
+        // to return per-session output files (e.g. /mnt/session/outputs/*
+        // artifacts from code_execution). Without it, the list filtered by
+        // scope_id returns 0 results even when the sandbox wrote files —
+        // which is why the "no deliver_file_to_chat tool" symptom appeared
+        // even after enabling code_execution.
+        'anthropic-beta': 'files-api-2025-04-14,compact-2026-01-12,code-execution-2025-08-25,managed-agents-2026-04-01'
       }
     });
     _anthropicKey = key;
@@ -3384,6 +3390,126 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
     try { res.end(); } catch (e) {}
   }
 
+  // ── Code-execution output harvester ──────────────────────────────
+  // When 86 runs code_execution (e.g., `python` writing
+  // `/mnt/session/outputs/foo.xlsx`), the artifact lives on Anthropic's
+  // session container — not in our SSE stream. We snapshot the
+  // session's known file IDs at turn-start, then on terminal idle we
+  // re-list files for the session, download anything NEW, persist to
+  // our own storage, and surface a markdown link + structured
+  // `chat_file` SSE event so the user can grab the file from chat.
+  //
+  // betas: managed-agents-2026-04-01 is required for files.list to
+  // filter by scope_id. Without it, scope_id is silently ignored and
+  // the list returns the org's flat file table (wrong file set).
+  const HARVEST_BETAS = ['files-api-2025-04-14', 'managed-agents-2026-04-01'];
+  const knownFileIds = new Set();
+  let _harvestSnapshotPromise = (async () => {
+    try {
+      for await (const meta of anthropic.beta.files.list({
+        scope_id: sessionId,
+        betas: HARVEST_BETAS
+      })) {
+        if (meta && meta.id) knownFileIds.add(meta.id);
+      }
+    } catch (e) {
+      // Non-fatal — an empty snapshot just means we treat all files
+      // visible at harvest time as new. Worst case we re-emit a file
+      // from a prior turn, which is harmless (it'll just appear as a
+      // duplicate link). Log so we can spot scope_id breakage.
+      console.warn('[v2-stream] file-snapshot pre-turn list failed:',
+        e && e.message, 'session', sessionId);
+    }
+  })();
+
+  async function harvestOutputFiles(inlineFileIds) {
+    // Wait for the start-of-turn snapshot so we have a baseline.
+    try { await _harvestSnapshotPromise; } catch (_) {}
+    const newFiles = [];
+    // Phase 1 — collect file_ids from the inline content-block source
+    // (passed in from the agent.message block walker). These are
+    // reliable: they came in the stream itself, no indexing lag.
+    const inlineIds = (inlineFileIds && inlineFileIds.size)
+      ? Array.from(inlineFileIds).filter(id => !knownFileIds.has(id))
+      : [];
+    // Phase 2 — also poll files.list({scope_id}) as a fallback in
+    // case some output path we didn't parse surfaced files. Retry
+    // up to 3 times — indexing lag is 1-3s after session.status_idle.
+    let listedMetas = [];
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const fetched = [];
+      try {
+        for await (const meta of anthropic.beta.files.list({
+          scope_id: sessionId,
+          betas: HARVEST_BETAS
+        })) {
+          if (meta && meta.id && !knownFileIds.has(meta.id)) fetched.push(meta);
+        }
+      } catch (e) {
+        console.warn('[v2-stream] files.list harvest attempt',
+          attempt + 1, 'failed:', e && e.message, 'session', sessionId);
+      }
+      if (fetched.length) { listedMetas = fetched; break; }
+      // If we already have inline ids we don't need the fallback to
+      // succeed — break out so we don't add 3s of latency for nothing.
+      if (inlineIds.length && attempt === 0) break;
+      if (attempt < 2) await new Promise(r => setTimeout(r, 1100));
+    }
+    // Union both sources (inline ids may not appear in listedMetas yet
+    // due to indexing lag — that's fine, we fetch metadata individually
+    // for those). Build a map of id -> meta-or-null.
+    const idsToFetch = new Map();
+    for (const m of listedMetas) idsToFetch.set(m.id, m);
+    for (const id of inlineIds) if (!idsToFetch.has(id)) idsToFetch.set(id, null);
+
+    vDebug('[v2-stream] harvest summary',
+      'session', sessionId,
+      'inline_ids:', JSON.stringify(inlineIds),
+      'listed_count:', listedMetas.length,
+      'total_to_fetch:', idsToFetch.size);
+
+    for (const [fileId, meta] of idsToFetch.entries()) {
+      try {
+        // If we only have the id (from inline blocks), fetch metadata
+        // so we know the filename + mime + size for naming + chip.
+        let m = meta;
+        if (!m) {
+          try {
+            m = await anthropic.beta.files.retrieveMetadata(fileId, {
+              betas: HARVEST_BETAS
+            });
+          } catch (e) {
+            console.warn('[v2-stream] retrieveMetadata failed for',
+              fileId, ':', e && e.message);
+            m = { id: fileId, filename: 'output-' + fileId, mime_type: 'application/octet-stream', size_bytes: 0 };
+          }
+        }
+        const resp = await anthropic.beta.files.download(fileId, {
+          betas: HARVEST_BETAS
+        });
+        const buf = Buffer.from(await resp.arrayBuffer());
+        const rawName = String(m.filename || ('output-' + fileId));
+        const safeName = rawName.replace(/[^A-Za-z0-9._-]+/g, '_');
+        const key = 'chat_outputs/' + sessionId + '/' + fileId + '_' + safeName;
+        const url = await storage.put(
+          key, buf, m.mime_type || 'application/octet-stream'
+        );
+        knownFileIds.add(fileId);
+        newFiles.push({
+          file_id: fileId,
+          filename: rawName,
+          mime: m.mime_type || 'application/octet-stream',
+          size: m.size_bytes || buf.length,
+          url: url
+        });
+      } catch (e) {
+        console.warn('[v2-stream] file harvest persist failed for',
+          fileId, ':', e && e.message);
+      }
+    }
+    return newFiles;
+  }
+
   // Premature-close diagnostics — fires when the client or an
   // intermediary (Cloudflare, Railway edge, browser) closes the TCP
   // connection BEFORE the server emitted [DONE]. Without this hook the
@@ -3670,6 +3796,12 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
     // request stack traces. Logged once at end-of-stream.
     const eventCounts = {};
     let stallNudgeQueued = false;
+    // File ids harvested from inline code_execution result blocks
+    // (bash_code_execution_output / code_execution_output). This is
+    // the primary source — bypasses files.list indexing lag. We still
+    // fall back to files.list({scope_id}) on terminal idle in case
+    // Anthropic surfaces files via a path we didn't capture.
+    const codeExecFileIds = new Set();
 
     const stream = await openStreamAndSend(nextEventsToSend);
     if (!stream) return;
@@ -3683,12 +3815,79 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
             // blocks (text, etc.). We forward each text block as a single
             // delta — coarser than the per-token v1 stream, but this is
             // the granularity the Sessions API exposes today.
+            //
+            // server_tool_use + *_code_execution_tool_result blocks are
+            // how Anthropic surfaces server-hosted tools (code_execution).
+            // The session does NOT emit a separate agent.tool_use event
+            // for these — they ride INSIDE agent.message content. We
+            // surface a chip from server_tool_use and harvest any
+            // bash_code_execution_output / code_execution_output blocks
+            // for their file_ids (more reliable than files.list — bypasses
+            // the post-idle indexing lag).
             const blocks = Array.isArray(event.content) ? event.content : [];
+            const seenBlockTypes = {};
             for (const b of blocks) {
-              if (b && b.type === 'text' && typeof b.text === 'string') {
+              if (!b || !b.type) continue;
+              seenBlockTypes[b.type] = (seenBlockTypes[b.type] || 0) + 1;
+              if (b.type === 'text' && typeof b.text === 'string') {
                 assistantText += b.text;
                 send({ delta: b.text });
+              } else if (b.type === 'server_tool_use') {
+                // Surface a chip so the user sees "code_execution · …"
+                // while the sandbox runs. Server-side tools fire and
+                // complete fast — send started + applied together so
+                // the chip flashes green even on turns with no follow-up.
+                const stuName = b.name || 'server_tool';
+                const i = b.input || {};
+                const ceFirstLine = (typeof i.code === 'string')
+                  ? (i.code.split('\n').find(s => s.trim()) || '').slice(0, 80)
+                  : (typeof i.command === 'string' ? i.command.slice(0, 80) : '');
+                send({ tool_started: { id: b.id, name: stuName } });
+                send({ tool_applied: {
+                  id: b.id, name: stuName,
+                  summary: stuName + (ceFirstLine ? (' · ' + ceFirstLine) : '')
+                }});
+              } else if (
+                b.type === 'bash_code_execution_tool_result' ||
+                b.type === 'code_execution_tool_result'
+              ) {
+                // Walk the nested result structure looking for file_id
+                // references. Shape per SDK types:
+                //   { type, tool_use_id, content: { type:'*_result',
+                //       content: [{type:'*_output', file_id}, …] } }
+                // Errors come through as content: { type:'…_error',
+                // error_code } — we just log those for forensic value.
+                try {
+                  const inner = b.content;
+                  if (inner && Array.isArray(inner.content)) {
+                    for (const o of inner.content) {
+                      if (o && o.file_id) {
+                        codeExecFileIds.add(o.file_id);
+                      }
+                    }
+                  } else if (inner && inner.error_code) {
+                    console.warn('[v2-stream] code_execution result error',
+                      'session', sessionId, 'code:', inner.error_code);
+                  }
+                } catch (e) {
+                  console.warn('[v2-stream] failed to parse code_execution result:',
+                    e && e.message);
+                }
               }
+            }
+            // Diagnostic: any block-types we didn't have an explicit
+            // branch for. Lets us see when Anthropic adds new content
+            // shapes (e.g., text_editor_code_execution_tool_result).
+            const unhandled = Object.keys(seenBlockTypes).filter(t =>
+              t !== 'text' && t !== 'server_tool_use' &&
+              t !== 'bash_code_execution_tool_result' &&
+              t !== 'code_execution_tool_result'
+            );
+            if (unhandled.length) {
+              vDebug('[v2-stream] agent.message unhandled block types',
+                'session', sessionId,
+                'types:', JSON.stringify(unhandled),
+                'counts:', JSON.stringify(seenBlockTypes));
             }
             break;
           }
@@ -4057,9 +4256,49 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
                 session_id: sessionId
               });
             } else {
-              if (assistantText && persistAssistantText) {
-                try { await persistAssistantText(assistantText, usage); }
-                catch (e) { console.error('persistAssistantText failed:', e); }
+              // Harvest any code_execution output files written to
+              // /mnt/session/outputs/ during this turn BEFORE we
+              // persist + close. Files are downloaded once, re-hosted
+              // on our storage so they survive past Anthropic's
+              // session container, and emitted to the client as
+              //   - a markdown footer appended to the streamed text
+              //     (renders as clickable links in chat history)
+              //   - a structured `chat_file` SSE event (optional
+              //     future client UI for download chips)
+              let harvested = [];
+              try {
+                harvested = await harvestOutputFiles(codeExecFileIds);
+              } catch (e) {
+                console.warn('[v2-stream] harvestOutputFiles failed:',
+                  e && e.message);
+              }
+              let footerText = '';
+              if (harvested.length) {
+                const lines = harvested.map(f => {
+                  const sizeKb = Math.max(1, Math.round((f.size || 0) / 1024));
+                  return '- 📎 [' + f.filename + '](' + f.url + ') · '
+                    + sizeKb + ' KB';
+                });
+                footerText = '\n\n**Files produced this turn:**\n'
+                  + lines.join('\n');
+                // Stream the footer as a delta so the live UI updates
+                // without a refresh, and append to assistantText so
+                // persistAssistantText writes the same text we showed.
+                send({ delta: footerText });
+                assistantText += footerText;
+                // Structured event — clients that render attachment
+                // chips can use this without parsing markdown. Older
+                // clients ignore the unknown key.
+                for (const f of harvested) {
+                  send({ chat_file: f });
+                }
+              }
+              if ((assistantText || harvested.length) && persistAssistantText) {
+                try {
+                  await persistAssistantText(assistantText, usage, {
+                    output_files: harvested.length ? harvested : null
+                  });
+                } catch (e) { console.error('persistAssistantText failed:', e); }
               }
               send({ done: true, usage: usage });
             }
@@ -4077,6 +4316,12 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
             // even on a turn that produces no follow-up text.
             const name = event.name || 'tool';
             const i = event.input || {};
+            // code_execution surfaces with input.code (a Python snippet);
+            // show the first line so the chip is informative without
+            // dumping the whole script.
+            const ceFirstLine = (typeof i.code === 'string')
+              ? (i.code.split('\n').find(s => s.trim()) || '').slice(0, 80)
+              : '';
             const summary =
               name === 'web_search' ? 'web_search · ' + (i.query || '').slice(0, 80) :
               name === 'web_fetch'  ? 'web_fetch · '  + (i.url   || '').slice(0, 80) :
@@ -4086,6 +4331,7 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
               name === 'edit'       ? 'edit · '       + (i.path || i.file_path || '').slice(0, 80) :
               name === 'glob'       ? 'glob · '       + (i.pattern || '').slice(0, 80) :
               name === 'grep'       ? 'grep · '       + (i.pattern || '').slice(0, 80) :
+              name === 'code_execution' ? 'code_execution · ' + ceFirstLine :
               name;
             send({ tool_started: { id: event.id, name: name } });
             send({ tool_applied: { id: event.id, name: name, summary: summary } });
@@ -8357,14 +8603,38 @@ async function execStaffTool(name, input, ctx) {
     }
 
     case 'read_workspace_sheet_full': {
+      // Phase 0 — accept either jobId or estimateId. The workspace now
+      // lives on either side (jobs.data.workbook OR estimates.data.workbook).
+      // Resolve in order: explicit input.estimateId → input.jobId →
+      // ctx.entityType+ctx.entityId (when the chat session is anchored
+      // to an entity, the model doesn't have to pass either explicitly).
+      const estimateId = String(input.estimateId || input.estimate_id || '').trim();
       const jobId = String(input.jobId || input.job_id || '').trim();
-      if (!jobId) return 'read_workspace_sheet_full requires jobId.';
+      let table = null, entityId = null;
+      if (estimateId) { table = 'estimates'; entityId = estimateId; }
+      else if (jobId) { table = 'jobs'; entityId = jobId; }
+      else if (ctx && ctx.entityType === 'estimate' && ctx.entityId) {
+        table = 'estimates'; entityId = ctx.entityId;
+      }
+      else if (ctx && ctx.entityType === 'job' && ctx.entityId) {
+        table = 'jobs'; entityId = ctx.entityId;
+      }
+      if (!table) return 'read_workspace_sheet_full requires jobId or estimateId (or a chat session anchored to a job/estimate).';
       const sheetName = String(input.sheet_name || '').trim();
       if (!sheetName) return 'read_workspace_sheet_full requires sheet_name.';
-      const r = await pool.query('SELECT data FROM jobs WHERE id = $1', [jobId]);
-      if (!r.rows.length) return 'Job not found: ' + jobId;
+      const r = await pool.query('SELECT data FROM ' + table + ' WHERE id = $1', [entityId]);
+      if (!r.rows.length) return (table === 'estimates' ? 'Estimate' : 'Job') + ' not found: ' + entityId;
       const d = r.rows[0].data || {};
-      const sheets = Array.isArray(d.workspaceSheets) ? d.workspaceSheets : [];
+      // Phase 0 — new shape: data.workbook.sheets (versioned workbook
+      // object). Legacy job-side shape kept as a fallback for any job
+      // that hasn't been re-saved since the cutover: data.workspaceSheets
+      // (flat array). Try the new path first, fall back to the legacy
+      // array shape so existing 86 reads stay non-empty during the
+      // transition window.
+      const workbook = d.workbook && typeof d.workbook === 'object' ? d.workbook : null;
+      const sheets = (workbook && Array.isArray(workbook.sheets))
+        ? workbook.sheets
+        : (Array.isArray(d.workspaceSheets) ? d.workspaceSheets : []);
       // Match: exact → case-insensitive → trimmed lowercase
       let sheet = sheets.find(s => s.name === sheetName);
       if (!sheet) sheet = sheets.find(s => String(s.name || '').toLowerCase() === sheetName.toLowerCase());
@@ -8385,7 +8655,25 @@ async function execStaffTool(name, input, ctx) {
       } else if (sheet.cells && typeof sheet.cells === 'object') {
         const keys = Object.keys(sheet.cells).sort();
         out.push('(' + keys.length + ' cells)');
-        keys.forEach(k => out.push(k + ': ' + sheet.cells[k]));
+        keys.forEach(k => {
+          // New workbook shape: cells are { raw, value, fmt, style, error }
+          // objects. Surface the human-readable value (or raw if value
+          // hasn't been evaluated yet) — dumping the whole cell object
+          // would bury the data in style noise the AI doesn't need.
+          // Legacy shape: cells are bare scalars (string / number) —
+          // pass through as-is.
+          const c = sheet.cells[k];
+          let render;
+          if (c && typeof c === 'object') {
+            if (c.error) render = '#ERROR(' + String(c.error) + ')';
+            else if (c.value !== undefined && c.value !== null && c.value !== '') render = String(c.value);
+            else if (c.raw !== undefined && c.raw !== null) render = String(c.raw);
+            else render = '';
+          } else {
+            render = c == null ? '' : String(c);
+          }
+          out.push(k + ': ' + render);
+        });
       } else {
         // Unknown shape — dump JSON, capped so we don't blow context.
         out.push(JSON.stringify(sheet, null, 2).slice(0, 8000));
@@ -11235,7 +11523,7 @@ router.get('/86/messages', requireAuth, async (req, res) => {
       if (!sr.rows.length) return res.status(404).json({ error: 'session not found' });
       const s = sr.rows[0];
       const mr = await pool.query(
-        `SELECT id, role, content, created_at
+        `SELECT id, role, content, output_files, created_at
            FROM ai_messages
           WHERE user_id = $1
             AND entity_type = $2
@@ -11246,7 +11534,7 @@ router.get('/86/messages', requireAuth, async (req, res) => {
       return res.json({ messages: mr.rows });
     }
     const r = await pool.query(
-      `SELECT id, role, content, created_at
+      `SELECT id, role, content, output_files, created_at
          FROM ai_messages
         WHERE entity_type='86' AND user_id=$1
         ORDER BY created_at ASC`,
@@ -11574,29 +11862,33 @@ router.post('/86/chat', requireAuth, requireOrg, aiChatLimiter, aiChatHourlyLimi
       freshlyCreated: !!(session && session._freshlyCreated),
       persistAssistantText: async (text, usage, meta) => {
         // Skip only when there's nothing worth keeping — empty text AND
-        // no tool_uses meta. Awaiting-approval turns with zero prose
-        // but non-empty tool_uses still write a row so introspection
-        // can see what was proposed.
+        // no tool_uses meta AND no output_files. Awaiting-approval
+        // turns with zero prose but non-empty tool_uses still write
+        // a row so introspection can see what was proposed; same
+        // applies to code_execution turns that emit files but no
+        // text.
         const hasText = !!(text && String(text).trim());
         const toolUses = (meta && Array.isArray(meta.tool_uses)) ? meta.tool_uses : null;
         const toolUseCount = (meta && Number.isInteger(meta.tool_use_count))
           ? meta.tool_use_count
           : (toolUses ? toolUses.length : 0);
-        if (!hasText && !toolUseCount) return;
+        const outputFiles = (meta && Array.isArray(meta.output_files)) ? meta.output_files : null;
+        if (!hasText && !toolUseCount && !(outputFiles && outputFiles.length)) return;
         const aMsgId = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
         await pool.query(
           `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, model,
                                     input_tokens, output_tokens,
                                     cache_creation_input_tokens, cache_read_input_tokens,
-                                    tool_use_count, tool_uses)
-           VALUES ($1, $2, $3, $4, 'assistant', $5, $6, $7, $8, $9, $10, $11, $12)`,
+                                    tool_use_count, tool_uses, output_files)
+           VALUES ($1, $2, $3, $4, 'assistant', $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
           [aMsgId, turnEntityType, turnEntityId, req.user.id, text || '', MODEL,
            (usage && usage.input_tokens) || null,
            (usage && usage.output_tokens) || null,
            (usage && usage.cache_creation_input_tokens) || null,
            (usage && usage.cache_read_input_tokens) || null,
            toolUseCount,
-           toolUses ? JSON.stringify(toolUses) : null]
+           toolUses ? JSON.stringify(toolUses) : null,
+           outputFiles ? JSON.stringify(outputFiles) : null]
         );
 
         // Background auto-label: on the very first exchange (the
@@ -11782,21 +12074,23 @@ router.post('/86/chat/continue', requireAuth, requireOrg, aiChatLimiter, aiChatH
         const toolUseCount = (meta && Number.isInteger(meta.tool_use_count))
           ? meta.tool_use_count
           : (toolUses ? toolUses.length : 0);
-        if (!hasText && !toolUseCount) return;
+        const outputFiles = (meta && Array.isArray(meta.output_files)) ? meta.output_files : null;
+        if (!hasText && !toolUseCount && !(outputFiles && outputFiles.length)) return;
         const aMsgId = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
         await pool.query(
           `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, model,
                                     input_tokens, output_tokens,
                                     cache_creation_input_tokens, cache_read_input_tokens,
-                                    tool_use_count, tool_uses)
-           VALUES ($1, $2, $3, $4, 'assistant', $5, $6, $7, $8, $9, $10, $11, $12)`,
+                                    tool_use_count, tool_uses, output_files)
+           VALUES ($1, $2, $3, $4, 'assistant', $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
           [aMsgId, session.entity_type, sessionEntityId, req.user.id, text || '', MODEL,
            (usage && usage.input_tokens) || null,
            (usage && usage.output_tokens) || null,
            (usage && usage.cache_creation_input_tokens) || null,
            (usage && usage.cache_read_input_tokens) || null,
            toolUseCount,
-           toolUses ? JSON.stringify(toolUses) : null]
+           toolUses ? JSON.stringify(toolUses) : null,
+           outputFiles ? JSON.stringify(outputFiles) : null]
         );
       }
     });

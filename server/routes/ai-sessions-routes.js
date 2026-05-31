@@ -214,6 +214,7 @@ router.get('/:id', requireAuth, async (req, res) => {
       `SELECT id, role, content, photos_included, inline_image_blocks,
               input_tokens, output_tokens,
               cache_creation_input_tokens, cache_read_input_tokens,
+              output_files,
               created_at
          FROM ai_messages
         WHERE user_id = $1
