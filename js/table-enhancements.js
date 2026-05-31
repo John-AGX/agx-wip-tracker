@@ -64,6 +64,11 @@
   var suppressClick = false;  // swallow the trailing header click after a drag/resize
   var resizeHandlerInstalled = false;
   var menuEl = null;          // floating reset menu
+  // Natural (renderer-emitted) column order per table, captured on the
+  // first enhance BEFORE any reordering. This is the canonical default
+  // that "Reset columns" restores to — the live DOM order can't serve as
+  // the default because by reset time it's already the reordered layout.
+  var DEFAULT_ORDER = {};
 
   // ── localStorage ────────────────────────────────────────────────
   function lsKey(key) { return LS_PREFIX + key + LS_SUFFIX; }
@@ -112,7 +117,10 @@
   // Final column order: saved order (filtered to known cols) + any new
   // cols appended, then the frozen key forced to the front.
   function computeOrder(key, table) {
-    var def = currentOrder(table);
+    // Base on the captured natural order so a reset (or a saved layout
+    // missing some cols) restores the true default, not the live DOM
+    // order which may already be reordered.
+    var def = (DEFAULT_ORDER[key] || currentOrder(table)).slice();
     var order = def.slice();
     var layout = loadLayout(key);
     if (layout && layout.order && layout.order.length) {
@@ -450,6 +458,10 @@
     var table = document.querySelector(reg.selector);
     if (!table) return;
     if (!headerCells(table).length) return; // headers not tagged yet
+
+    // Capture the renderer's natural column order ONCE, before we ever
+    // reorder the DOM, so "Reset columns" has a true default to restore.
+    if (!DEFAULT_ORDER[key]) DEFAULT_ORDER[key] = currentOrder(table);
 
     table.classList.add('p86-enhanced');
     table.style.setProperty('--p86-frozen-bg', reg.frozenBg);
