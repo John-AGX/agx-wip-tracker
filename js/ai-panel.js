@@ -1860,9 +1860,21 @@
     }
     var groups = bucketSessions(rows);
     var html = '';
-    function renderGroup(label, items) {
+    function renderGroup(label, items, key) {
       if (!items.length) return;
-      html += '<div style="padding:10px 12px 4px 12px;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:rgba(255,255,255,0.32);">' + escapeHTML(label) + '</div>';
+      // Each recency group is a collapsible section: clickable header
+      // (caret + label + count) over a body wrapper that hides on
+      // collapse. State persists in localStorage (default open) via the
+      // same helpers the Payloads / Recipes sections use, so the user
+      // can fold away big buckets and scan what's there without an
+      // endless scroll.
+      var grpOpen = getPanelSectionOpen('chats-' + key);
+      html += '<div class="ai-grp-header" data-grp="' + key + '" style="padding:10px 12px 4px 12px;display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none;">' +
+        '<span class="p86-caret" style="font-size:9px;opacity:0.5;transition:transform 0.15s;display:inline-block;transform:' + (grpOpen ? 'rotate(0deg)' : 'rotate(-90deg)') + ';">&#x25BC;</span>' +
+        '<span style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:rgba(255,255,255,0.32);">' + escapeHTML(label) + '</span>' +
+        '<span style="font-size:10px;color:rgba(255,255,255,0.26);">' + items.length + '</span>' +
+      '</div>';
+      html += '<div class="ai-grp-body" data-grp-body="' + key + '" style="' + (grpOpen ? '' : 'display:none;') + '">';
       items.forEach(function(r) {
         var active = (_currentSessionId === r.id);
         // Active row: subtle accent (no harsh left bar). Hover: faint
@@ -1909,13 +1921,28 @@
           '</div>' +
         '</div>';
       });
+      html += '</div>';
     }
-    renderGroup('Pinned', groups.pinned);
-    renderGroup('Today', groups.today);
-    renderGroup('Yesterday', groups.yesterday);
-    renderGroup('This week', groups.week);
-    renderGroup('Earlier', groups.earlier);
+    renderGroup('Pinned', groups.pinned, 'pinned');
+    renderGroup('Today', groups.today, 'today');
+    renderGroup('Yesterday', groups.yesterday, 'yesterday');
+    renderGroup('This week', groups.week, 'week');
+    renderGroup('Earlier', groups.earlier, 'earlier');
     host.innerHTML = html;
+
+    // Wire collapsible group headers. Clicking toggles the body's
+    // visibility + persists the choice. Delegated per render (cheap).
+    Array.from(host.querySelectorAll('.ai-grp-header')).forEach(function(hdr) {
+      hdr.onclick = function() {
+        var key = hdr.getAttribute('data-grp');
+        var open = !getPanelSectionOpen('chats-' + key);
+        setPanelSectionOpen('chats-' + key, open);
+        var body = host.querySelector('[data-grp-body="' + key + '"]');
+        var caret = hdr.querySelector('.p86-caret');
+        if (body) body.style.display = open ? '' : 'none';
+        if (caret) caret.style.transform = open ? 'rotate(0deg)' : 'rotate(-90deg)';
+      };
+    });
 
     // Wire row clicks + right-click menu. Use event delegation so we
     // don't re-bind on every render.
