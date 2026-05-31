@@ -88,15 +88,18 @@
   font-weight: 600;
 }
 
-/* Sheet tabs — white with green active tab matching Excel */
+/* Sheet sidebar — light panel with green active row matching Excel */
 .ws-excel-theme .ws-sheet-tabs {
   background: #f3f2f1;
-  border-top-color: #d4d4d4;
+  border-color: #d4d4d4;
+}
+.ws-excel-theme .ws-sheet-tabs-head {
+  color: #605e5c;
 }
 .ws-excel-theme .ws-sheet-tab {
-  background: #f3f2f1;
+  background: transparent;
   color: #252525;
-  border-color: #d4d4d4;
+  border-color: transparent;
 }
 .ws-excel-theme .ws-sheet-tab:hover {
   background: #ffffff;
@@ -105,7 +108,16 @@
 .ws-excel-theme .ws-sheet-tab.active {
   background: #ffffff;
   color: #107C41;
-  border-bottom-color: #ffffff;
+}
+.ws-excel-theme .ws-sheet-tab.active::before {
+  background: #107C41;
+}
+.ws-excel-theme .ws-sheet-tab-add {
+  color: #605e5c;
+}
+.ws-excel-theme .ws-sheet-tab-add:hover {
+  background: #ffffff;
+  color: #107C41;
 }
 .ws-excel-theme .ws-workbook-tab {
   background: rgba(16, 124, 65, 0.08);
@@ -1170,71 +1182,124 @@
 
 /* ── Sheet Tab Strip ────────────────────────────────────── */
 /* Excel-style tabs at the bottom of the workspace, above the status bar. */
+/* Main work area — horizontal split: left sheet-tab sidebar + the
+   grid/statusbar content column. The grid-wrapper keeps its own
+   overflow:auto, so .ws-content-col needs min-width:0 to let it shrink
+   inside the flex row instead of forcing the sidebar off-screen. */
+.ws-main-row {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+}
+.ws-content-col {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Sheet-tab sidebar — vertical list of sheets on the LEFT of the grid
+   (Claude-style). Replaces the old bottom Excel tab strip. Fixed width,
+   own vertical scroll, "+ New sheet" pinned at the bottom. */
 .ws-sheet-tabs {
+  flex: 0 0 auto;
+  width: 186px;
+  display: flex;
+  flex-direction: column;
   background: var(--grid-header-bg);
-  border-left: 1px solid var(--grid-border);
-  border-right: 1px solid var(--grid-border);
-  padding: 2px 4px 0;
+  border: 1px solid var(--grid-border);
+  border-right: none;
+  padding: 6px 6px 0;
   user-select: none;
+  overflow: hidden;
+}
+.ws-sheet-tabs-head {
+  flex: 0 0 auto;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--text-dim, #888);
+  padding: 4px 8px 8px;
 }
 .ws-sheet-tabs-list {
   display: flex;
-  align-items: flex-end;
+  flex-direction: column;
+  align-items: stretch;
   gap: 2px;
-  overflow-x: auto;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   scrollbar-width: thin;
 }
 .ws-sheet-tab {
   position: relative;
-  padding: 6px 14px 6px 12px;
-  background: rgba(255,255,255,0.02);
-  border: 1px solid var(--grid-border);
-  border-bottom: none;
-  border-radius: 4px 4px 0 0;
-  font-size: 11px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 7px 10px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font-size: 12px;
   color: var(--text-dim, #aaa);
   cursor: pointer;
   white-space: nowrap;
   transition: background 0.12s, color 0.12s;
-  margin-bottom: -1px;
 }
 .ws-sheet-tab:hover {
   background: rgba(255,255,255,0.05);
   color: var(--text, #fff);
 }
 .ws-sheet-tab.active {
-  background: var(--surface, #181820);
+  background: rgba(255,255,255,0.08);
   color: var(--text, #fff);
   font-weight: 600;
-  border-bottom: 1px solid var(--surface, #181820);
-  z-index: 1;
 }
-.ws-sheet-tab-name { display: inline-block; }
+/* Active accent — a short vertical bar on the left edge (replaces the
+   old folder-tab "open" look now that tabs are vertical). */
+.ws-sheet-tab.active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 60%;
+  border-radius: 0 2px 2px 0;
+  background: var(--accent, #4f8cff);
+}
+.ws-sheet-tab-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .ws-sheet-tab-icon {
-  display: inline-block;
-  margin-right: 4px;
-  font-size: 11px;
+  flex: 0 0 auto;
+  font-size: 12px;
   opacity: 0.85;
 }
 
-/* Workbook tab — represents a multi-sheet xlsx import in the bottom
-   strip. Folder icon + sheet count badge so the user sees there's
-   more behind the tab. AGX-green accent so it stands out from
-   regular sheets and pinned built-ins. */
+/* Workbook tab — represents a multi-sheet xlsx import in the sidebar.
+   Folder icon + sheet count badge so the user sees there's more behind
+   the row. AGX-green accent so it stands out from regular sheets and
+   pinned built-ins. No box border in the sidebar — the accent reads
+   as text color + the active left-edge bar. */
 .ws-workbook-tab {
-  border-color: rgba(27, 133, 65, 0.45);
   color: #a8dcb6;
-  background: rgba(27, 133, 65, 0.06);
 }
 .ws-workbook-tab:hover {
-  border-color: rgba(27, 133, 65, 0.7);
   color: #d6f0dd;
+  background: rgba(27, 133, 65, 0.10);
 }
 .ws-workbook-tab.active {
   color: #ffffff;
-  border-color: rgba(37, 99, 235, 0.55);
-  background: var(--surface, #181820);
-  border-bottom-color: var(--surface, #181820);
+  background: rgba(27, 133, 65, 0.16);
+}
+.ws-workbook-tab.active::before {
+  background: #2bb35f;
 }
 .ws-workbook-tab-count {
   display: inline-flex;
@@ -1312,30 +1377,30 @@
 }
 /* Pinned built-in views (e.g. Detailed Costs, Attachments) — each
    built-in gets its own accent color so the user can tell them
-   apart at a glance. Default pinned styling falls back to the blue
-   QB Costs accent. */
+   apart at a glance in the sidebar. No box border (that was the old
+   folder-tab look); the accent shows as text color + the active
+   left-edge bar. Default pinned styling falls back to blue. */
 .ws-sheet-tab-pinned {
-  border-color: rgba(79, 140, 255, 0.45);
   color: #a6c4ff;
 }
 .ws-sheet-tab-pinned.active {
   color: #4f8cff;
-  border-color: rgba(79, 140, 255, 0.7);
-  border-bottom-color: var(--surface, #181820);
+}
+.ws-sheet-tab-pinned.active::before {
+  background: #4f8cff;
 }
 /* Detailed Costs — blue (kept as default) */
 .ws-sheet-tab-qb-costs {
-  border-color: rgba(79, 140, 255, 0.45);
   color: #a6c4ff;
 }
 .ws-sheet-tab-qb-costs.active {
   color: #4f8cff;
-  border-color: rgba(79, 140, 255, 0.7);
-  border-bottom-color: var(--surface, #181820);
+}
+.ws-sheet-tab-qb-costs.active::before {
+  background: #4f8cff;
 }
 /* Attachments — purple/violet to distinguish from Detailed Costs */
 .ws-sheet-tab-attachments {
-  border-color: rgba(167, 139, 250, 0.45);
   color: #ddd0ff;
 }
 .ws-sheet-tab-attachments:hover {
@@ -1344,9 +1409,10 @@
 }
 .ws-sheet-tab-attachments.active {
   color: #a78bfa;
-  border-color: rgba(167, 139, 250, 0.75);
-  border-bottom-color: var(--surface, #181820);
-  background: linear-gradient(180deg, rgba(167, 139, 250, 0.10), var(--surface, #181820));
+  background: rgba(167, 139, 250, 0.12);
+}
+.ws-sheet-tab-attachments.active::before {
+  background: #a78bfa;
 }
 /* Embed host inside the workspace flex column — fills space between
    formatting toolbars (or instead of the grid) and the sheet tabs.
@@ -1382,16 +1448,23 @@ body.light-mode .ee-section-total,
 body.light-mode .ee-grand-total {
   color: var(--text, #111827);
 }
+/* "+ New sheet" — full-width row pinned at the bottom of the sidebar,
+   below the scrolling sheet list. flex:0 0 auto keeps it from being
+   pushed off-screen when the list overflows. */
 .ws-sheet-tab-add {
+  flex: 0 0 auto;
+  display: block;
+  width: 100%;
+  text-align: left;
   background: transparent;
-  border: 1px solid transparent;
+  border: none;
+  border-top: 1px solid var(--grid-border, #2e3346);
   color: var(--text-dim, #888);
-  padding: 4px 10px;
-  font-size: 14px;
+  padding: 9px 10px;
+  margin-top: 4px;
+  font-size: 12px;
   font-weight: 600;
   cursor: pointer;
-  border-radius: 4px;
-  margin-bottom: 1px;
   transition: background 0.12s, color 0.12s;
 }
 .ws-sheet-tab-add:hover {
@@ -1517,6 +1590,21 @@ body.light-mode .ee-grand-total {
 
   .ws-link-panel {
     max-height: 200px;
+  }
+
+  /* Narrow the sheet sidebar so it doesn't eat half a phone screen.
+     The grid column still gets min-width:0 from .ws-content-col, so it
+     keeps its own horizontal scroll. */
+  .ws-sheet-tabs {
+    width: 132px;
+    padding: 4px 4px 0;
+  }
+  .ws-sheet-tab {
+    padding: 8px 8px;
+    font-size: 12px;
+  }
+  .ws-sheet-tabs-head {
+    padding: 4px 6px 6px;
   }
 }
 

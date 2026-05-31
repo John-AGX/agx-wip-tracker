@@ -3082,34 +3082,45 @@
         </div>
         <div class="ws-link-options" id="wsLinkOptions"></div>
       </div>
-      <!-- Inner workbook tabs — appears only when the active sheet
-           belongs to a multi-sheet xlsx import. Lists the workbook's
-           sheets in their original order so the user can navigate
-           between them without leaving the imported workbook. -->
-      <div class="ws-workbook-inner-tabs" id="wsWorkbookInnerTabs" style="display:none;"></div>
-      <div class="ws-grid-wrapper" id="wsGridWrapper">
-        <table class="ws-grid" id="wsGrid"></table>
-      </div>
-      <div class="ws-sheet-tabs" id="wsSheetTabs"></div>
-      <div class="ws-statusbar">
-        <span id="wsStatus">Ready</span>
-        <span id="wsQuickCalc"></span>
-        <span class="ws-statusbar-actions">
-          <button class="ws-btn ws-btn-add" id="wsAddRow" title="Add row">+ Row</button>
-          <button class="ws-btn ws-btn-add" id="wsAddCol" title="Add column">+ Col</button>
-        </span>
+      <!-- Main work area — the sheet tabs render as a LEFT vertical
+           sidebar (Claude-style) beside the grid instead of the old
+           bottom strip. This reclaims that strip's vertical room for the
+           grid/toolbars and lets long sheet lists scroll vertically
+           without the horizontal tab-bar overflow. #wsSheetTabs keeps its
+           id so renderSheetTabs() + all tab wiring work unchanged. -->
+      <div class="ws-main-row">
+        <div class="ws-sheet-tabs" id="wsSheetTabs"></div>
+        <div class="ws-content-col">
+          <!-- Inner workbook tabs — appears only when the active sheet
+               belongs to a multi-sheet xlsx import. Lists the workbook's
+               sheets in their original order so the user can navigate
+               between them without leaving the imported workbook. -->
+          <div class="ws-workbook-inner-tabs" id="wsWorkbookInnerTabs" style="display:none;"></div>
+          <div class="ws-grid-wrapper" id="wsGridWrapper">
+            <table class="ws-grid" id="wsGrid"></table>
+          </div>
+          <div class="ws-statusbar">
+            <span id="wsStatus">Ready</span>
+            <span id="wsQuickCalc"></span>
+            <span class="ws-statusbar-actions">
+              <button class="ws-btn ws-btn-add" id="wsAddRow" title="Add row">+ Row</button>
+              <button class="ws-btn ws-btn-add" id="wsAddCol" title="Add column">+ Col</button>
+            </span>
+          </div>
+        </div>
       </div>
     `;
   }
 
-  // ── Sheet tab strip ────────────────────────────────────────
-  // Excel-style tabs at the bottom of the workspace. Click to switch,
-  // double-click to rename, right-click for the contextual menu.
-  // The "+" appends a fresh sheet.
+  // ── Sheet tab sidebar ──────────────────────────────────────
+  // Vertical left-sidebar list of sheets (Claude-style). Click to
+  // switch, double-click to rename, right-click for the contextual
+  // menu. The "+ New sheet" row at the bottom appends a fresh sheet.
   function renderSheetTabs() {
     const wrap = document.getElementById('wsSheetTabs');
     if (!wrap) return;
-    let html = '<div class="ws-sheet-tabs-list">';
+    let html = '<div class="ws-sheet-tabs-head">Sheets</div>';
+    html += '<div class="ws-sheet-tabs-list">';
 
     // Build a map: groupId → the active sheet within that group. When
     // an active sheet belongs to a group, we want the group tab to
@@ -3184,8 +3195,8 @@
         sourceChip +
       '</div>';
     });
-    html += '<button class="ws-sheet-tab-add" id="wsAddSheetBtn" title="Add sheet">+</button>';
     html += '</div>';
+    html += '<button class="ws-sheet-tab-add" id="wsAddSheetBtn" title="Add sheet">+ New sheet</button>';
     wrap.innerHTML = html;
 
     // Workbook group tabs — click activates the group's last-active
