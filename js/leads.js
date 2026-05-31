@@ -135,18 +135,18 @@
     // distribution; if everything together exceeds the viewport,
     // the wrapper's overflow-x:auto provides a horizontal scroll.
     return '<tr class="leads-row" onclick="openEditLeadModal(\'' + escapeAttr(l.id) + '\')">' +
-      '<td class="lead-title-cell" style="white-space:nowrap;" title="' + escapeAttr(l.title) + (location ? ' · ' + location : '') + '">' +
+      '<td data-col="title" class="lead-title-cell" style="white-space:nowrap;" title="' + escapeAttr(l.title) + (location ? ' · ' + location : '') + '">' +
         '<strong style="color:var(--text,#fff);font-size:13px;">' + escapeHTML(l.title) + '</strong>' +
         titleSuffix +
       '</td>' +
-      '<td style="white-space:nowrap;">' + clientCell + '</td>' +
-      '<td>' + statusPill + '</td>' +
-      '<td class="num" style="font-family:\'SF Mono\',monospace;color:#34d399;font-weight:600;font-size:13px;white-space:nowrap;">' + escapeHTML(revenue) + '</td>' +
-      '<td class="num" style="font-family:\'SF Mono\',monospace;color:var(--text-dim,#aaa);font-size:12px;">' + escapeHTML(conf) + '</td>' +
-      '<td style="font-size:12px;color:var(--text-dim,#aaa);white-space:nowrap;">' + escapeHTML(l.salesperson_name || '') + '</td>' +
-      '<td style="font-size:12px;color:var(--text-dim,#aaa);white-space:nowrap;">' + escapeHTML(l.project_type || '') + '</td>' +
-      '<td style="font-size:11px;color:' + projColor + ';white-space:nowrap;">' + escapeHTML(projDateStr) + '</td>' +
-      '<td style="font-size:11px;color:var(--text-dim,#888);white-space:nowrap;" title="created ' + escapeAttr(fmtDate(l.created_at)) + '">' + escapeHTML(fmtDate(l.updated_at || l.created_at)) + '</td>' +
+      '<td data-col="client" style="white-space:nowrap;">' + clientCell + '</td>' +
+      '<td data-col="status">' + statusPill + '</td>' +
+      '<td data-col="revenue" class="num" style="font-family:\'SF Mono\',monospace;color:#34d399;font-weight:600;font-size:13px;white-space:nowrap;">' + escapeHTML(revenue) + '</td>' +
+      '<td data-col="confidence" class="num" style="font-family:\'SF Mono\',monospace;color:var(--text-dim,#aaa);font-size:12px;">' + escapeHTML(conf) + '</td>' +
+      '<td data-col="salesperson" style="font-size:12px;color:var(--text-dim,#aaa);white-space:nowrap;">' + escapeHTML(l.salesperson_name || '') + '</td>' +
+      '<td data-col="project_type" style="font-size:12px;color:var(--text-dim,#aaa);white-space:nowrap;">' + escapeHTML(l.project_type || '') + '</td>' +
+      '<td data-col="projected_sale_date" style="font-size:11px;color:' + projColor + ';white-space:nowrap;">' + escapeHTML(projDateStr) + '</td>' +
+      '<td data-col="updated_at" style="font-size:11px;color:var(--text-dim,#888);white-space:nowrap;" title="created ' + escapeAttr(fmtDate(l.created_at)) + '">' + escapeHTML(fmtDate(l.updated_at || l.created_at)) + '</td>' +
     '</tr>';
   }
 
@@ -211,7 +211,7 @@
     var arrow = active ? (_leadsSort.dir === 'asc' ? ' &uarr;' : ' &darr;') : '';
     var color = active ? '#4f8cff' : 'var(--text-dim,#888)';
     var alignClass = opts.num ? ' class="num"' : '';
-    return '<th' + alignClass + ' style="text-align:' + (opts.num ? 'right' : 'left') + ';" onclick="sortLeadsBy(\'' + key + '\')">' +
+    return '<th' + alignClass + ' data-col="' + key + '" style="text-align:' + (opts.num ? 'right' : 'left') + ';" onclick="sortLeadsBy(\'' + key + '\')">' +
       '<span style="cursor:pointer;color:' + color + ';font-size:10px;text-transform:uppercase;letter-spacing:0.5px;font-weight:700;user-select:none;">' +
       label + arrow +
       '</span>' +
@@ -302,6 +302,9 @@
           '<tbody>' + sorted.map(leadRowHTML).join('') + '</tbody>' +
         '</table>' +
       '</div>';
+
+    // Reorderable / resizable / freezable columns + internal scroll.
+    if (window.p86Tables) window.p86Tables.enhance('leads');
   }
 
   function reloadLeadsCache() {

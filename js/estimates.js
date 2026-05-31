@@ -188,7 +188,7 @@ function estimatesHeaderCell(label, key, opts) {
     var active = _estimatesSort.key === key;
     var arrow = active ? (_estimatesSort.dir === 'asc' ? ' &uarr;' : ' &darr;') : '';
     var color = active ? '#4f8cff' : 'var(--text-dim,#888)';
-    return '<th style="text-align:' + (opts.num ? 'right' : 'left') +
+    return '<th data-col="' + key + '" style="text-align:' + (opts.num ? 'right' : 'left') +
         ';padding:8px 10px;cursor:pointer;user-select:none;" onclick="sortEstimatesBy(\'' + key + '\')">' +
         '<span style="color:' + color + ';font-size:10px;text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">' +
         label + arrow +
@@ -287,19 +287,19 @@ function renderEstimatesList() {
                 const margin = t.markedUp > 0 ? ((t.markedUp - t.baseCost) / t.markedUp) * 100 : 0;
                 const marginColor = margin >= 30 ? '#34d399' : margin >= 15 ? '#fbbf24' : '#f87171';
                 return '<tr style="cursor:pointer;border-bottom:1px solid var(--border,#2a2a3a);" onclick="editEstimate(\'' + est.id + '\')">' +
-                    '<td style="padding:8px 10px;">' +
+                    '<td data-col="title" style="padding:8px 10px;">' +
                         '<strong style="color:var(--text,#fff);font-size:13px;">' + escapeHTML(est.title || '(untitled)') + '</strong>' +
                         titleSuffix +
                     '</td>' +
-                    '<td style="padding:8px 10px;font-size:13px;color:var(--text,#e6e6e6);">' + clientLabel + '</td>' +
-                    '<td class="num" style="padding:8px 10px;font-family:\'SF Mono\',monospace;color:var(--text-dim,#aaa);font-size:12px;">' +
+                    '<td data-col="client" style="padding:8px 10px;font-size:13px;color:var(--text,#e6e6e6);">' + clientLabel + '</td>' +
+                    '<td data-col="lines" class="num" style="padding:8px 10px;font-family:\'SF Mono\',monospace;color:var(--text-dim,#aaa);font-size:12px;">' +
                         t.lineCount +
                     '</td>' +
-                    '<td class="num" style="padding:8px 10px;font-family:\'SF Mono\',monospace;">' + formatCurrency(t.baseCost) + '</td>' +
-                    '<td class="num" style="padding:8px 10px;color:#fbbf24;font-family:\'SF Mono\',monospace;">' + t.blendedMarkup.toFixed(1) + '%</td>' +
-                    '<td class="num" style="padding:8px 10px;font-family:\'SF Mono\',monospace;color:#34d399;font-weight:600;">' + formatCurrency(t.clientPrice) + '</td>' +
-                    '<td class="num" style="padding:8px 10px;font-family:\'SF Mono\',monospace;color:' + marginColor + ';font-weight:600;">' + margin.toFixed(1) + '%</td>' +
-                    '<td style="padding:8px 10px;font-size:11px;color:var(--text-dim,#888);white-space:nowrap;" title="' + escapeHTML(est.updated_at || '') + '">' +
+                    '<td data-col="baseCost" class="num" style="padding:8px 10px;font-family:\'SF Mono\',monospace;">' + formatCurrency(t.baseCost) + '</td>' +
+                    '<td data-col="markup" class="num" style="padding:8px 10px;color:#fbbf24;font-family:\'SF Mono\',monospace;">' + t.blendedMarkup.toFixed(1) + '%</td>' +
+                    '<td data-col="clientPrice" class="num" style="padding:8px 10px;font-family:\'SF Mono\',monospace;color:#34d399;font-weight:600;">' + formatCurrency(t.clientPrice) + '</td>' +
+                    '<td data-col="margin" class="num" style="padding:8px 10px;font-family:\'SF Mono\',monospace;color:' + marginColor + ';font-weight:600;">' + margin.toFixed(1) + '%</td>' +
+                    '<td data-col="updated_at" style="padding:8px 10px;font-size:11px;color:var(--text-dim,#888);white-space:nowrap;" title="' + escapeHTML(est.updated_at || '') + '">' +
                         escapeHTML(fmtRelativeDate(est.updated_at)) +
                     '</td>' +
                 '</tr>';
@@ -314,6 +314,9 @@ function renderEstimatesList() {
                         '<tbody>' + rowsHtml + '</tbody>' +
                     '</table>' +
                 '</div>';
+
+            // Reorderable / resizable / freezable columns + internal scroll.
+            if (window.p86Tables) window.p86Tables.enhance('estimates');
         }
 
         function openNewEstimateForm() {

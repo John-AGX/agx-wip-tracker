@@ -2069,6 +2069,103 @@
             color: var(--accent);
         }
 
+        /* ── Table enhancements (js/table-enhancements.js) ───────────────
+           Reorderable / resizable / freezable columns + internal scroll
+           for the Jobs / Estimates / Leads lists. The module adds these
+           classes; layout values (column widths, max-height) are inline. */
+
+        /* Scroll container — bounded height so the list scrolls inside the
+           viewport instead of growing the page. (max-height + overflow are
+           set inline by the module so they can track the viewport.) */
+        .p86-tbl-scroll {
+            position: relative;
+        }
+
+        /* Fixed layout makes column widths honor the px values we assign,
+           and lets the table exceed its container so it can scroll
+           horizontally (which is what the frozen column rides on). */
+        .p86-enhanced {
+            table-layout: fixed;
+        }
+        .p86-enhanced th,
+        .p86-enhanced td {
+            box-sizing: border-box;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .p86-enhanced td {
+            white-space: nowrap;
+        }
+
+        /* Frozen first column — pinned left during horizontal scroll. The
+           solid background (per-table via --p86-frozen-bg) occludes cells
+           scrolling underneath. Header cells are already sticky-top from
+           the global `th` rule; here we add sticky-left + a higher z so
+           the corner cell wins against both axes. */
+        .p86-frozen-col {
+            position: sticky;
+            left: 0;
+            background-color: var(--p86-frozen-bg, var(--bg));
+        }
+        .p86-enhanced tbody td.p86-frozen-col {
+            z-index: 5;
+        }
+        .p86-enhanced thead th.p86-frozen-col {
+            z-index: 16; /* above other sticky headers (z-index:10) */
+        }
+        /* Row-hover tint is translucent; layer it over the solid frozen bg
+           so the pinned cell matches the rest of the hovered row. */
+        .p86-tbl-scroll tbody tr:hover td.p86-frozen-col {
+            background-image: linear-gradient(rgba(79, 140, 255, 0.06), rgba(79, 140, 255, 0.06));
+        }
+
+        /* Resize grabber on the right edge of each header cell. */
+        .p86-col-resizer {
+            position: absolute;
+            top: 0;
+            right: 0;
+            width: 7px;
+            height: 100%;
+            cursor: col-resize;
+            z-index: 20;
+            user-select: none;
+        }
+        .p86-col-resizer:hover {
+            background: rgba(79, 140, 255, 0.4);
+        }
+
+        /* Header being dragged to reorder. */
+        .p86-th-dragging {
+            opacity: 0.6;
+        }
+
+        /* Right-click "Reset columns" menu. */
+        .p86-tbl-menu {
+            position: fixed;
+            z-index: 9999;
+            background: var(--surface, #1a1d27);
+            border: 1px solid var(--border, #333);
+            border-radius: 8px;
+            box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4);
+            padding: 4px;
+            min-width: 150px;
+        }
+        .p86-tbl-menu-item {
+            display: block;
+            width: 100%;
+            text-align: left;
+            background: none;
+            border: none;
+            color: var(--text, #e6e6e6);
+            padding: 8px 12px;
+            font-size: 13px;
+            border-radius: 6px;
+            cursor: pointer;
+        }
+        .p86-tbl-menu-item:hover {
+            background: rgba(79, 140, 255, 0.12);
+        }
+
         /* Slim header buttons — used in the estimate editor sticky header
            where the action row holds 5+ buttons and the standard .small
            padding ate too much horizontal space. Tighter padding + smaller

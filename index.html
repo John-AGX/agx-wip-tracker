@@ -215,7 +215,7 @@
     })();
     </script>
 
-    <link rel="stylesheet" href="css/styles.css?v=165">
+    <link rel="stylesheet" href="css/styles.css?v=166">
     <link rel="stylesheet" href="css/report-style-packs.css?v=3">
     <link rel="stylesheet" href="css/workspace-layout.css?v=60">
     <link rel="stylesheet" href="css/workspace.css?v=37b">
@@ -626,15 +626,15 @@
                             <table id="jobs-table">
                                 <thead>
                                     <tr>
-                                        <th style="width: 40px;">#</th>
-                                        <th class="sortable" data-sort="name" onclick="sortJobsTable('name')">Job # / Name</th>
-                                        <th class="sortable" data-sort="client" onclick="sortJobsTable('client')">Client</th>
-                                        <th class="sortable" data-sort="pm" onclick="sortJobsTable('pm')">PM</th>
-                                        <th class="sortable" data-sort="status" onclick="sortJobsTable('status')">Status</th>
-                                        <th class="sortable" data-sort="contract" onclick="sortJobsTable('contract')" style="text-align: right;">Total Income</th>
-                                        <th class="sortable" data-sort="pctcomplete" onclick="sortJobsTable('pctcomplete')" style="text-align: right;">% Complete</th>
-                                        <th class="sortable" data-sort="profit" onclick="sortJobsTable('profit')" style="text-align: right;">Gross Profit</th>
-                                        <th class="sortable" data-sort="margin" onclick="sortJobsTable('margin')" style="text-align: right;">Margin %</th>
+                                        <th data-col="idx" style="width: 40px;">#</th>
+                                        <th class="sortable" data-col="name" data-sort="name" onclick="sortJobsTable('name')">Job # / Name</th>
+                                        <th class="sortable" data-col="client" data-sort="client" onclick="sortJobsTable('client')">Client</th>
+                                        <th class="sortable" data-col="pm" data-sort="pm" onclick="sortJobsTable('pm')">PM</th>
+                                        <th class="sortable" data-col="status" data-sort="status" onclick="sortJobsTable('status')">Status</th>
+                                        <th class="sortable" data-col="contract" data-sort="contract" onclick="sortJobsTable('contract')" style="text-align: right;">Total Income</th>
+                                        <th class="sortable" data-col="pctcomplete" data-sort="pctcomplete" onclick="sortJobsTable('pctcomplete')" style="text-align: right;">% Complete</th>
+                                        <th class="sortable" data-col="profit" data-sort="profit" onclick="sortJobsTable('profit')" style="text-align: right;">Gross Profit</th>
+                                        <th class="sortable" data-col="margin" data-sort="margin" onclick="sortJobsTable('margin')" style="text-align: right;">Margin %</th>
 
                                     </tr>
                                 </thead>
@@ -2776,7 +2776,12 @@
     <script src="js/subs.js?v=8b"></script>
     <script src="js/job-audit.js?v=3b"></script>
     <script src="js/job-reports.js?v=1b"></script>
-    <script src="js/leads.js?v=37"></script>
+    <!-- Shared table enhancements (reorder / resize / freeze first column /
+         internal scroll / persisted layout) for the Jobs, Estimates and
+         Leads lists. Loads BEFORE those renderers so window.p86Tables is
+         ready the first time they build their tables. -->
+    <script src="js/table-enhancements.js?v=1"></script>
+    <script src="js/leads.js?v=38"></script>
     <script src="js/job-costs-import.js?v=4"></script>
     <script src="js/qb-costs-view.js?v=11"></script>
     <script src="js/insights.js?v=7"></script>
@@ -2804,9 +2809,9 @@
          estimate-preview + the upcoming change-order-editor. Loads
          BEFORE any of them so window.p86Pricing is ready. -->
     <script src="js/pricing-pipeline.js?v=1"></script>
-    <script src="js/jobs.js?v=84"></script>
+    <script src="js/jobs.js?v=85"></script>
     <script src="js/job-workflow-ui.js?v=2"></script>
-    <script src="js/estimates.js?v=37"></script>
+    <script src="js/estimates.js?v=38"></script>
     <script src="js/proposal.js?v=25"></script>
     <script src="js/estimate-editor.js?v=50"></script>
     <!-- Change Order editor — overlay opened from the job detail's
