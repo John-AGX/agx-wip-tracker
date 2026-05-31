@@ -215,7 +215,7 @@
     })();
     </script>
 
-    <link rel="stylesheet" href="css/styles.css?v=168">
+    <link rel="stylesheet" href="css/styles.css?v=169">
     <link rel="stylesheet" href="css/report-style-packs.css?v=3">
     <link rel="stylesheet" href="css/workspace-layout.css?v=60">
     <link rel="stylesheet" href="css/workspace.css?v=37b">
@@ -2773,7 +2773,12 @@
     <script src="js/admin-context-registry.js?v=3"></script>
     <script src="js/field-tools.js?v=4"></script>
     <script src="js/clients.js?v=16e"></script>
-    <script src="js/subs.js?v=8b"></script>
+    <!-- Folder taxonomy — default folder structure per entity type
+         (lead / estimate / job / client). Loads before subs.js and
+         my-files.js, which merge it with live folders for the grant
+         dropdown and the My Files tree. -->
+    <script src="js/folder-taxonomy.js?v=1"></script>
+    <script src="js/subs.js?v=8c"></script>
     <script src="js/job-audit.js?v=3b"></script>
     <script src="js/job-reports.js?v=1b"></script>
     <!-- Shared table enhancements (reorder / resize / freeze first column /
@@ -2786,10 +2791,10 @@
     <script src="js/qb-costs-view.js?v=11"></script>
     <script src="js/insights.js?v=7"></script>
     <script src="js/schedule.js?v=34"></script>
-    <script src="js/app.js?v=72"></script>
+    <script src="js/app.js?v=73"></script>
     <script src="js/compliance-review-ui.js?v=2"></script>
     <script src="js/messaging.js?v=1b"></script>
-    <script src="js/my-files.js?v=11"></script>
+    <script src="js/my-files.js?v=13"></script>
     <!-- Google Maps JS API loader + tag-icon registry for photo pins.
          Both load before projects-map.js so the map renderer can
          reference window.p86Maps + window.p86TagIcons. -->

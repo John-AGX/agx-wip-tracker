@@ -663,9 +663,12 @@
   // Phase 4: Folder access grants. PMs grant a sub access to a
   // specific (entity_type, entity_id, folder) combo. The list view
   // renders existing grants with a Revoke button per row; the form
-  // below it lets the PM add a new grant. We don't enumerate every
-  // possible folder — folder names are free-text, so the PM types
-  // the folder (autosuggest could come later if grants get heavy).
+  // below it lets the PM add a new grant. The Folder field is a
+  // dropdown built from the default folder taxonomy for the chosen
+  // entity type (window.foldersForEntity / mergeFolders in
+  // js/folder-taxonomy.js), MERGED with the folders that actually hold
+  // files on the selected entity. A "+ Custom folder…" option keeps the
+  // old free-text path available for ad-hoc folders.
   // ──────────────────────────────────────────────────────────────────
 
   function mountFolderGrants(mountEl, subId) {
@@ -686,6 +689,29 @@
       var jobs = (window.appData && window.appData.jobs) || [];
       var jobById = {};
       jobs.forEach(function(j) { jobById[j.id] = j; });
+
+      // Pretty-print a folder string for option labels:
+      // 'photos/before-after' → 'Photos / Before After'. Value stays raw.
+      function prettyFolder(f) {
+        return String(f || '').split('/').map(function(seg) {
+          return seg.replace(/[-_]/g, ' ').replace(/\b\w/g, function(c) { return c.toUpperCase(); });
+        }).join(' / ');
+      }
+      // Build the <option> list for the folder dropdown: taxonomy
+      // defaults for `type` merged with any live folders, plus a
+      // trailing custom-folder escape hatch. `selected` re-selects a
+      // value across rebuilds when it's still present.
+      function folderOptionsHTML(type, live, selected) {
+        var folders = window.mergeFolders
+          ? window.mergeFolders(type, live)
+          : (window.foldersForEntity ? window.foldersForEntity(type) : ['general']);
+        var opts = folders.map(function(f) {
+          var sel = (f === selected) ? ' selected' : '';
+          return '<option value="' + escapeAttr(f) + '"' + sel + '>' + escapeHTML(prettyFolder(f)) + '</option>';
+        }).join('');
+        return opts + '<option value="__custom__"' + (selected === '__custom__' ? ' selected' : '') + '>+ Custom folder…</option>';
+      }
+
       function entityLabel(g) {
         if (g.entity_type === 'job' && jobById[g.entity_id]) {
           var j = jobById[g.entity_id];
@@ -740,7 +766,10 @@
             '</div>' +
             '<div>' +
               '<label style="display:block;font-size:10px;color:var(--text-dim,#888);margin-bottom:3px;text-transform:uppercase;letter-spacing:0.4px;">Folder</label>' +
-              '<input id="fg_folder" type="text" value="general" placeholder="general / photos / rfp / …" style="width:100%;padding:6px 10px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);font-size:12px;" />' +
+              '<select id="fg_folder" style="width:100%;padding:6px 10px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);font-size:12px;">' +
+                folderOptionsHTML('job', null, null) +
+              '</select>' +
+              '<input id="fg_folder_custom" type="text" placeholder="custom folder name" style="width:100%;margin-top:4px;padding:5px 10px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);font-size:11px;display:none;" />' +
             '</div>' +
             '<button type="button" data-add-grant style="background:#4f8cff;color:#fff;border:none;border-radius:6px;padding:7px 16px;font-size:12px;font-weight:600;cursor:pointer;">Grant</button>' +
           '</div>' +
@@ -751,11 +780,57 @@
       var typeSel = mountEl.querySelector('#fg_entity_type');
       var idSel = mountEl.querySelector('#fg_entity_id');
       var idText = mountEl.querySelector('#fg_entity_id_text');
+      var folderSel = mountEl.querySelector('#fg_folder');
+      var folderCustom = mountEl.querySelector('#fg_folder_custom');
+
+      // Rebuild the folder dropdown for the current entity type, merging
+      // in any folders that actually hold files on the selected entity.
+      // Best-effort: a failed/short-circuited live fetch just leaves the
+      // taxonomy defaults in place. `keepSelection` preserves the user's
+      // current pick across the rebuild when still valid.
+      function rebuildFolderOptions(type, live, keepSelection) {
+        var prev = keepSelection ? folderSel.value : null;
+        folderSel.innerHTML = folderOptionsHTML(type, live, prev);
+        // If the previously-selected value vanished, fall back cleanly.
+        if (prev && folderSel.value !== prev) folderSel.selectedIndex = 0;
+        syncCustom();
+      }
+      function syncCustom() {
+        var isCustom = folderSel.value === '__custom__';
+        folderCustom.style.display = isCustom ? '' : 'none';
+        if (isCustom) folderCustom.focus();
+      }
+      // Pull live folders for an entity and merge them into the dropdown.
+      function mergeLiveFolders(type, id) {
+        if (!id || !window.p86Api || !window.p86Api.attachments) return;
+        window.p86Api.attachments.list(type, id).then(function(res) {
+          var atts = (res && res.attachments) || (Array.isArray(res) ? res : []);
+          var live = atts.map(function(a) { return a.folder; }).filter(Boolean);
+          rebuildFolderOptions(type, live, true);
+        }).catch(function() { /* keep taxonomy defaults */ });
+      }
+
+      folderSel.addEventListener('change', syncCustom);
+
       typeSel.addEventListener('change', function() {
         var isJob = typeSel.value === 'job';
         idSel.style.display = isJob ? '' : 'none';
         idText.style.display = isJob ? 'none' : '';
+        // Reset folders to the new type's taxonomy, then merge live
+        // folders for whatever entity is currently selected.
+        rebuildFolderOptions(typeSel.value, null, false);
+        var curId = isJob ? idSel.value : idText.value.trim();
+        if (curId) mergeLiveFolders(typeSel.value, curId);
       });
+      idSel.addEventListener('change', function() {
+        if (typeSel.value === 'job' && idSel.value) mergeLiveFolders('job', idSel.value);
+      });
+      idText.addEventListener('change', function() {
+        var id = idText.value.trim();
+        if (typeSel.value !== 'job' && id) mergeLiveFolders(typeSel.value, id);
+      });
+      // Seed live folders for the default (job) selection if one exists.
+      if (idSel.value) mergeLiveFolders('job', idSel.value);
 
       // Revoke handlers.
       mountEl.querySelectorAll('[data-revoke-grant]').forEach(function(btn) {
@@ -772,7 +847,13 @@
       mountEl.querySelector('[data-add-grant]').addEventListener('click', function() {
         var entity_type = typeSel.value;
         var entity_id = entity_type === 'job' ? idSel.value : idText.value.trim();
-        var folder = mountEl.querySelector('#fg_folder').value;
+        // Folder comes from the dropdown unless "+ Custom folder…" is
+        // picked, in which case the free-text input wins. Server
+        // re-sanitizes either way (sanitizeFolder), so a blank custom
+        // value safely falls back to 'general'.
+        var folder = folderSel.value === '__custom__'
+          ? (folderCustom.value.trim() || 'general')
+          : folderSel.value;
         if (!entity_id) { alert('Pick a job or enter an entity id.'); return; }
         window.p86Api.subs.grants.create(subId, {
           entity_type: entity_type,

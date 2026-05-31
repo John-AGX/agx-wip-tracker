@@ -7669,6 +7669,44 @@
 .mf-rail-caret:hover { color: var(--text, #fff); background: rgba(255, 255, 255, 0.06); }
 .mf-rail-caret-empty { cursor: default; visibility: hidden; }
 
+/* ── Contextual sidebar: My Files folder rail inside #app-sidebar ──────
+   On desktop the My Files tab relocates its folder rail (#app-filesnav)
+   into the left sidebar, below the primary nav (it never hides .app-nav —
+   My Files is a top-level tab, not a drill-down like the job page). The
+   wrapper gets its own padding + a top divider so it reads as a
+   contextual section, like Recents; the inner .mf-rail-* rows are already
+   styled by their standalone class rules above. See js/my-files.js. */
+.app-filesnav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 8px 12px;
+  margin-top: 4px;
+  border-top: 1px solid var(--border, #2e3346);
+  min-width: 0;
+}
+.app-filesnav .mf-rail-action { margin-top: 2px; }
+
+/* Collapsed rail (56px) — center glyphs, hide labels / counts / carets /
+   section heads. Folder-depth indentation (inline padding-left) is
+   overridden so glyphs line up. Mirrors the .app-jobnav collapsed rules. */
+.app-sidebar.collapsed .app-filesnav { padding-left: 0; padding-right: 0; }
+.app-sidebar.collapsed .app-filesnav .mf-rail-section-head { display: none; }
+.app-sidebar.collapsed .app-filesnav .mf-rail-action {
+  justify-content: center;
+  padding: 9px 0;
+  gap: 0;
+}
+.app-sidebar.collapsed .app-filesnav .mf-rail-action-label { display: none; }
+.app-sidebar.collapsed .app-filesnav .mf-rail-row {
+  justify-content: center;
+  padding: 9px 0 !important;
+  gap: 0;
+}
+.app-sidebar.collapsed .app-filesnav .mf-rail-row-label,
+.app-sidebar.collapsed .app-filesnav .mf-rail-row-count,
+.app-sidebar.collapsed .app-filesnav .mf-rail-caret { display: none; }
+
 /* ── My Files grid ──────────────────────────────────────────────────
    CompanyCam-style tiles built on .p86-proj-photo-tile. The footer
    is enriched with a 2-line meta block (filename + "date · time · by")

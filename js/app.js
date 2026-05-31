@@ -1414,6 +1414,15 @@
                 }
             }
 
+            // Leaving My Files: tear down the contextual folder rail that
+            // my-files.js relocates into #app-sidebar, so other pages don't
+            // show a stale Files section in the sidebar.
+            if (tabName !== 'my-files') {
+                if (typeof window.myFilesSidebarCleanup === 'function') {
+                    try { window.myFilesSidebarCleanup(); } catch (e) { /* defensive */ }
+                }
+            }
+
             if (tabName === 'summary') {
                 renderSummaryDashboard();
             } else if (tabName === 'my-files') {

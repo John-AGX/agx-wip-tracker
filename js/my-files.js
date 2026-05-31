@@ -55,6 +55,22 @@
     error: null
   };
 
+  // ── Contextual sidebar state (My Files folder rail → #app-sidebar) ──
+  // On desktop the folder rail is relocated out of the page and into the
+  // app's left sidebar (#app-sidebar) as a contextual "Files" section,
+  // mirroring the job page's subnav (workspace-layout.js). Unlike the job
+  // page — a drill-down that hides the primary nav and shows a Back
+  // control — My Files is a TOP-LEVEL destination reached from the header
+  // files icon, so the primary nav (.app-nav) stays visible and the rail
+  // is appended below it rather than replacing it. On mobile the sidebar
+  // is hidden, so the rail stays in the page as the original two-column
+  // .mf-layout. A matchMedia listener re-paints across the 768px
+  // breakpoint; window.myFilesSidebarCleanup (called by app.js switchTab
+  // when leaving the tab) removes the relocated rail.
+  var _filesSubnavMql = null;
+  var _filesSubnavMqlHandler = null;
+  var _filesMounted = false;
+
   function currentUserId() {
     var u = (window.p86Auth && window.p86Auth.getUser && window.p86Auth.getUser()) || null;
     return u ? u.id : null;
@@ -166,8 +182,14 @@
       var expanded = !!_state.expandedFolders[path];
       var ownCount = (bucket[path] || []).length;
       var n = totalCount(path);
+      // The row itself is a <button>; the caret toggle must therefore be a
+      // <span role="button">, not a nested <button> — the HTML parser
+      // refuses button-in-button and hoists the inner one out, which split
+      // the row (empty row + detached caret/label/count). role+tabindex
+      // keep it keyboard-accessible; stopPropagation stops the row's
+      // selectFolder from also firing on a caret click.
       var caret = kids.length
-        ? '<button type="button" class="mf-rail-caret" onclick="event.stopPropagation();window.myFiles.toggleFolder(\'' + escapeAttr(path) + '\')" aria-label="' + (expanded ? 'Collapse' : 'Expand') + '">' + (expanded ? '&#x25BE;' : '&#x25B8;') + '</button>'
+        ? '<span class="mf-rail-caret" role="button" tabindex="0" onclick="event.stopPropagation();window.myFiles.toggleFolder(\'' + escapeAttr(path) + '\')" onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();event.stopPropagation();window.myFiles.toggleFolder(\'' + escapeAttr(path) + '\');}" aria-label="' + (expanded ? 'Collapse' : 'Expand') + '">' + (expanded ? '&#x25BE;' : '&#x25B8;') + '</span>'
         : '<span class="mf-rail-caret mf-rail-caret-empty"></span>';
       var html = '<button class="mf-rail-row' + (active ? ' active' : '') + '" style="padding-left:' + (8 + depth * 14) + 'px;" data-folder="' + escapeAttr(path) + '" onclick="window.myFiles.selectFolder(\'' + escapeAttr(path) + '\')">' +
         caret +
@@ -254,6 +276,87 @@
       .then(function() { _state.loading = false; });
   }
 
+  // ──────────────────────────────────────────────────────────────────
+  // Contextual sidebar (folder rail → #app-sidebar) — see _filesMounted
+  // comment block above for the rationale.
+  // ──────────────────────────────────────────────────────────────────
+  function filesSubnavIsMobile() {
+    return !!(window.matchMedia && window.matchMedia('(max-width: 768px)').matches);
+  }
+
+  // Build (once) the #app-filesnav wrapper inside #app-sidebar. It is
+  // inserted AFTER the primary nav (.app-nav) so the folder rail reads as
+  // a contextual section below the main destinations — like Recents —
+  // rather than replacing them (contrast the job subnav, which sits
+  // before .app-nav and hides it).
+  function buildFilesSidebarShell() {
+    var sidebar = document.getElementById('app-sidebar');
+    if (!sidebar) return null;
+    var nav = document.getElementById('app-filesnav');
+    if (!nav) {
+      nav = document.createElement('div');
+      nav.id = 'app-filesnav';
+      nav.className = 'app-filesnav';
+      var appNav = sidebar.querySelector('.app-nav');
+      var recents = document.getElementById('app-sidebar-recents');
+      // Prefer to sit between the primary nav and Recents. Fall back to
+      // appending if neither anchor is present.
+      if (recents && recents.parentNode === sidebar) {
+        sidebar.insertBefore(nav, recents);
+      } else if (appNav && appNav.nextSibling) {
+        sidebar.insertBefore(nav, appNav.nextSibling);
+      } else {
+        sidebar.appendChild(nav);
+      }
+    }
+    return nav;
+  }
+
+  // Put the rail in the right place for the current viewport. Desktop:
+  // (re)inject railInner into #app-filesnav. Mobile / no sidebar: remove
+  // the wrapper (the rail lives in the page column instead). The primary
+  // nav is never hidden — My Files is a top-level tab.
+  function placeFilesSidebar(railInner, mobile) {
+    if (mobile || !document.getElementById('app-sidebar')) {
+      var existing = document.getElementById('app-filesnav');
+      if (existing) existing.remove();
+      return;
+    }
+    var nav = buildFilesSidebarShell();
+    if (nav) nav.innerHTML = railInner;
+  }
+
+  // Attach the breakpoint listener once; it re-paints My Files so the
+  // rail hops between the sidebar and the page column on resize.
+  function ensureFilesSubnavMql() {
+    if (window.matchMedia && !_filesSubnavMql) {
+      _filesSubnavMql = window.matchMedia('(max-width: 768px)');
+      _filesSubnavMqlHandler = function () {
+        if (!_filesMounted) return;
+        var pane = document.getElementById('my-files');
+        if (pane) paint(pane);
+      };
+      if (_filesSubnavMql.addEventListener) _filesSubnavMql.addEventListener('change', _filesSubnavMqlHandler);
+      else if (_filesSubnavMql.addListener) _filesSubnavMql.addListener(_filesSubnavMqlHandler);
+    }
+  }
+
+  // Called by app.js switchTab when leaving the My Files tab: drop the
+  // breakpoint listener and remove the relocated rail so it doesn't
+  // linger in the sidebar on other pages.
+  function filesSidebarCleanup() {
+    _filesMounted = false;
+    if (_filesSubnavMql && _filesSubnavMqlHandler) {
+      if (_filesSubnavMql.removeEventListener) _filesSubnavMql.removeEventListener('change', _filesSubnavMqlHandler);
+      else if (_filesSubnavMql.removeListener) _filesSubnavMql.removeListener(_filesSubnavMqlHandler);
+    }
+    _filesSubnavMql = null;
+    _filesSubnavMqlHandler = null;
+    var nav = document.getElementById('app-filesnav');
+    if (nav) nav.remove();
+  }
+  window.myFilesSidebarCleanup = filesSidebarCleanup;
+
   function paint(pane) {
     var files = _state.files;
     var bucket = groupByFolder(files);
@@ -294,9 +397,11 @@
     var isVirtualFolder = isProjectsFolder || isToolsFolder || isPrintoutsFolder;
     var activeFiles = isVirtualFolder ? [] : (bucket[_state.activeFolder] || []);
 
-    var html =
-      '<div style="max-width:1200px;margin:0 auto;padding:24px 16px;">' +
-        // Header
+    // Build the three structural pieces separately so the folder rail can
+    // be relocated into the app sidebar (#app-sidebar) on desktop while the
+    // header + file pane stay in the page column. On mobile (sidebar
+    // hidden) everything renders in-page as the original two-col layout.
+    var headerHTML =
         '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px;flex-wrap:wrap;">' +
           '<div>' +
             '<h1 style="font-size:22px;margin:0 0 2px 0;font-weight:700;color:var(--text,#fff);">My Files</h1>' +
@@ -316,78 +421,93 @@
             ) +
             '<span class="p86-ask86-mount"></span>' +
           '</div>' +
+        '</div>';
+
+    var errorHTML = _state.error
+      ? '<div style="padding:14px;background:rgba(248,113,113,0.1);border:1px solid rgba(248,113,113,0.3);border-radius:8px;color:#f87171;font-size:13px;margin-bottom:14px;">' + escapeHTML(_state.error) + '</div>'
+      : '';
+
+    // Folder rail interior. The .mf-rail-* classes are standalone (not
+    // scoped under .mf-rail) so they style correctly whether wrapped in an
+    // in-page <aside class="mf-rail"> (mobile) or injected into the
+    // #app-filesnav sidebar wrapper (desktop). Blends Claude's clean
+    // section structure (small uppercase headers, quiet item rows,
+    // top-aligned quick action) with the node-graph library's dark
+    // Project 86 palette and typography.
+    var railInner =
+        '<button class="mf-rail-action" onclick="window.myFiles.newFolder()" title="Create a new folder">' +
+          '<span class="mf-rail-action-icon">+</span>' +
+          '<span class="mf-rail-action-label">New folder</span>' +
+        '</button>' +
+
+        '<div class="mf-rail-section-head">Folders</div>' +
+        '<div class="mf-rail-list">' +
+          renderFolderTree(
+            folders.filter(function(f) {
+              return f !== PROJECTS_FOLDER && f !== TOOLS_FOLDER && f !== PRINTOUTS_FOLDER;
+            }),
+            bucket
+          ) +
         '</div>' +
 
-        (_state.error
-          ? '<div style="padding:14px;background:rgba(248,113,113,0.1);border:1px solid rgba(248,113,113,0.3);border-radius:8px;color:#f87171;font-size:13px;margin-bottom:14px;">' + escapeHTML(_state.error) + '</div>'
-          : '') +
+        '<div class="mf-rail-section-head">Views</div>' +
+        '<div class="mf-rail-list">' +
+          [PROJECTS_FOLDER, TOOLS_FOLDER, PRINTOUTS_FOLDER].filter(function(f) { return folders.indexOf(f) !== -1; }).map(function(f) {
+            var active = f === _state.activeFolder;
+            var glyph, label;
+            if (f === PROJECTS_FOLDER) { glyph = '&#x1F4F8;'; label = 'Projects'; }
+            else if (f === TOOLS_FOLDER) { glyph = '&#x1F527;'; label = 'Tools'; }
+            else { glyph = '&#x1F9FE;'; label = 'Printouts'; }
+            return '<button class="mf-rail-row' + (active ? ' active' : '') + '" data-folder="' + escapeAttr(f) + '" onclick="window.myFiles.selectFolder(\'' + escapeAttr(f) + '\')">' +
+              '<span class="mf-rail-row-glyph">' + glyph + '</span>' +
+              '<span class="mf-rail-row-label">' + escapeHTML(label) + '</span>' +
+            '</button>';
+          }).join('') +
+        '</div>';
 
-        // Two-col: sidebar (left) + file grid (right). The sidebar
-        // blends Claude's clean section structure (small uppercase
-        // headers, quiet item rows, top-aligned quick action) with
-        // the node-graph library's dark Project 86 palette and
-        // typography. CSS lives under .mf-rail / .mf-rail-*.
-        '<div class="mf-layout">' +
-          // Sidebar rail
-          '<aside class="mf-rail">' +
-            '<button class="mf-rail-action" onclick="window.myFiles.newFolder()" title="Create a new folder">' +
-              '<span class="mf-rail-action-icon">+</span>' +
-              '<span class="mf-rail-action-label">New folder</span>' +
-            '</button>' +
+    // Right pane — files for normal folders, virtual-pane host for
+    // Projects / Tools / Printouts. The host element gets a stable id so
+    // the owning module (or this file, for Printouts) can find it.
+    var mainPaneHTML =
+        '<div>' +
+          (isProjectsFolder
+            ? '<div id="mfProjectsHost" style="min-height:100px;"></div>'
+            : isToolsFolder
+              ? '<div id="mfToolsHost" style="min-height:100px;"></div>'
+              : isPrintoutsFolder
+              ? '<div id="mfPrintoutsHost" style="min-height:100px;"></div>'
+              : (
+                  '<div id="mfDropZone" data-mf-drop="1" style="border:2px dashed var(--border,#444);border-radius:10px;padding:14px;text-align:center;background:rgba(79,140,255,0.04);margin-bottom:14px;cursor:pointer;font-size:12px;color:var(--text-dim,#888);">' +
+                    'Drop files here or <strong style="color:var(--accent,#22d3ee);">click Upload</strong> &middot; Files land in <strong>' + escapeHTML(prettyFolder(_state.activeFolder)) + '</strong>' +
+                  '</div>' +
+                  (activeFiles.length === 0
+                    ? '<div style="padding:30px;text-align:center;color:var(--text-dim,#888);font-size:12px;border:1px dashed var(--border,#333);border-radius:10px;">' +
+                      'No files in this folder yet.' +
+                    '</div>'
+                    : renderFileGrid(activeFiles))
+                )
+          ) +
+        '</div>';
 
-            '<div class="mf-rail-section-head">Folders</div>' +
-            '<div class="mf-rail-list">' +
-              renderFolderTree(
-                folders.filter(function(f) {
-                  return f !== PROJECTS_FOLDER && f !== TOOLS_FOLDER && f !== PRINTOUTS_FOLDER;
-                }),
-                bucket
-              ) +
-            '</div>' +
+    // Desktop (sidebar present + above the mobile breakpoint): the rail
+    // moves to the app sidebar and the page shows header + full-width
+    // pane. Mobile / no sidebar: keep the original in-page two-col layout.
+    var useSidebar = !filesSubnavIsMobile() && !!document.getElementById('app-sidebar');
+    var body = useSidebar
+      ? (headerHTML + errorHTML + mainPaneHTML)
+      : (headerHTML + errorHTML +
+          '<div class="mf-layout">' +
+            '<aside class="mf-rail">' + railInner + '</aside>' +
+            mainPaneHTML +
+          '</div>');
 
-            '<div class="mf-rail-section-head">Views</div>' +
-            '<div class="mf-rail-list">' +
-              [PROJECTS_FOLDER, TOOLS_FOLDER, PRINTOUTS_FOLDER].filter(function(f) { return folders.indexOf(f) !== -1; }).map(function(f) {
-                var active = f === _state.activeFolder;
-                var glyph, label;
-                if (f === PROJECTS_FOLDER) { glyph = '&#x1F4F8;'; label = 'Projects'; }
-                else if (f === TOOLS_FOLDER) { glyph = '&#x1F527;'; label = 'Tools'; }
-                else { glyph = '&#x1F9FE;'; label = 'Printouts'; }
-                return '<button class="mf-rail-row' + (active ? ' active' : '') + '" data-folder="' + escapeAttr(f) + '" onclick="window.myFiles.selectFolder(\'' + escapeAttr(f) + '\')">' +
-                  '<span class="mf-rail-row-glyph">' + glyph + '</span>' +
-                  '<span class="mf-rail-row-label">' + escapeHTML(label) + '</span>' +
-                '</button>';
-              }).join('') +
-            '</div>' +
-          '</aside>' +
+    pane.innerHTML = '<div style="max-width:1200px;margin:0 auto;padding:24px 16px;">' + body + '</div>';
 
-          // Right pane — files for normal folders, virtual-pane host
-          // for Projects / Tools / Printouts. The host element gets a
-          // stable id so the owning module (or this file, for
-          // Printouts) can find it.
-          '<div>' +
-            (isProjectsFolder
-              ? '<div id="mfProjectsHost" style="min-height:100px;"></div>'
-              : isToolsFolder
-                ? '<div id="mfToolsHost" style="min-height:100px;"></div>'
-                : isPrintoutsFolder
-                ? '<div id="mfPrintoutsHost" style="min-height:100px;"></div>'
-                : (
-                    '<div id="mfDropZone" data-mf-drop="1" style="border:2px dashed var(--border,#444);border-radius:10px;padding:14px;text-align:center;background:rgba(79,140,255,0.04);margin-bottom:14px;cursor:pointer;font-size:12px;color:var(--text-dim,#888);">' +
-                      'Drop files here or <strong style="color:var(--accent,#22d3ee);">click Upload</strong> &middot; Files land in <strong>' + escapeHTML(prettyFolder(_state.activeFolder)) + '</strong>' +
-                    '</div>' +
-                    (activeFiles.length === 0
-                      ? '<div style="padding:30px;text-align:center;color:var(--text-dim,#888);font-size:12px;border:1px dashed var(--border,#333);border-radius:10px;">' +
-                        'No files in this folder yet.' +
-                      '</div>'
-                      : renderFileGrid(activeFiles))
-                  )
-            ) +
-          '</div>' +
-        '</div>' +
-      '</div>';
-
-    pane.innerHTML = html;
+    // Mount or tear down the relocated rail to match the viewport, then
+    // keep it correct as the viewport crosses the 768px breakpoint.
+    placeFilesSidebar(railInner, !useSidebar);
+    ensureFilesSubnavMql();
+    _filesMounted = true;
 
     // Projects folder: hand off the right pane to js/projects.js.
     if (isProjectsFolder) {
