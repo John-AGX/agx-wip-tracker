@@ -215,9 +215,9 @@
     })();
     </script>
 
-    <link rel="stylesheet" href="css/styles.css?v=159">
+    <link rel="stylesheet" href="css/styles.css?v=160">
     <link rel="stylesheet" href="css/report-style-packs.css?v=3">
-    <link rel="stylesheet" href="css/workspace-layout.css?v=58">
+    <link rel="stylesheet" href="css/workspace-layout.css?v=59">
     <link rel="stylesheet" href="css/workspace.css?v=37b">
     <link rel="stylesheet" href="css/schedule.css?v=22">
     <!-- Accidental-edit protection layer. Two attribute-driven gates
@@ -445,16 +445,31 @@
                     </button>
                 </div>
                 <nav class="app-nav" aria-label="Primary">
-                    <!-- Leads is its own top-level destination (was a sub-tab
-                         inside Estimates). Click routes to the Estimates →
-                         Leads sub-tab DOM but the active highlight stays on
-                         this button so Leads reads as a first-class page. -->
-                    <button class="tab-btn active" data-tab="estimates" data-est-subtab="leads" data-virtual-tab="leads" data-p86-icon="leads" data-cap="LEADS_VIEW" title="Leads"><span class="app-nav-label">Leads</span></button>
-                    <button class="tab-btn" data-tab="estimates" data-est-subtab="list" data-virtual-tab="estimates" data-p86-icon="estimates" data-cap="ESTIMATES_VIEW" title="Estimates"><span class="app-nav-label">Estimates</span></button>
-                    <button class="tab-btn" data-tab="schedule" data-p86-icon="schedule" title="Schedule"><span class="app-nav-label">Schedule</span></button>
-                    <button class="tab-btn" data-tab="jobs" data-p86-icon="wip" data-cap="JOBS_VIEW_ALL JOBS_VIEW_ASSIGNED JOBS_EDIT_ANY JOBS_EDIT_OWN" title="Jobs"><span class="app-nav-label">Jobs</span></button>
-                    <button class="tab-btn" data-tab="insights" data-p86-icon="insights" data-cap="INSIGHTS_VIEW" title="Insights"><span class="app-nav-label">Insights</span></button>
-                    <button class="tab-btn" data-tab="admin" data-p86-icon="admin" data-admin-only style="display:none;" title="Admin"><span class="app-nav-label">Admin</span></button>
+                    <!-- Destinations are grouped under uppercase section
+                         labels (style borrowed from the node-graph sidebar's
+                         .ng-sidebar-header). Empty groups auto-hide via
+                         applyRoleVisibility() so a user without a group's
+                         capabilities never sees an orphan header. -->
+                    <div class="app-nav-group">
+                        <div class="app-nav-group-label">Sales</div>
+                        <!-- Leads is its own top-level destination (was a
+                             sub-tab inside Estimates). Click routes to the
+                             Estimates → Leads sub-tab DOM but the active
+                             highlight stays here so Leads reads as a
+                             first-class page. -->
+                        <button class="tab-btn active" data-tab="estimates" data-est-subtab="leads" data-virtual-tab="leads" data-p86-icon="leads" data-cap="LEADS_VIEW" title="Leads"><span class="app-nav-label">Leads</span></button>
+                        <button class="tab-btn" data-tab="estimates" data-est-subtab="list" data-virtual-tab="estimates" data-p86-icon="estimates" data-cap="ESTIMATES_VIEW" title="Estimates"><span class="app-nav-label">Estimates</span></button>
+                    </div>
+                    <div class="app-nav-group">
+                        <div class="app-nav-group-label">Operations</div>
+                        <button class="tab-btn" data-tab="schedule" data-p86-icon="schedule" title="Schedule"><span class="app-nav-label">Schedule</span></button>
+                        <button class="tab-btn" data-tab="jobs" data-p86-icon="wip" data-cap="JOBS_VIEW_ALL JOBS_VIEW_ASSIGNED JOBS_EDIT_ANY JOBS_EDIT_OWN" title="Jobs"><span class="app-nav-label">Jobs</span></button>
+                    </div>
+                    <div class="app-nav-group">
+                        <div class="app-nav-group-label">Company</div>
+                        <button class="tab-btn" data-tab="insights" data-p86-icon="insights" data-cap="INSIGHTS_VIEW" title="Insights"><span class="app-nav-label">Insights</span></button>
+                        <button class="tab-btn" data-tab="admin" data-p86-icon="admin" data-admin-only style="display:none;" title="Admin"><span class="app-nav-label">Admin</span></button>
+                    </div>
                 </nav>
             </aside>
             <div class="app-content-col">
@@ -2658,7 +2673,7 @@
     </script>
 
     <script src="js/modal-drag.js?v=1b"></script>
-    <script src="js/auth.js?v=14"></script>
+    <script src="js/auth.js?v=15"></script>
     <script src="js/dialogs.js?v=1b"></script>
     <script src="js/geolocation.js?v=1"></script>
     <script src="js/api.js?v=35"></script>
@@ -2725,7 +2740,7 @@
     <script src="js/tab-slider.js?v=1b"></script>
 
     <script src="js/workspace.js?v=44"></script>
-    <script src="js/workspace-layout.js?v=65"></script>
+    <script src="js/workspace-layout.js?v=66"></script>
 
     <!-- URL router — pathname-based navigation. Loads last so all
          top-level nav functions (switchTab, editJob, etc.) exist

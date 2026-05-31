@@ -227,6 +227,20 @@
   color: var(--text-dim, #8b90a5);
 }
 
+/* Uppercase "Sections" header above the relocated subtabs, mirroring the
+   main nav's .app-nav-group-label so the contextual sidebar reads as a
+   sibling of the primary nav. */
+.app-jobnav-section-label {
+  padding: 4px 11px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim, #8b90a5);
+  opacity: 0.7;
+  user-select: none;
+}
+
 /* Strip → vertical list. Kill the horizontal-bar chrome (sticky,
    border-bottom, opaque bg, wrap) so it reads as a stacked nav. */
 .app-jobnav .ws-right-tabs {
@@ -287,6 +301,10 @@
   width: 20px;
   height: 20px;
 }
+/* Accent-tint the active subtab's icon to match the main nav. */
+.app-jobnav .ws-right-tab.active .p86-icon {
+  color: var(--accent, #4f8cff);
+}
 
 /* Actions row (Workspace toggle + hidden Ask 86 mount) sits at the
    bottom of the subtab list as its own full-width control. */
@@ -309,6 +327,7 @@
   padding-right: 0;
 }
 .app-sidebar.collapsed .app-jobnav-jobinfo { display: none; }
+.app-sidebar.collapsed .app-jobnav-section-label { display: none; }
 .app-sidebar.collapsed .app-jobnav-back {
   justify-content: center;
   padding: 9px 0;

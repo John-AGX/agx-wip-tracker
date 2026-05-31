@@ -64,7 +64,7 @@
     var link = document.createElement('link');
     link.id = 'ws-layout-v2-css';
     link.rel = 'stylesheet';
-    link.href = 'css/workspace-layout.css?v=58';
+    link.href = 'css/workspace-layout.css?v=59';
     document.head.appendChild(link);
   }
 
@@ -447,6 +447,14 @@
         '<div class="app-jobnav-title"></div>' +
         '<div class="app-jobnav-status"></div>';
       jobnav.appendChild(info);
+
+      // Uppercase section header above the relocated tabs strip, mirroring
+      // the main nav's .app-nav-group-label so the contextual sidebar reads
+      // as a sibling of the primary nav rather than a different widget.
+      var sectionLabel = document.createElement('div');
+      sectionLabel.className = 'app-jobnav-section-label';
+      sectionLabel.textContent = 'Sections';
+      jobnav.appendChild(sectionLabel);
     }
     // (Re)populate identity from the current job.
     if (job) {

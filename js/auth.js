@@ -137,6 +137,17 @@
       var allowed = keys.some(function(k) { return hasCapability(k); });
       el.style.display = allowed ? '' : 'none';
     });
+    // Orphan-group auto-hide: a sidebar section whose every destination
+    // button is capability/admin-hidden would otherwise render as a bare
+    // uppercase label with nothing under it. Hide the whole group (label
+    // included) when none of its .tab-btn children are visible.
+    document.querySelectorAll('.app-nav-group').forEach(function(group) {
+      var btns = group.querySelectorAll('.tab-btn');
+      var anyVisible = Array.prototype.some.call(btns, function(b) {
+        return b.style.display !== 'none';
+      });
+      group.style.display = anyVisible ? '' : 'none';
+    });
   }
 
   function hasCapability(key) {

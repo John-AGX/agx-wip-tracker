@@ -987,6 +987,36 @@
             overflow: hidden;
             text-overflow: ellipsis;
         }
+        /* Active destination gets an accent-tinted icon to match the
+           left accent bar. */
+        .app-nav .tab-btn.active .p86-icon {
+            color: var(--accent);
+        }
+
+        /* ── Nav section groups ───────────────────────────────────────
+           Destinations are bucketed under uppercase section labels
+           (Sales / Operations / Company), borrowing the node-graph
+           sidebar's .ng-sidebar-header aesthetic: tiny, bold, dim,
+           wide letter-spacing. Groups stack with a little air between
+           them. */
+        .app-nav-group {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+        .app-nav-group + .app-nav-group {
+            margin-top: 12px;
+        }
+        .app-nav-group-label {
+            padding: 4px 11px;
+            font-size: 10px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-dim);
+            opacity: 0.7;
+            user-select: none;
+        }
 
         /* Collapsed rail — center icons, hide labels. Titles on each
            button provide hover tooltips when the labels are gone. */
@@ -1000,6 +1030,25 @@
             gap: 0;
         }
         .app-sidebar.collapsed .app-nav-label {
+            display: none;
+        }
+        /* Collapsed rail — the section labels can't show text in 56px,
+           so render each as a thin divider line between icon clusters. */
+        .app-sidebar.collapsed .app-nav-group + .app-nav-group {
+            margin-top: 8px;
+        }
+        .app-sidebar.collapsed .app-nav-group-label {
+            font-size: 0;
+            letter-spacing: 0;
+            padding: 0;
+            margin: 4px 14px;
+            height: 1px;
+            opacity: 1;
+            background: var(--border);
+        }
+        /* The first group's label as a divider would float at the very
+           top of the rail with nothing above it — drop it. */
+        .app-sidebar.collapsed .app-nav-group:first-child .app-nav-group-label {
             display: none;
         }
 
