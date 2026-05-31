@@ -2097,18 +2097,20 @@
             white-space: nowrap;
         }
 
-        /* Frozen first column — pinned left during horizontal scroll. The
-           solid background (per-table via --p86-frozen-bg) occludes cells
-           scrolling underneath. Header cells are already sticky-top from
-           the global `th` rule; here we add sticky-left + a higher z so
-           the corner cell wins against both axes. */
+        /* Frozen first column — pinned left during horizontal scroll.
+           Header cells are already sticky-top from the global `th` rule;
+           we add sticky-left + a higher z so the corner cell wins on both
+           axes. The header keeps its global `th` (surface2) background so
+           it matches the rest of the header row; only the BODY cells get
+           the row-matching --p86-frozen-bg so they occlude cells scrolling
+           underneath. */
         .p86-frozen-col {
             position: sticky;
             left: 0;
-            background-color: var(--p86-frozen-bg, var(--bg));
         }
         .p86-enhanced tbody td.p86-frozen-col {
             z-index: 5;
+            background-color: var(--p86-frozen-bg, var(--bg));
         }
         .p86-enhanced thead th.p86-frozen-col {
             z-index: 16; /* above other sticky headers (z-index:10) */
