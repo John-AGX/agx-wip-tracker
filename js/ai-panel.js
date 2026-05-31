@@ -914,7 +914,9 @@
       // overlay. Width animates between 0 (collapsed) and a fixed
       // target so the sidebar feels inline, not pasted on top.
       '<div id="ai-body" style="flex:1;display:flex;flex-direction:row;min-height:0;">' +
-      // Messages scroll area — dotted background for a Claude-style canvas feel.
+      // Messages scroll area — clean, undecorated canvas (Claude-style):
+      // no dotted/textured background, generous padding and inter-message
+      // spacing so each turn reads as long-form output with room to breathe.
       // overflow-x:hidden + min-width:0 are critical: without them, a
       // child with intrinsic min-content wider than the panel (e.g. a
       // <pre> overflow:auto block, or a long unbreakable token) makes
@@ -923,7 +925,7 @@
       // Wrapped in a column so messages + presets + input live together
       // as the right pane of the row layout.
       '<div id="ai-content" style="flex:1;display:flex;flex-direction:column;min-width:0;min-height:0;">' +
-      '<div id="ai-messages" style="flex:1;overflow-y:auto;overflow-x:hidden;min-width:0;padding:18px 18px;display:flex;flex-direction:column;gap:14px;font-size:13px;color:var(--text,#e6e6e6);background-image:radial-gradient(circle, rgba(255,140,80,0.18) 1px, transparent 1px);background-size:14px 14px;"></div>' +
+      '<div id="ai-messages" style="flex:1;overflow-y:auto;overflow-x:hidden;min-width:0;padding:22px 20px;display:flex;flex-direction:column;gap:20px;font-size:13px;color:var(--text,#e6e6e6);"></div>' +
       // Preset prompts
       '<div id="ai-presets" style="padding:8px 12px;border-top:1px solid var(--border,#333);display:flex;flex-wrap:wrap;gap:6px;background:rgba(255,255,255,0.02);"></div>' +
       // (Payload dropbox moved up — now lives directly below the
@@ -2654,16 +2656,18 @@
   // Message rendering — Claude-style:
   //  - User: small right-aligned bubble (rounded, subtle bg). Like a chat
   //    message — fast to read, clearly user-authored.
-  //  - Assistant: unboxed, full-width markdown flow with a small cloud
-  //    avatar on the left. Reads as long-form output rather than a
-  //    chat reply.
+  //  - Assistant: unboxed, full-width markdown flow with no per-message
+  //    avatar — pure long-form prose like Claude's chat. The cloud +
+  //    brain-yoga caption lives only on the live streaming bubble
+  //    (appendStreamingBubble) as proof-of-life; once the turn finishes
+  //    the message re-renders here as clean prose.
   function renderBubble(m) {
     if (m.role === 'user') {
       var photoNote = m.photos_included
         ? '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:4px;text-align:right;">' + m.photos_included + ' photo' + (m.photos_included === 1 ? '' : 's') + ' attached</div>'
         : '';
       return '<div style="display:flex;justify-content:flex-end;">' +
-        '<div style="max-width:78%;background:rgba(255,255,255,0.08);color:var(--text,#fff);border-radius:14px;padding:8px 14px;font-size:13px;line-height:1.5;white-space:pre-wrap;">' +
+        '<div style="max-width:80%;background:rgba(255,255,255,0.07);color:var(--text,#fff);border-radius:16px;padding:10px 15px;font-size:13px;line-height:1.5;white-space:pre-wrap;">' +
           escapeHTMLLocal(m.content) +
           photoNote +
         '</div>' +
@@ -2687,10 +2691,7 @@
       }
     }
     return '<div style="width:100%;display:block;">' +
-      '<div style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text-dim,#888);margin-bottom:4px;">' +
-        '<span style="font-size:14px;line-height:1;">☁️</span>' +
-      '</div>' +
-      '<div class="ai-content" style="width:100%;overflow-x:hidden;font-size:13px;line-height:1.55;overflow-wrap:anywhere;word-break:normal;">' + renderMarkdown(m.content) + '</div>' +
+      '<div class="ai-content" style="width:100%;overflow-x:hidden;font-size:13px;line-height:1.6;overflow-wrap:anywhere;word-break:normal;">' + renderMarkdown(m.content) + '</div>' +
       usageFooter +
     '</div>';
   }
