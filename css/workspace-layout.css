@@ -157,6 +157,177 @@
   font-weight: 600;
 }
 
+/* ── Contextual sidebar: job subtabs inside #app-sidebar ──────
+   While a job is open the .ws-right-tabs strip is relocated into the
+   left sidebar (see workspace-layout.js placeJobSubnav). These rules
+   restyle the (normally horizontal, sticky) strip into a vertical nav
+   list that matches the main .app-nav aesthetic, plus the Back-to-Jobs
+   control and the job identity block above it. */
+.app-jobnav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px 12px;
+  min-width: 0;
+}
+
+/* Back-to-Jobs row — full-width, icon (← glyph) + label, mirrors the
+   .app-nav .tab-btn row shape. */
+.app-jobnav-back {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 11px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-dim, #8b90a5);
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.12s, color 0.12s;
+}
+.app-jobnav-back:hover {
+  background: var(--surface2, #242836);
+  color: var(--text, #e4e6f0);
+}
+.app-jobnav-back-arrow {
+  flex: 0 0 auto;
+  font-size: 16px;
+  line-height: 1;
+}
+
+/* Job identity block — number/title on top, status caption below. */
+.app-jobnav-jobinfo {
+  padding: 6px 11px 10px;
+  border-bottom: 1px solid var(--border, #2e3346);
+  margin-bottom: 6px;
+  min-width: 0;
+}
+.app-jobnav-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text, #e4e6f0);
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+.app-jobnav-status {
+  margin-top: 3px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.2px;
+  color: var(--text-dim, #8b90a5);
+}
+
+/* Strip → vertical list. Kill the horizontal-bar chrome (sticky,
+   border-bottom, opaque bg, wrap) so it reads as a stacked nav. */
+.app-jobnav .ws-right-tabs {
+  flex-direction: column;
+  flex-wrap: nowrap;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  border-bottom: none;
+  background: transparent;
+  position: static;
+  z-index: auto;
+}
+/* The horizontal sliding indicator makes no sense in a vertical list. */
+.app-jobnav .p86-tab-slider { display: none !important; }
+
+/* Each tab → full-width left-aligned row with icon + label, matching
+   .app-nav .tab-btn. */
+.app-jobnav .ws-right-tab {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 12px;
+  width: 100%;
+  flex: 0 0 auto;
+  padding: 9px 11px;
+  border-radius: 8px;
+  text-align: left;
+  font-size: 13.5px;
+  font-weight: 500;
+  position: relative;
+}
+.app-jobnav .ws-right-tab:hover {
+  background: var(--surface2, #242836);
+  color: var(--text, #e4e6f0);
+}
+.app-jobnav .ws-right-tab.active {
+  background: var(--surface2, #242836);
+  color: var(--text, #e4e6f0);
+  font-weight: 600;
+}
+/* Left accent bar marks the active subtab (replaces the slider). */
+.app-jobnav .ws-right-tab.active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 7px;
+  bottom: 7px;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: var(--accent, #4f8cff);
+}
+.app-jobnav .ws-right-tab .p86-icon-slot {
+  margin-right: 0;
+  flex: 0 0 auto;
+}
+.app-jobnav .ws-right-tab .p86-icon {
+  width: 20px;
+  height: 20px;
+}
+
+/* Actions row (Workspace toggle + hidden Ask 86 mount) sits at the
+   bottom of the subtab list as its own full-width control. */
+.app-jobnav .ws-right-tabs-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border, #2e3346);
+}
+.app-jobnav .ws-workspace-toggle {
+  width: 100%;
+  justify-content: center;
+}
+
+/* Collapsed rail (56px) — center icons, hide text labels + identity. */
+.app-sidebar.collapsed .app-jobnav {
+  padding-left: 0;
+  padding-right: 0;
+}
+.app-sidebar.collapsed .app-jobnav-jobinfo { display: none; }
+.app-sidebar.collapsed .app-jobnav-back {
+  justify-content: center;
+  padding: 9px 0;
+  gap: 0;
+}
+.app-sidebar.collapsed .app-jobnav-back .app-nav-label { display: none; }
+.app-sidebar.collapsed .app-jobnav .ws-right-tab {
+  justify-content: center;
+  padding: 9px 0;
+  gap: 0;
+  /* Hide the tab's text node (no wrapping span to target) while keeping
+     the icon visible. */
+  font-size: 0;
+}
+.app-sidebar.collapsed .app-jobnav .ws-right-tab .p86-icon {
+  width: 20px;
+  height: 20px;
+}
+
 /* ââ Right Tab Content âââââââââââââââââââââââââââââââââââââ */
 .ws-right-content {
   flex: 1;

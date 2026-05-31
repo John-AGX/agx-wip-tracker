@@ -47,13 +47,24 @@
   var _savedActiveTabId = null;
   var _inWorkspaceMode = false;
 
+  // ── Contextual sidebar state ──────────────────────────────
+  // While a job is open, the job's RIGHT_TABS strip is relocated out of
+  // the page body and into the left sidebar (#app-sidebar), the main nav
+  // (.app-nav) is hidden, and a Back-to-Jobs control + job identity block
+  // sit above the tabs. On mobile (<=768px) the sidebar is display:none,
+  // so the tabs stay in the page where the single-column layout shows
+  // them. A matchMedia listener keeps the tabs on the right side of the
+  // breakpoint as the viewport resizes.
+  var _jobSubnavMql = null;
+  var _jobSubnavMqlHandler = null;
+
   // ── CSS injection ─────────────────────────────────────────
   function injectCSS() {
     if (document.getElementById('ws-layout-v2-css')) return;
     var link = document.createElement('link');
     link.id = 'ws-layout-v2-css';
     link.rel = 'stylesheet';
-    link.href = 'css/workspace-layout.css?v=31';
+    link.href = 'css/workspace-layout.css?v=58';
     document.head.appendChild(link);
   }
 
@@ -68,6 +79,10 @@
 
   // ── Cleanup old injections ────────────────────────────────
   function cleanup() {
+    // Restore the main sidebar nav and tear down the job-context subnav
+    // before anything else removes the relocated tabs strip.
+    unmountJobSubnav();
+
     // Remove job info bar
     var jobInfo = document.querySelector(".jh-job-info");
     if (jobInfo) jobInfo.remove();
@@ -394,6 +409,113 @@
   // (Insights / Estimates / Admin). Without this the sticky job-metrics
   // header lingers until the polling loop notices the detail view is hidden.
   window.workspaceLayoutCleanup = cleanup;
+
+  // ── Contextual sidebar: swap job subtabs into #app-sidebar ──
+  // Below the mobile breakpoint the desktop sidebar is hidden, so the
+  // tabs must remain in the page column. Above it, they move into the
+  // sidebar. Single source of truth for the breakpoint test.
+  function jobSubnavIsMobile() {
+    return !!(window.matchMedia && window.matchMedia('(max-width: 768px)').matches);
+  }
+
+  // Build (once) the job-context wrapper that holds the Back-to-Jobs
+  // control + job identity block. The .ws-right-tabs strip is appended
+  // into it by placeJobSubnav(); it is NOT rebuilt here.
+  function buildJobSubnavShell(job) {
+    var jobnav = document.getElementById('app-jobnav');
+    if (!jobnav) {
+      jobnav = document.createElement('div');
+      jobnav.id = 'app-jobnav';
+      jobnav.className = 'app-jobnav';
+
+      var back = document.createElement('button');
+      back.type = 'button';
+      back.className = 'app-jobnav-back';
+      back.title = 'Back to all jobs';
+      back.innerHTML =
+        '<span class="app-jobnav-back-arrow" aria-hidden="true">←</span>' +
+        '<span class="app-nav-label">All Jobs</span>';
+      back.addEventListener('click', function () {
+        if (typeof backToJobsMain === 'function') backToJobsMain();
+        else if (typeof window.backToJobsMain === 'function') window.backToJobsMain();
+      });
+      jobnav.appendChild(back);
+
+      var info = document.createElement('div');
+      info.className = 'app-jobnav-jobinfo';
+      info.innerHTML =
+        '<div class="app-jobnav-title"></div>' +
+        '<div class="app-jobnav-status"></div>';
+      jobnav.appendChild(info);
+    }
+    // (Re)populate identity from the current job.
+    if (job) {
+      var num = job.jobNumber || '';
+      var nm = job.title || job.name || '';
+      var titleEl = jobnav.querySelector('.app-jobnav-title');
+      var statusEl = jobnav.querySelector('.app-jobnav-status');
+      if (titleEl) titleEl.textContent = num + (num && nm ? ' — ' : '') + nm;
+      if (statusEl) statusEl.textContent = job.status || 'In Progress';
+    }
+    return jobnav;
+  }
+
+  // Put the .ws-right-tabs strip in the correct place for the current
+  // viewport: inside the sidebar jobnav (desktop) or back in the page
+  // column (mobile / no sidebar). Reparenting preserves the click
+  // handlers wireTabSwitching() bound to each tab node.
+  function placeJobSubnav() {
+    var sidebar = document.getElementById('app-sidebar');
+    var appNav = sidebar ? sidebar.querySelector('.app-nav') : null;
+    var tabs = document.querySelector('.ws-right-tabs');
+    var jobnav = document.getElementById('app-jobnav');
+    var home = document.querySelector('#ws-two-col .ws-col-right');
+    if (!tabs) return;
+
+    var mobile = jobSubnavIsMobile() || !sidebar;
+    if (mobile) {
+      // Tabs live in the page column; main nav is restored; jobnav hidden.
+      if (home && tabs.parentNode !== home) home.insertBefore(tabs, home.firstChild);
+      if (appNav) appNav.style.display = '';
+      if (jobnav) jobnav.style.display = 'none';
+      return;
+    }
+    // Desktop: relocate tabs into the sidebar jobnav; hide main nav.
+    if (!jobnav) return;
+    if (jobnav.parentNode !== sidebar) sidebar.appendChild(jobnav);
+    if (tabs.parentNode !== jobnav) jobnav.appendChild(tabs);
+    jobnav.style.display = '';
+    if (appNav) appNav.style.display = 'none';
+  }
+
+  function mountJobSubnav(job) {
+    buildJobSubnavShell(job);
+    placeJobSubnav();
+    // Follow the tabs across the breakpoint as the viewport resizes.
+    if (window.matchMedia && !_jobSubnavMql) {
+      _jobSubnavMql = window.matchMedia('(max-width: 768px)');
+      _jobSubnavMqlHandler = function () { placeJobSubnav(); };
+      if (_jobSubnavMql.addEventListener) _jobSubnavMql.addEventListener('change', _jobSubnavMqlHandler);
+      else if (_jobSubnavMql.addListener) _jobSubnavMql.addListener(_jobSubnavMqlHandler);
+    }
+  }
+
+  function unmountJobSubnav() {
+    if (_jobSubnavMql && _jobSubnavMqlHandler) {
+      if (_jobSubnavMql.removeEventListener) _jobSubnavMql.removeEventListener('change', _jobSubnavMqlHandler);
+      else if (_jobSubnavMql.removeListener) _jobSubnavMql.removeListener(_jobSubnavMqlHandler);
+    }
+    _jobSubnavMql = null;
+    _jobSubnavMqlHandler = null;
+    // Restore the main nav, then drop the job subnav wrapper. The
+    // .ws-right-tabs node inside it (if relocated) dies with the wrapper;
+    // it is rebuilt by buildLayout on the next applyLayout.
+    var sidebar = document.getElementById('app-sidebar');
+    var appNav = sidebar ? sidebar.querySelector('.app-nav') : null;
+    if (appNav) appNav.style.display = '';
+    var jobnav = document.getElementById('app-jobnav');
+    if (jobnav) jobnav.remove();
+  }
 
   function buildLayout(detail) {
     var container = document.createElement('div');
@@ -1394,6 +1516,10 @@
       wireResizer();
     wireTabSwitching();
     moveJobInfoToAccordion(detail, document.getElementById('wsRightContent'));
+    // Relocate the job subtabs into the left sidebar (desktop) and swap
+    // the main nav out for a Back-to-Jobs + job-context view. Done AFTER
+    // wireTabSwitching so the tabs keep their click handlers when moved.
+    mountJobSubnav(job);
       layoutApplied = true;
       _applyingLayout = false;
   }
