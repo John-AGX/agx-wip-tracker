@@ -1791,6 +1791,38 @@ async function buildEstimateContext(estimateId, includePhotos, aiPhaseOverride, 
     lines.push('');
   }
 
+  // Workspace sheet index — parity with the job side (buildJobContext).
+  // The Excel-style workspace now lives on the estimate too
+  // (estimates.data.workbook, persisted via PUT /api/estimates/:id/workbook).
+  // Surface the COMPLETE tab list (including empty sheets) so 86 always
+  // knows what sheets exist by name and can fetch any one with
+  // read_workspace_sheet_full. We read server-side here rather than from
+  // client-packaged context so the index is correct even when the chat
+  // is opened from outside the editor (global Ask 86).
+  {
+    const wb = blob.workbook && typeof blob.workbook === 'object' ? blob.workbook : null;
+    const wbSheets = wb && Array.isArray(wb.sheets) ? wb.sheets : [];
+    if (wbSheets.length) {
+      const sheetInfo = wbSheets.map(function(s) {
+        let cellCount = 0;
+        if (s && s.cells && typeof s.cells === 'object') cellCount = Object.keys(s.cells).length;
+        else if (s && Array.isArray(s.rows)) cellCount = s.rows.length;
+        return { name: s && s.name ? String(s.name) : '(unnamed)', cellCount };
+      });
+      lines.push('# Workspace sheets — index (' + sheetInfo.length + ' tabs)');
+      lines.push('This estimate has an Excel-style workspace. Tab names available right now (1 line each):');
+      sheetInfo.forEach(function(si) {
+        lines.push('- "' + si.name + '"' + (si.cellCount === 0 ? ' · empty' : ' · ' + si.cellCount + ' cells'));
+      });
+      lines.push('When the user references a sheet, MATCH AGAINST THIS LIST FIRST — exact, then case-insensitive, then trimmed. To read a sheet\'s contents (cells, formulas, number formats, validation, notes, hyperlinks, named ranges) call `read_workspace_sheet_full({ sheet_name })` — auto-applies, no approval. The session is anchored to this estimate so you don\'t need to pass estimate_id.');
+      const namedRangeCount = wb.namedRanges && typeof wb.namedRanges === 'object' ? Object.keys(wb.namedRanges).length : 0;
+      if (namedRangeCount) {
+        lines.push('This workbook also defines ' + namedRangeCount + ' named range' + (namedRangeCount === 1 ? '' : 's') + ' (surfaced per-sheet by read_workspace_sheet_full).');
+      }
+      lines.push('');
+    }
+  }
+
   // Photo manifest — always lists IDs so 86 can call view_attachment_image
   // even when the photos aren't auto-attached inline (the default).
   if (photoRows.length) {
@@ -6824,7 +6856,17 @@ const PAYLOAD_TOOLS = [
       'sections (full replace) OR granular section_adds/updates/deletes. ' +
       'Section layout is one of photo-grid|single-photo|before-after| ' +
       'text-block|attachment-list. ' +
-      'system: {skill_pack_ops,watch_ops,field_tool_ops,link_ops,staff_agent_ops}. ' +
+      'system: {skill_pack_ops,watch_ops,field_tool_ops,link_ops,staff_agent_ops} ' +
+      '— link_ops includes {op:attach_files, attachment_ids[], target_entity_type, target_entity_id} to link existing files to an entity. ' +
+      'workbook: {host:estimate|job, sheet?, cell_ops[], sheet_ops[], named_range_ops[]} ' +
+      '— authors the Excel-style workspace ON an estimate/job. entity_id is the host id, host says which table. ' +
+      'cell_ops:[{addr:"B7", raw?, value?, numFmt?, validation?, hyperlink?, note?, clear?}] — raw starting with "=" is a formula (recomputed on load), a bare value writes a literal, clear:true deletes. ' +
+      'sheet_ops:[{op:add|rename|delete, name, new_name?}]; named_range_ops:[{op:set|delete, name, ref?, sheet?, comment?}]. ' +
+      'Read the sheet first with read_workspace_sheet_full to get exact addresses/sheet names. ' +
+      'TARGET FORMS (siblings of entity_type/ops, work on any entity_type): ' +
+      'conditional — add condition:"if_exists"|"if_missing"|"upsert" to a target (upsert needs no pre-check; if_exists/if_missing need a concrete entity_id). ' +
+      'bulk — {entity_type, bulk:{items:[{entity_id?, ops}, ...]}} applies the same dispatcher N times. ' +
+      'move — {op:"move", source:{entity_type,entity_id,ops}, dest:{entity_type,entity_id,ops}} runs source then dest in one transaction (e.g. delete a line from estimate A, add it to estimate B). ' +
       'Cross-entity refs ($new_id syntax) resolve at apply time. ' +
       'Do NOT pre-narrate the file.',
     tier: 'auto',
@@ -6841,16 +6883,20 @@ const PAYLOAD_TOOLS = [
             'that other targets in the same bundle reference. entity_display + entity_metadata ' +
             'render in the file preview so the user can sanity-check before dropping.',
           items: {
+            // A target is USUALLY {entity_type, entity_id?, ops} but may
+            // also be a `move` form {op:"move", source, dest} (no top-level
+            // entity_type) or a `bulk` form {entity_type, bulk:{items}}.
+            // Server-side validateTarget is the real arbiter, so we don't
+            // hard-`require` entity_type/ops here — that would block move.
             type: 'object',
-            required: ['entity_type', 'ops'],
             properties: {
               entity_type: {
                 type: 'string',
-                enum: ['estimate', 'job', 'lead', 'client', 'schedule', 'system', 'report'],
+                enum: ['estimate', 'job', 'lead', 'client', 'schedule', 'system', 'report', 'workbook'],
               },
               entity_id: {
                 type: 'string',
-                description: 'Real id for updates, or $new_<name> placeholder for creates referenced elsewhere in this bundle. Omit for one-off creates.',
+                description: 'Real id for updates, or $new_<name> placeholder for creates referenced elsewhere in this bundle. Omit for one-off creates. For workbook targets this is the host estimate/job id.',
               },
               entity_display: {
                 type: 'string',
@@ -6863,6 +6909,28 @@ const PAYLOAD_TOOLS = [
               ops: {
                 type: 'object',
                 description: 'Per-entity_type op vocabulary. See tool description for the full keys.',
+              },
+              condition: {
+                type: 'string',
+                enum: ['if_exists', 'if_missing', 'upsert'],
+                description: 'Optional gate: if_exists/if_missing skip the target unless the entity_id (does/does not) exist; upsert creates when absent, updates when present.',
+              },
+              op: {
+                type: 'string',
+                enum: ['move'],
+                description: 'Set to "move" for a cross-entity move target. Then provide source + dest instead of entity_type/ops.',
+              },
+              source: {
+                type: 'object',
+                description: 'move only: the {entity_type, entity_id, ops} to apply first (e.g. a line delete).',
+              },
+              dest: {
+                type: 'object',
+                description: 'move only: the {entity_type, entity_id, ops} to apply second (e.g. a line add).',
+              },
+              bulk: {
+                type: 'object',
+                description: 'Bulk form: { items: [{entity_id?, ops}, ...] } — applies this entity_type\'s dispatcher once per item.',
               },
             },
           },
@@ -8656,27 +8724,66 @@ async function execStaffTool(name, input, ctx) {
         const keys = Object.keys(sheet.cells).sort();
         out.push('(' + keys.length + ' cells)');
         keys.forEach(k => {
-          // New workbook shape: cells are { raw, value, fmt, style, error }
-          // objects. Surface the human-readable value (or raw if value
-          // hasn't been evaluated yet) — dumping the whole cell object
-          // would bury the data in style noise the AI doesn't need.
+          // New workbook shape: cells are { raw, value, fmt, style, numFmt,
+          // validation, hyperlink, note, error } objects. Surface the
+          // human-readable value (or raw if value hasn't been evaluated
+          // yet) PLUS the structural metadata 86 needs to reason about the
+          // sheet: the underlying formula, number format, data-validation
+          // rule, hyperlink target, and cell note. Without these, 86 can't
+          // tell a computed total from a typed one or know a cell is a
+          // dropdown. Style (fonts/fills) is still dropped as noise.
           // Legacy shape: cells are bare scalars (string / number) —
           // pass through as-is.
           const c = sheet.cells[k];
           let render;
+          const tags = [];
           if (c && typeof c === 'object') {
             if (c.error) render = '#ERROR(' + String(c.error) + ')';
             else if (c.value !== undefined && c.value !== null && c.value !== '') render = String(c.value);
             else if (c.raw !== undefined && c.raw !== null) render = String(c.raw);
             else render = '';
+            // Surface the formula when raw differs from the displayed value
+            // (i.e. it's a real "=..." expression, not a literal).
+            if (typeof c.raw === 'string' && c.raw.charAt(0) === '=' && c.raw !== render) {
+              tags.push('fx ' + c.raw);
+            }
+            if (c.numFmt) tags.push('fmt ' + String(c.numFmt));
+            if (c.validation) {
+              const v = c.validation;
+              if (v && typeof v === 'object') {
+                if (Array.isArray(v.list)) tags.push('dropdown[' + v.list.join(', ') + ']');
+                else if (v.type) tags.push('validation:' + v.type + (v.formula ? '(' + v.formula + ')' : ''));
+                else tags.push('validation');
+              } else {
+                tags.push('validation');
+              }
+            }
+            if (c.hyperlink) tags.push('link ' + String(c.hyperlink));
+            if (c.note) tags.push('note "' + String(c.note).replace(/\s+/g, ' ').slice(0, 120) + '"');
           } else {
             render = c == null ? '' : String(c);
           }
-          out.push(k + ': ' + render);
+          out.push(k + ': ' + render + (tags.length ? '  {' + tags.join('; ') + '}' : ''));
         });
       } else {
         // Unknown shape — dump JSON, capped so we don't blow context.
         out.push(JSON.stringify(sheet, null, 2).slice(0, 8000));
+      }
+      // Named ranges live at the workbook level, not per-sheet. Surface the
+      // ones anchored to THIS sheet (plus any global ones) so 86 can refer
+      // to them by name instead of raw A1 refs — and so it knows they
+      // exist before authoring a workbook payload that references them.
+      if (workbook && workbook.namedRanges && typeof workbook.namedRanges === 'object') {
+        const nrEntries = Object.values(workbook.namedRanges).filter(Boolean);
+        const relevant = nrEntries.filter(nr => !nr.sheetId || nr.sheetId === sheet.id);
+        if (relevant.length) {
+          out.push('');
+          out.push('Named ranges (' + relevant.length + '):');
+          relevant.forEach(nr => {
+            out.push('  ' + (nr.name || '?') + ' → ' + (nr.ref || '?') +
+              (nr.comment ? '  // ' + String(nr.comment).replace(/\s+/g, ' ').slice(0, 100) : ''));
+          });
+        }
       }
       const text = out.join('\n');
       // Cap total output at ~12k chars so a giant sheet doesn't melt
@@ -10106,19 +10213,21 @@ async function execEmitPayloadFile(tu, ctx) {
       return { tier: 'auto', error: 'emit_payload_file requires a summary' };
     }
 
-    // Validate each target's ops up front so the model gets an actionable
-    // error instead of a row that fails at apply time. validateOps
-    // throws on unknown keys / blocked fields / unsupported entity types.
-    for (const t of targets) {
-      if (!t || !t.entity_type) {
-        return { tier: 'auto', error: 'Each target requires entity_type' };
-      }
+    // Validate each target up front so the model gets an actionable error
+    // instead of a row that fails at apply time. validateTarget handles all
+    // target forms — plain entity_type+ops, conditional (if_exists/if_missing/
+    // upsert), bulk {items:[...]}, and move {source,dest} (which has no
+    // top-level entity_type) — and throws on unknown keys / blocked fields /
+    // unsupported entity types, tagging the offending target_index.
+    for (let idx = 0; idx < targets.length; idx++) {
+      const t = targets[idx];
       try {
-        payloadDispatcher.validateOps(t.entity_type, t.ops || {});
+        payloadDispatcher.validateTarget(t, idx);
       } catch (err) {
+        const label = t && t.entity_type ? `${t.entity_type} target` : `target #${idx}`;
         return {
           tier: 'auto',
-          error: `Invalid ops on ${t.entity_type} target: ${err.message}`,
+          error: `Invalid ${label}: ${err.message}`,
         };
       }
     }
