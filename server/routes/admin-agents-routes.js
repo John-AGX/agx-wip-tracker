@@ -1927,7 +1927,7 @@ const AGENT_SYSTEM_BASELINE = {
     '  • lead: `{op:\'create\'|\'update\', fields, notes?}`',
     '  • schedule: `{blocks: [{op, entry_id?, jobId, startDate, days, crew, ...}]}`',
     '  • system: `{watch_ops?, skill_pack_ops?, field_tool_ops?, link_ops?}` — for platform writes (no separate propose_* tools). `link_ops` includes `{op:\'attach_files\', attachment_ids:[...], target_entity_type, target_entity_id}` to re-point already-uploaded attachments onto an entity (the upload itself still goes through the attachment routes).',
-    '  • The workspace is NOT written via payload. To populate a sheet, build an .xlsx (code_execution) and the user drops it into the workspace — it auto-imports as sheets — or edit the sheet directly in the workspace UI.',
+    '  • The workspace is NOT written via payload. To populate a sheet, build an .xlsx with Python (write the script + run it via bash, output to `/mnt/session/outputs/`) and the user drops it into the workspace — it auto-imports as sheets — or edit the sheet directly in the workspace UI.',
     '',
     'Canonical field names per entity (do NOT invent fields — the dispatcher rejects unknown columns and lists the valid set in its error):',
     '  • lead.fields keys: client_id, title, street_address, city, state, zip, status, confidence, projected_sale_date, estimated_revenue_low, estimated_revenue_high, source, project_type, salesperson_id, property_name, gate_code, market, notes, job_id. Lead carries NO direct contact fields — name/email/phone live on the linked client. status enum: new | in_progress | sent | lost | sold | no_opportunity.',
@@ -1945,11 +1945,11 @@ const AGENT_SYSTEM_BASELINE = {
     '',
     'ONE payload per turn. The file IS the proposal — do NOT pre-narrate ("I\'ll create a payload…"). Emit and stop.',
     '',
-    '# Code execution (Python sandbox)',
-    'You can run Python in an Anthropic-hosted sandbox (`code_execution`) with the full PyData stack — openpyxl, pandas, numpy, matplotlib, reportlab, weasyprint, PIL. Use it to crunch numbers, reshape data, or BUILD real file artifacts (.xlsx, .csv, .pdf, .png).',
-    '  • The sandbox is isolated — it CANNOT reach this org\'s database, attachments, or workbooks. READ the data you need first (read_entity / read_workspace_sheet_full), then pass it INTO the code as literals/inputs.',
-    '  • Any file you write to `/mnt/session/outputs/` is automatically harvested and surfaced to the user as a downloadable chat attachment — no extra step. Write outputs there to deliver a spreadsheet, report, or chart.',
-    '  • To put computed data INTO an estimate/job workspace, write an .xlsx in the sandbox — the user drops the harvested file into the workspace and it auto-imports as sheets. There is no workspace payload op.',
+    '# Python (run code via your bash tool)',
+    'You can run Python directly in your session container — there is NO separate `code_execution` tool. You write a script with your `write` tool and run it with `bash` (e.g. write `/mnt/session/outputs/build.py`, then `python3 /mnt/session/outputs/build.py`). Only do this when your live tool list this turn actually includes `write` and `bash`. Python 3.11 is installed with pandas, numpy, openpyxl, matplotlib, and reportlab. Use it to crunch numbers, reshape data, or BUILD real file artifacts (.xlsx, .csv, .pdf, .png).',
+    '  • The container is isolated — it CANNOT reach this org\'s database, attachments, or workbooks. READ the data you need first (read_entity / read_workspace_sheet_full), then pass it INTO the script as literals or input files you write.',
+    '  • Output delivery: write your finished file to `/mnt/session/outputs/` — anything there is automatically harvested and surfaced to the user as a downloadable chat attachment, no extra step. The default working directory is `/`, and files written outside `/mnt/session/outputs/` are NOT surfaced — always target that directory for deliverables.',
+    '  • To put computed data INTO an estimate/job workspace, write an .xlsx to `/mnt/session/outputs/` — the user drops the harvested file into the workspace and it auto-imports as sheets. There is no workspace payload op.',
     '',
     '# Memory',
     '`remember / recall / list_memories / forget` — durable facts across sessions.',
@@ -2320,8 +2320,9 @@ function customToolsFor(agentKey, opts) {
       // ── Wave 3 (2) ── RFI/sub/trans + compliance reads
       'list_workflow_items',
       'list_compliance_expiring',
-      // ── Server-hosted runtime (1) ── Anthropic Python sandbox
-      'code_execution',
+      // NOTE: no `code_execution` entry — Python runs via the
+      // agent_toolset_20260401 bundle's bash + write tools (see the
+      // comment after the merge loop below), not a discrete tool.
     ]);
     const seen = new Set();
     const merged = [];
@@ -2348,29 +2349,30 @@ function customToolsFor(agentKey, opts) {
       seen.add(t.name);
       merged.push(t);
     });
-    // Anthropic server-hosted code execution sandbox (beta
-    // code-execution-2025-08-25) is INTENTIONALLY NOT added to the
-    // managed-agent toolset here.
+    // No server-hosted `code_execution` tool is added to the managed-
+    // agent toolset here — and none is needed.
     //
-    // Why: the Anthropic *Agents* API (beta.agents.create / .update)
-    // rejects a bare server-hosted tool entry — `{type:'code_execution_
-    // 20250825'}` with no name/description — with a 400:
-    //   "tools.<N>.description: minimum string length is 1".
-    // (The managed `agent_toolset_20260401` bundle is accepted without a
-    // description, but an individual server-hosted tool is not.) Because
-    // customToolsFor feeds EVERY managed-agent path — bootstrap create,
-    // manual /sync, drift comparison, and the boot-resync sweep — leaving
-    // it in here meant agents.update 400'd on every sync, freezing the
-    // stored agent at its last-good tool_count and blocking ALL newer
-    // tools (payload conditional/bulk/move/attach ops, workspace reads)
-    // from ever reaching it.
+    // The Anthropic *Agents* API (beta.agents.create / .update) accepts
+    // only three tool entry types: `agent_toolset_20260401`, `mcp_toolset`,
+    // and `custom`. There is NO `code_execution` toolset and no bare
+    // server-hosted `code_execution_20250825` entry on this API — a bare
+    // entry 400s ("tools.<N>.description: minimum string length is 1"),
+    // and because customToolsFor feeds EVERY managed-agent path (bootstrap
+    // create, manual /sync, drift comparison, boot-resync sweep), leaving
+    // one in froze the agent at its last-good tool_count and blocked all
+    // newer tools from syncing. That was the root cause of the earlier
+    // tool-drift; removing the bare entry healed it (tool_count 12→17).
     //
-    // The inline Messages path (ai-routes.js runStream) still declares
-    // code_execution directly — the Messages API DOES accept the bare
-    // shape — so 86's Python sandbox is unaffected on that path. If/when
-    // we want code execution on the managed-agent path too, it needs the
-    // correct Agents-API declaration (likely a toolset entry, not a bare
-    // server-hosted tool) — tracked separately.
+    // Python is ALREADY available on the managed path WITHOUT a dedicated
+    // tool: the `agent_toolset_20260401` bundle (added by builtinToolsetFor)
+    // ships `bash` + `write`, so 86 writes a .py and runs `python3`.
+    // Verified live (2026-05-31): the session container has Python 3.11.15
+    // with pandas/numpy/openpyxl/matplotlib/reportlab, and a file written
+    // to `/mnt/session/outputs/` is auto-harvested into chat as a download
+    // (a write to `/` is NOT). The system baseline's "# Python" block
+    // documents this for 86. The inline Messages path (ai-routes.js
+    // runStream) still declares the real `code_execution_20250825` tool —
+    // the Messages API DOES accept it — so that path is unaffected.
     // C7 — sync handoffs retired. The Principal no longer fans out to
     // staff sub-sessions; staff agents are repurposed as async
     // background watchers (C10) that emit their findings as payloads
