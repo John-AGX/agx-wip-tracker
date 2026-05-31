@@ -1215,12 +1215,39 @@
 }
 .ws-sheet-tabs-head {
   flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 10px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.6px;
   color: var(--text-dim, #888);
-  padding: 4px 8px 8px;
+  padding: 4px 4px 8px 8px;
+}
+.ws-sheet-tabs-head-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Collapse / expand chevron in the panel head. Flips glyph based on
+   state; toggles the .ws-collapsed rail. */
+.ws-sheet-collapse-btn {
+  flex: 0 0 auto;
+  background: transparent;
+  border: none;
+  color: var(--text-dim, #888);
+  font-size: 15px;
+  line-height: 1;
+  padding: 2px 5px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.ws-sheet-collapse-btn:hover {
+  background: rgba(255,255,255,0.08);
+  color: var(--text, #fff);
 }
 .ws-sheet-tabs-list {
   display: flex;
@@ -1280,6 +1307,22 @@
   flex: 0 0 auto;
   font-size: 12px;
   opacity: 0.85;
+}
+/* Letter badge for plain (icon-less) sheets — hidden in the expanded
+   view, revealed in the collapsed rail so every row stays identifiable
+   when names are gone. */
+.ws-sheet-tab-initial {
+  display: none;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  background: rgba(255,255,255,0.10);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
 }
 
 /* Workbook tab — represents a multi-sheet xlsx import in the sidebar.
@@ -1470,6 +1513,46 @@ body.light-mode .ee-grand-total {
 .ws-sheet-tab-add:hover {
   background: rgba(255,255,255,0.06);
   color: var(--text, #fff);
+}
+.ws-sheet-tab-add-label {
+  margin-left: 4px;
+}
+
+/* ── Collapsed icon rail ─────────────────────────────────────
+   The chevron in the head shrinks the sidebar to a thin icon-only
+   strip (Claude-style), handing the grid the full width back. State
+   persists in localStorage. Two-class specificity (0,2,x) beats the
+   mobile-width rule (0,1,0) so the rail stays 46px on phones too. */
+.ws-sheet-tabs.ws-collapsed {
+  width: 46px;
+  padding: 6px 4px 0;
+}
+.ws-sheet-tabs.ws-collapsed .ws-sheet-tabs-head {
+  justify-content: center;
+  padding: 4px 0 8px;
+}
+.ws-sheet-tabs.ws-collapsed .ws-sheet-tabs-head-label {
+  display: none;
+}
+.ws-sheet-tabs.ws-collapsed .ws-sheet-tab {
+  justify-content: center;
+  padding: 7px 0;
+  gap: 0;
+}
+.ws-sheet-tabs.ws-collapsed .ws-sheet-tab-name,
+.ws-sheet-tabs.ws-collapsed .ws-sheet-tab-source-chip,
+.ws-sheet-tabs.ws-collapsed .ws-workbook-tab-count {
+  display: none;
+}
+.ws-sheet-tabs.ws-collapsed .ws-sheet-tab-initial {
+  display: inline-flex;
+}
+.ws-sheet-tabs.ws-collapsed .ws-sheet-tab-add {
+  text-align: center;
+  padding: 9px 0;
+}
+.ws-sheet-tabs.ws-collapsed .ws-sheet-tab-add-label {
+  display: none;
 }
 
 /* ── Status Bar ─────────────────────────────────────────── */

@@ -3116,10 +3116,30 @@
   // Vertical left-sidebar list of sheets (Claude-style). Click to
   // switch, double-click to rename, right-click for the contextual
   // menu. The "+ New sheet" row at the bottom appends a fresh sheet.
+  // The chevron in the panel head collapses it to a thin icon rail
+  // (state persisted in localStorage) to give the grid full width.
+  function sheetSidebarCollapsed() {
+    try { return localStorage.getItem('ws-sheet-sidebar-collapsed') === '1'; }
+    catch (e) { return false; }
+  }
+  function toggleSheetSidebar() {
+    var next = !sheetSidebarCollapsed();
+    try { localStorage.setItem('ws-sheet-sidebar-collapsed', next ? '1' : '0'); } catch (e) {}
+    renderSheetTabs();
+  }
   function renderSheetTabs() {
     const wrap = document.getElementById('wsSheetTabs');
     if (!wrap) return;
-    let html = '<div class="ws-sheet-tabs-head">Sheets</div>';
+    var collapsed = sheetSidebarCollapsed();
+    wrap.classList.toggle('ws-collapsed', collapsed);
+    let html = '<div class="ws-sheet-tabs-head">' +
+      '<span class="ws-sheet-tabs-head-label">Sheets</span>' +
+      '<button class="ws-sheet-collapse-btn" id="wsSheetCollapseBtn" title="' +
+        (collapsed ? 'Expand sheet panel' : 'Collapse sheet panel') +
+        '" aria-label="Toggle sheet panel">' +
+        (collapsed ? '&rsaquo;' : '&lsaquo;') +
+      '</button>' +
+    '</div>';
     html += '<div class="ws-sheet-tabs-list">';
 
     // Build a map: groupId → the active sheet within that group. When
@@ -3174,6 +3194,12 @@
       } else if (s.kind === 'attachments') {
         icon = '<span class="ws-sheet-tab-icon" aria-hidden="true">&#x1F4CE;</span> ';
         kindCls = ' ws-sheet-tab-attachments';
+      } else {
+        // Plain sheet — a letter badge stands in for an icon so the
+        // collapsed rail still shows something identifiable. It's
+        // hidden in the expanded view (the name carries identity there).
+        var initial = ((s.name || '').trim().charAt(0) || '#').toUpperCase();
+        icon = '<span class="ws-sheet-tab-initial" aria-hidden="true">' + escapeHTML(initial) + '</span> ';
       }
       // Phase 0 — sheets inherited from an estimate at the moment a
       // job was created get a small "📋" chip + a "From estimate"
@@ -3196,7 +3222,10 @@
       '</div>';
     });
     html += '</div>';
-    html += '<button class="ws-sheet-tab-add" id="wsAddSheetBtn" title="Add sheet">+ New sheet</button>';
+    html += '<button class="ws-sheet-tab-add" id="wsAddSheetBtn" title="Add sheet">' +
+      '<span class="ws-sheet-tab-add-icon" aria-hidden="true">+</span>' +
+      '<span class="ws-sheet-tab-add-label">New sheet</span>' +
+    '</button>';
     wrap.innerHTML = html;
 
     // Workbook group tabs — click activates the group's last-active
@@ -3319,6 +3348,11 @@
     });
     const addBtn = wrap.querySelector('#wsAddSheetBtn');
     if (addBtn) addBtn.addEventListener('click', function() { addSheet(); });
+    const collapseBtn = wrap.querySelector('#wsSheetCollapseBtn');
+    if (collapseBtn) collapseBtn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      toggleSheetSidebar();
+    });
   }
 
   // Renders the secondary tab strip that appears above the grid when
