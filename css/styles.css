@@ -855,6 +855,154 @@
             display: block;
         }
 
+        /* ── App body: collapsible left sidebar + content column ──────
+           The .container is a vertical flex column (sticky header on top,
+           then .app-body filling the rest). .app-body is a horizontal
+           flex row: the collapsible nav sidebar on the left, the content
+           column (job-detail metrics strip + scrollable <main>) on the
+           right. min-height:0 on the row + column lets <main> own its own
+           scroll instead of the whole page growing. */
+        .app-body {
+            display: flex;
+            flex: 1;
+            min-height: 0;
+            width: 100%;
+        }
+        .app-content-col {
+            display: flex;
+            flex-direction: column;
+            flex: 1 1 auto;
+            min-width: 0;
+            min-height: 0;
+        }
+
+        /* Collapsible left sidebar (desktop primary nav). Holds the
+           destinations that used to live in the header's nav.tabs strip.
+           Collapses to a 56px icon rail via #app-sidebar-toggle. */
+        .app-sidebar {
+            flex: 0 0 auto;
+            width: 212px;
+            display: flex;
+            flex-direction: column;
+            background: var(--surface);
+            border-right: 1px solid var(--border);
+            overflow-y: auto;
+            overflow-x: hidden;
+            transition: width 0.18s ease;
+        }
+        .app-sidebar.collapsed {
+            width: 56px;
+        }
+        .app-sidebar-head {
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            padding: 8px 10px 4px;
+        }
+        .app-sidebar.collapsed .app-sidebar-head {
+            justify-content: center;
+        }
+        .app-sidebar-toggle {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 32px;
+            height: 32px;
+            border: 1px solid transparent;
+            border-radius: 8px;
+            background: transparent;
+            color: var(--text-dim);
+            cursor: pointer;
+            transition: background 0.12s, color 0.12s;
+        }
+        .app-sidebar-toggle:hover {
+            background: var(--surface2);
+            color: var(--text);
+        }
+
+        /* Nav list */
+        .app-nav {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            padding: 6px 8px 12px;
+        }
+        /* Each destination — full-width row: icon + label. The .app-nav
+           descendant combinator outranks the generic
+           `.tab-btn { background:transparent }` reset, so hover/active
+           fills apply. switchTab() still drives .active by class, so no
+           JS rewire was needed beyond moving the markup. */
+        .app-nav .tab-btn {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            width: 100%;
+            padding: 9px 11px;
+            border: none;
+            border-radius: 8px;
+            background: transparent;
+            color: var(--text-dim);
+            font-size: 13.5px;
+            font-weight: 500;
+            text-align: left;
+            cursor: pointer;
+            white-space: nowrap;
+            position: relative;
+            transition: background 0.12s, color 0.12s;
+        }
+        .app-nav .tab-btn:hover {
+            background: var(--surface2);
+            color: var(--text);
+        }
+        .app-nav .tab-btn.active {
+            background: var(--surface2);
+            color: var(--text);
+            font-weight: 600;
+        }
+        /* Left accent bar marks the active destination (replaces the
+           horizontal sliding underline the old top strip used). */
+        .app-nav .tab-btn.active::before {
+            content: "";
+            position: absolute;
+            left: 0;
+            top: 7px;
+            bottom: 7px;
+            width: 3px;
+            border-radius: 0 3px 3px 0;
+            background: var(--accent);
+        }
+        /* Icon — the .p86-icon-slot is auto-prepended by agx-icons.js. */
+        .app-nav .tab-btn .p86-icon-slot {
+            display: inline-flex;
+            align-items: center;
+            flex: 0 0 auto;
+        }
+        .app-nav .tab-btn .p86-icon {
+            width: 20px;
+            height: 20px;
+        }
+        .app-nav-label {
+            flex: 1 1 auto;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        /* Collapsed rail — center icons, hide labels. Titles on each
+           button provide hover tooltips when the labels are gone. */
+        .app-sidebar.collapsed .app-nav {
+            padding-left: 0;
+            padding-right: 0;
+        }
+        .app-sidebar.collapsed .app-nav .tab-btn {
+            justify-content: center;
+            padding: 9px 0;
+            gap: 0;
+        }
+        .app-sidebar.collapsed .app-nav-label {
+            display: none;
+        }
+
         /* Read-only mode for job detail when the current PM doesn't own the job. */
 
         /* Form controls always disabled (typing is meaningless if save is blocked). */
@@ -2019,6 +2167,10 @@
                header slims to brand + user-menu only; the bottom
                nav owns navigation duty. */
             nav.tabs { display: none !important; }
+            /* Desktop left sidebar is hidden on phones — the fixed
+               bottom-nav owns navigation here. .app-body collapses to
+               just the content column (flex:1) so nothing reflows. */
+            .app-sidebar { display: none !important; }
             .p86-ask86-badge.floating { display: none !important; }
             /* Keep the PROJECT 86 wordmark visible on mobile (was
                hidden previously) but shrink it so logo + wordmark +

@@ -285,10 +285,14 @@
     // header → strip → main — and naturally hugs the header's
     // bottom edge with no margin tricks.
     strip.id = "jh-strip-detached";
-    var appContainer = document.getElementById('app-container');
-    var mainEl = appContainer ? appContainer.querySelector('main') : null;
-    if (appContainer && mainEl) {
-      appContainer.insertBefore(strip, mainEl);
+    // Insert the strip as main's previous sibling inside whatever column
+    // wraps it: .app-content-col when the left sidebar shell is present,
+    // or #app-container directly on the legacy (sidebar-less) layout.
+    // Either way the strip sits between the header and the scrollable
+    // main area and hugs the header's bottom edge with no margin tricks.
+    var mainEl = document.querySelector('#app-container main');
+    if (mainEl && mainEl.parentNode) {
+      mainEl.parentNode.insertBefore(strip, mainEl);
     } else {
       // Fallback to the legacy in-detail placement if the new
       // siblings can't be located (e.g., page structure changed).

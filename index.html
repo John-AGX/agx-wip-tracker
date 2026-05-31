@@ -321,19 +321,11 @@
                     <img src="images/project-86-icon.svg" alt="" class="header-logo" />
                     <span class="header-wordmark">PROJECT 86</span>
                 </a>
-                <nav class="tabs">
-                    <!-- Leads is its own top-level destination now (was a
-                         sub-tab inside Estimates). Click routes to the
-                         existing Estimates → Leads sub-tab DOM but the
-                         active highlight stays on this button so Leads
-                         reads as a first-class page. -->
-                    <button class="tab-btn active" data-tab="estimates" data-est-subtab="leads" data-virtual-tab="leads" data-p86-icon="leads" data-cap="LEADS_VIEW">Leads</button>
-                    <button class="tab-btn" data-tab="estimates" data-est-subtab="list" data-virtual-tab="estimates" data-p86-icon="estimates" data-cap="ESTIMATES_VIEW">Estimates</button>
-                    <button class="tab-btn" data-tab="schedule" data-p86-icon="schedule">Schedule</button>
-                    <button class="tab-btn" data-tab="jobs" data-p86-icon="wip" data-cap="JOBS_VIEW_ALL JOBS_VIEW_ASSIGNED JOBS_EDIT_ANY JOBS_EDIT_OWN">Jobs</button>
-                    <button class="tab-btn" data-tab="insights" data-p86-icon="insights" data-cap="INSIGHTS_VIEW">Insights</button>
-                    <button class="tab-btn" data-tab="admin" data-p86-icon="admin" data-admin-only style="display:none;">Admin</button>
-                </nav>
+                <!-- Primary navigation moved out of the header into the
+                     collapsible left sidebar (#app-sidebar, below). The
+                     header now carries brand + the right-side user cluster
+                     only; the sidebar owns destination switching on
+                     desktop, and the bottom-nav owns it on mobile. -->
                 <div id="user-menu" class="header-user-menu">
                     <!-- Notifications bell. Renders the agx 'bell' SVG
                          (Heroicons outline) instead of the previous 🔔
@@ -434,6 +426,38 @@
             </div>
         </header>
 
+        <!-- App body: collapsible left sidebar (desktop nav) + content
+             column. The sidebar holds the primary destinations that used
+             to live in the header's nav.tabs strip; it collapses to an
+             icon rail via #app-sidebar-toggle (state persisted to
+             localStorage). Hidden entirely on mobile, where the fixed
+             bottom-nav owns navigation. -->
+        <div class="app-body">
+            <aside id="app-sidebar" class="app-sidebar" aria-label="Main navigation">
+                <div class="app-sidebar-head">
+                    <button id="app-sidebar-toggle" class="app-sidebar-toggle" type="button"
+                            aria-label="Collapse sidebar" aria-expanded="true" title="Collapse sidebar">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                             stroke-linecap="round" stroke-linejoin="round" width="18" height="18" aria-hidden="true">
+                            <rect x="3" y="3" width="18" height="18" rx="2"></rect>
+                            <line x1="9" y1="3" x2="9" y2="21"></line>
+                        </svg>
+                    </button>
+                </div>
+                <nav class="app-nav" aria-label="Primary">
+                    <!-- Leads is its own top-level destination (was a sub-tab
+                         inside Estimates). Click routes to the Estimates →
+                         Leads sub-tab DOM but the active highlight stays on
+                         this button so Leads reads as a first-class page. -->
+                    <button class="tab-btn active" data-tab="estimates" data-est-subtab="leads" data-virtual-tab="leads" data-p86-icon="leads" data-cap="LEADS_VIEW" title="Leads"><span class="app-nav-label">Leads</span></button>
+                    <button class="tab-btn" data-tab="estimates" data-est-subtab="list" data-virtual-tab="estimates" data-p86-icon="estimates" data-cap="ESTIMATES_VIEW" title="Estimates"><span class="app-nav-label">Estimates</span></button>
+                    <button class="tab-btn" data-tab="schedule" data-p86-icon="schedule" title="Schedule"><span class="app-nav-label">Schedule</span></button>
+                    <button class="tab-btn" data-tab="jobs" data-p86-icon="wip" data-cap="JOBS_VIEW_ALL JOBS_VIEW_ASSIGNED JOBS_EDIT_ANY JOBS_EDIT_OWN" title="Jobs"><span class="app-nav-label">Jobs</span></button>
+                    <button class="tab-btn" data-tab="insights" data-p86-icon="insights" data-cap="INSIGHTS_VIEW" title="Insights"><span class="app-nav-label">Insights</span></button>
+                    <button class="tab-btn" data-tab="admin" data-p86-icon="admin" data-admin-only style="display:none;" title="Admin"><span class="app-nav-label">Admin</span></button>
+                </nav>
+            </aside>
+            <div class="app-content-col">
         <main>
             <div class="main-inner">
                 <!-- JOBS TAB -->
@@ -1417,6 +1441,8 @@
 
             </div>
         </main>
+            </div><!-- /.app-content-col -->
+        </div><!-- /.app-body -->
     </div>
 
     <!-- MODALS -->
@@ -2920,7 +2946,7 @@
         function syncMobileNavActive() {
           var bottomBtns = document.querySelectorAll('.p86-mobile-nav-btn[data-mobile-nav]');
           bottomBtns.forEach(function (b) { b.classList.remove('active'); });
-          var activeTop = document.querySelector('nav.tabs .tab-btn.active');
+          var activeTop = document.querySelector('.app-nav .tab-btn.active');
           if (!activeTop) return;
           var virtual = activeTop.getAttribute('data-virtual-tab')
                      || activeTop.getAttribute('data-tab');
@@ -2929,12 +2955,55 @@
           });
         }
         function init() {
-          var topNav = document.querySelector('nav.tabs');
+          var topNav = document.querySelector('.app-nav');
           if (!topNav) return;
           new MutationObserver(syncMobileNavActive).observe(topNav, {
             attributes: true, subtree: true, attributeFilter: ['class']
           });
           syncMobileNavActive();
+        }
+        if (document.readyState === 'loading') {
+          document.addEventListener('DOMContentLoaded', init);
+        } else {
+          init();
+        }
+      })();
+
+      // ── Collapsible left sidebar (#app-sidebar) ─────────────────
+      // Claude-style desktop nav rail. The toggle flips a `collapsed`
+      // class on the sidebar (CSS shrinks it to an icon rail and hides
+      // the labels); the content column is flex:1 so it reclaims the
+      // freed width automatically. State persists across sessions in
+      // localStorage so the user's preference sticks. Re-positions the
+      // tab slider after the width transition so any wired bars stay
+      // anchored. Mobile is unaffected — CSS hides the sidebar there
+      // and the bottom-nav owns navigation.
+      (function () {
+        var KEY = 'p86SidebarCollapsed';
+        function apply(sidebar, btn, collapsed) {
+          sidebar.classList.toggle('collapsed', collapsed);
+          if (btn) {
+            btn.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+            btn.setAttribute('aria-label', collapsed ? 'Expand sidebar' : 'Collapse sidebar');
+            btn.setAttribute('title', collapsed ? 'Expand sidebar' : 'Collapse sidebar');
+          }
+        }
+        function init() {
+          var sidebar = document.getElementById('app-sidebar');
+          var btn = document.getElementById('app-sidebar-toggle');
+          if (!sidebar || !btn) return;
+          var collapsed = false;
+          try { collapsed = localStorage.getItem(KEY) === '1'; } catch (e) { /* private mode */ }
+          apply(sidebar, btn, collapsed);
+          btn.addEventListener('click', function () {
+            var next = !sidebar.classList.contains('collapsed');
+            apply(sidebar, btn, next);
+            try { localStorage.setItem(KEY, next ? '1' : '0'); } catch (e) { /* private mode */ }
+            // Width animates over 0.18s; nudge any tab sliders after it settles.
+            if (typeof window.p86TabSliderRefresh === 'function') {
+              setTimeout(window.p86TabSliderRefresh, 220);
+            }
+          });
         }
         if (document.readyState === 'loading') {
           document.addEventListener('DOMContentLoaded', init);
