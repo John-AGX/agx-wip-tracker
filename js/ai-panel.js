@@ -2346,7 +2346,16 @@
     // entity the user happens to be looking at. Entity-anchored
     // sessions get created automatically by the server's auto-anchor
     // when the user chats on that entity's page.
-    window.p86Api.post('/api/ai/sessions', { entity_type: 'general', label: 'New chat' }).then(function(resp) {
+    //
+    // session_kind:'user_thread' is REQUIRED for the new chat to stick.
+    // When the unified-user-thread flag is on, resolveSessionForChat
+    // (server) redirects the first turn of any NON-user_thread session
+    // back into the user's most-recent rolling thread — so a plain
+    // 'general' session created here would be orphaned and the message
+    // would land in the old conversation ("new chats aren't sticking").
+    // Minting it as a user_thread makes the server honor the explicit
+    // session_id AND gives the new chat compaction so it can't overflow.
+    window.p86Api.post('/api/ai/sessions', { entity_type: 'general', label: 'New chat', session_kind: 'user_thread' }).then(function(resp) {
       var s = resp && resp.session;
       if (!s) return;
       _sessionList.unshift(s);

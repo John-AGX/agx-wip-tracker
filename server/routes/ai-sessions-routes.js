@@ -248,6 +248,18 @@ router.post('/', requireAuth, requireOrg, async (req, res) => {
     const entityType = String(b.entity_type || 'general').trim();
     const entityId = b.entity_id ? String(b.entity_id) : null;
     const label = b.label ? String(b.label).slice(0, 200) : null;
+    // Sticky separate chats — when the sidebar "New chat" button mints a
+    // session it asks for session_kind:'user_thread' so resolveSessionForChat
+    // HONORS the explicit session_id (see ai-routes resolveSessionForChat,
+    // line ~2876) instead of redirecting the first turn into the user's
+    // most-recent rolling thread. Without this, every brand-new chat
+    // collapsed back into the single existing user_thread ("new chats
+    // aren't sticking"). A user_thread also gets compaction, so a sticky
+    // chat still can't blow the context window. There is NO unique-active
+    // index on ai_sessions (idx_ai_sessions_active was dropped — see
+    // db.js ~line 1805), so multiple active user_thread rows per user are
+    // allowed. Any other value falls back to the legacy default.
+    const sessionKind = b.session_kind === 'user_thread' ? 'user_thread' : undefined;
 
     // requireOrg guarantees req.organization is set; bare-minimum
     // defensive check in case the middleware chain ever skips ahead.
@@ -265,7 +277,8 @@ router.post('/', requireAuth, requireOrg, async (req, res) => {
       entityType,
       entityId,
       userId: req.user.id,
-      organization
+      organization,
+      sessionKind
     });
 
     if (label || b.summary) {
