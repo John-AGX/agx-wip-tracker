@@ -223,6 +223,25 @@
     if (!wrap) return;
     wrap.classList.add('p86-tbl-scroll');
     recomputeHeight(wrap);
+    observeVisibility(wrap);
+  }
+
+  // Lists that live inside hidden subtabs (Estimates / Leads) render
+  // while display:none, so recomputeHeight bails (correctly). When the
+  // subtab is later shown, nothing re-triggers the measurement — the
+  // window-resize handler only fires on an actual resize. An
+  // IntersectionObserver re-bounds the wrapper the moment it becomes
+  // visible. Guarded so we never attach twice to the same element.
+  function observeVisibility(wrap) {
+    if (wrap.dataset.p86VisObs) return;
+    if (typeof IntersectionObserver === 'undefined') return;
+    wrap.dataset.p86VisObs = '1';
+    var io = new IntersectionObserver(function (entries) {
+      for (var i = 0; i < entries.length; i++) {
+        if (entries[i].isIntersecting) { recomputeHeight(wrap); break; }
+      }
+    });
+    io.observe(wrap);
   }
 
   function recomputeAll() {
