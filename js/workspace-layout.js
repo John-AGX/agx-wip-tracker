@@ -102,7 +102,7 @@
       var origHeader = detail.querySelector(".job-detail-header");
       if (origHeader) origHeader.style.display = "";
     }
-    ['.action-buttons', '.sub-tabs', '#job-info-card'].forEach(function(sel) { var el = document.querySelector(sel); if (el) el.style.display = ''; });
+    ['.action-buttons', '.sub-tabs', '#job-info-card', '.job-totals-strip'].forEach(function(sel) { var el = document.querySelector(sel); if (el) el.style.display = ''; });
 
     // Remove any orphaned floating workspace panels — when the panel
     // was moved to .ng-canvas (graph mode) and the user navigated away
@@ -183,20 +183,23 @@
       if (revMatch) revVal = revMatch[0];
     }
 
-    // Order: Contract -> cost progression -> work-in-progress -> billing -> profit -> backlog
+    // Simplified 7-card set — mirrors the job-overview financial chips
+    // (Total Income, Actual Costs, Accrued, % Complete, Revenue Earned,
+    // Gross Profit, Margin %). The older 12-metric strip (Contract / Est
+    // Costs / Remaining / Invoiced / COs / Backlog) was retired in favor
+    // of this leaner row; the detailed numbers still live on the WIP
+    // Report + Detailed tabs. A `sub` field renders a small caption line
+    // under the value (e.g. the contract+CO income breakdown). Initial
+    // values are placeholders — refreshHeaderMetrics() repaints real
+    // numbers from getJobWIP() as soon as renderJobDetail runs.
     var metricsData = [
-      { label: "Contract Amount", value: extractVal(allText, "Total Income") },
-      { label: "Est. Costs (Rev.)", value: extractVal(allText, "Total Est. Costs (Revised)") },
+      { label: "Total Income", value: extractVal(allText, "Total Income"), sub: true },
       { label: "Actual Costs", value: extractVal(allText, "Actual Costs (from tracker)") },
-      { label: "Accrued Costs", value: "--" },
-      { label: "Remaining Costs", value: extractVal(allText, "Remaining Est. Costs") },
+      { label: "Accrued Costs", value: "--", sub: true },
       { label: "% Complete", value: extractVal(allText, "% Complete") },
       { label: "Revenue Earned", value: revVal },
-      { label: "Invoiced", value: extractVal(allText, "Invoiced to Date") },
-      { label: "Change Orders", value: extractVal(allText, "+ Change Orders") },
       { label: "Gross Profit", value: extractVal(allText, "Revised Gross Profit") },
-      { label: "Margin JTD", value: extractVal(allText, "Revised Margin %") },
-      { label: "Backlog", value: extractVal(allText, "Backlog (Income - Revenue)") }
+      { label: "Margin %", value: extractVal(allText, "Revised Margin %") }
     ];
 
     // ---- Job info inserted into the slim header, between the tabs
@@ -234,19 +237,19 @@
     // Map each metric label to a tone hint so the card can color-code itself.
     // Income-side = blue, cost-side = red, gain-side (revenue/profit/margin)
     // = green, backlog/throughput = amber, neutral counters = gray.
+    // Tones chosen to match the job-overview chips exactly: income green,
+    // costs/accrued yellow, revenue earned blue, % complete + margin
+    // plain. Gross Profit stays neutral here and gets a +/- green/red
+    // value color applied inline by refreshHeaderMetrics (mirrors the
+    // old in-content card behavior).
     var METRIC_TONE = {
-      'Contract Amount': 'income',
-      'Est. Costs (Rev.)': 'cost',
+      'Total Income': 'income',
       'Actual Costs': 'cost',
       'Accrued Costs': 'amber',
-      'Remaining Costs': 'cost',
       '% Complete': 'neutral',
       'Revenue Earned': 'gain',
-      'Invoiced': 'income',
-      'Change Orders': 'income',
-      'Gross Profit': 'gain',
-      'Margin JTD': 'gain',
-      'Backlog': 'neutral'
+      'Gross Profit': 'neutral',
+      'Margin %': 'neutral'
     };
 
     // ---- Metrics strip ----
@@ -280,6 +283,14 @@
       val.textContent = m.value;
       card.appendChild(lbl);
       card.appendChild(val);
+      // Optional caption line under the value (income breakdown / accrued
+      // note). refreshHeaderMetrics fills it by matching the chip label.
+      if (m.sub) {
+        var subEl = document.createElement("div");
+        subEl.className = "job-totals-chip-sub";
+        subEl.textContent = "";
+        card.appendChild(subEl);
+      }
       strip.appendChild(card);
     });
 
@@ -332,28 +343,40 @@
     }
     var w = getJobWIP(currentJobId);
     var accrued = (typeof getJobAccruedCosts === 'function') ? getJobAccruedCosts(currentJobId) : 0;
+    // 7-card simplified set — must mirror buildHeader's metricsData labels.
     var map = {
-      'Contract Amount': formatCurrency(w.totalIncome),
-      'Est. Costs (Rev.)': formatCurrency(w.revisedEstCosts),
+      'Total Income': formatCurrency(w.totalIncome),
       'Actual Costs': formatCurrency(w.actualCosts),
       'Accrued Costs': formatCurrency(accrued),
-      'Remaining Costs': formatCurrency(w.remainingCosts),
       '% Complete': w.pctComplete.toFixed(1) + '%',
       'Revenue Earned': formatCurrency(w.revenueEarned),
-      'Invoiced': formatCurrency(w.invoiced),
-      'Change Orders': formatCurrency(w.coIncome),
       // JTD profit (revenueEarned − actualCosts) so the tile matches
-      // the GROSS PROFIT watch node in the graph. The "as-sold +
-      // revised plan" profit was confusing here — the WIP page's
-      // dedicated Margin section is the right home for that metric.
+      // the GROSS PROFIT watch node in the graph.
       'Gross Profit': formatCurrency(w.jtdProfit),
-      'Margin JTD': w.jtdMargin.toFixed(1) + '%',
-      'Backlog': formatCurrency(w.backlog)
+      'Margin %': w.jtdMargin.toFixed(1) + '%'
+    };
+    // Sub-line captions keyed by label.
+    var subMap = {
+      'Total Income': (w.coIncome > 0)
+        ? 'Contract: ' + formatCurrency(w.contractIncome) + ' + CO: ' + formatCurrency(w.coIncome)
+        : '',
+      'Accrued Costs': (accrued > 0) ? 'Earned but unbilled' : ''
     };
     strip.querySelectorAll('.p86-totals-chip').forEach(function (card) {
       var lbl = card.querySelector('.p86-totals-chip-label');
       var val = card.querySelector('.p86-totals-chip-value');
-      if (lbl && val && map[lbl.textContent]) val.textContent = map[lbl.textContent];
+      if (!lbl || !val) return;
+      var key = lbl.textContent;
+      if (map[key] !== undefined) val.textContent = map[key];
+      // Gross Profit takes a +/- tone color.
+      if (key === 'Gross Profit') {
+        val.style.color = (w.jtdProfit >= 0) ? 'var(--green)' : 'var(--red)';
+      }
+      // Populate sub-line caption when present.
+      if (subMap[key] !== undefined) {
+        var sub = card.querySelector('.job-totals-chip-sub');
+        if (sub) sub.textContent = subMap[key];
+      }
     });
     // Also update job title + status in job bar
     if (typeof appData !== 'undefined') {
@@ -1365,7 +1388,7 @@
         }
         // Hide old summary grid and original elements
         var summaryGrid = detail.querySelector(".summary-grid");
-      ['.action-buttons', '.sub-tabs', '#job-info-card'].forEach(function(sel) { var el = detail.querySelector(sel); if (el) el.style.display = 'none'; });
+      ['.action-buttons', '.sub-tabs', '#job-info-card', '.job-totals-strip'].forEach(function(sel) { var el = detail.querySelector(sel); if (el) el.style.display = 'none'; });
         if (summaryGrid) summaryGrid.style.display = "none";
         populateRightPanels(detail);
       wireResizer();
