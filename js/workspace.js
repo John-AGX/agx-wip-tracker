@@ -3082,65 +3082,34 @@
         </div>
         <div class="ws-link-options" id="wsLinkOptions"></div>
       </div>
-      <!-- Main work area — the sheet tabs render as a LEFT vertical
-           sidebar (Claude-style) beside the grid instead of the old
-           bottom strip. This reclaims that strip's vertical room for the
-           grid/toolbars and lets long sheet lists scroll vertically
-           without the horizontal tab-bar overflow. #wsSheetTabs keeps its
-           id so renderSheetTabs() + all tab wiring work unchanged. -->
-      <div class="ws-main-row">
-        <div class="ws-sheet-tabs" id="wsSheetTabs"></div>
-        <div class="ws-content-col">
-          <!-- Inner workbook tabs — appears only when the active sheet
-               belongs to a multi-sheet xlsx import. Lists the workbook's
-               sheets in their original order so the user can navigate
-               between them without leaving the imported workbook. -->
-          <div class="ws-workbook-inner-tabs" id="wsWorkbookInnerTabs" style="display:none;"></div>
-          <div class="ws-grid-wrapper" id="wsGridWrapper">
-            <table class="ws-grid" id="wsGrid"></table>
-          </div>
-          <div class="ws-statusbar">
-            <span id="wsStatus">Ready</span>
-            <span id="wsQuickCalc"></span>
-            <span class="ws-statusbar-actions">
-              <button class="ws-btn ws-btn-add" id="wsAddRow" title="Add row">+ Row</button>
-              <button class="ws-btn ws-btn-add" id="wsAddCol" title="Add column">+ Col</button>
-            </span>
-          </div>
-        </div>
+      <!-- Inner workbook tabs — appears only when the active sheet
+           belongs to a multi-sheet xlsx import. Lists the workbook's
+           sheets in their original order so the user can navigate
+           between them without leaving the imported workbook. -->
+      <div class="ws-workbook-inner-tabs" id="wsWorkbookInnerTabs" style="display:none;"></div>
+      <div class="ws-grid-wrapper" id="wsGridWrapper">
+        <table class="ws-grid" id="wsGrid"></table>
+      </div>
+      <div class="ws-sheet-tabs" id="wsSheetTabs"></div>
+      <div class="ws-statusbar">
+        <span id="wsStatus">Ready</span>
+        <span id="wsQuickCalc"></span>
+        <span class="ws-statusbar-actions">
+          <button class="ws-btn ws-btn-add" id="wsAddRow" title="Add row">+ Row</button>
+          <button class="ws-btn ws-btn-add" id="wsAddCol" title="Add column">+ Col</button>
+        </span>
       </div>
     `;
   }
 
-  // ── Sheet tab sidebar ──────────────────────────────────────
-  // Vertical left-sidebar list of sheets (Claude-style). Click to
-  // switch, double-click to rename, right-click for the contextual
-  // menu. The "+ New sheet" row at the bottom appends a fresh sheet.
-  // The chevron in the panel head collapses it to a thin icon rail
-  // (state persisted in localStorage) to give the grid full width.
-  function sheetSidebarCollapsed() {
-    try { return localStorage.getItem('ws-sheet-sidebar-collapsed') === '1'; }
-    catch (e) { return false; }
-  }
-  function toggleSheetSidebar() {
-    var next = !sheetSidebarCollapsed();
-    try { localStorage.setItem('ws-sheet-sidebar-collapsed', next ? '1' : '0'); } catch (e) {}
-    renderSheetTabs();
-  }
+  // ── Sheet tab strip ────────────────────────────────────────
+  // Excel-style tabs at the bottom of the workspace. Click to switch,
+  // double-click to rename, right-click for the contextual menu.
+  // The "+" appends a fresh sheet.
   function renderSheetTabs() {
     const wrap = document.getElementById('wsSheetTabs');
     if (!wrap) return;
-    var collapsed = sheetSidebarCollapsed();
-    wrap.classList.toggle('ws-collapsed', collapsed);
-    let html = '<div class="ws-sheet-tabs-head">' +
-      '<span class="ws-sheet-tabs-head-label">Sheets</span>' +
-      '<button class="ws-sheet-collapse-btn" id="wsSheetCollapseBtn" title="' +
-        (collapsed ? 'Expand sheet panel' : 'Collapse sheet panel') +
-        '" aria-label="Toggle sheet panel">' +
-        (collapsed ? '&rsaquo;' : '&lsaquo;') +
-      '</button>' +
-    '</div>';
-    html += '<div class="ws-sheet-tabs-list">';
+    let html = '<div class="ws-sheet-tabs-list">';
 
     // Build a map: groupId → the active sheet within that group. When
     // an active sheet belongs to a group, we want the group tab to
@@ -3194,12 +3163,6 @@
       } else if (s.kind === 'attachments') {
         icon = '<span class="ws-sheet-tab-icon" aria-hidden="true">&#x1F4CE;</span> ';
         kindCls = ' ws-sheet-tab-attachments';
-      } else {
-        // Plain sheet — a letter badge stands in for an icon so the
-        // collapsed rail still shows something identifiable. It's
-        // hidden in the expanded view (the name carries identity there).
-        var initial = ((s.name || '').trim().charAt(0) || '#').toUpperCase();
-        icon = '<span class="ws-sheet-tab-initial" aria-hidden="true">' + escapeHTML(initial) + '</span> ';
       }
       // Phase 0 — sheets inherited from an estimate at the moment a
       // job was created get a small "📋" chip + a "From estimate"
@@ -3221,11 +3184,8 @@
         sourceChip +
       '</div>';
     });
+    html += '<button class="ws-sheet-tab-add" id="wsAddSheetBtn" title="Add sheet">+</button>';
     html += '</div>';
-    html += '<button class="ws-sheet-tab-add" id="wsAddSheetBtn" title="Add sheet">' +
-      '<span class="ws-sheet-tab-add-icon" aria-hidden="true">+</span>' +
-      '<span class="ws-sheet-tab-add-label">New sheet</span>' +
-    '</button>';
     wrap.innerHTML = html;
 
     // Workbook group tabs — click activates the group's last-active
@@ -3348,11 +3308,6 @@
     });
     const addBtn = wrap.querySelector('#wsAddSheetBtn');
     if (addBtn) addBtn.addEventListener('click', function() { addSheet(); });
-    const collapseBtn = wrap.querySelector('#wsSheetCollapseBtn');
-    if (collapseBtn) collapseBtn.addEventListener('click', function(e) {
-      e.stopPropagation();
-      toggleSheetSidebar();
-    });
   }
 
   // Renders the secondary tab strip that appears above the grid when
