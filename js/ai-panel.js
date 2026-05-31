@@ -848,15 +848,16 @@
     // so 86 slides in over the graph rather than being
     // covered by it. Modals (.modal z:1000) still trump the panel.
     var initialWidth = clampAIPanelWidth(loadAIPanelWidth());
-    panel.style.cssText = 'position:fixed;top:0;right:0;bottom:0;width:' + initialWidth + 'px;max-width:92vw;min-width:' + AI_PANEL_WIDTH_MIN + 'px;background:var(--surface,#0f0f1e);border-left:1px solid var(--border,#333);box-shadow:-4px 0 22px rgba(0,0,0,0.6);z-index:200;display:flex;flex-direction:column;transform:translateX(100%);transition:transform 0.22s ease;';
+    panel.style.cssText = 'position:fixed;top:0;left:0;bottom:0;width:' + initialWidth + 'px;max-width:92vw;min-width:' + AI_PANEL_WIDTH_MIN + 'px;background:var(--surface,#0f0f1e);border-right:1px solid var(--border,#333);box-shadow:4px 0 22px rgba(0,0,0,0.6);z-index:200;display:flex;flex-direction:column;transform:translateX(-100%);transition:transform 0.22s ease;';
     panel.innerHTML =
-      // Left-edge resize grabber. Wider than it looks (12px hit area)
+      // Right-edge resize grabber. Wider than it looks (12px hit area)
       // for easy targeting, but visually only a thin 2px line that
       // brightens on hover. While dragging we toggle a class that
       // disables the panel's slide transition so the resize feels
-      // direct instead of laggy.
+      // direct instead of laggy. (Panel is anchored left, so the
+      // draggable edge is the right side.)
       '<div id="ai-panel-resizer" title="Drag to resize" aria-label="Resize panel" ' +
-        'style="position:absolute;top:0;left:-6px;bottom:0;width:12px;cursor:ew-resize;z-index:1;display:flex;align-items:center;justify-content:center;">' +
+        'style="position:absolute;top:0;right:-6px;bottom:0;width:12px;cursor:ew-resize;z-index:1;display:flex;align-items:center;justify-content:center;">' +
         '<div style="width:2px;height:100%;background:rgba(79,140,255,0.18);transition:background 0.15s;"></div>' +
       '</div>' +
       // Header — close button is the most prominent control on the left
@@ -1264,9 +1265,9 @@
     return panel;
   }
 
-  // Bind drag-resize behavior to the panel's left-edge handle. The
-  // panel sits flush-right (right:0), so dragging left = wider, drag
-  // right = narrower. Width snaps within [320 .. 92vw]; pulled below
+  // Bind drag-resize behavior to the panel's right-edge handle. The
+  // panel sits flush-left (left:0), so dragging right = wider, drag
+  // left = narrower. Width snaps within [320 .. 92vw]; pulled below
   // 320 it stays at 320, pulled past 92vw clamps so the panel can't
   // hide the close button. The handle's hit area is 12px wide for
   // easy targeting; the visible line is 2px and brightens during drag.
@@ -1303,8 +1304,8 @@
 
     function onMove(e) {
       if (!dragging) return;
-      // Panel grows to the LEFT — moving cursor left should widen.
-      var delta = dragging.startX - e.clientX;
+      // Panel grows to the RIGHT — moving cursor right should widen.
+      var delta = e.clientX - dragging.startX;
       var w = clampAIPanelWidth(dragging.startW + delta);
       panel.style.width = w + 'px';
     }
@@ -1415,7 +1416,7 @@
     }
     // Slide the panel in lockstep with the body padding shift.
     // Force a layout commit on the off-screen state first (the initial
-    // panel cssText sets transform:translateX(100%)) so the browser has
+    // panel cssText sets transform:translateX(-100%)) so the browser has
     // a starting frame to animate FROM. Without this, on first open
     // some browsers fold the create + open into one paint and the
     // panel pops in instantly while the body smoothly slides — feels
@@ -1667,7 +1668,7 @@
 
   function close() {
     var panel = document.getElementById('p86-ai-panel');
-    if (panel) panel.style.transform = 'translateX(100%)';
+    if (panel) panel.style.transform = 'translateX(-100%)';
     document.body.classList.remove('p86-ai-open');
     _open = false;
     if (_abortController) {
@@ -7135,13 +7136,13 @@
       '#ai-send:disabled { opacity: 0.5; cursor: not-allowed; } ' +
       // When the panel is open, push the page content over so the
       // editor + sticky totals stay fully visible alongside the panel
-      // (otherwise the rightmost totals chips get hidden behind the
-      // 420px-wide overlay). Smooth transition keeps the shift from
-      // feeling jarring.
-      'body.p86-ai-open { padding-right: 420px; transition: padding-right 0.22s ease; } ' +
+      // (otherwise content gets hidden behind the 420px-wide overlay).
+      // Panel is anchored left, so we pad the LEFT. Smooth transition
+      // keeps the shift from feeling jarring.
+      'body.p86-ai-open { padding-left: 420px; transition: padding-left 0.22s ease; } ' +
       // On narrow screens fall back to the overlay behavior — no point
       // shoving a tablet's content into a 200px column.
-      '@media (max-width: 1100px) { body.p86-ai-open { padding-right: 0; } }';
+      '@media (max-width: 1100px) { body.p86-ai-open { padding-left: 0; } }';
     document.head.appendChild(style);
   }
 
