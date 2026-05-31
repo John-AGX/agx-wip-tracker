@@ -3868,8 +3868,23 @@ async function resyncDriftedAgents(force) {
         // Anthropic". Same update call — no extra version bump or cache
         // cost beyond the system-prompt push already happening here.
         const model = (aiInternals.defaultModel && aiInternals.defaultModel()) || undefined;
+        // Push the code-default tool list too, for the same reason as the
+        // model: when new tools land in code (e.g. the payload conditional/
+        // bulk/move/attach ops, workspace + code_execution tools) they were
+        // NOT reaching the stored agent on deploy — boot-resync only pushed
+        // system + model, so the live agent stayed on its old tool_count
+        // (12) while code defined 18, leaving those tools dark in prod until
+        // someone clicked "Sync now". agents.update is a partial PATCH
+        // (omitting a field leaves it unchanged — proven by skills staying
+        // intact while never being pushed here), so adding `tools` self-
+        // heals tool drift without touching skills. Same toolList the manual
+        // /managed/:agentKey/sync endpoint builds.
+        const toolList = [
+          ...builtinToolsetFor(row.agent_key),
+          ...customToolsFor(row.agent_key)
+        ];
         await anthropic.beta.agents.update(row.anthropic_agent_id, Object.assign(
-          { version: remote.version, system: composed },
+          { version: remote.version, system: composed, tools: toolList },
           model ? { model } : {}
         ));
         _lastSyncState.set(row.anthropic_agent_id, { hash: newHash, syncedAt: Date.now(), size: composed.length });
