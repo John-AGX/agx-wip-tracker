@@ -2349,28 +2349,28 @@ function customToolsFor(agentKey, opts) {
       merged.push(t);
     });
     // Anthropic server-hosted code execution sandbox (beta
-    // code-execution-2025-08-25). Appended AFTER the name-based merge
-    // filter because server-hosted tools have only {type: '...'} in
-    // the request — no `name` field, which would otherwise trip the
-    // `if (!t.name) return` gate above.
+    // code-execution-2025-08-25) is INTENTIONALLY NOT added to the
+    // managed-agent toolset here.
     //
-    // What this unlocks: 86 can run Python in an Anthropic-hosted
-    // sandbox with the full PyData stack (openpyxl, pandas,
-    // matplotlib, reportlab, weasyprint, PIL, numpy, ...) and emit
-    // real file artifacts (xlsx, csv, pdf, png) that surface in the
-    // chat as downloadable attachments via the files-api beta.
+    // Why: the Anthropic *Agents* API (beta.agents.create / .update)
+    // rejects a bare server-hosted tool entry — `{type:'code_execution_
+    // 20250825'}` with no name/description — with a 400:
+    //   "tools.<N>.description: minimum string length is 1".
+    // (The managed `agent_toolset_20260401` bundle is accepted without a
+    // description, but an individual server-hosted tool is not.) Because
+    // customToolsFor feeds EVERY managed-agent path — bootstrap create,
+    // manual /sync, drift comparison, and the boot-resync sweep — leaving
+    // it in here meant agents.update 400'd on every sync, freezing the
+    // stored agent at its last-good tool_count and blocking ALL newer
+    // tools (payload conditional/bulk/move/attach ops, workspace reads)
+    // from ever reaching it.
     //
-    // Compounded with the existing context layers (memory + skill
-    // packs + read_entity + turn_context) the loop closes: 86 pulls
-    // project data into prompt, writes Python that operates on that
-    // data, and produces a project-aware artifact the user can drop
-    // into the workspace import or anywhere else attachments flow.
-    //
-    // Zero Project 86 backend changes for generation — Anthropic
-    // runs the runtime. Token cost only (sandbox stdout + file
-    // references). Sandbox CANNOT reach Project 86's DB or
-    // attachments — 86 must read first, then compute.
-    merged.push({ type: 'code_execution_20250825' });
+    // The inline Messages path (ai-routes.js runStream) still declares
+    // code_execution directly — the Messages API DOES accept the bare
+    // shape — so 86's Python sandbox is unaffected on that path. If/when
+    // we want code execution on the managed-agent path too, it needs the
+    // correct Agents-API declaration (likely a toolset entry, not a bare
+    // server-hosted tool) — tracked separately.
     // C7 — sync handoffs retired. The Principal no longer fans out to
     // staff sub-sessions; staff agents are repurposed as async
     // background watchers (C10) that emit their findings as payloads
@@ -3883,10 +3883,26 @@ async function resyncDriftedAgents(force) {
           ...builtinToolsetFor(row.agent_key),
           ...customToolsFor(row.agent_key)
         ];
-        await anthropic.beta.agents.update(row.anthropic_agent_id, Object.assign(
-          { version: remote.version, system: composed, tools: toolList },
+        const baseUpdate = Object.assign(
+          { version: remote.version, system: composed },
           model ? { model } : {}
-        ));
+        );
+        // Defense-in-depth: a single malformed tool entry must never be
+        // able to block the system+model sync (that exact failure mode —
+        // a bare code_execution entry the Agents API 400s on — silently
+        // froze this sweep before). Try the full push WITH tools; if the
+        // API rejects the tools array, fall back to system+model only so
+        // prompt/model changes still land. The first attempt fails at
+        // request validation (no state change), so the CAS version is
+        // still valid for the retry → at most one real version bump.
+        try {
+          await anthropic.beta.agents.update(row.anthropic_agent_id,
+            Object.assign({ tools: toolList }, baseUpdate));
+        } catch (toolsErr) {
+          console.warn('[reference-links] tools push rejected for', row.anthropic_agent_id,
+            '— retrying system+model only:', toolsErr && toolsErr.message);
+          await anthropic.beta.agents.update(row.anthropic_agent_id, baseUpdate);
+        }
         _lastSyncState.set(row.anthropic_agent_id, { hash: newHash, syncedAt: Date.now(), size: composed.length });
         console.log('[reference-links] resynced agent', row.anthropic_agent_id,
           '— composed system prompt drifted (' + composed.length + ' chars)' +
