@@ -135,6 +135,20 @@ function shellWrap(title, bodyHtml) {
 
 var TEMPLATE_SOURCES = {
 
+  org_invite: {
+    subject: 'You\'re invited to join {{platform_name}}',
+    html_body: shellWrap('Welcome to {{platform_name}}',
+      '<p>Hi,</p>' +
+      '<p><strong>{{invited_by}}</strong> has invited you to set up <strong>{{org_name}}</strong> on {{platform_name}}. ' +
+        'Click the button below to claim your organization, set a password, and start using the platform.</p>' +
+      '<p><a href="{{accept_url}}" style="display:inline-block;background:#4f8cff;color:#fff;text-decoration:none;padding:12px 24px;border-radius:6px;font-weight:600;font-size:15px;">Accept invitation &amp; get started</a></p>' +
+      '<p style="color:#6b7280;font-size:13px;">This invitation expires on <strong>{{expires_at}}</strong>. ' +
+        'If the button doesn\'t work, paste this link into your browser:<br/>' +
+        '<a href="{{accept_url}}" style="color:#4f8cff;word-break:break-all;">{{accept_url}}</a></p>' +
+      '<p style="color:#6b7280;font-size:13px;">If you weren\'t expecting this invitation, you can safely ignore this email.</p>'
+    )
+  },
+
   user_invite: {
     subject: 'You\'re invited to Project 86',
     html_body: shellWrap('Welcome to Project 86',
@@ -265,6 +279,23 @@ function enrichParams(eventKey, raw) {
   if (!p.appUrl) p.appUrl = appUrl();
   p.appUrlHost = String(p.appUrl || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
 
+  if (eventKey === 'org_invite') {
+    if (!p.platform_name) p.platform_name = 'Project 86';
+    if (!p.invited_by) p.invited_by = 'A system admin';
+    if (!p.org_name) p.org_name = 'your organization';
+    // accept_url + expires_at come from the caller; we pre-format
+    // expires_at for the email body (e.g. "Tuesday, May 27, 2026").
+    if (p.expires_at && typeof p.expires_at !== 'string') {
+      try {
+        p.expires_at = new Date(p.expires_at).toLocaleDateString(undefined, {
+          weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
+        });
+      } catch (e) { /* leave as-is */ }
+    } else if (!p.expires_at) {
+      p.expires_at = 'in 7 days';
+    }
+    if (!p.accept_url) p.accept_url = appUrl();
+  }
   if (eventKey === 'user_invite') {
     if (!p.invitedBy) p.invitedBy = 'An admin';
     if (!p.name) p.name = 'there';
@@ -425,6 +456,14 @@ function getDefaultSource(eventKey) {
 // for live render before any real data exists.
 function sampleParams(eventKey) {
   switch (eventKey) {
+    case 'org_invite':
+      return {
+        platform_name: 'Project 86',
+        org_name: 'Acme Construction',
+        invited_by: 'System Admin',
+        accept_url: 'https://project86.net/accept-org-invite?token=sample-token',
+        expires_at: '2026-06-15T00:00:00Z'
+      };
     case 'user_invite':
       return { name: 'Jane Smith', email: 'jane@example.com', password: 'temp-pass-123', invitedBy: 'John Project 86' };
     case 'password_reset':

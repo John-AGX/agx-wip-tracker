@@ -1101,11 +1101,23 @@
   var _emailSettings = null;   // last-loaded settings blob (mutated as user edits)
   var _emailEvents = [];       // EVENTS catalog merged with current settings
   var _emailView = (function() {
-    try { return sessionStorage.getItem('agx_email_view') || 'settings'; } catch (e) { return 'settings'; }
+    try {
+      var v = sessionStorage.getItem('agx_email_view') || 'settings';
+      // Migrate legacy 'templates' value to the new 'templates_org' so
+      // existing sessions land on a real pill instead of falling back
+      // to settings.
+      if (v === 'templates') v = 'templates_org';
+      return v;
+    } catch (e) { return 'settings'; }
   })();
 
   window.switchEmailView = function(view) {
-    _emailView = (view === 'templates') ? 'templates' : 'settings';
+    // Whitelist the three valid views. Legacy 'templates' value from
+    // sessionStorage maps to the org tab (the prior default behavior
+    // — most editing was org-customizable templates).
+    var ALLOWED = ['settings', 'templates_system', 'templates_org'];
+    if (view === 'templates') view = 'templates_org';
+    _emailView = (ALLOWED.indexOf(view) >= 0) ? view : 'settings';
     try { sessionStorage.setItem('agx_email_view', _emailView); } catch (e) { /* ignore */ }
     renderAdminEmail();
   };
@@ -1121,9 +1133,17 @@
         label +
       '</button>';
     }
+    // Templates split into two scopes: 'system' (account-bootstrap /
+    // auth / onboarding — org admins shouldn't break these) and 'org'
+    // (notifications + customer-facing emails the org rebrands). The
+    // server tags each event with .scope; the client just filters the
+    // list. System scope only visible to system admins (TODO: gate
+    // when isSystemAdmin() helper is wired; for now Admin role sees
+    // both since both pills are useful during setup).
     return '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px;border-bottom:1px solid var(--border,#333);padding-bottom:10px;">' +
       pill('settings', '⚙ Settings') +
-      pill('templates', '📧 Templates') +
+      pill('templates_system', '📧 System Templates') +
+      pill('templates_org', '🏢 Org Templates') +
     '</div>';
   }
 
@@ -1132,7 +1152,7 @@
     var pane = document.getElementById('admin-subtab-email');
     if (!pane) return;
 
-    if (_emailView === 'templates') {
+    if (_emailView === 'templates_system' || _emailView === 'templates_org') {
       pane.innerHTML = renderEmailInnerPills() +
         '<div id="admin-subtab-email-templates"></div>';
       renderAdminEmailTemplates();
@@ -1797,17 +1817,34 @@
     loadTemplatesList();
   }
 
+  // Return the currently-active scope based on which Templates pill
+  // is selected. Defaults to 'org' (the historical bucket).
+  function currentTemplateScope() {
+    return (_emailView === 'templates_system') ? 'system' : 'org';
+  }
+  // Filter the full templates list down to the active scope. Legacy
+  // server responses that don't include .scope on each template
+  // default to 'org' so old admin builds keep working.
+  function templatesInScope() {
+    var scope = currentTemplateScope();
+    return _templatesList.filter(function(t) {
+      return (t.scope || 'org') === scope;
+    });
+  }
+
   function loadTemplatesList() {
     var box = document.getElementById('email-templates-list');
     if (!box) return;
     window.p86Api.get('/api/email/templates').then(function(r) {
       _templatesList = r.templates || [];
       renderTemplatesList();
-      // Auto-select previously active key, or the first wired template.
-      if (_templateActiveKey && _templatesList.find(function(t) { return t.key === _templateActiveKey; })) {
+      // Auto-select previously active key (only if it's in the
+      // current scope), else the first wired template in this scope.
+      var inScope = templatesInScope();
+      if (_templateActiveKey && inScope.find(function(t) { return t.key === _templateActiveKey; })) {
         loadTemplateDetail(_templateActiveKey);
       } else {
-        var first = _templatesList.find(function(t) { return t.wired; });
+        var first = inScope.find(function(t) { return t.wired; }) || inScope[0];
         if (first) loadTemplateDetail(first.key);
       }
     }).catch(function(err) {
@@ -1818,12 +1855,14 @@
   function renderTemplatesList() {
     var box = document.getElementById('email-templates-list');
     if (!box) return;
-    if (!_templatesList.length) {
-      box.innerHTML = '<div style="padding:10px;color:var(--text-dim,#888);">No templates.</div>';
+    var scopeList = templatesInScope();
+    if (!scopeList.length) {
+      var scopeLabel = currentTemplateScope() === 'system' ? 'system' : 'org';
+      box.innerHTML = '<div style="padding:10px;color:var(--text-dim,#888);">No ' + scopeLabel + ' templates.</div>';
       return;
     }
     var byCat = {};
-    _templatesList.forEach(function(t) {
+    scopeList.forEach(function(t) {
       var c = t.category || 'Other';
       if (!byCat[c]) byCat[c] = [];
       byCat[c].push(t);

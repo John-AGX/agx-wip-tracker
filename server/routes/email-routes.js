@@ -184,6 +184,7 @@ router.get('/templates',
         key: e.key,
         label: e.label,
         category: e.category,
+        scope: e.scope || 'org',  // default any legacy untagged events to org
         wired: e.wired,
         hasOverride: !!overridesByKey[e.key],
         updatedAt: overridesByKey[e.key] ? overridesByKey[e.key].updated_at : null

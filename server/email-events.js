@@ -12,13 +12,35 @@
 //
 // The admin Email page reads this list to render the events table —
 // add an entry here and it shows up automatically with a toggle.
+//
+// Each event has a `scope`:
+//   - 'system' — platform-owned, edited by system admins only. Tied
+//     to account-bootstrap / auth / onboarding flows where a broken
+//     template breaks the platform itself (org_invite, user_invite,
+//     password_reset).
+//   - 'org'    — org-customizable, edited by org admins. Notifications
+//     and customer-facing emails that orgs should brand to their
+//     business voice.
+// The admin UI splits templates into System / Org tabs by this field.
 
 const EVENTS = [
+  {
+    key: 'org_invite',
+    label: 'Organization invitation',
+    description: 'Sent when a system admin invites a new organization to the platform. Contains the onboarding accept link.',
+    category: 'Administrative',
+    scope: 'system',
+    defaultEnabled: true,
+    audience: 'The org\'s primary owner',
+    variables: ['org_name', 'invited_by', 'platform_name', 'accept_url', 'expires_at'],
+    wired: true
+  },
   {
     key: 'user_invite',
     label: 'User invitation',
     description: 'Sent when an admin creates a new user. Contains login + temp password.',
     category: 'Administrative',
+    scope: 'system',
     defaultEnabled: true,
     audience: 'The new user',
     variables: ['user.name', 'user.email', 'user.password', 'invitedBy.name', 'appUrl'],
@@ -29,6 +51,7 @@ const EVENTS = [
     label: 'Password reset',
     description: 'Sent when an admin resets a user\'s password. Contains the new temp password.',
     category: 'Administrative',
+    scope: 'system',
     defaultEnabled: true,
     audience: 'The user',
     variables: ['user.name', 'user.email', 'user.password', 'resetBy.name', 'appUrl'],
@@ -39,6 +62,7 @@ const EVENTS = [
     label: 'Job PM assignment',
     description: 'Sent when a user is assigned as PM on a job.',
     category: 'Project Management',
+    scope: 'org',
     defaultEnabled: true,
     audience: 'The PM',
     variables: ['recipientName', 'job.title', 'job.jobNumber', 'job.client', 'assignedBy.name', 'appUrl'],
@@ -49,6 +73,7 @@ const EVENTS = [
     label: 'Schedule assignment',
     description: 'Sent when a user (or sub) is assigned to a production schedule entry.',
     category: 'Project Management',
+    scope: 'org',
     defaultEnabled: true,
     audience: 'Assigned crew',
     variables: ['recipientName', 'entry.startDate', 'entry.endDate', 'entry.title', 'job.title', 'assignedBy.name', 'appUrl'],
@@ -59,6 +84,7 @@ const EVENTS = [
     label: 'Sub assigned to job',
     description: 'Sent when a sub is added to a job\'s subcontractor list. Useful for handoff.',
     category: 'Project Management',
+    scope: 'org',
     defaultEnabled: false,
     audience: 'Sub primary contact',
     variables: ['sub.name', 'sub.primaryContactFirst', 'job.title', 'job.jobNumber', 'contractAmt', 'assignedBy.name', 'appUrl'],
@@ -69,6 +95,7 @@ const EVENTS = [
     label: 'Lead won (sold)',
     description: 'Sent when a lead\'s status flips to Sold. Goes to the salesperson.',
     category: 'Financial',
+    scope: 'org',
     defaultEnabled: false,
     audience: 'Salesperson',
     variables: ['lead.title', 'lead.client_company', 'lead.estimated_revenue_high', 'salesperson.name', 'changedBy.name', 'appUrl'],
@@ -79,6 +106,7 @@ const EVENTS = [
     label: 'Lead lost',
     description: 'Sent when a lead\'s status flips to Lost or No Opportunity.',
     category: 'Financial',
+    scope: 'org',
     defaultEnabled: false,
     audience: 'Salesperson',
     variables: ['lead.title', 'lead.client_company', 'salesperson.name', 'changedBy.name', 'reason', 'appUrl'],
@@ -89,12 +117,18 @@ const EVENTS = [
     label: 'Certificate expiring',
     description: 'Daily cron: when a sub\'s GL/WC/W-9/Bank cert is within reminder_days of expiration.',
     category: 'Administrative',
+    scope: 'org',
     defaultEnabled: false,
     audience: 'Sub primary contact (+ admin BCC)',
     variables: ['sub.name', 'sub.primaryContactFirst', 'cert.type', 'cert.expirationDate', 'cert.daysUntilExpiry', 'appUrl'],
     wired: true
   }
 ];
+
+// Helper: events filtered by scope (used by admin UI tab split).
+function eventsByScope(scope) {
+  return EVENTS.filter(function(e) { return e.scope === scope; });
+}
 
 // Default global settings shape. The admin Email page persists overrides
 // to app_settings under key='email'. See getEmailSettings() in
@@ -113,4 +147,4 @@ function getEvent(key) {
   return EVENTS.find(e => e.key === key) || null;
 }
 
-module.exports = { EVENTS, DEFAULT_SETTINGS, getEvent };
+module.exports = { EVENTS, DEFAULT_SETTINGS, getEvent, eventsByScope };
