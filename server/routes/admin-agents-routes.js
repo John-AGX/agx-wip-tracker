@@ -3860,10 +3860,18 @@ async function resyncDriftedAgents(force) {
           // admin's sync-all endpoint handles that.
           continue;
         }
-        await anthropic.beta.agents.update(row.anthropic_agent_id, {
-          version: remote.version,
-          system: composed
-        });
+        // Push the code-default model alongside the system prompt so a
+        // model change in code (MODEL / AI_MODEL — e.g. the Opus 4.8
+        // switch) lands on the stored agent automatically on the next
+        // deploy boot. Without it the agent stays pinned to its
+        // create-time model until someone clicks "Sync all to
+        // Anthropic". Same update call — no extra version bump or cache
+        // cost beyond the system-prompt push already happening here.
+        const model = (aiInternals.defaultModel && aiInternals.defaultModel()) || undefined;
+        await anthropic.beta.agents.update(row.anthropic_agent_id, Object.assign(
+          { version: remote.version, system: composed },
+          model ? { model } : {}
+        ));
         _lastSyncState.set(row.anthropic_agent_id, { hash: newHash, syncedAt: Date.now(), size: composed.length });
         console.log('[reference-links] resynced agent', row.anthropic_agent_id,
           '— composed system prompt drifted (' + composed.length + ' chars)' +

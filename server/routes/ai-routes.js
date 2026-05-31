@@ -114,17 +114,25 @@ function getAnthropic() {
 })();
 
 // Sonnet 4.6 = the right cost/capability tier for an estimating assistant.
-// Override via env if we want to A/B against Opus 4.7 (the right
-// flip when the eval harness shows quality is the bottleneck, not
-// cost): set AI_MODEL=claude-opus-4-7 on Railway.
-const MODEL = process.env.AI_MODEL || 'claude-sonnet-4-6';
+// 86 runs on Opus 4.8 — Anthropic's newest, most capable Opus
+// (supersedes 4.7, which is now a legacy model). On 86's workload —
+// WIP / margin audits, estimating, multi-target payload authoring —
+// quality is the bottleneck, not token cost, so we default to Opus.
+// To A/B a cheaper model, set AI_MODEL=claude-sonnet-4-6 on Railway.
+// IMPORTANT: a Railway AI_MODEL env var WINS over this default — for
+// 86 to actually be on Opus, AI_MODEL must be unset or set to
+// claude-opus-4-8.
+const MODEL = process.env.AI_MODEL || 'claude-opus-4-8';
 
-// Optional thinking-effort knob. Opus 4.7 supports "low" | "medium" |
-// "high" | "xhigh" | "max". xhigh is the recommended default for most
-// agentic / coding-style work on 4.7. Sonnet 4.6 supports the same
-// scale up to "high". Sonnet 4.5 / Haiku 4.5 do NOT support effort —
-// passing it there would 400, so we only attach the param when the
-// model is in the supported set.
+// Optional thinking-effort knob. Opus 4.8 / 4.7 support "low" |
+// "medium" | "high" | "xhigh" | "max"; default is "high" when unset.
+// xhigh is the recommended setting for agentic / high-autonomy work
+// on 4.8 (set AI_EFFORT_JOB=xhigh on Railway to opt in). Note the 4.8
+// effort levels were recalibrated vs 4.7 (medium thinks a bit more,
+// high a bit less, xhigh substantially more). Sonnet 4.6 supports the
+// same scale up to "high". Sonnet 4.5 / Haiku 4.5 do NOT support
+// effort — passing it there would 400, so we only attach the param
+// when the model is in the supported set.
 const EFFORT = (process.env.AI_EFFORT || '').trim().toLowerCase();
 // Per-agent overrides — 86's WIP / margin audits benefit from
 // higher thinking budgets; line-item / intake turns don't. Each
@@ -141,7 +149,7 @@ const EFFORT_PER_AGENT = {
   staff: (process.env.AI_EFFORT_STAFF || '').trim().toLowerCase()
 };
 const EFFORT_SUPPORTED_MODELS = new Set([
-  'claude-opus-4-5', 'claude-opus-4-6', 'claude-opus-4-7', 'claude-sonnet-4-6'
+  'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-opus-4-5', 'claude-sonnet-4-6'
 ]);
 function effortClause(agentKey) {
   // Per-agent override beats global default. Resolve in this order:
@@ -166,11 +174,18 @@ function effortClause(agentKey) {
 // adaptive thinking with no display variant (Phase 5b/UI work can
 // hook the summary stream once we're on 4.7).
 const ADAPTIVE_THINKING_SUPPORTED = new Set([
-  'claude-opus-4-5', 'claude-opus-4-6', 'claude-opus-4-7', 'claude-sonnet-4-6'
+  'claude-opus-4-8', 'claude-opus-4-7', 'claude-opus-4-6', 'claude-opus-4-5', 'claude-sonnet-4-6'
+]);
+// Opus 4.8 / 4.7 support display:'summarized' — a collapsed thinking
+// summary streams to the UI so the panel can render reasoning progress
+// as a disclosure. Older Opus / Sonnet variants get plain adaptive
+// thinking with no display variant.
+const SUMMARIZED_THINKING_MODELS = new Set([
+  'claude-opus-4-8', 'claude-opus-4-7'
 ]);
 function thinkingClause() {
   if (!ADAPTIVE_THINKING_SUPPORTED.has(MODEL)) return null;
-  if (MODEL === 'claude-opus-4-7') {
+  if (SUMMARIZED_THINKING_MODELS.has(MODEL)) {
     return { thinking: { type: 'adaptive', display: 'summarized' } };
   }
   return { thinking: { type: 'adaptive' } };
