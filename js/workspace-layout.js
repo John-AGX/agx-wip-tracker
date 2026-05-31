@@ -455,6 +455,15 @@
       sectionLabel.className = 'app-jobnav-section-label';
       sectionLabel.textContent = 'Sections';
       jobnav.appendChild(sectionLabel);
+
+      // Attach the freshly-built shell into the sidebar immediately.
+      // placeJobSubnav() locates it via getElementById, so a detached
+      // element would be invisible to it — the desktop branch would bail
+      // at `if (!jobnav) return` and the subtabs would stay stranded in
+      // the page column. Append once here; placeJobSubnav() then decides
+      // whether it (and the tabs) are shown for the current viewport.
+      var sb = document.getElementById('app-sidebar');
+      if (sb) sb.appendChild(jobnav);
     }
     // (Re)populate identity from the current job.
     if (job) {
