@@ -64,6 +64,14 @@
   var suppressClick = false;  // swallow the trailing header click after a drag/resize
   var resizeHandlerInstalled = false;
   var menuEl = null;          // floating reset menu
+  // IntersectionObservers attached to list-wrapper elements that may
+  // be removed from the DOM by their parent renderer (leads.js +
+  // estimates.js wipe listEl.innerHTML on every full re-paint). The
+  // observer's target becomes detached but the observer itself never
+  // gets disconnected, so each wipe leaves a dead IO behind. We track
+  // them here and prune any whose target is no longer connected on
+  // every resize sweep — keeps the leak bounded to one cycle.
+  var visObservers = [];
   // Natural (renderer-emitted) column order per table, captured on the
   // first enhance BEFORE any reordering. This is the canonical default
   // that "Reset columns" restores to — the live DOM order can't serve as
@@ -250,9 +258,26 @@
       }
     });
     io.observe(wrap);
+    visObservers.push({ io: io, target: wrap });
+  }
+
+  // Disconnect any IntersectionObserver whose target is no longer in
+  // the DOM. Called from recomputeAll (every resize / orientation
+  // change), which is roughly the right cadence — leaks won't grow
+  // beyond one paint cycle and the sweep is O(n) over a small list.
+  function pruneDeadObservers() {
+    if (!visObservers.length) return;
+    for (var i = visObservers.length - 1; i >= 0; i--) {
+      var entry = visObservers[i];
+      if (entry.target && !entry.target.isConnected) {
+        try { entry.io.disconnect(); } catch (e) { /* harmless */ }
+        visObservers.splice(i, 1);
+      }
+    }
   }
 
   function recomputeAll() {
+    pruneDeadObservers();
     Object.keys(REGISTRY).forEach(function (key) {
       var table = document.querySelector(REGISTRY[key].selector);
       if (table && table.classList.contains('p86-enhanced')) {
