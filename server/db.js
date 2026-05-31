@@ -1467,6 +1467,32 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_email_template_overrides_org
       ON email_template_overrides(organization_id);
 
+    -- Organization invitations — system-admin onboarding flow.
+    -- A system admin enters an email + proposed org name; we create
+    -- a row here, generate a token, and email the recipient with an
+    -- accept link. When they click and submit a password we create
+    -- the org + owner user and mark accepted_at.
+    --
+    -- Tokens are random 32-byte hex (64 chars). Expire after 7 days
+    -- by default. Single-use — once accepted_at is set, subsequent
+    -- accept attempts return 409.
+    CREATE TABLE IF NOT EXISTS org_invitations (
+      id              SERIAL PRIMARY KEY,
+      email           TEXT NOT NULL,
+      org_name        TEXT NOT NULL,
+      token           TEXT NOT NULL UNIQUE,
+      invited_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      expires_at      TIMESTAMPTZ NOT NULL,
+      accepted_at     TIMESTAMPTZ,
+      accepted_org_id INTEGER REFERENCES organizations(id) ON DELETE SET NULL,
+      accepted_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_org_invitations_token
+      ON org_invitations(token);
+    CREATE INDEX IF NOT EXISTS idx_org_invitations_pending
+      ON org_invitations(created_at DESC) WHERE accepted_at IS NULL;
+
     -- Schedule page: production entries placed on the calendar.
     -- Phase 2 of the schedule feature — replaces the localStorage
     -- shim from Phase 1 with server-persisted, multi-device-synced

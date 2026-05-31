@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Accept Organization Invitation</title>
+  <style>
+    /* Self-contained styling — this page intentionally doesn't load
+       the main app's CSS so it stays lightweight for unauthenticated
+       visitors. */
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: linear-gradient(135deg, #0a0a14 0%, #1a1a2e 100%);
+      color: #e8e0d0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .card {
+      background: #141420;
+      border: 1px solid #2e3346;
+      border-radius: 12px;
+      padding: 32px;
+      width: 480px;
+      max-width: 100%;
+      box-shadow: 0 18px 60px rgba(0, 0, 0, 0.5);
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 22px;
+      font-weight: 700;
+      color: #fff;
+      letter-spacing: -0.3px;
+    }
+    .subtitle { color: #8899bb; font-size: 13px; margin-bottom: 22px; }
+    .field { display: flex; flex-direction: column; gap: 5px; margin-bottom: 14px; }
+    .label {
+      font-size: 11px;
+      font-weight: 600;
+      color: #aaa;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+    }
+    .input, .input-readonly {
+      padding: 10px 12px;
+      border-radius: 6px;
+      border: 1px solid #333;
+      background: #0a0a14;
+      color: #fff;
+      font-size: 14px;
+      font-family: inherit;
+    }
+    .input-readonly { color: #aaa; cursor: not-allowed; }
+    .input:focus { outline: 1px solid #4f8cff; outline-offset: 1px; }
+    .btn {
+      background: #4f8cff;
+      color: #fff;
+      border: 0;
+      padding: 12px 18px;
+      border-radius: 6px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      width: 100%;
+      margin-top: 10px;
+    }
+    .btn:hover { background: #5e9bff; }
+    .btn:disabled { background: #2e3346; cursor: not-allowed; }
+    .error {
+      padding: 12px;
+      background: rgba(248, 113, 113, 0.1);
+      border: 1px solid rgba(248, 113, 113, 0.3);
+      border-radius: 6px;
+      color: #f87171;
+      font-size: 13px;
+      margin-bottom: 14px;
+    }
+    .success {
+      padding: 16px;
+      background: rgba(52, 211, 153, 0.1);
+      border: 1px solid rgba(52, 211, 153, 0.3);
+      border-radius: 6px;
+      color: #34d399;
+      font-size: 13px;
+      text-align: center;
+    }
+    .status-tag {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 10px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 8px;
+    }
+    .status-claimable { background: rgba(52, 211, 153, 0.15); color: #34d399; }
+    .status-expired   { background: rgba(248, 113, 113, 0.15); color: #f87171; }
+    .status-accepted  { background: rgba(150, 150, 150, 0.15); color: #9ca3af; }
+    .loading { text-align: center; color: #8899bb; padding: 60px 0; }
+    .help { font-size: 12px; color: #8899bb; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <div class="card" id="card">
+    <div class="loading">Loading invitation…</div>
+  </div>
+
+  <script>
+    (function() {
+      // Parse the token from the URL.
+      var params = new URLSearchParams(window.location.search);
+      var token = params.get('token');
+      var card = document.getElementById('card');
+
+      if (!token) {
+        card.innerHTML =
+          '<h1>Invitation link is missing</h1>' +
+          '<p class="subtitle">This URL doesn\'t include an invitation token. Make sure you followed the full link from your invitation email.</p>';
+        return;
+      }
+
+      // Fetch the invitation details. The /admin/organizations/invites/
+      // :token endpoint is public read-only.
+      fetch('/api/admin/organizations/invites/' + encodeURIComponent(token), {
+        headers: { 'Accept': 'application/json' }
+      }).then(function(r) {
+        return r.json().then(function(data) {
+          if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
+          return data;
+        });
+      }).then(function(invite) {
+        if (invite.accepted) return renderAlreadyAccepted();
+        if (invite.expired) return renderExpired();
+        renderAcceptForm(invite);
+      }).catch(function(err) {
+        card.innerHTML =
+          '<h1>Invitation not found</h1>' +
+          '<p class="subtitle">' + escapeHtml(err.message || 'Unknown error') + '</p>' +
+          '<p class="help">If you believe this is a mistake, contact the person who sent you the invitation.</p>';
+      });
+
+      function renderAcceptForm(invite) {
+        var expDate = new Date(invite.expires_at).toLocaleDateString(undefined, {
+          weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
+        });
+        card.innerHTML =
+          '<span class="status-tag status-claimable">Ready to claim</span>' +
+          '<h1>Welcome to ' + escapeHtml(invite.org_name) + '</h1>' +
+          '<p class="subtitle">Set your password to create your account and start using the platform.</p>' +
+          '<div class="field"><span class="label">Email</span>' +
+            '<input type="text" class="input-readonly" id="f-email" value="' + escapeAttr(invite.email) + '" readonly /></div>' +
+          '<div class="field"><span class="label">Your name</span>' +
+            '<input type="text" class="input" id="f-name" placeholder="Jane Smith" autocomplete="name" /></div>' +
+          '<div class="field"><span class="label">Password</span>' +
+            '<input type="password" class="input" id="f-pass" placeholder="At least 8 characters" autocomplete="new-password" /></div>' +
+          '<div id="err" style="display:none;" class="error"></div>' +
+          '<button class="btn" id="submit">Accept & sign in</button>' +
+          '<p class="help">Invitation expires on ' + escapeHtml(expDate) + '</p>';
+
+        document.getElementById('f-name').focus();
+        document.getElementById('submit').addEventListener('click', submit);
+        ['f-name', 'f-pass'].forEach(function(id) {
+          document.getElementById(id).addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') submit();
+          });
+        });
+      }
+
+      function submit() {
+        var name = document.getElementById('f-name').value.trim();
+        var pass = document.getElementById('f-pass').value;
+        var err = document.getElementById('err');
+        err.style.display = 'none';
+        function showErr(msg) {
+          err.textContent = msg;
+          err.style.display = 'block';
+        }
+        if (!name) return showErr('Please enter your name.');
+        if (pass.length < 8) return showErr('Password must be at least 8 characters.');
+        var btn = document.getElementById('submit');
+        btn.disabled = true; btn.textContent = 'Setting up…';
+        fetch('/api/admin/organizations/invites/' + encodeURIComponent(token) + '/accept', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: name, password: pass })
+        }).then(function(r) {
+          return r.json().then(function(data) {
+            if (!r.ok) throw new Error(data.error || ('HTTP ' + r.status));
+            return data;
+          });
+        }).then(function(resp) {
+          // Stash the auth token so the user lands logged in.
+          try { localStorage.setItem('p86-auth-token', resp.token); } catch (e) {}
+          card.innerHTML =
+            '<div class="success">' +
+              '<h1 style="color:#34d399;margin:0 0 8px;font-size:18px;">Welcome aboard!</h1>' +
+              '<p style="margin:0;color:#8899bb;">Redirecting you to the platform…</p>' +
+            '</div>';
+          setTimeout(function() { window.location.href = '/'; }, 1200);
+        }).catch(function(e) {
+          btn.disabled = false; btn.textContent = 'Accept & sign in';
+          showErr(e.message || 'Failed to accept invitation.');
+        });
+      }
+
+      function renderExpired() {
+        card.innerHTML =
+          '<span class="status-tag status-expired">Expired</span>' +
+          '<h1>This invitation has expired</h1>' +
+          '<p class="subtitle">Invitations are valid for 7 days. Ask the system admin who sent it to issue a fresh invitation.</p>';
+      }
+
+      function renderAlreadyAccepted() {
+        card.innerHTML =
+          '<span class="status-tag status-accepted">Already accepted</span>' +
+          '<h1>You\'re already in</h1>' +
+          '<p class="subtitle">This invitation was already used. <a href="/" style="color:#4f8cff;text-decoration:none;">Sign in here.</a></p>';
+      }
+
+      function escapeHtml(s) {
+        return String(s == null ? '' : s)
+          .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      }
+      function escapeAttr(s) {
+        return String(s == null ? '' : s).replace(/"/g, '&quot;').replace(/&/g, '&amp;');
+      }
+    })();
+  </script>
+</body>
+</html>

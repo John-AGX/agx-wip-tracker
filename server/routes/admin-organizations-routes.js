@@ -16,11 +16,21 @@
 // (future — for now any admin can edit their own org).
 
 const express = require('express');
+const crypto = require('crypto');
+const bcrypt = require('bcryptjs');
 const { toFile } = require('@anthropic-ai/sdk');
 const { pool, listOrganizations, getOrgById } = require('../db');
-const { requireAuth, requireCapability, requireOrg, requireSystemAdmin } = require('../auth');
+const { requireAuth, requireCapability, requireOrg, requireSystemAdmin, signToken } = require('../auth');
+const { sendForEvent } = require('../email');
 
 const router = express.Router();
+
+// Helper: app URL used in invite links. Same logic email-templates uses.
+function appUrl() {
+  return process.env.APP_URL || process.env.RAILWAY_PUBLIC_DOMAIN
+    ? (process.env.APP_URL || ('https://' + process.env.RAILWAY_PUBLIC_DOMAIN))
+    : 'https://project86.net';
+}
 
 // Anthropic client (lazy — same pattern as ai-routes.js).
 let _anthropic = null;
@@ -140,6 +150,201 @@ router.post('/', requireAuth, requireSystemAdmin, async (req, res) => {
     }
   } catch (e) {
     console.error('POST /api/admin/organizations error:', e);
+    res.status(500).json({ error: e.message || 'Server error' });
+  }
+});
+
+// ── Organization invitations ──────────────────────────────────────
+//
+// Three-endpoint set:
+//   POST /api/admin/organizations/invites           — system admin creates
+//   GET  /api/admin/organizations/invites/:token    — public read (accept page)
+//   POST /api/admin/organizations/invites/:token/accept — public accept
+//
+// The GET + accept endpoints are PUBLIC (no auth) — anyone with the
+// token can read details + accept. The token is the credential.
+
+// POST /api/admin/organizations/invites — create a pending invitation.
+// SYSTEM_ADMIN only. Body: { email, org_name }
+router.post('/invites', requireAuth, requireSystemAdmin, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const email = String(b.email || '').trim().toLowerCase();
+    const orgName = String(b.org_name || '').trim();
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return res.status(400).json({ error: 'Valid email required' });
+    }
+    if (!orgName) return res.status(400).json({ error: 'org_name is required' });
+    const token = crypto.randomBytes(32).toString('hex');
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    const ins = await pool.query(
+      `INSERT INTO org_invitations (email, org_name, token, invited_by_user_id, expires_at)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, email, org_name, token, invited_by_user_id, expires_at, created_at`,
+      [email, orgName, token, req.user.id, expiresAt]
+    );
+    const invite = ins.rows[0];
+    const acceptUrl = appUrl().replace(/\/$/, '') + '/accept-org-invite?token=' + token;
+    // Fire-and-forget email. The endpoint always returns the invite
+    // (with token + accept URL) so the admin can copy/paste even if
+    // the email fails.
+    try {
+      await sendForEvent('org_invite', {
+        platform_name: process.env.PLATFORM_NAME || 'Project 86',
+        org_name: orgName,
+        invited_by: req.user.name || req.user.email || 'A system admin',
+        accept_url: acceptUrl,
+        expires_at: expiresAt
+      }, { to: email });
+    } catch (mailErr) {
+      console.warn('[org-invites] email send failed for', email, ':', mailErr.message);
+    }
+    res.json({ invitation: invite, accept_url: acceptUrl });
+  } catch (e) {
+    console.error('POST /api/admin/organizations/invites error:', e);
+    res.status(500).json({ error: e.message || 'Server error' });
+  }
+});
+
+// GET /api/admin/organizations/invites/:token — public read for the
+// accept-invite page. Returns minimal info: email, org_name,
+// expires_at, and whether the invite is still claimable.
+router.get('/invites/:token', async (req, res) => {
+  try {
+    const token = String(req.params.token || '').trim();
+    if (!/^[a-f0-9]{32,128}$/i.test(token)) {
+      return res.status(400).json({ error: 'Invalid token' });
+    }
+    const r = await pool.query(
+      `SELECT id, email, org_name, expires_at, accepted_at
+         FROM org_invitations WHERE token = $1`,
+      [token]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'Invitation not found' });
+    const inv = r.rows[0];
+    const now = new Date();
+    const expired = new Date(inv.expires_at) < now;
+    const accepted = !!inv.accepted_at;
+    res.json({
+      email: inv.email,
+      org_name: inv.org_name,
+      expires_at: inv.expires_at,
+      claimable: !accepted && !expired,
+      expired: expired,
+      accepted: accepted
+    });
+  } catch (e) {
+    console.error('GET /api/admin/organizations/invites/:token error:', e);
+    res.status(500).json({ error: e.message || 'Server error' });
+  }
+});
+
+// POST /api/admin/organizations/invites/:token/accept — claim an
+// invitation. Public endpoint. Body: { password, name }. Creates the
+// organization, creates the owner user, marks accepted, returns an
+// auth token so the caller can land logged in.
+router.post('/invites/:token/accept', async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const token = String(req.params.token || '').trim();
+    const b = req.body || {};
+    const password = String(b.password || '');
+    const fullName = String(b.name || '').trim();
+    if (!/^[a-f0-9]{32,128}$/i.test(token)) {
+      return res.status(400).json({ error: 'Invalid token' });
+    }
+    if (password.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
+    if (!fullName) return res.status(400).json({ error: 'Name is required' });
+
+    await client.query('BEGIN');
+    // Lock the invitation row so concurrent accepts can't both win.
+    const inv = (await client.query(
+      'SELECT * FROM org_invitations WHERE token = $1 FOR UPDATE',
+      [token]
+    )).rows[0];
+    if (!inv) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Invitation not found' });
+    }
+    if (inv.accepted_at) {
+      await client.query('ROLLBACK');
+      return res.status(409).json({ error: 'Invitation already accepted' });
+    }
+    if (new Date(inv.expires_at) < new Date()) {
+      await client.query('ROLLBACK');
+      return res.status(410).json({ error: 'Invitation expired' });
+    }
+    // Derive a slug from the org name (lowercase alnum + dash).
+    const baseSlug = inv.org_name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'org';
+    let slug = baseSlug;
+    // Avoid collisions by appending a counter.
+    for (let i = 2; i < 100; i++) {
+      const exists = await client.query('SELECT 1 FROM organizations WHERE slug = $1', [slug]);
+      if (!exists.rows.length) break;
+      slug = baseSlug + '-' + i;
+    }
+    const orgIns = await client.query(
+      `INSERT INTO organizations (slug, name) VALUES ($1, $2) RETURNING id, slug, name`,
+      [slug, inv.org_name]
+    );
+    const org = orgIns.rows[0];
+    // Create the owner user. Role 'admin' so they have full access
+    // inside their org from day one.
+    const hash = bcrypt.hashSync(password, 10);
+    const userIns = await client.query(
+      `INSERT INTO users (email, password_hash, name, role, organization_id, owner_id)
+       VALUES ($1, $2, $3, 'admin', $4, NULL) RETURNING id, email, name, role, organization_id`,
+      [inv.email, hash, fullName, org.id]
+    );
+    const user = userIns.rows[0];
+    // Set owner_id = user.id so the user is the org's owner record
+    // (the bootstrap pattern other org-scoped queries assume).
+    await client.query('UPDATE users SET owner_id = $1 WHERE id = $1', [user.id]);
+    // Mark the invitation accepted.
+    await client.query(
+      `UPDATE org_invitations
+          SET accepted_at = NOW(), accepted_org_id = $1, accepted_user_id = $2
+        WHERE id = $3`,
+      [org.id, user.id, inv.id]
+    );
+    await client.query('COMMIT');
+    // Sign an auth token so the new owner lands logged in.
+    const authToken = signToken({ id: user.id, email: user.email, role: user.role, organization_id: org.id });
+    res.json({ ok: true, token: authToken, user: user, organization: org });
+  } catch (e) {
+    try { await client.query('ROLLBACK'); } catch (e2) {}
+    console.error('POST /api/admin/organizations/invites/:token/accept error:', e);
+    if (e && e.code === '23505') {
+      return res.status(409).json({ error: 'An account with that email already exists. Please sign in instead.' });
+    }
+    res.status(500).json({ error: e.message || 'Server error' });
+  } finally {
+    client.release();
+  }
+});
+
+// GET /api/admin/organizations/invites — list pending invitations.
+// SYSTEM_ADMIN only. Used by the admin Orgs tab to show outstanding
+// invites + their copy-able links.
+router.get('/invites', requireAuth, requireSystemAdmin, async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT i.id, i.email, i.org_name, i.token, i.expires_at, i.accepted_at, i.created_at,
+              u.name AS invited_by_name
+         FROM org_invitations i
+         LEFT JOIN users u ON u.id = i.invited_by_user_id
+        ORDER BY i.created_at DESC
+        LIMIT 100`
+    );
+    const base = appUrl().replace(/\/$/, '');
+    const invitations = r.rows.map(function(row) {
+      return Object.assign({}, row, {
+        accept_url: base + '/accept-org-invite?token=' + row.token
+      });
+    });
+    res.json({ invitations: invitations });
+  } catch (e) {
+    console.error('GET /api/admin/organizations/invites error:', e);
     res.status(500).json({ error: e.message || 'Server error' });
   }
 });

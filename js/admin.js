@@ -4357,9 +4357,12 @@
       }).join('');
       var empty = '<tr><td colspan="5" style="padding:30px;text-align:center;color:var(--text-dim,#888);font-style:italic;">No organizations yet. Click "+ New organization" to add one.</td></tr>';
       host.innerHTML =
-        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;flex-wrap:wrap;gap:8px;">' +
           '<div style="font-size:13px;font-weight:600;color:var(--text,#fff);">All organizations (' + orgs.length + ')</div>' +
-          '<button class="ee-btn primary" onclick="openNewOrgModal()">&#x2795; New organization</button>' +
+          '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
+            '<button class="ee-btn secondary" onclick="openInviteOrgModal()">&#x2709; Invite Organization</button>' +
+            '<button class="ee-btn primary" onclick="openNewOrgModal()">&#x2795; New organization</button>' +
+          '</div>' +
         '</div>' +
         '<div style="border:1px solid var(--border,#333);border-radius:8px;overflow:hidden;">' +
           '<table style="width:100%;border-collapse:collapse;font-size:13px;">' +
@@ -4374,11 +4377,125 @@
             '</thead>' +
             '<tbody>' + (rows || empty) + '</tbody>' +
           '</table>' +
-        '</div>';
+        '</div>' +
+        // Pending invitations panel below the orgs table.
+        '<div id="org-invites-panel" style="margin-top:18px;"></div>';
+      loadOrgInvites();
     }).catch(function(err) {
       host.innerHTML = '<div style="color:#e74c3c;padding:14px 0;">Failed: ' + escapeHTML(err.message || 'unknown') + '</div>';
     });
   }
+
+  // ── Org invitations (Wave 2 of Email Templates plan) ──────────────
+  function loadOrgInvites() {
+    var panel = document.getElementById('org-invites-panel');
+    if (!panel) return;
+    window.p86Api.get('/api/admin/organizations/invites').then(function(resp) {
+      var invites = (resp && resp.invitations) || [];
+      // Filter to non-archived, non-accepted, non-expired pending
+      // invites only — the panel shows what's currently outstanding.
+      var now = Date.now();
+      var pending = invites.filter(function(i) {
+        return !i.accepted_at && new Date(i.expires_at).getTime() > now;
+      });
+      if (!pending.length) { panel.innerHTML = ''; return; }
+      var rows = pending.map(function(inv) {
+        var expDate = new Date(inv.expires_at).toLocaleDateString();
+        return '<tr>' +
+          '<td style="padding:8px 10px;font-weight:600;">' + escapeHTML(inv.org_name) + '</td>' +
+          '<td style="padding:8px 10px;color:var(--text-dim,#aaa);font-size:12px;">' + escapeHTML(inv.email) + '</td>' +
+          '<td style="padding:8px 10px;font-size:11px;color:var(--text-dim,#888);white-space:nowrap;">' + escapeHTML(expDate) + '</td>' +
+          '<td style="padding:8px 10px;font-size:11px;color:var(--text-dim,#888);white-space:nowrap;">' + escapeHTML(inv.invited_by_name || '—') + '</td>' +
+          '<td style="padding:8px 10px;text-align:right;white-space:nowrap;">' +
+            '<button class="ee-btn ghost" style="font-size:11px;padding:3px 8px;" onclick="copyOrgInviteLink(\'' + escapeAttr(inv.accept_url) + '\', this)">&#x1F517; Copy link</button>' +
+          '</td>' +
+        '</tr>';
+      }).join('');
+      panel.innerHTML =
+        '<div style="font-size:13px;font-weight:600;color:var(--text,#fff);margin-bottom:8px;">Pending invitations (' + pending.length + ')</div>' +
+        '<div style="border:1px solid var(--border,#333);border-radius:8px;overflow:hidden;">' +
+          '<table style="width:100%;border-collapse:collapse;font-size:13px;">' +
+            '<thead style="background:rgba(255,255,255,0.03);border-bottom:1px solid var(--border,#333);">' +
+              '<tr>' +
+                '<th style="padding:8px 10px;text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#888);">Org name</th>' +
+                '<th style="padding:8px 10px;text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#888);">Email</th>' +
+                '<th style="padding:8px 10px;text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#888);">Expires</th>' +
+                '<th style="padding:8px 10px;text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#888);">Sent by</th>' +
+                '<th style="padding:8px 10px;text-align:right;"></th>' +
+              '</tr>' +
+            '</thead>' +
+            '<tbody>' + rows + '</tbody>' +
+          '</table>' +
+        '</div>';
+    }).catch(function() { panel.innerHTML = ''; });
+  }
+
+  window.copyOrgInviteLink = function(url, btn) {
+    try {
+      navigator.clipboard.writeText(url).then(function() {
+        if (btn) { var orig = btn.innerHTML; btn.innerHTML = '&#x2705; Copied'; setTimeout(function() { btn.innerHTML = orig; }, 1500); }
+      });
+    } catch (e) { window.prompt('Copy this link:', url); }
+  };
+
+  window.openInviteOrgModal = function() {
+    var existing = document.getElementById('invite-org-modal');
+    if (existing) existing.remove();
+    var modal = document.createElement('div');
+    modal.id = 'invite-org-modal';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);display:flex;align-items:center;justify-content:center;z-index:9999;';
+    modal.innerHTML =
+      '<div style="background:var(--bg-elev,#1a1a1a);border:1px solid var(--border,#333);border-radius:8px;padding:20px;width:520px;max-width:90vw;display:flex;flex-direction:column;gap:12px;">' +
+        '<h3 style="margin:0;font-size:16px;color:var(--text,#fff);">&#x2709; Invite an organization</h3>' +
+        '<p style="margin:0;font-size:12px;color:var(--text-dim,#888);">Sends an email with a 7-day link. The recipient sets their own password + lands as the owner of their new organization. You can copy the link manually if the email doesn\'t arrive.</p>' +
+        '<label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--text-dim,#aaa);">Organization name ' +
+          '<input type="text" id="invite-org-name" maxlength="120" style="padding:8px 10px;border-radius:4px;border:1px solid var(--border,#333);background:var(--bg,#0a0a0a);color:var(--text,#fff);" placeholder="e.g. Acme Construction" />' +
+        '</label>' +
+        '<label style="display:flex;flex-direction:column;gap:4px;font-size:12px;color:var(--text-dim,#aaa);">Owner email ' +
+          '<input type="email" id="invite-org-email" maxlength="200" style="padding:8px 10px;border-radius:4px;border:1px solid var(--border,#333);background:var(--bg,#0a0a0a);color:var(--text,#fff);" placeholder="owner@example.com" />' +
+        '</label>' +
+        '<div id="invite-org-result" style="font-size:12px;"></div>' +
+        '<div style="display:flex;justify-content:flex-end;gap:8px;">' +
+          '<button class="ee-btn ghost" id="invite-org-cancel">Cancel</button>' +
+          '<button class="ee-btn primary" id="invite-org-send">&#x1F4E8; Send invite</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(modal);
+    function close() { modal.remove(); }
+    modal.querySelector('#invite-org-cancel').addEventListener('click', close);
+    modal.addEventListener('click', function(e) { if (e.target === modal) close(); });
+    modal.querySelector('#invite-org-send').addEventListener('click', function() {
+      var name = (modal.querySelector('#invite-org-name').value || '').trim();
+      var email = (modal.querySelector('#invite-org-email').value || '').trim();
+      var result = modal.querySelector('#invite-org-result');
+      if (!name) { result.innerHTML = '<span style="color:#f87171;">Organization name required.</span>'; return; }
+      if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        result.innerHTML = '<span style="color:#f87171;">Valid email required.</span>'; return;
+      }
+      var btn = modal.querySelector('#invite-org-send');
+      btn.disabled = true; btn.textContent = 'Sending…';
+      window.p86Api.post('/api/admin/organizations/invites', { email: email, org_name: name })
+        .then(function(resp) {
+          result.innerHTML =
+            '<div style="padding:10px;background:rgba(52,211,153,0.1);border:1px solid rgba(52,211,153,0.3);border-radius:6px;color:#34d399;">' +
+              'Invitation created. Email was sent to <strong>' + escapeHTML(email) + '</strong>.' +
+              '<div style="margin-top:8px;color:var(--text-dim,#aaa);font-size:11px;">If the email doesn\'t arrive, share this link directly:</div>' +
+              '<div style="margin-top:4px;font-family:\'SF Mono\',monospace;font-size:11px;color:var(--text,#fff);word-break:break-all;background:rgba(0,0,0,0.4);padding:8px;border-radius:4px;">' +
+                escapeHTML(resp.accept_url) +
+              '</div>' +
+              '<button class="ee-btn ghost" style="font-size:11px;padding:3px 8px;margin-top:6px;" onclick="copyOrgInviteLink(\'' + escapeAttr(resp.accept_url) + '\', this)">&#x1F517; Copy link</button>' +
+            '</div>';
+          btn.disabled = false; btn.textContent = '✓ Sent';
+          // Refresh the pending invitations panel behind the modal.
+          loadOrgInvites();
+          modal.querySelector('#invite-org-cancel').textContent = 'Close';
+        })
+        .catch(function(err) {
+          result.innerHTML = '<span style="color:#f87171;">' + escapeHTML(err.message || 'Failed') + '</span>';
+          btn.disabled = false; btn.textContent = '📨 Send invite';
+        });
+    });
+  };
 
   window.openNewOrgModal = function() {
     var existing = document.getElementById('new-org-modal');

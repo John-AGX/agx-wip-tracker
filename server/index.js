@@ -199,6 +199,14 @@ app.get('/portal', (req, res) => {
   res.sendFile(path.join(__dirname, '..', 'portal.html'));
 });
 
+// Public org-invite accept page. Recipient lands here from the
+// org_invite email; the page reads ?token=… and renders a small
+// sign-up form. Bypasses the main SPA so the unauthenticated visitor
+// doesn't see auth gates or the app shell flash.
+app.get('/accept-org-invite', (req, res) => {
+  res.sendFile(path.join(__dirname, '..', 'accept-org-invite.html'));
+});
+
 // Dynamic /sw.js — stamp the cache version with the current Railway
 // deployment SHA so EVERY deploy produces a different sw.js, which is
 // what triggers the "An update is available — Relaunch" toast in the
