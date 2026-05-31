@@ -936,7 +936,7 @@
            Collapses to a 56px icon rail via #app-sidebar-toggle. */
         .app-sidebar {
             flex: 0 0 auto;
-            width: 212px;
+            width: 200px;
             display: flex;
             flex-direction: column;
             background: var(--surface);
@@ -944,9 +944,12 @@
             overflow-y: auto;
             overflow-x: hidden;
             transition: width 0.18s ease;
+            /* Crisper text rendering on the dim sidebar surface. */
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
         }
         .app-sidebar.collapsed {
-            width: 56px;
+            width: 48px;
         }
         .app-sidebar-head {
             display: flex;
@@ -993,7 +996,7 @@
             border-radius: 8px;
             background: var(--surface2);
             color: var(--text);
-            font-size: 13.5px;
+            font-size: 12.5px;
             font-weight: 600;
             cursor: pointer;
             transition: background 0.12s, border-color 0.12s, color 0.12s;
@@ -1060,7 +1063,7 @@
         }
         .app-sidebar.collapsed .sidebar-new-btn {
             justify-content: center;
-            padding: 8px 0;
+            padding: 7px 0;
             gap: 0;
         }
         .app-sidebar.collapsed .sidebar-new-label {
@@ -1209,7 +1212,7 @@
         }
         .app-sidebar.collapsed .sidebar-search-box {
             justify-content: center;
-            padding: 8px 0;
+            padding: 7px 0;
             gap: 0;
             border-color: transparent;
             background: transparent;
@@ -1236,15 +1239,16 @@
         .app-nav .tab-btn {
             display: flex;
             align-items: center;
-            gap: 11px;
+            gap: 10px;
             width: 100%;
-            padding: 7px 11px;
+            padding: 6px 10px;
             border: none;
             border-radius: 8px;
             background: transparent;
             color: var(--text-dim);
-            font-size: 13.5px;
+            font-size: 12.5px;
             font-weight: 500;
+            letter-spacing: 0.1px;
             text-align: left;
             cursor: pointer;
             white-space: nowrap;
@@ -1279,8 +1283,8 @@
             flex: 0 0 auto;
         }
         .app-nav .tab-btn .p86-icon {
-            width: 19px;
-            height: 19px;
+            width: 18px;
+            height: 18px;
         }
         .app-nav-label {
             flex: 1 1 auto;
@@ -1327,7 +1331,7 @@
         }
         .app-sidebar.collapsed .app-nav .tab-btn {
             justify-content: center;
-            padding: 9px 0;
+            padding: 6px 0;
             gap: 0;
         }
         .app-sidebar.collapsed .app-nav-label {
@@ -1342,7 +1346,7 @@
             font-size: 0;
             letter-spacing: 0;
             padding: 0;
-            margin: 4px 14px;
+            margin: 4px 11px;
             height: 1px;
             opacity: 1;
             background: var(--border);
@@ -1411,7 +1415,7 @@
             border-radius: 8px;
             background: transparent;
             color: var(--text-dim);
-            font-size: 13px;
+            font-size: 12.5px;
             font-weight: 500;
             text-align: left;
             cursor: pointer;
@@ -1452,7 +1456,7 @@
             font-size: 0;
             letter-spacing: 0;
             padding: 0;
-            margin: 4px 14px;
+            margin: 4px 11px;
             height: 1px;
             opacity: 1;
             background: var(--border);
@@ -1463,7 +1467,7 @@
         }
         .app-sidebar.collapsed .sidebar-recent-item {
             justify-content: center;
-            padding: 8px 0;
+            padding: 6px 0;
             gap: 0;
         }
         .app-sidebar.collapsed .sidebar-recent-label {
