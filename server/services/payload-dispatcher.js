@@ -168,7 +168,7 @@ const PAYLOAD_OPS_SCHEMAS = Object.freeze({
     // watch_ops: [{op:'create'|'archive', watch_id?, name, cadence, ...}]
     // skill_pack_ops: [{op:'add'|'edit'|'delete', pack_id?, fields:{name, body, description?, agents?, category?, triggers?}}]
     // field_tool_ops: [{op:'create'|'edit'|'delete', tool_id?, fields:{name, description?, category?, html_body}}]
-    // link_ops: [{op:'link_job_to_client', job_id, client_id} | {op:'link_property_to_parent', property_id, parent_client_id}]
+    // link_ops: [{op:'link_job_to_client', job_id, client_id} | {op:'link_property_to_parent', property_id, parent_client_id} | {op:'attach_files', attachment_ids[], target_entity_type, target_entity_id}]
     // staff_agent_ops: deferred (needs Anthropic SDK calls)
     allowedTopKeys: new Set([
       'watch_ops', 'skill_pack_ops', 'field_tool_ops', 'link_ops', 'staff_agent_ops',
@@ -213,7 +213,32 @@ const PAYLOAD_OPS_SCHEMAS = Object.freeze({
       'section_adds', 'section_updates', 'section_deletes',
     ]),
   },
+  workbook: {
+    // Excel-style workspace authoring. The workbook lives in the host
+    // entity's JSONB blob (estimates.data.workbook OR jobs.data.workbook),
+    // same shape the client engine (js/workspace.js) reads/writes. We
+    // mutate the {workbook} slot surgically via jsonb_set so we never
+    // clobber a concurrent line-items save.
+    //
+    //   host       'estimate' | 'job' — which table hosts the workbook.
+    //              REQUIRED. target.entity_id is the host row id.
+    //   sheet      Default sheet NAME for cell_ops (optional; defaults to
+    //              the active sheet, then the first sheet).
+    //   cell_ops   [{ addr, raw?, value?, numFmt?, validation?, hyperlink?,
+    //                 note?, clear? }] — set or clear cells on the target
+    //              sheet. raw starting with '=' is a formula (value is left
+    //              blank for the client to recompute on load). A bare value
+    //              writes a literal. clear:true deletes the cell.
+    //   sheet_ops  [{ op:'add'|'rename'|'delete', name, new_name? }]
+    //   named_range_ops [{ op:'set'|'delete', name, ref?, sheet?, comment? }]
+    allowedTopKeys: new Set([
+      'host', 'sheet', 'cell_ops', 'sheet_ops', 'named_range_ops',
+    ]),
+  },
 });
+
+// Host tables a workbook can live on, keyed by the workbook op's `host`.
+const WORKBOOK_HOSTS = Object.freeze({ estimate: 'estimates', job: 'jobs' });
 
 // Mirror of the client-side template registry (js/report-templates.js)
 // and the server-side TEMPLATE_TYPES set in reports-routes.js. Used
@@ -426,6 +451,75 @@ function validateOps(entityType, ops) {
         );
       }
     }
+  }
+  if (entityType === 'workbook') {
+    if (!ops.host || !WORKBOOK_HOSTS[ops.host]) {
+      throw new PayloadValidationError(
+        `workbook.ops.host must be one of: ${Object.keys(WORKBOOK_HOSTS).join(', ')}`,
+        { code: 'invalid_enum', field_path: 'workbook.ops.host',
+          received: ops.host, expected: Object.keys(WORKBOOK_HOSTS),
+          suggestion: "Set host:'estimate' or host:'job' to say which entity's workbook to write. target.entity_id is that row's id." }
+      );
+    }
+    for (const k of ['cell_ops', 'sheet_ops', 'named_range_ops']) {
+      if (ops[k] != null && !Array.isArray(ops[k])) {
+        throw new PayloadValidationError(
+          `workbook.ops.${k} must be an array`,
+          { code: 'wrong_type', field_path: `workbook.ops.${k}`,
+            expected: 'array', received: typeof ops[k] }
+        );
+      }
+    }
+    (ops.cell_ops || []).forEach((c, i) => {
+      if (!c || typeof c !== 'object' || !c.addr || typeof c.addr !== 'string') {
+        throw new PayloadValidationError(
+          `workbook.ops.cell_ops[${i}] requires a string addr (e.g. "B7")`,
+          { code: 'missing_field', field_path: `workbook.ops.cell_ops[${i}].addr` }
+        );
+      }
+    });
+    (ops.sheet_ops || []).forEach((s, i) => {
+      if (!s || !['add', 'rename', 'delete'].includes(s.op)) {
+        throw new PayloadValidationError(
+          `workbook.ops.sheet_ops[${i}].op must be add|rename|delete`,
+          { code: 'invalid_enum', field_path: `workbook.ops.sheet_ops[${i}].op`,
+            received: s && s.op, expected: ['add', 'rename', 'delete'] }
+        );
+      }
+      if (!s.name) {
+        throw new PayloadValidationError(
+          `workbook.ops.sheet_ops[${i}].name is required`,
+          { code: 'missing_field', field_path: `workbook.ops.sheet_ops[${i}].name` }
+        );
+      }
+      if (s.op === 'rename' && !s.new_name) {
+        throw new PayloadValidationError(
+          `workbook.ops.sheet_ops[${i}].new_name is required for rename`,
+          { code: 'missing_field', field_path: `workbook.ops.sheet_ops[${i}].new_name` }
+        );
+      }
+    });
+    (ops.named_range_ops || []).forEach((n, i) => {
+      if (!n || !['set', 'delete'].includes(n.op)) {
+        throw new PayloadValidationError(
+          `workbook.ops.named_range_ops[${i}].op must be set|delete`,
+          { code: 'invalid_enum', field_path: `workbook.ops.named_range_ops[${i}].op`,
+            received: n && n.op, expected: ['set', 'delete'] }
+        );
+      }
+      if (!n.name) {
+        throw new PayloadValidationError(
+          `workbook.ops.named_range_ops[${i}].name is required`,
+          { code: 'missing_field', field_path: `workbook.ops.named_range_ops[${i}].name` }
+        );
+      }
+      if (n.op === 'set' && (!n.ref || typeof n.ref !== 'string')) {
+        throw new PayloadValidationError(
+          `workbook.ops.named_range_ops[${i}].ref is required for set (e.g. "Summary!B10")`,
+          { code: 'missing_field', field_path: `workbook.ops.named_range_ops[${i}].ref` }
+        );
+      }
+    });
   }
 }
 
@@ -1802,6 +1896,7 @@ async function dispatchSystem(dbClient, target, refTable, ctx) {
   // link_ops — cross-entity linkage. Currently supports:
   //   - link_job_to_client: {op:'link_job_to_client', job_id, client_id}
   //   - link_property_to_parent: {op:'link_property_to_parent', property_id, parent_client_id}
+  //   - attach_files: {op:'attach_files', attachment_ids:[...], target_entity_type, target_entity_id}
   if (Array.isArray(ops.link_ops) && ops.link_ops.length) {
     for (const lk of ops.link_ops) {
       if (!lk || !lk.op) throw new Error('link_ops[].op required');
@@ -1832,6 +1927,28 @@ async function dispatchSystem(dbClient, target, refTable, ctx) {
         );
         if (!r.rowCount) throw new Error(`property ${propId} not found`);
         updated.push({ kind: 'property_parent_link', property_id: propId, parent_client_id: parentId });
+      } else if (lk.op === 'attach_files') {
+        // Wave 2 — re-point EXISTING attachment rows to a target entity.
+        // Lets 86 wire already-uploaded files to a job/estimate/lead/etc.
+        // via the payload DSL instead of a separate REST round-trip.
+        // (Upload itself still goes through the attachment routes; this
+        // only relinks rows that already exist.)
+        const ATTACH_ENTITY_TYPES = ['lead', 'estimate', 'client', 'job', 'sub', 'user', 'org', 'project'];
+        const ids = Array.isArray(lk.attachment_ids)
+          ? lk.attachment_ids.map((x) => resolveRef(x, refTable)).filter(Boolean).map(String)
+          : [];
+        const et = lk.target_entity_type;
+        const eid = resolveRef(lk.target_entity_id, refTable);
+        if (!ids.length) throw new Error('attach_files requires a non-empty attachment_ids[]');
+        if (!ATTACH_ENTITY_TYPES.includes(et)) {
+          throw new Error(`attach_files target_entity_type must be one of: ${ATTACH_ENTITY_TYPES.join(', ')} (got '${et}')`);
+        }
+        if (!eid) throw new Error('attach_files requires target_entity_id');
+        const ar = await dbClient.query(
+          `UPDATE attachments SET entity_type = $1, entity_id = $2 WHERE id = ANY($3::text[])`,
+          [et, String(eid), ids]
+        );
+        updated.push({ kind: 'attach_files', count: ar.rowCount, target_entity_type: et, target_entity_id: String(eid) });
       } else {
         throw new Error(`link_ops[].op unsupported: ${lk.op}`);
       }
@@ -2125,6 +2242,230 @@ async function dispatchReport(dbClient, target, refTable, ctx) {
   };
 }
 
+// ──────────────────────────────────────────────────────────────────
+// dispatchWorkbook — authors the Excel-style workspace that lives in a
+// host entity's JSONB (estimates.data.workbook OR jobs.data.workbook).
+//
+// We mutate ONLY the {workbook} slot via jsonb_set, exactly like the
+// dedicated PUT /api/{estimates,jobs}/:id/workbook route, so a workbook
+// payload never clobbers a concurrent line-items save. The shape we
+// read/write is the same versioned object the client engine
+// (js/workspace.js) hydrates: { version, activeSheetId, sheets[],
+// namedRanges{}, workbookGroupActive{} }. Formula cells (raw starts
+// with '=') are written with an empty value — the client recomputes
+// every formula via recalcAll() on load, so we don't need a server-side
+// engine.
+// ──────────────────────────────────────────────────────────────────
+
+function newWorkbookSheetId() {
+  return 's_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 6);
+}
+
+function blankWorkbookSheet(name) {
+  return {
+    id: newWorkbookSheetId(),
+    name: name || 'Sheet1',
+    kind: 'grid',
+    rows: 100,
+    cols: 26,
+    cells: {},
+    colWidths: {},
+    rowHeights: {},
+    links: {},
+    merges: [],
+    tables: [],
+  };
+}
+
+function findWorkbookSheet(wb, name) {
+  if (!name) {
+    return wb.sheets.find(s => s.id === wb.activeSheetId) || wb.sheets[0] || null;
+  }
+  let s = wb.sheets.find(x => x.name === name);
+  if (!s) s = wb.sheets.find(x => String(x.name || '').toLowerCase() === String(name).toLowerCase());
+  if (!s) s = wb.sheets.find(x => String(x.name || '').trim().toLowerCase() === String(name).trim().toLowerCase());
+  return s || null;
+}
+
+// Apply one cell op to a sheet in place. Mirrors the cell shape the
+// client uses: { raw, value, fmt, style, numFmt?, validation?,
+// hyperlink?, note? }.
+function applyWorkbookCellOp(sheet, op) {
+  const a = String(op.addr).toUpperCase().trim();
+  if (op.clear) { delete sheet.cells[a]; return a; }
+  const cell = sheet.cells[a] || { raw: '', value: '', fmt: null, style: {} };
+  if (op.raw !== undefined && op.raw !== null) {
+    cell.raw = String(op.raw);
+    // Formula → leave value blank; the client recomputes on load.
+    // Literal → value mirrors raw unless an explicit value was supplied.
+    if (cell.raw.charAt(0) === '=') cell.value = '';
+    else cell.value = (op.value !== undefined) ? op.value : cell.raw;
+  } else if (op.value !== undefined) {
+    cell.value = op.value;
+    cell.raw = op.value === null ? '' : String(op.value);
+  }
+  if (op.numFmt !== undefined) {
+    if (op.numFmt == null || op.numFmt === '') delete cell.numFmt; else cell.numFmt = String(op.numFmt);
+  }
+  if (op.validation !== undefined) {
+    if (op.validation == null) delete cell.validation; else cell.validation = op.validation;
+  }
+  if (op.hyperlink !== undefined) {
+    if (op.hyperlink == null) delete cell.hyperlink;
+    else cell.hyperlink = (typeof op.hyperlink === 'string') ? { url: op.hyperlink } : op.hyperlink;
+  }
+  if (op.note !== undefined) {
+    if (!op.note) delete cell.note; else cell.note = String(op.note);
+  }
+  if (!cell.style || typeof cell.style !== 'object') cell.style = {};
+  sheet.cells[a] = cell;
+  return a;
+}
+
+async function dispatchWorkbook(dbClient, target, refTable, ctx) {
+  const ops = target.ops || {};
+  resolveRefsInOps(ops, refTable);
+
+  const table = WORKBOOK_HOSTS[ops.host];
+  if (!table) {
+    throw new PayloadValidationError(
+      `workbook.ops.host must be one of: ${Object.keys(WORKBOOK_HOSTS).join(', ')}`,
+      { code: 'invalid_enum', field_path: 'workbook.ops.host', received: ops.host,
+        expected: Object.keys(WORKBOOK_HOSTS) }
+    );
+  }
+  const hostId = resolveRef(target.entity_id, refTable);
+  if (!hostId || isRef(hostId)) {
+    throw new PayloadValidationError(
+      'workbook target requires a concrete entity_id (the host estimate/job id)',
+      { code: 'missing_field', field_path: 'entity_id' }
+    );
+  }
+
+  // Lock the host row and read just the workbook slot.
+  const sel = await dbClient.query(
+    `SELECT data->'workbook' AS workbook FROM ${table} WHERE id = $1 FOR UPDATE`,
+    [hostId]
+  );
+  if (!sel.rows.length) {
+    throw new PayloadValidationError(
+      `${ops.host} ${hostId} not found — cannot author its workbook`,
+      { code: 'not_found', field_path: 'entity_id', received: hostId }
+    );
+  }
+
+  let wb = sel.rows[0].workbook;
+  if (!wb || typeof wb !== 'object') {
+    wb = { version: 2, activeSheetId: null, sheets: [], namedRanges: {}, workbookGroupActive: {} };
+  }
+  if (!Array.isArray(wb.sheets)) wb.sheets = [];
+  if (!wb.namedRanges || typeof wb.namedRanges !== 'object') wb.namedRanges = {};
+
+  const summaryBits = [];
+
+  // 1. Sheet ops first so cell_ops can target a sheet created here.
+  for (const s of (ops.sheet_ops || [])) {
+    if (s.op === 'add') {
+      if (findWorkbookSheet(wb, s.name)) {
+        throw new PayloadValidationError(
+          `sheet '${s.name}' already exists`,
+          { code: 'conflict', field_path: 'sheet_ops', received: s.name }
+        );
+      }
+      const sheet = blankWorkbookSheet(s.name);
+      wb.sheets.push(sheet);
+      if (!wb.activeSheetId) wb.activeSheetId = sheet.id;
+      summaryBits.push(`+sheet "${s.name}"`);
+    } else if (s.op === 'rename') {
+      const sheet = findWorkbookSheet(wb, s.name);
+      if (!sheet) {
+        throw new PayloadValidationError(
+          `sheet '${s.name}' not found (rename)`,
+          { code: 'not_found', field_path: 'sheet_ops', received: s.name }
+        );
+      }
+      sheet.name = s.new_name;
+      summaryBits.push(`rename "${s.name}"→"${s.new_name}"`);
+    } else if (s.op === 'delete') {
+      const idx = wb.sheets.findIndex(x =>
+        x.name === s.name || String(x.name || '').toLowerCase() === String(s.name).toLowerCase());
+      if (idx === -1) {
+        throw new PayloadValidationError(
+          `sheet '${s.name}' not found (delete)`,
+          { code: 'not_found', field_path: 'sheet_ops', received: s.name }
+        );
+      }
+      const [removed] = wb.sheets.splice(idx, 1);
+      if (wb.activeSheetId === removed.id) {
+        wb.activeSheetId = wb.sheets.length ? wb.sheets[0].id : null;
+      }
+      summaryBits.push(`-sheet "${s.name}"`);
+    }
+  }
+
+  // 2. Cell ops on the resolved target sheet.
+  if (ops.cell_ops && ops.cell_ops.length) {
+    const sheet = findWorkbookSheet(wb, ops.sheet);
+    if (!sheet) {
+      throw new PayloadValidationError(
+        ops.sheet
+          ? `sheet '${ops.sheet}' not found for cell_ops`
+          : 'workbook has no sheets — add one with sheet_ops before writing cells',
+        { code: 'not_found', field_path: 'sheet', received: ops.sheet || null,
+          suggestion: 'Pass ops.sheet with an existing sheet name, or add a sheet via sheet_ops first.' }
+      );
+    }
+    if (!sheet.cells || typeof sheet.cells !== 'object') sheet.cells = {};
+    let written = 0, cleared = 0;
+    for (const c of ops.cell_ops) {
+      applyWorkbookCellOp(sheet, c);
+      if (c.clear) cleared++; else written++;
+    }
+    summaryBits.push(`${written} cell${written === 1 ? '' : 's'} on "${sheet.name}"` + (cleared ? `, ${cleared} cleared` : ''));
+  }
+
+  // 3. Named-range ops.
+  for (const n of (ops.named_range_ops || [])) {
+    const key = String(n.name).toUpperCase();
+    if (n.op === 'delete') {
+      delete wb.namedRanges[key];
+      summaryBits.push(`-range ${n.name}`);
+    } else if (n.op === 'set') {
+      let sheetId = n.sheetId || null;
+      if (!sheetId && n.sheet) {
+        const sh = findWorkbookSheet(wb, n.sheet);
+        sheetId = sh ? sh.id : null;
+      }
+      wb.namedRanges[key] = {
+        name: n.name,
+        ref: String(n.ref).trim(),
+        sheetId: sheetId,
+        comment: n.comment || '',
+      };
+      summaryBits.push(`range ${n.name}→${n.ref}`);
+    }
+  }
+
+  // Bump the version marker so the client knows this is a current-shape
+  // workbook (matches workspace.js save payloads).
+  if (!wb.version) wb.version = 2;
+
+  await dbClient.query(
+    `UPDATE ${table}
+        SET data = jsonb_set(COALESCE(data, '{}'::jsonb), '{workbook}', $1::jsonb, true),
+            updated_at = NOW()
+      WHERE id = $2`,
+    [JSON.stringify(wb), hostId]
+  );
+
+  return {
+    entity_type: 'workbook',
+    entity_id: hostId,
+    op: 'authored',
+    summary: `Workbook on ${ops.host} ${hostId}: ${summaryBits.join('; ') || 'no-op'}`,
+  };
+}
+
 const DISPATCHERS = {
   client: dispatchClient,
   estimate: dispatchEstimate,
@@ -2133,6 +2474,7 @@ const DISPATCHERS = {
   schedule: dispatchSchedule,
   system: dispatchSystem,
   report: dispatchReport,
+  workbook: dispatchWorkbook,
 };
 
 async function dispatchTarget(dbClient, target, refTable, ctx) {
@@ -2147,6 +2489,214 @@ async function dispatchTarget(dbClient, target, refTable, ctx) {
 }
 
 // ──────────────────────────────────────────────────────────────────
+// Wave 1/2 — target-level conditional / bulk / move handling + the
+// before/after changeset audit.
+//
+// These extend the payload vocabulary at the TARGET level (siblings of
+// entity_type / entity_id / ops), NOT inside an entity's ops schema, so
+// they work uniformly across every dispatcher and need no per-entity
+// schema changes. Every concrete write still flows through the existing
+// DISPATCHERS map — these helpers only orchestrate, gate, and snapshot.
+//
+// Target forms understood by applyPayload:
+//   1. Regular:     { entity_type, entity_id?, ops, condition? }
+//        condition (optional): 'if_exists' | 'if_missing' | 'upsert'
+//          if_exists  — dispatch only if the row exists, else skip
+//          if_missing — dispatch only if the row is absent, else skip
+//          upsert     — exists → update, absent → create
+//   2. Bulk:        { entity_type, bulk: { items: [{ entity_id?, ops }, ...] } }
+//        Applies the entity_type's dispatcher once per item.
+//   3. Move:        { op:'move', source:{...target}, dest:{...target} }
+//        Runs source ops then dest ops in one transaction (e.g. delete a
+//        child from estimate A, add it to estimate B).
+// ──────────────────────────────────────────────────────────────────
+
+// Single-row backing table per entity_type, used for existence checks
+// + changeset snapshots. Multi-row / structural types (schedule,
+// system) are intentionally absent — they aren't one snapshot-able row
+// and don't support conditional gating.
+const TABLE_FOR_ENTITY = Object.freeze({
+  client: 'clients',
+  estimate: 'estimates',
+  job: 'jobs',
+  lead: 'leads',
+  report: 'job_reports',
+});
+
+const CONDITION_VALUES = new Set(['if_exists', 'if_missing', 'upsert']);
+
+async function entityExists(dbClient, entityType, entityId) {
+  const table = TABLE_FOR_ENTITY[entityType];
+  if (!table || !entityId || isRef(entityId)) return false;
+  const r = await dbClient.query(`SELECT 1 FROM ${table} WHERE id = $1 LIMIT 1`, [entityId]);
+  return r.rowCount > 0;
+}
+
+// Full-row JSONB snapshot for the before/after audit. Returns null for
+// types we don't snapshot or rows that don't exist.
+async function snapshotEntity(dbClient, entityType, entityId) {
+  const table = TABLE_FOR_ENTITY[entityType];
+  if (!table || !entityId || isRef(entityId)) return null;
+  try {
+    const r = await dbClient.query(
+      `SELECT to_jsonb(t) AS row FROM ${table} t WHERE id = $1 LIMIT 1`, [entityId]
+    );
+    return r.rows.length ? r.rows[0].row : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+// Validate one top-level target (any form). Attaches target_index to a
+// PayloadValidationError so the caller can point 86 at the exact slot.
+function validateTarget(target, index) {
+  try {
+    if (!target || typeof target !== 'object') {
+      throw new Error('Each target must be an object');
+    }
+    if (target.op === 'move') {
+      for (const side of ['source', 'dest']) {
+        const s = target[side];
+        if (!s || !s.entity_type) {
+          throw new PayloadValidationError(
+            `move.${side} requires entity_type`,
+            { code: 'missing_field', field_path: `move.${side}.entity_type` }
+          );
+        }
+        validateOps(s.entity_type, s.ops || {});
+      }
+      return;
+    }
+    if (!target.entity_type) throw new Error('Each target requires entity_type');
+    if (target.bulk) {
+      if (!Array.isArray(target.bulk.items) || !target.bulk.items.length) {
+        throw new PayloadValidationError(
+          'bulk.items must be a non-empty array',
+          { code: 'wrong_type', field_path: 'bulk.items', expected: 'non-empty array' }
+        );
+      }
+      for (const item of target.bulk.items) {
+        validateOps(target.entity_type, (item && (item.ops || item)) || {});
+      }
+      return;
+    }
+    if (target.condition) {
+      if (!CONDITION_VALUES.has(target.condition)) {
+        throw new PayloadValidationError(
+          `Unknown condition '${target.condition}'`,
+          { code: 'invalid_enum', field_path: 'condition',
+            received: target.condition, expected: [...CONDITION_VALUES] }
+        );
+      }
+      // if_exists / if_missing need a concrete id to test. upsert may
+      // create, so it tolerates a missing/ref id.
+      if (target.condition !== 'upsert' && (!target.entity_id || isRef(target.entity_id))) {
+        throw new PayloadValidationError(
+          `condition '${target.condition}' requires a concrete entity_id`,
+          { code: 'missing_field', field_path: 'entity_id',
+            suggestion: 'Provide the entity_id of the row to test, or use upsert if it may not exist yet.' }
+        );
+      }
+    }
+    validateOps(target.entity_type, target.ops || {});
+  } catch (err) {
+    if (err instanceof PayloadValidationError && err.detail && err.detail.target_index == null) {
+      err.detail.target_index = index;
+    }
+    throw err;
+  }
+}
+
+// Every entity any target form touches, for advisory locking.
+function collectLockSubjects(targets) {
+  const subjects = [];
+  const add = (et, id) => subjects.push(`payload:${et || '?'}:${id || '$new'}`);
+  for (const t of targets) {
+    if (!t) continue;
+    if (t.op === 'move') {
+      if (t.source) add(t.source.entity_type, t.source.entity_id);
+      if (t.dest) add(t.dest.entity_type, t.dest.entity_id);
+    } else if (t.bulk && Array.isArray(t.bulk.items)) {
+      for (const item of t.bulk.items) add(t.entity_type, item && item.entity_id);
+    } else {
+      add(t.entity_type, t.entity_id);
+    }
+  }
+  return subjects;
+}
+
+// Dispatch a single concrete target through DISPATCHERS, capturing a
+// before/after row snapshot into the changeset.
+async function dispatchConcrete(dbClient, target, refTable, ctx, results, changeset) {
+  const before = await snapshotEntity(dbClient, target.entity_type, target.entity_id);
+  const result = await dispatchTarget(dbClient, target, refTable, ctx);
+  results.push(result);
+  // Use the resolved id from the result so $ref-created entities get an
+  // 'after' snapshot too.
+  const afterId = (result && result.entity_id) || target.entity_id;
+  const after = await snapshotEntity(dbClient, target.entity_type, afterId);
+  if (before !== null || after !== null) {
+    changeset.push({ entity_type: target.entity_type, id: afterId || null, before, after });
+  }
+}
+
+// Run ONE top-level target (regular | conditional | bulk | move).
+async function runTarget(dbClient, target, refTable, ctx, results, changeset) {
+  // move — ordered source→dest, each a normal target.
+  if (target.op === 'move') {
+    await dispatchConcrete(dbClient, target.source, refTable, ctx, results, changeset);
+    await dispatchConcrete(dbClient, target.dest, refTable, ctx, results, changeset);
+    results.push({
+      entity_type: 'move', op: 'move',
+      summary: `Moved ${target.source.entity_type} ${target.source.entity_id || '?'} → `
+        + `${target.dest.entity_type} ${target.dest.entity_id || '(new)'}`,
+    });
+    return;
+  }
+
+  // bulk — N items of the same entity_type.
+  if (target.bulk && Array.isArray(target.bulk.items)) {
+    let n = 0;
+    for (const item of target.bulk.items) {
+      const concrete = {
+        entity_type: target.entity_type,
+        entity_id: item && item.entity_id,
+        ops: (item && (item.ops || item)) || {},
+      };
+      await dispatchConcrete(dbClient, concrete, refTable, ctx, results, changeset);
+      n++;
+    }
+    results.push({
+      entity_type: target.entity_type, op: 'bulk',
+      summary: `Bulk applied ${n} ${target.entity_type} item(s)`,
+    });
+    return;
+  }
+
+  // conditional gate.
+  if (target.condition) {
+    const exists = await entityExists(dbClient, target.entity_type, target.entity_id);
+    if (target.condition === 'if_exists' && !exists) {
+      results.push({ entity_type: target.entity_type, entity_id: target.entity_id, op: 'skipped',
+        summary: `Skipped ${target.entity_type} ${target.entity_id} (if_exists: not found)` });
+      return;
+    }
+    if (target.condition === 'if_missing' && exists) {
+      results.push({ entity_type: target.entity_type, entity_id: target.entity_id, op: 'skipped',
+        summary: `Skipped ${target.entity_type} ${target.entity_id} (if_missing: already exists)` });
+      return;
+    }
+    if (target.condition === 'upsert') {
+      target.ops = target.ops || {};
+      target.ops.op = exists ? 'update' : 'create';
+    }
+  }
+
+  // regular target.
+  await dispatchConcrete(dbClient, target, refTable, ctx, results, changeset);
+}
+
+// ──────────────────────────────────────────────────────────────────
 // applyPayload — top-level apply. Wraps everything in a single PG
 // transaction. Per-target advisory locks acquired in stable sorted
 // order so concurrent multi-target applies don't deadlock.
@@ -2157,8 +2707,10 @@ async function dispatchTarget(dbClient, target, refTable, ctx) {
 //     server-side flow is one-piece.)
 //   { userId, sourceAgent } — used by dispatchers for attribution.
 //
-// Returns: { ok, apply_summary, affected_targets, ref_resolutions }
-// Throws on hard validation errors (caller maps to 422/4xx).
+// Returns: { ok, apply_summary, affected_targets, apply_changeset,
+//            ref_resolutions }
+// Throws on hard validation errors (caller maps to 422/4xx). On a
+// PayloadValidationError, err.detail.target_index points at the slot.
 // ──────────────────────────────────────────────────────────────────
 
 async function applyPayload(payloadRow, opts = {}) {
@@ -2166,38 +2718,39 @@ async function applyPayload(payloadRow, opts = {}) {
   if (!targets.length) throw new Error('Payload has no targets');
 
   // Validate every target up front so we fail fast before any SQL.
-  for (const t of targets) {
-    if (!t || !t.entity_type) throw new Error('Each target requires entity_type');
-    validateOps(t.entity_type, t.ops || {});
-  }
+  targets.forEach((t, i) => validateTarget(t, i));
 
   const dbClient = await pool.connect();
   const refTable = Object.create(null);
   const affectedTargets = [];
+  const changeset = [];
 
   try {
     await dbClient.query('BEGIN');
 
-    // Acquire per-target advisory locks in stable sorted order so
-    // concurrent multi-target applies that share entities serialize
-    // without deadlocking. The lock key includes both entity_type and
-    // entity_id (or '$new' for to-be-created refs).
-    const lockKeys = targets
-      .map((t) => `payload:${t.entity_type}:${t.entity_id || '$new'}`)
-      .sort();
+    // Acquire advisory locks across every entity any target form
+    // touches, in stable sorted order, so concurrent applies that share
+    // entities serialize without deadlocking.
+    const lockKeys = collectLockSubjects(targets).sort();
     for (const key of lockKeys) {
       await dbClient.query('SELECT pg_advisory_xact_lock(hashtext($1))', [key]);
     }
 
     // Dispatch in array order so $new_id refs become available to
     // later targets.
-    for (const target of targets) {
-      const result = await dispatchTarget(dbClient, target, refTable, {
-        userId: opts.userId,
-        organizationId: opts.organizationId,
-        sourceAgent: opts.sourceAgent,
-      });
-      affectedTargets.push(result);
+    for (let i = 0; i < targets.length; i++) {
+      try {
+        await runTarget(dbClient, targets[i], refTable, {
+          userId: opts.userId,
+          organizationId: opts.organizationId,
+          sourceAgent: opts.sourceAgent,
+        }, affectedTargets, changeset);
+      } catch (err) {
+        if (err instanceof PayloadValidationError && err.detail && err.detail.target_index == null) {
+          err.detail.target_index = i;
+        }
+        throw err;
+      }
     }
 
     if (opts.dryRun) {
@@ -2209,6 +2762,7 @@ async function applyPayload(payloadRow, opts = {}) {
         dry_run: true,
         apply_summary: buildApplySummary(affectedTargets),
         affected_targets: affectedTargets,
+        apply_changeset: changeset,
         ref_resolutions: Object.assign({}, refTable),
       };
     }
@@ -2219,6 +2773,7 @@ async function applyPayload(payloadRow, opts = {}) {
       dry_run: false,
       apply_summary: buildApplySummary(affectedTargets),
       affected_targets: affectedTargets,
+      apply_changeset: changeset,
       ref_resolutions: Object.assign({}, refTable),
     };
   } catch (err) {
@@ -2282,6 +2837,7 @@ module.exports = {
   PAYLOAD_OPS_SCHEMAS,
   PayloadValidationError,
   validateOps,
+  validateTarget,
   applyPayload,
   generateFilename,
   sanitizeShortName,

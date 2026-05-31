@@ -332,15 +332,23 @@ router.post('/:id/apply', requireAuth, requireOrg, async (req, res) => {
     }
 
     // Persist status on successful real applies. Dry runs keep status='ready'
-    // so the user can drop them again for the real run.
+    // so the user can drop them again for the real run. apply_changeset
+    // (Wave 1.C before/after audit) is captured on real applies so the
+    // row carries everything an "undo last payload" needs.
     if (!dryRun) {
       await pool.query(
         `UPDATE payloads
             SET status = 'applied',
                 applied_at = NOW(),
-                apply_summary = $1
-          WHERE id = $2`,
-        [result.apply_summary, payload.id]
+                apply_summary = $1,
+                apply_changeset = $2::jsonb
+          WHERE id = $3`,
+        [
+          result.apply_summary,
+          (Array.isArray(result.apply_changeset) && result.apply_changeset.length)
+            ? JSON.stringify(result.apply_changeset) : null,
+          payload.id,
+        ]
       );
     }
 
@@ -349,6 +357,7 @@ router.post('/:id/apply', requireAuth, requireOrg, async (req, res) => {
       dry_run: dryRun,
       apply_summary: result.apply_summary,
       affected_targets: result.affected_targets,
+      apply_changeset: result.apply_changeset || [],
       ref_resolutions: result.ref_resolutions,
     });
   } catch (e) {

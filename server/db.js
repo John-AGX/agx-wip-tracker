@@ -2179,6 +2179,23 @@ async function initSchema() {
       END IF;
     END $$;
 
+    -- payloads.apply_changeset — Wave 1.C before/after audit capture.
+    -- Populated inside the dispatch transaction (applyPayload) with an
+    -- array of {entity_type, id, before, after} row snapshots for every
+    -- single-row entity a payload touches (client/estimate/job/lead/
+    -- report). Enables "undo last payload" and feeds the dispatcher→
+    -- memory feedback loop. Nullable; null on payloads applied before
+    -- this column existed or that touched only structural/multi-row
+    -- entity types (schedule/system).
+    DO $$ BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+         WHERE table_name = 'payloads' AND column_name = 'apply_changeset'
+      ) THEN
+        ALTER TABLE payloads ADD COLUMN apply_changeset JSONB;
+      END IF;
+    END $$;
+
     CREATE TABLE IF NOT EXISTS context_load_events (
       id BIGSERIAL PRIMARY KEY,
       organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
