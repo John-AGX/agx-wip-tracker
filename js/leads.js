@@ -773,8 +773,27 @@
     renderLeadMap(addr);
     renderLeadEstimatesCompact(leadId);
     renderLeadProjects(leadId);
+    renderLeadTasks(leadId, lead);
     renderLeadAttachments(leadId);
     renderLeadWeather(addr);
+  }
+
+  // Tasks panel — defers to window.p86Tasks.mountEntityPanel
+  // (from js/tasks.js). Shows nothing actionable until the lead is
+  // saved (no id to link tasks against).
+  function renderLeadTasks(leadId, lead) {
+    var host = document.getElementById('leadEditor_tasksHost');
+    if (!host) return;
+    if (!leadId) {
+      host.innerHTML = '<div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;padding:8px 0;">Save the lead first to add tasks.</div>';
+      return;
+    }
+    if (window.p86Tasks && typeof window.p86Tasks.mountEntityPanel === 'function') {
+      var label = (lead && (lead.title || lead.name)) || ('Lead #' + leadId);
+      window.p86Tasks.mountEntityPanel(host, 'lead', leadId, label);
+    } else {
+      host.innerHTML = '<div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;padding:8px 0;">Tasks module not loaded.</div>';
+    }
   }
 
   // Linked Projects panel — defers to window.renderLinkedProjectsPanel

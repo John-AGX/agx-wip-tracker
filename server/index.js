@@ -53,6 +53,7 @@ const projectRoutes = require('./routes/project-routes');
 const projectPairsRoutes = require('./routes/project-pairs-routes');
 const orgTagsRoutes = require('./routes/org-tags-routes');
 const folderTemplatesRoutes = require('./routes/folder-templates-routes');
+const tasksRoutes = require('./routes/tasks-routes');
 const { storage } = require('./storage');
 
 const app = express();
@@ -123,6 +124,10 @@ app.use('/api/leads', leadRoutes);
 // on the pairs router exposes :projectId from this prefix.
 app.use('/api/projects/:projectId/pairs', projectPairsRoutes);
 app.use('/api/projects', projectRoutes);
+// Tasks / To-Do system — polymorphic entity (kind = todo|punch|follow_up),
+// org-scoped, requireAuth-only (assignee-driven model needs universal
+// access; no capability gate). See server/routes/tasks-routes.js.
+app.use('/api/tasks', tasksRoutes);
 app.use('/api/org-tags', orgTagsRoutes);
 app.use('/api/folder-templates', folderTemplatesRoutes);
 // Org manifest — one read-only endpoint that powers the Summary

@@ -333,14 +333,15 @@
                          flash an empty placeholder. Uses the standard NWS
                          pipeline already powering the schedule + job widgets. -->
                     <div id="header-weather" class="header-weather" hidden></div>
-                    <!-- My Files icon button — replaces the former Files
-                         tab in the top nav. Click jumps straight into
-                         the my-files tab pane. Personal files are a
-                         per-user utility, not a team page, so they sit
-                         in the right cluster next to bell + directory. -->
-                    <button id="header-files-btn" class="header-icon-btn" type="button" title="My Files"
-                            data-p86-icon="folder"
-                            onclick="if (typeof window.switchTab === 'function') window.switchTab('my-files');"></button>
+                    <!-- Quick-add "+" — replaces the former My Files icon
+                         (My Files now lives in the sidebar Workspace group).
+                         Opens #header-quickadd-menu, a ROLE-GATED menu of the
+                         create flows the current user is allowed to use;
+                         applyRoleVisibility() hides the data-cap rows the
+                         role can't reach, and auto-collapses if all are gone. -->
+                    <button id="header-quickadd-btn" class="header-icon-btn" type="button"
+                            title="Create new" aria-haspopup="true" aria-expanded="false"
+                            data-p86-icon="plus"></button>
                     <button id="header-notif-btn" class="header-icon-btn" type="button" title="Notifications" aria-haspopup="true" aria-expanded="false" data-p86-icon="bell">
                         <span class="header-notif-dot" data-count="0"></span>
                     </button>
@@ -424,6 +425,50 @@
                         <button type="button" class="header-popover-item" data-tab="estimates" data-est-subtab="users"   data-virtual-tab="users"   data-p86-icon="clients" role="menuitem">Internal Users</button>
                         <button type="button" class="header-popover-item" data-tab="estimates" data-est-subtab="subs"    data-virtual-tab="subs"    data-p86-icon="subs"    role="menuitem">Subs / Vendors</button>
                         <button type="button" class="header-popover-item" data-tab="estimates" data-est-subtab="clients" data-virtual-tab="clients" data-p86-icon="id-card" data-cap="ESTIMATES_VIEW" role="menuitem">Client Contacts</button>
+                    </div>
+                    <!-- Quick-add "+" menu — a single dropdown of the most
+                         frequently created records. Each row is data-cap
+                         gated to mirror the capability that protects its
+                         create route, so applyRoleVisibility() trims the
+                         menu down to exactly what the current role can do
+                         (a limited field user sees only the ungated rows).
+                         Items call the existing global create functions;
+                         objects are guarded with &amp;&amp; so a not-yet-loaded
+                         module can't throw from the inline handler. The
+                         menu is closed by the app.js toggle the moment an
+                         item is clicked, so the create flow opens cleanly. -->
+                    <div id="header-quickadd-menu" class="header-popover header-directory-menu" role="menu" hidden>
+                        <div class="header-popover-section header-popover-title">Create</div>
+                        <button type="button" class="header-popover-item" data-p86-icon="leads"      data-cap="LEADS_EDIT"     role="menuitem"
+                                onclick="if (typeof window.openNewLeadModal === 'function') window.openNewLeadModal();">New Lead</button>
+                        <button type="button" class="header-popover-item" data-p86-icon="estimates"  data-cap="ESTIMATES_VIEW" role="menuitem"
+                                onclick="if (typeof window.openNewEstimateForm === 'function') window.openNewEstimateForm();">New Estimate</button>
+                        <button type="button" class="header-popover-item" data-p86-icon="id-card"    data-cap="ESTIMATES_VIEW" role="menuitem"
+                                onclick="if (typeof window.openNewClientModal === 'function') window.openNewClientModal();">New Client</button>
+                        <button type="button" class="header-popover-item" data-p86-icon="subs"       data-cap="JOBS_EDIT_ANY"  role="menuitem"
+                                onclick="if (window.p86Subs &amp;&amp; window.p86Subs.openNew) window.p86Subs.openNew();">New Sub / Vendor</button>
+                        <button type="button" class="header-popover-item" data-p86-icon="photos"     data-cap="LEADS_EDIT"     role="menuitem"
+                                onclick="if (window.p86Projects &amp;&amp; window.p86Projects.openCreate) window.p86Projects.openCreate();">New Project</button>
+                        <button type="button" class="header-popover-item" data-p86-icon="daily-logs" data-cap="LEADS_EDIT"     role="menuitem"
+                                onclick="if (window.p86Projects &amp;&amp; window.p86Projects.openCreateReport) window.p86Projects.openCreateReport();">New Daily Log</button>
+                        <button type="button" class="header-popover-item" data-p86-icon="schedule"   role="menuitem"
+                                onclick="if (typeof window.scheduleAddEntry === 'function') window.scheduleAddEntry();">New Schedule Item</button>
+                        <button type="button" class="header-popover-item" data-p86-icon="envelope"   role="menuitem"
+                                onclick="if (window.p86Messaging &amp;&amp; window.p86Messaging.openInbox) window.p86Messaging.openInbox();">New Message</button>
+                        <!-- New To-Do — ungated to match the requireAuth-only
+                             tasks route (a TASKS_* cap would hide it from
+                             everyone until an admin toggled it, breaking the
+                             assignee-driven model). Context-free → personal task. -->
+                        <button type="button" class="header-popover-item" data-p86-icon="check-circle" role="menuitem"
+                                onclick="if (window.p86Tasks &amp;&amp; window.p86Tasks.openQuickAdd) window.p86Tasks.openQuickAdd();">New To-Do</button>
+                        <!-- Capture — field-first actions that don't need an
+                             entity open. New Photo streams straight into the
+                             user's My Files (quick-captures folder); on mobile
+                             it opens the rear camera. Ungated: every user can
+                             capture to their own files. -->
+                        <div class="header-popover-section header-popover-title">Capture</div>
+                        <button type="button" class="header-popover-item" data-p86-icon="photos"     role="menuitem"
+                                onclick="if (window.p86QuickPhoto) window.p86QuickPhoto();">New Photo</button>
                     </div>
                 </div>
             </div>
@@ -515,6 +560,15 @@
                         <div class="app-nav-group-label">Company</div>
                         <button class="tab-btn" data-tab="insights" data-p86-icon="insights" data-cap="INSIGHTS_VIEW" title="Insights"><span class="app-nav-label">Insights</span></button>
                         <button class="tab-btn" data-tab="admin" data-p86-icon="admin" data-admin-only style="display:none;" title="Admin"><span class="app-nav-label">Admin</span></button>
+                    </div>
+                    <!-- Workspace — personal per-user utilities. My Files
+                         moved here out of the header (its old "+" slot now
+                         holds the quick-add menu). Ungated: every signed-in
+                         user has a personal file space, so no data-cap. -->
+                    <div class="app-nav-group">
+                        <div class="app-nav-group-label">Workspace</div>
+                        <button class="tab-btn" data-tab="my-tasks" data-p86-icon="check-circle" title="My Tasks"><span class="app-nav-label">My Tasks</span></button>
+                        <button class="tab-btn" data-tab="my-files" data-p86-icon="folder" title="My Files"><span class="app-nav-label">My Files</span></button>
                     </div>
                 </nav>
                 <!-- Recents — client-side (localStorage) list of recently
@@ -1086,6 +1140,11 @@
                      by renderMyFilesTab() in js/my-files.js. -->
                 <div id="my-files" class="tab-content"></div>
 
+                <!-- MY TASKS TAB — per-user to-do / task list with quick
+                     capture + Today / Upcoming / Overdue / Done filters.
+                     Painted by renderMyTasksTab() in js/tasks.js. -->
+                <div id="my-tasks" class="tab-content"></div>
+
                 <!-- SCHEDULE TAB — production scheduling calendar.
                      Phase 1 = local-only persistence; Phase 2 will swap
                      to /api/schedule. -->
@@ -1304,6 +1363,10 @@
                                 <fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:6px 10px 8px;margin:0 0 14px 0;">
                                     <legend style="font-size:10px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.6px;padding:0 5px;">&#x1F4F8; Projects</legend>
                                     <div id="ee-projects-mount"></div>
+                                </fieldset>
+                                <fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:6px 10px 8px;margin:0 0 14px 0;">
+                                    <legend style="font-size:10px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.6px;padding:0 5px;">&#x2705; Tasks</legend>
+                                    <div id="ee-tasks-mount"></div>
                                 </fieldset>
                                 <div id="ee-photos-mount"></div>
                             </div>
@@ -2396,6 +2459,16 @@
               </div>
             </fieldset>
 
+            <!-- Tasks panel — to-dos linked to this lead via tasks.entity_type
+                 = 'lead'. "+ Add" opens the quick-add modal pre-linked to
+                 this lead. Defers to window.p86Tasks.mountEntityPanel. -->
+            <fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;">
+              <legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">&#x2705; Tasks</legend>
+              <div id="leadEditor_tasksHost">
+                <div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;padding:8px 0;">Save the lead first to add tasks.</div>
+              </div>
+            </fieldset>
+
             <!-- Photos & Attachments panel -->
             <fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;">
               <legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">&#x1F4F7; Photos &amp; Files</legend>
@@ -2762,7 +2835,7 @@
     <script src="js/auth.js?v=16"></script>
     <script src="js/dialogs.js?v=1b"></script>
     <script src="js/geolocation.js?v=1"></script>
-    <script src="js/api.js?v=36"></script>
+    <script src="js/api.js?v=37"></script>
     <script src="js/header-weather.js?v=2"></script>
     <script src="js/account.js?v=2b"></script>
     <script src="js/voice-input.js?v=5"></script>
@@ -2790,15 +2863,18 @@
          Leads lists. Loads BEFORE those renderers so window.p86Tables is
          ready the first time they build their tables. -->
     <script src="js/table-enhancements.js?v=4"></script>
-    <script src="js/leads.js?v=38"></script>
+    <script src="js/leads.js?v=39"></script>
     <script src="js/job-costs-import.js?v=4"></script>
     <script src="js/qb-costs-view.js?v=11"></script>
     <script src="js/insights.js?v=7"></script>
     <script src="js/schedule.js?v=34"></script>
-    <script src="js/app.js?v=73"></script>
+    <script src="js/app.js?v=75"></script>
     <script src="js/compliance-review-ui.js?v=2"></script>
     <script src="js/messaging.js?v=1b"></script>
-    <script src="js/my-files.js?v=13"></script>
+    <script src="js/my-files.js?v=14"></script>
+    <!-- Tasks / To-Do UI. Loads after my-files.js (reuses window.p86Toast)
+         and after api.js/auth.js (p86Api.tasks + p86Auth). -->
+    <script src="js/tasks.js?v=1"></script>
     <!-- Google Maps JS API loader + tag-icon registry for photo pins.
          Both load before projects-map.js so the map renderer can
          reference window.p86Maps + window.p86TagIcons. -->
@@ -2813,16 +2889,16 @@
          calls into window.p86ReportTemplates. -->
     <script src="js/report-templates.js?v=1"></script>
     <script src="js/report-style-packs.js?v=2"></script>
-    <script src="js/projects.js?v=53"></script>
+    <script src="js/projects.js?v=54"></script>
     <!-- Shared pricing pipeline — math used by estimate-editor +
          estimate-preview + the upcoming change-order-editor. Loads
          BEFORE any of them so window.p86Pricing is ready. -->
     <script src="js/pricing-pipeline.js?v=1"></script>
-    <script src="js/jobs.js?v=85"></script>
+    <script src="js/jobs.js?v=86"></script>
     <script src="js/job-workflow-ui.js?v=2"></script>
     <script src="js/estimates.js?v=38"></script>
     <script src="js/proposal.js?v=25"></script>
-    <script src="js/estimate-editor.js?v=50"></script>
+    <script src="js/estimate-editor.js?v=51"></script>
     <!-- Change Order editor — overlay opened from the job detail's
          Change Orders tab. Loads after pricing-pipeline (which it
          consumes via window.p86Pricing) and after api.js (which
@@ -2866,7 +2942,7 @@
     <!-- Project 86 inline-SVG icon helper. Provides window.p86Icon(name, opts)
          — 24 icons from Phosphor (MIT) + Heroicons (MIT). See
          scripts/build-agx-icons.js to regenerate. -->
-    <script src="js/agx-icons.js?v=20d"></script>
+    <script src="js/agx-icons.js?v=21"></script>
 
     <!-- Edit-gate helper — section + row gates that block accidental
          input edits. Must load AFTER agx-icons.js because attachSection

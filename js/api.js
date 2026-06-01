@@ -559,6 +559,33 @@
     }
   };
 
+  // Tasks — polymorphic to-do entity. See server/routes/tasks-routes.js.
+  // list() filters mirror the GET query params exactly; create/update
+  // accept the body fields the route's EDITABLE_FIELDS allowlist permits.
+  var tasks = {
+    list: function(opts) {
+      opts = opts || {};
+      var qs = [];
+      if (opts.assignee) qs.push('assignee=' + encodeURIComponent(opts.assignee));
+      if (opts.status) qs.push('status=' + encodeURIComponent(opts.status));
+      if (opts.exclude_done) qs.push('exclude_done=1');
+      if (opts.kind) qs.push('kind=' + encodeURIComponent(opts.kind));
+      if (opts.entity_type && opts.entity_id) {
+        qs.push('entity_type=' + encodeURIComponent(opts.entity_type));
+        qs.push('entity_id=' + encodeURIComponent(opts.entity_id));
+      }
+      if (opts.due_before) qs.push('due_before=' + encodeURIComponent(opts.due_before));
+      if (opts.due_after) qs.push('due_after=' + encodeURIComponent(opts.due_after));
+      if (opts.q) qs.push('q=' + encodeURIComponent(opts.q));
+      if (opts.limit) qs.push('limit=' + encodeURIComponent(opts.limit));
+      return get('/api/tasks' + (qs.length ? '?' + qs.join('&') : ''));
+    },
+    get: function(id) { return get('/api/tasks/' + encodeURIComponent(id)); },
+    create: function(payload) { return post('/api/tasks', payload); },
+    update: function(id, payload) { return patch('/api/tasks/' + encodeURIComponent(id), payload); },
+    remove: function(id) { return del('/api/tasks/' + encodeURIComponent(id)); }
+  };
+
   // Per-job weather lookup for the schedule. Server geocodes the job's
   // address (cached on the row), pulls the NWS 7-day forecast (cached
   // in-memory by rounded coords), classifies risk, and returns one
@@ -588,7 +615,7 @@
 
   window.p86Api = {
     get: get, put: put, post: post, del: del, patch: patch,
-    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, qbCosts: qbCosts, subs: subsApi, schedule: schedule, adminSms: adminSms, messages: messages, weather: weather, projects: projects, orgTags: orgTags, folderTemplates: folderTemplates, reports: reports, changeOrders: changeOrders,
+    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, qbCosts: qbCosts, subs: subsApi, schedule: schedule, adminSms: adminSms, messages: messages, weather: weather, projects: projects, tasks: tasks, orgTags: orgTags, folderTemplates: folderTemplates, reports: reports, changeOrders: changeOrders,
     isOffline: isOffline,
     isAuthenticated: function() { return !!getToken() && !isOffline(); }
   };

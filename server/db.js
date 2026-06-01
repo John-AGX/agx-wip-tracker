@@ -2770,6 +2770,52 @@ async function initSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_project_activity_project
       ON project_activity(project_id, created_at DESC);
+
+    -- ───────────────────────────────────────────────────────────────
+    -- Tasks — Project 86's streamlined to-do / task entity. ONE
+    -- polymorphic table (deliberately NOT separate punch/RFI/submittal
+    -- tables): a kind discriminator (todo | punch | follow_up) covers
+    -- the variants, and entity_type/entity_id link a task to ANY entity
+    -- (job/lead/estimate/client/sub/project) the same way reports do —
+    -- or stay NULL for a personal task. The design synthesizes
+    -- Buildertrend (field assignment + due dates + photos), Todoist
+    -- (fast single-line capture), and Asana (subtasks via the checklist
+    -- JSONB), without Procore's separate-table sprawl.
+    --
+    -- checklist JSONB shape: [{ text: '…', done: bool }]  (subtasks)
+    -- Photos attach via the attachments table with entity_type='task',
+    -- entity_id=<this task's id> (see VALID_ENTITY_TYPES).
+    CREATE TABLE IF NOT EXISTS tasks (
+      id                TEXT PRIMARY KEY,
+      organization_id   INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      title             TEXT NOT NULL,
+      notes             TEXT,
+      kind              TEXT NOT NULL DEFAULT 'todo',     -- todo | punch | follow_up
+      status            TEXT NOT NULL DEFAULT 'open',     -- open | in_progress | blocked | done
+      priority          TEXT NOT NULL DEFAULT 'normal',   -- low | normal | high | urgent
+      due_date          DATE,
+      assignee_user_id  INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_by        INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      entity_type       TEXT,    -- polymorphic link (NULL = personal task)
+      entity_id         TEXT,
+      checklist         JSONB NOT NULL DEFAULT '[]'::jsonb,
+      completed_at      TIMESTAMPTZ,
+      archived_at       TIMESTAMPTZ,
+      created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    -- "My open tasks" — powers the My Tasks page default query.
+    CREATE INDEX IF NOT EXISTS idx_tasks_assignee
+      ON tasks(organization_id, assignee_user_id, status)
+      WHERE archived_at IS NULL;
+    -- Per-entity Tasks panel — mirrors reports' polymorphic index.
+    CREATE INDEX IF NOT EXISTS idx_tasks_entity
+      ON tasks(entity_type, entity_id, updated_at DESC)
+      WHERE entity_type IS NOT NULL AND archived_at IS NULL;
+    -- Due / Overdue quick filters + the optional task_due digest.
+    CREATE INDEX IF NOT EXISTS idx_tasks_due
+      ON tasks(organization_id, due_date)
+      WHERE archived_at IS NULL AND status <> 'done';
   `);
 
   // ── Performance indexes: 86's read-tool surface (2026-05-23) ──────

@@ -372,6 +372,38 @@
                 });
             }
 
+            // Quick-add "+" menu (header). Mirrors the directory toggle:
+            // opens #header-quickadd-menu, closing every other popover, and
+            // syncs aria-expanded for a11y. Each item carries its own
+            // create-flow onclick; we just close the menu on any item click
+            // so the modal opens against a clean header. The menu rows are
+            // role-gated via data-cap (applyRoleVisibility trims them), so
+            // a limited user simply sees fewer options here.
+            const quickAddBtn = document.getElementById('header-quickadd-btn');
+            const quickAddMenu = document.getElementById('header-quickadd-menu');
+            if (quickAddBtn && quickAddMenu) {
+                quickAddBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const open = !quickAddMenu.hasAttribute('hidden');
+                    closeAllPopovers({ except: 'quickadd' });
+                    if (open) {
+                        quickAddMenu.setAttribute('hidden', '');
+                        quickAddBtn.setAttribute('aria-expanded', 'false');
+                    } else {
+                        quickAddMenu.removeAttribute('hidden');
+                        quickAddBtn.setAttribute('aria-expanded', 'true');
+                    }
+                });
+                quickAddMenu.addEventListener('click', (e) => {
+                    // Let the item's own onclick create flow run, then close.
+                    if (e.target.closest('.header-popover-item')) {
+                        quickAddMenu.setAttribute('hidden', '');
+                        quickAddBtn.setAttribute('aria-expanded', 'false');
+                    }
+                    e.stopPropagation();
+                });
+            }
+
             // Avatar dropdown (Account / Logout). The actual click
             // handlers on Account and Logout are wired elsewhere
             // (auth.js wires #logout-btn; admin code wires #account-btn).
@@ -517,6 +549,14 @@
                     nm.setAttribute('hidden', '');
                     const nb = document.getElementById('sidebar-new-btn');
                     if (nb) nb.setAttribute('aria-expanded', 'false');
+                }
+            }
+            if (opts.except !== 'quickadd') {
+                const qa = document.getElementById('header-quickadd-menu');
+                if (qa) {
+                    qa.setAttribute('hidden', '');
+                    const qb = document.getElementById('header-quickadd-btn');
+                    if (qb) qb.setAttribute('aria-expanded', 'false');
                 }
             }
         }
@@ -1359,6 +1399,7 @@
             schedule:   'Schedule',
             jobs:       'Jobs',
             'my-files': 'Files',
+            'my-tasks': 'Tasks',
             insights:   'Insights',
             admin:      'Admin'
         };
@@ -1427,6 +1468,8 @@
                 renderSummaryDashboard();
             } else if (tabName === 'my-files') {
                 if (typeof window.renderMyFilesTab === 'function') window.renderMyFilesTab();
+            } else if (tabName === 'my-tasks') {
+                if (typeof window.renderMyTasksTab === 'function') window.renderMyTasksTab();
             } else if (tabName === 'estimates') {
                 // Pick the currently-active sub-tab and route through
                 // switchEstimatesSubTab so its render fires. Without

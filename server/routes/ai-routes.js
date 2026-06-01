@@ -6748,13 +6748,16 @@ const READ_TOOLS = [
       'Use this when you know the entity_id. For finding ids by name or filter, use search_entities. ' +
       'Supported entity_types: job (depth: summary|full|audit; include: workspace_sheet|qb_cost_lines|building_breakdown), ' +
       'estimate (depth: summary|full|audit; include: lines|compare), ' +
-      'client (depth: summary|full), lead (depth: summary|full), pipeline (id=\'leads\' for funnel rollup).',
+      'client (depth: summary|full), lead (depth: summary|full), ' +
+      'task (full to-do detail: status, priority, due date, assignee, linked entity, checklist subtasks, photo count), ' +
+      'pipeline (id=\'leads\' for funnel rollup). ' +
+      'CROSS-LINK: add include:["tasks"] on any of job|lead|estimate|client|project|sub to list the OPEN to-dos/tasks attached to that entity (answers "what tasks are open on this job").',
     tier: 'auto',
     input_schema: {
       type: 'object',
       required: ['entity_type', 'id'],
       properties: {
-        entity_type: { type: 'string', enum: ['job', 'estimate', 'client', 'lead', 'pipeline'] },
+        entity_type: { type: 'string', enum: ['job', 'estimate', 'client', 'lead', 'task', 'pipeline'] },
         id: { type: 'string' },
         depth: { type: 'string', enum: ['summary', 'full', 'audit'] },
         include: { type: 'array', items: { type: 'string' } },
@@ -6766,7 +6769,8 @@ const READ_TOOLS = [
     description:
       'List/search entities by free-text filter. Returns up to `limit` light rows per filter. ' +
       'Use this when you don\'t know the exact id and need to find one before emitting a payload. ' +
-      'Supported entity_types: job, wip, client, lead, user, estimate, material, sub, business_card. ' +
+      'Supported entity_types: job, wip, client, lead, user, estimate, material, sub, business_card, task. ' +
+      'For tasks/to-dos: entity_type:"task" with a `filter` searches task titles; pass `status` (open|in_progress|blocked|done) to scope, e.g. status:"open" for "what to-dos are still open". Each row shows status, priority, due date, assignee, and any linked entity. ' +
       'IMPORTANT: For "top producing jobs", "highest backlog", "worst margin" or any ranking question that needs $/% per job, pass entity_type:"wip" (or entity_type:"job" with no filter) — it returns the full WIP rollup with income/cost/margin/backlog/pctComplete per job, sorted by `sort_by`. entity_type:"job" WITH a filter returns the lighter name-lookup result (no metrics). ' +
       'BATCHING: When you need to look up N items on the same entity_type (e.g. find several materials by keyword for an estimate), pass `filters: ["keyword1", "keyword2", ...]` to run them ALL in one tool call. Results come back grouped per filter. This is ALWAYS preferable to firing N separate search_entities calls.',
     tier: 'auto',
@@ -7190,9 +7194,19 @@ async function execConsolidatedRead(name, input, ctx) {
         case 'sub':      return dispatchReadTool('read_subs',     { q, limit }, ctx);
         case 'business_card':
           return dispatchReadTool('read_existing_clients', { q, limit }, ctx);
+        case 'task':
+          // To-do / task search — title substring (+ optional status).
+          // read_tasks is org-scoped via ctx, so cross-tenant tasks can
+          // never surface. exclude_done defaults on when no status given
+          // so "what tasks…" leans to the actionable (open) set.
+          return dispatchReadTool('read_tasks', {
+            q, status: inp.status,
+            exclude_done: inp.status ? undefined : '1',
+            limit
+          }, ctx);
         default:
           return Promise.resolve(
-            'search_entities: unsupported entity_type "' + et + '". Supported: job, wip, client, lead, user, estimate, material, sub, business_card.'
+            'search_entities: unsupported entity_type "' + et + '". Supported: job, wip, client, lead, user, estimate, material, sub, business_card, task.'
           );
       }
     }
@@ -7220,6 +7234,18 @@ async function execConsolidatedRead(name, input, ctx) {
   const includes = Array.isArray(inp.include)
     ? inp.include.map((s) => String(s).toLowerCase())
     : [];
+
+  // Universal cross-link: include:['tasks'] on any task-linkable entity
+  // returns that entity's OPEN tasks/to-dos. This is the "what to-dos are
+  // open on this job / lead / estimate / client / project / sub" flow —
+  // read_tasks is org-scoped via ctx, so nothing leaks across tenants.
+  if (includes.indexOf('tasks') !== -1 &&
+      ['job', 'lead', 'estimate', 'client', 'project', 'sub'].indexOf(et) !== -1) {
+    if (!id) return 'read_entity(' + et + ', include:tasks) requires id';
+    return dispatchReadTool('read_tasks', {
+      entity_type: et, entity_id: id, exclude_done: '1', limit: inp.limit
+    }, ctx);
+  }
 
   if (et === 'job') {
     if (!id) return 'read_entity(job) requires id';
@@ -7314,6 +7340,11 @@ async function execConsolidatedRead(name, input, ctx) {
     if (depth === 'full' && l.notes) lines.push('\nNotes:\n' + wrapUserData('leads.notes', String(l.notes).slice(0, 2000)));
     return lines.join('\n');
   }
+  if (et === 'task') {
+    if (!id) return 'read_entity(task) requires id';
+    // Full single-task detail — org-scoped inside read_tasks via ctx.
+    return dispatchReadTool('read_tasks', { id: id, depth: depth }, ctx);
+  }
   if (et === 'pipeline') {
     return dispatchReadTool('read_lead_pipeline', inp, ctx);
   }
@@ -7328,7 +7359,7 @@ async function execConsolidatedRead(name, input, ctx) {
     }, ctx);
   }
 
-  return 'read_entity: unsupported entity_type "' + et + '". Supported: job, wip, estimate, client, lead, pipeline.';
+  return 'read_entity: unsupported entity_type "' + et + '". Supported: job, wip, estimate, client, lead, task, pipeline.';
 }
 
 async function execStaffTool(name, input, ctx) {
@@ -8421,6 +8452,126 @@ async function execStaffTool(name, input, ctx) {
       return out.join('\n');
     }
 
+    case 'read_tasks': {
+      // Org-scoped task / to-do read. Backs BOTH consolidated surfaces:
+      //   • read_entity('task', id)         → input.id  → full single-task detail
+      //   • search_entities('task', filter) → input.q   → filtered list
+      // Org scoping mirrors GET /api/tasks: every query is constrained to
+      // the caller's organization_id (resolved from ctx) so the agent can
+      // never surface another tenant's tasks.
+      let taskOrgId;
+      try {
+        taskOrgId = await resolveOrgIdFromCtx(ctx);
+      } catch (e) {
+        return 'Cannot read tasks without a signed-in user context.';
+      }
+
+      // DATE columns come back from pg as JS Date (server TZ midnight) or
+      // a string depending on type parsers — normalize to YYYY-MM-DD.
+      const fmtDay = (d) => {
+        if (!d) return '';
+        if (typeof d === 'string') return d.slice(0, 10);
+        try { return new Date(d).toISOString().slice(0, 10); } catch (_) { return String(d); }
+      };
+      const TASK_KINDS = new Set(['todo', 'punch', 'follow_up']);
+      const TASK_STATUSES = new Set(['open', 'in_progress', 'blocked', 'done']);
+      const taskId = input && (input.id || input.entity_id);
+
+      // ── single-task detail (read_entity by id) ──
+      if (taskId && !(input && (input.q || input.filter))) {
+        const r = await pool.query(
+          `SELECT t.*,
+                  au.name AS assignee_name,
+                  cu.name AS created_by_name,
+                  (SELECT COUNT(*)::int FROM attachments a
+                     WHERE a.entity_type = 'task' AND a.entity_id = t.id) AS photo_count
+             FROM tasks t
+             LEFT JOIN users au ON au.id = t.assignee_user_id
+             LEFT JOIN users cu ON cu.id = t.created_by
+            WHERE t.id = $1 AND t.organization_id = $2 AND t.archived_at IS NULL`,
+          [String(taskId), taskOrgId]
+        );
+        if (!r.rows.length) return 'Task not found: ' + taskId;
+        const t = r.rows[0];
+        const lines = [];
+        lines.push('Task: ' + (t.title || '(untitled)') + '  [' + t.id + ']');
+        lines.push('Status: ' + (t.status || 'open') + '  | Priority: ' + (t.priority || 'normal') + '  | Kind: ' + (t.kind || 'todo'));
+        if (t.due_date) lines.push('Due: ' + fmtDay(t.due_date));
+        lines.push('Assignee: ' + (t.assignee_name || (t.assignee_user_id ? '#' + t.assignee_user_id : 'unassigned')));
+        if (t.created_by_name) lines.push('Created by: ' + t.created_by_name);
+        if (t.entity_type && t.entity_id) {
+          const label = await resolveTaskEntityLabel(taskOrgId, t.entity_type, t.entity_id);
+          lines.push('Linked to: ' + t.entity_type + (label ? ' "' + label + '"' : '') + ' [' + t.entity_id + ']');
+        }
+        const checklist = Array.isArray(t.checklist) ? t.checklist : [];
+        if (checklist.length) {
+          const doneN = checklist.filter((c) => c && c.done).length;
+          lines.push('Checklist (' + doneN + '/' + checklist.length + '):');
+          // PROMPT-INJECTION DEFENSE: subtask text is user data — wrapped + capped.
+          checklist.slice(0, 50).forEach((c) => {
+            lines.push('  ' + (c && c.done ? '[x]' : '[ ]') + ' ' +
+              wrapUserData('tasks.checklist', String((c && c.text) || '').slice(0, 200)));
+          });
+        }
+        if (t.photo_count) lines.push('Photos: ' + t.photo_count);
+        if (t.completed_at) lines.push('Completed: ' + fmtDay(t.completed_at));
+        // PROMPT-INJECTION DEFENSE: free-text notes wrapped as data.
+        if (t.notes) lines.push('\nNotes:\n' + wrapUserData('tasks.notes', String(t.notes).slice(0, 2000)));
+        return lines.join('\n');
+      }
+
+      // ── filtered list (search_entities) ──
+      const where = ['t.organization_id = $1', 't.archived_at IS NULL'];
+      const params = [taskOrgId];
+      let pn = 2;
+
+      const q = String((input && (input.q || input.filter)) || '').trim();
+      if (q) { where.push('t.title ILIKE $' + (pn++)); params.push('%' + q + '%'); }
+
+      const assignee = String((input && input.assignee) || '').trim();
+      const meId = ctx && ctx.userId;
+      if (assignee === 'me' && meId) { where.push('t.assignee_user_id = $' + (pn++)); params.push(Number(meId)); }
+      else if (assignee === 'unassigned') { where.push('t.assignee_user_id IS NULL'); }
+      else if (assignee && Number.isInteger(Number(assignee))) { where.push('t.assignee_user_id = $' + (pn++)); params.push(Number(assignee)); }
+
+      if (input && input.status && TASK_STATUSES.has(String(input.status))) { where.push('t.status = $' + (pn++)); params.push(String(input.status)); }
+      if (input && String(input.exclude_done || '') === '1') { where.push("t.status <> 'done'"); }
+      if (input && input.kind && TASK_KINDS.has(String(input.kind))) { where.push('t.kind = $' + (pn++)); params.push(String(input.kind)); }
+      if (input && input.entity_type && input.entity_id) {
+        where.push('t.entity_type = $' + (pn++)); params.push(String(input.entity_type));
+        where.push('t.entity_id = $' + (pn++));   params.push(String(input.entity_id));
+      }
+      if (input && input.due_before) { where.push('t.due_date IS NOT NULL AND t.due_date <= $' + (pn++)); params.push(String(input.due_before)); }
+      if (input && input.due_after)  { where.push('t.due_date IS NOT NULL AND t.due_date >= $' + (pn++)); params.push(String(input.due_after)); }
+
+      const limit = Math.max(1, Math.min(100, Number(input && input.limit) || 30));
+      const sql =
+        `SELECT t.id, t.title, t.status, t.priority, t.kind, t.due_date,
+                t.entity_type, t.entity_id, t.assignee_user_id,
+                au.name AS assignee_name
+           FROM tasks t
+           LEFT JOIN users au ON au.id = t.assignee_user_id
+          WHERE ${where.join(' AND ')}
+          ORDER BY (t.status = 'done') ASC,
+                   t.due_date ASC NULLS LAST,
+                   CASE t.priority WHEN 'urgent' THEN 0 WHEN 'high' THEN 1 WHEN 'normal' THEN 2 ELSE 3 END ASC,
+                   t.updated_at DESC
+          LIMIT ${limit}`;
+      const r = await pool.query(sql, params);
+      if (!r.rows.length) return q ? 'No tasks matched "' + q + '".' : 'No tasks match the filters.';
+      const out = ['Found ' + r.rows.length + ' task' + (r.rows.length === 1 ? '' : 's') + ':'];
+      for (const t of r.rows) {
+        out.push('- ' + (t.title || '(untitled)') + ' [id=' + t.id + ']' +
+          ' · ' + (t.status || 'open') +
+          (t.priority && t.priority !== 'normal' ? ' · ' + t.priority : '') +
+          (t.kind && t.kind !== 'todo' ? ' · ' + t.kind : '') +
+          (t.due_date ? ' · due ' + fmtDay(t.due_date) : '') +
+          (t.assignee_name ? ' · @' + t.assignee_name : (t.assignee_user_id ? ' · @#' + t.assignee_user_id : ' · unassigned')) +
+          (t.entity_type && t.entity_id ? ' · on ' + t.entity_type + ' ' + t.entity_id : ''));
+      }
+      return out.join('\n');
+    }
+
     case 'read_past_estimate_lines': {
       const q = (input && input.q || '').trim();
       if (!q) return 'q is required — search keyword across line descriptions.';
@@ -8820,6 +8971,29 @@ async function resolveOrgIdFromCtx(ctx) {
   const orgId = r.rows[0] && r.rows[0].organization_id;
   if (!orgId) throw new Error('User is not associated with an organization.');
   return orgId;
+}
+
+// Best-effort human label for a task's linked entity, used to hydrate
+// the read_tasks single-task detail. Mirrors resolveEntityLabel in
+// server/routes/tasks-routes.js. Returns '' when unresolvable (deleted,
+// cross-org, or unknown type). Org-scoped where the table carries it.
+const TASK_LINKABLE_ENTITY_TYPES = new Set(['lead', 'estimate', 'client', 'job', 'sub', 'project']);
+async function resolveTaskEntityLabel(orgId, type, id) {
+  if (!type || !id || !TASK_LINKABLE_ENTITY_TYPES.has(type)) return '';
+  try {
+    let sql;
+    if (type === 'lead')          sql = 'SELECT title AS label FROM leads WHERE id = $1';
+    else if (type === 'client')   sql = 'SELECT name AS label FROM clients WHERE id = $1';
+    else if (type === 'sub')      sql = 'SELECT name AS label FROM subs WHERE id = $1';
+    else if (type === 'project')  sql = 'SELECT name AS label FROM projects WHERE id = $1 AND organization_id = ' + Number(orgId);
+    else if (type === 'estimate') sql = "SELECT COALESCE(data->>'name', data->>'title', 'Estimate') AS label FROM estimates WHERE id = $1";
+    else if (type === 'job')      sql = "SELECT COALESCE(data->>'title', data->>'name', 'Job') AS label FROM jobs WHERE id = $1";
+    else return '';
+    const { rows } = await pool.query(sql, [String(id)]);
+    return rows.length ? (rows[0].label || '') : '';
+  } catch (e) {
+    return '';
+  }
 }
 
 async function execStaffApprovalTool(name, input, ctx) {

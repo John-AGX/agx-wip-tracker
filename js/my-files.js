@@ -792,6 +792,102 @@
     chain.then(fetchFiles).then(function() { paint(document.getElementById('my-files')); });
   }
 
+  // ──────────────────────────────────────────────────────────────────
+  // Quick Photo capture — context-free camera/upload entry point.
+  // Reached from the header "+" menu (New Photo) WITHOUT first opening a
+  // job, mirroring Buildertrend's mobile "Take Photo". Injects a hidden
+  // file input (camera on mobile via capture=environment), then streams
+  // each picked image into the user's personal files under a dedicated
+  // `quick-captures` folder — the SAME upload pipeline My Files uses,
+  // just with a fixed folder and no entity required. Exposed as
+  // window.p86QuickPhoto so the menu item's inline onclick can call it.
+  // ──────────────────────────────────────────────────────────────────
+  function quickPhoto() {
+    var uid = currentUserId();
+    if (!uid) { alert('Please sign in to capture photos.'); return; }
+
+    var input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.setAttribute('capture', 'environment'); // rear camera on mobile
+    input.multiple = true;
+    // Keep it off-screen rather than display:none — some mobile browsers
+    // refuse to open the picker for a fully hidden input.
+    input.style.position = 'fixed';
+    input.style.left = '-9999px';
+    document.body.appendChild(input);
+
+    function removeInput() { if (input.parentNode) input.parentNode.removeChild(input); }
+
+    input.addEventListener('change', function() {
+      var files = Array.from(input.files || []);
+      removeInput();
+      if (!files.length) return;
+      var maxBytes = 50 * 1024 * 1024;
+      var ok = 0, failed = 0;
+      var chain = Promise.resolve();
+      files.forEach(function(f) {
+        if (f.size > maxBytes) { failed++; return; }
+        chain = chain.then(function() {
+          return window.p86Api.attachments.upload('user', String(uid), f, { folder: 'quick-captures' })
+            .then(function() { ok++; })
+            .catch(function() { failed++; });
+        });
+      });
+      chain.then(function() {
+        var msg = ok
+          ? (ok + ' photo' + (ok === 1 ? '' : 's') + ' saved to My Files › quick-captures'
+             + (failed ? ' (' + failed + ' failed)' : ''))
+          : ('No photos were saved' + (failed ? ' (' + failed + ' failed)' : '') + '.');
+        notify(msg, ok ? 'success' : 'error');
+        // If the My Files pane is mounted, refresh it so the new captures
+        // appear immediately; otherwise skip the network round-trip.
+        if (_filesMounted) {
+          fetchFiles().then(function() { paint(document.getElementById('my-files')); });
+        }
+      });
+    });
+
+    // Cancel fallback: when the picker closes with no selection the window
+    // regains focus but `change` never fires — clean up the orphan input
+    // so repeated cancels don't accumulate hidden nodes.
+    window.addEventListener('focus', function onFocus() {
+      setTimeout(function() { if (!input.files || !input.files.length) removeInput(); }, 400);
+    }, { once: true });
+
+    input.click();
+  }
+
+  // Minimal toast — the app has no shared toast component yet, so this
+  // self-contained helper renders a brief bottom-center notification with
+  // inline styles (no CSS dependency). Also published as window.p86Toast
+  // so modules that already probe for it (field-tools.js) get a real
+  // implementation instead of silently no-op'ing.
+  function notify(message, kind) {
+    try {
+      var host = document.getElementById('p86-toast-host');
+      if (!host) {
+        host = document.createElement('div');
+        host.id = 'p86-toast-host';
+        host.style.cssText = 'position:fixed;left:50%;bottom:24px;transform:translateX(-50%);' +
+          'z-index:99999;display:flex;flex-direction:column;gap:8px;align-items:center;pointer-events:none;';
+        document.body.appendChild(host);
+      }
+      var el = document.createElement('div');
+      var bg = kind === 'error' ? '#7f1d1d' : (kind === 'success' ? '#14532d' : '#1f2937');
+      el.style.cssText = 'pointer-events:auto;max-width:90vw;padding:10px 16px;border-radius:8px;' +
+        'color:#fff;font-size:13px;line-height:1.4;box-shadow:0 6px 20px rgba(0,0,0,.35);' +
+        'opacity:0;transform:translateY(8px);transition:opacity .2s ease,transform .2s ease;background:' + bg + ';';
+      el.textContent = String(message == null ? '' : message);
+      host.appendChild(el);
+      requestAnimationFrame(function() { el.style.opacity = '1'; el.style.transform = 'translateY(0)'; });
+      setTimeout(function() {
+        el.style.opacity = '0'; el.style.transform = 'translateY(8px)';
+        setTimeout(function() { if (el.parentNode) el.parentNode.removeChild(el); }, 250);
+      }, 3200);
+    } catch (e) { /* a toast must never break the calling flow */ }
+  }
+
   function deleteFile(id) {
     if (!window.confirm('Delete this file? This cannot be undone.')) return;
     window.p86Api.attachments.remove(id)
@@ -1148,6 +1244,11 @@
     openSendPicker: openSendPicker,
     openPrintout: openPrintout,
     deletePrintout: deletePrintout,
-    refreshPrintouts: refreshPrintouts
+    refreshPrintouts: refreshPrintouts,
+    quickPhoto: quickPhoto
   };
+  // Context-free entry point for the header "+" menu's "New Photo" item.
+  window.p86QuickPhoto = quickPhoto;
+  // Backfill the toast helper other modules already probe for.
+  if (!window.p86Toast) window.p86Toast = { show: function(m, k) { notify(m, k); } };
 })();

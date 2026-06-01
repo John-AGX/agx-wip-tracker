@@ -1881,6 +1881,23 @@ function renderJobsMain() {
                 }
             }
 
+            // ── Tasks panel ──
+            // To-dos linked to this job via tasks.entity_type='job'. Lets
+            // PMs see/assign open field tasks right from the overview.
+            if (window.p86Tasks && typeof window.p86Tasks.mountEntityPanel === 'function') {
+                var taskWrap = document.createElement('fieldset');
+                taskWrap.style.cssText = 'border:1px solid var(--border,#333);border-radius:8px;padding:6px 10px 8px;margin:0 0 14px 0;';
+                taskWrap.innerHTML =
+                    '<legend style="font-size:10px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.6px;padding:0 5px;">&#x2705; Tasks</legend>' +
+                    '<div id="job-overview-tasks-host"></div>';
+                container.appendChild(taskWrap);
+                var taskHost = taskWrap.querySelector('#job-overview-tasks-host');
+                if (taskHost) {
+                    var jobLabel = (jobObj && ((jobObj.jobNumber ? jobObj.jobNumber + ' — ' : '') + (jobObj.title || ''))) || ('Job ' + jobId);
+                    window.p86Tasks.mountEntityPanel(taskHost, 'job', jobId, jobLabel);
+                }
+            }
+
             // ── Building cards ──
             const buildings = appData.buildings.filter(b => b.jobId === jobId);
             if (buildings.length > 0) {

@@ -409,7 +409,12 @@ const MAX_FILE_BYTES = 50 * 1024 * 1024; // 50MB — fits most drawings, big PDF
 // projects.id string; reads are allowed for any user in the project's
 // org, writes follow LEADS_EDIT (projects belong to the sales/job
 // lifecycle and edit rights track that, not a separate capability).
-const VALID_ENTITY_TYPES = new Set(['lead', 'estimate', 'client', 'job', 'sub', 'user', 'org', 'project']);
+// 'task' is the to-do / task entity (server/routes/tasks-routes.js).
+// entity_id is the tasks.id string; task photos/attachments (e.g. a
+// punch-list defect photo) attach here. Reads allowed for any user in
+// the task's org; writes track the same TASKS capability the task
+// routes enforce.
+const VALID_ENTITY_TYPES = new Set(['lead', 'estimate', 'client', 'job', 'sub', 'user', 'org', 'project', 'task']);
 
 // Lightweight MIME detection — sharp only handles raster images, so
 // anything outside this set bypasses the resize pipeline.

@@ -1317,6 +1317,7 @@
           '<button class="p86-proj-tab' + (active === 'photos' ? ' active' : '') + '" onclick="window.p86Projects.switchTab(\'photos\')">Photos <span class="p86-proj-tab-count">(' + imageCount + ')</span></button>' +
           '<button class="p86-proj-tab' + (active === 'reports' ? ' active' : '') + '" onclick="window.p86Projects.switchTab(\'reports\')">Reports <span class="p86-proj-tab-count">(' + reportCount + ')</span></button>' +
           '<button class="p86-proj-tab' + (active === 'files' ? ' active' : '') + '" onclick="window.p86Projects.switchTab(\'files\')">Files <span class="p86-proj-tab-count">(' + fileCount + ')</span></button>' +
+          '<button class="p86-proj-tab' + (active === 'tasks' ? ' active' : '') + '" onclick="window.p86Projects.switchTab(\'tasks\')">Tasks</button>' +
         '</div>';
       })() +
 
@@ -1387,6 +1388,11 @@
       // ===== FILES TAB =====
       '<div id="projTabFiles" class="p86-proj-tab-pane"' + (_detailState.activeTab === 'files' ? '' : ' style="display:none;"') + '>' +
         '<div id="projFilesHost"></div>' +
+      '</div>' +
+
+      // ===== TASKS TAB =====
+      '<div id="projTabTasks" class="p86-proj-tab-pane"' + (_detailState.activeTab === 'tasks' ? '' : ' style="display:none;"') + '>' +
+        '<div id="projTasksHost"></div>' +
       '</div>' +
 
       '</div>' + // end #projTabContent
@@ -1581,10 +1587,10 @@
   // paints the chosen one on demand. activeTab persists in
   // _detailState across paintDetail() calls within a single open.
   function switchTab(name) {
-    if (!['photos', 'reports', 'files'].includes(name)) return;
+    if (!['photos', 'reports', 'files', 'tasks'].includes(name)) return;
     _detailState.activeTab = name;
     // Toggle pane visibility without a full re-render.
-    var panes = { photos: 'projTabPhotos', reports: 'projTabReports', files: 'projTabFiles' };
+    var panes = { photos: 'projTabPhotos', reports: 'projTabReports', files: 'projTabFiles', tasks: 'projTabTasks' };
     Object.keys(panes).forEach(function(k) {
       var el = document.getElementById(panes[k]);
       if (el) el.style.display = (k === name) ? '' : 'none';
@@ -1600,6 +1606,25 @@
     });
     if (name === 'reports') paintReportsTab();
     else if (name === 'files') paintFilesTab();
+    else if (name === 'tasks') paintTasksTab();
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // Tasks tab — embeds the shared Tasks panel (js/tasks.js) filtered to
+  // this project via tasks.entity_type='project'. The panel owns its own
+  // "+ Add" quick-add (pre-linked to this project) and list rendering.
+  // ──────────────────────────────────────────────────────────────────
+  function paintTasksTab() {
+    var host = document.getElementById('projTasksHost');
+    if (!host) return;
+    var p = _detailState.project;
+    if (!p) return;
+    if (!window.p86Tasks || typeof window.p86Tasks.mountEntityPanel !== 'function') {
+      host.innerHTML = '<div class="p86-proj-empty-line">Tasks module not loaded.</div>';
+      return;
+    }
+    var label = p.name || p.title || ('Project ' + p.id);
+    window.p86Tasks.mountEntityPanel(host, 'project', p.id, label);
   }
 
   // ──────────────────────────────────────────────────────────────────

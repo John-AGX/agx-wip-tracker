@@ -456,6 +456,20 @@
             projMount.innerHTML = '<div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;padding:6px 0;">Link this estimate to a lead or client to surface projects.</div>';
           }
         }
+
+        // ── Tasks panel ──
+        // Unlike projects (inherited from the parent lead/client), tasks
+        // link directly to this estimate via tasks.entity_type='estimate'.
+        var taskMount = document.getElementById('ee-tasks-mount');
+        if (taskMount && window.p86Tasks && typeof window.p86Tasks.mountEntityPanel === 'function') {
+          var est3 = getEstimate();
+          if (est3 && est3.id) {
+            var estLabel = (est3.title || est3.name) || ('Estimate ' + est3.id);
+            window.p86Tasks.mountEntityPanel(taskMount, 'estimate', est3.id, estLabel);
+          } else {
+            taskMount.innerHTML = '<div style="font-size:12px;color:var(--text-dim,#888);font-style:italic;padding:6px 0;">Save the estimate first to add tasks.</div>';
+          }
+        }
       }
     } catch (e) {
       console.warn('[estimate-editor] switchEstimateEditorTab(' + name + ') renderer threw:', e);
