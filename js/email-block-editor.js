@@ -185,11 +185,64 @@
       var card = document.createElement('div');
       card.className = 'p86-eb-block p86-eb-block-' + escapeAttr(block.type || 'unknown');
       card.setAttribute('data-block-idx', String(idx));
+      card.setAttribute('draggable', 'true');
 
-      // Per-block toolbar — move up / down / delete.
+      // Drag-and-drop reordering. Dragging starts on the whole card;
+      // dragstart sets the source index, dragover/drop on any sibling
+      // card runs the swap. Drop indicator: a 2px accent line above
+      // the hovered target. Plays well with the keyboard ▴▾
+      // fallback — both update state.blocks the same way.
+      card.addEventListener('dragstart', function(e) {
+        // Hide drag while in the middle of editing a contenteditable
+        // field — otherwise dragging selected text starts a drag.
+        if (e.target && e.target.classList && e.target.classList.contains('p86-eb-rt-editor')) {
+          e.preventDefault();
+          return;
+        }
+        try { e.dataTransfer.setData('text/plain', String(idx)); } catch (e2) {}
+        if (e.dataTransfer) e.dataTransfer.effectAllowed = 'move';
+        card.classList.add('p86-eb-dragging');
+      });
+      card.addEventListener('dragend', function() {
+        card.classList.remove('p86-eb-dragging');
+        // Clear all hover indicators.
+        host.querySelectorAll('.p86-eb-drop-target').forEach(function(el) {
+          el.classList.remove('p86-eb-drop-target');
+        });
+      });
+      card.addEventListener('dragover', function(e) {
+        e.preventDefault();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+        // Light up this card as the target.
+        host.querySelectorAll('.p86-eb-drop-target').forEach(function(el) {
+          el.classList.remove('p86-eb-drop-target');
+        });
+        card.classList.add('p86-eb-drop-target');
+      });
+      card.addEventListener('dragleave', function(e) {
+        // Only clear if leaving the card entirely (not just moving
+        // to a child).
+        if (e.target === card) card.classList.remove('p86-eb-drop-target');
+      });
+      card.addEventListener('drop', function(e) {
+        e.preventDefault();
+        card.classList.remove('p86-eb-drop-target');
+        var fromIdx = -1;
+        try { fromIdx = parseInt(e.dataTransfer.getData('text/plain'), 10); } catch (e2) {}
+        if (!Number.isFinite(fromIdx) || fromIdx < 0 || fromIdx === idx) return;
+        var moved = state.blocks.splice(fromIdx, 1)[0];
+        // Adjust target index for the removal shift.
+        var insertAt = (fromIdx < idx) ? idx - 1 : idx;
+        state.blocks.splice(insertAt, 0, moved);
+        emitChange();
+        paint();
+      });
+
+      // Per-block toolbar — drag handle, move up / down / delete.
       var toolbar = document.createElement('div');
       toolbar.className = 'p86-eb-block-toolbar';
       toolbar.innerHTML =
+        '<span class="p86-eb-block-handle" title="Drag to reorder">⋮⋮</span>' +
         '<span class="p86-eb-block-label">' + escapeHTML(blockTypeLabel(block.type)) + '</span>' +
         '<span class="p86-eb-block-actions">' +
           '<button class="p86-eb-block-btn" data-act="up"   title="Move up">▴</button>' +

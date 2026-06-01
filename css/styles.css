@@ -9774,7 +9774,25 @@ body.light-mode .p86-pv-tag-modal-chip {
   border: 1px solid #2a2a3a;
   border-radius: 6px;
   overflow: hidden;
+  transition: opacity 0.12s, border-color 0.12s, box-shadow 0.12s;
 }
+/* Drag states — the source card fades, the hover target shows an
+   accent top-border indicating the insertion point. */
+.p86-eb-block.p86-eb-dragging { opacity: 0.4; }
+.p86-eb-block.p86-eb-drop-target {
+  border-color: #4f8cff;
+  box-shadow: 0 -3px 0 0 #4f8cff inset;
+}
+.p86-eb-block-handle {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 18px;
+  margin-right: 6px;
+  color: var(--text-dim, #555);
+  font-size: 14px;
+  cursor: grab;
+  user-select: none;
+}
+.p86-eb-block-handle:active { cursor: grabbing; }
 .p86-eb-block-toolbar {
   display: flex; align-items: center; justify-content: space-between;
   padding: 6px 10px;

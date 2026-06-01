@@ -206,6 +206,18 @@ var TEMPLATE_SOURCES = {
 
   job_assigned: {
     subject: '{{subjectAction}}: {{job.jobNumber}} — {{job.title}}',
+    // Wave 4 — block-based default. Note: the detail "rows" used to
+    // live in a <table> with conditional rows via {{{detailsRowsHtml}}}.
+    // In block form we capture the canonical fields in a single text
+    // block; admins who want richer per-row control can switch to
+    // HTML mode.
+    blocks: [
+      { type: 'header', title: 'Job {{verb}}' },
+      { type: 'text', html: '<p>Hi {{recipientName}},</p><p><strong>{{assignedBy}}</strong> just {{verb}} on Project 86.</p>' },
+      { type: 'text', html: '<p><strong>Job #:</strong> {{job.jobNumber}}<br><strong>Title:</strong> {{job.title}}<br><strong>Client:</strong> {{job.client}}<br><strong>Status:</strong> {{job.status}}</p>' },
+      { type: 'button', label: 'Open in Project 86', url: '{{appUrl}}', bg_color: '#4f8cff' },
+      { type: 'footer', address: 'Project 86' }
+    ],
     html_body: shellWrap('Job {{verb}}',
       '<p>Hi {{recipientName}},</p>' +
       '<p>{{assignedBy}} just {{verb}} on Project 86:</p>' +
@@ -218,6 +230,13 @@ var TEMPLATE_SOURCES = {
 
   schedule_entry: {
     subject: 'Scheduled: {{job.jobLabel}} — {{entry.startDateFmt}}',
+    blocks: [
+      { type: 'header', title: 'You\'ve been scheduled' },
+      { type: 'text', html: '<p>Hi {{recipientName}},</p><p><strong>{{assignedBy}}</strong> just added you to a production schedule entry on Project 86.</p>' },
+      { type: 'text', html: '<p><strong>Job:</strong> {{job.jobLabel}}<br><strong>Start date:</strong> {{entry.startDateFmt}}<br><strong>Days:</strong> {{entry.daysLabel}}</p>' },
+      { type: 'button', label: 'Open Schedule', url: '{{appUrl}}#schedule', bg_color: '#4f8cff' },
+      { type: 'footer', address: 'Project 86' }
+    ],
     html_body: shellWrap('You\'ve been scheduled',
       '<p>Hi {{recipientName}},</p>' +
       '<p>{{assignedBy}} just added you to a production schedule entry on Project 86:</p>' +
@@ -233,6 +252,13 @@ var TEMPLATE_SOURCES = {
 
   sub_assigned: {
     subject: 'Assigned to {{job.jobLabel}}',
+    blocks: [
+      { type: 'header', title: 'You\'ve been assigned to a job' },
+      { type: 'text', html: '<p>Hi {{sub.greetingName}},</p><p>{{assignedBy.name}} just added <strong>{{sub.name}}</strong> as a subcontractor on this Project 86 job:</p>' },
+      { type: 'text', html: '<p><strong>Job #:</strong> {{job.jobNumber}}<br><strong>Job:</strong> {{job.title}}</p>' },
+      { type: 'text', html: '<p>If you have questions about scope or schedule, reply to this email and we\'ll loop in the right person.</p>' },
+      { type: 'footer', address: 'Project 86' }
+    ],
     html_body: shellWrap('You\'ve been assigned to a job',
       '<p>Hi {{sub.greetingName}},</p>' +
       '<p>{{assignedBy.name}} just added <strong>{{sub.name}}</strong> as a subcontractor on this Project 86 job:</p>' +
@@ -247,6 +273,13 @@ var TEMPLATE_SOURCES = {
 
   lead_status_sold: {
     subject: '\u{1F389} Lead won: {{lead.title}}',
+    blocks: [
+      { type: 'header', title: 'Lead won — Sold' },
+      { type: 'text', html: '<p>Hi {{salesperson.name}},</p><p>Congrats — <strong>{{lead.title}}</strong> just flipped to <strong>Sold</strong>.</p>' },
+      { type: 'text', html: '<p><strong>Lead:</strong> {{lead.title}}<br><strong>Client:</strong> {{lead.client_company}}<br><strong>Est. revenue:</strong> {{lead.estimatedRevenueFmt}}<br><strong>Marked by:</strong> {{changedBy.name}}</p>' },
+      { type: 'button', label: 'Open in Project 86', url: '{{appUrl}}', bg_color: '#059669' },
+      { type: 'footer', address: 'Project 86' }
+    ],
     html_body: shellWrap('Lead won — Sold',
       '<p>Hi {{salesperson.name}},</p>' +
       '<p>Congrats &mdash; <strong>{{lead.title}}</strong> just flipped to ' +
@@ -263,6 +296,13 @@ var TEMPLATE_SOURCES = {
 
   lead_status_lost: {
     subject: '{{statusLabel}}: {{lead.title}}',
+    blocks: [
+      { type: 'header', title: 'Lead status: {{statusLabel}}' },
+      { type: 'text', html: '<p>Hi {{salesperson.name}},</p><p><strong>{{lead.title}}</strong> just flipped to <strong>{{statusLabel}}</strong>.</p>' },
+      { type: 'text', html: '<p><strong>Lead:</strong> {{lead.title}}<br><strong>Client:</strong> {{lead.client_company}}<br><strong>Marked by:</strong> {{changedBy.name}}<br><strong>Reason:</strong> {{reason}}</p>' },
+      { type: 'button', label: 'Open in Project 86', url: '{{appUrl}}', bg_color: '#4f8cff' },
+      { type: 'footer', address: 'Project 86' }
+    ],
     html_body: shellWrap('Lead status: {{statusLabel}}',
       '<p>Hi {{salesperson.name}},</p>' +
       '<p><strong>{{lead.title}}</strong> just flipped to ' +
@@ -279,6 +319,14 @@ var TEMPLATE_SOURCES = {
 
   cert_expiring: {
     subject: 'Cert expiring: {{cert.typeLabel}} ({{sub.name}})',
+    blocks: [
+      { type: 'header', title: '{{cert.typeLabel}} certificate expiring' },
+      { type: 'text', html: '<p>Hi {{sub.greetingName}},</p><p>Your <strong>{{cert.typeLabel}}</strong> certificate on file with Project 86 is approaching expiration.</p>' },
+      { type: 'text', html: '<p><strong>Sub:</strong> {{sub.name}}<br><strong>Certificate:</strong> {{cert.typeLabel}}<br><strong>Expiration date:</strong> {{cert.expirationDateFmt}}</p>' },
+      { type: 'text', html: '<p>Please send an updated copy at your earliest convenience — reply to this email or use the button below.</p>' },
+      { type: 'button', label: 'Open in Project 86', url: '{{appUrl}}', bg_color: '#4f8cff' },
+      { type: 'footer', address: 'Project 86' }
+    ],
     html_body: shellWrap('{{cert.typeLabel}} certificate expiring',
       '<p>Hi {{sub.greetingName}},</p>' +
       '<p>Your <strong>{{cert.typeLabel}}</strong> certificate on file with Project 86 is approaching expiration.</p>' +
