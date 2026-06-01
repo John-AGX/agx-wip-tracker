@@ -1703,6 +1703,468 @@
     });
   }
 
+  // ── Campaigns (Wave 9) ─────────────────────────────────────────
+  // One module covering list + builder for marketing-style bulk
+  // sends. List view shows status/counts; clicking a row opens the
+  // builder. Builder reuses the email block editor (window.p86EmailBlocks)
+  // for the body so the marketing surface and template surface share
+  // the same visual editing experience.
+
+  var _campaignsView = 'list';        // 'list' | 'edit'
+  var _campaignsList = [];
+  var _campaignDraft = null;           // current builder state
+  var _campaignBlockEditor = null;     // mounted editor instance
+
+  function renderCampaignsHost() {
+    var host = document.getElementById('campaigns-host');
+    if (!host) return;
+    if (_campaignsView === 'edit') {
+      renderCampaignBuilder(host);
+    } else {
+      loadCampaignsList();
+    }
+  }
+
+  function loadCampaignsList() {
+    var host = document.getElementById('campaigns-host');
+    if (!host) return;
+    host.innerHTML = '<div style="padding:12px;color:var(--text-dim,#888);">Loading campaigns…</div>';
+    window.p86Api.get('/api/email/campaigns').then(function(r) {
+      _campaignsList = r.rows || [];
+      renderCampaignsList(host);
+    }).catch(function(err) {
+      host.innerHTML = '<div style="padding:12px;color:#f87171;">Failed to load campaigns: ' + escapeHTML(err.message || '') + '</div>';
+    });
+  }
+
+  function statusPill(s) {
+    var colors = {
+      draft:     { bg: '#374151', fg: '#e5e7eb' },
+      scheduled: { bg: '#1e3a8a', fg: '#bfdbfe' },
+      sending:   { bg: '#92400e', fg: '#fde68a' },
+      completed: { bg: '#064e3b', fg: '#bbf7d0' },
+      failed:    { bg: '#7f1d1d', fg: '#fecaca' },
+      canceled:  { bg: '#3f3f46', fg: '#d4d4d8' }
+    };
+    var c = colors[s] || colors.draft;
+    return '<span style="display:inline-block;padding:2px 9px;border-radius:10px;background:' + c.bg + ';color:' + c.fg + ';font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.4px;">' + escapeHTML(s || 'draft') + '</span>';
+  }
+
+  function renderCampaignsList(host) {
+    var rows = _campaignsList;
+    var header =
+      '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">' +
+        '<h3 style="margin:0;">All campaigns</h3>' +
+        '<button class="primary" onclick="openCampaignBuilder()" style="white-space:nowrap;">&#x2795; New campaign</button>' +
+      '</div>';
+    if (!rows.length) {
+      host.innerHTML = header +
+        '<div class="card" style="padding:24px;text-align:center;color:var(--text-dim,#888);font-size:13px;">' +
+          'No campaigns yet. Create your first one to send a one-off message to a group of subs, leads, or clients.' +
+        '</div>';
+      return;
+    }
+    var tbl = '<div class="card" style="padding:0;overflow:hidden;">' +
+      '<table class="dense-table" style="width:100%;border-collapse:collapse;font-size:13px;">' +
+        '<thead style="border-bottom:1px solid var(--border,#333);">' +
+          '<tr>' +
+            '<th style="text-align:left;padding:10px 12px;">Name</th>' +
+            '<th style="text-align:left;padding:10px 12px;">Recipients</th>' +
+            '<th style="text-align:left;padding:10px 12px;">Status</th>' +
+            '<th style="text-align:right;padding:10px 12px;">Sent / Total</th>' +
+            '<th style="text-align:left;padding:10px 12px;">Scheduled</th>' +
+            '<th style="padding:10px 12px;width:90px;"></th>' +
+          '</tr>' +
+        '</thead><tbody>';
+    rows.forEach(function(r) {
+      var q = r.recipient_query || {};
+      var recDesc = (q.type || 'manual');
+      if (q.filters && q.filters.trade) recDesc += ' / ' + q.filters.trade;
+      if (q.filters && q.filters.status) recDesc += ' / ' + q.filters.status;
+      if (q.filters && q.filters.client_type) recDesc += ' / ' + q.filters.client_type;
+      var sched = r.scheduled_at ? new Date(r.scheduled_at).toLocaleString() : '—';
+      var safeId = String(r.id).replace(/'/g, '');
+      tbl +=
+        '<tr style="border-bottom:1px solid var(--border,#2a2a3a);cursor:pointer;" onclick="openCampaignBuilder(\'' + safeId + '\')">' +
+          '<td style="padding:10px 12px;font-weight:600;">' + escapeHTML(r.name) + '</td>' +
+          '<td style="padding:10px 12px;color:var(--text-dim,#aaa);">' + escapeHTML(recDesc) + '</td>' +
+          '<td style="padding:10px 12px;">' + statusPill(r.status) + '</td>' +
+          '<td style="padding:10px 12px;text-align:right;font-variant-numeric:tabular-nums;">' +
+            (r.sent_count || 0) + ' / ' + (r.total_count || 0) +
+            (r.failed_count ? ' <span style="color:#f87171;">(' + r.failed_count + ' failed)</span>' : '') +
+          '</td>' +
+          '<td style="padding:10px 12px;color:var(--text-dim,#aaa);">' + escapeHTML(sched) + '</td>' +
+          '<td style="padding:10px 12px;text-align:right;" onclick="event.stopPropagation();">' +
+            (r.status === 'draft' || r.status === 'scheduled'
+              ? '<button class="ghost small" onclick="cancelCampaign(\'' + safeId + '\')" title="Cancel" style="color:#f59e0b;">&#x2715;</button>'
+              : '') +
+            ' <button class="ghost small" onclick="deleteCampaign(\'' + safeId + '\')" title="Archive" style="color:#f87171;">&#x1F5D1;</button>' +
+          '</td>' +
+        '</tr>';
+    });
+    tbl += '</tbody></table></div>';
+    host.innerHTML = header + tbl;
+  }
+
+  function openCampaignBuilder(id) {
+    _campaignsView = 'edit';
+    if (id) {
+      // Load existing
+      window.p86Api.get('/api/email/campaigns/' + encodeURIComponent(id)).then(function(r) {
+        _campaignDraft = r.campaign || newCampaignDraft();
+        _campaignDraft._recipients = r.recipients || [];
+        renderCampaignsHost();
+      }).catch(function(err) {
+        alert('Failed to load campaign: ' + (err.message || ''));
+        _campaignsView = 'list';
+        renderCampaignsHost();
+      });
+    } else {
+      _campaignDraft = newCampaignDraft();
+      renderCampaignsHost();
+    }
+  }
+  window.openCampaignBuilder = openCampaignBuilder;
+
+  function newCampaignDraft() {
+    return {
+      id: null,
+      name: '',
+      event_key: null,
+      subject: '',
+      body: '',
+      recipient_query: { type: 'subs', filters: {} },
+      scheduled_at: null,
+      status: 'draft',
+      total_count: 0, sent_count: 0, failed_count: 0
+    };
+  }
+
+  function renderCampaignBuilder(host) {
+    var c = _campaignDraft || newCampaignDraft();
+    var editable = (c.status === 'draft' || c.status === 'scheduled' || !c.id);
+    var sched = c.scheduled_at ? new Date(c.scheduled_at) : null;
+    var schedVal = sched ? new Date(sched.getTime() - sched.getTimezoneOffset() * 60000).toISOString().slice(0, 16) : '';
+    var qType = (c.recipient_query && c.recipient_query.type) || 'subs';
+    var qFilters = (c.recipient_query && c.recipient_query.filters) || {};
+    var qManual = (c.recipient_query && c.recipient_query.manual) || [];
+    var manualText = Array.isArray(qManual) ? qManual.map(function(r) {
+      if (typeof r === 'string') return r;
+      return r.name ? (r.name + ' <' + r.email + '>') : r.email;
+    }).join('\n') : '';
+
+    var html =
+      '<div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">' +
+        '<button class="ghost" onclick="closeCampaignBuilder()">&#x2190; Back to campaigns</button>' +
+        '<h3 style="margin:0;flex:1;">' + escapeHTML(c.name || 'New campaign') + '</h3>' +
+        statusPill(c.status) +
+      '</div>' +
+
+      // Name + scheduling row
+      '<div class="card" style="padding:14px;margin-bottom:12px;">' +
+        '<div style="display:grid;grid-template-columns:2fr 1fr;gap:14px;">' +
+          '<div>' +
+            '<label style="display:block;font-size:11px;text-transform:uppercase;color:var(--text-dim,#888);margin-bottom:4px;">Campaign name (internal)</label>' +
+            '<input id="camp-name" type="text" value="' + escapeHTML(c.name) + '" ' +
+              (editable ? '' : 'disabled') + ' style="width:100%;" placeholder="e.g. May 2026 sub announcement" />' +
+          '</div>' +
+          '<div>' +
+            '<label style="display:block;font-size:11px;text-transform:uppercase;color:var(--text-dim,#888);margin-bottom:4px;">Schedule (optional)</label>' +
+            '<input id="camp-sched" type="datetime-local" value="' + escapeHTML(schedVal) + '" ' +
+              (editable ? '' : 'disabled') + ' style="width:100%;" />' +
+            '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:4px;">Leave empty to send immediately on click.</div>' +
+          '</div>' +
+        '</div>' +
+      '</div>' +
+
+      // Recipients card
+      '<div class="card" style="padding:14px;margin-bottom:12px;">' +
+        '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">' +
+          '<h4 style="margin:0;">Recipients</h4>' +
+          '<button class="secondary small" onclick="previewCampaignRecipients()" ' + (editable ? '' : 'disabled') + '>&#x1F50D; Preview list</button>' +
+        '</div>' +
+        '<div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">' +
+          ['subs', 'leads', 'clients', 'manual'].map(function(t) {
+            var checked = qType === t ? 'checked' : '';
+            return '<label style="display:flex;align-items:center;gap:6px;cursor:pointer;">' +
+              '<input type="radio" name="camp-type" value="' + t + '" ' + checked + ' onchange="onCampaignTypeChange(this.value)" ' + (editable ? '' : 'disabled') + ' /> ' +
+              t.charAt(0).toUpperCase() + t.slice(1) +
+            '</label>';
+          }).join('') +
+        '</div>' +
+        '<div id="camp-filter-host">' +
+          renderCampaignFilters(qType, qFilters, manualText, editable) +
+        '</div>' +
+        '<div id="camp-resolve-result" style="margin-top:10px;font-size:12px;color:var(--text-dim,#888);"></div>' +
+      '</div>' +
+
+      // Subject + body editor card
+      '<div class="card" style="padding:14px;margin-bottom:12px;">' +
+        '<div style="margin-bottom:10px;">' +
+          '<label style="display:block;font-size:11px;text-transform:uppercase;color:var(--text-dim,#888);margin-bottom:4px;">Subject</label>' +
+          '<input id="camp-subject" type="text" value="' + escapeHTML(c.subject) + '" ' +
+            (editable ? '' : 'disabled') + ' style="width:100%;" placeholder="e.g. Important update for our subcontractors" />' +
+          '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:4px;">Available variables: {{name}}, {{first_name}}, {{company}}, {{email}}</div>' +
+        '</div>' +
+        '<label style="display:block;font-size:11px;text-transform:uppercase;color:var(--text-dim,#888);margin-bottom:4px;">Body</label>' +
+        '<div id="camp-body-host" style="border:1px solid var(--border,#333);border-radius:6px;padding:8px;background:var(--input-bg,#0f0f1e);"></div>' +
+      '</div>' +
+
+      // Action footer
+      '<div style="display:flex;gap:8px;justify-content:flex-end;padding:12px 0;">' +
+        (c.status === 'draft' || !c.id
+          ? '<button class="ghost" onclick="saveCampaign(false)">Save draft</button>' +
+            '<button class="primary" onclick="saveCampaign(true)">' +
+              (schedVal ? '&#x1F4C5; Schedule send' : '&#x1F4E4; Send now') +
+            '</button>'
+          : c.status === 'scheduled'
+            ? '<button class="secondary" onclick="cancelCampaign(\'' + escapeHTML(c.id) + '\')">Cancel schedule</button>'
+            : '<div style="color:var(--text-dim,#888);font-size:12px;align-self:center;">Campaign is ' + escapeHTML(c.status) + ' &mdash; no further edits.</div>') +
+      '</div>';
+
+    // Recipients preview (for already-sent campaigns)
+    if (c._recipients && c._recipients.length) {
+      html += '<div class="card" style="padding:14px;margin-top:8px;">' +
+        '<h4 style="margin:0 0 10px 0;">Recipient log <span style="color:var(--text-dim,#888);font-size:11px;font-weight:normal;">(' + c._recipients.length + ' shown)</span></h4>' +
+        '<table class="dense-table" style="width:100%;border-collapse:collapse;font-size:12px;">' +
+          '<thead style="border-bottom:1px solid var(--border,#333);"><tr>' +
+            '<th style="text-align:left;padding:6px 8px;">Email</th>' +
+            '<th style="text-align:left;padding:6px 8px;">Status</th>' +
+            '<th style="text-align:left;padding:6px 8px;">Sent at</th>' +
+            '<th style="text-align:left;padding:6px 8px;">Error</th>' +
+          '</tr></thead><tbody>' +
+          c._recipients.map(function(r) {
+            return '<tr style="border-bottom:1px solid var(--border,#2a2a3a);">' +
+              '<td style="padding:6px 8px;">' + escapeHTML(r.email) + '</td>' +
+              '<td style="padding:6px 8px;">' + statusPill(r.status) + '</td>' +
+              '<td style="padding:6px 8px;color:var(--text-dim,#aaa);">' + (r.sent_at ? escapeHTML(new Date(r.sent_at).toLocaleString()) : '—') + '</td>' +
+              '<td style="padding:6px 8px;color:#f87171;">' + escapeHTML(r.error || '') + '</td>' +
+            '</tr>';
+          }).join('') +
+        '</tbody></table></div>';
+    }
+
+    host.innerHTML = html;
+
+    // Mount the block editor for the body.
+    var bodyHost = document.getElementById('camp-body-host');
+    if (bodyHost && window.p86EmailBlocks && window.p86EmailBlocks.mount) {
+      var initialBlocks = null;
+      var initialHtml = '';
+      try {
+        var parsed = JSON.parse(c.body || '{}');
+        if (parsed && Array.isArray(parsed.blocks)) {
+          initialBlocks = parsed.blocks;
+        } else {
+          initialHtml = c.body || '';
+        }
+      } catch (e) {
+        initialHtml = c.body || '';
+      }
+      _campaignBlockEditor = window.p86EmailBlocks.mount(bodyHost, {
+        blocks: initialBlocks || (initialHtml ? [] : [
+          { type: 'header', title: 'Hi {{first_name}}', subtitle: '' },
+          { type: 'text',   html: '<p>Write your message here…</p>' },
+          { type: 'footer', address: '' }
+        ]),
+        htmlBody: initialHtml,
+        htmlMode: !initialBlocks && !!initialHtml,
+        variables: ['name', 'first_name', 'company', 'email'],
+        onChange: function() { /* draft is sampled at save time */ }
+      });
+      if (!editable && _campaignBlockEditor && _campaignBlockEditor.lockEditing) {
+        try { _campaignBlockEditor.lockEditing(); } catch (e) {}
+      }
+    }
+  }
+
+  function renderCampaignFilters(type, filters, manualText, editable) {
+    var dis = editable ? '' : 'disabled';
+    if (type === 'subs') {
+      return '<div>' +
+        '<label style="display:block;font-size:11px;text-transform:uppercase;color:var(--text-dim,#888);margin-bottom:4px;">Trade (optional)</label>' +
+        '<input id="camp-filter-trade" type="text" value="' + escapeHTML(filters.trade || '') + '" ' + dis + ' style="width:300px;" placeholder="e.g. Painter, Drywall — leave empty for all" />' +
+      '</div>';
+    }
+    if (type === 'leads') {
+      var statusOpts = ['', 'new', 'qualified', 'proposal_sent', 'sold', 'lost'].map(function(s) {
+        var sel = (filters.status || '') === s ? ' selected' : '';
+        return '<option value="' + s + '"' + sel + '>' + (s || '(any)') + '</option>';
+      }).join('');
+      return '<div>' +
+        '<label style="display:block;font-size:11px;text-transform:uppercase;color:var(--text-dim,#888);margin-bottom:4px;">Lead status (optional)</label>' +
+        '<select id="camp-filter-status" ' + dis + ' style="width:300px;">' + statusOpts + '</select>' +
+      '</div>';
+    }
+    if (type === 'clients') {
+      var typeOpts = ['', 'HOA', 'Property Mgmt', 'Apartment', 'Commercial', 'Other'].map(function(s) {
+        var sel = (filters.client_type || '') === s ? ' selected' : '';
+        return '<option value="' + s + '"' + sel + '>' + (s || '(any)') + '</option>';
+      }).join('');
+      return '<div>' +
+        '<label style="display:block;font-size:11px;text-transform:uppercase;color:var(--text-dim,#888);margin-bottom:4px;">Client type (optional)</label>' +
+        '<select id="camp-filter-client-type" ' + dis + ' style="width:300px;">' + typeOpts + '</select>' +
+      '</div>';
+    }
+    // manual
+    return '<div>' +
+      '<label style="display:block;font-size:11px;text-transform:uppercase;color:var(--text-dim,#888);margin-bottom:4px;">Paste addresses (one per line)</label>' +
+      '<textarea id="camp-manual" rows="5" ' + dis + ' style="width:100%;font-family:Menlo,Consolas,monospace;font-size:12px;" placeholder="alice@example.com\nBob Builder &lt;bob@example.com&gt;">' + escapeHTML(manualText) + '</textarea>' +
+    '</div>';
+  }
+
+  function onCampaignTypeChange(t) {
+    if (!_campaignDraft) return;
+    _campaignDraft.recipient_query = { type: t, filters: {} };
+    document.getElementById('camp-filter-host').innerHTML = renderCampaignFilters(t, {}, '', true);
+  }
+  window.onCampaignTypeChange = onCampaignTypeChange;
+
+  function syncCampaignDraftFromInputs() {
+    var c = _campaignDraft;
+    if (!c) return;
+    var nameEl = document.getElementById('camp-name');
+    var subjEl = document.getElementById('camp-subject');
+    var schedEl = document.getElementById('camp-sched');
+    if (nameEl) c.name = nameEl.value || '';
+    if (subjEl) c.subject = subjEl.value || '';
+    if (schedEl) c.scheduled_at = schedEl.value ? new Date(schedEl.value).toISOString() : null;
+    // Recipient query
+    var typeEl = document.querySelector('input[name="camp-type"]:checked');
+    var t = typeEl ? typeEl.value : 'subs';
+    var rq = { type: t };
+    if (t === 'subs') {
+      var trade = (document.getElementById('camp-filter-trade') || {}).value || '';
+      rq.filters = trade ? { trade: trade } : {};
+    } else if (t === 'leads') {
+      var st = (document.getElementById('camp-filter-status') || {}).value || '';
+      rq.filters = st ? { status: st } : {};
+    } else if (t === 'clients') {
+      var ct = (document.getElementById('camp-filter-client-type') || {}).value || '';
+      rq.filters = ct ? { client_type: ct } : {};
+    } else if (t === 'manual') {
+      var ta = document.getElementById('camp-manual');
+      var lines = (ta && ta.value ? ta.value : '').split(/\r?\n/).map(function(s) { return s.trim(); }).filter(Boolean);
+      rq.manual = lines.map(function(line) {
+        var m = line.match(/^(.+?)\s*<([^>]+)>\s*$/);
+        if (m) return { name: m[1].trim(), email: m[2].trim() };
+        return { email: line };
+      });
+    }
+    c.recipient_query = rq;
+    // Body from block editor
+    if (_campaignBlockEditor && _campaignBlockEditor.getBody) {
+      try { c.body = _campaignBlockEditor.getBody() || ''; } catch (e) {}
+    }
+  }
+
+  function previewCampaignRecipients() {
+    syncCampaignDraftFromInputs();
+    var c = _campaignDraft;
+    var resBox = document.getElementById('camp-resolve-result');
+    if (resBox) resBox.textContent = 'Resolving…';
+    // Always save the draft first so /resolve has a row to read.
+    saveDraftSilent().then(function() {
+      return window.p86Api.post('/api/email/campaigns/' + encodeURIComponent(c.id) + '/resolve', {});
+    }).then(function(r) {
+      var n = r.total || 0;
+      var sample = (r.sample || []).slice(0, 8).map(function(x) {
+        return escapeHTML(x.name ? (x.name + ' <' + x.email + '>') : x.email);
+      }).join(', ');
+      if (resBox) {
+        if (!n) {
+          resBox.innerHTML = '<span style="color:#f59e0b;">No recipients matched. Adjust the filter above.</span>';
+        } else {
+          resBox.innerHTML = '<strong style="color:#34d399;">' + n + ' recipient' + (n === 1 ? '' : 's') + '</strong>' +
+            (sample ? ' &mdash; <span style="color:var(--text-dim,#888);">' + sample + (n > 8 ? ', …' : '') + '</span>' : '');
+        }
+      }
+    }).catch(function(err) {
+      if (resBox) resBox.innerHTML = '<span style="color:#f87171;">Resolve failed: ' + escapeHTML(err.message || '') + '</span>';
+    });
+  }
+  window.previewCampaignRecipients = previewCampaignRecipients;
+
+  // Persist the current draft (create or update). Returns promise.
+  function saveDraftSilent() {
+    var c = _campaignDraft;
+    if (!c) return Promise.reject(new Error('no draft'));
+    var payload = {
+      name: c.name, subject: c.subject, body: c.body,
+      event_key: c.event_key || null,
+      recipient_query: c.recipient_query || { type: 'manual' },
+      scheduled_at: c.scheduled_at || null
+    };
+    if (c.id) {
+      return window.p86Api.put('/api/email/campaigns/' + encodeURIComponent(c.id), payload).then(function() { return c.id; });
+    }
+    return window.p86Api.post('/api/email/campaigns', payload).then(function(r) {
+      c.id = r.id;
+      return r.id;
+    });
+  }
+
+  function saveCampaign(thenSend) {
+    syncCampaignDraftFromInputs();
+    var c = _campaignDraft;
+    if (!c.name) { alert('Campaign needs a name.'); return; }
+    if (!c.subject) { alert('Campaign needs a subject.'); return; }
+    if (!c.body) { alert('Campaign needs a body.'); return; }
+    saveDraftSilent().then(function(id) {
+      if (!thenSend) {
+        alert('Draft saved.');
+        _campaignsView = 'list';
+        renderCampaignsHost();
+        return;
+      }
+      // Confirm before firing.
+      var sched = c.scheduled_at;
+      var label = sched ? 'schedule send for ' + new Date(sched).toLocaleString() : 'send now';
+      if (!confirm('Ready to ' + label + '? This will resolve the recipient list and queue all emails.')) return;
+      return window.p86Api.post('/api/email/campaigns/' + encodeURIComponent(id) + '/send',
+        sched ? { scheduled_at: sched } : {}
+      ).then(function(r) {
+        if (r.scheduled) {
+          alert('Campaign scheduled for ' + new Date(r.scheduled_at).toLocaleString());
+        } else {
+          alert('Campaign started: ' + (r.total || 0) + ' recipients queued.');
+        }
+        _campaignsView = 'list';
+        renderCampaignsHost();
+      });
+    }).catch(function(err) {
+      alert('Save failed: ' + (err.message || ''));
+    });
+  }
+  window.saveCampaign = saveCampaign;
+
+  function cancelCampaign(id) {
+    if (!confirm('Cancel this campaign? Any queued recipients will be dropped.')) return;
+    window.p86Api.post('/api/email/campaigns/' + encodeURIComponent(id) + '/cancel', {}).then(function() {
+      _campaignsView = 'list';
+      renderCampaignsHost();
+    }).catch(function(err) { alert('Cancel failed: ' + (err.message || '')); });
+  }
+  window.cancelCampaign = cancelCampaign;
+
+  function deleteCampaign(id) {
+    if (!confirm('Archive this campaign? It will be hidden from the list (history is preserved).')) return;
+    window.p86Api.del('/api/email/campaigns/' + encodeURIComponent(id)).then(function() {
+      loadCampaignsList();
+    }).catch(function(err) { alert('Archive failed: ' + (err.message || '')); });
+  }
+  window.deleteCampaign = deleteCampaign;
+
+  function closeCampaignBuilder() {
+    if (_campaignBlockEditor && _campaignBlockEditor.destroy) {
+      try { _campaignBlockEditor.destroy(); } catch (e) {}
+    }
+    _campaignBlockEditor = null;
+    _campaignsView = 'list';
+    renderCampaignsHost();
+  }
+  window.closeCampaignBuilder = closeCampaignBuilder;
+
   // The Invite-user button opens a 2-way choice: brand-new user (the
   // existing Add User modal flow) OR existing user (re-send a working
   // credential by resetting their password). The existing-user path is
@@ -2834,10 +3296,11 @@
   // settings + templates surfaces share one home (both back to
   // app_settings under the hood).
   var TEMPLATES_TABS = [
-    { key: 'proposal', label: '📄 Proposal',  desc: 'Header, letter body, exclusions, signature.' },
-    { key: 'bt',       label: '📊 BT Export', desc: 'Buildertrend cost-category mapping.' },
-    { key: 'folders',  label: '📁 Folders',   desc: 'Default folder set shown for new leads / estimates / jobs / clients before any file is uploaded.' },
-    { key: 'email',    label: '📧 Email',     desc: 'Per-event triggers + branded templates for emails your org sends — assignments, lead notifications, sub handoffs, cert reminders.' }
+    { key: 'proposal',  label: '📄 Proposal',  desc: 'Header, letter body, exclusions, signature.' },
+    { key: 'bt',        label: '📊 BT Export', desc: 'Buildertrend cost-category mapping.' },
+    { key: 'folders',   label: '📁 Folders',   desc: 'Default folder set shown for new leads / estimates / jobs / clients before any file is uploaded.' },
+    { key: 'email',     label: '📧 Email',     desc: 'Per-event triggers + branded templates for emails your org sends — assignments, lead notifications, sub handoffs, cert reminders.' },
+    { key: 'campaigns', label: '📤 Campaigns', desc: 'One-off bulk sends — newsletters, sub announcements, marketing pushes. Pick recipients from your existing subs / leads / clients or paste addresses, design the email, send now or schedule for later.' }
   ];
 
   function switchTemplatesTab(key) {
@@ -2990,6 +3453,18 @@
       loadOrgBranding();
       var refreshBtn = document.getElementById('org-email-events-refresh');
       if (refreshBtn) refreshBtn.addEventListener('click', loadOrgScopeEvents);
+      return;
+    }
+
+    // Campaigns tab (Wave 9) — list + builder for marketing-style
+    // bulk sends. Self-contained: no shared Save All footer.
+    if (_templatesActiveTab === 'campaigns') {
+      var campHint = activeTab && activeTab.desc
+        ? '<p style="margin:0 0 12px 0;color:var(--text-dim,#888);font-size:12px;">' + activeTab.desc + '</p>'
+        : '';
+      pane.innerHTML = tabsHTML + campHint +
+        '<div id="campaigns-host"><div style="padding:12px;color:var(--text-dim,#888);">Loading campaigns…</div></div>';
+      renderCampaignsHost();
       return;
     }
 

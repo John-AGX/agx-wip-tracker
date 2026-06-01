@@ -36,6 +36,7 @@ const messageRoutes = require('./routes/message-routes');
 const scheduleRoutes = require('./routes/schedule-routes');
 const weatherRoutes = require('./routes/weather-routes');
 const emailRoutes = require('./routes/email-routes');
+const emailCampaignsRoutes = require('./routes/email-campaigns-routes');
 const adminAgentsRoutes = require('./routes/admin-agents-routes');
 const contextRegistryRoutes = require('./routes/context-registry-routes');
 const adminBatchRoutes = require('./routes/admin-batch-routes');
@@ -153,6 +154,10 @@ app.use('/api', subPortalRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/schedule', scheduleRoutes);
 app.use('/api/weather', weatherRoutes);
+// Campaigns routes mount BEFORE the generic email mount so the more
+// specific /api/email/campaigns paths win over any future glob in
+// the parent router.
+app.use('/api/email/campaigns', emailCampaignsRoutes);
 app.use('/api/email', emailRoutes);
 app.use('/api/admin/agents', adminAgentsRoutes);
 app.use('/api/admin/context-registry', contextRegistryRoutes);
@@ -295,6 +300,15 @@ function startServer() {
         require('./weekly-digest-cron').start();
       } catch (e) {
         console.warn('[weekly-digest] failed to start:', e && e.message);
+      }
+      // Marketing campaigns worker (Wave 9). Ticks every 60s: picks
+      // up scheduled campaigns whose time has come, drains in-flight
+      // batches one chunk per campaign per tick. Self-gated by the
+      // campaign status field.
+      try {
+        require('./email-campaigns').start();
+      } catch (e) {
+        console.warn('[campaigns] failed to start worker:', e && e.message);
       }
       // Phase 5 — proactive-watch scheduler. Ticks every 60s,
       // fires watches with next_fire_at <= NOW. Runs in-process; one

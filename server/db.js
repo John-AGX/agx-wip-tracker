@@ -107,6 +107,58 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_email_log_events_recent
       ON email_log_events(occurred_at DESC);
 
+    -- Email campaigns (Wave 9 — marketing-style bulk sends). One row
+    -- per outbound batch. recipient_query is the JSONB filter the org
+    -- admin saved on the builder page; we re-resolve it at send time
+    -- so a 'send to all active subs' campaign picks up a sub added
+    -- after the campaign was drafted. subject + body are the override
+    -- shape — empty means use the underlying event's template (the
+    -- builder can also pick a 'custom' shape without a backing event).
+    -- status lifecycle: draft → scheduled → sending → completed | failed | canceled.
+    CREATE TABLE IF NOT EXISTS email_campaigns (
+      id              TEXT PRIMARY KEY,
+      organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      name            TEXT NOT NULL,
+      event_key       TEXT,                            -- nullable: NULL = custom
+      subject         TEXT NOT NULL,
+      body            TEXT NOT NULL,                   -- raw HTML or blocks JSON
+      recipient_query JSONB NOT NULL DEFAULT '{}'::jsonb,
+      scheduled_at    TIMESTAMPTZ,                     -- NULL = send immediately on POST /send
+      status          TEXT NOT NULL DEFAULT 'draft',
+      created_by      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      sent_at         TIMESTAMPTZ,
+      total_count     INTEGER NOT NULL DEFAULT 0,
+      sent_count      INTEGER NOT NULL DEFAULT 0,
+      failed_count    INTEGER NOT NULL DEFAULT 0,
+      archived_at     TIMESTAMPTZ
+    );
+    CREATE INDEX IF NOT EXISTS idx_email_campaigns_org
+      ON email_campaigns(organization_id, created_at DESC) WHERE archived_at IS NULL;
+    CREATE INDEX IF NOT EXISTS idx_email_campaigns_due
+      ON email_campaigns(scheduled_at) WHERE status = 'scheduled' AND archived_at IS NULL;
+
+    -- Per-campaign materialized recipient list. Resolved at send time
+    -- (POST /send → resolveRecipients → INSERT … one row per email).
+    -- Status: queued → sent | failed. log_id (when sent) links back to
+    -- email_log so the analytics rollup can correlate opens/clicks.
+    -- params is the per-row interpolation context: {{name}}, {{email}},
+    -- {{company}}, {{first_name}}, plus org defaults.
+    CREATE TABLE IF NOT EXISTS email_campaign_recipients (
+      id            SERIAL PRIMARY KEY,
+      campaign_id   TEXT NOT NULL REFERENCES email_campaigns(id) ON DELETE CASCADE,
+      email         TEXT NOT NULL,
+      name          TEXT,
+      params        JSONB NOT NULL DEFAULT '{}'::jsonb,
+      status        TEXT NOT NULL DEFAULT 'queued',
+      sent_at       TIMESTAMPTZ,
+      log_id        TEXT,
+      error         TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_email_campaign_recipients_campaign
+      ON email_campaign_recipients(campaign_id, status);
+
+
     -- Seed AGX as the sole org. Idempotent — no-op if a row with
     -- slug='agx' already exists. The identity_body matches what
     -- AGENT_SYSTEM_BASELINE.job currently hardcodes about AGX so
