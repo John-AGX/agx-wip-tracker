@@ -170,13 +170,20 @@ router.get('/log',
 // ── Template editor endpoints (E1B) ────────────────────────────────
 const emailTemplates = require('../email-templates');
 
-// GET /api/email/templates — catalog of every event with override state.
+// GET /api/email/templates — catalog of every event with override state
+// for the caller's organization. System admins see overrides scoped
+// to their primary org (same as org admins) — a single platform admin
+// editing for all orgs is a future feature.
 router.get('/templates',
   requireAuth, requireRole('admin'),
   async (req, res) => {
     try {
+      const orgId = (req.user && req.user.organization_id) || null;
+      const params = orgId != null ? [orgId] : [];
+      const where = orgId != null ? 'WHERE organization_id = $1' : '';
       const { rows } = await pool.query(
-        'SELECT event_key, subject, html_body, updated_at FROM email_template_overrides'
+        'SELECT event_key, subject, html_body, updated_at FROM email_template_overrides ' + where,
+        params
       );
       const overridesByKey = {};
       rows.forEach(r => { overridesByKey[r.event_key] = r; });
@@ -208,10 +215,19 @@ router.get('/templates/:key',
       const event = EVENTS.find(e => e.key === eventKey);
       if (!event) return res.status(404).json({ error: 'Unknown event' });
 
-      const overrideRows = await pool.query(
-        'SELECT subject, html_body, updated_at FROM email_template_overrides WHERE event_key = $1',
-        [eventKey]
-      );
+      // Scope overrides to the caller's org. System admins editing
+      // for their primary org see their overrides; org admins see
+      // theirs.
+      const orgId = (req.user && req.user.organization_id) || null;
+      const overrideRows = orgId != null
+        ? await pool.query(
+            'SELECT subject, html_body, updated_at FROM email_template_overrides WHERE event_key = $1 AND organization_id = $2',
+            [eventKey, orgId]
+          )
+        : await pool.query(
+            'SELECT subject, html_body, updated_at FROM email_template_overrides WHERE event_key = $1 ORDER BY updated_at DESC LIMIT 1',
+            [eventKey]
+          );
       const override = overrideRows.rows.length ? overrideRows.rows[0] : null;
 
       // Try to render preview — wired events have baked-in defaults;
@@ -277,15 +293,20 @@ router.put('/templates/:key',
       const subject = (req.body && typeof req.body.subject === 'string') ? req.body.subject : '';
       const html_body = (req.body && typeof req.body.html_body === 'string') ? req.body.html_body : '';
       const userId = (req.user && req.user.id) || null;
+      const orgId = (req.user && req.user.organization_id) || null;
+      if (orgId == null) return res.status(400).json({ error: 'No organization context for this user.' });
+      // Fixed ON CONFLICT — table's PK is (organization_id, event_key)
+      // per Phase F migration; the previous (event_key) constraint
+      // was removed when the composite PK was added.
       await pool.query(
-        'INSERT INTO email_template_overrides (event_key, subject, html_body, updated_by) ' +
-        'VALUES ($1, $2, $3, $4) ' +
-        'ON CONFLICT (event_key) DO UPDATE SET ' +
+        'INSERT INTO email_template_overrides (organization_id, event_key, subject, html_body, updated_by) ' +
+        'VALUES ($1, $2, $3, $4, $5) ' +
+        'ON CONFLICT (organization_id, event_key) DO UPDATE SET ' +
         '  subject = EXCLUDED.subject, ' +
         '  html_body = EXCLUDED.html_body, ' +
         '  updated_by = EXCLUDED.updated_by, ' +
         '  updated_at = NOW()',
-        [eventKey, subject, html_body, userId]
+        [orgId, eventKey, subject, html_body, userId]
       );
       res.json({ ok: true });
     } catch (e) {
@@ -296,15 +317,25 @@ router.put('/templates/:key',
 );
 
 // DELETE /api/email/templates/:key — clear override (revert to baked-in default).
+// Scoped to the caller's org so deleting your override doesn't blow
+// away another tenant's customization.
 router.delete('/templates/:key',
   requireAuth, requireRole('admin'),
   async (req, res) => {
     try {
       const eventKey = req.params.key;
-      await pool.query(
-        'DELETE FROM email_template_overrides WHERE event_key = $1',
-        [eventKey]
-      );
+      const orgId = (req.user && req.user.organization_id) || null;
+      if (orgId != null) {
+        await pool.query(
+          'DELETE FROM email_template_overrides WHERE event_key = $1 AND organization_id = $2',
+          [eventKey, orgId]
+        );
+      } else {
+        await pool.query(
+          'DELETE FROM email_template_overrides WHERE event_key = $1',
+          [eventKey]
+        );
+      }
       res.json({ ok: true });
     } catch (e) {
       console.error('DELETE /api/email/templates/:key error:', e);

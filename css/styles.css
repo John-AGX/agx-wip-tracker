@@ -9840,6 +9840,34 @@ body.light-mode .p86-pv-tag-modal-chip {
 }
 .p86-eb-input.textarea { font-family: inherit; line-height: 1.4; resize: vertical; }
 .p86-eb-input.color { padding: 2px; height: 30px; width: 60px; cursor: pointer; }
+/* Image block upload action row */
+.p86-eb-image-actions {
+  display: flex; align-items: center; gap: 8px;
+  margin-top: -2px;
+  flex-wrap: wrap;
+}
+.p86-eb-upload-btn {
+  background: rgba(79, 140, 255, 0.12);
+  color: var(--text, #e8e0d0);
+  border: 1px solid rgba(79, 140, 255, 0.35);
+  padding: 5px 12px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.p86-eb-upload-btn:hover { background: rgba(79, 140, 255, 0.18); border-color: #4f8cff; }
+.p86-eb-upload-status {
+  font-size: 11px;
+  color: var(--text-dim, #888);
+}
+.p86-eb-image-preview {
+  max-height: 60px;
+  max-width: 140px;
+  border-radius: 3px;
+  border: 1px solid var(--border, #333);
+  background: #fff;
+}
 .p86-eb-input:focus { outline: 1px solid #4f8cff; outline-offset: 1px; }
 /* Rich text field — toolbar + contenteditable */
 .p86-eb-field-rich {

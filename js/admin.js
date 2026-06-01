@@ -1943,10 +1943,18 @@
     } else {
       lastSavedLabel = '<span style="color:var(--text-dim,#888);">Not yet customized — editing factory default</span>';
     }
+    // Per-org override badge — surfaces the scope the user is editing
+    // in. System templates (auth/bootstrap) are platform-defined but
+    // can be overridden per-org for branding; this badge makes that
+    // clear so the admin knows they're customizing for their org only.
+    var scopeBadge = '';
+    if (ev.scope === 'system') {
+      scopeBadge = '<span style="display:inline-block;padding:2px 8px;border-radius:10px;background:rgba(168, 85, 247, 0.18);color:#c084fc;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-left:6px;" title="System templates are platform-defined; your changes only apply to YOUR organization\'s sends.">Customizing for your org</span>';
+    }
     ed.innerHTML =
       '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:14px;margin-bottom:12px;flex-wrap:wrap;">' +
         '<div style="min-width:0;flex:1;">' +
-          '<h3 style="margin:0 0 4px 0;">' + escapeHTML(ev.label || ev.key || '') + '</h3>' +
+          '<h3 style="margin:0 0 4px 0;">' + escapeHTML(ev.label || ev.key || '') + scopeBadge + '</h3>' +
           '<div style="color:var(--text-dim,#888);font-size:12px;">' + escapeHTML(ev.description || '') + '</div>' +
           '<div style="color:var(--text-dim,#aaa);font-size:11px;margin-top:6px;">' +
             '<strong>Audience:</strong> ' + escapeHTML(ev.audience || '—') + ' &middot; ' +

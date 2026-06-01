@@ -412,7 +412,78 @@
       } else if (t === 'spacer') {
         box.appendChild(field('Height (pixels)', 'height_px', { type: 'number', min: 4, max: 120 }));
       } else if (t === 'image') {
-        box.appendChild(field('Image URL', 'url', { placeholder: 'https://…/photo.jpg' }));
+        // URL field + Upload button. Upload routes through the
+        // existing /api/attachments endpoint (user-scope), reuses
+        // the same auth + resize pipeline as every other photo
+        // upload in the app. Returns a webUrl that auto-fills the
+        // URL field.
+        var urlField = field('Image URL', 'url', { placeholder: 'https://…/photo.jpg' });
+        box.appendChild(urlField);
+        var urlInput = urlField.querySelector('input');
+        // Inline preview + upload button beneath the URL.
+        var actions = document.createElement('div');
+        actions.className = 'p86-eb-image-actions';
+        actions.innerHTML =
+          '<button type="button" class="p86-eb-upload-btn">&#x1F4E4; Upload image…</button>' +
+          '<input type="file" accept="image/*" class="p86-eb-upload-input" style="display:none;" />' +
+          '<span class="p86-eb-upload-status"></span>';
+        var fileInput = actions.querySelector('.p86-eb-upload-input');
+        var statusEl = actions.querySelector('.p86-eb-upload-status');
+        actions.querySelector('.p86-eb-upload-btn').addEventListener('click', function() {
+          fileInput.click();
+        });
+        fileInput.addEventListener('change', function() {
+          var f = fileInput.files && fileInput.files[0];
+          if (!f) return;
+          if (!window.p86Api || !window.p86Api.attachments || !window.p86Api.attachments.upload) {
+            statusEl.textContent = 'Upload not available.';
+            statusEl.style.color = '#f87171';
+            return;
+          }
+          var me = (window.p86Auth && window.p86Auth.getUser && window.p86Auth.getUser()) || null;
+          var uid = me ? String(me.id) : null;
+          if (!uid) {
+            statusEl.textContent = 'Sign in required to upload.';
+            statusEl.style.color = '#f87171';
+            return;
+          }
+          statusEl.textContent = 'Uploading…';
+          statusEl.style.color = 'var(--text-dim, #888)';
+          window.p86Api.attachments.upload('user', uid, f, {
+            // Park uploaded email images in a dedicated folder so
+            // they don't clutter My Files. The folder gets auto-
+            // created if it doesn't exist.
+            folder: 'email-templates',
+            geo: false
+          }).then(function(resp) {
+            var att = resp && resp.attachment;
+            var url = att && (att.web_url || att.original_url);
+            if (!url) throw new Error('Upload succeeded but no URL returned.');
+            block.url = url;
+            if (urlInput) urlInput.value = url;
+            statusEl.innerHTML = '<span style="color:#34d399;">&#x2713; Uploaded</span>';
+            emitChange();
+            // Refresh preview thumb.
+            var oldPrev = actions.querySelector('.p86-eb-image-preview');
+            if (oldPrev) oldPrev.remove();
+            var prev = document.createElement('img');
+            prev.className = 'p86-eb-image-preview';
+            prev.src = url;
+            actions.appendChild(prev);
+          }).catch(function(err) {
+            statusEl.textContent = 'Upload failed: ' + (err.message || 'unknown');
+            statusEl.style.color = '#f87171';
+          });
+          fileInput.value = '';
+        });
+        box.appendChild(actions);
+        // Show an existing image as a thumbnail preview right away.
+        if (block.url) {
+          var existing = document.createElement('img');
+          existing.className = 'p86-eb-image-preview';
+          existing.src = block.url;
+          actions.appendChild(existing);
+        }
         box.appendChild(field('Alt text', 'alt', { placeholder: 'Description for screen readers' }));
         box.appendChild(field('Max width (pixels)', 'max_width_px', { type: 'number', min: 80, max: 900 }));
       } else if (t === 'footer') {

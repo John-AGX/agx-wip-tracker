@@ -466,10 +466,29 @@ function enrichParams(eventKey, raw) {
 
 // ─── Override resolution ───────────────────────────────────────────
 
-async function getOverride(eventKey) {
+// Override lookup. When orgId is provided, prefers the org-scoped row;
+// when not, returns the first row found (legacy behavior — used by
+// system-level send paths where no specific org owns the message).
+//
+// The table is keyed by (organization_id, event_key) per Phase F.
+// System admins overriding a system template (e.g. user_invite) for
+// their primary org write to (their_org_id, event_key); the send
+// path looks up by (recipient's_org_id, event_key) and falls back
+// to baked default when no row exists.
+async function getOverride(eventKey, orgId) {
   try {
+    if (orgId != null) {
+      const { rows } = await pool.query(
+        'SELECT subject, html_body FROM email_template_overrides WHERE event_key = $1 AND organization_id = $2',
+        [eventKey, orgId]
+      );
+      if (rows.length) return { subject: rows[0].subject, html_body: rows[0].html_body };
+      return null;
+    }
+    // No org context — return any row (most-recently-updated) so the
+    // legacy single-org behavior keeps working.
     const { rows } = await pool.query(
-      'SELECT subject, html_body FROM email_template_overrides WHERE event_key = $1',
+      'SELECT subject, html_body FROM email_template_overrides WHERE event_key = $1 ORDER BY updated_at DESC LIMIT 1',
       [eventKey]
     );
     return rows.length ? { subject: rows[0].subject, html_body: rows[0].html_body } : null;
@@ -679,9 +698,10 @@ function renderDefault(eventKey, params) {
 // {{var}} interpolation pipeline as the default. Empty subject or
 // empty body falls back to the default for that field so partial
 // overrides work.
-async function render(eventKey, params) {
+async function render(eventKey, params, opts) {
   var enriched = enrichParams(eventKey, params);
-  var override = await getOverride(eventKey);
+  var orgId = opts && opts.orgId != null ? opts.orgId : (params && params.__orgId);
+  var override = await getOverride(eventKey, orgId);
 
   if (!override || (!override.subject && !override.html_body)) {
     return renderDefault(eventKey, params);
