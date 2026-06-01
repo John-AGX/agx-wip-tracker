@@ -635,11 +635,19 @@ function renderBlock(block, accent) {
 }
 
 // Render a blocks array to a full email-safe HTML body. accent is
-// the brand color used for default buttons (falls back to the
-// platform blue).
+// the brand color used for default buttons (falls back to org
+// branding's accent_color, then to the platform blue).
+//
+// Wave 6: when params includes __branding, missing block fields fall
+// back to the org's branding kit:
+//   header.logo_url        → branding.logo_url
+//   button.bg_color        → branding.accent_color  (or 'accent' arg)
+//   footer.address (empty) → branding.footer_address
 function renderBlocks(blocks, params, accent) {
   if (!Array.isArray(blocks)) return '';
   var enriched = params || {};
+  var branding = (enriched.__branding && typeof enriched.__branding === 'object') ? enriched.__branding : {};
+  var defaultAccent = accent || branding.accent_color || '#4f8cff';
   var rows = blocks.map(function(block) {
     // Interpolate every string field inside the block against params.
     var prepared = {};
@@ -649,7 +657,14 @@ function renderBlocks(blocks, params, accent) {
       else prepared[k] = v;
     });
     prepared.type = block.type;  // type is the dispatch key
-    return renderBlock(prepared, accent);
+    // Apply branding fallbacks per block type.
+    if (prepared.type === 'header' && !prepared.logo_url && branding.logo_url) {
+      prepared.logo_url = branding.logo_url;
+    }
+    if (prepared.type === 'footer' && !prepared.address && branding.footer_address) {
+      prepared.address = branding.footer_address;
+    }
+    return renderBlock(prepared, defaultAccent);
   }).join('');
   // Wrap in a centered max-width table — email-safe centering.
   return '<table role="presentation" cellpadding="0" cellspacing="0" border="0" ' +
@@ -673,7 +688,9 @@ function tryParseBlocks(bodyStr) {
 }
 
 // Render the baked-in default for an event by interpolating the
-// template source against enriched params.
+// template source against enriched params. enriched.__branding (when
+// present) is honored by renderBlocks for branding fallbacks; raw
+// html_body templates don't see it.
 function renderDefault(eventKey, params) {
   var src = TEMPLATE_SOURCES[eventKey];
   if (!src) throw new Error('No baked-in template for event: ' + eventKey);
@@ -701,6 +718,15 @@ function renderDefault(eventKey, params) {
 async function render(eventKey, params, opts) {
   var enriched = enrichParams(eventKey, params);
   var orgId = opts && opts.orgId != null ? opts.orgId : (params && params.__orgId);
+  // Branding kit (Wave 6). When we have an orgId, fetch the org's
+  // branding JSONB and stash it on enriched.__branding so renderBlocks
+  // can fall back to it for missing block fields.
+  if (orgId != null && !enriched.__branding) {
+    try {
+      var b = await pool.query('SELECT branding FROM organizations WHERE id = $1', [orgId]);
+      if (b.rows.length && b.rows[0].branding) enriched.__branding = b.rows[0].branding;
+    } catch (e) { /* branding lookup is best-effort */ }
+  }
   var override = await getOverride(eventKey, orgId);
 
   if (!override || (!override.subject && !override.html_body)) {

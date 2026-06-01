@@ -78,6 +78,14 @@ async function initSchema() {
       archived_at TIMESTAMPTZ
     );
     CREATE INDEX IF NOT EXISTS idx_organizations_slug ON organizations(slug) WHERE archived_at IS NULL;
+    -- Org branding kit (Wave 6 of email work). JSONB with shape:
+    --   { logo_url, primary_color, accent_color, footer_address }
+    -- Used by the email block renderer: when an outbound email is
+    -- scoped to an org, missing block fields (header logo, button
+    -- color, footer address) fall back to the org's branding so all
+    -- the org's emails share a consistent look without re-editing
+    -- every template.
+    ALTER TABLE organizations ADD COLUMN IF NOT EXISTS branding JSONB NOT NULL DEFAULT '{}'::jsonb;
 
     -- Seed AGX as the sole org. Idempotent — no-op if a row with
     -- slug='agx' already exists. The identity_body matches what

@@ -1539,6 +1539,144 @@
     });
   }
 
+  // ── Org branding kit (Wave 6) ────────────────────────────────────
+  //
+  // Logo URL, primary color, accent color, footer address — applied
+  // as fallbacks during outbound email render when individual blocks
+  // leave those fields empty. Stored on organizations.branding JSONB.
+  var _orgBrandingOrgId = null;
+  var _orgBrandingSaveTimer = null;
+  function loadOrgBranding() {
+    var box = document.getElementById('org-branding-form');
+    if (!box) return;
+    box.innerHTML = '<div style="padding:14px;color:var(--text-dim,#888);">Loading…</div>';
+    window.p86Api.get('/api/admin/organizations/me').then(function(r) {
+      var org = r && r.organization;
+      if (!org) { box.innerHTML = '<div style="color:#f87171;">Org not found.</div>'; return; }
+      _orgBrandingOrgId = org.id;
+      var b = org.branding || {};
+      renderOrgBrandingForm(b);
+    }).catch(function(err) {
+      box.innerHTML = '<div style="padding:14px;color:#f87171;">Failed to load: ' + escapeHTML(err.message || '') + '</div>';
+    });
+  }
+
+  function renderOrgBrandingForm(b) {
+    var box = document.getElementById('org-branding-form');
+    if (!box) return;
+    var logoUrl = b.logo_url || '';
+    var primary = b.primary_color || '#4f8cff';
+    var accent  = b.accent_color  || '#4f8cff';
+    var footer  = b.footer_address || '';
+    box.innerHTML =
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">' +
+        '<div>' +
+          '<label style="font-size:11px;color:var(--text-dim,#aaa);text-transform:uppercase;letter-spacing:0.5px;font-weight:600;display:block;margin-bottom:4px;">Logo URL</label>' +
+          '<input type="text" id="org-brand-logo" value="' + escapeHTML(logoUrl).replace(/"/g, '&quot;') + '" placeholder="https://… your org\'s logo" ' +
+            'style="width:100%;background:var(--input-bg,#0f0f1e);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:8px 10px;font-size:13px;" />' +
+          '<button type="button" id="org-brand-upload-btn" class="ee-btn secondary" style="font-size:11px;margin-top:6px;">&#x1F4E4; Upload logo…</button>' +
+          '<input type="file" id="org-brand-upload-file" accept="image/*" style="display:none;" />' +
+          (logoUrl ? '<div style="margin-top:8px;"><img src="' + escapeAttr(logoUrl) + '" alt="" style="max-height:50px;max-width:200px;border-radius:4px;background:#fff;padding:6px;" id="org-brand-logo-preview" /></div>' : '<div id="org-brand-logo-preview-host" style="margin-top:8px;"></div>') +
+        '</div>' +
+        '<div>' +
+          '<label style="font-size:11px;color:var(--text-dim,#aaa);text-transform:uppercase;letter-spacing:0.5px;font-weight:600;display:block;margin-bottom:4px;">Footer / company line</label>' +
+          '<textarea id="org-brand-footer" rows="3" placeholder="123 Main St, Tampa, FL 33602" ' +
+            'style="width:100%;background:var(--input-bg,#0f0f1e);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:8px 10px;font-size:13px;resize:vertical;">' + escapeHTML(footer) + '</textarea>' +
+        '</div>' +
+        '<div>' +
+          '<label style="font-size:11px;color:var(--text-dim,#aaa);text-transform:uppercase;letter-spacing:0.5px;font-weight:600;display:block;margin-bottom:4px;">Primary color</label>' +
+          '<div style="display:flex;align-items:center;gap:8px;">' +
+            '<input type="color" id="org-brand-primary" value="' + escapeAttr(primary) + '" style="width:40px;height:34px;border:0;background:transparent;cursor:pointer;" />' +
+            '<input type="text" id="org-brand-primary-text" value="' + escapeAttr(primary) + '" maxlength="9" style="flex:1;background:var(--input-bg,#0f0f1e);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:6px 8px;font-size:12px;font-family:monospace;" />' +
+          '</div>' +
+          '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:2px;">Used by app chrome; reserved for future surfaces.</div>' +
+        '</div>' +
+        '<div>' +
+          '<label style="font-size:11px;color:var(--text-dim,#aaa);text-transform:uppercase;letter-spacing:0.5px;font-weight:600;display:block;margin-bottom:4px;">Accent color</label>' +
+          '<div style="display:flex;align-items:center;gap:8px;">' +
+            '<input type="color" id="org-brand-accent" value="' + escapeAttr(accent) + '" style="width:40px;height:34px;border:0;background:transparent;cursor:pointer;" />' +
+            '<input type="text" id="org-brand-accent-text" value="' + escapeAttr(accent) + '" maxlength="9" style="flex:1;background:var(--input-bg,#0f0f1e);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:6px 8px;font-size:12px;font-family:monospace;" />' +
+          '</div>' +
+          '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:2px;">Used for button blocks when no per-block color is set.</div>' +
+        '</div>' +
+      '</div>';
+
+    // Wire two-way color picker → text sync + debounced save.
+    function bindColorPair(picker, text) {
+      picker.addEventListener('input', function() {
+        text.value = picker.value;
+        scheduleSaveOrgBranding();
+      });
+      text.addEventListener('input', function() {
+        if (/^#[0-9a-f]{6}$/i.test(text.value)) picker.value = text.value;
+        scheduleSaveOrgBranding();
+      });
+    }
+    bindColorPair(document.getElementById('org-brand-primary'), document.getElementById('org-brand-primary-text'));
+    bindColorPair(document.getElementById('org-brand-accent'), document.getElementById('org-brand-accent-text'));
+    document.getElementById('org-brand-logo').addEventListener('input', scheduleSaveOrgBranding);
+    document.getElementById('org-brand-footer').addEventListener('input', scheduleSaveOrgBranding);
+
+    // Logo upload — POSTs to /api/attachments with entity=user, drops
+    // the returned URL into the logo URL field.
+    var uploadBtn = document.getElementById('org-brand-upload-btn');
+    var uploadFile = document.getElementById('org-brand-upload-file');
+    if (uploadBtn && uploadFile) {
+      uploadBtn.addEventListener('click', function() { uploadFile.click(); });
+      uploadFile.addEventListener('change', function() {
+        var f = uploadFile.files && uploadFile.files[0];
+        if (!f || !window.p86Api || !window.p86Api.attachments) return;
+        var me = (window.p86Auth && window.p86Auth.getUser && window.p86Auth.getUser()) || null;
+        if (!me) return;
+        var statusEl = document.getElementById('org-branding-status');
+        if (statusEl) { statusEl.textContent = 'Uploading…'; statusEl.style.color = 'var(--text-dim, #888)'; }
+        window.p86Api.attachments.upload('user', String(me.id), f, { folder: 'org-branding', geo: false })
+          .then(function(resp) {
+            var url = resp && resp.attachment && (resp.attachment.web_url || resp.attachment.original_url);
+            if (!url) throw new Error('No URL returned.');
+            document.getElementById('org-brand-logo').value = url;
+            if (statusEl) { statusEl.innerHTML = '<span style="color:#34d399;">&#x2713; Uploaded</span>'; }
+            scheduleSaveOrgBranding();
+            // Re-render so the preview shows.
+            renderOrgBrandingForm(currentOrgBrandingFromInputs());
+          })
+          .catch(function(err) {
+            if (statusEl) { statusEl.textContent = 'Upload failed: ' + (err.message || ''); statusEl.style.color = '#f87171'; }
+          });
+        uploadFile.value = '';
+      });
+    }
+  }
+
+  function currentOrgBrandingFromInputs() {
+    return {
+      logo_url: (document.getElementById('org-brand-logo') || {}).value || '',
+      primary_color: (document.getElementById('org-brand-primary-text') || {}).value || '',
+      accent_color: (document.getElementById('org-brand-accent-text') || {}).value || '',
+      footer_address: (document.getElementById('org-brand-footer') || {}).value || ''
+    };
+  }
+
+  function scheduleSaveOrgBranding() {
+    if (_orgBrandingSaveTimer) clearTimeout(_orgBrandingSaveTimer);
+    _orgBrandingSaveTimer = setTimeout(saveOrgBranding, 400);
+  }
+
+  function saveOrgBranding() {
+    if (!_orgBrandingOrgId) return;
+    var b = currentOrgBrandingFromInputs();
+    var statusEl = document.getElementById('org-branding-status');
+    if (statusEl) { statusEl.textContent = 'Saving…'; statusEl.style.color = 'var(--text-dim, #888)'; }
+    window.p86Api.put('/api/admin/organizations/' + _orgBrandingOrgId, { branding: b }).then(function() {
+      if (statusEl) {
+        statusEl.innerHTML = '<span style="color:#34d399;">&#x2713; Saved ' + new Date().toLocaleTimeString() + '</span>';
+        setTimeout(function() { if (statusEl && /Saved/.test(statusEl.textContent || '')) statusEl.textContent = ''; }, 2500);
+      }
+    }).catch(function(err) {
+      if (statusEl) { statusEl.innerHTML = '<span style="color:#f87171;">Save failed: ' + escapeHTML(err.message || '') + '</span>'; }
+    });
+  }
+
   // The Invite-user button opens a 2-way choice: brand-new user (the
   // existing Add User modal flow) OR existing user (re-send a working
   // credential by resetting their password). The existing-user path is
@@ -2737,17 +2875,25 @@
       return;
     }
 
-    // Email tab — org-scoped events + Org Templates editor. Reuses the
-    // same renderAdminEmailTemplates() that powers System → Email
-    // Provider but pinned to the 'org' scope, plus a small per-event
-    // toggle/BCC table for the 6 org events. The events table reuses
-    // the existing loadEmailEvents() machinery; we just filter the
-    // rendered rows to scope==='org'.
+    // Email tab — three cards: branding kit, org-scope event triggers,
+    // org template library. Reuses the same renderAdminEmailTemplates()
+    // that powers System → Email Provider but pinned to the 'org' scope.
     if (_templatesActiveTab === 'email') {
       var emailHint = activeTab && activeTab.desc
         ? '<p style="margin:0 0 12px 0;color:var(--text-dim,#888);font-size:12px;">' + activeTab.desc + '</p>'
         : '';
       pane.innerHTML = tabsHTML + emailHint +
+        // Branding card — logo, primary/accent colors, footer address.
+        '<div class="card" style="padding:16px;margin-bottom:14px;">' +
+          '<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:10px;gap:10px;">' +
+            '<div>' +
+              '<h3 style="margin:0 0 4px 0;">&#x1F3A8; Branding kit</h3>' +
+              '<p style="margin:0;color:var(--text-dim,#888);font-size:12px;">Org-wide defaults applied to every outbound email. Individual blocks override these per-template, but missing fields fall back to your branding.</p>' +
+            '</div>' +
+            '<span id="org-branding-status" style="font-size:11px;color:var(--text-dim,#888);"></span>' +
+          '</div>' +
+          '<div id="org-branding-form" style="font-size:13px;color:var(--text-dim,#888);">Loading…</div>' +
+        '</div>' +
         // Events card — toggles + BCC for the 6 org-scope events.
         '<div class="card" style="padding:16px;margin-bottom:14px;">' +
           '<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:10px;gap:10px;">' +
@@ -2770,12 +2916,9 @@
       // right filter for templatesInScope().
       _emailView = 'templates_org';
       try { sessionStorage.setItem('agx_email_view', 'templates_org'); } catch (e) {}
-      // Load the org-scope events table (filters scope==='org' inside
-      // renderOrgScopeEventsTable). Templates editor mounts via the
-      // existing renderAdminEmailTemplates() (which reads the host
-      // element by id and filters by scope through templatesInScope()).
       renderAdminEmailTemplates();
       loadOrgScopeEvents();
+      loadOrgBranding();
       var refreshBtn = document.getElementById('org-email-events-refresh');
       if (refreshBtn) refreshBtn.addEventListener('click', loadOrgScopeEvents);
       return;

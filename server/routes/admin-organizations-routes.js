@@ -404,8 +404,23 @@ router.put('/:id', requireAuth, requireOrg, requireCapability('ROLES_MANAGE'), a
       updates.push('settings = $' + p++ + '::jsonb');
       params.push(JSON.stringify(req.body.settings));
     }
+    // Branding kit (Wave 6). JSONB with the org's logo URL + primary
+    // and accent colors + footer address. The email block renderer
+    // falls back to these when individual blocks omit the field.
+    // Validate: known keys only, color hex format, URL length cap,
+    // footer length cap. Unknown keys are silently dropped.
+    if (req.body.branding && typeof req.body.branding === 'object') {
+      const allowed = {};
+      const b = req.body.branding;
+      if (typeof b.logo_url === 'string')        allowed.logo_url = b.logo_url.slice(0, 2000);
+      if (typeof b.primary_color === 'string' && /^#[0-9a-f]{3,8}$/i.test(b.primary_color)) allowed.primary_color = b.primary_color;
+      if (typeof b.accent_color === 'string'  && /^#[0-9a-f]{3,8}$/i.test(b.accent_color))  allowed.accent_color  = b.accent_color;
+      if (typeof b.footer_address === 'string')  allowed.footer_address = b.footer_address.slice(0, 500);
+      updates.push('branding = $' + p++ + '::jsonb');
+      params.push(JSON.stringify(allowed));
+    }
     if (!updates.length) {
-      return res.status(400).json({ error: 'No editable fields supplied. Accepts: name, description, identity_body, settings.' });
+      return res.status(400).json({ error: 'No editable fields supplied. Accepts: name, description, identity_body, settings, branding.' });
     }
     updates.push('updated_at = NOW()');
     const r = await pool.query(
