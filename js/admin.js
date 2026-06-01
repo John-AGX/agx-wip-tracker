@@ -1112,11 +1112,13 @@
   })();
 
   window.switchEmailView = function(view) {
-    // Whitelist the three valid views. Legacy 'templates' value from
-    // sessionStorage maps to the org tab (the prior default behavior
-    // — most editing was org-customizable templates).
-    var ALLOWED = ['settings', 'templates_system', 'templates_org'];
-    if (view === 'templates') view = 'templates_org';
+    // Whitelist valid views for the System → Email Provider page.
+    // Org Templates moved to Organization → Templates → Email; we
+    // map any stale 'templates_org' / 'templates' sessionStorage
+    // value to 'templates_system' so the user lands on a real pill
+    // instead of falling back to settings silently.
+    var ALLOWED = ['settings', 'templates_system'];
+    if (view === 'templates' || view === 'templates_org') view = 'templates_system';
     _emailView = (ALLOWED.indexOf(view) >= 0) ? view : 'settings';
     try { sessionStorage.setItem('agx_email_view', _emailView); } catch (e) { /* ignore */ }
     renderAdminEmail();
@@ -1133,17 +1135,15 @@
         label +
       '</button>';
     }
-    // Templates split into two scopes: 'system' (account-bootstrap /
-    // auth / onboarding — org admins shouldn't break these) and 'org'
-    // (notifications + customer-facing emails the org rebrands). The
-    // server tags each event with .scope; the client just filters the
-    // list. System scope only visible to system admins (TODO: gate
-    // when isSystemAdmin() helper is wired; for now Admin role sees
-    // both since both pills are useful during setup).
+    // System → Email Provider houses platform-level concerns: provider
+    // config, system-scope templates (org_invite / user_invite /
+    // password_reset), and the recent send log. Org-scope templates +
+    // the per-event toggles for org notifications live at
+    // Organization → Templates → Email so org admins don't need to
+    // walk into the System area to brand their job-assignment emails.
     return '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px;border-bottom:1px solid var(--border,#333);padding-bottom:10px;">' +
       pill('settings', '⚙ Settings') +
       pill('templates_system', '📧 System Templates') +
-      pill('templates_org', '🏢 Org Templates') +
     '</div>';
   }
 
@@ -1152,7 +1152,7 @@
     var pane = document.getElementById('admin-subtab-email');
     if (!pane) return;
 
-    if (_emailView === 'templates_system' || _emailView === 'templates_org') {
+    if (_emailView === 'templates_system') {
       pane.innerHTML = renderEmailInnerPills() +
         '<div id="admin-subtab-email-templates"></div>';
       renderAdminEmailTemplates();
@@ -1429,6 +1429,112 @@
             btn.disabled = false;
             alert('Send failed: ' + (err.message || 'unknown'));
           });
+      });
+    });
+  }
+
+  // ── Org-scope events table (Organization → Templates → Email) ────
+  //
+  // Slimmer version of renderEmailEventsTable() that:
+  //   1. Filters to scope === 'org' (skips org_invite, user_invite,
+  //      password_reset which are platform-level)
+  //   2. Drops the special user_invite / password_reset action buttons
+  //      since those events are excluded by scope anyway
+  //   3. Mounts into #org-email-events-tbl (the renderTemplatesForm
+  //      'email' branch creates this host)
+  function loadOrgScopeEvents() {
+    var evtBox = document.getElementById('org-email-events-tbl');
+    if (!evtBox) return;
+    evtBox.innerHTML = '<div style="padding:14px;color:var(--text-dim,#888);">Loading…</div>';
+    window.p86Api.get('/api/email/events').then(function(r) {
+      _emailEvents = r.events || [];
+      _emailSettings = r.settings || _emailSettings;
+      renderOrgScopeEventsTable();
+    }).catch(function(err) {
+      evtBox.innerHTML = '<div style="padding:14px;color:#f87171;">Failed to load: ' + escapeHTML(err.message || '') + '</div>';
+    });
+  }
+
+  function renderOrgScopeEventsTable() {
+    var box = document.getElementById('org-email-events-tbl');
+    if (!box) return;
+    var orgEvents = (_emailEvents || []).filter(function(e) {
+      return (e.scope || 'org') === 'org';
+    });
+    if (!orgEvents.length) {
+      box.innerHTML = '<div style="padding:14px;color:var(--text-dim,#888);">No org-scope events defined.</div>';
+      return;
+    }
+    var byCat = {};
+    orgEvents.forEach(function(e) {
+      var cat = e.category || 'Other';
+      if (!byCat[cat]) byCat[cat] = [];
+      byCat[cat].push(e);
+    });
+    var cats = Object.keys(byCat).sort();
+    var html = '<table class="dense-table" style="width:100%;border-collapse:collapse;font-size:13px;">' +
+      '<thead style="border-bottom:1px solid var(--border,#333);">' +
+        '<tr>' +
+          '<th style="text-align:left;padding:8px;">Event</th>' +
+          '<th style="text-align:left;padding:8px;">Audience</th>' +
+          '<th style="text-align:center;padding:8px;width:90px;">Enabled</th>' +
+          '<th style="text-align:left;padding:8px;width:240px;">Per-event BCC (comma-sep.)</th>' +
+          '<th style="text-align:center;padding:8px;width:80px;">Wired</th>' +
+        '</tr>' +
+      '</thead><tbody>';
+    cats.forEach(function(cat) {
+      html += '<tr><td colspan="5" style="padding:10px 8px 4px 8px;color:var(--text-dim,#aaa);font-size:11px;text-transform:uppercase;letter-spacing:0.6px;">' + escapeHTML(cat) + '</td></tr>';
+      byCat[cat].forEach(function(e) {
+        var bccVal = Array.isArray(e.bcc) ? e.bcc.join(', ') : '';
+        html += '<tr style="border-bottom:1px solid var(--border,#2a2a3a);">' +
+          '<td style="padding:8px;vertical-align:top;">' +
+            '<div style="font-weight:600;color:var(--text);">' + escapeHTML(e.label) + '</div>' +
+            '<div style="color:var(--text-dim,#888);font-size:11px;margin-top:2px;">' + escapeHTML(e.description || '') + '</div>' +
+          '</td>' +
+          '<td style="padding:8px;vertical-align:top;color:var(--text-dim,#aaa);">' + escapeHTML(e.audience || '') + '</td>' +
+          '<td style="padding:8px;vertical-align:top;text-align:center;">' +
+            '<label class="p86-switch" style="display:inline-flex;align-items:center;cursor:pointer;">' +
+              '<input type="checkbox" data-email-event-toggle="' + escapeHTML(e.key) + '" ' + (e.enabled ? 'checked' : '') + ' style="cursor:pointer;width:18px;height:18px;" />' +
+            '</label>' +
+          '</td>' +
+          '<td style="padding:8px;vertical-align:top;">' +
+            '<input type="text" data-email-event-bcc="' + escapeHTML(e.key) + '" value="' + escapeHTML(bccVal).replace(/"/g, '&quot;') + '" placeholder="ops@example.com" ' +
+              'style="width:100%;background:var(--input-bg,#0f0f1e);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:5px 8px;font-size:12px;" />' +
+          '</td>' +
+          '<td style="padding:8px;vertical-align:top;text-align:center;">' +
+            (e.wired ?
+              '<span style="color:#34d399;font-size:11px;">&#x2713; Active</span>' :
+              '<span style="color:#fbbf24;font-size:11px;">Pending</span>') +
+          '</td>' +
+        '</tr>';
+      });
+    });
+    html += '</tbody></table>';
+    box.innerHTML = html;
+    // Wire the toggle + BCC inputs — same pattern as the System →
+    // Email Provider table. Both surfaces share _emailSettings, so
+    // a change here updates the System view's UI on its next render.
+    box.querySelectorAll('[data-email-event-toggle]').forEach(function(cb) {
+      cb.addEventListener('change', function() {
+        var key = cb.dataset.emailEventToggle;
+        if (!_emailSettings.events) _emailSettings.events = {};
+        if (!_emailSettings.events[key]) _emailSettings.events[key] = { enabled: false, bcc: [] };
+        _emailSettings.events[key].enabled = cb.checked;
+        var evt = _emailEvents.find(function(x) { return x.key === key; });
+        if (evt) evt.enabled = cb.checked;
+        saveEmailSettings();
+      });
+    });
+    box.querySelectorAll('[data-email-event-bcc]').forEach(function(inp) {
+      inp.addEventListener('change', function() {
+        var key = inp.dataset.emailEventBcc;
+        var list = inp.value.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+        if (!_emailSettings.events) _emailSettings.events = {};
+        if (!_emailSettings.events[key]) _emailSettings.events[key] = { enabled: false, bcc: [] };
+        _emailSettings.events[key].bcc = list;
+        var evt = _emailEvents.find(function(x) { return x.key === key; });
+        if (evt) evt.bcc = list;
+        saveEmailSettings();
       });
     });
   }
@@ -2523,7 +2629,8 @@
   var TEMPLATES_TABS = [
     { key: 'proposal', label: '📄 Proposal',  desc: 'Header, letter body, exclusions, signature.' },
     { key: 'bt',       label: '📊 BT Export', desc: 'Buildertrend cost-category mapping.' },
-    { key: 'folders',  label: '📁 Folders',   desc: 'Default folder set shown for new leads / estimates / jobs / clients before any file is uploaded.' }
+    { key: 'folders',  label: '📁 Folders',   desc: 'Default folder set shown for new leads / estimates / jobs / clients before any file is uploaded.' },
+    { key: 'email',    label: '📧 Email',     desc: 'Per-event triggers + branded templates for emails your org sends — assignments, lead notifications, sub handoffs, cert reminders.' }
   ];
 
   function switchTemplatesTab(key) {
@@ -2630,9 +2737,52 @@
       return;
     }
 
-    // _templatesActiveTab can still hold 'email' on sessionStorage
-    // entries written before the consolidation. Coerce to 'proposal'
-    // (the default) so the dispatch always hits a live branch.
+    // Email tab — org-scoped events + Org Templates editor. Reuses the
+    // same renderAdminEmailTemplates() that powers System → Email
+    // Provider but pinned to the 'org' scope, plus a small per-event
+    // toggle/BCC table for the 6 org events. The events table reuses
+    // the existing loadEmailEvents() machinery; we just filter the
+    // rendered rows to scope==='org'.
+    if (_templatesActiveTab === 'email') {
+      var emailHint = activeTab && activeTab.desc
+        ? '<p style="margin:0 0 12px 0;color:var(--text-dim,#888);font-size:12px;">' + activeTab.desc + '</p>'
+        : '';
+      pane.innerHTML = tabsHTML + emailHint +
+        // Events card — toggles + BCC for the 6 org-scope events.
+        '<div class="card" style="padding:16px;margin-bottom:14px;">' +
+          '<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:10px;gap:10px;">' +
+            '<div>' +
+              '<h3 style="margin:0 0 4px 0;">Org-scope event triggers</h3>' +
+              '<p style="margin:0;color:var(--text-dim,#888);font-size:12px;">Toggle which org-level notifications fire and BCC additional addresses. ' +
+                'System-scope events (account onboarding, password reset) live in <strong>System &rarr; Email Provider</strong>.</p>' +
+            '</div>' +
+            '<button class="ee-btn secondary" id="org-email-events-refresh" style="white-space:nowrap;">&#x21BB; Refresh</button>' +
+          '</div>' +
+          '<div id="org-email-events-tbl" style="font-size:13px;color:var(--text-dim,#888);">Loading…</div>' +
+        '</div>' +
+        // Templates editor — reuses #admin-subtab-email-templates so
+        // renderAdminEmailTemplates() can mount into it.
+        '<div class="card" style="padding:16px;">' +
+          '<h3 style="margin:0 0 10px 0;">Org template library</h3>' +
+          '<div id="admin-subtab-email-templates"></div>' +
+        '</div>';
+      // Pin the scope to 'org' so currentTemplateScope() picks up the
+      // right filter for templatesInScope().
+      _emailView = 'templates_org';
+      try { sessionStorage.setItem('agx_email_view', 'templates_org'); } catch (e) {}
+      // Load the org-scope events table (filters scope==='org' inside
+      // renderOrgScopeEventsTable). Templates editor mounts via the
+      // existing renderAdminEmailTemplates() (which reads the host
+      // element by id and filters by scope through templatesInScope()).
+      renderAdminEmailTemplates();
+      loadOrgScopeEvents();
+      var refreshBtn = document.getElementById('org-email-events-refresh');
+      if (refreshBtn) refreshBtn.addEventListener('click', loadOrgScopeEvents);
+      return;
+    }
+
+    // _templatesActiveTab can still hold legacy values; coerce to
+    // 'proposal' so the dispatch always hits a live branch.
     if (_templatesActiveTab !== 'proposal' && _templatesActiveTab !== 'bt') {
       _templatesActiveTab = 'proposal';
     }
