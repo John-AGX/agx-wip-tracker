@@ -863,7 +863,71 @@
     // state.attachments holds OWN attachments only — parent attachments
     // live on state.parentAttachments so the slot-count math, delete
     // gating, and upload limit only apply to what the user owns.
-    var state = { attachments: [], parentAttachments: [], loading: true, uploading: 0 };
+    // state.activeFolder is the folder new uploads land in (null →
+    // 'general'); set by clicking a chip in the folder bar.
+    var state = { attachments: [], parentAttachments: [], loading: true, uploading: 0, activeFolder: null };
+
+    // Effective folder set for this entity = the org folder template /
+    // built-in default for entityType (lead/estimate/job/client) MERGED
+    // with any folders that already hold files. Gives empty "drop
+    // target" buckets for the defaults even before a file is uploaded.
+    // Falls back to live-folders-only when the taxonomy helper isn't
+    // loaded (e.g. entity types with no default set).
+    function liveFoldersFromState() {
+      var seen = {};
+      var out = [];
+      (state.attachments || []).forEach(function(a) {
+        var f = (a && a.folder) ? String(a.folder) : 'general';
+        if (!seen[f]) { seen[f] = true; out.push(f); }
+      });
+      return out;
+    }
+    function effectiveFolders() {
+      var live = liveFoldersFromState();
+      if (typeof window.mergeFolders === 'function') {
+        return window.mergeFolders(entityType, live);
+      }
+      if (live.indexOf('general') === -1) live.unshift('general');
+      return live;
+    }
+    function folderCounts() {
+      var counts = {};
+      (state.attachments || []).forEach(function(a) {
+        var f = (a && a.folder) ? String(a.folder) : 'general';
+        counts[f] = (counts[f] || 0) + 1;
+      });
+      return counts;
+    }
+
+    // The folder chip bar — one chip per effective folder (defaults +
+    // live), with a file count. Clicking a chip sets the active upload
+    // target. Empty default folders show as 0-count chips so they read
+    // as "drop targets that get created when you add a file." Only shown
+    // when there's more than just 'general' and the user can upload.
+    function folderBarHTML() {
+      if (!canEdit) return '';
+      var eff = effectiveFolders();
+      if (!eff || eff.length <= 1) return '';
+      var counts = folderCounts();
+      var active = state.activeFolder || 'general';
+      var chips = eff.map(function(f) {
+        var isActive = (f === active);
+        var n = counts[f] || 0;
+        var bg = isActive ? 'rgba(79,140,255,0.18)' : 'transparent';
+        var bd = isActive ? '#4f8cff' : 'var(--border,#333)';
+        var col = isActive ? '#fff' : (n ? 'var(--text,#ddd)' : 'var(--text-dim,#888)');
+        var badge = '<span style="opacity:0.65;font-size:10px;margin-left:5px;">' + n + '</span>';
+        return '<button type="button" data-att-folder="' + escapeAttr(f) + '" ' +
+          'title="' + (isActive ? 'New uploads land here' : 'Upload into ' + escapeAttr(prettyFolder(f))) + '" ' +
+          'style="padding:4px 10px;border:1px solid ' + bd + ';border-radius:14px;background:' + bg + ';color:' + col + ';font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap;">' +
+          escapeHTMLLocal(prettyFolder(f)) + badge +
+        '</button>';
+      }).join('');
+      return '<div style="margin:0 0 14px 0;">' +
+        '<div style="font-size:11px;color:var(--text-dim,#888);margin-bottom:6px;">Folders <span style="opacity:0.7;">— click one to choose where new uploads land</span></div>' +
+        '<div style="display:flex;gap:6px;flex-wrap:wrap;">' + chips + '</div>' +
+      '</div>';
+    }
 
     function fetchList() {
       state.loading = true;
@@ -887,7 +951,14 @@
     function uploadOne(file) {
       state.uploading++;
       render();
-      return window.p86Api.attachments.upload(entityType, entityId, file)
+      // Target the active folder when one is selected. 'general' (or
+      // null) needs no folder field — the server defaults empties to
+      // 'general' anyway.
+      var extra = {};
+      if (state.activeFolder && state.activeFolder !== 'general') {
+        extra.folder = state.activeFolder;
+      }
+      return window.p86Api.attachments.upload(entityType, entityId, file, extra)
         .then(function() {
           state.uploading--;
         })
@@ -960,13 +1031,22 @@
       var html = '';
 
       if (canEdit) {
+        var targetFolder = state.activeFolder && state.activeFolder !== 'general' ? state.activeFolder : null;
+        var targetNote = targetFolder
+          ? '<div style="margin-top:6px;font-size:11px;color:#4f8cff;">Uploading into <strong>' + escapeHTMLLocal(prettyFolder(targetFolder)) + '</strong></div>'
+          : '';
         html += '<div data-att-drop="1" style="border:2px dashed var(--border,#444);border-radius:10px;padding:18px;text-align:center;background:rgba(79,140,255,0.04);margin-bottom:14px;cursor:pointer;transition:border-color 0.15s,background 0.15s;">' +
           '<div style="font-size:13px;color:var(--text,#fff);margin-bottom:4px;">Drop photos or files here or <strong style="color:#4f8cff;">click to pick</strong></div>' +
           '<div style="font-size:11px;color:var(--text-dim,#888);">Up to ' + MAX_PER_ENTITY + ' attachments &middot; ' + slotsLeft + ' slot' + (slotsLeft === 1 ? '' : 's') + ' left &middot; max ' + fmtBytes(MAX_FILE_BYTES) + ' per file &middot; photos auto-resized, docs (PDF, Excel, Word, drawings, etc.) stored as-is</div>' +
+          targetNote +
           (state.uploading ? '<div style="margin-top:8px;font-size:11px;color:#fbbf24;">Uploading ' + state.uploading + '…</div>' : '') +
           // accept="" lets the picker show every file type — server validates
           '<input data-att-input="1" type="file" multiple style="display:none;" />' +
         '</div>';
+        // Folder chips (effective default set + live folders). Empty
+        // defaults show as 0-count drop targets; clicking sets the
+        // upload destination.
+        html += folderBarHTML();
       }
 
       var parentPhotos = (state.parentAttachments || []).filter(isImageAttachment);
@@ -1122,6 +1202,17 @@
           input.value = '';
         };
       }
+      // Folder chips — set the active upload target. 'general' clears
+      // the override (null) so uploads use the server default; any other
+      // folder becomes the destination. Re-render to update highlight +
+      // the dropzone target note.
+      container.querySelectorAll('[data-att-folder]').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          var f = btn.getAttribute('data-att-folder');
+          state.activeFolder = (f === 'general') ? null : f;
+          render();
+        });
+      });
       // Photo click → lightbox; index is into the photos sub-array
       // Unified click delegation on every photo tile (owned + markup +
       // parent). Each tile carries data-att-tile-id + data-att-tile-kind

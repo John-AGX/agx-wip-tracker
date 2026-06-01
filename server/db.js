@@ -821,6 +821,39 @@ async function initSchema() {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_org_tags_ci_name
       ON org_tags(organization_id, (LOWER(name)));
 
+    -- ---------------------------------------------------------------
+    -- Per-org folder templates. Folders in Project 86 are IMPLICIT --
+    -- a folder only "exists" once an attachment row carries that
+    -- folder string. js/folder-taxonomy.js ships a hard-coded
+    -- DEFAULT set per entity type (lead / estimate / job / client) so
+    -- the My Files tree, send/copy picker, and sub-grant dropdown can
+    -- show a folder structure before any file is uploaded.
+    --
+    -- This table lets each org OVERRIDE those defaults without code
+    -- changes: one row per (organization_id, entity_type) holding an
+    -- ordered JSONB array of folder strings (already sanitized to the
+    -- shape sanitizeFolderPath produces -- lowercase, hyphenated,
+    -- slash-delimited, max 3 levels). Absence of a row falls back to
+    -- the built-in defaults. A present row fully REPLACES the defaults
+    -- for that type (not merged), so an org that wants fewer folders
+    -- gets exactly what it configures.
+    --
+    -- 'general' is always appended client-side as the catch-all and is
+    -- NOT stored here. entity_type is constrained to the four taxonomy
+    -- types so a typo can't create a dead row.
+    CREATE TABLE IF NOT EXISTS org_folder_templates (
+      id              BIGSERIAL PRIMARY KEY,
+      organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      entity_type     TEXT NOT NULL CHECK (entity_type IN ('lead','estimate','job','client')),
+      folders         JSONB NOT NULL DEFAULT '[]'::jsonb,
+      updated_by      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (organization_id, entity_type)
+    );
+    CREATE INDEX IF NOT EXISTS idx_org_folder_templates_org
+      ON org_folder_templates(organization_id);
+
     -- Extend the entity_type enum to support clients (business-card photos,
     -- W9s, COIs, etc. attached to a parent management company or property).
     -- The CHECK constraint is named implicitly so we have to drop and re-add

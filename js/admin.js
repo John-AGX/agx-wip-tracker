@@ -2421,7 +2421,8 @@
   // app_settings under the hood).
   var TEMPLATES_TABS = [
     { key: 'proposal', label: '📄 Proposal',  desc: 'Header, letter body, exclusions, signature.' },
-    { key: 'bt',       label: '📊 BT Export', desc: 'Buildertrend cost-category mapping.' }
+    { key: 'bt',       label: '📊 BT Export', desc: 'Buildertrend cost-category mapping.' },
+    { key: 'folders',  label: '📁 Folders',   desc: 'Default folder set shown for new leads / estimates / jobs / clients before any file is uploaded.' }
   ];
 
   function switchTemplatesTab(key) {
@@ -2513,6 +2514,20 @@
       '</button>';
     });
     tabsHTML += '</div>';
+
+    // Folders tab is self-contained: it has its own per-entity-type
+    // Save / Reset buttons (each hits /api/folder-templates directly),
+    // so it does NOT share the proposal/bt "Save All" footer. Render
+    // the host + kick off an async load, then bail out early.
+    if (_templatesActiveTab === 'folders') {
+      var fHint = activeTab && activeTab.desc
+        ? '<p style="margin:0 0 12px 0;color:var(--text-dim,#888);font-size:12px;">' + activeTab.desc + '</p>'
+        : '';
+      pane.innerHTML = tabsHTML + fHint +
+        '<div id="folder-tpl-host"><div style="padding:12px;color:var(--text-dim,#888);">Loading folder templates…</div></div>';
+      loadFolderTemplatesAdmin();
+      return;
+    }
 
     // _templatesActiveTab can still hold 'email' on sessionStorage
     // entries written before the consolidation. Coerce to 'proposal'
@@ -2640,6 +2655,138 @@
     html += '</fieldset>';
     return html;
   }
+
+  // ==================== FOLDER TEMPLATES (sub-section of Templates tab) ====================
+  // Per-org override of the DEFAULT folder set shown for new leads /
+  // estimates / jobs / clients before any file is uploaded. Folders are
+  // IMPLICIT in Project 86 (a folder exists only when an attachment
+  // carries it), so these templates are what populate the "empty drop
+  // target" buckets on each entity's Files view + the sub-grant picker.
+  //
+  // Backed by /api/folder-templates (org_folder_templates table). The
+  // built-in defaults live in js/folder-taxonomy.js + the server mirror
+  // server/folder-taxonomy.js. Each entity type edits independently
+  // with its own Save / Reset — no shared "Save All" draft.
+  var _folderTplData = null;   // { lead:{effective,custom,defaults,customized,updated_at}, ... }
+  var FOLDER_TPL_TYPES = [
+    { key: 'lead',     label: 'Lead',     desc: 'Pre-sale prospect folders.' },
+    { key: 'estimate', label: 'Estimate', desc: 'Sales-cycle folders (typically the lead set plus takeoff / bids / contract).' },
+    { key: 'job',      label: 'Job',      desc: 'Full doc-control set. Subfolders (e.g. plans/current) are the units a sub grant can be scoped to.' },
+    { key: 'client',   label: 'Client',   desc: 'Shared set spanning that client\'s work.' }
+  ];
+
+  function loadFolderTemplatesAdmin() {
+    var host = document.getElementById('folder-tpl-host');
+    if (!(window.p86Api && window.p86Api.folderTemplates)) {
+      if (host) host.innerHTML = '<div style="padding:12px;color:#f87171;">Folder templates API unavailable.</div>';
+      return;
+    }
+    window.p86Api.folderTemplates.list().then(function(resp) {
+      _folderTplData = (resp && resp.templates) || {};
+      renderFolderTemplatesEditor();
+    }).catch(function(err) {
+      if (host) host.innerHTML = '<div style="padding:12px;color:#f87171;">Failed to load folder templates: ' + escapeHTML(err.message || '') + '</div>';
+    });
+  }
+
+  function renderFolderTemplatesEditor() {
+    var host = document.getElementById('folder-tpl-host');
+    if (!host) return;
+    var data = _folderTplData || {};
+    var html = '';
+    html += '<p style="margin:0 0 14px 0;color:var(--text-dim,#888);font-size:12px;">' +
+      'One folder per line. Use <code>/</code> for subfolders (max 3 levels, e.g. <code>plans/current</code>). ' +
+      'Names are normalized to lowercase-hyphenated on save. <code>general</code> is always available as a catch-all and doesn\'t need listing. ' +
+      'A saved list fully replaces the defaults for that type; <strong>Reset</strong> reverts to the built-in set.' +
+    '</p>';
+    FOLDER_TPL_TYPES.forEach(function(t) {
+      var d = data[t.key] || {};
+      var eff = Array.isArray(d.effective) ? d.effective : (Array.isArray(d.defaults) ? d.defaults : []);
+      var customized = !!d.customized;
+      var badge = customized
+        ? '<span style="background:rgba(79,140,255,0.16);color:#4f8cff;font-size:10px;padding:2px 8px;border-radius:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">Customized</span>'
+        : '<span style="background:rgba(255,255,255,0.06);color:var(--text-dim,#888);font-size:10px;padding:2px 8px;border-radius:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">Default</span>';
+      var rows = Math.max(4, eff.length + 1);
+      html += '<fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;margin-bottom:14px;">';
+      html += '<legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">' +
+        escapeHTML(t.label) + ' &nbsp;' + badge + '</legend>';
+      html += '<p style="margin:0 0 8px 0;color:var(--text-dim,#888);font-size:12px;">' + escapeHTML(t.desc) + '</p>';
+      html += '<textarea id="folder-tpl-ta-' + t.key + '" rows="' + rows + '" ' +
+        'style="width:100%;resize:vertical;font-family:\'SF Mono\',monospace;font-size:12px;" ' +
+        'placeholder="site-photos&#10;plans-specs&#10;proposals">' + escapeHTML(eff.join('\n')) + '</textarea>';
+      html += '<div style="display:flex;gap:8px;align-items:center;margin-top:8px;">' +
+        '<button class="primary small" onclick="saveFolderTemplate(\'' + t.key + '\')">&#x1F4BE; Save</button>' +
+        '<button class="secondary small" onclick="resetFolderTemplate(\'' + t.key + '\')"' + (customized ? '' : ' disabled title="Already using the built-in defaults"') + '>&#x21BA; Reset to default</button>' +
+        '<span id="folder-tpl-status-' + t.key + '" style="margin-left:6px;color:var(--text-dim,#888);font-size:12px;"></span>' +
+      '</div>';
+      html += '</fieldset>';
+    });
+    host.innerHTML = html;
+  }
+
+  // Parse a textarea into a clean folder array (trim, drop blanks). The
+  // server re-sanitizes (lowercase-hyphenate, cap depth/length, strip
+  // 'general'), so this is just a friendly client-side first pass.
+  function parseFolderTextarea(type) {
+    var ta = document.getElementById('folder-tpl-ta-' + type);
+    if (!ta) return [];
+    return ta.value.split('\n').map(function(s) { return s.trim(); }).filter(Boolean);
+  }
+
+  function _folderTplStatus(type, msg, isErr) {
+    var st = document.getElementById('folder-tpl-status-' + type);
+    if (!st) return;
+    st.textContent = msg || '';
+    st.style.color = isErr ? '#f87171' : 'var(--text-dim,#888)';
+  }
+
+  // Persist the per-type folder list. On success, refresh the local
+  // cache + the shared folder-taxonomy cache so the entity Files views
+  // pick up the change without a reload, then re-render the editor so
+  // the Customized badge + sanitized list reflect the saved state.
+  window.saveFolderTemplate = function(type) {
+    if (!(window.p86Api && window.p86Api.folderTemplates)) return;
+    var folders = parseFolderTextarea(type);
+    _folderTplStatus(type, 'Saving…', false);
+    window.p86Api.folderTemplates.save(type, folders).then(function(resp) {
+      if (!_folderTplData) _folderTplData = {};
+      _folderTplData[type] = {
+        effective: Array.isArray(resp.folders) ? resp.folders : [],
+        custom: Array.isArray(resp.folders) ? resp.folders : [],
+        defaults: resp.defaults || [],
+        customized: true,
+        updated_at: resp.updated_at || null
+      };
+      if (typeof window.invalidateFolderTemplates === 'function') window.invalidateFolderTemplates();
+      renderFolderTemplatesEditor();
+      _folderTplStatus(type, 'Saved ✓', false);
+      setTimeout(function() { _folderTplStatus(type, '', false); }, 2500);
+    }).catch(function(err) {
+      _folderTplStatus(type, 'Error: ' + (err.message || 'save failed'), true);
+    });
+  };
+
+  // Clear the org override → revert to built-in defaults.
+  window.resetFolderTemplate = function(type) {
+    if (!(window.p86Api && window.p86Api.folderTemplates)) return;
+    _folderTplStatus(type, 'Resetting…', false);
+    window.p86Api.folderTemplates.reset(type).then(function(resp) {
+      if (!_folderTplData) _folderTplData = {};
+      _folderTplData[type] = {
+        effective: resp.defaults || [],
+        custom: null,
+        defaults: resp.defaults || [],
+        customized: false,
+        updated_at: null
+      };
+      if (typeof window.invalidateFolderTemplates === 'function') window.invalidateFolderTemplates();
+      renderFolderTemplatesEditor();
+      _folderTplStatus(type, 'Reset ✓', false);
+      setTimeout(function() { _folderTplStatus(type, '', false); }, 2500);
+    }).catch(function(err) {
+      _folderTplStatus(type, 'Error: ' + (err.message || 'reset failed'), true);
+    });
+  };
 
   // ==================== AGENT SKILLS (sub-section of Templates tab) ====================
   // Admin-editable prompt extensions loaded into 86 at chat time

@@ -324,6 +324,21 @@
     merge: function(payload) { return post('/api/org-tags/merge', payload); }
   };
 
+  // Per-org folder templates. Customizes the default folder set shown
+  // for new leads / estimates / jobs / clients before any file exists.
+  // list() returns { templates: { <type>: { effective, custom,
+  // defaults, customized, updated_at } } }. save() upserts a custom
+  // list; reset() drops the custom row → reverts to built-in defaults.
+  var folderTemplates = {
+    list: function() { return get('/api/folder-templates'); },
+    save: function(entityType, folders) {
+      return put('/api/folder-templates/' + encodeURIComponent(entityType), { folders: folders || [] });
+    },
+    reset: function(entityType) {
+      return del('/api/folder-templates/' + encodeURIComponent(entityType));
+    }
+  };
+
   var leads = {
     list: function(query) {
       var qs = '';
@@ -573,7 +588,7 @@
 
   window.p86Api = {
     get: get, put: put, post: post, del: del, patch: patch,
-    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, qbCosts: qbCosts, subs: subsApi, schedule: schedule, adminSms: adminSms, messages: messages, weather: weather, projects: projects, orgTags: orgTags, reports: reports, changeOrders: changeOrders,
+    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, qbCosts: qbCosts, subs: subsApi, schedule: schedule, adminSms: adminSms, messages: messages, weather: weather, projects: projects, orgTags: orgTags, folderTemplates: folderTemplates, reports: reports, changeOrders: changeOrders,
     isOffline: isOffline,
     isAuthenticated: function() { return !!getToken() && !isOffline(); }
   };

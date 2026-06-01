@@ -51,6 +51,7 @@ const payloadRoutes = require('./routes/payload-routes');
 const projectRoutes = require('./routes/project-routes');
 const projectPairsRoutes = require('./routes/project-pairs-routes');
 const orgTagsRoutes = require('./routes/org-tags-routes');
+const folderTemplatesRoutes = require('./routes/folder-templates-routes');
 const { storage } = require('./storage');
 
 const app = express();
@@ -122,6 +123,7 @@ app.use('/api/leads', leadRoutes);
 app.use('/api/projects/:projectId/pairs', projectPairsRoutes);
 app.use('/api/projects', projectRoutes);
 app.use('/api/org-tags', orgTagsRoutes);
+app.use('/api/folder-templates', folderTemplatesRoutes);
 // Org manifest — one read-only endpoint that powers the Summary
 // page's System Snapshot block + the System Map sub-tab. Returns
 // entity counts, the feature catalog, and recent activity in a
