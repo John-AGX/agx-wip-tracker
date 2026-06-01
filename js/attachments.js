@@ -929,6 +929,112 @@
       '</div>';
     }
 
+    // Folder-picker modal — replaces the old window.prompt for "Move to
+    // folder". Lists this entity's effective folders (org template /
+    // built-in defaults MERGED with any live folders) as one-click
+    // destinations with file counts, the current folder marked, plus a
+    // free-text field for ad-hoc / subfolder paths. Same sanitize +
+    // PUT { folder } path as before — just a real UI instead of a
+    // browser prompt() where the user had to remember + type the name.
+    function openFolderPicker(att) {
+      if (!att) return;
+      var attId = att.id;
+      var current = att.folder || 'general';
+      var counts = folderCounts();
+      var eff = effectiveFolders();
+      // Always surface the current folder, even if it's an ad-hoc one
+      // that isn't part of the effective set, so the user can see where
+      // the file lives now (and it reads as "current").
+      if (eff.indexOf(current) === -1) eff = eff.concat([current]);
+
+      var prior = document.getElementById('p86FolderPicker');
+      if (prior) prior.remove();
+      var modal = document.createElement('div');
+      modal.id = 'p86FolderPicker';
+      modal.className = 'modal active';
+
+      function close() {
+        document.removeEventListener('keydown', onKey, true);
+        if (modal.parentNode) modal.parentNode.removeChild(modal);
+      }
+      function onKey(e) {
+        if (e.key === 'Escape') { e.preventDefault(); close(); }
+      }
+      function setStatus(msg, isErr) {
+        var el = modal.querySelector('[data-fp-status]');
+        if (!el) return;
+        el.textContent = msg || '';
+        el.style.color = isErr ? '#ef4444' : 'var(--text-dim,#888)';
+      }
+      function doMove(folder) {
+        var next = sanitizeFolder(folder);
+        if (next === current) { close(); return; } // no-op
+        setStatus('Moving…', false);
+        window.p86Api.attachments.update(attId, { folder: next })
+          .then(function() { close(); fetchList(); })
+          .catch(function(err) {
+            setStatus('Move failed: ' + (err && err.message ? err.message : 'try again'), true);
+          });
+      }
+
+      var chips = eff.map(function(f) {
+        var isCurrent = (f === current);
+        var n = counts[f] || 0;
+        var bg = isCurrent ? 'rgba(79,140,255,0.18)' : 'transparent';
+        var bd = isCurrent ? '#4f8cff' : 'var(--border,#333)';
+        return '<button type="button" data-fp-pick="' + escapeAttr(f) + '" ' +
+          'style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;border:1px solid ' + bd + ';border-radius:8px;background:' + bg + ';color:var(--text,#ddd);font-size:13px;font-weight:600;cursor:pointer;text-align:left;width:100%;">' +
+          '<span>' + escapeHTMLLocal(prettyFolder(f)) + (isCurrent ? ' <span style="font-weight:400;color:var(--text-dim,#888);font-size:11px;">(current)</span>' : '') + '</span>' +
+          '<span style="opacity:0.6;font-size:11px;font-weight:400;">' + n + '</span>' +
+        '</button>';
+      }).join('');
+
+      modal.innerHTML =
+        '<div class="modal-content" style="max-width:440px;">' +
+          '<div class="modal-header">' +
+            '<span>Move “' + escapeHTMLLocal(att.filename || 'file') + '”</span>' +
+            '<button type="button" class="p86-modal-close" data-fp-close>&times;</button>' +
+          '</div>' +
+          '<div style="padding:14px 16px;">' +
+            '<div style="font-size:11px;color:var(--text-dim,#888);margin-bottom:8px;">Pick a destination folder</div>' +
+            '<div style="display:flex;flex-direction:column;gap:6px;max-height:300px;overflow:auto;">' + chips + '</div>' +
+            '<div style="margin-top:14px;border-top:1px solid var(--border,#333);padding-top:12px;">' +
+              '<div style="font-size:11px;color:var(--text-dim,#888);margin-bottom:6px;">Or type a new folder <span style="opacity:0.7;">— letters, numbers, dashes; use / for subfolders</span></div>' +
+              '<div style="display:flex;gap:8px;">' +
+                '<input type="text" data-fp-new placeholder="e.g. permits, photos/progress" ' +
+                  'style="flex:1;min-width:0;padding:8px 10px;border:1px solid var(--border,#333);border-radius:6px;background:var(--bg,#1a1a1a);color:var(--text,#ddd);font-size:13px;" />' +
+                '<button type="button" class="primary" data-fp-create style="flex:0 0 auto;">Move</button>' +
+              '</div>' +
+            '</div>' +
+            '<div data-fp-status style="font-size:11px;margin-top:10px;min-height:14px;"></div>' +
+          '</div>' +
+        '</div>';
+
+      modal.addEventListener('click', function(e) {
+        if (e.target === modal) close();
+      });
+      document.body.appendChild(modal);
+      document.addEventListener('keydown', onKey, true);
+
+      modal.querySelectorAll('[data-fp-close]').forEach(function(b) {
+        b.addEventListener('click', close);
+      });
+      modal.querySelectorAll('[data-fp-pick]').forEach(function(b) {
+        b.addEventListener('click', function() { doMove(b.getAttribute('data-fp-pick')); });
+      });
+      var newInput = modal.querySelector('[data-fp-new]');
+      var createBtn = modal.querySelector('[data-fp-create]');
+      function submitNew() {
+        var v = (newInput && newInput.value) || '';
+        if (!v.trim()) { if (newInput) newInput.focus(); return; }
+        doMove(v);
+      }
+      if (createBtn) createBtn.addEventListener('click', submitNew);
+      if (newInput) newInput.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') { e.preventDefault(); submitNew(); }
+      });
+    }
+
     function fetchList() {
       state.loading = true;
       render();
@@ -1302,30 +1408,15 @@
           deleteAttachment(btn.getAttribute('data-att-del-doc'), 'document');
         };
       });
-      // Move-to-folder. Two flavors:
-      //   • Plain folder rename (within this entity) → server PUT /:id { folder }
-      //   • Cross-entity move (job ↔ estimate ↔ lead, etc.) → POST /:id/move
-      // Prompt is intentionally simple — a single text input with the
-      // existing folder pre-filled, plus a hint about syntax. Heavier
-      // pickers can layer in later if folks need them.
+      // Move-to-folder (document rows) — opens the folder picker modal,
+      // which lists this entity's effective folders as one-click targets
+      // plus a free-text field for ad-hoc / subfolder paths.
       container.querySelectorAll('[data-att-move]').forEach(function(btn) {
         btn.onclick = function(e) {
           e.stopPropagation();
           var attId = btn.getAttribute('data-att-move');
           var att = state.attachments.find(function(a) { return a.id === attId; });
-          if (!att) return;
-          var current = att.folder || 'general';
-          var prompt = 'Move "' + (att.filename || 'file') + '" to folder:\n\n' +
-            'Folder name (e.g. photos, rfp, contracts) — letters, numbers, spaces, dashes.';
-          var next = window.prompt(prompt, current);
-          if (next == null) return; // cancel
-          var folder = sanitizeFolder(next);
-          if (folder === current) return; // no-op
-          window.p86Api.attachments.update(attId, { folder: folder })
-            .then(fetchList)
-            .catch(function(err) {
-              alert('Move failed: ' + (err.message || ''));
-            });
+          if (att) openFolderPicker(att);
         };
       });
       // PDF view button — opens the inline viewer with an Ask AI handoff.
@@ -1588,18 +1679,7 @@
         });
     }
     function moveAttachmentFolder(att) {
-      var current = att.folder || 'general';
-      var prompt = 'Move "' + (att.filename || 'file') + '" to folder:\n\n' +
-        'Folder name (e.g. photos, rfp, contracts) — letters, numbers, spaces, dashes.';
-      var next = window.prompt(prompt, current);
-      if (next == null) return;
-      var folder = sanitizeFolder(next);
-      if (folder === current) return;
-      window.p86Api.attachments.update(att.id, { folder: folder })
-        .then(fetchList)
-        .catch(function(err) {
-          alert('Move failed: ' + (err.message || ''));
-        });
+      openFolderPicker(att);
     }
 
     fetchList();
