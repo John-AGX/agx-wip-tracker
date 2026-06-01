@@ -122,6 +122,42 @@ const EVENTS = [
     audience: 'Sub primary contact (+ admin BCC)',
     variables: ['sub.name', 'sub.primaryContactFirst', 'cert.type', 'cert.expirationDate', 'cert.daysUntilExpiry', 'appUrl'],
     wired: true
+  },
+  // Wave 8 — weekly digest events. Cron fires Monday morning per org.
+  // The digest data is assembled at fire time so the template just
+  // interpolates pre-computed counters + lists.
+  {
+    key: 'weekly_digest_pm',
+    label: 'Weekly digest — PM',
+    description: 'Monday morning rollup for PMs: jobs touched this week, schedule entries for next week.',
+    category: 'Weekly Digests',
+    scope: 'org',
+    defaultEnabled: false,
+    audience: 'Each PM in the org',
+    variables: ['recipientName', 'week_label', 'jobsTouchedCount', 'jobsTouchedListHtml', 'scheduleNextWeekCount', 'scheduleNextWeekListHtml', 'appUrl'],
+    wired: true
+  },
+  {
+    key: 'weekly_digest_sales',
+    label: 'Weekly digest — Sales',
+    description: 'Monday morning rollup for salespeople: leads progressed this week, estimates sent/won.',
+    category: 'Weekly Digests',
+    scope: 'org',
+    defaultEnabled: false,
+    audience: 'Each salesperson in the org',
+    variables: ['recipientName', 'week_label', 'leadsProgressedCount', 'leadsProgressedListHtml', 'estimatesSentCount', 'leadsWonCount', 'appUrl'],
+    wired: true
+  },
+  {
+    key: 'weekly_digest_ops',
+    label: 'Weekly digest — Operations',
+    description: 'Monday morning rollup for ops/admin: certs expiring soon, jobs starting next week, recent compliance updates.',
+    category: 'Weekly Digests',
+    scope: 'org',
+    defaultEnabled: false,
+    audience: 'Org admins',
+    variables: ['recipientName', 'week_label', 'certsExpiringCount', 'certsExpiringListHtml', 'jobsStartingNextWeekCount', 'appUrl'],
+    wired: true
   }
 ];
 

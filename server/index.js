@@ -288,6 +288,14 @@ function startServer() {
       } catch (e) {
         console.warn('[cert-expiry] failed to start scanner:', e && e.message);
       }
+      // Weekly digest cron — Monday 7am local. Self-gated by event toggles
+      // in admin settings; sendForEvent skips disabled events. Each digest
+      // (PM / sales / ops) is independently togglable per org.
+      try {
+        require('./weekly-digest-cron').start();
+      } catch (e) {
+        console.warn('[weekly-digest] failed to start:', e && e.message);
+      }
       // Phase 5 — proactive-watch scheduler. Ticks every 60s,
       // fires watches with next_fire_at <= NOW. Runs in-process; one
       // tick per app instance (multiple Railway instances would each

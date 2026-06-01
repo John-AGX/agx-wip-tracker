@@ -317,6 +317,64 @@ var TEMPLATE_SOURCES = {
     )
   },
 
+  // ── Weekly digests (Wave 8) ─────────────────────────────────────
+  weekly_digest_pm: {
+    subject: 'Your weekly digest — {{week_label}}',
+    blocks: [
+      { type: 'header', title: 'Your week at a glance', subtitle: '{{week_label}}' },
+      { type: 'text', html: '<p>Hi {{recipientName}},</p><p>Here\'s what happened on your jobs this week and what\'s coming up next.</p>' },
+      { type: 'text', html: '<p><strong>Jobs touched this week:</strong> {{jobsTouchedCount}}</p>{{{jobsTouchedListHtml}}}' },
+      { type: 'text', html: '<p><strong>Coming up next week:</strong> {{scheduleNextWeekCount}} schedule entries</p>{{{scheduleNextWeekListHtml}}}' },
+      { type: 'button', label: 'Open Project 86', url: '{{appUrl}}', bg_color: '#4f8cff' },
+      { type: 'footer', address: 'Project 86' }
+    ],
+    html_body: shellWrap('Your week at a glance',
+      '<p>Hi {{recipientName}},</p>' +
+      '<p>Jobs touched this week: <strong>{{jobsTouchedCount}}</strong></p>' +
+      '{{{jobsTouchedListHtml}}}' +
+      '<p>Coming up next week: <strong>{{scheduleNextWeekCount}}</strong> schedule entries</p>' +
+      '{{{scheduleNextWeekListHtml}}}' +
+      '<p><a href="{{appUrl}}" style="display:inline-block;background:#4f8cff;color:#fff;text-decoration:none;padding:10px 20px;border-radius:6px;font-weight:600;">Open Project 86</a></p>'
+    )
+  },
+
+  weekly_digest_sales: {
+    subject: 'Sales digest — {{week_label}}',
+    blocks: [
+      { type: 'header', title: 'Sales recap', subtitle: '{{week_label}}' },
+      { type: 'text', html: '<p>Hi {{recipientName}},</p><p>A quick rollup of your week:</p>' },
+      { type: 'text', html: '<p><strong>Leads progressed:</strong> {{leadsProgressedCount}}<br><strong>Leads won (Sold):</strong> {{leadsWonCount}}<br><strong>Estimates sent:</strong> {{estimatesSentCount}}</p>' },
+      { type: 'text', html: '{{{leadsProgressedListHtml}}}' },
+      { type: 'button', label: 'Open pipeline', url: '{{appUrl}}', bg_color: '#059669' },
+      { type: 'footer', address: 'Project 86' }
+    ],
+    html_body: shellWrap('Sales recap — {{week_label}}',
+      '<p>Hi {{recipientName}},</p>' +
+      '<p>Leads progressed: <strong>{{leadsProgressedCount}}</strong> · Won: <strong>{{leadsWonCount}}</strong> · Estimates sent: <strong>{{estimatesSentCount}}</strong></p>' +
+      '{{{leadsProgressedListHtml}}}' +
+      '<p><a href="{{appUrl}}" style="display:inline-block;background:#059669;color:#fff;text-decoration:none;padding:10px 20px;border-radius:6px;font-weight:600;">Open pipeline</a></p>'
+    )
+  },
+
+  weekly_digest_ops: {
+    subject: 'Ops digest — {{week_label}}',
+    blocks: [
+      { type: 'header', title: 'Operations digest', subtitle: '{{week_label}}' },
+      { type: 'text', html: '<p>Hi {{recipientName}},</p><p>Heads-up for the week ahead:</p>' },
+      { type: 'text', html: '<p><strong>Certificates expiring soon:</strong> {{certsExpiringCount}}</p>{{{certsExpiringListHtml}}}' },
+      { type: 'text', html: '<p><strong>Jobs starting next week:</strong> {{jobsStartingNextWeekCount}}</p>' },
+      { type: 'button', label: 'Open Project 86', url: '{{appUrl}}', bg_color: '#4f8cff' },
+      { type: 'footer', address: 'Project 86' }
+    ],
+    html_body: shellWrap('Operations digest — {{week_label}}',
+      '<p>Hi {{recipientName}},</p>' +
+      '<p>Certificates expiring soon: <strong>{{certsExpiringCount}}</strong></p>' +
+      '{{{certsExpiringListHtml}}}' +
+      '<p>Jobs starting next week: <strong>{{jobsStartingNextWeekCount}}</strong></p>' +
+      '<p><a href="{{appUrl}}" style="display:inline-block;background:#4f8cff;color:#fff;text-decoration:none;padding:10px 20px;border-radius:6px;font-weight:600;">Open Project 86</a></p>'
+    )
+  },
+
   cert_expiring: {
     subject: 'Cert expiring: {{cert.typeLabel}} ({{sub.name}})',
     blocks: [
@@ -353,6 +411,29 @@ function enrichParams(eventKey, raw) {
   if (!p.appUrl) p.appUrl = appUrl();
   p.appUrlHost = String(p.appUrl || '').replace(/^https?:\/\//, '').replace(/\/$/, '');
 
+  // Wave 8 — digest defaults. The cron does the real data assembly
+  // (in weekly-digest-cron.js) and passes the full {{listHtml}}
+  // strings as triple-brace raw HTML. enrichParams just covers the
+  // greeting + week_label + zero defaults so live preview renders
+  // sensibly even before the cron has run.
+  if (eventKey === 'weekly_digest_pm' || eventKey === 'weekly_digest_sales' || eventKey === 'weekly_digest_ops') {
+    if (!p.recipientName) p.recipientName = 'there';
+    if (!p.week_label) {
+      var now = new Date();
+      p.week_label = now.toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' });
+    }
+    if (p.jobsTouchedCount == null) p.jobsTouchedCount = 0;
+    if (p.jobsTouchedListHtml == null) p.jobsTouchedListHtml = '';
+    if (p.scheduleNextWeekCount == null) p.scheduleNextWeekCount = 0;
+    if (p.scheduleNextWeekListHtml == null) p.scheduleNextWeekListHtml = '';
+    if (p.leadsProgressedCount == null) p.leadsProgressedCount = 0;
+    if (p.leadsProgressedListHtml == null) p.leadsProgressedListHtml = '';
+    if (p.leadsWonCount == null) p.leadsWonCount = 0;
+    if (p.estimatesSentCount == null) p.estimatesSentCount = 0;
+    if (p.certsExpiringCount == null) p.certsExpiringCount = 0;
+    if (p.certsExpiringListHtml == null) p.certsExpiringListHtml = '';
+    if (p.jobsStartingNextWeekCount == null) p.jobsStartingNextWeekCount = 0;
+  }
   if (eventKey === 'org_invite') {
     if (!p.platform_name) p.platform_name = 'Project 86';
     if (!p.invited_by) p.invited_by = 'A system admin';
@@ -795,6 +876,32 @@ function sampleParams(eventKey) {
       return { lead: { title: 'Solace Powerwash', client_company: 'Solace Communities' }, salesperson: { name: 'Jane Smith' }, changedBy: { name: 'John Project 86' }, reason: 'Lost to competitor', status: 'lost' };
     case 'cert_expiring':
       return { sub: { name: 'Summit Sealants', primaryContactFirst: 'Mike' }, cert: { type: 'gl', expirationDate: '2026-05-15', daysUntilExpiry: 12 } };
+    case 'weekly_digest_pm':
+      return {
+        recipientName: 'Jane Smith',
+        week_label: 'Week of May 27, 2026',
+        jobsTouchedCount: 5,
+        jobsTouchedListHtml: '<ul style="color:#1f2937;font-size:13px;line-height:1.6;"><li>Madeira Bay Restoration (S2245) — 3 new photos, status: In Progress</li><li>Solace Powerwash (S2247) — schedule updated</li><li>Penthouse Groves (S2248) — completed</li></ul>',
+        scheduleNextWeekCount: 3,
+        scheduleNextWeekListHtml: '<ul style="color:#1f2937;font-size:13px;line-height:1.6;"><li>Mon — Madeira Bay Restoration crew (3 days)</li><li>Wed — Solace Powerwash (1 day)</li><li>Fri — Hidden Creek (2 days)</li></ul>'
+      };
+    case 'weekly_digest_sales':
+      return {
+        recipientName: 'Scott Ryan',
+        week_label: 'Week of May 27, 2026',
+        leadsProgressedCount: 7,
+        leadsProgressedListHtml: '<ul style="color:#1f2937;font-size:13px;line-height:1.6;"><li>Acme HOA — moved to Proposal sent</li><li>Riverside Apartments — site visit booked</li><li>Westshore Bay — estimate in review</li></ul>',
+        leadsWonCount: 2,
+        estimatesSentCount: 4
+      };
+    case 'weekly_digest_ops':
+      return {
+        recipientName: 'Admin',
+        week_label: 'Week of May 27, 2026',
+        certsExpiringCount: 3,
+        certsExpiringListHtml: '<ul style="color:#1f2937;font-size:13px;line-height:1.6;"><li>Summit Sealants — GL expires in 12 days</li><li>Coast Painters — WC expires in 21 days</li><li>Florida Roofing — W-9 expires in 28 days</li></ul>',
+        jobsStartingNextWeekCount: 2
+      };
     default: return {};
   }
 }
