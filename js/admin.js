@@ -1194,6 +1194,26 @@
           '</div>' +
           '<div id="email-test-result" style="margin-top:10px;font-size:12px;"></div>' +
         '</div>' +
+        // Analytics card (Wave 7) — per-template sent / open / click
+        // rollup over a rolling window (default 30 days).
+        '<div class="card" style="padding:16px;">' +
+          '<div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:10px;gap:10px;">' +
+            '<div>' +
+              '<h3 style="margin:0 0 4px 0;">&#x1F4CA; Engagement analytics</h3>' +
+              '<p style="margin:0;color:var(--text-dim,#888);font-size:12px;">Open + click rates per template over the selected window. ' +
+                'Tracking requires the recipient\'s email client to load images (opens) or follow a link (clicks).</p>' +
+            '</div>' +
+            '<div style="display:flex;gap:6px;align-items:center;">' +
+              '<select id="email-analytics-window" style="background:var(--input-bg,#0f0f1e);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:4px 8px;font-size:12px;">' +
+                '<option value="7">Last 7 days</option>' +
+                '<option value="30" selected>Last 30 days</option>' +
+                '<option value="90">Last 90 days</option>' +
+              '</select>' +
+              '<button class="ee-btn secondary" id="email-analytics-refresh">&#x21BB;</button>' +
+            '</div>' +
+          '</div>' +
+          '<div id="email-analytics-tbl" style="font-size:12px;color:var(--text-dim,#888);">Loading…</div>' +
+        '</div>' +
         // Recent log card.
         '<div class="card" style="padding:16px;">' +
           '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">' +
@@ -1240,6 +1260,12 @@
     });
     document.getElementById('email-log-refresh').addEventListener('click', loadEmailLog);
     document.getElementById('email-log-status-filter').addEventListener('change', loadEmailLog);
+    // Wave 7 analytics card wire-up.
+    var anRefresh = document.getElementById('email-analytics-refresh');
+    var anWindow = document.getElementById('email-analytics-window');
+    if (anRefresh) anRefresh.addEventListener('click', loadEmailAnalytics);
+    if (anWindow) anWindow.addEventListener('change', loadEmailAnalytics);
+    loadEmailAnalytics();
     document.getElementById('email-events-refresh').addEventListener('click', loadEmailEventsAndSettings);
 
     loadEmailEventsAndSettings();
@@ -1981,6 +2007,49 @@
         if (statusEl) statusEl.innerHTML = '<span style="color:#f87171;">Save failed: ' + escapeHTML(err.message || '') + '</span>';
       });
     }, 250);
+  }
+
+  // ── Engagement analytics (Wave 7) ────────────────────────────────
+  function loadEmailAnalytics() {
+    var tbl = document.getElementById('email-analytics-tbl');
+    if (!tbl) return;
+    var sel = document.getElementById('email-analytics-window');
+    var days = sel ? Number(sel.value) || 30 : 30;
+    tbl.innerHTML = '<div style="padding:14px;color:var(--text-dim,#888);">Loading…</div>';
+    window.p86Api.get('/api/email/analytics?days=' + encodeURIComponent(days)).then(function(r) {
+      var rows = r.rows || [];
+      if (!rows.length) {
+        tbl.innerHTML = '<div style="padding:14px;text-align:center;color:var(--text-dim,#888);">No sends in this window yet.</div>';
+        return;
+      }
+      var html = '<table class="dense-table" style="width:100%;border-collapse:collapse;font-size:12px;">' +
+        '<thead style="border-bottom:1px solid var(--border,#333);">' +
+          '<tr>' +
+            '<th style="text-align:left;padding:8px;">Event</th>' +
+            '<th style="text-align:right;padding:8px;width:80px;">Sent</th>' +
+            '<th style="text-align:right;padding:8px;width:100px;">Opens</th>' +
+            '<th style="text-align:right;padding:8px;width:100px;">Clicks</th>' +
+            '<th style="text-align:right;padding:8px;width:80px;">Open %</th>' +
+            '<th style="text-align:right;padding:8px;width:80px;">Click %</th>' +
+          '</tr>' +
+        '</thead><tbody>';
+      rows.forEach(function(row) {
+        var openPct = row.sent ? Math.round((row.opens / row.sent) * 100) : 0;
+        var clickPct = row.sent ? Math.round((row.clicks / row.sent) * 100) : 0;
+        html += '<tr style="border-bottom:1px solid var(--border,#2a2a3a);">' +
+          '<td style="padding:6px 8px;font-family:monospace;font-size:11px;color:var(--text);">' + escapeHTML(row.event_key) + '</td>' +
+          '<td style="padding:6px 8px;text-align:right;font-weight:600;">' + row.sent + '</td>' +
+          '<td style="padding:6px 8px;text-align:right;">' + row.opens + '</td>' +
+          '<td style="padding:6px 8px;text-align:right;">' + row.clicks + '</td>' +
+          '<td style="padding:6px 8px;text-align:right;color:' + (openPct >= 30 ? '#34d399' : openPct >= 10 ? '#fbbf24' : 'var(--text-dim,#888)') + ';font-weight:600;">' + openPct + '%</td>' +
+          '<td style="padding:6px 8px;text-align:right;color:' + (clickPct >= 10 ? '#34d399' : clickPct >= 3 ? '#fbbf24' : 'var(--text-dim,#888)') + ';font-weight:600;">' + clickPct + '%</td>' +
+        '</tr>';
+      });
+      html += '</tbody></table>';
+      tbl.innerHTML = html;
+    }).catch(function(err) {
+      tbl.innerHTML = '<div style="padding:14px;color:#f87171;">Failed: ' + escapeHTML(err.message || '') + '</div>';
+    });
   }
 
   function loadEmailLog() {

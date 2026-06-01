@@ -45,9 +45,47 @@ function isDryRun() {
 }
 
 // Generate a stable id for log rows — short enough to surface in
-// the dashboard, unique enough not to collide.
+// the dashboard, unique enough not to collide. Also serves as the
+// tracking token in open/click URLs (Wave 7), so no separate token
+// table or column is needed.
 function genId() {
   return 'em_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+}
+
+// Resolve the public base URL for tracking links. Falls back to
+// project86.net so previews work even when env vars aren't set.
+function trackingBaseUrl() {
+  if (process.env.APP_URL) return String(process.env.APP_URL).replace(/\/$/, '');
+  if (process.env.RAILWAY_PUBLIC_DOMAIN) return 'https://' + process.env.RAILWAY_PUBLIC_DOMAIN;
+  return 'https://project86.net';
+}
+
+// Inject open-tracking pixel + rewrite anchor hrefs through the
+// click-tracking endpoint. The logId becomes the lookup key in both
+// URLs; the track endpoints record events keyed by it.
+//
+// Skipped on:
+//   - mailto: and tel: links (no value in click-tracking these)
+//   - anchors with an existing data-no-track attribute
+//   - URLs that already point at our tracking endpoint (defensive)
+function injectTracking(html, logId) {
+  if (!html || !logId) return html;
+  const base = trackingBaseUrl();
+  // Rewrite <a href="...">.
+  const rewritten = html.replace(/<a\s+([^>]*?)href\s*=\s*"([^"]+)"([^>]*)>/gi, function(match, before, url, after) {
+    if (/^(mailto:|tel:|#)/i.test(url)) return match;
+    if (url.indexOf(base + '/api/email/track/') === 0) return match;
+    if (/data-no-track/i.test(before + after)) return match;
+    const wrapped = base + '/api/email/track/click/' + encodeURIComponent(logId) + '?u=' + encodeURIComponent(url);
+    return '<a ' + before + 'href="' + wrapped + '"' + after + '>';
+  });
+  // Append the tracking pixel just before </body>, or at the end if
+  // no </body> tag is present (block-rendered emails don't wrap).
+  const pixel = '<img src="' + base + '/api/email/track/open/' + encodeURIComponent(logId) + '.gif" alt="" width="1" height="1" style="display:block;max-height:1px;border:0;" />';
+  if (/<\/body>/i.test(rewritten)) {
+    return rewritten.replace(/<\/body>/i, pixel + '</body>');
+  }
+  return rewritten + pixel;
 }
 
 // Insert a log row. Returns the row id so callers can reference it.
@@ -135,11 +173,18 @@ async function sendEmail(opts) {
   }
 
   try {
+    // Pre-allocate the log id so we can inject it into the open
+    // pixel + click-tracking links BEFORE the email is sent. The
+    // INSERT happens AFTER the send so we have the provider id;
+    // ON CONFLICT keeps us idempotent if the same id were ever re-used.
+    const logId = genId();
+    const trackedHtml = injectTracking(html, logId);
+
     const payload = {
       from: process.env.EMAIL_FROM,
       to: Array.isArray(to) ? to : [to],
       subject: subject,
-      html: html,
+      html: trackedHtml,
       text: text
     };
     if (bcc && (Array.isArray(bcc) ? bcc.length : true)) {
@@ -153,11 +198,11 @@ async function sendEmail(opts) {
     // { data: null, error: {...} } on failure — handle both shapes.
     if (res && res.error) {
       const err = res.error.message || JSON.stringify(res.error);
-      const id = await logSend({ to, subject, tag, status: 'failed', error: err });
+      const id = await logSend({ id: logId, to, subject, tag, status: 'failed', error: err });
       return { ok: false, id, providerId: null, error: err, dryRun: false };
     }
     const providerId = (res && res.data && res.data.id) || null;
-    const id = await logSend({ to, subject, tag, status: 'sent', providerId });
+    const id = await logSend({ id: logId, to, subject, tag, status: 'sent', providerId });
     return { ok: true, id, providerId, error: null, dryRun: false };
   } catch (e) {
     const err = e && e.message ? e.message : String(e);

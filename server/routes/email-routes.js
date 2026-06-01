@@ -21,6 +21,67 @@ const router = express.Router();
 
 console.log('[email-routes] mounted at /api/email');
 
+// ── Open / click tracking (Wave 7) ───────────────────────────────
+// Public endpoints — receive opens (1x1 pixel) and clicks (302
+// redirect), record events to email_log_events. Both are best-effort:
+// if the logId doesn't exist (manual cleanup, expired email, etc.)
+// the endpoint still responds normally so the email visual isn't
+// broken. Validation only checks the id shape, not existence.
+
+// 1x1 transparent GIF used for the open pixel.
+const OPEN_PIXEL_GIF = Buffer.from(
+  'R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7',
+  'base64'
+);
+
+function isLogIdShape(s) {
+  return typeof s === 'string' && /^[a-z0-9_]{6,60}$/i.test(s);
+}
+
+// Record an event row; non-blocking on failure.
+async function recordTrackEvent(logId, kind, url, req) {
+  try {
+    const ip = (req.headers['x-forwarded-for'] || req.ip || '').toString().split(',')[0].trim().slice(0, 64);
+    const ua = (req.headers['user-agent'] || '').toString().slice(0, 500);
+    await pool.query(
+      'INSERT INTO email_log_events (log_id, kind, url, ip, user_agent) VALUES ($1, $2, $3, $4, $5)',
+      [logId, kind, url ? String(url).slice(0, 2000) : null, ip, ua]
+    );
+  } catch (e) {
+    console.warn('[email-track] event insert failed:', e.message);
+  }
+}
+
+router.get('/track/open/:logId.gif', async (req, res) => {
+  const logId = String(req.params.logId || '').replace(/\.gif$/i, '');
+  if (isLogIdShape(logId)) {
+    // Fire-and-forget so the gif response isn't delayed by the DB write.
+    recordTrackEvent(logId, 'open', null, req);
+  }
+  res.set('Content-Type', 'image/gif');
+  res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+  res.set('Pragma', 'no-cache');
+  res.send(OPEN_PIXEL_GIF);
+});
+
+router.get('/track/click/:logId', async (req, res) => {
+  const logId = String(req.params.logId || '');
+  const target = String(req.query.u || '');
+  // Safety: only redirect to http(s) URLs (and our own paths) — never
+  // to javascript:, data:, etc. Falls back to the app root if the
+  // target is missing or unsafe.
+  let safeTarget = '/';
+  try {
+    const decoded = decodeURIComponent(target);
+    if (/^https?:\/\//i.test(decoded)) safeTarget = decoded;
+    else if (decoded[0] === '/') safeTarget = decoded;
+  } catch (e) { /* invalid encoding; keep fallback */ }
+  if (isLogIdShape(logId) && target) {
+    recordTrackEvent(logId, 'click', safeTarget, req);
+  }
+  res.redirect(302, safeTarget);
+});
+
 // GET /api/email/events — catalog of all event types the app fires,
 // merged with the current settings (toggle state + recipient config).
 // The admin Email page uses this to render the events table.
@@ -162,6 +223,52 @@ router.get('/log',
       });
     } catch (e) {
       console.error('GET /api/email/log error:', e);
+      res.status(500).json({ error: 'Server error' });
+    }
+  }
+);
+
+// ── Analytics rollup (Wave 7) ────────────────────────────────────
+// GET /api/email/analytics — per-template counts of sent / opens /
+// clicks over a window (default 30 days). The window's narrow enough
+// for the SQL to stay cheap without indexing on sent_at.
+router.get('/analytics',
+  requireAuth, requireRole('admin'),
+  async (req, res) => {
+    try {
+      const days = Math.max(1, Math.min(365, Number(req.query.days) || 30));
+      // sent counts (one row per email_log row, grouped by tag → event_key)
+      const sentR = await pool.query(
+        "SELECT tag AS event_key, COUNT(*)::int AS sent " +
+        "  FROM email_log " +
+        " WHERE sent_at >= NOW() - ($1::int * INTERVAL '1 day') " +
+        "   AND status IN ('sent', 'dry-run') " +
+        " GROUP BY tag",
+        [days]
+      );
+      // open / click counts (per log_id), then aggregate up via the tag.
+      const eventR = await pool.query(
+        "SELECT el.tag AS event_key, ev.kind, COUNT(*)::int AS c " +
+        "  FROM email_log_events ev " +
+        "  JOIN email_log el ON el.id = ev.log_id " +
+        " WHERE ev.occurred_at >= NOW() - ($1::int * INTERVAL '1 day') " +
+        " GROUP BY el.tag, ev.kind",
+        [days]
+      );
+      const byKey = {};
+      sentR.rows.forEach(function(r) {
+        byKey[r.event_key || '(untagged)'] = { event_key: r.event_key || '(untagged)', sent: r.sent, opens: 0, clicks: 0 };
+      });
+      eventR.rows.forEach(function(r) {
+        const k = r.event_key || '(untagged)';
+        if (!byKey[k]) byKey[k] = { event_key: k, sent: 0, opens: 0, clicks: 0 };
+        if (r.kind === 'open')  byKey[k].opens  = r.c;
+        if (r.kind === 'click') byKey[k].clicks = r.c;
+      });
+      const rows = Object.values(byKey).sort(function(a, b) { return b.sent - a.sent; });
+      res.json({ window_days: days, rows: rows });
+    } catch (e) {
+      console.error('GET /api/email/analytics error:', e);
       res.status(500).json({ error: 'Server error' });
     }
   }

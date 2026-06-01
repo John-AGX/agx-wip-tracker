@@ -87,6 +87,26 @@ async function initSchema() {
     -- every template.
     ALTER TABLE organizations ADD COLUMN IF NOT EXISTS branding JSONB NOT NULL DEFAULT '{}'::jsonb;
 
+    -- Email tracking events (Wave 7). One row per open/click recorded
+    -- by the tracking pixel + link rewriter. log_id matches the
+    -- email_log row's text id. kind = 'open' | 'click'. ip is the
+    -- caller's address (IPv4/IPv6 string), user_agent is the UA
+    -- header capped at 500 chars. url is the original URL the user
+    -- clicked (NULL for opens). Indexed by log_id for fast aggregation.
+    CREATE TABLE IF NOT EXISTS email_log_events (
+      id           SERIAL PRIMARY KEY,
+      log_id       TEXT NOT NULL,
+      kind         TEXT NOT NULL,
+      occurred_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      url          TEXT,
+      ip           TEXT,
+      user_agent   TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_email_log_events_log
+      ON email_log_events(log_id, kind);
+    CREATE INDEX IF NOT EXISTS idx_email_log_events_recent
+      ON email_log_events(occurred_at DESC);
+
     -- Seed AGX as the sole org. Idempotent — no-op if a row with
     -- slug='agx' already exists. The identity_body matches what
     -- AGENT_SYSTEM_BASELINE.job currently hardcodes about AGX so
