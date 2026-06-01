@@ -1789,6 +1789,11 @@
   var _templatesList = [];          // [{ key, label, category, wired, hasOverride, updatedAt }]
   var _templateActiveKey = null;     // key of currently-edited template
   var _templateDetail = null;        // last-loaded detail blob
+  // Active visual block editor instance for the currently-open
+  // template. We keep a reference so saveTemplate() and
+  // scheduleLivePreview() can pull the current body string
+  // (legacy textarea path uses document.getElementById fallback).
+  var _emailBlockEditor = null;
 
   function renderAdminEmailTemplates() {
     if (!isAdmin()) return;
@@ -1965,11 +1970,12 @@
         '<label style="font-size:12px;color:var(--text-dim,#aaa);">Subject</label>' +
         '<input type="text" id="email-tpl-subject" value="' + escapeHTML(subjectVal).replace(/"/g, '&quot;') + '" ' +
           'style="background:var(--input-bg,#0f0f1e);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:8px 10px;font-size:13px;" />' +
-        '<label style="font-size:12px;color:var(--text-dim,#aaa);">HTML body</label>' +
-        '<textarea id="email-tpl-body" spellcheck="false" ' +
-          'style="background:var(--input-bg,#0f0f1e);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:8px 10px;font-size:12px;font-family:Menlo,Consolas,monospace;min-height:240px;resize:vertical;">' +
-          escapeHTML(bodyVal) +
-        '</textarea>' +
+        '<label style="font-size:12px;color:var(--text-dim,#aaa);">Body</label>' +
+        // The block editor mounts here. If window.p86EmailBlocks is
+        // unavailable (e.g. cached JS without the new module) we
+        // fall back to the legacy textarea on initial paint —
+        // p86EmailBlocks.mount() replaces the placeholder when ready.
+        '<div id="email-tpl-body-host" class="p86-eb-host"></div>' +
       '</div>' +
       // Action buttons.
       '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;align-items:center;">' +
@@ -1993,10 +1999,24 @@
         '<iframe id="email-tpl-preview-frame" style="width:100%;height:420px;border:0;background:#fff;"></iframe>' +
       '</div>';
 
-    // Variable insertion buttons.
+    // Variable insertion buttons. In block mode, clicking inserts
+    // into the focused text-block via execCommand if possible; falls
+    // back to console hint otherwise.
     ed.querySelectorAll('[data-tpl-var]').forEach(function(btn) {
       btn.addEventListener('click', function() {
-        insertAtCursor(document.getElementById('email-tpl-body'), '{{' + btn.dataset.tplVar + '}}');
+        var marker = '{{' + btn.dataset.tplVar + '}}';
+        if (_emailBlockEditor && document.activeElement &&
+            document.activeElement.classList && document.activeElement.classList.contains('p86-eb-rt-editor')) {
+          // Focused inside a text-block rich-text editor — use
+          // execCommand to insert at cursor.
+          document.execCommand('insertText', false, marker);
+        } else {
+          // Either HTML-mode textarea, or nothing focused. Try
+          // textarea, else copy to clipboard as a last-resort hint.
+          var ta = document.querySelector('.p86-eb-html-textarea');
+          if (ta) insertAtCursor(ta, marker);
+          else if (navigator.clipboard) navigator.clipboard.writeText(marker);
+        }
       });
     });
     document.getElementById('email-tpl-save').addEventListener('click', saveTemplate);
@@ -2004,14 +2024,50 @@
     document.getElementById('email-tpl-test').addEventListener('click', sendTemplateTest);
     var resetBtn = document.getElementById('email-tpl-reset');
     if (resetBtn) resetBtn.addEventListener('click', resetTemplate);
-    // Live preview as the admin types — debounced so we don't re-render
-    // the iframe on every keystroke. Uses the enriched sample params
-    // shipped by the detail endpoint, so client-side interpolation
-    // produces the same output as a server-side render.
     var subjectInput = document.getElementById('email-tpl-subject');
-    var bodyInput = document.getElementById('email-tpl-body');
     if (subjectInput) subjectInput.addEventListener('input', scheduleLivePreview);
-    if (bodyInput) bodyInput.addEventListener('input', scheduleLivePreview);
+
+    // Mount the visual block editor. Prefers block-mode if the
+    // override (or baked default) ships a JSON {"blocks":…} body.
+    // Falls back to HTML mode for legacy raw-HTML templates.
+    var host = document.getElementById('email-tpl-body-host');
+    if (host && window.p86EmailBlocks && window.p86EmailBlocks.mount) {
+      // Tear down any previous editor (we re-paint when switching
+      // templates).
+      if (_emailBlockEditor && typeof _emailBlockEditor.destroy === 'function') {
+        try { _emailBlockEditor.destroy(); } catch (e) {}
+      }
+      var initialBlocks = null;
+      var initialHtml = bodyVal || '';
+      // 1) If the override body parses as blocks JSON, open in blocks.
+      var trimmed = String(bodyVal || '').trim();
+      if (trimmed[0] === '{' && trimmed.indexOf('"blocks"') !== -1) {
+        try {
+          var parsed = JSON.parse(trimmed);
+          if (Array.isArray(parsed.blocks)) { initialBlocks = parsed.blocks; initialHtml = ''; }
+        } catch (e) { /* fall through to defaultSource check */ }
+      }
+      // 2) If no override and the baked default ships blocks, use them.
+      if (initialBlocks == null && _templateDetail && _templateDetail.defaultSource &&
+          Array.isArray(_templateDetail.defaultSource.blocks)) {
+        initialBlocks = _templateDetail.defaultSource.blocks;
+        initialHtml = '';
+      }
+      _emailBlockEditor = window.p86EmailBlocks.mount(host, {
+        blocks: initialBlocks || [],
+        htmlBody: initialHtml,
+        htmlMode: !initialBlocks,   // legacy templates open in HTML mode
+        variables: (_templateDetail && _templateDetail.event && _templateDetail.event.variables) || [],
+        onChange: function() { scheduleLivePreview(); }
+      });
+    } else if (host) {
+      // Fallback for very stale caches — emit a plain textarea so
+      // editing still works.
+      host.innerHTML = '<textarea id="email-tpl-body" spellcheck="false" style="width:100%;background:var(--input-bg,#0f0f1e);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:8px 10px;font-size:12px;font-family:Menlo,Consolas,monospace;min-height:240px;resize:vertical;">' +
+        escapeHTML(bodyVal) + '</textarea>';
+      var ta = document.getElementById('email-tpl-body');
+      if (ta) ta.addEventListener('input', scheduleLivePreview);
+    }
     // Render the current preview into the iframe (initial render, server-side).
     setIframeContent('email-tpl-preview-frame', preview.html || '');
   }
@@ -2036,10 +2092,21 @@
     doc.close();
   }
 
+  // Resolve the current body string. Prefers the block editor when
+  // mounted (returns either a blocks-JSON string in visual mode or
+  // the raw HTML in HTML mode); falls back to the legacy textarea.
+  function getCurrentTemplateBody() {
+    if (_emailBlockEditor && typeof _emailBlockEditor.getBody === 'function') {
+      return _emailBlockEditor.getBody();
+    }
+    var ta = document.getElementById('email-tpl-body');
+    return ta ? ta.value : '';
+  }
+
   function saveTemplate() {
     if (!_templateActiveKey) return;
     var subject = document.getElementById('email-tpl-subject').value;
-    var html_body = document.getElementById('email-tpl-body').value;
+    var html_body = getCurrentTemplateBody();
     var status = document.getElementById('email-tpl-status');
     if (status) status.innerHTML = '<span style="color:#60a5fa;">Saving…</span>';
     window.p86Api.put('/api/email/templates/' + encodeURIComponent(_templateActiveKey), {
@@ -2096,10 +2163,24 @@
     if (!_templateDetail) return;
     var params = _templateDetail.enrichedSampleParams || _templateDetail.sampleParams || {};
     var subjectEl = document.getElementById('email-tpl-subject');
-    var bodyEl = document.getElementById('email-tpl-body');
     var subjPreview = document.getElementById('email-tpl-preview-subject');
     if (subjPreview && subjectEl) subjPreview.textContent = tplInterpolate(subjectEl.value || '', params);
-    if (bodyEl) setIframeContent('email-tpl-preview-frame', tplInterpolate(bodyEl.value || '', params));
+    var bodyStr = getCurrentTemplateBody();
+    // Blocks-JSON body? Parse + render via the block editor's client
+    // renderer (mirrors server renderBlocks). Otherwise treat as raw
+    // HTML with interpolation.
+    var trimmed = String(bodyStr || '').trim();
+    if (trimmed[0] === '{' && trimmed.indexOf('"blocks"') !== -1 &&
+        window.p86EmailBlocks && window.p86EmailBlocks.renderBlocksToHtml) {
+      try {
+        var parsed = JSON.parse(trimmed);
+        if (Array.isArray(parsed.blocks)) {
+          setIframeContent('email-tpl-preview-frame', window.p86EmailBlocks.renderBlocksToHtml(parsed.blocks, params));
+          return;
+        }
+      } catch (e) { /* fall through */ }
+    }
+    setIframeContent('email-tpl-preview-frame', tplInterpolate(bodyStr || '', params));
   }
 
   // Drop the baked-in template SOURCE (with {{var}} placeholders) into
@@ -2114,11 +2195,23 @@
       if (statusEl0) statusEl0.innerHTML = '<span style="color:#fbbf24;">No default source available for this template.</span>';
       return;
     }
-    if (!confirm('Load the default template source into the editor?\n\nThis replaces whatever is in the Subject + HTML body fields with the baked-in source (including {{variable}} placeholders). Nothing is saved until you click Save override.')) return;
+    if (!confirm('Load the default template source into the editor?\n\nThis replaces whatever is in the Subject + body fields with the baked-in source. Nothing is saved until you click Save.')) return;
     var subjectEl = document.getElementById('email-tpl-subject');
-    var bodyEl = document.getElementById('email-tpl-body');
     if (subjectEl) subjectEl.value = src.subject || '';
-    if (bodyEl) bodyEl.value = src.html_body || '';
+    // Prefer the block-based default if the source ships blocks;
+    // otherwise drop into the raw HTML body. The editor's setBody()
+    // handles both shapes.
+    if (_emailBlockEditor && typeof _emailBlockEditor.setBody === 'function') {
+      if (Array.isArray(src.blocks)) {
+        _emailBlockEditor.setBody(JSON.stringify({ blocks: src.blocks }));
+      } else {
+        _emailBlockEditor.setBody(src.html_body || '');
+      }
+    } else {
+      var bodyEl = document.getElementById('email-tpl-body');
+      if (bodyEl) bodyEl.value = src.html_body || '';
+    }
+    scheduleLivePreview();
     var statusEl = document.getElementById('email-tpl-status');
     if (statusEl) statusEl.innerHTML = '<span style="color:#34d399;">&#x2713; Default loaded — edit freely, then click Save.</span>';
   }

@@ -137,6 +137,18 @@ var TEMPLATE_SOURCES = {
 
   org_invite: {
     subject: 'You\'re invited to join {{platform_name}}',
+    // Wave 3 — block-based default. The visual editor opens this in
+    // block mode out of the box. Legacy raw-HTML fallback (html_body)
+    // mirrors the old shape so any consumer that ignores .blocks
+    // (older render paths) still works.
+    blocks: [
+      { type: 'header', title: 'Welcome to {{platform_name}}', subtitle: 'You\'ve been invited' },
+      { type: 'text', html: '<p>Hi,</p><p><strong>{{invited_by}}</strong> has invited you to set up <strong>{{org_name}}</strong> on {{platform_name}}. Click the button below to claim your organization, set a password, and start using the platform.</p>' },
+      { type: 'button', label: 'Accept invitation & get started', url: '{{accept_url}}', bg_color: '#4f8cff' },
+      { type: 'spacer', height_px: 8 },
+      { type: 'text', html: '<p>This invitation expires on <strong>{{expires_at}}</strong>. If the button doesn\'t work, paste this link into your browser:</p><p><a href="{{accept_url}}">{{accept_url}}</a></p><p>If you weren\'t expecting this invitation, you can safely ignore this email.</p>' },
+      { type: 'footer', address: 'Project 86' }
+    ],
     html_body: shellWrap('Welcome to {{platform_name}}',
       '<p>Hi,</p>' +
       '<p><strong>{{invited_by}}</strong> has invited you to set up <strong>{{org_name}}</strong> on {{platform_name}}. ' +
@@ -151,6 +163,13 @@ var TEMPLATE_SOURCES = {
 
   user_invite: {
     subject: 'You\'re invited to Project 86',
+    blocks: [
+      { type: 'header', title: 'Welcome to Project 86', subtitle: 'Your account is ready' },
+      { type: 'text', html: '<p>Hi {{name}},</p><p>{{invitedBy}} just created an account for you on Project 86. You can sign in with the credentials below:</p><p><strong>Email:</strong> {{email}}<br/><strong>Password:</strong> {{password}}</p>' },
+      { type: 'button', label: 'Sign in', url: '{{appUrl}}', bg_color: '#4f8cff' },
+      { type: 'text', html: '<p>For security, please change this password after your first login (Admin → Users → set new password).</p>' },
+      { type: 'footer', address: 'Project 86' }
+    ],
     html_body: shellWrap('Welcome to Project 86',
       '<p>Hi {{name}},</p>' +
       '<p>{{invitedBy}} just created an account for you on Project 86. ' +
@@ -166,6 +185,13 @@ var TEMPLATE_SOURCES = {
 
   password_reset: {
     subject: 'Your Project 86 password was reset',
+    blocks: [
+      { type: 'header', title: 'Password reset', subtitle: 'Your password was changed' },
+      { type: 'text', html: '<p>Hi {{name}},</p><p>{{resetBy}} has reset your Project 86 password. Use the credentials below to sign in:</p><p><strong>Email:</strong> {{email}}<br/><strong>New password:</strong> {{password}}</p>' },
+      { type: 'button', label: 'Sign in', url: '{{appUrl}}', bg_color: '#4f8cff' },
+      { type: 'text', html: '<p>If you didn\'t request this reset, contact the admin who issued it.</p>' },
+      { type: 'footer', address: 'Project 86' }
+    ],
     html_body: shellWrap('Password reset',
       '<p>Hi {{name}},</p>' +
       '<p>{{resetBy}} has reset your Project 86 password. Use the credentials below to sign in:</p>' +
@@ -405,12 +431,193 @@ async function getOverride(eventKey) {
   }
 }
 
+// ─── Block-based template renderer (Wave 3) ────────────────────────
+//
+// Templates can be stored EITHER as raw HTML (legacy) OR as a JSON
+// blocks array. A body string that starts with `{` and contains
+// `"blocks"` gets parsed as JSON; anything else is treated as legacy
+// raw HTML and interpolated normally.
+//
+// Block schema (all fields optional except `type`):
+//   { type: 'header',  logo_url, title, subtitle }
+//   { type: 'text',    html }
+//   { type: 'button',  label, url, bg_color }
+//   { type: 'spacer',  height_px }
+//   { type: 'image',   url, alt, max_width_px }
+//   { type: 'footer',  address, unsubscribe_url }
+//
+// Each block renders as a self-contained `<table>` with inline
+// styles — the only layout primitive that's reliable across Gmail,
+// Outlook, Apple Mail. The outer wrapper is the same shellWrap()
+// used by legacy templates so headers/footers stay consistent.
+
+// Whitelist of tags allowed inside text-block html. Anything else
+// gets stripped on save AND defensively at render time. Attributes
+// allow only href on <a> and href targets must be http(s):// or
+// mailto: or a template variable placeholder.
+var TEXT_BLOCK_TAG_WHITELIST = ['b', 'strong', 'i', 'em', 'a', 'br', 'p', 'ul', 'ol', 'li'];
+function sanitizeBlockHtml(html) {
+  if (typeof html !== 'string') return '';
+  // Strip <script>, <style>, <iframe>, <object>, <embed>, comments,
+  // and any tag not in the whitelist. Simple regex pass — for
+  // production we'd use a real HTML parser, but for the constrained
+  // input from the visual editor it's sufficient.
+  var s = String(html);
+  // Drop comments
+  s = s.replace(/<!--[\s\S]*?-->/g, '');
+  // Drop dangerous tags entirely (including content).
+  s = s.replace(/<(script|style|iframe|object|embed|form|input|button)\b[\s\S]*?<\/\1>/gi, '');
+  // Strip on* event handlers and javascript: URIs from attributes.
+  s = s.replace(/\s+on[a-z]+\s*=\s*"[^"]*"/gi, '');
+  s = s.replace(/\s+on[a-z]+\s*=\s*'[^']*'/gi, '');
+  s = s.replace(/javascript\s*:/gi, '');
+  // For each tag, if not in whitelist, strip the tag (keep content).
+  s = s.replace(/<\/?([a-z][a-z0-9]*)\b[^>]*>/gi, function(match, tag) {
+    if (TEXT_BLOCK_TAG_WHITELIST.indexOf(String(tag).toLowerCase()) === -1) return '';
+    // For <a> tags, validate href to safe schemes only.
+    if (tag.toLowerCase() === 'a' && match[1] !== '/') {
+      var hrefMatch = match.match(/href\s*=\s*["']([^"']+)["']/i);
+      if (hrefMatch) {
+        var url = hrefMatch[1].trim();
+        if (!/^(https?:|mailto:|\{\{)/i.test(url)) {
+          // Strip the href if it's not a safe scheme.
+          match = match.replace(/href\s*=\s*["'][^"']+["']/i, 'href="#"');
+        }
+      }
+      // Force target=_blank + rel for security.
+      if (!/target\s*=/i.test(match)) {
+        match = match.replace(/<a\b/i, '<a target="_blank" rel="noopener"');
+      }
+    }
+    return match;
+  });
+  return s;
+}
+
+// Render a single block to HTML. Each block is one row in a stacked
+// table so it survives every email client's layout engine.
+function renderBlock(block, accent) {
+  if (!block || typeof block !== 'object') return '';
+  var t = String(block.type || '').toLowerCase();
+  switch (t) {
+    case 'header': {
+      var logo = block.logo_url
+        ? '<img src="' + escapeAttr(block.logo_url) + '" alt="" style="max-height:42px;display:block;margin:0 auto 10px;" />'
+        : '';
+      var title = escapeHtml(block.title || '');
+      var subtitle = block.subtitle
+        ? '<div style="font-size:13px;color:#6b7280;text-align:center;margin-top:4px;">' + escapeHtml(block.subtitle) + '</div>'
+        : '';
+      return '<tr><td style="padding:16px 24px 8px;text-align:center;">' +
+        logo +
+        '<div style="font-size:22px;font-weight:700;color:#111827;line-height:1.2;">' + title + '</div>' +
+        subtitle +
+      '</td></tr>';
+    }
+    case 'text': {
+      // text.html has already been sanitized on save, but re-sanitize
+      // here as a defense-in-depth measure since legacy rows might
+      // skip the save-time pass.
+      var safe = sanitizeBlockHtml(block.html || '');
+      return '<tr><td style="padding:12px 24px;font-size:14px;line-height:1.55;color:#1f2937;">' +
+        safe +
+      '</td></tr>';
+    }
+    case 'button': {
+      var label = escapeHtml(block.label || 'Click');
+      var url = escapeAttr(block.url || '#');
+      var bg = /^#[0-9a-f]{3,8}$/i.test(block.bg_color || '') ? block.bg_color : (accent || '#4f8cff');
+      return '<tr><td style="padding:18px 24px;text-align:center;">' +
+        '<a href="' + url + '" target="_blank" rel="noopener" ' +
+          'style="display:inline-block;background:' + bg + ';color:#fff;text-decoration:none;padding:12px 24px;border-radius:6px;font-weight:600;font-size:15px;">' +
+          label +
+        '</a>' +
+      '</td></tr>';
+    }
+    case 'spacer': {
+      var h = Number(block.height_px);
+      if (!Number.isFinite(h)) h = 16;
+      h = Math.max(4, Math.min(120, h));
+      return '<tr><td style="padding:0;line-height:0;font-size:0;">' +
+        '<div style="height:' + h + 'px;">&nbsp;</div>' +
+      '</td></tr>';
+    }
+    case 'image': {
+      if (!block.url) return '';
+      var max = Number(block.max_width_px);
+      if (!Number.isFinite(max)) max = 560;
+      max = Math.max(80, Math.min(900, max));
+      return '<tr><td style="padding:12px 24px;text-align:center;">' +
+        '<img src="' + escapeAttr(block.url) + '" alt="' + escapeAttr(block.alt || '') + '" ' +
+          'style="max-width:' + max + 'px;width:100%;height:auto;border-radius:4px;display:inline-block;" />' +
+      '</td></tr>';
+    }
+    case 'footer': {
+      var addr = block.address ? escapeHtml(block.address) : '';
+      var unsubHtml = block.unsubscribe_url
+        ? '<div style="margin-top:6px;"><a href="' + escapeAttr(block.unsubscribe_url) + '" style="color:#6b7280;text-decoration:underline;font-size:11px;">Unsubscribe</a></div>'
+        : '';
+      return '<tr><td style="padding:16px 24px;text-align:center;color:#6b7280;font-size:11px;border-top:1px solid #e5e7eb;">' +
+        addr +
+        unsubHtml +
+      '</td></tr>';
+    }
+    default:
+      return '';
+  }
+}
+
+// Render a blocks array to a full email-safe HTML body. accent is
+// the brand color used for default buttons (falls back to the
+// platform blue).
+function renderBlocks(blocks, params, accent) {
+  if (!Array.isArray(blocks)) return '';
+  var enriched = params || {};
+  var rows = blocks.map(function(block) {
+    // Interpolate every string field inside the block against params.
+    var prepared = {};
+    Object.keys(block || {}).forEach(function(k) {
+      var v = block[k];
+      if (typeof v === 'string') prepared[k] = interpolate(v, enriched);
+      else prepared[k] = v;
+    });
+    prepared.type = block.type;  // type is the dispatch key
+    return renderBlock(prepared, accent);
+  }).join('');
+  // Wrap in a centered max-width table — email-safe centering.
+  return '<table role="presentation" cellpadding="0" cellspacing="0" border="0" ' +
+    'style="width:100%;max-width:600px;margin:0 auto;background:#fff;border:1px solid #e5e7eb;border-radius:8px;">' +
+    rows +
+  '</table>';
+}
+
+// Sniff whether a body string is a blocks-JSON template or legacy
+// raw HTML. Returns the parsed { subject, blocks } shape or null.
+function tryParseBlocks(bodyStr) {
+  if (typeof bodyStr !== 'string') return null;
+  var trimmed = bodyStr.trim();
+  if (trimmed[0] !== '{') return null;
+  if (trimmed.indexOf('"blocks"') === -1) return null;
+  try {
+    var parsed = JSON.parse(trimmed);
+    if (parsed && Array.isArray(parsed.blocks)) return parsed;
+  } catch (e) { /* not a valid JSON template */ }
+  return null;
+}
+
 // Render the baked-in default for an event by interpolating the
 // template source against enriched params.
 function renderDefault(eventKey, params) {
   var src = TEMPLATE_SOURCES[eventKey];
   if (!src) throw new Error('No baked-in template for event: ' + eventKey);
   var enriched = enrichParams(eventKey, params);
+  // Block-based default? Render via renderBlocks; subject is
+  // interpolated normally.
+  if (Array.isArray(src.blocks)) {
+    var subjectB = interpolate(src.subject, enriched);
+    var htmlB = renderBlocks(src.blocks, enriched);
+    return { subject: subjectB, html: htmlB, text: htmlToText(htmlB) };
+  }
   var subject = interpolate(src.subject, enriched);
   var html = interpolate(src.html_body, enriched);
   return { subject: subject, html: html, text: htmlToText(html) };
@@ -436,7 +643,16 @@ async function render(eventKey, params) {
   var subjectSrc = override.subject || (defSrc && defSrc.subject) || '';
   var bodySrc = override.html_body || (defSrc && defSrc.html_body) || '';
   var subject = interpolate(subjectSrc, enriched);
-  var html = interpolate(bodySrc, enriched);
+  // Block-based override? The body is a JSON string with blocks[].
+  // Parse and render via renderBlocks. Falls back to legacy raw-HTML
+  // interpolation if parsing fails.
+  var parsedBlocks = tryParseBlocks(bodySrc);
+  var html;
+  if (parsedBlocks && Array.isArray(parsedBlocks.blocks)) {
+    html = renderBlocks(parsedBlocks.blocks, enriched);
+  } else {
+    html = interpolate(bodySrc, enriched);
+  }
   return {
     subject: subject || '(no subject)',
     html: html,
@@ -446,10 +662,15 @@ async function render(eventKey, params) {
 
 // Returns the SOURCE (with {{var}} placeholders) for an event. The
 // admin Email Templates editor uses this so what the admin edits is
-// exactly what the renderer interpolates against.
+// exactly what the renderer interpolates against. For block-based
+// defaults we also surface the blocks array so the editor can open
+// in visual mode.
 function getDefaultSource(eventKey) {
   var s = TEMPLATE_SOURCES[eventKey];
-  return s ? { subject: s.subject, html_body: s.html_body } : null;
+  if (!s) return null;
+  var out = { subject: s.subject, html_body: s.html_body || '' };
+  if (Array.isArray(s.blocks)) out.blocks = s.blocks;
+  return out;
 }
 
 // Sample params for each event — used by the editor's preview pane
@@ -532,5 +753,10 @@ module.exports = {
   enrichedSampleParams,
   // Helpers exposed for tests / utilities
   interpolate,
-  htmlToText
+  htmlToText,
+  // Wave 3 block renderer helpers (used by routes that need to render
+  // or validate block-shaped templates).
+  renderBlocks,
+  sanitizeBlockHtml,
+  tryParseBlocks
 };
