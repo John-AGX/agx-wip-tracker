@@ -96,7 +96,7 @@
     if (t.sf) bits.push((Math.round(t.sf * 100) / 100) + ' ft²');
     if (t.count) bits.push(t.count + ' count');
     var totalsLine = bits.length ? bits.join(' · ') : 'No measurements yet';
-    var kindBadge = { blank: 'Blank canvas', photo: 'Photo', pdf: 'PDF' }[p.base_kind] || p.base_kind;
+    var kindBadge = { blank: 'Blank canvas', sheet: 'Shop drawing', photo: 'Photo', pdf: 'PDF' }[p.base_kind] || p.base_kind;
     var when = p.updated_at ? new Date(p.updated_at).toLocaleDateString() : '';
     return '<div data-plan-open="' + esc(p.id) + '" style="border:1px solid var(--border,#333);border-radius:12px;overflow:hidden;cursor:pointer;background:rgba(255,255,255,0.02);transition:border-color 0.15s;" ' +
       'onmouseenter="this.style.borderColor=\'#4f8cff\'" onmouseleave="this.style.borderColor=\'\'">' +
@@ -124,12 +124,21 @@
     box.style.cssText = 'background:#0f0f1e;border:1px solid #353545;border-radius:12px;padding:20px 22px;max-width:420px;width:100%;box-shadow:0 16px 48px rgba(0,0,0,0.6);color:#e6e6e6;';
     box.innerHTML =
       '<div style="font-size:15px;font-weight:700;color:#fff;margin-bottom:4px;">📐 New Plan</div>' +
-      '<div style="font-size:12px;color:#9aa;margin-bottom:12px;">A blank gridded canvas you draw and calibrate to scale.</div>' +
-      '<input id="p86-plan-name" type="text" autocomplete="off" value="Untitled takeoff" ' +
-        'style="width:100%;box-sizing:border-box;background:#1a1a2e;color:#fff;border:1px solid #444;border-radius:6px;padding:10px 12px;font-size:14px;font-weight:600;outline:none;" />' +
-      '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;">' +
+      '<div style="font-size:12px;color:#9aa;margin-bottom:12px;">Name it, then pick how you want to draw.</div>' +
+      '<input id="p86-plan-name" type="text" autocomplete="off" value="Untitled plan" ' +
+        'style="width:100%;box-sizing:border-box;background:#1a1a2e;color:#fff;border:1px solid #444;border-radius:6px;padding:10px 12px;font-size:14px;font-weight:600;outline:none;margin-bottom:14px;" />' +
+      '<div style="display:flex;flex-direction:column;gap:8px;">' +
+        '<button id="p86-plan-sheet" style="text-align:left;padding:12px 14px;background:rgba(79,140,255,0.10);color:#fff;border:1px solid rgba(79,140,255,0.4);border-radius:8px;cursor:pointer;">' +
+          '<div style="font-weight:700;font-size:13.5px;">📐 Shop drawing (sheet)</div>' +
+          '<div style="font-size:11px;color:#9aa;margin-top:2px;">CAD-style sheet: titleblock, plan + elevation views, ortho snapping, dimensions, layers.</div>' +
+        '</button>' +
+        '<button id="p86-plan-blank" style="text-align:left;padding:12px 14px;background:rgba(255,255,255,0.04);color:#fff;border:1px solid #444;border-radius:8px;cursor:pointer;">' +
+          '<div style="font-weight:700;font-size:13.5px;">✏️ Blank takeoff canvas</div>' +
+          '<div style="font-size:11px;color:#9aa;margin-top:2px;">Freeform gridded canvas — calibrate + take off LF / SF / counts.</div>' +
+        '</button>' +
+      '</div>' +
+      '<div style="display:flex;justify-content:flex-end;margin-top:14px;">' +
         '<button id="p86-plan-cancel" style="padding:8px 16px;background:rgba(255,255,255,0.06);color:#ddd;border:1px solid #444;border-radius:6px;cursor:pointer;font-weight:600;">Cancel</button>' +
-        '<button id="p86-plan-create" style="padding:8px 16px;background:#4f8cff;color:#fff;border:1px solid #4f8cff;border-radius:6px;cursor:pointer;font-weight:700;">Create &amp; draw</button>' +
       '</div>';
     overlay.appendChild(box);
     document.body.appendChild(overlay);
@@ -137,16 +146,15 @@
     function close() { if (overlay.parentNode) overlay.parentNode.removeChild(overlay); document.removeEventListener('keydown', onKey, true); }
     function onKey(e) {
       if (e.key === 'Escape') { e.preventDefault(); close(); }
-      else if (e.key === 'Enter' && document.activeElement === input) { e.preventDefault(); commit(); }
+      else if (e.key === 'Enter' && document.activeElement === input) { e.preventDefault(); commit('sheet'); }
     }
-    function commit() {
-      var name = (input.value || '').trim() || 'Untitled takeoff';
+    function commit(kind) {
+      var name = (input.value || '').trim() || 'Untitled plan';
+      var payload = (kind === 'sheet')
+        ? { name: name, base_kind: 'sheet', pages: [], totals: {} }
+        : { name: name, base_kind: 'blank', width: DEFAULT_W, height: DEFAULT_H, grid_spacing: DEFAULT_GRID, pages: [], totals: {} };
       close();
-      api().plans.create({
-        name: name, base_kind: 'blank',
-        width: DEFAULT_W, height: DEFAULT_H, grid_spacing: DEFAULT_GRID,
-        pages: [], totals: {}
-      }).then(function (resp) {
+      api().plans.create(payload).then(function (resp) {
         var plan = resp && resp.plan;
         if (!plan) { toast('Could not create plan.'); return; }
         openInViewer(plan);
@@ -155,7 +163,8 @@
       });
     }
     box.querySelector('#p86-plan-cancel').onclick = close;
-    box.querySelector('#p86-plan-create').onclick = commit;
+    box.querySelector('#p86-plan-sheet').onclick = function () { commit('sheet'); };
+    box.querySelector('#p86-plan-blank').onclick = function () { commit('blank'); };
     overlay.addEventListener('click', function (e) { if (e.target === overlay) close(); });
     document.addEventListener('keydown', onKey, true);
     setTimeout(function () { input.focus(); input.select(); }, 0);
@@ -178,6 +187,23 @@
   // (flat: calibration metas + page-tagged strokes). id:null routes Save
   // through onDone (no attachment PATCH), so the plan owns its data.
   function openInViewer(plan) {
+    // Shop-drawing sheets open in the dedicated CAD-style editor; markup
+    // plans (blank/photo/pdf) open in the markup/takeoff viewer.
+    if (plan.base_kind === 'sheet') {
+      if (!window.p86SheetEditor || typeof window.p86SheetEditor.open !== 'function') {
+        toast('Sheet editor not loaded — refresh the page.');
+        return;
+      }
+      window.p86SheetEditor.open({
+        plan: plan,
+        onSave: function (doc, totals) {
+          api().plans.update(plan.id, { pages: [doc], totals: totals || {} })
+            .then(function () { loadList(); })
+            .catch(function (err) { toast('Save failed: ' + (err && err.message ? err.message : 'error')); });
+        }
+      });
+      return;
+    }
     if (!window.p86Markup || typeof window.p86Markup.open !== 'function') {
       toast('Markup viewer not loaded — refresh the page.');
       return;

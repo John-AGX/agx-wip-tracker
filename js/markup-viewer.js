@@ -2830,6 +2830,22 @@
 
   window.p86Markup = { open: open, close: closeOverlay, summarize: summarizeAnnotations };
 
+  // Pure drawing/geometry primitives, exported so the CAD-style sheet
+  // editor (js/sheet-editor.js) can reuse the proven math + single-stroke
+  // renderer without duplicating it or bloating this module. These are
+  // side-effect-free (drawStroke writes only to the ctx you pass in).
+  window.p86DrawPrimitives = {
+    dist: dist,
+    polylinePixelLength: polylinePixelLength,
+    polygonPixelArea: polygonPixelArea,
+    angleBetween: angleBetween,
+    formatLF: formatLF,
+    formatSF: formatSF,
+    formatFeetInches: formatFeetInches,
+    parseMeasurement: parseMeasurement,
+    drawStroke: drawStroke
+  };
+
   // Public render API — lets the lightbox / tile previews draw the
   // SAME strokes the markup viewer renders, without needing to open
   // the viewer or duplicate the drawing pipeline. drawStroke / draw

@@ -49,6 +49,20 @@ function sanitizePages(raw) {
   if (!Array.isArray(raw)) return [];
   return raw.slice(0, 200).map(function (pg, i) {
     pg = pg || {};
+    // Sheet-doc (CAD shop-drawing) entries are a different shape than the
+    // markup {page,calibration,strokes} pages — pass them through (with
+    // light size caps) instead of coercing, which would strip the doc.
+    if (pg.kind === 'sheet-doc') {
+      return {
+        kind: 'sheet-doc',
+        version: Number.isFinite(pg.version) ? (pg.version | 0) : 1,
+        sheet: (pg.sheet && typeof pg.sheet === 'object') ? pg.sheet : {},
+        titleblock: (pg.titleblock && typeof pg.titleblock === 'object') ? pg.titleblock : {},
+        layers: Array.isArray(pg.layers) ? pg.layers.slice(0, 200) : [],
+        viewports: Array.isArray(pg.viewports) ? pg.viewports.slice(0, 50) : [],
+        entities: Array.isArray(pg.entities) ? pg.entities.slice(0, 20000) : []
+      };
+    }
     return {
       page: Number.isFinite(pg.page) ? (pg.page | 0) : i,
       calibration: (pg.calibration && typeof pg.calibration === 'object') ? pg.calibration : null,
