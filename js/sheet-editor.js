@@ -42,6 +42,9 @@
     { key: 'polyline', glyph: '⌇', label: 'Polyline (click points · double-click/Enter to finish)' },
     { key: 'rect',     glyph: '▭', label: 'Rectangle (click two opposite corners)' },
     { key: 'circle',   glyph: '◯', label: 'Circle (click center, click radius)' },
+    { key: 'dim',      glyph: '↔', label: 'Dimension (click two points — auto-labels real length at the viewport scale)' },
+    { key: 'angle',    glyph: '∠', label: 'Angle dimension (click three points: leg · vertex · leg)' },
+    { key: 'leader',   glyph: '➘', label: 'Leader / callout (click target, click text position)' },
     { key: 'text',     glyph: 'T', label: 'Text (click to place)' },
     { key: 'pan',      glyph: '✋', label: 'Pan (or hold Space / middle-drag)' }
   ];
@@ -119,6 +122,15 @@
           if (!e || e.viewport !== vp.id || !e.tool) return;
           var lyr = layerById(doc, e.layer);
           if (lyr && lyr.visible === false) return;
+          // Dimension labels are derived live from the viewport scale, so
+          // they stay correct as geometry changes (auto-update).
+          if (e.tool === 'measure' && vp.scale && vp.scale.pixelsPerInch) {
+            var px = Math.hypot(e.endX - e.startX, e.endY - e.startY);
+            e.measureInches = px / vp.scale.pixelsPerInch;
+            e.measureLabel = prims().formatFeetInches
+              ? prims().formatFeetInches(e.measureInches)
+              : (Math.round(e.measureInches / 12 * 100) / 100) + "'";
+          }
           try { prims().drawStroke(ctx, e); } catch (err) { /* defensive */ }
         });
       }
@@ -516,6 +528,7 @@
       else if (e.key === 'r' || e.key === 'R') setTool('rect');
       else if (e.key === 'p' || e.key === 'P') setTool('polyline');
       else if (e.key === 'c' || e.key === 'C') setTool('circle');
+      else if (e.key === 'd' || e.key === 'D') setTool('dim');
     };
     S.overlay.onkeyup = function (e) {
       if (e.key === 'Shift') S.shiftDown = false;
@@ -528,9 +541,53 @@
     return { id: uid(tool), tool: tool, viewport: vp ? vp.id : (S.doc.viewports[0] || {}).id,
       layer: S.activeLayer, color: l.color, lineWidth: l.weight || 3 };
   }
+  // Dimensions prefer the "Dimensions" layer (amber) if one exists.
+  function dimLayerId() {
+    var ls = S.doc.layers || [];
+    for (var i = 0; i < ls.length; i++) if ((ls[i].name || '').toLowerCase() === 'dimensions') return ls[i].id;
+    return S.activeLayer;
+  }
 
   function handleDrawClick(pt, vp) {
     var t = S.tool;
+    // Dimension — a two-point 'measure' entity; its label is computed
+    // live from the viewport scale in renderSheet (auto-updates).
+    if (t === 'dim') {
+      if (!S.draft) {
+        var de = newEntity('measure', vp);
+        de.layer = dimLayerId();
+        var dl = layerById(S.doc, de.layer);
+        de.color = dl.color; de.lineWidth = dl.weight || 2;
+        de.startX = pt.x; de.startY = pt.y; de.endX = pt.x; de.endY = pt.y;
+        de._anchor = { x: pt.x, y: pt.y };
+        S.draft = de;
+      } else { finalizeTwoPoint(pt); }
+      repaint(); return;
+    }
+    // Angle dimension — three points (leg · vertex · leg) via 'mangle'.
+    if (t === 'angle') {
+      if (!S.draft) {
+        var ae = newEntity('mangle', vp);
+        ae.layer = dimLayerId(); ae.color = layerById(S.doc, ae.layer).color;
+        ae.points = [{ x: pt.x, y: pt.y }]; ae._anchor = { x: pt.x, y: pt.y };
+        S.draft = ae;
+      } else {
+        S.draft.points.push({ x: pt.x, y: pt.y });
+        S.draft._anchor = { x: pt.x, y: pt.y };
+        if (S.draft.points.length >= 3) { var a = S.draft; delete a._anchor; S.doc.entities.push(a); S.draft = null; }
+      }
+      repaint(); return;
+    }
+    // Leader — arrow to a target, then a text callout at the elbow.
+    if (t === 'leader') {
+      if (!S.draft) {
+        var le = newEntity('arrow', vp);
+        le.startX = pt.x; le.startY = pt.y; le.endX = pt.x; le.endY = pt.y;
+        le._anchor = { x: pt.x, y: pt.y };
+        S.draft = le;
+      } else { finalizeLeader(pt, vp); }
+      repaint(); return;
+    }
     if (t === 'line' || t === 'rect' || t === 'circle') {
       if (!S.draft) {
         var e = newEntity(t === 'circle' ? 'ellipse' : t, vp);
@@ -569,6 +626,21 @@
     var d = S.draft;
     if (d && d.points && d.points.length >= 2) { delete d._anchor; S.doc.entities.push(d); }
     S.draft = null; repaint();
+  }
+  function finalizeLeader(pt, vp) {
+    var d = S.draft;
+    d.endX = pt.x; d.endY = pt.y;
+    if (Math.abs(d.endX - d.startX) < 0.5 && Math.abs(d.endY - d.startY) < 0.5) { S.draft = null; return; }
+    delete d._anchor;
+    S.doc.entities.push(d);          // the arrow
+    S.draft = null;
+    var txt = window.prompt('Leader text:');   // styled input is a polish follow-up
+    if (txt) {
+      var te = newEntity('text', vp);
+      te.x = pt.x + 6; te.y = pt.y - (vp && vp.scale ? vp.scale.pixelsPerInch * 9 : 22);
+      te.text = txt; te.fontPx = Math.round((vp && vp.scale ? vp.scale.pixelsPerInch : 2.5) * 9);
+      S.doc.entities.push(te);
+    }
   }
   function placeText(pt, vp) {
     var txt = window.prompt('Text:');       // D1: simple; styled input is a polish follow-up
@@ -632,6 +704,15 @@
           var r = Math.hypot(S.hover.x - d.startX, S.hover.y - d.startY);
           prev.startX = d.startX - r; prev.startY = d.startY - r; prev.endX = d.startX + r; prev.endY = d.startY + r;
         } else { prev.startX = d.startX; prev.startY = d.startY; prev.endX = S.hover.x; prev.endY = S.hover.y; }
+        // Live dimension label on the dim-tool preview.
+        if (d.tool === 'measure') {
+          var pvp = vpAt(d._anchor || { x: d.startX, y: d.startY });
+          if (pvp && pvp.scale && pvp.scale.pixelsPerInch) {
+            var ppx = Math.hypot(prev.endX - prev.startX, prev.endY - prev.startY);
+            prev.measureInches = ppx / pvp.scale.pixelsPerInch;
+            prev.measureLabel = prims().formatFeetInches ? prims().formatFeetInches(prev.measureInches) : '';
+          }
+        }
         if (prims().drawStroke) { try { prims().drawStroke(ctx, prev); } catch (e) {} }
       }
       ctx.restore();
