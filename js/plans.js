@@ -114,26 +114,51 @@
 
   // ── Create ──────────────────────────────────────────────────────
   // v1: blank canvas. (Photo/PDF takeoffs use the in-place launchers.)
+  // Styled modal for the name — matches the rest of the app (the
+  // codebase moved off native window.prompt for this kind of input).
   function openCreate() {
-    var name = window.prompt('Name this plan / takeoff:', 'Untitled takeoff');
-    if (name == null) return;
-    name = name.trim() || 'Untitled takeoff';
     if (!api() || !api().plans) { toast('Plans API not available.'); return; }
-    api().plans.create({
-      name: name,
-      base_kind: 'blank',
-      width: DEFAULT_W,
-      height: DEFAULT_H,
-      grid_spacing: DEFAULT_GRID,
-      pages: [],
-      totals: {}
-    }).then(function (resp) {
-      var plan = resp && resp.plan;
-      if (!plan) { toast('Could not create plan.'); return; }
-      openInViewer(plan);
-    }).catch(function (err) {
-      toast('Create failed: ' + (err && err.message ? err.message : 'error'));
-    });
+    var overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:10600;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(2px);';
+    var box = document.createElement('div');
+    box.style.cssText = 'background:#0f0f1e;border:1px solid #353545;border-radius:12px;padding:20px 22px;max-width:420px;width:100%;box-shadow:0 16px 48px rgba(0,0,0,0.6);color:#e6e6e6;';
+    box.innerHTML =
+      '<div style="font-size:15px;font-weight:700;color:#fff;margin-bottom:4px;">📐 New Plan</div>' +
+      '<div style="font-size:12px;color:#9aa;margin-bottom:12px;">A blank gridded canvas you draw and calibrate to scale.</div>' +
+      '<input id="p86-plan-name" type="text" autocomplete="off" value="Untitled takeoff" ' +
+        'style="width:100%;box-sizing:border-box;background:#1a1a2e;color:#fff;border:1px solid #444;border-radius:6px;padding:10px 12px;font-size:14px;font-weight:600;outline:none;" />' +
+      '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;">' +
+        '<button id="p86-plan-cancel" style="padding:8px 16px;background:rgba(255,255,255,0.06);color:#ddd;border:1px solid #444;border-radius:6px;cursor:pointer;font-weight:600;">Cancel</button>' +
+        '<button id="p86-plan-create" style="padding:8px 16px;background:#4f8cff;color:#fff;border:1px solid #4f8cff;border-radius:6px;cursor:pointer;font-weight:700;">Create &amp; draw</button>' +
+      '</div>';
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    var input = box.querySelector('#p86-plan-name');
+    function close() { if (overlay.parentNode) overlay.parentNode.removeChild(overlay); document.removeEventListener('keydown', onKey, true); }
+    function onKey(e) {
+      if (e.key === 'Escape') { e.preventDefault(); close(); }
+      else if (e.key === 'Enter' && document.activeElement === input) { e.preventDefault(); commit(); }
+    }
+    function commit() {
+      var name = (input.value || '').trim() || 'Untitled takeoff';
+      close();
+      api().plans.create({
+        name: name, base_kind: 'blank',
+        width: DEFAULT_W, height: DEFAULT_H, grid_spacing: DEFAULT_GRID,
+        pages: [], totals: {}
+      }).then(function (resp) {
+        var plan = resp && resp.plan;
+        if (!plan) { toast('Could not create plan.'); return; }
+        openInViewer(plan);
+      }).catch(function (err) {
+        toast('Create failed: ' + (err && err.message ? err.message : 'error'));
+      });
+    }
+    box.querySelector('#p86-plan-cancel').onclick = close;
+    box.querySelector('#p86-plan-create').onclick = commit;
+    overlay.addEventListener('click', function (e) { if (e.target === overlay) close(); });
+    document.addEventListener('keydown', onKey, true);
+    setTimeout(function () { input.focus(); input.select(); }, 0);
   }
 
   // ── Open / edit ─────────────────────────────────────────────────
