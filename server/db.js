@@ -2816,6 +2816,56 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_tasks_due
       ON tasks(organization_id, due_date)
       WHERE archived_at IS NULL AND status <> 'done';
+
+    -- ───────────────────────────────────────────────────────────────
+    -- Plans & Takeoffs — first-class scale-drawing documents (the
+    -- "dedicated home" for the Bluebeam-style markup tool). A plan is a
+    -- drawing surface (blank gridded canvas / a photo / a PDF) plus its
+    -- per-page calibration + measurement strokes + computed totals.
+    --
+    -- base_kind:
+    --   'blank' → drawn from scratch; width/height/grid_spacing set the
+    --             canvas; base_attachment_id NULL.
+    --   'photo' → base_attachment_id points at an image attachment.
+    --   'pdf'   → base_attachment_id points at a PDF attachment.
+    --
+    -- pages JSONB: per-page { calibration, strokes } — the SAME shape the
+    -- markup viewer persists in attachments.annotations, but owned by the
+    -- plan rather than an attachment (so blank canvases + standalone
+    -- takeoffs are first-class). Shape:
+    --   [{ page:0, calibration:{…}|null, strokes:[…] }, …]
+    -- totals JSONB: cached headline numbers for the list view
+    --   { lf:number, sf:number, count:number }  (recomputed on save)
+    --
+    -- entity_type/entity_id link a plan to ANY entity (job/lead/estimate/
+    -- client/sub/project) the same polymorphic way reports + tasks do, or
+    -- stay NULL for a standalone plan.
+    CREATE TABLE IF NOT EXISTS plans (
+      id                  TEXT PRIMARY KEY,
+      organization_id     INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      name                TEXT NOT NULL,
+      base_kind           TEXT NOT NULL DEFAULT 'blank',   -- blank | photo | pdf
+      base_attachment_id  TEXT REFERENCES attachments(id) ON DELETE SET NULL,
+      width               INTEGER,                          -- blank canvas px
+      height              INTEGER,                          -- blank canvas px
+      grid_spacing        INTEGER NOT NULL DEFAULT 40,      -- blank grid px
+      pages               JSONB NOT NULL DEFAULT '[]'::jsonb,
+      totals              JSONB NOT NULL DEFAULT '{}'::jsonb,
+      entity_type         TEXT,    -- polymorphic link (NULL = standalone)
+      entity_id           TEXT,
+      thumb_url           TEXT,
+      created_by          INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      archived_at         TIMESTAMPTZ
+    );
+    -- Plans list (org-scoped, newest first).
+    CREATE INDEX IF NOT EXISTS idx_plans_org
+      ON plans(organization_id, updated_at DESC) WHERE archived_at IS NULL;
+    -- Per-entity Plans panel — mirrors reports/tasks polymorphic index.
+    CREATE INDEX IF NOT EXISTS idx_plans_entity
+      ON plans(entity_type, entity_id, updated_at DESC)
+      WHERE entity_type IS NOT NULL AND archived_at IS NULL;
   `);
 
   // ── Performance indexes: 86's read-tool surface (2026-05-23) ──────

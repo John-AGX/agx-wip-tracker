@@ -586,6 +586,27 @@
     remove: function(id) { return del('/api/tasks/' + encodeURIComponent(id)); }
   };
 
+  // Plans & Takeoffs — scale-drawing documents. list() is light (no
+  // pages payload); get(id) returns the full per-page pages JSONB.
+  var plans = {
+    list: function(opts) {
+      opts = opts || {};
+      var qs = [];
+      if (opts.q) qs.push('q=' + encodeURIComponent(opts.q));
+      if (opts.status) qs.push('status=' + encodeURIComponent(opts.status));
+      if (opts.entity_type && opts.entity_id) {
+        qs.push('entity_type=' + encodeURIComponent(opts.entity_type));
+        qs.push('entity_id=' + encodeURIComponent(opts.entity_id));
+      }
+      if (opts.limit) qs.push('limit=' + encodeURIComponent(opts.limit));
+      return get('/api/plans' + (qs.length ? '?' + qs.join('&') : ''));
+    },
+    get: function(id) { return get('/api/plans/' + encodeURIComponent(id)); },
+    create: function(payload) { return post('/api/plans', payload); },
+    update: function(id, payload) { return patch('/api/plans/' + encodeURIComponent(id), payload); },
+    remove: function(id) { return del('/api/plans/' + encodeURIComponent(id)); }
+  };
+
   // Per-job weather lookup for the schedule. Server geocodes the job's
   // address (cached on the row), pulls the NWS 7-day forecast (cached
   // in-memory by rounded coords), classifies risk, and returns one
@@ -615,7 +636,7 @@
 
   window.p86Api = {
     get: get, put: put, post: post, del: del, patch: patch,
-    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, qbCosts: qbCosts, subs: subsApi, schedule: schedule, adminSms: adminSms, messages: messages, weather: weather, projects: projects, tasks: tasks, orgTags: orgTags, folderTemplates: folderTemplates, reports: reports, changeOrders: changeOrders,
+    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, qbCosts: qbCosts, subs: subsApi, schedule: schedule, adminSms: adminSms, messages: messages, weather: weather, projects: projects, tasks: tasks, plans: plans, orgTags: orgTags, folderTemplates: folderTemplates, reports: reports, changeOrders: changeOrders,
     isOffline: isOffline,
     isAuthenticated: function() { return !!getToken() && !isOffline(); }
   };

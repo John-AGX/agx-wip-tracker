@@ -428,6 +428,7 @@
         '<span id="p86-mk-hint" style="color:#aaa;font-size:11px;margin-right:8px;"></span>' +
         '<button id="p86-mk-cal-chip" title="Set drawing scale — calibrate against a known dimension" style="background:rgba(124,58,237,0.12);border:1px solid rgba(124,58,237,0.4);color:#c4b5fd;border-radius:999px;padding:3px 10px;font-size:10.5px;letter-spacing:0.3px;cursor:pointer;white-space:nowrap;margin-right:6px;">\u{1F4D0} Set scale</button>' +
         '<span id="p86-mk-save-chip" style="display:none;background:rgba(255,255,255,0.06);border:1px solid #444;color:#aaa;border-radius:999px;padding:3px 10px;font-size:10.5px;letter-spacing:0.3px;"></span>' +
+        '<button id="p86-mk-export" title="Download the annotated image as a PNG" style="background:rgba(255,255,255,0.06);color:#cbd5e1;border:1px solid #444;border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer;">⬇ PNG</button>' +
         '<button id="p86-mk-cancel" style="background:rgba(255,255,255,0.06);color:#aaa;border:1px solid #444;border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;">Cancel</button>' +
         '<button id="p86-mk-save" style="background:#4f8cff;color:#fff;border:0;border-radius:6px;padding:6px 16px;font-size:12px;font-weight:700;cursor:pointer;">Save</button>' +
       '</div>' +
@@ -555,6 +556,8 @@
     overlay.querySelector('#p86-mk-cancel').onclick = function() {
       if (!state.strokes.length || confirm('Discard your markup?')) requestClose();
     };
+    var exportBtn = overlay.querySelector('#p86-mk-export');
+    if (exportBtn) exportBtn.onclick = exportPng;
     // PDF page navigation.
     var pagePrev = overlay.querySelector('#p86-mk-page-prev');
     var pageNext = overlay.querySelector('#p86-mk-page-next');
@@ -2763,7 +2766,69 @@
       .replace(/"/g, '&quot;');
   }
 
-  window.p86Markup = { open: open, close: closeOverlay };
+  // P6 — Summary output. Rasterize the current canvas (image / PDF page /
+  // grid + all strokes) to a PNG and download it. The canvas already holds
+  // the composited drawing, so we just clear the selection for a clean
+  // frame, redraw, and toDataURL. Filename encodes the page + takeoff
+  // totals so the export is self-describing.
+  //
+  // SEAM (future): "Save summary to Reports" and "push LF/SF/counts to
+  // estimate line items" hang off measureSummary() — a report row would be
+  // created via the polymorphic reports infra (job-reports.js) and the
+  // estimate push would map {lf, sf, count} to line-item quantities. Left
+  // unbuilt in v1 (standalone scope); this PNG export is the v1 ceiling.
+  function exportPng() {
+    var canvas = document.getElementById('p86-mk-canvas');
+    if (!canvas) return;
+    commitPolylineIfActive();
+    state.selectedIdx = null;
+    redraw();
+    var base = ((state.attachment && state.attachment.filename) || 'markup').replace(/\.[^.]+$/, '');
+    if (state.isPdf && state.pageCount > 1) base += '-p' + ((state.page || 0) + 1);
+    var sum = measureSummary();
+    var bits = [];
+    if (sum.hasLen) bits.push((Math.round(sum.lf * 100) / 100) + 'ft');
+    if (sum.hasArea) bits.push((Math.round(sum.sf * 100) / 100) + 'sf');
+    if (sum.count) bits.push(sum.count + 'ct');
+    if (bits.length) base += '-takeoff-' + bits.join('-');
+    try {
+      var url = canvas.toDataURL('image/png');
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = base.replace(/[^a-z0-9._-]+/gi, '_') + '.png';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(function () { if (a.parentNode) a.parentNode.removeChild(a); }, 0);
+    } catch (e) {
+      alert('Could not export PNG — the background image may be cross-origin.\n\n' + (e && e.message ? e.message : ''));
+    }
+  }
+
+  // Standalone totals from a flat annotations array (calibration metas
+  // keyed by page + page-tagged measurement strokes) — used by the Plans
+  // surface to show headline LF/SF/count without opening the viewer.
+  // Reuses the same geometry helpers the live panel uses.
+  function summarizeAnnotations(annotations) {
+    if (!Array.isArray(annotations)) return { lf: 0, sf: 0, count: 0 };
+    var cals = {};
+    annotations.forEach(function (a) { if (a && a.kind === 'calibration') cals[a.page || 0] = a; });
+    var lf = 0, sf = 0, count = 0;
+    annotations.forEach(function (s) {
+      if (!s || !s.tool) return;
+      var cal = cals[s.page || 0];
+      var ppi = cal && cal.pixelsPerInch;
+      if (s.tool === 'mlen' && s.points && s.points.length > 1 && ppi) {
+        lf += (polylinePixelLength(s.points) / ppi) / 12;
+      } else if (s.tool === 'marea' && s.points && s.points.length >= 3 && ppi) {
+        sf += (polygonPixelArea(s.points) / (ppi * ppi)) / 144;
+      } else if (s.tool === 'mcount') {
+        count++;
+      }
+    });
+    return { lf: Math.round(lf * 100) / 100, sf: Math.round(sf * 100) / 100, count: count };
+  }
+
+  window.p86Markup = { open: open, close: closeOverlay, summarize: summarizeAnnotations };
 
   // Public render API — lets the lightbox / tile previews draw the
   // SAME strokes the markup viewer renders, without needing to open

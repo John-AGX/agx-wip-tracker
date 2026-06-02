@@ -51,6 +51,7 @@ const fieldToolsRoutes = require('./routes/field-tools-routes');
 const payloadRoutes = require('./routes/payload-routes');
 const projectRoutes = require('./routes/project-routes');
 const projectPairsRoutes = require('./routes/project-pairs-routes');
+const plansRoutes = require('./routes/plans-routes');
 const orgTagsRoutes = require('./routes/org-tags-routes');
 const folderTemplatesRoutes = require('./routes/folder-templates-routes');
 const tasksRoutes = require('./routes/tasks-routes');
@@ -124,6 +125,8 @@ app.use('/api/leads', leadRoutes);
 // on the pairs router exposes :projectId from this prefix.
 app.use('/api/projects/:projectId/pairs', projectPairsRoutes);
 app.use('/api/projects', projectRoutes);
+// Plans & Takeoffs — scale-drawing documents (Bluebeam-style measure).
+app.use('/api/plans', plansRoutes);
 // Tasks / To-Do system — polymorphic entity (kind = todo|punch|follow_up),
 // org-scoped, requireAuth-only (assignee-driven model needs universal
 // access; no capability gate). See server/routes/tasks-routes.js.

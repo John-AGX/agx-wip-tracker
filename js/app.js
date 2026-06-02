@@ -1496,6 +1496,7 @@
             jobs:       'Jobs',
             'my-files': 'Files',
             'my-tasks': 'Tasks',
+            plans:      'Plans & Takeoffs',
             insights:   'Insights',
             admin:      'Admin'
         };
@@ -1569,6 +1570,8 @@
                 if (typeof window.renderMyFilesTab === 'function') window.renderMyFilesTab();
             } else if (tabName === 'my-tasks') {
                 if (typeof window.renderMyTasksTab === 'function') window.renderMyTasksTab();
+            } else if (tabName === 'plans') {
+                if (typeof window.renderPlansTab === 'function') window.renderPlansTab();
             } else if (tabName === 'estimates') {
                 // Pick the currently-active sub-tab and route through
                 // switchEstimatesSubTab so its render fires. Without

@@ -609,6 +609,7 @@
                     <div class="app-nav-group">
                         <div class="app-nav-group-label">Workspace</div>
                         <button class="tab-btn" data-tab="my-tasks" data-p86-icon="check-circle" title="My Tasks"><span class="app-nav-label">My Tasks</span></button>
+                        <button class="tab-btn" data-tab="plans" data-p86-icon="reports" title="Plans &amp; Takeoffs"><span class="app-nav-label">Plans</span></button>
                         <button class="tab-btn" data-tab="my-files" data-p86-icon="folder" title="My Files"><span class="app-nav-label">My Files</span></button>
                     </div>
                 </nav>
@@ -1185,6 +1186,11 @@
                      capture + Today / Upcoming / Overdue / Done filters.
                      Painted by renderMyTasksTab() in js/tasks.js. -->
                 <div id="my-tasks" class="tab-content"></div>
+
+                <!-- Plans & Takeoffs — scale-drawing documents (Bluebeam-style
+                     calibrate + measure). Painted by renderPlansTab() in
+                     js/plans.js. -->
+                <div id="plans" class="tab-content"></div>
 
                 <!-- SCHEDULE TAB — production scheduling calendar.
                      Phase 1 = local-only persistence; Phase 2 will swap
@@ -2876,12 +2882,13 @@
     <script src="js/auth.js?v=16"></script>
     <script src="js/dialogs.js?v=1b"></script>
     <script src="js/geolocation.js?v=1"></script>
-    <script src="js/api.js?v=37"></script>
+    <script src="js/api.js?v=38"></script>
     <script src="js/header-weather.js?v=2"></script>
     <script src="js/account.js?v=2b"></script>
     <script src="js/voice-input.js?v=5"></script>
     <script src="js/attachments.js?v=24"></script>
-    <script src="js/markup-viewer.js?v=25"></script>
+    <script src="js/markup-viewer.js?v=26"></script>
+    <script src="js/plans.js?v=1"></script>
     <script src="js/pdf-viewer.js?v=3b"></script>
     <!-- Visual block editor for email templates (Wave 3). Loads
          BEFORE admin.js so window.p86EmailBlocks is available at the
@@ -2909,7 +2916,7 @@
     <script src="js/qb-costs-view.js?v=11"></script>
     <script src="js/insights.js?v=7"></script>
     <script src="js/schedule.js?v=34"></script>
-    <script src="js/app.js?v=77"></script>
+    <script src="js/app.js?v=78"></script>
     <script src="js/compliance-review-ui.js?v=2"></script>
     <script src="js/messaging.js?v=1b"></script>
     <script src="js/my-files.js?v=14"></script>
@@ -2967,7 +2974,7 @@
     <!-- URL router — pathname-based navigation. Loads last so all
          top-level nav functions (switchTab, editJob, etc.) exist
          before the router wraps them. -->
-    <script src="js/router.js?v=11"></script>
+    <script src="js/router.js?v=12"></script>
 
     <!-- Sidebar Recents — client-side recently-opened list. Loads after
          router.js + the entity-open modules so it can wrap editJob /
