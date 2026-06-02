@@ -1231,6 +1231,7 @@
               '</div>' +
               (canEdit ? '<button data-att-pin="' + escapeAttr(att.id) + '" title="' + escapeAttr(pinTitle) + '" style="flex:0 0 auto;background:' + (pinActive ? 'rgba(52,211,153,0.10)' : 'transparent') + ';color:' + pinColor + ';border:' + pinBorder + ';border-radius:6px;width:30px;height:30px;font-size:13px;cursor:pointer;line-height:1;">&#x1F4CC;</button>' : '') +
               (canEdit ? '<button data-att-move="' + escapeAttr(att.id) + '" title="Move to folder" style="flex:0 0 auto;background:transparent;color:var(--text-dim,#aaa);border:1px solid var(--border,#333);border-radius:6px;width:30px;height:30px;font-size:13px;cursor:pointer;line-height:1;">&#x1F4C1;</button>' : '') +
+              (isPdf && canEdit ? '<button data-att-measure="' + escapeAttr(att.id) + '" title="Calibrate scale &amp; take off measurements on this PDF" style="flex:0 0 auto;background:rgba(124,58,237,0.12);color:#c4b5fd;border:1px solid rgba(124,58,237,0.35);border-radius:6px;padding:6px 12px;font-size:11px;font-weight:600;cursor:pointer;">&#x1F4D0; Measure</button>' : '') +
               (isPdf ? '<button data-att-view="' + escapeAttr(att.id) + '" title="Preview pages and send to the AI assistant" style="flex:0 0 auto;background:rgba(139,92,246,0.12);color:#c4b5fd;border:1px solid rgba(139,92,246,0.3);border-radius:6px;padding:6px 12px;font-size:11px;font-weight:600;cursor:pointer;">&#x1F441; View</button>' : '') +
               '<a href="' + escapeAttr(att.original_url) + '" download="' + escapeAttr(att.filename) + '" target="_blank" rel="noopener" title="Download" style="flex:0 0 auto;background:rgba(79,140,255,0.12);color:#4f8cff;border:1px solid rgba(79,140,255,0.3);border-radius:6px;padding:6px 12px;text-decoration:none;font-size:11px;font-weight:600;">&#x2B07; Download</a>' +
               (canEdit ? '<button data-att-del-doc="' + escapeAttr(att.id) + '" title="Delete" style="flex:0 0 auto;background:rgba(248,113,113,0.10);color:#f87171;border:1px solid rgba(248,113,113,0.25);border-radius:6px;width:30px;height:30px;font-size:14px;cursor:pointer;line-height:1;">&times;</button>' : '') +
@@ -1430,6 +1431,16 @@
           } else {
             alert('PDF viewer not loaded — refresh the page.');
           }
+        };
+      });
+      // Calibrate & measure a PDF — opens the markup viewer (PDF-capable
+      // since P2). Saves takeoff strokes back to the PDF's annotations.
+      container.querySelectorAll('[data-att-measure]').forEach(function(btn) {
+        btn.onclick = function(e) {
+          e.stopPropagation();
+          var attId = btn.getAttribute('data-att-measure');
+          var att = state.attachments.find(function(a) { return a.id === attId; });
+          if (att) openMarkupForOwned(att);
         };
       });
       // Parent-photo click + markup wiring is now handled by the

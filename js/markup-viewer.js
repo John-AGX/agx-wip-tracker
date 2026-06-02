@@ -21,7 +21,12 @@
     { key: 'select',   glyph: '\u{1F446}', label: 'Select / move' },
     { key: 'arrow',    glyph: '↗',     label: 'Arrow' },
     { key: 'line',     glyph: '─',     label: 'Line' },
+    { key: 'calibrate',glyph: '\u{1F4D0}', label: 'Set scale (calibrate): draw a line over a known dimension, then type its real length — unlocks the takeoff tools' },
     { key: 'measure',  glyph: '\u{1F4CF}', label: 'Measurement (pick two points, enter distance — e.g. 84", 1.5\', 10 feet, 5\'6")' },
+    { key: 'mlen',     glyph: 'LF',    label: 'Linear takeoff (LF): click points along a run; double-click / Esc to finish. Auto-totals real length — set the scale first.' },
+    { key: 'marea',    glyph: 'SF',    label: 'Area takeoff (SF): click around a region; double-click / Esc to close. Shows area + perimeter — set the scale first.' },
+    { key: 'mcount',   glyph: '#',     label: 'Count: click to drop tally markers (heads, fixtures, trees). Live count.' },
+    { key: 'mangle',   glyph: '∠', label: 'Angle: click three points (vertex in the middle) to measure the angle in degrees.' },
     { key: 'polyline', glyph: '⌇',     label: 'Polyline (click to add points; double-click / Esc to finish; snaps to existing endpoints)' },
     { key: 'rect',     glyph: '▭',     label: 'Rectangle' },
     { key: 'ellipse',  glyph: '◯',     label: 'Ellipse' },
@@ -192,6 +197,82 @@
     return sign + ft + "'-" + inStr + '"';
   }
 
+  // ── Scale calibration + measurement geometry ────────────────────
+  // Calibration is stored canonically as pixels-per-INCH (the whole
+  // measurement system is inch-based via formatFeetInches), plus a
+  // display-unit preference. It lives in state.calibration — NOT in
+  // state.strokes — so it never pollutes hit-testing / undo / bbox.
+  // buildAnnotations() re-attaches it as a meta entry to the array we
+  // persist; open() splits it back out. drawStroke/renderAll skip any
+  // entry whose .kind is set (meta), so old markups render unchanged.
+  function buildAnnotations() {
+    if (!state) return [];
+    // Emit every page's calibration meta entry first, then the strokes
+    // (each tagged with its page). open() splits this back apart.
+    var metas = [];
+    if (state.calibrations) {
+      Object.keys(state.calibrations).forEach(function(pg) {
+        if (state.calibrations[pg]) metas.push(state.calibrations[pg]);
+      });
+    }
+    return metas.concat(state.strokes || []);
+  }
+  // Calibration for the page currently shown. Photos / blank canvas are
+  // always page 0; PDFs calibrate per page. Null if that page isn't set.
+  function currentCalibration() {
+    if (!state || !state.calibrations) return null;
+    return state.calibrations[state.page || 0] || null;
+  }
+  function isCalibrated() {
+    var c = currentCalibration();
+    return !!(c && c.pixelsPerInch > 0);
+  }
+  function dist(a, b) {
+    var dx = b.x - a.x, dy = b.y - a.y;
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+  function polylinePixelLength(points) {
+    if (!points || points.length < 2) return 0;
+    var total = 0;
+    for (var i = 1; i < points.length; i++) total += dist(points[i - 1], points[i]);
+    return total;
+  }
+  // Shoelace — absolute area (px²) of the closed polygon points[0..n,0].
+  function polygonPixelArea(points) {
+    if (!points || points.length < 3) return 0;
+    var sum = 0;
+    for (var i = 0; i < points.length; i++) {
+      var a = points[i], b = points[(i + 1) % points.length];
+      sum += a.x * b.y - b.x * a.y;
+    }
+    return Math.abs(sum) / 2;
+  }
+  // Interior angle (degrees) at vertex b along the path a-b-c.
+  function angleBetween(a, b, c) {
+    var v1x = a.x - b.x, v1y = a.y - b.y;
+    var v2x = c.x - b.x, v2y = c.y - b.y;
+    var m1 = Math.sqrt(v1x * v1x + v1y * v1y);
+    var m2 = Math.sqrt(v2x * v2x + v2y * v2y);
+    if (!m1 || !m2) return 0;
+    var cos = Math.max(-1, Math.min(1, (v1x * v2x + v1y * v2y) / (m1 * m2)));
+    return Math.acos(cos) * 180 / Math.PI;
+  }
+  // Pixel distance → real inches via the active calibration (null if
+  // not calibrated). Linear/area display helpers build on this.
+  function pxToInches(px) {
+    var c = currentCalibration();
+    if (!c || !c.pixelsPerInch) return null;
+    return px / c.pixelsPerInch;
+  }
+  // Linear measure: decimal feet is the takeoff-friendly form ("84.5 ft").
+  function formatLF(realInches) {
+    return (Math.round((realInches / 12) * 100) / 100) + ' ft';
+  }
+  // Area: square feet ("1240.3 ft²").
+  function formatSF(realSqInches) {
+    return (Math.round((realSqInches / 144) * 100) / 100) + ' ft²';
+  }
+
   // Thickness presets — click the Thickness button to swap among them.
   // Sized so the visual difference is obvious at typical photo
   // resolutions (the canvas is at native image size, often 1600+px wide).
@@ -227,19 +308,31 @@
   ];
 
   var state = null;          // active markup session
-  var _numberCounter = 1;    // resets per session
+  var _numberCounter = 1;    // resets per session (numbered sticker)
+  var _countCounter = 1;     // resets per session (count tally markers)
 
   function open(opts) {
     opts = opts || {};
     if (!opts.attachment) { alert('No attachment supplied.'); return; }
     if (state) closeOverlay();
     _numberCounter = 1;
+    _countCounter = 1;
     // Reset auto-save bookkeeping so the next session has a clean
     // slate. _autoSaveLastJson is seeded from the initial strokes so
     // the first redraw doesn't auto-fire on an unchanged snapshot.
     if (_autoSaveTimer) { clearTimeout(_autoSaveTimer); _autoSaveTimer = null; }
     _autoSaveInFlight = false;
-    _autoSaveLastJson = JSON.stringify((opts.attachment && Array.isArray(opts.attachment.annotations)) ? opts.attachment.annotations : []);
+    // Split stored annotations into per-page calibration meta entries
+    // (kept in state.calibrations[page] so they never pollute strokes)
+    // and the real drawable strokes (each tagged with its page; legacy
+    // strokes default to page 0). _autoSaveLastJson is re-seeded below
+    // from the same buildAnnotations() shape we persist.
+    var _anns = (opts.attachment && Array.isArray(opts.attachment.annotations)) ? opts.attachment.annotations : [];
+    var _initialCals = {}, _initialStrokes = [];
+    _anns.forEach(function(a) {
+      if (a && a.kind === 'calibration') { _initialCals[a.page || 0] = a; }
+      else if (a) { if (a.page == null) a.page = 0; _initialStrokes.push(a); }
+    });
     state = {
       attachment: opts.attachment,
       // Where the saved markup uploads to. Defaults to the source
@@ -282,9 +375,19 @@
       // selectable, draggable, deletable element. Phase 1.7 ended the
       // "rasterize to PNG on save" pattern — the strokes ride with
       // the original attachment and edit in place.
-      strokes: (opts.attachment && Array.isArray(opts.attachment.annotations))
-        ? opts.attachment.annotations.slice()
-        : [],
+      strokes: _initialStrokes,
+      // Scale calibration (pixels↔real) keyed by page. Photos / blank
+      // canvas use page 0; PDFs calibrate each page independently.
+      // Persisted as per-page meta entries via buildAnnotations().
+      calibrations: _initialCals,
+      // PDF paging. page 0 / pageCount 1 for photos + blank canvas.
+      page: 0,
+      pageCount: 1,
+      isPdf: false,
+      pdfDoc: null,          // cached pdfjs document for re-render on page switch
+      // Blank gridded canvas (P3) — { w, h, gridPx }. Null for photo/PDF.
+      // Set scale with the Calibrate tool just like a photo.
+      blank: opts.blank || null,
       currentStroke: null,
       activePolyline: null,    // mid-build polyline (committed on dblclick / Esc / tool switch)
       hoverPoint: null,        // last known canvas-local cursor (for polyline preview + snap)
@@ -297,6 +400,9 @@
       // onRequestClose without each plumbing them through.
       opts: opts
     };
+    // Seed change-detection from the full persisted shape (calibration
+    // meta + strokes) so the first redraw doesn't auto-fire a no-op save.
+    _autoSaveLastJson = JSON.stringify(buildAnnotations());
     buildOverlay();
   }
 
@@ -313,7 +419,14 @@
       // Top bar — filename + actions (Cancel / Save)
       '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;background:rgba(15,15,30,0.95);border:1px solid #2a2a3a;border-radius:10px;padding:8px 14px;">' +
         '<strong style="color:#fff;font-size:13px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(state.attachment.filename || 'Photo') + '</strong>' +
+        // PDF page navigation — hidden unless a multi-page PDF is open.
+        '<span id="p86-mk-page-nav" style="display:none;align-items:center;gap:4px;margin-right:8px;">' +
+          '<button id="p86-mk-page-prev" title="Previous page" style="background:rgba(255,255,255,0.06);color:#ddd;border:1px solid #444;border-radius:6px;padding:3px 9px;font-size:13px;cursor:pointer;">◀</button>' +
+          '<span id="p86-mk-page-label" style="color:#cbd5e1;font-size:11px;min-width:74px;text-align:center;">Page 1 / 1</span>' +
+          '<button id="p86-mk-page-next" title="Next page" style="background:rgba(255,255,255,0.06);color:#ddd;border:1px solid #444;border-radius:6px;padding:3px 9px;font-size:13px;cursor:pointer;">▶</button>' +
+        '</span>' +
         '<span id="p86-mk-hint" style="color:#aaa;font-size:11px;margin-right:8px;"></span>' +
+        '<button id="p86-mk-cal-chip" title="Set drawing scale — calibrate against a known dimension" style="background:rgba(124,58,237,0.12);border:1px solid rgba(124,58,237,0.4);color:#c4b5fd;border-radius:999px;padding:3px 10px;font-size:10.5px;letter-spacing:0.3px;cursor:pointer;white-space:nowrap;margin-right:6px;">\u{1F4D0} Set scale</button>' +
         '<span id="p86-mk-save-chip" style="display:none;background:rgba(255,255,255,0.06);border:1px solid #444;color:#aaa;border-radius:999px;padding:3px 10px;font-size:10.5px;letter-spacing:0.3px;"></span>' +
         '<button id="p86-mk-cancel" style="background:rgba(255,255,255,0.06);color:#aaa;border:1px solid #444;border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;">Cancel</button>' +
         '<button id="p86-mk-save" style="background:#4f8cff;color:#fff;border:0;border-radius:6px;padding:6px 16px;font-size:12px;font-weight:700;cursor:pointer;">Save</button>' +
@@ -362,6 +475,9 @@
         // Measurement picker — same anchor model as the sticker
         // picker. Visible only when the measure tool is active.
         '<div id="p86-mk-measure-picker" style="display:none;position:absolute;left:88px;top:78px;background:rgba(15,15,30,0.97);border:1px solid #3a3a4a;border-radius:8px;padding:8px;box-shadow:0 6px 20px rgba(0,0,0,0.5);z-index:5050;max-height:70vh;overflow-y:auto;width:160px;"></div>' +
+        // Live takeoff totals panel — bottom-right, shown only when
+        // there are measurement strokes (renderMeasurePanel toggles it).
+        '<div id="p86-mk-measure-panel" style="display:none;position:absolute;right:18px;bottom:18px;background:rgba(15,15,30,0.95);border:1px solid #3a3a4a;border-radius:10px;padding:10px 12px;box-shadow:0 6px 20px rgba(0,0,0,0.5);z-index:5050;min-width:150px;font-size:12px;color:#e6e6e6;"></div>' +
         // Canvas area
         '<div style="flex:1;background:#000;border:1px solid #2a2a3a;border-radius:10px;overflow:hidden;display:flex;align-items:center;justify-content:center;min-height:0;">' +
           '<canvas id="p86-mk-canvas" style="display:block;max-width:100%;max-height:100%;"></canvas>' +
@@ -375,9 +491,18 @@
     // Tool buttons
     overlay.querySelectorAll('[data-mk-tool]').forEach(function(btn) {
       btn.onclick = function() {
+        var nextTool = btn.dataset.mkTool;
+        // Linear / area takeoffs need a scale. If none is set yet, send
+        // the user to Calibrate first instead of letting them draw
+        // measurements that can't resolve to real units.
+        if (needsScale(nextTool) && !isCalibrated()) {
+          alert('Set the drawing scale first.\n\nUse the Calibrate tool (📐) to draw a line over a known dimension and enter its real length, then you can take off '
+            + (nextTool === 'mlen' ? 'linear feet' : 'square feet') + '.');
+          nextTool = 'calibrate';
+        }
         // Finish any in-progress polyline before switching tools.
         commitPolylineIfActive();
-        state.tool = btn.dataset.mkTool;
+        state.tool = nextTool;
         if (state.tool !== 'sticker') state.stickerKind = null;
         if (state.tool !== 'select') state.selectedIdx = null;
         // Reset measurement-only overrides when leaving the tool so
@@ -430,6 +555,26 @@
     overlay.querySelector('#p86-mk-cancel').onclick = function() {
       if (!state.strokes.length || confirm('Discard your markup?')) requestClose();
     };
+    // PDF page navigation.
+    var pagePrev = overlay.querySelector('#p86-mk-page-prev');
+    var pageNext = overlay.querySelector('#p86-mk-page-next');
+    if (pagePrev) pagePrev.onclick = function() { goToPage(canvas, overlay, (state.page || 0) - 1); };
+    if (pageNext) pageNext.onclick = function() { goToPage(canvas, overlay, (state.page || 0) + 1); };
+
+    // Calibration chip — jump straight to the Calibrate tool (set or
+    // re-set the scale). Mirrors the tool-button switch behavior.
+    var calChip = overlay.querySelector('#p86-mk-cal-chip');
+    if (calChip) calChip.onclick = function() {
+      commitPolylineIfActive();
+      state.tool = 'calibrate';
+      state.selectedIdx = null;
+      refreshToolbar(overlay);
+      renderStickerPicker(overlay);
+      renderMeasurePicker(overlay);
+      updateThicknessIndicator(overlay);
+      updateHint(overlay);
+      redraw();
+    };
 
     // Android back / browser back closes the markup viewer instead
     // of navigating the whole tab away. Skipped when the host (e.g.
@@ -459,7 +604,8 @@
       saveBtn.textContent = 'Saving…';
       var done = state && state.onDone;
       var att = state && state.attachment;
-      var strokes = state.strokes.slice();
+      // Persist the calibration meta entry alongside the strokes.
+      var strokes = buildAnnotations();
 
       function finish() {
         saveBtn.textContent = 'Saved';
@@ -501,6 +647,7 @@
     };
 
     refreshToolbar(overlay);
+    updateCalChip(overlay);
     renderStickerPicker(overlay);
     renderMeasurePicker(overlay);
     updateHint(overlay);
@@ -544,7 +691,24 @@
     };
   }
 
+  function attachmentIsPdf(a) {
+    return !!(a && (a.mime_type === 'application/pdf' || /\.pdf$/i.test(a.filename || '')));
+  }
   function loadImageInto(canvas) {
+    var a = state.attachment || {};
+    // Blank gridded canvas (P3) — no image; redraw paints a grid.
+    if (state.blank) {
+      canvas.width = state.blank.w || 1600;
+      canvas.height = state.blank.h || 1200;
+      state.naturalSize = { w: canvas.width, h: canvas.height };
+      state.img = null;
+      redraw();
+      return;
+    }
+    // PDF substrate — render the page through pdf.js into an offscreen
+    // canvas and use that as the drawing background (P2). Per-page
+    // calibration + strokes handle multi-sheet plan sets.
+    if (attachmentIsPdf(a)) { loadPdfInto(canvas); return; }
     // "Annotate before saving" hands us an attachment with id:null
     // and a local blob: URL in web_url/original_url — the photo
     // hasn't been uploaded yet, so there's nothing at the proxy
@@ -552,7 +716,6 @@
     // caller provided. Same path also lets us short-circuit data:
     // URLs (e.g. embedded test images) without a network round-trip.
     var directUrl = null;
-    var a = state.attachment || {};
     if (!a.id) {
       directUrl = a.web_url || a.original_url || a.thumb_url || null;
     }
@@ -607,6 +770,94 @@
       });
   }
 
+  // PDF render scale — pages rasterize at this multiple of their
+  // intrinsic (72-DPI) size for a crisp markup surface. Stroke + scale
+  // coordinates are stored in THIS rendered-pixel space, so the
+  // constant must stay fixed (changing it would offset saved markups).
+  var PDF_RENDER_SCALE = 2;
+
+  function loadPdfInto(canvas) {
+    if (!window.pdfjsLib) {
+      alert('PDF viewer library not loaded — cannot mark up this PDF.');
+      closeOverlay();
+      return;
+    }
+    var a = state.attachment || {};
+    var directUrl = (!a.id) ? (a.original_url || a.web_url || null) : null;
+    var fetchPromise;
+    if (directUrl) {
+      fetchPromise = fetch(directUrl).then(function(r) { return r.arrayBuffer(); });
+    } else {
+      // Raw endpoint WITHOUT ?variant — we want the original PDF bytes.
+      var proxyUrl = '/api/attachments/raw/' + encodeURIComponent(a.id);
+      var headers = {};
+      var token = (window.p86Auth && typeof window.p86Auth.getToken === 'function') ? window.p86Auth.getToken() : null;
+      if (!token) { try { token = localStorage.getItem('p86-auth-token'); } catch (e) { /* ignore */ } }
+      if (token) headers['Authorization'] = 'Bearer ' + token;
+      fetchPromise = fetch(proxyUrl, { headers: headers, credentials: 'same-origin' }).then(function(r) {
+        if (!r.ok) return r.text().then(function(b) { throw new Error('HTTP ' + r.status + ': ' + (b || r.statusText).slice(0, 200)); });
+        return r.arrayBuffer();
+      });
+    }
+    fetchPromise
+      .then(function(buf) { return window.pdfjsLib.getDocument({ data: buf }).promise; })
+      .then(function(pdf) {
+        state.pdfDoc = pdf;
+        state.isPdf = true;
+        state.pageCount = pdf.numPages || 1;
+        if (state.page >= state.pageCount) state.page = 0;
+        renderPdfPage(canvas, state.page);
+        var ov = document.getElementById('p86-markup-overlay');
+        if (ov) updatePageNav(ov);
+      })
+      .catch(function(err) {
+        alert('Failed to load PDF for markup.\n\n' + (err && err.message ? err.message : ''));
+        closeOverlay();
+      });
+  }
+
+  function renderPdfPage(canvas, pageIdx) {
+    if (!state.pdfDoc) return;
+    // pdf.js pages are 1-indexed; our state.page is 0-indexed.
+    state.pdfDoc.getPage(pageIdx + 1).then(function(page) {
+      var viewport = page.getViewport({ scale: PDF_RENDER_SCALE });
+      var off = document.createElement('canvas');
+      off.width = Math.round(viewport.width);
+      off.height = Math.round(viewport.height);
+      var offCtx = off.getContext('2d');
+      page.render({ canvasContext: offCtx, viewport: viewport }).promise.then(function() {
+        state.img = off;                       // canvas is a valid drawImage source
+        state.naturalSize = { w: off.width, h: off.height };
+        canvas.width = off.width;
+        canvas.height = off.height;
+        redraw();
+      });
+    });
+  }
+
+  // Switch to another PDF page: commit any in-progress stroke, clear the
+  // selection (indices are page-scoped), re-render, and refresh chrome.
+  function goToPage(canvas, overlay, pageIdx) {
+    if (!state.isPdf) return;
+    pageIdx = Math.max(0, Math.min((state.pageCount || 1) - 1, pageIdx));
+    if (pageIdx === state.page) return;
+    commitPolylineIfActive();
+    state.selectedIdx = null;
+    state.page = pageIdx;
+    renderPdfPage(canvas, pageIdx);
+    if (overlay) { updatePageNav(overlay); updateCalChip(overlay); updateHint(overlay); }
+  }
+
+  // Page navigation chip in the top bar — only shown for multi-page PDFs.
+  function updatePageNav(overlay) {
+    var nav = overlay ? overlay.querySelector('#p86-mk-page-nav') : document.getElementById('p86-mk-page-nav');
+    if (!nav) return;
+    if (!state.isPdf || (state.pageCount || 1) <= 1) { nav.style.display = 'none'; return; }
+    nav.style.display = 'inline-flex';
+    var label = nav.querySelector('#p86-mk-page-label');
+    if (label) label.textContent = 'Page ' + ((state.page || 0) + 1) + ' / ' + state.pageCount;
+  }
+
   function refreshToolbar(overlay) {
     overlay.querySelectorAll('[data-mk-tool]').forEach(function(btn) {
       var active = btn.dataset.mkTool === state.tool;
@@ -637,6 +888,30 @@
     dot.style.width = display + 'px';
     dot.style.height = display + 'px';
     dot.style.background = state.color || '#ddd';
+  }
+
+  // Reflect calibration state in the top-bar chip: purple "Set scale"
+  // prompt when uncalibrated, green "Scale set" once a reference has
+  // been drawn. Clicking it re-enters the Calibrate tool either way.
+  function updateCalChip(overlay) {
+    var chip = overlay ? overlay.querySelector('#p86-mk-cal-chip')
+                       : document.getElementById('p86-mk-cal-chip');
+    if (!chip) return;
+    if (isCalibrated()) {
+      var c = currentCalibration();
+      var refLabel = (c.refInches != null) ? formatFeetInches(c.refInches) : '';
+      chip.innerHTML = '\u{1F4D0} Scale set' + (refLabel ? ' · ' + escapeHTML(refLabel) + ' ref' : '');
+      chip.style.background = 'rgba(34,197,94,0.12)';
+      chip.style.borderColor = 'rgba(34,197,94,0.4)';
+      chip.style.color = '#86efac';
+      chip.title = 'Scale calibrated (' + (Math.round(c.pixelsPerInch * 100) / 100) + ' px/in). Click to re-calibrate.';
+    } else {
+      chip.innerHTML = '\u{1F4D0} Set scale';
+      chip.style.background = 'rgba(124,58,237,0.12)';
+      chip.style.borderColor = 'rgba(124,58,237,0.4)';
+      chip.style.color = '#c4b5fd';
+      chip.title = 'Set drawing scale — calibrate against a known dimension';
+    }
   }
 
   // Close any open tool config popups (thickness / text size). Used
@@ -825,11 +1100,27 @@
     }, 0);
   }
 
+  // Push a finished stroke onto the list, tagging it with the page it
+  // was drawn on (0 for photos / blank canvas; the active PDF page
+  // otherwise) so per-page filtering + save round-trip stay correct.
+  function commitStroke(s) {
+    if (state) s.page = state.page || 0;
+    state.strokes.push(s);
+    return s;
+  }
+
   // If a polyline is mid-build, push it onto strokes so it renders
   // and becomes selectable. Used when the tool changes / save fires.
   function commitPolylineIfActive() {
-    if (state && state.activePolyline && state.activePolyline.points && state.activePolyline.points.length >= 2) {
-      state.strokes.push(state.activePolyline);
+    var ap = state && state.activePolyline;
+    if (ap && ap.points) {
+      // Area + angle need ≥3 points; lines/polylines need ≥2. Angle is
+      // capped at its first three points.
+      var min = (ap.tool === 'marea' || ap.tool === 'mangle') ? 3 : 2;
+      if (ap.points.length >= min) {
+        if (ap.tool === 'mangle' && ap.points.length > 3) ap.points = ap.points.slice(0, 3);
+        commitStroke(ap);
+      }
     }
     if (state) state.activePolyline = null;
   }
@@ -1014,8 +1305,18 @@
       hint.textContent = 'Click on the photo to place text';
     } else if (state.tool === 'polyline') {
       hint.textContent = 'Click to add points · double-click or Esc to finish · snaps to existing endpoints';
+    } else if (state.tool === 'calibrate') {
+      hint.textContent = 'Draw a line over a KNOWN dimension, then type its real length to set the scale';
     } else if (state.tool === 'measure') {
       hint.textContent = 'Click and drag two points · enter the distance when prompted';
+    } else if (state.tool === 'mlen') {
+      hint.textContent = 'Linear takeoff · click points along the run · double-click / Esc to finish';
+    } else if (state.tool === 'marea') {
+      hint.textContent = 'Area takeoff · click around the region · double-click / Esc to close the polygon';
+    } else if (state.tool === 'mcount') {
+      hint.textContent = 'Count · click to drop a tally marker';
+    } else if (state.tool === 'mangle') {
+      hint.textContent = 'Angle · click three points: first leg, vertex, second leg';
     } else {
       hint.textContent = 'Click and drag on the photo';
     }
@@ -1091,7 +1392,7 @@
       if (state.tool === 'text') {
         var msg = prompt('Text to add:');
         if (msg) {
-          state.strokes.push({
+          commitStroke({
             tool: 'text', color: state.color, lineWidth: state.lineWidth,
             x: p.x, y: p.y, text: msg, fontPx: state.fontPx || 28
           });
@@ -1105,7 +1406,7 @@
         if (!state.stickerKind) { alert('Pick a sticker on the left first.'); return; }
         var size = Math.max(40, state.lineWidth * 14);
         var label = state.stickerKind === 'number' ? String(_numberCounter++) : null;
-        state.strokes.push({
+        commitStroke({
           tool: 'sticker', kind: state.stickerKind,
           color: state.color, lineWidth: state.lineWidth,
           x: p.x, y: p.y, size: size, label: label
@@ -1114,17 +1415,32 @@
         return;
       }
 
-      // Polyline tool: each click adds a point. Snap to existing
-      // endpoints when within SNAP_RADIUS. Double-click or Esc commits.
-      if (state.tool === 'polyline') {
+      // Count tool: each click drops a numbered tally marker.
+      if (state.tool === 'mcount') {
+        commitStroke({
+          tool: 'mcount', color: state.color, lineWidth: state.lineWidth,
+          x: p.x, y: p.y, label: String(_countCounter++), group: 'count'
+        });
+        redraw();
+        return;
+      }
+
+      // Multi-point tools — polyline + linear (mlen) / area (marea) /
+      // angle (mangle) takeoffs. Each click adds a point (snapping to
+      // existing endpoints); double-click or Esc commits. Angle
+      // auto-commits once it has its three points.
+      if (isPolyTool(state.tool)) {
         var snapped = snapToEndpoint(p);
         if (!state.activePolyline) {
           state.activePolyline = {
-            tool: 'polyline', color: state.color, lineWidth: state.lineWidth,
+            tool: state.tool, color: state.color, lineWidth: state.lineWidth,
             points: [snapped]
           };
         } else {
           state.activePolyline.points.push(snapped);
+        }
+        if (state.tool === 'mangle' && state.activePolyline.points.length >= 3) {
+          commitPolylineIfActive();
         }
         redraw();
         return;
@@ -1132,7 +1448,7 @@
 
       // Drawing tools: start a new stroke. Single-segment shapes
       // (line / arrow / measure) get endpoint snap on the start point too.
-      var startP = (state.tool === 'line' || state.tool === 'arrow' || state.tool === 'measure') ? snapToEndpoint(p) : p;
+      var startP = (state.tool === 'line' || state.tool === 'arrow' || state.tool === 'measure' || state.tool === 'calibrate') ? snapToEndpoint(p) : p;
       state.currentStroke = {
         tool: state.tool, color: state.color, lineWidth: state.lineWidth,
         startX: startP.x, startY: startP.y, endX: startP.x, endY: startP.y,
@@ -1140,9 +1456,10 @@
       };
     };
 
-    // Polyline finalization on double-click anywhere on the canvas.
+    // Multi-point finalization on double-click anywhere on the canvas
+    // (polyline + linear / area / angle takeoffs).
     canvas.ondblclick = function(e) {
-      if (state.tool !== 'polyline') return;
+      if (!isPolyTool(state.tool)) return;
       e.preventDefault();
       commitPolylineIfActive();
       redraw();
@@ -1180,7 +1497,7 @@
       }
       // Drawing in progress.
       if (!state.currentStroke) return;
-      var endP = (state.currentStroke.tool === 'line' || state.currentStroke.tool === 'arrow' || state.currentStroke.tool === 'measure')
+      var endP = (state.currentStroke.tool === 'line' || state.currentStroke.tool === 'arrow' || state.currentStroke.tool === 'measure' || state.currentStroke.tool === 'calibrate')
         ? snapToEndpoint(p, state.currentStroke)
         : p;
       if (state.currentStroke.tool === 'draw') {
@@ -1211,6 +1528,36 @@
           return;
         }
       }
+      // Calibrate tool: the drawn line is a reference of KNOWN real
+      // length. Ask the user what it actually measures, derive
+      // pixels-per-inch, and store it as the current page's calibration.
+      // The reference line itself is NOT committed as a stroke — only
+      // the scale survives (re-editable via the chip / meta entry).
+      if (s.tool === 'calibrate') {
+        var calPx = Math.sqrt(
+          (s.endX - s.startX) * (s.endX - s.startX) +
+          (s.endY - s.startY) * (s.endY - s.startY)
+        );
+        var calPage = state.page || 0;
+        promptMeasurement(state.measureUnit || 'ft', function(parsed) {
+          state.currentStroke = null;
+          if (!parsed || !parsed.inches || calPx < 1) { redraw(); return; }
+          state.calibrations[calPage] = {
+            kind: 'calibration',
+            pixelsPerInch: calPx / parsed.inches,
+            unit: state.measureUnit || 'ft',
+            refPixels: calPx,
+            refInches: parsed.inches,
+            source: 'line',
+            page: calPage
+          };
+          var ov = document.getElementById('p86-markup-overlay');
+          if (ov) { updateCalChip(ov); refreshToolbar(ov); updateHint(ov); }
+          redraw();   // signature change triggers auto-save of the meta entry
+        });
+        return;
+      }
+
       // Measurement tool: ask for the distance via an AGX-styled
       // modal (not the native window.prompt — feels foreign and
       // can't honor the unit toggle visually). Apply the picker's
@@ -1233,7 +1580,7 @@
           }
           s.measureInches = parsed.inches;
           s.measureLabel  = parsed.label;
-          state.strokes.push(s);
+          commitStroke(s);
           state.currentStroke = null;
           redraw();
         });
@@ -1242,7 +1589,7 @@
         // doesn't add an unmeasured copy.
         return;
       }
-      state.strokes.push(s);
+      commitStroke(s);
       state.currentStroke = null;
       redraw();
     };
@@ -1252,7 +1599,7 @@
 
   // ── Hit testing & translation ──────────────────────────────────
   function strokeBBox(s) {
-    if ((s.tool === 'draw' || s.tool === 'polyline') && s.points && s.points.length) {
+    if ((s.tool === 'draw' || s.tool === 'polyline' || s.tool === 'mlen' || s.tool === 'marea' || s.tool === 'mangle') && s.points && s.points.length) {
       var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
       s.points.forEach(function(p) {
         if (p.x < minX) minX = p.x; if (p.y < minY) minY = p.y;
@@ -1281,12 +1628,17 @@
       }
       return { x: s.x - sz / 2, y: s.y - sz / 2, w: sz, h: sz };
     }
+    if (s.tool === 'mcount') {
+      var rr = Math.max(10, (s.lineWidth || 4) * 2.2);
+      return { x: s.x - rr, y: s.y - rr, w: rr * 2, h: rr * 2 };
+    }
     return { x: 0, y: 0, w: 0, h: 0 };
   }
 
   function hitTestStrokes(p) {
     // Top-down so click picks the visually-topmost stroke.
     for (var i = state.strokes.length - 1; i >= 0; i--) {
+      if ((state.strokes[i].page || 0) !== (state.page || 0)) continue;  // other PDF page
       var bb = strokeBBox(state.strokes[i]);
       var slop = 10;
       if (p.x >= bb.x - slop && p.x <= bb.x + bb.w + slop &&
@@ -1338,18 +1690,47 @@
   }
 
   // ── Drawing ─────────────────────────────────────────────────────
+  // Blank-canvas grid background — fine lines every `step` px, a heavier
+  // line every 5th, on a dark surface. Calibrate against any run of grid
+  // squares of known real length to set the scale.
+  function drawGrid(ctx, w, h, step) {
+    ctx.save();
+    ctx.fillStyle = '#0f1117';
+    ctx.fillRect(0, 0, w, h);
+    var x, y;
+    ctx.strokeStyle = 'rgba(255,255,255,0.07)';
+    ctx.lineWidth = 1;
+    for (x = 0; x <= w; x += step) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); }
+    for (y = 0; y <= h; y += step) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
+    ctx.strokeStyle = 'rgba(255,255,255,0.16)';
+    for (x = 0; x <= w; x += step * 5) { ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, h); ctx.stroke(); }
+    for (y = 0; y <= h; y += step * 5) { ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke(); }
+    ctx.restore();
+  }
+
   function redraw(extra) {
     var canvas = document.getElementById('p86-mk-canvas');
-    if (!canvas || !state.img) return;
+    if (!canvas) return;
     var ctx = canvas.getContext('2d');
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(state.img, 0, 0, canvas.width, canvas.height);
+    if (state.blank && !state.img) {
+      // Blank gridded plan surface.
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      drawGrid(ctx, canvas.width, canvas.height, state.blank.gridPx || 40);
+    } else if (state.img) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(state.img, 0, 0, canvas.width, canvas.height);
+    } else {
+      return;   // nothing to draw on yet (image / PDF still loading)
+    }
     // Every redraw is a chance to detect a real stroke mutation and
     // kick off auto-save. The helper short-circuits if the JSON
     // signature hasn't actually changed (e.g. when redraw fired just
     // to update the selection ring), so this isn't a hot loop.
     scheduleAutoSave();
     state.strokes.forEach(function(s, i) {
+      // Only paint strokes belonging to the page currently shown (PDFs
+      // are per-page; photos / blank canvas are all page 0).
+      if ((s.page || 0) !== (state.page || 0)) return;
       drawStroke(ctx, s);
       if (i === state.selectedIdx) {
         // Only show the dashed bounding box for text/sticker — those
@@ -1385,6 +1766,10 @@
         if (snappedToExisting) drawSnapMarker(ctx, snapped);
       }
     }
+    // Keep the live takeoff totals in sync with the current geometry
+    // (covers commit, delete, undo, move, resize, calibration change).
+    var ovEl = document.getElementById('p86-markup-overlay');
+    if (ovEl) renderMeasurePanel(ovEl);
   }
 
   function drawPolylineDots(ctx, s) {
@@ -1411,6 +1796,11 @@
   }
 
   function drawStroke(ctx, s) {
+    // Skip meta entries (e.g. the calibration record): they carry no
+    // `tool`. NB stickers DO carry a `kind`, so we must guard on the
+    // absence of `tool`, not the presence of `kind`. Keeps tile /
+    // lightbox previews (which call renderAll) back-compatible.
+    if (!s || !s.tool) return;
     ctx.save();
     ctx.strokeStyle = s.color;
     ctx.fillStyle = s.color;
@@ -1440,6 +1830,23 @@
       drawArrow(ctx, s.startX, s.startY, s.endX, s.endY, s.lineWidth);
     } else if (s.tool === 'measure') {
       drawMeasurement(ctx, s);
+    } else if (s.tool === 'calibrate') {
+      // Transient reference line shown only while dragging the
+      // Calibrate tool — dashed, never committed to strokes.
+      ctx.setLineDash([12, 7]);
+      ctx.beginPath();
+      ctx.moveTo(s.startX, s.startY);
+      ctx.lineTo(s.endX, s.endY);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    } else if (s.tool === 'mlen') {
+      drawMlen(ctx, s);
+    } else if (s.tool === 'marea') {
+      drawMarea(ctx, s);
+    } else if (s.tool === 'mcount') {
+      drawMcount(ctx, s);
+    } else if (s.tool === 'mangle') {
+      drawMangle(ctx, s);
     } else if (s.tool === 'text') {
       ctx.font = 'bold ' + (s.fontPx || 24) + 'px Arial,sans-serif';
       ctx.textBaseline = 'top';
@@ -1664,6 +2071,185 @@
       s.y = nY + nH / 2;
       return;
     }
+  }
+
+  // ── Takeoff measurement tools (P1) ──────────────────────────────
+  // mlen (linear LF), marea (area SF + perimeter), mcount (tally),
+  // mangle (angle°). All derive real values live from state.calibration
+  // via the geometry helpers above, so moving / re-pointing a stroke
+  // keeps its readout correct (nothing derived is stored on the stroke).
+  function isPolyTool(t) {
+    return t === 'polyline' || t === 'mlen' || t === 'marea' || t === 'mangle';
+  }
+  function needsScale(t) { return t === 'mlen' || t === 'marea'; }
+  function centroid(points) {
+    var sx = 0, sy = 0;
+    points.forEach(function(p) { sx += p.x; sy += p.y; });
+    return { x: sx / points.length, y: sy / points.length };
+  }
+  function hexToRgba(hex, a) {
+    var h = String(hex || '#3b82f6').replace('#', '');
+    if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+    var n = parseInt(h, 16);
+    if (isNaN(n)) return 'rgba(59,130,246,' + a + ')';
+    return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + a + ')';
+  }
+  // Label with a dark rounded pill behind it so it reads over any photo.
+  function drawPill(ctx, text, x, y, fontPx, fg) {
+    ctx.save();
+    ctx.font = '700 ' + fontPx + 'px ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    var w = ctx.measureText(text).width;
+    var padX = fontPx * 0.5, h = fontPx * 1.5;
+    ctx.fillStyle = 'rgba(15,15,30,0.82)';
+    if (ctx.roundRect) {
+      ctx.beginPath();
+      ctx.roundRect(x - w / 2 - padX, y - h / 2, w + padX * 2, h, 6);
+      ctx.fill();
+    } else {
+      ctx.fillRect(x - w / 2 - padX, y - h / 2, w + padX * 2, h);
+    }
+    ctx.fillStyle = fg || '#fff';
+    ctx.fillText(text, x, y);
+    ctx.restore();
+  }
+  function drawVertexDots(ctx, pts, color, lw) {
+    ctx.save();
+    ctx.fillStyle = color;
+    pts.forEach(function(p) {
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, Math.max(3, (lw || 4) / 2), 0, Math.PI * 2);
+      ctx.fill();
+    });
+    ctx.restore();
+  }
+  function drawMlen(ctx, s) {
+    var pts = s.points || [];
+    if (!pts.length) return;
+    ctx.save();
+    ctx.strokeStyle = s.color; ctx.lineWidth = s.lineWidth || 4;
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    if (pts.length > 1) {
+      ctx.beginPath();
+      ctx.moveTo(pts[0].x, pts[0].y);
+      for (var i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+      ctx.stroke();
+    }
+    ctx.restore();
+    drawVertexDots(ctx, pts, s.color, s.lineWidth);
+    if (pts.length > 1) {
+      var inch = pxToInches(polylinePixelLength(pts));
+      var mid = pts[Math.floor(pts.length / 2)];
+      drawPill(ctx, inch != null ? formatLF(inch) : '(set scale)', mid.x, mid.y - 14, 16, '#dbeafe');
+    }
+  }
+  function drawMarea(ctx, s) {
+    var pts = s.points || [];
+    if (!pts.length) return;
+    ctx.save();
+    ctx.strokeStyle = s.color; ctx.lineWidth = s.lineWidth || 4; ctx.lineJoin = 'round';
+    ctx.beginPath();
+    ctx.moveTo(pts[0].x, pts[0].y);
+    for (var i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    if (pts.length >= 3) { ctx.closePath(); ctx.fillStyle = hexToRgba(s.color, 0.18); ctx.fill(); }
+    ctx.stroke();
+    ctx.restore();
+    drawVertexDots(ctx, pts, s.color, s.lineWidth);
+    if (pts.length >= 3) {
+      var c = centroid(pts);
+      if (isCalibrated()) {
+        var ppi = currentCalibration().pixelsPerInch;
+        var sqIn = polygonPixelArea(pts) / (ppi * ppi);
+        var perimInch = pxToInches(polylinePixelLength(pts) + dist(pts[pts.length - 1], pts[0]));
+        drawPill(ctx, formatSF(sqIn), c.x, c.y - 10, 17, '#d1fae5');
+        if (perimInch != null) drawPill(ctx, 'P ' + formatLF(perimInch), c.x, c.y + 16, 13, '#bbf7d0');
+      } else {
+        drawPill(ctx, '(set scale)', c.x, c.y, 14, '#fca5a5');
+      }
+    }
+  }
+  function drawMcount(ctx, s) {
+    var r = Math.max(10, (s.lineWidth || 4) * 2.2);
+    ctx.save();
+    ctx.fillStyle = s.color;
+    ctx.beginPath(); ctx.arc(s.x, s.y, r, 0, Math.PI * 2); ctx.fill();
+    ctx.strokeStyle = '#fff'; ctx.lineWidth = Math.max(1.5, r * 0.12); ctx.stroke();
+    ctx.fillStyle = '#fff';
+    ctx.font = '700 ' + Math.round(r * 1.05) + 'px ui-sans-serif,system-ui,Arial,sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(String(s.label != null ? s.label : ''), s.x, s.y);
+    ctx.restore();
+  }
+  function drawMangle(ctx, s) {
+    var pts = s.points || [];
+    ctx.save();
+    ctx.strokeStyle = s.color; ctx.lineWidth = s.lineWidth || 4;
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    if (pts.length >= 2) {
+      ctx.beginPath();
+      ctx.moveTo(pts[0].x, pts[0].y);
+      for (var i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+      ctx.stroke();
+    }
+    ctx.restore();
+    drawVertexDots(ctx, pts, s.color, s.lineWidth);
+    if (pts.length >= 3) {
+      var v = pts[1];
+      var a1 = Math.atan2(pts[0].y - v.y, pts[0].x - v.x);
+      var a2 = Math.atan2(pts[2].y - v.y, pts[2].x - v.x);
+      var ar = Math.max(16, (s.lineWidth || 4) * 5);
+      ctx.save();
+      ctx.strokeStyle = s.color; ctx.lineWidth = Math.max(1.5, (s.lineWidth || 4) * 0.5);
+      ctx.beginPath(); ctx.arc(v.x, v.y, ar, a1, a2); ctx.stroke();
+      ctx.restore();
+      drawPill(ctx, (Math.round(angleBetween(pts[0], pts[1], pts[2]) * 10) / 10) + '°', v.x, v.y - ar - 12, 15, '#fde68a');
+    }
+  }
+  // Live totals across the CURRENT page's measurement strokes. Scoped
+  // to the visible page because calibration is per-page — summing a
+  // page-2 stroke with page-1's scale would be wrong (and the panel
+  // should mirror what's on screen).
+  function measureSummary() {
+    var lf = 0, sf = 0, count = 0, angles = [], hasLen = false, hasArea = false;
+    (state.strokes || []).forEach(function(s) {
+      if (!s) return;
+      if ((s.page || 0) !== (state.page || 0)) return;
+      if (s.tool === 'mlen' && s.points && s.points.length > 1) {
+        var inch = pxToInches(polylinePixelLength(s.points));
+        if (inch != null) { lf += inch / 12; hasLen = true; }
+      } else if (s.tool === 'marea' && s.points && s.points.length >= 3 && isCalibrated()) {
+        var ppi = currentCalibration().pixelsPerInch;
+        sf += polygonPixelArea(s.points) / (ppi * ppi) / 144;
+        hasArea = true;
+      } else if (s.tool === 'mcount') {
+        count++;
+      } else if (s.tool === 'mangle' && s.points && s.points.length >= 3) {
+        angles.push(angleBetween(s.points[0], s.points[1], s.points[2]));
+      }
+    });
+    return { lf: lf, sf: sf, count: count, angles: angles, hasLen: hasLen, hasArea: hasArea };
+  }
+  function renderMeasurePanel(overlay) {
+    var panel = overlay ? overlay.querySelector('#p86-mk-measure-panel')
+                        : document.getElementById('p86-mk-measure-panel');
+    if (!panel) return;
+    var sum = measureSummary();
+    var rows = [];
+    if (sum.hasLen)  rows.push(['Linear', (Math.round(sum.lf * 100) / 100) + ' ft']);
+    if (sum.hasArea) rows.push(['Area', (Math.round(sum.sf * 100) / 100) + ' ft²']);
+    if (sum.count)   rows.push(['Count', String(sum.count)]);
+    if (sum.angles.length) rows.push(['Angles', sum.angles.map(function(d) { return (Math.round(d * 10) / 10) + '°'; }).join(', ')]);
+    if (!rows.length) { panel.style.display = 'none'; return; }
+    panel.style.display = '';
+    panel.innerHTML =
+      '<div style="font-weight:700;color:#fff;margin-bottom:6px;">\u{1F4D0} Takeoff totals</div>' +
+      rows.map(function(r) {
+        return '<div style="display:flex;justify-content:space-between;gap:14px;padding:2px 0;">' +
+          '<span style="color:#9aa;">' + escapeHTML(r[0]) + '</span>' +
+          '<strong style="color:#fff;">' + escapeHTML(r[1]) + '</strong></div>';
+      }).join('') +
+      (isCalibrated() ? '' : '<div style="margin-top:6px;color:#fca5a5;font-size:10.5px;">Set scale to total LF / SF</div>');
   }
 
   // Architectural-style dimension line — line between the two
@@ -2104,7 +2690,9 @@
   }
   function scheduleAutoSave() {
     if (!state || !state.strokes) return;
-    var json = JSON.stringify(state.strokes);
+    // Compare/persist the full shape (calibration meta + strokes) so a
+    // calibration change alone still triggers a save.
+    var json = JSON.stringify(buildAnnotations());
     if (json === _autoSaveLastJson) return;          // no real change
     _autoSaveLastJson = json;
     var att = state.attachment;
@@ -2130,7 +2718,7 @@
       }
       _autoSaveInFlight = true;
       setSaveChip('Saving…', '#aaa');
-      var snap = state.strokes.slice();
+      var snap = buildAnnotations();
       window.p86Api.attachments.update(att.id, { annotations: snap })
         .then(function() {
           att.annotations = snap;
@@ -2140,7 +2728,7 @@
           setTimeout(function() {
             // Fade the chip back to neutral after a moment — only if
             // no further edits happened in the meantime.
-            if (JSON.stringify(state.strokes) === JSON.stringify(snap)) setSaveChip('');
+            if (JSON.stringify(buildAnnotations()) === JSON.stringify(snap)) setSaveChip('');
           }, 1500);
         })
         .catch(function() {
