@@ -58,9 +58,14 @@
   // name for the WIP Report sub-tab inside a job).
   var LEGACY_JOB_SUB_REMAP = { 'job-wip': 'job-wip-report' };
   var KNOWN_EST_SUBS = ['list', 'leads', 'clients', 'subs', 'users'];
+  // Canonical admin sub-tabs (per switchAdminSubTab in admin.js):
+  //   users, roles, organization, agents, context, metrics, system.
+  // The trailing legacy aliases (email / templates / jobs / materials /
+  // sms) are kept so old deep links still parse — switchAdminSubTab's
+  // ORG_REDIRECTS folds them into the Organization tab on replay.
   var KNOWN_ADMIN_SUBS = [
-    'users', 'roles', 'email', 'templates', 'agents',
-    'jobs', 'materials', 'metrics', 'sms'
+    'users', 'roles', 'organization', 'agents', 'context', 'metrics', 'system',
+    'email', 'templates', 'jobs', 'materials', 'sms'
   ];
   // 'my-files' is the internal tab id (matches the pane element id and
   // TAB_TITLES key); the URL slug for it is '/files' — friendlier and
@@ -381,6 +386,24 @@
       if (route.top === 'admin' && route.adSub && typeof window.switchAdminSubTab === 'function') {
         var origAdSub = window.switchAdminSubTab.__p86RouterOrig || window.switchAdminSubTab;
         origAdSub(route.adSub);
+      }
+      // Drive the admin accordion child highlight on refresh, mirroring
+      // the estimates handling above — switchTab('admin') alone doesn't
+      // light the open child. The accordion children carry
+      // data-virtual-tab="admin-<subtab>". Legacy alias subtabs
+      // (templates/materials/jobs/sms/email) fold into Organization via
+      // switchAdminSubTab's ORG_REDIRECTS, so they highlight that child.
+      if (route.top === 'admin' && typeof window.markVirtualTabActive === 'function') {
+        var ADMIN_VIRTUAL = {
+          users: 'admin-users', roles: 'admin-roles',
+          organization: 'admin-organization', agents: 'admin-agents',
+          context: 'admin-context', metrics: 'admin-metrics',
+          system: 'admin-system',
+          templates: 'admin-organization', materials: 'admin-organization',
+          jobs: 'admin-organization', sms: 'admin-organization',
+          email: 'admin-organization', 'email-templates': 'admin-organization'
+        };
+        window.markVirtualTabActive(ADMIN_VIRTUAL[route.adSub] || 'admin-users');
       }
     } finally {
       replaying = false;
