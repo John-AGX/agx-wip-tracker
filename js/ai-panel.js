@@ -741,15 +741,35 @@
     // window.p86CopyCodeBlock (defined below) so this raw HTML string
     // can wire up the interaction without setting up event listeners
     // after innerHTML assignment.
-    html = html.replace(/```([\s\S]*?)```/g, function(_, code) {
-      var trimmed = code.trim();
-      return '<div class="p86-codeblock" style="position:relative;margin:6px 0;max-width:100%;">' +
+    // buildCodeBlock wraps a fenced block with TWO pinned buttons —
+    // Save (left) + Copy (right) — plus a data-lang attribute carrying
+    // the fence language so window.p86SaveCodeBlock (save-from-chat.js)
+    // can infer a file extension. The <pre> gains extra top padding so
+    // the first code line clears the button strip. The copy handler
+    // (p86CopyCodeBlock) still finds `pre code` via the shared parent,
+    // so adding the Save sibling doesn't disturb it.
+    var btnBase = 'background:rgba(255,255,255,0.08);color:#cbd5e1;border:1px solid rgba(255,255,255,0.12);border-radius:5px;padding:3px 7px;font-size:10px;cursor:pointer;line-height:1.2;font-family:inherit;opacity:0.7;transition:opacity 0.15s, background 0.15s;';
+    var btnHover = 'onmouseenter="this.style.opacity=1;this.style.background=\'rgba(255,255,255,0.14)\'" onmouseleave="this.style.opacity=0.7;this.style.background=\'rgba(255,255,255,0.08)\'"';
+    function buildCodeBlock(lang, code) {
+      var trimmed = String(code).replace(/^\r?\n/, '').replace(/\s+$/, '');
+      var langAttr = (lang || '').toLowerCase().replace(/[^a-z0-9+.#-]/g, '');
+      return '<div class="p86-codeblock" data-lang="' + langAttr + '" style="position:relative;margin:6px 0;max-width:100%;">' +
+        '<button type="button" class="p86-codeblock-save" onclick="p86SaveCodeBlock(this)" title="Save to…" aria-label="Save code" ' +
+          'style="position:absolute;top:5px;right:62px;' + btnBase + '" ' + btnHover + '>💾 Save</button>' +
         '<button type="button" class="p86-codeblock-copy" onclick="p86CopyCodeBlock(this)" title="Copy" aria-label="Copy code" ' +
-          'style="position:absolute;top:5px;right:5px;background:rgba(255,255,255,0.08);color:#cbd5e1;border:1px solid rgba(255,255,255,0.12);border-radius:5px;padding:3px 7px;font-size:10px;cursor:pointer;line-height:1.2;font-family:inherit;opacity:0.7;transition:opacity 0.15s, background 0.15s;" ' +
-          'onmouseenter="this.style.opacity=1;this.style.background=\'rgba(255,255,255,0.14)\'" ' +
-          'onmouseleave="this.style.opacity=0.7;this.style.background=\'rgba(255,255,255,0.08)\'">📋 Copy</button>' +
-        '<pre style="background:rgba(255,255,255,0.06);padding:8px 36px 8px 10px;border-radius:6px;overflow-x:auto;font-size:11px;font-family:SF Mono,Consolas,monospace;margin:0;max-width:100%;box-sizing:border-box;"><code>' + trimmed + '</code></pre>' +
+          'style="position:absolute;top:5px;right:5px;' + btnBase + '" ' + btnHover + '>📋 Copy</button>' +
+        '<pre style="background:rgba(255,255,255,0.06);padding:26px 10px 8px 10px;border-radius:6px;overflow-x:auto;font-size:11px;font-family:SF Mono,Consolas,monospace;margin:0;max-width:100%;box-sizing:border-box;"><code>' + trimmed + '</code></pre>' +
       '</div>';
+    }
+    // Fenced blocks with a language line (``` optionally followed by a
+    // lang token, then a newline) — captures the language.
+    html = html.replace(/```([\w+.#-]*)[^\S\r\n]*\r?\n([\s\S]*?)```/g, function(_, lang, code) {
+      return buildCodeBlock(lang, code);
+    });
+    // Any remaining newline-less single-line fences ``` ... ``` —
+    // no language token, content kept verbatim.
+    html = html.replace(/```([\s\S]*?)```/g, function(_, code) {
+      return buildCodeBlock('', code);
     });
     // Inline code
     html = html.replace(/`([^`]+)`/g, '<code style="background:rgba(255,255,255,0.08);padding:1px 5px;border-radius:3px;font-family:SF Mono,Consolas,monospace;font-size:0.9em;">$1</code>');
@@ -2725,9 +2745,22 @@
         usageFooter = '<div style="margin-top:6px;font-size:10px;color:var(--text-dim,#666);opacity:0.65;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:0.2px;">' + escapeHTMLLocal(line) + '</div>';
       }
     }
+    // Message-level "Save response" — saves the whole answer (raw
+    // markdown) to attachments / field tools via the save-from-chat
+    // picker. Gated on length so trivial acks ("Done!") stay clean.
+    // The raw source is stashed URI-encoded on data-raw (safe inside a
+    // double-quoted attribute — encodeURIComponent strips ", <, >, &).
+    var saveAction = '';
+    if (m.content && String(m.content).trim().length > 40) {
+      saveAction = '<button type="button" class="ai-msg-save" onclick="p86SaveResponse(this)" ' +
+        'data-raw="' + encodeURIComponent(String(m.content)) + '" title="Save this response" ' +
+        'style="background:none;border:none;color:var(--text-dim,#888);font-size:11px;cursor:pointer;padding:3px 4px;margin-top:4px;opacity:0.6;font-family:inherit;transition:opacity 0.15s;" ' +
+        'onmouseenter="this.style.opacity=1" onmouseleave="this.style.opacity=0.6">💾 Save response</button>';
+    }
     return '<div style="width:100%;display:block;">' +
       '<div class="ai-content" style="width:100%;overflow-x:hidden;font-size:13px;line-height:1.6;overflow-wrap:anywhere;word-break:normal;">' + renderMarkdown(m.content) + '</div>' +
       usageFooter +
+      saveAction +
     '</div>';
   }
 

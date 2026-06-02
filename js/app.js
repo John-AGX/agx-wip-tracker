@@ -330,12 +330,26 @@
                 btn.addEventListener('click', () => {
                     const tabName = btn.getAttribute('data-tab');
                     const estSub = btn.getAttribute('data-est-subtab');
+                    const adminSub = btn.getAttribute('data-admin-subtab');
                     const virtual = btn.getAttribute('data-virtual-tab');
                     switchTab(tabName);
                     if (estSub && typeof window.switchEstimatesSubTab === 'function') {
                         window.switchEstimatesSubTab(estSub);
                     }
+                    // Admin accordion children carry data-admin-subtab so the
+                    // sidebar can drive the in-page admin sub-view directly
+                    // (mirrors the data-est-subtab path for Estimates).
+                    if (adminSub && typeof window.switchAdminSubTab === 'function') {
+                        window.switchAdminSubTab(adminSub);
+                    }
                     if (virtual) markVirtualTabActive(virtual);
+                    // Clicking an accordion PARENT row navigates AND ensures
+                    // its section is open (the caret handles collapsing); a
+                    // child click leaves the already-open section as-is.
+                    const accParent = btn.closest('.app-nav-parent');
+                    if (accParent && btn.classList.contains('app-nav-parent-btn')) {
+                        setSidebarAccordionExpanded(accParent, true);
+                    }
                 });
             });
 
@@ -506,6 +520,10 @@
                     }
                 });
             });
+
+            // Sidebar accordion sub-nav (Estimates / Admin expandable
+            // sections). Wires caret toggles + restores saved expanded state.
+            initSidebarAccordion();
         }
 
         // Several tab-btns share data-tab="estimates" but each shows a
@@ -516,8 +534,20 @@
         // data-virtual-tab as the per-button identity instead.
         function markVirtualTabActive(virtual) {
             document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
-            const target = document.querySelector('[data-virtual-tab="' + virtual + '"]');
-            if (target) target.classList.add('active');
+            // A virtual-tab id can appear on MORE THAN ONE nav surface — the
+            // sidebar accordion child, the header directory-menu item, and the
+            // legacy hidden #estimates-main-tabs row all share e.g.
+            // data-virtual-tab="clients". querySelector would light only the
+            // FIRST in DOM order (often a hidden menu item), leaving the
+            // visible sidebar child un-highlighted. Light EVERY match so the
+            // sidebar accordion child always reflects the current page.
+            document.querySelectorAll('[data-virtual-tab="' + virtual + '"]').forEach(function(el) { el.classList.add('active'); });
+            // Reflect active descendants on accordion parents so a section
+            // whose child is the current page reads as "you are here" even
+            // when collapsed.
+            document.querySelectorAll('.app-nav-parent').forEach(function(parent) {
+                parent.classList.toggle('has-active-child', !!parent.querySelector('.app-nav-child.active'));
+            });
         }
         // Expose so the URL router (js/router.js) can drive the virtual-
         // tab highlight on deep-link / refresh — switchTab() alone always
@@ -525,6 +555,72 @@
         // which is wrong when the user refreshed on Estimates / Clients /
         // Subs. Click handlers already call this; the router didn't.
         window.markVirtualTabActive = markVirtualTabActive;
+
+        // ── Sidebar accordion (expandable page sub-nav) ────────────────
+        // Page-level sub-tabs (Estimates → Leads/Clients/Subs/Users; Admin
+        // → Users/Roles/…/System) live as nested children under an
+        // expandable parent row. The parent row is itself a real
+        // destination (it routes via the delegated .tab-btn handler); a
+        // caret <span> toggles the children open/closed without navigating.
+        // Expanded/collapsed state persists per-section to localStorage so
+        // the sidebar reopens the way the user left it. Entity-detail
+        // sub-tabs (open job → #app-jobnav, My Files → #app-filesnav) keep
+        // their existing contextual-swap and are NOT touched here.
+        var ACCORDION_LS_KEY = 'p86-sidebar-accordions';
+        function loadAccordionState() {
+            try { return JSON.parse(localStorage.getItem(ACCORDION_LS_KEY)) || {}; }
+            catch (e) { return {}; }
+        }
+        function saveAccordionState(state) {
+            try { localStorage.setItem(ACCORDION_LS_KEY, JSON.stringify(state)); }
+            catch (e) { /* localStorage unavailable — degrade silently */ }
+        }
+        function setSidebarAccordionExpanded(parent, expanded) {
+            if (!parent) return;
+            parent.classList.toggle('expanded', !!expanded);
+            var caret = parent.querySelector('.app-nav-caret');
+            if (caret) caret.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+            var key = parent.getAttribute('data-accordion');
+            if (key) {
+                var st = loadAccordionState();
+                st[key] = !!expanded;
+                saveAccordionState(st);
+            }
+        }
+        window.setSidebarAccordionExpanded = setSidebarAccordionExpanded;
+        function initSidebarAccordion() {
+            var saved = loadAccordionState();
+            // Default open/closed when the user has no saved preference yet.
+            var defaults = { estimates: true, admin: false };
+            document.querySelectorAll('.app-nav-parent').forEach(function(parent) {
+                var key = parent.getAttribute('data-accordion');
+                var expanded = (key && key in saved) ? saved[key]
+                             : (key && key in defaults) ? defaults[key]
+                             : false;
+                parent.classList.toggle('expanded', expanded);
+                var caret = parent.querySelector('.app-nav-caret');
+                if (!caret) return;
+                caret.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+                // The caret toggles the section WITHOUT navigating — stop the
+                // click from bubbling to the parent button's tab-switch
+                // handler. (Guard against double-binding if init re-runs.)
+                if (caret.dataset.accWired === '1') return;
+                caret.dataset.accWired = '1';
+                caret.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setSidebarAccordionExpanded(parent, !parent.classList.contains('expanded'));
+                });
+                caret.addEventListener('keydown', function(e) {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setSidebarAccordionExpanded(parent, !parent.classList.contains('expanded'));
+                    }
+                });
+            });
+        }
+        window.initSidebarAccordion = initSidebarAccordion;
 
         // Dismiss any open header popover. `except` keeps one open
         // (used when toggling so the click that just opened it isn't
@@ -1414,6 +1510,9 @@
         function switchTab(tabName) {
             document.querySelectorAll('.tab-content').forEach(tc => tc.classList.remove('active'));
             document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+            // Clear accordion parent "contains active page" cues; the
+            // virtual-tab pass (if any) recomputes them for the new page.
+            document.querySelectorAll('.app-nav-parent.has-active-child').forEach(p => p.classList.remove('has-active-child'));
 
             document.getElementById(tabName)?.classList.add('active');
             // Highlight the FIRST tab-btn matching this data-tab — the
@@ -1623,7 +1722,7 @@
                         //   list    → Estimates virtual tab
                         //   clients → Clients virtual tab
                         //   subs    → Subs virtual tab
-                        var virtualMap = { leads: 'leads', list: 'estimates', clients: 'clients', subs: 'subs' };
+                        var virtualMap = { leads: 'leads', list: 'estimates', clients: 'clients', subs: 'subs', users: 'users' };
                         var vTab = virtualMap[st.estSub] || 'estimates';
                         if (typeof markVirtualTabActive === 'function') markVirtualTabActive(vTab);
                     } else if (st.top === 'admin' && st.adSub && typeof window.switchAdminSubTab === 'function') {

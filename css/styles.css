@@ -936,7 +936,7 @@
            Collapses to a 56px icon rail via #app-sidebar-toggle. */
         .app-sidebar {
             flex: 0 0 auto;
-            width: 200px;
+            width: 212px;
             display: flex;
             flex-direction: column;
             background: var(--surface);
@@ -1241,12 +1241,12 @@
             align-items: center;
             gap: 10px;
             width: 100%;
-            padding: 6px 10px;
+            padding: 7px 10px;
             border: none;
             border-radius: 8px;
             background: transparent;
             color: var(--text-dim);
-            font-size: 12.5px;
+            font-size: 13px;
             font-weight: 500;
             letter-spacing: 0.1px;
             text-align: left;
@@ -1259,22 +1259,13 @@
             background: var(--surface2);
             color: var(--text);
         }
+        /* Active destination — a clean filled pill (Claude style): no left
+           accent bar, just a persistent fill + full-strength text/icon and a
+           slightly heavier weight to read as "you are here". */
         .app-nav .tab-btn.active {
             background: var(--surface2);
             color: var(--text);
             font-weight: 600;
-        }
-        /* Left accent bar marks the active destination (replaces the
-           horizontal sliding underline the old top strip used). */
-        .app-nav .tab-btn.active::before {
-            content: "";
-            position: absolute;
-            left: 0;
-            top: 6px;
-            bottom: 6px;
-            width: 3px;
-            border-radius: 0 3px 3px 0;
-            background: var(--accent);
         }
         /* Icon — the .p86-icon-slot is auto-prepended by agx-icons.js. */
         .app-nav .tab-btn .p86-icon-slot {
@@ -1292,10 +1283,80 @@
             overflow: hidden;
             text-overflow: ellipsis;
         }
-        /* Active destination gets an accent-tinted icon to match the
-           left accent bar. */
         .app-nav .tab-btn.active .p86-icon {
-            color: var(--accent);
+            color: var(--text);
+        }
+
+        /* ── Expandable accordion sub-nav ─────────────────────────────
+           Page-level sub-tabs (Estimates → Leads/Clients/Subs/Users;
+           Admin → Users/Roles/…/System) nest under an expandable parent
+           row. The parent row is a normal .tab-btn destination; a caret
+           <span> on its right toggles the children open/closed. Entity-
+           detail sub-tabs (open job, My Files) keep their contextual-swap
+           and are NOT part of this. */
+        .app-nav-parent {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+        /* Caret toggle — sits at the right edge of the parent row. Its own
+           click listener stops propagation so toggling never navigates. */
+        .app-nav-caret {
+            flex: 0 0 auto;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 18px;
+            height: 18px;
+            margin-left: 4px;
+            border-radius: 5px;
+            color: var(--text-dim);
+            cursor: pointer;
+            transition: transform 0.18s ease, background 0.12s, color 0.12s;
+        }
+        .app-nav-caret:hover {
+            background: var(--surface);
+            color: var(--text);
+        }
+        .app-nav-parent.expanded .app-nav-caret {
+            transform: rotate(90deg);
+        }
+        /* Children container — collapses via max-height. A left guide line
+           + indent reads them as nested under the parent. */
+        .app-nav-children {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            overflow: hidden;
+            max-height: 0;
+            margin-left: 18px;
+            padding-left: 4px;
+            border-left: 1px solid var(--border);
+            transition: max-height 0.2s ease;
+        }
+        .app-nav-parent.expanded .app-nav-children {
+            max-height: 420px;
+        }
+        /* Child rows — slightly smaller + lighter than top-level rows. */
+        .app-nav .app-nav-child {
+            padding: 5px 10px;
+            gap: 9px;
+            font-size: 12.5px;
+        }
+        .app-nav .app-nav-child .p86-icon {
+            width: 16px;
+            height: 16px;
+        }
+        /* When a child is the active page, give the (possibly collapsed)
+           parent a subtle "contains current page" cue. */
+        .app-nav-parent.has-active-child > .app-nav-parent-btn {
+            color: var(--text);
+        }
+        /* Collapsed rail — no room for nested labels or the caret; show
+           only the parent icon. Expanding the sidebar restores the tree. */
+        .app-sidebar.collapsed .app-nav-caret,
+        .app-sidebar.collapsed .app-nav-children {
+            display: none;
         }
 
         /* ── Nav section groups ───────────────────────────────────────
@@ -1310,16 +1371,16 @@
             gap: 2px;
         }
         .app-nav-group + .app-nav-group {
-            margin-top: 10px;
+            margin-top: 13px;
         }
         .app-nav-group-label {
-            padding: 3px 11px;
-            font-size: 10px;
-            font-weight: 700;
+            padding: 4px 11px 2px;
+            font-size: 10.5px;
+            font-weight: 600;
             text-transform: uppercase;
-            letter-spacing: 0.5px;
+            letter-spacing: 0.4px;
             color: var(--text-dim);
-            opacity: 0.7;
+            opacity: 0.6;
             user-select: none;
         }
 

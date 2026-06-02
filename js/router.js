@@ -57,7 +57,7 @@
   // /jobs/:id/job-wip transparently route to job-wip-report (the new
   // name for the WIP Report sub-tab inside a job).
   var LEGACY_JOB_SUB_REMAP = { 'job-wip': 'job-wip-report' };
-  var KNOWN_EST_SUBS = ['list', 'leads', 'clients', 'subs'];
+  var KNOWN_EST_SUBS = ['list', 'leads', 'clients', 'subs', 'users'];
   var KNOWN_ADMIN_SUBS = [
     'users', 'roles', 'email', 'templates', 'agents',
     'jobs', 'materials', 'metrics', 'sms'
@@ -374,6 +374,7 @@
         if (route.estSub === 'leads') virtual = 'leads';
         else if (route.estSub === 'clients') virtual = 'clients';
         else if (route.estSub === 'subs') virtual = 'subs';
+        else if (route.estSub === 'users') virtual = 'users';
         else virtual = 'estimates';   // covers estSub='list' and undefined
         window.markVirtualTabActive(virtual);
       }

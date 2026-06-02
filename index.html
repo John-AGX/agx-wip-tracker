@@ -215,7 +215,7 @@
     })();
     </script>
 
-    <link rel="stylesheet" href="css/styles.css?v=172">
+    <link rel="stylesheet" href="css/styles.css?v=174">
     <link rel="stylesheet" href="css/report-style-packs.css?v=3">
     <link rel="stylesheet" href="css/workspace-layout.css?v=60">
     <link rel="stylesheet" href="css/workspace.css?v=37b">
@@ -543,13 +543,29 @@
                          capabilities never sees an orphan header. -->
                     <div class="app-nav-group">
                         <div class="app-nav-group-label">Sales</div>
-                        <!-- Leads is its own top-level destination (was a
-                             sub-tab inside Estimates). Click routes to the
-                             Estimates → Leads sub-tab DOM but the active
-                             highlight stays here so Leads reads as a
-                             first-class page. -->
-                        <button class="tab-btn active" data-tab="estimates" data-est-subtab="leads" data-virtual-tab="leads" data-p86-icon="leads" data-cap="LEADS_VIEW" title="Leads"><span class="app-nav-label">Leads</span></button>
-                        <button class="tab-btn" data-tab="estimates" data-est-subtab="list" data-virtual-tab="estimates" data-p86-icon="estimates" data-cap="ESTIMATES_VIEW" title="Estimates"><span class="app-nav-label">Estimates</span></button>
+                        <!-- Estimates is an expandable accordion parent. The
+                             parent row IS the Estimates list destination; its
+                             sub-pages (Leads / Clients / Subs / Internal Users)
+                             live as nested children. The caret <span> toggles
+                             the section open/closed WITHOUT navigating; clicking
+                             the row navigates AND ensures the section is open.
+                             Children route through the same delegated .tab-btn
+                             handler (data-est-subtab + data-virtual-tab) as the
+                             old top-level buttons did. Wired by
+                             initSidebarAccordion() in js/app.js; expanded state
+                             persists to localStorage (p86-sidebar-accordions). -->
+                        <div class="app-nav-parent" data-accordion="estimates">
+                            <button class="tab-btn active app-nav-parent-btn" data-tab="estimates" data-est-subtab="list" data-virtual-tab="estimates" data-p86-icon="estimates" data-cap="ESTIMATES_VIEW" title="Estimates">
+                                <span class="app-nav-label">Estimates</span>
+                                <span class="app-nav-caret" role="button" tabindex="0" aria-label="Toggle Estimates sub-pages" aria-expanded="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" width="12" height="12" aria-hidden="true"><polyline points="9 18 15 12 9 6"></polyline></svg></span>
+                            </button>
+                            <div class="app-nav-children" role="group" aria-label="Estimates sub-pages">
+                                <button class="tab-btn app-nav-child" data-tab="estimates" data-est-subtab="leads" data-virtual-tab="leads" data-p86-icon="leads" data-cap="LEADS_VIEW" title="Leads"><span class="app-nav-label">Leads</span></button>
+                                <button class="tab-btn app-nav-child" data-tab="estimates" data-est-subtab="clients" data-virtual-tab="clients" data-p86-icon="id-card" data-cap="ESTIMATES_VIEW" title="Client Contacts"><span class="app-nav-label">Clients</span></button>
+                                <button class="tab-btn app-nav-child" data-tab="estimates" data-est-subtab="subs" data-virtual-tab="subs" data-p86-icon="subs" title="Subs / Vendors"><span class="app-nav-label">Subs / Vendors</span></button>
+                                <button class="tab-btn app-nav-child" data-tab="estimates" data-est-subtab="users" data-virtual-tab="users" data-p86-icon="clients" title="Internal Users"><span class="app-nav-label">Internal Users</span></button>
+                            </div>
+                        </div>
                     </div>
                     <div class="app-nav-group">
                         <div class="app-nav-group-label">Operations</div>
@@ -559,7 +575,32 @@
                     <div class="app-nav-group">
                         <div class="app-nav-group-label">Company</div>
                         <button class="tab-btn" data-tab="insights" data-p86-icon="insights" data-cap="INSIGHTS_VIEW" title="Insights"><span class="app-nav-label">Insights</span></button>
-                        <button class="tab-btn" data-tab="admin" data-p86-icon="admin" data-admin-only style="display:none;" title="Admin"><span class="app-nav-label">Admin</span></button>
+                        <!-- Admin is an expandable accordion parent (same
+                             mechanism as Estimates). The wrapper carries
+                             data-admin-only so applyRoleVisibility() hides the
+                             whole section for non-admins. Children route via
+                             data-admin-subtab → switchAdminSubTab() (the
+                             delegated handler in app.js was extended to read
+                             data-admin-subtab); each child also carries a
+                             data-virtual-tab for the sidebar active-highlight.
+                             The System child keeps its own SYSTEM_ADMIN cap so
+                             it only shows for the platform owner. Defaults
+                             collapsed. -->
+                        <div class="app-nav-parent" data-accordion="admin" data-admin-only style="display:none;">
+                            <button class="tab-btn app-nav-parent-btn" data-tab="admin" data-p86-icon="admin" title="Admin">
+                                <span class="app-nav-label">Admin</span>
+                                <span class="app-nav-caret" role="button" tabindex="0" aria-label="Toggle Admin sub-pages" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" width="12" height="12" aria-hidden="true"><polyline points="9 18 15 12 9 6"></polyline></svg></span>
+                            </button>
+                            <div class="app-nav-children" role="group" aria-label="Admin sub-pages">
+                                <button class="tab-btn app-nav-child" data-tab="admin" data-admin-subtab="users" data-virtual-tab="admin-users" data-p86-icon="clients" title="Users"><span class="app-nav-label">Users</span></button>
+                                <button class="tab-btn app-nav-child" data-tab="admin" data-admin-subtab="roles" data-virtual-tab="admin-roles" data-p86-icon="admin" title="Roles"><span class="app-nav-label">Roles</span></button>
+                                <button class="tab-btn app-nav-child" data-tab="admin" data-admin-subtab="organization" data-virtual-tab="admin-organization" data-p86-icon="briefcase" title="Organization"><span class="app-nav-label">Organization</span></button>
+                                <button class="tab-btn app-nav-child" data-tab="admin" data-admin-subtab="agents" data-virtual-tab="admin-agents" data-p86-icon="discord" title="Agents"><span class="app-nav-label">Agents</span></button>
+                                <button class="tab-btn app-nav-child" data-tab="admin" data-admin-subtab="context" data-virtual-tab="admin-context" data-p86-icon="academic-cap" title="Context"><span class="app-nav-label">Context</span></button>
+                                <button class="tab-btn app-nav-child" data-tab="admin" data-admin-subtab="metrics" data-virtual-tab="admin-metrics" data-p86-icon="insights" title="Metrics"><span class="app-nav-label">Metrics</span></button>
+                                <button class="tab-btn app-nav-child" data-tab="admin" data-admin-subtab="system" data-virtual-tab="admin-system" data-cap="SYSTEM_ADMIN" data-p86-icon="admin" style="display:none;" title="System"><span class="app-nav-label">⚙ System</span></button>
+                            </div>
+                        </div>
                     </div>
                     <!-- Workspace — personal per-user utilities. My Files
                          moved here out of the header (its old "+" slot now
@@ -1505,7 +1546,7 @@
                         <!-- AI / Agents -->
                         <button class="ws-right-tab" data-admin-subtab="agents" data-p86-icon="discord" onclick="switchAdminSubTab('agents')">Agents</button>
                         <!-- Context Registry (Wave 1.B observability) -->
-                        <button class="ws-right-tab" data-admin-subtab="context" data-p86-icon="brain" onclick="switchAdminSubTab('context')">Context</button>
+                        <button class="ws-right-tab" data-admin-subtab="context" data-p86-icon="academic-cap" onclick="switchAdminSubTab('context')">Context</button>
                         <!-- Observability -->
                         <button class="ws-right-tab" data-admin-subtab="metrics" data-p86-icon="insights" onclick="switchAdminSubTab('metrics')">Metrics</button>
 
@@ -2868,7 +2909,7 @@
     <script src="js/qb-costs-view.js?v=11"></script>
     <script src="js/insights.js?v=7"></script>
     <script src="js/schedule.js?v=34"></script>
-    <script src="js/app.js?v=75"></script>
+    <script src="js/app.js?v=77"></script>
     <script src="js/compliance-review-ui.js?v=2"></script>
     <script src="js/messaging.js?v=1b"></script>
     <script src="js/my-files.js?v=14"></script>
@@ -2912,7 +2953,12 @@
          window.PayloadDropbox exist when the panel mounts. -->
     <script src="js/payload-artifact.js?v=2"></script>
     <script src="js/payload-dropbox.js?v=4"></script>
-    <script src="js/ai-panel.js?v=119"></script>
+    <script src="js/ai-panel.js?v=120"></script>
+    <!-- Save-from-chat bridge (Workstream ③). Owns p86SaveCodeBlock /
+         p86SaveResponse / p86SaveToPicker, called by inline onclick
+         handlers in ai-panel.js renderMarkdown / renderBubble. Loads
+         after ai-panel.js + api.js (uses window.p86Api). -->
+    <script src="js/save-from-chat.js?v=1"></script>
     <script src="js/tab-slider.js?v=1b"></script>
 
     <script src="js/workspace.js?v=44"></script>
@@ -2921,7 +2967,7 @@
     <!-- URL router — pathname-based navigation. Loads last so all
          top-level nav functions (switchTab, editJob, etc.) exist
          before the router wraps them. -->
-    <script src="js/router.js?v=9"></script>
+    <script src="js/router.js?v=10"></script>
 
     <!-- Sidebar Recents — client-side recently-opened list. Loads after
          router.js + the entity-open modules so it can wrap editJob /
