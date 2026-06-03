@@ -20,10 +20,21 @@
 
 const express = require('express');
 const { pool } = require('../db');
-const { requireAuth } = require('../auth');
+const { requireAuth, requireOrg, requireCapability } = require('../auth');
 const { features, whats_new } = require('../feature-catalog');
 
 const router = express.Router();
+
+// Normalize a logos array → [{url, label}], capped + sanitized.
+function normLogos(arr) {
+  if (!Array.isArray(arr)) return [];
+  return arr.slice(0, 16).map(function (l) {
+    if (!l || typeof l !== 'object') return null;
+    var url = typeof l.url === 'string' ? l.url.trim().slice(0, 2000) : '';
+    if (!url) return null;
+    return { url: url, label: typeof l.label === 'string' ? l.label.trim().slice(0, 80) : '' };
+  }).filter(Boolean);
+}
 
 function callerOrgId(req) {
   const oid = req.user && req.user.organization_id;
@@ -393,7 +404,12 @@ router.get('/logo', requireAuth, async (req, res) => {
   try {
     const r = await pool.query('SELECT branding FROM organizations WHERE id = $1', [orgId]);
     const b = (r.rows[0] && r.rows[0].branding) || {};
-    const url = typeof b.logo_url === 'string' ? b.logo_url.trim() : '';
+    let url = typeof b.logo_url === 'string' ? b.logo_url.trim() : '';
+    // ?i=N streams a specific logo from the logos[] library (titleblock picker).
+    if (req.query.i != null && Array.isArray(b.logos)) {
+      const li = b.logos[parseInt(req.query.i, 10)];
+      if (li && typeof li.url === 'string') url = li.url.trim();
+    }
     if (!url || !/^https?:\/\//i.test(url)) return res.status(404).end();
     if (typeof fetch !== 'function') return res.status(501).end();
     const upstream = await fetch(url, { redirect: 'follow' });
@@ -427,6 +443,7 @@ router.get('/branding', requireAuth, async (req, res) => {
       name: row.name || '',
       branding: {
         logo_url: typeof b.logo_url === 'string' ? b.logo_url : '',
+        logos: normLogos(b.logos),
         primary_color: typeof b.primary_color === 'string' ? b.primary_color : '',
         accent_color: typeof b.accent_color === 'string' ? b.accent_color : '',
         footer_address: typeof b.footer_address === 'string' ? b.footer_address : '',
@@ -434,6 +451,37 @@ router.get('/branding', requireAuth, async (req, res) => {
     });
   } catch (e) {
     console.error('GET /api/org/branding error:', e);
+    res.status(500).json({ error: 'Server error', detail: e.message });
+  }
+});
+
+// PUT /api/org/branding — admin-gated write of the FULL branding kit incl. a
+// multi-logo library (logos[]). Merges into the caller's org branding so the
+// colors/footer + logos persist together. (The locked admin route only keeps
+// 4 whitelisted fields and would drop logos, so branding saves route here.)
+router.put('/branding', requireAuth, requireOrg, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  const orgId = callerOrgId(req);
+  if (!orgId) return res.status(403).json({ error: 'Caller has no organization' });
+  try {
+    const cur = (await pool.query('SELECT branding FROM organizations WHERE id = $1', [orgId])).rows[0];
+    if (!cur) return res.status(404).json({ error: 'Organization not found' });
+    const b = (cur.branding && typeof cur.branding === 'object') ? Object.assign({}, cur.branding) : {};
+    const body = req.body || {};
+    if (typeof body.logo_url === 'string') b.logo_url = body.logo_url.slice(0, 2000);
+    if (Array.isArray(body.logos)) b.logos = normLogos(body.logos);
+    if (typeof body.primary_color === 'string' && /^#[0-9a-f]{3,8}$/i.test(body.primary_color)) b.primary_color = body.primary_color;
+    if (typeof body.accent_color === 'string' && /^#[0-9a-f]{3,8}$/i.test(body.accent_color)) b.accent_color = body.accent_color;
+    if (typeof body.footer_address === 'string') b.footer_address = body.footer_address.slice(0, 500);
+    // Keep the primary logo_url consistent with the library so the titleblock
+    // + email (which read logo_url) always resolve to a real logo.
+    if (Array.isArray(b.logos) && b.logos.length) {
+      const has = b.logo_url && b.logos.some(function (l) { return l.url === b.logo_url; });
+      if (!has) b.logo_url = b.logos[0].url;
+    }
+    await pool.query('UPDATE organizations SET branding = $2::jsonb, updated_at = NOW() WHERE id = $1', [orgId, JSON.stringify(b)]);
+    res.json({ ok: true, branding: b });
+  } catch (e) {
+    console.error('PUT /api/org/branding error:', e);
     res.status(500).json({ error: 'Server error', detail: e.message });
   }
 });

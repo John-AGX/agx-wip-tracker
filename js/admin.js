@@ -1572,6 +1572,8 @@
   // leave those fields empty. Stored on organizations.branding JSONB.
   var _orgBrandingOrgId = null;
   var _orgBrandingSaveTimer = null;
+  var _orgLogos = [];        // [{url,label}] logo library
+  var _orgPrimary = '';      // primary logo url (used by titleblock + email)
   function loadOrgBranding() {
     var box = document.getElementById('org-branding-form');
     if (!box) return;
@@ -1590,19 +1592,25 @@
   function renderOrgBrandingForm(b) {
     var box = document.getElementById('org-branding-form');
     if (!box) return;
-    var logoUrl = b.logo_url || '';
+    // Seed the logo library from branding.logos (migrate a legacy single logo_url).
+    _orgLogos = Array.isArray(b.logos) ? b.logos.filter(function (l) { return l && l.url; }).map(function (l) { return { url: l.url, label: l.label || '' }; }) : [];
+    if (!_orgLogos.length && b.logo_url) _orgLogos = [{ url: b.logo_url, label: 'Primary' }];
+    _orgPrimary = (b.logo_url && _orgLogos.some(function (l) { return l.url === b.logo_url; })) ? b.logo_url : ((_orgLogos[0] && _orgLogos[0].url) || '');
     var primary = b.primary_color || '#4f8cff';
     var accent  = b.accent_color  || '#4f8cff';
     var footer  = b.footer_address || '';
     box.innerHTML =
       '<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">' +
-        '<div>' +
-          '<label style="font-size:11px;color:var(--text-dim,#aaa);text-transform:uppercase;letter-spacing:0.5px;font-weight:600;display:block;margin-bottom:4px;">Logo URL</label>' +
-          '<input type="text" id="org-brand-logo" value="' + escapeHTML(logoUrl).replace(/"/g, '&quot;') + '" placeholder="https://… your org\'s logo" ' +
-            'style="width:100%;background:var(--input-bg,#0f0f1e);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:8px 10px;font-size:13px;" />' +
-          '<button type="button" id="org-brand-upload-btn" class="ee-btn secondary" style="font-size:11px;margin-top:6px;">&#x1F4E4; Upload logo…</button>' +
-          '<input type="file" id="org-brand-upload-file" accept="image/*" style="display:none;" />' +
-          (logoUrl ? '<div style="margin-top:8px;"><img src="' + escapeAttr(logoUrl) + '" alt="" style="max-height:50px;max-width:200px;border-radius:4px;background:#fff;padding:6px;" id="org-brand-logo-preview" /></div>' : '<div id="org-brand-logo-preview-host" style="margin-top:8px;"></div>') +
+        '<div style="grid-column:1 / -1;">' +
+          '<label style="font-size:11px;color:var(--text-dim,#aaa);text-transform:uppercase;letter-spacing:0.5px;font-weight:600;display:block;margin-bottom:2px;">Logos</label>' +
+          '<div style="font-size:10px;color:var(--text-dim,#888);margin-bottom:8px;">Upload as many as you need (color, white/knockout, mark, horizontal…). The ⭐ Primary one is used on titleblocks &amp; emails.</div>' +
+          '<div id="org-brand-logos" style="display:flex;flex-wrap:wrap;gap:10px;"></div>' +
+          '<div style="display:flex;gap:8px;align-items:center;margin-top:10px;">' +
+            '<button type="button" id="org-brand-upload-btn" class="ee-btn secondary" style="font-size:11px;white-space:nowrap;">&#x1F4E4; Upload logo…</button>' +
+            '<input type="file" id="org-brand-upload-file" accept="image/*" multiple style="display:none;" />' +
+            '<input type="text" id="org-brand-addurl" placeholder="…or paste an image URL" style="flex:1;min-width:120px;background:var(--input-bg,#0f0f1e);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:6px 9px;font-size:12px;" />' +
+            '<button type="button" id="org-brand-addurl-btn" class="ee-btn secondary" style="font-size:11px;">+ Add</button>' +
+          '</div>' +
         '</div>' +
         '<div>' +
           '<label style="font-size:11px;color:var(--text-dim,#aaa);text-transform:uppercase;letter-spacing:0.5px;font-weight:600;display:block;margin-bottom:4px;">Footer / company line</label>' +
@@ -1640,43 +1648,82 @@
     }
     bindColorPair(document.getElementById('org-brand-primary'), document.getElementById('org-brand-primary-text'));
     bindColorPair(document.getElementById('org-brand-accent'), document.getElementById('org-brand-accent-text'));
-    document.getElementById('org-brand-logo').addEventListener('input', scheduleSaveOrgBranding);
     document.getElementById('org-brand-footer').addEventListener('input', scheduleSaveOrgBranding);
 
-    // Logo upload — POSTs to /api/attachments with entity=user, drops
-    // the returned URL into the logo URL field.
+    // Multi-logo: upload (one or many) + paste-URL add. Each appends to the
+    // _orgLogos library; the first becomes Primary if none is set yet.
+    function addLogo(url, label) {
+      if (!url) return;
+      _orgLogos.push({ url: url, label: label || '' });
+      if (!_orgPrimary) _orgPrimary = url;
+      renderLogoList(); scheduleSaveOrgBranding();
+    }
     var uploadBtn = document.getElementById('org-brand-upload-btn');
     var uploadFile = document.getElementById('org-brand-upload-file');
     if (uploadBtn && uploadFile) {
       uploadBtn.addEventListener('click', function() { uploadFile.click(); });
       uploadFile.addEventListener('change', function() {
-        var f = uploadFile.files && uploadFile.files[0];
-        if (!f || !window.p86Api || !window.p86Api.attachments) return;
+        var files = uploadFile.files ? Array.prototype.slice.call(uploadFile.files) : [];
         var me = (window.p86Auth && window.p86Auth.getUser && window.p86Auth.getUser()) || null;
-        if (!me) return;
+        if (!files.length || !me || !window.p86Api || !window.p86Api.attachments) return;
         var statusEl = document.getElementById('org-branding-status');
-        if (statusEl) { statusEl.textContent = 'Uploading…'; statusEl.style.color = 'var(--text-dim, #888)'; }
-        window.p86Api.attachments.upload('user', String(me.id), f, { folder: 'org-branding', geo: false })
-          .then(function(resp) {
-            var url = resp && resp.attachment && (resp.attachment.web_url || resp.attachment.original_url);
-            if (!url) throw new Error('No URL returned.');
-            document.getElementById('org-brand-logo').value = url;
-            if (statusEl) { statusEl.innerHTML = '<span style="color:#34d399;">&#x2713; Uploaded</span>'; }
-            scheduleSaveOrgBranding();
-            // Re-render so the preview shows.
-            renderOrgBrandingForm(currentOrgBrandingFromInputs());
-          })
-          .catch(function(err) {
-            if (statusEl) { statusEl.textContent = 'Upload failed: ' + (err.message || ''); statusEl.style.color = '#f87171'; }
-          });
+        if (statusEl) { statusEl.textContent = 'Uploading ' + files.length + ' logo' + (files.length > 1 ? 's' : '') + '…'; statusEl.style.color = 'var(--text-dim, #888)'; }
+        var done = 0, failed = 0;
+        files.forEach(function(f) {
+          window.p86Api.attachments.upload('user', String(me.id), f, { folder: 'org-branding', geo: false })
+            .then(function(resp) {
+              var url = resp && resp.attachment && (resp.attachment.web_url || resp.attachment.original_url);
+              if (url) addLogo(url, (f.name || '').replace(/\.[a-z0-9]+$/i, '').slice(0, 60)); else failed++;
+            })
+            .catch(function() { failed++; })
+            .then(function() {
+              done++;
+              if (done === files.length && statusEl) {
+                statusEl.innerHTML = failed ? '<span style="color:#f87171;">' + failed + ' upload(s) failed</span>' : '<span style="color:#34d399;">&#x2713; Uploaded</span>';
+              }
+            });
+        });
         uploadFile.value = '';
       });
     }
+    var addUrlBtn = document.getElementById('org-brand-addurl-btn');
+    var addUrlInp = document.getElementById('org-brand-addurl');
+    if (addUrlBtn && addUrlInp) {
+      var doAdd = function() { var u = (addUrlInp.value || '').trim(); if (/^https?:\/\//i.test(u)) { addLogo(u, ''); addUrlInp.value = ''; } };
+      addUrlBtn.addEventListener('click', doAdd);
+      addUrlInp.addEventListener('keydown', function(e) { if (e.key === 'Enter') { e.preventDefault(); doAdd(); } });
+    }
+    renderLogoList();
+  }
+
+  // Render the logo-library cards from _orgLogos / _orgPrimary into the
+  // #org-brand-logos host (incremental — keeps the color/footer inputs).
+  function renderLogoList() {
+    var host = document.getElementById('org-brand-logos'); if (!host) return;
+    if (!_orgLogos.length) { host.innerHTML = '<div style="font-size:12px;color:var(--text-dim,#888);padding:6px 0;">No logos yet — upload one or paste a URL.</div>'; return; }
+    host.innerHTML = _orgLogos.map(function(l, i) {
+      var isP = l.url === _orgPrimary;
+      return '<div style="width:158px;border:1px solid ' + (isP ? '#f5a623' : 'var(--border,#333)') + ';border-radius:8px;padding:8px;">' +
+        '<div style="background:#fff;border-radius:5px;padding:6px;height:60px;display:flex;align-items:center;justify-content:center;position:relative;">' +
+          (isP ? '<span title="Primary" style="position:absolute;top:2px;right:4px;font-size:13px;">⭐</span>' : '') +
+          '<img src="' + escapeAttr(l.url) + '" alt="" style="max-height:50px;max-width:138px;" />' +
+        '</div>' +
+        '<input type="text" data-logo-label="' + i + '" value="' + escapeAttr(l.label || '') + '" placeholder="Label (e.g. White)" style="width:100%;box-sizing:border-box;margin-top:6px;background:var(--input-bg,#0f0f1e);color:var(--text);border:1px solid var(--border,#333);border-radius:5px;padding:4px 6px;font-size:11px;" />' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;">' +
+          '<label style="font-size:10.5px;color:' + (isP ? '#f5a623' : 'var(--text-dim,#aaa)') + ';display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="radio" name="org-brand-primary-pick" data-logo-primary="' + i + '" ' + (isP ? 'checked' : '') + ' /> Primary</label>' +
+          '<button type="button" data-logo-remove="' + i + '" title="Remove" style="background:transparent;border:0;color:#f87171;cursor:pointer;font-size:13px;">✕</button>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+    host.querySelectorAll('[data-logo-label]').forEach(function(inp) { inp.addEventListener('input', function() { var i = +inp.getAttribute('data-logo-label'); if (_orgLogos[i]) { _orgLogos[i].label = inp.value; scheduleSaveOrgBranding(); } }); });
+    host.querySelectorAll('[data-logo-primary]').forEach(function(r) { r.addEventListener('change', function() { var i = +r.getAttribute('data-logo-primary'); if (_orgLogos[i]) { _orgPrimary = _orgLogos[i].url; renderLogoList(); scheduleSaveOrgBranding(); } }); });
+    host.querySelectorAll('[data-logo-remove]').forEach(function(btn) { btn.addEventListener('click', function() { var i = +btn.getAttribute('data-logo-remove'); var was = _orgLogos[i] && _orgLogos[i].url; _orgLogos.splice(i, 1); if (was === _orgPrimary) _orgPrimary = (_orgLogos[0] && _orgLogos[0].url) || ''; renderLogoList(); scheduleSaveOrgBranding(); }); });
   }
 
   function currentOrgBrandingFromInputs() {
     return {
-      logo_url: (document.getElementById('org-brand-logo') || {}).value || '',
+      logo_url: _orgPrimary || '',
+      logos: _orgLogos.map(function(l) { return { url: l.url, label: l.label || '' }; }),
       primary_color: (document.getElementById('org-brand-primary-text') || {}).value || '',
       accent_color: (document.getElementById('org-brand-accent-text') || {}).value || '',
       footer_address: (document.getElementById('org-brand-footer') || {}).value || ''
@@ -1693,7 +1740,8 @@
     var b = currentOrgBrandingFromInputs();
     var statusEl = document.getElementById('org-branding-status');
     if (statusEl) { statusEl.textContent = 'Saving…'; statusEl.style.color = 'var(--text-dim, #888)'; }
-    window.p86Api.put('/api/admin/organizations/' + _orgBrandingOrgId, { branding: b }).then(function() {
+    // Save via the org-branding route (persists the full kit incl. logos[]).
+    window.p86Api.put('/api/org/branding', b).then(function() {
       if (statusEl) {
         statusEl.innerHTML = '<span style="color:#34d399;">&#x2713; Saved ' + new Date().toLocaleTimeString() + '</span>';
         setTimeout(function() { if (statusEl && /Saved/.test(statusEl.textContent || '')) statusEl.textContent = ''; }, 2500);
