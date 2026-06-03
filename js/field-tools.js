@@ -60,16 +60,20 @@
     window.p86Api.get('/api/field-tools').then(function(resp) {
       var rows = (resp && resp.tools) || [];
 
+      var me = (window.p86Auth && window.p86Auth.getUser && window.p86Auth.getUser()) || null;
+      var isAdmin = !!(me && ['admin', 'corporate', 'system_admin', 'owner'].indexOf(me.role) !== -1);
+
       var headerHtml =
-        '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:14px;">' +
+        '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:14px;flex-wrap:wrap;">' +
           '<div>' +
             '<h2 style="margin:0;font-size:18px;font-weight:600;">Field Tools</h2>' +
             '<div style="font-size:12px;color:var(--text-dim,#888);margin-top:2px;">' +
-              'Self-contained utilities the team uses on phones. 86 can spin them up on demand.' +
+              'Self-contained utilities the team uses on phones. ⭐ = Project 86 system tool.' +
             '</div>' +
           '</div>' +
           '<div style="display:flex;gap:8px;">' +
             '<button type="button" class="ee-btn secondary" onclick="window.refreshFieldTools && window.refreshFieldTools()">↻ Refresh</button>' +
+            (isAdmin ? '<button type="button" class="ee-btn secondary" onclick="window.openSystemToolPicker && window.openSystemToolPicker()">⭐ System tools</button>' : '') +
             '<button type="button" class="ee-btn primary" onclick="window.openFieldToolComposer && window.openFieldToolComposer()">+ Add tool</button>' +
           '</div>' +
         '</div>';

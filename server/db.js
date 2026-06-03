@@ -1346,10 +1346,21 @@ async function initSchema() {
       html_body TEXT NOT NULL,
       created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      -- System (preset) tools come from the code catalog in
+      -- server/field-tool-catalog.js. They carry the catalog key in
+      -- system_key, render with a gold star, and cannot be deleted by
+      -- regular users (only removed from the catalog picker by an admin).
+      is_system BOOLEAN NOT NULL DEFAULT FALSE,
+      system_key TEXT
     );
+    -- Backfill columns for already-deployed DBs.
+    ALTER TABLE field_tools ADD COLUMN IF NOT EXISTS is_system BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE field_tools ADD COLUMN IF NOT EXISTS system_key TEXT;
     CREATE INDEX IF NOT EXISTS idx_field_tools_category ON field_tools(category);
     CREATE INDEX IF NOT EXISTS idx_field_tools_updated ON field_tools(updated_at DESC);
+    -- One row per catalog key (so "add" is idempotent / upgradable).
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_field_tools_system_key ON field_tools(system_key) WHERE system_key IS NOT NULL;
 
     -- Field tool printouts — one row per saved run. The user clicks
     -- "Save Printout" inside a field tool modal; the tool's HTML

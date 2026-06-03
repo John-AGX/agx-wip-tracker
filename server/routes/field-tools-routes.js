@@ -17,8 +17,9 @@
 //   DELETE /api/field-tools/:id       delete
 
 const express = require('express');
-const { requireAuth } = require('../auth');
+const { requireAuth, requireOrg, requireCapability } = require('../auth');
 const { pool } = require('../db');
+const catalog = require('../field-tool-catalog');
 
 const router = express.Router();
 
@@ -42,9 +43,9 @@ router.get('/', requireAuth, async (req, res) => {
   try {
     const r = await pool.query(
       `SELECT id, name, description, category, created_by, created_at, updated_at,
-              LENGTH(html_body) AS html_size
+              is_system, system_key, LENGTH(html_body) AS html_size
          FROM field_tools
-        ORDER BY updated_at DESC`
+        ORDER BY is_system DESC, updated_at DESC`
     );
     res.json({ tools: r.rows });
   } catch (e) {
@@ -256,6 +257,86 @@ router.delete('/runs/:id', requireAuth, async (req, res) => {
 });
 
 // ──────────────────────────────────────────────────────────────────
+// SYSTEM TOOL CATALOG — Project 86's built-in, higher-tier field tools
+// (server/field-tool-catalog.js). An org admin adds them to the org's
+// field-tools list from a picker; once added they carry system_key,
+// render with a gold star, and can't be deleted by regular users.
+//
+// Declared BEFORE the /:id routes so /catalog isn't matched as an id.
+// ──────────────────────────────────────────────────────────────────
+
+// GET /api/field-tools/catalog — the preset catalog + which are added.
+router.get('/catalog', requireAuth, async (req, res) => {
+  try {
+    const added = (await pool.query(
+      `SELECT system_key FROM field_tools WHERE system_key IS NOT NULL`
+    )).rows.map((r) => r.system_key);
+    const addedSet = new Set(added);
+    const list = catalog.getCatalog().map((e) => ({
+      key: e.key, name: e.name, description: e.description, category: e.category,
+      added: addedSet.has(e.key),
+    }));
+    res.json({ catalog: list });
+  } catch (e) {
+    console.error('GET /api/field-tools/catalog error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// POST /api/field-tools/catalog/:key/add — add (or refresh) a system tool.
+// Admin-gated (org config). Idempotent: re-adding upgrades html_body.
+router.post('/catalog/:key/add', requireAuth, requireOrg, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const key = String(req.params.key || '').trim();
+    const entry = catalog.getEntry(key);
+    if (!entry) return res.status(404).json({ error: 'Unknown system tool.' });
+    const existing = await pool.query('SELECT id FROM field_tools WHERE system_key = $1', [key]);
+    try {
+      if (existing.rows.length) {
+        const r = await pool.query(
+          `UPDATE field_tools
+              SET name=$2, description=$3, category=$4, html_body=$5, is_system=TRUE, updated_at=NOW()
+            WHERE system_key=$1 RETURNING id, name, is_system, system_key`,
+          [key, entry.name, entry.description, entry.category, entry.html_body]
+        );
+        return res.json({ tool: r.rows[0], added: false, updated: true });
+      }
+      const id = newId();
+      const r = await pool.query(
+        `INSERT INTO field_tools (id, name, description, category, html_body, created_by, is_system, system_key, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, TRUE, $7, NOW(), NOW())
+         RETURNING id, name, is_system, system_key`,
+        [id, entry.name, entry.description, entry.category, entry.html_body, req.user.id, key]
+      );
+      return res.json({ tool: r.rows[0], added: true });
+    } catch (e) {
+      if (e.code === '23505') {
+        return res.status(409).json({ error: 'A tool named "' + entry.name + '" already exists. Rename or remove it first.' });
+      }
+      throw e;
+    }
+  } catch (e) {
+    console.error('POST /api/field-tools/catalog/:key/add error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// DELETE /api/field-tools/catalog/:key — remove an added system tool.
+// Admin-gated (this is how a system tool is taken off the list, since
+// the normal DELETE blocks system tools).
+router.delete('/catalog/:key', requireAuth, requireOrg, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const key = String(req.params.key || '').trim();
+    const r = await pool.query('DELETE FROM field_tools WHERE system_key = $1 RETURNING id', [key]);
+    if (!r.rows.length) return res.status(404).json({ error: 'That system tool is not on the list.' });
+    res.json({ ok: true, key });
+  } catch (e) {
+    console.error('DELETE /api/field-tools/catalog/:key error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ──────────────────────────────────────────────────────────────────
 // FIELD TOOL CRUD by :id
 // (Declared AFTER /runs routes — see note above.)
 // ──────────────────────────────────────────────────────────────────
@@ -340,6 +421,13 @@ router.delete('/:id', requireAuth, async (req, res) => {
   try {
     const id = String(req.params.id || '').trim();
     if (!id) return res.status(400).json({ error: 'id is required' });
+    // System (preset) tools can't be deleted here — an admin removes them
+    // from the catalog (DELETE /catalog/:key).
+    const chk = await pool.query('SELECT is_system FROM field_tools WHERE id = $1', [id]);
+    if (!chk.rows.length) return res.status(404).json({ error: 'Not found' });
+    if (chk.rows[0].is_system) {
+      return res.status(403).json({ error: "System tools can't be deleted. An admin can remove them from Tools → Add system tool." });
+    }
     const r = await pool.query(`DELETE FROM field_tools WHERE id = $1 RETURNING id`, [id]);
     if (!r.rows.length) return res.status(404).json({ error: 'Not found' });
     res.json({ ok: true, id });

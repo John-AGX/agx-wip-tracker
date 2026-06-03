@@ -46,14 +46,18 @@
     estimates: {
       selector: '#estimates-list table',
       frozen: 'title',
-      frozenBg: 'var(--card-bg,#0f0f1e)',
+      // Match Jobs' frozenBg — --card-bg has a slight blue tint
+      // (#0f0f1e) that made the title column stand out against the
+      // page background. --bg (#0f1117) blends with the surrounding
+      // surface so the frozen column reads as part of the table.
+      frozenBg: 'var(--bg,#0f1117)',
       widths: { title: 280, client: 220, lines: 70, baseCost: 130,
                 markup: 110, clientPrice: 140, margin: 110, updated_at: 120 }
     },
     leads: {
       selector: '#leads-list table',
       frozen: 'title',
-      frozenBg: 'var(--card-bg,#0f0f1e)',
+      frozenBg: 'var(--bg,#0f1117)',
       widths: { title: 280, client: 220, status: 130, revenue: 130,
                 confidence: 90, salesperson: 160, project_type: 160,
                 projected_sale_date: 130, updated_at: 120 }

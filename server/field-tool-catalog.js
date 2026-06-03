@@ -1,0 +1,181 @@
+// System field-tool catalog.
+//
+// These are Project 86's built-in "system" field tools — a curated,
+// higher-tier set an org admin can add to their field-tools list from a
+// picker. Each entry is a self-contained HTML document (same shape as a
+// user-authored field tool) that runs in the sandboxed iframe and reports
+// inputs/outputs via the standard postMessage contract so Save Printout
+// works. Added tools carry their `key` in field_tools.system_key, render
+// with a gold star, and can't be deleted by regular users.
+//
+// To add another system tool later: append an entry here with a unique
+// `key`, then redeploy. Orgs add it from Tools → "Add system tool".
+
+'use strict';
+
+// ── Stairs Calculator ───────────────────────────────────────────────
+// 3 primary inputs (total rise, target riser, tread depth) + 2 framing
+// inputs (tread thickness, stringer board width) → full stair layout,
+// a dimensioned side-view, and a stringer cutting template. The throat
+// (uncut) math matches a standard cut-stringer: W - (riser*tread)/hypot.
+var STAIRS_HTML = [
+'<!doctype html>',
+'<html lang="en"><head><meta charset="utf-8">',
+'<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">',
+'<title>Stairs Calculator</title>',
+'<style>',
+'  :root{--ink:#111827;--line:#cbd5e1;--accent:#2563eb;--amber:#b45309;--ok:#15803d;--bg:#f1f5f9;}',
+'  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}',
+'  body{margin:0;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:var(--ink);background:var(--bg);padding:14px 14px 40px;}',
+'  h1{font-size:18px;margin:0 0 2px;}',
+'  .sub{font-size:12px;color:#64748b;margin:0 0 14px;}',
+'  .card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:14px;box-shadow:0 1px 2px rgba(0,0,0,0.04);}',
+'  .inputs{display:grid;grid-template-columns:1fr 1fr;gap:12px;}',
+'  @media(max-width:380px){.inputs{grid-template-columns:1fr;}}',
+'  label{display:block;font-size:11px;text-transform:uppercase;letter-spacing:.4px;color:#64748b;font-weight:700;margin-bottom:4px;}',
+'  .fieldrow{display:flex;align-items:stretch;}',
+'  input[type=number]{width:100%;font-size:17px;font-weight:600;padding:10px 12px;border:1px solid var(--line);border-radius:9px 0 0 9px;outline:none;color:var(--ink);min-width:0;}',
+'  input[type=number]:focus{border-color:var(--accent);}',
+'  .unit{display:flex;align-items:center;padding:0 11px;font-size:13px;color:#64748b;background:#f8fafc;border:1px solid var(--line);border-left:0;border-radius:0 9px 9px 0;}',
+'  .results{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--line);border:1px solid var(--line);border-radius:10px;overflow:hidden;}',
+'  .res{background:#fff;padding:10px 12px;}',
+'  .res .k{font-size:10.5px;text-transform:uppercase;letter-spacing:.4px;color:#64748b;font-weight:700;}',
+'  .res .v{font-size:19px;font-weight:800;margin-top:2px;font-variant-numeric:tabular-nums;}',
+'  .res.big{grid-column:1 / -1;background:#0f172a;}',
+'  .res.big .k{color:#93c5fd;} .res.big .v{color:#fff;font-size:22px;}',
+'  .note{font-size:12px;border-radius:8px;padding:8px 10px;margin-top:10px;line-height:1.4;}',
+'  .note.ok{background:#f0fdf4;color:var(--ok);border:1px solid #bbf7d0;}',
+'  .note.warn{background:#fffbeb;color:var(--amber);border:1px solid #fde68a;}',
+'  canvas{width:100%;display:block;}',
+'  .diagtitle{font-size:13px;font-weight:800;margin:0 0 8px;text-align:center;letter-spacing:.3px;}',
+'  .btns{display:flex;gap:8px;margin-top:4px;}',
+'  button{flex:1;font-size:14px;font-weight:700;padding:12px;border:0;border-radius:10px;background:var(--accent);color:#fff;cursor:pointer;}',
+'  button.sec{background:#fff;color:var(--ink);border:1px solid var(--line);}',
+'  @media print{body{background:#fff;padding:0;}.btns,.sub{display:none;}.card{border:0;box-shadow:none;break-inside:avoid;}}',
+'</style></head><body>',
+'  <h1>Stairs Calculator</h1>',
+'  <p class="sub">Enter the rise and your targets &mdash; everything else (risers, run, stringer cut) is computed and drawn.</p>',
+'  <div class="card">',
+'    <div class="inputs">',
+'      <div><label>Total rise (floor to floor)</label><div class="fieldrow"><input id="rise" type="number" inputmode="decimal" value="48" step="0.125"><span class="unit">in</span></div></div>',
+'      <div><label>Target riser height</label><div class="fieldrow"><input id="triser" type="number" inputmode="decimal" value="7" step="0.125"><span class="unit">in</span></div></div>',
+'      <div><label>Tread depth (run)</label><div class="fieldrow"><input id="tread" type="number" inputmode="decimal" value="10" step="0.25"><span class="unit">in</span></div></div>',
+'      <div><label>Tread thickness</label><div class="fieldrow"><input id="tthick" type="number" inputmode="decimal" value="1.5" step="0.125"><span class="unit">in</span></div></div>',
+'      <div><label>Stringer board width</label><div class="fieldrow"><input id="bwidth" type="number" inputmode="decimal" value="11.25" step="0.25"><span class="unit">in</span></div></div>',
+'    </div>',
+'  </div>',
+'  <div class="card">',
+'    <div class="results">',
+'      <div class="res big"><div class="k">Number of risers</div><div class="v" id="o_risers" data-ft-output="Risers">&mdash;</div></div>',
+'      <div class="res"><div class="k">Riser height (each)</div><div class="v" id="o_riser" data-ft-output="Riser height">&mdash;</div></div>',
+'      <div class="res"><div class="k">Treads</div><div class="v" id="o_treads" data-ft-output="Treads">&mdash;</div></div>',
+'      <div class="res"><div class="k">Tread depth (each)</div><div class="v" id="o_tread" data-ft-output="Tread depth">&mdash;</div></div>',
+'      <div class="res"><div class="k">Total run</div><div class="v" id="o_run" data-ft-output="Total run">&mdash;</div></div>',
+'      <div class="res"><div class="k">First step (cut)</div><div class="v" id="o_first" data-ft-output="First step">&mdash;</div></div>',
+'      <div class="res"><div class="k">Stringer length</div><div class="v" id="o_slen" data-ft-output="Stringer length">&mdash;</div></div>',
+'      <div class="res"><div class="k">Stringer angle</div><div class="v" id="o_ang" data-ft-output="Angle">&mdash;</div></div>',
+'      <div class="res"><div class="k">Throat / uncut</div><div class="v" id="o_throat" data-ft-output="Throat">&mdash;</div></div>',
+'    </div>',
+'    <div id="notes"></div>',
+'  </div>',
+'  <div class="card"><div class="diagtitle">STAIRS BLUEPRINT (SIDE VIEW)</div><canvas id="side" height="240"></canvas></div>',
+'  <div class="card"><div class="diagtitle">STRINGER CUTTING TEMPLATE</div><canvas id="stringer" height="240"></canvas></div>',
+'  <div class="btns"><button onclick="window.print()">Print cut sheet</button></div>',
+'<script>',
+'(function(){',
+'  function gcd(a,b){return b?gcd(b,a%b):a;}',
+'  function fmtIn(x){ if(!isFinite(x))return "\\u2014"; var neg=x<0;x=Math.abs(x); var w=Math.floor(x+1e-9); var f=Math.round((x-w)*16); if(f===16){w++;f=0;} var s=""+w; if(f>0){var g=gcd(f,16); s+=" "+(f/g)+"/"+(16/g);} return (neg?"-":"")+s+String.fromCharCode(34); }',
+'  function fmtFtIn(x){ if(!isFinite(x))return "\\u2014"; var neg=x<0;x=Math.abs(x); var ft=Math.floor(x/12+1e-9); var inch=x-ft*12; return (neg?"-":"")+ft+"\\u2019 "+fmtIn(inch); }',
+'  function num(id){ var v=parseFloat(document.getElementById(id).value); return isFinite(v)?v:0; }',
+'  var M={};',
+'  function compute(){',
+'    var rise=num("rise"), tRiser=num("triser")||7, tread=num("tread")||10, tthick=num("tthick"), bwidth=num("bwidth")||11.25;',
+'    var risers=Math.max(1, Math.round(rise/(tRiser||7)));',
+'    var riser=rise/risers;',
+'    var treads=Math.max(0,risers-1);',
+'    var run=treads*tread;',
+'    var first=riser-tthick;',
+'    var slen=Math.sqrt(rise*rise+run*run);',
+'    var ang=Math.atan2(rise,run)*180/Math.PI;',
+'    var diag=Math.sqrt(riser*riser+tread*tread)||1;',
+'    var throat=bwidth-(riser*tread)/diag;',
+'    M={rise:rise,tRiser:tRiser,tread:tread,tthick:tthick,bwidth:bwidth,risers:risers,riser:riser,treads:treads,run:run,first:first,slen:slen,ang:ang,throat:throat};',
+'    set("o_risers",risers); set("o_riser",fmtIn(riser)); set("o_treads",treads); set("o_tread",fmtIn(tread));',
+'    set("o_run",fmtFtIn(run)); set("o_first",fmtIn(first)); set("o_slen",fmtFtIn(slen)); set("o_ang",ang.toFixed(1)+"\\u00b0"); set("o_throat",fmtIn(throat));',
+'    renderNotes(); drawSide(); drawStringer(); postResult();',
+'  }',
+'  function set(id,v){ document.getElementById(id).textContent=v; }',
+'  function renderNotes(){',
+'    var n=document.getElementById("notes"); var h="";',
+'    if(M.riser<6.25||M.riser>7.875){ h+=note("warn","Riser "+fmtIn(M.riser)+" is outside the comfortable 6\\u00bd\\u20137\\u00be\\u2033 range \\u2014 adjust target riser or rise.");}',
+'    else { h+=note("ok","Riser "+fmtIn(M.riser)+" is in the comfortable range."); }',
+'    if(M.tread<10){ h+=note("warn","Tread depth under 10\\u2033 \\u2014 many codes require a 10\\u2033 minimum run.");}',
+'    var rule=2*M.riser+M.tread;',
+'    if(rule<24||rule>25){ h+=note("warn","2\\u00d7riser + tread = "+fmtIn(rule)+" (target 24\\u201325\\u2033 for an even stride).");}',
+'    if(M.throat<3.5){ h+=note("warn","Stringer throat "+fmtIn(M.throat)+" is thin \\u2014 use a wider board (throat \\u2265 3\\u00bd\\u2033, often 5\\u2033 for cut stringers).");}',
+'    n.innerHTML=h;',
+'  }',
+'  function note(cls,txt){ return "<div class=\\"note "+cls+"\\">"+txt+"</div>"; }',
+'  function ctxFit(c){ var dpr=Math.min(window.devicePixelRatio||1,2); var W=c.clientWidth||320, H=c.height; c.width=Math.round(W*dpr); c.style.height=H+"px"; c.height_css=H; var x=c.getContext("2d"); x.setTransform(dpr,0,0,dpr,0,0); x.clearRect(0,0,W,H); return {x:x,W:W,H:H}; }',
+'  function drawSide(){',
+'    var c=document.getElementById("side"); var o=ctxFit(c), x=o.x, W=o.W, H=o.H;',
+'    var pad=40, sc=Math.min((W-pad*2)/Math.max(M.run,1),(H-pad*2)/Math.max(M.rise,1));',
+'    var ox=pad, oy=H-pad-6; function PX(r){return ox+r*sc;} function PY(r){return oy-r*sc;}',
+'    x.strokeStyle="#111827"; x.lineWidth=2; x.lineJoin="round";',
+'    x.beginPath(); x.moveTo(PX(0),PY(0)); var cx=0,cy=0;',
+'    for(var i=0;i<M.risers;i++){ cy+=M.riser; x.lineTo(PX(cx),PY(cy)); if(i<M.treads){ cx+=M.tread; x.lineTo(PX(cx),PY(cy)); } }',
+'    x.stroke();',
+'    x.strokeStyle="#94a3b8"; x.fillStyle="#475569"; x.lineWidth=1; x.font="11px Arial"; x.textAlign="center";',
+'    var by=oy+16; x.beginPath(); x.moveTo(PX(0),by); x.lineTo(PX(M.run),by); x.stroke();',
+'    x.fillText("Run "+fmtFtIn(M.run), PX(M.run/2), by+13);',
+'    var rx=PX(M.run)+16; x.beginPath(); x.moveTo(rx,PY(0)); x.lineTo(rx,PY(M.rise)); x.stroke();',
+'    x.save(); x.translate(rx+12,PY(M.rise/2)); x.rotate(-Math.PI/2); x.fillText("Rise "+fmtFtIn(M.rise),0,0); x.restore();',
+'  }',
+'  function drawStringer(){',
+'    var c=document.getElementById("stringer"); var o=ctxFit(c), x=o.x, W=o.W, H=o.H;',
+'    var pad=40, sc=Math.min((W-pad*2)/Math.max(M.run,1),(H-pad*2)/Math.max(M.rise+M.bwidth,1));',
+'    var ox=pad, oy=H-pad-6; function PX(r){return ox+r*sc;} function PY(r){return oy-r*sc;}',
+'    var L=Math.sqrt(M.run*M.run+M.rise*M.rise)||1; var nx=M.rise/L, ny=M.run/L;',
+'    var cut=[]; var cx=0,cy=0; cut.push([0,0]);',
+'    for(var i=0;i<M.risers;i++){ cy+=M.riser; cut.push([cx,cy]); if(i<M.treads){ cx+=M.tread; cut.push([cx,cy]); } }',
+'    var backA=[0-nx*M.bwidth,0-ny*M.bwidth], backB=[M.run-nx*M.bwidth, M.rise-ny*M.bwidth];',
+'    x.beginPath(); x.moveTo(PX(cut[0][0]),PY(cut[0][1]));',
+'    for(var j=1;j<cut.length;j++) x.lineTo(PX(cut[j][0]),PY(cut[j][1]));',
+'    x.lineTo(PX(backB[0]),PY(backB[1])); x.lineTo(PX(backA[0]),PY(backA[1])); x.closePath();',
+'    x.fillStyle="#f5deb3"; x.fill(); x.strokeStyle="#92400e"; x.lineWidth=2; x.stroke();',
+'    x.strokeStyle="#b45309"; x.fillStyle="#7c2d12"; x.lineWidth=1; x.font="11px Arial"; x.textAlign="center";',
+'    var midx=(M.run/2-nx*M.bwidth/2), midy=(M.rise/2-ny*M.bwidth/2);',
+'    x.fillText("Throat "+fmtIn(M.throat), PX(midx), PY(midy));',
+'    x.textAlign="left"; x.fillText(M.risers+" risers \\u00d7 "+fmtIn(M.riser)+"  \\u2022  board "+fmtIn(M.bwidth), 8, 16);',
+'  }',
+'  function postResult(){',
+'    try{ window.parent.postMessage({type:"p86-field-tool-result",',
+'      inputs:{ "Total rise":fmtFtIn(M.rise), "Target riser":fmtIn(M.tRiser), "Tread depth":fmtIn(M.tread), "Tread thickness":fmtIn(M.tthick), "Board width":fmtIn(M.bwidth) },',
+'      outputs:{ "Risers":M.risers, "Riser height":fmtIn(M.riser), "Treads":M.treads, "Total run":fmtFtIn(M.run), "First step (cut)":fmtIn(M.first), "Stringer length":fmtFtIn(M.slen), "Angle":M.ang.toFixed(1)+"\\u00b0", "Throat":fmtIn(M.throat) } },"*"); }catch(e){}',
+'  }',
+'  var ids=["rise","triser","tread","tthick","bwidth"];',
+'  ids.forEach(function(id){ var el=document.getElementById(id); el.addEventListener("input",compute); el.addEventListener("change",compute); });',
+'  window.addEventListener("resize",function(){ drawSide(); drawStringer(); });',
+'  compute();',
+'})();',
+'</script>',
+'</body></html>'
+].join('\n');
+
+var CATALOG = [
+  {
+    key: 'stairs-calculator',
+    name: 'Stairs Calculator',
+    description: 'Rise + targets in, full stair layout out — risers, run, first-step cut, stringer length/angle, throat + side-view & stringer cut diagrams.',
+    category: 'calculator',
+    html_body: STAIRS_HTML
+  }
+];
+
+function getCatalog() { return CATALOG; }
+function getEntry(key) {
+  for (var i = 0; i < CATALOG.length; i++) if (CATALOG[i].key === key) return CATALOG[i];
+  return null;
+}
+
+module.exports = { CATALOG: CATALOG, getCatalog: getCatalog, getEntry: getEntry };
