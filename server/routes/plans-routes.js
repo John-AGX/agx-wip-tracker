@@ -39,7 +39,7 @@ const VALID_ENTITY_TYPES = new Set([
   'lead', 'estimate', 'client', 'job', 'sub', 'user', 'org', 'project', 'task'
 ]);
 
-const BASE_KINDS = new Set(['blank', 'photo', 'pdf']);
+const BASE_KINDS = new Set(['blank', 'sheet', 'photo', 'pdf']);
 
 // Coerce the `pages` payload to a safe JSONB-able array. Each page is
 // { page:int, calibration:obj|null, strokes:[...] }. We don't deeply
