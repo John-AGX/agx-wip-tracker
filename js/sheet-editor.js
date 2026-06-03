@@ -80,31 +80,58 @@
   }
   function uid(p) { return (p || 'e') + '_' + Math.random().toString(36).slice(2, 9); }
 
+  // ── Editor defaults (E5) — persisted to localStorage ────────────
+  // New drawings adopt scaleLabel + sheetSize + dimColor; unit/grid/snap
+  // defaults also apply to the live session when changed in Settings.
+  var SETTINGS_KEY = 'p86SheetSettings';
+  var DEFAULT_SETTINGS = {
+    unit: 'ft-in',                 // 'ft-in' | 'ft' (decimal feet)
+    scaleLabel: '1/4" = 1\'-0"',
+    sheetSize: 'arch-d',
+    gridFt: 1,
+    ortho: false, gridSnap: true, osnap: true,
+    dimColor: '#b45309'
+  };
+  function loadSettings() {
+    var s = {};
+    try { var raw = localStorage.getItem(SETTINGS_KEY); if (raw) s = JSON.parse(raw) || {}; } catch (e) {}
+    var out = {}; for (var k in DEFAULT_SETTINGS) out[k] = (s[k] != null) ? s[k] : DEFAULT_SETTINGS[k];
+    return out;
+  }
+  function saveSettings() { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(SETTINGS)); } catch (e) {} }
+  function scalePreset(label) {
+    for (var i = 0; i < SCALE_PRESETS.length; i++) if (SCALE_PRESETS[i].label === label) return SCALE_PRESETS[i];
+    return SCALE_PRESETS[1];        // 1/4" = 1'-0"
+  }
+  var SETTINGS = loadSettings();
+
   // ── Document model ──────────────────────────────────────────────
   function defaultDoc(plan) {
-    var sz = SHEET_SIZES['arch-d'];
+    var sizeKey = SHEET_SIZES[SETTINGS.sheetSize] ? SETTINGS.sheetSize : 'arch-d';
+    var sz = SHEET_SIZES[sizeKey];
     var w = Math.round(sz.wIn * DPI), h = Math.round(sz.hIn * DPI);
     var m = Math.round(0.5 * DPI);
     var tbH = Math.round(3 * DPI);
     var vpX = m + 14, vpY = m + 14;
     var vpW = w - m * 2 - 28;
     var vpH = h - m * 2 - 28 - tbH - 14;
+    var pre = scalePreset(SETTINGS.scaleLabel);
     return {
       kind: 'sheet-doc', version: 1,
-      sheet: { size: 'arch-d', w: w, h: h, unit: 'in', margin: m },
+      sheet: { size: sizeKey, w: w, h: h, unit: 'in', margin: m },
       titleblock: {
-        project: (plan && plan.name) || '', title: 'PLAN', scale: '1/4" = 1\'-0"',
+        project: (plan && plan.name) || '', title: 'PLAN', scale: pre.label,
         date: '', drawnBy: '', sheetNo: 'A-1', client: '', northDeg: 0,
         company: '', showLogo: true
       },
       layers: [
         { id: 'L0', name: 'Default', color: '#1f2937', weight: 4, lineType: 'solid', visible: true, locked: false },
-        { id: 'L1', name: 'Dimensions', color: '#b45309', weight: 2, lineType: 'solid', visible: true, locked: false },
+        { id: 'L1', name: 'Dimensions', color: SETTINGS.dimColor || '#b45309', weight: 2, lineType: 'solid', visible: true, locked: false },
         { id: 'L2', name: 'Hidden', color: '#64748b', weight: 2, lineType: 'dashed', visible: true, locked: false }
       ],
       viewports: [
         { id: 'VP1', label: 'PLAN', x: vpX, y: vpY, w: vpW, h: vpH,
-          scale: { pixelsPerInch: DPI / 48, unit: 'ft', label: '1/4" = 1\'-0"' } }
+          scale: { pixelsPerInch: DPI * pre.f, unit: 'ft', label: pre.label } }
       ],
       entities: []
     };
@@ -169,9 +196,7 @@
           if (e.tool === 'measure' && vp.scale && vp.scale.pixelsPerInch) {
             var px = Math.hypot(e.endX - e.startX, e.endY - e.startY);
             e.measureInches = px / vp.scale.pixelsPerInch;
-            e.measureLabel = prims().formatFeetInches
-              ? prims().formatFeetInches(e.measureInches)
-              : (Math.round(e.measureInches / 12 * 100) / 100) + "'";
+            e.measureLabel = fmtLen(e.measureInches);
           }
           try { prims().drawStroke(ctx, e); } catch (err) { /* defensive */ }
         });
@@ -425,7 +450,7 @@
   // Faint reference grid inside a viewport — 1 ft minor, 5 ft major.
   // Origin aligned to vp.x/vp.y so it matches the grid-snap lattice.
   function drawViewportGrid(ctx, vp, viewScale) {
-    var step = vp.scale.pixelsPerInch * 12;          // 1 ft, sheet px
+    var step = vp.scale.pixelsPerInch * 12 * (SETTINGS.gridFt || 1);   // grid spacing, sheet px
     if (step * viewScale < 7) return;                // too dense at this zoom
     var x0 = vp.x, y0 = vp.y, x1 = vp.x + vp.w, y1 = vp.y + vp.h, x, y;
     ctx.save();
@@ -461,6 +486,7 @@
     ov.innerHTML =
       '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;background:rgba(15,15,30,0.95);border:1px solid #2a2a3a;border-radius:10px;padding:8px 14px;">' +
         '<strong style="color:#fff;font-size:13px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">📐 ' + esc(plan.name || 'Shop drawing') + '</strong>' +
+        '<button id="p86-sheet-settings" title="Editor settings &amp; defaults (units, scale, sheet size, grid, snaps)" style="background:rgba(255,255,255,0.06);color:#cbd5e1;border:1px solid #444;border-radius:6px;padding:6px 11px;font-size:13px;cursor:pointer;">⚙</button>' +
         '<button id="p86-sheet-png" title="Download the sheet as a PNG" style="background:rgba(255,255,255,0.06);color:#cbd5e1;border:1px solid #444;border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer;">⬇ PNG</button>' +
         '<button id="p86-sheet-pdf" title="Print / Save as PDF at true sheet size" style="background:rgba(255,255,255,0.06);color:#cbd5e1;border:1px solid #444;border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer;">⎙ PDF</button>' +
         '<button id="p86-sheet-cancel" style="background:rgba(255,255,255,0.06);color:#aaa;border:1px solid #444;border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;">Close</button>' +
@@ -508,9 +534,9 @@
       draft: null,          // in-progress entity (sheet coords)
       hover: null,          // {x,y} sheet coords of cursor
       snap: null,           // {x,y,kind} active snap
-      ortho: false,
-      gridSnap: true,
-      objSnap: true,
+      ortho: !!SETTINGS.ortho,
+      gridSnap: SETTINGS.gridSnap !== false,
+      objSnap: SETTINGS.osnap !== false,
       panning: null,        // {sx,sy,tx,ty}
       spaceDown: false,
       selectedId: null,
@@ -715,10 +741,11 @@
   function addViewport() {
     pushUndo();
     var n = S.doc.viewports.length;
+    var pre = scalePreset(SETTINGS.scaleLabel);
     S.doc.viewports.push({
       id: uid('VP'), label: VIEW_LABELS[Math.min(n, VIEW_LABELS.length - 1)],
       x: 0, y: 0, w: 100, h: 100,
-      scale: { pixelsPerInch: DPI * 0.25 / 12, unit: 'ft', label: '1/4" = 1\'-0"' }
+      scale: { pixelsPerInch: DPI * pre.f, unit: 'ft', label: pre.label }
     });
     layoutViewports(S.doc);
     buildLayers(); repaint();
@@ -769,6 +796,58 @@
       S.doc.titleblock.northDeg = parseFloat(S.doc.titleblock.northDeg) || 0;
       var cb = box.querySelector('[data-tb-showlogo]'); if (cb) S.doc.titleblock.showLogo = cb.checked;
       close(); repaint();
+    };
+    ov.addEventListener('click', function (e) { if (e.target === ov) close(); });
+  }
+
+  // ── Settings / defaults (E5) ────────────────────────────────────
+  function openSettingsModal() {
+    var ov = document.createElement('div');
+    ov.style.cssText = 'position:fixed;inset:0;z-index:5400;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;padding:20px;';
+    var box = document.createElement('div');
+    box.style.cssText = 'background:#0f0f1e;border:1px solid #353545;border-radius:12px;padding:20px 22px;max-width:400px;width:100%;max-height:88vh;overflow-y:auto;color:#e6e6e6;box-shadow:0 16px 48px rgba(0,0,0,0.6);';
+    var selCss = 'width:100%;box-sizing:border-box;background:#1a1a2e;color:#fff;border:1px solid #444;border-radius:6px;padding:7px 10px;font-size:13px;outline:none;';
+    var labCss = 'display:block;font-size:11px;color:#9aa;margin:10px 0 3px;';
+    function opt(v, label, sel) { return '<option value="' + esc(v) + '"' + (sel ? ' selected' : '') + '>' + esc(label) + '</option>'; }
+    function cb(key, label, on) {
+      return '<label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#cbd5e1;margin-top:7px;cursor:pointer;">' +
+        '<input type="checkbox" data-st-cb="' + key + '" ' + (on ? 'checked' : '') + ' style="width:15px;height:15px;cursor:pointer;" /> ' + esc(label) + '</label>';
+    }
+    box.innerHTML =
+      '<div style="font-size:15px;font-weight:700;color:#fff;margin-bottom:4px;">⚙ Editor settings</div>' +
+      '<div style="font-size:10.5px;color:#64748b;margin-bottom:8px;line-height:1.45;">Scale &amp; sheet size apply to <b style="color:#9aa;">new</b> drawings. Units, grid &amp; snaps apply right now.</div>' +
+      '<label style="' + labCss + '">Units</label>' +
+      '<select data-st="unit" style="' + selCss + '">' + opt('ft-in', "Feet & inches  (12' 6\")", SETTINGS.unit !== 'ft') + opt('ft', "Decimal feet  (12.5')", SETTINGS.unit === 'ft') + '</select>' +
+      '<label style="' + labCss + '">Default scale (new drawings)</label>' +
+      '<select data-st="scaleLabel" style="' + selCss + '">' + SCALE_PRESETS.map(function (p) { return opt(p.label, p.label, p.label === SETTINGS.scaleLabel); }).join('') + '</select>' +
+      '<label style="' + labCss + '">Default sheet size (new drawings)</label>' +
+      '<select data-st="sheetSize" style="' + selCss + '">' + Object.keys(SHEET_SIZES).map(function (k) { return opt(k, SHEET_SIZES[k].label, k === SETTINGS.sheetSize); }).join('') + '</select>' +
+      '<label style="' + labCss + '">Grid spacing (ft)</label>' +
+      '<input data-st="gridFt" value="' + esc(SETTINGS.gridFt) + '" inputmode="decimal" style="' + selCss + '" />' +
+      '<label style="' + labCss + '">Default dimension color</label>' +
+      '<input type="color" data-st="dimColor" value="' + esc(SETTINGS.dimColor || '#b45309') + '" style="width:46px;height:32px;border:0;background:transparent;cursor:pointer;" />' +
+      '<div style="font-weight:700;color:#fff;margin:14px 0 2px;">Default snaps</div>' +
+      cb('ortho', 'Ortho lock (0 / 45 / 90°)', !!SETTINGS.ortho) +
+      cb('gridSnap', 'Snap to grid', SETTINGS.gridSnap !== false) +
+      cb('osnap', 'Object snap (end / mid / center / intersect)', SETTINGS.osnap !== false) +
+      '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px;">' +
+        '<button data-st-cancel style="padding:8px 16px;background:rgba(255,255,255,0.06);color:#ddd;border:1px solid #444;border-radius:6px;cursor:pointer;font-weight:600;">Cancel</button>' +
+        '<button data-st-save style="padding:8px 16px;background:#4f8cff;color:#fff;border:1px solid #4f8cff;border-radius:6px;cursor:pointer;font-weight:700;">Save defaults</button>' +
+      '</div>';
+    ov.appendChild(box); document.body.appendChild(ov);
+    function close() { if (ov.parentNode) ov.parentNode.removeChild(ov); }
+    box.querySelector('[data-st-cancel]').onclick = close;
+    box.querySelector('[data-st-save]').onclick = function () {
+      box.querySelectorAll('[data-st]').forEach(function (el) {
+        var k = el.getAttribute('data-st');
+        SETTINGS[k] = (k === 'gridFt') ? (Math.max(0.25, Math.min(100, parseFloat(el.value) || 1))) : el.value;
+      });
+      box.querySelectorAll('[data-st-cb]').forEach(function (el) { SETTINGS[el.getAttribute('data-st-cb')] = el.checked; });
+      saveSettings();
+      // Apply the live-affecting settings to the current session immediately.
+      S.ortho = !!SETTINGS.ortho; S.gridSnap = SETTINGS.gridSnap !== false; S.objSnap = SETTINGS.osnap !== false;
+      refreshStatusBar(); buildLayers(); repaint();
+      close();
     };
     ov.addEventListener('click', function (e) { if (e.target === ov) close(); });
   }
@@ -1032,7 +1111,7 @@
     }
     if (best) return best;
     if (S.gridSnap && vp && vp.scale && vp.scale.pixelsPerInch) {
-      var step = vp.scale.pixelsPerInch * 12;   // 1 ft grid, in sheet px
+      var step = vp.scale.pixelsPerInch * 12 * (SETTINGS.gridFt || 1);   // grid spacing, sheet px
       var gx = Math.round((raw.x - vp.x) / step) * step + vp.x;
       var gy = Math.round((raw.y - vp.y) / step) * step + vp.y;
       return { x: gx, y: gy, kind: 'grid' };
@@ -1055,10 +1134,13 @@
     if (!vp || !vp.scale || !vp.scale.pixelsPerInch) return null;
     return sheetPx / vp.scale.pixelsPerInch;     // inches
   }
-  function fmtFeet(inches) {
+  // Unit-aware length formatter (respects the Settings unit choice).
+  function fmtLen(inches) {
+    if (SETTINGS.unit === 'ft') return (Math.round(inches / 12 * 100) / 100) + "'";
     var f = prims().formatFeetInches;
     return f ? f(inches) : (Math.round(inches / 12 * 100) / 100) + "'";
   }
+  function fmtFeet(inches) { return fmtLen(inches); }
   function updateReadout(sheetPt, vp) {
     var coords = S.overlay.querySelector('#p86-sb-coords');
     var snapEl = S.overlay.querySelector('#p86-sb-snap');
@@ -1661,7 +1743,7 @@
           if (pvp && pvp.scale && pvp.scale.pixelsPerInch) {
             var ppx = Math.hypot(prev.endX - prev.startX, prev.endY - prev.startY);
             prev.measureInches = ppx / pvp.scale.pixelsPerInch;
-            prev.measureLabel = prims().formatFeetInches ? prims().formatFeetInches(prev.measureInches) : '';
+            prev.measureLabel = fmtLen(prev.measureInches);
           }
         }
         if (prims().drawStroke) { try { prims().drawStroke(ctx, prev); } catch (e) {} }
@@ -1761,6 +1843,7 @@
         S.overlay.querySelector('#p86-sheet-save').onclick = save;
         var pdfBtn = S.overlay.querySelector('#p86-sheet-pdf'); if (pdfBtn) pdfBtn.onclick = exportPdf;
         var pngBtn = S.overlay.querySelector('#p86-sheet-png'); if (pngBtn) pngBtn.onclick = exportPng;
+        var setBtn = S.overlay.querySelector('#p86-sheet-settings'); if (setBtn) setBtn.onclick = openSettingsModal;
       }
     },
     close: close,
