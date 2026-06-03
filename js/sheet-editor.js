@@ -228,7 +228,9 @@
       objSnap: true,
       panning: null,        // {sx,sy,tx,ty}
       spaceDown: false,
-      selectedId: null
+      selectedId: null,
+      moveDrag: null,       // {last:{x,y}, pushed:bool} while dragging a selection
+      _undo: [], _redo: []  // history stacks (JSON snapshots of entities+layers)
     };
 
     buildToolbar();
@@ -271,7 +273,13 @@
     html += toggleBtn('grid', '▦', 'Snap to grid (1 ft)');
     html += toggleBtn('osnap', '⊹', 'Object snap (endpoint / midpoint / center)');
     html += '<div style="width:34px;height:1px;background:#3a3a4a;margin:4px 0;"></div>';
+    html += '<button data-sheet-edit="rotate" title="Rotate selection 90°" style="width:42px;height:34px;background:rgba(255,255,255,0.05);color:#ddd;border:1px solid #444;border-radius:6px;font-size:15px;cursor:pointer;">⟳</button>';
+    html += '<button data-sheet-edit="mirrorH" title="Mirror selection (horizontal)" style="width:42px;height:34px;background:rgba(255,255,255,0.05);color:#ddd;border:1px solid #444;border-radius:6px;font-size:15px;cursor:pointer;">⇆</button>';
+    html += '<button data-sheet-edit="mirrorV" title="Mirror selection (vertical)" style="width:42px;height:34px;background:rgba(255,255,255,0.05);color:#ddd;border:1px solid #444;border-radius:6px;font-size:15px;cursor:pointer;">⇅</button>';
+    html += '<button data-sheet-edit="dup" title="Duplicate selection (Ctrl+D)" style="width:42px;height:34px;background:rgba(255,255,255,0.05);color:#ddd;border:1px solid #444;border-radius:6px;font-size:14px;cursor:pointer;">⧉</button>';
+    html += '<div style="width:34px;height:1px;background:#3a3a4a;margin:4px 0;"></div>';
     html += '<button data-sheet-undo title="Undo (Ctrl+Z)" style="width:42px;height:34px;background:rgba(255,255,255,0.05);color:#ddd;border:1px solid #444;border-radius:6px;font-size:14px;cursor:pointer;">↶</button>';
+    html += '<button data-sheet-redo title="Redo (Ctrl+Y / Ctrl+Shift+Z)" style="width:42px;height:34px;background:rgba(255,255,255,0.05);color:#ddd;border:1px solid #444;border-radius:6px;font-size:14px;cursor:pointer;">↷</button>';
     html += '<button data-sheet-fit title="Fit to screen" style="width:42px;height:34px;background:rgba(255,255,255,0.05);color:#ddd;border:1px solid #444;border-radius:6px;font-size:13px;cursor:pointer;">⤢</button>';
     bar.innerHTML = html;
     bar.querySelectorAll('[data-sheet-tool]').forEach(function (b) {
@@ -287,6 +295,17 @@
         repaint();
       };
     });
+    bar.querySelectorAll('[data-sheet-edit]').forEach(function (b) {
+      b.onclick = function () {
+        var k = b.getAttribute('data-sheet-edit');
+        if (!S.selectedId) { return; }
+        if (k === 'rotate') rotate90();
+        else if (k === 'mirrorH') mirror(true);
+        else if (k === 'mirrorV') mirror(false);
+        else if (k === 'dup') duplicateSelected();
+      };
+    });
+    bar.querySelector('[data-sheet-redo]').onclick = redo;
     bar.querySelector('[data-sheet-undo]').onclick = undo;
     bar.querySelector('[data-sheet-fit]').onclick = function () { sizeCanvas(true); repaint(); };
     refreshToolbar();
@@ -327,29 +346,73 @@
 
   function buildLayers() {
     var host = S.overlay.querySelector('#p86-sheet-layers');
-    var html = '<div style="font-weight:700;color:#fff;margin-bottom:8px;">Layers</div>';
+    var html = '<div style="display:flex;align-items:center;margin-bottom:8px;">' +
+      '<span style="font-weight:700;color:#fff;flex:1;">Layers</span>' +
+      '<button data-layer-add title="Add layer" style="background:rgba(79,140,255,0.15);color:#93c5fd;border:1px solid #4f8cff;border-radius:5px;width:22px;height:22px;cursor:pointer;font-size:14px;line-height:1;">+</button>' +
+    '</div>';
     html += (S.doc.layers || []).map(function (l) {
       var active = l.id === S.activeLayer;
-      return '<div data-layer-row="' + esc(l.id) + '" style="display:flex;align-items:center;gap:6px;padding:5px 6px;border-radius:6px;cursor:pointer;margin-bottom:2px;' +
+      return '<div data-layer-row="' + esc(l.id) + '" style="display:flex;align-items:center;gap:5px;padding:5px 6px;border-radius:6px;cursor:pointer;margin-bottom:2px;' +
         (active ? 'background:rgba(79,140,255,0.15);border:1px solid #4f8cff;' : 'border:1px solid transparent;') + '">' +
         '<button data-layer-vis="' + esc(l.id) + '" title="Show/hide" style="background:transparent;border:0;cursor:pointer;font-size:12px;width:16px;color:' + (l.visible === false ? '#555' : '#9aa') + ';">' + (l.visible === false ? '◌' : '●') + '</button>' +
-        '<span style="width:12px;height:12px;border-radius:3px;flex:0 0 auto;background:' + esc(l.color) + ';border:1px solid rgba(255,255,255,0.3);"></span>' +
-        '<span style="flex:1;color:' + (active ? '#fff' : '#cbd5e1') + ';overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(l.name) + '</span>' +
+        '<button data-layer-color="' + esc(l.id) + '" title="Recolor" style="width:13px;height:13px;border-radius:3px;flex:0 0 auto;background:' + esc(l.color) + ';border:1px solid rgba(255,255,255,0.3);cursor:pointer;padding:0;"></button>' +
+        '<span data-layer-name="' + esc(l.id) + '" title="Double-click to rename" style="flex:1;color:' + (active ? '#fff' : '#cbd5e1') + ';overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(l.name) + '</span>' +
+        '<span style="font-size:9.5px;color:#64748b;">' + (l.weight || 2) + 'px</span>' +
+        ((S.doc.layers.length > 1) ? '<button data-layer-del="' + esc(l.id) + '" title="Delete layer (objects move to first layer)" style="background:transparent;border:0;color:#f87171;cursor:pointer;font-size:12px;width:14px;">✕</button>' : '') +
       '</div>';
     }).join('');
-    html += '<div style="margin-top:10px;font-size:10.5px;color:#64748b;line-height:1.4;">Click a layer to draw on it. Full layer editing + dimensions come next.</div>';
+    html += '<div style="margin-top:10px;font-size:10.5px;color:#64748b;line-height:1.4;">Click = draw on it · dbl-click name = rename · swatch = color · ✕ = delete.</div>';
     host.innerHTML = html;
+    host.querySelector('[data-layer-add]').onclick = function () {
+      pushUndo();
+      var n = S.doc.layers.length;
+      S.doc.layers.push({ id: uid('L'), name: 'Layer ' + (n + 1), color: '#2563eb', weight: 2, lineType: 'solid', visible: true, locked: false });
+      S.activeLayer = S.doc.layers[S.doc.layers.length - 1].id;
+      buildLayers();
+    };
     host.querySelectorAll('[data-layer-row]').forEach(function (r) {
       r.onclick = function (e) {
-        if (e.target.getAttribute && e.target.getAttribute('data-layer-vis')) return;
+        var t = e.target.getAttribute ? e.target : null;
+        if (t && (t.getAttribute('data-layer-vis') || t.getAttribute('data-layer-color') || t.getAttribute('data-layer-del'))) return;
         S.activeLayer = r.getAttribute('data-layer-row'); buildLayers();
       };
     });
     host.querySelectorAll('[data-layer-vis]').forEach(function (b) {
+      b.onclick = function (e) { e.stopPropagation(); var l = layerById(S.doc, b.getAttribute('data-layer-vis')); l.visible = (l.visible === false); buildLayers(); repaint(); };
+    });
+    host.querySelectorAll('[data-layer-name]').forEach(function (s) {
+      s.ondblclick = function (e) {
+        e.stopPropagation();
+        var l = layerById(S.doc, s.getAttribute('data-layer-name'));
+        var nm = window.prompt('Layer name:', l.name);
+        if (nm != null && nm.trim()) { pushUndo(); l.name = nm.trim().slice(0, 40); buildLayers(); }
+      };
+    });
+    host.querySelectorAll('[data-layer-color]').forEach(function (b) {
       b.onclick = function (e) {
         e.stopPropagation();
-        var l = layerById(S.doc, b.getAttribute('data-layer-vis'));
-        l.visible = (l.visible === false);
+        var l = layerById(S.doc, b.getAttribute('data-layer-color'));
+        var col = window.prompt('Layer color (hex, e.g. #1f2937):', l.color);
+        if (col && /^#?[0-9a-fA-F]{3,8}$/.test(col.trim())) {
+          pushUndo();
+          l.color = col.trim().charAt(0) === '#' ? col.trim() : '#' + col.trim();
+          // recolor existing entities on this layer
+          (S.doc.entities || []).forEach(function (en) { if (en.layer === l.id) en.color = l.color; });
+          buildLayers(); repaint();
+        }
+      };
+    });
+    host.querySelectorAll('[data-layer-del]').forEach(function (b) {
+      b.onclick = function (e) {
+        e.stopPropagation();
+        var id = b.getAttribute('data-layer-del');
+        if (S.doc.layers.length <= 1) return;
+        if (!window.confirm('Delete this layer? Its objects move to the first layer.')) return;
+        pushUndo();
+        var fallback = S.doc.layers.filter(function (l) { return l.id !== id; })[0];
+        (S.doc.entities || []).forEach(function (en) { if (en.layer === id) { en.layer = fallback.id; en.color = fallback.color; } });
+        S.doc.layers = S.doc.layers.filter(function (l) { return l.id !== id; });
+        if (S.activeLayer === id) S.activeLayer = fallback.id;
         buildLayers(); repaint();
       };
     });
@@ -477,7 +540,13 @@
       var pt = resolveSnap(raw, vp);
       if (S.draft && S.draft._anchor) pt = applyOrtho(S.draft._anchor, pt);
 
-      if (S.tool === 'select') { selectAt(raw); return; }
+      if (S.tool === 'select') {
+        selectAt(raw);
+        // Arm a move-drag if we landed on an entity (commit to history on
+        // first actual movement, so a plain click just selects).
+        if (S.selectedId) S.moveDrag = { last: raw, pushed: false };
+        return;
+      }
       if (S.tool === 'text') { placeText(pt, vp); return; }
       handleDrawClick(pt, vp);
     };
@@ -487,6 +556,18 @@
         S.view.tx = S.panning.tx + (lp.x - S.panning.sx);
         S.view.ty = S.panning.ty + (lp.y - S.panning.sy);
         repaint();
+        return;
+      }
+      // Move-drag the selected entity (select tool, button held).
+      if (S.moveDrag && (e.buttons & 1)) {
+        var ent = selectedEntity();
+        if (ent) {
+          if (!S.moveDrag.pushed) { pushUndo(); S.moveDrag.pushed = true; }
+          var ds = toSheet(lp.x, lp.y);
+          translateEntity(ent, ds.x - S.moveDrag.last.x, ds.y - S.moveDrag.last.y);
+          S.moveDrag.last = ds;
+          repaint();
+        }
         return;
       }
       var raw = toSheet(lp.x, lp.y);
@@ -499,6 +580,7 @@
     };
     c.onmouseup = function () {
       if (S.panning) { S.panning = null; S.canvas.style.cursor = (S.tool === 'pan') ? 'grab' : (S.tool === 'select' ? 'default' : 'crosshair'); }
+      S.moveDrag = null;
     };
     c.ondblclick = function () {
       if (S.tool === 'polyline' && S.draft) commitPolyline();
@@ -522,7 +604,9 @@
         else S.overlay.querySelector('#p86-sheet-cancel').click();
       }
       else if (e.key === 'Enter') { if (S.tool === 'polyline' && S.draft) commitPolyline(); }
-      else if ((e.key === 'z' || e.key === 'Z') && (e.ctrlKey || e.metaKey)) { e.preventDefault(); undo(); }
+      else if ((e.key === 'z' || e.key === 'Z') && (e.ctrlKey || e.metaKey)) { e.preventDefault(); if (e.shiftKey) redo(); else undo(); }
+      else if ((e.key === 'y' || e.key === 'Y') && (e.ctrlKey || e.metaKey)) { e.preventDefault(); redo(); }
+      else if ((e.key === 'd' || e.key === 'D') && (e.ctrlKey || e.metaKey)) { e.preventDefault(); duplicateSelected(); }
       else if ((e.key === 'Delete' || e.key === 'Backspace') && S.selectedId) { deleteSelected(); }
       else if (e.key === 'l' || e.key === 'L') setTool('line');
       else if (e.key === 'r' || e.key === 'R') setTool('rect');
@@ -574,7 +658,7 @@
       } else {
         S.draft.points.push({ x: pt.x, y: pt.y });
         S.draft._anchor = { x: pt.x, y: pt.y };
-        if (S.draft.points.length >= 3) { var a = S.draft; delete a._anchor; S.doc.entities.push(a); S.draft = null; }
+        if (S.draft.points.length >= 3) { var a = S.draft; delete a._anchor; commitEntity(a); S.draft = null; }
       }
       repaint(); return;
     }
@@ -620,11 +704,11 @@
     } else { d.endX = pt.x; d.endY = pt.y; }
     if (Math.abs(d.endX - d.startX) < 0.5 && Math.abs(d.endY - d.startY) < 0.5) { S.draft = null; return; }
     delete d._anchor; delete d._circle;
-    S.doc.entities.push(d); S.draft = null;
+    commitEntity(d); S.draft = null;
   }
   function commitPolyline() {
     var d = S.draft;
-    if (d && d.points && d.points.length >= 2) { delete d._anchor; S.doc.entities.push(d); }
+    if (d && d.points && d.points.length >= 2) { delete d._anchor; commitEntity(d); }
     S.draft = null; repaint();
   }
   function finalizeLeader(pt, vp) {
@@ -632,6 +716,7 @@
     d.endX = pt.x; d.endY = pt.y;
     if (Math.abs(d.endX - d.startX) < 0.5 && Math.abs(d.endY - d.startY) < 0.5) { S.draft = null; return; }
     delete d._anchor;
+    pushUndo();
     S.doc.entities.push(d);          // the arrow
     S.draft = null;
     var txt = window.prompt('Leader text:');   // styled input is a polish follow-up
@@ -647,7 +732,7 @@
     if (!txt) return;
     var e = newEntity('text', vp);
     e.x = pt.x; e.y = pt.y; e.text = txt; e.fontPx = Math.round((vp && vp.scale ? vp.scale.pixelsPerInch : 2.5) * 9);
-    S.doc.entities.push(e); repaint();
+    commitEntity(e); repaint();
   }
   function selectAt(raw) {
     var hit = null;
@@ -670,12 +755,66 @@
     return null;
   }
   function deleteSelected() {
+    if (!S.selectedId) return;
+    pushUndo();
     S.doc.entities = S.doc.entities.filter(function (e) { return e.id !== S.selectedId; });
     S.selectedId = null; repaint();
   }
+
+  // ── History (undo / redo) ───────────────────────────────────────
+  function snapshot() { return JSON.stringify({ entities: S.doc.entities, layers: S.doc.layers }); }
+  function pushUndo() { S._undo.push(snapshot()); if (S._undo.length > 60) S._undo.shift(); S._redo.length = 0; }
+  function commitEntity(e) { pushUndo(); S.doc.entities.push(e); }
+  function restoreSnap(json) {
+    var o = JSON.parse(json);
+    S.doc.entities = o.entities; S.doc.layers = o.layers;
+    S.selectedId = null; buildLayers(); repaint();
+  }
   function undo() {
     if (S.draft) { S.draft = null; repaint(); return; }
-    S.doc.entities.pop(); S.selectedId = null; repaint();
+    if (!S._undo.length) return;
+    S._redo.push(snapshot()); restoreSnap(S._undo.pop());
+  }
+  function redo() {
+    if (!S._redo.length) return;
+    S._undo.push(snapshot()); restoreSnap(S._redo.pop());
+  }
+
+  // ── Edit operations (operate on the current selection) ──────────
+  function selectedEntity() { return S.doc.entities.filter(function (e) { return e.id === S.selectedId; })[0]; }
+  function translateEntity(e, dx, dy) {
+    if (e.points) e.points.forEach(function (p) { p.x += dx; p.y += dy; });
+    if (e.startX != null) { e.startX += dx; e.endX += dx; e.startY += dy; e.endY += dy; }
+    if (e.x != null) { e.x += dx; e.y += dy; }
+  }
+  function transformEntity(e, fn) {
+    if (e.points) e.points = e.points.map(function (p) { return fn(p); });
+    if (e.startX != null) {
+      var a = fn({ x: e.startX, y: e.startY }), b = fn({ x: e.endX, y: e.endY });
+      e.startX = a.x; e.startY = a.y; e.endX = b.x; e.endY = b.y;
+    }
+    if (e.x != null) { var p = fn({ x: e.x, y: e.y }); e.x = p.x; e.y = p.y; }
+  }
+  function rotate90() {
+    var e = selectedEntity(); if (!e) return;
+    pushUndo();
+    var bb = entBBox(e), cx = bb.x + bb.w / 2, cy = bb.y + bb.h / 2;
+    transformEntity(e, function (p) { return { x: cx - (p.y - cy), y: cy + (p.x - cx) }; });
+    repaint();
+  }
+  function mirror(horiz) {
+    var e = selectedEntity(); if (!e) return;
+    pushUndo();
+    var bb = entBBox(e), cx = bb.x + bb.w / 2, cy = bb.y + bb.h / 2;
+    transformEntity(e, function (p) { return { x: horiz ? (2 * cx - p.x) : p.x, y: horiz ? p.y : (2 * cy - p.y) }; });
+    repaint();
+  }
+  function duplicateSelected() {
+    var e = selectedEntity(); if (!e) return;
+    pushUndo();
+    var copy = JSON.parse(JSON.stringify(e)); copy.id = uid(copy.tool);
+    translateEntity(copy, 14, 14);
+    S.doc.entities.push(copy); S.selectedId = copy.id; repaint();
   }
 
   // ── Render ──────────────────────────────────────────────────────
