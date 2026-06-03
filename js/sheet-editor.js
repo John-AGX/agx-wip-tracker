@@ -333,6 +333,13 @@
         '<div style="flex:1;background:#11151c;border:1px solid #2a2a3a;border-radius:10px;overflow:hidden;position:relative;min-width:0;">' +
           '<canvas id="p86-sheet-canvas" style="display:block;width:100%;height:100%;cursor:crosshair;"></canvas>' +
           '<div id="p86-sheet-picker" style="display:none;position:absolute;left:10px;top:10px;gap:4px;flex-wrap:wrap;max-width:60%;background:rgba(15,15,30,0.95);border:1px solid #3a3a4a;border-radius:8px;padding:6px;box-shadow:0 6px 20px rgba(0,0,0,0.5);"></div>' +
+          // Dynamic input — type exact length (+ angle) after the first click.
+          '<div id="p86-sheet-dyn" style="display:none;position:absolute;align-items:center;gap:4px;background:rgba(15,15,30,0.97);border:1px solid #4f8cff;border-radius:6px;padding:4px 6px;box-shadow:0 4px 14px rgba(0,0,0,0.55);z-index:20;">' +
+            '<span style="font-size:10px;color:#9aa;font-weight:700;">LEN</span>' +
+            '<input data-dyn-len type="text" autocomplete="off" placeholder="" style="width:78px;background:#1a1a2e;color:#fff;border:1px solid #444;border-radius:4px;padding:3px 6px;font-size:12px;font-weight:600;outline:none;" />' +
+            '<span style="font-size:10px;color:#9aa;font-weight:700;">∠</span>' +
+            '<input data-dyn-ang type="text" autocomplete="off" placeholder="" style="width:52px;background:#1a1a2e;color:#fff;border:1px solid #444;border-radius:4px;padding:3px 6px;font-size:12px;font-weight:600;outline:none;" />' +
+          '</div>' +
           '<div id="p86-sheet-hint" style="position:absolute;left:12px;bottom:10px;color:#64748b;font-size:11px;pointer-events:none;"></div>' +
         '</div>' +
         // right: layers
@@ -479,6 +486,7 @@
   }
   function setTool(t) {
     if (S.draft) S.draft = null;             // cancel any in-progress draft
+    hideDyn();
     S.tool = t;
     S.canvas.style.cursor = (t === 'pan') ? 'grab' : (t === 'select' ? 'default' : 'crosshair');
     refreshToolbar(); renderPicker(); updateHint(); repaint();
@@ -898,6 +906,7 @@
       if (S.draft && S.draft._anchor) pt = applyOrtho(S.draft._anchor, pt);
       S.hover = pt; S.snap = pt; S.hoverVp = vp;
       updateReadout(pt, vp);
+      if (dynApplies()) updateDynLive();
       repaint();
     };
     c.onmouseup = function () {
@@ -919,10 +928,14 @@
       repaint();
     };
     S.overlay.onkeydown = function (e) {
+      // Don't fire canvas shortcuts while typing in a field (dynamic
+      // input, titleblock modal, etc.) — those inputs handle their own keys.
+      var tn = e.target && e.target.tagName;
+      if (tn === 'INPUT' || tn === 'TEXTAREA' || tn === 'SELECT') return;
       if (e.key === 'Shift') { S.shiftDown = true; }
       else if (e.key === ' ') { S.spaceDown = true; S.canvas.style.cursor = 'grab'; }
       else if (e.key === 'Escape') {
-        if (S.draft) { S.draft = null; repaint(); }
+        if (S.draft) { S.draft = null; hideDyn(); repaint(); }
         else S.overlay.querySelector('#p86-sheet-cancel').click();
       }
       else if (e.key === 'Enter') { if ((S.tool === 'polyline' || S.tool === 'hatch') && S.draft) commitPolyline(); }
@@ -940,6 +953,18 @@
       if (e.key === 'Shift') S.shiftDown = false;
       else if (e.key === ' ') { S.spaceDown = false; S.canvas.style.cursor = (S.tool === 'pan') ? 'grab' : (S.tool === 'select' ? 'default' : 'crosshair'); }
     };
+    // Dynamic-input keys: Enter commits the segment at the typed length/
+    // angle; Esc cancels the draft. (stopPropagation so the canvas
+    // shortcuts above never see these keystrokes.)
+    var dyn = dynEl();
+    if (dyn) {
+      dyn.querySelectorAll('input').forEach(function (inp) {
+        inp.onkeydown = function (e) {
+          if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); commitDyn(); }
+          else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); S.draft = null; hideDyn(); repaint(); S.overlay.focus(); }
+        };
+      });
+    }
   }
 
   function newEntity(tool, vp) {
@@ -1020,6 +1045,7 @@
         e.startX = pt.x; e.startY = pt.y; e.endX = pt.x; e.endY = pt.y;
         e._anchor = { x: pt.x, y: pt.y }; e._circle = (t === 'circle');
         S.draft = e;
+        if (t === 'line') showDyn();
       } else {
         finalizeTwoPoint(pt);
       }
@@ -1029,6 +1055,7 @@
         pe.points = [{ x: pt.x, y: pt.y }];
         pe._anchor = { x: pt.x, y: pt.y };
         S.draft = pe;
+        showDyn();
       } else {
         S.draft.points.push({ x: pt.x, y: pt.y });
         S.draft._anchor = { x: pt.x, y: pt.y };
@@ -1044,14 +1071,86 @@
       var cx = d.startX, cy = d.startY;
       d.startX = cx - r; d.startY = cy - r; d.endX = cx + r; d.endY = cy + r;
     } else { d.endX = pt.x; d.endY = pt.y; }
-    if (Math.abs(d.endX - d.startX) < 0.5 && Math.abs(d.endY - d.startY) < 0.5) { S.draft = null; return; }
+    if (Math.abs(d.endX - d.startX) < 0.5 && Math.abs(d.endY - d.startY) < 0.5) { S.draft = null; hideDyn(); return; }
     delete d._anchor; delete d._circle;
-    commitEntity(d); S.draft = null;
+    commitEntity(d); S.draft = null; hideDyn();
   }
   function commitPolyline() {
     var d = S.draft;
     if (d && d.points && d.points.length >= 2) { delete d._anchor; commitEntity(d); }
-    S.draft = null; repaint();
+    S.draft = null; hideDyn(); repaint();
+  }
+
+  // ── Dynamic input (direct distance entry) ───────────────────────
+  // Shown for line/polyline once the first point is placed: type an exact
+  // length (e.g. 10', 10' 6", 126") and optional angle, Enter to commit.
+  function dynEl() { return S.overlay ? S.overlay.querySelector('#p86-sheet-dyn') : null; }
+  function dynApplies() { return S.draft && S.draft._anchor && (S.tool === 'line' || S.tool === 'polyline'); }
+  function clearDynFields() {
+    var d = dynEl(); if (!d) return;
+    var li = d.querySelector('[data-dyn-len]'), ai = d.querySelector('[data-dyn-ang]');
+    if (li) li.value = ''; if (ai) ai.value = '';
+  }
+  function showDyn() {
+    var d = dynEl(); if (!d) return;
+    d.style.display = 'flex'; clearDynFields(); positionDyn();
+    var li = d.querySelector('[data-dyn-len]'); if (li) setTimeout(function () { try { li.focus(); } catch (e) {} }, 0);
+  }
+  function hideDyn() { var d = dynEl(); if (d) d.style.display = 'none'; }
+  function positionDyn() {
+    var d = dynEl(); if (!d || d.style.display === 'none' || !S.draft || !S.draft._anchor) return;
+    var ref = S.hover || S.draft._anchor;
+    var sp = toScreen(ref.x, ref.y);   // canvas px ≈ container CSS px (canvas sized 1:1 to container)
+    d.style.left = Math.max(4, sp.x + 18) + 'px';
+    d.style.top = Math.max(4, sp.y + 14) + 'px';
+  }
+  function updateDynLive() {
+    var d = dynEl(); if (!d || !dynApplies()) { hideDyn(); return; }
+    if (d.style.display === 'none') showDyn();
+    var a = S.draft._anchor, vp = vpAt(a) || S.hoverVp;
+    var h = S.hover ? applyOrtho(a, S.hover) : a;
+    var ppi = (vp && vp.scale && vp.scale.pixelsPerInch) ? vp.scale.pixelsPerInch : 1;
+    var li = d.querySelector('[data-dyn-len]'), ai = d.querySelector('[data-dyn-ang]');
+    if (li) li.placeholder = fmtFeet(Math.hypot(h.x - a.x, h.y - a.y) / ppi);
+    if (ai) ai.placeholder = Math.round(Math.atan2(-(h.y - a.y), h.x - a.x) * 180 / Math.PI) + '°';
+    positionDyn();
+  }
+  // Commit the current segment at the typed (or live) length + angle.
+  function commitDyn() {
+    var d = dynEl(); if (!d || !S.draft || !S.draft._anchor) return;
+    var dr = S.draft, a = dr._anchor;
+    var lenStr = (d.querySelector('[data-dyn-len]').value || '').trim();
+    var angStr = (d.querySelector('[data-dyn-ang]').value || '').trim();
+    var vp = vpAt(a) || S.hoverVp || (S.doc.viewports && S.doc.viewports[0]);
+    var ppi = (vp && vp.scale && vp.scale.pixelsPerInch) ? vp.scale.pixelsPerInch : 1;
+    // Direction: typed angle wins; else current (ortho-aware) cursor heading.
+    var target = S.hover ? applyOrtho(a, S.hover) : { x: a.x + 1, y: a.y };
+    var dirDeg = Math.atan2(-(target.y - a.y), target.x - a.x) * 180 / Math.PI;
+    if (angStr !== '' && isFinite(parseFloat(angStr))) dirDeg = parseFloat(angStr);
+    // Length: typed (parsed) wins; else live cursor distance.
+    var lenIn;
+    if (lenStr !== '') {
+      var p = prims().parseMeasurement ? prims().parseMeasurement(lenStr, 'ft') : null;
+      lenIn = p ? p.inches : (isFinite(parseFloat(lenStr)) ? parseFloat(lenStr) * 12 : null);
+      if (lenIn == null) return;   // unparseable — leave the draft open
+    } else {
+      lenIn = Math.hypot(target.x - a.x, target.y - a.y) / ppi;
+    }
+    var lenPx = lenIn * ppi, rad = dirDeg * Math.PI / 180;
+    var ex = a.x + lenPx * Math.cos(rad), ey = a.y - lenPx * Math.sin(rad);
+    if (dr.tool === 'polyline') {
+      dr.points.push({ x: ex, y: ey });
+      dr._anchor = { x: ex, y: ey };
+      clearDynFields();
+      var li = d.querySelector('[data-dyn-len]'); if (li) li.focus();
+      repaint();
+      return;
+    }
+    // line (single segment)
+    dr.endX = ex; dr.endY = ey;
+    delete dr._anchor; delete dr._circle;
+    commitEntity(dr); S.draft = null;
+    hideDyn(); repaint();
   }
   function finalizeLeader(pt, vp) {
     var d = S.draft;
