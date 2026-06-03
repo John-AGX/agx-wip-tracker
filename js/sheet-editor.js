@@ -82,6 +82,13 @@
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
   }
   function uid(p) { return (p || 'e') + '_' + Math.random().toString(36).slice(2, 9); }
+  // Normalize any stored color to #rrggbb for <input type="color">.
+  function toHex6(c) {
+    var h = String(c || '#000000').replace('#', '');
+    if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+    if (!/^[0-9a-fA-F]{6}$/.test(h)) return '#000000';
+    return '#' + h.toLowerCase();
+  }
 
   // ── Editor defaults (E5) — persisted to localStorage ────────────
   // New drawings adopt scaleLabel + sheetSize + dimColor; unit/grid/snap
@@ -872,11 +879,11 @@
         '<select data-prop-layer style="width:100%;box-sizing:border-box;background:#1a1a2e;color:#fff;border:1px solid #444;border-radius:5px;padding:4px 6px;font-size:11px;">' +
           (S.doc.layers || []).map(function (l) { return '<option value="' + esc(l.id) + '"' + (l.id === selEnt.layer ? ' selected' : '') + '>' + esc(l.name) + '</option>'; }).join('') +
         '</select>' +
-        '<div style="display:flex;gap:8px;margin-top:6px;font-size:10.5px;color:#9aa;">' +
-          '<span>Color <span style="display:inline-block;width:10px;height:10px;border-radius:2px;vertical-align:middle;background:' + esc(selEnt.color || '#888') + ';border:1px solid rgba(255,255,255,0.3);"></span></span>' +
-          '<span>Weight ' + (selEnt.lineWidth || 2) + 'px</span>' +
+        '<div style="display:flex;align-items:center;gap:12px;margin-top:7px;">' +
+          '<label style="font-size:10.5px;color:#9aa;display:flex;align-items:center;gap:5px;">Color <input type="color" data-prop-color value="' + esc(toHex6(selEnt.color)) + '" style="width:30px;height:22px;border:0;background:transparent;cursor:pointer;padding:0;" /></label>' +
+          '<label style="font-size:10.5px;color:#9aa;display:flex;align-items:center;gap:5px;">Weight <input type="number" data-prop-weight value="' + (selEnt.lineWidth || 2) + '" min="1" max="24" step="1" style="width:46px;background:#1a1a2e;color:#fff;border:1px solid #444;border-radius:5px;padding:3px 5px;font-size:11px;" /></label>' +
         '</div>' +
-        '<div style="margin-top:5px;font-size:9.5px;color:#64748b;">Drag to move · ⟳ rotate · ⇆⇅ mirror · Ctrl+D dup</div>' +
+        '<div style="margin-top:6px;font-size:9.5px;color:#64748b;">Drag body to move · drag grips to reshape · ⟳ rotate · ⇆⇅ mirror · Ctrl+D dup</div>' +
       '</div>';
     }
     html += '<div style="font-weight:700;color:#fff;margin-bottom:6px;">Sheet</div>';
@@ -916,10 +923,11 @@
         '<button data-layer-color="' + esc(l.id) + '" title="Recolor" style="width:13px;height:13px;border-radius:3px;flex:0 0 auto;background:' + esc(l.color) + ';border:1px solid rgba(255,255,255,0.3);cursor:pointer;padding:0;"></button>' +
         '<span data-layer-name="' + esc(l.id) + '" title="Double-click to rename" style="flex:1;color:' + (active ? '#fff' : '#cbd5e1') + ';overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(l.name) + '</span>' +
         '<span style="font-size:9.5px;color:#64748b;">' + (l.weight || 2) + 'px</span>' +
+        '<button data-layer-lock="' + esc(l.id) + '" title="' + (l.locked ? 'Locked — click to unlock' : 'Unlocked — click to lock') + '" style="background:transparent;border:0;cursor:pointer;font-size:11px;width:16px;color:' + (l.locked ? '#fbbf24' : '#64748b') + ';">' + (l.locked ? '🔒' : '🔓') + '</button>' +
         ((S.doc.layers.length > 1) ? '<button data-layer-del="' + esc(l.id) + '" title="Delete layer (objects move to first layer)" style="background:transparent;border:0;color:#f87171;cursor:pointer;font-size:12px;width:14px;">✕</button>' : '') +
       '</div>';
     }).join('');
-    html += '<div style="margin-top:10px;font-size:10.5px;color:#64748b;line-height:1.4;">Click = draw on it · dbl-click name = rename · swatch = color · ✕ = delete.</div>';
+    html += '<div style="margin-top:10px;font-size:10.5px;color:#64748b;line-height:1.4;">Click = draw on it · dbl-click name = rename · swatch = color · 🔒 = lock · ✕ = delete.</div>';
     host.innerHTML = html;
     // Properties wiring (selected object)
     var propLayer = host.querySelector('[data-prop-layer]');
@@ -931,6 +939,10 @@
       if (e.tool !== 'measure') { e.color = l.color; e.lineWidth = l.weight || e.lineWidth; }
       buildLayers(); repaint();
     };
+    var propColor = host.querySelector('[data-prop-color]');
+    if (propColor) propColor.onchange = function () { var e = selectedEntity(); if (!e) return; pushUndo(); e.color = propColor.value; repaint(); };
+    var propWeight = host.querySelector('[data-prop-weight]');
+    if (propWeight) propWeight.onchange = function () { var e = selectedEntity(); if (!e) return; pushUndo(); e.lineWidth = Math.max(1, Math.min(24, parseInt(propWeight.value, 10) || 2)); repaint(); };
     var propDel = host.querySelector('[data-prop-del]');
     if (propDel) propDel.onclick = deleteSelected;
     // Sheet + Views wiring
@@ -977,6 +989,15 @@
     });
     host.querySelectorAll('[data-layer-vis]').forEach(function (b) {
       b.onclick = function (e) { e.stopPropagation(); var l = layerById(S.doc, b.getAttribute('data-layer-vis')); l.visible = (l.visible === false); buildLayers(); repaint(); };
+    });
+    host.querySelectorAll('[data-layer-lock]').forEach(function (b) {
+      b.onclick = function (e) {
+        e.stopPropagation();
+        var l = layerById(S.doc, b.getAttribute('data-layer-lock'));
+        l.locked = !l.locked;
+        if (l.locked && S.selectedId) { var se = selectedEntity(); if (se && se.layer === l.id) S.selectedId = null; }
+        buildLayers(); repaint();
+      };
     });
     host.querySelectorAll('[data-layer-name]').forEach(function (s) {
       s.ondblclick = function (e) {
@@ -1196,7 +1217,11 @@
         if (S.selectedId) S.moveDrag = { last: raw, pushed: false };
         return;
       }
-      if (S.tool === 'text') { placeText(pt, vp); return; }
+      if (S.tool === 'text') {
+        var tl = layerById(S.doc, S.activeLayer);
+        if (tl && tl.locked) { setHint('Layer "' + tl.name + '" is locked — unlock it (🔓) to add text.'); return; }
+        placeText(pt, vp); return;
+      }
       handleDrawClick(pt, vp);
     };
     c.onmousemove = function (e) {
@@ -1334,6 +1359,9 @@
     if (t === 'trim') { trimAt(pt, vp); return; }
     if (t === 'extend') { extendAt(pt, vp); return; }
     if (t === 'fillet') { filletClick(pt, vp); return; }
+    // Block drawing onto a locked layer.
+    var actL = layerById(S.doc, S.activeLayer);
+    if (actL && actL.locked) { setHint('Layer "' + actL.name + '" is locked — unlock it (🔓) to draw.'); return; }
     // Dimension — a two-point 'measure' entity; its label is computed
     // live from the viewport scale in renderSheet (auto-updates).
     if (t === 'dim') {
@@ -1518,6 +1546,27 @@
     commitEntity(dr); S.draft = null;
     hideDyn(); repaint();
   }
+  // Styled single-line text input (replaces window.prompt). cb(value|null).
+  function promptText(title, cb, initial) {
+    var ov = document.createElement('div');
+    ov.style.cssText = 'position:fixed;inset:0;z-index:5400;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;padding:20px;';
+    var box = document.createElement('div');
+    box.style.cssText = 'background:#0f0f1e;border:1px solid #353545;border-radius:12px;padding:18px 20px;max-width:380px;width:100%;color:#e6e6e6;box-shadow:0 16px 48px rgba(0,0,0,0.6);';
+    box.innerHTML = '<div style="font-size:14px;font-weight:700;color:#fff;margin-bottom:10px;">' + esc(title) + '</div>' +
+      '<input data-pt-input value="' + esc(initial || '') + '" style="width:100%;box-sizing:border-box;background:#1a1a2e;color:#fff;border:1px solid #444;border-radius:6px;padding:8px 10px;font-size:13px;outline:none;" />' +
+      '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;">' +
+        '<button data-pt-cancel style="padding:8px 16px;background:rgba(255,255,255,0.06);color:#ddd;border:1px solid #444;border-radius:6px;cursor:pointer;font-weight:600;">Cancel</button>' +
+        '<button data-pt-ok style="padding:8px 16px;background:#4f8cff;color:#fff;border:1px solid #4f8cff;border-radius:6px;cursor:pointer;font-weight:700;">OK</button>' +
+      '</div>';
+    ov.appendChild(box); document.body.appendChild(ov);
+    var input = box.querySelector('[data-pt-input]');
+    function done(val) { if (ov.parentNode) ov.parentNode.removeChild(ov); cb(val); }
+    box.querySelector('[data-pt-cancel]').onclick = function () { done(null); };
+    box.querySelector('[data-pt-ok]').onclick = function () { done(input.value); };
+    input.onkeydown = function (e) { if (e.key === 'Enter') { e.preventDefault(); done(input.value); } else if (e.key === 'Escape') { e.preventDefault(); done(null); } };
+    setTimeout(function () { try { input.focus(); input.select(); } catch (e) {} }, 0);
+    ov.addEventListener('click', function (e) { if (e.target === ov) done(null); });
+  }
   function finalizeLeader(pt, vp) {
     var d = S.draft;
     d.endX = pt.x; d.endY = pt.y;
@@ -1526,25 +1575,31 @@
     pushUndo();
     S.doc.entities.push(d);          // the arrow
     S.draft = null;
-    var txt = window.prompt('Leader text:');   // styled input is a polish follow-up
-    if (txt) {
-      var te = newEntity('text', vp);
-      te.x = pt.x + 6; te.y = pt.y - (vp && vp.scale ? vp.scale.pixelsPerInch * 9 : 22);
-      te.text = txt; te.fontPx = Math.round((vp && vp.scale ? vp.scale.pixelsPerInch : 2.5) * 9);
-      S.doc.entities.push(te);
-    }
+    var ex = pt.x, ey = pt.y, ppi = (vp && vp.scale ? vp.scale.pixelsPerInch : 2.5);
+    promptText('Leader text', function (txt) {
+      if (txt) {
+        var te = newEntity('text', vp);
+        te.x = ex + 6; te.y = ey - ppi * 9;
+        te.text = txt; te.fontPx = Math.round(ppi * 9);
+        S.doc.entities.push(te); repaint();
+      }
+    });
+    repaint();
   }
   function placeText(pt, vp) {
-    var txt = window.prompt('Text:');       // D1: simple; styled input is a polish follow-up
-    if (!txt) return;
-    var e = newEntity('text', vp);
-    e.x = pt.x; e.y = pt.y; e.text = txt; e.fontPx = Math.round((vp && vp.scale ? vp.scale.pixelsPerInch : 2.5) * 9);
-    commitEntity(e); repaint();
+    promptText('Text', function (txt) {
+      if (!txt) return;
+      var e = newEntity('text', vp);
+      e.x = pt.x; e.y = pt.y; e.text = txt; e.fontPx = Math.round((vp && vp.scale ? vp.scale.pixelsPerInch : 2.5) * 9);
+      commitEntity(e); repaint();
+    });
   }
   function selectAt(raw) {
     var hit = null;
     for (var i = S.doc.entities.length - 1; i >= 0; i--) {
       var e = S.doc.entities[i];
+      var lyr = layerById(S.doc, e.layer);          // skip hidden + locked layers
+      if (lyr && (lyr.visible === false || lyr.locked)) continue;
       var bb = entBBox(e);
       var slop = 8 / S.view.scale;
       if (bb && raw.x >= bb.x - slop && raw.x <= bb.x + bb.w + slop && raw.y >= bb.y - slop && raw.y <= bb.y + bb.h + slop) { hit = e.id; break; }
@@ -1777,6 +1832,8 @@
     (S.doc.entities || []).forEach(function (e) {
       if (e.tool !== 'line' || e.startX == null) return;
       if (vp && e.viewport !== vp.id) return;
+      var ly = layerById(S.doc, e.layer);
+      if (ly && (ly.visible === false || ly.locked)) return;
       var info = ptSegInfo(pt.x, pt.y, e.startX, e.startY, e.endX, e.endY);
       if (info.dist < bestD && info.t >= -0.03 && info.t <= 1.03) { bestD = info.dist; best = { entity: e, t: Math.max(0, Math.min(1, info.t)) }; }
     });
