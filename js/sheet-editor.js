@@ -631,15 +631,33 @@
     window.p86Api.org.branding().then(function (r) {
       if (!S) return;
       S._orgName = (r && r.name) || '';
+      var br = (r && r.branding) || {};
+      // Logo library: prefer branding.logos[]; fall back to a single logo_url.
+      S._orgLogos = (Array.isArray(br.logos) ? br.logos : [])
+        .filter(function (l) { return l && l.url; })
+        .map(function (l) { return { url: l.url, label: l.label || '' }; });
+      if (!S._orgLogos.length && br.logo_url) S._orgLogos = [{ url: br.logo_url, label: 'Primary' }];
+      S._orgPrimaryUrl = br.logo_url || (S._orgLogos[0] && S._orgLogos[0].url) || '';
       repaint();
-      if (r && r.branding && r.branding.logo_url) loadOrgLogo();
+      if (S._orgLogos.length) loadChosenLogo();
     }).catch(function () { /* no org branding — titleblock just omits it */ });
   }
-  function loadOrgLogo() {
+  // Which logo this sheet stamps: titleblock.logoUrl picks one from the org
+  // library; if unset/missing, fall back to the org Primary (proxy default).
+  function chosenLogoIndex() {
+    var want = S && S.doc && S.doc.titleblock && S.doc.titleblock.logoUrl;
+    if (want && S._orgLogos) {
+      for (var i = 0; i < S._orgLogos.length; i++) if (S._orgLogos[i].url === want) return i;
+    }
+    return null; // null → Primary (no ?i on the proxy)
+  }
+  function loadChosenLogo() {
+    if (!S) return;
+    var idx = chosenLogoIndex();
     var token = (window.p86Auth && window.p86Auth.getToken && window.p86Auth.getToken()) || null;
     if (!token) { try { token = localStorage.getItem('p86-auth-token'); } catch (e) {} }
     var headers = {}; if (token) headers['Authorization'] = 'Bearer ' + token;
-    fetch('/api/org/logo', { headers: headers, credentials: 'same-origin' })
+    fetch('/api/org/logo' + (idx != null ? ('?i=' + idx) : ''), { headers: headers, credentials: 'same-origin' })
       .then(function (resp) { if (!resp.ok) throw new Error('no logo'); return resp.blob(); })
       .then(function (blob) {
         var url = URL.createObjectURL(blob);
@@ -651,8 +669,10 @@
         img.onerror = function () { try { URL.revokeObjectURL(url); } catch (e) {} };
         img.src = url;
       })
-      .catch(function () { /* logo optional */ });
+      .catch(function () { if (S) { S._logo = null; repaint(); } });
   }
+  // Back-compat alias (older callers).
+  function loadOrgLogo() { loadChosenLogo(); }
 
   function close() {
     if (!S) return;
@@ -846,21 +866,56 @@
       '<label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#cbd5e1;margin-top:14px;cursor:pointer;">' +
         '<input type="checkbox" data-tb-showlogo ' + (tb.showLogo !== false ? 'checked' : '') + ' style="width:15px;height:15px;cursor:pointer;" /> Show company logo in titleblock' +
       '</label>' +
-      '<div style="font-size:10.5px;color:#64748b;margin-top:5px;line-height:1.5;">Logo &amp; company name come from your org <b style="color:#9aa;">Branding kit</b> (Admin → Organization → Branding). ' +
-        (S && S._logo ? '<span style="color:#34d399;">✓ Logo loaded.</span>' : 'No logo found — add one there and it appears here.') + '</div>' +
+      '<div data-tb-logopick style="margin-top:10px;"></div>' +
+      '<div style="font-size:10.5px;color:#64748b;margin-top:6px;line-height:1.5;">Logos &amp; company name come from your org <b style="color:#9aa;">Branding kit</b> (Admin → Organization → Branding).</div>' +
       '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px;">' +
         '<button data-tb-cancel style="padding:8px 16px;background:rgba(255,255,255,0.06);color:#ddd;border:1px solid #444;border-radius:6px;cursor:pointer;font-weight:600;">Cancel</button>' +
         '<button data-tb-save style="padding:8px 16px;background:#4f8cff;color:#fff;border:1px solid #4f8cff;border-radius:6px;cursor:pointer;font-weight:700;">Save</button>' +
       '</div>';
     ov.appendChild(box); document.body.appendChild(ov);
     function close() { if (ov.parentNode) ov.parentNode.removeChild(ov); }
+
+    // Logo picker — choose WHICH org logo stamps this sheet ('' = org Primary).
+    var pickedLogo = tb.logoUrl || '';
+    var logos = (S && S._orgLogos) || [];
+    var primaryUrl = (S && S._orgPrimaryUrl) || '';
+    var pickHost = box.querySelector('[data-tb-logopick]');
+    function renderPicker() {
+      if (!pickHost) return;
+      if (!logos.length) { pickHost.innerHTML = '<div style="font-size:10.5px;color:#64748b;">No logos in your Branding kit yet.</div>'; return; }
+      function card(url, label, isPrimary, key) {
+        var sel = (key === pickedLogo);
+        return '<button type="button" data-pick="' + esc(key) + '" title="' + esc(label || (isPrimary ? 'Primary' : '')) + '" ' +
+          'style="flex:0 0 auto;width:84px;border:2px solid ' + (sel ? '#4f8cff' : '#333') + ';border-radius:8px;padding:5px;background:' + (sel ? 'rgba(79,140,255,0.12)' : '#161625') + ';cursor:pointer;text-align:center;">' +
+          '<div style="background:#fff;border-radius:4px;height:42px;display:flex;align-items:center;justify-content:center;position:relative;">' +
+            (isPrimary ? '<span style="position:absolute;top:1px;right:2px;font-size:10px;">⭐</span>' : '') +
+            (url ? '<img src="' + esc(url) + '" alt="" style="max-height:34px;max-width:72px;" />' : '<span style="font-size:16px;">★</span>') +
+          '</div>' +
+          '<div style="font-size:9.5px;color:' + (sel ? '#9ec2ff' : '#9aa') + ';margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(label || (isPrimary ? 'Default' : 'Logo')) + '</div>' +
+        '</button>';
+      }
+      var html = '<div style="font-size:11px;color:#9aa;margin-bottom:5px;">Logo on this sheet</div>' +
+        '<div style="display:flex;gap:6px;flex-wrap:wrap;">' +
+          card('', 'Default (Primary)', false, '') +
+          logos.map(function (l) { return card(l.url, l.label, l.url === primaryUrl, l.url); }).join('') +
+        '</div>';
+      pickHost.innerHTML = html;
+      pickHost.querySelectorAll('[data-pick]').forEach(function (btn) {
+        btn.addEventListener('click', function () { pickedLogo = btn.getAttribute('data-pick'); renderPicker(); });
+      });
+    }
+    renderPicker();
+
     box.querySelector('[data-tb-cancel]').onclick = close;
     box.querySelector('[data-tb-save]').onclick = function () {
       pushUndo();
       box.querySelectorAll('[data-tb]').forEach(function (inp) { S.doc.titleblock[inp.getAttribute('data-tb')] = inp.value; });
       S.doc.titleblock.northDeg = parseFloat(S.doc.titleblock.northDeg) || 0;
       var cb = box.querySelector('[data-tb-showlogo]'); if (cb) S.doc.titleblock.showLogo = cb.checked;
+      var prevLogo = S.doc.titleblock.logoUrl || '';
+      S.doc.titleblock.logoUrl = pickedLogo || '';
       close(); repaint();
+      if ((pickedLogo || '') !== prevLogo) loadChosenLogo(); // swap the stamped logo
     };
     ov.addEventListener('click', function (e) { if (e.target === ov) close(); });
   }
