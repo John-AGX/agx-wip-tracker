@@ -282,13 +282,13 @@ function renderEstimatesList() {
                     ? '<span style="font-size:11px;color:var(--text-dim,#888);font-weight:normal;margin-left:6px;">' + titleSubBits.join(' · ') + '</span>'
                     : '';
                 // Gross margin % — (markedUp − baseCost) / markedUp × 100.
-                // Bar width clamped to 100% even when margin is higher,
-                // and shown empty when ≤ 0 (loss / unpriced).
+                // Plain colored text matching the Jobs list's Margin %
+                // column. (Tried a progress-bar here but p86Tables.enhance
+                // clips block children in the narrow MARGIN column.)
                 const margin = t.markedUp > 0 ? ((t.markedUp - t.baseCost) / t.markedUp) * 100 : 0;
                 const marginColor = margin >= 30 ? '#34d399' : margin >= 15 ? '#fbbf24' : '#f87171';
-                const marginBar = margin > 0
-                    ? '<div class="progress-bar" style="margin-bottom:2px;height:6px;"><div class="progress-fill" style="width:' + Math.min(100, margin).toFixed(0) + '%;background:' + marginColor + ';"></div></div>' +
-                      '<span style="font-size:12px;color:' + marginColor + ';font-weight:600;">' + margin.toFixed(1) + '%</span>'
+                const marginCell = margin > 0
+                    ? '<span style="color:' + marginColor + ';font-weight:600;">' + margin.toFixed(1) + '%</span>'
                     : '<span style="color:var(--text-dim,#888);">—</span>';
                 return '<tr style="cursor:pointer;" onclick="editEstimate(\'' + est.id + '\')">' +
                     '<td data-col="title"><strong>' + escapeHTML(est.title || '(untitled)') + '</strong>' + titleSuffix + '</td>' +
@@ -297,7 +297,7 @@ function renderEstimatesList() {
                     '<td data-col="baseCost" class="num">' + formatCurrency(t.baseCost) + '</td>' +
                     '<td data-col="markup" class="num" style="color:#fbbf24;">' + t.blendedMarkup.toFixed(1) + '%</td>' +
                     '<td data-col="clientPrice" class="num" style="color:#34d399;font-weight:600;">' + formatCurrency(t.clientPrice) + '</td>' +
-                    '<td data-col="margin" class="num" style="text-align:right;">' + marginBar + '</td>' +
+                    '<td data-col="margin" class="num">' + marginCell + '</td>' +
                     '<td data-col="updated_at" style="white-space:nowrap;color:var(--text-dim,#888);" title="' + escapeHTML(est.updated_at || '') + '">' +
                         escapeHTML(fmtRelativeDate(est.updated_at)) +
                     '</td>' +

@@ -105,12 +105,14 @@
     var estRev = revenueFromAttachedEstimates(l.id);
     var revenue = estRev != null ? fmtCurrencyFull(estRev) : '';
 
-    // Confidence rendered as a progress-bar + numeric label, mirroring
-    // the Jobs "% Complete" column. Empty cell when confidence is 0/null.
+    // Confidence as plain colored % text — same pattern Jobs uses for
+    // its Margin column. Tried a progress-bar here but the
+    // `p86Tables.enhance` overflow:hidden clips it in the narrow CONF
+    // column. Tinted by tier: ≥75 green, ≥50 yellow, below dim.
     var confNum = (l.confidence != null && l.confidence > 0) ? Number(l.confidence) : 0;
+    var confColor = confNum >= 75 ? '#34d399' : confNum >= 50 ? '#fbbf24' : 'var(--text-dim,#aaa)';
     var confCell = confNum > 0
-      ? '<div class="progress-bar" style="margin-bottom:2px;height:6px;"><div class="progress-fill" style="width:' + confNum + '%"></div></div>' +
-        '<span style="font-size:12px;">' + confNum + '%</span>'
+      ? '<span style="color:' + confColor + ';font-weight:600;">' + confNum + '%</span>'
       : '';
 
     // Projected sale: show the date if set; flag as overdue in red when
