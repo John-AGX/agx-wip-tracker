@@ -1384,6 +1384,22 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_field_tool_runs_tool ON field_tool_runs(field_tool_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_field_tool_runs_user ON field_tool_runs(user_id, created_at DESC);
 
+    -- Per-user, per-tool input draft (autosave). ONE row per (user, tool)
+    -- — each save (debounced from the iframe's input events) is an
+    -- UPSERT that overwrites the previous values. This is the
+    -- "save on input" restoration surface: reopen any tool and the
+    -- inputs you last typed are still there. Distinct from
+    -- field_tool_runs, which are explicit named printouts the user
+    -- chose to keep.
+    CREATE TABLE IF NOT EXISTS field_tool_drafts (
+      field_tool_id   TEXT NOT NULL REFERENCES field_tools(id) ON DELETE CASCADE,
+      user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      inputs          JSONB NOT NULL DEFAULT '{}'::jsonb,
+      outputs         JSONB NOT NULL DEFAULT '{}'::jsonb,
+      updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (field_tool_id, user_id)
+    );
+
     CREATE TABLE IF NOT EXISTS qb_cost_lines (
       id TEXT PRIMARY KEY,
       job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,

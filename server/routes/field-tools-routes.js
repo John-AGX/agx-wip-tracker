@@ -123,6 +123,85 @@ function newRunId() {
   return 'ftrun_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
 }
 
+// ──────────────────────────────────────────────────────────────────
+// DRAFTS — per-user, per-tool input autosave. Distinct from /runs:
+//   /runs   = explicit named printouts (the user clicked Save Printout)
+//   /drafts = the in-progress input state, overwritten on every keystroke
+//             (debounced from the iframe's auto-instrumenter)
+// ONE row per (user, tool); a UPSERT replaces the previous draft.
+//
+// Mounted BEFORE /:id below so Express doesn't match `GET /drafts/:id`
+// as `GET /:id` with id="drafts".
+// ──────────────────────────────────────────────────────────────────
+
+// GET /api/field-tools/drafts/:fieldToolId — load this user's current
+// draft for a tool, or 404 when none exists. Hits on every modal open.
+router.get('/drafts/:fieldToolId', requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const toolId = String(req.params.fieldToolId || '').trim();
+    if (!toolId) return res.status(400).json({ error: 'fieldToolId required' });
+    const rows = (await pool.query(
+      `SELECT field_tool_id, user_id, inputs, outputs, updated_at
+         FROM field_tool_drafts
+        WHERE field_tool_id = $1 AND user_id = $2`,
+      [toolId, userId]
+    )).rows;
+    if (!rows.length) return res.status(404).json({ error: 'no draft' });
+    res.json({ draft: rows[0] });
+  } catch (e) {
+    console.error('GET /api/field-tools/drafts/:fieldToolId error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// PUT /api/field-tools/drafts/:fieldToolId — UPSERT this user's draft.
+// Body: { inputs, outputs }. Both are JSONB blobs (objects); empty is
+// allowed. The client debounces calls (~250ms) so this is a low-volume
+// write endpoint despite firing on input/change events in the iframe.
+router.put('/drafts/:fieldToolId', requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const toolId = String(req.params.fieldToolId || '').trim();
+    if (!toolId) return res.status(400).json({ error: 'fieldToolId required' });
+    // Verify the tool exists so we don't anchor orphan drafts.
+    const toolChk = await pool.query('SELECT id FROM field_tools WHERE id = $1', [toolId]);
+    if (!toolChk.rows.length) return res.status(404).json({ error: 'tool not found' });
+    const body = req.body || {};
+    const inputs  = (body.inputs  && typeof body.inputs  === 'object') ? body.inputs  : {};
+    const outputs = (body.outputs && typeof body.outputs === 'object') ? body.outputs : {};
+    await pool.query(
+      `INSERT INTO field_tool_drafts (field_tool_id, user_id, inputs, outputs, updated_at)
+       VALUES ($1, $2, $3::jsonb, $4::jsonb, NOW())
+       ON CONFLICT (field_tool_id, user_id)
+       DO UPDATE SET inputs = EXCLUDED.inputs, outputs = EXCLUDED.outputs, updated_at = NOW()`,
+      [toolId, userId, JSON.stringify(inputs), JSON.stringify(outputs)]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('PUT /api/field-tools/drafts/:fieldToolId error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// DELETE /api/field-tools/drafts/:fieldToolId — clear the user's draft
+// (e.g. after they save a printout, or hit "start fresh").
+router.delete('/drafts/:fieldToolId', requireAuth, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const toolId = String(req.params.fieldToolId || '').trim();
+    if (!toolId) return res.status(400).json({ error: 'fieldToolId required' });
+    await pool.query(
+      'DELETE FROM field_tool_drafts WHERE field_tool_id = $1 AND user_id = $2',
+      [toolId, userId]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('DELETE /api/field-tools/drafts/:fieldToolId error:', e);
+    res.status(500).json({ error: e.message });
+  }
+});
+
 // GET /api/field-tools/runs
 // Query params: ?tool_id=ftxxx (optional), ?limit=N (default 100, max 500).
 router.get('/runs', requireAuth, async (req, res) => {

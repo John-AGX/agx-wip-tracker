@@ -188,6 +188,35 @@
   'document.addEventListener("click",function(e){' +
     'if(e.target&&e.target.closest&&e.target.closest(\'button,[role="button"],input[type="button"],input[type="submit"]\')){setTimeout(post,120);}' +
   '},true);' +
+  // ── Restore handler ───────────────────────────────────────────
+  // Listen for a parent → iframe message of type
+  // `p86-field-tool-restore` with an `inputs` map (same shape as the
+  // outbound snapshot's `inputs`). For each restored key, find the
+  // matching <input>/<select>/<textarea> by re-running labelFor on
+  // every form element and writing back the value. Then fire input
+  // events so any compute() / autosave logic the tool wires re-runs.
+  // The instrumenter is its own postMessage receiver — tools that
+  // also want to handle restore can listen alongside it.
+  'function applyRestore(inputs){' +
+    'if(!inputs||typeof inputs!=="object")return;' +
+    'var fields=Array.prototype.slice.call(document.querySelectorAll("input,select,textarea"));' +
+    'var seen={};' +
+    'fields.forEach(function(el){' +
+      'if(el.type==="submit"||el.type==="button"||el.type==="reset"||el.type==="hidden")return;' +
+      'var k=labelFor(el),b=k,n=2;while(seen[k]){k=b+" ("+(n++)+")";}seen[k]=true;' +
+      'if(!(k in inputs))return;' +
+      'var v=inputs[k];' +
+      'if(el.type==="checkbox"){el.checked=!!v;}' +
+      'else if(el.type==="radio"){el.checked=(String(el.value)===String(v));}' +
+      'else{el.value=v==null?"":v;}' +
+      'try{el.dispatchEvent(new Event("input",{bubbles:true}));}catch(e){}' +
+      'try{el.dispatchEvent(new Event("change",{bubbles:true}));}catch(e){}' +
+    '});' +
+  '}' +
+  'window.addEventListener("message",function(ev){' +
+    'var d=ev.data||{};' +
+    'if(d&&d.type==="p86-field-tool-restore"&&d.inputs){applyRestore(d.inputs);setTimeout(post,120);}' +
+  '},false);' +
   'if(document.readyState==="loading"){document.addEventListener("DOMContentLoaded",function(){setTimeout(post,80);});}' +
   'else{setTimeout(post,80);}' +
 '})();';
@@ -274,6 +303,29 @@
       // post is the source of truth.
       var explicitPayload = null;
       var autoPayload = null;
+      // Draft autosave (Save on input). Each postMessage from the
+      // iframe debounces a PUT /api/field-tools/drafts/:toolId. The
+      // server-side drafts table is keyed (toolId, userId) and UPSERTs
+      // — one draft per user per tool, replaced on every change. The
+      // saved draft is hydrated back into the iframe on next open
+      // (see the GET below + the `p86-field-tool-restore` message).
+      var draftTimer = null;
+      function scheduleDraftSave() {
+        if (draftTimer) clearTimeout(draftTimer);
+        draftTimer = setTimeout(function() {
+          var p = latestPayload();
+          if (!p) return;
+          window.p86Api.put('/api/field-tools/drafts/' + encodeURIComponent(t.id), {
+            inputs: p.inputs || {},
+            outputs: p.outputs || {}
+          }).catch(function(err) {
+            // Non-fatal — drafts are best-effort. Log to console; the
+            // user keeps working in-memory and any subsequent
+            // successful save catches up.
+            console.warn('[field-tools] draft save failed:', err && err.message);
+          });
+        }, 600);
+      }
       function onMessage(ev) {
         // Verify the source is OUR iframe before trusting the payload.
         // Other postMessage chatter (extensions, embedded iframes
@@ -287,12 +339,34 @@
           };
           if (d._auto) autoPayload = p;
           else explicitPayload = p;
+          scheduleDraftSave();
         }
       }
       window.addEventListener('message', onMessage);
       function latestPayload() { return explicitPayload || autoPayload; }
 
+      // Hydrate the draft into the iframe once its DOM has settled.
+      // The auto-instrumenter (FT_AUTO_INSTRUMENT_SRC) listens for the
+      // `p86-field-tool-restore` message and walks the form, setting
+      // values by labelFor() match. Best-effort: 404 (no draft yet)
+      // just leaves the tool's default values in place.
+      iframe.addEventListener('load', function() {
+        window.p86Api.get('/api/field-tools/drafts/' + encodeURIComponent(t.id)).then(function(resp) {
+          if (!resp || !resp.draft) return;
+          var inputs = resp.draft.inputs || {};
+          // Small delay so the tool's own DOMContentLoaded compute()
+          // can finish first; restoring after that means our values
+          // win the final paint.
+          setTimeout(function() {
+            try {
+              iframe.contentWindow.postMessage({ type: 'p86-field-tool-restore', inputs: inputs }, '*');
+            } catch (e) { /* sandboxed iframe — postMessage should still work */ }
+          }, 200);
+        }).catch(function() { /* 404 = no draft; nothing to do */ });
+      });
+
       function closeModal() {
+        if (draftTimer) clearTimeout(draftTimer);
         window.removeEventListener('message', onMessage);
         modal.remove();
       }

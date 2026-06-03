@@ -55,6 +55,10 @@ var STAIRS_HTML = [
 '</style></head><body>',
 '  <h1>Stairs Calculator</h1>',
 '  <p class="sub">Enter the rise and your targets &mdash; risers, run, first-step cut and the stringer are computed and drawn.</p>',
+// Label input — same UX as the org-created tools. The auto-instrumenter
+// picks it up via labelFor() so it lands in the printout snapshot and
+// the draft autosave under the key "Label this calculation".
+'  <div class="card"><div><label for="ftLabel">Label this calculation</label><input id="ftLabel" type="text" placeholder="e.g. Front porch &mdash; Smith residence" style="width:100%;font-size:14px;padding:9px 11px;border:1px solid #333;border-radius:8px;outline:none;color:var(--ink);background:#0a0a0a;" /></div></div>',
 '  <div class="card"><div class="inputs">',
 '    <div><label>Total rise (floor to floor)</label><div class="fieldrow"><input id="rise" type="number" inputmode="decimal" value="48" step="0.125"><span class="unit">in</span></div></div>',
 '    <div><label>Target riser height</label><div class="fieldrow"><input id="triser" type="number" inputmode="decimal" value="7" step="0.125"><span class="unit">in</span></div></div>',
