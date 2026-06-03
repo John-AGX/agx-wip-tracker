@@ -43,6 +43,9 @@
     { key: 'rect',     glyph: '▭', label: 'Rectangle (click two opposite corners)' },
     { key: 'circle',   glyph: '◯', label: 'Circle (click center, click radius)' },
     { key: 'arc',      glyph: '⌒', label: 'Arc (3-point: click start, a point on the arc, then end)' },
+    { key: 'trim',     glyph: '✂', label: 'Trim — click a line segment to cut it back to the nearest crossing line' },
+    { key: 'extend',   glyph: '⇥', label: 'Extend — click a line near the end to extend it to the next line it meets' },
+    { key: 'fillet',   glyph: '◜', label: 'Fillet — click two lines, then enter a radius (0 = sharp corner)' },
     { key: 'dim',      glyph: '↔', label: 'Dimension (click two points — auto-labels real length at the viewport scale)' },
     { key: 'angle',    glyph: '∠', label: 'Angle dimension (click three points: leg · vertex · leg)' },
     { key: 'leader',   glyph: '➘', label: 'Leader / callout (click target, click text position)' },
@@ -541,6 +544,7 @@
       spaceDown: false,
       selectedId: null,
       moveDrag: null,       // {last:{x,y}, pushed:bool} while dragging a selection
+      gripDrag: null,       // {gi, type, last, pushed} while dragging a grip handle
       hatchPattern: 'earth',
       symbolKind: 'north',
       _calloutNum: 1,
@@ -693,6 +697,7 @@
   }
   function setTool(t) {
     if (S.draft) S.draft = null;             // cancel any in-progress draft
+    S._filletA = null;                       // cancel a pending fillet pick
     hideDyn();
     S.tool = t;
     S.canvas.style.cursor = (t === 'pan') ? 'grab' : (t === 'select' ? 'default' : 'crosshair');
@@ -1073,10 +1078,11 @@
     return out;
   }
   // Flatten drawable line segments in a viewport (for intersection snaps).
-  function segmentsInVp(vp) {
+  function segmentsInVp(vp, excludeId) {
     var segs = [];
     (S.doc.entities || []).forEach(function (e) {
       if (!e || e.viewport !== vp.id) return;
+      if (excludeId && e.id === excludeId) return;
       if (e.tool === 'line' && e.startX != null) {
         segs.push({ a: { x: e.startX, y: e.startY }, b: { x: e.endX, y: e.endY } });
       } else if (e.tool === 'rect' && e.startX != null) {
@@ -1180,6 +1186,10 @@
       if (S.draft && S.draft._anchor) pt = applyOrtho(S.draft._anchor, pt);
 
       if (S.tool === 'select') {
+        // Grip-drag: if the cursor is on a grip of the current selection,
+        // reshape that point (or move the whole entity for a 'move' grip).
+        var grip = gripAtScreen(lp);
+        if (grip) { S.gripDrag = { gi: grip.gi, type: grip.type, last: raw, pushed: false }; return; }
         selectAt(raw);
         // Arm a move-drag if we landed on an entity (commit to history on
         // first actual movement, so a plain click just selects).
@@ -1195,6 +1205,30 @@
         S.view.tx = S.panning.tx + (lp.x - S.panning.sx);
         S.view.ty = S.panning.ty + (lp.y - S.panning.sy);
         repaint();
+        return;
+      }
+      // Grip-drag the selected entity's handle (select tool, button held).
+      if (S.gripDrag && (e.buttons & 1)) {
+        var gent = selectedEntity();
+        if (gent) {
+          if (!S.gripDrag.pushed) { pushUndo(); S.gripDrag.pushed = true; }
+          var graw = toSheet(lp.x, lp.y);
+          var gvp = vpAt(graw);
+          var gpt = resolveSnap(graw, gvp);
+          var ghs = entGripHandles(gent), gh = ghs[S.gripDrag.gi];
+          if (gh) {
+            if (S.gripDrag.type === 'move') {
+              translateEntity(gent, graw.x - S.gripDrag.last.x, graw.y - S.gripDrag.last.y);
+              S.gripDrag.last = graw;
+            } else {
+              var gp = gh.anchor ? applyOrtho(gh.anchor, gpt) : gpt;
+              gh.apply(gp.x, gp.y);
+            }
+            S.snap = gpt; S.hover = gpt; S.hoverVp = gvp;
+            updateReadout(gpt, gvp);
+            repaint();
+          }
+        }
         return;
       }
       // Move-drag the selected entity (select tool, button held).
@@ -1214,13 +1248,17 @@
       var pt = resolveSnap(raw, vp);
       if (S.draft && S.draft._anchor) pt = applyOrtho(S.draft._anchor, pt);
       S.hover = pt; S.snap = pt; S.hoverVp = vp;
+      // Grip hover affordance in the select tool.
+      if (S.tool === 'select' && S.selectedId) {
+        S.canvas.style.cursor = gripAtScreen(lp) ? 'pointer' : 'default';
+      }
       updateReadout(pt, vp);
       if (dynApplies()) updateDynLive();
       repaint();
     };
     c.onmouseup = function () {
       if (S.panning) { S.panning = null; S.canvas.style.cursor = (S.tool === 'pan') ? 'grab' : (S.tool === 'select' ? 'default' : 'crosshair'); }
-      S.moveDrag = null;
+      S.moveDrag = null; S.gripDrag = null;
     };
     c.ondblclick = function () {
       if ((S.tool === 'polyline' || S.tool === 'hatch') && S.draft) commitPolyline();
@@ -1244,7 +1282,8 @@
       if (e.key === 'Shift') { S.shiftDown = true; }
       else if (e.key === ' ') { S.spaceDown = true; S.canvas.style.cursor = 'grab'; }
       else if (e.key === 'Escape') {
-        if (S.draft) { S.draft = null; hideDyn(); repaint(); }
+        if (S._filletA) { S._filletA = null; updateHint(); repaint(); }
+        else if (S.draft) { S.draft = null; hideDyn(); repaint(); }
         else S.overlay.querySelector('#p86-sheet-cancel').click();
       }
       else if (e.key === 'Enter') { if ((S.tool === 'polyline' || S.tool === 'hatch') && S.draft) commitPolyline(); }
@@ -1291,6 +1330,10 @@
 
   function handleDrawClick(pt, vp) {
     var t = S.tool;
+    // CAD modify tools (pick existing lines, not draw).
+    if (t === 'trim') { trimAt(pt, vp); return; }
+    if (t === 'extend') { extendAt(pt, vp); return; }
+    if (t === 'fillet') { filletClick(pt, vp); return; }
     // Dimension — a two-point 'measure' entity; its label is computed
     // live from the viewport scale in renderSheet (auto-updates).
     if (t === 'dim') {
@@ -1521,23 +1564,40 @@
     }
     return null;
   }
-  // Defining points of an entity, for selection grips.
-  function entGrips(e) {
+  // Draggable grip handles for an entity. Each handle has {x,y,type} and,
+  // for point grips, apply(nx,ny) to mutate that point + an optional ortho
+  // anchor. 'move' grips translate the whole entity. Render reads x/y only.
+  function entGripHandles(e) {
     var g = [];
     if (e.startX != null) {
-      g.push({ x: e.startX, y: e.startY }); g.push({ x: e.endX, y: e.endY });
+      g.push({ x: e.startX, y: e.startY, type: 'pt', anchor: { x: e.endX, y: e.endY }, apply: function (nx, ny) { e.startX = nx; e.startY = ny; } });
+      g.push({ x: e.endX, y: e.endY, type: 'pt', anchor: { x: e.startX, y: e.startY }, apply: function (nx, ny) { e.endX = nx; e.endY = ny; } });
       if (e.tool === 'rect' || e.tool === 'ellipse') {
-        g.push({ x: e.startX, y: e.endY }); g.push({ x: e.endX, y: e.startY });
-        g.push({ x: (e.startX + e.endX) / 2, y: (e.startY + e.endY) / 2 });
-      } else {
-        g.push({ x: (e.startX + e.endX) / 2, y: (e.startY + e.endY) / 2 });
+        g.push({ x: e.startX, y: e.endY, type: 'pt', anchor: { x: e.endX, y: e.startY }, apply: function (nx, ny) { e.startX = nx; e.endY = ny; } });
+        g.push({ x: e.endX, y: e.startY, type: 'pt', anchor: { x: e.startX, y: e.endY }, apply: function (nx, ny) { e.endX = nx; e.startY = ny; } });
       }
+      g.push({ x: (e.startX + e.endX) / 2, y: (e.startY + e.endY) / 2, type: 'move' });
     } else if (e.points && e.points.length) {
-      e.points.forEach(function (p) { g.push({ x: p.x, y: p.y }); });
+      e.points.forEach(function (p, i) {
+        var a = e.points[i - 1] || e.points[i + 1] || null;
+        g.push({ x: p.x, y: p.y, type: 'pt', anchor: a ? { x: a.x, y: a.y } : null, apply: (function (idx) { return function (nx, ny) { e.points[idx].x = nx; e.points[idx].y = ny; }; })(i) });
+      });
     } else if (e.x != null) {
-      g.push({ x: e.x, y: e.y });
+      g.push({ x: e.x, y: e.y, type: 'move' });
     }
     return g;
+  }
+  function entGrips(e) { return entGripHandles(e); }   // render reads x/y
+  // Grip near a screen point (for the selected entity), or null.
+  function gripAtScreen(lp) {
+    if (!S.selectedId) return null;
+    var e = selectedEntity(); if (!e) return null;
+    var hs = entGripHandles(e);
+    for (var i = 0; i < hs.length; i++) {
+      var sp = toScreen(hs[i].x, hs[i].y);
+      if (Math.hypot(sp.x - lp.x, sp.y - lp.y) <= 9) return { gi: i, type: hs[i].type };
+    }
+    return null;
   }
   function deleteSelected() {
     if (!S.selectedId) return;
@@ -1700,6 +1760,151 @@
         var side = parseFloat((box.querySelector('[data-op=side]') || {}).value) || 1;
         offsetOp(dist, side);
       });
+  }
+
+  // ── CAD modify ops (E4b): trim / extend / fillet ────────────────
+  function setHint(msg) { var el = S.overlay && S.overlay.querySelector('#p86-sheet-hint'); if (el) el.textContent = msg; }
+  // Point-to-segment distance + projection param t (unbounded).
+  function ptSegInfo(px, py, ax, ay, bx, by) {
+    var dx = bx - ax, dy = by - ay, L2 = dx * dx + dy * dy;
+    var t = L2 ? ((px - ax) * dx + (py - ay) * dy) / L2 : 0;
+    var tc = Math.max(0, Math.min(1, t)), cx = ax + dx * tc, cy = ay + dy * tc;
+    return { t: t, dist: Math.hypot(px - cx, py - cy) };
+  }
+  // Nearest 'line' entity to a sheet point within tolerance → {entity, t}.
+  function pickLineAt(pt, vp) {
+    var tol = 10 / S.view.scale, best = null, bestD = tol;
+    (S.doc.entities || []).forEach(function (e) {
+      if (e.tool !== 'line' || e.startX == null) return;
+      if (vp && e.viewport !== vp.id) return;
+      var info = ptSegInfo(pt.x, pt.y, e.startX, e.startY, e.endX, e.endY);
+      if (info.dist < bestD && info.t >= -0.03 && info.t <= 1.03) { bestD = info.dist; best = { entity: e, t: Math.max(0, Math.min(1, info.t)) }; }
+    });
+    return best;
+  }
+  // Param t along seg1 where it crosses seg2 (both finite), or null.
+  function segCrossT(x1, y1, x2, y2, x3, y3, x4, y4) {
+    var den = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
+    if (Math.abs(den) < 1e-9) return null;
+    var t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / den;
+    var u = ((x1 - x3) * (y1 - y2) - (y1 - y3) * (x1 - x2)) / den;
+    if (t < -0.001 || t > 1.001 || u < -0.001 || u > 1.001) return null;
+    return t;
+  }
+  // Sorted crossing params of line e against other segments in its viewport.
+  function lineCrossParams(e, vp) {
+    var out = [];
+    segmentsInVp(vp, e.id).forEach(function (s) {
+      var t = segCrossT(e.startX, e.startY, e.endX, e.endY, s.a.x, s.a.y, s.b.x, s.b.y);
+      if (t != null && t > 0.0008 && t < 0.9992) out.push(t);
+    });
+    out.sort(function (a, b) { return a - b; });
+    return out;
+  }
+  function trimAt(pt, vp) {
+    var hit = pickLineAt(pt, vp); if (!hit) return;
+    var e = hit.entity, t0 = hit.t, ts = lineCrossParams(e, vp);
+    if (!ts.length) { setHint('Trim: no crossing line to cut against.'); return; }
+    var lo = 0, hi = 1;
+    for (var i = 0; i < ts.length; i++) { if (ts[i] <= t0) lo = Math.max(lo, ts[i]); if (ts[i] >= t0) hi = Math.min(hi, ts[i]); }
+    var ax = e.startX, ay = e.startY, bx = e.endX, by = e.endY;
+    function P(t) { return { x: ax + (bx - ax) * t, y: ay + (by - ay) * t }; }
+    pushUndo();
+    var keep = [];
+    if (lo > 0.0008) keep.push([P(0), P(lo)]);
+    if (hi < 0.9992) keep.push([P(hi), P(1)]);
+    S.doc.entities = S.doc.entities.filter(function (x) { return x.id !== e.id; });
+    keep.forEach(function (seg) {
+      var c = JSON.parse(JSON.stringify(e)); c.id = uid('line');
+      c.startX = seg[0].x; c.startY = seg[0].y; c.endX = seg[1].x; c.endY = seg[1].y;
+      S.doc.entities.push(c);
+    });
+    S.selectedId = null; buildLayers(); repaint();
+  }
+  // Param along the ray P=(fx,fy)+u*(dx,dy) where it meets a segment (u=1
+  // is the moving end); requires the hit to lie within the segment.
+  function rayHitU(fx, fy, dx, dy, x3, y3, x4, y4) {
+    var x1 = fx, y1 = fy, x2 = fx + dx, y2 = fy + dy;
+    var den = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
+    if (Math.abs(den) < 1e-9) return null;
+    var t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / den;
+    var u = ((x1 - x3) * (y1 - y2) - (y1 - y3) * (x1 - x2)) / den;
+    if (u < -0.001 || u > 1.001) return null;
+    return t;
+  }
+  function extendAt(pt, vp) {
+    var hit = pickLineAt(pt, vp); if (!hit) return;
+    var e = hit.entity;
+    var ds = Math.hypot(pt.x - e.startX, pt.y - e.startY), de = Math.hypot(pt.x - e.endX, pt.y - e.endY);
+    var movingStart = ds < de;
+    var fx = movingStart ? e.endX : e.startX, fy = movingStart ? e.endY : e.startY;
+    var mx = movingStart ? e.startX : e.endX, my = movingStart ? e.startY : e.endY;
+    var dx = mx - fx, dy = my - fy, best = null, bestU = Infinity;
+    segmentsInVp(vp, e.id).forEach(function (s) {
+      var u = rayHitU(fx, fy, dx, dy, s.a.x, s.a.y, s.b.x, s.b.y);
+      if (u != null && u > 1.0005 && u < bestU) { bestU = u; best = { x: fx + dx * u, y: fy + dy * u }; }
+    });
+    if (!best) { setHint('Extend: no line ahead to extend to.'); return; }
+    pushUndo();
+    if (movingStart) { e.startX = best.x; e.startY = best.y; } else { e.endX = best.x; e.endY = best.y; }
+    buildLayers(); repaint();
+  }
+  function lineLineIntersect(x1, y1, x2, y2, x3, y3, x4, y4) {
+    var den = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
+    if (Math.abs(den) < 1e-9) return null;
+    var px = ((x1 * y2 - y1 * x2) * (x3 - x4) - (x1 - x2) * (x3 * y4 - y3 * x4)) / den;
+    var py = ((x1 * y2 - y1 * x2) * (y3 - y4) - (y1 - y2) * (x3 * y4 - y3 * x4)) / den;
+    return { x: px, y: py };
+  }
+  function setNearEnd(L, click, p) {
+    var d1 = Math.hypot(click.x - L.startX, click.y - L.startY), d2 = Math.hypot(click.x - L.endX, click.y - L.endY);
+    if (d1 < d2) { L.startX = p.x; L.startY = p.y; } else { L.endX = p.x; L.endY = p.y; }
+  }
+  function filletClick(pt, vp) {
+    var hit = pickLineAt(pt, vp); if (!hit) return;
+    if (!S._filletA) { S._filletA = { id: hit.entity.id, click: { x: pt.x, y: pt.y } }; setHint('Fillet: first line ✓ — now click the second line.'); repaint(); return; }
+    if (hit.entity.id === S._filletA.id) return;
+    var aRec = S._filletA; S._filletA = null;
+    var A = S.doc.entities.filter(function (x) { return x.id === aRec.id; })[0];
+    if (!A) { updateHint(); return; }
+    openFilletModal(A, hit.entity, aRec.click, { x: pt.x, y: pt.y });
+  }
+  function openFilletModal(A, B, ca, cb) {
+    opModal('Fillet radius',
+      numField('Radius (ft) — 0 = sharp corner', 'r', '1'),
+      function (box) {
+        var r = parseFloat((box.querySelector('[data-op=r]') || {}).value);
+        applyFillet(A, B, ca, cb, isFinite(r) ? r : 0);
+      });
+    updateHint();
+  }
+  function applyFillet(A, B, ca, cb, rFt) {
+    var I = lineLineIntersect(A.startX, A.startY, A.endX, A.endY, B.startX, B.startY, B.endX, B.endY);
+    if (!I) { alert('Those lines are parallel — nothing to fillet.'); return; }
+    var r = (rFt || 0) * 12 * ppiOf(A);
+    function dirToward(L, click) {
+      var d1 = Math.hypot(click.x - L.startX, click.y - L.startY), d2 = Math.hypot(click.x - L.endX, click.y - L.endY);
+      var end = (d1 < d2) ? { x: L.startX, y: L.startY } : { x: L.endX, y: L.endY };
+      var vx = end.x - I.x, vy = end.y - I.y, len = Math.hypot(vx, vy) || 1;
+      return { x: vx / len, y: vy / len };
+    }
+    var da = dirToward(A, ca), db = dirToward(B, cb);
+    pushUndo();
+    if (r <= 0) { setNearEnd(A, ca, I); setNearEnd(B, cb, I); buildLayers(); repaint(); return; }
+    var dot = Math.max(-1, Math.min(1, da.x * db.x + da.y * db.y)), theta = Math.acos(dot);
+    if (theta < 1e-3 || Math.abs(theta - Math.PI) < 1e-3) { alert('Those lines are collinear — cannot fillet.'); return; }
+    var dist = r / Math.tan(theta / 2);
+    var t1 = { x: I.x + da.x * dist, y: I.y + da.y * dist };
+    var t2 = { x: I.x + db.x * dist, y: I.y + db.y * dist };
+    var bx = da.x + db.x, by = da.y + db.y, bl = Math.hypot(bx, by) || 1; bx /= bl; by /= bl;
+    var cdist = r / Math.sin(theta / 2), C = { x: I.x + bx * cdist, y: I.y + by * cdist };
+    var mvx = (t1.x + t2.x) / 2 - C.x, mvy = (t1.y + t2.y) / 2 - C.y, ml = Math.hypot(mvx, mvy) || 1;
+    var arcMid = { x: C.x + mvx / ml * r, y: C.y + mvy / ml * r };
+    setNearEnd(A, ca, t1); setNearEnd(B, cb, t2);
+    var arc = newEntity('arc', viewportOf(A));
+    arc.points = [{ x: t1.x, y: t1.y }, { x: arcMid.x, y: arcMid.y }, { x: t2.x, y: t2.y }];
+    S.doc.entities.push(arc);
+    buildLayers(); repaint();
   }
 
   // ── Render ──────────────────────────────────────────────────────
