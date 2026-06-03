@@ -88,23 +88,30 @@
 
       var gridHtml = '<div id="field-tools-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px;">';
       rows.forEach(function(t) {
+        var sys = !!t.is_system;
         var cat = t.category ? '<span style="font-size:10px;text-transform:uppercase;letter-spacing:1px;color:#f5a623;border:1px solid rgba(245,166,35,0.4);padding:2px 6px;border-radius:3px;">' + escapeHTML(t.category) + '</span>' : '';
         var desc = t.description ? '<div style="font-size:12px;color:var(--text-dim,#888);margin-top:6px;line-height:1.4;">' + escapeHTML(t.description) + '</div>' : '';
+        // Gold star in the corner marks a Project 86 system tool.
+        var star = sys ? '<div title="Project 86 system tool — managed by your org admin" style="position:absolute;top:8px;right:10px;font-size:15px;line-height:1;filter:drop-shadow(0 1px 1px rgba(0,0,0,0.5));">⭐</div>' : '';
+        var border = sys ? '1px solid rgba(245,166,35,0.55)' : '1px solid #222';
+        // System tools: Open only (no edit/delete). Custom tools keep edit/delete.
+        var actions = sys
+          ? '<button type="button" class="ee-btn primary" style="flex:1;" onclick="window.openFieldTool && window.openFieldTool(\'' + escapeAttr(t.id) + '\')">Open</button>'
+          : '<button type="button" class="ee-btn primary" style="flex:1;" onclick="window.openFieldTool && window.openFieldTool(\'' + escapeAttr(t.id) + '\')">Open</button>' +
+            '<button type="button" class="ee-btn secondary" onclick="window.editFieldTool && window.editFieldTool(\'' + escapeAttr(t.id) + '\')" title="Edit">✎</button>' +
+            '<button type="button" class="ee-btn secondary" onclick="window.deleteFieldTool && window.deleteFieldTool(\'' + escapeAttr(t.id) + '\', \'' + escapeAttr(t.name) + '\')" title="Delete">×</button>';
         gridHtml +=
-          '<div style="background:#141414;border:1px solid #222;border-radius:6px;padding:14px;display:flex;flex-direction:column;gap:8px;">' +
-            '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;">' +
+          '<div style="position:relative;background:#141414;border:' + border + ';border-radius:6px;padding:14px;display:flex;flex-direction:column;gap:8px;">' +
+            star +
+            '<div style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px;padding-right:' + (sys ? '20px' : '0') + ';">' +
               '<div style="font-size:14px;font-weight:600;color:var(--text,#fff);">' + escapeHTML(t.name) + '</div>' +
               cat +
             '</div>' +
             desc +
             '<div style="font-size:10px;color:#555;margin-top:auto;">' +
-              fmtSize(t.html_size) + ' · updated ' + escapeHTML(fmtDate(t.updated_at)) +
+              (sys ? 'System tool' : (fmtSize(t.html_size) + ' · updated ' + escapeHTML(fmtDate(t.updated_at)))) +
             '</div>' +
-            '<div style="display:flex;gap:6px;margin-top:6px;">' +
-              '<button type="button" class="ee-btn primary" style="flex:1;" onclick="window.openFieldTool && window.openFieldTool(\'' + escapeAttr(t.id) + '\')">Open</button>' +
-              '<button type="button" class="ee-btn secondary" onclick="window.editFieldTool && window.editFieldTool(\'' + escapeAttr(t.id) + '\')" title="Edit">✎</button>' +
-              '<button type="button" class="ee-btn secondary" onclick="window.deleteFieldTool && window.deleteFieldTool(\'' + escapeAttr(t.id) + '\', \'' + escapeAttr(t.name) + '\')" title="Delete">×</button>' +
-            '</div>' +
+            '<div style="display:flex;gap:6px;margin-top:6px;">' + actions + '</div>' +
           '</div>';
       });
       gridHtml += '</div>';
@@ -467,6 +474,66 @@
   };
 
   window.refreshFieldTools = function() { loadList(); };
+
+  // System-tool catalog picker (admin). Lists Project 86's preset tools
+  // and lets the org add / remove them from the field-tools list.
+  window.openSystemToolPicker = function() {
+    var modal = document.createElement('div');
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);display:flex;align-items:center;justify-content:center;z-index:10000;padding:20px;';
+    modal.innerHTML =
+      '<div style="background:#141414;border:1px solid #222;border-radius:10px;padding:20px;width:620px;max-width:95vw;max-height:90vh;overflow:auto;display:flex;flex-direction:column;gap:12px;">' +
+        '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">' +
+          '<h3 style="margin:0;font-size:16px;color:var(--text,#fff);">⭐ System tools</h3>' +
+          '<button type="button" id="stp-close" class="ee-btn secondary">Close</button>' +
+        '</div>' +
+        '<div style="font-size:12px;color:var(--text-dim,#888);">Project 86\'s built-in field tools. Add them to your team\'s tool list — they show a gold star and can\'t be deleted by field users.</div>' +
+        '<div id="stp-list" style="display:flex;flex-direction:column;gap:8px;"><div style="color:#888;font-size:13px;padding:12px;">Loading…</div></div>' +
+      '</div>';
+    document.body.appendChild(modal);
+    var close = function() { modal.remove(); };
+    modal.querySelector('#stp-close').onclick = close;
+    modal.onclick = function(e) { if (e.target === modal) close(); };
+
+    function renderCatalog() {
+      var list = modal.querySelector('#stp-list');
+      window.p86Api.get('/api/field-tools/catalog').then(function(resp) {
+        var items = (resp && resp.catalog) || [];
+        if (!items.length) { list.innerHTML = '<div style="color:#888;font-size:13px;padding:12px;">No system tools available yet.</div>'; return; }
+        list.innerHTML = items.map(function(it) {
+          var btn = it.added
+            ? '<button type="button" class="ee-btn secondary" data-remove="' + escapeAttr(it.key) + '">Remove</button>'
+            : '<button type="button" class="ee-btn primary" data-add="' + escapeAttr(it.key) + '">+ Add</button>';
+          var badge = it.added ? '<span style="font-size:10px;color:#34d399;border:1px solid rgba(52,211,153,0.4);padding:2px 6px;border-radius:3px;">✓ Added</span>' : '';
+          return '<div style="display:flex;align-items:center;gap:10px;background:#0f0f0f;border:1px solid #222;border-radius:8px;padding:12px;">' +
+              '<div style="flex:1;min-width:0;">' +
+                '<div style="font-size:14px;font-weight:600;color:#fff;display:flex;align-items:center;gap:8px;">⭐ ' + escapeHTML(it.name) + ' ' + badge + '</div>' +
+                (it.description ? '<div style="font-size:12px;color:#888;margin-top:4px;line-height:1.4;">' + escapeHTML(it.description) + '</div>' : '') +
+              '</div>' + btn +
+            '</div>';
+        }).join('');
+        list.querySelectorAll('[data-add]').forEach(function(b) {
+          b.onclick = function() { act(b, 'post', '/api/field-tools/catalog/' + encodeURIComponent(b.getAttribute('data-add')) + '/add'); };
+        });
+        list.querySelectorAll('[data-remove]').forEach(function(b) {
+          b.onclick = function() {
+            if (!confirm('Remove this system tool from your field-tools list?')) return;
+            act(b, 'del', '/api/field-tools/catalog/' + encodeURIComponent(b.getAttribute('data-remove')));
+          };
+        });
+      }).catch(function(err) {
+        list.innerHTML = '<div style="color:#e74c3c;font-size:13px;padding:12px;">Failed to load: ' + escapeHTML(err && err.message || 'unknown') + '</div>';
+      });
+    }
+    function act(btn, verb, url) {
+      btn.disabled = true; var prev = btn.textContent; btn.textContent = '…';
+      var req = (verb === 'del') ? window.p86Api.del(url) : window.p86Api.post(url, {});
+      req.then(function() { renderCatalog(); loadList(); }).catch(function(err) {
+        btn.disabled = false; btn.textContent = prev;
+        alert((err && err.message) || 'Action failed. (Org admins manage system tools.)');
+      });
+    }
+    renderCatalog();
+  };
 
   // Render the field tools grid into an arbitrary host element. Used
   // by my-files.js when the virtual "Tools" folder is active so the
