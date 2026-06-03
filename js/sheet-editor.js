@@ -1110,8 +1110,16 @@
       } else if (e.tool === 'rect' && e.startX != null) {
         var c = [{ x: e.startX, y: e.startY }, { x: e.endX, y: e.startY }, { x: e.endX, y: e.endY }, { x: e.startX, y: e.endY }];
         for (var k = 0; k < 4; k++) segs.push({ a: c[k], b: c[(k + 1) % 4] });
-      } else if ((e.tool === 'polyline') && e.points && e.points.length > 1) {
+      } else if ((e.tool === 'polyline' || e.tool === 'mangle' || e.tool === 'hatch') && e.points && e.points.length > 1) {
         for (var p = 1; p < e.points.length; p++) segs.push({ a: e.points[p - 1], b: e.points[p] });
+        if (e.tool === 'hatch' && e.points.length > 2) segs.push({ a: e.points[e.points.length - 1], b: e.points[0] });
+      } else if (e.tool === 'arc' && e.points && e.points.length >= 3) {
+        // Sample the arc into chords so it acts as a trim/extend boundary.
+        var sa = arcSamples(e.points, 40);
+        for (var q = 1; q < sa.length; q++) segs.push({ a: sa[q - 1], b: sa[q] });
+      } else if (e.tool === 'ellipse' && e.startX != null) {
+        var ex0 = (e.startX + e.endX) / 2, ey0 = (e.startY + e.endY) / 2, rxe = Math.abs(e.endX - e.startX) / 2, rye = Math.abs(e.endY - e.startY) / 2, prev = null;
+        for (var ai2 = 0; ai2 <= 48; ai2++) { var th2 = ai2 / 48 * 2 * Math.PI, p2 = { x: ex0 + rxe * Math.cos(th2), y: ey0 + rye * Math.sin(th2) }; if (prev) segs.push({ a: prev, b: p2 }); prev = p2; }
       }
     });
     return segs;
@@ -1631,6 +1639,11 @@
       if (e.tool === 'rect' || e.tool === 'ellipse') {
         g.push({ x: e.startX, y: e.endY, type: 'pt', anchor: { x: e.endX, y: e.startY }, apply: function (nx, ny) { e.startX = nx; e.endY = ny; } });
         g.push({ x: e.endX, y: e.startY, type: 'pt', anchor: { x: e.startX, y: e.endY }, apply: function (nx, ny) { e.endX = nx; e.startY = ny; } });
+        // Edge-midpoint grips — drag a single side.
+        g.push({ x: (e.startX + e.endX) / 2, y: e.startY, type: 'pt', anchor: { x: (e.startX + e.endX) / 2, y: e.endY }, apply: function (nx, ny) { e.startY = ny; } });
+        g.push({ x: (e.startX + e.endX) / 2, y: e.endY, type: 'pt', anchor: { x: (e.startX + e.endX) / 2, y: e.startY }, apply: function (nx, ny) { e.endY = ny; } });
+        g.push({ x: e.startX, y: (e.startY + e.endY) / 2, type: 'pt', anchor: { x: e.endX, y: (e.startY + e.endY) / 2 }, apply: function (nx, ny) { e.startX = nx; } });
+        g.push({ x: e.endX, y: (e.startY + e.endY) / 2, type: 'pt', anchor: { x: e.startX, y: (e.startY + e.endY) / 2 }, apply: function (nx, ny) { e.endX = nx; } });
       }
       g.push({ x: (e.startX + e.endX) / 2, y: (e.startY + e.endY) / 2, type: 'move' });
     } else if (e.points && e.points.length) {
@@ -1859,10 +1872,38 @@
     out.sort(function (a, b) { return a - b; });
     return out;
   }
+  // Nearest trim target near a point — a line OR a polyline segment.
+  function pickTrimTarget(pt, vp) {
+    var tol = 10 / S.view.scale, best = null, bestD = tol;
+    (S.doc.entities || []).forEach(function (e) {
+      if (vp && e.viewport !== vp.id) return;
+      var ly = layerById(S.doc, e.layer); if (ly && (ly.visible === false || ly.locked)) return;
+      if (e.tool === 'line' && e.startX != null) {
+        var i0 = ptSegInfo(pt.x, pt.y, e.startX, e.startY, e.endX, e.endY);
+        if (i0.dist < bestD && i0.t >= -0.03 && i0.t <= 1.03) { bestD = i0.dist; best = { entity: e, kind: 'line', t: Math.max(0, Math.min(1, i0.t)) }; }
+      } else if (e.tool === 'polyline' && e.points && e.points.length > 1) {
+        for (var i = 1; i < e.points.length; i++) {
+          var a = e.points[i - 1], b = e.points[i], iN = ptSegInfo(pt.x, pt.y, a.x, a.y, b.x, b.y);
+          if (iN.dist < bestD && iN.t >= -0.03 && iN.t <= 1.03) { bestD = iN.dist; best = { entity: e, kind: 'poly', si: i - 1, t: Math.max(0, Math.min(1, iN.t)) }; }
+        }
+      }
+    });
+    return best;
+  }
+  // Crossing params of an arbitrary segment a→b against other geometry.
+  function segCrossParams(ax, ay, bx, by, excludeId, vp) {
+    var out = [];
+    segmentsInVp(vp, excludeId).forEach(function (s) {
+      var t = segCrossT(ax, ay, bx, by, s.a.x, s.a.y, s.b.x, s.b.y);
+      if (t != null && t > 0.0008 && t < 0.9992) out.push(t);
+    });
+    return out;
+  }
   function trimAt(pt, vp) {
-    var hit = pickLineAt(pt, vp); if (!hit) return;
+    var hit = pickTrimTarget(pt, vp); if (!hit) return;
+    if (hit.kind === 'poly') return trimPoly(hit, vp);
     var e = hit.entity, t0 = hit.t, ts = lineCrossParams(e, vp);
-    if (!ts.length) { setHint('Trim: no crossing line to cut against.'); return; }
+    if (!ts.length) { setHint('Trim: nothing crosses that line to cut against.'); return; }
     var lo = 0, hi = 1;
     for (var i = 0; i < ts.length; i++) { if (ts[i] <= t0) lo = Math.max(lo, ts[i]); if (ts[i] >= t0) hi = Math.min(hi, ts[i]); }
     var ax = e.startX, ay = e.startY, bx = e.endX, by = e.endY;
@@ -1879,6 +1920,24 @@
     });
     S.selectedId = null; buildLayers(); repaint();
   }
+  // Trim the clicked segment of a polyline back to its nearest crossings,
+  // splitting the polyline into the kept run(s).
+  function trimPoly(hit, vp) {
+    var e = hit.entity, si = hit.si, t0 = hit.t, a = e.points[si], b = e.points[si + 1];
+    var ts = segCrossParams(a.x, a.y, b.x, b.y, e.id, vp);
+    if (!ts.length) { setHint('Trim: nothing crosses that segment to cut against.'); return; }
+    var lo = 0, hi = 1;
+    ts.forEach(function (t) { if (t <= t0) lo = Math.max(lo, t); if (t >= t0) hi = Math.min(hi, t); });
+    function P(t) { return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t }; }
+    pushUndo();
+    var left = e.points.slice(0, si + 1); if (lo > 0.0008) left.push(P(lo));
+    var right = []; if (hi < 0.9992) right.push(P(hi)); right = right.concat(e.points.slice(si + 1));
+    S.doc.entities = S.doc.entities.filter(function (x) { return x.id !== e.id; });
+    [left, right].forEach(function (pts) {
+      if (pts.length >= 2) { var c = JSON.parse(JSON.stringify(e)); c.id = uid('polyline'); c.points = pts; S.doc.entities.push(c); }
+    });
+    S.selectedId = null; buildLayers(); repaint();
+  }
   // Param along the ray P=(fx,fy)+u*(dx,dy) where it meets a segment (u=1
   // is the moving end); requires the hit to lie within the segment.
   function rayHitU(fx, fy, dx, dy, x3, y3, x4, y4) {
@@ -1890,21 +1949,41 @@
     if (u < -0.001 || u > 1.001) return null;
     return t;
   }
+  // Extend the ray from a fixed point through a moving point to the
+  // nearest boundary ahead; returns the hit point (or null).
+  function extendHit(fx, fy, mx, my, excludeId, vp) {
+    var dx = mx - fx, dy = my - fy, best = null, bestU = Infinity;
+    segmentsInVp(vp, excludeId).forEach(function (s) {
+      var u = rayHitU(fx, fy, dx, dy, s.a.x, s.a.y, s.b.x, s.b.y);
+      if (u != null && u > 1.0005 && u < bestU) { bestU = u; best = { x: fx + dx * u, y: fy + dy * u }; }
+    });
+    return best;
+  }
   function extendAt(pt, vp) {
-    var hit = pickLineAt(pt, vp); if (!hit) return;
+    var hit = pickTrimTarget(pt, vp); if (!hit) return;
+    if (hit.kind === 'poly') return extendPoly(hit, vp);
     var e = hit.entity;
     var ds = Math.hypot(pt.x - e.startX, pt.y - e.startY), de = Math.hypot(pt.x - e.endX, pt.y - e.endY);
     var movingStart = ds < de;
     var fx = movingStart ? e.endX : e.startX, fy = movingStart ? e.endY : e.startY;
     var mx = movingStart ? e.startX : e.endX, my = movingStart ? e.startY : e.endY;
-    var dx = mx - fx, dy = my - fy, best = null, bestU = Infinity;
-    segmentsInVp(vp, e.id).forEach(function (s) {
-      var u = rayHitU(fx, fy, dx, dy, s.a.x, s.a.y, s.b.x, s.b.y);
-      if (u != null && u > 1.0005 && u < bestU) { bestU = u; best = { x: fx + dx * u, y: fy + dy * u }; }
-    });
-    if (!best) { setHint('Extend: no line ahead to extend to.'); return; }
+    var best = extendHit(fx, fy, mx, my, e.id, vp);
+    if (!best) { setHint('Extend: no edge ahead to extend to.'); return; }
     pushUndo();
     if (movingStart) { e.startX = best.x; e.startY = best.y; } else { e.endX = best.x; e.endY = best.y; }
+    buildLayers(); repaint();
+  }
+  // Extend a polyline's first/last vertex (whichever end the click is near)
+  // along its end segment to the nearest boundary.
+  function extendPoly(hit, vp) {
+    var e = hit.entity, pts = e.points, last = pts.length - 1;
+    var nearStart = (hit.si === 0 && hit.t < 0.5), nearEnd = (hit.si === last - 1 && hit.t > 0.5);
+    if (!nearStart && !nearEnd) { setHint('Extend: click near a polyline END to extend it.'); return; }
+    var mi = nearStart ? 0 : last, fi = nearStart ? 1 : last - 1;
+    var best = extendHit(pts[fi].x, pts[fi].y, pts[mi].x, pts[mi].y, e.id, vp);
+    if (!best) { setHint('Extend: no edge ahead to extend to.'); return; }
+    pushUndo();
+    pts[mi] = { x: best.x, y: best.y };
     buildLayers(); repaint();
   }
   function lineLineIntersect(x1, y1, x2, y2, x3, y3, x4, y4) {
