@@ -31,6 +31,12 @@ function newId() {
   return 'ft_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
 }
 
+// The caller's organization (field tools are per-org). NULL-org legacy
+// tools stay visible to everyone until backfilled.
+function callerOrg(req) {
+  return (req.user && req.user.organization_id) ? Number(req.user.organization_id) : null;
+}
+
 function isValidCategory(c) {
   return !c || VALID_CATEGORIES.includes(c);
 }
@@ -41,11 +47,14 @@ function isValidCategory(c) {
 // the body when the user opens a specific tool.
 router.get('/', requireAuth, async (req, res) => {
   try {
+    const org = callerOrg(req);
     const r = await pool.query(
       `SELECT id, name, description, category, created_by, created_at, updated_at,
               is_system, system_key, LENGTH(html_body) AS html_size
          FROM field_tools
-        ORDER BY is_system DESC, updated_at DESC`
+        WHERE organization_id = $1 OR organization_id IS NULL
+        ORDER BY is_system DESC, updated_at DESC`,
+      [org]
     );
     res.json({ tools: r.rows });
   } catch (e) {
@@ -80,14 +89,14 @@ router.post('/', requireAuth, async (req, res) => {
     const id = newId();
     try {
       const r = await pool.query(
-        `INSERT INTO field_tools (id, name, description, category, html_body, created_by, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
+        `INSERT INTO field_tools (id, name, description, category, html_body, created_by, organization_id, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
          RETURNING *`,
-        [id, name, description, category, htmlBody, req.user.id]
+        [id, name, description, category, htmlBody, req.user.id, callerOrg(req)]
       );
       res.json({ tool: r.rows[0] });
     } catch (e) {
-      // Unique violation on name
+      // Unique violation on (organization_id, name)
       if (e.code === '23505') {
         return res.status(409).json({ error: 'A tool named "' + name + '" already exists.' });
       }
@@ -348,7 +357,8 @@ router.delete('/runs/:id', requireAuth, async (req, res) => {
 router.get('/catalog', requireAuth, async (req, res) => {
   try {
     const added = (await pool.query(
-      `SELECT system_key FROM field_tools WHERE system_key IS NOT NULL`
+      `SELECT system_key FROM field_tools WHERE system_key IS NOT NULL AND organization_id = $1`,
+      [callerOrg(req)]
     )).rows.map((r) => r.system_key);
     const addedSet = new Set(added);
     const list = catalog.getCatalog().map((e) => ({
@@ -369,23 +379,24 @@ router.post('/catalog/:key/add', requireAuth, requireOrg, requireCapability('ROL
     const key = String(req.params.key || '').trim();
     const entry = catalog.getEntry(key);
     if (!entry) return res.status(404).json({ error: 'Unknown system tool.' });
-    const existing = await pool.query('SELECT id FROM field_tools WHERE system_key = $1', [key]);
+    const org = callerOrg(req);
+    const existing = await pool.query('SELECT id FROM field_tools WHERE system_key = $1 AND organization_id = $2', [key, org]);
     try {
       if (existing.rows.length) {
         const r = await pool.query(
           `UPDATE field_tools
               SET name=$2, description=$3, category=$4, html_body=$5, is_system=TRUE, updated_at=NOW()
-            WHERE system_key=$1 RETURNING id, name, is_system, system_key`,
-          [key, entry.name, entry.description, entry.category, entry.html_body]
+            WHERE id=$1 RETURNING id, name, is_system, system_key`,
+          [existing.rows[0].id, entry.name, entry.description, entry.category, entry.html_body]
         );
         return res.json({ tool: r.rows[0], added: false, updated: true });
       }
       const id = newId();
       const r = await pool.query(
-        `INSERT INTO field_tools (id, name, description, category, html_body, created_by, is_system, system_key, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, TRUE, $7, NOW(), NOW())
+        `INSERT INTO field_tools (id, name, description, category, html_body, created_by, organization_id, is_system, system_key, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, TRUE, $8, NOW(), NOW())
          RETURNING id, name, is_system, system_key`,
-        [id, entry.name, entry.description, entry.category, entry.html_body, req.user.id, key]
+        [id, entry.name, entry.description, entry.category, entry.html_body, req.user.id, org, key]
       );
       return res.json({ tool: r.rows[0], added: true });
     } catch (e) {
@@ -406,7 +417,7 @@ router.post('/catalog/:key/add', requireAuth, requireOrg, requireCapability('ROL
 router.delete('/catalog/:key', requireAuth, requireOrg, requireCapability('ROLES_MANAGE'), async (req, res) => {
   try {
     const key = String(req.params.key || '').trim();
-    const r = await pool.query('DELETE FROM field_tools WHERE system_key = $1 RETURNING id', [key]);
+    const r = await pool.query('DELETE FROM field_tools WHERE system_key = $1 AND organization_id = $2 RETURNING id', [key, callerOrg(req)]);
     if (!r.rows.length) return res.status(404).json({ error: 'That system tool is not on the list.' });
     res.json({ ok: true, key });
   } catch (e) {
@@ -425,7 +436,10 @@ router.get('/:id', requireAuth, async (req, res) => {
   try {
     const id = String(req.params.id || '').trim();
     if (!id) return res.status(400).json({ error: 'id is required' });
-    const r = await pool.query(`SELECT * FROM field_tools WHERE id = $1`, [id]);
+    const r = await pool.query(
+      `SELECT * FROM field_tools WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)`,
+      [id, callerOrg(req)]
+    );
     if (!r.rows.length) return res.status(404).json({ error: 'Not found' });
     res.json({ tool: r.rows[0] });
   } catch (e) {
@@ -441,6 +455,12 @@ router.put('/:id', requireAuth, async (req, res) => {
     const id = String(req.params.id || '').trim();
     if (!id) return res.status(400).json({ error: 'id is required' });
     const body = req.body || {};
+
+    // Ownership guard — only the owning org (or legacy null-org) may edit.
+    const own = await pool.query('SELECT organization_id FROM field_tools WHERE id = $1', [id]);
+    if (!own.rows.length) return res.status(404).json({ error: 'Not found' });
+    const oorg = own.rows[0].organization_id;
+    if (oorg != null && oorg !== callerOrg(req)) return res.status(404).json({ error: 'Not found' });
 
     // Only update fields the caller actually sent. Build dynamic SET.
     const sets = [];
@@ -502,8 +522,10 @@ router.delete('/:id', requireAuth, async (req, res) => {
     if (!id) return res.status(400).json({ error: 'id is required' });
     // System (preset) tools can't be deleted here — an admin removes them
     // from the catalog (DELETE /catalog/:key).
-    const chk = await pool.query('SELECT is_system FROM field_tools WHERE id = $1', [id]);
+    const chk = await pool.query('SELECT is_system, organization_id FROM field_tools WHERE id = $1', [id]);
     if (!chk.rows.length) return res.status(404).json({ error: 'Not found' });
+    const corg = chk.rows[0].organization_id;
+    if (corg != null && corg !== callerOrg(req)) return res.status(404).json({ error: 'Not found' });
     if (chk.rows[0].is_system) {
       return res.status(403).json({ error: "System tools can't be deleted. An admin can remove them from Tools → Add system tool." });
     }

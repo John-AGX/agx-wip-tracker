@@ -1340,11 +1340,15 @@ async function initSchema() {
     -- X") or via the Tools tab's "+ Add tool" button.
     CREATE TABLE IF NOT EXISTS field_tools (
       id TEXT PRIMARY KEY,
-      name TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
       description TEXT,
       category TEXT,                                       -- 'calculator' | 'lookup' | 'form' | 'other'
       html_body TEXT NOT NULL,
       created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      -- Owning organization. Field tools are per-org: each org curates its
+      -- own list (and its own selection of system presets). NULL = legacy
+      -- deployment-wide tool (visible to all) until backfilled.
+      organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       -- System (preset) tools come from the code catalog in
@@ -1357,10 +1361,19 @@ async function initSchema() {
     -- Backfill columns for already-deployed DBs.
     ALTER TABLE field_tools ADD COLUMN IF NOT EXISTS is_system BOOLEAN NOT NULL DEFAULT FALSE;
     ALTER TABLE field_tools ADD COLUMN IF NOT EXISTS system_key TEXT;
+    ALTER TABLE field_tools ADD COLUMN IF NOT EXISTS organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE;
+    -- Per-org scoping: drop the old global UNIQUE(name) + global system_key
+    -- index, scope both per organization. Backfill org from the creator.
+    ALTER TABLE field_tools DROP CONSTRAINT IF EXISTS field_tools_name_key;
+    DROP INDEX IF EXISTS idx_field_tools_system_key;
+    UPDATE field_tools ft SET organization_id = u.organization_id
+      FROM users u WHERE u.id = ft.created_by AND ft.organization_id IS NULL;
     CREATE INDEX IF NOT EXISTS idx_field_tools_category ON field_tools(category);
     CREATE INDEX IF NOT EXISTS idx_field_tools_updated ON field_tools(updated_at DESC);
-    -- One row per catalog key (so "add" is idempotent / upgradable).
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_field_tools_system_key ON field_tools(system_key) WHERE system_key IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_field_tools_org ON field_tools(organization_id);
+    -- Unique tool name per org, and one row per catalog key per org.
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_field_tools_org_name ON field_tools(organization_id, name);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_field_tools_org_syskey ON field_tools(organization_id, system_key) WHERE system_key IS NOT NULL;
 
     -- Field tool printouts — one row per saved run. The user clicks
     -- "Save Printout" inside a field tool modal; the tool's HTML
