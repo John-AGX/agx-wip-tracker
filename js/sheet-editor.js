@@ -93,7 +93,8 @@
       sheet: { size: 'arch-d', w: w, h: h, unit: 'in', margin: m },
       titleblock: {
         project: (plan && plan.name) || '', title: 'PLAN', scale: '1/4" = 1\'-0"',
-        date: '', drawnBy: '', sheetNo: 'A-1', client: '', northDeg: 0
+        date: '', drawnBy: '', sheetNo: 'A-1', client: '', northDeg: 0,
+        company: '', showLogo: true
       },
       layers: [
         { id: 'L0', name: 'Default', color: '#1f2937', weight: 4, lineType: 'solid', visible: true, locked: false },
@@ -173,6 +174,7 @@
           try { prims().drawStroke(ctx, e); } catch (err) { /* defensive */ }
         });
       }
+      try { drawScaleBar(ctx, vp); } catch (err) { /* defensive */ }
       ctx.restore();
       // label bar (outside clip)
       ctx.fillStyle = '#1f2937';
@@ -182,34 +184,107 @@
         vp.x + 4, vp.y - 6);
     });
 
+    drawNorthArrow(ctx, doc);
     drawTitleblock(ctx, doc);
   }
 
+  // Modern titleblock: a dark company band (logo + org name) over a clean
+  // field grid, with the sheet number emphasized. Pulls the org logo +
+  // name from the branding kit (loaded async into S._logo / S._orgName).
   function drawTitleblock(ctx, doc) {
     var s = doc.sheet, tb = doc.titleblock || {};
     var tbW = Math.round(5 * DPI), tbH = Math.round(3 * DPI);
     var x = s.w - s.margin - 10 - tbW;
     var y = s.h - s.margin - 10 - tbH;
+    var pad = Math.round(DPI * 0.11);
     ctx.save();
     ctx.fillStyle = '#ffffff'; ctx.fillRect(x, y, tbW, tbH);
-    ctx.strokeStyle = '#1f2937'; ctx.lineWidth = 2; ctx.strokeRect(x, y, tbW, tbH);
-    var rowH = tbH / 5;
-    ctx.lineWidth = 1;
-    for (var i = 1; i < 5; i++) { ctx.beginPath(); ctx.moveTo(x, y + rowH * i); ctx.lineTo(x + tbW, y + rowH * i); ctx.stroke(); }
-    function field(label, val, row, ox, ow) {
-      ox = ox == null ? 0 : ox;
-      ctx.fillStyle = '#6b7280'; ctx.font = '600 ' + Math.round(DPI * 0.1) + 'px Arial, sans-serif'; ctx.textBaseline = 'top';
-      ctx.fillText(label, x + 10 + ox, y + rowH * row + 8);
-      ctx.fillStyle = '#111827'; ctx.font = '700 ' + Math.round(DPI * 0.16) + 'px Arial, sans-serif';
-      ctx.fillText(String(val || '—'), x + 10 + ox, y + rowH * row + Math.round(DPI * 0.13));
+    ctx.strokeStyle = '#111827'; ctx.lineWidth = 2.5; ctx.strokeRect(x, y, tbW, tbH);
+
+    // ── Company band (top) ──
+    var bandH = Math.round(tbH * 0.26);
+    ctx.fillStyle = '#111827'; ctx.fillRect(x, y, tbW, bandH);
+    var company = String(tb.company || (S && S._orgName) || '').toUpperCase();
+    var logo = (tb.showLogo !== false && S && S._logo) ? S._logo : null;
+    var textX = x + pad;
+    if (logo) {
+      var boxH = bandH - pad, boxW = Math.round(bandH * 1.7);
+      var iw = logo.naturalWidth || logo.width || 1, ih = logo.naturalHeight || logo.height || 1;
+      var sc = Math.min(boxW / iw, boxH / ih), dw = iw * sc, dh = ih * sc;
+      var ly = y + (bandH - dh) / 2;
+      ctx.fillStyle = '#ffffff'; ctx.fillRect(x + pad - 4, ly - 4, dw + 8, dh + 8);
+      try { ctx.drawImage(logo, x + pad, ly, dw, dh); } catch (e) {}
+      textX = x + pad + dw + pad;
     }
-    field('PROJECT', tb.project, 0);
-    field('TITLE', tb.title, 1);
-    field('CLIENT', tb.client, 2);
-    field('SCALE', tb.scale, 3);
-    field('DATE', tb.date, 4, 0);
-    field('BY', tb.drawnBy, 4, tbW * 0.4);
-    field('SHEET', tb.sheetNo, 4, tbW * 0.7);
+    ctx.fillStyle = '#ffffff'; ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
+    ctx.font = '800 ' + Math.round(DPI * 0.19) + 'px Arial, sans-serif';
+    ctx.fillText(company || 'COMPANY NAME', textX, y + bandH / 2, x + tbW - textX - pad);
+
+    // ── Field grid (below band) ──
+    var gy = y + bandH, gh = tbH - bandH, rows = 4, rowH = gh / rows;
+    var midX = x + tbW * 0.55, splitX = x + tbW * 0.3;
+    ctx.strokeStyle = '#9ca3af'; ctx.lineWidth = 1;
+    for (var i = 1; i < rows; i++) { ctx.beginPath(); ctx.moveTo(x, gy + rowH * i); ctx.lineTo(x + tbW, gy + rowH * i); ctx.stroke(); }
+    ctx.beginPath(); ctx.moveTo(midX, gy + rowH * 2); ctx.lineTo(midX, gy + rowH * 4); ctx.stroke();   // CLIENT|SCALE + ·|SHEET
+    ctx.beginPath(); ctx.moveTo(splitX, gy + rowH * 3); ctx.lineTo(splitX, gy + rowH * 4); ctx.stroke(); // DATE|BY
+    function cell(label, val, cx, cy, cw, big) {
+      ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+      ctx.fillStyle = '#6b7280'; ctx.font = '700 ' + Math.round(DPI * 0.08) + 'px Arial, sans-serif';
+      ctx.fillText(label, cx + pad * 0.8, cy + Math.round(DPI * 0.06));
+      ctx.fillStyle = '#111827';
+      ctx.font = (big ? '800 ' + Math.round(DPI * 0.24) : '700 ' + Math.round(DPI * 0.145)) + 'px Arial, sans-serif';
+      ctx.fillText(String(val || '—'), cx + pad * 0.8, cy + rowH * (big ? 0.36 : 0.44), cw - pad * 1.6);
+    }
+    cell('PROJECT', tb.project, x, gy, tbW);
+    cell('SHEET TITLE', tb.title, x, gy + rowH, tbW);
+    cell('CLIENT', tb.client, x, gy + rowH * 2, tbW * 0.55);
+    cell('SCALE', tb.scale, midX, gy + rowH * 2, tbW * 0.45);
+    cell('DATE', tb.date, x, gy + rowH * 3, tbW * 0.3);
+    cell('DRAWN BY', tb.drawnBy, splitX, gy + rowH * 3, tbW * 0.25);
+    cell('SHEET', tb.sheetNo, midX, gy + rowH * 3, tbW * 0.45, true);
+    ctx.restore();
+  }
+
+  // North arrow at the sheet's top-right (rotates with titleblock.northDeg).
+  function drawNorthArrow(ctx, doc) {
+    var s = doc.sheet, tb = doc.titleblock || {};
+    var r = Math.round(DPI * 0.4);
+    var nx = s.w - s.margin - 22 - r, ny = s.margin + 22 + r;
+    ctx.save();
+    ctx.translate(nx, ny);
+    ctx.rotate((tb.northDeg || 0) * Math.PI / 180);
+    ctx.strokeStyle = '#111827'; ctx.fillStyle = '#111827'; ctx.lineWidth = 2; ctx.lineJoin = 'round';
+    ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, r * 0.72); ctx.lineTo(0, -r * 0.5); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, -r * 0.72); ctx.lineTo(-r * 0.24, -r * 0.34); ctx.lineTo(r * 0.24, -r * 0.34); ctx.closePath(); ctx.fill();
+    ctx.font = '800 ' + Math.round(r * 0.62) + 'px Arial, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText('N', 0, -r * 1.32);
+    ctx.restore();
+  }
+
+  // Pick the largest "nice" round number of feet whose bar fits in maxPx.
+  function niceScaleFeet(ppi, maxPx) {
+    var cand = [1, 2, 5, 10, 20, 25, 50, 100, 200, 500, 1000], best = cand[0];
+    for (var i = 0; i < cand.length; i++) if (cand[i] * 12 * ppi <= maxPx) best = cand[i];
+    return best;
+  }
+  // Graphic scale bar in a viewport's bottom-left — stays true when printed.
+  function drawScaleBar(ctx, vp) {
+    if (!vp.scale || !vp.scale.pixelsPerInch) return;
+    var ppi = vp.scale.pixelsPerInch;
+    var ft = niceScaleFeet(ppi, vp.w * 0.32), barPx = ft * 12 * ppi;
+    if (barPx < 24 || barPx > vp.w - 28) return;
+    var segs = 4, segPx = barPx / segs, bx = vp.x + 14, by = vp.y + vp.h - 26, bh = 7;
+    ctx.save();
+    ctx.lineWidth = 1; ctx.strokeStyle = '#111827';
+    for (var i = 0; i < segs; i++) {
+      ctx.fillStyle = (i % 2 === 0) ? '#111827' : '#ffffff';
+      ctx.fillRect(bx + segPx * i, by, segPx, bh); ctx.strokeRect(bx + segPx * i, by, segPx, bh);
+    }
+    ctx.fillStyle = '#111827'; ctx.font = '700 ' + Math.round(DPI * 0.08) + 'px Arial, sans-serif';
+    ctx.textBaseline = 'bottom'; ctx.textAlign = 'left'; ctx.fillText('0', bx - 2, by - 3);
+    ctx.textAlign = 'right'; ctx.fillText(ft + " ft", bx + barPx + 2, by - 3);
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top'; ctx.fillText(vp.scale.label || '', bx + barPx / 2, by + bh + 2);
     ctx.restore();
   }
 
@@ -416,10 +491,42 @@
     sizeCanvas(true);
     wireInput();
     repaint();
+    loadOrgBrand();
 
     ov.focus();
     window.addEventListener('resize', onResize);
     S.onResize = onResize;
+  }
+
+  // Pull the org name + branding logo for the titleblock. Name comes from
+  // /api/org/branding; the logo is fetched through the same-origin proxy
+  // (/api/org/logo) as a blob → object URL so the canvas exports cleanly.
+  function loadOrgBrand() {
+    if (!S || !window.p86Api || !window.p86Api.org) return;
+    window.p86Api.org.branding().then(function (r) {
+      if (!S) return;
+      S._orgName = (r && r.name) || '';
+      repaint();
+      if (r && r.branding && r.branding.logo_url) loadOrgLogo();
+    }).catch(function () { /* no org branding — titleblock just omits it */ });
+  }
+  function loadOrgLogo() {
+    var token = (window.p86Auth && window.p86Auth.getToken && window.p86Auth.getToken()) || null;
+    if (!token) { try { token = localStorage.getItem('p86-auth-token'); } catch (e) {} }
+    var headers = {}; if (token) headers['Authorization'] = 'Bearer ' + token;
+    fetch('/api/org/logo', { headers: headers, credentials: 'same-origin' })
+      .then(function (resp) { if (!resp.ok) throw new Error('no logo'); return resp.blob(); })
+      .then(function (blob) {
+        var url = URL.createObjectURL(blob);
+        var img = new Image();
+        img.onload = function () {
+          if (S) { S._logo = img; repaint(); }
+          setTimeout(function () { try { URL.revokeObjectURL(url); } catch (e) {} }, 0);
+        };
+        img.onerror = function () { try { URL.revokeObjectURL(url); } catch (e) {} };
+        img.src = url;
+      })
+      .catch(function () { /* logo optional */ });
   }
 
   function close() {
@@ -597,15 +704,20 @@
     var tb = S.doc.titleblock || {};
     var ov = document.createElement('div');
     ov.style.cssText = 'position:fixed;inset:0;z-index:5400;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;padding:20px;';
-    var fields = [['project', 'Project'], ['title', 'Sheet title'], ['client', 'Client'], ['scale', 'Scale note'], ['date', 'Date'], ['drawnBy', 'Drawn by'], ['sheetNo', 'Sheet #']];
+    var fields = [['company', 'Company name (blank = use your org name)'], ['project', 'Project'], ['title', 'Sheet title'], ['client', 'Client'], ['scale', 'Scale note'], ['date', 'Date'], ['drawnBy', 'Drawn by'], ['sheetNo', 'Sheet #'], ['northDeg', 'North rotation (°)']];
     var box = document.createElement('div');
-    box.style.cssText = 'background:#0f0f1e;border:1px solid #353545;border-radius:12px;padding:20px 22px;max-width:440px;width:100%;color:#e6e6e6;box-shadow:0 16px 48px rgba(0,0,0,0.6);';
+    box.style.cssText = 'background:#0f0f1e;border:1px solid #353545;border-radius:12px;padding:20px 22px;max-width:440px;width:100%;max-height:88vh;overflow-y:auto;color:#e6e6e6;box-shadow:0 16px 48px rgba(0,0,0,0.6);';
     box.innerHTML = '<div style="font-size:15px;font-weight:700;color:#fff;margin-bottom:12px;">Titleblock</div>' +
       fields.map(function (f) {
         return '<label style="display:block;font-size:11px;color:#9aa;margin:8px 0 3px;">' + esc(f[1]) + '</label>' +
-          '<input data-tb="' + f[0] + '" value="' + esc(tb[f[0]] || '') + '" style="width:100%;box-sizing:border-box;background:#1a1a2e;color:#fff;border:1px solid #444;border-radius:6px;padding:7px 10px;font-size:13px;outline:none;" />';
+          '<input data-tb="' + f[0] + '" value="' + esc(tb[f[0]] != null ? tb[f[0]] : '') + '" style="width:100%;box-sizing:border-box;background:#1a1a2e;color:#fff;border:1px solid #444;border-radius:6px;padding:7px 10px;font-size:13px;outline:none;" />';
       }).join('') +
-      '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;">' +
+      '<label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#cbd5e1;margin-top:14px;cursor:pointer;">' +
+        '<input type="checkbox" data-tb-showlogo ' + (tb.showLogo !== false ? 'checked' : '') + ' style="width:15px;height:15px;cursor:pointer;" /> Show company logo in titleblock' +
+      '</label>' +
+      '<div style="font-size:10.5px;color:#64748b;margin-top:5px;line-height:1.5;">Logo &amp; company name come from your org <b style="color:#9aa;">Branding kit</b> (Admin → Organization → Branding). ' +
+        (S && S._logo ? '<span style="color:#34d399;">✓ Logo loaded.</span>' : 'No logo found — add one there and it appears here.') + '</div>' +
+      '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px;">' +
         '<button data-tb-cancel style="padding:8px 16px;background:rgba(255,255,255,0.06);color:#ddd;border:1px solid #444;border-radius:6px;cursor:pointer;font-weight:600;">Cancel</button>' +
         '<button data-tb-save style="padding:8px 16px;background:#4f8cff;color:#fff;border:1px solid #4f8cff;border-radius:6px;cursor:pointer;font-weight:700;">Save</button>' +
       '</div>';
@@ -615,6 +727,8 @@
     box.querySelector('[data-tb-save]').onclick = function () {
       pushUndo();
       box.querySelectorAll('[data-tb]').forEach(function (inp) { S.doc.titleblock[inp.getAttribute('data-tb')] = inp.value; });
+      S.doc.titleblock.northDeg = parseFloat(S.doc.titleblock.northDeg) || 0;
+      var cb = box.querySelector('[data-tb-showlogo]'); if (cb) S.doc.titleblock.showLogo = cb.checked;
       close(); repaint();
     };
     ov.addEventListener('click', function (e) { if (e.target === ov) close(); });

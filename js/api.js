@@ -324,6 +324,14 @@
     merge: function(payload) { return post('/api/org-tags/merge', payload); }
   };
 
+  // Org-level surface metadata (name, branding kit). branding() is the
+  // all-users read powering the shop-drawing titleblock logo; manifest()
+  // is the System Map summary feed.
+  var org = {
+    branding: function() { return get('/api/org/branding'); },
+    manifest: function() { return get('/api/org/manifest'); }
+  };
+
   // Per-org folder templates. Customizes the default folder set shown
   // for new leads / estimates / jobs / clients before any file exists.
   // list() returns { templates: { <type>: { effective, custom,
@@ -636,7 +644,7 @@
 
   window.p86Api = {
     get: get, put: put, post: post, del: del, patch: patch,
-    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, qbCosts: qbCosts, subs: subsApi, schedule: schedule, adminSms: adminSms, messages: messages, weather: weather, projects: projects, tasks: tasks, plans: plans, orgTags: orgTags, folderTemplates: folderTemplates, reports: reports, changeOrders: changeOrders,
+    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, qbCosts: qbCosts, subs: subsApi, schedule: schedule, adminSms: adminSms, messages: messages, weather: weather, projects: projects, tasks: tasks, plans: plans, orgTags: orgTags, org: org, folderTemplates: folderTemplates, reports: reports, changeOrders: changeOrders,
     isOffline: isOffline,
     isAuthenticated: function() { return !!getToken() && !isOffline(); }
   };

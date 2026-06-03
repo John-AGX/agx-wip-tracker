@@ -383,4 +383,59 @@ router.get('/manifest', requireAuth, async (req, res) => {
   }
 });
 
+// GET /api/org/logo — streams the org's branding logo bytes SAME-ORIGIN so
+// the shop-drawing titleblock can draw it on a canvas and still export to
+// PNG/PDF without tainting (R2 logo URLs are cross-origin). Bounded: only
+// the org's own admin-set logo_url, http(s) only, image content-types only.
+router.get('/logo', requireAuth, async (req, res) => {
+  const orgId = callerOrgId(req);
+  if (!orgId) return res.status(403).end();
+  try {
+    const r = await pool.query('SELECT branding FROM organizations WHERE id = $1', [orgId]);
+    const b = (r.rows[0] && r.rows[0].branding) || {};
+    const url = typeof b.logo_url === 'string' ? b.logo_url.trim() : '';
+    if (!url || !/^https?:\/\//i.test(url)) return res.status(404).end();
+    if (typeof fetch !== 'function') return res.status(501).end();
+    const upstream = await fetch(url, { redirect: 'follow' });
+    if (!upstream.ok) return res.status(502).end();
+    const ct = upstream.headers.get('content-type') || 'image/png';
+    if (!/^image\//i.test(ct)) return res.status(415).end();
+    const buf = Buffer.from(await upstream.arrayBuffer());
+    res.set('Content-Type', ct);
+    res.set('Cache-Control', 'private, max-age=300');
+    return res.send(buf);
+  } catch (e) {
+    console.error('GET /api/org/logo error:', e);
+    return res.status(500).end();
+  }
+});
+
+// GET /api/org/branding — the caller's org name + branding kit (logo URL,
+// colors, footer line). Any authenticated user in the org may read it; this
+// is surface metadata, not record data. Powers the shop-drawing titleblock
+// logo (and any future branded surface). The admin *write* path lives in
+// admin-organizations-routes.js and is intentionally not touched here.
+router.get('/branding', requireAuth, async (req, res) => {
+  const orgId = callerOrgId(req);
+  if (!orgId) return res.status(403).json({ error: 'Caller has no organization' });
+  try {
+    const r = await pool.query('SELECT name, branding FROM organizations WHERE id = $1', [orgId]);
+    if (!r.rows.length) return res.status(404).json({ error: 'Organization not found' });
+    const row = r.rows[0];
+    const b = (row.branding && typeof row.branding === 'object') ? row.branding : {};
+    res.json({
+      name: row.name || '',
+      branding: {
+        logo_url: typeof b.logo_url === 'string' ? b.logo_url : '',
+        primary_color: typeof b.primary_color === 'string' ? b.primary_color : '',
+        accent_color: typeof b.accent_color === 'string' ? b.accent_color : '',
+        footer_address: typeof b.footer_address === 'string' ? b.footer_address : '',
+      },
+    });
+  } catch (e) {
+    console.error('GET /api/org/branding error:', e);
+    res.status(500).json({ error: 'Server error', detail: e.message });
+  }
+});
+
 module.exports = router;
