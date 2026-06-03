@@ -591,20 +591,24 @@
                             </div>
                         </div>
                     </div>
-                    <!-- Workspace — personal per-user utilities. My Files
-                         moved here out of the header (its old "+" slot now
-                         holds the quick-add menu). Ungated: every signed-in
-                         user has a personal file space, so no data-cap.
+                    <!-- Workspace — personal per-user utilities. Ungated:
+                         every signed-in user has a personal file space.
 
-                         My Files is an accordion parent (mirrors Admin):
-                         clicking the row navigates AND opens the section;
-                         the caret toggles without navigating. Children are
-                         the three virtual "Views" (Projects / Tools /
-                         Printouts) — they each carry data-myfiles-folder
-                         which the delegated click handler in app.js passes
-                         to window.myFiles.selectFolder(). The dynamic
-                         per-user Folders (General, Quick Captures, etc.)
-                         stay on the page, not the sidebar. -->
+                         My Files is an accordion parent: clicking the row
+                         navigates to the files page; the caret toggles
+                         the section. The children are populated DYNAMICALLY
+                         by my-files.js (window.myFiles.syncSidebarFolders)
+                         with the user's actual folder list (General +
+                         subfolders) — adding a new folder shows up here
+                         live. The .app-nav-children container is left
+                         empty in markup; my-files.js owns its content.
+
+                         Projects / Tools / Printouts moved out from under
+                         My Files — they're each their own destination now,
+                         not a "view" of My Files. They still navigate via
+                         data-tab="my-files" + data-myfiles-folder so they
+                         render in the same pane through the existing
+                         window.myFiles.selectFolder hand-off in app.js. -->
                     <div class="app-nav-group">
                         <div class="app-nav-group-label">Workspace</div>
                         <button class="tab-btn" data-tab="my-tasks" data-p86-icon="check-circle" title="My Tasks"><span class="app-nav-label">My Tasks</span></button>
@@ -612,14 +616,18 @@
                         <div class="app-nav-parent" data-accordion="myfiles">
                             <button class="tab-btn app-nav-parent-btn" data-tab="my-files" data-p86-icon="folder" title="My Files">
                                 <span class="app-nav-label">My Files</span>
-                                <span class="app-nav-caret" role="button" tabindex="0" aria-label="Toggle My Files views" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" width="12" height="12" aria-hidden="true"><polyline points="9 18 15 12 9 6"></polyline></svg></span>
+                                <span class="app-nav-caret" role="button" tabindex="0" aria-label="Toggle My Files folders" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" width="12" height="12" aria-hidden="true"><polyline points="9 18 15 12 9 6"></polyline></svg></span>
                             </button>
-                            <div class="app-nav-children" role="group" aria-label="My Files views">
-                                <button class="tab-btn app-nav-child" data-tab="my-files" data-myfiles-folder="__projects__" data-p86-icon="folder" title="Projects"><span class="app-nav-label">Projects</span></button>
-                                <button class="tab-btn app-nav-child" data-tab="my-files" data-myfiles-folder="__tools__" data-p86-icon="folder" title="Tools"><span class="app-nav-label">Tools</span></button>
-                                <button class="tab-btn app-nav-child" data-tab="my-files" data-myfiles-folder="__printouts__" data-p86-icon="folder" title="Printouts"><span class="app-nav-label">Printouts</span></button>
-                            </div>
+                            <!-- Populated dynamically by my-files.js with the
+                                 user's actual folders. Empty by default; the
+                                 accordion auto-fills on the first paint of
+                                 the My Files page (and re-syncs on folder
+                                 mutations). -->
+                            <div class="app-nav-children" role="group" aria-label="My Files folders"></div>
                         </div>
+                        <button class="tab-btn" data-tab="my-files" data-myfiles-folder="__projects__" data-p86-icon="folder" title="Projects"><span class="app-nav-label">Projects</span></button>
+                        <button class="tab-btn" data-tab="my-files" data-myfiles-folder="__tools__" data-p86-icon="folder" title="Tools"><span class="app-nav-label">Tools</span></button>
+                        <button class="tab-btn" data-tab="my-files" data-myfiles-folder="__printouts__" data-p86-icon="folder" title="Printouts"><span class="app-nav-label">Printouts</span></button>
                     </div>
                 </nav>
                 <!-- Recents — client-side (localStorage) list of recently
@@ -2929,7 +2937,7 @@
     <script src="js/app.js?v=80"></script>
     <script src="js/compliance-review-ui.js?v=2"></script>
     <script src="js/messaging.js?v=1b"></script>
-    <script src="js/my-files.js?v=14"></script>
+    <script src="js/my-files.js?v=15"></script>
     <!-- Tasks / To-Do UI. Loads after my-files.js (reuses window.p86Toast)
          and after api.js/auth.js (p86Api.tasks + p86Auth). -->
     <script src="js/tasks.js?v=1"></script>

@@ -312,18 +312,52 @@
     return nav;
   }
 
-  // Put the rail in the right place for the current viewport. Desktop:
-  // (re)inject railInner into #app-filesnav. Mobile / no sidebar: remove
-  // the wrapper (the rail lives in the page column instead). The primary
-  // nav is never hidden — My Files is a top-level tab.
-  function placeFilesSidebar(railInner, mobile) {
-    if (mobile || !document.getElementById('app-sidebar')) {
-      var existing = document.getElementById('app-filesnav');
-      if (existing) existing.remove();
-      return;
-    }
-    var nav = buildFilesSidebarShell();
-    if (nav) nav.innerHTML = railInner;
+  // Legacy: in the old layout, a contextual `#app-filesnav` rail
+  // mounted below the primary nav and held the folder list + Views.
+  // Now the folder list lives directly as accordion children under the
+  // My Files row in the main sidebar (see syncSidebarFolders below),
+  // and Projects / Tools / Printouts are their own top-level sidebar
+  // tabs. So `#app-filesnav` should never exist anymore — this helper
+  // just yanks any leftover wrapper from a stale session and is a
+  // no-op when nothing is mounted.
+  function placeFilesSidebar() {
+    var existing = document.getElementById('app-filesnav');
+    if (existing) existing.remove();
+  }
+
+  // Populate the accordion `.app-nav-children` slot under the My Files
+  // sidebar row with the user's actual folders. Called from paint() on
+  // every render so adding / deleting a folder reflects immediately.
+  //
+  //   - General is forced to the top (matches the page sort order).
+  //   - Virtual folders (__projects__ / __tools__ / __printouts__) are
+  //     EXCLUDED — those have their own top-level WORKSPACE tabs now.
+  //   - Each row carries data-myfiles-folder so it routes through the
+  //     same delegated tab-btn click handler in app.js that drives the
+  //     virtual-folder tabs (window.myFiles.selectFolder).
+  //   - The active row gets the .active class so the existing sidebar
+  //     active-row CSS highlight applies.
+  function syncSidebarFolders(folders, bucket) {
+    var slot = document.querySelector('.app-nav-parent[data-accordion="myfiles"] .app-nav-children');
+    if (!slot) return;
+    var VIRTUAL = { __projects__: 1, __tools__: 1, __printouts__: 1 };
+    var real = (folders || []).filter(function(f) { return !VIRTUAL[f]; }).sort(function(a, b) {
+      if (a === 'general') return -1;
+      if (b === 'general') return 1;
+      return a.localeCompare(b);
+    });
+    var active = _state.activeFolder;
+    slot.innerHTML = real.map(function(f) {
+      var isActive = (f === active) ? ' active' : '';
+      var count = (bucket && bucket[f] && bucket[f].length) || 0;
+      var countBadge = count
+        ? ' <span style="opacity:0.5;font-size:10px;margin-left:auto;">' + count + '</span>'
+        : '';
+      return '<button class="tab-btn app-nav-child' + isActive + '" data-tab="my-files" data-myfiles-folder="' +
+        escapeAttr(f) + '" title="' + escapeAttr(prettyFolder(f)) + '">' +
+        '<span class="app-nav-label">' + escapeHTML(prettyFolder(f)) + '</span>' + countBadge +
+      '</button>';
+    }).join('');
   }
 
   // Attach the breakpoint listener once; it re-paints My Files so the
@@ -342,8 +376,11 @@
   }
 
   // Called by app.js switchTab when leaving the My Files tab: drop the
-  // breakpoint listener and remove the relocated rail so it doesn't
-  // linger in the sidebar on other pages.
+  // breakpoint listener and yank any stale legacy wrapper. The folder
+  // accordion children stay in place — they're a permanent part of the
+  // sidebar now (mirrors how Admin's children persist) so when the user
+  // comes back to My Files (or hits a folder from another page) the
+  // tree is already painted.
   function filesSidebarCleanup() {
     _filesMounted = false;
     if (_filesSubnavMql && _filesSubnavMqlHandler) {
@@ -397,10 +434,12 @@
     var isVirtualFolder = isProjectsFolder || isToolsFolder || isPrintoutsFolder;
     var activeFiles = isVirtualFolder ? [] : (bucket[_state.activeFolder] || []);
 
-    // Build the three structural pieces separately so the folder rail can
-    // be relocated into the app sidebar (#app-sidebar) on desktop while the
-    // header + file pane stay in the page column. On mobile (sidebar
-    // hidden) everything renders in-page as the original two-col layout.
+    // Header: title + action cluster (New folder + Upload). Folder
+    // navigation is owned by the main sidebar accordion now
+    // (syncSidebarFolders), so the in-page two-column layout was
+    // removed on desktop — the page just renders header + drop-zone
+    // + grid. Mobile still drops a compact rail above the grid
+    // (folder switcher when no sidebar).
     var headerHTML =
         '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:16px;flex-wrap:wrap;">' +
           '<div>' +
@@ -409,12 +448,12 @@
           '</div>' +
           '<div style="display:flex;align-items:center;gap:8px;">' +
             (isVirtualFolder
-              ? '' // Virtual folders (Projects, Tools) own their own controls inside the pane
+              ? '' // Virtual folders (Projects, Tools, Printouts) own their own controls inside the pane
               : (
-                  // "New Folder" lives in the sidebar rail action now —
-                  // keep the header focused on the single primary action
-                  // (Upload). In-house .ee-btn.primary style matches the
-                  // Summary / Lead editor button language.
+                  // New folder + Upload as a paired action cluster.
+                  // New folder used to live inside the in-page rail —
+                  // since the rail is gone on desktop it moved here.
+                  '<button class="ee-btn secondary" onclick="window.myFiles.newFolder()" title="Create a new folder">+ New folder</button>' +
                   '<button class="ee-btn primary" data-p86-icon="plus" onclick="document.getElementById(\'mfFileInput\').click();">Upload</button>' +
                   '<input type="file" id="mfFileInput" multiple style="display:none;" onchange="window.myFiles.handleUpload(this.files); this.value=\'\';" />'
                 )
@@ -489,9 +528,10 @@
           ) +
         '</div>';
 
-    // Desktop (sidebar present + above the mobile breakpoint): the rail
-    // moves to the app sidebar and the page shows header + full-width
-    // pane. Mobile / no sidebar: keep the original in-page two-col layout.
+    // Desktop: the sidebar accordion under the My Files row owns the
+    // folder navigator (syncSidebarFolders below). The page just shows
+    // header + drop-zone + grid. Mobile / no sidebar: keep the original
+    // in-page two-col layout so folders are still reachable.
     var useSidebar = !filesSubnavIsMobile() && !!document.getElementById('app-sidebar');
     var body = useSidebar
       ? (headerHTML + errorHTML + mainPaneHTML)
@@ -503,9 +543,13 @@
 
     pane.innerHTML = '<div style="max-width:1200px;margin:0 auto;padding:24px 16px;">' + body + '</div>';
 
-    // Mount or tear down the relocated rail to match the viewport, then
-    // keep it correct as the viewport crosses the 768px breakpoint.
-    placeFilesSidebar(railInner, !useSidebar);
+    // Yank the legacy #app-filesnav wrapper if any session ever
+    // mounted it (defensive cleanup — should be a no-op now).
+    placeFilesSidebar();
+    // Sync the dynamic folder children into the My Files accordion.
+    // Empty on first paint if folders haven't loaded yet; the next
+    // paint after the load fills it.
+    if (useSidebar) syncSidebarFolders(folders, bucket);
     ensureFilesSubnavMql();
     _filesMounted = true;
 
@@ -1245,7 +1289,14 @@
     openPrintout: openPrintout,
     deletePrintout: deletePrintout,
     refreshPrintouts: refreshPrintouts,
-    quickPhoto: quickPhoto
+    quickPhoto: quickPhoto,
+    // Exposed so sidebar / other modules can trigger a re-sync of the
+    // accordion children without forcing a full paint() of the page.
+    syncSidebarFolders: function() {
+      var bucket = groupByFolder(_state.files || []);
+      var folders = Object.keys(bucket);
+      syncSidebarFolders(folders, bucket);
+    }
   };
   // Context-free entry point for the header "+" menu's "New Photo" item.
   window.p86QuickPhoto = quickPhoto;
