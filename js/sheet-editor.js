@@ -499,6 +499,7 @@
         '<button id="p86-sheet-settings" title="Editor settings &amp; defaults (units, scale, sheet size, grid, snaps)" style="background:rgba(255,255,255,0.06);color:#cbd5e1;border:1px solid #444;border-radius:6px;padding:6px 11px;font-size:13px;cursor:pointer;">⚙</button>' +
         '<button id="p86-sheet-png" title="Download the sheet as a PNG" style="background:rgba(255,255,255,0.06);color:#cbd5e1;border:1px solid #444;border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer;">⬇ PNG</button>' +
         '<button id="p86-sheet-pdf" title="Print / Save as PDF at true sheet size" style="background:rgba(255,255,255,0.06);color:#cbd5e1;border:1px solid #444;border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer;">⎙ PDF</button>' +
+        '<button id="p86-sheet-dxf" title="Export to DXF — opens to scale in AutoCAD / any CAD app" style="background:rgba(255,255,255,0.06);color:#cbd5e1;border:1px solid #444;border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer;">⛁ DXF</button>' +
         '<button id="p86-sheet-cancel" style="background:rgba(255,255,255,0.06);color:#aaa;border:1px solid #444;border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;">Close</button>' +
         '<button id="p86-sheet-save" style="background:#4f8cff;color:#fff;border:0;border-radius:6px;padding:6px 16px;font-size:12px;font-weight:700;cursor:pointer;">Save</button>' +
       '</div>' +
@@ -2096,6 +2097,86 @@
     w.document.close();
   }
 
+  // ── DXF export (ASCII R12-ish) ──────────────────────────────────
+  // Serializes the sheet's entities to real-world inches so the drawing
+  // opens to scale in AutoCAD / any CAD app. Each viewport's geometry is
+  // converted by its own scale (px → real inches) and laid left-to-right;
+  // Y is flipped (DXF is Y-up). DWG is a closed binary format — not
+  // generatable client-side — so we emit DXF, which every CAD app imports.
+  function buildDxf(doc) {
+    var s = doc.sheet, NL = '\n';
+    function g(code, val) { return code + NL + val + NL; }
+    function nm(v) { return String(v == null ? '0' : v).replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 255) || '0'; }
+    function n6(x) { return Math.round((x || 0) * 1e6) / 1e6; }
+    function vpPpi(vp) { return (vp && vp.scale && vp.scale.pixelsPerInch) ? vp.scale.pixelsPerInch : DPI * 0.25 / 12; }
+    function lineDxf(L, a, b) { return g(0, 'LINE') + g(8, L) + g(10, n6(a.x)) + g(20, n6(a.y)) + g(30, 0) + g(11, n6(b.x)) + g(21, n6(b.y)) + g(31, 0); }
+    function circleDxf(L, c, r) { return g(0, 'CIRCLE') + g(8, L) + g(10, n6(c.x)) + g(20, n6(c.y)) + g(30, 0) + g(40, n6(r)); }
+    function textDxf(L, p, h, str) { return g(0, 'TEXT') + g(8, L) + g(10, n6(p.x)) + g(20, n6(p.y)) + g(30, 0) + g(40, n6(Math.max(0.5, h))) + g(1, String(str).replace(/[\r\n]+/g, ' ')); }
+    function polyDxf(L, pts, closed) { var o = ''; for (var i = 1; i < pts.length; i++) o += lineDxf(L, pts[i - 1], pts[i]); if (closed && pts.length > 2) o += lineDxf(L, pts[pts.length - 1], pts[0]); return o; }
+    function arcDxf(L, p) {
+      var a = p[0], b = p[1], c = p[2];
+      var d = 2 * (a.x * (b.y - c.y) + b.x * (c.y - a.y) + c.x * (a.y - b.y));
+      if (Math.abs(d) < 1e-6) return lineDxf(L, a, c);
+      var ux = ((a.x * a.x + a.y * a.y) * (b.y - c.y) + (b.x * b.x + b.y * b.y) * (c.y - a.y) + (c.x * c.x + c.y * c.y) * (a.y - b.y)) / d;
+      var uy = ((a.x * a.x + a.y * a.y) * (c.x - b.x) + (b.x * b.x + b.y * b.y) * (a.x - c.x) + (c.x * c.x + c.y * c.y) * (b.x - a.x)) / d;
+      var r = Math.hypot(a.x - ux, a.y - uy);
+      function ang(P) { var t = Math.atan2(P.y - uy, P.x - ux) * 180 / Math.PI; return (t + 360) % 360; }
+      var a1 = ang(a), a2 = ang(b), a3 = ang(c);
+      var ccwSpan = (a3 - a1 + 360) % 360, midSpan = (a2 - a1 + 360) % 360;
+      var sA = (midSpan <= ccwSpan) ? a1 : a3, eA = (midSpan <= ccwSpan) ? a3 : a1;   // DXF ARC is CCW start→end
+      return g(0, 'ARC') + g(8, L) + g(10, n6(ux)) + g(20, n6(uy)) + g(30, 0) + g(40, n6(r)) + g(50, n6(sA)) + g(51, n6(eA));
+    }
+    var vps = doc.viewports || [], offsets = {}, offX = 0;
+    vps.forEach(function (vp) { var ppi = vpPpi(vp); offsets[vp.id] = { x: offX, ppi: ppi, vp: vp }; offX += (vp.w / ppi) + 24; });
+    function omap(e, px, py) {
+      var o = offsets[e.viewport] || offsets[(vps[0] || {}).id] || { x: 0, ppi: DPI * 0.25 / 12, vp: { x: 0, y: 0, h: s.h } };
+      return { x: (px - o.vp.x) / o.ppi + o.x, y: (o.vp.y + o.vp.h - py) / o.ppi };
+    }
+    function lyr(e) { var l = layerById(doc, e.layer); return nm(l && l.name); }
+
+    var out = '';
+    out += g(0, 'SECTION') + g(2, 'HEADER') + g(9, '$INSUNITS') + g(70, 1) + g(0, 'ENDSEC');   // 1 = inches
+    var layers = doc.layers || [];
+    out += g(0, 'SECTION') + g(2, 'TABLES') + g(0, 'TABLE') + g(2, 'LAYER') + g(70, layers.length || 1);
+    if (!layers.length) out += g(0, 'LAYER') + g(2, '0') + g(70, 0) + g(62, 7) + g(6, 'CONTINUOUS');
+    layers.forEach(function (l) { out += g(0, 'LAYER') + g(2, nm(l.name)) + g(70, 0) + g(62, 7) + g(6, 'CONTINUOUS'); });
+    out += g(0, 'ENDTAB') + g(0, 'ENDSEC');
+    out += g(0, 'SECTION') + g(2, 'ENTITIES');
+    (doc.entities || []).forEach(function (e) {
+      if (!e || !e.tool) return;
+      var L = lyr(e);
+      try {
+        if (e.tool === 'line' || e.tool === 'arrow') { out += lineDxf(L, omap(e, e.startX, e.startY), omap(e, e.endX, e.endY)); }
+        else if (e.tool === 'measure') { var a = omap(e, e.startX, e.startY), b = omap(e, e.endX, e.endY); out += lineDxf(L, a, b); if (e.measureLabel) out += textDxf(L, { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, 4, e.measureLabel); }
+        else if (e.tool === 'rect') { var p1 = omap(e, e.startX, e.startY), p2 = omap(e, e.endX, e.startY), p3 = omap(e, e.endX, e.endY), p4 = omap(e, e.startX, e.endY); out += lineDxf(L, p1, p2) + lineDxf(L, p2, p3) + lineDxf(L, p3, p4) + lineDxf(L, p4, p1); }
+        else if (e.tool === 'ellipse') {
+          var cx = (e.startX + e.endX) / 2, cy = (e.startY + e.endY) / 2, rxp = Math.abs(e.endX - e.startX) / 2, ryp = Math.abs(e.endY - e.startY) / 2;
+          var o = offsets[e.viewport] || { ppi: DPI * 0.25 / 12 };
+          if (Math.abs(rxp - ryp) < 0.75) { out += circleDxf(L, omap(e, cx, cy), rxp / o.ppi); }
+          else { var pts = []; for (var k = 0; k <= 48; k++) { var th = k / 48 * 2 * Math.PI; pts.push(omap(e, cx + rxp * Math.cos(th), cy + ryp * Math.sin(th))); } out += polyDxf(L, pts, true); }
+        }
+        else if (e.tool === 'arc' && e.points && e.points.length >= 3) { out += arcDxf(L, e.points.map(function (p) { return omap(e, p.x, p.y); })); }
+        else if ((e.tool === 'polyline' || e.tool === 'mangle' || e.tool === 'hatch') && e.points && e.points.length) { out += polyDxf(L, e.points.map(function (p) { return omap(e, p.x, p.y); }), e.tool === 'hatch'); }
+        else if (e.tool === 'text' && e.x != null) { var ot = offsets[e.viewport] || { ppi: DPI * 0.25 / 12 }; out += textDxf(L, omap(e, e.x, e.y), (e.fontPx || 24) / ot.ppi, e.text || ''); }
+        else if (e.tool === 'symbol' && e.x != null) { var os = offsets[e.viewport] || { ppi: DPI * 0.25 / 12 }; out += circleDxf(L, omap(e, e.x, e.y), (e.size || 40) / 2 / os.ppi); }
+      } catch (err) { /* skip a malformed entity, keep exporting */ }
+    });
+    out += g(0, 'ENDSEC') + g(0, 'EOF');
+    return out;
+  }
+  function exportDxf() {
+    try {
+      var dxf = buildDxf(S.doc);
+      var blob = new Blob([dxf], { type: 'application/dxf' });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = (String(S.plan && S.plan.name || 'sheet').replace(/[^a-z0-9._-]+/gi, '_')) + '.dxf';
+      document.body.appendChild(a); a.click();
+      setTimeout(function () { if (a.parentNode) a.parentNode.removeChild(a); try { URL.revokeObjectURL(url); } catch (e) {} }, 0);
+    } catch (e) { alert('DXF export failed: ' + (e && e.message ? e.message : 'unknown')); }
+  }
+
   // expose
   window.p86SheetEditor = {
     open: function (opts) {
@@ -2105,11 +2186,13 @@
         S.overlay.querySelector('#p86-sheet-save').onclick = save;
         var pdfBtn = S.overlay.querySelector('#p86-sheet-pdf'); if (pdfBtn) pdfBtn.onclick = exportPdf;
         var pngBtn = S.overlay.querySelector('#p86-sheet-png'); if (pngBtn) pngBtn.onclick = exportPng;
+        var dxfBtn = S.overlay.querySelector('#p86-sheet-dxf'); if (dxfBtn) dxfBtn.onclick = exportDxf;
         var setBtn = S.overlay.querySelector('#p86-sheet-settings'); if (setBtn) setBtn.onclick = openSettingsModal;
       }
     },
     close: close,
     defaultDoc: defaultDoc,
+    buildDxf: buildDxf,
     SHEET_SIZES: SHEET_SIZES,
     DPI: DPI
   };
