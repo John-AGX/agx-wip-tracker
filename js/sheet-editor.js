@@ -61,6 +61,16 @@
     { key: 'post', label: 'Post' }, { key: 'tree', label: 'Tree' },
     { key: 'callout', label: 'Callout' }
   ];
+  // Architectural + civil scales. f = paper-inches per real-inch; the
+  // viewport's pixelsPerInch (sheet px per real inch) = DPI * f.
+  var SCALE_PRESETS = [
+    { label: '1/8" = 1\'-0"', f: 0.125 / 12 }, { label: '1/4" = 1\'-0"', f: 0.25 / 12 },
+    { label: '1/2" = 1\'-0"', f: 0.5 / 12 }, { label: '3/4" = 1\'-0"', f: 0.75 / 12 },
+    { label: '1" = 1\'-0"', f: 1 / 12 }, { label: '1-1/2" = 1\'-0"', f: 1.5 / 12 },
+    { label: '3" = 1\'-0"', f: 3 / 12 }, { label: '1" = 10\'', f: 1 / 120 },
+    { label: '1" = 20\'', f: 1 / 240 }, { label: '1" = 30\'', f: 1 / 360 }
+  ];
+  var VIEW_LABELS = ['PLAN', 'FRONT ELEVATION', 'SIDE ELEVATION', 'SECTION', 'DETAIL'];
 
   function prims() { return window.p86DrawPrimitives || {}; }
   function esc(s) {
@@ -483,9 +493,102 @@
     el.textContent = t + '   ·   wheel = zoom, Space/middle-drag = pan';
   }
 
+  // Stack all viewports as equal vertical bands in the drawing area
+  // (above the titleblock) — gives Plan-top / Elevation-bottom layout
+  // automatically as views are added.
+  function layoutViewports(doc) {
+    var s = doc.sheet, m = s.margin + 16;
+    var tbH = Math.round(3 * DPI);
+    var area = { x: m, y: m, w: s.w - m * 2, h: s.h - m * 2 - tbH - 16 };
+    var n = doc.viewports.length || 1, gap = 16;
+    var bandH = (area.h - gap * (n - 1)) / n;
+    doc.viewports.forEach(function (vp, i) {
+      vp.x = area.x; vp.y = area.y + i * (bandH + gap); vp.w = area.w; vp.h = bandH;
+    });
+  }
+  function addViewport() {
+    pushUndo();
+    var n = S.doc.viewports.length;
+    S.doc.viewports.push({
+      id: uid('VP'), label: VIEW_LABELS[Math.min(n, VIEW_LABELS.length - 1)],
+      x: 0, y: 0, w: 100, h: 100,
+      scale: { pixelsPerInch: DPI * 0.25 / 12, unit: 'ft', label: '1/4" = 1\'-0"' }
+    });
+    layoutViewports(S.doc);
+    buildLayers(); repaint();
+  }
+  function setViewportScale(vpId, preset) {
+    var vp = (S.doc.viewports || []).filter(function (v) { return v.id === vpId; })[0];
+    if (!vp) return;
+    pushUndo();
+    vp.scale = { pixelsPerInch: DPI * preset.f, unit: 'ft', label: preset.label };
+    buildLayers(); repaint();
+  }
+  function applySheetSize(key) {
+    var sz = SHEET_SIZES[key]; if (!sz) return;
+    pushUndo();
+    S.doc.sheet.size = key;
+    S.doc.sheet.w = Math.round(sz.wIn * DPI);
+    S.doc.sheet.h = Math.round(sz.hIn * DPI);
+    layoutViewports(S.doc);
+    sizeCanvas(true); buildLayers(); repaint();
+  }
+  function openTitleblockModal() {
+    var tb = S.doc.titleblock || {};
+    var ov = document.createElement('div');
+    ov.style.cssText = 'position:fixed;inset:0;z-index:5400;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;padding:20px;';
+    var fields = [['project', 'Project'], ['title', 'Sheet title'], ['client', 'Client'], ['scale', 'Scale note'], ['date', 'Date'], ['drawnBy', 'Drawn by'], ['sheetNo', 'Sheet #']];
+    var box = document.createElement('div');
+    box.style.cssText = 'background:#0f0f1e;border:1px solid #353545;border-radius:12px;padding:20px 22px;max-width:440px;width:100%;color:#e6e6e6;box-shadow:0 16px 48px rgba(0,0,0,0.6);';
+    box.innerHTML = '<div style="font-size:15px;font-weight:700;color:#fff;margin-bottom:12px;">Titleblock</div>' +
+      fields.map(function (f) {
+        return '<label style="display:block;font-size:11px;color:#9aa;margin:8px 0 3px;">' + esc(f[1]) + '</label>' +
+          '<input data-tb="' + f[0] + '" value="' + esc(tb[f[0]] || '') + '" style="width:100%;box-sizing:border-box;background:#1a1a2e;color:#fff;border:1px solid #444;border-radius:6px;padding:7px 10px;font-size:13px;outline:none;" />';
+      }).join('') +
+      '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;">' +
+        '<button data-tb-cancel style="padding:8px 16px;background:rgba(255,255,255,0.06);color:#ddd;border:1px solid #444;border-radius:6px;cursor:pointer;font-weight:600;">Cancel</button>' +
+        '<button data-tb-save style="padding:8px 16px;background:#4f8cff;color:#fff;border:1px solid #4f8cff;border-radius:6px;cursor:pointer;font-weight:700;">Save</button>' +
+      '</div>';
+    ov.appendChild(box); document.body.appendChild(ov);
+    function close() { if (ov.parentNode) ov.parentNode.removeChild(ov); }
+    box.querySelector('[data-tb-cancel]').onclick = close;
+    box.querySelector('[data-tb-save]').onclick = function () {
+      pushUndo();
+      box.querySelectorAll('[data-tb]').forEach(function (inp) { S.doc.titleblock[inp.getAttribute('data-tb')] = inp.value; });
+      close(); repaint();
+    };
+    ov.addEventListener('click', function (e) { if (e.target === ov) close(); });
+  }
+
   function buildLayers() {
     var host = S.overlay.querySelector('#p86-sheet-layers');
-    var html = '<div style="display:flex;align-items:center;margin-bottom:8px;">' +
+    // ── Sheet section ──
+    var html = '<div style="font-weight:700;color:#fff;margin-bottom:6px;">Sheet</div>';
+    html += '<select data-sheet-size style="width:100%;box-sizing:border-box;background:#1a1a2e;color:#fff;border:1px solid #444;border-radius:6px;padding:5px 7px;font-size:11.5px;margin-bottom:6px;">' +
+      Object.keys(SHEET_SIZES).map(function (k) {
+        return '<option value="' + k + '"' + (S.doc.sheet.size === k ? ' selected' : '') + '>' + esc(SHEET_SIZES[k].label) + '</option>';
+      }).join('') + '</select>';
+    html += '<button data-tb-edit style="width:100%;box-sizing:border-box;background:rgba(255,255,255,0.05);color:#ddd;border:1px solid #444;border-radius:6px;padding:6px;font-size:11.5px;cursor:pointer;margin-bottom:12px;">✎ Edit titleblock…</button>';
+    // ── Views section ──
+    html += '<div style="display:flex;align-items:center;margin-bottom:6px;">' +
+      '<span style="font-weight:700;color:#fff;flex:1;">Views</span>' +
+      '<button data-vp-add title="Add view (Plan / Elevation / Section)" style="background:rgba(34,197,94,0.15);color:#86efac;border:1px solid #22c55e;border-radius:5px;width:22px;height:22px;cursor:pointer;font-size:14px;line-height:1;">+</button>' +
+    '</div>';
+    html += (S.doc.viewports || []).map(function (vp) {
+      return '<div style="border:1px solid #333;border-radius:6px;padding:5px 6px;margin-bottom:5px;">' +
+        '<div style="display:flex;align-items:center;gap:4px;">' +
+          '<span data-vp-name="' + esc(vp.id) + '" title="Double-click to rename" style="flex:1;color:#cbd5e1;font-size:11.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(vp.label) + '</span>' +
+          ((S.doc.viewports.length > 1) ? '<button data-vp-del="' + esc(vp.id) + '" title="Delete view" style="background:transparent;border:0;color:#f87171;cursor:pointer;font-size:11px;width:14px;">✕</button>' : '') +
+        '</div>' +
+        '<select data-vp-scale="' + esc(vp.id) + '" style="width:100%;box-sizing:border-box;background:#1a1a2e;color:#9aa;border:1px solid #444;border-radius:5px;padding:3px 5px;font-size:10.5px;margin-top:3px;">' +
+          SCALE_PRESETS.map(function (p) {
+            var sel = (vp.scale && Math.abs(vp.scale.pixelsPerInch - DPI * p.f) < 1e-6) ? ' selected' : '';
+            return '<option value="' + esc(p.label) + '"' + sel + '>' + esc(p.label) + '</option>';
+          }).join('') + '</select>' +
+      '</div>';
+    }).join('');
+    // ── Layers section ──
+    html += '<div style="display:flex;align-items:center;margin:12px 0 8px;">' +
       '<span style="font-weight:700;color:#fff;flex:1;">Layers</span>' +
       '<button data-layer-add title="Add layer" style="background:rgba(79,140,255,0.15);color:#93c5fd;border:1px solid #4f8cff;border-radius:5px;width:22px;height:22px;cursor:pointer;font-size:14px;line-height:1;">+</button>' +
     '</div>';
@@ -502,6 +605,34 @@
     }).join('');
     html += '<div style="margin-top:10px;font-size:10.5px;color:#64748b;line-height:1.4;">Click = draw on it · dbl-click name = rename · swatch = color · ✕ = delete.</div>';
     host.innerHTML = html;
+    // Sheet + Views wiring
+    var sizeSel = host.querySelector('[data-sheet-size]');
+    if (sizeSel) sizeSel.onchange = function () { applySheetSize(sizeSel.value); };
+    host.querySelector('[data-tb-edit]').onclick = openTitleblockModal;
+    host.querySelector('[data-vp-add]').onclick = addViewport;
+    host.querySelectorAll('[data-vp-name]').forEach(function (s) {
+      s.ondblclick = function () {
+        var id = s.getAttribute('data-vp-name');
+        var vp = S.doc.viewports.filter(function (v) { return v.id === id; })[0];
+        var nm = window.prompt('View label:', vp.label);
+        if (nm != null && nm.trim()) { pushUndo(); vp.label = nm.trim().slice(0, 40); buildLayers(); repaint(); }
+      };
+    });
+    host.querySelectorAll('[data-vp-del]').forEach(function (b) {
+      b.onclick = function () {
+        if (S.doc.viewports.length <= 1) return;
+        if (!window.confirm('Delete this view? Its drawn objects remain but lose their frame.')) return;
+        pushUndo();
+        S.doc.viewports = S.doc.viewports.filter(function (v) { return v.id !== b.getAttribute('data-vp-del'); });
+        layoutViewports(S.doc); buildLayers(); repaint();
+      };
+    });
+    host.querySelectorAll('[data-vp-scale]').forEach(function (sel) {
+      sel.onchange = function () {
+        var preset = SCALE_PRESETS.filter(function (p) { return p.label === sel.value; })[0];
+        if (preset) setViewportScale(sel.getAttribute('data-vp-scale'), preset);
+      };
+    });
     host.querySelector('[data-layer-add]').onclick = function () {
       pushUndo();
       var n = S.doc.layers.length;
