@@ -267,23 +267,37 @@
     window.p86Api.get('/api/field-tools/' + encodeURIComponent(id)).then(function(resp) {
       if (!resp || !resp.tool) { alert('Tool not found.'); return; }
       var t = resp.tool;
+      // Centered modal panel matching the Change Order / estimate-editor
+      // shape: dark backdrop, rounded panel with a header row + body.
+      // The OUTER div is the backdrop (full-viewport, click-to-close);
+      // the INNER .ft-panel is the contained dialog. Padding from the
+      // window edges + max-width prevents the panel from ever stretching
+      // edge-to-edge (which is what made it feel fullscreen before).
       var modal = document.createElement('div');
-      modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.85);display:flex;flex-direction:column;z-index:9999;';
+      modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.65);display:flex;align-items:center;justify-content:center;z-index:9999;padding:24px;backdrop-filter:blur(2px);';
       modal.innerHTML =
-        '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 14px;background:#0a0a0a;border-bottom:1px solid #222;">' +
-          '<div style="min-width:0;flex:1;">' +
-            '<div style="font-size:14px;font-weight:600;color:var(--text,#fff);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(t.name) + '</div>' +
-            (t.description ? '<div style="font-size:11px;color:var(--text-dim,#888);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(t.description) + '</div>' : '') +
+        '<div class="ft-panel" style="background:#141414;border:1px solid #2a2a2a;border-radius:12px;display:flex;flex-direction:column;width:100%;max-width:1300px;height:100%;max-height:92vh;overflow:hidden;box-shadow:0 16px 48px rgba(0,0,0,0.6);">' +
+          '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 16px;background:#0a0a0a;border-bottom:1px solid #222;flex-shrink:0;">' +
+            '<div style="min-width:0;flex:1;">' +
+              '<div style="font-size:15px;font-weight:600;color:var(--text,#fff);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(t.name) + '</div>' +
+              (t.description ? '<div style="font-size:11px;color:var(--text-dim,#888);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px;">' + escapeHTML(t.description) + '</div>' : '') +
+            '</div>' +
+            '<div style="display:flex;gap:6px;flex-shrink:0;">' +
+              '<button type="button" class="ee-btn primary ft-save-printout" title="Save a printout of the current inputs + outputs">' +
+                '<span style="font-size:13px;">💾</span> Save Printout' +
+              '</button>' +
+              '<button type="button" class="ee-btn secondary ft-close" aria-label="Close">&times;</button>' +
+            '</div>' +
           '</div>' +
-          '<div style="display:flex;gap:6px;flex-shrink:0;">' +
-            '<button type="button" class="ee-btn primary ft-save-printout" title="Save a printout of the current inputs + outputs">' +
-              '<span style="font-size:13px;">💾</span> Save Printout' +
-            '</button>' +
-            '<button type="button" class="ee-btn secondary ft-close">Close</button>' +
-          '</div>' +
-        '</div>' +
-        '<iframe sandbox="allow-scripts" style="flex:1;width:100%;border:0;background:#0f0f0f;"></iframe>';
+          '<iframe sandbox="allow-scripts" style="flex:1;width:100%;border:0;background:#0f0f0f;"></iframe>' +
+        '</div>';
       modal.classList.add('field-tool-modal');
+      // Click outside the panel (on the backdrop) closes — mirrors the
+      // p86Confirm + estimate-editor modal conventions. Click inside
+      // the panel falls through to its own handlers via stopPropagation.
+      var panel = modal.querySelector('.ft-panel');
+      if (panel) panel.addEventListener('click', function(e) { e.stopPropagation(); });
+      modal.addEventListener('click', function() { closeModal(); });
       document.body.appendChild(modal);
       var iframe = modal.querySelector('iframe');
       // Inject the HTML via srcdoc — sandboxed iframe has no same-
