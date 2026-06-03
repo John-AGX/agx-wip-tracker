@@ -84,8 +84,18 @@ var STAIRS_HTML = [
 '    var rise=num("rise"), tRiser=num("triser")||7, tread=num("tread")||10, tthick=num("tthick"), bwidth=num("bwidth")||11.25;',
 '    var risers=Math.max(1, Math.round(rise/(tRiser||7)));',
 '    var riser=rise/risers, treads=Math.max(0,risers-1), run=treads*tread, first=riser-tthick;',
-'    var slen=Math.sqrt(rise*rise+run*run), ang=Math.atan2(rise,run)*180/Math.PI;',
 '    var diag=Math.sqrt(riser*riser+tread*tread)||1, throat=bwidth-(riser*tread)/diag;',
+// Stringer length = the lumber length you actually need to cut. That
+// equals the back edge of the cut stringer, which is parallel to the
+// nosing line and spans FIRST nosing → TOP nosing — i.e. `treads`
+// steps of slope `diag`, not the full rise/run hypotenuse (which is
+// the line-of-travel, one riser longer). Old `sqrt(rise²+run²)`
+// over-stated the board length by one riser worth — visually obvious
+// because the H dimension line is drawn ON the back edge but its
+// label printed the line-of-travel value, so the number didn't match
+// the line. Angle stays as the stair line-of-travel angle (the
+// conventional "stair angle").
+'    var slen=treads*diag, ang=Math.atan2(rise,run)*180/Math.PI;',
 '    M={rise:rise,tRiser:tRiser,tread:tread,tthick:tthick,bwidth:bwidth,risers:risers,riser:riser,treads:treads,run:run,first:first,slen:slen,ang:ang,throat:throat};',
 '    document.getElementById("headline").innerHTML="<b>"+risers+" risers</b> @ "+fmtIn(riser)+"<span class=\\"dot\\">\\u2022</span>Run "+fmtFtIn(run)+"<span class=\\"dot\\">\\u2022</span>"+ang.toFixed(1)+"\\u00b0";',
 '    document.getElementById("leg_side").innerHTML=',
@@ -147,7 +157,14 @@ var STAIRS_HTML = [
 '    dashed(x,PX(M.run-M.tread),PY(M.rise),PX(maxX)+28,PY(M.rise));',
 '    x.beginPath();x.moveTo(PX(cut[0][0]),PY(cut[0][1]));',
 '    for(var j=1;j<cut.length;j++) x.lineTo(PX(cut[j][0]),PY(cut[j][1]));',
-'    x.lineTo(PX(Tb[0]),PY(Tb[1]));x.lineTo(PX(Bb[0]),PY(Bb[1]));x.closePath();',
+// Bottom-front cut: the old single-diagonal Bb → (0,0) merged the
+// plumb cut and level cut into one slope, which is what no real
+// carpenter cuts. Real bottom of a cut stringer = a LEVEL cut along
+// the floor (Bb → (0, Bb[1])) meeting a PLUMB cut up the front of
+// the first riser ((0, Bb[1]) → (0, 0)). closePath() auto-draws the
+// plumb segment back to the start point. Net result: a right-angle
+// notch at the front-bottom corner instead of a triangular nick.
+'    x.lineTo(PX(Tb[0]),PY(Tb[1]));x.lineTo(PX(Bb[0]),PY(Bb[1]));x.lineTo(PX(0),PY(Bb[1]));x.closePath();',
 '    x.fillStyle="rgba(184,134,72,0.30)";x.fill();x.strokeStyle="#c08a45";x.lineWidth=2;x.stroke();',
 '    x.fillStyle="#8a8a8a";x.font="10px Arial";x.textAlign="left";x.fillText("Ground",PX(Bb[0])-14,PY(Bb[1])+14);',
 '    x.textAlign="right";x.fillText("Top",PX(maxX)+28,PY(M.rise)-5);',
@@ -155,8 +172,16 @@ var STAIRS_HTML = [
 '    var Gf=[M.run+nx*M.bwidth, M.rise+ny*M.bwidth]; dim(x,PX(M.run),PY(M.rise),PX(Gf[0]),PY(Gf[1]),COL.G); tag(x,PX((M.run+Gf[0])/2)+11,PY((M.rise+Gf[1])/2),"G",COL.G);',
 '    if(M.treads>=2){ dim(x,PX(M.tread),PY(M.riser),PX(M.tread),PY(2*M.riser),COL.C); tag(x,PX(M.tread)+10,PY(1.5*M.riser),"C",COL.C); }',
 '    dim(x,PX(0),PY(M.riser),PX(M.tread),PY(M.riser),COL.D); tag(x,PX(M.tread/2),PY(M.riser)+12,"D",COL.D);',
-'    dim(x,PX(0)-9,PY(0),PX(0)-9,PY(M.first),COL.F); tag(x,PX(0)-18,PY(M.first/2),"F",COL.F);',
-'    dim(x,PX(0),PY(0),PX(Bb[0]),PY(Bb[1]),COL.I); tag(x,PX(Bb[0]/2)+10,PY(Bb[1]/2),"I",COL.I);',
+// F (first installed riser height) drawn on the plumb-cut edge, just
+// outside the board's left side. Bumped 3px further left so it has
+// more breathing room from the I label below it.
+'    dim(x,PX(0)-9,PY(0),PX(0)-9,PY(M.first),COL.F); tag(x,PX(0)-21,PY(M.first/2),"F",COL.F);',
+// I (throat / minimum wood under the nosing line) goes from origin
+// diagonally down-right to Bb. Old label position landed right under
+// the F dim line and the two letters bunched into "FI" on tall stair
+// configs. Push the label well down-right of the dim midpoint so it
+// reads cleanly inside the level-cut wedge.
+'    dim(x,PX(0),PY(0),PX(Bb[0]),PY(Bb[1]),COL.I); tag(x,PX(Bb[0])+12,PY(Bb[1])-4,"I",COL.I);',
 '  }',
 '  function postResult(){',
 '    try{ window.parent.postMessage({type:"p86-field-tool-result",',
