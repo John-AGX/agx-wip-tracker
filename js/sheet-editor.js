@@ -322,6 +322,8 @@
       '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;background:rgba(15,15,30,0.95);border:1px solid #2a2a3a;border-radius:10px;padding:8px 14px;">' +
         '<strong style="color:#fff;font-size:13px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">📐 ' + esc(plan.name || 'Shop drawing') + '</strong>' +
         '<span id="p86-sheet-readout" style="color:#9aa;font-size:11px;font-variant-numeric:tabular-nums;margin-right:8px;min-width:230px;text-align:right;"></span>' +
+        '<button id="p86-sheet-png" title="Download the sheet as a PNG" style="background:rgba(255,255,255,0.06);color:#cbd5e1;border:1px solid #444;border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer;">⬇ PNG</button>' +
+        '<button id="p86-sheet-pdf" title="Print / Save as PDF at true sheet size" style="background:rgba(255,255,255,0.06);color:#cbd5e1;border:1px solid #444;border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer;">⎙ PDF</button>' +
         '<button id="p86-sheet-cancel" style="background:rgba(255,255,255,0.06);color:#aaa;border:1px solid #444;border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;">Close</button>' +
         '<button id="p86-sheet-save" style="background:#4f8cff;color:#fff;border:0;border-radius:6px;padding:6px 16px;font-size:12px;font-weight:700;cursor:pointer;">Save</button>' +
       '</div>' +
@@ -1179,8 +1181,46 @@
     close();
   }
 
-  // wire save/close after open() builds them
-  function _wireTopBar() { /* done inline below */ }
+  // ── Export (D6) ─────────────────────────────────────────────────
+  // Render the whole sheet at full paper resolution (line weights are
+  // paper-true at scale 1) into an offscreen canvas.
+  function renderFullSheet() {
+    var s = S.doc.sheet;
+    var off = document.createElement('canvas');
+    off.width = s.w; off.height = s.h;
+    renderSheet(off.getContext('2d'), S.doc);
+    return off;
+  }
+  function exportPng() {
+    try {
+      var url = renderFullSheet().toDataURL('image/png');
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = (String(S.plan && S.plan.name || 'sheet').replace(/[^a-z0-9._-]+/gi, '_')) + '.png';
+      document.body.appendChild(a); a.click();
+      setTimeout(function () { if (a.parentNode) a.parentNode.removeChild(a); }, 0);
+    } catch (e) { alert('PNG export failed: ' + (e && e.message ? e.message : 'unknown')); }
+  }
+  // Print at true sheet size → browser's "Save as PDF". Mirrors the
+  // job-reports / estimate-preview print pattern (no PDF lib needed).
+  function exportPdf() {
+    var s = S.doc.sheet;
+    var sz = SHEET_SIZES[s.size] || { wIn: s.w / DPI, hIn: s.h / DPI };
+    var url;
+    try { url = renderFullSheet().toDataURL('image/png'); }
+    catch (e) { alert('PDF export failed: ' + (e && e.message ? e.message : 'unknown')); return; }
+    var w = window.open('', '_blank');
+    if (!w) { alert('Pop-up blocked — allow pop-ups for this site to print / save as PDF.'); return; }
+    var title = esc((S.doc.titleblock && S.doc.titleblock.title) || S.plan && S.plan.name || 'Sheet');
+    w.document.write(
+      '<!doctype html><html><head><meta charset="utf-8"><title>' + title + '</title>' +
+      '<style>@page{size:' + sz.wIn + 'in ' + sz.hIn + 'in;margin:0;}' +
+      'html,body{margin:0;padding:0;background:#fff;}' +
+      'img{width:' + sz.wIn + 'in;height:' + sz.hIn + 'in;display:block;}</style></head>' +
+      '<body><img src="' + url + '" onload="setTimeout(function(){window.focus();window.print();},250);"></body></html>'
+    );
+    w.document.close();
+  }
 
   // expose
   window.p86SheetEditor = {
@@ -1189,6 +1229,8 @@
       if (S) {
         S.overlay.querySelector('#p86-sheet-cancel').onclick = close;
         S.overlay.querySelector('#p86-sheet-save').onclick = save;
+        var pdfBtn = S.overlay.querySelector('#p86-sheet-pdf'); if (pdfBtn) pdfBtn.onclick = exportPdf;
+        var pngBtn = S.overlay.querySelector('#p86-sheet-png'); if (pngBtn) pngBtn.onclick = exportPng;
       }
     },
     close: close,
