@@ -626,8 +626,24 @@
                             <div class="app-nav-children" role="group" aria-label="My Files folders"></div>
                         </div>
                         <button class="tab-btn" data-tab="my-files" data-myfiles-folder="__projects__" data-p86-icon="folder" title="Projects"><span class="app-nav-label">Projects</span></button>
-                        <button class="tab-btn" data-tab="my-files" data-myfiles-folder="__tools__" data-p86-icon="folder" title="Tools"><span class="app-nav-label">Tools</span></button>
-                        <button class="tab-btn" data-tab="my-files" data-myfiles-folder="__printouts__" data-p86-icon="folder" title="Printouts"><span class="app-nav-label">Printouts</span></button>
+                        <!-- Tools is an accordion parent — clicking the row
+                             opens the Field Tools grid (Margin Calc, Square
+                             Footage, etc.); the caret toggles the section.
+                             Printouts is a sub-view of Tools (saved runs
+                             from the field-tool grid), so it folds under
+                             Tools here instead of standing alone in
+                             WORKSPACE. Same wiring as the Admin / My Files
+                             accordions: data-myfiles-folder + delegated
+                             click handler in app.js → window.myFiles.selectFolder. -->
+                        <div class="app-nav-parent" data-accordion="tools">
+                            <button class="tab-btn app-nav-parent-btn" data-tab="my-files" data-myfiles-folder="__tools__" data-p86-icon="folder" title="Tools">
+                                <span class="app-nav-label">Tools</span>
+                                <span class="app-nav-caret" role="button" tabindex="0" aria-label="Toggle Tools sub-pages" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" width="12" height="12" aria-hidden="true"><polyline points="9 18 15 12 9 6"></polyline></svg></span>
+                            </button>
+                            <div class="app-nav-children" role="group" aria-label="Tools sub-pages">
+                                <button class="tab-btn app-nav-child" data-tab="my-files" data-myfiles-folder="__printouts__" data-p86-icon="folder" title="Printouts"><span class="app-nav-label">Printouts</span></button>
+                            </div>
+                        </div>
                     </div>
                 </nav>
                 <!-- Recents — client-side (localStorage) list of recently
