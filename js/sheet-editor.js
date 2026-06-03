@@ -45,8 +45,21 @@
     { key: 'dim',      glyph: '↔', label: 'Dimension (click two points — auto-labels real length at the viewport scale)' },
     { key: 'angle',    glyph: '∠', label: 'Angle dimension (click three points: leg · vertex · leg)' },
     { key: 'leader',   glyph: '➘', label: 'Leader / callout (click target, click text position)' },
+    { key: 'hatch',    glyph: '▨', label: 'Hatch fill (click a closed region; pick a material pattern) — double-click / Enter to close' },
+    { key: 'symbol',   glyph: '✱', label: 'Symbol / block (north arrow, sprinkler head, post, tree, callout)' },
     { key: 'text',     glyph: 'T', label: 'Text (click to place)' },
     { key: 'pan',      glyph: '✋', label: 'Pan (or hold Space / middle-drag)' }
+  ];
+
+  var HATCH_PATTERNS = [
+    { key: 'earth', label: 'Earth' }, { key: 'concrete', label: 'Concrete' },
+    { key: 'gravel', label: 'Gravel' }, { key: 'brick', label: 'Brick/Paver' },
+    { key: 'grass', label: 'Grass' }, { key: 'solid', label: 'Solid' }
+  ];
+  var SYMBOLS = [
+    { key: 'north', label: 'North' }, { key: 'head', label: 'Head' },
+    { key: 'post', label: 'Post' }, { key: 'tree', label: 'Tree' },
+    { key: 'callout', label: 'Callout' }
   ];
 
   function prims() { return window.p86DrawPrimitives || {}; }
@@ -122,6 +135,9 @@
           if (!e || e.viewport !== vp.id || !e.tool) return;
           var lyr = layerById(doc, e.layer);
           if (lyr && lyr.visible === false) return;
+          // Hatch + symbol have their own renderers (not in drawStroke).
+          if (e.tool === 'hatch') { try { drawHatch(ctx, e); } catch (err) {} return; }
+          if (e.tool === 'symbol') { try { drawSymbol(ctx, e); } catch (err) {} return; }
           // Dimension labels are derived live from the viewport scale, so
           // they stay correct as geometry changes (auto-update).
           if (e.tool === 'measure' && vp.scale && vp.scale.pixelsPerInch) {
@@ -174,6 +190,105 @@
     ctx.restore();
   }
 
+  // ── Hatch + symbol renderers (D4) ───────────────────────────────
+  function polyBBox(pts) {
+    var mnx = Infinity, mny = Infinity, mxx = -Infinity, mxy = -Infinity;
+    pts.forEach(function (p) { if (p.x < mnx) mnx = p.x; if (p.y < mny) mny = p.y; if (p.x > mxx) mxx = p.x; if (p.y > mxy) mxy = p.y; });
+    return { x: mnx, y: mny, w: mxx - mnx, h: mxy - mny };
+  }
+  function hashJ(x, y) { var n = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453; return n - Math.floor(n); }
+  function rgba(hex, a) {
+    var h = String(hex || '#1f2937').replace('#', '');
+    if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+    var n = parseInt(h, 16); if (isNaN(n)) return 'rgba(31,41,55,' + a + ')';
+    return 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + a + ')';
+  }
+  function drawHatch(ctx, e) {
+    var pts = e.points; if (!pts || pts.length < 3) return;
+    var col = e.color || '#1f2937';
+    ctx.save();
+    ctx.beginPath(); ctx.moveTo(pts[0].x, pts[0].y);
+    for (var i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+    ctx.closePath();
+    ctx.save(); ctx.clip();
+    drawPattern(ctx, e.pattern || 'earth', polyBBox(pts), col);
+    ctx.restore();
+    ctx.strokeStyle = col; ctx.lineWidth = e.lineWidth || 2; ctx.stroke();
+    ctx.restore();
+  }
+  function drawPattern(ctx, pat, bb, col) {
+    var x0 = bb.x, y0 = bb.y, x1 = bb.x + bb.w, y1 = bb.y + bb.h, x, y;
+    ctx.save();
+    if (pat === 'solid') {
+      ctx.fillStyle = rgba(col, 0.14); ctx.fillRect(x0, y0, bb.w, bb.h);
+    } else if (pat === 'earth') {
+      ctx.strokeStyle = rgba(col, 0.5); ctx.lineWidth = 1; var step = 16;
+      for (var d = -bb.h; d < bb.w; d += step) { ctx.beginPath(); ctx.moveTo(x0 + d, y1); ctx.lineTo(x0 + d + bb.h, y0); ctx.stroke(); }
+    } else if (pat === 'concrete') {
+      ctx.fillStyle = rgba(col, 0.55); var s1 = 13;
+      for (x = x0; x < x1; x += s1) for (y = y0; y < y1; y += s1) {
+        var jx = (hashJ(x, y) - 0.5) * s1, jy = (hashJ(y, x) - 0.5) * s1;
+        ctx.beginPath(); ctx.arc(x + jx, y + jy, 0.9, 0, Math.PI * 2); ctx.fill();
+      }
+    } else if (pat === 'gravel') {
+      ctx.strokeStyle = rgba(col, 0.6); ctx.lineWidth = 1; var s2 = 22;
+      for (x = x0; x < x1; x += s2) for (y = y0; y < y1; y += s2) {
+        var r = 2 + hashJ(x, y) * 4, jx2 = (hashJ(x + 1, y) - 0.5) * s2, jy2 = (hashJ(x, y + 1) - 0.5) * s2;
+        ctx.beginPath(); ctx.arc(x + jx2, y + jy2, r, 0, Math.PI * 2); ctx.stroke();
+      }
+    } else if (pat === 'brick') {
+      ctx.strokeStyle = rgba(col, 0.55); ctx.lineWidth = 1; var bw = 44, bh = 18, row = 0;
+      for (y = y0; y < y1; y += bh, row++) {
+        ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x1, y); ctx.stroke();
+        var off = (row % 2) ? bw / 2 : 0;
+        for (x = x0 - bw + off; x < x1; x += bw) { ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, y + bh); ctx.stroke(); }
+      }
+    } else if (pat === 'grass') {
+      ctx.strokeStyle = rgba(col, 0.6); ctx.lineWidth = 1; var sx = 18, sy = 20;
+      for (y = y0 + sy; y < y1; y += sy) for (x = x0; x < x1; x += sx) {
+        var jx3 = hashJ(x, y) * 6;
+        ctx.beginPath();
+        ctx.moveTo(x + jx3, y); ctx.lineTo(x + jx3 - 3, y - 9);
+        ctx.moveTo(x + jx3, y); ctx.lineTo(x + jx3, y - 11);
+        ctx.moveTo(x + jx3, y); ctx.lineTo(x + jx3 + 3, y - 9);
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+  function drawSymbol(ctx, e) {
+    var s = e.size || 40, col = e.color || '#1f2937';
+    ctx.save();
+    ctx.translate(e.x, e.y);
+    if (e.rotation) ctx.rotate(e.rotation * Math.PI / 180);
+    ctx.strokeStyle = col; ctx.fillStyle = col;
+    ctx.lineWidth = Math.max(1.5, s * 0.05); ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    var r = s / 2;
+    if (e.kind === 'north') {
+      ctx.beginPath(); ctx.moveTo(0, r); ctx.lineTo(0, -r); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(0, -r); ctx.lineTo(-r * 0.28, -r * 0.55); ctx.lineTo(r * 0.28, -r * 0.55); ctx.closePath(); ctx.fill();
+      ctx.font = '700 ' + Math.round(s * 0.34) + 'px Arial, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+      ctx.fillText('N', 0, -r - 2);
+    } else if (e.kind === 'head') {
+      ctx.beginPath(); ctx.arc(0, 0, s * 0.16, 0, Math.PI * 2); ctx.fill();
+      for (var a = 0; a < 4; a++) {
+        ctx.save(); ctx.rotate(a * Math.PI / 2);
+        ctx.beginPath(); ctx.arc(0, 0, r * 0.85, -0.4, 0.4); ctx.stroke();
+        ctx.restore();
+      }
+    } else if (e.kind === 'post') {
+      ctx.fillRect(-s * 0.18, -s * 0.18, s * 0.36, s * 0.36);
+    } else if (e.kind === 'tree') {
+      ctx.beginPath(); ctx.arc(0, 0, r * 0.85, 0, Math.PI * 2); ctx.stroke();
+      for (var t = 0; t < 8; t++) { var ang = t * Math.PI / 4; ctx.beginPath(); ctx.moveTo(Math.cos(ang) * r * 0.55, Math.sin(ang) * r * 0.55); ctx.lineTo(Math.cos(ang) * r * 0.85, Math.sin(ang) * r * 0.85); ctx.stroke(); }
+    } else if (e.kind === 'callout') {
+      ctx.beginPath(); ctx.arc(0, 0, r * 0.7, 0, Math.PI * 2); ctx.stroke();
+      ctx.fillStyle = col; ctx.font = '700 ' + Math.round(s * 0.5) + 'px Arial, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(String(e.label != null ? e.label : '?'), 0, 1);
+    }
+    ctx.restore();
+  }
+
   function fitView(doc, cw, ch) {
     var s = doc.sheet, pad = 40;
     var scale = Math.min((cw - pad * 2) / s.w, (ch - pad * 2) / s.h);
@@ -206,6 +321,7 @@
         // canvas
         '<div style="flex:1;background:#11151c;border:1px solid #2a2a3a;border-radius:10px;overflow:hidden;position:relative;min-width:0;">' +
           '<canvas id="p86-sheet-canvas" style="display:block;width:100%;height:100%;cursor:crosshair;"></canvas>' +
+          '<div id="p86-sheet-picker" style="display:none;position:absolute;left:10px;top:10px;gap:4px;flex-wrap:wrap;max-width:60%;background:rgba(15,15,30,0.95);border:1px solid #3a3a4a;border-radius:8px;padding:6px;box-shadow:0 6px 20px rgba(0,0,0,0.5);"></div>' +
           '<div id="p86-sheet-hint" style="position:absolute;left:12px;bottom:10px;color:#64748b;font-size:11px;pointer-events:none;"></div>' +
         '</div>' +
         // right: layers
@@ -230,6 +346,9 @@
       spaceDown: false,
       selectedId: null,
       moveDrag: null,       // {last:{x,y}, pushed:bool} while dragging a selection
+      hatchPattern: 'earth',
+      symbolKind: 'north',
+      _calloutNum: 1,
       _undo: [], _redo: []  // history stacks (JSON snapshots of entities+layers)
     };
 
@@ -335,7 +454,27 @@
     if (S.draft) S.draft = null;             // cancel any in-progress draft
     S.tool = t;
     S.canvas.style.cursor = (t === 'pan') ? 'grab' : (t === 'select' ? 'default' : 'crosshair');
-    refreshToolbar(); updateHint(); repaint();
+    refreshToolbar(); renderPicker(); updateHint(); repaint();
+  }
+  // Pattern / symbol picker shown when the hatch or symbol tool is active.
+  function renderPicker() {
+    var el = S.overlay.querySelector('#p86-sheet-picker');
+    if (!el) return;
+    function btn(active, key, label) {
+      return '<button data-pick="' + key + '" style="padding:5px 9px;border-radius:5px;cursor:pointer;font-size:11px;font-weight:600;' +
+        (active ? 'background:rgba(251,191,36,0.15);color:#fbbf24;border:1px solid #fbbf24;' : 'background:rgba(255,255,255,0.05);color:#ddd;border:1px solid #444;') + '">' + esc(label) + '</button>';
+    }
+    if (S.tool === 'hatch') {
+      el.style.display = 'flex';
+      el.innerHTML = HATCH_PATTERNS.map(function (p) { return btn(p.key === S.hatchPattern, p.key, p.label); }).join('');
+      el.querySelectorAll('[data-pick]').forEach(function (b) { b.onclick = function () { S.hatchPattern = b.getAttribute('data-pick'); renderPicker(); }; });
+    } else if (S.tool === 'symbol') {
+      el.style.display = 'flex';
+      el.innerHTML = SYMBOLS.map(function (p) { return btn(p.key === S.symbolKind, p.key, p.label); }).join('');
+      el.querySelectorAll('[data-pick]').forEach(function (b) { b.onclick = function () { S.symbolKind = b.getAttribute('data-pick'); renderPicker(); }; });
+    } else {
+      el.style.display = 'none';
+    }
   }
   function updateHint() {
     var el = S.overlay.querySelector('#p86-sheet-hint');
@@ -583,7 +722,7 @@
       S.moveDrag = null;
     };
     c.ondblclick = function () {
-      if (S.tool === 'polyline' && S.draft) commitPolyline();
+      if ((S.tool === 'polyline' || S.tool === 'hatch') && S.draft) commitPolyline();
     };
     c.onwheel = function (e) {
       e.preventDefault();
@@ -603,7 +742,7 @@
         if (S.draft) { S.draft = null; repaint(); }
         else S.overlay.querySelector('#p86-sheet-cancel').click();
       }
-      else if (e.key === 'Enter') { if (S.tool === 'polyline' && S.draft) commitPolyline(); }
+      else if (e.key === 'Enter') { if ((S.tool === 'polyline' || S.tool === 'hatch') && S.draft) commitPolyline(); }
       else if ((e.key === 'z' || e.key === 'Z') && (e.ctrlKey || e.metaKey)) { e.preventDefault(); if (e.shiftKey) redo(); else undo(); }
       else if ((e.key === 'y' || e.key === 'Y') && (e.ctrlKey || e.metaKey)) { e.preventDefault(); redo(); }
       else if ((e.key === 'd' || e.key === 'D') && (e.ctrlKey || e.metaKey)) { e.preventDefault(); duplicateSelected(); }
@@ -671,6 +810,26 @@
         S.draft = le;
       } else { finalizeLeader(pt, vp); }
       repaint(); return;
+    }
+    // Hatch — accumulate a polygon (double-click / Enter closes + fills).
+    if (t === 'hatch') {
+      if (!S.draft) {
+        var he = newEntity('hatch', vp);
+        he.pattern = S.hatchPattern; he.points = [{ x: pt.x, y: pt.y }]; he._anchor = { x: pt.x, y: pt.y };
+        S.draft = he;
+      } else {
+        S.draft.points.push({ x: pt.x, y: pt.y });
+        S.draft._anchor = { x: pt.x, y: pt.y };
+      }
+      repaint(); return;
+    }
+    // Symbol — single click places the chosen block.
+    if (t === 'symbol') {
+      var se = newEntity('symbol', vp);
+      se.kind = S.symbolKind; se.x = pt.x; se.y = pt.y; se.rotation = 0;
+      se.size = Math.round((vp && vp.scale ? vp.scale.pixelsPerInch : 2.5) * 18);  // ~1.5 ft
+      if (se.kind === 'callout') se.label = String(S._calloutNum++);
+      commitEntity(se); repaint(); return;
     }
     if (t === 'line' || t === 'rect' || t === 'circle') {
       if (!S.draft) {
@@ -751,7 +910,10 @@
       var mnx = Math.min.apply(null, xs), mny = Math.min.apply(null, ys);
       return { x: mnx, y: mny, w: Math.max.apply(null, xs) - mnx, h: Math.max.apply(null, ys) - mny };
     }
-    if (e.x != null) return { x: e.x, y: e.y, w: 1, h: 1 };
+    if (e.x != null) {
+      if (e.tool === 'symbol') { var hs = (e.size || 40) / 2; return { x: e.x - hs, y: e.y - hs, w: hs * 2, h: hs * 2 }; }
+      var fp = e.fontPx || 24; return { x: e.x, y: e.y, w: Math.max(8, (e.text || '').length * fp * 0.55), h: fp };
+    }
     return null;
   }
   function deleteSelected() {
@@ -798,6 +960,7 @@
   function rotate90() {
     var e = selectedEntity(); if (!e) return;
     pushUndo();
+    if (e.tool === 'symbol') { e.rotation = ((e.rotation || 0) + 90) % 360; repaint(); return; }
     var bb = entBBox(e), cx = bb.x + bb.w / 2, cy = bb.y + bb.h / 2;
     transformEntity(e, function (p) { return { x: cx - (p.y - cy), y: cy + (p.x - cx) }; });
     repaint();
