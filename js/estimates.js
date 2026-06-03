@@ -183,17 +183,19 @@ function sortEstimatesBy(key) {
 }
 window.sortEstimatesBy = sortEstimatesBy;
 
+// Mirrors the Jobs-list header pattern (and the new leadsHeaderCell):
+// a `.sortable` th picks up its chevron + accent color from the global
+// `th.sortable.sort-asc/desc` rules in styles.css. No inline arrows or
+// label-color overrides here.
 function estimatesHeaderCell(label, key, opts) {
     opts = opts || {};
     var active = _estimatesSort.key === key;
-    var arrow = active ? (_estimatesSort.dir === 'asc' ? ' &uarr;' : ' &darr;') : '';
-    var color = active ? '#4f8cff' : 'var(--text-dim,#888)';
-    return '<th data-col="' + key + '" style="text-align:' + (opts.num ? 'right' : 'left') +
-        ';padding:8px 10px;cursor:pointer;user-select:none;" onclick="sortEstimatesBy(\'' + key + '\')">' +
-        '<span style="color:' + color + ';font-size:10px;text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">' +
-        label + arrow +
-        '</span>' +
-    '</th>';
+    var classes = 'sortable';
+    if (active) classes += (_estimatesSort.dir === 'asc' ? ' sort-asc' : ' sort-desc');
+    if (opts.num) classes += ' num';
+    var alignAttr = opts.num ? ' style="text-align:right;"' : '';
+    return '<th class="' + classes + '" data-col="' + key + '" data-sort="' + key + '"' + alignAttr +
+        ' onclick="sortEstimatesBy(\'' + key + '\')">' + label + '</th>';
 }
 
 function fmtRelativeDate(s) {
@@ -250,10 +252,10 @@ function renderEstimatesList() {
                     ? 'No estimates match.'
                     : 'No estimates yet. Click ' + '“' + 'New Estimate' + '”' + ' to create your first.';
                 listEl.innerHTML =
-                    '<div style="border:1px solid var(--border,#333);border-radius:10px;overflow:hidden;background:var(--card-bg,#0f0f1e);">' +
-                        '<table class="dense-table" style="width:100%;border-collapse:collapse;">' +
-                            '<thead style="background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border,#333);"><tr>' + headerRow + '</tr></thead>' +
-                            '<tbody><tr><td colspan="8" style="padding:24px;text-align:center;color:var(--text-dim,#888);font-size:13px;">' + msg + '</td></tr></tbody>' +
+                    '<div class="p86-tbl-scroll">' +
+                        '<table id="estimates-table" class="dense-table">' +
+                            '<thead><tr>' + headerRow + '</tr></thead>' +
+                            '<tbody><tr><td colspan="8" style="padding:24px;text-align:center;color:var(--text-dim,#888);">' + msg + '</td></tr></tbody>' +
                         '</table>' +
                     '</div>';
                 return;
@@ -263,54 +265,52 @@ function renderEstimatesList() {
                 return compareEstimates(a, b, _estimatesSort.key, _estimatesSort.dir);
             });
 
+            // Row markup mirrors the Jobs-list shape: minimal inline
+            // styling, defer cell padding + font + hover to the global
+            // `.dense-table` / `td` rules in styles.css. Money columns
+            // get colored emphasis (price=green, markup=yellow); margin
+            // gets the same progress-bar treatment Jobs uses for
+            // "% Complete" so the visual at a glance matches.
             const rowsHtml = sorted.map(function(est) {
                 const t = est.__totals;
                 const clientLabel = [est.client, est.community].filter(Boolean).join(' &middot; ') ||
                     '<span style="color:var(--text-dim,#666);font-style:italic;">no client</span>';
-                // WIP-style single-line title: bold title + small inline
-                // grey suffix for jobType / nickName. Drops the
-                // propertyAddr line that used to sit under client (the
-                // address lives on the job once linked, no need to
-                // duplicate it on the estimates list).
                 const titleSubBits = [];
                 if (est.jobType) titleSubBits.push(escapeHTML(est.jobType));
                 if (est.nickName) titleSubBits.push(escapeHTML(est.nickName));
                 const titleSuffix = titleSubBits.length
                     ? '<span style="font-size:11px;color:var(--text-dim,#888);font-weight:normal;margin-left:6px;">' + titleSubBits.join(' · ') + '</span>'
                     : '';
-                // Gross margin % — matches the editor's Margin chip
-                // formula: (markedUp − baseCost) / markedUp × 100.
-                // Computed BEFORE fees + tax (those are pass-throughs
-                // to the customer, not profit). The Price column shows
-                // the full proposal total INCLUDING fees + tax + round
-                // — same as the editor's Proposal Total chip.
+                // Gross margin % — (markedUp − baseCost) / markedUp × 100.
+                // Bar width clamped to 100% even when margin is higher,
+                // and shown empty when ≤ 0 (loss / unpriced).
                 const margin = t.markedUp > 0 ? ((t.markedUp - t.baseCost) / t.markedUp) * 100 : 0;
                 const marginColor = margin >= 30 ? '#34d399' : margin >= 15 ? '#fbbf24' : '#f87171';
-                return '<tr style="cursor:pointer;border-bottom:1px solid var(--border,#2a2a3a);" onclick="editEstimate(\'' + est.id + '\')">' +
-                    '<td data-col="title" style="padding:8px 10px;">' +
-                        '<strong style="color:var(--text,#fff);font-size:13px;">' + escapeHTML(est.title || '(untitled)') + '</strong>' +
-                        titleSuffix +
-                    '</td>' +
-                    '<td data-col="client" style="padding:8px 10px;font-size:13px;color:var(--text,#e6e6e6);">' + clientLabel + '</td>' +
-                    '<td data-col="lines" class="num" style="padding:8px 10px;font-family:\'SF Mono\',monospace;color:var(--text-dim,#aaa);font-size:12px;">' +
-                        t.lineCount +
-                    '</td>' +
-                    '<td data-col="baseCost" class="num" style="padding:8px 10px;font-family:\'SF Mono\',monospace;">' + formatCurrency(t.baseCost) + '</td>' +
-                    '<td data-col="markup" class="num" style="padding:8px 10px;color:#fbbf24;font-family:\'SF Mono\',monospace;">' + t.blendedMarkup.toFixed(1) + '%</td>' +
-                    '<td data-col="clientPrice" class="num" style="padding:8px 10px;font-family:\'SF Mono\',monospace;color:#34d399;font-weight:600;">' + formatCurrency(t.clientPrice) + '</td>' +
-                    '<td data-col="margin" class="num" style="padding:8px 10px;font-family:\'SF Mono\',monospace;color:' + marginColor + ';font-weight:600;">' + margin.toFixed(1) + '%</td>' +
-                    '<td data-col="updated_at" style="padding:8px 10px;font-size:11px;color:var(--text-dim,#888);white-space:nowrap;" title="' + escapeHTML(est.updated_at || '') + '">' +
+                const marginBar = margin > 0
+                    ? '<div class="progress-bar" style="margin-bottom:2px;height:6px;"><div class="progress-fill" style="width:' + Math.min(100, margin).toFixed(0) + '%;background:' + marginColor + ';"></div></div>' +
+                      '<span style="font-size:12px;color:' + marginColor + ';font-weight:600;">' + margin.toFixed(1) + '%</span>'
+                    : '<span style="color:var(--text-dim,#888);">—</span>';
+                return '<tr style="cursor:pointer;" onclick="editEstimate(\'' + est.id + '\')">' +
+                    '<td data-col="title"><strong>' + escapeHTML(est.title || '(untitled)') + '</strong>' + titleSuffix + '</td>' +
+                    '<td data-col="client">' + clientLabel + '</td>' +
+                    '<td data-col="lines" class="num">' + t.lineCount + '</td>' +
+                    '<td data-col="baseCost" class="num">' + formatCurrency(t.baseCost) + '</td>' +
+                    '<td data-col="markup" class="num" style="color:#fbbf24;">' + t.blendedMarkup.toFixed(1) + '%</td>' +
+                    '<td data-col="clientPrice" class="num" style="color:#34d399;font-weight:600;">' + formatCurrency(t.clientPrice) + '</td>' +
+                    '<td data-col="margin" class="num" style="text-align:right;">' + marginBar + '</td>' +
+                    '<td data-col="updated_at" style="white-space:nowrap;color:var(--text-dim,#888);" title="' + escapeHTML(est.updated_at || '') + '">' +
                         escapeHTML(fmtRelativeDate(est.updated_at)) +
                     '</td>' +
                 '</tr>';
             }).join('');
 
+            // Outer wrapper drops the heavy inline border / bg / radius
+            // overrides — `.dense-table` already carries the look. This
+            // matches how the Jobs list renders.
             listEl.innerHTML =
-                '<div style="border:1px solid var(--border,#333);border-radius:10px;overflow:hidden;background:var(--card-bg,#0f0f1e);">' +
-                    '<table class="dense-table" style="width:100%;border-collapse:collapse;">' +
-                        '<thead style="background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border,#333);">' +
-                            '<tr>' + headerRow + '</tr>' +
-                        '</thead>' +
+                '<div class="p86-tbl-scroll">' +
+                    '<table id="estimates-table" class="dense-table">' +
+                        '<thead><tr>' + headerRow + '</tr></thead>' +
                         '<tbody>' + rowsHtml + '</tbody>' +
                     '</table>' +
                 '</div>';

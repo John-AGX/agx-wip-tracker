@@ -89,64 +89,59 @@
   var _leadsSort = { key: 'updated_at', dir: 'desc' };
 
   function leadRowHTML(l) {
+    // Status: use the global .badge + per-status color class instead of
+    // an inline-styled span. Shape inherits from the .badge rule in
+    // styles.css — same character as the Jobs list, with lead-specific
+    // colors for the 6-stage pipeline.
     var sm = statusMeta(l.status);
-    var statusPill =
-      '<span style="display:inline-block;padding:2px 10px;border-radius:10px;background:' + sm.bg + ';color:' + sm.color +
-      ';font-size:10px;text-transform:uppercase;letter-spacing:0.5px;font-weight:700;white-space:nowrap;">' +
-      escapeHTML(sm.label) + '</span>';
+    var statusPill = '<span class="badge lead-' + (l.status || 'new') + '">' + escapeHTML(sm.label) + '</span>';
 
-    // Client cell — single line. The directory's client_name field
-    // already carries the "<parent short_name> - <community>" form
-    // (e.g. "RPM - Waterside I"), so showing client_company on a
-    // second line just duplicates the parent. Drop the sub-line.
-    var clientCell;
-    if (l.client_name) {
-      clientCell = '<span style="font-size:13px;color:var(--text,#e6e6e6);">' + escapeHTML(l.client_name) + '</span>';
-    } else {
-      clientCell = '<span style="color:var(--text-dim,#666);font-style:italic;font-size:12px;">no client</span>';
-    }
+    var clientCell = l.client_name
+      ? escapeHTML(l.client_name)
+      : '<span style="color:var(--text-dim,#666);font-style:italic;">no client</span>';
 
     // Revenue column = highest clientPrice across attached estimates.
-    // Blank when no estimate is linked. Full-precision dollars (no
-    // thousands rounding).
+    // Blank when no estimate is linked. Full-precision dollars.
     var estRev = revenueFromAttachedEstimates(l.id);
     var revenue = estRev != null ? fmtCurrencyFull(estRev) : '';
-    var conf = (l.confidence != null && l.confidence > 0) ? l.confidence + '%' : '';
-    var location = [l.city, l.state].filter(Boolean).join(', ');
 
-    // Projected sale: show the date if set; flag as "overdue" in red
-    // when the date has passed and the lead isn't terminal (sold/lost/no_opp).
+    // Confidence rendered as a progress-bar + numeric label, mirroring
+    // the Jobs "% Complete" column. Empty cell when confidence is 0/null.
+    var confNum = (l.confidence != null && l.confidence > 0) ? Number(l.confidence) : 0;
+    var confCell = confNum > 0
+      ? '<div class="progress-bar" style="margin-bottom:2px;height:6px;"><div class="progress-fill" style="width:' + confNum + '%"></div></div>' +
+        '<span style="font-size:12px;">' + confNum + '%</span>'
+      : '';
+
+    // Projected sale: show the date if set; flag as overdue in red when
+    // the date has passed and the lead isn't terminal.
     var projDateStr = l.projected_sale_date ? fmtDate(l.projected_sale_date) : '';
-    var projColor = 'var(--text-dim,#aaa)';
+    var projOverdue = false;
     if (l.projected_sale_date) {
       var pd = new Date(l.projected_sale_date).getTime();
       var terminal = ['sold', 'lost', 'no_opportunity'].indexOf(l.status) !== -1;
-      if (!terminal && !isNaN(pd) && pd < Date.now() - 86400000) projColor = '#f87171';
+      if (!terminal && !isNaN(pd) && pd < Date.now() - 86400000) projOverdue = true;
     }
 
-    // Single-line title: bold title + small inline grey
-    // suffix for location (city, state). No stacked sub-line.
+    // Single-line title: bold title + small inline grey suffix for
+    // location. Mirrors the Jobs "Job # / Name" cell pattern.
+    var location = [l.city, l.state].filter(Boolean).join(', ');
     var titleSuffix = location
       ? '<span style="font-size:11px;color:var(--text-dim,#888);font-weight:normal;margin-left:6px;">' + escapeHTML(location) + '</span>'
       : '';
-    // Single-line guarantee: white-space:nowrap stops the suffix from
-    // dropping below. No width clamping — the cell stretches to fit
-    // whatever the title needs. table-layout:auto handles the
-    // distribution; if everything together exceeds the viewport,
-    // the wrapper's overflow-x:auto provides a horizontal scroll.
+
     return '<tr class="leads-row" onclick="openEditLeadModal(\'' + escapeAttr(l.id) + '\')">' +
-      '<td data-col="title" class="lead-title-cell" style="white-space:nowrap;" title="' + escapeAttr(l.title) + (location ? ' · ' + location : '') + '">' +
-        '<strong style="color:var(--text,#fff);font-size:13px;">' + escapeHTML(l.title) + '</strong>' +
-        titleSuffix +
+      '<td data-col="title" class="lead-title-cell" title="' + escapeAttr(l.title) + (location ? ' · ' + location : '') + '">' +
+        '<strong>' + escapeHTML(l.title) + '</strong>' + titleSuffix +
       '</td>' +
-      '<td data-col="client" style="white-space:nowrap;">' + clientCell + '</td>' +
+      '<td data-col="client">' + clientCell + '</td>' +
       '<td data-col="status">' + statusPill + '</td>' +
-      '<td data-col="revenue" class="num" style="font-family:\'SF Mono\',monospace;color:#34d399;font-weight:600;font-size:13px;white-space:nowrap;">' + escapeHTML(revenue) + '</td>' +
-      '<td data-col="confidence" class="num" style="font-family:\'SF Mono\',monospace;color:var(--text-dim,#aaa);font-size:12px;">' + escapeHTML(conf) + '</td>' +
-      '<td data-col="salesperson" style="font-size:12px;color:var(--text-dim,#aaa);white-space:nowrap;">' + escapeHTML(l.salesperson_name || '') + '</td>' +
-      '<td data-col="project_type" style="font-size:12px;color:var(--text-dim,#aaa);white-space:nowrap;">' + escapeHTML(l.project_type || '') + '</td>' +
-      '<td data-col="projected_sale_date" style="font-size:11px;color:' + projColor + ';white-space:nowrap;">' + escapeHTML(projDateStr) + '</td>' +
-      '<td data-col="updated_at" style="font-size:11px;color:var(--text-dim,#888);white-space:nowrap;" title="created ' + escapeAttr(fmtDate(l.created_at)) + '">' + escapeHTML(fmtDate(l.updated_at || l.created_at)) + '</td>' +
+      '<td data-col="revenue" class="num" style="color:#34d399;font-weight:600;">' + escapeHTML(revenue) + '</td>' +
+      '<td data-col="confidence" class="num" style="text-align:right;">' + confCell + '</td>' +
+      '<td data-col="salesperson">' + escapeHTML(l.salesperson_name || '') + '</td>' +
+      '<td data-col="project_type">' + escapeHTML(l.project_type || '') + '</td>' +
+      '<td data-col="projected_sale_date"' + (projOverdue ? ' style="color:#f87171;"' : '') + '>' + escapeHTML(projDateStr) + '</td>' +
+      '<td data-col="updated_at" title="created ' + escapeAttr(fmtDate(l.created_at)) + '">' + escapeHTML(fmtDate(l.updated_at || l.created_at)) + '</td>' +
     '</tr>';
   }
 
@@ -205,17 +200,18 @@
     renderLeadsList();
   }
 
+  // Mirrors the Jobs-list header pattern: a sortable th picks up its
+  // chevron + accent color from the global `th.sortable.sort-asc/desc`
+  // CSS rules (see styles.css ~line 2119). No inline color/arrow here.
   function leadsHeaderCell(label, key, opts) {
     opts = opts || {};
     var active = _leadsSort.key === key;
-    var arrow = active ? (_leadsSort.dir === 'asc' ? ' &uarr;' : ' &darr;') : '';
-    var color = active ? '#4f8cff' : 'var(--text-dim,#888)';
-    var alignClass = opts.num ? ' class="num"' : '';
-    return '<th' + alignClass + ' data-col="' + key + '" style="text-align:' + (opts.num ? 'right' : 'left') + ';" onclick="sortLeadsBy(\'' + key + '\')">' +
-      '<span style="cursor:pointer;color:' + color + ';font-size:10px;text-transform:uppercase;letter-spacing:0.5px;font-weight:700;user-select:none;">' +
-      label + arrow +
-      '</span>' +
-    '</th>';
+    var classes = 'sortable';
+    if (active) classes += (_leadsSort.dir === 'asc' ? ' sort-asc' : ' sort-desc');
+    if (opts.num) classes += ' num';
+    var alignAttr = opts.num ? ' style="text-align:right;"' : '';
+    return '<th class="' + classes + '" data-col="' + key + '" data-sort="' + key + '"' + alignAttr +
+      ' onclick="sortLeadsBy(\'' + key + '\')">' + label + '</th>';
   }
 
   function matchesSearch(l, q) {
@@ -293,12 +289,14 @@
       leadsHeaderCell('Proj. Sale',    'projected_sale_date') +
       leadsHeaderCell('Updated',       'updated_at');
 
+    // Outer wrapper drops the heavy inline border / bg / radius — the
+    // global `.leads-table` + `table` + `th` rules already carry the
+    // Jobs-list look. `.p86-tbl-scroll` is the standard container the
+    // p86Tables enhancement module hangs its bounded-scroll logic on.
     listEl.innerHTML =
-      '<div class="leads-table-wrap" style="border:1px solid var(--border,#333);border-radius:10px;overflow-x:auto;background:var(--card-bg,#0f0f1e);">' +
-        '<table class="leads-table" style="width:100%;border-collapse:collapse;table-layout:auto;">' +
-          '<thead style="background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border,#333);">' +
-            '<tr>' + headerRow + '</tr>' +
-          '</thead>' +
+      '<div class="p86-tbl-scroll">' +
+        '<table id="leads-table" class="leads-table">' +
+          '<thead><tr>' + headerRow + '</tr></thead>' +
           '<tbody>' + sorted.map(leadRowHTML).join('') + '</tbody>' +
         '</table>' +
       '</div>';
