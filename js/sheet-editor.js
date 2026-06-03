@@ -44,6 +44,8 @@
     { key: 'circle',   glyph: '◯', label: 'Circle (click center, click radius)' },
     { key: 'arc',      glyph: '⌒', label: 'Arc (3-point: click start, a point on the arc, then end)' },
     { key: 'refline',  glyph: '┈', label: 'Reference line (construction guide — snaps & trims to, but is NOT printed or exported)' },
+    { key: 'level',    glyph: '↧', label: 'Level / elevation line — horizontal datum at a set elevation (e.g. 10\') with a head marker. Prints. The first one sets the datum.' },
+    { key: 'spotelev', glyph: '⌖', label: 'Spot elevation — click any point to tag its height above the level datum. Prints.' },
     { key: 'trim',     glyph: '✂', label: 'Trim — click a line segment to cut it back to the nearest crossing line' },
     { key: 'extend',   glyph: '⇥', label: 'Extend — click a line near the end to extend it to the next line it meets' },
     { key: 'fillet',   glyph: '◜', label: 'Fillet — click two lines, then enter a radius (0 = sharp corner)' },
@@ -202,6 +204,8 @@
           if (e.tool === 'hatch') { try { drawHatch(ctx, e); } catch (err) {} return; }
           if (e.tool === 'symbol') { try { drawSymbol(ctx, e); } catch (err) {} return; }
           if (e.tool === 'arc') { try { drawArc(ctx, e); } catch (err) {} return; }
+          if (e.tool === 'level') { try { drawLevel(ctx, e); } catch (err) {} return; }
+          if (e.tool === 'spotelev') { try { drawSpotElev(ctx, e); } catch (err) {} return; }
           if (e.tool === 'refline') { if (opts.editor) { try { drawRefline(ctx, e); } catch (err) {} } return; }   // construction guide — editor only, never exported
           // Dimension labels are derived live from the viewport scale, so
           // they stay correct as geometry changes (auto-update).
@@ -446,6 +450,44 @@
     n = n || 56; var out = [];
     for (var i = 0; i <= n; i++) { var a = a1 + sweep * (i / n); out.push({ x: ux + r * Math.cos(a), y: uy + r * Math.sin(a) }); }
     return out;
+  }
+  // ── Elevations / levels ─────────────────────────────────────────
+  // The first 'level' entity in a viewport is the datum; spot elevations are
+  // measured from it using the viewport's real scale (Y-up: higher = taller).
+  function datumForViewport(vpId) {
+    var ents = S.doc.entities || [];
+    for (var i = 0; i < ents.length; i++) if (ents[i].tool === 'level' && ents[i].viewport === vpId) return { y: ents[i].startY, elevIn: ents[i].elevIn || 0 };
+    return null;
+  }
+  function elevAtPoint(e) {
+    var vp = viewportOf(e), ppi = ppiOf(e), dat = datumForViewport(e.viewport);
+    if (dat) return dat.elevIn + (dat.y - e.y) / ppi;
+    return (vp ? (vp.y + vp.h - e.y) : 0) / ppi;     // fallback: above viewport floor
+  }
+  // Level/datum line: dash-dot horizontal line + a head bubble with the
+  // elevation. Paper-true (fixed sheet px) so it prints to scale.
+  function drawLevel(ctx, e) {
+    ctx.save();
+    ctx.strokeStyle = e.color || '#0ea5e9'; ctx.fillStyle = e.color || '#0ea5e9'; ctx.lineWidth = e.lineWidth || 2;
+    ctx.setLineDash([16, 7, 3, 7]);
+    ctx.beginPath(); ctx.moveTo(e.startX, e.startY); ctx.lineTo(e.endX, e.endY); ctx.stroke();
+    ctx.setLineDash([]);
+    var hx = Math.max(e.startX, e.endX), hy = e.startY, r = Math.round(DPI * 0.12);
+    ctx.beginPath(); ctx.arc(hx + r + 4, hy, r, 0, Math.PI * 2); ctx.stroke();
+    ctx.font = '700 ' + Math.round(DPI * 0.13) + 'px Arial, sans-serif'; ctx.textAlign = 'right'; ctx.textBaseline = 'bottom';
+    ctx.fillText(fmtFeet(e.elevIn || 0), hx - 6, hy - 5);
+    ctx.restore();
+  }
+  // Spot elevation: a triangle pointer at the spot + the computed height.
+  function drawSpotElev(ctx, e) {
+    var s = Math.round(DPI * 0.12);
+    ctx.save();
+    ctx.strokeStyle = e.color || '#0ea5e9'; ctx.fillStyle = e.color || '#0ea5e9'; ctx.lineWidth = 2; ctx.lineJoin = 'round';
+    ctx.beginPath(); ctx.moveTo(e.x, e.y); ctx.lineTo(e.x - s * 0.6, e.y - s); ctx.lineTo(e.x + s * 0.6, e.y - s); ctx.closePath(); ctx.stroke();
+    ctx.beginPath(); ctx.arc(e.x, e.y, 2, 0, Math.PI * 2); ctx.fill();
+    ctx.font = '700 ' + Math.round(DPI * 0.12) + 'px Arial, sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.fillText('+' + fmtFeet(elevAtPoint(e)), e.x + s * 0.8, e.y - s);
+    ctx.restore();
   }
   // Construction/reference line — faint dashed, screen-consistent weight.
   function drawRefline(ctx, e) {
@@ -1115,7 +1157,7 @@
     (S.doc.entities || []).forEach(function (e) {
       if (!e || e.viewport !== vp.id) return;
       if (excludeId && e.id === excludeId) return;
-      if ((e.tool === 'line' || e.tool === 'refline') && e.startX != null) {
+      if ((e.tool === 'line' || e.tool === 'refline' || e.tool === 'level') && e.startX != null) {
         segs.push({ a: { x: e.startX, y: e.startY }, b: { x: e.endX, y: e.endY } });
       } else if (e.tool === 'rect' && e.startX != null) {
         var c = [{ x: e.startX, y: e.startY }, { x: e.endX, y: e.startY }, { x: e.endX, y: e.endY }, { x: e.startX, y: e.endY }];
@@ -1381,6 +1423,32 @@
     // Block drawing onto a locked layer.
     var actL = layerById(S.doc, S.activeLayer);
     if (actL && actL.locked) { setHint('Layer "' + actL.name + '" is locked — unlock it (🔓) to draw.'); return; }
+    // Level / elevation line — a horizontal datum across the viewport at a
+    // typed elevation. The first level in a viewport sets the datum; later
+    // ones snap to the height implied by that datum + the viewport scale.
+    if (t === 'level') {
+      var vpL = vp || vpAt(pt) || (S.doc.viewports[0] || {});
+      var lv = newEntity('level', vpL);
+      var pad = 14;
+      lv.startX = (vpL.x || 0) + pad; lv.endX = (vpL.x || 0) + (vpL.w || 200) - pad;
+      promptText('Elevation (e.g. 10\', 0, 8\' 6")', function (txt) {
+        if (txt == null) return;
+        var p = prims().parseMeasurement ? prims().parseMeasurement(txt, 'ft') : null;
+        lv.elevIn = p ? p.inches : ((parseFloat(txt) || 0) * 12);
+        var dat = datumForViewport(vpL.id), yy = pt.y;
+        if (dat) { yy = dat.y - (lv.elevIn - dat.elevIn) * ppiOf(lv); }
+        lv.startY = yy; lv.endY = yy;
+        commitEntity(lv); repaint();
+      });
+      return;
+    }
+    // Spot elevation — tag a point's height above the level datum.
+    if (t === 'spotelev') {
+      var se = newEntity('spotelev', vp);
+      se.x = pt.x; se.y = pt.y;
+      commitEntity(se); repaint();
+      return;
+    }
     // Dimension — a two-point 'measure' entity; its label is computed
     // live from the viewport scale in renderSheet (auto-updates).
     if (t === 'dim') {
@@ -2334,6 +2402,8 @@
         else if ((e.tool === 'polyline' || e.tool === 'mangle' || e.tool === 'hatch') && e.points && e.points.length) { out += polyDxf(L, e.points.map(function (p) { return omap(e, p.x, p.y); }), e.tool === 'hatch'); }
         else if (e.tool === 'text' && e.x != null) { var ot = offsets[e.viewport] || { ppi: DPI * 0.25 / 12 }; out += textDxf(L, omap(e, e.x, e.y), (e.fontPx || 24) / ot.ppi, e.text || ''); }
         else if (e.tool === 'symbol' && e.x != null) { var os = offsets[e.viewport] || { ppi: DPI * 0.25 / 12 }; out += circleDxf(L, omap(e, e.x, e.y), (e.size || 40) / 2 / os.ppi); }
+        else if (e.tool === 'level') { var la = omap(e, e.startX, e.startY), lb = omap(e, e.endX, e.endY); out += lineDxf(L, la, lb) + textDxf(L, { x: Math.max(la.x, lb.x), y: la.y }, 5, fmtFeet(e.elevIn || 0)); }
+        else if (e.tool === 'spotelev' && e.x != null) { var oe = offsets[e.viewport] || { ppi: DPI * 0.25 / 12 }, sp = omap(e, e.x, e.y); out += circleDxf(L, sp, (DPI * 0.1) / oe.ppi) + textDxf(L, { x: sp.x, y: sp.y }, 5, '+' + fmtFeet(elevAtPoint(e))); }
       } catch (err) { /* skip a malformed entity, keep exporting */ }
     });
     out += g(0, 'ENDSEC') + g(0, 'EOF');
