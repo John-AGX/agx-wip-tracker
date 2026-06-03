@@ -321,7 +321,6 @@
     ov.innerHTML =
       '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;background:rgba(15,15,30,0.95);border:1px solid #2a2a3a;border-radius:10px;padding:8px 14px;">' +
         '<strong style="color:#fff;font-size:13px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">📐 ' + esc(plan.name || 'Shop drawing') + '</strong>' +
-        '<span id="p86-sheet-readout" style="color:#9aa;font-size:11px;font-variant-numeric:tabular-nums;margin-right:8px;min-width:230px;text-align:right;"></span>' +
         '<button id="p86-sheet-png" title="Download the sheet as a PNG" style="background:rgba(255,255,255,0.06);color:#cbd5e1;border:1px solid #444;border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer;">⬇ PNG</button>' +
         '<button id="p86-sheet-pdf" title="Print / Save as PDF at true sheet size" style="background:rgba(255,255,255,0.06);color:#cbd5e1;border:1px solid #444;border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer;">⎙ PDF</button>' +
         '<button id="p86-sheet-cancel" style="background:rgba(255,255,255,0.06);color:#aaa;border:1px solid #444;border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;">Close</button>' +
@@ -338,6 +337,17 @@
         '</div>' +
         // right: layers
         '<div id="p86-sheet-layers" style="width:184px;flex:0 0 184px;background:rgba(15,15,30,0.95);border:1px solid #2a2a3a;border-radius:10px;padding:10px;overflow-y:auto;color:#e6e6e6;font-size:12px;"></div>' +
+      '</div>' +
+      // bottom status bar (AutoCAD-style): coords · tool · snap · zoom · mode toggles
+      '<div style="display:flex;align-items:center;gap:14px;margin-top:8px;background:rgba(15,15,30,0.95);border:1px solid #2a2a3a;border-radius:8px;padding:5px 12px;font-size:11px;color:#9aa;font-variant-numeric:tabular-nums;">' +
+        '<span id="p86-sb-coords" style="min-width:188px;color:#cbd5e1;">x —   y —</span>' +
+        '<span id="p86-sb-snap" style="min-width:78px;color:#fbbf24;"></span>' +
+        '<span id="p86-sb-view" style="color:#64748b;"></span>' +
+        '<span style="flex:1;"></span>' +
+        '<span id="p86-sb-zoom" style="color:#64748b;margin-right:6px;"></span>' +
+        '<button data-sb-toggle="ortho" title="Ortho lock (or hold Shift) — 0/45/90°" style="background:rgba(255,255,255,0.05);color:#9aa;border:1px solid #444;border-radius:5px;padding:3px 9px;font-size:10px;font-weight:700;letter-spacing:0.4px;cursor:pointer;">ORTHO</button>' +
+        '<button data-sb-toggle="grid" title="Snap to grid (1 ft)" style="background:rgba(255,255,255,0.05);color:#9aa;border:1px solid #444;border-radius:5px;padding:3px 9px;font-size:10px;font-weight:700;letter-spacing:0.4px;cursor:pointer;">GRID</button>' +
+        '<button data-sb-toggle="osnap" title="Object snap (endpoint / midpoint / center)" style="background:rgba(255,255,255,0.05);color:#9aa;border:1px solid #444;border-radius:5px;padding:3px 9px;font-size:10px;font-weight:700;letter-spacing:0.4px;cursor:pointer;">OSNAP</button>' +
       '</div>';
     document.body.appendChild(ov);
 
@@ -400,10 +410,6 @@
         'style="width:42px;height:40px;background:rgba(255,255,255,0.05);color:#ddd;border:1px solid #444;border-radius:6px;font-size:17px;cursor:pointer;line-height:1;">' + t.glyph + '</button>';
     }).join('');
     html += '<div style="width:34px;height:1px;background:#3a3a4a;margin:4px 0;"></div>';
-    html += toggleBtn('ortho', '⊾', 'Ortho lock (or hold Shift) — 0/45/90°');
-    html += toggleBtn('grid', '▦', 'Snap to grid (1 ft)');
-    html += toggleBtn('osnap', '⊹', 'Object snap (endpoint / midpoint / center)');
-    html += '<div style="width:34px;height:1px;background:#3a3a4a;margin:4px 0;"></div>';
     html += '<button data-sheet-edit="rotate" title="Rotate selection 90°" style="width:42px;height:34px;background:rgba(255,255,255,0.05);color:#ddd;border:1px solid #444;border-radius:6px;font-size:15px;cursor:pointer;">⟳</button>';
     html += '<button data-sheet-edit="mirrorH" title="Mirror selection (horizontal)" style="width:42px;height:34px;background:rgba(255,255,255,0.05);color:#ddd;border:1px solid #444;border-radius:6px;font-size:15px;cursor:pointer;">⇆</button>';
     html += '<button data-sheet-edit="mirrorV" title="Mirror selection (vertical)" style="width:42px;height:34px;background:rgba(255,255,255,0.05);color:#ddd;border:1px solid #444;border-radius:6px;font-size:15px;cursor:pointer;">⇅</button>';
@@ -416,13 +422,13 @@
     bar.querySelectorAll('[data-sheet-tool]').forEach(function (b) {
       b.onclick = function () { setTool(b.getAttribute('data-sheet-tool')); };
     });
-    bar.querySelectorAll('[data-sheet-toggle]').forEach(function (b) {
+    S.overlay.querySelectorAll('[data-sb-toggle]').forEach(function (b) {
       b.onclick = function () {
-        var k = b.getAttribute('data-sheet-toggle');
+        var k = b.getAttribute('data-sb-toggle');
         if (k === 'ortho') S.ortho = !S.ortho;
         else if (k === 'grid') S.gridSnap = !S.gridSnap;
         else if (k === 'osnap') S.objSnap = !S.objSnap;
-        refreshToolbar();
+        refreshStatusBar();
         repaint();
       };
     });
@@ -454,13 +460,22 @@
       b.style.color = on ? '#fbbf24' : '#ddd';
       b.style.borderColor = on ? '#fbbf24' : '#444';
     });
-    bar.querySelectorAll('[data-sheet-toggle]').forEach(function (b) {
-      var k = b.getAttribute('data-sheet-toggle');
+    refreshStatusBar();
+  }
+  // AutoCAD-style bottom status bar: mode-toggle chips + view + zoom.
+  function refreshStatusBar() {
+    if (!S || !S.overlay) return;
+    S.overlay.querySelectorAll('[data-sb-toggle]').forEach(function (b) {
+      var k = b.getAttribute('data-sb-toggle');
       var on = (k === 'ortho' && S.ortho) || (k === 'grid' && S.gridSnap) || (k === 'osnap' && S.objSnap);
-      b.style.background = on ? 'rgba(79,140,255,0.18)' : 'rgba(255,255,255,0.05)';
-      b.style.color = on ? '#93c5fd' : '#ddd';
+      b.style.background = on ? 'rgba(79,140,255,0.22)' : 'rgba(255,255,255,0.05)';
+      b.style.color = on ? '#93c5fd' : '#9aa';
       b.style.borderColor = on ? '#4f8cff' : '#444';
     });
+    var v = S.overlay.querySelector('#p86-sb-view');
+    if (v) { var avp = S.hoverVp || (S.doc.viewports && S.doc.viewports[0]); v.textContent = avp ? (avp.label + '  ·  ' + (avp.scale && avp.scale.label ? avp.scale.label : '')) : ''; }
+    var z = S.overlay.querySelector('#p86-sb-zoom');
+    if (z) z.textContent = Math.round((S.view.scale || 1) * 100) + '%';
   }
   function setTool(t) {
     if (S.draft) S.draft = null;             // cancel any in-progress draft
@@ -565,7 +580,26 @@
   function buildLayers() {
     var host = S.overlay.querySelector('#p86-sheet-layers');
     // ── Sheet section ──
-    var html = '<div style="font-weight:700;color:#fff;margin-bottom:6px;">Sheet</div>';
+    var html = '';
+    // ── Properties (selected object) ──
+    var selEnt = S.selectedId ? selectedEntity() : null;
+    if (selEnt) {
+      var TOOL_NAMES = { line: 'Line', polyline: 'Polyline', rect: 'Rectangle', ellipse: 'Circle', text: 'Text', measure: 'Dimension', mangle: 'Angle', arrow: 'Leader', hatch: 'Hatch', symbol: 'Symbol' };
+      html += '<div style="border:1px solid #4f8cff;background:rgba(79,140,255,0.08);border-radius:8px;padding:8px 9px;margin-bottom:12px;">' +
+        '<div style="font-weight:700;color:#fff;margin-bottom:6px;display:flex;align-items:center;gap:6px;">⛶ ' + esc(TOOL_NAMES[selEnt.tool] || selEnt.tool) +
+          '<button data-prop-del style="margin-left:auto;background:transparent;border:0;color:#f87171;cursor:pointer;font-size:12px;">✕ Delete</button></div>' +
+        '<label style="display:block;font-size:10px;color:#9aa;margin-bottom:2px;">Layer</label>' +
+        '<select data-prop-layer style="width:100%;box-sizing:border-box;background:#1a1a2e;color:#fff;border:1px solid #444;border-radius:5px;padding:4px 6px;font-size:11px;">' +
+          (S.doc.layers || []).map(function (l) { return '<option value="' + esc(l.id) + '"' + (l.id === selEnt.layer ? ' selected' : '') + '>' + esc(l.name) + '</option>'; }).join('') +
+        '</select>' +
+        '<div style="display:flex;gap:8px;margin-top:6px;font-size:10.5px;color:#9aa;">' +
+          '<span>Color <span style="display:inline-block;width:10px;height:10px;border-radius:2px;vertical-align:middle;background:' + esc(selEnt.color || '#888') + ';border:1px solid rgba(255,255,255,0.3);"></span></span>' +
+          '<span>Weight ' + (selEnt.lineWidth || 2) + 'px</span>' +
+        '</div>' +
+        '<div style="margin-top:5px;font-size:9.5px;color:#64748b;">Drag to move · ⟳ rotate · ⇆⇅ mirror · Ctrl+D dup</div>' +
+      '</div>';
+    }
+    html += '<div style="font-weight:700;color:#fff;margin-bottom:6px;">Sheet</div>';
     html += '<select data-sheet-size style="width:100%;box-sizing:border-box;background:#1a1a2e;color:#fff;border:1px solid #444;border-radius:6px;padding:5px 7px;font-size:11.5px;margin-bottom:6px;">' +
       Object.keys(SHEET_SIZES).map(function (k) {
         return '<option value="' + k + '"' + (S.doc.sheet.size === k ? ' selected' : '') + '>' + esc(SHEET_SIZES[k].label) + '</option>';
@@ -607,6 +641,18 @@
     }).join('');
     html += '<div style="margin-top:10px;font-size:10.5px;color:#64748b;line-height:1.4;">Click = draw on it · dbl-click name = rename · swatch = color · ✕ = delete.</div>';
     host.innerHTML = html;
+    // Properties wiring (selected object)
+    var propLayer = host.querySelector('[data-prop-layer]');
+    if (propLayer) propLayer.onchange = function () {
+      var e = selectedEntity(); if (!e) return;
+      pushUndo();
+      e.layer = propLayer.value;
+      var l = layerById(S.doc, e.layer);
+      if (e.tool !== 'measure') { e.color = l.color; e.lineWidth = l.weight || e.lineWidth; }
+      buildLayers(); repaint();
+    };
+    var propDel = host.querySelector('[data-prop-del]');
+    if (propDel) propDel.onclick = deleteSelected;
     // Sheet + Views wiring
     var sizeSel = host.querySelector('[data-sheet-size]');
     if (sizeSel) sizeSel.onchange = function () { applySheetSize(sizeSel.value); };
@@ -779,20 +825,24 @@
     return f ? f(inches) : (Math.round(inches / 12 * 100) / 100) + "'";
   }
   function updateReadout(sheetPt, vp) {
-    var el = S.overlay.querySelector('#p86-sheet-readout');
-    if (!el) return;
-    if (!vp) { el.textContent = '(outside viewport)'; return; }
-    var bits = [];
-    var rx = realLen(sheetPt.x - vp.x, vp), ry = realLen(sheetPt.y - vp.y, vp);
-    if (rx != null) bits.push('x ' + fmtFeet(rx) + '  y ' + fmtFeet(ry));
-    if (S.draft && S.draft._anchor) {
-      var a = S.draft._anchor;
-      var len = realLen(Math.hypot(sheetPt.x - a.x, sheetPt.y - a.y), vp);
-      var deg = Math.round(Math.atan2(-(sheetPt.y - a.y), sheetPt.x - a.x) * 180 / Math.PI);
-      if (len != null) bits.push('· ' + fmtFeet(len) + ' @ ' + deg + '°');
+    var coords = S.overlay.querySelector('#p86-sb-coords');
+    var snapEl = S.overlay.querySelector('#p86-sb-snap');
+    if (coords) {
+      if (!vp) { coords.textContent = '(outside view)'; }
+      else {
+        var rx = realLen(sheetPt.x - vp.x, vp), ry = realLen(sheetPt.y - vp.y, vp);
+        var txt = (rx != null) ? ('x ' + fmtFeet(rx) + '   y ' + fmtFeet(ry)) : '';
+        if (S.draft && S.draft._anchor) {
+          var a = S.draft._anchor;
+          var len = realLen(Math.hypot(sheetPt.x - a.x, sheetPt.y - a.y), vp);
+          var deg = Math.round(Math.atan2(-(sheetPt.y - a.y), sheetPt.x - a.x) * 180 / Math.PI);
+          if (len != null) txt += '    Δ ' + fmtFeet(len) + ' @ ' + deg + '°';
+        }
+        coords.textContent = txt;
+      }
     }
-    if (S.snap && S.snap.kind && S.snap.kind !== 'grid') bits.push('[' + S.snap.kind + ']');
-    el.textContent = bits.join('   ');
+    if (snapEl) snapEl.textContent = (S.snap && S.snap.kind) ? ('⊹ ' + S.snap.kind) : '';
+    refreshStatusBar();
   }
 
   // ── Input handling ──────────────────────────────────────────────
@@ -1034,7 +1084,7 @@
       var slop = 8 / S.view.scale;
       if (bb && raw.x >= bb.x - slop && raw.x <= bb.x + bb.w + slop && raw.y >= bb.y - slop && raw.y <= bb.y + bb.h + slop) { hit = e.id; break; }
     }
-    S.selectedId = hit; repaint();
+    S.selectedId = hit; buildLayers(); repaint();
   }
   function entBBox(e) {
     if (e.startX != null) return { x: Math.min(e.startX, e.endX), y: Math.min(e.startY, e.endY), w: Math.abs(e.endX - e.startX), h: Math.abs(e.endY - e.startY) };
@@ -1053,7 +1103,7 @@
     if (!S.selectedId) return;
     pushUndo();
     S.doc.entities = S.doc.entities.filter(function (e) { return e.id !== S.selectedId; });
-    S.selectedId = null; repaint();
+    S.selectedId = null; buildLayers(); repaint();
   }
 
   // ── History (undo / redo) ───────────────────────────────────────
@@ -1110,7 +1160,7 @@
     pushUndo();
     var copy = JSON.parse(JSON.stringify(e)); copy.id = uid(copy.tool);
     translateEntity(copy, 14, 14);
-    S.doc.entities.push(copy); S.selectedId = copy.id; repaint();
+    S.doc.entities.push(copy); S.selectedId = copy.id; buildLayers(); repaint();
   }
 
   // ── Render ──────────────────────────────────────────────────────
