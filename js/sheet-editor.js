@@ -121,8 +121,16 @@
   // ── Static sheet render (used by editor under a transform, and at
   // full size for print/export in D6). Draws paper, border, viewport
   // frames + labels, titleblock, and committed entities (via drawStroke).
-  function renderSheet(ctx, doc) {
+  function renderSheet(ctx, doc, opts) {
+    opts = opts || {};
     var s = doc.sheet;
+    // Editor-only paper drop-shadow (export passes no shadow → clean sheet).
+    if (opts.paperShadow) {
+      ctx.save();
+      ctx.shadowColor = 'rgba(0,0,0,0.55)'; ctx.shadowBlur = 34; ctx.shadowOffsetY = 12;
+      ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, s.w, s.h);
+      ctx.restore();
+    }
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, s.w, s.h);
     ctx.strokeStyle = '#1f2937';
@@ -140,6 +148,11 @@
       ctx.setLineDash([]);
       // clip entities to the viewport frame
       ctx.beginPath(); ctx.rect(vp.x, vp.y, vp.w, vp.h); ctx.clip();
+      // Editor-only faint reference grid (1 ft minor / 5 ft major), gated
+      // by zoom so it never turns into a solid fill when zoomed out.
+      if (opts.grid && vp.scale && vp.scale.pixelsPerInch) {
+        drawViewportGrid(ctx, vp, opts.viewScale || 1);
+      }
       if (typeof prims().drawStroke === 'function') {
         (doc.entities || []).forEach(function (e) {
           if (!e || e.viewport !== vp.id || !e.tool) return;
@@ -299,6 +312,23 @@
     ctx.restore();
   }
 
+  // Faint reference grid inside a viewport — 1 ft minor, 5 ft major.
+  // Origin aligned to vp.x/vp.y so it matches the grid-snap lattice.
+  function drawViewportGrid(ctx, vp, viewScale) {
+    var step = vp.scale.pixelsPerInch * 12;          // 1 ft, sheet px
+    if (step * viewScale < 7) return;                // too dense at this zoom
+    var x0 = vp.x, y0 = vp.y, x1 = vp.x + vp.w, y1 = vp.y + vp.h, x, y;
+    ctx.save();
+    ctx.strokeStyle = 'rgba(37,99,235,0.09)'; ctx.lineWidth = 1 / viewScale;
+    for (x = x0; x <= x1 + 0.5; x += step) { ctx.beginPath(); ctx.moveTo(x, y0); ctx.lineTo(x, y1); ctx.stroke(); }
+    for (y = y0; y <= y1 + 0.5; y += step) { ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x1, y); ctx.stroke(); }
+    var major = step * 5;
+    ctx.strokeStyle = 'rgba(37,99,235,0.20)'; ctx.lineWidth = 1.3 / viewScale;
+    for (x = x0; x <= x1 + 0.5; x += major) { ctx.beginPath(); ctx.moveTo(x, y0); ctx.lineTo(x, y1); ctx.stroke(); }
+    for (y = y0; y <= y1 + 0.5; y += major) { ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x1, y); ctx.stroke(); }
+    ctx.restore();
+  }
+
   function fitView(doc, cw, ch) {
     var s = doc.sheet, pad = 40;
     var scale = Math.min((cw - pad * 2) / s.w, (ch - pad * 2) / s.h);
@@ -405,7 +435,12 @@
     var area = S.canvas.parentElement.getBoundingClientRect();
     var w = Math.max(320, Math.floor(area.width));
     var h = Math.max(240, Math.floor(area.height));
-    S.canvas.width = w; S.canvas.height = h;
+    // Render at device-pixel resolution for crisp lines on HiDPI/retina.
+    // All view math stays in CSS px; repaint applies the dpr base transform.
+    // (dpr === 1 → byte-identical to the pre-HiDPI behavior.)
+    var dpr = Math.max(1, Math.min(window.devicePixelRatio || 1, 2));
+    S.dpr = dpr; S.cssW = w; S.cssH = h;
+    S.canvas.width = Math.round(w * dpr); S.canvas.height = Math.round(h * dpr);
     if (fit) S.view = fitView(S.doc, w, h);
   }
 
@@ -751,7 +786,10 @@
     var r = S.canvas.getBoundingClientRect();
     var cx = e.touches ? e.touches[0].clientX : e.clientX;
     var cy = e.touches ? e.touches[0].clientY : e.clientY;
-    return { x: (cx - r.left) * (S.canvas.width / r.width), y: (cy - r.top) * (S.canvas.height / r.height) };
+    // Map to CSS px (the space the view transform works in), not the
+    // dpr-scaled backing store.
+    var cw = S.cssW || S.canvas.width, ch = S.cssH || S.canvas.height;
+    return { x: (cx - r.left) * (cw / r.width), y: (cy - r.top) * (ch / r.height) };
   }
   function vpAt(pt) {
     var vps = S.doc.viewports || [];
@@ -1198,6 +1236,24 @@
     }
     return null;
   }
+  // Defining points of an entity, for selection grips.
+  function entGrips(e) {
+    var g = [];
+    if (e.startX != null) {
+      g.push({ x: e.startX, y: e.startY }); g.push({ x: e.endX, y: e.endY });
+      if (e.tool === 'rect' || e.tool === 'ellipse') {
+        g.push({ x: e.startX, y: e.endY }); g.push({ x: e.endX, y: e.startY });
+        g.push({ x: (e.startX + e.endX) / 2, y: (e.startY + e.endY) / 2 });
+      } else {
+        g.push({ x: (e.startX + e.endX) / 2, y: (e.startY + e.endY) / 2 });
+      }
+    } else if (e.points && e.points.length) {
+      e.points.forEach(function (p) { g.push({ x: p.x, y: p.y }); });
+    } else if (e.x != null) {
+      g.push({ x: e.x, y: e.y });
+    }
+    return g;
+  }
   function deleteSelected() {
     if (!S.selectedId) return;
     pushUndo();
@@ -1265,12 +1321,13 @@
   // ── Render ──────────────────────────────────────────────────────
   function repaint() {
     var ctx = S.ctx, c = S.canvas;
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.fillStyle = '#11151c'; ctx.fillRect(0, 0, c.width, c.height);
+    var dpr = S.dpr || 1, vw = S.cssW || c.width, vh = S.cssH || c.height;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.fillStyle = '#11151c'; ctx.fillRect(0, 0, vw, vh);
     ctx.save();
     ctx.translate(S.view.tx, S.view.ty);
     ctx.scale(S.view.scale, S.view.scale);
-    renderSheet(ctx, S.doc);
+    renderSheet(ctx, S.doc, { paperShadow: true, grid: S.gridSnap, viewScale: S.view.scale });
     // draft preview
     if (S.draft) {
       var d = S.draft;
@@ -1311,6 +1368,19 @@
       }
     }
     ctx.restore();
+    // selection grips (screen space, fixed size) — CAD-style square handles
+    // at the entity's defining points. Display-only for now (E2).
+    if (S.selectedId) {
+      var selG = S.doc.entities.filter(function (e) { return e.id === S.selectedId; })[0];
+      var grips = selG ? entGrips(selG) : [];
+      ctx.save();
+      grips.forEach(function (g) {
+        var gp = toScreen(g.x, g.y);
+        ctx.fillStyle = '#22c55e'; ctx.strokeStyle = '#0b0e14'; ctx.lineWidth = 1;
+        ctx.fillRect(gp.x - 4, gp.y - 4, 8, 8); ctx.strokeRect(gp.x - 4, gp.y - 4, 8, 8);
+      });
+      ctx.restore();
+    }
     // snap marker (screen space, fixed size)
     if (S.snap && S.snap.kind) {
       var sp = toScreen(S.snap.x, S.snap.y);
