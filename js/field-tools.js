@@ -267,17 +267,17 @@
     window.p86Api.get('/api/field-tools/' + encodeURIComponent(id)).then(function(resp) {
       if (!resp || !resp.tool) { alert('Tool not found.'); return; }
       var t = resp.tool;
-      // Centered modal panel matching the Change Order / estimate-editor
-      // shape: dark backdrop, rounded panel with a header row + body.
+      // Centered modal panel matching the Change Order shape exactly:
+      // dark backdrop, panel capped at 1280px wide (fills viewport
+      // below that), 100vh tall, NO rounded corners, NO edge padding.
       // The OUTER div is the backdrop (full-viewport, click-to-close);
-      // the INNER .ft-panel is the contained dialog. Padding from the
-      // window edges + max-width prevents the panel from ever stretching
-      // edge-to-edge (which is what made it feel fullscreen before).
+      // the INNER .ft-panel is the contained host. Mirrors .p86-co-overlay
+      // / .p86-co-host in css/styles.css ~line 8274.
       var modal = document.createElement('div');
-      modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.65);display:flex;align-items:center;justify-content:center;z-index:9999;padding:24px;backdrop-filter:blur(2px);';
+      modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.78);display:flex;align-items:stretch;justify-content:center;z-index:9999;overflow-y:auto;';
       modal.innerHTML =
-        '<div class="ft-panel" style="background:#141414;border:1px solid #2a2a2a;border-radius:12px;display:flex;flex-direction:column;width:100%;max-width:1300px;height:100%;max-height:92vh;overflow:hidden;box-shadow:0 16px 48px rgba(0,0,0,0.6);">' +
-          '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 16px;background:#0a0a0a;border-bottom:1px solid #222;flex-shrink:0;">' +
+        '<div class="ft-panel" style="background:var(--bg,#0f1117);width:min(1280px,100%);min-height:100vh;display:flex;flex-direction:column;">' +
+          '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:12px 16px;background:var(--surface,#1a1d27);border-bottom:1px solid var(--border,#2e3346);flex-shrink:0;position:sticky;top:0;z-index:3;">' +
             '<div style="min-width:0;flex:1;">' +
               '<div style="font-size:15px;font-weight:600;color:var(--text,#fff);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(t.name) + '</div>' +
               (t.description ? '<div style="font-size:11px;color:var(--text-dim,#888);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:2px;">' + escapeHTML(t.description) + '</div>' : '') +
