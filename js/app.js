@@ -342,6 +342,15 @@
                     if (adminSub && typeof window.switchAdminSubTab === 'function') {
                         window.switchAdminSubTab(adminSub);
                     }
+                    // My Files accordion children carry data-myfiles-folder
+                    // (e.g. __projects__, __tools__, __printouts__) — same
+                    // pattern as data-admin-subtab. After switchTab routes us
+                    // into the my-files pane, hand the virtual folder name
+                    // to window.myFiles.selectFolder so the right View renders.
+                    const mfFolder = btn.getAttribute('data-myfiles-folder');
+                    if (mfFolder && window.myFiles && typeof window.myFiles.selectFolder === 'function') {
+                        window.myFiles.selectFolder(mfFolder);
+                    }
                     if (virtual) markVirtualTabActive(virtual);
                     // Clicking an accordion PARENT row navigates AND ensures
                     // its section is open (the caret handles collapsing); a
