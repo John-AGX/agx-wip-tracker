@@ -42,6 +42,7 @@
     { key: 'polyline', glyph: '⌇', label: 'Polyline (click points · double-click/Enter to finish)' },
     { key: 'rect',     glyph: '▭', label: 'Rectangle (click two opposite corners)' },
     { key: 'circle',   glyph: '◯', label: 'Circle (click center, click radius)' },
+    { key: 'arc',      glyph: '⌒', label: 'Arc (3-point: click start, a point on the arc, then end)' },
     { key: 'dim',      glyph: '↔', label: 'Dimension (click two points — auto-labels real length at the viewport scale)' },
     { key: 'angle',    glyph: '∠', label: 'Angle dimension (click three points: leg · vertex · leg)' },
     { key: 'leader',   glyph: '➘', label: 'Leader / callout (click target, click text position)' },
@@ -162,6 +163,7 @@
           // Hatch + symbol have their own renderers (not in drawStroke).
           if (e.tool === 'hatch') { try { drawHatch(ctx, e); } catch (err) {} return; }
           if (e.tool === 'symbol') { try { drawSymbol(ctx, e); } catch (err) {} return; }
+          if (e.tool === 'arc') { try { drawArc(ctx, e); } catch (err) {} return; }
           // Dimension labels are derived live from the viewport scale, so
           // they stay correct as geometry changes (auto-update).
           if (e.tool === 'measure' && vp.scale && vp.scale.pixelsPerInch) {
@@ -387,6 +389,39 @@
     ctx.restore();
   }
 
+  // ── Arc (3-point) ───────────────────────────────────────────────
+  // Stored as { tool:'arc', points:[start, through, end] } so it reuses the
+  // generic points machinery for bbox / grips / snaps / move / transform.
+  // The circle + sweep are recomputed from the 3 points on every render.
+  function arcSamples(pts, n) {
+    if (!pts || pts.length < 3) return (pts || []).slice();
+    var p1 = pts[0], p2 = pts[1], p3 = pts[2];
+    var ax = p1.x, ay = p1.y, bx = p2.x, by = p2.y, cx = p3.x, cy = p3.y;
+    var d = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
+    if (Math.abs(d) < 1e-6) return [p1, p3];          // collinear → straight
+    var ux = ((ax * ax + ay * ay) * (by - cy) + (bx * bx + by * by) * (cy - ay) + (cx * cx + cy * cy) * (ay - by)) / d;
+    var uy = ((ax * ax + ay * ay) * (cx - bx) + (bx * bx + by * by) * (ax - cx) + (cx * cx + cy * cy) * (bx - ax)) / d;
+    var r = Math.hypot(ax - ux, ay - uy);
+    var a1 = Math.atan2(ay - uy, ax - ux), a2 = Math.atan2(by - uy, bx - ux), a3 = Math.atan2(cy - uy, cx - ux);
+    function norm(a) { a %= 2 * Math.PI; if (a < 0) a += 2 * Math.PI; return a; }
+    var dCcw = norm(a3 - a1), mCcw = norm(a2 - a1);
+    var sweep = (mCcw <= dCcw) ? dCcw : -(2 * Math.PI - dCcw);   // pass through p2
+    n = n || 56; var out = [];
+    for (var i = 0; i <= n; i++) { var a = a1 + sweep * (i / n); out.push({ x: ux + r * Math.cos(a), y: uy + r * Math.sin(a) }); }
+    return out;
+  }
+  function drawArc(ctx, e) {
+    var s = arcSamples(e.points, 56); if (s.length < 2) return;
+    ctx.save();
+    ctx.strokeStyle = e.color || '#1f2937'; ctx.lineWidth = e.lineWidth || 2;
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    if (e.lineType === 'dashed') ctx.setLineDash([10, 6]);
+    ctx.beginPath(); ctx.moveTo(s[0].x, s[0].y);
+    for (var i = 1; i < s.length; i++) ctx.lineTo(s[i].x, s[i].y);
+    ctx.stroke();
+    ctx.restore();
+  }
+
   // Faint reference grid inside a viewport — 1 ft minor, 5 ft major.
   // Origin aligned to vp.x/vp.y so it matches the grid-snap lattice.
   function drawViewportGrid(ctx, vp, viewScale) {
@@ -563,6 +598,8 @@
     html += '<button data-sheet-edit="mirrorH" title="Mirror selection (horizontal)" style="width:42px;height:34px;background:rgba(255,255,255,0.05);color:#ddd;border:1px solid #444;border-radius:6px;font-size:15px;cursor:pointer;">⇆</button>';
     html += '<button data-sheet-edit="mirrorV" title="Mirror selection (vertical)" style="width:42px;height:34px;background:rgba(255,255,255,0.05);color:#ddd;border:1px solid #444;border-radius:6px;font-size:15px;cursor:pointer;">⇅</button>';
     html += '<button data-sheet-edit="dup" title="Duplicate selection (Ctrl+D)" style="width:42px;height:34px;background:rgba(255,255,255,0.05);color:#ddd;border:1px solid #444;border-radius:6px;font-size:14px;cursor:pointer;">⧉</button>';
+    html += '<button data-sheet-edit="offset" title="Offset selection by a distance (line / polyline / rect / circle)" style="width:42px;height:34px;background:rgba(255,255,255,0.05);color:#ddd;border:1px solid #444;border-radius:6px;font-size:14px;cursor:pointer;">⎘</button>';
+    html += '<button data-sheet-edit="array" title="Array selection (rows × columns)" style="width:42px;height:34px;background:rgba(255,255,255,0.05);color:#ddd;border:1px solid #444;border-radius:6px;font-size:14px;cursor:pointer;">▦</button>';
     html += '<div style="width:34px;height:1px;background:#3a3a4a;margin:4px 0;"></div>';
     html += '<button data-sheet-undo title="Undo (Ctrl+Z)" style="width:42px;height:34px;background:rgba(255,255,255,0.05);color:#ddd;border:1px solid #444;border-radius:6px;font-size:14px;cursor:pointer;">↶</button>';
     html += '<button data-sheet-redo title="Redo (Ctrl+Y / Ctrl+Shift+Z)" style="width:42px;height:34px;background:rgba(255,255,255,0.05);color:#ddd;border:1px solid #444;border-radius:6px;font-size:14px;cursor:pointer;">↷</button>';
@@ -589,6 +626,8 @@
         else if (k === 'mirrorH') mirror(true);
         else if (k === 'mirrorV') mirror(false);
         else if (k === 'dup') duplicateSelected();
+        else if (k === 'offset') openOffsetModal();
+        else if (k === 'array') openArrayModal();
       };
     });
     bar.querySelector('[data-sheet-redo]').onclick = redo;
@@ -943,7 +982,43 @@
         out.push({ x: e.x, y: e.y, kind: 'end' });
       }
     });
+    // Intersection snaps (line × line / polyline / rect edges). O(n²) over
+    // segments — capped so a dense sheet doesn't stall the snap on hover.
+    var segs = segmentsInVp(vp);
+    if (segs.length <= 80) {
+      for (var i = 0; i < segs.length; i++) for (var j = i + 1; j < segs.length; j++) {
+        var ix = segIntersect(segs[i], segs[j]);
+        if (ix) out.push({ x: ix.x, y: ix.y, kind: 'intersect' });
+      }
+    }
     return out;
+  }
+  // Flatten drawable line segments in a viewport (for intersection snaps).
+  function segmentsInVp(vp) {
+    var segs = [];
+    (S.doc.entities || []).forEach(function (e) {
+      if (!e || e.viewport !== vp.id) return;
+      if (e.tool === 'line' && e.startX != null) {
+        segs.push({ a: { x: e.startX, y: e.startY }, b: { x: e.endX, y: e.endY } });
+      } else if (e.tool === 'rect' && e.startX != null) {
+        var c = [{ x: e.startX, y: e.startY }, { x: e.endX, y: e.startY }, { x: e.endX, y: e.endY }, { x: e.startX, y: e.endY }];
+        for (var k = 0; k < 4; k++) segs.push({ a: c[k], b: c[(k + 1) % 4] });
+      } else if ((e.tool === 'polyline') && e.points && e.points.length > 1) {
+        for (var p = 1; p < e.points.length; p++) segs.push({ a: e.points[p - 1], b: e.points[p] });
+      }
+    });
+    return segs;
+  }
+  // Intersection point of two segments, or null if they don't cross.
+  function segIntersect(s1, s2) {
+    var x1 = s1.a.x, y1 = s1.a.y, x2 = s1.b.x, y2 = s1.b.y;
+    var x3 = s2.a.x, y3 = s2.a.y, x4 = s2.b.x, y4 = s2.b.y;
+    var den = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4);
+    if (Math.abs(den) < 1e-9) return null;
+    var t = ((x1 - x3) * (y3 - y4) - (y1 - y3) * (x3 - x4)) / den;
+    var u = ((x1 - x3) * (y1 - y2) - (y1 - y3) * (x1 - x2)) / den;
+    if (t < -0.001 || t > 1.001 || u < -0.001 || u > 1.001) return null;
+    return { x: x1 + t * (x2 - x1), y: y1 + t * (y2 - y1) };
   }
   // Resolve the snapped sheet-point for a raw cursor sheet-point.
   function resolveSnap(raw, vp) {
@@ -1099,6 +1174,7 @@
       else if (e.key === 'r' || e.key === 'R') setTool('rect');
       else if (e.key === 'p' || e.key === 'P') setTool('polyline');
       else if (e.key === 'c' || e.key === 'C') setTool('circle');
+      else if (e.key === 'a' || e.key === 'A') setTool('arc');
       else if (e.key === 'd' || e.key === 'D') setTool('dim');
     };
     S.overlay.onkeyup = function (e) {
@@ -1158,6 +1234,19 @@
         S.draft.points.push({ x: pt.x, y: pt.y });
         S.draft._anchor = { x: pt.x, y: pt.y };
         if (S.draft.points.length >= 3) { var a = S.draft; delete a._anchor; commitEntity(a); S.draft = null; }
+      }
+      repaint(); return;
+    }
+    // Arc — 3-point (start · point-on-arc · end).
+    if (t === 'arc') {
+      if (!S.draft) {
+        var arcE = newEntity('arc', vp);
+        arcE.points = [{ x: pt.x, y: pt.y }]; arcE._anchor = { x: pt.x, y: pt.y };
+        S.draft = arcE;
+      } else {
+        S.draft.points.push({ x: pt.x, y: pt.y });
+        S.draft._anchor = { x: pt.x, y: pt.y };
+        if (S.draft.points.length >= 3) { var ar = S.draft; delete ar._anchor; commitEntity(ar); S.draft = null; }
       }
       repaint(); return;
     }
@@ -1431,6 +1520,105 @@
     translateEntity(copy, 14, 14);
     S.doc.entities.push(copy); S.selectedId = copy.id; buildLayers(); repaint();
   }
+  // Viewport an entity lives in, + its real-world scale (sheet px per inch).
+  function viewportOf(e) {
+    var vps = S.doc.viewports || [];
+    for (var i = 0; i < vps.length; i++) if (vps[i].id === e.viewport) return vps[i];
+    return vps[0] || null;
+  }
+  function ppiOf(e) {
+    var vp = viewportOf(e);
+    return (vp && vp.scale && vp.scale.pixelsPerInch) ? vp.scale.pixelsPerInch : DPI * 0.25 / 12;
+  }
+  // Array: tile the selection into a rows×cols grid at real-world spacing.
+  function arrayOp(rows, cols, rowFt, colFt) {
+    var e = selectedEntity(); if (!e) return;
+    rows = Math.max(1, Math.min(40, rows | 0)); cols = Math.max(1, Math.min(40, cols | 0));
+    if (rows * cols <= 1) return;
+    var ppi = ppiOf(e), dx = (colFt || 0) * 12 * ppi, dy = (rowFt || 0) * 12 * ppi;
+    pushUndo();
+    var last = e.id;
+    for (var r = 0; r < rows; r++) for (var c = 0; c < cols; c++) {
+      if (r === 0 && c === 0) continue;
+      var copy = JSON.parse(JSON.stringify(e)); copy.id = uid(copy.tool);
+      translateEntity(copy, c * dx, r * dy);
+      S.doc.entities.push(copy); last = copy.id;
+    }
+    S.selectedId = last; buildLayers(); repaint();
+  }
+  // Offset: a parallel copy of the selection at a real-world distance.
+  function offsetOp(distFt, side) {
+    var e = selectedEntity(); if (!e) return;
+    var ppi = ppiOf(e), d = (distFt || 0) * 12 * ppi * (side < 0 ? -1 : 1);
+    if (!d) return;
+    var copy = JSON.parse(JSON.stringify(e)); copy.id = uid(copy.tool);
+    if (e.tool === 'line' && e.startX != null) {
+      var nx = -(e.endY - e.startY), ny = (e.endX - e.startX), len = Math.hypot(nx, ny) || 1; nx /= len; ny /= len;
+      copy.startX = e.startX + nx * d; copy.startY = e.startY + ny * d;
+      copy.endX = e.endX + nx * d; copy.endY = e.endY + ny * d;
+    } else if ((e.tool === 'rect' || e.tool === 'ellipse') && e.startX != null) {
+      var x0 = Math.min(e.startX, e.endX), y0 = Math.min(e.startY, e.endY), x1 = Math.max(e.startX, e.endX), y1 = Math.max(e.startY, e.endY);
+      copy.startX = x0 - d; copy.startY = y0 - d; copy.endX = x1 + d; copy.endY = y1 + d;
+      if (copy.endX - copy.startX < 1 || copy.endY - copy.startY < 1) { alert('Offset too large — shape would collapse.'); return; }
+    } else if (e.tool === 'polyline' && e.points && e.points.length >= 2) {
+      var pts = e.points;
+      copy.points = pts.map(function (p, i) {
+        var prev = pts[Math.max(0, i - 1)], next = pts[Math.min(pts.length - 1, i + 1)];
+        var tx = next.x - prev.x, ty = next.y - prev.y, mx = -ty, my = tx, l = Math.hypot(mx, my) || 1;
+        return { x: p.x + mx / l * d, y: p.y + my / l * d };
+      });
+    } else {
+      alert('Offset works on lines, polylines, rectangles, and circles.');
+      return;
+    }
+    pushUndo();
+    S.doc.entities.push(copy); S.selectedId = copy.id; buildLayers(); repaint();
+  }
+  // Small two/three-field modal shared by Array + Offset.
+  function opModal(title, rowsHtml, onApply) {
+    var ov = document.createElement('div');
+    ov.style.cssText = 'position:fixed;inset:0;z-index:5400;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;padding:20px;';
+    var box = document.createElement('div');
+    box.style.cssText = 'background:#0f0f1e;border:1px solid #353545;border-radius:12px;padding:20px 22px;max-width:340px;width:100%;color:#e6e6e6;box-shadow:0 16px 48px rgba(0,0,0,0.6);';
+    box.innerHTML = '<div style="font-size:15px;font-weight:700;color:#fff;margin-bottom:12px;">' + esc(title) + '</div>' + rowsHtml +
+      '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px;">' +
+        '<button data-op-cancel style="padding:8px 16px;background:rgba(255,255,255,0.06);color:#ddd;border:1px solid #444;border-radius:6px;cursor:pointer;font-weight:600;">Cancel</button>' +
+        '<button data-op-apply style="padding:8px 16px;background:#4f8cff;color:#fff;border:1px solid #4f8cff;border-radius:6px;cursor:pointer;font-weight:700;">Apply</button>' +
+      '</div>';
+    ov.appendChild(box); document.body.appendChild(ov);
+    function close() { if (ov.parentNode) ov.parentNode.removeChild(ov); }
+    box.querySelector('[data-op-cancel]').onclick = close;
+    box.querySelector('[data-op-apply]').onclick = function () { try { onApply(box); } catch (e) {} close(); };
+    ov.addEventListener('click', function (e) { if (e.target === ov) close(); });
+    var f = box.querySelector('input'); if (f) setTimeout(function () { try { f.focus(); f.select(); } catch (e) {} }, 0);
+  }
+  function numField(label, key, val) {
+    return '<label style="display:block;font-size:11px;color:#9aa;margin:8px 0 3px;">' + esc(label) + '</label>' +
+      '<input data-op="' + key + '" value="' + esc(val) + '" inputmode="decimal" style="width:100%;box-sizing:border-box;background:#1a1a2e;color:#fff;border:1px solid #444;border-radius:6px;padding:7px 10px;font-size:13px;outline:none;" />';
+  }
+  function openArrayModal() {
+    if (!selectedEntity()) return;
+    opModal('Array selection',
+      numField('Rows', 'rows', '2') + numField('Columns', 'cols', '3') +
+      numField('Row spacing (ft)', 'rowft', '5') + numField('Column spacing (ft)', 'colft', '5'),
+      function (box) {
+        function v(k) { return parseFloat((box.querySelector('[data-op=' + k + ']') || {}).value) || 0; }
+        arrayOp(v('rows'), v('cols'), v('rowft'), v('colft'));
+      });
+  }
+  function openOffsetModal() {
+    if (!selectedEntity()) return;
+    opModal('Offset selection',
+      numField('Distance (ft)', 'dist', '1') +
+      '<label style="display:block;font-size:11px;color:#9aa;margin:10px 0 3px;">Direction</label>' +
+      '<select data-op="side" style="width:100%;box-sizing:border-box;background:#1a1a2e;color:#fff;border:1px solid #444;border-radius:6px;padding:7px 10px;font-size:13px;">' +
+        '<option value="1">Outward / right of line</option><option value="-1">Inward / left of line</option></select>',
+      function (box) {
+        var dist = parseFloat((box.querySelector('[data-op=dist]') || {}).value) || 0;
+        var side = parseFloat((box.querySelector('[data-op=side]') || {}).value) || 1;
+        offsetOp(dist, side);
+      });
+  }
 
   // ── Render ──────────────────────────────────────────────────────
   function repaint() {
@@ -1448,7 +1636,15 @@
       ctx.save();
       ctx.strokeStyle = '#4f8cff'; ctx.fillStyle = '#4f8cff';
       ctx.lineWidth = (d.lineWidth || 3);
-      if (d.points) {
+      if (d.tool === 'arc') {
+        var pp = d.points.slice(); if (S.hover) pp.push(S.hover);
+        var sp = (pp.length >= 3) ? arcSamples(pp, 40) : pp;
+        if (sp.length) {
+          ctx.beginPath(); ctx.moveTo(sp[0].x, sp[0].y);
+          for (var ai = 1; ai < sp.length; ai++) ctx.lineTo(sp[ai].x, sp[ai].y);
+          ctx.stroke();
+        }
+      } else if (d.points) {
         ctx.beginPath(); ctx.moveTo(d.points[0].x, d.points[0].y);
         for (var i = 1; i < d.points.length; i++) ctx.lineTo(d.points[i].x, d.points[i].y);
         if (S.hover) ctx.lineTo(S.hover.x, S.hover.y);
@@ -1499,11 +1695,12 @@
     if (S.snap && S.snap.kind) {
       var sp = toScreen(S.snap.x, S.snap.y);
       ctx.save();
-      ctx.strokeStyle = S.snap.kind === 'grid' ? '#64748b' : '#fbbf24';
+      ctx.strokeStyle = S.snap.kind === 'grid' ? '#64748b' : (S.snap.kind === 'intersect' ? '#f472b6' : '#fbbf24');
       ctx.lineWidth = 1.5;
       if (S.snap.kind === 'mid') { ctx.beginPath(); ctx.moveTo(sp.x - 6, sp.y + 5); ctx.lineTo(sp.x, sp.y - 6); ctx.lineTo(sp.x + 6, sp.y + 5); ctx.closePath(); ctx.stroke(); }
       else if (S.snap.kind === 'center') { ctx.beginPath(); ctx.arc(sp.x, sp.y, 6, 0, Math.PI * 2); ctx.stroke(); }
       else if (S.snap.kind === 'grid') { ctx.beginPath(); ctx.moveTo(sp.x - 4, sp.y); ctx.lineTo(sp.x + 4, sp.y); ctx.moveTo(sp.x, sp.y - 4); ctx.lineTo(sp.x, sp.y + 4); ctx.stroke(); }
+      else if (S.snap.kind === 'intersect') { ctx.beginPath(); ctx.moveTo(sp.x - 5, sp.y - 5); ctx.lineTo(sp.x + 5, sp.y + 5); ctx.moveTo(sp.x + 5, sp.y - 5); ctx.lineTo(sp.x - 5, sp.y + 5); ctx.stroke(); }
       else { ctx.strokeRect(sp.x - 5, sp.y - 5, 10, 10); }   // endpoint square
       ctx.restore();
     }
