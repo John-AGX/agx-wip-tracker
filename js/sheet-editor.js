@@ -43,6 +43,7 @@
     { key: 'rect',     glyph: '▭', label: 'Rectangle (click two opposite corners)' },
     { key: 'circle',   glyph: '◯', label: 'Circle (click center, click radius)' },
     { key: 'arc',      glyph: '⌒', label: 'Arc (3-point: click start, a point on the arc, then end)' },
+    { key: 'refline',  glyph: '┈', label: 'Reference line (construction guide — snaps & trims to, but is NOT printed or exported)' },
     { key: 'trim',     glyph: '✂', label: 'Trim — click a line segment to cut it back to the nearest crossing line' },
     { key: 'extend',   glyph: '⇥', label: 'Extend — click a line near the end to extend it to the next line it meets' },
     { key: 'fillet',   glyph: '◜', label: 'Fillet — click two lines, then enter a radius (0 = sharp corner)' },
@@ -201,6 +202,7 @@
           if (e.tool === 'hatch') { try { drawHatch(ctx, e); } catch (err) {} return; }
           if (e.tool === 'symbol') { try { drawSymbol(ctx, e); } catch (err) {} return; }
           if (e.tool === 'arc') { try { drawArc(ctx, e); } catch (err) {} return; }
+          if (e.tool === 'refline') { if (opts.editor) { try { drawRefline(ctx, e); } catch (err) {} } return; }   // construction guide — editor only, never exported
           // Dimension labels are derived live from the viewport scale, so
           // they stay correct as geometry changes (auto-update).
           if (e.tool === 'measure' && vp.scale && vp.scale.pixelsPerInch) {
@@ -444,6 +446,14 @@
     n = n || 56; var out = [];
     for (var i = 0; i <= n; i++) { var a = a1 + sweep * (i / n); out.push({ x: ux + r * Math.cos(a), y: uy + r * Math.sin(a) }); }
     return out;
+  }
+  // Construction/reference line — faint dashed, screen-consistent weight.
+  function drawRefline(ctx, e) {
+    var sc = (S && S.view && S.view.scale) ? S.view.scale : 1;
+    ctx.save();
+    ctx.strokeStyle = 'rgba(34,211,238,0.6)'; ctx.lineWidth = 1.4 / sc; ctx.setLineDash([10 / sc, 7 / sc]);
+    ctx.beginPath(); ctx.moveTo(e.startX, e.startY); ctx.lineTo(e.endX, e.endY); ctx.stroke();
+    ctx.restore();
   }
   function drawArc(ctx, e) {
     var s = arcSamples(e.points, 56); if (s.length < 2) return;
@@ -1105,7 +1115,7 @@
     (S.doc.entities || []).forEach(function (e) {
       if (!e || e.viewport !== vp.id) return;
       if (excludeId && e.id === excludeId) return;
-      if (e.tool === 'line' && e.startX != null) {
+      if ((e.tool === 'line' || e.tool === 'refline') && e.startX != null) {
         segs.push({ a: { x: e.startX, y: e.startY }, b: { x: e.endX, y: e.endY } });
       } else if (e.tool === 'rect' && e.startX != null) {
         var c = [{ x: e.startX, y: e.startY }, { x: e.endX, y: e.startY }, { x: e.endX, y: e.endY }, { x: e.startX, y: e.endY }];
@@ -1442,13 +1452,13 @@
       if (se.kind === 'callout') se.label = String(S._calloutNum++);
       commitEntity(se); repaint(); return;
     }
-    if (t === 'line' || t === 'rect' || t === 'circle') {
+    if (t === 'line' || t === 'rect' || t === 'circle' || t === 'refline') {
       if (!S.draft) {
         var e = newEntity(t === 'circle' ? 'ellipse' : t, vp);
         e.startX = pt.x; e.startY = pt.y; e.endX = pt.x; e.endY = pt.y;
         e._anchor = { x: pt.x, y: pt.y }; e._circle = (t === 'circle');
         S.draft = e;
-        if (t === 'line') showDyn();
+        if (t === 'line' || t === 'refline') showDyn();
       } else {
         finalizeTwoPoint(pt);
       }
@@ -1488,7 +1498,7 @@
   // Shown for line/polyline once the first point is placed: type an exact
   // length (e.g. 10', 10' 6", 126") and optional angle, Enter to commit.
   function dynEl() { return S.overlay ? S.overlay.querySelector('#p86-sheet-dyn') : null; }
-  function dynApplies() { return S.draft && S.draft._anchor && (S.tool === 'line' || S.tool === 'polyline'); }
+  function dynApplies() { return S.draft && S.draft._anchor && (S.tool === 'line' || S.tool === 'refline' || S.tool === 'polyline'); }
   function clearDynFields() {
     var d = dynEl(); if (!d) return;
     var li = d.querySelector('[data-dyn-len]'), ai = d.querySelector('[data-dyn-ang]');
@@ -1840,6 +1850,42 @@
     var tc = Math.max(0, Math.min(1, t)), cx = ax + dx * tc, cy = ay + dy * tc;
     return { t: t, dist: Math.hypot(px - cx, py - cy) };
   }
+  // ── Arc geometry (center/radius/start-angle/signed-sweep) ───────
+  function arcGeom(pts) {
+    if (!pts || pts.length < 3) return null;
+    var a = pts[0], b = pts[1], c = pts[2];
+    var d = 2 * (a.x * (b.y - c.y) + b.x * (c.y - a.y) + c.x * (a.y - b.y));
+    if (Math.abs(d) < 1e-6) return null;
+    var ux = ((a.x * a.x + a.y * a.y) * (b.y - c.y) + (b.x * b.x + b.y * b.y) * (c.y - a.y) + (c.x * c.x + c.y * c.y) * (a.y - b.y)) / d;
+    var uy = ((a.x * a.x + a.y * a.y) * (c.x - b.x) + (b.x * b.x + b.y * b.y) * (a.x - c.x) + (c.x * c.x + c.y * c.y) * (b.x - a.x)) / d;
+    var r = Math.hypot(a.x - ux, a.y - uy);
+    var a1 = Math.atan2(a.y - uy, a.x - ux), a2 = Math.atan2(b.y - uy, b.x - ux), a3 = Math.atan2(c.y - uy, c.x - ux);
+    var dCcw = norm2pi(a3 - a1), mCcw = norm2pi(a2 - a1);
+    var sweep = (mCcw <= dCcw) ? dCcw : -(2 * Math.PI - dCcw);
+    return { cx: ux, cy: uy, r: r, a0: a1, sweep: sweep };
+  }
+  function norm2pi(a) { a %= 2 * Math.PI; if (a < 0) a += 2 * Math.PI; return a; }
+  function arcPt(g, u) { var a = g.a0 + g.sweep * u; return { x: g.cx + g.r * Math.cos(a), y: g.cy + g.r * Math.sin(a) }; }
+  function arcPts3(g, u1, u2) { return [arcPt(g, u1), arcPt(g, (u1 + u2) / 2), arcPt(g, u2)]; }
+  // Intersection angles of the full circle (g) with segment a→b that lie ON
+  // the segment.
+  function circleSegAngles(g, a, b) {
+    var dx = b.x - a.x, dy = b.y - a.y, A = dx * dx + dy * dy;
+    if (A < 1e-9) return [];
+    var fx = a.x - g.cx, fy = a.y - g.cy, B = 2 * (fx * dx + fy * dy), C = fx * fx + fy * fy - g.r * g.r;
+    var disc = B * B - 4 * A * C; if (disc < 0) return [];
+    disc = Math.sqrt(disc); var out = [];
+    [(-B - disc) / (2 * A), (-B + disc) / (2 * A)].forEach(function (t) {
+      if (t < -1e-6 || t > 1 + 1e-6) return;
+      out.push(Math.atan2(a.y + dy * t - g.cy, a.x + dx * t - g.cx));
+    });
+    return out;
+  }
+  // Arc param u∈[0,1] for an angle on g (or null if outside the sweep).
+  function angToU(g, ang) {
+    if (g.sweep >= 0) { var u = norm2pi(ang - g.a0) / g.sweep; return (u >= -1e-4 && u <= 1 + 1e-4) ? u : null; }
+    var u2 = norm2pi(g.a0 - ang) / (-g.sweep); return (u2 >= -1e-4 && u2 <= 1 + 1e-4) ? u2 : null;
+  }
   // Nearest 'line' entity to a sheet point within tolerance → {entity, t}.
   function pickLineAt(pt, vp) {
     var tol = 10 / S.view.scale, best = null, bestD = tol;
@@ -1878,13 +1924,19 @@
     (S.doc.entities || []).forEach(function (e) {
       if (vp && e.viewport !== vp.id) return;
       var ly = layerById(S.doc, e.layer); if (ly && (ly.visible === false || ly.locked)) return;
-      if (e.tool === 'line' && e.startX != null) {
+      if ((e.tool === 'line' || e.tool === 'refline') && e.startX != null) {
         var i0 = ptSegInfo(pt.x, pt.y, e.startX, e.startY, e.endX, e.endY);
         if (i0.dist < bestD && i0.t >= -0.03 && i0.t <= 1.03) { bestD = i0.dist; best = { entity: e, kind: 'line', t: Math.max(0, Math.min(1, i0.t)) }; }
       } else if (e.tool === 'polyline' && e.points && e.points.length > 1) {
         for (var i = 1; i < e.points.length; i++) {
           var a = e.points[i - 1], b = e.points[i], iN = ptSegInfo(pt.x, pt.y, a.x, a.y, b.x, b.y);
           if (iN.dist < bestD && iN.t >= -0.03 && iN.t <= 1.03) { bestD = iN.dist; best = { entity: e, kind: 'poly', si: i - 1, t: Math.max(0, Math.min(1, iN.t)) }; }
+        }
+      } else if (e.tool === 'arc' && e.points && e.points.length >= 3) {
+        var sa = arcSamples(e.points, 48);
+        for (var k = 1; k < sa.length; k++) {
+          var iA = ptSegInfo(pt.x, pt.y, sa[k - 1].x, sa[k - 1].y, sa[k].x, sa[k].y);
+          if (iA.dist < bestD) { bestD = iA.dist; best = { entity: e, kind: 'arc', u: (k - 1 + Math.max(0, Math.min(1, iA.t))) / (sa.length - 1) }; }
         }
       }
     });
@@ -1902,6 +1954,7 @@
   function trimAt(pt, vp) {
     var hit = pickTrimTarget(pt, vp); if (!hit) return;
     if (hit.kind === 'poly') return trimPoly(hit, vp);
+    if (hit.kind === 'arc') return trimArc(hit, vp);
     var e = hit.entity, t0 = hit.t, ts = lineCrossParams(e, vp);
     if (!ts.length) { setHint('Trim: nothing crosses that line to cut against.'); return; }
     var lo = 0, hi = 1;
@@ -1938,6 +1991,47 @@
     });
     S.selectedId = null; buildLayers(); repaint();
   }
+  // Trim an arc to its nearest crossings around the click point.
+  function trimArc(hit, vp) {
+    var e = hit.entity, g = arcGeom(e.points); if (!g) return;
+    var u0 = hit.u, us = [];
+    segmentsInVp(vp, e.id).forEach(function (s) {
+      circleSegAngles(g, s.a, s.b).forEach(function (ang) {
+        var u = angToU(g, ang); if (u != null && u > 0.0015 && u < 0.9985) us.push(u);
+      });
+    });
+    if (!us.length) { setHint('Trim: nothing crosses that arc to cut against.'); return; }
+    var lo = 0, hi = 1;
+    us.forEach(function (u) { if (u <= u0) lo = Math.max(lo, u); if (u >= u0) hi = Math.min(hi, u); });
+    pushUndo();
+    var keep = [];
+    if (lo > 0.003) keep.push([0, lo]);
+    if (hi < 0.997) keep.push([hi, 1]);
+    S.doc.entities = S.doc.entities.filter(function (x) { return x.id !== e.id; });
+    keep.forEach(function (rg) { var c = JSON.parse(JSON.stringify(e)); c.id = uid('arc'); c.points = arcPts3(g, rg[0], rg[1]); S.doc.entities.push(c); });
+    S.selectedId = null; buildLayers(); repaint();
+  }
+  // Extend an arc's near end to the next boundary it meets along the circle.
+  function extendArc(hit, vp) {
+    var e = hit.entity, g = arcGeom(e.points); if (!g) return;
+    var nearStart = hit.u < 0.5, s0 = g.sweep >= 0 ? 1 : -1, endAng = g.a0 + g.sweep;
+    var bestAng = null, bestDelta = Infinity;
+    segmentsInVp(vp, e.id).forEach(function (s) {
+      circleSegAngles(g, s.a, s.b).forEach(function (ang) {
+        var delta = nearStart
+          ? ((g.sweep >= 0) ? norm2pi(g.a0 - ang) : norm2pi(ang - g.a0))
+          : ((g.sweep >= 0) ? norm2pi(ang - endAng) : norm2pi(endAng - ang));
+        if (delta > 1e-3 && delta < bestDelta) { bestDelta = delta; bestAng = ang; }
+      });
+    });
+    if (bestAng == null) { setHint('Extend: no edge ahead of the arc.'); return; }
+    pushUndo();
+    var g2 = nearStart
+      ? { cx: g.cx, cy: g.cy, r: g.r, a0: g.a0 - s0 * bestDelta, sweep: g.sweep + s0 * bestDelta }
+      : { cx: g.cx, cy: g.cy, r: g.r, a0: g.a0, sweep: g.sweep + s0 * bestDelta };
+    e.points = arcPts3(g2, 0, 1);
+    buildLayers(); repaint();
+  }
   // Param along the ray P=(fx,fy)+u*(dx,dy) where it meets a segment (u=1
   // is the moving end); requires the hit to lie within the segment.
   function rayHitU(fx, fy, dx, dy, x3, y3, x4, y4) {
@@ -1962,6 +2056,7 @@
   function extendAt(pt, vp) {
     var hit = pickTrimTarget(pt, vp); if (!hit) return;
     if (hit.kind === 'poly') return extendPoly(hit, vp);
+    if (hit.kind === 'arc') return extendArc(hit, vp);
     var e = hit.entity;
     var ds = Math.hypot(pt.x - e.startX, pt.y - e.startY), de = Math.hypot(pt.x - e.endX, pt.y - e.endY);
     var movingStart = ds < de;
@@ -2053,7 +2148,7 @@
     ctx.save();
     ctx.translate(S.view.tx, S.view.ty);
     ctx.scale(S.view.scale, S.view.scale);
-    renderSheet(ctx, S.doc, { paperShadow: true, grid: S.gridSnap, viewScale: S.view.scale });
+    renderSheet(ctx, S.doc, { paperShadow: true, grid: S.gridSnap, viewScale: S.view.scale, editor: true });
     // draft preview
     if (S.draft) {
       var d = S.draft;
@@ -2074,7 +2169,7 @@
         if (S.hover) ctx.lineTo(S.hover.x, S.hover.y);
         ctx.stroke();
       } else if (S.hover) {
-        var prev = { tool: d._circle ? 'ellipse' : d.tool, color: '#4f8cff', lineWidth: d.lineWidth || 3 };
+        var prev = { tool: d._circle ? 'ellipse' : (d.tool === 'refline' ? 'line' : d.tool), color: '#4f8cff', lineWidth: d.lineWidth || 3 };
         if (d._circle) {
           var r = Math.hypot(S.hover.x - d.startX, S.hover.y - d.startY);
           prev.startX = d.startX - r; prev.startY = d.startY - r; prev.endX = d.startX + r; prev.endY = d.startY + r;
@@ -2223,6 +2318,7 @@
     out += g(0, 'SECTION') + g(2, 'ENTITIES');
     (doc.entities || []).forEach(function (e) {
       if (!e || !e.tool) return;
+      if (e.tool === 'refline') return;   // construction guide — never exported
       var L = lyr(e);
       try {
         if (e.tool === 'line' || e.tool === 'arrow') { out += lineDxf(L, omap(e, e.startX, e.startY), omap(e, e.endX, e.endY)); }
