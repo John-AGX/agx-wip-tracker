@@ -543,29 +543,18 @@
                          capabilities never sees an orphan header. -->
                     <div class="app-nav-group">
                         <div class="app-nav-group-label">Sales</div>
-                        <!-- Estimates is an expandable accordion parent. The
-                             parent row IS the Estimates list destination; its
-                             sub-pages (Leads / Clients / Subs / Internal Users)
-                             live as nested children. The caret <span> toggles
-                             the section open/closed WITHOUT navigating; clicking
-                             the row navigates AND ensures the section is open.
-                             Children route through the same delegated .tab-btn
-                             handler (data-est-subtab + data-virtual-tab) as the
-                             old top-level buttons did. Wired by
-                             initSidebarAccordion() in js/app.js; expanded state
-                             persists to localStorage (p86-sidebar-accordions). -->
-                        <div class="app-nav-parent" data-accordion="estimates">
-                            <button class="tab-btn active app-nav-parent-btn" data-tab="estimates" data-est-subtab="list" data-virtual-tab="estimates" data-p86-icon="estimates" data-cap="ESTIMATES_VIEW" title="Estimates">
-                                <span class="app-nav-label">Estimates</span>
-                                <span class="app-nav-caret" role="button" tabindex="0" aria-label="Toggle Estimates sub-pages" aria-expanded="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" width="12" height="12" aria-hidden="true"><polyline points="9 18 15 12 9 6"></polyline></svg></span>
-                            </button>
-                            <div class="app-nav-children" role="group" aria-label="Estimates sub-pages">
-                                <button class="tab-btn app-nav-child" data-tab="estimates" data-est-subtab="leads" data-virtual-tab="leads" data-p86-icon="leads" data-cap="LEADS_VIEW" title="Leads"><span class="app-nav-label">Leads</span></button>
-                                <button class="tab-btn app-nav-child" data-tab="estimates" data-est-subtab="clients" data-virtual-tab="clients" data-p86-icon="id-card" data-cap="ESTIMATES_VIEW" title="Client Contacts"><span class="app-nav-label">Clients</span></button>
-                                <button class="tab-btn app-nav-child" data-tab="estimates" data-est-subtab="subs" data-virtual-tab="subs" data-p86-icon="subs" title="Subs / Vendors"><span class="app-nav-label">Subs / Vendors</span></button>
-                                <button class="tab-btn app-nav-child" data-tab="estimates" data-est-subtab="users" data-virtual-tab="users" data-p86-icon="clients" title="Internal Users"><span class="app-nav-label">Internal Users</span></button>
-                            </div>
-                        </div>
+                        <!-- Leads + Estimates are flat top-level rows under SALES
+                             (matching how Schedule + Jobs sit under OPERATIONS).
+                             Pipeline order: Leads → Estimates. Clients,
+                             Subs / Vendors, and Internal Users are NOT in the
+                             sidebar — they live in the header directory
+                             popover (the diamond icon, top-right). The shared
+                             /estimates page still drives all four directory
+                             screens internally via data-est-subtab, so the
+                             popover items still route correctly through the
+                             same delegated handler. -->
+                        <button class="tab-btn" data-tab="estimates" data-est-subtab="leads" data-virtual-tab="leads" data-p86-icon="leads" data-cap="LEADS_VIEW" title="Leads"><span class="app-nav-label">Leads</span></button>
+                        <button class="tab-btn" data-tab="estimates" data-est-subtab="list" data-virtual-tab="estimates" data-p86-icon="estimates" data-cap="ESTIMATES_VIEW" title="Estimates"><span class="app-nav-label">Estimates</span></button>
                     </div>
                     <div class="app-nav-group">
                         <div class="app-nav-group-label">Operations</div>
@@ -2917,7 +2906,7 @@
     <script src="js/qb-costs-view.js?v=11"></script>
     <script src="js/insights.js?v=7"></script>
     <script src="js/schedule.js?v=34"></script>
-    <script src="js/app.js?v=78"></script>
+    <script src="js/app.js?v=79"></script>
     <script src="js/compliance-review-ui.js?v=2"></script>
     <script src="js/messaging.js?v=1b"></script>
     <script src="js/my-files.js?v=14"></script>

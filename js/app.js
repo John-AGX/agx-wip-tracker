@@ -591,7 +591,7 @@
         function initSidebarAccordion() {
             var saved = loadAccordionState();
             // Default open/closed when the user has no saved preference yet.
-            var defaults = { estimates: true, admin: false };
+            var defaults = { admin: false };
             document.querySelectorAll('.app-nav-parent').forEach(function(parent) {
                 var key = parent.getAttribute('data-accordion');
                 var expanded = (key && key in saved) ? saved[key]
