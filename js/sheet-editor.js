@@ -699,7 +699,9 @@
       polarInc: SETTINGS.polarInc || 90,
       panning: null,        // {sx,sy,tx,ty}
       spaceDown: false,
-      selectedId: null,
+      selectedId: null,     // the PRIMARY selection (single) — drives grips/properties
+      selIds: [],           // full multi-selection set (ids)
+      boxSel: null,         // {start,last,shift} rubber-band window/crossing select
       moveDrag: null,       // {last:{x,y}, pushed:bool} while dragging a selection
       gripDrag: null,       // {gi, type, last, pushed} while dragging a grip handle
       hatchPattern: 'earth',
@@ -865,7 +867,7 @@
         if (act === 'redo') return redo();
         if (act === 'fit') { sizeCanvas(true); repaint(); return; }
         if (act === 'edit') {
-          if (!S.selectedId) return;
+          if (!S.selIds.length) return;
           if (k === 'rotate') rotate90();
           else if (k === 'mirrorH') mirror(true);
           else if (k === 'mirrorV') mirror(false);
@@ -1363,7 +1365,11 @@
         e.stopPropagation();
         var l = layerById(S.doc, b.getAttribute('data-layer-lock'));
         l.locked = !l.locked;
-        if (l.locked && S.selectedId) { var se = selectedEntity(); if (se && se.layer === l.id) S.selectedId = null; }
+        // Drop any selected entities that live on the now-locked layer.
+        if (l.locked && S.selIds.length) {
+          var byId = {}; S.doc.entities.forEach(function (en) { byId[en.id] = en; });
+          setSelection(S.selIds.filter(function (id) { var en = byId[id]; return !(en && en.layer === l.id); }));
+        }
         buildLayers(); repaint();
       };
     });
@@ -1622,14 +1628,21 @@
       if (S.draft && S.draft._anchor) pt = applyOrtho(S.draft._anchor, pt);
 
       if (S.tool === 'select') {
-        // Grip-drag: if the cursor is on a grip of the current selection,
+        // Grip-drag: if the cursor is on a grip of the (single) selection,
         // reshape that point (or move the whole entity for a 'move' grip).
         var grip = gripAtScreen(lp);
         if (grip) { S.gripDrag = { gi: grip.gi, type: grip.type, last: raw, pushed: false }; return; }
-        selectAt(raw);
-        // Arm a move-drag if we landed on an entity (commit to history on
-        // first actual movement, so a plain click just selects).
-        if (S.selectedId) S.moveDrag = { last: raw, pushed: false };
+        var hit = hitTest(raw);
+        if (hit && e.shiftKey) { selectAt(raw, true); return; }     // toggle in/out of set
+        if (hit && isSelected(hit)) {
+          // Clicked an already-selected entity → arm a group move-drag; a plain
+          // click (no movement) collapses the selection to just this entity.
+          S.moveDrag = { last: raw, pushed: false, hit: hit, group: S.selIds.length > 1 };
+          return;
+        }
+        if (hit) { selectAt(raw, false); S.moveDrag = { last: raw, pushed: false, hit: hit, group: false }; return; }
+        // Empty space → rubber-band window/crossing select.
+        S.boxSel = { start: raw, last: raw, shift: e.shiftKey };
         return;
       }
       if (S.tool === 'text') {
@@ -1671,16 +1684,23 @@
         }
         return;
       }
-      // Move-drag the selected entity (select tool, button held).
+      // Move-drag the whole selection (select tool, button held).
       if (S.moveDrag && (e.buttons & 1)) {
-        var ent = selectedEntity();
-        if (ent) {
+        var ents = selEntities();
+        if (ents.length) {
           if (!S.moveDrag.pushed) { pushUndo(); S.moveDrag.pushed = true; }
           var ds = toSheet(lp.x, lp.y);
-          translateEntity(ent, ds.x - S.moveDrag.last.x, ds.y - S.moveDrag.last.y);
+          var ddx = ds.x - S.moveDrag.last.x, ddy = ds.y - S.moveDrag.last.y;
+          ents.forEach(function (en) { translateEntity(en, ddx, ddy); });
           S.moveDrag.last = ds;
           repaint();
         }
+        return;
+      }
+      // Rubber-band box selection in progress.
+      if (S.boxSel && (e.buttons & 1)) {
+        S.boxSel.last = toSheet(lp.x, lp.y);
+        repaint();
         return;
       }
       var raw = toSheet(lp.x, lp.y);
@@ -1698,6 +1718,24 @@
     };
     c.onmouseup = function () {
       if (S.panning) { S.panning = null; S.canvas.style.cursor = (S.tool === 'pan') ? 'grab' : (S.tool === 'select' ? 'default' : 'crosshair'); }
+      // A plain click on one member of a multi-selection (no drag) collapses to it.
+      if (S.moveDrag && !S.moveDrag.pushed && S.moveDrag.group && S.moveDrag.hit) { setSelection([S.moveDrag.hit]); buildLayers(); repaint(); }
+      // Finalize a rubber-band selection.
+      if (S.boxSel) {
+        var b = S.boxSel; S.boxSel = null;
+        var x0 = Math.min(b.start.x, b.last.x), x1 = Math.max(b.start.x, b.last.x);
+        var y0 = Math.min(b.start.y, b.last.y), y1 = Math.max(b.start.y, b.last.y);
+        var click = ((x1 - x0) < 4 / S.view.scale && (y1 - y0) < 4 / S.view.scale);
+        if (click) {
+          if (!b.shift) { setSelection([]); buildLayers(); repaint(); }     // click empty = clear
+        } else {
+          var crossing = b.start.x > b.last.x;                              // right→left = crossing
+          var picked = pickInBox({ x0: x0, y0: y0, x1: x1, y1: y1 }, crossing);
+          if (b.shift) { picked.forEach(function (id) { if (S.selIds.indexOf(id) < 0) S.selIds.push(id); }); setSelection(S.selIds); }
+          else setSelection(picked);
+          buildLayers(); repaint();
+        }
+      }
       S.moveDrag = null; S.gripDrag = null;
     };
     c.ondblclick = function () {
@@ -1730,7 +1768,7 @@
       else if ((e.key === 'z' || e.key === 'Z') && (e.ctrlKey || e.metaKey)) { e.preventDefault(); if (e.shiftKey) redo(); else undo(); }
       else if ((e.key === 'y' || e.key === 'Y') && (e.ctrlKey || e.metaKey)) { e.preventDefault(); redo(); }
       else if ((e.key === 'd' || e.key === 'D') && (e.ctrlKey || e.metaKey)) { e.preventDefault(); duplicateSelected(); }
-      else if ((e.key === 'Delete' || e.key === 'Backspace') && S.selectedId) { deleteSelected(); }
+      else if ((e.key === 'Delete' || e.key === 'Backspace') && S.selIds.length) { deleteSelected(); }
       else if (e.key === '?' || (e.key === '/' && e.shiftKey)) { e.preventDefault(); openShortcuts(); }
       else if (!e.ctrlKey && !e.metaKey && !e.altKey) {
         // Single-key tool aliases (AutoCAD-style). Guarded above so Ctrl/Cmd
@@ -2044,17 +2082,52 @@
       commitEntity(e); repaint();
     });
   }
-  function selectAt(raw) {
-    var hit = null;
+  // Topmost selectable entity id under a sheet point (or null).
+  function hitTest(raw) {
     for (var i = S.doc.entities.length - 1; i >= 0; i--) {
       var e = S.doc.entities[i];
       var lyr = layerById(S.doc, e.layer);          // skip hidden + locked layers
       if (lyr && (lyr.visible === false || lyr.locked)) continue;
       var bb = entBBox(e);
       var slop = 8 / S.view.scale;
-      if (bb && raw.x >= bb.x - slop && raw.x <= bb.x + bb.w + slop && raw.y >= bb.y - slop && raw.y <= bb.y + bb.h + slop) { hit = e.id; break; }
+      if (bb && raw.x >= bb.x - slop && raw.x <= bb.x + bb.w + slop && raw.y >= bb.y - slop && raw.y <= bb.y + bb.h + slop) return e.id;
     }
-    S.selectedId = hit; buildLayers(); repaint();
+    return null;
+  }
+  // ── Selection set helpers (multi-select) ──
+  function isSelected(id) { return S.selIds.indexOf(id) >= 0; }
+  function selEntities() { return S.doc.entities.filter(function (e) { return S.selIds.indexOf(e.id) >= 0; }); }
+  function setSelection(ids) { S.selIds = (ids || []).slice(); S.selectedId = (S.selIds.length === 1) ? S.selIds[0] : null; }
+  // Click-select (or shift-toggle) at a point.
+  function selectAt(raw, additive) {
+    var hit = hitTest(raw);
+    if (additive) {
+      if (hit) { var i = S.selIds.indexOf(hit); if (i >= 0) S.selIds.splice(i, 1); else S.selIds.push(hit); }
+    } else {
+      S.selIds = hit ? [hit] : [];
+    }
+    S.selectedId = (S.selIds.length === 1) ? S.selIds[0] : null;
+    buildLayers(); repaint();
+    return hit;
+  }
+  // Combined bounding box of a list of entities (sheet coords).
+  function groupBBox(ents) {
+    var mnx = Infinity, mny = Infinity, mxx = -Infinity, mxy = -Infinity;
+    ents.forEach(function (e) { var bb = entBBox(e); if (!bb) return; mnx = Math.min(mnx, bb.x); mny = Math.min(mny, bb.y); mxx = Math.max(mxx, bb.x + bb.w); mxy = Math.max(mxy, bb.y + bb.h); });
+    if (mnx === Infinity) return { x: 0, y: 0, w: 0, h: 0 };
+    return { x: mnx, y: mny, w: mxx - mnx, h: mxy - mny };
+  }
+  // Entities inside (window) or touching (crossing) a sheet-space box.
+  function pickInBox(bx, crossing) {
+    var out = [];
+    (S.doc.entities || []).forEach(function (e) {
+      var lyr = layerById(S.doc, e.layer); if (lyr && (lyr.visible === false || lyr.locked)) return;
+      var bb = entBBox(e); if (!bb) return;
+      var inside = bb.x >= bx.x0 && bb.y >= bx.y0 && (bb.x + bb.w) <= bx.x1 && (bb.y + bb.h) <= bx.y1;
+      var overlaps = !(bb.x > bx.x1 || (bb.x + bb.w) < bx.x0 || bb.y > bx.y1 || (bb.y + bb.h) < bx.y0);
+      if (crossing ? overlaps : inside) out.push(e.id);
+    });
+    return out;
   }
   function entBBox(e) {
     if (e.startX != null) return { x: Math.min(e.startX, e.endX), y: Math.min(e.startY, e.endY), w: Math.abs(e.endX - e.startX), h: Math.abs(e.endY - e.startY) };
@@ -2110,10 +2183,11 @@
     return null;
   }
   function deleteSelected() {
-    if (!S.selectedId) return;
+    if (!S.selIds.length) return;
     pushUndo();
-    S.doc.entities = S.doc.entities.filter(function (e) { return e.id !== S.selectedId; });
-    S.selectedId = null; buildLayers(); repaint();
+    var del = {}; S.selIds.forEach(function (id) { del[id] = 1; });
+    S.doc.entities = S.doc.entities.filter(function (e) { return !del[e.id]; });
+    setSelection([]); buildLayers(); repaint();
   }
 
   // ── History (undo / redo) ───────────────────────────────────────
@@ -2123,7 +2197,7 @@
   function restoreSnap(json) {
     var o = JSON.parse(json);
     S.doc.entities = o.entities; S.doc.layers = o.layers;
-    S.selectedId = null; buildLayers(); repaint();
+    setSelection([]); buildLayers(); repaint();
   }
   function undo() {
     if (S.draft) { S.draft = null; repaint(); return; }
@@ -2151,26 +2225,28 @@
     if (e.x != null) { var p = fn({ x: e.x, y: e.y }); e.x = p.x; e.y = p.y; }
   }
   function rotate90() {
-    var e = selectedEntity(); if (!e) return;
+    var ents = selEntities(); if (!ents.length) return;
     pushUndo();
-    if (e.tool === 'symbol') { e.rotation = ((e.rotation || 0) + 90) % 360; repaint(); return; }
-    var bb = entBBox(e), cx = bb.x + bb.w / 2, cy = bb.y + bb.h / 2;
-    transformEntity(e, function (p) { return { x: cx - (p.y - cy), y: cy + (p.x - cx) }; });
+    var gb = groupBBox(ents), cx = gb.x + gb.w / 2, cy = gb.y + gb.h / 2;
+    ents.forEach(function (e) {
+      transformEntity(e, function (p) { return { x: cx - (p.y - cy), y: cy + (p.x - cx) }; });
+      if (e.tool === 'symbol') e.rotation = ((e.rotation || 0) + 90) % 360;
+    });
     repaint();
   }
   function mirror(horiz) {
-    var e = selectedEntity(); if (!e) return;
+    var ents = selEntities(); if (!ents.length) return;
     pushUndo();
-    var bb = entBBox(e), cx = bb.x + bb.w / 2, cy = bb.y + bb.h / 2;
-    transformEntity(e, function (p) { return { x: horiz ? (2 * cx - p.x) : p.x, y: horiz ? p.y : (2 * cy - p.y) }; });
+    var gb = groupBBox(ents), cx = gb.x + gb.w / 2, cy = gb.y + gb.h / 2;
+    ents.forEach(function (e) { transformEntity(e, function (p) { return { x: horiz ? (2 * cx - p.x) : p.x, y: horiz ? p.y : (2 * cy - p.y) }; }); });
     repaint();
   }
   function duplicateSelected() {
-    var e = selectedEntity(); if (!e) return;
+    var ents = selEntities(); if (!ents.length) return;
     pushUndo();
-    var copy = JSON.parse(JSON.stringify(e)); copy.id = uid(copy.tool);
-    translateEntity(copy, 14, 14);
-    S.doc.entities.push(copy); S.selectedId = copy.id; buildLayers(); repaint();
+    var newIds = [];
+    ents.forEach(function (e) { var copy = JSON.parse(JSON.stringify(e)); copy.id = uid(copy.tool); translateEntity(copy, 14, 14); S.doc.entities.push(copy); newIds.push(copy.id); });
+    setSelection(newIds); buildLayers(); repaint();
   }
   // Viewport an entity lives in, + its real-world scale (sheet px per inch).
   function viewportOf(e) {
@@ -2184,7 +2260,7 @@
   }
   // Array: tile the selection into a rows×cols grid at real-world spacing.
   function arrayOp(rows, cols, rowFt, colFt) {
-    var e = selectedEntity(); if (!e) return;
+    var e = selEntities()[0]; if (!e) return;
     rows = Math.max(1, Math.min(40, rows | 0)); cols = Math.max(1, Math.min(40, cols | 0));
     if (rows * cols <= 1) return;
     var ppi = ppiOf(e), dx = (colFt || 0) * 12 * ppi, dy = (rowFt || 0) * 12 * ppi;
@@ -2196,11 +2272,11 @@
       translateEntity(copy, c * dx, r * dy);
       S.doc.entities.push(copy); last = copy.id;
     }
-    S.selectedId = last; buildLayers(); repaint();
+    setSelection([last]); buildLayers(); repaint();
   }
   // Offset: a parallel copy of the selection at a real-world distance.
   function offsetOp(distFt, side) {
-    var e = selectedEntity(); if (!e) return;
+    var e = selEntities()[0]; if (!e) return;
     var ppi = ppiOf(e), d = (distFt || 0) * 12 * ppi * (side < 0 ? -1 : 1);
     if (!d) return;
     var copy = JSON.parse(JSON.stringify(e)); copy.id = uid(copy.tool);
@@ -2224,7 +2300,7 @@
       return;
     }
     pushUndo();
-    S.doc.entities.push(copy); S.selectedId = copy.id; buildLayers(); repaint();
+    S.doc.entities.push(copy); setSelection([copy.id]); buildLayers(); repaint();
   }
   // Small two/three-field modal shared by Array + Offset.
   function opModal(title, rowsHtml, onApply) {
@@ -2402,7 +2478,7 @@
       c.startX = seg[0].x; c.startY = seg[0].y; c.endX = seg[1].x; c.endY = seg[1].y;
       S.doc.entities.push(c);
     });
-    S.selectedId = null; buildLayers(); repaint();
+    setSelection([]); buildLayers(); repaint();
   }
   // Trim the clicked segment of a polyline back to its nearest crossings,
   // splitting the polyline into the kept run(s).
@@ -2420,7 +2496,7 @@
     [left, right].forEach(function (pts) {
       if (pts.length >= 2) { var c = JSON.parse(JSON.stringify(e)); c.id = uid('polyline'); c.points = pts; S.doc.entities.push(c); }
     });
-    S.selectedId = null; buildLayers(); repaint();
+    setSelection([]); buildLayers(); repaint();
   }
   // Trim an arc to its nearest crossings around the click point.
   function trimArc(hit, vp) {
@@ -2440,7 +2516,7 @@
     if (hi < 0.997) keep.push([hi, 1]);
     S.doc.entities = S.doc.entities.filter(function (x) { return x.id !== e.id; });
     keep.forEach(function (rg) { var c = JSON.parse(JSON.stringify(e)); c.id = uid('arc'); c.points = arcPts3(g, rg[0], rg[1]); S.doc.entities.push(c); });
-    S.selectedId = null; buildLayers(); repaint();
+    setSelection([]); buildLayers(); repaint();
   }
   // Extend an arc's near end to the next boundary it meets along the circle.
   function extendArc(hit, vp) {
@@ -2618,18 +2694,27 @@
       }
       ctx.restore();
     }
-    // selection highlight
-    if (S.selectedId) {
-      var sel = S.doc.entities.filter(function (e) { return e.id === S.selectedId; })[0];
-      var bb = sel && entBBox(sel);
-      if (bb) {
-        ctx.save(); ctx.strokeStyle = '#22c55e'; ctx.lineWidth = 1.5 / S.view.scale; ctx.setLineDash([6 / S.view.scale, 4 / S.view.scale]);
-        ctx.strokeRect(bb.x - 4, bb.y - 4, bb.w + 8, bb.h + 8); ctx.restore();
-      }
+    // selection highlight — every selected entity (dashed green box)
+    if (S.selIds && S.selIds.length) {
+      ctx.save(); ctx.strokeStyle = '#22c55e'; ctx.lineWidth = 1.5 / S.view.scale; ctx.setLineDash([6 / S.view.scale, 4 / S.view.scale]);
+      selEntities().forEach(function (sel) { var bb = entBBox(sel); if (bb) ctx.strokeRect(bb.x - 4, bb.y - 4, bb.w + 8, bb.h + 8); });
+      ctx.restore();
+    }
+    // rubber-band selection box (window = solid blue · crossing = dashed green)
+    if (S.boxSel) {
+      var b = S.boxSel, crossing = b.start.x > b.last.x;
+      var bx0 = Math.min(b.start.x, b.last.x), by0 = Math.min(b.start.y, b.last.y);
+      var bw = Math.abs(b.last.x - b.start.x), bh = Math.abs(b.last.y - b.start.y);
+      ctx.save();
+      ctx.strokeStyle = crossing ? '#22c55e' : '#4f8cff';
+      ctx.fillStyle = crossing ? 'rgba(34,197,94,0.08)' : 'rgba(79,140,255,0.08)';
+      ctx.lineWidth = 1 / S.view.scale;
+      if (crossing) ctx.setLineDash([5 / S.view.scale, 4 / S.view.scale]); else ctx.setLineDash([]);
+      ctx.fillRect(bx0, by0, bw, bh); ctx.strokeRect(bx0, by0, bw, bh);
+      ctx.restore();
     }
     ctx.restore();
-    // selection grips (screen space, fixed size) — CAD-style square handles
-    // at the entity's defining points. Display-only for now (E2).
+    // selection grips (screen space) — only for a SINGLE selection (reshape).
     if (S.selectedId) {
       var selG = S.doc.entities.filter(function (e) { return e.id === S.selectedId; })[0];
       var grips = selG ? entGrips(selG) : [];
