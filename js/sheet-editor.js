@@ -688,7 +688,7 @@
       overlay: ov, canvas: canvas, ctx: canvas.getContext('2d'),
       doc: doc, plan: plan, onSave: opts.onSave,
       view: { scale: 1, tx: 0, ty: 0 },
-      tool: 'line',
+      tool: 'select',
       activeLayer: (doc.layers[0] && doc.layers[0].id) || 'L0',
       draft: null,          // in-progress entity (sheet coords)
       hover: null,          // {x,y} sheet coords of cursor
@@ -715,6 +715,7 @@
     buildLayers();
     sizeCanvas(true);
     wireInput();
+    S.canvas.style.cursor = 'default';     // default tool is Select
     repaint();
     loadOrgBrand();
 
@@ -1361,6 +1362,22 @@
     var pText = host.querySelector('[data-prop-text]'), pTh = host.querySelector('[data-prop-th]');
     if (pText) pText.onchange = function () { var e = selectedEntity(); if (!e) return; pushUndo(); e.text = pText.value; repaint(); };
     if (pTh) pTh.onchange = function () { var e = selectedEntity(); if (!e) return; var th = parseLenIn(pTh.value); if (th == null) return; pushUndo(); e.fontPx = Math.max(2, th * ppiOf(e)); repaint(); buildLayers(); };
+    var pElev = host.querySelector('[data-prop-elev]');
+    if (pElev) pElev.onchange = function () {
+      var e = selectedEntity(); if (!e) return;
+      var inches = parseLenIn(pElev.value); if (inches == null) return;
+      pushUndo();
+      if (e.tool === 'level') {
+        var dat = datumForViewport(e.viewport);
+        e.elevIn = inches;
+        // A second level repositions to the new elevation; the datum line itself just relabels.
+        if (dat && Math.abs(dat.y - e.startY) > 0.001) { var yy = dat.y - (inches - dat.elevIn) * ppiOf(e); e.startY = yy; e.endY = yy; }
+      } else if (e.tool === 'spotelev') {
+        var dat2 = datumForViewport(e.viewport);
+        if (dat2) e.y = dat2.y - (inches - dat2.elevIn) * ppiOf(e);
+      }
+      repaint(); buildLayers();
+    };
     // Sheet + Views wiring
     var sizeSel = host.querySelector('[data-sheet-size]');
     if (sizeSel) sizeSel.onchange = function () { applySheetSize(sizeSel.value); };
@@ -1806,10 +1823,12 @@
       if (e.key === 'Shift') { S.shiftDown = true; }
       else if (e.key === ' ') { S.spaceDown = true; S.canvas.style.cursor = 'grab'; }
       else if (e.key === 'Escape') {
-        if (S._filletA) { S._filletA = null; updateHint(); repaint(); }
-        else if (S.inq) { S.inq = null; repaint(); }
-        else if (S.draft) { S.draft = null; hideDyn(); repaint(); }
-        else S.overlay.querySelector('#p86-sheet-cancel').click();
+        // Cancel whatever's in progress, clear the selection, and fall back to
+        // the Select tool (CAD-style). Never closes the editor — that's the
+        // Close button's job.
+        S._filletA = null; S.inq = null; S.draft = null; S.boxSel = null; hideDyn();
+        setSelection([]);
+        if (S.tool !== 'select') setTool('select'); else { buildLayers(); repaint(); }
       }
       else if (e.key === 'Enter') {
         if ((S.tool === 'polyline' || S.tool === 'hatch') && S.draft) commitPolyline();
@@ -2275,7 +2294,13 @@
   }
   function propGeomHtml(e, ppi) {
     if (!e || !ppi) return '';
-    if (e.tool === 'line' || e.tool === 'refline' || e.tool === 'level') {
+    if (e.tool === 'level') {
+      return '<div style="margin-top:7px;">' + propLbl('Elevation', 'prop-elev', fmtLen(e.elevIn || 0), false) + '</div>';
+    }
+    if (e.tool === 'spotelev') {
+      return '<div style="margin-top:7px;">' + propLbl('Elevation', 'prop-elev', fmtLen(elevAtPoint(e)), false) + '</div>';
+    }
+    if (e.tool === 'line' || e.tool === 'refline') {
       var dx = e.endX - e.startX, dy = e.endY - e.startY;
       return '<div style="display:flex;gap:8px;margin-top:7px;">' + propLbl('Length', 'prop-len', fmtLen(Math.hypot(dx, dy) / ppi), true) + propLbl('Angle°', 'prop-ang', (Math.atan2(-dy, dx) * 180 / Math.PI).toFixed(1), true) + '</div>';
     }
