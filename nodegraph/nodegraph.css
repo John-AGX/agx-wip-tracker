@@ -493,6 +493,28 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
 #nodeGraphTab.ng-clean .ng-t-watch{border-color:var(--ng-border)}
 #nodeGraphTab.ng-clean .ng-t-watch .ng-hdr{text-shadow:none!important;font-size:14px;padding:8px 12px}
 #nodeGraphTab.ng-clean .ng-t-watch .ng-hdr-name{font-size:13px;letter-spacing:0}
+/* ── NG4a: n8n node anatomy (Clean Mode) ───────────────── */
+/* Icon-tile header: drop the in-tile name + header buttons; the name renders
+   below the tile and actions live in the floating hover toolbar (n8n-style). */
+#nodeGraphTab.ng-clean .ng-hdr-name{display:none}
+#nodeGraphTab.ng-clean .ng-hdr .ng-editbtn,
+#nodeGraphTab.ng-clean .ng-hdr .ng-dupbtn,
+#nodeGraphTab.ng-clean .ng-hdr .ng-cbtn,
+#nodeGraphTab.ng-clean .ng-hdr .ng-attachbtn{display:none}
+#nodeGraphTab.ng-clean .ng-hdr{justify-content:flex-start;gap:8px}
+/* Name caption below the tile */
+.ng-node-cap{display:none}
+#nodeGraphTab.ng-clean .ng-node-cap{display:block;position:absolute;top:100%;left:-12px;right:-12px;text-align:center;font-size:11.5px;font-weight:700;color:var(--ng-text);padding-top:6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:text;text-shadow:0 1px 3px var(--ng-bg)}
+/* Floating hover toolbar above the tile */
+.ng-node-tools{display:none}
+#nodeGraphTab.ng-clean .ng-node:hover .ng-node-tools,
+#nodeGraphTab.ng-clean .ng-node.ng-sel .ng-node-tools{display:flex;position:absolute;top:-30px;right:0;gap:3px;background:var(--ng-surface);border:1px solid var(--ng-border);border-radius:7px;padding:2px;box-shadow:0 4px 14px rgba(0,0,0,.45);z-index:20}
+.ng-node-tools .ng-nt-btn{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:5px;font-size:12px;color:var(--ng-dim);cursor:pointer}
+.ng-node-tools .ng-nt-btn:hover{background:rgba(255,255,255,.08);color:var(--ng-text)}
+.ng-node-tools .ng-nt-del:hover{background:rgba(248,113,113,.18);color:#f87171}
+/* Typed port shapes — structural (vertical / bottom) ports render square. */
+.ng-pv-top,.ng-pv-bot{border-radius:3px}
+
 /* Active state for a toggled topbar/ribbon button */
 .ng-tbtn.ng-tbtn-on{background:rgba(79,140,255,.22);border-color:#4f8cff;color:#6aa3ff}
 .ng-ribbon-btn.ng-on{background:rgba(79,140,255,.16);border-color:rgba(79,140,255,.4)}

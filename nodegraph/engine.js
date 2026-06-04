@@ -1178,19 +1178,47 @@ function drawWires(ctx, wrap, wiringFrom, wireMouse){
     var col = (fn && SRCCOL[fn.type]) || WCOL[tp] || '#4f8cff';
     // Detect vertical approach: WIP's top (pi=1) and bottom (pi=2) ports
     var vertIn = tn && tn.type==='wip' && (w.toPort===1||w.toPort===2);
-    ctx.beginPath(); ctx.moveTo(p1.x, p1.y);
-    if(vertIn){
-      var vy = w.toPort===1 ? -60 : 60; // approach top from above, bottom from below
-      ctx.bezierCurveTo(p1.x+60, p1.y, p2.x, p2.y+vy, p2.x, p2.y);
+    // NG4b: n8n-style bottom fan-out. In Clean Mode, when the child/source sits
+    // below its parent/target (and roughly under it), drop a dashed vertical
+    // connector from the parent's bottom edge down to the child's top. Purely a
+    // render choice — the wire's actual ports are unchanged, so calcs are safe.
+    var drop = false, dnP = null, dnC = null;
+    if(cleanMode && !vertIn && fn && tn){
+      var sb = nodeBox(fn), tb = nodeBox(tn);
+      var cxS = sb.x + sb.w/2, cxT = tb.x + tb.w/2;
+      if(sb.y > tb.y + tb.h*0.6 && Math.abs(cxS - cxT) < 520){
+        drop = true;
+        dnP = { x: cxT, y: tb.y + tb.h };   // parent bottom-center
+        dnC = { x: cxS, y: sb.y };          // child top-center
+      }
+    }
+    ctx.beginPath();
+    if(drop){
+      ctx.moveTo(dnP.x, dnP.y);
+      ctx.bezierCurveTo(dnP.x, dnP.y+50, dnC.x, dnC.y-50, dnC.x, dnC.y);
     } else {
-      var dx = Math.max(Math.abs(p2.x-p1.x)*0.4, 50);
-      ctx.bezierCurveTo(p1.x+dx, p1.y, p2.x-dx, p2.y, p2.x, p2.y);
+      ctx.moveTo(p1.x, p1.y);
+      if(vertIn){
+        var vy = w.toPort===1 ? -60 : 60; // approach top from above, bottom from below
+        ctx.bezierCurveTo(p1.x+60, p1.y, p2.x, p2.y+vy, p2.x, p2.y);
+      } else {
+        var dx = Math.max(Math.abs(p2.x-p1.x)*0.4, 50);
+        ctx.bezierCurveTo(p1.x+dx, p1.y, p2.x-dx, p2.y, p2.x, p2.y);
+      }
     }
     if(cleanMode){
-      // n8n-style: flat single-color wire, no glow.
-      ctx.strokeStyle = hexToRgba(col, 0.7); ctx.lineWidth = 2;
+      // n8n-style: flat single-color wire, no glow. Bottom drops are dashed
+      // with small square nubs at the parent + child ends.
+      ctx.strokeStyle = hexToRgba(col, drop ? 0.9 : 0.7); ctx.lineWidth = 2;
       ctx.shadowBlur = 0;
+      if(drop) ctx.setLineDash([7,5]);
       ctx.stroke();
+      if(drop){
+        ctx.setLineDash([]);
+        ctx.fillStyle = col;
+        ctx.fillRect(dnP.x-4, dnP.y-4, 8, 8);
+        ctx.fillRect(dnC.x-4, dnC.y-4, 8, 8);
+      }
     } else {
       // Gradient: breathing fade — bright near nodes, dips in middle
       var grad = ctx.createLinearGradient(p1.x, p1.y, p2.x, p2.y);

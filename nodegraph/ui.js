@@ -843,6 +843,16 @@ function renderNodes(){
       h+='<div class="ng-p ng-pv-bot ng-p-currency'+(cbot?' ng-pc':'')+'" data-node="'+n.id+'" data-pi="2" data-dir="in" data-type="currency" title="+ Costs / COs (bottom)"></div>';
     }
 
+    // NG4a: floating hover toolbar (above the tile) + name-below caption.
+    // Rendered for every node but only shown in Clean Mode (CSS-gated).
+    h+='<div class="ng-node-tools">';
+    if(canEdit) h+='<span class="ng-nt-btn" data-edit="'+n.id+'" title="Edit details">⚙</span>';
+    if(canColl) h+='<span class="ng-nt-btn" data-coll="'+n.id+'" title="Collapse / expand">'+(n.collapsed?'▶':'▼')+'</span>';
+    if(canColl) h+='<span class="ng-nt-btn" data-dup="'+n.id+'" title="Duplicate">⧉</span>';
+    h+='<span class="ng-nt-btn ng-nt-del" data-del="'+n.id+'" title="Delete">✕</span>';
+    h+='</div>';
+    h+='<div class="ng-node-cap" data-rename="'+n.id+'" title="Double-click to rename">'+n.label+'</div>';
+
     div.innerHTML=h;
     canvasEl.appendChild(div);
   });
@@ -1433,7 +1443,7 @@ function initEvents(){
       markCompatPorts((_fd&&_fd.outs[_pi])?_fd.outs[_pi].t:E.PT.A);
       return;
     }
-    var eb=e.target.closest('.ng-editbtn');
+    var eb=e.target.closest('[data-edit]');
     if(eb){
       e.stopPropagation();
       var en=E.findNode(eb.getAttribute('data-edit'));
@@ -1486,9 +1496,11 @@ function initEvents(){
         }
       }
     }
-    var db=e.target.closest('.ng-dupbtn');
+    var db=e.target.closest('[data-dup]');
     if(db){e.stopPropagation();duplicateNode(db.getAttribute('data-dup'));return;}
-    var cb=e.target.closest('.ng-cbtn');
+    var xb=e.target.closest('[data-del]');
+    if(xb){e.stopPropagation();var xn=E.findNode(xb.getAttribute('data-del'));if(xn) showDeleteDialog(xn);return;}
+    var cb=e.target.closest('[data-coll]');
     if(cb){e.stopPropagation();var cn=E.findNode(cb.getAttribute('data-coll'));if(cn){cn.collapsed=!cn.collapsed;render();}return;}
     // Click progress bar / label to edit %
     var pe=e.target.closest('[data-prog-edit]');
