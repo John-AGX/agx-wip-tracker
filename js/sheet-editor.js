@@ -55,6 +55,7 @@
     { key: 'level',    glyph: '↧', name: 'Level',      group: 'Annotate', label: 'Level / elevation line — horizontal datum at a set elevation (e.g. 10\') with a head marker. Prints. The first one sets the datum.' },
     { key: 'spotelev', glyph: '⌖', name: 'Spot elev',  group: 'Annotate', label: 'Spot elevation — click any point to tag its height above the level datum. Prints.' },
     { key: 'refline',  glyph: '┈', name: 'Ref line',   group: 'Annotate', label: 'Reference line (construction guide — snaps & trims to, but is NOT printed or exported)' },
+    { key: 'inquire',  glyph: '⊾', name: 'Measure',    group: 'View',     label: 'Measure / inquiry — click points for distance, angle, running total & enclosed area. Does NOT print. Enter/Esc clears.' },
     { key: 'pan',      glyph: '✋', name: 'Pan',        group: 'View',     label: 'Pan (or hold Space / middle-drag)' }
   ];
   // Non-tool buttons (edit ops + history/util) shown in the drawer, grouped.
@@ -75,7 +76,7 @@
     s: 'select', l: 'line', p: 'polyline', r: 'rect', c: 'circle', a: 'arc',
     x: 'trim', e: 'extend', f: 'fillet',
     d: 'dim', g: 'angle', k: 'leader', t: 'text', h: 'hatch', y: 'symbol',
-    v: 'pan'
+    m: 'inquire', v: 'pan'
   };
 
   var HATCH_PATTERNS = [
@@ -927,6 +928,7 @@
   function setTool(t) {
     if (S.draft) S.draft = null;             // cancel any in-progress draft
     S._filletA = null;                       // cancel a pending fillet pick
+    S.inq = null;                            // clear any measure/inquiry path
     hideDyn();
     S.tool = t;
     S.canvas.style.cursor = (t === 'pan') ? 'grab' : (t === 'select' ? 'default' : 'crosshair');
@@ -1238,8 +1240,17 @@
     var host = S.overlay.querySelector('#p86-sheet-layers');
     // ── Sheet section ──
     var html = '';
-    // ── Properties (selected object) ──
+    // ── Multi-selection summary (2+ objects) ──
+    if (S.selIds && S.selIds.length > 1) {
+      html += '<div style="border:1px solid #4f8cff;background:rgba(79,140,255,0.08);border-radius:8px;padding:8px 9px;margin-bottom:12px;">' +
+        '<div style="font-weight:700;color:#fff;display:flex;align-items:center;gap:6px;">⛶ ' + S.selIds.length + ' objects selected' +
+          '<button data-prop-del style="margin-left:auto;background:transparent;border:0;color:#f87171;cursor:pointer;font-size:12px;">✕ Delete</button></div>' +
+        '<div style="margin-top:6px;font-size:9.5px;color:#64748b;">Drag to move all · ⟳ rotate · ⇆⇅ mirror · Ctrl+D dup — all together.</div>' +
+      '</div>';
+    }
+    // ── Properties (single selected object) ──
     var selEnt = S.selectedId ? selectedEntity() : null;
+    var selPpi = selEnt ? ppiOf(selEnt) : 1;
     if (selEnt) {
       var TOOL_NAMES = { line: 'Line', polyline: 'Polyline', rect: 'Rectangle', ellipse: 'Circle', text: 'Text', measure: 'Dimension', mangle: 'Angle', arrow: 'Leader', hatch: 'Hatch', symbol: 'Symbol' };
       html += '<div style="border:1px solid #4f8cff;background:rgba(79,140,255,0.08);border-radius:8px;padding:8px 9px;margin-bottom:12px;">' +
@@ -1253,6 +1264,7 @@
           '<label style="font-size:10.5px;color:#9aa;display:flex;align-items:center;gap:5px;">Color <input type="color" data-prop-color value="' + esc(toHex6(selEnt.color)) + '" style="width:30px;height:22px;border:0;background:transparent;cursor:pointer;padding:0;" /></label>' +
           '<label style="font-size:10.5px;color:#9aa;display:flex;align-items:center;gap:5px;">Weight <input type="number" data-prop-weight value="' + (selEnt.lineWidth || 2) + '" min="1" max="24" step="1" style="width:46px;background:#1a1a2e;color:#fff;border:1px solid #444;border-radius:5px;padding:3px 5px;font-size:11px;" /></label>' +
         '</div>' +
+        propGeomHtml(selEnt, selPpi) +
         '<div style="margin-top:6px;font-size:9.5px;color:#64748b;">Drag body to move · drag grips to reshape · ⟳ rotate · ⇆⇅ mirror · Ctrl+D dup</div>' +
       '</div>';
     }
@@ -1315,6 +1327,40 @@
     if (propWeight) propWeight.onchange = function () { var e = selectedEntity(); if (!e) return; pushUndo(); e.lineWidth = Math.max(1, Math.min(24, parseInt(propWeight.value, 10) || 2)); repaint(); };
     var propDel = host.querySelector('[data-prop-del]');
     if (propDel) propDel.onclick = deleteSelected;
+    // Geometry edits — recompute the entity from typed real-world values.
+    var pLen = host.querySelector('[data-prop-len]'), pAng = host.querySelector('[data-prop-ang]');
+    function applyLine() {
+      var e = selectedEntity(); if (!e) return;
+      var lenIn = parseLenIn(pLen.value); var ang = parseFloat(pAng.value);
+      if (lenIn == null || !isFinite(ang)) return;
+      pushUndo(); var ppi = ppiOf(e), px = lenIn * ppi, rad = ang * Math.PI / 180;
+      e.endX = e.startX + px * Math.cos(rad); e.endY = e.startY - px * Math.sin(rad);
+      repaint(); buildLayers();
+    }
+    if (pLen) pLen.onchange = applyLine;
+    if (pAng) pAng.onchange = applyLine;
+    var pW = host.querySelector('[data-prop-w]'), pH = host.querySelector('[data-prop-h]');
+    function applyRect() {
+      var e = selectedEntity(); if (!e) return;
+      var w = parseLenIn(pW.value), h = parseLenIn(pH.value); if (w == null || h == null) return;
+      pushUndo(); var ppi = ppiOf(e);
+      var sx = Math.min(e.startX, e.endX), sy = Math.min(e.startY, e.endY);
+      e.startX = sx; e.startY = sy; e.endX = sx + Math.max(1, w * ppi); e.endY = sy + Math.max(1, h * ppi);
+      repaint(); buildLayers();
+    }
+    if (pW) pW.onchange = applyRect;
+    if (pH) pH.onchange = applyRect;
+    var pR = host.querySelector('[data-prop-r]');
+    if (pR) pR.onchange = function () {
+      var e = selectedEntity(); if (!e) return; var r = parseLenIn(pR.value); if (r == null) return;
+      pushUndo(); var ppi = ppiOf(e), rpx = Math.max(1, r * ppi);
+      var cx = (e.startX + e.endX) / 2, cy = (e.startY + e.endY) / 2;
+      e.startX = cx - rpx; e.endX = cx + rpx; e.startY = cy - rpx; e.endY = cy + rpx;
+      repaint(); buildLayers();
+    };
+    var pText = host.querySelector('[data-prop-text]'), pTh = host.querySelector('[data-prop-th]');
+    if (pText) pText.onchange = function () { var e = selectedEntity(); if (!e) return; pushUndo(); e.text = pText.value; repaint(); };
+    if (pTh) pTh.onchange = function () { var e = selectedEntity(); if (!e) return; var th = parseLenIn(pTh.value); if (th == null) return; pushUndo(); e.fontPx = Math.max(2, th * ppiOf(e)); repaint(); buildLayers(); };
     // Sheet + Views wiring
     var sizeSel = host.querySelector('[data-sheet-size]');
     if (sizeSel) sizeSel.onchange = function () { applySheetSize(sizeSel.value); };
@@ -1761,10 +1807,14 @@
       else if (e.key === ' ') { S.spaceDown = true; S.canvas.style.cursor = 'grab'; }
       else if (e.key === 'Escape') {
         if (S._filletA) { S._filletA = null; updateHint(); repaint(); }
+        else if (S.inq) { S.inq = null; repaint(); }
         else if (S.draft) { S.draft = null; hideDyn(); repaint(); }
         else S.overlay.querySelector('#p86-sheet-cancel').click();
       }
-      else if (e.key === 'Enter') { if ((S.tool === 'polyline' || S.tool === 'hatch') && S.draft) commitPolyline(); }
+      else if (e.key === 'Enter') {
+        if ((S.tool === 'polyline' || S.tool === 'hatch') && S.draft) commitPolyline();
+        else if (S.tool === 'inquire' && S.inq) { S.inq = null; repaint(); }
+      }
       else if ((e.key === 'z' || e.key === 'Z') && (e.ctrlKey || e.metaKey)) { e.preventDefault(); if (e.shiftKey) redo(); else undo(); }
       else if ((e.key === 'y' || e.key === 'Y') && (e.ctrlKey || e.metaKey)) { e.preventDefault(); redo(); }
       else if ((e.key === 'd' || e.key === 'D') && (e.ctrlKey || e.metaKey)) { e.preventDefault(); duplicateSelected(); }
@@ -1820,6 +1870,13 @@
     if (t === 'trim') { trimAt(pt, vp); return; }
     if (t === 'extend') { extendAt(pt, vp); return; }
     if (t === 'fillet') { filletClick(pt, vp); return; }
+    // Measure / inquiry — accumulate points; readout drawn in repaint. Never
+    // becomes a printed entity. Enter/Esc clears.
+    if (t === 'inquire') {
+      if (!S.inq) S.inq = { pts: [], vp: vp || vpAt(pt) };
+      S.inq.pts.push({ x: pt.x, y: pt.y });
+      repaint(); return;
+    }
     // Block drawing onto a locked layer.
     var actL = layerById(S.doc, S.activeLayer);
     if (actL && actL.locked) { setHint('Layer "' + actL.name + '" is locked — unlock it (🔓) to draw.'); return; }
@@ -2211,6 +2268,34 @@
 
   // ── Edit operations (operate on the current selection) ──────────
   function selectedEntity() { return S.doc.entities.filter(function (e) { return e.id === S.selectedId; })[0]; }
+  // ── Properties: editable geometry fields for the selected entity ──
+  function propLbl(label, attr, val, wide) {
+    return '<label style="font-size:10px;color:#9aa;display:flex;flex-direction:column;gap:2px;' + (wide ? 'flex:1;' : '') + '">' + esc(label) +
+      '<input data-' + attr + ' value="' + esc(val) + '" style="width:100%;box-sizing:border-box;background:#1a1a2e;color:#fff;border:1px solid #444;border-radius:5px;padding:3px 5px;font-size:11px;" /></label>';
+  }
+  function propGeomHtml(e, ppi) {
+    if (!e || !ppi) return '';
+    if (e.tool === 'line' || e.tool === 'refline' || e.tool === 'level') {
+      var dx = e.endX - e.startX, dy = e.endY - e.startY;
+      return '<div style="display:flex;gap:8px;margin-top:7px;">' + propLbl('Length', 'prop-len', fmtLen(Math.hypot(dx, dy) / ppi), true) + propLbl('Angle°', 'prop-ang', (Math.atan2(-dy, dx) * 180 / Math.PI).toFixed(1), true) + '</div>';
+    }
+    if (e.tool === 'rect') {
+      return '<div style="display:flex;gap:8px;margin-top:7px;">' + propLbl('Width', 'prop-w', fmtLen(Math.abs(e.endX - e.startX) / ppi), true) + propLbl('Height', 'prop-h', fmtLen(Math.abs(e.endY - e.startY) / ppi), true) + '</div>';
+    }
+    if (e.tool === 'ellipse') {
+      return '<div style="margin-top:7px;">' + propLbl('Radius', 'prop-r', fmtLen(Math.abs(e.endX - e.startX) / 2 / ppi), false) + '</div>';
+    }
+    if (e.tool === 'text') {
+      return '<div style="margin-top:7px;">' + propLbl('Text', 'prop-text', e.text || '', true) + '<div style="margin-top:6px;">' + propLbl('Text height', 'prop-th', fmtLen((e.fontPx || 24) / ppi), false) + '</div></div>';
+    }
+    return '';
+  }
+  // Parse a length input (e.g. "12' 6\"", "126\"", "10") → inches, or null.
+  function parseLenIn(str) {
+    var p = prims().parseMeasurement ? prims().parseMeasurement(str, 'ft') : null;
+    if (p) return p.inches;
+    var f = parseFloat(str); return isFinite(f) ? f * 12 : null;
+  }
   function translateEntity(e, dx, dy) {
     if (e.points) e.points.forEach(function (p) { p.x += dx; p.y += dy; });
     if (e.startX != null) { e.startX += dx; e.endX += dx; e.startY += dy; e.endY += dy; }
@@ -2724,6 +2809,37 @@
         ctx.fillStyle = '#22c55e'; ctx.strokeStyle = '#0b0e14'; ctx.lineWidth = 1;
         ctx.fillRect(gp.x - 4, gp.y - 4, 8, 8); ctx.strokeRect(gp.x - 4, gp.y - 4, 8, 8);
       });
+      ctx.restore();
+    }
+    // Measure / inquiry overlay (screen space) — path + live readout box.
+    if (S.inq && S.inq.pts && S.inq.pts.length) {
+      var ipts = S.inq.pts.slice();
+      var ilive = (S.hover && S.tool === 'inquire') ? S.hover : null;
+      var idraw = ilive ? ipts.concat([ilive]) : ipts;
+      ctx.save();
+      ctx.strokeStyle = '#22d3ee'; ctx.lineWidth = 1.5; ctx.setLineDash([5, 4]);
+      ctx.beginPath();
+      idraw.forEach(function (p, i) { var s = toScreen(p.x, p.y); if (i === 0) ctx.moveTo(s.x, s.y); else ctx.lineTo(s.x, s.y); });
+      ctx.stroke(); ctx.setLineDash([]);
+      idraw.forEach(function (p) { var s = toScreen(p.x, p.y); ctx.fillStyle = '#22d3ee'; ctx.beginPath(); ctx.arc(s.x, s.y, 3, 0, Math.PI * 2); ctx.fill(); });
+      var ivp = S.inq.vp || vpAt(ipts[0]) || (S.doc.viewports && S.doc.viewports[0]);
+      var ippi = (ivp && ivp.scale && ivp.scale.pixelsPerInch) ? ivp.scale.pixelsPerInch : 1;
+      var itotal = 0; for (var ii = 1; ii < idraw.length; ii++) itotal += Math.hypot(idraw[ii].x - idraw[ii - 1].x, idraw[ii].y - idraw[ii - 1].y);
+      var iseg = 0, iang = 0;
+      if (idraw.length >= 2) { var ia = idraw[idraw.length - 2], ib = idraw[idraw.length - 1]; iseg = Math.hypot(ib.x - ia.x, ib.y - ia.y); iang = Math.atan2(-(ib.y - ia.y), ib.x - ia.x) * 180 / Math.PI; }
+      var ilines = ['Seg ' + fmtLen(iseg / ippi) + '  ∠ ' + iang.toFixed(1) + '°', 'Total ' + fmtLen(itotal / ippi)];
+      if (idraw.length >= 3) {
+        var iarea = 0; for (var k = 0; k < idraw.length; k++) { var q1 = idraw[k], q2 = idraw[(k + 1) % idraw.length]; iarea += q1.x * q2.y - q2.x * q1.y; }
+        iarea = Math.abs(iarea) / 2 / (ippi * ippi) / 144;   // sheet px² → sq ft
+        ilines.push('Area ' + iarea.toFixed(1) + ' SF');
+      }
+      var ianchor = toScreen(idraw[idraw.length - 1].x, idraw[idraw.length - 1].y);
+      ctx.font = '600 11px Arial, sans-serif'; var ibw = 0; ilines.forEach(function (t) { ibw = Math.max(ibw, ctx.measureText(t).width); });
+      var ibx = ianchor.x + 12, iby = ianchor.y + 12, ibh = ilines.length * 15 + 8;
+      ctx.fillStyle = 'rgba(8,12,20,0.92)'; ctx.strokeStyle = '#22d3ee'; ctx.lineWidth = 1;
+      ctx.fillRect(ibx, iby, ibw + 16, ibh); ctx.strokeRect(ibx, iby, ibw + 16, ibh);
+      ctx.fillStyle = '#e6f6ff'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+      ilines.forEach(function (t, i) { ctx.fillText(t, ibx + 8, iby + 6 + i * 15); });
       ctx.restore();
     }
     // snap marker (screen space, fixed size)
