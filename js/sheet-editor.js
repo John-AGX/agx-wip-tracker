@@ -37,26 +37,39 @@
 
   // Left-toolbar tools. select + draw tools + pan.
   var TOOLS = [
-    { key: 'select',   glyph: '▢', label: 'Select (click to pick · Del removes)' },
-    { key: 'line',     glyph: '─', label: 'Line (click start, click end · Esc cancels)' },
-    { key: 'polyline', glyph: '⌇', label: 'Polyline (click points · double-click/Enter to finish)' },
-    { key: 'rect',     glyph: '▭', label: 'Rectangle (click two opposite corners)' },
-    { key: 'circle',   glyph: '◯', label: 'Circle (click center, click radius)' },
-    { key: 'arc',      glyph: '⌒', label: 'Arc (3-point: click start, a point on the arc, then end)' },
-    { key: 'refline',  glyph: '┈', label: 'Reference line (construction guide — snaps & trims to, but is NOT printed or exported)' },
-    { key: 'level',    glyph: '↧', label: 'Level / elevation line — horizontal datum at a set elevation (e.g. 10\') with a head marker. Prints. The first one sets the datum.' },
-    { key: 'spotelev', glyph: '⌖', label: 'Spot elevation — click any point to tag its height above the level datum. Prints.' },
-    { key: 'trim',     glyph: '✂', label: 'Trim — click a line segment to cut it back to the nearest crossing line' },
-    { key: 'extend',   glyph: '⇥', label: 'Extend — click a line near the end to extend it to the next line it meets' },
-    { key: 'fillet',   glyph: '◜', label: 'Fillet — click two lines, then enter a radius (0 = sharp corner)' },
-    { key: 'dim',      glyph: '↔', label: 'Dimension (click two points — auto-labels real length at the viewport scale)' },
-    { key: 'angle',    glyph: '∠', label: 'Angle dimension (click three points: leg · vertex · leg)' },
-    { key: 'leader',   glyph: '➘', label: 'Leader / callout (click target, click text position)' },
-    { key: 'hatch',    glyph: '▨', label: 'Hatch fill (click a closed region; pick a material pattern) — double-click / Enter to close' },
-    { key: 'symbol',   glyph: '✱', label: 'Symbol / block (north arrow, sprinkler head, post, tree, callout)' },
-    { key: 'text',     glyph: 'T', label: 'Text (click to place)' },
-    { key: 'pan',      glyph: '✋', label: 'Pan (or hold Space / middle-drag)' }
+    { key: 'select',   glyph: '▢', name: 'Select',     group: 'Draw',     label: 'Select (click to pick · Shift-click adds · drag a box to window/crossing select · Del removes)' },
+    { key: 'line',     glyph: '─', name: 'Line',       group: 'Draw',     label: 'Line (click start, click end · Esc cancels)' },
+    { key: 'polyline', glyph: '⌇', name: 'Polyline',   group: 'Draw',     label: 'Polyline (click points · double-click/Enter to finish)' },
+    { key: 'rect',     glyph: '▭', name: 'Rectangle',  group: 'Draw',     label: 'Rectangle (click two opposite corners)' },
+    { key: 'circle',   glyph: '◯', name: 'Circle',     group: 'Draw',     label: 'Circle (click center, click radius)' },
+    { key: 'arc',      glyph: '⌒', name: 'Arc',        group: 'Draw',     label: 'Arc (3-point: click start, a point on the arc, then end)' },
+    { key: 'trim',     glyph: '✂', name: 'Trim',       group: 'Modify',   label: 'Trim — click a line segment to cut it back to the nearest crossing line' },
+    { key: 'extend',   glyph: '⇥', name: 'Extend',     group: 'Modify',   label: 'Extend — click a line near the end to extend it to the next line it meets' },
+    { key: 'fillet',   glyph: '◜', name: 'Fillet',     group: 'Modify',   label: 'Fillet — click two lines, then enter a radius (0 = sharp corner)' },
+    { key: 'dim',      glyph: '↔', name: 'Dimension',  group: 'Annotate', label: 'Dimension (click two points — auto-labels real length at the viewport scale)' },
+    { key: 'angle',    glyph: '∠', name: 'Angle dim',  group: 'Annotate', label: 'Angle dimension (click three points: leg · vertex · leg)' },
+    { key: 'leader',   glyph: '➘', name: 'Leader',     group: 'Annotate', label: 'Leader / callout (click target, click text position)' },
+    { key: 'text',     glyph: 'T', name: 'Text',       group: 'Annotate', label: 'Text (click to place)' },
+    { key: 'hatch',    glyph: '▨', name: 'Hatch',      group: 'Annotate', label: 'Hatch fill (click a closed region; pick a material pattern) — double-click / Enter to close' },
+    { key: 'symbol',   glyph: '✱', name: 'Symbol',     group: 'Annotate', label: 'Symbol / block (north arrow, sprinkler head, post, tree, callout)' },
+    { key: 'level',    glyph: '↧', name: 'Level',      group: 'Annotate', label: 'Level / elevation line — horizontal datum at a set elevation (e.g. 10\') with a head marker. Prints. The first one sets the datum.' },
+    { key: 'spotelev', glyph: '⌖', name: 'Spot elev',  group: 'Annotate', label: 'Spot elevation — click any point to tag its height above the level datum. Prints.' },
+    { key: 'refline',  glyph: '┈', name: 'Ref line',   group: 'Annotate', label: 'Reference line (construction guide — snaps & trims to, but is NOT printed or exported)' },
+    { key: 'pan',      glyph: '✋', name: 'Pan',        group: 'View',     label: 'Pan (or hold Space / middle-drag)' }
   ];
+  // Non-tool buttons (edit ops + history/util) shown in the drawer, grouped.
+  var EDIT_ITEMS = [
+    { key: 'rotate',  act: 'edit', glyph: '⟳', name: 'Rotate 90°', group: 'Modify', label: 'Rotate selection 90°' },
+    { key: 'mirrorH', act: 'edit', glyph: '⇆', name: 'Mirror H',   group: 'Modify', label: 'Mirror selection (horizontal)' },
+    { key: 'mirrorV', act: 'edit', glyph: '⇅', name: 'Mirror V',   group: 'Modify', label: 'Mirror selection (vertical)' },
+    { key: 'dup',     act: 'edit', glyph: '⧉', name: 'Duplicate',  group: 'Modify', label: 'Duplicate selection (Ctrl+D)' },
+    { key: 'offset',  act: 'edit', glyph: '⎘', name: 'Offset',     group: 'Modify', label: 'Offset selection by a distance (line / polyline / rect / circle)' },
+    { key: 'array',   act: 'edit', glyph: '▦', name: 'Array',      group: 'Modify', label: 'Array selection (rows × columns)' },
+    { key: 'fit',     act: 'fit',  glyph: '⤢', name: 'Fit',        group: 'View',   label: 'Fit to screen' },
+    { key: 'undo',    act: 'undo', glyph: '↶', name: 'Undo',       group: 'View',   label: 'Undo (Ctrl+Z)' },
+    { key: 'redo',    act: 'redo', glyph: '↷', name: 'Redo',       group: 'View',   label: 'Redo (Ctrl+Y / Ctrl+Shift+Z)' }
+  ];
+  var TOOL_GROUP_ORDER = ['Draw', 'Modify', 'Annotate', 'View'];
 
   var HATCH_PATTERNS = [
     { key: 'earth', label: 'Earth' }, { key: 'concrete', label: 'Concrete' },
@@ -135,7 +148,11 @@
       titleblock: {
         project: (plan && plan.name) || '', title: 'PLAN', scale: pre.label,
         date: '', drawnBy: '', sheetNo: 'A-1', client: '', northDeg: 0,
-        company: '', showLogo: true
+        company: '', showLogo: true,
+        // CAD-style additions
+        projectNo: '', address: '', checkedBy: '', approvedBy: '', sheetOf: '',
+        revisions: [], generalNotes: '', showNotes: false,
+        logoScale: 1, logoPos: 'left'
       },
       layers: [
         { id: 'L0', name: 'Default', color: '#1f2937', weight: 4, lineType: 'solid', visible: true, locked: false },
@@ -244,47 +261,109 @@
     ctx.fillStyle = '#ffffff'; ctx.fillRect(x, y, tbW, tbH);
     ctx.strokeStyle = '#111827'; ctx.lineWidth = 2.5; ctx.strokeRect(x, y, tbW, tbH);
 
-    // ── Company band (top) ──
+    // ── Company band (top) — honors logoScale + logoPos ──
     var bandH = Math.round(tbH * 0.26);
     ctx.fillStyle = '#111827'; ctx.fillRect(x, y, tbW, bandH);
     var company = String(tb.company || (S && S._orgName) || '').toUpperCase();
     var logo = (tb.showLogo !== false && S && S._logo) ? S._logo : null;
-    var textX = x + pad;
+    var logoScale = Math.max(0.5, Math.min(2, parseFloat(tb.logoScale) || 1));
+    var logoPos = tb.logoPos === 'center' ? 'center' : 'left';
+    var nameStr = company || 'COMPANY NAME';
+    ctx.font = '800 ' + Math.round(DPI * 0.19) + 'px Arial, sans-serif';
+    var nameW = ctx.measureText(nameStr).width;
+    var dw = 0, dh = 0;
     if (logo) {
       var boxH = bandH - pad, boxW = Math.round(bandH * 1.7);
       var iw = logo.naturalWidth || logo.width || 1, ih = logo.naturalHeight || logo.height || 1;
-      var sc = Math.min(boxW / iw, boxH / ih), dw = iw * sc, dh = ih * sc;
+      var sc = Math.min(boxW / iw, boxH / ih); dw = iw * sc * logoScale; dh = ih * sc * logoScale;
+      if (dh > bandH - 4) { var k = (bandH - 4) / dh; dh *= k; dw *= k; }   // clamp to band
+    }
+    var gap = logo ? pad : 0;
+    var nameShownW = Math.min(nameW, tbW - dw - gap - pad * 2);
+    var startX = (logoPos === 'center') ? (x + Math.max(pad, (tbW - (dw + gap + nameShownW)) / 2)) : (x + pad);
+    var tx = startX;
+    if (logo) {
       var ly = y + (bandH - dh) / 2;
-      ctx.fillStyle = '#ffffff'; ctx.fillRect(x + pad - 4, ly - 4, dw + 8, dh + 8);
-      try { ctx.drawImage(logo, x + pad, ly, dw, dh); } catch (e) {}
-      textX = x + pad + dw + pad;
+      ctx.fillStyle = '#ffffff'; ctx.fillRect(startX - 3, ly - 3, dw + 6, dh + 6);
+      try { ctx.drawImage(logo, startX, ly, dw, dh); } catch (e) {}
+      tx = startX + dw + gap;
     }
     ctx.fillStyle = '#ffffff'; ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
     ctx.font = '800 ' + Math.round(DPI * 0.19) + 'px Arial, sans-serif';
-    ctx.fillText(company || 'COMPANY NAME', textX, y + bandH / 2, x + tbW - textX - pad);
+    ctx.fillText(nameStr, tx, y + bandH / 2, x + tbW - tx - pad);
 
-    // ── Field grid (below band) ──
-    var gy = y + bandH, gh = tbH - bandH, rows = 4, rowH = gh / rows;
-    var midX = x + tbW * 0.55, splitX = x + tbW * 0.3;
+    // ── Field grid (below band) — 5 rows ──
+    var gy = y + bandH, gh = tbH - bandH, rows = 5, rowH = gh / rows;
+    function rowLine(i) { ctx.beginPath(); ctx.moveTo(x, gy + rowH * i); ctx.lineTo(x + tbW, gy + rowH * i); ctx.stroke(); }
+    function vseg(frac, ri) { var px = x + tbW * frac; ctx.beginPath(); ctx.moveTo(px, gy + rowH * ri); ctx.lineTo(px, gy + rowH * (ri + 1)); ctx.stroke(); }
     ctx.strokeStyle = '#9ca3af'; ctx.lineWidth = 1;
-    for (var i = 1; i < rows; i++) { ctx.beginPath(); ctx.moveTo(x, gy + rowH * i); ctx.lineTo(x + tbW, gy + rowH * i); ctx.stroke(); }
-    ctx.beginPath(); ctx.moveTo(midX, gy + rowH * 2); ctx.lineTo(midX, gy + rowH * 4); ctx.stroke();   // CLIENT|SCALE + ·|SHEET
-    ctx.beginPath(); ctx.moveTo(splitX, gy + rowH * 3); ctx.lineTo(splitX, gy + rowH * 4); ctx.stroke(); // DATE|BY
-    function cell(label, val, cx, cy, cw, big) {
+    for (var i = 1; i < rows; i++) rowLine(i);
+    vseg(0.68, 0);                 // PROJECT | PROJ #
+    vseg(0.55, 2);                 // CLIENT | ADDRESS
+    vseg(0.34, 3); vseg(0.67, 3);  // DATE | DRAWN | SCALE
+    vseg(0.25, 4); vseg(0.5, 4);   // CHECKED | APPROVED | SHEET
+    function cell(label, val, frac0, ri, frac1, big) {
+      var cx = x + tbW * frac0, cw = tbW * (frac1 - frac0), cy = gy + rowH * ri;
       ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-      ctx.fillStyle = '#6b7280'; ctx.font = '700 ' + Math.round(DPI * 0.08) + 'px Arial, sans-serif';
-      ctx.fillText(label, cx + pad * 0.8, cy + Math.round(DPI * 0.06));
+      ctx.fillStyle = '#6b7280'; ctx.font = '700 ' + Math.round(DPI * 0.07) + 'px Arial, sans-serif';
+      ctx.fillText(label, cx + pad * 0.7, cy + Math.round(DPI * 0.05));
       ctx.fillStyle = '#111827';
-      ctx.font = (big ? '800 ' + Math.round(DPI * 0.24) : '700 ' + Math.round(DPI * 0.145)) + 'px Arial, sans-serif';
-      ctx.fillText(String(val || '—'), cx + pad * 0.8, cy + rowH * (big ? 0.36 : 0.44), cw - pad * 1.6);
+      ctx.font = (big ? '800 ' + Math.round(DPI * 0.2) : '700 ' + Math.round(DPI * 0.12)) + 'px Arial, sans-serif';
+      ctx.fillText(String(val || '—'), cx + pad * 0.7, cy + rowH * (big ? 0.38 : 0.46), cw - pad * 1.3);
     }
-    cell('PROJECT', tb.project, x, gy, tbW);
-    cell('SHEET TITLE', tb.title, x, gy + rowH, tbW);
-    cell('CLIENT', tb.client, x, gy + rowH * 2, tbW * 0.55);
-    cell('SCALE', tb.scale, midX, gy + rowH * 2, tbW * 0.45);
-    cell('DATE', tb.date, x, gy + rowH * 3, tbW * 0.3);
-    cell('DRAWN BY', tb.drawnBy, splitX, gy + rowH * 3, tbW * 0.25);
-    cell('SHEET', tb.sheetNo, midX, gy + rowH * 3, tbW * 0.45, true);
+    var sheetVal = String(tb.sheetNo || '') + (tb.sheetOf ? '  of ' + tb.sheetOf : '');
+    cell('PROJECT', tb.project, 0, 0, 0.68);
+    cell('PROJECT #', tb.projectNo, 0.68, 0, 1);
+    cell('SHEET TITLE', tb.title, 0, 1, 1);
+    cell('CLIENT', tb.client, 0, 2, 0.55);
+    cell('ADDRESS', tb.address, 0.55, 2, 1);
+    cell('DATE', tb.date, 0, 3, 0.34);
+    cell('DRAWN BY', tb.drawnBy, 0.34, 3, 0.67);
+    cell('SCALE', tb.scale, 0.67, 3, 1);
+    cell('CHECKED', tb.checkedBy, 0, 4, 0.25);
+    cell('APPROVED', tb.approvedBy, 0.25, 4, 0.5);
+    cell('SHEET', sheetVal, 0.5, 4, 1, true);
+
+    // ── Revision strip + general-notes block, stacked above the titleblock ──
+    var stackTop = y, gap2 = Math.round(DPI * 0.06);
+    var revs = Array.isArray(tb.revisions) ? tb.revisions.filter(function (r) { return r && (r.rev || r.date || r.desc); }) : [];
+    if (revs.length) {
+      var rH = Math.round(DPI * 0.15), totalH = rH * (revs.length + 1);
+      var ry = stackTop - gap2 - totalH;
+      ctx.fillStyle = '#ffffff'; ctx.fillRect(x, ry, tbW, totalH);
+      ctx.strokeStyle = '#111827'; ctx.lineWidth = 2; ctx.strokeRect(x, ry, tbW, totalH);
+      var rc1 = x + tbW * 0.12, rc2 = x + tbW * 0.34;
+      ctx.fillStyle = '#111827'; ctx.fillRect(x, ry, tbW, rH);
+      ctx.fillStyle = '#ffffff'; ctx.textBaseline = 'middle'; ctx.textAlign = 'left';
+      ctx.font = '800 ' + Math.round(DPI * 0.08) + 'px Arial, sans-serif';
+      ctx.fillText('REV', x + pad * 0.6, ry + rH / 2);
+      ctx.fillText('DATE', rc1 + pad * 0.4, ry + rH / 2);
+      ctx.fillText('DESCRIPTION', rc2 + pad * 0.4, ry + rH / 2);
+      revs.forEach(function (r, ri) {
+        var rowY = ry + rH * (ri + 1);
+        ctx.strokeStyle = '#9ca3af'; ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(x, rowY); ctx.lineTo(x + tbW, rowY); ctx.stroke();
+        ctx.fillStyle = '#111827'; ctx.font = '700 ' + Math.round(DPI * 0.08) + 'px Arial, sans-serif';
+        ctx.fillText(String(r.rev || ''), x + pad * 0.6, rowY + rH / 2);
+        ctx.fillText(String(r.date || ''), rc1 + pad * 0.4, rowY + rH / 2, rc2 - rc1 - pad);
+        ctx.fillText(String(r.desc || ''), rc2 + pad * 0.4, rowY + rH / 2, x + tbW - rc2 - pad);
+      });
+      ctx.strokeStyle = '#9ca3af'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(rc1, ry); ctx.lineTo(rc1, ry + totalH); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(rc2, ry); ctx.lineTo(rc2, ry + totalH); ctx.stroke();
+      stackTop = ry;
+    }
+    if (tb.showNotes && String(tb.generalNotes || '').trim()) {
+      var lines = String(tb.generalNotes).split(/\r?\n/);
+      var lh = Math.round(DPI * 0.125), nH = lh * (lines.length + 1) + pad;
+      var ny = Math.max(s.margin + 6, stackTop - gap2 - nH);
+      ctx.fillStyle = '#ffffff'; ctx.fillRect(x, ny, tbW, nH);
+      ctx.strokeStyle = '#111827'; ctx.lineWidth = 2; ctx.strokeRect(x, ny, tbW, nH);
+      ctx.fillStyle = '#111827'; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+      ctx.font = '800 ' + Math.round(DPI * 0.08) + 'px Arial, sans-serif';
+      ctx.fillText('GENERAL NOTES', x + pad * 0.7, ny + pad * 0.5);
+      ctx.font = '600 ' + Math.round(DPI * 0.095) + 'px Arial, sans-serif';
+      lines.forEach(function (ln, li) { ctx.fillText(ln, x + pad * 0.7, ny + pad * 0.5 + lh * (li + 1), tbW - pad * 1.4); });
+    }
     ctx.restore();
   }
 
@@ -565,9 +644,10 @@
           // Dynamic input — type exact length (+ angle) after the first click.
           '<div id="p86-sheet-dyn" style="display:none;position:absolute;align-items:center;gap:4px;background:rgba(15,15,30,0.97);border:1px solid #4f8cff;border-radius:6px;padding:4px 6px;box-shadow:0 4px 14px rgba(0,0,0,0.55);z-index:20;">' +
             '<span style="font-size:10px;color:#9aa;font-weight:700;">LEN</span>' +
-            '<input data-dyn-len type="text" autocomplete="off" placeholder="" style="width:78px;background:#1a1a2e;color:#fff;border:1px solid #444;border-radius:4px;padding:3px 6px;font-size:12px;font-weight:600;outline:none;" />' +
+            '<input data-dyn-len type="text" autocomplete="off" placeholder="" title="Type a length (10\', 10\' 6\", 126\") — press , (comma) or Tab to jump to the angle" style="width:78px;background:#1a1a2e;color:#fff;border:1px solid #444;border-radius:4px;padding:3px 6px;font-size:12px;font-weight:600;outline:none;" />' +
             '<span style="font-size:10px;color:#9aa;font-weight:700;">∠</span>' +
-            '<input data-dyn-ang type="text" autocomplete="off" placeholder="" style="width:52px;background:#1a1a2e;color:#fff;border:1px solid #444;border-radius:4px;padding:3px 6px;font-size:12px;font-weight:600;outline:none;" />' +
+            '<input data-dyn-ang type="text" autocomplete="off" placeholder="" title="Type an angle in degrees — Enter to commit" style="width:52px;background:#1a1a2e;color:#fff;border:1px solid #444;border-radius:4px;padding:3px 6px;font-size:12px;font-weight:600;outline:none;" />' +
+            '<span style="font-size:9px;color:#5b7a9a;font-weight:700;letter-spacing:.3px;padding-left:2px;">,&nbsp;⤏&nbsp;⏎</span>' +
           '</div>' +
           '<div id="p86-sheet-hint" style="position:absolute;left:12px;bottom:10px;color:#64748b;font-size:11px;pointer-events:none;"></div>' +
         '</div>' +
@@ -697,27 +777,93 @@
   }
 
   // ── Toolbar + layers UI ─────────────────────────────────────────
+  var TOOLS_KEY = 'p86SheetToolsCollapsed';
+  function toolsCollapsed() { try { return localStorage.getItem(TOOLS_KEY) === '1'; } catch (e) { return false; } }
+  // One-time stylesheet for the slide-out tool drawer (kept self-contained in
+  // the overlay so the editor doesn't depend on app CSS).
+  function injectToolStyle() {
+    if (document.getElementById('p86se-tools-style')) return;
+    var st = document.createElement('style');
+    st.id = 'p86se-tools-style';
+    st.textContent =
+      '#p86-sheet-tools{transition:width .18s ease,flex-basis .18s ease;}' +
+      '#p86-sheet-tools .p86se-thead{display:flex;align-items:center;justify-content:space-between;gap:6px;height:26px;margin-bottom:4px;}' +
+      '#p86-sheet-tools .p86se-ttitle{font-size:10px;font-weight:800;letter-spacing:1px;color:#7c8aa0;text-transform:uppercase;white-space:nowrap;overflow:hidden;}' +
+      '#p86-sheet-tools .p86se-ttoggle{flex:0 0 auto;width:26px;height:26px;display:inline-flex;align-items:center;justify-content:center;background:transparent;border:0;border-radius:6px;color:#9aa;cursor:pointer;font-size:15px;}' +
+      '#p86-sheet-tools .p86se-ttoggle:hover{background:rgba(255,255,255,0.07);color:#fff;}' +
+      '#p86-sheet-tools .p86se-tgrp{font-size:9.5px;font-weight:800;letter-spacing:.6px;color:#5f6b7e;text-transform:uppercase;margin:8px 2px 3px;white-space:nowrap;overflow:hidden;}' +
+      '#p86-sheet-tools .p86se-tbtn{display:flex;align-items:center;gap:9px;width:100%;height:34px;padding:0 8px;box-sizing:border-box;background:rgba(255,255,255,0.05);color:#ddd;border:1px solid #444;border-radius:6px;cursor:pointer;line-height:1;text-align:left;}' +
+      '#p86-sheet-tools .p86se-tbtn:hover{background:rgba(255,255,255,0.1);}' +
+      '#p86-sheet-tools .p86se-tbtn .g{flex:0 0 18px;width:18px;text-align:center;font-size:16px;}' +
+      '#p86-sheet-tools .p86se-tbtn .l{font-size:11.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
+      // collapsed (icon-rail) state
+      '#p86-sheet-tools.collapsed{align-items:center;}' +
+      '#p86-sheet-tools.collapsed .p86se-thead{justify-content:center;}' +
+      '#p86-sheet-tools.collapsed .p86se-ttitle{display:none;}' +
+      '#p86-sheet-tools.collapsed .p86se-tgrp{font-size:0;height:1px;width:24px;margin:6px auto;padding:0;background:#3a3a4a;color:transparent;}' +
+      '#p86-sheet-tools.collapsed .p86se-tbtn{justify-content:center;gap:0;width:40px;padding:0;}' +
+      '#p86-sheet-tools.collapsed .p86se-tbtn .l{display:none;}';
+    document.head.appendChild(st);
+  }
+  function applyToolsCollapsed(collapsed) {
+    var bar = S.overlay.querySelector('#p86-sheet-tools'); if (!bar) return;
+    bar.classList.toggle('collapsed', collapsed);
+    var w = collapsed ? 54 : 190;
+    bar.style.width = w + 'px'; bar.style.flexBasis = w + 'px'; bar.style.flex = '0 0 ' + w + 'px';
+    bar.style.alignItems = collapsed ? 'center' : 'stretch';
+    var tg = bar.querySelector('.p86se-ttoggle');
+    if (tg) { tg.textContent = collapsed ? '»' : '«'; tg.title = collapsed ? 'Expand tools' : 'Collapse tools'; }
+    // Canvas is flex:1 — recompute its pixel size after the width transition settles.
+    setTimeout(function () { if (S) { sizeCanvas(false); repaint(); } }, 200);
+  }
   function buildToolbar() {
+    injectToolStyle();
     var bar = S.overlay.querySelector('#p86-sheet-tools');
-    var html = TOOLS.map(function (t) {
-      return '<button data-sheet-tool="' + t.key + '" title="' + esc(t.label) + '" ' +
-        'style="width:42px;height:40px;background:rgba(255,255,255,0.05);color:#ddd;border:1px solid #444;border-radius:6px;font-size:17px;cursor:pointer;line-height:1;">' + t.glyph + '</button>';
-    }).join('');
-    html += '<div style="width:34px;height:1px;background:#3a3a4a;margin:4px 0;"></div>';
-    html += '<button data-sheet-edit="rotate" title="Rotate selection 90°" style="width:42px;height:34px;background:rgba(255,255,255,0.05);color:#ddd;border:1px solid #444;border-radius:6px;font-size:15px;cursor:pointer;">⟳</button>';
-    html += '<button data-sheet-edit="mirrorH" title="Mirror selection (horizontal)" style="width:42px;height:34px;background:rgba(255,255,255,0.05);color:#ddd;border:1px solid #444;border-radius:6px;font-size:15px;cursor:pointer;">⇆</button>';
-    html += '<button data-sheet-edit="mirrorV" title="Mirror selection (vertical)" style="width:42px;height:34px;background:rgba(255,255,255,0.05);color:#ddd;border:1px solid #444;border-radius:6px;font-size:15px;cursor:pointer;">⇅</button>';
-    html += '<button data-sheet-edit="dup" title="Duplicate selection (Ctrl+D)" style="width:42px;height:34px;background:rgba(255,255,255,0.05);color:#ddd;border:1px solid #444;border-radius:6px;font-size:14px;cursor:pointer;">⧉</button>';
-    html += '<button data-sheet-edit="offset" title="Offset selection by a distance (line / polyline / rect / circle)" style="width:42px;height:34px;background:rgba(255,255,255,0.05);color:#ddd;border:1px solid #444;border-radius:6px;font-size:14px;cursor:pointer;">⎘</button>';
-    html += '<button data-sheet-edit="array" title="Array selection (rows × columns)" style="width:42px;height:34px;background:rgba(255,255,255,0.05);color:#ddd;border:1px solid #444;border-radius:6px;font-size:14px;cursor:pointer;">▦</button>';
-    html += '<div style="width:34px;height:1px;background:#3a3a4a;margin:4px 0;"></div>';
-    html += '<button data-sheet-undo title="Undo (Ctrl+Z)" style="width:42px;height:34px;background:rgba(255,255,255,0.05);color:#ddd;border:1px solid #444;border-radius:6px;font-size:14px;cursor:pointer;">↶</button>';
-    html += '<button data-sheet-redo title="Redo (Ctrl+Y / Ctrl+Shift+Z)" style="width:42px;height:34px;background:rgba(255,255,255,0.05);color:#ddd;border:1px solid #444;border-radius:6px;font-size:14px;cursor:pointer;">↷</button>';
-    html += '<button data-sheet-fit title="Fit to screen" style="width:42px;height:34px;background:rgba(255,255,255,0.05);color:#ddd;border:1px solid #444;border-radius:6px;font-size:13px;cursor:pointer;">⤢</button>';
+    var collapsed = toolsCollapsed();
+    function btnTool(t) {
+      return '<button class="p86se-tbtn" data-sheet-tool="' + t.key + '" title="' + esc(t.label) + '">' +
+        '<span class="g">' + t.glyph + '</span><span class="l">' + esc(t.name) + '</span></button>';
+    }
+    function btnEdit(e) {
+      return '<button class="p86se-tbtn" data-sheet-act="' + e.act + '" data-sheet-akey="' + e.key + '" title="' + esc(e.label) + '">' +
+        '<span class="g">' + e.glyph + '</span><span class="l">' + esc(e.name) + '</span></button>';
+    }
+    var html = '<div class="p86se-thead"><span class="p86se-ttitle">Tools</span>' +
+      '<button class="p86se-ttoggle" data-sheet-tools-toggle title="Collapse tools">' + (collapsed ? '»' : '«') + '</button></div>';
+    TOOL_GROUP_ORDER.forEach(function (g) {
+      var tools = TOOLS.filter(function (t) { return t.group === g; });
+      var edits = EDIT_ITEMS.filter(function (e) { return e.group === g; });
+      if (!tools.length && !edits.length) return;
+      html += '<div class="p86se-tgrp">' + esc(g) + '</div>';
+      html += tools.map(btnTool).join('') + edits.map(btnEdit).join('');
+    });
     bar.innerHTML = html;
     bar.querySelectorAll('[data-sheet-tool]').forEach(function (b) {
       b.onclick = function () { setTool(b.getAttribute('data-sheet-tool')); };
     });
+    bar.querySelectorAll('[data-sheet-act]').forEach(function (b) {
+      b.onclick = function () {
+        var act = b.getAttribute('data-sheet-act'), k = b.getAttribute('data-sheet-akey');
+        if (act === 'undo') return undo();
+        if (act === 'redo') return redo();
+        if (act === 'fit') { sizeCanvas(true); repaint(); return; }
+        if (act === 'edit') {
+          if (!S.selectedId) return;
+          if (k === 'rotate') rotate90();
+          else if (k === 'mirrorH') mirror(true);
+          else if (k === 'mirrorV') mirror(false);
+          else if (k === 'dup') duplicateSelected();
+          else if (k === 'offset') openOffsetModal();
+          else if (k === 'array') openArrayModal();
+        }
+      };
+    });
+    var toggle = bar.querySelector('[data-sheet-tools-toggle]');
+    if (toggle) toggle.onclick = function () {
+      var next = !bar.classList.contains('collapsed');
+      try { localStorage.setItem(TOOLS_KEY, next ? '1' : '0'); } catch (e) {}
+      applyToolsCollapsed(next);
+    };
     S.overlay.querySelectorAll('[data-sb-toggle]').forEach(function (b) {
       b.onclick = function () {
         var k = b.getAttribute('data-sb-toggle');
@@ -728,35 +874,17 @@
         repaint();
       };
     });
-    bar.querySelectorAll('[data-sheet-edit]').forEach(function (b) {
-      b.onclick = function () {
-        var k = b.getAttribute('data-sheet-edit');
-        if (!S.selectedId) { return; }
-        if (k === 'rotate') rotate90();
-        else if (k === 'mirrorH') mirror(true);
-        else if (k === 'mirrorV') mirror(false);
-        else if (k === 'dup') duplicateSelected();
-        else if (k === 'offset') openOffsetModal();
-        else if (k === 'array') openArrayModal();
-      };
-    });
-    bar.querySelector('[data-sheet-redo]').onclick = redo;
-    bar.querySelector('[data-sheet-undo]').onclick = undo;
-    bar.querySelector('[data-sheet-fit]').onclick = function () { sizeCanvas(true); repaint(); };
+    applyToolsCollapsed(collapsed);
     refreshToolbar();
     updateHint();
-  }
-  function toggleBtn(key, glyph, title) {
-    return '<button data-sheet-toggle="' + key + '" title="' + esc(title) + '" ' +
-      'style="width:42px;height:34px;background:rgba(255,255,255,0.05);color:#ddd;border:1px solid #444;border-radius:6px;font-size:15px;cursor:pointer;">' + glyph + '</button>';
   }
   function refreshToolbar() {
     var bar = S.overlay.querySelector('#p86-sheet-tools');
     bar.querySelectorAll('[data-sheet-tool]').forEach(function (b) {
       var on = b.getAttribute('data-sheet-tool') === S.tool;
-      b.style.background = on ? 'rgba(251,191,36,0.12)' : 'rgba(255,255,255,0.05)';
-      b.style.color = on ? '#fbbf24' : '#ddd';
-      b.style.borderColor = on ? '#fbbf24' : '#444';
+      b.style.background = on ? 'rgba(251,191,36,0.12)' : '';
+      b.style.color = on ? '#fbbf24' : '';
+      b.style.borderColor = on ? '#fbbf24' : '';
     });
     refreshStatusBar();
   }
@@ -855,17 +983,53 @@
     var tb = S.doc.titleblock || {};
     var ov = document.createElement('div');
     ov.style.cssText = 'position:fixed;inset:0;z-index:5400;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;padding:20px;';
-    var fields = [['company', 'Company name (blank = use your org name)'], ['project', 'Project'], ['title', 'Sheet title'], ['client', 'Client'], ['scale', 'Scale note'], ['date', 'Date'], ['drawnBy', 'Drawn by'], ['sheetNo', 'Sheet #'], ['northDeg', 'North rotation (°)']];
+    // Two-column field layout (label + input). Wide fields span both columns.
+    var fields = [
+      ['company', 'Company name (blank = org name)', 1], ['project', 'Project', 1],
+      ['projectNo', 'Project #', 0], ['title', 'Sheet title', 0],
+      ['client', 'Client', 0], ['address', 'Project address', 0],
+      ['scale', 'Scale note', 0], ['date', 'Date', 0],
+      ['drawnBy', 'Drawn by', 0], ['checkedBy', 'Checked by', 0],
+      ['approvedBy', 'Approved by', 0], ['northDeg', 'North rotation (°)', 0],
+      ['sheetNo', 'Sheet #', 0], ['sheetOf', 'Of (total sheets)', 0]
+    ];
+    var inCss = 'width:100%;box-sizing:border-box;background:#1a1a2e;color:#fff;border:1px solid #444;border-radius:6px;padding:7px 10px;font-size:13px;outline:none;';
+    var hdrCss = 'font-size:10px;font-weight:800;letter-spacing:.7px;color:#7c8aa0;text-transform:uppercase;margin:16px 0 6px;';
     var box = document.createElement('div');
-    box.style.cssText = 'background:#0f0f1e;border:1px solid #353545;border-radius:12px;padding:20px 22px;max-width:440px;width:100%;max-height:88vh;overflow-y:auto;color:#e6e6e6;box-shadow:0 16px 48px rgba(0,0,0,0.6);';
-    box.innerHTML = '<div style="font-size:15px;font-weight:700;color:#fff;margin-bottom:12px;">Titleblock</div>' +
-      fields.map(function (f) {
-        return '<label style="display:block;font-size:11px;color:#9aa;margin:8px 0 3px;">' + esc(f[1]) + '</label>' +
-          '<input data-tb="' + f[0] + '" value="' + esc(tb[f[0]] != null ? tb[f[0]] : '') + '" style="width:100%;box-sizing:border-box;background:#1a1a2e;color:#fff;border:1px solid #444;border-radius:6px;padding:7px 10px;font-size:13px;outline:none;" />';
-      }).join('') +
-      '<label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#cbd5e1;margin-top:14px;cursor:pointer;">' +
+    box.style.cssText = 'background:#0f0f1e;border:1px solid #353545;border-radius:12px;padding:20px 22px;max-width:520px;width:100%;max-height:88vh;overflow-y:auto;color:#e6e6e6;box-shadow:0 16px 48px rgba(0,0,0,0.6);';
+    box.innerHTML = '<div style="font-size:15px;font-weight:700;color:#fff;margin-bottom:4px;">Titleblock</div>' +
+      '<div style="' + hdrCss + 'margin-top:6px;">Fields</div>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 12px;">' +
+        fields.map(function (f) {
+          return '<div' + (f[2] ? ' style="grid-column:1 / -1;"' : '') + '>' +
+            '<label style="display:block;font-size:11px;color:#9aa;margin:0 0 3px;">' + esc(f[1]) + '</label>' +
+            '<input data-tb="' + f[0] + '" value="' + esc(tb[f[0]] != null ? tb[f[0]] : '') + '" style="' + inCss + '" /></div>';
+        }).join('') +
+      '</div>' +
+      // Revisions
+      '<div style="' + hdrCss + '">Revisions</div>' +
+      '<div data-tb-revs></div>' +
+      '<button type="button" data-tb-revadd style="margin-top:6px;padding:5px 10px;background:rgba(255,255,255,0.06);color:#ddd;border:1px solid #444;border-radius:6px;cursor:pointer;font-size:11.5px;font-weight:600;">+ Add revision</button>' +
+      // General notes
+      '<div style="' + hdrCss + '">General notes</div>' +
+      '<label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#cbd5e1;margin-bottom:6px;cursor:pointer;">' +
+        '<input type="checkbox" data-tb-shownotes ' + (tb.showNotes ? 'checked' : '') + ' style="width:15px;height:15px;cursor:pointer;" /> Show a general-notes block on the sheet' +
+      '</label>' +
+      '<textarea data-tb-notes rows="3" placeholder="1. All dimensions to be field-verified.&#10;2. ..." style="' + inCss + 'resize:vertical;font-family:inherit;">' + esc(tb.generalNotes || '') + '</textarea>' +
+      // Logo
+      '<div style="' + hdrCss + '">Logo</div>' +
+      '<label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#cbd5e1;cursor:pointer;">' +
         '<input type="checkbox" data-tb-showlogo ' + (tb.showLogo !== false ? 'checked' : '') + ' style="width:15px;height:15px;cursor:pointer;" /> Show company logo in titleblock' +
       '</label>' +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 12px;margin-top:8px;">' +
+        '<div><label style="display:block;font-size:11px;color:#9aa;margin:0 0 3px;">Logo size (×)</label>' +
+          '<input data-tb-logoscale type="number" min="0.5" max="2" step="0.1" value="' + esc(tb.logoScale != null ? tb.logoScale : 1) + '" style="' + inCss + '" /></div>' +
+        '<div><label style="display:block;font-size:11px;color:#9aa;margin:0 0 3px;">Logo position</label>' +
+          '<select data-tb-logopos style="' + inCss + '">' +
+            '<option value="left"' + (tb.logoPos !== 'center' ? ' selected' : '') + '>Left of company name</option>' +
+            '<option value="center"' + (tb.logoPos === 'center' ? ' selected' : '') + '>Centered</option>' +
+          '</select></div>' +
+      '</div>' +
       '<div data-tb-logopick style="margin-top:10px;"></div>' +
       '<div style="font-size:10.5px;color:#64748b;margin-top:6px;line-height:1.5;">Logos &amp; company name come from your org <b style="color:#9aa;">Branding kit</b> (Admin → Organization → Branding).</div>' +
       '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px;">' +
@@ -874,6 +1038,28 @@
       '</div>';
     ov.appendChild(box); document.body.appendChild(ov);
     function close() { if (ov.parentNode) ov.parentNode.removeChild(ov); }
+
+    // ── Revision rows editor ──
+    var revs = (Array.isArray(tb.revisions) ? tb.revisions : []).map(function (r) { return { rev: r.rev || '', date: r.date || '', desc: r.desc || '' }; });
+    var revHost = box.querySelector('[data-tb-revs]');
+    function renderRevs() {
+      if (!revHost) return;
+      if (!revs.length) { revHost.innerHTML = '<div style="font-size:11px;color:#64748b;padding:2px 0;">No revisions.</div>'; return; }
+      revHost.innerHTML = revs.map(function (r, i) {
+        return '<div style="display:flex;gap:6px;align-items:center;margin-bottom:5px;">' +
+          '<input data-rev-rev="' + i + '" value="' + esc(r.rev) + '" placeholder="#" style="' + inCss + 'width:42px;flex:0 0 42px;text-align:center;" />' +
+          '<input data-rev-date="' + i + '" value="' + esc(r.date) + '" placeholder="Date" style="' + inCss + 'width:84px;flex:0 0 84px;" />' +
+          '<input data-rev-desc="' + i + '" value="' + esc(r.desc) + '" placeholder="Description" style="' + inCss + 'flex:1;" />' +
+          '<button type="button" data-rev-del="' + i + '" title="Remove" style="flex:0 0 auto;background:transparent;border:0;color:#f87171;cursor:pointer;font-size:14px;">✕</button>' +
+        '</div>';
+      }).join('');
+      revHost.querySelectorAll('[data-rev-rev]').forEach(function (el) { el.oninput = function () { revs[+el.getAttribute('data-rev-rev')].rev = el.value; }; });
+      revHost.querySelectorAll('[data-rev-date]').forEach(function (el) { el.oninput = function () { revs[+el.getAttribute('data-rev-date')].date = el.value; }; });
+      revHost.querySelectorAll('[data-rev-desc]').forEach(function (el) { el.oninput = function () { revs[+el.getAttribute('data-rev-desc')].desc = el.value; }; });
+      revHost.querySelectorAll('[data-rev-del]').forEach(function (el) { el.onclick = function () { revs.splice(+el.getAttribute('data-rev-del'), 1); renderRevs(); }; });
+    }
+    renderRevs();
+    box.querySelector('[data-tb-revadd]').onclick = function () { revs.push({ rev: String(revs.length + 1), date: '', desc: '' }); renderRevs(); };
 
     // Logo picker — choose WHICH org logo stamps this sheet ('' = org Primary).
     var pickedLogo = tb.logoUrl || '';
@@ -909,11 +1095,17 @@
     box.querySelector('[data-tb-cancel]').onclick = close;
     box.querySelector('[data-tb-save]').onclick = function () {
       pushUndo();
-      box.querySelectorAll('[data-tb]').forEach(function (inp) { S.doc.titleblock[inp.getAttribute('data-tb')] = inp.value; });
-      S.doc.titleblock.northDeg = parseFloat(S.doc.titleblock.northDeg) || 0;
-      var cb = box.querySelector('[data-tb-showlogo]'); if (cb) S.doc.titleblock.showLogo = cb.checked;
-      var prevLogo = S.doc.titleblock.logoUrl || '';
-      S.doc.titleblock.logoUrl = pickedLogo || '';
+      var t = S.doc.titleblock;
+      box.querySelectorAll('[data-tb]').forEach(function (inp) { t[inp.getAttribute('data-tb')] = inp.value; });
+      t.northDeg = parseFloat(t.northDeg) || 0;
+      var cb = box.querySelector('[data-tb-showlogo]'); if (cb) t.showLogo = cb.checked;
+      var sn = box.querySelector('[data-tb-shownotes]'); if (sn) t.showNotes = sn.checked;
+      var nt = box.querySelector('[data-tb-notes]'); if (nt) t.generalNotes = nt.value;
+      var ls = box.querySelector('[data-tb-logoscale]'); if (ls) t.logoScale = Math.max(0.5, Math.min(2, parseFloat(ls.value) || 1));
+      var lp = box.querySelector('[data-tb-logopos]'); if (lp) t.logoPos = lp.value;
+      t.revisions = revs.filter(function (r) { return (r.rev || r.date || r.desc); });
+      var prevLogo = t.logoUrl || '';
+      t.logoUrl = pickedLogo || '';
       close(); repaint();
       if ((pickedLogo || '') !== prevLogo) loadChosenLogo(); // swap the stamped logo
     };
@@ -1448,10 +1640,17 @@
     // shortcuts above never see these keystrokes.)
     var dyn = dynEl();
     if (dyn) {
+      // CAD-style field switching: a comma (like "10,45") OR Tab jumps from the
+      // LEN field to the ∠ field (and back); Enter commits, Esc cancels. The
+      // comma never lands as a literal character in either numeric field.
+      var lenInp = dyn.querySelector('[data-dyn-len]'), angInp = dyn.querySelector('[data-dyn-ang]');
+      function focusOther(from) { var t = (from === angInp) ? lenInp : angInp; if (t) { t.focus(); try { t.select(); } catch (e) {} } }
       dyn.querySelectorAll('input').forEach(function (inp) {
         inp.onkeydown = function (e) {
           if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); commitDyn(); }
           else if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); S.draft = null; hideDyn(); repaint(); S.overlay.focus(); }
+          else if (e.key === ',') { e.preventDefault(); e.stopPropagation(); if (e.target === lenInp) focusOther(lenInp); /* comma in ∠ is a no-op */ }
+          else if (e.key === 'Tab') { e.preventDefault(); e.stopPropagation(); focusOther(e.target); }
         };
       });
     }
@@ -1655,8 +1854,9 @@
   function commitDyn() {
     var d = dynEl(); if (!d || !S.draft || !S.draft._anchor) return;
     var dr = S.draft, a = dr._anchor;
-    var lenStr = (d.querySelector('[data-dyn-len]').value || '').trim();
-    var angStr = (d.querySelector('[data-dyn-ang]').value || '').trim();
+    // Strip any stray comma (e.g. a fast-typed "10,45" before the field swap fired).
+    var lenStr = (d.querySelector('[data-dyn-len]').value || '').replace(/,/g, '').trim();
+    var angStr = (d.querySelector('[data-dyn-ang]').value || '').replace(/,/g, '').trim();
     var vp = vpAt(a) || S.hoverVp || (S.doc.viewports && S.doc.viewports[0]);
     var ppi = (vp && vp.scale && vp.scale.pixelsPerInch) ? vp.scale.pixelsPerInch : 1;
     // Direction: typed angle wins; else current (ortho-aware) cursor heading.
