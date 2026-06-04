@@ -202,7 +202,7 @@ function renderNodes(){
         // Input port + label (left side)
         if(hasIns&&i<d.ins.length&&!(isWip&&(i===1||i===2))){
           var ip=d.ins[i], ic=wires.some(function(w){return w.toNode===n.id&&w.toPort===i;});
-          h+='<div class="ng-p ng-pi ng-p-'+ip.t+(ic?' ng-pc':'')+'" data-node="'+n.id+'" data-pi="'+i+'" data-dir="in" data-type="'+ip.t+'"></div>';
+          h+='<div class="ng-p ng-pi ng-p-'+ip.t+(ic?' ng-pc':'')+'" data-node="'+n.id+'" data-pi="'+i+'" data-dir="in" data-type="'+ip.t+'" title="'+ip.n+' → input ('+ip.t+')"></div>';
           h+='<span class="ng-pl" style="text-align:left">'+ip.n+'</span>';
         } else if(hasIns){
           h+='<span style="width:13px;flex-shrink:0"></span><span class="ng-pl"></span>';
@@ -215,7 +215,7 @@ function renderNodes(){
           if(!hasIns) h+='<span class="ng-pl" style="text-align:left;flex:1">'+op.n+'</span>';
           else h+='<span class="ng-pl" style="text-align:right;flex:0">'+op.n+'</span>';
           h+='<span class="ng-pv" style="margin-left:4px">'+E.fmtV(ov,op.t)+'</span>';
-          h+='<div class="ng-p ng-po ng-p-'+op.t+(oc?' ng-pc':'')+'" data-node="'+n.id+'" data-pi="'+i+'" data-dir="out" data-type="'+op.t+'"></div>';
+          h+='<div class="ng-p ng-po ng-p-'+op.t+(oc?' ng-pc':'')+'" data-node="'+n.id+'" data-pi="'+i+'" data-dir="out" data-type="'+op.t+'" title="'+op.n+' → output ('+op.t+') · drag to connect, or click ⊕ to add"></div>';
         }
         h+='</div>';
       }
@@ -1200,7 +1200,133 @@ function initEvents(){
       wireMouse={x:e.clientX-r.left,y:e.clientY-r.top};
       E.drawWires(wireCtx,wrap,wiringFrom,wireMouse);
     }
+    // NG3: when idle, show the floating "+" over a hovered output port or wire.
+    if(!isPan && !dragN && !wiringFrom) updateAddFab(e);
   });
+
+  // ── NG3: floating "+" add-node affordance (port-hover + wire-hover) ──
+  var addFabEl=null, addFabArm=null, addMenuEl=null, addFabHideTimer=null;
+  function ensureAddFab(){
+    if(addFabEl) return addFabEl;
+    addFabEl=document.createElement('div');
+    addFabEl.className='ng-add-fab'; addFabEl.textContent='+';
+    addFabEl.title='Add a node here';
+    addFabEl.addEventListener('mouseenter',function(){ clearTimeout(addFabHideTimer); });
+    addFabEl.addEventListener('mousedown',function(ev){ ev.stopPropagation(); });
+    addFabEl.addEventListener('click',function(ev){
+      ev.stopPropagation();
+      if(!addFabArm) return;
+      var r=addFabEl.getBoundingClientRect();
+      openAddMenu(r.left, r.bottom+4, onAddPick);
+    });
+    wrap.appendChild(addFabEl);
+    return addFabEl;
+  }
+  function showAddFabAt(sx, sy){ ensureAddFab(); clearTimeout(addFabHideTimer); addFabEl.style.display='flex'; addFabEl.style.left=sx+'px'; addFabEl.style.top=sy+'px'; }
+  function hideAddFab(){ clearTimeout(addFabHideTimer); addFabHideTimer=setTimeout(function(){ if(addFabEl) addFabEl.style.display='none'; addFabArm=null; },150); }
+  function bez(p1,c1,c2,p2,t){ var u=1-t; return { x:u*u*u*p1.x+3*u*u*t*c1.x+3*u*t*t*c2.x+t*t*t*p2.x, y:u*u*u*p1.y+3*u*u*t*c1.y+3*u*t*t*c2.y+t*t*t*p2.y }; }
+  function wireHitTest(gx,gy){
+    var best=null, bestD=14/z();
+    E.wires().forEach(function(w){
+      var p1=E.portPos(w.fromNode,w.fromPort,'out'), p2=E.portPos(w.toNode,w.toPort,'in');
+      var dx=Math.max(Math.abs(p2.x-p1.x)*0.4,50), c1={x:p1.x+dx,y:p1.y}, c2={x:p2.x-dx,y:p2.y};
+      for(var t=0;t<=1.0001;t+=0.08){ var pt=bez(p1,c1,c2,p2,t); var d=Math.hypot(pt.x-gx,pt.y-gy); if(d<bestD){ bestD=d; best={w:w, mid:bez(p1,c1,c2,p2,0.5)}; } }
+    });
+    return best;
+  }
+  function updateAddFab(e){
+    if(addMenuEl) return;                                   // menu open — leave fab
+    if(addFabEl && (e.target===addFabEl)) return;           // hovering the fab itself
+    var p=E.pan(), zz=z();
+    var outPort=e.target.closest && e.target.closest('[data-dir="out"]');
+    if(outPort){
+      var nid=outPort.getAttribute('data-node'), pi=parseInt(outPort.getAttribute('data-pi'));
+      var pp=E.portPos(nid,pi,'out');
+      showAddFabAt((pp.x+p.x)*zz+15, (pp.y+p.y)*zz-9);
+      addFabArm={kind:'port', nid:nid, pi:pi};
+      return;
+    }
+    var r=wrap.getBoundingClientRect();
+    var hit=wireHitTest((e.clientX-r.left)/zz - p.x, (e.clientY-r.top)/zz - p.y);
+    if(hit){ showAddFabAt((hit.mid.x+p.x)*zz-11, (hit.mid.y+p.y)*zz-11); addFabArm={kind:'wire', wire:hit.w}; return; }
+    hideAddFab();
+  }
+  function onAddPick(type){
+    var arm=addFabArm; hideAddFab();
+    if(!arm) return;
+    if(arm.kind==='port'){
+      var src=E.findNode(arm.nid); if(!src) return;
+      var fd=E.DEFS[src.type], fromType=(fd&&fd.outs[arm.pi])?fd.outs[arm.pi].t:E.PT.A;
+      spawnNodeAt(type, src.x+260, src.y, function(nn){
+        if(!nn) return;
+        E.wires().push({fromNode:arm.nid, fromPort:arm.pi, toNode:nn.id, toPort:E.firstCompatPort(E.DEFS[type], fromType, 'in')});
+        render();
+      });
+    } else if(arm.kind==='wire'){
+      var w=arm.wire, s=E.findNode(w.fromNode), dt=E.findNode(w.toNode); if(!s||!dt) return;
+      var sFromType=(E.DEFS[s.type].outs[w.fromPort]||{}).t||E.PT.A;
+      var dInType=(E.DEFS[dt.type].ins[w.toPort]||{}).t||E.PT.A;
+      var mp=E.portPos(w.fromNode,w.fromPort,'out'), mp2=E.portPos(w.toNode,w.toPort,'in');
+      spawnNodeAt(type, (mp.x+mp2.x)/2-90, (mp.y+mp2.y)/2-20, function(nn){
+        if(!nn) return;
+        var nd=E.DEFS[type], hasIn=nd.ins&&nd.ins.length, hasOut=nd.outs&&nd.outs.length, ws=E.wires();
+        if(hasIn&&hasOut){
+          var idx=ws.indexOf(w); if(idx>=0) ws.splice(idx,1);
+          ws.push({fromNode:w.fromNode,fromPort:w.fromPort,toNode:nn.id,toPort:E.firstCompatPort(nd,sFromType,'in')});
+          ws.push({fromNode:nn.id,fromPort:E.firstCompatPort(nd,dInType,'out'),toNode:w.toNode,toPort:w.toPort});
+        } else if(hasIn){
+          ws.push({fromNode:w.fromNode,fromPort:w.fromPort,toNode:nn.id,toPort:E.firstCompatPort(nd,sFromType,'in')});
+        }
+        render();
+      });
+    }
+  }
+  // Create a node of `type` at (x,y); data-backed types route through the same
+  // picker the sidebar uses. Calls cb(node|null).
+  function spawnNodeAt(type, x, y, cb){
+    var d=E.DEFS[type]; if(!d){ cb(null); return; }
+    if(PICKABLE_TYPES[type] && E.job()){
+      showDataPicker(type, function(entry, focused){
+        if(focused){ cb(null); return; }
+        if(entry){ var nn=E.addNode(type,x,y,entryLabel(type,entry),entry); if(nn) autoWireFromData(nn,entry); cb(nn); }
+        else openEntityCreateModal(type, function(ne){ if(ne){ var n2=E.addNode(type,x,y,entryLabel(type,ne),ne); if(n2) autoWireFromData(n2,ne); cb(n2); } else cb(null); });
+      });
+    } else {
+      var label=d.label; if(d.nameEdit){ var pr=prompt('Name:',label); label=pr||label; }
+      cb(E.addNode(type,x,y,label));
+    }
+  }
+  // Searchable node-type menu anchored at a viewport point.
+  function openAddMenu(clientX, clientY, onPick){
+    closeAddMenu();
+    addMenuEl=document.createElement('div'); addMenuEl.className='ng-add-menu';
+    addMenuEl.innerHTML='<input class="ng-add-search" placeholder="Add node…" /><div class="ng-add-list"></div>';
+    document.body.appendChild(addMenuEl);
+    addMenuEl.style.left=Math.max(8,Math.min(clientX, window.innerWidth-248))+'px';
+    addMenuEl.style.top=Math.max(8,Math.min(clientY, window.innerHeight-340))+'px';
+    var listEl=addMenuEl.querySelector('.ng-add-list'), inp=addMenuEl.querySelector('.ng-add-search');
+    function build(filter){
+      var f=(filter||'').toLowerCase(), out='';
+      E.CATS.forEach(function(c){
+        var items=c.items.filter(function(t){ var d=E.DEFS[t]; return d && ((d.label||t).toLowerCase().indexOf(f)>=0 || c.name.toLowerCase().indexOf(f)>=0); });
+        if(!items.length) return;
+        out+='<div class="ng-add-cat">'+c.name+'</div>';
+        items.forEach(function(t){ var d=E.DEFS[t]; out+='<div class="ng-add-item" data-type="'+t+'"><span class="ng-add-ic">'+d.icon+'</span>'+(d.label||t)+'</div>'; });
+      });
+      listEl.innerHTML=out||'<div class="ng-add-empty">No matches</div>';
+    }
+    build('');
+    inp.addEventListener('input',function(){ build(inp.value); });
+    inp.addEventListener('keydown',function(ev){
+      if(ev.key==='Escape'){ closeAddMenu(); }
+      else if(ev.key==='Enter'){ var first=listEl.querySelector('.ng-add-item'); if(first){ var t=first.getAttribute('data-type'); closeAddMenu(); onPick(t); } }
+    });
+    listEl.addEventListener('click',function(ev){ var it=ev.target.closest('.ng-add-item'); if(!it) return; var t=it.getAttribute('data-type'); closeAddMenu(); onPick(t); });
+    setTimeout(function(){ try{ inp.focus(); }catch(_){} },0);
+    setTimeout(function(){ document.addEventListener('mousedown', outsideAddMenu); },0);
+  }
+  function outsideAddMenu(ev){ if(addMenuEl && !addMenuEl.contains(ev.target)) closeAddMenu(); }
+  function closeAddMenu(){ if(addMenuEl){ addMenuEl.remove(); addMenuEl=null; document.removeEventListener('mousedown', outsideAddMenu); } }
 
   wrap.addEventListener('mouseup',function(e){
     isPan=false; wrap.classList.remove('ng-panning'); dragN=null;
@@ -1222,7 +1348,7 @@ function initEvents(){
           }
         }
       }
-      wiringFrom=null;wireMouse=null;render();
+      wiringFrom=null;wireMouse=null;clearCompatPorts();render();
     }
   });
 
@@ -1284,9 +1410,29 @@ function initEvents(){
     zoomAt(e.clientX, e.clientY, e.deltaY > 0 ? ZOOM_OUT_FACTOR : ZOOM_IN_FACTOR);
   },{passive:false});
 
+  // Smart-ports: while dragging a wire, light up compatible input ports and
+  // dim incompatible ones (reuses the engine's canConn type rules).
+  function markCompatPorts(fromType){
+    var tabEl=document.getElementById('nodeGraphTab'); if(tabEl) tabEl.classList.add('ng-wiring');
+    canvasEl.querySelectorAll('.ng-p[data-dir="in"]').forEach(function(p){
+      if(E.canConn(fromType, p.getAttribute('data-type'))) p.classList.add('ng-p-ok');
+      else p.classList.remove('ng-p-ok');
+    });
+  }
+  function clearCompatPorts(){
+    var tabEl=document.getElementById('nodeGraphTab'); if(tabEl) tabEl.classList.remove('ng-wiring');
+    canvasEl.querySelectorAll('.ng-p.ng-p-ok').forEach(function(p){ p.classList.remove('ng-p-ok'); });
+  }
   canvasEl.addEventListener('mousedown',function(e){
     var port=e.target.closest('[data-dir="out"]');
-    if(port){e.stopPropagation();wiringFrom={nid:port.getAttribute('data-node'),pi:parseInt(port.getAttribute('data-pi'))};return;}
+    if(port){
+      e.stopPropagation();
+      var _pi=parseInt(port.getAttribute('data-pi'));
+      var _fn=E.findNode(port.getAttribute('data-node')), _fd=E.DEFS[_fn?_fn.type:''];
+      wiringFrom={nid:port.getAttribute('data-node'),pi:_pi};
+      markCompatPorts((_fd&&_fd.outs[_pi])?_fd.outs[_pi].t:E.PT.A);
+      return;
+    }
     var eb=e.target.closest('.ng-editbtn');
     if(eb){
       e.stopPropagation();
@@ -2727,6 +2873,15 @@ function init(){
   var aab=tab.querySelector('.ng-arrange-btn');
   if(aab) aab.addEventListener('click',function(){ autoArrange(selN); render(); });
 
+  // Clean Mode — n8n-style flat look (toggle, persisted in engine).
+  var cleanBtn=tab.querySelector('.ng-clean-btn');
+  if(cleanBtn) cleanBtn.addEventListener('click',function(){
+    var on = E.setCleanMode(!E.cleanMode());
+    tab.classList.toggle('ng-clean', on);
+    cleanBtn.classList.toggle('ng-on', on);
+    render();   // re-stroke wires flat/gradient
+  });
+
   // Save Layout — checkpoint the current node graph to a separate
   // localStorage slot (independent of auto-save) so the user can
   // recover from accidental edits or auto-save wipes after a
@@ -3255,6 +3410,12 @@ window.openNodeGraph=function(jid){
   var header=document.querySelector('header');
   if(header) tab.style.top=header.offsetHeight+'px';
   tab.classList.add('active');
+  // Restore the persisted Clean Mode look + sync the toggle button.
+  try {
+    var _clean = E && E.cleanMode && E.cleanMode();
+    tab.classList.toggle('ng-clean', !!_clean);
+    var _cb = document.getElementById('ngCleanBtn'); if(_cb) _cb.classList.toggle('ng-on', !!_clean);
+  } catch(_){}
   if(!wrap) init();
   resize();
   // Initial render off the synchronous localStorage cache for instant

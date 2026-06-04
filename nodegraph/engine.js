@@ -63,6 +63,22 @@ var CATS = [
 var nodes = [], wires = [], nid = 1;
 var panX = 0, panY = 0, zoom = 1;
 var jobId = null;
+// n8n-style "Clean Mode" — flat calm nodes + wires. Persisted per-user.
+var cleanMode = (function(){ try { return localStorage.getItem('ngCleanMode') === '1'; } catch(_) { return false; } })();
+function setCleanMode(v){ cleanMode = !!v; try { localStorage.setItem('ngCleanMode', cleanMode ? '1' : '0'); } catch(_){} return cleanMode; }
+function getCleanMode(){ return cleanMode; }
+// First ins/outs index on a def whose port type can connect with `type` in
+// the given direction ('in'|'out'). Used to auto-wire added/spliced nodes.
+function firstCompatPort(def, type, dir){
+  if(!def) return 0;
+  var list = dir === 'out' ? def.outs : def.ins;
+  if(!list || !list.length) return 0;
+  for(var i=0;i<list.length;i++){
+    var a = dir === 'out' ? list[i].t : type, b = dir === 'out' ? type : list[i].t;
+    if(canConn(a,b)) return i;
+  }
+  return 0;
+}
 var SNAP = 15;
 
 function genId(){ return 'n'+(nid++); }
@@ -1170,18 +1186,25 @@ function drawWires(ctx, wrap, wiringFrom, wireMouse){
       var dx = Math.max(Math.abs(p2.x-p1.x)*0.4, 50);
       ctx.bezierCurveTo(p1.x+dx, p1.y, p2.x-dx, p2.y, p2.x, p2.y);
     }
-    // Gradient: breathing fade — bright near nodes, dips in middle
-    var grad = ctx.createLinearGradient(p1.x, p1.y, p2.x, p2.y);
-    grad.addColorStop(0,    hexToRgba(col, 0.15));
-    grad.addColorStop(0.15, hexToRgba(col, 0.85));
-    grad.addColorStop(0.35, hexToRgba(col, 0.45));
-    grad.addColorStop(0.50, hexToRgba(col, 0.30));
-    grad.addColorStop(0.65, hexToRgba(col, 0.45));
-    grad.addColorStop(0.85, hexToRgba(col, 0.85));
-    grad.addColorStop(1,    hexToRgba(col, 0.15));
-    ctx.strokeStyle = grad; ctx.lineWidth = 3;
-    ctx.shadowColor = col; ctx.shadowBlur = 4;
-    ctx.stroke(); ctx.shadowBlur = 0;
+    if(cleanMode){
+      // n8n-style: flat single-color wire, no glow.
+      ctx.strokeStyle = hexToRgba(col, 0.7); ctx.lineWidth = 2;
+      ctx.shadowBlur = 0;
+      ctx.stroke();
+    } else {
+      // Gradient: breathing fade — bright near nodes, dips in middle
+      var grad = ctx.createLinearGradient(p1.x, p1.y, p2.x, p2.y);
+      grad.addColorStop(0,    hexToRgba(col, 0.15));
+      grad.addColorStop(0.15, hexToRgba(col, 0.85));
+      grad.addColorStop(0.35, hexToRgba(col, 0.45));
+      grad.addColorStop(0.50, hexToRgba(col, 0.30));
+      grad.addColorStop(0.65, hexToRgba(col, 0.45));
+      grad.addColorStop(0.85, hexToRgba(col, 0.85));
+      grad.addColorStop(1,    hexToRgba(col, 0.15));
+      ctx.strokeStyle = grad; ctx.lineWidth = 3;
+      ctx.shadowColor = col; ctx.shadowBlur = 4;
+      ctx.stroke(); ctx.shadowBlur = 0;
+    }
   });
 
   // Preview wire
@@ -1306,6 +1329,7 @@ return {
   zm:function(z){ if(z!=null)zoom=z; return zoom; },
   job:function(j){ if(j!=null)jobId=j; return jobId; },
   canConn:canConn, addNode:addNode, findNode:findNode,
+  cleanMode:getCleanMode, setCleanMode:setCleanMode, firstCompatPort:firstCompatPort,
   getOutput:getOutput, getActual:getActual, getAccrued:getAccrued, resetComp:resetComp,
   getPhaseAllocWires:getPhaseAllocWires, rebalancePhaseAllocations:rebalancePhaseAllocations,
   getCOAllocWires:getCOAllocWires, rebalanceCOAllocations:rebalanceCOAllocations,
