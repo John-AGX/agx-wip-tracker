@@ -70,6 +70,13 @@
     { key: 'redo',    act: 'redo', glyph: '↷', name: 'Redo',       group: 'View',   label: 'Redo (Ctrl+Y / Ctrl+Shift+Z)' }
   ];
   var TOOL_GROUP_ORDER = ['Draw', 'Modify', 'Annotate', 'View'];
+  // Single-key tool aliases (no modifier). Ctrl/Cmd combos handled separately.
+  var SHORTCUTS = {
+    s: 'select', l: 'line', p: 'polyline', r: 'rect', c: 'circle', a: 'arc',
+    x: 'trim', e: 'extend', f: 'fillet',
+    d: 'dim', g: 'angle', k: 'leader', t: 'text', h: 'hatch', y: 'symbol',
+    v: 'pan'
+  };
 
   var HATCH_PATTERNS = [
     { key: 'earth', label: 'Earth' }, { key: 'concrete', label: 'Concrete' },
@@ -116,12 +123,19 @@
     sheetSize: 'arch-d',
     gridFt: 1,
     ortho: false, gridSnap: true, osnap: true,
+    polarInc: 90,                  // polar-tracking increment in degrees (15/30/45/90)
+    // Per-object-snap toggles (gated by the master osnap). nearest defaults off
+    // because it overrides the precise snaps when on.
+    snaps: { end: true, mid: true, center: true, intersect: true, perp: true, near: false, quad: true, node: true },
     dimColor: '#b45309'
   };
   function loadSettings() {
     var s = {};
     try { var raw = localStorage.getItem(SETTINGS_KEY); if (raw) s = JSON.parse(raw) || {}; } catch (e) {}
     var out = {}; for (var k in DEFAULT_SETTINGS) out[k] = (s[k] != null) ? s[k] : DEFAULT_SETTINGS[k];
+    // Deep-merge the snaps object so newly-added snap kinds get their defaults.
+    var sn = {}; for (var sk in DEFAULT_SETTINGS.snaps) sn[sk] = (out.snaps && out.snaps[sk] != null) ? out.snaps[sk] : DEFAULT_SETTINGS.snaps[sk];
+    out.snaps = sn;
     return out;
   }
   function saveSettings() { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(SETTINGS)); } catch (e) {} }
@@ -628,6 +642,7 @@
       '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;background:rgba(15,15,30,0.95);border:1px solid #2a2a3a;border-radius:10px;padding:8px 14px;">' +
         '<strong style="color:#fff;font-size:13px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">📐 ' + esc(plan.name || 'Shop drawing') + '</strong>' +
         '<button id="p86-sheet-settings" title="Editor settings &amp; defaults (units, scale, sheet size, grid, snaps)" style="background:rgba(255,255,255,0.06);color:#cbd5e1;border:1px solid #444;border-radius:6px;padding:6px 11px;font-size:13px;cursor:pointer;">⚙</button>' +
+        '<button id="p86-sheet-shortcuts" title="Keyboard shortcuts (?)" style="background:rgba(255,255,255,0.06);color:#cbd5e1;border:1px solid #444;border-radius:6px;padding:6px 11px;font-size:13px;cursor:pointer;">⌨</button>' +
         '<button id="p86-sheet-png" title="Download the sheet as a PNG" style="background:rgba(255,255,255,0.06);color:#cbd5e1;border:1px solid #444;border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer;">⬇ PNG</button>' +
         '<button id="p86-sheet-pdf" title="Print / Save as PDF at true sheet size" style="background:rgba(255,255,255,0.06);color:#cbd5e1;border:1px solid #444;border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer;">⎙ PDF</button>' +
         '<button id="p86-sheet-dxf" title="Export to DXF — opens to scale in AutoCAD / any CAD app" style="background:rgba(255,255,255,0.06);color:#cbd5e1;border:1px solid #444;border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer;">⛁ DXF</button>' +
@@ -680,6 +695,8 @@
       ortho: !!SETTINGS.ortho,
       gridSnap: SETTINGS.gridSnap !== false,
       objSnap: SETTINGS.osnap !== false,
+      snaps: SETTINGS.snaps,
+      polarInc: SETTINGS.polarInc || 90,
       panning: null,        // {sx,sy,tx,ty}
       spaceDown: false,
       selectedId: null,
@@ -897,6 +914,8 @@
       b.style.background = on ? 'rgba(79,140,255,0.22)' : 'rgba(255,255,255,0.05)';
       b.style.color = on ? '#93c5fd' : '#9aa';
       b.style.borderColor = on ? '#4f8cff' : '#444';
+      // Reflect the polar increment on the ortho chip (ORTHO at 90°, else POLAR n°).
+      if (k === 'ortho') b.textContent = (S.polarInc && S.polarInc !== 90) ? ('POLAR ' + S.polarInc + '°') : 'ORTHO';
     });
     var v = S.overlay.querySelector('#p86-sb-view');
     if (v) { var avp = S.hoverVp || (S.doc.viewports && S.doc.viewports[0]); v.textContent = avp ? (avp.label + '  ·  ' + (avp.scale && avp.scale.label ? avp.scale.label : '')) : ''; }
@@ -1112,6 +1131,40 @@
     ov.addEventListener('click', function (e) { if (e.target === ov) close(); });
   }
 
+  // ── Keyboard shortcuts cheat-sheet ──────────────────────────────
+  function openShortcuts() {
+    var ov = document.createElement('div');
+    ov.style.cssText = 'position:fixed;inset:0;z-index:5400;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;padding:20px;';
+    var rows = [
+      ['Tools', ''],
+      ['S', 'Select'], ['L', 'Line'], ['P', 'Polyline'], ['R', 'Rectangle'], ['C', 'Circle'], ['A', 'Arc'],
+      ['X', 'Trim'], ['E', 'Extend'], ['F', 'Fillet'],
+      ['D', 'Dimension'], ['G', 'Angle dim'], ['K', 'Leader'], ['T', 'Text'], ['H', 'Hatch'], ['Y', 'Symbol'], ['V', 'Pan'],
+      ['Edit & view', ''],
+      ['Ctrl+Z', 'Undo'], ['Ctrl+Y / Ctrl+Shift+Z', 'Redo'], ['Ctrl+D', 'Duplicate selection'],
+      ['Del / Backspace', 'Delete selection'], ['Enter', 'Finish polyline / hatch'], ['Esc', 'Cancel current action'],
+      ['Shift (hold)', 'Polar / ortho lock'], ['Space (hold) / middle-drag', 'Pan'], ['Mouse wheel', 'Zoom'],
+      ['Drawing', ''],
+      ['type a number', 'Exact length while drawing'], [', (comma) or Tab', 'Jump to the angle field'], ['?', 'This cheat-sheet']
+    ];
+    var box = document.createElement('div');
+    box.style.cssText = 'background:#0f0f1e;border:1px solid #353545;border-radius:12px;padding:20px 22px;max-width:440px;width:100%;max-height:88vh;overflow-y:auto;color:#e6e6e6;box-shadow:0 16px 48px rgba(0,0,0,0.6);';
+    box.innerHTML = '<div style="font-size:15px;font-weight:700;color:#fff;margin-bottom:10px;">⌨ Keyboard shortcuts</div>' +
+      rows.map(function (r) {
+        if (!r[1]) return '<div style="font-size:10px;font-weight:800;letter-spacing:.7px;color:#7c8aa0;text-transform:uppercase;margin:13px 0 4px;">' + esc(r[0]) + '</div>';
+        return '<div style="display:flex;justify-content:space-between;gap:12px;padding:3px 0;font-size:12.5px;">' +
+          '<kbd style="background:#1a1a2e;border:1px solid #444;border-radius:4px;padding:1px 7px;color:#cbd5e1;font-family:ui-monospace,monospace;font-size:11.5px;white-space:nowrap;">' + esc(r[0]) + '</kbd>' +
+          '<span style="color:#cbd5e1;text-align:right;">' + esc(r[1]) + '</span></div>';
+      }).join('') +
+      '<div style="display:flex;justify-content:flex-end;margin-top:16px;">' +
+        '<button data-sc-close style="padding:8px 16px;background:#4f8cff;color:#fff;border:1px solid #4f8cff;border-radius:6px;cursor:pointer;font-weight:700;">Got it</button>' +
+      '</div>';
+    ov.appendChild(box); document.body.appendChild(ov);
+    function close() { if (ov.parentNode) ov.parentNode.removeChild(ov); }
+    box.querySelector('[data-sc-close]').onclick = close;
+    ov.addEventListener('click', function (e) { if (e.target === ov) close(); });
+  }
+
   // ── Settings / defaults (E5) ────────────────────────────────────
   function openSettingsModal() {
     var ov = document.createElement('div');
@@ -1124,6 +1177,10 @@
     function cb(key, label, on) {
       return '<label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#cbd5e1;margin-top:7px;cursor:pointer;">' +
         '<input type="checkbox" data-st-cb="' + key + '" ' + (on ? 'checked' : '') + ' style="width:15px;height:15px;cursor:pointer;" /> ' + esc(label) + '</label>';
+    }
+    function snapCb(key, label, on) {
+      return '<label style="display:flex;align-items:center;gap:6px;font-size:11.5px;color:#cbd5e1;margin-top:5px;cursor:pointer;">' +
+        '<input type="checkbox" data-st-snap="' + key + '" ' + (on ? 'checked' : '') + ' style="width:14px;height:14px;cursor:pointer;" /> ' + esc(label) + '</label>';
     }
     box.innerHTML =
       '<div style="font-size:15px;font-weight:700;color:#fff;margin-bottom:4px;">⚙ Editor settings</div>' +
@@ -1138,10 +1195,16 @@
       '<input data-st="gridFt" value="' + esc(SETTINGS.gridFt) + '" inputmode="decimal" style="' + selCss + '" />' +
       '<label style="' + labCss + '">Default dimension color</label>' +
       '<input type="color" data-st="dimColor" value="' + esc(SETTINGS.dimColor || '#b45309') + '" style="width:46px;height:32px;border:0;background:transparent;cursor:pointer;" />' +
-      '<div style="font-weight:700;color:#fff;margin:14px 0 2px;">Default snaps</div>' +
-      cb('ortho', 'Ortho lock (0 / 45 / 90°)', !!SETTINGS.ortho) +
+      '<div style="font-weight:700;color:#fff;margin:14px 0 2px;">Snaps &amp; tracking</div>' +
+      cb('ortho', 'Polar / ortho tracking (hold Shift too)', !!SETTINGS.ortho) +
+      '<label style="' + labCss + '">Polar increment</label>' +
+      '<select data-st="polarInc" style="' + selCss + '">' + [15, 30, 45, 90].map(function (d) { return opt(String(d), d + '°' + (d === 90 ? '  (ortho)' : ''), (SETTINGS.polarInc || 90) == d); }).join('') + '</select>' +
       cb('gridSnap', 'Snap to grid', SETTINGS.gridSnap !== false) +
-      cb('osnap', 'Object snap (end / mid / center / intersect)', SETTINGS.osnap !== false) +
+      cb('osnap', 'Object snap (master)', SETTINGS.osnap !== false) +
+      '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 14px;margin-top:2px;padding-left:4px;">' +
+        [['end', 'Endpoint'], ['mid', 'Midpoint'], ['center', 'Center'], ['intersect', 'Intersection'], ['perp', 'Perpendicular'], ['near', 'Nearest'], ['quad', 'Quadrant'], ['node', 'Node']]
+          .map(function (p) { return snapCb(p[0], p[1], SETTINGS.snaps && SETTINGS.snaps[p[0]] !== false); }).join('') +
+      '</div>' +
       '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px;">' +
         '<button data-st-cancel style="padding:8px 16px;background:rgba(255,255,255,0.06);color:#ddd;border:1px solid #444;border-radius:6px;cursor:pointer;font-weight:600;">Cancel</button>' +
         '<button data-st-save style="padding:8px 16px;background:#4f8cff;color:#fff;border:1px solid #4f8cff;border-radius:6px;cursor:pointer;font-weight:700;">Save defaults</button>' +
@@ -1152,12 +1215,17 @@
     box.querySelector('[data-st-save]').onclick = function () {
       box.querySelectorAll('[data-st]').forEach(function (el) {
         var k = el.getAttribute('data-st');
-        SETTINGS[k] = (k === 'gridFt') ? (Math.max(0.25, Math.min(100, parseFloat(el.value) || 1))) : el.value;
+        if (k === 'gridFt') SETTINGS[k] = Math.max(0.25, Math.min(100, parseFloat(el.value) || 1));
+        else if (k === 'polarInc') SETTINGS[k] = parseInt(el.value, 10) || 90;
+        else SETTINGS[k] = el.value;
       });
       box.querySelectorAll('[data-st-cb]').forEach(function (el) { SETTINGS[el.getAttribute('data-st-cb')] = el.checked; });
+      var snaps = {}; box.querySelectorAll('[data-st-snap]').forEach(function (el) { snaps[el.getAttribute('data-st-snap')] = el.checked; });
+      SETTINGS.snaps = snaps;
       saveSettings();
       // Apply the live-affecting settings to the current session immediately.
       S.ortho = !!SETTINGS.ortho; S.gridSnap = SETTINGS.gridSnap !== false; S.objSnap = SETTINGS.osnap !== false;
+      S.snaps = SETTINGS.snaps; S.polarInc = SETTINGS.polarInc || 90;
       refreshStatusBar(); buildLayers(); repaint();
       close();
     };
@@ -1375,6 +1443,13 @@
           out.push({ x: e.startX, y: e.endY, kind: 'end' });
           out.push({ x: e.endX, y: e.startY, kind: 'end' });
         }
+        if (e.tool === 'ellipse') {
+          // Quadrant points (E/N/W/S) of the circle/ellipse.
+          var qcx = (e.startX + e.endX) / 2, qcy = (e.startY + e.endY) / 2;
+          var qrx = Math.abs(e.endX - e.startX) / 2, qry = Math.abs(e.endY - e.startY) / 2;
+          out.push({ x: qcx + qrx, y: qcy, kind: 'quad' }); out.push({ x: qcx - qrx, y: qcy, kind: 'quad' });
+          out.push({ x: qcx, y: qcy + qry, kind: 'quad' }); out.push({ x: qcx, y: qcy - qry, kind: 'quad' });
+        }
       } else if (e.points && e.points.length) {
         e.points.forEach(function (p, i) {
           out.push({ x: p.x, y: p.y, kind: 'end' });
@@ -1384,7 +1459,8 @@
           }
         });
       } else if (e.x != null) {
-        out.push({ x: e.x, y: e.y, kind: 'end' });
+        // Symbol / text insertion points = node snaps.
+        out.push({ x: e.x, y: e.y, kind: 'node' });
       }
     });
     // Intersection snaps (line × line / polyline / rect edges). O(n²) over
@@ -1434,15 +1510,45 @@
     if (t < -0.001 || t > 1.001 || u < -0.001 || u > 1.001) return null;
     return { x: x1 + t * (x2 - x1), y: y1 + t * (y2 - y1) };
   }
+  // Projection parameter of point p onto the infinite line a→b (0=a, 1=b).
+  function projParam(p, a, b) { var dx = b.x - a.x, dy = b.y - a.y, L2 = dx * dx + dy * dy; if (L2 < 1e-9) return null; return ((p.x - a.x) * dx + (p.y - a.y) * dy) / L2; }
   // Resolve the snapped sheet-point for a raw cursor sheet-point.
   function resolveSnap(raw, vp) {
     var radiusSheet = SNAP_SCREEN / S.view.scale;
     var best = null, bestD = radiusSheet;
+    var sn = S.snaps || {};
     if (S.objSnap && vp) {
       snapCandidates(vp).forEach(function (c) {
+        if (sn[c.kind] === false) return;                    // per-kind toggle
         var d = Math.hypot(c.x - raw.x, c.y - raw.y);
         if (d < bestD) { bestD = d; best = c; }
       });
+      // Anchor-aware perpendicular + nearest (need the segment list).
+      if (sn.perp || sn.near) {
+        var anchor = S.draft && (S.draft._anchor ||
+          (S.draft.startX != null ? { x: S.draft.startX, y: S.draft.startY } : null) ||
+          (S.draft.points && S.draft.points.length ? S.draft.points[S.draft.points.length - 1] : null));
+        var segs = segmentsInVp(vp);
+        segs.forEach(function (g) {
+          if (sn.perp && anchor) {
+            var t = projParam(anchor, g.a, g.b);
+            if (t != null) {
+              var fx = g.a.x + t * (g.b.x - g.a.x), fy = g.a.y + t * (g.b.y - g.a.y);
+              var dp = Math.hypot(fx - raw.x, fy - raw.y);
+              if (dp < bestD) { bestD = dp; best = { x: fx, y: fy, kind: 'perp' }; }
+            }
+          }
+          if (sn.near) {
+            var tt = projParam(raw, g.a, g.b);
+            if (tt != null) {
+              tt = Math.max(0, Math.min(1, tt));
+              var nx = g.a.x + tt * (g.b.x - g.a.x), ny = g.a.y + tt * (g.b.y - g.a.y);
+              var dn = Math.hypot(nx - raw.x, ny - raw.y);
+              if (dn < bestD) { bestD = dn; best = { x: nx, y: ny, kind: 'near' }; }
+            }
+          }
+        });
+      }
     }
     if (best) return best;
     if (S.gridSnap && vp && vp.scale && vp.scale.pixelsPerInch) {
@@ -1453,12 +1559,13 @@
     }
     return { x: raw.x, y: raw.y, kind: null };
   }
-  // Constrain a point to ortho/45° relative to an anchor.
+  // Constrain a point to the polar-tracking increment relative to an anchor.
   function applyOrtho(anchor, pt) {
     if (!(S.ortho || S.shiftDown)) return pt;
     var dx = pt.x - anchor.x, dy = pt.y - anchor.y;
     var ang = Math.atan2(dy, dx);
-    var step = Math.PI / 4;                      // 45°
+    var inc = (S.polarInc || 90);
+    var step = inc * Math.PI / 180;
     var snapped = Math.round(ang / step) * step;
     var len = Math.hypot(dx, dy);
     return { x: anchor.x + Math.cos(snapped) * len, y: anchor.y + Math.sin(snapped) * len, kind: pt.kind };
@@ -1624,12 +1731,13 @@
       else if ((e.key === 'y' || e.key === 'Y') && (e.ctrlKey || e.metaKey)) { e.preventDefault(); redo(); }
       else if ((e.key === 'd' || e.key === 'D') && (e.ctrlKey || e.metaKey)) { e.preventDefault(); duplicateSelected(); }
       else if ((e.key === 'Delete' || e.key === 'Backspace') && S.selectedId) { deleteSelected(); }
-      else if (e.key === 'l' || e.key === 'L') setTool('line');
-      else if (e.key === 'r' || e.key === 'R') setTool('rect');
-      else if (e.key === 'p' || e.key === 'P') setTool('polyline');
-      else if (e.key === 'c' || e.key === 'C') setTool('circle');
-      else if (e.key === 'a' || e.key === 'A') setTool('arc');
-      else if (e.key === 'd' || e.key === 'D') setTool('dim');
+      else if (e.key === '?' || (e.key === '/' && e.shiftKey)) { e.preventDefault(); openShortcuts(); }
+      else if (!e.ctrlKey && !e.metaKey && !e.altKey) {
+        // Single-key tool aliases (AutoCAD-style). Guarded above so Ctrl/Cmd
+        // combos (undo/redo/dup) never reach here.
+        var k = (e.key || '').toLowerCase();
+        if (SHORTCUTS[k]) { e.preventDefault(); setTool(SHORTCUTS[k]); }
+      }
     };
     S.overlay.onkeyup = function (e) {
       if (e.key === 'Shift') S.shiftDown = false;
@@ -2537,12 +2645,17 @@
     if (S.snap && S.snap.kind) {
       var sp = toScreen(S.snap.x, S.snap.y);
       ctx.save();
-      ctx.strokeStyle = S.snap.kind === 'grid' ? '#64748b' : (S.snap.kind === 'intersect' ? '#f472b6' : '#fbbf24');
+      var sk = S.snap.kind;
+      ctx.strokeStyle = sk === 'grid' ? '#64748b' : (sk === 'intersect' ? '#f472b6' : (sk === 'perp' || sk === 'near' ? '#34d399' : (sk === 'quad' || sk === 'node' ? '#a78bfa' : '#fbbf24')));
       ctx.lineWidth = 1.5;
-      if (S.snap.kind === 'mid') { ctx.beginPath(); ctx.moveTo(sp.x - 6, sp.y + 5); ctx.lineTo(sp.x, sp.y - 6); ctx.lineTo(sp.x + 6, sp.y + 5); ctx.closePath(); ctx.stroke(); }
-      else if (S.snap.kind === 'center') { ctx.beginPath(); ctx.arc(sp.x, sp.y, 6, 0, Math.PI * 2); ctx.stroke(); }
-      else if (S.snap.kind === 'grid') { ctx.beginPath(); ctx.moveTo(sp.x - 4, sp.y); ctx.lineTo(sp.x + 4, sp.y); ctx.moveTo(sp.x, sp.y - 4); ctx.lineTo(sp.x, sp.y + 4); ctx.stroke(); }
-      else if (S.snap.kind === 'intersect') { ctx.beginPath(); ctx.moveTo(sp.x - 5, sp.y - 5); ctx.lineTo(sp.x + 5, sp.y + 5); ctx.moveTo(sp.x + 5, sp.y - 5); ctx.lineTo(sp.x - 5, sp.y + 5); ctx.stroke(); }
+      if (sk === 'mid') { ctx.beginPath(); ctx.moveTo(sp.x - 6, sp.y + 5); ctx.lineTo(sp.x, sp.y - 6); ctx.lineTo(sp.x + 6, sp.y + 5); ctx.closePath(); ctx.stroke(); }
+      else if (sk === 'center') { ctx.beginPath(); ctx.arc(sp.x, sp.y, 6, 0, Math.PI * 2); ctx.stroke(); }
+      else if (sk === 'grid') { ctx.beginPath(); ctx.moveTo(sp.x - 4, sp.y); ctx.lineTo(sp.x + 4, sp.y); ctx.moveTo(sp.x, sp.y - 4); ctx.lineTo(sp.x, sp.y + 4); ctx.stroke(); }
+      else if (sk === 'intersect') { ctx.beginPath(); ctx.moveTo(sp.x - 5, sp.y - 5); ctx.lineTo(sp.x + 5, sp.y + 5); ctx.moveTo(sp.x + 5, sp.y - 5); ctx.lineTo(sp.x - 5, sp.y + 5); ctx.stroke(); }
+      else if (sk === 'perp') { ctx.beginPath(); ctx.moveTo(sp.x - 6, sp.y - 6); ctx.lineTo(sp.x - 6, sp.y + 6); ctx.lineTo(sp.x + 6, sp.y + 6); ctx.moveTo(sp.x - 6, sp.y + 1); ctx.lineTo(sp.x + 1, sp.y + 1); ctx.lineTo(sp.x + 1, sp.y + 6); ctx.stroke(); }   // ⟂
+      else if (sk === 'near') { ctx.beginPath(); ctx.moveTo(sp.x - 6, sp.y - 6); ctx.lineTo(sp.x + 6, sp.y - 6); ctx.lineTo(sp.x - 6, sp.y + 6); ctx.lineTo(sp.x + 6, sp.y + 6); ctx.stroke(); }   // hourglass
+      else if (sk === 'quad') { ctx.beginPath(); ctx.moveTo(sp.x, sp.y - 6); ctx.lineTo(sp.x + 6, sp.y); ctx.lineTo(sp.x, sp.y + 6); ctx.lineTo(sp.x - 6, sp.y); ctx.closePath(); ctx.stroke(); }   // diamond
+      else if (sk === 'node') { ctx.beginPath(); ctx.arc(sp.x, sp.y, 5, 0, Math.PI * 2); ctx.moveTo(sp.x - 6, sp.y); ctx.lineTo(sp.x + 6, sp.y); ctx.moveTo(sp.x, sp.y - 6); ctx.lineTo(sp.x, sp.y + 6); ctx.stroke(); }   // ⊙
       else { ctx.strokeRect(sp.x - 5, sp.y - 5, 10, 10); }   // endpoint square
       ctx.restore();
     }
@@ -2688,6 +2801,7 @@
         var pngBtn = S.overlay.querySelector('#p86-sheet-png'); if (pngBtn) pngBtn.onclick = exportPng;
         var dxfBtn = S.overlay.querySelector('#p86-sheet-dxf'); if (dxfBtn) dxfBtn.onclick = exportDxf;
         var setBtn = S.overlay.querySelector('#p86-sheet-settings'); if (setBtn) setBtn.onclick = openSettingsModal;
+        var scBtn = S.overlay.querySelector('#p86-sheet-shortcuts'); if (scBtn) scBtn.onclick = openShortcuts;
       }
     },
     close: close,
