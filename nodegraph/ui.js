@@ -192,15 +192,18 @@ function renderNodes(){
 
     // Ports
     var hasIns=(d.ins&&d.ins.length>0), hasOuts=(d.outs&&d.outs.length>0);
-    // WIP's input ports 1 and 2 render vertically (top/bottom) rather than in the left-side grid
+    // WIP's input ports 1 and 2 render vertically; Building (t1) / Phase (t2)
+    // render their Costs input (port 0) as a square BOTTOM port instead of the
+    // left grid (n8n sub-node look). Both are drawn below the node body.
     var isWip = n.type==='wip';
+    var isTier = (n.type==='t1' || n.type==='t2');
     if(hasIns||hasOuts){
       h+='<div class="ng-ports">';
       var mx=Math.max((d.ins||[]).length,(d.outs||[]).length);
       for(var i=0;i<mx;i++){
         h+='<div class="ng-pr">';
         // Input port + label (left side)
-        if(hasIns&&i<d.ins.length&&!(isWip&&(i===1||i===2))){
+        if(hasIns&&i<d.ins.length&&!(isWip&&(i===0||i===1||i===2))&&!(isTier&&i===0)){
           var ip=d.ins[i], ic=wires.some(function(w){return w.toNode===n.id&&w.toPort===i;});
           h+='<div class="ng-p ng-pi ng-p-'+ip.t+(ic?' ng-pc':'')+'" data-node="'+n.id+'" data-pi="'+i+'" data-dir="in" data-type="'+ip.t+'" title="'+ip.n+' → input ('+ip.t+')"></div>';
           h+='<span class="ng-pl" style="text-align:left">'+ip.n+'</span>';
@@ -835,12 +838,20 @@ function renderNodes(){
       h+='</div>';
     }
 
-    // WIP vertical top/bottom input ports (always visible, even collapsed)
+    // WIP ports: main child input (port 0) on the bottom-center; the two extra
+    // cost/CO ports on top + bottom-right (always visible, even collapsed).
     if(n.type==='wip'){
+      var cmain=wires.some(function(w){return w.toNode===n.id&&w.toPort===0;});
       var ctop=wires.some(function(w){return w.toNode===n.id&&w.toPort===1;});
       var cbot=wires.some(function(w){return w.toNode===n.id&&w.toPort===2;});
+      h+='<div class="ng-p ng-pv-bot ng-p-currency'+(cmain?' ng-pc':'')+'" style="left:50%" data-node="'+n.id+'" data-pi="0" data-dir="in" data-type="currency" title="Buildings / costs"></div>';
       h+='<div class="ng-p ng-pv-top ng-p-currency'+(ctop?' ng-pc':'')+'" data-node="'+n.id+'" data-pi="1" data-dir="in" data-type="currency" title="+ Costs / COs (top)"></div>';
-      h+='<div class="ng-p ng-pv-bot ng-p-currency'+(cbot?' ng-pc':'')+'" data-node="'+n.id+'" data-pi="2" data-dir="in" data-type="currency" title="+ Costs / COs (bottom)"></div>';
+      h+='<div class="ng-p ng-pv-bot ng-p-currency'+(cbot?' ng-pc':'')+'" style="left:76%" data-node="'+n.id+'" data-pi="2" data-dir="in" data-type="currency" title="+ Costs / COs (extra)"></div>';
+    }
+    // Building (t1) / Phase (t2): Costs input (port 0) as a square BOTTOM port.
+    if(n.type==='t1' || n.type==='t2'){
+      var cb0=wires.some(function(w){return w.toNode===n.id&&w.toPort===0;});
+      h+='<div class="ng-p ng-pv-bot ng-p-currency'+(cb0?' ng-pc':'')+'" data-node="'+n.id+'" data-pi="0" data-dir="in" data-type="currency" title="Costs / phases (drag a cost here, or click ⊕)"></div>';
     }
 
     // NG4a: floating hover toolbar (above the tile) + name-below caption.
@@ -2970,17 +2981,54 @@ function init(){
 // targets, mirroring how watch nodes fan from WIP outputs but in reverse.
 // Each sub-fan follows the outward direction of its branch so fans don't overlap.
 function autoArrange(selectedId){
-  if(!selectedId) return; // Only arrange nodes connected to the selected node
   var allNodes=E.nodes(), wires=E.wires();
   if(!allNodes.length) return;
-
+  var SNAP=E.SNAP;
+  // ── Top-down tidy-tree (n8n cascade): parent on top, its inputs/children
+  // hang below. Root = selected node, or the WIP master when nothing's selected.
+  // Reingold–Tilford-style: leaves take slots left→right; parents center over
+  // their children. Anchored so the root stays put. Only moves x/y (calc-safe).
+  var rootNode = selectedId ? E.findNode(selectedId) : allNodes.find(function(n){return n.type==='wip';});
+  if(!rootNode) rootNode = allNodes[0];
+  if(!rootNode || rootNode.type==='watch' || rootNode.type==='note') return;
+  var NODE_W=210, H_GAP=64, V_GAP=230, visited={}, cursorX=0;
+  var TYPE_RANK={t1:1,t2:2,sub:3,po:4,inv:5,co:6,labor:7,burden:7.5,mat:8,gc:9,other:10,sum:11,sub2:11,mul:11,pct:11,job:12};
+  function childrenOf(id){
+    var seen={}, out=[];
+    wires.forEach(function(w){
+      if(w.toNode!==id) return;
+      var s=E.findNode(w.fromNode);
+      if(!s||seen[s.id]||s.type==='watch'||s.type==='note'||visited[s.id]) return;
+      seen[s.id]=true; out.push(s);
+    });
+    out.sort(function(a,b){return (TYPE_RANK[a.type]||99)-(TYPE_RANK[b.type]||99);});
+    return out;
+  }
+  function tdLayout(id, depth){
+    if(visited[id]) return null; visited[id]=true;
+    var node=E.findNode(id); if(!node) return null;
+    var y=depth*V_GAP, kids=childrenOf(id), spans=[];
+    kids.forEach(function(k){ var s=tdLayout(k.id, depth+1); if(s) spans.push(s); });
+    if(!spans.length){ var lx=cursorX; cursorX+=NODE_W+H_GAP; node._tx=lx; node._ty=y; return {cx:lx+NODE_W/2, min:lx, max:lx+NODE_W}; }
+    var cxc=(spans[0].cx+spans[spans.length-1].cx)/2;
+    node._tx=cxc-NODE_W/2; node._ty=y;
+    return {cx:cxc, min:Math.min(node._tx, spans[0].min), max:Math.max(node._tx+NODE_W, spans[spans.length-1].max)};
+  }
+  tdLayout(rootNode.id, 0);
+  var offX=rootNode.x - (rootNode._tx||0), offY=rootNode.y - (rootNode._ty||0);
+  allNodes.forEach(function(n){
+    if(n._tx==null) return;
+    n.x=Math.round((n._tx+offX)/SNAP)*SNAP;
+    n.y=Math.round((n._ty+offY)/SNAP)*SNAP;
+    delete n._tx; delete n._ty;
+  });
+  return;
+  /* ── legacy radial arrange (retained, unreachable) ── */
   var nodes=allNodes.filter(function(n){return n.type!=='watch'&&n.type!=='note';});
   if(!nodes.length) return;
-
   var p=E.pan(),z=E.zm();
   var cx=-p.x+(wrap?wrap.clientWidth/2/z:500);
   var cy=-p.y+(wrap?wrap.clientHeight/2/z:300);
-  var SNAP=E.SNAP;
   var placed={};
 
   // Measure how deep a sub-tree is below a given node (for middle-out ordering).

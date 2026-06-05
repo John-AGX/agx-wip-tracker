@@ -63,8 +63,9 @@ var CATS = [
 var nodes = [], wires = [], nid = 1;
 var panX = 0, panY = 0, zoom = 1;
 var jobId = null;
-// n8n-style "Clean Mode" — flat calm nodes + wires. Persisted per-user.
-var cleanMode = (function(){ try { return localStorage.getItem('ngCleanMode') === '1'; } catch(_) { return false; } })();
+// n8n-style "Clean Mode" — flat calm nodes + wires. Default ON; persisted
+// per-user (anyone who toggled it off keeps that choice).
+var cleanMode = (function(){ try { var v = localStorage.getItem('ngCleanMode'); return v === null ? true : v === '1'; } catch(_) { return true; } })();
 function setCleanMode(v){ cleanMode = !!v; try { localStorage.setItem('ngCleanMode', cleanMode ? '1' : '0'); } catch(_){} return cleanMode; }
 function getCleanMode(){ return cleanMode; }
 // First ins/outs index on a def whose port type can connect with `type` in
@@ -1176,49 +1177,25 @@ function drawWires(ctx, wrap, wiringFrom, wireMouse){
     var tp = td && td.ins && td.ins[w.toPort] ? td.ins[w.toPort].t : PT.A;
     var fn = findNode(w.fromNode);
     var col = (fn && SRCCOL[fn.type]) || WCOL[tp] || '#4f8cff';
-    // Detect vertical approach: WIP's top (pi=1) and bottom (pi=2) ports
-    var vertIn = tn && tn.type==='wip' && (w.toPort===1||w.toPort===2);
-    // NG4b: n8n-style bottom fan-out. In Clean Mode, when the child/source sits
-    // below its parent/target (and roughly under it), drop a dashed vertical
-    // connector from the parent's bottom edge down to the child's top. Purely a
-    // render choice — the wire's actual ports are unchanged, so calcs are safe.
-    var drop = false, dnP = null, dnC = null;
-    if(cleanMode && !vertIn && fn && tn){
-      var sb = nodeBox(fn), tb = nodeBox(tn);
-      var cxS = sb.x + sb.w/2, cxT = tb.x + tb.w/2;
-      if(sb.y > tb.y + tb.h*0.6 && Math.abs(cxS - cxT) < 520){
-        drop = true;
-        dnP = { x: cxT, y: tb.y + tb.h };   // parent bottom-center
-        dnC = { x: cxS, y: sb.y };          // child top-center
-      }
-    }
-    ctx.beginPath();
-    if(drop){
-      ctx.moveTo(dnP.x, dnP.y);
-      ctx.bezierCurveTo(dnP.x, dnP.y+50, dnC.x, dnC.y-50, dnC.x, dnC.y);
+    // Vertical bottom-port approach: WIP top/bottom (pi 1/2) and Building/Phase
+    // Costs input (pi 0) render on the bottom edge → route the wire up into the
+    // bottom (n8n sub-node cascade). Render-only; the wire's ports are unchanged.
+    var vertIn = tn && ((tn.type==='wip' && (w.toPort===0||w.toPort===1||w.toPort===2)) ||
+                        ((tn.type==='t1'||tn.type==='t2') && w.toPort===0));
+    ctx.beginPath(); ctx.moveTo(p1.x, p1.y);
+    if(vertIn){
+      var vy = (w.toPort===1) ? -60 : 60; // top port from above; bottom ports from below
+      ctx.bezierCurveTo(p1.x+60, p1.y, p2.x, p2.y+vy, p2.x, p2.y);
     } else {
-      ctx.moveTo(p1.x, p1.y);
-      if(vertIn){
-        var vy = w.toPort===1 ? -60 : 60; // approach top from above, bottom from below
-        ctx.bezierCurveTo(p1.x+60, p1.y, p2.x, p2.y+vy, p2.x, p2.y);
-      } else {
-        var dx = Math.max(Math.abs(p2.x-p1.x)*0.4, 50);
-        ctx.bezierCurveTo(p1.x+dx, p1.y, p2.x-dx, p2.y, p2.x, p2.y);
-      }
+      var dx = Math.max(Math.abs(p2.x-p1.x)*0.4, 50);
+      ctx.bezierCurveTo(p1.x+dx, p1.y, p2.x-dx, p2.y, p2.x, p2.y);
     }
     if(cleanMode){
-      // n8n-style: flat single-color wire, no glow. Bottom drops are dashed
-      // with small square nubs at the parent + child ends.
-      ctx.strokeStyle = hexToRgba(col, drop ? 0.9 : 0.7); ctx.lineWidth = 2;
-      ctx.shadowBlur = 0;
-      if(drop) ctx.setLineDash([7,5]);
+      // n8n-style: flat single-color wire; bottom-port connectors dashed.
+      ctx.strokeStyle = hexToRgba(col, 0.75); ctx.lineWidth = 2; ctx.shadowBlur = 0;
+      if(vertIn) ctx.setLineDash([7,5]);
       ctx.stroke();
-      if(drop){
-        ctx.setLineDash([]);
-        ctx.fillStyle = col;
-        ctx.fillRect(dnP.x-4, dnP.y-4, 8, 8);
-        ctx.fillRect(dnC.x-4, dnC.y-4, 8, 8);
-      }
+      ctx.setLineDash([]);
     } else {
       // Gradient: breathing fade — bright near nodes, dips in middle
       var grad = ctx.createLinearGradient(p1.x, p1.y, p2.x, p2.y);
