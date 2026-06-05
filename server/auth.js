@@ -107,6 +107,48 @@ function requireCapability(capKey) {
   };
 }
 
+// requireEntitlement — gate a route on the caller's ORG PLAN having a
+// feature (SaaS scaffold). Mirrors requireCapability, but the axis is
+// the org's subscription tier, not the user's role:
+//   requireCapability → "is this USER allowed to do this action?"
+//   requireEntitlement → "does this ORG's PLAN include this feature?"
+//
+// Today this is INERT: AGX is on the 'internal' (unlimited) plan, so
+// every feature resolves true. It is applied to ZERO routes right now —
+// it exists so that gating a surface later is a one-line addition (drop
+// it into a route's middleware chain) instead of a code hunt. When you
+// gate something, a non-entitled org gets a 403 with `upgrade: true` so
+// the client can route them to a pricing/upgrade prompt instead of
+// showing a generic error.
+//
+// entitlements is lazy-required inside the returned middleware to keep
+// auth.js free of a load-time dependency on the db pool wiring.
+function requireEntitlement(featureKey) {
+  return async function(req, res, next) {
+    if (!req.user) return res.status(401).json({ error: 'Not authenticated' });
+    const orgId = req.user.organization_id;
+    if (!orgId) return res.status(403).json({ error: 'Caller has no organization' });
+    try {
+      const entitlements = require('./entitlements');
+      const ok = await entitlements.can(orgId, featureKey);
+      if (!ok) {
+        return res.status(403).json({
+          error: 'Your plan does not include this feature.',
+          feature: featureKey,
+          upgrade: true,
+        });
+      }
+      next();
+    } catch (e) {
+      // Fail OPEN — an entitlements lookup blip should never lock an org
+      // out of a feature it may well be paying for. (Matches the
+      // fail-open posture in entitlements.js itself.)
+      console.warn('[auth] requireEntitlement(' + featureKey + ') check errored, allowing:', e.message);
+      next();
+    }
+  };
+}
+
 function signToken(user) {
   return jwt.sign(
     {
@@ -263,5 +305,7 @@ module.exports = {
   signToken, requireAuth, requireRole, requireOrg, requireSystemAdmin, resolveUserOrg, JWT_SECRET,
   // Roles / capabilities
   CAPABILITY_KEYS, setRolePool, refreshRoleCache, hasCapability, requireCapability,
-  isAdminish
+  isAdminish,
+  // Plan entitlements (SaaS scaffold) — applied to zero routes today.
+  requireEntitlement
 };

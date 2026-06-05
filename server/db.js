@@ -87,6 +87,48 @@ async function initSchema() {
     -- every template.
     ALTER TABLE organizations ADD COLUMN IF NOT EXISTS branding JSONB NOT NULL DEFAULT '{}'::jsonb;
 
+    -- ── SaaS commercialization scaffold ─────────────────────────────
+    -- Subscription state per org. All additive + defaulted, so every
+    -- existing row (AGX) becomes plan_key='internal' / status='active'
+    -- automatically — the 'internal' plan is unlimited, so the
+    -- entitlements layer is a NO-OP until a real (non-internal) plan is
+    -- assigned. See server/plans-catalog.js + server/entitlements.js.
+    --
+    --   plan_key       machine id of the tier (matches plans-catalog).
+    --   plan_status    trialing | active | past_due | canceled. Drives
+    --                  future suspension logic + the trial-ending cron.
+    --   trial_ends_at  when a trial converts/expires (NULL = no trial).
+    --   billing        provider-specific junk drawer (Stripe customer +
+    --                  subscription ids, payment method last4, etc.) —
+    --                  JSONB so wiring Stripe later needs no migration.
+    ALTER TABLE organizations ADD COLUMN IF NOT EXISTS plan_key      TEXT NOT NULL DEFAULT 'internal';
+    ALTER TABLE organizations ADD COLUMN IF NOT EXISTS plan_status   TEXT NOT NULL DEFAULT 'active';
+    ALTER TABLE organizations ADD COLUMN IF NOT EXISTS trial_ends_at TIMESTAMPTZ;
+    ALTER TABLE organizations ADD COLUMN IF NOT EXISTS billing       JSONB NOT NULL DEFAULT '{}'::jsonb;
+    -- Partial index for the future "trials ending soon" / "past_due
+    -- sweep" crons — cheap, and only covers the rows those jobs scan.
+    CREATE INDEX IF NOT EXISTS idx_organizations_plan_status
+      ON organizations(plan_status) WHERE archived_at IS NULL;
+
+    -- Per-org usage counters (SaaS scaffold). ONE row per
+    -- (org, metric, period) where period is the 'YYYY-MM' billing month.
+    -- recordUsage() in server/usage-meter.js UPSERT-increments these.
+    -- We start ACCUMULATING now — before any plan enforces a limit — so
+    -- that when billing turns on there's already real usage history to
+    -- meter against and to show on an account/usage page. Nothing reads
+    -- these for enforcement yet; they're pure accounting.
+    --   metric examples: 'ai_messages' | 'email_sends' | 'storage_bytes'
+    CREATE TABLE IF NOT EXISTS usage_counters (
+      organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      metric          TEXT NOT NULL,
+      period          TEXT NOT NULL,                 -- 'YYYY-MM'
+      count           BIGINT NOT NULL DEFAULT 0,
+      updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (organization_id, metric, period)
+    );
+    CREATE INDEX IF NOT EXISTS idx_usage_counters_org_period
+      ON usage_counters(organization_id, period);
+
     -- Email tracking events (Wave 7). One row per open/click recorded
     -- by the tracking pixel + link rewriter. log_id matches the
     -- email_log row's text id. kind = 'open' | 'click'. ip is the

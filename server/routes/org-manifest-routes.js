@@ -22,6 +22,7 @@ const express = require('express');
 const { pool } = require('../db');
 const { requireAuth, requireOrg, requireCapability } = require('../auth');
 const { features, whats_new } = require('../feature-catalog');
+const entitlements = require('../entitlements');
 
 const router = express.Router();
 
@@ -336,9 +337,23 @@ router.get('/manifest', requireAuth, async (req, res) => {
       return out;
     }
 
+    // Plan entitlements (SaaS scaffold). The client can read this to
+    // hide/disable surfaces a plan doesn't include — though today AGX
+    // is 'internal' (unlimited) so `unlimited:true` and the client
+    // should gate nothing. Resolved + cached in entitlements.js; a
+    // lookup blip falls back to the default (unlimited) plan.
+    let ent;
+    try {
+      ent = await entitlements.entitlementsFor(orgId);
+    } catch (e) {
+      console.warn('[manifest] entitlements lookup failed:', e.message);
+      ent = { plan_key: 'internal', plan_name: 'Internal', plan_status: 'active', unlimited: true, limits: {}, features: {} };
+    }
+
     res.json({
       org: orgRow.rows[0] || { id: orgId, name: null },
       generated_at: new Date().toISOString(),
+      entitlements: ent,
       entities: {
         jobs: {
           active: jobsActive,

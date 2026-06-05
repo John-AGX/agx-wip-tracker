@@ -203,6 +203,15 @@ async function sendEmail(opts) {
     }
     const providerId = (res && res.data && res.data.id) || null;
     const id = await logSend({ id: logId, to, subject, tag, status: 'sent', providerId });
+    // Usage metering (SaaS scaffold) — the one live example of the meter
+    // accumulating. Counts billable sends per org per month. Fire-and-
+    // forget: recordUsage never throws and a null org is a silent no-op,
+    // so this can't affect the send result. Pure accounting — nothing
+    // enforces the email_sends limit yet.
+    if (opts.organizationId) {
+      const recipients = Array.isArray(to) ? to.length : 1;
+      require('./usage-meter').recordUsage(opts.organizationId, 'email_sends', recipients);
+    }
     return { ok: true, id, providerId, error: null, dryRun: false };
   } catch (e) {
     const err = e && e.message ? e.message : String(e);
@@ -306,7 +315,11 @@ async function sendForEvent(eventKey, params, opts) {
       subject: rendered.subject,
       html: rendered.html,
       text: rendered.text,
-      tag: opts.tag || eventKey
+      tag: opts.tag || eventKey,
+      // Thread the org scope through so sendEmail can meter the send
+      // against the right tenant (SaaS scaffold). params.__orgId is the
+      // branding-cascade key the digest/notification callers already set.
+      organizationId: (params && params.__orgId) || opts.organizationId || null
     };
     if (bcc.length) payload.bcc = bcc;
     if (opts.replyTo) payload.replyTo = opts.replyTo;
