@@ -278,6 +278,8 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
 .ng-node.ng-coll .ng-subitems{display:none}
 .ng-node.ng-coll .ng-wv{display:none}
 .ng-node.ng-coll .ng-watch-kpi{display:none}
+.ng-node.ng-coll .ng-wip-ov{display:none}
+.ng-node.ng-coll .ng-ov-head{display:none}
 /* Collapsed progress bar */
 .ng-coll-prog{height:5px;background:var(--ng-input);border-radius:3px;overflow:hidden;width:100%}
 .ng-coll-prog-fill{height:100%;border-radius:3px;transition:width .3s}
