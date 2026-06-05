@@ -61,6 +61,7 @@ var CATS = [
 
 // ── State ──
 var nodes = [], wires = [], nid = 1;
+var frames = []; // NG8: group boxes — additive overlay, never wired, never in calcs
 var panX = 0, panY = 0, zoom = 1;
 var jobId = null;
 // n8n-style "Clean Mode" — flat calm nodes + wires. Default ON; persisted
@@ -859,6 +860,7 @@ function buildGraphState(){
       };
     }),
     wires: wires,
+    frames: frames, // NG8: persisted group boxes (additive; old graphs simply have none)
     panX:panX, panY:panY, zoom:zoom, nid:nid
   };
 }
@@ -1102,6 +1104,7 @@ function loadGraph(){
   }
 
   nodes = []; wires = state.wires || []; nid = state.nid || 1;
+  frames = state.frames || []; // NG8: guard so pre-frames graphs load fine
   panX = state.panX || 0; panY = state.panY || 0; zoom = state.zoom || 1;
 
   state.nodes.forEach(function(sn){
@@ -1331,6 +1334,18 @@ function drawGrid(ctx, w, h){
 }
 
 // ── Public API ──
+// ── NG8: frames (group boxes) ──
+function getFrames(){ return frames; }
+function setFrames(f){ frames = f || []; return frames; }
+function findFrame(id){ for(var i=0;i<frames.length;i++){ if(frames[i].id===id) return frames[i]; } return null; }
+function addFrame(x,y,w,h,label){
+  var f={ id:'frm'+(nid++), frame:true, x:Math.round(x), y:Math.round(y),
+          w:Math.round(Math.max(160,w)), h:Math.round(Math.max(100,h)),
+          label:label||'Group', color:'#4f8cff' };
+  frames.push(f); return f;
+}
+function removeFrame(id){ frames = frames.filter(function(f){ return f.id!==id; }); }
+
 return {
   PT:PT, DEFS:DEFS, CATS:CATS, WCOL:WCOL, SRCCOL:SRCCOL, SNAP:SNAP,
   nodes:function(){ return nodes; },
@@ -1358,5 +1373,6 @@ return {
   drawWires:drawWires, drawGrid:drawGrid,
   portPos:portPos, setCanvasEl:setCanvasEl,
   genId:genId,
+  frames:getFrames, setFrames:setFrames, addFrame:addFrame, removeFrame:removeFrame, findFrame:findFrame,
 };
 })();

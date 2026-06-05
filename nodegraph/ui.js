@@ -10,6 +10,8 @@ var dragN=null, dragOff={x:0,y:0};
 var wiringFrom=null, wireMouse=null;
 var selN=null, isPan=false, panSt={x:0,y:0};
 var editingId=null;
+// NG8: frames (group boxes) interaction state
+var selFrame=null, dragFrame=null, frameDragOff=null, frameMembers=null, resizeFrame=null, resizeStart=null;
 // When set to a note's id, the next click on a node attaches the note
 // to that node. Click the attach button again (or the canvas) to cancel.
 var attachingFromNoteId=null;
@@ -878,6 +880,7 @@ function render(){
   updateTierLabels();
   updateT1Progress();
   pushToJobSilent();
+  renderFrames();
   renderNodes();
   E.drawGrid(gridCtx, gridC.width, gridC.height);
   E.drawWires(wireCtx, wrap, wiringFrom, wireMouse);
@@ -907,6 +910,34 @@ function fmtCompactC(v){
   if(a>=1e6){ var m=a/1e6; return s+'$'+(m>=10?Math.round(m):m.toFixed(1).replace(/\.0$/,''))+'M'; }
   if(a>=1e3){ var k=a/1e3; return s+'$'+(k>=100?Math.round(k):k.toFixed(1).replace(/\.0$/,''))+'k'; }
   return s+'$'+Math.round(a);
+}
+
+// ── NG8: frames (group boxes) ──
+function ngHexA(hex,a){ var h=(hex||'#4f8cff').replace('#',''); if(h.length===3)h=h[0]+h[0]+h[1]+h[1]+h[2]+h[2]; var r=parseInt(h.substr(0,2),16),g=parseInt(h.substr(2,2),16),b=parseInt(h.substr(4,2),16); return 'rgba('+r+','+g+','+b+','+a+')'; }
+// Nodes whose center falls inside the frame rect — captured at drag-start so
+// the frame carries them when moved.
+function ngFrameMembers(f){
+  return E.nodes().filter(function(n){
+    var fp=ngNodeFootprint(n); var cx=n.x+fp.w/2, cy=n.y+fp.h/2;
+    return cx>=f.x && cx<=f.x+f.w && cy>=f.y && cy<=f.y+f.h;
+  });
+}
+// Render frame boxes behind the nodes (separate from .ng-node rebuild).
+function renderFrames(){
+  if(!canvasEl) return;
+  canvasEl.querySelectorAll('.ng-frame').forEach(function(el){ el.remove(); });
+  var fr=(E.frames && E.frames())||[];
+  fr.forEach(function(f){
+    var div=document.createElement('div');
+    div.className='ng-frame'+(selFrame===f.id?' ng-frame-sel':'');
+    div.setAttribute('data-frame', f.id);
+    div.style.left=f.x+'px'; div.style.top=f.y+'px'; div.style.width=f.w+'px'; div.style.height=f.h+'px';
+    var col=f.color||'#4f8cff';
+    div.style.borderColor=ngHexA(col,0.55); div.style.background=ngHexA(col,0.06);
+    div.innerHTML='<div class="ng-frame-title" data-frame-drag="'+f.id+'" style="color:'+col+'"><span class="ng-frame-label" data-frame-rename="'+f.id+'" title="Double-click to rename"></span><span class="ng-frame-del" data-frame-del="'+f.id+'" title="Delete frame">×</span></div><div class="ng-frame-resize" data-frame-resize="'+f.id+'" title="Drag to resize"></div>';
+    div.querySelector('.ng-frame-label').textContent=f.label||'Group';
+    canvasEl.appendChild(div);
+  });
 }
 
 // ── NG7: node footprint (true layout box) ──
@@ -1266,8 +1297,19 @@ function initEvents(){
 
   wrap.addEventListener('mousedown',function(e){
     if(e.target.closest('.ng-p')||e.target.closest('.ng-node')) return;
+    // NG8: frame interactions (delete handled on click; drag/resize start here)
+    if(e.target.closest('[data-frame-del]')){ e.stopPropagation(); return; }
+    var _fr=e.target.closest('[data-frame-resize]');
+    if(_fr){ e.stopPropagation(); resizeFrame=_fr.getAttribute('data-frame-resize'); var rf=E.findFrame(resizeFrame);
+      if(rf){ resizeStart={mx:e.clientX/z(), my:e.clientY/z(), w:rf.w, h:rf.h}; selFrame=resizeFrame; renderFrames(); } return; }
+    var _fd=e.target.closest('[data-frame-drag]');
+    if(_fd){ e.stopPropagation(); dragFrame=_fd.getAttribute('data-frame-drag'); var df=E.findFrame(dragFrame);
+      if(df){ var dp=E.pan(); frameDragOff={x:e.clientX/z()-dp.x-df.x, y:e.clientY/z()-dp.y-df.y};
+        frameMembers=ngFrameMembers(df).map(function(mn){return {id:mn.id, ox:mn.x-df.x, oy:mn.y-df.y};});
+        selFrame=dragFrame; if(selN) selN=null; renderFrames(); } return; }
     // Empty-canvas click cancels any pending note-attach.
     if(attachingFromNoteId){ attachingFromNoteId=null; render(); }
+    if(selFrame){ selFrame=null; renderFrames(); }
     isPan=true; wrap.classList.add('ng-panning');
     var p=E.pan();
     panSt={x:e.clientX/z()-p.x, y:e.clientY/z()-p.y};
@@ -1295,8 +1337,52 @@ function initEvents(){
       wireMouse={x:e.clientX-r.left,y:e.clientY-r.top};
       E.drawWires(wireCtx,wrap,wiringFrom,wireMouse);
     }
+    if(dragFrame){
+      var f=E.findFrame(dragFrame); if(f){
+        var p=E.pan();
+        f.x=Math.round((e.clientX/z()-p.x-frameDragOff.x)/SN)*SN;
+        f.y=Math.round((e.clientY/z()-p.y-frameDragOff.y)/SN)*SN;
+        var fel=canvasEl.querySelector('.ng-frame[data-frame="'+f.id+'"]');
+        if(fel){ fel.style.left=f.x+'px'; fel.style.top=f.y+'px'; }
+        (frameMembers||[]).forEach(function(m){
+          var mn=E.findNode(m.id); if(!mn) return;
+          mn.x=f.x+m.ox; mn.y=f.y+m.oy;
+          var mel=canvasEl.querySelector('.ng-node[data-id="'+mn.id+'"]');
+          if(mel){ mel.style.left=mn.x+'px'; mel.style.top=mn.y+'px'; }
+        });
+        E.drawWires(wireCtx,wrap,wiringFrom,wireMouse);
+      }
+      return;
+    }
+    if(resizeFrame){
+      var rf2=E.findFrame(resizeFrame); if(rf2 && resizeStart){
+        rf2.w=Math.max(160, Math.round((resizeStart.w + (e.clientX/z()-resizeStart.mx))/SN)*SN);
+        rf2.h=Math.max(100, Math.round((resizeStart.h + (e.clientY/z()-resizeStart.my))/SN)*SN);
+        var rel=canvasEl.querySelector('.ng-frame[data-frame="'+rf2.id+'"]');
+        if(rel){ rel.style.width=rf2.w+'px'; rel.style.height=rf2.h+'px'; }
+      }
+      return;
+    }
     // NG3: when idle, show the floating "+" over a hovered output port or wire.
     if(!isPan && !dragN && !wiringFrom) updateAddFab(e);
+  });
+
+  // ── NG8: frame delete (click ×) + rename (double-click the label) ──
+  canvasEl.addEventListener('click',function(e){
+    var del=e.target.closest('[data-frame-del]'); if(!del) return;
+    e.stopPropagation();
+    var fid=del.getAttribute('data-frame-del');
+    var go=(typeof window.agxConfirm==='function')
+      ? window.agxConfirm({title:'Delete frame', message:'Remove this group box? The nodes inside are kept.', confirmLabel:'Delete', danger:true})
+      : Promise.resolve(window.confirm('Delete this frame? (Nodes inside are kept.)'));
+    go.then(function(ok){ if(!ok) return; E.removeFrame(fid); if(selFrame===fid) selFrame=null; render(); E.saveGraph(); });
+  });
+  canvasEl.addEventListener('dblclick',function(e){
+    var lbl=e.target.closest('[data-frame-rename]'); if(!lbl) return;
+    e.stopPropagation();
+    var f=E.findFrame(lbl.getAttribute('data-frame-rename')); if(!f) return;
+    var nv=prompt('Frame name:', f.label||'Group');
+    if(nv!=null){ f.label=nv.trim()||'Group'; render(); E.saveGraph(); }
   });
 
   // ── NG3: floating "+" add-node affordance (port-hover + wire-hover) ──
@@ -1427,6 +1513,7 @@ function initEvents(){
 
   wrap.addEventListener('mouseup',function(e){
     isPan=false; wrap.classList.remove('ng-panning'); dragN=null;
+    if(dragFrame || resizeFrame){ dragFrame=null; resizeFrame=null; frameMembers=null; frameDragOff=null; resizeStart=null; E.saveGraph(); }
     if(wiringFrom){
       var tp=e.target.closest('[data-dir="in"]');
       if(tp){
@@ -2987,7 +3074,7 @@ function init(){
       : Promise.resolve(window.confirm('Reset graph?'));
     go.then(function(ok) {
       if (!ok) return;
-      E.setNodes([]); E.setWires([]); E.setNid(1);
+      E.setNodes([]); E.setWires([]); E.setNid(1); if(E.setFrames) E.setFrames([]);
       populate(); ensureWatchFan(); render();
     });
   });
@@ -2995,6 +3082,23 @@ function init(){
   // Auto arrange
   var aab=tab.querySelector('.ng-arrange-btn');
   if(aab) aab.addEventListener('click',function(){ autoArrange(selN); render(); });
+
+  // NG8: Frame — wrap the selected node in a labeled group box, or drop an
+  // empty one in the middle of the current view. Drag its title to move the
+  // frame + the nodes inside it; drag the corner to resize; ×/double-click
+  // the label to delete/rename.
+  var frameBtn=tab.querySelector('.ng-frame-btn');
+  if(frameBtn) frameBtn.addEventListener('click',function(){
+    var sel = selN ? E.findNode(selN) : null, f;
+    if(sel){
+      var fp=ngNodeFootprint(sel), pad=40;
+      f=E.addFrame(sel.x-pad, sel.y-pad-22, fp.w+pad*2, fp.h+pad*2+22, 'Group');
+    } else {
+      var p=E.pan(), zz=E.zm();
+      f=E.addFrame(wrap.clientWidth/2/zz-p.x-180, wrap.clientHeight/2/zz-p.y-120, 360, 240, 'Group');
+    }
+    selFrame=f.id; selN=null; render(); E.saveGraph();
+  });
 
   // Clean Mode — n8n-style flat look (toggle, persisted in engine).
   var cleanBtn=tab.querySelector('.ng-clean-btn');

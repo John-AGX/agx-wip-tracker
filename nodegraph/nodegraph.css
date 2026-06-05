@@ -374,6 +374,16 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
 #nodeGraphTab.ng-clean .ng-tt-co.ng-coll .ng-coll-pi{left:-4px;top:50%}
 /* NG-WIRE: CO output on TOP so it drops cleanly to WIP/parent below it. */
 #nodeGraphTab.ng-clean .ng-tt-co.ng-coll .ng-coll-po{left:50%;top:-4px;right:auto;transform:translateX(-50%)}
+/* ── NG8: frames / group boxes (sit behind nodes; body is click-through so
+   pan + node interaction still work — only the title + resize are live) ── */
+.ng-frame{position:absolute;z-index:1;border:1.5px solid rgba(79,140,255,.55);border-radius:12px;background:rgba(79,140,255,.06);pointer-events:none;box-sizing:border-box}
+.ng-frame.ng-frame-sel{box-shadow:0 0 0 1px rgba(79,140,255,.45)}
+.ng-frame-title{position:absolute;top:0;left:12px;transform:translateY(-50%);display:flex;align-items:center;gap:8px;font-size:12px;font-weight:700;letter-spacing:.2px;background:var(--ng-bg);padding:2px 9px;border:1px solid var(--ng-border2);border-radius:7px;cursor:move;user-select:none;max-width:calc(100% - 28px);pointer-events:auto}
+.ng-frame-label{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:move}
+.ng-frame-del{cursor:pointer;opacity:.4;font-size:15px;line-height:1;color:var(--ng-dim)}
+.ng-frame-title:hover .ng-frame-del{opacity:.8}
+.ng-frame-del:hover{opacity:1;color:#f87171}
+.ng-frame-resize{position:absolute;right:-2px;bottom:-2px;width:16px;height:16px;cursor:nwse-resize;pointer-events:auto;border-right:2px solid rgba(140,150,180,.7);border-bottom:2px solid rgba(140,150,180,.7);border-bottom-right-radius:11px}
 .ng-note-body textarea{width:100%;min-height:55px;background:var(--ng-input);border:1px solid var(--ng-border2);color:var(--ng-text);font-size:12px;padding:6px 8px;border-radius:4px;resize:vertical;outline:none;font-family:inherit;line-height:1.4}
 .ng-note-body textarea:focus{border-color:#4f8cff}
 /* Data picker overlay */

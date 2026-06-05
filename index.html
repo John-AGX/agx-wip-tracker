@@ -3038,7 +3038,7 @@
     <script src="js/edit-gate.js?v=1"></script>
 
     <!-- Node Graph (Beta) -->
-    <link rel="stylesheet" href="nodegraph/nodegraph.css?v=98" />
+    <link rel="stylesheet" href="nodegraph/nodegraph.css?v=99" />
     <div id="nodeGraphTab">
       <!-- Workspace canvas toolbar — Outlook ribbon style. Each
            button is icon-on-top + label-below, buttons cluster into
@@ -3080,6 +3080,10 @@
             <button class="ng-tbtn ng-ribbon-btn ng-arrange-btn" title="Arrange — auto-layout the full tree, or only the selected node's children if one is selected">
               <span class="ng-ribbon-icon">&#x2728;</span>
               <span class="ng-ribbon-label">Arrange</span>
+            </button>
+            <button class="ng-tbtn ng-ribbon-btn ng-frame-btn" title="Frame — draw a labeled group box around the selected node, or an empty one in view">
+              <span class="ng-ribbon-icon">&#x2B1A;</span>
+              <span class="ng-ribbon-label">Frame</span>
             </button>
             <button class="ng-tbtn ng-ribbon-btn ng-sync-btn" title="Sync — add missing nodes from job data without moving existing ones">
               <span class="ng-ribbon-icon">&#x1F504;</span>
@@ -3157,8 +3161,8 @@
         </div>
       </div>
     </div>
-    <script src="nodegraph/engine.js?v=78"></script>
-    <script src="nodegraph/ui.js?v=158"></script>
+    <script src="nodegraph/engine.js?v=79"></script>
+    <script src="nodegraph/ui.js?v=159"></script>
 
     <!-- ── Mobile bottom nav (M1) ─────────────────────────────────
          Visible only below 768px (CSS-gated). Five-slot layout:
