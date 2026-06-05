@@ -217,7 +217,9 @@ function renderNodes(){
           var op=d.outs[i], oc=wires.some(function(w){return w.fromNode===n.id&&w.fromPort===i;}), ov=E.getOutput(n,i);
           if(!hasIns) h+='<span class="ng-pl" style="text-align:left;flex:1">'+op.n+'</span>';
           else h+='<span class="ng-pl" style="text-align:right;flex:0">'+op.n+'</span>';
-          h+='<span class="ng-pv" style="margin-left:4px">'+E.fmtV(ov,op.t)+'</span>';
+          // WIP: values live in the overview KPI grid below, so the output
+          // ports stay as clean connection nubs (name + dot) — no inline value.
+          if(!isWip) h+='<span class="ng-pv" style="margin-left:4px">'+E.fmtV(ov,op.t)+'</span>';
           h+='<div class="ng-p ng-po ng-p-'+op.t+(oc?' ng-pc':'')+'" data-node="'+n.id+'" data-pi="'+i+'" data-dir="out" data-type="'+op.t+'" title="'+op.n+' → output ('+op.t+') · drag to connect, or click ⊕ to add"></div>';
         }
         h+='</div>';
