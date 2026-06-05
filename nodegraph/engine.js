@@ -1191,8 +1191,8 @@ function drawWires(ctx, wrap, wiringFrom, wireMouse){
       ctx.bezierCurveTo(p1.x+dx, p1.y, p2.x-dx, p2.y, p2.x, p2.y);
     }
     if(cleanMode){
-      // n8n-style: flat single-color wire; bottom-port connectors dashed.
-      ctx.strokeStyle = hexToRgba(col, 0.75); ctx.lineWidth = 2; ctx.shadowBlur = 0;
+      // n8n-style: calm flat single-color wire; bottom-port connectors dashed.
+      ctx.strokeStyle = hexToRgba(col, 0.5); ctx.lineWidth = 1.75; ctx.shadowBlur = 0;
       if(vertIn) ctx.setLineDash([7,5]);
       ctx.stroke();
       ctx.setLineDash([]);

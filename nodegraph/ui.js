@@ -815,24 +815,10 @@ function renderNodes(){
         h+='<div class="ng-coll-kv"><span class="ng-coll-lbl">Rev. Earned</span><span class="ng-coll-val ng-cv-blu">'+E.fmtC(tRevEarned)+'</span></div>';
         h+='</div>';
       } else if(n.type==='co'){
-        // CO collapsed: show income, actual, accrued, GP — like a mini P&L
-        var _coAw2=E.getCOAllocWires(n.id);
-        var _coHp=_coAw2.some(function(w){ return w.pctComplete!=null; });
-        var coPct=(_coAw2.length && _coHp) ? E.getT2WeightedPct(n) : (n.pctComplete||0);
-        var coPColor = 'linear-gradient(90deg, #4f8cff, #a78bfa)';
+        // NG-SHAPE: CO collapses to a simple triangle chip — icon + income $
+        // at a glance (full P&L is on the expanded card). Compact $ so it fits.
         E.resetComp(); var coInc=E.getOutput(n,0);
-        E.resetComp(); var coAct2=E.getActual(n);
-        var coAcc2=E.getAccrued(n);
-        var coGP2=coInc-(coAct2+coAcc2);
-        var gpC2=coGP2>=0?'#34d399':'#f87171';
-        h+='<div class="ng-coll-t12">';
-        h+='<div class="ng-coll-prog"><div class="ng-coll-prog-fill" style="width:'+Math.min(coPct,100)+'%;background:'+coPColor+'"></div></div>';
-        h+='<div class="ng-coll-pctrow"><span class="ng-coll-pct">'+coPct.toFixed(0)+'%</span></div>';
-        h+='<div class="ng-coll-kv"><span class="ng-coll-lbl">Income</span><span class="ng-coll-val ng-cv-grn">'+E.fmtC(coInc)+'</span></div>';
-        h+='<div class="ng-coll-kv"><span class="ng-coll-lbl">Actual</span><span class="ng-coll-val ng-cv-grn">'+E.fmtC(coAct2)+'</span></div>';
-        h+='<div class="ng-coll-kv"><span class="ng-coll-lbl">Accrued</span><span class="ng-coll-val ng-cv-yel">'+E.fmtC(coAcc2)+'</span></div>';
-        h+='<div class="ng-coll-kv"><span class="ng-coll-lbl">Gross Profit</span><span class="ng-coll-val" style="color:'+gpC2+'">'+E.fmtC(coGP2)+'</span></div>';
-        h+='</div>';
+        h+='<span class="ng-coll-val ng-coll-val-big" style="text-align:center;width:100%" title="Income '+E.fmtC(coInc)+'">'+fmtCompactC(coInc)+'</span>';
       } else if(d.hasProg){
         var cpct2 = n.pctComplete||0;
         var cpColor2 = 'linear-gradient(90deg, #4f8cff, #a78bfa)';
@@ -850,7 +836,9 @@ function renderNodes(){
       } else if(n.type==='inv'){
         h+='<div class="ng-coll-detail"><span class="ng-coll-lbl">Amount</span><span class="ng-coll-val">'+E.fmtC(collVal)+'</span></div>';
       } else {
-        h+='<span class="ng-coll-val" style="text-align:center;width:100%">'+E.fmtC(collVal)+'</span>';
+        // NG-R3: round cost chips show compact $ at a glance; others full $.
+        var _cvDisp = (n.cat==='cost') ? fmtCompactC(collVal) : E.fmtC(collVal);
+        h+='<span class="ng-coll-val'+(n.cat==='cost'?' ng-coll-val-big':'')+'" style="text-align:center;width:100%" title="'+E.fmtC(collVal)+'">'+_cvDisp+'</span>';
       }
       h+='</div>';
     }
@@ -911,6 +899,14 @@ function render(){
 function applyTx(){
   var p=E.pan(), z=E.zm();
   canvasEl.style.transform='translate('+(p.x*z)+'px,'+(p.y*z)+'px) scale('+z+')';
+}
+
+// ── NG-R3: compact currency ($120k / $1.3M) for at-a-glance round cost chips ──
+function fmtCompactC(v){
+  v=+v||0; var a=Math.abs(v), s=v<0?'-':'';
+  if(a>=1e6){ var m=a/1e6; return s+'$'+(m>=10?Math.round(m):m.toFixed(1).replace(/\.0$/,''))+'M'; }
+  if(a>=1e3){ var k=a/1e3; return s+'$'+(k>=100?Math.round(k):k.toFixed(1).replace(/\.0$/,''))+'k'; }
+  return s+'$'+Math.round(a);
 }
 
 // ── NG7: node footprint (true layout box) ──
@@ -1393,7 +1389,7 @@ function initEvents(){
     } else {
       var label=d.label; if(d.nameEdit){ var pr=prompt('Name:',label); label=pr||label; }
       var nn=E.addNode(type,x,y,label);
-      if(nn && nn.cat==='cost') nn.collapsed=true; // NG-R2: cost nodes spawn as round chips
+      if(nn && (nn.cat==='cost'||nn.cat==='co')) nn.collapsed=true; // NG-R2/SHAPE: cost→round, CO→triangle chip
       cb(nn);
     }
   }
@@ -2942,9 +2938,9 @@ function populate(){
   // / pruneWipWatches). Manual Watch nodes can still be added from the library
   // to watch a specific building/phase value out on the canvas.
 
-  // NG-R2: cost-category nodes default to the round/collapsed "chip" form
-  // ($ at a glance); expand from the hover toolbar for the full line-item card.
-  E.nodes().forEach(function(n){ if(n.cat==='cost') n.collapsed=true; });
+  // NG-R2/NG-SHAPE: cost nodes default to the round chip, COs to the triangle
+  // chip ($ at a glance); expand from the hover toolbar for the full card.
+  E.nodes().forEach(function(n){ if(n.cat==='cost'||n.cat==='co') n.collapsed=true; });
 }
 
 // ── Init ──

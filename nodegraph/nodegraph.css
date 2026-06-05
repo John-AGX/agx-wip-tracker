@@ -351,6 +351,25 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
 #nodeGraphTab.ng-clean .ng-t-cost.ng-coll .ng-coll-val{font-size:14px;font-weight:700;font-family:'Courier New',monospace;color:var(--ng-text);width:auto;text-align:center}
 #nodeGraphTab.ng-clean .ng-t-cost.ng-coll .ng-coll-pi{left:-5px}
 #nodeGraphTab.ng-clean .ng-t-cost.ng-coll .ng-coll-po{right:-5px}
+.ng-coll-val-big{font-size:15px;font-weight:700;font-family:'Courier New',monospace}
+/* ── NG-SHAPE: shape = type at a glance (n8n vocabulary) ──
+   building → square · phase → half-rounded · change order → triangle chip
+   · cost → circle (above) · WIP → big rounded dashboard. */
+.ng-tt-t1{border-radius:4px}                                  /* T1 building → square */
+.ng-tt-t2{border-radius:22px 4px 4px 22px}                    /* T2 phase → rounded-left D */
+/* CO → downward-triangle chip when collapsed (clean). The triangle is drawn on
+   ::before so the name caption + hover toolbar (which sit OUTSIDE the box) are
+   not clipped away. Content sits in the wide top band. */
+#nodeGraphTab.ng-clean .ng-tt-co.ng-coll{background:transparent!important;border:none!important;box-shadow:none!important;width:130px;min-width:130px;height:96px;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:1px;padding:13px 0 0;text-align:center;overflow:visible}
+#nodeGraphTab.ng-clean .ng-tt-co.ng-coll::before{content:"";position:absolute;inset:0;background:var(--ng-surface);clip-path:polygon(0 0,100% 0,50% 100%);box-shadow:inset 0 0 0 1px var(--ng-border2);z-index:0}
+#nodeGraphTab.ng-clean .ng-tt-co.ng-coll.ng-sel::before{box-shadow:inset 0 0 0 1.5px #4f8cff}
+#nodeGraphTab.ng-clean .ng-tt-co.ng-coll .ng-hdr,
+#nodeGraphTab.ng-clean .ng-tt-co.ng-coll .ng-coll-row{position:relative;z-index:1}
+#nodeGraphTab.ng-clean .ng-tt-co.ng-coll .ng-hdr{background:none!important;border:none!important;box-shadow:none!important;padding:0;justify-content:center;min-height:0;gap:0}
+#nodeGraphTab.ng-clean .ng-tt-co.ng-coll .ng-hi{font-size:22px;width:auto;height:auto;background:none!important;border-radius:0}
+#nodeGraphTab.ng-clean .ng-tt-co.ng-coll .ng-coll-row{padding:0;width:auto;display:block}
+#nodeGraphTab.ng-clean .ng-tt-co.ng-coll .ng-coll-pi{left:16px;top:34%}
+#nodeGraphTab.ng-clean .ng-tt-co.ng-coll .ng-coll-po{right:16px;top:34%}
 .ng-note-body textarea{width:100%;min-height:55px;background:var(--ng-input);border:1px solid var(--ng-border2);color:var(--ng-text);font-size:12px;padding:6px 8px;border-radius:4px;resize:vertical;outline:none;font-family:inherit;line-height:1.4}
 .ng-note-body textarea:focus{border-color:#4f8cff}
 /* Data picker overlay */
