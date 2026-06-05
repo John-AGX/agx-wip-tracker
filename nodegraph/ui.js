@@ -2991,8 +2991,17 @@ function autoArrange(selectedId){
   var rootNode = selectedId ? E.findNode(selectedId) : allNodes.find(function(n){return n.type==='wip';});
   if(!rootNode) rootNode = allNodes[0];
   if(!rootNode || rootNode.type==='watch' || rootNode.type==='note') return;
-  var NODE_W=210, H_GAP=64, V_GAP=230, visited={}, cursorX=0;
+  var H_GAP=80, V_PAD=80, visited={}, cursorX=0, levelMaxH={};
   var TYPE_RANK={t1:1,t2:2,sub:3,po:4,inv:5,co:6,labor:7,burden:7.5,mat:8,gc:9,other:10,sum:11,sub2:11,mul:11,pct:11,job:12};
+  // Measure each node's true layout box from the DOM. offsetWidth/offsetHeight
+  // are in graph units (unaffected by the canvas zoom transform) and exclude
+  // the overflowing port nubs, so they're the right footprint for spacing.
+  // Falls back to estNodeHeight when a node isn't currently rendered.
+  function nodeDim(n){
+    var el=document.querySelector('.ng-node[data-id="'+n.id+'"]');
+    if(el && el.offsetHeight) return {w:el.offsetWidth||210, h:el.offsetHeight};
+    return {w:210, h:estNodeHeight(n)};
+  }
   function childrenOf(id){
     var seen={}, out=[];
     wires.forEach(function(w){
@@ -3004,23 +3013,33 @@ function autoArrange(selectedId){
     out.sort(function(a,b){return (TYPE_RANK[a.type]||99)-(TYPE_RANK[b.type]||99);});
     return out;
   }
+  // Pass 1: tidy-tree X — leaves slot left→right by their real width; each
+  // parent centers over its children. Also record each node's depth and the
+  // tallest node found at each depth (for the height-aware vertical pass).
   function tdLayout(id, depth){
     if(visited[id]) return null; visited[id]=true;
     var node=E.findNode(id); if(!node) return null;
-    var y=depth*V_GAP, kids=childrenOf(id), spans=[];
+    var dim=nodeDim(node); node._depth=depth;
+    if(levelMaxH[depth]==null||dim.h>levelMaxH[depth]) levelMaxH[depth]=dim.h;
+    var kids=childrenOf(id), spans=[];
     kids.forEach(function(k){ var s=tdLayout(k.id, depth+1); if(s) spans.push(s); });
-    if(!spans.length){ var lx=cursorX; cursorX+=NODE_W+H_GAP; node._tx=lx; node._ty=y; return {cx:lx+NODE_W/2, min:lx, max:lx+NODE_W}; }
+    if(!spans.length){ var lx=cursorX; cursorX+=dim.w+H_GAP; node._tx=lx; return {cx:lx+dim.w/2, min:lx, max:lx+dim.w}; }
     var cxc=(spans[0].cx+spans[spans.length-1].cx)/2;
-    node._tx=cxc-NODE_W/2; node._ty=y;
-    return {cx:cxc, min:Math.min(node._tx, spans[0].min), max:Math.max(node._tx+NODE_W, spans[spans.length-1].max)};
+    node._tx=cxc-dim.w/2;
+    return {cx:cxc, min:Math.min(node._tx, spans[0].min), max:Math.max(node._tx+dim.w, spans[spans.length-1].max)};
   }
   tdLayout(rootNode.id, 0);
+  // Pass 2: stack levels by measured row heights so a tall parent (e.g. the
+  // data-rich WIP master, ~900px) never overlaps the level hanging below it.
+  var levelY={}, accY=0, dpt=0;
+  while(levelMaxH[dpt]!=null){ levelY[dpt]=accY; accY+=levelMaxH[dpt]+V_PAD; dpt++; }
+  allNodes.forEach(function(n){ if(n._tx==null) return; n._ty=levelY[n._depth!=null?n._depth:0]||0; });
   var offX=rootNode.x - (rootNode._tx||0), offY=rootNode.y - (rootNode._ty||0);
   allNodes.forEach(function(n){
     if(n._tx==null) return;
     n.x=Math.round((n._tx+offX)/SNAP)*SNAP;
     n.y=Math.round((n._ty+offY)/SNAP)*SNAP;
-    delete n._tx; delete n._ty;
+    delete n._tx; delete n._ty; delete n._depth;
   });
   return;
   /* ── legacy radial arrange (retained, unreachable) ── */
