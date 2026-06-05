@@ -261,6 +261,16 @@ function renderNodes(){
       h+='<div class="ng-progress"><div class="ng-progress-fill" style="width:'+Math.min(pct,100)+'%;background:'+progColor+'"></div></div>';
       h+='</div>';
       h+='<div class="ng-progress-label"'+progAttr+' title="'+progTitle+'"><span class="ng-pct-val">'+pct.toFixed(0)+'%</span> '+(_computed?'avg':'complete')+(n.budget?' \u00b7 Budget: '+E.fmtC(n.budget):'')+'</div>';
+      // NG9: status-colored % pill (top-right corner). % complete, tinted by
+      // budget health (actual vs n.budget). Neutral when there's no budget.
+      var _chipCls='ng-stat-neutral', _chipAct=null;
+      if(n.budget && n.budget>0){
+        E.resetComp(); _chipAct=E.getActual(n);
+        var _chipR=_chipAct/n.budget;
+        _chipCls = _chipR>1 ? 'ng-stat-over' : (_chipR>=0.9 ? 'ng-stat-warn' : 'ng-stat-ok');
+      }
+      var _chipTitle = pct.toFixed(0)+'% complete'+(_chipAct!=null?' \u00b7 '+E.fmtC(_chipAct)+' of '+E.fmtC(n.budget)+(_chipCls==='ng-stat-over'?' (over budget)':''):'');
+      h+='<div class="ng-pct-chip '+_chipCls+'" title="'+_chipTitle+'">'+pct.toFixed(0)+'%</div>';
     }
 
     // Sub-items (type-specific layout)
@@ -1382,7 +1392,9 @@ function initEvents(){
       });
     } else {
       var label=d.label; if(d.nameEdit){ var pr=prompt('Name:',label); label=pr||label; }
-      cb(E.addNode(type,x,y,label));
+      var nn=E.addNode(type,x,y,label);
+      if(nn && nn.cat==='cost') nn.collapsed=true; // NG-R2: cost nodes spawn as round chips
+      cb(nn);
     }
   }
   // Searchable node-type menu anchored at a viewport point.
@@ -2929,6 +2941,10 @@ function populate(){
   // the octopus fan of per-output Watch nodes is retired (see ensureWatchFan
   // / pruneWipWatches). Manual Watch nodes can still be added from the library
   // to watch a specific building/phase value out on the canvas.
+
+  // NG-R2: cost-category nodes default to the round/collapsed "chip" form
+  // ($ at a glance); expand from the hover toolbar for the full line-item card.
+  E.nodes().forEach(function(n){ if(n.cat==='cost') n.collapsed=true; });
 }
 
 // ── Init ──

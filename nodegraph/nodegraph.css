@@ -202,6 +202,23 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
 .ng-p-currency{border-color:#34d399}.ng-p-currency.ng-pc{background:#34d399;border-color:#34d399}
 .ng-p-percent{border-color:#fbbf24}.ng-p-percent.ng-pc{background:#fbbf24;border-color:#fbbf24}
 .ng-p-number{border-color:#a78bfa}.ng-p-number.ng-pc{background:#a78bfa;border-color:#a78bfa}
+.ng-p-any{border-color:#4f8cff}.ng-p-any.ng-pc{background:#4f8cff;border-color:#4f8cff}
+/* NG-R1: directional input ports — a chevron tab pointing INTO the node.
+   The arrow is drawn on ::after so .ng-p::before stays the enlarged hit area. */
+.ng-pi{background:transparent;border:none;width:11px;height:14px;margin-left:-6px;border-radius:0}
+.ng-pi::after{content:"";position:absolute;inset:0;background:#566194;clip-path:polygon(0 0,100% 50%,0 100%)}
+.ng-pi.ng-p-currency::after{background:#34d399}
+.ng-pi.ng-p-percent::after{background:#fbbf24}
+.ng-pi.ng-p-number::after{background:#a78bfa}
+.ng-pi.ng-p-any::after{background:#4f8cff}
+.ng-pi:hover{background:transparent;box-shadow:none;transform:scale(1.4)}
+.ng-pi:hover::after{background:#4f8cff}
+/* NG9: status-colored % pill — small badge clipped to the node's top-right */
+.ng-pct-chip{position:absolute;top:-9px;right:10px;z-index:8;font-size:10px;font-weight:700;line-height:1;padding:3px 7px;border-radius:9px;border:1px solid var(--ng-border2);background:var(--ng-surface);color:var(--ng-dim);box-shadow:0 1px 4px var(--ng-shadow);pointer-events:none;user-select:none;white-space:nowrap}
+.ng-pct-chip.ng-stat-ok{background:rgba(52,211,153,.16);border-color:rgba(52,211,153,.5);color:#34d399}
+.ng-pct-chip.ng-stat-warn{background:rgba(251,191,36,.16);border-color:rgba(251,191,36,.5);color:#fbbf24}
+.ng-pct-chip.ng-stat-over{background:rgba(248,113,113,.18);border-color:rgba(248,113,113,.55);color:#f87171}
+.ng-pct-chip.ng-stat-neutral{background:var(--ng-input);border-color:var(--ng-border2);color:var(--ng-dim)}
 .ng-pv-top,.ng-pv-bot{position:absolute;left:50%;transform:translateX(-50%);width:16px;height:16px;border-width:2px}
 .ng-pv-top{top:-8px}
 .ng-pv-bot{bottom:-8px}
@@ -324,6 +341,16 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
 /* Note */
 .ng-note-body{padding:8px 12px 10px}
 .ng-node.ng-coll .ng-note-body{display:none}
+/* NG-R2: round cost nodes — a collapsed cost card becomes a circular chip
+   (icon + total $ at a glance, name below). Expand via the hover toolbar for
+   the full line-item card. Clean mode only; classic mode keeps the rect. */
+#nodeGraphTab.ng-clean .ng-t-cost.ng-coll{width:108px;min-width:108px;height:108px;border-radius:50%;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;padding:0;text-align:center}
+#nodeGraphTab.ng-clean .ng-t-cost.ng-coll .ng-hdr{background:none!important;border:none!important;box-shadow:none!important;padding:0;justify-content:center;min-height:0;gap:0}
+#nodeGraphTab.ng-clean .ng-t-cost.ng-coll .ng-hi{font-size:26px;width:auto;height:auto;background:none!important;border-radius:0}
+#nodeGraphTab.ng-clean .ng-t-cost.ng-coll .ng-coll-row{padding:0;width:auto;display:block}
+#nodeGraphTab.ng-clean .ng-t-cost.ng-coll .ng-coll-val{font-size:14px;font-weight:700;font-family:'Courier New',monospace;color:var(--ng-text);width:auto;text-align:center}
+#nodeGraphTab.ng-clean .ng-t-cost.ng-coll .ng-coll-pi{left:-5px}
+#nodeGraphTab.ng-clean .ng-t-cost.ng-coll .ng-coll-po{right:-5px}
 .ng-note-body textarea{width:100%;min-height:55px;background:var(--ng-input);border:1px solid var(--ng-border2);color:var(--ng-text);font-size:12px;padding:6px 8px;border-radius:4px;resize:vertical;outline:none;font-family:inherit;line-height:1.4}
 .ng-note-body textarea:focus{border-color:#4f8cff}
 /* Data picker overlay */
