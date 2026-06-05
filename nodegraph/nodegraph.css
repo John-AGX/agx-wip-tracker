@@ -350,7 +350,9 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
 #nodeGraphTab.ng-clean .ng-t-cost.ng-coll .ng-coll-row{padding:0;width:auto;display:block}
 #nodeGraphTab.ng-clean .ng-t-cost.ng-coll .ng-coll-val{font-size:14px;font-weight:700;font-family:'Courier New',monospace;color:var(--ng-text);width:auto;text-align:center}
 #nodeGraphTab.ng-clean .ng-t-cost.ng-coll .ng-coll-pi{left:-5px}
-#nodeGraphTab.ng-clean .ng-t-cost.ng-coll .ng-coll-po{right:-5px}
+/* NG-WIRE: output on TOP-center so the chip hangs straight below its parent
+   and the connector is a clean vertical drop (n8n sub-node cascade). */
+#nodeGraphTab.ng-clean .ng-t-cost.ng-coll .ng-coll-po{left:50%;top:-5px;right:auto;transform:translateX(-50%)}
 .ng-coll-val-big{font-size:15px;font-weight:700;font-family:'Courier New',monospace}
 /* ── NG-SHAPE: shape = type at a glance (n8n vocabulary) ──
    building → square · phase → half-rounded · change order → triangle chip
@@ -370,7 +372,8 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
 #nodeGraphTab.ng-clean .ng-tt-co.ng-coll .ng-hi{font-size:22px;width:auto;height:auto;background:none!important;border-radius:0}
 #nodeGraphTab.ng-clean .ng-tt-co.ng-coll .ng-coll-row{padding:0;width:auto;display:block}
 #nodeGraphTab.ng-clean .ng-tt-co.ng-coll .ng-coll-pi{left:-4px;top:50%}
-#nodeGraphTab.ng-clean .ng-tt-co.ng-coll .ng-coll-po{right:-4px;top:50%}
+/* NG-WIRE: CO output on TOP so it drops cleanly to WIP/parent below it. */
+#nodeGraphTab.ng-clean .ng-tt-co.ng-coll .ng-coll-po{left:50%;top:-4px;right:auto;transform:translateX(-50%)}
 .ng-note-body textarea{width:100%;min-height:55px;background:var(--ng-input);border:1px solid var(--ng-border2);color:var(--ng-text);font-size:12px;padding:6px 8px;border-radius:4px;resize:vertical;outline:none;font-family:inherit;line-height:1.4}
 .ng-note-body textarea:focus{border-color:#4f8cff}
 /* Data picker overlay */

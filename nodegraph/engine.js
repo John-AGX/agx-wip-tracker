@@ -1182,10 +1182,18 @@ function drawWires(ctx, wrap, wiringFrom, wireMouse){
     // bottom (n8n sub-node cascade). Render-only; the wire's ports are unchanged.
     var vertIn = tn && ((tn.type==='wip' && (w.toPort===0||w.toPort===1||w.toPort===2)) ||
                         ((tn.type==='t1'||tn.type==='t2') && w.toPort===0));
+    // NG-WIRE: collapsed cost/CO chips put their output on the TOP edge, so the
+    // connector is a clean vertical drop up to the parent's bottom port.
+    var srcChip = fn && fn.collapsed && (fn.cat==='cost' || fn.type==='co');
     ctx.beginPath(); ctx.moveTo(p1.x, p1.y);
     if(vertIn){
-      var vy = (w.toPort===1) ? -60 : 60; // top port from above; bottom ports from below
-      ctx.bezierCurveTo(p1.x+60, p1.y, p2.x, p2.y+vy, p2.x, p2.y);
+      var vy = (w.toPort===1) ? -60 : 60; // approach: top port from above, bottom from below
+      if(srcChip){
+        var dyc = Math.max(28, Math.min(80, Math.abs(p2.y-p1.y)*0.5));
+        ctx.bezierCurveTo(p1.x, p1.y - dyc, p2.x, p2.y + vy, p2.x, p2.y);
+      } else {
+        ctx.bezierCurveTo(p1.x+60, p1.y, p2.x, p2.y+vy, p2.x, p2.y);
+      }
     } else {
       var dx = Math.max(Math.abs(p2.x-p1.x)*0.4, 50);
       ctx.bezierCurveTo(p1.x+dx, p1.y, p2.x-dx, p2.y, p2.x, p2.y);
