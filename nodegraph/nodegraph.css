@@ -168,6 +168,18 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
 .ng-t-job{min-width:240px;border-color:#2563eb40}
 .ng-t-wip .ng-hdr{background:linear-gradient(135deg,rgba(251,191,36,.2),rgba(236,72,153,.1));color:#fbbf24}
 .ng-t-wip{min-width:340px;border-color:#f59e0b40}
+.ng-tt-wip{min-width:366px;max-width:460px}
+/* NG-WIP — overview dashboard (computed metrics as a KPI tile grid) */
+.ng-ov-head{padding:8px 12px 0;font-size:10px;font-weight:700;letter-spacing:.6px;text-transform:uppercase;color:var(--ng-dim2)}
+.ng-wip-ov{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:6px 12px 12px}
+.ng-wip-ov-kpi{display:flex;flex-direction:column;gap:3px;background:var(--ng-input);border:1px solid var(--ng-border2);border-radius:8px;padding:8px 10px;min-width:0}
+.ng-wip-ov-kpi.ng-ov-hero{grid-column:span 2;background:linear-gradient(180deg,rgba(79,140,255,.12),var(--ng-input));border-color:rgba(79,140,255,.32)}
+.ng-ov-lbl{font-size:10px;font-weight:600;letter-spacing:.3px;text-transform:uppercase;color:var(--ng-dim2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ng-ov-val{font-family:'Courier New',monospace;font-weight:700;font-size:17px;color:var(--ng-text);line-height:1.1}
+.ng-ov-hero .ng-ov-val{font-size:23px}
+.ng-ov-pos{color:#34d399}
+.ng-ov-neg{color:#f87171}
+.ng-ov-zero{color:var(--ng-dim)}
 .ng-wip-row{gap:10px}
 .ng-wip-lbl{flex:1;color:var(--ng-dim);font-size:13px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ng-wip-chip{display:inline-block;min-width:120px;text-align:right;font-family:'Courier New',monospace;font-size:15px;font-weight:700;color:#fbbf24;background:var(--ng-input);border:1px solid var(--ng-border2);border-radius:4px;padding:4px 10px;cursor:pointer;transition:all .12s;flex-shrink:0;user-select:none}
@@ -325,7 +337,17 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
 .ng-picker-loaded{opacity:.55;font-style:italic}
 .ng-picker-loaded:hover{opacity:.85;background:rgba(52,211,153,.08)}
 /* HUD */
-.ng-zoom{position:absolute;bottom:10px;left:10px;font-size:11px;color:var(--ng-dim2);background:var(--ng-surface);border:1px solid var(--ng-border2);border-radius:4px;padding:4px 10px;z-index:10}
+/* NG7 — zoom control cluster (bottom-left) */
+.ng-zoomctl{position:absolute;bottom:10px;left:10px;z-index:11;display:flex;align-items:center;gap:2px;background:var(--ng-surface);border:1px solid var(--ng-border2);border-radius:8px;padding:3px;box-shadow:0 2px 8px var(--ng-shadow)}
+.ng-zoom{font-size:11px;color:var(--ng-dim2);min-width:40px;text-align:center;user-select:none}
+.ng-zc-btn{width:25px;height:25px;display:flex;align-items:center;justify-content:center;border:none;background:transparent;color:var(--ng-text);font-size:16px;line-height:1;border-radius:6px;cursor:pointer;padding:0;font-family:inherit}
+.ng-zc-btn:hover{background:var(--ng-surface2)}
+.ng-zc-btn:active{background:var(--ng-input)}
+.ng-zc-fit{font-size:14px}
+/* NG7 — overview minimap (bottom-right, above the help strip) */
+.ng-minimap{position:absolute;bottom:46px;right:10px;width:190px;height:130px;background:var(--ng-surface);border:1px solid var(--ng-border2);border-radius:8px;overflow:hidden;z-index:11;box-shadow:0 2px 8px var(--ng-shadow);cursor:pointer}
+.ng-minimap-cv{display:block;width:190px;height:130px}
+.ng-minimap-vp{position:absolute;border:1.5px solid #4f8cff;background:rgba(79,140,255,0.12);pointer-events:none;border-radius:2px;top:0;left:0;width:0;height:0}
 .ng-help{position:absolute;bottom:10px;right:10px;font-size:10px;color:var(--ng-dim2);background:var(--ng-surface);border:1px solid var(--ng-border2);border-radius:4px;padding:5px 12px;z-index:10;line-height:1.5}
 
 /* ── Outlook-style ribbon toolbar ───────────────────────── */

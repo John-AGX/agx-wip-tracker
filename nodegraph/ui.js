@@ -727,16 +727,21 @@ function renderNodes(){
         }
       });
       h+='</div>';
-      // Metrics display
+      // NG-WIP: overview dashboard — computed metrics as a KPI tile grid.
+      // (Replaces the old per-output Watch fan; Watch nodes no longer echo
+      // these.) Total Income + Gross Profit are featured as full-width hero
+      // tiles; the rest fill a 2-column grid. Display-only — calc-safe.
       var wipD=E.DEFS.wip;
-      h+='<div style="padding:4px 10px 6px;border-top:1px solid var(--ng-border2);">';
+      h+='<div class="ng-ov-head">Overview</div>';
+      h+='<div class="ng-wip-ov">';
       wipD.outs.forEach(function(op,oi){
         var ov=E.getOutput(n,oi);
-        var cls=ov>0?' style="color:#34d399"':ov<0?' style="color:#f87171"':'';
         var fmt=op.t===E.PT.P?E.fmtP(ov):E.fmtC(ov);
-        h+='<div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid #1a1f30;font-size:14px;">';
-        h+='<span style="color:#6a7090;">'+op.n+'</span>';
-        h+='<span style="font-family:\'Courier New\',monospace;font-weight:700;font-size:15px;"'+cls+'>'+fmt+'</span>';
+        var vc=ov>0?'ng-ov-pos':ov<0?'ng-ov-neg':'ng-ov-zero';
+        var hero=(op.n==='Total Income'||op.n==='Gross Profit')?' ng-ov-hero':'';
+        h+='<div class="ng-wip-ov-kpi'+hero+'">';
+        h+='<span class="ng-ov-lbl">'+op.n+'</span>';
+        h+='<span class="ng-ov-val '+vc+'">'+fmt+'</span>';
         h+='</div>';
       });
       h+='</div>';
@@ -877,6 +882,7 @@ function render(){
   E.drawGrid(gridCtx, gridC.width, gridC.height);
   E.drawWires(wireCtx, wrap, wiringFrom, wireMouse);
   E.saveGraph();
+  drawMinimap();
   var z=document.querySelector('.ng-zoom');
   if(z) z.textContent=Math.round(E.zm()*100)+'%';
   if(wrap){
@@ -893,6 +899,66 @@ function render(){
 function applyTx(){
   var p=E.pan(), z=E.zm();
   canvasEl.style.transform='translate('+(p.x*z)+'px,'+(p.y*z)+'px) scale('+z+')';
+}
+
+// ── NG7: node footprint (true layout box) ──
+// offsetWidth/offsetHeight are graph-unit values (unaffected by the canvas
+// zoom transform) and exclude the overflowing port nubs — the right size for
+// minimap + fit math. Falls back to estNodeHeight when a node isn't rendered.
+function ngNodeFootprint(n){
+  var el=canvasEl?canvasEl.querySelector('.ng-node[data-id="'+n.id+'"]'):null;
+  if(el && el.offsetHeight) return {w:el.offsetWidth||210, h:el.offsetHeight};
+  return {w:210, h:(typeof estNodeHeight==='function'?estNodeHeight(n):120)};
+}
+
+// ── NG7: overview minimap ──
+// Draws every node scaled into the corner canvas + a rectangle marking the
+// current viewport. _ngMmTx caches the graph->minimap transform so the click/
+// drag navigation handler can invert a minimap point back to graph space.
+var _ngMmTx=null;
+var NG_MM_COL={wip:'#4f8cff',t1:'#5b8def',t2:'#6aa9ef',cost:'#e0a23c',sub:'#9b7ed8',co:'#e8806a',math:'#7a8699',watch:'#4bbf9a',note:'#cdbb6a'};
+function drawMinimap(){
+  if(!wrap) return;
+  var mm=wrap.querySelector('.ng-minimap');
+  var cv=wrap.querySelector('.ng-minimap-cv');
+  var vp=wrap.querySelector('.ng-minimap-vp');
+  if(!mm||!cv||!vp) return;
+  var ns=E.nodes();
+  if(!ns.length){ mm.style.display='none'; _ngMmTx=null; return; }
+  mm.style.display='';
+  var ctx=cv.getContext('2d'); if(!ctx) return;
+  var W=cv.width, H=cv.height;
+  ctx.clearRect(0,0,W,H);
+  var p=E.pan(), z=E.zm()||1;
+  // viewport rect in graph coords (screen 0..client maps to gx = sx/z - p)
+  var vx0=-p.x, vy0=-p.y, vw=wrap.clientWidth/z, vh=wrap.clientHeight/z;
+  // graph bounds — include the viewport so the vp marker is always on-map
+  var minX=vx0,minY=vy0,maxX=vx0+vw,maxY=vy0+vh;
+  var boxes=ns.map(function(n){
+    var f=ngNodeFootprint(n);
+    if(n.x<minX)minX=n.x; if(n.y<minY)minY=n.y;
+    if(n.x+f.w>maxX)maxX=n.x+f.w; if(n.y+f.h>maxY)maxY=n.y+f.h;
+    return {x:n.x,y:n.y,w:f.w,h:f.h,type:n.type};
+  });
+  var gw=Math.max(1,maxX-minX), gh=Math.max(1,maxY-minY), pad=8;
+  var scale=Math.min((W-pad*2)/gw,(H-pad*2)/gh);
+  var offX=(W-gw*scale)/2 - minX*scale;
+  var offY=(H-gh*scale)/2 - minY*scale;
+  _ngMmTx={scale:scale, offX:offX, offY:offY};
+  boxes.forEach(function(b){
+    var d=null; try{ d=E.DEFS[b.type]; }catch(e){}
+    var col=NG_MM_COL[b.type]||(d&&NG_MM_COL[d.cat])||'#6b7689';
+    ctx.fillStyle=col; ctx.globalAlpha=0.85;
+    ctx.fillRect(b.x*scale+offX, b.y*scale+offY, Math.max(2,b.w*scale), Math.max(2,b.h*scale));
+  });
+  ctx.globalAlpha=1;
+  // viewport marker (clamped to the minimap)
+  var rx=vx0*scale+offX, ry=vy0*scale+offY, rw=vw*scale, rh=vh*scale;
+  var lx=Math.max(0,rx), ty=Math.max(0,ry);
+  vp.style.left=lx+'px';
+  vp.style.top=ty+'px';
+  vp.style.width=Math.max(4,Math.min(W,rx+rw)-lx)+'px';
+  vp.style.height=Math.max(4,Math.min(H,ry+rh)-ty)+'px';
 }
 
 // ── Data Picker — select existing job data to load as a node ──
@@ -1404,15 +1470,15 @@ function initEvents(){
       applyTx(); render();
       return;
     }
-    // Approximate node footprint — actual width/height vary by type
-    // and collapsed state, but ~250×120 covers most.
-    var NW = 250, NH = 120;
+    // Measure each node's true footprint (NG7) so tall data-rich cards and
+    // the deep top-down tree fit fully instead of being clipped.
     var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     ns.forEach(function(n){
+      var f = ngNodeFootprint(n);
       if (n.x < minX) minX = n.x;
       if (n.y < minY) minY = n.y;
-      if (n.x + NW > maxX) maxX = n.x + NW;
-      if (n.y + NH > maxY) maxY = n.y + NH;
+      if (n.x + f.w > maxX) maxX = n.x + f.w;
+      if (n.y + f.h > maxY) maxY = n.y + f.h;
     });
     var bw = maxX - minX, bh = maxY - minY;
     var pad = 80;
@@ -1430,6 +1496,39 @@ function initEvents(){
     e.preventDefault();
     zoomAt(e.clientX, e.clientY, e.deltaY > 0 ? ZOOM_OUT_FACTOR : ZOOM_IN_FACTOR);
   },{passive:false});
+
+  // ── NG7: zoom control buttons (+ / − / fit) ──
+  var zcWrap=wrap.querySelector('.ng-zoomctl');
+  if(zcWrap){
+    // swallow mousedown so a button press doesn't start a canvas pan
+    zcWrap.addEventListener('mousedown',function(e){ e.stopPropagation(); });
+    zcWrap.addEventListener('click',function(e){
+      var btn=e.target.closest('.ng-zc-btn'); if(!btn) return;
+      var act=btn.getAttribute('data-zc');
+      var r=wrap.getBoundingClientRect(), cx=r.left+r.width/2, cy=r.top+r.height/2;
+      if(act==='in') zoomAt(cx,cy,1.25);
+      else if(act==='out') zoomAt(cx,cy,0.8);
+      else if(act==='fit') zoomFitAll();
+    });
+  }
+
+  // ── NG7: minimap navigation (click / drag to recenter the viewport) ──
+  var mm=wrap.querySelector('.ng-minimap');
+  if(mm){
+    var mmDragging=false;
+    function mmNavTo(e){
+      if(!_ngMmTx) return;
+      var r=mm.getBoundingClientRect();
+      var gx=(e.clientX-r.left-_ngMmTx.offX)/_ngMmTx.scale;
+      var gy=(e.clientY-r.top -_ngMmTx.offY)/_ngMmTx.scale;
+      var z=E.zm()||1;
+      E.pan(wrap.clientWidth/2/z - gx, wrap.clientHeight/2/z - gy);
+      applyTx(); render();
+    }
+    mm.addEventListener('mousedown',function(e){ e.stopPropagation(); e.preventDefault(); mmDragging=true; mmNavTo(e); });
+    window.addEventListener('mousemove',function(e){ if(mmDragging) mmNavTo(e); });
+    window.addEventListener('mouseup',function(){ mmDragging=false; });
+  }
 
   // Smart-ports: while dragging a wire, light up compatible input ports and
   // dim incompatible ones (reuses the engine's canConn type rules).
@@ -2824,23 +2923,10 @@ function populate(){
     });
   }
 
-  // Col 5: Watch nodes — one per WIP output, octopus fan to the right
-  var wipDef = E.DEFS.wip;
-  var wipOuts = wipDef ? wipDef.outs : [];
-  var wipCx = sx+700+160;
-  var wipCy = sy+50+220;
-  var radius = 780;
-  var count = wipOuts.length;
-  var arcSpan = 170; // total arc degrees — wider so tentacles clear each other
-  var arcStart = -arcSpan/2;
-  wipOuts.forEach(function(op,i){
-    var angleDeg = count>1 ? arcStart + arcSpan*i/(count-1) : 0;
-    var a = angleDeg*Math.PI/180;
-    var wx = wipCx + Math.cos(a)*radius;
-    var wy = wipCy + Math.sin(a)*radius - 70;
-    var w = E.addNode('watch',wx,wy,op.n);
-    if(w&&wipNode) E.wires().push({fromNode:wipNode.id,fromPort:i,toNode:w.id,toPort:0});
-  });
+  // NG-WIP: no Watch fan. WIP metrics render inside the WIP overview card;
+  // the octopus fan of per-output Watch nodes is retired (see ensureWatchFan
+  // / pruneWipWatches). Manual Watch nodes can still be added from the library
+  // to watch a specific building/phase value out on the canvas.
 }
 
 // ── Init ──
@@ -3400,34 +3486,30 @@ function refanWatches(){
 }
 
 // ── Public ──
-function ensureWatchFan(){
-  // For any WIP output port without a Watch already wired, add one in the octopus fan.
-  var nodes=E.nodes();
-  var wipNode=nodes.find(function(n){return n.type==='wip';});
+// WIP metrics now live inside the WIP overview card (NG-WIP). The old octopus
+// fan of Watch nodes echoing each WIP output is retired. This function used to
+// CREATE that fan; it now PRUNES it instead, so the change applies to existing
+// graphs (local + cloud) the moment they're opened or synced. All the former
+// "ensure" call sites (open / sync / reset) therefore self-heal. Manual Watch
+// nodes wired to a building/phase value are left intact. Watch nodes are
+// output-less display leaves, so removing them is calc-safe.
+function ensureWatchFan(){ return pruneWipWatches(); }
+
+// Remove every Watch node wired FROM a WIP output (plus its wire). Returns
+// true if anything was removed (so callers can re-render).
+function pruneWipWatches(){
+  var wipNode=E.nodes().find(function(n){return n.type==='wip';});
   if(!wipNode) return false;
-  var wipDef=E.DEFS.wip;
-  if(!wipDef||!wipDef.outs) return false;
-  var wipOuts=wipDef.outs;
-  var wired={};
+  var rm={};
   E.wires().forEach(function(w){
     if(w.fromNode===wipNode.id){
       var t=E.findNode(w.toNode);
-      if(t&&t.type==='watch') wired[w.fromPort]=true;
+      if(t && t.type==='watch') rm[t.id]=true;
     }
   });
-  var missing=[];
-  wipOuts.forEach(function(_,i){ if(!wired[i]) missing.push(i); });
-  if(missing.length===0) return false;
-  var wipCx=wipNode.x+160, wipCy=wipNode.y+220;
-  var radius=1100, count=wipOuts.length, arcSpan=210, arcStart=-arcSpan/2;
-  missing.forEach(function(portIdx){
-    var angleDeg=count>1?arcStart+arcSpan*portIdx/(count-1):0;
-    var a=angleDeg*Math.PI/180;
-    var wx=wipCx+Math.cos(a)*radius;
-    var wy=wipCy+Math.sin(a)*radius-70;
-    var w=E.addNode('watch',wx,wy,wipOuts[portIdx].n);
-    if(w) E.wires().push({fromNode:wipNode.id,fromPort:portIdx,toNode:w.id,toPort:0});
-  });
+  if(!Object.keys(rm).length) return false;
+  E.setNodes(E.nodes().filter(function(n){ return !rm[n.id]; }));
+  E.setWires(E.wires().filter(function(w){ return !rm[w.fromNode] && !rm[w.toNode]; }));
   return true;
 }
 

@@ -3038,7 +3038,7 @@
     <script src="js/edit-gate.js?v=1"></script>
 
     <!-- Node Graph (Beta) -->
-    <link rel="stylesheet" href="nodegraph/nodegraph.css?v=92" />
+    <link rel="stylesheet" href="nodegraph/nodegraph.css?v=93" />
     <div id="nodeGraphTab">
       <!-- Workspace canvas toolbar — Outlook ribbon style. Each
            button is icon-on-top + label-below, buttons cluster into
@@ -3143,13 +3143,22 @@
           <canvas class="ng-grid-canvas"></canvas>
           <div class="ng-canvas"></div>
           <canvas class="ng-wire-canvas"></canvas>
-          <div class="ng-zoom">100%</div>
+          <div class="ng-minimap" title="Overview — click or drag to navigate">
+            <canvas class="ng-minimap-cv" width="190" height="130"></canvas>
+            <div class="ng-minimap-vp"></div>
+          </div>
+          <div class="ng-zoomctl">
+            <button type="button" class="ng-zc-btn" data-zc="out" title="Zoom out" aria-label="Zoom out">&#8722;</button>
+            <span class="ng-zoom">100%</span>
+            <button type="button" class="ng-zc-btn" data-zc="in" title="Zoom in" aria-label="Zoom in">+</button>
+            <button type="button" class="ng-zc-btn ng-zc-fit" data-zc="fit" title="Fit all to view" aria-label="Fit all">&#9974;</button>
+          </div>
           <div class="ng-help">Drag port &#x2192; port &nbsp;|&nbsp; Scroll zoom &nbsp;|&nbsp; Ctrl + right-click = fit all &nbsp;|&nbsp; Right-click wire = delete &nbsp;|&nbsp; Del = remove node</div>
         </div>
       </div>
     </div>
     <script src="nodegraph/engine.js?v=76"></script>
-    <script src="nodegraph/ui.js?v=154"></script>
+    <script src="nodegraph/ui.js?v=155"></script>
 
     <!-- ── Mobile bottom nav (M1) ─────────────────────────────────
          Visible only below 768px (CSS-gated). Five-slot layout:
