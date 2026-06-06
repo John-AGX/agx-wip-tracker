@@ -254,7 +254,12 @@ router.post('/import', requireAuth, requireCapability('LEADS_EDIT'), async (req,
 
     // Existing leads keyed by lowercase title — used for dedupe so re-running
     // an import doesn't double-insert the same opportunity.
-    const existingLeadsRes = await pool.query('SELECT id, title FROM leads');
+    // Wave A (A7): scope dedup to the caller's org so a re-import can't match
+    // (or skip against) another org's lead. OR-IS-NULL = no-op for AGX.
+    const existingLeadsRes = await pool.query(
+      'SELECT id, title FROM leads WHERE (organization_id = $1 OR organization_id IS NULL)',
+      [req.user.organization_id]
+    );
     const existingByTitle = new Map();
     for (const l of existingLeadsRes.rows) {
       if (l.title) existingByTitle.set(String(l.title).trim().toLowerCase(), l.id);
@@ -284,8 +289,10 @@ router.post('/import', requireAuth, requireCapability('LEADS_EDIT'), async (req,
         }
 
         const id = 'lead_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
-        const cols = ['id', 'created_by'].concat(Object.keys(fields));
-        const vals = [id, req.user.id].concat(Object.keys(fields).map(k => fields[k]));
+        // Wave A (A7): stamp organization_id on import so re-imported BT rows
+        // carry the right tenant from the start (don't wait for a boot backfill).
+        const cols = ['id', 'created_by', 'organization_id'].concat(Object.keys(fields));
+        const vals = [id, req.user.id, req.user.organization_id].concat(Object.keys(fields).map(k => fields[k]));
         const placeholders = cols.map((_, idx) => '$' + (idx + 1)).join(', ');
         try {
           await client.query(

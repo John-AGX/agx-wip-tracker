@@ -252,7 +252,13 @@ router.post('/import', requireAuth, requireCapability('ESTIMATES_EDIT'), async (
 
     // Build a name -> id index of the existing directory for case-insensitive
     // dedupe. We do this once up front and keep it in sync as we go.
-    const existing = await pool.query('SELECT id, name FROM clients');
+    // Wave A (A7): scope the dedup/parent index to the caller's org so a
+    // re-import can't dedup against (or attach a parent from) another org.
+    // OR-IS-NULL = no-op for AGX.
+    const existing = await pool.query(
+      'SELECT id, name FROM clients WHERE (organization_id = $1 OR organization_id IS NULL)',
+      [req.user.organization_id]
+    );
     const byName = new Map();
     for (const r of existing.rows) byName.set(String(r.name).trim().toLowerCase(), r.id);
 
@@ -335,8 +341,9 @@ router.post('/import', requireAuth, requireCapability('ESTIMATES_EDIT'), async (
           }
         } else {
           const id = 'client_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
-          const cols = ['id', 'name', 'parent_client_id'];
-          const vals = [id, name, parentId];
+          // Wave A (A7): stamp organization_id on import (clients has the column).
+          const cols = ['id', 'name', 'parent_client_id', 'organization_id'];
+          const vals = [id, name, parentId, req.user.organization_id];
           for (const k of Object.keys(fields)) {
             if (k === 'name') continue;
             if (fields[k] === '' || fields[k] == null) continue;
