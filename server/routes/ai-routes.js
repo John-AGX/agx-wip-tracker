@@ -1460,10 +1460,20 @@ const JOB_TOOLS = [
 async function buildEstimateContext(estimateId, includePhotos, aiPhaseOverride, organization) {
   // Estimate row carries the JSONB blob with all the editor fields plus
   // alternates and lines (the bulk-save routes serialize them this way).
-  const estRes = await pool.query(
-    'SELECT id, owner_id, data FROM estimates WHERE id = $1',
-    [estimateId]
-  );
+  // Wave A (A6): the client supplies entity_id, so scope the estimate to the
+  // caller's org (owner -> users.organization_id). A cross-org id yields no row
+  // -> "Estimate not found" -> the caller's try/catch degrades to empty context.
+  // OR-IS-NULL (org tolerance) + conditional-on-org-present = no-op for AGX.
+  const _orgId = organization && organization.id;
+  const estRes = _orgId != null
+    ? await pool.query(
+        `SELECT e.id, e.owner_id, e.data FROM estimates e
+           JOIN users u ON u.id = e.owner_id
+          WHERE e.id = $1 AND (u.organization_id = $2 OR u.organization_id IS NULL)`,
+        [estimateId, _orgId])
+    : await pool.query(
+        'SELECT id, owner_id, data FROM estimates WHERE id = $1',
+        [estimateId]);
   if (!estRes.rows.length) throw new Error('Estimate not found');
   const blob = estRes.rows[0].data || {};
 
@@ -4567,7 +4577,17 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
   // responses.
   const slimForRouter = !(opts && opts.slimForRouter === false);
   // Pull the job + the related data the bulk-save serializes alongside it.
-  const jobRes = await pool.query('SELECT id, owner_id, data FROM jobs WHERE id = $1', [jobId]);
+  // Wave A (A6): scope the job to the caller's org (owner -> users.org). A
+  // cross-org id yields no row -> caught upstream -> empty context. OR-IS-NULL
+  // (org tolerance) + conditional-on-org-present = no-op for AGX.
+  const _orgId = organization && organization.id;
+  const jobRes = _orgId != null
+    ? await pool.query(
+        `SELECT j.id, j.owner_id, j.data FROM jobs j
+           JOIN users u ON u.id = j.owner_id
+          WHERE j.id = $1 AND (u.organization_id = $2 OR u.organization_id IS NULL)`,
+        [jobId, _orgId])
+    : await pool.query('SELECT id, owner_id, data FROM jobs WHERE id = $1', [jobId]);
   if (!jobRes.rows.length) throw new Error('Job not found');
   const job = { id: jobRes.rows[0].id, owner_id: jobRes.rows[0].owner_id, ...jobRes.rows[0].data };
 
