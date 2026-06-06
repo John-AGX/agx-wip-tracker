@@ -896,13 +896,22 @@ router.post('/bulk-tag', requireAuth, async (req, res) => {
 router.get('/recent', requireAuth, async (req, res) => {
   try {
     const limit = Math.min(24, Math.max(1, parseInt(req.query.limit, 10) || 10));
+    // Wave A (A1): scope to the caller's org. Attachments are polymorphic
+    // (9 entity types), so rather than a casted per-type union we scope by the
+    // UPLOADER's org (uploaded_by -> users.organization_id) — correct for a
+    // "recent uploads" discovery widget. LEFT JOIN + OR-IS-NULL (org tolerance)
+    // keeps it a no-op for AGX today (un-stamped / system uploads still show);
+    // tighten by dropping the IS NULL clause once data is fully org-stamped.
+    const orgId = req.user.organization_id;
     const { rows } = await pool.query(
-      `SELECT id, entity_type, entity_id, filename, mime_type, size_bytes,
-              thumb_url, web_url, original_url, folder, uploaded_at, uploaded_by
-         FROM attachments
-        ORDER BY uploaded_at DESC
+      `SELECT a.id, a.entity_type, a.entity_id, a.filename, a.mime_type, a.size_bytes,
+              a.thumb_url, a.web_url, a.original_url, a.folder, a.uploaded_at, a.uploaded_by
+         FROM attachments a
+         LEFT JOIN users u ON u.id = a.uploaded_by
+        WHERE (u.organization_id = $2 OR u.organization_id IS NULL)
+        ORDER BY a.uploaded_at DESC
         LIMIT $1`,
-      [limit]
+      [limit, orgId]
     );
     res.json({ attachments: rows });
   } catch (e) {

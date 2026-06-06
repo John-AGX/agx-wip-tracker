@@ -18,6 +18,7 @@
 const express = require('express');
 const { pool } = require('../db');
 const { requireAuth, requireCapability } = require('../auth');
+const { assertEntityInOrg } = require('../org-access');
 const { sendEmail } = require('../email');
 const { scheduleAssigned } = require('../email-templates');
 
@@ -182,12 +183,17 @@ router.get('/',
     try {
       const params = [];
       const where = [];
+      // Wave A (A5): scope to the caller's org via job -> owner -> org. LEFT
+      // JOINs + OR-IS-NULL (org tolerance) + "s.job_id IS NULL" (standalone
+      // entries) keep this a no-op for AGX today.
+      params.push(req.user.organization_id);
+      const orgParam = '$' + params.length;
       if (req.query.from) {
         if (!/^\d{4}-\d{2}-\d{2}$/.test(String(req.query.from))) {
           return res.status(400).json({ error: 'from must be YYYY-MM-DD' });
         }
         params.push(req.query.from);
-        where.push('start_date >= $' + params.length);
+        where.push('s.start_date >= $' + params.length);
       }
       if (req.query.to) {
         if (!/^\d{4}-\d{2}-\d{2}$/.test(String(req.query.to))) {
@@ -196,19 +202,23 @@ router.get('/',
         params.push(req.query.to);
         // Use start_date <= to since the entry could span past it; the
         // client expands days[] when rendering anyway.
-        where.push('start_date <= $' + params.length);
+        where.push('s.start_date <= $' + params.length);
       }
       if (req.query.jobId) {
         params.push(String(req.query.jobId));
-        where.push('job_id = $' + params.length);
+        where.push('s.job_id = $' + params.length);
       }
+      where.push('(u.organization_id = ' + orgParam +
+                 ' OR u.organization_id IS NULL OR s.job_id IS NULL)');
       // Cast start_date through to_char to dodge pg's timezone-aware
       // Date parsing for the DATE column (see rowToJson comment).
       const sql =
-        "SELECT *, to_char(start_date, 'YYYY-MM-DD') AS start_date_iso " +
-        'FROM schedule_entries ' +
-        (where.length ? 'WHERE ' + where.join(' AND ') + ' ' : '') +
-        'ORDER BY start_date ASC, created_at ASC';
+        "SELECT s.*, to_char(s.start_date, 'YYYY-MM-DD') AS start_date_iso " +
+        'FROM schedule_entries s ' +
+        'LEFT JOIN jobs j ON j.id = s.job_id ' +
+        'LEFT JOIN users u ON u.id = j.owner_id ' +
+        'WHERE ' + where.join(' AND ') + ' ' +
+        'ORDER BY s.start_date ASC, s.created_at ASC';
       const { rows } = await pool.query(sql, params);
       res.json({ entries: rows.map(rowToJson) });
     } catch (e) {
@@ -289,6 +299,10 @@ router.patch('/:id',
       const v = parsed.value;
       const expectedUpdatedAt = v._expectedUpdatedAt;
       delete v._expectedUpdatedAt;
+
+      // Wave A (A5): the entry must belong to the caller's org before any edit.
+      const inOrg = await assertEntityInOrg('schedule_entry', req.params.id, req.user.organization_id);
+      if (!inOrg) return res.status(404).json({ error: 'not found' });
 
       // Optimistic-locking pre-check. Skipped silently when the
       // client hasn't sent a token (older callers / scripts).
@@ -380,6 +394,9 @@ router.delete('/:id',
   requireAuth, requireCapability('JOBS_VIEW_ALL'),
   async (req, res) => {
     try {
+      // Wave A (A5): only delete entries in the caller's org.
+      const inOrg = await assertEntityInOrg('schedule_entry', req.params.id, req.user.organization_id);
+      if (!inOrg) return res.status(404).json({ error: 'not found' });
       const { rowCount } = await pool.query('DELETE FROM schedule_entries WHERE id = $1', [req.params.id]);
       if (!rowCount) return res.status(404).json({ error: 'not found' });
       res.json({ ok: true });

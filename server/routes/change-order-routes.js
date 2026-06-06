@@ -20,7 +20,8 @@
 //   DELETE /api/change-orders/:id                  hard delete (forbidden if 'applied')
 const express = require('express');
 const { pool } = require('../db');
-const { requireAuth, requireCapability } = require('../auth');
+const { requireAuth, requireCapability, hasCapability } = require('../auth');
+const { assertEntityInOrg } = require('../org-access');
 
 const router = express.Router();
 
@@ -77,6 +78,10 @@ function shapeRow(r) {
 // GET /api/jobs/:jobId/change-orders
 router.get('/jobs/:jobId/change-orders', requireAuth, async (req, res) => {
   try {
+    // Wave A (A3): the job must belong to the caller's org. assertEntityInOrg
+    // uses the owner->org join with OR-IS-NULL tolerance (no-op for AGX).
+    const inOrg = await assertEntityInOrg('job', req.params.jobId, req.user.organization_id);
+    if (!inOrg) return res.json({ change_orders: [] });
     const { rows } = await pool.query(
       `SELECT id, job_id, owner_id, status, co_number, data, approved_at,
               approved_by, linked_node_id, created_at, updated_at
@@ -245,9 +250,16 @@ router.post('/change-orders/:id/status', requireAuth, async (req, res) => {
     if (!STATUS_VALUES.includes(next)) {
       return res.status(400).json({ error: 'Invalid status' });
     }
+    // Wave A (A4): resolve the CO through its job's owner -> org so a CO outside
+    // the caller's org reads as "not found". OR-IS-NULL (org tolerance) = no-op
+    // for AGX today.
     const { rows } = await pool.query(
-      `SELECT status, job_id, linked_node_id, data FROM job_change_orders WHERE id = $1`,
-      [id]
+      `SELECT co.status, co.job_id, co.linked_node_id, co.data
+         FROM job_change_orders co
+         JOIN jobs j ON j.id = co.job_id
+         JOIN users u ON u.id = j.owner_id
+        WHERE co.id = $1 AND (u.organization_id = $2 OR u.organization_id IS NULL)`,
+      [id, req.user.organization_id]
     );
     if (!rows.length) return res.status(404).json({ error: 'Not found' });
     const current = rows[0].status;
@@ -260,7 +272,10 @@ router.post('/change-orders/:id/status', requireAuth, async (req, res) => {
     // require the user to own the job (job.owner_id check).
     if (next === 'approved' || next === 'applied') {
       const role = req.user.role || '';
-      const isPrivileged = (req.user.capabilities || []).includes('JOBS_EDIT_ANY')
+      // Wave B (B1): the JWT carries no `capabilities` array — that check was
+      // always false (wrongly blocked a non-owner PM holding JOBS_EDIT_ANY).
+      // Use the role-cache helper, the way the rest of the app checks caps.
+      const isPrivileged = hasCapability(req.user, 'JOBS_EDIT_ANY')
                           || role === 'admin' || role === 'corporate';
       if (!isPrivileged) {
         const ownerCheck = await pool.query('SELECT owner_id FROM jobs WHERE id = $1', [rows[0].job_id]);

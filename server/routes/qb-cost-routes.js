@@ -217,18 +217,30 @@ router.get('/',
   async (req, res) => {
     try {
       const { jobId } = req.query;
+      // Wave A (A2): scope cost lines to the caller's org via job -> owner -> org.
+      // LEFT JOIN + OR-IS-NULL (org tolerance) = no-op for AGX today; tighten by
+      // dropping the IS NULL clause once data is fully org-stamped.
+      const orgId = req.user.organization_id;
       let rows;
       if (jobId) {
         const r = await pool.query(
-          `SELECT * FROM qb_cost_lines WHERE job_id = $1
-           ORDER BY txn_date DESC NULLS LAST, amount DESC`,
-          [jobId]
+          `SELECT q.* FROM qb_cost_lines q
+             LEFT JOIN jobs j ON j.id = q.job_id
+             LEFT JOIN users u ON u.id = j.owner_id
+            WHERE q.job_id = $1
+              AND (u.organization_id = $2 OR u.organization_id IS NULL)
+            ORDER BY q.txn_date DESC NULLS LAST, q.amount DESC`,
+          [jobId, orgId]
         );
         rows = r.rows;
       } else {
         const r = await pool.query(
-          `SELECT * FROM qb_cost_lines
-           ORDER BY txn_date DESC NULLS LAST, amount DESC LIMIT 5000`
+          `SELECT q.* FROM qb_cost_lines q
+             LEFT JOIN jobs j ON j.id = q.job_id
+             LEFT JOIN users u ON u.id = j.owner_id
+            WHERE (u.organization_id = $1 OR u.organization_id IS NULL)
+            ORDER BY q.txn_date DESC NULLS LAST, q.amount DESC LIMIT 5000`,
+          [orgId]
         );
         rows = r.rows;
       }
