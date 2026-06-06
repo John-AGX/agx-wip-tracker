@@ -1991,20 +1991,135 @@
   var _wsServerSavePendingPayload = null;
   var _wsServerSavePendingEntity = null;
 
-  function saveWorkspace() {
-    if (!workbook.entityType || workbook.entityId == null) return;
-    syncGridToActiveSheet();
-    const data = {
-      // Versioned shape so the next migration knows what it's reading.
+  // ── WS-POP: pop-out window + single-live-copy coordination ──────────
+  // The workspace can open in a dedicated browser window (/workspace/:type/:id)
+  // so it can live on a second monitor. There's no live cell-sync and server
+  // saves are last-write-wins, so only ONE instance of a given sheet is the
+  // live editor at a time; the others show a placeholder. Coordination rides a
+  // per-entity BroadcastChannel.
+  var IS_WS_POPOUT = /^\/workspace\//.test(location.pathname || '');
+  var _wsContainerId = null;   // where the current instance is mounted
+  var _wsBC = null;            // BroadcastChannel for the active entity
+  var _wsInstanceId = String(Date.now()) + '.' + Math.random().toString(36).slice(2);
+  var _wsIsEditor = true;      // is this instance the live editor?
+  var _wsClaimTs = 0;          // timestamp of my editor claim (tiebreak)
+  var _wsUnloadWired = false;
+
+  // Build the persisted workbook payload — shared by autosave + close-flush so
+  // the two can never drift. Syncs the live grid into the active sheet first.
+  function _wsBuildSaveData() {
+    try { syncGridToActiveSheet(); } catch (e) {}
+    return {
       version: 2,
       activeSheetId: workbook.activeSheetId,
       sheets: workbook.sheets,
-      // Workbook-scoped named ranges (Phase 2.7).
       namedRanges: workbook.namedRanges || {},
-      // Per-workbook-group "last active inner sheet" so clicking a
-      // workbook tab returns to the same sheet across reloads.
       workbookGroupActive: workbook.workbookGroupActive || {}
     };
+  }
+
+  // Flush any pending debounced save immediately, surviving page unload via
+  // fetch keepalive (so the last keystrokes in a closing pop-out persist).
+  function _wsFlushSave() {
+    if (!workbook.entityType || workbook.entityId == null) return;
+    if (_wsServerSaveTimer) { clearTimeout(_wsServerSaveTimer); _wsServerSaveTimer = null; }
+    var data = _wsBuildSaveData();
+    try {
+      var allWs = safeLoadJSON('p86-workspaces', {});
+      allWs[_wsLocalKey(workbook.entityType, workbook.entityId)] = data;
+      localStorage.setItem('p86-workspaces', JSON.stringify(allWs));
+    } catch (e) {}
+    var url = '/api/' + (workbook.entityType === 'job' ? 'jobs' : 'estimates') + '/' + encodeURIComponent(workbook.entityId) + '/workbook';
+    try {
+      fetch(url, { method: 'PUT', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data), keepalive: true });
+    } catch (e) {}
+  }
+
+  // Stand up the per-entity coordination channel and claim editor role.
+  function _wsSetupCoordination(type, id, containerId) {
+    if (type == null || id == null || typeof BroadcastChannel === 'undefined') return;
+    if (_wsBC) { try { _wsBC.close(); } catch (e) {} _wsBC = null; }
+    _wsIsEditor = true;
+    _wsClaimTs = Date.now();
+    _wsBC = new BroadcastChannel('p86-ws-' + type + '-' + id);
+    _wsBC.onmessage = function (ev) {
+      var m = ev.data || {};
+      if (!m || m.from === _wsInstanceId) return;
+      if (m.t === 'claim') {
+        // Newer claim wins; older yields. Tiebreak by instance id so two
+        // simultaneous opens can't both yield (deadlock).
+        var theyAreNewer = (m.ts > _wsClaimTs) || (m.ts === _wsClaimTs && m.from > _wsInstanceId);
+        if (_wsIsEditor && theyAreNewer) _wsYieldToPlaceholder(type, id, containerId);
+      } else if (m.t === 'released') {
+        // Let the closing editor's keepalive PUT commit server-side before we
+        // re-fetch, so the reclaiming instance loads the latest, not stale data.
+        if (!_wsIsEditor) setTimeout(function () { if (!_wsIsEditor) _wsReclaim(type, id, containerId); }, 500);
+      }
+    };
+    try { _wsBC.postMessage({ t: 'claim', from: _wsInstanceId, ts: _wsClaimTs }); } catch (e) {}
+  }
+
+  // Give up editor role: flush my edits, then swap the grid for a placeholder.
+  function _wsYieldToPlaceholder(type, id, containerId) {
+    _wsIsEditor = false;
+    _wsFlushSave();
+    var c = document.getElementById(containerId);
+    if (!c) return;
+    var sub = IS_WS_POPOUT
+      ? 'This sheet is being edited in the main window — you can close this window.'
+      : 'It’s open in a separate window so edits don’t overwrite each other.';
+    c.innerHTML =
+      '<div class="ws-popout-placeholder">' +
+        '<div class="ws-pp-icon">⧉</div>' +
+        '<div class="ws-pp-title">Workspace open in another window</div>' +
+        '<div class="ws-pp-sub">' + sub + '</div>' +
+        '<button class="ws-btn ws-pp-btn" type="button">Bring it back here</button>' +
+      '</div>';
+    var btn = c.querySelector('.ws-pp-btn');
+    if (btn) btn.onclick = function () { _wsReclaim(type, id, containerId); };
+  }
+
+  // Become the editor again: re-mount (reloads the latest from the server) —
+  // the fresh init re-broadcasts a claim so the other instance yields.
+  function _wsReclaim(type, id, containerId) {
+    initWorkspace(containerId, type, id);
+  }
+
+  // Wire the toolbar "Pop out" anchor for the current instance.
+  function _wsSetupPopoutButton(type, id) {
+    var a = wsContainer && wsContainer.querySelector('.ws-tb-popout');
+    if (!a) return;
+    if (IS_WS_POPOUT || type == null || id == null) { a.style.display = 'none'; return; }
+    var href = '/workspace/' + type + '/' + encodeURIComponent(id);
+    a.setAttribute('href', href);
+    var winName = 'p86ws-' + type + '-' + id;
+    a.onclick = function (e) {
+      // Let non-left / modified clicks use the browser's native behavior
+      // (right-click → Open in new window; ctrl/cmd/middle → new tab).
+      if (e.button !== 0 || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+      e.preventDefault();
+      var w = Math.min((window.screen && screen.availWidth) || 1440, 1680);
+      var h = Math.min((window.screen && screen.availHeight) || 900, 1180);
+      window.open(href, winName, 'popup,width=' + w + ',height=' + h);
+    };
+  }
+
+  // Render the standalone pop-out view (called by auth.js on /workspace/* URLs).
+  function renderWorkspacePopout() {
+    var m = /^\/workspace\/(job|estimate)\/([^\/?#]+)/.exec(location.pathname || '');
+    if (!m) return false;
+    var type = m[1], id = decodeURIComponent(m[2]);
+    document.body.classList.add('p86-ws-popout');
+    var host = document.getElementById('wsPopoutHost');
+    if (!host) { host = document.createElement('div'); host.id = 'wsPopoutHost'; document.body.appendChild(host); }
+    document.title = 'Workspace — ' + (type === 'job' ? 'Job' : 'Estimate') + ' ' + id;
+    initWorkspace('wsPopoutHost', type, id);
+    return true;
+  }
+
+  function saveWorkspace() {
+    if (!workbook.entityType || workbook.entityId == null) return;
+    const data = _wsBuildSaveData();
     // Write-through to localStorage immediately — that's the offline
     // cache + the safety net if the server PUT fails.
     const allWs = safeLoadJSON('p86-workspaces', {});
@@ -2910,6 +3025,7 @@
             <button class="ws-btn ws-btn-icon" id="wsExportXlsxBtn" onclick="window.wsExportXlsx()" title="Export workbook to .xlsx (preserves formulas, merges, column widths, frozen panes)">&#x1F4E4;</button>
             <button class="ws-btn ws-btn-icon" id="wsExportCsvBtn" onclick="window.wsExportCsv()" title="Export active sheet to .csv">&#x1F4DD;</button>
             <button class="ws-btn ws-btn-icon" id="wsFindReplaceBtn" onclick="window.wsOpenFindReplace()" title="Find / Replace (Ctrl+F)">&#x1F50D;</button>
+            <a class="ws-btn ws-btn-icon ws-tb-popout" href="#" target="_blank" rel="noopener" title="Pop out to a separate window — drag it to another monitor (right-click → Open in new window)">&#x29C9;</a>
           </div>
           <div class="ws-ribbon-label">File</div>
         </div>
@@ -7557,6 +7673,19 @@
     renderActiveSheet();
     renderSheetTabs();
 
+    // WS-POP: wire the pop-out button + single-live-copy coordination now that
+    // the entity (workbook.entityType/entityId) is known.
+    _wsContainerId = containerId;
+    _wsSetupPopoutButton(workbook.entityType, workbook.entityId);
+    _wsSetupCoordination(workbook.entityType, workbook.entityId, containerId);
+    if (!_wsUnloadWired) {
+      _wsUnloadWired = true;
+      window.addEventListener('beforeunload', function () {
+        try { if (_wsIsEditor) _wsFlushSave(); } catch (e) {}
+        try { if (_wsBC) _wsBC.postMessage({ t: 'released', from: _wsInstanceId }); } catch (e) {}
+      });
+    }
+
     // Select first cell only when starting on a grid sheet — embedded
     // views don't have cells.
     if (!isEmbedSheet(activeSheet())) selectCell(0, 0);
@@ -7961,6 +8090,7 @@
 
   // ── Expose globally ────────────────────────────────────────
   window.initWorkspace = initWorkspace;
+  window.renderWorkspacePopout = renderWorkspacePopout; // WS-POP: standalone window entry
   window.workspaceGrid = grid;
 
 })();

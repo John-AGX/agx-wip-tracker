@@ -43,6 +43,13 @@
     document.getElementById('login-screen').style.display = 'none';
     document.getElementById('app-container').style.display = '';
     updateUserMenu();
+    // WS-POP: standalone Workspace pop-out window (/workspace/:type/:id) —
+    // render only the spreadsheet full-window (chrome hidden via
+    // body.p86-ws-popout) and skip the normal tab/nav restore.
+    if (/^\/workspace\//.test(location.pathname) && typeof window.renderWorkspacePopout === 'function') {
+      try { if (window.renderWorkspacePopout()) return; }
+      catch (e) { console.warn('[ws-popout] render failed:', e); }
+    }
     // Try to restore the user's last position first — refresh-to-home
     // was disorienting when you'd just opened a job or estimate. The
     // restorer (in app.js) returns false if the saved tab is no longer

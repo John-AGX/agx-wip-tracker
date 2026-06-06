@@ -1646,3 +1646,28 @@ body.light-mode .ee-grand-total {
   border-color: var(--accent, #107C41);
 }
 .ws-filter-popup .ws-btn { font-size: 11px; }
+
+/* ── WS-POP: pop-out Workspace window + single-live-copy placeholder ── */
+/* Standalone window (/workspace/:type/:id): hide the whole app, show only the
+   spreadsheet full-window. #wsPopoutHost is appended to <body>, outside #app. */
+body.p86-ws-popout #app-container { display: none !important; }
+body.p86-ws-popout #login-screen { display: none !important; }
+#wsPopoutHost {
+  position: fixed; inset: 0; overflow: hidden; z-index: 1;
+  display: flex; flex-direction: column;
+  background: var(--surface2, #1a1d28);
+}
+#wsPopoutHost > * { min-height: 0; }
+/* The Pop-out button is meaningless once you're already in the pop-out. */
+body.p86-ws-popout .ws-tb-popout { display: none !important; }
+.ws-tb-popout { text-decoration: none; }
+/* Single-live-copy placeholder shown where the inline grid was while popped out. */
+.ws-popout-placeholder {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 10px; height: 100%; min-height: 280px; text-align: center; padding: 40px 24px;
+  color: var(--text, #e4e6f0);
+}
+.ws-pp-icon { font-size: 34px; opacity: .65; line-height: 1; }
+.ws-pp-title { font-size: 16px; font-weight: 700; }
+.ws-pp-sub { font-size: 13px; color: var(--text-dim, #8b90a5); max-width: 380px; line-height: 1.5; }
+.ws-pp-btn { margin-top: 6px; }
