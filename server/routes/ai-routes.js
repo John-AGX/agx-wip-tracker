@@ -8691,9 +8691,20 @@ async function execStaffTool(name, input, ctx) {
     case 'read_qb_cost_lines': {
       const jobId = String(input.jobId || input.job_id || '').trim();
       if (!jobId) return 'read_qb_cost_lines requires jobId.';
-      const where = ['job_id = $1'];
-      const params = [jobId];
-      let p = 2;
+      // A6-class org-scope: the job must belong to the caller's org (owner ->
+      // users.org). Fail-closed on no user context (mirrors read_tasks);
+      // tolerant OR-IS-NULL = no-op for AGX; a cross-org jobId returns no lines.
+      let _orgId;
+      try {
+        _orgId = await resolveOrgIdFromCtx(ctx);
+      } catch (e) {
+        return 'read_qb_cost_lines requires a signed-in user context.';
+      }
+      const where = ['job_id = $1',
+        'EXISTS (SELECT 1 FROM jobs j JOIN users u ON u.id = j.owner_id ' +
+        'WHERE j.id = qb_cost_lines.job_id AND (u.organization_id = $2 OR u.organization_id IS NULL))'];
+      const params = [jobId, _orgId];
+      let p = 3;
       if (input.account) { where.push('account ILIKE $' + p); params.push('%' + input.account + '%'); p++; }
       if (input.vendor)  { where.push('vendor ILIKE $' + p);  params.push('%' + input.vendor + '%');  p++; }
       if (input.status === 'linked')   where.push('linked_node_id IS NOT NULL');
@@ -8731,7 +8742,20 @@ async function execStaffTool(name, input, ctx) {
     case 'read_building_breakdown': {
       const jobId = String(input.jobId || input.job_id || '').trim();
       if (!jobId) return 'read_building_breakdown requires jobId.';
-      const r = await pool.query('SELECT data FROM jobs WHERE id = $1', [jobId]);
+      // A6-class org-scope by owner -> users.org. Fail-closed on no user
+      // context; tolerant OR-IS-NULL = no-op for AGX; a cross-org jobId
+      // resolves no row -> "Job not found".
+      let _orgId;
+      try {
+        _orgId = await resolveOrgIdFromCtx(ctx);
+      } catch (e) {
+        return 'read_building_breakdown requires a signed-in user context.';
+      }
+      const r = await pool.query(
+        'SELECT j.data FROM jobs j JOIN users u ON u.id = j.owner_id ' +
+        'WHERE j.id = $1 AND (u.organization_id = $2 OR u.organization_id IS NULL)',
+        [jobId, _orgId]
+      );
       if (!r.rows.length) return 'Job not found: ' + jobId;
       const d = r.rows[0].data || {};
       const buildings = Array.isArray(d.buildings) ? d.buildings : [];
@@ -8801,7 +8825,20 @@ async function execStaffTool(name, input, ctx) {
     case 'read_job_pct_audit': {
       const jobId = String(input.jobId || input.job_id || '').trim();
       if (!jobId) return 'read_job_pct_audit requires jobId.';
-      const r = await pool.query('SELECT data FROM jobs WHERE id = $1', [jobId]);
+      // A6-class org-scope by owner -> users.org. Fail-closed on no user
+      // context; tolerant OR-IS-NULL = no-op for AGX; a cross-org jobId
+      // resolves no row -> "Job not found".
+      let _orgId;
+      try {
+        _orgId = await resolveOrgIdFromCtx(ctx);
+      } catch (e) {
+        return 'read_job_pct_audit requires a signed-in user context.';
+      }
+      const r = await pool.query(
+        'SELECT j.data FROM jobs j JOIN users u ON u.id = j.owner_id ' +
+        'WHERE j.id = $1 AND (u.organization_id = $2 OR u.organization_id IS NULL)',
+        [jobId, _orgId]
+      );
       if (!r.rows.length) return 'Job not found: ' + jobId;
       const d = r.rows[0].data || {};
       const buildings = Array.isArray(d.buildings) ? d.buildings : [];
@@ -9001,15 +9038,20 @@ const TASK_LINKABLE_ENTITY_TYPES = new Set(['lead', 'estimate', 'client', 'job',
 async function resolveTaskEntityLabel(orgId, type, id) {
   if (!type || !id || !TASK_LINKABLE_ENTITY_TYPES.has(type)) return '';
   try {
+    // All branches org-scoped via the table's direct organization_id column
+    // (tolerant OR-IS-NULL = no-op for AGX). Reached only from the already
+    // org-scoped read_tasks handler — defense-in-depth so a cross-org
+    // task->entity link can't surface another tenant's label.
+    const orgGuard = ' AND (organization_id = $2 OR organization_id IS NULL)';
     let sql;
-    if (type === 'lead')          sql = 'SELECT title AS label FROM leads WHERE id = $1';
-    else if (type === 'client')   sql = 'SELECT name AS label FROM clients WHERE id = $1';
-    else if (type === 'sub')      sql = 'SELECT name AS label FROM subs WHERE id = $1';
-    else if (type === 'project')  sql = 'SELECT name AS label FROM projects WHERE id = $1 AND organization_id = ' + Number(orgId);
-    else if (type === 'estimate') sql = "SELECT COALESCE(data->>'name', data->>'title', 'Estimate') AS label FROM estimates WHERE id = $1";
-    else if (type === 'job')      sql = "SELECT COALESCE(data->>'title', data->>'name', 'Job') AS label FROM jobs WHERE id = $1";
+    if (type === 'lead')          sql = 'SELECT title AS label FROM leads WHERE id = $1' + orgGuard;
+    else if (type === 'client')   sql = 'SELECT name AS label FROM clients WHERE id = $1' + orgGuard;
+    else if (type === 'sub')      sql = 'SELECT name AS label FROM subs WHERE id = $1' + orgGuard;
+    else if (type === 'project')  sql = 'SELECT name AS label FROM projects WHERE id = $1' + orgGuard;
+    else if (type === 'estimate') sql = "SELECT COALESCE(data->>'name', data->>'title', 'Estimate') AS label FROM estimates WHERE id = $1" + orgGuard;
+    else if (type === 'job')      sql = "SELECT COALESCE(data->>'title', data->>'name', 'Job') AS label FROM jobs WHERE id = $1" + orgGuard;
     else return '';
-    const { rows } = await pool.query(sql, [String(id)]);
+    const { rows } = await pool.query(sql, [String(id), orgId]);
     return rows.length ? (rows[0].label || '') : '';
   } catch (e) {
     return '';
