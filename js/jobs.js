@@ -291,6 +291,8 @@ function renderJobsMain() {
                 invoiced, unbilled, backlog, remainingCosts
             };
         }
+        // Exposed for js/job-audit.js (R8 margin-drift + R10 underbilled rules).
+        window.getJobWIP = getJobWIP;
 
         function renderWipTab(jobId) {
             const job = appData.jobs.find(j => j.id === jobId);

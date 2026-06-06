@@ -55,10 +55,13 @@
       hasOutgoing[w.fromNode] = true;
     });
 
-    // Pre-compute WIP if available — used by margin drift rule
+    // Pre-compute WIP if available — used by R8 (margin drift) + R10
+    // (underbilled) rules. The real implementation is window.getJobWIP(jobId)
+    // in js/jobs.js (reads appData + node-graph engine values); it returns
+    // {} for an unknown job, which both rules treat as a benign no-op.
     var wip = null;
-    if (typeof window.computeJobWIP === 'function') {
-      try { wip = window.computeJobWIP(job, buildings, phases, changeOrders, subs, invoices); } catch (e) {}
+    if (typeof window.getJobWIP === 'function') {
+      try { wip = window.getJobWIP(jobId); } catch (e) {}
     }
 
     return {
