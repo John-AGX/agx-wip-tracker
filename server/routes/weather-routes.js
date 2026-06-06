@@ -141,8 +141,11 @@ router.get('/jobs', async function(req, res) {
       '       c.city AS client_city, c.state AS client_state, c.zip AS client_zip ' +
       'FROM jobs j ' +
       "LEFT JOIN clients c ON c.id = (j.data->>'clientId') " +
-      'WHERE j.id = ANY($1::text[])',
-      [ids]
+      // Wave A (A8): org-scope so a caller can't pull another org's job
+      // geocode/address via the batch endpoint. OR-IS-NULL = no-op for AGX;
+      // out-of-org ids fall through to the 'unknown_job' default below.
+      'WHERE j.id = ANY($1::text[]) AND (j.organization_id = $2 OR j.organization_id IS NULL)',
+      [ids, req.user.organization_id]
     );
     rows = result.rows;
   } catch (e) {
@@ -201,9 +204,12 @@ router.get('/projects', async function(req, res) {
   let rows;
   try {
     const result = await pool.query(
+      // Wave A (A8): org-scope (projects.organization_id is direct).
+      // OR-IS-NULL = no-op for AGX; out-of-org ids fall through to the
+      // 'unknown_project' default below.
       'SELECT id, name, address_text, geocode_lat, geocode_lng, geocode_status, geocode_address ' +
-      '  FROM projects WHERE id = ANY($1::text[])',
-      [ids]
+      '  FROM projects WHERE id = ANY($1::text[]) AND (organization_id = $2 OR organization_id IS NULL)',
+      [ids, req.user.organization_id]
     );
     rows = result.rows;
   } catch (e) {

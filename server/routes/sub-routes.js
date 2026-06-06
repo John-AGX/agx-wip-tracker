@@ -94,8 +94,9 @@ router.get('/',
           FROM job_subs
           GROUP BY sub_id
         ) js ON js.sub_id = s.id
+        WHERE (s.organization_id = $1 OR s.organization_id IS NULL)
         ORDER BY lower(s.name) ASC
-      `);
+      `, [req.user.organization_id]);
       res.json({ subs: rows, trades: KNOWN_TRADES });
     } catch (e) {
       console.error('GET /api/subs error:', e);
@@ -109,7 +110,12 @@ router.get('/:id',
   requireAuth, requireCapability('JOBS_VIEW_ALL'),
   async (req, res) => {
     try {
-      const subRes = await pool.query('SELECT * FROM subs WHERE id = $1', [req.params.id]);
+      // Wave A (A8): org-scope the sub fetch. subs.organization_id is direct +
+      // backfilled; OR-IS-NULL = no-op for AGX.
+      const subRes = await pool.query(
+        'SELECT * FROM subs WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+        [req.params.id, req.user.organization_id]
+      );
       if (!subRes.rows.length) return res.status(404).json({ error: 'Sub not found' });
       const assignments = await pool.query(`
         SELECT js.*, j.data->>'jobNumber' AS job_number,
