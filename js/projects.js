@@ -2607,14 +2607,14 @@
           var candidates = (_detailState.photos || []).filter(function(p) {
             if (!p || existing.has(String(p.id))) return false;
             if (!(p.mime_type && /^image\//i.test(p.mime_type))) return false;
-            return Number.isFinite(Number(p.lat)) && Number.isFinite(Number(p.lng));
+            return hasValidGeo(p);
           });
           if (!candidates.length) {
             // Distinguish "everything's already pinned" from "no
             // geotagged photos exist" so the user knows what to do.
             var totalWithCoords = (_detailState.photos || []).filter(function(p) {
               return p && p.mime_type && /^image\//i.test(p.mime_type)
-                && Number.isFinite(Number(p.lat)) && Number.isFinite(Number(p.lng));
+                && hasValidGeo(p);
             }).length;
             if (totalWithCoords === 0) {
               window.alert('No project photos have location data yet. Photos uploaded with the geolocation permission granted, or that have GPS in their EXIF, will appear here.');
@@ -3803,16 +3803,30 @@
       };
     }
 
+    // A photo has a usable map pin only if its coords are finite, within
+    // real-world range, AND not the 0,0 "null island". Without the range +
+    // null-island guard a single bad/missing geotag (which Number.isFinite
+    // accepts because isFinite(0) === true) drags fitBounds out to a
+    // world-view over the ocean and the whole HYBRID map reads as blank.
+    function hasValidGeo(p) {
+      if (!p) return false;
+      var lat = Number(p.lat), lng = Number(p.lng);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return false;
+      if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return false;
+      if (lat === 0 && lng === 0) return false;
+      return true;
+    }
+
     function sectionPhotoMapBodyHTML(section) {
       var ids = Array.isArray(section.photo_ids) ? section.photo_ids : [];
       var picked = ids.map(function(pid) {
         return allPhotos.find(function(a) { return a.id === pid; });
       }).filter(Boolean);
       var withCoords = picked.filter(function(p) {
-        return Number.isFinite(Number(p.lat)) && Number.isFinite(Number(p.lng));
+        return hasValidGeo(p);
       });
       var withoutCoords = picked.filter(function(p) {
-        return !Number.isFinite(Number(p.lat)) || !Number.isFinite(Number(p.lng));
+        return !hasValidGeo(p);
       });
 
       var emptyHelp = picked.length === 0
