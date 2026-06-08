@@ -760,10 +760,7 @@
     ov.innerHTML =
       '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;background:rgba(15,15,30,0.95);border:1px solid #2a2a3a;border-radius:10px;padding:8px 14px;">' +
         '<strong style="color:#fff;font-size:13px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">📐 ' + esc(plan.name || 'Shop drawing') + '</strong>' +
-        '<div id="p86-space-seg" title="Model = draw at true size, no titleblock (working / cutout view) · Sheet = the titleblocked sheet for printing" style="display:flex;border:1px solid #3a3a4a;border-radius:7px;overflow:hidden;margin-right:2px;">' +
-          '<button id="p86-space-model" data-space="model" style="background:rgba(255,255,255,0.06);color:#cbd5e1;border:0;border-right:1px solid #3a3a4a;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer;">▦ Model</button>' +
-          '<button id="p86-space-sheet" data-space="sheet" style="background:#4f8cff;color:#fff;border:0;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer;">▭ Sheet</button>' +
-        '</div>' +
+        '<div id="p86-space-seg" title="Model = true-size working view (no titleblock) · sheet tabs = titleblocked pages · + adds a sheet · double-click a tab to rename" style="display:flex;gap:3px;align-items:center;margin-right:2px;max-width:48%;overflow-x:auto;"></div>' +
         '<button id="p86-sheet-settings" title="Editor settings &amp; defaults (units, scale, sheet size, grid, snaps)" style="background:rgba(255,255,255,0.06);color:#cbd5e1;border:1px solid #444;border-radius:6px;padding:6px 11px;font-size:13px;cursor:pointer;">⚙</button>' +
         '<button id="p86-sheet-shortcuts" title="Keyboard shortcuts (?)" style="background:rgba(255,255,255,0.06);color:#cbd5e1;border:1px solid #444;border-radius:6px;padding:6px 11px;font-size:13px;cursor:pointer;">⌨</button>' +
         '<button id="p86-sheet-underlay" title="Import a plan PDF/image as a scaled background to trace + measure over (takeoff)" style="background:rgba(79,140,255,0.14);color:#cbd5e1;border:1px solid #4f8cff;border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer;">⊞ Underlay</button>' +
@@ -837,6 +834,7 @@
 
     buildToolbar();
     buildLayers();
+    buildSpaceTabs();
     sizeCanvas(true);
     wireInput();
     S.canvas.style.cursor = 'default';     // default tool is Select
@@ -2888,7 +2886,11 @@
   function validateScale() {
     if (!S) return;
     S._scaleWarn = '';
-    var ids = {}; (S.doc.viewports || []).forEach(function (v) { ids[v.id] = true; });
+    // Gather viewport ids across ALL sheets (multi-sheet) — an entity is only an
+    // orphan if its viewport exists on no sheet, not merely the inactive ones.
+    var ids = {}, sheets = S.doc.sheets || [];
+    if (sheets.length) sheets.forEach(function (sh) { (sh.viewports || []).forEach(function (v) { ids[v.id] = true; }); });
+    else (S.doc.viewports || []).forEach(function (v) { ids[v.id] = true; });
     var orphans = 0;
     (S.doc.entities || []).forEach(function (e) { if (e && e.viewport && !ids[e.viewport]) orphans++; });
     if (orphans) {
@@ -3485,14 +3487,73 @@
   // Same coordinate space (no data change) — the model-canonical coordinate
   // migration + scaled viewport windows land in Phase C/D (multi-viewport).
   function setSpace(sp) {
-    if (!S || (sp !== 'model' && sp !== 'sheet') || S.space === sp) return;
+    if (!S || (sp !== 'model' && sp !== 'sheet')) return;
     S.space = sp;
-    var mb = S.overlay && S.overlay.querySelector('#p86-space-model');
-    var sb = S.overlay && S.overlay.querySelector('#p86-space-sheet');
-    if (mb) { mb.style.background = (sp === 'model') ? '#4f8cff' : 'rgba(255,255,255,0.06)'; mb.style.color = (sp === 'model') ? '#fff' : '#cbd5e1'; }
-    if (sb) { sb.style.background = (sp === 'sheet') ? '#4f8cff' : 'rgba(255,255,255,0.06)'; sb.style.color = (sp === 'sheet') ? '#fff' : '#cbd5e1'; }
     setHint(sp === 'model' ? 'Model space — true-size working view (no titleblock).' : 'Sheet space — titleblocked sheet for printing.');
-    repaint();
+    buildSpaceTabs(); repaint();
+  }
+  // Phase C: space/sheet tab strip — [ Model ] [ A-1 ] [ A-2 ] … [ + ]. Each sheet
+  // is a titleblocked page owning its own viewport id(s); entities tag to the active
+  // sheet's viewport (newEntity), so the tag-filtered renderer shows each sheet's own
+  // content — no viewport-window transform needed, existing single-sheet drawings
+  // unchanged. Switching re-points the flat aliases (doc.sheet/viewports/titleblock).
+  function buildSpaceTabs() {
+    var host = S.overlay && S.overlay.querySelector('#p86-space-seg');
+    if (!host) return;
+    var sheets = S.doc.sheets || [];
+    function tab(id, label, on, title) {
+      return '<button data-space-tab="' + esc(id) + '" title="' + esc(title || '') + '" style="background:' + (on ? '#4f8cff' : 'rgba(255,255,255,0.06)') +
+        ';color:' + (on ? '#fff' : '#cbd5e1') + ';border:1px solid ' + (on ? '#4f8cff' : '#3a3a4a') +
+        ';border-radius:6px;padding:6px 11px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;flex:0 0 auto;">' + esc(label) + '</button>';
+    }
+    var html = tab('__model', '▦ Model', S.space === 'model', 'Model — true-size working view (no titleblock)');
+    sheets.forEach(function (sh) {
+      var on = (S.space === 'sheet' && S.doc.activeSheetId === sh.id);
+      html += tab(sh.id, '▭ ' + (sh.name || sh.id), on, 'Sheet ' + (sh.name || '') + ' — double-click to rename');
+    });
+    html += '<button data-add-sheet title="Add a new titleblocked sheet" style="background:rgba(34,197,94,0.14);color:#86efac;border:1px solid #22c55e;border-radius:6px;width:28px;height:30px;cursor:pointer;font-size:15px;line-height:1;flex:0 0 auto;">+</button>';
+    host.innerHTML = html;
+    host.querySelectorAll('[data-space-tab]').forEach(function (b) {
+      var id = b.getAttribute('data-space-tab');
+      b.onclick = function () { if (id === '__model') setSpace('model'); else setActiveSheet(id); };
+      if (id !== '__model') b.ondblclick = function () {
+        var sh = (S.doc.sheets || []).filter(function (s) { return s.id === id; })[0]; if (!sh) return;
+        var nm = window.prompt('Sheet name', sh.name || ''); if (nm != null && nm.trim()) { pushUndo(); sh.name = nm.trim().slice(0, 40); markDirty(); buildSpaceTabs(); }
+      };
+    });
+    var add = host.querySelector('[data-add-sheet]'); if (add) add.onclick = addSheet;
+  }
+  function setActiveSheet(id) {
+    var sheets = S.doc.sheets || [], sh = null;
+    for (var i = 0; i < sheets.length; i++) if (sheets[i].id === id) { sh = sheets[i]; break; }
+    if (!sh) return;
+    S.doc.activeSheetId = id;
+    S.doc.sheet = sh;                                   // re-point the flat aliases at the active sheet
+    S.doc.viewports = sh.viewports || (sh.viewports = []);
+    S.doc.titleblock = sh.titleblock || (sh.titleblock = {});
+    S.space = 'sheet';
+    setSelection([]);
+    buildSpaceTabs(); buildLayers(); sizeCanvas(true); repaint();
+  }
+  function addSheet() {
+    var sheets = S.doc.sheets || (S.doc.sheets = []);
+    pushUndo();
+    var s0 = S.doc.sheet || {};
+    var pre = scalePreset(SETTINGS.scaleLabel);
+    var num = sheets.length + 1;
+    var sheet = {
+      id: uid('S'), name: 'A-' + num,
+      size: s0.size, w: s0.w, h: s0.h, margin: s0.margin,
+      titleblock: { project: (S.plan && S.plan.name) || '', title: 'PLAN', scale: pre.label, sheetNo: 'A-' + num,
+        date: '', drawnBy: '', client: '', company: '', showLogo: true, projectNo: '', address: '',
+        checkedBy: '', approvedBy: '', sheetOf: '', revisions: [], generalNotes: '', showNotes: false, logoScale: 1, logoPos: 'left' },
+      viewports: [{ id: uid('VP'), label: 'PLAN', x: 0, y: 0, w: 100, h: 100,
+        scale: { pixelsPerInch: DPI * pre.f, unit: pre.unit || 'ft', label: pre.label } }]
+    };
+    sheets.push(sheet);
+    setActiveSheet(sheet.id);
+    layoutViewports(S.doc);                              // position the new sheet's viewport within the page
+    markDirty(); buildLayers(); repaint();
   }
 
   // ── Render ──────────────────────────────────────────────────────
@@ -3823,8 +3884,7 @@
         var setBtn = S.overlay.querySelector('#p86-sheet-settings'); if (setBtn) setBtn.onclick = openSettingsModal;
         var scBtn = S.overlay.querySelector('#p86-sheet-shortcuts'); if (scBtn) scBtn.onclick = openShortcuts;
         var ulBtn = S.overlay.querySelector('#p86-sheet-underlay'); if (ulBtn) ulBtn.onclick = importUnderlay;
-        var smBtn = S.overlay.querySelector('#p86-space-model'); if (smBtn) smBtn.onclick = function () { setSpace('model'); };
-        var ssBtn = S.overlay.querySelector('#p86-space-sheet'); if (ssBtn) ssBtn.onclick = function () { setSpace('sheet'); };
+        // Space/sheet tab strip self-wires in buildSpaceTabs() (called from open()).
       }
     },
     close: close,
