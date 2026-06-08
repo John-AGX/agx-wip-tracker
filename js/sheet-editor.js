@@ -112,7 +112,14 @@
     { label: '1/2" = 1\'-0"', f: 0.5 / 12 }, { label: '3/4" = 1\'-0"', f: 0.75 / 12 },
     { label: '1" = 1\'-0"', f: 1 / 12 }, { label: '1-1/2" = 1\'-0"', f: 1.5 / 12 },
     { label: '3" = 1\'-0"', f: 3 / 12 }, { label: '1" = 10\'', f: 1 / 120 },
-    { label: '1" = 20\'', f: 1 / 240 }, { label: '1" = 30\'', f: 1 / 360 }
+    { label: '1" = 20\'', f: 1 / 240 }, { label: '1" = 30\'', f: 1 / 360 },
+    // Fine / full-size scales for small parts (sheet-metal cutouts, details).
+    // f = paper-inches per real-inch, so ppi = DPI*f. unit:'in' → inch readouts
+    // + inch scale bar. 1:1 = true size; 2:1/4:1 enlarge tiny parts; 1:2 shrinks big ones.
+    { label: '1:1 (full size)', f: 1, unit: 'in' },
+    { label: '2:1 (2× detail)', f: 2, unit: 'in' },
+    { label: '4:1 (4× detail)', f: 4, unit: 'in' },
+    { label: '1:2 (half size)', f: 0.5, unit: 'in' }
   ];
   var VIEW_LABELS = ['PLAN', 'FRONT ELEVATION', 'SIDE ELEVATION', 'SECTION', 'DETAIL'];
 
@@ -495,11 +502,20 @@
     for (var i = 0; i < cand.length; i++) if (cand[i] * 12 * ppi <= maxPx) best = cand[i];
     return best;
   }
+  // Nice round INCH length for fine/full-size scales (sheet-metal detail bars).
+  function niceScaleInches(ppi, maxPx) {
+    var cand = [0.25, 0.5, 1, 2, 3, 6, 12, 24, 48], best = cand[0];
+    for (var i = 0; i < cand.length; i++) if (cand[i] * ppi <= maxPx) best = cand[i];
+    return best;
+  }
   // Graphic scale bar in a viewport's bottom-left — stays true when printed.
   function drawScaleBar(ctx, vp) {
     if (!vp.scale || !vp.scale.pixelsPerInch) return;
     var ppi = vp.scale.pixelsPerInch;
-    var ft = niceScaleFeet(ppi, vp.w * 0.32), barPx = ft * 12 * ppi;
+    var inchMode = (vp.scale.unit === 'in');
+    var barPx, endLbl;
+    if (inchMode) { var inLen = niceScaleInches(ppi, vp.w * 0.32); barPx = inLen * ppi; endLbl = inLen + '"'; }
+    else { var ft = niceScaleFeet(ppi, vp.w * 0.32); barPx = ft * 12 * ppi; endLbl = ft + ' ft'; }
     if (barPx < 24 || barPx > vp.w - 28) return;
     var segs = 4, segPx = barPx / segs, bx = vp.x + 14, by = vp.y + vp.h - 26, bh = 7;
     ctx.save();
@@ -510,7 +526,7 @@
     }
     ctx.fillStyle = '#111827'; ctx.font = '700 ' + Math.round(DPI * 0.08) + 'px Arial, sans-serif';
     ctx.textBaseline = 'bottom'; ctx.textAlign = 'left'; ctx.fillText('0', bx - 2, by - 3);
-    ctx.textAlign = 'right'; ctx.fillText(ft + " ft", bx + barPx + 2, by - 3);
+    ctx.textAlign = 'right'; ctx.fillText(endLbl, bx + barPx + 2, by - 3);
     ctx.textAlign = 'center'; ctx.textBaseline = 'top'; ctx.fillText(vp.scale.label || '', bx + barPx / 2, by + bh + 2);
     ctx.restore();
   }
@@ -1121,7 +1137,7 @@
     var vp = (S.doc.viewports || []).filter(function (v) { return v.id === vpId; })[0];
     if (!vp) return;
     pushUndo();
-    vp.scale = { pixelsPerInch: DPI * preset.f, unit: 'ft', label: preset.label };
+    vp.scale = { pixelsPerInch: DPI * preset.f, unit: preset.unit || 'ft', label: preset.label };
     buildLayers(); repaint();
   }
   function applySheetSize(key) {
