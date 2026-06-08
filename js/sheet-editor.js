@@ -199,8 +199,65 @@
   }
   function loadDoc(plan) {
     var pages = plan && plan.pages;
-    if (Array.isArray(pages) && pages[0] && pages[0].kind === 'sheet-doc') return pages[0];
-    return defaultDoc(plan);
+    var d = (Array.isArray(pages) && pages[0] && pages[0].kind === 'sheet-doc') ? pages[0] : defaultDoc(plan);
+    return toV2(d);
+  }
+  // ── Model / paper-space data model — v2 (Option 2, Phase A) ──────
+  // v2 separates the drawing (model.entities = real geometry) from the sheets
+  // (paper space: titleblock + viewports). This Phase-A step is NON-DESTRUCTIVE
+  // and changes no behaviour: v2 wraps the existing v1 objects as ALIASES —
+  // doc.entities ⇄ doc.model.entities, and doc.viewports/titleblock/sheet ⇄ the
+  // active sheet — so today's editor reads exactly what it read before. Later
+  // phases add the Model/Sheet UI + the viewport transform.
+  function toV2(doc) {
+    if (!doc) return doc;
+    if (doc.version === 2 && doc.model && doc.sheets) {
+      // Saved v2 (flat aliases were stripped on save) — rebuild the aliases.
+      var sh = null;
+      for (var i = 0; i < doc.sheets.length; i++) { if (doc.sheets[i].id === doc.activeSheetId) { sh = doc.sheets[i]; break; } }
+      if (!sh) sh = doc.sheets[0] || (doc.sheets[0] = { id: 'S1', viewports: [] });
+      if (!doc.model.entities) doc.model.entities = [];
+      if (!doc.model.layers) doc.model.layers = [];
+      if (!sh.viewports) sh.viewports = [];
+      doc.entities = doc.model.entities;
+      doc.layers = doc.model.layers;
+      doc.viewports = sh.viewports;
+      doc.titleblock = sh.titleblock || (sh.titleblock = {});
+      doc.sheet = sh;                                 // sheet object carries size/w/h/margin
+      if (!doc.activeSheetId) doc.activeSheetId = sh.id;
+      if (!doc.space) doc.space = 'model';
+      return doc;
+    }
+    // v1 → v2: build model + a single sheet that ALIAS the existing objects.
+    doc.version = 2;
+    doc.model = { entities: doc.entities || (doc.entities = []), layers: doc.layers || (doc.layers = []) };
+    var s0 = doc.sheet || {};
+    var sheet = {
+      id: 'S1', name: (doc.titleblock && doc.titleblock.sheetNo) || 'A-1',
+      size: s0.size, w: s0.w, h: s0.h, margin: s0.margin,
+      titleblock: doc.titleblock || null,
+      viewports: doc.viewports || (doc.viewports = [])
+    };
+    doc.sheets = [sheet];
+    doc.sheet = sheet;                                 // editor's sheet dims ⇄ the v2 sheet
+    doc.titleblock = sheet.titleblock;                 // keep titleblock alias shared
+    doc.activeSheetId = 'S1';
+    doc.space = 'model';
+    return doc;
+  }
+  // Persist clean v2 — model + sheets are the source of truth; the flat working
+  // aliases are rebuilt by toV2() on load, so strip them to avoid duplicating
+  // the geometry in the blob. SAFE: only strip when the v2 structure provably
+  // holds the data (model.entities is the live array + sheets exist); otherwise
+  // keep the flat fields so a bug can never lose data (worst case = larger blob).
+  function serializeDoc(doc) {
+    var out = {};
+    for (var k in doc) { if (Object.prototype.hasOwnProperty.call(doc, k)) out[k] = doc[k]; }
+    out.kind = 'sheet-doc'; out.version = 2;
+    if (out.model && out.model.entities === out.entities && Array.isArray(out.sheets) && out.sheets.length) {
+      delete out.entities; delete out.layers; delete out.viewports; delete out.sheet; delete out.titleblock;
+    }
+    return out;
   }
   function layerById(doc, id) {
     var ls = doc.layers || [];
@@ -3558,14 +3615,14 @@
     if (!S || !S._dirty) return;
     if (S._autosaveT) { clearTimeout(S._autosaveT); S._autosaveT = null; }
     if (typeof S.onSave === 'function') {
-      try { S.onSave(S.doc, {}); S._dirty = false; setHint('Saved.'); }
+      try { S.onSave(serializeDoc(S.doc), {}); S._dirty = false; setHint('Saved.'); }
       catch (e) { /* keep dirty; a later edit / close will retry */ }
     }
   }
   function save() {
     if (S && S._autosaveT) { clearTimeout(S._autosaveT); S._autosaveT = null; }
     if (S) S._dirty = false;
-    if (S && typeof S.onSave === 'function') { try { S.onSave(S.doc, {}); } catch (e) { /* defensive */ } }
+    if (S && typeof S.onSave === 'function') { try { S.onSave(serializeDoc(S.doc), {}); } catch (e) { /* defensive */ } }
     close();
   }
 
