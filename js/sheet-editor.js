@@ -18,8 +18,9 @@
 //        a tool + layer toolbar. Entities persist in doc.entities.
 //   D2+ — dimensions, full layers/edit ops, hatch, symbols, titleblock
 //        editing, multi-viewport layout, PDF export.
-//   Deferred from D1 (noted): type-in length/angle, intersection +
-//        perpendicular snaps, arc tool, drag-move/rotate.
+//   (Type-in length/angle, intersection + perpendicular snaps, the arc
+//        tool, and drag-move/rotate — once deferred — are all implemented
+//        now, along with the takeoff underlay + calibration in Tier 1.)
 //
 //   window.p86SheetEditor.open({ plan, onSave })
 
@@ -792,8 +793,6 @@
       })
       .catch(function () { if (S) { S._logo = null; repaint(); } });
   }
-  // Back-compat alias (older callers).
-  function loadOrgLogo() { loadChosenLogo(); }
 
   function close() {
     if (!S) return;
