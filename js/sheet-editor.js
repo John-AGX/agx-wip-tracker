@@ -43,6 +43,8 @@
     { key: 'rect',     glyph: '▭', name: 'Rectangle',  group: 'Draw',     label: 'Rectangle (click two opposite corners)' },
     { key: 'circle',   glyph: '◯', name: 'Circle',     group: 'Draw',     label: 'Circle (click center, click radius)' },
     { key: 'arc',      glyph: '⌒', name: 'Arc',        group: 'Draw',     label: 'Arc (3-point: click start, a point on the arc, then end)' },
+    { key: 'ellipse',  glyph: '⬭', name: 'Ellipse',    group: 'Draw',     label: 'Ellipse (click two opposite corners of its bounding box)' },
+    { key: 'polygon',  glyph: '⬠', name: 'Polygon',    group: 'Draw',     label: 'Regular polygon (click the center, click a vertex, then type the number of sides)' },
     { key: 'trim',     glyph: '✂', name: 'Trim',       group: 'Modify',   label: 'Trim — click a line segment to cut it back to the nearest crossing line' },
     { key: 'extend',   glyph: '⇥', name: 'Extend',     group: 'Modify',   label: 'Extend — click a line near the end to extend it to the next line it meets' },
     { key: 'fillet',   glyph: '◜', name: 'Fillet',     group: 'Modify',   label: 'Fillet — click two lines, then enter a radius (0 = sharp corner)' },
@@ -66,6 +68,7 @@
     { key: 'mirrorV', act: 'edit', glyph: '⇅', name: 'Mirror V',   group: 'Modify', label: 'Mirror selection (vertical)' },
     { key: 'dup',     act: 'edit', glyph: '⧉', name: 'Duplicate',  group: 'Modify', label: 'Duplicate selection (Ctrl+D)' },
     { key: 'offset',  act: 'edit', glyph: '⎘', name: 'Offset',     group: 'Modify', label: 'Offset selection by a distance (line / polyline / rect / circle)' },
+    { key: 'scale',   act: 'edit', glyph: '⤧', name: 'Scale',      group: 'Modify', label: 'Scale selection uniformly by a factor (e.g. 2 = double, 0.5 = half) about its center' },
     { key: 'array',   act: 'edit', glyph: '▦', name: 'Array',      group: 'Modify', label: 'Array selection (rows × columns)' },
     { key: 'fit',     act: 'fit',  glyph: '⤢', name: 'Fit',        group: 'View',   label: 'Fit to screen' },
     { key: 'undo',    act: 'undo', glyph: '↶', name: 'Undo',       group: 'View',   label: 'Undo (Ctrl+Z)' },
@@ -893,6 +896,7 @@
           else if (k === 'mirrorV') mirror(false);
           else if (k === 'dup') duplicateSelected();
           else if (k === 'offset') openOffsetModal();
+          else if (k === 'scale') scaleSel();
           else if (k === 'array') openArrayModal();
         }
       };
@@ -960,6 +964,7 @@
     S._filletA = null;                       // cancel a pending fillet pick
     S.inq = null;                            // clear any measure/inquiry path
     S._calib = null;                         // cancel any in-progress calibration
+    S._poly = null;                          // cancel any in-progress polygon
     hideDyn();
     S.tool = t;
     // Track last/recent drawing commands for Enter-repeat + the right-click menu.
@@ -1888,7 +1893,7 @@
         // Cancel whatever's in progress, clear the selection, and fall back to
         // the Select tool (CAD-style). Never closes the editor — that's the
         // Close button's job.
-        S._filletA = null; S.inq = null; S.draft = null; S.boxSel = null; S._calib = null; hideDyn();
+        S._filletA = null; S.inq = null; S.draft = null; S.boxSel = null; S._calib = null; S._poly = null; hideDyn();
         setSelection([]);
         if (S.tool !== 'select') setTool('select'); else { buildLayers(); repaint(); }
       }
@@ -1961,7 +1966,7 @@
   // Cancel everything in progress + drop to Select (shared by Esc + menu).
   function cancelAll() {
     if (!S) return;
-    S._filletA = null; S.inq = null; S.draft = null; S.boxSel = null; S._calib = null; hideDyn();
+    S._filletA = null; S.inq = null; S.draft = null; S.boxSel = null; S._calib = null; S._poly = null; hideDyn();
     setSelection([]);
     if (S.tool !== 'select') setTool('select'); else { buildLayers(); repaint(); }
   }
@@ -2131,7 +2136,25 @@
       if (se.kind === 'callout') se.label = String(S._calloutNum++);
       commitEntity(se); repaint(); return;
     }
-    if (t === 'line' || t === 'rect' || t === 'circle' || t === 'refline') {
+    if (t === 'polygon') {
+      // Regular N-gon: click center, click a vertex, then type the side count.
+      if (!S._poly) { S._poly = { cx: pt.x, cy: pt.y, vp: vp }; setHint('Polygon: click a vertex to set size + orientation.'); repaint(); return; }
+      var pc = S._poly; S._poly = null;
+      var R = Math.hypot(pt.x - pc.cx, pt.y - pc.cy);
+      if (R < 1) { repaint(); return; }
+      var a0 = Math.atan2(pt.y - pc.cy, pt.x - pc.cx);
+      promptText('Number of sides (3–24)', function (txt) {
+        if (txt == null) { repaint(); return; }
+        var n = Math.max(3, Math.min(24, parseInt(txt, 10) || 0));
+        if (n < 3) { repaint(); return; }
+        var poly = newEntity('polyline', pc.vp || vp); poly.points = [];
+        for (var i = 0; i < n; i++) { var a = a0 + i * 2 * Math.PI / n; poly.points.push({ x: pc.cx + R * Math.cos(a), y: pc.cy + R * Math.sin(a) }); }
+        poly.points.push({ x: poly.points[0].x, y: poly.points[0].y });   // close the ring
+        commitEntity(poly); repaint();
+      });
+      return;
+    }
+    if (t === 'line' || t === 'rect' || t === 'circle' || t === 'refline' || t === 'ellipse') {
       if (!S.draft) {
         var e = newEntity(t === 'circle' ? 'ellipse' : t, vp);
         e.startX = pt.x; e.startY = pt.y; e.endX = pt.x; e.endY = pt.y;
@@ -2492,6 +2515,20 @@
     var newIds = [];
     ents.forEach(function (e) { var copy = JSON.parse(JSON.stringify(e)); copy.id = uid(copy.tool); translateEntity(copy, 14, 14); S.doc.entities.push(copy); newIds.push(copy.id); });
     setSelection(newIds); buildLayers(); repaint();
+  }
+  // Uniform scale of the selection about its centre by a typed factor (Tier 4).
+  function scaleSel() {
+    var ents = selEntities(); if (!ents.length) return;
+    promptText('Scale factor (e.g. 2 = double, 0.5 = half)', function (txt) {
+      if (txt == null) return;
+      var f = parseFloat(txt);
+      if (!isFinite(f) || f <= 0) { alert('Enter a positive number — e.g. 2 or 0.5.'); return; }
+      if (f === 1) return;
+      pushUndo();
+      var gb = groupBBox(ents), cx = gb.x + gb.w / 2, cy = gb.y + gb.h / 2;
+      ents.forEach(function (e) { transformEntity(e, function (p) { return { x: cx + (p.x - cx) * f, y: cy + (p.y - cy) * f }; }); });
+      repaint();
+    });
   }
   // Viewport an entity lives in, + its real-world scale (sheet px per inch).
   function viewportOf(e) {
