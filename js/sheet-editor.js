@@ -51,6 +51,7 @@
     { key: 'extend',   glyph: '⇥', name: 'Extend',     group: 'Modify',   label: 'Extend — click a line near the end to extend it to the next line it meets' },
     { key: 'fillet',   glyph: '◜', name: 'Fillet',     group: 'Modify',   label: 'Fillet — click two lines, then enter a radius (0 = sharp corner)' },
     { key: 'break',    glyph: '⊟', name: 'Break',      group: 'Modify',   label: 'Break — click a point on a line to split it into two segments there' },
+    { key: 'chamfer',  glyph: '◣', name: 'Chamfer',    group: 'Modify',   label: 'Chamfer — click two lines, then enter a setback distance (0 = sharp corner)' },
     { key: 'dim',      glyph: '↔', name: 'Dimension',  group: 'Annotate', label: 'Dimension (click two points — auto-labels real length at the viewport scale)' },
     { key: 'angle',    glyph: '∠', name: 'Angle dim',  group: 'Annotate', label: 'Angle dimension (click three points: leg · vertex · leg)' },
     { key: 'leader',   glyph: '➘', name: 'Leader',     group: 'Annotate', label: 'Leader / callout (click target, click text position)' },
@@ -967,7 +968,7 @@
   }
   function setTool(t) {
     if (S.draft) S.draft = null;             // cancel any in-progress draft
-    S._filletA = null;                       // cancel a pending fillet pick
+    S._filletA = null; S._chamferA = null;   // cancel a pending fillet/chamfer pick
     S.inq = null;                            // clear any measure/inquiry path
     S._calib = null;                         // cancel any in-progress calibration
     S._poly = null;                          // cancel any in-progress polygon
@@ -1899,7 +1900,7 @@
         // Cancel whatever's in progress, clear the selection, and fall back to
         // the Select tool (CAD-style). Never closes the editor — that's the
         // Close button's job.
-        S._filletA = null; S.inq = null; S.draft = null; S.boxSel = null; S._calib = null; S._poly = null; hideDyn();
+        S._filletA = null; S._chamferA = null; S.inq = null; S.draft = null; S.boxSel = null; S._calib = null; S._poly = null; hideDyn();
         setSelection([]);
         if (S.tool !== 'select') setTool('select'); else { buildLayers(); repaint(); }
       }
@@ -1972,7 +1973,7 @@
   // Cancel everything in progress + drop to Select (shared by Esc + menu).
   function cancelAll() {
     if (!S) return;
-    S._filletA = null; S.inq = null; S.draft = null; S.boxSel = null; S._calib = null; S._poly = null; hideDyn();
+    S._filletA = null; S._chamferA = null; S.inq = null; S.draft = null; S.boxSel = null; S._calib = null; S._poly = null; hideDyn();
     setSelection([]);
     if (S.tool !== 'select') setTool('select'); else { buildLayers(); repaint(); }
   }
@@ -2034,6 +2035,7 @@
     if (t === 'trim') { trimAt(pt, vp); return; }
     if (t === 'extend') { extendAt(pt, vp); return; }
     if (t === 'fillet') { filletClick(pt, vp); return; }
+    if (t === 'chamfer') { chamferClick(pt, vp); return; }
     if (t === 'break') { breakAt(pt, vp); return; }
     if (t === 'calibrate') { calibrateClick(pt, vp); return; }
     // Measure / inquiry — accumulate points; readout drawn in repaint. Never
@@ -3038,6 +3040,48 @@
     var A = S.doc.entities.filter(function (x) { return x.id === aRec.id; })[0];
     if (!A) { updateHint(); return; }
     openFilletModal(A, hit.entity, aRec.click, { x: pt.x, y: pt.y });
+  }
+  // Chamfer — like fillet but a straight setback cut (Tier 4). Reuses the
+  // fillet two-line pick + geometry helpers.
+  function chamferClick(pt, vp) {
+    var hit = pickLineAt(pt, vp); if (!hit) return;
+    if (!S._chamferA) { S._chamferA = { id: hit.entity.id, click: { x: pt.x, y: pt.y } }; setHint('Chamfer: first line ✓ — now click the second line.'); repaint(); return; }
+    if (hit.entity.id === S._chamferA.id) return;
+    var aRec = S._chamferA; S._chamferA = null;
+    var A = S.doc.entities.filter(function (x) { return x.id === aRec.id; })[0];
+    if (!A) { updateHint(); return; }
+    openChamferModal(A, hit.entity, aRec.click, { x: pt.x, y: pt.y });
+  }
+  function openChamferModal(A, B, ca, cb) {
+    opModal('Chamfer distance',
+      numField('Setback (ft) — 0 = sharp corner', 'd', '1'),
+      function (box) {
+        var d = parseFloat((box.querySelector('[data-op=d]') || {}).value);
+        applyChamfer(A, B, ca, cb, isFinite(d) ? d : 0);
+      });
+    updateHint();
+  }
+  function applyChamfer(A, B, ca, cb, dFt) {
+    var I = lineLineIntersect(A.startX, A.startY, A.endX, A.endY, B.startX, B.startY, B.endX, B.endY);
+    if (!I) { alert('Those lines are parallel — nothing to chamfer.'); return; }
+    var d = (dFt || 0) * 12 * ppiOf(A);
+    function dirToward(L, click) {
+      var d1 = Math.hypot(click.x - L.startX, click.y - L.startY), d2 = Math.hypot(click.x - L.endX, click.y - L.endY);
+      var end = (d1 < d2) ? { x: L.startX, y: L.startY } : { x: L.endX, y: L.endY };
+      var vx = end.x - I.x, vy = end.y - I.y, len = Math.hypot(vx, vy) || 1;
+      return { x: vx / len, y: vy / len };
+    }
+    pushUndo();
+    if (d <= 0) { setNearEnd(A, ca, I); setNearEnd(B, cb, I); buildLayers(); repaint(); return; }
+    var da = dirToward(A, ca), db = dirToward(B, cb);
+    var t1 = { x: I.x + da.x * d, y: I.y + da.y * d };
+    var t2 = { x: I.x + db.x * d, y: I.y + db.y * d };
+    setNearEnd(A, ca, t1); setNearEnd(B, cb, t2);
+    var bev = newEntity('line', viewportOf(A));
+    bev.layer = A.layer; bev.color = A.color; bev.lineWidth = A.lineWidth;
+    bev.startX = t1.x; bev.startY = t1.y; bev.endX = t2.x; bev.endY = t2.y;
+    S.doc.entities.push(bev);
+    buildLayers(); repaint();
   }
   function openFilletModal(A, B, ca, cb) {
     opModal('Fillet radius',
