@@ -54,7 +54,10 @@
     { key: 'chamfer',  glyph: '◣', name: 'Chamfer',    group: 'Modify',   label: 'Chamfer — click two lines, then enter a setback distance (0 = sharp corner)' },
     { key: 'polararray', glyph: '❋', name: 'Polar array', group: 'Modify', label: 'Polar array — select objects first, then click a center point and enter the count to array them around it' },
     { key: 'stretch',  glyph: '⇲', name: 'Stretch',    group: 'Modify',   label: 'Stretch — click two corners of a crossing window (vertices inside move, the rest stays), then click a base + destination point' },
-    { key: 'dim',      glyph: '↔', name: 'Dimension',  group: 'Annotate', label: 'Dimension (click two points — auto-labels real length at the viewport scale)' },
+    { key: 'dim',      glyph: '↔', name: 'Dimension',  group: 'Annotate', label: 'Dimension (aligned — click two points; auto-labels real length along the line at the viewport scale)' },
+    { key: 'dimradius',glyph: 'R', name: 'Radius dim',  group: 'Annotate', label: 'Radius dimension — click a circle / ellipse; labels its radius (R …)' },
+    { key: 'dimdia',   glyph: '⌀', name: 'Diameter dim',group: 'Annotate', label: 'Diameter dimension — click a circle / ellipse; labels its diameter (⌀ …)' },
+    { key: 'dimcont',  glyph: '⊢', name: 'Continuous',  group: 'Annotate', label: 'Continuous dimension chain — click points in a row; each span is dimensioned (Enter / Esc to finish)' },
     { key: 'angle',    glyph: '∠', name: 'Angle dim',  group: 'Annotate', label: 'Angle dimension (click three points: leg · vertex · leg)' },
     { key: 'leader',   glyph: '➘', name: 'Leader',     group: 'Annotate', label: 'Leader / callout (click target, click text position)' },
     { key: 'revcloud', glyph: '☁', name: 'Rev cloud',  group: 'Annotate', label: 'Revision cloud — click two opposite corners; drawn as a scalloped cloud around that box' },
@@ -259,7 +262,10 @@
           if (e.tool === 'measure' && vp.scale && vp.scale.pixelsPerInch) {
             var px = Math.hypot(e.endX - e.startX, e.endY - e.startY);
             e.measureInches = px / vp.scale.pixelsPerInch;
-            e.measureLabel = fmtLen(e.measureInches);
+            var mlbl = fmtLen(e.measureInches);
+            if (e.dimKind === 'radius') mlbl = 'R ' + mlbl;
+            else if (e.dimKind === 'diameter') mlbl = '⌀ ' + mlbl;   // ⌀
+            e.measureLabel = mlbl;
           }
           try { prims().drawStroke(ctx, e); } catch (err) { /* defensive */ }
         });
@@ -970,7 +976,7 @@
   }
   function setTool(t) {
     if (S.draft) S.draft = null;             // cancel any in-progress draft
-    S._filletA = null; S._chamferA = null; S._stretch = null;   // cancel pending fillet/chamfer/stretch
+    S._filletA = null; S._chamferA = null; S._stretch = null; S._dimcont = null;   // cancel pending fillet/chamfer/stretch/cont-dim
     S.inq = null;                            // clear any measure/inquiry path
     S._calib = null;                         // cancel any in-progress calibration
     S._poly = null;                          // cancel any in-progress polygon
@@ -1902,13 +1908,14 @@
         // Cancel whatever's in progress, clear the selection, and fall back to
         // the Select tool (CAD-style). Never closes the editor — that's the
         // Close button's job.
-        S._filletA = null; S._chamferA = null; S._stretch = null; S.inq = null; S.draft = null; S.boxSel = null; S._calib = null; S._poly = null; hideDyn();
+        S._filletA = null; S._chamferA = null; S._stretch = null; S._dimcont = null; S.inq = null; S.draft = null; S.boxSel = null; S._calib = null; S._poly = null; hideDyn();
         setSelection([]);
         if (S.tool !== 'select') setTool('select'); else { buildLayers(); repaint(); }
       }
       else if (e.key === 'Enter') {
         if ((S.tool === 'polyline' || S.tool === 'hatch' || S.tool === 'spline') && S.draft) commitPolyline();
         else if (S.tool === 'inquire' && S.inq) { S.inq = null; repaint(); }
+        else if (S.tool === 'dimcont' && S._dimcont) { e.preventDefault(); S._dimcont = null; setHint('Continuous dimension finished.'); repaint(); }
         else if (!S.draft && S._lastTool) { e.preventDefault(); setTool(S._lastTool); }   // AutoCAD: Enter repeats the last command
       }
       else if ((e.key === 'z' || e.key === 'Z') && (e.ctrlKey || e.metaKey)) { e.preventDefault(); if (e.shiftKey) redo(); else undo(); }
@@ -1975,7 +1982,7 @@
   // Cancel everything in progress + drop to Select (shared by Esc + menu).
   function cancelAll() {
     if (!S) return;
-    S._filletA = null; S._chamferA = null; S._stretch = null; S.inq = null; S.draft = null; S.boxSel = null; S._calib = null; S._poly = null; hideDyn();
+    S._filletA = null; S._chamferA = null; S._stretch = null; S._dimcont = null; S.inq = null; S.draft = null; S.boxSel = null; S._calib = null; S._poly = null; hideDyn();
     setSelection([]);
     if (S.tool !== 'select') setTool('select'); else { buildLayers(); repaint(); }
   }
@@ -2042,6 +2049,9 @@
     if (t === 'stretch') { stretchClick(pt, vp); return; }
     if (t === 'break') { breakAt(pt, vp); return; }
     if (t === 'calibrate') { calibrateClick(pt, vp); return; }
+    if (t === 'dimradius') { dimCircleClick(pt, vp, 'radius'); return; }
+    if (t === 'dimdia') { dimCircleClick(pt, vp, 'diameter'); return; }
+    if (t === 'dimcont') { dimContClick(pt, vp); return; }
     // Measure / inquiry — accumulate points; readout drawn in repaint. Never
     // becomes a printed entity. Enter/Esc clears.
     if (t === 'inquire') {
@@ -2735,6 +2745,33 @@
       S._stretch = null; buildLayers(); repaint(); setHint('Stretched.');
     }
   }
+  // Radius / diameter dimension — click a circle/ellipse; emitted as a 'measure'
+  // entity (existing render) with a dimKind so the label gets the R / ⌀ prefix.
+  function dimCircleClick(pt, vp, kind) {
+    var id = hitTest(pt);
+    var e = id && S.doc.entities.filter(function (x) { return x.id === id; })[0];
+    if (!e || e.tool !== 'ellipse' || e.startX == null) { setHint((kind === 'diameter' ? 'Diameter' : 'Radius') + ' dim: click a circle or ellipse.'); return; }
+    var cx = (e.startX + e.endX) / 2, cy = (e.startY + e.endY) / 2;
+    var rx = Math.abs(e.endX - e.startX) / 2, ry = Math.abs(e.endY - e.startY) / 2;
+    var ang = Math.atan2(pt.y - cy, pt.x - cx);
+    var ex = cx + rx * Math.cos(ang), ey = cy + ry * Math.sin(ang);
+    var dm = newEntity('measure', viewportOf(e));
+    dm.layer = dimLayerId(); dm.color = layerById(S.doc, dm.layer).color; dm.lineWidth = 2; dm.dimKind = kind;
+    if (kind === 'diameter') { dm.startX = cx - rx * Math.cos(ang); dm.startY = cy - ry * Math.sin(ang); dm.endX = ex; dm.endY = ey; }
+    else { dm.startX = cx; dm.startY = cy; dm.endX = ex; dm.endY = ey; }
+    commitEntity(dm); repaint(); setTool('select');
+  }
+  // Continuous dimension chain — each click dimensions the span from the prior
+  // point; Enter/Esc finishes. Each span is a 'measure' entity.
+  function dimContClick(pt, vp) {
+    if (!S._dimcont) { S._dimcont = { last: { x: pt.x, y: pt.y }, vp: vp }; setHint('Continuous dim: click the next point (Enter / Esc to finish).'); repaint(); return; }
+    var dm = newEntity('measure', S._dimcont.vp || vp);
+    dm.layer = dimLayerId(); dm.color = layerById(S.doc, dm.layer).color; dm.lineWidth = 2;
+    dm.startX = S._dimcont.last.x; dm.startY = S._dimcont.last.y; dm.endX = pt.x; dm.endY = pt.y;
+    commitEntity(dm);
+    S._dimcont.last = { x: pt.x, y: pt.y };
+    repaint();
+  }
   // Viewport an entity lives in, + its real-world scale (sheet px per inch).
   function viewportOf(e) {
     var vps = S.doc.viewports || [];
@@ -3415,6 +3452,13 @@
       });
       if (stp.phase === 'dest' && stp.base && S.hover) { ctx.beginPath(); ctx.moveTo(stp.base.x, stp.base.y); ctx.lineTo(S.hover.x, S.hover.y); ctx.stroke(); }
       ctx.restore();
+    }
+    // continuous-dim in progress — rubber line from the last point to the cursor
+    if (S._dimcont && S._dimcont.last && S.hover) {
+      ctx.save(); ctx.strokeStyle = '#b45309'; ctx.lineWidth = 1 / S.view.scale;
+      ctx.setLineDash([5 / S.view.scale, 4 / S.view.scale]);
+      ctx.beginPath(); ctx.moveTo(S._dimcont.last.x, S._dimcont.last.y); ctx.lineTo(S.hover.x, S.hover.y); ctx.stroke();
+      ctx.setLineDash([]); ctx.restore();
     }
     // selection highlight — every selected entity (dashed green box)
     if (S.selIds && S.selIds.length) {
