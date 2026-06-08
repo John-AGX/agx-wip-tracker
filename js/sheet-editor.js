@@ -729,6 +729,13 @@
     ov.focus();
     window.addEventListener('resize', onResize);
     S.onResize = onResize;
+    // Unsaved-changes guard — autosave flushes on idle, but if the user closes
+    // the tab mid-edit we flush once more + warn (Tier 2).
+    S._beforeUnload = function (ev) {
+      if (S && S._dirty) { saveSilent(); ev.preventDefault(); ev.returnValue = ''; return ''; }
+    };
+    window.addEventListener('beforeunload', S._beforeUnload);
+    validateScale();                        // warn on orphan viewport links / unset scale
   }
 
   // Pull the org name + branding logo for the titleblock. Name comes from
@@ -784,6 +791,9 @@
 
   function close() {
     if (!S) return;
+    if (S._dirty) saveSilent();                       // flush any pending edits
+    if (S._beforeUnload) window.removeEventListener('beforeunload', S._beforeUnload);
+    if (S._autosaveT) clearTimeout(S._autosaveT);
     if (S.onResize) window.removeEventListener('resize', S.onResize);
     if (S.overlay && S.overlay.parentNode) S.overlay.parentNode.removeChild(S.overlay);
     S = null;
@@ -934,10 +944,12 @@
       var slbl = (avp && avp.scale && avp.scale.label) ? avp.scale.label : '';
       // An imported plan underlay has an arbitrary scale until calibrated —
       // warn instead of implying the preset is meaningful.
-      var notSet = !!(S.doc.underlay && avp && !(avp.scale && avp.scale.calibrated));
-      if (notSet) slbl = '⚠ SCALE NOT SET — calibrate';
+      var warn = (S.doc.underlay && avp && !(avp.scale && avp.scale.calibrated))
+        ? '⚠ SCALE NOT SET — calibrate'
+        : (S._scaleWarn ? ('⚠ ' + S._scaleWarn) : '');
+      if (warn) slbl = warn;
       v.textContent = avp ? (avp.label + '  ·  ' + slbl) : '';
-      v.style.color = notSet ? '#f87171' : '#64748b';
+      v.style.color = warn ? '#f87171' : '#64748b';
     }
     var z = S.overlay.querySelector('#p86-sb-zoom');
     if (z) z.textContent = Math.round((S.view.scale || 1) * 100) + '%';
@@ -1515,7 +1527,7 @@
   // ── Snapping ────────────────────────────────────────────────────
   // Collect endpoint / midpoint / center candidates from entities in the
   // given viewport (sheet coords).
-  function snapCandidates(vp) {
+  function snapCandidates(vp, raw) {
     var out = [];
     if (!vp) return out;
     (S.doc.entities || []).forEach(function (e) {
@@ -1549,13 +1561,23 @@
         out.push({ x: e.x, y: e.y, kind: 'node' });
       }
     });
-    // Intersection snaps (line × line / polyline / rect edges). O(n²) over
-    // segments — capped so a dense sheet doesn't stall the snap on hover.
+    // Intersection snaps (line × line / polyline / rect edges). When we know
+    // the cursor (raw) we only pair segments NEAR it, so this stays O(k²) on
+    // a small k even on a dense sheet — no more silent disable past 80 segs.
     var segs = segmentsInVp(vp);
-    if (segs.length <= 80) {
-      for (var i = 0; i < segs.length; i++) for (var j = i + 1; j < segs.length; j++) {
-        var ix = segIntersect(segs[i], segs[j]);
-        if (ix) out.push({ x: ix.x, y: ix.y, kind: 'intersect' });
+    if (raw) {
+      var R = (SNAP_SCREEN / S.view.scale) * 1.5;
+      var near = [];
+      for (var si = 0; si < segs.length; si++) { if (segNearPoint(segs[si], raw, R)) near.push(segs[si]); }
+      for (var i = 0; i < near.length; i++) for (var j = i + 1; j < near.length; j++) {
+        var ix = segIntersect(near[i], near[j]);
+        if (ix && Math.hypot(ix.x - raw.x, ix.y - raw.y) <= R) out.push({ x: ix.x, y: ix.y, kind: 'intersect' });
+      }
+    } else if (segs.length <= 80) {
+      // No cursor context (rare) — fall back to the bounded global pass.
+      for (var i2 = 0; i2 < segs.length; i2++) for (var j2 = i2 + 1; j2 < segs.length; j2++) {
+        var ix2 = segIntersect(segs[i2], segs[j2]);
+        if (ix2) out.push({ x: ix2.x, y: ix2.y, kind: 'intersect' });
       }
     }
     return out;
@@ -1598,16 +1620,33 @@
   }
   // Projection parameter of point p onto the infinite line a→b (0=a, 1=b).
   function projParam(p, a, b) { var dx = b.x - a.x, dy = b.y - a.y, L2 = dx * dx + dy * dy; if (L2 < 1e-9) return null; return ((p.x - a.x) * dx + (p.y - a.y) * dy) / L2; }
+  // True if segment s (a→b) passes within R of point p — used to limit
+  // intersection snapping to segments near the cursor.
+  function segNearPoint(s, p, R) {
+    var t = projParam(p, s.a, s.b);
+    var fx, fy;
+    if (t == null) { fx = s.a.x; fy = s.a.y; }
+    else { t = Math.max(0, Math.min(1, t)); fx = s.a.x + t * (s.b.x - s.a.x); fy = s.a.y + t * (s.b.y - s.a.y); }
+    return Math.hypot(fx - p.x, fy - p.y) <= R;
+  }
+  // AutoCAD-style object-snap priority — when several snaps fall inside the
+  // aperture, the higher-priority TYPE wins; distance only breaks ties within
+  // the same type. endpoint > intersection > mid/center/quad > node > perp > near.
+  var SNAP_RANK = { end: 6, intersect: 5, mid: 4, center: 4, quad: 4, node: 3, perp: 2, near: 1 };
   // Resolve the snapped sheet-point for a raw cursor sheet-point.
   function resolveSnap(raw, vp) {
     var radiusSheet = SNAP_SCREEN / S.view.scale;
-    var best = null, bestD = radiusSheet;
+    var best = null, bestRank = -1, bestD = radiusSheet;
     var sn = S.snaps || {};
+    function consider(c, d) {
+      if (d > radiusSheet) return;
+      var rank = SNAP_RANK[c.kind] || 0;
+      if (rank > bestRank || (rank === bestRank && d < bestD)) { bestRank = rank; bestD = d; best = c; }
+    }
     if (S.objSnap && vp) {
-      snapCandidates(vp).forEach(function (c) {
+      snapCandidates(vp, raw).forEach(function (c) {
         if (sn[c.kind] === false) return;                    // per-kind toggle
-        var d = Math.hypot(c.x - raw.x, c.y - raw.y);
-        if (d < bestD) { bestD = d; best = c; }
+        consider(c, Math.hypot(c.x - raw.x, c.y - raw.y));
       });
       // Anchor-aware perpendicular + nearest (need the segment list).
       if (sn.perp || sn.near) {
@@ -1620,8 +1659,7 @@
             var t = projParam(anchor, g.a, g.b);
             if (t != null) {
               var fx = g.a.x + t * (g.b.x - g.a.x), fy = g.a.y + t * (g.b.y - g.a.y);
-              var dp = Math.hypot(fx - raw.x, fy - raw.y);
-              if (dp < bestD) { bestD = dp; best = { x: fx, y: fy, kind: 'perp' }; }
+              consider({ x: fx, y: fy, kind: 'perp' }, Math.hypot(fx - raw.x, fy - raw.y));
             }
           }
           if (sn.near) {
@@ -1629,8 +1667,7 @@
             if (tt != null) {
               tt = Math.max(0, Math.min(1, tt));
               var nx = g.a.x + tt * (g.b.x - g.a.x), ny = g.a.y + tt * (g.b.y - g.a.y);
-              var dn = Math.hypot(nx - raw.x, ny - raw.y);
-              if (dn < bestD) { bestD = dn; best = { x: nx, y: ny, kind: 'near' }; }
+              consider({ x: nx, y: ny, kind: 'near' }, Math.hypot(nx - raw.x, ny - raw.y));
             }
           }
         });
@@ -2286,12 +2323,12 @@
 
   // ── History (undo / redo) ───────────────────────────────────────
   function snapshot() { return JSON.stringify({ entities: S.doc.entities, layers: S.doc.layers }); }
-  function pushUndo() { S._undo.push(snapshot()); if (S._undo.length > 60) S._undo.shift(); S._redo.length = 0; }
+  function pushUndo() { S._undo.push(snapshot()); if (S._undo.length > 60) S._undo.shift(); S._redo.length = 0; markDirty(); }
   function commitEntity(e) { pushUndo(); S.doc.entities.push(e); }
   function restoreSnap(json) {
     var o = JSON.parse(json);
     S.doc.entities = o.entities; S.doc.layers = o.layers;
-    setSelection([]); buildLayers(); repaint();
+    setSelection([]); buildLayers(); repaint(); markDirty();
   }
   function undo() {
     if (S.draft) { S.draft = null; repaint(); return; }
@@ -2385,6 +2422,20 @@
   function ppiOf(e) {
     var vp = viewportOf(e);
     return (vp && vp.scale && vp.scale.pixelsPerInch) ? vp.scale.pixelsPerInch : DPI * 0.25 / 12;
+  }
+  // Flag entities pointing at a viewport id that no longer exists — their
+  // measurements would silently fall back to viewports[0]'s scale. Surface it
+  // (status bar) instead of guessing (Tier 2). Cheap; run on load.
+  function validateScale() {
+    if (!S) return;
+    S._scaleWarn = '';
+    var ids = {}; (S.doc.viewports || []).forEach(function (v) { ids[v.id] = true; });
+    var orphans = 0;
+    (S.doc.entities || []).forEach(function (e) { if (e && e.viewport && !ids[e.viewport]) orphans++; });
+    if (orphans) {
+      S._scaleWarn = orphans + ' object' + (orphans === 1 ? '' : 's') + ' on a missing viewport — scale unverified';
+      if (window.console) console.warn('[sheet] ' + S._scaleWarn);
+    }
   }
   // Array: tile the selection into a rows×cols grid at real-world spacing.
   function arrayOp(rows, cols, rowFt, colFt) {
@@ -2886,6 +2937,7 @@
         if (vp0 && vp0.scale) vp0.scale.calibrated = false;
         S._underlayBmp = null; S._underlayKey = null; S._underlayLoadKey = null;
         ensureUnderlay();
+        markDirty();
         if (typeof setTool === 'function') setTool('calibrate');
         setHint('Underlay added — click two points a known distance apart, then type the real length to set scale.');
         repaint(); refreshStatusBar();
@@ -2918,6 +2970,7 @@
       vp.scale.pixelsPerInch = pxDist / inches;
       vp.scale.calibrated = true;
       vp.scale.label = 'Calibrated · ' + fmtLen(inches) + ' ref';
+      markDirty();
       if (typeof setTool === 'function') setTool('select');
       repaint(); refreshStatusBar();
       setHint('Scale calibrated — measurements are now true to the plan.');
@@ -3065,7 +3118,28 @@
     }
   }
 
+  // ── Autosave / dirty tracking (Tier 2) ──────────────────────────
+  // Every mutation calls markDirty() (via pushUndo + the calibrate/underlay
+  // paths), which debounces an idle autosave. close() + beforeunload flush a
+  // final save so edits survive an accidental tab close.
+  var AUTOSAVE_MS = 2500;
+  function markDirty() {
+    if (!S) return;
+    S._dirty = true;
+    if (S._autosaveT) clearTimeout(S._autosaveT);
+    S._autosaveT = setTimeout(function () { saveSilent(); }, AUTOSAVE_MS);
+  }
+  function saveSilent() {
+    if (!S || !S._dirty) return;
+    if (S._autosaveT) { clearTimeout(S._autosaveT); S._autosaveT = null; }
+    if (typeof S.onSave === 'function') {
+      try { S.onSave(S.doc, {}); S._dirty = false; setHint('Saved.'); }
+      catch (e) { /* keep dirty; a later edit / close will retry */ }
+    }
+  }
   function save() {
+    if (S && S._autosaveT) { clearTimeout(S._autosaveT); S._autosaveT = null; }
+    if (S) S._dirty = false;
     if (S && typeof S.onSave === 'function') { try { S.onSave(S.doc, {}); } catch (e) { /* defensive */ } }
     close();
   }
