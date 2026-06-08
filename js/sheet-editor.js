@@ -711,15 +711,25 @@
 
   // Faint reference grid inside a viewport — 1 ft minor, 5 ft major.
   // Origin aligned to vp.x/vp.y so it matches the grid-snap lattice.
+  // Grid spacing in sheet-px. Fine / full-size scales (unit:'in') get an INCH grid
+  // (1" minor / 12" major) so small parts are precise; architectural scales keep
+  // the 1-ft grid (×5 major). Shared by the visual grid + grid-snap so they agree.
+  function gridStepPx(vp) {
+    if (!vp || !vp.scale || !vp.scale.pixelsPerInch) return 0;
+    return (vp.scale.unit === 'in')
+      ? vp.scale.pixelsPerInch * (SETTINGS.gridIn || 1)
+      : vp.scale.pixelsPerInch * 12 * (SETTINGS.gridFt || 1);
+  }
+  function gridMajorMult(vp) { return (vp && vp.scale && vp.scale.unit === 'in') ? 12 : 5; }
   function drawViewportGrid(ctx, vp, viewScale) {
-    var step = vp.scale.pixelsPerInch * 12 * (SETTINGS.gridFt || 1);   // grid spacing, sheet px
-    if (step * viewScale < 7) return;                // too dense at this zoom
+    var step = gridStepPx(vp);                       // grid spacing, sheet px (unit-aware)
+    if (!step || step * viewScale < 7) return;       // too dense at this zoom
     var x0 = vp.x, y0 = vp.y, x1 = vp.x + vp.w, y1 = vp.y + vp.h, x, y;
     ctx.save();
     ctx.strokeStyle = 'rgba(37,99,235,0.09)'; ctx.lineWidth = 1 / viewScale;
     for (x = x0; x <= x1 + 0.5; x += step) { ctx.beginPath(); ctx.moveTo(x, y0); ctx.lineTo(x, y1); ctx.stroke(); }
     for (y = y0; y <= y1 + 0.5; y += step) { ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x1, y); ctx.stroke(); }
-    var major = step * 5;
+    var major = step * gridMajorMult(vp);
     ctx.strokeStyle = 'rgba(37,99,235,0.20)'; ctx.lineWidth = 1.3 / viewScale;
     for (x = x0; x <= x1 + 0.5; x += major) { ctx.beginPath(); ctx.moveTo(x, y0); ctx.lineTo(x, y1); ctx.stroke(); }
     for (y = y0; y <= y1 + 0.5; y += major) { ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x1, y); ctx.stroke(); }
@@ -1792,7 +1802,7 @@
     }
     if (best) return best;
     if (S.gridSnap && vp && vp.scale && vp.scale.pixelsPerInch) {
-      var step = vp.scale.pixelsPerInch * 12 * (SETTINGS.gridFt || 1);   // grid spacing, sheet px
+      var step = gridStepPx(vp);   // grid spacing, sheet px (unit-aware: inch grid for fine scales)
       var gx = Math.round((raw.x - vp.x) / step) * step + vp.x;
       var gy = Math.round((raw.y - vp.y) / step) * step + vp.y;
       return { x: gx, y: gy, kind: 'grid' };
