@@ -791,6 +791,7 @@
 
   function close() {
     if (!S) return;
+    hideContextMenu();
     if (S._dirty) saveSilent();                       // flush any pending edits
     if (S._beforeUnload) window.removeEventListener('beforeunload', S._beforeUnload);
     if (S._autosaveT) clearTimeout(S._autosaveT);
@@ -961,6 +962,12 @@
     S._calib = null;                         // cancel any in-progress calibration
     hideDyn();
     S.tool = t;
+    // Track last/recent drawing commands for Enter-repeat + the right-click menu.
+    if (t && t !== 'select' && t !== 'pan' && t !== 'calibrate') {
+      S._lastTool = t;
+      S._recentTools = (S._recentTools || []).filter(function (x) { return x !== t; });
+      S._recentTools.unshift(t); S._recentTools = S._recentTools.slice(0, 5);
+    }
     S.canvas.style.cursor = (t === 'pan') ? 'grab' : (t === 'select' ? 'default' : 'crosshair');
     refreshToolbar(); renderPicker(); updateHint(); repaint();
   }
@@ -1858,6 +1865,7 @@
     c.ondblclick = function () {
       if ((S.tool === 'polyline' || S.tool === 'hatch') && S.draft) commitPolyline();
     };
+    c.oncontextmenu = function (e) { e.preventDefault(); showContextMenu(e); };
     c.onwheel = function (e) {
       e.preventDefault();
       var lp = localPt(e);
@@ -1887,17 +1895,25 @@
       else if (e.key === 'Enter') {
         if ((S.tool === 'polyline' || S.tool === 'hatch') && S.draft) commitPolyline();
         else if (S.tool === 'inquire' && S.inq) { S.inq = null; repaint(); }
+        else if (!S.draft && S._lastTool) { e.preventDefault(); setTool(S._lastTool); }   // AutoCAD: Enter repeats the last command
       }
       else if ((e.key === 'z' || e.key === 'Z') && (e.ctrlKey || e.metaKey)) { e.preventDefault(); if (e.shiftKey) redo(); else undo(); }
       else if ((e.key === 'y' || e.key === 'Y') && (e.ctrlKey || e.metaKey)) { e.preventDefault(); redo(); }
       else if ((e.key === 'd' || e.key === 'D') && (e.ctrlKey || e.metaKey)) { e.preventDefault(); duplicateSelected(); }
       else if ((e.key === 'Delete' || e.key === 'Backspace') && S.selIds.length) { deleteSelected(); }
       else if (e.key === '?' || (e.key === '/' && e.shiftKey)) { e.preventDefault(); openShortcuts(); }
-      else if (!e.ctrlKey && !e.metaKey && !e.altKey) {
-        // Single-key tool aliases (AutoCAD-style). Guarded above so Ctrl/Cmd
-        // combos (undo/redo/dup) never reach here.
+      else if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key && e.key.length === 1 && /[a-z]/i.test(e.key)) {
+        // Tool shortcuts. Single-key fires instantly (l/c/r/…); a quick second
+        // key forms a two-letter AutoCAD alias (CO/MI/RO/TR/EX) that overrides.
         var k = (e.key || '').toLowerCase();
-        if (SHORTCUTS[k]) { e.preventDefault(); setTool(SHORTCUTS[k]); }
+        e.preventDefault();
+        var tnow = Date.now();
+        if (S._lastKey && (tnow - (S._lastKeyT || 0)) < 450 && TWO_LETTER_CMD[S._lastKey + k]) {
+          var combo = S._lastKey + k; S._lastKey = null; runAlias(TWO_LETTER_CMD[combo]); return;
+        }
+        S._lastKey = k; S._lastKeyT = tnow;
+        if (k === 'o') { runAlias('offset'); return; }           // O = offset (free key)
+        if (SHORTCUTS[k]) setTool(SHORTCUTS[k]);
       }
     };
     S.overlay.onkeyup = function (e) {
@@ -1923,6 +1939,70 @@
         };
       });
     }
+  }
+
+  // ── AutoCAD-convention polish (Tier 3) ──────────────────────────
+  // Two-letter command aliases. Single-key shortcuts still fire instantly;
+  // a quick follow-up key forms the alias (overrides). trim/extend are tools;
+  // dup/mirror/rotate/offset are edit-ops on the current selection.
+  var TWO_LETTER_CMD = { co: 'dup', mi: 'mirrorH', ro: 'rotate', tr: 'trim', ex: 'extend' };
+  function runAlias(cmd) {
+    if (cmd === 'trim' || cmd === 'extend') { setTool(cmd); return; }
+    if (!S.selIds || !S.selIds.length) { setHint('Select objects first, then ' + cmd.toUpperCase() + '.'); return; }
+    if (cmd === 'dup') duplicateSelected();
+    else if (cmd === 'mirrorH') mirror(true);
+    else if (cmd === 'rotate') rotate90();
+    else if (cmd === 'offset') openOffsetModal();
+    if (S.tool !== 'select') setTool('select');
+  }
+  function toolDef(k) { for (var i = 0; i < TOOLS.length; i++) if (TOOLS[i].key === k) return TOOLS[i]; return null; }
+  function toolName(k) { var d = toolDef(k); return d ? d.name : (k || 'tool'); }
+  function toolGlyph(k) { var d = toolDef(k); return d ? d.glyph : '•'; }
+  // Cancel everything in progress + drop to Select (shared by Esc + menu).
+  function cancelAll() {
+    if (!S) return;
+    S._filletA = null; S.inq = null; S.draft = null; S.boxSel = null; S._calib = null; hideDyn();
+    setSelection([]);
+    if (S.tool !== 'select') setTool('select'); else { buildLayers(); repaint(); }
+  }
+  // Right-click context menu — repeat last command, select/cancel, selection
+  // edits, recent tools. The core AutoCAD right-click reflex.
+  function ctxOutside(ev) { var m = document.getElementById('p86-sheet-ctx'); if (m && !m.contains(ev.target)) hideContextMenu(); }
+  function hideContextMenu() { var m = document.getElementById('p86-sheet-ctx'); if (m && m.parentNode) m.parentNode.removeChild(m); document.removeEventListener('mousedown', ctxOutside, true); }
+  function showContextMenu(e) {
+    hideContextMenu();
+    var menu = document.createElement('div');
+    menu.id = 'p86-sheet-ctx';
+    menu.style.cssText = 'position:fixed;z-index:5300;background:#0f0f1e;border:1px solid #353545;border-radius:8px;padding:4px;min-width:172px;box-shadow:0 12px 34px rgba(0,0,0,0.6);font-size:12px;color:#e6e6e6;user-select:none;';
+    menu.style.left = Math.max(4, Math.min(e.clientX, window.innerWidth - 188)) + 'px';
+    menu.style.top = Math.max(4, Math.min(e.clientY, window.innerHeight - 280)) + 'px';
+    var items = [];
+    if (S._lastTool) items.push({ label: '↻ Repeat ' + toolName(S._lastTool) + '  (Enter)', act: function () { setTool(S._lastTool); } });
+    items.push({ label: '▢ Select', act: function () { setTool('select'); } });
+    if (S.draft || S.inq || S._calib || (S.selIds && S.selIds.length)) items.push({ label: '⊘ Cancel  (Esc)', act: cancelAll });
+    if (S.selIds && S.selIds.length) {
+      items.push({ sep: 1 });
+      items.push({ label: '⧉ Duplicate', act: duplicateSelected });
+      items.push({ label: '⟳ Rotate 90°', act: rotate90 });
+      items.push({ label: '⌫ Delete', act: deleteSelected });
+    }
+    var recents = (S._recentTools || []).filter(function (tk) { return tk !== S._lastTool; });
+    if (recents.length) {
+      items.push({ sep: 1 });
+      recents.slice(0, 4).forEach(function (tk) { items.push({ label: toolGlyph(tk) + '  ' + toolName(tk), act: function () { setTool(tk); } }); });
+    }
+    items.forEach(function (it) {
+      if (it.sep) { var hr = document.createElement('div'); hr.style.cssText = 'height:1px;background:#2a2a3a;margin:4px 2px;'; menu.appendChild(hr); return; }
+      var b = document.createElement('div');
+      b.textContent = it.label;
+      b.style.cssText = 'padding:6px 10px;border-radius:5px;cursor:pointer;white-space:nowrap;';
+      b.onmouseenter = function () { b.style.background = 'rgba(79,140,255,0.18)'; };
+      b.onmouseleave = function () { b.style.background = 'transparent'; };
+      b.onclick = function () { hideContextMenu(); try { it.act(); } catch (err) {} };
+      menu.appendChild(b);
+    });
+    document.body.appendChild(menu);
+    setTimeout(function () { document.addEventListener('mousedown', ctxOutside, true); }, 0);
   }
 
   function newEntity(tool, vp) {
