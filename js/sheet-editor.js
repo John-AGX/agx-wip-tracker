@@ -56,6 +56,7 @@
     { key: 'spotelev', glyph: '⌖', name: 'Spot elev',  group: 'Annotate', label: 'Spot elevation — click any point to tag its height above the level datum. Prints.' },
     { key: 'refline',  glyph: '┈', name: 'Ref line',   group: 'Annotate', label: 'Reference line (construction guide — snaps & trims to, but is NOT printed or exported)' },
     { key: 'inquire',  glyph: '⊾', name: 'Measure',    group: 'View',     label: 'Measure / inquiry — click points for distance, angle, running total & enclosed area. Does NOT print. Enter/Esc clears.' },
+    { key: 'calibrate',glyph: '📐', name: 'Calibrate',  group: 'View',     label: 'Calibrate scale — click two points a known distance apart on the plan underlay, then type the real length (e.g. 20\'). Sets this viewport\'s scale so every measurement reads true.' },
     { key: 'pan',      glyph: '✋', name: 'Pan',        group: 'View',     label: 'Pan (or hold Space / middle-drag)' }
   ];
   // Non-tool buttons (edit ops + history/util) shown in the drawer, grouped.
@@ -222,6 +223,8 @@
       ctx.setLineDash([]);
       // clip entities to the viewport frame
       ctx.beginPath(); ctx.rect(vp.x, vp.y, vp.w, vp.h); ctx.clip();
+      // Plan underlay (Tier 1) — drawn first so it sits behind grid + entities.
+      try { drawUnderlay(ctx, vp); } catch (err) { /* defensive */ }
       // Editor-only faint reference grid (1 ft minor / 5 ft major), gated
       // by zoom so it never turns into a solid fill when zoomed out.
       if (opts.grid && vp.scale && vp.scale.pixelsPerInch) {
@@ -634,6 +637,8 @@
     if (S) close();
     var plan = opts.plan || {};
     var doc = loadDoc(plan);
+    // Optional bridge: a caller may pass an underlay to seed a fresh takeoff.
+    if (opts.underlay && !doc.underlay) doc.underlay = opts.underlay;
 
     var ov = document.createElement('div');
     ov.id = 'p86-sheet-overlay';
@@ -644,6 +649,7 @@
         '<strong style="color:#fff;font-size:13px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">📐 ' + esc(plan.name || 'Shop drawing') + '</strong>' +
         '<button id="p86-sheet-settings" title="Editor settings &amp; defaults (units, scale, sheet size, grid, snaps)" style="background:rgba(255,255,255,0.06);color:#cbd5e1;border:1px solid #444;border-radius:6px;padding:6px 11px;font-size:13px;cursor:pointer;">⚙</button>' +
         '<button id="p86-sheet-shortcuts" title="Keyboard shortcuts (?)" style="background:rgba(255,255,255,0.06);color:#cbd5e1;border:1px solid #444;border-radius:6px;padding:6px 11px;font-size:13px;cursor:pointer;">⌨</button>' +
+        '<button id="p86-sheet-underlay" title="Import a plan PDF/image as a scaled background to trace + measure over (takeoff)" style="background:rgba(79,140,255,0.14);color:#cbd5e1;border:1px solid #4f8cff;border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer;">⊞ Underlay</button>' +
         '<button id="p86-sheet-png" title="Download the sheet as a PNG" style="background:rgba(255,255,255,0.06);color:#cbd5e1;border:1px solid #444;border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer;">⬇ PNG</button>' +
         '<button id="p86-sheet-pdf" title="Print / Save as PDF at true sheet size" style="background:rgba(255,255,255,0.06);color:#cbd5e1;border:1px solid #444;border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer;">⎙ PDF</button>' +
         '<button id="p86-sheet-dxf" title="Export to DXF — opens to scale in AutoCAD / any CAD app" style="background:rgba(255,255,255,0.06);color:#cbd5e1;border:1px solid #444;border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer;">⛁ DXF</button>' +
@@ -717,6 +723,7 @@
     wireInput();
     S.canvas.style.cursor = 'default';     // default tool is Select
     repaint();
+    ensureUnderlay();                       // load a persisted plan underlay, if any
     loadOrgBrand();
 
     ov.focus();
@@ -922,7 +929,16 @@
       if (k === 'ortho') b.textContent = (S.polarInc && S.polarInc !== 90) ? ('POLAR ' + S.polarInc + '°') : 'ORTHO';
     });
     var v = S.overlay.querySelector('#p86-sb-view');
-    if (v) { var avp = S.hoverVp || (S.doc.viewports && S.doc.viewports[0]); v.textContent = avp ? (avp.label + '  ·  ' + (avp.scale && avp.scale.label ? avp.scale.label : '')) : ''; }
+    if (v) {
+      var avp = S.hoverVp || (S.doc.viewports && S.doc.viewports[0]);
+      var slbl = (avp && avp.scale && avp.scale.label) ? avp.scale.label : '';
+      // An imported plan underlay has an arbitrary scale until calibrated —
+      // warn instead of implying the preset is meaningful.
+      var notSet = !!(S.doc.underlay && avp && !(avp.scale && avp.scale.calibrated));
+      if (notSet) slbl = '⚠ SCALE NOT SET — calibrate';
+      v.textContent = avp ? (avp.label + '  ·  ' + slbl) : '';
+      v.style.color = notSet ? '#f87171' : '#64748b';
+    }
     var z = S.overlay.querySelector('#p86-sb-zoom');
     if (z) z.textContent = Math.round((S.view.scale || 1) * 100) + '%';
   }
@@ -930,6 +946,7 @@
     if (S.draft) S.draft = null;             // cancel any in-progress draft
     S._filletA = null;                       // cancel a pending fillet pick
     S.inq = null;                            // clear any measure/inquiry path
+    S._calib = null;                         // cancel any in-progress calibration
     hideDyn();
     S.tool = t;
     S.canvas.style.cursor = (t === 'pan') ? 'grab' : (t === 'select' ? 'default' : 'crosshair');
@@ -1826,7 +1843,7 @@
         // Cancel whatever's in progress, clear the selection, and fall back to
         // the Select tool (CAD-style). Never closes the editor — that's the
         // Close button's job.
-        S._filletA = null; S.inq = null; S.draft = null; S.boxSel = null; hideDyn();
+        S._filletA = null; S.inq = null; S.draft = null; S.boxSel = null; S._calib = null; hideDyn();
         setSelection([]);
         if (S.tool !== 'select') setTool('select'); else { buildLayers(); repaint(); }
       }
@@ -1889,6 +1906,7 @@
     if (t === 'trim') { trimAt(pt, vp); return; }
     if (t === 'extend') { extendAt(pt, vp); return; }
     if (t === 'fillet') { filletClick(pt, vp); return; }
+    if (t === 'calibrate') { calibrateClick(pt, vp); return; }
     // Measure / inquiry — accumulate points; readout drawn in repaint. Never
     // becomes a printed entity. Enter/Esc clears.
     if (t === 'inquire') {
@@ -2756,6 +2774,156 @@
     buildLayers(); repaint();
   }
 
+  // ── Plan underlay (Tier 1) ──────────────────────────────────────
+  // Import a PDF/image plan as a scaled background to trace + measure
+  // over. Stored on doc.underlay (rides pages[0] through save), rendered
+  // behind entities inside the viewport clip, calibrated via the
+  // Calibrate tool. The rendered bitmap is cached on S (not persisted).
+  function underlayRawUrl(u) {
+    if (!u) return null;
+    if (u.url) return u.url;                                   // pre-upload / explicit
+    if (u.attachmentId) return '/api/attachments/raw/' + encodeURIComponent(u.attachmentId);
+    return null;
+  }
+  function placeUnderlayDefault(u) {
+    if (!S || !u || !u.natW || !u.natH) return;
+    var vps = S.doc.viewports || [], vp = null;
+    for (var i = 0; i < vps.length; i++) { if (vps[i].id === u.viewport) { vp = vps[i]; break; } }
+    if (!vp) vp = vps[0];
+    if (!vp) return;
+    // Fit the plan inside its viewport frame, preserving aspect (letterbox).
+    var fit = Math.min(vp.w / u.natW, vp.h / u.natH);
+    u.w = u.natW * fit; u.h = u.natH * fit;
+    u.x = vp.x + (vp.w - u.w) / 2;
+    u.y = vp.y + (vp.h - u.h) / 2;
+  }
+  function ensureUnderlay() {
+    var u = S && S.doc && S.doc.underlay;
+    if (!u) { if (S) { S._underlayBmp = null; S._underlayKey = null; } return; }
+    var key = (u.attachmentId || u.url || '') + ':' + (u.page || 0);
+    if (S._underlayKey === key && S._underlayBmp) return;      // already loaded
+    if (S._underlayLoadKey === key) return;                    // load in flight
+    var url = underlayRawUrl(u); if (!url) return;
+    S._underlayLoadKey = key;
+    var headers = {};
+    var tok = (window.p86Auth && typeof p86Auth.getToken === 'function') ? p86Auth.getToken() : null;
+    if (!tok) { try { tok = localStorage.getItem('p86-auth-token'); } catch (e) {} }
+    if (tok) headers['Authorization'] = 'Bearer ' + tok;
+    function done(bmp, w, h) {
+      if (!S || S._underlayLoadKey !== key) return;            // superseded / editor closed
+      S._underlayBmp = bmp; S._underlayKey = key; S._underlayLoadKey = null;
+      if (u.natW == null || u.x == null) { u.natW = w; u.natH = h; placeUnderlayDefault(u); }
+      repaint(); refreshStatusBar();
+    }
+    function fail(e) { if (S && S._underlayLoadKey === key) S._underlayLoadKey = null; if (window.console) console.warn('[sheet underlay] load failed', e); }
+    if (u.kind === 'pdf') {
+      if (!window.pdfjsLib) { fail(new Error('pdfjsLib not loaded')); return; }
+      fetch(url, { headers: headers, credentials: 'same-origin' })
+        .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.arrayBuffer(); })
+        .then(function (buf) { return window.pdfjsLib.getDocument({ data: buf }).promise; })
+        .then(function (pdf) { return pdf.getPage((u.page || 0) + 1); })
+        .then(function (page) {
+          var vpt = page.getViewport({ scale: 2 });
+          var off = document.createElement('canvas');
+          off.width = Math.max(1, Math.round(vpt.width)); off.height = Math.max(1, Math.round(vpt.height));
+          return page.render({ canvasContext: off.getContext('2d'), viewport: vpt }).promise.then(function () { return off; });
+        })
+        .then(function (off) { done(off, off.width, off.height); })
+        .catch(fail);
+    } else {
+      // image — fetch as blob so the bitmap is same-origin and exports clean.
+      fetch(url, { headers: headers, credentials: 'same-origin' })
+        .then(function (r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.blob(); })
+        .then(function (blob) {
+          var burl = URL.createObjectURL(blob);
+          var img = new Image();
+          img.onload = function () { done(img, img.naturalWidth, img.naturalHeight); setTimeout(function () { try { URL.revokeObjectURL(burl); } catch (e) {} }, 0); };
+          img.onerror = function () { fail(new Error('image decode failed')); };
+          img.src = burl;
+        })
+        .catch(fail);
+    }
+  }
+  // Drawn inside renderSheet's per-viewport clip, behind entities, under
+  // the same pan/zoom transform — so it tracks the drawing 1:1.
+  function drawUnderlay(ctx, vp) {
+    var u = S && S.doc && S.doc.underlay;
+    if (!u || !S._underlayBmp || u.x == null) return;
+    var owner = u.viewport || (((S.doc.viewports || [])[0]) || {}).id;
+    if (owner !== vp.id) return;
+    ctx.save();
+    var op = (u.opacity == null) ? 0.6 : u.opacity;
+    ctx.globalAlpha = Math.max(0.05, Math.min(1, op));
+    try { ctx.drawImage(S._underlayBmp, u.x, u.y, u.w, u.h); } catch (e) {}
+    ctx.restore();
+  }
+  function importUnderlay() {
+    if (!S) return;
+    var inp = document.createElement('input');
+    inp.type = 'file'; inp.accept = 'application/pdf,image/*'; inp.style.display = 'none';
+    inp.onchange = function () {
+      var file = inp.files && inp.files[0];
+      if (inp.parentNode) inp.parentNode.removeChild(inp);
+      if (!file) return;
+      var isPdf = /pdf/i.test(file.type) || /\.pdf$/i.test(file.name);
+      var plan = S.plan || {};
+      var et, eid;
+      if (plan.entity_type && plan.entity_id) { et = plan.entity_type; eid = plan.entity_id; }
+      else { et = 'user'; eid = (window.p86Auth && p86Auth.getUser && (p86Auth.getUser() || {}).id); }
+      if (eid == null) { alert('Could not determine where to store the underlay file.'); return; }
+      if (!window.p86Api || !p86Api.attachments || !p86Api.attachments.upload) { alert('Upload API unavailable — refresh the page.'); return; }
+      setHint('Uploading underlay…');
+      p86Api.attachments.upload(et, eid, file, { skip_geo: true }).then(function (res) {
+        var att = (res && (res.attachment || res)) || {};
+        if (!att.id) throw new Error('upload returned no attachment id');
+        S.doc.underlay = {
+          attachmentId: att.id, kind: isPdf ? 'pdf' : 'image', page: 0,
+          viewport: (((S.doc.viewports || [])[0]) || {}).id || 'VP1', opacity: 0.6,
+          name: file.name || ''
+        };
+        // A fresh plan import has an arbitrary scale until calibrated.
+        var vp0 = (S.doc.viewports || [])[0];
+        if (vp0 && vp0.scale) vp0.scale.calibrated = false;
+        S._underlayBmp = null; S._underlayKey = null; S._underlayLoadKey = null;
+        ensureUnderlay();
+        if (typeof setTool === 'function') setTool('calibrate');
+        setHint('Underlay added — click two points a known distance apart, then type the real length to set scale.');
+        repaint(); refreshStatusBar();
+      }).catch(function (e) {
+        alert('Underlay upload failed: ' + (e && e.message ? e.message : e));
+        setHint('');
+      });
+    };
+    document.body.appendChild(inp);
+    inp.click();
+  }
+  // Calibrate: two clicks a known distance apart → type the real length →
+  // back-solve this viewport's pixelsPerInch so every measure/dim/area is true.
+  function calibrateClick(pt, vp) {
+    vp = vp || vpAt(pt) || (S.doc.viewports || [])[0];
+    if (!vp) return;
+    if (!S._calib || S._calib.vpId !== vp.id) S._calib = { vpId: vp.id, pts: [] };
+    S._calib.pts.push({ x: pt.x, y: pt.y });
+    if (S._calib.pts.length < 2) { setHint('Calibrate: now click the second point of the known distance.'); repaint(); return; }
+    var a = S._calib.pts[0], b = S._calib.pts[1];
+    var pxDist = Math.hypot(b.x - a.x, b.y - a.y);
+    S._calib = null;
+    if (pxDist < 1) { setHint('Those two points are too close — try again.'); repaint(); return; }
+    repaint();
+    promptText('Real distance between the two points (e.g. 20\', 24\' 6", 240")', function (txt) {
+      if (txt == null) { repaint(); return; }
+      var inches = parseLenIn(txt);
+      if (!inches || inches <= 0) { alert('Could not read that distance. Try e.g. 20\' or 24\' 6".'); return; }
+      if (!vp.scale) vp.scale = { unit: 'ft' };
+      vp.scale.pixelsPerInch = pxDist / inches;
+      vp.scale.calibrated = true;
+      vp.scale.label = 'Calibrated · ' + fmtLen(inches) + ' ref';
+      if (typeof setTool === 'function') setTool('select');
+      repaint(); refreshStatusBar();
+      setHint('Scale calibrated — measurements are now true to the plan.');
+    });
+  }
+
   // ── Render ──────────────────────────────────────────────────────
   function repaint() {
     var ctx = S.ctx, c = S.canvas;
@@ -2802,6 +2970,16 @@
         }
         if (prims().drawStroke) { try { prims().drawStroke(ctx, prev); } catch (e) {} }
       }
+      ctx.restore();
+    }
+    // calibrate in progress — marker on the first point + rubber line to cursor
+    if (S._calib && S._calib.pts && S._calib.pts.length) {
+      var ca0 = S._calib.pts[0];
+      ctx.save();
+      ctx.strokeStyle = '#f59e0b'; ctx.fillStyle = '#f59e0b';
+      ctx.lineWidth = 1.5 / S.view.scale;
+      ctx.beginPath(); ctx.arc(ca0.x, ca0.y, 4 / S.view.scale, 0, Math.PI * 2); ctx.fill();
+      if (S.hover) { ctx.beginPath(); ctx.moveTo(ca0.x, ca0.y); ctx.lineTo(S.hover.x, S.hover.y); ctx.stroke(); }
       ctx.restore();
     }
     // selection highlight — every selected entity (dashed green box)
@@ -3028,6 +3206,7 @@
         var dxfBtn = S.overlay.querySelector('#p86-sheet-dxf'); if (dxfBtn) dxfBtn.onclick = exportDxf;
         var setBtn = S.overlay.querySelector('#p86-sheet-settings'); if (setBtn) setBtn.onclick = openSettingsModal;
         var scBtn = S.overlay.querySelector('#p86-sheet-shortcuts'); if (scBtn) scBtn.onclick = openShortcuts;
+        var ulBtn = S.overlay.querySelector('#p86-sheet-underlay'); if (ulBtn) ulBtn.onclick = importUnderlay;
       }
     },
     close: close,
