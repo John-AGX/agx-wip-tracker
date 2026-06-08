@@ -48,6 +48,7 @@
     { key: 'trim',     glyph: '✂', name: 'Trim',       group: 'Modify',   label: 'Trim — click a line segment to cut it back to the nearest crossing line' },
     { key: 'extend',   glyph: '⇥', name: 'Extend',     group: 'Modify',   label: 'Extend — click a line near the end to extend it to the next line it meets' },
     { key: 'fillet',   glyph: '◜', name: 'Fillet',     group: 'Modify',   label: 'Fillet — click two lines, then enter a radius (0 = sharp corner)' },
+    { key: 'break',    glyph: '⊟', name: 'Break',      group: 'Modify',   label: 'Break — click a point on a line to split it into two segments there' },
     { key: 'dim',      glyph: '↔', name: 'Dimension',  group: 'Annotate', label: 'Dimension (click two points — auto-labels real length at the viewport scale)' },
     { key: 'angle',    glyph: '∠', name: 'Angle dim',  group: 'Annotate', label: 'Angle dimension (click three points: leg · vertex · leg)' },
     { key: 'leader',   glyph: '➘', name: 'Leader',     group: 'Annotate', label: 'Leader / callout (click target, click text position)' },
@@ -69,6 +70,8 @@
     { key: 'dup',     act: 'edit', glyph: '⧉', name: 'Duplicate',  group: 'Modify', label: 'Duplicate selection (Ctrl+D)' },
     { key: 'offset',  act: 'edit', glyph: '⎘', name: 'Offset',     group: 'Modify', label: 'Offset selection by a distance (line / polyline / rect / circle)' },
     { key: 'scale',   act: 'edit', glyph: '⤧', name: 'Scale',      group: 'Modify', label: 'Scale selection uniformly by a factor (e.g. 2 = double, 0.5 = half) about its center' },
+    { key: 'explode', act: 'edit', glyph: '✺', name: 'Explode',    group: 'Modify', label: 'Explode a rectangle / polyline into individual line segments' },
+    { key: 'join',    act: 'edit', glyph: '⛓', name: 'Join',       group: 'Modify', label: 'Join selected connected lines into a single polyline' },
     { key: 'array',   act: 'edit', glyph: '▦', name: 'Array',      group: 'Modify', label: 'Array selection (rows × columns)' },
     { key: 'fit',     act: 'fit',  glyph: '⤢', name: 'Fit',        group: 'View',   label: 'Fit to screen' },
     { key: 'undo',    act: 'undo', glyph: '↶', name: 'Undo',       group: 'View',   label: 'Undo (Ctrl+Z)' },
@@ -897,6 +900,8 @@
           else if (k === 'dup') duplicateSelected();
           else if (k === 'offset') openOffsetModal();
           else if (k === 'scale') scaleSel();
+          else if (k === 'explode') explodeSel();
+          else if (k === 'join') joinSel();
           else if (k === 'array') openArrayModal();
         }
       };
@@ -2028,6 +2033,7 @@
     if (t === 'trim') { trimAt(pt, vp); return; }
     if (t === 'extend') { extendAt(pt, vp); return; }
     if (t === 'fillet') { filletClick(pt, vp); return; }
+    if (t === 'break') { breakAt(pt, vp); return; }
     if (t === 'calibrate') { calibrateClick(pt, vp); return; }
     // Measure / inquiry — accumulate points; readout drawn in repaint. Never
     // becomes a printed entity. Enter/Esc clears.
@@ -2529,6 +2535,82 @@
       ents.forEach(function (e) { transformEntity(e, function (p) { return { x: cx + (p.x - cx) * f, y: cy + (p.y - cy) * f }; }); });
       repaint();
     });
+  }
+  // Explode a rect / polyline into individual line segments (Tier 4).
+  function explodeSel() {
+    var ents = selEntities(); if (!ents.length) return;
+    var added = [], removed = {};
+    ents.forEach(function (e) {
+      var segs = [];
+      if (e.tool === 'rect' && e.startX != null) {
+        var c = [{ x: e.startX, y: e.startY }, { x: e.endX, y: e.startY }, { x: e.endX, y: e.endY }, { x: e.startX, y: e.endY }];
+        for (var k = 0; k < 4; k++) segs.push([c[k], c[(k + 1) % 4]]);
+      } else if ((e.tool === 'polyline' || e.tool === 'hatch') && e.points && e.points.length > 1) {
+        for (var p = 1; p < e.points.length; p++) segs.push([e.points[p - 1], e.points[p]]);
+      } else return;
+      removed[e.id] = 1;
+      segs.forEach(function (s) {
+        var ln = newEntity('line', viewportOf(e));
+        ln.layer = e.layer; ln.color = e.color; ln.lineWidth = e.lineWidth;
+        ln.startX = s[0].x; ln.startY = s[0].y; ln.endX = s[1].x; ln.endY = s[1].y;
+        added.push(ln);
+      });
+    });
+    if (!added.length) { setHint('Explode: select a rectangle or polyline.'); return; }
+    pushUndo();
+    S.doc.entities = S.doc.entities.filter(function (e) { return !removed[e.id]; });
+    added.forEach(function (a) { S.doc.entities.push(a); });
+    setSelection(added.map(function (a) { return a.id; })); buildLayers(); repaint();
+  }
+  function _ptNear(a, b, tol) { return Math.abs(a.x - b.x) <= tol && Math.abs(a.y - b.y) <= tol; }
+  // Join selected end-to-end connected lines into one polyline (Tier 4).
+  function joinSel() {
+    var lines = selEntities().filter(function (e) { return e.tool === 'line' && e.startX != null; });
+    if (lines.length < 2) { setHint('Join: select 2+ connected lines.'); return; }
+    var tol = 2.5 / S.view.scale, pool = lines.slice();
+    var path = [{ x: pool[0].startX, y: pool[0].startY }, { x: pool[0].endX, y: pool[0].endY }];
+    pool.splice(0, 1);
+    var progress = true;
+    while (pool.length && progress) {
+      progress = false;
+      for (var i = 0; i < pool.length; i++) {
+        var L = pool[i], a = { x: L.startX, y: L.startY }, b = { x: L.endX, y: L.endY };
+        var head = path[0], tail = path[path.length - 1];
+        if (_ptNear(tail, a, tol)) path.push(b);
+        else if (_ptNear(tail, b, tol)) path.push(a);
+        else if (_ptNear(head, a, tol)) path.unshift(b);
+        else if (_ptNear(head, b, tol)) path.unshift(a);
+        else continue;
+        pool.splice(i, 1); progress = true; break;
+      }
+    }
+    if (pool.length) { setHint('Join: those lines don\'t form one connected chain.'); return; }
+    pushUndo();
+    var first = lines[0];
+    var poly = newEntity('polyline', viewportOf(first));
+    poly.layer = first.layer; poly.color = first.color; poly.lineWidth = first.lineWidth; poly.points = path;
+    var rm = {}; lines.forEach(function (L) { rm[L.id] = 1; });
+    S.doc.entities = S.doc.entities.filter(function (e) { return !rm[e.id]; });
+    S.doc.entities.push(poly);
+    setSelection([poly.id]); buildLayers(); repaint();
+  }
+  // Break a line into two segments at the clicked point (Tier 4 tool).
+  function breakAt(pt, vp) {
+    var id = hitTest(pt);
+    var e = id && S.doc.entities.filter(function (x) { return x.id === id; })[0];
+    if (!e || e.tool !== 'line' || e.startX == null) { setHint('Break: click on a straight line.'); return; }
+    var a = { x: e.startX, y: e.startY }, b = { x: e.endX, y: e.endY };
+    var tt = projParam(pt, a, b); if (tt == null) return;
+    tt = Math.max(0, Math.min(1, tt));
+    if (tt < 0.02 || tt > 0.98) { setHint('Break: pick a point nearer the middle of the line.'); return; }
+    var bx = a.x + (b.x - a.x) * tt, by = a.y + (b.y - a.y) * tt;
+    pushUndo();
+    var l2 = JSON.parse(JSON.stringify(e)); l2.id = uid('line'); delete l2._anchor; delete l2._circle;
+    e.endX = bx; e.endY = by;
+    l2.startX = bx; l2.startY = by; l2.endX = b.x; l2.endY = b.y;
+    S.doc.entities.push(l2);
+    setSelection([e.id, l2.id]); buildLayers(); repaint();
+    setHint('Line broken into two segments.');
   }
   // Viewport an entity lives in, + its real-world scale (sheet px per inch).
   function viewportOf(e) {
