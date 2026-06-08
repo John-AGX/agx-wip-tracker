@@ -52,6 +52,8 @@
     { key: 'fillet',   glyph: '◜', name: 'Fillet',     group: 'Modify',   label: 'Fillet — click two lines, then enter a radius (0 = sharp corner)' },
     { key: 'break',    glyph: '⊟', name: 'Break',      group: 'Modify',   label: 'Break — click a point on a line to split it into two segments there' },
     { key: 'chamfer',  glyph: '◣', name: 'Chamfer',    group: 'Modify',   label: 'Chamfer — click two lines, then enter a setback distance (0 = sharp corner)' },
+    { key: 'polararray', glyph: '❋', name: 'Polar array', group: 'Modify', label: 'Polar array — select objects first, then click a center point and enter the count to array them around it' },
+    { key: 'stretch',  glyph: '⇲', name: 'Stretch',    group: 'Modify',   label: 'Stretch — click two corners of a crossing window (vertices inside move, the rest stays), then click a base + destination point' },
     { key: 'dim',      glyph: '↔', name: 'Dimension',  group: 'Annotate', label: 'Dimension (click two points — auto-labels real length at the viewport scale)' },
     { key: 'angle',    glyph: '∠', name: 'Angle dim',  group: 'Annotate', label: 'Angle dimension (click three points: leg · vertex · leg)' },
     { key: 'leader',   glyph: '➘', name: 'Leader',     group: 'Annotate', label: 'Leader / callout (click target, click text position)' },
@@ -968,7 +970,7 @@
   }
   function setTool(t) {
     if (S.draft) S.draft = null;             // cancel any in-progress draft
-    S._filletA = null; S._chamferA = null;   // cancel a pending fillet/chamfer pick
+    S._filletA = null; S._chamferA = null; S._stretch = null;   // cancel pending fillet/chamfer/stretch
     S.inq = null;                            // clear any measure/inquiry path
     S._calib = null;                         // cancel any in-progress calibration
     S._poly = null;                          // cancel any in-progress polygon
@@ -1900,7 +1902,7 @@
         // Cancel whatever's in progress, clear the selection, and fall back to
         // the Select tool (CAD-style). Never closes the editor — that's the
         // Close button's job.
-        S._filletA = null; S._chamferA = null; S.inq = null; S.draft = null; S.boxSel = null; S._calib = null; S._poly = null; hideDyn();
+        S._filletA = null; S._chamferA = null; S._stretch = null; S.inq = null; S.draft = null; S.boxSel = null; S._calib = null; S._poly = null; hideDyn();
         setSelection([]);
         if (S.tool !== 'select') setTool('select'); else { buildLayers(); repaint(); }
       }
@@ -1973,7 +1975,7 @@
   // Cancel everything in progress + drop to Select (shared by Esc + menu).
   function cancelAll() {
     if (!S) return;
-    S._filletA = null; S._chamferA = null; S.inq = null; S.draft = null; S.boxSel = null; S._calib = null; S._poly = null; hideDyn();
+    S._filletA = null; S._chamferA = null; S._stretch = null; S.inq = null; S.draft = null; S.boxSel = null; S._calib = null; S._poly = null; hideDyn();
     setSelection([]);
     if (S.tool !== 'select') setTool('select'); else { buildLayers(); repaint(); }
   }
@@ -2036,6 +2038,8 @@
     if (t === 'extend') { extendAt(pt, vp); return; }
     if (t === 'fillet') { filletClick(pt, vp); return; }
     if (t === 'chamfer') { chamferClick(pt, vp); return; }
+    if (t === 'polararray') { polarArrayClick(pt, vp); return; }
+    if (t === 'stretch') { stretchClick(pt, vp); return; }
     if (t === 'break') { breakAt(pt, vp); return; }
     if (t === 'calibrate') { calibrateClick(pt, vp); return; }
     // Measure / inquiry — accumulate points; readout drawn in repaint. Never
@@ -2666,6 +2670,70 @@
     S.doc.entities.push(l2);
     setSelection([e.id, l2.id]); buildLayers(); repaint();
     setHint('Line broken into two segments.');
+  }
+  // Polar array — copy the current selection N times around a clicked center
+  // (Tier 4 tool; select first, then click the center).
+  function polarArrayClick(pt, vp) {
+    var ents = selEntities();
+    if (!ents.length) { setHint('Polar array: select objects first, then click the center.'); return; }
+    var cx = pt.x, cy = pt.y;
+    promptText('Number of items around the center (e.g. 6)', function (txt) {
+      if (txt == null) return;
+      var n = Math.max(2, Math.min(120, parseInt(txt, 10) || 0));
+      if (n < 2) return;
+      pushUndo();
+      var newIds = ents.map(function (e) { return e.id; });
+      for (var k = 1; k < n; k++) {
+        var ang = k * 2 * Math.PI / n, ca = Math.cos(ang), sa = Math.sin(ang);
+        ents.forEach(function (e) {
+          var copy = JSON.parse(JSON.stringify(e)); copy.id = uid(copy.tool); delete copy._anchor; delete copy._circle;
+          transformEntity(copy, function (p) {
+            var dx = p.x - cx, dy = p.y - cy;
+            return { x: cx + dx * ca - dy * sa, y: cy + dx * sa + dy * ca };
+          });
+          if (copy.tool === 'symbol') copy.rotation = ((copy.rotation || 0) + ang * 180 / Math.PI) % 360;
+          S.doc.entities.push(copy); newIds.push(copy.id);
+        });
+      }
+      setSelection(newIds); buildLayers(); repaint(); setTool('select');
+    });
+  }
+  // Stretch — capture vertices inside a crossing window, then move them by a
+  // base→destination vector; vertices outside the window stay put (Tier 4).
+  function captureVertsInRect(x0, y0, x1, y1) {
+    var v = [];
+    function inR(p) { return p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1; }
+    (S.doc.entities || []).forEach(function (e) {
+      var lyr = layerById(S.doc, e.layer); if (lyr && (lyr.visible === false || lyr.locked)) return;
+      if (e.startX != null) { if (inR({ x: e.startX, y: e.startY })) v.push({ e: e, k: 's' }); if (inR({ x: e.endX, y: e.endY })) v.push({ e: e, k: 'e' }); }
+      if (e.points) e.points.forEach(function (p, i) { if (inR(p)) v.push({ e: e, k: 'p', i: i }); });
+      if (e.x != null) { if (inR({ x: e.x, y: e.y })) v.push({ e: e, k: 'x' }); }
+    });
+    return v;
+  }
+  function applyVertDelta(v, dx, dy) {
+    var e = v.e;
+    if (v.k === 's') { e.startX += dx; e.startY += dy; }
+    else if (v.k === 'e') { e.endX += dx; e.endY += dy; }
+    else if (v.k === 'p') { e.points[v.i].x += dx; e.points[v.i].y += dy; }
+    else if (v.k === 'x') { e.x += dx; e.y += dy; }
+  }
+  function stretchClick(pt, vp) {
+    var st = S._stretch || (S._stretch = { phase: 'c1' });
+    if (st.phase === 'c1') { st.p1 = { x: pt.x, y: pt.y }; st.phase = 'c2'; setHint('Stretch: click the opposite corner of the crossing window.'); repaint(); return; }
+    if (st.phase === 'c2') {
+      st.rect = { x0: Math.min(st.p1.x, pt.x), y0: Math.min(st.p1.y, pt.y), x1: Math.max(st.p1.x, pt.x), y1: Math.max(st.p1.y, pt.y) };
+      st.verts = captureVertsInRect(st.rect.x0, st.rect.y0, st.rect.x1, st.rect.y1);
+      if (!st.verts.length) { setHint('Stretch: no vertices in that window — start again.'); S._stretch = null; repaint(); return; }
+      st.phase = 'base'; setHint(st.verts.length + ' point(s) captured — click a base point.'); repaint(); return;
+    }
+    if (st.phase === 'base') { st.base = { x: pt.x, y: pt.y }; st.phase = 'dest'; setHint('Stretch: click the destination point.'); repaint(); return; }
+    if (st.phase === 'dest') {
+      var dx = pt.x - st.base.x, dy = pt.y - st.base.y;
+      pushUndo();
+      st.verts.forEach(function (v) { applyVertDelta(v, dx, dy); });
+      S._stretch = null; buildLayers(); repaint(); setHint('Stretched.');
+    }
   }
   // Viewport an entity lives in, + its real-world scale (sheet px per inch).
   function viewportOf(e) {
@@ -3329,6 +3397,23 @@
       ctx.lineWidth = 1.5 / S.view.scale;
       ctx.beginPath(); ctx.arc(ca0.x, ca0.y, 4 / S.view.scale, 0, Math.PI * 2); ctx.fill();
       if (S.hover) { ctx.beginPath(); ctx.moveTo(ca0.x, ca0.y); ctx.lineTo(S.hover.x, S.hover.y); ctx.stroke(); }
+      ctx.restore();
+    }
+    // stretch in progress — crossing window (c2) + captured vertices + move vector
+    if (S._stretch) {
+      var stp = S._stretch;
+      ctx.save();
+      ctx.strokeStyle = '#22c55e'; ctx.fillStyle = '#22c55e'; ctx.lineWidth = 1 / S.view.scale;
+      if (stp.phase === 'c2' && stp.p1 && S.hover) {
+        ctx.setLineDash([6 / S.view.scale, 4 / S.view.scale]);
+        ctx.strokeRect(Math.min(stp.p1.x, S.hover.x), Math.min(stp.p1.y, S.hover.y), Math.abs(S.hover.x - stp.p1.x), Math.abs(S.hover.y - stp.p1.y));
+        ctx.setLineDash([]);
+      }
+      if (stp.verts) stp.verts.forEach(function (v) {
+        var p = v.k === 's' ? { x: v.e.startX, y: v.e.startY } : v.k === 'e' ? { x: v.e.endX, y: v.e.endY } : v.k === 'p' ? v.e.points[v.i] : { x: v.e.x, y: v.e.y };
+        ctx.beginPath(); ctx.arc(p.x, p.y, 3 / S.view.scale, 0, Math.PI * 2); ctx.fill();
+      });
+      if (stp.phase === 'dest' && stp.base && S.hover) { ctx.beginPath(); ctx.moveTo(stp.base.x, stp.base.y); ctx.lineTo(S.hover.x, S.hover.y); ctx.stroke(); }
       ctx.restore();
     }
     // selection highlight — every selected entity (dashed green box)
