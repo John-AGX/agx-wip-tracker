@@ -225,7 +225,7 @@
       doc.titleblock = sh.titleblock || (sh.titleblock = {});
       doc.sheet = sh;                                 // sheet object carries size/w/h/margin
       if (!doc.activeSheetId) doc.activeSheetId = sh.id;
-      if (!doc.space) doc.space = 'model';
+      if (!doc.space) doc.space = 'sheet';
       return doc;
     }
     // v1 → v2: build model + a single sheet that ALIAS the existing objects.
@@ -242,7 +242,7 @@
     doc.sheet = sheet;                                 // editor's sheet dims ⇄ the v2 sheet
     doc.titleblock = sheet.titleblock;                 // keep titleblock alias shared
     doc.activeSheetId = 'S1';
-    doc.space = 'model';
+    doc.space = 'sheet';
     return doc;
   }
   // Persist clean v2 — model + sheets are the source of truth; the flat working
@@ -272,7 +272,7 @@
     opts = opts || {};
     var s = doc.sheet;
     // Editor-only paper drop-shadow (export passes no shadow → clean sheet).
-    if (opts.paperShadow) {
+    if (opts.paperShadow && !opts.modelMode) {
       ctx.save();
       ctx.shadowColor = 'rgba(0,0,0,0.55)'; ctx.shadowBlur = 34; ctx.shadowOffsetY = 12;
       ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, s.w, s.h);
@@ -280,21 +280,28 @@
     }
     ctx.fillStyle = '#ffffff';
     ctx.fillRect(0, 0, s.w, s.h);
-    ctx.strokeStyle = '#1f2937';
-    ctx.lineWidth = 6;
-    ctx.strokeRect(s.margin, s.margin, s.w - s.margin * 2, s.h - s.margin * 2);
-    ctx.lineWidth = 2;
-    ctx.strokeRect(s.margin + 10, s.margin + 10, s.w - s.margin * 2 - 20, s.h - s.margin * 2 - 20);
+    // Sheet chrome (paper border) — hidden in model space (chrome-free working view).
+    if (!opts.modelMode) {
+      ctx.strokeStyle = '#1f2937';
+      ctx.lineWidth = 6;
+      ctx.strokeRect(s.margin, s.margin, s.w - s.margin * 2, s.h - s.margin * 2);
+      ctx.lineWidth = 2;
+      ctx.strokeRect(s.margin + 10, s.margin + 10, s.w - s.margin * 2 - 20, s.h - s.margin * 2 - 20);
+    }
 
     (doc.viewports || []).forEach(function (vp) {
       ctx.save();
-      ctx.strokeStyle = '#94a3b8';
-      ctx.lineWidth = 1.5;
-      ctx.setLineDash([14, 8]);
-      ctx.strokeRect(vp.x, vp.y, vp.w, vp.h);
-      ctx.setLineDash([]);
-      // clip entities to the viewport frame
-      ctx.beginPath(); ctx.rect(vp.x, vp.y, vp.w, vp.h); ctx.clip();
+      // Viewport frame + clip — sheet space only. In model space we draw the
+      // geometry free (no titleblock/viewport window), so skip the frame + clip.
+      if (!opts.modelMode) {
+        ctx.strokeStyle = '#94a3b8';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([14, 8]);
+        ctx.strokeRect(vp.x, vp.y, vp.w, vp.h);
+        ctx.setLineDash([]);
+        // clip entities to the viewport frame
+        ctx.beginPath(); ctx.rect(vp.x, vp.y, vp.w, vp.h); ctx.clip();
+      }
       // Plan underlay (Tier 1) — drawn first so it sits behind grid + entities.
       try { drawUnderlay(ctx, vp); } catch (err) { /* defensive */ }
       // Editor-only faint reference grid (1 ft minor / 5 ft major), gated
@@ -329,16 +336,21 @@
       }
       try { drawScaleBar(ctx, vp); } catch (err) { /* defensive */ }
       ctx.restore();
-      // label bar (outside clip)
-      ctx.fillStyle = '#1f2937';
-      ctx.font = '700 ' + Math.round(DPI * 0.18) + 'px Arial, sans-serif';
-      ctx.textBaseline = 'bottom';
-      ctx.fillText(vp.label + '    ' + (vp.scale && vp.scale.label ? vp.scale.label : ''),
-        vp.x + 4, vp.y - 6);
+      // label bar (outside clip) — sheet space only
+      if (!opts.modelMode) {
+        ctx.fillStyle = '#1f2937';
+        ctx.font = '700 ' + Math.round(DPI * 0.18) + 'px Arial, sans-serif';
+        ctx.textBaseline = 'bottom';
+        ctx.fillText(vp.label + '    ' + (vp.scale && vp.scale.label ? vp.scale.label : ''),
+          vp.x + 4, vp.y - 6);
+      }
     });
 
-    drawNorthArrow(ctx, doc);
-    drawTitleblock(ctx, doc);
+    // North arrow + titleblock are sheet-space presentation — hidden in model space.
+    if (!opts.modelMode) {
+      drawNorthArrow(ctx, doc);
+      drawTitleblock(ctx, doc);
+    }
   }
 
   // Modern titleblock: a dark company band (logo + org name) over a clean
@@ -722,6 +734,10 @@
     ov.innerHTML =
       '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;background:rgba(15,15,30,0.95);border:1px solid #2a2a3a;border-radius:10px;padding:8px 14px;">' +
         '<strong style="color:#fff;font-size:13px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">📐 ' + esc(plan.name || 'Shop drawing') + '</strong>' +
+        '<div id="p86-space-seg" title="Model = draw at true size, no titleblock (working / cutout view) · Sheet = the titleblocked sheet for printing" style="display:flex;border:1px solid #3a3a4a;border-radius:7px;overflow:hidden;margin-right:2px;">' +
+          '<button id="p86-space-model" data-space="model" style="background:rgba(255,255,255,0.06);color:#cbd5e1;border:0;border-right:1px solid #3a3a4a;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer;">▦ Model</button>' +
+          '<button id="p86-space-sheet" data-space="sheet" style="background:#4f8cff;color:#fff;border:0;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer;">▭ Sheet</button>' +
+        '</div>' +
         '<button id="p86-sheet-settings" title="Editor settings &amp; defaults (units, scale, sheet size, grid, snaps)" style="background:rgba(255,255,255,0.06);color:#cbd5e1;border:1px solid #444;border-radius:6px;padding:6px 11px;font-size:13px;cursor:pointer;">⚙</button>' +
         '<button id="p86-sheet-shortcuts" title="Keyboard shortcuts (?)" style="background:rgba(255,255,255,0.06);color:#cbd5e1;border:1px solid #444;border-radius:6px;padding:6px 11px;font-size:13px;cursor:pointer;">⌨</button>' +
         '<button id="p86-sheet-underlay" title="Import a plan PDF/image as a scaled background to trace + measure over (takeoff)" style="background:rgba(79,140,255,0.14);color:#cbd5e1;border:1px solid #4f8cff;border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer;">⊞ Underlay</button>' +
@@ -770,6 +786,7 @@
       doc: doc, plan: plan, onSave: opts.onSave,
       view: { scale: 1, tx: 0, ty: 0 },
       tool: 'select',
+      space: 'sheet',       // Phase B: 'sheet' = titleblocked paper (default) | 'model' = chrome-free true-size working view
       activeLayer: (doc.layers[0] && doc.layers[0].id) || 'L0',
       draft: null,          // in-progress entity (sheet coords)
       hover: null,          // {x,y} sheet coords of cursor
@@ -3435,6 +3452,23 @@
     });
   }
 
+  // ── Model / Sheet space (Phase B) ───────────────────────────────
+  // Phase B step 1: a chrome-free Model working view. Sheet space is the
+  // titleblocked paper (unchanged default); Model space hides the sheet
+  // border / viewport frame / titleblock so you draw on a clean surface.
+  // Same coordinate space (no data change) — the model-canonical coordinate
+  // migration + scaled viewport windows land in Phase C/D (multi-viewport).
+  function setSpace(sp) {
+    if (!S || (sp !== 'model' && sp !== 'sheet') || S.space === sp) return;
+    S.space = sp;
+    var mb = S.overlay && S.overlay.querySelector('#p86-space-model');
+    var sb = S.overlay && S.overlay.querySelector('#p86-space-sheet');
+    if (mb) { mb.style.background = (sp === 'model') ? '#4f8cff' : 'rgba(255,255,255,0.06)'; mb.style.color = (sp === 'model') ? '#fff' : '#cbd5e1'; }
+    if (sb) { sb.style.background = (sp === 'sheet') ? '#4f8cff' : 'rgba(255,255,255,0.06)'; sb.style.color = (sp === 'sheet') ? '#fff' : '#cbd5e1'; }
+    setHint(sp === 'model' ? 'Model space — true-size working view (no titleblock).' : 'Sheet space — titleblocked sheet for printing.');
+    repaint();
+  }
+
   // ── Render ──────────────────────────────────────────────────────
   function repaint() {
     var ctx = S.ctx, c = S.canvas;
@@ -3444,7 +3478,7 @@
     ctx.save();
     ctx.translate(S.view.tx, S.view.ty);
     ctx.scale(S.view.scale, S.view.scale);
-    renderSheet(ctx, S.doc, { paperShadow: true, grid: S.gridSnap, viewScale: S.view.scale, editor: true });
+    renderSheet(ctx, S.doc, { paperShadow: true, grid: S.gridSnap, viewScale: S.view.scale, editor: true, modelMode: S.space === 'model' });
     // draft preview
     if (S.draft) {
       var d = S.draft;
@@ -3763,6 +3797,8 @@
         var setBtn = S.overlay.querySelector('#p86-sheet-settings'); if (setBtn) setBtn.onclick = openSettingsModal;
         var scBtn = S.overlay.querySelector('#p86-sheet-shortcuts'); if (scBtn) scBtn.onclick = openShortcuts;
         var ulBtn = S.overlay.querySelector('#p86-sheet-underlay'); if (ulBtn) ulBtn.onclick = importUnderlay;
+        var smBtn = S.overlay.querySelector('#p86-space-model'); if (smBtn) smBtn.onclick = function () { setSpace('model'); };
+        var ssBtn = S.overlay.querySelector('#p86-space-sheet'); if (ssBtn) ssBtn.onclick = function () { setSpace('sheet'); };
       }
     },
     close: close,
