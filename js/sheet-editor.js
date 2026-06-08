@@ -46,6 +46,7 @@
     { key: 'arc',      glyph: '⌒', name: 'Arc',        group: 'Draw',     label: 'Arc (3-point: click start, a point on the arc, then end)' },
     { key: 'ellipse',  glyph: '⬭', name: 'Ellipse',    group: 'Draw',     label: 'Ellipse (click two opposite corners of its bounding box)' },
     { key: 'polygon',  glyph: '⬠', name: 'Polygon',    group: 'Draw',     label: 'Regular polygon (click the center, click a vertex, then type the number of sides)' },
+    { key: 'spline',   glyph: '∿', name: 'Spline',     group: 'Draw',     label: 'Spline — click control points; double-click / Enter to finish. Drawn as a smooth curve through the points.' },
     { key: 'trim',     glyph: '✂', name: 'Trim',       group: 'Modify',   label: 'Trim — click a line segment to cut it back to the nearest crossing line' },
     { key: 'extend',   glyph: '⇥', name: 'Extend',     group: 'Modify',   label: 'Extend — click a line near the end to extend it to the next line it meets' },
     { key: 'fillet',   glyph: '◜', name: 'Fillet',     group: 'Modify',   label: 'Fillet — click two lines, then enter a radius (0 = sharp corner)' },
@@ -53,6 +54,7 @@
     { key: 'dim',      glyph: '↔', name: 'Dimension',  group: 'Annotate', label: 'Dimension (click two points — auto-labels real length at the viewport scale)' },
     { key: 'angle',    glyph: '∠', name: 'Angle dim',  group: 'Annotate', label: 'Angle dimension (click three points: leg · vertex · leg)' },
     { key: 'leader',   glyph: '➘', name: 'Leader',     group: 'Annotate', label: 'Leader / callout (click target, click text position)' },
+    { key: 'revcloud', glyph: '☁', name: 'Rev cloud',  group: 'Annotate', label: 'Revision cloud — click two opposite corners; drawn as a scalloped cloud around that box' },
     { key: 'text',     glyph: 'T', name: 'Text',       group: 'Annotate', label: 'Text (click to place)' },
     { key: 'hatch',    glyph: '▨', name: 'Hatch',      group: 'Annotate', label: 'Hatch fill (click a closed region; pick a material pattern) — double-click / Enter to close' },
     { key: 'symbol',   glyph: '✱', name: 'Symbol',     group: 'Annotate', label: 'Symbol / block (north arrow, sprinkler head, post, tree, callout)' },
@@ -1872,7 +1874,7 @@
       S.moveDrag = null; S.gripDrag = null;
     };
     c.ondblclick = function () {
-      if ((S.tool === 'polyline' || S.tool === 'hatch') && S.draft) commitPolyline();
+      if ((S.tool === 'polyline' || S.tool === 'hatch' || S.tool === 'spline') && S.draft) commitPolyline();
     };
     c.oncontextmenu = function (e) { e.preventDefault(); showContextMenu(e); };
     c.onwheel = function (e) {
@@ -1902,7 +1904,7 @@
         if (S.tool !== 'select') setTool('select'); else { buildLayers(); repaint(); }
       }
       else if (e.key === 'Enter') {
-        if ((S.tool === 'polyline' || S.tool === 'hatch') && S.draft) commitPolyline();
+        if ((S.tool === 'polyline' || S.tool === 'hatch' || S.tool === 'spline') && S.draft) commitPolyline();
         else if (S.tool === 'inquire' && S.inq) { S.inq = null; repaint(); }
         else if (!S.draft && S._lastTool) { e.preventDefault(); setTool(S._lastTool); }   // AutoCAD: Enter repeats the last command
       }
@@ -2159,7 +2161,7 @@
       });
       return;
     }
-    if (t === 'line' || t === 'rect' || t === 'circle' || t === 'refline' || t === 'ellipse') {
+    if (t === 'line' || t === 'rect' || t === 'circle' || t === 'refline' || t === 'ellipse' || t === 'revcloud') {
       if (!S.draft) {
         var e = newEntity(t === 'circle' ? 'ellipse' : t, vp);
         e.startX = pt.x; e.startY = pt.y; e.endX = pt.x; e.endY = pt.y;
@@ -2169,9 +2171,9 @@
       } else {
         finalizeTwoPoint(pt);
       }
-    } else if (t === 'polyline') {
+    } else if (t === 'polyline' || t === 'spline') {
       if (!S.draft) {
-        var pe = newEntity('polyline', vp);
+        var pe = newEntity(t, vp);   // 'polyline' or 'spline' (resampled to a polyline on commit)
         pe.points = [{ x: pt.x, y: pt.y }];
         pe._anchor = { x: pt.x, y: pt.y };
         S.draft = pe;
@@ -2193,12 +2195,64 @@
     } else { d.endX = pt.x; d.endY = pt.y; }
     if (Math.abs(d.endX - d.startX) < 0.5 && Math.abs(d.endY - d.startY) < 0.5) { S.draft = null; hideDyn(); return; }
     delete d._anchor; delete d._circle;
+    if (d.tool === 'revcloud') {
+      // Convert the drawn bbox into a scalloped closed polyline (reuses
+      // polyline render/snaps/export — no new entity type).
+      d.points = revCloudPoints(Math.min(d.startX, d.endX), Math.min(d.startY, d.endY), Math.max(d.startX, d.endX), Math.max(d.startY, d.endY));
+      d.tool = 'polyline';
+      delete d.startX; delete d.startY; delete d.endX; delete d.endY;
+    }
     commitEntity(d); S.draft = null; hideDyn();
   }
   function commitPolyline() {
     var d = S.draft;
-    if (d && d.points && d.points.length >= 2) { delete d._anchor; commitEntity(d); }
+    if (d && d.points && d.points.length >= 2) {
+      delete d._anchor;
+      // Spline → resample into a smooth Catmull-Rom polyline (existing render).
+      if (d.tool === 'spline') { if (d.points.length >= 3) d.points = catmullRom(d.points, 16); d.tool = 'polyline'; }
+      commitEntity(d);
+    }
     S.draft = null; hideDyn(); repaint();
+  }
+  // Catmull-Rom resample through control points → smooth polyline (Tier 4 spline).
+  function catmullRom(P, segs) {
+    if (!P || P.length < 3) return (P || []).slice();
+    segs = segs || 16;
+    var out = [];
+    function at(i) { return P[Math.max(0, Math.min(P.length - 1, i))]; }
+    for (var i = 0; i < P.length - 1; i++) {
+      var p0 = at(i - 1), p1 = at(i), p2 = at(i + 1), p3 = at(i + 2);
+      for (var s = 0; s < segs; s++) {
+        var t = s / segs, t2 = t * t, t3 = t2 * t;
+        out.push({
+          x: 0.5 * ((2 * p1.x) + (-p0.x + p2.x) * t + (2 * p0.x - 5 * p1.x + 4 * p2.x - p3.x) * t2 + (-p0.x + 3 * p1.x - 3 * p2.x + p3.x) * t3),
+          y: 0.5 * ((2 * p1.y) + (-p0.y + p2.y) * t + (2 * p0.y - 5 * p1.y + 4 * p2.y - p3.y) * t2 + (-p0.y + 3 * p1.y - 3 * p2.y + p3.y) * t3)
+        });
+      }
+    }
+    out.push(P[P.length - 1]);
+    return out;
+  }
+  // Scalloped (arc-bump) closed loop around a bbox → polyline (Tier 4 rev-cloud).
+  function revCloudPoints(x0, y0, x1, y1) {
+    var bump = Math.max(8, Math.min(36, Math.min(x1 - x0, y1 - y0) / 6));
+    var pts = [];
+    function edge(ax, ay, bx, by) {
+      var len = Math.hypot(bx - ax, by - ay); if (len < 1e-6) return;
+      var n = Math.max(1, Math.round(len / (bump * 2)));
+      var ux = (bx - ax) / len, uy = (by - ay) / len, nx = uy, ny = -ux;   // outward normal (CW winding)
+      for (var i = 0; i < n; i++) {
+        var sx = ax + (bx - ax) * (i / n), sy = ay + (by - ay) * (i / n);
+        var ex = ax + (bx - ax) * ((i + 1) / n), ey = ay + (by - ay) * ((i + 1) / n);
+        var r = Math.hypot(ex - sx, ey - sy) / 2;
+        for (var a = 0; a <= 6; a++) {
+          var f = a / 6, bulge = Math.sin(Math.PI * f) * r;
+          pts.push({ x: sx + (ex - sx) * f + nx * bulge, y: sy + (ey - sy) * f + ny * bulge });
+        }
+      }
+    }
+    edge(x0, y0, x1, y0); edge(x1, y0, x1, y1); edge(x1, y1, x0, y1); edge(x0, y1, x0, y0);
+    return pts;
   }
 
   // ── Dynamic input (direct distance entry) ───────────────────────
@@ -3205,7 +3259,7 @@
         if (S.hover) ctx.lineTo(S.hover.x, S.hover.y);
         ctx.stroke();
       } else if (S.hover) {
-        var prev = { tool: d._circle ? 'ellipse' : (d.tool === 'refline' ? 'line' : d.tool), color: '#4f8cff', lineWidth: d.lineWidth || 3 };
+        var prev = { tool: d._circle ? 'ellipse' : (d.tool === 'refline' ? 'line' : (d.tool === 'revcloud' ? 'rect' : d.tool)), color: '#4f8cff', lineWidth: d.lineWidth || 3 };
         if (d._circle) {
           var r = Math.hypot(S.hover.x - d.startX, S.hover.y - d.startY);
           prev.startX = d.startX - r; prev.startY = d.startY - r; prev.endX = d.startX + r; prev.endY = d.startY + r;
