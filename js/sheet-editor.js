@@ -87,6 +87,31 @@
     { key: 'redo',    act: 'redo', glyph: '↷', name: 'Redo',       group: 'View',   label: 'Redo (Ctrl+Y / Ctrl+Shift+Z)' }
   ];
   var TOOL_GROUP_ORDER = ['Draw', 'Modify', 'Annotate', 'View'];
+  // AutoCAD-style ribbon: tabs → panels → items. Items are tool keys (TOOLS) or
+  // 'edit:<key>' (EDIT_ITEMS). Reuses every existing tool/edit handler.
+  var RIBBON = [
+    { tab: 'Draw', panels: [
+      { title: 'Draw', items: ['line', 'polyline', 'rect', 'circle', 'arc', 'ellipse', 'polygon', 'spline'] },
+      { title: 'Select', items: ['select'] }
+    ] },
+    { tab: 'Modify', panels: [
+      { title: 'Modify', items: ['trim', 'extend', 'fillet', 'chamfer', 'break'] },
+      { title: 'Arrange', items: ['edit:dup', 'edit:offset', 'edit:scale', 'edit:rotate', 'edit:mirrorH', 'edit:mirrorV', 'stretch'] },
+      { title: 'Array', items: ['polararray', 'edit:array'] },
+      { title: 'Combine', items: ['edit:explode', 'edit:join'] }
+    ] },
+    { tab: 'Annotate', panels: [
+      { title: 'Dimensions', items: ['dim', 'dimcont', 'dimradius', 'dimdia', 'angle'] },
+      { title: 'Text & Notes', items: ['text', 'leader', 'revcloud'] },
+      { title: 'Fills & Symbols', items: ['hatch', 'symbol'] },
+      { title: 'Levels', items: ['level', 'spotelev', 'refline'] }
+    ] },
+    { tab: 'View', panels: [
+      { title: 'Measure', items: ['inquire', 'calibrate'] },
+      { title: 'Navigate', items: ['pan', 'edit:fit'] },
+      { title: 'History', items: ['edit:undo', 'edit:redo'] }
+    ] }
+  ];
   // Single-key tool aliases (no modifier). Ctrl/Cmd combos handled separately.
   var SHORTCUTS = {
     s: 'select', l: 'line', p: 'polyline', r: 'rect', c: 'circle', a: 'arc',
@@ -770,9 +795,9 @@
         '<button id="p86-sheet-cancel" style="background:rgba(255,255,255,0.06);color:#aaa;border:1px solid #444;border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;">Close</button>' +
         '<button id="p86-sheet-save" style="background:#4f8cff;color:#fff;border:0;border-radius:6px;padding:6px 16px;font-size:12px;font-weight:700;cursor:pointer;">Save</button>' +
       '</div>' +
+      // AutoCAD-style top ribbon (tabs + panels) — populated by buildToolbar().
+      '<div id="p86-sheet-ribbon"></div>' +
       '<div style="display:flex;gap:10px;flex:1;min-height:0;">' +
-        // left toolbar
-        '<div id="p86-sheet-tools" style="width:56px;flex:0 0 56px;background:rgba(15,15,30,0.95);border:1px solid #2a2a3a;border-radius:10px;padding:8px 6px;display:flex;flex-direction:column;gap:6px;align-items:center;overflow-y:auto;"></div>' +
         // canvas
         '<div style="flex:1;background:#11151c;border:1px solid #2a2a3a;border-radius:10px;overflow:hidden;position:relative;min-width:0;">' +
           '<canvas id="p86-sheet-canvas" style="display:block;width:100%;height:100%;cursor:crosshair;"></canvas>' +
@@ -810,6 +835,7 @@
       view: { scale: 1, tx: 0, ty: 0 },
       tool: 'select',
       space: 'sheet',       // Phase B: 'sheet' = titleblocked paper (default) | 'model' = chrome-free true-size working view
+      ribbonTab: 'Draw',    // active AutoCAD-style ribbon tab
       activeLayer: (doc.layers[0] && doc.layers[0].id) || 'L0',
       draft: null,          // in-progress entity (sheet coords)
       hover: null,          // {x,y} sheet coords of cursor
@@ -955,7 +981,23 @@
       '#p86-sheet-tools.collapsed .p86se-ttitle{display:none;}' +
       '#p86-sheet-tools.collapsed .p86se-tgrp{font-size:0;height:1px;width:24px;margin:6px auto;padding:0;background:#3a3a4a;color:transparent;}' +
       '#p86-sheet-tools.collapsed .p86se-tbtn{justify-content:center;gap:0;width:40px;padding:0;}' +
-      '#p86-sheet-tools.collapsed .p86se-tbtn .l{display:none;}';
+      '#p86-sheet-tools.collapsed .p86se-tbtn .l{display:none;}' +
+      // ── AutoCAD-style ribbon (top) ──
+      '#p86-sheet-ribbon{flex:0 0 auto;margin-bottom:10px;background:linear-gradient(180deg,#171b26,#11141c);border:1px solid #2a2a3a;border-radius:10px;overflow:hidden;}' +
+      '#p86-sheet-ribbon .p86rb-tabs{display:flex;gap:3px;padding:5px 8px 0;border-bottom:1px solid #262b38;background:rgba(0,0,0,0.18);}' +
+      '#p86-sheet-ribbon .p86rb-tab{background:transparent;color:#9aa7bd;border:0;border-radius:7px 7px 0 0;padding:7px 18px;font-size:12px;font-weight:700;letter-spacing:.4px;cursor:pointer;}' +
+      '#p86-sheet-ribbon .p86rb-tab:hover{background:rgba(255,255,255,0.05);color:#cdd6e6;}' +
+      '#p86-sheet-ribbon .p86rb-tab.on{background:#1d2333;color:#fff;box-shadow:inset 0 -2px 0 #4f8cff;}' +
+      '#p86-sheet-ribbon .p86rb-body{display:flex;gap:0;padding:8px 6px 6px;overflow-x:auto;align-items:stretch;}' +
+      '#p86-sheet-ribbon .p86rb-panel{display:flex;flex-direction:column;padding:0 12px;border-right:1px solid #242a38;flex:0 0 auto;}' +
+      '#p86-sheet-ribbon .p86rb-panel:last-child{border-right:0;}' +
+      '#p86-sheet-ribbon .p86rb-pbtns{display:flex;gap:5px;flex:1;align-items:flex-start;flex-wrap:wrap;max-width:420px;}' +
+      '#p86-sheet-ribbon .p86rb-ptitle{font-size:9px;font-weight:700;letter-spacing:.8px;color:#5f6b7e;text-transform:uppercase;text-align:center;margin-top:6px;}' +
+      '#p86-sheet-ribbon .p86rb-btn{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:4px;width:58px;min-height:54px;padding:7px 4px 5px;background:transparent;color:#d7deea;border:1px solid transparent;border-radius:7px;cursor:pointer;line-height:1.1;}' +
+      '#p86-sheet-ribbon .p86rb-btn:hover{background:rgba(255,255,255,0.07);border-color:#3a4253;}' +
+      '#p86-sheet-ribbon .p86rb-btn.on{background:rgba(251,191,36,0.16);border-color:#fbbf24;color:#fde68a;}' +
+      '#p86-sheet-ribbon .p86rb-btn .g{font-size:20px;height:22px;display:flex;align-items:center;justify-content:center;}' +
+      '#p86-sheet-ribbon .p86rb-btn .l{font-size:10px;font-weight:600;white-space:nowrap;}';
     document.head.appendChild(st);
   }
   function applyToolsCollapsed(collapsed) {
@@ -969,32 +1011,46 @@
     // Canvas is flex:1 — recompute its pixel size after the width transition settles.
     setTimeout(function () { if (S) { sizeCanvas(false); repaint(); } }, 200);
   }
+  // Build the AutoCAD-style top ribbon (tabs → panels → tool buttons). Kept named
+  // buildToolbar so the existing open() call + setTool refresh hooks are unchanged.
+  function ribbonItemDef(id) {
+    if (id.indexOf('edit:') === 0) {
+      var k = id.slice(5);
+      for (var i = 0; i < EDIT_ITEMS.length; i++) if (EDIT_ITEMS[i].key === k) return { kind: 'edit', e: EDIT_ITEMS[i] };
+      return null;
+    }
+    var t = toolDef(id); return t ? { kind: 'tool', t: t } : null;
+  }
   function buildToolbar() {
     injectToolStyle();
-    var bar = S.overlay.querySelector('#p86-sheet-tools');
-    var collapsed = toolsCollapsed();
-    function btnTool(t) {
-      return '<button class="p86se-tbtn" data-sheet-tool="' + t.key + '" title="' + esc(t.label) + '">' +
-        '<span class="g">' + t.glyph + '</span><span class="l">' + esc(t.name) + '</span></button>';
+    var host = S.overlay.querySelector('#p86-sheet-ribbon');
+    if (!host) return;
+    function btn(id) {
+      var d = ribbonItemDef(id); if (!d) return '';
+      if (d.kind === 'tool') {
+        return '<button class="p86rb-btn" data-sheet-tool="' + d.t.key + '" title="' + esc(d.t.label) + '">' +
+          '<span class="g">' + d.t.glyph + '</span><span class="l">' + esc(d.t.name) + '</span></button>';
+      }
+      return '<button class="p86rb-btn" data-sheet-act="' + d.e.act + '" data-sheet-akey="' + d.e.key + '" title="' + esc(d.e.label) + '">' +
+        '<span class="g">' + d.e.glyph + '</span><span class="l">' + esc(d.e.name) + '</span></button>';
     }
-    function btnEdit(e) {
-      return '<button class="p86se-tbtn" data-sheet-act="' + e.act + '" data-sheet-akey="' + e.key + '" title="' + esc(e.label) + '">' +
-        '<span class="g">' + e.glyph + '</span><span class="l">' + esc(e.name) + '</span></button>';
-    }
-    var html = '<div class="p86se-thead"><span class="p86se-ttitle">Tools</span>' +
-      '<button class="p86se-ttoggle" data-sheet-tools-toggle title="Collapse tools">' + (collapsed ? '»' : '«') + '</button></div>';
-    TOOL_GROUP_ORDER.forEach(function (g) {
-      var tools = TOOLS.filter(function (t) { return t.group === g; });
-      var edits = EDIT_ITEMS.filter(function (e) { return e.group === g; });
-      if (!tools.length && !edits.length) return;
-      html += '<div class="p86se-tgrp">' + esc(g) + '</div>';
-      html += tools.map(btnTool).join('') + edits.map(btnEdit).join('');
+    var activeTab = S.ribbonTab || 'Draw';
+    var tabs = RIBBON.map(function (r) {
+      return '<button class="p86rb-tab' + (r.tab === activeTab ? ' on' : '') + '" data-ribbon-tab="' + esc(r.tab) + '">' + esc(r.tab) + '</button>';
+    }).join('');
+    var conf = null; RIBBON.forEach(function (r) { if (r.tab === activeTab) conf = r; });
+    var panels = (conf ? conf.panels : []).map(function (p) {
+      return '<div class="p86rb-panel"><div class="p86rb-pbtns">' + p.items.map(btn).join('') +
+        '</div><div class="p86rb-ptitle">' + esc(p.title) + '</div></div>';
+    }).join('');
+    host.innerHTML = '<div class="p86rb-tabs">' + tabs + '</div><div class="p86rb-body">' + panels + '</div>';
+    host.querySelectorAll('[data-ribbon-tab]').forEach(function (b) {
+      b.onclick = function () { S.ribbonTab = b.getAttribute('data-ribbon-tab'); buildToolbar(); };
     });
-    bar.innerHTML = html;
-    bar.querySelectorAll('[data-sheet-tool]').forEach(function (b) {
+    host.querySelectorAll('[data-sheet-tool]').forEach(function (b) {
       b.onclick = function () { setTool(b.getAttribute('data-sheet-tool')); };
     });
-    bar.querySelectorAll('[data-sheet-act]').forEach(function (b) {
+    host.querySelectorAll('[data-sheet-act]').forEach(function (b) {
       b.onclick = function () {
         var act = b.getAttribute('data-sheet-act'), k = b.getAttribute('data-sheet-akey');
         if (act === 'undo') return undo();
@@ -1014,12 +1070,6 @@
         }
       };
     });
-    var toggle = bar.querySelector('[data-sheet-tools-toggle]');
-    if (toggle) toggle.onclick = function () {
-      var next = !bar.classList.contains('collapsed');
-      try { localStorage.setItem(TOOLS_KEY, next ? '1' : '0'); } catch (e) {}
-      applyToolsCollapsed(next);
-    };
     S.overlay.querySelectorAll('[data-sb-toggle]').forEach(function (b) {
       b.onclick = function () {
         var k = b.getAttribute('data-sb-toggle');
@@ -1030,17 +1080,13 @@
         repaint();
       };
     });
-    applyToolsCollapsed(collapsed);
     refreshToolbar();
     updateHint();
   }
   function refreshToolbar() {
-    var bar = S.overlay.querySelector('#p86-sheet-tools');
-    bar.querySelectorAll('[data-sheet-tool]').forEach(function (b) {
-      var on = b.getAttribute('data-sheet-tool') === S.tool;
-      b.style.background = on ? 'rgba(251,191,36,0.12)' : '';
-      b.style.color = on ? '#fbbf24' : '';
-      b.style.borderColor = on ? '#fbbf24' : '';
+    var host = S.overlay.querySelector('#p86-sheet-ribbon');
+    if (host) host.querySelectorAll('[data-sheet-tool]').forEach(function (b) {
+      b.classList.toggle('on', b.getAttribute('data-sheet-tool') === S.tool);
     });
     refreshStatusBar();
   }
