@@ -42,6 +42,23 @@
   function isImage(att) {
     return att && att.mime_type && /^image\//i.test(att.mime_type) && att.thumb_url;
   }
+  function isPdfFile(att) {
+    return !!(att && (att.mime_type === 'application/pdf' || /\.pdf$/i.test(att.filename || '')));
+  }
+  // Open a file in the markup viewer (annotation + measure surface). It renders
+  // PDFs via pdf.js and images directly, so both can be marked up — and saves
+  // annotations back onto the same attachment. Falls back to the raw file if the
+  // markup module isn't loaded.
+  function openAnnotate(file) {
+    if (window.p86Markup && typeof window.p86Markup.open === 'function') {
+      window.p86Markup.open({
+        attachment: file,
+        onDone: function () { fetchFiles().then(function () { paint(document.getElementById('my-files')); }); }
+      });
+    } else {
+      window.open(file.original_url, '_blank', 'noopener');
+    }
+  }
 
   // Per-tab UI state. Re-built on every paint so refresh is consistent;
   // selected folder survives across re-renders within the same session.
@@ -723,9 +740,12 @@
           // Fallback if attachments.js isn't loaded — just open original.
           window.open(file.original_url, '_blank', 'noopener');
         }
+      } else if (isPdfFile(file)) {
+        // PDF → open the markup viewer (PDF substrate) so it can be annotated /
+        // measured, instead of dumping the raw file in a new tab.
+        openAnnotate(file);
       } else {
-        // Non-image: open the original file in a new tab. Browsers will
-        // display PDFs inline, prompt download for everything else.
+        // Other non-image files: open the original in a new tab (download/view).
         window.open(file.original_url, '_blank', 'noopener');
       }
     });
@@ -741,6 +761,7 @@
     menu.id = 'mf-file-menu';
     menu.className = 'p86-proj-photo-menu mf-file-menu';
     menu.innerHTML =
+      ((isImage(file) || isPdfFile(file)) ? '<button data-act="annotate">&#x270E; Annotate / mark up</button>' : '') +
       '<a href="' + escapeAttr(file.original_url) + '" download="' + escapeAttr(file.filename) + '" target="_blank" rel="noopener" data-act="download">&#x2B07; Download</a>' +
       '<button data-act="send">&#x27A4; Send to job / estimate</button>' +
       '<button data-act="copy">&#x2398; Copy to job / estimate</button>' +
@@ -761,7 +782,8 @@
         // Download — let the native <a download> handle it, then just close.
         if (act === 'download') { close(); return; }
         e.preventDefault();
-        if (act === 'send') openSendPicker(file.id, 'move');
+        if (act === 'annotate') openAnnotate(file);
+        else if (act === 'send') openSendPicker(file.id, 'move');
         else if (act === 'copy') openSendPicker(file.id, 'copy');
         else if (act === 'delete') deleteFile(file.id);
         close();
