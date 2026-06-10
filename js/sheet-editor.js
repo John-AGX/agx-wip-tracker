@@ -112,6 +112,72 @@
       { title: 'History', items: ['edit:undo', 'edit:redo'] }
     ] }
   ];
+  // Large (primary) ribbon buttons; everything else renders as a compact small button.
+  var RIBBON_PRIMARY = { line: 1, rect: 1, circle: 1, select: 1, trim: 1, extend: 1, fillet: 1, dup: 1, array: 1, dim: 1, text: 1, hatch: 1, inquire: 1, pan: 1, pdf: 1 };
+  var SNAP_META = {
+    ortho: { name: 'Ortho', label: 'Ortho lock (0 / 45 / 90°) — or hold Shift' },
+    grid: { name: 'Grid', label: 'Snap to grid' },
+    osnap: { name: 'Osnap', label: 'Object snap (endpoint / midpoint / center / intersection …)' }
+  };
+  // Monochrome line-icon set (24×24, stroke = currentColor). Crisp CAD-style glyphs.
+  var ICONS = {
+    select: '<path d="M5 4l13 6-5.5 1.6L10.5 18z" fill="currentColor" stroke="none"/>',
+    line: '<path d="M5 19L19 5"/><circle cx="5" cy="19" r="1.5"/><circle cx="19" cy="5" r="1.5"/>',
+    polyline: '<path d="M3 17l5-6 4 4 4-6 5 4"/>',
+    rect: '<rect x="4" y="6" width="16" height="12" rx="1"/>',
+    circle: '<circle cx="12" cy="12" r="7.5"/>',
+    arc: '<path d="M4 17a8 8 0 0 1 16 0"/>',
+    ellipse: '<ellipse cx="12" cy="12" rx="8.5" ry="5.5"/>',
+    polygon: '<path d="M12 4l7.6 5.5-2.9 9H7.3l-2.9-9z"/>',
+    spline: '<path d="M3 15c3-9 6 9 9 0s5-7 9-3"/>',
+    trim: '<circle cx="6" cy="7" r="2.2"/><circle cx="6" cy="17" r="2.2"/><path d="M8 8.5L20 16M8 15.5L20 8"/>',
+    extend: '<path d="M3 12h11M11 8l4 4-4 4"/><path d="M19 5v14"/>',
+    fillet: '<path d="M4 20v-8a6 6 0 0 1 6-6h8"/>',
+    break: '<path d="M3 12h6M15 12h6"/><path d="M11.5 8l1.5 8"/>',
+    chamfer: '<path d="M4 20v-8l4-4h8"/><path d="M4 12l4-4"/>',
+    polararray: '<circle cx="12" cy="12" r="2"/><circle cx="12" cy="4.5" r="1.3"/><circle cx="12" cy="19.5" r="1.3"/><circle cx="4.5" cy="12" r="1.3"/><circle cx="19.5" cy="12" r="1.3"/>',
+    stretch: '<rect x="8" y="8" width="8" height="8"/><path d="M2 12h4M18 12h4M6 10l-2 2 2 2M18 10l2 2-2 2"/>',
+    dim: '<path d="M4 8v8M20 8v8"/><path d="M4 12h16M4 12l3-2M4 12l3 2M20 12l-3-2M20 12l-3 2"/>',
+    dimradius: '<circle cx="12" cy="12" r="7.5"/><path d="M12 12l6-6"/>',
+    dimdia: '<circle cx="12" cy="12" r="7.5"/><path d="M6.7 17.3L17.3 6.7"/>',
+    dimcont: '<path d="M4 12h16M5 9v6M12 9v6M19 9v6"/>',
+    angle: '<path d="M5 19h13M5 19L18 7"/><path d="M5 19a9 9 0 0 1 4.5-7"/>',
+    leader: '<path d="M4 20l8-8M4 20l.5-3.5M4 20l3.5-.5"/><path d="M12 12h8"/>',
+    revcloud: '<path d="M6 14a2.2 2.2 0 0 1 1.6-3.6A3 3 0 0 1 13 9a2.6 2.6 0 0 1 4 1.4 2.4 2.4 0 0 1 1 4.4 2.6 2.6 0 0 1-2 .8H8a2.4 2.4 0 0 1-2-1.6z"/>',
+    text: '<path d="M6 7V5h12v2M12 5v14M9 19h6"/>',
+    hatch: '<rect x="4" y="4" width="16" height="16" rx="1"/><path d="M4 13l9-9M9 20l11-11M4 18l4-4"/>',
+    symbol: '<path d="M12 3v18M3 12h18M5.5 5.5l13 13M18.5 5.5l-13 13"/>',
+    level: '<path d="M3 12h18"/><path d="M16 12l-2-3h6l-2 3"/>',
+    spotelev: '<circle cx="12" cy="12" r="2.2"/><path d="M12 3v4M12 17v4M3 12h4M17 12h4"/>',
+    refline: '<path d="M3 12h18" stroke-dasharray="3 3"/>',
+    inquire: '<rect x="3" y="9" width="18" height="6" rx="1"/><path d="M7 9v3M11 9v4M15 9v3"/>',
+    calibrate: '<rect x="3" y="9" width="18" height="6" rx="1"/><path d="M7 9v3M15 9v3"/><path d="M9 15l3 4 3-4"/>',
+    pan: '<path d="M12 3v18M3 12h18M12 3l-2.5 2.5M12 3l2.5 2.5M12 21l-2.5-2.5M12 21l2.5-2.5M3 12l2.5-2.5M3 12l2.5 2.5M21 12l-2.5-2.5M21 12l2.5 2.5"/>',
+    rotate: '<path d="M20 12a8 8 0 1 1-2.3-5.6"/><path d="M18 3v4h-4"/>',
+    mirrorH: '<path d="M12 3v18" stroke-dasharray="3 2"/><path d="M9 8L3 12l6 4zM15 8l6 4-6 4z"/>',
+    mirrorV: '<path d="M3 12h18" stroke-dasharray="3 2"/><path d="M8 9L12 3l4 6zM8 15l4 6 4-6z"/>',
+    dup: '<rect x="8" y="8" width="12" height="12" rx="1.5"/><path d="M4 16V4h12"/>',
+    offset: '<rect x="8" y="8" width="11" height="11" rx="1"/><rect x="4" y="4" width="11" height="11" rx="1" stroke-dasharray="2.5 2.5"/>',
+    scale: '<rect x="5" y="5" width="14" height="14"/><path d="M9 9l6 6M9 9h3.5M9 9v3.5M15 15h-3.5M15 15v-3.5"/>',
+    explode: '<path d="M12 12L6 6M12 12l6-6M12 12l6 6M12 12l-6 6"/>',
+    join: '<path d="M3 12h7M14 12h7"/><circle cx="12" cy="12" r="1.8"/>',
+    array: '<rect x="4" y="4" width="6.5" height="6.5"/><rect x="13.5" y="4" width="6.5" height="6.5"/><rect x="4" y="13.5" width="6.5" height="6.5"/><rect x="13.5" y="13.5" width="6.5" height="6.5"/>',
+    fit: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
+    undo: '<path d="M9 7L4 12l5 5"/><path d="M4 12h10a6 6 0 0 1 6 6v1"/>',
+    redo: '<path d="M15 7l5 5-5 5"/><path d="M20 12H10a6 6 0 0 0-6 6v1"/>',
+    png: '<rect x="3" y="5" width="18" height="14" rx="1.5"/><circle cx="8.5" cy="10" r="1.6"/><path d="M3 16l5-4 4 3 3-2 6 4"/>',
+    pdf: '<path d="M7 3h8l4 4v14H7z"/><path d="M15 3v4h4"/><path d="M10 13h1.6a1.3 1.3 0 0 1 0 2.6H10v-2.6m0 0v4.6"/>',
+    dxf: '<path d="M7 3h8l4 4v14H7z"/><path d="M15 3v4h4"/><path d="M10 13v4.6l2.2-4.6v4.6"/>',
+    ortho: '<path d="M5 19V5h14"/>',
+    grid: '<path d="M4 9.5h16M4 14.5h16M9.5 4v16M14.5 4v16"/>',
+    osnap: '<circle cx="12" cy="12" r="2.3"/><path d="M12 4v5M12 15v5M4 12h5M15 12h5"/>'
+  };
+  function svgIcon(key) {
+    var p = ICONS[key]; if (!p) return null;
+    return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" width="100%" height="100%" preserveAspectRatio="xMidYMid meet">' + p + '</svg>';
+  }
+  function ribbonKeyOf(id) { return (id.indexOf('edit:') === 0 || id.indexOf('snap:') === 0) ? id.slice(5) : id; }
+  function ribbonIsPrimary(id) { return !!RIBBON_PRIMARY[ribbonKeyOf(id)]; }
   // Single-key tool aliases (no modifier). Ctrl/Cmd combos handled separately.
   var SHORTCUTS = {
     s: 'select', l: 'line', p: 'polyline', r: 'rect', c: 'circle', a: 'arc',
@@ -983,21 +1049,27 @@
       '#p86-sheet-tools.collapsed .p86se-tbtn{justify-content:center;gap:0;width:40px;padding:0;}' +
       '#p86-sheet-tools.collapsed .p86se-tbtn .l{display:none;}' +
       // ── AutoCAD-style ribbon (top) ──
-      '#p86-sheet-ribbon{flex:0 0 auto;margin-bottom:10px;background:linear-gradient(180deg,#171b26,#11141c);border:1px solid #2a2a3a;border-radius:10px;overflow:hidden;}' +
-      '#p86-sheet-ribbon .p86rb-tabs{display:flex;gap:3px;padding:5px 8px 0;border-bottom:1px solid #262b38;background:rgba(0,0,0,0.18);}' +
-      '#p86-sheet-ribbon .p86rb-tab{background:transparent;color:#9aa7bd;border:0;border-radius:7px 7px 0 0;padding:7px 18px;font-size:12px;font-weight:700;letter-spacing:.4px;cursor:pointer;}' +
-      '#p86-sheet-ribbon .p86rb-tab:hover{background:rgba(255,255,255,0.05);color:#cdd6e6;}' +
-      '#p86-sheet-ribbon .p86rb-tab.on{background:#1d2333;color:#fff;box-shadow:inset 0 -2px 0 #4f8cff;}' +
-      '#p86-sheet-ribbon .p86rb-body{display:flex;gap:0;padding:8px 6px 6px;overflow-x:auto;align-items:stretch;}' +
-      '#p86-sheet-ribbon .p86rb-panel{display:flex;flex-direction:column;padding:0 12px;border-right:1px solid #242a38;flex:0 0 auto;}' +
+      '#p86-sheet-ribbon{flex:0 0 auto;margin-bottom:10px;background:linear-gradient(180deg,#1a1f2b 0%,#12151d 60%,#0f1219 100%);border:1px solid #2c3242;border-radius:11px;overflow:hidden;box-shadow:0 2px 10px rgba(0,0,0,0.35),inset 0 1px 0 rgba(255,255,255,0.03);}' +
+      '#p86-sheet-ribbon .p86rb-tabs{display:flex;gap:2px;padding:6px 10px 0;border-bottom:1px solid #2a3142;background:rgba(0,0,0,0.22);}' +
+      '#p86-sheet-ribbon .p86rb-tab{background:transparent;color:#97a3ba;border:0;border-radius:8px 8px 0 0;padding:8px 20px;font-size:12.5px;font-weight:700;letter-spacing:.4px;cursor:pointer;transition:color .12s,background .12s;}' +
+      '#p86-sheet-ribbon .p86rb-tab:hover{background:rgba(255,255,255,0.05);color:#d3dcec;}' +
+      '#p86-sheet-ribbon .p86rb-tab.on{background:linear-gradient(180deg,#222a3b,#1a2030);color:#fff;box-shadow:inset 0 -2px 0 #4f8cff;}' +
+      '#p86-sheet-ribbon .p86rb-body{display:flex;gap:0;padding:9px 6px 7px;overflow-x:auto;align-items:stretch;}' +
+      '#p86-sheet-ribbon .p86rb-panel{display:flex;flex-direction:column;padding:0 11px;border-right:1px solid #232a39;flex:0 0 auto;}' +
       '#p86-sheet-ribbon .p86rb-panel:last-child{border-right:0;}' +
-      '#p86-sheet-ribbon .p86rb-pbtns{display:flex;gap:5px;flex:1;align-items:flex-start;flex-wrap:wrap;max-width:420px;}' +
-      '#p86-sheet-ribbon .p86rb-ptitle{font-size:9px;font-weight:700;letter-spacing:.8px;color:#5f6b7e;text-transform:uppercase;text-align:center;margin-top:6px;}' +
-      '#p86-sheet-ribbon .p86rb-btn{display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:4px;width:58px;min-height:54px;padding:7px 4px 5px;background:transparent;color:#d7deea;border:1px solid transparent;border-radius:7px;cursor:pointer;line-height:1.1;}' +
-      '#p86-sheet-ribbon .p86rb-btn:hover{background:rgba(255,255,255,0.07);border-color:#3a4253;}' +
-      '#p86-sheet-ribbon .p86rb-btn.on{background:rgba(251,191,36,0.16);border-color:#fbbf24;color:#fde68a;}' +
-      '#p86-sheet-ribbon .p86rb-btn .g{font-size:20px;height:22px;display:flex;align-items:center;justify-content:center;}' +
-      '#p86-sheet-ribbon .p86rb-btn .l{font-size:10px;font-weight:600;white-space:nowrap;}';
+      '#p86-sheet-ribbon .p86rb-pbtns{display:flex;flex-direction:column;flex-wrap:wrap;height:74px;align-content:flex-start;gap:4px;}' +
+      '#p86-sheet-ribbon .p86rb-ptitle{font-size:9px;font-weight:700;letter-spacing:.9px;color:#5d6981;text-transform:uppercase;text-align:center;margin-top:7px;}' +
+      '#p86-sheet-ribbon .p86rb-btn{display:flex;align-items:center;background:transparent;color:#d7deea;border:1px solid transparent;border-radius:7px;cursor:pointer;line-height:1.05;transition:background .1s,border-color .1s;}' +
+      '#p86-sheet-ribbon .p86rb-btn:hover{background:rgba(255,255,255,0.08);border-color:#3c4660;}' +
+      '#p86-sheet-ribbon .p86rb-btn.on{background:rgba(251,191,36,0.17);border-color:#fbbf24;color:#fde68a;}' +
+      '#p86-sheet-ribbon .p86rb-btn .g{display:flex;align-items:center;justify-content:center;color:inherit;}' +
+      '#p86-sheet-ribbon .p86rb-btn .g svg{display:block;}' +
+      '#p86-sheet-ribbon .p86rb-btn.lg{flex-direction:column;justify-content:center;gap:5px;width:62px;height:74px;padding:6px 4px;}' +
+      '#p86-sheet-ribbon .p86rb-btn.lg .g{width:28px;height:28px;}' +
+      '#p86-sheet-ribbon .p86rb-btn.lg .l{font-size:10.5px;font-weight:600;white-space:nowrap;}' +
+      '#p86-sheet-ribbon .p86rb-btn.sm{flex-direction:row;justify-content:flex-start;gap:7px;height:35px;min-width:94px;padding:0 9px 0 7px;}' +
+      '#p86-sheet-ribbon .p86rb-btn.sm .g{width:17px;height:17px;flex:0 0 17px;}' +
+      '#p86-sheet-ribbon .p86rb-btn.sm .l{font-size:11px;font-weight:600;white-space:nowrap;}';
     document.head.appendChild(st);
   }
   function applyToolsCollapsed(collapsed) {
@@ -1026,13 +1098,19 @@
     var host = S.overlay.querySelector('#p86-sheet-ribbon');
     if (!host) return;
     function btn(id) {
+      var sz = ribbonIsPrimary(id) ? ' lg' : ' sm';
+      if (id.indexOf('snap:') === 0) {               // View › Snaps toggle button
+        var sk = id.slice(5), meta = SNAP_META[sk] || { name: sk, label: sk };
+        return '<button class="p86rb-btn' + sz + '" data-sb-toggle="' + sk + '" title="' + esc(meta.label) + '">' +
+          '<span class="g">' + (svgIcon(sk) || '•') + '</span><span class="l">' + esc(meta.name) + '</span></button>';
+      }
       var d = ribbonItemDef(id); if (!d) return '';
       if (d.kind === 'tool') {
-        return '<button class="p86rb-btn" data-sheet-tool="' + d.t.key + '" title="' + esc(d.t.label) + '">' +
-          '<span class="g">' + d.t.glyph + '</span><span class="l">' + esc(d.t.name) + '</span></button>';
+        return '<button class="p86rb-btn' + sz + '" data-sheet-tool="' + d.t.key + '" title="' + esc(d.t.label) + '">' +
+          '<span class="g">' + (svgIcon(d.t.key) || d.t.glyph) + '</span><span class="l">' + esc(d.t.name) + '</span></button>';
       }
-      return '<button class="p86rb-btn" data-sheet-act="' + d.e.act + '" data-sheet-akey="' + d.e.key + '" title="' + esc(d.e.label) + '">' +
-        '<span class="g">' + d.e.glyph + '</span><span class="l">' + esc(d.e.name) + '</span></button>';
+      return '<button class="p86rb-btn' + sz + '" data-sheet-act="' + d.e.act + '" data-sheet-akey="' + d.e.key + '" title="' + esc(d.e.label) + '">' +
+        '<span class="g">' + (svgIcon(d.e.key) || d.e.glyph) + '</span><span class="l">' + esc(d.e.name) + '</span></button>';
     }
     var activeTab = S.ribbonTab || 'Draw';
     var tabs = RIBBON.map(function (r) {
@@ -1040,7 +1118,8 @@
     }).join('');
     var conf = null; RIBBON.forEach(function (r) { if (r.tab === activeTab) conf = r; });
     var panels = (conf ? conf.panels : []).map(function (p) {
-      return '<div class="p86rb-panel"><div class="p86rb-pbtns">' + p.items.map(btn).join('') +
+      var lg = p.items.filter(ribbonIsPrimary), sm = p.items.filter(function (x) { return !ribbonIsPrimary(x); });
+      return '<div class="p86rb-panel"><div class="p86rb-pbtns">' + lg.concat(sm).map(btn).join('') +
         '</div><div class="p86rb-ptitle">' + esc(p.title) + '</div></div>';
     }).join('');
     host.innerHTML = '<div class="p86rb-tabs">' + tabs + '</div><div class="p86rb-body">' + panels + '</div>';
@@ -1056,6 +1135,7 @@
         if (act === 'undo') return undo();
         if (act === 'redo') return redo();
         if (act === 'fit') { sizeCanvas(true); repaint(); return; }
+        if (act === 'export') { if (k === 'png') exportPng(); else if (k === 'pdf') exportPdf(); else if (k === 'dxf') exportDxf(); return; }
         if (act === 'edit') {
           if (!S.selIds.length) return;
           if (k === 'rotate') rotate90();
@@ -1085,9 +1165,15 @@
   }
   function refreshToolbar() {
     var host = S.overlay.querySelector('#p86-sheet-ribbon');
-    if (host) host.querySelectorAll('[data-sheet-tool]').forEach(function (b) {
-      b.classList.toggle('on', b.getAttribute('data-sheet-tool') === S.tool);
-    });
+    if (host) {
+      host.querySelectorAll('[data-sheet-tool]').forEach(function (b) {
+        b.classList.toggle('on', b.getAttribute('data-sheet-tool') === S.tool);
+      });
+      host.querySelectorAll('[data-sb-toggle]').forEach(function (b) {
+        var k = b.getAttribute('data-sb-toggle');
+        b.classList.toggle('on', (k === 'ortho' && S.ortho) || (k === 'grid' && S.gridSnap) || (k === 'osnap' && S.objSnap));
+      });
+    }
     refreshStatusBar();
   }
   // AutoCAD-style bottom status bar: mode-toggle chips + view + zoom.
