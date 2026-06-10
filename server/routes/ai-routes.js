@@ -5598,7 +5598,14 @@ const CLIENT_EDITABLE_FIELDS = new Set([
 // the chat loop turns the error into a tool_result with `is_error: true`
 // so the model can recover (apologize / try a different tool).
 // ──────────────────────────────────────────────────────────────────
-async function execClientDirectoryTool(name, input) {
+async function execClientDirectoryTool(name, input, ctx) {
+  // P0-1 org scope — resolve the caller's org once (threaded via ctx, so
+  // no DB hit on the live chat/exec paths). null only when there is no
+  // user context at all (e.g. a null-user background fire); the read_jobs
+  // / read_wip_summary / read_users handlers below fail closed in that
+  // case rather than leak the full cross-org roster.
+  let _cdOrgId = null;
+  try { _cdOrgId = await resolveOrgIdFromCtx(ctx); } catch (_) { _cdOrgId = null; }
   switch (name) {
     case 'create_property': {
       if (!input.name || !input.parent_client_id) throw new Error('name and parent_client_id are required');
@@ -5806,11 +5813,14 @@ async function execClientDirectoryTool(name, input) {
       const q = String(input.q || '').trim().toLowerCase();
       const status = String(input.status || '').trim();
       const limit = Math.max(1, Math.min(100, parseInt(input.limit, 10) || 30));
+      if (!_cdOrgId) return 'Cannot read jobs without a signed-in user context.';
       const r = await pool.query(
         'SELECT j.id, j.data, c.name AS client_name ' +
         'FROM jobs j ' +
         "LEFT JOIN clients c ON c.id = (j.data->>'clientId') " +
-        'ORDER BY j.updated_at DESC NULLS LAST'
+        'WHERE (j.organization_id = $1 OR j.organization_id IS NULL) ' +
+        'ORDER BY j.updated_at DESC NULLS LAST',
+        [_cdOrgId]
       );
       let rows = r.rows.map(row => {
         const d = row.data || {};
@@ -5857,11 +5867,14 @@ async function execClientDirectoryTool(name, input) {
       const sortBy = ['backlog', 'contract', 'margin', 'pct_complete'].includes(input.sort_by)
         ? input.sort_by : 'backlog';
       const limit = Math.max(1, Math.min(200, parseInt(input.limit, 10) || 20));
+      if (!_cdOrgId) return 'Cannot read WIP without a signed-in user context.';
       const r = await pool.query(
         'SELECT j.id, j.data, j.updated_at, c.name AS client_name ' +
         'FROM jobs j ' +
         "LEFT JOIN clients c ON c.id = (j.data->>'clientId') " +
-        'ORDER BY j.updated_at DESC NULLS LAST'
+        'WHERE (j.organization_id = $1 OR j.organization_id IS NULL) ' +
+        'ORDER BY j.updated_at DESC NULLS LAST',
+        [_cdOrgId]
       );
       const allJobs = r.rows.map(row => {
         const d = row.data || {};
@@ -5985,6 +5998,10 @@ async function execClientDirectoryTool(name, input) {
       let n = 1;
       if (activeOnly) where.push('active = TRUE');
       if (role) { where.push('role = $' + (n++)); args.push(role); }
+      // Org scope — keep the directory readable (assignment picker) but
+      // never surface another tenant's staff. Tolerant OR-IS-NULL so
+      // legacy un-stamped users stay visible to AGX.
+      if (_cdOrgId) { where.push('(organization_id = $' + (n++) + ' OR organization_id IS NULL)'); args.push(_cdOrgId); }
       const sql =
         'SELECT id, name, email, role, active, last_seen_at FROM users ' +
         (where.length ? 'WHERE ' + where.join(' AND ') + ' ' : '') +
@@ -6039,7 +6056,7 @@ async function execClientDirectoryToolWithCtx(name, input, ctx) {
     return `Added note to "${exists.rows[0].name}": "${body.slice(0, 80)}${body.length > 80 ? '…' : ''}".`;
   }
   if (name !== 'attach_business_card_to_client') {
-    return execClientDirectoryTool(name, input);
+    return execClientDirectoryTool(name, input, ctx);
   }
   const userId = ctx && ctx.userId;
   if (!userId) throw new Error('userId required for attach_business_card_to_client');
@@ -7109,7 +7126,7 @@ async function dispatchReadTool(name, input, ctx) {
     /^Unknown (?:staff )?tool:\s/.test(e.message);
   try { return await execStaffTool(name, input, ctx); }
   catch (e) { if (!isUnknownToolError(e)) throw e; }
-  try { return await execClientDirectoryTool(name, input); }
+  try { return await execClientDirectoryTool(name, input, ctx); }
   catch (e) { if (!isUnknownToolError(e)) throw e; }
   // execIntakeRead handles read_existing_clients / read_existing_leads
   // (it's an if-chain, not a switch — returns undefined for unknowns).
@@ -8441,6 +8458,11 @@ async function execStaffTool(name, input, ctx) {
         p++;
       }
       if (input && input.status) { where.push('l.status = $' + p++); params.push(input.status); }
+      // Org scope — tolerant OR-IS-NULL (no-op for single-tenant AGX,
+      // closes the cross-org lead leak before org #2 onboards).
+      let leadOrgId = null;
+      try { leadOrgId = await resolveOrgIdFromCtx(ctx); } catch (_) {}
+      if (leadOrgId) { where.push('(l.organization_id = $' + p++ + ' OR l.organization_id IS NULL)'); params.push(leadOrgId); }
       params.push(limit);
       const r = await pool.query(
         `SELECT l.id, l.title, l.status, l.market,
@@ -8909,7 +8931,16 @@ async function execStaffTool(name, input, ctx) {
       if (!table) return 'read_workspace_sheet_full requires jobId or estimateId (or a chat session anchored to a job/estimate).';
       const sheetName = String(input.sheet_name || '').trim();
       if (!sheetName) return 'read_workspace_sheet_full requires sheet_name.';
-      const r = await pool.query('SELECT data FROM ' + table + ' WHERE id = $1', [entityId]);
+      // Org scope — assert the job/estimate belongs to the caller's org
+      // before reading its sheet data. Tolerant OR-IS-NULL for legacy
+      // un-stamped rows; a cross-org id simply reads as "not found".
+      let wsOrgId = null;
+      try { wsOrgId = await resolveOrgIdFromCtx(ctx); } catch (_) {}
+      if (!wsOrgId) return 'Cannot read workspace sheet without a signed-in user context.';
+      const r = await pool.query(
+        'SELECT data FROM ' + table + ' WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+        [entityId, wsOrgId]
+      );
       if (!r.rows.length) return (table === 'estimates' ? 'Estimate' : 'Job') + ' not found: ' + entityId;
       const d = r.rows[0].data || {};
       // Phase 0 — new shape: data.workbook.sheets (versioned workbook
@@ -9022,6 +9053,10 @@ async function execStaffTool(name, input, ctx) {
 // per-tenant org_skill_packs table. Caller passes ctx={userId} so we
 // can resolve the right organization.
 async function resolveOrgIdFromCtx(ctx) {
+  // Fast path — the dispatcher / exec-tool now thread the resolved org id
+  // straight through ctx.orgId (from req.user.organization_id), so most
+  // callers never hit the DB here.
+  if (ctx && ctx.orgId) return ctx.orgId;
   const userId = ctx && ctx.userId;
   if (!userId) throw new Error('Skill-pack mutation requires a user context (call from /api/ai/exec-tool).');
   const r = await pool.query('SELECT organization_id FROM users WHERE id = $1', [userId]);
@@ -10590,7 +10625,127 @@ async function execEmitPayloadFile(tu, ctx) {
   }
 }
 
-function make86OnCustomToolUse(userId, parentSession, turnContextText) {
+// ════════════════════════════════════════════════════════════════════
+// P0-1 — AI tool capability gate (shared helper)
+// ════════════════════════════════════════════════════════════════════
+// The Ask-86 tool dispatcher (make86OnCustomToolUse) and the /exec-tool
+// HTTP endpoint are a parallel data path that historically skipped the
+// per-capability checks the REST layer enforces (ai-routes imported
+// hasCapability but never called it). This map + helpers close that gap:
+// every sensitive read maps to the SAME capability key its REST
+// equivalent requires, so a field_crew / sub user asking 86 for
+// financials, leads, or the job roster is declined IN-BAND (the model
+// relays "I can't show that") instead of leaking the data.
+//
+// Design:
+//   • A tool absent from the map needs no extra capability beyond the
+//     route's baseline auth (long-term memory, self-scoped KB/sessions,
+//     attachment lookups, schedule/photo reads, field-tool listing —
+//     low-sensitivity or already user/org-scoped). New SENSITIVE tools
+//     should be added here so the gate stays the one place to reason
+//     about AI read authorization.
+//   • A value may be a single cap or an array (caller needs ANY of them).
+//   • read_entity / search_entities are the consolidated front door —
+//     their effective capability is derived from entity_type (+ depth /
+//     include) so the inline client/lead reads inside execConsolidatedRead
+//     are covered without a second gate site.
+//   • admin / owner hold every capability, so AGX is never restricted.
+const AI_TOOL_CAPABILITY = new Map([
+  // Financial reads — company WIP, QB cost lines, per-job cost/percent audit.
+  ['read_wip_summary',        'FINANCIALS_VIEW'],
+  ['read_qb_cost_lines',      'FINANCIALS_VIEW'],
+  ['read_building_breakdown', 'FINANCIALS_VIEW'],
+  ['read_job_pct_audit',      'FINANCIALS_VIEW'],
+  // Lead pipeline + records.
+  ['read_leads',          'LEADS_VIEW'],
+  ['read_lead_pipeline',  'LEADS_VIEW'],
+  ['read_existing_leads', 'LEADS_VIEW'],
+  // Job roster.
+  ['read_jobs', 'JOBS_VIEW_ALL'],
+  // Estimating data — past estimates, active lines, material catalog,
+  // purchase history, sub + client directories. field_crew holds
+  // ESTIMATES_VIEW so these stay available to estimators (John's call:
+  // read_materials/read_purchase_history → ESTIMATES_VIEW).
+  ['read_past_estimates',      'ESTIMATES_VIEW'],
+  ['read_past_estimate_lines', 'ESTIMATES_VIEW'],
+  ['read_active_lines',        'ESTIMATES_VIEW'],
+  ['read_materials',           'ESTIMATES_VIEW'],
+  ['read_purchase_history',    'ESTIMATES_VIEW'],
+  ['read_subs',                'ESTIMATES_VIEW'],
+  ['read_clients',          ['ESTIMATES_VIEW', 'LEADS_VIEW']],
+  ['read_existing_clients', ['ESTIMATES_VIEW', 'LEADS_VIEW']],
+  // Workspace sheet (estimate OR job financial grid).
+  ['read_workspace_sheet_full', ['ESTIMATES_VIEW', 'JOBS_VIEW_ALL']],
+  // Client-directory writes that are tier:'auto' in their tool defs.
+  ['update_client_field',     'ESTIMATES_EDIT'],
+  ['create_property',         'ESTIMATES_EDIT'],
+  ['link_property_to_parent', 'ESTIMATES_EDIT'],
+  // CoS introspection over team conversations / usage metrics.
+  ['read_metrics',              'INSIGHTS_VIEW'],
+  ['read_recent_conversations', 'INSIGHTS_VIEW'],
+  ['read_conversation_detail',  'INSIGHTS_VIEW'],
+  // read_users intentionally UNGATED — it's the assignment-picker
+  // directory (org-scoped in the handler, no PII beyond name/email/role).
+]);
+
+// Effective capability for the consolidated read front door, derived
+// from entity_type (+ depth/include) so it matches whichever narrow
+// handler execConsolidatedRead will actually route to.
+function consolidatedReadCapability(name, inp) {
+  const et = String(inp.entity_type || '').toLowerCase();
+  const includes = Array.isArray(inp.include) ? inp.include.map((s) => String(s).toLowerCase()) : [];
+  const depth = String(inp.depth || '').toLowerCase();
+  const hasFilter = !!(inp.filter || inp.q || (Array.isArray(inp.filters) && inp.filters.length));
+  switch (et) {
+    case 'wip': return 'FINANCIALS_VIEW';
+    case 'job':
+      // search_entities('job') with NO filter routes to read_wip_summary
+      // (financial roll-up); with a filter → read_jobs (roster only).
+      if (name === 'search_entities') return hasFilter ? 'JOBS_VIEW_ALL' : 'FINANCIALS_VIEW';
+      // read_entity('job') — financial includes vs roster summary.
+      if (includes.indexOf('qb_cost_lines') !== -1 || includes.indexOf('building_breakdown') !== -1 ||
+          includes.indexOf('buildings') !== -1 || depth === 'audit' || includes.indexOf('audit') !== -1) {
+        return 'FINANCIALS_VIEW';
+      }
+      if (depth === 'full' || includes.indexOf('workspace_sheet') !== -1) return ['ESTIMATES_VIEW', 'JOBS_VIEW_ALL'];
+      return 'JOBS_VIEW_ALL';
+    case 'client':        return ['ESTIMATES_VIEW', 'LEADS_VIEW'];
+    case 'business_card': return ['ESTIMATES_VIEW', 'LEADS_VIEW'];
+    case 'lead':          return 'LEADS_VIEW';
+    case 'pipeline':      return 'LEADS_VIEW';
+    case 'estimate':      return 'ESTIMATES_VIEW';
+    case 'material':      return 'ESTIMATES_VIEW';
+    case 'sub':           return 'ESTIMATES_VIEW';
+    // user (assignment directory), task (org+user scoped in read_tasks),
+    // and unknown entity types need no extra capability.
+    default: return null;
+  }
+}
+
+// Resolve the capability requirement for any dispatched tool. Returns a
+// cap string, an array of caps (ANY-of), or null (no extra cap).
+function aiToolRequiredCapability(name, input) {
+  if (name === 'read_entity' || name === 'search_entities') {
+    return consolidatedReadCapability(name, input || {});
+  }
+  return AI_TOOL_CAPABILITY.has(name) ? AI_TOOL_CAPABILITY.get(name) : null;
+}
+
+// Returns null when allowed, or a graceful denial string when the acting
+// user lacks the capability. `user` is a {role} object (req.user, or a
+// row loaded from users for background/watch fires); a missing or
+// role-less user is denied for any gated tool (fail-closed).
+function aiToolCapabilityDenial(name, input, user) {
+  const need = aiToolRequiredCapability(name, input);
+  if (!need) return null;
+  const needed = Array.isArray(need) ? need : [need];
+  if (user && user.role && needed.some((cap) => hasCapability(user, cap))) return null;
+  return 'Permission denied: the current user lacks the ' + needed.join(' or ') +
+         ' capability required to read this. Tell the user you can\'t show this data because ' +
+         'their role doesn\'t have access, and suggest they contact an admin if they need it.';
+}
+
+function make86OnCustomToolUse(userId, parentSession, turnContextText, gateUser) {
   // Per-request dedupe cache. Scoped to ONE /86/chat (or /chat/continue)
   // call — closes over this Map. If the model calls e.g.
   // read_materials({q:"PT 2x4"}) twice in the same turn (which it
@@ -10609,6 +10764,25 @@ function make86OnCustomToolUse(userId, parentSession, turnContextText) {
     } catch (_) {
       return name + '\0' + String(input);
     }
+  }
+
+  // P0-1 — resolve the acting user (role + org) ONCE for this turn. For
+  // the chat entry points gateUser is req.user (zero DB cost). For the
+  // background/watch fires (only userId available) we lazily load the
+  // role + organization_id from the users table and memoize it so the
+  // capability gate and org-scoping below have what they need.
+  let _capUser = gateUser || null;
+  let _capUserLoaded = !!gateUser;
+  async function resolveCapUser() {
+    if (_capUserLoaded) return _capUser;
+    _capUserLoaded = true;
+    if (userId) {
+      try {
+        const r = await pool.query('SELECT id, role, organization_id FROM users WHERE id = $1', [userId]);
+        _capUser = r.rows[0] || null;
+      } catch (_) { _capUser = null; }
+    }
+    return _capUser;
   }
 
   return async function (tu) {
@@ -10634,6 +10808,21 @@ function make86OnCustomToolUse(userId, parentSession, turnContextText) {
                  requiredEntity + ' first.'
         };
       }
+    }
+    // ── P0-1 capability gate — resolve the acting user + org once, then
+    // deny gated tools BEFORE the dedupe cache (so denials are never
+    // cached) and BEFORE any executor branch (so every read path is
+    // covered). ctx carries userId + orgId + the user object so the
+    // org-scoped handlers below don't each re-query the users table.
+    const capUser = await resolveCapUser();
+    const ctx = {
+      userId,
+      orgId: (capUser && capUser.organization_id) || null,
+      user: capUser || null,
+    };
+    const capDenial = aiToolCapabilityDenial(tu.name, tu.input || {}, capUser);
+    if (capDenial) {
+      return { tier: 'auto', error: capDenial };
     }
     // ── Payload DSL — emit_payload_file lands here BEFORE the rest of
     // the auto-tier dispatch because its result shape is special: we
@@ -10681,17 +10870,17 @@ function make86OnCustomToolUse(userId, parentSession, turnContextText) {
         } else if (FIELD_TOOLS_EXECUTOR_TOOLS.has(name)) {
           result = await execFieldToolRead(name, input);
         } else if (CLIENT_EXECUTOR_TOOLS.has(name)) {
-          result = await execClientDirectoryTool(name, input);
+          result = await execClientDirectoryTool(name, input, ctx);
         } else if (MEMORY_EXECUTOR_TOOLS.has(name)) {
-          result = await execMemoryTool(name, input, { userId });
+          result = await execMemoryTool(name, input, ctx);
         } else if (WATCH_EXECUTOR_TOOLS.has(name)) {
-          result = await execWatchTool(name, input, { userId });
+          result = await execWatchTool(name, input, ctx);
         } else if (WAVE3_EXECUTOR_TOOLS.has(name)) {
-          result = await execWave3Tool(name, input, { userId });
+          result = await execWave3Tool(name, input, ctx);
         } else if (PROJECT_INLINE_EXECUTOR_TOOLS.has(name)) {
-          result = await execProjectInlineTool(name, input, { userId });
+          result = await execProjectInlineTool(name, input, ctx);
         } else {
-          result = await execStaffTool(name, input, { userId });
+          result = await execStaffTool(name, input, ctx);
         }
         // Structured result with `blocks` (e.g. view_attachment_image
         // returns an image block + text label). Pass it through so
@@ -11681,17 +11870,24 @@ router.post('/exec-tool', requireAuth, requireCapability('ESTIMATES_VIEW'), asyn
     const input = (req.body && req.body.input) || {};
     if (!name || typeof name !== 'string') return res.status(400).json({ error: 'name is required' });
     if (!ALLOWED_AUTO_TIER_TOOLS.has(name)) return res.status(400).json({ error: 'tool not allowed via this endpoint' });
+    // P0-1 — per-tool capability gate. The route-level ESTIMATES_VIEW
+    // baseline stays; this layers the per-tool requirement on top so an
+    // ESTIMATES_VIEW-only role can't pull WIP / leads / cost lines via
+    // this endpoint any more than it can via the chat dispatcher.
+    const capDenial = aiToolCapabilityDenial(name, input, req.user);
+    if (capDenial) return res.status(403).json({ error: capDenial });
+    const ctx = { userId: req.user.id, orgId: req.user.organization_id || null, user: req.user };
     let summary;
     if (INTAKE_EXECUTOR_TOOLS.has(name)) {
       summary = await execIntakeRead(name, input);
     } else if (FIELD_TOOLS_EXECUTOR_TOOLS.has(name)) {
       summary = await execFieldToolRead(name, input);
     } else if (CLIENT_EXECUTOR_TOOLS.has(name)) {
-      summary = await execClientDirectoryTool(name, input);
+      summary = await execClientDirectoryTool(name, input, ctx);
     } else if (PROJECT_INLINE_EXECUTOR_TOOLS.has(name)) {
-      summary = await execProjectInlineTool(name, input, { userId: req.user.id });
+      summary = await execProjectInlineTool(name, input, ctx);
     } else {
-      summary = await execStaffTool(name, input, { userId: req.user.id });
+      summary = await execStaffTool(name, input, ctx);
     }
     res.json({ ok: true, summary });
   } catch (e) {
@@ -12208,7 +12404,7 @@ router.post('/86/chat', requireAuth, requireOrg, aiChatLimiter, aiChatHourlyLimi
       // 86 chip-style read_existing_clients / _leads + intake reads
       // anywhere in the app. Pass turnContextText so handoff_to_*
       // forwards the same snapshot to the staff sub-session.
-      onCustomToolUse: make86OnCustomToolUse(req.user.id, session, turnContextText),
+      onCustomToolUse: make86OnCustomToolUse(req.user.id, session, turnContextText, req.user),
       // When ensureAiSession just minted this session (first /86/chat
       // for the user, or a stuck-session recovery upstream), skip the
       // archive-and-retry recovery path inside runV2SessionStream —
@@ -12422,7 +12618,7 @@ router.post('/86/chat/continue', requireAuth, requireOrg, aiChatLimiter, aiChatH
       anthropic, res,
       session: session,
       eventsToSend: eventsToSend,
-      onCustomToolUse: make86OnCustomToolUse(req.user.id, session),
+      onCustomToolUse: make86OnCustomToolUse(req.user.id, session, undefined, req.user),
       persistAssistantText: async (text, usage, meta) => {
         const hasText = !!(text && String(text).trim());
         const toolUses = (meta && Array.isArray(meta.tool_uses)) ? meta.tool_uses : null;
