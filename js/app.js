@@ -464,33 +464,8 @@
                 });
             }
 
-            // Sidebar "+ New" create menu. Opens a small dropdown with the
-            // role-gated create actions (New Lead / New Estimate). Items run
-            // their own onclick create flows; close the menu after a pick.
-            const sidebarNewBtn = document.getElementById('sidebar-new-btn');
-            const sidebarNewMenu = document.getElementById('sidebar-new-menu');
-            if (sidebarNewBtn && sidebarNewMenu) {
-                sidebarNewBtn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    const open = !sidebarNewMenu.hasAttribute('hidden');
-                    closeAllPopovers({ except: 'new' });
-                    if (open) {
-                        sidebarNewMenu.setAttribute('hidden', '');
-                        sidebarNewBtn.setAttribute('aria-expanded', 'false');
-                    } else {
-                        sidebarNewMenu.removeAttribute('hidden');
-                        sidebarNewBtn.setAttribute('aria-expanded', 'true');
-                    }
-                });
-                sidebarNewMenu.addEventListener('click', (e) => {
-                    // Let the item's own onclick run, then close the menu.
-                    if (e.target.closest('.sidebar-new-item')) {
-                        sidebarNewMenu.setAttribute('hidden', '');
-                        sidebarNewBtn.setAttribute('aria-expanded', 'false');
-                    }
-                    e.stopPropagation();
-                });
-            }
+            // The sidebar "+ New" button was removed — create actions live in the
+            // sticky header's quick-add ("+") menu instead.
 
             // Notifications bell. Panel is empty by default; future
             // hook will populate from server-side notifications source.
@@ -647,14 +622,6 @@
             if (opts.except !== 'notif') {
                 const np = document.getElementById('notifications-panel');
                 if (np) np.setAttribute('hidden', '');
-            }
-            if (opts.except !== 'new') {
-                const nm = document.getElementById('sidebar-new-menu');
-                if (nm) {
-                    nm.setAttribute('hidden', '');
-                    const nb = document.getElementById('sidebar-new-btn');
-                    if (nb) nb.setAttribute('aria-expanded', 'false');
-                }
             }
             if (opts.except !== 'quickadd') {
                 const qa = document.getElementById('header-quickadd-menu');

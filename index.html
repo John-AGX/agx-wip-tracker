@@ -215,7 +215,7 @@
     })();
     </script>
 
-    <link rel="stylesheet" href="css/styles.css?v=175">
+    <link rel="stylesheet" href="css/styles.css?v=176">
     <link rel="stylesheet" href="css/report-style-packs.css?v=3">
     <link rel="stylesheet" href="css/workspace-layout.css?v=60">
     <link rel="stylesheet" href="css/workspace.css?v=38">
@@ -492,27 +492,7 @@
                         </svg>
                     </button>
                 </div>
-                <!-- Quick "+ New" — prominent create action at the top of
-                     the sidebar (Claude "New chat" style). Opens a small
-                     menu wired to the existing create flows. Jobs are
-                     created by converting a won lead, so only Lead +
-                     Estimate are offered here. Collapses to just the "+"
-                     glyph on the icon rail. -->
-                <div class="app-sidebar-new" id="app-sidebar-new">
-                    <button id="sidebar-new-btn" class="sidebar-new-btn" type="button"
-                            aria-haspopup="true" aria-expanded="false" title="Create new">
-                        <span class="sidebar-new-plus" aria-hidden="true">+</span>
-                        <span class="sidebar-new-label">New</span>
-                    </button>
-                    <div id="sidebar-new-menu" class="sidebar-new-menu" role="menu" hidden>
-                        <button type="button" class="sidebar-new-item" role="menuitem" data-cap="LEADS_EDIT"
-                                data-p86-icon="leads"
-                                onclick="if(typeof window.openNewLeadModal==='function')window.openNewLeadModal();">New Lead</button>
-                        <button type="button" class="sidebar-new-item" role="menuitem" data-cap="ESTIMATES_VIEW"
-                                data-p86-icon="estimates"
-                                onclick="if(typeof window.openNewEstimateForm==='function')window.openNewEstimateForm();">New Estimate</button>
-                    </div>
-                </div>
+                <!-- "+ New" create action lives in the sticky header's quick-add ("+") menu. -->
                 <!-- Global search — server-backed (js/search.js → GET
                      /api/search). Searches jobs / estimates / leads /
                      clients directly in the DB, so it finds entities even
@@ -2950,7 +2930,7 @@
     <script src="js/qb-costs-view.js?v=11"></script>
     <script src="js/insights.js?v=7"></script>
     <script src="js/schedule.js?v=34"></script>
-    <script src="js/app.js?v=80"></script>
+    <script src="js/app.js?v=81"></script>
     <script src="js/compliance-review-ui.js?v=2"></script>
     <script src="js/messaging.js?v=1b"></script>
     <script src="js/my-files.js?v=16"></script>
