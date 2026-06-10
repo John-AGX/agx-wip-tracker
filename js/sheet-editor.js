@@ -84,7 +84,10 @@
     { key: 'array',   act: 'edit', glyph: '▦', name: 'Array',      group: 'Modify', label: 'Array selection (rows × columns)' },
     { key: 'fit',     act: 'fit',  glyph: '⤢', name: 'Fit',        group: 'View',   label: 'Fit to screen' },
     { key: 'undo',    act: 'undo', glyph: '↶', name: 'Undo',       group: 'View',   label: 'Undo (Ctrl+Z)' },
-    { key: 'redo',    act: 'redo', glyph: '↷', name: 'Redo',       group: 'View',   label: 'Redo (Ctrl+Y / Ctrl+Shift+Z)' }
+    { key: 'redo',    act: 'redo', glyph: '↷', name: 'Redo',       group: 'View',   label: 'Redo (Ctrl+Y / Ctrl+Shift+Z)' },
+    { key: 'pdf',     act: 'export', glyph: '⎙', name: 'PDF',      group: 'Output', label: 'Print / Save as PDF at true sheet size' },
+    { key: 'png',     act: 'export', glyph: '⬇', name: 'PNG',      group: 'Output', label: 'Download the sheet as a PNG' },
+    { key: 'dxf',     act: 'export', glyph: '⛁', name: 'DXF',      group: 'Output', label: 'Export to DXF — opens to scale in AutoCAD / any CAD app' }
   ];
   var TOOL_GROUP_ORDER = ['Draw', 'Modify', 'Annotate', 'View'];
   // AutoCAD-style ribbon: tabs → panels → items. Items are tool keys (TOOLS) or
@@ -109,7 +112,11 @@
     { tab: 'View', panels: [
       { title: 'Measure', items: ['inquire', 'calibrate'] },
       { title: 'Navigate', items: ['pan', 'edit:fit'] },
+      { title: 'Snaps', items: ['snap:ortho', 'snap:grid', 'snap:osnap'] },
       { title: 'History', items: ['edit:undo', 'edit:redo'] }
+    ] },
+    { tab: 'Output', panels: [
+      { title: 'Export', items: ['pdf', 'png', 'dxf'] }
     ] }
   ];
   // Large (primary) ribbon buttons; everything else renders as a compact small button.
@@ -855,9 +862,7 @@
         '<button id="p86-sheet-settings" title="Editor settings &amp; defaults (units, scale, sheet size, grid, snaps)" style="background:rgba(255,255,255,0.06);color:#cbd5e1;border:1px solid #444;border-radius:6px;padding:6px 11px;font-size:13px;cursor:pointer;">⚙</button>' +
         '<button id="p86-sheet-shortcuts" title="Keyboard shortcuts (?)" style="background:rgba(255,255,255,0.06);color:#cbd5e1;border:1px solid #444;border-radius:6px;padding:6px 11px;font-size:13px;cursor:pointer;">⌨</button>' +
         '<button id="p86-sheet-underlay" title="Import a plan PDF/image as a scaled background to trace + measure over (takeoff)" style="background:rgba(79,140,255,0.14);color:#cbd5e1;border:1px solid #4f8cff;border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer;">⊞ Underlay</button>' +
-        '<button id="p86-sheet-png" title="Download the sheet as a PNG" style="background:rgba(255,255,255,0.06);color:#cbd5e1;border:1px solid #444;border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer;">⬇ PNG</button>' +
-        '<button id="p86-sheet-pdf" title="Print / Save as PDF at true sheet size" style="background:rgba(255,255,255,0.06);color:#cbd5e1;border:1px solid #444;border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer;">⎙ PDF</button>' +
-        '<button id="p86-sheet-dxf" title="Export to DXF — opens to scale in AutoCAD / any CAD app" style="background:rgba(255,255,255,0.06);color:#cbd5e1;border:1px solid #444;border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer;">⛁ DXF</button>' +
+        // PNG / PDF / DXF now live in the ribbon's Output tab.
         '<button id="p86-sheet-cancel" style="background:rgba(255,255,255,0.06);color:#aaa;border:1px solid #444;border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;">Close</button>' +
         '<button id="p86-sheet-save" style="background:#4f8cff;color:#fff;border:0;border-radius:6px;padding:6px 16px;font-size:12px;font-weight:700;cursor:pointer;">Save</button>' +
       '</div>' +
@@ -888,9 +893,7 @@
         '<span id="p86-sb-view" style="color:#64748b;"></span>' +
         '<span style="flex:1;"></span>' +
         '<span id="p86-sb-zoom" style="color:#64748b;margin-right:6px;"></span>' +
-        '<button data-sb-toggle="ortho" title="Ortho lock (or hold Shift) — 0/45/90°" style="background:rgba(255,255,255,0.05);color:#9aa;border:1px solid #444;border-radius:5px;padding:3px 9px;font-size:10px;font-weight:700;letter-spacing:0.4px;cursor:pointer;">ORTHO</button>' +
-        '<button data-sb-toggle="grid" title="Snap to grid (1 ft)" style="background:rgba(255,255,255,0.05);color:#9aa;border:1px solid #444;border-radius:5px;padding:3px 9px;font-size:10px;font-weight:700;letter-spacing:0.4px;cursor:pointer;">GRID</button>' +
-        '<button data-sb-toggle="osnap" title="Object snap (endpoint / midpoint / center)" style="background:rgba(255,255,255,0.05);color:#9aa;border:1px solid #444;border-radius:5px;padding:3px 9px;font-size:10px;font-weight:700;letter-spacing:0.4px;cursor:pointer;">OSNAP</button>' +
+        // Ortho / Grid / Osnap toggles now live on the ribbon's View › Snaps panel.
       '</div>';
     document.body.appendChild(ov);
 
@@ -1101,7 +1104,7 @@
       var sz = ribbonIsPrimary(id) ? ' lg' : ' sm';
       if (id.indexOf('snap:') === 0) {               // View › Snaps toggle button
         var sk = id.slice(5), meta = SNAP_META[sk] || { name: sk, label: sk };
-        return '<button class="p86rb-btn' + sz + '" data-sb-toggle="' + sk + '" title="' + esc(meta.label) + '">' +
+        return '<button class="p86rb-btn' + sz + '" data-rb-snap="' + sk + '" title="' + esc(meta.label) + '">' +
           '<span class="g">' + (svgIcon(sk) || '•') + '</span><span class="l">' + esc(meta.name) + '</span></button>';
       }
       var d = ribbonItemDef(id); if (!d) return '';
@@ -1150,13 +1153,13 @@
         }
       };
     });
-    S.overlay.querySelectorAll('[data-sb-toggle]').forEach(function (b) {
+    S.overlay.querySelectorAll('[data-rb-snap]').forEach(function (b) {
       b.onclick = function () {
-        var k = b.getAttribute('data-sb-toggle');
+        var k = b.getAttribute('data-rb-snap');
         if (k === 'ortho') S.ortho = !S.ortho;
         else if (k === 'grid') S.gridSnap = !S.gridSnap;
         else if (k === 'osnap') S.objSnap = !S.objSnap;
-        refreshStatusBar();
+        refreshToolbar();
         repaint();
       };
     });
@@ -1169,8 +1172,8 @@
       host.querySelectorAll('[data-sheet-tool]').forEach(function (b) {
         b.classList.toggle('on', b.getAttribute('data-sheet-tool') === S.tool);
       });
-      host.querySelectorAll('[data-sb-toggle]').forEach(function (b) {
-        var k = b.getAttribute('data-sb-toggle');
+      host.querySelectorAll('[data-rb-snap]').forEach(function (b) {
+        var k = b.getAttribute('data-rb-snap');
         b.classList.toggle('on', (k === 'ortho' && S.ortho) || (k === 'grid' && S.gridSnap) || (k === 'osnap' && S.objSnap));
       });
     }
