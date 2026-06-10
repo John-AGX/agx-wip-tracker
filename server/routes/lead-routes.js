@@ -2,6 +2,39 @@ const express = require('express');
 const { pool } = require('../db');
 const { requireAuth, requireCapability } = require('../auth');
 const { sendForEvent } = require('../email');
+const { geocodeAddress } = require('../geocoder');
+
+// ── Lead geocoding (for the leads map view) ─────────────────────────
+// Compose a one-line address from the lead's address fields. Returns null
+// when there isn't enough to geocode (street alone won't match anyway).
+function leadAddressLine(l) {
+  const parts = [l.street_address, l.city, l.state, l.zip]
+    .map(s => (s == null ? '' : String(s).trim())).filter(Boolean);
+  return parts.length >= 2 ? parts.join(', ') : null;
+}
+// Best-effort: geocode and persist real coords (US Census, free). Never
+// writes 0,0; a miss marks geocode_status='failed' (sticky — the boot
+// backfill skips it; re-cleared whenever the address fields change).
+async function geocodeLead(id) {
+  try {
+    const r = await pool.query('SELECT street_address, city, state, zip FROM leads WHERE id = $1', [id]);
+    if (!r.rowCount) return;
+    const addr = leadAddressLine(r.rows[0]);
+    if (!addr) return;
+    const g = await geocodeAddress(addr);
+    if (g && Number.isFinite(g.lat) && Number.isFinite(g.lng) && !(g.lat === 0 && g.lng === 0)) {
+      await pool.query(
+        "UPDATE leads SET geocode_lat = $1, geocode_lng = $2, geocode_status = 'ok', geocode_at = NOW() WHERE id = $3",
+        [g.lat, g.lng, id]
+      );
+    } else {
+      await pool.query(
+        "UPDATE leads SET geocode_status = 'failed', geocode_at = NOW() WHERE id = $1", [id]
+      );
+    }
+  } catch (e) { console.error('[leads] geocode error:', e && e.message); }
+}
+const LEAD_ADDRESS_FIELDS = ['street_address', 'city', 'state', 'zip'];
 
 const router = express.Router();
 
@@ -125,6 +158,10 @@ router.post('/', requireAuth, requireCapability('LEADS_EDIT'), async (req, res) 
       vals
     );
     res.json({ ok: true, id });
+    // Geocode after the response — the map picks the pin up on next load.
+    if (LEAD_ADDRESS_FIELDS.some(k => fields[k])) {
+      geocodeLead(id).catch(() => {});
+    }
   } catch (e) {
     console.error('POST /api/leads error:', e);
     res.status(500).json({ error: 'Server error: ' + e.message });
@@ -164,6 +201,12 @@ router.put('/:id', requireAuth, requireCapability('LEADS_EDIT'), async (req, res
     );
     if (u.rowCount === 0) return res.status(404).json({ error: 'Lead not found' });
     res.json({ ok: true });
+
+    // Address fields changed → re-geocode (after the response; sticky-failed
+    // status is overwritten with the fresh result).
+    if (LEAD_ADDRESS_FIELDS.some(k => Object.prototype.hasOwnProperty.call(fields, k))) {
+      geocodeLead(req.params.id).catch(() => {});
+    }
 
     // Fire status-change notifications (gated by isEventEnabled).
     // Sold: any prior status → 'sold'. Lost: any prior non-lost/no-opp
@@ -334,5 +377,26 @@ router.delete('/:id', requireAuth, requireCapability('LEADS_EDIT'), async (req, 
     res.status(500).json({ error: 'Server error' });
   }
 });
+
+// ── One-time-ish backfill ───────────────────────────────────────────
+// Geocode existing leads that have address fields but no usable coords.
+// Best-effort + throttled (free Census geocoder); 'failed' rows are skipped
+// so unmatchable addresses aren't retried every restart.
+async function backfillLeadGeocodes() {
+  try {
+    const { rows } = await pool.query(
+      "SELECT id FROM leads " +
+      "WHERE (street_address IS NOT NULL OR city IS NOT NULL) " +
+      "AND (geocode_lat IS NULL OR geocode_lng IS NULL OR (geocode_lat = 0 AND geocode_lng = 0)) " +
+      "AND geocode_status IS DISTINCT FROM 'failed' LIMIT 300"
+    );
+    for (const l of rows) {
+      await geocodeLead(l.id);
+      await new Promise(r => setTimeout(r, 250));
+    }
+    if (rows.length) console.log('[leads] geocode backfill: processed ' + rows.length + ' lead(s)');
+  } catch (e) { console.error('[leads] geocode backfill error:', e && e.message); }
+}
+setTimeout(() => { backfillLeadGeocodes(); }, 12000);   // after boot settles (offset from the projects backfill)
 
 module.exports = router;

@@ -39,8 +39,15 @@ async function geocodeProject(id, orgId, addr) {
     const g = await geocodeAddress(addr);
     if (g && Number.isFinite(g.lat) && Number.isFinite(g.lng) && !(g.lat === 0 && g.lng === 0)) {
       await pool.query(
-        'UPDATE projects SET geocode_lat = $1, geocode_lng = $2 WHERE id = $3 AND organization_id = $4',
+        "UPDATE projects SET geocode_lat = $1, geocode_lng = $2, geocode_status = 'ok' WHERE id = $3 AND organization_id = $4",
         [g.lat, g.lng, id, orgId]
+      );
+    } else {
+      // Sticky failure — the boot backfill skips these so an unmatchable
+      // address isn't re-geocoded on every restart. Cleared on address edit.
+      await pool.query(
+        "UPDATE projects SET geocode_status = 'failed' WHERE id = $1 AND organization_id = $2",
+        [id, orgId]
       );
     }
   } catch (e) { console.error('[projects] geocode error:', e && e.message); }
@@ -512,6 +519,7 @@ async function backfillProjectGeocodes() {
       "SELECT id, organization_id, address_text FROM projects " +
       "WHERE address_text IS NOT NULL AND btrim(address_text) <> '' " +
       "AND (geocode_lat IS NULL OR geocode_lng IS NULL OR (geocode_lat = 0 AND geocode_lng = 0)) " +
+      "AND geocode_status IS DISTINCT FROM 'failed' " +
       "AND archived_at IS NULL LIMIT 300"
     );
     for (const p of rows) {

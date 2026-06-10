@@ -782,6 +782,15 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_leads_status ON leads(status);
     CREATE INDEX IF NOT EXISTS idx_leads_salesperson ON leads(salesperson_id);
 
+    -- Geocode cache for the leads map view (mirrors the jobs pattern at the
+    -- jobs table above). Populated by lead-routes on create/update + a boot
+    -- backfill; status 'failed' is sticky per address so bad addresses are
+    -- not retried on every boot.
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS geocode_lat NUMERIC(8, 5);
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS geocode_lng NUMERIC(8, 5);
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS geocode_status TEXT;
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS geocode_at TIMESTAMPTZ;
+
     -- Polymorphic attachments — each row is a single uploaded photo (or doc)
     -- belonging to either a lead or an estimate. We store three size variants
     -- per upload (thumbnail, web, original) so the UI can show a fast grid,
@@ -2809,6 +2818,11 @@ async function initSchema() {
     ALTER TABLE projects ADD COLUMN IF NOT EXISTS tags JSONB NOT NULL DEFAULT '[]'::jsonb;
     CREATE INDEX IF NOT EXISTS idx_projects_tags
       ON projects USING gin (tags jsonb_path_ops) WHERE archived_at IS NULL;
+
+    -- Geocode result status ('ok' | 'failed'). 'failed' is sticky so the boot
+    -- backfill doesn't re-hit the Census geocoder for the same unmatchable
+    -- address on every restart; clearing happens when the address changes.
+    ALTER TABLE projects ADD COLUMN IF NOT EXISTS geocode_status TEXT;
 
     -- Before/After pairs — CompanyCam-style paired photos. Each row
     -- couples two attachments (both must have entity_type='project'

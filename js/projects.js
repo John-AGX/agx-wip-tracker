@@ -1153,6 +1153,8 @@
     _detailState.pairs = [];
     _detailState.activity = [];
     _detailState.photos = [];
+    _detailState.reports = [];
+    _detailState.reportsCount = 0;
     var overlay = ensureDetailOverlay();
     overlay.style.display = 'flex';
     document.body.style.overflow = 'hidden';
@@ -1167,23 +1169,32 @@
     var reportsPromise = (window.p86Api && window.p86Api.reports)
       ? window.p86Api.reports.list('project', projectId).catch(function() { return { reports: [] }; })
       : Promise.resolve({ reports: [] });
+    // Fast first paint: only gate on the project row + its photos (what the
+    // default Photos tab shows). Pairs / activity / reports hydrate right
+    // after and repaint — so one slow straggler can't hold the whole open.
     Promise.all([
       api().get(projectId),
-      api().pairs.list(projectId).catch(function() { return { pairs: [] }; }),
-      api().activity(projectId, { limit: 50 }).catch(function() { return { activity: [] }; }),
-      window.p86Api.attachments.list('project', projectId).catch(function() { return { attachments: [] }; }),
-      reportsPromise
+      window.p86Api.attachments.list('project', projectId).catch(function() { return { attachments: [] }; })
     ]).then(function(results) {
+      if (_detailState.projectId !== projectId) return;   // user moved on
       _detailState.project = results[0] && results[0].project;
-      _detailState.pairs = (results[1] && results[1].pairs) || [];
-      _detailState.activity = (results[2] && results[2].activity) || [];
-      _detailState.photos = (results[3] && results[3].attachments) || [];
-      _detailState.reports = (results[4] && results[4].reports) || [];
-      _detailState.reportsCount = _detailState.reports.length;
+      _detailState.photos = (results[1] && results[1].attachments) || [];
       _detailState.activeTab = _detailState.activeTab || 'photos';
       paintDetail();
     }).catch(function(e) {
       paintDetailError(e.message || 'Failed to load project');
+    });
+    Promise.all([
+      api().pairs.list(projectId).catch(function() { return { pairs: [] }; }),
+      api().activity(projectId, { limit: 50 }).catch(function() { return { activity: [] }; }),
+      reportsPromise
+    ]).then(function(late) {
+      if (_detailState.projectId !== projectId) return;
+      _detailState.pairs = (late[0] && late[0].pairs) || [];
+      _detailState.activity = (late[1] && late[1].activity) || [];
+      _detailState.reports = (late[2] && late[2].reports) || [];
+      _detailState.reportsCount = _detailState.reports.length;
+      if (_detailState.project) paintDetail();   // refresh tab counts/feeds once hydrated
     });
   }
   window.openProject = openProject;

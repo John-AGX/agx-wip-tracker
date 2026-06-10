@@ -87,6 +87,19 @@
   // numeric columns right-aligned. Click anywhere on a row to open the
   // editor.
   var _leadsSort = { key: 'updated_at', dir: 'desc' };
+  var _leadsView = 'list';   // 'list' | 'map' — toggled by the toolbar 🗺 button
+
+  function toggleLeadsMapView() {
+    _leadsView = (_leadsView === 'map') ? 'list' : 'map';
+    var b = document.getElementById('leads-map-toggle');
+    if (b) {
+      b.style.background = (_leadsView === 'map') ? 'rgba(79,140,255,0.18)' : '';
+      b.style.borderColor = (_leadsView === 'map') ? '#4f8cff' : '';
+      b.style.color = (_leadsView === 'map') ? '#93c5fd' : '';
+    }
+    renderLeadsList();
+  }
+  window.toggleLeadsMapView = toggleLeadsMapView;
 
   function leadRowHTML(l) {
     // Status: use the global .badge + per-status color class instead of
@@ -267,6 +280,33 @@
         ? 'Showing ' + filtered.length + ' of ' + _leads.length + ' leads'
         : _leads.length + ' leads';
       summaryEl.textContent = counts ? prefix + ' (' + counts + ')' : prefix;
+    }
+
+    // Map view — same split list+map pane the Projects page uses, fed by
+    // the filtered leads (status filter + search still apply). Pins come
+    // from geocode_lat/lng (populated server-side from the address fields).
+    if (_leadsView === 'map') {
+      listEl.innerHTML = '<div id="p86LeadsMapHost" class="p86-projects-map-host"></div>';
+      var mapHost = document.getElementById('p86LeadsMapHost');
+      if (mapHost && window.p86ProjectsMap && typeof window.p86ProjectsMap.render === 'function') {
+        window.p86ProjectsMap.render(mapHost, filtered, {
+          entityLabel: 'leads',
+          showThumb: false,
+          getName: function(l) { return l.title || 'Untitled lead'; },
+          getAddress: function(l) {
+            return [l.street_address, l.city, l.state, l.zip].filter(Boolean).join(', ');
+          },
+          getMeta: function(l) {
+            return statusMeta(l.status).label + (l.client_name ? ' · ' + l.client_name : '');
+          },
+          onPin: function(id) {
+            if (typeof window.openEditLeadModal === 'function') window.openEditLeadModal(id);
+          }
+        });
+      } else if (mapHost) {
+        mapHost.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);text-align:center;">Map module not loaded.</div>';
+      }
+      return;
     }
 
     if (!filtered.length) {

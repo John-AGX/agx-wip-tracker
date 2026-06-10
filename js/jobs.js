@@ -930,6 +930,49 @@ function renderJobsMain() {
             return jobs;
         }
 
+        // Jobs map view — toolbar 🗺 toggle swaps the table for the shared
+        // list+map pane (js/projects-map.js). Pins come from geocode_lat/lng,
+        // which the weather route fills lazily per job; jobs without coords
+        // land in the pane's "Unmapped" list.
+        let _jobsMapView = false;
+        function toggleJobsMapView() {
+            const tableWrap = document.querySelector('#jobs-main-view .table-container');
+            const host = document.getElementById('jobs-map-host');
+            const btn = document.getElementById('jobs-map-toggle');
+            if (!host) return;
+            _jobsMapView = !_jobsMapView;
+            if (btn) {
+                btn.style.background = _jobsMapView ? 'rgba(79,140,255,0.18)' : '';
+                btn.style.borderColor = _jobsMapView ? '#4f8cff' : '';
+                btn.style.color = _jobsMapView ? '#93c5fd' : '';
+            }
+            if (!_jobsMapView) {
+                host.style.display = 'none';
+                if (tableWrap) tableWrap.style.display = '';
+                return;
+            }
+            if (tableWrap) tableWrap.style.display = 'none';
+            host.style.display = '';
+            const jobs = getFilteredJobs();
+            if (window.p86ProjectsMap && typeof window.p86ProjectsMap.render === 'function') {
+                window.p86ProjectsMap.render(host, jobs, {
+                    entityLabel: 'jobs',
+                    showThumb: false,
+                    getName: function(j) {
+                        return (j.jobNumber ? j.jobNumber + ' — ' : '') + (j.title || 'Untitled job');
+                    },
+                    getAddress: function(j) { return j.geocode_address || j.address || ''; },
+                    getMeta: function(j) {
+                        return (j.status || '') + (j.client ? ' · ' + j.client : '');
+                    },
+                    onPin: function(id) { editJob(id); }
+                });
+            } else {
+                host.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);text-align:center;">Map module not loaded.</div>';
+            }
+        }
+        window.toggleJobsMapView = toggleJobsMapView;
+
         function calculateJobsSummary() {
             // Tiles follow the active filter — what the user sees in
             // the table below is what the tiles sum / count. Switch

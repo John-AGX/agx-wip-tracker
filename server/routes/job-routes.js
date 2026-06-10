@@ -67,6 +67,7 @@ router.get('/', requireAuth, async (req, res) => {
     // data remains visible until the NOT NULL tightening commit.
     const { rows } = await pool.query(`
       SELECT j.id, j.data, j.owner_id, j.created_at, j.updated_at,
+             j.geocode_lat, j.geocode_lng, j.geocode_address,
              COALESCE(ja.access_level, '') AS access_level
       FROM jobs j
       LEFT JOIN job_access ja ON ja.job_id = j.id AND ja.user_id = $1
@@ -82,7 +83,10 @@ router.get('/', requireAuth, async (req, res) => {
       // override any stale copies that may have crept into the JSONB
       // blob via a prior bulk-save round-trip. owner_id specifically
       // is mutable via PUT /:id/owner, so the column is the truth.
-      return { ...j.data, id: j.id, owner_id: j.owner_id, _canEdit: canEdit };
+      // geocode_* columns power the Jobs map view (filled lazily by the
+      // weather route's ensureGeocode).
+      return { ...j.data, id: j.id, owner_id: j.owner_id, _canEdit: canEdit,
+        geocode_lat: j.geocode_lat, geocode_lng: j.geocode_lng, geocode_address: j.geocode_address };
     });
     res.json({ jobs: result });
   } catch (e) {

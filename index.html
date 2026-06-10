@@ -686,6 +686,7 @@
                             <button class="ee-btn ghost" data-p86-icon="exports" onclick="exportJobsToCSV()" title="Export the job list as CSV">Export CSV</button>
                             <button class="ee-btn ghost" onclick="window.print()" title="Print the job list">Print</button>
                             <button class="ee-btn ghost" onclick="showArchivedJobs()" title="Show archived jobs">Archived</button>
+                            <button class="ee-btn ghost" id="jobs-map-toggle" onclick="toggleJobsMapView()" title="Show jobs on a map (pins come from each job's geocoded address)">&#x1F5FA; Map</button>
                             <span class="p86-ask86-mount" style="margin-left:auto;"></span>
                         </div>
 
@@ -750,6 +751,9 @@
                                 <tbody></tbody>
                             </table>
                         </div>
+                        <!-- Jobs map view — toggled by the toolbar's 🗺 Map button.
+                             Reuses the projects map pane (list + Google Map). -->
+                        <div id="jobs-map-host" class="p86-projects-map-host" style="display:none;"></div>
                     </div>
 
                     <div id="archived-jobs-list" style="display:none;"></div>
@@ -1260,6 +1264,7 @@
                                     <option value="no_opportunity">No Opportunity</option>
                                 </select>
                                 <input type="text" id="leads-search" oninput="renderLeadsList()" placeholder="Search leads…" style="margin-left:auto;min-width:220px;" />
+                                <button class="ee-btn ghost" id="leads-map-toggle" onclick="toggleLeadsMapView()" title="Show leads on a map (pins come from each lead's geocoded address)" style="margin-left:8px;white-space:nowrap;">&#x1F5FA; Map</button>
                                 <!-- Global Ask 86 badge in the right corner of the action bar. -->
                                 <span class="p86-ask86-mount"></span>
                             </div>
@@ -2925,7 +2930,7 @@
          Leads lists. Loads BEFORE those renderers so window.p86Tables is
          ready the first time they build their tables. -->
     <script src="js/table-enhancements.js?v=5"></script>
-    <script src="js/leads.js?v=41"></script>
+    <script src="js/leads.js?v=42"></script>
     <script src="js/job-costs-import.js?v=4"></script>
     <script src="js/qb-costs-view.js?v=11"></script>
     <script src="js/insights.js?v=7"></script>
@@ -2942,7 +2947,7 @@
          reference window.p86Maps + window.p86TagIcons. -->
     <script src="js/maps-loader.js?v=2"></script>
     <script src="js/tag-icons.js?v=1"></script>
-    <script src="js/projects-map.js?v=5"></script>
+    <script src="js/projects-map.js?v=6"></script>
     <script src="js/projects-pairs.js?v=1"></script>
     <!-- Report template registry (Wave B). Eight construction report
          templates (walkthrough, daily-log, weekly-progress, etc.)
@@ -2951,12 +2956,12 @@
          calls into window.p86ReportTemplates. -->
     <script src="js/report-templates.js?v=1"></script>
     <script src="js/report-style-packs.js?v=2"></script>
-    <script src="js/projects.js?v=56"></script>
+    <script src="js/projects.js?v=57"></script>
     <!-- Shared pricing pipeline — math used by estimate-editor +
          estimate-preview + the upcoming change-order-editor. Loads
          BEFORE any of them so window.p86Pricing is ready. -->
     <script src="js/pricing-pipeline.js?v=1"></script>
-    <script src="js/jobs.js?v=87"></script>
+    <script src="js/jobs.js?v=88"></script>
     <script src="js/job-workflow-ui.js?v=2"></script>
     <script src="js/estimates.js?v=40"></script>
     <script src="js/proposal.js?v=25"></script>

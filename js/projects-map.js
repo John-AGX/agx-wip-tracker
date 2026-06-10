@@ -75,24 +75,27 @@
     return { lat: lat, lng: lng };
   }
 
-  function listRowHTML(p, active) {
+  // Adapter-aware row builder. opts carries getName/getAddress/getMeta so the
+  // same pane renders projects (default), leads, or jobs.
+  function listRowHTML(opts, p, active) {
     var coords = projectCoords(p);
-    var coverUrl = p.cover_thumb_url || '';
-    var thumb = coverUrl
-      ? '<img src="' + escapeAttr(coverUrl) + '" alt="" class="p86-projects-map-list-thumb" />'
-      : '<div class="p86-projects-map-list-thumb p86-projects-map-list-thumb-empty">📸</div>';
+    var thumb = '';
+    if (opts.showThumb) {
+      var coverUrl = p.cover_thumb_url || '';
+      thumb = coverUrl
+        ? '<img src="' + escapeAttr(coverUrl) + '" alt="" class="p86-projects-map-list-thumb" />'
+        : '<div class="p86-projects-map-list-thumb p86-projects-map-list-thumb-empty">📸</div>';
+    }
     return '<div class="p86-projects-map-list-row' + (active ? ' active' : '') +
            (coords ? '' : ' p86-projects-map-list-row-unmapped') +
-           '" data-id="' + escapeAttr(p.id) + '" title="Click to focus map · double-click to open project">' +
+           '" data-id="' + escapeAttr(p.id) + '" title="Click to focus map · double-click to open">' +
       thumb +
       '<div class="p86-projects-map-list-body">' +
         '<div class="p86-projects-map-list-name">' +
-          statusEmoji(p) + ' ' + escapeHTML(p.name || 'Untitled') +
+          statusEmoji(p) + ' ' + escapeHTML(opts.getName(p)) +
         '</div>' +
-        '<div class="p86-projects-map-list-addr">' + escapeHTML(p.address_text || '(no address)') + '</div>' +
-        '<div class="p86-projects-map-list-meta">📷 ' + Number(p.photo_count || 0) +
-          ' · ' + escapeHTML(fmtRelative(p.updated_at)) +
-        '</div>' +
+        '<div class="p86-projects-map-list-addr">' + escapeHTML(opts.getAddress(p) || '(no address)') + '</div>' +
+        '<div class="p86-projects-map-list-meta">' + escapeHTML(opts.getMeta(p)) + '</div>' +
       '</div>' +
     '</div>';
   }
@@ -105,15 +108,28 @@
     if (!host) return null;
     opts = opts || {};
     projects = projects || [];
+    // Entity adapters — defaults preserve the original projects behavior;
+    // leads/jobs pass their own getName/getAddress/getMeta.
+    opts.getName = opts.getName || function(p) { return p.name || 'Untitled'; };
+    opts.getAddress = opts.getAddress || function(p) { return p.address_text || ''; };
+    opts.getMeta = opts.getMeta || function(p) { return '📷 ' + Number(p.photo_count || 0) + ' · ' + fmtRelative(p.updated_at); };
+    opts.showThumb = opts.showThumb !== false;
+    opts.entityLabel = opts.entityLabel || 'projects';
+    // Info-window "Open" anchors dispatch through this registry so leads/jobs
+    // open their own detail instead of the hardcoded window.openProject.
+    window.__p86MapOpen = function(id) {
+      if (typeof opts.onPin === 'function') opts.onPin(id);
+      else if (typeof window.openProject === 'function') window.openProject(id);
+    };
 
     var mapped = projects.filter(projectCoords);
     var unmapped = projects.filter(function(p) { return !projectCoords(p); });
 
-    // No projects with coords AND no photo layer fallback — pure empty.
+    // No rows with coords AND no photo layer fallback — pure empty.
     if (!mapped.length && !(opts.photoLayer && opts.photos && opts.photos.length)) {
       host.innerHTML = emptyHTML(
-        'No projects with geocoded addresses yet. Save a project address to plot it on the map.' +
-        (unmapped.length ? ' (' + unmapped.length + ' project(s) without coords)' : '')
+        'No ' + opts.entityLabel + ' with geocoded addresses yet. Save an address to plot it on the map.' +
+        (unmapped.length ? ' (' + unmapped.length + ' without coords)' : '')
       );
       return null;
     }
@@ -124,12 +140,12 @@
     host.innerHTML =
       '<div class="p86-projects-map-pane">' +
         '<div class="p86-projects-map-list" id="p86ProjMapList">' +
-          mapped.map(function(p) { return listRowHTML(p, initial && p.id === initial.id); }).join('') +
+          mapped.map(function(p) { return listRowHTML(opts, p, initial && p.id === initial.id); }).join('') +
           (unmapped.length
             ? '<div class="p86-projects-map-unmapped-header">Unmapped (' + unmapped.length + ')</div>' +
               unmapped.map(function(p) {
                 return '<div class="p86-projects-map-list-row p86-projects-map-list-row-unmapped" data-id="' + escapeAttr(p.id) + '">' +
-                  '<div class="p86-projects-map-list-name">' + escapeHTML(p.name || 'Untitled') + '</div>' +
+                  '<div class="p86-projects-map-list-name">' + escapeHTML(opts.getName(p)) + '</div>' +
                   '<div class="p86-projects-map-list-addr">No coords</div>' +
                 '</div>';
               }).join('')
@@ -222,7 +238,7 @@
       markersById[p.id] = marker;
       bounds.extend(c);
       marker.addListener('click', function() {
-        infoWindow.setContent(infoContentHTML(p));
+        infoWindow.setContent(infoContentHTML(opts, p));
         infoWindow.open(map, marker);
         listEl.querySelectorAll('.p86-projects-map-list-row').forEach(function(row) {
           row.classList.toggle('active', row.getAttribute('data-id') === String(p.id));
@@ -298,14 +314,16 @@
     }
   }
 
-  function infoContentHTML(p) {
+  function infoContentHTML(opts, p) {
     // Plain HTML — Google Maps strips most styling but keeps inline
-    // styles + img tags. Anchor with onclick to open via window.openProject.
+    // styles + img tags. Anchor dispatches through __p86MapOpen (set per
+    // render) so each entity type opens its own detail view.
+    var addr = opts.getAddress(p);
     return '<div style="min-width:200px;font-family:system-ui,sans-serif;">' +
-      '<div style="font-size:13px;font-weight:600;color:#111;margin-bottom:2px;">' + escapeHTML(p.name || 'Untitled') + '</div>' +
-      (p.address_text ? '<div style="font-size:11px;color:#555;margin-bottom:6px;">' + escapeHTML(p.address_text) + '</div>' : '') +
+      '<div style="font-size:13px;font-weight:600;color:#111;margin-bottom:2px;">' + escapeHTML(opts.getName(p)) + '</div>' +
+      (addr ? '<div style="font-size:11px;color:#555;margin-bottom:6px;">' + escapeHTML(addr) + '</div>' : '') +
       '<a href="#" style="font-size:12px;color:#0a66c2;text-decoration:none;font-weight:600;" ' +
-        'onclick="event.preventDefault();window.openProject&&window.openProject(\'' + escapeAttr(p.id) + '\');">Open project →</a>' +
+        'onclick="event.preventDefault();window.__p86MapOpen&&window.__p86MapOpen(\'' + escapeAttr(p.id) + '\');">Open →</a>' +
     '</div>';
   }
 
