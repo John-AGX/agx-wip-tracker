@@ -1025,32 +1025,13 @@
   }
 
   // ── Toolbar + layers UI ─────────────────────────────────────────
-  var TOOLS_KEY = 'p86SheetToolsCollapsed';
-  function toolsCollapsed() { try { return localStorage.getItem(TOOLS_KEY) === '1'; } catch (e) { return false; } }
-  // One-time stylesheet for the slide-out tool drawer (kept self-contained in
-  // the overlay so the editor doesn't depend on app CSS).
+  // One-time stylesheet for the editor ribbon (kept self-contained in the overlay
+  // so the editor doesn't depend on app CSS).
   function injectToolStyle() {
     if (document.getElementById('p86se-tools-style')) return;
     var st = document.createElement('style');
     st.id = 'p86se-tools-style';
     st.textContent =
-      '#p86-sheet-tools{transition:width .18s ease,flex-basis .18s ease;}' +
-      '#p86-sheet-tools .p86se-thead{display:flex;align-items:center;justify-content:space-between;gap:6px;height:26px;margin-bottom:4px;}' +
-      '#p86-sheet-tools .p86se-ttitle{font-size:10px;font-weight:800;letter-spacing:1px;color:#7c8aa0;text-transform:uppercase;white-space:nowrap;overflow:hidden;}' +
-      '#p86-sheet-tools .p86se-ttoggle{flex:0 0 auto;width:26px;height:26px;display:inline-flex;align-items:center;justify-content:center;background:transparent;border:0;border-radius:6px;color:#9aa;cursor:pointer;font-size:15px;}' +
-      '#p86-sheet-tools .p86se-ttoggle:hover{background:rgba(255,255,255,0.07);color:#fff;}' +
-      '#p86-sheet-tools .p86se-tgrp{font-size:9.5px;font-weight:800;letter-spacing:.6px;color:#5f6b7e;text-transform:uppercase;margin:8px 2px 3px;white-space:nowrap;overflow:hidden;}' +
-      '#p86-sheet-tools .p86se-tbtn{display:flex;align-items:center;gap:9px;width:100%;height:34px;padding:0 8px;box-sizing:border-box;background:rgba(255,255,255,0.05);color:#ddd;border:1px solid #444;border-radius:6px;cursor:pointer;line-height:1;text-align:left;}' +
-      '#p86-sheet-tools .p86se-tbtn:hover{background:rgba(255,255,255,0.1);}' +
-      '#p86-sheet-tools .p86se-tbtn .g{flex:0 0 18px;width:18px;text-align:center;font-size:16px;}' +
-      '#p86-sheet-tools .p86se-tbtn .l{font-size:11.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
-      // collapsed (icon-rail) state
-      '#p86-sheet-tools.collapsed{align-items:center;}' +
-      '#p86-sheet-tools.collapsed .p86se-thead{justify-content:center;}' +
-      '#p86-sheet-tools.collapsed .p86se-ttitle{display:none;}' +
-      '#p86-sheet-tools.collapsed .p86se-tgrp{font-size:0;height:1px;width:24px;margin:6px auto;padding:0;background:#3a3a4a;color:transparent;}' +
-      '#p86-sheet-tools.collapsed .p86se-tbtn{justify-content:center;gap:0;width:40px;padding:0;}' +
-      '#p86-sheet-tools.collapsed .p86se-tbtn .l{display:none;}' +
       // ── AutoCAD-style ribbon (top) ──
       '#p86-sheet-ribbon{flex:0 0 auto;margin-bottom:10px;background:linear-gradient(180deg,#1a1f2b 0%,#12151d 60%,#0f1219 100%);border:1px solid #2c3242;border-radius:11px;overflow:hidden;box-shadow:0 2px 10px rgba(0,0,0,0.35),inset 0 1px 0 rgba(255,255,255,0.03);}' +
       '#p86-sheet-ribbon .p86rb-tabs{display:flex;gap:2px;padding:6px 10px 0;border-bottom:1px solid #2a3142;background:rgba(0,0,0,0.22);}' +
@@ -1074,17 +1055,6 @@
       '#p86-sheet-ribbon .p86rb-btn.sm .g{width:17px;height:17px;flex:0 0 17px;}' +
       '#p86-sheet-ribbon .p86rb-btn.sm .l{font-size:11px;font-weight:600;white-space:nowrap;}';
     document.head.appendChild(st);
-  }
-  function applyToolsCollapsed(collapsed) {
-    var bar = S.overlay.querySelector('#p86-sheet-tools'); if (!bar) return;
-    bar.classList.toggle('collapsed', collapsed);
-    var w = collapsed ? 54 : 190;
-    bar.style.width = w + 'px'; bar.style.flexBasis = w + 'px'; bar.style.flex = '0 0 ' + w + 'px';
-    bar.style.alignItems = collapsed ? 'center' : 'stretch';
-    var tg = bar.querySelector('.p86se-ttoggle');
-    if (tg) { tg.textContent = collapsed ? '»' : '«'; tg.title = collapsed ? 'Expand tools' : 'Collapse tools'; }
-    // Canvas is flex:1 — recompute its pixel size after the width transition settles.
-    setTimeout(function () { if (S) { sizeCanvas(false); repaint(); } }, 200);
   }
   // Build the AutoCAD-style top ribbon (tabs → panels → tool buttons). Kept named
   // buildToolbar so the existing open() call + setTool refresh hooks are unchanged.
