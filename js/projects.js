@@ -360,7 +360,11 @@
                 ? '<div id="p86ProjMapHost" class="p86-projects-map-host"></div>' +
                   (function() {
                     var unmapped = projects.filter(function(p) {
-                      return !(Number.isFinite(Number(p.geocode_lat)) && Number.isFinite(Number(p.geocode_lng)));
+                      var lat = Number(p.geocode_lat), lng = Number(p.geocode_lng);
+                      // Finite, in real-world range, and not 0,0 "null island".
+                      var valid = Number.isFinite(lat) && Number.isFinite(lng) &&
+                        !(lat === 0 && lng === 0) && lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180;
+                      return !valid;
                     });
                     if (!unmapped.length) return '';
                     return '<div class="p86-projects-unmapped"><strong>Unmapped (' + unmapped.length + ')</strong> · ' +

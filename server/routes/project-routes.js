@@ -21,11 +21,29 @@
 const express = require('express');
 const { pool } = require('../db');
 const { requireAuth, requireCapability } = require('../auth');
+const { geocodeAddress } = require('../geocoder');
 
 const router = express.Router();
 
 function newId() {
   return 'proj_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+}
+
+// Geocode a project's address (free US Census geocoder) and persist real
+// lat/lng so the projects map can plot a pin. Best-effort: an unmatched /
+// foreign address or a network error leaves the row's coords untouched (the
+// client never plots 0,0 or out-of-range coords anyway).
+async function geocodeProject(id, orgId, addr) {
+  try {
+    if (!addr) return;
+    const g = await geocodeAddress(addr);
+    if (g && Number.isFinite(g.lat) && Number.isFinite(g.lng) && !(g.lat === 0 && g.lng === 0)) {
+      await pool.query(
+        'UPDATE projects SET geocode_lat = $1, geocode_lng = $2 WHERE id = $3 AND organization_id = $4',
+        [g.lat, g.lng, id, orgId]
+      );
+    }
+  } catch (e) { console.error('[projects] geocode error:', e && e.message); }
 }
 
 // Resolve the caller's organization_id. Returns null when the user
@@ -302,7 +320,17 @@ router.post('/', requireAuth, requireCapability('LEADS_EDIT'), async (req, res) 
     const sql = 'INSERT INTO projects (' + cols.join(', ') + ') VALUES (' + vals.join(', ') + ') RETURNING *';
     const { rows } = await pool.query(sql, params);
     recordActivity(id, req.user.id, 'created', { name: name });
-    res.json({ project: rows[0] });
+    let project = rows[0];
+    // Have an address but no usable coords → geocode it so the map can pin it
+    // (instead of falling back to 0,0 / the "Unmapped" list).
+    const haveCoords = Number.isFinite(Number(project.geocode_lat)) && Number.isFinite(Number(project.geocode_lng))
+      && !(Number(project.geocode_lat) === 0 && Number(project.geocode_lng) === 0);
+    if (project.address_text && !haveCoords) {
+      await geocodeProject(id, orgId, project.address_text);
+      const re = await pool.query('SELECT * FROM projects WHERE id = $1', [id]);
+      if (re.rowCount) project = re.rows[0];
+    }
+    res.json({ project });
   } catch (e) {
     console.error('POST /api/projects error:', e);
     res.status(500).json({ error: 'Server error' });
@@ -439,7 +467,14 @@ router.patch('/:id', requireAuth, requireCapability('LEADS_EDIT'), async (req, r
       recordActivity(req.params.id, req.user.id, kind, detail);
     });
 
-    res.json({ project: r.rows[0] });
+    // Address changed → re-geocode so the map pin follows the new address.
+    let project = r.rows[0];
+    if (changedFields.address_text) {
+      await geocodeProject(req.params.id, orgId, project.address_text);
+      const re = await pool.query('SELECT * FROM projects WHERE id = $1', [req.params.id]);
+      if (re.rowCount) project = re.rows[0];
+    }
+    res.json({ project });
   } catch (e) {
     console.error('PATCH /api/projects/:id error:', e);
     res.status(500).json({ error: 'Server error' });
@@ -465,6 +500,28 @@ router.delete('/:id', requireAuth, requireCapability('LEADS_EDIT'), async (req, 
     res.status(500).json({ error: 'Server error' });
   }
 });
+
+// ── One-time-ish backfill ───────────────────────────────────────────
+// Geocode existing projects that have an address but no usable coords
+// (NULL or 0,0 — the legacy state that pinned them at "null island").
+// Best-effort + throttled; runs shortly after boot. Projects that already
+// have real coords are skipped by the WHERE filter.
+async function backfillProjectGeocodes() {
+  try {
+    const { rows } = await pool.query(
+      "SELECT id, organization_id, address_text FROM projects " +
+      "WHERE address_text IS NOT NULL AND btrim(address_text) <> '' " +
+      "AND (geocode_lat IS NULL OR geocode_lng IS NULL OR (geocode_lat = 0 AND geocode_lng = 0)) " +
+      "AND archived_at IS NULL LIMIT 300"
+    );
+    for (const p of rows) {
+      await geocodeProject(p.id, p.organization_id, p.address_text);
+      await new Promise(function (r) { setTimeout(r, 250); });   // be gentle with the free geocoder
+    }
+    if (rows.length) console.log('[projects] geocode backfill: processed ' + rows.length + ' project(s)');
+  } catch (e) { console.error('[projects] geocode backfill error:', e && e.message); }
+}
+setTimeout(function () { backfillProjectGeocodes(); }, 9000);   // after boot settles
 
 // Expose recordActivity for sibling route modules (pairs, future
 // reports) so they can post into the same activity feed without

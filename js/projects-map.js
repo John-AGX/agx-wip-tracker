@@ -66,8 +66,13 @@
   function projectCoords(p) {
     var lat = Number(p.geocode_lat);
     var lng = Number(p.geocode_lng);
-    if (Number.isFinite(lat) && Number.isFinite(lng)) return { lat: lat, lng: lng };
-    return null;
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+    // 0,0 is "Null Island" in the Atlantic — a project with a real address that
+    // was never geocoded often stores 0/0. Never plot it; treat as unmapped.
+    if (lat === 0 && lng === 0) return null;
+    // Reject anything outside real-world lat/lng ranges (bad/garbage data).
+    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;
+    return { lat: lat, lng: lng };
   }
 
   function listRowHTML(p, active) {
