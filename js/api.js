@@ -26,12 +26,30 @@
       if (typeof location !== 'undefined') location.reload();
       throw new Error('Session expired');
     }
-    return r.json().then(function(data) {
+    // Parse via text so an empty / non-JSON body (server mid-restart during a
+    // deploy, proxy error page, dropped connection) yields a readable error
+    // instead of the raw "Unexpected end of JSON input" from r.json().
+    return r.text().then(function(txt) {
+      var data = null;
+      if (txt && txt.length) {
+        try { data = JSON.parse(txt); }
+        catch (e) {
+          var perr = new Error(r.ok ? 'Server returned an unreadable response — try again in a moment.'
+                                    : ('HTTP ' + r.status));
+          perr.status = r.status;
+          throw perr;
+        }
+      }
       if (!r.ok) {
         var err = new Error((data && data.error) || ('HTTP ' + r.status));
         err.status = r.status;
         err.data = data;
         throw err;
+      }
+      if (data == null) {
+        var eerr = new Error('Empty response from server — it may be restarting. Try again in a moment.');
+        eerr.status = r.status;
+        throw eerr;
       }
       return data;
     });

@@ -5694,6 +5694,7 @@
     if (ctx.kind === 'client') opts.client_id = ctx.id;
 
     api().list(opts).then(function(r) {
+      ctx._retried = false;
       var rows = (r && r.projects) || [];
       var newBtn = '<button class="ee-btn secondary p86-proj-linked-newbtn" onclick="window.p86Projects.createForEntity(\'' + escapeAttr(ctx.kind) + '\', \'' + escapeAttr(ctx.id) + '\')">&#x2795; New Project</button>';
       if (!rows.length) {
@@ -5719,7 +5720,20 @@
         '</div>';
       }).join('') + newBtn;
     }).catch(function(e) {
-      host.innerHTML = '<div style="font-size:12px;color:#f87171;padding:6px 0;">Failed to load: ' + escapeHTML(e.message || e) + '</div>';
+      // Transient failures (server restarting during a deploy, network blip)
+      // are the common case here — retry once quietly before surfacing, and
+      // make the surfaced error itself retryable.
+      if (!ctx._retried) {
+        ctx._retried = true;
+        setTimeout(function() { renderLinkedProjectsPanel(host, ctx); }, 1500);
+        return;
+      }
+      ctx._retried = false;
+      host.innerHTML =
+        '<div style="font-size:12px;color:#f87171;padding:6px 0;">Couldn’t load projects: ' + escapeHTML(e.message || e) + '</div>' +
+        '<button class="ee-btn secondary" style="font-size:11px;">Retry</button>';
+      var rb = host.querySelector('button');
+      if (rb) rb.onclick = function() { renderLinkedProjectsPanel(host, ctx); };
     });
   }
   window.renderLinkedProjectsPanel = renderLinkedProjectsPanel;
