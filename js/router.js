@@ -71,7 +71,7 @@
   // TAB_TITLES key); the URL slug for it is '/files' — friendlier and
   // matches the header icon's purpose. parsePath/serializeRoute do the
   // translation.
-  var KNOWN_TOP_TABS = ['summary', 'my-files', 'jobs', 'estimates', 'schedule', 'plans', 'insights', 'admin'];
+  var KNOWN_TOP_TABS = ['summary', 'my-files', 'jobs', 'estimates', 'schedule', 'plans', 'insights', 'admin', 'projects'];
 
   // ── URL <-> route object ──────────────────────────────────────
   function parsePath(pathname) {
@@ -98,6 +98,15 @@
     if (top === 'subs') {
       route.top = 'estimates'; route.estSub = 'subs';
       if (parts[1]) route.subId = parts[1];
+      return route;
+    }
+    // /leads[/:id] — same pseudo-top-level treatment (IA-C). Leads reads
+    // as a first-class destination in the URL bar even though its UI
+    // still lives under #estimates. Old /estimates/leads/:id links keep
+    // parsing below; serializeRoute emits /leads going forward.
+    if (top === 'leads') {
+      route.top = 'estimates'; route.estSub = 'leads';
+      if (parts[1]) route.leadId = parts[1];
       return route;
     }
     if (KNOWN_TOP_TABS.indexOf(top) === -1) return route;
@@ -192,8 +201,12 @@
           ? '/subs/' + encodeURIComponent(route.subId)
           : '/subs';
       }
+      // Leads surfaces at /leads[/:id] (IA-C) — first-class URL like
+      // clients/subs above. parsePath still accepts the legacy
+      // /estimates/leads/:id shape for old bookmarks.
+      if (route.leadId) return '/leads/' + encodeURIComponent(route.leadId);
+      if (route.estSub === 'leads') return '/leads';
       if (route.estId) return '/estimates/edit/' + encodeURIComponent(route.estId);
-      if (route.leadId) return '/estimates/leads/' + encodeURIComponent(route.leadId);
       if (route.estSub) return '/estimates/' + route.estSub;
       return '/estimates';
     }

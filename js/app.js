@@ -1474,7 +1474,8 @@
             'my-tasks': 'Tasks',
             plans:      'Plans & Takeoffs',
             insights:   'Insights',
-            admin:      'Admin'
+            admin:      'Admin',
+            projects:   'Projects'
         };
 
         // Stale-nav threshold. After this long without activity, the
@@ -1561,6 +1562,15 @@
                     window.switchEstimatesSubTab(subName);
                 } else {
                     renderEstimatesList();
+                }
+            } else if (tabName === 'projects') {
+                // IA-B: Projects is a true top-level page — mount the same
+                // list renderer the My Files __projects__ virtual folder used.
+                var projHost = document.getElementById('projectsPageHost');
+                if (projHost && typeof window.renderProjectsInto === 'function') {
+                    window.renderProjectsInto(projHost);
+                } else if (projHost) {
+                    projHost.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);">Projects module not loaded.</div>';
                 }
             } else if (tabName === 'schedule') {
                 if (typeof window.renderSchedule === 'function') window.renderSchedule();

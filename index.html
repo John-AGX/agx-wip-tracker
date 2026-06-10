@@ -525,14 +525,12 @@
                         <div class="app-nav-group-label">Sales</div>
                         <!-- Leads + Estimates are flat top-level rows under SALES
                              (matching how Schedule + Jobs sit under OPERATIONS).
-                             Pipeline order: Leads → Estimates. Clients,
-                             Subs / Vendors, and Internal Users are NOT in the
-                             sidebar — they live in the header directory
-                             popover (the diamond icon, top-right). The shared
-                             /estimates page still drives all four directory
-                             screens internally via data-est-subtab, so the
-                             popover items still route correctly through the
-                             same delegated handler. -->
+                             Pipeline order: Leads → Estimates. Clients and
+                             Subs / Vendors live in the DIRECTORY group below
+                             (IA-A); Internal Users stays header-popover/Admin
+                             only. The shared /estimates page still drives all
+                             four directory screens internally via
+                             data-est-subtab through the delegated handler. -->
                         <button class="tab-btn" data-tab="estimates" data-est-subtab="leads" data-virtual-tab="leads" data-p86-icon="leads" data-cap="LEADS_VIEW" title="Leads"><span class="app-nav-label">Leads</span></button>
                         <button class="tab-btn" data-tab="estimates" data-est-subtab="list" data-virtual-tab="estimates" data-p86-icon="estimates" data-cap="ESTIMATES_VIEW" title="Estimates"><span class="app-nav-label">Estimates</span></button>
                     </div>
@@ -540,6 +538,17 @@
                         <div class="app-nav-group-label">Operations</div>
                         <button class="tab-btn" data-tab="schedule" data-p86-icon="schedule" title="Schedule"><span class="app-nav-label">Schedule</span></button>
                         <button class="tab-btn" data-tab="jobs" data-p86-icon="wip" data-cap="JOBS_VIEW_ALL JOBS_VIEW_ASSIGNED JOBS_EDIT_ANY JOBS_EDIT_OWN" title="Jobs"><span class="app-nav-label">Jobs</span></button>
+                    </div>
+                    <div class="app-nav-group">
+                        <div class="app-nav-group-label">Directory</div>
+                        <!-- IA-A: Clients + Subs promoted from the header Directory
+                             popover into the sidebar — they're daily-use directory
+                             screens. Same routing as the popover items (the shared
+                             /estimates page drives them via data-est-subtab through
+                             the delegated handler); the popover stays as a header
+                             shortcut. Internal Users remains popover/Admin-only. -->
+                        <button class="tab-btn" data-tab="estimates" data-est-subtab="clients" data-virtual-tab="clients" data-p86-icon="id-card" data-cap="ESTIMATES_VIEW" title="Clients"><span class="app-nav-label">Clients</span></button>
+                        <button class="tab-btn" data-tab="estimates" data-est-subtab="subs" data-virtual-tab="subs" data-p86-icon="subs" title="Subs / Vendors"><span class="app-nav-label">Subs / Vendors</span></button>
                     </div>
                     <div class="app-nav-group">
                         <div class="app-nav-group-label">Company</div>
@@ -605,23 +614,22 @@
                                  mutations). -->
                             <div class="app-nav-children" role="group" aria-label="My Files folders"></div>
                         </div>
-                        <button class="tab-btn" data-tab="my-files" data-myfiles-folder="__projects__" data-p86-icon="folder" title="Projects"><span class="app-nav-label">Projects</span></button>
-                        <!-- Tools is an accordion parent — clicking the row
+                        <button class="tab-btn" data-tab="projects" data-p86-icon="folder" title="Projects"><span class="app-nav-label">Projects</span></button>
+                        <!-- IA-D: "Field Tools" (was the ambiguous "Tools" —
+                             easily confused with Plans). Clicking the row
                              opens the Field Tools grid (Margin Calc, Square
                              Footage, etc.); the caret toggles the section.
-                             Printouts is a sub-view of Tools (saved runs
-                             from the field-tool grid), so it folds under
-                             Tools here instead of standing alone in
-                             WORKSPACE. Same wiring as the Admin / My Files
+                             Printouts (saved runs from the grid) folds under
+                             it. Same wiring as the Admin / My Files
                              accordions: data-myfiles-folder + delegated
                              click handler in app.js → window.myFiles.selectFolder. -->
                         <div class="app-nav-parent" data-accordion="tools">
-                            <button class="tab-btn app-nav-parent-btn" data-tab="my-files" data-myfiles-folder="__tools__" data-p86-icon="folder" title="Tools">
-                                <span class="app-nav-label">Tools</span>
-                                <span class="app-nav-caret" role="button" tabindex="0" aria-label="Toggle Tools sub-pages" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" width="12" height="12" aria-hidden="true"><polyline points="9 18 15 12 9 6"></polyline></svg></span>
+                            <button class="tab-btn app-nav-parent-btn" data-tab="my-files" data-myfiles-folder="__tools__" data-p86-icon="folder" title="Field Tools — calculators &amp; field utilities (Margin Calc, Stairs, Square Footage…)">
+                                <span class="app-nav-label">Field Tools</span>
+                                <span class="app-nav-caret" role="button" tabindex="0" aria-label="Toggle Field Tools sub-pages" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" width="12" height="12" aria-hidden="true"><polyline points="9 18 15 12 9 6"></polyline></svg></span>
                             </button>
-                            <div class="app-nav-children" role="group" aria-label="Tools sub-pages">
-                                <button class="tab-btn app-nav-child" data-tab="my-files" data-myfiles-folder="__printouts__" data-p86-icon="folder" title="Printouts"><span class="app-nav-label">Printouts</span></button>
+                            <div class="app-nav-children" role="group" aria-label="Field Tools sub-pages">
+                                <button class="tab-btn app-nav-child" data-tab="my-files" data-myfiles-folder="__printouts__" data-p86-icon="folder" title="Printouts — saved field-tool runs"><span class="app-nav-label">Printouts</span></button>
                             </div>
                         </div>
                     </div>
@@ -1208,6 +1216,14 @@
                      calibrate + measure). Painted by renderPlansTab() in
                      js/plans.js. -->
                 <div id="plans" class="tab-content"></div>
+
+                <!-- IA-B: Projects as a true top-level page. switchTab('projects')
+                     mounts js/projects.js renderProjectsInto() here — the same
+                     renderer the My Files __projects__ virtual folder used (that
+                     folder still works for old links; the sidebar now comes here). -->
+                <div id="projects" class="tab-content">
+                    <div id="projectsPageHost"></div>
+                </div>
 
                 <!-- SCHEDULE TAB — production scheduling calendar.
                      Phase 1 = local-only persistence; Phase 2 will swap
@@ -2936,7 +2952,7 @@
     <script src="js/qb-costs-view.js?v=11"></script>
     <script src="js/insights.js?v=7"></script>
     <script src="js/schedule.js?v=34"></script>
-    <script src="js/app.js?v=81"></script>
+    <script src="js/app.js?v=82"></script>
     <script src="js/compliance-review-ui.js?v=2"></script>
     <script src="js/messaging.js?v=1b"></script>
     <script src="js/my-files.js?v=16"></script>
@@ -2994,7 +3010,7 @@
     <!-- URL router — pathname-based navigation. Loads last so all
          top-level nav functions (switchTab, editJob, etc.) exist
          before the router wraps them. -->
-    <script src="js/router.js?v=12"></script>
+    <script src="js/router.js?v=13"></script>
 
     <!-- Sidebar Recents — client-side recently-opened list. Loads after
          router.js + the entity-open modules so it can wrap editJob /
