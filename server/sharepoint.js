@@ -25,6 +25,7 @@
 'use strict';
 
 const ExcelJS = require('exceljs');
+const { safeFetch } = require('./util/ssrf-guard'); // P1-3 SSRF guard
 
 const UA = 'AGX/Project86 reference-link fetcher (project86.net)';
 const MAX_BYTES = 25 * 1024 * 1024; // 25 MB cap per workbook
@@ -73,14 +74,16 @@ function toDownloadUrl(shareUrl) {
 async function fetchWorkbookBytes(shareUrl) {
   const provider = detectProvider(shareUrl);
   const url = toDownloadUrl(shareUrl);
-  const res = await fetch(url, {
+  // P1-3 — SSRF guard: the share URL is admin-supplied and unknown
+  // providers pass through unchanged, so validate it resolves to a public
+  // host and re-validate every redirect hop before following.
+  const res = await safeFetch(url, {
     headers: {
       'User-Agent': UA,
       // Hint XLSX-friendly types so providers are more likely to
       // return binary bytes vs a JS-driven viewer page.
       'Accept': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/octet-stream, */*'
-    },
-    redirect: 'follow'
+    }
   });
   const ct = (res.headers.get('content-type') || '').toLowerCase();
 

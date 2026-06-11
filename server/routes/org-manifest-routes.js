@@ -23,6 +23,7 @@ const { pool } = require('../db');
 const { requireAuth, requireOrg, requireCapability } = require('../auth');
 const { features, whats_new } = require('../feature-catalog');
 const entitlements = require('../entitlements');
+const { safeFetch } = require('../util/ssrf-guard'); // P1-3 SSRF guard
 
 const router = express.Router();
 
@@ -427,7 +428,15 @@ router.get('/logo', requireAuth, async (req, res) => {
     }
     if (!url || !/^https?:\/\//i.test(url)) return res.status(404).end();
     if (typeof fetch !== 'function') return res.status(501).end();
-    const upstream = await fetch(url, { redirect: 'follow' });
+    // P1-3 — SSRF guard: validate the admin-set logo URL resolves to a
+    // public host and re-validate any redirect hop before following it.
+    let upstream;
+    try {
+      upstream = await safeFetch(url, {});
+    } catch (e) {
+      console.warn('GET /api/org/logo blocked by SSRF guard:', e && e.message);
+      return res.status(400).end();
+    }
     if (!upstream.ok) return res.status(502).end();
     const ct = upstream.headers.get('content-type') || 'image/png';
     if (!/^image\//i.test(ct)) return res.status(415).end();
