@@ -174,8 +174,22 @@ router.post('/register', requireAuth, requireRole('admin'), async (req, res) => 
 // schedule notifications" hints in the assignment UI.
 router.get('/users', requireAuth, async (req, res) => {
   try {
+    // P1-1 — the staff directory feeds internal assignment / crew / admin
+    // pickers. A sub-portal user has no business reading staff emails and
+    // phone numbers, so deny sub callers outright. For staff callers,
+    // exclude sub rows and scope to the caller's org (tolerant OR-IS-NULL
+    // so legacy un-stamped users stay visible to AGX).
+    if (req.user && (req.user.sub_id || req.user.role === 'sub')) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+    const orgId = req.user && req.user.organization_id;
+    const params = [];
+    let where = "WHERE role <> 'sub'";
+    if (orgId) { params.push(orgId); where += ' AND (organization_id = $1 OR organization_id IS NULL)'; }
     const { rows } = await pool.query(
-      'SELECT id, email, name, role, active, phone_number, notification_prefs, created_at, last_seen_at FROM users'
+      'SELECT id, email, name, role, active, phone_number, notification_prefs, created_at, last_seen_at FROM users ' +
+      where + ' ORDER BY name ASC',
+      params
     );
     res.json({ users: rows });
   } catch (e) {
