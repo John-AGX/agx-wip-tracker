@@ -4029,16 +4029,21 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
             }
             break;
           }
+          case 'agent.thread_context_compacted':
           case 'session.compaction_complete':
           case 'session.compacted': {
-            // Anthropic server-side compaction (compact-2026-01-12)
-            // just summarized earlier turns. Stamp the row so the
-            // sidebar / admin UI can show "last compacted N ago" and
-            // observability dashboards can alert when a long thread
-            // hasn't compacted recently. Defensive on event name —
-            // both shapes are documented variants depending on SDK
-            // version. Non-fatal on UPDATE failure (the actual
-            // compaction already happened server-side).
+            // Anthropic server-side compaction (compact-2026-01-12) just
+            // summarized earlier turns. The ACTUAL event the managed
+            // Sessions API emits in @anthropic-ai/sdk 0.94.0 is
+            // `agent.thread_context_compacted` (BetaManagedAgentsAgentThreadContextCompactedEvent);
+            // the two `session.*` names below were guesses that never
+            // matched, which is why last_compacted_at never stamped and it
+            // LOOKED like compaction never fired (Task #30). Compaction is
+            // server-managed and fires on its own token trigger — we only
+            // OBSERVE it here. Kept the legacy names as a defensive fallback
+            // in case the event is renamed on an SDK bump. Stamp the row so
+            // the sidebar / admin UI can show "last compacted N ago".
+            // Non-fatal on UPDATE failure (the compaction already happened).
             vDebug('[v2-stream] compaction event:', event.type, 'session', sessionId);
             try {
               await pool.query(
