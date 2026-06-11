@@ -349,6 +349,10 @@ router.post('/sub-portal/attachments',
       const entity_id   = String((req.body && req.body.entity_id)   || '').trim();
       const folder      = String((req.body && req.body.folder)      || 'general').trim().toLowerCase();
       if (!entity_type || !entity_id) return res.status(400).json({ error: 'entity_type and entity_id are required' });
+      // P1-4 — reject path-traversal / non-slug refs before they become a storage key.
+      if (!/^[A-Za-z0-9_-]+$/.test(entity_type) || !/^[A-Za-z0-9_-]+$/.test(entity_id)) {
+        return res.status(400).json({ error: 'Invalid entity reference' });
+      }
 
       // Grant check — the sub must have an explicit grant on
       // exactly this (entity_type, entity_id, folder) tuple.

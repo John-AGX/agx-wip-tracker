@@ -570,6 +570,13 @@ function requireDynamicCapability(getCap) {
 }
 
 function entityTypeOk(t) { return VALID_ENTITY_TYPES.has(t); }
+// P1-4 — storage keys are built as `${entityType}/${entityId}/${id}`, and
+// the local-disk backend path.joins that onto a root dir. Reject any
+// entity id that isn't a plain slug so a crafted value (e.g. containing
+// '../' or a leading slash) can't traverse out of the upload tree. Every
+// real id (lead_*, client_*, job ids, numeric user/org, project UUIDs)
+// is alnum + underscore + hyphen.
+function entityIdOk(id) { return typeof id === 'string' && id.length > 0 && id.length <= 128 && /^[A-Za-z0-9_-]+$/.test(id); }
 
 // GET /api/attachments/raw/:id — stream the attachment bytes back through
 // the API so the browser fetches them same-origin. Used by the photo
@@ -862,6 +869,10 @@ router.post('/:entityType/:entityId',
     try {
       const { entityType, entityId } = req.params;
       if (!req.file) return res.status(400).json({ error: 'file is required' });
+      // P1-4 — reject path-traversal / non-slug refs before they become a key.
+      if (!entityTypeOk(entityType) || !entityIdOk(entityId)) {
+        return res.status(400).json({ error: 'Invalid entity reference' });
+      }
 
       // Cap the per-entity total — keeps one runaway upload from hogging
       // storage. Done in JS since the count needs a SELECT either way.
@@ -1276,6 +1287,7 @@ router.post('/:id/move', requireAuth, async (req, res) => {
     if (!newType || !newId) return res.status(400).json({ error: 'entity_type and entity_id are required' });
     const VALID = ['lead', 'estimate', 'client', 'job', 'sub', 'user'];
     if (VALID.indexOf(newType) === -1) return res.status(400).json({ error: 'invalid entity_type' });
+    if (!entityIdOk(newId)) return res.status(400).json({ error: 'Invalid entity_id' }); // P1-4
 
     // Owner-or-cap gate on the SOURCE — must be allowed to move
     // files away from the current home.
@@ -1329,6 +1341,7 @@ router.post('/:id/copy', requireAuth, async (req, res) => {
     if (!newType || !newId) return res.status(400).json({ error: 'entity_type and entity_id are required' });
     const VALID = ['lead', 'estimate', 'client', 'job', 'sub', 'user'];
     if (VALID.indexOf(newType) === -1) return res.status(400).json({ error: 'invalid entity_type' });
+    if (!entityIdOk(newId)) return res.status(400).json({ error: 'Invalid entity_id' }); // P1-4
 
     // Read on source + write on destination.
     if (!(await canReadAttachment(req, src))) {
