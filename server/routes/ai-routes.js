@@ -1875,14 +1875,16 @@ async function buildEstimateContext(estimateId, includePhotos, aiPhaseOverride, 
   // `read_materials` tool. Best-effort: if the count query fails (no
   // table yet on a fresh deploy), skip silently.
   try {
+    const _ovOrgId = (organization && organization.id) || null;
     const matRes = await pool.query(
       `SELECT
-         (SELECT COUNT(*)::int FROM materials WHERE is_hidden = false) AS total,
-         (SELECT COUNT(*)::int FROM materials WHERE is_hidden = false AND last_seen >= NOW() - INTERVAL '90 days') AS recent,
+         (SELECT COUNT(*)::int FROM materials WHERE is_hidden = false AND ($1::int IS NULL OR organization_id = $1 OR organization_id IS NULL)) AS total,
+         (SELECT COUNT(*)::int FROM materials WHERE is_hidden = false AND last_seen >= NOW() - INTERVAL '90 days' AND ($1::int IS NULL OR organization_id = $1 OR organization_id IS NULL)) AS recent,
          (SELECT array_agg(DISTINCT category) FROM (
-            SELECT category FROM materials WHERE is_hidden = false AND category IS NOT NULL
+            SELECT category FROM materials WHERE is_hidden = false AND category IS NOT NULL AND ($1::int IS NULL OR organization_id = $1 OR organization_id IS NULL)
               GROUP BY category ORDER BY COUNT(*) DESC LIMIT 8
-         ) c) AS top_cats`
+         ) c) AS top_cats`,
+      [_ovOrgId]
     );
     const totalMat = matRes.rows[0].total || 0;
     const recentMat = matRes.rows[0].recent || 0;
@@ -8160,9 +8162,13 @@ async function execStaffTool(name, input, ctx) {
       const subgroup = (input && input.subgroup || '').trim();
       const category = (input && input.category || '').trim();
       const limit = Math.max(1, Math.min(100, Number(input && input.limit) || 20));
+      // Per-org catalog (John's call). Tolerant OR-IS-NULL during rollout.
+      let _matOrgId = null;
+      try { _matOrgId = await resolveOrgIdFromCtx(ctx); } catch (_) {}
       const where = ['is_hidden = false'];
       const params = [];
       let p = 1;
+      if (_matOrgId) { where.push('(organization_id = $' + p++ + ' OR organization_id IS NULL)'); params.push(_matOrgId); }
       if (subgroup) { where.push('agx_subgroup = $' + p++); params.push(subgroup); }
       if (category) { where.push('category = $' + p++); params.push(category); }
       if (q) {
@@ -8180,7 +8186,9 @@ async function execStaffTool(name, input, ctx) {
            LIMIT $${p}`,
         params
       );
-      const totalQ = await pool.query('SELECT COUNT(*)::int AS c FROM materials');
+      const totalQ = _matOrgId
+        ? await pool.query('SELECT COUNT(*)::int AS c FROM materials WHERE (organization_id = $1 OR organization_id IS NULL)', [_matOrgId])
+        : await pool.query('SELECT COUNT(*)::int AS c FROM materials');
       const total = totalQ.rows[0].c;
       if (!r.rows.length) {
         const queryDesc = q ? '"' + q + '"' : '(no filter)';
@@ -8206,9 +8214,12 @@ async function execStaffTool(name, input, ctx) {
     case 'read_purchase_history': {
       const days = Math.max(1, Math.min(730, Number(input && input.days) || 365));
       const limit = Math.max(1, Math.min(200, Number(input && input.limit) || 30));
+      let _mphOrgId = null;
+      try { _mphOrgId = await resolveOrgIdFromCtx(ctx); } catch (_) {}
       const where = [`purchase_date >= NOW() - INTERVAL '${days} days'`];
       const params = [];
       let p = 1;
+      if (_mphOrgId) { where.push('(mp.organization_id = $' + p++ + ' OR mp.organization_id IS NULL)'); params.push(_mphOrgId); }
       if (input && input.material_id) {
         params.push(Number(input.material_id));
         where.push('mp.material_id = $' + p++);

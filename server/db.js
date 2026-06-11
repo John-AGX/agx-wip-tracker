@@ -1554,9 +1554,15 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_materials_hidden ON materials(is_hidden);
     CREATE INDEX IF NOT EXISTS idx_materials_search ON materials
       USING gin(to_tsvector('english', description || ' ' || raw_description));
-    -- Natural-key dedupe — case-insensitive description per vendor.
-    CREATE UNIQUE INDEX IF NOT EXISTS idx_materials_natural_key
-      ON materials(vendor, lower(raw_description));
+    -- Natural-key dedupe — case-insensitive description per vendor, now
+    -- scoped PER-ORG (Phase F follow-up) so two tenants can each carry the
+    -- same vendor+description without the import colliding on a global
+    -- unique. The materials org backfill above already stamped every row,
+    -- so the new index sees no NULLs. Drop the old global unique, create
+    -- the org-scoped one.
+    DROP INDEX IF EXISTS idx_materials_natural_key;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_materials_natural_key_org
+      ON materials(organization_id, vendor, lower(raw_description));
 
     -- Materials Catalog Drawer phase 2 — per-user starred materials.
     -- Lets PMs pin frequent SKUs so the drawer surfaces them at the
@@ -1592,6 +1598,30 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_material_purchases_material ON material_purchases(material_id);
     CREATE INDEX IF NOT EXISTS idx_material_purchases_date ON material_purchases(purchase_date);
     CREATE INDEX IF NOT EXISTS idx_material_purchases_job ON material_purchases(job_name);
+    -- Phase F follow-up — material_purchases go org-scoped to match
+    -- materials. Same bootstrap-lowest-id idiom; prefer the parent
+    -- material's org, fall back to bootstrap for orphan rows.
+    ALTER TABLE material_purchases
+      ADD COLUMN IF NOT EXISTS organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE;
+    DO $migrate_material_purchases_org$
+    DECLARE
+      bootstrap_org_id INTEGER;
+    BEGIN
+      SELECT id INTO bootstrap_org_id
+        FROM organizations
+       WHERE archived_at IS NULL
+       ORDER BY id ASC LIMIT 1;
+      IF bootstrap_org_id IS NOT NULL THEN
+        UPDATE material_purchases mp
+           SET organization_id = COALESCE(
+                 (SELECT m.organization_id FROM materials m WHERE m.id = mp.material_id),
+                 bootstrap_org_id)
+         WHERE mp.organization_id IS NULL;
+      END IF;
+    END
+    $migrate_material_purchases_org$;
+    CREATE INDEX IF NOT EXISTS idx_material_purchases_org
+      ON material_purchases(organization_id) WHERE organization_id IS NOT NULL;
 
     -- Email send log — every transactional email goes through
     -- server/email.js which writes a row here so admins can see

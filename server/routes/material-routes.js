@@ -231,6 +231,9 @@ router.get('/', requireAuth, requireCapability('ESTIMATES_VIEW'), async (req, re
     const where = [];
     const params = [];
     let p = 1;
+    // Per-org catalog (tolerant OR-IS-NULL during rollout).
+    const orgId = req.user.organization_id;
+    where.push('(m.organization_id = $' + p++ + ' OR m.organization_id IS NULL)'); params.push(orgId);
     if (!showHidden) where.push('m.is_hidden = false');
     if (subgroup) { where.push('m.agx_subgroup = $' + p++); params.push(subgroup); }
     if (category) { where.push('m.category = $' + p++); params.push(category); }
@@ -275,7 +278,7 @@ router.get('/', requireAuth, requireCapability('ESTIMATES_VIEW'), async (req, re
        LIMIT $${limitParam}`,
       params
     );
-    const totalQ = await pool.query('SELECT COUNT(*)::int AS c FROM materials');
+    const totalQ = await pool.query('SELECT COUNT(*)::int AS c FROM materials WHERE (organization_id = $1 OR organization_id IS NULL)', [orgId]);
     res.json({ materials: rows, totalInDb: totalQ.rows[0].c });
   } catch (e) {
     console.error('GET /api/materials error:', e);
@@ -374,11 +377,12 @@ router.get('/recent', requireAuth, requireCapability('ESTIMATES_VIEW'), async (r
               r.use_count, r.last_used_at
          FROM recent_uses r
          JOIN materials m ON m.id = r.material_id AND m.is_hidden = false
+                         AND (m.organization_id = $4 OR m.organization_id IS NULL)
          LEFT JOIN user_material_favorites f
            ON f.material_id = m.id AND f.user_id = $1
         ORDER BY r.last_used_at DESC, r.use_count DESC
         LIMIT $3`,
-      [req.user.id, String(days), limit]
+      [req.user.id, String(days), limit, req.user.organization_id]
     );
     res.json({ materials: rows });
   } catch (e) {
@@ -421,8 +425,9 @@ router.put('/:id', requireAuth, requireCapability('ROLES_MANAGE'), async (req, r
     sets.push('manual_override = true');
     sets.push('updated_at = NOW()');
     params.push(req.params.id);
+    params.push(req.user.organization_id);
     // SAFE: column names iterate the hardcoded `allowed` array above (description / agx_subgroup / category / unit / is_hidden / notes).
-    await pool.query(`UPDATE materials SET ${sets.join(', ')} WHERE id = $${p}`, params);
+    await pool.query(`UPDATE materials SET ${sets.join(', ')} WHERE id = $${p} AND (organization_id = $${p + 1} OR organization_id IS NULL)`, params);
     res.json({ ok: true });
   } catch (e) {
     console.error('PUT /api/materials/:id error:', e);
@@ -449,6 +454,10 @@ router.post('/import', requireAuth, requireCapability('ROLES_MANAGE'), async (re
   const sourceFile = (req.body && req.body.source_file) || null;
   const rows = (req.body && Array.isArray(req.body.rows)) ? req.body.rows : null;
   if (!rows || !rows.length) return res.status(400).json({ error: 'rows array is required' });
+  // Per-org catalog: stamp every imported material + purchase with the
+  // caller's org, and match the natural-key upsert within that org only.
+  const orgId = req.user && req.user.organization_id;
+  if (!orgId) return res.status(400).json({ error: 'No organization context' });
 
   const client = await pool.connect();
   try {
@@ -574,8 +583,8 @@ router.post('/import', requireAuth, requireCapability('ROLES_MANAGE'), async (re
       const existRes = await client.query(
         `SELECT id, manual_override, lower(raw_description) AS key
          FROM materials
-         WHERE vendor = $1 AND lower(raw_description) = ANY($2::text[])`,
-        [vendor, lowerDescs]
+         WHERE organization_id = $1 AND vendor = $2 AND lower(raw_description) = ANY($3::text[])`,
+        [orgId, vendor, lowerDescs]
       );
       for (const row of existRes.rows) {
         existingMap.set(row.key, { id: row.id, manual_override: row.manual_override });
@@ -613,13 +622,13 @@ router.post('/import', requireAuth, requireCapability('ROLES_MANAGE'), async (re
         for (const e of slice) {
           placeholders.push(
             `($${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, ` +
-            `$${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++})`
+            `$${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++})`
           );
           params.push(
             e.vendor, e.sku, e.internet_sku, e.raw_description, e.description,
             e.hd_department, e.hd_class, e.hd_subclass, e.agx_subgroup, e.category, e.unit,
             e.last_unit_price, e.avg_unit_price, e.min_unit_price, e.max_unit_price,
-            e.total_qty, e.purchase_count, e.first_seen, e.last_seen
+            e.total_qty, e.purchase_count, e.first_seen, e.last_seen, orgId
           );
         }
         const { rows: ins } = await client.query(
@@ -627,7 +636,7 @@ router.post('/import', requireAuth, requireCapability('ROLES_MANAGE'), async (re
              (vendor, sku, internet_sku, raw_description, description,
               hd_department, hd_class, hd_subclass, agx_subgroup, category, unit,
               last_unit_price, avg_unit_price, min_unit_price, max_unit_price,
-              total_qty, purchase_count, first_seen, last_seen)
+              total_qty, purchase_count, first_seen, last_seen, organization_id)
            VALUES ${placeholders.join(',')}
            RETURNING id`,
           params
@@ -768,18 +777,18 @@ router.post('/import', requireAuth, requireCapability('ROLES_MANAGE'), async (re
         let p = 1;
         for (const ap of slice) {
           placeholders.push(
-            `($${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++})`
+            `($${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++}, $${p++})`
           );
           params.push(
             ap.material_id, ap.p.purchase_date, ap.p.store_number, ap.p.transaction_id,
             ap.p.job_name, ap.p.quantity, ap.p.unit_price, ap.p.net_unit_price,
-            ap.p.is_return, sourceFile
+            ap.p.is_return, sourceFile, orgId
           );
         }
         await client.query(
           `INSERT INTO material_purchases
              (material_id, purchase_date, store_number, transaction_id, job_name,
-              quantity, unit_price, net_unit_price, is_return, source_file)
+              quantity, unit_price, net_unit_price, is_return, source_file, organization_id)
            VALUES ${placeholders.join(',')}`,
           params
         );
@@ -814,8 +823,10 @@ router.get('/meta/categories', requireAuth, requireCapability('ESTIMATES_VIEW'),
       `SELECT category, COUNT(*)::int AS n
        FROM materials
        WHERE is_hidden = false AND category IS NOT NULL
+         AND (organization_id = $1 OR organization_id IS NULL)
        GROUP BY category
-       ORDER BY n DESC`
+       ORDER BY n DESC`,
+      [req.user.organization_id]
     );
     const counts = new Map(rows.map(r => [r.category, r.n]));
     // Merge canonical list with observed categories so the dropdown
@@ -845,7 +856,9 @@ router.post('/recategorize', requireAuth, requireCapability('ROLES_MANAGE'), asy
     const { rows } = await pool.query(
       `SELECT id, hd_department, hd_class, hd_subclass
        FROM materials
-       WHERE manual_override = false`
+       WHERE manual_override = false
+         AND (organization_id = $1 OR organization_id IS NULL)`,
+      [req.user.organization_id]
     );
     let touched = 0;
     // Group by category so we can batch updates by target value — turns
