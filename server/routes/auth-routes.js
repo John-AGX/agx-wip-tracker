@@ -1,7 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const { pool, getOrgById } = require('../db');
-const { signToken, requireAuth, requireRole, resolveUserOrg } = require('../auth');
+const { signToken, requireAuth, requireRole, resolveUserOrg, hasCapability } = require('../auth');
 const { ipLoginLimiter } = require('../rate-limit');
 
 const router = express.Router();
@@ -263,12 +263,35 @@ router.put('/users/:id/notification-prefs', requireAuth, requireRole('admin'), a
 });
 
 // PUT /api/auth/users/:id (admin only)
+// P0-3 — validate a role assignment against the roles table (the source
+// of truth, incl. custom roles) and block privilege escalation: a caller
+// may not assign any role whose capabilities include SYSTEM_ADMIN unless
+// they themselves hold SYSTEM_ADMIN. requireRole('admin') is satisfied by
+// a plain org admin, so without this an org admin could self-promote to
+// system_admin (cross-tenant) by PUTting role:'system_admin', and could
+// set an arbitrary unknown role string (users.role has no DB CHECK/FK).
+async function validateRoleAssignment(targetRole, callerUser) {
+  if (!targetRole) return null; // role field absent/empty → unchanged
+  const r = await pool.query('SELECT capabilities FROM roles WHERE name = $1', [targetRole]);
+  if (!r.rows.length) return { status: 400, error: 'Unknown role: ' + targetRole };
+  const caps = Array.isArray(r.rows[0].capabilities) ? r.rows[0].capabilities : [];
+  if (caps.indexOf('SYSTEM_ADMIN') !== -1 && !hasCapability(callerUser, 'SYSTEM_ADMIN')) {
+    return { status: 403, error: 'Only a system administrator can assign the "' + targetRole + '" role.' };
+  }
+  return null;
+}
+
 router.put('/users/:id', requireAuth, requireRole('admin'), async (req, res) => {
   try {
     const { name, role, active, phone_number, email } = req.body;
     const { rows } = await pool.query('SELECT * FROM users WHERE id = $1', [req.params.id]);
     const user = rows[0];
     if (!user) return res.status(404).json({ error: 'User not found' });
+
+    // P0-3 — gate the role field: reject unknown roles (400) and block a
+    // non-system-admin from assigning any SYSTEM_ADMIN-carrying role (403).
+    const roleErr = await validateRoleAssignment(role, req.user);
+    if (roleErr) return res.status(roleErr.status).json({ error: roleErr.error });
 
     // phone_number is optional. If present in the body:
     //   - empty string clears it (sets NULL)
