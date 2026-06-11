@@ -484,9 +484,36 @@ function newNoteId() {
   return 'note_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
 }
 
+// ──────────────────────────────────────────────────────────────────
+// P0-2 — tolerant org guard for the entity dispatchers. When a concrete
+// target row already exists but belongs to a DIFFERENT organization than
+// the applier, block the write — surfaced as "not found" (matches the
+// dispatchers' own missing-row errors AND avoids confirming the row
+// exists in another tenant). Tolerant of NULL organization_id (legacy /
+// un-stamped rows) and of $refs / creates (no concrete row yet). No-op
+// for single-tenant AGX; closes cross-org payload writes before org #2.
+// ──────────────────────────────────────────────────────────────────
+const ORG_SCOPED_TABLE = Object.freeze({
+  client: 'clients', estimate: 'estimates', job: 'jobs', lead: 'leads',
+});
+async function assertTargetOrg(dbClient, entityType, entityId, orgId) {
+  if (!orgId || !entityId || isRef(entityId)) return;
+  const table = ORG_SCOPED_TABLE[entityType];
+  if (!table) return;
+  const ok = await dbClient.query(
+    `SELECT 1 FROM ${table} WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL) LIMIT 1`,
+    [entityId, orgId]
+  );
+  if (ok.rowCount) return;                 // in-org (or NULL-org) → allow
+  const exists = await dbClient.query(`SELECT 1 FROM ${table} WHERE id = $1 LIMIT 1`, [entityId]);
+  if (exists.rowCount) throw new Error(`${entityType} not found: ${entityId}`); // cross-org → block as not-found
+  // genuinely absent → let the dispatcher's own create / not-found path run
+}
+
 async function dispatchClient(dbClient, target, refTable, ctx) {
   const ops = target.ops || {};
   resolveRefsInOps(ops, refTable);
+  await assertTargetOrg(dbClient, 'client', target.entity_id, ctx && ctx.organizationId);
 
   // Default op based on whether entity_id was provided.
   const opType = ops.op || (target.entity_id ? 'update' : 'create');
@@ -687,6 +714,7 @@ async function dispatchEstimate(dbClient, target, refTable, ctx) {
   // cross-target refs. See preRegisterEstimateRefs for the why.
   preRegisterEstimateRefs(ops, refTable);
   resolveRefsInOps(ops, refTable);
+  await assertTargetOrg(dbClient, 'estimate', target.entity_id, ctx && ctx.organizationId);
 
   const opType = ops.op || (target.entity_id ? 'update' : 'create');
 
@@ -1200,6 +1228,7 @@ async function dispatchJob(dbClient, target, refTable, ctx) {
 
   const id = resolveRef(target.entity_id, refTable);
   if (!id) throw new Error('job ops require entity_id');
+  await assertTargetOrg(dbClient, 'job', id, ctx && ctx.organizationId);
 
   const r = await dbClient.query('SELECT data FROM jobs WHERE id = $1', [id]);
   if (!r.rows.length) throw new Error(`Job not found: ${id}`);
@@ -1453,6 +1482,7 @@ function newLeadId() {
 async function dispatchLead(dbClient, target, refTable, ctx) {
   const ops = target.ops || {};
   resolveRefsInOps(ops, refTable);
+  await assertTargetOrg(dbClient, 'lead', target.entity_id, ctx && ctx.organizationId);
 
   const opType = ops.op || (target.entity_id ? 'update' : 'create');
   const fields = ops.fields || {};
@@ -1566,6 +1596,10 @@ async function dispatchSchedule(dbClient, target, refTable, ctx) {
     throw new Error('schedule ops require non-empty blocks[]');
   }
 
+  // P0-2 org scope — tolerant OR-IS-NULL (no-op for AGX). Scopes the
+  // create-time job check + the update/delete by entry org.
+  const schedOrgId = (ctx && ctx.organizationId) || null;
+
   const created = [];
   const updated = [];
   const deleted = [];
@@ -1574,7 +1608,9 @@ async function dispatchSchedule(dbClient, target, refTable, ctx) {
     if (b.op === 'create') {
       const jobId = resolveRef(b.jobId || b.job_id, refTable);
       if (!jobId) throw new Error('schedule.create requires jobId');
-      const jobChk = await dbClient.query('SELECT id FROM jobs WHERE id = $1', [jobId]);
+      const jobChk = schedOrgId
+        ? await dbClient.query('SELECT id FROM jobs WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)', [jobId, schedOrgId])
+        : await dbClient.query('SELECT id FROM jobs WHERE id = $1', [jobId]);
       if (!jobChk.rows.length) throw new Error(`schedule.create: job ${jobId} not found`);
       const id = (b.entry_id && !isRef(b.entry_id)) ? b.entry_id : newScheduleEntryId();
       const days = Math.max(1, Number(b.days || 1));
@@ -1617,16 +1653,21 @@ async function dispatchSchedule(dbClient, target, refTable, ctx) {
       if (!sets.length) continue;
       sets.push('updated_at = NOW()');
       params.push(id);
+      let schedWhere = `id = $${params.length}`;
+      if (schedOrgId) { params.push(schedOrgId); schedWhere += ` AND (organization_id = $${params.length} OR organization_id IS NULL)`; }
       const r = await dbClient.query(
-        `UPDATE schedule_entries SET ${sets.join(', ')} WHERE id = $${params.length}`,
+        `UPDATE schedule_entries SET ${sets.join(', ')} WHERE ${schedWhere}`,
         params
       );
       if (!r.rowCount) throw new Error(`schedule entry ${id} not found for update`);
       updated.push(id);
     } else if (b.op === 'delete') {
       const id = resolveRef(b.entry_id, refTable);
+      const delParams = [id];
+      let delWhere = 'id = $1';
+      if (schedOrgId) { delParams.push(schedOrgId); delWhere += ' AND (organization_id = $2 OR organization_id IS NULL)'; }
       const r = await dbClient.query(
-        'DELETE FROM schedule_entries WHERE id = $1', [id]
+        `DELETE FROM schedule_entries WHERE ${delWhere}`, delParams
       );
       if (!r.rowCount) throw new Error(`schedule entry ${id} not found for delete`);
       deleted.push(id);
@@ -1781,8 +1822,14 @@ async function dispatchSystem(dbClient, target, refTable, ctx) {
         if (!sets.length) continue;
         sets.push('updated_at = NOW()');
         vals.push(id);
+        // P0-2 — scope to the caller's org and refuse to edit system
+        // (built-in) tools via payload. Tolerant OR-IS-NULL for legacy
+        // un-stamped org tools; no-op for AGX.
+        const ftOrgId = (ctx && ctx.organizationId) || null;
+        let ftWhere = `id = $${p}`;
+        if (ftOrgId) { vals.push(ftOrgId); ftWhere += ` AND (organization_id = $${vals.length} OR organization_id IS NULL) AND is_system = false`; }
         const r = await dbClient.query(
-          `UPDATE field_tools SET ${sets.join(', ')} WHERE id = $${p}`,
+          `UPDATE field_tools SET ${sets.join(', ')} WHERE ${ftWhere}`,
           vals
         );
         if (!r.rowCount) throw new Error(`field_tool ${id} not found`);
@@ -1790,7 +1837,12 @@ async function dispatchSystem(dbClient, target, refTable, ctx) {
       } else if (ft.op === 'delete') {
         const id = resolveRef(ft.tool_id, refTable);
         if (!id) throw new Error('field_tool_ops delete requires tool_id');
-        const r = await dbClient.query('DELETE FROM field_tools WHERE id = $1', [id]);
+        // P0-2 — scope to the caller's org and never delete system tools.
+        const ftDelOrgId = (ctx && ctx.organizationId) || null;
+        const ftDelParams = [id];
+        let ftDelWhere = 'id = $1';
+        if (ftDelOrgId) { ftDelParams.push(ftDelOrgId); ftDelWhere += ' AND (organization_id = $2 OR organization_id IS NULL) AND is_system = false'; }
+        const r = await dbClient.query(`DELETE FROM field_tools WHERE ${ftDelWhere}`, ftDelParams);
         if (!r.rowCount) throw new Error(`field_tool ${id} not found`);
         archived.push({ kind: 'field_tool', id });
       } else {
@@ -1810,6 +1862,9 @@ async function dispatchSystem(dbClient, target, refTable, ctx) {
         const jobId = resolveRef(lk.job_id, refTable);
         const clientId = resolveRef(lk.client_id, refTable);
         if (!jobId || !clientId) throw new Error('link_job_to_client requires job_id + client_id');
+        // P0-2 — both ends must resolve to the caller's org.
+        await assertTargetOrg(dbClient, 'job', jobId, ctx && ctx.organizationId);
+        await assertTargetOrg(dbClient, 'client', clientId, ctx && ctx.organizationId);
         // Jobs store linked client_id inside the data JSONB blob.
         const jr = await dbClient.query('SELECT data FROM jobs WHERE id = $1', [jobId]);
         if (!jr.rows.length) throw new Error(`job ${jobId} not found`);
@@ -1825,6 +1880,9 @@ async function dispatchSystem(dbClient, target, refTable, ctx) {
         const parentId = resolveRef(lk.parent_client_id, refTable);
         if (!propId || !parentId) throw new Error('link_property_to_parent requires property_id + parent_client_id');
         if (propId === parentId) throw new Error('A client cannot be its own parent');
+        // P0-2 — both clients must belong to the caller's org.
+        await assertTargetOrg(dbClient, 'client', propId, ctx && ctx.organizationId);
+        await assertTargetOrg(dbClient, 'client', parentId, ctx && ctx.organizationId);
         const pc = await dbClient.query('SELECT id FROM clients WHERE id = $1', [parentId]);
         if (!pc.rows.length) throw new Error(`parent client ${parentId} not found`);
         const r = await dbClient.query(
@@ -1850,10 +1908,18 @@ async function dispatchSystem(dbClient, target, refTable, ctx) {
           throw new Error(`attach_files target_entity_type must be one of: ${ATTACH_ENTITY_TYPES.join(', ')} (got '${et}')`);
         }
         if (!eid) throw new Error('attach_files requires target_entity_id');
-        const ar = await dbClient.query(
-          `UPDATE attachments SET entity_type = $1, entity_id = $2 WHERE id = ANY($3::text[])`,
-          [et, String(eid), ids]
-        );
+        // P0-2 — the target entity (for the org-scoped types) must belong
+        // to the caller's org, and only the caller's own attachment rows
+        // may be re-pointed. Tolerant OR-IS-NULL; no-op for AGX.
+        if (ORG_SCOPED_TABLE[et]) await assertTargetOrg(dbClient, et, String(eid), ctx && ctx.organizationId);
+        const afOrgId = (ctx && ctx.organizationId) || null;
+        const ar = afOrgId
+          ? await dbClient.query(
+              `UPDATE attachments SET entity_type = $1, entity_id = $2 WHERE id = ANY($3::text[]) AND (organization_id = $4 OR organization_id IS NULL)`,
+              [et, String(eid), ids, afOrgId])
+          : await dbClient.query(
+              `UPDATE attachments SET entity_type = $1, entity_id = $2 WHERE id = ANY($3::text[])`,
+              [et, String(eid), ids]);
         updated.push({ kind: 'attach_files', count: ar.rowCount, target_entity_type: et, target_entity_id: String(eid) });
       } else {
         throw new Error(`link_ops[].op unsupported: ${lk.op}`);
@@ -1896,10 +1962,15 @@ async function dispatchSystem(dbClient, target, refTable, ctx) {
         created.push(id);
       } else if (w.op === 'archive') {
         const id = resolveRef(w.watch_id, refTable);
-        const r = await dbClient.query(
-          `UPDATE ai_watches SET archived_at = NOW(), enabled = false WHERE id = $1`,
-          [id]
-        );
+        // P0-2 — scope archive to the caller's org (ai_watches.organization_id
+        // is NOT NULL, so a strict equality is correct here).
+        const r = orgId
+          ? await dbClient.query(
+              `UPDATE ai_watches SET archived_at = NOW(), enabled = false WHERE id = $1 AND organization_id = $2`,
+              [id, orgId])
+          : await dbClient.query(
+              `UPDATE ai_watches SET archived_at = NOW(), enabled = false WHERE id = $1`,
+              [id]);
         if (!r.rowCount) throw new Error(`watch ${id} not found`);
         archived.push(id);
       } else {

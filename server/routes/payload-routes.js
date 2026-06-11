@@ -28,7 +28,7 @@
 const express = require('express');
 const multer = require('multer');
 const { pool } = require('../db');
-const { requireAuth, requireOrg } = require('../auth');
+const { requireAuth, requireOrg, hasCapability } = require('../auth');
 const dispatcher = require('../services/payload-dispatcher');
 const csvConverter = require('../services/csv-payload-converter');
 
@@ -260,6 +260,80 @@ router.post('/:id/reject', requireAuth, requireOrg, async (req, res) => {
 //   422 validation (unknown op / blocked field / unresolved ref)
 //   500 dispatch failure
 // ──────────────────────────────────────────────────────────────────
+// ──────────────────────────────────────────────────────────────────
+// P0-2 — apply-time capability gate.
+//
+// /apply dispatches writes to leads, clients, estimates, jobs,
+// schedules, reports, and org-config (system), but the route only
+// required auth + org. Map each target entity_type to the capability
+// its REST edit equivalent requires and verify the caller holds it
+// BEFORE the dispatcher runs, so a field_crew / sub / non-owner PM
+// can't apply a financial or lead payload they could never write via
+// the normal UI. A denial is a clean 403 that LEAVES the payload
+// 'ready' (it must not brick the row for an authorized applier).
+// ──────────────────────────────────────────────────────────────────
+const PAYLOAD_APPLY_CAP = {
+  lead:     ['LEADS_EDIT'],
+  client:   ['ESTIMATES_EDIT'],
+  estimate: ['ESTIMATES_EDIT'],
+  job:      ['JOBS_EDIT_ANY', 'JOBS_EDIT_OWN'],
+  report:   ['JOBS_EDIT_ANY', 'JOBS_EDIT_OWN'],
+  schedule: ['JOBS_VIEW_ALL'],
+  system:   ['ROLES_MANAGE'],
+};
+
+// Walk a payload's targets[] (regular + move source/dest + bulk) and
+// collect the entity types it writes, plus the job entity_ids (for the
+// JOBS_EDIT_OWN ownership sub-check).
+function collectPayloadScope(targets) {
+  const types = new Set();
+  const jobIds = new Set();
+  const visit = (t) => {
+    if (!t || typeof t !== 'object') return;
+    const et = t.entity_type ? String(t.entity_type).toLowerCase() : null;
+    if (!et) return;
+    types.add(et);
+    if (et === 'job' && t.entity_id) jobIds.add(String(t.entity_id));
+    if (et === 'job' && t.bulk && Array.isArray(t.bulk.items)) {
+      t.bulk.items.forEach((it) => { if (it && it.entity_id) jobIds.add(String(it.entity_id)); });
+    }
+  };
+  for (const t of (Array.isArray(targets) ? targets : [])) {
+    if (t && t.op === 'move') { visit(t.source); visit(t.dest); }
+    else visit(t);
+  }
+  return { types: Array.from(types), jobIds: Array.from(jobIds) };
+}
+
+// Returns null when the caller may apply this payload, else a human
+// string (mapped to 403). Async — the JOBS_EDIT_OWN path verifies
+// ownership of each targeted job.
+async function denyPayloadApply(user, payload) {
+  // Watcher-emitted payloads (user_id IS NULL) are admin-review items —
+  // any org member could previously self-apply them. Require ROLES_MANAGE.
+  if (payload.user_id == null && !hasCapability(user, 'ROLES_MANAGE')) {
+    return 'This is an admin-review (watcher) payload — applying it requires the Roles & Permissions capability.';
+  }
+  const { types, jobIds } = collectPayloadScope(payload.targets);
+  for (const et of types) {
+    const caps = PAYLOAD_APPLY_CAP[et];
+    if (!caps) continue; // unknown entity_type — the dispatcher rejects it
+    if (!caps.some((c) => hasCapability(user, c))) {
+      return 'You don\'t have permission to apply changes to ' + et + ' records (requires ' + caps.join(' or ') + ').';
+    }
+  }
+  // JOBS_EDIT_OWN-only holders may apply job payloads only to jobs they own.
+  if (jobIds.length && !hasCapability(user, 'JOBS_EDIT_ANY') && hasCapability(user, 'JOBS_EDIT_OWN')) {
+    for (const jid of jobIds) {
+      const r = await pool.query('SELECT owner_id FROM jobs WHERE id = $1', [jid]);
+      if (!r.rows.length || String(r.rows[0].owner_id) !== String(user.id)) {
+        return 'You can only apply job payloads to jobs you own.';
+      }
+    }
+  }
+  return null;
+}
+
 router.post('/:id/apply', requireAuth, requireOrg, async (req, res) => {
   const orgId = req.user.organization_id;
   const userId = req.user.id;
@@ -290,6 +364,13 @@ router.post('/:id/apply', requireAuth, requireOrg, async (req, res) => {
     if (payload.expires_at && new Date(payload.expires_at) < new Date()) {
       return res.status(410).json({ error: 'Payload expired' });
     }
+
+    // P0-2 capability gate — verify the caller may write every entity
+    // type this payload touches (and owns each targeted job, for
+    // JOBS_EDIT_OWN holders) BEFORE the dispatcher runs. 403 leaves the
+    // payload 'ready' so a later authorized applier can still use it.
+    const denial = await denyPayloadApply(req.user, payload);
+    if (denial) return res.status(403).json({ error: denial });
 
     // Hand to the dispatcher. Throws on validation errors / dispatch
     // failures — we map to the right status code below.
