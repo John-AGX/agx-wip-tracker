@@ -88,6 +88,14 @@ process.on('unhandledRejection', (reason) => {
 app.use(express.json({ limit: '10mb' }));
 app.use(cookieParser());
 
+// P1-2 — global per-IP rate guard for /api (200 req/min/IP). It was
+// defined + exported in rate-limit.js but never mounted. Sits in front
+// of the /api routers; the per-route limiters (login, AI chat) still
+// apply independently on top of this. trust proxy=1 means req.ip is the
+// real client, so this is keyed per actual client IP.
+const { ipGenericLimiter } = require('./rate-limit');
+app.use('/api', ipGenericLimiter);
+
 // API routes
 app.use('/api/auth', authRoutes);
 app.use('/api/jobs', jobRoutes);

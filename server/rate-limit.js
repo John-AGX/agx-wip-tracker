@@ -12,9 +12,9 @@
 //                         60/hour. Protects against credential-stuffing
 //                         and brute-force.
 //
-//   2. ipGenericLimiter — broad per-IP guard for unauthenticated paths.
-//                         60/min. Catches anonymous abuse before it can
-//                         exhaust DB connections.
+//   2. ipGenericLimiter — broad per-IP guard for all /api paths.
+//                         200/min. Catches anonymous/runaway abuse before
+//                         it can exhaust DB connections.
 //
 //   3. aiChatLimiter    — applied INSIDE the AI router after requireAuth
 //                         (so req.user is set). Per-user 20/min,
