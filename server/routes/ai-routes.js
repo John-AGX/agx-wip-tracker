@@ -1693,13 +1693,16 @@ async function buildEstimateContext(estimateId, includePhotos, aiPhaseOverride, 
     lines.push('# Active group: ' + activeAlt.name + (activeAlt.excludeFromTotal ? ' [EXCLUDED]' : ''));
     if (activeAlt.scope) {
       lines.push('## Scope of work for this group');
-      lines.push(activeAlt.scope);
+      // PROMPT-INJECTION DEFENSE (P1-5): scope is long free text a user
+      // (or an imported SOW) fully controls; wrap so it can't smuggle
+      // instructions into the system prompt.
+      lines.push(wrapUserData('estimate.scope', activeAlt.scope));
       lines.push('');
     }
   } else if (blob.scopeOfWork) {
     // legacy estimates that haven't been opened post-migration
     lines.push('# Scope of work');
-    lines.push(blob.scopeOfWork);
+    lines.push(wrapUserData('estimate.scope', blob.scopeOfWork));
     lines.push('');
   }
 
@@ -1946,9 +1949,10 @@ async function buildEstimateContext(estimateId, includePhotos, aiPhaseOverride, 
       lines.push('### [' + d.source + '] ' + d.filename + sizeStr + mimeBit + idBit);
       if (d.has_text) {
         lines.push('_' + d.text_chars + ' chars of extracted text on file. Preview:_');
-        lines.push('```');
-        lines.push(d.text_preview);
-        lines.push('```');
+        // PROMPT-INJECTION DEFENSE (P1-5): extracted document text is
+        // external content; wrap so an uploaded doc can't smuggle
+        // instructions into the system prompt.
+        lines.push(wrapUserData('attachment.text_preview', d.text_preview || ''));
         lines.push('_Call read_attachment_text({attachment_id:"' + d.id + '"}) to read the full body._');
       } else {
         lines.push('_(no extracted text — either an unsupported format or a scanned image. Read the rendered page images attached this turn, if any.)_');
@@ -4867,7 +4871,9 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
       const inc = fmtMoney(c.income || c.contractAmount || 0);
       const cost = fmtMoney(c.costs || c.estimatedCosts || 0);
       const desc = c.description || c.title || '(no description)';
-      lines.push('- CO ' + num + ': ' + desc + ' — income ' + inc + ', cost ' + cost + (c.status ? ' [' + c.status + ']' : ''));
+      // PROMPT-INJECTION DEFENSE (P1-5): CO descriptions are free text,
+      // often pasted from external correspondence.
+      lines.push('- CO ' + num + ': ' + wrapUserData('job.change_order', desc) + ' — income ' + inc + ', cost ' + cost + (c.status ? ' [' + c.status + ']' : ''));
     });
     lines.push('');
   } else {
