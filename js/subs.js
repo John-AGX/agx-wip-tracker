@@ -1014,10 +1014,9 @@
   // Tabs:          Additional information | Notifications | Job access
   //
   // Phase 1A delivers Contact info + Additional info (Preferences,
-  // Notes, Default payment email). Certificates / Notifications matrix
-  // / Job access are stubbed with "Phase 1B/1C" placeholders so the
-  // visual layout matches the user's reference screenshots while the
-  // backing systems land in follow-up commits.
+  // Notes, Default payment email); the Notifications matrix and Job
+  // access tabs are now wired. Only Certificates remains a placeholder
+  // pending its backing system.
   //
   // Skipped per request: Accounting + Trade agreement tabs.
   // ──────────────────────────────────────────────────────────────────

@@ -44,6 +44,14 @@ router.put('/bulk/save', requireAuth, requireCapability('ESTIMATES_EDIT'), async
     if (!Array.isArray(estimates)) {
       return res.status(400).json({ error: 'estimates array required' });
     }
+    // P3 — cap bulk sizes before opening the txn. These are far above any
+    // realistic full-portfolio save (the handler sends every estimate on
+    // each save), so they only stop a runaway / abusive payload.
+    if (estimates.length > 5000 ||
+        (Array.isArray(estimateLines) && estimateLines.length > 200000) ||
+        (Array.isArray(estimateAlternates) && estimateAlternates.length > 20000)) {
+      return res.status(400).json({ error: 'Bulk save payload too large' });
+    }
 
     const client = await pool.connect();
     try {

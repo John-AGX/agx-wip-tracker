@@ -930,11 +930,11 @@ router.post('/:entityType/:entityId',
         // + keep original. .rotate() honors EXIF orientation so phone photos
         // stop coming in sideways; the resized variants drop EXIF entirely
         // so we don't leak GPS coords from contractor phones.
-        const meta = await sharp(buf).rotate().metadata();
+        const meta = await sharp(buf, { limitInputPixels: 50000000 }).rotate().metadata();
         width = meta.width || null;
         height = meta.height || null;
-        const thumbBuf = await sharp(buf).rotate().resize(200, 200, { fit: 'cover' }).jpeg({ quality: 80 }).toBuffer();
-        const webBuf = await sharp(buf).rotate().resize(1600, 1600, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 82 }).toBuffer();
+        const thumbBuf = await sharp(buf, { limitInputPixels: 50000000 }).rotate().resize(200, 200, { fit: 'cover' }).jpeg({ quality: 80 }).toBuffer();
+        const webBuf = await sharp(buf, { limitInputPixels: 50000000 }).rotate().resize(1600, 1600, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 82 }).toBuffer();
         thumbKey = baseKey + '_thumb.jpg';
         webKey = baseKey + '_web.jpg';
         originalKey = baseKey + '_orig.' + ext;

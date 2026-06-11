@@ -6081,11 +6081,11 @@ async function execClientDirectoryToolWithCtx(name, input, ctx) {
   try {
     // Use sharp pipeline if available — same as attachment-routes.
     const sharp = require('sharp');
-    const meta = await sharp(buf).metadata();
+    const meta = await sharp(buf, { limitInputPixels: 50000000 }).metadata();
     width = meta.width || null;
     height = meta.height || null;
-    const thumbBuf = await sharp(buf).rotate().resize(200, 200, { fit: 'cover' }).jpeg({ quality: 80 }).toBuffer();
-    const webBuf   = await sharp(buf).rotate().resize(1600, 1600, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 85 }).toBuffer();
+    const thumbBuf = await sharp(buf, { limitInputPixels: 50000000 }).rotate().resize(200, 200, { fit: 'cover' }).jpeg({ quality: 80 }).toBuffer();
+    const webBuf   = await sharp(buf, { limitInputPixels: 50000000 }).rotate().resize(1600, 1600, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 85 }).toBuffer();
     thumbKey    = baseKey + '_thumb.jpg';
     webKey      = baseKey + '_web.jpg';
     originalKey = baseKey + '_orig.jpg';
@@ -9806,11 +9806,11 @@ async function attachBase64PhotosToEntity(entityType, entityId, photos, userId, 
       let width = null, height = null;
       try {
         const sharp = require('sharp');
-        const meta = await sharp(buf).metadata();
+        const meta = await sharp(buf, { limitInputPixels: 50000000 }).metadata();
         width = meta.width || null;
         height = meta.height || null;
-        const thumbBuf = await sharp(buf).rotate().resize(200, 200, { fit: 'cover' }).jpeg({ quality: 80 }).toBuffer();
-        const webBuf   = await sharp(buf).rotate().resize(1600, 1600, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 85 }).toBuffer();
+        const thumbBuf = await sharp(buf, { limitInputPixels: 50000000 }).rotate().resize(200, 200, { fit: 'cover' }).jpeg({ quality: 80 }).toBuffer();
+        const webBuf   = await sharp(buf, { limitInputPixels: 50000000 }).rotate().resize(1600, 1600, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 85 }).toBuffer();
         thumbKey    = baseKey + '_thumb.jpg';
         webKey      = baseKey + '_web.jpg';
         originalKey = baseKey + '_orig.jpg';

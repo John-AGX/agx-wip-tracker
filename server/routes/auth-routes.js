@@ -247,9 +247,13 @@ router.put('/me/notification-prefs', requireAuth, async (req, res) => {
     const prefs = (req.body && req.body.prefs && typeof req.body.prefs === 'object')
       ? req.body.prefs
       : {};
+    // P3 — cap the JSONB size. It's a small opt-out map and is shipped
+    // directory-wide via GET /users, so an oversized blob is wasteful/abusable.
+    const prefsJson = JSON.stringify(prefs);
+    if (prefsJson.length > 16384) return res.status(400).json({ error: 'Notification preferences too large' });
     await pool.query(
       'UPDATE users SET notification_prefs = $1::jsonb, updated_at = NOW() WHERE id = $2',
-      [JSON.stringify(prefs), req.user.id]
+      [prefsJson, req.user.id]
     );
     res.json({ ok: true, prefs: prefs });
   } catch (e) {
@@ -263,11 +267,13 @@ router.put('/users/:id/notification-prefs', requireAuth, requireRole('admin'), a
     const prefs = (req.body && req.body.prefs && typeof req.body.prefs === 'object')
       ? req.body.prefs
       : {};
+    const prefsJson = JSON.stringify(prefs); // P3 — cap JSONB size (see /me handler)
+    if (prefsJson.length > 16384) return res.status(400).json({ error: 'Notification preferences too large' });
     const { rows } = await pool.query('SELECT id FROM users WHERE id = $1', [req.params.id]);
     if (!rows.length) return res.status(404).json({ error: 'User not found' });
     await pool.query(
       'UPDATE users SET notification_prefs = $1::jsonb, updated_at = NOW() WHERE id = $2',
-      [JSON.stringify(prefs), req.params.id]
+      [prefsJson, req.params.id]
     );
     res.json({ ok: true, prefs: prefs });
   } catch (e) {
@@ -361,8 +367,8 @@ router.put('/users/:id', requireAuth, requireRole('admin'), async (req, res) => 
 router.put('/users/:id/password', requireAuth, requireRole('admin'), async (req, res) => {
   try {
     const { newPassword } = req.body;
-    if (!newPassword || newPassword.length < 4) {
-      return res.status(400).json({ error: 'New password required (min 4 chars)' });
+    if (!newPassword || newPassword.length < 8) {
+      return res.status(400).json({ error: 'New password required (min 8 chars)' });
     }
     const { rows } = await pool.query('SELECT id, email, name FROM users WHERE id = $1', [req.params.id]);
     if (!rows.length) return res.status(404).json({ error: 'User not found' });
@@ -432,6 +438,7 @@ router.put('/password', requireAuth, async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
     if (!currentPassword || !newPassword) return res.status(400).json({ error: 'Both passwords required' });
+    if (newPassword.length < 8) return res.status(400).json({ error: 'New password must be at least 8 characters' }); // P3
 
     const { rows } = await pool.query('SELECT * FROM users WHERE id = $1', [req.user.id]);
     if (!bcrypt.compareSync(currentPassword, rows[0].password_hash)) {

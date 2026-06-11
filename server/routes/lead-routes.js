@@ -281,6 +281,9 @@ router.post('/import', requireAuth, requireCapability('LEADS_EDIT'), async (req,
     if (!incoming || !incoming.length) {
       return res.status(400).json({ error: 'rows array is required' });
     }
+    if (incoming.length > 5000) { // P3 — cap import batch size (BT imports are far smaller)
+      return res.status(400).json({ error: 'Import batch too large (max 5000 rows)' });
+    }
 
     // Build a name -> client.id index for fast lookup. We match either
     // client.name or client.company_name so BT's "ProCura - La Hacienda
