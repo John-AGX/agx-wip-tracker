@@ -30,6 +30,8 @@ const { pool } = require('../db');
 const { requireAuth, requireCapability, signToken } = require('../auth');
 const { sendEmail, isEnabled: emailIsEnabled } = require('../email');
 const { storage } = require('../storage');
+// P0-4 — same byte sniffing + SVG sanitization the PM upload path uses.
+const { sniffMimeFromBytes, sanitizeSvg, mimeFamilyMatches } = require('../util/attachment-mime');
 
 const router = express.Router();
 
@@ -366,9 +368,21 @@ router.post('/sub-portal/attachments',
       const id = 'att_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
       const ext = (req.file.originalname.match(/\.([a-z0-9]+)$/i) || [, 'bin'])[1].toLowerCase();
       const baseKey = entity_type + '/' + entity_id + '/' + id;
-      const buf = req.file.buffer;
-      const mime = req.file.mimetype || 'application/octet-stream';
-      const isImage = typeof mime === 'string' && mime.indexOf('image/') === 0;
+      let buf = req.file.buffer;
+      const claimedMime = req.file.mimetype || 'application/octet-stream';
+      // P0-4 — sniff the real bytes, reject a claimed/actual family
+      // mismatch, canonicalize to the sniffed type, and sanitize SVG so a
+      // sub can't store an SVG carrying <script> that runs when a PM opens
+      // it. Mirrors the PM path (attachment-routes.js).
+      const sniffedMime = sniffMimeFromBytes(buf);
+      if (!mimeFamilyMatches(claimedMime, sniffedMime)) {
+        return res.status(400).json({ error: 'File contents do not match its declared type' });
+      }
+      const mime = sniffedMime || claimedMime;
+      if (mime === 'image/svg+xml') buf = sanitizeSvg(buf);
+      // Raster images go through sharp; SVG (sanitized above) + non-images
+      // are stored as-is — sharp would throw on SVG.
+      const isImage = typeof mime === 'string' && mime.indexOf('image/') === 0 && mime !== 'image/svg+xml';
 
       let thumbUrl = null, webUrl = null, originalUrl;
       let thumbKey = null, webKey = null, originalKey;
@@ -408,7 +422,7 @@ router.post('/sub-portal/attachments',
          RETURNING *`,
         [
           id, entity_type, entity_id, folder,
-          req.file.originalname, mime, req.file.size,
+          req.file.originalname, mime, buf.length,
           width, height,
           thumbUrl, webUrl, originalUrl,
           thumbKey, webKey, originalKey,
