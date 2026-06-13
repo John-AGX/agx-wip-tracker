@@ -44,6 +44,7 @@ const adminFilesRoutes = require('./routes/admin-files-routes');
 const adminAnthropicRoutes = require('./routes/admin-anthropic-routes');
 const adminSmsRoutes = require('./routes/admin-sms-routes');
 const adminOrganizationsRoutes = require('./routes/admin-organizations-routes');
+const adminConsoleRoutes = require('./routes/admin-console-routes');
 const smsRoutes = require('./routes/sms-routes');
 const reportRoutes = require('./routes/report-routes');
 const reportsPolymorphicRoutes = require('./routes/reports-routes');
@@ -191,6 +192,7 @@ app.use('/api/admin/files', adminFilesRoutes);
 app.use('/api/admin/anthropic', adminAnthropicRoutes);
 app.use('/api/admin/sms', adminSmsRoutes);
 app.use('/api/admin/organizations', adminOrganizationsRoutes);
+app.use('/api/admin/console', adminConsoleRoutes);
 app.use('/api/sms', smsRoutes);
 
 // Serve uploaded files when running with the local storage backend.
