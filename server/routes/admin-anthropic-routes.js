@@ -14,10 +14,15 @@
 // still exist for legacy packs; this surface is the going-forward
 // "fresh native build" admin UI.
 //
-// Admin-gated by ROLES_MANAGE.
+// SYSTEM_ADMIN-gated: these operate on the single API key's ACCOUNT-WIDE
+// Anthropic resources (Skills/Files/Batches), shared across every tenant.
+// An org admin must NOT be able to delete another tenant's mirrored Skills
+// or enumerate every org's Files/Batches, so this surface is platform-owner
+// only (was ROLES_MANAGE — a cross-tenant authority leak before org #2).
 
 const express = require('express');
-const { requireAuth, requireCapability } = require('../auth');
+const { requireAuth, requireSystemAdmin } = require('../auth');
+const { auditLog } = require('../audit');
 
 const router = express.Router();
 
@@ -43,7 +48,7 @@ function notConfigured() {
 //   whatever the list endpoint surfaces. Filters out non-skill rows
 //   (Anthropic Files objects sometimes leak into this listing on
 //   legacy accounts — they have no `skill_` id prefix).
-router.get('/skills', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+router.get('/skills', requireAuth, requireSystemAdmin, async (req, res) => {
   try {
     const anthropic = getAnthropic();
     if (!anthropic) return res.status(503).json(notConfigured());
@@ -72,7 +77,7 @@ router.get('/skills', requireAuth, requireCapability('ROLES_MANAGE'), async (req
 //   native-first (no local pack mirror). The legacy mirror endpoints
 //   at /api/admin/agents/skills/:idx/sync-to-anthropic still work for
 //   packs that exist in app_settings.agent_skills.
-router.post('/skills', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+router.post('/skills', requireAuth, requireSystemAdmin, async (req, res) => {
   try {
     const anthropic = getAnthropic();
     if (!anthropic) return res.status(503).json(notConfigured());
@@ -112,6 +117,7 @@ router.post('/skills', requireAuth, requireCapability('ROLES_MANAGE'), async (re
       files: [file]
     });
 
+    auditLog(req, { action: 'anthropic.skill_create', targetType: 'anthropic_skill', targetId: created && created.id, detail: { display_title: displayTitle } });
     res.json({ ok: true, skill: created });
   } catch (e) {
     console.error('POST /api/admin/anthropic/skills error:', e);
@@ -132,7 +138,7 @@ router.post('/skills', requireAuth, requireCapability('ROLES_MANAGE'), async (re
 //   show it as un-synced. That's intentional: this endpoint is the
 //   "purge from Anthropic" knob, and re-syncing from the local pack
 //   rebuilds the pointer.
-router.delete('/skills/:id', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+router.delete('/skills/:id', requireAuth, requireSystemAdmin, async (req, res) => {
   try {
     const anthropic = getAnthropic();
     if (!anthropic) return res.status(503).json(notConfigured());
@@ -176,6 +182,7 @@ router.delete('/skills/:id', requireAuth, requireCapability('ROLES_MANAGE'), asy
 
     // Step 3: delete the skill envelope now that no versions remain.
     await anthropic.beta.skills.delete(id);
+    auditLog(req, { action: 'anthropic.skill_delete', targetType: 'anthropic_skill', targetId: id, detail: { versions_deleted: versions.length } });
     res.json({ ok: true, deleted: id, versions_deleted: versions.length });
   } catch (e) {
     console.error('DELETE /api/admin/anthropic/skills/:id error:', e);
@@ -189,7 +196,7 @@ router.delete('/skills/:id', requireAuth, requireCapability('ROLES_MANAGE'), asy
 //   ad-hoc uploads. Each row carries id, filename, size_bytes,
 //   created_at, mime_type — handy for spotting orphan files we
 //   uploaded but no longer reference.
-router.get('/files', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+router.get('/files', requireAuth, requireSystemAdmin, async (req, res) => {
   try {
     const anthropic = getAnthropic();
     if (!anthropic) return res.status(503).json(notConfigured());
@@ -209,7 +216,7 @@ router.get('/files', requireAuth, requireCapability('ROLES_MANAGE'), async (req,
 //   the source of truth — including batches submitted from other
 //   tooling, batches that failed before we recorded them locally, or
 //   manually-cancelled ones.
-router.get('/batches', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+router.get('/batches', requireAuth, requireSystemAdmin, async (req, res) => {
   try {
     const anthropic = getAnthropic();
     if (!anthropic) return res.status(503).json(notConfigured());
