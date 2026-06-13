@@ -331,6 +331,7 @@
                     const tabName = btn.getAttribute('data-tab');
                     const estSub = btn.getAttribute('data-est-subtab');
                     const adminSub = btn.getAttribute('data-admin-subtab');
+                    const consoleSub = btn.getAttribute('data-console-subtab');
                     const virtual = btn.getAttribute('data-virtual-tab');
                     switchTab(tabName);
                     if (estSub && typeof window.switchEstimatesSubTab === 'function') {
@@ -341,6 +342,13 @@
                     // (mirrors the data-est-subtab path for Estimates).
                     if (adminSub && typeof window.switchAdminSubTab === 'function') {
                         window.switchAdminSubTab(adminSub);
+                    }
+                    // Command Center accordion children carry data-console-subtab
+                    // so the sidebar dropdown drives which platform section shows
+                    // (Overview / Metrics / Tenants / Audit / Anthropic / Email /
+                    // BT Mapping / Settings) — same pattern as data-admin-subtab.
+                    if (consoleSub && typeof window.switchConsoleSubTab === 'function') {
+                        window.switchConsoleSubTab(consoleSub);
                     }
                     // My Files accordion children carry data-myfiles-folder
                     // (e.g. __projects__, __tools__, __printouts__) — same

@@ -615,8 +615,28 @@
                             <div class="app-nav-children" role="group" aria-label="My Files folders"></div>
                         </div>
                         <button class="tab-btn" data-tab="projects" data-p86-icon="folder" title="Projects"><span class="app-nav-label">Projects</span></button>
-                        <!-- Platform-owner only: the Project 86 Command Center. data-cap hides it until SYSTEM_ADMIN. -->
-                        <button class="tab-btn" data-tab="console" data-cap="SYSTEM_ADMIN" data-p86-icon="admin" style="display:none;" title="Command Center"><span class="app-nav-label">⚙ Command Center</span></button>
+                        <!-- Platform-owner only: the Project 86 Command Center.
+                             Accordion parent — expands into platform sub-views
+                             (Overview / Metrics / Tenants / Audit / Anthropic /
+                             Email / BT Mapping / Settings). data-cap hides the
+                             whole group until SYSTEM_ADMIN. Same wiring as the
+                             Admin / My Files accordions. -->
+                        <div class="app-nav-parent" data-accordion="console" data-cap="SYSTEM_ADMIN" style="display:none;">
+                            <button class="tab-btn app-nav-parent-btn" data-tab="console" data-p86-icon="admin" title="Command Center">
+                                <span class="app-nav-label">⚙ Command Center</span>
+                                <span class="app-nav-caret" role="button" tabindex="0" aria-label="Toggle Command Center sub-pages" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" width="12" height="12" aria-hidden="true"><polyline points="9 18 15 12 9 6"></polyline></svg></span>
+                            </button>
+                            <div class="app-nav-children" role="group" aria-label="Command Center sub-pages">
+                                <button class="tab-btn app-nav-child" data-tab="console" data-console-subtab="overview" data-virtual-tab="console-overview" data-p86-icon="insights" title="Overview"><span class="app-nav-label">Overview</span></button>
+                                <button class="tab-btn app-nav-child" data-tab="console" data-console-subtab="metrics" data-virtual-tab="console-metrics" data-p86-icon="chart-bar" title="Metrics"><span class="app-nav-label">Metrics</span></button>
+                                <button class="tab-btn app-nav-child" data-tab="console" data-console-subtab="tenants" data-virtual-tab="console-tenants" data-p86-icon="clients" title="Tenants"><span class="app-nav-label">Tenants</span></button>
+                                <button class="tab-btn app-nav-child" data-tab="console" data-console-subtab="audit" data-virtual-tab="console-audit" data-p86-icon="detective" title="Audit"><span class="app-nav-label">Audit</span></button>
+                                <button class="tab-btn app-nav-child" data-tab="console" data-console-subtab="anthropic" data-virtual-tab="console-anthropic" data-p86-icon="dna" title="Anthropic"><span class="app-nav-label">Anthropic</span></button>
+                                <button class="tab-btn app-nav-child" data-tab="console" data-console-subtab="email" data-virtual-tab="console-email" data-p86-icon="envelope" title="Email"><span class="app-nav-label">Email</span></button>
+                                <button class="tab-btn app-nav-child" data-tab="console" data-console-subtab="btmapping" data-virtual-tab="console-btmapping" data-p86-icon="links" title="BT Mapping"><span class="app-nav-label">BT Mapping</span></button>
+                                <button class="tab-btn app-nav-child" data-tab="console" data-console-subtab="settings" data-virtual-tab="console-settings" data-p86-icon="wrench" title="Settings"><span class="app-nav-label">Settings</span></button>
+                            </div>
+                        </div>
                         <!-- IA-D: "Field Tools" (was the ambiguous "Tools" —
                              easily confused with Plans). Clicking the row
                              opens the Field Tools grid (Margin Calc, Square
@@ -2962,7 +2982,7 @@
     <script src="js/qb-costs-view.js?v=11"></script>
     <script src="js/insights.js?v=7"></script>
     <script src="js/schedule.js?v=34"></script>
-    <script src="js/app.js?v=84"></script>
+    <script src="js/app.js?v=85"></script>
     <script src="js/compliance-review-ui.js?v=2"></script>
     <script src="js/messaging.js?v=1b"></script>
     <script src="js/my-files.js?v=16"></script>
@@ -2984,7 +3004,7 @@
     <script src="js/report-templates.js?v=1"></script>
     <script src="js/report-style-packs.js?v=2"></script>
     <script src="js/projects.js?v=58"></script>
-    <script src="js/console.js?v=3"></script>
+    <script src="js/console.js?v=4"></script>
     <!-- Shared pricing pipeline — math used by estimate-editor +
          estimate-preview + the upcoming change-order-editor. Loads
          BEFORE any of them so window.p86Pricing is ready. -->

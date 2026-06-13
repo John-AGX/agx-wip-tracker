@@ -76,28 +76,66 @@
           'background:linear-gradient(135deg,rgba(124,58,237,0.16),rgba(79,140,255,0.14));' +
           'border:1px solid rgba(124,58,237,0.35);">' +
           '<div style="font-size:20px;font-weight:600;color:var(--text,#e8e8ea);">⚙ Project 86 — Command Center</div>' +
-          '<div style="font-size:12.5px;color:var(--text-dim,#9a9aa2);margin-top:3px;">Platform owner · system administrator · every privileged action is logged below.</div>' +
+          '<div style="font-size:12.5px;color:var(--text-dim,#9a9aa2);margin-top:3px;">Platform owner · system administrator · pick a section from the ⚙ Command Center menu in the sidebar.</div>' +
         '</div>' +
-        '<div id="cc-overview" style="margin-bottom:22px;"></div>' +
-        '<div id="cc-metrics" style="margin-bottom:22px;"></div>' +
-        '<div id="cc-tenants" style="margin-bottom:22px;"></div>' +
-        '<div id="cc-audit" style="margin-bottom:28px;"></div>' +
-        // Platform service config, migrated here from the retired admin
-        // "⚙ System" sub-tab. These mount the existing host-parameterized
-        // admin.js renderers, so the forms stay single-source-of-truth.
-        '<div id="cc-anthropic" style="margin-bottom:22px;"></div>' +
-        '<div id="cc-email" style="margin-bottom:22px;"></div>' +
-        '<div id="cc-btmapping" style="margin-bottom:22px;"></div>' +
-        '<div id="cc-settings"></div>' +
+        // One section shown at a time, driven by the sidebar Command Center
+        // dropdown (switchConsoleSubTab). The platform service views
+        // (anthropic/email/btmapping/settings) mount the existing
+        // host-parameterized admin.js renderers — single source of truth.
+        '<div id="cc-overview"  class="cc-section" style="display:none;"></div>' +
+        '<div id="cc-metrics"   class="cc-section" style="display:none;"></div>' +
+        '<div id="cc-tenants"   class="cc-section" style="display:none;"></div>' +
+        '<div id="cc-audit"     class="cc-section" style="display:none;"></div>' +
+        '<div id="cc-anthropic" class="cc-section" style="display:none;"></div>' +
+        '<div id="cc-email"     class="cc-section" style="display:none;"></div>' +
+        '<div id="cc-btmapping" class="cc-section" style="display:none;"></div>' +
+        '<div id="cc-settings"  class="cc-section" style="display:none;"></div>' +
       '</div>';
-    loadOverview();
-    loadMetrics();
-    loadTenants();
-    loadAudit();
-    mountSystem('cc-anthropic', 'cc-anthropic-host', '🌐 Anthropic resources', window.renderSystemAnthropic);
-    mountSystem('cc-email', 'cc-email-host', '✉ Email provider', window.renderSystemEmailProvider);
-    mountSystem('cc-btmapping', 'cc-btmapping-host', '🔗 Buildertrend cost-code mapping', window.renderSystemBTMapping);
-    mountSystem('cc-settings', 'cc-settings-host', '🔧 Platform settings', window.renderSystemSettings);
+    // Land on the last-viewed section (persisted) or Overview by default.
+    var initial = 'overview';
+    try { var saved = sessionStorage.getItem('agx_console_tab'); if (saved && CONSOLE_VIEWS.indexOf(saved) >= 0) initial = saved; } catch (e) {}
+    switchConsoleSubTab(initial);
+  }
+
+  // The 8 platform sub-views, in sidebar order.
+  var CONSOLE_VIEWS = ['overview', 'metrics', 'tenants', 'audit', 'anthropic', 'email', 'btmapping', 'settings'];
+
+  // Each view's loader. The system-service views mount the existing
+  // host-parameterized admin.js renderers (re-runs fresh each visit).
+  function loadConsoleView(view) {
+    if (view === 'overview') return loadOverview();
+    if (view === 'metrics') return loadMetrics();
+    if (view === 'tenants') return loadTenants();
+    if (view === 'audit') return loadAudit();
+    if (view === 'anthropic') return mountSystem('cc-anthropic', 'cc-anthropic-host', '🌐 Anthropic resources', window.renderSystemAnthropic);
+    if (view === 'email') return mountSystem('cc-email', 'cc-email-host', '✉ Email provider', window.renderSystemEmailProvider);
+    if (view === 'btmapping') return mountSystem('cc-btmapping', 'cc-btmapping-host', '🔗 Buildertrend cost-code mapping', window.renderSystemBTMapping);
+    if (view === 'settings') return mountSystem('cc-settings', 'cc-settings-host', '🔧 Platform settings', window.renderSystemSettings);
+  }
+
+  // Show one section at a time — mirrors switchAdminSubTab. Toggles the sidebar
+  // child active state, hides every .cc-section, reveals + (re)loads the
+  // target, persists the choice, and syncs the sidebar highlight.
+  function switchConsoleSubTab(view) {
+    if (CONSOLE_VIEWS.indexOf(view) < 0) view = 'overview';
+    var target = document.getElementById('cc-' + view);
+    if (!target) {
+      // Console chrome not built yet (child clicked from another tab) —
+      // persist the desired view and render; renderConsoleInto reads
+      // agx_console_tab and lands on it.
+      try { sessionStorage.setItem('agx_console_tab', view); } catch (e) {}
+      var host = document.getElementById('consolePageHost');
+      if (host && typeof window.renderConsoleInto === 'function') window.renderConsoleInto(host);
+      return;
+    }
+    document.querySelectorAll('[data-console-subtab]').forEach(function (btn) {
+      btn.classList.toggle('active', btn.getAttribute('data-console-subtab') === view);
+    });
+    document.querySelectorAll('#consolePageHost .cc-section').forEach(function (s) { s.style.display = 'none'; });
+    target.style.display = 'block';
+    loadConsoleView(view);
+    try { sessionStorage.setItem('agx_console_tab', view); } catch (e) {}
+    if (typeof window.markVirtualTabActive === 'function') window.markVirtualTabActive('console-' + view);
   }
 
   function sectionTitle(t, right) {
@@ -321,4 +359,5 @@
   }
 
   window.renderConsoleInto = renderConsoleInto;
+  window.switchConsoleSubTab = switchConsoleSubTab;
 })();
