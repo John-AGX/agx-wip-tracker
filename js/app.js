@@ -1542,6 +1542,20 @@
                 }
             }
 
+            // Leaving the Command Center: clear its host. The console mounts
+            // platform System views (Anthropic resources, BT mapping) that
+            // create globally-unique element ids (#managed-agents-panel,
+            // #tpl-tab-content) ALSO used by the Agents and Organization →
+            // Templates admin sub-tabs. The console pane sits earlier in the
+            // document, so a lingering console copy would shadow those
+            // sub-tabs' getElementById lookups and break their load/save.
+            // Clearing on exit guarantees at most one live copy; the console
+            // re-renders fresh whenever its tab is reopened.
+            if (tabName !== 'console') {
+                var ccHost = document.getElementById('consolePageHost');
+                if (ccHost && ccHost.firstChild) ccHost.innerHTML = '';
+            }
+
             if (tabName === 'summary') {
                 renderSummaryDashboard();
             } else if (tabName === 'my-files') {

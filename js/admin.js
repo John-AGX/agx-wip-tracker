@@ -1033,6 +1033,13 @@
   function switchAdminSubTab(name) {
     refreshSystemAdminTabVisibility();
 
+    // The "⚙ System" sub-tab was retired — its cross-tenant surface now
+    // lives in the top-level Project 86 Command Center. Redirect any
+    // lingering nav state / deep link there instead of an empty pane.
+    if (name === 'system') {
+      if (typeof window.switchTab === 'function') { window.switchTab('console'); return; }
+    }
+
     // Phase F: Templates / Materials / Job Assignments / Email moved
     // INTO the Organization tab as sub-pills. Old top-level URLs
     // (/admin/templates, /admin/materials, /admin/jobs, /admin/email)
@@ -5821,6 +5828,15 @@
         '<div style="font-size:12px;line-height:1.6;">Reserved for SaaS-level config: rate limits, default org settings, system-wide feature flags.<br>None defined yet.</div>' +
       '</div>';
   }
+
+  // Expose the host-parameterized System sub-view renderers so the Project 86
+  // Command Center (js/console.js) can mount them directly — these were
+  // written to be hosted anywhere (each builds its own sub-DOM). The old
+  // admin "⚙ System" sub-tab is retired in favor of the Command Center.
+  window.renderSystemAnthropic = renderSystemAnthropic;
+  window.renderSystemEmailProvider = renderSystemEmailProvider;
+  window.renderSystemBTMapping = renderSystemBTMapping;
+  window.renderSystemSettings = renderSystemSettings;
 
   function renderAdminAgents() {
     var pane = document.getElementById('admin-subtab-agents');

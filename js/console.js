@@ -81,14 +81,23 @@
         '<div id="cc-overview" style="margin-bottom:22px;"></div>' +
         '<div id="cc-metrics" style="margin-bottom:22px;"></div>' +
         '<div id="cc-tenants" style="margin-bottom:22px;"></div>' +
-        '<div id="cc-skills" style="margin-bottom:22px;"></div>' +
-        '<div id="cc-audit"></div>' +
+        '<div id="cc-audit" style="margin-bottom:28px;"></div>' +
+        // Platform service config, migrated here from the retired admin
+        // "⚙ System" sub-tab. These mount the existing host-parameterized
+        // admin.js renderers, so the forms stay single-source-of-truth.
+        '<div id="cc-anthropic" style="margin-bottom:22px;"></div>' +
+        '<div id="cc-email" style="margin-bottom:22px;"></div>' +
+        '<div id="cc-btmapping" style="margin-bottom:22px;"></div>' +
+        '<div id="cc-settings"></div>' +
       '</div>';
     loadOverview();
     loadMetrics();
     loadTenants();
-    loadSkills();
     loadAudit();
+    mountSystem('cc-anthropic', 'cc-anthropic-host', '🌐 Anthropic resources', window.renderSystemAnthropic);
+    mountSystem('cc-email', 'cc-email-host', '✉ Email provider', window.renderSystemEmailProvider);
+    mountSystem('cc-btmapping', 'cc-btmapping-host', '🔗 Buildertrend cost-code mapping', window.renderSystemBTMapping);
+    mountSystem('cc-settings', 'cc-settings-host', '🔧 Platform settings', window.renderSystemSettings);
   }
 
   function sectionTitle(t, right) {
@@ -269,37 +278,22 @@
     }).catch(function (e) { el.innerHTML = errBox('tenants', e); });
   }
 
-  function loadSkills() {
-    var el = document.getElementById('cc-skills');
-    if (!el) return;
-    el.innerHTML = sectionTitle('Account-wide Anthropic Skills') + '<div style="color:var(--text-dim,#888);font-size:12px;padding:4px;">Loading…</div>';
-    cget('/api/admin/anthropic/skills?limit=200').then(function (d) {
-      var skills = (d && d.skills) || [];
-      var rows = skills.map(function (s) {
-        return '<tr>' +
-          '<td style="padding:7px 10px;">' + esc(s.display_title || s.name || s.id) + '</td>' +
-          '<td style="padding:7px 10px;color:var(--text-dim,#9a9aa2);font-size:11.5px;">' + esc(s.id) + '</td>' +
-          '<td style="padding:7px 10px;text-align:right;">' + ghostBtn('Delete', 'data-cc-skill="' + esc(s.id) + '" data-cc-skillname="' + esc(s.display_title || s.id) + '"') + '</td>' +
-          '</tr>';
-      }).join('');
-      el.innerHTML = sectionTitle('Account-wide Anthropic Skills',
-          '<span style="font-size:11.5px;color:var(--text-dim,#888);">' + skills.length + ' skill' + (skills.length === 1 ? '' : 's') + '</span>') +
-        panel('<table style="width:100%;border-collapse:collapse;font-size:12.5px;">' +
-          '<tr style="font-size:11px;color:var(--text-dim,#9a9aa2);text-transform:uppercase;letter-spacing:.03em;">' +
-          '<th style="padding:8px 10px;text-align:left;">Skill</th><th style="padding:8px 10px;text-align:left;">ID</th><th style="padding:8px 10px;"></th></tr>' +
-          (rows || '<tr><td colspan="3" style="padding:14px;color:var(--text-dim,#888);">No native Skills in this account.</td></tr>') + '</table>') +
-        '<div style="font-size:10.5px;color:var(--text-dim,#777);margin:6px 2px 0;">Account-wide across all tenants — deleting here removes the Skill for every org. Create new Skills from Admin → System → Anthropic.</div>';
-      el.querySelectorAll('[data-cc-skill]').forEach(function (b) {
-        b.addEventListener('click', function () {
-          var id = b.getAttribute('data-cc-skill');
-          var nm = b.getAttribute('data-cc-skillname');
-          if (!window.confirm('Delete the account-wide Skill "' + nm + '"? This removes it (and all versions) for EVERY tenant.')) return;
-          cdel('/api/admin/anthropic/skills/' + encodeURIComponent(id)).then(function () {
-            toast('Skill deleted'); loadSkills();
-          }).catch(function (e) { toast(e.message || 'Delete failed', true); });
-        });
-      });
-    }).catch(function (e) { el.innerHTML = sectionTitle('Account-wide Anthropic Skills') + errBox('skills', e); });
+  // Mount a platform-service sub-view migrated from the old admin "⚙ System"
+  // sub-tab. The admin.js renderers (renderSystemAnthropic / EmailProvider /
+  // BTMapping / Settings) are host-parameterized and build their own sub-DOM,
+  // so we hand each one its own host div under a Command-Center section title.
+  function mountSystem(wrapId, hostId, title, fn) {
+    var wrap = document.getElementById(wrapId);
+    if (!wrap) return;
+    wrap.innerHTML = sectionTitle(title) + '<div id="' + hostId + '"></div>';
+    var host = document.getElementById(hostId);
+    if (!host) return;
+    if (typeof fn !== 'function') {
+      host.innerHTML = '<div style="padding:14px;color:var(--text-dim,#888);font-size:12px;">This panel isn\'t available — the admin module hasn\'t loaded.</div>';
+      return;
+    }
+    try { fn(host); }
+    catch (e) { host.innerHTML = errBox(title, e); }
   }
 
   function loadAudit() {

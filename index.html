@@ -576,7 +576,7 @@
                                 <button class="tab-btn app-nav-child" data-tab="admin" data-admin-subtab="agents" data-virtual-tab="admin-agents" data-p86-icon="discord" title="Agents"><span class="app-nav-label">Agents</span></button>
                                 <button class="tab-btn app-nav-child" data-tab="admin" data-admin-subtab="context" data-virtual-tab="admin-context" data-p86-icon="academic-cap" title="Context"><span class="app-nav-label">Context</span></button>
                                 <button class="tab-btn app-nav-child" data-tab="admin" data-admin-subtab="metrics" data-virtual-tab="admin-metrics" data-p86-icon="insights" title="Metrics"><span class="app-nav-label">Metrics</span></button>
-                                <button class="tab-btn app-nav-child" data-tab="admin" data-admin-subtab="system" data-virtual-tab="admin-system" data-cap="SYSTEM_ADMIN" data-p86-icon="admin" style="display:none;" title="System"><span class="app-nav-label">⚙ System</span></button>
+                                <!-- ⚙ System retired → top-level ⚙ Command Center -->
                             </div>
                         </div>
                     </div>
@@ -1600,12 +1600,12 @@
                         <!-- Observability -->
                         <button class="ws-right-tab" data-admin-subtab="metrics" data-p86-icon="insights" onclick="switchAdminSubTab('metrics')">Metrics</button>
 
-                        <!-- System Admin sub-tab — visible ONLY to users with the
-                             SYSTEM_ADMIN capability (platform owner). JS sets
-                             display:inline-flex on /me load when the cap is
-                             present. Cross-tenant ops live here: tenants list,
-                             cross-org metrics, Anthropic-account resources. -->
-                        <button class="ws-right-tab" data-admin-subtab="system" data-cap="SYSTEM_ADMIN" data-p86-icon="admin" onclick="switchAdminSubTab('system')" style="display:none;background:linear-gradient(135deg,rgba(124,58,237,0.12),rgba(79,140,255,0.12));border-color:rgba(124,58,237,0.4);">⚙ System</button>
+                        <!-- ⚙ System sub-tab retired — its cross-tenant surface
+                             (tenants, cross-org metrics, audit, Anthropic
+                             resources, email provider, BT mapping, settings)
+                             now lives in the top-level ⚙ Command Center.
+                             switchAdminSubTab('system') redirects there for
+                             any lingering nav state / deep link. -->
                         <span class="p86-ask86-mount" style="margin-left:auto;"></span>
                     </div>
 
@@ -2940,7 +2940,7 @@
          BEFORE admin.js so window.p86EmailBlocks is available at the
          time renderTemplateEditor() runs its mount call. -->
     <script src="js/email-block-editor.js?v=3"></script>
-    <script src="js/admin.js?v=95"></script>
+    <script src="js/admin.js?v=96"></script>
     <script src="js/admin-context-registry.js?v=3"></script>
     <script src="js/field-tools.js?v=8"></script>
     <script src="js/clients.js?v=16e"></script>
@@ -2962,7 +2962,7 @@
     <script src="js/qb-costs-view.js?v=11"></script>
     <script src="js/insights.js?v=7"></script>
     <script src="js/schedule.js?v=34"></script>
-    <script src="js/app.js?v=83"></script>
+    <script src="js/app.js?v=84"></script>
     <script src="js/compliance-review-ui.js?v=2"></script>
     <script src="js/messaging.js?v=1b"></script>
     <script src="js/my-files.js?v=16"></script>
@@ -2984,7 +2984,7 @@
     <script src="js/report-templates.js?v=1"></script>
     <script src="js/report-style-packs.js?v=2"></script>
     <script src="js/projects.js?v=58"></script>
-    <script src="js/console.js?v=2"></script>
+    <script src="js/console.js?v=3"></script>
     <!-- Shared pricing pipeline — math used by estimate-editor +
          estimate-preview + the upcoming change-order-editor. Loads
          BEFORE any of them so window.p86Pricing is ready. -->
