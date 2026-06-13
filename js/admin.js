@@ -4920,6 +4920,10 @@
     paintOrgTagCatalog();
     window.p86Api.orgTags.list({ include_archived: 1 }).then(function(r) {
       _tagCatalogState.tags = (r && r.tags) || [];
+      // Mirror the loaded per-tag pin config (icon + hue) into the
+      // renderer so the row previews — and any open photo maps — reflect
+      // the catalog immediately.
+      if (window.p86TagIcons && window.p86TagIcons.setConfig) window.p86TagIcons.setConfig(_tagCatalogState.tags);
       _tagCatalogState.loading = false;
       paintOrgTagCatalog();
     }).catch(function(e) {
@@ -5001,12 +5005,14 @@
     var archived = !!t.archived_at;
     return '<tr style="border-bottom:1px solid var(--border,#222);' + (archived ? 'opacity:0.55;' : '') + '">' +
       '<td style="padding:6px 4px;"><input type="checkbox" data-tag-sel="' + t.id + '" ' + checked + ' /></td>' +
-      '<td style="padding:6px 4px;">' +
+      '<td style="padding:6px 4px;white-space:nowrap;">' +
+        tagPinPreview(t) +
         '<span class="p86-chip-tag" style="--h:' + (t.hue != null ? t.hue : hueFromName(t.name)) + ';">#' + escapeHTML(t.name) + '</span>' +
       '</td>' +
       '<td style="padding:6px 4px;color:var(--text-dim,#aaa);">' + Number(t.use_count || 0) + '</td>' +
       '<td style="padding:6px 4px;color:' + (archived ? '#888' : '#34d399') + ';font-size:11px;">' + (archived ? 'Archived' : 'Active') + '</td>' +
       '<td style="padding:6px 4px;text-align:right;">' +
+        '<button class="ee-btn secondary" onclick="window.adminTagCatalog.openPinStyle(' + t.id + ')" style="font-size:11px;padding:4px 8px;" title="Map-pin icon + color">Pin</button> ' +
         '<button class="ee-btn secondary" onclick="window.adminTagCatalog.openRename(' + t.id + ')" style="font-size:11px;padding:4px 8px;">Rename</button> ' +
         '<button class="ee-btn secondary" onclick="window.adminTagCatalog.toggleArchive(' + t.id + ')" style="font-size:11px;padding:4px 8px;">' + (archived ? 'Unarchive' : 'Archive') + '</button>' +
       '</td>' +
@@ -5023,6 +5029,15 @@
       h |= 0;
     }
     return Math.abs(h) % 360;
+  }
+
+  // Small inline pin preview for a tag row — the same marker the photo
+  // maps draw, via the shared tag-icons renderer.
+  function tagPinPreview(t) {
+    if (!window.p86TagIcons || !window.p86TagIcons.pinSvg) return '';
+    var spec = window.p86TagIcons.forTag(t.name);
+    return '<span style="display:inline-block;width:20px;height:20px;vertical-align:middle;margin-right:6px;">' +
+      window.p86TagIcons.pinSvg(spec, { size: 20, stroke: 2 }) + '</span>';
   }
 
   // Public actions for the tag catalog (inline onclicks).
@@ -5078,6 +5093,61 @@
         _tagCatalogState.selected.clear();
         renderOrgTagCatalog();
       }).catch(function(e) { alert('Merge failed: ' + (e.message || e)); });
+    },
+    // Map-pin style editor — set this tag's pin icon (P86 icon set) + color
+    // (hue). Saved to org_tags via PATCH; the live pin preview uses the same
+    // renderer the maps do.
+    openPinStyle: function(id) {
+      var t = _tagCatalogState.tags.find(function(x) { return Number(x.id) === Number(id); });
+      if (!t || !window.p86TagIcons) return;
+      var MP = window.p86TagIcons;
+      var curHue = (t.hue != null) ? Number(t.hue) : hueFromName(t.name);
+      var curIcon = t.icon || '';
+      var iconOpts = MP.ICON_CHOICES.map(function(n) {
+        return '<option value="' + escapeAttr(n) + '">' + (n ? escapeHTML(n) : '(letter glyph)') + '</option>';
+      }).join('');
+      var modal = document.createElement('div');
+      modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;z-index:9999;';
+      modal.innerHTML =
+        '<div style="background:var(--bg,#1a1a1a);border:1px solid var(--border,#333);border-radius:10px;padding:20px;max-width:380px;width:92%;">' +
+          '<div style="font-size:15px;font-weight:600;color:var(--text,#fff);margin-bottom:14px;">Pin style — #' + escapeHTML(t.name) + '</div>' +
+          '<div style="display:flex;align-items:center;gap:16px;margin-bottom:16px;">' +
+            '<span id="pinStylePreview" style="display:inline-block;width:34px;height:40px;"></span>' +
+            '<div style="flex:1;display:grid;gap:12px;font-size:12px;">' +
+              '<label style="display:grid;gap:4px;color:var(--text-dim,#aaa);">Icon' +
+                '<select id="pinStyleIcon" style="font-size:12px;padding:5px 6px;">' + iconOpts + '</select>' +
+              '</label>' +
+              '<label style="display:grid;gap:4px;color:var(--text-dim,#aaa);">Color (hue)' +
+                '<input id="pinStyleHue" type="range" min="0" max="360" value="' + curHue + '" />' +
+              '</label>' +
+            '</div>' +
+          '</div>' +
+          '<div style="display:flex;justify-content:flex-end;gap:8px;">' +
+            '<button class="ee-btn secondary" id="pinStyleCancel">Cancel</button>' +
+            '<button class="ee-btn primary" id="pinStyleSave">Save</button>' +
+          '</div>' +
+        '</div>';
+      document.body.appendChild(modal);
+      var iconSel = modal.querySelector('#pinStyleIcon');
+      var hueInp = modal.querySelector('#pinStyleHue');
+      var prev = modal.querySelector('#pinStylePreview');
+      iconSel.value = curIcon;
+      function paint() {
+        var base = MP.forTag(t.name);
+        var spec = { bg: MP.hueToHex(Number(hueInp.value)), fg: '#fff', glyph: base.glyph, icon: (iconSel.value || null) };
+        prev.innerHTML = MP.pinSvg(spec, { size: 34, stroke: 2.5 });
+      }
+      iconSel.addEventListener('change', paint);
+      hueInp.addEventListener('input', paint);
+      paint();
+      function close() { try { document.body.removeChild(modal); } catch (_) {} }
+      modal.querySelector('#pinStyleCancel').addEventListener('click', close);
+      modal.querySelector('#pinStyleSave').addEventListener('click', function() {
+        window.p86Api.orgTags.update(id, { icon: iconSel.value || '', hue: Number(hueInp.value) }).then(function() {
+          close();
+          renderOrgTagCatalog();
+        }).catch(function(e) { alert('Save failed: ' + (e.message || e)); });
+      });
     }
   };
 

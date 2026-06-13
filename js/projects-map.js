@@ -170,9 +170,11 @@
       // Load the org's pin config (color/icon per type) before mounting so
       // the very first render shows the right pins. ensureConfig never
       // rejects — a failed load just leaves the built-in defaults in place.
-      var cfgReady = (window.p86MapPins && window.p86MapPins.ensureConfig)
-        ? window.p86MapPins.ensureConfig() : Promise.resolve();
-      return cfgReady.then(function() { mountMap(maps, mapHostEl, listEl, mapped, opts); });
+      var cfgs = [];
+      if (window.p86MapPins && window.p86MapPins.ensureConfig) cfgs.push(window.p86MapPins.ensureConfig());
+      // Photo layer pins read the org's per-tag icon/color config too.
+      if (opts.photoLayer && window.p86TagIcons && window.p86TagIcons.ensureConfig) cfgs.push(window.p86TagIcons.ensureConfig());
+      return Promise.all(cfgs).then(function() { mountMap(maps, mapHostEl, listEl, mapped, opts); });
     }).catch(function(err) {
       mapHostEl.innerHTML = emptyHTML('Map unavailable: ' + (err && err.message || 'unknown error') +
         '\nList view still works — pick a project on the left.');
@@ -345,14 +347,18 @@
   // Compact SVG pin used for photo markers. ~22px square, glyph
   // centered, drop-shadow to lift it off the map tiles.
   function photoPinSvg(icon) {
+    // Glyph (white P86 icon when the tag spec carries one, else the text
+    // glyph) comes from the shared tag-icons helper so photo pins match
+    // the rest of the app's markers.
+    var glyph = (window.p86TagIcons && window.p86TagIcons.glyphMarkup)
+      ? window.p86TagIcons.glyphMarkup(icon, 11, 11, 12)
+      : '<text x="11" y="14.5" text-anchor="middle" font-size="10" font-family="Arial,sans-serif" font-weight="bold" fill="' + (icon.fg || '#fff') + '">' + escapeHTML(icon.glyph || '') + '</text>';
     return '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22">' +
       '<defs><filter id="s" x="-20%" y="-20%" width="140%" height="140%">' +
         '<feDropShadow dx="0" dy="1" stdDeviation="1" flood-opacity="0.4"/>' +
       '</filter></defs>' +
       '<circle cx="11" cy="11" r="9" fill="' + icon.bg + '" stroke="white" stroke-width="2" filter="url(#s)"/>' +
-      '<text x="11" y="14.5" text-anchor="middle" font-size="10" font-family="Arial,sans-serif" font-weight="bold" fill="' + icon.fg + '">' +
-        escapeHTML(icon.glyph) +
-      '</text>' +
+      glyph +
     '</svg>';
   }
 

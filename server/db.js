@@ -951,6 +951,10 @@ async function initSchema() {
     -- of any case rather than spawning duplicates.
     CREATE UNIQUE INDEX IF NOT EXISTS idx_org_tags_ci_name
       ON org_tags(organization_id, (LOWER(name)));
+    -- Per-tag map-pin icon (an agx-icons.js name). hue (above) carries
+    -- the color; together they style this tag's photo map pins. NULL =
+    -- fall back to the built-in tag-icons.js catalog.
+    ALTER TABLE org_tags ADD COLUMN IF NOT EXISTS icon TEXT;
 
     -- ---------------------------------------------------------------
     -- Per-org folder templates. Folders in Project 86 are IMPLICIT --

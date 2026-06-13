@@ -2858,7 +2858,12 @@
         // when its host node gets emptied — pin markers GC with the
         // old Map instance).
         mapEl.innerHTML = '';
-        window.p86Maps.ready().then(function(maps) {
+        // Load the org's per-tag pin config (icon/color) alongside the
+        // Maps SDK so photo pins reflect the Tag Catalog on first paint.
+        var _tagCfg = (window.p86TagIcons && window.p86TagIcons.ensureConfig)
+          ? window.p86TagIcons.ensureConfig() : Promise.resolve();
+        Promise.all([window.p86Maps.ready(), _tagCfg]).then(function(_r) {
+          var maps = _r[0];
           // Bail if user navigated away mid-load.
           if (!mapEl.isConnected) return;
           // Re-check the fingerprint — paint() may have fired again
@@ -3742,7 +3747,7 @@
     }
     function buildPinMarker(maps, photo, pinIdx, pinStyle) {
       // Standard 28px circle + drop shadow, varied per style.
-      var bg, fg, glyph;
+      var bg, fg, glyph, tagSpec = null;
       if (pinStyle === 'numbered') {
         bg = '#4f8cff'; fg = '#fff'; glyph = String(pinIdx + 1);
       } else if (pinStyle === 'lettered') {
@@ -3781,17 +3786,24 @@
         pinStyle = 'tag';
       }
       if (pinStyle === 'tag' || !bg) {
-        var tagIcon = window.p86TagIcons ? window.p86TagIcons.forPhoto(photo) : { bg: '#6b7280', fg: '#fff', glyph: '●' };
-        bg = tagIcon.bg; fg = tagIcon.fg; glyph = tagIcon.glyph;
+        tagSpec = window.p86TagIcons ? window.p86TagIcons.forPhoto(photo) : { bg: '#6b7280', fg: '#fff', glyph: '●' };
+        bg = tagSpec.bg; fg = tagSpec.fg; glyph = tagSpec.glyph;
       }
       // Standard circle SVG used by all glyph-based styles. Glyph
       // text rendered server-side in the SVG for tag/dot (single
       // char) and via maps.Label for numbered/lettered (clean text
       // without font baking).
       var hasInlineGlyph = (pinStyle === 'tag' || pinStyle === 'dot') && glyph;
-      var glyphMarkup = hasInlineGlyph
-        ? '<text x="14" y="18" text-anchor="middle" font-size="13" font-family="Arial,sans-serif" font-weight="bold" fill="' + fg + '">' + glyph + '</text>'
-        : '';
+      // Tag pins draw the P86 icon glyph (or text fallback) via the shared
+      // tag-icons helper so they match the rest of the app's pins.
+      var glyphMarkup;
+      if (pinStyle === 'tag' && tagSpec && window.p86TagIcons && window.p86TagIcons.glyphMarkup) {
+        glyphMarkup = window.p86TagIcons.glyphMarkup(tagSpec, 14, 14, 14);
+      } else if (hasInlineGlyph) {
+        glyphMarkup = '<text x="14" y="18" text-anchor="middle" font-size="13" font-family="Arial,sans-serif" font-weight="bold" fill="' + fg + '">' + glyph + '</text>';
+      } else {
+        glyphMarkup = '';
+      }
       var pinSvg = '<svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 28 28">' +
         '<defs><filter id="ms"><feDropShadow dx="0" dy="1" stdDeviation="1.5" flood-opacity="0.5"/></filter></defs>' +
         '<circle cx="14" cy="14" r="11" fill="' + bg + '" stroke="white" stroke-width="2.5" filter="url(#ms)"/>' +

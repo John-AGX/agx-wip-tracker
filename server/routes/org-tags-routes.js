@@ -54,6 +54,14 @@ function normTagName(raw) {
   return c || null;
 }
 
+// Per-tag map-pin icon — an agx-icons.js name slug, or null to clear.
+function normIcon(raw) {
+  if (raw == null || raw === '') return null;
+  if (typeof raw !== 'string') return null;
+  const c = raw.trim().slice(0, 40);
+  return /^[a-z0-9-]+$/i.test(c) ? c : null;
+}
+
 // GET /api/org-tags?q=&include_archived=1
 // Lists tags in the caller's org. Default excludes archived. Optional
 // ?q substring filter is case-insensitive.
@@ -73,7 +81,7 @@ router.get('/', requireAuth, async (req, res) => {
       params.push('%' + String(req.query.q).trim().toLowerCase() + '%');
     }
     const { rows } = await pool.query(
-      'SELECT id, name, hue, use_count, archived_at, created_at, updated_at ' +
+      'SELECT id, name, hue, icon, use_count, archived_at, created_at, updated_at ' +
       '  FROM org_tags ' +
       ' WHERE ' + where.join(' AND ') +
       ' ORDER BY use_count DESC, name ASC ' +
@@ -127,13 +135,14 @@ router.post('/', requireAuth, requireAdmin, async (req, res) => {
     const name = normTagName(body.name);
     if (!name) return res.status(400).json({ error: 'name required' });
     const hue = (body.hue == null || body.hue === '') ? null : Math.max(0, Math.min(360, parseInt(body.hue, 10) || 0));
+    const icon = normIcon(body.icon);
 
     const { rows } = await pool.query(
-      'INSERT INTO org_tags (organization_id, name, hue, created_by) ' +
-      'VALUES ($1, $2, $3, $4) ' +
+      'INSERT INTO org_tags (organization_id, name, hue, icon, created_by) ' +
+      'VALUES ($1, $2, $3, $4, $5) ' +
       'ON CONFLICT (organization_id, name) DO UPDATE SET updated_at = NOW() ' +
       'RETURNING *',
-      [orgId, name, hue, req.user.id]
+      [orgId, name, hue, icon, req.user.id]
     );
     res.json({ tag: rows[0] });
   } catch (e) {
@@ -189,6 +198,10 @@ router.patch('/:id', requireAuth, requireAdmin, async (req, res) => {
       const h = (body.hue == null || body.hue === '') ? null : Math.max(0, Math.min(360, parseInt(body.hue, 10) || 0));
       sets.push('hue = $' + (pn++));
       params.push(h);
+    }
+    if (body.icon !== undefined) {
+      sets.push('icon = $' + (pn++));
+      params.push(normIcon(body.icon));
     }
     if (body.archived !== undefined) {
       if (body.archived) {
