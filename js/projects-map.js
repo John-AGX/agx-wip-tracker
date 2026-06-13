@@ -167,14 +167,15 @@
       return null;
     }
     window.p86Maps.ready().then(function(maps) {
-      // Load the org's pin config (color/icon per type) before mounting so
-      // the very first render shows the right pins. ensureConfig never
-      // rejects — a failed load just leaves the built-in defaults in place.
-      var cfgs = [];
-      if (window.p86MapPins && window.p86MapPins.ensureConfig) cfgs.push(window.p86MapPins.ensureConfig());
-      // Photo layer pins read the org's per-tag icon/color config too.
-      if (opts.photoLayer && window.p86TagIcons && window.p86TagIcons.ensureConfig) cfgs.push(window.p86TagIcons.ensureConfig());
-      return Promise.all(cfgs).then(function() { mountMap(maps, mapHostEl, listEl, mapped, opts); });
+      // Best-effort: warm the pin config (entity pins + photo-tag pins).
+      // Deliberately NOT awaited — the map must mount on the SDK alone so a
+      // slow or failed config fetch can never blank the map. Pins fall back
+      // to built-in defaults until the config resolves.
+      try {
+        if (window.p86MapPins && window.p86MapPins.ensureConfig) window.p86MapPins.ensureConfig();
+        if (opts.photoLayer && window.p86TagIcons && window.p86TagIcons.ensureConfig) window.p86TagIcons.ensureConfig();
+      } catch (e) { /* non-fatal */ }
+      mountMap(maps, mapHostEl, listEl, mapped, opts);
     }).catch(function(err) {
       mapHostEl.innerHTML = emptyHTML('Map unavailable: ' + (err && err.message || 'unknown error') +
         '\nList view still works — pick a project on the left.');

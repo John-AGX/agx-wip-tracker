@@ -2170,6 +2170,49 @@
               '</div>';
             }).join('') +
           '</div>';
+        } else if (layout === 'photo-map') {
+          // Photo-map preview/print — render the Static Maps snapshot
+          // (the interactive map can't print), with a tag-color legend.
+          // Falls back to a located-photo grid if the maps key isn't
+          // cached yet (so the section is never blank).
+          var pmIds = section.photo_ids || [];
+          var pmPhotos = pmIds.map(function(pid) { return allPhotos.find(function(a) { return a.id === pid; }); }).filter(Boolean);
+          var pmCoords = pmPhotos.filter(function(p) {
+            var la = Number(p.lat), ln = Number(p.lng);
+            return Number.isFinite(la) && Number.isFinite(ln) && !(la === 0 && ln === 0);
+          });
+          var pmStyle = section.pin_style || 'tag';
+          var pmUrl = (typeof buildStaticMapsUrl === 'function') ? buildStaticMapsUrl(pmCoords, pmStyle) : '';
+          if (pmUrl) {
+            var legend = '';
+            if (pmStyle === 'tag' && window.p86TagIcons && window.p86TagIcons.forTag) {
+              var seen = {};
+              pmCoords.forEach(function(p) {
+                var tg = (Array.isArray(p.tags) && p.tags[0]) ? p.tags[0] : '';
+                var key = tg.toLowerCase();
+                if (key && !seen[key]) seen[key] = window.p86TagIcons.forTag(tg);
+              });
+              var items = Object.keys(seen).map(function(k) {
+                return '<span style="display:inline-flex;align-items:center;gap:5px;margin:0 12px 6px 0;font-size:12px;">' +
+                  '<span style="display:inline-block;width:13px;height:13px;border-radius:50%;background:' + escapeAttr(seen[k].bg) + ';"></span>' +
+                  escapeHTML(k) + '</span>';
+              }).join('');
+              if (items) legend = '<div class="p86-report-preview-map-legend" style="margin-top:8px;">' + items + '</div>';
+            }
+            bodyHTML = '<div class="p86-report-preview-map">' +
+              '<img src="' + escapeAttr(pmUrl) + '" alt="Photo locations" style="width:100%;max-width:680px;border-radius:8px;display:block;" />' +
+              legend +
+            '</div>';
+          } else if (pmCoords.length) {
+            bodyHTML = '<div class="p86-report-preview-section-grid size-small">' +
+              pmCoords.map(function(p) {
+                var src = p.web_url || p.thumb_url;
+                return '<div class="p86-report-preview-photo"><div class="p86-report-preview-photo-img-wrap"><img src="' + escapeAttr(src) + '" alt="" /></div></div>';
+              }).join('') +
+            '</div>';
+          } else {
+            bodyHTML = '<div class="p86-report-preview-empty">No located photos in this section.</div>';
+          }
         } else {
           // photo-grid / single-photo / before-after — same render but
           // without the edit chrome.
@@ -2858,12 +2901,14 @@
         // when its host node gets emptied — pin markers GC with the
         // old Map instance).
         mapEl.innerHTML = '';
-        // Load the org's per-tag pin config (icon/color) alongside the
-        // Maps SDK so photo pins reflect the Tag Catalog on first paint.
-        var _tagCfg = (window.p86TagIcons && window.p86TagIcons.ensureConfig)
-          ? window.p86TagIcons.ensureConfig() : Promise.resolve();
-        Promise.all([window.p86Maps.ready(), _tagCfg]).then(function(_r) {
-          var maps = _r[0];
+        // Best-effort: warm the org's per-tag pin config so pins reflect
+        // the Tag Catalog. Deliberately NOT awaited — the map must mount
+        // on the SDK alone; a slow or failed config load must never blank
+        // the map. Pins fall back to the built-in catalog until it loads.
+        if (window.p86TagIcons && window.p86TagIcons.ensureConfig) {
+          try { window.p86TagIcons.ensureConfig(); } catch (e) { /* non-fatal */ }
+        }
+        window.p86Maps.ready().then(function(maps) {
           // Bail if user navigated away mid-load.
           if (!mapEl.isConnected) return;
           // Re-check the fingerprint — paint() may have fired again
