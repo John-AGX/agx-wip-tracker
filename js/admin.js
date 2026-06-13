@@ -4474,7 +4474,8 @@
     { key: 'materials', label: '\u{1F9F1} Materials',    desc: 'This org\'s materials catalog — SKUs, average / last / min / max pricing from purchase history.' },
     { key: 'jobs',      label: '\u{1F4CB} Job Assignments', desc: 'PM / crew / role assignments per job for this org.' },
     { key: 'sms',       label: '\u{1F4F1} SMS',              desc: 'SMS scheduling-agent observability for this org (send log, delivery stats). Global Twilio provider config lives in System.' },
-    { key: 'tags',      label: '\u{1F3F7} Tag Catalog',      desc: 'Curated master list of photo tags used across projects. Rename to propagate everywhere; merge to consolidate duplicates; archive to hide from autocomplete. New tags auto-add when a user types one on any photo.' }
+    { key: 'tags',      label: '\u{1F3F7} Tag Catalog',      desc: 'Curated master list of photo tags used across projects. Rename to propagate everywhere; merge to consolidate duplicates; archive to hide from autocomplete. New tags auto-add when a user types one on any photo.' },
+    { key: 'mappins',   label: '\u{1F4CD} Map Pins',          desc: 'Pin color + icon for each map marker type — Lead, Service job, Reno, Work order, Job, Project. Applies to the Jobs, Leads, and Projects maps for everyone in your org.' }
   ];
 
   var _orgActiveTab = (function() {
@@ -4568,6 +4569,12 @@
       bodyHTML = '<div id="admin-org-tags-host"><div style="color:var(--text-dim,#888);font-style:italic;font-size:12px;padding:20px 0;">Loading tag catalog…</div></div>';
       setTimeout(renderOrgTagCatalog, 0);
     }
+    else if (_orgActiveTab === 'mappins') {
+      // Map pins config renders into a host div, then fetches the org's
+      // branding.map_pins + paints the per-type color/icon editor.
+      bodyHTML = '<div id="admin-org-mappins-host"><div style="color:var(--text-dim,#888);font-style:italic;font-size:12px;padding:20px 0;">Loading map pins…</div></div>';
+      setTimeout(renderOrgMapPins, 0);
+    }
     else if (_orgActiveTab === 'templates' || _orgActiveTab === 'materials' || _orgActiveTab === 'sms') {
       // Phase F / G nested tabs — these render functions paint into
       // their OWN panes (#admin-subtab-templates, -materials, -sms).
@@ -4637,6 +4644,103 @@
       +   '</div>'
       + '</fieldset>';
   }
+
+  // ── Org → Map Pins ──────────────────────────────────────────────
+  // Per-org color + icon for each map marker type. Reads/writes
+  // organizations.branding.map_pins via the all-readable GET + admin PUT
+  // /api/org/branding. The live pin preview + the maps themselves render
+  // through window.p86MapPins (js/map-pins.js).
+  var _mapPinsDraft = null;   // { typeKey: {color, icon} } working copy
+
+  function renderOrgMapPins() {
+    var host = document.getElementById('admin-org-mappins-host');
+    if (!host) return;
+    var MP = window.p86MapPins;
+    if (!MP) { host.innerHTML = '<div style="color:#e74c3c;font-size:12px;padding:14px 0;">Map-pins module not loaded.</div>'; return; }
+    window.p86Api.get('/api/org/branding').then(function(resp) {
+      var saved = (resp && resp.branding && resp.branding.map_pins) || {};
+      // Seed the draft from defaults, overlaid with the org's saved overrides.
+      _mapPinsDraft = {};
+      MP.TYPE_ORDER.forEach(function(k) {
+        var d = MP.DEFAULTS[k] || {};
+        var s = saved[k] || {};
+        _mapPinsDraft[k] = { color: s.color || d.color, icon: s.icon || d.icon };
+      });
+      paintOrgMapPins();
+    }).catch(function(err) {
+      host.innerHTML = '<div style="color:#e74c3c;font-size:12px;padding:14px 0;">Failed to load map pins: ' + escapeHTML(err.message || 'unknown') + '</div>';
+    });
+  }
+  window.renderOrgMapPins = renderOrgMapPins;
+
+  function mapPinPreview(typeKey) {
+    return window.p86MapPins.previewSvg(typeKey, _mapPinsDraft[typeKey]);
+  }
+
+  function refreshMapPinPreview(k) {
+    var el = document.querySelector('[data-mp-preview="' + k + '"]');
+    if (el) el.innerHTML = mapPinPreview(k);
+  }
+
+  function paintOrgMapPins() {
+    var host = document.getElementById('admin-org-mappins-host');
+    if (!host || !_mapPinsDraft) return;
+    var MP = window.p86MapPins;
+    var iconOpts = MP.ICON_CHOICES.map(function(n) {
+      return '<option value="' + escapeAttr(n) + '">' + escapeHTML(n) + '</option>';
+    }).join('');
+    var rows = MP.TYPE_ORDER.map(function(k) {
+      var d = _mapPinsDraft[k];
+      return '<tr style="border-top:1px solid var(--border,#2a2a30);">' +
+        '<td style="padding:10px 8px;font-weight:600;color:var(--text,#e6e6e6);">' + escapeHTML(MP.TYPE_LABELS[k] || k) + '</td>' +
+        '<td style="padding:10px 8px;"><input type="color" value="' + escapeAttr(d.color) + '" data-mp-color="' + k + '" style="width:42px;height:28px;padding:0;border:1px solid var(--border,#333);border-radius:6px;background:none;cursor:pointer;" /></td>' +
+        '<td style="padding:10px 8px;"><select data-mp-icon="' + k + '" style="font-size:12px;padding:4px 6px;">' + iconOpts + '</select></td>' +
+        '<td style="padding:10px 8px;text-align:right;"><span data-mp-preview="' + k + '" style="display:inline-block;width:28px;height:40px;vertical-align:middle;">' + mapPinPreview(k) + '</span></td>' +
+      '</tr>';
+    }).join('');
+    host.innerHTML =
+      '<fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:14px;">' +
+        '<legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Map pins</legend>' +
+        '<table style="width:100%;border-collapse:collapse;font-size:12px;">' +
+          '<tr style="font-size:11px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.3px;text-align:left;">' +
+            '<th style="padding:6px 8px;font-weight:600;">Type</th>' +
+            '<th style="padding:6px 8px;font-weight:600;">Color</th>' +
+            '<th style="padding:6px 8px;font-weight:600;">Icon</th>' +
+            '<th style="padding:6px 8px;font-weight:600;text-align:right;">Preview</th>' +
+          '</tr>' +
+          rows +
+        '</table>' +
+        '<div style="display:flex;gap:8px;margin-top:14px;align-items:center;flex-wrap:wrap;">' +
+          '<span id="org-mappins-status" style="flex:1;font-size:11px;color:var(--text-dim,#888);min-width:120px;"></span>' +
+          '<button class="ee-btn secondary" onclick="renderOrgMapPins()">Discard</button>' +
+          '<button class="ee-btn primary" onclick="saveOrgMapPins()">&#x1F4BE; Save map pins</button>' +
+        '</div>' +
+      '</fieldset>';
+    // Set each select to its current icon + wire live-preview updates.
+    MP.TYPE_ORDER.forEach(function(k) {
+      var sel = host.querySelector('[data-mp-icon="' + k + '"]');
+      if (sel) {
+        sel.value = _mapPinsDraft[k].icon;
+        sel.addEventListener('change', function() { _mapPinsDraft[k].icon = sel.value; refreshMapPinPreview(k); });
+      }
+      var col = host.querySelector('[data-mp-color="' + k + '"]');
+      if (col) col.addEventListener('input', function() { _mapPinsDraft[k].color = col.value; refreshMapPinPreview(k); });
+    });
+  }
+
+  function saveOrgMapPins() {
+    if (!_mapPinsDraft) return;
+    var status = document.getElementById('org-mappins-status');
+    if (status) { status.style.color = 'var(--text-dim,#888)'; status.textContent = 'Saving…'; }
+    window.p86Api.put('/api/org/branding', { map_pins: _mapPinsDraft }).then(function(resp) {
+      var saved = (resp && resp.branding && resp.branding.map_pins) || _mapPinsDraft;
+      if (window.p86MapPins && window.p86MapPins.setConfig) window.p86MapPins.setConfig(saved);
+      if (status) { status.style.color = '#34d399'; status.textContent = 'Saved — maps use these pins now.'; }
+    }).catch(function(err) {
+      if (status) { status.style.color = '#e74c3c'; status.textContent = 'Save failed: ' + (err.message || 'unknown'); }
+    });
+  }
+  window.saveOrgMapPins = saveOrgMapPins;
 
   // Audit modal — pulls /api/admin/agents/managed/audit, renders one
   // row per registered agent with flags, and exposes a Kill button on

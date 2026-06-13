@@ -38,6 +38,27 @@ function normLogos(arr) {
   }).filter(Boolean);
 }
 
+// Map-pin config — { typeKey: {color, icon} } for the known marker types
+// only (drives js/map-pins.js). Validates hex color + a safe icon-name
+// slug; drops unknown types and malformed entries.
+var MAP_PIN_TYPES = ['lead', 'service', 'reno', 'wo', 'job', 'project'];
+function normMapPins(obj) {
+  if (!obj || typeof obj !== 'object') return {};
+  var out = {};
+  MAP_PIN_TYPES.forEach(function (k) {
+    var v = obj[k];
+    if (!v || typeof v !== 'object') return;
+    var entry = {};
+    if (typeof v.color === 'string' && /^#[0-9a-f]{3,8}$/i.test(v.color.trim())) entry.color = v.color.trim();
+    if (typeof v.icon === 'string') {
+      var icon = v.icon.trim().slice(0, 40);
+      if (/^[a-z0-9-]+$/i.test(icon)) entry.icon = icon;
+    }
+    if (entry.color || entry.icon) out[k] = entry;
+  });
+  return out;
+}
+
 function callerOrgId(req) {
   const oid = req.user && req.user.organization_id;
   return oid ? Number(oid) : null;
@@ -471,6 +492,7 @@ router.get('/branding', requireAuth, async (req, res) => {
         primary_color: typeof b.primary_color === 'string' ? b.primary_color : '',
         accent_color: typeof b.accent_color === 'string' ? b.accent_color : '',
         footer_address: typeof b.footer_address === 'string' ? b.footer_address : '',
+        map_pins: normMapPins(b.map_pins),
       },
     });
   } catch (e) {
@@ -496,6 +518,7 @@ router.put('/branding', requireAuth, requireOrg, requireCapability('ROLES_MANAGE
     if (typeof body.primary_color === 'string' && /^#[0-9a-f]{3,8}$/i.test(body.primary_color)) b.primary_color = body.primary_color;
     if (typeof body.accent_color === 'string' && /^#[0-9a-f]{3,8}$/i.test(body.accent_color)) b.accent_color = body.accent_color;
     if (typeof body.footer_address === 'string') b.footer_address = body.footer_address.slice(0, 500);
+    if (body.map_pins && typeof body.map_pins === 'object') b.map_pins = normMapPins(body.map_pins);
     // Keep the primary logo_url consistent with the library so the titleblock
     // + email (which read logo_url) always resolve to a real logo.
     if (Array.isArray(b.logos) && b.logos.length) {

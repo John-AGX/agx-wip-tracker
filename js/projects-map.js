@@ -167,7 +167,12 @@
       return null;
     }
     window.p86Maps.ready().then(function(maps) {
-      mountMap(maps, mapHostEl, listEl, mapped, opts);
+      // Load the org's pin config (color/icon per type) before mounting so
+      // the very first render shows the right pins. ensureConfig never
+      // rejects — a failed load just leaves the built-in defaults in place.
+      var cfgReady = (window.p86MapPins && window.p86MapPins.ensureConfig)
+        ? window.p86MapPins.ensureConfig() : Promise.resolve();
+      return cfgReady.then(function() { mountMap(maps, mapHostEl, listEl, mapped, opts); });
     }).catch(function(err) {
       mapHostEl.innerHTML = emptyHTML('Map unavailable: ' + (err && err.message || 'unknown error') +
         '\nList view still works — pick a project on the left.');
@@ -229,12 +234,22 @@
     mapped.forEach(function(p) {
       var c = projectCoords(p);
       if (!c) return;
-      var marker = new maps.Marker({
-        position: c,
-        map: map,
-        title: p.name || 'Untitled'
-        // (default Google red pin — purpose-of-place visual semantic)
-      });
+      // Typed Project 86 pin — color + icon chosen by entity type
+      // (lead / service / reno / work-order / job / project) via the
+      // shared map-pins module. Falls back to the default Google pin if
+      // that module isn't loaded.
+      var markerOpts = { position: c, map: map, title: opts.getName(p) || 'Untitled' };
+      if (window.p86MapPins && typeof window.p86MapPins.specForEntity === 'function') {
+        var spec = window.p86MapPins.specForEntity(p, opts.entityLabel);
+        if (spec && spec.url) {
+          markerOpts.icon = {
+            url: spec.url,
+            anchor: new maps.Point(spec.ax, spec.ay),
+            scaledSize: new maps.Size(spec.w, spec.h)
+          };
+        }
+      }
+      var marker = new maps.Marker(markerOpts);
       markersById[p.id] = marker;
       bounds.extend(c);
       marker.addListener('click', function() {
