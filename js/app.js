@@ -1475,7 +1475,8 @@
             plans:      'Plans & Takeoffs',
             insights:   'Insights',
             admin:      'Admin',
-            projects:   'Projects'
+            projects:   'Projects',
+            console:    'Command Center'
         };
 
         // Stale-nav threshold. After this long without activity, the
@@ -1571,6 +1572,14 @@
                     window.renderProjectsInto(projHost);
                 } else if (projHost) {
                     projHost.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);">Projects module not loaded.</div>';
+                }
+            } else if (tabName === 'console') {
+                // Project 86 Command Center — platform-owner surface.
+                var consoleHost = document.getElementById('consolePageHost');
+                if (consoleHost && typeof window.renderConsoleInto === 'function') {
+                    window.renderConsoleInto(consoleHost);
+                } else if (consoleHost) {
+                    consoleHost.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);">Command Center module not loaded.</div>';
                 }
             } else if (tabName === 'schedule') {
                 if (typeof window.renderSchedule === 'function') window.renderSchedule();

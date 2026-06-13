@@ -615,6 +615,8 @@
                             <div class="app-nav-children" role="group" aria-label="My Files folders"></div>
                         </div>
                         <button class="tab-btn" data-tab="projects" data-p86-icon="folder" title="Projects"><span class="app-nav-label">Projects</span></button>
+                        <!-- Platform-owner only: the Project 86 Command Center. data-cap hides it until SYSTEM_ADMIN. -->
+                        <button class="tab-btn" data-tab="console" data-cap="SYSTEM_ADMIN" data-p86-icon="admin" style="display:none;" title="Command Center"><span class="app-nav-label">⚙ Command Center</span></button>
                         <!-- IA-D: "Field Tools" (was the ambiguous "Tools" —
                              easily confused with Plans). Clicking the row
                              opens the Field Tools grid (Margin Calc, Square
@@ -1223,6 +1225,14 @@
                      folder still works for old links; the sidebar now comes here). -->
                 <div id="projects" class="tab-content">
                     <div id="projectsPageHost"></div>
+                </div>
+
+                <!-- Project 86 Command Center — platform-owner (system_admin)
+                     surface, distinct from the per-org admin tab. Rendered by
+                     js/console.js (renderConsoleInto). Nav entry is data-cap
+                     SYSTEM_ADMIN so only the platform owner ever sees it. -->
+                <div id="console" class="tab-content">
+                    <div id="consolePageHost"></div>
                 </div>
 
                 <!-- SCHEDULE TAB — production scheduling calendar.
@@ -2952,7 +2962,7 @@
     <script src="js/qb-costs-view.js?v=11"></script>
     <script src="js/insights.js?v=7"></script>
     <script src="js/schedule.js?v=34"></script>
-    <script src="js/app.js?v=82"></script>
+    <script src="js/app.js?v=83"></script>
     <script src="js/compliance-review-ui.js?v=2"></script>
     <script src="js/messaging.js?v=1b"></script>
     <script src="js/my-files.js?v=16"></script>
@@ -2974,6 +2984,7 @@
     <script src="js/report-templates.js?v=1"></script>
     <script src="js/report-style-packs.js?v=2"></script>
     <script src="js/projects.js?v=58"></script>
+    <script src="js/console.js?v=1"></script>
     <!-- Shared pricing pipeline — math used by estimate-editor +
          estimate-preview + the upcoming change-order-editor. Loads
          BEFORE any of them so window.p86Pricing is ready. -->
@@ -3010,7 +3021,7 @@
     <!-- URL router — pathname-based navigation. Loads last so all
          top-level nav functions (switchTab, editJob, etc.) exist
          before the router wraps them. -->
-    <script src="js/router.js?v=13"></script>
+    <script src="js/router.js?v=14"></script>
 
     <!-- Sidebar Recents — client-side recently-opened list. Loads after
          router.js + the entity-open modules so it can wrap editJob /
