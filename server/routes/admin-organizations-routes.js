@@ -22,6 +22,7 @@ const { toFile } = require('@anthropic-ai/sdk');
 const { pool, listOrganizations, getOrgById } = require('../db');
 const { requireAuth, requireCapability, requireOrg, requireSystemAdmin, signToken } = require('../auth');
 const { sendForEvent } = require('../email');
+const { auditLog } = require('../audit');
 
 const router = express.Router();
 
@@ -141,6 +142,11 @@ router.post('/', requireAuth, requireSystemAdmin, async (req, res) => {
          RETURNING *`,
         [slug, name, b.description || '', b.identity_body || '']
       );
+      auditLog(req, {
+        action: 'org.create', targetType: 'organization',
+        targetId: r.rows[0].id, organizationId: r.rows[0].id,
+        detail: { slug, name },
+      });
       res.json({ organization: r.rows[0] });
     } catch (e) {
       if (e && e.code === '23505') {
@@ -184,6 +190,7 @@ router.post('/invites', requireAuth, requireSystemAdmin, async (req, res) => {
       [email, orgName, token, req.user.id, expiresAt]
     );
     const invite = ins.rows[0];
+    auditLog(req, { action: 'org.invite', targetType: 'org_invitation', targetId: invite.id, detail: { email, org_name: orgName } });
     const acceptUrl = appUrl().replace(/\/$/, '') + '/accept-org-invite?token=' + token;
     // Fire-and-forget email. The endpoint always returns the invite
     // (with token + accept URL) so the admin can copy/paste even if
@@ -362,6 +369,10 @@ router.delete('/:id', requireAuth, requireSystemAdmin, async (req, res) => {
       [id]
     );
     if (!r.rows.length) return res.status(404).json({ error: 'Organization not found or already archived' });
+    auditLog(req, {
+      action: 'org.archive', targetType: 'organization', targetId: id, organizationId: id,
+      detail: { slug: r.rows[0].slug, name: r.rows[0].name },
+    });
     res.json({ ok: true, organization: r.rows[0] });
   } catch (e) {
     console.error('DELETE /api/admin/organizations/:id error:', e);

@@ -4,6 +4,7 @@ const {
   requireAuth, requireRole, CAPABILITY_KEYS,
   refreshRoleCache, requireCapability
 } = require('../auth');
+const { auditLog } = require('../audit');
 
 const router = express.Router();
 
@@ -49,6 +50,7 @@ router.post('/', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res
       [name, label, description || null, JSON.stringify(caps)]
     );
     await refreshRoleCache();
+    auditLog(req, { action: 'role.create', targetType: 'role', targetId: name, detail: { label, capabilities: caps } });
     res.json({ ok: true, name });
   } catch (e) {
     if (e.code === '23505') {
@@ -64,7 +66,7 @@ router.post('/', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res
 // PM has, for example), but the name + builtin flag stay locked.
 router.put('/:name', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
   try {
-    const { rows } = await pool.query('SELECT builtin FROM roles WHERE name = $1', [req.params.name]);
+    const { rows } = await pool.query('SELECT builtin, capabilities FROM roles WHERE name = $1', [req.params.name]);
     if (!rows.length) return res.status(404).json({ error: 'Role not found' });
 
     const { label, description, capabilities } = req.body || {};
@@ -88,6 +90,10 @@ router.put('/:name', requireAuth, requireCapability('ROLES_MANAGE'), async (req,
       params
     );
     await refreshRoleCache();
+    auditLog(req, {
+      action: 'role.update', targetType: 'role', targetId: req.params.name,
+      detail: { capabilities_before: rows[0].capabilities, capabilities_after: caps != null ? caps : '(unchanged)' },
+    });
     res.json({ ok: true });
   } catch (e) {
     console.error('PUT /api/roles/:name error:', e);
@@ -112,6 +118,7 @@ router.delete('/:name', requireAuth, requireCapability('ROLES_MANAGE'), async (r
     }
     await pool.query('DELETE FROM roles WHERE name = $1', [req.params.name]);
     await refreshRoleCache();
+    auditLog(req, { action: 'role.delete', targetType: 'role', targetId: req.params.name });
     res.json({ ok: true });
   } catch (e) {
     console.error('DELETE /api/roles/:name error:', e);

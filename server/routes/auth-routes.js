@@ -3,6 +3,7 @@ const bcrypt = require('bcryptjs');
 const { pool, getOrgById } = require('../db');
 const { signToken, requireAuth, requireRole, resolveUserOrg, hasCapability } = require('../auth');
 const { ipLoginLimiter } = require('../rate-limit');
+const { auditLog } = require('../audit');
 
 const router = express.Router();
 
@@ -349,6 +350,21 @@ router.put('/users/:id', requireAuth, requireRole('admin'), async (req, res) => 
       [name || user.name, role || user.role, active != null ? active : user.active, phoneUpdate, emailUpdate, req.params.id]
     );
 
+    // Audit — role change is the privileged one; record before/after.
+    auditLog(req, {
+      action: (role && role !== user.role) ? 'user.role_change' : 'user.update',
+      targetType: 'user',
+      targetId: req.params.id,
+      organizationId: user.organization_id || null,
+      detail: {
+        email: emailUpdate,
+        role_before: user.role,
+        role_after: role || user.role,
+        active_before: user.active,
+        active_after: active != null ? active : user.active,
+      },
+    });
+
     res.json({ ok: true });
   } catch (e) {
     if (e && e.code === '23505') {
@@ -377,6 +393,8 @@ router.put('/users/:id/password', requireAuth, requireRole('admin'), async (req,
       'UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2',
       [bcrypt.hashSync(newPassword, 10), req.params.id]
     );
+    // Audit — record the reset (NEVER the password itself).
+    auditLog(req, { action: 'user.password_reset', targetType: 'user', targetId: req.params.id, detail: { email: targetUser.email } });
 
     // Email the user their new password — security tradeoff is
     // deliberate: Project 86 is small + admin-driven. Auth flow is "admin
@@ -418,9 +436,14 @@ router.delete('/users/:id', requireAuth, requireRole('admin'), async (req, res) 
     if (parseInt(req.params.id, 10) === req.user.id) {
       return res.status(400).json({ error: 'Cannot delete your own account' });
     }
-    const { rows } = await pool.query('SELECT id FROM users WHERE id = $1', [req.params.id]);
+    const { rows } = await pool.query('SELECT id, email, role, organization_id FROM users WHERE id = $1', [req.params.id]);
     if (!rows.length) return res.status(404).json({ error: 'User not found' });
     await pool.query('DELETE FROM users WHERE id = $1', [req.params.id]);
+    auditLog(req, {
+      action: 'user.delete', targetType: 'user', targetId: req.params.id,
+      organizationId: rows[0].organization_id || null,
+      detail: { email: rows[0].email, role: rows[0].role },
+    });
     res.json({ ok: true });
   } catch (e) {
     if (e.code === '23503') {

@@ -1642,6 +1642,33 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_email_log_tag ON email_log(tag);
     CREATE INDEX IF NOT EXISTS idx_email_log_to ON email_log(to_address);
 
+    -- Project 86 Command Center — append-only audit trail of privileged
+    -- actions (role changes, org create/archive, skill/MCP edits, native
+    -- Anthropic skill deletes, any system_admin operation). actor_email /
+    -- actor_role are SNAPSHOTTED so the record survives the user being
+    -- deleted. organization_id = the TARGET org the action touched
+    -- (nullable for platform-level ops); actor_org_id = the actor's home
+    -- org. Written fire-and-forget by server/audit.js — never blocks the
+    -- request. Append-only by convention (no UPDATE/DELETE paths).
+    CREATE TABLE IF NOT EXISTS admin_audit_log (
+      id BIGSERIAL PRIMARY KEY,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      actor_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      actor_email TEXT,
+      actor_role TEXT,
+      action TEXT NOT NULL,
+      target_type TEXT,
+      target_id TEXT,
+      organization_id INTEGER REFERENCES organizations(id) ON DELETE SET NULL,
+      actor_org_id INTEGER,
+      detail JSONB,
+      ip TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_admin_audit_created ON admin_audit_log(created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_admin_audit_actor ON admin_audit_log(actor_user_id);
+    CREATE INDEX IF NOT EXISTS idx_admin_audit_action ON admin_audit_log(action);
+    CREATE INDEX IF NOT EXISTS idx_admin_audit_org ON admin_audit_log(organization_id);
+
     -- Per-event template overrides. The codebase ships baked-in defaults
     -- in server/email-templates.js; admins can customize subject + body
     -- without redeploying by saving a row here. Lookup at send time
