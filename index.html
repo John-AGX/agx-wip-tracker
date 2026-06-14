@@ -246,7 +246,7 @@
     })();
     </script>
 
-    <link rel="stylesheet" href="css/styles.css?v=178">
+    <link rel="stylesheet" href="css/styles.css?v=179">
     <link rel="stylesheet" href="css/report-style-packs.css?v=3">
     <link rel="stylesheet" href="css/workspace-layout.css?v=60">
     <link rel="stylesheet" href="css/workspace.css?v=38">
@@ -546,6 +546,11 @@
                     </div>
                     <div id="sidebar-search-results" class="sidebar-search-results" role="listbox" hidden></div>
                 </div>
+                <!-- Scroll region: the nav AND recents live here so they
+                     scroll together. Only the head/search (above) and the
+                     account footer (below) stay pinned — recents is NOT
+                     sticky, it scrolls with the nav. -->
+                <div class="app-sidebar-scroll">
                 <nav class="app-nav" aria-label="Primary">
                     <!-- Destinations are grouped under uppercase section
                          labels (style borrowed from the node-graph sidebar's
@@ -703,6 +708,7 @@
                     </div>
                     <div id="sidebar-recents-list" class="sidebar-recents-list"></div>
                 </div>
+                </div><!-- /.app-sidebar-scroll -->
                 <!-- Account footer — pinned to the bottom of the sidebar
                      (margin-top:auto). Uses the dead space below the nav
                      to surface who's signed in. Clicking opens the SAME

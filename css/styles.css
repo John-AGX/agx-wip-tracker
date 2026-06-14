@@ -1134,13 +1134,16 @@
         }
 
         /* Nav list */
-        .app-nav {
-            /* Scroll area of the sidebar — grows to fill the space between
-               the fixed search box and the sticky footer. */
+        /* The scroll region holds the nav AND recents so they scroll
+           together; only head/search (above) and the footer (below) stay
+           pinned. Recents is deliberately inside this — it scrolls, not sticky. */
+        .app-sidebar-scroll {
             flex: 1 1 auto;
             min-height: 0;
             overflow-y: auto;
             overflow-x: hidden;
+        }
+        .app-nav {
             display: flex;
             flex-direction: column;
             gap: 2px;
@@ -1339,13 +1342,11 @@
            reads as one consistent list. Its own max-height + scroll keeps
            the account footer reachable if the list ever fills up. */
         .app-sidebar-recents {
-            flex: 0 0 auto;
-            max-height: 26vh;
-            overflow-y: auto;
             display: flex;
             flex-direction: column;
             gap: 2px;
             padding: 8px 8px 4px;
+            margin-top: 10px;
             border-top: 1px solid var(--border);
         }
         .app-sidebar-recents-head {
