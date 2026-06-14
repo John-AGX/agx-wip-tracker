@@ -1530,31 +1530,49 @@
       if (badge && job) job.status = badge.textContent.trim();
     }
 
-    buildHeader(detail, job);
+    // Build the contextual job layout. Wrapped so a throw in ANY step can
+    // never leave _applyingLayout stuck true — that previously froze the
+    // whole job layout permanently (no subtab nav, metrics stuck on "--"),
+    // because the observer early-returns while _applyingLayout is true.
+    var _step = 'start';
+    try {
+      _step = 'buildHeader';
+      buildHeader(detail, job);
 
-    // Insert two-col layout after the (now hidden) job-detail-header
-    var layout = buildLayout(detail);
-        // Insert two-col after the job-detail-header
-        var anchor = detail.querySelector(".job-detail-header");
-        if (anchor && anchor.nextSibling) {
-          detail.insertBefore(layout, anchor.nextSibling);
-        } else {
-          detail.appendChild(layout);
-        }
-        // Hide old summary grid and original elements
-        var summaryGrid = detail.querySelector(".summary-grid");
+      // Insert two-col layout after the (now hidden) job-detail-header
+      _step = 'buildLayout';
+      var layout = buildLayout(detail);
+      var anchor = detail.querySelector(".job-detail-header");
+      if (anchor && anchor.nextSibling) {
+        detail.insertBefore(layout, anchor.nextSibling);
+      } else {
+        detail.appendChild(layout);
+      }
+      // Hide old summary grid and original elements
+      _step = 'hideChrome';
+      var summaryGrid = detail.querySelector(".summary-grid");
       ['.action-buttons', '.sub-tabs', '#job-info-card', '.job-totals-strip'].forEach(function(sel) { var el = detail.querySelector(sel); if (el) el.style.display = 'none'; });
-        if (summaryGrid) summaryGrid.style.display = "none";
-        populateRightPanels(detail);
-      wireResizer();
-    wireTabSwitching();
-    moveJobInfoToAccordion(detail, document.getElementById('wsRightContent'));
-    // Relocate the job subtabs into the left sidebar (desktop) and swap
-    // the main nav out for a Back-to-Jobs + job-context view. Done AFTER
-    // wireTabSwitching so the tabs keep their click handlers when moved.
-    mountJobSubnav(job);
+      if (summaryGrid) summaryGrid.style.display = "none";
+      _step = 'populateRightPanels'; populateRightPanels(detail);
+      _step = 'wireResizer'; wireResizer();
+      _step = 'wireTabSwitching'; wireTabSwitching();
+      _step = 'moveJobInfoToAccordion'; moveJobInfoToAccordion(detail, document.getElementById('wsRightContent'));
+      // Relocate the job subtabs into the left sidebar (desktop) and swap
+      // the main nav out for a Back-to-Jobs + job-context view. Done AFTER
+      // wireTabSwitching so the tabs keep their click handlers when moved.
+      _step = 'mountJobSubnav'; mountJobSubnav(job);
       layoutApplied = true;
+    } catch (e) {
+      try { window.__p86LayoutErr = _step + ': ' + ((e && e.message) || e); } catch (_) {}
+      if (window.console && console.warn) console.warn('[applyLayout] failed at ' + _step + ':', e);
+      // Revert the half-built two-column layout to the static subtab view so
+      // the job stays navigable, then mark applied so the observer doesn't
+      // spin re-applying (which would infinite-loop via the body observer).
+      try { cleanup(); } catch (_) {}
+      layoutApplied = true;
+    } finally {
       _applyingLayout = false;
+    }
   }
 
   function tryInitWorkspace() {
