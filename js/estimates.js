@@ -322,6 +322,14 @@ function renderEstimatesList() {
                 else summaryEl.textContent = all.length + ' estimate' + (all.length === 1 ? '' : 's');
             }
 
+            // Map view — split map+list pane, pins resolved from each
+            // estimate's linked lead. Search still applies; the derived
+            // status filter is rendered inside the map view itself.
+            if (_estimatesView === 'map') {
+                renderEstimatesMap(listEl, filtered);
+                return;
+            }
+
             // Compute totals once per estimate, store on the object so the
             // sort comparator can use them without repeat work.
             const enriched = filtered.map(function(est) {
