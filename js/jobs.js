@@ -409,9 +409,11 @@ function renderJobsMain() {
         // Mounts an inline-styled section with a "+ New Change Order"
         // button, a count badge, and a clickable row per CO. Re-paints
         // after each loadChangeOrdersForJob.
-        function renderJobChangeOrdersInto(container, jobId) {
+        function renderJobChangeOrdersInto(container, jobId, mountId) {
             var mount = document.createElement('div');
-            mount.id = 'job-overview-change-orders';
+            // Distinct id per surface (overview vs the CO subtab) so the
+            // same renderer can mount in both without colliding ids.
+            mount.id = mountId || 'job-overview-change-orders';
             mount.style.cssText = 'margin-top:14px;';
             container.appendChild(mount);
             paintJobChangeOrdersInto(mount, jobId);
@@ -630,35 +632,144 @@ function renderJobsMain() {
         }
 
         function renderChangeOrders(jobId) {
-            const cos = appData.changeOrders.filter(co => co.jobId === jobId);
-            const tbody = document.querySelector('#co-table tbody');
-            tbody.innerHTML = '';
-            let totalInc = 0, totalCost = 0;
-            cos.forEach((co, idx) => {
-                const profit = (co.income || 0) - (co.estimatedCosts || 0);
-                totalInc += co.income || 0;
-                totalCost += co.estimatedCosts || 0;
-                const row = document.createElement('tr');
-                row.innerHTML = `
-                    <td>${escapeHTML(co.coNumber) || 'CO-' + (idx + 1)}</td>
-                    <td>${escapeHTML(co.description)}${co.notes ? '<br><span style="font-size: 11px; color: var(--text-dim);">' + escapeHTML(co.notes) + '</span>' : ''}</td>
-                    <td style="text-align: right;">${formatCurrency(co.income)}</td>
-                    <td style="text-align: right;">${formatCurrency(co.estimatedCosts)}</td>
-                    <td style="text-align: right; color: ${profit >= 0 ? 'var(--green)' : 'var(--red)'};">${formatCurrency(profit)}</td>
-                    <td>${escapeHTML(co.date) || '—'}</td>
-                    <td>
-                        <button class="ee-btn secondary" onclick="event.stopPropagation(); editCO('${escapeHTML(co.id)}')">&#x270F;&#xFE0F; Edit</button>
-                        <button class="ee-btn ee-icon-btn danger" onclick="event.stopPropagation(); deleteCO('${escapeHTML(co.id)}')" title="Delete">&#x1F5D1;</button>
-                    </td>`;
-                tbody.appendChild(row);
-            });
-            document.getElementById('co-total-income').textContent = formatCurrency(totalInc);
-            document.getElementById('co-total-costs').textContent = formatCurrency(totalCost);
-            document.getElementById('co-total-profit').textContent = formatCurrency(totalInc - totalCost);
-            document.getElementById('co-total-profit').style.color = (totalInc - totalCost) >= 0 ? 'var(--green)' : 'var(--red)';
+            // Repointed to the server-backed job_change_orders entity (was
+            // the legacy appData.changeOrders / #co-table). Renders the
+            // same list the Jobs hub shows, filtered to this job; rows open
+            // the dedicated CO editor (window.p86ChangeOrders).
+            var coHost = document.getElementById('job-changeorders');
+            if (!coHost) return;
+            coHost.innerHTML = '';
+            renderJobChangeOrdersInto(coHost, jobId, 'job-subtab-change-orders');
         }
 
         // ==================== PURCHASE ORDERS ====================
+        // ── Server-backed PO list on the job detail (mirrors the CO flow) ──
+        // The job Purchase Orders subtab renders the new job_purchase_orders
+        // entity (p86Api.purchaseOrders) — the same records the Jobs hub
+        // shows — NOT the legacy appData.purchaseOrders. Rows open the
+        // dedicated PO editor (window.p86PurchaseOrders).
+        var _poFetchInflight = {};
+        function loadPurchaseOrdersForJob(jobId) {
+            if (!jobId || !window.p86Api || !window.p86Api.purchaseOrders) return Promise.resolve([]);
+            if (_poFetchInflight[jobId]) return _poFetchInflight[jobId];
+            _poFetchInflight[jobId] = window.p86Api.purchaseOrders.listForJob(jobId)
+                .then(function(r) {
+                    var list = (r && r.purchase_orders) || [];
+                    if (!Array.isArray(appData.jobPurchaseOrders)) appData.jobPurchaseOrders = [];
+                    appData.jobPurchaseOrders = appData.jobPurchaseOrders
+                        .filter(function(p) { return p.job_id !== jobId; })
+                        .concat(list);
+                    delete _poFetchInflight[jobId];
+                    return list;
+                })
+                .catch(function(e) {
+                    delete _poFetchInflight[jobId];
+                    console.warn('loadPurchaseOrdersForJob failed:', e);
+                    return [];
+                });
+            return _poFetchInflight[jobId];
+        }
+        window.loadPurchaseOrdersForJob = loadPurchaseOrdersForJob;
+
+        // PO total from its line items — mirrors the Jobs hub computation
+        // (qty * unitCost, skipping section headers) so the number matches
+        // the hub + editor. Billed = sum of recorded bills.
+        function poRowTotal(po) {
+            return (Array.isArray(po && po.lines) ? po.lines : []).reduce(function(s, l) {
+                if (!l || l.section === '__section_header__') return s;
+                return s + (parseFloat(l.qty) || 0) * (parseFloat(l.unitCost) || 0);
+            }, 0);
+        }
+        function poRowBilled(po) {
+            return (Array.isArray(po && po.bills) ? po.bills : []).reduce(function(s, b) {
+                return s + (parseFloat(b.amount) || 0);
+            }, 0);
+        }
+
+        function renderJobPurchaseOrdersInto(container, jobId, mountId) {
+            var mount = document.createElement('div');
+            mount.id = mountId || 'job-overview-purchase-orders';
+            mount.style.cssText = 'margin-top:4px;';
+            container.appendChild(mount);
+            paintJobPurchaseOrdersInto(mount, jobId);
+            loadPurchaseOrdersForJob(jobId).then(function() {
+                paintJobPurchaseOrdersInto(mount, jobId);
+            });
+        }
+        function paintJobPurchaseOrdersInto(mount, jobId) {
+            if (!mount) return;
+            var rows = (appData.jobPurchaseOrders || []).filter(function(p) { return p.job_id === jobId; });
+            rows.sort(function(a, b) { return new Date(b.updated_at || 0) - new Date(a.updated_at || 0); });
+            function poStatusBadge(s) {
+                s = String(s || 'draft').toLowerCase();
+                var done = (s === 'approved' || s === 'closed' || s === 'work_complete');
+                var color = done ? 'var(--green,#34d399)' : (s === 'issued' ? 'var(--accent,#4f8cff)' : '#cbd5e1');
+                var bg = done ? 'rgba(52,211,153,0.12)' : (s === 'issued' ? 'rgba(79,140,255,0.12)' : 'rgba(148,163,184,0.12)');
+                var label = s.replace(/_/g, ' ').replace(/\b\w/g, function(m) { return m.toUpperCase(); });
+                return '<span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;letter-spacing:0.4px;text-transform:uppercase;color:' + color + ';background:' + bg + ';">' + escapeHTML(label) + '</span>';
+            }
+            var bodyHTML;
+            if (!rows.length) {
+                bodyHTML =
+                    '<div style="padding:20px;border:1px dashed var(--border,#333);border-radius:10px;text-align:center;color:var(--text-dim,#888);font-size:12px;">' +
+                        'No purchase orders yet. Click <strong>+ New Purchase Order</strong> to start one.' +
+                    '</div>';
+            } else {
+                var rowsHTML = rows.map(function(p) {
+                    var total = poRowTotal(p);
+                    var billed = poRowBilled(p);
+                    var outstanding = total - billed;
+                    return '<tr class="overview-row" style="cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.04);" data-po-open="' + escapeHTML(p.id) + '" title="Click to open">' +
+                        '<td style="white-space:nowrap;padding:8px 10px;"><strong style="color:var(--text,#fff);font-size:13px;">' + escapeHTML(p.po_number || 'PO') + '</strong></td>' +
+                        '<td style="padding:8px 10px;font-size:12.5px;color:var(--text-dim,#aaa);">' + escapeHTML(p.sub_name || '—') + '</td>' +
+                        '<td style="padding:8px 10px;font-size:12.5px;color:var(--text,#fff);">' + escapeHTML(p.title || '(untitled)') + '</td>' +
+                        '<td style="white-space:nowrap;padding:8px 10px;">' + poStatusBadge(p.status) + '</td>' +
+                        '<td class="num" style="text-align:right;white-space:nowrap;padding:8px 10px;font-family:\'SF Mono\',monospace;font-size:13px;color:var(--text,#fff);font-weight:600;">' + formatCurrency(total) + '</td>' +
+                        '<td class="num" style="text-align:right;white-space:nowrap;padding:8px 10px;font-family:\'SF Mono\',monospace;font-size:13px;color:var(--text-dim,#aaa);">' + formatCurrency(billed) + '</td>' +
+                        '<td class="num" style="text-align:right;white-space:nowrap;padding:8px 10px;font-family:\'SF Mono\',monospace;font-size:13px;color:' + (outstanding > 0.005 ? 'var(--yellow,#fbbf24)' : 'var(--green,#34d399)') + ';font-weight:600;">' + formatCurrency(outstanding) + '</td>' +
+                    '</tr>';
+                }).join('');
+                bodyHTML =
+                    '<div style="border:1px solid var(--border,#333);border-radius:10px;overflow-x:auto;background:var(--card-bg,#0f0f1e);">' +
+                        '<table style="width:100%;border-collapse:collapse;">' +
+                            '<thead style="background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border,#333);"><tr>' +
+                                thCell('PO #', 'left') +
+                                thCell('Sub', 'left') +
+                                thCell('Title', 'left') +
+                                thCell('Status', 'left') +
+                                thCell('Total', 'right') +
+                                thCell('Billed', 'right') +
+                                thCell('Outstanding', 'right') +
+                            '</tr></thead>' +
+                            '<tbody>' + rowsHTML + '</tbody>' +
+                        '</table>' +
+                    '</div>';
+            }
+            mount.innerHTML =
+                '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">' +
+                    '<h3 style="font-size:13px;margin:0;">&#x1F4C4; Purchase Orders (' + rows.length + ')</h3>' +
+                    '<button class="ee-btn primary" data-po-new="' + escapeHTML(jobId) + '" style="font-size:12px;">+ New Purchase Order</button>' +
+                '</div>' +
+                bodyHTML;
+            mount.querySelectorAll('[data-po-open]').forEach(function(tr) {
+                tr.addEventListener('click', function() {
+                    var id = tr.getAttribute('data-po-open');
+                    if (window.p86PurchaseOrders && window.p86PurchaseOrders.open) window.p86PurchaseOrders.open(id);
+                });
+            });
+            var newBtn = mount.querySelector('[data-po-new]');
+            if (newBtn) newBtn.addEventListener('click', function() {
+                if (window.p86PurchaseOrders && window.p86PurchaseOrders.openNew) {
+                    window.p86PurchaseOrders.openNew(jobId);
+                    // Best-effort refresh after the editor opens — it doesn't
+                    // emit a close event, so re-fetch shortly after.
+                    setTimeout(function() {
+                        loadPurchaseOrdersForJob(jobId).then(function() { paintJobPurchaseOrdersInto(mount, jobId); });
+                    }, 600);
+                }
+            });
+        }
+
         function getJobPOTotals(jobId) {
             const pos = appData.purchaseOrders.filter(po => po.jobId === jobId);
             return {
@@ -773,35 +884,14 @@ function renderJobsMain() {
         }
 
         function renderPurchaseOrders(jobId) {
-            const pos = appData.purchaseOrders.filter(po => po.jobId === jobId);
-            const tbody = document.querySelector('#po-table tbody');
-            tbody.innerHTML = '';
-            let totalAmt = 0, totalBilled = 0;
-            pos.forEach((po, idx) => {
-                const remaining = (po.amount || 0) - (po.billedToDate || 0);
-                totalAmt += po.amount || 0;
-                totalBilled += po.billedToDate || 0;
-                const statusColor = po.status === 'Closed' ? 'var(--green)' : po.status === 'Partial' ? 'var(--yellow)' : 'var(--accent)';
-                const row = document.createElement('tr');
-                row.innerHTML = `
-                    <td>${escapeHTML(po.poNumber) || 'PO-' + (idx + 1)}</td>
-                    <td>${escapeHTML(po.vendor)}</td>
-                    <td>${escapeHTML(po.description)}${po.notes ? '<br><span style="font-size: 11px; color: var(--text-dim);">' + escapeHTML(po.notes) + '</span>' : ''}</td>
-                    <td style="text-align: right;">${formatCurrency(po.amount)}</td>
-                    <td style="text-align: right;">${formatCurrency(po.billedToDate)}</td>
-                    <td style="text-align: right; color: ${remaining > 0 ? 'var(--yellow)' : 'var(--green)'};">${formatCurrency(remaining)}</td>
-                    <td><span style="color: ${statusColor}; font-weight: 600; font-size: 12px;">${escapeHTML(po.status)}</span></td>
-                    <td>${escapeHTML(po.date) || '—'}</td>
-                    <td>
-                        <button class="ee-btn secondary" onclick="event.stopPropagation(); editPO('${escapeHTML(po.id)}')">&#x270F;&#xFE0F; Edit</button>
-                        <button class="ee-btn ee-icon-btn danger" onclick="event.stopPropagation(); deletePO('${escapeHTML(po.id)}')" title="Delete">&#x1F5D1;</button>
-                    </td>`;
-                tbody.appendChild(row);
-            });
-            document.getElementById('po-total-amount').textContent = formatCurrency(totalAmt);
-            document.getElementById('po-total-billed').textContent = formatCurrency(totalBilled);
-            document.getElementById('po-total-remaining').textContent = formatCurrency(totalAmt - totalBilled);
-            document.getElementById('po-total-remaining').style.color = (totalAmt - totalBilled) > 0 ? 'var(--yellow)' : 'var(--green)';
+            // Repointed to the server-backed job_purchase_orders entity (was
+            // the legacy appData.purchaseOrders / #po-table). Renders the
+            // same list the Jobs hub shows, filtered to this job; rows open
+            // the dedicated PO editor (window.p86PurchaseOrders).
+            var poHost = document.getElementById('job-purchaseorders');
+            if (!poHost) return;
+            poHost.innerHTML = '';
+            renderJobPurchaseOrdersInto(poHost, jobId, 'job-subtab-purchase-orders');
         }
 
         // ==================== INVOICES ====================
