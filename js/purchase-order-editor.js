@@ -473,6 +473,7 @@
           if (rt) rt.textContent = money(lineTotal(_po.lines[i]));
           var tot = document.getElementById('po-ed-total');
           if (tot) tot.textContent = money(poTotal(_po));
+          recomputePay(); // line changes shift the PO total → refresh % billed
         }
         queueSave();
       });
@@ -493,6 +494,7 @@
     var tot = document.getElementById('po-ed-total');
     if (tot) tot.textContent = money(poTotal(_po));
     wireLineInputs();
+    recomputePay(); // adding/removing lines shifts the PO total
   }
 
   // ── save ────────────────────────────────────────────────────────────
