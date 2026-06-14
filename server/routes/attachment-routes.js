@@ -414,7 +414,7 @@ const MAX_FILE_BYTES = 50 * 1024 * 1024; // 50MB — fits most drawings, big PDF
 // punch-list defect photo) attach here. Reads allowed for any user in
 // the task's org; writes track the same TASKS capability the task
 // routes enforce.
-const VALID_ENTITY_TYPES = new Set(['lead', 'estimate', 'client', 'job', 'sub', 'user', 'org', 'project', 'task']);
+const VALID_ENTITY_TYPES = new Set(['lead', 'estimate', 'client', 'job', 'sub', 'user', 'org', 'project', 'task', 'purchase_order']);
 
 // Lightweight MIME detection — sharp only handles raster images, so
 // anything outside this set bypasses the resize pipeline.

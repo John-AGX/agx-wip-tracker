@@ -159,6 +159,7 @@
           '<input id="jh-search" class="jobshub-search" type="text" placeholder="Search…" value="' + esc(st.q) + '" autocomplete="off">' +
           jobFilterHTML(st.job) +
           statusFilterHTML(cfg.statusOptions, st.status) +
+          (cfg.extraActionHTML || '') +
           '<button id="jh-new" class="ee-btn primary jobshub-new" type="button">+ New</button>' +
         '</div>' +
       '</div>' +
@@ -202,6 +203,7 @@
     if (jobEl) jobEl.addEventListener('change', function () { st.job = jobEl.value; refetch(); });
     if (statusEl) statusEl.addEventListener('change', function () { st.status = statusEl.value; refetch(); });
     if (newBtn) newBtn.addEventListener('click', function () { openCreateModal(cfg.createKind, refetch); });
+    if (typeof cfg.wireExtra === 'function') cfg.wireExtra(host);
     refetch();
   }
 
@@ -295,6 +297,8 @@
       key: 'purchase-orders',
       title: 'Purchase Orders',
       createKind: 'po',
+      extraActionHTML: '<button id="jh-po-template" class="ee-btn jobshub-tpl-btn" type="button" title="Edit the org-wide scope-of-work template seeded into new POs">⚙ Template</button>',
+      wireExtra: function (h) { var b = h.querySelector('#jh-po-template'); if (b) b.addEventListener('click', openScopeTemplateModal); },
       onRow: function (tr) {
         var id = tr.getAttribute('data-po-id');
         if (id && window.p86PurchaseOrders && typeof window.p86PurchaseOrders.open === 'function') {
@@ -484,6 +488,51 @@
     window.p86Api.workflowItems.create(jobId, payload)
       .then(function () { close(); if (typeof onSaved === 'function') onSaved(); })
       .catch(function (err) { done(); alert('Could not create: ' + ((err && err.message) || 'error')); });
+  }
+
+  // ── PO scope template editor (per-org default seeded into new POs) ──
+  function openScopeTemplateModal() {
+    var overlay = document.createElement('div');
+    overlay.className = 'jobshub-modal-overlay';
+    overlay.innerHTML =
+      '<div class="jobshub-modal jobshub-modal-wide" role="dialog" aria-modal="true">' +
+        '<div class="jobshub-modal-head"><span>Purchase Order — Scope &amp; Terms Template</span>' +
+          '<button class="jobshub-modal-x" type="button" aria-label="Close">✕</button></div>' +
+        '<div class="jobshub-modal-body">' +
+          '<div class="jobshub-hint-note">This text seeds the Scope of Work &amp; Terms on every NEW purchase order. Paste your exact subcontract language here. Existing POs keep their own saved copy.</div>' +
+          '<textarea id="jh-tpl-text" class="jobshub-input" rows="18" style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;line-height:1.5;">Loading…</textarea>' +
+          '<div class="jobshub-tpl-status" id="jh-tpl-status"></div>' +
+        '</div>' +
+        '<div class="jobshub-modal-foot">' +
+          '<button class="ee-btn jobshub-tpl-reset" type="button">Reset to default</button>' +
+          '<span style="flex:1 1 auto"></span>' +
+          '<button class="ee-btn jobshub-cancel" type="button">Cancel</button>' +
+          '<button class="ee-btn primary jobshub-tpl-save" type="button">Save template</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(overlay);
+    function close() { if (overlay.parentNode) overlay.parentNode.removeChild(overlay); }
+    overlay.addEventListener('click', function (e) { if (e.target === overlay) close(); });
+    overlay.querySelector('.jobshub-modal-x').addEventListener('click', close);
+    overlay.querySelector('.jobshub-cancel').addEventListener('click', close);
+    var ta = overlay.querySelector('#jh-tpl-text');
+    var statusEl = overlay.querySelector('#jh-tpl-status');
+    window.p86Api.purchaseOrders.getScopeTemplate()
+      .then(function (r) { ta.value = (r && r.template) || ''; statusEl.textContent = (r && r.is_default) ? 'Currently using the built-in default.' : 'Custom template in use.'; })
+      .catch(function () { ta.value = ''; });
+    overlay.querySelector('.jobshub-tpl-save').addEventListener('click', function () {
+      var btn = this; btn.disabled = true; btn.textContent = 'Saving…';
+      window.p86Api.purchaseOrders.setScopeTemplate(ta.value || '')
+        .then(function () { close(); })
+        .catch(function (e) { btn.disabled = false; btn.textContent = 'Save template'; alert('Could not save: ' + ((e && e.message) || 'error — admin rights required')); });
+    });
+    overlay.querySelector('.jobshub-tpl-reset').addEventListener('click', function () {
+      if (!window.confirm('Reset to the built-in default template? Your custom text will be cleared.')) return;
+      window.p86Api.purchaseOrders.setScopeTemplate('')
+        .then(function () { return window.p86Api.purchaseOrders.getScopeTemplate(); })
+        .then(function (r) { ta.value = (r && r.template) || ''; statusEl.textContent = 'Reset to the built-in default.'; })
+        .catch(function (e) { alert('Could not reset: ' + ((e && e.message) || 'error')); });
+    });
   }
 
   window.p86JobsHub = { renderJobsHubInto: renderJobsHubInto, switchJobsHubSubTab: switchJobsHubSubTab };

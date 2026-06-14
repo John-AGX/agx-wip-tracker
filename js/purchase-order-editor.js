@@ -138,7 +138,10 @@
         '<div class="po-ed-body">' +
           generalSectionHTML(locked) +
           lineItemsSectionHTML(locked) +
+          paymentsSectionHTML(locked) +
           scopeSectionHTML(locked) +
+          attachmentsSectionHTML() +
+          linkedRfisSectionHTML() +
           notesSectionHTML(locked) +
           acceptanceSectionHTML() +
         '</div>' +
@@ -223,6 +226,128 @@
     '</div>';
   }
 
+  // ── Bills & Lien Waivers (data.bills[]) + % billed / outstanding ────
+  function billsTotal(po) { return ((po && po.bills) || []).reduce(function (s, b) { return s + num(b.amount); }, 0); }
+  var LIEN_OPTS = [
+    { v: 'none', label: 'No waiver', c: '#94a3b8' },
+    { v: 'conditional', label: 'Conditional', c: '#fbbf24' },
+    { v: 'unconditional', label: 'Unconditional', c: '#34d399' }
+  ];
+  function paymentsSectionHTML(locked) {
+    var total = poTotal(_po), billed = billsTotal(_po), outstanding = total - billed;
+    var pct = total > 0 ? Math.round(billed / total * 100) : 0;
+    var bills = _po.bills || [];
+    var rows = bills.length
+      ? bills.map(function (b, i) { return billRowHTML(b, i, locked); }).join('')
+      : '<tr><td colspan="5" class="po-ed-empty">No bills yet.</td></tr>';
+    return '<div class="po-ed-sec">' +
+      '<div class="po-ed-sec-title">Bills &amp; Lien Waivers</div>' +
+      '<div class="po-ed-pay-summary">' +
+        '<div class="po-ed-stat"><span>PO Total</span><strong id="po-ed-pt">' + money(total) + '</strong></div>' +
+        '<div class="po-ed-stat"><span>Billed</span><strong id="po-ed-pb">' + money(billed) + '</strong></div>' +
+        '<div class="po-ed-stat"><span>Outstanding</span><strong id="po-ed-po">' + money(outstanding) + '</strong></div>' +
+        '<div class="po-ed-stat"><span>% Billed</span><strong id="po-ed-pp">' + pct + '%</strong></div>' +
+      '</div>' +
+      '<div class="po-ed-progress"><div class="po-ed-progress-fill" id="po-ed-progfill" style="width:' + Math.min(100, pct) + '%"></div></div>' +
+      '<div class="po-ed-tbl-wrap"><table class="po-ed-tbl">' +
+        '<thead><tr><th>Date</th><th>Description</th><th class="num">Amount</th><th>Lien waiver</th><th></th></tr></thead>' +
+        '<tbody id="po-ed-bills">' + rows + '</tbody>' +
+      '</table></div>' +
+      (locked ? '' : '<button class="ee-btn po-ed-addrow" id="po-ed-addbill">+ Add bill</button>') +
+    '</div>';
+  }
+  function billRowHTML(b, i, locked) {
+    var dis = locked ? ' disabled' : '';
+    return '<tr data-bill="' + i + '">' +
+      '<td><input class="po-ed-cell" data-bf="date" type="date" value="' + escAttr(b.date || '') + '"' + dis + '></td>' +
+      '<td><input class="po-ed-cell" data-bf="description" value="' + escAttr(b.description || '') + '" placeholder="Sub invoice / draw"' + dis + '></td>' +
+      '<td class="num"><input class="po-ed-cell num" data-bf="amount" type="number" step="0.01" value="' + escAttr(b.amount != null ? b.amount : '') + '"' + dis + '></td>' +
+      '<td><select class="po-ed-cell" data-bf="lienWaiver"' + dis + '>' +
+        LIEN_OPTS.map(function (o) { return '<option value="' + o.v + '"' + ((b.lienWaiver || 'none') === o.v ? ' selected' : '') + '>' + o.label + '</option>'; }).join('') +
+      '</select></td>' +
+      '<td>' + (locked ? '' : '<button class="po-ed-delbill" data-bill="' + i + '" title="Remove">✕</button>') + '</td>' +
+    '</tr>';
+  }
+  function recomputePay() {
+    var total = poTotal(_po), billed = billsTotal(_po);
+    var pct = total > 0 ? Math.round(billed / total * 100) : 0;
+    var set = function (id, v) { var el = document.getElementById(id); if (el) el.textContent = v; };
+    set('po-ed-pt', money(total)); set('po-ed-pb', money(billed));
+    set('po-ed-po', money(total - billed)); set('po-ed-pp', pct + '%');
+    var pf = document.getElementById('po-ed-progfill'); if (pf) pf.style.width = Math.min(100, pct) + '%';
+  }
+
+  // ── Attachments (polymorphic, entity_type='purchase_order') ─────────
+  function attachmentsSectionHTML() {
+    return '<div class="po-ed-sec">' +
+      '<div class="po-ed-sec-title">Attachments <span class="po-ed-hint">(plans, specs, approvals)</span></div>' +
+      '<div id="po-ed-atts"><div class="po-ed-hint">Loading…</div></div>' +
+      '<label class="ee-btn po-ed-addrow">+ Upload file<input type="file" id="po-ed-file" multiple style="display:none"></label>' +
+    '</div>';
+  }
+  function loadAttachments() {
+    var host = document.getElementById('po-ed-atts');
+    if (!host || !window.p86Api || !window.p86Api.attachments) return;
+    window.p86Api.attachments.list('purchase_order', _po.id).then(function (r) {
+      var atts = (r && r.attachments) || [];
+      if (!atts.length) { host.innerHTML = '<div class="po-ed-hint">No files yet.</div>'; return; }
+      host.innerHTML = '<div class="po-ed-att-grid">' + atts.map(function (a) {
+        var url = a.original_url || a.web_url || a.thumb_url || '#';
+        var isImg = /^image\//.test(a.mime_type || '') && a.thumb_url;
+        return '<div class="po-ed-att">' +
+          (isImg
+            ? '<a href="' + esc(url) + '" target="_blank" rel="noopener"><img class="po-ed-att-thumb" src="' + esc(a.thumb_url) + '" alt=""></a>'
+            : '<a href="' + esc(url) + '" target="_blank" rel="noopener" class="po-ed-att-doc">📄</a>') +
+          '<a class="po-ed-att-name" href="' + esc(url) + '" target="_blank" rel="noopener" title="' + escAttr(a.filename || '') + '">' + esc(a.filename || 'file') + '</a>' +
+          '<button class="po-ed-att-del" data-att="' + esc(a.id) + '" title="Remove">✕</button>' +
+        '</div>';
+      }).join('') + '</div>';
+      host.querySelectorAll('.po-ed-att-del').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          if (!window.confirm('Remove this file?')) return;
+          window.p86Api.attachments.remove(btn.getAttribute('data-att')).then(loadAttachments).catch(function () { alert('Could not remove file.'); });
+        });
+      });
+    }).catch(function () { host.innerHTML = '<div class="po-ed-hint">Could not load files.</div>'; });
+  }
+
+  // ── Linked RFIs (data.linkedRfiIds[], from this PO's job) ───────────
+  function linkedRfisSectionHTML() {
+    return '<div class="po-ed-sec">' +
+      '<div class="po-ed-sec-title">Linked RFIs <span class="po-ed-hint">(open questions tied to this PO)</span></div>' +
+      '<div id="po-ed-rfis"><div class="po-ed-hint">Loading…</div></div>' +
+    '</div>';
+  }
+  function loadLinkedRfis(locked) {
+    var host = document.getElementById('po-ed-rfis');
+    if (!host) return;
+    if (!_po.job_id || !window.p86Api || !window.p86Api.workflowItems) { host.innerHTML = '<div class="po-ed-hint">No job linked.</div>'; return; }
+    window.p86Api.workflowItems.listForJob(_po.job_id, { type: 'rfi' }).then(function (r) {
+      var rfis = (r && r.items) || [];
+      var linked = _po.linkedRfiIds || [];
+      if (!rfis.length) { host.innerHTML = '<div class="po-ed-hint">No RFIs on this job yet — create them from Jobs → RFIs.</div>'; return; }
+      host.innerHTML = rfis.map(function (it) {
+        var on = linked.indexOf(it.id) !== -1;
+        return '<label class="po-ed-rfi-row">' +
+          '<input type="checkbox" data-rfi="' + esc(it.id) + '"' + (on ? ' checked' : '') + (locked ? ' disabled' : '') + '>' +
+          '<span class="po-ed-rfi-num">' + esc(it.number || '') + '</span>' +
+          '<span class="po-ed-rfi-subj">' + esc(it.subject || '') + '</span>' +
+          '<span class="po-ed-rfi-status">' + esc(it.status || '') + '</span>' +
+        '</label>';
+      }).join('');
+      if (!locked) host.querySelectorAll('input[data-rfi]').forEach(function (cb) {
+        cb.addEventListener('change', function () {
+          var id = cb.getAttribute('data-rfi');
+          var arr = _po.linkedRfiIds || [];
+          if (cb.checked) { if (arr.indexOf(id) === -1) arr.push(id); }
+          else { arr = arr.filter(function (x) { return x !== id; }); }
+          _po.linkedRfiIds = arr;
+          queueSave();
+        });
+      });
+    }).catch(function () { host.innerHTML = '<div class="po-ed-hint">Could not load RFIs.</div>'; });
+  }
+
   // ── wiring ──────────────────────────────────────────────────────────
   function wire(locked) {
     var byId = function (id) { return document.getElementById(id); };
@@ -247,6 +372,11 @@
         queueSave();
       });
     }
+
+    // Read-only sections load regardless of lock state.
+    loadAttachments();
+    loadLinkedRfis(locked);
+
     if (locked) return;
 
     bindInput('po-f-title', function (v) { _po.title = v; });
@@ -264,6 +394,62 @@
     });
 
     wireLineInputs();
+
+    // Bills & lien waivers
+    var addBill = byId('po-ed-addbill');
+    if (addBill) addBill.addEventListener('click', function () {
+      if (!Array.isArray(_po.bills)) _po.bills = [];
+      _po.bills.push({ id: 'bill_' + Math.random().toString(36).slice(2, 8), date: new Date().toISOString().slice(0, 10), description: '', amount: '', lienWaiver: 'none' });
+      reRenderBills();
+      queueSave();
+    });
+    wireBillInputs();
+
+    // Attachment upload
+    var fileInput = byId('po-ed-file');
+    if (fileInput) fileInput.addEventListener('change', function () {
+      var files = Array.prototype.slice.call(fileInput.files || []);
+      if (!files.length) return;
+      var host = byId('po-ed-atts'); if (host) host.innerHTML = '<div class="po-ed-hint">Uploading…</div>';
+      Promise.all(files.map(function (f) {
+        return window.p86Api.attachments.upload('purchase_order', _po.id, f, {}).catch(function () { return null; });
+      })).then(function () { fileInput.value = ''; loadAttachments(); });
+    });
+  }
+
+  function wireBillInputs() {
+    var body = document.getElementById('po-ed-bills');
+    if (!body) return;
+    body.querySelectorAll('.po-ed-cell').forEach(function (inp) {
+      var handler = function () { updateBillCell(inp); };
+      inp.addEventListener('input', handler);
+      if (inp.tagName === 'SELECT') inp.addEventListener('change', handler);
+    });
+    body.querySelectorAll('.po-ed-delbill').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        var i = parseInt(btn.getAttribute('data-bill'), 10);
+        if (_po.bills) { _po.bills.splice(i, 1); reRenderBills(); queueSave(); }
+      });
+    });
+  }
+  function updateBillCell(inp) {
+    var tr = inp.closest('tr'); if (!tr) return;
+    var i = parseInt(tr.getAttribute('data-bill'), 10);
+    var f = inp.getAttribute('data-bf');
+    if (!_po.bills || !_po.bills[i]) return;
+    _po.bills[i][f] = inp.value;
+    if (f === 'amount') recomputePay();
+    queueSave();
+  }
+  function reRenderBills() {
+    var body = document.getElementById('po-ed-bills');
+    if (!body) return;
+    var bills = _po.bills || [];
+    body.innerHTML = bills.length
+      ? bills.map(function (b, i) { return billRowHTML(b, i, false); }).join('')
+      : '<tr><td colspan="5" class="po-ed-empty">No bills yet.</td></tr>';
+    wireBillInputs();
+    recomputePay();
   }
 
   function bindInput(id, setter) {
@@ -321,7 +507,8 @@
     var payload = {
       title: _po.title || '', scope: _po.scope || '', internalNotes: _po.internalNotes || '',
       scheduledCompletion: _po.scheduledCompletion || '', materialsOnly: !!_po.materialsOnly,
-      lines: _po.lines || [], sub_id: _po.sub_id || null
+      lines: _po.lines || [], bills: _po.bills || [], linkedRfiIds: _po.linkedRfiIds || [],
+      sub_id: _po.sub_id || null
     };
     window.p86Api.purchaseOrders.update(_po.id, payload)
       .then(function () { setSaved('Saved'); })

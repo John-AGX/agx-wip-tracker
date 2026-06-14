@@ -2483,8 +2483,32 @@
         .po-ed-delrow:hover { background: rgba(248, 113, 113, 0.15); color: #f87171; }
         .po-ed-addrow { margin-top: 8px; }
         .po-ed-accepted { border-color: #34d39955; }
+        .po-ed-pay-summary { display: flex; flex-wrap: wrap; gap: 18px 24px; margin-bottom: 8px; }
+        .po-ed-stat { display: flex; flex-direction: column; gap: 2px; }
+        .po-ed-stat span { font-size: 10.5px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .3px; }
+        .po-ed-stat strong { font-size: 15px; color: var(--text); font-variant-numeric: tabular-nums; }
+        .po-ed-progress { height: 6px; background: var(--surface2); border-radius: 4px; overflow: hidden; margin-bottom: 12px; }
+        .po-ed-progress-fill { height: 100%; background: #34d399; transition: width .2s; }
+        .po-ed-empty { color: var(--text-dim); text-align: center; padding: 10px 0; font-size: 11.5px; }
+        .po-ed-att-grid { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
+        .po-ed-att { width: 120px; display: flex; flex-direction: column; gap: 4px; position: relative; background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 6px; }
+        .po-ed-att-thumb { width: 100%; height: 72px; object-fit: cover; border-radius: 6px; display: block; }
+        .po-ed-att-doc { display: flex; align-items: center; justify-content: center; height: 72px; font-size: 30px; text-decoration: none; }
+        .po-ed-att-name { font-size: 11px; color: var(--text); text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .po-ed-att-name:hover { text-decoration: underline; }
+        .po-ed-att-del { position: absolute; top: 2px; right: 2px; background: rgba(0, 0, 0, .5); border: none; color: #fff; border-radius: 50%; width: 18px; height: 18px; cursor: pointer; font-size: 10px; line-height: 1; }
+        .po-ed-rfi-row { display: flex; align-items: center; gap: 8px; padding: 5px 4px; border-bottom: 1px solid var(--border); font-size: 12px; color: var(--text); cursor: pointer; }
+        .po-ed-rfi-row:last-child { border-bottom: none; }
+        .po-ed-rfi-num { font-weight: 600; color: var(--text-dim); min-width: 52px; }
+        .po-ed-rfi-subj { flex: 1 1 auto; }
+        .po-ed-rfi-status { font-size: 10.5px; color: var(--text-dim); text-transform: capitalize; }
+        .po-ed-delbill { background: none; border: none; color: var(--text-dim); cursor: pointer; font-size: 12px; padding: 2px 6px; border-radius: 6px; }
+        .po-ed-delbill:hover { background: rgba(248, 113, 113, 0.15); color: #f87171; }
         .jobshub-inline-check { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text); padding-top: 22px; }
         .jobshub-hint-note { font-size: 11.5px; color: var(--text-dim); background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+        .jobshub-modal-wide { max-width: 720px; }
+        .jobshub-tpl-status { font-size: 11px; color: var(--text-dim); }
+        .jobshub-tpl-btn { white-space: nowrap; }
 
         td {
             padding: 6px 8px;
