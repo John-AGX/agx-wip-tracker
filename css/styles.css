@@ -941,8 +941,10 @@
             flex-direction: column;
             background: var(--surface);
             border-right: 1px solid var(--border);
-            overflow-y: auto;
-            overflow-x: hidden;
+            /* The sidebar itself no longer scrolls — the nav (.app-nav) is
+               the scroll area so head / search / footer stay pinned. That
+               makes .app-sidebar-foot a true sticky footer. */
+            overflow: hidden;
             transition: width 0.18s ease;
             /* Crisper text rendering on the dim sidebar surface. */
             -webkit-font-smoothing: antialiased;
@@ -952,6 +954,7 @@
             width: 48px;
         }
         .app-sidebar-head {
+            flex: 0 0 auto;
             display: flex;
             align-items: center;
             justify-content: flex-end;
@@ -986,6 +989,7 @@
            rather than pushing it down. Collapsed rail shows just the
            magnifier; clicking it expands the sidebar (js/search.js). */
         .app-sidebar-search {
+            flex: 0 0 auto;
             position: relative;
             padding: 0 8px 8px;
         }
@@ -1131,6 +1135,12 @@
 
         /* Nav list */
         .app-nav {
+            /* Scroll area of the sidebar — grows to fill the space between
+               the fixed search box and the sticky footer. */
+            flex: 1 1 auto;
+            min-height: 0;
+            overflow-y: auto;
+            overflow-x: hidden;
             display: flex;
             flex-direction: column;
             gap: 2px;
@@ -1329,11 +1339,13 @@
            reads as one consistent list. Its own max-height + scroll keeps
            the account footer reachable if the list ever fills up. */
         .app-sidebar-recents {
+            flex: 0 0 auto;
+            max-height: 26vh;
+            overflow-y: auto;
             display: flex;
             flex-direction: column;
             gap: 2px;
             padding: 8px 8px 4px;
-            margin-top: 10px;
             border-top: 1px solid var(--border);
         }
         .app-sidebar-recents-head {
@@ -1447,11 +1459,69 @@
            #user-avatar-menu popover, repositioned to pop UP from here
            via the .from-sidebar modifier. */
         .app-sidebar-foot {
-            margin-top: auto;
+            flex: 0 0 auto;
             padding: 8px;
             border-top: 1px solid var(--border);
             position: relative;
         }
+        /* Update banner — Claude-style "new version" notice that lives in the
+           always-visible sticky footer (above the account row). Hidden until
+           the SW reports a waiting worker; js/index.html#showUpdateToast
+           toggles .p86-sidebar-update-show. */
+        .p86-sidebar-update {
+            display: none;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+            padding: 7px 9px;
+            border: 1px solid rgba(79, 140, 255, 0.45);
+            border-radius: 10px;
+            background: linear-gradient(135deg, rgba(79, 140, 255, 0.15), rgba(124, 58, 237, 0.12));
+        }
+        .p86-sidebar-update.p86-sidebar-update-show { display: flex; }
+        .p86-sidebar-update-text {
+            flex: 1 1 auto;
+            min-width: 0;
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text, #e8e8ea);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .p86-sidebar-update-dot {
+            flex: 0 0 auto;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: #4f8cff;
+            animation: p86-update-pulse 2s infinite;
+        }
+        @keyframes p86-update-pulse {
+            0%   { box-shadow: 0 0 0 0 rgba(79, 140, 255, 0.55); }
+            70%  { box-shadow: 0 0 0 6px rgba(79, 140, 255, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(79, 140, 255, 0); }
+        }
+        .p86-sidebar-update-btn {
+            flex: 0 0 auto;
+            padding: 4px 10px;
+            border: none;
+            border-radius: 7px;
+            background: var(--accent, #4f8cff);
+            color: #fff;
+            font-size: 11.5px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        .p86-sidebar-update-btn:hover { filter: brightness(1.08); }
+        /* Collapsed icon rail: drop the label, keep a compact ↻ chip. */
+        .app-sidebar.collapsed .p86-sidebar-update { justify-content: center; padding: 6px; }
+        .app-sidebar.collapsed .p86-sidebar-update-text { display: none; }
+        .app-sidebar.collapsed .p86-sidebar-update-btn { font-size: 0; padding: 5px 7px; }
+        .app-sidebar.collapsed .p86-sidebar-update-btn::before { content: "\21BB"; font-size: 13px; }
         .sidebar-account {
             display: flex;
             align-items: center;

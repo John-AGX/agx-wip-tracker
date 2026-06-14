@@ -95,6 +95,37 @@
           // button → message the waiting SW + flip the reload flag
           // so controllerchange triggers the page reload.
           window.showUpdateToast = function (waitingWorker) {
+            // Claude-style: when the sticky sidebar footer is on screen
+            // (desktop), surface the update there so it's always visible
+            // and never missed. On mobile the sidebar is hidden, so fall
+            // through to the floating toast below.
+            var _sb = document.getElementById('app-sidebar');
+            var _slot = document.getElementById('app-sidebar-update');
+            if (_slot && _sb && _sb.offsetParent !== null) {
+              if (_slot.getAttribute('data-shown') === '1') return;
+              _slot.setAttribute('data-shown', '1');
+              _slot.innerHTML =
+                '<span class="p86-sidebar-update-text"><span class="p86-sidebar-update-dot" aria-hidden="true"></span>Update ready</span>' +
+                '<button class="p86-sidebar-update-btn" type="button">Relaunch</button>';
+              _slot.classList.add('p86-sidebar-update-show');
+              var _fired = false;
+              var _fire = function () {
+                if (_fired) return;
+                _fired = true;
+                _reloadOnControllerChange = true;
+                try {
+                  if (waitingWorker && waitingWorker.postMessage) waitingWorker.postMessage({ type: 'SKIP_WAITING' });
+                } catch (e) { console.warn('[sw] postMessage failed:', e); }
+                var b = _slot.querySelector('.p86-sidebar-update-btn');
+                if (b) { b.textContent = 'Relaunching…'; b.disabled = true; }
+                setTimeout(function () { location.reload(); }, 800);
+              };
+              var _b = _slot.querySelector('.p86-sidebar-update-btn');
+              _b.addEventListener('click', _fire);
+              _b.addEventListener('touchend', function (e) { e.preventDefault(); _fire(); });
+              return;
+            }
+            // ── Floating toast fallback (mobile / no sidebar) ──
             if (document.getElementById('p86-update-toast')) return;
             var t = document.createElement('div');
             t.id = 'p86-update-toast';
@@ -215,7 +246,7 @@
     })();
     </script>
 
-    <link rel="stylesheet" href="css/styles.css?v=176">
+    <link rel="stylesheet" href="css/styles.css?v=177">
     <link rel="stylesheet" href="css/report-style-packs.css?v=3">
     <link rel="stylesheet" href="css/workspace-layout.css?v=60">
     <link rel="stylesheet" href="css/workspace.css?v=38">
@@ -682,6 +713,12 @@
                      the avatar/name/role in sync. Hidden on mobile with
                      the rest of the sidebar. -->
                 <div class="app-sidebar-foot">
+                    <!-- Update banner — Claude-style "new version" notice in
+                         the sticky footer. Hidden until the service worker
+                         reports a waiting worker; showUpdateToast (head)
+                         fills + reveals it. On mobile (sidebar hidden) the
+                         floating toast is used instead. -->
+                    <div id="app-sidebar-update" class="p86-sidebar-update" role="status" aria-live="polite"></div>
                     <button id="sidebar-account-btn" class="sidebar-account" type="button"
                             aria-haspopup="true" aria-expanded="false" title="Account">
                         <span id="sidebar-account-avatar" class="sidebar-account-avatar">JT</span>
