@@ -791,6 +791,17 @@ async function initSchema() {
     ALTER TABLE leads ADD COLUMN IF NOT EXISTS geocode_status TEXT;
     ALTER TABLE leads ADD COLUMN IF NOT EXISTS geocode_at TIMESTAMPTZ;
 
+    -- Geocode cache for the Estimates map view. Estimates store their
+    -- address as a single free-form data->>'propertyAddr' string (not split
+    -- columns like leads), so geocode_addr records which address string the
+    -- coords were resolved from — estimate-routes self-skips re-geocoding
+    -- when the address is unchanged. Same 'failed'-is-sticky posture as leads.
+    ALTER TABLE estimates ADD COLUMN IF NOT EXISTS geocode_lat NUMERIC(8, 5);
+    ALTER TABLE estimates ADD COLUMN IF NOT EXISTS geocode_lng NUMERIC(8, 5);
+    ALTER TABLE estimates ADD COLUMN IF NOT EXISTS geocode_status TEXT;
+    ALTER TABLE estimates ADD COLUMN IF NOT EXISTS geocode_at TIMESTAMPTZ;
+    ALTER TABLE estimates ADD COLUMN IF NOT EXISTS geocode_addr TEXT;
+
     -- Polymorphic attachments — each row is a single uploaded photo (or doc)
     -- belonging to either a lead or an estimate. We store three size variants
     -- per upload (thumbnail, web, original) so the UI can show a fast grid,

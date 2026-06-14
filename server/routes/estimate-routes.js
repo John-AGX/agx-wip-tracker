@@ -1,8 +1,61 @@
 const express = require('express');
 const { pool } = require('../db');
 const { requireAuth, requireRole, requireCapability } = require('../auth');
+const { geocodeAddress } = require('../geocoder');
 
 const router = express.Router();
+
+// ── Estimate geocoding (for the Estimates map view) ─────────────────
+// Estimates store their address as a single free-form propertyAddr string
+// inside the data JSONB blob (unlike leads, which have split columns). We
+// geocode that string and cache coords on dedicated columns; geocode_addr
+// records the exact string we resolved so we self-skip when unchanged.
+// Best-effort + 'failed'-is-sticky, mirroring geocodeLead.
+async function geocodeEstimate(id) {
+  try {
+    const r = await pool.query(
+      "SELECT NULLIF(TRIM(data->>'propertyAddr'), '') AS addr, geocode_lat, geocode_addr FROM estimates WHERE id = $1",
+      [id]
+    );
+    if (!r.rowCount) return;
+    const addr = r.rows[0].addr;
+    if (!addr) return;
+    // Already resolved for this exact address — nothing to do.
+    if (r.rows[0].geocode_lat != null && r.rows[0].geocode_addr === addr) return;
+    const g = await geocodeAddress(addr);
+    if (g && Number.isFinite(g.lat) && Number.isFinite(g.lng) && !(g.lat === 0 && g.lng === 0)) {
+      await pool.query(
+        "UPDATE estimates SET geocode_lat = $1, geocode_lng = $2, geocode_status = 'ok', geocode_at = NOW(), geocode_addr = $3 WHERE id = $4",
+        [g.lat, g.lng, addr, id]
+      );
+    } else {
+      await pool.query(
+        "UPDATE estimates SET geocode_status = 'failed', geocode_at = NOW(), geocode_addr = $1 WHERE id = $2",
+        [addr, id]
+      );
+    }
+  } catch (e) { console.error('[estimates] geocode error:', e && e.message); }
+}
+
+// Geocode existing estimates that have a property address but no coords.
+// Best-effort + throttled (free Census geocoder); 'failed' rows are
+// skipped so unmatchable addresses aren't retried every restart.
+async function backfillEstimateGeocodes() {
+  try {
+    const { rows } = await pool.query(
+      "SELECT id FROM estimates " +
+      "WHERE NULLIF(TRIM(data->>'propertyAddr'), '') IS NOT NULL " +
+      "AND (geocode_lat IS NULL OR geocode_lng IS NULL OR (geocode_lat = 0 AND geocode_lng = 0)) " +
+      "AND geocode_status IS DISTINCT FROM 'failed' LIMIT 500"
+    );
+    for (const e of rows) {
+      await geocodeEstimate(e.id);
+      await new Promise(r => setTimeout(r, 250));
+    }
+    if (rows.length) console.log('[estimates] geocode backfill: processed ' + rows.length + ' estimate(s)');
+  } catch (e) { console.error('[estimates] geocode backfill error:', e && e.message); }
+}
+setTimeout(() => { backfillEstimateGeocodes(); }, 18000); // after boot settles (offset from leads/projects backfills)
 
 // GET /api/estimates - list all estimates (org-wide visibility for now;
 // per-user/per-job permissions come later when we move estimates into the ERP layer)
@@ -11,19 +64,21 @@ router.get('/', requireAuth, async (req, res) => {
     // Wave 1.A Phase 2 — org-scoped list. NULL org_id retained for
     // unbackfilled legacy until NOT NULL tightening.
     const { rows } = await pool.query(
-      'SELECT id, owner_id, data, created_at, updated_at FROM estimates WHERE organization_id = $1 OR organization_id IS NULL ORDER BY updated_at DESC',
+      'SELECT id, owner_id, data, created_at, updated_at, geocode_lat, geocode_lng FROM estimates WHERE organization_id = $1 OR organization_id IS NULL ORDER BY updated_at DESC',
       [req.user.organization_id]
     );
-    // Surface created_at/updated_at on the returned estimate so the
-    // list view can sort/display them. Spread data first so any
-    // mistakenly-stored "updated_at" inside the JSONB blob doesn't
-    // shadow the canonical column-derived value.
+    // Surface created_at/updated_at + geocode coords on the returned
+    // estimate so the list/map views can sort/display/plot them. Spread
+    // data first so any mistakenly-stored canonical field inside the JSONB
+    // blob doesn't shadow the real column-derived value.
     const estimates = rows.map(r => ({
       ...r.data,
       id: r.id,
       owner_id: r.owner_id,
       created_at: r.created_at,
-      updated_at: r.updated_at
+      updated_at: r.updated_at,
+      geocode_lat: r.geocode_lat != null ? Number(r.geocode_lat) : null,
+      geocode_lng: r.geocode_lng != null ? Number(r.geocode_lng) : null
     }));
     res.json({ estimates });
   } catch (e) {
@@ -121,6 +176,18 @@ router.put('/bulk/save', requireAuth, requireCapability('ESTIMATES_EDIT'), async
     } finally {
       client.release();
     }
+    // Fire-and-forget geocoding for estimates carrying a property address.
+    // geocodeEstimate self-skips when coords already match the current
+    // address, so this only does work for new/changed addresses. Capped so
+    // a full-portfolio save can't spawn an unbounded geocode burst.
+    try {
+      for (const est of estimates.slice(0, 200)) {
+        if (est && typeof est.propertyAddr === 'string' && est.propertyAddr.trim()) {
+          geocodeEstimate(est.id).catch(() => {});
+        }
+      }
+    } catch (_) { /* never let geocoding affect the save response */ }
+
     res.json({ ok: true, count: estimates.length });
   } catch (e) {
     console.error('PUT /api/estimates/bulk/save error:', e);

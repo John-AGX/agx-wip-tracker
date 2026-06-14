@@ -262,14 +262,18 @@ function renderEstimatesMap(listEl, filtered) {
         if (_estMapStatus === 'active') return !e.job_id;
         return true;
     });
-    // Attach lead-resolved coords so p86ProjectsMap (reads geocode_lat/lng)
-    // can plot. Copy so we never mutate the cached estimate objects.
+    // Resolve coords for p86ProjectsMap (which reads geocode_lat/lng):
+    // prefer the estimate's OWN server-geocoded coords (from propertyAddr),
+    // fall back to the linked lead's coords. Copy so we never mutate the
+    // cached estimate objects.
     var items = byStatus.map(function(e) {
-        var c = e.lead_id ? _estLeadCoords[e.lead_id] : null;
-        return Object.assign({}, e, {
-            geocode_lat: c ? c.lat : null,
-            geocode_lng: c ? c.lng : null
-        });
+        var lat = (e.geocode_lat != null) ? Number(e.geocode_lat) : null;
+        var lng = (e.geocode_lng != null) ? Number(e.geocode_lng) : null;
+        if (lat == null || lng == null || isNaN(lat) || isNaN(lng)) {
+            var c = e.lead_id ? _estLeadCoords[e.lead_id] : null;
+            if (c) { lat = c.lat; lng = c.lng; }
+        }
+        return Object.assign({}, e, { geocode_lat: lat, geocode_lng: lng });
     });
     var mapped = items.filter(function(i) { return i.geocode_lat && i.geocode_lng; }).length;
     listEl.innerHTML =
