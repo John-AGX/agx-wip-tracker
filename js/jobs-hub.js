@@ -166,9 +166,14 @@
       '<div class="jobshub-list" id="jh-list"><div class="jobshub-loading">Loading…</div></div>';
 
     var _rows = [];
+    // All lookups are scoped to THIS section host, not document-global ids.
+    // Combined with switchJobsHubSubTab clearing inactive sections, a stale
+    // fetch that resolves after the user switched away finds a cleared host
+    // (querySelector → null) and harmlessly no-ops instead of painting its
+    // rows into whatever section is now active.
     function repaint() {
-      var listEl = document.getElementById('jh-list');
-      var sumEl = document.getElementById('jh-summary');
+      var listEl = host.querySelector('#jh-list');
+      var sumEl = host.querySelector('#jh-summary');
       if (!listEl) return;
       var q = (st.q || '').toLowerCase();
       var rows = !q ? _rows : _rows.filter(function (r) { return cfg.matches(r, q); });
@@ -181,7 +186,7 @@
       wireRows(listEl, cfg);
     }
     function refetch() {
-      var listEl = document.getElementById('jh-list');
+      var listEl = host.querySelector('#jh-list');
       if (listEl) listEl.innerHTML = '<div class="jobshub-loading">Loading…</div>';
       cfg.fetch(st).then(function (rows) { _rows = rows || []; repaint(); })
         .catch(function (err) {
@@ -189,10 +194,10 @@
         });
     }
     _currentRefetch = refetch;
-    var searchEl = document.getElementById('jh-search');
-    var jobEl = document.getElementById('jh-job');
-    var statusEl = document.getElementById('jh-status');
-    var newBtn = document.getElementById('jh-new');
+    var searchEl = host.querySelector('#jh-search');
+    var jobEl = host.querySelector('#jh-job');
+    var statusEl = host.querySelector('#jh-status');
+    var newBtn = host.querySelector('#jh-new');
     if (searchEl) searchEl.addEventListener('input', function () { st.q = searchEl.value; repaint(); });
     if (jobEl) jobEl.addEventListener('change', function () { st.job = jobEl.value; refetch(); });
     if (statusEl) statusEl.addEventListener('change', function () { st.status = statusEl.value; refetch(); });
