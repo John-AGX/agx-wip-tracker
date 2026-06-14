@@ -144,6 +144,9 @@
         if (item.body) {
           html += '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:600px;">' + esc(item.body.slice(0, 120)) + '</div>';
         }
+        if (item.type === 'submittal' && item.metadata && item.metadata.submitted_to) {
+          html += '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:2px;">Submitted to: <strong style="color:var(--text,#cfd3e2);">' + esc(item.metadata.submitted_to) + '</strong></div>';
+        }
         html += '</div>';
         html += '<div class="wf-row-due" style="font-size:11px;color:' + (overdue ? '#f87171' : 'var(--text-dim,#aaa)') + ';">';
         if (item.due_date) html += (overdue ? '⚠ Overdue: ' : 'Due ') + esc(fmtDate(item.due_date));
@@ -195,6 +198,9 @@
       html += '<textarea data-edit-meta="response" rows="2" style="width:100%;background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#2e3346);color:var(--text,#fff);padding:7px 10px;border-radius:6px;font-size:13px;resize:vertical;">' + esc(meta.response || '') + '</textarea>';
       html += '</div>';
     } else if (item.type === 'submittal') {
+      html += '<div style="grid-column:1/-1;"><label style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:3px;">Submitted To</label>';
+      html += '<input type="text" data-edit-meta="submitted_to" value="' + esc(meta.submitted_to || '') + '" placeholder="e.g. Architect / Engineer of Record / GC" style="width:100%;background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#2e3346);color:var(--text,#fff);padding:7px 10px;border-radius:6px;font-size:13px;">';
+      html += '</div>';
       html += '<div><label style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:3px;">Category</label>';
       html += '<input type="text" data-edit-meta="category" value="' + esc(meta.category || '') + '" placeholder="e.g. Mechanical, Electrical" style="width:100%;background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#2e3346);color:var(--text,#fff);padding:7px 10px;border-radius:6px;font-size:13px;">';
       html += '</div>';
@@ -309,6 +315,10 @@
           statusOpts.map(function(s) { var sl = STATUS_STYLE[s] || {}; return '<option value="' + s + '">' + esc(sl.label || s) + '</option>'; }).join('') +
           '</select></div>' +
         '</div>' +
+        (type === 'submittal'
+          ? '<label style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;display:block;margin-bottom:3px;">Submitted To</label>' +
+            '<input type="text" id="workflowCreateSubmittedTo" placeholder="e.g. Architect / Engineer of Record / GC" style="width:100%;background:rgba(0,0,0,0.3);border:1px solid var(--border,#2e3346);color:var(--text,#fff);padding:8px 10px;border-radius:6px;font-size:13px;margin-bottom:18px;">'
+          : '') +
         '<div style="display:flex;gap:8px;justify-content:flex-end;">' +
           '<button id="workflowCreateCancel" style="background:transparent;border:1px solid var(--border,#2e3346);color:var(--text-dim,#888);padding:8px 16px;border-radius:6px;font-size:12px;cursor:pointer;">Cancel</button>' +
           '<button id="workflowCreateSubmit" style="background:#34d399;color:#0f0f1e;border:none;padding:8px 18px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">Create</button>' +
@@ -328,6 +338,10 @@
         due_date: document.getElementById('workflowCreateDue').value || null,
         status: document.getElementById('workflowCreateStatus').value
       };
+      if (type === 'submittal') {
+        var stTo = (document.getElementById('workflowCreateSubmittedTo') || {}).value;
+        if (stTo && stTo.trim()) payload.metadata = { submitted_to: stTo.trim() };
+      }
       window.p86Api.post('/api/jobs/' + encodeURIComponent(STATE.jobId) + '/workflow-items', payload)
         .then(function() { close(); loadItems(); })
         .catch(function(err) { alert('Create failed: ' + (err && err.message || err)); });

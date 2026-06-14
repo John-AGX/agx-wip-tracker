@@ -396,6 +396,7 @@
     }
     // submittal
     return field('Subject', '<input id="jh-cr-subject" type="text" class="jobshub-input" placeholder="What is being submitted?">', true) +
+      field('Submitted to', '<input id="jh-cr-submitted-to" type="text" class="jobshub-input" placeholder="e.g. Architect / Engineer of Record / GC">') +
       field('Notes (optional)', '<textarea id="jh-cr-body" class="jobshub-input" rows="2"></textarea>') +
       '<div class="jobshub-field-row">' +
         field('Category (optional)', '<input id="jh-cr-category" type="text" class="jobshub-input" placeholder="e.g. Mechanical">') +
@@ -499,6 +500,7 @@
     var due = val('jh-cr-due'); if (due) payload.due_date = due;
     if (kind === 'submittal') {
       var meta = {};
+      var sto = val('jh-cr-submitted-to'); if (sto) meta.submitted_to = sto;
       var cat = val('jh-cr-category'); if (cat) meta.category = cat;
       var spec = val('jh-cr-spec'); if (spec) meta.spec_section = spec;
       if (Object.keys(meta).length) payload.metadata = meta;
