@@ -246,7 +246,7 @@
     })();
     </script>
 
-    <link rel="stylesheet" href="css/styles.css?v=183">
+    <link rel="stylesheet" href="css/styles.css?v=184">
     <link rel="stylesheet" href="css/report-style-packs.css?v=3">
     <link rel="stylesheet" href="css/workspace-layout.css?v=60">
     <link rel="stylesheet" href="css/workspace.css?v=38">
@@ -595,7 +595,8 @@
                                 <span class="app-nav-caret" role="button" tabindex="0" aria-label="Toggle Estimates sub-pages" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" width="12" height="12" aria-hidden="true"><polyline points="9 18 15 12 9 6"></polyline></svg></span>
                             </button>
                             <div class="app-nav-children" role="group" aria-label="Estimates sub-pages">
-                                <button class="tab-btn app-nav-child" data-tab="estimates" data-est-subtab="list" data-virtual-tab="estimates" data-p86-icon="estimates" title="Estimate List"><span class="app-nav-label">Estimate List</span></button>
+                                <button class="tab-btn app-nav-child" data-tab="estimates" data-est-subtab="list" data-estimates-view="list" data-virtual-tab="estimates" data-p86-icon="estimates" title="Estimate List"><span class="app-nav-label">Estimate List</span></button>
+                                <button class="tab-btn app-nav-child" data-tab="estimates" data-est-subtab="list" data-estimates-view="map" data-virtual-tab="estimates-map" data-p86-icon="globe" title="Estimates Map"><span class="app-nav-label">Estimates Map</span></button>
                             </div>
                         </div>
                     </div>
@@ -3081,7 +3082,7 @@
     <script src="js/qb-costs-view.js?v=11"></script>
     <script src="js/insights.js?v=7"></script>
     <script src="js/schedule.js?v=34"></script>
-    <script src="js/app.js?v=87"></script>
+    <script src="js/app.js?v=88"></script>
     <script src="js/compliance-review-ui.js?v=2"></script>
     <script src="js/messaging.js?v=1b"></script>
     <script src="js/my-files.js?v=16"></script>
@@ -3108,14 +3109,14 @@
     <!-- Jobs Hub — cross-job index pages (Purchase Orders / Change Orders /
          RFIs / Submittals) for the Jobs sidebar dropdown. Uses p86Api +
          appData.jobs + editJob/switchJobSubTab at runtime. -->
-    <script src="js/jobs-hub.js?v=1"></script>
+    <script src="js/jobs-hub.js?v=2"></script>
     <!-- Shared pricing pipeline — math used by estimate-editor +
          estimate-preview + the upcoming change-order-editor. Loads
          BEFORE any of them so window.p86Pricing is ready. -->
     <script src="js/pricing-pipeline.js?v=1"></script>
     <script src="js/jobs.js?v=89"></script>
     <script src="js/job-workflow-ui.js?v=2"></script>
-    <script src="js/estimates.js?v=40"></script>
+    <script src="js/estimates.js?v=41"></script>
     <script src="js/proposal.js?v=25"></script>
     <script src="js/estimate-editor.js?v=51"></script>
     <!-- Change Order editor — overlay opened from the job detail's

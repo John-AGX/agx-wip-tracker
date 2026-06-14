@@ -242,7 +242,13 @@ router.get('/', requireAuth, async (req, res) => {
     if (statusQ === 'open') {
       where.push('w.closed_at IS NULL');
     } else if (statusQ && statusQ !== 'all') {
-      where.push('w.status = $' + (pn++)); params.push(statusQ);
+      // Only apply a specific-status filter when it's valid for the type
+      // (or, with no type set, valid for ANY type). Unknown values are
+      // ignored rather than returning a confusing empty list.
+      const validForType = type
+        ? (VALID_STATUSES[type] && VALID_STATUSES[type].has(statusQ))
+        : Object.keys(VALID_STATUSES).some(t => VALID_STATUSES[t].has(statusQ));
+      if (validForType) { where.push('w.status = $' + (pn++)); params.push(statusQ); }
     }
     const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 300));
     const r = await pool.query(

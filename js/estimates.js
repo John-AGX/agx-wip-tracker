@@ -210,6 +210,98 @@ function fmtRelativeDate(s) {
     return d.toLocaleDateString();
 }
 
+// ── Estimates map view ─────────────────────────────────────────────
+// Estimates carry no geocoded coords of their own, but every estimate
+// links to a lead (lead_id), and leads ARE geocoded server-side — so we
+// resolve each estimate's pin from its linked lead. The split map+list
+// pane is the same p86ProjectsMap the Leads / Projects maps use. The
+// sidebar "Estimate List" / "Estimates Map" children flip _estimatesView
+// via setEstimatesView().
+var _estimatesView = 'list';   // 'list' | 'map'
+var _estMapStatus = 'active';  // 'all' | 'active' (no job yet) | 'won' (has job)
+var _estLeadCoords = null;     // { leadId: {lat,lng,address} } — loaded once
+
+function setEstimatesView(v) {
+    _estimatesView = (v === 'map') ? 'map' : 'list';
+    renderEstimatesList();
+}
+window.setEstimatesView = setEstimatesView;
+
+function setEstimatesMapStatus(s) {
+    _estMapStatus = (s === 'all' || s === 'won') ? s : 'active';
+    renderEstimatesList();
+}
+window.setEstimatesMapStatus = setEstimatesMapStatus;
+
+function loadEstimateLeadCoords(cb) {
+    if (_estLeadCoords) { cb(); return; }
+    if (!window.p86Api || !window.p86Api.leads || !window.p86Api.isAuthenticated()) { _estLeadCoords = {}; cb(); return; }
+    window.p86Api.leads.list().then(function(res) {
+        var m = {};
+        ((res && res.leads) || []).forEach(function(l) {
+            m[l.id] = {
+                lat: l.geocode_lat, lng: l.geocode_lng,
+                address: [l.street_address, l.city, l.state, l.zip].filter(Boolean).join(', ')
+            };
+        });
+        _estLeadCoords = m; cb();
+    }).catch(function() { _estLeadCoords = {}; cb(); });
+}
+
+function renderEstimatesMap(listEl, filtered) {
+    // Lazy-load the lead coord lookup, then re-render with pins resolved.
+    if (!_estLeadCoords) {
+        listEl.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);text-align:center;">Loading map…</div>';
+        loadEstimateLeadCoords(function() { if (_estimatesView === 'map') renderEstimatesList(); });
+        return;
+    }
+    // Derived status filter — estimates have no status column; a linked
+    // job_id means "won/converted", otherwise "active/open".
+    var byStatus = filtered.filter(function(e) {
+        if (_estMapStatus === 'won') return !!e.job_id;
+        if (_estMapStatus === 'active') return !e.job_id;
+        return true;
+    });
+    // Attach lead-resolved coords so p86ProjectsMap (reads geocode_lat/lng)
+    // can plot. Copy so we never mutate the cached estimate objects.
+    var items = byStatus.map(function(e) {
+        var c = e.lead_id ? _estLeadCoords[e.lead_id] : null;
+        return Object.assign({}, e, {
+            geocode_lat: c ? c.lat : null,
+            geocode_lng: c ? c.lng : null
+        });
+    });
+    var mapped = items.filter(function(i) { return i.geocode_lat && i.geocode_lng; }).length;
+    listEl.innerHTML =
+        '<div class="est-map-filterbar">' +
+            '<div class="est-map-filterbtns">' +
+                ['active', 'all', 'won'].map(function(s) {
+                    var label = s === 'active' ? 'Active' : (s === 'won' ? 'Won' : 'All');
+                    return '<button type="button" class="est-map-fbtn' + (_estMapStatus === s ? ' active' : '') + '" onclick="setEstimatesMapStatus(\'' + s + '\')">' + label + '</button>';
+                }).join('') +
+            '</div>' +
+            '<span class="est-map-count">' + mapped + ' of ' + items.length + ' plotted</span>' +
+        '</div>' +
+        '<div id="p86EstimatesMapHost" class="p86-projects-map-host"></div>';
+    var host = document.getElementById('p86EstimatesMapHost');
+    if (host && window.p86ProjectsMap && typeof window.p86ProjectsMap.render === 'function') {
+        window.p86ProjectsMap.render(host, items, {
+            entityLabel: 'estimates',
+            showThumb: false,
+            getName: function(e) { return e.title || '(untitled estimate)'; },
+            getAddress: function(e) {
+                if (e.propertyAddr) return e.propertyAddr;
+                var c = e.lead_id ? _estLeadCoords[e.lead_id] : null;
+                return c ? c.address : '';
+            },
+            getMeta: function(e) { return [e.client, e.community].filter(Boolean).join(' · ') || ''; },
+            onPin: function(id) { if (typeof window.editEstimate === 'function') window.editEstimate(id); }
+        });
+    } else if (host) {
+        host.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);text-align:center;">Map module not loaded.</div>';
+    }
+}
+
 function renderEstimatesList() {
             const listEl = document.getElementById('estimates-list');
             const searchEl = document.getElementById('estimates-search');

@@ -166,11 +166,16 @@ router.get('/change-orders', requireAuth, async (req, res) => {
 // GET /api/change-orders/:id
 router.get('/change-orders/:id', requireAuth, async (req, res) => {
   try {
+    // Org-scoped: resolve the CO through its job so a CO outside the
+    // caller's org reads as 404 (no cross-tenant read by guessed id).
     const { rows } = await pool.query(
-      `SELECT id, job_id, owner_id, status, co_number, data, approved_at,
-              approved_by, linked_node_id, created_at, updated_at
-       FROM job_change_orders WHERE id = $1`,
-      [req.params.id]
+      `SELECT co.id, co.job_id, co.owner_id, co.status, co.co_number, co.data,
+              co.approved_at, co.approved_by, co.linked_node_id,
+              co.created_at, co.updated_at
+         FROM job_change_orders co
+         JOIN jobs j ON j.id = co.job_id
+        WHERE co.id = $1 AND (j.organization_id = $2 OR j.organization_id IS NULL)`,
+      [req.params.id, req.user.organization_id]
     );
     if (!rows.length) return res.status(404).json({ error: 'Not found' });
     res.json({ change_order: shapeRow(rows[0]) });
@@ -188,9 +193,13 @@ router.get('/change-orders/:id', requireAuth, async (req, res) => {
 router.post('/jobs/:jobId/change-orders', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req, res) => {
   try {
     const jobId = req.params.jobId;
-    // Confirm the job exists — FK would block the insert but a 404 is
-    // clearer than the generic 500 the FK violation would produce.
-    const job = await pool.query('SELECT id FROM jobs WHERE id = $1', [jobId]);
+    // Confirm the job exists AND belongs to the caller's org — a 404 is
+    // clearer than the generic 500 the FK violation would produce, and the
+    // org filter blocks creating a CO against another tenant's job.
+    const job = await pool.query(
+      'SELECT id FROM jobs WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+      [jobId, req.user.organization_id]
+    );
     if (!job.rowCount) return res.status(404).json({ error: 'Job not found' });
 
     const id = 'co_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
@@ -234,9 +243,13 @@ router.post('/jobs/:jobId/change-orders', requireAuth, requireCapability('ESTIMA
 router.put('/change-orders/:id', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req, res) => {
   try {
     const id = req.params.id;
+    // Org-scoped: a CO outside the caller's org reads as 404 (no
+    // cross-tenant edit by guessed id).
     const existing = await pool.query(
-      `SELECT status FROM job_change_orders WHERE id = $1`,
-      [id]
+      `SELECT co.status FROM job_change_orders co
+         JOIN jobs j ON j.id = co.job_id
+        WHERE co.id = $1 AND (j.organization_id = $2 OR j.organization_id IS NULL)`,
+      [id, req.user.organization_id]
     );
     if (!existing.rowCount) return res.status(404).json({ error: 'Not found' });
     // Applied COs are immutable on the data side — they've already
@@ -414,9 +427,12 @@ router.post('/change-orders/:id/link-node', requireAuth, requireCapability('ESTI
   try {
     const id = req.params.id;
     const nodeId = req.body.node_id || null;
+    // Org-scoped resolve so a CO outside the caller's org reads as 404.
     const { rows } = await pool.query(
-      `SELECT job_id FROM job_change_orders WHERE id = $1`,
-      [id]
+      `SELECT co.job_id FROM job_change_orders co
+         JOIN jobs j ON j.id = co.job_id
+        WHERE co.id = $1 AND (j.organization_id = $2 OR j.organization_id IS NULL)`,
+      [id, req.user.organization_id]
     );
     if (!rows.length) return res.status(404).json({ error: 'Not found' });
 
@@ -452,9 +468,13 @@ router.post('/change-orders/:id/link-node', requireAuth, requireCapability('ESTI
 // would silently drop revenue from the rollup.
 router.delete('/change-orders/:id', requireAuth, async (req, res) => {
   try {
+    // Org-scoped: resolve through the job so a CO outside the caller's org
+    // reads as 404 before the owner/admin permission check runs.
     const { rows } = await pool.query(
-      'SELECT owner_id, status FROM job_change_orders WHERE id = $1',
-      [req.params.id]
+      `SELECT co.owner_id, co.status FROM job_change_orders co
+         JOIN jobs j ON j.id = co.job_id
+        WHERE co.id = $1 AND (j.organization_id = $2 OR j.organization_id IS NULL)`,
+      [req.params.id, req.user.organization_id]
     );
     if (!rows.length) return res.status(404).json({ error: 'Not found' });
     if (req.user.role !== 'admin' && rows[0].owner_id !== req.user.id) {

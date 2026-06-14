@@ -40,9 +40,11 @@
     return (window.appData && Array.isArray(window.appData.jobs)) ? window.appData.jobs : [];
   }
   function jobLabel(j) {
+    if (!j) return 'Job';
     return (j.jobNumber ? j.jobNumber + ' — ' : '') + (j.title || 'Untitled job');
   }
   function isActiveJob(j) {
+    if (!j) return false;
     var s = j.status || 'active';
     return s !== 'closed' && s !== 'Archived' && s !== 'Completed';
   }

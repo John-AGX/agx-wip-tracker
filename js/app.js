@@ -356,6 +356,13 @@
                     if (leadsView && typeof window.setLeadsView === 'function') {
                         window.setLeadsView(leadsView);
                     }
+                    // Estimates dropdown children carry data-estimates-view
+                    // (list|map) so "Estimate List" / "Estimates Map" land on a
+                    // known view — same pattern as data-leads-view.
+                    const estView = btn.getAttribute('data-estimates-view');
+                    if (estView && typeof window.setEstimatesView === 'function') {
+                        window.setEstimatesView(estView);
+                    }
                     // Admin accordion children carry data-admin-subtab so the
                     // sidebar can drive the in-page admin sub-view directly
                     // (mirrors the data-est-subtab path for Estimates).
