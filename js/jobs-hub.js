@@ -105,9 +105,16 @@
     if (VIEWS.indexOf(view) < 0) view = DEFAULT_VIEW;
     _view = view;
     try { sessionStorage.setItem('p86_jobshub_tab', view); } catch (e) {}
+    // Show the active section; HIDE + CLEAR the others. buildView uses
+    // shared ids (#jh-list, #jh-status, #jh-new…) per section, so leaving a
+    // previously-visited section in the DOM creates duplicate ids and the
+    // active view's getElementById would resolve to the hidden sibling.
+    // Clearing guarantees exactly one live set of controls.
     VIEWS.forEach(function (v) {
       var el = document.getElementById('jobshub-' + v);
-      if (el) el.style.display = (v === view ? 'block' : 'none');
+      if (!el) return;
+      if (v === view) { el.style.display = 'block'; }
+      else { el.style.display = 'none'; el.innerHTML = ''; }
     });
     loadView(view);
     if (typeof window.markVirtualTabActive === 'function') window.markVirtualTabActive('jobshub-' + view);
