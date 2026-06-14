@@ -1164,7 +1164,7 @@
             border-radius: 8px;
             background: transparent;
             color: var(--text);
-            font-size: 12.5px;
+            font-size: 12px;
             font-weight: 500;
             letter-spacing: 0.1px;
             text-align: left;
@@ -1192,8 +1192,8 @@
             flex: 0 0 auto;
         }
         .app-nav .tab-btn .p86-icon {
-            width: 16px;
-            height: 16px;
+            width: 15px;
+            height: 15px;
         }
         .app-nav-label {
             flex: 1 1 auto;
@@ -1259,11 +1259,11 @@
         .app-nav .app-nav-child {
             padding: 4px 9px;
             gap: 8px;
-            font-size: 12px;
+            font-size: 11.5px;
         }
         .app-nav .app-nav-child .p86-icon {
-            width: 15px;
-            height: 15px;
+            width: 14px;
+            height: 14px;
         }
         /* When a child is the active page, give the (possibly collapsed)
            parent a subtle "contains current page" cue. */
