@@ -281,6 +281,16 @@
       subtab: 'job-workflow',
       createKind: type,
       statusOptions: statusOpts,
+      onRow: function (tr) {
+        var jobId = tr.getAttribute('data-job-id');
+        // Tell the job's workflow pane which type + item to open, so a
+        // click on a submittal lands on the Submittals tab with that
+        // item expanded — not the default (empty) RFI tab.
+        if (window.p86JobWorkflowUI && typeof window.p86JobWorkflowUI.setFocus === 'function') {
+          window.p86JobWorkflowUI.setFocus({ jobId: jobId, type: type, itemId: tr.getAttribute('data-wf-id') });
+        }
+        openParentJob(jobId, 'job-workflow');
+      },
       fetch: function (st) {
         return window.p86Api.workflowItems.listAll({ type: type, status: st.status, job: st.job })
           .then(function (r) { return (r && r.items) || []; });
@@ -294,7 +304,7 @@
           '</tr></thead><tbody>' +
           rows.map(function (r) {
             var overdue = r.due_date && !r.closed_at && new Date(r.due_date).getTime() < Date.now();
-            return '<tr data-job-id="' + esc(r.job_id) + '">' +
+            return '<tr data-job-id="' + esc(r.job_id) + '" data-wf-id="' + esc(r.id) + '">' +
               '<td><strong>' + esc(r.number || '') + '</strong></td>' +
               '<td>' + esc(jobLabelFromRow(r)) + '</td>' +
               '<td>' + esc(r.subject || '') + '</td>' +

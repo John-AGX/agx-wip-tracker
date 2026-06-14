@@ -27,8 +27,16 @@
     jobId: null,
     activeType: 'rfi',
     items: [],
-    expandedId: null
+    expandedId: null,
+    focusId: null
   };
+
+  // Cross-job deep-link focus. The Jobs-hub RFI/Submittal/Transmittal
+  // lists call setFocus({jobId,type,itemId}) immediately before navigating
+  // to the parent job, so clicking a specific submittal opens the
+  // Submittals tab with that item expanded — instead of landing on the
+  // default (empty) RFI tab. Consumed once by the next matching mount().
+  var PENDING_FOCUS = null;
 
   var TYPE_LABELS = {
     rfi:         { plural: 'RFIs', singular: 'RFI', icon: '❓' },
@@ -77,10 +85,24 @@
 
   function mount(jobId) {
     STATE.jobId = jobId;
+    // Apply a pending cross-job focus (set by the Jobs-hub list right
+    // before navigating here) so we open the requested type + item.
+    if (PENDING_FOCUS && String(PENDING_FOCUS.jobId) === String(jobId)) {
+      if (PENDING_FOCUS.type && TYPE_LABELS[PENDING_FOCUS.type]) STATE.activeType = PENDING_FOCUS.type;
+      STATE.focusId = PENDING_FOCUS.itemId != null ? PENDING_FOCUS.itemId : null;
+    }
+    PENDING_FOCUS = null;
     var host = document.getElementById('job-workflow-content');
     if (!host) return;
     host.innerHTML = '<div style="padding:24px;color:var(--text-dim,#888);">Loading workflow…</div>';
     loadItems();
+  }
+
+  // Stash a target the next matching mount() should open. Called by the
+  // Jobs-hub RFI/Submittal/Transmittal lists. itemId is optional (just
+  // switches the type when omitted).
+  function setFocus(focus) {
+    PENDING_FOCUS = (focus && focus.jobId) ? focus : null;
   }
 
   function loadItems() {
@@ -88,6 +110,14 @@
     window.p86Api.get('/api/jobs/' + encodeURIComponent(STATE.jobId) + '/workflow-items?type=' + STATE.activeType)
       .then(function(resp) {
         STATE.items = (resp && resp.items) || [];
+        // Resolve a pending cross-job focus to the actual loaded item so
+        // the row auto-expands (uses the raw id so the === comparison in
+        // paint() holds regardless of number/string typing).
+        if (STATE.focusId != null) {
+          var match = STATE.items.filter(function(it) { return String(it.id) === String(STATE.focusId); })[0];
+          STATE.expandedId = match ? match.id : null;
+          STATE.focusId = null;
+        }
         paint();
       })
       .catch(function(err) {
@@ -164,6 +194,17 @@
 
     host.innerHTML = html;
     wireEvents(host);
+
+    // Bring an auto-expanded (deep-linked) row into view.
+    if (STATE.expandedId != null) {
+      var rows = host.querySelectorAll('[data-workflow-row]');
+      for (var k = 0; k < rows.length; k++) {
+        if (rows[k].getAttribute('data-workflow-row') === String(STATE.expandedId)) {
+          try { rows[k].scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (e) {}
+          break;
+        }
+      }
+    }
   }
 
   function renderEditPanel(item) {
@@ -348,5 +389,5 @@
     });
   }
 
-  window.p86JobWorkflowUI = { mount: mount };
+  window.p86JobWorkflowUI = { mount: mount, setFocus: setFocus };
 })();
