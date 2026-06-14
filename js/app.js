@@ -369,6 +369,13 @@
                     if (consoleSub && typeof window.switchConsoleSubTab === 'function') {
                         window.switchConsoleSubTab(consoleSub);
                     }
+                    // Jobs hub accordion children carry data-jobshub-subtab
+                    // (purchase-orders / change-orders / rfis / submittals) —
+                    // same pattern as data-console-subtab.
+                    const jobshubSub = btn.getAttribute('data-jobshub-subtab');
+                    if (jobshubSub && typeof window.switchJobsHubSubTab === 'function') {
+                        window.switchJobsHubSubTab(jobshubSub);
+                    }
                     // My Files accordion children carry data-myfiles-folder
                     // (e.g. __projects__, __tools__, __printouts__) — same
                     // pattern as data-admin-subtab. After switchTab routes us
@@ -1503,6 +1510,7 @@
             insights:   'Insights',
             admin:      'Admin',
             projects:   'Projects',
+            jobshub:    'Jobs',
             console:    'Command Center'
         };
 
@@ -1621,6 +1629,15 @@
                     window.renderConsoleInto(consoleHost);
                 } else if (consoleHost) {
                     consoleHost.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);">Command Center module not loaded.</div>';
+                }
+            } else if (tabName === 'jobshub') {
+                // Jobs Hub — cross-job index pages (Purchase Orders / Change
+                // Orders / RFIs / Submittals) reached from the Jobs dropdown.
+                var jhHost = document.getElementById('jobshubPageHost');
+                if (jhHost && window.p86JobsHub && typeof window.p86JobsHub.renderJobsHubInto === 'function') {
+                    window.p86JobsHub.renderJobsHubInto(jhHost);
+                } else if (jhHost) {
+                    jhHost.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);">Jobs hub module not loaded.</div>';
                 }
             } else if (tabName === 'schedule') {
                 if (typeof window.renderSchedule === 'function') window.renderSchedule();

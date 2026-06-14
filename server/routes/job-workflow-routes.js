@@ -225,6 +225,46 @@ router.get('/overdue', requireAuth, async (req, res) => {
   }
 });
 
+// GET /api/workflow-items — cross-job org-wide list for the Jobs hub.
+//   Query: ?type=rfi|submittal|transmittal, ?status=open|all|<specific>,
+//          ?job=<jobId>, ?limit=
+//   open (default) = closed_at IS NULL (terminal statuses set closed_at).
+//   Joins jobs for a display label. Uses idx_jwi_org.
+router.get('/', requireAuth, async (req, res) => {
+  try {
+    const where = ['(w.organization_id = $1 OR w.organization_id IS NULL)', 'w.archived_at IS NULL'];
+    const params = [req.user.organization_id];
+    let pn = 2;
+    const type = String(req.query.type || '').toLowerCase();
+    if (type && VALID_STATUSES[type]) { where.push('w.type = $' + (pn++)); params.push(type); }
+    if (req.query.job) { where.push('w.job_id = $' + (pn++)); params.push(String(req.query.job)); }
+    const statusQ = String(req.query.status || 'open').toLowerCase();
+    if (statusQ === 'open') {
+      where.push('w.closed_at IS NULL');
+    } else if (statusQ && statusQ !== 'all') {
+      where.push('w.status = $' + (pn++)); params.push(statusQ);
+    }
+    const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 300));
+    const r = await pool.query(
+      `SELECT w.id, w.type, w.number, w.subject, w.status, w.due_date,
+              w.job_id, w.responsible_user_id, w.metadata, w.closed_at,
+              w.created_at, w.updated_at,
+              j.data->>'jobNumber' AS job_number,
+              j.data->>'title'     AS job_title
+         FROM job_workflow_items w
+         LEFT JOIN jobs j ON j.id = w.job_id
+        WHERE ${where.join(' AND ')}
+        ORDER BY (w.closed_at IS NULL) DESC, w.due_date ASC NULLS LAST, w.created_at DESC
+        LIMIT ${limit}`,
+      params
+    );
+    res.json({ items: r.rows });
+  } catch (err) {
+    console.error('[workflow] list-all failed:', err.message);
+    res.status(500).json({ error: 'Failed to list workflow items' });
+  }
+});
+
 // GET /api/workflow-items/:id — single item with full detail.
 router.get('/:id', requireAuth, async (req, res) => {
   try {

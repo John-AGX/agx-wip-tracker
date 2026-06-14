@@ -120,6 +120,49 @@ router.get('/change-orders/summary', requireAuth, async (req, res) => {
   }
 });
 
+// GET /api/change-orders — cross-job org-wide list for the Jobs hub.
+// Query: ?status=open|all|draft|approved|applied, ?job=<jobId>, ?limit=
+//   open (default) = draft OR approved (still in play; not yet applied).
+// Joins jobs for a display label (job_number / job_title). Org-scoped via
+// the same jobs.organization_id filter the /summary route uses.
+router.get('/change-orders', requireAuth, async (req, res) => {
+  try {
+    const orgId = req.user.organization_id;
+    const where = ['(j.organization_id = $1 OR j.organization_id IS NULL)'];
+    const params = [orgId];
+    let pn = 2;
+    const statusQ = String(req.query.status || 'open').toLowerCase();
+    if (req.query.job) { where.push('co.job_id = $' + (pn++)); params.push(String(req.query.job)); }
+    if (statusQ === 'open') {
+      where.push("co.status IN ('draft', 'approved')");
+    } else if (statusQ && statusQ !== 'all' && STATUS_VALUES.includes(statusQ)) {
+      where.push('co.status = $' + (pn++)); params.push(statusQ);
+    }
+    const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 300));
+    const { rows } = await pool.query(
+      `SELECT co.id, co.job_id, co.owner_id, co.status, co.co_number, co.data,
+              co.approved_at, co.approved_by, co.linked_node_id,
+              co.created_at, co.updated_at,
+              j.data->>'jobNumber' AS job_number,
+              j.data->>'title'     AS job_title
+         FROM job_change_orders co
+         JOIN jobs j ON j.id = co.job_id
+        WHERE ${where.join(' AND ')}
+        ORDER BY co.updated_at DESC
+        LIMIT ${limit}`,
+      params
+    );
+    res.json({
+      change_orders: rows.map(r => Object.assign(shapeRow(r), {
+        job_number: r.job_number, job_title: r.job_title
+      }))
+    });
+  } catch (e) {
+    console.error('GET /api/change-orders error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // GET /api/change-orders/:id
 router.get('/change-orders/:id', requireAuth, async (req, res) => {
   try {

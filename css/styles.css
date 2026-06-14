@@ -2404,6 +2404,37 @@
         .lead-card-fu-due { flex: 0 0 auto; opacity: 0.8; }
         .lead-card-fu-more { font-size: 10px; color: var(--text-dim); opacity: 0.7; }
 
+        /* ── Jobs Hub (cross-job index pages) ─────────────────────────── */
+        .jobshub-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 6px 2px 12px; }
+        .jobshub-title { font-size: 16px; font-weight: 600; color: var(--text); }
+        .jobshub-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+        .jobshub-search { background: var(--surface2); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 5px 10px; font-size: 12px; min-width: 150px; }
+        .jobshub-filter { background: var(--surface2); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 5px 8px; font-size: 12px; max-width: 220px; }
+        .jobshub-new { white-space: nowrap; }
+        .jobshub-summary { font-size: 11.5px; color: var(--text-dim); padding: 0 2px 8px; }
+        .jobshub-loading, .jobshub-empty, .jobshub-error { padding: 24px; text-align: center; color: var(--text-dim); font-size: 13px; }
+        .jobshub-error { color: #f87171; }
+        .jobshub-table tbody tr { cursor: pointer; }
+        .jobshub-table tbody tr:hover { background: rgba(79, 140, 255, 0.06); }
+        .jobshub-po-coming { max-width: 520px; margin: 32px auto; text-align: center; background: var(--surface2); border: 1px solid var(--border); border-radius: 14px; padding: 32px 28px; }
+        .jobshub-po-icon { font-size: 34px; margin-bottom: 8px; }
+        .jobshub-po-title { font-size: 16px; font-weight: 600; color: var(--text); margin-bottom: 8px; }
+        .jobshub-po-body { font-size: 13px; color: var(--text-dim); line-height: 1.5; }
+        .jobshub-modal-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.55); display: flex; align-items: center; justify-content: center; z-index: 1200; padding: 20px; }
+        .jobshub-modal { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; width: 100%; max-width: 460px; max-height: 90vh; display: flex; flex-direction: column; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5); }
+        .jobshub-modal-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px; border-bottom: 1px solid var(--border); font-size: 15px; font-weight: 600; color: var(--text); }
+        .jobshub-modal-x { background: none; border: none; color: var(--text-dim); font-size: 16px; cursor: pointer; line-height: 1; padding: 2px 6px; border-radius: 6px; }
+        .jobshub-modal-x:hover { background: var(--surface2); color: var(--text); }
+        .jobshub-modal-body { padding: 16px 18px; overflow-y: auto; display: flex; flex-direction: column; gap: 12px; }
+        .jobshub-modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--border); }
+        .jobshub-field { display: flex; flex-direction: column; gap: 4px; }
+        .jobshub-field-label { font-size: 11.5px; font-weight: 600; color: var(--text-dim); }
+        .jobshub-field-row { display: flex; gap: 12px; }
+        .jobshub-field-row .jobshub-field { flex: 1 1 0; min-width: 0; }
+        .jobshub-input { background: var(--surface2); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 7px 10px; font-size: 13px; font-family: inherit; width: 100%; box-sizing: border-box; }
+        .jobshub-input:focus { outline: none; border-color: #4f8cff; }
+        textarea.jobshub-input { resize: vertical; }
+
         td {
             padding: 6px 8px;
             border-bottom: 1px solid var(--border);

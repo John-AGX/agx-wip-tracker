@@ -298,6 +298,42 @@
     },
     remove: function(id) {
       return del('/api/change-orders/' + encodeURIComponent(id));
+    },
+    // Cross-job org-wide list for the Jobs hub. opts: { status?:'open'|'all'|
+    // 'draft'|'approved'|'applied', job?:jobId, limit? }. Default open.
+    listAll: function(opts) {
+      opts = opts || {};
+      var qs = [];
+      if (opts.status) qs.push('status=' + encodeURIComponent(opts.status));
+      if (opts.job) qs.push('job=' + encodeURIComponent(opts.job));
+      if (opts.limit) qs.push('limit=' + encodeURIComponent(opts.limit));
+      return get('/api/change-orders' + (qs.length ? '?' + qs.join('&') : ''));
+    }
+  };
+
+  // Workflow items — RFIs / Submittals / Transmittals (job_workflow_items).
+  // The Jobs hub uses listAll() (cross-job, org-wide) + create() (per-job);
+  // the in-job UI uses listForJob(). See server/routes/job-workflow-routes.js.
+  var workflowItems = {
+    listAll: function(opts) {
+      opts = opts || {};
+      var qs = [];
+      ['type', 'status', 'job', 'limit'].forEach(function(k) {
+        if (opts[k] != null && opts[k] !== '') qs.push(k + '=' + encodeURIComponent(opts[k]));
+      });
+      return get('/api/workflow-items' + (qs.length ? '?' + qs.join('&') : ''));
+    },
+    listForJob: function(jobId, opts) {
+      opts = opts || {};
+      var qs = [];
+      ['type', 'status'].forEach(function(k) { if (opts[k]) qs.push(k + '=' + encodeURIComponent(opts[k])); });
+      return get('/api/jobs/' + encodeURIComponent(jobId) + '/workflow-items' + (qs.length ? '?' + qs.join('&') : ''));
+    },
+    create: function(jobId, payload) {
+      return post('/api/jobs/' + encodeURIComponent(jobId) + '/workflow-items', payload || {});
+    },
+    update: function(id, payload) {
+      return put('/api/workflow-items/' + encodeURIComponent(id), payload || {});
     }
   };
 
@@ -664,7 +700,7 @@
 
   window.p86Api = {
     get: get, put: put, post: post, del: del, patch: patch,
-    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, qbCosts: qbCosts, subs: subsApi, schedule: schedule, adminSms: adminSms, messages: messages, weather: weather, projects: projects, tasks: tasks, plans: plans, orgTags: orgTags, org: org, folderTemplates: folderTemplates, reports: reports, changeOrders: changeOrders,
+    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, qbCosts: qbCosts, subs: subsApi, schedule: schedule, adminSms: adminSms, messages: messages, weather: weather, projects: projects, tasks: tasks, plans: plans, orgTags: orgTags, org: org, folderTemplates: folderTemplates, reports: reports, changeOrders: changeOrders, workflowItems: workflowItems,
     isOffline: isOffline,
     isAuthenticated: function() { return !!getToken() && !isOffline(); }
   };

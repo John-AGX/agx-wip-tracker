@@ -246,7 +246,7 @@
     })();
     </script>
 
-    <link rel="stylesheet" href="css/styles.css?v=182">
+    <link rel="stylesheet" href="css/styles.css?v=183">
     <link rel="stylesheet" href="css/report-style-packs.css?v=3">
     <link rel="stylesheet" href="css/workspace-layout.css?v=60">
     <link rel="stylesheet" href="css/workspace.css?v=38">
@@ -601,8 +601,27 @@
                     </div>
                     <div class="app-nav-group">
                         <div class="app-nav-group-label">Operations</div>
+                        <!-- Jobs sits ABOVE Schedule and is an expand-on-click
+                             accordion (data-accordion-toggle parent toggles the
+                             section; the actual list is the "Jobs List" child).
+                             Children: the jobs list + the cross-job hub pages
+                             (Purchase Orders / Change Orders / RFIs / Submittals)
+                             which route to the #jobshub tab via data-jobshub-subtab.
+                             data-cap on the wrapper gates the whole section. -->
+                        <div class="app-nav-parent" data-accordion="jobs" data-cap="JOBS_VIEW_ALL JOBS_VIEW_ASSIGNED JOBS_EDIT_ANY JOBS_EDIT_OWN">
+                            <button class="tab-btn app-nav-parent-btn" data-accordion-toggle data-p86-icon="wip" title="Jobs">
+                                <span class="app-nav-label">Jobs</span>
+                                <span class="app-nav-caret" role="button" tabindex="0" aria-label="Toggle Jobs sub-pages" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" width="12" height="12" aria-hidden="true"><polyline points="9 18 15 12 9 6"></polyline></svg></span>
+                            </button>
+                            <div class="app-nav-children" role="group" aria-label="Jobs sub-pages">
+                                <button class="tab-btn app-nav-child" data-tab="jobs" data-virtual-tab="jobs" data-p86-icon="wip" title="Jobs List"><span class="app-nav-label">Jobs List</span></button>
+                                <button class="tab-btn app-nav-child" data-tab="jobshub" data-jobshub-subtab="purchase-orders" data-virtual-tab="jobshub-purchase-orders" data-p86-icon="attachments" title="Purchase Orders"><span class="app-nav-label">Purchase Orders</span></button>
+                                <button class="tab-btn app-nav-child" data-tab="jobshub" data-jobshub-subtab="change-orders" data-virtual-tab="jobshub-change-orders" data-p86-icon="edit" title="Change Orders"><span class="app-nav-label">Change Orders</span></button>
+                                <button class="tab-btn app-nav-child" data-tab="jobshub" data-jobshub-subtab="rfis" data-virtual-tab="jobshub-rfis" data-p86-icon="magnifying-glass" title="RFIs"><span class="app-nav-label">RFIs</span></button>
+                                <button class="tab-btn app-nav-child" data-tab="jobshub" data-jobshub-subtab="submittals" data-virtual-tab="jobshub-submittals" data-p86-icon="import" title="Submittals"><span class="app-nav-label">Submittals</span></button>
+                            </div>
+                        </div>
                         <button class="tab-btn" data-tab="schedule" data-p86-icon="schedule" title="Schedule"><span class="app-nav-label">Schedule</span></button>
-                        <button class="tab-btn" data-tab="jobs" data-p86-icon="wip" data-cap="JOBS_VIEW_ALL JOBS_VIEW_ASSIGNED JOBS_EDIT_ANY JOBS_EDIT_OWN" title="Jobs"><span class="app-nav-label">Jobs</span></button>
                     </div>
                     <div class="app-nav-group">
                         <div class="app-nav-group-label">Directory</div>
@@ -1325,6 +1344,14 @@
                      SYSTEM_ADMIN so only the platform owner ever sees it. -->
                 <div id="console" class="tab-content">
                     <div id="consolePageHost"></div>
+                </div>
+
+                <!-- JOBS HUB TAB — cross-job index pages (Purchase Orders /
+                     Change Orders / RFIs / Submittals) reached from the Jobs
+                     sidebar dropdown. js/jobs-hub.js renders into the host;
+                     switchJobsHubSubTab() picks the sub-view. -->
+                <div id="jobshub" class="tab-content">
+                    <div id="jobshubPageHost"></div>
                 </div>
 
                 <!-- SCHEDULE TAB — production scheduling calendar.
@@ -3019,7 +3046,7 @@
     <script src="js/auth.js?v=17"></script>
     <script src="js/dialogs.js?v=1b"></script>
     <script src="js/geolocation.js?v=1"></script>
-    <script src="js/api.js?v=41"></script>
+    <script src="js/api.js?v=42"></script>
     <script src="js/header-weather.js?v=2"></script>
     <script src="js/account.js?v=2b"></script>
     <script src="js/voice-input.js?v=5"></script>
@@ -3054,7 +3081,7 @@
     <script src="js/qb-costs-view.js?v=11"></script>
     <script src="js/insights.js?v=7"></script>
     <script src="js/schedule.js?v=34"></script>
-    <script src="js/app.js?v=86"></script>
+    <script src="js/app.js?v=87"></script>
     <script src="js/compliance-review-ui.js?v=2"></script>
     <script src="js/messaging.js?v=1b"></script>
     <script src="js/my-files.js?v=16"></script>
@@ -3078,6 +3105,10 @@
     <script src="js/report-style-packs.js?v=2"></script>
     <script src="js/projects.js?v=60"></script>
     <script src="js/console.js?v=4"></script>
+    <!-- Jobs Hub — cross-job index pages (Purchase Orders / Change Orders /
+         RFIs / Submittals) for the Jobs sidebar dropdown. Uses p86Api +
+         appData.jobs + editJob/switchJobSubTab at runtime. -->
+    <script src="js/jobs-hub.js?v=1"></script>
     <!-- Shared pricing pipeline — math used by estimate-editor +
          estimate-preview + the upcoming change-order-editor. Loads
          BEFORE any of them so window.p86Pricing is ready. -->
