@@ -1154,14 +1154,14 @@
         .app-nav .tab-btn {
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 9px;
             width: 100%;
-            padding: 7px 10px;
+            padding: 5px 9px;
             border: none;
             border-radius: 8px;
             background: transparent;
             color: var(--text-dim);
-            font-size: 13px;
+            font-size: 12.5px;
             font-weight: 500;
             letter-spacing: 0.1px;
             text-align: left;
@@ -1189,8 +1189,8 @@
             flex: 0 0 auto;
         }
         .app-nav .tab-btn .p86-icon {
-            width: 18px;
-            height: 18px;
+            width: 16px;
+            height: 16px;
         }
         .app-nav-label {
             flex: 1 1 auto;
@@ -1254,13 +1254,13 @@
         }
         /* Child rows — slightly smaller + lighter than top-level rows. */
         .app-nav .app-nav-child {
-            padding: 5px 10px;
-            gap: 9px;
-            font-size: 12.5px;
+            padding: 4px 9px;
+            gap: 8px;
+            font-size: 12px;
         }
         .app-nav .app-nav-child .p86-icon {
-            width: 16px;
-            height: 16px;
+            width: 15px;
+            height: 15px;
         }
         /* When a child is the active page, give the (possibly collapsed)
            parent a subtle "contains current page" cue. */
@@ -1286,11 +1286,11 @@
             gap: 2px;
         }
         .app-nav-group + .app-nav-group {
-            margin-top: 13px;
+            margin-top: 11px;
         }
         .app-nav-group-label {
-            padding: 4px 11px 2px;
-            font-size: 10.5px;
+            padding: 3px 10px 2px;
+            font-size: 10px;
             font-weight: 600;
             text-transform: uppercase;
             letter-spacing: 0.4px;
