@@ -20,9 +20,10 @@
   // Per-view filter state persists for the session so flipping between
   // sub-tabs keeps your filters.
   var _state = {
-    'change-orders': { status: 'open', job: '', q: '' },
-    rfis:            { status: 'open', job: '', q: '' },
-    submittals:      { status: 'open', job: '', q: '' }
+    'purchase-orders': { status: 'open', job: '', q: '' },
+    'change-orders':   { status: 'open', job: '', q: '' },
+    rfis:              { status: 'open', job: '', q: '' },
+    submittals:        { status: 'open', job: '', q: '' }
   };
 
   function esc(v) {
