@@ -1732,6 +1732,14 @@ function renderJobsMain() {
 
             const w = getJobWIP(jobId);
 
+            // Legacy header + info/summary-card fields. The redesigned overview
+            // (renderJobOverview) rebuilds that region, so some of these ids may
+            // no longer be in the DOM after the first job is opened in a session.
+            // Guard the WHOLE block: a single missing element must not throw and
+            // abort renderJobDetail — doing so skipped switchJobSubTab() below,
+            // so the subtab content (incl. the RFI/Submittal workflow panel)
+            // never rendered and the job detail showed a blank body.
+            try {
             document.getElementById('job-detail-title').textContent = (job.jobNumber ? job.jobNumber + ' — ' : '') + job.title;
             const detailStatusClass = job.status === 'On Hold' ? 'at-risk' : job.status === 'Completed' ? 'on-track' : job.status === 'Archived' ? 'not-started' : 'on-track';
             document.getElementById('job-detail-status').innerHTML = `<span class="badge ${detailStatusClass}">${escapeHTML(job.status)}</span>`;
@@ -1773,6 +1781,7 @@ function renderJobsMain() {
             document.getElementById('job-summary-profit').style.color = w.jtdProfit >= 0 ? 'var(--green)' : 'var(--red)';
             const jtdMarginStr = w.jtdMargin.toFixed(1) + '%';
             document.getElementById('job-summary-margin').textContent = jtdMarginStr;
+            } catch (e) { console.warn('[job detail] legacy field render skipped (missing element):', e && e.message); }
 
             // Re-render the currently active subtab
             const activeSubTab = document.querySelector('.sub-tab-btn-job.active');
