@@ -567,8 +567,36 @@
                              only. The shared /estimates page still drives all
                              four directory screens internally via
                              data-est-subtab through the delegated handler. -->
-                        <button class="tab-btn" data-tab="estimates" data-est-subtab="leads" data-virtual-tab="leads" data-p86-icon="leads" data-cap="LEADS_VIEW" title="Leads"><span class="app-nav-label">Leads</span></button>
-                        <button class="tab-btn" data-tab="estimates" data-est-subtab="list" data-virtual-tab="estimates" data-p86-icon="estimates" data-cap="ESTIMATES_VIEW" title="Estimates"><span class="app-nav-label">Estimates</span></button>
+                        <!-- Leads + Estimates are expand-on-click accordions
+                             (data-accordion-toggle parent = toggles the section,
+                             does NOT navigate — the actual list is a child row).
+                             Same mechanism as the Admin / Command Center
+                             accordions, except the parent toggles instead of
+                             routing. data-cap on the wrapper hides the whole
+                             section for users who lack the capability. Children
+                             route via the shared /estimates page through
+                             data-est-subtab; the Leads Map child additionally
+                             carries data-leads-view so it lands on the map view
+                             deterministically (vs the toolbar flip-toggle). -->
+                        <div class="app-nav-parent" data-accordion="leads" data-cap="LEADS_VIEW">
+                            <button class="tab-btn app-nav-parent-btn" data-accordion-toggle data-p86-icon="leads" title="Leads">
+                                <span class="app-nav-label">Leads</span>
+                                <span class="app-nav-caret" role="button" tabindex="0" aria-label="Toggle Leads sub-pages" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" width="12" height="12" aria-hidden="true"><polyline points="9 18 15 12 9 6"></polyline></svg></span>
+                            </button>
+                            <div class="app-nav-children" role="group" aria-label="Leads sub-pages">
+                                <button class="tab-btn app-nav-child" data-tab="estimates" data-est-subtab="leads" data-leads-view="list" data-virtual-tab="leads" data-p86-icon="leads" title="Leads List"><span class="app-nav-label">Leads List</span></button>
+                                <button class="tab-btn app-nav-child" data-tab="estimates" data-est-subtab="leads" data-leads-view="map" data-virtual-tab="leads-map" data-p86-icon="globe" title="Leads Map"><span class="app-nav-label">Leads Map</span></button>
+                            </div>
+                        </div>
+                        <div class="app-nav-parent" data-accordion="estimates" data-cap="ESTIMATES_VIEW">
+                            <button class="tab-btn app-nav-parent-btn" data-accordion-toggle data-p86-icon="estimates" title="Estimates">
+                                <span class="app-nav-label">Estimates</span>
+                                <span class="app-nav-caret" role="button" tabindex="0" aria-label="Toggle Estimates sub-pages" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" width="12" height="12" aria-hidden="true"><polyline points="9 18 15 12 9 6"></polyline></svg></span>
+                            </button>
+                            <div class="app-nav-children" role="group" aria-label="Estimates sub-pages">
+                                <button class="tab-btn app-nav-child" data-tab="estimates" data-est-subtab="list" data-virtual-tab="estimates" data-p86-icon="estimates" title="Estimate List"><span class="app-nav-label">Estimate List</span></button>
+                            </div>
+                        </div>
                     </div>
                     <div class="app-nav-group">
                         <div class="app-nav-group-label">Operations</div>
@@ -3020,12 +3048,12 @@
          Leads lists. Loads BEFORE those renderers so window.p86Tables is
          ready the first time they build their tables. -->
     <script src="js/table-enhancements.js?v=5"></script>
-    <script src="js/leads.js?v=42"></script>
+    <script src="js/leads.js?v=43"></script>
     <script src="js/job-costs-import.js?v=4"></script>
     <script src="js/qb-costs-view.js?v=11"></script>
     <script src="js/insights.js?v=7"></script>
     <script src="js/schedule.js?v=34"></script>
-    <script src="js/app.js?v=85"></script>
+    <script src="js/app.js?v=86"></script>
     <script src="js/compliance-review-ui.js?v=2"></script>
     <script src="js/messaging.js?v=1b"></script>
     <script src="js/my-files.js?v=16"></script>

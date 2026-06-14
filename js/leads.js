@@ -89,17 +89,32 @@
   var _leadsSort = { key: 'updated_at', dir: 'desc' };
   var _leadsView = 'list';   // 'list' | 'map' — toggled by the toolbar 🗺 button
 
-  function toggleLeadsMapView() {
-    _leadsView = (_leadsView === 'map') ? 'list' : 'map';
+  function _syncLeadsMapToggleBtn() {
     var b = document.getElementById('leads-map-toggle');
     if (b) {
       b.style.background = (_leadsView === 'map') ? 'rgba(79,140,255,0.18)' : '';
       b.style.borderColor = (_leadsView === 'map') ? '#4f8cff' : '';
       b.style.color = (_leadsView === 'map') ? '#93c5fd' : '';
     }
+  }
+  function toggleLeadsMapView() {
+    _leadsView = (_leadsView === 'map') ? 'list' : 'map';
+    _syncLeadsMapToggleBtn();
     renderLeadsList();
   }
   window.toggleLeadsMapView = toggleLeadsMapView;
+
+  // Deterministic view setter (vs the flip-flop toggle above). The sidebar
+  // Leads dropdown wires "Leads List" → setLeadsView('list') and "Leads
+  // Map" → setLeadsView('map') so each child lands on a known view instead
+  // of toggling whatever was last shown. No-op re-render is cheap; we always
+  // re-render so a child click from another tab paints the right view.
+  function setLeadsView(v) {
+    _leadsView = (v === 'map') ? 'map' : 'list';
+    _syncLeadsMapToggleBtn();
+    renderLeadsList();
+  }
+  window.setLeadsView = setLeadsView;
 
   function leadRowHTML(l) {
     // Status: use the global .badge + per-status color class instead of

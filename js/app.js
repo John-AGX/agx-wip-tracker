@@ -328,6 +328,18 @@
             // the Leads button, not the Estimates one).
             document.querySelectorAll('.tab-btn').forEach(btn => {
                 btn.addEventListener('click', () => {
+                    // Expand-on-click accordion parents (Leads / Estimates /
+                    // Jobs) carry data-accordion-toggle and NO data-tab —
+                    // clicking the row just toggles its section open/closed;
+                    // the actual list lives in a child row ("Leads List" etc).
+                    // This differs from the Admin / Command Center / My Files
+                    // parents, which navigate AND open. Handle + bail before
+                    // any tab switch so switchTab(null) is never called.
+                    if (btn.hasAttribute('data-accordion-toggle')) {
+                        const tp = btn.closest('.app-nav-parent');
+                        if (tp) setSidebarAccordionExpanded(tp, !tp.classList.contains('expanded'));
+                        return;
+                    }
                     const tabName = btn.getAttribute('data-tab');
                     const estSub = btn.getAttribute('data-est-subtab');
                     const adminSub = btn.getAttribute('data-admin-subtab');
@@ -336,6 +348,13 @@
                     switchTab(tabName);
                     if (estSub && typeof window.switchEstimatesSubTab === 'function') {
                         window.switchEstimatesSubTab(estSub);
+                    }
+                    // Leads dropdown children carry data-leads-view (list|map)
+                    // so "Leads List" / "Leads Map" each land on a known view
+                    // (vs the toolbar 🗺 flip-toggle which just inverts).
+                    const leadsView = btn.getAttribute('data-leads-view');
+                    if (leadsView && typeof window.setLeadsView === 'function') {
+                        window.setLeadsView(leadsView);
                     }
                     // Admin accordion children carry data-admin-subtab so the
                     // sidebar can drive the in-page admin sub-view directly
