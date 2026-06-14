@@ -110,7 +110,7 @@
   // of toggling whatever was last shown. No-op re-render is cheap; we always
   // re-render so a child click from another tab paints the right view.
   function setLeadsView(v) {
-    _leadsView = (v === 'map') ? 'map' : 'list';
+    _leadsView = (v === 'map' || v === 'activities') ? v : 'list';
     _syncLeadsMapToggleBtn();
     renderLeadsList();
   }
@@ -297,6 +297,15 @@
       summaryEl.textContent = counts ? prefix + ' (' + counts + ')' : prefix;
     }
 
+    // Activities view — pipeline kanban board (drag a card to change a
+    // lead's stage) with each card surfacing its open follow-up tasks.
+    // Search applies; the status filter does NOT (the board shows every
+    // stage as its own column). See renderLeadsActivities().
+    if (_leadsView === 'activities') {
+      renderLeadsActivities(listEl, _leads.filter(function(l) { return matchesSearch(l, q); }));
+      return;
+    }
+
     // Map view — same split list+map pane the Projects page uses, fed by
     // the filtered leads (status filter + search still apply). Pins come
     // from geocode_lat/lng (populated server-side from the address fields).
@@ -362,8 +371,152 @@
     if (window.p86Tables) window.p86Tables.enhance('leads');
   }
 
+  // ── Activities: pipeline board + follow-ups ───────────────────────
+  // Open follow-up tasks linked to leads (entity_type='lead'), fetched
+  // once and cached. Each board card surfaces its lead's open tasks.
+  var _leadTasks = [];
+  var _leadTasksLoaded = false;
+  var _lastLeadCardDragEnd = 0;
+
+  function loadLeadTasks(cb) {
+    if (!window.p86Api || !window.p86Api.tasks || !window.p86Api.isAuthenticated()) {
+      _leadTasksLoaded = true; cb && cb(); return;
+    }
+    window.p86Api.tasks.list({ entity_type: 'lead', exclude_done: 1, limit: 200 })
+      .then(function(res) {
+        _leadTasks = (res && res.tasks) || (Array.isArray(res) ? res : []);
+        _leadTasksLoaded = true; cb && cb();
+      })
+      .catch(function() { _leadTasksLoaded = true; cb && cb(); });
+  }
+  function tasksForLead(leadId) {
+    return _leadTasks.filter(function(t) { return String(t.entity_id) === String(leadId); });
+  }
+  function currentLeadSearch() {
+    var s = document.getElementById('leads-search');
+    return s ? s.value.trim() : '';
+  }
+  function reRenderActivities() {
+    if (_leadsView !== 'activities') return;
+    var host = document.getElementById('leads-list');
+    if (host) renderLeadsActivities(host, _leads.filter(function(l) { return matchesSearch(l, currentLeadSearch()); }));
+  }
+
+  function leadCardHTML(l) {
+    var rev = revenueFromAttachedEstimates(l.id);
+    var revStr = rev != null ? fmtCurrencyShort(rev) : '';
+    var loc = [l.city, l.state].filter(Boolean).join(', ');
+    var proj = l.projected_sale_date ? fmtDate(l.projected_sale_date) : '';
+    var tks = tasksForLead(l.id);
+    var fuHTML = '';
+    if (tks.length) {
+      fuHTML = '<div class="lead-card-fu">' + tks.slice(0, 3).map(function(t) {
+        var due = t.due_date ? fmtDate(t.due_date) : '';
+        var overdue = t.due_date && new Date(t.due_date).getTime() < (Date.now() - 86400000);
+        return '<div class="lead-card-fu-item' + (overdue ? ' overdue' : '') + '">' +
+          '<span class="lead-card-fu-dot"></span>' +
+          '<span class="lead-card-fu-txt">' + escapeHTML(t.title || 'Follow-up') + '</span>' +
+          (due ? '<span class="lead-card-fu-due">' + escapeHTML(due) + '</span>' : '') +
+        '</div>';
+      }).join('') +
+      (tks.length > 3 ? '<div class="lead-card-fu-more">+' + (tks.length - 3) + ' more</div>' : '') +
+      '</div>';
+    }
+    return '<div class="lead-card" draggable="true" data-lead-id="' + escapeAttr(l.id) + '">' +
+      '<div class="lead-card-title">' + escapeHTML(l.title || 'Untitled lead') + '</div>' +
+      (l.client_name ? '<div class="lead-card-client">' + escapeHTML(l.client_name) + '</div>' : '') +
+      '<div class="lead-card-meta">' +
+        (revStr ? '<span class="lead-card-rev">' + escapeHTML(revStr) + '</span>' : '') +
+        (proj ? '<span class="lead-card-proj">📅 ' + escapeHTML(proj) + '</span>' : '') +
+        (loc ? '<span class="lead-card-loc">' + escapeHTML(loc) + '</span>' : '') +
+      '</div>' +
+      fuHTML +
+    '</div>';
+  }
+
+  function renderLeadsActivities(host, leads) {
+    if (!host) return;
+    // Lazy-load follow-ups once, then re-render with them in place.
+    if (!_leadTasksLoaded) {
+      host.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);text-align:center;">Loading pipeline…</div>';
+      loadLeadTasks(function() { if (_leadsView === 'activities') renderLeadsActivities(host, leads); });
+      return;
+    }
+    var openFollowups = _leadTasks.length;
+    var colsHTML = STATUSES.map(function(s) {
+      var inStage = leads.filter(function(l) { return (l.status || 'new') === s.key; });
+      var cards = inStage.length
+        ? inStage.map(leadCardHTML).join('')
+        : '<div class="lead-board-empty">No leads</div>';
+      return '<div class="lead-board-col" data-stage="' + s.key + '">' +
+          '<div class="lead-board-col-head" style="border-top-color:' + s.color + ';">' +
+            '<span class="lead-board-col-title">' + escapeHTML(s.label) + '</span>' +
+            '<span class="lead-board-col-count">' + inStage.length + '</span>' +
+          '</div>' +
+          '<div class="lead-board-col-body" data-stage="' + s.key + '">' + cards + '</div>' +
+        '</div>';
+    }).join('');
+    host.innerHTML =
+      '<div class="lead-board-meta">' + leads.length + ' lead' + (leads.length === 1 ? '' : 's') +
+        ' · ' + openFollowups + ' open follow-up' + (openFollowups === 1 ? '' : 's') +
+        ' <span class="lead-board-hint">— drag a card to change its stage</span></div>' +
+      '<div class="lead-board">' + colsHTML + '</div>';
+    wireLeadBoardDnD(host);
+  }
+
+  function wireLeadBoardDnD(host) {
+    var dragId = null;
+    host.querySelectorAll('.lead-card').forEach(function(card) {
+      card.addEventListener('dragstart', function(e) {
+        dragId = card.getAttribute('data-lead-id');
+        card.classList.add('dragging');
+        try { e.dataTransfer.setData('text/plain', dragId); e.dataTransfer.effectAllowed = 'move'; } catch (_) {}
+      });
+      card.addEventListener('dragend', function() {
+        card.classList.remove('dragging');
+        _lastLeadCardDragEnd = Date.now();
+        dragId = null;
+        host.querySelectorAll('.lead-board-col-body.drop-hover').forEach(function(b) { b.classList.remove('drop-hover'); });
+      });
+      // Click opens the lead — but suppress the click that fires right
+      // after a drag (some browsers emit one).
+      card.addEventListener('click', function() {
+        if (Date.now() - _lastLeadCardDragEnd < 250) return;
+        var id = card.getAttribute('data-lead-id');
+        if (id && typeof window.openEditLeadModal === 'function') window.openEditLeadModal(id);
+      });
+    });
+    host.querySelectorAll('.lead-board-col-body').forEach(function(body) {
+      body.addEventListener('dragover', function(e) { e.preventDefault(); try { e.dataTransfer.dropEffect = 'move'; } catch (_) {} body.classList.add('drop-hover'); });
+      body.addEventListener('dragleave', function() { body.classList.remove('drop-hover'); });
+      body.addEventListener('drop', function(e) {
+        e.preventDefault();
+        body.classList.remove('drop-hover');
+        var id = dragId || (e.dataTransfer && e.dataTransfer.getData('text/plain'));
+        var stage = body.getAttribute('data-stage');
+        if (id && stage) updateLeadStatus(id, stage);
+      });
+    });
+  }
+
+  function updateLeadStatus(leadId, newStatus) {
+    var lead = _leads.find(function(l) { return String(l.id) === String(leadId); });
+    if (!lead || (lead.status || 'new') === newStatus) return;
+    var prev = lead.status;
+    lead.status = newStatus;        // optimistic paint
+    reRenderActivities();
+    if (!window.p86Api || !window.p86Api.leads) return;
+    window.p86Api.leads.update(leadId, { status: newStatus }).catch(function() {
+      lead.status = prev;           // revert on failure
+      reRenderActivities();
+      alert('Could not update the lead stage. Please try again.');
+    });
+  }
+
   function reloadLeadsCache() {
     _leads = [];
+    _leadTasks = [];
+    _leadTasksLoaded = false;
     renderLeadsList();
   }
 

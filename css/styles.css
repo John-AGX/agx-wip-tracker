@@ -2335,6 +2335,75 @@
             max-width: 320px;
         }
 
+        /* ── Lead Activities: pipeline board + follow-ups ─────────────── */
+        .lead-board-meta {
+            padding: 6px 4px 10px;
+            font-size: 12px;
+            color: var(--text-dim);
+        }
+        .lead-board-hint { opacity: 0.75; font-style: italic; }
+        .lead-board {
+            display: flex;
+            gap: 10px;
+            align-items: flex-start;
+            overflow-x: auto;
+            padding-bottom: 12px;
+        }
+        .lead-board-col {
+            flex: 0 0 250px;
+            width: 250px;
+            background: var(--surface2);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            display: flex;
+            flex-direction: column;
+            max-height: calc(100vh - 250px);
+        }
+        .lead-board-col-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 10px;
+            border-top: 3px solid var(--border);
+            border-radius: 10px 10px 0 0;
+        }
+        .lead-board-col-title { font-size: 12px; font-weight: 600; color: var(--text); }
+        .lead-board-col-count {
+            font-size: 11px; font-weight: 600; color: var(--text-dim);
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: 10px; padding: 0 7px; min-width: 20px; text-align: center;
+        }
+        .lead-board-col-body {
+            display: flex; flex-direction: column; gap: 8px;
+            padding: 8px; overflow-y: auto; flex: 1 1 auto; min-height: 60px;
+        }
+        .lead-board-col-body.drop-hover {
+            background: rgba(79,140,255,0.10);
+            outline: 2px dashed rgba(79,140,255,0.45); outline-offset: -4px;
+            border-radius: 0 0 10px 10px;
+        }
+        .lead-board-empty { color: var(--text-dim); font-size: 11px; text-align: center; padding: 14px 0; opacity: 0.5; }
+        .lead-card {
+            background: var(--surface); border: 1px solid var(--border);
+            border-radius: 8px; padding: 8px 9px; cursor: pointer;
+            transition: border-color .12s, box-shadow .12s;
+        }
+        .lead-card:hover { border-color: #4f8cff; box-shadow: 0 2px 8px rgba(0,0,0,0.18); }
+        .lead-card.dragging { opacity: 0.45; }
+        .lead-card-title { font-size: 12.5px; font-weight: 600; color: var(--text); line-height: 1.25; }
+        .lead-card-client { font-size: 11px; color: var(--text-dim); margin-top: 1px; }
+        .lead-card-meta { display: flex; flex-wrap: wrap; gap: 4px 10px; margin-top: 5px; font-size: 11px; }
+        .lead-card-rev { color: #34d399; font-weight: 600; }
+        .lead-card-proj, .lead-card-loc { color: var(--text-dim); }
+        .lead-card-fu { margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--border); display: flex; flex-direction: column; gap: 3px; }
+        .lead-card-fu-item { display: flex; align-items: center; gap: 5px; font-size: 10.5px; color: var(--text-dim); }
+        .lead-card-fu-dot { width: 6px; height: 6px; border-radius: 50%; background: #fbbf24; flex: 0 0 auto; }
+        .lead-card-fu-item.overdue { color: #f87171; }
+        .lead-card-fu-item.overdue .lead-card-fu-dot { background: #f87171; }
+        .lead-card-fu-txt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; }
+        .lead-card-fu-due { flex: 0 0 auto; opacity: 0.8; }
+        .lead-card-fu-more { font-size: 10px; color: var(--text-dim); opacity: 0.7; }
+
         td {
             padding: 6px 8px;
             border-bottom: 1px solid var(--border);

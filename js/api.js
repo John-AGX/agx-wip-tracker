@@ -596,9 +596,11 @@
       if (opts.status) qs.push('status=' + encodeURIComponent(opts.status));
       if (opts.exclude_done) qs.push('exclude_done=1');
       if (opts.kind) qs.push('kind=' + encodeURIComponent(opts.kind));
-      if (opts.entity_type && opts.entity_id) {
+      // entity_type can be sent alone (all tasks of a type, e.g. lead
+      // follow-ups) or with entity_id (one entity's tasks).
+      if (opts.entity_type) {
         qs.push('entity_type=' + encodeURIComponent(opts.entity_type));
-        qs.push('entity_id=' + encodeURIComponent(opts.entity_id));
+        if (opts.entity_id) qs.push('entity_id=' + encodeURIComponent(opts.entity_id));
       }
       if (opts.due_before) qs.push('due_before=' + encodeURIComponent(opts.due_before));
       if (opts.due_after) qs.push('due_after=' + encodeURIComponent(opts.due_after));

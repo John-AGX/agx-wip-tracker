@@ -295,9 +295,14 @@ router.get('/', requireAuth, async (req, res) => {
       where.push('t.kind = $' + (pn++));
       params.push(String(req.query.kind));
     }
-    if (req.query.entity_type && req.query.entity_id) {
+    // entity_type may be filtered alone (e.g. "all open lead follow-ups"
+    // for the Leads → Activities board) OR together with entity_id (the
+    // per-entity Tasks panel). Both stay org-scoped via the base WHERE.
+    if (req.query.entity_type && LINKABLE_ENTITY_TYPES.has(String(req.query.entity_type))) {
       where.push('t.entity_type = $' + (pn++)); params.push(String(req.query.entity_type));
-      where.push('t.entity_id = $' + (pn++));   params.push(String(req.query.entity_id));
+      if (req.query.entity_id) {
+        where.push('t.entity_id = $' + (pn++)); params.push(String(req.query.entity_id));
+      }
     }
     if (req.query.due_before) {
       where.push('t.due_date IS NOT NULL AND t.due_date <= $' + (pn++));
