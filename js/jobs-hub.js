@@ -58,11 +58,21 @@
   }
   function openParentJob(jobId, subtab) {
     if (!jobId) return;
+    // Use the canonical router open — it sets the URL AND runs the
+    // data-aware editJob + switchJobSubTab sequence atomically. The old
+    // manual switchTab('jobs') + editJob path raced: switchTab renders the
+    // jobs MAIN list (and a nav-state sync re-applied "/jobs" with no
+    // jobId), re-hiding the detail editJob had just opened — leaving a
+    // blank job screen.
+    if (window.p86Router && typeof window.p86Router.navigate === 'function') {
+      window.p86Router.navigate({ top: 'jobs', jobId: jobId, jobSub: subtab || null });
+      return;
+    }
+    // Fallback only if the router isn't present.
     try { if (typeof window.switchTab === 'function') window.switchTab('jobs'); } catch (e) {}
     if (typeof window.editJob === 'function') window.editJob(jobId);
     if (subtab && typeof window.switchJobSubTab === 'function') {
-      // Let the job detail paint before flipping its subtab.
-      setTimeout(function () { try { window.switchJobSubTab(subtab); } catch (e) {} }, 40);
+      setTimeout(function () { try { window.switchJobSubTab(subtab); } catch (e) {} }, 60);
     }
   }
 
@@ -224,6 +234,14 @@
       title: 'Change Orders',
       subtab: 'job-changeorders',
       createKind: 'co',
+      onRow: function (tr) {
+        var id = tr.getAttribute('data-co-id');
+        if (id && window.p86ChangeOrders && typeof window.p86ChangeOrders.open === 'function') {
+          window.p86ChangeOrders.open(id);
+        } else {
+          openParentJob(tr.getAttribute('data-job-id'), 'job-changeorders');
+        }
+      },
       statusOptions: [
         { v: 'open', label: 'Open (draft + approved)' }, { v: 'all', label: 'All' },
         { v: 'draft', label: 'Draft' }, { v: 'approved', label: 'Approved' }, { v: 'applied', label: 'Applied' }
@@ -240,7 +258,7 @@
           '<th>CO #</th><th>Job</th><th>Title</th><th>Status</th><th>Updated</th>' +
           '</tr></thead><tbody>' +
           rows.map(function (r) {
-            return '<tr data-job-id="' + esc(r.job_id) + '">' +
+            return '<tr data-job-id="' + esc(r.job_id) + '" data-co-id="' + esc(r.id) + '">' +
               '<td><strong>' + esc(r.co_number || '') + '</strong></td>' +
               '<td>' + esc(jobLabelFromRow(r)) + '</td>' +
               '<td>' + esc(r.title || '(untitled)') + '</td>' +
