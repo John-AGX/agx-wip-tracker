@@ -474,7 +474,11 @@
       var sb = document.getElementById('app-sidebar');
       if (sb) {
         var sbNav = sb.querySelector('.app-nav');
-        if (sbNav) sb.insertBefore(jobnav, sbNav);
+        // .app-nav may be nested inside a scroll wrapper rather than being a
+        // direct child of #app-sidebar — insert relative to its REAL parent
+        // so insertBefore() doesn't throw "reference node is not a child of
+        // this node" (which froze the whole job layout).
+        if (sbNav && sbNav.parentNode) sbNav.parentNode.insertBefore(jobnav, sbNav);
         else sb.appendChild(jobnav);
       }
     }
@@ -512,9 +516,13 @@
     }
     // Desktop: relocate tabs into the sidebar jobnav; hide main nav.
     if (!jobnav) return;
-    if (jobnav.parentNode !== sidebar) {
-      if (appNav) sidebar.insertBefore(jobnav, appNav);
-      else sidebar.appendChild(jobnav);
+    // Insert jobnav just before .app-nav using .app-nav's ACTUAL parent — it
+    // may live inside a scroll wrapper, not directly under #app-sidebar, so
+    // sidebar.insertBefore(jobnav, appNav) would throw.
+    var navParent = (appNav && appNav.parentNode) ? appNav.parentNode : sidebar;
+    if (jobnav.parentNode !== navParent) {
+      if (appNav && appNav.parentNode) navParent.insertBefore(jobnav, appNav);
+      else navParent.appendChild(jobnav);
     }
     if (tabs.parentNode !== jobnav) jobnav.appendChild(tabs);
     jobnav.style.display = '';
