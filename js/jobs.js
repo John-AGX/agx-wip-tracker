@@ -1786,11 +1786,15 @@ function renderJobsMain() {
             // Re-render the currently active subtab
             const activeSubTab = document.querySelector('.sub-tab-btn-job.active');
             const activeTabName = activeSubTab ? activeSubTab.getAttribute('data-subtab') : 'job-overview';
-            switchJobSubTab(activeTabName);
-            renderWipTab(jobId);
-            renderChangeOrders(jobId);
-            renderPurchaseOrders(jobId);
-            renderInvoices(jobId);
+            // Each sub-render writes to its own subtab's elements; some
+            // legacy elements can be absent after the overview redesign, so
+            // isolate each call — one throwing on a missing element must NOT
+            // abort the others (or leave the detail body blank).
+            try { switchJobSubTab(activeTabName); } catch (e) { console.warn('[job detail] subtab render:', e && e.message); }
+            try { renderWipTab(jobId); } catch (e) { console.warn('[job detail] wip render:', e && e.message); }
+            try { renderChangeOrders(jobId); } catch (e) { console.warn('[job detail] CO render:', e && e.message); }
+            try { renderPurchaseOrders(jobId); } catch (e) { console.warn('[job detail] PO render:', e && e.message); }
+            try { renderInvoices(jobId); } catch (e) { console.warn('[job detail] invoices render:', e && e.message); }
 
             // Refresh sticky header metrics strip
             if (typeof refreshHeaderMetrics === 'function') refreshHeaderMetrics();
@@ -1806,9 +1810,10 @@ function renderJobsMain() {
                 // renderJobOverview internally calls renderJobBuildings
                 // (and any other dependent sub-renders) when buildings
                 // exist, so this single call refreshes the building
-                // cards + the overview chrome.
-                renderJobOverview(jobId);
-                renderWipTab(jobId);
+                // cards + the overview chrome. Isolated so a stale/missing
+                // element can't throw out of the async callback.
+                try { renderJobOverview(jobId); } catch (e) { console.warn('[job detail] overview resync:', e && e.message); }
+                try { renderWipTab(jobId); } catch (e) { console.warn('[job detail] wip resync:', e && e.message); }
                 if (typeof refreshHeaderMetrics === 'function') refreshHeaderMetrics();
             });
         }
