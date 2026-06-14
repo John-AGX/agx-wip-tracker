@@ -77,6 +77,32 @@
     document.head.appendChild(link);
   }
 
+  // Rescue relocated sub-tab panels + job-info-card out of a two-column
+  // wrapper and back into the job detail view BEFORE that wrapper is
+  // destroyed. populateRightPanels() moves every .sub-tab-content-job and
+  // #job-info-card into #wsRightContent (inside #ws-two-col); if the
+  // wrapper is removed with the panes still inside, every subtab body
+  // (incl. #job-workflow-content) vanishes and the job detail renders
+  // blank. Both teardown paths — cleanup() and the observer's
+  // stale-ws-two-col removal — call this so panes are never lost.
+  function rescuePanels(twoCol, detail) {
+    if (!twoCol || !detail) return;
+    twoCol.querySelectorAll('.sub-tab-content-job').forEach(function(p) {
+      p.style.display = '';
+      detail.appendChild(p);
+    });
+    var jobInfoCard = twoCol.querySelector('#job-info-card');
+    if (jobInfoCard) {
+      jobInfoCard.style.display = '';
+      jobInfoCard.style.border = '';
+      jobInfoCard.style.boxShadow = '';
+      jobInfoCard.classList.remove('ws-accordion-content');
+      detail.appendChild(jobInfoCard);
+    }
+    var accordion = twoCol.querySelector('.ws-job-info-details');
+    if (accordion) accordion.remove();
+  }
+
   // ── Cleanup old injections ────────────────────────────────
   function cleanup() {
     // Restore the main sidebar nav and tear down the job-context subnav
@@ -145,26 +171,7 @@
 
     // Move sub-tab content panels back to detail before destroying two-col
     var twoCol = document.getElementById("ws-two-col");
-    if (twoCol && detail) {
-      // Rescue sub-tab panels
-      var panels = twoCol.querySelectorAll('.sub-tab-content-job');
-      panels.forEach(function(p) {
-        p.style.display = '';
-        detail.appendChild(p);
-      });
-      // Rescue job-info-card (moved into a <details> accordion)
-      var jobInfoCard = twoCol.querySelector('#job-info-card');
-      if (jobInfoCard) {
-        jobInfoCard.style.display = '';
-        jobInfoCard.style.border = '';
-        jobInfoCard.style.boxShadow = '';
-        jobInfoCard.classList.remove('ws-accordion-content');
-        detail.appendChild(jobInfoCard);
-      }
-      // Remove the accordion wrapper
-      var accordion = twoCol.querySelector('.ws-job-info-details');
-      if (accordion) accordion.remove();
-    }
+    rescuePanels(twoCol, detail);
     if (twoCol) twoCol.remove();
   }
 
@@ -1594,9 +1601,15 @@
 
         // Job detail is visible — ensure layout is applied
         if (!layoutApplied) {
-          // Remove any stale ws-two-col left from a previous session
+          // Remove any stale ws-two-col left from a previous session.
+          // CRITICAL: rescue its panels first. A desynced layoutApplied
+          // flag can make the CURRENT wrapper (with the live sub-tab
+          // panels + #job-info-card still inside) look "stale"; removing
+          // it blind destroys every subtab body and the detail renders
+          // blank. rescuePanels() moves them back to detail so the
+          // applyLayout() below can re-home them into the fresh wrapper.
           var stale = document.getElementById('ws-two-col');
-          if (stale) stale.remove();
+          if (stale) { rescuePanels(stale, detail); stale.remove(); }
           applyLayout();
         }
 
