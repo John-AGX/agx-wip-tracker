@@ -638,6 +638,34 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_job_change_orders_job ON job_change_orders(job_id);
     CREATE INDEX IF NOT EXISTS idx_job_change_orders_status ON job_change_orders(status);
 
+    -- Purchase Orders — the AGX <-> subcontractor scope-of-work contract
+    -- (net-new entity modeled on Buildertrend POs; see the saved
+    -- reference_buildertrend_po_spec). Mirrors job_change_orders' shape:
+    -- canonical lifecycle columns ride alongside a data JSONB blob holding
+    -- the editable body (title, scope rich text, lines[], materialsOnly,
+    -- scheduledCompletion, internalNotes, acceptance{name,date,accepted}).
+    -- sub_id links the assigned subcontractor (subs.id, loose — a sub may
+    -- be removed without cascading the historical PO). organization_id is
+    -- set on every insert (net-new table, no backfill needed). Status
+    -- workflow: draft -> issued -> approved (sub e-signs) -> work_complete
+    -- -> closed. idx ...org is built for the cross-job Jobs-hub list.
+    CREATE TABLE IF NOT EXISTS job_purchase_orders (
+      id TEXT PRIMARY KEY,
+      job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+      organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE,
+      owner_id INTEGER REFERENCES users(id),
+      sub_id TEXT,
+      status TEXT NOT NULL DEFAULT 'draft',
+      po_number TEXT,
+      data JSONB NOT NULL DEFAULT '{}'::jsonb,
+      approved_at TIMESTAMPTZ,
+      approved_by INTEGER REFERENCES users(id),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_job_purchase_orders_job ON job_purchase_orders(job_id);
+    CREATE INDEX IF NOT EXISTS idx_job_purchase_orders_org ON job_purchase_orders(organization_id, status, created_at DESC) WHERE organization_id IS NOT NULL;
+
     -- Role definitions. users.role is a TEXT FK by name (no schema change to
     -- users), so existing 'admin'/'corporate'/'pm' values keep working as
     -- soon as the matching rows are seeded below. capabilities is a JSONB

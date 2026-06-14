@@ -126,6 +126,10 @@ app.use('/api/search', searchRoutes);
 // and /api/change-orders/:id) so we mount the router at /api and let
 // it define both shapes internally.
 app.use('/api', changeOrderRoutes);
+// Purchase Orders — same two-URL-family pattern as change orders
+// (/api/jobs/:jobId/purchase-orders + /api/purchase-orders/*).
+const purchaseOrderRoutes = require('./routes/purchase-order-routes');
+app.use('/api', purchaseOrderRoutes);
 app.use('/api/roles', roleRoutes);
 app.use('/api/clients', clientRoutes);
 app.use('/api/leads', leadRoutes);

@@ -70,8 +70,15 @@
     draft: '#94a3b8', approved: '#34d399', applied: '#2dd4bf',
     open: '#4f8cff', answered: '#34d399', closed: '#8b90a5',
     submitted: '#4f8cff', revise_resubmit: '#fbbf24', rejected: '#f87171',
-    pending: '#fbbf24', sent: '#60a5fa', received: '#34d399'
+    pending: '#fbbf24', sent: '#60a5fa', received: '#34d399',
+    issued: '#4f8cff', work_complete: '#2dd4bf'
   };
+  function poLineTotal(l) {
+    if (!l || l.section === '__section_header__') return 0;
+    return (parseFloat(l.qty) || 0) * (parseFloat(l.unitCost) || 0);
+  }
+  function poSum(po) { return ((po && po.lines) || []).reduce(function (s, l) { return s + poLineTotal(l); }, 0); }
+  function money(n) { n = Number(n) || 0; return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
   function statusBadge(status) {
     var s = String(status || '').toLowerCase();
     var c = STATUS_COLOR[s] || '#8b90a5';
@@ -108,11 +115,15 @@
   function loadView(view) {
     var host = document.getElementById('jobshub-' + view);
     if (!host) return;
-    if (view === 'purchase-orders') return renderPOPlaceholder(host);
+    if (view === 'purchase-orders') return renderPO(host);
     if (view === 'change-orders')   return renderCO(host);
     if (view === 'rfis')            return renderWorkflow(host, 'rfi', 'RFIs');
     if (view === 'submittals')      return renderWorkflow(host, 'submittal', 'Submittals');
   }
+
+  // Lets the PO editor refresh the hub list after a status change.
+  var _currentRefetch = null;
+  window.p86JobsHubRefresh = function () { if (typeof _currentRefetch === 'function') _currentRefetch(); };
 
   // ── Shared list scaffold ───────────────────────────────────────────
   function jobFilterHTML(selected) {
@@ -159,7 +170,7 @@
         return;
       }
       listEl.innerHTML = cfg.tableHTML(rows);
-      wireRowOpen(listEl, cfg.subtab);
+      wireRows(listEl, cfg);
     }
     function refetch() {
       var listEl = document.getElementById('jh-list');
@@ -169,6 +180,7 @@
           if (listEl) listEl.innerHTML = '<div class="jobshub-error">Failed to load: ' + esc((err && err.message) || 'error') + '</div>';
         });
     }
+    _currentRefetch = refetch;
     var searchEl = document.getElementById('jh-search');
     var jobEl = document.getElementById('jh-job');
     var statusEl = document.getElementById('jh-status');
@@ -180,10 +192,12 @@
     refetch();
   }
 
-  function wireRowOpen(listEl, subtab) {
-    listEl.querySelectorAll('tr[data-job-id]').forEach(function (tr) {
+  function wireRows(listEl, cfg) {
+    listEl.querySelectorAll('tbody tr').forEach(function (tr) {
+      if (!tr.getAttribute('data-job-id') && !tr.getAttribute('data-po-id')) return;
       tr.addEventListener('click', function () {
-        openParentJob(tr.getAttribute('data-job-id'), subtab);
+        if (typeof cfg.onRow === 'function') cfg.onRow(tr);
+        else openParentJob(tr.getAttribute('data-job-id'), cfg.subtab);
       });
     });
   }
@@ -260,15 +274,48 @@
     });
   }
 
-  // ── Purchase Orders (net-new entity — Phase 2) ─────────────────────
-  function renderPOPlaceholder(host) {
-    host.innerHTML =
-      '<div class="jobshub-head"><div class="jobshub-title">Purchase Orders</div></div>' +
-      '<div class="jobshub-po-coming">' +
-        '<div class="jobshub-po-icon">📄</div>' +
-        '<div class="jobshub-po-title">Purchase Orders are coming next</div>' +
-        '<div class="jobshub-po-body">A full PO entity — header, line items, scope-of-work contract (seeded from your standard subcontract terms), attachments, sub e-sign acceptance, and status workflow — modeled on your Buildertrend POs. Building this now.</div>' +
-      '</div>';
+  // ── Purchase Orders ────────────────────────────────────────────────
+  // Rows open the dedicated PO editor (window.p86PurchaseOrders), not the
+  // parent job — the PO is its own contract document.
+  function renderPO(host) {
+    buildView(host, {
+      key: 'purchase-orders',
+      title: 'Purchase Orders',
+      createKind: 'po',
+      onRow: function (tr) {
+        var id = tr.getAttribute('data-po-id');
+        if (id && window.p86PurchaseOrders && typeof window.p86PurchaseOrders.open === 'function') {
+          window.p86PurchaseOrders.open(id);
+        }
+      },
+      statusOptions: [
+        { v: 'open', label: 'Open' }, { v: 'all', label: 'All' },
+        { v: 'draft', label: 'Draft' }, { v: 'issued', label: 'Issued' }, { v: 'approved', label: 'Approved' },
+        { v: 'work_complete', label: 'Work Complete' }, { v: 'closed', label: 'Closed' }
+      ],
+      fetch: function (st) {
+        return window.p86Api.purchaseOrders.listAll({ status: st.status, job: st.job })
+          .then(function (r) { return (r && r.purchase_orders) || []; });
+      },
+      matches: function (r, q) {
+        return [r.po_number, r.title, r.job_title, r.job_number, r.sub_name].filter(Boolean).join(' ').toLowerCase().indexOf(q) !== -1;
+      },
+      tableHTML: function (rows) {
+        return '<div class="p86-tbl-scroll"><table class="leads-table jobshub-table"><thead><tr>' +
+          '<th>PO #</th><th>Job</th><th>Sub</th><th>Title</th><th class="num">Total</th><th>Status</th>' +
+          '</tr></thead><tbody>' +
+          rows.map(function (r) {
+            return '<tr data-po-id="' + esc(r.id) + '">' +
+              '<td><strong>' + esc(r.po_number || '') + '</strong></td>' +
+              '<td>' + esc(jobLabelFromRow(r)) + '</td>' +
+              '<td>' + esc(r.sub_name || '—') + '</td>' +
+              '<td>' + esc(r.title || '(untitled)') + '</td>' +
+              '<td class="num">' + money(poSum(r)) + '</td>' +
+              '<td>' + statusBadge(r.status) + '</td>' +
+            '</tr>';
+          }).join('') + '</tbody></table></div>';
+      }
+    });
   }
 
   // ── Create modal (required job picker + entity fields) ─────────────
@@ -287,12 +334,22 @@
   }
 
   var KIND_META = {
-    co:        { title: 'New Change Order', requiredLabel: 'Title' },
-    rfi:       { title: 'New RFI',          requiredLabel: 'Subject' },
-    submittal: { title: 'New Submittal',    requiredLabel: 'Subject' }
+    co:        { title: 'New Change Order',   requiredLabel: 'Title' },
+    rfi:       { title: 'New RFI',            requiredLabel: 'Subject' },
+    submittal: { title: 'New Submittal',      requiredLabel: 'Subject' },
+    po:        { title: 'New Purchase Order', requiredLabel: 'Title' }
   };
 
   function fieldsHTML(kind) {
+    if (kind === 'po') {
+      return field('Title', '<input id="jh-cr-title" type="text" class="jobshub-input" placeholder="e.g. Framing and Decking">', true) +
+        field('Subcontractor (optional)', '<select id="jh-cr-sub" class="jobshub-input"><option value="">— Select sub —</option></select>') +
+        '<div class="jobshub-field-row">' +
+          field('Scheduled completion (optional)', '<input id="jh-cr-sched" type="date" class="jobshub-input">') +
+          field('', '<label class="jobshub-inline-check"><input id="jh-cr-materials" type="checkbox"> Materials only</label>') +
+        '</div>' +
+        '<div class="jobshub-hint-note">The scope-of-work contract is seeded from your org template — add line items &amp; details in the editor that opens.</div>';
+    }
     if (kind === 'co') {
       return field('Title', '<input id="jh-cr-title" type="text" class="jobshub-input" placeholder="e.g. Framing and Decking">', true) +
         field('Scope (optional)', '<textarea id="jh-cr-scope" class="jobshub-input" rows="3" placeholder="Short description — add line items after creating"></textarea>');
@@ -341,6 +398,18 @@
     overlay.querySelector('.jobshub-cancel').addEventListener('click', close);
     var saveBtn = overlay.querySelector('.jobshub-save');
     if (saveBtn) saveBtn.addEventListener('click', function () { submitCreate(kind, close, onSaved, saveBtn); });
+    // PO create needs the subcontractor list — populate the picker async.
+    if (kind === 'po' && window.p86Api && window.p86Api.subs) {
+      window.p86Api.subs.list().then(function (r) {
+        var subs = (r && r.subs) || (Array.isArray(r) ? r : []);
+        var sel = overlay.querySelector('#jh-cr-sub');
+        if (sel) {
+          sel.innerHTML = '<option value="">— Select sub —</option>' + subs.map(function (s) {
+            return '<option value="' + esc(s.id) + '">' + esc(s.name || s.id) + '</option>';
+          }).join('');
+        }
+      }).catch(function () {});
+    }
     var firstInput = overlay.querySelector('#jh-cr-job');
     if (firstInput) firstInput.focus();
   }
@@ -350,11 +419,29 @@
   function submitCreate(kind, close, onSaved, saveBtn) {
     var jobId = val('jh-cr-job');
     if (!jobId) { alert('Please pick a job first.'); return; }
-    var required = (kind === 'co') ? val('jh-cr-title') : val('jh-cr-subject');
-    if (!required) { alert('Please enter a ' + (kind === 'co' ? 'title' : 'subject') + '.'); return; }
+    var titleKind = (kind === 'co' || kind === 'po');
+    var required = titleKind ? val('jh-cr-title') : val('jh-cr-subject');
+    if (!required) { alert('Please enter a ' + (titleKind ? 'title' : 'subject') + '.'); return; }
     saveBtn.disabled = true;
     saveBtn.textContent = 'Creating…';
     var done = function () { saveBtn.disabled = false; saveBtn.textContent = 'Create'; };
+
+    if (kind === 'po') {
+      var poPayload = { title: required, sub_id: val('jh-cr-sub') || null };
+      var sched = val('jh-cr-sched'); if (sched) poPayload.scheduledCompletion = sched;
+      var matEl = document.getElementById('jh-cr-materials'); if (matEl && matEl.checked) poPayload.materialsOnly = true;
+      window.p86Api.purchaseOrders.create(jobId, poPayload)
+        .then(function (res) {
+          close();
+          var id = res && res.purchase_order && res.purchase_order.id;
+          if (id && window.p86PurchaseOrders && typeof window.p86PurchaseOrders.open === 'function') {
+            window.p86PurchaseOrders.open(id);
+          }
+          if (typeof onSaved === 'function') onSaved();
+        })
+        .catch(function (err) { done(); alert('Could not create the purchase order: ' + ((err && err.message) || 'error')); });
+      return;
+    }
 
     if (kind === 'co') {
       window.p86Api.changeOrders.create(jobId, { title: required, scope: val('jh-cr-scope'), lines: [] })

@@ -337,6 +337,34 @@
     }
   };
 
+  // Purchase Orders — the AGX <-> sub scope-of-work contract. Mirrors
+  // changeOrders + adds the per-org scope template. See
+  // server/routes/purchase-order-routes.js.
+  var purchaseOrders = {
+    listForJob: function(jobId) {
+      return get('/api/jobs/' + encodeURIComponent(jobId) + '/purchase-orders');
+    },
+    listAll: function(opts) {
+      opts = opts || {};
+      var qs = [];
+      if (opts.status) qs.push('status=' + encodeURIComponent(opts.status));
+      if (opts.job) qs.push('job=' + encodeURIComponent(opts.job));
+      if (opts.limit) qs.push('limit=' + encodeURIComponent(opts.limit));
+      return get('/api/purchase-orders' + (qs.length ? '?' + qs.join('&') : ''));
+    },
+    get: function(id) { return get('/api/purchase-orders/' + encodeURIComponent(id)); },
+    create: function(jobId, payload) {
+      return post('/api/jobs/' + encodeURIComponent(jobId) + '/purchase-orders', payload || {});
+    },
+    update: function(id, payload) { return put('/api/purchase-orders/' + encodeURIComponent(id), payload || {}); },
+    setStatus: function(id, status, acceptance) {
+      return post('/api/purchase-orders/' + encodeURIComponent(id) + '/status', { status: status, acceptance: acceptance });
+    },
+    remove: function(id) { return del('/api/purchase-orders/' + encodeURIComponent(id)); },
+    getScopeTemplate: function() { return get('/api/purchase-orders/scope-template'); },
+    setScopeTemplate: function(template) { return put('/api/purchase-orders/scope-template', { template: template }); }
+  };
+
   // Polymorphic reports (Phase 2) — projects (and future leads /
   // estimates) share the legacy job_reports table via entity_type +
   // entity_id columns. The legacy /api/jobs/:jobId/reports route
@@ -700,7 +728,7 @@
 
   window.p86Api = {
     get: get, put: put, post: post, del: del, patch: patch,
-    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, qbCosts: qbCosts, subs: subsApi, schedule: schedule, adminSms: adminSms, messages: messages, weather: weather, projects: projects, tasks: tasks, plans: plans, orgTags: orgTags, org: org, folderTemplates: folderTemplates, reports: reports, changeOrders: changeOrders, workflowItems: workflowItems,
+    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, qbCosts: qbCosts, subs: subsApi, schedule: schedule, adminSms: adminSms, messages: messages, weather: weather, projects: projects, tasks: tasks, plans: plans, orgTags: orgTags, org: org, folderTemplates: folderTemplates, reports: reports, changeOrders: changeOrders, workflowItems: workflowItems, purchaseOrders: purchaseOrders,
     isOffline: isOffline,
     isAuthenticated: function() { return !!getToken() && !isOffline(); }
   };

@@ -246,7 +246,7 @@
     })();
     </script>
 
-    <link rel="stylesheet" href="css/styles.css?v=184">
+    <link rel="stylesheet" href="css/styles.css?v=185">
     <link rel="stylesheet" href="css/report-style-packs.css?v=3">
     <link rel="stylesheet" href="css/workspace-layout.css?v=60">
     <link rel="stylesheet" href="css/workspace.css?v=38">
@@ -3047,7 +3047,7 @@
     <script src="js/auth.js?v=17"></script>
     <script src="js/dialogs.js?v=1b"></script>
     <script src="js/geolocation.js?v=1"></script>
-    <script src="js/api.js?v=42"></script>
+    <script src="js/api.js?v=43"></script>
     <script src="js/header-weather.js?v=2"></script>
     <script src="js/account.js?v=2b"></script>
     <script src="js/voice-input.js?v=5"></script>
@@ -3109,7 +3109,10 @@
     <!-- Jobs Hub — cross-job index pages (Purchase Orders / Change Orders /
          RFIs / Submittals) for the Jobs sidebar dropdown. Uses p86Api +
          appData.jobs + editJob/switchJobSubTab at runtime. -->
-    <script src="js/jobs-hub.js?v=2"></script>
+    <script src="js/jobs-hub.js?v=3"></script>
+    <!-- Purchase Order editor — full-window overlay opened from the Jobs
+         hub Purchase Orders list. Uses p86Api.purchaseOrders + subs. -->
+    <script src="js/purchase-order-editor.js?v=1"></script>
     <!-- Shared pricing pipeline — math used by estimate-editor +
          estimate-preview + the upcoming change-order-editor. Loads
          BEFORE any of them so window.p86Pricing is ready. -->

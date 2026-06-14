@@ -2443,6 +2443,49 @@
         .est-map-fbtn.active { background: var(--accent, #4f8cff); color: #fff; }
         .est-map-count { font-size: 11.5px; color: var(--text-dim); }
 
+        /* ── Purchase Order editor (full-window overlay) ──────────────── */
+        .po-ed-overlay { position: fixed; inset: 0; background: var(--bg, #0b0d12); z-index: 1300; display: none; }
+        .po-ed { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--bg, #0b0d12); }
+        .po-ed-loading { padding: 40px; text-align: center; color: var(--text-dim); }
+        .po-ed-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 18px; border-bottom: 1px solid var(--border); background: var(--surface); flex: 0 0 auto; }
+        .po-ed-head-l { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+        .po-ed-num { font-size: 16px; font-weight: 700; color: var(--text); }
+        .po-ed-job { font-size: 12px; color: var(--text-dim); }
+        .po-ed-head-r { display: flex; align-items: center; gap: 8px; }
+        .po-ed-saved { font-size: 11px; color: var(--text-dim); min-width: 56px; text-align: right; }
+        .po-ed-body { flex: 1 1 auto; overflow-y: auto; padding: 18px; max-width: 980px; width: 100%; margin: 0 auto; box-sizing: border-box; }
+        .po-ed-sec { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; margin-bottom: 14px; }
+        .po-ed-sec-title { font-size: 13px; font-weight: 600; color: var(--text); margin-bottom: 10px; }
+        .po-ed-hint { font-weight: 400; color: var(--text-dim); font-size: 11px; }
+        .po-ed-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+        .po-ed-field { display: flex; flex-direction: column; gap: 4px; }
+        .po-ed-field-wide { grid-column: 1 / -1; }
+        .po-ed-field > span { font-size: 11.5px; font-weight: 600; color: var(--text-dim); }
+        .po-ed-check { flex-direction: row; align-items: center; gap: 8px; }
+        .po-ed-input { background: var(--surface2); border: 1px solid var(--border); color: var(--text); border-radius: 8px; padding: 7px 10px; font-size: 13px; font-family: inherit; width: 100%; box-sizing: border-box; }
+        .po-ed-input:focus { outline: none; border-color: #4f8cff; }
+        textarea.po-ed-input { resize: vertical; }
+        .po-ed-scope { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.5; }
+        .po-ed-sub-current { font-size: 11.5px; color: var(--text-dim); margin-top: 8px; }
+        .po-ed-tbl-wrap { overflow-x: auto; }
+        .po-ed-tbl { width: 100%; border-collapse: collapse; font-size: 12px; }
+        .po-ed-tbl th { text-align: left; color: var(--text-dim); font-weight: 600; padding: 4px 6px; border-bottom: 1px solid var(--border); }
+        .po-ed-tbl th.num, .po-ed-tbl td.num { text-align: right; }
+        .po-ed-tbl td { padding: 3px 6px; border-bottom: 1px solid var(--border); }
+        .po-ed-cell { background: transparent; border: 1px solid transparent; color: var(--text); border-radius: 6px; padding: 4px 6px; font-size: 12px; width: 100%; box-sizing: border-box; font-family: inherit; }
+        .po-ed-cell:hover { border-color: var(--border); }
+        .po-ed-cell:focus { outline: none; border-color: #4f8cff; background: var(--surface2); }
+        .po-ed-cell.num { text-align: right; }
+        .po-ed-rowtot { white-space: nowrap; font-variant-numeric: tabular-nums; }
+        .po-ed-tot-label { text-align: right; font-weight: 600; color: var(--text-dim); }
+        .po-ed-tot { font-weight: 700; color: #34d399; font-variant-numeric: tabular-nums; }
+        .po-ed-delrow { background: none; border: none; color: var(--text-dim); cursor: pointer; font-size: 12px; padding: 2px 6px; border-radius: 6px; }
+        .po-ed-delrow:hover { background: rgba(248, 113, 113, 0.15); color: #f87171; }
+        .po-ed-addrow { margin-top: 8px; }
+        .po-ed-accepted { border-color: #34d39955; }
+        .jobshub-inline-check { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--text); padding-top: 22px; }
+        .jobshub-hint-note { font-size: 11.5px; color: var(--text-dim); background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+
         td {
             padding: 6px 8px;
             border-bottom: 1px solid var(--border);
