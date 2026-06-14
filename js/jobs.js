@@ -2078,92 +2078,13 @@ function renderJobsMain() {
                 container.appendChild(subsSection);
             }
 
-            // ── Change Orders (Phase 4 — server-backed with line items + status) ──
-            // Renders ABOVE the legacy summary so the new flow is the
-            // primary surface. Legacy localStorage COs still show below
-            // until the migration phase runs.
+            // ── Change Orders + Purchase Orders (server-backed) ──
+            // Renders the job_change_orders / job_purchase_orders entities —
+            // the same records the dedicated subtabs + Jobs hub use. The old
+            // localStorage CO/PO summary blocks were removed so the overview
+            // no longer shows stale pre-migration data.
             renderJobChangeOrdersInto(container, jobId);
-
-            // ── Change Orders summary (legacy — pre-Phase 4) ──
-            const cos = appData.changeOrders.filter(c => c.jobId === jobId);
-            if (cos.length > 0) {
-                const coSection = document.createElement('div');
-                coSection.style.cssText = 'margin-top:14px;';
-                let coTotalInc = 0, coTotalCost = 0;
-                cos.forEach(c => { coTotalInc += c.income || 0; coTotalCost += c.estimatedCosts || 0; });
-                const coRows = cos.map(function(c) {
-                    const profit = (c.income || 0) - (c.estimatedCosts || 0);
-                    return '<tr class="overview-row" style="cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.04);" onclick="editCO(\'' + escapeHTML(c.id) + '\')" title="Click to edit">' +
-                        '<td style="white-space:nowrap;padding:6px 10px;"><strong style="color:var(--text,#fff);font-size:13px;">' + escapeHTML(c.coNumber || 'CO') + '</strong></td>' +
-                        '<td style="padding:6px 10px;font-size:12px;color:var(--text-dim,#aaa);">' + escapeHTML(c.description || '') + '</td>' +
-                        '<td style="white-space:nowrap;padding:6px 10px;font-size:11px;color:var(--text-dim,#888);">' + escapeHTML(c.date || '') + '</td>' +
-                        '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-family:\'SF Mono\',monospace;font-size:13px;color:var(--green);font-weight:600;">' + formatCurrency(c.income) + '</td>' +
-                        '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-family:\'SF Mono\',monospace;font-size:13px;color:var(--accent);font-weight:600;">' + formatCurrency(c.estimatedCosts) + '</td>' +
-                        '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-family:\'SF Mono\',monospace;font-size:13px;font-weight:600;color:' + (profit >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(profit) + '</td>' +
-                    '</tr>';
-                }).join('');
-                coSection.innerHTML =
-                    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">' +
-                        '<h3 style="font-size:13px;margin:0;">&#x1F4DD; Change Orders (' + cos.length + ')</h3>' +
-                        '<div style="font-size:12px;color:var(--text-dim);">Total Inc: <b style="color:var(--green);">' + formatCurrency(coTotalInc) + '</b> &nbsp; Profit: <b style="color:' + ((coTotalInc - coTotalCost) >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(coTotalInc - coTotalCost) + '</b></div>' +
-                    '</div>' +
-                    '<div style="border:1px solid var(--border,#333);border-radius:10px;overflow-x:auto;background:var(--card-bg,#0f0f1e);">' +
-                        '<table style="width:100%;border-collapse:collapse;table-layout:auto;">' +
-                            '<thead style="background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border,#333);"><tr>' +
-                                thCell('CO #', 'left') +
-                                thCell('Description', 'left') +
-                                thCell('Date', 'left') +
-                                thCell('Income', 'right') +
-                                thCell('Cost', 'right') +
-                                thCell('Profit', 'right') +
-                            '</tr></thead>' +
-                            '<tbody>' + coRows + '</tbody>' +
-                        '</table>' +
-                    '</div>';
-                container.appendChild(coSection);
-            }
-
-            // ── Purchase Orders summary ──
-            const pos = appData.purchaseOrders.filter(p => p.jobId === jobId);
-            if (pos.length > 0) {
-                const poSection = document.createElement('div');
-                poSection.style.cssText = 'margin-top:14px;';
-                let poTotalAmt = 0, poTotalBilled = 0;
-                pos.forEach(p => { poTotalAmt += p.amount || 0; poTotalBilled += p.billedToDate || 0; });
-                const poRows = pos.map(function(p) {
-                    const remaining = (p.amount || 0) - (p.billedToDate || 0);
-                    const statusColor = p.status === 'Closed' ? 'var(--green)' : p.status === 'Partial' ? 'var(--yellow)' : 'var(--accent)';
-                    return '<tr class="overview-row" style="cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.04);" onclick="editPO(\'' + escapeHTML(p.id) + '\')" title="Click to edit">' +
-                        '<td style="white-space:nowrap;padding:6px 10px;"><strong style="color:var(--text,#fff);font-size:13px;">' + escapeHTML(p.poNumber || 'PO') + '</strong></td>' +
-                        '<td style="padding:6px 10px;font-size:12px;color:var(--text-dim,#aaa);">' + escapeHTML(p.vendor || '') + '</td>' +
-                        '<td style="padding:6px 10px;font-size:11px;color:var(--text-dim,#888);">' + escapeHTML(p.description || '') + '</td>' +
-                        '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-family:\'SF Mono\',monospace;font-size:13px;color:var(--accent);font-weight:600;">' + formatCurrency(p.amount) + '</td>' +
-                        '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-family:\'SF Mono\',monospace;font-size:13px;color:var(--green);font-weight:600;">' + formatCurrency(p.billedToDate) + '</td>' +
-                        '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-family:\'SF Mono\',monospace;font-size:13px;font-weight:600;color:' + (remaining > 0 ? 'var(--yellow)' : 'var(--green)') + ';">' + formatCurrency(remaining) + '</td>' +
-                        '<td style="white-space:nowrap;padding:6px 10px;"><span style="font-size:10px;padding:2px 8px;border-radius:10px;background:rgba(79,140,255,0.1);color:' + statusColor + ';font-weight:600;">' + escapeHTML(p.status || 'Open') + '</span></td>' +
-                    '</tr>';
-                }).join('');
-                poSection.innerHTML =
-                    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">' +
-                        '<h3 style="font-size:13px;margin:0;">&#x1F4C4; Purchase Orders (' + pos.length + ')</h3>' +
-                        '<div style="font-size:12px;color:var(--text-dim);">Total: <b>' + formatCurrency(poTotalAmt) + '</b> &nbsp; Billed: <b>' + formatCurrency(poTotalBilled) + '</b> &nbsp; Rem: <b style="color:' + ((poTotalAmt - poTotalBilled) > 0 ? 'var(--yellow)' : 'var(--green)') + ';">' + formatCurrency(poTotalAmt - poTotalBilled) + '</b></div>' +
-                    '</div>' +
-                    '<div style="border:1px solid var(--border,#333);border-radius:10px;overflow-x:auto;background:var(--card-bg,#0f0f1e);">' +
-                        '<table style="width:100%;border-collapse:collapse;table-layout:auto;">' +
-                            '<thead style="background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border,#333);"><tr>' +
-                                thCell('PO #', 'left') +
-                                thCell('Vendor', 'left') +
-                                thCell('Description', 'left') +
-                                thCell('Amount', 'right') +
-                                thCell('Billed', 'right') +
-                                thCell('Remaining', 'right') +
-                                thCell('Status', 'left') +
-                            '</tr></thead>' +
-                            '<tbody>' + poRows + '</tbody>' +
-                        '</table>' +
-                    '</div>';
-                container.appendChild(poSection);
-            }
+            renderJobPurchaseOrdersInto(container, jobId);
 
             // ── Invoices summary ──
             const invs = appData.invoices.filter(i => i.jobId === jobId);
