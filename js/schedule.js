@@ -973,6 +973,12 @@
   var MONTHS_AHEAD = 6;
   var _io = null;            // IntersectionObserver instance
   var _focusedWeekStart = null; // ISO date of the currently-focused week
+  // Flow mode: every week row is content-driven (height grows with the
+  // number of items scheduled) and shows its full day cards, instead of the
+  // scroll-position fisheye that enlarged only the centered week. The
+  // continuous month scroll + month label are kept. Set false to restore
+  // the legacy fisheye lens.
+  var FLOW_MODE = true;
 
   function renderGrid() {
     try { renderGridInner(); }
@@ -1055,14 +1061,16 @@
       centerRow = stack.querySelector('[data-week-start="' + todayWeekIso + '"]');
       centerIso = todayWeekIso;
     }
+    // Flow mode: tag the stack so CSS makes every row content-driven
+    // (height grows with its items) instead of the scroll-position fisheye.
+    stack.classList.toggle('sch-flow', FLOW_MODE);
     if (centerRow) {
-      centerRow.setAttribute('data-lens', 'focused');
+      if (!FLOW_MODE) centerRow.setAttribute('data-lens', 'focused');
       _focusedWeekStart = centerIso;
     }
     // Set decay lens states on rows above/below so the initial paint
-    // already shows the fisheye shape, not a wall of equal rows that
-    // animates after the first IO tick.
-    setLensAround(stack, centerRow);
+    // already shows the fisheye shape (legacy fisheye only).
+    if (!FLOW_MODE) setLensAround(stack, centerRow);
 
     // Position scroll so the center row lands centered in the viewport.
     // requestAnimationFrame so we measure AFTER the new layout has
@@ -1131,15 +1139,18 @@
       var focusedIso = rows[bestIdx].getAttribute('data-week-start');
       if (focusedIso === _focusedWeekStart) return; // no change
       _focusedWeekStart = focusedIso;
-      // Apply new lens states based on row-count distance.
-      for (var k = 0; k < rows.length; k++) {
-        var distRows = Math.abs(k - bestIdx);
-        var lens = 'far';
-        if (distRows === 0) lens = 'focused';
-        else if (distRows === 1) lens = 'near';
-        else if (distRows === 2) lens = 'mid';
-        if (rows[k].getAttribute('data-lens') !== lens) {
-          rows[k].setAttribute('data-lens', lens);
+      // Apply new lens states based on row-count distance (legacy fisheye).
+      // Skipped in flow mode, where rows are sized by their own content.
+      if (!FLOW_MODE) {
+        for (var k = 0; k < rows.length; k++) {
+          var distRows = Math.abs(k - bestIdx);
+          var lens = 'far';
+          if (distRows === 0) lens = 'focused';
+          else if (distRows === 1) lens = 'near';
+          else if (distRows === 2) lens = 'mid';
+          if (rows[k].getAttribute('data-lens') !== lens) {
+            rows[k].setAttribute('data-lens', lens);
+          }
         }
       }
       updateMonthLabel();

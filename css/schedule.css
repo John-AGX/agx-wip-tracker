@@ -505,6 +505,31 @@
   .sch-day-job-card { font-size: 10.5px; padding: 4px 6px; }
   .sch-month-header { padding: 10px 12px 6px; font-size: 10px; }
 }
+
+/* ── Flow mode ──────────────────────────────────────────────────────
+   Every week row is content-driven: its height grows with the number of
+   items scheduled that week, and it always shows the full per-day cards.
+   Replaces the scroll-position fisheye (the data-lens height tiers) while
+   keeping the continuous month scroll. These selectors are more specific
+   than the .sch-cal-week-row[data-lens="…"] rules, so they win regardless
+   of any lens attribute. */
+.sch-cal-stack.sch-flow .sch-cal-week-row {
+  min-height: 116px;
+  max-height: none;
+  transition: none;
+}
+.sch-cal-stack.sch-flow .sch-cal-day-jobs {
+  display: flex;
+  max-height: none;
+  overflow-y: visible;
+}
+.sch-cal-stack.sch-flow .sch-cal-bars,
+.sch-cal-stack.sch-flow .sch-cal-day-dots { display: none; }
+@media (max-width: 640px) {
+  .sch-cal-stack.sch-flow .sch-cal-week-row { min-height: 96px; }
+  .sch-cal-stack.sch-flow .sch-cal-day-jobs { max-height: none; padding: 3px; }
+}
+
 .sch-cal-dow {
   background: var(--card-bg, #0f0f1e);
   font-size: 9px;
