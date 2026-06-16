@@ -3813,8 +3813,11 @@ async function buildReferenceLinksBlock(organizationId) {
     for (const row of r.rows) {
       const block = row.last_fetched_text || '';
       if (!block) continue;
-      const stamp = row.last_fetched_at ? ' (fetched ' + row.last_fetched_at.toISOString() + ')' : '';
-      const candidate = '\n\n[' + row.title + ']' + stamp + '\n' + block;
+      // No fetch timestamp in the prompt text: it changes on every 15-min
+      // refresh even when the sheet data is identical, which re-registers
+      // the whole stable system prefix and busts the agent prompt cache.
+      // Freshness lives in agent_reference_links.last_fetched_at for the UI.
+      const candidate = '\n\n[' + row.title + ']\n' + block;
       if (out.length + candidate.length > REF_LINKS_PROMPT_CAP) break;
       out += candidate;
     }

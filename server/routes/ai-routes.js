@@ -11810,31 +11810,19 @@ const WAVE3_EXECUTOR_TOOLS = new Set(['list_workflow_items', 'list_compliance_ex
 // Map of surface (entity_type) -> primary WRITE tool names.
 // Used both for the per-turn <available_tools> hint and as the
 // source of truth for which surfaces a tool "belongs to".
+// The live agent has ONE write primitive — emit_payload_file — which
+// carries its own targets (entity_type + entity_id + ops), so the
+// per-surface hint just points 86 at it. The old per-surface propose_*
+// lists named tools that are no longer registered; surfacing them
+// contradicted the baseline ("your tool list this turn is authoritative")
+// and could push 86 into the silent-stop path. (Step 7 of the Scribe
+// rework swaps this to the scribe.write handoff.)
 const SURFACE_PRIMARY_WRITES = {
-  estimate: [
-    'propose_add_line_item', 'propose_update_line_item', 'propose_remove_line_item',
-    'propose_move_line_item', 'propose_add_section', 'propose_remove_section',
-    'propose_rename_section', 'propose_set_scope', 'propose_set_estimate_field',
-    'propose_add_client_note', 'request_edit_mode'
-  ],
-  job: [
-    'set_phase_pct_complete', 'set_phase_field', 'set_node_value',
-    'wire_nodes', 'create_node', 'set_phase_buildingId', 'propose_change_order'
-  ],
-  intake: [
-    'propose_create_lead'
-  ],
-  client: [
-    'create_property', 'create_parent_company', 'update_client_field',
-    'link_property_to_parent', 'rename_client', 'change_property_parent',
-    'merge_clients', 'split_client_into_parent_and_property',
-    'attach_business_card_to_client'
-  ],
-  staff: [
-    'propose_skill_pack_add', 'propose_skill_pack_edit', 'propose_skill_pack_delete',
-    'propose_skill_pack_mirror', 'propose_skill_pack_unmirror',
-    'propose_watch_create', 'propose_watch_archive'
-  ]
+  estimate: ['emit_payload_file'],
+  job: ['emit_payload_file'],
+  intake: ['emit_payload_file'],
+  client: ['emit_payload_file'],
+  staff: ['emit_payload_file']
 };
 
 // Strict-gate map: tool name -> required entity_type. ONLY the entity-
