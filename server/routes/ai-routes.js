@@ -7045,10 +7045,13 @@ const PAYLOAD_TOOLS = [
         instruction: {
           type: 'string',
           description:
-            'The complete, unambiguous change in plain words, INCLUDING the resolved ' +
-            'entity_type + entity_id and every field/value to set. Example: "On ' +
-            'estimate est_abc123, change line item line_5 (currently qty 8 @ $12) to ' +
-            'qty 10, and set status to sent." The Scribe converts this into ONE payload.'
+            'The complete, unambiguous change in plain words, INCLUDING the entity_type + ' +
+            'entity_id and every field/value to set. Example: "On estimate est_abc123, ' +
+            'change line item line_5 (currently qty 8 @ $12) to qty 10, and set status to ' +
+            'sent." The Scribe converts this into ONE payload. NOTE: for a JOB you may ' +
+            'reference it by its jobNumber (e.g. "RV2000") — the Scribe resolves the ' +
+            'jobNumber to the canonical row id for you, so you do NOT need to dig up the ' +
+            'j-style id first. For other entity types, pass the resolved id from your reads.'
         }
       }
     }

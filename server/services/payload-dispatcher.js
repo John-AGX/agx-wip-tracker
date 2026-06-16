@@ -510,6 +510,32 @@ async function assertTargetOrg(dbClient, entityType, entityId, orgId) {
   // genuinely absent → let the dispatcher's own create / not-found path run
 }
 
+// resolveJobTarget — tolerate a human jobNumber ("RV2000") where a canonical
+// row id ("j1778…") is expected. Reads format jobs by their jobNumber and hide
+// the row id, so 86/the Scribe naturally reference a job by its number; without
+// this, that lands as "Job not found" and 86 burns turns reverse-engineering the
+// row id from cross-links. Resolution is ORG-SCOPED (only a job in the applier's
+// org or a NULL-org legacy row) so it can never reach across tenants, and a
+// jobNumber that matches >1 job is rejected as ambiguous rather than guessed.
+// A $ref or an id that already resolves to a row is passed through untouched.
+async function resolveJobTarget(dbClient, rawId, orgId) {
+  if (!rawId || isRef(rawId)) return rawId;
+  const direct = await dbClient.query('SELECT 1 FROM jobs WHERE id = $1 LIMIT 1', [rawId]);
+  if (direct.rowCount) return rawId;             // already a canonical row id
+  // jobNumber fallback is ORG-SCOPED only — never resolve a number across the
+  // whole table. Without an orgId we decline to guess (the row-id lookup above
+  // already failed), so this can never select another tenant's job.
+  if (!orgId) return rawId;                       // unresolved → "Job not found: <id>"
+  const byNum = await dbClient.query(
+    `SELECT id FROM jobs WHERE data->>'jobNumber' = $1 AND (organization_id = $2 OR organization_id IS NULL)`,
+    [rawId, orgId]);
+  if (byNum.rowCount === 1) return byNum.rows[0].id;
+  if (byNum.rowCount > 1) {
+    throw new Error(`Ambiguous job number "${rawId}" — it matches ${byNum.rowCount} jobs. Pass the canonical job id (j-style) instead.`);
+  }
+  return rawId;                                  // unresolved → downstream "Job not found: <id>"
+}
+
 async function dispatchClient(dbClient, target, refTable, ctx) {
   const ops = target.ops || {};
   resolveRefsInOps(ops, refTable);
@@ -1226,8 +1252,9 @@ async function dispatchJob(dbClient, target, refTable, ctx) {
   const ops = target.ops || {};
   resolveRefsInOps(ops, refTable);
 
-  const id = resolveRef(target.entity_id, refTable);
+  let id = resolveRef(target.entity_id, refTable);
   if (!id) throw new Error('job ops require entity_id');
+  id = await resolveJobTarget(dbClient, id, ctx && ctx.organizationId);
   await assertTargetOrg(dbClient, 'job', id, ctx && ctx.organizationId);
 
   const r = await dbClient.query('SELECT data FROM jobs WHERE id = $1', [id]);
