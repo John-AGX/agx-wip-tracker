@@ -11152,8 +11152,14 @@ async function execScribeWrite(tu, ctx) {
   if (!result || !result.ok) {
     return { tier: 'auto', error: 'The Scribe could not complete that write: ' + ((result && result.error) || 'unknown error') + '. Refine the instruction (resolve the entity ids + exact fields) and try again.' };
   }
+  // Keep the SSE meta LEAN. The dry-run changeset captures the full
+  // before/after entity blob — for a real job that's hundreds of KB, which
+  // blows up the tool_applied SSE `data:` line and breaks the client's line
+  // parser (the event silently never renders). Carry only a short
+  // apply_summary string; the card fetches the full dry-run diff on demand
+  // (POST /api/payloads/:id/apply?dry_run=true) via its Preview button.
   const meta = result.meta
-    ? Object.assign({}, result.meta, { scribe: true, changeset: result.changeset || null })
+    ? Object.assign({}, result.meta, { scribe: true, apply_summary: result.applySummary || null })
     : null;
   const summaryForModel =
     'Scribe drafted the change' +

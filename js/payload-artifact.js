@@ -312,6 +312,15 @@
       card.appendChild(r);
     }
 
+    // Dry-run summary on ready rows — the Scribe surfaces a short
+    // apply_summary ("Job j1: +1 note(s)") in place of the full changeset.
+    if ((payload.status || 'ready') === 'ready' && payload.apply_summary) {
+      const ds = document.createElement('div');
+      ds.style.cssText = CARD_CSS.rationale;
+      ds.textContent = '→ ' + payload.apply_summary;
+      card.appendChild(ds);
+    }
+
     // Apply summary on applied rows
     if (payload.status === 'applied' && payload.apply_summary) {
       const a = document.createElement('div');

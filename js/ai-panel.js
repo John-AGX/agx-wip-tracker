@@ -3325,7 +3325,10 @@
                         (payload.tool_applied.meta.scribe ? 'scribe' : '86'),
                 status: payload.tool_applied.meta.status || 'ready',
                 file_content: payload.tool_applied.meta.file_content,
-                changeset: payload.tool_applied.meta.changeset || null,
+                // Scribe payloads carry a short apply_summary ("Job j1: +1
+                // note(s)") instead of the heavy dry-run changeset (which is
+                // too big for the SSE line — see execScribeWrite).
+                apply_summary: payload.tool_applied.meta.apply_summary || null,
               };
               window.PayloadArtifact.render(pl, streamDiv);
             } catch (e) {
