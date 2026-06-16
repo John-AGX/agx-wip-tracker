@@ -7024,6 +7024,35 @@ const PAYLOAD_TOOLS = [
       },
     },
   },
+  {
+    name: 'scribe_write',
+    description:
+      'Delegate a data change to the Scribe (the write worker). Use this for ' +
+      'EVERY write — field updates, line-item edits, phase changes, change ' +
+      'orders, lead/client creates, schedule blocks, reports, etc. You do NOT ' +
+      'author the payload yourself; you describe the change in plain words and ' +
+      'the Scribe produces it, dry-runs it, and the user gets a review/approve ' +
+      'card. CRITICAL: fully specify the change — the Scribe has NO read access ' +
+      'and sees ONLY your `instruction`. Resolve the entity_type + entity_id with ' +
+      'your reads FIRST, then include them plus every field/value to set (and any ' +
+      'current values relevant to the edit). One scribe_write per change. Do NOT ' +
+      'pre-narrate — just call it; the card speaks for itself.',
+    tier: 'auto',
+    input_schema: {
+      type: 'object',
+      required: ['instruction'],
+      properties: {
+        instruction: {
+          type: 'string',
+          description:
+            'The complete, unambiguous change in plain words, INCLUDING the resolved ' +
+            'entity_type + entity_id and every field/value to set. Example: "On ' +
+            'estimate est_abc123, change line item line_5 (currently qty 8 @ $12) to ' +
+            'qty 10, and set status to sent." The Scribe converts this into ONE payload.'
+        }
+      }
+    }
+  },
 ];
 
 // Build the SKILL.md body for one local pack. Mirrors the helper of
@@ -10853,6 +10882,11 @@ function make86OnCustomToolUse(userId, parentSession, turnContextText, gateUser)
     if (tu.name === 'emit_payload_file') {
       return await execEmitPayloadFile(tu, { userId, parentSession });
     }
+    // scribe_write — 86 delegates the write to the Scribe, which authors +
+    // dry-runs the payload and returns the same card meta as emit_payload_file.
+    if (tu.name === 'scribe_write') {
+      return await execScribeWrite(tu, { userId, parentSession });
+    }
     // Auto-tier: any tool in ALLOWED_AUTO_TIER_TOOLS executes inline
     // and returns its summary to the model. Mirrors the /exec-tool
     // HTTP dispatcher exactly so the V2-session path (this handler)
@@ -11037,6 +11071,7 @@ async function driveScribeWrite(intent, ctx) {
         payloadId,
         filename: res.meta.filename,
         title: res.meta.title,
+        meta: res.meta,
         changeset: (dry && (dry.apply_changeset || dry.affected_targets)) || [],
         applySummary: (dry && dry.apply_summary) || null
       };
@@ -11072,7 +11107,7 @@ async function driveScribeWrite(intent, ctx) {
   if (captured) {
     return {
       ok: true, payloadId: captured.payloadId, filename: captured.filename,
-      title: captured.title, changeset: captured.changeset,
+      title: captured.title, meta: captured.meta, changeset: captured.changeset,
       applySummary: captured.applySummary, usage: (result && result.usage) || null
     };
   }
@@ -11081,6 +11116,42 @@ async function driveScribeWrite(intent, ctx) {
     error: lastError || (result && result.error) || 'The Scribe did not produce a valid payload.',
     text: result && result.text, usage: (result && result.usage) || null
   };
+}
+
+// execScribeWrite — 86's `scribe_write` tool lands here. 86 describes the
+// change in plain words; we hand it to the Scribe (driveScribeWrite),
+// which authors + dry-runs the payload. On success we surface the SAME
+// payload-card meta that emit_payload_file produced, so the proposal
+// renders inline for the user to review/approve.
+async function execScribeWrite(tu, ctx) {
+  const instruction = tu && tu.input && tu.input.instruction;
+  if (!instruction || !String(instruction).trim()) {
+    return { tier: 'auto', error: 'scribe_write requires an `instruction` describing the change — include the resolved entity_type + entity_id and the exact fields/values to set.' };
+  }
+  // Resolve org the same way execEmitPayloadFile does.
+  let orgId = (ctx && ctx.organizationId) ||
+              (ctx && ctx.parentSession && ctx.parentSession.organization_id) || null;
+  if (!orgId && ctx && ctx.userId) {
+    try {
+      const r = await pool.query('SELECT organization_id FROM users WHERE id = $1', [ctx.userId]);
+      if (r.rows.length) orgId = r.rows[0].organization_id;
+    } catch (_) {}
+  }
+  const result = await driveScribeWrite(
+    { instruction: String(instruction) },
+    { userId: (ctx && ctx.userId) || null, orgId, parentSession: (ctx && ctx.parentSession) || null }
+  );
+  if (!result || !result.ok) {
+    return { tier: 'auto', error: 'The Scribe could not complete that write: ' + ((result && result.error) || 'unknown error') + '. Refine the instruction (resolve the entity ids + exact fields) and try again.' };
+  }
+  const meta = result.meta
+    ? Object.assign({}, result.meta, { scribe: true, changeset: result.changeset || null })
+    : null;
+  const summaryForModel =
+    'Scribe drafted the change' +
+    (result.applySummary ? ': ' + result.applySummary : (result.title ? ' (' + result.title + ')' : '')) +
+    '. The review card is now in the chat — do NOT narrate it; let the user approve or reject.';
+  return { tier: 'auto', summary: summaryForModel, meta };
 }
 
 async function driveSubtaskTurn({ anthropic, sessionId, eventsToSend, onCustomToolUse }) {
