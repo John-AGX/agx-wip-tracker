@@ -2356,7 +2356,14 @@ function customToolsFor(agentKey, opts) {
   // it, and returns the diff.
   if (agentKey === 'scribe') {
     const payloadDefs = (aiInternals.payloadTools ? aiInternals.payloadTools() : []);
-    return payloadDefs.filter(t => t && t.name === 'emit_payload_file');
+    // .map(toCustomToolParam) is REQUIRED — it shapes the raw tool def into
+    // the {type:'custom', name, description, input_schema} the Agents API
+    // expects. The shared return at the bottom does this for the job branch;
+    // this early return must do it too, or agents.create rejects the Scribe
+    // with "tool definition missing its type field".
+    return payloadDefs
+      .filter(t => t && t.name === 'emit_payload_file')
+      .map(toCustomToolParam);
   }
   // estimateTools / jobTools / clientTools / staffTools each include
   // the WEB_TOOLS prefix; strip those because we configure web_search
