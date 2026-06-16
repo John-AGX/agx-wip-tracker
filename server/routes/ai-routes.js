@@ -10945,6 +10945,144 @@ const SUBTASK_BUDGET_TOKENS = 300000;    // Per-fire token budget — fail-stop 
 //
 // Returns { text, usage, error? } where usage = { input_tokens,
 // output_tokens, cache_creation_input_tokens, cache_read_input_tokens }.
+// ──────────────────────────────────────────────────────────────────
+// driveScribeWrite — the Scribe write path (the 86 → Scribe handoff).
+// 86 (planner) calls this with a fully-specified, approved change
+// `intent` + a snapshot of the target entity's current state. We spin a
+// cheap Sonnet Scribe sub-session, let it author ONE emit_payload_file
+// payload, dry-run it for a before/after changeset, and return the
+// payload id + diff so 86 can surface an inline approve/reject card.
+// The Scribe self-corrects on validation errors. It never reads org data
+// or talks to the user. See docs/86-scribe-rework.md.
+//
+//   intent: { instruction: <plain-words change>, targetSnapshot?: obj|str }
+//   ctx:    { userId, orgId|organization, parentSession? (86's session row) }
+//   → { ok:true, payloadId, filename, title, changeset, applySummary, usage }
+//   → { ok:false, error, text?, usage? }
+// ──────────────────────────────────────────────────────────────────
+const SCRIBE_MAX_RETRIES = 2;
+
+async function driveScribeWrite(intent, ctx) {
+  const anthropic = getAnthropic();
+  if (!anthropic) return { ok: false, error: 'ANTHROPIC_API_KEY not set on this deployment.' };
+  if (!intent || !intent.instruction) return { ok: false, error: 'driveScribeWrite requires intent.instruction.' };
+  ctx = ctx || {};
+
+  let organization = ctx.organization || null;
+  if (!organization && ctx.orgId) {
+    try {
+      const r = await pool.query('SELECT * FROM organizations WHERE id = $1', [ctx.orgId]);
+      organization = r.rows[0] || null;
+    } catch (_) {}
+  }
+  if (!organization || !organization.id) return { ok: false, error: 'driveScribeWrite could not resolve the organization.' };
+
+  const adminAgents = require('./admin-agents-routes');
+  const payloadDispatcher = require('../services/payload-dispatcher');
+
+  let agent, env;
+  try {
+    env = await adminAgents.ensureManagedEnvironment();
+    agent = await adminAgents.ensureManagedAgent('scribe', organization);
+  } catch (e) {
+    return { ok: false, error: 'Could not register the Scribe: ' + (e.message || 'unknown') };
+  }
+
+  let sessionId;
+  try {
+    const created = await anthropic.beta.sessions.create({
+      agent: agent.anthropic_agent_id,
+      environment_id: env.anthropic_environment_id,
+      title: 'Project 86 Scribe · ' + (organization.slug || organization.id)
+    });
+    sessionId = created.id;
+  } catch (e) {
+    return { ok: false, error: 'Could not open Scribe session: ' + (e.message || 'unknown') };
+  }
+
+  // ctx the Scribe's emit_payload_file runs under. organizationId is set
+  // explicitly (the Scribe has no read tools); parentSession is 86's
+  // session so the payload binds to 86's conversation for the card.
+  const scribeCtx = {
+    userId: ctx.userId || null,
+    organizationId: organization.id,
+    parentSession: ctx.parentSession || null,
+    payloadSource: 'scribe',
+    emittingAgentKey: 'scribe'
+  };
+
+  let captured = null;   // { payloadId, filename, title, changeset, applySummary }
+  let lastError = null;
+
+  const onCustomToolUse = async (tu) => {
+    if (!tu || tu.name !== 'emit_payload_file') {
+      lastError = 'The Scribe may only call emit_payload_file.';
+      return { tier: 'auto', error: lastError };
+    }
+    // 1. Validate + persist the payload row (reuse 86's emit handler).
+    const res = await execEmitPayloadFile(tu, scribeCtx);
+    if (res && res.error) { lastError = res.error; return { tier: 'auto', error: res.error }; }
+    const payloadId = res && res.meta && res.meta.payload_id;
+    if (!payloadId) { lastError = 'Payload was not persisted.'; return { tier: 'auto', error: lastError }; }
+    // 2. Dry-run for the before/after changeset. applyPayload THROWS a
+    //    PayloadValidationError on a deeper failure — catch + feed back.
+    try {
+      const rowRes = await pool.query('SELECT * FROM payloads WHERE id = $1', [payloadId]);
+      const payloadRow = rowRes.rows[0];
+      if (!payloadRow) { lastError = 'Persisted payload vanished.'; return { tier: 'auto', error: lastError }; }
+      const dry = await payloadDispatcher.applyPayload(payloadRow, {
+        dryRun: true, userId: scribeCtx.userId, organizationId: organization.id, sourceAgent: 'scribe'
+      });
+      captured = {
+        payloadId,
+        filename: res.meta.filename,
+        title: res.meta.title,
+        changeset: (dry && (dry.apply_changeset || dry.affected_targets)) || [],
+        applySummary: (dry && dry.apply_summary) || null
+      };
+      lastError = null;
+      return { tier: 'auto', summary: 'Dry-run OK — changeset ready for approval.' };
+    } catch (e) {
+      // Deeper validation error: discard the draft so it doesn't linger,
+      // and feed the structured error back for self-correction.
+      try { await pool.query('DELETE FROM payloads WHERE id = $1', [payloadId]); } catch (_) {}
+      lastError = (e && (e.message || (e.detail && JSON.stringify(e.detail)))) || 'Dry-run failed.';
+      return { tier: 'auto', error: lastError };
+    }
+  };
+
+  const snap = intent.targetSnapshot;
+  const snapText = snap
+    ? '\n\n<target_snapshot>\n' + String(typeof snap === 'string' ? snap : JSON.stringify(snap, null, 2)).slice(0, 20000) + '\n</target_snapshot>'
+    : '';
+  let nextEvents = [{ type: 'user.message', content: [{ type: 'text', text: String(intent.instruction) + snapText }] }];
+
+  let result = null;
+  for (let attempt = 0; attempt <= SCRIBE_MAX_RETRIES; attempt++) {
+    result = await driveSubtaskTurn({ anthropic, sessionId, eventsToSend: nextEvents, onCustomToolUse });
+    if (captured) break;
+    if (result && result.error && !lastError) break;  // hard session error, not a fixable miss
+    if (attempt === SCRIBE_MAX_RETRIES) break;
+    nextEvents = [{ type: 'user.message', content: [{ type: 'text',
+      text: 'Your payload was not accepted: ' + (lastError || 'unknown error') +
+            '\nFix it and re-emit ONE corrected emit_payload_file payload (address the named field_path / op_index).' }] }];
+    lastError = null;
+  }
+
+  if (captured) {
+    return {
+      ok: true, payloadId: captured.payloadId, filename: captured.filename,
+      title: captured.title, changeset: captured.changeset,
+      applySummary: captured.applySummary, usage: (result && result.usage) || null
+    };
+  }
+  return {
+    ok: false,
+    error: lastError || (result && result.error) || 'The Scribe did not produce a valid payload.',
+    text: result && result.text, usage: (result && result.usage) || null
+  };
+}
+
 async function driveSubtaskTurn({ anthropic, sessionId, eventsToSend, onCustomToolUse }) {
   let collectedText = '';
   const aggUsage = {
