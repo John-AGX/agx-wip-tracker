@@ -4694,6 +4694,7 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
   // Job entity in focus this turn. Snapshot follows. For any write,
   // emit an `emit_payload_file` targeting this job.
   lines.push('# Job');
+  lines.push('- Id (write target): ' + jobId);   // canonical row id — pass THIS to scribe_write, not the jobNumber
   lines.push('- Title: ' + (job.title || job.jobName || '(untitled)'));
   if (job.jobNumber) lines.push('- Job number: ' + job.jobNumber);
   if (job.client) lines.push('- Client: ' + job.client);
@@ -5864,7 +5865,11 @@ async function execClientDirectoryTool(name, input, ctx) {
       rows = rows.slice(0, limit);
       if (!rows.length) return 'No jobs match the filters.';
       return rows.map(j =>
-        '• ' + (j.jobNumber ? '[' + j.jobNumber + '] ' : '') + (j.title || '(untitled)') +
+        // Bracket leads with the canonical row id (the targeting key for
+        // writes / navigate / scribe_write) and shows the human jobNumber
+        // alongside it, e.g. "[RV2000 · j1]". Reads used to print only the
+        // jobNumber, which hid the id the write path actually needs.
+        '• [' + (j.jobNumber ? j.jobNumber + ' · ' : '') + j.id + '] ' + (j.title || '(untitled)') +
         (j.client ? ' — ' + j.client : '') +
         (j.status ? ' · ' + j.status : '') +
         (j.pm ? ' · PM ' + j.pm : '') +
