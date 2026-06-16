@@ -3330,7 +3330,15 @@
                 // too big for the SSE line — see execScribeWrite).
                 apply_summary: payload.tool_applied.meta.apply_summary || null,
               };
-              window.PayloadArtifact.render(pl, streamDiv);
+              // A slow tool (e.g. scribe_write, ~20s) can emit tool_applied
+              // AFTER the in-flight streaming bubble was detached by a
+              // mid-turn re-render (fresh-chat session redirect). Appending
+              // to a detached streamDiv silently loses the card — fall back
+              // to the live #ai-messages so the card is always visible.
+              var __cardHost = (streamDiv && document.contains(streamDiv))
+                ? streamDiv
+                : document.getElementById('ai-messages');
+              window.PayloadArtifact.render(pl, __cardHost);
             } catch (e) {
               console.error('[ai-panel] failed to render payload artifact:', e);
             }
