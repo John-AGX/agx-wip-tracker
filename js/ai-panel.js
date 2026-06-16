@@ -3303,7 +3303,12 @@
           // carrying the full file_content. Render a dedicated file
           // artifact in the message stream AND refresh the sidebar
           // Payloads section so the user can find it later.
-          if (payload.tool_applied.name === 'emit_payload_file' &&
+          // Both 86's direct emit_payload_file AND the Scribe's scribe_write
+          // surface the same payload-card meta (kind === 'emit_payload_file');
+          // the Scribe just authors it in a sub-session. Render the inline
+          // review card for either.
+          if ((payload.tool_applied.name === 'emit_payload_file' ||
+               payload.tool_applied.name === 'scribe_write') &&
               payload.tool_applied.meta &&
               payload.tool_applied.meta.kind === 'emit_payload_file' &&
               window.PayloadArtifact &&
@@ -3316,9 +3321,11 @@
                 summary: payload.tool_applied.meta.summary,
                 rationale: payload.tool_applied.meta.rationale,
                 targets: payload.tool_applied.meta.targets,
-                source: payload.tool_applied.meta.source || '86',
+                source: payload.tool_applied.meta.source ||
+                        (payload.tool_applied.meta.scribe ? 'scribe' : '86'),
                 status: payload.tool_applied.meta.status || 'ready',
                 file_content: payload.tool_applied.meta.file_content,
+                changeset: payload.tool_applied.meta.changeset || null,
               };
               window.PayloadArtifact.render(pl, streamDiv);
             } catch (e) {

@@ -73,6 +73,12 @@
       'cursor:pointer;transition:background 0.12s, border-color 0.12s;',
     btnHover:
       'background:rgba(255,255,255,0.10);border-color:rgba(255,255,255,0.20);',
+    btnPrimary:
+      'background:rgba(46,204,113,0.16);border:1px solid rgba(46,204,113,0.45);' +
+      'color:#7ee2a5;border-radius:6px;padding:5px 12px;font-size:11.5px;' +
+      'font-weight:600;cursor:pointer;transition:background 0.12s, border-color 0.12s;',
+    btnPrimaryHover:
+      'background:rgba(46,204,113,0.26);border-color:rgba(46,204,113,0.65);',
     preview:
       'background:rgba(0,0,0,0.25);border:1px solid rgba(255,255,255,0.05);' +
       'border-radius:6px;padding:10px 12px;font-family:ui-monospace,Menlo,' +
@@ -142,6 +148,72 @@
     if (status === 'rejected') return CARD_CSS.container + CARD_CSS.containerRejected;
     if (status === 'failed')   return CARD_CSS.container + CARD_CSS.containerFailed;
     return CARD_CSS.container;
+  }
+
+  // Render the dry-run before/after diff the Scribe captured (apply_changeset
+  // / affected_targets). Tolerant of shape — strings, {entity_type,entity_id,
+  // summary|label|changes}, or arbitrary objects — so it degrades gracefully.
+  function summarizeChangeset(cs) {
+    if (!cs) return '';
+    if (typeof cs === 'string') return cs;
+    try {
+      if (Array.isArray(cs)) {
+        if (!cs.length) return '';
+        return cs.map((c, i) => {
+          if (typeof c === 'string') return '• ' + c;
+          const head = (c.entity_type || c.type || '?') +
+                       (c.entity_id ? (' ' + c.entity_id) : '') +
+                       (c.entity_display ? (' — ' + c.entity_display) : '');
+          const detail = c.summary || c.label || c.description ||
+                         (c.changes ? JSON.stringify(c.changes) : JSON.stringify(c));
+          return '#' + (i + 1) + ' ' + head + '\n    ' + String(detail).slice(0, 400);
+        }).join('\n\n');
+      }
+      return JSON.stringify(cs, null, 2).slice(0, 1500);
+    } catch (_) { return ''; }
+  }
+
+  // Inline Approve — apply the payload directly (no drag-to-dropbox needed).
+  // Mirrors js/payload-dropbox.js applyPayload: POST /api/payloads/:id/apply,
+  // then dispatch p86:payload-applied so every surface re-hydrates, and flip
+  // the card to its applied state. `actions` is cleared on success so the
+  // approve/reject buttons can't be pressed twice.
+  async function applyInline(payload, actions, approveBtn) {
+    const orig = approveBtn.textContent;
+    approveBtn.disabled = true;
+    approveBtn.textContent = '⏳ Applying…';
+    try {
+      const r = await fetch('/api/payloads/' + encodeURIComponent(payload.id) + '/apply', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        const msg = r.status === 410 ? 'Payload expired.' :
+                    r.status === 409 ? 'Already used.' :
+                    r.status === 404 ? 'Not found.' :
+                    r.status === 422 ? (body.error || 'Validation failed.') :
+                    (body.error || ('HTTP ' + r.status));
+        approveBtn.textContent = '✗ ' + msg;
+        setTimeout(() => { approveBtn.disabled = false; approveBtn.textContent = orig; }, 4500);
+        return;
+      }
+      updateStatus(payload.id, 'applied', body.apply_summary);
+      document.dispatchEvent(new CustomEvent('p86:payload-applied', {
+        detail: {
+          payload_id: payload.id,
+          apply_summary: body.apply_summary,
+          affected_targets: body.affected_targets || [],
+        },
+      }));
+      // Retire the action buttons — the change is committed.
+      if (actions && actions.parentNode) actions.parentNode.removeChild(actions);
+    } catch (err) {
+      console.error('[payload-artifact] inline apply failed:', err);
+      approveBtn.textContent = '✗ ' + (err && err.message || 'Apply failed');
+      setTimeout(() => { approveBtn.disabled = false; approveBtn.textContent = orig; }, 4500);
+    }
   }
 
   function render(payload, container) {
@@ -260,16 +332,32 @@
     const preview = document.createElement('pre');
     preview.style.cssText = CARD_CSS.preview;
     preview.style.display = 'none';
-    preview.textContent = summarizeOps(payload.targets);
+    // Prefer the Scribe's dry-run changeset (real before/after); fall back to
+    // the op-key summary for payloads that carry only targets.
+    preview.textContent = summarizeChangeset(payload.changeset) || summarizeOps(payload.targets);
     card.appendChild(preview);
 
     // Action row
     const actions = document.createElement('div');
     actions.style.cssText = CARD_CSS.actionsRow;
 
+    // Inline Approve (primary) — apply the change now, no drag-to-dropbox.
+    // Ready payloads only; the handler retires the row once committed.
+    if ((payload.status || 'ready') === 'ready') {
+      const approve = document.createElement('button');
+      approve.type = 'button';
+      approve.textContent = '✓ Approve';
+      approve.title = 'Apply this change now';
+      approve.style.cssText = CARD_CSS.btnPrimary;
+      approve.onmouseenter = () => { approve.style.cssText = CARD_CSS.btnPrimary + CARD_CSS.btnPrimaryHover; };
+      approve.onmouseleave = () => { approve.style.cssText = CARD_CSS.btnPrimary; };
+      approve.onclick = (ev) => { ev.stopPropagation(); applyInline(payload, actions, approve); };
+      actions.appendChild(approve);
+    }
+
     actions.appendChild(btn('⏷ Preview', () => {
       preview.style.display = preview.style.display === 'none' ? 'block' : 'none';
-    }, { title: 'Show targets and ops' }));
+    }, { title: 'Show the dry-run changes' }));
 
     actions.appendChild(btn('↓ Download', () => {
       const url = '/api/payloads/' + encodeURIComponent(payload.id) + '/file';
