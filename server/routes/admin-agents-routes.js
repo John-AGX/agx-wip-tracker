@@ -2185,6 +2185,13 @@ async function collectSkillsFor(agentKey, organization) {
   const out = [];
   const seen = new Set();
 
+  // Scribe is a write-only worker with NO builtin toolset (no `read` tool).
+  // Anthropic refuses to start a session whose agent has skills attached but
+  // no usable `read` tool ("skills require the read tool to be usable on the
+  // session's agent_toolset"). The Scribe needs no org skills/playbooks — it
+  // authors a payload from a fully-specified intent — so return none.
+  if (agentKey === 'scribe') return out;
+
   // Source 0 (preferred — Phase 2d): per-tenant org_skill_packs rows
   // that have been mirrored to Anthropic native Skills. The
   // propose_skill_pack_mirror flow uploads a pack body via
@@ -4250,7 +4257,8 @@ router.post('/managed/:agentKey/sync',
   try {
     const agentKey = String(req.params.agentKey || '').toLowerCase();
     // Phase S2/S3 — staff_agents keys are also valid sync targets.
-    const legacyKeys = ['ag', 'job', 'cra', 'staff'];
+    // 'scribe' is the write-only worker (its own static baseline) — syncable.
+    const legacyKeys = ['ag', 'job', 'cra', 'staff', 'scribe'];
     const liveStaffKeys = STANDING_STAFF_SPECS.map(s => s.agent_key);
     if (!legacyKeys.includes(agentKey) && !liveStaffKeys.includes(agentKey)) {
       return res.status(400).json({ error: 'agentKey must be one of: ' + legacyKeys.concat(liveStaffKeys).join(', ') });
