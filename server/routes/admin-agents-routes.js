@@ -2025,6 +2025,50 @@ const AGENT_SYSTEM_BASELINE = {
     'Construction trade vocabulary. Lead with the answer. No "Sure!", no "Let me know if you have questions." The file artifact speaks for itself.'
   ].join('\n'),
 
+  // ── Scribe — the write-only worker ──────────────────────────────────
+  // 86 plans and hands off a fully-specified write intent (+ a snapshot of
+  // the target entity's current state, since the Scribe has no read tools).
+  // The Scribe turns that into ONE valid emit_payload_file payload, dry-runs
+  // it, self-corrects on validation errors, and returns the diff. It never
+  // reads org data, never plans, never talks to the user. Runs on Sonnet.
+  scribe: [
+    'You are the Scribe — the write-only worker for 86. You receive an approved, fully-specified change plus a snapshot of the target entity\'s current state, and you emit EXACTLY ONE `emit_payload_file` payload that performs it. You do not read data, plan, or talk to the user. Output the payload tool call and nothing else — no prose, no preamble.',
+    '',
+    '# Rules',
+    '- Address entities by their real `entity_id` (from the snapshot you were given) or a `$new_<name>` ref — NEVER by array index or position.',
+    '- Do NOT invent fields. The dispatcher rejects unknown columns and lists the valid set in its error — use the exact keys from the snapshot / the vocabulary below.',
+    '- If the plan is ambiguous or missing an id you need, return a one-line note saying what is missing instead of guessing.',
+    '- On a validation error, re-emit a corrected payload using the error\'s field_path / op_index. Do not loop more than twice.',
+    '',
+    '# `emit_payload_file`',
+    'Payload shape: `{ targets: [{entity_type, entity_id, entity_display?, entity_metadata?, ops}], title, summary, rationale, template_ref? }`',
+    '',
+    'Per-entity_type ops vocabulary:',
+    '  • client: `{op:\'create\'|\'update\', fields, notes?, structure?}`',
+    '  • estimate: `{op, scope?, field_updates?, sections?, groups?, line_adds?, line_edits?, line_deletes?}`. line_adds: `{description, qty, unit, unitCost, markup?, subgroup_id?, section?}` (camelCase `unitCost`/`markup`; snake_case aliases also accepted).\n' +
+    '     - Put a line under a section with `section: "Materials & Supplies Costs"` (literal name) or `btCategory: "materials"|"labor"|"sub"|"gc"` (auto-routes).\n' +
+    '     - `groups` = ALTERNATES (Base, Alt 1…); only add a group for an ADDITIONAL alternate beyond Base. `sections` = explicit subgroup headers (rarely needed; groups auto-seed the 4 standard ones).',
+    '  • job: `{field_updates?, phase_updates?, node_values?, wire_updates?, qb_assignments?, change_orders?, purchase_orders?, invoices?, notes?, graph?}`',
+    '  • lead: `{op:\'create\'|\'update\', fields, notes?}`',
+    '  • schedule: `{blocks: [{op, entry_id?, jobId, startDate, days, crew, ...}]}`',
+    '  • system: `{watch_ops?, skill_pack_ops?, field_tool_ops?, link_ops?}`. link_ops includes `{op:\'attach_files\', attachment_ids:[...], target_entity_type, target_entity_id}`.',
+    '  • report: `{op, template_type, parent_type, parent_id, title?, cover_page?, sections?, section_adds?, section_updates?, section_deletes?}`',
+    '',
+    'Canonical field names (do NOT invent fields — the dispatcher rejects unknown columns and lists the valid set in its error):',
+    '  • lead.fields: client_id, title, street_address, city, state, zip, status, confidence, projected_sale_date, estimated_revenue_low, estimated_revenue_high, source, project_type, salesperson_id, property_name, gate_code, market, notes, job_id. status enum: new | in_progress | sent | lost | sold | no_opportunity.',
+    '  • client.fields: name, short_name, client_type, activation_status, first_name, last_name, email, phone, cell, address, city, state, zip, company_name, community_name, market, property_address, property_phone, website, gate_code, additional_pocs, community_manager, cm_email, cm_phone, maintenance_manager, mm_email, mm_phone, notes, parent_client_id.',
+    '  • For any other field, use the exact key shown in the entity snapshot you were given.',
+    '',
+    'Cross-entity refs: use `$new_<name>` as a placeholder entity_id when creating multiple linked entities in one payload; the dispatcher resolves refs at apply time inside one transaction.',
+    '',
+    'Advanced target forms (siblings of entity_type/entity_id/ops, all in one transaction):',
+    '  • condition: `condition:\'if_exists\'|\'if_missing\'|\'upsert\'` — gate the write on whether the row exists (`upsert` = update if present else create).',
+    '  • bulk: `{entity_type, bulk:{items:[{entity_id?, ops}, ...]}}` — run that entity\'s dispatcher once per item.',
+    '  • move: `{op:\'move\', source:{entity_type, entity_id, ops}, dest:{entity_type, entity_id, ops}}` — source ops then dest ops, atomically.',
+    '',
+    'Emit ONE payload. The payload tool call IS your entire output.'
+  ].join('\n'),
+
   // Legacy 'cra' (directory) and 'staff' (Chief of Staff) baselines have been
   // retired. 86 absorbs both roles. These keys remain only as null
   // back-compat shims so any old `managed_agent_registry` row pointing
@@ -2285,11 +2329,25 @@ async function collectSkillsFor(agentKey, organization) {
 // Persistent writes against org data ALWAYS route through the
 // custom tool emit_payload_file — the sandbox is throwaway.
 function builtinToolsetFor(agentKey) {
+  // The Scribe is a write-only worker — it never authors files, runs code,
+  // or browses the web. No agent toolset bundle (bash/write/web) for it.
+  if (agentKey === 'scribe') return [];
   return [{
     type: 'agent_toolset_20260401',
     default_config: { enabled: true }
     // No per-tool overrides — every tool in the toolset is enabled.
   }];
+}
+
+// Per-agent model. Every agent runs on the code default (Opus) EXCEPT the
+// Scribe — the cheap, write-only worker — which runs on Sonnet. Routed
+// through every agents.create / agents.update site so the background resync
+// sweep and admin "sync all" can't clobber the Scribe back to Opus.
+const SCRIBE_MODEL = 'claude-sonnet-4-6';
+function modelForAgentKey(agentKey) {
+  if (agentKey === 'scribe') return SCRIBE_MODEL;
+  const aiInternals = require('./ai-routes-internals');
+  return (aiInternals && aiInternals.defaultModel) ? aiInternals.defaultModel() : 'claude-opus-4-8';
 }
 
 // Resolve the Project 86-side custom tools for an agent. Goes through the
@@ -2301,6 +2359,7 @@ function agentKeyHasOwnBranch(agentKey) {
   return (
     agentKey === 'job' || agentKey === 'ag' ||
     agentKey === 'cra' || agentKey === 'staff' ||
+    agentKey === 'scribe' ||
     agentKey === '86-estimator' ||
     agentKey === '86-pm' || agentKey === '86-scheduler' ||
     agentKey === '86-directory' || agentKey === '86-sales'
@@ -2316,6 +2375,14 @@ function customToolsFor(agentKey, opts) {
   // dynamic agent reuses an already-vetted, focused tool subset.
   if (opts && opts.inheritFromKey && !agentKeyHasOwnBranch(agentKey)) {
     return customToolsFor(opts.inheritFromKey);
+  }
+  // Scribe — the write-only worker. ONE custom tool: emit_payload_file.
+  // No reads, memory, navigate, or builtin toolset. 86 plans + hands off a
+  // fully-specified write intent; the Scribe authors the payload, dry-runs
+  // it, and returns the diff.
+  if (agentKey === 'scribe') {
+    const payloadDefs = (aiInternals.payloadTools ? aiInternals.payloadTools() : []);
+    return payloadDefs.filter(t => t && t.name === 'emit_payload_file');
   }
   // estimateTools / jobTools / clientTools / staffTools each include
   // the WEB_TOOLS prefix; strip those because we configure web_search
@@ -2591,7 +2658,7 @@ async function ensureManagedAgent(agentKey, organization) {
   }
 
   const aiInternals = require('./ai-routes-internals');
-  const model = aiInternals && aiInternals.defaultModel ? aiInternals.defaultModel() : 'claude-opus-4-8';
+  const model = modelForAgentKey(agentKey);
   const skills = await collectSkillsFor(agentKey, organization);
   const customTools = customToolsFor(agentKey, inheritFromKey ? { inheritFromKey } : undefined);
   const builtinTools = builtinToolsetFor(agentKey);
@@ -3933,7 +4000,7 @@ async function resyncDriftedAgents(force) {
         // create-time model until someone clicks "Sync all to
         // Anthropic". Same update call — no extra version bump or cache
         // cost beyond the system-prompt push already happening here.
-        const model = (aiInternals.defaultModel && aiInternals.defaultModel()) || undefined;
+        const model = modelForAgentKey(row.agent_key);
         // Push the code-default tool list too, for the same reason as the
         // model: when new tools land in code (e.g. the payload conditional/
         // bulk/move/attach ops, workspace + code_execution tools) they were
@@ -4081,7 +4148,7 @@ router.get('/managed/:agentKey/anthropic-state', requireAuth, requireCapability(
     // canonical push path.
     const baseline = AGENT_SYSTEM_BASELINE[agentKey] || '';
     const aiInternals = require('./ai-routes-internals');
-    const localModel = aiInternals && aiInternals.defaultModel ? aiInternals.defaultModel() : 'claude-opus-4-8';
+    const localModel = modelForAgentKey(agentKey);
     let localOrg = null;
     if (row.organization_id) {
       const orgRow = await pool.query('SELECT * FROM organizations WHERE id = $1', [row.organization_id]);
@@ -4220,7 +4287,7 @@ router.post('/managed/:agentKey/sync',
 
     const baseline = AGENT_SYSTEM_BASELINE[agentKey] || '';
     const aiInternals = require('./ai-routes-internals');
-    const model = aiInternals && aiInternals.defaultModel ? aiInternals.defaultModel() : 'claude-opus-4-8';
+    const model = modelForAgentKey(agentKey);
     const skills = await collectSkillsFor(agentKey, req.organization);
     const customTools = customToolsFor(agentKey);
     const builtinTools = builtinToolsetFor(agentKey);
@@ -4379,12 +4446,12 @@ router.post('/managed/sync-all',
     }
 
     const aiInternals = require('./ai-routes-internals');
-    const model = aiInternals && aiInternals.defaultModel ? aiInternals.defaultModel() : 'claude-opus-4-8';
     const summary = [];
 
     for (const row of reg.rows) {
       const agentKey = row.agent_key;
       const agentId = row.anthropic_agent_id;
+      const model = modelForAgentKey(agentKey);
       const org = {
         id: row.organization_id,
         slug: row.org_slug,
