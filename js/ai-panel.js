@@ -2696,10 +2696,25 @@
       return;
     }
     var html = '';
-    _messages.forEach(function(m) {
-      html += renderBubble(m);
+    _messages.forEach(function(m, i) {
+      html += renderBubble(m, i);
     });
     box.innerHTML = html;
+    // Reconstruct inline payload cards (Scribe / emit_payload_file proposals).
+    // They're client-only artifacts, so the innerHTML write above wipes them;
+    // re-render each from the message model into its host slot so the card +
+    // its Approve/Reject buttons survive every renderMessages() pass.
+    if (window.PayloadArtifact && typeof window.PayloadArtifact.render === 'function') {
+      _messages.forEach(function(m, i) {
+        if (!m || !Array.isArray(m.payloads) || !m.payloads.length) return;
+        var host = box.querySelector('.p86-inline-payload-host[data-mi="' + i + '"]');
+        if (!host) return;
+        m.payloads.forEach(function(pl) {
+          try { window.PayloadArtifact.render(pl, host); }
+          catch (e) { console.error('[ai-panel] inline payload re-render failed:', e); }
+        });
+      });
+    }
     box.scrollTop = box.scrollHeight;
   }
 
@@ -2711,7 +2726,7 @@
   //    brain-yoga caption lives only on the live streaming bubble
   //    (appendStreamingBubble) as proof-of-life; once the turn finishes
   //    the message re-renders here as clean prose.
-  function renderBubble(m) {
+  function renderBubble(m, idx) {
     if (m.role === 'user') {
       var photoNote = m.photos_included
         ? '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:4px;text-align:right;">' + m.photos_included + ' photo' + (m.photos_included === 1 ? '' : 's') + ' attached</div>'
@@ -2757,8 +2772,13 @@
         'style="background:none;border:none;color:var(--text-dim,#888);font-size:11px;cursor:pointer;padding:3px 4px;margin-top:4px;opacity:0.6;font-family:inherit;transition:opacity 0.15s;" ' +
         'onmouseenter="this.style.opacity=1" onmouseleave="this.style.opacity=0.6">💾 Save response</button>';
     }
+    // Host slot for inline payload cards (re-rendered by renderMessages).
+    var payloadHost = (Array.isArray(m.payloads) && m.payloads.length)
+      ? '<div class="p86-inline-payload-host" data-mi="' + idx + '" style="margin-top:8px;"></div>'
+      : '';
     return '<div style="width:100%;display:block;">' +
       '<div class="ai-content" style="width:100%;overflow-x:hidden;font-size:13px;line-height:1.6;overflow-wrap:anywhere;word-break:normal;">' + renderMarkdown(m.content) + '</div>' +
+      payloadHost +
       usageFooter +
       saveAction +
     '</div>';
@@ -3212,6 +3232,9 @@
     var pendingAssistantContent = null; // full content array for echo-back
     var brainYoga = startBrainYoga(streamDiv);
     var chipsAppended = 0; // tracks tool_applied/tool_failed/tool_rejected count
+    var turnPayloads = []; // inline payload cards (Scribe/emit) emitted this turn;
+                           // attached to the finalized message so they survive the
+                           // end-of-turn renderMessages() innerHTML wipe.
     var turnUsage = null;  // captured from `done` event; rendered as a dim footer
     // Most-recent server-emitted {error,...} payload. Captured by the
     // SSE handler so the .catch below can distinguish a clean
@@ -3339,6 +3362,9 @@
                 ? streamDiv
                 : document.getElementById('ai-messages');
               window.PayloadArtifact.render(pl, __cardHost);
+              // Remember it so the finalized message can re-render the card
+              // after renderMessages() wipes the live bubble.
+              turnPayloads.push(pl);
             } catch (e) {
               console.error('[ai-panel] failed to render payload artifact:', e);
             }
@@ -3468,7 +3494,7 @@
           ? Date.now() - Number(streamDiv.dataset.startedAt)
           : null;
         if (streamDiv && streamDiv.parentNode) streamDiv.parentNode.removeChild(streamDiv);
-        _messages.push({ role: 'assistant', content: assistantText, usage: turnUsage, elapsed_ms: elapsed });
+        _messages.push({ role: 'assistant', content: assistantText, usage: turnUsage, elapsed_ms: elapsed, payloads: turnPayloads.slice() });
         renderMessages();
       } else if (chipsAppended > 0) {
         // No final narration but built-in tools (web_search /
