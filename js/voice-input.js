@@ -2,75 +2,52 @@
 //   - js/ai-panel.js (86 chat composer mic)
 //   - js/projects.js (walkthrough upload preview caption mic)
 //
-// One implementation, one set of mobile-quirks defenses. Earlier the
-// two surfaces each had their own copy of the algorithm — they drifted
-// (different silence timeouts, different cleanup paths), and the
-// "double-speak" bug surfaced on the walkthrough because subtle
-// edge-case defenses lived in the chat copy but not the walkthrough.
+// ── The "double-speak on mobile" bug — the real root cause ──────────
+//
+// History: the result algorithm was rewritten ~4 times (index-tracked,
+// full-rescan "Version A", iOS adjacent-final dedup, engine-restart
+// baseValue fix). Each tweaked the WRONG layer and the doubling kept
+// coming back, because the cause is NOT the accumulation logic — it's
+// that mobile Chrome/Safari with `continuous = true` RE-EMITS finalized
+// phrases as EXTRA final results. e.results ends up holding more finals
+// than there were spoken phrases — duplicates ("walls", "walls",
+// "are cracked") or growing "extension" restatements ("walls",
+// "walls are", "walls are cracked"). Any algorithm that concatenates
+// every final (Version A's `allFinal += t`) then doubles. The previous
+// revert DELETED the dedup that was compensating for this, on the
+// assumption the quirk "wasn't happening" — it is.
+//
+// Fix (this version), defensive on every known doubling path:
+//   1. onresult collapses adjacent finals that are exact duplicates or
+//      prefix-extensions of each other. Genuinely separate segments
+//      (not prefixes) pass through untouched, so normal dictation is
+//      unchanged — only the engine's redundant re-emissions are dropped.
+//   2. A concurrent-start guard: a fast double-tap before onstart flips
+//      `listening` can no longer spin up a SECOND recognizer writing
+//      into the same field.
+//   3. The teardown now UNBINDS the click handler, so re-wiring the same
+//      button can never stack a second listener / second recognizer.
+//   4. Always-on capture: every emission is recorded to a ring buffer
+//      (window.p86VoiceLog(), mirrored to localStorage 'p86VoiceLog').
+//      If doubling ever recurs, the exact engine emission is on record —
+//      no mobile devtools needed. Set window._p86VoiceDebug for console.
 //
 // Surface:
-//   window.p86VoiceInput.wire(textareaEl, micBtnEl, opts)
-//       Wires a mic button to a textarea. Returns a teardown
-//       function the caller can invoke when the host UI closes.
-//       opts: {
-//         silenceTimeoutMs?: number   default 3000 (chat) — pass 5000
-//                                     for walkthrough narration.
-//         onChange?: function(value)  fired after each transcript
-//                                     update so callers can sync
-//                                     external state.
-//       }
-//   window.p86VoiceInput.isSupported()
-//       Returns true if SpeechRecognition (native or webkit-prefixed)
-//       exists. Callers should hide their mic UI when false.
-//
-// Algorithm: ARCHAEOLOGY-DRIVEN REVERT to Version A.
-//
-// The chat composer's original pre-consolidation inline mic (in
-// js/ai-panel.js at commit 80705bb^) used a naive full-rescan
-// approach with no dedup — and the user reports that version worked
-// cleanly on his phone during real walkthroughs. Three subsequent
-// "improvements" (the consolidation's iOS adjacent-final dedup, the
-// engine-restart baseValue fix, and the index-tracked algorithm)
-// each tried to solve a theoretical mobile-engine quirk and each
-// left residual doubling behind. The empirical conclusion: the
-// theoretical quirks aren't happening for John in practice, and
-// every defense layered on top of A was solving phantoms while
-// adding new edge cases.
-//
-// So we're back to Version A:
-//
-//   onresult(e) {
-//     var allFinal = '', allInterim = '';
-//     for (var i = 0; i < e.results.length; i++) {
-//       if (e.results[i].isFinal) allFinal += transcript;
-//       else allInterim += transcript;
-//     }
-//     textarea.value = baseValue + allFinal + allInterim;
-//   }
-//
-// Why this is idempotent: every onresult event rebuilds allFinal +
-// allInterim from scratch and replaces textarea.value entirely.
-// Same e.results in → same string out. No state accumulates across
-// events (allFinal is a fresh local var per call). The only thing
-// that persists between events is baseValue (the textarea content
-// at session start) — captured in onstart so a "send between
-// dictations" cleanly clears the baseline.
-//
-// What we kept from the consolidation, because they're not algorithm
-// behavior:
-//   - The wire(textarea, button, opts) wrapper so chat + walkthrough
-//     share one implementation
-//   - Silence watchdog that stops the mic after N ms of quiet
-//   - Optional onChange callback (no consumer uses it yet — kept
-//     for API stability)
-//
-// Diagnostic: set window._p86VoiceDebug = true in devtools and the
-// helper will log every e.results snapshot + the resolved textarea
-// value to console. If a doubling pattern reappears, the log will
-// show the actual engine emission so the next fix can be targeted
-// at a real quirk instead of speculation.
+//   window.p86VoiceInput.wire(textareaEl, micBtnEl, opts) -> teardown fn
+//       opts: { silenceTimeoutMs?: number (default 3000),
+//               onChange?: function(value) }
+//   window.p86VoiceInput.isSupported() -> boolean
+//   window.p86VoiceLog() -> array of recent { raw, finals, merged, value }
 (function () {
   'use strict';
+
+  // Module-level capture ring buffer (shared across all wired surfaces).
+  var captureLog = [];
+  function pushCapture(entry) {
+    captureLog.push(entry);
+    if (captureLog.length > 30) captureLog.shift();
+    try { localStorage.setItem('p86VoiceLog', JSON.stringify(captureLog)); } catch (_) {}
+  }
 
   function isSupported() {
     return !!(window.SpeechRecognition || window.webkitSpeechRecognition);
@@ -89,6 +66,7 @@
 
     var recognition = null;
     var listening = false;
+    var starting = false;       // true between start() and onstart — guards the double-tap race
     var silenceTimer = null;
     var lastResultTs = 0;
 
@@ -99,6 +77,7 @@
     }
 
     function stop() {
+      starting = false;
       if (silenceTimer) { clearInterval(silenceTimer); silenceTimer = null; }
       if (recognition) {
         try { recognition.stop(); } catch (e) {}
@@ -107,21 +86,45 @@
       setListening(false);
     }
 
+    // Collapse the mobile engine's redundant final re-emissions. Drops a
+    // final that exactly duplicates the previous, and replaces the
+    // previous with a longer "extension" restatement of it. Separate
+    // (non-prefix) segments are kept as-is, so real speech is untouched.
+    function mergeFinals(segs) {
+      var out = [];
+      for (var k = 0; k < segs.length; k++) {
+        var s = segs[k];
+        var st = s.replace(/^\s+|\s+$/g, '');
+        if (!st) continue;
+        if (out.length) {
+          var pt = out[out.length - 1].replace(/^\s+|\s+$/g, '');
+          if (st === pt) continue;                                  // exact duplicate
+          if (st.indexOf(pt) === 0) { out[out.length - 1] = s; continue; } // extension → keep the longer
+          if (pt.indexOf(st) === 0) { continue; }                   // shorter prefix of prev → drop
+        }
+        out.push(s);
+      }
+      return out;
+    }
+
     function start() {
+      // Concurrent-start guard: bail if a recognizer is already running
+      // or mid-start. Without this a fast double-tap (or a ghost click)
+      // before onstart flips `listening` spins up a SECOND recognizer
+      // writing into the same field — a real source of doubling.
+      if (recognition || starting) return;
+      starting = true;
       try {
         recognition = new SR();
         recognition.continuous = true;
         recognition.interimResults = true;
         recognition.lang = navigator.language || 'en-US';
-        // baseValue captured fresh on each onstart. This mirrors the
-        // original chat-composer inline algorithm (pre-consolidation,
-        // pre-80705bb) that was empirically known to work on John's
-        // mobile setup. Re-capturing in onstart correctly handles the
-        // "user sent the chat between dictations" case — the new
-        // session starts from the now-empty textarea instead of
-        // baselining onto stale pre-send text.
+        // baseValue captured fresh on each onstart so "send the chat
+        // between dictations" baselines onto the now-empty textarea
+        // instead of stale pre-send text.
         var baseValue = '';
         recognition.onstart = function () {
+          starting = false;
           baseValue = textareaEl.value || '';
           if (baseValue && !/\s$/.test(baseValue)) baseValue += ' ';
           setListening(true);
@@ -133,54 +136,41 @@
           }, 500);
         };
         recognition.onresult = function (e) {
-          // Reset the silence countdown on every result (interim too)
-          // so the mic stays open while mid-sentence.
-          lastResultTs = Date.now();
-          // Iterate the FULL e.results array, not e.resultIndex onward.
-          // Mobile Safari + Chrome on Android don't advance
-          // resultIndex reliably — reconstructing from scratch is
-          // idempotent: no matter how many times this fires for the
-          // same logical utterance, input.value lands at the right
-          // text. Same-content re-emission writes the same string
-          // and is a no-op effectively.
-          var allFinal = '';
+          lastResultTs = Date.now();   // reset silence countdown (interim too)
+
+          // Rebuild from the full results array (resultIndex is
+          // unreliable on mobile), then collapse redundant finals.
           var allInterim = '';
+          var finalSegs = [];
           for (var i = 0; i < e.results.length; i++) {
             var t = (e.results[i][0] && e.results[i][0].transcript) || '';
-            if (e.results[i].isFinal) allFinal += t;
+            if (e.results[i].isFinal) finalSegs.push(t);
             else allInterim += t;
           }
+          var merged = mergeFinals(finalSegs);
+          var allFinal = merged.join('');   // direct concat preserves the engine's own spacing
           var nextValue = baseValue + allFinal + allInterim;
 
-          // Diagnostic — set window._p86VoiceDebug = true in devtools
-          // to log every e.results snapshot + the resolved value. Use
-          // when a mobile quirk surfaces so the fix can be driven by
-          // a real transcript instead of speculation.
-          if (window._p86VoiceDebug) {
-            try {
-              var raw = [];
-              for (var d = 0; d < e.results.length; d++) {
-                raw.push((e.results[d].isFinal ? 'F:' : 'I:') +
-                         JSON.stringify(e.results[d][0].transcript));
-              }
+          // Always-on capture (cheap) — a recurrence is diagnosable with
+          // no devtools via window.p86VoiceLog() / localStorage.
+          try {
+            var raw = [];
+            for (var d = 0; d < e.results.length; d++) {
+              raw.push((e.results[d].isFinal ? 'F:' : 'I:') +
+                       ((e.results[d][0] && e.results[d][0].transcript) || ''));
+            }
+            pushCapture({ t: lastResultTs, raw: raw, finals: finalSegs.length, merged: merged.length, value: nextValue });
+            if (window._p86VoiceDebug) {
               console.log('[voice] results(' + e.results.length + '):', raw.join(' '));
-              console.log('[voice] → ' + JSON.stringify(nextValue));
-            } catch (_) { /* defensive */ }
-          }
+              console.log('[voice] finals ' + finalSegs.length + ' → merged ' + merged.length + ' → ' + JSON.stringify(nextValue));
+            }
+          } catch (_) { /* defensive */ }
 
-          // Write unconditionally + use a NON-BUBBLING input event
-          // to match the original chat-composer behavior exactly
-          // (Version A — empirically known to work on John's phone).
-          // A bubbling event could reach a parent listener and trip
-          // an unknown side-effect path; the original used
-          // `new Event('input')` (bubbles defaults to false) and
-          // never had this class of bug.
+          // Non-bubbling input event (matches the known-good original).
           textareaEl.value = nextValue;
           try { textareaEl.dispatchEvent(new Event('input')); }
-          catch (_) { /* defensive — older browsers may throw */ }
-          if (onChange) {
-            try { onChange(nextValue); } catch (_) { /* defensive */ }
-          }
+          catch (_) { /* older browsers */ }
+          if (onChange) { try { onChange(nextValue); } catch (_) {} }
         };
         recognition.onerror = function (ev) {
           stop();
@@ -191,24 +181,30 @@
         recognition.onend = function () { stop(); };
         recognition.start();
       } catch (e) {
+        starting = false;
         alert('Could not start dictation: ' + (e.message || e));
         stop();
       }
     }
 
-    micBtnEl.addEventListener('click', function (e) {
+    function onMicClick(e) {
       e.preventDefault();
-      if (listening) stop();
+      if (listening || starting) stop();
       else start();
-    });
+    }
+    micBtnEl.addEventListener('click', onMicClick);
 
-    // Teardown returned to caller so a closing modal / panel can
-    // cleanly stop dictation. Idempotent — safe to call multiple times.
-    return stop;
+    // Teardown: stop dictation AND unbind the click handler so a re-wire
+    // of the same button can never stack a second listener/recognizer.
+    // Idempotent — safe to call multiple times.
+    return function teardown() {
+      stop();
+      try { micBtnEl.removeEventListener('click', onMicClick); } catch (_) {}
+    };
   }
 
-  window.p86VoiceInput = {
-    isSupported: isSupported,
-    wire: wire
-  };
+  window.p86VoiceInput = { isSupported: isSupported, wire: wire };
+  // Diagnostic getter — the last ~30 raw engine emissions + collapsed
+  // results. Survives in localStorage('p86VoiceLog') across reloads.
+  window.p86VoiceLog = function () { return captureLog.slice(); };
 })();
