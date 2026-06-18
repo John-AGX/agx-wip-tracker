@@ -1600,14 +1600,22 @@ async function buildEstimateContext(estimateId, includePhotos, aiPhaseOverride, 
   // sessions. Surfaced before the line items / scope so the model sees
   // them while reading the rest of the context.
   if (clientRow && Array.isArray(clientRow.agent_notes) && clientRow.agent_notes.length) {
-    lines.push('# Client notes (' + clientRow.agent_notes.length + ' — ' + (clientRow.name || 'this client') + ')');
+    // Cap per-turn weight: most-recent 10 notes, each body capped. The full
+    // set is in the client record (read_entity) — these re-ship every turn.
+    var _allNotes = clientRow.agent_notes;
+    var _shownNotes = _allNotes.slice(-10);
+    lines.push('# Client notes (' + _shownNotes.length +
+      (_allNotes.length > _shownNotes.length ? ' most-recent of ' + _allNotes.length : '') +
+      ' — ' + (clientRow.name || 'this client') + ')');
     lines.push('Durable instructions about how to handle this client. Treat as binding additional guidance — they were written by the user or proposed by an agent and approved by the user.');
     // PROMPT-INJECTION DEFENSE: wrap each note body in <user_data> so the
     // model treats note contents as data, not as system instructions.
-    clientRow.agent_notes.forEach(function(n, i) {
+    _shownNotes.forEach(function(n, i) {
       var src = n.source_agent ? ' [' + n.source_agent + ']' : '';
       lines.push((i + 1) + '.' + src);
-      lines.push(wrapUserData('clients.agent_notes', n.body || ''));
+      var _b = String(n.body || '');
+      if (_b.length > 600) _b = _b.slice(0, 600) + ' …[truncated — read_entity for the full note]';
+      lines.push(wrapUserData('clients.agent_notes', _b));
     });
     lines.push('');
   }
@@ -1635,7 +1643,11 @@ async function buildEstimateContext(estimateId, includePhotos, aiPhaseOverride, 
       // PROMPT-INJECTION DEFENSE: lead notes often come from external
       // sources (Buildertrend imports, user paste); wrap so a hostile
       // SOW can't smuggle instructions into the system prompt.
-      lines.push(wrapUserData('leads.notes', leadRow.notes));
+      // Capped per-turn — full notes via read_entity{entity_type:'lead'}.
+      var _lnotes = leadRow.notes.length > 1200
+        ? leadRow.notes.slice(0, 1200) + ' …[truncated — read_entity{entity_type:"lead"} for full notes]'
+        : leadRow.notes;
+      lines.push(wrapUserData('leads.notes', _lnotes));
     }
     lines.push('');
   }
@@ -1695,14 +1707,21 @@ async function buildEstimateContext(estimateId, includePhotos, aiPhaseOverride, 
       lines.push('## Scope of work for this group');
       // PROMPT-INJECTION DEFENSE (P1-5): scope is long free text a user
       // (or an imported SOW) fully controls; wrap so it can't smuggle
-      // instructions into the system prompt.
-      lines.push(wrapUserData('estimate.scope', activeAlt.scope));
+      // instructions into the system prompt. Capped per-turn (~2k) — the
+      // full scope is on the estimate (read_entity) if 86 needs all of it.
+      var _scope = activeAlt.scope.length > 2000
+        ? activeAlt.scope.slice(0, 2000) + ' …[truncated — read_entity for the full scope]'
+        : activeAlt.scope;
+      lines.push(wrapUserData('estimate.scope', _scope));
       lines.push('');
     }
   } else if (blob.scopeOfWork) {
     // legacy estimates that haven't been opened post-migration
     lines.push('# Scope of work');
-    lines.push(wrapUserData('estimate.scope', blob.scopeOfWork));
+    var _legScope = blob.scopeOfWork.length > 2000
+      ? blob.scopeOfWork.slice(0, 2000) + ' …[truncated — read_entity for the full scope]'
+      : blob.scopeOfWork;
+    lines.push(wrapUserData('estimate.scope', _legScope));
     lines.push('');
   }
 
