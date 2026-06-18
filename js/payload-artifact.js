@@ -1,27 +1,17 @@
-// PayloadArtifact — renders a .p86.json file icon in the chat that the
-// user can preview, download, or drag into the universal dropbox.
+// PayloadArtifact — renders an inline approval card in the chat that
+// the user can Approve, Reject, Preview, or Download.
 //
 // Mounted inside the AI panel's message bubbles. One artifact per
 // emitted payload row. The artifact carries the payload_id + file
-// metadata; on dragstart it advertises BOTH MIME types so it works
-// for in-app drag (dropbox reads x-p86-payload-id) AND OS-style drag
-// (file content as application/vnd.p86.payload+json, downloadable as
-// a real file via the GET /api/payloads/:id/file endpoint).
+// metadata. Approve applies the change inline; Download pulls the
+// raw .p86.json from the GET /api/payloads/:id/file endpoint.
 //
-// Wired in by ai-panel.js when an emit_payload_file tool_applied SSE
-// event arrives. Also rendered from the sidebar Payloads list when
-// the user jumps to the original message via "view in chat".
+// Wired in by ai-panel.js when an emit_payload_file / scribe_write
+// tool_applied SSE event arrives.
 //
 // Public API (window.PayloadArtifact):
 //   render(payload, container) → returns the rendered DOM node
 //   updateStatus(payloadId, status, apply_summary?) → flips badge
-//
-// Cross-component signals dispatched on document:
-//   'p86:payload-drag-start' { payload_id, filename, targets }
-//   'p86:payload-drag-end'
-//
-// C2 scope: render + drag + preview toggle. Apply/Pin/Reject buttons
-// are wired but POST to endpoints that may 501 until later commits.
 
 (function () {
   'use strict';
@@ -33,7 +23,7 @@
     container:
       'border:1px solid rgba(255,255,255,0.10);background:rgba(255,255,255,0.03);' +
       'border-radius:10px;padding:12px 14px;margin:8px 0;font-size:12.5px;' +
-      'color:#e6e6e6;display:flex;flex-direction:column;gap:8px;cursor:grab;' +
+      'color:#e6e6e6;display:flex;flex-direction:column;gap:8px;' +
       'transition:background 0.15s, border-color 0.15s;user-select:none;',
     containerApplied:
       'border-color:rgba(46,204,113,0.45);background:rgba(46,204,113,0.06);',
@@ -173,8 +163,7 @@
     } catch (_) { return ''; }
   }
 
-  // Inline Approve — apply the payload directly (no drag-to-dropbox needed).
-  // Mirrors js/payload-dropbox.js applyPayload: POST /api/payloads/:id/apply,
+  // Inline Approve — apply the payload directly: POST /api/payloads/:id/apply,
   // then dispatch p86:payload-applied so every surface re-hydrates, and flip
   // the card to its applied state. `actions` is cleared on success so the
   // approve/reject buttons can't be pressed twice.
@@ -226,40 +215,6 @@
     card.dataset.payloadId = payload.id;
     card.dataset.status = payload.status || 'ready';
     card.style.cssText = statusCardCss(payload.status);
-    card.draggable = (payload.status || 'ready') === 'ready';
-
-    // Drag plumbing — advertise both MIME types so dropbox + OS drag work.
-    card.addEventListener('dragstart', (ev) => {
-      if (card.dataset.status !== 'ready') {
-        ev.preventDefault();
-        return;
-      }
-      try {
-        const dragMeta = {
-          payload_id: payload.id,
-          filename: payload.filename,
-          targets: payload.targets,
-        };
-        ev.dataTransfer.setData('application/x-p86-payload-id', payload.id);
-        ev.dataTransfer.setData('application/x-p86-payload', JSON.stringify(dragMeta));
-        // Also expose the full file content as a draggable OS-style file.
-        // The dropbox prefers x-p86-payload-id when both are present; OS
-        // drag-out into Finder/Explorer would use the JSON serialization.
-        ev.dataTransfer.setData(
-          'application/vnd.p86.payload+json',
-          JSON.stringify(payload.file_content || {})
-        );
-        ev.dataTransfer.effectAllowed = 'copy';
-        card.style.opacity = '0.6';
-        document.dispatchEvent(new CustomEvent('p86:payload-drag-start', { detail: dragMeta }));
-      } catch (err) {
-        console.error('[payload-artifact] dragstart failed:', err);
-      }
-    });
-    card.addEventListener('dragend', () => {
-      card.style.opacity = '1';
-      document.dispatchEvent(new CustomEvent('p86:payload-drag-end'));
-    });
 
     // Top row: icon + filename/title + status badge
     const iconRow = document.createElement('div');
@@ -378,33 +333,6 @@
       a.remove();
     }, { title: 'Download .p86.json' }));
 
-    // Pin-as-Recipe — POST /api/recipes with payload_id. Prompts the
-    // user for a recipe name (defaults to the payload title). Server
-    // saves the bundle as a template; the sidebar Recipes section
-    // refreshes via the p86:recipe-changed event so the new pin
-    // shows up immediately.
-    actions.appendChild(btn('📌 Pin as Recipe', async () => {
-      const defaultName = payload.title || payload.filename || 'Recipe';
-      const name = window.prompt('Recipe name:', defaultName);
-      if (name == null) return; // user cancelled
-      const trimmed = String(name).trim();
-      if (!trimmed) return;
-      try {
-        const r = await fetch('/api/recipes', {
-          method: 'POST',
-          credentials: 'include',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ payload_id: payload.id, name: trimmed }),
-        });
-        const body = await r.json().catch(() => ({}));
-        if (!r.ok) throw new Error(body.error || ('HTTP ' + r.status));
-        // Refresh sidebar so the new recipe shows up under Recipes.
-        document.dispatchEvent(new CustomEvent('p86:recipe-changed'));
-      } catch (err) {
-        window.alert('Pin failed: ' + (err && err.message || err));
-      }
-    }, { title: 'Save this payload as a reusable recipe' }));
-
     // Reject is wired now — POST /api/payloads/:id/reject is live.
     if ((payload.status || 'ready') === 'ready') {
       actions.appendChild(btn('Reject', async () => {
@@ -438,7 +366,6 @@
     );
     cards.forEach((card) => {
       card.dataset.status = status;
-      card.draggable = status === 'ready';
       card.style.cssText = statusCardCss(status);
       // Update the badge in place (last child of iconRow).
       const iconRow = card.firstChild;

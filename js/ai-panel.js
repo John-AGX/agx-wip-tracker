@@ -921,14 +921,6 @@
       '<div id="ai-notice" style="padding:8px 14px;background:rgba(79,140,255,0.08);border-bottom:1px solid var(--border,#333);font-size:11px;color:var(--text-dim,#aaa);">' +
         'Read-only — I see your estimate and photos but cannot change anything. Apply suggestions by hand.' +
       '</div>' +
-      // Universal payload dropbox — top of the panel, full-width
-      // below the header/notice. Slimmer than the v1 strip so it
-      // stays present without crowding the chat. CSV import lives
-      // in the sidebar Payloads section header (📤 button).
-      '<div id="p86-payload-strip" style="padding:6px 12px;border-bottom:1px solid rgba(255,255,255,0.05);background:rgba(255,255,255,0.015);">' +
-        '<div id="p86-dropbox-slot" style="width:100%;"></div>' +
-        '<input id="p86-csv-file" type="file" accept=".csv,text/csv" style="display:none;" />' +
-      '</div>' +
       // Body wrapper — flex ROW so the sidebar can live as a real
       // left-rail column next to the chat content rather than as an
       // overlay. Width animates between 0 (collapsed) and a fixed
@@ -948,8 +940,6 @@
       '<div id="ai-messages" style="flex:1;overflow-y:auto;overflow-x:hidden;min-width:0;padding:22px 20px;display:flex;flex-direction:column;gap:20px;font-size:13px;color:var(--text,#e6e6e6);"></div>' +
       // Preset prompts
       '<div id="ai-presets" style="padding:8px 12px;border-top:1px solid var(--border,#333);display:flex;flex-wrap:wrap;gap:6px;background:rgba(255,255,255,0.02);"></div>' +
-      // (Payload dropbox moved up — now lives directly below the
-      //  notice strip, full-width, slim. See #p86-payload-strip above.)
       // Input row. Photos are auto-included via the entity's attachments
       // and inline uploads via the + composer button — no separate toggle
       // needed.
@@ -1004,43 +994,12 @@
                 ' onfocus="this.style.borderColor=\'rgba(79,140,255,0.35)\';this.style.background=\'rgba(255,255,255,0.05)\'"' +
                 ' onblur="this.style.borderColor=\'rgba(255,255,255,0.06)\';this.style.background=\'rgba(255,255,255,0.03)\'" />' +
             '</div>' +
-            // Scrollable region containing three stacked sections:
-            // Chats (existing sessions), Payloads (new), Recipes (new).
-            // Flex:1 + overflow live here so the whole stack scrolls
-            // together as one column.
+            // Scrollable region containing the Chats list (existing
+            // sessions). Flex:1 + overflow live here so it scrolls as
+            // one column.
             '<div id="ai-sidebar-scroll" style="flex:1;overflow-y:auto;padding:2px 0 10px 0;font-size:12px;color:#e6e6e6;">' +
               '<div id="ai-sidebar-list">' +
                 '<div style="padding:14px;color:rgba(255,255,255,0.35);font-size:11.5px;">Loading sessions…</div>' +
-              '</div>' +
-              // Payloads section — list of ready/applied payload files
-              // (Principal-emitted and watcher-emitted) for this user
-              // and org. Collapsible header; populated by
-              // refreshPayloadsSidebar().
-              '<div id="ai-sidebar-payloads-section" style="margin-top:8px;border-top:1px solid rgba(255,255,255,0.05);padding-top:4px;">' +
-                '<div id="ai-sidebar-payloads-header" style="padding:10px 12px 6px 12px;display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none;">' +
-                  '<span class="p86-caret" style="font-size:10px;opacity:0.5;transition:transform 0.15s;display:inline-block;">▼</span>' +
-                  '<span style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:rgba(255,255,255,0.35);">Payloads</span>' +
-                  '<span id="ai-sidebar-payloads-count" style="font-size:10px;color:rgba(255,255,255,0.30);"></span>' +
-                  '<div style="flex:1;"></div>' +
-                  '<button id="ai-sidebar-payloads-bulk" type="button" title="Bulk import from CSV" aria-label="Bulk CSV import" style="background:transparent;border:none;color:rgba(255,255,255,0.5);cursor:pointer;font-size:11px;padding:0 4px;">📤 CSV</button>' +
-                  '<button id="ai-sidebar-payloads-refresh" type="button" title="Refresh" aria-label="Refresh payloads" style="background:transparent;border:none;color:rgba(255,255,255,0.4);cursor:pointer;font-size:11px;padding:0 2px;">↻</button>' +
-                '</div>' +
-                '<div id="ai-sidebar-payloads-list" style="padding:0 6px 4px 6px;">' +
-                  '<div style="padding:8px 12px;color:rgba(255,255,255,0.30);font-size:11px;">No payloads yet.</div>' +
-                '</div>' +
-              '</div>' +
-              // Recipes section — pinned/recent templates. Empty in C2;
-              // populated in C11. Header visible now so the UX is
-              // discoverable.
-              '<div id="ai-sidebar-recipes-section" style="margin-top:4px;border-top:1px solid rgba(255,255,255,0.05);padding-top:4px;">' +
-                '<div id="ai-sidebar-recipes-header" style="padding:10px 12px 6px 12px;display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none;">' +
-                  '<span class="p86-caret" style="font-size:10px;opacity:0.5;transition:transform 0.15s;display:inline-block;">▼</span>' +
-                  '<span style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:rgba(255,255,255,0.35);">Recipes ⭐</span>' +
-                  '<span id="ai-sidebar-recipes-count" style="font-size:10px;color:rgba(255,255,255,0.30);"></span>' +
-                '</div>' +
-                '<div id="ai-sidebar-recipes-list" style="padding:0 6px 4px 6px;">' +
-                  '<div style="padding:8px 12px;color:rgba(255,255,255,0.30);font-size:11px;">Pin payloads as recipes (C11).</div>' +
-                '</div>' +
               '</div>' +
             '</div>' +
           '</div>' +
@@ -1066,111 +1025,12 @@
     wireAIPanelResizer(panel);
     panel.querySelector('#ai-sidebar-toggle').onclick = toggleSidebar;
 
-    // ─────────────────────────────────────────────────────────────
-    // Payload DSL wiring (C2).
-    //
-    // Mount the universal dropbox in the strip above the input, wire
-    // the sidebar Payloads + Recipes collapse + refresh handlers,
-    // hook the CSV upload button (POSTs to /from-csv; 501 until C14),
-    // and register an SSE listener for emit_payload_file events.
-    // ─────────────────────────────────────────────────────────────
-    try {
-      var dropboxSlot = panel.querySelector('#p86-dropbox-slot');
-      if (dropboxSlot && window.PayloadDropbox && typeof window.PayloadDropbox.mount === 'function') {
-        window.PayloadDropbox.mount(dropboxSlot);
-      }
-    } catch (e) { console.warn('[ai-panel] PayloadDropbox mount failed:', e); }
-    var payloadsHeader = panel.querySelector('#ai-sidebar-payloads-header');
-    if (payloadsHeader) {
-      payloadsHeader.addEventListener('click', function() {
-        togglePanelSection('payloads');
-      });
-    }
-    var recipesHeader = panel.querySelector('#ai-sidebar-recipes-header');
-    if (recipesHeader) {
-      recipesHeader.addEventListener('click', function() {
-        togglePanelSection('recipes');
-      });
-    }
-    var refreshBtn = panel.querySelector('#ai-sidebar-payloads-refresh');
-    if (refreshBtn) {
-      refreshBtn.addEventListener('click', function(ev) {
-        ev.stopPropagation();
-        refreshPayloadsSidebar();
-      });
-    }
-    // CSV upload via the sidebar Payloads section header (+ Bulk).
-    // Opens a small modal that lets the user pick entity_type and
-    // file, then POSTs to /from-csv. Hidden #p86-csv-file input is
-    // kept in the DOM so the modal can trigger it.
-    var csvInput = panel.querySelector('#p86-csv-file');
-    var bulkBtn = panel.querySelector('#ai-sidebar-payloads-bulk');
-    if (bulkBtn) {
-      bulkBtn.addEventListener('click', function(ev) {
-        ev.stopPropagation();
-        openBulkImportModal();
-      });
-    }
-    if (csvInput) {
-      csvInput.addEventListener('change', function() {
-        var f = csvInput.files && csvInput.files[0];
-        if (!f) return;
-        var et = csvInput.dataset.entityType || 'lead';
-        uploadCsvAsPayload(f, et);
-        csvInput.value = '';
-        csvInput.dataset.entityType = '';
-      });
-    }
-    // Drag-into-chat for recipes (C12). The input pill accepts a
-    // recipe drag from the sidebar and stages it as the next message's
-    // attached_recipe context. Visual cue: the pill border turns
-    // accent on dragover.
-    var pill = panel.querySelector('#ai-input-pill');
-    if (pill) {
-      pill.addEventListener('dragenter', function(ev) {
-        if (ev.dataTransfer && Array.from(ev.dataTransfer.types || []).indexOf('application/x-p86-recipe-id') !== -1) {
-          ev.preventDefault();
-          pill.style.borderColor = 'rgba(255,200,80,0.55)';
-        }
-      });
-      pill.addEventListener('dragover', function(ev) {
-        if (ev.dataTransfer && Array.from(ev.dataTransfer.types || []).indexOf('application/x-p86-recipe-id') !== -1) {
-          ev.preventDefault();
-          try { ev.dataTransfer.dropEffect = 'copy'; } catch (_) {}
-        }
-      });
-      pill.addEventListener('dragleave', function(ev) {
-        if (ev.target !== pill) return;
-        pill.style.borderColor = '';
-      });
-      pill.addEventListener('drop', function(ev) {
-        pill.style.borderColor = '';
-        try {
-          var metaJson = ev.dataTransfer.getData('application/x-p86-recipe');
-          var recipeId = ev.dataTransfer.getData('application/x-p86-recipe-id');
-          if (!recipeId && !metaJson) return;
-          ev.preventDefault();
-          var meta = metaJson ? JSON.parse(metaJson) : {};
-          setAttachedRecipe({
-            recipe_id: meta.recipe_id || recipeId,
-            name: meta.name || 'Recipe',
-          });
-          // Focus the input so the user can type the request right away.
-          var inp = panel.querySelector('#ai-input');
-          if (inp) inp.focus();
-        } catch (e) {
-          console.warn('[ai-panel] recipe drop failed:', e);
-        }
-      });
-    }
-
     // Listen for cross-component signals so the sidebar updates when a
     // payload is applied (badge flip) or a fresh ready-payload arrives
     // mid-session (re-fetch). Also dispatch entity-surface refreshes
     // based on affected_targets so the UI reflects the new data without
     // a manual page reload.
     document.addEventListener('p86:payload-applied', function(ev) {
-      refreshPayloadsSidebar();
       try {
         var targets = (ev && ev.detail && ev.detail.affected_targets) || [];
         var types = {};
@@ -1197,14 +1057,6 @@
       } catch (e) {
         console.warn('[payload-applied] surface refresh dispatch failed:', e);
       }
-    });
-    document.addEventListener('p86:payload-ready', function(ev) {
-      refreshPayloadsSidebar();
-    });
-    // Recipe pin / unpin / archive / clone all dispatch p86:recipe-changed.
-    document.addEventListener('p86:recipe-changed', function() {
-      refreshRecipesSidebar();
-      refreshPayloadsSidebar(); // a clone produces a new ready payload
     });
     var trustBtn = panel.querySelector('#ai-trust');
     if (trustBtn) trustBtn.onclick = function(e) {
@@ -1452,15 +1304,6 @@
     // Photos toggle and proposal cards only make sense on the estimate
     // side. Hide / disable them when running against a job.
     refreshModeSpecificUI();
-    // Pull the latest payloads into the sidebar each time the panel
-    // opens so the user sees fresh ready/applied state. Apply persisted
-    // collapse state for Payloads + Recipes sections.
-    try {
-      applyPanelSectionVisual('payloads', getPanelSectionOpen('payloads'));
-      applyPanelSectionVisual('recipes',  getPanelSectionOpen('recipes'));
-      refreshPayloadsSidebar();
-      refreshRecipesSidebar();
-    } catch (e) { console.warn('[ai-panel] payload sidebar init failed:', e); }
     setTimeout(function() {
       var inp = document.getElementById('ai-input');
       if (inp) inp.focus();
@@ -2003,11 +1846,7 @@
     if (titleEl) titleEl.textContent = row.label || ('Session ' + sessionId);
   }
 
-  // ─────────────────────────────────────────────────────────────
-  // Payload DSL — sidebar Payloads / Recipes section helpers (C2).
-  // ─────────────────────────────────────────────────────────────
-
-  // Collapse state for the sidebar's Payloads + Recipes sections.
+  // Collapse state for sidebar sections (shared by the Chats section).
   // localStorage so the user's choice survives reload. Default to
   // open ('1') so the sections are discoverable on first sight.
   function getPanelSectionOpen(key) {
@@ -2018,378 +1857,6 @@
   }
   function setPanelSectionOpen(key, val) {
     try { localStorage.setItem('p86-sidebar-' + key, val ? '1' : '0'); } catch (_) {}
-  }
-  function togglePanelSection(key) {
-    var open = !getPanelSectionOpen(key);
-    setPanelSectionOpen(key, open);
-    applyPanelSectionVisual(key, open);
-  }
-  function applyPanelSectionVisual(key, open) {
-    var listId = key === 'payloads' ? 'ai-sidebar-payloads-list' :
-                 key === 'recipes'  ? 'ai-sidebar-recipes-list'  : null;
-    var headerId = key === 'payloads' ? 'ai-sidebar-payloads-header' :
-                   key === 'recipes'  ? 'ai-sidebar-recipes-header'  : null;
-    if (!listId || !headerId) return;
-    var list = document.getElementById(listId);
-    var caret = document.querySelector('#' + headerId + ' .p86-caret');
-    if (list) list.style.display = open ? '' : 'none';
-    if (caret) caret.style.transform = open ? 'rotate(0deg)' : 'rotate(-90deg)';
-  }
-
-  // Fetch the latest payloads for the user/org and re-render the
-  // sidebar Payloads section. Called on panel open, after applies,
-  // and when a fresh emit_payload_file arrives via SSE.
-  var _payloadsList = [];
-  function refreshPayloadsSidebar() {
-    if (!window.p86Api || !window.p86Api.get) return;
-    var host = document.getElementById('ai-sidebar-payloads-list');
-    var countEl = document.getElementById('ai-sidebar-payloads-count');
-    if (host) host.innerHTML = '<div style="padding:8px 12px;color:rgba(255,255,255,0.30);font-size:11px;">Loading…</div>';
-    window.p86Api.get('/api/payloads?limit=50')
-      .then(function(resp) {
-        _payloadsList = (resp && resp.payloads) || [];
-        renderPayloadsSidebar();
-        if (countEl) {
-          var ready = _payloadsList.filter(function(p) { return p.status === 'ready'; }).length;
-          countEl.textContent = ready ? '(' + ready + ' ready)' : '';
-        }
-      })
-      .catch(function(err) {
-        if (host) host.innerHTML = '<div style="padding:8px 12px;color:#fbbf24;font-size:11px;">Failed to load: ' +
-          escapeHTML(err && err.message || 'unknown error') + '</div>';
-      });
-  }
-
-  function renderPayloadsSidebar() {
-    var host = document.getElementById('ai-sidebar-payloads-list');
-    if (!host) return;
-    if (!_payloadsList.length) {
-      host.innerHTML = '<div style="padding:8px 12px;color:rgba(255,255,255,0.30);font-size:11px;">No payloads yet.</div>';
-      return;
-    }
-    // Group: Ready first, then Applied (last 7d), then everything else.
-    var groups = { ready: [], applied: [], other: [] };
-    _payloadsList.forEach(function(p) {
-      if (p.status === 'ready') groups.ready.push(p);
-      else if (p.status === 'applied') groups.applied.push(p);
-      else groups.other.push(p);
-    });
-    var html = '';
-    function renderGroup(label, items, color) {
-      if (!items.length) return;
-      html += '<div style="padding:6px 12px 3px 12px;font-size:9.5px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:' + color + ';">' +
-        escapeHTML(label) + ' (' + items.length + ')</div>';
-      items.forEach(function(p) {
-        var icon = p.source && p.source.indexOf('watcher_') === 0 ? '🤖' :
-                   p.source === 'csv_import' ? '📥' :
-                   p.source === 'qb_sync'    ? '📒' :
-                   '📄';
-        var statusIcon = p.status === 'applied'  ? '✓' :
-                         p.status === 'rejected' ? '×' :
-                         p.status === 'expired'  ? '⏳' :
-                         p.status === 'failed'   ? '✗' : '';
-        var statusColor = p.status === 'applied'  ? '#7ee2a5' :
-                          p.status === 'failed'   ? '#ffb4ad' :
-                          p.status === 'rejected' ? 'rgba(255,255,255,0.4)' :
-                          'rgba(255,255,255,0.6)';
-        var draggable = p.status === 'ready' ? 'draggable="true"' : '';
-        html +=
-          '<div class="p86-sidebar-payload" data-payload-id="' + escapeHTML(p.id) + '" ' + draggable + ' ' +
-          'style="display:flex;align-items:center;gap:8px;padding:6px 12px;margin:1px 6px;border-radius:6px;cursor:' + (p.status === 'ready' ? 'grab' : 'pointer') + ';transition:background 0.12s;" ' +
-          'onmouseenter="this.style.background=\'rgba(255,255,255,0.05)\'" ' +
-          'onmouseleave="this.style.background=\'transparent\'">' +
-            '<span style="font-size:13px;line-height:1;flex-shrink:0;">' + icon + '</span>' +
-            '<div style="flex:1;min-width:0;overflow:hidden;">' +
-              '<div style="font-size:11.5px;color:rgba(255,255,255,0.85);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(p.title || p.filename || p.id) + '</div>' +
-              '<div style="font-size:10px;color:rgba(255,255,255,0.40);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(p.summary || '') + '</div>' +
-            '</div>' +
-            (statusIcon ? '<span style="font-size:10px;color:' + statusColor + ';flex-shrink:0;">' + statusIcon + '</span>' : '') +
-          '</div>';
-      });
-    }
-    renderGroup('Ready', groups.ready, 'rgba(155,188,255,0.85)');
-    renderGroup('Applied', groups.applied, 'rgba(126,226,165,0.65)');
-    renderGroup('Other', groups.other, 'rgba(255,255,255,0.32)');
-    host.innerHTML = html;
-    // Wire drag for ready rows AND click for all (opens preview drawer).
-    host.querySelectorAll('.p86-sidebar-payload').forEach(function(row) {
-      var pid = row.dataset.payloadId;
-      var payload = _payloadsList.find(function(x) { return x.id === pid; });
-      if (!payload) return;
-      if (payload.status === 'ready') {
-        row.addEventListener('dragstart', function(ev) {
-          try {
-            ev.dataTransfer.setData('application/x-p86-payload-id', payload.id);
-            ev.dataTransfer.setData('application/x-p86-payload', JSON.stringify({
-              payload_id: payload.id, filename: payload.filename, targets: payload.targets,
-            }));
-            ev.dataTransfer.effectAllowed = 'copy';
-            document.dispatchEvent(new CustomEvent('p86:payload-drag-start', {
-              detail: { payload_id: payload.id, filename: payload.filename, targets: payload.targets }
-            }));
-          } catch (e) { /* swallow */ }
-        });
-        row.addEventListener('dragend', function() {
-          document.dispatchEvent(new CustomEvent('p86:payload-drag-end'));
-        });
-      }
-      row.addEventListener('click', function() { openPayloadPreviewDrawer(payload); });
-    });
-  }
-
-  // Lightweight preview drawer — re-uses the artifact renderer in a
-  // modal overlay. Click outside or press Esc to close.
-  function openPayloadPreviewDrawer(payload) {
-    if (!window.PayloadArtifact || typeof window.PayloadArtifact.render !== 'function') {
-      console.warn('[ai-panel] PayloadArtifact not loaded');
-      return;
-    }
-    // Fetch the full row (list response excludes file_content).
-    var url = '/api/payloads/' + encodeURIComponent(payload.id);
-    if (!window.p86Api || !window.p86Api.get) return;
-    window.p86Api.get(url).then(function(resp) {
-      var full = (resp && resp.payload) || payload;
-      var overlay = document.createElement('div');
-      overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:9999;display:flex;align-items:center;justify-content:center;padding:24px;';
-      overlay.addEventListener('click', function(ev) { if (ev.target === overlay) overlay.remove(); });
-      var modal = document.createElement('div');
-      modal.style.cssText = 'background:var(--surface,#0f0f1e);border:1px solid rgba(255,255,255,0.12);border-radius:12px;max-width:560px;width:100%;max-height:80vh;overflow:auto;padding:16px 18px;';
-      var closeBtn = document.createElement('button');
-      closeBtn.textContent = '×';
-      closeBtn.style.cssText = 'float:right;background:transparent;border:none;color:rgba(255,255,255,0.6);font-size:20px;line-height:1;cursor:pointer;padding:0 4px;';
-      closeBtn.onclick = function() { overlay.remove(); };
-      modal.appendChild(closeBtn);
-      var heading = document.createElement('div');
-      heading.style.cssText = 'font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:rgba(255,255,255,0.45);margin-bottom:10px;';
-      heading.textContent = 'Payload preview';
-      modal.appendChild(heading);
-      window.PayloadArtifact.render(full, modal);
-      overlay.appendChild(modal);
-      document.body.appendChild(overlay);
-      var escHandler = function(ev) { if (ev.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', escHandler); } };
-      document.addEventListener('keydown', escHandler);
-    }).catch(function(err) {
-      window.alert('Could not load payload: ' + (err && err.message || err));
-    });
-  }
-
-  // Bulk-import modal — opens from the sidebar Payloads section
-  // "📤 CSV" button. Replaces the old inline CSV widget that lived
-  // next to the dropbox (which was confusing because it looked
-  // surface-aware). Modal flow: pick entity_type, pick file, upload.
-  function openBulkImportModal() {
-    var prev = document.getElementById('p86-bulk-import-modal');
-    if (prev) prev.remove();
-    var overlay = document.createElement('div');
-    overlay.id = 'p86-bulk-import-modal';
-    overlay.style.cssText =
-      'position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:9999;' +
-      'display:flex;align-items:center;justify-content:center;padding:24px;';
-    overlay.addEventListener('click', function(ev) {
-      if (ev.target === overlay) overlay.remove();
-    });
-    var modal = document.createElement('div');
-    modal.style.cssText =
-      'background:var(--surface,#0f0f1e);border:1px solid rgba(255,255,255,0.12);' +
-      'border-radius:12px;max-width:480px;width:100%;padding:20px 22px;color:#e6e6e6;font-size:13px;';
-    modal.innerHTML =
-      '<div style="font-size:11px;text-transform:uppercase;letter-spacing:0.06em;color:rgba(255,255,255,0.45);margin-bottom:6px;">Bulk import</div>' +
-      '<div style="font-size:15px;font-weight:600;color:#fff;margin-bottom:14px;">CSV → Payload</div>' +
-      '<div style="font-size:12px;color:rgba(255,255,255,0.65);margin-bottom:14px;line-height:1.5;">Upload a CSV file. Each row becomes one create-op target in a new payload. The payload lands in the sidebar Payloads → Ready section; drag it into the dropbox to apply all rows atomically.</div>' +
-      '<label style="display:block;font-size:11px;color:rgba(255,255,255,0.6);margin-bottom:4px;">Entity type</label>' +
-      '<select id="p86-bulk-entity-type" style="width:100%;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.10);color:#e6e6e6;border-radius:6px;font-size:13px;padding:8px 10px;margin-bottom:14px;">' +
-        '<option value="lead">Leads</option>' +
-        '<option value="client">Clients</option>' +
-      '</select>' +
-      '<div style="display:flex;gap:8px;justify-content:flex-end;">' +
-        '<button id="p86-bulk-cancel" type="button" style="background:transparent;border:1px solid rgba(255,255,255,0.15);color:#e6e6e6;border-radius:6px;padding:7px 14px;font-size:12px;cursor:pointer;">Cancel</button>' +
-        '<button id="p86-bulk-go" type="button" style="background:rgba(79,140,255,0.20);border:1px solid rgba(79,140,255,0.40);color:#cfdcff;border-radius:6px;padding:7px 14px;font-size:12px;cursor:pointer;font-weight:600;">Choose file…</button>' +
-      '</div>';
-    overlay.appendChild(modal);
-    document.body.appendChild(overlay);
-    modal.querySelector('#p86-bulk-cancel').onclick = function() { overlay.remove(); };
-    modal.querySelector('#p86-bulk-go').onclick = function() {
-      var et = modal.querySelector('#p86-bulk-entity-type').value;
-      var input = document.getElementById('p86-csv-file');
-      if (input) {
-        input.dataset.entityType = et;
-        input.click();
-      }
-      overlay.remove();
-    };
-  }
-
-  // CSV → payload upload. Hits /api/payloads/from-csv with multipart
-  // form data + entity_type. Backend converter (C14) parses each row
-  // into a create-op target.
-  function uploadCsvAsPayload(file, entityType) {
-    if (!file) return;
-    var form = new FormData();
-    form.append('file', file);
-    form.append('entity_type', entityType || 'lead');
-    fetch('/api/payloads/from-csv', {
-      method: 'POST',
-      credentials: 'include',
-      body: form,
-    }).then(function(r) {
-      return r.json().then(function(b) { return { status: r.status, body: b }; }).catch(function() { return { status: r.status, body: {} }; });
-    }).then(function(res) {
-      if (res.status === 501) {
-        window.alert('CSV → payload converter lands in C14. (Server returned 501.)');
-        return;
-      }
-      if (res.status >= 400) {
-        window.alert('CSV upload failed: ' + (res.body && res.body.error || ('HTTP ' + res.status)));
-        return;
-      }
-      // Success path (post-C14): refresh the sidebar so the new payload
-      // shows up under Ready immediately.
-      refreshPayloadsSidebar();
-    }).catch(function(err) {
-      window.alert('CSV upload error: ' + (err && err.message || err));
-    });
-  }
-
-  // ─────────────────────────────────────────────────────────────
-  // Recipes sidebar (C11) — list, pin/unpin, clone, archive.
-  // ─────────────────────────────────────────────────────────────
-  var _recipesList = [];
-  function refreshRecipesSidebar() {
-    if (!window.p86Api || !window.p86Api.get) return;
-    var host = document.getElementById('ai-sidebar-recipes-list');
-    var countEl = document.getElementById('ai-sidebar-recipes-count');
-    if (host) host.innerHTML = '<div style="padding:8px 12px;color:rgba(255,255,255,0.30);font-size:11px;">Loading…</div>';
-    window.p86Api.get('/api/recipes?limit=100').then(function(resp) {
-      _recipesList = (resp && resp.recipes) || [];
-      renderRecipesSidebar();
-      if (countEl) {
-        var pinned = _recipesList.filter(function(r) { return r.is_pinned; }).length;
-        countEl.textContent = _recipesList.length
-          ? '(' + _recipesList.length + (pinned ? ', ' + pinned + ' pinned' : '') + ')'
-          : '';
-      }
-    }).catch(function(err) {
-      if (host) host.innerHTML = '<div style="padding:8px 12px;color:#fbbf24;font-size:11px;">Failed: ' +
-        escapeHTML(err && err.message || 'unknown error') + '</div>';
-    });
-  }
-
-  function renderRecipesSidebar() {
-    var host = document.getElementById('ai-sidebar-recipes-list');
-    if (!host) return;
-    if (!_recipesList.length) {
-      host.innerHTML = '<div style="padding:8px 12px;color:rgba(255,255,255,0.30);font-size:11px;">No recipes yet. Click 📌 Pin as Recipe on any payload to save it here.</div>';
-      return;
-    }
-    var html = '';
-    _recipesList.forEach(function(r) {
-      var icon = r.icon || '⭐';
-      var useCount = r.use_count || 0;
-      html +=
-        '<div class="p86-sidebar-recipe" data-recipe-id="' + escapeHTML(r.id) + '" draggable="true" ' +
-        'style="display:flex;align-items:center;gap:8px;padding:6px 12px;margin:1px 6px;border-radius:6px;cursor:grab;transition:background 0.12s;" ' +
-        'onmouseenter="this.style.background=\'rgba(255,255,255,0.05)\'" ' +
-        'onmouseleave="this.style.background=\'transparent\'">' +
-          '<span style="font-size:13px;line-height:1;flex-shrink:0;">' + (r.is_pinned ? '⭐' : '○') + '</span>' +
-          '<div style="flex:1;min-width:0;overflow:hidden;">' +
-            '<div style="font-size:11.5px;color:rgba(255,255,255,0.85);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(r.name || r.id) + '</div>' +
-            '<div style="font-size:10px;color:rgba(255,255,255,0.40);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' +
-              (useCount ? (useCount + ' use' + (useCount === 1 ? '' : 's') + ' · ') : '') +
-              escapeHTML(r.description || '') +
-            '</div>' +
-          '</div>' +
-        '</div>';
-    });
-    host.innerHTML = html;
-    host.querySelectorAll('.p86-sidebar-recipe').forEach(function(row) {
-      var rid = row.dataset.recipeId;
-      var recipe = _recipesList.find(function(x) { return x.id === rid; });
-      if (!recipe) return;
-      // Drag — into chat input (C12) OR directly into the dropbox.
-      row.addEventListener('dragstart', function(ev) {
-        try {
-          ev.dataTransfer.setData('application/x-p86-recipe-id', recipe.id);
-          ev.dataTransfer.setData('application/x-p86-recipe', JSON.stringify({
-            recipe_id: recipe.id, name: recipe.name, description: recipe.description,
-          }));
-          ev.dataTransfer.effectAllowed = 'copy';
-        } catch (e) { /* swallow */ }
-      });
-      // Click — open a small popover with Use / Pin / Archive options.
-      row.addEventListener('click', function(ev) {
-        ev.stopPropagation();
-        openRecipeMenu(recipe, ev.clientX, ev.clientY);
-      });
-    });
-  }
-
-  function openRecipeMenu(recipe, x, y) {
-    var prev = document.getElementById('p86-recipe-context-menu');
-    if (prev) prev.remove();
-    var menu = document.createElement('div');
-    menu.id = 'p86-recipe-context-menu';
-    menu.style.cssText =
-      'position:fixed;left:' + x + 'px;top:' + y + 'px;background:#1a2230;' +
-      'border:1px solid rgba(255,255,255,0.18);border-radius:8px;padding:4px;' +
-      'font-size:12px;z-index:10000;box-shadow:0 6px 16px rgba(0,0,0,0.5);min-width:180px;';
-    function item(label, onClick) {
-      var b = document.createElement('button');
-      b.type = 'button';
-      b.textContent = label;
-      b.style.cssText =
-        'display:block;width:100%;text-align:left;background:transparent;border:0;' +
-        'color:#e6e6e6;padding:6px 10px;cursor:pointer;border-radius:6px;font-size:12px;';
-      b.onmouseenter = function() { b.style.background = 'rgba(255,255,255,0.06)'; };
-      b.onmouseleave = function() { b.style.background = 'transparent'; };
-      b.onclick = function() { menu.remove(); onClick(); };
-      menu.appendChild(b);
-    }
-    item('🧪 Use — generate a payload', function() {
-      window.p86Api.post('/api/recipes/' + encodeURIComponent(recipe.id) + '/clone', {})
-        .then(function() {
-          refreshPayloadsSidebar();
-        })
-        .catch(function(err) {
-          window.alert('Clone failed: ' + (err && err.message || err));
-        });
-    });
-    item(recipe.is_pinned ? '☆ Unpin' : '⭐ Pin to top', function() {
-      window.p86Api.post('/api/recipes/' + encodeURIComponent(recipe.id) + '/pin', { pinned: !recipe.is_pinned })
-        .then(function() { refreshRecipesSidebar(); })
-        .catch(function(err) { window.alert('Pin toggle failed: ' + (err && err.message || err)); });
-    });
-    item('🗑 Archive', function() {
-      if (!window.confirm('Archive "' + recipe.name + '"? (soft delete — can be restored from admin)')) return;
-      window.p86Api.del('/api/recipes/' + encodeURIComponent(recipe.id))
-        .then(function() { refreshRecipesSidebar(); })
-        .catch(function(err) { window.alert('Archive failed: ' + (err && err.message || err)); });
-    });
-    document.body.appendChild(menu);
-    var dismiss = function(ev) {
-      if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('click', dismiss); }
-    };
-    setTimeout(function() { document.addEventListener('click', dismiss); }, 50);
-  }
-
-  // Dev helper — pushes a synthetic payload row into the local list so
-  // the visual loop can be exercised end-to-end without a real emit.
-  // Window-exposed for console use: window.p86AI.injectFixturePayload({...}).
-  function injectFixturePayload(fixture) {
-    var p = Object.assign({
-      id: 'pl_fixture_' + Date.now(),
-      filename: 'Estimate.S0000-Fixture.' + (new Date().toISOString().slice(0,10)) + '.p86.json',
-      title: 'Fixture payload',
-      summary: '1 fixture target',
-      rationale: 'Local dev fixture for the C2 visual loop',
-      source: '86',
-      status: 'ready',
-      targets: [{ entity_type: 'estimate', entity_id: 'fixture', ops: { field_updates: { note: 'fixture' } } }],
-      created_at: new Date().toISOString(),
-      file_content: null,
-    }, fixture || {});
-    _payloadsList.unshift(p);
-    renderPayloadsSidebar();
-    return p;
   }
 
   function sidebarStartNewChat() {
@@ -3159,65 +2626,8 @@
       // session from the sidebar.
       var sid = getCurrentSessionId();
       if (sid) body.session_id = sid;
-      // Recipe attached via drag-into-chat (C12). The server-side
-      // /86/chat handler reads attached_recipe and injects the
-      // template's ops_template into the turn context so 86 can
-      // reference its shape when drafting a payload. The chip is
-      // cleared after one turn — explicit attach per turn.
-      if (_attachedRecipe) {
-        body.attached_recipe = {
-          recipe_id: _attachedRecipe.recipe_id,
-          name: _attachedRecipe.name,
-        };
-        clearAttachedRecipe();
-      }
       streamFromEndpoint(apiBase() + '/chat', body);
     });
-  }
-
-  // ─────────────────────────────────────────────────────────────
-  // Attached recipe (C12) — chip rendered above the input pill.
-  // Set when the user drops a recipe from the sidebar onto the
-  // chat input area. Cleared after the next message sends.
-  // ─────────────────────────────────────────────────────────────
-  var _attachedRecipe = null;
-  function setAttachedRecipe(meta) {
-    _attachedRecipe = meta;
-    renderAttachedRecipeChip();
-  }
-  function clearAttachedRecipe() {
-    _attachedRecipe = null;
-    renderAttachedRecipeChip();
-  }
-  function renderAttachedRecipeChip() {
-    var strip = document.getElementById('ai-attachments-strip');
-    if (!strip) return;
-    // Remove any prior recipe chip.
-    var prior = strip.querySelector('[data-attached-recipe]');
-    if (prior) prior.remove();
-    if (!_attachedRecipe) {
-      // Hide strip if no chips remaining.
-      if (!strip.children.length) strip.style.display = 'none';
-      return;
-    }
-    var chip = document.createElement('div');
-    chip.setAttribute('data-attached-recipe', '1');
-    chip.style.cssText =
-      'display:inline-flex;align-items:center;gap:6px;background:rgba(255,200,80,0.10);' +
-      'border:1px solid rgba(255,200,80,0.30);border-radius:6px;padding:3px 8px;' +
-      'font-size:11px;color:#ffd28a;';
-    chip.innerHTML =
-      '<span style="font-size:12px;">⭐</span>' +
-      '<span style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' +
-      'Recipe: ' + escapeHTML(_attachedRecipe.name || _attachedRecipe.recipe_id) +
-      '</span>' +
-      '<button type="button" title="Remove" style="background:transparent;border:none;color:inherit;opacity:0.55;cursor:pointer;font-size:13px;line-height:1;padding:0 2px;">×</button>';
-    chip.querySelector('button').onclick = function(ev) {
-      ev.stopPropagation();
-      clearAttachedRecipe();
-    };
-    strip.style.display = 'flex';
-    strip.appendChild(chip);
   }
 
   // Shared streaming runner — used by sendMessage (initial turn) and by
@@ -3367,10 +2777,6 @@
               turnPayloads.push(pl);
             } catch (e) {
               console.error('[ai-panel] failed to render payload artifact:', e);
-            }
-            // Refresh sidebar so the file shows up under Ready.
-            if (typeof refreshPayloadsSidebar === 'function') {
-              try { refreshPayloadsSidebar(); } catch (_) {}
             }
             // Resume brain yoga and skip the live-chip path — the file
             // artifact is the visible affordance, not a chip.
@@ -7295,14 +6701,7 @@
     isOpen: function() { return _open; },
     // Re-render the AG header + notice when the editor's Plan/Build
     // pill flips. Cheap call (just two DOM text writes).
-    refreshPhaseChip: function() { try { refreshModeSpecificUI(); } catch (e) {} },
-    // Payload DSL hooks (C2). injectFixturePayload pushes a synthetic
-    // row into the sidebar for visual testing without a real emit; the
-    // sidebar refresh is exposed so other modules (e.g., post-apply
-    // surface listeners) can force a re-pull.
-    injectFixturePayload: function(fixture) { return injectFixturePayload(fixture); },
-    refreshPayloadsSidebar: function() { return refreshPayloadsSidebar(); },
-    refreshRecipesSidebar: function() { return refreshRecipesSidebar(); }
+    refreshPhaseChip: function() { try { refreshModeSpecificUI(); } catch (e) {} }
   };
 
   // Sticky-header shim mirroring openEstimateAI() — finds the active job id
