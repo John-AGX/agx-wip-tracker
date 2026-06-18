@@ -7113,7 +7113,7 @@ const PAYLOAD_TOOLS = [
   {
     name: 'escalate_to_86',
     description:
-      'Hand a question that needs DEEP business reasoning to 86 — the lead estimator/analyst (Opus). Use this for estimating, WIP, job-costing, margins, scope analysis, pricing strategy, or any heavy construction judgment beyond a quick lookup. Frame the ask fully: include the resolved entity_type + entity_id(s) and any figures you already pulled. 86 reads + reasons and returns an answer you relay to the user. NOTE: 86 does NOT write during an escalation — if its answer implies a data change, YOU apply it afterward via scribe_write so the user gets the approval card. Do not escalate trivial lookups you can answer yourself.',
+      'Hand a question that needs DEEP business reasoning to 86 — the lead estimator/analyst (Opus). Use this for estimating, WIP, job-costing, margins, scope analysis, pricing strategy, or any heavy construction judgment beyond a quick lookup. FOR SPEED: pass entity_type + entity_id (the canonical j-/e-style id you saw in your reads) so the server hands 86 the full CURRENT snapshot directly — 86 then reasons on it instead of re-reading the whole job from scratch (which is slow). Also pass a `briefing` summarizing the specific figures/findings you already pulled. 86 reasons + returns an answer you relay to the user. NOTE: 86 does NOT write during an escalation — if its answer implies a data change, YOU apply it afterward via scribe_write so the user gets the approval card. Do not escalate trivial lookups you can answer yourself.',
     tier: 'auto',
     input_schema: {
       type: 'object',
@@ -7121,7 +7121,19 @@ const PAYLOAD_TOOLS = [
       properties: {
         question: {
           type: 'string',
-          description: 'The fully-framed question/task for 86 — the user\'s ask plus the resolved entity_type + entity_id(s) and any figures you already gathered, so 86 has what it needs to reason.'
+          description: 'The fully-framed question/task for 86 — the user\'s ask in plain terms.'
+        },
+        entity_type: {
+          type: 'string',
+          description: 'The entity 86 should analyze: "job" or "estimate". Setting this lets the server attach that entity\'s full snapshot to the escalation so 86 does not re-read it. Omit only if the question is not about one specific entity.'
+        },
+        entity_id: {
+          type: 'string',
+          description: 'The CANONICAL id of that entity (the j-/e-style row id surfaced in your reads — NOT a job number like "RV2000"). Required whenever entity_type is set.'
+        },
+        briefing: {
+          type: 'string',
+          description: 'A short briefing of the specific figures, findings, and context you already gathered, so 86 starts from your work instead of rediscovering it.'
         }
       }
     }
@@ -11292,7 +11304,47 @@ async function driveEscalateTo86(intent, ctx) {
     return base(tu);
   };
 
-  const events = [{ type: 'user.message', content: [{ type: 'text', text: String(intent.question) }] }];
+  // Build a deterministic context pack so 86 reasons on the data the
+  // Assistant already gathered instead of re-reading the whole job from a
+  // cold sub-session (that re-discovery was the ~7-min escalation tax). For
+  // jobs/estimates we attach the SAME full snapshot the entity-anchored chat
+  // uses; 86 keeps its read toolset as a fallback for anything truly missing.
+  let pack = '';
+  try {
+    const et = intent.entityType && String(intent.entityType).toLowerCase();
+    const eid = intent.entityId && String(intent.entityId);
+    if (et === 'job' && eid) {
+      pack = await buildJobContext(eid, null, 'plan', organization, { slimForRouter: false });
+    } else if (et === 'estimate' && eid) {
+      pack = await buildEstimateContext(eid, false, 'plan', organization);
+    }
+  } catch (e) {
+    // Non-fatal — a bad id (e.g. a jobNumber instead of the row id) just
+    // means no pack; 86 falls back to reading. Log so we can see it.
+    console.warn('[escalate] context-pack build failed (non-fatal — 86 will read):', e && e.message);
+    pack = '';
+  }
+
+  const briefing = (intent.briefing && String(intent.briefing).trim()) || '';
+  const parts = [];
+  if (pack) {
+    parts.push(
+      'You are 86, handling an escalation from the Assistant (your front-line aide).',
+      'The Assistant already pulled the full, CURRENT snapshot below — REASON ON IT; it is authoritative and up to date.',
+      'Only call a read tool if a SPECIFIC figure you need is genuinely missing from the snapshot. Do NOT re-read what is already here. Then give your rigorous analysis as text.',
+      '',
+      '<entity_snapshot>',
+      pack,
+      '</entity_snapshot>'
+    );
+  }
+  if (briefing) {
+    parts.push('', '<assistant_briefing>', briefing, '</assistant_briefing>');
+  }
+  parts.push('', 'Question: ' + String(intent.question));
+  const composed = parts.join('\n');
+
+  const events = [{ type: 'user.message', content: [{ type: 'text', text: composed }] }];
   const result = await driveSubtaskTurn({ anthropic, sessionId, eventsToSend: events, onCustomToolUse });
   if (result && result.error && !result.text) return { ok: false, error: result.error };
   return { ok: true, answer: (result && result.text) || '', usage: (result && result.usage) || null };
@@ -11313,7 +11365,12 @@ async function execEscalateTo86(tu, ctx) {
     } catch (_) {}
   }
   const result = await driveEscalateTo86(
-    { question: String(question) },
+    {
+      question: String(question),
+      entityType: (tu.input && tu.input.entity_type) || null,
+      entityId: (tu.input && tu.input.entity_id) || null,
+      briefing: (tu.input && tu.input.briefing) || null
+    },
     { userId: (ctx && ctx.userId) || null, orgId, parentSession: (ctx && ctx.parentSession) || null, gateUser: (ctx && ctx.gateUser) || null }
   );
   if (!result || !result.ok) {
