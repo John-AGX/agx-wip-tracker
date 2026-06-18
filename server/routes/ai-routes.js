@@ -3432,6 +3432,14 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
   // (memoized-inventing-mountain.md).
   let _consecWriteFails = 0;
   const MAX_CONSEC_WRITE_FAILS = 2;
+  // SSE keepalive. While a long custom tool runs — escalate_to_86 opens an
+  // 86 (Opus) sub-session whose multi-read turn can take minutes — NO bytes
+  // flow to the client, so the proxy idles the socket out (~100s) and the
+  // client's fetch body stream errors with "network error" mid-turn. A
+  // comment-line heartbeat every 15s keeps the connection warm. SSE comments
+  // (lines starting ':') are ignored by the client parser. Cleared on end.
+  let _hb = null;
+  function clearHeartbeat() { if (_hb) { clearInterval(_hb); _hb = null; } }
   function send(payload) {
     if (_ended || res.writableEnded) return;
     try {
@@ -3455,6 +3463,7 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
       // socket dangling.
       if (_consecWriteFails >= MAX_CONSEC_WRITE_FAILS && !_ended) {
         _ended = true;
+        clearHeartbeat();
         try {
           console.warn('[v2-stream] hard-end after',
             _consecWriteFails, 'consecutive write failures',
@@ -3465,11 +3474,20 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
     }
   }
   function endWithDone() {
-    if (_ended || res.writableEnded) return;
+    if (_ended || res.writableEnded) { clearHeartbeat(); return; }
     _ended = true;
+    clearHeartbeat();
     try { res.write('data: [DONE]\n\n'); } catch (e) {}
     try { res.end(); } catch (e) {}
   }
+  // Start the keepalive now that send/end helpers exist. unref so it never
+  // holds the process open on its own.
+  _hb = setInterval(() => {
+    if (_ended || res.writableEnded) { clearHeartbeat(); return; }
+    try { res.write(': hb\n\n'); } catch (_) {}
+  }, 15000);
+  if (_hb && _hb.unref) _hb.unref();
+  try { res.on('close', clearHeartbeat); } catch (_) {}
 
   // ── Code-execution output harvester ──────────────────────────────
   // When 86 runs code_execution (e.g., `python` writing
