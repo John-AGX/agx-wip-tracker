@@ -1841,7 +1841,7 @@ router.post('/conversations/:key/replay', requireAuth, requireCapability('ROLES_
     // Effort gating mirrors the production agent: only attach when the
     // model supports it and an effort value is set.
     const effortClause = effortOverride
-      ? (new Set(['claude-opus-4-5','claude-opus-4-6','claude-opus-4-7','claude-sonnet-4-6']).has(model)
+      ? (new Set(['claude-opus-4-8','claude-opus-4-5','claude-opus-4-6','claude-opus-4-7','claude-sonnet-4-6']).has(model)
           ? { effort: effortOverride } : null)
       : null;
 

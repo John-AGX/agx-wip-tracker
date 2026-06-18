@@ -6676,12 +6676,12 @@
     var modelChoice = prompt(
       'Replay this conversation with which model?\n\n' +
       'Available:\n' +
-      '  claude-opus-4-7   (most capable, $5/$25 per 1M)\n' +
+      '  claude-opus-4-8   (production default — most capable)\n' +
       '  claude-opus-4-6\n' +
-      '  claude-sonnet-4-6 (default)\n' +
+      '  claude-sonnet-4-6\n' +
       '  claude-haiku-4-5  (cheapest)\n\n' +
       'Leave blank to use the env default.',
-      'claude-opus-4-7'
+      'claude-opus-4-8'
     );
     if (modelChoice === null) return;
     var effortChoice = prompt('Thinking effort? (low / medium / high / xhigh / max — Opus 4.7 + Sonnet 4.6 only). Leave blank for none.', 'xhigh');
