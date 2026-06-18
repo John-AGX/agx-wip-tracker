@@ -11309,6 +11309,15 @@ async function execEscalateTo86(tu, ctx) {
   return { tier: 'auto', summary: result.answer || '(86 returned no answer)' };
 }
 
+// Debug ring buffer for sub-turn forensics (escalate_to_86 / watches).
+// Last ~80 per-turn records, readable at GET /api/ai/subtask-debug. Temporary
+// instrumentation to diagnose why escalations churn to the turn cap.
+const SUBTASK_DEBUG = [];
+function pushSubtaskDebug(rec) {
+  try { SUBTASK_DEBUG.push(rec); if (SUBTASK_DEBUG.length > 80) SUBTASK_DEBUG.shift(); }
+  catch (_) {}
+}
+
 async function driveSubtaskTurn({ anthropic, sessionId, eventsToSend, onCustomToolUse }) {
   let collectedText = '';
   const aggUsage = {
@@ -11352,6 +11361,7 @@ async function driveSubtaskTurn({ anthropic, sessionId, eventsToSend, onCustomTo
 
     const pendingResults = [];
     let turnText = '';
+    let turnToolNames = [];
     let idleSeen = false;
     // Captured from session.status_idle's stop_reason.event_ids — the
     // CANONICAL ids the session expects on user.custom_tool_result.
@@ -11379,6 +11389,7 @@ async function driveSubtaskTurn({ anthropic, sessionId, eventsToSend, onCustomTo
               name: event.tool_name || event.name || 'unknown',
               input: event.input || {}
             };
+            turnToolNames.push(tu.name);
             let decision;
             try { decision = await onCustomToolUse(tu); }
             catch (e) { decision = { tier: 'auto', error: 'Tool exec threw: ' + (e.message || 'unknown') }; }
@@ -11424,6 +11435,17 @@ async function driveSubtaskTurn({ anthropic, sessionId, eventsToSend, onCustomTo
     }
 
     collectedText += turnText;
+
+    pushSubtaskDebug({
+      sid: sessionId,
+      turn: turnCount,
+      tools: turnToolNames.slice(),
+      toolN: turnToolNames.length,
+      turnTextLen: turnText.length,
+      stop: lastIdleStopReason,
+      blockedIds: blockedEventIds.length,
+      ts: Date.now()
+    });
 
     // Token-budget fail-stop. Prevents a runaway tool loop from
     // burning unbounded spend if the model misbehaves.
@@ -12430,6 +12452,16 @@ function renderPageContextBlock(ctx) {
 
 // Phase 3 subtask polling endpoint removed — fan-out is retired.
 router.get('/subtasks', requireAuth, (req, res) => res.json({ subtasks: [], retired: true }));
+
+// Temporary sub-turn forensics — per-turn records from driveSubtaskTurn
+// (escalate_to_86 / watches). System-admin only. Remove once escalation
+// latency is diagnosed + fixed.
+router.get('/subtask-debug', requireAuth, (req, res) => {
+  if (!req.user || req.user.role !== 'system_admin') {
+    return res.status(403).json({ error: 'system_admin only' });
+  }
+  res.json({ count: SUBTASK_DEBUG.length, entries: SUBTASK_DEBUG.slice(-60) });
+});
 
 router.get('/86/messages', requireAuth, async (req, res) => {
   try {
