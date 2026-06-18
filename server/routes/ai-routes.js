@@ -10891,6 +10891,15 @@ function make86OnCustomToolUse(userId, parentSession, turnContextText, gateUser)
   // tool result from billing twice as cache_creation on the model's
   // next read of the conversation.
   const dedupeCache = new Map();
+  // Per-request read capture. The Assistant typically reads the relevant
+  // entity (search_entities / read_entity / …) right before it calls
+  // escalate_to_86 — but Haiku does NOT reliably populate the tool's
+  // entity_type/entity_id/briefing params, so the escalation would build no
+  // context pack and 86 would re-read the whole job from a cold session (the
+  // ~7-min tax). We accumulate {name,input,summary} for every auto-tier read
+  // this turn and hand it to execEscalateTo86 as a fallback briefing + entity
+  // source, so the speed-up does not depend on Haiku filling in params.
+  const readLog = [];
   function dedupeKey(name, input) {
     // Stable-stringify by sorting keys so {a:1,b:2} and {b:2,a:1}
     // hash identically. JSON.stringify with default order isn't
@@ -10978,7 +10987,7 @@ function make86OnCustomToolUse(userId, parentSession, turnContextText, gateUser)
     // at the host level so the approval card renders to the user). Only the
     // Assistant has this tool — 86's own allowlist omits it, so no recursion.
     if (tu.name === 'escalate_to_86') {
-      return await execEscalateTo86(tu, { userId, parentSession, orgId: ctx.orgId, gateUser: capUser });
+      return await execEscalateTo86(tu, { userId, parentSession, orgId: ctx.orgId, gateUser: capUser, readLog });
     }
     // Auto-tier: any tool in ALLOWED_AUTO_TIER_TOOLS executes inline
     // and returns its summary to the model. Mirrors the /exec-tool
@@ -11045,6 +11054,11 @@ function make86OnCustomToolUse(userId, parentSession, turnContextText, gateUser)
         }
         const summary = result;
         dedupeCache.set(k, summary);
+        // Capture for the escalation fallback briefing (see readLog above).
+        try {
+          readLog.push({ name, input, summary: typeof summary === 'string' ? summary.slice(0, 4000) : '' });
+          if (readLog.length > 24) readLog.shift();
+        } catch (_) {}
         return { tier: 'auto', summary };
       } catch (e) {
         return { tier: 'auto', error: 'Error: ' + (e.message || 'failed') };
@@ -11317,9 +11331,28 @@ async function driveEscalateTo86(intent, ctx) {
   // cold sub-session (that re-discovery was the ~7-min escalation tax). For
   // jobs/estimates we attach the SAME full snapshot the entity-anchored chat
   // uses; 86 keeps its read toolset as a fallback for anything truly missing.
+  // Resolve the target entity + briefing. Haiku frequently OMITS the
+  // entity_type/entity_id/briefing params even though it just read the data,
+  // so fall back to the Assistant's reads this turn (intent.readLog) — the
+  // robust fix that doesn't depend on the model populating params.
+  const readLog = Array.isArray(intent.readLog) ? intent.readLog : [];
+  let et = (intent.entityType && String(intent.entityType).toLowerCase()) || null;
+  let eid = (intent.entityId && String(intent.entityId)) || null;
+  if ((!et || !eid) && readLog.length) {
+    // Most-recent read of a job/estimate wins.
+    for (let i = readLog.length - 1; i >= 0; i--) {
+      const inp = (readLog[i] && readLog[i].input) || {};
+      const t = String(inp.entity_type || inp.type || '').toLowerCase();
+      const id = inp.id || inp.entity_id || inp.job_id || inp.estimate_id;
+      if ((t === 'job' || t === 'estimate') && id) {
+        if (!et) et = t;
+        if (!eid) eid = String(id);
+        break;
+      }
+    }
+  }
+
   let pack = '';
-  const et = intent.entityType && String(intent.entityType).toLowerCase();
-  const eid = intent.entityId && String(intent.entityId);
   let eidResolved = eid;
   try {
     if (et === 'job' && eid) {
@@ -11346,16 +11379,26 @@ async function driveEscalateTo86(intent, ctx) {
     console.warn('[escalate] context-pack build failed (non-fatal — 86 will read):', e && e.message);
     pack = '';
   }
+
+  // Briefing: Haiku's if it provided one, else synthesize from the reads it
+  // ran this turn so 86 still gets the gathered data even with no pack.
+  let briefing = (intent.briefing && String(intent.briefing).trim()) || '';
+  if (!briefing && readLog.length) {
+    briefing = readLog
+      .map(r => '• ' + (r && r.name || 'read') + ':\n' + ((r && r.summary) || ''))
+      .join('\n\n')
+      .slice(0, 12000);
+  }
+
   pushEscalateDebug({
     entityType: et || null,
-    entityIdIn: eid || null,
+    entityIdIn: (intent.entityId || null),
     entityIdResolved: eidResolved || null,
     packLen: pack ? pack.length : 0,
-    briefingLen: intent.briefing ? String(intent.briefing).length : 0,
+    briefingLen: briefing ? briefing.length : 0,
+    readLogLen: readLog.length,
     ts: Date.now()
   });
-
-  const briefing = (intent.briefing && String(intent.briefing).trim()) || '';
   const parts = [];
   if (pack) {
     parts.push(
@@ -11399,7 +11442,8 @@ async function execEscalateTo86(tu, ctx) {
       question: String(question),
       entityType: (tu.input && tu.input.entity_type) || null,
       entityId: (tu.input && tu.input.entity_id) || null,
-      briefing: (tu.input && tu.input.briefing) || null
+      briefing: (tu.input && tu.input.briefing) || null,
+      readLog: (ctx && ctx.readLog) || null
     },
     { userId: (ctx && ctx.userId) || null, orgId, parentSession: (ctx && ctx.parentSession) || null, gateUser: (ctx && ctx.gateUser) || null }
   );
