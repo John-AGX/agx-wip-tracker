@@ -11253,6 +11253,14 @@ async function execScribeWrite(tu, ctx) {
   return { tier: 'auto', summary: summaryForModel, meta };
 }
 
+// Escalation forensics — what the Assistant passed + whether the context pack
+// built. Readable at GET /api/ai/subtask-debug (escalations field). Temporary.
+const ESCALATE_DEBUG = [];
+function pushEscalateDebug(rec) {
+  try { ESCALATE_DEBUG.push(rec); if (ESCALATE_DEBUG.length > 40) ESCALATE_DEBUG.shift(); }
+  catch (_) {}
+}
+
 // driveEscalateTo86 — the Assistant → 86 handoff (mirror of driveScribeWrite).
 // Opens an ephemeral 86 (Opus) sub-session, runs 86 with its REAL dispatcher
 // (full reads + memory) but BLOCKS writes (scribe_write / re-escalation) so the
@@ -11310,20 +11318,42 @@ async function driveEscalateTo86(intent, ctx) {
   // jobs/estimates we attach the SAME full snapshot the entity-anchored chat
   // uses; 86 keeps its read toolset as a fallback for anything truly missing.
   let pack = '';
+  const et = intent.entityType && String(intent.entityType).toLowerCase();
+  const eid = intent.entityId && String(intent.entityId);
+  let eidResolved = eid;
   try {
-    const et = intent.entityType && String(intent.entityType).toLowerCase();
-    const eid = intent.entityId && String(intent.entityId);
     if (et === 'job' && eid) {
-      pack = await buildJobContext(eid, null, 'plan', organization, { slimForRouter: false });
+      // The Assistant often references jobs by NUMBER ("RV2000") rather than
+      // the canonical row id ("j1"). Resolve either to the row id (org-scoped)
+      // so the snapshot actually builds instead of silently falling back to
+      // 86 re-reading the whole job (the latency we're trying to kill).
+      try {
+        const jr = await pool.query(
+          `SELECT j.id FROM jobs j JOIN users u ON u.id = j.owner_id
+             WHERE (j.id = $1 OR j.data->>'jobNumber' = $1)
+               AND (u.organization_id = $2 OR u.organization_id IS NULL)
+             LIMIT 1`,
+          [eid, organization.id]
+        );
+        if (jr.rows.length) eidResolved = jr.rows[0].id;
+      } catch (_) { /* fall back to the raw id */ }
+      pack = await buildJobContext(eidResolved, null, 'plan', organization, { slimForRouter: false });
     } else if (et === 'estimate' && eid) {
       pack = await buildEstimateContext(eid, false, 'plan', organization);
     }
   } catch (e) {
-    // Non-fatal — a bad id (e.g. a jobNumber instead of the row id) just
-    // means no pack; 86 falls back to reading. Log so we can see it.
+    // Non-fatal — a bad id just means no pack; 86 falls back to reading.
     console.warn('[escalate] context-pack build failed (non-fatal — 86 will read):', e && e.message);
     pack = '';
   }
+  pushEscalateDebug({
+    entityType: et || null,
+    entityIdIn: eid || null,
+    entityIdResolved: eidResolved || null,
+    packLen: pack ? pack.length : 0,
+    briefingLen: intent.briefing ? String(intent.briefing).length : 0,
+    ts: Date.now()
+  });
 
   const briefing = (intent.briefing && String(intent.briefing).trim()) || '';
   const parts = [];
@@ -12530,7 +12560,11 @@ router.get('/subtask-debug', requireAuth, (req, res) => {
   if (!req.user || req.user.role !== 'system_admin') {
     return res.status(403).json({ error: 'system_admin only' });
   }
-  res.json({ count: SUBTASK_DEBUG.length, entries: SUBTASK_DEBUG.slice(-60) });
+  res.json({
+    count: SUBTASK_DEBUG.length,
+    entries: SUBTASK_DEBUG.slice(-60),
+    escalations: ESCALATE_DEBUG.slice(-20)
+  });
 });
 
 router.get('/86/messages', requireAuth, async (req, res) => {
