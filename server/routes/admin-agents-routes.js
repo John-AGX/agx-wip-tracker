@@ -1037,6 +1037,11 @@ router.post('/skills/:idx/unsync-from-anthropic', requireAuth, requireCapability
 //     86-scheduler    → p86-scheduler-dispatch-playbook
 //     86-sales        → p86-sales-intake-playbook
 router.post('/p86/install-skills', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  // RETIRED 2026-06-18 — the standing staff/watcher agents were archived
+  // (live arch is the 3-tier assistant→86→scribe). No-op so an accidental
+  // call can't re-provision skills onto archived staff keys.
+  return res.status(410).json({ error: 'Staff-agent skill install is retired — the standing staff/watcher agents were archived.' });
+  /* eslint-disable no-unreachable */
   try {
     const anthropic = getAnthropic();
     if (!anthropic) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not set on this deployment.' });
@@ -1142,6 +1147,11 @@ router.post('/p86/install-skills', requireAuth, requireCapability('ROLES_MANAGE'
 //   existing ai_watches table doesn't have that index; we dedup
 //   manually here by SELECT-then-INSERT.)
 router.post('/p86/install-watchers', requireAuth, requireCapability('ROLES_MANAGE'), require('../auth').requireOrg, async (req, res) => {
+  // RETIRED 2026-06-18 — the staff/watcher agents were archived. This used to
+  // arm 5 kind='agent' watches that drove recurring Opus sessions; no-op now so
+  // an accidental call can't recreate the billable trigger surface.
+  return res.status(410).json({ error: 'Staff-agent watchers are retired — the standing staff/watcher agents were archived.' });
+  /* eslint-disable no-unreachable */
   try {
     const orgId = req.organization.id;
     const userId = req.user.id;
@@ -2770,63 +2780,15 @@ async function ensureManagedAgent(agentKey, organization) {
 // here makes the agent available org-wide; the seed helper below
 // upserts the spec into the DB and triggers ensureManagedAgent to
 // register the Anthropic-side agent.
-const STANDING_STAFF_SPECS = [
-  {
-    agent_key: '86-estimator',
-    display_name: '86 · Estimator',
-    tier: 2,
-    role_card: 'Senior estimator. Owns line items, sections, groups, scope text, pricing benchmarks, and BT-export prep. Receives requests from the Principal via handoff and returns proposed estimate changes for user approval.',
-    tool_keys: [], // populated from customToolsFor at register time
-    routing_hints: {
-      surfaces: ['estimate'],
-      trigger_phrases: ['add line', 'add scope', 'price this', 'bid', 'estimate', 'subgroup', 'line item']
-    }
-  },
-  {
-    agent_key: '86-pm',
-    display_name: '86 · PM',
-    tier: 2,
-    role_card: 'Project manager. Owns WIP audits, phase pct-complete, CO/PO/invoice review, QB cost reconciliation, margin drift, billing gaps, node graph integrity. Reads deeply; recommends in text; Principal fires approval cards.',
-    tool_keys: [],
-    routing_hints: {
-      surfaces: ['job'],
-      trigger_phrases: ['wip', 'change order', 'CO', 'invoice', 'PO', 'margin', 'phase pct', 'audit this job', 'billing gap']
-    }
-  },
-  {
-    agent_key: '86-scheduler',
-    display_name: '86 · Scheduler',
-    tier: 2,
-    role_card: 'Production scheduler. Owns crew dispatch, job sequencing, weather windows, sub availability, calendar coordination. Reasoning-driven; recommends sequences in text; Principal communicates to user.',
-    tool_keys: [],
-    routing_hints: {
-      surfaces: ['job', 'schedule'],
-      trigger_phrases: ['schedule', 'dispatch', 'sequence', 'when can we', 'crew', 'next week', 'availability']
-    }
-  },
-  {
-    agent_key: '86-directory',
-    display_name: '86 · Directory',
-    tier: 2,
-    role_card: 'Office manager / directory steward. Owns client/property hierarchy, addresses, dedupe, business-card capture, durable client notes. Applies safe tier:auto edits inline; describes judgment-heavy changes (merge/split/delete) for Principal to surface as cards.',
-    tool_keys: [],
-    routing_hints: {
-      surfaces: ['client', 'directory'],
-      trigger_phrases: ['client', 'property', 'parent company', 'address', 'merge', 'split', 'rename', 'business card', 'directory']
-    }
-  },
-  {
-    agent_key: '86-sales',
-    display_name: '86 · Sales',
-    tier: 2,
-    role_card: 'Sales / intake specialist. Owns lead capture, dedup against existing client+lead set, pipeline health, salesperson assignment. Recommends lead structure; Principal fires propose_create_lead based on the recommendation.',
-    tool_keys: [],
-    routing_hints: {
-      surfaces: ['intake', 'leads'],
-      trigger_phrases: ['lead', 'intake', 'new client', 'pipeline', 'salesperson', 'capture', 'dedup']
-    }
-  }
-];
+// ARCHIVED 2026-06-18: the 5 standing staff/watcher agents (86-estimator/pm/
+// scheduler/directory/sales) were retired and archived. The sync-handoff path
+// that invoked them was already a stub; the live architecture is the 3-tier
+// assistant → job(86) → scribe. Emptied (not deleted) so every consumer
+// (liveStaffKeys in reregister/sync/audit, seedStandingStaffAgents, sync-all
+// staff inclusion) resolves to "no staff" and cannot re-register them. The
+// per-spec data lives in git history if the proactive-watcher feature is ever
+// revived. See the agent-audit report.
+const STANDING_STAFF_SPECS = [];
 
 // Seed the standing-staff spec rows for this org and register their
 // Anthropic-side agents via ensureManagedAgent. Router mode is the
@@ -2886,6 +2848,10 @@ async function seedStandingStaffAgents(organization) {
 //   Use after first deploy (or after adding a new spec) so the
 //   staff_agents table reflects the canonical roster.
 router.post('/staff/seed', requireAuth, requireCapability('ROLES_MANAGE'), require('../auth').requireOrg, async (req, res) => {
+  // RETIRED 2026-06-18 — STANDING_STAFF_SPECS is now empty (staff agents
+  // archived); seeding is a no-op. Return 410 so the intent is explicit.
+  return res.status(410).json({ error: 'Standing-staff seeding is retired — the staff/watcher agents were archived.' });
+  /* eslint-disable no-unreachable */
   try {
     const seeded = await seedStandingStaffAgents(req.organization);
     res.json({
