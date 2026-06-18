@@ -2868,6 +2868,18 @@ async function ensureAiSession({ agentKey, entityType, entityId, userId, organiz
 // inserts. Sets _freshlyCreated for first-turn detection (skip the
 // stuck-session-recovery retry loop on a brand-new session).
 async function resolveSessionForChat({ sessionId, currentContext, userId, organization }) {
+  // Assistant v1 pilot — the rolling user_thread hosts on the personal
+  // Assistant (Haiku) for SYSTEM ADMINS, else 86. Computed once and used both
+  // to resolve/mint the right host thread AND to avoid pinning a system admin
+  // onto a legacy 86 thread via an explicit sessionId. Everyone else: hostKey
+  // stays 'job', so behavior is identical to before.
+  let hostKey = 'job';
+  if (FLAG_UNIFIED_USER_THREAD && userId) {
+    try {
+      const ur = await pool.query('SELECT role FROM users WHERE id = $1', [userId]);
+      if (ur.rows[0] && ur.rows[0].role === 'system_admin') hostKey = 'assistant';
+    } catch (_) { /* default to 86 */ }
+  }
   if (sessionId) {
     const sid = parseInt(sessionId, 10);
     if (Number.isFinite(sid)) {
@@ -2889,14 +2901,15 @@ async function resolveSessionForChat({ sessionId, currentContext, userId, organi
         //   (a) the flag is off, OR
         //   (b) the picked session IS the user_thread.
         // Otherwise fall through to the user_thread resolver below.
-        if (!FLAG_UNIFIED_USER_THREAD || picked.session_kind === 'user_thread') {
+        if (!FLAG_UNIFIED_USER_THREAD ||
+            (picked.session_kind === 'user_thread' && picked.agent_key === hostKey)) {
           return picked;
         }
         // Log once so we can see the redirect happen in Railway.
         console.log(
-          '[resolve-session] explicit sessionId %d is legacy_partitioned;' +
-          ' redirecting new turn to user_thread (user %d)',
-          picked.id, userId
+          '[resolve-session] explicit sessionId %d (%s/%s) not host thread' +
+          ' for user %d; redirecting new turn to %s user_thread',
+          picked.id, picked.session_kind, picked.agent_key, userId, hostKey
         );
         // fall through
       }
@@ -2914,32 +2927,37 @@ async function resolveSessionForChat({ sessionId, currentContext, userId, organi
   // explicit sessionId (sidebar resume) so historic threads stay
   // accessible.
   if (FLAG_UNIFIED_USER_THREAD) {
+    // Resolve the rolling thread for THIS user's host agent (assistant for
+    // system admins, else 86). Scoping by agent_key means a system admin who
+    // still has a legacy 'job' user_thread gets their own 'assistant' thread
+    // minted rather than being stuck on 86 forever.
     const ut = await pool.query(
       `SELECT * FROM ai_sessions
          WHERE user_id = $1
            AND session_kind = 'user_thread'
+           AND agent_key = $2
            AND archived_at IS NULL
          ORDER BY last_used_at DESC
          LIMIT 1`,
-      [userId]
+      [userId, hostKey]
     );
     if (ut.rows.length) return ut.rows[0];
 
-    // First chat turn since the flag flipped on for this user — mint
-    // the rolling thread. entity_type stays 'general' / entity_id
-    // 'global' on the row so the ai_messages.estimate_id NOT NULL
-    // constraint is satisfied; the per-turn current_context carries
-    // the actual surface to the model via <turn_context>.
+    // No rolling thread on the host agent yet — mint it. entity_type stays
+    // 'general' / entity_id 'global' so the ai_messages.estimate_id NOT NULL
+    // constraint is satisfied; the per-turn current_context carries the
+    // actual surface to the model via <turn_context>.
     const fresh = await createFreshAiSession({
-      agentKey: 'job',
+      agentKey: hostKey,
       entityType: 'general',
       entityId: 'global',
       userId,
       organization,
       sessionKind: 'user_thread'
     });
-    await pool.query(`UPDATE ai_sessions SET label = '86' WHERE id = $1`, [fresh.id]);
-    fresh.label = '86';
+    const lbl = hostKey === 'assistant' ? 'Assistant' : '86';
+    await pool.query(`UPDATE ai_sessions SET label = $2 WHERE id = $1`, [fresh.id, lbl]);
+    fresh.label = lbl;
     fresh._freshlyCreated = true;
     return fresh;
   }
@@ -3027,18 +3045,6 @@ function autoLabelFromContext(entityType, entityId, ctx) {
 
 async function createFreshAiSession({ agentKey, entityType, entityId, userId, organization, sessionKind }) {
   const adminAgents = require('./admin-agents-routes');
-  // Assistant v1 pilot (Slice 4 — reachability). Fresh GENERAL ("Ask 86")
-  // chats host on the personal Assistant (Haiku) for SYSTEM ADMINS only;
-  // everyone else — and every entity-anchored session (estimate/job/etc.) —
-  // stays on 86. Gated tight so the rollout is opt-in by role and the live
-  // 86 chat is untouched for all other users + surfaces. The Assistant
-  // escalates to 86 when it needs the heavy reasoning.
-  if (entityType === 'general' && agentKey === 'job' && userId) {
-    try {
-      const ur = await pool.query('SELECT role FROM users WHERE id = $1', [userId]);
-      if (ur.rows[0] && ur.rows[0].role === 'system_admin') agentKey = 'assistant';
-    } catch (_) { /* fall back to 86 on any lookup error */ }
-  }
   const env = await adminAgents.ensureManagedEnvironment();
   // Per-org Anthropic agent — ensureManagedAgent looks up by
   // (agent_key, organization_id) and creates with org.identity_body
