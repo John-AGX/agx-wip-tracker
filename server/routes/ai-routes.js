@@ -3027,6 +3027,18 @@ function autoLabelFromContext(entityType, entityId, ctx) {
 
 async function createFreshAiSession({ agentKey, entityType, entityId, userId, organization, sessionKind }) {
   const adminAgents = require('./admin-agents-routes');
+  // Assistant v1 pilot (Slice 4 — reachability). Fresh GENERAL ("Ask 86")
+  // chats host on the personal Assistant (Haiku) for SYSTEM ADMINS only;
+  // everyone else — and every entity-anchored session (estimate/job/etc.) —
+  // stays on 86. Gated tight so the rollout is opt-in by role and the live
+  // 86 chat is untouched for all other users + surfaces. The Assistant
+  // escalates to 86 when it needs the heavy reasoning.
+  if (entityType === 'general' && agentKey === 'job' && userId) {
+    try {
+      const ur = await pool.query('SELECT role FROM users WHERE id = $1', [userId]);
+      if (ur.rows[0] && ur.rows[0].role === 'system_admin') agentKey = 'assistant';
+    } catch (_) { /* fall back to 86 on any lookup error */ }
+  }
   const env = await adminAgents.ensureManagedEnvironment();
   // Per-org Anthropic agent — ensureManagedAgent looks up by
   // (agent_key, organization_id) and creates with org.identity_body
