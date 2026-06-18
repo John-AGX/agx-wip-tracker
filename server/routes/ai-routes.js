@@ -3785,7 +3785,7 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
         vDebug('[v2-stream] sent', eventsForThisOpen.length, 'event(s) to', sessionId,
           '(serial single-event sends, Anthropic acked', totalAcked + ')');
       } catch (e) {
-        if (isStuckSessionError(e) && !freshlyCreated) {
+        if (isStuckSessionError(e)) {
           // In-place recovery FIRST: parse the blocked sevt_* ids out
           // of the error, send user.custom_tool_result events to
           // resolve them, then retry the original send on the SAME
@@ -3794,6 +3794,15 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
           // prior turn — see the "option 1" amnesia bug). Only fall
           // through to the nuclear archive+recreate if in-place
           // recovery itself fails.
+          //
+          // This runs even for freshlyCreated sessions: in-place recovery
+          // is non-destructive and loop-guarded (inPlaceRecoveryAttempted),
+          // so it can't trigger the archive→create→archive loop the
+          // fresh-session guard was added to prevent. Gating the WHOLE
+          // block on !freshlyCreated meant a fresh session that legitimately
+          // stalled a few tool-turns in (e.g. an escalation that ran 3 reads
+          // then idled requires_action) surfaced the raw Anthropic 400
+          // ("waiting on responses to events [sevt_…]") straight to the user.
           if (!inPlaceRecoveryAttempted) {
             const blockedIds = extractStuckEventIds(e);
             if (blockedIds.length) {
@@ -3830,21 +3839,25 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
           }
           // Nuclear fallback: archive + recreate. Loses Anthropic-side
           // history; user has to re-state context if they ask a
-          // follow-up that depended on a prior turn.
-          try {
-            activeSession = await recoverStuckSession({ anthropic, sessionRow: activeSession });
-            sessionId = activeSession.anthropic_session_id;
-            try { await stream.controller.abort(); } catch (_) {}
-            return openStreamAndSend(eventsForThisOpen);
-          } catch (e2) {
-            console.error('Stuck-session recovery failed:', e2);
-            send({ error: 'Could not recover session: ' + (e2.message || 'unknown') });
-            endWithDone();
-            return null;
+          // follow-up that depended on a prior turn. ONLY for non-fresh
+          // sessions — a brand-new session that's STILL stuck after the
+          // in-place attempt would loop archive→create→archive forever, so
+          // we surface the error instead.
+          if (!freshlyCreated) {
+            try {
+              activeSession = await recoverStuckSession({ anthropic, sessionRow: activeSession });
+              sessionId = activeSession.anthropic_session_id;
+              try { await stream.controller.abort(); } catch (_) {}
+              return openStreamAndSend(eventsForThisOpen);
+            } catch (e2) {
+              console.error('Stuck-session recovery failed:', e2);
+              send({ error: 'Could not recover session: ' + (e2.message || 'unknown') });
+              endWithDone();
+              return null;
+            }
+          } else {
+            console.error('[v2-stream] freshly-created session still stuck after in-place recovery — surfacing error:', sessionId);
           }
-        }
-        if (isStuckSessionError(e) && freshlyCreated) {
-          console.error('[v2-stream] freshly-created session reported stuck — refusing to recover (would loop):', sessionId);
         }
         // Stale tool_use_id — the client posted approval for a card
         // whose tool_use event lives in an archived session. Surface
