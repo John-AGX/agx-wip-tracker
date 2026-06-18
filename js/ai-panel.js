@@ -6592,9 +6592,9 @@
       return;
     }
     _stopDictation = window.p86VoiceInput.wire(input, micBtn, {
-      silenceTimeoutMs: 3000     // Chat: tighter pause-detection than
-                                  // the walkthrough's 5s narration
-                                  // tolerance.
+      silenceTimeoutMs: 6000     // Chat: pause tolerance long enough not
+                                  // to cut off mid-sentence while the user
+                                  // is composing a prompt.
     });
   }
 

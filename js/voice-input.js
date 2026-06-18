@@ -25,8 +25,10 @@
 //   2. A concurrent-start guard: a fast double-tap before onstart flips
 //      `listening` can no longer spin up a SECOND recognizer writing
 //      into the same field.
-//   3. The teardown now UNBINDS the click handler, so re-wiring the same
-//      button can never stack a second listener / second recognizer.
+//   3. Re-wiring the same button auto-drops the prior click handler (via
+//      micBtnEl._p86VoiceUnbind) so listeners can't stack into multiple
+//      recognizers. The returned teardown only STOPS dictation and leaves
+//      the button usable — callers fire it on every send.
 //   4. Always-on capture: every emission is recorded to a ring buffer
 //      (window.p86VoiceLog(), mirrored to localStorage 'p86VoiceLog').
 //      If doubling ever recurs, the exact engine emission is on record —
@@ -187,20 +189,31 @@
       }
     }
 
+    // Re-wire guard: if this button was wired before (e.g. a panel rebuilt
+    // in place), drop the prior click handler BEFORE adding a fresh one so
+    // listeners can't stack into multiple recognizers. Done here — NOT in
+    // the returned teardown — because callers fire the teardown on every
+    // send to stop dictation, and the button must stay usable afterward.
+    if (typeof micBtnEl._p86VoiceUnbind === 'function') {
+      try { micBtnEl._p86VoiceUnbind(); } catch (_) {}
+    }
     function onMicClick(e) {
       e.preventDefault();
       if (listening || starting) stop();
       else start();
     }
     micBtnEl.addEventListener('click', onMicClick);
-
-    // Teardown: stop dictation AND unbind the click handler so a re-wire
-    // of the same button can never stack a second listener/recognizer.
-    // Idempotent — safe to call multiple times.
-    return function teardown() {
-      stop();
+    micBtnEl._p86VoiceUnbind = function () {
       try { micBtnEl.removeEventListener('click', onMicClick); } catch (_) {}
+      micBtnEl._p86VoiceUnbind = null;
     };
+
+    // The returned teardown STOPS dictation but leaves the click handler
+    // bound — the chat composer calls it on every send and the mic must
+    // keep working after. (Regression fix: it previously also unbound the
+    // handler, which left the button dead after the first send.) To fully
+    // unbind a button whose host is going away, call micBtnEl._p86VoiceUnbind().
+    return stop;
   }
 
   window.p86VoiceInput = { isSupported: isSupported, wire: wire };

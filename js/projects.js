@@ -96,7 +96,8 @@
       return function () {};
     }
     return window.p86VoiceInput.wire(textareaEl, micBtnEl, {
-      silenceTimeoutMs: 5000   // 5s for walkthrough narration (vs 3s for chat)
+      silenceTimeoutMs: 7000   // 7s for walkthrough narration — longer pauses
+                               // between describing things; avoids mid-thought cutoff
     });
   }
 
