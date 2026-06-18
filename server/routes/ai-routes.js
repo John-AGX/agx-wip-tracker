@@ -2580,7 +2580,7 @@ function wrapUserData(source, text) {
 // hints rather than crashing.)
 const STAFF_HINT_BY_SURFACE = {};
 
-async function buildTurnContext({ entityType, entityId, clientContext, aiPhase, userId, organization, activeStaffHint }) {
+async function buildTurnContext({ entityType, entityId, clientContext, aiPhase, userId, organization }) {
   let turnContextText = '';
   let photoBlocks = [];
   if (entityType === 'estimate' && entityId) {
@@ -2622,10 +2622,6 @@ async function buildTurnContext({ entityType, entityId, clientContext, aiPhase, 
       ? turnContextText + '\n\n' + availableBlock
       : availableBlock;
   }
-  // Phase S4 staff-hint resolution retired. Sync handoffs are gone;
-  // the activeStaffHint argument is accepted for back-compat with
-  // legacy callers but no routing block is emitted from it.
-  void activeStaffHint;
 
   // C13 — forward-momentum apply events.
   //
@@ -3792,11 +3788,9 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
     }
 
     if (Array.isArray(eventsForThisOpen) && eventsForThisOpen.length) {
-      // Anthropic's events.send endpoint caps at 50 events per call.
-      // Auto-tier batches (86 running update_client_field across an
-      // entire client directory, etc.) routinely exceed that — chunk
-      // sequentially. The session processes chunks in order, so
-      // tool_result ordering is preserved.
+      // Events are serialized one-at-a-time (EVENTS_PER_SEND=1); the
+      // session processes them in order, so tool_result ordering is
+      // preserved.
       //
       // EVENTS_PER_SEND=1: observed bug — when events.send is called
       // with a body { events: [N items] } where N>1 and ALL items
@@ -4682,14 +4676,9 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
   // 'plan' so 86 starts as an analyst until the PM grants write access
   // via the phase pill or the request_edit_mode tool.
   aiPhase = (aiPhase === 'plan') ? 'plan' : 'edit';
-  // Slim-vs-full toggle. Default = slim (router-mode for the Principal).
-  // When execHandoffToStaff invokes us to build context for the 86-pm
-  // sub-session, it passes opts.slimForRouter=false so the staff sees
-  // the FULL WIP snapshot + structure + node graph + QB cost data.
-  // Without that, the staff received the Principal's slim banner
-  // ("JUST HANDOFF") meant for the Principal — confusing prose that
-  // told the staff to do something it can't do, producing empty
-  // responses.
+  // Slim-vs-full toggle. Default = slim. Callers that need the FULL WIP
+  // snapshot + structure + node graph + QB cost data pass opts.slimForRouter
+  // = false (e.g. the escalation context-pack via escalationLean below).
   const slimForRouter = !(opts && opts.slimForRouter === false);
   // escalationLean (escalate_to_86): build the WIP headline + a COMPACT
   // per-building rollup + a manifest of what's pullable, then return early —
@@ -6858,43 +6847,6 @@ const WATCH_TOOLS = [
     }
   }
 ];
-
-// ────────────────────────────────────────────────────────────────────
-// P86 Crew Agent Platform — Phase S2.3
-// Handoff tools — the Principal (86) delegates a chunk of work to a
-// standing-staff specialist (Estimator first, more in S3). The staff
-// agent runs in an isolated sub-session, returns text + structured
-// proposals, and the Principal composes them into the user-facing
-// conversation. From the user's POV identity is still "86".
-// ────────────────────────────────────────────────────────────────────
-// C17 — HANDOFF_TOOLS array literal deleted. Sync handoffs were
-// retired in C7; the exporter handoffTools() returns [] and nothing
-// else in the codebase references this array. The five tool
-// definitions (handoff_to_estimator/pm/scheduler/directory/sales +
-// handoff_to_dynamic_staff) live in git history at commit 14ccb73
-// if anyone needs the schemas back.
-//
-// What's intentionally KEPT (still callable, but unreachable on
-// freshly-registered Principal agents):
-//   - STAFF_AGENT_KEY_BY_HANDOFF map — still referenced by
-//     make86OnCustomToolUse for cached agents that might fire
-//     stale handoff_to_* tools before they get re-registered.
-//   - execHandoffToStaff function — stubbed in C7 to return a
-//     retirement message so stale-cached fires self-correct
-//     instead of crashing.
-// Both will go away in a follow-up once production confirms no
-// cached agent is firing handoff_to_* anymore (check via
-// /api/admin/agents/managed/audit for non-zero tool_count on
-// handoff_to_* across all 'job' rows after sync-all).
-
-// HANDOFF_TOOLS export removed from the internals exporter; this
-// const stays as an empty back-compat shim only because some admin
-// tooling outside this repo may dereference module.exports.internals
-// for the array shape. New callers should use payloadTools() instead.
-const HANDOFF_TOOLS = [];
-
-// (~85 lines of original handoff_to_* tool schemas deleted here.
-//  See git@14ccb73 for the pre-cleanup definitions if needed.)
 
 // ──────────────────────────────────────────────────────────────────
 // PAYLOAD_TOOLS — Project 86 Payload DSL (v1).
@@ -9654,15 +9606,12 @@ async function execStaffApprovalTool(name, input, ctx) {
         throw new Error('Could not register Anthropic agent: ' + (e.message || 'unknown'));
       }
 
-      // The Principal reaches Tier 3 agents via the generic
-      // `handoff_to_dynamic_staff({ agent_key, request, context })`
-      // tool — same flow as the dedicated handoffs, just with the
-      // target resolved at call time from staff_agents. No Principal
-      // re-sync needed; the new agent is reachable immediately.
+      // The new staff agent is registered against Anthropic and its
+      // spec row persisted; it runs as an async background watcher and
+      // emits its findings as payloads into the user's sidebar queue.
+      // No Principal re-sync needed.
       return 'Spawned staff agent "' + input.display_name + '" (agent_key=' +
-        input.agent_key + ', inherits ' + input.inherits_from + ' tool set). ' +
-        'Reachable now via `handoff_to_dynamic_staff({ agent_key: "' + input.agent_key +
-        '", request: "..." })`.';
+        input.agent_key + ', inherits ' + input.inherits_from + ' tool set).';
     }
     default:
       throw new Error('Unknown approval-tier staff tool: ' + name);
@@ -10622,73 +10571,6 @@ async function execWatchTool(name, input, ctx) {
   throw new Error('Unknown watch read tool: ' + name);
 }
 
-// ────────────────────────────────────────────────────────────────────
-// P86 Crew Agent Platform — Phase S2.3
-// Map handoff_to_<staff> tool names to their staff_agents.agent_key.
-// Add a new entry when a new standing staff agent ships.
-// ────────────────────────────────────────────────────────────────────
-const STAFF_AGENT_KEY_BY_HANDOFF = new Map([
-  ['handoff_to_estimator', '86-estimator'],
-  ['handoff_to_pm',        '86-pm'],
-  ['handoff_to_scheduler', '86-scheduler'],
-  ['handoff_to_directory', '86-directory'],
-  ['handoff_to_sales',     '86-sales']
-]);
-
-// execHandoffToStaff — Principal calls this when the model emits a
-// `handoff_to_<staff>` tool. We open a fresh sub-session against the
-// staff agent for THIS org, send the request as a user.message,
-// drain the stream until idle, collect the staff's text, archive the
-// sub-session, and return text to the Principal as the tool_result.
-//
-// The staff agent runs inside its own session — its tool calls fire
-// against the SAME make86 dispatcher (we reuse make86OnCustomToolUse
-// with a scope guard to prevent recursive handoff loops). Approval-
-// tier writes inside the staff session bubble back to the Principal
-// as text in the form "I would propose X" instead of surfacing as
-// approval cards directly — Phase S2 keeps approvals on the
-// Principal's session so the user sees one card stream.
-//
-// ctx = { userId, principalSessionId } — userId resolves the org;
-// principalSessionId is captured for the staff session title.
-async function execHandoffToStaff(toolName, input, ctx) {
-  // C7 — sync handoff machinery RETIRED.
-  //
-  // The Payload DSL eliminated the need for sync staff handoffs:
-  //   - Writes are unified into emit_payload_file on the Principal.
-  //   - Staff agents survive as async background watchers (see C10:
-  //     agent-watch-runner) that emit their findings as payloads
-  //     into the user's sidebar queue.
-  //   - Domain reasoning that used to require a handoff now happens
-  //     in the Principal session, with the relevant playbook Skill
-  //     loaded on demand (server-side cached, not per-turn cost).
-  //
-  // This function would normally fire a sub-session against a staff
-  // agent. The Principal's tool surface no longer includes any
-  // handoff_to_* tools (see admin-agents-routes customToolsFor), so
-  // this code path should never be reached on a re-registered agent.
-  // If an Anthropic-side agent registered BEFORE the C7 cutover
-  // still has handoff tools cached and the model fires one, we
-  // return a clear retirement message so the model self-corrects.
-  //
-  // Full body deletion (and removal of driveSubtaskTurn + staffCallback
-  // + marker bubbling + stall recovery + ID remap) lands in C17 once
-  // the new architecture has been exercised in production for a few
-  // days without regressions.
-  // C17 cleanup — full body deletion of the retired sync-handoff
-  // sub-session machinery (~140 lines: context build, session open,
-  // staffCallback, driveSubtaskTurn invocation, archive). Original
-  // body preserved at commit 1faff1a. The shim above returns the
-  // retirement message; any model that fires a stale handoff_to_*
-  // tool self-corrects and emits emit_payload_file instead.
-  void toolName; void input; void ctx;
-  console.warn('[handoffs] retired execHandoffToStaff invoked — agent registration likely stale; re-register via /managed/reregister.');
-  return (
-    'Sync handoffs to staff agents are retired. To make changes, emit a ' +
-    'payload file via emit_payload_file instead.'
-  );
-}
-
 // ──────────────────────────────────────────────────────────────────
 // execEmitPayloadFile — handle the Principal's emit_payload_file tool
 // inline. Validates ops against PAYLOAD_OPS_SCHEMAS, generates a
@@ -11088,8 +10970,7 @@ function make86OnCustomToolUse(userId, parentSession, turnContextText, gateUser)
     // read_materials / etc. on the unified /86 chat path were all
     // returning {tier:'approval'} — never executing — and the model
     // saw no result, concluding "no match" on real searches.
-    const isHandoff = STAFF_AGENT_KEY_BY_HANDOFF.has(tu.name) || tu.name === 'handoff_to_dynamic_staff';
-    if (ALLOWED_AUTO_TIER_TOOLS.has(tu.name) || isHandoff) {
+    if (ALLOWED_AUTO_TIER_TOOLS.has(tu.name)) {
       const name = tu.name;
       const input = tu.input || {};
       const k = dedupeKey(name, input);
@@ -11102,18 +10983,7 @@ function make86OnCustomToolUse(userId, parentSession, turnContextText, gateUser)
       }
       try {
         let result;
-        if (STAFF_AGENT_KEY_BY_HANDOFF.has(name) || name === 'handoff_to_dynamic_staff') {
-          // P86 Crew handoff — delegate to a staff agent in a sub-session
-          // and return its prose response to the Principal. Thread
-          // parentSession + turnContextText through so the staff sees
-          // the SAME entity context + WIP/estimate/directory snapshot
-          // the Principal saw this turn. Without turnContextText the
-          // staff would have to re-fetch the snapshot via its own
-          // tools — wasteful when the Principal already has it cached.
-          // handoff_to_dynamic_staff resolves the target agent_key
-          // from input at call time (Tier 3 spawned agents).
-          result = await execHandoffToStaff(name, input, { userId, parentSession, turnContextText });
-        } else if (INTAKE_EXECUTOR_TOOLS.has(name)) {
+        if (INTAKE_EXECUTOR_TOOLS.has(name)) {
           result = await execIntakeRead(name, input);
         } else if (FIELD_TOOLS_EXECUTOR_TOOLS.has(name)) {
           result = await execFieldToolRead(name, input);
@@ -11357,14 +11227,6 @@ async function execScribeWrite(tu, ctx) {
   return { tier: 'auto', summary: summaryForModel, meta };
 }
 
-// Escalation forensics — what the Assistant passed + whether the context pack
-// built. Readable at GET /api/ai/subtask-debug (escalations field). Temporary.
-const ESCALATE_DEBUG = [];
-function pushEscalateDebug(rec) {
-  try { ESCALATE_DEBUG.push(rec); if (ESCALATE_DEBUG.length > 40) ESCALATE_DEBUG.shift(); }
-  catch (_) {}
-}
-
 // driveEscalateTo86 — the Assistant → 86 handoff (mirror of driveScribeWrite).
 // Opens an ephemeral 86 (Opus) sub-session, runs 86 with its REAL dispatcher
 // (full reads + memory) but BLOCKS writes (scribe_write / re-escalation) so the
@@ -11484,15 +11346,6 @@ async function driveEscalateTo86(intent, ctx) {
       .slice(0, 12000);
   }
 
-  pushEscalateDebug({
-    entityType: et || null,
-    entityIdIn: (intent.entityId || null),
-    entityIdResolved: eidResolved || null,
-    packLen: pack ? pack.length : 0,
-    briefingLen: briefing ? briefing.length : 0,
-    readLogLen: readLog.length,
-    ts: Date.now()
-  });
   const parts = [];
   // Efficiency directive — the managed 86 agent runs ADAPTIVE thinking (no fixed
   // effort), so we steer its depth via the prompt: frame this as a focused,
@@ -11554,15 +11407,6 @@ async function execEscalateTo86(tu, ctx) {
   return { tier: 'auto', summary: result.answer || '(86 returned no answer)' };
 }
 
-// Debug ring buffer for sub-turn forensics (escalate_to_86 / watches).
-// Last ~80 per-turn records, readable at GET /api/ai/subtask-debug. Temporary
-// instrumentation to diagnose why escalations churn to the turn cap.
-const SUBTASK_DEBUG = [];
-function pushSubtaskDebug(rec) {
-  try { SUBTASK_DEBUG.push(rec); if (SUBTASK_DEBUG.length > 80) SUBTASK_DEBUG.shift(); }
-  catch (_) {}
-}
-
 async function driveSubtaskTurn({ anthropic, sessionId, eventsToSend, onCustomToolUse }) {
   let collectedText = '';
   const aggUsage = {
@@ -11606,7 +11450,6 @@ async function driveSubtaskTurn({ anthropic, sessionId, eventsToSend, onCustomTo
 
     const pendingResults = [];
     let turnText = '';
-    let turnToolNames = [];
     let idleSeen = false;
     // Captured from session.status_idle's stop_reason.event_ids — the
     // CANONICAL ids the session expects on user.custom_tool_result.
@@ -11634,7 +11477,6 @@ async function driveSubtaskTurn({ anthropic, sessionId, eventsToSend, onCustomTo
               name: event.tool_name || event.name || 'unknown',
               input: event.input || {}
             };
-            turnToolNames.push(tu.name);
             let decision;
             try { decision = await onCustomToolUse(tu); }
             catch (e) { decision = { tier: 'auto', error: 'Tool exec threw: ' + (e.message || 'unknown') }; }
@@ -11680,17 +11522,6 @@ async function driveSubtaskTurn({ anthropic, sessionId, eventsToSend, onCustomTo
     }
 
     collectedText += turnText;
-
-    pushSubtaskDebug({
-      sid: sessionId,
-      turn: turnCount,
-      tools: turnToolNames.slice(),
-      toolN: turnToolNames.length,
-      turnTextLen: turnText.length,
-      stop: lastIdleStopReason,
-      blockedIds: blockedEventIds.length,
-      ts: Date.now()
-    });
 
     // Token-budget fail-stop. Prevents a runaway tool loop from
     // burning unbounded spend if the model misbehaves.
@@ -11763,188 +11594,6 @@ async function driveSubtaskTurn({ anthropic, sessionId, eventsToSend, onCustomTo
 //
 // runWatchFire(watchRunId) is the unit of work; the scheduler creates
 // one ai_watch_runs row per due watch and enqueues a fire.
-//
-// C10 — agent-kind watches go through runAgentWatchFire below. The
-// rule-kind path (legacy) stays in runWatchFire after the dispatch
-// branch. The two paths share the ai_watch_runs row lifecycle so
-// admin tooling, audit, and the scheduler's CAS-update advancement
-// don't fork.
-
-// runAgentWatchFire — invokes a staff agent in watcher mode.
-//
-// Flow:
-//   1. Lookup the managed agent (86-pm / 86-estimator / etc.) for this org
-//   2. Build an incremental scope hint from watch.last_scan_at + scope_filter
-//   3. Create a one-shot Anthropic session against the staff agent;
-//      session.metadata carries source='watcher_<agent_key>' so
-//      execEmitPayloadFile stamps the payload row correctly.
-//   4. Drive one turn with a scoped prompt. The agent invokes its
-//      domain Skill (loaded server-side via C8), reads scope, and emits
-//      one emit_payload_file per finding. Those calls fall through to
-//      make86OnCustomToolUse → execEmitPayloadFile → INSERT payloads.
-//   5. Archive the session, update watch.last_scan_at, mark the run
-//      completed.
-//
-// Approval-tier tools are auto-rejected with a text error (same as
-// the legacy runWatchFire path) so the agent can't fire propose_*
-// from a background context.
-async function runAgentWatchFire(watchRunId, row) {
-  const anthropic = getAnthropic();
-  if (!anthropic) {
-    await pool.query(
-      `UPDATE ai_watch_runs SET status='failed', error=$2, finished_at=NOW() WHERE id=$1`,
-      [watchRunId, 'ANTHROPIC_API_KEY not configured.']
-    );
-    return;
-  }
-
-  const agentKey = row.watch_agent_key;
-  if (!agentKey || !/^86-[a-z0-9-]+$/.test(agentKey)) {
-    await pool.query(
-      `UPDATE ai_watch_runs SET status='failed', error=$2, finished_at=NOW() WHERE id=$1`,
-      [watchRunId, 'agent-kind watch requires a valid agent_key like 86-pm']
-    );
-    return;
-  }
-
-  const orgRow = await pool.query(`SELECT * FROM organizations WHERE id = $1`, [row.watch_org_id]);
-  const organization = orgRow.rows[0];
-  if (!organization) {
-    await pool.query(
-      `UPDATE ai_watch_runs SET status='failed', error=$2, finished_at=NOW() WHERE id=$1`,
-      [watchRunId, 'Watch organization not found.']
-    );
-    return;
-  }
-
-  const flip = await pool.query(
-    `UPDATE ai_watch_runs SET status='running', started_at=NOW()
-      WHERE id=$1 AND status='pending' RETURNING id`,
-    [watchRunId]
-  );
-  if (!flip.rows.length) return;
-
-  let sessionId = null;
-  try {
-    const adminAgents = require('./admin-agents-routes');
-    const env = await adminAgents.ensureManagedEnvironment();
-    const agent = await adminAgents.ensureManagedAgent(agentKey, organization);
-
-    const created = await anthropic.beta.sessions.create({
-      agent: agent.anthropic_agent_id,
-      environment_id: env.anthropic_environment_id,
-      title: 'P86 watcher · ' + organization.slug + ' · ' + agentKey + ' · ' +
-             (row.watch_name || '').slice(0, 40),
-    });
-    sessionId = created.id;
-    await pool.query(`UPDATE ai_watch_runs SET anthropic_session_id=$2 WHERE id=$1`, [watchRunId, sessionId]);
-
-    // Build the scoped prompt — describes what to scan and surfaces
-    // last_scan_at as an incremental hint. The scope_filter JSONB
-    // carries entity-type-specific narrowing the watch creator (or
-    // future admin UI) supplied. The agent baselines (C9) tell the
-    // watcher to invoke its skill, read scope, and emit per finding.
-    const lastScanAt = row.watch_last_scan_at || null;
-    const scopeFilter = row.watch_scope_filter || null;
-    const promptParts = [
-      '[Background watcher invocation. You are running on a scheduled fire — there is no user in the conversation. Read your domain scope, identify findings worth surfacing, and emit one emit_payload_file per actionable finding. The user will see the resulting files in their sidebar Payloads section and decide whether to apply each one.]',
-      '',
-      'agent_key: ' + agentKey,
-      'last_scan_at: ' + (lastScanAt ? new Date(lastScanAt).toISOString() : 'never (first scan)'),
-    ];
-    if (scopeFilter) {
-      promptParts.push('scope_filter: ' + JSON.stringify(scopeFilter));
-    }
-    if (row.watch_prompt) {
-      promptParts.push('');
-      promptParts.push('watch_prompt:');
-      promptParts.push(String(row.watch_prompt));
-    }
-    const prompt = promptParts.join('\n');
-
-    // Base callback — the standard make86OnCustomToolUse handler.
-    // Wrap to: (a) inject payloadSource so execEmitPayloadFile stamps
-    // the payload row with source='watcher_<agent_key>', and (b)
-    // reject approval-tier tools (background context — no user
-    // available to click cards).
-    const baseCallback = make86OnCustomToolUse(row.user_id || null, {
-      // parentSession-shaped object — only the fields execEmitPayloadFile
-      // actually reads. We thread the org id and a synthetic session id
-      // (null is fine; payload rows then have session_id=null which is
-      // schema-correct).
-      organization_id: organization.id,
-      id: null,
-    }, '');
-    const watcherCallback = async (tu) => {
-      if (tu.name === 'emit_payload_file') {
-        // Hand the tool input to execEmitPayloadFile directly so we
-        // can inject payloadSource + emittingAgentKey for the row.
-        return await execEmitPayloadFile(tu, {
-          userId: row.user_id || null,
-          parentSession: { organization_id: organization.id, id: null },
-          payloadSource: 'watcher_' + agentKey,
-          emittingAgentKey: agentKey,
-        });
-      }
-      if (tu.name === 'spawn_subtask' || tu.name === 'await_subtasks' || tu.name === 'subtask_status') {
-        return { tier: 'auto', error: 'Watcher invocations cannot spawn subtasks.' };
-      }
-      const decision = await baseCallback(tu);
-      if (decision && decision.tier === 'approval') {
-        return {
-          tier: 'auto',
-          error: 'Tool "' + tu.name + '" is approval-tier and cannot run inside a background watcher. Emit emit_payload_file instead so the user can review.',
-        };
-      }
-      return decision;
-    };
-
-    const result = await driveSubtaskTurn({
-      anthropic,
-      sessionId,
-      eventsToSend: [{ type: 'user.message', content: [{ type: 'text', text: prompt }] }],
-      onCustomToolUse: watcherCallback,
-    });
-
-    // Stamp last_scan_at on the watch row so the next fire's
-    // incremental hint reflects this run.
-    await pool.query(
-      `UPDATE ai_watches SET last_scan_at = NOW() WHERE id = $1`,
-      [row.watch_id]
-    );
-
-    await pool.query(
-      `UPDATE ai_watch_runs SET
-         status = $2, result = $3, error = $4,
-         input_tokens = COALESCE(input_tokens,0) + $5,
-         output_tokens = COALESCE(output_tokens,0) + $6,
-         cache_creation_tokens = COALESCE(cache_creation_tokens,0) + $7,
-         cache_read_tokens = COALESCE(cache_read_tokens,0) + $8,
-         finished_at = NOW()
-       WHERE id = $1`,
-      [
-        watchRunId,
-        result.error ? 'failed' : 'completed',
-        result.text || null,
-        result.error || null,
-        (result.usage && result.usage.input_tokens) || 0,
-        (result.usage && result.usage.output_tokens) || 0,
-        (result.usage && result.usage.cache_creation_input_tokens) || 0,
-        (result.usage && result.usage.cache_read_input_tokens) || 0,
-      ]
-    );
-  } catch (e) {
-    console.error('[watch] agent-runner failed for', watchRunId, e);
-    await pool.query(
-      `UPDATE ai_watch_runs SET status='failed', error=$2, finished_at=NOW() WHERE id=$1`,
-      [watchRunId, (e && e.message) || 'Agent watcher runner error']
-    );
-  } finally {
-    if (sessionId) {
-      try { await anthropic.beta.sessions.archive(sessionId); } catch (_) {}
-    }
-  }
-}
 
 async function runWatchFire(watchRunId) {
   const anthropic = getAnthropic();
@@ -11969,14 +11618,6 @@ async function runWatchFire(watchRunId) {
   );
   if (!lookup.rows.length) return;
   const row = lookup.rows[0];
-
-  // C10 — agent-kind watches dispatch to a different runner. The legacy
-  // (rule-kind) path below stays unchanged for back-compat.
-  if (row.watch_kind === 'agent') {
-    return runAgentWatchFire(watchRunId, row).catch(err => {
-      console.error('[watch] agent-runner failed for', watchRunId, err);
-    });
-  }
 
   const orgRow = await pool.query(`SELECT * FROM organizations WHERE id = $1`, [row.watch_org_id]);
   const organization = orgRow.rows[0];
@@ -12703,20 +12344,6 @@ function renderPageContextBlock(ctx) {
 // Phase 3 subtask polling endpoint removed — fan-out is retired.
 router.get('/subtasks', requireAuth, (req, res) => res.json({ subtasks: [], retired: true }));
 
-// Temporary sub-turn forensics — per-turn records from driveSubtaskTurn
-// (escalate_to_86 / watches). System-admin only. Remove once escalation
-// latency is diagnosed + fixed.
-router.get('/subtask-debug', requireAuth, (req, res) => {
-  if (!req.user || req.user.role !== 'system_admin') {
-    return res.status(403).json({ error: 'system_admin only' });
-  }
-  res.json({
-    count: SUBTASK_DEBUG.length,
-    entries: SUBTASK_DEBUG.slice(-60),
-    escalations: ESCALATE_DEBUG.slice(-20)
-  });
-});
-
 router.get('/86/messages', requireAuth, async (req, res) => {
   try {
     // Multi-session: when the sidebar passes ?session_id=N, return
@@ -12845,11 +12472,6 @@ router.post('/86/chat', requireAuth, requireOrg, aiChatLimiter, aiChatHourlyLimi
     // Legacy 'build' coerces to 'edit'.
     const cctxAiPhase    = (currentContext && currentContext.aiPhase) === 'plan' ? 'plan' : 'edit';
     const cctxClientCtx  = (currentContext && currentContext.clientContext) || null;
-    // Phase S4 — active_staff_hint flows from the client and tells the
-    // Principal which staff agent to default-delegate to. Falls back to
-    // the surface→staff map in buildTurnContext when absent.
-    const cctxStaffHint  = (currentContext && typeof currentContext.active_staff_hint === 'string')
-      ? currentContext.active_staff_hint.trim() : null;
 
     let extraPhotoBlocks = []; // photos pulled from the entity itself (job WIP, estimate, lead)
 
@@ -12875,8 +12497,7 @@ router.post('/86/chat', requireAuth, requireOrg, aiChatLimiter, aiChatHourlyLimi
         clientContext:   cctxClientCtx,
         aiPhase:         cctxAiPhase,
         userId:          req.user.id,
-        organization:    req.organization,
-        activeStaffHint: cctxStaffHint
+        organization:    req.organization
       });
       turnContextText  = turnCtx.turnContextText;
       extraPhotoBlocks = turnCtx.photoBlocks;
@@ -13322,15 +12943,6 @@ module.exports.internals = {
   // Phase 5 — proactive watching tools (3 of 4 are auto; the writes
   // are approval-tier and surface as cards).
   watchTools:    () => WATCH_TOOLS.map(({ tier, ...t }) => t),
-  // C7 — sync handoffs RETIRED. The Principal no longer fans out to
-  // staff sub-sessions; staff agents are repurposed as async
-  // background watchers (C10). The exporter stays callable (admin
-  // tooling may still reference it) but always returns an empty
-  // array so the Principal's tool surface excludes handoff_to_*.
-  // The HANDOFF_TOOLS array literal stays in source until C17 — it's
-  // unreachable but kept so cross-references still resolve while we
-  // exercise the new architecture in production.
-  handoffTools: () => [],
   // Project 86 Payload DSL — the Principal's ONE write tool. Handled
   // inline by execEmitPayloadFile in make86OnCustomToolUse; the meta
   // it returns rides the SSE tool_applied event so the file artifact

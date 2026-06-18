@@ -1920,25 +1920,6 @@ router.post('/conversations/:key/replay', requireAuth, requireCapability('ROLES_
 // via the Session's first user message in Phase 1b — this is just the
 // identity + capabilities baseline that survives across sessions.
 
-// All 5 staff agents share this generic watcher baseline. Domain-
-// specific behavior is injected per-fire by the watch-runner via
-// scope_filter + agent_key; the prompt itself is identity-free so
-// it never leaks back to the user's chat with 86.
-const BACKGROUND_WATCHER_BASELINE = [
-  'You are a Project 86 background watcher. You are invoked by the watch-runner on a schedule to scan a slice of org data and surface findings. You do NOT speak to a user.',
-  '',
-  '# What you do',
-  '1. Read data within the scope provided in the turn message (use `read_entity` + `search_entities`).',
-  '2. Identify items worth flagging — anomalies, missing fields, drift, mismatches, opportunities.',
-  '3. Emit one or more `emit_payload_file` calls — ONE payload per actionable finding. The runtime auto-stamps `source=watcher_<your_agent_key>`.',
-  '',
-  '# Output contract',
-  '- Each payload\'s `rationale` field explains the finding plainly (cite numbers, names, ids).',
-  '- One finding per payload so the user can apply selectively from the sidebar.',
-  '- Be conservative: emit only when confidence is high. Silence is acceptable.',
-  '- No prose responses. Tool calls only.'
-].join('\n');
-
 const AGENT_SYSTEM_BASELINE = {
   // 86 — the ONE operator agent for Project 86. Serves every surface
   // (per-job chat, per-estimate editor, lead intake, Ask 86 global).
@@ -2081,72 +2062,6 @@ const AGENT_SYSTEM_BASELINE = {
   // has a dead-code 'ag' branch; pointing it at 86's baseline ensures
   // nothing surfaces an old persona if it ever does fire.
   ag:    null, // resolved at lookup time to AGENT_SYSTEM_BASELINE.job
-
-  // Project 86 Agent Platform — Phase S2 (Crew scaffolding).
-  // Staff agent baselines. Each is a focused specialist invoked
-  // by the Principal (86) via handoff_to_<staff> tools. Staff
-  // never see the user directly; they receive a request string
-  // from the Principal, work in an isolated sub-session, and
-  // return a structured response that the Principal weaves into
-  // the user-facing conversation. Identity stays "86" from the
-  // user's POV — the staff is how 86 gets specialist help.
-  // ──────────────────────────────────────────────────────────────────
-  // STAFF AGENTS — focused specialists invoked by the Principal via
-  // handoff_to_<staff>. Each baseline embeds its domain playbook
-  // INLINE (no section composition). Staff never see the user;
-  // they receive a request from the Principal, work in an isolated
-  // sub-session, and return a structured response. From the user's
-  // POV identity stays "86".
-  //
-  // Each baseline follows the same shape:
-  //   1. Identity (who you are, who calls you)
-  //   2. Domain scope + tools available
-  //   3. Playbook (embedded prose — was SECTION_DEFAULTS)
-  //   4. Handoff contract (return text + recommendations; the
-  //      Principal fires the actual approval cards)
-  //   5. Closing rules (no nested handoffs, no scope creep)
-  // ──────────────────────────────────────────────────────────────────
-
-  // ──────────────────────────────────────────────────────────────────
-  // STAFF BASELINES — post-C9 watcher mode.
-  //
-  // Sync handoffs were retired in C7. The 5 staff agents now run as
-  // ASYNCHRONOUS background watchers invoked by watch-runner (C10) on
-  // a 12h cron. Each gets a scope_filter telling it which subset of
-  // entities to scan; it reads, reasons, and emits emit_payload_file
-  // for any findings. The user sees the payloads in the sidebar and
-  // applies what's useful.
-  //
-  // Each baseline:
-  //   1. Identity + watcher mode statement
-  //   2. Skill invocation directive (heavy domain prose lives in the
-  //      Anthropic Skill registered in C8, not in this baseline)
-  //   3. Output contract: emit emit_payload_file per finding, source
-  //      auto-stamped 'watcher_<agent_key>' by the runtime
-  //   4. Conservatism guardrails (only emit when confidence high; per-
-  //      finding payload so user can apply selectively)
-  //
-  // Baseline length: ~150 words each. Was 300-400 words pre-C9 with
-  // inline playbooks; the playbook prose moved to native Skills.
-  // ──────────────────────────────────────────────────────────────────
-  // 2026-05-21 — all 5 staff baselines collapse to one identical
-  // generic watcher prompt. The previous baselines were domain-
-  // branded ("Estimator scans scope", "PM scans WIP") which leaked
-  // back into the user's chat with 86. Staff are pure background
-  // workers — they have no public identity. The watch-runner
-  // (server/routes/ai-routes.js runAgentWatchFire) injects the
-  // scope_filter + agent_key at invocation time; that's where any
-  // domain-specific behavior lives. The PROMPT is generic.
-  '86-estimator': BACKGROUND_WATCHER_BASELINE,
-  // (Pre-C9 86-estimator prose deleted; ~80 lines of inline playbook
-  //  moved to the p86-estimator-structure-playbook Anthropic Skill in
-  //  C8. The watcher-mode baseline above replaces it. Full original
-  //  prose preserved at git commit ee7eee8.)
-
-  '86-pm':        BACKGROUND_WATCHER_BASELINE,
-  '86-scheduler': BACKGROUND_WATCHER_BASELINE,
-  '86-directory': BACKGROUND_WATCHER_BASELINE,
-  '86-sales':     BACKGROUND_WATCHER_BASELINE,
 };
 // Resolve the back-compat aliases after the literal initializer runs.
 // Every retired agent_key now resolves to 86's baseline so a stale
@@ -2370,10 +2285,7 @@ function agentKeyHasOwnBranch(agentKey) {
   return (
     agentKey === 'job' || agentKey === 'ag' ||
     agentKey === 'cra' || agentKey === 'staff' ||
-    agentKey === 'scribe' || agentKey === 'assistant' ||
-    agentKey === '86-estimator' ||
-    agentKey === '86-pm' || agentKey === '86-scheduler' ||
-    agentKey === '86-directory' || agentKey === '86-sales'
+    agentKey === 'scribe' || agentKey === 'assistant'
   );
 }
 
@@ -2578,71 +2490,6 @@ function customToolsFor(agentKey, opts) {
     // toolset here. The function bodies in ai-routes.js stay as
     // unreachable stubs until C17 cleanup confirms nothing else
     // depends on them.
-    tools = merged;
-  } else if (
-    agentKey === '86-estimator' || agentKey === '86-pm' ||
-    agentKey === '86-scheduler' || agentKey === '86-directory' ||
-    agentKey === '86-sales'
-  ) {
-    // C9/C10 — staff agents run ONLY as async background watchers
-    // (the C10 watch-runner invokes them on a 12h cron). Sync handoffs
-    // are retired (C7). So each staff's tool surface needs just:
-    //   • Domain-scoped reads — enough to scan its slice of the data
-    //   • emit_payload_file — to surface findings as draggable payloads
-    //   • Memory tools — cross-session recall the watcher uses to
-    //     remember what it flagged on a prior run
-    //
-    // Everything else (set_*, propose_* setters, create_node, merge_clients,
-    // attach_business_card_to_client, etc.) is RETIRED from staff. The
-    // payload DSL is the only write primitive a watcher can fire, and the
-    // payload row gets stamped source='watcher_<agent_key>' so the user
-    // sees who emitted what in the sidebar Payloads list.
-    // C18 — staff watchers all use the consolidated read surface
-    // (read_entity + search_entities) plus a tiny set of domain-
-    // specific reads that don't fit the universal shape. The narrow
-    // domain handlers still exist in execStaffTool; the consolidated
-    // tools route to them so this is purely a tool-surface shrink.
-    const allowlistByStaff = {
-      '86-estimator': new Set([
-        'read_entity', 'search_entities',
-        'read_purchase_history',           // pricing history (cross-entity analytics)
-        'read_attachment_text',            // sometimes needed for spec/scope PDFs
-      ]),
-      '86-pm':        new Set(['read_entity', 'search_entities', 'read_wip_summary']),
-      '86-scheduler': new Set(['read_entity', 'search_entities', 'read_wip_summary']),
-      '86-directory': new Set(['read_entity', 'search_entities', 'read_wip_summary']),
-      '86-sales':     new Set(['read_entity', 'search_entities']),
-    };
-    const allow = allowlistByStaff[agentKey];
-    const candidates = [
-      ...aiInternals.estimateTools(),
-      ...aiInternals.jobTools(),
-      ...aiInternals.clientTools(),
-      ...(aiInternals.readTools ? aiInternals.readTools() : []),
-    ];
-    const seen = new Set();
-    const merged = [];
-    candidates.forEach((t) => {
-      if (!t || !t.name || seen.has(t.name)) return;
-      if (!allow.has(t.name)) return;
-      seen.add(t.name);
-      merged.push(t);
-    });
-    // emit_payload_file — staff watchers' ONE write primitive. The
-    // agent-watch-runner injects payloadSource='watcher_<agent_key>'
-    // when the tool fires, so the resulting payload row stamps the
-    // right source in the sidebar.
-    (aiInternals.payloadTools ? aiInternals.payloadTools() : []).forEach((t) => {
-      if (!t || !t.name || seen.has(t.name)) return;
-      seen.add(t.name);
-      merged.push(t);
-    });
-    // Memory tools — every staff has cross-session recall.
-    aiInternals.memoryTools().forEach((t) => {
-      if (!t || !t.name || seen.has(t.name)) return;
-      seen.add(t.name);
-      merged.push(t);
-    });
     tools = merged;
   }
   return tools

@@ -9,7 +9,6 @@
 // Batch processing trades 50% of the cost for up-to-24h latency. Used
 // for things you'd want to look at in the morning, not mid-conversation:
 //   - Nightly 86 audit on every active job → "morning briefing"
-//   - Bulk re-run of past estimates against a new pricing pack
 //
 // Admin-gated by ROLES_MANAGE.
 

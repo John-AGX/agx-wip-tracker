@@ -2197,8 +2197,8 @@ async function initSchema() {
     -- decoding results.
     CREATE TABLE IF NOT EXISTS batch_jobs (
       id TEXT PRIMARY KEY,
-      agent TEXT NOT NULL,                                  -- 'job' (86), 'ag', 'cra', 'staff'
-      kind TEXT NOT NULL DEFAULT 'audit',                   -- 'audit' | 'extract' | future kinds
+      agent TEXT NOT NULL,                                  -- always 'job' (86)
+      kind TEXT NOT NULL DEFAULT 'audit',                   -- only 'audit' today
       anthropic_batch_id TEXT,
       status TEXT NOT NULL DEFAULT 'submitted',
       request_count INTEGER NOT NULL DEFAULT 0,
