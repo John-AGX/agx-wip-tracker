@@ -162,40 +162,10 @@ router.post('/import',
 
       await client.query('COMMIT');
 
-      // C15 — Payload DSL forward-momentum.
-      //
-      // After a successful QB import, nudge the 86-pm agent-based
-      // watcher so it picks up the freshly-imported lines on the
-      // next scheduler tick (~60s) instead of waiting for its 12h
-      // cron. The watcher then scans for drift (phase pct vs cost
-      // ratio mismatches, unlinked lines, missing COs) and emits
-      // diagnostic payloads to the user's sidebar — same flow as
-      // its normal scheduled run.
-      //
-      // We don't compute diffs here; the watcher already owns that
-      // logic post-C8 (via the p86-pm-wip-playbook Skill) and post-C10
-      // (the agent-watch-runner). This is just an "earliest possible
-      // scan" trigger. Fire-and-forget; failures don't block the
-      // import response.
-      try {
-        const orgId = req.user && req.user.organization_id;
-        if (orgId) {
-          await pool.query(
-            `UPDATE ai_watches
-                SET next_fire_at = NOW()
-              WHERE organization_id = $1
-                AND kind = 'agent'
-                AND agent_key = '86-pm'
-                AND enabled = true
-                AND archived_at IS NULL`,
-            [orgId]
-          );
-        }
-      } catch (nudgeErr) {
-        // Logged but non-fatal — the watcher will still pick up the
-        // change on its normal 12h cycle.
-        console.warn('[qb-costs/import] PM watcher nudge skipped:', nudgeErr.message);
-      }
+      // (Removed: the post-import 86-pm agent-watcher nudge. The staff/watcher
+      // agents were retired/archived — re-firing one on every QB import was the
+      // one automatic trigger that could turn a routine import into recurring
+      // Opus spend. QB lines are read on demand by 86/the assistant instead.)
 
       res.json({ ok: true, ...stats });
     } catch (e) {

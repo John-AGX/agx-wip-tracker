@@ -7368,14 +7368,14 @@
       // added here so the admin UI doesn't mark them as "stale" and
       // offer a Delete button next to them.
       var labels = {
-        job:             '86 (unified operator agent — every surface)',
-        '86-estimator':  '86 · Estimator (staff: estimating specialist)',
-        '86-pm':         '86 · PM (staff: WIP / production)',
-        '86-scheduler':  '86 · Scheduler (staff: crew dispatch / sequencing)',
-        '86-directory':  '86 · Directory (staff: client hygiene)',
-        '86-sales':      '86 · Sales (staff: lead intake / pipeline)'
+        assistant: 'Assistant (Haiku — personal host; escalates to 86, delegates writes to Scribe)',
+        job:       '86 (operator — Opus; estimating / WIP / job-costing reasoning)',
+        scribe:    'Scribe (Sonnet — shared writer; authors + dry-runs the approval card)'
       };
-      var activeKeys = ['job', '86-estimator', '86-pm', '86-scheduler', '86-directory', '86-sales'];
+      // The live 3-tier roster. The legacy 86-* staff/watcher agents were
+      // archived (handoff system retired); any still-registered staff/legacy
+      // rows now surface in the stale list with a Delete button.
+      var activeKeys = ['assistant', 'job', 'scribe'];
       var registered = {};
       rows.forEach(function(r) { registered[r.agent_key] = r; });
       // Stale rows — registered keys that aren't in the current set

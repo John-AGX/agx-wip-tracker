@@ -2224,8 +2224,10 @@ async function collectSkillsFor(agentKey, organization) {
           WHERE organization_id = $1
             AND anthropic_skill_id IS NOT NULL
             AND archived_at IS NULL
+            AND ($2 = ANY(SELECT jsonb_array_elements_text(COALESCE(agents, '[]'::jsonb)))
+                 OR $2 = 'job')
           ORDER BY created_at ASC`,
-        [organization.id]
+        [organization.id, agentKey]
       );
       for (const row of orgR.rows) {
         if (out.length >= 20) break;
@@ -3061,14 +3063,11 @@ router.get('/managed/audit', requireAuth, requireCapability('ROLES_MANAGE'), asy
          LEFT JOIN organizations o ON o.id = r.organization_id
         ORDER BY r.organization_id, r.agent_key`
     );
-    // Phase S2/S3 — keys recognized as live. The Principal ('job')
-    // plus the standing staff_agents seeded via /staff/seed. Anything
-    // else (e.g. legacy 'cra'/'staff'/'ag', or a future retired key)
-    // gets the stale_agent_key flag.
-    const liveAgentKeys = new Set([
-      'job',
-      ...STANDING_STAFF_SPECS.map(s => s.agent_key)
-    ]);
+    // The live 3-tier roster: assistant (Haiku host) → job (=86, Opus) →
+    // scribe (Sonnet writer). Anything else (legacy 'cra'/'staff'/'ag', the
+    // retired 86-* staff/watcher agents, or a future retired key) gets the
+    // stale_agent_key flag so the admin UI offers to delete it.
+    const liveAgentKeys = new Set(['assistant', 'job', 'scribe']);
     const rows = [];
     for (const row of r.rows) {
       const flags = [];

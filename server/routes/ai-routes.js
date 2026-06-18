@@ -12375,7 +12375,12 @@ const ALLOWED_AUTO_TIER_TOOLS = new Set([
   // cards → session went into requires_action → next turn triggered
   // stuck-session recovery → archive+recreate → fresh session amnesia
   // (the "no prior turn" symptom). Now they actually run inline.
-  'update_client_field', 'create_property', 'link_property_to_parent'
+  'update_client_field', 'create_property', 'link_property_to_parent',
+  // Wave-3 cross-job reads (executor: execWave3Tool / WAVE3_EXECUTOR_TOOLS).
+  // Registered on the assistant + 86 with working executors, but were missing
+  // here — so every call fell through to {tier:'approval'} and rendered a
+  // useless approval card instead of returning data. Pure reads, auto-tier.
+  'list_workflow_items', 'list_compliance_expiring'
 ]);
 // Tools whose executor lives in execClientDirectoryTool (client-directory
 // reads and tier:'auto' writes — see ALLOWED_AUTO_TIER_TOOLS above).
