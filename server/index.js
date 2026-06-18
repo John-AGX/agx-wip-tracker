@@ -110,16 +110,10 @@ app.use('/api/jobs/:jobId/reports', reportRoutes);
 // (buildings, phases, COs).
 app.use('/api/reports', reportsPolymorphicRoutes);
 app.use('/api/field-tools', fieldToolsRoutes);
-// Payload DSL routes — list, file download, reject, apply, CSV import.
-// Mounted before the broad /api/ai handler so /api/payloads claims its
-// namespace without ambiguity.
+// Payload DSL routes — file download, reject, apply (inline approval
+// card). Mounted before the broad /api/ai handler so /api/payloads
+// claims its namespace without ambiguity.
 app.use('/api/payloads', payloadRoutes);
-// Recipes (payload_templates CRUD) — sub-router exported from
-// payload-routes.js so the dispatcher + recipe code stay co-located.
-app.use('/api/recipes', payloadRoutes.recipes);
-// Admin-only payload audit view — org-wide visibility, gated on
-// ROLES_MANAGE inside the sub-router.
-app.use('/api/admin/payloads', payloadRoutes.admin);
 app.use('/api/estimates', estimateRoutes);
 app.use('/api/search', searchRoutes);
 // Change Orders use two URL families (/api/jobs/:jobId/change-orders
