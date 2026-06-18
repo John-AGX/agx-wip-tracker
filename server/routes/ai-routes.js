@@ -4636,6 +4636,13 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
   // told the staff to do something it can't do, producing empty
   // responses.
   const slimForRouter = !(opts && opts.slimForRouter === false);
+  // escalationLean (escalate_to_86): build the WIP headline + a COMPACT
+  // per-building rollup + a manifest of what's pullable, then return early —
+  // skipping the heavy per-phase / cost-line / node-graph / how-to-write
+  // sections. 86 reasons on the index and uses its read tools ONLY for the
+  // detail it decides it needs (selective retrieval, the true Aider/Cursor
+  // pattern) instead of chewing through a full dump.
+  const escalationLean = !!(opts && opts.escalationLean);
   // Pull the job + the related data the bulk-save serializes alongside it.
   // Wave A (A6): scope the job to the caller's org (owner -> users.org). A
   // cross-org id yields no row -> caught upstream -> empty context. OR-IS-NULL
@@ -4821,6 +4828,34 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
   lines.push('- Unbilled (earned − invoiced): ' + fmtMoney(wip.unbilled));
   lines.push('- Backlog (total income − revenue earned): ' + fmtMoney(wip.backlog));
   lines.push('');
+
+  // ── escalationLean cut: WIP headline (above) + compact rollup + manifest,
+  // then return. 86 pulls detail selectively via its read tools.
+  if (escalationLean) {
+    if (buildings.length || phases.length) {
+      lines.push('# Structure (' + buildings.length + ' building' + (buildings.length === 1 ? '' : 's') +
+        ', ' + phases.length + ' phase' + (phases.length === 1 ? '' : 's') + ') — budget-weighted % rollup');
+      buildings.slice(0, 16).forEach(function(b) {
+        var bp = phases.filter(function(p) { return p.buildingId === b.id; });
+        var tb = bp.reduce(function(s, p) { return s + (Number(p.phaseBudget) || 0); }, 0);
+        var wp = 0;
+        if (bp.length) {
+          wp = tb > 0
+            ? bp.reduce(function(s, p) { return s + (Number(p.pctComplete) || 0) * (Number(p.phaseBudget) || 0); }, 0) / tb
+            : bp.reduce(function(s, p) { return s + (Number(p.pctComplete) || 0); }, 0) / bp.length;
+        }
+        lines.push('- ' + (b.name || b.id) + ' [' + b.id + ']: ' + Math.round(wp) + '% · ' +
+          bp.length + ' phase' + (bp.length === 1 ? '' : 's') + (b.budget ? ' · budget ' + fmtMoney(b.budget) : ''));
+      });
+      if (buildings.length > 16) lines.push('- …and ' + (buildings.length - 16) + ' more buildings');
+      lines.push('');
+    }
+    lines.push('# Detail available on demand — pull with your read tools ONLY if your analysis needs it');
+    lines.push('- Full per-phase budgets/% + orphan phases + node-graph wiring: read_entity { entity_type:"job", id:"' + jobId + '" }');
+    lines.push('- Top cost lines by vendor / QB actuals, invoices, POs, change orders, RFIs: search_entities or read_entity as needed.');
+    lines.push('');
+    return { system: lines.join('\n'), photoBlocks: [], aiPhase: aiPhase, packsLoaded: [] };
+  }
 
   // Sub-job structure — full per-building phase composition with the
   // computed budget-weighted rollup that drives the WIP page. Without
@@ -11370,9 +11405,13 @@ async function driveEscalateTo86(intent, ctx) {
         );
         if (jr.rows.length) eidResolved = jr.rows[0].id;
       } catch (_) { /* fall back to the raw id */ }
-      pack = await buildJobContext(eidResolved, null, 'plan', organization, { slimForRouter: false });
+      // escalationLean → WIP headline + compact rollup + manifest (NOT the full
+      // dump). buildJobContext returns an OBJECT {system,…} — take .system.
+      const jc = await buildJobContext(eidResolved, null, 'plan', organization, { slimForRouter: false, escalationLean: true });
+      pack = (jc && typeof jc === 'object') ? (jc.system || '') : (typeof jc === 'string' ? jc : '');
     } else if (et === 'estimate' && eid) {
-      pack = await buildEstimateContext(eid, false, 'plan', organization);
+      const ec = await buildEstimateContext(eid, false, 'plan', organization);
+      pack = (ec && typeof ec === 'object') ? (ec.system || '') : (typeof ec === 'string' ? ec : '');
     }
   } catch (e) {
     // Non-fatal — a bad id just means no pack; 86 falls back to reading.
@@ -11400,19 +11439,26 @@ async function driveEscalateTo86(intent, ctx) {
     ts: Date.now()
   });
   const parts = [];
+  // Efficiency directive — the managed 86 agent runs ADAPTIVE thinking (no fixed
+  // effort), so we steer its depth via the prompt: frame this as a focused,
+  // decisive escalation so it doesn't burn max-depth reasoning re-deriving an
+  // exhaustive audit. This is the "dial effort down" lever for escalations.
+  parts.push(
+    'You are 86, handling a FOCUSED escalation from the Assistant (your front-line aide) — not an open-ended audit.',
+    'Be decisive and efficient: lead with your answer, the 2-4 figures that matter, and a clear recommendation. Do NOT exhaustively enumerate every line or re-derive everything — give the high-signal read. The Assistant relays your answer to the user, so keep it tight.'
+  );
   if (pack) {
     parts.push(
-      'You are 86, handling an escalation from the Assistant (your front-line aide).',
-      'The Assistant already pulled the full, CURRENT snapshot below — REASON ON IT; it is authoritative and up to date.',
-      'Only call a read tool if a SPECIFIC figure you need is genuinely missing from the snapshot. Do NOT re-read what is already here. Then give your rigorous analysis as text.',
       '',
-      '<entity_snapshot>',
+      'Below is a COMPACT INDEX of the entity — headline figures plus a manifest of what detail is pullable. REASON ON THIS. Pull specific detail with your read tools ONLY if your analysis genuinely needs a number that is not here — do not reflexively read.',
+      '',
+      '<entity_index>',
       pack,
-      '</entity_snapshot>'
+      '</entity_index>'
     );
   }
   if (briefing) {
-    parts.push('', '<assistant_briefing>', briefing, '</assistant_briefing>');
+    parts.push('', 'What the Assistant already gathered this turn:', '<assistant_briefing>', briefing, '</assistant_briefing>');
   }
   parts.push('', 'Question: ' + String(intent.question));
   const composed = parts.join('\n');
