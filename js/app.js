@@ -906,77 +906,6 @@
             var leadsClick = "window.switchTab('estimates'); if (typeof window.switchEstimatesSubTab === 'function') window.switchEstimatesSubTab('leads');";
             var estsClick  = "window.switchTab('estimates'); if (typeof window.switchEstimatesSubTab === 'function') window.switchEstimatesSubTab('list');";
 
-            // ── Recent Activity feed ────────────────────────────────────
-            // Stream of the most recently touched entities — estimates,
-            // leads, change orders, COs, sub assignments — sorted by
-            // updated_at desc, capped at 12. Each row clickable so the
-            // user can land on the entity. Placeholder copy when there's
-            // nothing recent.
-            function timeAgo(ts) {
-                var t = ts ? new Date(ts).getTime() : NaN;
-                if (!isFinite(t)) return '';
-                var diff = Math.max(0, now - t);
-                if (diff < 60 * 1000) return 'just now';
-                if (diff < 60 * 60 * 1000) return Math.floor(diff / (60 * 1000)) + 'm ago';
-                if (diff < 24 * 60 * 60 * 1000) return Math.floor(diff / (60 * 60 * 1000)) + 'h ago';
-                if (diff < 7 * DAY) return Math.floor(diff / DAY) + 'd ago';
-                return new Date(ts).toLocaleDateString();
-            }
-
-            var feed = [];
-            (d.estimates || []).forEach(function(e) {
-                if (!e || !e.updatedAt && !e.updated_at && !e.dateAdded) return;
-                feed.push({
-                    ts: e.updatedAt || e.updated_at || e.dateAdded,
-                    kind: 'Estimate',
-                    title: e.title || 'Untitled estimate',
-                    sub: e.client || e.community || '',
-                    onClick: "window.switchTab('estimates'); if (typeof window.switchEstimatesSubTab === 'function') window.switchEstimatesSubTab('list');"
-                });
-            });
-            (d.leads || []).forEach(function(l) {
-                if (!l) return;
-                feed.push({
-                    ts: l.updatedAt || l.updated_at || l.dateAdded || l.created_at,
-                    kind: 'Lead',
-                    title: l.title || l.name || 'New lead',
-                    sub: l.client || l.community || (l.status ? ('status: ' + l.status) : ''),
-                    onClick: leadsClick
-                });
-            });
-            (d.changeOrders || []).forEach(function(co) {
-                if (!co) return;
-                feed.push({
-                    ts: co.updatedAt || co.updated_at || co.date,
-                    kind: 'Change Order',
-                    title: (co.coNumber ? co.coNumber + ' · ' : '') + (co.description || 'Change order'),
-                    sub: '',
-                    onClick: "window.switchTab('jobs');"
-                });
-            });
-            feed.sort(function(a, b) { return new Date(b.ts).getTime() - new Date(a.ts).getTime(); });
-            feed = feed.slice(0, 12);
-
-            var feedHtml;
-            if (!feed.length) {
-                feedHtml = '<div style="padding:32px;text-align:center;color:var(--text-dim,#888);font-size:12px;border:1px dashed var(--border,#333);border-radius:8px;">' +
-                    'No recent activity yet. Add a lead or an estimate to get started.' +
-                '</div>';
-            } else {
-                feedHtml = '<div style="display:flex;flex-direction:column;gap:1px;border:1px solid var(--border,#333);border-radius:10px;overflow:hidden;background:var(--card-bg,#0f0f1e);">';
-                feed.forEach(function(f) {
-                    feedHtml += '<button class="ee-btn" onclick="' + f.onClick + '" style="text-align:left;padding:10px 14px;background:transparent;border:none;border-bottom:1px solid var(--border,#222);cursor:pointer;display:flex;align-items:center;gap:12px;">' +
-                        '<span style="font-size:9px;font-weight:700;color:var(--accent,#22d3ee);text-transform:uppercase;letter-spacing:0.4px;background:rgba(34,211,238,0.08);padding:2px 6px;border-radius:4px;flex-shrink:0;min-width:80px;text-align:center;">' + escapeHTML(f.kind) + '</span>' +
-                        '<div style="flex:1;min-width:0;">' +
-                            '<div style="font-size:13px;color:var(--text,#fff);font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(f.title) + '</div>' +
-                            (f.sub ? '<div style="font-size:11px;color:var(--text-dim,#888);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(f.sub) + '</div>' : '') +
-                        '</div>' +
-                        '<span style="font-size:11px;color:var(--text-dim,#888);font-variant-numeric:tabular-nums;flex-shrink:0;">' + timeAgo(f.ts) + '</span>' +
-                    '</button>';
-                });
-                feedHtml += '</div>';
-            }
-
             // ── Page composition ────────────────────────────────────────
             // The agenda rail is a placeholder until the schedule fetch
             // resolves below. Greeting + quick actions land synchronously.
@@ -1056,12 +985,13 @@
                 //           its own header + body card so they read
                 //           as discrete sections in the column.
                 '<div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(300px,380px);gap:18px;align-items:flex-start;">' +
-                    // Left column: Recent Activity
+                    // Left column: combined leads + jobs map (Phase 1 — see
+                    // renderSummaryMap below; host populated post-paint).
                     '<div>' +
                         '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">' +
-                            '<div style="font-size:11px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">Recent Activity</div>' +
+                            '<div style="font-size:11px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">Map</div>' +
                         '</div>' +
-                        feedHtml +
+                        '<div id="summaryMapHost" style="border:1px solid var(--border,#333);border-radius:10px;background:var(--card-bg,#0f0f1e);min-height:420px;overflow:hidden;position:relative;"></div>' +
                     '</div>' +
                     // Right rail: stacked widgets
                     '<div style="display:flex;flex-direction:column;gap:18px;">' +
