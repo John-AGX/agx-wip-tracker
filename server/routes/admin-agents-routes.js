@@ -2043,6 +2043,16 @@ const AGENT_SYSTEM_BASELINE = {
     'Emit ONE payload. The payload tool call IS your entire output.'
   ].join('\n'),
 
+  assistant: [
+    "You are the Assistant — a personal aide inside Project 86 for the signed-in user. You host the conversation: proactive, concise, and on top of the day. You help with the calendar, schedule, tasks, reminders, a daily rundown, finding jobs/people/info, and general questions — like a sharp executive assistant who happens to know the construction business.",
+    '',
+    '# How you work',
+    '- READ freely to answer (read_entity, search_entities, the schedule, attachments, the reference sheets). You only ever see what the signed-in user is allowed to see.',
+    '- To CHANGE anything, you do NOT edit data yourself — you hand a fully-specified change to the Scribe via `scribe_write`. The Scribe writes it, dry-runs it, and shows the user an approve/reject card. Resolve the entity_type + entity_id from your reads FIRST, then describe the change in plain words including every field and value to set.',
+    '- Use memory (remember / recall) to keep the user\'s preferences, routines, and people straight across days. A good assistant remembers.',
+    '- Be brief. Lead with the answer, then offer the next useful step. Do not narrate your tool use.',
+  ].join('\n'),
+
   // Legacy 'cra' (directory) and 'staff' (Chief of Staff) baselines have been
   // retired. 86 absorbs both roles. These keys remain only as null
   // back-compat shims so any old `managed_agent_registry` row pointing
@@ -2325,8 +2335,13 @@ function builtinToolsetFor(agentKey) {
 // through every agents.create / agents.update site so the background resync
 // sweep and admin "sync all" can't clobber the Scribe back to Opus.
 const SCRIBE_MODEL = 'claude-sonnet-4-6';
+// The Assistant — the cheap personal aide that HOSTS the conversation — runs on
+// Haiku. Like SCRIBE_MODEL, routed through every create/update site so the
+// background resync sweep + "sync all" can't clobber it back to Opus.
+const ASSISTANT_MODEL = 'claude-haiku-4-5';
 function modelForAgentKey(agentKey) {
   if (agentKey === 'scribe') return SCRIBE_MODEL;
+  if (agentKey === 'assistant') return ASSISTANT_MODEL;
   const aiInternals = require('./ai-routes-internals');
   return (aiInternals && aiInternals.defaultModel) ? aiInternals.defaultModel() : 'claude-opus-4-8';
 }
@@ -2340,7 +2355,7 @@ function agentKeyHasOwnBranch(agentKey) {
   return (
     agentKey === 'job' || agentKey === 'ag' ||
     agentKey === 'cra' || agentKey === 'staff' ||
-    agentKey === 'scribe' ||
+    agentKey === 'scribe' || agentKey === 'assistant' ||
     agentKey === '86-estimator' ||
     agentKey === '86-pm' || agentKey === '86-scheduler' ||
     agentKey === '86-directory' || agentKey === '86-sales'
@@ -2371,6 +2386,54 @@ function customToolsFor(agentKey, opts) {
     return payloadDefs
       .filter(t => t && t.name === 'emit_payload_file')
       .map(toCustomToolParam);
+  }
+  // Assistant — the personal aide that HOSTS the conversation (Haiku). Full
+  // read surface + memory + navigate + the one write primitive (scribe_write,
+  // delegated to the Scribe). It is fully capable (its reach is bounded by the
+  // signed-in user's role at apply time, not here) but is NOT the estimator —
+  // deep business reasoning routes to 86 via escalate_to_86 (added in a later
+  // slice), and personal-domain tools (calendar/tasks/daily-summary) layer on
+  // after. Same candidate pool as the job branch, filtered to the assistant's
+  // allowlist, so scribe_write + every read resolve identically.
+  if (agentKey === 'assistant') {
+    const ASSISTANT_TOOL_NAMES = new Set([
+      // Reads
+      'read_entity', 'search_entities', 'search_reference_sheet',
+      'read_attachment_text', 'view_attachment_image',
+      // Memory
+      'remember', 'recall', 'list_memories', 'forget',
+      // Inline (photo comments, schedule read)
+      'read_photo_comments', 'add_photo_comment', 'read_schedule_blocks',
+      // Navigation
+      'navigate',
+      // The one write — delegated to the Scribe
+      'scribe_write',
+      // Workflow + compliance reads
+      'list_workflow_items', 'list_compliance_expiring',
+    ]);
+    const seenA = new Set();
+    const mergedA = [];
+    [
+      ...aiInternals.estimateTools(),
+      ...aiInternals.jobTools(),
+      ...aiInternals.clientTools(),
+      ...aiInternals.staffTools(),
+      ...aiInternals.memoryTools(),
+      ...aiInternals.watchTools(),
+      ...(aiInternals.payloadTools ? aiInternals.payloadTools() : []),
+      ...(aiInternals.readTools ? aiInternals.readTools() : []),
+      ...(aiInternals.wave3Tools ? aiInternals.wave3Tools() : []),
+      ...(aiInternals.projectInlineTools ? aiInternals.projectInlineTools() : [])
+    ].forEach(t => {
+      if (!t || !t.name || seenA.has(t.name)) return;
+      if (!ASSISTANT_TOOL_NAMES.has(t.name)) return;
+      seenA.add(t.name);
+      mergedA.push(t);
+    });
+    return mergedA
+      .filter(t => t.name !== 'web_search')
+      .map(toCustomToolParam)
+      .slice(0, 128);
   }
   // estimateTools / jobTools / clientTools / staffTools each include
   // the WEB_TOOLS prefix; strip those because we configure web_search
@@ -2913,9 +2976,13 @@ router.post('/managed/bootstrap',
   async (req, res) => {
     try {
       const key = String(req.query.key || 'all').toLowerCase();
-      // Post-unification, only 'job' is a real agent. 'all' and any
-      // legacy key alias to 'job'.
-      const agents = (key === 'all' || key === '') ? ['job'] : [key === 'job' ? 'job' : 'job'];
+      // Real registerable agents: 86 (job), the Scribe (writer), and the
+      // Assistant (personal host). 'all' bootstraps the set; a specific known
+      // key bootstraps just that one; anything else aliases to 'job'.
+      const KNOWN_AGENTS = ['job', 'scribe', 'assistant'];
+      const agents = (key === 'all' || key === '')
+        ? KNOWN_AGENTS
+        : (KNOWN_AGENTS.includes(key) ? [key] : ['job']);
       const summary = [];
       for (const agentKey of agents) {
         try {
@@ -4257,8 +4324,9 @@ router.post('/managed/:agentKey/sync',
   try {
     const agentKey = String(req.params.agentKey || '').toLowerCase();
     // Phase S2/S3 — staff_agents keys are also valid sync targets.
-    // 'scribe' is the write-only worker (its own static baseline) — syncable.
-    const legacyKeys = ['ag', 'job', 'cra', 'staff', 'scribe'];
+    // 'scribe' (write worker) + 'assistant' (personal host) have their own
+    // static baselines — both syncable.
+    const legacyKeys = ['ag', 'job', 'cra', 'staff', 'scribe', 'assistant'];
     const liveStaffKeys = STANDING_STAFF_SPECS.map(s => s.agent_key);
     if (!legacyKeys.includes(agentKey) && !liveStaffKeys.includes(agentKey)) {
       return res.status(400).json({ error: 'agentKey must be one of: ' + legacyKeys.concat(liveStaffKeys).join(', ') });
