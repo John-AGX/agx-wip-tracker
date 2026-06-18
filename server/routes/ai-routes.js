@@ -2198,6 +2198,42 @@ function setSSEHeaders(res) {
   res.flushHeaders();
 }
 
+// ── Per-user turn lock ────────────────────────────────────────────
+// The unified user_thread puts ALL of a user's chat on ONE shared
+// Anthropic session. Two concurrent turns race on its server-side state
+// (requires_action / archive collisions — observed: a long escalation gets
+// its parent session reset mid-turn by a second concurrent turn, so 86's
+// answer fails to relay). Cursor/Aider avoid this by being stateless per
+// request; we keep the Sessions API (server-side compaction + persistence)
+// and instead SERIALIZE turns per user — one in-flight turn at a time. A
+// concurrent turn gets a clear "still working" SSE error rather than
+// corrupting the thread. In-memory is fine (single Railway instance; the
+// collision is same-instance concurrency).
+const _activeChatTurns = new Map(); // userId -> startedAt ms
+const ACTIVE_TURN_TTL_MS = 6 * 60 * 1000; // safety auto-expire (escalations can run a few min)
+function acquireUserTurnLock(res, userId) {
+  if (userId == null) return true; // post-auth this shouldn't happen; don't block
+  const startedAt = _activeChatTurns.get(userId);
+  if (startedAt && (Date.now() - startedAt) < ACTIVE_TURN_TTL_MS) {
+    try {
+      res.write('data: ' + JSON.stringify({
+        error: "I'm still finishing your previous message — give me a moment, then resend.",
+        busy: true
+      }) + '\n\n');
+      res.write('data: [DONE]\n\n');
+      res.end();
+    } catch (_) {}
+    return false;
+  }
+  _activeChatTurns.set(userId, Date.now());
+  // Clear on ANY response termination — normal end (res.end → 'finish'),
+  // client disconnect ('close'), or crash. Idempotent.
+  const clear = () => { _activeChatTurns.delete(userId); };
+  res.on('finish', clear);
+  res.on('close', clear);
+  return true;
+}
+
 // Build an Anthropic image content block from a base64-encoded image
 // shipped by the client (clipboard paste, PDF page render, etc.).
 // Detects the media_type from the base64 magic bytes — the client
@@ -12749,6 +12785,10 @@ router.post('/86/chat', requireAuth, requireOrg, aiChatLimiter, aiChatHourlyLimi
     : [];
 
   setSSEHeaders(res);
+  // Serialize turns per user — reject a concurrent turn while one is in
+  // flight (prevents the shared user_thread session from being reset
+  // mid-escalation by a second turn). See acquireUserTurnLock.
+  if (!acquireUserTurnLock(res, req.user && req.user.id)) return;
   try {
     // ── Per-entity context enrichment (Phase 2 unification) ──
     // If current_context names an entity (job / estimate / intake),
@@ -13036,6 +13076,9 @@ router.post('/86/chat/continue', requireAuth, requireOrg, aiChatLimiter, aiChatH
   const continueSessionId = req.body && (req.body.session_id || req.body.sessionId);
 
   setSSEHeaders(res);
+  // Same per-user turn lock as /chat — a continuation also mutates the shared
+  // session, so don't let it overlap an in-flight turn.
+  if (!acquireUserTurnLock(res, req.user && req.user.id)) return;
   try {
     let session = null;
     if (continueSessionId) {
