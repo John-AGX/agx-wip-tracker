@@ -7061,6 +7061,22 @@ const PAYLOAD_TOOLS = [
       }
     }
   },
+  {
+    name: 'escalate_to_86',
+    description:
+      'Hand a question that needs DEEP business reasoning to 86 — the lead estimator/analyst (Opus). Use this for estimating, WIP, job-costing, margins, scope analysis, pricing strategy, or any heavy construction judgment beyond a quick lookup. Frame the ask fully: include the resolved entity_type + entity_id(s) and any figures you already pulled. 86 reads + reasons and returns an answer you relay to the user. NOTE: 86 does NOT write during an escalation — if its answer implies a data change, YOU apply it afterward via scribe_write so the user gets the approval card. Do not escalate trivial lookups you can answer yourself.',
+    tier: 'auto',
+    input_schema: {
+      type: 'object',
+      required: ['question'],
+      properties: {
+        question: {
+          type: 'string',
+          description: 'The fully-framed question/task for 86 — the user\'s ask plus the resolved entity_type + entity_id(s) and any figures you already gathered, so 86 has what it needs to reason.'
+        }
+      }
+    }
+  },
 ];
 
 // Build the SKILL.md body for one local pack. Mirrors the helper of
@@ -10895,6 +10911,14 @@ function make86OnCustomToolUse(userId, parentSession, turnContextText, gateUser)
     if (tu.name === 'scribe_write') {
       return await execScribeWrite(tu, { userId, parentSession });
     }
+    // escalate_to_86 — the Assistant hands a deep-reasoning question to 86
+    // (Opus). 86 reads + reasons in a sub-session and returns an answer the
+    // Assistant relays. 86 does NOT write during the escalation (writes stay
+    // at the host level so the approval card renders to the user). Only the
+    // Assistant has this tool — 86's own allowlist omits it, so no recursion.
+    if (tu.name === 'escalate_to_86') {
+      return await execEscalateTo86(tu, { userId, parentSession, orgId: ctx.orgId, gateUser: capUser });
+    }
     // Auto-tier: any tool in ALLOWED_AUTO_TIER_TOOLS executes inline
     // and returns its summary to the model. Mirrors the /exec-tool
     // HTTP dispatcher exactly so the V2-session path (this handler)
@@ -11166,6 +11190,87 @@ async function execScribeWrite(tu, ctx) {
     (result.applySummary ? ': ' + result.applySummary : (result.title ? ' (' + result.title + ')' : '')) +
     '. The review card is now in the chat — do NOT narrate it; let the user approve or reject.';
   return { tier: 'auto', summary: summaryForModel, meta };
+}
+
+// driveEscalateTo86 — the Assistant → 86 handoff (mirror of driveScribeWrite).
+// Opens an ephemeral 86 (Opus) sub-session, runs 86 with its REAL dispatcher
+// (full reads + memory) but BLOCKS writes (scribe_write / re-escalation) so the
+// approval card always renders at the host level, not two sessions deep. Returns
+// 86's answer text, which the Assistant relays. 86 cannot loop back into the
+// Assistant — escalate_to_86 is on the Assistant's allowlist only.
+async function driveEscalateTo86(intent, ctx) {
+  const anthropic = getAnthropic();
+  if (!anthropic) return { ok: false, error: 'ANTHROPIC_API_KEY not set on this deployment.' };
+  if (!intent || !intent.question) return { ok: false, error: 'driveEscalateTo86 requires intent.question.' };
+  ctx = ctx || {};
+
+  let organization = ctx.organization || null;
+  if (!organization && ctx.orgId) {
+    try {
+      const r = await pool.query('SELECT * FROM organizations WHERE id = $1', [ctx.orgId]);
+      organization = r.rows[0] || null;
+    } catch (_) {}
+  }
+  if (!organization || !organization.id) return { ok: false, error: 'driveEscalateTo86 could not resolve the organization.' };
+
+  const adminAgents = require('./admin-agents-routes');
+  let agent, env;
+  try {
+    env = await adminAgents.ensureManagedEnvironment();
+    agent = await adminAgents.ensureManagedAgent('job', organization);   // 86 = agentKey 'job'
+  } catch (e) {
+    return { ok: false, error: 'Could not reach 86: ' + (e.message || 'unknown') };
+  }
+
+  let sessionId;
+  try {
+    const created = await anthropic.beta.sessions.create({
+      agent: agent.anthropic_agent_id,
+      environment_id: env.anthropic_environment_id,
+      title: '86 escalation · ' + (organization.slug || organization.id)
+    });
+    sessionId = created.id;
+  } catch (e) {
+    return { ok: false, error: 'Could not open the 86 session: ' + (e.message || 'unknown') };
+  }
+
+  // 86 runs with its real read/memory dispatch, but writes are refused here.
+  const base = make86OnCustomToolUse(ctx.userId || null, ctx.parentSession || null, '', ctx.gateUser || null);
+  const onCustomToolUse = async (tu) => {
+    if (tu && (tu.name === 'scribe_write' || tu.name === 'escalate_to_86' || tu.name === 'emit_payload_file')) {
+      return { tier: 'auto', error: 'During an escalation you ANALYZE and RECOMMEND only — you do not write. State the exact change (entity_type, entity_id, the fields/values) in your answer; the Assistant applies it via the Scribe so the user gets the approval card.' };
+    }
+    return base(tu);
+  };
+
+  const events = [{ type: 'user.message', content: [{ type: 'text', text: String(intent.question) }] }];
+  const result = await driveSubtaskTurn({ anthropic, sessionId, eventsToSend: events, onCustomToolUse });
+  if (result && result.error && !result.text) return { ok: false, error: result.error };
+  return { ok: true, answer: (result && result.text) || '', usage: (result && result.usage) || null };
+}
+
+// execEscalateTo86 — the Assistant's `escalate_to_86` tool lands here.
+async function execEscalateTo86(tu, ctx) {
+  const question = tu && tu.input && tu.input.question;
+  if (!question || !String(question).trim()) {
+    return { tier: 'auto', error: 'escalate_to_86 requires a `question` — frame the ask plus the resolved entity ids and any figures you pulled.' };
+  }
+  let orgId = (ctx && ctx.orgId) ||
+              (ctx && ctx.parentSession && ctx.parentSession.organization_id) || null;
+  if (!orgId && ctx && ctx.userId) {
+    try {
+      const r = await pool.query('SELECT organization_id FROM users WHERE id = $1', [ctx.userId]);
+      if (r.rows.length) orgId = r.rows[0].organization_id;
+    } catch (_) {}
+  }
+  const result = await driveEscalateTo86(
+    { question: String(question) },
+    { userId: (ctx && ctx.userId) || null, orgId, parentSession: (ctx && ctx.parentSession) || null, gateUser: (ctx && ctx.gateUser) || null }
+  );
+  if (!result || !result.ok) {
+    return { tier: 'auto', error: '86 could not complete that escalation: ' + ((result && result.error) || 'unknown') + '. Answer from what you have, or refine and retry.' };
+  }
+  return { tier: 'auto', summary: result.answer || '(86 returned no answer)' };
 }
 
 async function driveSubtaskTurn({ anthropic, sessionId, eventsToSend, onCustomToolUse }) {

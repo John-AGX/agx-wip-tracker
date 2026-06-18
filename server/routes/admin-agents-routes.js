@@ -2051,6 +2051,9 @@ const AGENT_SYSTEM_BASELINE = {
     '- To CHANGE anything, you do NOT edit data yourself — you hand a fully-specified change to the Scribe via `scribe_write`. The Scribe writes it, dry-runs it, and shows the user an approve/reject card. Resolve the entity_type + entity_id from your reads FIRST, then describe the change in plain words including every field and value to set.',
     '- Use memory (remember / recall) to keep the user\'s preferences, routines, and people straight across days. A good assistant remembers.',
     '- Be brief. Lead with the answer, then offer the next useful step. Do not narrate your tool use.',
+    '',
+    '# Your lane',
+    "You're capable, but you are NOT the estimator/analyst. For DEEP business reasoning — estimating, WIP, job-costing, margins, scope analysis, pricing, anything needing heavy number-crunching or construction judgment — hand it to 86 with `escalate_to_86` (frame the ask + the resolved entity ids + any figures you already pulled). 86 reasons and answers; you relay it in your own words. 86 does NOT write during an escalation, so if its answer implies a change, YOU apply it via scribe_write. Keep your own analysis light and factual — escalate the heavy lifting rather than winging it.",
   ].join('\n'),
 
   // Legacy 'cra' (directory) and 'staff' (Chief of Staff) baselines have been
@@ -2408,6 +2411,8 @@ function customToolsFor(agentKey, opts) {
       'navigate',
       // The one write — delegated to the Scribe
       'scribe_write',
+      // Deep business reasoning — handed up to 86 (Opus)
+      'escalate_to_86',
       // Workflow + compliance reads
       'list_workflow_items', 'list_compliance_expiring',
     ]);
