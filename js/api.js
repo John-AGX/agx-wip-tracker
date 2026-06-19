@@ -678,6 +678,22 @@
     remove: function(id) { return del('/api/tasks/' + encodeURIComponent(id)); }
   };
 
+  // My Notes — personal, private scratchpad. Mirrors the tasks/schedule
+  // verb shape. Server scopes every call to (org, user); a second user
+  // never sees another's notes. See server/routes/notes-routes.js.
+  var notes = {
+    list: function() { return get('/api/notes'); },
+    create: function(payload) { return post('/api/notes', payload); },
+    update: function(id, payload) { return patch('/api/notes/' + encodeURIComponent(id), payload); },
+    remove: function(id) { return del('/api/notes/' + encodeURIComponent(id)); }
+  };
+
+  // Combined map feed — org-scoped leads + jobs with plottable coords
+  // for the Summary combined map. See server/routes/map-routes.js.
+  var map = {
+    entities: function() { return get('/api/map/entities'); }
+  };
+
   // Plans & Takeoffs — scale-drawing documents. list() is light (no
   // pages payload); get(id) returns the full per-page pages JSONB.
   var plans = {
@@ -728,7 +744,7 @@
 
   window.p86Api = {
     get: get, put: put, post: post, del: del, patch: patch,
-    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, qbCosts: qbCosts, subs: subsApi, schedule: schedule, adminSms: adminSms, messages: messages, weather: weather, projects: projects, tasks: tasks, plans: plans, orgTags: orgTags, org: org, folderTemplates: folderTemplates, reports: reports, changeOrders: changeOrders, workflowItems: workflowItems, purchaseOrders: purchaseOrders,
+    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, qbCosts: qbCosts, subs: subsApi, schedule: schedule, adminSms: adminSms, messages: messages, weather: weather, projects: projects, tasks: tasks, notes: notes, map: map, plans: plans, orgTags: orgTags, org: org, folderTemplates: folderTemplates, reports: reports, changeOrders: changeOrders, workflowItems: workflowItems, purchaseOrders: purchaseOrders,
     isOffline: isOffline,
     isAuthenticated: function() { return !!getToken() && !isOffline(); }
   };

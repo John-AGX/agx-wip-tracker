@@ -3047,7 +3047,7 @@
     <script src="js/auth.js?v=17"></script>
     <script src="js/dialogs.js?v=1b"></script>
     <script src="js/geolocation.js?v=1"></script>
-    <script src="js/api.js?v=43"></script>
+    <script src="js/api.js?v=44"></script>
     <script src="js/header-weather.js?v=2"></script>
     <script src="js/account.js?v=2b"></script>
     <script src="js/voice-input.js?v=7"></script>
@@ -3096,6 +3096,12 @@
     <script src="js/tag-icons.js?v=2"></script>
     <script src="js/projects-map.js?v=9"></script>
     <script src="js/map-pins.js?v=1"></script>
+    <!-- Combined leads+jobs map for the Summary "Map" card (Phase 1 — D2).
+         Self-contained renderer (window.p86EntitiesMap) that reuses
+         map-pins + maps-loader + geolocation and lazy-loads Google
+         MarkerClusterer from CDN for pin clustering. Loads after
+         map-pins.js so window.p86MapPins is available. -->
+    <script src="js/entities-map.js?v=1"></script>
     <script src="js/projects-pairs.js?v=1"></script>
     <!-- Report template registry (Wave B). Eight construction report
          templates (walkthrough, daily-log, weekly-progress, etc.)

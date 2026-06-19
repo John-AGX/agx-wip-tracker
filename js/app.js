@@ -995,6 +995,17 @@
                     '</div>' +
                     // Right rail: stacked widgets
                     '<div style="display:flex;flex-direction:column;gap:18px;">' +
+                        // AI Assistant Hub (Phase 1 — D4). One-line daily
+                        // summary + Today/Overdue/Upcoming task counts +
+                        // short list + quick-add + the Ask 86 entry point.
+                        // Read-only over the existing tasks system.
+                        '<div>' +
+                            '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">' +
+                                '<div style="font-size:11px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">Assistant</div>' +
+                                '<button class="ee-btn ghost small" onclick="if(window.p86AI&amp;&amp;window.p86AI.open)window.p86AI.open({entityType:\'ask86\'});" style="font-size:11px;padding:2px 8px;">Ask 86 &rarr;</button>' +
+                            '</div>' +
+                            '<div id="summary-assistant" style="border:1px solid var(--border,#333);border-radius:10px;background:var(--card-bg,#0f0f1e);padding:12px;color:var(--text-dim,#888);font-size:12px;min-height:80px;">Loading tasks&hellip;</div>' +
+                        '</div>' +
                         // Agenda
                         '<div>' +
                             '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">' +
@@ -1011,6 +1022,15 @@
                                 '<div style="font-size:11px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">Recent Files</div>' +
                             '</div>' +
                             '<div id="summary-files" style="border:1px solid var(--border,#333);border-radius:10px;background:var(--card-bg,#0f0f1e);padding:12px;color:var(--text-dim,#888);font-size:12px;text-align:center;min-height:80px;">Loading recent files&hellip;</div>' +
+                        '</div>' +
+                        // My Notes (Phase 1 — D3). Personal, private notes:
+                        // pinned first, single-line quick-add, click-to-edit,
+                        // pin toggle, delete. Owner+org scoped server-side.
+                        '<div>' +
+                            '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">' +
+                                '<div style="font-size:11px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">My Notes</div>' +
+                            '</div>' +
+                            '<div id="summary-notes" style="border:1px solid var(--border,#333);border-radius:10px;background:var(--card-bg,#0f0f1e);padding:12px;color:var(--text-dim,#888);font-size:12px;min-height:80px;">Loading notes&hellip;</div>' +
                         '</div>' +
                         // Inbox
                         '<div>' +
@@ -1029,6 +1049,12 @@
             renderSummaryAgenda();
             renderSummaryRecentFiles();
             renderSummaryInbox();
+            // Phase 1 — combined leads+jobs map (D2), Assistant hub (D4),
+            // My Notes (D3). Each is guarded for its host + deps existing
+            // so a missing module degrades to its loading/empty state.
+            renderSummaryMap();
+            renderSummaryAssistant();
+            renderSummaryNotes();
             paintSnapshotRow();
             fetchWorkflowAttentionCounts();
             fetchComplianceAttentionCounts();
@@ -1275,6 +1301,230 @@
                 host.innerHTML = html;
             }).catch(function() {
                 host.innerHTML = '<div style="padding:14px;text-align:center;color:var(--text-dim,#888);font-size:12px;">Could not load recent files.</div>';
+            });
+        }
+
+        // ── Combined map (Phase 1 — D2) ───────────────────────────────
+        // Plot leads + jobs together into #summaryMapHost via the
+        // self-contained entities-map renderer. Guarded for the host +
+        // both the entities-map module and the Maps loader existing, so a
+        // key-less / module-missing deploy degrades to a clean message
+        // rather than a console error.
+        function renderSummaryMap() {
+            var host = document.getElementById('summaryMapHost');
+            if (!host) return;
+            if (window.p86EntitiesMap && typeof window.p86EntitiesMap.render === 'function' &&
+                window.p86Maps && typeof window.p86Maps.ready === 'function') {
+                window.p86EntitiesMap.render('summaryMapHost');
+            } else {
+                host.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;min-height:420px;color:var(--text-dim,#888);font-size:13px;text-align:center;padding:18px;">Map module not loaded.</div>';
+            }
+        }
+
+        // ── AI Assistant Hub (Phase 1 — D4) ───────────────────────────
+        // READ-ONLY over the existing tasks system (no new store). Shows
+        // a one-line daily summary, Today / Overdue / Upcoming counts +
+        // a short list of the caller's own open tasks, and a quick-add
+        // that reuses window.p86Tasks.openQuickAdd. The Ask 86 entry lives
+        // in the card header (wired to window.p86AI.open).
+        function renderSummaryAssistant() {
+            var host = document.getElementById('summary-assistant');
+            if (!host) return;
+            if (!window.p86Api || !window.p86Api.tasks || typeof window.p86Api.tasks.list !== 'function') {
+                host.innerHTML = '<div style="text-align:center;color:var(--text-dim,#888);font-size:12px;padding:8px;">Tasks not available offline.</div>';
+                return;
+            }
+            // My open (not done) tasks — the idx_tasks_assignee index
+            // powers assignee=me + exclude_done. We bucket client-side
+            // into overdue / today / upcoming by due_date.
+            window.p86Api.tasks.list({ assignee: 'me', exclude_done: 1, limit: 100 }).then(function(res) {
+                var tasks = (res && res.tasks) || [];
+                var todayStr = (function() {
+                    var dt = new Date(); dt.setHours(0, 0, 0, 0);
+                    var m = String(dt.getMonth() + 1).padStart(2, '0');
+                    var d = String(dt.getDate()).padStart(2, '0');
+                    return dt.getFullYear() + '-' + m + '-' + d;
+                })();
+                function dueYmd(t) {
+                    if (!t.due_date) return null;
+                    // DATE columns serialize as ISO; take the date part.
+                    return String(t.due_date).slice(0, 10);
+                }
+                var overdue = [], today = [], upcoming = [];
+                tasks.forEach(function(t) {
+                    var y = dueYmd(t);
+                    if (!y) { upcoming.push(t); return; }
+                    if (y < todayStr) overdue.push(t);
+                    else if (y === todayStr) today.push(t);
+                    else upcoming.push(t);
+                });
+
+                // One-line daily summary.
+                var summaryLine;
+                if (!tasks.length) summaryLine = 'No open tasks — you’re all caught up.';
+                else if (overdue.length) summaryLine = overdue.length + ' overdue, ' + today.length + ' due today.';
+                else if (today.length) summaryLine = today.length + ' due today, ' + upcoming.length + ' upcoming.';
+                else summaryLine = tasks.length + ' open task' + (tasks.length === 1 ? '' : 's') + ', none overdue.';
+
+                function countPill(label, n, color) {
+                    var c = (n > 0) ? color : 'var(--text-dim,#888)';
+                    return '<div style="flex:1;text-align:center;padding:6px 4px;background:rgba(255,255,255,0.02);border:1px solid var(--border,#333);border-radius:8px;">' +
+                        '<div style="font-size:18px;font-weight:700;line-height:1;color:' + c + ';font-variant-numeric:tabular-nums;">' + n + '</div>' +
+                        '<div style="font-size:9px;text-transform:uppercase;letter-spacing:0.4px;color:var(--text-dim,#888);margin-top:3px;">' + label + '</div>' +
+                    '</div>';
+                }
+
+                var html =
+                    '<div style="font-size:12px;color:var(--text,#fff);margin-bottom:10px;line-height:1.4;">' + escapeHTML(summaryLine) + '</div>' +
+                    '<div style="display:flex;gap:6px;margin-bottom:10px;">' +
+                        countPill('Today', today.length, '#22d3ee') +
+                        countPill('Overdue', overdue.length, '#f87171') +
+                        countPill('Upcoming', upcoming.length, '#34d399') +
+                    '</div>';
+
+                // Short list — overdue first, then today, then upcoming.
+                var listed = overdue.concat(today).concat(upcoming).slice(0, 4);
+                if (listed.length) {
+                    html += '<div style="display:flex;flex-direction:column;gap:1px;background:var(--border,#222);border-radius:8px;overflow:hidden;margin-bottom:10px;">';
+                    listed.forEach(function(t) {
+                        var y = dueYmd(t);
+                        var dueLabel = '';
+                        if (y) {
+                            if (y < todayStr) dueLabel = '<span style="color:#f87171;">overdue</span>';
+                            else if (y === todayStr) dueLabel = '<span style="color:#22d3ee;">today</span>';
+                            else dueLabel = '<span style="color:var(--text-dim,#888);">' + escapeHTML(y.slice(5)) + '</span>';
+                        }
+                        html += '<button class="ee-btn" onclick="if(window.p86Tasks&amp;&amp;window.p86Tasks.openDetail)window.p86Tasks.openDetail(\'' + String(t.id).replace(/'/g, "\\'") + '\')" style="text-align:left;padding:7px 10px;background:var(--card-bg,#0f0f1e);border:none;cursor:pointer;display:flex;align-items:center;gap:8px;">' +
+                            '<span style="flex:1;font-size:12px;color:var(--text,#fff);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(t.title || '(untitled)') + '</span>' +
+                            (dueLabel ? '<span style="font-size:10px;font-weight:600;flex-shrink:0;">' + dueLabel + '</span>' : '') +
+                        '</button>';
+                    });
+                    html += '</div>';
+                }
+
+                // Quick-add — reuses the tasks quick-capture modal.
+                html += '<button class="ee-btn primary" onclick="if(window.p86Tasks&amp;&amp;window.p86Tasks.openQuickAdd)window.p86Tasks.openQuickAdd()" style="width:100%;font-size:12px;padding:7px;">+ Quick add task</button>';
+
+                host.innerHTML = html;
+            }).catch(function(err) {
+                host.innerHTML = '<div style="text-align:center;color:var(--text-dim,#888);font-size:12px;padding:8px;">Could not load tasks: ' + escapeHTML((err && err.message) || 'error') + '</div>';
+            });
+        }
+        // Public hook so other surfaces (e.g. after creating a task) can
+        // ask the Assistant hub to refresh.
+        window.refreshSummaryAssistant = function() {
+            var summaryDiv = document.getElementById('summary');
+            if (summaryDiv && summaryDiv.classList.contains('active')) renderSummaryAssistant();
+        };
+
+        // ── My Notes (Phase 1 — D3) ───────────────────────────────────
+        // Personal, private notes. Pinned first; single-line quick-add;
+        // click a note to edit (inline); pin toggle; delete. All four ops
+        // route through p86Api.notes (server scopes every call to the
+        // caller's own org+user — a second user never sees these).
+        function renderSummaryNotes() {
+            var host = document.getElementById('summary-notes');
+            if (!host) return;
+            if (!window.p86Api || !window.p86Api.notes || typeof window.p86Api.notes.list !== 'function') {
+                host.innerHTML = '<div style="text-align:center;color:var(--text-dim,#888);font-size:12px;padding:8px;">Notes not available offline.</div>';
+                return;
+            }
+            window.p86Api.notes.list().then(function(res) {
+                var notes = (res && res.notes) || [];
+                var html = '';
+
+                // Quick-add — single-line input + Enter / button to create.
+                html += '<div style="display:flex;gap:6px;margin-bottom:10px;">' +
+                    '<input id="summary-note-add" type="text" placeholder="Jot a note…" ' +
+                        'style="flex:1;font-size:12px;padding:7px 9px;background:var(--input-bg,#1a1a2e);border:1px solid var(--border,#333);border-radius:6px;color:var(--text,#fff);" />' +
+                    '<button class="ee-btn primary" data-note-add-btn style="font-size:12px;padding:7px 10px;flex-shrink:0;">Add</button>' +
+                '</div>';
+
+                if (!notes.length) {
+                    html += '<div style="text-align:center;color:var(--text-dim,#888);font-size:12px;padding:10px;">No notes yet. Type above to start.</div>';
+                } else {
+                    html += '<div style="display:flex;flex-direction:column;gap:1px;background:var(--border,#222);border-radius:8px;overflow:hidden;">';
+                    notes.forEach(function(n) {
+                        var label = (n.title && n.title.trim()) || (n.body && n.body.trim()) || '(empty note)';
+                        var oneLine = String(label).replace(/\s+/g, ' ').slice(0, 80);
+                        html += '<div data-note-row data-note-id="' + escapeHTML(String(n.id)) + '" style="display:flex;align-items:center;gap:8px;padding:7px 10px;background:var(--card-bg,#0f0f1e);">' +
+                            '<button data-note-pin title="' + (n.pinned ? 'Unpin' : 'Pin') + '" style="background:none;border:none;cursor:pointer;font-size:13px;flex-shrink:0;padding:0;line-height:1;" >' + (n.pinned ? '\u{1F4CC}' : '\u{1F4CD}') + '</button>' +
+                            '<span data-note-open style="flex:1;font-size:12px;color:var(--text,#fff);cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="Click to edit">' + escapeHTML(oneLine) + '</span>' +
+                            '<button data-note-del title="Delete" style="background:none;border:none;cursor:pointer;font-size:12px;color:var(--text-dim,#888);flex-shrink:0;padding:0;line-height:1;">✕</button>' +
+                        '</div>';
+                    });
+                    html += '</div>';
+                }
+                host.innerHTML = html;
+                wireSummaryNotes(host, notes);
+            }).catch(function(err) {
+                host.innerHTML = '<div style="text-align:center;color:var(--text-dim,#888);font-size:12px;padding:8px;">Could not load notes: ' + escapeHTML((err && err.message) || 'error') + '</div>';
+            });
+        }
+
+        // Attach handlers for quick-add / pin / delete / edit. Each op
+        // calls p86Api.notes then re-renders so the list stays in sync.
+        function wireSummaryNotes(host, notes) {
+            function refresh() { renderSummaryNotes(); }
+
+            var input = host.querySelector('#summary-note-add');
+            var addBtn = host.querySelector('[data-note-add-btn]');
+            function doAdd() {
+                var val = (input && input.value || '').trim();
+                if (!val) { if (input) input.focus(); return; }
+                if (addBtn) addBtn.disabled = true;
+                window.p86Api.notes.create({ title: val }).then(refresh).catch(function(err) {
+                    if (addBtn) addBtn.disabled = false;
+                    if (window.p86Toast) window.p86Toast((err && err.message) || 'Could not add note', 'error');
+                });
+            }
+            if (addBtn) addBtn.addEventListener('click', doAdd);
+            if (input) input.addEventListener('keydown', function(e) {
+                if (e.key === 'Enter') { e.preventDefault(); doAdd(); }
+            });
+
+            var byId = {};
+            (notes || []).forEach(function(n) { byId[String(n.id)] = n; });
+
+            host.querySelectorAll('[data-note-row]').forEach(function(row) {
+                var id = row.getAttribute('data-note-id');
+                var note = byId[id] || {};
+
+                var pinBtn = row.querySelector('[data-note-pin]');
+                if (pinBtn) pinBtn.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    window.p86Api.notes.update(id, { pinned: !note.pinned }).then(refresh).catch(function(err) {
+                        if (window.p86Toast) window.p86Toast((err && err.message) || 'Could not update note', 'error');
+                    });
+                });
+
+                var delBtn = row.querySelector('[data-note-del]');
+                if (delBtn) delBtn.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    window.p86Api.notes.remove(id).then(refresh).catch(function(err) {
+                        if (window.p86Toast) window.p86Toast((err && err.message) || 'Could not delete note', 'error');
+                    });
+                });
+
+                var openEl = row.querySelector('[data-note-open]');
+                if (openEl) openEl.addEventListener('click', function() {
+                    openNoteEditor(id, note, refresh);
+                });
+            });
+        }
+
+        // Inline note editor — a small prompt-style modal via the shared
+        // dialogs helper when present, else a plain editable replacement.
+        function openNoteEditor(id, note, onSaved) {
+            // Prefer the app's dialog helper if it exposes a text prompt.
+            var current = (note.title || '') + (note.body ? ('\n' + note.body) : '');
+            var next = window.prompt('Edit note (first line = title):', current);
+            if (next == null) return; // cancelled
+            var lines = String(next).split('\n');
+            var title = (lines.shift() || '').trim();
+            var body = lines.join('\n');
+            window.p86Api.notes.update(id, { title: title, body: body }).then(onSaved).catch(function(err) {
+                if (window.p86Toast) window.p86Toast((err && err.message) || 'Could not save note', 'error');
             });
         }
 
