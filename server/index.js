@@ -58,6 +58,7 @@ const folderTemplatesRoutes = require('./routes/folder-templates-routes');
 const tasksRoutes = require('./routes/tasks-routes');
 const notesRoutes = require('./routes/notes-routes');
 const mapRoutes = require('./routes/map-routes');
+const calendarRoutes = require('./routes/calendar-routes');
 const { storage } = require('./storage');
 
 const app = express();
@@ -146,6 +147,9 @@ app.use('/api/notes', notesRoutes);
 // Map data — combined leads + jobs feed for the Summary combined map
 // (Phase 1 / Deliverable 2). Org-scoped, read-only. See map-routes.js.
 app.use('/api/map', mapRoutes);
+// Personal calendar events — the per-user Assistant calendar. requireAuth
+// only; every query owner + org scoped (fail-closed). See calendar-routes.js.
+app.use('/api/calendar', calendarRoutes);
 app.use('/api/org-tags', orgTagsRoutes);
 app.use('/api/folder-templates', folderTemplatesRoutes);
 // Org manifest — one read-only endpoint that powers the Summary

@@ -694,6 +694,22 @@
     entities: function() { return get('/api/map/entities'); }
   };
 
+  // Personal calendar events — the per-user Assistant calendar. Every
+  // call is owner + org scoped server-side. list({from,to}) windows to
+  // a date range. See server/routes/calendar-routes.js.
+  var calendar = {
+    list: function(opts) {
+      opts = opts || {};
+      var qs = [];
+      if (opts.from) qs.push('from=' + encodeURIComponent(opts.from));
+      if (opts.to) qs.push('to=' + encodeURIComponent(opts.to));
+      return get('/api/calendar' + (qs.length ? '?' + qs.join('&') : ''));
+    },
+    create: function(payload) { return post('/api/calendar', payload); },
+    update: function(id, payload) { return patch('/api/calendar/' + encodeURIComponent(id), payload); },
+    remove: function(id) { return del('/api/calendar/' + encodeURIComponent(id)); }
+  };
+
   // Plans & Takeoffs — scale-drawing documents. list() is light (no
   // pages payload); get(id) returns the full per-page pages JSONB.
   var plans = {
@@ -744,7 +760,7 @@
 
   window.p86Api = {
     get: get, put: put, post: post, del: del, patch: patch,
-    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, qbCosts: qbCosts, subs: subsApi, schedule: schedule, adminSms: adminSms, messages: messages, weather: weather, projects: projects, tasks: tasks, notes: notes, map: map, plans: plans, orgTags: orgTags, org: org, folderTemplates: folderTemplates, reports: reports, changeOrders: changeOrders, workflowItems: workflowItems, purchaseOrders: purchaseOrders,
+    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, qbCosts: qbCosts, subs: subsApi, schedule: schedule, adminSms: adminSms, messages: messages, weather: weather, projects: projects, tasks: tasks, notes: notes, map: map, calendar: calendar, plans: plans, orgTags: orgTags, org: org, folderTemplates: folderTemplates, reports: reports, changeOrders: changeOrders, workflowItems: workflowItems, purchaseOrders: purchaseOrders,
     isOffline: isOffline,
     isAuthenticated: function() { return !!getToken() && !isOffline(); }
   };

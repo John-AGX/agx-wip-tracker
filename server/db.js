@@ -3034,6 +3034,37 @@ async function initSchema() {
       ON user_notes (organization_id, user_id, updated_at DESC);
 
     -- ───────────────────────────────────────────────────────────────
+    -- Personal calendar events — the per-user Assistant calendar
+    -- (unified-calendar Slice B). PRIVATE, owner+org scoped, fail-closed
+    -- exactly like user_notes. Distinct from the production-scheduling
+    -- job entries (schedule_entries / the Schedule tab); these are the
+    -- user's own meetings / reminders / appointments that the unified
+    -- calendar overlays as a "My Events" layer.
+    --
+    -- status drives the Outlook opaque/translucent bar styling:
+    --   'confirmed' → opaque fill   'tentative' → translucent outline
+    --   'canceled'  → translucent outline + strikethrough
+    CREATE TABLE IF NOT EXISTS calendar_events (
+      id               TEXT PRIMARY KEY,
+      organization_id  INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      user_id          INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      title            TEXT,
+      starts_at        TIMESTAMPTZ NOT NULL,
+      ends_at          TIMESTAMPTZ,
+      all_day          BOOLEAN NOT NULL DEFAULT false,
+      location         TEXT,
+      notes            TEXT,
+      color            TEXT,
+      status           TEXT NOT NULL DEFAULT 'confirmed',
+      recurrence       TEXT,
+      reminder_minutes INTEGER,
+      created_at       TIMESTAMPTZ DEFAULT NOW(),
+      updated_at       TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_calendar_events_owner
+      ON calendar_events (organization_id, user_id, starts_at);
+
+    -- ───────────────────────────────────────────────────────────────
     -- Plans & Takeoffs — first-class scale-drawing documents (the
     -- "dedicated home" for the Bluebeam-style markup tool). A plan is a
     -- drawing surface (blank gridded canvas / a photo / a PDF) plus its
