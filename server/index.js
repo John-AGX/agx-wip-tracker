@@ -56,6 +56,8 @@ const plansRoutes = require('./routes/plans-routes');
 const orgTagsRoutes = require('./routes/org-tags-routes');
 const folderTemplatesRoutes = require('./routes/folder-templates-routes');
 const tasksRoutes = require('./routes/tasks-routes');
+const notesRoutes = require('./routes/notes-routes');
+const mapRoutes = require('./routes/map-routes');
 const { storage } = require('./storage');
 
 const app = express();
@@ -138,6 +140,12 @@ app.use('/api/plans', plansRoutes);
 // org-scoped, requireAuth-only (assignee-driven model needs universal
 // access; no capability gate). See server/routes/tasks-routes.js.
 app.use('/api/tasks', tasksRoutes);
+// My Notes — personal, private scratchpad. requireAuth-only; every
+// query is owner + org scoped (fail-closed). See notes-routes.js.
+app.use('/api/notes', notesRoutes);
+// Map data — combined leads + jobs feed for the Summary combined map
+// (Phase 1 / Deliverable 2). Org-scoped, read-only. See map-routes.js.
+app.use('/api/map', mapRoutes);
 app.use('/api/org-tags', orgTagsRoutes);
 app.use('/api/folder-templates', folderTemplatesRoutes);
 // Org manifest — one read-only endpoint that powers the Summary

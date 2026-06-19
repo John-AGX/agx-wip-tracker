@@ -3014,6 +3014,26 @@ async function initSchema() {
       WHERE archived_at IS NULL AND status <> 'done';
 
     -- ───────────────────────────────────────────────────────────────
+    -- My Notes — a personal, PRIVATE scratchpad (Phase 1 / Deliverable
+    -- 3). Unlike tasks (org-shared, assignee-driven), a note belongs to
+    -- exactly one user in one org and is visible to NO other user. The
+    -- routes (server/routes/notes-routes.js) filter every query by BOTH
+    -- organization_id AND user_id, fail-closed. Index ordered to match
+    -- the list query (pinned first, then most-recently-updated).
+    CREATE TABLE IF NOT EXISTS user_notes (
+      id               TEXT PRIMARY KEY,
+      organization_id  INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      user_id          INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      title            TEXT,
+      body             TEXT,
+      pinned           BOOLEAN NOT NULL DEFAULT false,
+      created_at       TIMESTAMPTZ DEFAULT NOW(),
+      updated_at       TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_user_notes_owner
+      ON user_notes (organization_id, user_id, updated_at DESC);
+
+    -- ───────────────────────────────────────────────────────────────
     -- Plans & Takeoffs — first-class scale-drawing documents (the
     -- "dedicated home" for the Bluebeam-style markup tool). A plan is a
     -- drawing surface (blank gridded canvas / a photo / a PDF) plus its
