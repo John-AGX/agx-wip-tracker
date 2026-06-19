@@ -5165,14 +5165,15 @@
       });
       // Walkthrough loop — after the chain finishes, if the user
       // is still in walkthrough mode (i.e. they didn't tap Done),
-      // re-open the camera so they can keep snapping. setTimeout
-      // gives the modal-close transition a beat before the camera
-      // pops up — feels less jarring on iOS.
+      // re-open the camera so they can keep snapping. A short beat lets
+      // the modal tear down before the native camera pops up; 80ms is
+      // tight enough to feel continuous (the modal removes synchronously,
+      // so the old 220ms just read as a dead pause between shots).
       if (_walkthroughKeepOpen) {
         setTimeout(function() {
           var inp = document.getElementById('projPhotoFileInput');
           if (inp) inp.click();
-        }, 220);
+        }, 80);
       }
     });
   }
