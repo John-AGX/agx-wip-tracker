@@ -4,12 +4,19 @@
 //   • Typed Project 86 teardrop pins (reuses js/map-pins.js — same
 //     classifier + SVG builder the Projects / Leads / Jobs maps use, so
 //     a reno job here looks identical to a reno job on the Jobs map).
-//   • Marker clustering (Google MarkerClusterer, CDN) so a dense area
-//     collapses to a count bubble instead of a pin pile.
+//   • PROPERTY GROUPING — AGX does repeat work at the same address, so a
+//     lead + a job (or several) routinely share one set of coordinates.
+//     Markers are grouped by exact coordinate (the server-side US Census
+//     geocoder is deterministic: the same address → the same lat/lng), so
+//     a property with 2+ items collapses to ONE pin carrying a count
+//     badge. Clicking it opens a list of every item there, each routing
+//     to its entity. A single-item location renders as its normal typed
+//     pin. (Deliberately NOT proximity clustering — co-located items at
+//     ONE property are grouped; nearby-but-different properties are not.)
 //   • A "you are here" marker + Recenter button when the browser grants
 //     geolocation (window.p86Geo). Degrades gracefully — denied / null
 //     position simply omits the marker; the entity pins still render.
-//   • Filter chips to toggle Leads vs Jobs.
+//   • Filter chips to toggle Leads vs Jobs (re-groups the visible set).
 //   • Click a pin → opens that entity through the existing app router
 //     (window.openEditLeadModal for leads, window.editJob for jobs —
 //     the same handlers the standalone Leads / Jobs maps wire to onPin).
@@ -31,11 +38,10 @@
 
   if (window.p86EntitiesMap) return; // idempotent
 
-  // MarkerClusterer CDN — the @googlemaps/markerclustererplus successor.
-  // Exposes window.markerClusterer.MarkerClusterer. Loaded lazily on
-  // first render so non-map pages don't pay for it.
-  var CLUSTERER_SRC = 'https://unpkg.com/@googlemaps/markerclusterer@2.5.3/dist/index.min.js';
-  var _clustererPromise = null;
+  // Coordinate-grouping precision. 5 decimals ≈ 1.1m — finer than any
+  // street address, so distinct addresses never collide, while the SAME
+  // address (deterministic geocode) always lands in one group.
+  var GROUP_DECIMALS = 5;
 
   function escapeHTML(s) {
     if (typeof window.escapeHTML === 'function') return window.escapeHTML(s);
@@ -45,38 +51,6 @@
   }
   function escapeAttr(s) {
     return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/"/g, '&quot;');
-  }
-
-  // Load the clusterer once. ALWAYS resolves — a CDN failure resolves to
-  // null so the map still renders pins (just un-clustered).
-  function ensureClusterer() {
-    if (window.markerClusterer && window.markerClusterer.MarkerClusterer) {
-      return Promise.resolve(window.markerClusterer.MarkerClusterer);
-    }
-    if (_clustererPromise) return _clustererPromise;
-    _clustererPromise = new Promise(function (resolve) {
-      var existing = document.querySelector('script[data-p86-clusterer]');
-      if (existing) {
-        existing.addEventListener('load', function () {
-          resolve((window.markerClusterer && window.markerClusterer.MarkerClusterer) || null);
-        });
-        existing.addEventListener('error', function () { resolve(null); });
-        if (window.markerClusterer && window.markerClusterer.MarkerClusterer) {
-          resolve(window.markerClusterer.MarkerClusterer);
-        }
-        return;
-      }
-      var s = document.createElement('script');
-      s.src = CLUSTERER_SRC;
-      s.async = true;
-      s.setAttribute('data-p86-clusterer', '1');
-      s.onload = function () {
-        resolve((window.markerClusterer && window.markerClusterer.MarkerClusterer) || null);
-      };
-      s.onerror = function () { resolve(null); };
-      document.head.appendChild(s);
-    });
-    return _clustererPromise;
   }
 
   // Same null-island / range guard the server + projects-map use.
@@ -104,8 +78,9 @@
       escapeHTML(reason) + '</div>';
   }
 
-  // Build the marker icon spec for an entity via the shared map-pins
-  // module (falls back to the default Google pin if it isn't loaded).
+  // Build the marker icon spec for a SINGLE entity via the shared
+  // map-pins module (falls back to the default Google pin if it isn't
+  // loaded).
   function iconForItem(maps, item) {
     if (window.p86MapPins && typeof window.p86MapPins.specForEntity === 'function') {
       var spec = window.p86MapPins.specForEntity(item, item.kind === 'lead' ? 'lead' : 'job');
@@ -120,14 +95,67 @@
     return undefined;
   }
 
+  // A grouped "property" pin: an indigo teardrop with a white head
+  // showing how many items share this address. Self-contained SVG (a
+  // grouped pin is a new visual concept, kept out of the shared per-entity
+  // pin builder so the other maps are untouched). Count text shrinks for
+  // 2+ digits so it stays inside the head.
+  function groupPinIcon(maps, count) {
+    var label = count > 99 ? '99+' : String(count);
+    var fs = label.length >= 3 ? 9 : (label.length === 2 ? 11 : 13);
+    var svg =
+      '<svg xmlns="http://www.w3.org/2000/svg" width="30" height="42" viewBox="0 0 30 42">' +
+        '<path d="M15 1 C7.3 1 1 7.3 1 15 c0 10.2 14 26 14 26 s14-15.8 14-26 C29 7.3 22.7 1 15 1 z" ' +
+          'fill="#4f46e5" stroke="#ffffff" stroke-width="1.5"/>' +
+        '<circle cx="15" cy="15" r="9.5" fill="#ffffff"/>' +
+        '<text x="15" y="15" text-anchor="middle" dominant-baseline="central" ' +
+          'font-family="system-ui,Segoe UI,sans-serif" font-size="' + fs + '" font-weight="700" fill="#4f46e5">' +
+          escapeHTML(label) + '</text>' +
+      '</svg>';
+    return {
+      url: 'data:image/svg+xml;utf8,' + encodeURIComponent(svg),
+      anchor: new maps.Point(15, 42),
+      scaledSize: new maps.Size(30, 42)
+    };
+  }
+
+  // Small kind tag (matches the filter-chip colors).
+  function kindTag(kind) {
+    var c = kind === 'lead' ? '#4f8cff' : '#94a3b8';
+    var label = kind === 'lead' ? 'LEAD' : 'JOB';
+    return '<span style="display:inline-block;font-size:9px;font-weight:700;letter-spacing:0.4px;' +
+      'color:#fff;background:' + c + ';border-radius:4px;padding:1px 5px;flex-shrink:0;">' + label + '</span>';
+  }
+
+  // Info window for a SINGLE entity.
   function infoContentHTML(item) {
-    var kindLabel = item.kind === 'lead' ? 'Lead' : 'Job';
     return '<div style="min-width:180px;font-family:system-ui,sans-serif;">' +
-      '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;color:#0a66c2;margin-bottom:2px;">' + escapeHTML(kindLabel) + '</div>' +
+      '<div style="margin-bottom:4px;">' + kindTag(item.kind) + '</div>' +
       '<div style="font-size:13px;font-weight:600;color:#111;margin-bottom:6px;">' + escapeHTML(item.title || '(untitled)') + '</div>' +
       '<a href="#" style="font-size:12px;color:#0a66c2;text-decoration:none;font-weight:600;" ' +
         'onclick="event.preventDefault();window.__p86EntitiesMapOpen&&window.__p86EntitiesMapOpen(\'' +
           escapeAttr(item.kind) + '\',\'' + escapeAttr(item.id) + '\');">Open &rarr;</a>' +
+    '</div>';
+  }
+
+  // Info window for a GROUP of co-located entities — one row per item,
+  // each with an Open link. Rows are shaped like a future property-card
+  // row so this can graduate into a project-backed view later.
+  function groupContentHTML(members) {
+    var rows = members.map(function (m) {
+      return '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-top:1px solid #eee;">' +
+        kindTag(m.kind) +
+        '<span style="flex:1;font-size:13px;color:#111;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' +
+          escapeHTML(m.title || '(untitled)') + '</span>' +
+        '<a href="#" style="font-size:12px;color:#0a66c2;text-decoration:none;font-weight:600;flex-shrink:0;" ' +
+          'onclick="event.preventDefault();window.__p86EntitiesMapOpen&&window.__p86EntitiesMapOpen(\'' +
+            escapeAttr(m.kind) + '\',\'' + escapeAttr(m.id) + '\');">Open &rarr;</a>' +
+      '</div>';
+    }).join('');
+    return '<div style="min-width:220px;max-width:300px;font-family:system-ui,sans-serif;">' +
+      '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;color:#4f46e5;margin-bottom:2px;">' +
+        members.length + ' items at this property</div>' +
+      rows +
     '</div>';
   }
 
@@ -202,26 +230,41 @@
     return { leads: clean(data.leads, 'lead'), jobs: clean(data.jobs, 'job') };
   }
 
+  // Group a flat item list by exact coordinate. Returns an array of
+  // groups: { lat, lng, members[] } preserving first-seen order.
+  function groupByLocation(items) {
+    var byKey = {};
+    var order = [];
+    items.forEach(function (it) {
+      var key = it.lat.toFixed(GROUP_DECIMALS) + ',' + it.lng.toFixed(GROUP_DECIMALS);
+      if (!byKey[key]) { byKey[key] = { lat: it.lat, lng: it.lng, members: [] }; order.push(key); }
+      byKey[key].members.push(it);
+    });
+    return order.map(function (k) { return byKey[k]; });
+  }
+
   function mount(maps, host, data) {
-    var leads = data.leads, jobs = data.jobs;
-    var total = leads.length + jobs.length;
+    var allItems = data.leads.concat(data.jobs);
+    var total = allItems.length;
 
     if (!total) {
       host.innerHTML = emptyHTML('No leads or jobs with mapped addresses yet. Save an address on a lead or job to plot it here.');
       return;
     }
 
-    // Chrome: filter chips + map canvas + recenter button.
+    // Chrome: filter chips + map canvas + recenter button. Canvas fills
+    // the relative host via absolute inset so it always has a definite
+    // box for the Maps SDK to measure.
     host.innerHTML =
       '<div style="position:absolute;top:10px;left:10px;z-index:5;display:flex;gap:6px;">' +
         '<button type="button" data-emap-chip="lead" class="p86-emap-chip" ' +
-          'style="font-size:11px;font-weight:600;padding:5px 10px;border-radius:14px;border:1px solid #4f8cff;background:#4f8cff;color:#fff;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,0.3);">Leads ' + leads.length + '</button>' +
+          'style="font-size:11px;font-weight:600;padding:5px 10px;border-radius:14px;border:1px solid #4f8cff;background:#4f8cff;color:#fff;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,0.3);">Leads ' + data.leads.length + '</button>' +
         '<button type="button" data-emap-chip="job" class="p86-emap-chip" ' +
-          'style="font-size:11px;font-weight:600;padding:5px 10px;border-radius:14px;border:1px solid #94a3b8;background:#94a3b8;color:#fff;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,0.3);">Jobs ' + jobs.length + '</button>' +
+          'style="font-size:11px;font-weight:600;padding:5px 10px;border-radius:14px;border:1px solid #94a3b8;background:#94a3b8;color:#fff;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,0.3);">Jobs ' + data.jobs.length + '</button>' +
       '</div>' +
       '<button type="button" data-emap-recenter ' +
         'style="position:absolute;bottom:24px;right:10px;z-index:5;display:none;font-size:11px;font-weight:600;padding:6px 10px;border-radius:6px;border:1px solid var(--border,#333);background:#fff;color:#111;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,0.3);">\u{1F4CD} You</button>' +
-      '<div data-emap-canvas style="width:100%;height:100%;min-height:420px;"></div>';
+      '<div data-emap-canvas style="position:absolute;inset:0;"></div>';
 
     var canvas = host.querySelector('[data-emap-canvas]');
     var recenterBtn = host.querySelector('[data-emap-recenter]');
@@ -230,8 +273,7 @@
     window.__p86EntitiesMapOpen = openEntity;
 
     var map = new maps.Map(canvas, {
-      center: { lat: leads[0] ? leads[0].lat : jobs[0].lat,
-                lng: leads[0] ? leads[0].lng : jobs[0].lng },
+      center: { lat: allItems[0].lat, lng: allItems[0].lng },
       zoom: 11,
       mapTypeControl: false,
       streetViewControl: false,
@@ -241,75 +283,56 @@
     });
 
     var infoWindow = new maps.InfoWindow();
-    var bounds = new maps.LatLngBounds();
-
-    // Build markers per kind so the chips can show/hide whole sets.
-    var markersByKind = { lead: [], job: [] };
-
-    function buildMarker(item) {
-      var pos = { lat: item.lat, lng: item.lng };
-      var icon = iconForItem(maps, item);
-      var marker = new maps.Marker({
-        position: pos,
-        title: item.title || '',
-        icon: icon
-      });
-      marker.addListener('click', function () {
-        infoWindow.setContent(infoContentHTML(item));
-        infoWindow.open(map, marker);
-      });
-      bounds.extend(pos);
-      return marker;
-    }
-
-    leads.forEach(function (it) { markersByKind.lead.push(buildMarker(it)); });
-    jobs.forEach(function (it) { markersByKind.job.push(buildMarker(it)); });
-
-    // Fit to all markers (the clusterer/visibility toggle works on top).
-    if (total > 1) map.fitBounds(bounds, 48);
-    else map.setZoom(14);
-
-    // Cluster the entity pins. The clusterer manages add/remove from the
-    // map, so we feed it the currently-visible set and rebuild on toggle.
-    var clustererCtor = null;
-    var clusterer = null;
     var shown = { lead: true, job: true };
+    var markers = [];
+    var didFit = false;
 
-    function visibleMarkers() {
-      var out = [];
-      if (shown.lead) out = out.concat(markersByKind.lead);
-      if (shown.job) out = out.concat(markersByKind.job);
-      return out;
-    }
+    // (Re)build all markers from the currently-visible item set, grouping
+    // co-located items into a single count-badged pin. Called on first
+    // render and whenever a filter chip toggles.
+    function rebuild() {
+      // Clear prior markers off the map.
+      markers.forEach(function (m) { m.setMap(null); });
+      markers = [];
 
-    function applyMarkers() {
-      var vis = visibleMarkers();
-      if (clusterer) {
-        clusterer.clearMarkers();
-        clusterer.addMarkers(vis);
-      } else {
-        // No clusterer (CDN failed) — set each marker's map directly.
-        markersByKind.lead.forEach(function (m) { m.setMap(shown.lead ? map : null); });
-        markersByKind.job.forEach(function (m) { m.setMap(shown.job ? map : null); });
-      }
-    }
+      var visible = allItems.filter(function (it) { return shown[it.kind]; });
+      var groups = groupByLocation(visible);
+      var bounds = new maps.LatLngBounds();
 
-    ensureClusterer().then(function (Ctor) {
-      clustererCtor = Ctor;
-      if (clustererCtor) {
-        try {
-          clusterer = new clustererCtor({ map: map, markers: visibleMarkers() });
-        } catch (e) {
-          clusterer = null;
-          applyMarkers();
+      groups.forEach(function (g) {
+        var pos = { lat: g.lat, lng: g.lng };
+        var marker;
+        if (g.members.length === 1) {
+          var item = g.members[0];
+          marker = new maps.Marker({ position: pos, title: item.title || '', icon: iconForItem(maps, item), map: map });
+          marker.addListener('click', (function (it) {
+            return function () { infoWindow.setContent(infoContentHTML(it)); infoWindow.open(map, marker); };
+          })(item));
+        } else {
+          marker = new maps.Marker({
+            position: pos,
+            title: g.members.length + ' items at this property',
+            icon: groupPinIcon(maps, g.members.length),
+            map: map
+          });
+          marker.addListener('click', (function (members) {
+            return function () { infoWindow.setContent(groupContentHTML(members)); infoWindow.open(map, marker); };
+          })(g.members));
         }
-      } else {
-        applyMarkers();
+        markers.push(marker);
+        bounds.extend(pos);
+      });
+
+      // Fit only on the first paint — re-fitting on every chip toggle is
+      // jarring. After that, leave the user's pan/zoom alone.
+      if (!didFit) {
+        didFit = true;
+        if (groups.length > 1) map.fitBounds(bounds, 48);
+        else map.setZoom(14);
       }
-    });
-    // Render pins immediately (un-clustered) so they show even before the
-    // clusterer CDN resolves; the clusterer takes over once it loads.
-    applyMarkers();
+    }
+
+    rebuild();
 
     // ── Filter chips ────────────────────────────────────────────────
     host.querySelectorAll('[data-emap-chip]').forEach(function (chip) {
@@ -322,7 +345,8 @@
         } else {
           chip.style.background = 'transparent'; chip.style.color = onColor; chip.style.borderColor = onColor;
         }
-        applyMarkers();
+        infoWindow.close();
+        rebuild();
       });
     });
 
