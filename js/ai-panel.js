@@ -425,6 +425,157 @@
     return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   }
 
+  // ── Slash commands (utilities + quick prompts) ────────────────────
+  // Typing "/" at the start of the input opens a filterable palette.
+  // Utilities (kind 'util') run immediately; prompt-commands (kind
+  // 'prompt') drop a template into the input for the user to finish +
+  // send — same contract as the preset chips. An inline "/web roof felt"
+  // is expanded on send via expandSlash().
+  function slashCommands() {
+    return [
+      { cmd: '/help',  label: 'What can 86 do here', kind: 'util', run: function () { showFullHelp(); } },
+      { cmd: '/new',   label: 'Start a fresh conversation', kind: 'util', run: function () { if (typeof sidebarStartNewChat === 'function') sidebarStartNewChat(); } },
+      { cmd: '/clear', label: 'Clear this conversation', kind: 'util', run: function () { if (typeof clearConversation === 'function') clearConversation(); } },
+      { cmd: '/web',   label: 'Force a live web search', kind: 'prompt', prompt: 'Use web_search to find current info on: ' },
+      { cmd: '/job',   label: 'Look up a job number', kind: 'prompt', prompt: 'Look up job [number or short name] in the live reference sheets — full QB name, client, address, status.' },
+      { cmd: '/price', label: 'Search a material price', kind: 'prompt', prompt: 'Use web_search to find current pricing on [material / SKU]. Compare a couple of suppliers and give the typical Central-FL range.' },
+      { cmd: '/wip',   label: 'WIP snapshot', kind: 'prompt', prompt: 'Pull the WIP report and summarize what\'s under contract — total value, top 5 by remaining backlog, anything behind schedule.' },
+      { cmd: '/scope', label: 'Brainstorm a scope', kind: 'prompt', prompt: 'I\'m thinking through a [scope] at [property type / size / age]. Walk me through line items, gotchas, and questions to ask the PM before quoting.' }
+    ];
+  }
+
+  var _slashSel = -1;
+  var _slashItems = [];
+  function slashPaletteEl() { return document.getElementById('ai-slash-palette'); }
+  function slashOpen() { var el = slashPaletteEl(); return !!(el && el.style.display !== 'none'); }
+
+  function openSlashPalette(filter) {
+    var el = slashPaletteEl();
+    if (!el) return;
+    var f = String(filter || '').replace(/^\//, '').toLowerCase();
+    _slashItems = slashCommands().filter(function (c) {
+      return c.cmd.slice(1).toLowerCase().indexOf(f) === 0 || c.label.toLowerCase().indexOf(f) >= 0;
+    });
+    if (!_slashItems.length) { closeSlashPalette(); return; }
+    _slashSel = 0;
+    renderSlashPalette();
+    el.style.display = 'block';
+  }
+  function closeSlashPalette() {
+    var el = slashPaletteEl();
+    if (el) el.style.display = 'none';
+    _slashSel = -1;
+  }
+  function renderSlashPalette() {
+    var el = slashPaletteEl();
+    if (!el) return;
+    el.innerHTML = _slashItems.map(function (c, i) {
+      var active = i === _slashSel;
+      return '<div data-slash-i="' + i + '" style="display:flex;align-items:center;gap:10px;padding:7px 10px;cursor:pointer;border-radius:8px;' +
+        (active ? 'background:rgba(79,140,255,0.18);' : '') + '">' +
+        '<span style="font-family:ui-monospace,SFMono-Regular,monospace;font-size:12px;font-weight:700;color:#4f8cff;flex-shrink:0;min-width:52px;">' + escapeHTMLLocal(c.cmd) + '</span>' +
+        '<span style="font-size:12px;color:var(--text-dim,#aaa);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTMLLocal(c.label) + '</span>' +
+        '</div>';
+    }).join('');
+    Array.prototype.forEach.call(el.querySelectorAll('[data-slash-i]'), function (row) {
+      row.onmouseenter = function () { _slashSel = Number(row.getAttribute('data-slash-i')); renderSlashPalette(); };
+      // mousedown (not click) so it fires before the input blur closes us.
+      row.onmousedown = function (e) { e.preventDefault(); _slashSel = Number(row.getAttribute('data-slash-i')); applySlashSel(); };
+    });
+  }
+  function moveSlashSel(dir) {
+    if (!_slashItems.length) return;
+    _slashSel = (_slashSel + dir + _slashItems.length) % _slashItems.length;
+    renderSlashPalette();
+  }
+  function applySlashSel() {
+    var c = _slashItems[_slashSel];
+    var ta = document.getElementById('ai-input');
+    closeSlashPalette();
+    if (!c) return;
+    if (c.kind === 'util') {
+      if (ta) { ta.value = ''; ta.style.height = 'auto'; }
+      if (typeof c.run === 'function') c.run();
+      return;
+    }
+    if (ta) {
+      ta.value = c.prompt;
+      ta.focus();
+      ta.style.height = 'auto';
+      ta.style.height = Math.min(ta.scrollHeight, 320) + 'px';
+    }
+  }
+  // Expand an inline-typed command ("/web roof felt", "/help") at send
+  // time. Returns {handled:true} when a utility ran (don't send),
+  // {text:expanded} for a prompt command, or null when it isn't a command.
+  function expandSlash(text) {
+    var m = /^\/(\S+)(?:\s+([\s\S]+))?$/.exec(String(text || '').trim());
+    if (!m) return null;
+    var name = '/' + m[1].toLowerCase();
+    var arg = (m[2] || '').trim();
+    var cmd = slashCommands().filter(function (c) { return c.cmd === name; })[0];
+    if (!cmd) return null;
+    if (cmd.kind === 'util') { if (typeof cmd.run === 'function') cmd.run(); return { handled: true }; }
+    var p = cmd.prompt;
+    if (arg) p = /\[[^\]]*\]/.test(p) ? p.replace(/\[[^\]]*\]/, arg) : (p + arg);
+    return { text: p };
+  }
+
+  // ── Agent identity badge ──────────────────────────────────────────
+  // Set from the session_resolved SSE event's agent_key. 'assistant' =
+  // the per-user Haiku host; 'job' = 86 (Opus); 'scribe' = the writer.
+  var _activeAgentKey = null;
+  function renderAgentBadge() {
+    var el = document.getElementById('ai-agent-badge');
+    if (!el) return;
+    if (!_activeAgentKey) { el.style.display = 'none'; return; }
+    var map = {
+      assistant: { txt: '✦ Assistant', bg: 'rgba(99,102,241,0.92)', title: 'Your personal assistant (Haiku) is hosting — it escalates to 86 for deep work' },
+      job:       { txt: '86',               bg: 'rgba(34,211,238,0.92)', title: 'Talking to 86 (Opus) directly' },
+      scribe:    { txt: 'Scribe',           bg: 'rgba(148,163,184,0.92)', title: 'Scribe (the writer) is active' }
+    };
+    var m = map[_activeAgentKey] || { txt: _activeAgentKey, bg: 'rgba(148,163,184,0.92)', title: '' };
+    el.textContent = m.txt;
+    el.style.background = m.bg;
+    el.title = m.title;
+    el.style.display = 'inline-flex';
+  }
+
+  // ── Notice strip (intro) — short by default, dismissible+remembered ─
+  var INTRO_DISMISS_KEY = 'p86-ai-intro-dismissed';
+  function introDismissed() {
+    try { return localStorage.getItem(INTRO_DISMISS_KEY) === '1'; } catch (e) { return false; }
+  }
+  function shortNoticeFor() {
+    if (isJobMode())    return '86 · job operator — estimating, costs, margin, schedule. I propose; you approve.';
+    if (isClientMode()) return '86 · client directory — split, link, dedupe, capture notes. I propose; you approve.';
+    if (isStaffMode())  return '86 · admin — cross-agent metrics, conversations, skill packs.';
+    if (isIntakeMode()) return '86 · new lead intake — tell me the lead and drop any photos.';
+    if (isAsk86Mode())  return '86 · global — ask anything, or type / for commands.';
+    var phaseN = (window.estimateEditorAPI && window.estimateEditorAPI.getAIPhase) ? window.estimateEditorAPI.getAIPhase() : 'edit';
+    if (phaseN === 'plan') return '\u{1F5FA}️ Plan mode — I think through scope; no line items until you flip to Edit/Auto.';
+    return '86 · estimator — draft, edit, price. Every change is a card you approve.';
+  }
+  function fullHelpFor() {
+    if (isJobMode())    return 'I\'m 86 — Project 86\'s operator. Estimating, scope, line items, leads, jobs, margin, schedule, the node graph, and the customer directory — I do all of it. I propose changes; you approve before they land. Type / for commands.';
+    if (isClientMode()) return 'Client directory mode — I can split parent+property compounds, link unparented properties, capture durable client notes, and propose mutations. Same brain as everywhere else, scoped to your directory snapshot. Type / for commands.';
+    if (isStaffMode())  return 'Admin mode — I see cross-agent metrics, recent conversations, and your skill packs, and can propose skill-pack edits when a workflow should be standardized. Type / for commands.';
+    if (isIntakeMode()) return 'New lead intake — I\'m 86. Tell me what the lead is (property name, scope, salesperson) and drop any photos. I\'ll dedupe against existing clients/leads, propose the new lead for your approval, and tee up the estimate.';
+    if (isAsk86Mode())  return 'I\'m 86 — global mode. Ask me anything. I have web search, the live reference sheets, and can create leads / update clients / propose skill-pack changes inline. For per-line-item edits on a specific estimate or job, open that entity\'s AI panel. Type / for commands.';
+    var phaseN = (window.estimateEditorAPI && window.estimateEditorAPI.getAIPhase) ? window.estimateEditorAPI.getAIPhase() : 'edit';
+    if (phaseN === 'plan') return '\u{1F5FA}️ Plan mode — I\'ll think through scope with you and ask questions, but I won\'t propose line items until you flip to ✏️ Edit or ⚡ Auto.';
+    return 'I\'m 86 — your operator. I draft scopes, add/edit/delete line items and sections, run pricing math, and pull from photos / catalogs / web search as needed. Every change shows as a card with Approve / Reject before it lands.';
+  }
+  // /help — bring the intro back (un-dismiss) and expand it to the full
+  // capability blurb for the current mode.
+  function showFullHelp() {
+    try { localStorage.setItem(INTRO_DISMISS_KEY, '0'); } catch (e) {}
+    var txt = document.querySelector('#p86-ai-panel #ai-notice-text');
+    var wrap = document.querySelector('#p86-ai-panel #ai-notice');
+    if (txt) txt.textContent = fullHelpFor();
+    if (wrap) wrap.style.display = 'flex';
+  }
+
   // Copy-to-clipboard handler for fenced code blocks. Bound to the
   // copy button via inline onclick="p86CopyCodeBlock(this)" emitted
   // by renderMarkdown above. Walks to the sibling <code>, grabs its
@@ -864,6 +1015,10 @@
         '<button id="ai-sidebar-toggle" title="Sessions" aria-label="Open sessions sidebar" style="background:rgba(255,255,255,0.08);color:#fff;border:1px solid rgba(255,255,255,0.15);border-radius:6px;width:30px;height:30px;font-size:16px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;line-height:1;">&#x2630;</button>' +
         '<button id="ai-close" title="Close (Esc)" style="background:rgba(255,255,255,0.12);color:#fff;border:1px solid rgba(255,255,255,0.2);border-radius:6px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:6px;">&rarr; Close</button>' +
         '<div class="p86-ai-title" style="font-size:14px;font-weight:700;color:#fff;flex:1;text-align:right;">&#x2728; AI Assistant</div>' +
+        // Live "who am I talking to" badge — Assistant (Haiku) vs 86
+        // (Opus) vs Scribe. Hidden until session_resolved reports the
+        // agent_key; styled by renderAgentBadge().
+        '<span id="ai-agent-badge" title="Which agent is hosting this chat" style="display:none;align-items:center;font-size:10px;font-weight:700;letter-spacing:0.3px;color:#fff;padding:3px 9px;border-radius:11px;line-height:1.4;flex-shrink:0;"></span>' +
         // AG phase pill — single-icon dropdown. Visible only in estimate
         // mode. The visible icon reflects the active phase (📐 for Plan,
         // 🛠️ for Build); clicking opens a tiny popover with the *other*
@@ -892,9 +1047,12 @@
         '<button id="ai-trust" title="Trust settings (now in the phase pill dropdown)" style="display:none;">&#x2699;</button>' +
         '<button id="ai-clear" title="Clear conversation" style="background:rgba(255,255,255,0.08);color:#ccc;border:1px solid rgba(255,255,255,0.15);border-radius:6px;padding:6px 10px;font-size:11px;cursor:pointer;">Clear</button>' +
       '</div>' +
-      // Notice strip
-      '<div id="ai-notice" style="padding:8px 14px;background:rgba(79,140,255,0.08);border-bottom:1px solid var(--border,#333);font-size:11px;color:var(--text-dim,#aaa);">' +
-        'Read-only — I see your estimate and photos but cannot change anything. Apply suggestions by hand.' +
+      // Notice strip — a short, dismissible first-run hint. The dismiss
+      // "×" remembers itself in localStorage (per-user); /help brings it
+      // back (expanded). Text is set by refreshModeSpecificUI().
+      '<div id="ai-notice" style="padding:7px 12px 7px 14px;background:rgba(79,140,255,0.08);border-bottom:1px solid var(--border,#333);font-size:11px;color:var(--text-dim,#aaa);display:flex;align-items:center;gap:8px;">' +
+        '<span id="ai-notice-text" style="flex:1;min-width:0;">Ask anything, or type / for commands.</span>' +
+        '<button id="ai-notice-dismiss" title="Dismiss (bring it back with /help)" aria-label="Dismiss" style="background:none;border:none;color:var(--text-dim,#888);cursor:pointer;font-size:15px;line-height:1;padding:0 2px;flex-shrink:0;">&times;</button>' +
       '</div>' +
       // Body wrapper — flex ROW so the sidebar can live as a real
       // left-rail column next to the chat content rather than as an
@@ -917,8 +1075,11 @@
       '<div id="ai-presets" style="padding:8px 12px;border-top:1px solid var(--border,#333);display:flex;flex-wrap:wrap;gap:6px;background:rgba(255,255,255,0.02);"></div>' +
       // Input row. Photos are auto-included via the entity's attachments
       // and inline uploads via the + composer button — no separate toggle
-      // needed.
-      '<div style="padding:10px 12px 12px;border-top:1px solid var(--border,#333);background:var(--card-bg,#0c0c14);">' +
+      // needed. position:relative anchors the / command palette.
+      '<div id="ai-input-row" style="position:relative;padding:10px 12px 12px;border-top:1px solid var(--border,#333);background:var(--card-bg,#0c0c14);">' +
+        // Slash-command palette — pops above the input when the user
+        // types "/". Filled by renderSlashPalette(); hidden otherwise.
+        '<div id="ai-slash-palette" style="display:none;position:absolute;left:12px;right:12px;bottom:100%;margin-bottom:6px;background:#1a2230;border:1px solid rgba(255,255,255,0.14);border-radius:10px;padding:4px;box-shadow:0 8px 22px rgba(0,0,0,0.5);max-height:240px;overflow-y:auto;z-index:20;"></div>' +
         // Pill-style input container — borderless textarea with attach,
         // camera, mic and send icons docked at the bottom-right. Grows
         // up as the user types so long prompts stay readable; capped at
@@ -988,6 +1149,18 @@
     panel.querySelector('#ai-clear').onclick = clearConversation;
     panel.querySelector('#ai-send').onclick = onSend;
     panel.querySelector('#ai-sidebar-new').onclick = sidebarStartNewChat;
+    // Dismissible intro — remember the choice; /help brings it back.
+    var noticeDismiss = panel.querySelector('#ai-notice-dismiss');
+    if (noticeDismiss) noticeDismiss.onclick = function () {
+      try { localStorage.setItem(INTRO_DISMISS_KEY, '1'); } catch (e) {}
+      var w = panel.querySelector('#ai-notice');
+      if (w) w.style.display = 'none';
+    };
+    // Close the / palette on a click outside the input row.
+    document.addEventListener('click', function (e) {
+      var row = panel.querySelector('#ai-input-row');
+      if (slashOpen() && row && !row.contains(e.target)) closeSlashPalette();
+    });
     var searchInput = panel.querySelector('#ai-sidebar-search');
     if (searchInput) {
       var _searchTimer = null;
@@ -1079,7 +1252,25 @@
       input.style.height = Math.min(input.scrollHeight, 320) + 'px';
     }
     input.addEventListener('input', autoGrow);
+    // Slash-command detection: open the palette when the input is a bare
+    // "/foo" token (no space/newline yet); close once they type past it.
+    input.addEventListener('input', function () {
+      var v = input.value;
+      if (v.charAt(0) === '/' && v.indexOf(' ') === -1 && v.indexOf('\n') === -1) {
+        openSlashPalette(v.slice(1));
+      } else {
+        closeSlashPalette();
+      }
+    });
     input.addEventListener('keydown', function(e) {
+      // When the / palette is open, the arrow keys + Enter drive it.
+      if (slashOpen()) {
+        if (e.key === 'ArrowDown') { e.preventDefault(); moveSlashSel(1); return; }
+        if (e.key === 'ArrowUp')   { e.preventDefault(); moveSlashSel(-1); return; }
+        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); applySlashSel(); return; }
+        if (e.key === 'Tab') { e.preventDefault(); applySlashSel(); return; }
+        if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeSlashPalette(); return; }
+      }
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         onSend();
@@ -1459,25 +1650,13 @@
     // a ref to #ai-trust keeps working) but is permanently hidden.
     var trustBtn = document.getElementById('ai-trust');
     if (trustBtn) trustBtn.style.display = 'none';
-    var noticeEl = document.querySelector('#p86-ai-panel #ai-notice');
-    if (noticeEl) {
-      if (isJobMode()) noticeEl.textContent = 'I\'m 86 — Project 86\'s operator. Estimating, scope, line items, leads, jobs, margin, schedule, the node graph, and the customer directory (clients, jobs, subs, users) — I do all of it. I propose changes; you approve before they land.';
-      else if (isClientMode()) noticeEl.textContent = 'Client directory mode — I can split parent+property compounds, link unparented properties, capture durable client notes, propose mutations. Same brain as everywhere else, scoped to your directory snapshot.';
-      else if (isStaffMode()) noticeEl.textContent = 'Admin mode — I see cross-agent metrics, recent conversations, and your skill packs. I can propose skill-pack edits when a workflow should be standardized. Same brain as everywhere else, scoped to the admin snapshot.';
-      else if (isIntakeMode()) noticeEl.textContent = 'New lead intake — I\'m 86. Tell me what the lead is (property name, scope, salesperson) and drop any photos. I\'ll dedupe against existing clients/leads, propose the new lead for your approval, and tee up the estimate.';
-      else if (isAsk86Mode()) noticeEl.textContent = 'I\'m 86 — global mode. Ask me anything. I have web search, the live reference sheets, and can create leads / update clients / propose skill-pack changes inline. For per-line-item edits on a specific estimate or job, open that entity\'s AI panel.';
-      else {
-        // 86's notice changes wording in Plan mode so the user sees a
-        // clear cue that 86 won't propose line items right now.
-        var phaseN = (window.estimateEditorAPI && window.estimateEditorAPI.getAIPhase)
-          ? window.estimateEditorAPI.getAIPhase() : 'edit';
-        if (phaseN === 'plan') {
-          noticeEl.textContent = '🗺️ Plan mode — I\'ll think through scope with you and ask questions, but I won\'t propose line items until you flip to ✏️ Edit or ⚡ Auto.';
-        } else {
-          noticeEl.textContent = 'I\'m 86 — your operator. I draft scopes, add/edit/delete line items and sections, run pricing math, and pull from photos / catalogs / web search as needed. Every change shows as a card with Approve / Reject before it lands.';
-        }
-      }
-    }
+    // Notice: a short, dismissible first-run hint. Full text lives in
+    // shortNoticeFor()/fullHelpFor(); the strip hides entirely once the
+    // user dismisses it (remembered per-user). /help brings it back.
+    var noticeText = document.querySelector('#p86-ai-panel #ai-notice-text');
+    var noticeWrap = document.querySelector('#p86-ai-panel #ai-notice');
+    if (noticeText) noticeText.textContent = shortNoticeFor();
+    if (noticeWrap) noticeWrap.style.display = introDismissed() ? 'none' : 'flex';
     var inputEl = document.getElementById('ai-input');
     if (inputEl) {
       if (isClientMode()) inputEl.placeholder = 'Describe a change, ask a question, or tap "Run full audit" below…';
@@ -1489,21 +1668,61 @@
     renderPresets();
   }
 
+  // Rolling hint chips (Claude-in-Chrome style): show a window of the
+  // active presets and gently rotate through the rest on a timer, with a
+  // fade. Clicking a chip still prefills the input. Rotation pauses while
+  // the user is hovering the row, has the input focused/typed, or a turn
+  // is streaming — so it never moves under an active hand.
+  var _presetRotateTimer = null;
+  var _presetOffset = 0;
+  var PRESET_VISIBLE = 3;
   function renderPresets() {
     var presetWrap = document.getElementById('ai-presets');
     if (!presetWrap) return;
-    presetWrap.innerHTML = '';
-    getActivePresets().forEach(function(p) {
-      var btn = document.createElement('button');
-      btn.className = 'ee-btn ghost';
-      btn.textContent = p.label;
-      btn.onclick = function() {
+    if (_presetRotateTimer) { clearInterval(_presetRotateTimer); _presetRotateTimer = null; }
+    var presets = getActivePresets();
+    if (!presets || !presets.length) { presetWrap.innerHTML = ''; return; }
+    _presetOffset = 0;
+
+    function paint() {
+      var slice = [];
+      var n = Math.min(PRESET_VISIBLE, presets.length);
+      for (var i = 0; i < n; i++) slice.push(presets[(_presetOffset + i) % presets.length]);
+      presetWrap.style.transition = 'opacity 0.18s ease';
+      presetWrap.style.opacity = '0';
+      setTimeout(function () {
+        presetWrap.innerHTML = '';
+        slice.forEach(function (p) {
+          var btn = document.createElement('button');
+          btn.className = 'ee-btn ghost';
+          btn.textContent = p.label;
+          btn.onclick = function () {
+            if (_streaming) return;
+            var ta = document.getElementById('ai-input');
+            if (ta) { ta.value = p.prompt; ta.focus(); ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 320) + 'px'; }
+          };
+          presetWrap.appendChild(btn);
+        });
+        // Subtle "/ for commands" affordance, pushed to the right.
+        var hint = document.createElement('span');
+        hint.textContent = '/ for commands';
+        hint.style.cssText = 'align-self:center;margin-left:auto;font-size:10px;color:var(--text-dim,#777);opacity:0.65;white-space:nowrap;';
+        presetWrap.appendChild(hint);
+        presetWrap.style.opacity = '1';
+      }, 180);
+    }
+    paint();
+
+    if (presets.length > PRESET_VISIBLE) {
+      _presetRotateTimer = setInterval(function () {
         if (_streaming) return;
+        if (presetWrap.matches && presetWrap.matches(':hover')) return;
         var ta = document.getElementById('ai-input');
-        if (ta) { ta.value = p.prompt; ta.focus(); }
-      };
-      presetWrap.appendChild(btn);
-    });
+        if (ta && (document.activeElement === ta || (ta.value || '').trim())) return;
+        _presetOffset = (_presetOffset + PRESET_VISIBLE) % presets.length;
+        paint();
+      }, 3800);
+    }
   }
 
   function close() {
@@ -1511,6 +1730,9 @@
     if (panel) panel.style.transform = 'translateX(100%)';
     document.body.classList.remove('p86-ai-open');
     _open = false;
+    // Stop the rolling-hint rotation while the panel is closed.
+    if (_presetRotateTimer) { clearInterval(_presetRotateTimer); _presetRotateTimer = null; }
+    closeSlashPalette();
     if (_abortController) {
       try { _abortController.abort(); } catch (e) { /* ignore */ }
       _abortController = null;
@@ -2438,6 +2660,17 @@
     var input = document.getElementById('ai-input');
     var text = (input && input.value || '').trim();
     if (!text) return;
+    // Slash command typed inline (e.g. "/help", "/web roof felt"). A
+    // utility runs and stops here; a prompt command expands its template
+    // and falls through to send. Plain text passes through untouched.
+    if (text.charAt(0) === '/') {
+      var ex = expandSlash(text);
+      if (ex) {
+        closeSlashPalette();
+        if (ex.handled) { input.value = ''; input.style.height = 'auto'; return; }
+        if (ex.text) { text = ex.text; if (input) { input.value = text; } }
+      }
+    }
     if (!_entityId) { alert('No ' + _entityType + ' is open.'); return; }
     // Stop dictation if the user clicked send mid-utterance. Without
     // this the recognition keeps running with a stale `baseValue`
@@ -2655,6 +2888,11 @@
         // legacy session.
         if (payload.session_resolved) {
           try {
+            // Live agent badge — which managed agent hosts this thread.
+            if (payload.session_resolved.agent_key) {
+              _activeAgentKey = payload.session_resolved.agent_key;
+              renderAgentBadge();
+            }
             var resolvedId = payload.session_resolved.db_session_id;
             if (resolvedId != null && resolvedId !== _currentSessionId) {
               var prev = _currentSessionId;

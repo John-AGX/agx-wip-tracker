@@ -3711,6 +3711,11 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
       anthropic_session_id: sessionId,
       freshly_created: !!freshlyCreated,
       label: session && session.label,
+      // Which managed agent hosts this thread — 'assistant' (Haiku),
+      // 'job' (86/Opus), or 'scribe'. Surfaced so the client can show a
+      // live "who am I talking to" badge. Additive field; older clients
+      // that don't read it are unaffected.
+      agent_key: session && session.agent_key,
     }
   });
 
