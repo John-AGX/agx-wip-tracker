@@ -1463,7 +1463,7 @@
       }
       html += '<div class="sch-entry-bar' + statusCls + '" ' +
         'data-entry-id="' + escapeAttr(e.id) + '" ' +
-        'style="left:' + leftPct.toFixed(4) + '%;width:calc(' + widthPct.toFixed(4) + '% - 4px);top:' + topPx + 'px;background:' + color + ';" ' +
+        'style="left:' + leftPct.toFixed(4) + '%;width:calc(' + widthPct.toFixed(4) + '% - 4px);top:' + topPx + 'px;--entry-color:' + color + ';" ' +
         'title="' + escapeAttr(jobLabel(job)) + (e.notes ? ' — ' + escapeAttr(e.notes) : '') + '">' +
         wxHtml +
         '<span class="sch-entry-bar-label">' + escapeHTML(label) + hint + '</span>' +
@@ -1518,10 +1518,10 @@
         e.stopPropagation();
         var id = el.getAttribute('data-entry-id');
         var entry = _state.entries.find(function(x) { return x.id === id; });
-        if (entry) openEntryEditor(entry, entry.startDate, entry.jobId);
+        if (entry) openEntryCard(entry);
       });
     });
-    // Per-day job cards inside focused weeks. Tap → open entry editor.
+    // Per-day job cards inside focused weeks. Tap → open the read-only card.
     // Wired BEFORE the day-cell catch-all so the card click doesn't
     // bubble up and re-open the day sheet on top of the editor.
     grid.querySelectorAll('.sch-day-job-card[data-entry-id]').forEach(function(card) {
@@ -1529,7 +1529,7 @@
         e.stopPropagation();
         var id = card.getAttribute('data-entry-id');
         var entry = _state.entries.find(function(x) { return x.id === id; });
-        if (entry) openEntryEditor(entry, entry.startDate, entry.jobId);
+        if (entry) openEntryCard(entry);
       });
     });
     grid.querySelectorAll('.sch-cal-day[data-date]').forEach(function(cell) {
@@ -1713,8 +1713,72 @@
         var id = row.getAttribute('data-entry-id');
         var entry = _state.entries.find(function(x) { return x.id === id; });
         close();
-        if (entry) openEntryEditor(entry, entry.startDate, entry.jobId);
+        if (entry) openEntryCard(entry);
       });
+    });
+  }
+
+  // ── Read-only "live card" for a schedule entry ─────────────
+  // Clicking an entry on the calendar opens this clean, refined view —
+  // NOT the editor. An Edit button flips into the full editor only when
+  // the user actually wants to change something (the Outlook "open the
+  // item, then choose to edit" flow).
+  function fmtCardDate(d) {
+    if (!d) return '';
+    var DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    var MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return DOW[d.getDay()] + ', ' + MON[d.getMonth()] + ' ' + d.getDate();
+  }
+  function openEntryCard(entry) {
+    if (!entry) return;
+    var job = jobById(entry.jobId);
+    var color = colorForJob(entry.jobId);
+    var span = entrySpanDays(entry);
+    var startD = parseISODate(entry.startDate);
+    var endIso = span.length ? span[span.length - 1] : entry.startDate;
+    var endD = parseISODate(endIso);
+    var when = fmtCardDate(startD) + (endD && endIso !== entry.startDate ? '  →  ' + fmtCardDate(endD) : '');
+    var dayCount = span.length || (parseInt(entry.days, 10) || 1);
+    var statusLabel = (entry.status || 'planned').replace(/-/g, ' ');
+    var crew = (entry.crew || []).map(function (id) {
+      var u = (_state.users || []).find(function (x) { return String(x.id) === String(id); });
+      return u ? (u.name || u.email || ('User ' + id)) : ('User ' + id);
+    });
+
+    function row(label, val) {
+      if (!val) return '';
+      return '<div style="display:flex;gap:12px;padding:9px 0;border-top:1px solid var(--border,#262626);">' +
+        '<div style="width:92px;flex-shrink:0;font-size:11px;text-transform:uppercase;letter-spacing:0.4px;color:var(--text-dim,#888);padding-top:1px;">' + escapeHTML(label) + '</div>' +
+        '<div style="flex:1;font-size:13px;color:var(--text,#e6e6e6);line-height:1.5;">' + val + '</div>' +
+      '</div>';
+    }
+
+    var modal = document.createElement('div');
+    modal.id = 'schEntryCard';
+    modal.className = 'modal active';
+    modal.innerHTML =
+      '<div class="modal-content" style="max-width:440px;border-left:4px solid ' + color + ';">' +
+        '<div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:8px;">' +
+          '<div style="flex:1;min-width:0;">' +
+            '<div style="font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:' + color + ';font-weight:700;margin-bottom:3px;">Schedule entry</div>' +
+            '<div style="font-size:17px;font-weight:700;color:var(--text,#fff);line-height:1.25;">' + escapeHTML(jobLabel(job)) + '</div>' +
+            '<div style="margin-top:6px;"><span style="font-size:11px;font-weight:600;text-transform:capitalize;color:' + color + ';background:rgba(255,255,255,0.06);border:1px solid ' + color + ';border-radius:10px;padding:2px 10px;">' + escapeHTML(statusLabel) + '</span></div>' +
+          '</div>' +
+          '<button type="button" class="sch-btn sch-btn-primary" id="schCardEdit">Edit</button>' +
+          '<button type="button" class="sch-btn sch-btn-icon" id="schCardClose" title="Close">✕</button>' +
+        '</div>' +
+        row('When', escapeHTML(when)) +
+        row('Production', dayCount + ' day' + (dayCount === 1 ? '' : 's')) +
+        row('Crew', crew.length ? crew.map(escapeHTML).join(', ') : '<span style="color:var(--text-dim,#888);">No crew assigned</span>') +
+        row('Notes', entry.notes ? escapeHTML(entry.notes) : '') +
+      '</div>';
+    document.body.appendChild(modal);
+    function close() { modal.remove(); }
+    modal.querySelector('#schCardClose').addEventListener('click', close);
+    modal.addEventListener('click', function (e) { if (e.target === modal) close(); });
+    modal.querySelector('#schCardEdit').addEventListener('click', function () {
+      close();
+      openEntryEditor(entry, entry.startDate, entry.jobId);
     });
   }
 

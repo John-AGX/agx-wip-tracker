@@ -738,16 +738,27 @@ body.light-mode .sch-cal-week-row.sch-week-focused::after {
   transform: translateY(-1px);
   z-index: 5;
 }
+/* Outlook-style muted bars — translucent + outlined instead of a solid
+   fill (like a canceled / completed event). The --entry-color custom
+   property (set inline per job) drives the outline + text so each job
+   keeps its identity even when de-emphasized. Active (planned /
+   in-progress) bars keep the opaque fill from the base rule above. */
 .sch-entry-bar.sch-entry-bar-done {
-  opacity: 0.55;
+  background: transparent;
+  color: var(--entry-color, rgba(79, 140, 255, 0.95));
+  border: 1px solid var(--entry-color, rgba(79, 140, 255, 0.6));
+  border-left: 3px solid var(--entry-color, rgba(79, 140, 255, 0.9));
+  box-shadow: none;
   text-decoration: line-through;
+  opacity: 0.85;
 }
 .sch-entry-bar.sch-entry-bar-rolled {
-  opacity: 0.55;
-  background-image: repeating-linear-gradient(
-    45deg, transparent, transparent 4px,
-    rgba(255, 255, 255, 0.12) 4px, rgba(255, 255, 255, 0.12) 8px
-  );
+  background: transparent;
+  color: var(--entry-color, rgba(79, 140, 255, 0.95));
+  border: 1px dashed var(--entry-color, rgba(79, 140, 255, 0.7));
+  border-left: 3px solid var(--entry-color, rgba(79, 140, 255, 0.9));
+  box-shadow: none;
+  opacity: 0.9;
 }
 .sch-entry-bar-meta {
   font-size: 9px;
