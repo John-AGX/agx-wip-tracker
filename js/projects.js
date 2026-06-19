@@ -5280,8 +5280,8 @@
           // "Done" appears only in walkthrough mode — saves the
           // current photo AND exits the capture loop so the camera
           // doesn't pop back up after this save.
-          '<button class="ee-btn secondary" id="upPrevDone" style="display:none;" title="Save this photo and stop the walkthrough capture loop">&#x2714;&#xFE0F; Done</button>' +
-          '<button class="ee-btn secondary" id="upPrevQuick" title="Skip preview for the rest of this batch">&#x26A1; Quick Save</button>' +
+          '<button class="ee-btn secondary" id="upPrevDone" style="display:none;" title="Save this photo and stop the walkthrough capture loop">&#x2714;&#xFE0F; Save &amp; finish</button>' +
+          '<button class="ee-btn secondary" id="upPrevQuick" title="Save this one, then skip the preview for the rest of this batch">&#x26A1; Quick save (skip previews)</button>' +
           '<button class="primary" id="upPrevSave">Save</button>' +
         '</div>' +
       '</div>';
