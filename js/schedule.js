@@ -68,7 +68,12 @@
       // would show "Pinned" in the toolbar but with no week-row
       // glow because the focus key was lost.
       weekSummaryPinned: false,
-      focusWeekStart: null
+      focusWeekStart: null,
+      // Slice C — overlay layer visibility. Both on by default; the
+      // toolbar pills flip these. Merge-healed below so a legacy save
+      // (no layers key) picks up the defaults without clobbering an
+      // explicit user choice.
+      layers: { jobs: true, events: true }
     };
     try {
       var saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
@@ -82,6 +87,16 @@
       }
       if (!merged.jobTypeFilter || typeof merged.jobTypeFilter !== 'object') {
         merged.jobTypeFilter = Object.assign({}, defaults.jobTypeFilter);
+      }
+      // Slice C — heal the layers object. A legacy save predates it
+      // entirely (object missing → seed both-on); a partial save may
+      // carry only one key → backfill the other with its default so
+      // an undefined never reads as "off". Explicit false is honored.
+      if (!merged.layers || typeof merged.layers !== 'object') {
+        merged.layers = Object.assign({}, defaults.layers);
+      } else {
+        if (typeof merged.layers.jobs !== 'boolean') merged.layers.jobs = defaults.layers.jobs;
+        if (typeof merged.layers.events !== 'boolean') merged.layers.events = defaults.layers.events;
       }
       // Heal the legacy state where weekSummaryPinned was persisted
       // but focusWeekStart was a top-level _state key that never
@@ -208,6 +223,35 @@
     });
   }
 
+  // ── Slice C: personal calendar events ──────────────────────
+  // Pulls the user's personal calendar events (window.p86Api.calendar)
+  // so they can be overlaid as a second layer on the production grid.
+  // No range filter — we window client-side per week-row, same as job
+  // entries. Degrades silently to [] when the api is unavailable or
+  // the user isn't authenticated, so a logged-out / offline view just
+  // shows no event layer instead of erroring. Returns a Promise so the
+  // caller can chain a render.
+  function isCalendarApiReady() {
+    return !!(window.p86Api &&
+              window.p86Api.calendar &&
+              window.p86Api.isAuthenticated &&
+              window.p86Api.isAuthenticated());
+  }
+  function fetchEvents() {
+    if (!isCalendarApiReady()) {
+      _state.events = [];
+      return Promise.resolve(_state.events);
+    }
+    return window.p86Api.calendar.list().then(function(res) {
+      _state.events = (res && res.events) || [];
+      return _state.events;
+    }).catch(function(err) {
+      console.warn('[schedule] event fetch failed:', err && err.message);
+      _state.events = [];
+      return _state.events;
+    });
+  }
+
   // ── Date helpers ───────────────────────────────────────────
   // All keys & wire format are YYYY-MM-DD strings — easy to compare,
   // easy to persist, and they round-trip without timezone drift.
@@ -274,6 +318,23 @@
     return (sum / colWeightSum()) * 100;
   }
 
+  // ── Slice C: event time formatting ─────────────────────────
+  // Compact local 12-hour clock for an ISO datetime — no leading zero
+  // on the hour, lowercased am/pm, e.g. "9:30 am". Used to prefix
+  // timed event labels on the grid. Returns '' for an unparseable
+  // input so the label just falls back to the bare title.
+  function fmtEventTime(iso) {
+    if (!iso) return '';
+    var d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    var h = d.getHours();
+    var m = d.getMinutes();
+    var ampm = h < 12 ? 'am' : 'pm';
+    var h12 = h % 12;
+    if (h12 === 0) h12 = 12;
+    return h12 + ':' + (m < 10 ? '0' + m : m) + ' ' + ampm;
+  }
+
   // ── Color palette for jobs ─────────────────────────────────
   // Stable hash-mod-palette so the same job always gets the same color
   // across the sidebar, calendar, and modal.
@@ -309,13 +370,20 @@
   var _state = {
     cursor: null,        // first day of the month being viewed
     entries: [],
+    // Slice C — personal calendar events overlaid as a second layer
+    // on the production grid. Hydrated by fetchEvents() from
+    // window.p86Api.calendar; stays [] when the api is unavailable.
+    events: [],
     settings: {
       showWeekends: true,
       viewMonth: null,
       // Persisted across sessions. Object keyed by string label,
       // value true/false. Missing key = false (filtered out).
       statusFilter: Object.assign({}, DEFAULT_STATUS_SET),
-      jobTypeFilter: Object.assign({}, DEFAULT_JOB_TYPE_SET)
+      jobTypeFilter: Object.assign({}, DEFAULT_JOB_TYPE_SET),
+      // Slice C — which overlay layers paint on the grid. Both on
+      // by default. Toggled via the toolbar pills.
+      layers: { jobs: true, events: true }
     },
     users: [],           // hydrated from /api/auth/users
     sidebarSearch: '',
@@ -758,6 +826,13 @@
       refreshWeatherForVisibleJobs();
       refreshUserWeatherForecast();
     });
+
+    // Slice C — personal calendar events, fetched on their own chain
+    // so they don't gate (or get gated by) the job-entry fetch. Repaint
+    // the grid when they land so the event layer appears.
+    fetchEvents().then(function() {
+      renderGrid();
+    });
   }
 
   // ── Render: sidebar ────────────────────────────────────────
@@ -891,6 +966,12 @@
     var el = document.getElementById('schCalWrap');
     if (!el) return;
     var showW = !!_state.settings.showWeekends;
+    // Slice C — layer visibility. Defaults to on if the key is missing
+    // (defensive; loadSettings heals it but renderCalendar can run
+    // before a fresh load on re-render).
+    var layers = _state.settings.layers || (_state.settings.layers = { jobs: true, events: true });
+    var jobsOn = layers.jobs !== false;
+    var eventsOn = layers.events !== false;
 
     el.innerHTML =
       '<div class="sch-cal-toolbar">' +
@@ -906,10 +987,19 @@
         '</div>' +
         '<div class="sch-toolbar-spacer"></div>' +
         '<span class="p86-ask86-mount"></span>' +
+        // Slice C — layer toggle pills. Flip which overlay layers the
+        // grid paints (production jobs vs the user's personal events).
+        '<div class="sch-layer-toggles" role="group" aria-label="Calendar layers">' +
+          '<button class="sch-btn sch-btn-toggle' + (jobsOn ? ' active' : '') + '" id="schLayerJobs" ' +
+            'title="Show / hide production job bars on the calendar.">Jobs</button>' +
+          '<button class="sch-btn sch-btn-toggle' + (eventsOn ? ' active' : '') + '" id="schLayerEvents" ' +
+            'title="Show / hide your personal calendar events on the calendar.">My Events</button>' +
+        '</div>' +
         '<button class="sch-btn sch-btn-toggle' + (showW ? ' active' : '') + '" id="schWeekendToggle" ' +
           'title="' + (showW ? 'Hide' : 'Show') + ' weekend columns. Display only — does not change how production days are counted on entries.">' +
           (showW ? '&#x1F441; 7-day' : '&#x1F441; 5-day') +
         '</button>' +
+        '<button class="sch-btn sch-btn-primary" id="schAddEvent">+ Event</button>' +
         '<button class="sch-btn sch-btn-primary" id="schAddEntry">+ Schedule entry</button>' +
       '</div>' +
       // Fisheye scroll container. Sticky day-of-week header rides
@@ -930,6 +1020,27 @@
     });
     document.getElementById('schAddEntry').addEventListener('click', function() {
       openEntryEditor(null, toISODate(new Date()));
+    });
+    // Slice C — layer toggle pills + "+ Event" button.
+    var layerJobsBtn = document.getElementById('schLayerJobs');
+    if (layerJobsBtn) layerJobsBtn.addEventListener('click', function() {
+      _state.settings.layers = _state.settings.layers || { jobs: true, events: true };
+      _state.settings.layers.jobs = !( _state.settings.layers.jobs !== false );
+      saveSettings(_state.settings);
+      this.classList.toggle('active', _state.settings.layers.jobs !== false);
+      renderGrid();
+    });
+    var layerEventsBtn = document.getElementById('schLayerEvents');
+    if (layerEventsBtn) layerEventsBtn.addEventListener('click', function() {
+      _state.settings.layers = _state.settings.layers || { jobs: true, events: true };
+      _state.settings.layers.events = !( _state.settings.layers.events !== false );
+      saveSettings(_state.settings);
+      this.classList.toggle('active', _state.settings.layers.events !== false);
+      renderGrid();
+    });
+    var addEventBtn = document.getElementById('schAddEvent');
+    if (addEventBtn) addEventBtn.addEventListener('click', function() {
+      openEventEditor(null, toISODate(new Date()));
     });
     var toggleBtn = document.getElementById('schSidebarToggle');
     if (toggleBtn) toggleBtn.addEventListener('click', toggleMobileSidebar);
@@ -1407,8 +1518,16 @@
     // row. Bars use percent-based left/width so they snap to the
     // 7-col layout and stay aligned when the row resizes.
     html += '<div class="sch-cal-bars">';
-    var maxRow = 0;
-    segments.forEach(function(seg) {
+    // Slice C — layer visibility. Job bars only emit when the Jobs
+    // layer is on; events only when the My Events layer is on. maxRow
+    // tracks the highest job-bar row actually rendered so the event
+    // layer can stack below without overlapping. When jobs are hidden
+    // maxRow stays -1 so events start at the base row.
+    var layers = _state.settings.layers || {};
+    var jobsLayerOn = layers.jobs !== false;
+    var eventsLayerOn = layers.events !== false;
+    var maxRow = -1;
+    if (jobsLayerOn) segments.forEach(function(seg) {
       // Note: when "Show Sat/Sun" is off but an entry's includesWeekends
       // is true, the bar still renders over the (visibility:hidden)
       // weekend cells. Underlying cells take grid space, so the
@@ -1471,6 +1590,97 @@
         handleHtml +
       '</div>';
     });
+
+    // ── Slice C: personal calendar events layer ────────────────
+    // A SECOND layer painted alongside (below) the job bars. Each
+    // event is clipped to this week's 7 day-columns; multi-day events
+    // span columns, single-day events occupy one. Events stack into
+    // their own rows starting just below the lowest job-bar row used
+    // this week (eventBaseRow), so the two layers never overlap.
+    if (eventsLayerOn && _state.events && _state.events.length) {
+      var eventSegs = [];
+      _state.events.forEach(function(ev) {
+        if (!ev || !ev.starts_at) return;
+        var sd = parseISODate(ev.starts_at);
+        if (!sd) return;
+        // End date inclusive; fall back to the start date when ends_at
+        // is missing. Clip the [start..end] day range to this week.
+        var ed = parseISODate(ev.ends_at) || sd;
+        if (ed < sd) ed = sd;
+        var cols = [];
+        for (var ci = 0; ci < 7; ci++) {
+          var dayIso = weekKeys[ci];
+          if (dayIso >= toISODate(sd) && dayIso <= toISODate(ed)) cols.push(ci);
+        }
+        if (!cols.length) return;
+        // Group consecutive columns into runs so an event that wraps
+        // a week boundary (or the layout) renders as one bar per run.
+        var run = [cols[0]];
+        for (var k = 1; k < cols.length; k++) {
+          if (cols[k] === cols[k - 1] + 1) { run.push(cols[k]); }
+          else { eventSegs.push({ event: ev, startCol: run[0], span: run.length }); run = [cols[k]]; }
+        }
+        eventSegs.push({ event: ev, startCol: run[0], span: run.length });
+      });
+
+      if (eventSegs.length) {
+        // Greedy left-to-right row packing within the event layer,
+        // identical to the job-bar packer. Row 0 here is the first
+        // event row; it's offset below the job rows when positioned.
+        eventSegs.sort(function(a, b) {
+          if (a.startCol !== b.startCol) return a.startCol - b.startCol;
+          return b.span - a.span;
+        });
+        var evOccupancy = [];
+        eventSegs.forEach(function(seg) {
+          var placed = false;
+          for (var r = 0; r < 12 && !placed; r++) {
+            evOccupancy[r] = evOccupancy[r] || [];
+            var clash = evOccupancy[r].some(function(slot) {
+              return !(seg.startCol + seg.span <= slot.start || seg.startCol >= slot.end);
+            });
+            if (!clash) {
+              evOccupancy[r].push({ start: seg.startCol, end: seg.startCol + seg.span });
+              seg.row = r;
+              placed = true;
+            }
+          }
+          if (!placed) seg.row = 11;
+        });
+
+        // Events start one row below the lowest job-bar row used this
+        // week. When jobs are hidden (maxRow === -1) they start at the
+        // base row, same vertical rhythm (22 + row*18).
+        var eventBaseRow = maxRow + 1;
+        eventSegs.forEach(function(seg) {
+          var ev = seg.event;
+          var leftPct = colLeftPct(seg.startCol);
+          var widthPct = colWidthPct(seg.startCol, seg.span);
+          var rowIdx = eventBaseRow + seg.row;
+          var topPx = 22 + rowIdx * 18;
+          var color = ev.color || EVENT_DEFAULT_COLOR;
+          var statusCls = '';
+          if (ev.status === 'tentative') statusCls = ' sch-cal-event-tentative';
+          else if (ev.status === 'canceled') statusCls = ' sch-cal-event-canceled';
+          var title = ev.title || '(untitled event)';
+          // Timed events get a compact local-time prefix; all-day
+          // events just show the title. Prefix only on the segment's
+          // first column so a wrapped run doesn't repeat the time.
+          var timePrefix = '';
+          if (!ev.all_day) {
+            var t = fmtEventTime(ev.starts_at);
+            if (t) timePrefix = t + ' ';
+          }
+          html += '<div class="sch-cal-event' + statusCls + '" ' +
+            'data-event-id="' + escapeAttr(ev.id) + '" ' +
+            'style="left:' + leftPct.toFixed(4) + '%;width:calc(' + widthPct.toFixed(4) + '% - 4px);top:' + topPx + 'px;--event-color:' + escapeAttr(color) + ';" ' +
+            'title="' + escapeAttr((timePrefix ? timePrefix : '') + title) + '">' +
+            escapeHTML(timePrefix + title) +
+          '</div>';
+        });
+      }
+    }
+
     html += '</div></div>'; // close .sch-cal-bars + .sch-cal-week-row
     return html;
   }
@@ -1519,6 +1729,17 @@
         var id = el.getAttribute('data-entry-id');
         var entry = _state.entries.find(function(x) { return x.id === id; });
         if (entry) openEntryCard(entry);
+      });
+    });
+    // Slice C — personal calendar events. Tap → read-only event card.
+    // Wired alongside the job-bar handler so both overlay layers are
+    // independently clickable.
+    grid.querySelectorAll('.sch-cal-event[data-event-id]').forEach(function(el) {
+      el.addEventListener('click', function(e) {
+        e.stopPropagation();
+        var id = el.getAttribute('data-event-id');
+        var event = (_state.events || []).find(function(x) { return String(x.id) === String(id); });
+        if (event) openEventCard(event);
       });
     });
     // Per-day job cards inside focused weeks. Tap → open the read-only card.
@@ -1779,6 +2000,286 @@
     modal.querySelector('#schCardEdit').addEventListener('click', function () {
       close();
       openEntryEditor(entry, entry.startDate, entry.jobId);
+    });
+  }
+
+  // ── Slice C: read-only "live card" for a personal event ─────
+  // Mirrors openEntryCard's structure/scaffolding — left accent border
+  // in the event color, an "Event" eyebrow, the title, a status chip,
+  // and rows for When / Location / Notes. Top-right Edit + close.
+  var EVENT_DEFAULT_COLOR = '#6366f1';
+  function openEventCard(event) {
+    if (!event) return;
+    var color = event.color || EVENT_DEFAULT_COLOR;
+    var sd = parseISODate(event.starts_at);
+    var ed = parseISODate(event.ends_at);
+    // Compose the When line. All-day → "All day"; timed → a local
+    // time range. Multi-day events show the end date too.
+    var whenVal = '';
+    if (sd) {
+      var startDateLabel = fmtCardDate(sd);
+      if (event.all_day) {
+        whenVal = startDateLabel + (ed && toISODate(ed) !== toISODate(sd) ? '  →  ' + fmtCardDate(ed) : '') + ' · All day';
+      } else {
+        var startTime = fmtEventTime(event.starts_at);
+        var endTime = event.ends_at ? fmtEventTime(event.ends_at) : '';
+        var sameDay = !ed || toISODate(ed) === toISODate(sd);
+        if (sameDay) {
+          whenVal = startDateLabel + ' · ' + startTime + (endTime ? '–' + endTime : '');
+        } else {
+          whenVal = startDateLabel + ' ' + startTime + '  →  ' + fmtCardDate(ed) + (endTime ? ' ' + endTime : '');
+        }
+      }
+    }
+    var statusLabel = (event.status || 'confirmed');
+
+    function row(label, val) {
+      if (!val) return '';
+      return '<div style="display:flex;gap:12px;padding:9px 0;border-top:1px solid var(--border,#262626);">' +
+        '<div style="width:92px;flex-shrink:0;font-size:11px;text-transform:uppercase;letter-spacing:0.4px;color:var(--text-dim,#888);padding-top:1px;">' + escapeHTML(label) + '</div>' +
+        '<div style="flex:1;font-size:13px;color:var(--text,#e6e6e6);line-height:1.5;">' + val + '</div>' +
+      '</div>';
+    }
+
+    var modal = document.createElement('div');
+    modal.id = 'schEventCard';
+    modal.className = 'modal active';
+    modal.innerHTML =
+      '<div class="modal-content" style="max-width:440px;border-left:4px solid ' + escapeAttr(color) + ';">' +
+        '<div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:8px;">' +
+          '<div style="flex:1;min-width:0;">' +
+            '<div style="font-size:11px;text-transform:uppercase;letter-spacing:0.5px;color:' + escapeAttr(color) + ';font-weight:700;margin-bottom:3px;">Event</div>' +
+            '<div style="font-size:17px;font-weight:700;color:var(--text,#fff);line-height:1.25;">' + escapeHTML(event.title || '(untitled event)') + '</div>' +
+            '<div style="margin-top:6px;"><span style="font-size:11px;font-weight:600;text-transform:capitalize;color:' + escapeAttr(color) + ';background:rgba(255,255,255,0.06);border:1px solid ' + escapeAttr(color) + ';border-radius:10px;padding:2px 10px;">' + escapeHTML(statusLabel) + '</span></div>' +
+          '</div>' +
+          '<button type="button" class="sch-btn sch-btn-primary" id="schEventCardEdit">Edit</button>' +
+          '<button type="button" class="sch-btn sch-btn-icon" id="schEventCardClose" title="Close">✕</button>' +
+        '</div>' +
+        row('When', escapeHTML(whenVal)) +
+        row('Location', event.location ? escapeHTML(event.location) : '') +
+        row('Notes', event.notes ? escapeHTML(event.notes) : '') +
+      '</div>';
+    document.body.appendChild(modal);
+    function close() { modal.remove(); }
+    modal.querySelector('#schEventCardClose').addEventListener('click', close);
+    modal.addEventListener('click', function (e) { if (e.target === modal) close(); });
+    modal.querySelector('#schEventCardEdit').addEventListener('click', function () {
+      close();
+      openEventEditor(event);
+    });
+  }
+
+  // ── Slice C: event editor (create / edit) ───────────────────
+  // A self-contained modal mirroring openEntryEditor's flow. Fields:
+  // Title, All-day, Date, Start/End time (hidden when all-day),
+  // Location, Notes, Status. Save composes starts_at/ends_at as ISO
+  // and calls create or update; Delete removes; both refetch + repaint.
+  function openEventEditor(eventOrNull, prefillDateISO) {
+    var event = eventOrNull || null;
+    var isEdit = !!event;
+    var prior = document.getElementById('schEventEditorModal');
+    if (prior) prior.remove();
+
+    var sd = event && event.starts_at ? new Date(event.starts_at) : null;
+    var ed = event && event.ends_at ? new Date(event.ends_at) : null;
+    var allDay = !!(event && event.all_day);
+    var dateVal = (sd && !isNaN(sd.getTime())) ? toISODate(sd) : (prefillDateISO || toISODate(new Date()));
+    // Time inputs want HH:MM (24h). Derive from the event's local time.
+    function toTimeInput(d) {
+      if (!d || isNaN(d.getTime())) return '';
+      var h = d.getHours(), m = d.getMinutes();
+      return (h < 10 ? '0' + h : h) + ':' + (m < 10 ? '0' + m : m);
+    }
+    var startTimeVal = (!allDay && sd) ? toTimeInput(sd) : '09:00';
+    var endTimeVal = (!allDay && ed) ? toTimeInput(ed) : '10:00';
+    var title = (event && event.title) || '';
+    var location = (event && event.location) || '';
+    var notes = (event && event.notes) || '';
+    var status = (event && event.status) || 'confirmed';
+
+    var modal = document.createElement('div');
+    modal.id = 'schEventEditorModal';
+    modal.className = 'modal active';
+    modal.innerHTML =
+      '<div class="modal-content" style="max-width:560px;">' +
+        '<div class="modal-header">' + (isEdit ? 'Edit event' : 'New event') + '</div>' +
+        '<div class="sch-modal-form">' +
+          '<div>' +
+            '<label>Title</label>' +
+            '<input type="text" id="schEventTitle" value="' + escapeAttr(title) + '" placeholder="Event title" />' +
+          '</div>' +
+          '<div title="All-day events span whole days and ignore start / end times.">' +
+            '<label class="p86-check-row">' +
+              '<input type="checkbox" id="schEventAllDay" ' + (allDay ? 'checked' : '') + ' />' +
+              '<span>All-day event</span>' +
+            '</label>' +
+          '</div>' +
+          '<div class="sch-modal-row">' +
+            '<div>' +
+              '<label>Date</label>' +
+              '<input type="date" id="schEventDate" value="' + escapeAttr(dateVal) + '" />' +
+            '</div>' +
+            '<div id="schEventTimeWrap" class="sch-modal-row" style="gap:8px;' + (allDay ? 'display:none;' : '') + '">' +
+              '<div>' +
+                '<label>Start</label>' +
+                '<input type="time" id="schEventStart" value="' + escapeAttr(startTimeVal) + '" ' + (allDay ? 'disabled' : '') + ' />' +
+              '</div>' +
+              '<div>' +
+                '<label>End</label>' +
+                '<input type="time" id="schEventEnd" value="' + escapeAttr(endTimeVal) + '" ' + (allDay ? 'disabled' : '') + ' />' +
+              '</div>' +
+            '</div>' +
+          '</div>' +
+          '<div>' +
+            '<label>Location</label>' +
+            '<input type="text" id="schEventLocation" value="' + escapeAttr(location) + '" placeholder="Optional" />' +
+          '</div>' +
+          '<div>' +
+            '<label>Notes</label>' +
+            '<textarea id="schEventNotes" rows="2">' + escapeHTML(notes) + '</textarea>' +
+          '</div>' +
+          '<div>' +
+            '<label>Status</label>' +
+            '<select id="schEventStatus">' +
+              ['confirmed','tentative','canceled'].map(function(s) {
+                return '<option value="' + s + '"' + (s === status ? ' selected' : '') + '>' + s + '</option>';
+              }).join('') +
+            '</select>' +
+          '</div>' +
+        '</div>' +
+        '<div class="modal-footer" style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;">' +
+          (isEdit ? '<button class="sch-btn" id="schEventDelete" style="margin-right:auto;color:#f87171;border-color:rgba(248,113,113,0.4);">Delete</button>' : '') +
+          '<button class="sch-btn" id="schEventCancel">Cancel</button>' +
+          '<button class="sch-btn sch-btn-primary" id="schEventSave">' + (isEdit ? 'Save' : 'Create') + '</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(modal);
+
+    function close() { modal.remove(); }
+    modal.querySelector('#schEventCancel').addEventListener('click', close);
+    modal.addEventListener('click', function(e) { if (e.target === modal) close(); });
+
+    // Toggle the time inputs in/out as all-day flips.
+    var allDayEl = modal.querySelector('#schEventAllDay');
+    var timeWrap = modal.querySelector('#schEventTimeWrap');
+    var startEl = modal.querySelector('#schEventStart');
+    var endEl = modal.querySelector('#schEventEnd');
+    allDayEl.addEventListener('change', function() {
+      var on = allDayEl.checked;
+      if (timeWrap) timeWrap.style.display = on ? 'none' : '';
+      if (startEl) startEl.disabled = on;
+      if (endEl) endEl.disabled = on;
+    });
+
+    function setBusy(busy) {
+      modal.querySelectorAll('button').forEach(function(b) { b.disabled = !!busy; });
+      var saveBtn = modal.querySelector('#schEventSave');
+      if (saveBtn) saveBtn.textContent = busy ? '…' : (isEdit ? 'Save' : 'Create');
+    }
+
+    // Compose a local Date from a YYYY-MM-DD date string + HH:MM time
+    // string. Returns a Date in local time (so .toISOString() carries
+    // the correct UTC offset for the user's timezone).
+    function composeLocal(dateStr, timeStr) {
+      var dm = String(dateStr).match(/^(\d{4})-(\d{2})-(\d{2})/);
+      if (!dm) return null;
+      var hh = 0, mm = 0;
+      var tm = String(timeStr || '').match(/^(\d{1,2}):(\d{2})/);
+      if (tm) { hh = +tm[1]; mm = +tm[2]; }
+      return new Date(+dm[1], +dm[2] - 1, +dm[3], hh, mm, 0, 0);
+    }
+
+    var del = modal.querySelector('#schEventDelete');
+    if (del) {
+      del.addEventListener('click', function() {
+        if (!event) return;
+        var goDelete = (typeof window.p86Confirm === 'function')
+          ? window.p86Confirm({
+              title: 'Delete event',
+              message: 'Delete this event? This cannot be undone.',
+              confirmLabel: 'Delete',
+              danger: true
+            })
+          : Promise.resolve(window.confirm('Delete this event?'));
+        goDelete.then(function(ok) {
+          if (!ok) return;
+          setBusy(true);
+          var p = (isCalendarApiReady() && event.id)
+            ? window.p86Api.calendar.remove(event.id)
+            : Promise.resolve();
+          p.then(function() {
+            close();
+            fetchEvents().then(renderGrid);
+          }).catch(function(err) {
+            setBusy(false);
+            if (typeof window.p86Alert === 'function') {
+              window.p86Alert({ title: 'Delete failed', message: (err && err.message) || String(err) });
+            } else {
+              alert('Delete failed: ' + ((err && err.message) || err));
+            }
+          });
+        });
+      });
+    }
+
+    modal.querySelector('#schEventSave').addEventListener('click', function() {
+      var t = (modal.querySelector('#schEventTitle').value || '').trim();
+      var dateStr = modal.querySelector('#schEventDate').value;
+      var isAllDay = modal.querySelector('#schEventAllDay').checked;
+      // Require a title OR a date; alert when a date is missing (the
+      // grid needs at least a date to place the event).
+      if (!t && !dateStr) { alert('Add a title or a date.'); return; }
+      if (!dateStr) { alert('Pick a date.'); return; }
+      var startsAt, endsAt;
+      if (isAllDay) {
+        // All-day → local midnight on the date. ends_at left null
+        // (single-day all-day event).
+        var startD = composeLocal(dateStr, '00:00');
+        startsAt = startD ? startD.toISOString() : null;
+        endsAt = null;
+      } else {
+        var st = modal.querySelector('#schEventStart').value || '00:00';
+        var et = modal.querySelector('#schEventEnd').value || '';
+        var sD = composeLocal(dateStr, st);
+        startsAt = sD ? sD.toISOString() : null;
+        if (et) {
+          var eD = composeLocal(dateStr, et);
+          endsAt = eD ? eD.toISOString() : null;
+        } else {
+          endsAt = null;
+        }
+      }
+      var payload = {
+        title: t || '(untitled event)',
+        starts_at: startsAt,
+        ends_at: endsAt,
+        all_day: isAllDay,
+        location: (modal.querySelector('#schEventLocation').value || '').trim(),
+        notes: modal.querySelector('#schEventNotes').value || '',
+        status: modal.querySelector('#schEventStatus').value || 'confirmed'
+      };
+
+      if (!isCalendarApiReady()) {
+        // No api → can't persist. Surface a soft notice and bail
+        // rather than silently dropping the user's input.
+        if (typeof window.p86Alert === 'function') {
+          window.p86Alert({ title: 'Offline', message: 'Calendar is unavailable right now — event not saved.' });
+        } else {
+          alert('Calendar is unavailable right now — event not saved.');
+        }
+        return;
+      }
+      setBusy(true);
+      var req = (isEdit && event && event.id)
+        ? window.p86Api.calendar.update(event.id, payload)
+        : window.p86Api.calendar.create(payload);
+      req.then(function() {
+        close();
+        fetchEvents().then(renderGrid);
+      }).catch(function(err) {
+        setBusy(false);
+        alert('Save failed: ' + ((err && err.message) || err));
+      });
     });
   }
 

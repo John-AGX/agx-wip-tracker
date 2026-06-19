@@ -798,6 +798,68 @@ body.light-mode .sch-cal-week-row.sch-week-focused::after {
   text-overflow: ellipsis;
   vertical-align: middle;
 }
+
+/* ─── Slice C: personal calendar event bars ──────────────────
+   A SECOND overlay layer painted alongside the job bars. Same
+   absolute-positioning baseline as .sch-entry-bar so the two layers
+   line up on the 7-col grid; an opaque indigo fill (overridable per
+   event via --event-color) plus a lighter left border read it as a
+   distinct "calendar event" rather than a production job. */
+.sch-cal-event {
+  position: absolute;
+  height: 16px;
+  background: var(--event-color, #6366f1);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 0 7px;
+  border-radius: 3px;
+  line-height: 16px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  pointer-events: auto;
+  margin-left: 2px;
+  /* Left dot / accent so it reads as a calendar event, mirroring the
+     left/right border treatment the job bars use. */
+  border-left: 3px solid rgba(255, 255, 255, 0.45);
+  border-right: 2px solid rgba(0, 0, 0, 0.20);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  transition: filter 0.12s, transform 0.12s;
+}
+.sch-cal-event:hover {
+  filter: brightness(1.18);
+  transform: translateY(-1px);
+  z-index: 5;
+}
+/* Tentative — translucent outline instead of a solid fill so it reads
+   as "not locked in", echoing the muted job-bar treatment. */
+.sch-cal-event.sch-cal-event-tentative {
+  background: transparent;
+  color: var(--event-color, #6366f1);
+  border: 1px solid var(--event-color, #6366f1);
+  border-left: 3px solid var(--event-color, #6366f1);
+  box-shadow: none;
+}
+/* Canceled — same translucent outline, struck through + dimmed. */
+.sch-cal-event.sch-cal-event-canceled {
+  background: transparent;
+  color: var(--event-color, #6366f1);
+  border: 1px solid var(--event-color, #6366f1);
+  border-left: 3px solid var(--event-color, #6366f1);
+  box-shadow: none;
+  text-decoration: line-through;
+  opacity: 0.8;
+}
+
+/* Slice C — layer toggle pill group in the toolbar. Sits near the
+   weekend toggle; just a thin flex wrapper so the two pills cluster. */
+.sch-layer-toggles {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
 /* While a resize-drag is active, dim the cursor everywhere on the
    page to ew-resize so the user knows they're in resize mode and
    the UI stays responsive when the cursor leaves the bar. */
