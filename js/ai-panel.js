@@ -1672,14 +1672,15 @@
     renderPresets();
   }
 
-  // Rolling hint chips (Claude-in-Chrome style): show a window of the
-  // active presets and gently rotate through the rest on a timer, with a
-  // fade. Clicking a chip still prefills the input. Rotation pauses while
-  // the user is hovering the row, has the input focused/typed, or a turn
-  // is streaming — so it never moves under an active hand.
+  // Rolling hint chip (Claude-in-Chrome style): ONE suggestion at a time,
+  // rolling to the next on a timer. The layout is persistent — a chip slot
+  // on the left, "/ for commands" pinned right — and only the chip itself
+  // crossfades (slide + fade), so it rolls in smoothly instead of the whole
+  // row blinking. Clicking the chip prefills the input. Rotation pauses
+  // while hovering, while the input has text (composing), or while
+  // streaming — never under an active hand.
   var _presetRotateTimer = null;
   var _presetOffset = 0;
-  var PRESET_VISIBLE = 3;
   function renderPresets() {
     var presetWrap = document.getElementById('ai-presets');
     if (!presetWrap) return;
@@ -1688,36 +1689,40 @@
     if (!presets || !presets.length) { presetWrap.innerHTML = ''; return; }
     _presetOffset = 0;
 
-    function paint() {
-      var slice = [];
-      var n = Math.min(PRESET_VISIBLE, presets.length);
-      for (var i = 0; i < n; i++) slice.push(presets[(_presetOffset + i) % presets.length]);
-      presetWrap.style.transition = 'opacity 0.18s ease';
-      presetWrap.style.opacity = '0';
-      setTimeout(function () {
-        presetWrap.innerHTML = '';
-        slice.forEach(function (p) {
-          var btn = document.createElement('button');
-          btn.className = 'ee-btn ghost';
-          btn.textContent = p.label;
-          btn.onclick = function () {
-            if (_streaming) return;
-            var ta = document.getElementById('ai-input');
-            if (ta) { ta.value = p.prompt; ta.focus(); ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 320) + 'px'; }
-          };
-          presetWrap.appendChild(btn);
-        });
-        // Subtle "/ for commands" affordance, pushed to the right.
-        var hint = document.createElement('span');
-        hint.textContent = '/ for commands';
-        hint.style.cssText = 'align-self:center;margin-left:auto;font-size:10px;color:var(--text-dim,#777);opacity:0.65;white-space:nowrap;';
-        presetWrap.appendChild(hint);
-        presetWrap.style.opacity = '1';
-      }, 180);
-    }
-    paint();
+    // Persistent shell so the chip can swap without relaying out the row.
+    presetWrap.style.opacity = '1';
+    presetWrap.style.alignItems = 'center';
+    presetWrap.innerHTML =
+      '<span data-preset-rotor style="display:inline-flex;min-width:0;max-width:100%;"></span>' +
+      '<span style="margin-left:auto;font-size:10px;color:var(--text-dim,#777);opacity:0.65;white-space:nowrap;padding-left:8px;">/ for commands</span>';
+    var rotor = presetWrap.querySelector('[data-preset-rotor]');
 
-    if (presets.length > PRESET_VISIBLE) {
+    function paint(animate) {
+      if (!rotor) return;
+      var p = presets[_presetOffset % presets.length];
+      var btn = document.createElement('button');
+      btn.className = 'ee-btn ghost';
+      btn.textContent = p.label;
+      btn.style.maxWidth = '100%';
+      btn.style.overflow = 'hidden';
+      btn.style.textOverflow = 'ellipsis';
+      btn.style.whiteSpace = 'nowrap';
+      btn.style.transition = 'opacity 0.3s ease, transform 0.3s ease';
+      btn.onclick = function () {
+        if (_streaming) return;
+        var ta = document.getElementById('ai-input');
+        if (ta) { ta.value = p.prompt; ta.focus(); ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 320) + 'px'; }
+      };
+      if (animate) { btn.style.opacity = '0'; btn.style.transform = 'translateY(7px)'; }
+      rotor.innerHTML = '';
+      rotor.appendChild(btn);
+      if (animate) {
+        requestAnimationFrame(function () { btn.style.opacity = '1'; btn.style.transform = 'translateY(0)'; });
+      }
+    }
+    paint(false);
+
+    if (presets.length > 1) {
       _presetRotateTimer = setInterval(function () {
         if (_streaming) return;
         if (presetWrap.matches && presetWrap.matches(':hover')) return;
@@ -1726,9 +1731,9 @@
         // input on open, so a focus-based pause would never let it roll).
         var ta = document.getElementById('ai-input');
         if (ta && (ta.value || '').trim()) return;
-        _presetOffset = (_presetOffset + PRESET_VISIBLE) % presets.length;
-        paint();
-      }, 3800);
+        _presetOffset = (_presetOffset + 1) % presets.length;
+        paint(true);
+      }, 4200);
     }
   }
 
