@@ -454,7 +454,11 @@
     if (!el) return;
     var f = String(filter || '').replace(/^\//, '').toLowerCase();
     _slashItems = slashCommands().filter(function (c) {
-      return c.cmd.slice(1).toLowerCase().indexOf(f) === 0 || c.label.toLowerCase().indexOf(f) >= 0;
+      // Match by command prefix first; only fall back to a label
+      // substring once 2+ chars are typed (so "/w" doesn't match a
+      // command whose description happens to contain a "w").
+      if (c.cmd.slice(1).toLowerCase().indexOf(f) === 0) return true;
+      return f.length >= 2 && c.label.toLowerCase().indexOf(f) >= 0;
     });
     if (!_slashItems.length) { closeSlashPalette(); return; }
     _slashSel = 0;
@@ -1717,8 +1721,11 @@
       _presetRotateTimer = setInterval(function () {
         if (_streaming) return;
         if (presetWrap.matches && presetWrap.matches(':hover')) return;
+        // Pause only while the user is actually composing — a focused but
+        // EMPTY input must not freeze rotation (the panel auto-focuses the
+        // input on open, so a focus-based pause would never let it roll).
         var ta = document.getElementById('ai-input');
-        if (ta && (document.activeElement === ta || (ta.value || '').trim())) return;
+        if (ta && (ta.value || '').trim()) return;
         _presetOffset = (_presetOffset + PRESET_VISIBLE) % presets.length;
         paint();
       }, 3800);
