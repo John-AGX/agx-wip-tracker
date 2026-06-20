@@ -148,13 +148,47 @@
   // that needs a server-emitted meta.speak slot template — noted, not v1.
   var NOUNS = {
     schedule: 'appointment', appointment: 'appointment', event: 'appointment',
+    calendar_event: 'appointment',
     task: 'task', reminder: 'reminder', lead: 'lead', client: 'client',
     estimate: 'estimate', job: 'job', change_order: 'change order',
     note: 'note', report: 'report'
   };
   var CREATE_VERB = { schedule: 'added', appointment: 'added', event: 'added',
+    calendar_event: 'added',
     task: 'added', reminder: 'set', lead: 'created', client: 'added',
     estimate: 'created', note: 'saved', change_order: 'drafted', report: 'created' };
+
+  // Format an ISO datetime as a spoken relative-when, e.g. "today",
+  // "tomorrow at 9 AM", "Thursday at 2:30 PM", "on Jun 25". Parsed in the
+  // user's local timezone (the read-back happens in their browser).
+  var DOW = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  var MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+  function relWhen(iso, allDay) {
+    try {
+      // A date-only 'YYYY-MM-DD' parses as UTC midnight via new Date(),
+      // which shifts back a day in negative-UTC zones — build it as LOCAL
+      // midnight instead so "due Friday" doesn't say "due Thursday".
+      var s = String(iso);
+      var dm = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+      var d = dm ? new Date(Number(dm[1]), Number(dm[2]) - 1, Number(dm[3])) : new Date(s);
+      if (isNaN(d.getTime())) return '';
+      var now = new Date();
+      var days = Math.round(
+        (new Date(d.getFullYear(), d.getMonth(), d.getDate()) -
+         new Date(now.getFullYear(), now.getMonth(), now.getDate())) / 86400000);
+      var dayWord;
+      if (days === 0) dayWord = 'today';
+      else if (days === 1) dayWord = 'tomorrow';
+      else if (days > 1 && days < 7) dayWord = DOW[d.getDay()];
+      else dayWord = 'on ' + MON[d.getMonth()] + ' ' + d.getDate();
+      if (allDay) return dayWord;
+      var h = d.getHours(), m = d.getMinutes();
+      var ampm = h < 12 ? 'AM' : 'PM';
+      var h12 = h % 12; if (h12 === 0) h12 = 12;
+      var time = h12 + (m ? ':' + (m < 10 ? '0' + m : m) : '') + ' ' + ampm;
+      return dayWord + ' at ' + time;
+    } catch (_) { return ''; }
+  }
 
   function safeDisplay(t) {
     var d = t && (t.entity_display || t.title || t.label);
@@ -169,6 +203,19 @@
     detail = detail || {};
     var targets = detail.affected_targets || [];
     var summary = (detail.apply_summary || '').toLowerCase();
+
+    // Rich line for timed personal entities (Phase 3 write ops surface a
+    // title + date on the target). Title is sanitized; dates/times survive
+    // the financial sanitizer, so this stays numbers-safe.
+    var t0 = targets[0];
+    if (t0 && t0.entity_type === 'calendar_event' && t0.title) {
+      var when = relWhen(t0.starts_at, t0.all_day);
+      return sanitizeForSpeech('Got it — ' + t0.title + (when ? ' ' + when : '') + '.');
+    }
+    if (t0 && t0.entity_type === 'task' && t0.title) {
+      var dueW = t0.due_date ? relWhen(t0.due_date, true) : '';
+      return sanitizeForSpeech('Added a task: ' + t0.title + (dueW ? ', due ' + dueW : '') + '.');
+    }
 
     // Determine the dominant entity type.
     var type = '';

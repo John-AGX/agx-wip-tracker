@@ -124,6 +124,25 @@ const SCHEDULE_ENTRY_FIELDS = new Set([
   'status', 'notes',
 ]);
 
+// Calendar-event editable fields (mirrors calendar-routes.js). Owner
+// (user_id) + organization_id are NEVER settable via ops — the dispatcher
+// stamps them from ctx so a payload can't write into another user's calendar.
+const CALENDAR_EVENT_FIELDS = new Set([
+  'title', 'starts_at', 'ends_at', 'all_day', 'location',
+  'notes', 'color', 'status', 'recurrence', 'reminder_minutes',
+]);
+const CALENDAR_EVENT_STATUSES = new Set(['confirmed', 'tentative', 'canceled']);
+
+// Task editable fields (mirrors tasks-routes.js). organization_id +
+// created_by + assignee_user_id are stamped from ctx (a personal task
+// assigned to the acting user) — never client-supplied.
+const TASK_FIELDS = new Set([
+  'title', 'notes', 'kind', 'status', 'priority', 'due_date',
+]);
+const TASK_KINDS = new Set(['todo', 'punch', 'follow_up']);
+const TASK_STATUSES = new Set(['open', 'in_progress', 'blocked', 'done']);
+const TASK_PRIORITIES = new Set(['low', 'normal', 'high', 'urgent']);
+
 const PAYLOAD_OPS_SCHEMAS = Object.freeze({
   client: {
     // op: 'create' | 'update' (default 'update' if entity_id set, else 'create')
@@ -212,6 +231,20 @@ const PAYLOAD_OPS_SCHEMAS = Object.freeze({
       'cover_page', 'sections',
       'section_adds', 'section_updates', 'section_deletes',
     ]),
+  },
+  calendar_event: {
+    // op: 'create' (v1 — the assistant scheduling a new timed event/reminder).
+    // fields: { title, starts_at (ISO datetime), ends_at?, all_day?, location?,
+    //           notes?, color?, status?, recurrence?, reminder_minutes? }
+    // A timed "reminder" = a calendar_event with starts_at + reminder_minutes.
+    // org + user are stamped from ctx, never from fields.
+    allowedTopKeys: new Set(['op', 'fields']),
+  },
+  task: {
+    // op: 'create' (v1). fields: { title, due_date? (DATE), notes?, kind?,
+    //           status?, priority? }. Created as a personal task assigned to
+    //           the acting user; org + creator stamped from ctx.
+    allowedTopKeys: new Set(['op', 'fields']),
   },
 });
 
@@ -426,6 +459,58 @@ function validateOps(entityType, ops) {
         );
       }
     }
+  }
+  if (entityType === 'calendar_event') {
+    const op = ops.op || 'create';
+    if (op !== 'create') {
+      throw new Error(`calendar_event.ops.op must be 'create' (got '${op}')`);
+    }
+    const fields = ops.fields || {};
+    if (typeof fields !== 'object') throw new Error('calendar_event.ops.fields must be an object');
+    if (!fields.title || !String(fields.title).trim()) {
+      throw new Error('calendar_event.create requires fields.title');
+    }
+    if (!fields.starts_at) {
+      throw new Error('calendar_event.create requires fields.starts_at (ISO datetime)');
+    }
+    if (isNaN(new Date(fields.starts_at).getTime())) {
+      throw new Error(`calendar_event.fields.starts_at is not a valid datetime: '${fields.starts_at}'`);
+    }
+    const bad = Object.keys(fields).filter(k => !CALENDAR_EVENT_FIELDS.has(k));
+    if (bad.length) {
+      throw new PayloadValidationError(
+        `calendar_event.ops.fields has non-editable key(s): ${bad.map(k => `'${k}'`).join(', ')}. ` +
+        `Valid: ${[...CALENDAR_EVENT_FIELDS].sort().join(', ')}. ` +
+        `(organization_id/user_id are set automatically — never pass them.)`,
+        { code: 'unknown_field', field_path: 'calendar_event.ops.fields', received: bad, expected: [...CALENDAR_EVENT_FIELDS] }
+      );
+    }
+    if (fields.status && !CALENDAR_EVENT_STATUSES.has(fields.status)) {
+      throw new Error(`calendar_event.fields.status invalid: '${fields.status}'. Valid: ${[...CALENDAR_EVENT_STATUSES].sort().join(', ')}.`);
+    }
+  }
+  if (entityType === 'task') {
+    const op = ops.op || 'create';
+    if (op !== 'create') {
+      throw new Error(`task.ops.op must be 'create' (got '${op}')`);
+    }
+    const fields = ops.fields || {};
+    if (typeof fields !== 'object') throw new Error('task.ops.fields must be an object');
+    if (!fields.title || !String(fields.title).trim()) {
+      throw new Error('task.create requires fields.title');
+    }
+    const bad = Object.keys(fields).filter(k => !TASK_FIELDS.has(k));
+    if (bad.length) {
+      throw new PayloadValidationError(
+        `task.ops.fields has non-editable key(s): ${bad.map(k => `'${k}'`).join(', ')}. ` +
+        `Valid: ${[...TASK_FIELDS].sort().join(', ')}. (org/creator/assignee are set automatically.)`,
+        { code: 'unknown_field', field_path: 'task.ops.fields', received: bad, expected: [...TASK_FIELDS] }
+      );
+    }
+    if (fields.kind && !TASK_KINDS.has(fields.kind)) throw new Error(`task.fields.kind invalid: '${fields.kind}'. Valid: ${[...TASK_KINDS].sort().join(', ')}.`);
+    if (fields.status && !TASK_STATUSES.has(fields.status)) throw new Error(`task.fields.status invalid: '${fields.status}'. Valid: ${[...TASK_STATUSES].sort().join(', ')}.`);
+    if (fields.priority && !TASK_PRIORITIES.has(fields.priority)) throw new Error(`task.fields.priority invalid: '${fields.priority}'. Valid: ${[...TASK_PRIORITIES].sort().join(', ')}.`);
+    if (fields.due_date && isNaN(new Date(fields.due_date).getTime())) throw new Error(`task.fields.due_date is not a valid date: '${fields.due_date}'`);
   }
 }
 
@@ -2246,6 +2331,97 @@ async function dispatchReport(dbClient, target, refTable, ctx) {
   };
 }
 
+function newCalendarEventId() {
+  return 'cal_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+}
+function newTaskId() {
+  return 'task_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+}
+
+// dispatchCalendarEvent — create a personal/timed calendar event (also the
+// vehicle for a timed "reminder" via reminder_minutes). organization_id +
+// user_id are stamped from ctx so a payload can never write into another
+// user's calendar or org. Create-only in v1.
+async function dispatchCalendarEvent(dbClient, target, refTable, ctx) {
+  const ops = target.ops || {};
+  resolveRefsInOps(ops, refTable);
+  if (!ctx || !ctx.organizationId || !ctx.userId) {
+    throw new Error('calendar_event write requires an authenticated org + user context');
+  }
+  const opType = ops.op || 'create';
+  if (opType !== 'create') throw new Error(`calendar_event: only op:create is supported (got '${opType}')`);
+  const fields = ops.fields || {};
+  if (!fields.title || !String(fields.title).trim()) throw new Error('calendar_event.create requires fields.title');
+  if (!fields.starts_at) throw new Error('calendar_event.create requires fields.starts_at');
+
+  const id = (target.entity_id && !isRef(target.entity_id)) ? target.entity_id : newCalendarEventId();
+  // Whitelisted columns only; org + owner are stamped, never client-supplied.
+  const cols = ['id', 'organization_id', 'user_id'];
+  const vals = [id, ctx.organizationId, ctx.userId];
+  for (const k of Object.keys(fields)) {
+    if (!CALENDAR_EVENT_FIELDS.has(k)) continue;
+    cols.push(k);
+    vals.push(fields[k]);
+  }
+  const placeholders = cols.map((_, i) => '$' + (i + 1)).join(', ');
+  await dbClient.query(
+    `INSERT INTO calendar_events (${cols.join(', ')}) VALUES (${placeholders})`,
+    vals
+  );
+  if (isRef(target.entity_id)) refTable[target.entity_id] = id;
+
+  return {
+    entity_type: 'calendar_event',
+    entity_id: id,
+    op: 'create',
+    created: true,
+    title: String(fields.title).trim(),
+    starts_at: fields.starts_at,
+    all_day: !!(fields.all_day === true || fields.all_day === 'true'),
+    summary: `Created calendar event "${String(fields.title).trim()}"`,
+  };
+}
+
+// dispatchTask — create a personal task assigned to the acting user.
+// organization_id + created_by + assignee_user_id are stamped from ctx.
+// Create-only in v1.
+async function dispatchTask(dbClient, target, refTable, ctx) {
+  const ops = target.ops || {};
+  resolveRefsInOps(ops, refTable);
+  if (!ctx || !ctx.organizationId || !ctx.userId) {
+    throw new Error('task write requires an authenticated org + user context');
+  }
+  const opType = ops.op || 'create';
+  if (opType !== 'create') throw new Error(`task: only op:create is supported (got '${opType}')`);
+  const fields = ops.fields || {};
+  if (!fields.title || !String(fields.title).trim()) throw new Error('task.create requires fields.title');
+
+  const id = (target.entity_id && !isRef(target.entity_id)) ? target.entity_id : newTaskId();
+  const cols = ['id', 'organization_id', 'created_by', 'assignee_user_id'];
+  const vals = [id, ctx.organizationId, ctx.userId, ctx.userId];
+  for (const k of Object.keys(fields)) {
+    if (!TASK_FIELDS.has(k)) continue;
+    cols.push(k);
+    vals.push(fields[k]);
+  }
+  const placeholders = cols.map((_, i) => '$' + (i + 1)).join(', ');
+  await dbClient.query(
+    `INSERT INTO tasks (${cols.join(', ')}) VALUES (${placeholders})`,
+    vals
+  );
+  if (isRef(target.entity_id)) refTable[target.entity_id] = id;
+
+  return {
+    entity_type: 'task',
+    entity_id: id,
+    op: 'create',
+    created: true,
+    title: String(fields.title).trim(),
+    due_date: fields.due_date || null,
+    summary: `Created task "${String(fields.title).trim()}"`,
+  };
+}
+
 const DISPATCHERS = {
   client: dispatchClient,
   estimate: dispatchEstimate,
@@ -2254,6 +2430,8 @@ const DISPATCHERS = {
   schedule: dispatchSchedule,
   system: dispatchSystem,
   report: dispatchReport,
+  calendar_event: dispatchCalendarEvent,
+  task: dispatchTask,
 };
 
 async function dispatchTarget(dbClient, target, refTable, ctx) {

@@ -7028,6 +7028,11 @@ const PAYLOAD_TOOLS = [
       'text-block|attachment-list. ' +
       'system: {skill_pack_ops,watch_ops,field_tool_ops,link_ops,staff_agent_ops} ' +
       '— link_ops includes {op:attach_files, attachment_ids[], target_entity_type, target_entity_id} to link existing files to an entity. ' +
+      'calendar_event: {op:create, fields:{title, starts_at (ISO 8601 local datetime, e.g. 2026-06-25T09:00:00), ends_at?, all_day?, location?, notes?, reminder_minutes?, status?}} ' +
+      '— the vehicle for a personal APPOINTMENT or a timed REMINDER for the acting user (set reminder_minutes for a heads-up N minutes before starts_at). Always resolve a real local datetime for starts_at. ' +
+      'task: {op:create, fields:{title, due_date? (DATE, e.g. 2026-06-25), notes?, kind?(todo|punch|follow_up), priority?(low|normal|high|urgent)}} ' +
+      '— a personal to-do for the acting user; use for a date-only reminder when there is no specific time. ' +
+      '(calendar_event + task are always created for the current user — never pass user/org ids.) ' +
       'To populate an estimate/job workspace, do NOT use a payload — build an .xlsx with code_execution and the user drops it into the workspace (it auto-imports as sheets), or edit the sheet directly in the workspace UI. ' +
       'TARGET FORMS (siblings of entity_type/ops, work on any entity_type): ' +
       'conditional — add condition:"if_exists"|"if_missing"|"upsert" to a target (upsert needs no pre-check; if_exists/if_missing need a concrete entity_id). ' +
@@ -7058,7 +7063,7 @@ const PAYLOAD_TOOLS = [
             properties: {
               entity_type: {
                 type: 'string',
-                enum: ['estimate', 'job', 'lead', 'client', 'schedule', 'system', 'report'],
+                enum: ['estimate', 'job', 'lead', 'client', 'schedule', 'system', 'report', 'calendar_event', 'task'],
               },
               entity_id: {
                 type: 'string',
