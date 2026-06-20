@@ -686,6 +686,7 @@
                     <div class="app-nav-group">
                         <div class="app-nav-group-label">Workspace</div>
                         <button class="tab-btn" data-tab="my-tasks" data-p86-icon="check-circle" title="My Tasks"><span class="app-nav-label">My Tasks</span></button>
+                        <button class="tab-btn" data-tab="messages" data-p86-icon="envelope" title="Messages"><span class="app-nav-label">Messages</span><span id="navMessagesBadge" style="display:none;margin-left:auto;background:#f87171;color:#fff;font-size:10px;font-weight:700;padding:1px 7px;border-radius:10px;line-height:1.5;"></span></button>
                         <button class="tab-btn" data-tab="plans" data-p86-icon="scale" title="Plans &amp; Takeoffs"><span class="app-nav-label">Plans</span></button>
                         <div class="app-nav-parent" data-accordion="myfiles">
                             <button class="tab-btn app-nav-parent-btn" data-tab="my-files" data-p86-icon="folder" title="My Files">
@@ -1325,6 +1326,12 @@
                      capture + Today / Upcoming / Overdue / Done filters.
                      Painted by renderMyTasksTab() in js/tasks.js. -->
                 <div id="my-tasks" class="tab-content"></div>
+
+                <!-- MESSAGES TAB — team direct messages + entity comment
+                     threads. Painted by renderMessagesTab() in
+                     js/messaging.js (two-column inbox: thread list + thread
+                     pane + "New message" recipient picker). -->
+                <div id="messages" class="tab-content"></div>
 
                 <!-- Plans & Takeoffs — scale-drawing documents (Bluebeam-style
                      calibrate + measure). Painted by renderPlansTab() in
@@ -3084,7 +3091,7 @@
     <script src="js/schedule.js?v=39"></script>
     <script src="js/app.js?v=89"></script>
     <script src="js/compliance-review-ui.js?v=2"></script>
-    <script src="js/messaging.js?v=1b"></script>
+    <script src="js/messaging.js?v=2"></script>
     <script src="js/my-files.js?v=16"></script>
     <!-- Tasks / To-Do UI. Loads after my-files.js (reuses window.p86Toast)
          and after api.js/auth.js (p86Api.tasks + p86Auth). -->

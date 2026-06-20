@@ -56,6 +56,7 @@
       '<div class="modal-content" style="max-width:920px;width:96vw;height:80vh;max-height:720px;display:flex;flex-direction:column;padding:0;">' +
         '<div style="padding:12px 18px;border-bottom:1px solid var(--border,#333);display:flex;align-items:center;gap:10px;">' +
           '<strong style="font-size:15px;flex:1;">Inbox</strong>' +
+          '<button type="button" data-new-msg class="primary" style="padding:5px 12px;font-size:12px;font-weight:600;">&#x270E; New message</button>' +
           '<button type="button" data-close style="background:transparent;border:none;color:var(--text-dim,#888);font-size:20px;cursor:pointer;padding:0 4px;">&times;</button>' +
         '</div>' +
         '<div style="flex:1;display:grid;grid-template-columns:280px minmax(0,1fr);overflow:hidden;">' +
@@ -78,11 +79,137 @@
 
     var listEl = modal.querySelector('#msgInboxList');
     var threadEl = modal.querySelector('#msgInboxThread');
+    var newBtn = modal.querySelector('[data-new-msg]');
+    if (newBtn) newBtn.addEventListener('click', function() { startNewMessage(listEl, threadEl); });
 
     loadInboxList(listEl, threadEl);
   }
 
-  function loadInboxList(listEl, threadEl) {
+  // ──────────────────────────────────────────────────────────────────
+  // Direct-message helpers — start a DM with another org user. The
+  // canonical thread key is dm:<lowId>:<highId> (sorted) so both
+  // participants resolve to the SAME thread regardless of who opens it.
+  // ──────────────────────────────────────────────────────────────────
+  function sortedDmKey(otherId) {
+    var me = Number(currentUserId());
+    var other = Number(otherId);
+    if (!me || !other || me === other) return null;
+    var lo = Math.min(me, other), hi = Math.max(me, other);
+    return 'dm:' + lo + ':' + hi;
+  }
+
+  // Org-user cache for the recipient picker. Reuses the same endpoint
+  // the tasks assignee picker uses; cached for the session.
+  var _msgUsers = null, _msgUsersPromise = null;
+  function loadOrgUsers() {
+    if (_msgUsers) return Promise.resolve(_msgUsers);
+    if (_msgUsersPromise) return _msgUsersPromise;
+    if (!window.p86Api || !window.p86Api.users) return Promise.resolve([]);
+    _msgUsersPromise = window.p86Api.users.list().then(function(res) {
+      _msgUsers = (res && res.users) || [];
+      return _msgUsers;
+    }).catch(function() { _msgUsers = []; return _msgUsers; });
+    return _msgUsersPromise;
+  }
+
+  // Open the DM thread with `otherId` in the given thread panel, and
+  // refresh the surrounding inbox list. Used by both surfaces.
+  function startDm(otherId, otherName, listEl, threadEl, onThreadOpen) {
+    var key = sortedDmKey(otherId);
+    if (!key) return;
+    renderThreadIntoPanel(threadEl, key, {
+      title: otherName || 'Direct message',
+      autofocus: true,
+      onPosted: function() {
+        if (listEl) loadInboxList(listEl, threadEl, onThreadOpen);
+        refreshNavMessagesBadge();
+        if (typeof window.refreshSummaryUnreadBadge === 'function') window.refreshSummaryUnreadBadge();
+      }
+    });
+    if (typeof onThreadOpen === 'function') onThreadOpen();
+  }
+
+  // Recipient picker → start a DM. Lists org users (minus self),
+  // type-to-filter, click to open the conversation.
+  function startNewMessage(listEl, threadEl, onThreadOpen) {
+    var prior = document.getElementById('msgRecipientModal');
+    if (prior) prior.remove();
+    var me = Number(currentUserId());
+
+    var modal = document.createElement('div');
+    modal.id = 'msgRecipientModal';
+    modal.className = 'modal active';
+    modal.style.zIndex = '10050';
+    modal.innerHTML =
+      '<div class="modal-content" style="max-width:420px;width:92vw;max-height:70vh;display:flex;flex-direction:column;padding:0;">' +
+        '<div style="padding:12px 16px;border-bottom:1px solid var(--border,#333);display:flex;align-items:center;gap:10px;">' +
+          '<strong style="font-size:14px;flex:1;">New message</strong>' +
+          '<button type="button" data-close style="background:transparent;border:none;color:var(--text-dim,#888);font-size:20px;cursor:pointer;padding:0 4px;">&times;</button>' +
+        '</div>' +
+        '<div style="padding:10px 14px;border-bottom:1px solid var(--border,#222);">' +
+          '<input type="text" data-recip-search placeholder="Search teammates&hellip;" style="width:100%;padding:8px 10px;font-size:13px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);" />' +
+        '</div>' +
+        '<div data-recip-list style="flex:1;overflow-y:auto;background:var(--card-bg,#0f0f1e);">' +
+          '<div style="padding:18px;color:var(--text-dim,#888);font-size:12px;text-align:center;">Loading teammates&hellip;</div>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(modal);
+    modal.addEventListener('click', function(e) { if (e.target === modal) modal.remove(); });
+    modal.querySelectorAll('[data-close]').forEach(function(b) { b.addEventListener('click', function() { modal.remove(); }); });
+
+    var searchEl = modal.querySelector('[data-recip-search]');
+    var recipListEl = modal.querySelector('[data-recip-list]');
+
+    loadOrgUsers().then(function(users) {
+      var people = (users || []).filter(function(u) { return Number(u.id) !== me && u.role !== 'sub'; });
+      function paint(filter) {
+        var f = (filter || '').trim().toLowerCase();
+        var rows = people.filter(function(u) {
+          if (!f) return true;
+          return String(u.name || '').toLowerCase().indexOf(f) !== -1 ||
+                 String(u.email || '').toLowerCase().indexOf(f) !== -1;
+        });
+        if (!rows.length) {
+          recipListEl.innerHTML = '<div style="padding:18px;color:var(--text-dim,#888);font-size:12px;text-align:center;">' +
+            (people.length ? 'No matches.' : 'No teammates to message yet.') + '</div>';
+          return;
+        }
+        var html = '';
+        rows.forEach(function(u) {
+          var nm = u.name || u.email || ('User ' + u.id);
+          html += '<button class="msg-recip-row" data-uid="' + escapeAttr(u.id) + '" data-uname="' + escapeAttr(nm) + '" ' +
+            'style="display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:10px 14px;background:transparent;border:none;border-bottom:1px solid var(--border,#222);color:var(--text,#fff);cursor:pointer;">' +
+            '<span style="width:28px;height:28px;border-radius:50%;background:rgba(34,211,238,0.18);color:var(--accent,#22d3ee);font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;">' + escapeHTML(initials(nm)) + '</span>' +
+            '<span style="overflow:hidden;"><span style="display:block;font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(nm) + '</span>' +
+            (u.email ? '<span style="display:block;font-size:11px;color:var(--text-dim,#888);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(u.email) + '</span>' : '') + '</span>' +
+          '</button>';
+        });
+        recipListEl.innerHTML = html;
+        recipListEl.querySelectorAll('.msg-recip-row').forEach(function(btn) {
+          btn.addEventListener('mouseenter', function() { btn.style.background = 'rgba(34,211,238,0.06)'; });
+          btn.addEventListener('mouseleave', function() { btn.style.background = 'transparent'; });
+          btn.addEventListener('click', function() {
+            var uid = btn.getAttribute('data-uid');
+            var uname = btn.getAttribute('data-uname');
+            modal.remove();
+            startDm(uid, uname, listEl, threadEl, onThreadOpen);
+          });
+        });
+      }
+      paint('');
+      searchEl.addEventListener('input', function() { paint(searchEl.value); });
+      setTimeout(function() { searchEl.focus(); }, 50);
+    });
+  }
+
+  function initials(name) {
+    var parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+    if (!parts.length) return '?';
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  }
+
+  function loadInboxList(listEl, threadEl, onThreadOpen) {
     if (!window.p86Api || !window.p86Api.messages) {
       listEl.innerHTML = '<div style="padding:18px;color:#f87171;font-size:12px;">Messaging API not available.</div>';
       return;
@@ -127,12 +254,17 @@
           btn.style.background = 'rgba(34,211,238,0.10)';
           renderThreadIntoPanel(threadEl, key, { title: label, autofocus: true, onPosted: function() {
             // refresh list to update unread + last message
-            loadInboxList(listEl, threadEl);
-            // bump the summary badge if we're on summary
+            loadInboxList(listEl, threadEl, onThreadOpen);
+            // bump the badges (summary card + sidebar nav)
             if (typeof window.refreshSummaryUnreadBadge === 'function') {
               window.refreshSummaryUnreadBadge();
             }
+            refreshNavMessagesBadge();
           } });
+          // Opening a thread also clears its unread once painted; keep the
+          // sidebar badge honest.
+          refreshNavMessagesBadge();
+          if (typeof onThreadOpen === 'function') onThreadOpen();
         });
       });
     }).catch(function(err) {
@@ -245,9 +377,111 @@
       .catch(function() { return 0; });
   }
 
+  // ──────────────────────────────────────────────────────────────────
+  // One-time styles for the full-page Messages surface (#messages tab).
+  // Self-contained so the module owns its own look; responsive so the
+  // two-column inbox collapses to a single column on phones.
+  // ──────────────────────────────────────────────────────────────────
+  function ensurePageStyles() {
+    if (document.getElementById('p86-messaging-styles')) return;
+    var css =
+      '#messages .msg-page{display:flex;flex-direction:column;height:calc(100vh - 130px);min-height:420px;}' +
+      '#messages .msg-page-head{display:flex;align-items:center;gap:10px;padding:0 4px 12px;}' +
+      '#messages .msg-page-head h2{margin:0;font-size:19px;flex:1;}' +
+      '#messages .msg-page-body{flex:1;display:grid;grid-template-columns:300px minmax(0,1fr);gap:0;border:1px solid var(--border,#2a2a3a);border-radius:10px;overflow:hidden;background:var(--card-bg,#0f0f1e);}' +
+      '#messages .msg-page-list{border-right:1px solid var(--border,#2a2a3a);overflow-y:auto;}' +
+      '#messages .msg-page-thread{overflow:hidden;display:flex;flex-direction:column;}' +
+      '#messages .msg-page-back{display:none;}' +
+      '@media (max-width:640px){' +
+        '#messages .msg-page{height:calc(100vh - 150px);}' +
+        '#messages .msg-page-body{grid-template-columns:minmax(0,1fr);}' +
+        '#messages .msg-page-body.show-thread .msg-page-list{display:none;}' +
+        '#messages .msg-page-body:not(.show-thread) .msg-page-thread{display:none;}' +
+        '#messages .msg-page-back{display:inline-flex;align-items:center;gap:4px;background:transparent;border:none;color:var(--accent,#22d3ee);font-size:13px;cursor:pointer;padding:6px 4px;}' +
+      '}';
+    var st = document.createElement('style');
+    st.id = 'p86-messaging-styles';
+    st.textContent = css;
+    document.head.appendChild(st);
+  }
+
+  // Full-page inbox — rendered into the #messages tab-content pane.
+  // Same two-column model as the modal, but persistent and responsive.
+  function renderMessagesTab() {
+    var pane = document.getElementById('messages');
+    if (!pane) return;
+    ensurePageStyles();
+    pane.innerHTML =
+      '<div class="msg-page">' +
+        '<div class="msg-page-head">' +
+          '<button type="button" class="msg-page-back" data-page-back>&#8592; Inbox</button>' +
+          '<h2>Messages</h2>' +
+          '<button type="button" data-new-msg class="primary" style="padding:7px 14px;font-size:13px;font-weight:600;">&#x270E; New message</button>' +
+        '</div>' +
+        '<div class="msg-page-body">' +
+          '<div class="msg-page-list" id="msgPageList">' +
+            '<div style="padding:18px;color:var(--text-dim,#888);font-size:12px;text-align:center;">Loading threads&hellip;</div>' +
+          '</div>' +
+          '<div class="msg-page-thread" id="msgPageThread">' +
+            '<div style="padding:32px;color:var(--text-dim,#888);font-size:12px;text-align:center;">Pick a conversation, or start a new message.</div>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+
+    var bodyEl = pane.querySelector('.msg-page-body');
+    var listEl = pane.querySelector('#msgPageList');
+    var threadEl = pane.querySelector('#msgPageThread');
+    var newBtn = pane.querySelector('[data-new-msg]');
+    var backBtn = pane.querySelector('[data-page-back]');
+
+    // On mobile the list and thread share the viewport — opening a
+    // thread swaps to the thread view; Back returns to the list.
+    function showThreadMobile() { if (bodyEl) bodyEl.classList.add('show-thread'); }
+    if (backBtn) backBtn.addEventListener('click', function() { if (bodyEl) bodyEl.classList.remove('show-thread'); });
+
+    if (newBtn) newBtn.addEventListener('click', function() {
+      startNewMessage(listEl, threadEl, showThreadMobile);
+    });
+
+    // loadInboxList wires row clicks to renderThreadIntoPanel(threadEl,…);
+    // the onThreadOpen callback flips the mobile view on selection.
+    loadInboxList(listEl, threadEl, showThreadMobile);
+    refreshNavMessagesBadge();
+  }
+
+  // Update the sidebar "Messages" nav badge with the unread total.
+  // Defensive: no-ops if the nav button isn't present.
+  function refreshNavMessagesBadge() {
+    getTotalUnread().then(function(n) {
+      var badge = document.getElementById('navMessagesBadge');
+      if (!badge) return;
+      if (n > 0) {
+        badge.textContent = n > 99 ? '99+' : String(n);
+        badge.style.display = '';
+      } else {
+        badge.textContent = '';
+        badge.style.display = 'none';
+      }
+    }).catch(function() {});
+  }
+
   window.p86Messaging = {
     openInbox: openInbox,
     mountInline: mountInline,
-    getTotalUnread: getTotalUnread
+    getTotalUnread: getTotalUnread,
+    renderMessagesTab: renderMessagesTab,
+    refreshNavBadge: refreshNavMessagesBadge,
+    startNewMessage: startNewMessage
   };
+  window.renderMessagesTab = renderMessagesTab;
+
+  // Keep the nav badge fresh: on auth-ready and on a light interval.
+  document.addEventListener('p86:auth-ready', function() { refreshNavMessagesBadge(); });
+  if (!window._p86MsgBadgeTimer) {
+    window._p86MsgBadgeTimer = setInterval(function() {
+      if (window.p86Api && window.p86Api.isAuthenticated && window.p86Api.isAuthenticated()) {
+        refreshNavMessagesBadge();
+      }
+    }, 90 * 1000);
+  }
 })();
