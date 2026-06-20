@@ -30,6 +30,7 @@ const express = require('express');
 const crypto = require('crypto');
 const { pool } = require('../db');
 const { requireAuth, isAdminish } = require('../auth');
+const { sendEmail } = require('../email');
 
 const router = express.Router();
 
@@ -60,6 +61,23 @@ function isValidThreadKey(key) {
   if (/^(job|lead|estimate|attachment):[a-zA-Z0-9_:-]+$/.test(key)) return true;
   if (/^dm:\d+:\d+$/.test(key)) return true;
   return false;
+}
+
+// For a `dm:<a>:<b>` thread key, return [a, b] as numbers; otherwise null.
+// Used to enforce that only the two participants can read/post a DM — the
+// entity threads (job/lead/estimate/attachment) are org-shared by design,
+// but a DM is private to its two endpoints.
+function dmParticipants(key) {
+  const m = /^dm:(\d+):(\d+)$/.exec(key);
+  return m ? [Number(m[1]), Number(m[2])] : null;
+}
+
+// True when `key` is a DM and `userId` is NOT one of its two participants.
+// Non-DM threads return false (no per-user gate at this layer).
+function isForbiddenDm(key, userId) {
+  const parts = dmParticipants(key);
+  if (!parts) return false;
+  return parts.indexOf(Number(userId)) === -1;
 }
 
 // Friendly label for a thread used by the inbox widget. Best-effort —
@@ -117,6 +135,94 @@ async function describeThread(key) {
   return { kind: 'thread', label: key };
 }
 
+// Public base URL for email links (env override → live domain fallback).
+// Mirrors taskAppUrl() in tasks-routes.js — kept self-contained so message
+// notifications stay off the protected email-* template files.
+function appUrl() {
+  var u = process.env.APP_URL;
+  if (typeof u === 'string' && /^https?:\/\//.test(u.trim())) {
+    return u.trim().replace(/\/$/, '');
+  }
+  return 'https://project86.net';
+}
+
+function escHtml(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// Fire a direct-message email to the OTHER participant of a `dm:` thread.
+// Fire-and-forget; respects notification_prefs.messages opt-out — same
+// posture as notifyTaskAssigned (tasks-routes.js). Body built inline (no
+// email-templates dependency); the send is recorded in email_log by
+// sendEmail. Never throws. No-op for non-DM threads (entity threads are
+// org-shared comment streams — emailing the whole org on every comment is
+// out of scope for M1).
+async function notifyMessageDM(key, senderId, body) {
+  try {
+    const parts = dmParticipants(key);
+    if (!parts) return; // only DMs notify in M1
+    const recipientId = parts.find((p) => p !== Number(senderId));
+    if (!recipientId) return; // self-DM or malformed — nobody to notify
+
+    const { rows } = await pool.query(
+      'SELECT email, name, notification_prefs FROM users WHERE id = $1 AND active = TRUE',
+      [recipientId]
+    );
+    if (!rows.length) return;
+    const u = rows[0];
+    const prefs = u.notification_prefs || {};
+    if (prefs.messages === false) return; // user opted out
+    if (!u.email) return;
+
+    // Sender's display name for the subject/body.
+    let senderName = 'A teammate';
+    try {
+      const s = await pool.query('SELECT name, email FROM users WHERE id = $1', [Number(senderId)]);
+      if (s.rows.length) senderName = s.rows[0].name || s.rows[0].email || senderName;
+    } catch (_) { /* fall back to generic sender name */ }
+
+    const base = appUrl();
+    const hostLabel = base.replace(/^https?:\/\//, '');
+    const preview = body.length > 280 ? body.slice(0, 280) + '…' : body;
+    const subject = 'New message from ' + senderName;
+
+    const html =
+      '<!doctype html><html><body style="margin:0;padding:0;background:#f3f4f6;font-family:Arial,Helvetica,sans-serif;">' +
+        '<div style="max-width:560px;margin:24px auto;padding:24px;background:#fff;border-radius:10px;color:#1f2937;line-height:1.5;">' +
+          '<div style="margin-bottom:12px;"><img src="' + base + '/images/logo-color.png" alt="Project 86" style="height:40px;display:block;" /></div>' +
+          '<h2 style="margin:0 0 16px 0;color:#111827;font-size:20px;">' + escHtml(senderName) + ' sent you a message</h2>' +
+          '<p>Hi ' + escHtml(u.name || 'there') + ',</p>' +
+          '<div style="background:#f9fafb;border:1px solid #e5e7eb;border-left:4px solid #4f8cff;border-radius:6px;margin:16px 0;padding:12px 16px;font-size:14px;white-space:pre-wrap;">' + escHtml(preview) + '</div>' +
+          '<p><a href="' + base + '" style="display:inline-block;background:#4f8cff;color:#fff;text-decoration:none;padding:10px 20px;border-radius:6px;font-weight:600;">Open Messages</a></p>' +
+          '<div style="margin-top:32px;padding-top:16px;border-top:1px solid #e5e7eb;font-size:12px;color:#6b7280;">' +
+            'Project 86 &middot; <a href="' + base + '" style="color:#4f8cff;text-decoration:none;">' + escHtml(hostLabel) + '</a><br/>' +
+            'You\'re receiving this because a teammate messaged you on Project 86. ' +
+            'Toggle notifications in <strong>My Account &rarr; Notifications</strong>.' +
+          '</div>' +
+        '</div>' +
+      '</body></html>';
+
+    const text =
+      'Hi ' + (u.name || 'there') + ',\n\n' +
+      senderName + ' sent you a message on Project 86:\n\n' +
+      preview + '\n\n' +
+      'Open Messages: ' + base + '\n\n' +
+      'Toggle notifications in My Account → Notifications.';
+
+    sendEmail({
+      to: u.email,
+      subject: subject,
+      html: html,
+      text: text,
+      tag: 'message'
+    }).catch((e) => console.warn('[messages] notify email failed:', e && e.message));
+  } catch (e) {
+    console.warn('[messages] notify lookup failed:', e && e.message);
+  }
+}
+
 // GET /api/messages/recent
 // Threads the current user can see, ordered by last activity. We
 // surface the latest message + author + unread count per thread.
@@ -125,11 +231,28 @@ async function describeThread(key) {
 router.get('/recent', async (req, res) => {
   try {
     const userId = req.user.id;
-    // Last message per thread + this user's last_read timestamp.
+    // Threads this user can see in the inbox:
+    //   • any thread they've posted in (entity comment streams they joined), plus
+    //   • any DM where they are one of the two participants.
+    // This scopes /recent to the user's own activity instead of leaking
+    // every thread in the database to every user. (Entity threads remain
+    // org-shared; a user only sees one in the inbox once they participate.)
+    // Last message per visible thread + this user's last_read timestamp.
     const { rows } = await pool.query(
-      `WITH latest AS (
+      `WITH mine AS (
+         SELECT DISTINCT thread_key
+           FROM messages
+          WHERE user_id = $1
+          UNION
+         SELECT DISTINCT thread_key
+           FROM messages
+          WHERE thread_key LIKE 'dm:' || $1 || ':%'
+             OR thread_key LIKE 'dm:%:' || $1
+       ),
+       latest AS (
          SELECT thread_key, MAX(created_at) AS last_at
            FROM messages
+          WHERE thread_key IN (SELECT thread_key FROM mine)
           GROUP BY thread_key
        )
        SELECT m.thread_key,
@@ -185,6 +308,9 @@ router.get('/:threadKey', async (req, res) => {
     if (!isValidThreadKey(key)) {
       return res.status(400).json({ error: 'Invalid thread key' });
     }
+    if (isForbiddenDm(key, req.user.id)) {
+      return res.status(403).json({ error: 'Not a participant in this conversation' });
+    }
     const { rows } = await pool.query(
       `SELECT m.id, m.thread_key, m.user_id, u.name AS user_name, u.email AS user_email,
               m.body, m.created_at, m.edited_at
@@ -209,6 +335,9 @@ router.post('/:threadKey', async (req, res) => {
     const key = String(req.params.threadKey || '');
     if (!isValidThreadKey(key)) {
       return res.status(400).json({ error: 'Invalid thread key' });
+    }
+    if (isForbiddenDm(key, req.user.id)) {
+      return res.status(403).json({ error: 'Not a participant in this conversation' });
     }
     const body = String((req.body && req.body.body) || '').trim();
     if (!body) return res.status(400).json({ error: 'body is required' });
@@ -235,6 +364,9 @@ router.post('/:threadKey', async (req, res) => {
         WHERE m.id = $1`,
       [id]
     );
+    // Fire-and-forget DM email to the other participant (self-guarding,
+    // honors notification_prefs.messages, no-op for entity threads).
+    notifyMessageDM(key, req.user.id, body);
     res.json({ message: rows[0] });
   } catch (e) {
     console.error('POST /api/messages/:threadKey error:', e);
@@ -248,6 +380,9 @@ router.post('/:threadKey/read', async (req, res) => {
     const key = String(req.params.threadKey || '');
     if (!isValidThreadKey(key)) {
       return res.status(400).json({ error: 'Invalid thread key' });
+    }
+    if (isForbiddenDm(key, req.user.id)) {
+      return res.status(403).json({ error: 'Not a participant in this conversation' });
     }
     await pool.query(
       `INSERT INTO message_reads (thread_key, user_id, last_read_at)
