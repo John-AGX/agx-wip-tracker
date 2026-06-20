@@ -41,6 +41,13 @@ async function initSchema() {
     -- formatting heuristics. Nullable — most office users won't set it.
     ALTER TABLE users ADD COLUMN IF NOT EXISTS phone_number TEXT;
     CREATE UNIQUE INDEX IF NOT EXISTS idx_users_phone_number ON users(phone_number) WHERE phone_number IS NOT NULL;
+    -- Per-user IANA timezone OVERRIDE (e.g. 'America/Chicago'). NULL =
+    -- inherit the org timezone. Lets a crew member who works a different
+    -- market than the org's home base get reminders in THEIR local time.
+    -- Resolution order (server/timezone.js resolveTz): user → org → default
+    -- ('America/New_York'). Drives the morning-gate on reminder digests and
+    -- the timezone every reminder/notification email renders dates in.
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS timezone TEXT;
     -- users.sub_id (sub portal) is added AFTER the subs table is
     -- created further down so the FK resolves on first run.
 
@@ -86,6 +93,14 @@ async function initSchema() {
     -- the org's emails share a consistent look without re-editing
     -- every template.
     ALTER TABLE organizations ADD COLUMN IF NOT EXISTS branding JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+    -- Org's home-market IANA timezone (e.g. 'America/New_York'). Default
+    -- US Eastern. This is the multi-market anchor: every time-gated cron
+    -- (reminder digests, cert-expiry, weekly digest) and every date/time
+    -- rendered in this org's emails resolves against THIS zone unless a
+    -- user has set their own override. Adding a new market = create/assign
+    -- its org and set this field. Validated as a real IANA zone on save.
+    ALTER TABLE organizations ADD COLUMN IF NOT EXISTS timezone TEXT NOT NULL DEFAULT 'America/New_York';
 
     -- ── SaaS commercialization scaffold ─────────────────────────────
     -- Subscription state per org. All additive + defaulted, so every
