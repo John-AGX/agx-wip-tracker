@@ -1726,3 +1726,150 @@ body.light-mode .sch-cal-grid { background: #d6dae3; }
      to see the full list in the day-at-glance sheet. */
   .sch-cal-day-entry-text { display: none; }
 }
+
+/* ==========================================================
+   MOBILE month-grid view (Outlook-mobile style, P86 dark)
+   ----------------------------------------------------------
+   At ≤640px the calendar swaps from the desktop spanning-bar
+   / fisheye rows to a clean fixed month grid: a row of single-
+   letter weekday headers (S M T W T F S) over week rows of
+   equal-height day cells. Each cell shows the day number, up to
+   3 compact rounded event chips, and a "+N more" affordance.
+   Today's number sits in a filled accent circle.
+
+   Markup is produced by schedule.js's renderMobileWeekRow()
+   (.sch-mweek / .sch-mcell / .sch-mchip / .sch-mmore) and the
+   DOW header gets .sch-mdow. Desktop is untouched — every rule
+   below is scoped to this media query AND to the mobile-only
+   classes, so the desktop selectors never see them.
+   ========================================================== */
+@media (max-width: 640px) {
+  /* DOW header — 7 equal cols, single dim letters. */
+  #schDowRow.sch-mdow {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+  }
+  #schDowRow.sch-mdow .sch-cal-dow {
+    text-align: center;
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--text-dim, #888);
+    padding: 5px 0;
+  }
+  /* Reset the desktop weekend-letter dim — on mobile every column
+     is equal weight, so the bookend letters read like the rest. */
+  #schDowRow.sch-mdow .sch-cal-dow:nth-child(1),
+  #schDowRow.sch-mdow .sch-cal-dow:nth-child(7) {
+    color: var(--text-dim, #888);
+  }
+
+  /* Week row — plain 7-equal-col grid of day cells. More specific
+     than the .sch-cal-week-row repeat(7, minmax(...)) rule in the
+     ≤768px block, so this wins. Override the desktop flow-mode and
+     lens min/max heights so cells size to content. */
+  .sch-cal-week-row.sch-mweek {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 0;
+    background: transparent;
+    min-height: 0;
+    max-height: none;
+  }
+  /* Belt-and-suspenders: flow-mode + lens rules from earlier media
+     blocks key off .sch-cal-week-row; re-assert content sizing on
+     the mobile row regardless of any data-lens / .sch-flow context. */
+  .sch-cal-stack.sch-flow .sch-cal-week-row.sch-mweek,
+  .sch-cal-week-row.sch-mweek[data-lens] {
+    min-height: 0;
+    max-height: none;
+  }
+
+  /* Day cell — bordered, day number on top, chips stacked below. */
+  .sch-mcell {
+    box-sizing: border-box;
+    min-height: 76px;
+    padding: 3px;
+    border: 1px solid var(--border, #2e3346);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    overflow: hidden;
+    background: var(--surface, #181820);
+    cursor: pointer;
+  }
+  .sch-mcell-weekend {
+    /* Very subtle wash so weekends read as secondary. */
+    background: rgba(255, 255, 255, 0.02);
+  }
+  .sch-mcell-oom {
+    /* Out-of-month cells dim the whole cell + number. */
+    background: rgba(0, 0, 0, 0.18);
+  }
+
+  /* Day number — small, top-left. */
+  .sch-mdaynum {
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1;
+    color: var(--text, #e4e6f0);
+    padding: 1px 1px 2px;
+  }
+  .sch-mcell-oom .sch-mdaynum {
+    color: var(--text-dim, #555);
+  }
+  /* Today — filled accent circle in the P86 cyan accent. */
+  .sch-mcell-today .sch-mdaynum {
+    background: var(--accent, #22d3ee);
+    color: #04161a;
+    font-weight: 700;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+  }
+
+  /* Compact event chip — one line, ellipsis, chip color from JS. */
+  .sch-mchip {
+    font-size: 10px;
+    line-height: 1.4;
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: var(--chip-color, #4f8cff);
+    color: #fff;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
+  }
+  /* Muted (done / rolled-over jobs; tentative / canceled events) —
+     hollow outline in the chip color instead of a filled fill. */
+  .sch-mchip-muted {
+    background: transparent;
+    color: var(--chip-color, #4f8cff);
+    border: 1px solid var(--chip-color, #4f8cff);
+  }
+  .sch-mchip-canceled {
+    text-decoration: line-through;
+  }
+
+  /* "+N more" — quiet text button, opens the day sheet. */
+  .sch-mmore {
+    font-size: 9px;
+    color: var(--text-dim, #888);
+    background: none;
+    border: none;
+    text-align: left;
+    padding: 1px 4px;
+    cursor: pointer;
+  }
+
+  /* Hide weather decorations on the mobile grid — keep it calm.
+     (Mobile cells don't emit these, but the desktop bar/day-cell
+     weather chips are hidden defensively in case any leak in.) */
+  .sch-entry-bar-wx-icon,
+  .sch-cal-day-wx { display: none; }
+}
+

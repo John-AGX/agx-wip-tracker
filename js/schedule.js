@@ -318,6 +318,35 @@
     return (sum / colWeightSum()) * 100;
   }
 
+  // ── Mobile detection + breakpoint-flip re-render ───────────
+  // The calendar swaps to a fixed Outlook-style month grid (plain
+  // 7-equal-col day cells with compact chips) at phone widths. The
+  // desktop spanning-bar / fisheye path is untouched above the
+  // breakpoint. 640px matches the existing @media (max-width:640px)
+  // CSS section so the JS branch and the CSS section flip together.
+  function isMobileCal() { return (window.innerWidth || 0) <= 640; }
+  // Track the mode used at the last render so the resize handler only
+  // re-renders when the breakpoint actually flips (not on every tick).
+  var _lastCalMobileMode = null;
+  // Guard so the resize listener is only attached once per page life.
+  var _resizeListenerAttached = false;
+  function attachCalResizeListener() {
+    if (_resizeListenerAttached) return;
+    _resizeListenerAttached = true;
+    var t = 0;
+    window.addEventListener('resize', function() {
+      if (t) clearTimeout(t);
+      t = setTimeout(function() {
+        t = 0;
+        // Only act when the schedule page is mounted.
+        if (!document.getElementById('schStack')) return;
+        var now = isMobileCal();
+        if (now === _lastCalMobileMode) return; // breakpoint didn't flip
+        renderGrid();
+      }, 200);
+    });
+  }
+
   // ── Slice C: event time formatting ─────────────────────────
   // Compact local 12-hour clock for an ISO datetime — no leading zero
   // on the hour, lowercased am/pm, e.g. "9:30 am". Used to prefix
@@ -1114,14 +1143,27 @@
     var scrollEl = document.getElementById('schCalScroll');
     if (!stack || !dowRow || !scrollEl) return;
     var showW = !!_state.settings.showWeekends;
+    var mobile = isMobileCal();
+    // Remember the mode this render painted so the resize handler can
+    // detect a breakpoint flip without re-rendering on every tick.
+    _lastCalMobileMode = mobile;
+    attachCalResizeListener();
 
-    // Day-of-week header.
+    // Day-of-week header. On mobile we collapse to single letters
+    // (S M T W T F S) laid out as 7 equal columns to match the
+    // mobile week rows; desktop keeps the 3-letter labels and the
+    // weekend-bookend column treatment.
+    var MDOW_LABELS = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+    var dowLabels = mobile ? MDOW_LABELS : DOW_LABELS;
     var dowHtml = '';
-    DOW_LABELS.forEach(function(d) {
+    dowLabels.forEach(function(d) {
       dowHtml += '<div class="sch-cal-dow">' + d + '</div>';
     });
     dowRow.innerHTML = dowHtml;
-    dowRow.classList.toggle('sch-no-weekends', !showW);
+    // On mobile, hide the no-weekends collapse (all 7 cols equal) and
+    // tag the row so CSS lays it out as a 7-equal-col grid.
+    dowRow.classList.toggle('sch-no-weekends', !mobile && !showW);
+    dowRow.classList.toggle('sch-mdow', mobile);
 
     // Build the stack: walk from (today - MONTHS_BEHIND months, snapped
     // to its containing Sunday) to (today + MONTHS_AHEAD months, snapped
@@ -1203,6 +1245,10 @@
   // This avoids the IO having to fire 30 ticks just to set the
   // starting state.
   function setLensAround(stack, centerRow) {
+    // Mobile rows are content-sized fixed cells, not lens-driven bar
+    // rows — no fisheye decoration applies. No-op so a stray call
+    // can't tag mobile rows with data-lens height tiers.
+    if (isMobileCal()) return;
     if (!centerRow) return;
     var rows = stack.querySelectorAll('.sch-cal-week-row');
     var centerIdx = -1;
@@ -1321,6 +1367,117 @@
   // hop months) still work. Maps to scrollToMonth.
   function stepMonth(delta) { scrollToMonth(delta); }
 
+  // ── Mobile week row (Outlook-style month grid) ─────────────
+  // Builds one week as a 7-equal-col grid of day cells. Each cell:
+  //   - day number at top (filled accent circle for today)
+  //   - up to 3 compact rounded chips (title only, one line, ellipsis)
+  //   - a "+N more" button when the day has > 3 items
+  // The per-day item list is the union of job entries that span the
+  // day (when the Jobs layer is on) and personal events whose
+  // [starts_at .. ends_at||starts_at] range covers the day (when the
+  // My Events layer is on). All-day / job items sort first; timed
+  // events follow by start time. Reuses entrySpanDays, colorForJob,
+  // jobById, EVENT_DEFAULT_COLOR, escapeHTML/escapeAttr — no new
+  // scheduling logic. `days` and `weekKeys` come from renderWeekRow.
+  function renderMobileWeekRow(days, weekKeys) {
+    var layers = _state.settings.layers || {};
+    var jobsOn = layers.jobs !== false;
+    var eventsOn = layers.events !== false;
+
+    var weekStartIso = weekKeys[0];
+    var html = '<div class="sch-cal-week-row sch-mweek" data-week-start="' +
+               escapeAttr(weekStartIso) + '">';
+
+    days.forEach(function(day) {
+      // Collect this day's items. Match the desktop date-clipping
+      // logic: jobs via entrySpanDays membership, events via an
+      // inclusive [start..end] ISO-date range that falls back to the
+      // start date when ends_at is missing.
+      var items = [];
+      if (jobsOn) {
+        _state.entries.forEach(function(e) {
+          var span = entrySpanDays(e);
+          if (span.indexOf(day.iso) === -1) return;
+          items.push({
+            kind: 'job',
+            entry: e,
+            color: colorForJob(e.jobId),
+            label: (function() {
+              var job = jobById(e.jobId);
+              return job ? (job.jobNumber || job.title || 'Job') : 'Job';
+            })(),
+            muted: (e.status === 'done' || e.status === 'rolled-over'),
+            canceled: false,
+            sortKey: 0 // jobs (all-day-ish) sort before timed events
+          });
+        });
+      }
+      if (eventsOn && _state.events && _state.events.length) {
+        _state.events.forEach(function(ev) {
+          if (!ev || !ev.starts_at) return;
+          var sd = parseISODate(ev.starts_at);
+          if (!sd) return;
+          var ed = parseISODate(ev.ends_at) || sd;
+          if (ed < sd) ed = sd;
+          if (day.iso < toISODate(sd) || day.iso > toISODate(ed)) return;
+          // Timed events sort after all-day ones, ordered by start
+          // time. All-day events keep the same all-day rank as jobs.
+          var sortKey = 0;
+          if (!ev.all_day) {
+            var t = new Date(ev.starts_at);
+            sortKey = isNaN(t.getTime()) ? 1 : (1 + t.getHours() / 24 + t.getMinutes() / 1440);
+          }
+          items.push({
+            kind: 'event',
+            event: ev,
+            color: ev.color || EVENT_DEFAULT_COLOR,
+            label: ev.title || '(untitled event)',
+            muted: (ev.status === 'tentative' || ev.status === 'canceled'),
+            canceled: (ev.status === 'canceled'),
+            sortKey: sortKey
+          });
+        });
+      }
+      // Stable sort: all-day/job first, then timed events by start.
+      items.sort(function(a, b) { return a.sortKey - b.sortKey; });
+
+      var cls = 'sch-mcell';
+      if (!day.inMonth) cls += ' sch-mcell-oom';
+      if (day.isToday) cls += ' sch-mcell-today';
+      if (day.isWeekend) cls += ' sch-mcell-weekend';
+
+      var cellHtml = '<div class="' + cls + '" data-date="' + escapeAttr(day.iso) + '">' +
+        '<div class="sch-mdaynum">' + day.date.getDate() + '</div>';
+
+      var shown = items.slice(0, 3);
+      shown.forEach(function(it) {
+        var chipCls = 'sch-mchip';
+        if (it.muted) chipCls += ' sch-mchip-muted';
+        if (it.canceled) chipCls += ' sch-mchip-canceled';
+        var idAttr = it.kind === 'job'
+          ? 'data-entry-id="' + escapeAttr(it.entry.id) + '"'
+          : 'data-event-id="' + escapeAttr(it.event.id) + '"';
+        cellHtml += '<div class="' + chipCls + '" ' + idAttr +
+          ' style="--chip-color:' + escapeAttr(it.color) + ';"' +
+          ' title="' + escapeAttr(it.label) + '">' +
+          escapeHTML(it.label) +
+        '</div>';
+      });
+
+      if (items.length > 3) {
+        var more = items.length - 3;
+        cellHtml += '<button type="button" class="sch-mmore" data-date="' +
+          escapeAttr(day.iso) + '">+' + more + ' more</button>';
+      }
+
+      cellHtml += '</div>';
+      html += cellHtml;
+    });
+
+    html += '</div>';
+    return html;
+  }
+
   // Render a single week row. Day cells form a 7-column sub-grid;
   // entry bars layer on top using grid-column spans so a multi-day
   // entry paints as one continuous bar instead of breaking on every
@@ -1341,6 +1498,17 @@
       });
     }
     var weekKeys = days.map(function(x) { return x.iso; });
+
+    // ── MOBILE month-grid branch ───────────────────────────────
+    // Outlook-mobile-style fixed grid: a 7-equal-col row of day cells,
+    // each with the day number on top + up to 3 compact event chips +
+    // a "+N more" affordance. No spanning bars, no fisheye, no weekend
+    // bookends — all 7 columns are equal width. Keeps the
+    // data-week-start attribute so scroll-to-week still works. Desktop
+    // (the code below) is left byte-for-byte unchanged.
+    if (isMobileCal()) {
+      return renderMobileWeekRow(days, weekKeys);
+    }
 
     // Find entries that touch this week. Compute their per-week
     // segment (start col, span) so each entry renders as one bar
@@ -1789,6 +1957,46 @@
         refreshWeekSummary();
       });
     });
+
+    // ── Mobile month-grid wiring ───────────────────────────────
+    // Chips open their read-only card; "+N more" and a bare cell tap
+    // open the day-at-a-glance sheet. These selectors only exist on
+    // mobile rows (renderMobileWeekRow), so on desktop the loops are
+    // no-ops.
+    grid.querySelectorAll('.sch-mchip[data-entry-id]').forEach(function(el) {
+      el.addEventListener('click', function(e) {
+        e.stopPropagation();
+        var id = el.getAttribute('data-entry-id');
+        var entry = _state.entries.find(function(x) { return x.id === id; });
+        if (entry) openEntryCard(entry);
+      });
+    });
+    grid.querySelectorAll('.sch-mchip[data-event-id]').forEach(function(el) {
+      el.addEventListener('click', function(e) {
+        e.stopPropagation();
+        var id = el.getAttribute('data-event-id');
+        var event = (_state.events || []).find(function(x) { return String(x.id) === String(id); });
+        if (event) openEventCard(event);
+      });
+    });
+    grid.querySelectorAll('.sch-mmore[data-date]').forEach(function(btn) {
+      btn.addEventListener('click', function(e) {
+        e.stopPropagation();
+        var date = btn.getAttribute('data-date');
+        if (date) openDaySheet(date);
+      });
+    });
+    grid.querySelectorAll('.sch-mcell[data-date]').forEach(function(cell) {
+      cell.addEventListener('click', function(e) {
+        // Only the bare cell tap opens the day sheet — chip / more
+        // taps handle themselves and stopPropagation above.
+        if (e.target.closest('.sch-mchip')) return;
+        if (e.target.closest('.sch-mmore')) return;
+        var date = cell.getAttribute('data-date');
+        if (date) openDaySheet(date);
+      });
+    });
+
     wireResizeHandles(grid);
   }
 
