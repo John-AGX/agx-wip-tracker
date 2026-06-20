@@ -45,6 +45,7 @@ const adminAnthropicRoutes = require('./routes/admin-anthropic-routes');
 const adminSmsRoutes = require('./routes/admin-sms-routes');
 const adminOrganizationsRoutes = require('./routes/admin-organizations-routes');
 const adminConsoleRoutes = require('./routes/admin-console-routes');
+const remindersRoutes = require('./routes/reminders-routes');
 const smsRoutes = require('./routes/sms-routes');
 const reportRoutes = require('./routes/report-routes');
 const reportsPolymorphicRoutes = require('./routes/reports-routes');
@@ -203,6 +204,7 @@ app.use('/api/admin/anthropic', adminAnthropicRoutes);
 app.use('/api/admin/sms', adminSmsRoutes);
 app.use('/api/admin/organizations', adminOrganizationsRoutes);
 app.use('/api/admin/console', adminConsoleRoutes);
+app.use('/api/admin/reminders', remindersRoutes);
 app.use('/api/sms', smsRoutes);
 
 // Serve uploaded files when running with the local storage backend.
@@ -328,6 +330,15 @@ function startServer() {
         require('./weekly-digest-cron').start();
       } catch (e) {
         console.warn('[weekly-digest] failed to start:', e && e.message);
+      }
+      // Reminders scanner — ticks every 10 min. Fires per-user task-due
+      // digests (morning-gated, deduped per day) + calendar event
+      // reminders (per event reminder_minutes). Honors notification_prefs
+      // opt-outs (task_due / event_reminder); self-guarding, never throws.
+      try {
+        require('./reminders-cron').start();
+      } catch (e) {
+        console.warn('[reminders] failed to start scanner:', e && e.message);
       }
       // Marketing campaigns worker (Wave 9). Ticks every 60s: picks
       // up scheduled campaigns whose time has come, drains in-flight
