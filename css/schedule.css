@@ -514,7 +514,11 @@
    than the .sch-cal-week-row[data-lens="…"] rules, so they win regardless
    of any lens attribute. */
 .sch-cal-stack.sch-flow .sch-cal-week-row {
-  min-height: 116px;
+  /* Taller rows so the in-view month fills the scroll viewport instead of
+     leaving room for ~2 full weeks of the next month below it. Sized so a
+     full 6-week month still fits without clipping; tune this one number to
+     taste. */
+  min-height: 140px;
   max-height: none;
   transition: none;
 }
@@ -526,7 +530,7 @@
 .sch-cal-stack.sch-flow .sch-cal-bars,
 .sch-cal-stack.sch-flow .sch-cal-day-dots { display: none; }
 @media (max-width: 640px) {
-  .sch-cal-stack.sch-flow .sch-cal-week-row { min-height: 96px; }
+  .sch-cal-stack.sch-flow .sch-cal-week-row { min-height: 116px; }
   .sch-cal-stack.sch-flow .sch-cal-day-jobs { max-height: none; padding: 3px; }
 }
 
