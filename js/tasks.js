@@ -145,6 +145,8 @@
       '.p86-task-modal .p86-field{display:flex;flex-direction:column;gap:4px;margin-bottom:10px;}' +
       '.p86-task-modal .p86-field>span{font-size:12px;font-weight:600;color:var(--muted,#71717a);}' +
       '.p86-task-linkchip{display:inline-flex;align-items:center;gap:6px;font-size:12px;padding:3px 8px;border-radius:999px;background:var(--chip-bg,#f1f5f9);color:var(--muted,#475569);}' +
+      '.p86-task-linkpick{display:flex;gap:8px;}' +
+      '.p86-task-linkpick select{flex:1 1 0;min-width:0;}' +
       // List
       '.p86-task-list{display:flex;flex-direction:column;gap:2px;}' +
       '.p86-task-item{display:flex;align-items:flex-start;gap:10px;padding:9px 8px;border-radius:8px;border:1px solid transparent;cursor:default;}' +
@@ -221,6 +223,29 @@
   // prefill: { title?, entity_type?, entity_id?, entity_label?, kind?,
   //            assignee_user_id?, due_date?, priority? }
   // opts:    { onCreated(task) }
+  // Manual entity-link picker source for the quick-add (reminder) modal —
+  // the same four types the calendar links to. Cached per type per page so
+  // toggling the type select is instant after the first load. Labels mirror
+  // server entity-labels.js ([jobNumber] title / lead title / name).
+  var _entOptCache = {};
+  function loadEntOptions(type) {
+    if (_entOptCache[type]) return Promise.resolve(_entOptCache[type]);
+    var a = window.p86Api;
+    if (!a) return Promise.resolve([]);
+    var p;
+    if (type === 'client')       p = a.clients.list().then(function (r) { return (r && r.clients) || []; });
+    else if (type === 'job')     p = a.jobs.list().then(function (r) { return (r && r.jobs) || []; });
+    else if (type === 'lead')    p = a.leads.list().then(function (r) { return (r && r.leads) || []; });
+    else if (type === 'project') p = a.projects.list().then(function (r) { return (r && r.projects) || []; });
+    else return Promise.resolve([]);
+    return p.then(function (l) { _entOptCache[type] = l; return l; }).catch(function () { return []; });
+  }
+  function entOptLabel(type, it) {
+    if (type === 'job') { var n = it.jobNumber ? '[' + it.jobNumber + '] ' : ''; return n + (it.title || it.name || 'Job'); }
+    if (type === 'lead') return it.title || '(untitled lead)';
+    return it.name || it.title || '(unnamed)';
+  }
+
   function openQuickAdd(prefill, opts) {
     prefill = prefill || {};
     opts = opts || {};
@@ -239,7 +264,18 @@
           '<div style="padding:16px;">' +
             (hasLink
               ? '<div style="margin-bottom:10px;"><span class="p86-task-linkchip">Linked: ' + esc(linkLabel || (prefill.entity_type + ' ' + prefill.entity_id)) + '</span></div>'
-              : '') +
+              : '<div class="p86-field"><span>Link to <span style="font-weight:400;color:var(--muted,#9ca3af);">(optional — client, job, lead, or project)</span></span>' +
+                  '<div class="p86-task-linkpick">' +
+                    '<select id="qaLinkType" class="p86-task-select">' +
+                      '<option value="">— None —</option>' +
+                      '<option value="client">Client</option>' +
+                      '<option value="job">Job</option>' +
+                      '<option value="lead">Lead</option>' +
+                      '<option value="project">Project</option>' +
+                    '</select>' +
+                    '<select id="qaLinkId" class="p86-task-select" style="display:none;"></select>' +
+                  '</div>' +
+                '</div>') +
             '<input id="qaTitle" type="text" style="width:100%;font-size:15px;padding:9px 11px;" ' +
               'placeholder="What needs doing?" value="' + escAttr(prefill.title || '') + '" />' +
             '<div class="p86-task-row-fields">' +
@@ -263,6 +299,27 @@
       var titleEl = h.modal.querySelector('#qaTitle');
       if (titleEl) { titleEl.focus(); }
 
+      // Wire the optional link picker (only present when not prefilled).
+      var linkTypeEl = h.modal.querySelector('#qaLinkType');
+      var linkIdEl = h.modal.querySelector('#qaLinkId');
+      if (linkTypeEl && linkIdEl) {
+        linkTypeEl.addEventListener('change', function () {
+          var type = linkTypeEl.value;
+          if (!type) { linkIdEl.style.display = 'none'; linkIdEl.innerHTML = ''; return; }
+          linkIdEl.style.display = '';
+          linkIdEl.innerHTML = '<option value="">Loading…</option>';
+          loadEntOptions(type).then(function (items) {
+            var opts = ['<option value="">— Select a ' + esc(type) + ' —</option>'];
+            items.forEach(function (it) {
+              opts.push('<option value="' + escAttr(String(it.id)) + '">' + esc(entOptLabel(type, it)) + '</option>');
+            });
+            linkIdEl.innerHTML = opts.join('');
+          }).catch(function () {
+            linkIdEl.innerHTML = '<option value="">(could not load ' + esc(type) + 's)</option>';
+          });
+        });
+      }
+
       function submit() {
         var title = (titleEl.value || '').trim();
         if (!title) { titleEl.focus(); return; }
@@ -275,7 +332,13 @@
         if (due) payload.due_date = due;
         var asg = h.modal.querySelector('#qaAssignee').value;
         if (asg) payload.assignee_user_id = Number(asg);
-        if (hasLink) { payload.entity_type = prefill.entity_type; payload.entity_id = String(prefill.entity_id); }
+        if (hasLink) {
+          payload.entity_type = prefill.entity_type; payload.entity_id = String(prefill.entity_id);
+        } else if (linkTypeEl && linkIdEl) {
+          var lt = linkTypeEl.value || '';
+          var li = linkIdEl.value || '';
+          if (lt && li) { payload.entity_type = lt; payload.entity_id = li; }
+        }
 
         var btn = h.modal.querySelector('#qaSave');
         btn.disabled = true; btn.textContent = 'Adding…';
