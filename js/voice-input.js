@@ -80,10 +80,12 @@
     var recognition = null;
     var listening = false;
     var starting = false;       // true between start() and onstart — guards the double-tap race
+    var stopping = false;       // stop() in progress — the recognizer's onend must NOT restart
     var silenceTimer = null;
     var lastResultTs = 0;
     var startTs = 0;
     var hadSpeech = false;       // flips true on the first result (interim or final)
+    var baseValue = '';          // session-level so an engine auto-restart accumulates onto prior text
 
     function setListening(v) {
       listening = v;
@@ -95,6 +97,7 @@
       // Capture before teardown so onStop fires only when we were really
       // listening — and only once, even if a caller's onStop re-enters stop().
       var wasActive = !!(recognition || starting || listening);
+      stopping = true;          // tells the recognizer's onend NOT to restart
       starting = false;
       if (silenceTimer) { clearInterval(silenceTimer); silenceTimer = null; }
       if (recognition) {
@@ -126,96 +129,119 @@
       return out;
     }
 
-    function start() {
-      // Concurrent-start guard: bail if a recognizer is already running
-      // or mid-start. Without this a fast double-tap (or a ghost click)
-      // before onstart flips `listening` spins up a SECOND recognizer
-      // writing into the same field — a real source of doubling.
-      if (recognition || starting) return;
-      starting = true;
-      try {
-        recognition = new SR();
-        recognition.continuous = true;
-        recognition.interimResults = true;
-        recognition.lang = navigator.language || 'en-US';
-        // baseValue captured fresh on each onstart so "send the chat
-        // between dictations" baselines onto the now-empty textarea
-        // instead of stale pre-send text.
-        var baseValue = '';
-        recognition.onstart = function () {
-          starting = false;
-          if (onStart) { try { onStart(); } catch (_) {} }
-          baseValue = textareaEl.value || '';
-          if (baseValue && !/\s$/.test(baseValue)) baseValue += ' ';
-          setListening(true);
-          startTs = Date.now();
-          hadSpeech = false;
-          lastResultTs = startTs;
-          if (silenceTimer) clearInterval(silenceTimer);
-          silenceTimer = setInterval(function () {
-            if (!listening) return;
-            var now = Date.now();
-            if (!hadSpeech) {
-              // Nothing heard yet — give the user up to NO_SPEECH_TIMEOUT_MS
-              // to begin before closing the mic.
-              if (now - startTs > NO_SPEECH_TIMEOUT_MS) stop();
-            } else if (now - lastResultTs > SILENCE_TIMEOUT_MS) {
-              // Speech began, then a pause long enough to count as "done".
-              stop();
-            }
-          }, 500);
-        };
-        recognition.onresult = function (e) {
-          lastResultTs = Date.now();   // reset silence countdown (interim too)
-          hadSpeech = true;            // switch the watchdog to post-speech mode
+    // The watchdog is the AUTHORITY on when the session ends. The Web Speech
+    // engine stops on its OWN after only a few seconds of silence (especially
+    // on mobile) — we restart it (see spinUp's onend) and let THIS timer make
+    // the real cutoff: NO_SPEECH_TIMEOUT_MS before any speech, then
+    // SILENCE_TIMEOUT_MS after speech begins.
+    function windowExpired() {
+      var now = Date.now();
+      return (!hadSpeech && now - startTs > NO_SPEECH_TIMEOUT_MS) ||
+             (hadSpeech && now - lastResultTs > SILENCE_TIMEOUT_MS);
+    }
+    function startWatchdog() {
+      if (silenceTimer) clearInterval(silenceTimer);
+      silenceTimer = setInterval(function () {
+        if (listening && windowExpired()) stop();
+      }, 500);
+    }
 
-          // Rebuild from the full results array (resultIndex is
-          // unreliable on mobile), then collapse redundant finals.
-          var allInterim = '';
-          var finalSegs = [];
-          for (var i = 0; i < e.results.length; i++) {
-            var t = (e.results[i][0] && e.results[i][0].transcript) || '';
-            if (e.results[i].isFinal) finalSegs.push(t);
-            else allInterim += t;
-          }
-          var merged = mergeFinals(finalSegs);
-          var allFinal = merged.join('');   // direct concat preserves the engine's own spacing
-          var nextValue = baseValue + allFinal + allInterim;
-
-          // Always-on capture (cheap) — a recurrence is diagnosable with
-          // no devtools via window.p86VoiceLog() / localStorage.
-          try {
-            var raw = [];
-            for (var d = 0; d < e.results.length; d++) {
-              raw.push((e.results[d].isFinal ? 'F:' : 'I:') +
-                       ((e.results[d][0] && e.results[d][0].transcript) || ''));
-            }
-            pushCapture({ t: lastResultTs, raw: raw, finals: finalSegs.length, merged: merged.length, value: nextValue });
-            if (window._p86VoiceDebug) {
-              console.log('[voice] results(' + e.results.length + '):', raw.join(' '));
-              console.log('[voice] finals ' + finalSegs.length + ' → merged ' + merged.length + ' → ' + JSON.stringify(nextValue));
-            }
-          } catch (_) { /* defensive */ }
-
-          // Non-bubbling input event (matches the known-good original).
-          textareaEl.value = nextValue;
-          try { textareaEl.dispatchEvent(new Event('input')); }
-          catch (_) { /* older browsers */ }
-          if (onChange) { try { onChange(nextValue); } catch (_) {} }
-        };
-        recognition.onerror = function (ev) {
-          stop();
-          if (ev && ev.error === 'not-allowed') {
-            alert('Microphone access denied. Allow it in your browser settings to dictate.');
-          }
-        };
-        recognition.onend = function () { stop(); };
-        recognition.start();
-      } catch (e) {
+    // Create + start ONE recognizer for the current session. Re-invoked by
+    // its own onend whenever the engine auto-stops on silence, so the mic
+    // stays open across the engine's short internal timeout until the
+    // watchdog (or the user) ends the session.
+    function spinUp() {
+      if (recognition) return;
+      var rec;
+      try { rec = new SR(); }
+      catch (e) { starting = false; stop(); return; }
+      recognition = rec;
+      rec.continuous = true;
+      rec.interimResults = true;
+      rec.lang = navigator.language || 'en-US';
+      rec.onstart = function () {
         starting = false;
-        alert('Could not start dictation: ' + (e.message || e));
-        stop();
-      }
+        // Re-baseline onto whatever is already in the field so a restart
+        // (or a send between dictations) accumulates instead of duplicating.
+        baseValue = textareaEl.value || '';
+        if (baseValue && !/\s$/.test(baseValue)) baseValue += ' ';
+      };
+      rec.onresult = function (e) {
+        lastResultTs = Date.now();   // reset silence countdown (interim too)
+        hadSpeech = true;            // switch the watchdog to post-speech mode
+
+        // Rebuild from the full results array (resultIndex is
+        // unreliable on mobile), then collapse redundant finals.
+        var allInterim = '';
+        var finalSegs = [];
+        for (var i = 0; i < e.results.length; i++) {
+          var t = (e.results[i][0] && e.results[i][0].transcript) || '';
+          if (e.results[i].isFinal) finalSegs.push(t);
+          else allInterim += t;
+        }
+        var merged = mergeFinals(finalSegs);
+        var allFinal = merged.join('');   // direct concat preserves the engine's own spacing
+        var nextValue = baseValue + allFinal + allInterim;
+
+        // Always-on capture (cheap) — a recurrence is diagnosable with
+        // no devtools via window.p86VoiceLog() / localStorage.
+        try {
+          var raw = [];
+          for (var d = 0; d < e.results.length; d++) {
+            raw.push((e.results[d].isFinal ? 'F:' : 'I:') +
+                     ((e.results[d][0] && e.results[d][0].transcript) || ''));
+          }
+          pushCapture({ t: lastResultTs, raw: raw, finals: finalSegs.length, merged: merged.length, value: nextValue });
+          if (window._p86VoiceDebug) {
+            console.log('[voice] results(' + e.results.length + '):', raw.join(' '));
+            console.log('[voice] finals ' + finalSegs.length + ' → merged ' + merged.length + ' → ' + JSON.stringify(nextValue));
+          }
+        } catch (_) { /* defensive */ }
+
+        // Non-bubbling input event (matches the known-good original).
+        textareaEl.value = nextValue;
+        try { textareaEl.dispatchEvent(new Event('input')); }
+        catch (_) { /* older browsers */ }
+        if (onChange) { try { onChange(nextValue); } catch (_) {} }
+      };
+      rec.onerror = function (ev) {
+        if (ev && ev.error === 'not-allowed') {
+          stop();
+          alert('Microphone access denied. Allow it in your browser settings to dictate.');
+        }
+        // Other errors (no-speech / aborted / network) fall through to onend,
+        // which decides whether to restart or finalize.
+      };
+      rec.onend = function () {
+        recognition = null;
+        if (stopping || !listening) return;        // user/watchdog already ended it
+        if (windowExpired()) { stop(); return; }   // listen window elapsed → done
+        // Engine auto-ended but we're still inside the window — restart it
+        // (paced, so a fast end/error can't tight-loop).
+        starting = true;
+        setTimeout(function () {
+          if (!listening || stopping) { starting = false; return; }
+          spinUp();
+        }, 250);
+      };
+      try { rec.start(); }
+      catch (e) { recognition = null; starting = false; stop(); }
+    }
+
+    function start() {
+      // One session per tap. `listening` is set synchronously (via
+      // setListening) so a fast double-tap can't open a second session.
+      if (listening || starting) return;
+      stopping = false;
+      starting = true;
+      startTs = Date.now();
+      hadSpeech = false;
+      lastResultTs = startTs;
+      baseValue = '';
+      setListening(true);
+      if (onStart) { try { onStart(); } catch (_) {} }
+      startWatchdog();
+      spinUp();
     }
 
     // Re-wire guard: if this button was wired before (e.g. a panel rebuilt
