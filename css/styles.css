@@ -3115,9 +3115,13 @@
                 padding-bottom: env(safe-area-inset-bottom, 0px);
                 box-shadow: 0 -4px 14px rgba(0, 0, 0, 0.5);
             }
+            /* Compact text buttons — six slots have to fit at iPhone
+               width, so the regular buttons are deliberately smaller
+               than the raised "86" cube, which keeps 86 standing out. */
             .p86-mobile-nav-btn {
                 flex: 1;
-                min-height: 56px;
+                min-width: 0;
+                min-height: 54px;
                 background: transparent;
                 border: none;
                 color: rgba(255, 255, 255, 0.58);
@@ -3125,14 +3129,20 @@
                 flex-direction: column;
                 align-items: center;
                 justify-content: center;
-                gap: 3px;
-                font-size: 10px;
+                gap: 2px;
+                font-size: 9px;
                 font-weight: 600;
-                letter-spacing: 0.3px;
-                padding: 8px 4px;
+                letter-spacing: 0.2px;
+                padding: 6px 1px;
                 cursor: pointer;
                 -webkit-tap-highlight-color: transparent;
                 transition: color 0.15s;
+            }
+            .p86-mobile-nav-btn .p86-mobile-nav-label {
+                max-width: 100%;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
             }
             .p86-mobile-nav-btn:hover,
             .p86-mobile-nav-btn:active,
@@ -3142,14 +3152,14 @@
             }
             .p86-mobile-nav-btn.active { color: #22d3ee; }
             .p86-mobile-nav-icon {
-                width: 22px; height: 22px;
+                width: 20px; height: 20px;
                 display: inline-flex;
                 align-items: center;
                 justify-content: center;
             }
-            .p86-mobile-nav-icon svg { width: 22px; height: 22px; }
+            .p86-mobile-nav-icon svg { width: 20px; height: 20px; }
             .p86-mobile-nav-icon-glyph {
-                font-size: 22px;
+                font-size: 20px;
                 line-height: 1;
                 color: currentColor;
             }
@@ -3318,6 +3328,27 @@
         @keyframes p86mbSheetUp {
             from { transform: translateY(100%); }
             to { transform: translateY(0); }
+        }
+
+        /* Full-screen 86 chat on phones — like the Claude mobile app. The
+           panel is built with inline styles (right-docked, ~420px,
+           max-width:92vw), so we override edge-to-edge with !important and
+           drop the desktop chrome (left border, shadow, resize grabber).
+           Safe-area padding keeps the header below the notch and the
+           composer above the home indicator in standalone PWA mode. */
+        @media (max-width: 768px) {
+            #p86-ai-panel {
+                width: 100vw !important;
+                max-width: 100vw !important;
+                min-width: 0 !important;
+                left: 0 !important;
+                right: 0 !important;
+                border-left: none !important;
+                box-shadow: none !important;
+                padding-top: env(safe-area-inset-top, 0px) !important;
+                padding-bottom: env(safe-area-inset-bottom, 0px) !important;
+            }
+            #p86-ai-panel #ai-panel-resizer { display: none !important; }
         }
 
         /* PRINT STYLES */
