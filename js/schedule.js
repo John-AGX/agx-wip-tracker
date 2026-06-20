@@ -2335,11 +2335,36 @@
   // Title, All-day, Date, Start/End time (hidden when all-day),
   // Location, Notes, Status. Save composes starts_at/ends_at as ISO
   // and calls create or update; Delete removes; both refetch + repaint.
+  // Linked-record picker data source — the calendar's LINK_TYPES
+  // (client/job/lead/project, matching server calendar-routes.js). Cached
+  // per type for the life of the page so toggling the type select is
+  // instant after the first load.
+  var _linkOptCache = {};
+  function loadEntList(type) {
+    if (_linkOptCache[type]) return Promise.resolve(_linkOptCache[type]);
+    var api = window.p86Api;
+    if (!api) return Promise.resolve([]);
+    var p;
+    if (type === 'client')      p = api.clients.list().then(function(r) { return (r && r.clients) || []; });
+    else if (type === 'job')    p = api.jobs.list().then(function(r) { return (r && r.jobs) || []; });
+    else if (type === 'lead')   p = api.leads.list().then(function(r) { return (r && r.leads) || []; });
+    else if (type === 'project') p = api.projects.list().then(function(r) { return (r && r.projects) || []; });
+    else return Promise.resolve([]);
+    return p.then(function(list) { _linkOptCache[type] = list; return list; })
+            .catch(function() { return []; });
+  }
+  // Mirror server entity-labels.js: jobs prefix [jobNumber], leads use
+  // title, clients/projects use name.
+  function entOptionLabel(type, it) {
+    if (type === 'job') { var n = it.jobNumber ? '[' + it.jobNumber + '] ' : ''; return n + (it.title || it.name || 'Job'); }
+    if (type === 'lead') return it.title || '(untitled lead)';
+    return it.name || it.title || '(unnamed)';
+  }
+
   // opts (optional):
-  //   prefillEntity: { type, id, label } — on CREATE, link the new event
-  //     to this record (client|job|lead|project). Shown as a read-only
-  //     chip in the modal. On edit, the event's own link is preserved by
-  //     simply not sending entity_* in the PATCH body.
+  //   prefillEntity: { type, id, label } — on CREATE, preselect this
+  //     record (client|job|lead|project) in the link picker. The user can
+  //     still change or clear it.
   //   onSaved / onDeleted: callbacks fired after a successful mutation so
   //     a caller outside the schedule page (e.g. an entity panel) can
   //     refresh its own list. When absent we fall back to refreshing the
@@ -2423,13 +2448,19 @@
               }).join('') +
             '</select>' +
           '</div>' +
-          (linkEntity
-            ? '<div><label>Linked to</label>' +
-                '<div class="sch-event-link-chip">🔗 ' +
-                  escapeHTML(linkEntity.label || (linkEntity.type.charAt(0).toUpperCase() + linkEntity.type.slice(1))) +
-                '</div>' +
-              '</div>'
-            : '') +
+          '<div>' +
+            '<label>Linked to <span style="font-weight:400;color:var(--text-dim,#888);">(optional — client, job, lead, or project)</span></label>' +
+            '<div class="sch-link-picker">' +
+              '<select id="schEventLinkType">' +
+                '<option value="">— None —</option>' +
+                '<option value="client">Client</option>' +
+                '<option value="job">Job</option>' +
+                '<option value="lead">Lead</option>' +
+                '<option value="project">Project</option>' +
+              '</select>' +
+              '<select id="schEventLinkId" style="display:none;"></select>' +
+            '</div>' +
+          '</div>' +
         '</div>' +
         '<div class="modal-footer" style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;">' +
           (isEdit ? '<button class="sch-btn" id="schEventDelete" style="margin-right:auto;color:#f87171;border-color:rgba(248,113,113,0.4);">Delete</button>' : '') +
@@ -2454,6 +2485,36 @@
       if (startEl) startEl.disabled = on;
       if (endEl) endEl.disabled = on;
     });
+
+    // ── Linked-record picker ───────────────────────────────────
+    // Type select drives a lazily-loaded record select. Preselected to
+    // the event's existing link (edit) or the prefill entity (create from
+    // a client/job page). Empty type → no link (cleared on save).
+    var linkTypeEl = modal.querySelector('#schEventLinkType');
+    var linkIdEl = modal.querySelector('#schEventLinkId');
+    function fillLinkOptions(type, selectedId) {
+      if (!linkIdEl) return;
+      if (!type) { linkIdEl.style.display = 'none'; linkIdEl.innerHTML = ''; return; }
+      linkIdEl.style.display = '';
+      linkIdEl.innerHTML = '<option value="">Loading…</option>';
+      loadEntList(type).then(function(items) {
+        var opts = ['<option value="">— Select a ' + type + ' —</option>'];
+        items.forEach(function(it) {
+          var sel = (selectedId != null && String(it.id) === String(selectedId)) ? ' selected' : '';
+          opts.push('<option value="' + escapeAttr(String(it.id)) + '"' + sel + '>' + escapeHTML(entOptionLabel(type, it)) + '</option>');
+        });
+        linkIdEl.innerHTML = opts.join('');
+      }).catch(function() {
+        linkIdEl.innerHTML = '<option value="">(could not load ' + escapeHTML(type) + 's)</option>';
+      });
+    }
+    if (linkTypeEl) {
+      if (linkEntity && linkEntity.type) {
+        linkTypeEl.value = linkEntity.type;
+        fillLinkOptions(linkEntity.type, linkEntity.id);
+      }
+      linkTypeEl.addEventListener('change', function() { fillLinkOptions(linkTypeEl.value, null); });
+    }
 
     function setBusy(busy) {
       modal.querySelectorAll('button').forEach(function(b) { b.disabled = !!busy; });
@@ -2543,13 +2604,13 @@
         notes: modal.querySelector('#schEventNotes').value || '',
         status: modal.querySelector('#schEventStatus').value || 'confirmed'
       };
-      // On create from an entity page, carry the contextual link so the
-      // new event shows up under that record's Appointments. (Edits leave
-      // entity_* out of the body → the server preserves the existing link.)
-      if (!isEdit && linkEntity) {
-        payload.entity_type = linkEntity.type;
-        payload.entity_id = String(linkEntity.id);
-      }
+      // Linked record from the picker — always sent so an edit can set,
+      // change, or clear the link. Empty type clears it; the server stores
+      // both columns or neither.
+      var lpType = (modal.querySelector('#schEventLinkType') || {}).value || '';
+      var lpId = (modal.querySelector('#schEventLinkId') || {}).value || '';
+      if (lpType && lpId) { payload.entity_type = lpType; payload.entity_id = lpId; }
+      else { payload.entity_type = null; payload.entity_id = null; }
 
       if (!isCalendarApiReady()) {
         // No api → can't persist. Surface a soft notice and bail
