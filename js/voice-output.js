@@ -255,7 +255,7 @@
       if (_voice) u.voice = _voice;
       u.rate = 1.0; u.pitch = 1.0; u.volume = 1.0;
       u.onstart = function () { setState('speaking'); };
-      u.onend = function () { setState('idle'); };
+      u.onend = function () { setState('idle'); rearmMic(); };
       u.onerror = function (e) { setState('idle'); logOut({ ev: 'error', err: (e && e.error) || '?' }); };
       window.speechSynthesis.speak(u);
       logOut({ ev: 'speak', text: text, unlocked: _unlocked, voice: _voice ? _voice.name : '(default)' });
@@ -458,18 +458,36 @@
   // it flips voice mode: ai-panel then auto-submits a finished dictation
   // and speaks 86/Assistant's reply aloud. PTT — you tap the mic each turn.
   var CHAT_INTRO_KEY = 'p86VoiceChatIntro';
+  var _micEl = null;
+  // Re-arm the mic after 86's spoken reply so voice-chat flows hands-free.
+  // Best-effort on iOS (a fresh recognizer start may want a tap there);
+  // reliable on desktop/Android. The short delay clears the speaker tail so
+  // the mic doesn't transcribe the end of the TTS (half-duplex).
+  function rearmMic() {
+    if (!isVoiceMode() || !_micEl || typeof _micEl._p86VoiceStart !== 'function') return;
+    setTimeout(function () {
+      if (isVoiceMode() && _micEl && _micEl._p86VoiceStart) {
+        try { _micEl._p86VoiceStart(); } catch (_) {}
+      }
+    }, 600);
+  }
   function setupVoiceChat(panelEl) {
     try {
       var mic = (panelEl && panelEl.querySelector) ? panelEl.querySelector('#ai-mic') : null;
       if (!mic || !mic.parentNode || mic.parentNode.querySelector('#p86-voice-mode')) return;
+      _micEl = mic;
       var btn = document.createElement('button');
       btn.id = 'p86-voice-mode';
       btn.type = 'button';
       btn.title = 'Voice chat — talk to 86, hear the reply';
       btn.setAttribute('aria-label', 'Voice chat mode');
       btn.className = mic.className || 'ai-tool-btn';
-      btn.style.cssText = 'font-size:17px;';
-      btn.textContent = '🎧';
+      btn.style.cssText = 'display:inline-flex;align-items:center;justify-content:center;';
+      // Voice-synth (sound-wave) glyph; currentColor so the active tint shows.
+      btn.innerHTML = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">' +
+        '<line x1="4" y1="9" x2="4" y2="15"/><line x1="8.5" y1="6" x2="8.5" y2="18"/>' +
+        '<line x1="13" y1="3.5" x2="13" y2="20.5"/><line x1="17.5" y1="6" x2="17.5" y2="18"/>' +
+        '<line x1="22" y1="9" x2="22" y2="15"/></svg>';
       mic.parentNode.insertBefore(btn, mic.nextSibling);
       btn.addEventListener('click', function (e) {
         e.preventDefault();
@@ -477,12 +495,15 @@
         setVoiceMode(on);
         btn.style.background = on ? 'rgba(79,140,255,0.30)' : '';
         btn.style.color = on ? '#9ec5ff' : '';
-        btn.title = on ? 'Voice chat ON — tap the mic to talk' : 'Voice chat — talk to 86, hear the reply';
+        btn.title = on ? 'Voice chat ON — listening; tap to end' : 'Voice chat — talk to 86, hear the reply';
         if (on) {
           prime();
-          showPill(firstChatIntro() || 'Voice chat on — tap the mic to talk; I’ll reply out loud.');
+          showPill(firstChatIntro() || 'Voice chat on — go ahead and talk; I’ll reply out loud.');
+          // Auto-open the mic now (in-gesture, so iOS allows the first start).
+          if (mic._p86VoiceStart) { try { mic._p86VoiceStart(); } catch (_) {} }
         } else {
           cancel(); hidePill();
+          if (mic._p86VoiceStop) { try { mic._p86VoiceStop(); } catch (_) {} }
         }
       });
     } catch (_) {}

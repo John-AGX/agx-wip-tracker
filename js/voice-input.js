@@ -64,6 +64,11 @@
     }
     opts = opts || {};
     var SILENCE_TIMEOUT_MS = opts.silenceTimeoutMs || 3000;
+    // Max wait for the user to START talking after the mic opens (no result
+    // at all). Distinct from SILENCE_TIMEOUT_MS, which is the pause-tolerance
+    // AFTER speech begins. Keeps an auto-opened (voice-chat) mic from hanging
+    // open forever while still giving the user time to begin. Default 20s.
+    var NO_SPEECH_TIMEOUT_MS = opts.noSpeechTimeoutMs || 20000;
     var onChange = typeof opts.onChange === 'function' ? opts.onChange : null;
     // Fired when dictation actually starts — used to cancel any active
     // TTS read-back so the mic never hears (and transcribes) its own voice.
@@ -77,6 +82,8 @@
     var starting = false;       // true between start() and onstart — guards the double-tap race
     var silenceTimer = null;
     var lastResultTs = 0;
+    var startTs = 0;
+    var hadSpeech = false;       // flips true on the first result (interim or final)
 
     function setListening(v) {
       listening = v;
@@ -141,15 +148,26 @@
           baseValue = textareaEl.value || '';
           if (baseValue && !/\s$/.test(baseValue)) baseValue += ' ';
           setListening(true);
-          lastResultTs = Date.now();
+          startTs = Date.now();
+          hadSpeech = false;
+          lastResultTs = startTs;
           if (silenceTimer) clearInterval(silenceTimer);
           silenceTimer = setInterval(function () {
             if (!listening) return;
-            if (Date.now() - lastResultTs > SILENCE_TIMEOUT_MS) stop();
+            var now = Date.now();
+            if (!hadSpeech) {
+              // Nothing heard yet — give the user up to NO_SPEECH_TIMEOUT_MS
+              // to begin before closing the mic.
+              if (now - startTs > NO_SPEECH_TIMEOUT_MS) stop();
+            } else if (now - lastResultTs > SILENCE_TIMEOUT_MS) {
+              // Speech began, then a pause long enough to count as "done".
+              stop();
+            }
           }, 500);
         };
         recognition.onresult = function (e) {
           lastResultTs = Date.now();   // reset silence countdown (interim too)
+          hadSpeech = true;            // switch the watchdog to post-speech mode
 
           // Rebuild from the full results array (resultIndex is
           // unreliable on mobile), then collapse redundant finals.
@@ -217,7 +235,15 @@
     micBtnEl._p86VoiceUnbind = function () {
       try { micBtnEl.removeEventListener('click', onMicClick); } catch (_) {}
       micBtnEl._p86VoiceUnbind = null;
+      micBtnEl._p86VoiceStart = null;
+      micBtnEl._p86VoiceStop = null;
     };
+    // Programmatic start/stop so voice-chat can drive the mic itself —
+    // open it on entering voice mode and re-arm it after 86's spoken reply.
+    // Idempotent: start() no-ops if already listening/starting.
+    micBtnEl._p86VoiceStart = function () { if (!listening && !starting) start(); };
+    micBtnEl._p86VoiceStop = function () { stop(); };
+    micBtnEl._p86VoiceListening = function () { return listening || starting; };
 
     // The returned teardown STOPS dictation but leaves the click handler
     // bound — the chat composer calls it on every send and the mic must
