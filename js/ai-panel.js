@@ -3163,6 +3163,14 @@
         _messages.push({ role: 'assistant', content: '(no response)' });
         renderMessages();
       }
+
+      // Voice-chat: speak the assistant's reply aloud (full reply, numbers
+      // included — the user opted into voice mode with an earshot warning).
+      // assistantText holds the narration for talk-through / proposal / plain.
+      if (assistantText && window.p86VoiceOutput && window.p86VoiceOutput.isVoiceMode &&
+          window.p86VoiceOutput.isVoiceMode() && window.p86VoiceOutput.speakReply) {
+        try { window.p86VoiceOutput.speakReply(assistantText); } catch (_) {}
+      }
     }).catch(function(err) {
       brainYoga.stop();
       if (streamDiv && typeof streamDiv._stopTimer === 'function') streamDiv._stopTimer();
@@ -6828,6 +6836,15 @@
         // never picks up (and re-transcribes) the synth's own voice.
         if (window.p86VoiceOutput && window.p86VoiceOutput.cancel) {
           try { window.p86VoiceOutput.cancel(); } catch (_) {}
+        }
+      },
+      onStop: function () {
+        // Voice-chat: a finished dictation auto-submits, then 86 replies
+        // aloud (see the speakReply hook at the stream finalize).
+        if (window.p86VoiceOutput && window.p86VoiceOutput.isVoiceMode &&
+            window.p86VoiceOutput.isVoiceMode()) {
+          var inp = document.getElementById('ai-input');
+          if (inp && inp.value.trim()) onSend();
         }
       }
     });

@@ -68,6 +68,9 @@
     // Fired when dictation actually starts — used to cancel any active
     // TTS read-back so the mic never hears (and transcribes) its own voice.
     var onStart = typeof opts.onStart === 'function' ? opts.onStart : null;
+    // Fired once when dictation stops (silence/tap/end) — voice-chat uses
+    // it to auto-submit the finished utterance.
+    var onStop = typeof opts.onStop === 'function' ? opts.onStop : null;
 
     var recognition = null;
     var listening = false;
@@ -82,6 +85,9 @@
     }
 
     function stop() {
+      // Capture before teardown so onStop fires only when we were really
+      // listening — and only once, even if a caller's onStop re-enters stop().
+      var wasActive = !!(recognition || starting || listening);
       starting = false;
       if (silenceTimer) { clearInterval(silenceTimer); silenceTimer = null; }
       if (recognition) {
@@ -89,6 +95,7 @@
         recognition = null;
       }
       setListening(false);
+      if (wasActive && onStop) { try { onStop(); } catch (_) {} }
     }
 
     // Collapse the mobile engine's redundant final re-emissions. Drops a

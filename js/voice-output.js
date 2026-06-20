@@ -227,12 +227,51 @@
     _speakNative(text);
   }
 
+  function _emit(text) {
+    if (VOICE_ENGINE === 'cloud') _speakCloud(text);
+    else _speakNative(text);
+  }
+
+  // Confirmation read-back — financial-safe (sanitizeForSpeech strips $/%/ids).
   function speak(text, opts) {
     if (!isSupported()) return;
     var clean = sanitizeForSpeech(text);
     if (!clean) return;
-    if (VOICE_ENGINE === 'cloud') _speakCloud(clean);
-    else _speakNative(clean);
+    _emit(clean);
+  }
+
+  // Voice-chat reply — speaks the assistant's full answer aloud, NUMBERS
+  // INCLUDED (the user opted into voice mode with an earshot warning).
+  // cleanForSpeech strips markdown + caps length but keeps the figures.
+  function speakReply(text) {
+    if (!isSupported()) return;
+    var clean = cleanForSpeech(text);
+    if (!clean) return;
+    _emit(clean);
+  }
+
+  // Make a long/markdown reply speakable: strip formatting + cap length.
+  // Deliberately does NOT remove numbers — voice-chat wants the figures.
+  function cleanForSpeech(s) {
+    if (!s) return '';
+    var t = String(s)
+      .replace(/```[\s\S]*?```/g, ' ')                // code fences
+      .replace(/`([^`]*)`/g, '$1')                    // inline code
+      .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')      // links/images -> text
+      .replace(/^\s{0,3}#{1,6}\s*/gm, '')             // headings
+      .replace(/[*_]{1,3}([^*_]+)[*_]{1,3}/g, '$1')   // bold / italic
+      .replace(/^\s{0,3}>\s?/gm, '')                  // blockquotes
+      .replace(/^\s*[-*+]\s+/gm, '')                  // bullets
+      .replace(/\|/g, ' ')                            // table pipes
+      .replace(/https?:\/\/\S+/g, '')                 // bare urls
+      .replace(/\s{2,}/g, ' ')
+      .trim();
+    if (t.length > 360) {                              // don't monologue
+      var cut = t.slice(0, 360);
+      var dot = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('! '), cut.lastIndexOf('? '));
+      t = (dot > 120 ? cut.slice(0, dot + 1) : cut) + ' … the rest is on your screen.';
+    }
+    return t;
   }
 
   function cancel() {
@@ -250,6 +289,14 @@
   function setEnabled(v) {
     try { localStorage.setItem(READBACK_KEY, v ? '1' : '0'); } catch (_) {}
   }
+
+  // ── Voice-chat mode ────────────────────────────────────────────────
+  // Session-scoped (never persisted, so the mic is never hot across
+  // reloads without an explicit tap). When ON, ai-panel auto-submits a
+  // finished dictation and speaks the assistant's full reply aloud.
+  var _voiceMode = false;
+  function isVoiceMode() { return _voiceMode; }
+  function setVoiceMode(v) { _voiceMode = !!v; }
 
   // ── Read-back wiring + confirmation pill ───────────────────────────
   // Called once from ai-panel.js after setupVoiceInput. Wires: a global
@@ -272,6 +319,7 @@
     });
 
     buildPill(panelEl || document.body);
+    setupVoiceChat(panelEl);
 
     document.addEventListener('p86:payload-applied', function (ev) {
       try {
@@ -359,16 +407,62 @@
     } catch (_) {}
   }
 
+  // Inject a voice-chat toggle (headset) beside the composer mic. Tapping
+  // it flips voice mode: ai-panel then auto-submits a finished dictation
+  // and speaks 86/Assistant's reply aloud. PTT — you tap the mic each turn.
+  var CHAT_INTRO_KEY = 'p86VoiceChatIntro';
+  function setupVoiceChat(panelEl) {
+    try {
+      var mic = (panelEl && panelEl.querySelector) ? panelEl.querySelector('#ai-mic') : null;
+      if (!mic || !mic.parentNode || mic.parentNode.querySelector('#p86-voice-mode')) return;
+      var btn = document.createElement('button');
+      btn.id = 'p86-voice-mode';
+      btn.type = 'button';
+      btn.title = 'Voice chat — talk to 86, hear the reply';
+      btn.setAttribute('aria-label', 'Voice chat mode');
+      btn.className = mic.className || 'ai-tool-btn';
+      btn.style.cssText = 'font-size:17px;';
+      btn.textContent = '🎧';
+      mic.parentNode.insertBefore(btn, mic.nextSibling);
+      btn.addEventListener('click', function (e) {
+        e.preventDefault();
+        var on = !isVoiceMode();
+        setVoiceMode(on);
+        btn.style.background = on ? 'rgba(79,140,255,0.30)' : '';
+        btn.style.color = on ? '#9ec5ff' : '';
+        btn.title = on ? 'Voice chat ON — tap the mic to talk' : 'Voice chat — talk to 86, hear the reply';
+        if (on) {
+          prime();
+          showPill(firstChatIntro() || 'Voice chat on — tap the mic to talk; I’ll reply out loud.');
+        } else {
+          cancel(); hidePill();
+        }
+      });
+    } catch (_) {}
+  }
+  // One-time earshot warning the first time voice chat is turned on.
+  function firstChatIntro() {
+    try {
+      if (localStorage.getItem(CHAT_INTRO_KEY) === '1') return null;
+      localStorage.setItem(CHAT_INTRO_KEY, '1');
+      return 'Voice chat on — I read replies aloud, dollar amounts included, so others nearby may hear them.';
+    } catch (_) { return null; }
+  }
+
   window.p86VoiceOutput = {
     speak: speak,
+    speakReply: speakReply,
     cancel: cancel,
     prime: prime,
     isSupported: isSupported,
     isSpeaking: isSpeaking,
     isEnabled: isEnabled,
     setEnabled: setEnabled,
+    isVoiceMode: isVoiceMode,
+    setVoiceMode: setVoiceMode,
     buildConfirmation: buildConfirmation,
     sanitizeForSpeech: sanitizeForSpeech,
+    cleanForSpeech: cleanForSpeech,
     setupReadback: setupReadback
   };
   window.p86VoiceOutLog = function () { return outLog.slice(); };
