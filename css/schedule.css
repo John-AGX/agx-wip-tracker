@@ -1805,10 +1805,17 @@ body.light-mode .sch-cal-grid { background: #d6dae3; }
     max-height: none;
   }
 
-  /* Day cell — bordered, day number on top, chips stacked below. */
+  /* Day cell — bordered, day number on top, chips stacked below.
+     Even full-height grid: each cell fills ~1/6 of the viewport so the
+     month fills the screen AND a week with no jobs doesn't collapse.
+     (Content-driven sizing used to shrink empty weeks — the "calendar
+     shrinks after I delete the entries" bug.) dvh tracks the mobile URL
+     bar; the 92px floor keeps cells readable on short screens; the first
+     min-height is a fallback for engines without dvh/max(). */
   .sch-mcell {
     box-sizing: border-box;
-    min-height: 76px;
+    min-height: 108px;
+    min-height: max(92px, calc((100dvh - 172px) / 6));
     padding: 3px;
     border: 1px solid var(--border, #2e3346);
     display: flex;
