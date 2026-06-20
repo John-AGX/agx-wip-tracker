@@ -138,11 +138,15 @@
   // the in-memory list so the user sees them; they're promoted to
   // real server rows the next time the user edits + saves them.
   //
-  // Migration rule: any cached entry whose id is NOT in the server's
-  // response AND doesn't have the sch_local_ prefix is treated as an
-  // orphaned Phase-1-style entry (created before server persistence
-  // shipped). We POST them up so they're not silently dropped — see
-  // migrateOrphanedCacheEntries().
+  // SERVER IS THE SOURCE OF TRUTH for everything else. A cached entry
+  // with a server-style id that is NOT in the server's response means
+  // it was DELETED on the server — we drop it from the cache; we do
+  // NOT re-create it. (Previously a one-time "Phase-1 migration"
+  // re-POSTed such entries, which could not distinguish "never synced"
+  // from "deleted" — so a delete on one device was silently undone by
+  // any other device/tab that still held the entry in its localStorage
+  // cache. That cross-device resurrection bug is the reason this was
+  // removed; Phase-1 migration is long complete.)
   function fetchEntries() {
     if (!isApiReady()) {
       _state.entries = loadCachedEntries();
@@ -151,75 +155,21 @@
     return window.p86Api.schedule.list().then(function(res) {
       var serverList = (res && res.entries) || [];
       var cached = loadCachedEntries();
-      var serverIds = {};
-      serverList.forEach(function(e) { if (e.id) serverIds[e.id] = true; });
+      // Keep only genuine offline-created entries from the cache; the
+      // server list is authoritative for everything else, so anything
+      // cached-but-missing-from-server (i.e. deleted) is pruned by the
+      // cacheEntries(merged) rewrite below — never re-uploaded.
       var localOnly = cached.filter(function(e) {
-        return typeof e.id === 'string' && e.id.indexOf('sch_local_') === 0;
-      });
-      // Phase-1 orphans — cached, not on the server, not local-only.
-      var orphans = cached.filter(function(e) {
-        if (!e || !e.id) return false;
-        if (serverIds[e.id]) return false;
-        if (typeof e.id === 'string' && e.id.indexOf('sch_local_') === 0) return false;
-        return true;
+        return e && typeof e.id === 'string' && e.id.indexOf('sch_local_') === 0;
       });
       var merged = serverList.concat(localOnly);
       _state.entries = merged;
       cacheEntries(merged);
-      // Kick off the migration in the background and re-render once
-      // it completes. This is best-effort — failures get logged but
-      // don't block the render.
-      if (orphans.length) {
-        migrateOrphanedCacheEntries(orphans).then(function(migrated) {
-          if (!migrated.length) return;
-          // Append the new server rows and drop the orphan id
-          // versions from the cache.
-          _state.entries = _state.entries.concat(migrated);
-          cacheEntries(_state.entries);
-          renderGrid();
-          refreshWeekSummary();
-          // One-shot toast so the user knows what happened.
-          try { console.info('[schedule] migrated ' + migrated.length + ' Phase-1 entries to server'); } catch (e) {}
-        });
-      }
       return merged;
     }).catch(function(err) {
       console.warn('[schedule] fetch failed, using cache:', err && err.message);
       _state.entries = loadCachedEntries();
       return _state.entries;
-    });
-  }
-
-  // POST each orphaned cache entry to the server. Resolves with the
-  // list of successfully-migrated server rows.
-  function migrateOrphanedCacheEntries(orphans) {
-    if (!orphans || !orphans.length) return Promise.resolve([]);
-    var jobs = (window.appData && Array.isArray(window.appData.jobs)) ? window.appData.jobs : [];
-    var validJobIds = {};
-    jobs.forEach(function(j) { validJobIds[j.id] = true; });
-    var promises = orphans.map(function(e) {
-      // Drop entries that reference a job that no longer exists —
-      // POST would 404 otherwise and the server would reject. Better
-      // to skip them quietly than break the whole migration.
-      if (!validJobIds[e.jobId]) return Promise.resolve(null);
-      var payload = {
-        jobId: e.jobId,
-        startDate: e.startDate,
-        days: parseInt(e.days, 10) || 1,
-        crew: Array.isArray(e.crew) ? e.crew : [],
-        includesWeekends: !!e.includesWeekends,
-        status: e.status || 'planned',
-        notes: e.notes || ''
-      };
-      return window.p86Api.schedule.create(payload)
-        .then(function(res) { return res && res.entry ? res.entry : null; })
-        .catch(function(err) {
-          console.warn('[schedule] migrate orphan failed (' + e.id + '):', err && err.message);
-          return null;
-        });
-    });
-    return Promise.all(promises).then(function(results) {
-      return results.filter(function(r) { return !!r; });
     });
   }
 
