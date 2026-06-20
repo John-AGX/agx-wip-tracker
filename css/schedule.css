@@ -1871,5 +1871,17 @@ body.light-mode .sch-cal-grid { background: #d6dae3; }
      weather chips are hidden defensively in case any leak in.) */
   .sch-entry-bar-wx-icon,
   .sch-cal-day-wx { display: none; }
+
+  /* De-clutter the top on phones. The production week-summary stats
+     strip (THIS WEEK / expected revenue / jobs) and the 7-day weekend
+     toggle are desktop PM affordances that just add blocky chrome on
+     mobile — Outlook mobile keeps the top minimal. The month nav, layer
+     toggles, and + Event / + Schedule entry stay. */
+  .sch-week-summary { display: none !important; }
+  #schWeekendToggle { display: none !important; }
+  .sch-cal-toolbar { padding: 6px 8px; gap: 6px; row-gap: 6px; }
+  .sch-cal-toolbar .sch-btn,
+  .sch-cal-toolbar .sch-btn-toggle,
+  .sch-cal-toolbar .sch-btn-primary { font-size: 11px; padding: 5px 9px; min-height: 32px; }
 }
 

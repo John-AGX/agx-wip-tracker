@@ -2026,6 +2026,16 @@
       return ((ja && ja.jobNumber) || '').localeCompare((jb && jb.jobNumber) || '');
     });
 
+    // Personal calendar events on this day — unified into the day sheet
+    // alongside job entries so "day at a glance" shows EVERYTHING. Same
+    // date-clip as the grid; sorted by start time.
+    var dayEvents = (_state.events || []).filter(function(ev) {
+      if (!ev || !ev.starts_at) return false;
+      var sd = parseISODate(ev.starts_at); if (!sd) return false;
+      var ed = parseISODate(ev.ends_at) || sd; if (ed < sd) ed = sd;
+      return dateISO >= toISODate(sd) && dateISO <= toISODate(ed);
+    }).sort(function(a, b) { return String(a.starts_at).localeCompare(String(b.starts_at)); });
+
     // Aggregate metrics for this day so the sheet header has the
     // same "at a glance" feel as the week-summary widget.
     var scheduledDaysIndex = buildScheduledDaysIndex();
@@ -2039,11 +2049,7 @@
     });
     var crewCount = Object.keys(crewIds).length;
 
-    var rowsHtml;
-    if (!entries.length) {
-      rowsHtml = '<div class="sch-day-sheet-empty">No production scheduled for this day yet.</div>';
-    } else {
-      rowsHtml = entries.map(function(e) {
+    var entryRowsHtml = entries.map(function(e) {
         var job = jobById(e.jobId);
         var color = colorForJob(e.jobId);
         var label = jobLabel(job);
@@ -2080,7 +2086,32 @@
           '</div>' +
         '</div>';
       }).join('');
-    }
+
+    var eventRowsHtml = dayEvents.map(function(ev) {
+      var color = ev.color || EVENT_DEFAULT_COLOR;
+      var timeLabel = ev.all_day ? 'All day'
+        : (fmtEventTime(ev.starts_at) + (ev.ends_at ? '–' + fmtEventTime(ev.ends_at) : ''));
+      var st = (ev.status && ev.status !== 'confirmed') ? ev.status : '';
+      return '<div class="sch-day-row" data-event-id="' + escapeAttr(ev.id) + '" ' +
+              'style="--job-color:' + escapeAttr(color) + ';">' +
+        '<div class="sch-day-row-color"></div>' +
+        '<div class="sch-day-row-main">' +
+          '<div class="sch-day-row-title">' + escapeHTML(ev.title || '(untitled event)') + '</div>' +
+          '<div class="sch-day-row-meta">' +
+            '<span>' + escapeHTML(timeLabel) + '</span>' +
+            (ev.location ? '<span>' + escapeHTML(ev.location) + '</span>' : '') +
+            (st ? '<span class="sch-day-row-status">' + escapeHTML(st) + '</span>' : '') +
+          '</div>' +
+          (ev.notes ? '<div class="sch-day-row-notes">' + escapeHTML(ev.notes) + '</div>' : '') +
+        '</div>' +
+        '<div class="sch-day-row-actions">' +
+          '<button type="button" class="sch-btn sch-day-edit-event" data-event-id="' + escapeAttr(ev.id) + '">Edit</button>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+
+    var rowsHtml = (entryRowsHtml + eventRowsHtml) ||
+      '<div class="sch-day-sheet-empty">Nothing scheduled for this day yet.</div>';
 
     var modal = document.createElement('div');
     modal.id = 'schDaySheet';
@@ -2096,8 +2127,8 @@
         '</div>' +
         '<div class="sch-day-sheet-stats">' +
           '<div class="sch-day-stat">' +
-            '<div class="sch-day-stat-label">Entries</div>' +
-            '<div class="sch-day-stat-val">' + entries.length + '</div>' +
+            '<div class="sch-day-stat-label">Items</div>' +
+            '<div class="sch-day-stat-val">' + (entries.length + dayEvents.length) + '</div>' +
           '</div>' +
           '<div class="sch-day-stat">' +
             '<div class="sch-day-stat-label">Crew on site</div>' +
@@ -2111,7 +2142,8 @@
         '<div class="sch-day-sheet-rows">' + rowsHtml + '</div>' +
         '<div class="sch-day-sheet-footer">' +
           '<button class="sch-btn" id="schDaySheetCancel">Close</button>' +
-          '<button class="sch-btn sch-btn-primary" id="schDaySheetAdd">+ Add entry on this day</button>' +
+          '<button class="sch-btn" id="schDaySheetAddEvent">+ Event</button>' +
+          '<button class="sch-btn sch-btn-primary" id="schDaySheetAdd">+ Job entry</button>' +
         '</div>' +
       '</div>';
     document.body.appendChild(modal);
@@ -2125,6 +2157,12 @@
       close();
       openEntryEditor(null, dateISO);
     });
+    var addEvtBtn = modal.querySelector('#schDaySheetAddEvent');
+    if (addEvtBtn) addEvtBtn.addEventListener('click', function() {
+      close();
+      openEventEditor(null, dateISO);
+    });
+    // Edit buttons jump straight to the editor (job entries / events).
     modal.querySelectorAll('.sch-day-edit').forEach(function(btn) {
       btn.addEventListener('click', function() {
         var id = btn.getAttribute('data-entry-id');
@@ -2133,12 +2171,27 @@
         if (entry) openEntryEditor(entry, entry.startDate, entry.jobId);
       });
     });
-    // Click anywhere on a row (not the Edit button) to also edit —
-    // Buildertrend-style affordance, mirrors how rows behave in
-    // most "list of records" surfaces in the rest of the app.
+    modal.querySelectorAll('.sch-day-edit-event').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var id = btn.getAttribute('data-event-id');
+        var ev = (_state.events || []).find(function(x) { return String(x.id) === String(id); });
+        close();
+        if (ev) openEventEditor(ev);
+      });
+    });
+    // Click anywhere on a row (not an Edit button) → open its READ-ONLY
+    // card; the card's Edit button is the path into the editor. Branches
+    // job rows (data-entry-id) vs event rows (data-event-id).
     modal.querySelectorAll('.sch-day-row').forEach(function(row) {
       row.addEventListener('click', function(e) {
-        if (e.target.closest('.sch-day-edit')) return;
+        if (e.target.closest('.sch-day-edit') || e.target.closest('.sch-day-edit-event')) return;
+        var eid = row.getAttribute('data-event-id');
+        if (eid) {
+          var ev = (_state.events || []).find(function(x) { return String(x.id) === String(eid); });
+          close();
+          if (ev) openEventCard(ev);
+          return;
+        }
         var id = row.getAttribute('data-entry-id');
         var entry = _state.entries.find(function(x) { return x.id === id; });
         close();
