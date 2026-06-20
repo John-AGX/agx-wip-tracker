@@ -1747,7 +1747,10 @@ body.light-mode .sch-cal-grid { background: #d6dae3; }
   /* DOW header — 7 equal cols, single dim letters. */
   #schDowRow.sch-mdow {
     display: grid;
-    grid-template-columns: repeat(7, 1fr);
+    /* Weekend bookends (Sun/Sat) at ~2/3 the weekday width — Outlook
+       frames the workweek with narrower weekends. Must match .sch-mweek
+       exactly so the header letters stay aligned to the day columns. */
+    grid-template-columns: 0.66fr 1fr 1fr 1fr 1fr 1fr 0.66fr;
   }
   #schDowRow.sch-mdow .sch-cal-dow {
     text-align: center;
@@ -1769,12 +1772,16 @@ body.light-mode .sch-cal-grid { background: #d6dae3; }
      lens min/max heights so cells size to content. */
   .sch-cal-week-row.sch-mweek {
     display: grid;
-    grid-template-columns: repeat(7, 1fr);
+    /* Narrower weekend bookends — matches #schDowRow.sch-mdow above. */
+    grid-template-columns: 0.66fr 1fr 1fr 1fr 1fr 1fr 0.66fr;
     gap: 0;
     background: transparent;
     min-height: 0;
     max-height: none;
   }
+  /* Let cells shrink to their track so chip/number content can never
+     blow a column past its 0.66fr / 1fr share. */
+  .sch-cal-week-row.sch-mweek > .sch-mcell { min-width: 0; }
   /* Belt-and-suspenders: flow-mode + lens rules from earlier media
      blocks key off .sch-cal-week-row; re-assert content sizing on
      the mobile row regardless of any data-lens / .sch-flow context. */
