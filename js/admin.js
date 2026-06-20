@@ -142,6 +142,10 @@
     document.getElementById('editUser_name').value = u.name || '';
     var phoneEl = document.getElementById('editUser_phone');
     if (phoneEl) phoneEl.value = u.phone_number || '';
+    var tzEl = document.getElementById('editUser_timezone');
+    if (tzEl && window.p86TzOptionsHTML) {
+      tzEl.innerHTML = window.p86TzOptionsHTML(u.timezone || '', { inheritLabel: 'Inherit from organization' });
+    }
     document.getElementById('editUser_active').checked = !!u.active;
     document.getElementById('editUser_newPassword').value = '';
     document.getElementById('editUser_status').textContent = '';
@@ -164,6 +168,9 @@
     var newPassword = document.getElementById('editUser_newPassword').value;
     var phoneEl = document.getElementById('editUser_phone');
     var phone = phoneEl ? phoneEl.value.trim() : '';
+    var tzEl = document.getElementById('editUser_timezone');
+    // '' = inherit org timezone (server stores NULL).
+    var timezone = tzEl ? tzEl.value : '';
 
     btn.disabled = true;
     statusEl.style.color = 'var(--text-dim,#888)';
@@ -173,7 +180,7 @@
     // else gets normalized server-side). Caller hasn't typed = stays empty
     // but the server treats present-empty as "clear" — that's the desired
     // behavior since the phone field on the form mirrors the user record.
-    var updatePromise = window.p86Api.users.update(id, { name: name, role: role, active: active, phone_number: phone });
+    var updatePromise = window.p86Api.users.update(id, { name: name, role: role, active: active, phone_number: phone, timezone: timezone });
     var passwordPromise = newPassword
       ? window.p86Api.users.resetPassword(id, newPassword)
       : Promise.resolve();
@@ -4514,6 +4521,8 @@
       if (descEl) _orgDraft.description = descEl.value;
       var idEl = document.getElementById('org-identity-body');
       if (idEl) _orgDraft.identity_body = idEl.value;
+      var tzEl = document.getElementById('org-timezone');
+      if (tzEl) _orgDraft.timezone = tzEl.value;
     }
     if (_orgPacksDraft && document.querySelector('[data-org-pack-idx]')) {
       _orgPacksDraft.forEach(function(_, idx) { syncPackFromInputs(idx); });
@@ -4612,6 +4621,45 @@
     return tabsHTML + hintHTML + bodyHTML;
   }
 
+  // Multi-market timezone menu. The field accepts ANY valid IANA zone;
+  // this is the convenience list (US markets first — AGX's footprint).
+  // Mirrors COMMON_ZONES in server/timezone.js.
+  var TZ_ZONES = [
+    ['America/New_York', 'US Eastern (New York)'],
+    ['America/Chicago', 'US Central (Chicago)'],
+    ['America/Denver', 'US Mountain (Denver)'],
+    ['America/Phoenix', 'US Mountain – no DST (Phoenix)'],
+    ['America/Los_Angeles', 'US Pacific (Los Angeles)'],
+    ['America/Anchorage', 'US Alaska (Anchorage)'],
+    ['Pacific/Honolulu', 'US Hawaii (Honolulu)'],
+    ['America/Halifax', 'Atlantic (Halifax)'],
+    ['America/Toronto', 'Canada Eastern (Toronto)'],
+    ['Europe/London', 'UK (London)'],
+    ['Europe/Paris', 'Central Europe (Paris)'],
+    ['UTC', 'UTC']
+  ];
+  // Build <option>s for a timezone <select>. opts.inheritLabel adds a
+  // leading blank option (used by the per-user override). A stored value
+  // outside the menu is preserved as its own option so it's never lost.
+  function tzOptionsHTML(selected, opts) {
+    opts = opts || {};
+    var html = '';
+    if (opts.inheritLabel) {
+      html += '<option value=""' + (selected ? '' : ' selected') + '>' + escapeHTML(opts.inheritLabel) + '</option>';
+    }
+    var found = false;
+    TZ_ZONES.forEach(function (z) {
+      var sel = (z[0] === selected) ? ' selected' : '';
+      if (z[0] === selected) found = true;
+      html += '<option value="' + escapeAttr(z[0]) + '"' + sel + '>' + escapeHTML(z[1]) + '</option>';
+    });
+    if (selected && !found) {
+      html = '<option value="' + escapeAttr(selected) + '" selected>' + escapeHTML(selected) + '</option>' + html;
+    }
+    return html;
+  }
+  window.p86TzOptionsHTML = tzOptionsHTML;
+
   function renderOrgIdentityHTML() {
     var o = _orgDraft || {};
     return ''
@@ -4624,6 +4672,8 @@
       +     '<input id="org-name" type="text" value="' + escapeAttr(o.name || '') + '" maxlength="200" />'
       +     '<label>Description</label>'
       +     '<input id="org-description" type="text" value="' + escapeAttr(o.description || '') + '" placeholder="Short blurb — shown on the agent\'s description field" />'
+      +     '<label>Timezone</label>'
+      +     '<select id="org-timezone" title="This market\'s home timezone — drives when reminder digests + cert/weekly emails fire and the timezone dates render in.">' + tzOptionsHTML(o.timezone || 'America/New_York') + '</select>'
       +   '</div>'
       +   '<div style="margin-top:14px;font-size:12px;">'
       +     '<label style="display:block;margin-bottom:4px;color:var(--text-dim,#aaa);">Identity body — admin-editable prose composed into 86\'s registered system prompt'
@@ -5477,10 +5527,12 @@
     var name = document.getElementById('org-name').value.trim();
     var description = document.getElementById('org-description').value;
     var identityBody = document.getElementById('org-identity-body').value;
+    var tzEl = document.getElementById('org-timezone');
+    var timezone = tzEl ? tzEl.value : undefined;
     var status = document.getElementById('org-identity-status');
     if (status) { status.textContent = 'Saving…'; status.style.color = 'var(--text-dim,#888)'; }
     window.p86Api.put('/api/admin/organizations/' + _orgDraft.id, {
-      name: name, description: description, identity_body: identityBody
+      name: name, description: description, identity_body: identityBody, timezone: timezone
     }).then(function(resp) {
       if (resp && resp.organization) _orgDraft = resp.organization;
       if (status) { status.textContent = 'Saved. Click "Sync managed agent" to push to Anthropic.'; status.style.color = '#34d399'; }

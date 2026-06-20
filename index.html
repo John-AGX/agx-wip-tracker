@@ -3017,6 +3017,10 @@
             <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Phone Number <span style="color:var(--text-dim,#666);font-weight:400;">(optional — for SMS scheduling agent)</span></label>
             <input id="editUser_phone" type="tel" placeholder="(407) 555-1234" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);" />
           </div>
+          <div>
+            <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Timezone <span style="color:var(--text-dim,#666);font-weight:400;">(optional — overrides the org timezone for this user's reminders)</span></label>
+            <select id="editUser_timezone" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);"></select>
+          </div>
           <label class="p86-check-row">
             <input type="checkbox" id="editUser_active" />
             <span>Active <span class="p86-check-hint">(uncheck to disable login)</span></span>
@@ -3074,7 +3078,7 @@
          BEFORE admin.js so window.p86EmailBlocks is available at the
          time renderTemplateEditor() runs its mount call. -->
     <script src="js/email-block-editor.js?v=3"></script>
-    <script src="js/admin.js?v=100"></script>
+    <script src="js/admin.js?v=101"></script>
     <script src="js/admin-context-registry.js?v=3"></script>
     <script src="js/field-tools.js?v=8"></script>
     <script src="js/clients.js?v=16e"></script>

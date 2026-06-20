@@ -411,6 +411,16 @@ router.put('/:id', requireAuth, requireOrg, requireCapability('ROLES_MANAGE'), a
       updates.push('identity_body = $' + p++);
       params.push(req.body.identity_body);
     }
+    // Home-market IANA timezone (multi-market). Validate it's a real zone
+    // so a typo can't wedge the time-gated crons.
+    if (typeof req.body.timezone === 'string') {
+      const tzName = req.body.timezone.trim();
+      if (!require('../timezone').isValidTz(tzName)) {
+        return res.status(400).json({ error: 'Invalid timezone (expected an IANA name like America/New_York)' });
+      }
+      updates.push('timezone = $' + p++);
+      params.push(tzName);
+    }
     if (req.body.settings && typeof req.body.settings === 'object') {
       updates.push('settings = $' + p++ + '::jsonb');
       params.push(JSON.stringify(req.body.settings));
@@ -431,7 +441,7 @@ router.put('/:id', requireAuth, requireOrg, requireCapability('ROLES_MANAGE'), a
       params.push(JSON.stringify(allowed));
     }
     if (!updates.length) {
-      return res.status(400).json({ error: 'No editable fields supplied. Accepts: name, description, identity_body, settings, branding.' });
+      return res.status(400).json({ error: 'No editable fields supplied. Accepts: name, description, identity_body, timezone, settings, branding.' });
     }
     updates.push('updated_at = NOW()');
     const r = await pool.query(

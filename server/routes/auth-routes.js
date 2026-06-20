@@ -188,7 +188,7 @@ router.get('/users', requireAuth, async (req, res) => {
     let where = "WHERE role <> 'sub'";
     if (orgId) { params.push(orgId); where += ' AND (organization_id = $1 OR organization_id IS NULL)'; }
     const { rows } = await pool.query(
-      'SELECT id, email, name, role, active, phone_number, notification_prefs, created_at, last_seen_at FROM users ' +
+      'SELECT id, email, name, role, active, phone_number, timezone, notification_prefs, created_at, last_seen_at FROM users ' +
       where + ' ORDER BY name ASC',
       params
     );
@@ -304,7 +304,7 @@ async function validateRoleAssignment(targetRole, callerUser) {
 
 router.put('/users/:id', requireAuth, requireRole('admin'), async (req, res) => {
   try {
-    const { name, role, active, phone_number, email } = req.body;
+    const { name, role, active, phone_number, email, timezone } = req.body;
     const { rows } = await pool.query('SELECT * FROM users WHERE id = $1', [req.params.id]);
     const user = rows[0];
     if (!user) return res.status(404).json({ error: 'User not found' });
@@ -345,9 +345,26 @@ router.put('/users/:id', requireAuth, requireRole('admin'), async (req, res) => 
       emailUpdate = normalized;
     }
 
+    // Per-user timezone OVERRIDE (multi-market). Optional:
+    //   - empty string / null clears it (inherit the org timezone)
+    //   - any other value must be a valid IANA zone
+    // Absent from the body = leave whatever was there.
+    let timezoneUpdate = user.timezone;
+    if (Object.prototype.hasOwnProperty.call(req.body, 'timezone')) {
+      if (timezone == null || String(timezone).trim() === '') {
+        timezoneUpdate = null;
+      } else {
+        const tzName = String(timezone).trim();
+        if (!require('../timezone').isValidTz(tzName)) {
+          return res.status(400).json({ error: 'Invalid timezone (expected an IANA name like America/New_York)' });
+        }
+        timezoneUpdate = tzName;
+      }
+    }
+
     await pool.query(
-      'UPDATE users SET name = $1, role = $2, active = $3, phone_number = $4, email = $5, updated_at = NOW() WHERE id = $6',
-      [name || user.name, role || user.role, active != null ? active : user.active, phoneUpdate, emailUpdate, req.params.id]
+      'UPDATE users SET name = $1, role = $2, active = $3, phone_number = $4, email = $5, timezone = $6, updated_at = NOW() WHERE id = $7',
+      [name || user.name, role || user.role, active != null ? active : user.active, phoneUpdate, emailUpdate, timezoneUpdate, req.params.id]
     );
 
     // Audit — role change is the privileged one; record before/after.
