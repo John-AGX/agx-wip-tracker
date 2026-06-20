@@ -3226,39 +3226,92 @@
             position: absolute;
             left: 0; right: 0;
             bottom: calc(64px + env(safe-area-inset-bottom, 0px));
+            max-height: calc(100vh - 92px);
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
             background: #0f172a;
             border-top: 1px solid rgba(34, 211, 238, 0.35);
-            padding: 10px 0 14px;
+            border-radius: 16px 16px 0 0;
+            padding: 6px 14px 18px;
             display: flex;
             flex-direction: column;
             animation: p86mbSheetUp 0.22s ease-out;
         }
-        .p86-mobile-more-item {
-            background: transparent;
-            border: none;
-            color: rgba(255, 255, 255, 0.9);
-            font-size: 14px;
-            font-weight: 600;
-            padding: 14px 22px;
-            display: flex;
-            align-items: center;
-            gap: 14px;
-            text-align: left;
+        .p86-mobile-more-grip {
+            width: 38px; height: 4px; border-radius: 2px;
+            background: rgba(255, 255, 255, 0.22);
+            margin: 4px auto 10px;
+            flex: 0 0 auto;
+        }
+        /* Flagship Ask-86 row at the top of the sheet. */
+        .p86-mobile-more-ask {
+            display: flex; align-items: center; gap: 12px;
+            width: 100%;
+            background: linear-gradient(135deg, rgba(34,211,238,0.16), rgba(124,58,237,0.16));
+            border: 1px solid rgba(34,211,238,0.4);
+            border-radius: 12px;
+            padding: 12px 14px;
+            margin-bottom: 6px;
             cursor: pointer;
             -webkit-tap-highlight-color: transparent;
         }
-        .p86-mobile-more-item:hover,
-        .p86-mobile-more-item:active {
-            background: rgba(34, 211, 238, 0.08);
+        .p86-mobile-more-ask:active {
+            background: linear-gradient(135deg, rgba(34,211,238,0.26), rgba(124,58,237,0.26));
         }
+        .p86-mobile-more-ask-logo {
+            width: 40px; height: 40px; flex: 0 0 40px;
+            display: flex; align-items: center; justify-content: center;
+            background: radial-gradient(circle at 30% 30%, #1e293b 0%, #0b1226 75%);
+            border-radius: 10px; overflow: hidden;
+        }
+        .p86-mobile-more-ask-logo img { width: 30px; height: 30px; object-fit: contain; }
+        .p86-mobile-more-ask-text { display: flex; flex-direction: column; line-height: 1.25; text-align: left; }
+        .p86-mobile-more-ask-text strong { color: #fff; font-size: 15px; }
+        .p86-mobile-more-ask-text small { color: rgba(255,255,255,0.6); font-size: 11px; }
+        /* Section label + tile grid. */
+        .p86-mobile-more-section {
+            font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.6px;
+            color: rgba(255, 255, 255, 0.42);
+            padding: 12px 4px 6px;
+        }
+        .p86-mobile-more-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 6px;
+        }
+        .p86-mobile-more-tile {
+            display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px;
+            background: rgba(255, 255, 255, 0.04);
+            border: 1px solid rgba(255, 255, 255, 0.07);
+            border-radius: 12px;
+            color: rgba(255, 255, 255, 0.9);
+            font-size: 11px; font-weight: 600;
+            padding: 13px 6px;
+            min-height: 74px;
+            cursor: pointer;
+            -webkit-tap-highlight-color: transparent;
+            text-align: center;
+        }
+        .p86-mobile-more-tile:active {
+            background: rgba(34, 211, 238, 0.12);
+            border-color: rgba(34, 211, 238, 0.4);
+        }
+        .p86-mobile-more-tile > span:last-child { line-height: 1.15; }
         .p86-mobile-more-icon {
-            width: 22px; height: 22px;
+            width: 24px; height: 24px;
             display: inline-flex;
             align-items: center;
             justify-content: center;
             color: #22d3ee;
+            position: relative;
         }
-        .p86-mobile-more-icon svg { width: 22px; height: 22px; }
+        .p86-mobile-more-icon svg { width: 24px; height: 24px; }
+        .p86-mobile-more-badge {
+            position: absolute; top: -5px; right: -9px;
+            background: #f87171; color: #fff;
+            font-size: 9px; font-weight: 700;
+            padding: 1px 5px; border-radius: 9px; line-height: 1.4;
+        }
         @keyframes p86mbDropFade {
             from { opacity: 0; } to { opacity: 1; }
         }

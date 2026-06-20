@@ -453,15 +453,18 @@
   // Defensive: no-ops if the nav button isn't present.
   function refreshNavMessagesBadge() {
     getTotalUnread().then(function(n) {
-      var badge = document.getElementById('navMessagesBadge');
-      if (!badge) return;
-      if (n > 0) {
-        badge.textContent = n > 99 ? '99+' : String(n);
-        badge.style.display = '';
-      } else {
-        badge.textContent = '';
-        badge.style.display = 'none';
-      }
+      // Sidebar nav badge + the mobile More-sheet Messages tile badge.
+      ['navMessagesBadge', 'moreMessagesBadge'].forEach(function(id) {
+        var badge = document.getElementById(id);
+        if (!badge) return;
+        if (n > 0) {
+          badge.textContent = n > 99 ? '99+' : String(n);
+          badge.style.display = '';
+        } else {
+          badge.textContent = '';
+          badge.style.display = 'none';
+        }
+      });
     }).catch(function() {});
   }
 

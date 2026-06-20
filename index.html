@@ -246,7 +246,7 @@
     })();
     </script>
 
-    <link rel="stylesheet" href="css/styles.css?v=186">
+    <link rel="stylesheet" href="css/styles.css?v=187">
     <link rel="stylesheet" href="css/report-style-packs.css?v=3">
     <link rel="stylesheet" href="css/workspace-layout.css?v=60">
     <link rel="stylesheet" href="css/workspace.css?v=38">
@@ -3103,7 +3103,7 @@
     <script src="js/my-day.js?v=1"></script>
     <script src="js/app.js?v=91"></script>
     <script src="js/compliance-review-ui.js?v=2"></script>
-    <script src="js/messaging.js?v=2"></script>
+    <script src="js/messaging.js?v=3"></script>
     <script src="js/my-files.js?v=16"></script>
     <!-- Tasks / To-Do UI. Loads after my-files.js (reuses window.p86Toast)
          and after api.js/auth.js (p86Api.tasks + p86Auth). -->
@@ -3330,14 +3330,14 @@
     <script src="nodegraph/ui.js?v=159"></script>
 
     <!-- ── Mobile bottom nav (M1) ─────────────────────────────────
-         Visible only below 768px (CSS-gated). Five-slot layout:
-         4 primary destinations + the prominent Ask 86 button in
-         the center. The top tab strip and the floating Ask 86
-         badge both hide at the same breakpoint — bottom nav takes
-         over as the only navigation surface on phones.
-         Jobs / Insights / Admin live behind the More button to
-         keep the bottom rail at exactly 5 slots (any more and
-         touch targets get crushed at iPhone width). -->
+         Visible only below 768px (CSS-gated). Five equal slots:
+         Leads · Estimates · Jobs · Schedule · More. The top tab
+         strip hides at the same breakpoint — bottom nav takes over
+         as the only navigation surface on phones. EVERY other
+         destination (Ask 86, Summary, My Day, My Tasks, Messages,
+         Projects, My Files, Plans, Field Tools, Clients, Subs,
+         Insights, Admin, Command Center) lives in the More sheet
+         below, role-gated via data-cap / data-admin-only. -->
     <nav id="p86-mobile-nav" class="p86-mobile-nav" aria-label="Primary navigation">
       <button type="button" class="p86-mobile-nav-btn" data-mobile-nav="leads" data-cap="LEADS_VIEW"
               onclick="if(window.switchTab){window.switchTab('estimates');if(window.switchEstimatesSubTab)window.switchEstimatesSubTab('leads');if(window.markVirtualTabActive)window.markVirtualTabActive('leads');}">
@@ -3349,17 +3349,11 @@
         <span class="p86-mobile-nav-icon" data-p86-icon="estimates"></span>
         <span class="p86-mobile-nav-label">Estimates</span>
       </button>
-      <button type="button" class="p86-mobile-nav-btn p86-mobile-nav-btn-primary" data-mobile-nav="ask86"
-              aria-label="Ask 86"
-              onclick="if(window.p86AI&amp;&amp;window.p86AI.open)window.p86AI.open({entityType:'ask86'});">
-        <!-- Cyan cube logo (the same one used in the PWA icons) gives
-             the Ask 86 button its own brand identity instead of the
-             generic DNA glyph. Wrapped in .p86-mobile-nav-icon-logo so
-             the lift / circle / shadow still come from the parent. -->
-        <span class="p86-mobile-nav-icon p86-mobile-nav-icon-logo" aria-hidden="true">
-          <img src="images/pwa/icon-192.png?v=2" alt="" draggable="false" />
-        </span>
-        <span class="p86-mobile-nav-label">86</span>
+      <button type="button" class="p86-mobile-nav-btn" data-mobile-nav="jobs"
+              data-cap="JOBS_VIEW_ALL JOBS_VIEW_ASSIGNED JOBS_EDIT_ANY JOBS_EDIT_OWN"
+              onclick="if(window.switchTab)window.switchTab('jobs');">
+        <span class="p86-mobile-nav-icon" data-p86-icon="wip"></span>
+        <span class="p86-mobile-nav-label">Jobs</span>
       </button>
       <button type="button" class="p86-mobile-nav-btn" data-mobile-nav="schedule"
               onclick="if(window.switchTab)window.switchTab('schedule');">
@@ -3373,36 +3367,89 @@
         <span class="p86-mobile-nav-label">More</span>
       </button>
     </nav>
-    <!-- "More" overflow sheet — holds Jobs, Insights, Admin behind
-         a slide-up panel so the bottom rail stays at 5 slots. -->
+    <!-- "More" overflow sheet — slide-up panel holding EVERY destination
+         that isn't on the 5-slot rail. Role-gated via data-cap /
+         data-admin-only (applyRoleVisibility); p86OpenMobileMore() hides
+         any section whose tiles are all gated away. -->
     <div id="p86-mobile-more-sheet" class="p86-mobile-more-sheet" hidden>
       <div class="p86-mobile-more-backdrop"
            onclick="if(window.p86CloseMobileMore)window.p86CloseMobileMore();"></div>
       <div class="p86-mobile-more-panel" role="menu" aria-label="More navigation">
-        <button type="button" class="p86-mobile-more-item"
-                data-cap="JOBS_VIEW_ALL JOBS_VIEW_ASSIGNED JOBS_EDIT_ANY JOBS_EDIT_OWN"
-                onclick="window.p86CloseMobileMore&amp;&amp;window.p86CloseMobileMore();if(window.switchTab)window.switchTab('jobs');">
-          <span class="p86-mobile-more-icon" data-p86-icon="wip"></span>
-          <span>Jobs</span>
+        <div class="p86-mobile-more-grip" aria-hidden="true"></div>
+
+        <!-- Flagship action — Ask 86 (was the rail center button). -->
+        <button type="button" class="p86-mobile-more-ask" onclick="p86MoreGo(null,{ask:1})">
+          <span class="p86-mobile-more-ask-logo" aria-hidden="true"><img src="images/pwa/icon-192.png?v=2" alt="" draggable="false" /></span>
+          <span class="p86-mobile-more-ask-text"><strong>Ask 86</strong><small>Your AI assistant</small></span>
         </button>
-        <button type="button" class="p86-mobile-more-item" data-cap="INSIGHTS_VIEW"
-                onclick="window.p86CloseMobileMore&amp;&amp;window.p86CloseMobileMore();if(window.switchTab)window.switchTab('insights');">
-          <span class="p86-mobile-more-icon" data-p86-icon="insights"></span>
-          <span>Insights</span>
-        </button>
-        <button type="button" class="p86-mobile-more-item" data-admin-only style="display:none;"
-                onclick="window.p86CloseMobileMore&amp;&amp;window.p86CloseMobileMore();if(window.switchTab)window.switchTab('admin');">
-          <span class="p86-mobile-more-icon" data-p86-icon="admin"></span>
-          <span>Admin</span>
-        </button>
+
+        <div class="p86-mobile-more-section" data-more-section>Home</div>
+        <div class="p86-mobile-more-grid" data-more-grid>
+          <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('summary')"><span class="p86-mobile-more-icon" data-p86-icon="chart-bar"></span><span>Summary</span></button>
+          <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('my-day')"><span class="p86-mobile-more-icon" data-p86-icon="sun"></span><span>My Day</span></button>
+        </div>
+
+        <div class="p86-mobile-more-section" data-more-section>Workspace</div>
+        <div class="p86-mobile-more-grid" data-more-grid>
+          <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('my-tasks')"><span class="p86-mobile-more-icon" data-p86-icon="check-circle"></span><span>My Tasks</span></button>
+          <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('messages')"><span class="p86-mobile-more-icon" data-p86-icon="envelope"><span id="moreMessagesBadge" class="p86-mobile-more-badge" style="display:none;"></span></span><span>Messages</span></button>
+          <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('projects')"><span class="p86-mobile-more-icon" data-p86-icon="folder"></span><span>Projects</span></button>
+          <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('my-files')"><span class="p86-mobile-more-icon" data-p86-icon="folder"></span><span>My Files</span></button>
+          <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('plans')"><span class="p86-mobile-more-icon" data-p86-icon="scale"></span><span>Plans</span></button>
+          <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('my-files',{folder:'__tools__'})"><span class="p86-mobile-more-icon" data-p86-icon="wrench"></span><span>Field Tools</span></button>
+        </div>
+
+        <div class="p86-mobile-more-section" data-more-section>Directory</div>
+        <div class="p86-mobile-more-grid" data-more-grid>
+          <button type="button" class="p86-mobile-more-tile" data-cap="ESTIMATES_VIEW" onclick="p86MoreGo('estimates',{estSub:'clients',virtual:'clients'})"><span class="p86-mobile-more-icon" data-p86-icon="id-card"></span><span>Clients</span></button>
+          <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('estimates',{estSub:'subs',virtual:'subs'})"><span class="p86-mobile-more-icon" data-p86-icon="subs"></span><span>Subs</span></button>
+        </div>
+
+        <div class="p86-mobile-more-section" data-more-section>Company</div>
+        <div class="p86-mobile-more-grid" data-more-grid>
+          <button type="button" class="p86-mobile-more-tile" data-cap="INSIGHTS_VIEW" onclick="p86MoreGo('insights')"><span class="p86-mobile-more-icon" data-p86-icon="insights"></span><span>Insights</span></button>
+          <button type="button" class="p86-mobile-more-tile" data-admin-only style="display:none;" onclick="p86MoreGo('admin')"><span class="p86-mobile-more-icon" data-p86-icon="admin"></span><span>Admin</span></button>
+          <button type="button" class="p86-mobile-more-tile" data-cap="SYSTEM_ADMIN" onclick="p86MoreGo('console')"><span class="p86-mobile-more-icon" data-p86-icon="admin"></span><span>Command Center</span></button>
+        </div>
       </div>
     </div>
     <script>
-      // Mobile More sheet — open / close. Globals so the inline
-      // onclick handlers can reach them without bundling drama.
+      // Mobile More sheet — open / close + navigate. Globals so the
+      // inline onclick handlers can reach them without bundling drama.
+      // p86MoreGo(tab, opts) closes the sheet then routes:
+      //   opts.ask     → open Ask 86 instead of switching tabs
+      //   opts.estSub  → switchEstimatesSubTab(...) after switchTab
+      //   opts.virtual → markVirtualTabActive(...) for sidebar highlight
+      //   opts.folder  → myFiles.selectFolder(...) (Field Tools)
+      window.p86MoreGo = function (tab, opts) {
+        if (window.p86CloseMobileMore) window.p86CloseMobileMore();
+        opts = opts || {};
+        try {
+          if (opts.ask) {
+            if (window.p86AI && window.p86AI.open) window.p86AI.open({ entityType: 'ask86' });
+            return;
+          }
+          if (tab && window.switchTab) window.switchTab(tab);
+          if (opts.estSub && window.switchEstimatesSubTab) window.switchEstimatesSubTab(opts.estSub);
+          if (opts.virtual && window.markVirtualTabActive) window.markVirtualTabActive(opts.virtual);
+          if (opts.folder && window.myFiles && window.myFiles.selectFolder) window.myFiles.selectFolder(opts.folder);
+        } catch (e) { /* defensive */ }
+      };
       window.p86OpenMobileMore = function () {
         var el = document.getElementById('p86-mobile-more-sheet');
-        if (el) el.hidden = false;
+        if (!el) return;
+        // Hide any section whose tiles are all role-gated away, so a
+        // field-crew user never sees an empty "Company" header. Recomputed
+        // each open since applyRoleVisibility toggles tiles post-load.
+        el.querySelectorAll('[data-more-grid]').forEach(function (grid) {
+          var tiles = grid.querySelectorAll('.p86-mobile-more-tile');
+          var anyVisible = Array.prototype.some.call(tiles, function (t) { return t.style.display !== 'none'; });
+          grid.style.display = anyVisible ? '' : 'none';
+          var label = grid.previousElementSibling;
+          if (label && label.hasAttribute('data-more-section')) label.style.display = anyVisible ? '' : 'none';
+        });
+        if (window.p86Messaging && window.p86Messaging.refreshNavBadge) window.p86Messaging.refreshNavBadge();
+        el.hidden = false;
       };
       window.p86CloseMobileMore = function () {
         var el = document.getElementById('p86-mobile-more-sheet');
