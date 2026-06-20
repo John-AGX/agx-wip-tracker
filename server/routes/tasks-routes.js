@@ -339,6 +339,9 @@ router.get('/', requireAuth, async (req, res) => {
       ' LIMIT ' + limit;
 
     const { rows } = await pool.query(sql, params);
+    // Hydrate linked-record labels (client/job/lead/...) in one batched
+    // pass so list consumers (My Day) can show the link without N+1.
+    await require('../services/entity-labels').attachEntityLabels(orgId, rows);
     res.json({ tasks: rows });
   } catch (e) {
     console.error('GET /api/tasks error:', e);

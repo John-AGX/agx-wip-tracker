@@ -23,6 +23,7 @@
 const express = require('express');
 const { pool } = require('../db');
 const { requireAuth } = require('../auth');
+const { attachEntityLabels } = require('../services/entity-labels');
 
 const router = express.Router();
 
@@ -87,6 +88,9 @@ router.get('/', requireAuth, async (req, res) => {
         ORDER BY starts_at ASC`,
       params
     );
+    // Hydrate the linked-record label (client/job/lead/project) for any
+    // event that carries an entity link, so My Day / cards can show it.
+    await attachEntityLabels(orgId, rows);
     res.json({ events: rows });
   } catch (e) {
     console.error('GET /api/calendar error:', e);

@@ -227,7 +227,8 @@
           '<span class="myday-dot" style="background:' + esc(color) + ';opacity:' + (translucent ? '0.5' : '1') + ';margin-top:4px;"></span>' +
           '<div class="myday-body">' +
             '<div class="myday-title">' + esc(e.title || '(untitled event)') +
-              (translucent ? '<span class="myday-chip" style="background:rgba(148,163,184,0.2);color:#94a3b8;">tentative</span>' : '') + '</div>' +
+              (translucent ? '<span class="myday-chip" style="background:rgba(148,163,184,0.2);color:#94a3b8;">tentative</span>' : '') +
+              linkChip(e) + '</div>' +
             (e.location ? '<div class="myday-meta">&#128205; ' + esc(e.location) + '</div>' : '') +
           '</div></div>';
       });
@@ -242,7 +243,8 @@
         html += '<div class="myday-card" data-kind="event" data-id="' + esc(e.id) + '">' +
           '<span class="myday-dot" style="background:' + esc(color) + ';"></span>' +
           '<div class="myday-body"><div class="myday-title">' + esc(e.title || '(untitled event)') +
-            '<span class="myday-chip" style="background:rgba(99,102,241,0.18);color:#a5b4fc;">all day</span></div>' +
+            '<span class="myday-chip" style="background:rgba(99,102,241,0.18);color:#a5b4fc;">all day</span>' +
+            linkChip(e) + '</div>' +
             (e.location ? '<div class="myday-meta">&#128205; ' + esc(e.location) + '</div>' : '') +
           '</div></div>';
       });
@@ -270,9 +272,9 @@
           '<span class="myday-dot" style="background:' + (overdue ? '#f87171' : '#60a5fa') + ';"></span>' +
           '<div class="myday-body"><div class="myday-title">' + esc(t.title || '(untitled task)') +
             (pr ? '<span class="myday-chip" style="background:rgba(148,163,184,0.15);color:' + prColor + ';">' + esc(pr) + '</span>' : '') +
-            (overdue ? '<span class="myday-chip" style="background:rgba(248,113,113,0.18);color:#f87171;">overdue</span>' : '') + '</div>' +
-            '<div class="myday-meta">Due ' + esc(dueLabel(t.due_date)) +
-              (t.entity_type ? ' · ' + esc(t.entity_type) : '') + '</div>' +
+            (overdue ? '<span class="myday-chip" style="background:rgba(248,113,113,0.18);color:#f87171;">overdue</span>' : '') +
+            linkChip(t) + '</div>' +
+            '<div class="myday-meta">Due ' + esc(dueLabel(t.due_date)) + '</div>' +
           '</div></div>';
       });
       html += '</div>';
@@ -299,6 +301,16 @@
         }
       });
     });
+  }
+
+  // A "🔗 <label>" chip shown when an event/task is linked to a record
+  // (client/job/lead/project). Uses the server-resolved entity_label,
+  // falling back to a capitalized type.
+  function linkChip(row) {
+    if (!row || !row.entity_type) return '';
+    var label = row.entity_label ||
+      (String(row.entity_type).charAt(0).toUpperCase() + String(row.entity_type).slice(1));
+    return '<span class="myday-chip" style="background:rgba(34,211,238,0.14);color:#22d3ee;">&#128279; ' + esc(label) + '</span>';
   }
 
   window.p86MyDay = { render: renderMyDayTab };
