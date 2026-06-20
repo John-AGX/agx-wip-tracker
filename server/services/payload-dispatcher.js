@@ -130,15 +130,27 @@ const SCHEDULE_ENTRY_FIELDS = new Set([
 const CALENDAR_EVENT_FIELDS = new Set([
   'title', 'starts_at', 'ends_at', 'all_day', 'location',
   'notes', 'color', 'status', 'recurrence', 'reminder_minutes',
+  // OPTIONAL polymorphic link — the entity this event/reminder is about
+  // (client | job | lead | project). Omit both for a standalone personal
+  // appointment/reminder.
+  'entity_type', 'entity_id',
 ]);
 const CALENDAR_EVENT_STATUSES = new Set(['confirmed', 'tentative', 'canceled']);
 
 // Task editable fields (mirrors tasks-routes.js). organization_id +
 // created_by + assignee_user_id are stamped from ctx (a personal task
-// assigned to the acting user) — never client-supplied.
+// assigned to the acting user) — never client-supplied. entity_type/
+// entity_id OPTIONALLY link the task/reminder to a client/job/lead/project.
 const TASK_FIELDS = new Set([
   'title', 'notes', 'kind', 'status', 'priority', 'due_date',
+  'entity_type', 'entity_id',
 ]);
+
+// Entity kinds a calendar_event or task may be linked to. Mirrors the
+// tasks-routes LINKABLE_ENTITY_TYPES, minus the ones that don't represent
+// a property/relationship (the Assistant defaults to CLIENT when an event
+// concerns a property, JOB for active work).
+const SCHEDULE_LINK_ENTITY_TYPES = new Set(['client', 'job', 'lead', 'project']);
 const TASK_KINDS = new Set(['todo', 'punch', 'follow_up']);
 const TASK_STATUSES = new Set(['open', 'in_progress', 'blocked', 'done']);
 const TASK_PRIORITIES = new Set(['low', 'normal', 'high', 'urgent']);
@@ -488,6 +500,7 @@ function validateOps(entityType, ops) {
     if (fields.status && !CALENDAR_EVENT_STATUSES.has(fields.status)) {
       throw new Error(`calendar_event.fields.status invalid: '${fields.status}'. Valid: ${[...CALENDAR_EVENT_STATUSES].sort().join(', ')}.`);
     }
+    validateScheduleLink('calendar_event', fields);
   }
   if (entityType === 'task') {
     const op = ops.op || 'create';
@@ -511,6 +524,20 @@ function validateOps(entityType, ops) {
     if (fields.status && !TASK_STATUSES.has(fields.status)) throw new Error(`task.fields.status invalid: '${fields.status}'. Valid: ${[...TASK_STATUSES].sort().join(', ')}.`);
     if (fields.priority && !TASK_PRIORITIES.has(fields.priority)) throw new Error(`task.fields.priority invalid: '${fields.priority}'. Valid: ${[...TASK_PRIORITIES].sort().join(', ')}.`);
     if (fields.due_date && isNaN(new Date(fields.due_date).getTime())) throw new Error(`task.fields.due_date is not a valid date: '${fields.due_date}'`);
+    validateScheduleLink('task', fields);
+  }
+}
+
+// Shared validation for the OPTIONAL entity link on calendar_event / task.
+// Both fields together or neither; the type must be linkable.
+function validateScheduleLink(label, fields) {
+  const hasType = !!fields.entity_type;
+  const hasId = !!(fields.entity_id != null && String(fields.entity_id).trim());
+  if (hasType !== hasId) {
+    throw new Error(`${label} link requires BOTH entity_type and entity_id (or neither, for a standalone personal item).`);
+  }
+  if (hasType && !SCHEDULE_LINK_ENTITY_TYPES.has(fields.entity_type)) {
+    throw new Error(`${label}.fields.entity_type invalid: '${fields.entity_type}'. Linkable: ${[...SCHEDULE_LINK_ENTITY_TYPES].sort().join(', ')} (or omit for a standalone item).`);
   }
 }
 
@@ -2378,7 +2405,10 @@ async function dispatchCalendarEvent(dbClient, target, refTable, ctx) {
     title: String(fields.title).trim(),
     starts_at: fields.starts_at,
     all_day: !!(fields.all_day === true || fields.all_day === 'true'),
-    summary: `Created calendar event "${String(fields.title).trim()}"`,
+    linked_entity_type: fields.entity_type || null,
+    linked_entity_id: fields.entity_id || null,
+    summary: `Created calendar event "${String(fields.title).trim()}"` +
+      (fields.entity_type ? ` (linked to ${fields.entity_type})` : ''),
   };
 }
 
@@ -2418,7 +2448,10 @@ async function dispatchTask(dbClient, target, refTable, ctx) {
     created: true,
     title: String(fields.title).trim(),
     due_date: fields.due_date || null,
-    summary: `Created task "${String(fields.title).trim()}"`,
+    linked_entity_type: fields.entity_type || null,
+    linked_entity_id: fields.entity_id || null,
+    summary: `Created task "${String(fields.title).trim()}"` +
+      (fields.entity_type ? ` (linked to ${fields.entity_type})` : ''),
   };
 }
 

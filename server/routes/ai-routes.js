@@ -7028,11 +7028,14 @@ const PAYLOAD_TOOLS = [
       'text-block|attachment-list. ' +
       'system: {skill_pack_ops,watch_ops,field_tool_ops,link_ops,staff_agent_ops} ' +
       '— link_ops includes {op:attach_files, attachment_ids[], target_entity_type, target_entity_id} to link existing files to an entity. ' +
-      'calendar_event: {op:create, fields:{title, starts_at (ISO 8601 local datetime, e.g. 2026-06-25T09:00:00), ends_at?, all_day?, location?, notes?, reminder_minutes?, status?}} ' +
-      '— the vehicle for a personal APPOINTMENT or a timed REMINDER for the acting user (set reminder_minutes for a heads-up N minutes before starts_at). Always resolve a real local datetime for starts_at. ' +
-      'task: {op:create, fields:{title, due_date? (DATE, e.g. 2026-06-25), notes?, kind?(todo|punch|follow_up), priority?(low|normal|high|urgent)}} ' +
-      '— a personal to-do for the acting user; use for a date-only reminder when there is no specific time. ' +
-      '(calendar_event + task are always created for the current user — never pass user/org ids.) ' +
+      'calendar_event: {op:create, fields:{title, starts_at (ISO 8601 local datetime, e.g. 2026-06-25T09:00:00), ends_at?, all_day?, location?, notes?, reminder_minutes?, status?, entity_type?, entity_id?}} ' +
+      '— the vehicle for an APPOINTMENT or a timed REMINDER for the acting user (set reminder_minutes for a heads-up N minutes before starts_at). Always resolve a real local datetime for starts_at. ' +
+      'task: {op:create, fields:{title, due_date? (DATE, e.g. 2026-06-25), notes?, kind?(todo|punch|follow_up), priority?(low|normal|high|urgent), entity_type?, entity_id?}} ' +
+      '— a to-do for the acting user; use for a date-only reminder when there is no specific time. ' +
+      'OPTIONAL LINK (both calendar_event + task): set fields.entity_type (client|job|lead|project) + fields.entity_id to tie the event/reminder to a record. ' +
+      'DEFAULT to linking when it concerns a property or a specific record: prefer the CLIENT for anything about a property/the relationship (e.g. "remind me to call the Sterling HOA about the deck"), the JOB for active work, the lead/project when that is the subject. Resolve the real row id from a read first. ' +
+      'Leave entity_type/entity_id OUT for a purely personal item with no property/client (e.g. "remind me to pick up my kid at 3pm"). ' +
+      '(user/org are always stamped automatically — never pass user/org ids; the entity link above is the ONLY association you set.) ' +
       'To populate an estimate/job workspace, do NOT use a payload — build an .xlsx with code_execution and the user drops it into the workspace (it auto-imports as sheets), or edit the sheet directly in the workspace UI. ' +
       'TARGET FORMS (siblings of entity_type/ops, work on any entity_type): ' +
       'conditional — add condition:"if_exists"|"if_missing"|"upsert" to a target (upsert needs no pre-check; if_exists/if_missing need a concrete entity_id). ' +

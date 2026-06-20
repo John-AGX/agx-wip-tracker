@@ -47,10 +47,18 @@ function normStatus(s) {
   return STATUSES.indexOf(String(s || '')) >= 0 ? String(s) : 'confirmed';
 }
 
+// Optional polymorphic link — the entity (client|job|lead|project) an
+// event is about. NULL = standalone personal item. normLinkType returns
+// the valid type or null; the route stores both columns or neither.
+const LINK_TYPES = ['client', 'job', 'lead', 'project'];
+function normLinkType(t) {
+  return LINK_TYPES.indexOf(String(t || '')) >= 0 ? String(t) : null;
+}
+
 // Shape a row for the client (camelCase-friendly but we keep the
 // snake_case the DB returns; the client reads these names).
 const SELECT_COLS =
-  'id, title, starts_at, ends_at, all_day, location, notes, color, status, recurrence, reminder_minutes, created_at, updated_at';
+  'id, title, starts_at, ends_at, all_day, location, notes, color, status, recurrence, reminder_minutes, entity_type, entity_id, created_at, updated_at';
 
 // GET /api/calendar — the caller's own events. Optional ?from=&to=
 // ISO datetimes clip to a window (the month the calendar is showing);
@@ -104,14 +112,18 @@ router.post('/', requireAuth, async (req, res) => {
     const status = normStatus(b.status);
     const recurrence = (typeof b.recurrence === 'string') ? b.recurrence.trim().slice(0, 300) : null;
     const reminder = (b.reminder_minutes == null || b.reminder_minutes === '') ? null : (parseInt(b.reminder_minutes, 10) || null);
+    // Optional link — stored both-or-neither.
+    const linkType = normLinkType(b.entity_type);
+    const linkId = (linkType && b.entity_id != null && String(b.entity_id).trim()) ? String(b.entity_id).trim() : null;
+    const entType = linkId ? linkType : null;
 
     const id = newId();
     const { rows } = await pool.query(
       `INSERT INTO calendar_events
-         (id, organization_id, user_id, title, starts_at, ends_at, all_day, location, notes, color, status, recurrence, reminder_minutes)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+         (id, organization_id, user_id, title, starts_at, ends_at, all_day, location, notes, color, status, recurrence, reminder_minutes, entity_type, entity_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
        RETURNING ${SELECT_COLS}`,
-      [id, orgId, callerUserId(req), title, b.starts_at, b.ends_at || null, allDay, location, notes, color, status, recurrence, reminder]
+      [id, orgId, callerUserId(req), title, b.starts_at, b.ends_at || null, allDay, location, notes, color, status, recurrence, reminder, entType, linkId]
     );
     res.json({ event: rows[0] });
   } catch (e) {
@@ -142,6 +154,13 @@ router.patch('/:id', requireAuth, async (req, res) => {
     if (Object.prototype.hasOwnProperty.call(b, 'status')) set('status', normStatus(b.status));
     if (Object.prototype.hasOwnProperty.call(b, 'recurrence')) set('recurrence', typeof b.recurrence === 'string' ? b.recurrence.trim().slice(0, 300) : null);
     if (Object.prototype.hasOwnProperty.call(b, 'reminder_minutes')) set('reminder_minutes', (b.reminder_minutes == null || b.reminder_minutes === '') ? null : (parseInt(b.reminder_minutes, 10) || null));
+    // Link edit — touching either field rewrites both (both-or-neither).
+    if (Object.prototype.hasOwnProperty.call(b, 'entity_type') || Object.prototype.hasOwnProperty.call(b, 'entity_id')) {
+      const lt = normLinkType(b.entity_type);
+      const li = (lt && b.entity_id != null && String(b.entity_id).trim()) ? String(b.entity_id).trim() : null;
+      set('entity_type', li ? lt : null);
+      set('entity_id', li);
+    }
 
     if (!sets.length) {
       const cur = await pool.query(

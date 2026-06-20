@@ -3078,6 +3078,17 @@ async function initSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_calendar_events_owner
       ON calendar_events (organization_id, user_id, starts_at);
+    -- OPTIONAL polymorphic link to the entity this event/reminder is
+    -- about (client | job | lead | project). NULL = a standalone personal
+    -- appointment/reminder. Mirrors tasks.entity_type/entity_id. The
+    -- Assistant defaults to linking the CLIENT when an event concerns a
+    -- property, the JOB when it's active work, else leaves it NULL.
+    ALTER TABLE calendar_events ADD COLUMN IF NOT EXISTS entity_type TEXT;
+    ALTER TABLE calendar_events ADD COLUMN IF NOT EXISTS entity_id   TEXT;
+    -- Per-entity lookup so a client/job page can list its appointments.
+    CREATE INDEX IF NOT EXISTS idx_calendar_events_entity
+      ON calendar_events (entity_type, entity_id, starts_at)
+      WHERE entity_type IS NOT NULL;
 
     -- ───────────────────────────────────────────────────────────────
     -- Plans & Takeoffs — first-class scale-drawing documents (the
