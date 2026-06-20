@@ -18,6 +18,7 @@
 const { pool } = require('./db');
 const { sendForEvent } = require('./email');
 const { certTypeLabel } = require('./email-templates');
+const tz = require('./timezone');
 
 // 24h period; 60s warmup on first boot so we don't spam right after
 // every redeploy if dedupe somehow fails.
@@ -68,106 +69,125 @@ function pruneFireLog(log) {
   return log;
 }
 
-async function runOnce() {
-  var fired = 0;
-  var skipped = 0;
-  try {
-    // Scan: certs whose expiration_date is in the future or already
-    // expired (we still want to nudge for recently-lapsed) and within
-    // reminder_days of today. reminder_direction='before' is the only
-    // mode currently used; 'after' would extend into post-expiry.
-    var sql = [
-      "SELECT sc.id AS cert_id, sc.cert_type, sc.expiration_date,",
-      "       sc.reminder_days, sc.reminder_direction,",
-      "       (sc.expiration_date - CURRENT_DATE) AS days_until,",
-      "       s.id AS sub_id, s.name AS sub_name, s.email AS sub_email,",
-      "       s.primary_contact_first",
-      "FROM sub_certificates sc",
-      "JOIN subs s ON s.id = sc.sub_id",
-      "WHERE sc.expiration_date IS NOT NULL",
-      "  AND s.email IS NOT NULL AND s.email <> ''",
-      "  AND ((sc.reminder_direction = 'before' AND sc.expiration_date >= CURRENT_DATE",
-      "         AND sc.expiration_date <= CURRENT_DATE + sc.reminder_days * INTERVAL '1 day')",
-      "    OR (sc.reminder_direction = 'after' AND sc.expiration_date < CURRENT_DATE",
-      "         AND sc.expiration_date >= CURRENT_DATE - sc.reminder_days * INTERVAL '1 day'))"
-    ].join(' ');
-    var r = await pool.query(sql);
-    if (!r.rows.length) {
-      console.log('[cert-expiry] no certificates in reminder window');
-      return { fired: 0, skipped: 0 };
-    }
+var ONE_HOUR_MS = 60 * 60 * 1000;
+var SCAN_HOUR = 9; // local hour at/after which an org's daily scan runs
 
-    var log = await loadFireLog();
-    pruneFireLog(log);
-    var fires = log.fires;
-    var today = todayISO();
-
-    for (var i = 0; i < r.rows.length; i++) {
-      var row = r.rows[i];
-      // Dedupe key: cert id + expiration + today. Re-renewing the cert
-      // (changing expiration) yields a new key, so the next reminder
-      // for the new date fires correctly.
-      var expIso = row.expiration_date instanceof Date ?
-        row.expiration_date.toISOString().slice(0, 10) :
-        String(row.expiration_date).slice(0, 10);
-      var key = row.cert_id + '|' + expIso + '|' + today;
-      if (fires[key]) { skipped++; continue; }
-
-      try {
-        var result = await sendForEvent('cert_expiring', {
-          sub: { name: row.sub_name, primaryContactFirst: row.primary_contact_first || '' },
-          cert: {
-            type: certTypeLabel(row.cert_type),
-            expirationDate: expIso,
-            daysUntilExpiry: Number(row.days_until)
-          }
-        }, { to: row.sub_email, tag: 'cert_expiring' });
-        if (result && result.skipped) {
-          skipped++;
-          // Don't record skipped sends — re-checking tomorrow is fine
-          // and lets the admin enable the toggle and have it fire on
-          // the next run.
-        } else {
-          fires[key] = Date.now();
-          fired++;
+// Scan + send cert reminders for ONE org. Returns { fired, skipped,
+// candidates }. Per-cert dedup uses `localDate` so the key resets at the
+// org's local midnight. Never throws.
+async function scanOrg(orgId, localDate, fires) {
+  var fired = 0, skipped = 0;
+  var sql = [
+    "SELECT sc.id AS cert_id, sc.cert_type, sc.expiration_date,",
+    "       sc.reminder_days, sc.reminder_direction,",
+    "       (sc.expiration_date - CURRENT_DATE) AS days_until,",
+    "       s.id AS sub_id, s.name AS sub_name, s.email AS sub_email,",
+    "       s.primary_contact_first",
+    "FROM sub_certificates sc",
+    "JOIN subs s ON s.id = sc.sub_id",
+    "WHERE sc.expiration_date IS NOT NULL",
+    "  AND s.organization_id = $1",
+    "  AND s.email IS NOT NULL AND s.email <> ''",
+    "  AND ((sc.reminder_direction = 'before' AND sc.expiration_date >= CURRENT_DATE",
+    "         AND sc.expiration_date <= CURRENT_DATE + sc.reminder_days * INTERVAL '1 day')",
+    "    OR (sc.reminder_direction = 'after' AND sc.expiration_date < CURRENT_DATE",
+    "         AND sc.expiration_date >= CURRENT_DATE - sc.reminder_days * INTERVAL '1 day'))"
+  ].join(' ');
+  var r = await pool.query(sql, [orgId]);
+  for (var i = 0; i < r.rows.length; i++) {
+    var row = r.rows[i];
+    var expIso = row.expiration_date instanceof Date ?
+      row.expiration_date.toISOString().slice(0, 10) :
+      String(row.expiration_date).slice(0, 10);
+    var key = row.cert_id + '|' + expIso + '|' + localDate;
+    if (fires[key]) { skipped++; continue; }
+    try {
+      var result = await sendForEvent('cert_expiring', {
+        sub: { name: row.sub_name, primaryContactFirst: row.primary_contact_first || '' },
+        cert: {
+          type: certTypeLabel(row.cert_type),
+          expirationDate: expIso,
+          daysUntilExpiry: Number(row.days_until)
         }
-      } catch (e) {
-        console.warn('[cert-expiry] send failed for cert ' + row.cert_id + ':', e && e.message);
+      }, { to: row.sub_email, tag: 'cert_expiring' });
+      if (result && result.skipped) {
+        skipped++;
+      } else {
+        fires[key] = Date.now();
+        fired++;
       }
+    } catch (e) {
+      console.warn('[cert-expiry] send failed for cert ' + row.cert_id + ':', e && e.message);
     }
-    if (fired > 0) await saveFireLog(log);
-    console.log('[cert-expiry] scan complete — fired=' + fired + ' skipped=' + skipped + ' candidates=' + r.rows.length);
-    return { fired: fired, skipped: skipped, candidates: r.rows.length };
-  } catch (e) {
-    console.error('[cert-expiry] scan failed:', e && e.message);
-    return { fired: fired, skipped: skipped, error: e.message };
   }
+  return { fired: fired, skipped: skipped, candidates: r.rows.length };
 }
 
-// Compute the milliseconds until the next 09:00 server-local time.
-function msUntilNext9am() {
+// Called hourly. Scans each org's certs once on its LOCAL morning
+// (>= 09:00 in organizations.timezone), deduped per org per local day.
+//   opts.dry   → report the per-org plan, scan/send nothing.
+//   opts.force → ignore the hour/dedup gate (manual immediate scan).
+async function runOnce(opts) {
+  opts = opts || {};
+  var dry = !!opts.dry;
+  var force = !!opts.force;
   var now = new Date();
-  var next = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 9, 0, 0, 0);
-  if (next <= now) next = new Date(next.getTime() + ONE_DAY_MS);
-  return next.getTime() - now.getTime();
+  try {
+    var orgs = (await pool.query(
+      'SELECT id, name, timezone FROM organizations WHERE archived_at IS NULL'
+    )).rows;
+    var log = await loadFireLog();
+    pruneFireLog(log);
+    if (!log.orgRuns) log.orgRuns = {};
+    var fires = log.fires;
+    var plan = [];
+    var totalFired = 0, totalSkipped = 0;
+    var dirty = false;
+
+    for (var i = 0; i < orgs.length; i++) {
+      var org = orgs[i];
+      var zone = tz.resolveTz(null, org.timezone);
+      var localHour = tz.hourInTz(zone, now);
+      var localDate = tz.localDateInTz(zone, now);
+      var ranToday = log.orgRuns[String(org.id)] === localDate;
+      var inWindow = localHour >= SCAN_HOUR;
+      var wouldRun = force || (inWindow && !ranToday);
+      var entry = { orgId: org.id, name: org.name, timezone: zone, localHour: localHour, inWindow: inWindow, ranToday: ranToday, wouldRun: wouldRun };
+      if (wouldRun && !dry) {
+        var res = await scanOrg(org.id, localDate, fires);
+        entry.fired = res.fired; entry.skipped = res.skipped; entry.candidates = res.candidates;
+        totalFired += res.fired; totalSkipped += res.skipped;
+        log.orgRuns[String(org.id)] = localDate;
+        dirty = true;
+      }
+      plan.push(entry);
+    }
+
+    if (dirty) await saveFireLog(log);
+    if (!dry) console.log('[cert-expiry] tick — orgs=' + orgs.length + ' ran=' + plan.filter(function (p) { return p.wouldRun; }).length + ' fired=' + totalFired + ' skipped=' + totalSkipped);
+    return { dry: dry, force: force, orgs: plan, fired: totalFired, skipped: totalSkipped };
+  } catch (e) {
+    console.error('[cert-expiry] scan failed:', e && e.message);
+    return { error: e.message, fired: 0, skipped: 0 };
+  }
 }
 
 var _started = false;
 function start() {
   if (_started) return;
   _started = true;
-  // Warmup run shortly after boot.
+  // Warmup shortly after boot (gated per-org inside runOnce, so it only
+  // actually sends for orgs currently in their local morning window).
   setTimeout(function() {
     runOnce().catch(function(e) { console.warn('[cert-expiry] warmup error:', e && e.message); });
   }, FIRST_RUN_DELAY_MS);
-  // Then schedule the first daily run for the next 9 AM, then chain
-  // 24h intervals from there.
+  // Hourly tick — the per-org local-time gate + per-day dedup inside
+  // runOnce decide when each org's certs are scanned.
   setTimeout(function tick() {
-    runOnce().catch(function(e) { console.warn('[cert-expiry] daily error:', e && e.message); });
-    setTimeout(tick, ONE_DAY_MS);
-  }, msUntilNext9am());
-  console.log('[cert-expiry] daily scanner armed; first daily run in ' +
-    Math.round(msUntilNext9am() / 60000) + ' min');
+    runOnce().catch(function(e) { console.warn('[cert-expiry] tick error:', e && e.message); });
+    setTimeout(tick, ONE_HOUR_MS);
+  }, ONE_HOUR_MS);
+  console.log('[cert-expiry] scanner armed; hourly tick, scans each org on its local ' + SCAN_HOUR + ':00');
 }
 
 module.exports = { start: start, runOnce: runOnce };

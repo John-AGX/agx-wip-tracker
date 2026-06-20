@@ -16,17 +16,40 @@
 //   - sendForEvent() handles the enabled gate; this module just
 //     produces the payload and calls sendForEvent
 //
+// Multi-market: ticks HOURLY and fires each org's digest once on its own
+// local Monday morning (>= 07:00 in organizations.timezone), deduped per
+// org per local ISO-week. So a New York org and a Los Angeles org each get
+// their digest at 7am THEIR time, not at one global UTC moment.
+//
 // Exports:
-//   start()   — arm the weekly tick
-//   runOnce(opts) — fire the digest assembly now (admin button or test)
-//                   opts.dayOverride lets a manual run pretend it's
-//                   the Monday cron run (so a Thursday admin click
-//                   still computes a Mon-Sun window)
+//   start()       — arm the hourly tick
+//   runOnce(opts) — opts.dry reports the per-org plan without sending;
+//                   opts.force ignores the day/hour/dedup gate (manual send)
 
 'use strict';
 
 const { pool } = require('./db');
 const { sendForEvent } = require('./email');
+const tz = require('./timezone');
+
+// Per-org "already sent this local week" marker so the hourly tick fires a
+// given org's digest exactly once on its local Monday morning. Keyed by
+// org id → ISO-week string in the org's own timezone.
+async function loadWeekLog() {
+  try {
+    const r = await pool.query("SELECT value FROM app_settings WHERE key = 'weekly_digest_log'");
+    return (r.rows.length && r.rows[0].value) || { orgs: {} };
+  } catch (e) { return { orgs: {} }; }
+}
+async function saveWeekLog(log) {
+  try {
+    await pool.query(
+      "INSERT INTO app_settings (key, value) VALUES ('weekly_digest_log', $1) " +
+      "ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = NOW()",
+      [JSON.stringify(log)]
+    );
+  } catch (e) { console.warn('[weekly-digest] week-log save failed:', e.message); }
+}
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 const FIRST_RUN_DELAY_MS = 30 * 1000;  // 30s after boot — warmup
@@ -35,26 +58,14 @@ function isoDate(d) {
   return d.toISOString().slice(0, 10);
 }
 
-// Format a "Week of …" label for the digest header. Returns the
-// label for the trailing 7-day window ending today.
-function weekLabel(now) {
-  return now.toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' });
+// Format a "Week of …" label for the digest header, in the org's zone.
+function weekLabel(now, zone) {
+  return tz.formatInTz(now, zone, { month: 'long', day: 'numeric', year: 'numeric' });
 }
 
-// Compute the timestamp of next Monday 7 AM relative to now.
-function msUntilNextMon7am() {
-  const now = new Date();
-  const out = new Date(now);
-  out.setHours(7, 0, 0, 0);
-  const dow = out.getDay(); // 0 = Sun, 1 = Mon
-  let daysAdd;
-  if (dow === 1 && out > now) daysAdd = 0;
-  else if (dow === 1) daysAdd = 7;
-  else if (dow === 0) daysAdd = 1;
-  else daysAdd = (8 - dow);
-  out.setDate(out.getDate() + daysAdd);
-  return out.getTime() - now.getTime();
-}
+var ONE_HOUR_MS = 60 * 60 * 1000;
+// Hour (local) at/after which the Monday digest may fire.
+var DIGEST_HOUR = 7;
 
 // Render a simple <ul><li>…</li></ul> from an array of strings.
 function listHtmlOf(items) {
@@ -200,47 +211,82 @@ async function recipientsForRole(orgId, role) {
   return r.rows;
 }
 
+// Assemble + send all three role digests for one org. Returns the number
+// of emails sent.
+async function sendOrgDigests(org, weekStart, label) {
+  let sent = 0;
+  try {
+    const pmData = await assemblePmDigest(org.id, weekStart);
+    if (pmData) {
+      const pms = await recipientsForRole(org.id, 'pm');
+      for (const u of pms) {
+        await sendForEvent('weekly_digest_pm', Object.assign({ recipientName: u.name || 'there', week_label: label, __orgId: org.id }, pmData), { to: u.email });
+        sent++;
+      }
+    }
+  } catch (e) { console.warn('[weekly-digest][pm] org=' + org.id, e.message); }
+  try {
+    const salesData = await assembleSalesDigest(org.id, weekStart);
+    if (salesData) {
+      const ppl = await recipientsForRole(org.id, 'sales');
+      for (const u of ppl) {
+        await sendForEvent('weekly_digest_sales', Object.assign({ recipientName: u.name || 'there', week_label: label, __orgId: org.id }, salesData), { to: u.email });
+        sent++;
+      }
+    }
+  } catch (e) { console.warn('[weekly-digest][sales] org=' + org.id, e.message); }
+  try {
+    const opsData = await assembleOpsDigest(org.id);
+    if (opsData) {
+      const admins = await recipientsForRole(org.id, 'admin');
+      for (const u of admins) {
+        await sendForEvent('weekly_digest_ops', Object.assign({ recipientName: u.name || 'there', week_label: label, __orgId: org.id }, opsData), { to: u.email });
+        sent++;
+      }
+    }
+  } catch (e) { console.warn('[weekly-digest][ops] org=' + org.id, e.message); }
+  return sent;
+}
+
 // ── Run-once entry point ─────────────────────────────────────────
-async function runOnce() {
+// Called hourly. Fires each org's digest once on its LOCAL Monday morning
+// (>= 07:00 in the org's timezone), deduped per org per local ISO-week.
+//   opts.dry   → report the per-org plan, send nothing, record nothing.
+//   opts.force → ignore the Monday/hour/dedup gate (manual immediate send).
+async function runOnce(opts) {
+  opts = opts || {};
+  const dry = !!opts.dry;
+  const force = !!opts.force;
   const now = new Date();
   const weekStart = new Date(now.getTime() - 7 * ONE_DAY_MS);
-  const label = weekLabel(now);
-  const orgs = (await pool.query('SELECT id, name FROM organizations WHERE archived_at IS NULL')).rows;
+  const orgs = (await pool.query(
+    'SELECT id, name, timezone FROM organizations WHERE archived_at IS NULL'
+  )).rows;
+  const log = await loadWeekLog();
+  const plan = [];
+  let totalSent = 0;
+  let dirty = false;
+
   for (const org of orgs) {
-    // PM digest
-    try {
-      const pmData = await assemblePmDigest(org.id, weekStart);
-      if (pmData) {
-        const pms = await recipientsForRole(org.id, 'pm');
-        for (const u of pms) {
-          await sendForEvent('weekly_digest_pm', Object.assign({ recipientName: u.name || 'there', week_label: label, __orgId: org.id }, pmData), { to: u.email });
-        }
-      }
-    } catch (e) { console.warn('[weekly-digest][pm] org=' + org.id, e.message); }
-
-    // Sales digest
-    try {
-      const salesData = await assembleSalesDigest(org.id, weekStart);
-      if (salesData) {
-        const ppl = await recipientsForRole(org.id, 'sales');
-        for (const u of ppl) {
-          await sendForEvent('weekly_digest_sales', Object.assign({ recipientName: u.name || 'there', week_label: label, __orgId: org.id }, salesData), { to: u.email });
-        }
-      }
-    } catch (e) { console.warn('[weekly-digest][sales] org=' + org.id, e.message); }
-
-    // Ops digest
-    try {
-      const opsData = await assembleOpsDigest(org.id);
-      if (opsData) {
-        const admins = await recipientsForRole(org.id, 'admin');
-        for (const u of admins) {
-          await sendForEvent('weekly_digest_ops', Object.assign({ recipientName: u.name || 'there', week_label: label, __orgId: org.id }, opsData), { to: u.email });
-        }
-      }
-    } catch (e) { console.warn('[weekly-digest][ops] org=' + org.id, e.message); }
+    const zone = tz.resolveTz(null, org.timezone);
+    const localDow = tz.dayOfWeekInTz(zone, now);
+    const localHour = tz.hourInTz(zone, now);
+    const weekKey = tz.localWeekInTz(zone, now);
+    const alreadySent = log.orgs[org.id] === weekKey;
+    const inWindow = (localDow === 1 && localHour >= DIGEST_HOUR);
+    const wouldFire = force || (inWindow && !alreadySent);
+    plan.push({ orgId: org.id, name: org.name, timezone: zone, localDow: localDow, localHour: localHour, inWindow: inWindow, alreadySent: alreadySent, wouldFire: wouldFire });
+    if (!wouldFire || dry) continue;
+    const label = weekLabel(now, zone);
+    const sent = await sendOrgDigests(org, weekStart, label);
+    totalSent += sent;
+    log.orgs[org.id] = weekKey;
+    dirty = true;
   }
-  console.log('[weekly-digest] run completed for ' + orgs.length + ' org(s)');
+
+  if (dirty) await saveWeekLog(log);
+  if (!dry) console.log('[weekly-digest] tick — orgs=' + orgs.length + ' fired=' + plan.filter(p => p.wouldFire).length + ' emails=' + totalSent);
+  return { dry: dry, force: force, orgs: plan, emails_sent: totalSent };
 }
 
 let _started = false;
@@ -248,15 +294,14 @@ function start() {
   if (_started) return;
   _started = true;
   setTimeout(function() {
-    // No-op warmup — digests only fire on the scheduled cadence so
-    // we don't blast emails right after a deploy. The "first run"
-    // here is just a log line.
-    console.log('[weekly-digest] armed; next Mon 7am tick in ' + Math.round(msUntilNextMon7am() / 60000) + ' min');
+    console.log('[weekly-digest] armed; hourly tick, fires each org on its local Monday ' + DIGEST_HOUR + ':00');
   }, FIRST_RUN_DELAY_MS);
+  // Hourly tick — the per-org local-time gate + per-week dedup inside
+  // runOnce decide when each org actually receives its digest.
   setTimeout(function tick() {
-    runOnce().catch(function(e) { console.warn('[weekly-digest] weekly run error:', e && e.message); });
-    setTimeout(tick, 7 * ONE_DAY_MS);
-  }, msUntilNextMon7am());
+    runOnce().catch(function(e) { console.warn('[weekly-digest] tick error:', e && e.message); });
+    setTimeout(tick, ONE_HOUR_MS);
+  }, ONE_HOUR_MS);
 }
 
 module.exports = { start: start, runOnce: runOnce };

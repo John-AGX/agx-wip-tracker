@@ -11,6 +11,8 @@
 const express = require('express');
 const { requireAuth, requireSystemAdmin } = require('../auth');
 const reminders = require('../reminders-cron');
+const certExpiry = require('../cert-expiry-cron');
+const weeklyDigest = require('../weekly-digest-cron');
 
 const router = express.Router();
 
@@ -21,6 +23,23 @@ router.get('/run', requireAuth, requireSystemAdmin, async (req, res) => {
     res.json(result);
   } catch (e) {
     console.error('GET /api/admin/reminders/run error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Cron timing preview — dry-runs every time-gated cron so an admin can see,
+// per org, the resolved timezone + local time + whether each cron would
+// fire right now. Sends nothing. Multi-market visibility / verification.
+router.get('/cron-preview', requireAuth, requireSystemAdmin, async (req, res) => {
+  try {
+    const [rem, cert, weekly] = await Promise.all([
+      reminders.runOnce({ dry: true }),
+      certExpiry.runOnce({ dry: true }),
+      weeklyDigest.runOnce({ dry: true })
+    ]);
+    res.json({ reminders: rem, cert_expiry: cert, weekly_digest: weekly });
+  } catch (e) {
+    console.error('GET /api/admin/reminders/cron-preview error:', e);
     res.status(500).json({ error: 'Server error' });
   }
 });
