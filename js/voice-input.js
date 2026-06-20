@@ -65,6 +65,9 @@
     opts = opts || {};
     var SILENCE_TIMEOUT_MS = opts.silenceTimeoutMs || 3000;
     var onChange = typeof opts.onChange === 'function' ? opts.onChange : null;
+    // Fired when dictation actually starts — used to cancel any active
+    // TTS read-back so the mic never hears (and transcribes) its own voice.
+    var onStart = typeof opts.onStart === 'function' ? opts.onStart : null;
 
     var recognition = null;
     var listening = false;
@@ -127,6 +130,7 @@
         var baseValue = '';
         recognition.onstart = function () {
           starting = false;
+          if (onStart) { try { onStart(); } catch (_) {} }
           baseValue = textareaEl.value || '';
           if (baseValue && !/\s$/.test(baseValue)) baseValue += ' ';
           setListening(true);

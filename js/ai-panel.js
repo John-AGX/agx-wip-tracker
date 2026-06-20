@@ -1295,6 +1295,11 @@
       }
     });
     setupVoiceInput(panel);
+    // Voice OUTPUT — read back short confirmations when a write applies
+    // (fires off p86:payload-applied; financial-safe by construction).
+    if (window.p86VoiceOutput && typeof window.p86VoiceOutput.setupReadback === 'function') {
+      try { window.p86VoiceOutput.setupReadback(panel); } catch (_) {}
+    }
     setupFileAttachments(panel);
 
     // Initial preset render — refreshed on every open() to switch
@@ -2684,6 +2689,12 @@
       }
     }
     if (!_entityId) { alert('No ' + _entityType + ' is open.'); return; }
+    // Prime the speech synth inside this send gesture so a later async
+    // read-back can speak on iOS (which blocks speak() outside a gesture).
+    // Covers keyboard (Enter) sends; pointer taps are primed globally.
+    if (window.p86VoiceOutput && window.p86VoiceOutput.prime) {
+      try { window.p86VoiceOutput.prime(); } catch (_) {}
+    }
     // Stop dictation if the user clicked send mid-utterance. Without
     // this the recognition keeps running with a stale `baseValue`
     // pointing at the pre-send text, so the next interim result
@@ -6809,9 +6820,16 @@
       return;
     }
     _stopDictation = window.p86VoiceInput.wire(input, micBtn, {
-      silenceTimeoutMs: 6000     // Chat: pause tolerance long enough not
+      silenceTimeoutMs: 6000,    // Chat: pause tolerance long enough not
                                   // to cut off mid-sentence while the user
                                   // is composing a prompt.
+      onStart: function () {
+        // Starting dictation cancels any active read-back so the mic
+        // never picks up (and re-transcribes) the synth's own voice.
+        if (window.p86VoiceOutput && window.p86VoiceOutput.cancel) {
+          try { window.p86VoiceOutput.cancel(); } catch (_) {}
+        }
+      }
     });
   }
 
