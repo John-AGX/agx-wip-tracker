@@ -805,6 +805,8 @@
                             <button class="ee-btn primary" data-p86-icon="plus" onclick="openAddJobModal()" title="Add a new job">Add Job</button>
                             <button class="ee-btn ghost" data-p86-icon="import" onclick="document.getElementById('qb-costs-import-file').click()" title="Import a QuickBooks weekly Detailed Job Costs xlsx">Import QB Costs</button>
                             <input type="file" id="qb-costs-import-file" accept=".xlsx" style="display:none;" onchange="handleQBCostsFile(event)" />
+                            <button class="ee-btn ghost" data-p86-icon="import" onclick="document.getElementById('project-costs-backfill-file').click()" title="Bulk backfill historical jobs + costs from a QB Project Costs xlsx (Profitability + Cost Detail tabs)">Backfill Project Costs</button>
+                            <input type="file" id="project-costs-backfill-file" accept=".xlsx" style="display:none;" onchange="handleProjectCostsBackfillFile(event)" />
                             <button class="ee-btn ghost" data-p86-icon="exports" onclick="exportJobsToCSV()" title="Export the job list as CSV">Export CSV</button>
                             <button class="ee-btn ghost" onclick="window.print()" title="Print the job list">Print</button>
                             <button class="ee-btn ghost" onclick="showArchivedJobs()" title="Show archived jobs">Archived</button>
@@ -1833,6 +1835,21 @@
         <div class="modal-footer" style="display:flex;gap:10px;justify-content:flex-end;">
           <button class="secondary" onclick="closeModal('qbCostsImportModal')">Cancel</button>
           <button class="primary" id="qbCostsImport_confirmBtn" onclick="commitQBCostsImport()">Import</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Project Costs bulk backfill preview. Populated by
+         js/project-costs-backfill.js from a dry-run of the import:
+         creates jobs from the Profitability tab + attaches cost lines
+         from the Cost Detail tab. Confirm commits server-side. -->
+    <div id="projectCostsBackfillModal" class="modal">
+      <div class="modal-content" style="max-width:900px;max-height:88vh;display:flex;flex-direction:column;">
+        <div class="modal-header" id="pcbf_title">Backfill Project Costs</div>
+        <div id="pcbf_body" style="padding:18px 20px;overflow-y:auto;flex:1;"></div>
+        <div class="modal-footer" style="display:flex;gap:10px;justify-content:flex-end;">
+          <button class="secondary" onclick="closeModal('projectCostsBackfillModal')">Cancel</button>
+          <button class="primary" id="pcbf_confirmBtn" onclick="commitProjectCostsBackfill()">Backfill</button>
         </div>
       </div>
     </div>
@@ -3079,6 +3096,7 @@
     <script src="js/table-enhancements.js?v=5"></script>
     <script src="js/leads.js?v=44"></script>
     <script src="js/job-costs-import.js?v=4"></script>
+    <script src="js/project-costs-backfill.js?v=1"></script>
     <script src="js/qb-costs-view.js?v=11"></script>
     <script src="js/insights.js?v=7"></script>
     <script src="js/schedule.js?v=39"></script>

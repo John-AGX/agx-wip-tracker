@@ -30,6 +30,7 @@ const aiRoutes = require('./routes/ai-routes');
 const aiSessionsRoutes = require('./routes/ai-sessions-routes');
 const materialRoutes = require('./routes/material-routes');
 const qbCostRoutes = require('./routes/qb-cost-routes');
+const projectCostsBackfillRoutes = require('./routes/project-costs-backfill-routes');
 const subRoutes = require('./routes/sub-routes');
 const subPortalRoutes = require('./routes/sub-portal-routes');
 const messageRoutes = require('./routes/message-routes');
@@ -171,6 +172,7 @@ app.use('/api/ai/sessions', aiSessionsRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/materials', materialRoutes);
 app.use('/api/qb-costs', qbCostRoutes);
+app.use('/api/project-costs-backfill', projectCostsBackfillRoutes);
 app.use('/api/subs', subRoutes);
 // Sub portal routes — mounted at /api so the file can register both
 // PM-side paths (`/subs/:subId/invite`) and sub-facing paths
