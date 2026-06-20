@@ -24,8 +24,30 @@ const express = require('express');
 const { pool } = require('../db');
 const { requireAuth } = require('../auth');
 const { attachEntityLabels } = require('../services/entity-labels');
+const { resolveTz, localWallClockToInstant } = require('../timezone');
 
 const router = express.Router();
+
+// Resolve the caller's IANA timezone (user override → org → default) so a
+// naive local datetime in starts_at/ends_at is stored as the correct
+// instant. Values that already carry an offset/'Z' (what the web UI sends)
+// pass through localWallClockToInstant unchanged.
+async function callerTz(req) {
+  try {
+    const { rows } = await pool.query(
+      'SELECT u.timezone AS utz, o.timezone AS otz FROM users u ' +
+      'LEFT JOIN organizations o ON o.id = u.organization_id WHERE u.id = $1',
+      [callerUserId(req)]
+    );
+    const r = rows[0] || {};
+    return resolveTz(r.utz, r.otz);
+  } catch (e) { return undefined; }
+}
+function toInstantISO(value, tz) {
+  if (value == null || value === '') return value;
+  const inst = localWallClockToInstant(value, tz);
+  return inst ? inst.toISOString() : value;
+}
 
 function newId() {
   return 'cal_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
@@ -132,13 +154,19 @@ router.post('/', requireAuth, async (req, res) => {
     const linkId = (linkType && b.entity_id != null && String(b.entity_id).trim()) ? String(b.entity_id).trim() : null;
     const entType = linkId ? linkType : null;
 
+    // Stamp the caller's tz onto naive datetimes (defensive — the web UI
+    // already sends fully-zoned ISO instants, which pass through unchanged).
+    const tz = await callerTz(req);
+    const startsAt = toInstantISO(b.starts_at, tz);
+    const endsAt = b.ends_at ? toInstantISO(b.ends_at, tz) : null;
+
     const id = newId();
     const { rows } = await pool.query(
       `INSERT INTO calendar_events
          (id, organization_id, user_id, title, starts_at, ends_at, all_day, location, notes, color, status, recurrence, reminder_minutes, entity_type, entity_id)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
        RETURNING ${SELECT_COLS}`,
-      [id, orgId, callerUserId(req), title, b.starts_at, b.ends_at || null, allDay, location, notes, color, status, recurrence, reminder, entType, linkId]
+      [id, orgId, callerUserId(req), title, startsAt, endsAt, allDay, location, notes, color, status, recurrence, reminder, entType, linkId]
     );
     res.json({ event: rows[0] });
   } catch (e) {
@@ -159,9 +187,13 @@ router.patch('/:id', requireAuth, async (req, res) => {
     let pn = 1;
     function set(col, val) { sets.push(col + ' = $' + (pn++)); params.push(val); }
 
+    // Resolve tz once if a datetime is being edited (stamp naive strings).
+    const needTz = Object.prototype.hasOwnProperty.call(b, 'starts_at') || Object.prototype.hasOwnProperty.call(b, 'ends_at');
+    const editTz = needTz ? await callerTz(req) : undefined;
+
     if (Object.prototype.hasOwnProperty.call(b, 'title')) set('title', typeof b.title === 'string' ? b.title.trim().slice(0, 300) : null);
-    if (Object.prototype.hasOwnProperty.call(b, 'starts_at')) set('starts_at', b.starts_at);
-    if (Object.prototype.hasOwnProperty.call(b, 'ends_at')) set('ends_at', b.ends_at || null);
+    if (Object.prototype.hasOwnProperty.call(b, 'starts_at')) set('starts_at', toInstantISO(b.starts_at, editTz));
+    if (Object.prototype.hasOwnProperty.call(b, 'ends_at')) set('ends_at', b.ends_at ? toInstantISO(b.ends_at, editTz) : null);
     if (Object.prototype.hasOwnProperty.call(b, 'all_day')) set('all_day', b.all_day === true || b.all_day === 'true');
     if (Object.prototype.hasOwnProperty.call(b, 'location')) set('location', typeof b.location === 'string' ? b.location.trim().slice(0, 300) : null);
     if (Object.prototype.hasOwnProperty.call(b, 'notes')) set('notes', typeof b.notes === 'string' ? b.notes.slice(0, 20000) : null);

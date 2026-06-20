@@ -110,6 +110,40 @@ function localWeekInTz(tz, date) {
   return d.getUTCFullYear() + '-W' + String(week).padStart(2, '0');
 }
 
+// Convert a NAIVE local wall-clock string ('2026-06-25T09:00:00', no
+// offset / no 'Z') in zone `tz` into the correct UTC instant (a Date).
+//
+// Why this exists: calendar_events.starts_at is a TIMESTAMPTZ and the
+// Railway pg session runs in UTC, so an offset-less datetime string is
+// read by Postgres AS UTC — shifting the wall-clock (and, near midnight,
+// the calendar DAY) when the client re-renders it in the user's zone.
+// 86/Scribe emits a bare local datetime, so we stamp the zone offset here
+// before it lands in the column. A string that ALREADY carries an offset
+// or 'Z' is unambiguous and returned as-is. Returns null on empty input.
+function localWallClockToInstant(naive, tz) {
+  if (naive == null || naive === '') return null;
+  var s = String(naive).trim();
+  // Already zoned (…Z or ±HH:MM) → an unambiguous instant; pass through.
+  if (/[zZ]$/.test(s) || /[+\-]\d{2}:?\d{2}$/.test(s)) {
+    var d0 = new Date(s);
+    return isNaN(d0.getTime()) ? null : d0;
+  }
+  var m = s.match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?/);
+  if (!m) {
+    var d1 = new Date(s);
+    return isNaN(d1.getTime()) ? null : d1;
+  }
+  var Y = +m[1], Mo = +m[2], D = +m[3], H = +m[4], Mi = +m[5], S = +(m[6] || 0);
+  var zone = isValidTz(tz) ? tz : DEFAULT_TZ;
+  // Guess the instant as if the wall-clock were UTC, then measure how far
+  // `zone` sits from UTC at that instant (DST-correct via Intl) and undo it.
+  var guess = Date.UTC(Y, Mo - 1, D, H, Mi, S);
+  var p = partsInTz(new Date(guess), zone);
+  var asUtcOfParts = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, S);
+  var offset = asUtcOfParts - guess; // ms the zone is ahead of UTC
+  return new Date(guess - offset);
+}
+
 // Format a date/time in `tz` using Intl options (e.g. {weekday, month,
 // day, hour, minute}). Falls back gracefully on bad input.
 function formatInTz(date, tz, options) {
@@ -134,5 +168,6 @@ module.exports = {
   dayOfWeekInTz,
   localDateInTz,
   localWeekInTz,
+  localWallClockToInstant,
   formatInTz
 };

@@ -15,6 +15,7 @@
 // now so adding entity types in C5 only needs new dispatchN functions.
 
 const { pool } = require('../db');
+const { resolveTz, localWallClockToInstant, DEFAULT_TZ } = require('../timezone');
 
 // ──────────────────────────────────────────────────────────────────
 // Wave 1.C — PayloadValidationError carries the structured shape
@@ -2382,13 +2383,40 @@ async function dispatchCalendarEvent(dbClient, target, refTable, ctx) {
   if (!fields.starts_at) throw new Error('calendar_event.create requires fields.starts_at');
 
   const id = (target.entity_id && !isRef(target.entity_id)) ? target.entity_id : newCalendarEventId();
+
+  // 86/Scribe emits starts_at/ends_at as a NAIVE local datetime
+  // ('2026-06-25T09:00:00', no offset). starts_at is TIMESTAMPTZ and the
+  // pg session is UTC, so a bare string would be stored as UTC and then
+  // re-render in the user's zone shifted by hours (and, near midnight, a
+  // whole day). Resolve the acting user's tz and stamp the offset so the
+  // saved instant matches the local day/time the user approved.
+  let acctTz = DEFAULT_TZ;
+  if (fields.starts_at || fields.ends_at) {
+    try {
+      const tzr = await dbClient.query(
+        'SELECT u.timezone AS utz, o.timezone AS otz FROM users u ' +
+        'LEFT JOIN organizations o ON o.id = u.organization_id WHERE u.id = $1',
+        [ctx.userId]
+      );
+      const r = tzr.rows[0] || {};
+      acctTz = resolveTz(r.utz, r.otz);
+    } catch (e) { acctTz = DEFAULT_TZ; }
+  }
+  let savedStartsAt = fields.starts_at;
+
   // Whitelisted columns only; org + owner are stamped, never client-supplied.
   const cols = ['id', 'organization_id', 'user_id'];
   const vals = [id, ctx.organizationId, ctx.userId];
   for (const k of Object.keys(fields)) {
     if (!CALENDAR_EVENT_FIELDS.has(k)) continue;
+    let v = fields[k];
+    if ((k === 'starts_at' || k === 'ends_at') && v) {
+      const inst = localWallClockToInstant(v, acctTz);
+      if (inst) v = inst.toISOString();
+      if (k === 'starts_at') savedStartsAt = v;
+    }
     cols.push(k);
-    vals.push(fields[k]);
+    vals.push(v);
   }
   const placeholders = cols.map((_, i) => '$' + (i + 1)).join(', ');
   await dbClient.query(
@@ -2403,7 +2431,7 @@ async function dispatchCalendarEvent(dbClient, target, refTable, ctx) {
     op: 'create',
     created: true,
     title: String(fields.title).trim(),
-    starts_at: fields.starts_at,
+    starts_at: savedStartsAt,
     all_day: !!(fields.all_day === true || fields.all_day === 'true'),
     linked_entity_type: fields.entity_type || null,
     linked_entity_id: fields.entity_id || null,
