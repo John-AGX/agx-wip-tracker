@@ -246,7 +246,7 @@
     })();
     </script>
 
-    <link rel="stylesheet" href="css/styles.css?v=188">
+    <link rel="stylesheet" href="css/styles.css?v=189">
     <link rel="stylesheet" href="css/report-style-packs.css?v=3">
     <link rel="stylesheet" href="css/workspace-layout.css?v=60">
     <link rel="stylesheet" href="css/workspace.css?v=38">
@@ -3330,41 +3330,36 @@
     <script src="nodegraph/ui.js?v=159"></script>
 
     <!-- ── Mobile bottom nav (M1) ─────────────────────────────────
-         Visible only below 768px (CSS-gated). Six slots:
-         Leads · Estimates · [86] · Jobs · Schedule · More — the raised
-         cyan "86" cube stays the prominent center action; the other
-         five are compact text buttons. The top tab strip hides at the
-         same breakpoint. EVERY other destination (Summary, My Day,
-         My Tasks, Messages, Projects, My Files, Plans, Field Tools,
-         Clients, Subs, Insights, Admin, Command Center) lives in the
-         More sheet below, role-gated via data-cap / data-admin-only. -->
+         Visible only below 768px (CSS-gated). Five slots with the raised
+         cyan "86" cube DEAD-CENTER (slot 3 of 5):
+         Leads · Jobs · [86] · Schedule · More. The top tab strip hides at
+         the same breakpoint. EVERY other destination (Estimates, Summary,
+         My Day, My Tasks, Messages, Projects, My Files, Plans, Field
+         Tools, Clients, Subs, Insights, Admin, Command Center) lives in
+         the More sheet below, role-gated via data-cap / data-admin-only. -->
     <nav id="p86-mobile-nav" class="p86-mobile-nav" aria-label="Primary navigation">
       <button type="button" class="p86-mobile-nav-btn" data-mobile-nav="leads" data-cap="LEADS_VIEW"
               onclick="if(window.switchTab){window.switchTab('estimates');if(window.switchEstimatesSubTab)window.switchEstimatesSubTab('leads');if(window.markVirtualTabActive)window.markVirtualTabActive('leads');}">
         <span class="p86-mobile-nav-icon" data-p86-icon="leads"></span>
         <span class="p86-mobile-nav-label">Leads</span>
       </button>
-      <button type="button" class="p86-mobile-nav-btn" data-mobile-nav="estimates" data-cap="ESTIMATES_VIEW"
-              onclick="if(window.switchTab){window.switchTab('estimates');if(window.switchEstimatesSubTab)window.switchEstimatesSubTab('list');if(window.markVirtualTabActive)window.markVirtualTabActive('estimates');}">
-        <span class="p86-mobile-nav-icon" data-p86-icon="estimates"></span>
-        <span class="p86-mobile-nav-label">Estimates</span>
-      </button>
-      <button type="button" class="p86-mobile-nav-btn p86-mobile-nav-btn-primary" data-mobile-nav="ask86"
-              aria-label="Ask 86"
-              onclick="if(window.p86AI&amp;&amp;window.p86AI.open)window.p86AI.open({entityType:'ask86'});">
-        <!-- Cyan cube logo (same as the PWA icons) — the raised, prominent
-             center action. Wrapped in .p86-mobile-nav-icon-logo so the
-             lift / circle / shadow come from the parent. -->
-        <span class="p86-mobile-nav-icon p86-mobile-nav-icon-logo" aria-hidden="true">
-          <img src="images/pwa/icon-192.png?v=2" alt="" draggable="false" />
-        </span>
-        <span class="p86-mobile-nav-label">86</span>
-      </button>
       <button type="button" class="p86-mobile-nav-btn" data-mobile-nav="jobs"
               data-cap="JOBS_VIEW_ALL JOBS_VIEW_ASSIGNED JOBS_EDIT_ANY JOBS_EDIT_OWN"
               onclick="if(window.switchTab)window.switchTab('jobs');">
         <span class="p86-mobile-nav-icon" data-p86-icon="wip"></span>
         <span class="p86-mobile-nav-label">Jobs</span>
+      </button>
+      <button type="button" class="p86-mobile-nav-btn p86-mobile-nav-btn-primary" data-mobile-nav="ask86"
+              aria-label="Ask 86"
+              onclick="if(window.p86AI&amp;&amp;window.p86AI.open)window.p86AI.open({entityType:'ask86'});">
+        <!-- Cyan cube logo (same as the PWA icons) — the raised, prominent
+             DEAD-CENTER action (slot 3 of 5). Wrapped in
+             .p86-mobile-nav-icon-logo so the lift / circle / shadow come
+             from the parent. -->
+        <span class="p86-mobile-nav-icon p86-mobile-nav-icon-logo" aria-hidden="true">
+          <img src="images/pwa/icon-192.png?v=2" alt="" draggable="false" />
+        </span>
+        <span class="p86-mobile-nav-label">86</span>
       </button>
       <button type="button" class="p86-mobile-nav-btn" data-mobile-nav="schedule"
               onclick="if(window.switchTab)window.switchTab('schedule');">
@@ -3387,6 +3382,11 @@
            onclick="if(window.p86CloseMobileMore)window.p86CloseMobileMore();"></div>
       <div class="p86-mobile-more-panel" role="menu" aria-label="More navigation">
         <div class="p86-mobile-more-grip" aria-hidden="true"></div>
+
+        <div class="p86-mobile-more-section" data-more-section>Sales</div>
+        <div class="p86-mobile-more-grid" data-more-grid>
+          <button type="button" class="p86-mobile-more-tile" data-cap="ESTIMATES_VIEW" onclick="p86MoreGo('estimates',{estSub:'list',virtual:'estimates'})"><span class="p86-mobile-more-icon" data-p86-icon="estimates"></span><span>Estimates</span></button>
+        </div>
 
         <div class="p86-mobile-more-section" data-more-section>Home</div>
         <div class="p86-mobile-more-grid" data-more-grid>

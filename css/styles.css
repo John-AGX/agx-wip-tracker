@@ -3115,13 +3115,12 @@
                 padding-bottom: env(safe-area-inset-bottom, 0px);
                 box-shadow: 0 -4px 14px rgba(0, 0, 0, 0.5);
             }
-            /* Compact text buttons — six slots have to fit at iPhone
-               width, so the regular buttons are deliberately smaller
-               than the raised "86" cube, which keeps 86 standing out. */
+            /* Four flat text buttons flank the raised "86" cube. Back to
+               five slots, so they get comfortable sizing again. */
             .p86-mobile-nav-btn {
                 flex: 1;
                 min-width: 0;
-                min-height: 54px;
+                min-height: 56px;
                 background: transparent;
                 border: none;
                 color: rgba(255, 255, 255, 0.58);
@@ -3129,11 +3128,11 @@
                 flex-direction: column;
                 align-items: center;
                 justify-content: center;
-                gap: 2px;
-                font-size: 9px;
+                gap: 3px;
+                font-size: 10px;
                 font-weight: 600;
-                letter-spacing: 0.2px;
-                padding: 6px 1px;
+                letter-spacing: 0.3px;
+                padding: 8px 4px;
                 cursor: pointer;
                 -webkit-tap-highlight-color: transparent;
                 transition: color 0.15s;
@@ -3152,14 +3151,14 @@
             }
             .p86-mobile-nav-btn.active { color: #22d3ee; }
             .p86-mobile-nav-icon {
-                width: 20px; height: 20px;
+                width: 22px; height: 22px;
                 display: inline-flex;
                 align-items: center;
                 justify-content: center;
             }
-            .p86-mobile-nav-icon svg { width: 20px; height: 20px; }
+            .p86-mobile-nav-icon svg { width: 22px; height: 22px; }
             .p86-mobile-nav-icon-glyph {
-                font-size: 20px;
+                font-size: 22px;
                 line-height: 1;
                 color: currentColor;
             }
