@@ -1449,6 +1449,23 @@ body.light-mode .sch-day-row-wx.sch-wx-red {
   font-size: 13px;
 }
 .sch-modal-form textarea { resize: vertical; min-height: 50px; }
+/* Read-only "linked record" chip in the event editor — shows the
+   client/job/lead/project an event is attached to. */
+.sch-event-link-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: rgba(34, 211, 238, 0.10);
+  border: 1px solid rgba(34, 211, 238, 0.30);
+  color: var(--text, #e5e7eb);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .sch-crew-picker {
   display: flex;
   flex-wrap: wrap;

@@ -2335,9 +2335,25 @@
   // Title, All-day, Date, Start/End time (hidden when all-day),
   // Location, Notes, Status. Save composes starts_at/ends_at as ISO
   // and calls create or update; Delete removes; both refetch + repaint.
-  function openEventEditor(eventOrNull, prefillDateISO) {
+  // opts (optional):
+  //   prefillEntity: { type, id, label } — on CREATE, link the new event
+  //     to this record (client|job|lead|project). Shown as a read-only
+  //     chip in the modal. On edit, the event's own link is preserved by
+  //     simply not sending entity_* in the PATCH body.
+  //   onSaved / onDeleted: callbacks fired after a successful mutation so
+  //     a caller outside the schedule page (e.g. an entity panel) can
+  //     refresh its own list. When absent we fall back to refreshing the
+  //     schedule grid, guarded so it no-ops when the grid isn't mounted.
+  function openEventEditor(eventOrNull, prefillDateISO, opts) {
+    opts = opts || {};
     var event = eventOrNull || null;
     var isEdit = !!event;
+    // Prefer the prefill link on create; on edit, reflect the event's link.
+    var linkEntity = isEdit
+      ? (event.entity_type && event.entity_id
+          ? { type: event.entity_type, id: event.entity_id, label: event.entity_label || '' }
+          : null)
+      : (opts.prefillEntity && opts.prefillEntity.type && opts.prefillEntity.id ? opts.prefillEntity : null);
     var prior = document.getElementById('schEventEditorModal');
     if (prior) prior.remove();
 
@@ -2407,6 +2423,13 @@
               }).join('') +
             '</select>' +
           '</div>' +
+          (linkEntity
+            ? '<div><label>Linked to</label>' +
+                '<div class="sch-event-link-chip">🔗 ' +
+                  escapeHTML(linkEntity.label || (linkEntity.type.charAt(0).toUpperCase() + linkEntity.type.slice(1))) +
+                '</div>' +
+              '</div>'
+            : '') +
         '</div>' +
         '<div class="modal-footer" style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;">' +
           (isEdit ? '<button class="sch-btn" id="schEventDelete" style="margin-right:auto;color:#f87171;border-color:rgba(248,113,113,0.4);">Delete</button>' : '') +
@@ -2470,6 +2493,7 @@
             : Promise.resolve();
           p.then(function() {
             close();
+            if (opts.onSaved) { try { opts.onSaved(); } catch (e) {} }
             fetchEvents().then(renderGrid);
           }).catch(function(err) {
             setBusy(false);
@@ -2519,6 +2543,13 @@
         notes: modal.querySelector('#schEventNotes').value || '',
         status: modal.querySelector('#schEventStatus').value || 'confirmed'
       };
+      // On create from an entity page, carry the contextual link so the
+      // new event shows up under that record's Appointments. (Edits leave
+      // entity_* out of the body → the server preserves the existing link.)
+      if (!isEdit && linkEntity) {
+        payload.entity_type = linkEntity.type;
+        payload.entity_id = String(linkEntity.id);
+      }
 
       if (!isCalendarApiReady()) {
         // No api → can't persist. Surface a soft notice and bail
@@ -2536,6 +2567,7 @@
         : window.p86Api.calendar.create(payload);
       req.then(function() {
         close();
+        if (opts.onSaved) { try { opts.onSaved(); } catch (e) {} }
         fetchEvents().then(renderGrid);
       }).catch(function(err) {
         setBusy(false);
@@ -3216,6 +3248,11 @@
   window.scheduleAddEntry = function(jobId, dateISO) {
     openEntryEditor(null, dateISO, jobId);
   };
+  // Personal calendar event editor — reusable from entity pages (the
+  // Appointments subsection's "+ Add" and row-click both call this).
+  // openEventEditor(eventOrNull, prefillDateISO, { prefillEntity, onSaved }).
+  window.p86Schedule = window.p86Schedule || {};
+  window.p86Schedule.openEventEditor = openEventEditor;
   // Surface the job-detail widget so wip.js (and any other module
   // that wants a per-job forecast) can drop it into a container.
   window.p86Weather = {

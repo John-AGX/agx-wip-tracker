@@ -82,6 +82,17 @@ router.get('/', requireAuth, async (req, res) => {
       params.push(req.query.to);
       where += ' AND starts_at <= $' + params.length;
     }
+    // Entity filter — surface a single linked record's appointments
+    // (the Appointments subsection on a client/job/lead/project page).
+    // Both params required together; type is validated against LINK_TYPES.
+    if (req.query.entity_type && req.query.entity_id != null && String(req.query.entity_id).trim() !== '') {
+      const lt = normLinkType(req.query.entity_type);
+      if (!lt) return res.json({ events: [] });
+      params.push(lt);
+      where += ' AND entity_type = $' + params.length;
+      params.push(String(req.query.entity_id).trim());
+      where += ' AND entity_id = $' + params.length;
+    }
     const { rows } = await pool.query(
       `SELECT ${SELECT_COLS} FROM calendar_events
         WHERE ${where}

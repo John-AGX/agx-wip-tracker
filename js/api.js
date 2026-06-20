@@ -703,6 +703,11 @@
       var qs = [];
       if (opts.from) qs.push('from=' + encodeURIComponent(opts.from));
       if (opts.to) qs.push('to=' + encodeURIComponent(opts.to));
+      // Scope to one linked record's appointments (entity-page panel).
+      if (opts.entity_type && opts.entity_id) {
+        qs.push('entity_type=' + encodeURIComponent(opts.entity_type));
+        qs.push('entity_id=' + encodeURIComponent(opts.entity_id));
+      }
       return get('/api/calendar' + (qs.length ? '?' + qs.join('&') : ''));
     },
     create: function(payload) { return post('/api/calendar', payload); },

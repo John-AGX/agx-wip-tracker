@@ -250,7 +250,7 @@
     <link rel="stylesheet" href="css/report-style-packs.css?v=3">
     <link rel="stylesheet" href="css/workspace-layout.css?v=60">
     <link rel="stylesheet" href="css/workspace.css?v=38">
-    <link rel="stylesheet" href="css/schedule.css?v=29">
+    <link rel="stylesheet" href="css/schedule.css?v=30">
     <!-- Accidental-edit protection layer. Two attribute-driven gates
          ([data-edit-gate], [data-row-edit-gate]) lock form inputs
          behind a pencil toggle / row-tap so stray taps can't mutate
@@ -2875,6 +2875,10 @@
             </div>
           </fieldset>
 
+          <!-- Tasks + Appointments — only in edit mode (needs a client id).
+               Mounted by openEditClientModal via p86Tasks.mountEntityPanel. -->
+          <div id="clientEditor_tasksHost" style="display:none;"></div>
+
           <div id="clientEditor_status" style="font-size:13px;"></div>
         </div>
         <div class="modal-footer">
@@ -3064,7 +3068,7 @@
     <script src="js/auth.js?v=17"></script>
     <script src="js/dialogs.js?v=1b"></script>
     <script src="js/geolocation.js?v=1"></script>
-    <script src="js/api.js?v=45"></script>
+    <script src="js/api.js?v=46"></script>
     <script src="js/header-weather.js?v=2"></script>
     <script src="js/account.js?v=2b"></script>
     <script src="js/voice-input.js?v=11"></script>
@@ -3081,7 +3085,7 @@
     <script src="js/admin.js?v=101"></script>
     <script src="js/admin-context-registry.js?v=3"></script>
     <script src="js/field-tools.js?v=8"></script>
-    <script src="js/clients.js?v=16e"></script>
+    <script src="js/clients.js?v=17"></script>
     <!-- Folder taxonomy — default folder structure per entity type
          (lead / estimate / job / client). Loads before subs.js and
          my-files.js, which merge it with live folders for the grant
@@ -3099,7 +3103,7 @@
     <script src="js/job-costs-import.js?v=4"></script>
     <script src="js/qb-costs-view.js?v=11"></script>
     <script src="js/insights.js?v=7"></script>
-    <script src="js/schedule.js?v=39"></script>
+    <script src="js/schedule.js?v=40"></script>
     <script src="js/my-day.js?v=2"></script>
     <script src="js/app.js?v=91"></script>
     <script src="js/compliance-review-ui.js?v=2"></script>
@@ -3107,7 +3111,7 @@
     <script src="js/my-files.js?v=16"></script>
     <!-- Tasks / To-Do UI. Loads after my-files.js (reuses window.p86Toast)
          and after api.js/auth.js (p86Api.tasks + p86Auth). -->
-    <script src="js/tasks.js?v=1"></script>
+    <script src="js/tasks.js?v=2"></script>
     <!-- Google Maps JS API loader + tag-icon registry for photo pins.
          Both load before projects-map.js so the map renderer can
          reference window.p86Maps + window.p86TagIcons. -->

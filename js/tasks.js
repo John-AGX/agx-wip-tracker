@@ -178,7 +178,20 @@
       '.p86-task-clrow button.rm{border:none;background:transparent;color:#b91c1c;cursor:pointer;font-size:16px;line-height:1;}' +
       '.p86-task-panel{border:1px solid var(--border,#e5e7eb);border-radius:12px;padding:12px;margin-top:12px;}' +
       '.p86-task-panel-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;}' +
-      '.p86-task-panel-head h4{margin:0;font-size:14px;}';
+      '.p86-task-panel-head h4{margin:0;font-size:14px;}' +
+      // Appointments subsection (entity-page calendar events)
+      '.p86-appt-list{display:flex;flex-direction:column;gap:2px;}' +
+      '.p86-appt-row{display:flex;align-items:flex-start;gap:10px;width:100%;text-align:left;padding:9px 8px;border-radius:8px;border:1px solid transparent;background:transparent;color:inherit;font:inherit;cursor:pointer;}' +
+      '.p86-appt-row:hover{background:var(--hover,#f8fafc);}' +
+      '.p86-appt-dot{flex:0 0 auto;width:7px;height:7px;border-radius:999px;margin-top:7px;background:#22d3ee;}' +
+      '.p86-appt-row.tentative .p86-appt-dot{background:#f59e0b;}' +
+      '.p86-appt-row.canceled .p86-appt-dot{background:#9ca3af;}' +
+      '.p86-appt-main{flex:1 1 auto;min-width:0;display:flex;flex-direction:column;gap:2px;}' +
+      '.p86-appt-title{font-size:14px;line-height:1.35;word-break:break-word;}' +
+      '.p86-appt-row.canceled .p86-appt-title{text-decoration:line-through;color:var(--muted,#9ca3af);}' +
+      '.p86-appt-when{font-size:11.5px;color:var(--muted,#71717a);}' +
+      '.p86-appt-loc{margin-left:4px;}' +
+      '.p86-appt-empty{padding:18px 8px;text-align:center;color:var(--muted,#9ca3af);font-size:13px;}';
     var st = document.createElement('style');
     st.id = 'p86-tasks-styles';
     st.textContent = css;
@@ -491,18 +504,103 @@
     return { refresh: refresh };
   }
 
-  // ── Entity-page panel (Tasks panel embedded on a detail page) ──────
-  // Renders a titled panel with a "+ Add" button (link prefilled) and a
-  // list scoped to that entity. Returns { refresh }.
+  // ── Appointments subsection (entity-page calendar events) ──────────
+  // The per-user personal calendar (window.p86Api.calendar) is owner +
+  // org scoped server-side. We list only the events LINKED to this
+  // entity, so a client/job page shows "my appointments about this
+  // record." Calendar sharing / attendees aren't built yet, so this is
+  // intentionally a personal view (the viewer's own linked events).
+  function calApi() { return window.p86Api && window.p86Api.calendar; }
+  function scheduleEditor() {
+    return (window.p86Schedule && window.p86Schedule.openEventEditor) || null;
+  }
+  // "Mon, Jun 23 · 9:00 AM" / "Mon, Jun 23 · All day".
+  function apptWhen(ev) {
+    if (!ev || !ev.starts_at) return '';
+    var d = new Date(ev.starts_at);
+    if (isNaN(d.getTime())) return '';
+    var opts = { weekday: 'short', month: 'short', day: 'numeric' };
+    if (d.getFullYear() !== new Date().getFullYear()) opts.year = 'numeric';
+    var dateStr;
+    try { dateStr = d.toLocaleDateString(undefined, opts); } catch (e) { dateStr = isoDay(d); }
+    if (ev.all_day) return dateStr + ' · All day';
+    var timeStr = '';
+    try { timeStr = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }); } catch (e) {}
+    return dateStr + (timeStr ? ' · ' + timeStr : '');
+  }
+  function mountApptList(host, entityType, entityId) {
+    if (!host) return { refresh: function () {} };
+    function refresh() {
+      var api = calApi();
+      if (!api || !authed()) {
+        host.innerHTML = '<div class="p86-appt-empty">Sign in to see appointments.</div>';
+        return;
+      }
+      host.innerHTML = '<div class="p86-appt-empty">Loading…</div>';
+      api.list({ entity_type: entityType, entity_id: String(entityId) }).then(function (res) {
+        var events = (res && res.events) || [];
+        if (!events.length) {
+          host.innerHTML = '<div class="p86-appt-empty">No appointments for this ' + esc(entityType) + ' yet.</div>';
+          return;
+        }
+        host.innerHTML = '<div class="p86-appt-list">' + events.map(function (ev) {
+          var sCls = ev.status === 'canceled' ? ' canceled' : (ev.status === 'tentative' ? ' tentative' : '');
+          var loc = ev.location ? '<span class="p86-appt-loc">· ' + esc(ev.location) + '</span>' : '';
+          return '<button type="button" class="p86-appt-row' + sCls + '" data-ev-id="' + escAttr(ev.id) + '">' +
+              '<span class="p86-appt-dot"></span>' +
+              '<span class="p86-appt-main">' +
+                '<span class="p86-appt-title">' + esc(ev.title || '(untitled event)') + '</span>' +
+                '<span class="p86-appt-when">' + esc(apptWhen(ev)) + loc + '</span>' +
+              '</span>' +
+            '</button>';
+        }).join('') + '</div>';
+        var openEd = scheduleEditor();
+        host.querySelectorAll('[data-ev-id]').forEach(function (btn) {
+          btn.addEventListener('click', function () {
+            if (!openEd) return;
+            var id = btn.getAttribute('data-ev-id');
+            var ev = events.filter(function (x) { return String(x.id) === String(id); })[0];
+            if (ev) openEd(ev, null, { onSaved: refresh });
+          });
+        });
+      }).catch(function () {
+        host.innerHTML = '<div class="p86-appt-empty">Could not load appointments.</div>';
+      });
+    }
+    refresh();
+    return { refresh: refresh };
+  }
+
+  // Calendar events can only link to these types (server LINK_TYPES in
+  // calendar-routes.js). The Appointments subsection only renders for
+  // them; estimate/sub pages keep just the Tasks panel so a "+ Add"
+  // can't silently create an unlinked event that never shows here.
+  var CAL_LINK_TYPES = ['client', 'job', 'lead', 'project'];
+
+  // ── Entity-page panel (Tasks + Appointments embedded on a detail page)
+  // Renders Tasks (scoped to the entity) and — for calendar-linkable
+  // types — Appointments (the viewer's own calendar events linked to the
+  // entity). Each has a "+ Add" that prefills the link. Returns { refresh }.
   function mountEntityPanel(container, entityType, entityId, entityLabel) {
     if (!container) return { refresh: function () {} };
     ensureStyles();
+    var showAppts = CAL_LINK_TYPES.indexOf(entityType) >= 0;
+    var canAddAppt = showAppts && !!scheduleEditor();
     container.innerHTML =
       '<div class="p86-task-panel">' +
         '<div class="p86-task-panel-head"><h4>Tasks</h4>' +
           '<button type="button" class="ee-btn secondary" data-add-task>+ Add</button></div>' +
         '<div data-task-list></div>' +
-      '</div>';
+      '</div>' +
+      (showAppts
+        ? '<div class="p86-task-panel p86-appt-panel">' +
+            '<div class="p86-task-panel-head"><h4>Appointments</h4>' +
+              (canAddAppt ? '<button type="button" class="ee-btn secondary" data-add-appt>+ Add</button>' : '') +
+            '</div>' +
+            '<div data-appt-list></div>' +
+          '</div>'
+        : '');
+
     var listHost = container.querySelector('[data-task-list]');
     var mounted = mountList(listHost, { entity_type: entityType, entity_id: String(entityId) }, {
       emptyText: 'No tasks yet for this ' + entityType + '.'
@@ -513,7 +611,24 @@
         { onCreated: function () { mounted.refresh(); } }
       );
     });
-    return mounted;
+
+    var appts = { refresh: function () {} };
+    if (showAppts) {
+      appts = mountApptList(container.querySelector('[data-appt-list]'), entityType, entityId);
+      var addAppt = container.querySelector('[data-add-appt]');
+      if (addAppt) {
+        addAppt.addEventListener('click', function () {
+          var openEd = scheduleEditor();
+          if (!openEd) return;
+          openEd(null, null, {
+            prefillEntity: { type: entityType, id: String(entityId), label: entityLabel },
+            onSaved: function () { appts.refresh(); }
+          });
+        });
+      }
+    }
+
+    return { refresh: function () { mounted.refresh(); appts.refresh(); } };
   }
 
   // ── My Tasks page ──────────────────────────────────────────────────

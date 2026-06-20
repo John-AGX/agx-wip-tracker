@@ -730,6 +730,25 @@
     document.getElementById('clientEditor_status').textContent = '';
     document.getElementById('clientEditor_submitBtn').disabled = false;
     document.getElementById('clientEditor_deleteBtn').style.display = 'none';
+    // Tasks + Appointments panel is edit-only (needs a saved client id);
+    // hide + clear it so New Client mode never shows a stale panel.
+    var tasksHost = document.getElementById('clientEditor_tasksHost');
+    if (tasksHost) { tasksHost.style.display = 'none'; tasksHost.innerHTML = ''; }
+  }
+
+  // Mount the shared Tasks + Appointments panel for a saved client.
+  // No-op (stays hidden) if the tasks module isn't loaded.
+  function mountClientTasksPanel(c) {
+    var host = document.getElementById('clientEditor_tasksHost');
+    if (!host) return;
+    if (!c || !c.id || !window.p86Tasks || !window.p86Tasks.mountEntityPanel) {
+      host.style.display = 'none';
+      host.innerHTML = '';
+      return;
+    }
+    host.style.display = '';
+    host.innerHTML = '';
+    window.p86Tasks.mountEntityPanel(host, 'client', c.id, c.name || '');
   }
 
   // Make sure the cache is populated before opening the modal so the
@@ -771,6 +790,7 @@
       // up-to-date list (cache may be stale if another tab/agent added
       // notes since this user's last reload).
       renderAgentNotesPanel(id);
+      mountClientTasksPanel(c);
       openModal('clientEditorModal');
       // Edit mode — sections render locked. Per-section pencil arms
       // a fieldset for editing; Save commits the whole form.
