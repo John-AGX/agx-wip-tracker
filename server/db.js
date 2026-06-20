@@ -3085,6 +3085,32 @@ async function initSchema() {
     -- property, the JOB when it's active work, else leaves it NULL.
     ALTER TABLE calendar_events ADD COLUMN IF NOT EXISTS entity_type TEXT;
     ALTER TABLE calendar_events ADD COLUMN IF NOT EXISTS entity_id   TEXT;
+
+    -- Per-user OAuth tokens for external mailbox/calendar providers
+    -- (Phase 4: Microsoft 365 / Outlook). OWNER-SCOPED by (organization_id,
+    -- user_id) — a tenant/system admin must NOT be able to read another
+    -- user's mailbox token, so unlike org_mcp_servers these are NOT stored
+    -- in the clear: access_token_enc / refresh_token_enc hold AES-256-GCM
+    -- ciphertext from server/util/secretbox.js (key only in Railway env,
+    -- never the DB). One row per (org, user, provider).
+    CREATE TABLE IF NOT EXISTS oauth_tokens (
+      id                SERIAL PRIMARY KEY,
+      organization_id   INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      user_id           INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      provider          TEXT NOT NULL DEFAULT 'microsoft',
+      account_email     TEXT,                 -- which mailbox is connected (from /me)
+      scope             TEXT,                 -- granted delegated scopes
+      access_token_enc  TEXT,                 -- AES-256-GCM ciphertext (v1:iv:tag:ct)
+      refresh_token_enc TEXT,                 -- AES-256-GCM ciphertext
+      expires_at        TIMESTAMPTZ,          -- access-token expiry
+      connected_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      UNIQUE (organization_id, user_id, provider)
+    );
+    CREATE INDEX IF NOT EXISTS idx_oauth_tokens_owner
+      ON oauth_tokens (organization_id, user_id, provider);
+    CREATE INDEX IF NOT EXISTS idx_oauth_tokens_refresh
+      ON oauth_tokens (provider, expires_at);
     -- Per-entity lookup so a client/job page can list its appointments.
     CREATE INDEX IF NOT EXISTS idx_calendar_events_entity
       ON calendar_events (entity_type, entity_id, starts_at)
