@@ -1693,6 +1693,7 @@
             jobs:       'Jobs',
             'my-files': 'Files',
             'my-tasks': 'Tasks',
+            'my-day':   'My Day',
             messages:   'Messages',
             plans:      'Plans & Takeoffs',
             insights:   'Insights',
@@ -1785,6 +1786,8 @@
                 if (typeof window.renderMyFilesTab === 'function') window.renderMyFilesTab();
             } else if (tabName === 'my-tasks') {
                 if (typeof window.renderMyTasksTab === 'function') window.renderMyTasksTab();
+            } else if (tabName === 'my-day') {
+                if (typeof window.renderMyDayTab === 'function') window.renderMyDayTab();
             } else if (tabName === 'messages') {
                 if (typeof window.renderMessagesTab === 'function') window.renderMessagesTab();
             } else if (tabName === 'plans') {
