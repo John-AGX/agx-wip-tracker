@@ -3121,7 +3121,7 @@
     <script src="js/compliance-review-ui.js?v=2"></script>
     <script src="js/messaging.js?v=3"></script>
     <script src="js/file-explorer.js?v=5"></script>
-    <script src="js/my-files.js?v=19"></script>
+    <script src="js/my-files.js?v=20"></script>
     <!-- Tasks / To-Do UI. Loads after my-files.js (reuses window.p86Toast)
          and after api.js/auth.js (p86Api.tasks + p86Auth). -->
     <script src="js/tasks.js?v=3"></script>
@@ -3176,7 +3176,7 @@
          BEFORE ai-panel.js so window.PayloadArtifact exists when the
          panel mounts. -->
     <script src="js/payload-artifact.js?v=5"></script>
-    <script src="js/ai-panel.js?v=132"></script>
+    <script src="js/ai-panel.js?v=133"></script>
     <!-- Save-from-chat bridge (Workstream ③). Owns p86SaveCodeBlock /
          p86SaveResponse / p86SaveToPicker, called by inline onclick
          handlers in ai-panel.js renderMarkdown / renderBubble. Loads
@@ -3442,7 +3442,6 @@
       //   opts.ask     → open Ask 86 instead of switching tabs
       //   opts.estSub  → switchEstimatesSubTab(...) after switchTab
       //   opts.virtual → markVirtualTabActive(...) for sidebar highlight
-      //   opts.folder  → myFiles.selectFolder(...) (Field Tools)
       window.p86MoreGo = function (tab, opts) {
         if (window.p86CloseMobileMore) window.p86CloseMobileMore();
         opts = opts || {};
@@ -3454,7 +3453,6 @@
           if (tab && window.switchTab) window.switchTab(tab);
           if (opts.estSub && window.switchEstimatesSubTab) window.switchEstimatesSubTab(opts.estSub);
           if (opts.virtual && window.markVirtualTabActive) window.markVirtualTabActive(opts.virtual);
-          if (opts.folder && window.myFiles && window.myFiles.selectFolder) window.myFiles.selectFolder(opts.folder);
         } catch (e) { /* defensive */ }
       };
       window.p86OpenMobileMore = function () {

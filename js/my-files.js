@@ -286,11 +286,6 @@
   }
   window.renderMyFilesTab = renderMyFilesTab;
 
-  function isVirtualFolderName(n) {
-    // Literals on purpose — the PROJECTS_FOLDER/TOOLS_FOLDER/PRINTOUTS_FOLDER
-    // consts are local to paint(), not module scope.
-    return n === '__projects__' || n === '__tools__' || n === '__printouts__';
-  }
   function mountExplorerInto(pane) {
     if (!pane) return;
     var uid = currentUserId();
@@ -378,18 +373,15 @@
   // every render so adding / deleting a folder reflects immediately.
   //
   //   - General is forced to the top (matches the page sort order).
-  //   - Virtual folders (__projects__ / __tools__ / __printouts__) are
-  //     EXCLUDED — those have their own top-level WORKSPACE tabs now.
   //   - Each row carries data-myfiles-folder so it routes through the
-  //     same delegated tab-btn click handler in app.js that drives the
-  //     virtual-folder tabs (window.myFiles.selectFolder).
+  //     same delegated tab-btn click handler in app.js
+  //     (window.myFiles.selectFolder → remounts the Explorer).
   //   - The active row gets the .active class so the existing sidebar
   //     active-row CSS highlight applies.
   function syncSidebarFolders(folders, bucket) {
     var slot = document.querySelector('.app-nav-parent[data-accordion="myfiles"] .app-nav-children');
     if (!slot) return;
-    var VIRTUAL = { __projects__: 1, __tools__: 1, __printouts__: 1 };
-    var real = (folders || []).filter(function(f) { return !VIRTUAL[f]; }).sort(function(a, b) {
+    var real = (folders || []).slice().sort(function(a, b) {
       if (a === 'general') return -1;
       if (b === 'general') return 1;
       return a.localeCompare(b);
@@ -452,35 +444,15 @@
     });
     if (!folders.length) folders = ['general'];
 
-    // Pin the virtual folders at the bottom. They don't store files —
-    // when selected, the right pane renders a special view instead of
-    // the file grid + upload zone. The double-underscore sentinel
-    // ensures these can never collide with real folder names
-    // (sanitizeFolder strips underscores at the edges).
-    //
-    //   __projects__  — CompanyCam-style photo + walkthrough buckets
-    //                   with markups + reports. Owned by js/projects.js.
-    //   __tools__     — field tools grid (calculators / take-offs etc).
-    //                   Owned by js/field-tools.js.
-    //   __printouts__ — saved field-tool runs (receipts). Owned by
-    //                   this file, calls /api/field-tools/runs.
-    //
-    // Future phases will add __takeoffs__ (P4) pivots here.
-    var PROJECTS_FOLDER = '__projects__';
-    var TOOLS_FOLDER = '__tools__';
-    var PRINTOUTS_FOLDER = '__printouts__';
-    if (folders.indexOf(PROJECTS_FOLDER) === -1) folders.push(PROJECTS_FOLDER);
-    if (folders.indexOf(TOOLS_FOLDER) === -1) folders.push(TOOLS_FOLDER);
-    if (folders.indexOf(PRINTOUTS_FOLDER) === -1) folders.push(PRINTOUTS_FOLDER);
-
+    // NOTE: this paint() path is the LEGACY browser, kept only as the
+    // fallback for when the Explorer module (js/file-explorer.js) fails to
+    // load — mountExplorerInto() is the normal My Files view. The old
+    // virtual folders (Projects / Field Tools / Printouts) graduated to
+    // their own top-level tabs, so nothing renders them here anymore.
     if (folders.indexOf(_state.activeFolder) === -1) {
       _state.activeFolder = folders[0];
     }
-    var isProjectsFolder = _state.activeFolder === PROJECTS_FOLDER;
-    var isToolsFolder = _state.activeFolder === TOOLS_FOLDER;
-    var isPrintoutsFolder = _state.activeFolder === PRINTOUTS_FOLDER;
-    var isVirtualFolder = isProjectsFolder || isToolsFolder || isPrintoutsFolder;
-    var activeFiles = isVirtualFolder ? [] : (bucket[_state.activeFolder] || []);
+    var activeFiles = bucket[_state.activeFolder] || [];
 
     // Header: title + action cluster (New folder + Upload). Folder
     // navigation is owned by the main sidebar accordion now
@@ -495,17 +467,10 @@
             '<p style="margin:0;color:var(--text-dim,#888);font-size:12px;">Your personal files. Drag any file into a job or estimate when needed.</p>' +
           '</div>' +
           '<div style="display:flex;align-items:center;gap:8px;">' +
-            (isVirtualFolder
-              ? '' // Virtual folders (Projects, Tools, Printouts) own their own controls inside the pane
-              : (
-                  // New folder + Upload as a paired action cluster.
-                  // New folder used to live inside the in-page rail —
-                  // since the rail is gone on desktop it moved here.
-                  '<button class="ee-btn secondary" onclick="window.myFiles.newFolder()" title="Create a new folder">+ New folder</button>' +
-                  '<button class="ee-btn primary" data-p86-icon="plus" onclick="document.getElementById(\'mfFileInput\').click();">Upload</button>' +
-                  '<input type="file" id="mfFileInput" multiple style="display:none;" onchange="window.myFiles.handleUpload(this.files); this.value=\'\';" />'
-                )
-            ) +
+            // New folder + Upload as a paired action cluster.
+            '<button class="ee-btn secondary" onclick="window.myFiles.newFolder()" title="Create a new folder">+ New folder</button>' +
+            '<button class="ee-btn primary" data-p86-icon="plus" onclick="document.getElementById(\'mfFileInput\').click();">Upload</button>' +
+            '<input type="file" id="mfFileInput" multiple style="display:none;" onchange="window.myFiles.handleUpload(this.files); this.value=\'\';" />' +
             '<span class="p86-ask86-mount"></span>' +
           '</div>' +
         '</div>';
@@ -529,51 +494,20 @@
 
         '<div class="mf-rail-section-head">Folders</div>' +
         '<div class="mf-rail-list">' +
-          renderFolderTree(
-            folders.filter(function(f) {
-              return f !== PROJECTS_FOLDER && f !== TOOLS_FOLDER && f !== PRINTOUTS_FOLDER;
-            }),
-            bucket
-          ) +
-        '</div>' +
-
-        '<div class="mf-rail-section-head">Views</div>' +
-        '<div class="mf-rail-list">' +
-          [PROJECTS_FOLDER, TOOLS_FOLDER, PRINTOUTS_FOLDER].filter(function(f) { return folders.indexOf(f) !== -1; }).map(function(f) {
-            var active = f === _state.activeFolder;
-            var glyph, label;
-            if (f === PROJECTS_FOLDER) { glyph = '&#x1F4F8;'; label = 'Projects'; }
-            else if (f === TOOLS_FOLDER) { glyph = '&#x1F527;'; label = 'Tools'; }
-            else { glyph = '&#x1F9FE;'; label = 'Printouts'; }
-            return '<button class="mf-rail-row' + (active ? ' active' : '') + '" data-folder="' + escapeAttr(f) + '" onclick="window.myFiles.selectFolder(\'' + escapeAttr(f) + '\')">' +
-              '<span class="mf-rail-row-glyph">' + glyph + '</span>' +
-              '<span class="mf-rail-row-label">' + escapeHTML(label) + '</span>' +
-            '</button>';
-          }).join('') +
+          renderFolderTree(folders, bucket) +
         '</div>';
 
-    // Right pane — files for normal folders, virtual-pane host for
-    // Projects / Tools / Printouts. The host element gets a stable id so
-    // the owning module (or this file, for Printouts) can find it.
+    // Right pane — drop zone + the file grid for the active folder.
     var mainPaneHTML =
         '<div>' +
-          (isProjectsFolder
-            ? '<div id="mfProjectsHost" style="min-height:100px;"></div>'
-            : isToolsFolder
-              ? '<div id="mfToolsHost" style="min-height:100px;"></div>'
-              : isPrintoutsFolder
-              ? '<div id="mfPrintoutsHost" style="min-height:100px;"></div>'
-              : (
-                  '<div id="mfDropZone" data-mf-drop="1" style="border:2px dashed var(--border,#444);border-radius:10px;padding:14px;text-align:center;background:rgba(79,140,255,0.04);margin-bottom:14px;cursor:pointer;font-size:12px;color:var(--text-dim,#888);">' +
-                    'Drop files here or <strong style="color:var(--accent,#22d3ee);">click Upload</strong> &middot; Files land in <strong>' + escapeHTML(prettyFolder(_state.activeFolder)) + '</strong>' +
-                  '</div>' +
-                  (activeFiles.length === 0
-                    ? '<div style="padding:30px;text-align:center;color:var(--text-dim,#888);font-size:12px;border:1px dashed var(--border,#333);border-radius:10px;">' +
-                      'No files in this folder yet.' +
-                    '</div>'
-                    : renderFileGrid(activeFiles))
-                )
-          ) +
+          '<div id="mfDropZone" data-mf-drop="1" style="border:2px dashed var(--border,#444);border-radius:10px;padding:14px;text-align:center;background:rgba(79,140,255,0.04);margin-bottom:14px;cursor:pointer;font-size:12px;color:var(--text-dim,#888);">' +
+            'Drop files here or <strong style="color:var(--accent,#22d3ee);">click Upload</strong> &middot; Files land in <strong>' + escapeHTML(prettyFolder(_state.activeFolder)) + '</strong>' +
+          '</div>' +
+          (activeFiles.length === 0
+            ? '<div style="padding:30px;text-align:center;color:var(--text-dim,#888);font-size:12px;border:1px dashed var(--border,#333);border-radius:10px;">' +
+              'No files in this folder yet.' +
+            '</div>'
+            : renderFileGrid(activeFiles)) +
         '</div>';
 
     // Desktop: the sidebar accordion under the My Files row owns the
@@ -600,36 +534,6 @@
     if (useSidebar) syncSidebarFolders(folders, bucket);
     ensureFilesSubnavMql();
     _filesMounted = true;
-
-    // Projects folder: hand off the right pane to js/projects.js.
-    if (isProjectsFolder) {
-      var projectsHost = pane.querySelector('#mfProjectsHost');
-      if (projectsHost && typeof window.renderProjectsInto === 'function') {
-        window.renderProjectsInto(projectsHost);
-      } else if (projectsHost) {
-        projectsHost.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);">Projects module not loaded.</div>';
-      }
-      return; // skip drop-zone wiring — not relevant in Projects mode
-    }
-
-    // Tools folder: hand off the right pane to field-tools.js.
-    if (isToolsFolder) {
-      var toolsHost = pane.querySelector('#mfToolsHost');
-      if (toolsHost && typeof window.renderFieldToolsInto === 'function') {
-        window.renderFieldToolsInto(toolsHost);
-      } else if (toolsHost) {
-        toolsHost.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);">Field tools module not loaded.</div>';
-      }
-      return; // skip drop-zone wiring — not relevant in Tools mode
-    }
-
-    // Printouts folder: render the saved field-tool runs list. Click
-    // a row → open the receipt-style viewer (print-friendly).
-    if (isPrintoutsFolder) {
-      var printoutsHost = pane.querySelector('#mfPrintoutsHost');
-      if (printoutsHost) renderPrintoutsList(printoutsHost);
-      return;
-    }
 
     // Wire drop zone
     var drop = pane.querySelector('#mfDropZone');
@@ -826,17 +730,14 @@
   // Public actions (called from inline onclicks)
   // ──────────────────────────────────────────────────────────────────
   function selectFolder(name) {
-    var pane = document.getElementById('my-files');
-    if (isVirtualFolderName(name)) {
-      // Projects / Field Tools / Printouts deep-link → legacy in-pane view.
-      _state.activeFolder = name;
-      if (pane) pane._mfMode = 'virtual';
-      fetchFiles().then(function() { paint(pane); });
-      return;
-    }
-    // Any real folder → the Explorer owns folder navigation now.
+    // Folder navigation is owned by the Explorer now. Projects / Field
+    // Tools / Printouts each graduated to their own top-level tab, so the
+    // old virtual-folder deep-link is gone — every selection just (re)mounts
+    // the Explorer, which has its own folder tree. `name` is accepted for
+    // backward-compat with the delegated data-myfiles-folder handler but no
+    // longer drives a special view.
     _state.activeFolder = 'general';
-    mountExplorerInto(pane);
+    mountExplorerInto(document.getElementById('my-files'));
   }
 
   // Create a new folder. If the user is currently viewing a real
@@ -846,8 +747,7 @@
   // with `/` directly (e.g. "jobs/smith").
   function newFolder() {
     var cur = _state.activeFolder;
-    var isVirtual = cur === '__projects__' || cur === '__tools__' || cur === '__printouts__';
-    var asChildOf = (!isVirtual && cur && cur !== 'general') ? cur : '';
+    var asChildOf = (cur && cur !== 'general') ? cur : '';
     var promptLabel = asChildOf
       ? 'New folder under "' + prettyFolder(asChildOf) + '"\n(or use a/b/c for deeper paths)'
       : 'New folder name\n(use a/b for subfolders, e.g. "jobs/smith")';
@@ -1115,6 +1015,11 @@
   // out clean of all chrome.
   // ──────────────────────────────────────────────────────────────────
   var _printoutsCache = { runs: null, loadedAt: 0 };
+  // The element the printouts list is currently mounted into. Set on
+  // every render so refresh / delete re-paint the right host — which is
+  // now the Field Tools › Printouts sub-view host (not the retired
+  // My Files __printouts__ pane).
+  var _printoutsHost = null;
 
   function fetchPrintouts() {
     return window.p86Api.get('/api/field-tools/runs')
@@ -1130,11 +1035,13 @@
   }
 
   function renderPrintoutsList(host) {
+    _printoutsHost = host;
     host.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);font-size:13px;">Loading printouts…</div>';
     fetchPrintouts().then(function() { paintPrintoutsList(host); });
   }
 
   function paintPrintoutsList(host) {
+    if (host) _printoutsHost = host;
     if (_printoutsCache.error) {
       host.innerHTML = '<div style="padding:20px;color:#e74c3c;">' + escapeHTML(_printoutsCache.error) + '</div>';
       return;
@@ -1330,15 +1237,13 @@
     window.p86Api.del('/api/field-tools/runs/' + encodeURIComponent(id))
       .then(fetchPrintouts)
       .then(function() {
-        var host = document.querySelector('#mfPrintoutsHost');
-        if (host) paintPrintoutsList(host);
+        if (_printoutsHost) paintPrintoutsList(_printoutsHost);
       })
       .catch(function(err) { alert('Delete failed: ' + (err.message || err)); });
   }
 
   function refreshPrintouts() {
-    var host = document.querySelector('#mfPrintoutsHost');
-    if (host) renderPrintoutsList(host);
+    if (_printoutsHost) renderPrintoutsList(_printoutsHost);
   }
 
   window.myFiles = {

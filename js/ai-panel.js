@@ -3658,15 +3658,9 @@
       case 'wip':      go('jobs');     return 'Switched to the Jobs list.';
       case 'insights': go('insights'); return 'Switched to Insights.';
       case 'tools':
-        // Field tools live inside My Files as a virtual "Tools"
-        // folder. Switch to the my-files tab, then ask my-files to
-        // activate the Tools section.
-        go('my-files');
-        try {
-          if (window.myFiles && typeof window.myFiles.selectFolder === 'function') {
-            window.myFiles.selectFolder('__tools__');
-          }
-        } catch (e) {}
+        // Field Tools graduated from a My Files virtual folder to its own
+        // top-level tab (#field-tools).
+        go('field-tools');
         return 'Switched to Field Tools.';
       case 'admin':    go('admin');    return 'Switched to Admin.';
       case 'job':
