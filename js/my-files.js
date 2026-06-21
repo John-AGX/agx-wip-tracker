@@ -287,7 +287,9 @@
   window.renderMyFilesTab = renderMyFilesTab;
 
   function isVirtualFolderName(n) {
-    return n === PROJECTS_FOLDER || n === TOOLS_FOLDER || n === PRINTOUTS_FOLDER;
+    // Literals on purpose — the PROJECTS_FOLDER/TOOLS_FOLDER/PRINTOUTS_FOLDER
+    // consts are local to paint(), not module scope.
+    return n === '__projects__' || n === '__tools__' || n === '__printouts__';
   }
   function mountExplorerInto(pane) {
     if (!pane) return;
