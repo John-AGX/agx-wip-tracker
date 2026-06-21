@@ -4405,23 +4405,23 @@
   background: var(--bg, #0a0a14);
 }
 .p86-projects-map-list-row {
-  display: flex; gap: 10px; align-items: center;
-  padding: 8px 10px;
+  display: flex; gap: 11px; align-items: center;
+  padding: 11px 12px;
   border-bottom: 1px solid var(--border, #222);
   cursor: pointer;
   transition: background 0.12s;
 }
-.p86-projects-map-list-row:hover { background: rgba(79,140,255,0.06); }
+.p86-projects-map-list-row:hover { background: rgba(79,140,255,0.08); }
 .p86-projects-map-list-row.active {
-  background: rgba(79,140,255,0.12);
+  background: rgba(79,140,255,0.14);
   border-left: 3px solid var(--accent, #4f8cff);
-  padding-left: 7px;
+  padding-left: 9px;
 }
-.p86-projects-map-list-row-unmapped { opacity: 0.6; }
+.p86-projects-map-list-row-unmapped { opacity: 0.55; }
 .p86-projects-map-list-thumb {
-  width: 44px; height: 44px;
+  width: 52px; height: 52px;
   object-fit: cover;
-  border-radius: 4px;
+  border-radius: 8px;
   flex-shrink: 0;
   background: #1a1a2e;
 }
@@ -4429,21 +4429,29 @@
   display: flex; align-items: center; justify-content: center;
   background: rgba(34,211,238,0.06);
   color: var(--accent, #4f8cff);
-  font-size: 18px;
+  font-size: 20px;
 }
 .p86-projects-map-list-body { min-width: 0; flex: 1; }
 .p86-projects-map-list-name {
-  font-size: 12px; font-weight: 600;
+  font-size: 13px; font-weight: 600;
   color: var(--text, #fff);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+/* Recency status dot — inline so the name text still ellipsizes. */
+.p86-projects-map-list-dot {
+  display: inline-block;
+  width: 8px; height: 8px; border-radius: 50%;
+  margin-right: 6px;
+  vertical-align: middle;
+}
 .p86-projects-map-list-addr {
-  font-size: 10.5px; color: var(--text-dim, #aaa);
+  font-size: 11px; color: var(--text-dim, #aaa);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  margin-top: 1px;
 }
 .p86-projects-map-list-meta {
-  font-size: 10px; color: var(--text-dim, #888);
-  margin-top: 2px;
+  font-size: 10.5px; color: var(--text-dim, #888);
+  margin-top: 3px;
 }
 .p86-projects-map-unmapped-header {
   font-size: 10px; font-weight: 700;

@@ -55,6 +55,16 @@
     if (ageDays <= 7) return '🟢';
     return '🟡';
   }
+  // Recency-coded status color (archived=slate, fresh≤7d=green, else amber).
+  // Used for the colored dot in list rows + info windows — cleaner than the
+  // emoji and aligns with the app's chip palette.
+  function statusColor(p) {
+    if (p.archived_at) return '#64748b';
+    var updated = p.updated_at ? new Date(p.updated_at).getTime() : 0;
+    var ageDays = (Date.now() - updated) / 86400000;
+    if (ageDays <= 7) return '#22c55e';
+    return '#eab308';
+  }
 
   // A project is "mapped" if it has either an explicit address_text
   // OR usable geocoded lat/lng coords. The latter is the only thing
@@ -92,7 +102,8 @@
       thumb +
       '<div class="p86-projects-map-list-body">' +
         '<div class="p86-projects-map-list-name">' +
-          statusEmoji(p) + ' ' + escapeHTML(opts.getName(p)) +
+          '<span class="p86-projects-map-list-dot" style="background:' + statusColor(p) + ';"></span>' +
+          escapeHTML(opts.getName(p)) +
         '</div>' +
         '<div class="p86-projects-map-list-addr">' + escapeHTML(opts.getAddress(p) || '(no address)') + '</div>' +
         '<div class="p86-projects-map-list-meta">' + escapeHTML(opts.getMeta(p)) + '</div>' +
@@ -337,11 +348,16 @@
     // styles + img tags. Anchor dispatches through __p86MapOpen (set per
     // render) so each entity type opens its own detail view.
     var addr = opts.getAddress(p);
-    return '<div style="min-width:200px;font-family:system-ui,sans-serif;">' +
-      '<div style="font-size:13px;font-weight:600;color:#111;margin-bottom:2px;">' + escapeHTML(opts.getName(p)) + '</div>' +
-      (addr ? '<div style="font-size:11px;color:#555;margin-bottom:6px;">' + escapeHTML(addr) + '</div>' : '') +
-      '<a href="#" style="font-size:12px;color:#0a66c2;text-decoration:none;font-weight:600;" ' +
-        'onclick="event.preventDefault();window.__p86MapOpen&&window.__p86MapOpen(\'' + escapeAttr(p.id) + '\');">Open →</a>' +
+    var meta = (typeof opts.getMeta === 'function') ? opts.getMeta(p) : '';
+    return '<div style="min-width:210px;max-width:280px;font-family:system-ui,sans-serif;">' +
+      '<div style="display:flex;align-items:center;gap:7px;margin-bottom:3px;">' +
+        '<span style="width:9px;height:9px;border-radius:50%;flex-shrink:0;background:' + statusColor(p) + ';"></span>' +
+        '<span style="font-size:14px;font-weight:600;color:#111;line-height:1.3;">' + escapeHTML(opts.getName(p)) + '</span>' +
+      '</div>' +
+      (addr ? '<div style="font-size:11px;color:#555;margin-bottom:4px;">' + escapeHTML(addr) + '</div>' : '') +
+      (meta ? '<div style="font-size:11px;color:#888;margin-bottom:6px;">' + escapeHTML(meta) + '</div>' : '') +
+      '<a href="#" style="display:inline-block;font-size:12px;color:#fff;background:#0a66c2;text-decoration:none;font-weight:600;border-radius:6px;padding:5px 12px;margin-top:4px;" ' +
+        'onclick="event.preventDefault();window.__p86MapOpen&&window.__p86MapOpen(\'' + escapeAttr(p.id) + '\');">Open &rarr;</a>' +
     '</div>';
   }
 

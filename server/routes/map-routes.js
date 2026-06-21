@@ -52,7 +52,7 @@ router.get('/entities', requireAuth, async (req, res) => {
     // Leads: title is a first-class column; coords from geocode_*.
     // Org filter matches GET /api/leads (NULL-org legacy rows included).
     const leadsQ = pool.query(
-      `SELECT l.id, l.title, l.geocode_lat, l.geocode_lng
+      `SELECT l.id, l.title, l.status, l.geocode_lat, l.geocode_lng
          FROM leads l
         WHERE (l.organization_id = $1 OR l.organization_id IS NULL)
           AND l.geocode_lat IS NOT NULL AND l.geocode_lng IS NOT NULL`,
@@ -80,7 +80,8 @@ router.get('/entities', requireAuth, async (req, res) => {
         title: r.title || 'Untitled lead',
         lat: c.lat,
         lng: c.lng,
-        kind: 'lead'
+        kind: 'lead',
+        status: r.status || ''
       });
     }
 
@@ -99,7 +100,8 @@ router.get('/entities', requireAuth, async (req, res) => {
         // Carry the job-number prefix so the client's typeForEntity()
         // can classify reno/wo/service vs generic job for the pin icon.
         kind: 'job',
-        jobNumber: num
+        jobNumber: num,
+        status: (typeof data.status === 'string' ? data.status : '')
       });
     }
 

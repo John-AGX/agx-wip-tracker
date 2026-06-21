@@ -127,32 +127,53 @@
       'color:#fff;background:' + c + ';border-radius:4px;padding:1px 5px;flex-shrink:0;">' + label + '</span>';
   }
 
+  // Lead pipeline status → chip color. Jobs get a neutral slate chip with
+  // their raw (capped) status label. Returns '' when there is no status.
+  var LEAD_STATUS_COLORS = {
+    'new': '#3b82f6', 'in_progress': '#06b6d4', 'sent': '#a855f7',
+    'sold': '#22c55e', 'lost': '#ef4444', 'no_opportunity': '#64748b'
+  };
+  function statusChip(kind, status) {
+    if (!status) return '';
+    var s = String(status).slice(0, 24);
+    var color = (kind === 'lead') ? (LEAD_STATUS_COLORS[s] || '#64748b') : '#64748b';
+    var label = s.replace(/_/g, ' ');
+    return '<span style="display:inline-block;font-size:9px;font-weight:700;letter-spacing:0.3px;' +
+      'color:#fff;background:' + color + ';border-radius:4px;padding:1px 6px;text-transform:capitalize;flex-shrink:0;">' +
+      escapeHTML(label) + '</span>';
+  }
+  function openBtn(kind, id, label) {
+    return '<a href="#" style="display:inline-block;font-size:12px;color:#fff;background:#0a66c2;' +
+      'text-decoration:none;font-weight:600;border-radius:6px;padding:5px 12px;margin-top:8px;" ' +
+      'onclick="event.preventDefault();window.__p86EntitiesMapOpen&&window.__p86EntitiesMapOpen(\'' +
+        escapeAttr(kind) + '\',\'' + escapeAttr(id) + '\');">' + (label || 'Open') + ' &rarr;</a>';
+  }
+
   // Info window for a SINGLE entity.
   function infoContentHTML(item) {
-    return '<div style="min-width:180px;font-family:system-ui,sans-serif;">' +
-      '<div style="margin-bottom:4px;">' + kindTag(item.kind) + '</div>' +
-      '<div style="font-size:13px;font-weight:600;color:#111;margin-bottom:6px;">' + escapeHTML(item.title || '(untitled)') + '</div>' +
-      '<a href="#" style="font-size:12px;color:#0a66c2;text-decoration:none;font-weight:600;" ' +
-        'onclick="event.preventDefault();window.__p86EntitiesMapOpen&&window.__p86EntitiesMapOpen(\'' +
-          escapeAttr(item.kind) + '\',\'' + escapeAttr(item.id) + '\');">Open &rarr;</a>' +
+    return '<div style="min-width:200px;max-width:280px;font-family:system-ui,sans-serif;">' +
+      '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">' +
+        kindTag(item.kind) + statusChip(item.kind, item.status) +
+      '</div>' +
+      '<div style="font-size:14px;font-weight:600;color:#111;line-height:1.3;">' + escapeHTML(item.title || '(untitled)') + '</div>' +
+      openBtn(item.kind, item.id, 'Open') +
     '</div>';
   }
 
-  // Info window for a GROUP of co-located entities — one row per item,
-  // each with an Open link. Rows are shaped like a future property-card
-  // row so this can graduate into a project-backed view later.
+  // Info window for a GROUP of co-located entities — one row per item.
   function groupContentHTML(members) {
     var rows = members.map(function (m) {
-      return '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-top:1px solid #eee;">' +
+      return '<div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-top:1px solid #eee;">' +
         kindTag(m.kind) +
         '<span style="flex:1;font-size:13px;color:#111;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' +
           escapeHTML(m.title || '(untitled)') + '</span>' +
+        statusChip(m.kind, m.status) +
         '<a href="#" style="font-size:12px;color:#0a66c2;text-decoration:none;font-weight:600;flex-shrink:0;" ' +
           'onclick="event.preventDefault();window.__p86EntitiesMapOpen&&window.__p86EntitiesMapOpen(\'' +
             escapeAttr(m.kind) + '\',\'' + escapeAttr(m.id) + '\');">Open &rarr;</a>' +
       '</div>';
     }).join('');
-    return '<div style="min-width:220px;max-width:300px;font-family:system-ui,sans-serif;">' +
+    return '<div style="min-width:240px;max-width:320px;font-family:system-ui,sans-serif;">' +
       '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;color:#4f46e5;margin-bottom:2px;">' +
         members.length + ' items at this property</div>' +
       rows +
@@ -206,13 +227,14 @@
     var d = window.appData || {};
     var leads = (d.leads || []).map(function (l) {
       return { id: l.id, title: l.title || 'Untitled lead',
-        lat: l.geocode_lat, lng: l.geocode_lng, kind: 'lead' };
+        lat: l.geocode_lat, lng: l.geocode_lng, kind: 'lead', status: l.status || '' };
     });
     var jobs = (d.jobs || []).map(function (j) {
       var num = j.jobNumber || j.job_number || '';
       var name = j.title || j.name || 'Untitled job';
+      var jstatus = (j.data && typeof j.data.status === 'string') ? j.data.status : (j.status || '');
       return { id: j.id, title: num ? (num + ' — ' + name) : name,
-        lat: j.geocode_lat, lng: j.geocode_lng, kind: 'job', jobNumber: num };
+        lat: j.geocode_lat, lng: j.geocode_lng, kind: 'job', jobNumber: num, status: jstatus };
     });
     return { leads: leads, jobs: jobs };
   }
@@ -224,7 +246,7 @@
         var c = usableCoords(it.lat, it.lng);
         if (!c) return null;
         return { id: it.id, title: it.title, lat: c.lat, lng: c.lng,
-          kind: kind, jobNumber: it.jobNumber || '' };
+          kind: kind, jobNumber: it.jobNumber || '', status: it.status || '' };
       }).filter(Boolean);
     }
     return { leads: clean(data.leads, 'lead'), jobs: clean(data.jobs, 'job') };
