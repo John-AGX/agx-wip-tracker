@@ -3050,7 +3050,7 @@ async function initSchema() {
       due_date          DATE,
       assignee_user_id  INTEGER REFERENCES users(id) ON DELETE SET NULL,
       created_by        INTEGER REFERENCES users(id) ON DELETE SET NULL,
-      entity_type       TEXT,    -- polymorphic link (NULL = personal task)
+      entity_type       TEXT,    -- polymorphic link (NULL = unlinked; NOT a privacy signal — see scope/owner_user_id)
       entity_id         TEXT,
       checklist         JSONB NOT NULL DEFAULT '[]'::jsonb,
       completed_at      TIMESTAMPTZ,
@@ -3070,6 +3070,26 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_tasks_due
       ON tasks(organization_id, due_date)
       WHERE archived_at IS NULL AND status <> 'done';
+
+    -- 3-tier model (Tasks / To-dos / Reminders). scope is the PRIVACY axis
+    -- (org | personal), ORTHOGONAL to kind (work-type). Additive + SAFE:
+    -- every existing row defaults to 'org' so it stays team-visible (no
+    -- surprise hide; zero UPDATEs). A 'personal' task = a private To-do,
+    -- visible ONLY to owner_user_id (fail-closed, like user_notes); for 'org'
+    -- rows owner_user_id is NULL and ignored. NEVER derive personal-ness from
+    -- kind='todo' (that's the column default — would mass-hide the backlog).
+    ALTER TABLE tasks ADD COLUMN IF NOT EXISTS scope         TEXT NOT NULL DEFAULT 'org';
+    ALTER TABLE tasks ADD COLUMN IF NOT EXISTS owner_user_id INTEGER REFERENCES users(id) ON DELETE CASCADE;
+    -- ADD CONSTRAINT has no IF NOT EXISTS — guard so the boot-time re-run no-ops.
+    DO $tasks_scope_chk$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'tasks_scope_chk') THEN
+        ALTER TABLE tasks ADD CONSTRAINT tasks_scope_chk CHECK (scope IN ('org','personal'));
+      END IF;
+    END $tasks_scope_chk$;
+    -- Personal To-do list + the privacy predicate (avoids a table scan).
+    CREATE INDEX IF NOT EXISTS idx_tasks_personal
+      ON tasks(organization_id, owner_user_id, status)
+      WHERE scope = 'personal' AND archived_at IS NULL;
 
     -- ───────────────────────────────────────────────────────────────
     -- My Notes — a personal, PRIVATE scratchpad (Phase 1 / Deliverable

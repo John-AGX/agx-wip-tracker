@@ -8754,8 +8754,9 @@ async function execStaffTool(name, input, ctx) {
              FROM tasks t
              LEFT JOIN users au ON au.id = t.assignee_user_id
              LEFT JOIN users cu ON cu.id = t.created_by
-            WHERE t.id = $1 AND t.organization_id = $2 AND t.archived_at IS NULL`,
-          [String(taskId), taskOrgId]
+            WHERE t.id = $1 AND t.organization_id = $2 AND t.archived_at IS NULL
+              AND (t.scope = 'org' OR (t.scope = 'personal' AND t.owner_user_id = $3))`,
+          [String(taskId), taskOrgId, Number((ctx && ctx.userId) || 0)]
         );
         if (!r.rows.length) return 'Task not found: ' + taskId;
         const t = r.rows[0];
@@ -8787,9 +8788,13 @@ async function execStaffTool(name, input, ctx) {
       }
 
       // ── filtered list (search_entities) ──
-      const where = ['t.organization_id = $1', 't.archived_at IS NULL'];
-      const params = [taskOrgId];
-      let pn = 2;
+      // PRIVACY: the AI read path is a security boundary, not just UI. Personal
+      // to-dos surface ONLY to their owner (ctx.userId), regardless of any
+      // assignee filter the model passes.
+      const where = ['t.organization_id = $1', 't.archived_at IS NULL',
+        "(t.scope = 'org' OR (t.scope = 'personal' AND t.owner_user_id = $2))"];
+      const params = [taskOrgId, Number((ctx && ctx.userId) || 0)];
+      let pn = 3;
 
       const q = String((input && (input.q || input.filter)) || '').trim();
       if (q) { where.push('t.title ILIKE $' + (pn++)); params.push('%' + q + '%'); }

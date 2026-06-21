@@ -269,9 +269,13 @@ router.get('/', requireAuth, async (req, res) => {
     const orgId = callerOrgId(req);
     if (!orgId) return res.json({ tasks: [] });
 
-    const where = ['t.organization_id = $1', 't.archived_at IS NULL'];
-    const params = [orgId];
-    let pn = 2;
+    // PRIVACY PREDICATE (load-bearing, caller id from req.user ONLY): everyone
+    // sees org tasks; a personal To-do is visible ONLY to its owner. A personal
+    // row owned by someone else matches zero rows. Mirrors notes-routes.js.
+    const where = ['t.organization_id = $1', 't.archived_at IS NULL',
+      "(t.scope = 'org' OR (t.scope = 'personal' AND t.owner_user_id = $2))"];
+    const params = [orgId, Number(req.user.id)];
+    let pn = 3;
 
     const assignee = String(req.query.assignee || '').trim();
     if (assignee === 'me') {
@@ -364,8 +368,9 @@ router.get('/:id', requireAuth, async (req, res) => {
       '  FROM tasks t ' +
       '  LEFT JOIN users au ON au.id = t.assignee_user_id ' +
       '  LEFT JOIN users cu ON cu.id = t.created_by ' +
-      ' WHERE t.id = $1 AND t.organization_id = $2',
-      [req.params.id, orgId]
+      ' WHERE t.id = $1 AND t.organization_id = $2' +
+      "   AND (t.scope = 'org' OR (t.scope = 'personal' AND t.owner_user_id = $3))",
+      [req.params.id, orgId, Number(req.user.id)]
     );
     if (!rows.length) return res.status(404).json({ error: 'Task not found' });
     const task = rows[0];
@@ -444,8 +449,9 @@ router.patch('/:id', requireAuth, async (req, res) => {
     const body = req.body || {};
 
     const prior = await pool.query(
-      'SELECT * FROM tasks WHERE id = $1 AND organization_id = $2',
-      [req.params.id, orgId]
+      'SELECT * FROM tasks WHERE id = $1 AND organization_id = $2' +
+      "   AND (scope = 'org' OR (scope = 'personal' AND owner_user_id = $3))",
+      [req.params.id, orgId, Number(req.user.id)]
     );
     if (!prior.rowCount) return res.status(404).json({ error: 'Task not found' });
     const before = prior.rows[0];
@@ -509,10 +515,11 @@ router.patch('/:id', requireAuth, async (req, res) => {
     if (!sets.length) return res.json({ task: before });
     sets.push('updated_at = NOW()');
 
-    params.push(req.params.id, orgId);
+    params.push(req.params.id, orgId, Number(req.user.id));
     const sql =
       'UPDATE tasks SET ' + sets.join(', ') +
       ' WHERE id = $' + (pn++) + ' AND organization_id = $' + (pn++) +
+      "   AND (scope = 'org' OR (scope = 'personal' AND owner_user_id = $" + (pn++) + '))' +
       ' RETURNING *';
     const r = await pool.query(sql, params);
     if (!r.rowCount) return res.status(404).json({ error: 'Task not found' });
@@ -536,8 +543,9 @@ router.delete('/:id', requireAuth, async (req, res) => {
     if (!orgId) return res.status(404).json({ error: 'Task not found' });
     const r = await pool.query(
       'UPDATE tasks SET archived_at = NOW(), updated_at = NOW() ' +
-      ' WHERE id = $1 AND organization_id = $2 AND archived_at IS NULL',
-      [req.params.id, orgId]
+      ' WHERE id = $1 AND organization_id = $2 AND archived_at IS NULL' +
+      "   AND (scope = 'org' OR (scope = 'personal' AND owner_user_id = $3))",
+      [req.params.id, orgId, Number(req.user.id)]
     );
     if (!r.rowCount) return res.status(404).json({ error: 'Task not found' });
     res.json({ ok: true });

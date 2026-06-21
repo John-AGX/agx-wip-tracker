@@ -120,7 +120,7 @@ async function gatherTaskDigests() {
     'FROM tasks t',
     'JOIN users u ON u.id = t.assignee_user_id',
     'LEFT JOIN organizations o ON o.id = u.organization_id',
-    "WHERE t.archived_at IS NULL AND t.status <> 'done'",
+    "WHERE t.archived_at IS NULL AND t.status <> 'done' AND t.scope = 'org'",
     "  AND t.due_date IS NOT NULL AND t.due_date <= CURRENT_DATE + INTERVAL '1 day'",
     '  AND u.active = TRUE AND u.email IS NOT NULL AND u.email <> %3',
     'ORDER BY t.assignee_user_id, t.due_date ASC'
