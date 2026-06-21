@@ -311,6 +311,11 @@ router.get('/sub-portal/attachments',
     try {
       const subId = req.user && req.user.sub_id;
       if (!subId) return res.status(403).json({ error: 'Not a sub-portal user' });
+      // Additive match: a file belongs to a grant if its legacy folder
+      // STRING matches OR (when the grant carries a folder_id) its
+      // folder_id matches. The two agree in steady state (the string is
+      // dual-written = folder.path), but the OR guarantees no lockout in
+      // any transient state where one drifted from the other.
       const { rows } = await pool.query(
         `SELECT a.*, g.entity_type AS grant_entity_type,
                 g.entity_id AS grant_entity_id,
@@ -319,7 +324,8 @@ router.get('/sub-portal/attachments',
            JOIN attachments a
              ON a.entity_type = g.entity_type
             AND a.entity_id   = g.entity_id
-            AND a.folder      = g.folder
+            AND ( a.folder = g.folder
+                  OR (g.folder_id IS NOT NULL AND a.folder_id = g.folder_id) )
           WHERE g.sub_id = $1
           ORDER BY g.entity_type, g.entity_id, g.folder, a.position`,
         [subId]
@@ -354,12 +360,19 @@ router.post('/sub-portal/attachments',
         return res.status(400).json({ error: 'Invalid entity reference' });
       }
 
-      // Grant check — the sub must have an explicit grant on
-      // exactly this (entity_type, entity_id, folder) tuple.
-      // No fall-through to "general" or wildcard grants.
+      // Grant check — the sub must have an explicit grant on this
+      // (entity_type, entity_id, folder) folder. Additive match: the
+      // grant's legacy folder STRING matches, OR (when the grant carries
+      // a folder_id) the folder_id resolves to a folder whose path equals
+      // the requested folder. The folder string is dual-written = path,
+      // so the two agree in steady state; the OR keeps a folder_id-backed
+      // grant working even if the string drifted. Still no fall-through
+      // to "general" or wildcard grants.
       const grant = await pool.query(
-        `SELECT 1 FROM attachment_folder_grants
-          WHERE sub_id = $1 AND entity_type = $2 AND entity_id = $3 AND folder = $4
+        `SELECT 1 FROM attachment_folder_grants g
+           LEFT JOIN file_folders ff ON ff.id = g.folder_id
+          WHERE g.sub_id = $1 AND g.entity_type = $2 AND g.entity_id = $3
+            AND ( g.folder = $4 OR LOWER(ff.path) = $4 )
           LIMIT 1`,
         [subId, entity_type, entity_id, folder]
       );

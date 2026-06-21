@@ -29,6 +29,7 @@ const express = require('express');
 const { pool } = require('../db');
 const { requireAuth, requireCapability } = require('../auth');
 const { sendForEvent } = require('../email');
+const fileFolders = require('../services/file-folders');
 
 const router = express.Router();
 
@@ -810,14 +811,30 @@ router.post('/:subId/attachment-grants',
       const id = genId('afg');
       const granted_by = (req.user && req.user.id) || null;
 
+      // Resolve (and create if needed) the real folder row so the grant is
+      // folder_id-backed from the start — rename/move-safe without waiting
+      // for the next boot's backfill to stamp it. ensureFolderChain also
+      // persists the folder as a real row even when it has no files yet, so
+      // granting on a not-yet-used folder name now makes it exist. Best
+      // effort: a resolution failure just leaves folder_id NULL (the
+      // backfill and the additive string match both still cover it).
+      let folderId = null;
+      try {
+        const leaf = await fileFolders.ensureFolderChain(entity_type, entity_id, folder);
+        if (leaf && leaf.id) folderId = leaf.id;
+      } catch (e) {
+        console.warn('[sub grant] folder_id resolve failed (non-fatal):', e && e.message);
+      }
+
       const { rows } = await pool.query(
         `INSERT INTO attachment_folder_grants
-           (id, sub_id, entity_type, entity_id, folder, granted_by)
-         VALUES ($1, $2, $3, $4, $5, $6)
+           (id, sub_id, entity_type, entity_id, folder, folder_id, granted_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
          ON CONFLICT (sub_id, entity_type, entity_id, folder) DO UPDATE
-           SET granted_at = NOW(), granted_by = EXCLUDED.granted_by
+           SET granted_at = NOW(), granted_by = EXCLUDED.granted_by,
+               folder_id = COALESCE(EXCLUDED.folder_id, attachment_folder_grants.folder_id)
          RETURNING *`,
-        [id, req.params.subId, entity_type, entity_id, folder, granted_by]
+        [id, req.params.subId, entity_type, entity_id, folder, folderId, granted_by]
       );
       res.json({ grant: rows[0] });
     } catch (e) {
@@ -854,6 +871,9 @@ router.get('/:subId/shared-attachments',
   requireAuth, requireCapability('JOBS_VIEW_ALL'),
   async (req, res) => {
     try {
+      // Additive match (folder STRING OR folder_id) so this PM preview
+      // shows exactly what the sub portal returns — keep the two joins in
+      // lockstep. See /api/sub-portal/attachments for the rationale.
       const { rows } = await pool.query(
         `SELECT a.*, g.folder AS grant_folder,
                 g.entity_type AS grant_entity_type,
@@ -863,7 +883,8 @@ router.get('/:subId/shared-attachments',
            JOIN attachments a
              ON a.entity_type = g.entity_type
             AND a.entity_id   = g.entity_id
-            AND a.folder      = g.folder
+            AND ( a.folder = g.folder
+                  OR (g.folder_id IS NOT NULL AND a.folder_id = g.folder_id) )
           WHERE g.sub_id = $1
           ORDER BY g.entity_type, g.entity_id, g.folder, a.position`,
         [req.params.subId]
