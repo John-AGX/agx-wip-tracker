@@ -1083,6 +1083,43 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_attachments_entity_folder
       ON attachments (entity_type, entity_id, folder);
 
+    -- ── Real folder tree (Explorer-style file system) ──────────────
+    -- Folders graduate from the free-text attachments.folder string to
+    -- actual rows: scoped to (entity_type, entity_id), self-referential
+    -- parent_id, materialized path ('a/b/c'). attachments.folder_id
+    -- points at the leaf; the legacy attachments.folder TEXT column stays
+    -- DUAL-WRITTEN = folder.path during the transition so string readers
+    -- (sub-portal grants, 86 search) keep working until they migrate.
+    -- A folders refactor touches only metadata, never the stored bytes.
+    -- Unique per entity by (parent, name) case-insensitively (Windows-
+    -- like). parent_id CASCADE so deleting a folder removes its subtree;
+    -- attachments.folder_id SET NULL so files are never destroyed by a
+    -- folder delete (the route unfiles them to root instead).
+    CREATE TABLE IF NOT EXISTS file_folders (
+      id              TEXT PRIMARY KEY,
+      organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE,
+      entity_type     TEXT NOT NULL,
+      entity_id       TEXT NOT NULL,
+      parent_id       TEXT REFERENCES file_folders(id) ON DELETE CASCADE,
+      name            TEXT NOT NULL,
+      path            TEXT NOT NULL,
+      position        INTEGER NOT NULL DEFAULT 0,
+      created_by      INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_file_folders_unique
+      ON file_folders (entity_type, entity_id, COALESCE(parent_id, ''), LOWER(name));
+    CREATE INDEX IF NOT EXISTS idx_file_folders_parent
+      ON file_folders (entity_type, entity_id, parent_id);
+    CREATE INDEX IF NOT EXISTS idx_file_folders_path
+      ON file_folders (entity_type, entity_id, path);
+
+    ALTER TABLE attachments
+      ADD COLUMN IF NOT EXISTS folder_id TEXT REFERENCES file_folders(id) ON DELETE SET NULL;
+    CREATE INDEX IF NOT EXISTS idx_attachments_folder_id
+      ON attachments (folder_id);
+
     -- Domain rebrand: rewrite attachment URLs from the old
     -- wip-agxco.com host to attachments.project86.net. Existing rows
     -- baked the host into thumb_url / web_url / original_url at
@@ -1428,6 +1465,12 @@ async function initSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_afg_sub ON attachment_folder_grants(sub_id);
     CREATE INDEX IF NOT EXISTS idx_afg_entity ON attachment_folder_grants(entity_type, entity_id, folder);
+    -- Rename/move-safe grants: point at the folder row, not the string.
+    -- Backfilled by the file-folders migration; enforcement switches to
+    -- folder_id in a later phase (string match still works meanwhile).
+    ALTER TABLE attachment_folder_grants
+      ADD COLUMN IF NOT EXISTS folder_id TEXT REFERENCES file_folders(id) ON DELETE CASCADE;
+    CREATE INDEX IF NOT EXISTS idx_afg_folder_id ON attachment_folder_grants(folder_id);
 
     -- QuickBooks Detailed Job Cost lines. Imported from the weekly
     -- "Project Costs" / "Detailed Job Costs" xlsx export. The id is a
@@ -3959,6 +4002,13 @@ async function initSchema() {
 
 async function init() {
   await initSchema();
+  // Build the real folder tree from existing folder strings (idempotent;
+  // a fast no-op once every attachment/grant has a folder_id).
+  try {
+    await require('./services/file-folders').backfill();
+  } catch (e) {
+    console.error('[init] file-folders backfill failed (non-fatal):', e && e.message);
+  }
 }
 
 // ────────────────────────────────────────────────────────────────

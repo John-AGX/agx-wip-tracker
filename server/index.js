@@ -60,6 +60,7 @@ const tasksRoutes = require('./routes/tasks-routes');
 const notesRoutes = require('./routes/notes-routes');
 const mapRoutes = require('./routes/map-routes');
 const calendarRoutes = require('./routes/calendar-routes');
+const fileFoldersRoutes = require('./routes/file-folders-routes');
 const { storage } = require('./storage');
 
 const app = express();
@@ -163,6 +164,7 @@ app.use('/api/org', require('./routes/org-manifest-routes'));
 app.use('/api/config', require('./routes/config-routes'));
 app.use('/api/settings', settingsRoutes);
 app.use('/api/attachments', attachmentRoutes);
+app.use('/api/file-folders', fileFoldersRoutes);
 // Sessions sidebar routes mount BEFORE the catch-all aiRoutes so they
 // claim /api/ai/sessions/* before any wildcard handler in aiRoutes
 // would. Both share helpers via the require('./ai-routes') call inside

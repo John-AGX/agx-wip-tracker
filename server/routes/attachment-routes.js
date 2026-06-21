@@ -1532,3 +1532,13 @@ module.exports.__internals__ = {
   sanitizeSvg,
   mimeFamilyMatches
 };
+// Shared entity-access model — reused by file-folders-routes.js so the
+// folder endpoints enforce the exact same per-entity capability + owner/
+// org scoping as the attachment endpoints (single source of truth).
+module.exports.entityAccess = {
+  entityTypeOk,
+  entityIdOk,
+  readCapForEntity,
+  writeCapForEntity,
+  requireDynamicCapability
+};

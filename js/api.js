@@ -763,8 +763,30 @@
     }
   };
 
+  // Explorer-style folder tree for any entity bucket. See
+  // server/routes/file-folders-routes.js. The legacy attachments.folder
+  // string is dual-written server-side, so existing readers keep working.
+  var fileFolders = {
+    tree: function(entityType, entityId) {
+      return get('/api/file-folders/' + encodeURIComponent(entityType) + '/' + encodeURIComponent(entityId));
+    },
+    create: function(entityType, entityId, payload) {
+      return post('/api/file-folders/' + encodeURIComponent(entityType) + '/' + encodeURIComponent(entityId), payload || {});
+    },
+    update: function(entityType, entityId, folderId, payload) {
+      return patch('/api/file-folders/' + encodeURIComponent(entityType) + '/' + encodeURIComponent(entityId) + '/' + encodeURIComponent(folderId), payload || {});
+    },
+    remove: function(entityType, entityId, folderId) {
+      return del('/api/file-folders/' + encodeURIComponent(entityType) + '/' + encodeURIComponent(entityId) + '/' + encodeURIComponent(folderId));
+    },
+    moveFiles: function(entityType, entityId, ids, folderId) {
+      return post('/api/file-folders/' + encodeURIComponent(entityType) + '/' + encodeURIComponent(entityId) + '/move-files', { ids: ids || [], folder_id: folderId || null });
+    }
+  };
+
   window.p86Api = {
     get: get, put: put, post: post, del: del, patch: patch,
+    fileFolders: fileFolders,
     jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, qbCosts: qbCosts, subs: subsApi, schedule: schedule, adminSms: adminSms, messages: messages, weather: weather, projects: projects, tasks: tasks, notes: notes, map: map, calendar: calendar, plans: plans, orgTags: orgTags, org: org, folderTemplates: folderTemplates, reports: reports, changeOrders: changeOrders, workflowItems: workflowItems, purchaseOrders: purchaseOrders,
     isOffline: isOffline,
     isAuthenticated: function() { return !!getToken() && !isOffline(); }
