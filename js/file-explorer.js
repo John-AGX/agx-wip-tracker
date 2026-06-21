@@ -375,6 +375,16 @@
 
     function wireItemEvents() {
       var box = host.querySelector('[data-items]');
+      // OS files dropped onto empty area → upload into the current folder.
+      if (S.canEdit && box && !box._p86drop) {
+        box._p86drop = true;
+        box.addEventListener('dragover', function (e) {
+          if (e.dataTransfer && e.dataTransfer.types && [].indexOf.call(e.dataTransfer.types, 'Files') >= 0) { e.preventDefault(); }
+        });
+        box.addEventListener('drop', function (e) {
+          if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length) { e.preventDefault(); doUpload(e.dataTransfer.files, S.cur); }
+        });
+      }
       // checkboxes
       box.querySelectorAll('[data-check]').forEach(function (c) {
         c.onclick = function (e) { e.stopPropagation(); var id = c.getAttribute('data-check'); if (c.checked) S.sel[id] = 1; else delete S.sel[id]; renderItems(); };
@@ -420,6 +430,8 @@
       el.addEventListener('dragleave', function () { el.classList.remove('drop-ok'); });
       el.addEventListener('drop', function (e) {
         e.preventDefault(); e.stopPropagation(); el.classList.remove('drop-ok');
+        // OS files dropped from the desktop → upload INTO this folder.
+        if (S.canEdit && e.dataTransfer.files && e.dataTransfer.files.length) { doUpload(e.dataTransfer.files, targetFolderId); return; }
         var files = e.dataTransfer.getData('text/p86-files');
         var folder = e.dataTransfer.getData('text/p86-folder');
         if (files) { moveFiles(files.split(',').filter(Boolean), targetFolderId); }
@@ -449,10 +461,12 @@
           .then(function () { load(); }).catch(function (e) { toast((e && e.message) || 'Could not create folder', 'error'); });
       });
     }
-    function doUpload(fileList) {
+    function doUpload(fileList, folderId) {
       var files = Array.prototype.slice.call(fileList || []);
       if (!files.length) return;
-      var path = curPath() || 'general';
+      var fid = (folderId === undefined) ? S.cur : folderId;
+      var ff = fid ? folderById(fid) : null;
+      var path = (ff ? ff.path : '') || 'general';
       var done = 0;
       toast('Uploading ' + files.length + ' file(s)…');
       (function next() {
