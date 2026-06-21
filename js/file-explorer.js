@@ -156,7 +156,8 @@
       query: '',
       sel: {},              // selected file ids
       expanded: {},         // folder id → true
-      clip: null            // { ids:[], op:'cut' }
+      clip: null,           // { ids:[], op:'cut' }
+      loading: true         // show a skeleton until the first load resolves
     };
 
     function folderById(id) { for (var i = 0; i < S.folders.length; i++) if (S.folders[i].id === id) return S.folders[i]; return null; }
@@ -175,6 +176,7 @@
       ]).then(function (out) {
         S.folders = out[0];
         S.files = out[1];
+        S.loading = false;
         // prune selection to existing files
         var ok = {}; S.files.forEach(function (f) { ok[f.id] = 1; });
         Object.keys(S.sel).forEach(function (id) { if (!ok[id]) delete S.sel[id]; });
@@ -284,6 +286,10 @@
         var q = S.query.toLowerCase();
         subs = subs.filter(function (f) { return f.name.toLowerCase().indexOf(q) >= 0; });
         files = files.filter(function (f) { return String(f.filename || '').toLowerCase().indexOf(q) >= 0 || String(f.caption || '').toLowerCase().indexOf(q) >= 0; });
+      }
+      if (S.loading) {
+        box.innerHTML = '<div class="p86fx-empty">Loading…</div>';
+        return;
       }
       if (!subs.length && !files.length) {
         box.innerHTML = '<div class="p86fx-empty">' + (S.query ? 'Nothing matches “' + esc(S.query) + '”.' : 'This folder is empty.' + (S.canEdit ? ' Drop files here or use Upload.' : '')) + '</div>';
@@ -579,6 +585,9 @@
       showMenu(e, items);
     }
 
+    // Paint the shell synchronously so the component survives a host
+    // re-render the same way a synchronous panel does, then populate.
+    render();
     load();
     return { refresh: load, destroy: function () { host.innerHTML = ''; } };
   }
