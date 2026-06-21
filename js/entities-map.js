@@ -162,7 +162,18 @@
       '<div style="font-size:14px;font-weight:600;color:#111;line-height:1.3;">' + escapeHTML(item.title || '(untitled)') + '</div>' +
       (addr ? '<div style="font-size:11px;color:#555;margin-top:3px;">' + escapeHTML(addr) + '</div>' : '') +
       openBtn(item.kind, item.id, 'Open', false) +
+      mapsLinkRow(item) +
     '</div>';
+  }
+
+  // "Open in Google Maps" row for an info window. Prefers the pin's exact
+  // coords (always present) and falls back to the entity address label.
+  function mapsLinkRow(item) {
+    if (!item || !window.p86MapLink || !window.p86MapLink.linkHTML) return '';
+    var link = window.p86MapLink.linkHTML('Open in Google Maps', item.address || '',
+      { lat: Number(item.lat), lng: Number(item.lng),
+        style: 'display:inline-block;margin-top:6px;font-size:12px;color:#0a66c2;text-decoration:none;font-weight:600;' });
+    return link ? '<div>' + link + '</div>' : '';
   }
 
   // Info window for a GROUP of co-located entities — one row per item. The
@@ -183,6 +194,9 @@
       '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;color:#4f46e5;margin-bottom:2px;">' +
         members.length + ' items at this property</div>' +
       (addr ? '<div style="font-size:11px;color:#555;margin-bottom:4px;">' + escapeHTML(addr) + '</div>' : '') +
+      // One "Open in Google Maps" link for the shared coordinate (grouped
+      // pins are all at the same lat/lng), so rows stay clean.
+      (members[0] ? mapsLinkRow(members[0]) : '') +
       rows +
     '</div>';
   }
@@ -242,10 +256,13 @@
     var jobs = (d.jobs || []).map(function (j) {
       var num = j.jobNumber || j.job_number || '';
       var name = j.title || j.name || 'Untitled job';
-      var jstatus = (j.data && typeof j.data.status === 'string') ? j.data.status : (j.status || '');
+      var jd = j.data || j;
+      var jstatus = (jd && typeof jd.status === 'string') ? jd.status : (j.status || '');
+      var addr = j.geocode_address || (jd.geocode_address) ||
+        (jd.address && String(jd.address).trim()) ||
+        ((Array.isArray(jd.buildings) && jd.buildings[0] && jd.buildings[0].address) || '');
       return { id: j.id, title: num ? (num + ' — ' + name) : name,
-        lat: j.geocode_lat, lng: j.geocode_lng, kind: 'job', jobNumber: num, status: jstatus,
-        address: j.geocode_address || (j.data && j.data.geocode_address) || '' };
+        lat: j.geocode_lat, lng: j.geocode_lng, kind: 'job', jobNumber: num, status: jstatus, address: addr };
     });
     return { leads: leads, jobs: jobs };
   }

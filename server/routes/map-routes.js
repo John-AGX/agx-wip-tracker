@@ -52,7 +52,7 @@ router.get('/entities', requireAuth, async (req, res) => {
     // Leads: title is a first-class column; coords from geocode_*.
     // Org filter matches GET /api/leads (NULL-org legacy rows included).
     const leadsQ = pool.query(
-      `SELECT l.id, l.title, l.status, l.street_address, l.city,
+      `SELECT l.id, l.title, l.status, l.street_address, l.city, l.state, l.zip,
               l.geocode_lat, l.geocode_lng
          FROM leads l
         WHERE (l.organization_id = $1 OR l.organization_id IS NULL)
@@ -83,7 +83,10 @@ router.get('/entities', requireAuth, async (req, res) => {
         lng: c.lng,
         kind: 'lead',
         status: r.status || '',
-        address: [r.street_address, r.city].filter(Boolean).join(', ')
+        // Assembled one-line address for the "Open in Google Maps" link
+        // (coords are preferred client-side; this is the fallback label).
+        address: [r.street_address, [r.city, r.state, r.zip].filter(Boolean).join(', ')]
+          .filter(Boolean).join(', ')
       });
     }
 
@@ -104,7 +107,12 @@ router.get('/entities', requireAuth, async (req, res) => {
         kind: 'job',
         jobNumber: num,
         status: (typeof data.status === 'string' ? data.status : ''),
-        address: r.geocode_address || ''
+        // Address label for the "Open in Google Maps" link (coords win
+        // client-side). Prefer the exact geocoded string, then the canonical
+        // data.address, then the first building's address.
+        address: (r.geocode_address && String(r.geocode_address).trim()) ||
+          (data.address && String(data.address).trim()) ||
+          ((Array.isArray(data.buildings) && data.buildings[0] && data.buildings[0].address) || '')
       });
     }
 

@@ -941,25 +941,35 @@
     });
     if (inList) out.push(inList === 'ul' ? '</ul>' : '</ol>');
     var rendered = out.join('');
-    // Auto-linkify bare URLs. Runs LAST so it doesn't re-wrap URLs the
-    // model emitted as markdown links (which we don't currently parse
-    // — future enhancement). Conservative regex: requires http(s)://
-    // and stops at whitespace, closing punctuation, or angle bracket.
-    // The negative lookbehind avoids re-wrapping anything already
-    // inside an href= attribute (defensive — at this point our html
-    // doesn't contain anchors yet, but cheap insurance).
+    // Links, in two passes that can't collide. We first convert markdown
+    // links [text](http(s)://…) — this is what lets 86/the assistant hand
+    // back a clickable Google-Maps address — then auto-linkify any
+    // remaining BARE URLs. Each produced anchor is stashed behind a null
+    // placeholder before the bare-URL pass runs, so the bare-URL regex
+    // (whose prefix class includes ") can't re-wrap the URL sitting inside
+    // a freshly-built href="…". Placeholders are restored at the end.
+    var _linkStash = [];
+    function _stash(anchorHtml) { var i = _linkStash.length; _linkStash.push(anchorHtml); return '\u0000L' + i + '\u0000'; }
+    // 1) Markdown links [text](url) — http(s) targets only (no javascript:).
+    rendered = rendered.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g, function(_, text, url) {
+      return _stash('<a href="' + url + '" target="_blank" rel="noopener" style="color:#4f8cff;text-decoration:underline;">' + text + '</a>');
+    });
+    // 2) Bare URLs. Conservative regex: requires http(s):// and stops at
+    // whitespace, closing punctuation, or angle bracket. Strips a single
+    // trailing punctuation char so "see https://x.com." renders cleanly.
     rendered = rendered.replace(
       /(^|[\s>("])((?:https?:\/\/)[^\s<>")]+)/g,
       function(_, prefix, url) {
-        // Strip a single trailing punctuation char so "see https://x.com." renders cleanly.
         var trail = '';
         var m = url.match(/^(.*?)([.,;:!?)\]]+)$/);
         if (m) { url = m[1]; trail = m[2]; }
         return prefix +
-          '<a href="' + url + '" target="_blank" rel="noopener" style="color:#4f8cff;text-decoration:underline;">' +
-          url + '</a>' + trail;
+          _stash('<a href="' + url + '" target="_blank" rel="noopener" style="color:#4f8cff;text-decoration:underline;">' + url + '</a>') +
+          trail;
       }
     );
+    // 3) Restore the stashed anchors.
+    rendered = rendered.replace(/\u0000L(\d+)\u0000/g, function(_, i) { return _linkStash[Number(i)] || ''; });
     return rendered;
   }
 

@@ -3130,6 +3130,11 @@
          Both load before projects-map.js so the map renderer can
          reference window.p86Maps + window.p86TagIcons. -->
     <script src="js/maps-loader.js?v=2"></script>
+    <!-- Google-Maps deep-link helper (window.p86MapLink) — builds click-to-
+         open-Maps URLs for chat, map info windows, and detail address
+         lines. SDK-independent; separate namespace from p86Maps so load
+         order is irrelevant. -->
+    <script src="js/maps-link.js?v=1"></script>
     <script src="js/tag-icons.js?v=2"></script>
     <script src="js/projects-map.js?v=11"></script>
     <script src="js/map-pins.js?v=2"></script>
@@ -3138,7 +3143,7 @@
          map-pins + maps-loader + geolocation and lazy-loads Google
          MarkerClusterer from CDN for pin clustering. Loads after
          map-pins.js so window.p86MapPins is available. -->
-    <script src="js/entities-map.js?v=4"></script>
+    <script src="js/entities-map.js?v=5"></script>
     <script src="js/projects-pairs.js?v=1"></script>
     <!-- Report template registry (Wave B). Eight construction report
          templates (walkthrough, daily-log, weekly-progress, etc.)
@@ -3177,7 +3182,7 @@
          BEFORE ai-panel.js so window.PayloadArtifact exists when the
          panel mounts. -->
     <script src="js/payload-artifact.js?v=5"></script>
-    <script src="js/ai-panel.js?v=133"></script>
+    <script src="js/ai-panel.js?v=134"></script>
     <!-- Save-from-chat bridge (Workstream ③). Owns p86SaveCodeBlock /
          p86SaveResponse / p86SaveToPicker, called by inline onclick
          handlers in ai-panel.js renderMarkdown / renderBubble. Loads
