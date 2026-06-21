@@ -973,6 +973,8 @@
     wireMarginChip();
     // Also refresh the detailed breakdown card under the line items.
     renderPricingBreakdown();
+    // Keep the mobile docked grand-total bar in sync (no-op on desktop).
+    updateMobileTotalBar();
   }
 
   // The Margin chip — uses the global edit-gate pencil pattern (same
@@ -1124,6 +1126,7 @@
     setChipValue(i + 3, fmtCurrency(t.total));
     // Skip i+4 (margin chip — user is typing in its input).
     renderPricingBreakdown();
+    updateMobileTotalBar();
   }
 
   // Detailed breakdown shown under the line items table. Hides components
@@ -1294,6 +1297,158 @@
     if (window.p86EditGate) {
       window.p86EditGate.attachRowContainer(container, '[data-row-edit-gate]');
     }
+    // Phase 2 mobile: tap a line card → open the edit sheet (instead of
+    // the inline edit-gate). Idempotent; no-op on desktop.
+    eeArmMobileLineTap(container);
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // Mobile line editing (Phase 2). On a phone the line "cards" are read
+  // mostly; tapping one opens a bottom-sheet editor with big keypad
+  // fields + live Extension / Client-price math, and a docked grand-total
+  // bar keeps the proposal number in view. Both are mobile-only (<=760px);
+  // desktop keeps the inline edit-gate table untouched. Mirrors how
+  // Buildertrend / CoConstruct / ServiceTitan handle line items on phones.
+  // ──────────────────────────────────────────────────────────────────
+  function eeLineIsMobile() {
+    return !!(window.matchMedia && window.matchMedia('(max-width: 760px)').matches);
+  }
+  function eeFindLine(id) {
+    var lines = getLines() || [];
+    for (var i = 0; i < lines.length; i++) if (String(lines[i].id) === String(id)) return lines[i];
+    return null;
+  }
+  function eeInheritedMarkup(line) {
+    // Effective markup when this line's own markup is blank (section value).
+    var clone = {}; for (var k in line) clone[k] = line[k]; clone.markup = '';
+    return effectiveMarkupForLine(clone, getLines(), getEstimate());
+  }
+  function eeLineMath(line) {
+    var ext = num(line.qty) * num(line.unitCost);
+    var m = effectiveMarkupForLine(line, getLines(), getEstimate());
+    return { ext: ext, client: ext * (1 + m / 100), markupEff: m };
+  }
+
+  // Capture-phase tap handler so a card tap pre-empts the inline edit
+  // gate on mobile. Delete / drag (data-edit-gate-passthrough) keep their
+  // own behavior; desktop returns early.
+  function eeArmMobileLineTap(container) {
+    if (!container || container._eeTapArmed) return;
+    container._eeTapArmed = true;
+    container.addEventListener('click', function (e) {
+      if (!eeLineIsMobile()) return;
+      if (e.target.closest('[data-edit-gate-passthrough]')) return;
+      var row = e.target.closest('[data-row-edit-gate]');
+      if (!row) return;
+      e.preventDefault();
+      e.stopPropagation();
+      openEeLineSheet(row.getAttribute('data-line-id'));
+    }, true);
+  }
+
+  function closeEeLineSheet() {
+    var bd = document.getElementById('ee-line-sheet-backdrop');
+    if (bd) bd.remove();
+    document.body.style.overflow = '';
+  }
+
+  function openEeLineSheet(id) {
+    var line = eeFindLine(id);
+    if (!line) return;
+    closeEeLineSheet();
+    var lines = getLines() || [];
+    var sectionName = '';
+    for (var i = 0; i < lines.length; i++) {
+      if (lines[i].section === '__section_header__') sectionName = lines[i].description || '';
+      if (String(lines[i].id) === String(id)) break;
+    }
+    var math = eeLineMath(line);
+    var bd = document.createElement('div');
+    bd.id = 'ee-line-sheet-backdrop';
+    bd.className = 'ee-line-sheet-backdrop';
+    bd.innerHTML =
+      '<div class="ee-line-sheet" role="dialog" aria-label="Edit line item">' +
+        '<div class="ee-line-sheet-grip"></div>' +
+        '<div class="ee-line-sheet-head">' +
+          '<div class="ee-line-sheet-section">' + escapeHTML(sectionName || 'Line item') + '</div>' +
+          '<button type="button" class="ee-line-sheet-done" data-x>Done</button>' +
+        '</div>' +
+        '<label class="ee-sheet-field"><span>Description</span>' +
+          '<textarea data-f="description" rows="2">' + escapeHTML(line.description || '') + '</textarea></label>' +
+        '<div class="ee-sheet-row3">' +
+          '<label class="ee-sheet-field"><span>Qty</span>' +
+            '<input data-f="qty" type="text" inputmode="decimal" value="' + escapeHTML(line.qty == null ? '' : String(line.qty)) + '" /></label>' +
+          '<label class="ee-sheet-field"><span>Unit</span>' +
+            '<input data-f="unit" type="text" value="' + escapeHTML(line.unit || '') + '" /></label>' +
+          '<label class="ee-sheet-field"><span>Unit Cost</span>' +
+            '<input data-f="unitCost" type="text" inputmode="decimal" value="' + escapeHTML(line.unitCost == null ? '' : String(line.unitCost)) + '" /></label>' +
+        '</div>' +
+        '<label class="ee-sheet-field"><span>Markup %</span>' +
+          '<input data-f="markup" type="text" inputmode="decimal" value="' + escapeHTML(line.markup == null ? '' : String(line.markup)) + '" placeholder="blank = section (' + escapeHTML(String(Math.round(eeInheritedMarkup(line) * 10) / 10)) + '%)" /></label>' +
+        '<div class="ee-sheet-readouts">' +
+          '<div><span>Extension</span><strong data-ro="ext">' + fmtCurrency(math.ext) + '</strong></div>' +
+          '<div class="accent"><span>Client price</span><strong data-ro="client">' + fmtCurrency(math.client) + '</strong></div>' +
+        '</div>' +
+        '<div class="ee-sheet-actions">' +
+          '<button type="button" class="ee-sheet-del" data-del>\u{1F5D1} Delete line</button>' +
+          '<button type="button" class="ee-sheet-save primary" data-x>Done</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(bd);
+    document.body.style.overflow = 'hidden';
+    requestAnimationFrame(function () { bd.classList.add('show'); });
+
+    var sheet = bd.querySelector('.ee-line-sheet');
+    function recompute() {
+      var q = num(sheet.querySelector('[data-f="qty"]').value);
+      var uc = num(sheet.querySelector('[data-f="unitCost"]').value);
+      var mkRaw = sheet.querySelector('[data-f="markup"]').value;
+      var ext = q * uc;
+      var mk = (mkRaw === '' || mkRaw == null) ? eeInheritedMarkup(eeFindLine(id) || line) : num(mkRaw);
+      sheet.querySelector('[data-ro="ext"]').textContent = fmtCurrency(ext);
+      sheet.querySelector('[data-ro="client"]').textContent = fmtCurrency(ext * (1 + mk / 100));
+    }
+    sheet.querySelectorAll('input,textarea').forEach(function (el) {
+      var f = el.getAttribute('data-f');
+      el.addEventListener('input', recompute);
+      el.addEventListener('change', function () { updateLineField(id, f, el.value); });
+    });
+    bd.querySelectorAll('[data-x]').forEach(function (b) { b.addEventListener('click', closeEeLineSheet); });
+    bd.addEventListener('click', function (e) { if (e.target === bd) closeEeLineSheet(); });
+    var del = bd.querySelector('[data-del]');
+    if (del) del.addEventListener('click', function () { closeEeLineSheet(); deleteLineFromEditor(id); });
+  }
+  window.openEeLineSheet = openEeLineSheet;
+
+  // Docked grand-total bar (mobile + Line Items tab). Mounted once on
+  // <body>, positioned just above the mobile bottom-nav (measured at
+  // runtime — the nav height isn't a CSS var). Refreshed by renderTotals.
+  function eeEnsureTotalBar() {
+    var bar = document.getElementById('ee-mobile-totalbar');
+    if (!bar) {
+      bar = document.createElement('div');
+      bar.id = 'ee-mobile-totalbar';
+      bar.className = 'ee-mobile-totalbar';
+      bar.innerHTML =
+        '<div class="ee-mtb-left"><span class="ee-mtb-sub" data-sub></span></div>' +
+        '<div class="ee-mtb-right"><span class="ee-mtb-label">Proposal total</span>' +
+          '<span class="ee-mtb-total" data-total></span></div>';
+      document.body.appendChild(bar);
+    }
+    var nav = document.querySelector('.p86-mobile-nav');
+    var navH = (nav && nav.offsetParent !== null) ? nav.offsetHeight : 0;
+    bar.style.bottom = navH + 'px';
+    return bar;
+  }
+  function updateMobileTotalBar() {
+    var bar = eeEnsureTotalBar();
+    var linesTab = document.getElementById('ee-tab-lines');
+    var onLines = !!(linesTab && linesTab.offsetParent !== null);
+    if (!(eeLineIsMobile() && onLines)) { bar.classList.remove('show'); return; }
+    var t = computeTotals();
+    bar.querySelector('[data-total]').textContent = fmtCurrency(t.total);
+    bar.querySelector('[data-sub]').textContent = 'Cost ' + fmtCurrency(t.subtotal) + ' · Markup ' + fmtCurrency(t.markupAmount);
+    bar.classList.add('show');
   }
 
   // (Column header row removed — the per-line inputs are self-labeled

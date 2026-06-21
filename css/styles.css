@@ -8841,16 +8841,87 @@ body.light-mode .p86-pv-tag-modal-chip {
     min-width: 40px; min-height: 40px;
   }
 
-  /* fat-finger-friendly inputs (16px font also blocks iOS focus-zoom) */
+  /* On a phone the card is read-only — editing happens in the tap sheet —
+     so the inline inputs are non-interactive and a tap anywhere on the
+     card opens the editor (no keyboard flash). The delete <button> keeps
+     pointer-events, so it still works. */
   .ee-line-tbl [data-row-edit-gate] input,
   .ee-line-tbl [data-row-edit-gate] textarea {
-    min-height: 44px; font-size: 16px !important;
+    min-height: 40px; font-size: 16px !important; pointer-events: none;
   }
 
   /* section header: name full-width, "+ Line Item" stretches to an easy tap */
   .ee-line-tbl [data-section-id] > input { flex: 1 1 100% !important; min-width: 0 !important; }
   .ee-line-tbl [data-section-id] .ee-btn { flex: 1 1 auto; }
+
+  /* leave room so the last line + "+ Line Item" clear the docked total bar */
+  #ee-tab-lines { padding-bottom: 68px; }
 }
+
+/* ── Estimate line editor — mobile bottom sheet (Phase 2) ──────────────
+   Tap a line card on a phone → this slides up with big keypad fields +
+   live Extension / Client-price math (the "edit in a sheet, not the cell"
+   pattern the big estimating apps use). Created on demand by
+   openEeLineSheet(); only the mobile tap handler triggers it, so desktop
+   never sees it. */
+.ee-line-sheet-backdrop {
+  position: fixed; inset: 0; z-index: 9500;
+  background: rgba(0,0,0,0.5);
+  display: flex; align-items: flex-end;
+  opacity: 0; transition: opacity 0.2s ease;
+}
+.ee-line-sheet-backdrop.show { opacity: 1; }
+.ee-line-sheet {
+  width: 100%; max-height: 88vh; overflow: auto;
+  background: var(--surface, #161620);
+  border-top-left-radius: 16px; border-top-right-radius: 16px;
+  border-top: 1px solid var(--border, #2e3346);
+  padding: 8px 16px calc(20px + env(safe-area-inset-bottom, 0px));
+  transform: translateY(100%); transition: transform 0.24s ease;
+  box-shadow: 0 -12px 40px rgba(0,0,0,0.5);
+}
+.ee-line-sheet-backdrop.show .ee-line-sheet { transform: translateY(0); }
+.ee-line-sheet-grip { width: 40px; height: 4px; border-radius: 2px; background: var(--border, #3a3f52); margin: 6px auto 12px; }
+.ee-line-sheet-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.ee-line-sheet-section { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; color: var(--text-dim, #888); }
+.ee-line-sheet-done { background: transparent; border: 0; color: var(--accent, #22d3ee); font-weight: 700; font-size: 15px; cursor: pointer; padding: 6px 4px; }
+.ee-sheet-field { display: block; margin-bottom: 12px; }
+.ee-sheet-field > span { display: block; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; color: var(--text-dim, #888); margin-bottom: 5px; }
+.ee-sheet-field input, .ee-sheet-field textarea {
+  width: 100%; box-sizing: border-box; font-family: inherit;
+  font-size: 16px; padding: 12px; min-height: 48px;
+  background: var(--input-bg, #0f1117); border: 1px solid var(--border, #2e3346);
+  border-radius: 10px; color: var(--text, #fff);
+}
+.ee-sheet-field textarea { min-height: 60px; resize: vertical; line-height: 1.4; }
+.ee-sheet-row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+.ee-sheet-readouts { display: flex; gap: 12px; margin: 4px 0 16px; }
+.ee-sheet-readouts > div { flex: 1; background: rgba(255,255,255,0.03); border: 1px solid var(--border, #2e3346); border-radius: 10px; padding: 10px 12px; }
+.ee-sheet-readouts span { display: block; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; color: var(--text-dim, #888); margin-bottom: 4px; }
+.ee-sheet-readouts strong { font-size: 18px; font-weight: 700; color: var(--text, #fff); font-family: 'SF Mono', monospace; }
+.ee-sheet-readouts .accent strong { color: #34d399; }
+.ee-sheet-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.ee-sheet-del { background: transparent; border: 1px solid rgba(248,113,113,0.4); color: #f87171; border-radius: 10px; padding: 12px 16px; font-size: 14px; font-weight: 600; cursor: pointer; min-height: 48px; }
+.ee-sheet-save { background: var(--accent, #22d3ee); border: 0; color: #06141a; border-radius: 10px; padding: 12px 22px; font-size: 15px; font-weight: 700; cursor: pointer; min-height: 48px; flex: 1; }
+
+/* ── Estimate line editor — docked grand-total bar (mobile) ───────────
+   Fixed above the mobile bottom-nav (its `bottom` is set at runtime to
+   the measured nav height). Shown only on the Line Items tab on a phone;
+   toggled via .show by updateMobileTotalBar(). */
+.ee-mobile-totalbar {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 120;
+  display: none; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 8px 16px calc(8px + env(safe-area-inset-bottom, 0px));
+  background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+  border-top: 1px solid rgba(34, 211, 238, 0.35);
+  box-shadow: 0 -4px 14px rgba(0,0,0,0.4);
+}
+.ee-mobile-totalbar.show { display: flex; }
+.ee-mtb-sub { font-size: 11px; color: var(--text-dim, #9aa3b8); }
+.ee-mtb-right { text-align: right; display: flex; flex-direction: column; line-height: 1.15; }
+.ee-mtb-label { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-dim, #9aa3b8); }
+.ee-mtb-total { font-size: 18px; font-weight: 800; color: #34d399; font-family: 'SF Mono', monospace; }
+@media (min-width: 761px) { .ee-mobile-totalbar { display: none !important; } }
 /* Tighten the input styling inside line rows so they don't look like
    form fields stacked on form fields. Targets only inputs inside
    data-row-edit-gate rows so section headers keep their own chrome. */
