@@ -60,6 +60,7 @@ const tasksRoutes = require('./routes/tasks-routes');
 const notesRoutes = require('./routes/notes-routes');
 const mapRoutes = require('./routes/map-routes');
 const calendarRoutes = require('./routes/calendar-routes');
+const outlookRoutes = require('./routes/outlook-routes');
 const fileFoldersRoutes = require('./routes/file-folders-routes');
 const { storage } = require('./storage');
 
@@ -152,6 +153,11 @@ app.use('/api/map', mapRoutes);
 // Personal calendar events — the per-user Assistant calendar. requireAuth
 // only; every query owner + org scoped (fail-closed). See calendar-routes.js.
 app.use('/api/calendar', calendarRoutes);
+// Outlook / M365 connection (Phase 4, read-only). The router declares full
+// paths (/api/me/outlook/* + the /auth/microsoft/callback matching
+// MS_REDIRECT_URI), so it mounts at root. Boot-safe: MSAL + the token key are
+// lazy, so this is inert until the env vars are set and a user connects.
+app.use(outlookRoutes);
 app.use('/api/org-tags', orgTagsRoutes);
 app.use('/api/folder-templates', folderTemplatesRoutes);
 // Org manifest — one read-only endpoint that powers the Summary

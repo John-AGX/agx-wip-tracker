@@ -3154,6 +3154,10 @@ async function initSchema() {
       ON oauth_tokens (organization_id, user_id, provider);
     CREATE INDEX IF NOT EXISTS idx_oauth_tokens_refresh
       ON oauth_tokens (provider, expires_at);
+    -- MSAL serialized token cache (encrypted): the source of truth for the
+    -- access + rolling refresh tokens. Supersedes access_token_enc/
+    -- refresh_token_enc (kept nullable for compatibility). Idempotent add.
+    ALTER TABLE oauth_tokens ADD COLUMN IF NOT EXISTS token_cache_enc TEXT;
     -- Per-entity lookup so a client/job page can list its appointments.
     CREATE INDEX IF NOT EXISTS idx_calendar_events_entity
       ON calendar_events (entity_type, entity_id, starts_at)
