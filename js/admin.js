@@ -5723,6 +5723,9 @@
         '<div id="dz-body" style="margin-top:16px;"></div>' +
       '</div>';
   }
+  // Exposed so the Command Center (js/console.js) can mount it as a section,
+  // same pattern as the other renderSystem* renderers.
+  window.renderSystemDanger = renderSystemDanger;
 
   window.dzLoadPreview = function() {
     var body = document.getElementById('dz-body');

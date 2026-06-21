@@ -90,6 +90,7 @@
         '<div id="cc-email"     class="cc-section" style="display:none;"></div>' +
         '<div id="cc-btmapping" class="cc-section" style="display:none;"></div>' +
         '<div id="cc-settings"  class="cc-section" style="display:none;"></div>' +
+        '<div id="cc-danger"    class="cc-section" style="display:none;"></div>' +
       '</div>';
     // Land on the last-viewed section (persisted) or Overview by default.
     var initial = 'overview';
@@ -97,8 +98,8 @@
     switchConsoleSubTab(initial);
   }
 
-  // The 8 platform sub-views, in sidebar order.
-  var CONSOLE_VIEWS = ['overview', 'metrics', 'tenants', 'audit', 'anthropic', 'email', 'btmapping', 'settings'];
+  // The platform sub-views, in sidebar order.
+  var CONSOLE_VIEWS = ['overview', 'metrics', 'tenants', 'audit', 'anthropic', 'email', 'btmapping', 'settings', 'danger'];
 
   // Each view's loader. The system-service views mount the existing
   // host-parameterized admin.js renderers (re-runs fresh each visit).
@@ -111,6 +112,7 @@
     if (view === 'email') return mountSystem('cc-email', 'cc-email-host', '✉ Email provider', window.renderSystemEmailProvider);
     if (view === 'btmapping') return mountSystem('cc-btmapping', 'cc-btmapping-host', '🔗 Buildertrend cost-code mapping', window.renderSystemBTMapping);
     if (view === 'settings') return mountSystem('cc-settings', 'cc-settings-host', '🔧 Platform settings', window.renderSystemSettings);
+    if (view === 'danger') return mountSystem('cc-danger', 'cc-danger-host', '⚠ Danger Zone — reset workspace data', window.renderSystemDanger);
   }
 
   // Show one section at a time — mirrors switchAdminSubTab. Toggles the sidebar
