@@ -160,6 +160,45 @@
     _loadPromise = Promise.resolve();
   }
 
+  // ── Shared status encoding for EVERY map surface ──────────────────
+  // Both the per-entity maps (projects-map.js list + info windows) and the
+  // combined Summary map (entities-map.js) read status through here, so a
+  // color means the same thing everywhere. Leads carry a pipeline status
+  // (new→sold); projects/jobs fall back to recency. GREEN is reserved for
+  // "sold" — recency never uses green (avoids "green = fresh" vs "green =
+  // sold" clashing across surfaces).
+  var LEAD_STATUS_COLORS = {
+    'new': '#3b82f6', 'in_progress': '#06b6d4', 'sent': '#a855f7',
+    'sold': '#22c55e', 'lost': '#ef4444', 'no_opportunity': '#64748b'
+  };
+  function leadPipeline(status) {
+    if (!status) return null;
+    var s = String(status).slice(0, 24);
+    var c = LEAD_STATUS_COLORS[s];
+    if (!c) return null;
+    return { color: c, label: s.replace(/_/g, ' ') };
+  }
+  function recencyColor(updatedAt, archivedAt) {
+    if (archivedAt) return '#475569';        // archived — dark slate
+    var u = updatedAt ? new Date(updatedAt).getTime() : 0;
+    var ageDays = (Date.now() - u) / 86400000;
+    if (ageDays <= 7) return '#22d3ee';      // fresh — accent cyan (NOT green)
+    return '#94a3b8';                        // aging — slate
+  }
+  // Dot color for any entity: a lead's pipeline color when it has a real
+  // pipeline status, else recency.
+  function statusDotColor(entity) {
+    entity = entity || {};
+    var pl = leadPipeline(entity.status);
+    return pl ? pl.color : recencyColor(entity.updated_at, entity.archived_at);
+  }
+  window.p86MapStatus = {
+    LEAD_STATUS_COLORS: LEAD_STATUS_COLORS,
+    pipeline: leadPipeline,
+    recency: recencyColor,
+    dotColor: statusDotColor
+  };
+
   window.p86MapPins = {
     DEFAULTS: DEFAULTS,
     TYPE_ORDER: TYPE_ORDER,

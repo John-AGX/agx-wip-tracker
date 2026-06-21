@@ -55,15 +55,15 @@
     if (ageDays <= 7) return '🟢';
     return '🟡';
   }
-  // Recency-coded status color (archived=slate, fresh≤7d=green, else amber).
-  // Used for the colored dot in list rows + info windows — cleaner than the
-  // emoji and aligns with the app's chip palette.
+  // Status dot color via the SHARED encoding (js/map-pins.js → p86MapStatus)
+  // so leads show their pipeline color (sold=green, lost=red, …) and other
+  // entities fall back to recency — identical to the combined Summary map.
   function statusColor(p) {
-    if (p.archived_at) return '#64748b';
+    if (window.p86MapStatus && window.p86MapStatus.dotColor) return window.p86MapStatus.dotColor(p);
+    // Fallback if map-pins.js hasn't loaded yet (recency; never green).
+    if (p.archived_at) return '#475569';
     var updated = p.updated_at ? new Date(p.updated_at).getTime() : 0;
-    var ageDays = (Date.now() - updated) / 86400000;
-    if (ageDays <= 7) return '#22c55e';
-    return '#eab308';
+    return ((Date.now() - updated) / 86400000) <= 7 ? '#22d3ee' : '#94a3b8';
   }
 
   // A project is "mapped" if it has either an explicit address_text
