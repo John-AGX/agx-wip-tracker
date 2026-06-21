@@ -174,6 +174,22 @@
       '.p86-tasks-filters{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;}' +
       '.p86-tasks-filter{font:inherit;font-size:12.5px;padding:5px 11px;border-radius:999px;border:1px solid var(--border,#e5e7eb);background:var(--surface,#fff);color:var(--muted,#475569);cursor:pointer;}' +
       '.p86-tasks-filter.active{background:#111827;color:#fff;border-color:#111827;}' +
+      // 3-tier tabs + per-tab toolbar
+      '.p86-tabs{display:flex;gap:4px;border-bottom:1px solid var(--border,#e5e7eb);margin-bottom:14px;}' +
+      '.p86-tab{font:inherit;font-size:13.5px;font-weight:600;padding:8px 14px;border:none;background:transparent;color:var(--muted,#64748b);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;}' +
+      '.p86-tab.active{color:var(--accent,#111827);border-bottom-color:var(--accent,#111827);}' +
+      '.p86-tasks-toolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:8px;}' +
+      '.p86-tasks-userfilter{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted,#64748b);}' +
+      '.p86-tasks-userfilter select{font:inherit;padding:5px 8px;border:1px solid var(--border,#e5e7eb);border-radius:8px;background:var(--surface,#fff);color:inherit;}' +
+      '.p86-tasks-hint{font-size:12px;color:var(--muted,#9ca3af);margin:2px 0 8px;}' +
+      // Reminders
+      '.p86-rem-quickbar{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;}' +
+      '.p86-rem-quickbar input[type=text]{flex:1 1 180px;font:inherit;padding:9px 12px;border:1px solid var(--border,#d4d4d8);border-radius:10px;background:var(--surface,#fff);color:inherit;}' +
+      '.p86-rem-quickbar input[type=datetime-local]{font:inherit;padding:8px 10px;border:1px solid var(--border,#d4d4d8);border-radius:10px;background:var(--surface,#fff);color:inherit;}' +
+      '.p86-rem-when{padding:1px 7px;border-radius:999px;background:#f3e8ff;color:#7e22ce;font-weight:600;}' +
+      '.p86-rem-notes{font-size:12px;color:var(--muted,#71717a);margin-top:3px;}' +
+      '.p86-rem-del{margin-left:8px;border:none;background:transparent;color:var(--muted,#9ca3af);font-size:20px;line-height:1;cursor:pointer;padding:0 4px;align-self:center;}' +
+      '.p86-rem-del:hover{color:#b91c1c;}' +
       '.p86-task-checklist{margin-top:6px;display:flex;flex-direction:column;gap:5px;}' +
       '.p86-task-clrow{display:flex;align-items:center;gap:8px;}' +
       '.p86-task-clrow input[type=text]{flex:1 1 auto;}' +
@@ -694,16 +710,33 @@
     return { refresh: function () { mounted.refresh(); appts.refresh(); } };
   }
 
-  // ── My Tasks page ──────────────────────────────────────────────────
-  var FILTERS = [
-    { key: 'open',     label: 'All open',  build: function () { return { assignee: 'me', exclude_done: 1 }; } },
-    { key: 'today',    label: 'Today',     build: function () { return { assignee: 'me', exclude_done: 1, due_before: todayISO() }; } },
-    { key: 'upcoming', label: 'Upcoming',  build: function () { return { assignee: 'me', exclude_done: 1, due_after: shiftISO(1) }; } },
-    { key: 'overdue',  label: 'Overdue',   build: function () { return { assignee: 'me', exclude_done: 1, due_before: shiftISO(-1) }; } },
-    { key: 'done',     label: 'Done',      build: function () { return { assignee: 'me', status: 'done', limit: 100 }; } }
+  // ── Tasks & Reminders page (3-tier model) ──────────────────────────
+  // Three tabs:
+  //   • Team Tasks  — org-wide, assignable, filterable by user + date.
+  //   • My To-Dos   — private personal items (scope='personal'), just mine.
+  //   • Reminders   — timed nudges on their own list (lower tier; emailed).
+  // Date-window filters reused across the task tabs (no assignee baked in —
+  // the Team tab layers a user filter on top; To-Dos are all mine already).
+  var TASK_FILTERS = [
+    { key: 'open',     label: 'All open',  build: function () { return { exclude_done: 1 }; } },
+    { key: 'today',    label: 'Today',     build: function () { return { exclude_done: 1, due_before: todayISO() }; } },
+    { key: 'upcoming', label: 'Upcoming',  build: function () { return { exclude_done: 1, due_after: shiftISO(1) }; } },
+    { key: 'overdue',  label: 'Overdue',   build: function () { return { exclude_done: 1, due_before: shiftISO(-1) }; } },
+    { key: 'done',     label: 'Done',      build: function () { return { status: 'done', limit: 100 }; } }
   ];
-  var _activeFilter = 'open';
-  var _myListCtl = null;
+  var _activeTab = 'team';     // team | todos | reminders
+  var _teamFilter = 'open';
+  var _teamUser = '';          // '' = everyone | 'me' | 'unassigned' | <id>
+  var _todoFilter = 'open';
+  var _remStatus = 'pending';  // pending | all
+  var _ctl = { team: null, todos: null, reminders: null };
+
+  function filterBtns(filters, activeKey, dataAttr) {
+    return filters.map(function (f) {
+      return '<button class="p86-tasks-filter' + (f.key === activeKey ? ' active' : '') +
+        '" ' + dataAttr + '="' + f.key + '">' + esc(f.label) + '</button>';
+    }).join('');
+  }
 
   function renderMyTasksTab() {
     var pane = document.getElementById('my-tasks');
@@ -711,64 +744,266 @@
     ensureStyles();
     pane.innerHTML =
       '<div class="p86-tasks-page">' +
-        '<div class="p86-tasks-head"><h2>My Tasks</h2></div>' +
-        '<div class="p86-tasks-quickbar">' +
-          '<input id="myTaskQuick" type="text" placeholder="Add a task and press Enter…" />' +
-          '<button class="primary" id="myTaskQuickBtn">Add</button>' +
+        '<div class="p86-tasks-head"><h2>Tasks &amp; Reminders</h2></div>' +
+        '<div class="p86-tabs" role="tablist">' +
+          '<button class="p86-tab" data-tab="team">Team Tasks</button>' +
+          '<button class="p86-tab" data-tab="todos">My To-Dos</button>' +
+          '<button class="p86-tab" data-tab="reminders">Reminders</button>' +
         '</div>' +
-        '<div class="p86-tasks-filters">' +
-          FILTERS.map(function (f) {
-            return '<button class="p86-tasks-filter' + (f.key === _activeFilter ? ' active' : '') + '" data-filter="' + f.key + '">' + esc(f.label) + '</button>';
-          }).join('') +
-        '</div>' +
-        '<div id="myTaskList"></div>' +
+        '<div id="p86TabBody"></div>' +
       '</div>';
 
-    var listHost = pane.querySelector('#myTaskList');
-    function mountActive() {
-      var f = FILTERS.filter(function (x) { return x.key === _activeFilter; })[0] || FILTERS[0];
-      _myListCtl = mountList(listHost, f.build(), {
-        emptyText: _activeFilter === 'done' ? 'Nothing completed yet.' : 'All clear — no tasks here.'
+    function selectTab(tab) {
+      _activeTab = tab;
+      pane.querySelectorAll('[data-tab]').forEach(function (b) {
+        b.classList.toggle('active', b.getAttribute('data-tab') === tab);
+      });
+      var body = pane.querySelector('#p86TabBody');
+      if (tab === 'team') renderTeam(body);
+      else if (tab === 'todos') renderTodos(body);
+      else renderReminders(body);
+    }
+    pane.querySelectorAll('[data-tab]').forEach(function (b) {
+      b.addEventListener('click', function () { selectTab(b.getAttribute('data-tab')); });
+    });
+    selectTab(_activeTab);
+  }
+
+  // ── Tab 1: Team Tasks (org-wide, assignable, user-filterable) ──────
+  function renderTeam(body) {
+    body.innerHTML =
+      '<div class="p86-tasks-quickbar">' +
+        '<input id="teamQuick" type="text" placeholder="Add a team task and press Enter…" />' +
+        '<button class="primary" id="teamQuickBtn">Add</button>' +
+      '</div>' +
+      '<div class="p86-tasks-toolbar">' +
+        '<div class="p86-tasks-filters">' + filterBtns(TASK_FILTERS, _teamFilter, 'data-tf') + '</div>' +
+        '<label class="p86-tasks-userfilter">Who <select id="teamUser"></select></label>' +
+      '</div>' +
+      '<div id="teamList"></div>';
+
+    var sel = body.querySelector('#teamUser');
+    function buildUserOptions() {
+      var list = _users || (window.appData && window.appData.users) || [];
+      var o = ['<option value="">Everyone</option>',
+        '<option value="me">Assigned to me</option>',
+        '<option value="unassigned">Unassigned</option>'];
+      list.forEach(function (u) {
+        o.push('<option value="' + escAttr(u.id) + '">' + esc(u.name || u.email || ('User ' + u.id)) + '</option>');
+      });
+      sel.innerHTML = o.join('');
+      sel.value = _teamUser;
+    }
+    function mountTeam() {
+      var f = (TASK_FILTERS.filter(function (x) { return x.key === _teamFilter; })[0] || TASK_FILTERS[0]).build();
+      f.scope = 'org';
+      if (_teamUser) f.assignee = _teamUser;
+      _ctl.team = mountList(body.querySelector('#teamList'), f, {
+        emptyText: _teamFilter === 'done' ? 'No completed team tasks.' : 'No team tasks here.'
       });
     }
-    mountActive();
+    loadUsers().then(buildUserOptions);
+    mountTeam();
 
-    pane.querySelectorAll('[data-filter]').forEach(function (btn) {
+    body.querySelectorAll('[data-tf]').forEach(function (btn) {
       btn.addEventListener('click', function () {
-        _activeFilter = btn.getAttribute('data-filter');
-        pane.querySelectorAll('[data-filter]').forEach(function (b) { b.classList.toggle('active', b === btn); });
-        mountActive();
+        _teamFilter = btn.getAttribute('data-tf');
+        body.querySelectorAll('[data-tf]').forEach(function (b) { b.classList.toggle('active', b === btn); });
+        mountTeam();
+      });
+    });
+    sel.addEventListener('change', function () { _teamUser = sel.value; mountTeam(); });
+
+    var quick = body.querySelector('#teamQuick');
+    var qbtn = body.querySelector('#teamQuickBtn');
+    function add() {
+      var title = (quick.value || '').trim();
+      if (!title || !api()) return;
+      qbtn.disabled = true;
+      // Org task assigned to me by default; reassign in the detail editor.
+      api().create({ title: title, assignee_user_id: currentUserId() || undefined }).then(function () {
+        quick.value = ''; qbtn.disabled = false; quick.focus();
+        if (_ctl.team) _ctl.team.refresh();
+      }).catch(function (e) { qbtn.disabled = false; toast((e && e.message) || 'Could not add task', 'error'); });
+    }
+    quick.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); add(); } });
+    qbtn.addEventListener('click', add);
+  }
+
+  // ── Tab 2: My To-Dos (private personal — scope='personal') ─────────
+  function renderTodos(body) {
+    body.innerHTML =
+      '<div class="p86-tasks-quickbar">' +
+        '<input id="todoQuick" type="text" placeholder="Add a private to-do and press Enter…" />' +
+        '<button class="primary" id="todoQuickBtn">Add</button>' +
+      '</div>' +
+      '<div class="p86-tasks-filters">' + filterBtns(TASK_FILTERS, _todoFilter, 'data-df') + '</div>' +
+      '<div class="p86-tasks-hint">Private to you — no one else in the org sees these.</div>' +
+      '<div id="todoList"></div>';
+
+    function mountTodos() {
+      var f = (TASK_FILTERS.filter(function (x) { return x.key === _todoFilter; })[0] || TASK_FILTERS[0]).build();
+      f.scope = 'personal';
+      _ctl.todos = mountList(body.querySelector('#todoList'), f, {
+        emptyText: _todoFilter === 'done' ? 'Nothing completed yet.' : 'No to-dos — you\'re all caught up.'
+      });
+    }
+    mountTodos();
+    body.querySelectorAll('[data-df]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        _todoFilter = btn.getAttribute('data-df');
+        body.querySelectorAll('[data-df]').forEach(function (b) { b.classList.toggle('active', b === btn); });
+        mountTodos();
+      });
+    });
+    var quick = body.querySelector('#todoQuick');
+    var qbtn = body.querySelector('#todoQuickBtn');
+    function add() {
+      var title = (quick.value || '').trim();
+      if (!title || !api()) return;
+      qbtn.disabled = true;
+      // scope:'personal' → server stamps owner = me; never assignable/visible to others.
+      api().create({ title: title, scope: 'personal' }).then(function () {
+        quick.value = ''; qbtn.disabled = false; quick.focus();
+        if (_ctl.todos) _ctl.todos.refresh();
+      }).catch(function (e) { qbtn.disabled = false; toast((e && e.message) || 'Could not add to-do', 'error'); });
+    }
+    quick.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); add(); } });
+    qbtn.addEventListener('click', add);
+  }
+
+  // ── Tab 3: Reminders (timed nudges on their own list) ──────────────
+  function remApi() { return window.p86Api && window.p86Api.reminders; }
+  function remWhen(ts) {
+    if (!ts) return '';
+    var d = new Date(ts);
+    if (isNaN(d.getTime())) return '';
+    var opts = { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' };
+    if (d.getFullYear() !== new Date().getFullYear()) opts.year = 'numeric';
+    try { return d.toLocaleString(undefined, opts); } catch (e) { return String(ts); }
+  }
+  // datetime-local value (local wall-clock, no offset) for the picker default.
+  function isoLocalInput(d) {
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) +
+      'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+  }
+
+  function renderReminders(body) {
+    body.innerHTML =
+      '<div class="p86-rem-quickbar">' +
+        '<input id="remTitle" type="text" placeholder="Remind me to…" />' +
+        '<input id="remWhen" type="datetime-local" />' +
+        '<button class="primary" id="remAddBtn">Set</button>' +
+      '</div>' +
+      '<div class="p86-tasks-filters">' +
+        '<button class="p86-tasks-filter' + (_remStatus === 'pending' ? ' active' : '') + '" data-rs="pending">Pending</button>' +
+        '<button class="p86-tasks-filter' + (_remStatus === 'all' ? ' active' : '') + '" data-rs="all">All</button>' +
+      '</div>' +
+      '<div id="remList"></div>';
+
+    var ctl = mountReminders(body.querySelector('#remList'));
+    _ctl.reminders = ctl;
+
+    body.querySelectorAll('[data-rs]').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        _remStatus = btn.getAttribute('data-rs');
+        body.querySelectorAll('[data-rs]').forEach(function (b) { b.classList.toggle('active', b === btn); });
+        ctl.refresh();
       });
     });
 
-    // Inline quick capture: Enter (or Add) creates an open todo for me.
-    var quick = pane.querySelector('#myTaskQuick');
-    function quickAdd() {
-      var title = (quick.value || '').trim();
-      if (!title || !api()) return;
-      var btn = pane.querySelector('#myTaskQuickBtn');
-      btn.disabled = true;
-      var payload = { title: title, assignee_user_id: currentUserId() || undefined };
-      api().create(payload).then(function () {
-        quick.value = '';
-        btn.disabled = false;
-        quick.focus();
-        if (_myListCtl) _myListCtl.refresh();
-      }).catch(function (e) {
-        btn.disabled = false;
-        toast((e && e.message) || 'Could not add task', 'error');
-      });
+    var t = body.querySelector('#remTitle');
+    var w = body.querySelector('#remWhen');
+    var b = body.querySelector('#remAddBtn');
+    // Default the picker to the next round hour.
+    (function () { var d = new Date(); d.setHours(d.getHours() + 1, 0, 0, 0); w.value = isoLocalInput(d); })();
+    function add() {
+      var title = (t.value || '').trim();
+      var when = w.value;
+      if (!title) { toast('Give the reminder a title', 'error'); return; }
+      if (!when) { toast('Pick a date & time', 'error'); return; }
+      if (!remApi()) return;
+      b.disabled = true;
+      // new Date(local-string) is interpreted in the browser's zone; toISOString
+      // stamps the correct UTC instant for the server.
+      var iso = new Date(when).toISOString();
+      remApi().create({ title: title, remind_at: iso }).then(function () {
+        t.value = ''; b.disabled = false; t.focus();
+        ctl.refresh();
+      }).catch(function (e) { b.disabled = false; toast((e && e.message) || 'Could not set reminder', 'error'); });
     }
-    quick.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); quickAdd(); } });
-    pane.querySelector('#myTaskQuickBtn').addEventListener('click', quickAdd);
+    t.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); add(); } });
+    b.addEventListener('click', add);
   }
 
-  // Refresh whatever task surfaces happen to be visible after a mutation.
+  function mountReminders(host) {
+    if (!host) return { refresh: function () {} };
+    function paint(rems) {
+      if (!rems || !rems.length) {
+        host.innerHTML = '<div class="p86-task-empty">' +
+          (_remStatus === 'pending' ? 'No pending reminders.' : 'No reminders yet.') + '</div>';
+        return;
+      }
+      host.innerHTML = '<div class="p86-task-list">' + rems.map(remRow).join('') + '</div>';
+      wire(rems);
+    }
+    function remRow(r) {
+      var done = r.status === 'done' || r.status === 'dismissed';
+      var meta = ['<span class="p86-rem-when">' + esc(remWhen(r.remind_at)) + '</span>'];
+      if (r.source && r.source !== 'user') meta.push('<span class="p86-task-link">' + esc(r.source) + '</span>');
+      if (r.status && r.status !== 'pending') meta.push('<span>' + esc(r.status) + '</span>');
+      return '<div class="p86-task-item' + (done ? ' is-done' : '') + '" data-rem-id="' + escAttr(r.id) + '">' +
+        '<button class="p86-task-check' + (done ? ' done' : '') + '" data-rdone title="' + (done ? 'Reopen' : 'Mark done') + '"></button>' +
+        '<span class="p86-task-pdot" style="background:#a855f7;" title="Reminder"></span>' +
+        '<div class="p86-task-main">' +
+          '<div class="p86-task-title">' + esc(r.title || '(untitled)') + '</div>' +
+          '<div class="p86-task-meta">' + meta.join('') + '</div>' +
+          (r.notes ? '<div class="p86-rem-notes">' + esc(r.notes) + '</div>' : '') +
+        '</div>' +
+        '<button class="p86-rem-del" data-rdel title="Delete">&times;</button>' +
+      '</div>';
+    }
+    function wire(rems) {
+      var byId = {}; rems.forEach(function (r) { byId[r.id] = r; });
+      host.querySelectorAll('.p86-task-item').forEach(function (row) {
+        var id = row.getAttribute('data-rem-id');
+        var doneBtn = row.querySelector('[data-rdone]');
+        var delBtn = row.querySelector('[data-rdel]');
+        if (doneBtn) doneBtn.addEventListener('click', function () {
+          var r = byId[id];
+          var next = (r && (r.status === 'done' || r.status === 'dismissed')) ? 'pending' : 'done';
+          doneBtn.disabled = true;
+          remApi().update(id, { status: next }).then(refresh).catch(function (e) {
+            doneBtn.disabled = false; toast((e && e.message) || 'Could not update', 'error');
+          });
+        });
+        if (delBtn) delBtn.addEventListener('click', function () {
+          delBtn.disabled = true;
+          remApi().remove(id).then(refresh).catch(function (e) {
+            delBtn.disabled = false; toast((e && e.message) || 'Could not delete', 'error');
+          });
+        });
+      });
+    }
+    function refresh() {
+      if (!remApi()) { host.innerHTML = '<div class="p86-task-empty">Not connected.</div>'; return Promise.resolve(); }
+      host.innerHTML = '<div class="p86-task-empty">Loading…</div>';
+      return remApi().list(_remStatus === 'all' ? { status: 'all' } : {}).then(function (res) {
+        paint((res && res.reminders) || []);
+      }).catch(function (e) {
+        host.innerHTML = '<div class="p86-task-empty">' + esc((e && e.message) || 'Could not load reminders.') + '</div>';
+      });
+    }
+    refresh();
+    return { refresh: refresh };
+  }
+
+  // Refresh whatever surface is visible on the active tab after a mutation.
   function refreshOpenSurfaces() {
     var pane = document.getElementById('my-tasks');
-    if (pane && pane.classList.contains('active') && _myListCtl) {
-      _myListCtl.refresh();
-    }
+    if (!pane || !pane.classList.contains('active')) return;
+    var ctl = _ctl[_activeTab];
+    if (ctl && ctl.refresh) ctl.refresh();
   }
 
   // ── Exports ────────────────────────────────────────────────────────

@@ -277,6 +277,15 @@ router.get('/', requireAuth, async (req, res) => {
     const params = [orgId, Number(req.user.id)];
     let pn = 3;
 
+    // 3-tier scope filter: scope='org' → org tasks only (the Team Tasks pane);
+    // scope='personal' → the caller's OWN private to-dos only (My To-Dos). The
+    // base privacy predicate already guarantees a personal row is the caller's,
+    // so 'personal' here can only ever return the caller's own rows. Omit to
+    // get both (back-compat with existing callers).
+    const scopeFilter = String(req.query.scope || '').trim();
+    if (scopeFilter === 'org') where.push("t.scope = 'org'");
+    else if (scopeFilter === 'personal') where.push("t.scope = 'personal'");
+
     const assignee = String(req.query.assignee || '').trim();
     if (assignee === 'me') {
       where.push('t.assignee_user_id = $' + (pn++));

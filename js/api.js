@@ -656,6 +656,9 @@
     list: function(opts) {
       opts = opts || {};
       var qs = [];
+      // 3-tier scope: 'org' (Team Tasks pane) | 'personal' (My To-Dos). Omit
+      // for both. See server/routes/tasks-routes.js.
+      if (opts.scope) qs.push('scope=' + encodeURIComponent(opts.scope));
       if (opts.assignee) qs.push('assignee=' + encodeURIComponent(opts.assignee));
       if (opts.status) qs.push('status=' + encodeURIComponent(opts.status));
       if (opts.exclude_done) qs.push('exclude_done=1');
@@ -686,6 +689,22 @@
     create: function(payload) { return post('/api/notes', payload); },
     update: function(id, payload) { return patch('/api/notes/' + encodeURIComponent(id), payload); },
     remove: function(id) { return del('/api/notes/' + encodeURIComponent(id)); }
+  };
+
+  // Personal Reminders — timed nudges on their own list (lower tier than
+  // to-dos). Owner + org scoped server-side; a second user never sees
+  // another's reminders. list({status:'all'}) includes done/dismissed
+  // (default is pending only). See server/routes/reminders-crud-routes.js.
+  var reminders = {
+    list: function(opts) {
+      opts = opts || {};
+      var qs = [];
+      if (opts.status) qs.push('status=' + encodeURIComponent(opts.status));
+      return get('/api/reminders' + (qs.length ? '?' + qs.join('&') : ''));
+    },
+    create: function(payload) { return post('/api/reminders', payload); },
+    update: function(id, payload) { return patch('/api/reminders/' + encodeURIComponent(id), payload); },
+    remove: function(id) { return del('/api/reminders/' + encodeURIComponent(id)); }
   };
 
   // Combined map feed — org-scoped leads + jobs with plottable coords
@@ -787,7 +806,7 @@
   window.p86Api = {
     get: get, put: put, post: post, del: del, patch: patch,
     fileFolders: fileFolders,
-    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, qbCosts: qbCosts, subs: subsApi, schedule: schedule, adminSms: adminSms, messages: messages, weather: weather, projects: projects, tasks: tasks, notes: notes, map: map, calendar: calendar, plans: plans, orgTags: orgTags, org: org, folderTemplates: folderTemplates, reports: reports, changeOrders: changeOrders, workflowItems: workflowItems, purchaseOrders: purchaseOrders,
+    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, qbCosts: qbCosts, subs: subsApi, schedule: schedule, adminSms: adminSms, messages: messages, weather: weather, projects: projects, tasks: tasks, notes: notes, reminders: reminders, map: map, calendar: calendar, plans: plans, orgTags: orgTags, org: org, folderTemplates: folderTemplates, reports: reports, changeOrders: changeOrders, workflowItems: workflowItems, purchaseOrders: purchaseOrders,
     isOffline: isOffline,
     isAuthenticated: function() { return !!getToken() && !isOffline(); }
   };
