@@ -396,8 +396,14 @@ router.post('/', requireAuth, async (req, res) => {
       : '';
     if (!title) return res.status(400).json({ error: 'title is required' });
 
-    // Assignee must belong to the caller's org (or be null).
-    if (body.assignee_user_id != null && !(await assigneeOk(orgId, body.assignee_user_id))) {
+    // Personal to-do (3-tier model): scope='personal' makes this row private to
+    // the creator — visible ONLY to them (the fail-closed read predicate keys
+    // on owner_user_id), and never assignable to another user. Org tasks (the
+    // default) stay assignable + org-viewable.
+    const wantPersonal = String(body.scope) === 'personal';
+
+    // Assignee applies to ORG tasks only; a personal to-do is for the creator.
+    if (!wantPersonal && body.assignee_user_id != null && !(await assigneeOk(orgId, body.assignee_user_id))) {
       return res.status(400).json({ error: 'Invalid assignee' });
     }
 
@@ -407,12 +413,19 @@ router.post('/', requireAuth, async (req, res) => {
     const params = [id, orgId, title, Number(req.user.id)];
     let pn = 5;
 
+    // Stamp the private scope + owner from the SESSION (never the body's
+    // owner_user_id) so a personal to-do can only ever belong to its creator.
+    if (wantPersonal) {
+      cols.push('scope');         vals.push("'personal'");
+      cols.push('owner_user_id'); vals.push('$' + pn++); params.push(Number(req.user.id));
+    }
+
     if (typeof body.notes === 'string')              { cols.push('notes');    vals.push('$' + pn++); params.push(body.notes.slice(0, 5000)); }
     if (body.kind && KINDS.has(String(body.kind)))   { cols.push('kind');     vals.push('$' + pn++); params.push(String(body.kind)); }
     if (body.status && STATUSES.has(String(body.status))) { cols.push('status'); vals.push('$' + pn++); params.push(String(body.status)); }
     if (body.priority && PRIORITIES.has(String(body.priority))) { cols.push('priority'); vals.push('$' + pn++); params.push(String(body.priority)); }
     if (body.due_date)                               { cols.push('due_date'); vals.push('$' + pn++); params.push(String(body.due_date)); }
-    if (body.assignee_user_id != null)               { cols.push('assignee_user_id'); vals.push('$' + pn++); params.push(Number(body.assignee_user_id)); }
+    if (!wantPersonal && body.assignee_user_id != null) { cols.push('assignee_user_id'); vals.push('$' + pn++); params.push(Number(body.assignee_user_id)); }
     if (body.entity_type && body.entity_id && LINKABLE_ENTITY_TYPES.has(String(body.entity_type))) {
       cols.push('entity_type'); vals.push('$' + pn++); params.push(String(body.entity_type));
       cols.push('entity_id');   vals.push('$' + pn++); params.push(String(body.entity_id));
