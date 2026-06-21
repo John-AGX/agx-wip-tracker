@@ -3183,6 +3183,40 @@ async function initSchema() {
       ON calendar_events (entity_type, entity_id, starts_at)
       WHERE entity_type IS NOT NULL;
 
+    -- Reminders (3-tier model) — PERSONAL, timed, assistant-driven nudges on
+    -- their OWN list, SEPARATE from calendar_event appointments. Owner-scoped
+    -- (organization_id + user_id, both NOT NULL + CASCADE) like user_notes —
+    -- fail-closed private. The reminders-cron emails at remind_at and stamps
+    -- fired_at (the atomic per-row fire flag); status is the user's
+    -- pending|done|dismissed lifecycle.
+    CREATE TABLE IF NOT EXISTS reminders (
+      id               TEXT PRIMARY KEY,
+      organization_id  INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      user_id          INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      title            TEXT NOT NULL,
+      notes            TEXT,
+      remind_at        TIMESTAMPTZ NOT NULL,
+      status           TEXT NOT NULL DEFAULT 'pending',   -- pending | done | dismissed
+      source           TEXT NOT NULL DEFAULT 'user',      -- user | assistant
+      fired_at         TIMESTAMPTZ,                        -- set once the cron nudged it
+      entity_type      TEXT,                               -- optional polymorphic link
+      entity_id        TEXT,
+      created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    -- Owner's list, soonest first.
+    CREATE INDEX IF NOT EXISTS idx_reminders_owner
+      ON reminders (organization_id, user_id, remind_at);
+    -- Cron firing scan (system-wide; supports the atomic claim) — only unfired
+    -- pending rows.
+    CREATE INDEX IF NOT EXISTS idx_reminders_due
+      ON reminders (remind_at)
+      WHERE status = 'pending' AND fired_at IS NULL;
+    -- Per-entity reminders panel.
+    CREATE INDEX IF NOT EXISTS idx_reminders_entity
+      ON reminders (entity_type, entity_id, remind_at)
+      WHERE entity_type IS NOT NULL;
+
     -- ───────────────────────────────────────────────────────────────
     -- Plans & Takeoffs — first-class scale-drawing documents (the
     -- "dedicated home" for the Bluebeam-style markup tool). A plan is a

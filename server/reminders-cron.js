@@ -254,6 +254,65 @@ function buildEventReminderEmail(ev, zone) {
   return { subject: subject, html: html, text: text };
 }
 
+// Personal reminders due to fire: pending, not yet fired, remind_at reached.
+// CATCH-UP semantics (remind_at <= NOW(), not a narrow forward window like the
+// event path) so a reminder landing between two 10-min ticks is still caught on
+// the next pass — late but never dropped.
+async function gatherDueReminders() {
+  var sql = [
+    'SELECT r.id, r.title, r.notes, r.remind_at, r.entity_type, r.entity_id,',
+    '       u.id AS uid, u.email, u.name, u.notification_prefs,',
+    '       u.timezone AS user_tz, o.timezone AS org_tz',
+    'FROM reminders r',
+    'JOIN users u ON u.id = r.user_id',
+    'LEFT JOIN organizations o ON o.id = u.organization_id',
+    "WHERE r.status = 'pending' AND r.fired_at IS NULL AND r.remind_at <= NOW()",
+    '  AND u.active = TRUE AND u.email IS NOT NULL AND u.email <> %3',
+    'ORDER BY r.remind_at ASC'
+  ].join(' ').replace('%3', "''");
+  var r = await pool.query(sql);
+  return r.rows;
+}
+
+function buildReminderEmail(rem, zone) {
+  var base = appUrl();
+  var hostLabel = base.replace(/^https?:\/\//, '');
+  var when = fmtEventTime(rem.remind_at, zone);
+  var title = rem.title || '(untitled reminder)';
+  var subject = 'Reminder: ' + title;
+
+  var detailRows = [];
+  detailRows.push('<tr><td style="padding:5px 10px;color:#6b7280;">When</td><td style="padding:5px 10px;font-weight:600;">' + escHtml(when) + '</td></tr>');
+  if (rem.notes) detailRows.push('<tr><td style="padding:5px 10px;color:#6b7280;">Note</td><td style="padding:5px 10px;">' + escHtml(rem.notes) + '</td></tr>');
+
+  var html =
+    '<!doctype html><html><body style="margin:0;padding:0;background:#f3f4f6;font-family:Arial,Helvetica,sans-serif;">' +
+      '<div style="max-width:560px;margin:24px auto;padding:24px;background:#fff;border-radius:10px;color:#1f2937;line-height:1.5;">' +
+        '<div style="margin-bottom:12px;"><img src="' + base + '/images/logo-color.png" alt="Project 86" style="height:40px;display:block;" /></div>' +
+        '<h2 style="margin:0 0 12px 0;color:#111827;font-size:20px;">&#128276; ' + escHtml(title) + '</h2>' +
+        '<p>Hi ' + escHtml(rem.name || 'there') + ', here is your reminder.</p>' +
+        '<table style="width:100%;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;margin:16px 0;font-size:14px;border-collapse:collapse;">' +
+          detailRows.join('') +
+        '</table>' +
+        '<p><a href="' + base + '" style="display:inline-block;background:#4f8cff;color:#fff;text-decoration:none;padding:10px 20px;border-radius:6px;font-weight:600;">Open Reminders</a></p>' +
+        '<div style="margin-top:32px;padding-top:16px;border-top:1px solid #e5e7eb;font-size:12px;color:#6b7280;">' +
+          'Project 86 &middot; <a href="' + base + '" style="color:#4f8cff;text-decoration:none;">' + escHtml(hostLabel) + '</a><br/>' +
+          'You (or your assistant) set this reminder on Project 86. ' +
+          'Toggle notifications in <strong>My Account &rarr; Notifications</strong>.' +
+        '</div>' +
+      '</div>' +
+    '</body></html>';
+
+  var text =
+    'Reminder: ' + title + '\n\n' +
+    'When: ' + when + '\n' +
+    (rem.notes ? 'Note: ' + rem.notes + '\n' : '') +
+    '\nOpen Reminders: ' + base + '\n\n' +
+    'Toggle notifications in My Account -> Notifications.';
+
+  return { subject: subject, html: html, text: text };
+}
+
 // ── Orchestration ────────────────────────────────────────────────────
 // opts.dry = true → report candidates, send nothing, record nothing.
 async function runOnce(opts) {
@@ -262,7 +321,8 @@ async function runOnce(opts) {
   var out = {
     dry: dry,
     tasks: { candidates: 0, sent: 0, skipped: 0 },
-    events: { candidates: 0, sent: 0, skipped: 0 }
+    events: { candidates: 0, sent: 0, skipped: 0 },
+    reminders: { candidates: 0, sent: 0, skipped: 0 }
   };
   try {
     var log = await loadFireLog();
@@ -325,10 +385,40 @@ async function runOnce(opts) {
       }
     }
 
+    // 3) Personal reminders (one per row), rendered in the owner's zone.
+    //    Idempotency is an ATOMIC per-row claim (UPDATE ... WHERE fired_at IS
+    //    NULL RETURNING) — stronger than the JSONB fire log and safe across
+    //    concurrent instances + crash-resumable. NOT recorded in the log.
+    var due = await gatherDueReminders();
+    out.reminders.candidates = due.length;
+    for (var k = 0; k < due.length; k++) {
+      var rem = due[k];
+      var rprefs = rem.notification_prefs || {};
+      if (rprefs.reminder === false) { out.reminders.skipped++; continue; }
+      if (dry) { out.reminders.sent++; continue; } // would-send; do NOT claim
+      var claim = await pool.query(
+        "UPDATE reminders SET fired_at = NOW(), updated_at = NOW()" +
+        " WHERE id = $1 AND fired_at IS NULL AND status = 'pending' RETURNING id",
+        [rem.id]
+      );
+      if (!claim.rowCount) { out.reminders.skipped++; continue; } // another tick won
+      try {
+        var rzone = tz.resolveTz(rem.user_tz, rem.org_tz);
+        var re = buildReminderEmail(rem, rzone);
+        await sendEmail({ to: rem.email, subject: re.subject, html: re.html, text: re.text, tag: 'reminder' });
+        out.reminders.sent++;
+      } catch (e) {
+        // Claimed but send failed — leave it fired (at-most-once), matching
+        // the event-reminder posture; just log.
+        console.warn('[reminders] reminder send failed for ' + rem.id + ':', e && e.message);
+      }
+    }
+
     if (dirty) await saveFireLog(log);
     console.log('[reminders] scan complete — tasks(sent=' + out.tasks.sent + ' skipped=' + out.tasks.skipped +
       ' cand=' + out.tasks.candidates + ') events(sent=' + out.events.sent + ' skipped=' + out.events.skipped +
-      ' cand=' + out.events.candidates + ') dry=' + dry);
+      ' cand=' + out.events.candidates + ') reminders(sent=' + out.reminders.sent + ' skipped=' + out.reminders.skipped +
+      ' cand=' + out.reminders.candidates + ') dry=' + dry);
     return out;
   } catch (e) {
     console.error('[reminders] scan failed:', e && e.message);
