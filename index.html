@@ -733,12 +733,12 @@
                              accordions: data-myfiles-folder + delegated
                              click handler in app.js → window.myFiles.selectFolder. -->
                         <div class="app-nav-parent" data-accordion="tools">
-                            <button class="tab-btn app-nav-parent-btn" data-tab="my-files" data-myfiles-folder="__tools__" data-p86-icon="folder" title="Field Tools — calculators &amp; field utilities (Margin Calc, Stairs, Square Footage…)">
+                            <button class="tab-btn app-nav-parent-btn" data-tab="field-tools" data-p86-icon="folder" title="Field Tools — calculators &amp; field utilities (Margin Calc, Stairs, Square Footage…)">
                                 <span class="app-nav-label">Field Tools</span>
                                 <span class="app-nav-caret" role="button" tabindex="0" aria-label="Toggle Field Tools sub-pages" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" width="12" height="12" aria-hidden="true"><polyline points="9 18 15 12 9 6"></polyline></svg></span>
                             </button>
                             <div class="app-nav-children" role="group" aria-label="Field Tools sub-pages">
-                                <button class="tab-btn app-nav-child" data-tab="my-files" data-myfiles-folder="__printouts__" data-p86-icon="folder" title="Printouts — saved field-tool runs"><span class="app-nav-label">Printouts</span></button>
+                                <button class="tab-btn app-nav-child" data-p86-icon="folder" title="Printouts — saved field-tool runs" onclick="window.switchTab &amp;&amp; window.switchTab('field-tools'); if(window.renderFieldToolsTab) window.renderFieldToolsTab({view:'printouts'});"><span class="app-nav-label">Printouts</span></button>
                             </div>
                         </div>
                     </div>
@@ -1332,6 +1332,12 @@
                      calendar events + field-schedule assignments + tasks
                      due. Painted by renderMyDayTab() in js/my-day.js. -->
                 <div id="my-day" class="tab-content"></div>
+
+                <!-- FIELD TOOLS TAB — calculators / utilities + saved
+                     Printouts. Painted by renderFieldToolsTab() in
+                     js/field-tools.js (FS Phase 4 — promoted from a My
+                     Files virtual folder to its own top-level tab). -->
+                <div id="field-tools" class="tab-content"></div>
 
                 <!-- MESSAGES TAB — team direct messages + entity comment
                      threads. Painted by renderMessagesTab() in
@@ -3090,7 +3096,7 @@
     <script src="js/email-block-editor.js?v=3"></script>
     <script src="js/admin.js?v=101"></script>
     <script src="js/admin-context-registry.js?v=3"></script>
-    <script src="js/field-tools.js?v=8"></script>
+    <script src="js/field-tools.js?v=9"></script>
     <script src="js/clients.js?v=18"></script>
     <!-- Folder taxonomy — default folder structure per entity type
          (lead / estimate / job / client). Loads before subs.js and
@@ -3111,11 +3117,11 @@
     <script src="js/insights.js?v=7"></script>
     <script src="js/schedule.js?v=42"></script>
     <script src="js/my-day.js?v=2"></script>
-    <script src="js/app.js?v=91"></script>
+    <script src="js/app.js?v=92"></script>
     <script src="js/compliance-review-ui.js?v=2"></script>
     <script src="js/messaging.js?v=3"></script>
     <script src="js/file-explorer.js?v=3"></script>
-    <script src="js/my-files.js?v=18"></script>
+    <script src="js/my-files.js?v=19"></script>
     <!-- Tasks / To-Do UI. Loads after my-files.js (reuses window.p86Toast)
          and after api.js/auth.js (p86Api.tasks + p86Auth). -->
     <script src="js/tasks.js?v=3"></script>
@@ -3412,7 +3418,7 @@
           <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('projects')"><span class="p86-mobile-more-icon" data-p86-icon="folder"></span><span>Projects</span></button>
           <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('my-files')"><span class="p86-mobile-more-icon" data-p86-icon="folder"></span><span>My Files</span></button>
           <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('plans')"><span class="p86-mobile-more-icon" data-p86-icon="scale"></span><span>Plans</span></button>
-          <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('my-files',{folder:'__tools__'})"><span class="p86-mobile-more-icon" data-p86-icon="wrench"></span><span>Field Tools</span></button>
+          <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('field-tools')"><span class="p86-mobile-more-icon" data-p86-icon="wrench"></span><span>Field Tools</span></button>
         </div>
 
         <div class="p86-mobile-more-section" data-more-section>Directory</div>

@@ -628,11 +628,52 @@
   // grid embeds in the same right pane that normally shows files.
   window.renderFieldToolsInto = function(host) { loadList(host); };
 
-  // Legacy stand-alone-tab entry point. Kept in case anything else
-  // calls it directly; routes through the same loader.
-  window.renderFieldToolsTab = function() {
-    var host = document.getElementById('field-tools-view');
-    if (host) loadList(host);
+  // Top-level Field Tools tab (FS Phase 4). Renders a sub-tab bar —
+  // Field Tools (the calculators/utilities grid) + Printouts (saved tool
+  // runs, rendered by my-files.js) — into the #field-tools pane. opts.view
+  // ('tools' | 'printouts') picks the initial sub-tab.
+  window.renderFieldToolsTab = function(opts) {
+    var pane = document.getElementById('field-tools');
+    if (!pane) {
+      // Fallback: legacy host id, if present.
+      var legacy = document.getElementById('field-tools-view');
+      if (legacy) loadList(legacy);
+      return;
+    }
+    if (!document.getElementById('p86-ft-tab-styles')) {
+      var st = document.createElement('style');
+      st.id = 'p86-ft-tab-styles';
+      st.textContent =
+        '.ft-page{padding:8px 4px;}' +
+        '.ft-subtabs{display:flex;gap:6px;margin-bottom:10px;border-bottom:1px solid var(--border,#2e3346);padding-bottom:8px;}' +
+        '.ft-subtab{font:inherit;font-size:13px;padding:6px 14px;border-radius:8px;border:1px solid var(--border,#2e3346);background:var(--surface,#181820);color:inherit;cursor:pointer;}' +
+        '.ft-subtab.active{background:var(--accent,#22d3ee);border-color:var(--accent,#22d3ee);color:#06141a;font-weight:600;}';
+      document.head.appendChild(st);
+    }
+    pane.innerHTML =
+      '<div class="ft-page">' +
+        '<div class="ft-subtabs">' +
+          '<button class="ft-subtab" data-ftsub="tools">\u{1F9F0} Field Tools</button>' +
+          '<button class="ft-subtab" data-ftsub="printouts">\u{1F4C4} Printouts</button>' +
+        '</div>' +
+        '<div id="field-tools-view"></div>' +
+        '<div id="field-tools-printouts" style="display:none;"></div>' +
+      '</div>';
+    var toolsHost = pane.querySelector('#field-tools-view');
+    var printHost = pane.querySelector('#field-tools-printouts');
+    function show(which) {
+      pane.querySelectorAll('[data-ftsub]').forEach(function(b) { b.classList.toggle('active', b.getAttribute('data-ftsub') === which); });
+      toolsHost.style.display = which === 'printouts' ? 'none' : '';
+      printHost.style.display = which === 'printouts' ? '' : 'none';
+      if (which === 'printouts') {
+        if (window.myFiles && typeof window.myFiles.renderPrintoutsInto === 'function') window.myFiles.renderPrintoutsInto(printHost);
+        else printHost.innerHTML = '<div style="padding:24px;color:var(--text-dim,#888);">Printouts unavailable — refresh the page.</div>';
+      } else {
+        loadList(toolsHost);
+      }
+    }
+    pane.querySelectorAll('[data-ftsub]').forEach(function(b) { b.onclick = function() { show(b.getAttribute('data-ftsub')); }; });
+    show(opts && opts.view === 'printouts' ? 'printouts' : 'tools');
   };
 
 })();

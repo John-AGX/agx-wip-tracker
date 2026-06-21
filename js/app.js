@@ -1692,6 +1692,7 @@
             schedule:   'Schedule',
             jobs:       'Jobs',
             'my-files': 'Files',
+            'field-tools': 'Field Tools',
             'my-tasks': 'Tasks',
             'my-day':   'My Day',
             messages:   'Messages',
@@ -1784,6 +1785,8 @@
                 renderSummaryDashboard();
             } else if (tabName === 'my-files') {
                 if (typeof window.renderMyFilesTab === 'function') window.renderMyFilesTab();
+            } else if (tabName === 'field-tools') {
+                if (typeof window.renderFieldToolsTab === 'function') window.renderFieldToolsTab();
             } else if (tabName === 'my-tasks') {
                 if (typeof window.renderMyTasksTab === 'function') window.renderMyTasksTab();
             } else if (tabName === 'my-day') {

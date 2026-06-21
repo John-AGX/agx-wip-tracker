@@ -1351,6 +1351,10 @@
     openPrintout: openPrintout,
     deletePrintout: deletePrintout,
     refreshPrintouts: refreshPrintouts,
+    // Render the saved field-tool runs into an arbitrary host — used by the
+    // Field Tools tab's Printouts sub-view (FS Phase 4) so Printouts no
+    // longer needs the My Files __printouts__ virtual folder.
+    renderPrintoutsInto: renderPrintoutsList,
     quickPhoto: quickPhoto,
     // Exposed so sidebar / other modules can trigger a re-sync of the
     // accordion children without forcing a full paint() of the page.
