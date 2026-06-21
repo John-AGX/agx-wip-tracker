@@ -805,7 +805,17 @@
     // Using the "search" output mode so the address is rendered as a
     // pin with the location name in the corner. q= is URL-encoded.
     var url = 'https://www.google.com/maps?q=' + encodeURIComponent(address) + '&output=embed&z=16';
-    host.innerHTML = '<iframe src="' + url + '" style="border:0;width:100%;height:100%;display:block;" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>';
+    // The embed isn't clickable-to-open, so pin a small "Open in Google
+    // Maps" chip that launches the real Maps app/site for this address.
+    var openChip = (window.p86MapLink && window.p86MapLink.linkHTML)
+      ? window.p86MapLink.linkHTML('Open in Google Maps ↗', address,
+          { noIcon: true, style: 'font-size:11px;font-weight:600;color:#0a66c2;text-decoration:none;' })
+      : '';
+    host.innerHTML =
+      '<div style="position:relative;width:100%;height:100%;">' +
+        '<iframe src="' + url + '" style="border:0;width:100%;height:100%;display:block;" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>' +
+        (openChip ? '<div style="position:absolute;bottom:8px;right:8px;background:rgba(255,255,255,0.94);border-radius:6px;padding:4px 9px;box-shadow:0 1px 5px rgba(0,0,0,0.3);">' + openChip + '</div>' : '') +
+      '</div>';
   }
 
   function renderLeadWeather(address) {

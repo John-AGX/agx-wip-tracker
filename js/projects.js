@@ -1432,6 +1432,14 @@
               ? '<iframe class="p86-proj-detail-map-frame" src="https://www.google.com/maps?q=' + encodeURIComponent(addr) + '&output=embed&z=16" loading="lazy" referrerpolicy="no-referrer-when-downgrade"></iframe>'
               : '<div class="p86-proj-detail-map-empty">Add an address to drop a pin here.</div>') +
           '</fieldset>' +
+          // The map above is a non-clickable embed; add a real "Open in
+          // Google Maps" link (full-width row) so the address opens the app.
+          ((addr && window.p86MapLink && window.p86MapLink.linkHTML)
+            ? '<div style="grid-column:1/-1;text-align:right;padding:2px 4px 0;">' +
+                window.p86MapLink.linkHTML('Open in Google Maps ↗', addr,
+                  { noIcon: true, style: 'font-size:11px;font-weight:600;color:var(--accent,#22d3ee);text-decoration:none;' }) +
+              '</div>'
+            : '') +
         '</div>' +
       '</details>' +
 

@@ -2307,6 +2307,13 @@ function renderJobsMain() {
                             '<span id="' + arrowId + '" class="p86-bldg-arrow">' + ARROW_RIGHT + '</span> ' +
                             '<strong class="p86-bldg-name">' + escapeHTML(building.name) + '</strong>' +
                             (building.address ? '<span class="p86-bldg-addr">' + escapeHTML(building.address) + '</span>' : '') +
+                            // 📍 opens this building's address in Google Maps.
+                            // stopPropagation so it doesn't also toggle the row.
+                            (building.address && window.p86MapLink && window.p86MapLink.url(building.address)
+                              ? ' <a href="' + window.p86MapLink.url(building.address).replace(/&/g, '&amp;') +
+                                  '" target="_blank" rel="noopener" onclick="event.stopPropagation();" ' +
+                                  'title="Open in Google Maps" style="text-decoration:none;margin-left:4px;">📍</a>'
+                              : '') +
                         '</td>' +
                         '<td class="p86-bldg-cell p86-bldg-cell-num accent">' +
                             formatCurrency(building.budget) +
