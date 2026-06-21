@@ -8723,6 +8723,32 @@ body.light-mode .p86-pv-tag-modal-chip {
 .p86-totals-chip.info .p86-totals-chip-value { color: var(--accent, #60a5fa); }
 .p86-totals-chip.dim  .p86-totals-chip-value { color: var(--text-dim, #c4c8d8); }
 
+/* Estimate editor totals strip — compact. The shared .p86-totals-chip is
+   sized for the job-summary / CO grids; on the estimate editor the same
+   6 chips were wrapping to a second row (and stacking many rows tall on
+   mobile), pushing the line-item table below the fold. Scope a tighter
+   variant to #ee-totals only — single horizontally-scrolling row, smaller
+   chips — so the header stops eating the viewport. Other surfaces keep
+   the full-size chip. */
+#ee-totals.p86-totals-strip {
+  gap: 6px;
+  padding: 6px 8px;
+  flex-wrap: nowrap;          /* one row; scroll instead of stacking */
+  justify-content: flex-start;
+}
+#ee-totals .p86-totals-chip {
+  min-width: 0;               /* drop the 110px floor — size to content */
+  padding: 4px 10px;
+}
+#ee-totals .p86-totals-chip-label { font-size: 9px; margin-bottom: 1px; letter-spacing: 0.4px; }
+#ee-totals .p86-totals-chip-value { font-size: 13px; }
+@media (max-width: 760px) {
+  #ee-totals.p86-totals-strip { padding: 5px 6px; gap: 5px; }
+  #ee-totals .p86-totals-chip { padding: 4px 8px; }
+  #ee-totals .p86-totals-chip-value { font-size: 12px; }
+  #ee-totals .p86-totals-chip-label { font-size: 8.5px; }
+}
+
 /* Estimate editor line table — column header row + cleaner input
    styling so the table reads more like the CO editor's clean grid.
    The row structures themselves (rendered by renderLineItemRow /
