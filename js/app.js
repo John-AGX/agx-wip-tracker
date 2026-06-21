@@ -1001,10 +1001,10 @@
                         // Read-only over the existing tasks system.
                         '<div>' +
                             '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">' +
-                                '<div style="font-size:11px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">Assistant</div>' +
+                                '<div style="font-size:11px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">Assistant Hub</div>' +
                                 '<button class="ee-btn ghost small" onclick="if(window.p86AI&amp;&amp;window.p86AI.open)window.p86AI.open({entityType:\'ask86\'});" style="font-size:11px;padding:2px 8px;">Ask 86 &rarr;</button>' +
                             '</div>' +
-                            '<div id="summary-assistant" style="border:1px solid var(--border,#333);border-radius:10px;background:var(--card-bg,#0f0f1e);padding:12px;color:var(--text-dim,#888);font-size:12px;min-height:80px;">Loading tasks&hellip;</div>' +
+                            '<div id="summary-assistant" style="border:1px solid var(--border,#333);border-radius:10px;background:var(--card-bg,#0f0f1e);padding:12px;color:var(--text-dim,#888);font-size:12px;min-height:80px;">Loading your day&hellip;</div>' +
                         '</div>' +
                         // Agenda
                         '<div>' +
@@ -1334,11 +1334,39 @@
                 host.innerHTML = '<div style="text-align:center;color:var(--text-dim,#888);font-size:12px;padding:8px;">Tasks not available offline.</div>';
                 return;
             }
-            // My open (not done) tasks — the idx_tasks_assignee index
-            // powers assignee=me + exclude_done. We bucket client-side
-            // into overdue / today / upcoming by due_date.
-            window.p86Api.tasks.list({ assignee: 'me', exclude_done: 1, limit: 100 }).then(function(res) {
-                var tasks = (res && res.tasks) || [];
+            // Personal hub: my open tasks + pending reminders + next
+            // appointment, fetched in parallel. Each feed degrades to [] so a
+            // missing/erroring endpoint never blanks the whole card.
+            var nowD = new Date();
+            var tasksP = window.p86Api.tasks.list({ assignee: 'me', exclude_done: 1, limit: 100 })
+                .then(function(r) { return (r && r.tasks) || []; }).catch(function() { return []; });
+            var remP = (window.p86Api.reminders && window.p86Api.reminders.list)
+                ? window.p86Api.reminders.list().then(function(r) { return (r && r.reminders) || []; }).catch(function() { return []; })
+                : Promise.resolve([]);
+            var calP = (window.p86Api.calendar && window.p86Api.calendar.list)
+                ? window.p86Api.calendar.list({ from: nowD.toISOString(), to: new Date(nowD.getTime() + 14 * 864e5).toISOString() })
+                    .then(function(r) { return (r && r.events) || []; }).catch(function() { return []; })
+                : Promise.resolve([]);
+
+            // Compact "Today 3:00 PM" / "Tmrw 9:00 AM" / "Tue Jun 24 8:00 AM".
+            function fmtWhenShort(iso) {
+                var d = new Date(iso);
+                if (isNaN(d.getTime())) return '';
+                var t = '';
+                try { t = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }); } catch (e) {}
+                var nd = new Date(); var tm = new Date(); tm.setDate(nd.getDate() + 1);
+                if (d.toDateString() === nd.toDateString()) return 'Today' + (t ? ' ' + t : '');
+                if (d.toDateString() === tm.toDateString()) return 'Tmrw' + (t ? ' ' + t : '');
+                var ds = '';
+                try { ds = d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }); } catch (e) { ds = String(iso).slice(0, 10); }
+                return ds + (t ? ' ' + t : '');
+            }
+            function sectionLabel(txt) {
+                return '<div style="font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#888);margin:0 0 6px;">' + escapeHTML(txt) + '</div>';
+            }
+
+            Promise.all([tasksP, remP, calP]).then(function(out) {
+                var tasks = out[0], reminders = out[1], events = out[2];
                 var todayStr = (function() {
                     var dt = new Date(); dt.setHours(0, 0, 0, 0);
                     var m = String(dt.getMonth() + 1).padStart(2, '0');
@@ -1347,7 +1375,6 @@
                 })();
                 function dueYmd(t) {
                     if (!t.due_date) return null;
-                    // DATE columns serialize as ISO; take the date part.
                     return String(t.due_date).slice(0, 10);
                 }
                 var overdue = [], today = [], upcoming = [];
@@ -1359,12 +1386,18 @@
                     else upcoming.push(t);
                 });
 
-                // One-line daily summary.
-                var summaryLine;
-                if (!tasks.length) summaryLine = 'No open tasks — you’re all caught up.';
-                else if (overdue.length) summaryLine = overdue.length + ' overdue, ' + today.length + ' due today.';
-                else if (today.length) summaryLine = today.length + ' due today, ' + upcoming.length + ' upcoming.';
-                else summaryLine = tasks.length + ' open task' + (tasks.length === 1 ? '' : 's') + ', none overdue.';
+                var pendRems = reminders.filter(function(r) { return (r.status || 'pending') === 'pending'; })
+                    .sort(function(a, b) { return new Date(a.remind_at) - new Date(b.remind_at); });
+                var nextEv = events[0] || null; // server returns starts_at ASC, windowed to now+14d
+
+                // One-line summary spanning all three feeds.
+                var bits = [];
+                if (overdue.length) bits.push(overdue.length + ' overdue');
+                if (today.length) bits.push(today.length + ' due today');
+                if (pendRems.length) bits.push(pendRems.length + ' reminder' + (pendRems.length === 1 ? '' : 's'));
+                var summaryLine = bits.length
+                    ? bits.join(' · ')
+                    : (tasks.length ? tasks.length + ' open task' + (tasks.length === 1 ? '' : 's') + ', none overdue.' : 'All caught up — nothing needs you right now.');
 
                 function countPill(label, n, color) {
                     var c = (n > 0) ? color : 'var(--text-dim,#888)';
@@ -1376,15 +1409,41 @@
 
                 var html =
                     '<div style="font-size:12px;color:var(--text,#fff);margin-bottom:10px;line-height:1.4;">' + escapeHTML(summaryLine) + '</div>' +
-                    '<div style="display:flex;gap:6px;margin-bottom:10px;">' +
+                    '<div style="display:flex;gap:6px;margin-bottom:12px;">' +
                         countPill('Today', today.length, '#22d3ee') +
                         countPill('Overdue', overdue.length, '#f87171') +
                         countPill('Upcoming', upcoming.length, '#34d399') +
                     '</div>';
 
-                // Short list — overdue first, then today, then upcoming.
+                // NEXT UP — the soonest upcoming appointment.
+                if (nextEv && nextEv.starts_at) {
+                    html += sectionLabel('Next up') +
+                        '<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:rgba(34,211,238,0.06);border:1px solid var(--border,#333);border-radius:8px;margin-bottom:12px;">' +
+                            '<span style="width:7px;height:7px;border-radius:50%;background:#22d3ee;flex-shrink:0;"></span>' +
+                            '<span style="flex:1;font-size:12px;color:var(--text,#fff);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(nextEv.title || '(untitled)') + '</span>' +
+                            '<span style="font-size:10.5px;color:#22d3ee;font-weight:600;flex-shrink:0;">' + escapeHTML(fmtWhenShort(nextEv.starts_at)) + '</span>' +
+                        '</div>';
+                }
+
+                // REMINDERS — pending, soonest first (top 3).
+                if (pendRems.length) {
+                    html += sectionLabel(pendRems.length > 3 ? 'Reminders · ' + pendRems.length : 'Reminders');
+                    html += '<div style="display:flex;flex-direction:column;gap:1px;background:var(--border,#222);border-radius:8px;overflow:hidden;margin-bottom:12px;">';
+                    pendRems.slice(0, 3).forEach(function(r) {
+                        var rOver = new Date(r.remind_at).getTime() < nowD.getTime();
+                        html += '<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;background:var(--card-bg,#0f0f1e);">' +
+                            '<span style="color:#a855f7;font-size:11px;flex-shrink:0;">&#9200;</span>' +
+                            '<span style="flex:1;font-size:12px;color:var(--text,#fff);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(r.title || '(untitled)') + '</span>' +
+                            '<span style="font-size:10px;font-weight:600;flex-shrink:0;color:' + (rOver ? '#f87171' : 'var(--text-dim,#888)') + ';">' + escapeHTML(fmtWhenShort(r.remind_at)) + '</span>' +
+                        '</div>';
+                    });
+                    html += '</div>';
+                }
+
+                // MY TASKS — short list, overdue first, then today, then upcoming.
                 var listed = overdue.concat(today).concat(upcoming).slice(0, 4);
                 if (listed.length) {
+                    html += sectionLabel('My tasks');
                     html += '<div style="display:flex;flex-direction:column;gap:1px;background:var(--border,#222);border-radius:8px;overflow:hidden;margin-bottom:10px;">';
                     listed.forEach(function(t) {
                         var y = dueYmd(t);
@@ -1407,7 +1466,7 @@
 
                 host.innerHTML = html;
             }).catch(function(err) {
-                host.innerHTML = '<div style="text-align:center;color:var(--text-dim,#888);font-size:12px;padding:8px;">Could not load tasks: ' + escapeHTML((err && err.message) || 'error') + '</div>';
+                host.innerHTML = '<div style="text-align:center;color:var(--text-dim,#888);font-size:12px;padding:8px;">Could not load hub: ' + escapeHTML((err && err.message) || 'error') + '</div>';
             });
         }
         // Public hook so other surfaces (e.g. after creating a task) can
