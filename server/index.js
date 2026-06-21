@@ -45,6 +45,7 @@ const adminAnthropicRoutes = require('./routes/admin-anthropic-routes');
 const adminSmsRoutes = require('./routes/admin-sms-routes');
 const adminOrganizationsRoutes = require('./routes/admin-organizations-routes');
 const adminConsoleRoutes = require('./routes/admin-console-routes');
+const adminOrgResetRoutes = require('./routes/admin-org-reset-routes');
 const remindersRoutes = require('./routes/reminders-routes');
 const smsRoutes = require('./routes/sms-routes');
 const reportRoutes = require('./routes/report-routes');
@@ -200,6 +201,8 @@ app.use('/api/weather', weatherRoutes);
 app.use('/api/email/campaigns', emailCampaignsRoutes);
 app.use('/api/email', emailRoutes);
 app.use('/api/admin/agents', adminAgentsRoutes);
+// Danger Zone — system-admin org "clean slate" hard reset (preview + execute).
+app.use('/api/admin/org-reset', adminOrgResetRoutes);
 app.use('/api/admin/context-registry', contextRegistryRoutes);
 // Wave 3 — RFI / submittal / transmittal workflow items.
 // Two mounts: global endpoints at /api/workflow-items/* and nested

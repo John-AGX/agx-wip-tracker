@@ -5667,6 +5667,7 @@
           '<button class="ws-right-tab' + (_systemView === 'email-provider' ? ' active' : '') + '" onclick="switchSystemView(\'email-provider\')">&#x2709; Email Provider</button>' +
           '<button class="ws-right-tab' + (_systemView === 'bt-mapping' ? ' active' : '') + '" onclick="switchSystemView(\'bt-mapping\')">&#x1F517; BT Mapping</button>' +
           '<button class="ws-right-tab' + (_systemView === 'settings' ? ' active' : '') + '" onclick="switchSystemView(\'settings\')">&#x1F527; Platform Settings</button>' +
+          '<button class="ws-right-tab' + (_systemView === 'danger' ? ' active' : '') + '" onclick="switchSystemView(\'danger\')" style="color:#f87171;">&#x26A0; Danger Zone</button>' +
         '</div>' +
       '</div>' +
       '<div id="system-section-host"></div>';
@@ -5698,7 +5699,109 @@
     if (_systemView === 'email-provider') return renderSystemEmailProvider(host);
     if (_systemView === 'bt-mapping') return renderSystemBTMapping(host);
     if (_systemView === 'settings') return renderSystemSettings(host);
+    if (_systemView === 'danger') return renderSystemDanger(host);
   }
+
+  // ── Danger Zone — org "clean slate" hard reset ────────────────────────
+  // Two-step + typed-confirmation guard. Step 1 loads a read-only preview of
+  // exactly what would be deleted; step 2 requires typing the exact phrase
+  // before the (red) execute button enables. Backed by /api/admin/org-reset.
+  var RESET_PHRASE = 'RESET MY WORKSPACE';
+  function renderSystemDanger(host) {
+    host.innerHTML =
+      '<div style="max-width:640px;">' +
+        '<div style="padding:14px 16px;background:rgba(248,113,113,0.08);border:1px solid rgba(248,113,113,0.35);border-radius:10px;margin-bottom:16px;">' +
+          '<div style="font-weight:700;color:#f87171;font-size:14px;margin-bottom:6px;">&#x26A0; Reset workspace data (clean slate)</div>' +
+          '<div style="font-size:12.5px;line-height:1.6;color:var(--text-dim,#bbb);">' +
+            'Permanently deletes <strong>all leads, jobs, estimates, and projects</strong> in your workspace, plus everything attached to them — photos &amp; files, schedule entries, change orders / POs / invoices, cost lines, reports, and entity-linked tasks / reminders / calendar events. ' +
+            '<strong style="color:#fca5a5;">This cannot be undone from the app.</strong><br><br>' +
+            'Kept: clients, subs, users, org settings &amp; templates, field tools, and your personal to-dos / reminders.<br><br>' +
+            '<strong style="color:#fca5a5;">Take a Railway database snapshot first</strong> — it is the only way to recover.' +
+          '</div>' +
+        '</div>' +
+        '<button class="ee-btn" id="dz-load" onclick="dzLoadPreview()" style="font-size:12px;">Load preview of what will be deleted</button>' +
+        '<div id="dz-body" style="margin-top:16px;"></div>' +
+      '</div>';
+  }
+
+  window.dzLoadPreview = function() {
+    var body = document.getElementById('dz-body');
+    var btn = document.getElementById('dz-load');
+    if (!body) return;
+    if (btn) btn.disabled = true;
+    body.innerHTML = '<div style="font-style:italic;color:var(--text-dim,#888);padding:8px 0;">Counting…</div>';
+    window.p86Api.get('/api/admin/org-reset/preview').then(function(res) {
+      if (btn) btn.disabled = false;
+      var c = (res && res.counts) || {};
+      function row(label, key) {
+        var v = c[key];
+        var disp = (v == null) ? '<span style="color:var(--text-dim,#888);">—</span>' : '<strong style="color:' + (v > 0 ? '#f87171' : 'var(--text-dim,#888)') + ';">' + v + '</strong>';
+        return '<tr><td style="padding:5px 12px 5px 0;color:var(--text-dim,#bbb);">' + label + '</td><td style="padding:5px 0;text-align:right;font-variant-numeric:tabular-nums;">' + disp + '</td></tr>';
+      }
+      var legacy = (c.legacy_untagged_leads || 0) + (c.legacy_untagged_jobs || 0);
+      var sweeps = c.include_legacy_untagged !== false;
+      body.innerHTML =
+        '<div style="font-size:12px;font-weight:600;color:var(--text,#fff);margin-bottom:8px;">This will permanently delete:</div>' +
+        '<table style="font-size:12.5px;border-collapse:collapse;margin-bottom:6px;">' +
+          row('Leads', 'leads') + row('Jobs', 'jobs') + row('Estimates', 'estimates') + row('Projects', 'projects') +
+          '<tr><td colspan="2" style="padding:6px 0;border-top:1px solid var(--border,#333);"></td></tr>' +
+          row('Photos &amp; files', 'attachments') + row('File folders', 'file_folders') +
+          row('Reports', 'reports') + row('Schedule entries', 'schedule_entries') +
+          row('Change orders', 'change_orders') + row('Sub assignments', 'job_subs') +
+          row('Compliance items', 'compliance_items') + row('Message threads', 'messages') +
+          row('Linked tasks', 'tasks') + row('Linked reminders', 'reminders') +
+          row('Linked calendar events', 'calendar_events') + row('Plans / takeoffs', 'plans') +
+        '</table>' +
+        (legacy > 0
+          ? '<div style="font-size:11px;color:' + (sweeps ? 'var(--text-dim,#999)' : '#fbbf24') + ';margin-bottom:14px;">' +
+              (sweeps
+                ? 'Includes ' + legacy + ' legacy un-tagged record(s) folded into the totals above (you are the only organization).'
+                : legacy + ' legacy un-tagged record(s) are NOT included — another organization exists, so only your org’s tagged rows are deleted.') +
+            '</div>'
+          : '<div style="margin-bottom:14px;"></div>') +
+        '<div style="font-size:12px;color:var(--text-dim,#bbb);margin-bottom:6px;">To proceed, type <code style="color:#fca5a5;background:rgba(248,113,113,0.1);padding:1px 6px;border-radius:4px;">' + RESET_PHRASE + '</code> exactly:</div>' +
+        '<input id="dz-confirm" type="text" autocomplete="off" oninput="dzSyncConfirm()" placeholder="' + RESET_PHRASE + '" style="width:100%;max-width:360px;font:inherit;padding:9px 12px;border:1px solid var(--border,#444);border-radius:8px;background:var(--input-bg,#1a1a2e);color:var(--text,#fff);margin-bottom:12px;" />' +
+        '<div><button class="ee-btn" id="dz-exec" disabled onclick="dzExecute()" style="font-size:12px;background:#7f1d1d;border-color:#b91c1c;color:#fff;opacity:0.5;cursor:not-allowed;">&#x1F5D1; Permanently delete this data</button></div>' +
+        '<div id="dz-result" style="margin-top:14px;"></div>';
+    }).catch(function(err) {
+      if (btn) btn.disabled = false;
+      body.innerHTML = '<div style="color:#f87171;font-size:12px;">Could not load preview: ' + escapeHTML((err && err.message) || 'error') + '</div>';
+    });
+  };
+
+  window.dzSyncConfirm = function() {
+    var inp = document.getElementById('dz-confirm');
+    var btn = document.getElementById('dz-exec');
+    if (!inp || !btn) return;
+    var ok = inp.value === RESET_PHRASE;
+    btn.disabled = !ok;
+    btn.style.opacity = ok ? '1' : '0.5';
+    btn.style.cursor = ok ? 'pointer' : 'not-allowed';
+  };
+
+  window.dzExecute = function() {
+    var inp = document.getElementById('dz-confirm');
+    var btn = document.getElementById('dz-exec');
+    var out = document.getElementById('dz-result');
+    if (!inp || inp.value !== RESET_PHRASE) return;
+    if (!window.confirm('Final check — permanently delete all leads, jobs, estimates, and projects (and attached data)? This cannot be undone.')) return;
+    if (btn) { btn.disabled = true; btn.textContent = 'Deleting…'; }
+    window.p86Api.post('/api/admin/org-reset/execute', { confirm: RESET_PHRASE }).then(function(res) {
+      var d = (res && res.deleted) || {};
+      var lines = Object.keys(d).map(function(k) { return k + ': ' + d[k]; }).join(' · ');
+      var skipped = (res && res.skipped) || [];
+      if (out) out.innerHTML =
+        '<div style="padding:12px 14px;background:rgba(52,211,153,0.08);border:1px solid rgba(52,211,153,0.3);border-radius:8px;font-size:12px;line-height:1.6;color:var(--text,#fff);">' +
+          '<strong style="color:#34d399;">Workspace reset complete.</strong><br>' +
+          '<span style="color:var(--text-dim,#bbb);">Deleted — ' + escapeHTML(lines || 'nothing matched') + '</span>' +
+          (skipped.length ? '<br><span style="color:#fbbf24;">Skipped ' + skipped.length + ' table(s): ' + escapeHTML(skipped.map(function(s) { return s.table; }).join(', ')) + '</span>' : '') +
+        '</div>';
+      if (typeof reloadLeadsCache === 'function') { try { reloadLeadsCache(); } catch (e) {} }
+    }).catch(function(err) {
+      if (btn) { btn.disabled = false; btn.innerHTML = '&#x1F5D1; Permanently delete this data'; }
+      if (out) out.innerHTML = '<div style="color:#f87171;font-size:12px;">Reset failed: ' + escapeHTML((err && err.message) || 'error') + '</div>';
+    });
+  };
 
   function renderSystemOrganizations(host) {
     host.innerHTML = '<div style="font-style:italic;color:var(--text-dim,#888);padding:14px 0;">Loading organizations…</div>';
