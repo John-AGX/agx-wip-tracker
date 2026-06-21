@@ -2047,6 +2047,22 @@ function renderJobsMain() {
                 }
             }
 
+            // ── Files panel ──
+            // Explorer-style file system scoped to this job (photos, plans,
+            // closeout docs, etc.). Jobs had no file UI before.
+            if (window.p86Explorer && typeof window.p86Explorer.mount === 'function') {
+                var fileWrap = document.createElement('fieldset');
+                fileWrap.style.cssText = 'border:1px solid var(--border,#333);border-radius:8px;padding:6px 10px 8px;margin:0 0 14px 0;';
+                fileWrap.innerHTML =
+                    '<legend style="font-size:10px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.6px;padding:0 5px;">&#x1F4C1; Files</legend>' +
+                    '<div id="job-overview-files-host"></div>';
+                container.appendChild(fileWrap);
+                var fileHost = fileWrap.querySelector('#job-overview-files-host');
+                if (fileHost) {
+                    window.p86Explorer.mount(fileHost, { entityType: 'job', entityId: String(jobId), canEdit: true, embedded: true });
+                }
+            }
+
             // ── Building cards ──
             const buildings = appData.buildings.filter(b => b.jobId === jobId);
             if (buildings.length > 0) {

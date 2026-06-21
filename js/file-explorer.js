@@ -189,8 +189,12 @@
       // flight. Bail so we don't clobber it.
       if (opts.shouldRender && !opts.shouldRender()) return;
       var canEdit = S.canEdit;
+      // Embedded contexts (entity modals, an overview fieldset) get a
+      // bounded height with internal scroll; full-pane mounts (My Files,
+      // a Files subtab) keep the default 100dvh fill.
+      var rootStyle = opts.embedded ? ' style="height:' + (opts.height || 520) + 'px;min-height:' + (opts.height || 520) + 'px;border:1px solid var(--border,#2e3346);border-radius:10px;"' : '';
       host.innerHTML =
-        '<div class="p86fx" data-view="' + S.view + '">' +
+        '<div class="p86fx" data-view="' + S.view + '"' + rootStyle + '>' +
           '<div class="p86fx-toolbar">' +
             (canEdit ? '<button class="p86fx-btn" data-act="newfolder">\u{1F4C1}+ New folder</button>' : '') +
             (canEdit ? '<button class="p86fx-btn primary" data-act="upload">↑ Upload</button>' : '') +

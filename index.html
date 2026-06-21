@@ -2879,6 +2879,12 @@
                Mounted by openEditClientModal via p86Tasks.mountEntityPanel. -->
           <div id="clientEditor_tasksHost" style="display:none;"></div>
 
+          <!-- Files (Explorer) — edit mode only. Mounted by openEditClientModal. -->
+          <fieldset id="clientEditor_filesWrap" style="display:none;border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;margin-top:12px;">
+            <legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">&#x1F4C1; Files</legend>
+            <div id="clientEditor_filesHost"></div>
+          </fieldset>
+
           <div id="clientEditor_status" style="font-size:13px;"></div>
         </div>
         <div class="modal-footer">
@@ -3085,7 +3091,7 @@
     <script src="js/admin.js?v=101"></script>
     <script src="js/admin-context-registry.js?v=3"></script>
     <script src="js/field-tools.js?v=8"></script>
-    <script src="js/clients.js?v=17"></script>
+    <script src="js/clients.js?v=18"></script>
     <!-- Folder taxonomy — default folder structure per entity type
          (lead / estimate / job / client). Loads before subs.js and
          my-files.js, which merge it with live folders for the grant
@@ -3099,7 +3105,7 @@
          Leads lists. Loads BEFORE those renderers so window.p86Tables is
          ready the first time they build their tables. -->
     <script src="js/table-enhancements.js?v=5"></script>
-    <script src="js/leads.js?v=44"></script>
+    <script src="js/leads.js?v=45"></script>
     <script src="js/job-costs-import.js?v=4"></script>
     <script src="js/qb-costs-view.js?v=11"></script>
     <script src="js/insights.js?v=7"></script>
@@ -3108,7 +3114,7 @@
     <script src="js/app.js?v=91"></script>
     <script src="js/compliance-review-ui.js?v=2"></script>
     <script src="js/messaging.js?v=3"></script>
-    <script src="js/file-explorer.js?v=1"></script>
+    <script src="js/file-explorer.js?v=2"></script>
     <script src="js/my-files.js?v=18"></script>
     <!-- Tasks / To-Do UI. Loads after my-files.js (reuses window.p86Toast)
          and after api.js/auth.js (p86Api.tasks + p86Auth). -->
@@ -3134,7 +3140,7 @@
          calls into window.p86ReportTemplates. -->
     <script src="js/report-templates.js?v=1"></script>
     <script src="js/report-style-packs.js?v=2"></script>
-    <script src="js/projects.js?v=63"></script>
+    <script src="js/projects.js?v=64"></script>
     <script src="js/console.js?v=4"></script>
     <!-- Jobs Hub — cross-job index pages (Purchase Orders / Change Orders /
          RFIs / Submittals) for the Jobs sidebar dropdown. Uses p86Api +
@@ -3147,7 +3153,7 @@
          estimate-preview + the upcoming change-order-editor. Loads
          BEFORE any of them so window.p86Pricing is ready. -->
     <script src="js/pricing-pipeline.js?v=1"></script>
-    <script src="js/jobs.js?v=93"></script>
+    <script src="js/jobs.js?v=94"></script>
     <script src="js/job-workflow-ui.js?v=4"></script>
     <script src="js/estimates.js?v=43"></script>
     <script src="js/proposal.js?v=25"></script>

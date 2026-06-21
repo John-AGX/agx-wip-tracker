@@ -4106,30 +4106,14 @@
   function paintFilesTab() {
     var host = document.getElementById('projFilesHost');
     if (!host) return;
-    var files = (_detailState.photos || []).filter(function(a) { return !(a.mime_type && /^image\//.test(a.mime_type)); });
-    if (!files.length) {
-      host.innerHTML = '<div class="p86-proj-empty-line" style="padding:30px;text-align:center;border:1px dashed var(--border, #333);border-radius:10px;">No documents yet. Upload PDFs / Word / Excel via the Photos tab and they\'ll appear here.</div>';
+    // Explorer-style file system for the whole project (folders, upload,
+    // drag-drop, etc.) — supersedes the old read-only document list. The
+    // Photos tab keeps the report-authoring photo feed.
+    if (_detailState.projectId && window.p86Explorer && window.p86Explorer.mount) {
+      window.p86Explorer.mount(host, { entityType: 'project', entityId: String(_detailState.projectId), canEdit: true, embedded: true });
       return;
     }
-    files.sort(function(a, b) {
-      return new Date(b.uploaded_at).getTime() - new Date(a.uploaded_at).getTime();
-    });
-    host.innerHTML = '<div class="p86-proj-files-list">' +
-      files.map(function(f) {
-        var ext = (f.filename || '').split('.').pop().slice(0, 4).toUpperCase() || 'DOC';
-        return '<a class="p86-proj-file-row" href="' + escapeAttr(f.original_url) + '" download="' + escapeAttr(f.filename) + '" target="_blank" rel="noopener">' +
-          '<div class="p86-proj-file-ext">' + escapeHTML(ext) + '</div>' +
-          '<div class="p86-proj-file-meta">' +
-            '<div class="p86-proj-file-name">' + escapeHTML(f.filename) + '</div>' +
-            '<div class="p86-proj-file-sub">' + fmtFileSize(f.size_bytes) +
-              (f.uploaded_by_name ? ' &middot; ' + escapeHTML(f.uploaded_by_name) : '') +
-              ' &middot; ' + escapeHTML(fmtRelative(f.uploaded_at)) +
-            '</div>' +
-          '</div>' +
-          '<span class="p86-proj-file-arrow">&#x2B07;</span>' +
-        '</a>';
-      }).join('') +
-    '</div>';
+    host.innerHTML = '<div class="p86-proj-empty-line" style="padding:30px;text-align:center;border:1px dashed var(--border, #333);border-radius:10px;">File browser unavailable — refresh the page.</div>';
   }
 
   function fmtFileSize(bytes) {

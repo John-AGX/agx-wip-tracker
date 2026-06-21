@@ -1538,7 +1538,16 @@
     // re-entry since p86Attachments handles its own state internally.
     if (name === 'photos' && _currentEditingLeadId) {
       var mountEl = document.getElementById('leadEditor_photosMount');
-      if (mountEl && window.p86Attachments) {
+      if (mountEl && window.p86Explorer) {
+        // Explorer-style files (folders, drag-drop, etc.). Embedded height
+        // so it fits inside the lead editor tab.
+        window.p86Explorer.mount(mountEl, {
+          entityType: 'lead',
+          entityId: _currentEditingLeadId,
+          canEdit: true,
+          embedded: true
+        });
+      } else if (mountEl && window.p86Attachments) {
         window.p86Attachments.mount(mountEl, {
           entityType: 'lead',
           entityId: _currentEditingLeadId,
