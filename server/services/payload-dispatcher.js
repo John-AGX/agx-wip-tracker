@@ -138,13 +138,28 @@ const CALENDAR_EVENT_FIELDS = new Set([
 ]);
 const CALENDAR_EVENT_STATUSES = new Set(['confirmed', 'tentative', 'canceled']);
 
-// Task editable fields (mirrors tasks-routes.js). organization_id +
-// created_by + assignee_user_id are stamped from ctx (a personal task
-// assigned to the acting user) — never client-supplied. entity_type/
-// entity_id OPTIONALLY link the task/reminder to a client/job/lead/project.
+// Task/to-do/reminder editable fields (mirror tasks-routes.js +
+// reminders-crud-routes.js). organization_id + created_by are always stamped
+// from ctx; scope/owner_user_id/user_id are set per dispatcher. entity_type/
+// entity_id OPTIONALLY link the item to a client/job/lead/project.
+//
+// THREE tiers (3-tier model):
+//   task     → ORG task, org-wide visible, assignable to any org user via
+//              assignee_user_id (validated in-org; defaults to the actor).
+//   todo     → PERSONAL to-do, private to the actor (scope='personal',
+//              owner_user_id stamped) — NOT assignable.
+//   reminder → PERSONAL timed nudge in the reminders table (its own list),
+//              source='assistant'.
 const TASK_FIELDS = new Set([
   'title', 'notes', 'kind', 'status', 'priority', 'due_date',
+  'assignee_user_id', 'entity_type', 'entity_id',
+]);
+const TODO_FIELDS = new Set([
+  'title', 'notes', 'kind', 'status', 'priority', 'due_date',
   'entity_type', 'entity_id',
+]);
+const REMINDER_FIELDS = new Set([
+  'title', 'notes', 'remind_at', 'entity_type', 'entity_id',
 ]);
 
 // Entity kinds a calendar_event or task may be linked to. Mirrors the
@@ -255,8 +270,22 @@ const PAYLOAD_OPS_SCHEMAS = Object.freeze({
   },
   task: {
     // op: 'create' (v1). fields: { title, due_date? (DATE), notes?, kind?,
-    //           status?, priority? }. Created as a personal task assigned to
-    //           the acting user; org + creator stamped from ctx.
+    //           status?, priority?, assignee_user_id? (in-org user; defaults
+    //           to the actor) }. An ORG task — org-wide visible. org + creator
+    //           stamped from ctx.
+    allowedTopKeys: new Set(['op', 'fields']),
+  },
+  todo: {
+    // op: 'create' (v1). fields: same as task MINUS assignee_user_id. A
+    //           PERSONAL to-do — private to the actor (scope='personal',
+    //           owner_user_id stamped from ctx). Not assignable.
+    allowedTopKeys: new Set(['op', 'fields']),
+  },
+  reminder: {
+    // op: 'create' (v1). fields: { title, remind_at (ISO datetime), notes?,
+    //           entity_type?, entity_id? }. A PERSONAL timed nudge written to
+    //           the reminders table (its own list); source='assistant'. org +
+    //           user stamped from ctx.
     allowedTopKeys: new Set(['op', 'fields']),
   },
 });
@@ -503,29 +532,51 @@ function validateOps(entityType, ops) {
     }
     validateScheduleLink('calendar_event', fields);
   }
-  if (entityType === 'task') {
+  if (entityType === 'task' || entityType === 'todo') {
     const op = ops.op || 'create';
     if (op !== 'create') {
-      throw new Error(`task.ops.op must be 'create' (got '${op}')`);
+      throw new Error(`${entityType}.ops.op must be 'create' (got '${op}')`);
     }
     const fields = ops.fields || {};
-    if (typeof fields !== 'object') throw new Error('task.ops.fields must be an object');
+    if (typeof fields !== 'object') throw new Error(`${entityType}.ops.fields must be an object`);
     if (!fields.title || !String(fields.title).trim()) {
-      throw new Error('task.create requires fields.title');
+      throw new Error(`${entityType}.create requires fields.title`);
     }
-    const bad = Object.keys(fields).filter(k => !TASK_FIELDS.has(k));
+    const allowed = entityType === 'task' ? TASK_FIELDS : TODO_FIELDS;
+    const bad = Object.keys(fields).filter(k => !allowed.has(k));
     if (bad.length) {
       throw new PayloadValidationError(
-        `task.ops.fields has non-editable key(s): ${bad.map(k => `'${k}'`).join(', ')}. ` +
-        `Valid: ${[...TASK_FIELDS].sort().join(', ')}. (org/creator/assignee are set automatically.)`,
-        { code: 'unknown_field', field_path: 'task.ops.fields', received: bad, expected: [...TASK_FIELDS] }
+        `${entityType}.ops.fields has non-editable key(s): ${bad.map(k => `'${k}'`).join(', ')}. ` +
+        `Valid: ${[...allowed].sort().join(', ')}. (org/creator${entityType === 'todo' ? '/owner' : ''} set automatically.)`,
+        { code: 'unknown_field', field_path: `${entityType}.ops.fields`, received: bad, expected: [...allowed] }
       );
     }
-    if (fields.kind && !TASK_KINDS.has(fields.kind)) throw new Error(`task.fields.kind invalid: '${fields.kind}'. Valid: ${[...TASK_KINDS].sort().join(', ')}.`);
-    if (fields.status && !TASK_STATUSES.has(fields.status)) throw new Error(`task.fields.status invalid: '${fields.status}'. Valid: ${[...TASK_STATUSES].sort().join(', ')}.`);
-    if (fields.priority && !TASK_PRIORITIES.has(fields.priority)) throw new Error(`task.fields.priority invalid: '${fields.priority}'. Valid: ${[...TASK_PRIORITIES].sort().join(', ')}.`);
-    if (fields.due_date && isNaN(new Date(fields.due_date).getTime())) throw new Error(`task.fields.due_date is not a valid date: '${fields.due_date}'`);
-    validateScheduleLink('task', fields);
+    if (fields.kind && !TASK_KINDS.has(fields.kind)) throw new Error(`${entityType}.fields.kind invalid: '${fields.kind}'. Valid: ${[...TASK_KINDS].sort().join(', ')}.`);
+    if (fields.status && !TASK_STATUSES.has(fields.status)) throw new Error(`${entityType}.fields.status invalid: '${fields.status}'. Valid: ${[...TASK_STATUSES].sort().join(', ')}.`);
+    if (fields.priority && !TASK_PRIORITIES.has(fields.priority)) throw new Error(`${entityType}.fields.priority invalid: '${fields.priority}'. Valid: ${[...TASK_PRIORITIES].sort().join(', ')}.`);
+    if (fields.due_date && isNaN(new Date(fields.due_date).getTime())) throw new Error(`${entityType}.fields.due_date is not a valid date: '${fields.due_date}'`);
+    if (entityType === 'task' && fields.assignee_user_id != null && !Number.isInteger(Number(fields.assignee_user_id))) {
+      throw new Error('task.fields.assignee_user_id must be a numeric user id (validated in-org at apply time).');
+    }
+    validateScheduleLink(entityType, fields);
+  }
+  if (entityType === 'reminder') {
+    const op = ops.op || 'create';
+    if (op !== 'create') throw new Error(`reminder.ops.op must be 'create' (got '${op}')`);
+    const fields = ops.fields || {};
+    if (typeof fields !== 'object') throw new Error('reminder.ops.fields must be an object');
+    if (!fields.title || !String(fields.title).trim()) throw new Error('reminder.create requires fields.title');
+    if (!fields.remind_at) throw new Error('reminder.create requires fields.remind_at (ISO datetime)');
+    if (isNaN(new Date(fields.remind_at).getTime())) throw new Error(`reminder.fields.remind_at is not a valid datetime: '${fields.remind_at}'`);
+    const bad = Object.keys(fields).filter(k => !REMINDER_FIELDS.has(k));
+    if (bad.length) {
+      throw new PayloadValidationError(
+        `reminder.ops.fields has non-editable key(s): ${bad.map(k => `'${k}'`).join(', ')}. ` +
+        `Valid: ${[...REMINDER_FIELDS].sort().join(', ')}. (org/user set automatically.)`,
+        { code: 'unknown_field', field_path: 'reminder.ops.fields', received: bad, expected: [...REMINDER_FIELDS] }
+      );
+    }
+    validateScheduleLink('reminder', fields);
   }
 }
 
@@ -2440,9 +2491,10 @@ async function dispatchCalendarEvent(dbClient, target, refTable, ctx) {
   };
 }
 
-// dispatchTask — create a personal task assigned to the acting user.
-// organization_id + created_by + assignee_user_id are stamped from ctx.
-// Create-only in v1.
+// dispatchTask — create an ORG task (org-wide visible). organization_id +
+// created_by are stamped from ctx; assignee_user_id comes from the op (an
+// explicit in-org user) and defaults to the actor. scope stays the table
+// default 'org'. Create-only in v1.
 async function dispatchTask(dbClient, target, refTable, ctx) {
   const ops = target.ops || {};
   resolveRefsInOps(ops, refTable);
@@ -2454,11 +2506,26 @@ async function dispatchTask(dbClient, target, refTable, ctx) {
   const fields = ops.fields || {};
   if (!fields.title || !String(fields.title).trim()) throw new Error('task.create requires fields.title');
 
+  // Resolve assignee: an explicit in-org user, else default to the actor. A
+  // foreign/invalid id is rejected here (before the FK would blow up).
+  let assignee = ctx.userId;
+  if (fields.assignee_user_id != null) {
+    const n = Number(fields.assignee_user_id);
+    const okq = await dbClient.query(
+      'SELECT 1 FROM users WHERE id = $1 AND organization_id = $2',
+      [n, ctx.organizationId]
+    );
+    if (!okq.rowCount) throw new Error(`task.fields.assignee_user_id ${n} is not a user in this organization`);
+    assignee = n;
+  }
+
   const id = (target.entity_id && !isRef(target.entity_id)) ? target.entity_id : newTaskId();
+  // assignee_user_id is in the base cols ONCE; the field loop skips it to
+  // avoid a duplicate-column INSERT.
   const cols = ['id', 'organization_id', 'created_by', 'assignee_user_id'];
-  const vals = [id, ctx.organizationId, ctx.userId, ctx.userId];
+  const vals = [id, ctx.organizationId, ctx.userId, assignee];
   for (const k of Object.keys(fields)) {
-    if (!TASK_FIELDS.has(k)) continue;
+    if (!TASK_FIELDS.has(k) || k === 'assignee_user_id') continue;
     cols.push(k);
     vals.push(fields[k]);
   }
@@ -2475,11 +2542,118 @@ async function dispatchTask(dbClient, target, refTable, ctx) {
     op: 'create',
     created: true,
     title: String(fields.title).trim(),
+    assignee_user_id: assignee,
     due_date: fields.due_date || null,
     linked_entity_type: fields.entity_type || null,
     linked_entity_id: fields.entity_id || null,
     summary: `Created task "${String(fields.title).trim()}"` +
+      (assignee !== ctx.userId ? ` (assigned to user ${assignee})` : '') +
       (fields.entity_type ? ` (linked to ${fields.entity_type})` : ''),
+  };
+}
+
+// dispatchTodo — create a PERSONAL to-do, private to the acting user.
+// scope='personal' + owner_user_id stamped from ctx; NOT assignable. The
+// fail-closed read predicate (tasks-routes.js) shows it only to its owner.
+async function dispatchTodo(dbClient, target, refTable, ctx) {
+  const ops = target.ops || {};
+  resolveRefsInOps(ops, refTable);
+  if (!ctx || !ctx.organizationId || !ctx.userId) {
+    throw new Error('todo write requires an authenticated org + user context');
+  }
+  const opType = ops.op || 'create';
+  if (opType !== 'create') throw new Error(`todo: only op:create is supported (got '${opType}')`);
+  const fields = ops.fields || {};
+  if (!fields.title || !String(fields.title).trim()) throw new Error('todo.create requires fields.title');
+
+  const id = (target.entity_id && !isRef(target.entity_id)) ? target.entity_id : newTaskId();
+  const cols = ['id', 'organization_id', 'created_by', 'scope', 'owner_user_id'];
+  const vals = [id, ctx.organizationId, ctx.userId, 'personal', ctx.userId];
+  for (const k of Object.keys(fields)) {
+    if (!TODO_FIELDS.has(k)) continue;
+    cols.push(k);
+    vals.push(fields[k]);
+  }
+  const placeholders = cols.map((_, i) => '$' + (i + 1)).join(', ');
+  await dbClient.query(
+    `INSERT INTO tasks (${cols.join(', ')}) VALUES (${placeholders})`,
+    vals
+  );
+  if (isRef(target.entity_id)) refTable[target.entity_id] = id;
+
+  return {
+    entity_type: 'todo',
+    entity_id: id,
+    op: 'create',
+    created: true,
+    title: String(fields.title).trim(),
+    due_date: fields.due_date || null,
+    linked_entity_type: fields.entity_type || null,
+    linked_entity_id: fields.entity_id || null,
+    summary: `Added to-do "${String(fields.title).trim()}"`,
+  };
+}
+
+function newReminderId() {
+  return 'rem_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+}
+
+// dispatchReminder — create a PERSONAL timed nudge in the reminders table
+// (its own list, separate from the calendar). org + user stamped from ctx;
+// source='assistant'. remind_at arrives as a naive local datetime from
+// 86/Scribe — resolved to the actor's tz so the stored instant matches the
+// local time the user approved (same posture as dispatchCalendarEvent).
+async function dispatchReminder(dbClient, target, refTable, ctx) {
+  const ops = target.ops || {};
+  resolveRefsInOps(ops, refTable);
+  if (!ctx || !ctx.organizationId || !ctx.userId) {
+    throw new Error('reminder write requires an authenticated org + user context');
+  }
+  const opType = ops.op || 'create';
+  if (opType !== 'create') throw new Error(`reminder: only op:create is supported (got '${opType}')`);
+  const fields = ops.fields || {};
+  if (!fields.title || !String(fields.title).trim()) throw new Error('reminder.create requires fields.title');
+  if (!fields.remind_at) throw new Error('reminder.create requires fields.remind_at');
+
+  let acctTz = DEFAULT_TZ;
+  try {
+    const tzr = await dbClient.query(
+      'SELECT u.timezone AS utz, o.timezone AS otz FROM users u ' +
+      'LEFT JOIN organizations o ON o.id = u.organization_id WHERE u.id = $1',
+      [ctx.userId]
+    );
+    const r = tzr.rows[0] || {};
+    acctTz = resolveTz(r.utz, r.otz);
+  } catch (e) { acctTz = DEFAULT_TZ; }
+  let remindAt = fields.remind_at;
+  const inst = localWallClockToInstant(remindAt, acctTz);
+  if (inst) remindAt = inst.toISOString();
+
+  const id = (target.entity_id && !isRef(target.entity_id)) ? target.entity_id : newReminderId();
+  const cols = ['id', 'organization_id', 'user_id', 'title', 'remind_at', 'source'];
+  const vals = [id, ctx.organizationId, ctx.userId, String(fields.title).trim(), remindAt, 'assistant'];
+  if (fields.notes != null) { cols.push('notes'); vals.push(String(fields.notes)); }
+  if (fields.entity_type && fields.entity_id) {
+    cols.push('entity_type'); vals.push(String(fields.entity_type));
+    cols.push('entity_id');   vals.push(String(fields.entity_id));
+  }
+  const placeholders = cols.map((_, i) => '$' + (i + 1)).join(', ');
+  await dbClient.query(
+    `INSERT INTO reminders (${cols.join(', ')}) VALUES (${placeholders})`,
+    vals
+  );
+  if (isRef(target.entity_id)) refTable[target.entity_id] = id;
+
+  return {
+    entity_type: 'reminder',
+    entity_id: id,
+    op: 'create',
+    created: true,
+    title: String(fields.title).trim(),
+    remind_at: remindAt,
+    linked_entity_type: fields.entity_type || null,
+    linked_entity_id: fields.entity_id || null,
+    summary: `Set reminder "${String(fields.title).trim()}"`,
   };
 }
 
@@ -2493,6 +2667,8 @@ const DISPATCHERS = {
   report: dispatchReport,
   calendar_event: dispatchCalendarEvent,
   task: dispatchTask,
+  todo: dispatchTodo,
+  reminder: dispatchReminder,
 };
 
 async function dispatchTarget(dbClient, target, refTable, ctx) {
@@ -2864,6 +3040,10 @@ module.exports = {
   internals: {
     dispatchClient,
     dispatchEstimate,
+    dispatchTask,
+    dispatchTodo,
+    dispatchReminder,
+    dispatchCalendarEvent,
     resolveRef,
     isRef,
     resolveRefsInOps,
@@ -2871,5 +3051,8 @@ module.exports = {
     CLIENT_EDITABLE_FIELDS,
     ESTIMATE_FIELD_KEYS,
     ESTIMATE_BLOCKED_FIELDS,
+    TASK_FIELDS,
+    TODO_FIELDS,
+    REMINDER_FIELDS,
   },
 };
