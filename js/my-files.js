@@ -273,9 +273,38 @@
       pane.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-dim,#888);">Sign in to access your files.</div>';
       return;
     }
-    fetchFiles().then(function() { paint(pane); });
+    // Dispatch: the default My Files view is now the shared Explorer
+    // (window.p86Explorer). The three virtual folders (Projects / Field
+    // Tools / Printouts) keep their existing in-pane rendering until they
+    // graduate to their own tabs (FS Phase 4). A virtual deep-link calls
+    // selectFolder() AFTER switchTab→renderMyFilesTab, so we always reset
+    // to the Explorer here; selectFolder then switches to the virtual view
+    // (the Explorer's stale-render guard prevents its async load from
+    // clobbering that switch).
+    _state.activeFolder = 'general';
+    mountExplorerInto(pane);
   }
   window.renderMyFilesTab = renderMyFilesTab;
+
+  function isVirtualFolderName(n) {
+    return n === PROJECTS_FOLDER || n === TOOLS_FOLDER || n === PRINTOUTS_FOLDER;
+  }
+  function mountExplorerInto(pane) {
+    if (!pane) return;
+    var uid = currentUserId();
+    if (!uid || !window.p86Explorer || !window.p86Explorer.mount) {
+      // Fall back to the legacy browser if the Explorer isn't available.
+      fetchFiles().then(function() { paint(pane); });
+      return;
+    }
+    pane._mfMode = 'explorer';
+    window.p86Explorer.mount(pane, {
+      entityType: 'user',
+      entityId: String(uid),
+      canEdit: true,
+      shouldRender: function() { return pane._mfMode === 'explorer'; }
+    });
+  }
 
   function fetchFiles() {
     var uid = currentUserId();
@@ -795,8 +824,17 @@
   // Public actions (called from inline onclicks)
   // ──────────────────────────────────────────────────────────────────
   function selectFolder(name) {
-    _state.activeFolder = name;
-    paint(document.getElementById('my-files'));
+    var pane = document.getElementById('my-files');
+    if (isVirtualFolderName(name)) {
+      // Projects / Field Tools / Printouts deep-link → legacy in-pane view.
+      _state.activeFolder = name;
+      if (pane) pane._mfMode = 'virtual';
+      fetchFiles().then(function() { paint(pane); });
+      return;
+    }
+    // Any real folder → the Explorer owns folder navigation now.
+    _state.activeFolder = 'general';
+    mountExplorerInto(pane);
   }
 
   // Create a new folder. If the user is currently viewing a real
