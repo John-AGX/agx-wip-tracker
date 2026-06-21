@@ -66,13 +66,20 @@
       '.p86fx-folder .p86fx-thumb{color:var(--accent,#22d3ee);}' +
       '.p86fx-check{position:absolute;top:6px;left:6px;width:18px;height:18px;z-index:2;}' +
       // list rows
-      '.p86fx-row{display:flex;align-items:center;gap:10px;padding:7px 8px;border-radius:7px;cursor:pointer;border:1px solid transparent;}' +
+      // Fixed-column grid so the icon / name / size / date line up across
+      // EVERY row — folders (no checkbox) get a .ck-spacer in column 1 so they
+      // align with file rows instead of sliding left.
+      '.p86fx-row{display:grid;grid-template-columns:18px 24px minmax(0,1fr) 70px 96px;align-items:center;gap:10px;padding:8px 8px;border-radius:7px;cursor:pointer;border:1px solid transparent;}' +
       '.p86fx-row:hover{background:var(--hover,#23232e);}' +
       '.p86fx-row.sel{background:rgba(34,211,238,0.12);}' +
       '.p86fx-row.drop-ok{outline:2px dashed var(--accent,#22d3ee);}' +
-      '.p86fx-row .ic{flex:0 0 auto;width:22px;text-align:center;}' +
-      '.p86fx-row .nm{flex:1 1 0;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}' +
-      '.p86fx-row .meta{flex:0 0 auto;color:var(--muted,#6b7280);font-size:11.5px;}' +
+      '.p86fx-row>input[type=checkbox]{width:16px;height:16px;margin:0;justify-self:center;}' +
+      '.p86fx-row .ck-spacer{display:block;}' +
+      '.p86fx-row .ic{justify-self:center;font-size:16px;line-height:1;}' +
+      '.p86fx-row .nm{display:flex;align-items:center;gap:7px;min-width:0;}' +
+      '.p86fx-row .nm .fn{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}' +
+      '.p86fx-row .nm .ext{flex-shrink:0;font-size:9px;font-weight:700;letter-spacing:0.3px;color:var(--muted,#9ca3af);background:var(--hover,#23232e);border:1px solid var(--border,#333);border-radius:3px;padding:0 4px;}' +
+      '.p86fx-row .meta{color:var(--muted,#6b7280);font-size:11.5px;text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
       '.p86fx-empty{padding:36px 12px;text-align:center;color:var(--muted,#6b7280);}' +
       // context menu
       '.p86fx-menu{position:fixed;z-index:9999;min-width:170px;background:var(--surface,#1b1b24);border:1px solid var(--border,#2e3346);border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,0.4);padding:5px;font-size:13px;}' +
@@ -127,6 +134,22 @@
     if (/sheet|excel|csv/i.test(f.mime_type || '')) return '\u{1F4CA}';
     if (/word|document/i.test(f.mime_type || '')) return '\u{1F4DD}';
     return '\u{1F4CE}';
+  }
+  // Short uppercase type label for the row badge — extension first, else
+  // a family guess from the mime type. '' when nothing useful is known.
+  function fileExt(f) {
+    var m = /\.([a-z0-9]{1,5})$/i.exec((f && f.filename) || '');
+    if (m) return m[1].toUpperCase();
+    var mt = (f && f.mime_type) || '';
+    if (/pdf/i.test(mt)) return 'PDF';
+    if (/sheet|excel|csv/i.test(mt)) return 'XLS';
+    if (/word|document/i.test(mt)) return 'DOC';
+    if (/^image\//i.test(mt)) return 'IMG';
+    return '';
+  }
+  function extBadge(f) {
+    var e = fileExt(f);
+    return e ? '<span class="ext">' + esc(e) + '</span>' : '';
   }
   function fmtBytes(n) {
     if (!n) return '';
@@ -335,13 +358,16 @@
       } else {
         subs.forEach(function (f) {
           html += '<div class="p86fx-row" data-folder="' + esc(f.id) + '" data-drop="' + esc(f.id) + '" draggable="true">' +
-            '<span class="ic">\u{1F4C1}</span><span class="nm">' + esc(f.name) + '</span><span class="meta">Folder</span></div>';
+            '<span class="ck-spacer"></span><span class="ic">\u{1F4C1}</span>' +
+            '<span class="nm"><span class="fn">' + esc(f.name) + '</span></span>' +
+            '<span class="meta">Folder</span><span class="meta"></span></div>';
         });
         files.forEach(function (f) {
           var sel = S.sel[f.id] ? ' sel' : '';
           html += '<div class="p86fx-row' + sel + '" data-file="' + esc(f.id) + '" draggable="true">' +
             '<input type="checkbox" data-check="' + esc(f.id) + '"' + (S.sel[f.id] ? ' checked' : '') + ' />' +
-            '<span class="ic">' + fileGlyph(f) + '</span><span class="nm" title="' + esc(f.filename) + '">' + esc(f.filename) + '</span>' +
+            '<span class="ic">' + fileGlyph(f) + '</span>' +
+            '<span class="nm">' + extBadge(f) + '<span class="fn" title="' + esc(f.filename) + '">' + esc(f.filename) + '</span></span>' +
             '<span class="meta">' + esc(fmtBytes(f.size_bytes)) + '</span><span class="meta">' + esc(fmtDate(f.uploaded_at)) + '</span></div>';
         });
       }
@@ -376,7 +402,8 @@
       } else {
         files.forEach(function (f) {
           html += '<div class="p86fx-row" data-pfile="' + esc(f.id) + '">' +
-            '<span class="ic">' + fileGlyph(f) + '</span><span class="nm" title="' + esc(f.filename) + '">' + esc(f.filename) + '</span>' +
+            '<span class="ck-spacer"></span><span class="ic">' + fileGlyph(f) + '</span>' +
+            '<span class="nm">' + extBadge(f) + '<span class="fn" title="' + esc(f.filename) + '">' + esc(f.filename) + '</span></span>' +
             '<span class="meta">' + esc(fmtBytes(f.size_bytes)) + '</span><span class="meta">' + esc(fmtDate(f.uploaded_at)) + '</span></div>';
         });
       }
