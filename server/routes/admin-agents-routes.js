@@ -2330,8 +2330,8 @@ function customToolsFor(agentKey, opts) {
       'read_attachment_text', 'view_attachment_image',
       // Memory
       'remember', 'recall', 'list_memories', 'forget',
-      // Inline (photo comments, schedule read)
-      'read_photo_comments', 'add_photo_comment', 'read_schedule_blocks',
+      // Inline (photo comments, schedule read, personal reminders read)
+      'read_photo_comments', 'add_photo_comment', 'read_schedule_blocks', 'read_reminders',
       // Navigation
       'navigate',
       // The one write — delegated to the Scribe
@@ -2416,12 +2416,12 @@ function customToolsFor(agentKey, opts) {
       'view_attachment_image', // look at photos
       // ── Memory (4) ──
       'remember', 'recall', 'list_memories', 'forget',
-      // ── Project inline (3, Wave T3) ──
+      // ── Project inline (4, Wave T3 + 3-tier reminders) ──
       // Real-time/inline tools that don't fit the payload primitive:
-      // photo comments are conversational (post-and-go); schedule
-      // read is a pure lookup. Schedule WRITES still use
+      // photo comments are conversational (post-and-go); schedule +
+      // reminders reads are pure lookups. Schedule WRITES still use
       // emit_payload_file with schedule.blocks ops.
-      'read_photo_comments', 'add_photo_comment', 'read_schedule_blocks',
+      'read_photo_comments', 'add_photo_comment', 'read_schedule_blocks', 'read_reminders',
       // ── Navigation (1) ──
       'navigate',
       // ── The ONE write — delegated to the Scribe (1) ──

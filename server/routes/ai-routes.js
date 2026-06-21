@@ -27,6 +27,9 @@ const { aiChatLimiter, aiChatHourlyLimiter } = require('../rate-limit');
 // Wave 1.B context registry — fire-and-forget event logger for
 // memory recalls, entity reads, and any other layer we observe.
 const { logContextLoad } = require('../services/context-registry');
+// Timezone helpers — render reminder remind_at instants in the acting
+// user's local zone (the time IS the point of a reminder).
+const { resolveTz, formatInTz } = require('../timezone');
 
 const router = express.Router();
 
@@ -6709,6 +6712,21 @@ const PROJECT_INLINE_TOOLS = [
       },
     },
   },
+  {
+    name: 'read_reminders',
+    tier: 'auto',
+    description:
+      'Read the acting user\'s personal REMINDERS — timed nudges on their own list, separate from calendar appointments and from tasks/to-dos. Owner-scoped: returns ONLY this user\'s reminders, never anyone else\'s. Defaults to PENDING (active) reminders, soonest-first; pass status:"all" to include done/dismissed. remind_at is rendered in the user\'s local timezone. Use to answer "what reminders do I have" / "what am I being reminded about", or before setting a new reminder to avoid duplicates.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        status: { type: 'string', enum: ['pending', 'all'], description: 'pending (default) = active only; all = include done/dismissed.' },
+        due_before: { type: 'string', description: 'Optional ISO datetime — only reminders with remind_at on/before this instant.' },
+        limit: { type: 'number', description: 'Cap results. Default 30, max 100.' },
+      },
+    },
+  },
 ];
 
 // Auto-tier — same as subtask tools, no approval card. The user is
@@ -7060,11 +7078,16 @@ const PAYLOAD_TOOLS = [
       'text-block|attachment-list. ' +
       'system: {skill_pack_ops,watch_ops,field_tool_ops,link_ops,staff_agent_ops} ' +
       '— link_ops includes {op:attach_files, attachment_ids[], target_entity_type, target_entity_id} to link existing files to an entity. ' +
+      'FOUR personal/org scheduling+work types — pick by what the user means: ' +
       'calendar_event: {op:create, fields:{title, starts_at (ISO 8601 local datetime, e.g. 2026-06-25T09:00:00), ends_at?, all_day?, location?, notes?, reminder_minutes?, status?, entity_type?, entity_id?}} ' +
-      '— the vehicle for an APPOINTMENT or a timed REMINDER for the acting user (set reminder_minutes for a heads-up N minutes before starts_at). Always resolve a real local datetime for starts_at. ' +
-      'task: {op:create, fields:{title, due_date? (DATE, e.g. 2026-06-25), notes?, kind?(todo|punch|follow_up), priority?(low|normal|high|urgent), entity_type?, entity_id?}} ' +
-      '— a to-do for the acting user; use for a date-only reminder when there is no specific time. ' +
-      'OPTIONAL LINK (both calendar_event + task): set fields.entity_type (client|job|lead|project) + fields.entity_id to tie the event/reminder to a record. ' +
+      '— an APPOINTMENT that occupies a block on the calendar (a walkthrough, a meeting). Set reminder_minutes for a heads-up before it. Always resolve a real local datetime for starts_at. ' +
+      'reminder: {op:create, fields:{title, remind_at (ISO 8601 local datetime, e.g. 2026-06-25T15:00:00), notes?, entity_type?, entity_id?}} ' +
+      '— a timed personal NUDGE on the user\'s own Reminders list (NOT a calendar block); it emails the user at remind_at. Use for "remind me at 3pm to call the inspector". ' +
+      'task: {op:create, fields:{title, due_date? (DATE, e.g. 2026-06-25), notes?, kind?(todo|punch|follow_up), priority?(low|normal|high|urgent), assignee_user_id? (an in-org user id; defaults to the acting user), entity_type?, entity_id?}} ' +
+      '— ORG work, visible org-wide and assignable to a teammate. Use for "assign Bob to fix the punch list" or any team to-do. Resolve assignee_user_id from read_users when the user names someone. ' +
+      'todo: {op:create, fields:{title, due_date? (DATE), notes?, kind?, priority?, entity_type?, entity_id?}} ' +
+      '— a PRIVATE personal to-do, just for the acting user (never assignable, never org-visible). Use for "remind me to pick up materials" with no specific time. ' +
+      'OPTIONAL LINK (calendar_event/reminder/task/todo): set fields.entity_type (client|job|lead|project) + fields.entity_id to tie the item to a record. ' +
       'DEFAULT to linking when it concerns a property or a specific record: prefer the CLIENT for anything about a property/the relationship (e.g. "remind me to call the Sterling HOA about the deck"), the JOB for active work, the lead/project when that is the subject. Resolve the real row id from a read first. ' +
       'Leave entity_type/entity_id OUT for a purely personal item with no property/client (e.g. "remind me to pick up my kid at 3pm"). ' +
       '(user/org are always stamped automatically — never pass user/org ids; the entity link above is the ONLY association you set.) ' +
@@ -7098,7 +7121,7 @@ const PAYLOAD_TOOLS = [
             properties: {
               entity_type: {
                 type: 'string',
-                enum: ['estimate', 'job', 'lead', 'client', 'schedule', 'system', 'report', 'calendar_event', 'task'],
+                enum: ['estimate', 'job', 'lead', 'client', 'schedule', 'system', 'report', 'calendar_event', 'task', 'todo', 'reminder'],
               },
               entity_id: {
                 type: 'string',
@@ -11991,17 +12014,67 @@ async function execProjectInlineTool(name, input, ctx) {
       }).join('\n');
   }
 
+  if (name === 'read_reminders') {
+    // Owner-scoped personal reminders read. SECURITY: the AI read path is a
+    // boundary — a reminder surfaces ONLY to its owner (org + user from ctx),
+    // never another user. remind_at is rendered in the user's local zone.
+    const orgRow = await pool.query(
+      'SELECT u.organization_id, u.timezone AS utz, o.timezone AS otz ' +
+      'FROM users u LEFT JOIN organizations o ON o.id = u.organization_id WHERE u.id = $1',
+      [userId]
+    );
+    const row = orgRow.rows[0] || {};
+    const orgId = row.organization_id;
+    if (!orgId) throw new Error('User has no organization');
+    const zone = resolveTz(row.utz, row.otz);
+
+    const where = ['r.organization_id = $1', 'r.user_id = $2'];
+    const params = [orgId, Number(userId)];
+    let pn = 3;
+    const onlyPending = String((input && input.status) || '') !== 'all';
+    if (onlyPending) where.push("r.status = 'pending'");
+    if (input && input.due_before && !isNaN(new Date(input.due_before).getTime())) {
+      where.push('r.remind_at <= $' + (pn++)); params.push(new Date(input.due_before).toISOString());
+    }
+    const limit = Math.max(1, Math.min(100, Number(input && input.limit) || 30));
+    const rr = await pool.query(
+      `SELECT r.id, r.title, r.notes, r.remind_at, r.status, r.source, r.entity_type, r.entity_id
+         FROM reminders r
+        WHERE ${where.join(' AND ')}
+        ORDER BY r.remind_at ASC
+        LIMIT ${limit}`,
+      params
+    );
+    if (!rr.rows.length) return onlyPending ? 'No pending reminders.' : 'No reminders.';
+    const fmtWhen = (d) => {
+      try { return formatInTz(d, zone, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); }
+      catch (_) { try { return new Date(d).toISOString(); } catch (__) { return String(d); } }
+    };
+    const lines = [`${rr.rows.length} reminder${rr.rows.length === 1 ? '' : 's'}${onlyPending ? ' (pending)' : ''}:`];
+    for (const x of rr.rows) {
+      // PROMPT-INJECTION DEFENSE: title/notes are user data — wrapped + capped.
+      lines.push('- ' + wrapUserData('reminders.title', String(x.title || '(untitled)').slice(0, 200)) +
+        ' [id=' + x.id + '] · ' + fmtWhen(x.remind_at) +
+        ' · ' + (x.status || 'pending') +
+        (x.source && x.source !== 'user' ? ' · ' + x.source : '') +
+        (x.entity_type && x.entity_id ? ' · on ' + x.entity_type + ' ' + x.entity_id : '') +
+        (x.notes ? '\n    ' + wrapUserData('reminders.notes', String(x.notes).slice(0, 300)) : ''));
+    }
+    return lines.join('\n');
+  }
+
   throw new Error(`Unknown project-inline tool: ${name}`);
 }
 const PROJECT_INLINE_EXECUTOR_TOOLS = new Set([
-  'read_photo_comments', 'add_photo_comment', 'read_schedule_blocks',
+  'read_photo_comments', 'add_photo_comment', 'read_schedule_blocks', 'read_reminders',
 ]);
 
 const ALLOWED_AUTO_TIER_TOOLS = new Set([
   // Wave T3 — inline real-time tools (executor: execProjectInlineTool).
   // Photo comments + schedule reads that don't belong in the payload
-  // primitive (conversational + pure-read respectively).
-  'read_photo_comments', 'add_photo_comment', 'read_schedule_blocks',
+  // primitive (conversational + pure-read respectively). read_reminders
+  // is the owner-scoped personal Reminders read (3-tier model).
+  'read_photo_comments', 'add_photo_comment', 'read_schedule_blocks', 'read_reminders',
   // C18 — universal read surface. Replaces ~15 narrow reads via two
   // tools (read_entity + search_entities). Routed through
   // execConsolidatedRead → existing narrow handlers.
