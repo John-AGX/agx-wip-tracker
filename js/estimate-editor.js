@@ -416,16 +416,17 @@
           console.warn('[estimate-editor] photos mount point missing');
         } else if (!_currentId) {
           mountEl.innerHTML = '<div style="padding:18px;color:var(--text-dim,#888);font-size:12px;font-style:italic;">No estimate loaded.</div>';
-        } else if (window.p86Attachments && typeof window.p86Attachments.mount === 'function') {
-          // If the estimate was created from a lead (has lead_id), surface
-          // the lead's attachments alongside the estimate's own as a
-          // read-only "From lead" section. Read-only is enforced in the
-          // attachments widget — no upload/delete UI for the parent set.
+        } else if (window.p86Explorer && typeof window.p86Explorer.mount === 'function') {
+          // Full Explorer for the estimate's own files. If the estimate was
+          // created from a lead (has lead_id), the lead's files appear as a
+          // read-only "From lead" pinned pseudo-folder (parentEntity) so
+          // they can feed proposal building without being editable here.
           var est = getEstimate();
           var mountOpts = {
             entityType: 'estimate',
             entityId: _currentId,
-            canEdit: true
+            canEdit: true,
+            embedded: true
           };
           if (est && est.lead_id) {
             mountOpts.parentEntity = {
@@ -434,10 +435,27 @@
               label: 'From lead'
             };
           }
-          window.p86Attachments.mount(mountEl, mountOpts);
+          window.p86Explorer.mount(mountEl, mountOpts);
+        } else if (window.p86Attachments && typeof window.p86Attachments.mount === 'function') {
+          // Fallback: the legacy attachments widget with the same read-only
+          // parent inheritance, in case the Explorer module failed to load.
+          var estA = getEstimate();
+          var mountOptsA = {
+            entityType: 'estimate',
+            entityId: _currentId,
+            canEdit: true
+          };
+          if (estA && estA.lead_id) {
+            mountOptsA.parentEntity = {
+              entityType: 'lead',
+              entityId: estA.lead_id,
+              label: 'From lead'
+            };
+          }
+          window.p86Attachments.mount(mountEl, mountOptsA);
         } else {
-          mountEl.innerHTML = '<div style="padding:18px;color:var(--yellow,#fbbf24);font-size:12px;">Attachments widget not loaded — refresh the page.</div>';
-          console.warn('[estimate-editor] window.p86Attachments not available; can not mount photos tab');
+          mountEl.innerHTML = '<div style="padding:18px;color:var(--yellow,#fbbf24);font-size:12px;">File browser not loaded — refresh the page.</div>';
+          console.warn('[estimate-editor] neither p86Explorer nor p86Attachments available; can not mount photos tab');
         }
 
         // ── Linked Projects panel ──

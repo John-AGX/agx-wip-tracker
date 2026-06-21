@@ -157,11 +157,14 @@
       sel: {},              // selected file ids
       expanded: {},         // folder id → true
       clip: null,           // { ids:[], op:'cut' }
-      loading: true         // show a skeleton until the first load resolves
+      loading: true,        // show a skeleton until the first load resolves
+      parent: opts.parentEntity || null,  // { entityType, entityId, label } — read-only inherited files
+      parentFiles: []
     };
+    var PARENT_ID = '__parent__';
 
     function folderById(id) { for (var i = 0; i < S.folders.length; i++) if (S.folders[i].id === id) return S.folders[i]; return null; }
-    function childFolders(pid) { return S.folders.filter(function (f) { return (f.parent_id || null) === (pid || null); }); }
+    function childFolders(pid) { if (pid === PARENT_ID) return []; return S.folders.filter(function (f) { return (f.parent_id || null) === (pid || null); }); }
     function curPath() { var f = S.cur ? folderById(S.cur) : null; return f ? f.path : ''; }
     function filesIn(pid) {
       return S.files.filter(function (f) { return (f.folder_id || null) === (pid || null); });
@@ -172,10 +175,14 @@
       if (!a) { host.innerHTML = '<div class="p86fx-empty">Not connected.</div>'; return Promise.resolve(); }
       return Promise.all([
         a.fileFolders.tree(S.et, S.eid).then(function (r) { return (r && r.folders) || []; }).catch(function () { return []; }),
-        a.attachments.list(S.et, S.eid).then(function (r) { return (r && r.attachments) || []; }).catch(function () { return []; })
+        a.attachments.list(S.et, S.eid).then(function (r) { return (r && r.attachments) || []; }).catch(function () { return []; }),
+        (S.parent && S.parent.entityType && S.parent.entityId)
+          ? a.attachments.list(S.parent.entityType, S.parent.entityId).then(function (r) { return (r && r.attachments) || []; }).catch(function () { return []; })
+          : Promise.resolve([])
       ]).then(function (out) {
         S.folders = out[0];
         S.files = out[1];
+        S.parentFiles = out[2] || [];
         S.loading = false;
         // prune selection to existing files
         var ok = {}; S.files.forEach(function (f) { ok[f.id] = 1; });
@@ -190,7 +197,8 @@
       // (e.g. a My Files virtual folder) while our async load was in
       // flight. Bail so we don't clobber it.
       if (opts.shouldRender && !opts.shouldRender()) return;
-      var canEdit = S.canEdit;
+      // In the read-only inherited-files view, hide the editing actions.
+      var canEdit = S.canEdit && S.cur !== PARENT_ID;
       // Embedded contexts (entity modals, an overview fieldset) get a
       // bounded height with internal scroll; full-pane mounts (My Files,
       // a Files subtab) keep the default 100dvh fill.
@@ -230,10 +238,14 @@
       var f = S.cur ? folderById(S.cur) : null;
       while (f) { chain.unshift(f); f = f.parent_id ? folderById(f.parent_id) : null; }
       var html = '<span class="p86fx-crumb" data-go="" data-drop="">\u{1F3E0} Home</span>';
-      chain.forEach(function (node) {
-        html += '<span class="p86fx-crumb-sep">›</span>' +
-          '<span class="p86fx-crumb" data-go="' + esc(node.id) + '" data-drop="' + esc(node.id) + '">' + esc(node.name) + '</span>';
-      });
+      if (S.cur === PARENT_ID) {
+        html += '<span class="p86fx-crumb-sep">›</span><span class="p86fx-crumb">\u{1F4CE} ' + esc((S.parent && S.parent.label) || 'Inherited') + ' (read-only)</span>';
+      } else {
+        chain.forEach(function (node) {
+          html += '<span class="p86fx-crumb-sep">›</span>' +
+            '<span class="p86fx-crumb" data-go="' + esc(node.id) + '" data-drop="' + esc(node.id) + '">' + esc(node.name) + '</span>';
+        });
+      }
       host2.innerHTML = html;
       host2.querySelectorAll('[data-go]').forEach(function (el) {
         el.onclick = function () { S.cur = el.getAttribute('data-go') || null; S.sel = {}; render(); };
@@ -256,6 +268,12 @@
         });
       }
       walk(null, 0);
+      // Read-only inherited files (e.g. an estimate's parent lead) as a
+      // pinned pseudo-folder — not a real folder, no drag/drop.
+      if (S.parent) {
+        html += '<div class="p86fx-tnode' + (S.cur === PARENT_ID ? ' active' : '') + '" data-fid="' + PARENT_ID + '" style="margin-top:6px;border-top:1px solid var(--border,#2e3346);padding-top:8px;">' +
+          '<span class="p86fx-tcaret"></span><span class="p86fx-tlabel">\u{1F4CE} ' + esc((S.parent.label) || 'Inherited') + '</span></div>';
+      }
       t.innerHTML = html;
       t.querySelectorAll('[data-fid]').forEach(function (el) {
         var fid = el.getAttribute('data-fid') || null;
@@ -265,6 +283,7 @@
           }
           S.cur = fid; S.sel = {}; render();
         });
+        if (fid === PARENT_ID) return; // read-only: no drag/drop
         if (fid) wireFolderDrag(el, fid);
         wireFolderDrop(el, fid);
       });
@@ -280,6 +299,7 @@
 
     function renderItems() {
       var box = host.querySelector('[data-items]');
+      if (S.cur === PARENT_ID) { renderParentFiles(box); return; }
       var subs = childFolders(S.cur).sort(function (a, b) { return a.name.localeCompare(b.name); });
       var files = sortFiles(filesIn(S.cur));
       if (S.query) {
@@ -328,6 +348,50 @@
       box.innerHTML = html;
       wireItemEvents();
       renderSelbar();
+    }
+
+    // Read-only view of the parent entity's files (e.g. an estimate showing
+    // its lead's photos). No checkboxes, drag, move, or delete — click to
+    // open, right-click for Open / Download only.
+    function renderParentFiles(box) {
+      var files = sortFiles(S.parentFiles.slice());
+      if (S.query) {
+        var q = S.query.toLowerCase();
+        files = files.filter(function (f) { return String(f.filename || '').toLowerCase().indexOf(q) >= 0 || String(f.caption || '').toLowerCase().indexOf(q) >= 0; });
+      }
+      if (S.loading) { box.innerHTML = '<div class="p86fx-empty">Loading…</div>'; return; }
+      if (!files.length) {
+        box.innerHTML = '<div class="p86fx-empty">' + (S.query ? 'Nothing matches “' + esc(S.query) + '”.' : 'No inherited files.') + '</div>';
+        return;
+      }
+      var html = '';
+      if (S.view === 'grid') {
+        files.forEach(function (f) {
+          var thumb = isImg(f) && f.thumb_url ? '<img src="' + esc(f.thumb_url) + '" alt="" loading="lazy" />' : fileGlyph(f);
+          html += '<div class="p86fx-tile" data-pfile="' + esc(f.id) + '">' +
+            '<div class="p86fx-thumb">' + thumb + '</div>' +
+            '<div class="p86fx-cap"><span class="nm" title="' + esc(f.filename) + '">' + esc(f.filename) + '</span>' +
+              '<span class="mt">' + esc(fmtBytes(f.size_bytes)) + (f.size_bytes ? ' · ' : '') + esc(fmtDate(f.uploaded_at)) + '</span></div></div>';
+        });
+      } else {
+        files.forEach(function (f) {
+          html += '<div class="p86fx-row" data-pfile="' + esc(f.id) + '">' +
+            '<span class="ic">' + fileGlyph(f) + '</span><span class="nm" title="' + esc(f.filename) + '">' + esc(f.filename) + '</span>' +
+            '<span class="meta">' + esc(fmtBytes(f.size_bytes)) + '</span><span class="meta">' + esc(fmtDate(f.uploaded_at)) + '</span></div>';
+        });
+      }
+      box.innerHTML = html;
+      box.querySelectorAll('[data-pfile]').forEach(function (el) {
+        var id = el.getAttribute('data-pfile');
+        el.addEventListener('click', function () { openFile(id); });
+        el.addEventListener('contextmenu', function (e) {
+          e.preventDefault();
+          var f = S.parentFiles.filter(function (x) { return x.id === id; })[0];
+          var items = [{ key: 'open', label: 'Open', run: function () { openFile(id); } }];
+          if (f && f.original_url) items.push({ key: 'dl', label: 'Download', run: function () { window.open(f.original_url, '_blank', 'noopener'); } });
+          showMenu(e, items);
+        });
+      });
     }
 
     function renderSelbar() {
@@ -441,10 +505,12 @@
 
     // ── Actions ──────────────────────────────────────────────────────
     function openFile(id) {
-      var f = S.files.filter(function (x) { return x.id === id; })[0];
+      var inParent = S.cur === PARENT_ID;
+      var pool = inParent ? S.parentFiles : S.files;
+      var f = pool.filter(function (x) { return x.id === id; })[0];
       if (!f) return;
       if (isImg(f)) {
-        var imgs = sortFiles(filesIn(S.cur)).filter(isImg);
+        var imgs = (inParent ? sortFiles(S.parentFiles.slice()) : sortFiles(filesIn(S.cur))).filter(isImg);
         var idx = imgs.findIndex(function (x) { return x.id === id; });
         if (window.p86Attachments && window.p86Attachments.openLightbox) { window.p86Attachments.openLightbox(imgs, Math.max(0, idx)); return; }
       }
