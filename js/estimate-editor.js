@@ -1431,7 +1431,8 @@
       } else {
         typeAttr = opts.type ? 'type="' + opts.type + '"' : 'type="text"';
       }
-      return '<div style="flex:' + (opts.flex || '1') + ';padding:4px 6px;">' +
+      return '<div data-cell="' + field + '" data-label="' + escapeHTML(opts.label || field) + '" ' +
+          'style="flex:' + (opts.flex || '1') + ';padding:4px 6px;">' +
         '<input ' + typeAttr + inputAttrs + ' />' +
       '</div>';
     };
@@ -1441,7 +1442,7 @@
     // truncating mid-text. Auto-grow on input via JS-set inline height.
     var descTextarea = function() {
       var v = line.description == null ? '' : String(line.description);
-      return '<div style="flex:2 1 200px;padding:4px 6px;">' +
+      return '<div data-cell="description" style="flex:2 1 200px;padding:4px 6px;">' +
         '<textarea rows="1" ' +
           ' onchange="updateLineField(\'' + idAttr + '\', \'description\', this.value)"' +
           ' oninput="this.style.height=\'auto\';this.style.height=Math.min(this.scrollHeight,180)+\'px\';"' +
@@ -1474,13 +1475,13 @@
         'style="display:flex;align-items:flex-start;border-bottom:1px solid var(--border,#333);">' +
       dragHandleHTML(line.id) +
       descTextarea() +
-      input('qty', line.qty, { flex: '0 0 70px', type: 'number', align: 'right', mono: true }) +
-      input('unit', line.unit, { flex: '0 0 70px' }) +
-      input('unitCost', line.unitCost, { flex: '0 0 110px', type: 'number', align: 'right', mono: true }) +
-      input('markup', line.markup, { flex: '0 0 90px', type: 'number', align: 'right', mono: true, placeholder: markupPlaceholder }) +
-      readOnly(fmtCurrency(ext), '0 0 110px') +
+      input('qty', line.qty, { flex: '0 0 70px', type: 'number', align: 'right', mono: true, label: 'Qty' }) +
+      input('unit', line.unit, { flex: '0 0 70px', label: 'Unit' }) +
+      input('unitCost', line.unitCost, { flex: '0 0 110px', type: 'number', align: 'right', mono: true, label: 'Unit Cost' }) +
+      input('markup', line.markup, { flex: '0 0 90px', type: 'number', align: 'right', mono: true, placeholder: markupPlaceholder, label: 'Markup %' }) +
+      readOnly(fmtCurrency(ext), '0 0 110px', null, 'ee-line-ext') +
       readOnly(fmtCurrency(clientPrice), '0 0 120px', null, 'ee-line-amount') +
-      '<div data-edit-gate-passthrough style="flex:0 0 36px;text-align:center;padding-top:8px;">' +
+      '<div data-cell="delete" data-edit-gate-passthrough style="flex:0 0 36px;text-align:center;padding-top:8px;">' +
         '<button class="ee-btn ee-icon-btn danger" onclick="deleteLineFromEditor(\'' + idAttr + '\')" title="Delete line">&#x1F5D1;</button>' +
       '</div>' +
     '</div>';
