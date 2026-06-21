@@ -2736,6 +2736,37 @@ async function buildTurnContext({ entityType, entityId, clientContext, aiPhase, 
     }
   } catch (_) { /* observation, not load-bearing */ }
 
+  // Acting-user identity — so the model knows WHO it is assisting and that
+  // "my/me/I" means THIS user. Without it the assistant can't personalize
+  // (it literally said "I don't know who you are") and defaults personal
+  // reads org-wide (e.g. "do I have tasks" returned everyone's). Prepended so
+  // it sits at the top of the turn context.
+  if (userId) {
+    try {
+      const ur = await pool.query(
+        `SELECT u.id, u.name, u.email, u.role, o.name AS org_name
+           FROM users u LEFT JOIN organizations o ON o.id = u.organization_id
+          WHERE u.id = $1`,
+        [Number(userId)]
+      );
+      if (ur.rows.length) {
+        const u = ur.rows[0];
+        const who = u.name || u.email || ('user #' + u.id);
+        const idBlock =
+          '<acting_user>\n' +
+          'You are assisting ' + who + (u.email ? ' (' + u.email + ')' : '') +
+          ', role: ' + (u.role || 'user') + (u.org_name ? ', at ' + u.org_name : '') + '. ' +
+          'This is user #' + u.id + '. When the user says "my", "me", "mine", or "I" ' +
+          '("my tasks", "my calendar", "remind me", "do I have any to-dos"), it means THIS ' +
+          'user — scope personal reads to them (search_entities entity_type:"task" with ' +
+          'assignee:"me"; new reminders/events/tasks are created for this user). Do NOT list ' +
+          'another person’s personal items when asked about the user’s own.\n' +
+          '</acting_user>';
+        turnContextText = turnContextText ? (idBlock + '\n\n' + turnContextText) : idBlock;
+      }
+    } catch (e) { /* non-fatal: identity is best-effort */ }
+  }
+
   return { turnContextText, photoBlocks };
 }
 
@@ -6921,7 +6952,7 @@ const READ_TOOLS = [
       'List/search entities by free-text filter. Returns up to `limit` light rows per filter. ' +
       'Use this when you don\'t know the exact id and need to find one before emitting a payload. ' +
       'Supported entity_types: job, wip, client, lead, user, estimate, material, sub, business_card, task. ' +
-      'For tasks/to-dos: entity_type:"task" with a `filter` searches task titles; pass `status` (open|in_progress|blocked|done) to scope, e.g. status:"open" for "what to-dos are still open". Each row shows status, priority, due date, assignee, and any linked entity. ' +
+      'For tasks/to-dos: entity_type:"task" with a `filter` searches task titles; pass `status` (open|in_progress|blocked|done) to scope, e.g. status:"open" for "what to-dos are still open". For the USER\'S OWN tasks ("do I have any to-dos", "my tasks") pass assignee:"me" — WITHOUT it the search returns the whole org\'s tasks, not just theirs. Each row shows status, priority, due date, assignee, and any linked entity. ' +
       'IMPORTANT: For "top producing jobs", "highest backlog", "worst margin" or any ranking question that needs $/% per job, pass entity_type:"wip" (or entity_type:"job" with no filter) — it returns the full WIP rollup with income/cost/margin/backlog/pctComplete per job, sorted by `sort_by`. entity_type:"job" WITH a filter returns the lighter name-lookup result (no metrics). ' +
       'BATCHING: When you need to look up N items on the same entity_type (e.g. find several materials by keyword for an estimate), pass `filters: ["keyword1", "keyword2", ...]` to run them ALL in one tool call. Results come back grouped per filter. This is ALWAYS preferable to firing N separate search_entities calls.',
     tier: 'auto',
@@ -6931,7 +6962,7 @@ const READ_TOOLS = [
       properties: {
         entity_type: {
           type: 'string',
-          enum: ['job', 'wip', 'client', 'lead', 'user', 'estimate', 'material', 'sub', 'business_card'],
+          enum: ['job', 'wip', 'client', 'lead', 'user', 'estimate', 'material', 'sub', 'business_card', 'task'],
         },
         filter: { type: 'string', description: 'Single free-text filter (case-insensitive substring). Use `filters` for multi-keyword lookups.' },
         filters: {
@@ -6941,6 +6972,7 @@ const READ_TOOLS = [
           description: 'Batch mode — array of substring filters (max 12). One tool call replaces N separate searches. Results grouped per filter so you can map outputs to inputs.'
         },
         status: { type: 'string', description: 'Optional status filter (entity_types that have one).' },
+        assignee: { type: 'string', description: 'entity_type:"task" only. Pass "me" to return ONLY the current user\'s own to-dos (for "do I have any tasks", "my tasks"); "unassigned" for unassigned; omit for all org tasks.' },
         sort_by: { type: 'string', enum: ['backlog', 'contract', 'margin', 'pct_complete'], description: 'Only used when entity_type is "wip" or "job" without a filter. backlog: highest unrecognized revenue. contract: highest total income (= "top producing"). margin: worst JTD margin first. pct_complete: most complete first.' },
         limit: { type: 'integer', minimum: 1, maximum: 100, description: 'Per-filter row cap. Default 20.' },
       },
@@ -7420,6 +7452,7 @@ async function execConsolidatedRead(name, input, ctx) {
           // so "what tasks…" leans to the actionable (open) set.
           return dispatchReadTool('read_tasks', {
             q, status: inp.status,
+            assignee: inp.assignee,          // "me" => only the caller's own to-dos
             exclude_done: inp.status ? undefined : '1',
             limit
           }, ctx);
