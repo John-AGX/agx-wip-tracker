@@ -79,6 +79,14 @@ function setViewMode(v){ viewMode = (v === 'siteplan') ? 'siteplan' : 'graph'; t
 function getViewMode(){ return viewMode; }
 // Node types shown as spatial blocks in site-plan mode (Slice 1: buildings + WIP hub).
 function sitePlanVisible(t){ return t === 't1' || t === 'wip'; }
+// Site-plan footprint size for a building (t1) — area roughly proportional to
+// budget so a site reads with varied block sizes, clamped to a sane range.
+// A node.footprint {w,h} override (set by drag-resize in a later slice) wins.
+function budgetFootprint(b){
+  b = Number(b) || 0;
+  var f = b > 0 ? Math.min(1, Math.sqrt(b) / Math.sqrt(150000)) : 0.25;
+  return { w: Math.round(190 + f * 110), h: Math.round(104 + f * 76) };
+}
 // First ins/outs index on a def whose port type can connect with `type` in
 // the given direction ('in'|'out'). Used to auto-wire added/spliced nodes.
 function firstCompatPort(def, type, dir){
@@ -1371,7 +1379,7 @@ return {
   job:function(j){ if(j!=null)jobId=j; return jobId; },
   canConn:canConn, addNode:addNode, findNode:findNode,
   cleanMode:getCleanMode, setCleanMode:setCleanMode, firstCompatPort:firstCompatPort,
-  viewMode:getViewMode, setViewMode:setViewMode, sitePlanVisible:sitePlanVisible,
+  viewMode:getViewMode, setViewMode:setViewMode, sitePlanVisible:sitePlanVisible, budgetFootprint:budgetFootprint,
   getOutput:getOutput, getActual:getActual, getAccrued:getAccrued, resetComp:resetComp,
   getPhaseAllocWires:getPhaseAllocWires, rebalancePhaseAllocations:rebalancePhaseAllocations,
   getCOAllocWires:getCOAllocWires, rebalanceCOAllocations:rebalanceCOAllocations,

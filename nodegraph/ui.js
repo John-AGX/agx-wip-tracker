@@ -180,6 +180,15 @@ function renderNodes(){
     div.className='ng-node ng-t-'+n.cat+' ng-tt-'+n.type+(selN===n.id?' ng-sel':'')+(connectedIds[n.id]?' ng-connected':'')+(n.collapsed?' ng-coll':'');
     div.setAttribute('data-id',n.id);
     div.style.left=n.x+'px'; div.style.top=n.y+'px';
+    // Site-plan: size a building into a footprint block (budget-proportional,
+    // or its saved footprint) and tag a status class so CSS tints it by
+    // progress. Render-only — n.footprint is read, never written here.
+    if(sitePlan && n.type==='t1'){
+      var _fp = n.footprint || E.budgetFootprint(n.budget);
+      div.style.width=_fp.w+'px'; div.style.minHeight=_fp.h+'px';
+      var _pc = n.pctComplete||0;
+      div.classList.add(_pc>=100?'ng-sp-done':(_pc>0?'ng-sp-prog':'ng-sp-todo'));
+    }
 
     var canColl = n.type!=='note' && n.type!=='watch';
     var canEdit = (n.type==='t1'||n.type==='t2'||n.type==='sub'||n.type==='co'||n.type==='po'||n.type==='inv') && n.data && n.data.id;
