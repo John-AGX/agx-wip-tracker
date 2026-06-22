@@ -354,6 +354,11 @@ router.post('/import', requireAuth, requireCapability('LEADS_EDIT'), async (req,
 
       await client.query('COMMIT');
       res.json({ ok: true, total: incoming.length, inserted, skipped, errors });
+      // Geocode the freshly-imported leads in the background so they land on the
+      // leads/combined map without waiting for the next boot backfill. The
+      // single-create/edit paths geocode inline; the bulk path didn't, which left
+      // imported leads address-only (no pin). Best-effort + throttled inside.
+      if (inserted > 0) { setTimeout(() => { backfillLeadGeocodes().catch(() => {}); }, 500); }
     } catch (e) {
       await client.query('ROLLBACK');
       throw e;
@@ -363,6 +368,29 @@ router.post('/import', requireAuth, requireCapability('LEADS_EDIT'), async (req,
   } catch (e) {
     console.error('POST /api/leads/import error:', e);
     res.status(500).json({ error: 'Server error: ' + e.message });
+  }
+});
+
+// POST /api/leads/geocode-backfill — on-demand kick of the lead geocode
+// backfill (handy right after a bulk BT import, since the boot backfill only
+// runs at startup). Fire-and-forget; returns the current count of leads still
+// needing coords so the caller can poll until it reaches 0. Capped at 300/run
+// and throttled inside backfillLeadGeocodes(); re-entrancy-guarded.
+router.post('/geocode-backfill', requireAuth, requireCapability('LEADS_EDIT'), async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      "SELECT COUNT(*)::int AS pending FROM leads " +
+      "WHERE (organization_id = $1 OR organization_id IS NULL) " +
+      "AND (street_address IS NOT NULL OR city IS NOT NULL) " +
+      "AND (geocode_lat IS NULL OR geocode_lng IS NULL OR (geocode_lat = 0 AND geocode_lng = 0)) " +
+      "AND geocode_status IS DISTINCT FROM 'failed'",
+      [req.user.organization_id]
+    );
+    setTimeout(() => { backfillLeadGeocodes().catch(() => {}); }, 100);
+    res.json({ ok: true, started: true, pending: rows[0] ? rows[0].pending : 0 });
+  } catch (e) {
+    console.error('POST /api/leads/geocode-backfill error:', e);
+    res.status(500).json({ error: 'Server error' });
   }
 });
 
@@ -385,7 +413,10 @@ router.delete('/:id', requireAuth, requireCapability('LEADS_EDIT'), async (req, 
 // Geocode existing leads that have address fields but no usable coords.
 // Best-effort + throttled (free Census geocoder); 'failed' rows are skipped
 // so unmatchable addresses aren't retried every restart.
+let _geocodeBackfillRunning = false;
 async function backfillLeadGeocodes() {
+  if (_geocodeBackfillRunning) return 0;   // don't overlap boot + on-demand runs
+  _geocodeBackfillRunning = true;
   try {
     const { rows } = await pool.query(
       "SELECT id FROM leads " +
@@ -398,7 +429,9 @@ async function backfillLeadGeocodes() {
       await new Promise(r => setTimeout(r, 250));
     }
     if (rows.length) console.log('[leads] geocode backfill: processed ' + rows.length + ' lead(s)');
-  } catch (e) { console.error('[leads] geocode backfill error:', e && e.message); }
+    return rows.length;
+  } catch (e) { console.error('[leads] geocode backfill error:', e && e.message); return 0; }
+  finally { _geocodeBackfillRunning = false; }
 }
 setTimeout(() => { backfillLeadGeocodes(); }, 12000);   // after boot settles (offset from the projects backfill)
 
