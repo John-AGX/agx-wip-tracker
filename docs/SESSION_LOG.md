@@ -35,7 +35,21 @@ knowledge transfer — durable and complete.
 
 ---
 
+## Active handoffs
+
+### → Rolling86 — complete the push (assigned 2026-06-14 · affectionate-feynman)
+Two branches pushed, ready to **review → merge to `main` → deploy**. Baton: **`docs/handoff-to-rolling86.md`**.
+- **`claude/scribe-user-ops`** — `system.user_ops` (password_reset + resend_invite) on the Scribe. **In your subsystem** (payload-dispatcher / Scribe vocab) + auth-sensitive → you're the right reviewer. SYSTEM_ADMIN-gated, dry-run-safe, audit-logged.
+- **`claude/project-costs-backfill`** — bulk historical jobs+costs importer (~293 jobs / 2,237 lines). Cut from older `main`; rebase on current `main` (additive, low-conflict).
+Neither ran against a DB; both ship with dry-run/preview safety nets (verification in the doc).
+
+---
+
 ## Entries (newest first)
+
+### 2026-06-14 · affectionate-feynman (handoff)
+- Shipped two feature branches and **handed the push to Rolling86** (see Active handoffs + `docs/handoff-to-rolling86.md`): `claude/scribe-user-ops` + `claude/project-costs-backfill`.
+- Heads-up for Rolling86: scribe-user-ops adds `dryRun` to the dispatcher ctx (`payload-dispatcher.js` ~2937), shared by all dispatchers — worth a glance.
 
 ### 2026-06-14 · affectionate-feynman
 - Joined `main` and caught up on 72 missed commits (was branched off stale `f208bbc`).
