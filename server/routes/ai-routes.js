@@ -7076,8 +7076,9 @@ const PAYLOAD_TOOLS = [
       'sections (full replace) OR granular section_adds/updates/deletes. ' +
       'Section layout is one of photo-grid|single-photo|before-after| ' +
       'text-block|attachment-list. ' +
-      'system: {skill_pack_ops,watch_ops,field_tool_ops,link_ops,staff_agent_ops} ' +
+      'system: {skill_pack_ops,watch_ops,field_tool_ops,link_ops,staff_agent_ops,user_ops} ' +
       '— link_ops includes {op:attach_files, attachment_ids[], target_entity_type, target_entity_id} to link existing files to an entity. ' +
+      'user_ops (SYSTEM_ADMIN only): {op:password_reset, user_id} sets + emails a new temporary password; {op:resend_invite, org_invitation_id? OR email?} re-sends a pending org invite (same token, expiry refreshed +7d). ' +
       'FOUR personal/org scheduling+work types — pick by what the user means: ' +
       'calendar_event: {op:create, fields:{title, starts_at (ISO 8601 local datetime, e.g. 2026-06-25T09:00:00), ends_at?, all_day?, location?, notes?, reminder_minutes?, status?, entity_type?, entity_id?}} ' +
       '— an APPOINTMENT that occupies a block on the calendar (a walkthrough, a meeting). Set reminder_minutes for a heads-up before it. Always resolve a real local datetime for starts_at. ' +

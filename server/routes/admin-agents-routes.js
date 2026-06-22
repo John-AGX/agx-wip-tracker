@@ -2022,7 +2022,7 @@ const AGENT_SYSTEM_BASELINE = {
     '  • job: `{field_updates?, phase_updates?, node_values?, wire_updates?, qb_assignments?, change_orders?, purchase_orders?, invoices?, notes?, graph?}`',
     '  • lead: `{op:\'create\'|\'update\', fields, notes?}`',
     '  • schedule: `{blocks: [{op, entry_id?, jobId, startDate, days, crew, ...}]}`',
-    '  • system: `{watch_ops?, skill_pack_ops?, field_tool_ops?, link_ops?}`. link_ops includes `{op:\'attach_files\', attachment_ids:[...], target_entity_type, target_entity_id}`.',
+    '  • system: `{watch_ops?, skill_pack_ops?, field_tool_ops?, link_ops?, user_ops?}`. link_ops includes `{op:\'attach_files\', attachment_ids:[...], target_entity_type, target_entity_id}`. user_ops (SYSTEM_ADMIN only): `{op:\'password_reset\', user_id}` sets + emails a temp password; `{op:\'resend_invite\', org_invitation_id? | email?}` re-sends a pending org invite (same token, expiry refreshed).',
     '  • report: `{op, template_type, parent_type, parent_id, title?, cover_page?, sections?, section_adds?, section_updates?, section_deletes?}`',
     '',
     'Canonical field names (do NOT invent fields — the dispatcher rejects unknown columns and lists the valid set in its error):',

@@ -219,6 +219,7 @@ const PAYLOAD_OPS_SCHEMAS = Object.freeze({
     // staff_agent_ops: deferred (needs Anthropic SDK calls)
     allowedTopKeys: new Set([
       'watch_ops', 'skill_pack_ops', 'field_tool_ops', 'link_ops', 'staff_agent_ops',
+      'user_ops',
     ]),
   },
   report: {
@@ -452,7 +453,7 @@ function validateOps(entityType, ops) {
     }
   }
   if (entityType === 'system') {
-    for (const k of ['watch_ops', 'skill_pack_ops', 'field_tool_ops', 'link_ops', 'staff_agent_ops']) {
+    for (const k of ['watch_ops', 'skill_pack_ops', 'field_tool_ops', 'link_ops', 'staff_agent_ops', 'user_ops']) {
       if (ops[k] != null && !Array.isArray(ops[k])) {
         throw new Error(`system.ops.${k} must be an array`);
       }
@@ -2170,6 +2171,97 @@ async function dispatchSystem(dbClient, target, refTable, ctx) {
     }
   }
 
+  // user_ops — SYSTEM_ADMIN-only: password resets + org-invite resends.
+  // These send email + change auth, so they (a) gate on the caller's role
+  // loaded server-side from ctx.userId (ctx carries no role, so a caller
+  // can't spoof it) and (b) skip ALL side effects on a dry run — the
+  // approve-card preview must never email anyone or change a password.
+  if (Array.isArray(ops.user_ops) && ops.user_ops.length) {
+    const actorId = (ctx && ctx.userId) || null;
+    if (!actorId) throw new Error('user_ops requires an authenticated user');
+    const actorRes = await dbClient.query(
+      'SELECT id, email, name, role, organization_id FROM users WHERE id = $1', [actorId]);
+    if (!actorRes.rows.length) throw new Error('user_ops: acting user not found');
+    const actor = actorRes.rows[0];
+    if (actor.role !== 'system_admin') {
+      throw new Error('user_ops requires SYSTEM_ADMIN — password resets and invite resends are owner-only.');
+    }
+    const dryRun = !!(ctx && ctx.dryRun);
+    const crypto = require('crypto');
+    const { auditLog } = require('../audit');
+    // Synthetic req so the shared auditLog() snapshots the real actor.
+    const actorReq = { user: { id: actor.id, email: actor.email, role: actor.role, organization_id: actor.organization_id }, ip: null };
+
+    for (const uo of ops.user_ops) {
+      if (!uo || !uo.op) throw new Error('user_ops[].op required');
+
+      if (uo.op === 'password_reset') {
+        const uid = resolveRef(uo.user_id, refTable);
+        if (uid == null || uid === '') throw new Error('user_ops password_reset requires user_id');
+        const ur = await dbClient.query('SELECT id, email, name FROM users WHERE id = $1', [uid]);
+        if (!ur.rows.length) throw new Error(`password_reset: user not found: ${uid}`);
+        const tgt = ur.rows[0];
+        if (dryRun) { updated.push({ kind: 'user_password_reset', id: String(tgt.id), email: tgt.email, preview: true }); continue; }
+        // Match the existing admin reset: set a strong temp password +
+        // email it; the user changes it after logging in.
+        const tempPassword = crypto.randomBytes(12).toString('base64').replace(/[^a-zA-Z0-9]/g, '').slice(0, 14) + 'A7!';
+        const bcrypt = require('bcryptjs');
+        await dbClient.query('UPDATE users SET password_hash = $1, updated_at = NOW() WHERE id = $2',
+          [bcrypt.hashSync(tempPassword, 10), tgt.id]);
+        try {
+          const { sendEmail } = require('../email');
+          const { passwordReset } = require('../email-templates');
+          const tpl = passwordReset({ name: tgt.name, email: tgt.email, password: tempPassword, resetBy: actor.name || actor.email || 'A system admin' });
+          await sendEmail({ to: tgt.email, subject: tpl.subject, html: tpl.html, text: tpl.text, tag: 'password_reset' });
+        } catch (e) { console.warn('[payload-dispatcher] password_reset email failed:', e && e.message); }
+        auditLog(actorReq, { action: 'user.password_reset', targetType: 'user', targetId: String(tgt.id), detail: { email: tgt.email, via: 'scribe' } });
+        updated.push({ kind: 'user_password_reset', id: String(tgt.id), email: tgt.email });
+
+      } else if (uo.op === 'resend_invite') {
+        const inviteId = (uo.org_invitation_id != null) ? resolveRef(uo.org_invitation_id, refTable) : null;
+        const byEmail = uo.email ? String(uo.email).trim().toLowerCase() : null;
+        let inv = null;
+        if (inviteId != null && inviteId !== '') {
+          const r = await dbClient.query(
+            'SELECT id, email, org_name, token, expires_at, accepted_at, invited_by_user_id FROM org_invitations WHERE id = $1', [inviteId]);
+          inv = r.rows[0];
+        } else if (byEmail) {
+          const r = await dbClient.query(
+            'SELECT id, email, org_name, token, expires_at, accepted_at, invited_by_user_id FROM org_invitations WHERE lower(email) = $1 AND accepted_at IS NULL ORDER BY created_at DESC LIMIT 1', [byEmail]);
+          inv = r.rows[0];
+        } else {
+          throw new Error('resend_invite requires org_invitation_id or email');
+        }
+        if (!inv) throw new Error('resend_invite: pending invitation not found');
+        if (inv.accepted_at) throw new Error(`resend_invite: invitation ${inv.id} already accepted`);
+        if (dryRun) { updated.push({ kind: 'org_invite_resend', id: String(inv.id), email: inv.email, preview: true }); continue; }
+        // Reuse the existing token; push the expiry out 7 more days.
+        const newExpiry = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+        await dbClient.query('UPDATE org_invitations SET expires_at = $1 WHERE id = $2', [newExpiry, inv.id]);
+        try {
+          const { sendForEvent } = require('../email');
+          const base = (process.env.APP_URL || (process.env.RAILWAY_PUBLIC_DOMAIN ? 'https://' + process.env.RAILWAY_PUBLIC_DOMAIN : 'https://project86.net')).replace(/\/$/, '');
+          let inviterName = actor.name || 'A system admin';
+          if (inv.invited_by_user_id) {
+            try { const ir = await dbClient.query('SELECT name FROM users WHERE id = $1', [inv.invited_by_user_id]); if (ir.rows.length && ir.rows[0].name) inviterName = ir.rows[0].name; } catch (_) {}
+          }
+          await sendForEvent('org_invite', {
+            platform_name: process.env.PLATFORM_NAME || 'Project 86',
+            org_name: inv.org_name,
+            invited_by: inviterName,
+            accept_url: base + '/accept-org-invite?token=' + inv.token,
+            expires_at: newExpiry
+          }, { to: inv.email });
+        } catch (e) { console.warn('[payload-dispatcher] resend_invite email failed:', e && e.message); }
+        auditLog(actorReq, { action: 'org.invite_resend', targetType: 'org_invitation', targetId: String(inv.id), detail: { email: inv.email, org_name: inv.org_name, via: 'scribe' } });
+        updated.push({ kind: 'org_invite_resend', id: String(inv.id), email: inv.email });
+
+      } else {
+        throw new Error(`user_ops[].op must be password_reset|resend_invite, got: ${uo.op}`);
+      }
+    }
+  }
+
   const parts = [];
   if (created.length)  parts.push(`+${created.length} created`);
   if (updated.length)  parts.push(`~${updated.length} updated`);
@@ -2938,6 +3030,7 @@ async function applyPayload(payloadRow, opts = {}) {
           userId: opts.userId,
           organizationId: opts.organizationId,
           sourceAgent: opts.sourceAgent,
+          dryRun: opts.dryRun,
         }, affectedTargets, changeset);
       } catch (err) {
         if (err instanceof PayloadValidationError && err.detail && err.detail.target_index == null) {
