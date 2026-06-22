@@ -169,8 +169,10 @@ function renderNodes(){
   E.resetComp();
 
   var connectedIds=getConnectedIds(selN);
+  var sitePlan = E.viewMode && E.viewMode()==='siteplan';
   nodes.forEach(function(n){
     var d=E.DEFS[n.type]; if(!d) return;
+    if(sitePlan && !E.sitePlanVisible(n.type)) return; // site-plan: only buildings + WIP hub
     if(editingId===n.id) return;
     // Watches are never collapsed — always show the flashy KPI
     if(n.type==='watch') n.collapsed=false;
@@ -3109,6 +3111,15 @@ function init(){
     render();   // re-stroke wires flat/gradient
   });
 
+  // Site Plan (beta) — spatial view of the SAME graph (render-only toggle).
+  var spBtn=tab.querySelector('.ng-siteplan-btn');
+  if(spBtn) spBtn.addEventListener('click',function(){
+    var on = E.setViewMode(E.viewMode()==='siteplan' ? 'graph' : 'siteplan')==='siteplan';
+    tab.classList.toggle('ng-siteplan', on);
+    spBtn.classList.toggle('ng-on', on);
+    render();   // re-render filtered nodes + inward wires
+  });
+
   // Save Layout — checkpoint the current node graph to a separate
   // localStorage slot (independent of auto-save) so the user can
   // recover from accidental edits or auto-save wipes after a
@@ -3694,6 +3705,12 @@ window.openNodeGraph=function(jid){
     var _clean = E && E.cleanMode && E.cleanMode();
     tab.classList.toggle('ng-clean', !!_clean);
     var _cb = document.getElementById('ngCleanBtn'); if(_cb) _cb.classList.toggle('ng-on', !!_clean);
+  } catch(_){}
+  // Restore the persisted Site Plan view mode + sync its toggle button.
+  try {
+    var _sp = E && E.viewMode && E.viewMode()==='siteplan';
+    tab.classList.toggle('ng-siteplan', !!_sp);
+    var _spb = document.getElementById('ngSitePlanBtn'); if(_spb) _spb.classList.toggle('ng-on', !!_sp);
   } catch(_){}
   if(!wrap) init();
   resize();

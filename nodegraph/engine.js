@@ -69,6 +69,16 @@ var jobId = null;
 var cleanMode = (function(){ try { var v = localStorage.getItem('ngCleanMode'); return v === null ? true : v === '1'; } catch(_) { return true; } })();
 function setCleanMode(v){ cleanMode = !!v; try { localStorage.setItem('ngCleanMode', cleanMode ? '1' : '0'); } catch(_){} return cleanMode; }
 function getCleanMode(){ return cleanMode; }
+// Site-plan view mode (Slice 1) — a spatial rendering of the SAME graph:
+// only building (t1) + the master WIP node show, as blocks, with the existing
+// t1->wip wires flowing inward. RENDER-ONLY — nodes, wires, values, and
+// persistence are all untouched; toggling back to 'graph' restores everything.
+// Persisted per-user in localStorage, exactly like cleanMode.
+var viewMode = (function(){ try { return localStorage.getItem('ngViewMode') === 'siteplan' ? 'siteplan' : 'graph'; } catch(_) { return 'graph'; } })();
+function setViewMode(v){ viewMode = (v === 'siteplan') ? 'siteplan' : 'graph'; try { localStorage.setItem('ngViewMode', viewMode); } catch(_){} return viewMode; }
+function getViewMode(){ return viewMode; }
+// Node types shown as spatial blocks in site-plan mode (Slice 1: buildings + WIP hub).
+function sitePlanVisible(t){ return t === 't1' || t === 'wip'; }
 // First ins/outs index on a def whose port type can connect with `type` in
 // the given direction ('in'|'out'). Used to auto-wire added/spliced nodes.
 function firstCompatPort(def, type, dir){
@@ -1179,6 +1189,9 @@ function drawWires(ctx, wrap, wiringFrom, wireMouse){
     var tn = findNode(w.toNode), td = DEFS[tn?tn.type:''];
     var tp = td && td.ins && td.ins[w.toPort] ? td.ins[w.toPort].t : PT.A;
     var fn = findNode(w.fromNode);
+    // Site-plan mode: only the building->WIP wires (both endpoints visible) are
+    // drawn, so cost flows read as building clusters feeding the central hub.
+    if (viewMode === 'siteplan' && (!fn || !tn || !sitePlanVisible(fn.type) || !sitePlanVisible(tn.type))) return;
     var col = (fn && SRCCOL[fn.type]) || WCOL[tp] || '#4f8cff';
     // Vertical bottom-port approach: WIP top/bottom (pi 1/2) and Building/Phase
     // Costs input (pi 0) render on the bottom edge → route the wire up into the
@@ -1358,6 +1371,7 @@ return {
   job:function(j){ if(j!=null)jobId=j; return jobId; },
   canConn:canConn, addNode:addNode, findNode:findNode,
   cleanMode:getCleanMode, setCleanMode:setCleanMode, firstCompatPort:firstCompatPort,
+  viewMode:getViewMode, setViewMode:setViewMode, sitePlanVisible:sitePlanVisible,
   getOutput:getOutput, getActual:getActual, getAccrued:getAccrued, resetComp:resetComp,
   getPhaseAllocWires:getPhaseAllocWires, rebalancePhaseAllocations:rebalancePhaseAllocations,
   getCOAllocWires:getCOAllocWires, rebalanceCOAllocations:rebalanceCOAllocations,

@@ -630,3 +630,20 @@ body.light-mode .ng-topbar.ng-ribbon .ng-ribbon-btn:hover{
   background:rgba(0,0,0,.04);
   border-color:rgba(0,0,0,.06);
 }
+
+/* ── Site Plan (beta, Slice 1) ──────────────────────────────────────────
+   Spatial view of the same graph: only building (t1) + the master WIP node
+   render, as blocks, with the t1->WIP wires flowing inward. Scoped to the
+   .ng-siteplan class on #nodeGraphTab, so graph mode is unaffected. */
+#nodeGraphTab.ng-siteplan .ng-grid-canvas{opacity:.3}
+#nodeGraphTab.ng-siteplan .ng-node.ng-tt-t1{
+  border-color:#22c55e;border-width:2px;border-radius:10px;
+  box-shadow:0 2px 16px var(--ng-shadow);
+}
+#nodeGraphTab.ng-siteplan .ng-node.ng-tt-wip{
+  border-color:#4f8cff;border-width:2.5px;
+  box-shadow:0 0 0 3px rgba(79,140,255,.18),0 4px 22px var(--ng-shadow);
+}
+/* Ports are noise in the spatial view — fade them (wires fall back to the
+   node edge). Re-shown the moment you toggle back to graph mode. */
+#nodeGraphTab.ng-siteplan .ng-node .ng-p{opacity:0;pointer-events:none}
