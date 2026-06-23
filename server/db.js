@@ -427,6 +427,18 @@ async function initSchema() {
     ALTER TABLE jobs      ADD COLUMN IF NOT EXISTS organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE;
     ALTER TABLE estimates ADD COLUMN IF NOT EXISTS organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE;
     ALTER TABLE leads     ADD COLUMN IF NOT EXISTS organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE;
+
+    -- Lead/estimate provenance on jobs. A job created via "Create Job" from a
+    -- lead or estimate records where it came from, so (a) the estimate's bid
+    -- carries into the job and (b) the relationship is queryable both ways:
+    --   lead.job_id  <-> jobs.lead_id
+    --   estimate.data.job_id <-> jobs.estimate_id
+    -- Placed after the core tables exist so the FKs resolve. ON DELETE SET NULL
+    -- keeps a job alive if its source lead/estimate is later deleted.
+    ALTER TABLE jobs ADD COLUMN IF NOT EXISTS lead_id     TEXT REFERENCES leads(id)     ON DELETE SET NULL;
+    ALTER TABLE jobs ADD COLUMN IF NOT EXISTS estimate_id TEXT REFERENCES estimates(id) ON DELETE SET NULL;
+    CREATE INDEX IF NOT EXISTS idx_jobs_lead_id     ON jobs(lead_id);
+    CREATE INDEX IF NOT EXISTS idx_jobs_estimate_id ON jobs(estimate_id);
     ALTER TABLE clients   ADD COLUMN IF NOT EXISTS organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE;
 
     -- Indexes to power the upcoming per-org route filters. Partial

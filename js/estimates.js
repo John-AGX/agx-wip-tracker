@@ -182,6 +182,9 @@ function sortEstimatesBy(key) {
     renderEstimatesList();
 }
 window.sortEstimatesBy = sortEstimatesBy;
+// Exposed so the lead-side "Create Job" flow can compute a chosen estimate's
+// proposal total (the bid) without opening the estimate editor.
+window.computeEstimateTotals = computeEstimateTotals;
 
 // Mirrors the Jobs-list header pattern (and the new leadsHeaderCell):
 // a `.sortable` th picks up its chevron + accent color from the global

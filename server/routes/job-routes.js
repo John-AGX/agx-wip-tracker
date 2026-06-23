@@ -154,6 +154,76 @@ router.post('/', requireAuth, requireRole('admin', 'pm'), async (req, res) => {
   }
 });
 
+// POST /api/jobs/convert — atomically create a job from a lead and/or estimate
+// and wire up the links in ONE transaction, so a partial failure can't leave an
+// orphan job (the old client-side flow's failure mode). Establishes:
+//   • jobs.lead_id / jobs.estimate_id  (provenance, queryable both ways)
+//   • leads.job_id + lead.status = 'sold'
+//   • estimate.data.job_id            (powers the Estimates "Won" filter)
+// Body: { job: {…full job blob incl contractAmount + workbook}, lead_id?, estimate_id? }
+router.post('/convert', requireAuth, requireRole('admin', 'pm'), async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const job = (req.body && req.body.job) || {};
+    const leadId = (req.body && req.body.lead_id) || null;
+    const estimateId = (req.body && req.body.estimate_id) || null;
+    if (!leadId && !estimateId) {
+      return res.status(400).json({ error: 'lead_id or estimate_id is required' });
+    }
+    const orgId = req.user.organization_id;
+
+    // Resolve owner (mirror POST /): admins may assign, others own their own.
+    let ownerId = req.user.id;
+    if (isAdminish(req.user) && job.owner_id) {
+      const u = await pool.query('SELECT id FROM users WHERE id = $1 AND active = true', [job.owner_id]);
+      if (!u.rows.length) return res.status(400).json({ error: 'Invalid owner_id' });
+      ownerId = job.owner_id;
+    }
+
+    // Guard: don't double-convert a lead that's already linked to a job.
+    if (leadId) {
+      const lr = await pool.query(
+        'SELECT job_id FROM leads WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+        [leadId, orgId]
+      );
+      if (!lr.rows.length) return res.status(404).json({ error: 'Lead not found' });
+      if (lr.rows[0].job_id) {
+        return res.status(409).json({ error: 'Lead already linked to a job', job_id: lr.rows[0].job_id });
+      }
+    }
+
+    const id = job.id || 'job' + Date.now();
+
+    await client.query('BEGIN');
+    await client.query(
+      'INSERT INTO jobs (id, owner_id, data, organization_id, lead_id, estimate_id) VALUES ($1, $2, $3, $4, $5, $6)',
+      [id, ownerId, JSON.stringify(job), orgId, leadId, estimateId]
+    );
+    if (leadId) {
+      await client.query(
+        "UPDATE leads SET job_id = $1, status = 'sold', updated_at = NOW() WHERE id = $2 AND (organization_id = $3 OR organization_id IS NULL)",
+        [id, leadId, orgId]
+      );
+    }
+    if (estimateId) {
+      // Estimates keep their fields in a JSONB `data` blob — stamp job_id there.
+      await client.query(
+        "UPDATE estimates SET data = jsonb_set(COALESCE(data, '{}'::jsonb), '{job_id}', to_jsonb($1::text)), updated_at = NOW() WHERE id = $2 AND (organization_id = $3 OR organization_id IS NULL)",
+        [id, estimateId, orgId]
+      );
+    }
+    await client.query('COMMIT');
+
+    res.json({ ok: true, id: id, job_id: id, owner_id: ownerId, lead_id: leadId, estimate_id: estimateId });
+  } catch (e) {
+    try { await client.query('ROLLBACK'); } catch (_) {}
+    console.error('POST /api/jobs/convert error:', e);
+    res.status(500).json({ error: 'Server error: ' + (e && e.message) });
+  } finally {
+    client.release();
+  }
+});
+
 // PUT /api/jobs/:id
 router.put('/:id', requireAuth, async (req, res) => {
   try {

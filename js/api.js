@@ -97,6 +97,9 @@
   // Domain-specific helpers built on top of the verbs above.
   var jobs = {
     list: function() { return get('/api/jobs'); },
+    // Atomically create a job from a lead and/or estimate (links + bid carry-over
+    // happen server-side in one transaction). payload: { job, lead_id?, estimate_id? }
+    convert: function(payload) { return post('/api/jobs/convert', payload); },
     bulkSave: function(appData) { return put('/api/jobs/bulk/save', { appData: appData }); },
     remove: function(id) { return del('/api/jobs/' + encodeURIComponent(id)); },
     reassignOwner: function(id, ownerId, notify) {

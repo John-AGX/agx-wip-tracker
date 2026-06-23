@@ -1346,86 +1346,117 @@
     }
   }
 
-  // Phase 0 workspace inheritance — find the lead's most-recently-
-  // updated estimate that has a non-empty workbook, fetch it via the
-  // /api/estimates/:id/workbook endpoint, strip the embedded views
-  // (Detailed Costs / Attachments — the new job auto-injects its own),
-  // and stamp each remaining sheet with sourceEstimateId/Name so the
-  // job-side tab strip shows the "📋 From estimate" chip.
-  //
-  // Returns { workbook, estimate } on hit, null on miss. Async because
-  // it hits the server; the conversion handler awaits this BEFORE
-  // pushing the new job so the workbook rides along on the bulk save
-  // (newJob.workbook → data.workbook in the JSONB row).
-  async function _inheritWorkbookFromLatestEstimate(leadId) {
-    try {
-      var ests = (window.appData && Array.isArray(window.appData.estimates))
-        ? window.appData.estimates.filter(function(e) { return e.lead_id === leadId; })
-        : [];
-      if (!ests.length) return null;
-      // Sort most-recent-first by updated_at — leads with multiple
-      // estimates usually have the "live" one as the most recent edit.
-      // String compare on ISO dates works without parsing.
-      ests.sort(function(a, b) {
-        var av = a.updated_at || a.updatedAt || '';
-        var bv = b.updated_at || b.updatedAt || '';
-        return String(bv).localeCompare(String(av));
-      });
-      for (var i = 0; i < ests.length; i++) {
-        var est = ests[i];
-        try {
-          var resp = await fetch(
-            '/api/estimates/' + encodeURIComponent(est.id) + '/workbook',
-            { credentials: 'include' }
-          );
-          if (!resp.ok) continue;
-          var json = await resp.json();
-          var wb = json && json.workbook;
-          if (!wb || !Array.isArray(wb.sheets) || !wb.sheets.length) continue;
-          // Check there's at least one real grid sheet — skip
-          // workbooks that contain only the Attachments embed.
-          var realSheets = wb.sheets.filter(function(s) {
-            return !s.pinned && (!s.kind || s.kind === 'grid');
-          });
-          if (!realSheets.length) continue;
-          // Deep-clone so we don't mutate any cached object, then
-          // strip embedded views + stamp the source on each real
-          // sheet. The job's own embedded views auto-inject on load.
-          var stamped = JSON.parse(JSON.stringify(wb));
-          var estName = est.name || est.title || ('Estimate ' + String(est.id).slice(0, 8));
-          stamped.sheets = (stamped.sheets || [])
-            .filter(function(s) {
-              return !s.pinned && (!s.kind || s.kind === 'grid');
-            })
-            .map(function(s) {
-              s.sourceEstimateId = est.id;
-              s.sourceEstimateName = estName;
-              return s;
-            });
-          // If the original activeSheetId pointed at a now-stripped
-          // sheet, fall back to the first remaining grid sheet.
-          if (!stamped.sheets.find(function(s) { return s.id === stamped.activeSheetId; })) {
-            stamped.activeSheetId = stamped.sheets[0] ? stamped.sheets[0].id : null;
-          }
-          return { workbook: stamped, estimate: est };
-        } catch (e) {
-          console.warn('[lead-convert] workbook fetch failed for estimate', est.id, e && e.message);
-        }
-      }
-    } catch (e) {
-      console.warn('[lead-convert] inheritance lookup failed:', e && e.message);
-    }
-    return null;
+  // The lead's estimates, most-recent-edit first (string compare on ISO
+  // dates works without parsing). Used by the conversion flow to pick which
+  // estimate's bid + workspace carry into the job.
+  function _estimatesForLead(leadId) {
+    var ests = (window.appData && Array.isArray(window.appData.estimates))
+      ? window.appData.estimates.filter(function(e) { return e.lead_id === leadId; })
+      : [];
+    ests.sort(function(a, b) {
+      var av = a.updated_at || a.updatedAt || '';
+      var bv = b.updated_at || b.updatedAt || '';
+      return String(bv).localeCompare(String(av));
+    });
+    return ests;
   }
 
-  // Convert the currently-editing lead into a new job. Copies title,
-  // client, project type, market, contract amount (from estimated revenue),
-  // and assigns the salesperson as PM/owner. Sets lead.status = 'sold' and
-  // lead.job_id = new job id so future opens of the lead show the chip.
-  //
-  // Async because Phase 0 added workbook inheritance — the latest
-  // estimate's workspace is fetched + snapshotted onto the new job
-  // before the bulk save fires.
+  // Proposal total (the bid) for an estimate, via the shared estimates-list
+  // math. Returns 0 if the helper isn't loaded or the estimate has no lines.
+  function _estimateProposalTotal(est) {
+    try {
+      return (est && window.computeEstimateTotals)
+        ? (window.computeEstimateTotals(est).proposalTotal || 0) : 0;
+    } catch (e) { return 0; }
+  }
+
+  // Modal picker for when a lead has >1 estimate. Resolves to the chosen
+  // estimate, or null if the user cancels. Each row shows the estimate's
+  // proposal total so the user picks by the bid that will seed the contract.
+  function _pickEstimate(ests) {
+    return new Promise(function(resolve) {
+      function esc(s) {
+        return String(s == null ? '' : s).replace(/[&<>"]/g, function(ch) {
+          return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch];
+        });
+      }
+      var ov = document.createElement('div');
+      ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:99990;display:flex;align-items:center;justify-content:center;padding:20px;';
+      var rowsHtml = ests.map(function(e, i) {
+        var t = _estimateProposalTotal(e);
+        var nm = e.name || e.title || ('Estimate ' + String(e.id).slice(0, 8));
+        var when = String(e.updated_at || e.updatedAt || '').slice(0, 10);
+        return '<button data-pick="' + i + '" style="display:block;width:100%;text-align:left;margin:6px 0;padding:12px 14px;border:1px solid var(--border,#333);border-radius:8px;background:var(--bg,#0a0a14);color:var(--text,#fff);cursor:pointer;">' +
+          '<div style="font-weight:600;">' + esc(nm) + '</div>' +
+          '<div style="font-size:12px;color:var(--text-muted,#9aa);margin-top:3px;">$' +
+            t.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) +
+            (when ? ' · updated ' + when : '') + '</div>' +
+          '</button>';
+      }).join('');
+      var card = document.createElement('div');
+      card.style.cssText = 'background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:12px;max-width:520px;width:100%;max-height:80vh;overflow:auto;padding:18px;';
+      card.innerHTML =
+        '<div style="font-size:15px;font-weight:700;margin-bottom:4px;">Which estimate becomes the job?</div>' +
+        '<div style="font-size:12px;color:var(--text-muted,#9aa);margin-bottom:10px;">Its proposal total seeds the job\'s Contract Amount, and its workspace carries over.</div>' +
+        rowsHtml +
+        '<button data-pick="cancel" style="margin-top:10px;padding:8px 14px;border:1px solid var(--border,#333);border-radius:8px;background:transparent;color:var(--text-muted,#9aa);cursor:pointer;">Cancel</button>';
+      ov.appendChild(card);
+      ov.addEventListener('click', function(ev) {
+        var b = ev.target.closest && ev.target.closest('[data-pick]');
+        if (!b && ev.target !== ov) return;  // click inside card, not on a button/backdrop
+        var v = b ? b.getAttribute('data-pick') : 'cancel';
+        if (ov.parentNode) ov.parentNode.removeChild(ov);
+        if (v === 'cancel' || v == null) return resolve(null);
+        resolve(ests[Number(v)] || null);
+      });
+      document.body.appendChild(ov);
+    });
+  }
+
+  // Fetch a specific estimate's workbook, strip embedded views (the new job
+  // auto-injects its own), and stamp each remaining grid sheet with
+  // sourceEstimateId/Name so the job-side tab strip shows the "📋 From
+  // estimate" chip. Returns { workbook, estimate } on hit, null on miss.
+  async function _inheritWorkbookFromEstimate(est) {
+    try {
+      if (!est || !est.id) return null;
+      var resp = await fetch(
+        '/api/estimates/' + encodeURIComponent(est.id) + '/workbook',
+        { credentials: 'include' }
+      );
+      if (!resp.ok) return null;
+      var json = await resp.json();
+      var wb = json && json.workbook;
+      if (!wb || !Array.isArray(wb.sheets) || !wb.sheets.length) return null;
+      var realSheets = wb.sheets.filter(function(s) {
+        return !s.pinned && (!s.kind || s.kind === 'grid');
+      });
+      if (!realSheets.length) return null;
+      var stamped = JSON.parse(JSON.stringify(wb));
+      var estName = est.name || est.title || ('Estimate ' + String(est.id).slice(0, 8));
+      stamped.sheets = (stamped.sheets || [])
+        .filter(function(s) { return !s.pinned && (!s.kind || s.kind === 'grid'); })
+        .map(function(s) {
+          s.sourceEstimateId = est.id;
+          s.sourceEstimateName = estName;
+          return s;
+        });
+      if (!stamped.sheets.find(function(s) { return s.id === stamped.activeSheetId; })) {
+        stamped.activeSheetId = stamped.sheets[0] ? stamped.sheets[0].id : null;
+      }
+      return { workbook: stamped, estimate: est };
+    } catch (e) {
+      console.warn('[lead-convert] workbook fetch failed for estimate', est && est.id, e && e.message);
+      return null;
+    }
+  }
+
+  // Convert the currently-editing lead into a new job. The chosen estimate's
+  // PROPOSAL TOTAL becomes the job's Contract Amount (the real bid), and that
+  // estimate's workspace carries over. The whole thing is committed in one
+  // atomic server call (POST /api/jobs/convert) that also sets lead.job_id +
+  // status='sold' and estimate.data.job_id — so a failure can't leave an
+  // orphan job. With >1 estimate the user picks which one.
   async function convertLeadToJob() {
     var leadId = _currentEditingLeadId;
     var l = _leads.find(function(x) { return x.id === leadId; });
@@ -1434,31 +1465,41 @@
       alert('This lead is already linked to a job. Use the Open Job button.');
       return;
     }
-    if (!window.appData || !Array.isArray(window.appData.jobs)) {
-      alert('App data not ready — try again in a moment.');
-      return;
-    }
 
     var clientCache = (window.p86Clients && window.p86Clients.getCached && window.p86Clients.getCached()) || [];
     var c = l.client_id ? clientCache.find(function(x) { return x.id === l.client_id; }) : null;
     var clientName = c ? (c.company_name || c.name) : '';
 
+    // Choose the estimate whose bid + workspace seed the job.
+    var ests = _estimatesForLead(leadId);
+    var chosen = null;
+    if (ests.length === 1) chosen = ests[0];
+    else if (ests.length > 1) {
+      chosen = await _pickEstimate(ests);
+      if (chosen === null) return;  // user cancelled the picker
+    }
+
+    // Contract Amount = chosen estimate's proposal total (the bid). Falls back
+    // to the lead's estimated revenue when there's no estimate to base it on.
+    var contractAmt = chosen ? _estimateProposalTotal(chosen) : 0;
+    if (!contractAmt) contractAmt = Number(l.estimated_revenue_low || 0);
+
+    function money(n) { return Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+    var estLabel = chosen ? (chosen.name || chosen.title || ('Estimate ' + String(chosen.id).slice(0, 8))) : null;
     var msg =
       'Create a new job from this lead?\n\n' +
       'This will:\n' +
-      '  • Add a job to the Jobs list with the lead\'s title, client, and project info\n' +
-      '  • Use Estimated Revenue (high) as the Contract Amount\n' +
-      '  • Mark the lead as Sold and link the new job to it\n' +
-      '  • Snapshot the latest estimate\'s workspace into the new job (if any)\n\n' +
+      '  • Add a job with the lead\'s title, client, and project info\n' +
+      (chosen
+        ? ('  • Set Contract Amount to ' + estLabel + '\'s total ($' + money(contractAmt) + ')\n' +
+           '  • Carry that estimate\'s workspace into the job and link them\n')
+        : ('  • Set Contract Amount to the lead\'s Estimated Revenue ($' + money(contractAmt) + ')\n')) +
+      '  • Mark the lead as Sold and link the new job to it\n\n' +
       'You can edit the job number, costs, and other fields after.';
     if (!confirm(msg)) return;
 
-    // Lead-to-job conversion: use the single estimated revenue value as
-    // the starter contract amount (we no longer track a low/high range).
-    var contractAmt = Number(l.estimated_revenue_low || 0);
     var me = window.p86Auth && window.p86Auth.getUser && window.p86Auth.getUser();
     var ownerId = l.salesperson_id || (me && me.id) || null;
-
     var jobId = 'j' + Date.now();
     var nowIso = new Date().toISOString();
     var newJob = {
@@ -1479,48 +1520,51 @@
       invoicedToDate: 0,
       revisedCostChanges: 0,
       notes: l.notes || '',
+      // Provenance mirrored in the blob too (server also sets the columns).
+      lead_id: l.id || null,
+      estimate_id: chosen ? chosen.id : null,
       createdAt: nowIso,
       updatedAt: nowIso
     };
 
-    // Snapshot the latest estimate's workbook onto the new job, if
-    // any. Attaching to newJob.workbook means the bulk save ships it
-    // along inside the JSONB blob (data.workbook server-side), where
-    // the workspace engine's GET /api/jobs/:id/workbook picks it up
-    // on first open. The fetch failing or returning nothing just
-    // means the job starts with a blank workspace — non-fatal.
-    var inherited = await _inheritWorkbookFromLatestEstimate(leadId);
-    if (inherited && inherited.workbook) {
-      newJob.workbook = inherited.workbook;
-      console.log('[lead-convert] inherited workbook from estimate',
-        inherited.estimate.id,
-        '(' + (inherited.estimate.name || inherited.estimate.title || 'untitled') + ')',
-        '—', inherited.workbook.sheets.length, 'sheet(s)');
+    if (chosen) {
+      var inherited = await _inheritWorkbookFromEstimate(chosen);
+      if (inherited && inherited.workbook) {
+        newJob.workbook = inherited.workbook;
+        console.log('[lead-convert] inherited workbook from estimate', chosen.id,
+          '—', inherited.workbook.sheets.length, 'sheet(s)');
+      }
     }
 
-    window.appData.jobs.push(newJob);
-    if (typeof saveData === 'function') saveData();
-
-    // Update the lead record on the server: set job_id + flip status to sold.
-    // Keep the local lead object in sync so the chip renders correctly when
-    // the modal stays open.
-    window.p86Api.leads.update(leadId, { job_id: jobId, status: 'sold' }).then(function() {
-      l.job_id = jobId;
+    // Atomic server-side conversion (job + lead link + estimate link in one tx).
+    try {
+      var res = await window.p86Api.jobs.convert({
+        job: newJob,
+        lead_id: l.id,
+        estimate_id: chosen ? chosen.id : null
+      });
+      var newId = (res && (res.job_id || res.id)) || jobId;
+      newJob.id = newId;
+      // Keep local caches consistent so the immediate editJob() opens cleanly.
+      if (window.appData && Array.isArray(window.appData.jobs)) window.appData.jobs.push(newJob);
+      l.job_id = newId;
       l.status = 'sold';
+      if (chosen) chosen.job_id = newId;
       closeLeadEditorAny();
       reloadLeadsCache();
-      // Hand off to Jobs so the user sees the new job
       if (typeof window.switchTab === 'function') window.switchTab('jobs');
       setTimeout(function() {
-        if (typeof window.editJob === 'function') window.editJob(jobId);
+        if (typeof window.editJob === 'function') window.editJob(newId);
       }, 250);
-    }).catch(function(err) {
-      alert('Job created, but linking it back to the lead failed: ' + err.message +
-            '\n\nThe job is in the Jobs list — you can re-link it manually if needed.');
-      closeLeadEditorAny();
-      reloadLeadsCache();
-      if (typeof window.switchTab === 'function') window.switchTab('jobs');
-    });
+    } catch (err) {
+      var m = (err && err.message) || '';
+      if (/already linked/i.test(m)) {
+        alert('This lead is already linked to a job.');
+        reloadLeadsCache();
+      } else {
+        alert('Could not create the job: ' + (m || 'unknown error') + '\n\nNothing was changed — try again.');
+      }
+    }
   }
 
   // ──────────────────────────────────────────────────────────────────
