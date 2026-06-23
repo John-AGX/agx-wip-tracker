@@ -2,7 +2,7 @@ const express = require('express');
 const { pool } = require('../db');
 const { requireAuth, requireCapability } = require('../auth');
 const { sendForEvent } = require('../email');
-const { geocodeAddress } = require('../geocoder');
+const { geocodeAddress, geocodeViaGoogle, geocodeViaCensus } = require('../geocoder');
 
 // ── Lead geocoding (for the leads map view) ─────────────────────────
 // Compose a one-line address from the lead's address fields. Returns null
@@ -378,18 +378,42 @@ router.post('/import', requireAuth, requireCapability('LEADS_EDIT'), async (req,
 // and throttled inside backfillLeadGeocodes(); re-entrancy-guarded.
 router.post('/geocode-backfill', requireAuth, requireCapability('LEADS_EDIT'), async (req, res) => {
   try {
+    const retryFailed = !!(req.body && req.body.retryFailed);
     const { rows } = await pool.query(
       "SELECT COUNT(*)::int AS pending FROM leads " +
       "WHERE (organization_id = $1 OR organization_id IS NULL) " +
       "AND (street_address IS NOT NULL OR city IS NOT NULL) " +
       "AND (geocode_lat IS NULL OR geocode_lng IS NULL OR (geocode_lat = 0 AND geocode_lng = 0)) " +
-      "AND geocode_status IS DISTINCT FROM 'failed'",
+      (retryFailed ? "" : "AND geocode_status IS DISTINCT FROM 'failed'"),
       [req.user.organization_id]
     );
-    setTimeout(() => { backfillLeadGeocodes().catch(() => {}); }, 100);
-    res.json({ ok: true, started: true, pending: rows[0] ? rows[0].pending : 0 });
+    setTimeout(() => { backfillLeadGeocodes({ includeFailed: retryFailed }).catch(() => {}); }, 100);
+    res.json({ ok: true, started: true, retryFailed: retryFailed, pending: rows[0] ? rows[0].pending : 0 });
   } catch (e) {
     console.error('POST /api/leads/geocode-backfill error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /api/leads/geocode-selftest — diagnose geocoding without touching data.
+// Surfaces Google's raw status so we can tell if the existing GOOGLE_MAPS_API_KEY
+// works server-side (status 'OK') or is blocked ('REQUEST_DENIED' = HTTP-referrer
+// restriction or the Geocoding API not enabled on the key). Body: { address? }.
+router.post('/geocode-selftest', requireAuth, requireCapability('LEADS_EDIT'), async (req, res) => {
+  try {
+    const address = ((req.body && req.body.address) || '1201 S Highland Ave, Clearwater, FL 33756').toString().trim();
+    const google = await geocodeViaGoogle(address);
+    const census = await geocodeViaCensus(address);
+    res.json({
+      address,
+      hasGoogleKey: !!process.env.GOOGLE_MAPS_API_KEY,
+      census: census ? { lat: census.lat, lng: census.lng } : null,
+      google: (google && google.ok)
+        ? { ok: true, lat: google.lat, lng: google.lng }
+        : { ok: false, status: google && google.status, error: google && google.error }
+    });
+  } catch (e) {
+    console.error('POST /api/leads/geocode-selftest error:', e);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -414,15 +438,19 @@ router.delete('/:id', requireAuth, requireCapability('LEADS_EDIT'), async (req, 
 // Best-effort + throttled (free Census geocoder); 'failed' rows are skipped
 // so unmatchable addresses aren't retried every restart.
 let _geocodeBackfillRunning = false;
-async function backfillLeadGeocodes() {
+async function backfillLeadGeocodes(opts) {
   if (_geocodeBackfillRunning) return 0;   // don't overlap boot + on-demand runs
   _geocodeBackfillRunning = true;
+  // includeFailed: also retry sticky-'failed' rows — used after adding the
+  // Google fallback so Census misses get a second shot at a real provider.
+  const includeFailed = !!(opts && opts.includeFailed);
   try {
     const { rows } = await pool.query(
       "SELECT id FROM leads " +
       "WHERE (street_address IS NOT NULL OR city IS NOT NULL) " +
       "AND (geocode_lat IS NULL OR geocode_lng IS NULL OR (geocode_lat = 0 AND geocode_lng = 0)) " +
-      "AND geocode_status IS DISTINCT FROM 'failed' LIMIT 300"
+      (includeFailed ? "" : "AND geocode_status IS DISTINCT FROM 'failed' ") +
+      "LIMIT 300"
     );
     for (const l of rows) {
       await geocodeLead(l.id);
