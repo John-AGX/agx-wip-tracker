@@ -96,7 +96,15 @@ function setSitePlanFocusSet(s){ _spFocusSet = (s && typeof s === 'object') ? s 
 // (ui.js) and drawWires (below) so node + wire visibility never diverge.
 function spNodeVisible(type, id){
   if (_spFocusSet) return _spFocusSet[id] === 1 || type === 'wip';
-  return type === 't1' || type === 'wip';
+  if (type === 't1' || type === 'wip') return true;
+  // Shared/site costs (Slice 2b): any node wired DIRECTLY into a WIP node,
+  // bypassing the buildings — mobilization, general conditions, etc. They flow
+  // straight to the hub, so the whole-site view shows them as chips feeding it.
+  return wires.some(function(w){
+    if (w.fromNode !== id) return false;
+    var tn = findNode(w.toNode);
+    return !!(tn && tn.type === 'wip');
+  });
 }
 // First ins/outs index on a def whose port type can connect with `type` in
 // the given direction ('in'|'out'). Used to auto-wire added/spliced nodes.

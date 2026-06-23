@@ -652,3 +652,10 @@ body.light-mode .ng-topbar.ng-ribbon .ng-ribbon-btn:hover{
 /* Ports are noise in the spatial view — fade them (wires fall back to the
    node edge). Re-shown the moment you toggle back to graph mode. */
 #nodeGraphTab.ng-siteplan .ng-node .ng-p{opacity:0;pointer-events:none}
+/* Shared/site costs (Slice 2b): nodes wired straight into the WIP hub (mobil-
+   ization, general conditions, etc.) read as compact dashed chips in the whole-
+   site view — distinct from the solid building footprints and the hub. When you
+   drill into a building, its revealed nodes render in full (hence :not focused). */
+#nodeGraphTab.ng-siteplan:not(.ng-sp-focused) .ng-node:not(.ng-tt-t1):not(.ng-tt-wip){
+  min-width:0;border-style:dashed;border-color:var(--ng-border);opacity:.92;
+}
