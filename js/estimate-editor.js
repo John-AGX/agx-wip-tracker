@@ -621,6 +621,19 @@
         }
       }
     }
+
+    // Create Job (or Open Job) from this estimate — the estimate-side entry
+    // point for lead/estimate -> job conversion. Flips to "Open job" once the
+    // estimate is linked. Gated to job-editors; the server also enforces it.
+    if (est.job_id) {
+      html += '<button class="ee-btn secondary" onclick="openJobFromEstimate(\'' + escapeHTML(est.job_id) + '\')" style="display:inline-flex;align-items:center;gap:6px;background:rgba(52,211,153,0.12);color:var(--green,#34d399);">' +
+        '<span>&#x1F3D7;&#xFE0F;</span>Open job &rarr;' +
+      '</button>';
+    } else {
+      html += '<button class="ee-btn secondary" data-cap="JOBS_EDIT_ANY JOBS_EDIT_OWN" onclick="convertEstimateToJob()" style="display:inline-flex;align-items:center;gap:6px;">' +
+        '<span>&#x1F3D7;&#xFE0F;</span>Create Job' +
+      '</button>';
+    }
     chipsEl.innerHTML = html;
   }
 
@@ -643,6 +656,94 @@
       }
     }, 80);
   }
+
+  // Estimate-side "Create Job": build a job from THIS estimate — contract =
+  // its proposal total, its workspace carries over — and commit it (plus the
+  // lead/estimate links) via the shared atomic POST /api/jobs/convert. Mirrors
+  // the lead-side convertLeadToJob; either entry point produces a linked job.
+  async function convertEstimateToJob() {
+    var est = getEstimate();
+    if (!est) return;
+    if (est.job_id) { alert('This estimate is already linked to a job. Use the Open job button.'); return; }
+
+    // Flush pending edits so the total + workbook we snapshot are current.
+    try { if (typeof window.saveEstimateNow === 'function') await window.saveEstimateNow(); } catch (e) {}
+
+    var totals = (window.computeEstimateTotals ? window.computeEstimateTotals(est) : null);
+    var contractAmt = (totals && totals.proposalTotal) || 0;
+
+    var clientName = '';
+    var clientCache = (window.p86Clients && window.p86Clients.getCached && window.p86Clients.getCached()) || [];
+    if (est.client_id) { var c = clientCache.find(function(x) { return x.id === est.client_id; }); if (c) clientName = c.company_name || c.name || ''; }
+    if (!clientName) clientName = est.client_name || est.client || '';
+
+    // Resolve the linked lead (so it also flips to sold + links).
+    var leadId = est.lead_id || null;
+    var lead = null;
+    if (leadId) {
+      var leads = (window.p86Leads && window.p86Leads.getCached && window.p86Leads.getCached()) || [];
+      lead = leads.find(function(x) { return x.id === leadId; }) || null;
+    }
+    if (lead && lead.job_id) {
+      if (confirm('The lead this estimate belongs to is already linked to a job. Open that job instead?')) openJobFromEstimate(lead.job_id);
+      return;
+    }
+
+    function money(n) { return Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+    var msg = 'Create a job from this estimate?\n\n' +
+      '  • Contract Amount = this estimate\'s total ($' + money(contractAmt) + ')\n' +
+      '  • Carries this estimate\'s workspace into the job\n' +
+      (leadId ? '  • Marks the linked lead as Sold and links it to the job\n' : '') +
+      '\nYou can edit the job number, costs, and other fields after.';
+    if (!confirm(msg)) return;
+
+    var me = window.p86Auth && window.p86Auth.getUser && window.p86Auth.getUser();
+    var ownerId = (lead && lead.salesperson_id) || (me && me.id) || null;
+    var jobId = 'j' + Date.now();
+    var nowIso = new Date().toISOString();
+    var newJob = {
+      id: jobId, jobNumber: '', title: est.name || est.title || 'New Job',
+      client: clientName, pm: '', owner_id: ownerId,
+      jobType: (lead && lead.project_type) || est.jobType || '', workType: '',
+      market: (lead && lead.market) || est.market || '', status: 'New',
+      contractAmount: contractAmt, estimatedCosts: 0, targetMarginPct: 50,
+      pctComplete: 0, invoicedToDate: 0, revisedCostChanges: 0,
+      notes: (lead && lead.notes) || '',
+      lead_id: leadId || null, estimate_id: est.id || null,
+      createdAt: nowIso, updatedAt: nowIso
+    };
+
+    // Snapshot this estimate's workbook (reuse the lead-side helper).
+    try {
+      if (typeof window.p86InheritWorkbookFromEstimate === 'function') {
+        var inh = await window.p86InheritWorkbookFromEstimate(est);
+        if (inh && inh.workbook) newJob.workbook = inh.workbook;
+      }
+    } catch (e) {}
+
+    try {
+      var res = await window.p86Api.jobs.convert({ job: newJob, lead_id: leadId, estimate_id: est.id });
+      var newId = (res && (res.job_id || res.id)) || jobId;
+      est.job_id = newId;
+      if (lead) { lead.job_id = newId; lead.status = 'sold'; }
+      if (typeof renderHeaderChips === 'function') renderHeaderChips();
+      openJobFromEstimate(newId);
+    } catch (err) {
+      var m = (err && err.message) || '';
+      if (/already linked/i.test(m)) alert('That lead is already linked to a job.');
+      else alert('Could not create the job: ' + (m || 'unknown error') + '\n\nNothing was changed — try again.');
+    }
+  }
+
+  function openJobFromEstimate(jobId) {
+    closeEstimateEditor();
+    setTimeout(function() {
+      if (typeof window.switchTab === 'function') window.switchTab('jobs');
+      setTimeout(function() { if (typeof window.editJob === 'function') window.editJob(jobId); }, 200);
+    }, 80);
+  }
+  window.convertEstimateToJob = convertEstimateToJob;
+  window.openJobFromEstimate = openJobFromEstimate;
 
   // ──────────────────────────────────────────────────────────────────
   // Alternates / tiers — Good / Better / Best style parallel line sets.

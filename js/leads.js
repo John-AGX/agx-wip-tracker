@@ -2421,6 +2421,9 @@
   window.createEstimateFromLead = createEstimateFromLead;
   window.convertLeadToJob = convertLeadToJob;
   window.openLinkedJobFromLead = openLinkedJobFromLead;
+  // Reused by the estimate-side "Create Job" (estimate-editor.js) so both
+  // entry points snapshot an estimate's workspace the same way.
+  window.p86InheritWorkbookFromEstimate = _inheritWorkbookFromEstimate;
   window.handleLeadsImportFile = handleLeadsImportFile;
   window.p86Leads = {
     getCached: function() { return _leads.slice(); },
