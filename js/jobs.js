@@ -1772,6 +1772,23 @@ function renderJobsMain() {
             return job.pm || '—';
         }
 
+        // Back-link navigation from a job to its source lead / estimate
+        // (the "← From lead / estimate" chips on the job detail header).
+        function openLeadFromJob(leadId) {
+            if (typeof window.switchTab === 'function') window.switchTab('leads');
+            setTimeout(function () {
+                if (typeof window.openEditLeadModal === 'function') window.openEditLeadModal(leadId);
+            }, 200);
+        }
+        function openEstimateFromJob(estimateId) {
+            if (typeof window.switchTab === 'function') window.switchTab('estimates');
+            setTimeout(function () {
+                if (typeof window.editEstimate === 'function') window.editEstimate(estimateId);
+            }, 200);
+        }
+        window.openLeadFromJob = openLeadFromJob;
+        window.openEstimateFromJob = openEstimateFromJob;
+
         function renderJobDetail(jobId) {
             const job = appData.jobs.find(j => j.id === jobId);
             if (!job) return;
@@ -1831,6 +1848,38 @@ function renderJobsMain() {
             // never rendered and the job detail showed a blank body.
             try {
             document.getElementById('job-detail-title').textContent = (job.jobNumber ? job.jobNumber + ' — ' : '') + job.title;
+            // Source back-links: if this job was created from a lead/estimate
+            // (Create Job conversion stamps job.lead_id / job.estimate_id), show
+            // clickable "← From lead / estimate" chips under the title so the
+            // bid trail is navigable both ways. Injected dynamically so no
+            // index.html change is needed; hidden when there's no source.
+            try {
+                var _titleEl = document.getElementById('job-detail-title');
+                if (_titleEl && _titleEl.parentNode) {
+                    var _srcHost = document.getElementById('job-detail-source-chips');
+                    if (!_srcHost) {
+                        _srcHost = document.createElement('div');
+                        _srcHost.id = 'job-detail-source-chips';
+                        _srcHost.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;margin-top:5px;';
+                        _titleEl.parentNode.insertBefore(_srcHost, _titleEl.nextSibling);
+                    }
+                    var _chips = '';
+                    if (job.lead_id) {
+                        var _leadsC = (window.p86Leads && window.p86Leads.getCached && window.p86Leads.getCached()) || [];
+                        var _ld = _leadsC.find(function (x) { return x.id === job.lead_id; });
+                        var _lt = _ld ? (_ld.title || 'lead') : 'lead';
+                        _chips += '<button onclick="openLeadFromJob(\'' + escapeHTML(job.lead_id) + '\')" class="badge" style="cursor:pointer;border:none;background:rgba(251,191,36,0.12);color:var(--yellow,#fbbf24);">&larr; From lead: ' + escapeHTML(_lt) + '</button>';
+                    }
+                    if (job.estimate_id) {
+                        var _estC = (window.appData && window.appData.estimates) || [];
+                        var _es = _estC.find(function (x) { return x.id === job.estimate_id; });
+                        var _en = _es ? (_es.name || _es.title || 'estimate') : 'estimate';
+                        _chips += '<button onclick="openEstimateFromJob(\'' + escapeHTML(job.estimate_id) + '\')" class="badge" style="cursor:pointer;border:none;background:rgba(79,140,255,0.14);color:#4f8cff;">&larr; From estimate: ' + escapeHTML(_en) + '</button>';
+                    }
+                    _srcHost.innerHTML = _chips;
+                    _srcHost.style.display = _chips ? 'flex' : 'none';
+                }
+            } catch (_eSrc) { /* non-fatal — chip is a convenience */ }
             const detailStatusClass = job.status === 'On Hold' ? 'at-risk' : job.status === 'Completed' ? 'on-track' : job.status === 'Archived' ? 'not-started' : 'on-track';
             document.getElementById('job-detail-status').innerHTML = `<span class="badge ${detailStatusClass}">${escapeHTML(job.status)}</span>`;
             // job-detail-contract used to live in the header meta row but was
