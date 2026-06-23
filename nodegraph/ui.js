@@ -10,6 +10,7 @@ var dragN=null, dragOff={x:0,y:0};
 var wiringFrom=null, wireMouse=null;
 var selN=null, isPan=false, panSt={x:0,y:0};
 var editingId=null;
+var _spFocus=null; // site-plan drill-in: focused building id (view-state, not saved)
 // NG8: frames (group boxes) interaction state
 var selFrame=null, dragFrame=null, frameDragOff=null, frameMembers=null, resizeFrame=null, resizeStart=null;
 // When set to a note's id, the next click on a node attaches the note
@@ -172,7 +173,7 @@ function renderNodes(){
   var sitePlan = E.viewMode && E.viewMode()==='siteplan';
   nodes.forEach(function(n){
     var d=E.DEFS[n.type]; if(!d) return;
-    if(sitePlan && !E.sitePlanVisible(n.type)) return; // site-plan: only buildings + WIP hub
+    if(sitePlan && !E.spNodeVisible(n.type, n.id)) return; // site-plan: buildings + WIP hub, or a drilled-in building's subgraph
     if(editingId===n.id) return;
     // Watches are never collapsed — always show the flashy KPI
     if(n.type==='watch') n.collapsed=false;
@@ -1073,6 +1074,36 @@ function findLoadedNode(type,entry){
 // DOM size beats the old hardcoded (85, 30) — large nodes (expanded
 // subs / wip / collapsed-but-tall watch) were drifting noticeably to
 // the upper-left.
+// ── Site-plan drill-in (Slice 3) ──────────────────────────────────────
+// Recompute the engine focus-set from _spFocus: the building + its directly
+// wired phases/costs (the WIP hub is always shown). null = whole-site view.
+function applySpFocus(){
+  if(_spFocus){
+    var set=getConnectedIds(_spFocus); set[_spFocus]=1;
+    E.setSitePlanFocusSet(set);
+  } else {
+    E.setSitePlanFocusSet(null);
+  }
+  var t=document.getElementById('nodeGraphTab');
+  if(t) t.classList.toggle('ng-sp-focused', !!_spFocus);
+}
+// Frame the currently-visible site-plan nodes — mirrors zoomFitAll but scoped
+// via E.spNodeVisible (so it fits the whole site, or a drilled-in subgraph).
+function fitSiteplan(){
+  if(!wrap) return;
+  var ns=E.nodes().filter(function(n){ return E.spNodeVisible(n.type, n.id); });
+  if(!ns.length){ applyTx(); render(); return; }
+  var minX=Infinity,minY=Infinity,maxX=-Infinity,maxY=-Infinity;
+  ns.forEach(function(n){ var f=ngNodeFootprint(n); if(n.x<minX)minX=n.x; if(n.y<minY)minY=n.y; if(n.x+f.w>maxX)maxX=n.x+f.w; if(n.y+f.h>maxY)maxY=n.y+f.h; });
+  var bw=Math.max(1,maxX-minX), bh=Math.max(1,maxY-minY), pad=90;
+  var vw=Math.max(1,wrap.clientWidth-pad*2), vh=Math.max(1,wrap.clientHeight-pad*2);
+  var fz=Math.max(0.2,Math.min(2,Math.min(vw/bw,vh/bh)));
+  E.zm(fz);
+  var bcx=(minX+maxX)/2, bcy=(minY+maxY)/2;
+  E.pan(wrap.clientWidth/2/fz-bcx, wrap.clientHeight/2/fz-bcy);
+  applyTx(); render();
+}
+
 function focusNode(n, opts){
   if(!wrap) return;
   opts = opts || {};
@@ -2209,6 +2240,20 @@ function initEvents(){
     }
   });
 
+  // Site-plan drill-in (Slice 3): dbl-click a building to enter it (reveal its
+  // phases/costs + fit), dbl-click the same building or empty canvas to back
+  // out to the whole site. Rename targets are skipped so name dbl-click still
+  // renames; body dbl-clicks are inert in the handlers above, so no collision.
+  canvasEl.addEventListener('dblclick',function(e){
+    if(!(E.viewMode && E.viewMode()==='siteplan')) return;
+    if(e.target.closest('[data-rename]') || e.target.closest('[data-frame-rename]')) return;
+    var bEl=e.target.closest('.ng-node.ng-tt-t1');
+    var bid=bEl ? bEl.getAttribute('data-id') : null;
+    _spFocus = (bid && bid!==_spFocus) ? bid : null;
+    applySpFocus();
+    fitSiteplan();
+  });
+
   canvasEl.addEventListener('focusin',function(e){
     var t=e.target;
     if((t.tagName==='INPUT'||t.tagName==='TEXTAREA'||t.tagName==='SELECT')&&t.dataset.node){
@@ -3126,7 +3171,8 @@ function init(){
     var on = E.setViewMode(E.viewMode()==='siteplan' ? 'graph' : 'siteplan')==='siteplan';
     tab.classList.toggle('ng-siteplan', on);
     spBtn.classList.toggle('ng-on', on);
-    render();   // re-render filtered nodes + inward wires
+    _spFocus=null; applySpFocus();        // always start at the whole-site view
+    if(on) fitSiteplan(); else render();  // auto-fit to the buildings on enter
   });
 
   // Save Layout — checkpoint the current node graph to a separate

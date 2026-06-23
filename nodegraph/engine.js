@@ -87,6 +87,17 @@ function budgetFootprint(b){
   var f = b > 0 ? Math.min(1, Math.sqrt(b) / Math.sqrt(150000)) : 0.25;
   return { w: Math.round(190 + f * 110), h: Math.round(104 + f * 76) };
 }
+// Site-plan drill-in focus (Slice 3): when set to an id-map, only those nodes
+// (+ the WIP hub) render in site-plan mode — used to drill into one building's
+// phases/costs. View-state only; never persisted. ui.js sets it on dbl-click.
+var _spFocusSet = null;
+function setSitePlanFocusSet(s){ _spFocusSet = (s && typeof s === 'object') ? s : null; }
+// Is this node visible in site-plan mode right now? Gates BOTH renderNodes
+// (ui.js) and drawWires (below) so node + wire visibility never diverge.
+function spNodeVisible(type, id){
+  if (_spFocusSet) return _spFocusSet[id] === 1 || type === 'wip';
+  return type === 't1' || type === 'wip';
+}
 // First ins/outs index on a def whose port type can connect with `type` in
 // the given direction ('in'|'out'). Used to auto-wire added/spliced nodes.
 function firstCompatPort(def, type, dir){
@@ -1199,7 +1210,7 @@ function drawWires(ctx, wrap, wiringFrom, wireMouse){
     var fn = findNode(w.fromNode);
     // Site-plan mode: only the building->WIP wires (both endpoints visible) are
     // drawn, so cost flows read as building clusters feeding the central hub.
-    if (viewMode === 'siteplan' && (!fn || !tn || !sitePlanVisible(fn.type) || !sitePlanVisible(tn.type))) return;
+    if (viewMode === 'siteplan' && (!fn || !tn || !spNodeVisible(fn.type, fn.id) || !spNodeVisible(tn.type, tn.id))) return;
     var col = (fn && SRCCOL[fn.type]) || WCOL[tp] || '#4f8cff';
     // Vertical bottom-port approach: WIP top/bottom (pi 1/2) and Building/Phase
     // Costs input (pi 0) render on the bottom edge → route the wire up into the
@@ -1380,6 +1391,7 @@ return {
   canConn:canConn, addNode:addNode, findNode:findNode,
   cleanMode:getCleanMode, setCleanMode:setCleanMode, firstCompatPort:firstCompatPort,
   viewMode:getViewMode, setViewMode:setViewMode, sitePlanVisible:sitePlanVisible, budgetFootprint:budgetFootprint,
+  spNodeVisible:spNodeVisible, setSitePlanFocusSet:setSitePlanFocusSet,
   getOutput:getOutput, getActual:getActual, getAccrued:getAccrued, resetComp:resetComp,
   getPhaseAllocWires:getPhaseAllocWires, rebalancePhaseAllocations:rebalancePhaseAllocations,
   getCOAllocWires:getCOAllocWires, rebalanceCOAllocations:rebalanceCOAllocations,
