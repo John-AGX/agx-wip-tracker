@@ -12,7 +12,7 @@ var selN=null, isPan=false, panSt={x:0,y:0};
 var editingId=null;
 var _spFocus=null; // site-plan drill-in: focused building id (view-state, not saved)
 // Phase 2-A satellite basemap state (view-state / localStorage only — no graph write):
-var basemapEl=null, _basemap=null, _basemapReady=false, _spOrigin=null, _spOriginGraph=null, _spOriginJob=null, _satHintEl=null;
+var basemapEl=null, _basemap=null, _basemapReady=false, _spOrigin=null, _spOriginGraph=null, _spOriginJob=null, _satHintEl=null, _geocoding=false;
 var _geoPick=false, _geoPickOverlay=null, _geoPickId=null; // Slice 3: map-picker state (captured building id)
 // Slice 4: photo-GPS pins
 var _photoPinsEl=null, _geoPhotos=[], _geoPhotosJob=null, _geoPhotosNoGps=0;
@@ -147,10 +147,11 @@ function updateT1Progress(){
 function resize(){
   wireC.width=wrap.clientWidth; wireC.height=wrap.clientHeight;
   gridC.width=wrap.clientWidth; gridC.height=wrap.clientHeight;
-  // Re-honor a persisted satellite state once the tab is actually visible
-  // (the init-restore mount is skipped while #nodeGraphTab is hidden).
+  // Re-honor a persisted satellite state once the tab is actually visible.
+  // NOTE: #nodeGraphTab is position:fixed, so offsetParent is ALWAYS null —
+  // use offsetWidth (0 when display:none, >0 once shown) to detect visibility.
   var _t=document.getElementById('nodeGraphTab');
-  if(_t && _t.offsetParent!==null && _spSatellite) updateBasemapVisibility();
+  if(_t && _t.offsetWidth>0 && _spSatellite) updateBasemapVisibility();
 }
 
 // ── Render ──
@@ -1161,10 +1162,33 @@ function showSatHint(show, msg){
   _satHintEl.textContent = msg || 'Add a geocoded job address to enable the satellite basemap.';
   _satHintEl.style.display = show ? 'block' : 'none';
 }
+// On-demand geocode: when a job has no coords yet, the weather endpoint geocodes
+// its address server-side (cached on the job row) AND returns the coords — so we
+// light up the basemap immediately instead of stranding the user on the hint.
+function tryGeocodeJobThenMount(){
+  var jid=E.job();
+  if(_geocoding) return;
+  if(!jid || typeof p86Api==='undefined' || !p86Api.weather){ showSatHint(true); return; }
+  _geocoding=true;
+  showSatHint(true, 'Locating the job address…');
+  p86Api.weather.jobs([jid]).then(function(resp){
+    _geocoding=false;
+    var w=resp && resp.weather && resp.weather[jid];
+    var lat=w?Number(w.lat):NaN, lng=w?Number(w.lng):NaN;
+    if(isFinite(lat)&&isFinite(lng)&&!(lat===0&&lng===0)){
+      var job=(typeof appData!=='undefined'&&appData.jobs)?appData.jobs.find(function(j){return j.id===jid;}):null;
+      if(job){ job.geocode_lat=lat; job.geocode_lng=lng; }   // so jobOrigin() resolves on retry
+      showSatHint(false);
+      if(_spSatellite && E.viewMode && E.viewMode()==='siteplan'){ mountBasemap(); updatePhotoLayer(); }
+    } else {
+      showSatHint(true, 'Add a street address to this job to enable the satellite map.');
+    }
+  }).catch(function(){ _geocoding=false; showSatHint(true, 'Could not locate the job address.'); });
+}
 function mountBasemap(){
   if(!basemapEl) return;
   _spOrigin=jobOrigin(); _spOriginGraph=siteplanCentroid(); _spOriginJob=E.job(); // stamp origin with its job
-  if(!_spOrigin){ showSatHint(true); return; }
+  if(!_spOrigin){ tryGeocodeJobThenMount(); return; } // no coords yet — geocode on demand, then retry
   showSatHint(false);
   if(_basemap){ _basemapReady=true; syncBasemapCamera(); return; }
   if(!window.p86Maps){ showSatHint(true, 'Google Maps is not available.'); return; }
@@ -4039,9 +4063,10 @@ window.openNodeGraph=function(jid){
     var _spb = document.getElementById('ngSitePlanBtn'); if(_spb) _spb.classList.toggle('ng-on', !!_sp);
     // Restore the satellite sub-toggle; mount the basemap only if the tab is
     // already visible (avoid sizing a google.maps.Map inside a hidden overlay).
+    // offsetWidth (not offsetParent — the tab is position:fixed) detects visibility.
     var _satb = document.getElementById('ngSatelliteBtn'); if(_satb) _satb.classList.toggle('ng-on', _spSatellite);
     var _phb = document.getElementById('ngPhotosBtn'); if(_phb) _phb.classList.toggle('ng-on', _spPhotos);
-    if(tab && tab.offsetParent!==null) updateBasemapVisibility();
+    if(tab && tab.offsetWidth>0) updateBasemapVisibility();
   } catch(_){}
   if(!wrap) init();
   resize();
@@ -4063,7 +4088,7 @@ window.openNodeGraph=function(jid){
   }
   if(jid && jid!==E.job()){
     E.job(jid);
-    _spOrigin=null; _spOriginGraph=null; _spOriginJob=null; _geoPhotos=[]; _geoPhotosJob=null; // drop geo caches: avoid cross-job staleness
+    _spOrigin=null; _spOriginGraph=null; _spOriginJob=null; _geoPhotos=[]; _geoPhotosJob=null; _geocoding=false; // drop geo caches: avoid cross-job staleness
     E.setNodes([]); E.setWires([]); E.setNid(1);
     if(!E.loadGraph()){ populate(); }
     ensureWatchFan();
