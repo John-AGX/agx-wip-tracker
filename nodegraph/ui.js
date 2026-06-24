@@ -183,7 +183,9 @@ function renderNodes(){
     var div=document.createElement('div');
     div.className='ng-node ng-t-'+n.cat+' ng-tt-'+n.type+(selN===n.id?' ng-sel':'')+(connectedIds[n.id]?' ng-connected':'')+(n.collapsed?' ng-coll':'');
     div.setAttribute('data-id',n.id);
-    div.style.left=n.x+'px'; div.style.top=n.y+'px';
+    var _rx=n.x, _ry=n.y;
+    if(sitePlan && _spSatellite && n.geoLatLng){ var _gp=geoRenderPos(n); _rx=_gp.x; _ry=_gp.y; } // Slice 2: render geo-bound buildings on their real spot (n.x/y never overwritten)
+    div.style.left=_rx+'px'; div.style.top=_ry+'px';
     // Site-plan: size a building into a footprint block (budget-proportional,
     // or its saved footprint) and tag a status class so CSS tints it by
     // progress. Render-only — n.footprint is read, never written here.
@@ -1135,6 +1137,14 @@ function siteplanCentroid(){
   if(!ns.length) return { x:0, y:0 };
   var sx=0, sy=0; ns.forEach(function(n){ sx+=n.x; sy+=n.y; });
   return { x:sx/ns.length, y:sy/ns.length };
+}
+// Slice 2: a geo-bound building's render position = the origin's graph anchor
+// (_spOriginGraph) + its projected offset from the origin lat/lng. Derived only —
+// n.x/n.y are never mutated, so toggling satellite off restores the layout.
+function geoRenderPos(n){
+  if(!_spOrigin || !_spOriginGraph || !n.geoLatLng) return { x:n.x, y:n.y };
+  var g=E.spLatLngToGraph(n.geoLatLng.lat, n.geoLatLng.lng, _spOrigin.lat, _spOrigin.lng);
+  return { x:_spOriginGraph.x + g.x, y:_spOriginGraph.y + g.y };
 }
 function showSatHint(show, msg){
   if(!wrap) return;

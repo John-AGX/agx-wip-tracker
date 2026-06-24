@@ -916,6 +916,7 @@ function buildGraphState(){
         _coRevApplied: n._coRevApplied||0,
         allocTarget: n.allocTarget||null,
         attachedTo: n.attachedTo||null,
+        geoLatLng: (n.type==='t1' && n.geoLatLng) ? n.geoLatLng : null, // Phase 2-A: building's real lat/lng (additive; old graphs have none)
         dataId: n.data ? n.data.id : null
       };
     }),
@@ -1209,6 +1210,7 @@ function loadGraph(){
       _coRevApplied:sn._coRevApplied||0,
       allocTarget:sn.allocTarget||null,
       attachedTo:sn.attachedTo||null,
+      geoLatLng:sn.geoLatLng||null, // Phase 2-A: building's real lat/lng (guard so pre-geo graphs load fine)
     };
     nodes.push(n);
   });
