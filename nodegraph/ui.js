@@ -12,8 +12,8 @@ var selN=null, isPan=false, panSt={x:0,y:0};
 var editingId=null;
 var _spFocus=null; // site-plan drill-in: focused building id (view-state, not saved)
 // Phase 2-A satellite basemap state (view-state / localStorage only — no graph write):
-var basemapEl=null, _basemap=null, _basemapReady=false, _spOrigin=null, _spOriginGraph=null, _satHintEl=null;
-var _geoPick=false, _geoPickOverlay=null; // Slice 3: map-picker mode state
+var basemapEl=null, _basemap=null, _basemapReady=false, _spOrigin=null, _spOriginGraph=null, _spOriginJob=null, _satHintEl=null;
+var _geoPick=false, _geoPickOverlay=null, _geoPickId=null; // Slice 3: map-picker state (captured building id)
 // Slice 4: photo-GPS pins
 var _photoPinsEl=null, _geoPhotos=[], _geoPhotosJob=null, _geoPhotosNoGps=0;
 var _spPhotos=(function(){ try{ return localStorage.getItem('ngSitePlanPhotos')==='1'; }catch(_){ return false; } })();
@@ -147,6 +147,10 @@ function updateT1Progress(){
 function resize(){
   wireC.width=wrap.clientWidth; wireC.height=wrap.clientHeight;
   gridC.width=wrap.clientWidth; gridC.height=wrap.clientHeight;
+  // Re-honor a persisted satellite state once the tab is actually visible
+  // (the init-restore mount is skipped while #nodeGraphTab is hidden).
+  var _t=document.getElementById('nodeGraphTab');
+  if(_t && _t.offsetParent!==null && _spSatellite) updateBasemapVisibility();
 }
 
 // ── Render ──
@@ -1131,7 +1135,7 @@ function jobOrigin(){
   var lat=Number(job.geocode_lat), lng=Number(job.geocode_lng);
   if(!isFinite(lat)||!isFinite(lng)) return null;
   if(lat===0&&lng===0) return null;                       // Null Island = never geocoded
-  if(lat<-90||lat>90||lng<-180||lng>180) return null;
+  if(Math.abs(lat)>85.05||lng<-180||lng>180) return null; // Mercator clip band — keeps cos(lat) well-conditioned
   return { lat:lat, lng:lng };
 }
 // Graph-space anchor for the origin: centroid of the visible site-plan nodes, so
@@ -1147,7 +1151,7 @@ function siteplanCentroid(){
 // (_spOriginGraph) + its projected offset from the origin lat/lng. Derived only —
 // n.x/n.y are never mutated, so toggling satellite off restores the layout.
 function geoRenderPos(n){
-  if(!_spOrigin || !_spOriginGraph || !n.geoLatLng) return { x:n.x, y:n.y };
+  if(!_spOrigin || !_spOriginGraph || !n.geoLatLng || _spOriginJob!==E.job()) return { x:n.x, y:n.y }; // fail safe if origin is stale (cross-job)
   var g=E.spLatLngToGraph(n.geoLatLng.lat, n.geoLatLng.lng, _spOrigin.lat, _spOrigin.lng);
   return { x:_spOriginGraph.x + g.x, y:_spOriginGraph.y + g.y };
 }
@@ -1159,7 +1163,7 @@ function showSatHint(show, msg){
 }
 function mountBasemap(){
   if(!basemapEl) return;
-  _spOrigin=jobOrigin(); _spOriginGraph=siteplanCentroid();
+  _spOrigin=jobOrigin(); _spOriginGraph=siteplanCentroid(); _spOriginJob=E.job(); // stamp origin with its job
   if(!_spOrigin){ showSatHint(true); return; }
   showSatHint(false);
   if(_basemap){ _basemapReady=true; syncBasemapCamera(); return; }
@@ -1185,10 +1189,10 @@ function syncBasemapCamera(){
   var z=E.zm(), p=E.pan();
   var gcx=(wrap.clientWidth/2)/z - p.x, gcy=(wrap.clientHeight/2)/z - p.y;   // screen-centre in graph coords
   var c=E.spGraphToLatLng(gcx-_spOriginGraph.x, gcy-_spOriginGraph.y, _spOrigin.lat, _spOrigin.lng);
-  var mz=E.spMapZoom(z, _spOrigin.lat), iz=Math.floor(mz);
+  var mz=E.spMapZoom(z, _spOrigin.lat), iz=Math.max(0, Math.min(21, Math.floor(mz))); // clamp to Google's zoom range
   _basemap.setZoom(iz); _basemap.setCenter(c);
   basemapEl.style.transformOrigin='center center';
-  basemapEl.style.transform='scale('+Math.pow(2, mz-iz)+')';
+  basemapEl.style.transform='scale('+Math.pow(2, Math.max(0, mz-iz))+')';
 }
 function updateBasemapVisibility(){
   if(!basemapEl) return;
@@ -1216,21 +1220,28 @@ function ensureGeoPickOverlay(){
   if(_geoPickOverlay) return _geoPickOverlay;
   _geoPickOverlay=document.createElement('div');
   _geoPickOverlay.className='ng-geopick-overlay';
+  // Swallow the gesture so the engine's wrap-level mousedown never pans/deselects.
+  _geoPickOverlay.addEventListener('mousedown',function(e){ e.stopPropagation(); });
+  _geoPickOverlay.addEventListener('pointerdown',function(e){ e.stopPropagation(); });
+  _geoPickOverlay.addEventListener('mouseup',function(e){ e.stopPropagation(); });
   _geoPickOverlay.addEventListener('click',function(e){
-    var sel=selN && E.findNode(selN);
+    var sel=_geoPickId && E.findNode(_geoPickId);            // captured at Place time — not live selN
     if(sel && sel.type==='t1' && _spOrigin && _spOriginGraph){
       var ll=pickLatLngFromEvent(e);
       E.setNodeGeo(sel.id, ll.lat, ll.lng);
       if(E.saveGraph) E.saveGraph();
       render();
+      exitGeoPick();
+    } else {
+      exitGeoPick();
+      showSatHint(true, 'Selection lost — pick a building, then click Place again.');
     }
-    exitGeoPick();
   });
   wrap.appendChild(_geoPickOverlay);
   return _geoPickOverlay;
 }
 function exitGeoPick(){
-  _geoPick=false;
+  _geoPick=false; _geoPickId=null;
   var pb=document.getElementById('ngGeoPlaceBtn'); if(pb) pb.classList.remove('ng-on');
   if(_geoPickOverlay) _geoPickOverlay.style.display='none';
 }
@@ -1240,7 +1251,7 @@ function toggleGeoPick(){
   var sel=selN && E.findNode(selN);
   if(!sel || sel.type!=='t1'){ showSatHint(true, 'Select a building first, then click Place and tap its spot on the map.'); return; }
   if(!_spOrigin){ showSatHint(true); return; }
-  _geoPick=true;
+  _geoPick=true; _geoPickId=sel.id;                          // capture the building now (don't depend on selN surviving)
   var pb=document.getElementById('ngGeoPlaceBtn'); if(pb) pb.classList.add('ng-on');
   ensureGeoPickOverlay().style.display='block';
   showSatHint(true, 'Click the map to place “'+(sel.label||'building')+'”.');
@@ -1276,7 +1287,7 @@ function renderPhotoPins(){
   _geoPhotos.forEach(function(ph, idx){
     var pin=document.createElement('div');
     pin.className='ng-photopin';
-    pin.title=ph.original_name||ph.file_name||'Photo';
+    pin.title=ph.filename||'Photo';
     if(ph.thumb_url){ var im=document.createElement('img'); im.src=ph.thumb_url; im.alt=''; im.loading='lazy'; pin.appendChild(im); }
     pin.addEventListener('click', function(e){
       e.stopPropagation();
@@ -1293,9 +1304,9 @@ function renderPhotoPins(){
 function loadGeoPhotos(cb){
   var jid=E.job();
   if(!jid || typeof p86Api==='undefined' || !p86Api.attachments){ _geoPhotos=[]; if(cb)cb(); return; }
-  if(_geoPhotosJob===jid && _geoPhotos.length){ if(cb)cb(); return; } // cached per job
-  p86Api.attachments.list('job', jid).then(function(rows){
-    rows=rows||[]; var ok=[], noGps=0;
+  if(_geoPhotosJob===jid){ if(cb)cb(); return; } // cached per job (incl. confirmed-empty)
+  p86Api.attachments.list('job', jid).then(function(resp){
+    var rows=(resp && resp.attachments) || []; var ok=[], noGps=0; // endpoint returns an {attachments:[…]} envelope
     rows.forEach(function(a){
       if(!(a.mime_type && a.mime_type.indexOf('image/')===0)) return;
       var lat=Number(a.lat), lng=Number(a.lng);
@@ -1309,7 +1320,7 @@ function loadGeoPhotos(cb){
 function updatePhotoLayer(){
   var show=_spPhotos && _spSatellite && E.viewMode && E.viewMode()==='siteplan';
   if(!show){ if(_photoPinsEl) _photoPinsEl.style.display='none'; return; }
-  _spOrigin=_spOrigin||jobOrigin(); _spOriginGraph=_spOriginGraph||siteplanCentroid();
+  if(_spOriginJob!==E.job()){ _spOrigin=jobOrigin(); _spOriginGraph=siteplanCentroid(); _spOriginJob=E.job(); } // recompute for the current job
   if(!_spOrigin){ showSatHint(true); return; }
   if(_photoPinsEl) _photoPinsEl.style.display='block';
   loadGeoPhotos(function(){
@@ -1326,7 +1337,7 @@ function updatePhotoLayer(){
 function createTaskFromPhoto(ph){
   var jid=E.job();
   if(!jid || typeof p86Api==='undefined' || !p86Api.tasks){ showSatHint(true, 'Open a job to create tasks.'); return; }
-  var base=(ph.original_name||ph.file_name||'field photo').replace(/\.[a-z0-9]+$/i,'');
+  var base=(ph.filename||'field photo').replace(/\.[a-z0-9]+$/i,'');
   var def='Follow up: '+base;
   var title = (typeof window.prompt==='function') ? window.prompt('New task from this photo:', def) : def;
   if(title===null) return;                                          // cancelled
@@ -1573,6 +1584,7 @@ function initEvents(){
   var SN=E.SNAP, z=function(){return E.zm();};
 
   wrap.addEventListener('mousedown',function(e){
+    if(_geoPick) return; // map-picker active: the overlay handles the placement click
     if(e.target.closest('.ng-p')||e.target.closest('.ng-node')) return;
     // NG8: frame interactions (delete handled on click; drag/resize start here)
     if(e.target.closest('[data-frame-del]')){ e.stopPropagation(); return; }
@@ -4051,6 +4063,7 @@ window.openNodeGraph=function(jid){
   }
   if(jid && jid!==E.job()){
     E.job(jid);
+    _spOrigin=null; _spOriginGraph=null; _spOriginJob=null; _geoPhotos=[]; _geoPhotosJob=null; // drop geo caches: avoid cross-job staleness
     E.setNodes([]); E.setWires([]); E.setNid(1);
     if(!E.loadGraph()){ populate(); }
     ensureWatchFan();
