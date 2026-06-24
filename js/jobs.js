@@ -1472,6 +1472,64 @@ function renderJobsMain() {
             renderJobDetail(jobId);
         }
 
+        // ── Editable Project Address (Places autocomplete) ──────────────
+        // Inline-edit a job's address so any job (even one with no source
+        // lead) can be located + geocoded. Picking a Places result fills the
+        // fields cleanly; Save persists to job.data and kicks the weather
+        // geocoder (which populates geocode_lat/lng for the map + Site Plan).
+        function editJobAddress(jobId) {
+            var job = (window.appData && appData.jobs || []).find(function (j) { return j.id === jobId; });
+            if (!job) return;
+            var cell = document.getElementById('job-info-address');
+            if (!cell) return;
+            var esc = function (s) { return escapeHTML(s == null ? '' : String(s)); };
+            cell.innerHTML =
+                '<div class="job-addr-ac-mount" style="margin-bottom:6px;"></div>' +
+                '<input id="job-addr-street" placeholder="Street" value="' + esc(job.street_address) + '" style="width:100%;margin-bottom:6px;" />' +
+                '<div style="display:grid;grid-template-columns:1fr 60px 90px;gap:6px;margin-bottom:8px;">' +
+                  '<input id="job-addr-city" placeholder="City" value="' + esc(job.city) + '" />' +
+                  '<input id="job-addr-state" placeholder="ST" maxlength="2" value="' + esc(job.state) + '" style="text-transform:uppercase;" />' +
+                  '<input id="job-addr-zip" placeholder="Zip" maxlength="10" value="' + esc(job.zip) + '" />' +
+                '</div>' +
+                '<div style="display:flex;gap:6px;">' +
+                  '<button onclick="saveJobAddress(\'' + esc(jobId) + '\')" class="btn-primary" style="padding:4px 12px;cursor:pointer;">Save</button>' +
+                  '<button onclick="renderJobDetail(\'' + esc(jobId) + '\')" style="padding:4px 12px;cursor:pointer;">Cancel</button>' +
+                '</div>';
+            if (window.p86AddressAutocomplete) {
+                window.p86AddressAutocomplete.attach({
+                    mount: cell.querySelector('.job-addr-ac-mount'),
+                    placeholder: 'Search address…',
+                    onPlace: function (r) {
+                        var set = function (id, v) { var el = document.getElementById(id); if (el && v) el.value = v; };
+                        set('job-addr-street', r.components.street_address || r.formatted);
+                        set('job-addr-city', r.components.city);
+                        set('job-addr-state', r.components.state);
+                        set('job-addr-zip', r.components.zip);
+                    }
+                });
+            }
+        }
+        function saveJobAddress(jobId) {
+            var job = (window.appData && appData.jobs || []).find(function (j) { return j.id === jobId; });
+            if (!job) return;
+            var val = function (id) { var el = document.getElementById(id); return el ? el.value.trim() : ''; };
+            job.street_address = val('job-addr-street');
+            job.city = val('job-addr-city');
+            job.state = val('job-addr-state').toUpperCase();
+            job.zip = val('job-addr-zip');
+            job.address = [job.street_address, job.city, job.state, job.zip].filter(Boolean).join(', ');
+            job.updatedAt = new Date().toISOString();
+            saveData();
+            // Best-effort: geocode the new address server-side so the map /
+            // Site Plan satellite get coordinates (reuses the weather geocoder).
+            try {
+                if (window.p86Api && p86Api.weather && p86Api.weather.jobs) p86Api.weather.jobs([jobId]).catch(function () {});
+            } catch (_) {}
+            renderJobDetail(jobId);
+        }
+        window.editJobAddress = editJobAddress;
+        window.saveJobAddress = saveJobAddress;
+
         // Wired to the picker's onchange attribute. When the user picks a
         // client from the dropdown, copy its name into the free-text field
         // and stash the id on the hidden input so saveJob persists it.
@@ -2001,8 +2059,9 @@ function renderJobsMain() {
             var _jobAddr = [job.street_address, job.city, job.state, job.zip].filter(Boolean).join(', ') || job.address || '';
             var _jobAddrCell = document.getElementById('job-info-address');
             if (_jobAddrCell) {
-                var _jobAddrLink = (_jobAddr && window.p86MapLink && window.p86MapLink.linkHTML) ? window.p86MapLink.linkHTML(_jobAddr, _jobAddr) : '';
-                if (_jobAddrLink) _jobAddrCell.innerHTML = _jobAddrLink; else _jobAddrCell.textContent = _jobAddr || '—';
+                var _jobAddrDisp = (_jobAddr && window.p86MapLink && window.p86MapLink.linkHTML) ? window.p86MapLink.linkHTML(_jobAddr, _jobAddr) : escapeHTML(_jobAddr || '—');
+                _jobAddrCell.innerHTML = _jobAddrDisp +
+                    ' <button onclick="editJobAddress(\'' + escapeHTML(job.id) + '\')" title="Edit address" style="margin-left:8px;cursor:pointer;background:none;border:none;color:var(--accent,#4f8cff);font-size:12px;padding:0;">&#9998; Edit</button>';
             }
             // Explain a $0 estimated cost when the job DOES have an estimate (the
             // lead-only case is already covered by the red "Add estimate" chip).
