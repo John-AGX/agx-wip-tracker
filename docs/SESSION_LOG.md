@@ -47,6 +47,11 @@ Neither ran against a DB; both ship with dry-run/preview safety nets (verificati
 
 ## Entries (newest first)
 
+### 2026-06-14 · affectionate-feynman (client dashboard spec)
+- Mapped the current client page (modal form, no metrics) and wrote **`docs/CLIENT_DASHBOARD_SPEC.md`** — phased dashboard (Phase 1 leads + activity + lead-map buildable now; Phase 1.5 jobs↔client FK; Phase 2 property-intel enrichment).
+- **Key finding:** jobs/estimates link to clients only by freeform *name text* (no FK); leads/tasks/files link cleanly. A `jobs.client_id` link is the biggest CRM-foundation unlock.
+- John chose "spec it first" — no code yet; awaiting direction on the 4 open decisions in the spec.
+
 ### 2026-06-14 · affectionate-feynman (handoff)
 - Shipped two feature branches and **handed the push to Rolling86** (see Active handoffs + `docs/handoff-to-rolling86.md`): `claude/scribe-user-ops` + `claude/project-costs-backfill`.
 - Heads-up for Rolling86: scribe-user-ops adds `dryRun` to the dispatcher ctx (`payload-dispatcher.js` ~2937), shared by all dispatchers — worth a glance.
