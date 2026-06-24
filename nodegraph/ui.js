@@ -1282,6 +1282,10 @@ function renderPhotoPins(){
       e.stopPropagation();
       if(window.p86Attachments && window.p86Attachments.openLightbox) window.p86Attachments.openLightbox(_geoPhotos, idx);
     });
+    var tbtn=document.createElement('button');                       // Slice 5: create a task from this photo
+    tbtn.className='ng-photopin-task'; tbtn.type='button'; tbtn.textContent='+'; tbtn.title='Create a task from this photo';
+    tbtn.addEventListener('click', function(e){ e.stopPropagation(); createTaskFromPhoto(ph); });
+    pin.appendChild(tbtn);
     layer.appendChild(pin);
   });
   layoutPhotoPins();
@@ -1312,6 +1316,27 @@ function updatePhotoLayer(){
     renderPhotoPins();
     if(_geoPhotosNoGps) showSatHint(true, _geoPhotosNoGps+' photo'+(_geoPhotosNoGps===1?'':'s')+' have no GPS and aren’t shown.');
   });
+}
+// Slice 5: create an org task FROM a geotagged photo. The task is linked to the
+// job and its notes capture the photo + its real location, so the field photo on
+// the map turns into an action item in one tap. Uses the well-tested tasks.create
+// path only — no server/DB change. (Attaching the photo FILE to the task is a
+// verified follow-up: it needs the attachments CHECK constraint + the copy
+// endpoint's allowlist/geo-preservation + a writeCapForEntity('task') case.)
+function createTaskFromPhoto(ph){
+  var jid=E.job();
+  if(!jid || typeof p86Api==='undefined' || !p86Api.tasks){ showSatHint(true, 'Open a job to create tasks.'); return; }
+  var base=(ph.original_name||ph.file_name||'field photo').replace(/\.[a-z0-9]+$/i,'');
+  var def='Follow up: '+base;
+  var title = (typeof window.prompt==='function') ? window.prompt('New task from this photo:', def) : def;
+  if(title===null) return;                                          // cancelled
+  title=(title||'').trim()||def;
+  var lat=Number(ph.lat), lng=Number(ph.lng);
+  var loc=(isFinite(lat)&&isFinite(lng)) ? (' at '+lat.toFixed(5)+', '+lng.toFixed(5)) : '';
+  var notes='Created from a geotagged field photo'+loc+'.'+(ph.thumb_url?('\nPhoto: '+ph.thumb_url):'');
+  p86Api.tasks.create({ title:title, notes:notes, entity_type:'job', entity_id:jid })
+    .then(function(){ showSatHint(true, '✓ Task created: '+title); })
+    .catch(function(e){ showSatHint(true, 'Could not create task: '+((e&&e.message)||'error')); });
 }
 
 function focusNode(n, opts){
