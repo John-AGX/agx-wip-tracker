@@ -629,6 +629,11 @@
       html += '<button class="ee-btn secondary" onclick="openJobFromEstimate(\'' + escapeHTML(est.job_id) + '\')" style="display:inline-flex;align-items:center;gap:6px;background:rgba(52,211,153,0.12);color:var(--green,#34d399);">' +
         '<span>&#x1F3D7;&#xFE0F;</span>Open job &rarr;' +
       '</button>';
+      // Push this estimate's current totals + workspace to the linked job so the
+      // estimate stays the live source of truth (re-run after editing the bid).
+      html += '<button class="ee-btn secondary" data-cap="JOBS_EDIT_ANY JOBS_EDIT_OWN" onclick="syncEstimateToJob()" title="Update the linked job\'s Contract + Estimated Costs + workspace from this estimate" style="display:inline-flex;align-items:center;gap:6px;background:rgba(79,140,255,0.12);color:#4f8cff;">' +
+        '<span>&#x21BB;</span>Sync costs &rarr; job' +
+      '</button>';
     } else {
       html += '<button class="ee-btn secondary" data-cap="JOBS_EDIT_ANY JOBS_EDIT_OWN" onclick="convertEstimateToJob()" style="display:inline-flex;align-items:center;gap:6px;">' +
         '<span>&#x1F3D7;&#xFE0F;</span>Create Job' +
@@ -744,6 +749,34 @@
   }
   window.convertEstimateToJob = convertEstimateToJob;
   window.openJobFromEstimate = openJobFromEstimate;
+
+  // Re-push this (job-linked) estimate's totals + workspace to its job. Keeps
+  // the estimate as the live source of truth for the job's estimated costs:
+  // contract = proposal total, estimatedCosts = base cost, plus the workspace.
+  async function syncEstimateToJob() {
+    var est = getEstimate();
+    if (!est || !est.job_id) return;
+    try { if (typeof window.saveEstimateNow === 'function') await window.saveEstimateNow(); } catch (e) {}
+    var t = (window.computeEstimateTotals ? window.computeEstimateTotals(est) : {}) || {};
+    var contractAmount = (typeof t.proposalTotal === 'number') ? t.proposalTotal : undefined;
+    var estimatedCosts = (typeof t.baseCost === 'number') ? t.baseCost : undefined;
+    var workbook = null;
+    try {
+      if (typeof window.p86InheritWorkbookFromEstimate === 'function') {
+        var inh = await window.p86InheritWorkbookFromEstimate(est);
+        if (inh && inh.workbook) workbook = inh.workbook;
+      }
+    } catch (e) {}
+    try {
+      await window.p86Api.jobs.linkEstimate(est.job_id, { estimate_id: est.id, contractAmount: contractAmount, estimatedCosts: estimatedCosts, workbook: workbook });
+      function money(n) { return Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+      if (typeof window.p86Toast === 'function') window.p86Toast('Synced to job — contract $' + money(contractAmount) + ' · est. cost $' + money(estimatedCosts) + '.');
+      else alert('Synced to the job.');
+    } catch (err) {
+      alert('Sync failed: ' + ((err && err.message) || 'unknown error'));
+    }
+  }
+  window.syncEstimateToJob = syncEstimateToJob;
 
   // ──────────────────────────────────────────────────────────────────
   // Alternates / tiers — Good / Better / Best style parallel line sets.
