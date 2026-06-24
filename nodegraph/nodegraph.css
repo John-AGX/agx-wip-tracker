@@ -673,3 +673,9 @@ body.light-mode .ng-topbar.ng-ribbon .ng-ribbon-btn:hover{
    crosshair overlay captures the placement click ABOVE the engine. */
 #nodeGraphTab:not(.ng-sat) .ng-geoplace-btn{display:none}
 .ng-geopick-overlay{position:absolute;inset:0;z-index:40;display:none;cursor:crosshair;background:rgba(79,140,255,.05)}
+/* Photo-GPS pins (Slice 4): thumbnail markers on the imagery, screen-positioned. */
+#nodeGraphTab:not(.ng-sat) .ng-photos-btn{display:none}
+.ng-photopins{position:absolute;inset:0;z-index:8;pointer-events:none;display:none}
+.ng-photopin{position:absolute;width:30px;height:30px;margin:-15px 0 0 -15px;border-radius:50%;border:2px solid #4f8cff;background:var(--ng-surface);overflow:hidden;cursor:pointer;pointer-events:auto;box-shadow:0 2px 8px var(--ng-shadow)}
+.ng-photopin:hover{border-color:#fbbf24;z-index:9}
+.ng-photopin img{width:100%;height:100%;object-fit:cover;display:block}

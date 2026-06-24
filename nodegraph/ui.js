@@ -14,6 +14,9 @@ var _spFocus=null; // site-plan drill-in: focused building id (view-state, not s
 // Phase 2-A satellite basemap state (view-state / localStorage only — no graph write):
 var basemapEl=null, _basemap=null, _basemapReady=false, _spOrigin=null, _spOriginGraph=null, _satHintEl=null;
 var _geoPick=false, _geoPickOverlay=null; // Slice 3: map-picker mode state
+// Slice 4: photo-GPS pins
+var _photoPinsEl=null, _geoPhotos=[], _geoPhotosJob=null, _geoPhotosNoGps=0;
+var _spPhotos=(function(){ try{ return localStorage.getItem('ngSitePlanPhotos')==='1'; }catch(_){ return false; } })();
 var _spSatellite=(function(){ try{ return localStorage.getItem('ngSitePlanSatellite')==='1'; }catch(_){ return false; } })();
 // NG8: frames (group boxes) interaction state
 var selFrame=null, dragFrame=null, frameDragOff=null, frameMembers=null, resizeFrame=null, resizeStart=null;
@@ -921,6 +924,7 @@ function applyTx(){
   var p=E.pan(), z=E.zm();
   canvasEl.style.transform='translate('+(p.x*z)+'px,'+(p.y*z)+'px) scale('+z+')';
   if(_spSatellite) syncBasemapCamera();   // keep the slaved basemap under the camera
+  if(_spPhotos) layoutPhotoPins();        // keep photo pins on their spots
 }
 
 // ── NG-R3: compact currency ($120k / $1.3M) for at-a-glance round cost chips ──
@@ -1193,6 +1197,7 @@ function updateBasemapVisibility(){
   if(t) t.classList.toggle('ng-sat', !!show);
   basemapEl.style.display = show ? 'block' : 'none';
   if(show){ mountBasemap(); } else { showSatHint(false); exitGeoPick(); }
+  updatePhotoLayer(); // photos ride on top of satellite — show/hide together
 }
 
 // ── Map-picker (Slice 3): the ONLY building-geo write path ──────────────
@@ -1239,6 +1244,74 @@ function toggleGeoPick(){
   var pb=document.getElementById('ngGeoPlaceBtn'); if(pb) pb.classList.add('ng-on');
   ensureGeoPickOverlay().style.display='block';
   showSatHint(true, 'Click the map to place “'+(sel.label||'building')+'”.');
+}
+
+// ── Photo-GPS pins (Slice 4) ───────────────────────────────────────────
+// Plot the job's geotagged field photos on the imagery as thumbnail pins. Pins
+// live in a screen-space overlay (repositioned every applyTx); read-only.
+function photoScreenPos(ph){
+  var g=E.spLatLngToGraph(Number(ph.lat), Number(ph.lng), _spOrigin.lat, _spOrigin.lng);
+  var z=E.zm(), p=E.pan();
+  return { x:(p.x + _spOriginGraph.x + g.x)*z, y:(p.y + _spOriginGraph.y + g.y)*z };
+}
+function ensurePhotoPinsLayer(){
+  if(_photoPinsEl) return _photoPinsEl;
+  _photoPinsEl=document.createElement('div');
+  _photoPinsEl.className='ng-photopins';
+  wrap.appendChild(_photoPinsEl);
+  return _photoPinsEl;
+}
+function layoutPhotoPins(){
+  if(!_photoPinsEl || !_spPhotos || !_spOrigin || !_spOriginGraph) return;
+  if(!_spSatellite || (E.viewMode && E.viewMode()!=='siteplan')) return;
+  var pins=_photoPinsEl.children;
+  for(var i=0;i<pins.length && i<_geoPhotos.length;i++){
+    var s=photoScreenPos(_geoPhotos[i]);
+    pins[i].style.left=s.x+'px'; pins[i].style.top=s.y+'px';
+  }
+}
+function renderPhotoPins(){
+  var layer=ensurePhotoPinsLayer();
+  layer.innerHTML='';
+  _geoPhotos.forEach(function(ph, idx){
+    var pin=document.createElement('div');
+    pin.className='ng-photopin';
+    pin.title=ph.original_name||ph.file_name||'Photo';
+    if(ph.thumb_url){ var im=document.createElement('img'); im.src=ph.thumb_url; im.alt=''; im.loading='lazy'; pin.appendChild(im); }
+    pin.addEventListener('click', function(e){
+      e.stopPropagation();
+      if(window.p86Attachments && window.p86Attachments.openLightbox) window.p86Attachments.openLightbox(_geoPhotos, idx);
+    });
+    layer.appendChild(pin);
+  });
+  layoutPhotoPins();
+}
+function loadGeoPhotos(cb){
+  var jid=E.job();
+  if(!jid || typeof p86Api==='undefined' || !p86Api.attachments){ _geoPhotos=[]; if(cb)cb(); return; }
+  if(_geoPhotosJob===jid && _geoPhotos.length){ if(cb)cb(); return; } // cached per job
+  p86Api.attachments.list('job', jid).then(function(rows){
+    rows=rows||[]; var ok=[], noGps=0;
+    rows.forEach(function(a){
+      if(!(a.mime_type && a.mime_type.indexOf('image/')===0)) return;
+      var lat=Number(a.lat), lng=Number(a.lng);
+      if(isFinite(lat)&&isFinite(lng)&&!(lat===0&&lng===0)&&lat>=-90&&lat<=90&&lng>=-180&&lng<=180) ok.push(a);
+      else noGps++;
+    });
+    _geoPhotos=ok; _geoPhotosNoGps=noGps; _geoPhotosJob=jid;
+    if(cb)cb();
+  }).catch(function(){ _geoPhotos=[]; if(cb)cb(); });
+}
+function updatePhotoLayer(){
+  var show=_spPhotos && _spSatellite && E.viewMode && E.viewMode()==='siteplan';
+  if(!show){ if(_photoPinsEl) _photoPinsEl.style.display='none'; return; }
+  _spOrigin=_spOrigin||jobOrigin(); _spOriginGraph=_spOriginGraph||siteplanCentroid();
+  if(!_spOrigin){ showSatHint(true); return; }
+  if(_photoPinsEl) _photoPinsEl.style.display='block';
+  loadGeoPhotos(function(){
+    renderPhotoPins();
+    if(_geoPhotosNoGps) showSatHint(true, _geoPhotosNoGps+' photo'+(_geoPhotosNoGps===1?'':'s')+' have no GPS and aren’t shown.');
+  });
 }
 
 function focusNode(n, opts){
@@ -3327,6 +3400,15 @@ function init(){
   var placeBtn=tab.querySelector('.ng-geoplace-btn');
   if(placeBtn) placeBtn.addEventListener('click', toggleGeoPick);
 
+  // Photo-GPS pins (Slice 4) — plot the job's geotagged photos on the imagery.
+  var photosBtn=tab.querySelector('.ng-photos-btn');
+  if(photosBtn) photosBtn.addEventListener('click', function(){
+    _spPhotos=!_spPhotos;
+    try{ localStorage.setItem('ngSitePlanPhotos', _spPhotos?'1':'0'); }catch(_){}
+    photosBtn.classList.toggle('ng-on', _spPhotos);
+    updatePhotoLayer();
+  });
+
   // Save Layout — checkpoint the current node graph to a separate
   // localStorage slot (independent of auto-save) so the user can
   // recover from accidental edits or auto-save wipes after a
@@ -3921,6 +4003,7 @@ window.openNodeGraph=function(jid){
     // Restore the satellite sub-toggle; mount the basemap only if the tab is
     // already visible (avoid sizing a google.maps.Map inside a hidden overlay).
     var _satb = document.getElementById('ngSatelliteBtn'); if(_satb) _satb.classList.toggle('ng-on', _spSatellite);
+    var _phb = document.getElementById('ngPhotosBtn'); if(_phb) _phb.classList.toggle('ng-on', _spPhotos);
     if(tab && tab.offsetParent!==null) updateBasemapVisibility();
   } catch(_){}
   if(!wrap) init();
