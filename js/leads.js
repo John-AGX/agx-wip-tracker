@@ -1546,6 +1546,14 @@
       jobNumber: '',
       title: l.title,
       client: clientName,
+      // Carry the client link + address from the lead so the job isn't a shell —
+      // Link Client shows "Linked" and the map/weather have an address.
+      clientId: l.client_id || null,
+      street_address: l.street_address || '',
+      city: l.city || '',
+      state: l.state || '',
+      zip: l.zip || '',
+      address: [l.street_address, l.city, l.state, l.zip].filter(Boolean).join(', '),
       pm: '',
       owner_id: ownerId,
       jobType: l.project_type || '',
@@ -1553,7 +1561,8 @@
       market: l.market || '',
       status: 'New',
       contractAmount: contractAmt,
-      estimatedCosts: 0,
+      // Estimate is the source of truth for estimated costs (its base cost).
+      estimatedCosts: (chosen && window.computeEstimateTotals ? (window.computeEstimateTotals(chosen).baseCost || 0) : 0),
       targetMarginPct: 50,
       pctComplete: 0,
       invoicedToDate: 0,

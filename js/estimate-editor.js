@@ -709,9 +709,18 @@
     var newJob = {
       id: jobId, jobNumber: '', title: est.name || est.title || 'New Job',
       client: clientName, pm: '', owner_id: ownerId,
+      // Carry the client link + address (from the estimate / its lead) so the
+      // job isn't a shell — Link Client shows "Linked" and map/weather have an address.
+      clientId: est.client_id || (lead && lead.client_id) || null,
+      street_address: (lead && lead.street_address) || '',
+      city: (lead && lead.city) || '',
+      state: (lead && lead.state) || '',
+      zip: (lead && lead.zip) || '',
+      address: lead ? [lead.street_address, lead.city, lead.state, lead.zip].filter(Boolean).join(', ') : '',
       jobType: (lead && lead.project_type) || est.jobType || '', workType: '',
       market: (lead && lead.market) || est.market || '', status: 'New',
-      contractAmount: contractAmt, estimatedCosts: 0, targetMarginPct: 50,
+      // Estimate is the source of truth for estimated costs (its base cost).
+      contractAmount: contractAmt, estimatedCosts: (totals && typeof totals.baseCost === 'number' ? totals.baseCost : 0), targetMarginPct: 50,
       pctComplete: 0, invoicedToDate: 0, revisedCostChanges: 0,
       notes: (lead && lead.notes) || '',
       lead_id: leadId || null, estimate_id: est.id || null,
