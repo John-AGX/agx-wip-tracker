@@ -3098,7 +3098,13 @@
     <script src="js/admin.js?v=103"></script>
     <script src="js/admin-context-registry.js?v=3"></script>
     <script src="js/field-tools.js?v=9"></script>
+    <div id="clientDashboardModal" class="modal">
+      <div class="modal-content" style="max-width:1120px;width:96vw;max-height:92vh;display:flex;flex-direction:column;">
+        <div id="clientDashboard_body" style="padding:20px 22px;overflow-y:auto;flex:1;"></div>
+      </div>
+    </div>
     <script src="js/clients.js?v=18"></script>
+    <script src="js/clients-dashboard.js?v=1"></script>
     <!-- Folder taxonomy — default folder structure per entity type
          (lead / estimate / job / client). Loads before subs.js and
          my-files.js, which merge it with live folders for the grant

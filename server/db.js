@@ -391,6 +391,11 @@ async function initSchema() {
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );
+    -- CRM: explicit job→client link for the client dashboard. Additive +
+    -- nullable; existing jobs (which store only the client NAME in data)
+    -- resolve by name-match in the dashboard endpoint until linked here.
+    ALTER TABLE jobs ADD COLUMN IF NOT EXISTS client_id TEXT;
+    CREATE INDEX IF NOT EXISTS idx_jobs_client_id ON jobs(client_id);
     -- Geocode cache for the schedule's per-job weather lookup. Filled
     -- in lazily by the weather route the first time a job's address
     -- is needed; status='ok'|'failed'|null lets us avoid retrying a

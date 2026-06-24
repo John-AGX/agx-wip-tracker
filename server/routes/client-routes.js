@@ -65,6 +65,103 @@ router.get('/:id', requireAuth, requireCapability('ESTIMATES_VIEW'), async (req,
   }
 });
 
+// GET /api/clients/:id/dashboard — CRM rollup for the client page.
+// Resolves the client's jobs by the explicit jobs.client_id link when set,
+// else falls back to an exact name-match on data->>'client' (existing jobs
+// aren't linked yet). Returns financial rollups + linked leads + jobs + a
+// simple health badge. Resilient: every number defaults to 0, never throws.
+router.get('/:id/dashboard', requireAuth, requireCapability('ESTIMATES_VIEW'), async (req, res) => {
+  try {
+    const orgId = req.user.organization_id;
+    const cr = await pool.query(
+      'SELECT * FROM clients WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+      [req.params.id, orgId]
+    );
+    if (!cr.rows.length) return res.status(404).json({ error: 'Client not found' });
+    const client = cr.rows[0];
+    const cname = (client.name || '').trim().toLowerCase();
+
+    const jr = await pool.query(
+      `SELECT id, data, client_id FROM jobs
+        WHERE (organization_id = $1 OR organization_id IS NULL)
+          AND ( client_id = $2
+                OR (client_id IS NULL AND lower(btrim(data->>'client')) = $3) )`,
+      [orgId, client.id, cname]
+    );
+    const jobRows = jr.rows;
+    const jobIds = jobRows.map((j) => j.id);
+
+    const costByJob = {};
+    if (jobIds.length) {
+      const qc = await pool.query(
+        'SELECT job_id, COALESCE(SUM(amount),0)::float AS total FROM qb_cost_lines WHERE job_id = ANY($1::text[]) GROUP BY job_id',
+        [jobIds]
+      );
+      qc.rows.forEach((r) => { costByJob[r.job_id] = Number(r.total) || 0; });
+    }
+
+    const num = (v) => { const n = Number(v); return isFinite(n) ? n : 0; };
+    let contractValue = 0, costs = 0, revenue = 0;
+    const jobs = jobRows.map((j) => {
+      const d = j.data || {};
+      const contract = num(d.contractAmount);
+      const cost = (costByJob[j.id] != null) ? costByJob[j.id] : (num(d.qbCostsTotal) || num(d.estimatedCosts));
+      const rev = num(d.invoicedToDate);
+      contractValue += contract; costs += cost; revenue += rev;
+      return {
+        id: j.id, jobNumber: d.jobNumber || '', title: d.title || d.name || d.jobNumber || j.id,
+        status: d.status || '', contract, cost, revenue: rev,
+        margin: contract > 0 ? (contract - cost) / contract : null,
+      };
+    }).sort((a, b) => (b.contract - a.contract));
+
+    const lr = await pool.query(
+      `SELECT id, title, status, estimated_revenue_low, estimated_revenue_high,
+              geocode_lat, geocode_lng, updated_at
+         FROM leads
+        WHERE client_id = $1 AND (organization_id = $2 OR organization_id IS NULL)
+        ORDER BY updated_at DESC NULLS LAST`,
+      [client.id, orgId]
+    );
+    const OPEN = new Set(['new', 'in_progress', 'sent']);
+    let pipelineValue = 0, openLeads = 0;
+    const leads = lr.rows.map((l) => {
+      const value = num(l.estimated_revenue_high) || num(l.estimated_revenue_low);
+      const open = OPEN.has(String(l.status || '').toLowerCase());
+      if (open) { openLeads++; pipelineValue += value; }
+      return { id: l.id, title: l.title || '(untitled lead)', status: l.status || 'new', value, open };
+    });
+
+    const margin = contractValue > 0 ? (contractValue - costs) / contractValue : null;
+
+    // Account-activity health (property-condition health lands with the
+    // property-intel layer). tier: healthy | watch | risk.
+    let tier = 'healthy', reason = 'Active account';
+    if (jobs.length === 0 && openLeads === 0) { tier = 'watch'; reason = 'No jobs or active leads'; }
+    else if (margin != null && margin < 0.15 && jobs.length) { tier = 'watch'; reason = 'Thin margins on completed work'; }
+    else if (openLeads > 0 && jobs.length === 0) { reason = openLeads + ' open lead(s), no jobs yet'; }
+
+    res.json({
+      client: {
+        id: client.id, name: client.name, client_type: client.client_type,
+        market: client.market, property_address: client.property_address,
+        first_name: client.first_name, last_name: client.last_name,
+        email: client.email, phone: client.phone || client.cell,
+        community_manager: client.community_manager, cm_email: client.cm_email, cm_phone: client.cm_phone,
+        maintenance_manager: client.maintenance_manager, mm_email: client.mm_email, mm_phone: client.mm_phone,
+      },
+      summary: {
+        jobCount: jobs.length, contractValue, costs, revenue, margin,
+        totalLeads: leads.length, openLeads, pipelineValue, health: { tier, reason },
+      },
+      jobs, leads,
+    });
+  } catch (e) {
+    console.error('GET /api/clients/:id/dashboard error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // POST /api/clients — create. parent_client_id is validated against the
 // existing set so we don't end up with dangling parents.
 router.post('/', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req, res) => {
