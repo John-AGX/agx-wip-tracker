@@ -224,6 +224,68 @@ router.post('/convert', requireAuth, requireRole('admin', 'pm'), async (req, res
   }
 });
 
+// POST /api/jobs/:id/link-estimate — attach an estimate to an EXISTING job (the
+// backfill case: a lead-only job that had no cost basis, or re-syncing costs
+// after the estimate changed). The estimate is the source of truth for the
+// job's estimated costs, so the client passes the freshly-computed contract
+// (proposal total) + estimatedCosts (base cost) + workspace snapshot; we merge
+// them into the job, set jobs.estimate_id, and stamp estimate.data.job_id —
+// all atomic. Mirrors /convert but UPDATEs instead of INSERTing.
+router.post('/:id/link-estimate', requireAuth, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    if (!(await canEdit(req.user.id, req.user.role, req.params.id))) {
+      return res.status(403).json({ error: 'No edit access' });
+    }
+    const estimateId = req.body && req.body.estimate_id;
+    if (!estimateId) return res.status(400).json({ error: 'estimate_id is required' });
+    const orgId = req.user.organization_id;
+    const contractAmount = req.body.contractAmount;
+    const estimatedCosts = req.body.estimatedCosts;
+    const workbook = req.body.workbook;
+
+    await client.query('BEGIN');
+    const jr = await client.query(
+      'SELECT data, lead_id FROM jobs WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL) FOR UPDATE',
+      [req.params.id, orgId]
+    );
+    if (!jr.rows.length) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Job not found' }); }
+    const er = await client.query(
+      'SELECT data FROM estimates WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+      [estimateId, orgId]
+    );
+    if (!er.rows.length) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Estimate not found' }); }
+
+    let data = jr.rows[0].data || {};
+    if (typeof data === 'string') { try { data = JSON.parse(data); } catch (_) { data = {}; } }
+    data.estimate_id = estimateId;
+    if (typeof contractAmount === 'number') data.contractAmount = contractAmount;
+    if (typeof estimatedCosts === 'number') data.estimatedCosts = estimatedCosts;
+    if (workbook && typeof workbook === 'object') data.workbook = workbook;
+    const estData = er.rows[0].data || {};
+    const estLeadId = (estData && estData.lead_id) || null;
+    const newLeadId = jr.rows[0].lead_id || data.lead_id || estLeadId || null;
+    if (newLeadId) data.lead_id = newLeadId;
+
+    await client.query(
+      'UPDATE jobs SET data = $1, estimate_id = $2, lead_id = $3, updated_at = NOW() WHERE id = $4 AND (organization_id = $5 OR organization_id IS NULL)',
+      [JSON.stringify(data), estimateId, newLeadId, req.params.id, orgId]
+    );
+    await client.query(
+      "UPDATE estimates SET data = jsonb_set(COALESCE(data, '{}'::jsonb), '{job_id}', to_jsonb($1::text)), updated_at = NOW() WHERE id = $2 AND (organization_id = $3 OR organization_id IS NULL)",
+      [req.params.id, estimateId, orgId]
+    );
+    await client.query('COMMIT');
+    res.json({ ok: true, id: req.params.id, estimate_id: estimateId, lead_id: newLeadId });
+  } catch (e) {
+    try { await client.query('ROLLBACK'); } catch (_) {}
+    console.error('POST /api/jobs/:id/link-estimate error:', e);
+    res.status(500).json({ error: 'Server error: ' + (e && e.message) });
+  } finally {
+    client.release();
+  }
+});
+
 // PUT /api/jobs/:id
 router.put('/:id', requireAuth, async (req, res) => {
   try {

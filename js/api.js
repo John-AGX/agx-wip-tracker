@@ -100,6 +100,9 @@
     // Atomically create a job from a lead and/or estimate (links + bid carry-over
     // happen server-side in one transaction). payload: { job, lead_id?, estimate_id? }
     convert: function(payload) { return post('/api/jobs/convert', payload); },
+    // Attach an estimate to an existing job (backfill / re-sync costs).
+    // payload: { estimate_id, contractAmount?, estimatedCosts?, workbook? }
+    linkEstimate: function(jobId, payload) { return post('/api/jobs/' + encodeURIComponent(jobId) + '/link-estimate', payload); },
     bulkSave: function(appData) { return put('/api/jobs/bulk/save', { appData: appData }); },
     remove: function(id) { return del('/api/jobs/' + encodeURIComponent(id)); },
     reassignOwner: function(id, ownerId, notify) {

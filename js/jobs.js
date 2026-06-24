@@ -1789,6 +1789,89 @@ function renderJobsMain() {
         window.openLeadFromJob = openLeadFromJob;
         window.openEstimateFromJob = openEstimateFromJob;
 
+        // ── Attach an estimate to an existing (lead-only) job ──────────────
+        // The estimate is the source of truth for estimated costs, so linking
+        // re-seeds the job's Contract (proposal total) + Estimated Costs (base
+        // cost) and carries the workspace. Backfills a hollow lead-only job.
+        function _jobEstTotals(est) { try { return (window.computeEstimateTotals ? window.computeEstimateTotals(est) : {}) || {}; } catch (e) { return {}; } }
+        function _jobMoney(n) { return Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+
+        async function _doLinkEstimateToJob(jobId, est) {
+            try {
+                var t = _jobEstTotals(est);
+                var contractAmount = (typeof t.proposalTotal === 'number') ? t.proposalTotal : undefined;
+                var estimatedCosts = (typeof t.baseCost === 'number') ? t.baseCost : undefined;
+                var workbook = null;
+                if (typeof window.p86InheritWorkbookFromEstimate === 'function') {
+                    var inh = await window.p86InheritWorkbookFromEstimate(est);
+                    if (inh && inh.workbook) workbook = inh.workbook;
+                }
+                await window.p86Api.jobs.linkEstimate(jobId, { estimate_id: est.id, contractAmount: contractAmount, estimatedCosts: estimatedCosts, workbook: workbook });
+                var job = appData.jobs.find(function (j) { return j.id === jobId; });
+                if (job) {
+                    job.estimate_id = est.id;
+                    if (contractAmount != null) job.contractAmount = contractAmount;
+                    if (estimatedCosts != null) job.estimatedCosts = estimatedCosts;
+                    if (workbook) job.workbook = workbook;
+                    if (!job.lead_id && est.lead_id) job.lead_id = est.lead_id;
+                }
+                est.job_id = jobId;
+                if (typeof window.p86Toast === 'function') window.p86Toast('Estimate linked — contract + estimated costs updated from the estimate.');
+                if (typeof renderJobDetail === 'function') renderJobDetail(jobId);
+            } catch (err) {
+                alert('Could not link the estimate: ' + ((err && err.message) || 'unknown error'));
+            }
+        }
+
+        function addEstimateToJob(jobId) {
+            var job = appData.jobs.find(function (j) { return j.id === jobId; });
+            if (!job) return;
+            var leadId = job.lead_id || null;
+            var ests = ((window.appData && window.appData.estimates) || []).filter(function (e) {
+                return leadId && e.lead_id === leadId && (!e.job_id || e.job_id === jobId);
+            });
+            function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+            var ov = document.createElement('div');
+            ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:99990;display:flex;align-items:center;justify-content:center;padding:20px;';
+            var rows = ests.map(function (e, i) {
+                var t = _jobEstTotals(e);
+                var nm = e.name || e.title || ('Estimate ' + String(e.id).slice(0, 8));
+                return '<button data-link="' + i + '" style="display:block;width:100%;text-align:left;margin:6px 0;padding:12px 14px;border:1px solid var(--border,#333);border-radius:8px;background:var(--bg,#0a0a14);color:var(--text,#fff);cursor:pointer;">' +
+                    '<div style="font-weight:600;">' + esc(nm) + '</div>' +
+                    '<div style="font-size:12px;color:var(--text-muted,#9aa);margin-top:3px;">Contract $' + _jobMoney(t.proposalTotal) + ' &middot; Est. cost $' + _jobMoney(t.baseCost) + '</div>' +
+                    '</button>';
+            }).join('');
+            var card = document.createElement('div');
+            card.style.cssText = 'background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:12px;max-width:520px;width:100%;max-height:80vh;overflow:auto;padding:18px;';
+            card.innerHTML =
+                '<div style="font-size:15px;font-weight:700;margin-bottom:4px;">Add an estimate to this job</div>' +
+                '<div style="font-size:12px;color:var(--text-muted,#9aa);margin-bottom:10px;">The estimate is the source of truth for estimated costs — linking sets the job’s Contract + Estimated Costs and carries the workspace.</div>' +
+                (ests.length
+                    ? ('<div style="font-size:12px;font-weight:600;color:var(--text-muted,#9aa);margin:8px 0 2px;">Link an existing estimate' + (leadId ? ' on this lead' : '') + '</div>' + rows)
+                    : '<div style="font-size:12px;color:var(--text-muted,#9aa);margin:6px 0;">No estimates on this job’s lead yet.</div>') +
+                (leadId ? '<button data-create="1" style="display:block;width:100%;margin-top:10px;padding:11px 14px;border:1px dashed var(--border,#555);border-radius:8px;background:transparent;color:var(--blue,#4f8cff);cursor:pointer;">+ New estimate &mdash; opens the lead to build it</button>' : '') +
+                '<button data-cancel="1" style="margin-top:10px;padding:8px 14px;border:1px solid var(--border,#333);border-radius:8px;background:transparent;color:var(--text-muted,#9aa);cursor:pointer;">Cancel</button>';
+            ov.appendChild(card);
+            ov.addEventListener('click', function (ev) {
+                var b = ev.target.closest && ev.target.closest('[data-link],[data-create],[data-cancel]');
+                if (!b && ev.target !== ov) return;
+                var doClose = function () { if (ov.parentNode) ov.parentNode.removeChild(ov); };
+                if (!b || b.getAttribute('data-cancel')) { doClose(); return; }
+                if (b.getAttribute('data-create')) {
+                    doClose();
+                    // Slice A: hop to the lead to build a fresh estimate, then come
+                    // back and Link it. (Slice B auto-links + live-syncs.)
+                    openLeadFromJob(leadId);
+                    return;
+                }
+                var est = ests[Number(b.getAttribute('data-link'))];
+                doClose();
+                if (est) _doLinkEstimateToJob(jobId, est);
+            });
+            document.body.appendChild(ov);
+        }
+        window.addEstimateToJob = addEstimateToJob;
+
         function renderJobDetail(jobId) {
             const job = appData.jobs.find(j => j.id === jobId);
             if (!job) return;
@@ -1875,6 +1958,12 @@ function renderJobsMain() {
                         var _es = _estC.find(function (x) { return x.id === job.estimate_id; });
                         var _en = _es ? (_es.name || _es.title || 'estimate') : 'estimate';
                         _chips += '<button onclick="openEstimateFromJob(\'' + escapeHTML(job.estimate_id) + '\')" class="badge" style="cursor:pointer;border:none;background:rgba(79,140,255,0.14);color:#4f8cff;">&larr; From estimate: ' + escapeHTML(_en) + '</button>';
+                    }
+                    // No estimate backing the job → its estimated costs aren't
+                    // flowing into WIP. Flag it with a one-click "Add estimate"
+                    // (the estimate is the source of truth for estimated costs).
+                    if (!job.estimate_id) {
+                        _chips += '<button onclick="addEstimateToJob(\'' + escapeHTML(job.id) + '\')" class="badge" title="No estimate is backing this job, so estimated costs aren&#39;t flowing into its WIP. Click to attach one." style="cursor:pointer;border:none;background:rgba(239,68,68,0.14);color:var(--red,#ef4444);">&#9888;&#xFE0F; No estimate &mdash; costs not flowing &middot; Add estimate</button>';
                     }
                     _srcHost.innerHTML = _chips;
                     _srcHost.style.display = _chips ? 'flex' : 'none';
