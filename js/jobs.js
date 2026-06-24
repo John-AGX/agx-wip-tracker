@@ -1943,10 +1943,12 @@ function renderJobsMain() {
                     if (!_srcHost) {
                         _srcHost = document.createElement('div');
                         _srcHost.id = 'job-detail-source-chips';
-                        _srcHost.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;margin-top:5px;';
+                        _srcHost.style.cssText = 'display:flex;flex-wrap:wrap;align-items:center;gap:7px;margin-top:8px;';
                         _titleEl.parentNode.insertBefore(_srcHost, _titleEl.nextSibling);
                     }
-                    var _chips = '';
+                    var _chips = (job.lead_id || job.estimate_id)
+                        ? '<span style="font-size:10px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:.5px;">Source</span>'
+                        : '';
                     if (job.lead_id) {
                         var _leadsC = (window.p86Leads && window.p86Leads.getCached && window.p86Leads.getCached()) || [];
                         var _ld = _leadsC.find(function (x) { return x.id === job.lead_id; });
@@ -1993,6 +1995,21 @@ function renderJobsMain() {
             const statusClass = job.status === 'On Hold' ? 'at-risk' : job.status === 'Completed' ? 'on-track' : job.status === 'Archived' ? 'not-started' : 'on-track';
             document.getElementById('job-info-status').innerHTML = `<span class="badge ${statusClass}">${escapeHTML(job.status)}</span>`;
             document.getElementById('job-info-notes').textContent = job.notes || '—';
+            // Project Address — carried from the lead/estimate at conversion;
+            // rendered as a Google-Maps deep link for field reference. Guarded so
+            // an older HTML cache (no address cell) can't throw.
+            var _jobAddr = [job.street_address, job.city, job.state, job.zip].filter(Boolean).join(', ') || job.address || '';
+            var _jobAddrCell = document.getElementById('job-info-address');
+            if (_jobAddrCell) {
+                var _jobAddrLink = (_jobAddr && window.p86MapLink && window.p86MapLink.linkHTML) ? window.p86MapLink.linkHTML(_jobAddr, _jobAddr) : '';
+                if (_jobAddrLink) _jobAddrCell.innerHTML = _jobAddrLink; else _jobAddrCell.textContent = _jobAddr || '—';
+            }
+            // Explain a $0 estimated cost when the job DOES have an estimate (the
+            // lead-only case is already covered by the red "Add estimate" chip).
+            var _ecCell = document.getElementById('job-info-estcosts');
+            if (_ecCell && !job.estimatedCosts && job.estimate_id) {
+                _ecCell.innerHTML = formatCurrency(job.estimatedCosts) + ' <span style="color:var(--text-dim,#888);font-size:11px;">· estimate has no cost basis</span>';
+            }
             document.getElementById('archive-job-btn').textContent = job.status === 'Archived' ? 'Unarchive Job' : 'Archive Job';
 
             // Summary cards — WIP-based
