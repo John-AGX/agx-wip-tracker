@@ -3136,6 +3136,15 @@
          Both load before projects-map.js so the map renderer can
          reference window.p86Maps + window.p86TagIcons. -->
     <script src="js/maps-loader.js?v=2"></script>
+    <!-- Google Places address autocomplete helper (window.p86AddressAutocomplete) -->
+    <script src="js/address-autocomplete.js?v=1"></script>
+    <style>
+      /* Places autocomplete search box — color-scheme:dark renders the gmp
+         dropdown to match the dark UI; full width inside the address fieldset. */
+      .p86-addr-ac{display:block;width:100%;color-scheme:dark;margin:0;}
+      .p86-addr-ac-row{margin-bottom:10px;}
+      .p86-addr-ac-row > label{display:block;font-size:11px;color:var(--text-dim,#888);margin-bottom:3px;}
+    </style>
     <!-- Google-Maps deep-link helper (window.p86MapLink) — builds click-to-
          open-Maps URLs for chat, map info windows, and detail address
          lines. SDK-independent; separate namespace from p86Maps so load

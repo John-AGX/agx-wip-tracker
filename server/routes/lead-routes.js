@@ -49,7 +49,8 @@ const EDITABLE_FIELDS = [
   'salesperson_id',
   'property_name', 'gate_code', 'market',
   'notes',
-  'job_id'
+  'job_id',
+  'geocode_lat', 'geocode_lng'   // accepted from a Places-picked address (skips Census re-geocode)
 ];
 
 const VALID_STATUSES = new Set(['new', 'in_progress', 'sent', 'lost', 'sold', 'no_opportunity']);
@@ -68,7 +69,7 @@ function pickEditable(body) {
     if (isNaN(n)) n = 0;
     out.confidence = Math.max(0, Math.min(100, n));
   }
-  ['estimated_revenue_low', 'estimated_revenue_high'].forEach(function(k) {
+  ['estimated_revenue_low', 'estimated_revenue_high', 'geocode_lat', 'geocode_lng'].forEach(function(k) {
     if (out[k] === '' || out[k] == null) { out[k] = null; return; }
     var n = parseFloat(out[k]);
     out[k] = isNaN(n) ? null : n;
@@ -159,7 +160,8 @@ router.post('/', requireAuth, requireCapability('LEADS_EDIT'), async (req, res) 
     );
     res.json({ ok: true, id });
     // Geocode after the response — the map picks the pin up on next load.
-    if (LEAD_ADDRESS_FIELDS.some(k => fields[k])) {
+    // Skip when the client already supplied real (Places-picked) coords.
+    if (LEAD_ADDRESS_FIELDS.some(k => fields[k]) && fields.geocode_lat == null) {
       geocodeLead(id).catch(() => {});
     }
   } catch (e) {
@@ -204,7 +206,7 @@ router.put('/:id', requireAuth, requireCapability('LEADS_EDIT'), async (req, res
 
     // Address fields changed → re-geocode (after the response; sticky-failed
     // status is overwritten with the fresh result).
-    if (LEAD_ADDRESS_FIELDS.some(k => Object.prototype.hasOwnProperty.call(fields, k))) {
+    if (LEAD_ADDRESS_FIELDS.some(k => Object.prototype.hasOwnProperty.call(fields, k)) && fields.geocode_lat == null) {
       geocodeLead(req.params.id).catch(() => {});
     }
 

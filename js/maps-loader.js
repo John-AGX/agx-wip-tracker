@@ -80,7 +80,7 @@
       s.src = 'https://maps.googleapis.com/maps/api/js' +
         '?key=' + encodeURIComponent(key) +
         '&v=weekly' +
-        '&libraries=marker,geometry' +
+        '&libraries=marker,geometry,places' +
         '&loading=async' +
         '&callback=__p86MapsReady';
       s.onerror = function() {

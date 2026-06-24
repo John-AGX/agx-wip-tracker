@@ -550,6 +550,7 @@
   }
 
   function clearEditor() {
+    _pickedGeo = null; // drop any address picked in a prior editor session
     EDITABLE_FIELDS.forEach(function(f) { setField(f, ''); });
     setField('status', 'new');
     setField('confidence', 0);
@@ -1165,6 +1166,7 @@
   // Bound once per editor open; subsequent calls are no-ops (we check
   // the data-watcher-bound flag).
   var _addressRebuildTimer = null;
+  var _pickedGeo = null, _leadAcHandle = null; // Places-picked coords for the save payload
   function wireLeadAddressWatchers() {
     ['leadEditor_street_address', 'leadEditor_city', 'leadEditor_state', 'leadEditor_zip'].forEach(function(id) {
       var el = document.getElementById(id);
@@ -1178,6 +1180,43 @@
           renderLeadWeather(addr);
         }, 700);
       });
+    });
+    wireLeadAddressAutocomplete();
+  }
+
+  // Google Places autocomplete on the Project Address fieldset — a "Search
+  // address" box that fills street/city/state/zip and captures the exact
+  // lat/lng, so the lead saves with real coords (map + Site Plan satellite
+  // render immediately, no separate geocode). Mounted once per editor DOM.
+  function wireLeadAddressAutocomplete() {
+    if (!window.p86AddressAutocomplete) return;
+    var street = document.getElementById('leadEditor_street_address');
+    if (!street || typeof street.closest !== 'function') return;
+    var fs = street.closest('fieldset');
+    if (!fs || fs.querySelector('.p86-addr-ac-row')) return; // mount once
+    var row = document.createElement('div');
+    row.className = 'p86-addr-ac-row';
+    var lbl = document.createElement('label');
+    lbl.textContent = 'Search address';
+    row.appendChild(lbl);
+    var legend = fs.querySelector('legend');
+    if (legend && legend.nextSibling) fs.insertBefore(row, legend.nextSibling);
+    else fs.insertBefore(row, fs.firstChild);
+    _leadAcHandle = window.p86AddressAutocomplete.attach({
+      mount: row,
+      placeholder: 'Start typing an address…',
+      onPlace: function (r) {
+        function set(id, v) { var el = document.getElementById(id); if (el && v) el.value = v; }
+        set('leadEditor_street_address', r.components.street_address || r.formatted);
+        set('leadEditor_city', r.components.city);
+        set('leadEditor_state', r.components.state);
+        set('leadEditor_zip', r.components.zip);
+        _pickedGeo = (r.lat != null && r.lng != null) ? { lat: r.lat, lng: r.lng } : null;
+        ['leadEditor_street_address', 'leadEditor_city', 'leadEditor_state', 'leadEditor_zip'].forEach(function (id) {
+          var el = document.getElementById(id);
+          if (el) { try { el.dispatchEvent(new Event('input', { bubbles: true })); } catch (_) {} }
+        });
+      }
     });
   }
 
@@ -1914,6 +1953,13 @@
       payload[f] = v === '' ? null : v;
     });
     payload.title = (payload.title || '').trim();
+
+    // A Places-picked address carries exact coords — save them so the lead map
+    // + Site Plan satellite render immediately (the server skips re-geocoding).
+    if (_pickedGeo && _pickedGeo.lat != null && _pickedGeo.lng != null) {
+      payload.geocode_lat = _pickedGeo.lat;
+      payload.geocode_lng = _pickedGeo.lng;
+    }
 
     if (!payload.title) {
       statusEl.style.color = '#fbbf24';
