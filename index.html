@@ -3226,7 +3226,7 @@
     <script src="js/edit-gate.js?v=1"></script>
 
     <!-- Node Graph (Beta) -->
-    <link rel="stylesheet" href="nodegraph/nodegraph.css?v=102" />
+    <link rel="stylesheet" href="nodegraph/nodegraph.css?v=103" />
     <div id="nodeGraphTab">
       <!-- Workspace canvas toolbar — Outlook ribbon style. Each
            button is icon-on-top + label-below, buttons cluster into
@@ -3318,6 +3318,10 @@
               <span class="ng-ribbon-icon">&#x1F5FA;</span>
               <span class="ng-ribbon-label">Site Plan</span>
             </button>
+            <button class="ng-tbtn ng-ribbon-btn ng-sat-btn" id="ngSatelliteBtn" title="Satellite (beta) — drop a real satellite basemap under the site plan, centered on the job address (toggle)">
+              <span class="ng-ribbon-icon">&#x1F6F0;</span>
+              <span class="ng-ribbon-label">Satellite</span>
+            </button>
             <button class="ng-tbtn ng-ribbon-btn ng-audit-btn" id="ngAuditBtn" title="Audit — connectivity + completeness check (orphan nodes, missing %complete, unlinked QB lines, margin drift)">
               <span class="ng-ribbon-icon">&#x1F50D;</span>
               <span class="ng-ribbon-label">Audit<span id="ngAuditBadge" style="display:none;margin-left:3px;font-size:9px;padding:1px 5px;border-radius:8px;background:rgba(248,113,113,0.25);color:#f87171;font-weight:700;"></span></span>
@@ -3337,6 +3341,7 @@
         <div class="ng-sidebar"></div>
         <div class="ng-canvas-area">
           <canvas class="ng-grid-canvas"></canvas>
+          <div class="ng-basemap" aria-hidden="true"></div>
           <div class="ng-canvas"></div>
           <canvas class="ng-wire-canvas"></canvas>
           <div class="ng-minimap" title="Overview — click or drag to navigate">
@@ -3353,8 +3358,8 @@
         </div>
       </div>
     </div>
-    <script src="nodegraph/engine.js?v=83"></script>
-    <script src="nodegraph/ui.js?v=162"></script>
+    <script src="nodegraph/engine.js?v=84"></script>
+    <script src="nodegraph/ui.js?v=163"></script>
 
     <!-- ── Mobile bottom nav (M1) ─────────────────────────────────
          Visible only below 768px (CSS-gated). Five slots with the raised

@@ -875,6 +875,29 @@ function getAccrued(n){
   return v;
 }
 
+// ── Site-plan geo projection (Phase 2-A) ────────────────────────────────
+// Local Web-Mercator mapping so a slaved google.maps.Map can be driven one-way
+// from the engine camera. One graph unit = SP_M_PER_UNIT meters (fixed), so map
+// center + zoom derive consistently from E.pan()/E.zm() and a fixed origin (the
+// job geocode). Pure math — never mutates nodes/wires/values.
+var SP_M_PER_UNIT = 0.5;        // meters represented by one graph unit
+var SP_MERC_C = 156543.03392;   // Web-Mercator meters/pixel at zoom 0, equator
+function spMapZoom(engineZoom, lat){
+  var mpp = SP_M_PER_UNIT / Math.max(0.0001, engineZoom);          // meters per screen pixel
+  return Math.log(SP_MERC_C * Math.cos(lat*Math.PI/180) / mpp) / Math.LN2;
+}
+function spGraphToLatLng(dxUnits, dyUnits, originLat, originLng){
+  var mx = dxUnits * SP_M_PER_UNIT, my = dyUnits * SP_M_PER_UNIT;   // meters east / south of origin
+  var lat = originLat - (my / 111320);
+  var lng = originLng + (mx / (111320 * Math.cos(originLat*Math.PI/180)));
+  return { lat: lat, lng: lng };
+}
+function spLatLngToGraph(lat, lng, originLat, originLng){
+  var my = (originLat - lat) * 111320;
+  var mx = (lng - originLng) * 111320 * Math.cos(originLat*Math.PI/180);
+  return { x: mx / SP_M_PER_UNIT, y: my / SP_M_PER_UNIT };          // graph units relative to origin
+}
+
 // ── Formatting ──
 function fmtC(v){ return '$'+v.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0}); }
 function fmtP(v){ return v.toFixed(1)+'%'; }
@@ -1400,6 +1423,7 @@ return {
   cleanMode:getCleanMode, setCleanMode:setCleanMode, firstCompatPort:firstCompatPort,
   viewMode:getViewMode, setViewMode:setViewMode, sitePlanVisible:sitePlanVisible, budgetFootprint:budgetFootprint,
   spNodeVisible:spNodeVisible, setSitePlanFocusSet:setSitePlanFocusSet,
+  spMapZoom:spMapZoom, spGraphToLatLng:spGraphToLatLng, spLatLngToGraph:spLatLngToGraph,
   getOutput:getOutput, getActual:getActual, getAccrued:getAccrued, resetComp:resetComp,
   getPhaseAllocWires:getPhaseAllocWires, rebalancePhaseAllocations:rebalancePhaseAllocations,
   getCOAllocWires:getCOAllocWires, rebalanceCOAllocations:rebalanceCOAllocations,

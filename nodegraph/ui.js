@@ -11,6 +11,9 @@ var wiringFrom=null, wireMouse=null;
 var selN=null, isPan=false, panSt={x:0,y:0};
 var editingId=null;
 var _spFocus=null; // site-plan drill-in: focused building id (view-state, not saved)
+// Phase 2-A satellite basemap state (view-state / localStorage only — no graph write):
+var basemapEl=null, _basemap=null, _basemapReady=false, _spOrigin=null, _spOriginGraph=null, _satHintEl=null;
+var _spSatellite=(function(){ try{ return localStorage.getItem('ngSitePlanSatellite')==='1'; }catch(_){ return false; } })();
 // NG8: frames (group boxes) interaction state
 var selFrame=null, dragFrame=null, frameDragOff=null, frameMembers=null, resizeFrame=null, resizeStart=null;
 // When set to a note's id, the next click on a node attaches the note
@@ -914,6 +917,7 @@ function render(){
 function applyTx(){
   var p=E.pan(), z=E.zm();
   canvasEl.style.transform='translate('+(p.x*z)+'px,'+(p.y*z)+'px) scale('+z+')';
+  if(_spSatellite) syncBasemapCamera();   // keep the slaved basemap under the camera
 }
 
 // ── NG-R3: compact currency ($120k / $1.3M) for at-a-glance round cost chips ──
@@ -1102,6 +1106,82 @@ function fitSiteplan(){
   var bcx=(minX+maxX)/2, bcy=(minY+maxY)/2;
   E.pan(wrap.clientWidth/2/fz-bcx, wrap.clientHeight/2/fz-bcy);
   applyTx(); render();
+}
+
+// ── Site-plan satellite basemap (Phase 2-A, Slice 1) ───────────────────
+// A real google.maps.Map mounted BEHIND the node canvas (pointer-events:none),
+// driven ONE-WAY from the engine camera: on every pan/zoom we derive the map's
+// center + zoom from E.pan()/E.zm() and a fixed origin (the job geocode). The
+// engine stays the sole input authority, so wires/drag/drill are untouched and
+// this layer is render-only. Satellite on/off rides localStorage (like the
+// view-mode toggle) — no graph write, no GRAPH_VER concern.
+
+// The job's geocoded lat/lng = the map origin (validated like projects-map's projectCoords).
+function jobOrigin(){
+  if(typeof appData==='undefined' || !appData.jobs) return null;
+  var jid=E.job(); if(!jid) return null;
+  var job=appData.jobs.find(function(j){ return j.id===jid; }); if(!job) return null;
+  var lat=Number(job.geocode_lat), lng=Number(job.geocode_lng);
+  if(!isFinite(lat)||!isFinite(lng)) return null;
+  if(lat===0&&lng===0) return null;                       // Null Island = never geocoded
+  if(lat<-90||lat>90||lng<-180||lng>180) return null;
+  return { lat:lat, lng:lng };
+}
+// Graph-space anchor for the origin: centroid of the visible site-plan nodes, so
+// the imagery sits centered under the building blocks (Slice 1 — nodes aren't
+// geo-bound yet; true per-building placement comes in Slice 2).
+function siteplanCentroid(){
+  var ns=E.nodes().filter(function(n){ return E.spNodeVisible(n.type, n.id); });
+  if(!ns.length) return { x:0, y:0 };
+  var sx=0, sy=0; ns.forEach(function(n){ sx+=n.x; sy+=n.y; });
+  return { x:sx/ns.length, y:sy/ns.length };
+}
+function showSatHint(show, msg){
+  if(!wrap) return;
+  if(!_satHintEl){ _satHintEl=document.createElement('div'); _satHintEl.className='ng-sat-hint'; wrap.appendChild(_satHintEl); }
+  _satHintEl.textContent = msg || 'Add a geocoded job address to enable the satellite basemap.';
+  _satHintEl.style.display = show ? 'block' : 'none';
+}
+function mountBasemap(){
+  if(!basemapEl) return;
+  _spOrigin=jobOrigin(); _spOriginGraph=siteplanCentroid();
+  if(!_spOrigin){ showSatHint(true); return; }
+  showSatHint(false);
+  if(_basemap){ _basemapReady=true; syncBasemapCamera(); return; }
+  if(!window.p86Maps){ showSatHint(true, 'Google Maps is not available.'); return; }
+  window.p86Maps.ready().then(function(maps){
+    if(!_spSatellite) return;                              // toggled off while the SDK loaded
+    _basemap=new maps.Map(basemapEl, {
+      center:{ lat:_spOrigin.lat, lng:_spOrigin.lng }, zoom:19,
+      mapTypeId:maps.MapTypeId.SATELLITE, tilt:0,
+      disableDefaultUI:true, gestureHandling:'none', keyboardShortcuts:false,
+      clickableIcons:false, backgroundColor:'#0b0e16', isFractionalZoomEnabled:false
+    });
+    _basemapReady=true; syncBasemapCamera();
+  }).catch(function(e){ showSatHint(true, (e&&e.message) || 'Satellite basemap unavailable.'); });
+}
+// One-way camera sync. Raster satellite tiles exist only at integer zoom, so we
+// floor to an integer map zoom and CSS-scale the basemap div by the fractional
+// remainder (>=1, so it always fills the viewport) to track the engine's
+// continuous zoom smoothly. Pure read of E.pan()/E.zm() — no writeback.
+function syncBasemapCamera(){
+  if(!_basemap || !_basemapReady || !_spOrigin || !_spOriginGraph) return;
+  if(!_spSatellite || (E.viewMode && E.viewMode()!=='siteplan')) return;
+  var z=E.zm(), p=E.pan();
+  var gcx=(wrap.clientWidth/2)/z - p.x, gcy=(wrap.clientHeight/2)/z - p.y;   // screen-centre in graph coords
+  var c=E.spGraphToLatLng(gcx-_spOriginGraph.x, gcy-_spOriginGraph.y, _spOrigin.lat, _spOrigin.lng);
+  var mz=E.spMapZoom(z, _spOrigin.lat), iz=Math.floor(mz);
+  _basemap.setZoom(iz); _basemap.setCenter(c);
+  basemapEl.style.transformOrigin='center center';
+  basemapEl.style.transform='scale('+Math.pow(2, mz-iz)+')';
+}
+function updateBasemapVisibility(){
+  if(!basemapEl) return;
+  var show=_spSatellite && E.viewMode && E.viewMode()==='siteplan';
+  var t=document.getElementById('nodeGraphTab');
+  if(t) t.classList.toggle('ng-sat', !!show);
+  basemapEl.style.display = show ? 'block' : 'none';
+  if(show) mountBasemap(); else showSatHint(false);
 }
 
 function focusNode(n, opts){
@@ -3093,6 +3173,7 @@ function init(){
   canvasEl=tab.querySelector('.ng-canvas');
   wireC=tab.querySelector('.ng-wire-canvas'); wireCtx=wireC.getContext('2d');
   gridC=tab.querySelector('.ng-grid-canvas'); gridCtx=gridC.getContext('2d');
+  basemapEl=tab.querySelector('.ng-basemap');
   E.setCanvasEl(canvasEl);
   buildSidebar(); initEvents(); applyTx();
 
@@ -3173,6 +3254,16 @@ function init(){
     spBtn.classList.toggle('ng-on', on);
     _spFocus=null; applySpFocus();        // always start at the whole-site view
     if(on) fitSiteplan(); else render();  // auto-fit to the buildings on enter
+    updateBasemapVisibility();            // show/hide the satellite basemap with the mode
+  });
+
+  // Satellite basemap sub-toggle (Phase 2-A) — only meaningful in site-plan mode.
+  var satBtn=tab.querySelector('.ng-sat-btn');
+  if(satBtn) satBtn.addEventListener('click',function(){
+    _spSatellite=!_spSatellite;
+    try{ localStorage.setItem('ngSitePlanSatellite', _spSatellite?'1':'0'); }catch(_){}
+    satBtn.classList.toggle('ng-on', _spSatellite);
+    updateBasemapVisibility();
   });
 
   // Save Layout — checkpoint the current node graph to a separate
@@ -3766,6 +3857,10 @@ window.openNodeGraph=function(jid){
     var _sp = E && E.viewMode && E.viewMode()==='siteplan';
     tab.classList.toggle('ng-siteplan', !!_sp);
     var _spb = document.getElementById('ngSitePlanBtn'); if(_spb) _spb.classList.toggle('ng-on', !!_sp);
+    // Restore the satellite sub-toggle; mount the basemap only if the tab is
+    // already visible (avoid sizing a google.maps.Map inside a hidden overlay).
+    var _satb = document.getElementById('ngSatelliteBtn'); if(_satb) _satb.classList.toggle('ng-on', _spSatellite);
+    if(tab && tab.offsetParent!==null) updateBasemapVisibility();
   } catch(_){}
   if(!wrap) init();
   resize();

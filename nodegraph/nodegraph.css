@@ -659,3 +659,13 @@ body.light-mode .ng-topbar.ng-ribbon .ng-ribbon-btn:hover{
 #nodeGraphTab.ng-siteplan:not(.ng-sp-focused) .ng-node:not(.ng-tt-t1):not(.ng-tt-wip){
   min-width:0;border-style:dashed;border-color:var(--ng-border);opacity:.92;
 }
+
+/* ── Satellite basemap (Phase 2-A, Slice 1) ─────────────────────────────
+   A real google.maps.Map mounted BEHIND the nodes (z:1, between grid z:0 and
+   wires z:2), driven one-way from the engine camera. pointer-events:none so the
+   engine keeps all input — this is what makes it a slave layer. The fractional
+   zoom remainder is applied as a CSS scale (set inline by syncBasemapCamera). */
+#nodeGraphTab .ng-basemap{position:absolute;inset:0;z-index:1;pointer-events:none;display:none;background:var(--ng-bg);will-change:transform}
+#nodeGraphTab.ng-sat .ng-grid-canvas{opacity:0}            /* hide the dot grid under imagery */
+#nodeGraphTab:not(.ng-siteplan) .ng-sat-btn{display:none}  /* satellite toggle is site-plan only */
+.ng-sat-hint{position:absolute;left:50%;top:14px;transform:translateX(-50%);z-index:30;background:var(--ng-surface);border:1px solid var(--ng-border);color:var(--ng-dim);padding:6px 12px;border-radius:8px;font-size:12px;display:none;pointer-events:none;max-width:80%;text-align:center}
