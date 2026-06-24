@@ -181,7 +181,7 @@
     // shrinks to content width and the rest of the row lines up next to
     // it instead of across the full table, which renders as a stray
     // vertical seam halfway across the body.
-    return '<tr ' + rowAttrs + ' style="cursor:pointer;' + rowStyle + '" onclick="openEditClientModal(\'' + escapeAttr(c.id) + '\')">' +
+    return '<tr ' + rowAttrs + ' style="cursor:pointer;' + rowStyle + '" onclick="openClientDashboard(\'' + escapeAttr(c.id) + '\')">' +
       '<td><div style="display:flex;align-items:center;gap:8px;">' + nameCell + '</div></td>' +
       '<td>' + escapeHTML(contact) + '</td>' +
       '<td>' + escapeHTML(location) + '</td>' +
