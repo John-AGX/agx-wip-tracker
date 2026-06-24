@@ -8,6 +8,25 @@ starting from what links cleanly today and layering the property-intel enrichmen
 
 ---
 
+## 0. Vision update — v2 (John, with directory screenshot, 2026-06-14)
+John wants the client page to stop being a sparse form and become a **rich, interactive,
+visually appealing dashboard** with **property health built in**, where clicking a client shows
+the **leads and jobs we've done, their costs, revenue, margin** — all **linked to that client**.
+
+This **reprioritizes the spec:**
+- **Jobs↔client link is now REQUIRED** (was "Phase 1.5, optional" → folded into Phase 1). Costs /
+  revenue / jobs-per-client are the core ask, and today jobs link to clients only by name text.
+- **Property health** becomes a first-class dashboard element — a visible score/badge. Foundation
+  now from in-house signals (last job date, open issues/tasks, lead momentum); the rich version
+  (roof/permit age, review complaints) lands with the property-intel layer (Phase 2).
+- **Full-width dashboard, not the cramped modal** — promote the client detail to a real page (or a
+  full-width expanded view): header (identity + health + key contacts) · financial metric cards ·
+  map · linked Leads + Jobs lists · activity feed.
+- **The directory list is under-used** (empty CONTACT / LOCATION columns) — enrich each row with
+  contact + market + a mini-metric (# jobs / open leads) so the list itself is informative.
+
+---
+
 ## 1. Current state (grounded)
 
 The client "page" is today a **modal edit form** (`#clientEditorModal`, `index.html:2754-2903`),
