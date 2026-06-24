@@ -669,3 +669,7 @@ body.light-mode .ng-topbar.ng-ribbon .ng-ribbon-btn:hover{
 #nodeGraphTab.ng-sat .ng-grid-canvas{opacity:0}            /* hide the dot grid under imagery */
 #nodeGraphTab:not(.ng-siteplan) .ng-sat-btn{display:none}  /* satellite toggle is site-plan only */
 .ng-sat-hint{position:absolute;left:50%;top:14px;transform:translateX(-50%);z-index:30;background:var(--ng-surface);border:1px solid var(--ng-border);color:var(--ng-dim);padding:6px 12px;border-radius:8px;font-size:12px;display:none;pointer-events:none;max-width:80%;text-align:center}
+/* Map-picker (Slice 3): the Place button shows only in satellite mode; the
+   crosshair overlay captures the placement click ABOVE the engine. */
+#nodeGraphTab:not(.ng-sat) .ng-geoplace-btn{display:none}
+.ng-geopick-overlay{position:absolute;inset:0;z-index:40;display:none;cursor:crosshair;background:rgba(79,140,255,.05)}

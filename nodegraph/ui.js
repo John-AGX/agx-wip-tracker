@@ -13,6 +13,7 @@ var editingId=null;
 var _spFocus=null; // site-plan drill-in: focused building id (view-state, not saved)
 // Phase 2-A satellite basemap state (view-state / localStorage only — no graph write):
 var basemapEl=null, _basemap=null, _basemapReady=false, _spOrigin=null, _spOriginGraph=null, _satHintEl=null;
+var _geoPick=false, _geoPickOverlay=null; // Slice 3: map-picker mode state
 var _spSatellite=(function(){ try{ return localStorage.getItem('ngSitePlanSatellite')==='1'; }catch(_){ return false; } })();
 // NG8: frames (group boxes) interaction state
 var selFrame=null, dragFrame=null, frameDragOff=null, frameMembers=null, resizeFrame=null, resizeStart=null;
@@ -1191,7 +1192,53 @@ function updateBasemapVisibility(){
   var t=document.getElementById('nodeGraphTab');
   if(t) t.classList.toggle('ng-sat', !!show);
   basemapEl.style.display = show ? 'block' : 'none';
-  if(show) mountBasemap(); else showSatHint(false);
+  if(show){ mountBasemap(); } else { showSatHint(false); exitGeoPick(); }
+}
+
+// ── Map-picker (Slice 3): the ONLY building-geo write path ──────────────
+// Convert a click in the canvas area to a lat/lng using the SAME projection the
+// renderer uses, so a placed building lands exactly where it was clicked.
+function pickLatLngFromEvent(e){
+  var r=wrap.getBoundingClientRect();
+  var cx=e.clientX-r.left, cy=e.clientY-r.top;
+  var z=E.zm(), p=E.pan();
+  var gx=cx/z - p.x, gy=cy/z - p.y;                          // click point in graph coords
+  return E.spGraphToLatLng(gx-_spOriginGraph.x, gy-_spOriginGraph.y, _spOrigin.lat, _spOrigin.lng);
+}
+// A transparent crosshair overlay captures the placement click ABOVE the engine,
+// so the engine never sees it (no event-ordering fight, no pan/select side-effects).
+function ensureGeoPickOverlay(){
+  if(_geoPickOverlay) return _geoPickOverlay;
+  _geoPickOverlay=document.createElement('div');
+  _geoPickOverlay.className='ng-geopick-overlay';
+  _geoPickOverlay.addEventListener('click',function(e){
+    var sel=selN && E.findNode(selN);
+    if(sel && sel.type==='t1' && _spOrigin && _spOriginGraph){
+      var ll=pickLatLngFromEvent(e);
+      E.setNodeGeo(sel.id, ll.lat, ll.lng);
+      if(E.saveGraph) E.saveGraph();
+      render();
+    }
+    exitGeoPick();
+  });
+  wrap.appendChild(_geoPickOverlay);
+  return _geoPickOverlay;
+}
+function exitGeoPick(){
+  _geoPick=false;
+  var pb=document.getElementById('ngGeoPlaceBtn'); if(pb) pb.classList.remove('ng-on');
+  if(_geoPickOverlay) _geoPickOverlay.style.display='none';
+}
+function toggleGeoPick(){
+  if(!_spSatellite){ return; }
+  if(_geoPick){ exitGeoPick(); showSatHint(false); return; }
+  var sel=selN && E.findNode(selN);
+  if(!sel || sel.type!=='t1'){ showSatHint(true, 'Select a building first, then click Place and tap its spot on the map.'); return; }
+  if(!_spOrigin){ showSatHint(true); return; }
+  _geoPick=true;
+  var pb=document.getElementById('ngGeoPlaceBtn'); if(pb) pb.classList.add('ng-on');
+  ensureGeoPickOverlay().style.display='block';
+  showSatHint(true, 'Click the map to place “'+(sel.label||'building')+'”.');
 }
 
 function focusNode(n, opts){
@@ -3275,6 +3322,10 @@ function init(){
     satBtn.classList.toggle('ng-on', _spSatellite);
     updateBasemapVisibility();
   });
+
+  // Place-on-map (Slice 3) — select a building, then click its real spot.
+  var placeBtn=tab.querySelector('.ng-geoplace-btn');
+  if(placeBtn) placeBtn.addEventListener('click', toggleGeoPick);
 
   // Save Layout — checkpoint the current node graph to a separate
   // localStorage slot (independent of auto-save) so the user can

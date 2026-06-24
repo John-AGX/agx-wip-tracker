@@ -897,6 +897,13 @@ function spLatLngToGraph(lat, lng, originLat, originLng){
   var mx = (lng - originLng) * 111320 * Math.cos(originLat*Math.PI/180);
   return { x: mx / SP_M_PER_UNIT, y: my / SP_M_PER_UNIT };          // graph units relative to origin
 }
+// Slice 3: the single guarded write path for a building's geo location. Sets ONLY
+// node.geoLatLng (never x/y/value/budget). The caller persists via saveGraph().
+function setNodeGeo(id, lat, lng){
+  var n = findNode(id); if(!n) return null;
+  n.geoLatLng = (isFinite(lat) && isFinite(lng)) ? { lat: lat, lng: lng } : null;
+  return n.geoLatLng;
+}
 
 // ── Formatting ──
 function fmtC(v){ return '$'+v.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0}); }
@@ -1425,7 +1432,7 @@ return {
   cleanMode:getCleanMode, setCleanMode:setCleanMode, firstCompatPort:firstCompatPort,
   viewMode:getViewMode, setViewMode:setViewMode, sitePlanVisible:sitePlanVisible, budgetFootprint:budgetFootprint,
   spNodeVisible:spNodeVisible, setSitePlanFocusSet:setSitePlanFocusSet,
-  spMapZoom:spMapZoom, spGraphToLatLng:spGraphToLatLng, spLatLngToGraph:spLatLngToGraph,
+  spMapZoom:spMapZoom, spGraphToLatLng:spGraphToLatLng, spLatLngToGraph:spLatLngToGraph, setNodeGeo:setNodeGeo,
   getOutput:getOutput, getActual:getActual, getAccrued:getAccrued, resetComp:resetComp,
   getPhaseAllocWires:getPhaseAllocWires, rebalancePhaseAllocations:rebalancePhaseAllocations,
   getCOAllocWires:getCOAllocWires, rebalanceCOAllocations:rebalanceCOAllocations,
