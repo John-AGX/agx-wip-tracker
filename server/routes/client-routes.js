@@ -82,7 +82,7 @@ router.get('/:id/dashboard', requireAuth, requireCapability('ESTIMATES_VIEW'), a
     const cname = (client.name || '').trim().toLowerCase();
 
     const jr = await pool.query(
-      `SELECT id, data, client_id FROM jobs
+      `SELECT id, data, client_id, updated_at, geocode_lat, geocode_lng FROM jobs
         WHERE (organization_id = $1 OR organization_id IS NULL)
           AND ( client_id = $2
                 OR (client_id IS NULL AND lower(btrim(data->>'client')) = $3) )`,
@@ -112,6 +112,7 @@ router.get('/:id/dashboard', requireAuth, requireCapability('ESTIMATES_VIEW'), a
         id: j.id, jobNumber: d.jobNumber || '', title: d.title || d.name || d.jobNumber || j.id,
         status: d.status || '', contract, cost, revenue: rev,
         margin: contract > 0 ? (contract - cost) / contract : null,
+        lat: j.geocode_lat, lng: j.geocode_lng, updatedAt: j.updated_at,
       };
     }).sort((a, b) => (b.contract - a.contract));
 
@@ -129,7 +130,8 @@ router.get('/:id/dashboard', requireAuth, requireCapability('ESTIMATES_VIEW'), a
       const value = num(l.estimated_revenue_high) || num(l.estimated_revenue_low);
       const open = OPEN.has(String(l.status || '').toLowerCase());
       if (open) { openLeads++; pipelineValue += value; }
-      return { id: l.id, title: l.title || '(untitled lead)', status: l.status || 'new', value, open };
+      return { id: l.id, title: l.title || '(untitled lead)', status: l.status || 'new', value, open,
+        lat: l.geocode_lat, lng: l.geocode_lng, updatedAt: l.updated_at };
     });
 
     const margin = contractValue > 0 ? (contractValue - costs) / contractValue : null;
@@ -140,6 +142,17 @@ router.get('/:id/dashboard', requireAuth, requireCapability('ESTIMATES_VIEW'), a
     if (jobs.length === 0 && openLeads === 0) { tier = 'watch'; reason = 'No jobs or active leads'; }
     else if (margin != null && margin < 0.15 && jobs.length) { tier = 'watch'; reason = 'Thin margins on completed work'; }
     else if (openLeads > 0 && jobs.length === 0) { reason = openLeads + ' open lead(s), no jobs yet'; }
+
+    // Activity feed — recent jobs + leads + agent notes, newest first.
+    const activity = [];
+    jobs.forEach((j) => { if (j.updatedAt) activity.push({ type: 'job', label: (j.jobNumber ? j.jobNumber + ' ' : '') + (j.title || '') + ' · ' + (j.status || ''), when: j.updatedAt }); });
+    leads.forEach((l) => { if (l.updatedAt) activity.push({ type: 'lead', label: (l.title || 'Lead') + ' · ' + (l.status || ''), when: l.updatedAt }); });
+    try {
+      const notes = Array.isArray(client.agent_notes) ? client.agent_notes : [];
+      notes.forEach((n) => { if (n && n.body) activity.push({ type: 'note', label: String(n.body).slice(0, 120), when: n.created_at || null }); });
+    } catch (e) { /* agent_notes optional */ }
+    activity.sort((a, b) => new Date(b.when || 0) - new Date(a.when || 0));
+    const activityTop = activity.slice(0, 8);
 
     res.json({
       client: {
@@ -154,7 +167,7 @@ router.get('/:id/dashboard', requireAuth, requireCapability('ESTIMATES_VIEW'), a
         jobCount: jobs.length, contractValue, costs, revenue, margin,
         totalLeads: leads.length, openLeads, pipelineValue, health: { tier, reason },
       },
-      jobs, leads,
+      jobs, leads, activity: activityTop,
     });
   } catch (e) {
     console.error('GET /api/clients/:id/dashboard error:', e);

@@ -53,6 +53,16 @@
 
   function render(host, d) {
     var c = d.client || {}, s = d.summary || {}, jobs = d.jobs || [], leads = d.leads || [];
+    var mapItems = {
+      leads: leads.filter(function (l) { return l.lat != null && l.lng != null; }).map(function (l) { return { id: l.id, title: l.title, lat: l.lat, lng: l.lng, kind: 'lead', status: l.status }; }),
+      jobs: jobs.filter(function (j) { return j.lat != null && j.lng != null; }).map(function (j) { return { id: j.id, title: (j.jobNumber ? j.jobNumber + ' — ' : '') + (j.title || ''), lat: j.lat, lng: j.lng, kind: 'job', status: j.status, jobNumber: j.jobNumber }; })
+    };
+    var hasMap = (mapItems.leads.length + mapItems.jobs.length) > 0 && !!window.p86EntitiesMap;
+    var actHtml = (d.activity || []).length ? (d.activity || []).map(function (a) {
+      var icon = a.type === 'job' ? '🔧' : (a.type === 'lead' ? '🎯' : '📝');
+      var when = ''; try { if (a.when) when = new Date(a.when).toLocaleDateString(); } catch (e) {}
+      return '<div style="display:flex;gap:8px;padding:6px 0;border-bottom:1px solid var(--border,#23262e);font-size:12px;align-items:flex-start;"><span>' + icon + '</span><span style="color:#cdd;flex:1;">' + esc(a.label) + '</span><span style="color:var(--text-dim,#8a93a6);white-space:nowrap;">' + esc(when) + '</span></div>';
+    }).join('') : '<div style="color:var(--text-dim,#8a93a6);font-size:12px;padding:10px;">No recent activity.</div>';
     var h = HEALTH[(s.health && s.health.tier) || 'healthy'] || HEALTH.healthy;
     var html = '';
     html += '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:14px;">' +
@@ -83,6 +93,10 @@
       card('Open Leads', (s.openLeads || 0), '#a78bfa', money(s.pipelineValue) + ' pipeline') +
     '</div>';
 
+    html += '<div style="display:grid;grid-template-columns:' + (hasMap ? '2fr 1fr' : '1fr') + ';gap:16px;margin-bottom:18px;">';
+    if (hasMap) html += '<div><div style="font-size:13px;font-weight:600;color:#fff;margin-bottom:8px;">Map</div><div id="clientDashboard_map" style="height:300px;border:1px solid var(--border,#2a2f3a);border-radius:10px;overflow:hidden;"></div></div>';
+    html += '<div><div style="font-size:13px;font-weight:600;color:#fff;margin-bottom:8px;">Recent activity</div>' + actHtml + '</div></div>';
+
     var jobRows = jobs.slice(0, 14).map(function (j) {
       return '<tr style="border-top:1px solid var(--border,#23262e);">' +
         '<td style="padding:7px 9px;color:#fff;"><span style="font-family:monospace;color:#4f8cff;">' + esc(j.jobNumber || '') + '</span> ' + esc(j.title || '') + '</td>' +
@@ -104,6 +118,7 @@
 
     html += '<div style="margin-top:14px;font-size:11px;color:var(--text-dim,#8a93a6);">Health is account-activity based; property-condition health (roof/permit age, tenant reviews) lands with the property-intel layer. Jobs link by explicit client link or client-name match.</div>';
     host.innerHTML = html;
+    if (hasMap) { try { window.p86EntitiesMap.render('clientDashboard_map', { items: mapItems }); } catch (e) {} }
   }
 
   function openClientDashboard(id) {
