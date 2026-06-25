@@ -10656,6 +10656,24 @@ async function execWatchTool(name, input, ctx) {
 // for background-watcher turns (C10) the session metadata carries
 // 'watcher_<agent_key>' which the runner injects on session.create.
 // ──────────────────────────────────────────────────────────────────
+// auto-apply allowlist — these three low-risk PERSONAL types commit
+// straight from the spoken read-back (no approval card). 'todo' = the
+// actor's personal to-do (scope='personal'); 'task' (org, assignable to
+// other staff) is deliberately EXCLUDED and still renders a card. Only
+// op:create qualifies — the dispatchers are create-only today; when
+// edit/delete land, extend the op check here (keep delete carded).
+const AUTO_APPLY_TYPES = new Set(['calendar_event', 'todo', 'reminder']);
+function payloadIsAutoApply(targets) {
+  if (!Array.isArray(targets) || !targets.length) return false;
+  return targets.every((t) => {
+    if (!t || typeof t !== 'object') return false;
+    const et = String(t.entity_type || '').toLowerCase();
+    if (!AUTO_APPLY_TYPES.has(et)) return false;
+    const op = (t.ops && t.ops.op) || 'create';
+    return op === 'create';
+  });
+}
+
 async function execEmitPayloadFile(tu, ctx) {
   try {
     const payloadDispatcher = require('../services/payload-dispatcher');
@@ -10799,6 +10817,10 @@ async function execEmitPayloadFile(tu, ctx) {
         source,
         file_content: fileContent,
         status: 'ready',
+        // card-free commit for the user's own calendar events / personal
+        // to-dos / reminders (creates) — the spoken read-back is the
+        // confirmation. Everything else stays carded.
+        auto_apply: payloadIsAutoApply(targets),
       },
     };
   } catch (err) {

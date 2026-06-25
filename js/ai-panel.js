@@ -3000,6 +3000,9 @@
                 // note(s)") instead of the heavy dry-run changeset (which is
                 // too big for the SSE line — see execScribeWrite).
                 apply_summary: payload.tool_applied.meta.apply_summary || null,
+                // server flags create-only calendar_event/todo/reminder as
+                // card-free — commit on read-back, no Approve click.
+                auto_apply: !!payload.tool_applied.meta.auto_apply,
               };
               // A slow tool (e.g. scribe_write, ~20s) can emit tool_applied
               // AFTER the in-flight streaming bubble was detached by a
@@ -3010,6 +3013,12 @@
                 ? streamDiv
                 : document.getElementById('ai-messages');
               window.PayloadArtifact.render(pl, __cardHost);
+              // Card-free types (calendar_event/todo/reminder creates) commit
+              // themselves — the spoken read-back is the confirmation. Fired
+              // only here (live SSE), not on re-render, and idempotent.
+              if (pl.auto_apply && typeof window.PayloadArtifact.autoApply === 'function') {
+                window.PayloadArtifact.autoApply(pl);
+              }
               // Remember it so the finalized message can re-render the card
               // after renderMessages() wipes the live bubble.
               turnPayloads.push(pl);

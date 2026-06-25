@@ -189,6 +189,11 @@
         return;
       }
       updateStatus(payload.id, 'applied', body.apply_summary);
+      // reflect applied state on the in-memory object so a later re-render
+      // (renderMessages rebuilds the card from this object) shows it
+      // committed — not a stale 'ready' card with a live Approve button.
+      payload.status = 'applied';
+      if (body.apply_summary) payload.apply_summary = body.apply_summary;
       document.dispatchEvent(new CustomEvent('p86:payload-applied', {
         detail: {
           payload_id: payload.id,
@@ -203,6 +208,30 @@
       approveBtn.textContent = '✗ ' + (err && err.message || 'Apply failed');
       setTimeout(() => { approveBtn.disabled = false; approveBtn.textContent = orig; }, 4500);
     }
+  }
+
+  // Card-free auto-apply: for server-flagged low-risk payloads (the user's
+  // own calendar events / personal to-dos / reminders), commit immediately
+  // instead of waiting on the Approve click — the spoken read-back is the
+  // confirmation. Reuses the SAME applyInline POST path, so the server-side
+  // capability/org checks stay intact and any 4xx still surfaces in-card.
+  // Guarded by _autoApplied so a re-render can't double-fire the commit.
+  const _autoApplied = new Set();
+  function autoApply(payload) {
+    if (!payload || !payload.id || _autoApplied.has(payload.id)) return;
+    const idSel = (window.CSS && CSS.escape) ? CSS.escape(payload.id) : payload.id;
+    const card = document.querySelector('.p86-payload-artifact[data-payload-id="' + idSel + '"]');
+    if (!card || (card.dataset.status || 'ready') !== 'ready') return;
+    // Find the Approve control by label (robust to card-layout changes) and
+    // drive the exact same commit path a click would.
+    let approve = null;
+    const btns = card.querySelectorAll('button');
+    for (let i = 0; i < btns.length; i++) {
+      if ((btns[i].textContent || '').indexOf('Approve') !== -1) { approve = btns[i]; break; }
+    }
+    if (!approve) return;
+    _autoApplied.add(payload.id);
+    applyInline(payload, approve.parentNode, approve);
   }
 
   function render(payload, container) {
@@ -388,5 +417,5 @@
     });
   }
 
-  window.PayloadArtifact = { render: render, updateStatus: updateStatus };
+  window.PayloadArtifact = { render: render, updateStatus: updateStatus, autoApply: autoApply };
 })();
