@@ -14,6 +14,7 @@ var _spFocus=null; // site-plan drill-in: focused building id (view-state, not s
 // Phase 2-A satellite basemap state (view-state / localStorage only — no graph write):
 var basemapEl=null, _basemap=null, _basemapReady=false, _spOrigin=null, _spOriginGraph=null, _spOriginJob=null, _satHintEl=null, _geocoding=false;
 var _geoPick=false, _geoPickOverlay=null, _geoPickId=null; // Slice 3: map-picker state (captured building id)
+var _spMassing=(function(){ try{ return localStorage.getItem('ngSitePlanMassing')!=='0'; }catch(_){ return true; } })(); // 2.5D building massing — on by default
 // Slice 4: photo-GPS pins
 var _photoPinsEl=null, _geoPhotos=[], _geoPhotosJob=null, _geoPhotosNoGps=0;
 var _spPhotos=(function(){ try{ return localStorage.getItem('ngSitePlanPhotos')==='1'; }catch(_){ return false; } })();
@@ -205,12 +206,15 @@ function renderNodes(){
       div.classList.add(_pc>=100?'ng-sp-done':(_pc>0?'ng-sp-prog':'ng-sp-todo'));
       // 2.5D massing (first step toward 3D): extrude the block with a budget-
       // proportional depth so buildings read as solid mass (bigger budget =
-      // taller). Render-only — a stacked box-shadow, status stays on the border.
-      var _mb=Number(n.budget)||0, _mf=_mb>0?Math.min(1,Math.sqrt(_mb)/Math.sqrt(150000)):0.18, _md=Math.round(5+_mf*13);
-      var _msh=''; for(var _mi=1;_mi<=_md;_mi++){ _msh+=(_msh?',':'')+_mi+'px '+_mi+'px 0 #0d1019'; }
-      _msh+=','+(_md+2)+'px '+(_md+6)+'px '+(_md+5)+'px rgba(0,0,0,.5)';
-      div.style.boxShadow=_msh;
-      div.classList.add('ng-sp-massing');
+      // taller). Render-only; gated behind the "3D" toggle (status stays on the
+      // border, so toggling massing off cleanly reverts to flat blocks).
+      if(_spMassing){
+        var _mb=Number(n.budget)||0, _mf=_mb>0?Math.min(1,Math.sqrt(_mb)/Math.sqrt(150000)):0.18, _md=Math.round(5+_mf*13);
+        var _msh=''; for(var _mi=1;_mi<=_md;_mi++){ _msh+=(_msh?',':'')+_mi+'px '+_mi+'px 0 #0d1019'; }
+        _msh+=','+(_md+2)+'px '+(_md+6)+'px '+(_md+5)+'px rgba(0,0,0,.5)';
+        div.style.boxShadow=_msh;
+        div.classList.add('ng-sp-massing');
+      }
     }
 
     var canColl = n.type!=='note' && n.type!=='watch';
@@ -3465,6 +3469,15 @@ function init(){
     updateBasemapVisibility();
   });
 
+  // 3D massing sub-toggle — extrude buildings into solid blocks (site-plan only).
+  var massBtn=tab.querySelector('.ng-3d-btn');
+  if(massBtn) massBtn.addEventListener('click',function(){
+    _spMassing=!_spMassing;
+    try{ localStorage.setItem('ngSitePlanMassing', _spMassing?'1':'0'); }catch(_){}
+    massBtn.classList.toggle('ng-on', _spMassing);
+    render();
+  });
+
   // Place-on-map (Slice 3) — select a building, then click its real spot.
   var placeBtn=tab.querySelector('.ng-geoplace-btn');
   if(placeBtn) placeBtn.addEventListener('click', toggleGeoPick);
@@ -4073,6 +4086,7 @@ window.openNodeGraph=function(jid){
     // already visible (avoid sizing a google.maps.Map inside a hidden overlay).
     // offsetWidth (not offsetParent — the tab is position:fixed) detects visibility.
     var _satb = document.getElementById('ngSatelliteBtn'); if(_satb) _satb.classList.toggle('ng-on', _spSatellite);
+    var _3db = document.getElementById('ng3dBtn'); if(_3db) _3db.classList.toggle('ng-on', _spMassing);
     var _phb = document.getElementById('ngPhotosBtn'); if(_phb) _phb.classList.toggle('ng-on', _spPhotos);
     if(tab && tab.offsetWidth>0) updateBasemapVisibility();
   } catch(_){}
