@@ -914,6 +914,16 @@ function setNodeGeo(id, lat, lng){
   n.geoLatLng = (isFinite(lat) && isFinite(lng)) ? { lat: lat, lng: lng } : null;
   return n.geoLatLng;
 }
+// Phase 1 (polygon buildings): the single guarded write for a traced footprint.
+// Sets ONLY n.polygon ([{lat,lng},…], ordered ring) — never x/y/value/budget.
+// Caller persists via saveGraph(). Geometry only; the cost rollups never read it.
+function setNodePolygon(id, verts){
+  var n = findNode(id); if(!n) return null;
+  n.polygon = (verts && verts.length >= 3)
+    ? verts.map(function(v){ return { lat: Number(v.lat), lng: Number(v.lng) }; })
+    : null;
+  return n.polygon;
+}
 
 // ── Formatting ──
 function fmtC(v){ return '$'+v.toLocaleString('en-US',{minimumFractionDigits:0,maximumFractionDigits:0}); }
@@ -934,6 +944,7 @@ function buildGraphState(){
         allocTarget: n.allocTarget||null,
         attachedTo: n.attachedTo||null,
         geoLatLng: (n.type==='t1' && n.geoLatLng) ? n.geoLatLng : null, // Phase 2-A: building's real lat/lng (additive; old graphs have none)
+        polygon: (n.type==='t1' && n.polygon) ? n.polygon : null,       // Phase 1: traced building footprint (additive, no GRAPH_VER bump)
         dataId: n.data ? n.data.id : null
       };
     }),
@@ -1228,6 +1239,7 @@ function loadGraph(){
       allocTarget:sn.allocTarget||null,
       attachedTo:sn.attachedTo||null,
       geoLatLng:sn.geoLatLng||null, // Phase 2-A: building's real lat/lng (guard so pre-geo graphs load fine)
+      polygon:sn.polygon||null, // traced building footprint (guard so pre-polygon graphs load fine)
     };
     nodes.push(n);
   });
@@ -1442,7 +1454,7 @@ return {
   cleanMode:getCleanMode, setCleanMode:setCleanMode, firstCompatPort:firstCompatPort,
   viewMode:getViewMode, setViewMode:setViewMode, sitePlanVisible:sitePlanVisible, budgetFootprint:budgetFootprint, spBuildingFootprint:spBuildingFootprint,
   spNodeVisible:spNodeVisible, setSitePlanFocusSet:setSitePlanFocusSet,
-  spMapZoom:spMapZoom, spGraphToLatLng:spGraphToLatLng, spLatLngToGraph:spLatLngToGraph, setNodeGeo:setNodeGeo,
+  spMapZoom:spMapZoom, spGraphToLatLng:spGraphToLatLng, spLatLngToGraph:spLatLngToGraph, setNodeGeo:setNodeGeo, setNodePolygon:setNodePolygon,
   getOutput:getOutput, getActual:getActual, getAccrued:getAccrued, resetComp:resetComp,
   getPhaseAllocWires:getPhaseAllocWires, rebalancePhaseAllocations:rebalancePhaseAllocations,
   getCOAllocWires:getCOAllocWires, rebalanceCOAllocations:rebalanceCOAllocations,

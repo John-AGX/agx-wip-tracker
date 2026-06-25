@@ -3245,7 +3245,7 @@
     <script src="js/edit-gate.js?v=1"></script>
 
     <!-- Node Graph (Beta) -->
-    <link rel="stylesheet" href="nodegraph/nodegraph.css?v=109" />
+    <link rel="stylesheet" href="nodegraph/nodegraph.css?v=110" />
     <div id="nodeGraphTab">
       <!-- Workspace canvas toolbar — Outlook ribbon style. Each
            button is icon-on-top + label-below, buttons cluster into
@@ -3349,6 +3349,10 @@
               <span class="ng-ribbon-icon">&#x1F4CD;</span>
               <span class="ng-ribbon-label">Place</span>
             </button>
+            <button class="ng-tbtn ng-ribbon-btn ng-trace-btn" id="ngTraceBtn" title="Trace Building — select a building, click Trace, then tap each corner of its footprint on the imagery; double-click to close the outline">
+              <span class="ng-ribbon-icon">&#x270F;</span>
+              <span class="ng-ribbon-label">Trace</span>
+            </button>
             <button class="ng-tbtn ng-ribbon-btn ng-photos-btn" id="ngPhotosBtn" title="Photos — plot this job's geotagged field photos on the satellite imagery (toggle)">
               <span class="ng-ribbon-icon">&#x1F4F7;</span>
               <span class="ng-ribbon-label">Photos</span>
@@ -3389,8 +3393,8 @@
         </div>
       </div>
     </div>
-    <script src="nodegraph/engine.js?v=87"></script>
-    <script src="nodegraph/ui.js?v=173"></script>
+    <script src="nodegraph/engine.js?v=88"></script>
+    <script src="nodegraph/ui.js?v=174"></script>
 
     <!-- ── Mobile bottom nav (M1) ─────────────────────────────────
          Visible only below 768px (CSS-gated). Five slots with the raised

@@ -14,6 +14,9 @@ var _spFocus=null; // site-plan drill-in: focused building id (view-state, not s
 // Phase 2-A satellite basemap state (view-state / localStorage only — no graph write):
 var basemapEl=null, _basemap=null, _basemapReady=false, _spOrigin=null, _spOriginGraph=null, _spOriginJob=null, _satHintEl=null, _geocoding=false;
 var _geoPick=false, _geoPickOverlay=null, _geoPickId=null; // Slice 3: map-picker state (captured building id)
+// Phase 1 — building polygons: trace state + the geo-anchored SVG layer
+var _tracing=false, _traceId=null, _tracePts=[], _traceOverlay=null, _traceClickTimer=null, _polyLayer=null;
+var _SVGNS='http://www.w3.org/2000/svg';
 var _spMassing=(function(){ try{ return localStorage.getItem('ngSitePlanMassing')!=='0'; }catch(_){ return true; } })(); // 2.5D building massing — on by default
 // Slice 4: photo-GPS pins
 var _photoPinsEl=null, _geoPhotos=[], _geoPhotosJob=null, _geoPhotosNoGps=0;
@@ -931,6 +934,7 @@ function render(){
   pushToJobSilent();
   renderFrames();
   renderNodes();
+  renderPolygons();                 // geo-anchored building footprints (satellite only)
   E.drawGrid(gridCtx, gridC.width, gridC.height);
   E.drawWires(wireCtx, wrap, wiringFrom, wireMouse);
   E.saveGraph();
@@ -1255,8 +1259,9 @@ function updateBasemapVisibility(){
   var t=document.getElementById('nodeGraphTab');
   if(t) t.classList.toggle('ng-sat', !!show);
   basemapEl.style.display = show ? 'block' : 'none';
-  if(show){ mountBasemap(); } else { showSatHint(false); exitGeoPick(); }
+  if(show){ mountBasemap(); } else { showSatHint(false); exitGeoPick(); exitTrace(); }
   updatePhotoLayer(); // photos ride on top of satellite — show/hide together
+  renderPolygons();   // show/hide the building footprint layer with satellite
 }
 
 // ── Map-picker (Slice 3): the ONLY building-geo write path ──────────────
@@ -1303,6 +1308,7 @@ function exitGeoPick(){
 function toggleGeoPick(){
   if(!_spSatellite){ return; }
   if(_geoPick){ exitGeoPick(); showSatHint(false); return; }
+  if(_tracing) exitTrace();                                   // don't run both picker modes at once
   var sel=selN && E.findNode(selN);
   if(!sel || sel.type!=='t1'){ showSatHint(true, 'Select a building first, then click Place and tap its spot on the map.'); return; }
   if(!_spOrigin){ showSatHint(true); return; }
@@ -1310,6 +1316,114 @@ function toggleGeoPick(){
   var pb=document.getElementById('ngGeoPlaceBtn'); if(pb) pb.classList.add('ng-on');
   ensureGeoPickOverlay().style.display='block';
   showSatHint(true, 'Click the map to place “'+(sel.label||'building')+'”.');
+}
+
+// ── Building polygons (Phase 1): trace a footprint on the basemap ────────
+// Same coordinate pipeline as the map-picker (pickLatLngFromEvent) + the
+// renderer, so a traced corner lands exactly where clicked at any zoom. Stores
+// lat/lng vertices on n.polygon; renders as a geo-anchored SVG <polygon>.
+function _geoOriginNow(){
+  var sameJob=_spOriginJob===E.job();
+  return {
+    o:(_spOrigin && sameJob)?_spOrigin:jobOrigin(),
+    og:(_spOriginGraph && sameJob)?_spOriginGraph:siteplanCentroid()
+  };
+}
+function renderPolygons(){
+  if(!canvasEl) return;
+  if(!_polyLayer){
+    _polyLayer=document.createElementNS(_SVGNS,'svg');
+    _polyLayer.setAttribute('class','ng-polygon-layer');
+  }
+  if(_polyLayer.parentNode!==canvasEl) canvasEl.insertBefore(_polyLayer, canvasEl.firstChild); // behind nodes; re-attach if renderNodes cleared the canvas
+  while(_polyLayer.firstChild) _polyLayer.removeChild(_polyLayer.firstChild);
+  var sitePlan=E.viewMode && E.viewMode()==='siteplan';
+  if(!(sitePlan && _spSatellite)){ _polyLayer.style.display='none'; return; }
+  _polyLayer.style.display='';
+  var or=_geoOriginNow(), o=or.o, og=or.og;
+  if(!o || !og) return;
+  function gp(v){ var g=E.spLatLngToGraph(Number(v.lat), Number(v.lng), o.lat, o.lng); return { x:og.x+g.x, y:og.y+g.y }; }
+  E.nodes().forEach(function(n){
+    if(n.type!=='t1' || !n.polygon || n.polygon.length<3) return;
+    var poly=document.createElementNS(_SVGNS,'polygon');
+    poly.setAttribute('points', n.polygon.map(function(v){ var p=gp(v); return p.x+','+p.y; }).join(' '));
+    poly.setAttribute('class','ng-poly'+(selN===n.id?' ng-sel':''));
+    poly.setAttribute('data-id', n.id);
+    _polyLayer.appendChild(poly);
+  });
+  if(_tracing && _tracePts.length){
+    if(_tracePts.length>=2){
+      var pl=document.createElementNS(_SVGNS,'polyline');
+      pl.setAttribute('points', _tracePts.map(function(v){ var p=gp(v); return p.x+','+p.y; }).join(' '));
+      pl.setAttribute('class','ng-poly-preview');
+      _polyLayer.appendChild(pl);
+    }
+    _tracePts.forEach(function(v,i){
+      var p=gp(v), c=document.createElementNS(_SVGNS,'circle');
+      c.setAttribute('cx', p.x); c.setAttribute('cy', p.y); c.setAttribute('r', 3);
+      c.setAttribute('class','ng-poly-vert'+(i===0?' ng-poly-vert0':''));
+      _polyLayer.appendChild(c);
+    });
+  }
+}
+function ensureTraceOverlay(){
+  if(_traceOverlay) return _traceOverlay;
+  _traceOverlay=document.createElement('div');
+  _traceOverlay.className='ng-geopick-overlay';                  // reuse the crosshair overlay styling
+  _traceOverlay.addEventListener('mousedown',function(e){ e.stopPropagation(); });
+  _traceOverlay.addEventListener('pointerdown',function(e){ e.stopPropagation(); });
+  _traceOverlay.addEventListener('mouseup',function(e){ e.stopPropagation(); });
+  _traceOverlay.addEventListener('click',function(e){
+    if(!_tracing || !_spOrigin || !_spOriginGraph) return;
+    var ll=pickLatLngFromEvent(e);
+    if(_traceClickTimer) clearTimeout(_traceClickTimer);        // debounce so a dbl-click doesn't add the same corner twice
+    _traceClickTimer=setTimeout(function(){ _tracePts.push(ll); _traceClickTimer=null; renderPolygons(); }, 230);
+  });
+  _traceOverlay.addEventListener('dblclick',function(e){
+    if(!_tracing) return;
+    e.preventDefault();
+    if(_traceClickTimer){ clearTimeout(_traceClickTimer); _traceClickTimer=null; }
+    _tracePts.push(pickLatLngFromEvent(e));                     // the dbl-click spot is the final corner
+    finishTrace();
+  });
+  wrap.appendChild(_traceOverlay);
+  return _traceOverlay;
+}
+function exitTrace(){
+  _tracing=false; _traceId=null; _tracePts=[];
+  if(_traceClickTimer){ clearTimeout(_traceClickTimer); _traceClickTimer=null; }
+  var tb=document.getElementById('ngTraceBtn'); if(tb) tb.classList.remove('ng-on');
+  if(_traceOverlay) _traceOverlay.style.display='none';
+}
+function finishTrace(){
+  var pts=_tracePts.slice(), id=_traceId;
+  exitTrace();
+  if(id && pts.length>=3 && E.setNodePolygon){
+    E.setNodePolygon(id, pts);
+    // Anchor the building (block + label) at the footprint centroid so it sits on
+    // the polygon even if it wasn't placed first.
+    var clat=0, clng=0; pts.forEach(function(v){ clat+=v.lat; clng+=v.lng; }); clat/=pts.length; clng/=pts.length;
+    if(E.setNodeGeo) E.setNodeGeo(id, clat, clng);
+    if(E.saveGraph) E.saveGraph();
+    showSatHint(false);
+    render();
+  } else {
+    showSatHint(true, 'Need at least 3 corners — Trace again.');
+    renderPolygons();
+  }
+}
+function toggleTraceMode(){
+  if(!_spSatellite) return;
+  if(_tracing){ exitTrace(); showSatHint(false); renderPolygons(); return; }
+  if(_geoPick) exitGeoPick();                                   // don't run both picker modes at once
+  var sel=selN && E.findNode(selN);
+  if(!sel || sel.type!=='t1'){ showSatHint(true, 'Select a building first, then Trace and click its corners on the map.'); return; }
+  _spOrigin=_spOrigin||jobOrigin(); _spOriginGraph=_spOriginGraph||siteplanCentroid();
+  if(!_spOrigin){ showSatHint(true); return; }
+  _tracing=true; _traceId=sel.id; _tracePts=[];
+  var tb=document.getElementById('ngTraceBtn'); if(tb) tb.classList.add('ng-on');
+  ensureTraceOverlay().style.display='block';
+  showSatHint(true, 'Click the corners of “'+(sel.label||'building')+'”; double-click to finish.');
 }
 
 // ── Photo-GPS pins (Slice 4) ───────────────────────────────────────────
@@ -3500,6 +3614,10 @@ function init(){
   // Place-on-map (Slice 3) — select a building, then click its real spot.
   var placeBtn=tab.querySelector('.ng-geoplace-btn');
   if(placeBtn) placeBtn.addEventListener('click', toggleGeoPick);
+
+  // Trace Building (Phase 1) — select a building, then click its footprint corners.
+  var traceBtn=tab.querySelector('.ng-trace-btn');
+  if(traceBtn) traceBtn.addEventListener('click', toggleTraceMode);
 
   // Photo-GPS pins (Slice 4) — plot the job's geotagged photos on the imagery.
   var photosBtn=tab.querySelector('.ng-photos-btn');
