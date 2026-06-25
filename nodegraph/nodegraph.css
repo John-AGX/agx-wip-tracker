@@ -682,3 +682,10 @@ body.light-mode .ng-topbar.ng-ribbon .ng-ribbon-btn:hover{
 /* Slice 5: "+task" affordance on a photo pin (shows on hover). */
 .ng-photopin-task{position:absolute;top:-7px;right:-7px;width:17px;height:17px;line-height:15px;padding:0;border-radius:50%;border:1px solid #fff;background:#22c55e;color:#fff;font-size:13px;font-weight:700;cursor:pointer;display:none;text-align:center}
 .ng-photopin:hover .ng-photopin-task{display:block}
+/* 2.5D massing: a building block in site-plan reads as solid mass — flatter
+   "block" corners + a lit top edge over the budget-proportional extrusion
+   (the depth shadow is set inline by renderNodes). */
+#nodeGraphTab.ng-siteplan .ng-node.ng-tt-t1.ng-sp-massing{
+  border-radius:5px;
+  background-image:linear-gradient(155deg, rgba(255,255,255,.07), rgba(0,0,0,.05));
+}
