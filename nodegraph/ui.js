@@ -218,6 +218,9 @@ function renderNodes(){
       // extrusion below does the walls (a lighter building grey, not dark depth).
       var _geoBldg = _spSatellite && n.geoLatLng;
       if(_geoBldg) div.classList.add('ng-sp-building');
+      // Phase 4: a TRACED geo building is represented by its polygon (label + % drawn
+      // on it, clicks handled there) — demote this card to a click-through shell.
+      if(_geoBldg && n.polygon && n.polygon.length>=3) div.classList.add('ng-has-poly');
       // 2.5D massing: extrude the block with a budget-proportional depth so it
       // reads as solid mass (bigger budget = taller). Render-only; gated behind
       // the "3D" toggle (status stays on the border, so off reverts to flat).
@@ -1335,6 +1338,24 @@ function renderPolygons(){
   if(!_polyLayer){
     _polyLayer=document.createElementNS(_SVGNS,'svg');
     _polyLayer.setAttribute('class','ng-polygon-layer');
+    // Polygon-as-node: a traced building polygon IS the interactive node (its card is
+    // demoted to a click-through shell), so these handlers own select + drill-in for
+    // traced buildings. mousedown→select (stop the canvas pan/deselect); dblclick→
+    // drill in via the same _spFocus path the card uses.
+    _polyLayer.addEventListener('mousedown',function(e){
+      if(_tracing) return;
+      var pe=e.target.closest('[data-id]'); if(!pe) return;
+      e.stopPropagation();
+      var id=pe.getAttribute('data-id');
+      if(selN!==id){ selN=id; render(); }
+    });
+    _polyLayer.addEventListener('dblclick',function(e){
+      if(_tracing) return;
+      var pe=e.target.closest('[data-id]'); if(!pe) return;
+      e.stopPropagation(); e.preventDefault();
+      var id=pe.getAttribute('data-id');
+      _spFocus=(id && id!==_spFocus) ? id : null; applySpFocus(); fitSiteplan();
+    });
   }
   if(_polyLayer.parentNode!==canvasEl) canvasEl.insertBefore(_polyLayer, canvasEl.firstChild); // behind nodes; re-attach if renderNodes cleared the canvas
   while(_polyLayer.firstChild) _polyLayer.removeChild(_polyLayer.firstChild);
@@ -1344,13 +1365,25 @@ function renderPolygons(){
   var or=_geoOriginNow(), o=or.o, og=or.og;
   if(!o || !og) return;
   function gp(v){ var g=E.spLatLngToGraph(Number(v.lat), Number(v.lng), o.lat, o.lng); return { x:og.x+g.x, y:og.y+g.y }; }
+  var _connP = selN ? getConnectedIds(selN) : {};
   E.nodes().forEach(function(n){
     if(n.type!=='t1' || !n.polygon || n.polygon.length<3) return;
+    var pts=n.polygon.map(function(v){ return gp(v); });
     var poly=document.createElementNS(_SVGNS,'polygon');
-    poly.setAttribute('points', n.polygon.map(function(v){ var p=gp(v); return p.x+','+p.y; }).join(' '));
-    poly.setAttribute('class','ng-poly'+(selN===n.id?' ng-sel':''));
+    poly.setAttribute('points', pts.map(function(p){ return p.x+','+p.y; }).join(' '));
+    poly.setAttribute('class','ng-poly'+(selN===n.id?' ng-sel':'')+(_connP[n.id]?' ng-connected':''));
     poly.setAttribute('data-id', n.id);
     _polyLayer.appendChild(poly);
+    // The building reads as its polygon: label + % complete drawn at the centroid.
+    var cx=0, cy=0; pts.forEach(function(p){ cx+=p.x; cy+=p.y; }); cx/=pts.length; cy/=pts.length;
+    var lbl=document.createElementNS(_SVGNS,'text');
+    lbl.setAttribute('x', cx); lbl.setAttribute('y', cy-3); lbl.setAttribute('class','ng-poly-label');
+    lbl.textContent=n.label||'Building';
+    _polyLayer.appendChild(lbl);
+    var kpi=document.createElementNS(_SVGNS,'text');
+    kpi.setAttribute('x', cx); kpi.setAttribute('y', cy+7); kpi.setAttribute('class','ng-poly-kpi');
+    kpi.textContent=Math.round(n.pctComplete||0)+'% complete';
+    _polyLayer.appendChild(kpi);
   });
   if(_tracing && _tracePts.length){
     var pstr=_tracePts.map(function(v){ var p=gp(v); return p.x+','+p.y; }).join(' ');

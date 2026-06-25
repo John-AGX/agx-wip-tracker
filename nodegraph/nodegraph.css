@@ -687,13 +687,26 @@ body.light-mode .ng-topbar.ng-ribbon .ng-ribbon-btn:hover{
    lives inside .ng-canvas so it inherits the same scale(z)+translate(pan) as the
    nodes; coords are graph units. vector-effect keeps strokes crisp at any zoom. */
 #nodeGraphTab:not(.ng-sat) .ng-trace-btn{display:none}
+/* Layer itself never catches clicks (empty area passes through); the painted
+   polygons do (Phase 4: polygon-as-node). display toggled by renderPolygons. */
 .ng-polygon-layer{position:absolute;left:0;top:0;width:1px;height:1px;overflow:visible;z-index:6;pointer-events:none;display:none}
-.ng-poly{fill:rgba(79,140,255,.16);stroke:#4f8cff;stroke-width:1.5;vector-effect:non-scaling-stroke;stroke-linejoin:round}
-.ng-poly.ng-sel{fill:rgba(251,191,36,.18);stroke:#fbbf24;stroke-width:2;vector-effect:non-scaling-stroke}
+.ng-poly{fill:rgba(79,140,255,.16);stroke:#4f8cff;stroke-width:1.5;vector-effect:non-scaling-stroke;stroke-linejoin:round;pointer-events:auto;cursor:pointer}
+.ng-poly.ng-connected{fill:rgba(79,140,255,.26);stroke:#7aa8ff;stroke-width:2;vector-effect:non-scaling-stroke}
+.ng-poly.ng-sel{fill:rgba(251,191,36,.2);stroke:#fbbf24;stroke-width:2.5;vector-effect:non-scaling-stroke}
 .ng-poly-preview{fill:none;stroke:#fbbf24;stroke-width:1.5;stroke-dasharray:5 4;vector-effect:non-scaling-stroke;stroke-linejoin:round}
 .ng-poly-preview-fill{fill:rgba(251,191,36,.18);stroke:#fbbf24;stroke-width:1.5;stroke-dasharray:5 4;vector-effect:non-scaling-stroke;stroke-linejoin:round}
 .ng-poly-vert{fill:#fbbf24;stroke:#1a1a1a;stroke-width:1;vector-effect:non-scaling-stroke}
 .ng-poly-vert0{fill:#22c55e}
+/* Polygon node label + KPI (drawn at the footprint centroid). SVG text scales with
+   the map; the dark halo (paint-order:stroke) keeps it legible over imagery. */
+.ng-poly-label{fill:#fff;font:700 7px sans-serif;text-anchor:middle;dominant-baseline:middle;pointer-events:none;paint-order:stroke;stroke:#0b1020;stroke-width:2;stroke-linejoin:round}
+.ng-poly-kpi{fill:#bcd6ff;font:600 5.5px sans-serif;text-anchor:middle;dominant-baseline:middle;pointer-events:none;paint-order:stroke;stroke:#0b1020;stroke-width:1.6;stroke-linejoin:round}
+/* A traced building is represented by its polygon, so its card becomes an invisible,
+   click-through shell (kept in DOM for data-id lookups; wires anchor via the geo hook,
+   not its ports, so hiding its chrome is safe). */
+.ng-node.ng-has-poly{background:transparent!important;border-color:transparent!important;box-shadow:none!important;pointer-events:none}
+.ng-node.ng-has-poly>*{display:none!important}
+.ng-node.ng-has-poly::before,.ng-node.ng-has-poly::after{display:none!important}
 /* Site Plan rework: WIP metrics live in the sidebar in satellite mode (the WIP node
    leaves the canvas). Panel + the WIP node-library category are satellite-scoped. */
 .ng-sp-metrics{display:none;padding:10px 10px 6px;border-bottom:1px solid var(--ng-border)}
