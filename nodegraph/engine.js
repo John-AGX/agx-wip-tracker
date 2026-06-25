@@ -1388,9 +1388,24 @@ function clipToBox(from, to, box){
 // ── Port Positions ──
 var _canvasEl = null;
 function setCanvasEl(el){ _canvasEl = el; }
+// Phase 2 (polygon buildings): ui.js owns the geo origin (_spOrigin/_spOriginGraph),
+// so it registers a callback that returns a geo-placed building's on-map graph
+// position (or null). Render-only; consulted by portPos. Mirrors setCanvasEl — the
+// engine receives a ui-owned dependency it cannot compute itself.
+var _geoPortAnchor = null;
+function setGeoPortAnchor(fn){ _geoPortAnchor = (typeof fn==='function') ? fn : null; }
 
 function portPos(nid2, pi, dir){
   var n = findNode(nid2); if(!n) return {x:0,y:0};
+  // Phase 2: a geo-placed building (traced footprint OR map-placed) anchors BOTH its
+  // in/out wires at its on-map visual center, not the abstract n.x/n.y port dot. Gate
+  // excludes abstract graph mode (geoLatLng is null there) and every non-t1 node; the
+  // ui callback adds the satellite-mode + origin-resolved check the engine can't see,
+  // and returns null to fall straight through to the existing logic below.
+  if(_geoPortAnchor && viewMode==='siteplan' && n.type==='t1' && n.geoLatLng){
+    var _ga=_geoPortAnchor(n);
+    if(_ga && isFinite(_ga.x) && isFinite(_ga.y)) return { x:_ga.x, y:_ga.y };
+  }
   if(!_canvasEl) return {x:n.x, y:n.y+20};
   var el = _canvasEl.querySelector('[data-id="'+nid2+'"]');
   if(!el) return {x:n.x, y:n.y+20};
@@ -1468,7 +1483,7 @@ return {
   setInitialCloudSyncInFlight:setInitialCloudSyncInFlight,
   saveSnapshot:saveSnapshot, restoreSnapshot:restoreSnapshot, getSnapshot:getSnapshot,
   drawWires:drawWires, drawGrid:drawGrid,
-  portPos:portPos, setCanvasEl:setCanvasEl,
+  portPos:portPos, setCanvasEl:setCanvasEl, setGeoPortAnchor:setGeoPortAnchor,
   genId:genId,
   frames:getFrames, setFrames:setFrames, addFrame:addFrame, removeFrame:removeFrame, findFrame:findFrame,
 };

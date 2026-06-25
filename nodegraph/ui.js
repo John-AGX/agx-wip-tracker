@@ -3511,6 +3511,21 @@ function init(){
   gridC=tab.querySelector('.ng-grid-canvas'); gridCtx=gridC.getContext('2d');
   basemapEl=tab.querySelector('.ng-basemap');
   E.setCanvasEl(canvasEl);
+  // Phase 2: anchor a geo-placed building's graph wires at its on-map visual center
+  // (instead of the abstract n.x/n.y port), so phase/cost nodes feed into the footprint
+  // the user sees. Same origin pipeline as the polygon layer + card, so the endpoint
+  // stays pixel-consistent at every zoom. Render-only; returns null (→ engine falls
+  // back to the abstract port) when off-satellite, no geo, or the origin is unresolved.
+  E.setGeoPortAnchor(function(n){
+    if(!(E.viewMode && E.viewMode()==='siteplan' && _spSatellite)) return null;
+    if(!n || !n.geoLatLng) return null;
+    var or=_geoOriginNow(); if(!or || !or.o || !or.og) return null;   // origin not ready → skip, don't guess
+    var g=E.spLatLngToGraph(n.geoLatLng.lat, n.geoLatLng.lng, or.o.lat, or.o.lng);
+    var cx=or.og.x + g.x, cy=or.og.y + g.y;        // geoLatLng projected: polygon centroid (traced) or placed point
+    if(n.polygon && n.polygon.length>=3) return { x:cx, y:cy };       // traced: the drawn polygon is centered here
+    var fp=E.spBuildingFootprint(n.budget);        // placed-only: block top-left sits here → shift to its center
+    return { x:cx + fp.w/2, y:cy + fp.h/2 };
+  });
   buildSidebar(); initEvents(); applyTx();
 
   // Close-graph button removed — the back-to-WIP nav and top-level
