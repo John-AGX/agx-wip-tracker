@@ -2953,16 +2953,28 @@ async function ensureAiSession({ agentKey, entityType, entityId, userId, organiz
 // inserts. Sets _freshlyCreated for first-turn detection (skip the
 // stuck-session-recovery retry loop on a brand-new session).
 async function resolveSessionForChat({ sessionId, currentContext, userId, organization }) {
-  // Assistant v1 pilot — the rolling user_thread hosts on the personal
-  // Assistant (Haiku) for SYSTEM ADMINS, else 86. Computed once and used both
-  // to resolve/mint the right host thread AND to avoid pinning a system admin
-  // onto a legacy 86 thread via an explicit sessionId. Everyone else: hostKey
-  // stays 'job', so behavior is identical to before.
+  // Assistant v1 rollout — the rolling user_thread hosts on the personal
+  // Assistant (Haiku) for OFFICE staff (system_admin/admin/corporate/pm) plus
+  // any user explicitly opted in; field crew + subs stay on 86 until the
+  // role-permission smoke-test rig (#221) lands, so a low-privilege user never
+  // gets a write-capable AI ahead of that. A per-user `ai_host_agent_key`
+  // override always wins. Computed once and used both to resolve/mint the right
+  // host thread AND to avoid pinning a user onto the wrong-host thread via an
+  // explicit sessionId. Everyone else: hostKey stays 'job' (86), unchanged.
+  const ASSISTANT_OFFICE_ROLES = ['system_admin', 'admin', 'corporate', 'pm'];
   let hostKey = 'job';
   if (FLAG_UNIFIED_USER_THREAD && userId) {
     try {
-      const ur = await pool.query('SELECT role FROM users WHERE id = $1', [userId]);
-      if (ur.rows[0] && ur.rows[0].role === 'system_admin') hostKey = 'assistant';
+      const ur = await pool.query('SELECT role, ai_host_agent_key FROM users WHERE id = $1', [userId]);
+      const u = ur.rows[0];
+      if (u) {
+        const override = u.ai_host_agent_key;
+        if (override === 'assistant' || override === 'job') {
+          hostKey = override;                                  // explicit per-user opt-in/out wins
+        } else if (ASSISTANT_OFFICE_ROLES.indexOf(u.role) !== -1) {
+          hostKey = 'assistant';                               // office-staff default
+        }
+      }
     } catch (_) { /* default to 86 */ }
   }
   if (sessionId) {

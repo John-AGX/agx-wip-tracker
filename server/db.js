@@ -48,6 +48,12 @@ async function initSchema() {
     -- ('America/New_York'). Drives the morning-gate on reminder digests and
     -- the timezone every reminder/notification email renders dates in.
     ALTER TABLE users ADD COLUMN IF NOT EXISTS timezone TEXT;
+    -- Assistant v1 rollout — per-user OVERRIDE of which AI hosts the in-app
+    -- chat: 'assistant' (Haiku personal aide) or 'job' (86/Opus). NULL =
+    -- use the role default in resolveSessionForChat (office roles —
+    -- system_admin/admin/corporate/pm — host on the Assistant; field crew +
+    -- subs stay on 86 until the role-permission smoke-test rig lands).
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_host_agent_key TEXT;
     -- users.sub_id (sub portal) is added AFTER the subs table is
     -- created further down so the FK resolves on first run.
 
