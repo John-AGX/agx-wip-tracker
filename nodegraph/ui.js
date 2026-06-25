@@ -1352,9 +1352,17 @@ function renderPolygons(){
     _polyLayer.appendChild(poly);
   });
   if(_tracing && _tracePts.length){
-    if(_tracePts.length>=2){
+    var pstr=_tracePts.map(function(v){ var p=gp(v); return p.x+','+p.y; }).join(' ');
+    if(_tracePts.length>=3){
+      // ≥3 corners → show the forming footprint as a filled, highlighted polygon
+      // (closes back to the first corner) so it reads as the building taking shape.
+      var pg=document.createElementNS(_SVGNS,'polygon');
+      pg.setAttribute('points', pstr);
+      pg.setAttribute('class','ng-poly-preview-fill');
+      _polyLayer.appendChild(pg);
+    } else if(_tracePts.length===2){
       var pl=document.createElementNS(_SVGNS,'polyline');
-      pl.setAttribute('points', _tracePts.map(function(v){ var p=gp(v); return p.x+','+p.y; }).join(' '));
+      pl.setAttribute('points', pstr);
       pl.setAttribute('class','ng-poly-preview');
       _polyLayer.appendChild(pl);
     }
@@ -1375,15 +1383,15 @@ function ensureTraceOverlay(){
   _traceOverlay.addEventListener('mouseup',function(e){ e.stopPropagation(); });
   _traceOverlay.addEventListener('click',function(e){
     if(!_tracing || !_spOrigin || !_spOriginGraph) return;
-    var ll=pickLatLngFromEvent(e);
-    if(_traceClickTimer) clearTimeout(_traceClickTimer);        // debounce so a dbl-click doesn't add the same corner twice
-    _traceClickTimer=setTimeout(function(){ _tracePts.push(ll); _traceClickTimer=null; renderPolygons(); }, 230);
+    _tracePts.push(pickLatLngFromEvent(e));                     // add the corner NOW + draw it immediately
+    renderPolygons();
   });
   _traceOverlay.addEventListener('dblclick',function(e){
     if(!_tracing) return;
     e.preventDefault();
-    if(_traceClickTimer){ clearTimeout(_traceClickTimer); _traceClickTimer=null; }
-    _tracePts.push(pickLatLngFromEvent(e));                     // the dbl-click spot is the final corner
+    // A dblclick fires as click + click + dblclick, so two near-identical corners
+    // were just pushed at the finish spot — drop the duplicate, then close the ring.
+    if(_tracePts.length>=2) _tracePts.pop();
     finishTrace();
   });
   wrap.appendChild(_traceOverlay);

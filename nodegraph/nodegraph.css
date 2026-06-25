@@ -691,6 +691,7 @@ body.light-mode .ng-topbar.ng-ribbon .ng-ribbon-btn:hover{
 .ng-poly{fill:rgba(79,140,255,.16);stroke:#4f8cff;stroke-width:1.5;vector-effect:non-scaling-stroke;stroke-linejoin:round}
 .ng-poly.ng-sel{fill:rgba(251,191,36,.18);stroke:#fbbf24;stroke-width:2;vector-effect:non-scaling-stroke}
 .ng-poly-preview{fill:none;stroke:#fbbf24;stroke-width:1.5;stroke-dasharray:5 4;vector-effect:non-scaling-stroke;stroke-linejoin:round}
+.ng-poly-preview-fill{fill:rgba(251,191,36,.18);stroke:#fbbf24;stroke-width:1.5;stroke-dasharray:5 4;vector-effect:non-scaling-stroke;stroke-linejoin:round}
 .ng-poly-vert{fill:#fbbf24;stroke:#1a1a1a;stroke-width:1;vector-effect:non-scaling-stroke}
 .ng-poly-vert0{fill:#22c55e}
 /* 2.5D massing: a building block in site-plan reads as solid mass — flatter
