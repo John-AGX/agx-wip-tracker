@@ -200,7 +200,12 @@ function renderNodes(){
     // or its saved footprint) and tag a status class so CSS tints it by
     // progress. Render-only — n.footprint is read, never written here.
     if(sitePlan && n.type==='t1'){
-      var _fp = n.footprint || E.budgetFootprint(n.budget);
+      // On satellite, a geo-bound building is sized to a REAL-world footprint
+      // (meters via E.spBuildingFootprint) so it matches building scale on the
+      // imagery instead of the oversized budget pixel-card. Render-only.
+      var _fp = (_spSatellite && n.geoLatLng)
+        ? E.spBuildingFootprint(n.budget)
+        : (n.footprint || E.budgetFootprint(n.budget));
       div.style.width=_fp.w+'px'; div.style.minHeight=_fp.h+'px';
       var _pc = n.pctComplete||0;
       div.classList.add(_pc>=100?'ng-sp-done':(_pc>0?'ng-sp-prog':'ng-sp-todo'));
@@ -1164,9 +1169,17 @@ function siteplanCentroid(){
 // (_spOriginGraph) + its projected offset from the origin lat/lng. Derived only —
 // n.x/n.y are never mutated, so toggling satellite off restores the layout.
 function geoRenderPos(n){
-  if(!_spOrigin || !_spOriginGraph || !n.geoLatLng || _spOriginJob!==E.job()) return { x:n.x, y:n.y }; // fail safe if origin is stale (cross-job)
-  var g=E.spLatLngToGraph(n.geoLatLng.lat, n.geoLatLng.lng, _spOrigin.lat, _spOrigin.lng);
-  return { x:_spOriginGraph.x + g.x, y:_spOriginGraph.y + g.y };
+  if(!n.geoLatLng) return { x:n.x, y:n.y };
+  // Use the cached origin when it belongs to the current job; otherwise recompute
+  // it on the spot (jobOrigin/siteplanCentroid are pure reads + deterministic).
+  // This keeps a geo-bound building anchored even if the cache was transiently
+  // nulled — rather than snapping it to its off-screen abstract x/y.
+  var _sameJob=_spOriginJob===E.job();
+  var o=(_spOrigin && _sameJob) ? _spOrigin : jobOrigin();
+  var og=(_spOriginGraph && _sameJob) ? _spOriginGraph : siteplanCentroid();
+  if(!o || !og) return { x:n.x, y:n.y };
+  var g=E.spLatLngToGraph(n.geoLatLng.lat, n.geoLatLng.lng, o.lat, o.lng);
+  return { x:og.x + g.x, y:og.y + g.y };
 }
 function showSatHint(show, msg){
   if(!wrap) return;

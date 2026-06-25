@@ -87,6 +87,16 @@ function budgetFootprint(b){
   var f = b > 0 ? Math.min(1, Math.sqrt(b) / Math.sqrt(150000)) : 0.25;
   return { w: Math.round(190 + f * 110), h: Math.round(104 + f * 76) };
 }
+// Real-world building footprint for SATELLITE/geo mode, returned in graph UNITS.
+// budgetFootprint's pixel sizes (~190-300px = ~95-150m at SP_M_PER_UNIT) dwarf
+// real buildings on the imagery; here we size in METERS (budget-aware, ~12-35m
+// wide) then convert via SP_M_PER_UNIT so a block matches building scale.
+function spBuildingFootprint(b){
+  b = Number(b) || 0;
+  var f = b > 0 ? Math.min(1, Math.sqrt(b) / Math.sqrt(150000)) : 0.2;
+  var wM = 12 + f * 23, hM = 9 + f * 16;        // ~12-35m wide, ~9-25m deep
+  return { w: Math.round(wM / SP_M_PER_UNIT), h: Math.round(hM / SP_M_PER_UNIT) };
+}
 // Site-plan drill-in focus (Slice 3): when set to an id-map, only those nodes
 // (+ the WIP hub) render in site-plan mode — used to drill into one building's
 // phases/costs. View-state only; never persisted. ui.js sets it on dbl-click.
@@ -1430,7 +1440,7 @@ return {
   job:function(j){ if(j!=null)jobId=j; return jobId; },
   canConn:canConn, addNode:addNode, findNode:findNode,
   cleanMode:getCleanMode, setCleanMode:setCleanMode, firstCompatPort:firstCompatPort,
-  viewMode:getViewMode, setViewMode:setViewMode, sitePlanVisible:sitePlanVisible, budgetFootprint:budgetFootprint,
+  viewMode:getViewMode, setViewMode:setViewMode, sitePlanVisible:sitePlanVisible, budgetFootprint:budgetFootprint, spBuildingFootprint:spBuildingFootprint,
   spNodeVisible:spNodeVisible, setSitePlanFocusSet:setSitePlanFocusSet,
   spMapZoom:spMapZoom, spGraphToLatLng:spGraphToLatLng, spLatLngToGraph:spLatLngToGraph, setNodeGeo:setNodeGeo,
   getOutput:getOutput, getActual:getActual, getAccrued:getAccrued, resetComp:resetComp,
