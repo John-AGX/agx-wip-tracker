@@ -775,6 +775,7 @@
       document.getElementById('clientEditor_title').textContent = 'New Client';
       populateParentSelect(null, null);
       openModal('clientEditorModal');
+      if (window.p86AddressAutocomplete) window.p86AddressAutocomplete.attachToField(document.getElementById('clientEditor_property_address'), { placeholder: 'Search property address…' });
       // Create mode — sections open unlocked so the user can fill in
       // a new client without tapping every pencil first.
       applyClientFieldsetGates(true);
@@ -800,6 +801,7 @@
       renderAgentNotesPanel(id);
       mountClientTasksPanel(c);
       openModal('clientEditorModal');
+      if (window.p86AddressAutocomplete) window.p86AddressAutocomplete.attachToField(document.getElementById('clientEditor_property_address'), { placeholder: 'Search property address…' });
       // Edit mode — sections render locked. Per-section pencil arms
       // a fieldset for editing; Save commits the whole form.
       applyClientFieldsetGates(false);

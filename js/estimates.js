@@ -443,6 +443,7 @@ function renderEstimatesList() {
             document.getElementById('estCommunity').value = '';
             document.getElementById('estPropertyAddr').value = '';
             document.getElementById('estBillingAddr').value = '';
+            if (window.p86AddressAutocomplete) window.p86AddressAutocomplete.attachToField(document.getElementById('estPropertyAddr'), { placeholder: 'Search property address…' });
             document.getElementById('estManagerName').value = '';
             document.getElementById('estManagerEmail').value = '';
             document.getElementById('estManagerPhone').value = '';
@@ -544,6 +545,7 @@ function renderEstimatesList() {
     document.getElementById('editEst_community').value = estimate.community || '';
     document.getElementById('editEst_propertyAddr').value = estimate.propertyAddr || '';
     document.getElementById('editEst_billingAddr').value = estimate.billingAddr || '';
+    if (window.p86AddressAutocomplete) window.p86AddressAutocomplete.attachToField(document.getElementById('editEst_propertyAddr'), { placeholder: 'Search property address…' });
     document.getElementById('editEst_managerName').value = estimate.managerName || '';
     document.getElementById('editEst_managerEmail').value = estimate.managerEmail || '';
     document.getElementById('editEst_managerPhone').value = estimate.managerPhone || '';

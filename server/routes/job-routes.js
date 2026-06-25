@@ -215,6 +215,24 @@ router.post('/convert', requireAuth, requireRole('admin', 'pm'), async (req, res
     await client.query('COMMIT');
 
     res.json({ ok: true, id: id, job_id: id, owner_id: ownerId, lead_id: leadId, estimate_id: estimateId });
+
+    // Geocode the carried address (after the response; best-effort) so the map /
+    // weather / Site Plan satellite get coordinates with no manual step. A failure
+    // here can never affect the committed conversion.
+    try {
+      var _convAddr = (job && job.address) || (job ? [job.street_address, job.city, job.state, job.zip].filter(Boolean).join(', ') : '');
+      if (_convAddr) {
+        const { geocodeAddress } = require('../geocoder');
+        Promise.resolve(geocodeAddress(_convAddr)).then(function (g) {
+          if (g && Number.isFinite(g.lat) && Number.isFinite(g.lng) && !(g.lat === 0 && g.lng === 0)) {
+            pool.query(
+              "UPDATE jobs SET geocode_lat=$1, geocode_lng=$2, geocode_status='ok', geocode_address=$3, geocode_at=NOW() WHERE id=$4 AND (organization_id=$5 OR organization_id IS NULL)",
+              [g.lat, g.lng, _convAddr, id, orgId]
+            ).catch(function () {});
+          }
+        }).catch(function () {});
+      }
+    } catch (_) {}
   } catch (e) {
     try { await client.query('ROLLBACK'); } catch (_) {}
     console.error('POST /api/jobs/convert error:', e);

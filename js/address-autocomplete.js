@@ -11,6 +11,12 @@
 //   });
 //   // h.destroy() to unmount (call on modal close).
 //
+//   // Convenience for a single free-text address <input>: inserts a search
+//   // box above it and fills it on pick (idempotent — wires once per field).
+//   window.p86AddressAutocomplete.attachToField(inputEl, {
+//     mode: 'formatted' | 'street', placeholder, onPlace
+//   });
+//
 // result = {
 //   formatted: 'full one-line address',
 //   components: { street_address, city, state, zip },   // '' when absent
@@ -107,5 +113,33 @@
     return handle;
   }
 
-  window.p86AddressAutocomplete = { attach: attach };
+  // Convenience: decorate a single free-text address <input>. Inserts a search
+  // box immediately before it; on pick, writes the chosen address into the input
+  // (formatted by default, or just the street line) and fires input/change so
+  // existing listeners run. Idempotent per field via a data flag.
+  function attachToField(fieldEl, opts) {
+    opts = opts || {};
+    if (!fieldEl || fieldEl.dataset.p86AcWired) return null;
+    fieldEl.dataset.p86AcWired = '1';
+    var row = document.createElement('div');
+    row.className = 'p86-addr-ac-row';
+    if (fieldEl.parentNode) fieldEl.parentNode.insertBefore(row, fieldEl);
+    return attach({
+      mount: row,
+      placeholder: opts.placeholder || 'Search address…',
+      onPlace: function (r) {
+        var v = (opts.mode === 'street') ? (r.components.street_address || r.formatted) : r.formatted;
+        if (v) {
+          fieldEl.value = v;
+          try {
+            fieldEl.dispatchEvent(new Event('input', { bubbles: true }));
+            fieldEl.dispatchEvent(new Event('change', { bubbles: true }));
+          } catch (_) {}
+        }
+        if (typeof opts.onPlace === 'function') opts.onPlace(r);
+      }
+    });
+  }
+
+  window.p86AddressAutocomplete = { attach: attach, attachToField: attachToField };
 })();
