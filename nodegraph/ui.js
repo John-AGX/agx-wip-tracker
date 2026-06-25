@@ -209,13 +209,19 @@ function renderNodes(){
       div.style.width=_fp.w+'px'; div.style.minHeight=_fp.h+'px';
       var _pc = n.pctComplete||0;
       div.classList.add(_pc>=100?'ng-sp-done':(_pc>0?'ng-sp-prog':'ng-sp-todo'));
-      // 2.5D massing (first step toward 3D): extrude the block with a budget-
-      // proportional depth so buildings read as solid mass (bigger budget =
-      // taller). Render-only; gated behind the "3D" toggle (status stays on the
-      // border, so toggling massing off cleanly reverts to flat blocks).
+      // On satellite, a geo-bound building renders as a real 3D MASSING BLOCK
+      // (clean roof + extruded walls, data card stripped — drill in for numbers)
+      // rather than a data card floating on the map. CSS does the roof; the
+      // extrusion below does the walls (a lighter building grey, not dark depth).
+      var _geoBldg = _spSatellite && n.geoLatLng;
+      if(_geoBldg) div.classList.add('ng-sp-building');
+      // 2.5D massing: extrude the block with a budget-proportional depth so it
+      // reads as solid mass (bigger budget = taller). Render-only; gated behind
+      // the "3D" toggle (status stays on the border, so off reverts to flat).
       if(_spMassing){
         var _mb=Number(n.budget)||0, _mf=_mb>0?Math.min(1,Math.sqrt(_mb)/Math.sqrt(150000)):0.18, _md=Math.round(5+_mf*13);
-        var _msh=''; for(var _mi=1;_mi<=_md;_mi++){ _msh+=(_msh?',':'')+_mi+'px '+_mi+'px 0 #0d1019'; }
+        var _wall=_geoBldg?'#8a8f9c':'#0d1019';   // building wall vs abstract-canvas depth
+        var _msh=''; for(var _mi=1;_mi<=_md;_mi++){ _msh+=(_msh?',':'')+_mi+'px '+_mi+'px 0 '+_wall; }
         _msh+=','+(_md+2)+'px '+(_md+6)+'px '+(_md+5)+'px rgba(0,0,0,.5)';
         div.style.boxShadow=_msh;
         div.classList.add('ng-sp-massing');

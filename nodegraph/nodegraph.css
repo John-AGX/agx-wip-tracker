@@ -690,3 +690,17 @@ body.light-mode .ng-topbar.ng-ribbon .ng-ribbon-btn:hover{
   border-radius:5px;
   background-image:linear-gradient(155deg, rgba(255,255,255,.07), rgba(0,0,0,.05));
 }
+/* Satellite "3D building": a geo-placed building renders as a clean massing
+   BLOCK on the imagery — the data-card chrome is stripped down to a roof + the
+   label; the inline extrusion (a lighter building grey, set by renderNodes)
+   gives the walls/height, so it reads like a Google-Maps 3D building you can use
+   as the node (double-click to drill in for the numbers). */
+#nodeGraphTab.ng-siteplan.ng-sat .ng-node.ng-tt-t1.ng-sp-building > *{display:none !important}
+#nodeGraphTab.ng-siteplan.ng-sat .ng-node.ng-tt-t1.ng-sp-building > .ng-node-cap{display:block !important}
+#nodeGraphTab.ng-siteplan.ng-sat .ng-node.ng-tt-t1.ng-sp-building{
+  background:linear-gradient(150deg,#d7dae1 0%,#bcc0cb 58%,#a3a8b5 100%) !important; /* roof, lit top-left */
+  border:1px solid #767c8a !important;
+  border-radius:3px;
+  overflow:visible;
+}
+#nodeGraphTab.ng-siteplan.ng-sat .ng-node.ng-tt-t1.ng-sp-building.ng-sel{border-color:#4f8cff !important}
