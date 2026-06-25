@@ -694,6 +694,13 @@ body.light-mode .ng-topbar.ng-ribbon .ng-ribbon-btn:hover{
 .ng-poly-preview-fill{fill:rgba(251,191,36,.18);stroke:#fbbf24;stroke-width:1.5;stroke-dasharray:5 4;vector-effect:non-scaling-stroke;stroke-linejoin:round}
 .ng-poly-vert{fill:#fbbf24;stroke:#1a1a1a;stroke-width:1;vector-effect:non-scaling-stroke}
 .ng-poly-vert0{fill:#22c55e}
+/* Site Plan rework: WIP metrics live in the sidebar in satellite mode (the WIP node
+   leaves the canvas). Panel + the WIP node-library category are satellite-scoped. */
+.ng-sp-metrics{display:none;padding:10px 10px 6px;border-bottom:1px solid var(--ng-border)}
+#nodeGraphTab.ng-siteplan.ng-sat .ng-sp-metrics{display:block}
+#nodeGraphTab.ng-siteplan.ng-sat .ng-cat-wip{display:none}
+.ng-sp-metrics-head{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ng-dim);margin:0 0 8px}
+.ng-sp-metrics-empty{color:var(--ng-dim);font-size:12px;padding:8px 2px}
 /* 2.5D massing: a building block in site-plan reads as solid mass — flatter
    "block" corners + a lit top edge over the budget-proportional extrusion
    (the depth shadow is set inline by renderNodes). */

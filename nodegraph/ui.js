@@ -935,6 +935,7 @@ function render(){
   renderFrames();
   renderNodes();
   renderPolygons();                 // geo-anchored building footprints (satellite only)
+  renderSidebarMetrics();           // live WIP totals in the sidebar (satellite only, via CSS)
   E.drawGrid(gridCtx, gridC.width, gridC.height);
   E.drawWires(wireCtx, wrap, wiringFrom, wireMouse);
   E.saveGraph();
@@ -1657,9 +1658,14 @@ function buildSidebar(){
     '<span class="ng-sidebar-header-text">Node Library</span>' +
     '<button class="ng-sidebar-toggle" id="ngSidebarToggle" title="Collapse library">◀</button>' +
     '</div>';
+  // Site Plan rework: live WIP-metrics panel (shown only in satellite Site Plan via
+  // CSS). Body is filled by renderSidebarMetrics() on every render; chips inside are
+  // click-to-edit (same data-wip-edit path as the old WIP card).
+  html+='<div class="ng-sp-metrics"><div class="ng-sp-metrics-head">Project WIP</div><div class="ng-sp-metrics-body"></div></div>';
   html+='<div class="ng-sidebar-search"><input type="text" placeholder="Search..." id="ngSearch"/></div>';
   E.CATS.forEach(function(cat,ci){
-    html+='<div class="ng-cat ng-open">';
+    var isWipCat=(cat.items||[]).indexOf('wip')>-1;   // hidden in satellite (the WIP node lives in the sidebar there)
+    html+='<div class="ng-cat ng-open'+(isWipCat?' ng-cat-wip':'')+'">';
     html+='<div class="ng-cat-header"><span class="ng-cat-arrow">\u25B6</span>'+cat.name+'</div>';
     html+='<div class="ng-cat-items">';
     cat.items.forEach(function(k){
@@ -1695,6 +1701,9 @@ function buildSidebar(){
   });
 
   sb.addEventListener('click',function(e){
+    // WIP-metrics chip → inline-edit the job financial field (mirrors the card path).
+    var wchip=e.target.closest('[data-wip-edit]');
+    if(wchip && !e.target.closest('input')){ e.preventDefault(); e.stopPropagation(); wipChipEdit(wchip); return; }
     if(e.target.closest('.ng-sidebar-toggle')){
       e.stopPropagation();
       sb.classList.toggle('ng-collapsed');
@@ -1754,6 +1763,74 @@ function buildSidebar(){
     });
     if(q) sb.querySelectorAll('.ng-cat').forEach(function(el){el.classList.add('ng-open');});
   });
+}
+
+// Inline-edit a WIP job-financial chip (Contract Amount, CO Income, …). Shared by
+// the canvas WIP card and the sidebar metrics panel so both behave identically.
+function wipChipEdit(wc){
+  var wn=E.findNode(wc.getAttribute('data-wip-edit'));
+  if(!wn) return;
+  var wkey=wc.getAttribute('data-wip-key');
+  var wtyp=wc.getAttribute('data-wip-type');
+  if(!wn.jobFields) wn.jobFields={};
+  editingId=wn.id;
+  var winp=document.createElement('input');
+  winp.type='number'; winp.step=wtyp==='p'?'0.1':'0.01';
+  if(wtyp==='p'){winp.min=0;winp.max=100;}
+  winp.value=wn.jobFields[wkey]||0;
+  winp.className='ng-wip-chip-input';
+  wc.textContent=''; wc.appendChild(winp);
+  setTimeout(function(){ winp.focus(); winp.select(); }, 0);
+  var wdone=false;
+  function wfinish(){
+    if(wdone) return; wdone=true;
+    var nv=parseFloat(winp.value)||0;
+    if(wtyp==='p') nv=Math.max(0,Math.min(100,nv));
+    wn.jobFields[wkey]=nv;
+    editingId=null; render();
+  }
+  winp.addEventListener('blur',wfinish);
+  winp.addEventListener('keydown',function(ev){
+    if(ev.key==='Enter'){ev.preventDefault();winp.blur();}
+    else if(ev.key==='Escape'){ev.preventDefault();wdone=true;editingId=null;render();}
+  });
+  winp.addEventListener('mousedown',function(ev){ev.stopPropagation();});
+}
+
+// Site Plan rework: fill the sidebar WIP-metrics panel from the (still-alive) wip
+// node — same jobField chips + 8-KPI Overview grid as the old card, identical math
+// via E.getOutput. Called every render(); the panel is shown only in satellite via
+// CSS, so this is a cheap no-op repaint otherwise.
+function renderSidebarMetrics(){
+  var body=document.querySelector('.ng-sp-metrics-body'); if(!body) return;
+  if(!(_spSatellite && E.viewMode && E.viewMode()==='siteplan')) return; // panel hidden off-satellite — skip the work
+  var wn=E.nodes().find(function(n){return n.type==='wip';});
+  if(!wn){ body.innerHTML='<div class="ng-sp-metrics-empty">No WIP data</div>'; return; }
+  if(editingId===wn.id && body.querySelector('input')) return; // mid-edit in this panel: don't clobber the focused input
+  var jf=wn.jobFields||{};
+  var wipComputedPct=E.getWIPWeightedPct(wn);
+  var h='<div class="ng-subitems" style="max-height:none;">';
+  [{k:'contractAmount',l:'Contract Amount',t:'c'},{k:'coIncome',l:'CO Income',t:'c'},{k:'estimatedCosts',l:'Est. Costs',t:'c'},{k:'coCosts',l:'CO Costs',t:'c'},{k:'revisedCostChanges',l:'Revised Changes',t:'c'},{k:'invoicedToDate',l:'Invoiced to Date',t:'c'},{k:'pctComplete',l:'% Complete',t:'p'}].forEach(function(r){
+    var raw=jf[r.k]||0;
+    if(r.k==='pctComplete' && wipComputedPct!=null){
+      h+='<div class="ng-subitem ng-wip-row"><span class="ng-wip-lbl">'+r.l+'</span><span class="ng-wip-chip" title="Averaged from connected phases/buildings/COs" style="cursor:default;opacity:0.85;">'+wipComputedPct.toFixed(1)+'% avg</span></div>';
+    } else {
+      var disp=r.t==='p'?raw.toFixed(1)+'%':E.fmtC(raw);
+      h+='<div class="ng-subitem ng-wip-row"><span class="ng-wip-lbl">'+r.l+'</span><span class="ng-wip-chip" data-wip-edit="'+wn.id+'" data-wip-key="'+r.k+'" data-wip-type="'+r.t+'" title="Click to edit">'+disp+'</span></div>';
+    }
+  });
+  h+='</div>';
+  var wipD=E.DEFS.wip;
+  h+='<div class="ng-ov-head">Overview</div><div class="ng-wip-ov">';
+  wipD.outs.forEach(function(op,oi){
+    var ov=E.getOutput(wn,oi);
+    var fmt=op.t===E.PT.P?E.fmtP(ov):E.fmtC(ov);
+    var vc=ov>0?'ng-ov-pos':ov<0?'ng-ov-neg':'ng-ov-zero';
+    var hero=(op.n==='Total Income'||op.n==='Gross Profit')?' ng-ov-hero':'';
+    h+='<div class="ng-wip-ov-kpi'+hero+'"><span class="ng-ov-lbl">'+op.n+'</span><span class="ng-ov-val '+vc+'">'+fmt+'</span></div>';
+  });
+  h+='</div>';
+  body.innerHTML=h;
 }
 
 // ── Events ──
@@ -2213,33 +2290,7 @@ function initEvents(){
     var wc=e.target.closest('[data-wip-edit]');
     if(wc && !e.target.closest('input')){
       e.preventDefault(); e.stopPropagation();
-      var wn=E.findNode(wc.getAttribute('data-wip-edit'));
-      if(!wn) return;
-      var wkey=wc.getAttribute('data-wip-key');
-      var wtyp=wc.getAttribute('data-wip-type');
-      if(!wn.jobFields) wn.jobFields={};
-      editingId=wn.id;
-      var winp=document.createElement('input');
-      winp.type='number'; winp.step=wtyp==='p'?'0.1':'0.01';
-      if(wtyp==='p'){winp.min=0;winp.max=100;}
-      winp.value=wn.jobFields[wkey]||0;
-      winp.className='ng-wip-chip-input';
-      wc.textContent=''; wc.appendChild(winp);
-      setTimeout(function(){ winp.focus(); winp.select(); }, 0);
-      var wdone=false;
-      function wfinish(){
-        if(wdone) return; wdone=true;
-        var nv=parseFloat(winp.value)||0;
-        if(wtyp==='p') nv=Math.max(0,Math.min(100,nv));
-        wn.jobFields[wkey]=nv;
-        editingId=null; render();
-      }
-      winp.addEventListener('blur',wfinish);
-      winp.addEventListener('keydown',function(ev){
-        if(ev.key==='Enter'){ev.preventDefault();winp.blur();}
-        else if(ev.key==='Escape'){ev.preventDefault();wdone=true;editingId=null;render();}
-      });
-      winp.addEventListener('mousedown',function(ev){ev.stopPropagation();});
+      wipChipEdit(wc);     // shared with the sidebar metrics panel
       return;
     }
     // Click phase revenue → edit
@@ -3534,6 +3585,9 @@ function init(){
     var fp=E.spBuildingFootprint(n.budget);        // placed-only: block top-left sits here → shift to its center
     return { x:cx + fp.w/2, y:cy + fp.h/2 };
   });
+  // Site Plan rework: tell the engine when satellite Site Plan is active, so
+  // spNodeVisible hides the WIP hub (its totals live in the sidebar panel).
+  E.setSatelliteActive(function(){ return !!_spSatellite && E.viewMode && E.viewMode()==='siteplan'; });
   buildSidebar(); initEvents(); applyTx();
 
   // Close-graph button removed — the back-to-WIP nav and top-level
@@ -3622,7 +3676,11 @@ function init(){
     _spSatellite=!_spSatellite;
     try{ localStorage.setItem('ngSitePlanSatellite', _spSatellite?'1':'0'); }catch(_){}
     satBtn.classList.toggle('ng-on', _spSatellite);
+    // If the WIP node was selected, drop the selection before it gets hidden in
+    // satellite — otherwise its connected buildings keep an orphan amber highlight.
+    if(selN){ var _sn=E.findNode(selN); if(_sn && _sn.type==='wip') selN=null; }
     updateBasemapVisibility();
+    render();   // re-run renderNodes/drawWires so the wip card+wires hide/show with satellite
   });
 
   // 3D massing sub-toggle — extrude buildings into solid blocks (site-plan only).
