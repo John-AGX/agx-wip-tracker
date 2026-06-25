@@ -408,7 +408,8 @@ router.post('/geocode-selftest', requireAuth, requireCapability('LEADS_EDIT'), a
     const census = await geocodeViaCensus(address);
     res.json({
       address,
-      hasGoogleKey: !!process.env.GOOGLE_MAPS_API_KEY,
+      hasGoogleKey: !!(process.env.GEOCODING_API_KEY || process.env.GOOGLE_MAPS_API_KEY),
+      keySource: process.env.GEOCODING_API_KEY ? 'GEOCODING_API_KEY' : (process.env.GOOGLE_MAPS_API_KEY ? 'GOOGLE_MAPS_API_KEY' : 'none'),
       census: census ? { lat: census.lat, lng: census.lng } : null,
       google: (google && google.ok)
         ? { ok: true, lat: google.lat, lng: google.lng }

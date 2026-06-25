@@ -1,8 +1,10 @@
 // Address → lat/lng geocoder. Census first (free, no key, US-only), then
 // a Google Geocoding API fallback for the addresses Census can't match
 // (unit-only, PO boxes, new construction). Google is only attempted when
-// GOOGLE_MAPS_API_KEY is set AND the key is usable server-side (Geocoding
-// API enabled + no HTTP-referrer restriction blocking server IPs).
+// a server-usable key is set (GEOCODING_API_KEY preferred — a dedicated
+// server key restricted to the Geocoding API with NO HTTP-referrer
+// restriction; falls back to GOOGLE_MAPS_API_KEY, which is the browser
+// Maps key and is usually referrer-locked so it WON'T work server-side).
 //
 // Result shape: { lat, lng, matchedAddress, provider } on hit, null on miss
 // (no match from either provider, network error, malformed response).
@@ -59,7 +61,7 @@ async function geocodeViaCensus(address) {
 // Google's own ('OK','ZERO_RESULTS','REQUEST_DENIED','OVER_QUERY_LIMIT',…)
 // or a local marker ('NO_KEY','EMPTY','NETWORK','BAD_JSON','NO_LOCATION').
 async function geocodeViaGoogle(address) {
-  const key = process.env.GOOGLE_MAPS_API_KEY || null;
+  const key = process.env.GEOCODING_API_KEY || process.env.GOOGLE_MAPS_API_KEY || null;
   if (!key) return { ok: false, status: 'NO_KEY' };
   const cleaned = (address || '').trim();
   if (!cleaned) return { ok: false, status: 'EMPTY' };
