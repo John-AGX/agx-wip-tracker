@@ -2341,8 +2341,8 @@ function customToolsFor(agentKey, opts) {
       'read_attachment_text', 'view_attachment_image',
       // Memory
       'remember', 'recall', 'list_memories', 'forget',
-      // Inline (photo comments, schedule read, personal reminders read)
-      'read_photo_comments', 'add_photo_comment', 'read_schedule_blocks', 'read_reminders',
+      // Inline (photo comments, schedule read, personal reminders + calendar read)
+      'read_photo_comments', 'add_photo_comment', 'read_schedule_blocks', 'read_reminders', 'read_calendar_events',
       // Navigation
       'navigate',
       // The one write — delegated to the Scribe
@@ -2433,7 +2433,7 @@ function customToolsFor(agentKey, opts) {
       // photo comments are conversational (post-and-go); schedule +
       // reminders reads are pure lookups. Schedule WRITES still use
       // emit_payload_file with schedule.blocks ops.
-      'read_photo_comments', 'add_photo_comment', 'read_schedule_blocks', 'read_reminders',
+      'read_photo_comments', 'add_photo_comment', 'read_schedule_blocks', 'read_reminders', 'read_calendar_events',
       // ── Navigation (1) ──
       'navigate',
       // ── The ONE write — delegated to the Scribe (1) ──

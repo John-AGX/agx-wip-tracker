@@ -6739,6 +6739,21 @@ const PROJECT_INLINE_TOOLS = [
       },
     },
   },
+  {
+    name: 'read_calendar_events',
+    tier: 'auto',
+    description:
+      'Read the acting user\'s CALENDAR events / appointments (their My Day calendar) — separate from reminders and from production schedule blocks. Owner-scoped: returns ONLY this user\'s own events, never anyone else\'s. Defaults to UPCOMING events from now through the next 14 days, soonest-first; pass from_date/to_date (YYYY-MM-DD) for a specific window. starts_at is rendered in the user\'s local timezone; canceled events are excluded. Use to answer "what\'s on my calendar", "what do I have today / this week", "when\'s my next appointment", or before adding an event to avoid duplicates.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        from_date: { type: 'string', description: 'YYYY-MM-DD inclusive lower bound. Default: now.' },
+        to_date: { type: 'string', description: 'YYYY-MM-DD inclusive upper bound. Default: 14 days out.' },
+        limit: { type: 'number', description: 'Cap results. Default 50, max 200.' },
+      },
+    },
+  },
 ];
 
 // Auto-tier — same as subtask tools, no approval card. The user is
@@ -12198,10 +12213,66 @@ async function execProjectInlineTool(name, input, ctx) {
     return lines.join('\n');
   }
 
+  if (name === 'read_calendar_events') {
+    // Owner-scoped personal calendar read. SECURITY: an event surfaces ONLY
+    // to its owner (org + user from ctx), never another user. starts_at is
+    // rendered in the user's local zone. Separate from reminders + schedule blocks.
+    const orgRow = await pool.query(
+      'SELECT u.organization_id, u.timezone AS utz, o.timezone AS otz ' +
+      'FROM users u LEFT JOIN organizations o ON o.id = u.organization_id WHERE u.id = $1',
+      [userId]
+    );
+    const row = orgRow.rows[0] || {};
+    const orgId = row.organization_id;
+    if (!orgId) throw new Error('User has no organization');
+    const zone = resolveTz(row.utz, row.otz);
+
+    const where = ['e.organization_id = $1', 'e.user_id = $2', "e.status <> 'canceled'"];
+    const params = [orgId, Number(userId)];
+    let pn = 3;
+    const fromD = (input && input.from_date && !isNaN(new Date(input.from_date).getTime()))
+      ? new Date(input.from_date) : new Date();
+    where.push('e.starts_at >= $' + (pn++)); params.push(fromD.toISOString());
+    if (input && input.to_date && !isNaN(new Date(input.to_date).getTime())) {
+      const toD = new Date(input.to_date); toD.setHours(23, 59, 59, 999);
+      where.push('e.starts_at <= $' + (pn++)); params.push(toD.toISOString());
+    } else if (!(input && input.from_date)) {
+      where.push('e.starts_at <= $' + (pn++)); params.push(new Date(Date.now() + 14 * 864e5).toISOString());
+    }
+    const limit = Math.max(1, Math.min(200, Number(input && input.limit) || 50));
+    const er = await pool.query(
+      `SELECT e.id, e.title, e.starts_at, e.ends_at, e.all_day, e.location,
+              e.status, e.entity_type, e.entity_id
+         FROM calendar_events e
+        WHERE ${where.join(' AND ')}
+        ORDER BY e.starts_at ASC
+        LIMIT ${limit}`,
+      params
+    );
+    if (!er.rows.length) return 'No calendar events in that window.';
+    const fmtWhen = (d, allDay) => {
+      try {
+        return allDay
+          ? formatInTz(d, zone, { weekday: 'short', month: 'short', day: 'numeric' })
+          : formatInTz(d, zone, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+      } catch (_) { try { return new Date(d).toISOString(); } catch (__) { return String(d); } }
+    };
+    const lines = [`${er.rows.length} calendar event${er.rows.length === 1 ? '' : 's'}:`];
+    for (const x of er.rows) {
+      lines.push('- ' + wrapUserData('calendar_events.title', String(x.title || '(untitled)').slice(0, 200)) +
+        ' [id=' + x.id + '] · ' + fmtWhen(x.starts_at, x.all_day) +
+        (x.all_day ? ' · all-day' : '') +
+        (x.status && x.status !== 'confirmed' ? ' · ' + x.status : '') +
+        (x.location ? ' · ' + wrapUserData('calendar_events.location', String(x.location).slice(0, 120)) : '') +
+        (x.entity_type && x.entity_id ? ' · on ' + x.entity_type + ' ' + x.entity_id : ''));
+    }
+    return lines.join('\n');
+  }
+
   throw new Error(`Unknown project-inline tool: ${name}`);
 }
 const PROJECT_INLINE_EXECUTOR_TOOLS = new Set([
-  'read_photo_comments', 'add_photo_comment', 'read_schedule_blocks', 'read_reminders',
+  'read_photo_comments', 'add_photo_comment', 'read_schedule_blocks', 'read_reminders', 'read_calendar_events',
 ]);
 
 const ALLOWED_AUTO_TIER_TOOLS = new Set([
@@ -12210,6 +12281,7 @@ const ALLOWED_AUTO_TIER_TOOLS = new Set([
   // primitive (conversational + pure-read respectively). read_reminders
   // is the owner-scoped personal Reminders read (3-tier model).
   'read_photo_comments', 'add_photo_comment', 'read_schedule_blocks', 'read_reminders',
+  'read_calendar_events',
   // C18 — universal read surface. Replaces ~15 narrow reads via two
   // tools (read_entity + search_entities). Routed through
   // execConsolidatedRead → existing narrow handlers.
