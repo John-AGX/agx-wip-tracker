@@ -702,6 +702,7 @@
                             <div class="app-nav-children" role="group" aria-label="My Files folders"></div>
                         </div>
                         <button class="tab-btn" data-tab="projects" data-p86-icon="folder" title="Projects"><span class="app-nav-label">Projects</span></button>
+                        <button class="tab-btn" data-tab="orgmap" data-p86-icon="globe" title="Job Map — all jobs on a satellite map"><span class="app-nav-label">Job Map</span></button>
                         <!-- Platform-owner only: the Project 86 Command Center.
                              Accordion parent — expands into platform sub-views
                              (Overview / Metrics / Tenants / Audit / Anthropic /
@@ -1361,6 +1362,13 @@
                      folder still works for old links; the sidebar now comes here). -->
                 <div id="projects" class="tab-content">
                     <div id="projectsPageHost"></div>
+                </div>
+
+                <!-- Job Map (org-level "Google Earth") — every geocoded job on a
+                     satellite map; click a pin → drill into that job's Site Plan.
+                     Mounted lazily by switchTab('orgmap') via window.p86EntitiesMap. -->
+                <div id="orgmap" class="tab-content">
+                    <div id="orgMapHost" style="position:relative;height:calc(100vh - 130px);min-height:480px;"></div>
                 </div>
 
                 <!-- Project 86 Command Center — platform-owner (system_admin)
@@ -3128,7 +3136,7 @@
     <script src="js/insights.js?v=7"></script>
     <script src="js/schedule.js?v=42"></script>
     <script src="js/my-day.js?v=2"></script>
-    <script src="js/app.js?v=93"></script>
+    <script src="js/app.js?v=94"></script>
     <script src="js/compliance-review-ui.js?v=2"></script>
     <script src="js/messaging.js?v=3"></script>
     <script src="js/file-explorer.js?v=6"></script>
@@ -3162,7 +3170,7 @@
          map-pins + maps-loader + geolocation and lazy-loads Google
          MarkerClusterer from CDN for pin clustering. Loads after
          map-pins.js so window.p86MapPins is available. -->
-    <script src="js/entities-map.js?v=5"></script>
+    <script src="js/entities-map.js?v=6"></script>
     <script src="js/projects-pairs.js?v=1"></script>
     <!-- Report template registry (Wave B). Eight construction report
          templates (walkthrough, daily-log, weekly-progress, etc.)
@@ -3215,7 +3223,7 @@
     <!-- URL router — pathname-based navigation. Loads last so all
          top-level nav functions (switchTab, editJob, etc.) exist
          before the router wraps them. -->
-    <script src="js/router.js?v=15"></script>
+    <script src="js/router.js?v=16"></script>
 
     <!-- Sidebar Recents — client-side recently-opened list. Loads after
          router.js + the entity-open modules so it can wrap editJob /

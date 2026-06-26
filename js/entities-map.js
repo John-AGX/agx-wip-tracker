@@ -64,10 +64,14 @@
 
   // Open an entity through the existing app router — the same handlers
   // the standalone Leads / Jobs maps pass as onPin.
+  // Org-map drill hook: when set (by a caller passing opts.onJob), a job pin's
+  // Open action drills into that job instead of the default editJob.
+  var _onJobHook = null;
   function openEntity(kind, id) {
     if (kind === 'lead') {
       if (typeof window.openEditLeadModal === 'function') { window.openEditLeadModal(id); return; }
     } else if (kind === 'job') {
+      if (typeof _onJobHook === 'function') { _onJobHook(id); return; }
       if (typeof window.editJob === 'function') { window.editJob(id); return; }
     }
     // Last resort — no-op rather than throwing.
@@ -235,7 +239,7 @@
     ]).then(function (results) {
       var maps = results[0];
       var data = results[1] || {};
-      mount(maps, host, normalizeData(data));
+      mount(maps, host, normalizeData(data), opts);
     }).catch(function (err) {
       host.innerHTML = emptyHTML('Map unavailable: ' + (err && err.message || 'unknown error'));
     });
@@ -293,7 +297,9 @@
     return order.map(function (k) { return byKey[k]; });
   }
 
-  function mount(maps, host, data) {
+  function mount(maps, host, data, opts) {
+    opts = opts || {};
+    _onJobHook = (typeof opts.onJob === 'function') ? opts.onJob : null; // org-map: pin → drill into Site Plan
     var allItems = data.leads.concat(data.jobs);
     var total = allItems.length;
 
@@ -325,11 +331,12 @@
     var map = new maps.Map(canvas, {
       center: { lat: allItems[0].lat, lng: allItems[0].lng },
       zoom: 11,
-      mapTypeControl: false,
+      mapTypeControl: !!opts.satellite,          // org map: let the user flip satellite/hybrid/road
       streetViewControl: false,
       fullscreenControl: true,
       gestureHandling: 'greedy',
-      mapTypeId: maps.MapTypeId.ROADMAP
+      // org map → Google-Earth-style hybrid (imagery + labels); other mounts stay roadmap
+      mapTypeId: opts.satellite ? maps.MapTypeId.HYBRID : maps.MapTypeId.ROADMAP
     });
 
     var infoWindow = new maps.InfoWindow();

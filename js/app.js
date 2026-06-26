@@ -1759,6 +1759,7 @@
             insights:   'Insights',
             admin:      'Admin',
             projects:   'Projects',
+            orgmap:     'Job Map',
             jobshub:    'Jobs',
             console:    'Command Center'
         };
@@ -1769,6 +1770,29 @@
         // instead of being dumped back into whatever they were looking
         // at last week. Activity = any switchTab/saveNavState call.
         var STALE_NAV_MS = 60 * 60 * 1000; // 1 hour
+
+        // Job Map drill-in: open a job's node-graph Site Plan in satellite mode.
+        // openNodeGraph only RESTORES the (global) view-mode + satellite localStorage
+        // keys — it doesn't force them — so after the overlay is sized + its toolbar
+        // buttons are wired, we click Site Plan / Satellite ON if not already on (read
+        // via the button's .ng-on class, since _spSatellite is module-private). The
+        // node graph's own Back button (closeNodeGraph) then reveals this Map tab.
+        window.openJobSitePlan = function (jobId) {
+            if (!jobId || typeof window.openNodeGraph !== 'function') return;
+            window.openNodeGraph(jobId);
+            var tries = 0;
+            (function force() {
+                var tab = document.getElementById('nodeGraphTab');
+                var spBtn = document.getElementById('ngSitePlanBtn');
+                var satBtn = document.getElementById('ngSatelliteBtn');
+                if ((!tab || tab.offsetWidth <= 0 || !spBtn || !satBtn) && tries++ < 40) {
+                    return void setTimeout(force, 60); // wait for overlay sizing + init() to wire the buttons
+                }
+                if (!tab || !spBtn || !satBtn) return;
+                if (!spBtn.classList.contains('ng-on')) spBtn.click();          // enter Site Plan if not already
+                setTimeout(function () { if (satBtn && !satBtn.classList.contains('ng-on')) satBtn.click(); }, 90); // then Satellite
+            })();
+        };
 
         function switchTab(tabName) {
             document.querySelectorAll('.tab-content').forEach(tc => tc.classList.remove('active'));
@@ -1876,6 +1900,12 @@
                     window.renderProjectsInto(projHost);
                 } else if (projHost) {
                     projHost.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);">Projects module not loaded.</div>';
+                }
+            } else if (tabName === 'orgmap') {
+                // Job Map (org "Google Earth") — every geocoded job on satellite;
+                // a pin's Open drills into that job's Site Plan via openJobSitePlan.
+                if (window.p86EntitiesMap && typeof window.p86EntitiesMap.render === 'function') {
+                    window.p86EntitiesMap.render('orgMapHost', { satellite: true, onJob: window.openJobSitePlan });
                 }
             } else if (tabName === 'console') {
                 // Project 86 Command Center — platform-owner surface.
