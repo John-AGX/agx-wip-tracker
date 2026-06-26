@@ -2004,9 +2004,13 @@ function addCostToBuilding(bId, clientX, clientY){
       if(!nn) return;
       var toPort=E.firstCompatPort(E.DEFS[b.type], nn.type, 'in');
       E.wires().push({ fromNode:nn.id, fromPort:0, toNode:b.id, toPort:toPort||0 });
-      delete _fannedSet[bId];                                   // re-fan to include the new cost
-      if(_spFocus===bId){ applySpFocus(); fanFocusNodes(bId); } // already drilled in → place it now
-      selN=nn.id; if(E.saveGraph) E.saveGraph(); render();
+      delete _fannedSet[bId];
+      // Cost nodes are only visible when drilled into the building, so drill in (if
+      // not already) — otherwise the node you just added stays invisible on the
+      // whole-site view. applySpFocus reveals the subgraph; fan + fit show it.
+      if(_spFocus!==bId){ _spFocus=bId; applySpFocus(); }
+      fanFocusNodes(bId);
+      selN=nn.id; if(E.saveGraph) E.saveGraph(); render(); fitSiteplan();
     }
     if(PICKABLE_TYPES[type] && E.job()){
       showDataPicker(type, function(entry, focused){
