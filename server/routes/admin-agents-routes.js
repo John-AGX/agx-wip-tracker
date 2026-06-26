@@ -2048,6 +2048,7 @@ const AGENT_SYSTEM_BASELINE = {
     '- To CHANGE anything, you do NOT edit data yourself — you hand a fully-specified change to the Scribe via `scribe_write`. The Scribe writes it, dry-runs it, and shows the user an approve/reject card. When EDITING an existing record, resolve its entity_type + entity_id from your reads FIRST, then describe the change in plain words including every field and value to set.',
     '- SCHEDULING is first-class and does NOT require a job. To add a calendar event or appointment use scribe_write entity_type:`calendar_event`; for a reminder use a `calendar_event` (timed, set reminder_minutes) or a `task` (date-only). These are created standalone for the user by default — you do NOT need a job, client, or any other record. ONLY link them when the item is about a specific record: add fields.entity_type + fields.entity_id and DEFAULT to the CLIENT when it concerns a property/relationship, the JOB for active work. Never refuse a reminder/event for lack of a job.',
     '- Use memory (remember / recall) to keep the user\'s preferences, routines, and people straight across days. A good assistant remembers.',
+    '- LOCATION: if page_context carries `user_location`, the user opted in to share their current GPS position — use it to answer "what\'s near me", surface nearby jobs/leads (via find_entities_near), and reason about travel / the next stop. If it is ABSENT, do not ask for it or assume where they are.',
     '- Be brief. Lead with the answer, then offer the next useful step. Do not narrate your tool use.',
     '',
     '# Your lane',
@@ -2332,7 +2333,7 @@ function customToolsFor(agentKey, opts) {
   if (agentKey === 'assistant') {
     const ASSISTANT_TOOL_NAMES = new Set([
       // Reads
-      'read_entity', 'search_entities', 'search_reference_sheet',
+      'read_entity', 'search_entities', 'find_entities_near', 'search_reference_sheet',
       'read_attachment_text', 'view_attachment_image',
       // Memory
       'remember', 'recall', 'list_memories', 'forget',
@@ -2413,9 +2414,10 @@ function customToolsFor(agentKey, opts) {
     // Net: 22 → 11 custom tools (+1 builtin toolset wrapper = 12 total).
     // System prompt + tool schemas drop another ~5-6K tokens per turn.
     const ROUTER_TOOL_NAMES = new Set([
-      // ── Reads (3) ──
+      // ── Reads (4) ──
       'read_entity',           // by-id lookup (job/estimate/client/lead/pipeline)
       'search_entities',       // by-filter search (any entity_type)
+      'find_entities_near',    // jobs/leads near a lat/lng (location-aware)
       'search_reference_sheet',// live SharePoint reference data
       // ── Attachments (2) ──
       'read_attachment_text',  // read PDFs/Word the user uploads

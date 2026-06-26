@@ -545,6 +545,37 @@
     el.style.display = 'inline-flex';
   }
 
+  // ── Location share (opt-in via the browser's own geolocation grant) ─
+  // When the browser already grants location (status 'granted' — e.g. from
+  // the weather prompt), attach the user's coords to each chat turn so the
+  // Assistant/86 can do "near me" / "next stop" reasoning. AUTO when
+  // allowed — we NEVER prompt from the chat path. Coords ride only in the
+  // POST body's current_context (the server drops them from chat history)
+  // and we keep the last-known fix so a send never blocks on GPS.
+  var _lastUserLoc = null;
+  function refreshUserLoc() {
+    try {
+      if (!window.p86Geo || typeof window.p86Geo.status !== 'function') return;
+      if (window.p86Geo.status() !== 'granted') { _lastUserLoc = null; updateLocIndicator(); return; }
+      window.p86Geo.get(120000).then(function (fix) {
+        if (fix && isFinite(fix.lat) && isFinite(fix.lng)) {
+          _lastUserLoc = {
+            lat: Math.round(fix.lat * 1e5) / 1e5,   // ~1m precision
+            lng: Math.round(fix.lng * 1e5) / 1e5,
+            accuracy: (fix.accuracy != null) ? Math.round(fix.accuracy) : undefined
+          };
+          updateLocIndicator();
+        }
+      }).catch(function () {});
+    } catch (e) { /* never block chat on geo */ }
+  }
+  function updateLocIndicator() {
+    var el = document.getElementById('ai-loc-indicator');
+    if (el) el.style.display = _lastUserLoc ? 'inline-flex' : 'none';
+  }
+  // Prime once after the silent Permissions probe settles.
+  try { setTimeout(refreshUserLoc, 1500); } catch (e) {}
+
   // ── Notice strip (intro) — short by default, dismissible+remembered ─
   var INTRO_DISMISS_KEY = 'p86-ai-intro-dismissed';
   function introDismissed() {
@@ -1109,6 +1140,10 @@
             '<button id="ai-attach" type="button" title="Attach file (image or PDF)" aria-label="Attach file" class="ai-tool-btn" style="font-size:18px;">' + (typeof p86Icon === 'function' ? p86Icon('composer-attach') : '&#x002B;') + '</button>' +
             '<button id="ai-camera" type="button" title="Take a photo" aria-label="Take a photo" class="ai-tool-btn" style="font-size:18px;">' + (typeof p86Icon === 'function' ? p86Icon('composer-camera') : '&#x1F4F7;') + '</button>' +
             '<button id="ai-mic" type="button" title="Dictate (voice → text)" aria-label="Dictate" class="ai-tool-btn" style="font-size:18px;">' + (typeof p86Icon === 'function' ? p86Icon('composer-mic') : '&#x1F3A4;') + '</button>' +
+            // Opt-in location indicator — shown when we're sharing the
+            // user's current position with the Assistant (auto when the
+            // browser already grants it). Non-interactive; transparency only.
+            '<span id="ai-loc-indicator" title="Sharing your location with the Assistant" aria-label="Sharing your location" style="display:none;align-items:center;font-size:14px;color:#34d399;padding:0 4px;" tabindex="-1">&#x1F4CD;</span>' +
             '<input id="ai-file-input" type="file" accept="image/*,application/pdf,.xlsx,.xls,.xlsm,.csv,.tsv,.docx,.doc,.txt,.md,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword,text/plain" multiple style="display:none;" />' +
             '<input id="ai-camera-input" type="file" accept="image/*" capture="environment" style="display:none;" />' +
             '<div style="flex:1;"></div>' +
@@ -2829,6 +2864,11 @@
         // prompt shaping AND the tool gate (write tools off in plan).
         pageCtx.aiPhase = getJobAIPhase(_entityId);
       }
+      // Opt-in location: attach the last-known fix (auto when the browser
+      // already grants geolocation) so 86/Assistant can do "near me". Also
+      // kicks a background refresh for the next turn. Never blocks send.
+      refreshUserLoc();
+      if (_lastUserLoc) pageCtx.user_location = _lastUserLoc;
       body.current_context = pageCtx;
     }
     // Combine one-shot images: pre-existing handoff (PDF viewer) + composer.

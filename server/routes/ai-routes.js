@@ -7008,6 +7008,26 @@ const READ_TOOLS = [
       },
     },
   },
+  {
+    name: 'find_entities_near',
+    description:
+      'Find jobs and/or leads NEAR a point, sorted closest-first with distances in miles. ' +
+      'Use for "what jobs are near me", "leads nearby", "what\'s my next stop from here". ' +
+      'Pass the user\'s coordinates from page_context user_location when present, or geocode an address the user named and pass those coords. ' +
+      'Returns entity_type, id, title, status, distance_miles, address. Org-scoped + capability-gated to what the user may view.',
+    tier: 'auto',
+    input_schema: {
+      type: 'object',
+      required: ['lat', 'lng'],
+      properties: {
+        lat: { type: 'number', description: 'Latitude of the search center (e.g. user_location.lat from page_context).' },
+        lng: { type: 'number', description: 'Longitude of the search center.' },
+        radius_miles: { type: 'number', description: 'Search radius in miles. Default 25, max 100.' },
+        entity_types: { type: 'array', items: { type: 'string', enum: ['job', 'lead'] }, description: 'Which to search. Default ["job","lead"].' },
+        limit: { type: 'integer', minimum: 1, maximum: 50, description: 'Max results, closest first. Default 10.' },
+      },
+    },
+  },
 ];
 
 // Wave 3 — workflow + compliance read tools. Auto-tier so 86 can
@@ -7386,6 +7406,18 @@ async function dispatchReadTool(name, input, ctx) {
     'their question (different tool, or ask them to navigate to the relevant page).';
 }
 
+// Great-circle distance in miles between two lat/lng points (no PostGIS).
+// Used by find_entities_near to rank jobs/leads by proximity to the user.
+function haversineMiles(aLat, aLng, bLat, bLng) {
+  const R = 3958.8; // Earth radius, miles
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(bLat - aLat);
+  const dLng = toRad(bLng - aLng);
+  const s = Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(aLat)) * Math.cos(toRad(bLat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(s)));
+}
+
 async function execConsolidatedRead(name, input, ctx) {
   const inp = input || {};
 
@@ -7433,6 +7465,68 @@ async function execConsolidatedRead(name, input, ctx) {
       }
     }
   } catch (_) { /* observation, not load-bearing */ }
+
+  if (name === 'find_entities_near') {
+    const lat = Number(inp.lat), lng = Number(inp.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng) || (lat === 0 && lng === 0) ||
+        lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+      return 'find_entities_near: a valid lat/lng is required. If the user shared their location it is in page_context as user_location; otherwise geocode an address they named and pass those coords.';
+    }
+    let radius = Number(inp.radius_miles); if (!Number.isFinite(radius) || radius <= 0) radius = 25; if (radius > 100) radius = 100;
+    let limit = Number(inp.limit); if (!Number.isFinite(limit) || limit <= 0) limit = 10; if (limit > 50) limit = 50;
+    let types = (Array.isArray(inp.entity_types) && inp.entity_types.length)
+      ? inp.entity_types.map((s) => String(s).toLowerCase()).filter((t) => t === 'job' || t === 'lead')
+      : ['job', 'lead'];
+    if (!types.length) types = ['job', 'lead'];
+    let orgId = ctx && ctx.orgId;
+    if (!orgId && ctx && ctx.userId) {
+      try { const r = await pool.query('SELECT organization_id FROM users WHERE id = $1', [ctx.userId]); orgId = r.rows[0] && r.rows[0].organization_id; } catch (_) {}
+    }
+    if (!orgId) return 'find_entities_near: could not resolve your organization.';
+    const hits = [];
+    if (types.includes('job')) {
+      const jr = await pool.query(
+        `SELECT j.id, j.data, j.geocode_address, j.geocode_lat, j.geocode_lng
+           FROM jobs j
+          WHERE (j.organization_id = $1 OR j.organization_id IS NULL)
+            AND j.geocode_lat IS NOT NULL AND j.geocode_lng IS NOT NULL`, [orgId]);
+      for (const r of jr.rows) {
+        const a = Number(r.geocode_lat), o = Number(r.geocode_lng);
+        if (!Number.isFinite(a) || !Number.isFinite(o) || (a === 0 && o === 0)) continue;
+        const d = haversineMiles(lat, lng, a, o);
+        if (d > radius) continue;
+        const data = r.data || {};
+        const num = data.jobNumber || data.job_number || '';
+        const nm = data.title || data.name || 'Untitled job';
+        hits.push({ et: 'job', id: r.id, title: num ? (num + ' — ' + nm) : nm,
+          status: (typeof data.status === 'string' ? data.status : ''),
+          d: Math.round(d * 10) / 10,
+          address: (r.geocode_address && String(r.geocode_address).trim()) || (data.address && String(data.address).trim()) || '' });
+      }
+    }
+    if (types.includes('lead')) {
+      const lr = await pool.query(
+        `SELECT l.id, l.title, l.status, l.street_address, l.city, l.state, l.zip, l.geocode_lat, l.geocode_lng
+           FROM leads l
+          WHERE (l.organization_id = $1 OR l.organization_id IS NULL)
+            AND l.geocode_lat IS NOT NULL AND l.geocode_lng IS NOT NULL`, [orgId]);
+      for (const r of lr.rows) {
+        const a = Number(r.geocode_lat), o = Number(r.geocode_lng);
+        if (!Number.isFinite(a) || !Number.isFinite(o) || (a === 0 && o === 0)) continue;
+        const d = haversineMiles(lat, lng, a, o);
+        if (d > radius) continue;
+        hits.push({ et: 'lead', id: r.id, title: r.title || 'Untitled lead', status: r.status || '',
+          d: Math.round(d * 10) / 10,
+          address: [r.street_address, [r.city, r.state, r.zip].filter(Boolean).join(', ')].filter(Boolean).join(', ') });
+      }
+    }
+    hits.sort((x, y) => x.d - y.d);
+    const top = hits.slice(0, limit);
+    if (!top.length) return 'No ' + types.join('/') + ' found within ' + radius + ' miles of that location.';
+    return 'Nearest ' + types.join(' + ') + ' within ' + radius + ' mi (closest first):\n' +
+      top.map((e) => '- [' + e.et + '] ' + e.title + (e.status ? (' (' + e.status + ')') : '') +
+        ' — ' + e.d + ' mi' + (e.address ? (' · ' + e.address) : '') + ' (id: ' + e.id + ')').join('\n');
+  }
 
   if (name === 'search_entities') {
     const et = String(inp.entity_type || '').toLowerCase();
@@ -7660,7 +7754,7 @@ async function execStaffTool(name, input, ctx) {
   // search_entities) instead of ~15 narrow ones. These dispatchers
   // route to the existing case-handlers internally — no new SQL,
   // no behavior change, just a tighter tool surface for the model.
-  if (name === 'read_entity' || name === 'search_entities') {
+  if (name === 'read_entity' || name === 'search_entities' || name === 'find_entities_near') {
     return execConsolidatedRead(name, input, ctx);
   }
 
@@ -10902,6 +10996,8 @@ const AI_TOOL_CAPABILITY = new Map([
   ['read_conversation_detail',  'INSIGHTS_VIEW'],
   // read_users intentionally UNGATED — it's the assignment-picker
   // directory (org-scoped in the handler, no PII beyond name/email/role).
+  // "Near me" — surfaces nearby job/lead locations; ANY-of jobs-or-leads view.
+  ['find_entities_near', ['JOBS_VIEW_ALL', 'LEADS_VIEW']],
 ]);
 
 // Effective capability for the consolidated read front door, derived
@@ -12495,6 +12591,22 @@ function renderPageContextBlock(ctx) {
   if (ctx.entity_label)   lines.push('entity_label: ' + String(ctx.entity_label));
   if (ctx.url)            lines.push('url: ' + String(ctx.url));
   if (ctx.open_data_summary) lines.push('open_data_summary:\n  ' + String(ctx.open_data_summary).split('\n').join('\n  '));
+  // Opt-in user location (auto when the browser grants it). Re-validate
+  // server-side — never trust the client; drop silently if out of range or
+  // Null Island (0,0). Lives only in this transient turn block; the user
+  // message persisted to ai_messages is the raw text, never this wrapper.
+  if (ctx.user_location && typeof ctx.user_location === 'object') {
+    const ulat = Number(ctx.user_location.lat);
+    const ulng = Number(ctx.user_location.lng);
+    if (Number.isFinite(ulat) && Number.isFinite(ulng) &&
+        ulat >= -90 && ulat <= 90 && ulng >= -180 && ulng <= 180 &&
+        !(ulat === 0 && ulng === 0)) {
+      const uacc = Number(ctx.user_location.accuracy);
+      lines.push('user_location: lat=' + ulat + ', lng=' + ulng +
+        (Number.isFinite(uacc) ? ', accuracy_m=' + Math.round(uacc) : '') +
+        ' (the signed-in user opted in to share their current position; use for "near me"/travel, do not echo raw coords)');
+    }
+  }
   lines.push('</page_context>');
   return lines.join('\n');
 }
