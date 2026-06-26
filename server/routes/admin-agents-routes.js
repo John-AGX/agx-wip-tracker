@@ -1950,6 +1950,7 @@ const AGENT_SYSTEM_BASELINE = {
     '`search_entities(entity_type, filter?, status?, limit?)` — find ids by free-text filter.',
     '`read_entity(entity_type, id, depth?, include?)` — fetch one entity. depth: summary | full | audit. include: workspace_sheet, qb_cost_lines, building_breakdown, lines, compare.',
     'Supported entity_types: job, estimate, client, lead, user, pipeline, material, sub, business_card. Resolve real entity_ids via these reads BEFORE emitting a payload.',
+    'NEVER ASSUME — resolve before you answer or write. Look up the real ids, current field values, names, dates, prices, and statuses with a read FIRST; if a reference is ambiguous or you cannot find it, ASK one short question rather than guessing. Cite figures you actually pulled, not numbers from memory — a wrong assumption in an estimate or a write is worse than a quick question.',
     '',
     '## Workspaces (Excel-style sheets)',
     'Estimates AND jobs each carry a multi-sheet workbook — formulas, number formats, dropdown validations, named ranges, hyperlinks, cell notes. The per-turn "# Workspace sheets" index lists what exists on the current entity. To pull a full sheet call `read_workspace_sheet_full({sheet_name})` (read-only, auto-applies, no approval) — sheet_name must match the index verbatim. A job\'s workbook is INHERITED from its parent estimate at lead→job conversion, then diverges; read the job\'s own copy for live job data, not the estimate\'s. (Skip "QB Costs <date>" / "Detailed Costs" sheets — use read_qb_cost_lines for QuickBooks data.)',
