@@ -1440,32 +1440,46 @@ function exitTrace(){
 function finishTrace(){
   var pts=_tracePts.slice(), id=_traceId;
   exitTrace();
-  if(id && pts.length>=3 && E.setNodePolygon){
-    E.setNodePolygon(id, pts);
-    // Anchor the building (block + label) at the footprint centroid so it sits on
-    // the polygon even if it wasn't placed first.
-    var clat=0, clng=0; pts.forEach(function(v){ clat+=v.lat; clng+=v.lng; }); clat/=pts.length; clng/=pts.length;
-    if(E.setNodeGeo) E.setNodeGeo(id, clat, clng);
-    if(E.saveGraph) E.saveGraph();
-    showSatHint(false);
-    render();
-  } else {
+  if(pts.length<3 || !E.setNodePolygon){
     showSatHint(true, 'Need at least 3 corners — Trace again.');
     renderPolygons();
+    return;
   }
+  // Footprint centroid → the building's geo anchor (block/label/wires sit on it).
+  var clat=0, clng=0; pts.forEach(function(v){ clat+=v.lat; clng+=v.lng; }); clat/=pts.length; clng/=pts.length;
+  if(!id){
+    // Trace-to-create: the drawn footprint IS a new building node, auto-wired to WIP.
+    var or=_geoOriginNow(), gx=0, gy=0;
+    if(or && or.o && or.og){ var g=E.spLatLngToGraph(clat, clng, or.o.lat, or.o.lng); gx=or.og.x+g.x; gy=or.og.y+g.y; }
+    var cnt=E.nodes().filter(function(x){ return x.type==='t1'; }).length;
+    var nn=E.addNode('t1', Math.round(gx), Math.round(gy), 'B'+(cnt+1));
+    if(!nn){ showSatHint(true, 'Could not create the building — try again.'); renderPolygons(); return; }
+    id=nn.id;
+    var wip=E.nodes().find(function(x){ return x.type==='wip'; });
+    if(wip) E.wires().push({ fromNode:nn.id, fromPort:0, toNode:wip.id, toPort:0 }); // auto-connect to the WIP hub
+    selN=nn.id;
+  }
+  E.setNodePolygon(id, pts);
+  if(E.setNodeGeo) E.setNodeGeo(id, clat, clng);
+  if(E.saveGraph) E.saveGraph();
+  showSatHint(false);
+  render();
 }
 function toggleTraceMode(){
   if(!_spSatellite) return;
   if(_tracing){ exitTrace(); showSatHint(false); renderPolygons(); return; }
   if(_geoPick) exitGeoPick();                                   // don't run both picker modes at once
+  // A selected building → re-trace its footprint; otherwise draw a NEW building.
   var sel=selN && E.findNode(selN);
-  if(!sel || sel.type!=='t1'){ showSatHint(true, 'Select a building first, then Trace and click its corners on the map.'); return; }
+  var existing=(sel && sel.type==='t1') ? sel : null;
   _spOrigin=_spOrigin||jobOrigin(); _spOriginGraph=_spOriginGraph||siteplanCentroid();
   if(!_spOrigin){ showSatHint(true); return; }
-  _tracing=true; _traceId=sel.id; _tracePts=[];
+  _tracing=true; _traceId=existing?existing.id:null; _tracePts=[];
   var tb=document.getElementById('ngTraceBtn'); if(tb) tb.classList.add('ng-on');
   ensureTraceOverlay().style.display='block';
-  showSatHint(true, 'Click the corners of “'+(sel.label||'building')+'”; double-click to finish.');
+  showSatHint(true, existing
+    ? ('Re-trace “'+(existing.label||'building')+'” — click each corner, double-click to finish.')
+    : 'Draw the new building — click each corner of its roof, double-click to finish.');
 }
 
 // ── Photo-GPS pins (Slice 4) ───────────────────────────────────────────
