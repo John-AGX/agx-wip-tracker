@@ -701,12 +701,12 @@ body.light-mode .ng-topbar.ng-ribbon .ng-ribbon-btn:hover{
    the map; the dark halo (paint-order:stroke) keeps it legible over imagery. */
 .ng-poly-label{fill:#fff;font:700 7px sans-serif;text-anchor:middle;dominant-baseline:middle;pointer-events:none;paint-order:stroke;stroke:#0b1020;stroke-width:2;stroke-linejoin:round}
 .ng-poly-kpi{fill:#bcd6ff;font:600 5.5px sans-serif;text-anchor:middle;dominant-baseline:middle;pointer-events:none;paint-order:stroke;stroke:#0b1020;stroke-width:1.6;stroke-linejoin:round}
-/* A traced building is represented by its polygon, so its card becomes an invisible,
-   click-through shell (kept in DOM for data-id lookups; wires anchor via the geo hook,
-   not its ports, so hiding its chrome is safe). */
-.ng-node.ng-has-poly{background:transparent!important;border-color:transparent!important;box-shadow:none!important}
-.ng-node.ng-has-poly>*{display:none!important}
-.ng-node.ng-has-poly::before,.ng-node.ng-has-poly::after{display:none!important}
+/* A traced building IS its polygon — the old massing-block card is hidden entirely
+   (the polygon owns the visual, label, selection + drill-in via the polygon layer).
+   Selector out-specifies .ng-sp-building (1,0,5,0) so its !important roof gradient
+   can't win. Card stays in the DOM (display:none) so data-id lookups still resolve;
+   wires anchor via the geo hook, not its ports. */
+#nodeGraphTab.ng-siteplan.ng-sat .ng-node.ng-tt-t1.ng-sp-building.ng-has-poly{display:none !important}
 /* Site Plan rework: WIP metrics live in the sidebar in satellite mode (the WIP node
    leaves the canvas). Panel + the WIP node-library category are satellite-scoped. */
 .ng-sp-metrics{display:none;padding:10px 10px 6px;border-bottom:1px solid var(--ng-border)}
