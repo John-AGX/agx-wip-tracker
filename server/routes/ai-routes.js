@@ -6754,6 +6754,37 @@ const PROJECT_INLINE_TOOLS = [
       },
     },
   },
+  {
+    name: 'read_projects',
+    tier: 'auto',
+    description:
+      'List/search PROJECTS — the org\'s project workspaces (photo feeds, reports, before/after, each linked to a job/lead/client). Org-scoped; archived projects excluded. Pass `filter` to match the project name OR address, `status` to scope. Returns id, name, status, address, and any linked job/lead/client. Use for "what projects do we have", "find the <name> project", "projects in <city>".',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        filter: { type: 'string', description: 'Case-insensitive substring on project name or address.' },
+        status: { type: 'string', description: 'Optional status filter (e.g. active).' },
+        limit: { type: 'number', description: 'Cap results. Default 20, max 100.' },
+      },
+    },
+  },
+  {
+    name: 'read_purchase_orders',
+    tier: 'auto',
+    description:
+      'List/read PURCHASE ORDERS (job POs — sub scope-of-work contracts). READ-ONLY. Org-scoped. Pass `job_id` to restrict to one job, `status` to scope (draft|approved|...), or `filter` to match the PO number. Returns id, po_number, status, the job, the sub/vendor, amount (if set), and approval state. Use for "what POs are on job X", "show open purchase orders".',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        job_id: { type: 'string', description: 'Optional — restrict to one job.' },
+        status: { type: 'string', description: 'Optional status filter (draft | approved | ...).' },
+        filter: { type: 'string', description: 'Case-insensitive substring on po_number.' },
+        limit: { type: 'number', description: 'Cap results. Default 20, max 100.' },
+      },
+    },
+  },
 ];
 
 // Auto-tier — same as subtask tools, no approval card. The user is
@@ -11018,6 +11049,9 @@ const AI_TOOL_CAPABILITY = new Map([
   // directory (org-scoped in the handler, no PII beyond name/email/role).
   // "Near me" — surfaces nearby job/lead locations; ANY-of jobs-or-leads view.
   ['find_entities_near', ['JOBS_VIEW_ALL', 'LEADS_VIEW']],
+  // Projects + POs reads — org-domain work; gate to job viewers.
+  ['read_projects', 'JOBS_VIEW_ALL'],
+  ['read_purchase_orders', 'JOBS_VIEW_ALL'],
 ]);
 
 // Effective capability for the consolidated read front door, derived
@@ -12269,10 +12303,83 @@ async function execProjectInlineTool(name, input, ctx) {
     return lines.join('\n');
   }
 
+  if (name === 'read_projects') {
+    const orgRow = await pool.query('SELECT organization_id FROM users WHERE id = $1', [userId]);
+    const orgId = orgRow.rows[0] && orgRow.rows[0].organization_id;
+    if (!orgId) throw new Error('User has no organization');
+    const where = ['p.organization_id = $1', 'p.archived_at IS NULL'];
+    const params = [orgId];
+    let pn = 2;
+    const q = (input && (input.filter || input.q) || '').trim();
+    if (q) { where.push('(p.name ILIKE $' + pn + ' OR p.address_text ILIKE $' + pn + ')'); params.push('%' + q + '%'); pn++; }
+    if (input && input.status) { where.push('p.status = $' + (pn++)); params.push(input.status); }
+    const limit = Math.max(1, Math.min(100, Number(input && input.limit) || 20));
+    const pr = await pool.query(
+      `SELECT p.id, p.name, p.status, p.address_text, p.job_id, p.lead_id, p.client_id, c.name AS client_name
+         FROM projects p
+         LEFT JOIN clients c ON c.id = p.client_id
+        WHERE ${where.join(' AND ')}
+        ORDER BY p.updated_at DESC
+        LIMIT ${limit}`,
+      params
+    );
+    if (!pr.rows.length) return q ? 'No projects matched "' + q + '".' : 'No projects.';
+    const lines = [`${pr.rows.length} project${pr.rows.length === 1 ? '' : 's'}:`];
+    for (const x of pr.rows) {
+      lines.push('- ' + wrapUserData('projects.name', String(x.name || '(unnamed)').slice(0, 160)) +
+        ' [id=' + x.id + '] · ' + (x.status || 'active') +
+        (x.address_text ? ' · ' + wrapUserData('projects.address', String(x.address_text).slice(0, 120)) : '') +
+        (x.client_name ? ' · client: ' + x.client_name : '') +
+        (x.job_id ? ' · job ' + x.job_id : '') +
+        (x.lead_id ? ' · lead ' + x.lead_id : ''));
+    }
+    return lines.join('\n');
+  }
+
+  if (name === 'read_purchase_orders') {
+    const orgRow = await pool.query('SELECT organization_id FROM users WHERE id = $1', [userId]);
+    const orgId = orgRow.rows[0] && orgRow.rows[0].organization_id;
+    if (!orgId) throw new Error('User has no organization');
+    const where = ['(po.organization_id = $1 OR po.organization_id IS NULL)'];
+    const params = [orgId];
+    let pn = 2;
+    if (input && input.job_id) { where.push('po.job_id = $' + (pn++)); params.push(String(input.job_id)); }
+    if (input && input.status) { where.push('po.status = $' + (pn++)); params.push(input.status); }
+    const q = (input && (input.filter || input.q) || '').trim();
+    if (q) { where.push('po.po_number ILIKE $' + (pn++)); params.push('%' + q + '%'); }
+    const limit = Math.max(1, Math.min(100, Number(input && input.limit) || 20));
+    const por = await pool.query(
+      `SELECT po.id, po.po_number, po.status, po.job_id, po.sub_id, po.data, po.approved_at
+         FROM job_purchase_orders po
+        WHERE ${where.join(' AND ')}
+        ORDER BY po.created_at DESC
+        LIMIT ${limit}`,
+      params
+    );
+    if (!por.rows.length) return 'No purchase orders found.';
+    const amtOf = (d) => {
+      if (!d || typeof d !== 'object') return null;
+      const v = d.total != null ? d.total : (d.amount != null ? d.amount : (d.grand_total != null ? d.grand_total : d.totalAmount));
+      const n = Number(v);
+      return Number.isFinite(n) && n ? '$' + Math.round(n).toLocaleString() : null;
+    };
+    const lines = [`${por.rows.length} purchase order${por.rows.length === 1 ? '' : 's'}:`];
+    for (const x of por.rows) {
+      const amt = amtOf(x.data);
+      lines.push('- PO ' + (x.po_number || x.id) + ' [id=' + x.id + '] · ' + (x.status || 'draft') +
+        (x.sub_id ? ' · sub ' + x.sub_id : '') +
+        (amt ? ' · ' + amt : '') +
+        (x.job_id ? ' · job ' + x.job_id : '') +
+        (x.approved_at ? ' · approved' : ''));
+    }
+    return lines.join('\n');
+  }
+
   throw new Error(`Unknown project-inline tool: ${name}`);
 }
 const PROJECT_INLINE_EXECUTOR_TOOLS = new Set([
   'read_photo_comments', 'add_photo_comment', 'read_schedule_blocks', 'read_reminders', 'read_calendar_events',
+  'read_projects', 'read_purchase_orders',
 ]);
 
 const ALLOWED_AUTO_TIER_TOOLS = new Set([
@@ -12281,7 +12388,7 @@ const ALLOWED_AUTO_TIER_TOOLS = new Set([
   // primitive (conversational + pure-read respectively). read_reminders
   // is the owner-scoped personal Reminders read (3-tier model).
   'read_photo_comments', 'add_photo_comment', 'read_schedule_blocks', 'read_reminders',
-  'read_calendar_events',
+  'read_calendar_events', 'read_projects', 'read_purchase_orders',
   // C18 — universal read surface. Replaces ~15 narrow reads via two
   // tools (read_entity + search_entities). Routed through
   // execConsolidatedRead → existing narrow handlers.
