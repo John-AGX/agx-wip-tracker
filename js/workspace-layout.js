@@ -64,7 +64,7 @@
     var link = document.createElement('link');
     link.id = 'ws-layout-v2-css';
     link.rel = 'stylesheet';
-    link.href = 'css/workspace-layout.css?v=60';
+    link.href = 'css/workspace-layout.css?v=61';
     document.head.appendChild(link);
   }
 
@@ -1151,8 +1151,8 @@
       height: parseFloat(panel.style.height) || 480
     };
     panel.classList.add('ws-floating-folder');
-    panel.style.width = '320px';
-    panel.style.height = '240px';
+    panel.style.width = '';            // a compact icon chip now — size to its header
+    panel.style.height = '';
     // Restore the user's last minimized position if we have one;
     // otherwise leave the panel where it is so the minimized icon
     // appears near where the expanded panel was.
@@ -1283,7 +1283,10 @@
       return;
     }
     if (panel.contains(e.target)) {
-      restoreFromMinimized();
+      // Clicking the corner icon opens the FULL-SCREEN workspace (toggleFullscreen
+      // un-minimizes first, and re-minimizes back to the icon when toggled off).
+      if (typeof toggleFullscreenWorkspace === 'function') toggleFullscreenWorkspace();
+      else restoreFromMinimized();
     }
   });
 
