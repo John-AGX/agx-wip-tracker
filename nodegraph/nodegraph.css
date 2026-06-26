@@ -712,9 +712,9 @@ body.light-mode .ng-topbar.ng-ribbon .ng-ribbon-btn:hover{
 .ng-sp-metrics{display:none;padding:10px 10px 6px;border-bottom:1px solid var(--ng-border)}
 #nodeGraphTab.ng-siteplan.ng-sat .ng-sp-metrics{display:block}
 #nodeGraphTab.ng-siteplan.ng-sat .ng-cat-wip{display:none}
-/* In satellite you ADD a building by tracing it on the map, so the palette's
-   Building item is hidden here (abstract graph mode keeps it). */
-#nodeGraphTab.ng-siteplan.ng-sat .ng-cat-item[data-type="t1"]{display:none}
+/* In satellite the Building (t1) palette item stays visible and acts as the
+   trace INITIATOR (handled in the sidebar click → toggleTraceMode), so the
+   user draws the footprint instead of dropping an abstract card. */
 .ng-sp-metrics-head{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ng-dim);margin:0 0 8px}
 /* S2: per-building cost panel — visibility is JS-driven (display:block when a
    building is selected); the body reuses the WIP KPI tiles. */

@@ -1805,6 +1805,12 @@ function buildSidebar(){
     if(item){
       var type=item.getAttribute('data-type');
       var d=E.DEFS[type]; if(!d) return;
+      // In satellite Site Plan, the Building (t1) item INITIATES a footprint trace
+      // (trace-to-create) rather than dropping an abstract card — the polygon you
+      // draw becomes the new building node.
+      if(type==='t1' && _spSatellite && E.viewMode && E.viewMode()==='siteplan'){
+        selN=null; toggleTraceMode(); return;
+      }
       var p=E.pan(),z=E.zm();
       var cx=-p.x+wrap.clientWidth/2/z, cy=-p.y+wrap.clientHeight/2/z;
       if(PICKABLE_TYPES[type] && E.job()){
