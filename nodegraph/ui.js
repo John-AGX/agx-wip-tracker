@@ -939,6 +939,7 @@ function render(){
   renderNodes();
   renderPolygons();                 // geo-anchored building footprints (satellite only)
   renderSidebarMetrics();           // live WIP totals in the sidebar (satellite only, via CSS)
+  renderBuildingMetrics();          // S2: selected building's cost breakdown
   E.drawGrid(gridCtx, gridC.width, gridC.height);
   E.drawWires(wireCtx, wrap, wiringFrom, wireMouse);
   E.saveGraph();
@@ -1709,6 +1710,8 @@ function buildSidebar(){
   // CSS). Body is filled by renderSidebarMetrics() on every render; chips inside are
   // click-to-edit (same data-wip-edit path as the old WIP card).
   html+='<div class="ng-sp-metrics"><div class="ng-sp-metrics-head">Project WIP</div><div class="ng-sp-metrics-body"></div></div>';
+  // Per-building cost panel (S2) — shown when a building polygon is selected.
+  html+='<div class="ng-sp-bldg"><div class="ng-sp-metrics-head">Building · <span class="ng-sp-bldg-name"></span></div><div class="ng-sp-bldg-body"></div></div>';
   html+='<div class="ng-sidebar-search"><input type="text" placeholder="Search..." id="ngSearch"/></div>';
   E.CATS.forEach(function(cat,ci){
     var isWipCat=(cat.items||[]).indexOf('wip')>-1;   // hidden in satellite (the WIP node lives in the sidebar there)
@@ -1878,6 +1881,40 @@ function renderSidebarMetrics(){
   });
   h+='</div>';
   body.innerHTML=h;
+}
+
+// S2: per-building cost panel. Shown only when a building polygon is selected in
+// satellite Site Plan; reuses the same KPI tiles + engine helpers the building card
+// body uses, so the numbers match. display:'block' (not '') — CSS default is none.
+function renderBuildingMetrics(){
+  var panel=document.querySelector('.ng-sp-bldg'); if(!panel) return;
+  var on=_spSatellite && E.viewMode && E.viewMode()==='siteplan';
+  var sel=(on && selN) ? E.findNode(selN) : null;
+  if(!sel || sel.type!=='t1'){ panel.style.display='none'; return; }
+  panel.style.display='block';
+  var nameEl=panel.querySelector('.ng-sp-bldg-name'); if(nameEl) nameEl.textContent=sel.label||'Building';
+  var bRev=E.getBuildingAllocatedRevenue(sel);
+  var pct=E.getT1WeightedPct(sel);
+  var revEarned=bRev*(pct/100);
+  var act=E.getActual(sel), acc=E.getAccrued(sel);
+  var gp=revEarned-(act+acc);
+  var margin=bRev>0?(gp/bRev*100):0;
+  var rows=[
+    {l:'% Complete', v:pct.toFixed(1)+'%', c:pct>0?'ng-ov-pos':'ng-ov-zero', hero:true},
+    {l:'Revenue', v:E.fmtC(bRev), c:bRev>0?'ng-ov-pos':'ng-ov-zero'},
+    {l:'Rev. Earned', v:E.fmtC(revEarned), c:revEarned>0?'ng-ov-pos':'ng-ov-zero'},
+    {l:'Actual Cost', v:E.fmtC(act), c:act>0?'ng-ov-neg':'ng-ov-zero'},
+    {l:'Accrued', v:E.fmtC(acc), c:acc>0?'ng-ov-neg':'ng-ov-zero'},
+    {l:'Gross Profit', v:E.fmtC(gp), c:gp>0?'ng-ov-pos':gp<0?'ng-ov-neg':'ng-ov-zero', hero:true},
+    {l:'Margin', v:margin.toFixed(1)+'%', c:margin>0?'ng-ov-pos':margin<0?'ng-ov-neg':'ng-ov-zero'},
+    {l:'Budget', v:E.fmtC(sel.budget||0), c:'ng-ov-zero'}
+  ];
+  var h='<div class="ng-wip-ov">';
+  rows.forEach(function(r){
+    h+='<div class="ng-wip-ov-kpi'+(r.hero?' ng-ov-hero':'')+'"><span class="ng-ov-lbl">'+r.l+'</span><span class="ng-ov-val '+r.c+'">'+r.v+'</span></div>';
+  });
+  h+='</div>';
+  var bodyEl=panel.querySelector('.ng-sp-bldg-body'); if(bodyEl) bodyEl.innerHTML=h;
 }
 
 // ── Events ──

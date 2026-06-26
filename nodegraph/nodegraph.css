@@ -716,6 +716,10 @@ body.light-mode .ng-topbar.ng-ribbon .ng-ribbon-btn:hover{
    Building item is hidden here (abstract graph mode keeps it). */
 #nodeGraphTab.ng-siteplan.ng-sat .ng-cat-item[data-type="t1"]{display:none}
 .ng-sp-metrics-head{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ng-dim);margin:0 0 8px}
+/* S2: per-building cost panel — visibility is JS-driven (display:block when a
+   building is selected); the body reuses the WIP KPI tiles. */
+.ng-sp-bldg{display:none;padding:10px 10px 6px;border-bottom:1px solid var(--ng-border)}
+.ng-sp-bldg-name{color:#4f8cff;text-transform:none;letter-spacing:0}
 .ng-sp-metrics-empty{color:var(--ng-dim);font-size:12px;padding:8px 2px}
 /* 2.5D massing: a building block in site-plan reads as solid mass — flatter
    "block" corners + a lit top edge over the budget-proportional extrusion
