@@ -1739,7 +1739,7 @@ function buildSidebar(){
   // click-to-edit (same data-wip-edit path as the old WIP card).
   html+='<div class="ng-sp-metrics"><div class="ng-sp-metrics-head">Project WIP</div><div class="ng-sp-metrics-body"></div></div>';
   // Per-building cost panel (S2) — shown when a building polygon is selected.
-  html+='<div class="ng-sp-bldg"><div class="ng-sp-metrics-head">Building · <span class="ng-sp-bldg-name"></span></div><div class="ng-sp-bldg-body"></div></div>';
+  html+='<div class="ng-sp-bldg"><div class="ng-sp-metrics-head">Building · <span class="ng-sp-bldg-name"></span></div><div class="ng-sp-bldg-body"></div><button class="ng-sp-addcost">+ Add Cost</button></div>';
   html+='<div class="ng-sidebar-search"><input type="text" placeholder="Search..." id="ngSearch"/></div>';
   E.CATS.forEach(function(cat,ci){
     var isWipCat=(cat.items||[]).indexOf('wip')>-1;   // hidden in satellite (the WIP node lives in the sidebar there)
@@ -1782,6 +1782,9 @@ function buildSidebar(){
     // WIP-metrics chip → inline-edit the job financial field (mirrors the card path).
     var wchip=e.target.closest('[data-wip-edit]');
     if(wchip && !e.target.closest('input')){ e.preventDefault(); e.stopPropagation(); wipChipEdit(wchip); return; }
+    // S4: "+ Add Cost" on the selected-building panel → cost-type picker wired to it.
+    var addc=e.target.closest('.ng-sp-addcost');
+    if(addc){ e.preventDefault(); e.stopPropagation(); var sn=selN&&E.findNode(selN); if(sn&&sn.type==='t1'){ var br=addc.getBoundingClientRect(); addCostToBuilding(sn.id, br.left, br.bottom+4); } return; }
     if(e.target.closest('.ng-sidebar-toggle')){
       e.stopPropagation();
       sb.classList.toggle('ng-collapsed');
@@ -1943,6 +1946,49 @@ function renderBuildingMetrics(){
   });
   h+='</div>';
   var bodyEl=panel.querySelector('.ng-sp-bldg-body'); if(bodyEl) bodyEl.innerHTML=h;
+}
+
+// S4: "+ Add Cost" on a selected building — a small cost-type picker that creates the
+// node near the building and wires it into the building's Costs input. Reuses the
+// module-level data picker so a Sub/PO/Phase can be chosen from the directory.
+function addCostToBuilding(bId, clientX, clientY){
+  var b=E.findNode(bId); if(!b) return;
+  var existing=document.querySelector('.ng-add-menu.ng-addcost'); if(existing) existing.remove();
+  var menu=document.createElement('div'); menu.className='ng-add-menu ng-addcost';
+  var h='<div class="ng-add-cat">Add to '+(b.label||'building')+'</div>';
+  ['t2','sub','po','mat','labor'].forEach(function(t){ var d=E.DEFS[t]; if(d) h+='<div class="ng-add-item" data-type="'+t+'"><span class="ng-add-ic">'+d.icon+'</span>'+(d.label||t)+'</div>'; });
+  menu.innerHTML=h;
+  document.body.appendChild(menu);
+  menu.style.left=Math.max(8,Math.min(clientX, window.innerWidth-248))+'px';
+  menu.style.top=Math.max(8,Math.min(clientY, window.innerHeight-300))+'px';
+  function close(){ if(menu){ menu.remove(); menu=null; document.removeEventListener('mousedown', outside, true); } }
+  function outside(ev){ if(menu && !menu.contains(ev.target)) close(); }
+  setTimeout(function(){ document.addEventListener('mousedown', outside, true); }, 0);
+  menu.addEventListener('click',function(ev){
+    var it=ev.target.closest('.ng-add-item'); if(!it) return;
+    var type=it.getAttribute('data-type'); close();
+    var center=(b.geoLatLng)?geoRenderPos(b):{x:b.x, y:b.y};
+    var px=Math.round(center.x), py=Math.round(center.y-220);
+    function wireToBuilding(nn){
+      if(!nn) return;
+      var toPort=E.firstCompatPort(E.DEFS[b.type], nn.type, 'in');
+      E.wires().push({ fromNode:nn.id, fromPort:0, toNode:b.id, toPort:toPort||0 });
+      delete _fannedSet[bId];                                   // re-fan to include the new cost
+      if(_spFocus===bId){ applySpFocus(); fanFocusNodes(bId); } // already drilled in → place it now
+      selN=nn.id; if(E.saveGraph) E.saveGraph(); render();
+    }
+    if(PICKABLE_TYPES[type] && E.job()){
+      showDataPicker(type, function(entry, focused){
+        if(focused) return;
+        if(entry){ var nn=E.addNode(type, px, py, entryLabel(type,entry), entry); if(nn){ autoWireFromData(nn, entry); wireToBuilding(nn); } }
+        else openEntityCreateModal(type, function(ne){ if(ne){ var n2=E.addNode(type, px, py, entryLabel(type,ne), ne); if(n2){ autoWireFromData(n2, ne); wireToBuilding(n2); } } });
+      });
+    } else {
+      var d=E.DEFS[type], label=d.label;
+      if(d.nameEdit){ label=prompt('Name for this '+(d.label||type)+':', label)||label; }
+      wireToBuilding(E.addNode(type, px, py, label));
+    }
+  });
 }
 
 // ── Events ──
