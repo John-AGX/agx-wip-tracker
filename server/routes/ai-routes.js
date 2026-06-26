@@ -12210,6 +12210,9 @@ const ALLOWED_AUTO_TIER_TOOLS = new Set([
   // execConsolidatedRead → existing narrow handlers.
   'read_entity',
   'search_entities',
+  // Location-aware "near me" — jobs/leads near a lat/lng (haversine).
+  // Auto-tier read; routed through execConsolidatedRead like the two above.
+  'find_entities_near',
   // Project 86 Payload DSL — 86's ONE write primitive. Validates +
   // INSERTs a payloads row inline so the file artifact appears in
   // chat immediately. Auto-tier because the commit gate is the user
