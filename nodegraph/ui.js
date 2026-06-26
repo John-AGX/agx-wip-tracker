@@ -1135,6 +1135,34 @@ function applySpFocus(){
   var t=document.getElementById('nodeGraphTab');
   if(t) t.classList.toggle('ng-sp-focused', !!_spFocus);
 }
+// S3: on first drill-in, fan a building's directly-connected phase/cost nodes in an
+// arc around its polygon (geo) centre — so the cost graph reads spatially on the map.
+// Fans once per session per building (manual moves stick after). Mutates child x/y
+// only; financial rollups never read x/y, so this is calc-safe.
+var _fannedSet={};
+function fanFocusNodes(bId){
+  if(!bId || _fannedSet[bId]) return;
+  var b=E.findNode(bId); if(!b) return;
+  var center=(b.geoLatLng)?geoRenderPos(b):{x:b.x, y:b.y};
+  var seen={}, kids=[];
+  E.wires().forEach(function(w){
+    if(w.toNode!==bId) return;
+    var k=E.findNode(w.fromNode);
+    if(k && !seen[k.id]){ seen[k.id]=true; kids.push(k); }
+  });
+  if(!kids.length) return;
+  kids.sort(function(a,c){ return (a.type==='t2'?0:1)-(c.type==='t2'?0:1); }); // phases first
+  var R=Math.max(220, 56*kids.length);
+  var arc=Math.min(330, Math.max(110, kids.length*46));
+  var start=270-arc/2;                                  // 270° = above the building (y grows down)
+  kids.forEach(function(k,i){
+    var deg=kids.length>1 ? start+arc*i/(kids.length-1) : 270;
+    var a=deg*Math.PI/180;
+    k.x=Math.round(center.x + Math.cos(a)*R - 85);      // -85/-30 centres the node card on the ring point
+    k.y=Math.round(center.y + Math.sin(a)*R - 30);
+  });
+  _fannedSet[bId]=true;
+}
 // Frame the currently-visible site-plan nodes — mirrors zoomFitAll but scoped
 // via E.spNodeVisible (so it fits the whole site, or a drilled-in subgraph).
 function fitSiteplan(){
@@ -1355,7 +1383,7 @@ function renderPolygons(){
       var pe=e.target.closest('[data-id]'); if(!pe) return;
       e.stopPropagation(); e.preventDefault();
       var id=pe.getAttribute('data-id');
-      _spFocus=(id && id!==_spFocus) ? id : null; applySpFocus(); fitSiteplan();
+      _spFocus=(id && id!==_spFocus) ? id : null; applySpFocus(); if(_spFocus) fanFocusNodes(_spFocus); fitSiteplan();
     });
   }
   if(_polyLayer.parentNode!==canvasEl) canvasEl.insertBefore(_polyLayer, canvasEl.firstChild); // behind nodes; re-attach if renderNodes cleared the canvas
@@ -2810,6 +2838,7 @@ function initEvents(){
     var bid=bEl ? bEl.getAttribute('data-id') : null;
     _spFocus = (bid && bid!==_spFocus) ? bid : null;
     applySpFocus();
+    if(_spFocus) fanFocusNodes(_spFocus);
     fitSiteplan();
   });
 
