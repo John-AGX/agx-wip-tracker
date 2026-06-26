@@ -8806,7 +8806,12 @@ async function execStaffTool(name, input, ctx) {
       const params = [];
       let p = 1;
       if (q) {
-        where.push('(l.title ILIKE $' + p + ' OR l.property_name ILIKE $' + p + ')');
+        // Match the free-text q against the title/property AND the address
+        // fields — so "leads in Lakeland" / a zip / a street finds leads whose
+        // city/address contains it, not just ones with it in the title.
+        where.push('(l.title ILIKE $' + p + ' OR l.property_name ILIKE $' + p +
+          ' OR l.city ILIKE $' + p + ' OR l.street_address ILIKE $' + p +
+          ' OR l.state ILIKE $' + p + ' OR l.zip ILIKE $' + p + ')');
         params.push('%' + q + '%');
         p++;
       }
