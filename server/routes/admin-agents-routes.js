@@ -2045,7 +2045,8 @@ const AGENT_SYSTEM_BASELINE = {
     '',
     '# How you work',
     '- READ freely to answer (read_entity, search_entities, the schedule, attachments, the reference sheets). You only ever see what the signed-in user is allowed to see.',
-    '- To CHANGE anything, you do NOT edit data yourself — you hand a fully-specified change to the Scribe via `scribe_write`. The Scribe writes it, dry-runs it, and shows the user an approve/reject card. When EDITING an existing record, resolve its entity_type + entity_id from your reads FIRST, then describe the change in plain words including every field and value to set.',
+    "- NEVER ASSUME — resolve before you act or answer. Look up the real entity_type + entity_id, current field values, names, dates, prices, and statuses with a READ first. If something is ambiguous or you cannot find it, ask ONE short clarifying question (or escalate) — do NOT guess ids, amounts, addresses, statuses, or which job/client/person the user means. A wrong assumption that writes data is worse than a quick question.",
+    '- To CHANGE anything, you do NOT edit data yourself — you hand a fully-specified change to the Scribe via `scribe_write`. For the user\'s OWN calendar events, personal to-dos, and reminders, the change COMMITS IMMEDIATELY with no approval card — just make it and read the result back to confirm. For everything else (estimates, jobs, tasks assigned to other staff, etc.) the Scribe dry-runs it and the user gets an approve/reject card. When EDITING an existing record, resolve its entity_type + entity_id from your reads FIRST, then describe the change in plain words including every field and value to set.',
     '- SCHEDULING is first-class and does NOT require a job. To add a calendar event or appointment use scribe_write entity_type:`calendar_event`; for a reminder use a `calendar_event` (timed, set reminder_minutes) or a `task` (date-only). These are created standalone for the user by default — you do NOT need a job, client, or any other record. ONLY link them when the item is about a specific record: add fields.entity_type + fields.entity_id and DEFAULT to the CLIENT when it concerns a property/relationship, the JOB for active work. Never refuse a reminder/event for lack of a job.',
     '- Use memory (remember / recall) to keep the user\'s preferences, routines, and people straight across days. A good assistant remembers.',
     '- LOCATION: if page_context carries `user_location`, the user opted in to share their current GPS position — use it to answer "what\'s near me", surface nearby jobs/leads (via find_entities_near), and reason about travel / the next stop. If it is ABSENT, do not ask for it or assume where they are.',
@@ -2273,10 +2274,12 @@ function builtinToolsetFor(agentKey) {
 // through every agents.create / agents.update site so the background resync
 // sweep and admin "sync all" can't clobber the Scribe back to Opus.
 const SCRIBE_MODEL = 'claude-sonnet-4-6';
-// The Assistant — the cheap personal aide that HOSTS the conversation — runs on
-// Haiku. Like SCRIBE_MODEL, routed through every create/update site so the
-// background resync sweep + "sync all" can't clobber it back to Opus.
-const ASSISTANT_MODEL = 'claude-haiku-4-5';
+// The Assistant — the personal aide that HOSTS the conversation — runs on
+// Sonnet (upgraded from Haiku 2026-06-24: Haiku over-assumed and was flaky at
+// populating escalate_to_86 params). Like SCRIBE_MODEL, routed through every
+// create/update site so the background resync sweep + "sync all" can't clobber
+// it back to Opus.
+const ASSISTANT_MODEL = 'claude-sonnet-4-6';
 function modelForAgentKey(agentKey) {
   if (agentKey === 'scribe') return SCRIBE_MODEL;
   if (agentKey === 'assistant') return ASSISTANT_MODEL;
