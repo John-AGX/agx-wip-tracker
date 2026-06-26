@@ -1361,7 +1361,7 @@ function renderPolygons(){
   while(_polyLayer.firstChild) _polyLayer.removeChild(_polyLayer.firstChild);
   var sitePlan=E.viewMode && E.viewMode()==='siteplan';
   if(!(sitePlan && _spSatellite)){ _polyLayer.style.display='none'; return; }
-  _polyLayer.style.display='';
+  _polyLayer.style.display='block';   // NOT '' — the CSS default is display:none, so '' would leave it hidden
   var or=_geoOriginNow(), o=or.o, og=or.og;
   if(!o || !og) return;
   function gp(v){ var g=E.spLatLngToGraph(Number(v.lat), Number(v.lng), o.lat, o.lng); return { x:og.x+g.x, y:og.y+g.y }; }

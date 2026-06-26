@@ -704,7 +704,7 @@ body.light-mode .ng-topbar.ng-ribbon .ng-ribbon-btn:hover{
 /* A traced building is represented by its polygon, so its card becomes an invisible,
    click-through shell (kept in DOM for data-id lookups; wires anchor via the geo hook,
    not its ports, so hiding its chrome is safe). */
-.ng-node.ng-has-poly{background:transparent!important;border-color:transparent!important;box-shadow:none!important;pointer-events:none}
+.ng-node.ng-has-poly{background:transparent!important;border-color:transparent!important;box-shadow:none!important}
 .ng-node.ng-has-poly>*{display:none!important}
 .ng-node.ng-has-poly::before,.ng-node.ng-has-poly::after{display:none!important}
 /* Site Plan rework: WIP metrics live in the sidebar in satellite mode (the WIP node
