@@ -110,7 +110,10 @@ function spNodeVisible(type, id){
   // every wire stay alive, so getOutput totals are unchanged. Non-satellite is byte-
   // identical (predicate falsy → original behavior).
   var _sat = _satActive && _satActive();
-  if (_spFocusSet) return _spFocusSet[id] === 1 || (type === 'wip' && !_sat);
+  if (_spFocusSet) {
+    if (type === 'wip') return !_sat;          // satellite: WIP hub stays hidden even when drilled in
+    return _spFocusSet[id] === 1;              // (a building wires INTO wip, so it would otherwise leak via the focus set)
+  }
   if (type === 't1') return true;
   if (type === 'wip') return !_sat;
   if (_sat) return false; // hide shared/site-cost chips too — they roll into the sidebar totals

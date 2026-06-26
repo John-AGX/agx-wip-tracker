@@ -232,6 +232,14 @@ function renderNodes(){
         div.style.boxShadow=_msh;
         div.classList.add('ng-sp-massing');
       }
+    } else if(sitePlan && _spSatellite){
+      // Every NON-building node (phase/sub/PO/materials/labor) is graph-unit sized;
+      // on the ~0.5 m/unit satellite basemap a ~190px card reads ~95m — dwarfing the
+      // building footprints. Scale it down so it sits proportional to them. transform
+      // keeps getBoundingClientRect (→ wire port anchors) consistent, and top-left
+      // origin keeps n.x/n.y the anchor. Reverts when satellite toggles off.
+      div.style.transformOrigin='top left';
+      div.style.transform='scale(0.16)';
     }
 
     var canColl = n.type!=='note' && n.type!=='watch';
@@ -1152,14 +1160,18 @@ function fanFocusNodes(bId){
   });
   if(!kids.length) return;
   kids.sort(function(a,c){ return (a.type==='t2'?0:1)-(c.type==='t2'?0:1); }); // phases first
-  var R=Math.max(220, 56*kids.length);
+  // On satellite the cost cards are scale(0.16) and 1 graph unit ≈ 0.5m, so the ring
+  // + card-centre offsets shrink to match (else the nodes fly hundreds of metres off).
+  var _sat=!!_spSatellite && E.viewMode && E.viewMode()==='siteplan';
+  var R=Math.max(220, 56*kids.length) * (_sat?0.14:1);
+  var _ox=_sat?15:85, _oy=_sat?5:30;                    // half the (scaled) card, to centre it on the ring point
   var arc=Math.min(330, Math.max(110, kids.length*46));
   var start=270-arc/2;                                  // 270° = above the building (y grows down)
   kids.forEach(function(k,i){
     var deg=kids.length>1 ? start+arc*i/(kids.length-1) : 270;
     var a=deg*Math.PI/180;
-    k.x=Math.round(center.x + Math.cos(a)*R - 85);      // -85/-30 centres the node card on the ring point
-    k.y=Math.round(center.y + Math.sin(a)*R - 30);
+    k.x=Math.round(center.x + Math.cos(a)*R - _ox);
+    k.y=Math.round(center.y + Math.sin(a)*R - _oy);
   });
   _fannedSet[bId]=true;
 }
@@ -1282,9 +1294,17 @@ function syncBasemapCamera(){
   var gcx=(wrap.clientWidth/2)/z - p.x, gcy=(wrap.clientHeight/2)/z - p.y;   // screen-centre in graph coords
   var c=E.spGraphToLatLng(gcx-_spOriginGraph.x, gcy-_spOriginGraph.y, _spOrigin.lat, _spOrigin.lng);
   var mz=E.spMapZoom(z, _spOrigin.lat), iz=Math.max(0, Math.min(21, Math.floor(mz))); // clamp to Google's zoom range
-  _basemap.setZoom(iz); _basemap.setCenter(c);
+  if(_basemap.getZoom()!==iz) _basemap.setZoom(iz);   // only re-tile on a real integer-zoom boundary cross
+  _basemap.setCenter(c);
+  // Scale by the delta between the engine's continuous map-zoom and the basemap's
+  // CURRENTLY-rendered integer zoom (not the freshly-floored target). A setZoom
+  // re-tile is async, so getZoom() can lag iz for a frame at the boundary; scaling
+  // off the rendered zoom keeps the transform exact across 100%/200% instead of
+  // snapping the div back to 1.0 a frame before the sharper tiles arrive (the bump).
+  var rz=_basemap.getZoom();
+  if(typeof rz!=='number' || !isFinite(rz)) rz=iz;
   basemapEl.style.transformOrigin='center center';
-  basemapEl.style.transform='scale('+Math.pow(2, Math.max(0, mz-iz))+')';
+  basemapEl.style.transform='scale('+Math.pow(2, mz-rz)+')';
 }
 function updateBasemapVisibility(){
   if(!basemapEl) return;
@@ -1715,16 +1735,20 @@ function openEntityCreateModal(type, cb){
   var before={};
   getJobEntries(type).forEach(function(e){ before[e.id]=1; });
   fn();
-  // Watch for the modal to close (display: none)
+  // The app toggles modals via the .active CLASS (openModal/closeModal), NOT inline
+  // style.display — so detect the real OPEN→CLOSE transition on class changes. fn()
+  // opens synchronously, so seed wasOpen from the current (already-open) state; the
+  // callback then fires once .active is removed (Save or Cancel), diffing for the
+  // new entry. (The old style.display check fired immediately on open → cb(null).)
+  var wasOpen=modalEl.classList.contains('active');
   var obs=new MutationObserver(function(){
-    var disp=modalEl.style.display;
-    if(disp==='none' || disp===''){
-      obs.disconnect();
-      var newOnes=getJobEntries(type).filter(function(e){ return !before[e.id]; });
-      cb(newOnes[0]||null);
-    }
+    if(modalEl.classList.contains('active')){ wasOpen=true; return; }
+    if(!wasOpen) return;
+    obs.disconnect();
+    var newOnes=getJobEntries(type).filter(function(e){ return !before[e.id]; });
+    cb(newOnes[0]||null);
   });
-  obs.observe(modalEl, {attributes:true, attributeFilter:['style','class']});
+  obs.observe(modalEl, {attributes:true, attributeFilter:['class']});
 }
 
 // ── Sidebar ──
@@ -1974,7 +1998,8 @@ function addCostToBuilding(bId, clientX, clientY){
     var it=ev.target.closest('.ng-add-item'); if(!it) return;
     var type=it.getAttribute('data-type'); close();
     var center=(b.geoLatLng)?geoRenderPos(b):{x:b.x, y:b.y};
-    var px=Math.round(center.x), py=Math.round(center.y-220);
+    var _satAdd=!!_spSatellite && E.viewMode && E.viewMode()==='siteplan';
+    var px=Math.round(center.x), py=Math.round(center.y-(_satAdd?40:220)); // sit it just above the building (scaled on satellite)
     function wireToBuilding(nn){
       if(!nn) return;
       var toPort=E.firstCompatPort(E.DEFS[b.type], nn.type, 'in');
