@@ -77,6 +77,64 @@
     // Last resort — no-op rather than throwing.
   }
 
+  // Handle to the CURRENT mount, so the public flyToJob(jobId) can drive the
+  // live map + markers from outside (e.g. a jobs-list row). Reset each mount.
+  var _active = null;
+
+  // Shallow clone of an opts object with overrides (ES5-safe, no Object.assign
+  // dependency). Used to re-render after the geocode warm-up without re-warming.
+  function assignOpts(base, over) {
+    var o = {}, k;
+    for (k in base) { if (Object.prototype.hasOwnProperty.call(base, k)) o[k] = base[k]; }
+    for (k in over) { if (Object.prototype.hasOwnProperty.call(over, k)) o[k] = over[k]; }
+    return o;
+  }
+
+  // Inject the jobs-sidebar stylesheet once (the org Job Map only).
+  function injectJobsSidebarStyle() {
+    if (document.getElementById('emap-jobs-style')) return;
+    var st = document.createElement('style');
+    st.id = 'emap-jobs-style';
+    st.textContent =
+      '.emap-jobs-panel{position:absolute;top:0;right:0;bottom:0;width:300px;max-width:78%;z-index:6;display:flex;flex-direction:column;' +
+        'background:rgba(17,20,28,0.94);border-left:1px solid rgba(255,255,255,0.10);box-shadow:-4px 0 18px rgba(0,0,0,0.35);' +
+        'transition:transform .22s ease;font-family:system-ui,Segoe UI,sans-serif;}' +
+      '.emap-jobs-panel.emap-collapsed{transform:translateX(100%);}' +
+      '.emap-jobs-head{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid rgba(255,255,255,0.08);}' +
+      '.emap-jobs-title{font-size:13px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#cbd5e1;}' +
+      '.emap-jobs-title b{color:#4f8cff;}' +
+      '.emap-jobs-collapse{background:transparent;border:1px solid rgba(255,255,255,0.15);color:#94a3b8;min-width:24px;height:24px;border-radius:6px;cursor:pointer;font-size:12px;line-height:1;}' +
+      '.emap-jobs-collapse:hover{color:#fff;border-color:#4f8cff;}' +
+      '.emap-jobs-search{margin:10px 12px;padding:7px 10px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:7px;color:#e2e8f0;font-size:13px;outline:none;}' +
+      '.emap-jobs-search:focus{border-color:#4f8cff;}' +
+      '.emap-jobs-search::placeholder{color:#64748b;}' +
+      '.emap-jobs-list{flex:1;overflow-y:auto;padding:0 8px 12px;}' +
+      '.emap-job-row{padding:9px 10px;border-radius:8px;cursor:pointer;border:1px solid transparent;margin-bottom:2px;}' +
+      '.emap-job-row:hover{background:rgba(255,255,255,0.05);}' +
+      '.emap-job-row.sel{background:rgba(79,140,255,0.14);border-color:rgba(79,140,255,0.40);}' +
+      '.emap-job-main{display:flex;align-items:center;gap:6px;justify-content:space-between;}' +
+      '.emap-job-name{font-size:13px;font-weight:600;color:#e2e8f0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}' +
+      '.emap-job-status{flex-shrink:0;font-size:9px;font-weight:700;text-transform:capitalize;color:#fff;background:#64748b;border-radius:4px;padding:1px 6px;}' +
+      '.emap-job-addr{font-size:11px;color:#94a3b8;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}' +
+      '.emap-job-wip{display:none;margin-top:7px;width:100%;padding:5px;font-size:11px;font-weight:600;color:#fff;background:#0a66c2;border:none;border-radius:6px;cursor:pointer;}' +
+      '.emap-job-row.sel .emap-job-wip{display:block;}' +
+      '.emap-job-wip:hover{background:#0958a8;}' +
+      '.emap-jobs-empty{padding:20px 10px;text-align:center;color:#64748b;font-size:12px;}' +
+      '.emap-jobs-expand{position:absolute;top:10px;right:10px;z-index:6;font-size:11px;font-weight:600;padding:6px 11px;border-radius:6px;border:1px solid rgba(255,255,255,0.15);background:rgba(17,20,28,0.94);color:#cbd5e1;cursor:pointer;box-shadow:-2px 0 8px rgba(0,0,0,0.30);}' +
+      '.emap-jobs-expand:hover{color:#fff;border-color:#4f8cff;}' +
+      '.emap-geocode-note{position:absolute;bottom:24px;left:10px;z-index:6;font-size:11px;font-weight:600;padding:6px 12px;border-radius:14px;background:rgba(17,20,28,0.92);color:#cbd5e1;border:1px solid rgba(255,255,255,0.12);box-shadow:0 1px 6px rgba(0,0,0,0.30);}';
+    document.head.appendChild(st);
+  }
+
+  // Public: smoothly fly the live map to a job's pin (driven by the jobs list).
+  function flyToJob(jobId) {
+    if (!_active || !_active.jobIndex) return false;
+    var e = _active.jobIndex[jobId];
+    if (!e) return false;
+    _active.flyTo(e.pos, e.marker, e.item);
+    return true;
+  }
+
   function emptyHTML(reason) {
     return '<div style="padding:28px 18px;text-align:center;color:var(--text-dim,#888);font-size:13px;line-height:1.5;">' +
       escapeHTML(reason) + '</div>';
@@ -328,7 +386,7 @@
     // Wire the open-entity dispatcher (info-window anchors call it).
     window.__p86EntitiesMapOpen = openEntity;
 
-    var map = new maps.Map(canvas, {
+    var mapOpts = {
       center: { lat: allItems[0].lat, lng: allItems[0].lng },
       zoom: 11,
       mapTypeControl: !!opts.satellite,          // org map: let the user flip satellite/hybrid/road
@@ -337,12 +395,20 @@
       gestureHandling: 'greedy',
       // org map → Google-Earth-style hybrid (imagery + labels); other mounts stay roadmap
       mapTypeId: opts.satellite ? maps.MapTypeId.HYBRID : maps.MapTypeId.ROADMAP
-    });
+    };
+    // The jobs sidebar covers the right edge — move the zoom + fullscreen controls
+    // to the left so they stay reachable behind it.
+    if (opts.jobsSidebar && maps.ControlPosition) {
+      mapOpts.zoomControlOptions = { position: maps.ControlPosition.LEFT_BOTTOM };
+      mapOpts.fullscreenControlOptions = { position: maps.ControlPosition.LEFT_TOP };
+    }
+    var map = new maps.Map(canvas, mapOpts);
 
     var infoWindow = new maps.InfoWindow();
     var shown = { lead: true, job: true };
     var markers = [];
     var didFit = false;
+    var jobIndex = {}; // jobId → { pos, marker, item } for the sidebar fly-to
 
     // (Re)build all markers from the currently-visible item set, grouping
     // co-located items into a single count-badged pin. Called on first
@@ -351,6 +417,7 @@
       // Clear prior markers off the map.
       markers.forEach(function (m) { m.setMap(null); });
       markers = [];
+      for (var jk in jobIndex) { if (Object.prototype.hasOwnProperty.call(jobIndex, jk)) delete jobIndex[jk]; }
 
       var visible = allItems.filter(function (it) { return shown[it.kind]; });
       var groups = groupByLocation(visible);
@@ -378,6 +445,10 @@
         }
         markers.push(marker);
         bounds.extend(pos);
+        // Index every JOB at this location → its (group) marker, for the sidebar.
+        g.members.forEach(function (m) {
+          if (m.kind === 'job') jobIndex[m.id] = { pos: pos, marker: marker, item: m };
+        });
       });
 
       // Fit only on the first paint — re-fitting on every chip toggle is
@@ -390,6 +461,127 @@
     }
 
     rebuild();
+
+    // ── Org Job Map: fly-to + collapsible jobs sidebar + geocode warm-up ──
+    // Expose the live mount so the public flyToJob(jobId) can drive it.
+    _active = { map: map, infoWindow: infoWindow, jobIndex: jobIndex, flyTo: flyTo };
+
+    // Smoothly move the camera to a coordinate, bounce its pin, open its info
+    // window. The stepped zoom reads as a mini "fly-in" on the raster map (the
+    // true cinematic camera arrives with the vector-basemap upgrade).
+    function flyTo(pos, marker, item) {
+      if (!map || !pos) return;
+      map.panTo(pos);
+      var z = map.getZoom() || 11;
+      if (z < 17) {
+        var steps = []; [Math.max(z, 14), 16, 18].forEach(function (s) { if (steps.indexOf(s) < 0) steps.push(s); });
+        var k = 0;
+        (function step() {
+          if (k >= steps.length) return;
+          map.setZoom(steps[k++]);
+          setTimeout(step, 200);
+        })();
+      }
+      if (marker && maps.Animation) {
+        try { marker.setAnimation(maps.Animation.BOUNCE); } catch (e) {}
+        setTimeout(function () { try { marker.setAnimation(null); } catch (e) {} }, 1500);
+      }
+      if (item) { infoWindow.setContent(infoContentHTML(item)); infoWindow.open(map, marker); }
+    }
+    function flyToById(id) { var e = jobIndex[id]; if (e) flyTo(e.pos, e.marker, e.item); }
+
+    if (opts.jobsSidebar) buildJobsSidebar();
+    if (opts.warmGeocode) warmGeocodeJobs();
+
+    // Collapsible right-hand jobs list (mapped jobs). Click a row → fly to its
+    // pin + select; "Open WIP" → the job's drill hook (Site Plan).
+    function buildJobsSidebar() {
+      injectJobsSidebarStyle();
+      var jobs = data.jobs.slice().sort(function (a, b) {
+        return String(a.title || '').localeCompare(String(b.title || ''));
+      });
+      var panel = document.createElement('div');
+      panel.className = 'emap-jobs-panel';
+      panel.innerHTML =
+        '<div class="emap-jobs-head"><span class="emap-jobs-title">Jobs <b>' + jobs.length + '</b></span>' +
+          '<button type="button" class="emap-jobs-collapse" title="Collapse">››</button></div>' +
+        '<input type="text" class="emap-jobs-search" placeholder="Search jobs…">' +
+        '<div class="emap-jobs-list"></div>';
+      host.appendChild(panel);
+      var expandTab = document.createElement('button');
+      expandTab.type = 'button';
+      expandTab.className = 'emap-jobs-expand';
+      expandTab.innerHTML = '‹‹ Jobs';
+      expandTab.style.display = 'none';
+      host.appendChild(expandTab);
+
+      var listEl = panel.querySelector('.emap-jobs-list');
+      function rowHTML(j) {
+        return '<div class="emap-job-row" data-job-id="' + escapeAttr(j.id) + '">' +
+          '<div class="emap-job-main"><span class="emap-job-name">' + escapeHTML(j.title || '(untitled)') + '</span>' +
+            (j.status ? '<span class="emap-job-status">' + escapeHTML(String(j.status).replace(/_/g, ' ')) + '</span>' : '') + '</div>' +
+          (j.address ? '<div class="emap-job-addr">' + escapeHTML(j.address) + '</div>' : '') +
+          '<button type="button" class="emap-job-wip">Open WIP →</button>' +
+        '</div>';
+      }
+      function paint(filter) {
+        var f = String(filter || '').toLowerCase().trim();
+        var shown = !f ? jobs : jobs.filter(function (j) {
+          return ((j.title || '') + ' ' + (j.address || '')).toLowerCase().indexOf(f) >= 0;
+        });
+        listEl.innerHTML = shown.length ? shown.map(rowHTML).join('') : '<div class="emap-jobs-empty">No matching jobs</div>';
+      }
+      paint('');
+      panel.querySelector('.emap-jobs-search').addEventListener('input', function () { paint(this.value); });
+      panel.querySelector('.emap-jobs-collapse').addEventListener('click', function () {
+        panel.classList.add('emap-collapsed'); expandTab.style.display = '';
+      });
+      expandTab.addEventListener('click', function () {
+        panel.classList.remove('emap-collapsed'); expandTab.style.display = 'none';
+      });
+      listEl.addEventListener('click', function (ev) {
+        var row = ev.target.closest ? ev.target.closest('.emap-job-row') : null;
+        if (!row) return;
+        var id = row.getAttribute('data-job-id');
+        if (ev.target.closest('.emap-job-wip')) {
+          if (typeof _onJobHook === 'function') _onJobHook(id); else openEntity('job', id);
+          return;
+        }
+        var prev = listEl.querySelector('.emap-job-row.sel'); if (prev) prev.classList.remove('sel');
+        row.classList.add('sel');
+        flyToById(id);
+      });
+    }
+
+    // Phase 0 warm-up: geocode jobs that have no coordinates yet — the weather
+    // lookup geocodes + persists server-side — throttled, then re-render ONCE so
+    // their pins + rows appear. The re-render passes warmGeocode:false to avoid a
+    // loop; jobs with no resolvable address simply stay unlisted.
+    function warmGeocodeJobs() {
+      var all = (window.appData && window.appData.jobs) || [];
+      var mapped = {};
+      data.jobs.forEach(function (j) { mapped[j.id] = 1; });
+      var missing = all.filter(function (j) {
+        return !mapped[j.id] && !usableCoords(j.geocode_lat, j.geocode_lng);
+      }).map(function (j) { return j.id; });
+      if (!missing.length || !(window.p86Api && p86Api.weather && typeof p86Api.weather.jobs === 'function')) return;
+      var note = document.createElement('div');
+      note.className = 'emap-geocode-note';
+      note.textContent = 'Locating ' + missing.length + ' job' + (missing.length === 1 ? '' : 's') + '…';
+      host.appendChild(note);
+      var CHUNK = 6, i = 0;
+      function next() {
+        if (i >= missing.length) {
+          try { note.remove(); } catch (e) {}
+          render(host, assignOpts(opts, { warmGeocode: false }));
+          return;
+        }
+        var batch = missing.slice(i, i + CHUNK); i += CHUNK;
+        note.textContent = 'Locating jobs… ' + Math.min(i, missing.length) + '/' + missing.length;
+        p86Api.weather.jobs(batch).then(function () {}, function () {}).then(function () { setTimeout(next, 350); });
+      }
+      next();
+    }
 
     // ── Filter chips ────────────────────────────────────────────────
     host.querySelectorAll('[data-emap-chip]').forEach(function (chip) {
@@ -438,5 +630,5 @@
     }
   }
 
-  window.p86EntitiesMap = { render: render };
+  window.p86EntitiesMap = { render: render, flyToJob: flyToJob };
 })();

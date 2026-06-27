@@ -1924,7 +1924,7 @@
                 // Job Map (org "Google Earth") — every geocoded job on satellite;
                 // a pin's Open drills into that job's Site Plan via openJobSitePlan.
                 if (window.p86EntitiesMap && typeof window.p86EntitiesMap.render === 'function') {
-                    window.p86EntitiesMap.render('orgMapHost', { satellite: true, onJob: window.openJobSitePlan });
+                    window.p86EntitiesMap.render('orgMapHost', { satellite: true, onJob: window.openJobSitePlan, jobsSidebar: true, warmGeocode: true });
                 }
             } else if (tabName === 'console') {
                 // Project 86 Command Center — platform-owner surface.
