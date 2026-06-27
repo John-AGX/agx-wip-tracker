@@ -449,7 +449,9 @@
         if (o.zIndex != null) mk.setZIndex(o.zIndex);
         mk.__adv = false;
       }
-      if (o.onClick) mk.addListener('click', o.onClick);
+      // AdvancedMarkerElement deprecates 'click' in favor of 'gmp-click'; classic
+      // maps.Marker still uses 'click'.
+      if (o.onClick) mk.addListener(mk.__adv ? 'gmp-click' : 'click', o.onClick);
       return mk;
     }
     function removeMarker(m) { if (!m) return; if (m.__adv) { m.map = null; } else { m.setMap(null); } }
