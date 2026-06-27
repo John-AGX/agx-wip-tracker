@@ -4543,8 +4543,13 @@ window.openNodeGraph=function(jid){
     tab.classList.toggle('ng-clean', !!_clean);
     var _cb = document.getElementById('ngCleanBtn'); if(_cb) _cb.classList.toggle('ng-on', !!_clean);
   } catch(_){}
-  // Restore the persisted Site Plan view mode + sync its toggle button.
+  // The node graph is satellite-mapping-only now — the old abstract card/wire
+  // graph is retired. Force Site Plan + the satellite basemap ON on every open,
+  // overriding any persisted localStorage, so a job never lands on the abstract graph.
   try {
+    if(E && E.setViewMode) E.setViewMode('siteplan');
+    _spSatellite = true;
+    try { localStorage.setItem('ngSitePlanSatellite','1'); } catch(_){}
     var _sp = E && E.viewMode && E.viewMode()==='siteplan';
     tab.classList.toggle('ng-siteplan', !!_sp);
     var _spb = document.getElementById('ngSitePlanBtn'); if(_spb) _spb.classList.toggle('ng-on', !!_sp);

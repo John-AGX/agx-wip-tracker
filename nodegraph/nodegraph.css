@@ -637,6 +637,13 @@ body.light-mode .ng-topbar.ng-ribbon .ng-ribbon-btn:hover{
    blocks (sized inline by budget) tinted by progress; WIP is the central hub.
    Scoped to .ng-siteplan on #nodeGraphTab, so graph mode is unaffected. */
 #nodeGraphTab.ng-siteplan .ng-grid-canvas{opacity:.3}
+/* Mapping-only retire: hide the abstract-graph chrome now that site-plan is the only
+   mode — the overview minimap, the Clean Mode toggle, and the (now-redundant) Site
+   Plan toggle. Reversible (delete these lines). The sidebar (WIP + Add Cost), the
+   ribbon (Trace/Place/Photos/3D/Audit/86), and the Satellite toggle stay. */
+#nodeGraphTab.ng-siteplan .ng-minimap{display:none !important}
+#nodeGraphTab.ng-siteplan .ng-clean-btn,
+#nodeGraphTab.ng-siteplan .ng-siteplan-btn{display:none !important}
 #nodeGraphTab.ng-siteplan .ng-node.ng-tt-t1{
   border-width:2px;border-radius:12px;box-shadow:0 2px 16px var(--ng-shadow);
 }

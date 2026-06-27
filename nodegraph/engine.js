@@ -73,8 +73,10 @@ function getCleanMode(){ return cleanMode; }
 // only building (t1) + the master WIP node show, as blocks, with the existing
 // t1->wip wires flowing inward. RENDER-ONLY — nodes, wires, values, and
 // persistence are all untouched; toggling back to 'graph' restores everything.
-// Persisted per-user in localStorage, exactly like cleanMode.
-var viewMode = (function(){ try { return localStorage.getItem('ngViewMode') === 'siteplan' ? 'siteplan' : 'graph'; } catch(_) { return 'graph'; } })();
+// Mapping-only: the abstract card/wire graph is retired, so site-plan is the only
+// mode. Default to 'siteplan' regardless of any persisted value (openNodeGraph also
+// forces it on each open); 'graph' is no longer reachable from the UI.
+var viewMode = 'siteplan';
 function setViewMode(v){ viewMode = (v === 'siteplan') ? 'siteplan' : 'graph'; try { localStorage.setItem('ngViewMode', viewMode); } catch(_){} return viewMode; }
 function getViewMode(){ return viewMode; }
 // Node types shown as spatial blocks in site-plan mode (Slice 1: buildings + WIP hub).
