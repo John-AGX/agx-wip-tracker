@@ -2268,6 +2268,14 @@ function builtinToolsetFor(agentKey) {
   // The Scribe is a write-only worker — it never authors files, runs code,
   // or browses the web. No agent toolset bundle (bash/write/web) for it.
   if (agentKey === 'scribe') return [];
+  // The Assistant (personal aide) likewise needs NO sandbox/web bundle: it
+  // delegates ALL writes to the Scribe and escalates research/analysis to 86.
+  // The 8-tool agent_toolset_20260401 schema was ~30k cached tokens of dead
+  // weight on every assistant session's first turn. It has 0 linked skills,
+  // so there's no skill-content read-gate to satisfy (same reason as Scribe).
+  // (If the Assistant later needs web lookups, give it just web_search +
+  // web_fetch via a per-tool config rather than the whole bundle.)
+  if (agentKey === 'assistant') return [];
   return [{
     type: 'agent_toolset_20260401',
     default_config: { enabled: true }
