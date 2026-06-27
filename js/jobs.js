@@ -1064,28 +1064,12 @@ function renderJobsMain() {
         window.toggleJobsMapView = toggleJobsMapView;
 
         function calculateJobsSummary() {
-            // Tiles follow the active filter — what the user sees in
-            // the table below is what the tiles sum / count. Switch
-            // the status filter dropdown and the tile values move
-            // in lockstep. Audit finding W1 + W2.
-            const jobs = getFilteredJobs();
-            let totalIncome = 0;
-            let totalCost = 0;
-            jobs.forEach(j => {
-                const w = getJobWIP(j.id);
-                totalIncome += w.totalIncome;
-                totalCost += w.actualCosts;
-            });
-            const totalProfit = totalIncome - totalCost;
-
-            document.getElementById('total-pipeline').textContent = formatCurrency(totalIncome);
-            // Active Jobs tile = count of currently-visible rows. The
-            // prior hardcoded ['New','In Progress','On Hold'] set was
-            // a different definition than the table's default filter
-            // ("everything except Archived") — caused user confusion.
-            document.getElementById('active-jobs').textContent = jobs.length;
-            document.getElementById('total-cost').textContent = formatCurrency(totalCost);
-            document.getElementById('total-profit').textContent = formatCurrency(totalProfit);
+            // The job-list KPI tiles (Total Pipeline / Active Jobs / Total
+            // Cost / Total Profit) were removed from the Jobs view — these
+            // metrics are moving to the Insights page, which will own the
+            // richer roll-up. Kept as a no-op so the existing call sites
+            // (renderJobs + filterJobs) stay valid; restore the body here
+            // if the tiles ever return to this page.
         }
 
         function getJobType(jobNumber) {
