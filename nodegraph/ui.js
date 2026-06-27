@@ -1803,7 +1803,10 @@ function buildSidebar(){
   });
 
   sb.addEventListener('click',function(e){
-    // WIP-metrics chip → inline-edit the job financial field (mirrors the card path).
+    // WIP-panel financial chip → inline-edit the JOB field (WIP lives on the job now).
+    var jchip=e.target.closest('[data-job-edit]');
+    if(jchip && !e.target.closest('input')){ e.preventDefault(); e.stopPropagation(); jobFieldEdit(jchip); return; }
+    // Legacy WIP-node chip (still used by the on-canvas WIP card in non-satellite mode).
     var wchip=e.target.closest('[data-wip-edit]');
     if(wchip && !e.target.closest('input')){ e.preventDefault(); e.stopPropagation(); wipChipEdit(wchip); return; }
     // S4: "+ Add Cost" on the selected-building panel → cost-type picker wired to it.
@@ -1912,36 +1915,87 @@ function wipChipEdit(wc){
 // node — same jobField chips + 8-KPI Overview grid as the old card, identical math
 // via E.getOutput. Called every render(); the panel is shown only in satellite via
 // CSS, so this is a cheap no-op repaint otherwise.
+// WIP now lives on the JOB (getJobWIP), not a node-graph WIP hub — so the panel reads
+// job-level WIP and shows real numbers even on a graph that has no WIP node (e.g. a
+// freshly-traced Site Plan). The financial inputs edit the job fields directly.
+var _jobChipEditing=false;
 function renderSidebarMetrics(){
   var body=document.querySelector('.ng-sp-metrics-body'); if(!body) return;
   if(!(_spSatellite && E.viewMode && E.viewMode()==='siteplan')) return; // panel hidden off-satellite — skip the work
-  var wn=E.nodes().find(function(n){return n.type==='wip';});
-  if(!wn){ body.innerHTML='<div class="ng-sp-metrics-empty">No WIP data</div>'; return; }
-  if(editingId===wn.id && body.querySelector('input')) return; // mid-edit in this panel: don't clobber the focused input
-  var jf=wn.jobFields||{};
-  var wipComputedPct=E.getWIPWeightedPct(wn);
+  if(_jobChipEditing && body.querySelector('input')) return;             // mid-edit: don't clobber the focused input
+  var jid=E.job();
+  var job=(typeof appData!=='undefined' && appData.jobs) ? appData.jobs.find(function(j){return j.id===jid;}) : null;
+  if(!job || typeof window.getJobWIP!=='function'){ body.innerHTML='<div class="ng-sp-metrics-empty">No job loaded</div>'; return; }
+  var w=window.getJobWIP(jid)||{};
+  // Editable job-financial inputs (write straight to the job; CO totals are derived).
   var h='<div class="ng-subitems" style="max-height:none;">';
-  [{k:'contractAmount',l:'Contract Amount',t:'c'},{k:'coIncome',l:'CO Income',t:'c'},{k:'estimatedCosts',l:'Est. Costs',t:'c'},{k:'coCosts',l:'CO Costs',t:'c'},{k:'revisedCostChanges',l:'Revised Changes',t:'c'},{k:'invoicedToDate',l:'Invoiced to Date',t:'c'},{k:'pctComplete',l:'% Complete',t:'p'}].forEach(function(r){
-    var raw=jf[r.k]||0;
-    if(r.k==='pctComplete' && wipComputedPct!=null){
-      h+='<div class="ng-subitem ng-wip-row"><span class="ng-wip-lbl">'+r.l+'</span><span class="ng-wip-chip" title="Averaged from connected phases/buildings/COs" style="cursor:default;opacity:0.85;">'+wipComputedPct.toFixed(1)+'% avg</span></div>';
+  [
+    {f:'contractAmount',     l:'Contract Amount', t:'c', edit:true},
+    {f:'coIncome',           l:'CO Income',       t:'c', edit:false, val:w.coIncome},
+    {f:'estimatedCosts',     l:'Est. Costs',      t:'c', edit:true},
+    {f:'coCosts',            l:'CO Costs',        t:'c', edit:false, val:w.coCosts},
+    {f:'revisedCostChanges', l:'Revised Changes', t:'c', edit:true},
+    {f:'invoicedToDate',     l:'Invoiced to Date',t:'c', edit:true},
+    {f:'pctComplete',        l:'% Complete',      t:'p', edit:true}
+  ].forEach(function(r){
+    var raw=(r.val!=null)?r.val:(job[r.f]||0);
+    var disp=r.t==='p'?(Number(raw)||0).toFixed(1)+'%':E.fmtC(Number(raw)||0);
+    if(r.edit){
+      h+='<div class="ng-subitem ng-wip-row"><span class="ng-wip-lbl">'+r.l+'</span><span class="ng-wip-chip" data-job-edit="'+r.f+'" data-job-type="'+r.t+'" title="Click to edit">'+disp+'</span></div>';
     } else {
-      var disp=r.t==='p'?raw.toFixed(1)+'%':E.fmtC(raw);
-      h+='<div class="ng-subitem ng-wip-row"><span class="ng-wip-lbl">'+r.l+'</span><span class="ng-wip-chip" data-wip-edit="'+wn.id+'" data-wip-key="'+r.k+'" data-wip-type="'+r.t+'" title="Click to edit">'+disp+'</span></div>';
+      h+='<div class="ng-subitem ng-wip-row"><span class="ng-wip-lbl">'+r.l+'</span><span class="ng-wip-chip" title="From change orders" style="cursor:default;opacity:0.85;">'+disp+'</span></div>';
     }
   });
   h+='</div>';
-  var wipD=E.DEFS.wip;
+  // KPI tiles straight from getJobWIP — job-level WIP, independent of any WIP node.
+  function _c(v){ return v>0?'ng-ov-pos':v<0?'ng-ov-neg':'ng-ov-zero'; }
+  var tiles=[
+    {n:'Total Income',  v:E.fmtC(w.totalIncome||0),     c:_c(w.totalIncome||0),     hero:true},
+    {n:'Revised Costs', v:E.fmtC(w.revisedEstCosts||0), c:_c(-(w.revisedEstCosts||0))},
+    {n:'Actual Costs',  v:E.fmtC(w.actualCosts||0),     c:_c(-(w.actualCosts||0))},
+    {n:'Revenue Earned',v:E.fmtC(w.revenueEarned||0),   c:_c(w.revenueEarned||0)},
+    {n:'Gross Profit',  v:E.fmtC(w.jtdProfit||0),       c:_c(w.jtdProfit||0),       hero:true},
+    {n:'Margin JTD',    v:(Number(w.jtdMargin)||0).toFixed(1)+'%', c:_c(w.jtdMargin||0)},
+    {n:'Invoiced',      v:E.fmtC(w.invoiced||0),        c:_c(w.invoiced||0)},
+    {n:'Backlog',       v:E.fmtC(w.backlog||0),         c:_c(w.backlog||0)}
+  ];
   h+='<div class="ng-ov-head">Overview</div><div class="ng-wip-ov">';
-  wipD.outs.forEach(function(op,oi){
-    var ov=E.getOutput(wn,oi);
-    var fmt=op.t===E.PT.P?E.fmtP(ov):E.fmtC(ov);
-    var vc=ov>0?'ng-ov-pos':ov<0?'ng-ov-neg':'ng-ov-zero';
-    var hero=(op.n==='Total Income'||op.n==='Gross Profit')?' ng-ov-hero':'';
-    h+='<div class="ng-wip-ov-kpi'+hero+'"><span class="ng-ov-lbl">'+op.n+'</span><span class="ng-ov-val '+vc+'">'+fmt+'</span></div>';
+  tiles.forEach(function(t){
+    h+='<div class="ng-wip-ov-kpi'+(t.hero?' ng-ov-hero':'')+'"><span class="ng-ov-lbl">'+t.n+'</span><span class="ng-ov-val '+t.c+'">'+t.v+'</span></div>';
   });
   h+='</div>';
   body.innerHTML=h;
+}
+// Inline-edit a job financial field from the WIP panel → write the job + persist via
+// saveData (the same path the WIP report uses); getJobWIP then recomputes on render.
+function jobFieldEdit(chip){
+  var jid=E.job();
+  var job=(typeof appData!=='undefined' && appData.jobs) ? appData.jobs.find(function(j){return j.id===jid;}) : null;
+  if(!job) return;
+  var field=chip.getAttribute('data-job-edit'), typ=chip.getAttribute('data-job-type');
+  _jobChipEditing=true;
+  var inp=document.createElement('input');
+  inp.type='number'; inp.step=typ==='p'?'0.1':'0.01';
+  if(typ==='p'){ inp.min=0; inp.max=100; }
+  inp.value=Number(job[field])||0;
+  inp.className='ng-wip-chip-input';
+  chip.textContent=''; chip.appendChild(inp);
+  setTimeout(function(){ inp.focus(); inp.select(); }, 0);
+  var done=false;
+  function finish(){
+    if(done) return; done=true; _jobChipEditing=false;
+    var nv=parseFloat(inp.value)||0;
+    if(typ==='p') nv=Math.max(0,Math.min(100,nv));
+    job[field]=nv;
+    if(typeof window.saveData==='function') saveData();   // persist the job financial change
+    render();
+  }
+  inp.addEventListener('blur',finish);
+  inp.addEventListener('keydown',function(ev){
+    if(ev.key==='Enter'){ ev.preventDefault(); inp.blur(); }
+    else if(ev.key==='Escape'){ ev.preventDefault(); done=true; _jobChipEditing=false; render(); }
+  });
+  inp.addEventListener('mousedown',function(ev){ ev.stopPropagation(); });
 }
 
 // S2: per-building cost panel. Shown only when a building polygon is selected in
