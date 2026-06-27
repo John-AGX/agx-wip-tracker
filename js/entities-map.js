@@ -129,7 +129,33 @@
       '.emap-jobs-expand:hover{color:#fff;border-color:#4f8cff;}' +
       '.emap-geocode-note{position:absolute;bottom:24px;left:10px;z-index:6;font-size:11px;font-weight:600;padding:6px 12px;border-radius:14px;background:rgba(17,20,28,0.92);color:#cbd5e1;border:1px solid rgba(255,255,255,0.12);box-shadow:0 1px 6px rgba(0,0,0,0.30);}' +
       '@keyframes emap-pin-bounce{0%,100%{transform:translateY(0)}25%{transform:translateY(-13px)}50%{transform:translateY(0)}75%{transform:translateY(-6px)}}' +
-      '.emap-pin-bounce{animation:emap-pin-bounce .7s ease-in-out 2;transform-origin:bottom center}';
+      '.emap-pin-bounce{animation:emap-pin-bounce .7s ease-in-out 2;transform-origin:bottom center}' +
+      '.emap-detail{flex-shrink:0;max-height:54%;overflow-y:auto;border-top:1px solid rgba(255,255,255,.10);padding:12px 12px 14px;background:rgba(8,11,17,.55);}' +
+      '.emap-jc-top{display:flex;gap:13px;align-items:center;}' +
+      '.emap-jc-ring{flex-shrink:0;}' +
+      '.emap-jc-meta{min-width:0;flex:1;}' +
+      '.emap-jc-name{font-size:14px;font-weight:600;color:#f1f5f9;line-height:1.25;margin-bottom:5px;}' +
+      '.emap-jc-statusrow{margin-bottom:8px;display:flex;align-items:center;gap:6px;}' +
+      '.emap-jc-nums{display:flex;gap:16px;}' +
+      '.emap-jc-lbl{display:block;font-size:10px;color:#7c8699;margin-bottom:1px;}' +
+      '.emap-jc-val{font-size:13px;font-weight:600;color:#e2e8f0;}' +
+      '.emap-pos{color:#34d399;}' +
+      '.emap-neg{color:#f87171;}' +
+      '.emap-jc-addr{font-size:11px;color:#8b94a6;margin-top:10px;line-height:1.4;}' +
+      '.emap-jc-actions{display:flex;gap:7px;margin-top:12px;}' +
+      '.emap-jc-btn{flex:1;background:#0a66c2;border:none;color:#fff;font-size:12px;font-weight:600;border-radius:7px;padding:7px;cursor:pointer;}' +
+      '.emap-jc-btn:hover{background:#0958a8;}' +
+      '.emap-jc-ghost{flex:0 0 auto;background:transparent;border:1px solid rgba(255,255,255,.16);color:#cbd5e1;padding:7px 12px;}' +
+      '.emap-jc-ghost:hover{background:rgba(255,255,255,.06);}' +
+      '.emap-grp-head{font-size:11px;font-weight:600;color:#8aa6ff;margin-bottom:2px;}' +
+      '.emap-grp-addr{font-size:11px;color:#8b94a6;margin-bottom:10px;}' +
+      '.emap-grp-list{display:flex;flex-direction:column;gap:7px;}' +
+      '.emap-grp-row{display:flex;align-items:center;gap:8px;background:rgba(255,255,255,.04);border-radius:8px;padding:8px 10px;cursor:pointer;}' +
+      '.emap-grp-row:hover{background:rgba(79,140,255,.12);}' +
+      '.emap-grp-name{flex:1;font-size:12px;color:#dbe2ec;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}' +
+      '.emap-kind{font-size:9px;font-weight:600;color:#bcd4f5;background:#16335c;border-radius:4px;padding:2px 6px;flex-shrink:0;}' +
+      '.emap-kind-job{color:#cbd5e1;background:#3a4150;}' +
+      '.emap-chev{color:#7c8699;font-size:15px;line-height:1;}';
     document.head.appendChild(st);
   }
 
@@ -495,7 +521,10 @@
             title: item.title || '',
             icon: sIcon,
             content: (advOK && sIcon) ? pinImg({ url: sIcon.url, w: sIcon.scaledSize.width, h: sIcon.scaledSize.height }) : null,
-            onClick: (function (it) { return function () { openInfo(infoContentHTML(it), marker); }; })(item)
+            onClick: (function (it) { return function () {
+              if (opts.jobsSidebar) { flyTo(pos, marker); if (it.kind === 'job') { selectRow(it.id); showJobDetail(it.id); } else showLeadDetail(it); }
+              else { openInfo(infoContentHTML(it), marker); }
+            }; })(item)
           });
         } else {
           var gIcon = groupPinIcon(maps, g.members.length);
@@ -503,7 +532,10 @@
             title: g.members.length + ' items at this property',
             icon: gIcon,
             content: advOK ? pinImg({ url: gIcon.url, w: gIcon.scaledSize.width, h: gIcon.scaledSize.height }) : null,
-            onClick: (function (members) { return function () { openInfo(groupContentHTML(members), marker); }; })(g.members)
+            onClick: (function (members) { return function () {
+              if (opts.jobsSidebar) { flyTo(pos, marker); showGroupDetail(members); }
+              else { openInfo(groupContentHTML(members), marker); }
+            }; })(g.members)
           });
         }
         markers.push(marker);
@@ -571,9 +603,93 @@
         else { try { map.moveCamera({ center: pos, zoom: eZoom, tilt: eTilt, heading: sHead }); } catch (e) {} }
       }
       bounceMarker(marker);
-      if (item) openInfo(infoContentHTML(item), marker);
+      // No info window here — the Job Map shows the detail in the docked panel
+      // (the caller calls showJobDetail/showGroupDetail). flyTo is camera-only.
     }
     function flyToById(id) { var e = jobIndex[id]; if (e) flyTo(e.pos, e.marker, e.item); }
+
+    // ── Docked detail panel (under the jobs list) — replaces the floating info
+    // window, so there are no off-center popup scrollbars. Job → pulse card,
+    // lead → compact card, shared address → property list. ──
+    function money(n) {
+      n = Number(n) || 0; var a = Math.abs(n), s = n < 0 ? '-' : '';
+      if (a >= 1e6) return s + '$' + (a / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
+      if (a >= 1e3) return s + '$' + (a / 1e3).toFixed(1).replace(/\.0$/, '') + 'k';
+      return s + '$' + Math.round(a);
+    }
+    function detailEl() { return host.querySelector('.emap-detail'); }
+    function expandPanel() {
+      var p = host.querySelector('.emap-jobs-panel'), t = host.querySelector('.emap-jobs-expand');
+      if (p && p.classList.contains('emap-collapsed')) { p.classList.remove('emap-collapsed'); if (t) t.style.display = 'none'; }
+    }
+    function setDetail(html) {
+      var d = detailEl(); if (!d) return;
+      d.innerHTML = html || '';
+      d.style.display = html ? 'block' : 'none';
+      if (html) { expandPanel(); d.scrollTop = 0; }
+    }
+    function selectRow(id) {
+      var prev = host.querySelector('.emap-job-row.sel'); if (prev) prev.classList.remove('sel');
+      var rows = host.querySelectorAll('.emap-job-row');
+      for (var i = 0; i < rows.length; i++) {
+        if (rows[i].getAttribute('data-job-id') === id) { rows[i].classList.add('sel'); rows[i].scrollIntoView({ block: 'nearest' }); break; }
+      }
+    }
+    function showJobDetail(id) {
+      var e = jobIndex[id], it = e ? e.item : null; if (!it) return;
+      var w = (window.getJobWIP ? window.getJobWIP(id) : null) || {};
+      var pct = Math.max(0, Math.min(100, Number(w.pctComplete) || 0));
+      var contract = (w.totalIncome != null) ? w.totalIncome : (w.contractIncome || 0);
+      var profit = (w.jtdProfit != null) ? w.jtdProfit : 0;
+      var circ = 163.4, off = circ * (1 - pct / 100);
+      var pc = profit < 0 ? 'emap-neg' : 'emap-pos', psign = profit < 0 ? '' : '+';
+      setDetail(
+        '<div class="emap-jc"><div class="emap-jc-top">' +
+          '<svg class="emap-jc-ring" width="62" height="62" viewBox="0 0 62 62" aria-hidden="true">' +
+            '<circle cx="31" cy="31" r="26" fill="none" stroke="#0e1320" stroke-width="7"/>' +
+            '<circle cx="31" cy="31" r="26" fill="none" stroke="#4f8cff" stroke-width="7" stroke-linecap="round" stroke-dasharray="' + circ.toFixed(1) + '" stroke-dashoffset="' + off.toFixed(1) + '" transform="rotate(-90 31 31)"/>' +
+            '<text x="31" y="35" text-anchor="middle" font-size="14" font-weight="600" fill="#e2e8f0">' + Math.round(pct) + '%</text>' +
+          '</svg>' +
+          '<div class="emap-jc-meta">' +
+            '<div class="emap-jc-name">' + escapeHTML(it.title || '(untitled)') + '</div>' +
+            '<div class="emap-jc-statusrow">' + statusChip('job', it.status) + '</div>' +
+            '<div class="emap-jc-nums"><div><span class="emap-jc-lbl">Contract</span><span class="emap-jc-val">' + money(contract) + '</span></div>' +
+              '<div><span class="emap-jc-lbl">Profit</span><span class="emap-jc-val ' + pc + '">' + psign + money(profit) + '</span></div></div>' +
+          '</div></div>' +
+          (it.address ? '<div class="emap-jc-addr">' + escapeHTML(it.address) + '</div>' : '') +
+          '<div class="emap-jc-actions">' +
+            '<button type="button" class="emap-jc-btn emap-jc-wip" data-id="' + escapeAttr(id) + '">Open WIP →</button>' +
+            '<button type="button" class="emap-jc-btn emap-jc-ghost emap-jc-maps" data-lat="' + Number(it.lat) + '" data-lng="' + Number(it.lng) + '">Maps</button>' +
+          '</div></div>'
+      );
+    }
+    function showLeadDetail(it) {
+      if (!it) return;
+      setDetail(
+        '<div class="emap-jc">' +
+          '<div class="emap-jc-statusrow"><span class="emap-kind">Lead</span> ' + statusChip('lead', it.status) + '</div>' +
+          '<div class="emap-jc-name" style="margin-top:6px;">' + escapeHTML(it.title || '(untitled)') + '</div>' +
+          (it.address ? '<div class="emap-jc-addr">' + escapeHTML(it.address) + '</div>' : '') +
+          '<div class="emap-jc-actions">' +
+            '<button type="button" class="emap-jc-btn emap-jc-open" data-kind="lead" data-id="' + escapeAttr(it.id) + '">Open lead →</button>' +
+            '<button type="button" class="emap-jc-btn emap-jc-ghost emap-jc-maps" data-lat="' + Number(it.lat) + '" data-lng="' + Number(it.lng) + '">Maps</button>' +
+          '</div></div>'
+      );
+    }
+    function showGroupDetail(members) {
+      var addr = ''; for (var i = 0; i < members.length; i++) { if (members[i].address) { addr = members[i].address; break; } }
+      var rows = members.map(function (m) {
+        return '<div class="emap-grp-row" data-kind="' + escapeAttr(m.kind) + '" data-id="' + escapeAttr(m.id) + '">' +
+          '<span class="emap-kind ' + (m.kind === 'job' ? 'emap-kind-job' : '') + '">' + (m.kind === 'lead' ? 'Lead' : 'Job') + '</span>' +
+          '<span class="emap-grp-name">' + escapeHTML(m.title || '(untitled)') + '</span>' +
+          '<span class="emap-chev">›</span></div>';
+      }).join('');
+      setDetail(
+        '<div class="emap-grp"><div class="emap-grp-head">' + members.length + ' at this property</div>' +
+          (addr ? '<div class="emap-grp-addr">' + escapeHTML(addr) + '</div>' : '') +
+          '<div class="emap-grp-list">' + rows + '</div></div>'
+      );
+    }
 
     if (opts.jobsSidebar) buildJobsSidebar();
     if (opts.warmGeocode) warmGeocodeJobs();
@@ -591,7 +707,8 @@
         '<div class="emap-jobs-head"><span class="emap-jobs-title">Jobs <b>' + jobs.length + '</b></span>' +
           '<button type="button" class="emap-jobs-collapse" title="Collapse">››</button></div>' +
         '<input type="text" class="emap-jobs-search" placeholder="Search jobs…">' +
-        '<div class="emap-jobs-list"></div>';
+        '<div class="emap-jobs-list"></div>' +
+        '<div class="emap-detail" style="display:none;"></div>';
       host.appendChild(panel);
       var expandTab = document.createElement('button');
       expandTab.type = 'button';
@@ -635,6 +752,24 @@
         var prev = listEl.querySelector('.emap-job-row.sel'); if (prev) prev.classList.remove('sel');
         row.classList.add('sel');
         flyToById(id);
+        showJobDetail(id);
+      });
+
+      // Docked detail panel actions (Open WIP / Open lead / Maps / group rows).
+      var detail = panel.querySelector('.emap-detail');
+      detail.addEventListener('click', function (ev) {
+        var t = ev.target;
+        var go = function (sel) { return t.closest ? t.closest(sel) : null; };
+        var wip = go('.emap-jc-wip');
+        if (wip) { var jid = wip.getAttribute('data-id'); if (typeof _onJobHook === 'function') _onJobHook(jid); else openEntity('job', jid); return; }
+        var op = go('.emap-jc-open') || go('.emap-grp-row');
+        if (op) { openEntity(op.getAttribute('data-kind'), op.getAttribute('data-id')); return; }
+        var mp = go('.emap-jc-maps');
+        if (mp) {
+          var la = mp.getAttribute('data-lat'), ln = mp.getAttribute('data-lng');
+          if (la && ln) window.open('https://www.google.com/maps/search/?api=1&query=' + la + ',' + ln, '_blank');
+          return;
+        }
       });
     }
 
