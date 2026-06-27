@@ -2966,6 +2966,49 @@
             color: var(--text-dim);
         }
 
+        /* ── Summary "Command center" layout (Direction A) ───────────────
+           Dense dashboard relayout: thin header + search trigger, a
+           color-coded attention ribbon, a compact snapshot strip, and a
+           3-column module workspace. Presentation-only — every module
+           hydrates into its existing host id. Mobile overrides live in the
+           @media (max-width:768px) block below and carry a #summary-root
+           prefix so they win over these base rules. */
+        .p86-cmd-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 18px; }
+        .p86-cmd-greet h1 { font-size: 24px; margin: 0 0 2px 0; font-weight: 700; color: var(--text, #fff); }
+        .p86-cmd-greet p { margin: 0; color: var(--text-dim, #888); font-size: 12px; }
+        .p86-cmd-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; max-width: 100%; }
+        .p86-cmd-search { display: inline-flex; align-items: center; gap: 7px; background: var(--input-bg, #0f1117); color: var(--text-dim, #888); border: 1px solid var(--border, #333); border-radius: 8px; padding: 7px 12px; font-size: 12px; cursor: pointer; transition: border-color 0.12s, color 0.12s; }
+        .p86-cmd-search:hover { border-color: var(--accent, #4f8cff); color: var(--text, #fff); }
+        .p86-cmd-sectlabel { font-size: 11px; color: var(--text-dim, #888); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 700; margin-bottom: 8px; }
+
+        .p86-cmd-attention { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 8px; margin-bottom: 18px; }
+        .p86-attn-tile { text-align: left; display: flex; flex-direction: column; align-items: flex-start; justify-content: flex-start; gap: 3px; padding: 9px 10px 10px; background: var(--card-bg, #0f0f1e); border: 1px solid var(--border, #333); border-top: 3px solid var(--attn-accent, var(--accent, #4f8cff)); border-radius: 0; cursor: pointer; min-height: 62px; transition: background 0.12s, border-color 0.12s; }
+        .p86-attn-tile:hover { background: var(--overlay-light, rgba(255, 255, 255, 0.04)); }
+        .p86-attn-tile-label { font-size: 10px; color: var(--text-dim, #aaa); text-transform: uppercase; letter-spacing: 0.4px; font-weight: 600; line-height: 1.2; }
+        .p86-attn-tile-count { font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; line-height: 1; }
+        .p86-attn-tile-sub { font-size: 9px; color: var(--text-dim, #888); line-height: 1.25; }
+
+        /* Snapshot strip — restyles paintSnapshotRow()'s .p86-snapshot-card
+           buttons into one compact row via descendant rules (no JS change);
+           descendant specificity beats the base .p86-snapshot-card rules. */
+        .p86-cmd-snapshot { display: flex; gap: 0; margin-bottom: 18px; border: 1px solid var(--border, #333); border-radius: 8px; overflow: hidden; background: var(--card-bg, #0f0f1e); }
+        .p86-cmd-snapshot .p86-snapshot-placeholder { flex: 1; padding: 10px 14px; }
+        .p86-cmd-snapshot .p86-snapshot-card { flex: 1; min-height: 0; border: none; border-right: 1px solid var(--border, #333); border-radius: 0; flex-direction: row; align-items: baseline; gap: 8px; padding: 9px 14px; }
+        .p86-cmd-snapshot .p86-snapshot-card:last-child { border-right: none; }
+        .p86-cmd-snapshot .p86-snapshot-card-count { font-size: 18px; }
+        .p86-cmd-snapshot .p86-snapshot-card-sub { display: none; }
+
+        /* Segmented control — mobile only (shown in the @media block). */
+        .p86-cmd-seg { display: none; gap: 4px; margin-bottom: 14px; background: var(--card-bg, #0f0f1e); border: 1px solid var(--border, #333); border-radius: 10px; padding: 3px; }
+        .p86-cmd-seg-btn { flex: 1; border: none; background: transparent; color: var(--text-dim, #888); font-size: 12px; font-weight: 600; padding: 8px 6px; border-radius: 8px; cursor: pointer; }
+        .p86-cmd-seg-btn.active { background: rgba(79, 140, 255, 0.16); color: var(--accent, #4f8cff); }
+
+        .p86-cmd-workspace { display: grid; grid-template-columns: 1.5fr 1fr 1fr; gap: 14px; align-items: flex-start; }
+        .p86-cmd-col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+        .p86-cmd-mod { display: flex; flex-direction: column; min-width: 0; }
+        .p86-cmd-modhead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; font-size: 11px; color: var(--text-dim, #888); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 700; }
+        .p86-cmd-modbody { border: 1px solid var(--border, #333); border-radius: 10px; background: var(--card-bg, #0f0f1e); padding: 12px; color: var(--text-dim, #888); font-size: 12px; min-height: 80px; }
+
         /* RESPONSIVE */
         @media (max-width: 768px) {
             .main-inner {
@@ -2994,16 +3037,33 @@
                child of #summary-root stays within the viewport. */
             #summary-root { max-width: 100%; overflow-x: hidden; padding: 16px 12px !important; }
             #summary-root > div > div { min-width: 0; }
-            #summary-root [style*="grid-template-columns"] { grid-template-columns: 1fr !important; }
             #summary-root .summary-card { min-width: 0; }
-            /* Force the dashboard's two-column main grid down to one
-               column so the rail (agenda, pipeline, files, inbox)
-               stacks below the recent-activity feed instead of getting
-               crushed beside it. */
-            #summary-root > div[style*="minmax(300px"],
-            #summary-root > div[style*="minmax(0,1fr) minmax(300px"] {
-                grid-template-columns: 1fr !important;
+            /* Command-center mobile (Direction A). The old blanket
+               [style*="grid-template-columns"] clamp is gone — the summary
+               grids are class-based now, and the sales stat-strip + files
+               grid keep their own intrinsic columns. Attention ribbon
+               scrolls horizontally; snapshot wraps 2-up; the 3-col
+               workspace collapses to one column; the segmented control
+               (Today / Money / Comms) pages between the module groups.
+               These rules carry a #summary-root prefix so they win over
+               the desktop .p86-cmd-* base rules above. */
+            #summary-root .p86-cmd-attention {
+                display: flex; gap: 8px; overflow-x: auto; -webkit-overflow-scrolling: touch;
+                scroll-snap-type: x mandatory; margin-bottom: 16px; padding-bottom: 4px;
             }
+            #summary-root .p86-cmd-attention > * { flex: 0 0 auto; scroll-snap-align: start; }
+            #summary-root .p86-cmd-attention .p86-attn-tile { min-width: 132px; }
+            #summary-root .p86-cmd-snapshot { flex-wrap: wrap; }
+            #summary-root .p86-cmd-snapshot .p86-snapshot-card { flex: 1 1 44%; }
+            #summary-root .p86-cmd-search { display: none; }
+            #summary-root .p86-cmd-seg { display: flex; }
+            #summary-root .p86-cmd-workspace { grid-template-columns: 1fr; }
+            #summary-root .p86-cmd-workspace[data-seg="today"] .p86-cmd-col:not([data-seg-group="today"]),
+            #summary-root .p86-cmd-workspace[data-seg="money"] .p86-cmd-col:not([data-seg-group="money"]),
+            #summary-root .p86-cmd-workspace[data-seg="comms"] .p86-cmd-col:not([data-seg-group="comms"]) {
+                display: none;
+            }
+            #summary-root .p86-cmd-greet h1 { font-size: 20px; }
 
             /* Mobile header — single-row layout. Logo + PROJECT 86
                wordmark on the left, icon cluster (files / bell /

@@ -890,16 +890,18 @@
             }).length;
 
             function attentionCard(label, count, color, onClick, subtitle) {
-                var clickAttr = onClick ? 'onclick="' + onClick + '"' : '';
-                var subHtml = subtitle ? '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:2px;">' + subtitle + '</div>' : '';
-                var countColor = (Number(count) > 0) ? color : 'var(--text-dim,#888)';
-                return '<button class="ee-btn" ' + clickAttr +
-                    ' style="text-align:left;padding:14px 16px;background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:10px;cursor:pointer;display:flex;align-items:flex-start;justify-content:space-between;gap:10px;min-height:72px;transition:border-color 0.12s;">' +
-                    '<div style="display:flex;flex-direction:column;gap:2px;">' +
-                        '<div style="font-size:11px;color:var(--text-dim,#aaa);text-transform:uppercase;letter-spacing:0.4px;font-weight:600;">' + label + '</div>' +
-                        subHtml +
-                    '</div>' +
-                    '<div style="font-size:24px;font-weight:700;color:' + countColor + ';font-variant-numeric:tabular-nums;line-height:1;">' + count + '</div>' +
+                var clickAttr = onClick ? ' onclick="' + onClick + '"' : '';
+                var subHtml = subtitle ? '<div class="p86-attn-tile-sub">' + subtitle + '</div>' : '';
+                // count is a literal number for the 4 sync cards and an HTML
+                // <span> placeholder for the 3 async cards — only grey-out a
+                // literal zero; never coerce the span to a Number.
+                var isLiteral = (typeof count === 'number');
+                var countColor = (isLiteral && count <= 0) ? 'var(--text-dim,#888)' : color;
+                return '<button type="button" class="p86-attn-tile ee-btn"' + clickAttr +
+                    ' style="--attn-accent:' + color + ';">' +
+                    '<div class="p86-attn-tile-label">' + label + '</div>' +
+                    '<div class="p86-attn-tile-count" style="color:' + countColor + ';">' + count + '</div>' +
+                    subHtml +
                 '</button>';
             }
 
@@ -911,14 +913,18 @@
             // resolves below. Greeting + quick actions land synchronously.
             root.innerHTML =
                 // Header zone
-                '<div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:20px;flex-wrap:wrap;">' +
-                    '<div>' +
-                        '<h1 style="font-size:26px;margin:0 0 4px 0;font-weight:700;color:var(--text,#fff);">' +
+                '<div class="p86-cmd-header">' +
+                    '<div class="p86-cmd-greet">' +
+                        '<h1>' +
                             greet + (firstName ? ', ' + escapeHTML(firstName) : '') + '.' +
                         '</h1>' +
-                        '<p style="margin:0;color:var(--text-dim,#888);font-size:13px;">Pick up where the team is.</p>' +
+                        '<p>Pick up where the team is.</p>' +
                     '</div>' +
-                    '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;max-width:100%;">' +
+                    '<div class="p86-cmd-actions">' +
+                        '<button type="button" class="p86-cmd-search" onclick="if(window.p86Search)window.p86Search.open();" aria-label="Search" title="Search jobs, leads, estimates, clients">' +
+                            '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>' +
+                            '<span>Search&hellip;</span>' +
+                        '</button>' +
                         // Global Ask 86 badge in the dashboard header.
                         '<span class="p86-ask86-mount"></span>' +
                         // Step 1: a new lead is the entry to the whole
@@ -939,8 +945,8 @@
                 '</div>' +
 
                 // Needs Attention row
-                '<div style="font-size:11px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:8px;">Needs your attention</div>' +
-                '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-bottom:24px;">' +
+                '<div class="p86-cmd-sectlabel">Needs your attention</div>' +
+                '<div class="p86-cmd-attention">' +
                     attentionCard('Overdue Invoices', overdueInv,  '#f87171', "window.switchTab('jobs');",   'Past due, unpaid') +
                     attentionCard('Open Leads',       openLeads,   '#22d3ee', leadsClick,                   'New + working') +
                     attentionCard('Pending Estimates', pendingEsts,'#fbbf24', estsClick,                    'Draft / not sent') +
@@ -973,8 +979,8 @@
                 // first paint via fetchManifest(); the placeholder
                 // below renders synchronously so the rest of Today
                 // can paint without waiting on the network.
-                '<div style="font-size:11px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;margin-bottom:8px;">System Snapshot</div>' +
-                '<div id="summary-snapshot-row" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:10px;margin-bottom:24px;">' +
+                '<div class="p86-cmd-sectlabel">System Snapshot</div>' +
+                '<div id="summary-snapshot-row" class="p86-cmd-snapshot">' +
                     '<div class="p86-snapshot-placeholder">Loading snapshot…</div>' +
                 '</div>' +
 
@@ -984,61 +990,58 @@
                 //           Recent Files, Inbox. Each rail widget has
                 //           its own header + body card so they read
                 //           as discrete sections in the column.
-                '<div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(300px,380px);gap:18px;align-items:flex-start;">' +
-                    // Left column: combined leads + jobs map (Phase 1 — see
-                    // renderSummaryMap below; host populated post-paint).
-                    '<div>' +
-                        '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">' +
-                            '<div style="font-size:11px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">Map</div>' +
+                // Mobile-only segmented control (Today / Money / Comms) —
+                // toggles which workspace column group shows on phones.
+                // Hidden on desktop via CSS; the hide-rules live inside the
+                // 768px media query so all three columns show on desktop.
+                '<div class="p86-cmd-seg" role="tablist" aria-label="Dashboard sections">' +
+                    '<button type="button" class="p86-cmd-seg-btn active" data-seg="today" onclick="window.p86CmdSeg(\'today\')">Today</button>' +
+                    '<button type="button" class="p86-cmd-seg-btn" data-seg="money" onclick="window.p86CmdSeg(\'money\')">Money</button>' +
+                    '<button type="button" class="p86-cmd-seg-btn" data-seg="comms" onclick="window.p86CmdSeg(\'comms\')">Comms</button>' +
+                '</div>' +
+                // 3-column workspace. Each host id + data-attribute + onclick
+                // is preserved from the prior layout so hydration is unchanged.
+                '<div class="p86-cmd-workspace" data-seg="today">' +
+                    // Col 1 (money) — combined leads + jobs map + sales pipeline.
+                    '<div class="p86-cmd-col" data-seg-group="money">' +
+                        '<div class="p86-cmd-mod">' +
+                            '<div class="p86-cmd-modhead"><span>Map</span></div>' +
+                            '<div id="summaryMapHost" class="p86-cmd-modbody" style="padding:0;min-height:420px;overflow:hidden;position:relative;"></div>' +
                         '</div>' +
-                        '<div id="summaryMapHost" style="border:1px solid var(--border,#333);border-radius:10px;background:var(--card-bg,#0f0f1e);min-height:420px;overflow:hidden;position:relative;"></div>' +
+                        // Sales pipeline renders its own header + card, so it
+                        // sits as a bare host (no .p86-cmd-mod wrapper).
+                        '<div id="summary-sales-host">' + renderSalesPipelineHTML(d, leadsClick, estsClick) + '</div>' +
                     '</div>' +
-                    // Right rail: stacked widgets
-                    '<div style="display:flex;flex-direction:column;gap:18px;">' +
-                        // AI Assistant Hub (Phase 1 — D4). One-line daily
-                        // summary + Today/Overdue/Upcoming task counts +
-                        // short list + quick-add + the Ask 86 entry point.
-                        // Read-only over the existing tasks system.
-                        '<div>' +
-                            '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">' +
-                                '<div style="font-size:11px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">Assistant Hub</div>' +
+                    // Col 2 (today) — assistant hub + this-week agenda.
+                    '<div class="p86-cmd-col" data-seg-group="today">' +
+                        '<div class="p86-cmd-mod">' +
+                            '<div class="p86-cmd-modhead"><span>Assistant Hub</span>' +
                                 '<button class="ee-btn ghost small" onclick="if(window.p86AI&amp;&amp;window.p86AI.open)window.p86AI.open({entityType:\'ask86\'});" style="font-size:11px;padding:2px 8px;">Ask 86 &rarr;</button>' +
                             '</div>' +
-                            '<div id="summary-assistant" style="border:1px solid var(--border,#333);border-radius:10px;background:var(--card-bg,#0f0f1e);padding:12px;color:var(--text-dim,#888);font-size:12px;min-height:80px;">Loading your day&hellip;</div>' +
+                            '<div id="summary-assistant" class="p86-cmd-modbody">Loading your day&hellip;</div>' +
                         '</div>' +
-                        // Agenda
-                        '<div>' +
-                            '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">' +
-                                '<div style="font-size:11px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">This Week’s Agenda</div>' +
+                        '<div class="p86-cmd-mod">' +
+                            '<div class="p86-cmd-modhead"><span>This Week’s Agenda</span>' +
                                 '<button class="ee-btn ghost small" onclick="window.switchTab(\'schedule\')" style="font-size:11px;padding:2px 8px;">View schedule &rarr;</button>' +
                             '</div>' +
-                            '<div id="summary-agenda" style="border:1px solid var(--border,#333);border-radius:10px;background:var(--card-bg,#0f0f1e);padding:12px;color:var(--text-dim,#888);font-size:12px;text-align:center;">Loading agenda&hellip;</div>' +
+                            '<div id="summary-agenda" class="p86-cmd-modbody" style="text-align:center;">Loading agenda&hellip;</div>' +
                         '</div>' +
-                        // Sales Pipeline
-                        '<div id="summary-sales-host">' + renderSalesPipelineHTML(d, leadsClick, estsClick) + '</div>' +
-                        // Recent Files
-                        '<div>' +
-                            '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">' +
-                                '<div style="font-size:11px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">Recent Files</div>' +
-                            '</div>' +
-                            '<div id="summary-files" style="border:1px solid var(--border,#333);border-radius:10px;background:var(--card-bg,#0f0f1e);padding:12px;color:var(--text-dim,#888);font-size:12px;text-align:center;min-height:80px;">Loading recent files&hellip;</div>' +
-                        '</div>' +
-                        // My Notes (Phase 1 — D3). Personal, private notes:
-                        // pinned first, single-line quick-add, click-to-edit,
-                        // pin toggle, delete. Owner+org scoped server-side.
-                        '<div>' +
-                            '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">' +
-                                '<div style="font-size:11px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">My Notes</div>' +
-                            '</div>' +
-                            '<div id="summary-notes" style="border:1px solid var(--border,#333);border-radius:10px;background:var(--card-bg,#0f0f1e);padding:12px;color:var(--text-dim,#888);font-size:12px;min-height:80px;">Loading notes&hellip;</div>' +
-                        '</div>' +
-                        // Inbox
-                        '<div>' +
-                            '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">' +
-                                '<div style="font-size:11px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">Inbox</div>' +
+                    '</div>' +
+                    // Col 3 (comms) — inbox + recent files + my notes.
+                    '<div class="p86-cmd-col" data-seg-group="comms">' +
+                        '<div class="p86-cmd-mod">' +
+                            '<div class="p86-cmd-modhead"><span>Inbox</span>' +
                                 '<button class="ee-btn ghost small" onclick="if (window.p86Messaging) window.p86Messaging.openInbox();" style="font-size:11px;padding:2px 8px;">Open inbox &rarr;</button>' +
                             '</div>' +
-                            '<div id="summary-inbox" style="border:1px solid var(--border,#333);border-radius:10px;background:var(--card-bg,#0f0f1e);padding:18px;text-align:center;color:var(--text-dim,#888);font-size:12px;line-height:1.5;min-height:80px;">Loading inbox&hellip;</div>' +
+                            '<div id="summary-inbox" class="p86-cmd-modbody" style="text-align:center;">Loading inbox&hellip;</div>' +
+                        '</div>' +
+                        '<div class="p86-cmd-mod">' +
+                            '<div class="p86-cmd-modhead"><span>Recent Files</span></div>' +
+                            '<div id="summary-files" class="p86-cmd-modbody" style="text-align:center;">Loading recent files&hellip;</div>' +
+                        '</div>' +
+                        '<div class="p86-cmd-mod">' +
+                            '<div class="p86-cmd-modhead"><span>My Notes</span></div>' +
+                            '<div id="summary-notes" class="p86-cmd-modbody">Loading notes&hellip;</div>' +
                         '</div>' +
                     '</div>' +
                 '</div>';
@@ -1061,6 +1064,22 @@
             fetchChangeOrderAttentionCounts();
         }
         window.renderSummaryDashboard = renderSummaryDashboard;
+
+        // Command-center mobile segmented control — swaps which workspace
+        // column group is visible on phones (Today / Money / Comms). Inert
+        // on desktop: the column hide-rules live inside the 768px media
+        // query, so all three columns render regardless of data-seg. The
+        // hidden columns' hosts are already hydrated, so switching tabs
+        // never triggers a re-fetch.
+        window.p86CmdSeg = function (seg) {
+            var ws = document.querySelector('#summary-root .p86-cmd-workspace');
+            if (!ws) return;
+            ws.setAttribute('data-seg', seg);
+            var b = document.querySelectorAll('#summary-root .p86-cmd-seg-btn');
+            for (var i = 0; i < b.length; i++) {
+                b[i].classList.toggle('active', b[i].getAttribute('data-seg') === seg);
+            }
+        };
 
         // Wave 3 — hydrate the "My Open RFIs/Subs" attention card after
         // first paint. Two parallel fetches (mine + overdue) feed:
