@@ -105,26 +105,20 @@ function setSitePlanFocusSet(s){ _spFocusSet = (s && typeof s === 'object') ? s 
 // Is this node visible in site-plan mode right now? Gates BOTH renderNodes
 // (ui.js) and drawWires (below) so node + wire visibility never diverge.
 function spNodeVisible(type, id){
-  // Satellite Site Plan: the WIP hub (+ its direct site-cost chips) move OFF the
-  // canvas into the sidebar metrics panel. Visibility-only — the wip node object +
-  // every wire stay alive, so getOutput totals are unchanged. Non-satellite is byte-
-  // identical (predicate falsy → original behavior).
-  var _sat = _satActive && _satActive();
+  // Site Plan (satellite OR abstract): the WIP hub + its shared/site-cost chips live
+  // in the sidebar metrics panel, never on the canvas. WIP data is now read from the
+  // job (getJobWIP), so the hub node is purely vestigial here — hidden unconditionally.
+  // Visibility-only: the wip node object + every wire stay alive, so getOutput totals
+  // are unchanged. spNodeVisible is consulted ONLY in site-plan render paths (renderNodes
+  // gates on sitePlan; drawWires on viewMode==='siteplan'), so the abstract graph is
+  // byte-identical — the WIP node still renders there as before.
   if (_spFocusSet) {
-    if (type === 'wip') return !_sat;          // satellite: WIP hub stays hidden even when drilled in
-    return _spFocusSet[id] === 1;              // (a building wires INTO wip, so it would otherwise leak via the focus set)
+    if (type === 'wip') return false;          // drilled-in: hub stays off-canvas (a building wires INTO it, so it would otherwise leak via the focus set)
+    return _spFocusSet[id] === 1;
   }
-  if (type === 't1') return true;
-  if (type === 'wip') return !_sat;
-  if (_sat) return false; // hide shared/site-cost chips too — they roll into the sidebar totals
-  // Shared/site costs (Slice 2b): any node wired DIRECTLY into a WIP node,
-  // bypassing the buildings — mobilization, general conditions, etc. They flow
-  // straight to the hub, so the whole-site view shows them as chips feeding it.
-  return wires.some(function(w){
-    if (w.fromNode !== id) return false;
-    var tn = findNode(w.toNode);
-    return !!(tn && tn.type === 'wip');
-  });
+  if (type === 'wip') return false;            // whole-site: hub lives in the sidebar
+  if (type === 't1') return true;              // Site / building footprints
+  return false;                                // Scope/cost render on drill-in (focus set); shared-to-wip costs stay off-canvas
 }
 // First ins/outs index on a def whose port type can connect with `type` in
 // the given direction ('in'|'out'). Used to auto-wire added/spliced nodes.

@@ -707,11 +707,12 @@ body.light-mode .ng-topbar.ng-ribbon .ng-ribbon-btn:hover{
    can't win. Card stays in the DOM (display:none) so data-id lookups still resolve;
    wires anchor via the geo hook, not its ports. */
 #nodeGraphTab.ng-siteplan.ng-sat .ng-node.ng-tt-t1.ng-sp-building.ng-has-poly{display:none !important}
-/* Site Plan rework: WIP metrics live in the sidebar in satellite mode (the WIP node
-   leaves the canvas). Panel + the WIP node-library category are satellite-scoped. */
+/* Site Plan rework: WIP metrics live in the sidebar in ALL Site Plan modes (the WIP
+   node leaves the canvas whether or not the satellite basemap is on). Panel + the WIP
+   node-library category are site-plan-scoped (not satellite-scoped). */
 .ng-sp-metrics{display:none;padding:10px 10px 6px;border-bottom:1px solid var(--ng-border)}
-#nodeGraphTab.ng-siteplan.ng-sat .ng-sp-metrics{display:block}
-#nodeGraphTab.ng-siteplan.ng-sat .ng-cat-wip{display:none}
+#nodeGraphTab.ng-siteplan .ng-sp-metrics{display:block}
+#nodeGraphTab.ng-siteplan .ng-cat-wip{display:none}
 /* In satellite the Building (t1) palette item stays visible and acts as the
    trace INITIATOR (handled in the sidebar click → toggleTraceMode), so the
    user draws the footprint instead of dropping an abstract card. */

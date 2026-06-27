@@ -1921,7 +1921,7 @@ function wipChipEdit(wc){
 var _jobChipEditing=false;
 function renderSidebarMetrics(){
   var body=document.querySelector('.ng-sp-metrics-body'); if(!body) return;
-  if(!(_spSatellite && E.viewMode && E.viewMode()==='siteplan')) return; // panel hidden off-satellite — skip the work
+  if(!(E.viewMode && E.viewMode()==='siteplan')) return; // shown in all Site Plan modes (WIP lives in the sidebar, satellite or not)
   if(_jobChipEditing && body.querySelector('input')) return;             // mid-edit: don't clobber the focused input
   var jid=E.job();
   var job=(typeof appData!=='undefined' && appData.jobs) ? appData.jobs.find(function(j){return j.id===jid;}) : null;
@@ -2003,7 +2003,7 @@ function jobFieldEdit(chip){
 // body uses, so the numbers match. display:'block' (not '') — CSS default is none.
 function renderBuildingMetrics(){
   var panel=document.querySelector('.ng-sp-bldg'); if(!panel) return;
-  var on=_spSatellite && E.viewMode && E.viewMode()==='siteplan';
+  var on=E.viewMode && E.viewMode()==='siteplan'; // per-building panel works in all Site Plan modes
   var sel=(on && selN) ? E.findNode(selN) : null;
   if(!sel || sel.type!=='t1'){ panel.style.display='none'; return; }
   panel.style.display='block';
