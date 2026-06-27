@@ -43,6 +43,11 @@
   // address (deterministic geocode) always lands in one group.
   var GROUP_DECIMALS = 5;
 
+  // Vector "Map ID" (Google Cloud → Maps → Map Management, project86). A vector map
+  // unlocks tilt + a cinematic camera and is REQUIRED for AdvancedMarkerElement pins.
+  // Used ONLY by the org Job Map (opts.jobsSidebar); the Summary card stays raster.
+  var P86_MAP_ID = '285034f23d385f2e9f756209';
+
   function escapeHTML(s) {
     if (typeof window.escapeHTML === 'function') return window.escapeHTML(s);
     return String(s == null ? '' : s)
@@ -122,7 +127,9 @@
       '.emap-jobs-empty{padding:20px 10px;text-align:center;color:#64748b;font-size:12px;}' +
       '.emap-jobs-expand{position:absolute;top:10px;right:10px;z-index:6;font-size:11px;font-weight:600;padding:6px 11px;border-radius:6px;border:1px solid rgba(255,255,255,0.15);background:rgba(17,20,28,0.94);color:#cbd5e1;cursor:pointer;box-shadow:-2px 0 8px rgba(0,0,0,0.30);}' +
       '.emap-jobs-expand:hover{color:#fff;border-color:#4f8cff;}' +
-      '.emap-geocode-note{position:absolute;bottom:24px;left:10px;z-index:6;font-size:11px;font-weight:600;padding:6px 12px;border-radius:14px;background:rgba(17,20,28,0.92);color:#cbd5e1;border:1px solid rgba(255,255,255,0.12);box-shadow:0 1px 6px rgba(0,0,0,0.30);}';
+      '.emap-geocode-note{position:absolute;bottom:24px;left:10px;z-index:6;font-size:11px;font-weight:600;padding:6px 12px;border-radius:14px;background:rgba(17,20,28,0.92);color:#cbd5e1;border:1px solid rgba(255,255,255,0.12);box-shadow:0 1px 6px rgba(0,0,0,0.30);}' +
+      '@keyframes emap-pin-bounce{0%,100%{transform:translateY(0)}25%{transform:translateY(-13px)}50%{transform:translateY(0)}75%{transform:translateY(-6px)}}' +
+      '.emap-pin-bounce{animation:emap-pin-bounce .7s ease-in-out 2;transform-origin:bottom center}';
     document.head.appendChild(st);
   }
 
@@ -396,6 +403,11 @@
       // org map → Google-Earth-style hybrid (imagery + labels); other mounts stay roadmap
       mapTypeId: opts.satellite ? maps.MapTypeId.HYBRID : maps.MapTypeId.ROADMAP
     };
+    // Vector basemap + AdvancedMarkerElement pins — ONLY the org Job Map, and only when
+    // the marker library exposes AdvancedMarkerElement. Falls back to raster + classic
+    // markers (the current behavior) otherwise. The Summary card never opts in.
+    var advOK = !!(opts.jobsSidebar && P86_MAP_ID && maps.marker && maps.marker.AdvancedMarkerElement);
+    if (advOK) mapOpts.mapId = P86_MAP_ID;
     // The jobs sidebar covers the right edge — move the zoom + fullscreen controls
     // to the left so they stay reachable behind it.
     if (opts.jobsSidebar && maps.ControlPosition) {
@@ -410,12 +422,60 @@
     var didFit = false;
     var jobIndex = {}; // jobId → { pos, marker, item } for the sidebar fly-to
 
+    // ── Marker abstraction: AdvancedMarkerElement on the vector Job Map, classic
+    // maps.Marker everywhere else. One creation/teardown/anchor path for both. ──
+    function pinImg(spec) {
+      if (!spec || !spec.url) return null;
+      var img = document.createElement('img');
+      img.src = spec.url;
+      img.style.width = (spec.w || 30) + 'px';
+      img.style.height = (spec.h || 42) + 'px';
+      img.style.display = 'block';
+      img.draggable = false;
+      return img;
+    }
+    // o: { content (HTMLEl, adv), icon (maps icon, classic), title, onClick, zIndex }
+    function makeMarker(pos, o) {
+      var mk;
+      if (advOK) {
+        mk = new maps.marker.AdvancedMarkerElement({
+          position: pos, map: map, title: o.title || '',
+          content: o.content || undefined, gmpClickable: !!o.onClick
+        });
+        if (o.zIndex != null) mk.zIndex = o.zIndex;
+        mk.__adv = true;
+      } else {
+        mk = new maps.Marker({ position: pos, map: map, title: o.title || '', icon: o.icon });
+        if (o.zIndex != null) mk.setZIndex(o.zIndex);
+        mk.__adv = false;
+      }
+      if (o.onClick) mk.addListener('click', o.onClick);
+      return mk;
+    }
+    function removeMarker(m) { if (!m) return; if (m.__adv) { m.map = null; } else { m.setMap(null); } }
+    function openInfo(content, m) {
+      infoWindow.setContent(content);
+      if (m && m.__adv) infoWindow.open({ anchor: m, map: map });
+      else infoWindow.open(map, m);
+    }
+    function bounceMarker(m) {
+      if (!m) return;
+      if (m.__adv) {
+        var el = m.content; if (!el) return;
+        el.classList.add('emap-pin-bounce');
+        setTimeout(function () { try { el.classList.remove('emap-pin-bounce'); } catch (e) {} }, 1400);
+      } else if (m.setAnimation && maps.Animation) {
+        try { m.setAnimation(maps.Animation.BOUNCE); } catch (e) {}
+        setTimeout(function () { try { m.setAnimation(null); } catch (e) {} }, 1400);
+      }
+    }
+
     // (Re)build all markers from the currently-visible item set, grouping
     // co-located items into a single count-badged pin. Called on first
     // render and whenever a filter chip toggles.
     function rebuild() {
       // Clear prior markers off the map.
-      markers.forEach(function (m) { m.setMap(null); });
+      markers.forEach(removeMarker);
       markers = [];
       for (var jk in jobIndex) { if (Object.prototype.hasOwnProperty.call(jobIndex, jk)) delete jobIndex[jk]; }
 
@@ -428,20 +488,21 @@
         var marker;
         if (g.members.length === 1) {
           var item = g.members[0];
-          marker = new maps.Marker({ position: pos, title: item.title || '', icon: iconForItem(maps, item), map: map });
-          marker.addListener('click', (function (it) {
-            return function () { infoWindow.setContent(infoContentHTML(it)); infoWindow.open(map, marker); };
-          })(item));
-        } else {
-          marker = new maps.Marker({
-            position: pos,
-            title: g.members.length + ' items at this property',
-            icon: groupPinIcon(maps, g.members.length),
-            map: map
+          var sIcon = iconForItem(maps, item);
+          marker = makeMarker(pos, {
+            title: item.title || '',
+            icon: sIcon,
+            content: (advOK && sIcon) ? pinImg({ url: sIcon.url, w: sIcon.scaledSize.width, h: sIcon.scaledSize.height }) : null,
+            onClick: (function (it) { return function () { openInfo(infoContentHTML(it), marker); }; })(item)
           });
-          marker.addListener('click', (function (members) {
-            return function () { infoWindow.setContent(groupContentHTML(members)); infoWindow.open(map, marker); };
-          })(g.members));
+        } else {
+          var gIcon = groupPinIcon(maps, g.members.length);
+          marker = makeMarker(pos, {
+            title: g.members.length + ' items at this property',
+            icon: gIcon,
+            content: advOK ? pinImg({ url: gIcon.url, w: gIcon.scaledSize.width, h: gIcon.scaledSize.height }) : null,
+            onClick: (function (members) { return function () { openInfo(groupContentHTML(members), marker); }; })(g.members)
+          });
         }
         markers.push(marker);
         bounds.extend(pos);
@@ -466,27 +527,49 @@
     // Expose the live mount so the public flyToJob(jobId) can drive it.
     _active = { map: map, infoWindow: infoWindow, jobIndex: jobIndex, flyTo: flyTo };
 
-    // Smoothly move the camera to a coordinate, bounce its pin, open its info
-    // window. The stepped zoom reads as a mini "fly-in" on the raster map (the
-    // true cinematic camera arrives with the vector-basemap upgrade).
+    // Fly the camera to a coordinate, bounce its pin, open its info window. On the
+    // vector basemap this is a true cinematic arc — center + zoom + TILT interpolated
+    // together via moveCamera. On raster it falls back to pan + a stepped zoom-in.
     function flyTo(pos, marker, item) {
       if (!map || !pos) return;
-      map.panTo(pos);
-      var z = map.getZoom() || 11;
-      if (z < 17) {
-        var steps = []; [Math.max(z, 14), 16, 18].forEach(function (s) { if (steps.indexOf(s) < 0) steps.push(s); });
-        var k = 0;
-        (function step() {
-          if (k >= steps.length) return;
-          map.setZoom(steps[k++]);
-          setTimeout(step, 200);
-        })();
+      if (!advOK || !map.moveCamera) {
+        map.panTo(pos);
+        var z = map.getZoom() || 11;
+        if (z < 17) {
+          var steps = []; [Math.max(z, 14), 16, 18].forEach(function (s) { if (steps.indexOf(s) < 0) steps.push(s); });
+          var k = 0;
+          (function step() {
+            if (k >= steps.length) return;
+            map.setZoom(steps[k++]);
+            setTimeout(step, 200);
+          })();
+        }
+      } else {
+        var c = map.getCenter();
+        var sLat = c ? c.lat() : pos.lat, sLng = c ? c.lng() : pos.lng;
+        var sZoom = map.getZoom() || 11, eZoom = 18;
+        var sTilt = (map.getTilt && map.getTilt()) || 0, eTilt = 55;
+        var sHead = (map.getHeading && map.getHeading()) || 0;
+        var t0 = null, DUR = 850;
+        var frame = function (ts) {
+          if (t0 == null) t0 = ts;
+          var kk = Math.min(1, (ts - t0) / DUR);
+          var ee = 1 - Math.pow(1 - kk, 3); // ease-out cubic
+          try {
+            map.moveCamera({
+              center: { lat: sLat + (pos.lat - sLat) * ee, lng: sLng + (pos.lng - sLng) * ee },
+              zoom: sZoom + (eZoom - sZoom) * ee,
+              tilt: sTilt + (eTilt - sTilt) * ee,
+              heading: sHead
+            });
+          } catch (err) { map.setCenter(pos); map.setZoom(eZoom); return; }
+          if (kk < 1) requestAnimationFrame(frame);
+        };
+        if (typeof requestAnimationFrame === 'function') requestAnimationFrame(frame);
+        else { try { map.moveCamera({ center: pos, zoom: eZoom, tilt: eTilt, heading: sHead }); } catch (e) {} }
       }
-      if (marker && maps.Animation) {
-        try { marker.setAnimation(maps.Animation.BOUNCE); } catch (e) {}
-        setTimeout(function () { try { marker.setAnimation(null); } catch (e) {} }, 1500);
-      }
-      if (item) { infoWindow.setContent(infoContentHTML(item)); infoWindow.open(map, marker); }
+      bounceMarker(marker);
+      if (item) openInfo(infoContentHTML(item), marker);
     }
     function flyToById(id) { var e = jobIndex[id]; if (e) flyTo(e.pos, e.marker, e.item); }
 
@@ -607,17 +690,22 @@
       function placeYou(g) {
         if (!g || !isFinite(Number(g.lat)) || !isFinite(Number(g.lng))) return;
         youPos = { lat: Number(g.lat), lng: Number(g.lng) };
-        var youIcon = {
-          url: 'data:image/svg+xml;utf8,' + encodeURIComponent(
-            '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22">' +
-            '<circle cx="11" cy="11" r="7" fill="#1a73e8" stroke="#fff" stroke-width="3"/>' +
-            '<circle cx="11" cy="11" r="10" fill="#1a73e8" fill-opacity="0.18"/></svg>'),
-          anchor: new maps.Point(11, 11),
-          scaledSize: new maps.Size(22, 22)
-        };
-        youMarker = new maps.Marker({
-          position: youPos, map: map, icon: youIcon,
-          title: 'You are here', zIndex: 9999
+        var youUrl = 'data:image/svg+xml;utf8,' + encodeURIComponent(
+          '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22">' +
+          '<circle cx="11" cy="11" r="7" fill="#1a73e8" stroke="#fff" stroke-width="3"/>' +
+          '<circle cx="11" cy="11" r="10" fill="#1a73e8" fill-opacity="0.18"/></svg>');
+        var youContent = null;
+        if (advOK) {
+          youContent = pinImg({ url: youUrl, w: 22, h: 22 });
+          // AdvancedMarkerElement anchors content bottom-center; shift down so the dot
+          // sits centered on the point (it's a position dot, not a pin).
+          youContent.style.transform = 'translateY(50%)';
+        }
+        youMarker = makeMarker(youPos, {
+          title: 'You are here',
+          icon: { url: youUrl, anchor: new maps.Point(11, 11), scaledSize: new maps.Size(22, 22) },
+          content: youContent,
+          zIndex: 9999
         });
         if (recenterBtn) {
           recenterBtn.style.display = '';
