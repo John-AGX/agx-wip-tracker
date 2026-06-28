@@ -81,7 +81,7 @@
       contactChip('Maint', c.maintenance_manager, c.mm_email, c.mm_phone),
       contactChip('Contact', [c.first_name, c.last_name].filter(Boolean).join(' '), c.email, c.phone)
     ].filter(Boolean).join('');
-    if (c.property_address || c.market) contacts += '<span style="font-size:12px;color:var(--text-dim,#8a93a6);">📍 ' + esc([c.market, c.property_address].filter(Boolean).join(' · ')) + '</span>';
+    if (c.property_address || c.market) contacts += '<span style="font-size:12px;color:var(--text-dim,#8a93a6);">' + (window.p86Icon ? window.p86Icon('map-pin') + ' ' : '') + esc([c.market, c.property_address].filter(Boolean).join(' · ')) + '</span>';
     if (contacts) html += '<div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:16px;">' + contacts + '</div>';
 
     html += '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:18px;">' +

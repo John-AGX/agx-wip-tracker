@@ -52,7 +52,7 @@
   //   label            : visible text (usually the address itself)
   //   addressOrLatLng  : address string OR {lat,lng,address}
   //   opts.lat/opts.lng: coords to prefer over the address
-  //   opts.iconOnly    : render just the 📍 pin (tight rows)
+  //   opts.iconOnly    : render just the map-pin icon (tight rows)
   //   opts.noIcon      : render the label with no leading pin
   //   opts.style       : inline-style override for the <a>
   // Returns '' when there's nothing to link (and, when not iconOnly,
@@ -69,8 +69,11 @@
       : (typeof addressOrLatLng === 'string' ? addressOrLatLng : '');
     if (!href) return opts.iconOnly ? '' : esc(labelText);
     var style = opts.style || 'color:#4f8cff;text-decoration:none;cursor:pointer;';
-    var inner = opts.iconOnly ? '📍'
-      : (opts.noIcon ? esc(labelText) : ('📍 ' + esc(labelText)));
+    // Heroicon map-pin (tints to the link color via currentColor). Falls back to
+    // the emoji only if the icon system somehow hasn't loaded yet (defensive).
+    var pin = (typeof window.p86Icon === 'function') ? window.p86Icon('map-pin', { class: 'p86-map-pin' }) : '📍';
+    var inner = opts.iconOnly ? pin
+      : (opts.noIcon ? esc(labelText) : (pin + ' ' + esc(labelText)));
     return '<a href="' + escAttr(href) + '" target="_blank" rel="noopener noreferrer" ' +
       'style="' + style + '" title="Open in Google Maps">' + inner + '</a>';
   }

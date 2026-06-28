@@ -3436,11 +3436,11 @@
         var pinStyle = section.pin_style || 'tag';
         var pinStyleSelect =
           '<select class="p86-report-section-pinstyle" title="Pin style — how each photo appears on the map">' +
-            '<option value="tag"' + (pinStyle === 'tag' ? ' selected' : '') + '>📍 Tag colors</option>' +
-            '<option value="numbered"' + (pinStyle === 'numbered' ? ' selected' : '') + '>📍 Numbered</option>' +
-            '<option value="lettered"' + (pinStyle === 'lettered' ? ' selected' : '') + '>📍 Lettered</option>' +
-            '<option value="photo"' + (pinStyle === 'photo' ? ' selected' : '') + '>📍 Photo thumb</option>' +
-            '<option value="dot"' + (pinStyle === 'dot' ? ' selected' : '') + '>📍 Plain dot</option>' +
+            '<option value="tag"' + (pinStyle === 'tag' ? ' selected' : '') + '>Tag colors</option>' +
+            '<option value="numbered"' + (pinStyle === 'numbered' ? ' selected' : '') + '>Numbered</option>' +
+            '<option value="lettered"' + (pinStyle === 'lettered' ? ' selected' : '') + '>Lettered</option>' +
+            '<option value="photo"' + (pinStyle === 'photo' ? ' selected' : '') + '>Photo thumb</option>' +
+            '<option value="dot"' + (pinStyle === 'dot' ? ' selected' : '') + '>Plain dot</option>' +
           '</select>';
         mapBtns =
           '<button class="ee-btn secondary p86-report-section-autopin" title="Add every project photo that has GPS data">&#x1F4CD; Auto-pin all</button>' +

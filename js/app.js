@@ -812,7 +812,7 @@
                                     '<div class="p86-help-feature-label">' + escapeHTML(f.label) + '</div>' +
                                     '<div class="p86-help-feature-blurb">' + escapeHTML(f.blurb) + '</div>' +
                                     '<div class="p86-help-feature-path">' +
-                                        '<span class="p86-help-feature-path-icon">📍</span> ' +
+                                        '<span class="p86-help-feature-path-icon">' + (window.p86Icon ? window.p86Icon('map-pin') : '') + '</span> ' +
                                         escapeHTML(f.access_path) +
                                     '</div>' +
                                 '</div>';

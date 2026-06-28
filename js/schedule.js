@@ -678,14 +678,14 @@
     if (jobWx.status === 'no_address') {
       return '<div class="sch-day-row-wx sch-day-row-wx-muted" ' +
               'title="Add a job address (or a building address) to see weather here.">' +
-        '<span class="sch-wx-icon">📍</span>' +
+        '<span class="sch-wx-icon">' + (window.p86Icon ? window.p86Icon('map-pin') : '') + '</span>' +
         '<span class="sch-day-row-wx-msg">No address on this job</span>' +
       '</div>';
     }
     if (jobWx.status === 'failed') {
       return '<div class="sch-day-row-wx sch-day-row-wx-muted" ' +
               'title="Could not geocode address: ' + escapeAttr(jobWx.address || '') + '">' +
-        '<span class="sch-wx-icon">📍</span>' +
+        '<span class="sch-wx-icon">' + (window.p86Icon ? window.p86Icon('map-pin') : '') + '</span>' +
         '<span class="sch-day-row-wx-msg">Address not recognized</span>' +
       '</div>';
     }
@@ -3761,7 +3761,7 @@
       '</div>';
     }).join('');
     var addrNote = w.address
-      ? '<div class="sch-job-wx-addr">📍 ' + escapeHTML(w.address) + '</div>'
+      ? '<div class="sch-job-wx-addr">' + (window.p86Icon ? window.p86Icon('map-pin') + ' ' : '') + escapeHTML(w.address) + '</div>'
       : '';
     body.innerHTML = '<div class="sch-job-wx-strip">' + cards + '</div>' + addrNote;
   }

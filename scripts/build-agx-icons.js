@@ -70,6 +70,7 @@ const MAP = {
   'magnifying-glass':'heroicons/magnifying-glass',     // admin Prompt Preview tab — uses existing source if present, else falls back to command-line below
   'command-line':    'heroicons/command-line',         // alt for prompt preview / terminal
   'globe':           'heroicons/globe-alt',            // admin Anthropic tab
+  'map-pin':         'heroicons/map-pin',              // location pin — address lines, 86 chat location indicator, schedule
   'cube':            'heroicons/cube',                 // admin Batch tab
   'chart-bar':       'heroicons/chart-bar',            // admin Metrics tab
   'chart-pie':       'heroicons/chart-pie',
@@ -264,7 +265,8 @@ const FOOTER = `
     '🏢': 'buildings',         // 1F3E2 office building (Gen. Conditions)
     '⚖': 'scale',              // 2696  balance scales (Direct Burden)
     '📌': 'bookmark',          // 1F4CC pushpin (Other / Note)
-    '💳': 'banknotes'          // 1F4B3 credit card (Invoice)
+    '💳': 'banknotes',         // 1F4B3 credit card (Invoice)
+    '📍': 'map-pin'            // 1F4CD round pushpin (location pin)
   };
   // Match an emoji at start of string with optional U+FE0F + whitespace.
   function matchLeadingEmoji(text) {
@@ -364,6 +366,13 @@ const CUSTOM_ICONS = {
   // V5 = path-drawn 8 + 6 to match the user reference image exactly
   'dna-86-v5': '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none" stroke="currentColor" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"><circle cx="128" cy="128" r="120"/><g><path d="M 56 24 C 56 58 140 58 140 92 C 140 126 56 126 56 160"/><path d="M 140 24 C 140 58 56 58 56 92 C 56 126 140 126 140 160"/><line x1="62" y1="40" x2="134" y2="40"/><line x1="62" y1="108" x2="134" y2="108"/></g><rect x="142" y="156" width="38" height="32" rx="14"/><rect x="138" y="190" width="42" height="36" rx="16"/><path d="M 230 154 Q 200 164 200 208"/><rect x="194" y="194" width="36" height="34" rx="16"/></svg>'
 };
+// Restored: users / id-card / check-circle were hand-added directly to the
+// generated agx-icons.js and were dropped on every rebuild (not in MAP). Inline
+// them verbatim so they survive rebuilds. users + check-circle are Phosphor
+// 256-grid; id-card is Heroicons "identification" (stroke already slimmed to 1.2).
+CUSTOM_ICONS['users'] = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><rect width="256" height="256" fill="none"/><circle cx="128" cy="96" r="64" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="12"/><path d="M30.99,224a112.12,112.12,0,0,1,194.02,0" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="12"/></svg>';
+CUSTOM_ICONS['id-card'] = '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.2" stroke="currentColor" aria-hidden="true" data-slot="icon"><path stroke-linecap="round" stroke-linejoin="round" d="M15 9h3.75M15 12h3.75M15 15h3.75M4.5 19.5h15a2.25 2.25 0 0 0 2.25-2.25V6.75A2.25 2.25 0 0 0 19.5 4.5h-15a2.25 2.25 0 0 0-2.25 2.25v10.5A2.25 2.25 0 0 0 4.5 19.5Zm6-10.125a1.875 1.875 0 1 1-3.75 0 1.875 1.875 0 0 1 3.75 0Zm1.294 6.336a6.721 6.721 0 0 1-3.17.789 6.721 6.721 0 0 1-3.168-.789 3.376 3.376 0 0 1 6.338 0Z"/></svg>';
+CUSTOM_ICONS['check-circle'] = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256"><rect width="256" height="256" fill="none"/><polyline points="172 104 113.33 160 84 132" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="12"/><circle cx="128" cy="128" r="96" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="12"/></svg>';
 // dna-86-badge is the user-supplied 86Badge.svg, traced as filled paths.
 // Loaded from disk so the source SVG stays canonical and we don't double-
 // maintain it. fill="#000000" on the <g> is rewritten to currentColor in
