@@ -889,10 +889,10 @@
                                 <div class="job-detail-title" id="job-detail-title"></div>
                             </div>
                             <span id="job-detail-status" class="job-detail-status-pill"></span>
-                            <div class="ee-header-icons" style="display:inline-flex;align-items:center;gap:2px;">
+                            <div class="ee-header-icons" style="display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap;">
                                 <button class="header-icon-btn" data-p86-icon="edit" onclick="toggleEditJobInfo()" id="edit-job-info-btn" title="Edit job info" aria-label="Edit job info"></button>
-                                <button class="header-icon-btn" data-p86-icon="folder" onclick="archiveCurrentJob()" id="archive-job-btn" title="Archive job" aria-label="Archive job"></button>
-                                <button class="header-icon-btn ee-header-icon-danger" data-p86-icon="delete" onclick="deleteCurrentJob()" title="Delete job" aria-label="Delete job"></button>
+                                <button onclick="archiveCurrentJob()" id="archive-job-btn" title="Archive job" style="padding:6px 12px;font-size:12px;font-weight:600;white-space:nowrap;border-radius:7px;border:1px solid var(--border,#2e3346);background:var(--surface,#1a1d27);color:var(--text,#eef0f6);cursor:pointer;">Archive</button>
+                                <button onclick="deleteCurrentJob()" title="Delete job permanently" style="padding:6px 12px;font-size:12px;font-weight:600;white-space:nowrap;border-radius:7px;border:1px solid rgba(255,107,107,.45);background:var(--surface,#1a1d27);color:#ff6b6b;cursor:pointer;">Delete</button>
                             </div>
                         </div>
 
@@ -3204,7 +3204,7 @@
          estimate-preview + the upcoming change-order-editor. Loads
          BEFORE any of them so window.p86Pricing is ready. -->
     <script src="js/pricing-pipeline.js?v=1"></script>
-    <script src="js/jobs.js?v=101"></script>
+    <script src="js/jobs.js?v=102"></script>
     <script src="js/job-workflow-ui.js?v=4"></script>
     <script src="js/estimates.js?v=45"></script>
     <script src="js/proposal.js?v=25"></script>

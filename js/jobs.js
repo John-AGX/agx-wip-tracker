@@ -2077,7 +2077,8 @@ function renderJobsMain() {
             if (_ecCell && !job.estimatedCosts && job.estimate_id) {
                 _ecCell.innerHTML = formatCurrency(job.estimatedCosts) + ' <span style="color:var(--text-dim,#888);font-size:11px;">· estimate has no cost basis</span>';
             }
-            document.getElementById('archive-job-btn').textContent = job.status === 'Archived' ? 'Unarchive Job' : 'Archive Job';
+            var _archBtn = document.getElementById('archive-job-btn');
+            if (_archBtn) _archBtn.textContent = job.status === 'Archived' ? 'Unarchive' : 'Archive';
 
             // Summary cards — WIP-based
             const coInfo = w.coIncome > 0 ? `Contract: ${formatCurrency(w.contractIncome)} + CO: ${formatCurrency(w.coIncome)}` : '';
