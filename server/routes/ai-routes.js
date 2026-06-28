@@ -2952,15 +2952,16 @@ async function ensureAiSession({ agentKey, entityType, entityId, userId, organiz
 // uses session.entity_type / entity_id when keying ai_messages
 // inserts. Sets _freshlyCreated for first-turn detection (skip the
 // stuck-session-recovery retry loop on a brand-new session).
-async function resolveSessionForChat({ sessionId, currentContext, userId, organization }) {
-  // Assistant v1 rollout — the rolling user_thread hosts on the personal
-  // Assistant (Haiku) for OFFICE staff (system_admin/admin/corporate/pm) plus
-  // any user explicitly opted in; field crew + subs stay on 86 until the
-  // role-permission smoke-test rig (#221) lands, so a low-privilege user never
-  // gets a write-capable AI ahead of that. A per-user `ai_host_agent_key`
-  // override always wins. Computed once and used both to resolve/mint the right
-  // host thread AND to avoid pinning a user onto the wrong-host thread via an
-  // explicit sessionId. Everyone else: hostKey stays 'job' (86), unchanged.
+// Which managed agent hosts a user's rolling chat thread: 'assistant' for
+// OFFICE staff (system_admin/admin/corporate/pm) or an explicit per-user
+// `ai_host_agent_key` opt-in, else 'job' (86). Field crew + subs stay on 86
+// until the role-permission smoke-test rig (#221) lands. Shared by
+// resolveSessionForChat AND the "New chat" route (POST /api/ai/sessions) so a
+// freshly-minted user_thread is stamped with the SAME agent_key the resolver
+// looks for — otherwise the new chat's agent_key !== hostKey, the resolver
+// refuses to honor the explicit session_id, and every turn gets redirected
+// back into the user's single existing rolling thread ("new chats don't stick").
+async function resolveHostKeyForUser(userId) {
   const ASSISTANT_OFFICE_ROLES = ['system_admin', 'admin', 'corporate', 'pm'];
   let hostKey = 'job';
   if (FLAG_UNIFIED_USER_THREAD && userId) {
@@ -2969,14 +2970,19 @@ async function resolveSessionForChat({ sessionId, currentContext, userId, organi
       const u = ur.rows[0];
       if (u) {
         const override = u.ai_host_agent_key;
-        if (override === 'assistant' || override === 'job') {
-          hostKey = override;                                  // explicit per-user opt-in/out wins
-        } else if (ASSISTANT_OFFICE_ROLES.indexOf(u.role) !== -1) {
-          hostKey = 'assistant';                               // office-staff default
-        }
+        if (override === 'assistant' || override === 'job') hostKey = override;       // explicit opt-in/out wins
+        else if (ASSISTANT_OFFICE_ROLES.indexOf(u.role) !== -1) hostKey = 'assistant'; // office-staff default
       }
     } catch (_) { /* default to 86 */ }
   }
+  return hostKey;
+}
+
+async function resolveSessionForChat({ sessionId, currentContext, userId, organization }) {
+  // Host agent for this user's rolling thread. Computed once and used both to
+  // resolve/mint the right host thread AND to avoid pinning a user onto a
+  // wrong-host thread via an explicit sessionId. See resolveHostKeyForUser.
+  const hostKey = await resolveHostKeyForUser(userId);
   if (sessionId) {
     const sid = parseInt(sessionId, 10);
     if (Number.isFinite(sid)) {
@@ -13359,6 +13365,7 @@ module.exports.startWatchScheduler = startWatchScheduler;
 // beta.sessions.*).
 module.exports.createFreshAiSession = createFreshAiSession;
 module.exports.ensureAiSession      = ensureAiSession;
+module.exports.resolveHostKeyForUser = resolveHostKeyForUser;
 module.exports.archiveActiveAiSession = archiveActiveAiSession;
 module.exports.getAnthropic         = getAnthropic;
 module.exports.internals = {

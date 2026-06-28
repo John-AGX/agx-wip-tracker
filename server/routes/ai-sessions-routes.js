@@ -269,11 +269,21 @@ router.post('/', requireAuth, requireOrg, async (req, res) => {
     }
 
     const ai = aiRoutes();
+    // Stamp a "New chat" (user_thread) with the user's HOST agent — 'assistant'
+    // for office staff, else 'job' (86) — so resolveSessionForChat HONORS the
+    // explicit session_id instead of redirecting the turn into the user's
+    // single existing rolling thread. Was hardcoded 'job', so office-staff new
+    // chats carried agent_key='job' != hostKey('assistant') and collapsed back
+    // into the one assistant thread ("new chats don't stick"). Non-user_thread
+    // (legacy) sessions keep 'job'.
+    const hostAgentKey = (sessionKind === 'user_thread' && typeof ai.resolveHostKeyForUser === 'function')
+      ? await ai.resolveHostKeyForUser(req.user.id)
+      : 'job';
     // Delegate Anthropic-side session creation to the existing helper.
     // The helper inserts the row too, then we apply our label / summary
     // patches in a second statement.
     const session = await ai.createFreshAiSession({
-      agentKey: 'job',
+      agentKey: hostAgentKey,
       entityType,
       entityId,
       userId: req.user.id,
