@@ -136,6 +136,8 @@
     // detail view, not inside the header)
     var strip = document.querySelector(".jh-metrics-strip");
     if (strip) strip.remove();
+    var jobActionsBar = document.querySelector(".jh-job-actions");
+    if (jobActionsBar) jobActionsBar.remove();
 
     // Un-hide original job detail header and elements
     var detail = document.getElementById("jobs-job-detail-view");
@@ -350,6 +352,22 @@
     // Hide original job-detail-header in page content
     var origHeader = detail.querySelector(".job-detail-header");
     if (origHeader) origHeader.style.display = "none";
+
+    // The hidden header also held the Edit / Archive / Delete actions, so they'd
+    // be unreachable. Surface them in an always-visible bar under the strip.
+    try {
+      if (strip.parentNode && !document.querySelector(".jh-job-actions")) {
+        var jobActions = document.createElement("div");
+        jobActions.className = "jh-job-actions";
+        jobActions.style.cssText = "display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;align-items:center;padding:6px 16px 0;";
+        var btnBase = "padding:6px 12px;font-size:12px;font-weight:600;border-radius:7px;border:1px solid var(--border,#2e3346);background:var(--surface,#1a1d27);color:var(--text,#eef0f6);cursor:pointer;";
+        jobActions.innerHTML =
+          '<button type="button" onclick="if(window.toggleEditJobInfo)window.toggleEditJobInfo()" title="Edit job info" style="' + btnBase + '">Edit</button>' +
+          '<button type="button" onclick="if(window.archiveCurrentJob)window.archiveCurrentJob()" title="Archive job" style="' + btnBase + '">Archive</button>' +
+          '<button type="button" onclick="if(window.deleteCurrentJob)window.deleteCurrentJob()" title="Delete job permanently" style="' + btnBase + 'color:#ff6b6b;border-color:rgba(255,107,107,.45);">Delete</button>';
+        strip.parentNode.insertBefore(jobActions, strip.nextSibling);
+      }
+    } catch (e) { /* actions bar is best-effort */ }
   }
 
   /** Refresh the sticky header metrics strip with current WIP data */
