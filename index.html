@@ -500,6 +500,8 @@
                         <div class="header-popover-section header-popover-title">Capture</div>
                         <button type="button" class="header-popover-item" data-p86-icon="photos"     role="menuitem"
                                 onclick="if (window.p86QuickPhoto) window.p86QuickPhoto();">New Photo</button>
+                        <button type="button" class="header-popover-item" data-p86-icon="materials"  role="menuitem"
+                                onclick="if (window.p86CostInbox &amp;&amp; window.p86CostInbox.openNew) window.p86CostInbox.openNew();">Scan Receipt</button>
                     </div>
                 </div>
             </div>
@@ -3188,7 +3190,7 @@
     <script src="js/report-style-packs.js?v=2"></script>
     <script src="js/projects.js?v=65"></script>
     <script src="js/receipt-scanner.js?v=1"></script>
-    <script src="js/cost-inbox.js?v=7"></script>
+    <script src="js/cost-inbox.js?v=8"></script>
     <script src="js/console.js?v=5"></script>
     <!-- Jobs Hub — cross-job index pages (Purchase Orders / Change Orders /
          RFIs / Submittals) for the Jobs sidebar dropdown. Uses p86Api +
@@ -3490,6 +3492,11 @@
           <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('my-files')"><span class="p86-mobile-more-icon" data-p86-icon="folder"></span><span>My Files</span></button>
           <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('plans')"><span class="p86-mobile-more-icon" data-p86-icon="scale"></span><span>Plans</span></button>
           <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('field-tools')"><span class="p86-mobile-more-icon" data-p86-icon="wrench"></span><span>Field Tools</span></button>
+        </div>
+
+        <div class="p86-mobile-more-section" data-more-section>Operations</div>
+        <div class="p86-mobile-more-grid" data-more-grid>
+          <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('cost-inbox')"><span class="p86-mobile-more-icon" data-p86-icon="materials"></span><span>Cost Inbox</span></button>
         </div>
 
         <div class="p86-mobile-more-section" data-more-section>Directory</div>

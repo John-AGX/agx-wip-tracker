@@ -510,5 +510,12 @@
     if (typeof window.switchTab === 'function') window.switchTab('cost-inbox');
   }
 
-  window.p86CostInbox = { render: render, openNew: function () { openReceiptModal(null); }, mountRollup: mountRollup, openFor: openFor };
+  // openNew works from anywhere (quick-add menu, mobile, etc.) — ensure the
+  // job/lead picker has data even if the Cost Inbox tab was never opened.
+  window.p86CostInbox = {
+    render: render,
+    openNew: function () { loadEntities().then(function () { openReceiptModal(null); }); },
+    mountRollup: mountRollup,
+    openFor: openFor
+  };
 })();
