@@ -2896,6 +2896,7 @@ function initEvents(){
     return best;
   }
   function updateAddFab(e){
+    if(E.viewMode && E.viewMode()==='siteplan'){ if(addFabEl) addFabEl.style.display='none'; addFabArm=null; return; } // Site Plan: no on-wire/port "+" FAB — add via the building +Add menu / Inspector
     if(addMenuEl) return;                                   // menu open — leave fab
     if(addFabEl && (e.target===addFabEl)) return;           // hovering the fab itself
     var p=E.pan(), zz=z();
