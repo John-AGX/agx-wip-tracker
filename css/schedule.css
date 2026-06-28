@@ -674,9 +674,11 @@ body.light-mode .sch-cal-week-row.sch-week-focused::after {
   background: rgba(0, 0, 0, 0.22);
   color: var(--text-dim, #555);
 }
-.sch-cal-day.sch-today {
+/* Selected day — blue highlight box (today is shown via the number bubble). */
+.sch-cal-day.sch-cal-day-selected {
   outline: 2px solid #4f8cff;
   outline-offset: -2px;
+  border-radius: 4px;
 }
 .sch-cal-day.sch-drop-target {
   background: rgba(79, 140, 255, 0.18);
@@ -694,9 +696,18 @@ body.light-mode .sch-cal-week-row.sch-week-focused::after {
   line-height: 1;
 }
 .sch-cal-day.sch-other-month .sch-cal-day-num { color: var(--text-dim, #555); }
+/* Today — filled blue bubble on the day number (matches the mobile view). */
 .sch-cal-day.sch-today .sch-cal-day-num {
-  color: #4f8cff;
+  background: #4f8cff;
+  color: #fff;
   font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 10px;
 }
 
 /* ─── Entry bars (multi-day continuous) ───────────────────
@@ -2045,6 +2056,11 @@ body.light-mode .sch-cal-grid { background: #d6dae3; }
 /* Inline "set a due date" picker on unscheduled to-do rows. */
 .sch-dsr-setdate { display: inline-flex; align-items: center; gap: 5px; margin-top: 4px; font-size: 10px; color: var(--text-dim, #8a90a6); }
 .sch-dsr-datein { font-size: 11px; padding: 2px 5px; background: var(--card-bg, #0f0f1e); border: 1px solid var(--border, #2e3346); border-radius: 4px; color: var(--text, #e4e6f0); }
+/* Selected day on the mobile month grid — blue highlight box. */
+.sch-mcell-selected { outline: 2px solid #4f8cff; outline-offset: -2px; border-radius: 4px; }
+/* Tappable event-location → Google Maps link. */
+.sch-loc-link { color: #6ba3ff; text-decoration: none; }
+.sch-loc-link:hover { text-decoration: underline; }
 /* Light "nothing today" line (vs the big empty state) — shown when the
    day is clear but there are still unscheduled to-dos below. */
 .sch-dsum-none { font-size: 11px; color: var(--text-dim, #8a90a6); padding: 2px 2px 4px; }

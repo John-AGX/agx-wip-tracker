@@ -280,6 +280,13 @@
     if (isTaskDone(t)) return '#64748b';
     return (t && t.scope === 'personal') ? TODO_COLOR : TASK_COLOR;
   }
+  // A saved event location → tappable Google Maps search link (no Maps JS
+  // needed; opens search/directions in a new tab). Empty string if no value.
+  function locLinkHTML(loc) {
+    if (!loc) return '';
+    var url = 'https://www.google.com/maps/search/?api=1&query=' + encodeURIComponent(loc);
+    return '<a class="sch-loc-link" href="' + escapeAttr(url) + '" target="_blank" rel="noopener">' + escapeHTML(loc) + '</a>';
+  }
   // Normalized calendar items (events + tasks/to-dos + reminders) on a
   // given local ISO day. Used for the per-day cards/dots on the grid AND
   // the day-summary sidebar so everything stays consistent.
@@ -962,6 +969,7 @@
     _state.selectedDay = iso;
     if (currentView() === 'calendar') {
       renderSidebar();
+      renderGrid(); // repaint so the selected-day highlight moves
       var p = document.getElementById('schPage');
       if (p && typeof isMobileCal === 'function' && isMobileCal()) p.classList.add('sch-sidebar-open');
     } else {
@@ -1132,7 +1140,7 @@
         '<span class="sch-dsr-dot"></span>' +
         '<div class="sch-dsr-main">' +
           '<div class="sch-dsr-title">' + escapeHTML(ev.title || '(untitled event)') + '</div>' +
-          '<div class="sch-dsr-meta">' + escapeHTML(tl) + (ev.location ? ' · ' + escapeHTML(ev.location) : '') + (st ? ' · ' + escapeHTML(st) : '') + '</div>' +
+          '<div class="sch-dsr-meta">' + escapeHTML(tl) + (ev.location ? ' · ' + locLinkHTML(ev.location) : '') + (st ? ' · ' + escapeHTML(st) : '') + '</div>' +
         '</div>' +
       '</div>';
     }
@@ -1220,6 +1228,7 @@
       nd.setDate(nd.getDate() + n);
       _state.selectedDay = toISODate(nd);
       renderDaySummarySidebar(el);
+      renderGrid();
       scrollToDate(_state.selectedDay);
     }
     var prevBtn = document.getElementById('schDsumPrev');
@@ -1227,7 +1236,7 @@
     var nextBtn = document.getElementById('schDsumNext');
     if (nextBtn) nextBtn.addEventListener('click', function() { shiftDay(1); });
     var todayBtn = document.getElementById('schDsumToday');
-    if (todayBtn) todayBtn.addEventListener('click', function() { _state.selectedDay = toISODate(new Date()); renderDaySummarySidebar(el); scrollToDate(_state.selectedDay); });
+    if (todayBtn) todayBtn.addEventListener('click', function() { _state.selectedDay = toISODate(new Date()); renderDaySummarySidebar(el); renderGrid(); scrollToDate(_state.selectedDay); });
     var addEvBtn = document.getElementById('schDsumAddEvent');
     if (addEvBtn) addEvBtn.addEventListener('click', function() { openEventEditor(null, _state.selectedDay); });
     var toProdBtn = document.getElementById('schDsumToProd');
@@ -1235,7 +1244,8 @@
 
     // Event rows open the read-only card.
     el.querySelectorAll('.sch-dsr-event[data-event-id]').forEach(function(row) {
-      row.addEventListener('click', function() {
+      row.addEventListener('click', function(e) {
+        if (e.target.closest('a')) return; // let the location maps-link open
         var ev = (_state.events || []).find(function(x) { return String(x.id) === String(row.getAttribute('data-event-id')); });
         if (ev) openEventCard(ev);
       });
@@ -1784,6 +1794,7 @@
       var cls = 'sch-mcell';
       if (!day.inMonth) cls += ' sch-mcell-oom';
       if (day.isToday) cls += ' sch-mcell-today';
+      if (_state.selectedDay && day.iso === _state.selectedDay) cls += ' sch-mcell-selected';
       if (day.isWeekend) cls += ' sch-mcell-weekend';
 
       var cellHtml = '<div class="' + cls + '" data-date="' + escapeAttr(day.iso) + '">' +
@@ -1958,6 +1969,7 @@
       if (!d.inMonth) cls += ' sch-other-month';
       if (d.isWeekend) cls += ' sch-weekend';
       if (d.isToday) cls += ' sch-today';
+      if (_state.selectedDay && d.iso === _state.selectedDay) cls += ' sch-cal-day-selected';
       var dayWx = userWeatherOnDate(d.iso);
       var wxHtml = '';
       if (dayWx) {
@@ -2516,7 +2528,7 @@
           '<div class="sch-day-row-title">' + escapeHTML(ev.title || '(untitled event)') + '</div>' +
           '<div class="sch-day-row-meta">' +
             '<span>' + escapeHTML(timeLabel) + '</span>' +
-            (ev.location ? '<span>' + escapeHTML(ev.location) + '</span>' : '') +
+            (ev.location ? '<span>' + locLinkHTML(ev.location) + '</span>' : '') +
             (st ? '<span class="sch-day-row-status">' + escapeHTML(st) + '</span>' : '') +
           '</div>' +
           (ev.notes ? '<div class="sch-day-row-notes">' + escapeHTML(ev.notes) + '</div>' : '') +
@@ -2756,7 +2768,7 @@
           '<button type="button" class="sch-btn sch-btn-icon" id="schEventCardClose" title="Close">✕</button>' +
         '</div>' +
         row('When', escapeHTML(whenVal)) +
-        row('Location', event.location ? escapeHTML(event.location) : '') +
+        row('Location', event.location ? locLinkHTML(event.location) : '') +
         row('Notes', event.notes ? escapeHTML(event.notes) : '') +
       '</div>';
     document.body.appendChild(modal);
