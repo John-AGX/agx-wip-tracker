@@ -10673,6 +10673,9 @@ textarea.ci-input { height: auto; resize: vertical; font-family: inherit; }
 @media (max-width: 560px) {
   .ci-wrap { padding: 12px 12px 80px; }
   .ci-toolbar { flex-direction: column; align-items: stretch; }
+  /* In the column layout the main axis is vertical, so flex-grow on the search
+     input stretched it into a giant tall box. Pin it to its own height. */
+  .ci-search { flex: 0 0 auto; height: 40px; }
   .ci-total { margin-left: 0; }
   .ci-field-2 { grid-template-columns: 1fr; }
   .ci-link-row { grid-template-columns: 110px 1fr; }
