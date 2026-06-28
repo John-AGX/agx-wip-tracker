@@ -527,7 +527,11 @@
       banner = document.createElement('div');
       banner.id = 'co-lock-banner';
       banner.className = 'co-lock-banner';
-      host.insertBefore(banner, host.firstChild);
+      // Place under the topbar (CO #/title/status) so it reads clearly in the
+      // editor body — inserting before the topbar tucks it at the clipped top edge.
+      var topbar = host.querySelector('.p86-co-topbar');
+      if (topbar && topbar.nextSibling) host.insertBefore(banner, topbar.nextSibling);
+      else host.appendChild(banner);
     }
     banner.innerHTML =
       '<span><strong>🔒 Approved — locked.</strong> This change order is approved and read-only. ' +

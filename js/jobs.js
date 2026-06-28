@@ -1745,85 +1745,72 @@ function renderJobsMain() {
             backToJobsMain();
         }
 
+        // Edit the Job Information card. Layout-agnostic: instead of rebuilding
+        // a grid, it swaps each value cell (#job-info-*) in place into an input,
+        // and on save re-runs renderJobDetail (which repopulates those same ids).
+        // Read-only-gated the same way every other job input is — a job with
+        // _canEdit === false never enters edit mode (and the button is disabled
+        // by the .read-only-mode CSS + applyReadOnlyButtonGuard).
         function toggleEditJobInfo() {
             const jobId = appState.currentJobId;
             const job = appData.jobs.find(j => j.id === jobId);
             if (!job) return;
             const btn = document.getElementById('edit-job-info-btn');
-            const card = document.getElementById('job-info-card');
-            const isEditing = btn.textContent.includes('Save');
+            if (!btn) return;
+            if (job._canEdit === false) return; // gate: no editing assigned-away jobs
+            const isEditing = btn.getAttribute('data-editing') === '1';
+
+            const IST = 'width:100%;box-sizing:border-box;background:var(--input-bg,#0f111a);color:var(--text);border:1px solid var(--border,#2e3346);border-radius:6px;padding:5px 7px;font-size:13px;';
+            const SST = 'box-sizing:border-box;background:var(--input-bg,#0f111a);color:var(--text);border:1px solid var(--border,#2e3346);border-radius:6px;padding:4px 6px;font-size:12px;';
+            const opts = (arr, cur) => arr.map(v => '<option' + (v === cur ? ' selected' : '') + '>' + escapeHTML(v) + '</option>').join('');
+
             if (isEditing) {
-                // Save mode - read inputs and save
-                job.jobNumber = document.getElementById('edit-jobNumber').value.trim();
-                job.title = document.getElementById('edit-jobTitle').value.trim();
-                job.client = document.getElementById('edit-jobClient').value.trim();
-                job.pm = document.getElementById('edit-jobPM').value;
-                const typeVal = document.getElementById('edit-jobType').value;
-                job.jobType = typeVal;
-                job.workType = document.getElementById('edit-jobWorkType').value;
-                job.market = document.getElementById('edit-jobMarket').value;
-                job.contractAmount = parseFloat(document.getElementById('edit-jobContract').value) || 0;
-                job.estimatedCosts = parseFloat(document.getElementById('edit-jobEstCosts').value) || 0;
-                job.targetMarginPct = parseFloat(document.getElementById('edit-jobMargin').value) || 50;
+                // Save — read inputs defensively (a cell may be absent on older
+                // cached markup) and write back.
+                const gv = (id) => { const e = document.getElementById(id); return e ? e.value : null; };
+                let v;
+                if ((v = gv('edit-jobNumber')) !== null) job.jobNumber = v.trim();
+                if ((v = gv('edit-jobTitle')) !== null) job.title = v.trim();
+                if ((v = gv('edit-jobClient')) !== null) job.client = v.trim();
+                if ((v = gv('edit-jobPM')) !== null) job.pm = v;
+                if ((v = gv('edit-jobType')) !== null) job.jobType = v;
+                if ((v = gv('edit-jobWorkType')) !== null) job.workType = v;
+                if ((v = gv('edit-jobMarket')) !== null) job.market = v;
+                if ((v = gv('edit-jobContract')) !== null) job.contractAmount = parseFloat(v) || 0;
+                if ((v = gv('edit-jobEstCosts')) !== null) job.estimatedCosts = parseFloat(v) || 0;
+                if ((v = gv('edit-jobMargin')) !== null) job.targetMarginPct = parseFloat(v) || 50;
                 // Schedule page reads totalProductionDays for daily-revenue math.
-                var prodEl = document.getElementById('edit-jobProductionDays');
-                if (prodEl) job.totalProductionDays = parseInt(prodEl.value, 10) || 0;
-                job.status = document.getElementById('edit-jobStatus').value;
-                job.notes = document.getElementById('edit-jobNotes').value.trim();
+                if ((v = gv('edit-jobProductionDays')) !== null) job.totalProductionDays = parseInt(v, 10) || 0;
+                if ((v = gv('edit-jobStatus')) !== null) job.status = v;
+                if ((v = gv('edit-jobNotes')) !== null) job.notes = v.trim();
                 job.updatedAt = new Date().toISOString();
                 saveData();
-                // Restore the original grid HTML so renderJobDetail can populate it
-                const grid = document.getElementById('job-info-card').querySelector('div[style*="grid-template-columns"]');
-                if (grid) {
-                    const mkDiv = (lbl, id, extraStyle) => {
-                        const lt = String.fromCharCode(60);
-                        const gt = String.fromCharCode(62);
-                        return lt + 'div' + gt + lt + 'label style="font-size: 12px; color: var(--text-dim);"' + gt + lbl + lt + '/label' + gt + lt + 'div style="font-size: 14px; color: ' + (extraStyle || 'var(--text)') + ';" id="' + id + '"' + gt + lt + '/div' + gt + lt + '/div' + gt;
-                    };
-                    grid.innerHTML = mkDiv('Job Number','job-info-number') + mkDiv('Job Name','job-info-title') + mkDiv('Client','job-info-client') + mkDiv('PM','job-info-pm') + mkDiv('Type','job-info-type') + mkDiv('Work Type','job-info-worktype') + mkDiv('Market','job-info-market') + mkDiv('Contract (As Sold)','job-info-contract','var(--accent); font-weight: 700') + mkDiv('Est. Costs (As Sold)','job-info-estcosts') + mkDiv('Target Margin %','job-info-margin') + mkDiv('Production Days','job-info-prod-days') + mkDiv('Status','job-info-status') + mkDiv('Notes','job-info-notes');
-                }
-                btn.innerHTML = '&#x270F;&#xFE0F; Edit Job';
-                btn.className = 'ee-btn primary';
-                renderJobDetail(jobId);
+                btn.setAttribute('data-editing', '0');
+                btn.innerHTML = '&#9998; Edit';
+                renderJobDetail(jobId); // repopulates #job-info-* cells → restores display
             } else {
-                // Enter edit mode - replace displays with inputs
-                btn.innerHTML = '&#x1F4BE; Save';
-                btn.className = 'ee-btn success';
-                const grid = card.querySelector('div[style*="grid-template-columns"]');
-                if (!grid) return;
-                const pmOpts = ['John','Noah','Henry'].map(p => 
-                    String.fromCharCode(60) + 'option' + (p === job.pm ? ' selected' : '') + String.fromCharCode(62) + p + String.fromCharCode(60) + '/option' + String.fromCharCode(62)
-                ).join('');
-                const typeOpts = ['Service','Renovation','Work Order'].map(t =>
-                    String.fromCharCode(60) + 'option' + (t === job.jobType ? ' selected' : '') + String.fromCharCode(62) + t + String.fromCharCode(60) + '/option' + String.fromCharCode(62)
-                ).join('');
-                const statusOpts = ['New','Backlog','In Progress','On Hold','Completed','Archived'].map(s =>
-                    String.fromCharCode(60) + 'option' + (s === job.status ? ' selected' : '') + String.fromCharCode(62) + s + String.fromCharCode(60) + '/option' + String.fromCharCode(62)
-                ).join('');
-                const marketOpts = ['Tampa','Orlando'].map(m =>
-                    String.fromCharCode(60) + 'option' + (m === job.market ? ' selected' : '') + String.fromCharCode(62) + m + String.fromCharCode(60) + '/option' + String.fromCharCode(62)
-                ).join('');
-                const inp = (id, val, type) => {
-                    type = type || 'text';
-                    return String.fromCharCode(60) + 'input id="' + id + '" type="' + type + '" value="' + escapeHTML(val || '') + '" style="width:100%;background:var(--input-bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:13px;"' + String.fromCharCode(62);
+                // Enter edit mode — swap each value cell into an input/select.
+                const FIELDS = {
+                    'job-info-title':     () => '<input id="edit-jobTitle" type="text" value="' + escapeHTML(job.title || '') + '" style="' + IST + '">',
+                    'job-info-number':    () => '<input id="edit-jobNumber" type="text" value="' + escapeHTML(job.jobNumber || '') + '" style="' + IST + '">',
+                    'job-info-client':    () => '<input id="edit-jobClient" type="text" value="' + escapeHTML(job.client || '') + '" style="' + IST + '">',
+                    'job-info-pm':        () => '<select id="edit-jobPM" style="' + IST + '">' + opts(['John', 'Noah', 'Henry'], job.pm) + '</select>',
+                    'job-info-type':      () => '<select id="edit-jobType" style="' + IST + '">' + opts(['Service', 'Renovation', 'Work Order'], job.jobType) + '</select>',
+                    'job-info-worktype':  () => '<input id="edit-jobWorkType" type="text" value="' + escapeHTML(job.workType || '') + '" style="' + IST + '">',
+                    'job-info-market':    () => '<select id="edit-jobMarket" style="' + IST + '">' + opts(['Tampa', 'Orlando'], job.market) + '</select>',
+                    'job-info-contract':  () => '<input id="edit-jobContract" type="number" step="0.01" value="' + (job.contractAmount || 0) + '" style="' + IST + '">',
+                    'job-info-estcosts':  () => '<input id="edit-jobEstCosts" type="number" step="0.01" value="' + (job.estimatedCosts || 0) + '" style="' + IST + '">',
+                    'job-info-margin':    () => '<input id="edit-jobMargin" type="number" value="' + (job.targetMarginPct || 50) + '" style="' + IST + '">',
+                    'job-info-prod-days': () => '<input id="edit-jobProductionDays" type="number" value="' + (job.totalProductionDays || '') + '" style="' + IST + '">',
+                    'job-info-status':    () => '<select id="edit-jobStatus" style="' + SST + '">' + opts(['New', 'Backlog', 'In Progress', 'On Hold', 'Completed', 'Archived'], job.status) + '</select>',
+                    'job-info-notes':     () => '<textarea id="edit-jobNotes" rows="3" style="' + IST + 'resize:vertical;">' + escapeHTML(job.notes || '') + '</textarea>'
                 };
-                const sel = (id, opts) => String.fromCharCode(60) + 'select id="' + id + '" style="width:100%;background:var(--input-bg);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:6px 8px;font-size:13px;"' + String.fromCharCode(62) + opts + String.fromCharCode(60) + '/select' + String.fromCharCode(62);
-                const lbl = (txt) => String.fromCharCode(60) + 'label style="font-size:12px;color:var(--text-dim);"' + String.fromCharCode(62) + txt + String.fromCharCode(60) + '/label' + String.fromCharCode(62);
-                const d = (inner) => String.fromCharCode(60) + 'div' + String.fromCharCode(62) + inner + String.fromCharCode(60) + '/div' + String.fromCharCode(62);
-                grid.innerHTML = 
-                    d(lbl('Job Number') + inp('edit-jobNumber', job.jobNumber)) +
-                    d(lbl('Job Name') + inp('edit-jobTitle', job.title)) +
-                    d(lbl('Client') + inp('edit-jobClient', job.client)) +
-                    d(lbl('PM') + sel('edit-jobPM', pmOpts)) +
-                    d(lbl('Type') + sel('edit-jobType', typeOpts)) +
-                    d(lbl('Work Type') + inp('edit-jobWorkType', job.workType)) +
-                    d(lbl('Market') + sel('edit-jobMarket', marketOpts)) +
-                    d(lbl('Contract (As Sold)') + inp('edit-jobContract', job.contractAmount, 'number')) +
-                    d(lbl('Est. Costs (As Sold)') + inp('edit-jobEstCosts', job.estimatedCosts, 'number')) +
-                    d(lbl('Target Margin %') + inp('edit-jobMargin', job.targetMarginPct || 50, 'number')) +
-                    d(lbl('Production Days') + inp('edit-jobProductionDays', job.totalProductionDays || '', 'number')) +
-                    d(lbl('Status') + sel('edit-jobStatus', statusOpts)) +
-                    d(lbl('Notes') + inp('edit-jobNotes', job.notes));
+                Object.keys(FIELDS).forEach((cellId) => {
+                    const el = document.getElementById(cellId);
+                    if (el) el.innerHTML = FIELDS[cellId]();
+                });
+                btn.setAttribute('data-editing', '1');
+                btn.innerHTML = '&#x1F4BE; Save';
             }
         }
 
