@@ -10523,3 +10523,24 @@ body.light-mode .p86-pv-tag-modal-chip {
   .p86-eb-adder { padding: 6px; }
   .p86-eb-adder-btn { padding: 4px 8px; font-size: 10.5px; }
 }
+
+/* ── Google Places address-autocomplete element (window.p86AddressAutocomplete) ──
+   The <gmp-place-autocomplete> web component renders ~49px tall / 16px font by
+   default — larger than our standard inputs (~33px / 13px), so it looked oversized
+   everywhere it's used (lead / job / estimate / client / calendar event). Scale it
+   down to sit inline with the surrounding fields. The shadow DOM is closed, so we
+   size the host + the exposed ::part(input); overflow stays visible so the
+   predictions dropdown is never clipped. */
+.p86-addr-ac {
+  display: block;
+  width: 100%;
+  height: 40px;
+  min-height: 0;
+}
+.p86-addr-ac::part(input) {
+  height: 40px;
+  min-height: 0;
+  font-size: 13px;
+  box-sizing: border-box;
+}
+.p86-addr-ac-row { margin-bottom: 6px; }
