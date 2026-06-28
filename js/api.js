@@ -734,6 +734,7 @@
       if (opts.entity_id) qs.push('entity_id=' + encodeURIComponent(opts.entity_id));
       return get('/api/receipts/rollup' + (qs.length ? '?' + qs.join('&') : ''));
     },
+    ocr: function(payload) { return post('/api/receipts/ocr', payload); },
     create: function(payload) { return post('/api/receipts', payload); },
     update: function(id, payload) { return patch('/api/receipts/' + encodeURIComponent(id), payload); },
     remove: function(id, hard) { return del('/api/receipts/' + encodeURIComponent(id) + (hard ? '?hard=1' : '')); }

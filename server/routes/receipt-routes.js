@@ -15,8 +15,20 @@
 const express = require('express');
 const { pool } = require('../db');
 const { requireAuth } = require('../auth');
+const { Anthropic } = require('@anthropic-ai/sdk');
 
 const router = express.Router();
+
+// Lazy Anthropic client for receipt OCR (vision). Mirrors the pattern in
+// admin-batch-routes.js — reads ANTHROPIC_API_KEY on first use.
+let _anth = null;
+function anthropic() {
+  if (_anth) return _anth;
+  const key = (process.env.ANTHROPIC_API_KEY || '').trim();
+  if (!key) return null;
+  _anth = new Anthropic({ apiKey: key });
+  return _anth;
+}
 
 const COST_CODES = new Set(['materials', 'labor', 'sub', 'gc']);
 const STATUSES = new Set(['unprocessed', 'processed', 'void']);
@@ -200,6 +212,54 @@ router.get('/:id', requireAuth, async (req, res) => {
   } catch (e) {
     console.error('GET /api/receipts/:id error:', e);
     res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /api/receipts/ocr — read a receipt photo and pre-fill vendor + date +
+// a cost-code GUESS. INTENTIONALLY does not extract the dollar amount — that's
+// the error-prone field, kept manual (John's call). Body: { image_base64
+// (raw or data-URL), media_type }. Best-effort: returns { ok:false } on any
+// failure so the capture flow never breaks.
+const OCR_MEDIA = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
+router.post('/ocr', requireAuth, async (req, res) => {
+  try {
+    const b = req.body || {};
+    let data = String(b.image_base64 || '');
+    if (data.startsWith('data:')) { const i = data.indexOf(','); if (i >= 0) data = data.slice(i + 1); }
+    const media = OCR_MEDIA.has(String(b.media_type)) ? String(b.media_type) : 'image/jpeg';
+    if (!data || data.length > 9000000) return res.json({ ok: false });
+    const client = anthropic();
+    if (!client) return res.json({ ok: false, error: 'ocr-unavailable' });
+    const prompt =
+      'You are reading a photographed receipt or invoice. Return ONLY a JSON object, no prose:\n' +
+      '{"vendor": string|null, "date": "YYYY-MM-DD"|null, "cost_code": "materials"|"labor"|"sub"|"gc"|null}\n' +
+      '- vendor: the store / supplier / company name (usually at the top).\n' +
+      '- date: the purchase/transaction date as YYYY-MM-DD; null if not visible.\n' +
+      '- cost_code: best category guess — materials (supply/hardware/lumber/paint stores), sub (a subcontractor invoice), labor (payroll/labor), gc (permits, equipment rental, fuel, dump fees); null if unsure.\n' +
+      'Do NOT extract, guess, or return the dollar amount or total. Use null for anything you cannot read.';
+    const msg = await client.messages.create({
+      model: 'claude-haiku-4-5',
+      max_tokens: 200,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'image', source: { type: 'base64', media_type: media, data: data } },
+          { type: 'text', text: prompt }
+        ]
+      }]
+    });
+    let text = '';
+    try { text = (msg.content || []).filter((c) => c.type === 'text').map((c) => c.text).join(''); } catch (_) {}
+    let parsed = null;
+    try { const m = text.match(/\{[\s\S]*\}/); if (m) parsed = JSON.parse(m[0]); } catch (_) {}
+    if (!parsed) return res.json({ ok: false });
+    const vendor = parsed.vendor ? String(parsed.vendor).trim().slice(0, 200) : null;
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(String(parsed.date || '')) ? String(parsed.date) : null;
+    const cost_code = COST_CODES.has(String(parsed.cost_code)) ? String(parsed.cost_code) : null;
+    res.json({ ok: true, vendor: vendor, date: date, cost_code: cost_code });
+  } catch (e) {
+    console.error('POST /api/receipts/ocr error:', e && e.message);
+    res.json({ ok: false });
   }
 });
 

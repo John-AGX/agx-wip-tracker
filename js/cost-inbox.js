@@ -52,6 +52,28 @@
       return p.id || p.user_id || p.sub || null;
     } catch (e) { return null; }
   }
+  // Downscale a picked photo to a JPEG data-URL before sending to OCR — keeps
+  // the payload small/fast/cheap; ~1280px is plenty to read vendor + date text.
+  function downscaleImage(file, maxDim, cb) {
+    try {
+      var img = new Image();
+      var url = URL.createObjectURL(file);
+      img.onload = function () {
+        try {
+          var scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+          var cw = Math.max(1, Math.round(img.width * scale));
+          var ch = Math.max(1, Math.round(img.height * scale));
+          var canvas = document.createElement('canvas');
+          canvas.width = cw; canvas.height = ch;
+          canvas.getContext('2d').drawImage(img, 0, 0, cw, ch);
+          URL.revokeObjectURL(url);
+          cb(canvas.toDataURL('image/jpeg', 0.7));
+        } catch (e) { URL.revokeObjectURL(url); cb(null); }
+      };
+      img.onerror = function () { URL.revokeObjectURL(url); cb(null); };
+      img.src = url;
+    } catch (e) { cb(null); }
+  }
 
   // ── Entity (job/lead) cache for the picker + label resolution ──────
   var _jobs = [], _leads = [], _entLoaded = false;
@@ -266,6 +288,7 @@
       var presaleNote = modal.querySelector('#ciPresaleNote');
       var codeSeg = modal.querySelector('#ciCodeSeg');
       var chosenCode = r.cost_code || 'materials';
+      var codeUserPicked = isEdit; // true once the user (or an existing record) owns the cost code — OCR won't override
 
       function fillEntityOptions() {
         var type = selType.value;
@@ -287,6 +310,7 @@
       codeSeg.addEventListener('click', function (e) {
         var btn = e.target.closest('.ci-seg-btn'); if (!btn) return;
         chosenCode = btn.getAttribute('data-code');
+        codeUserPicked = true;
         codeSeg.querySelectorAll('.ci-seg-btn').forEach(function (b) { b.classList.toggle('active', b === btn); });
       });
 
@@ -299,6 +323,26 @@
         var inner = modal.querySelector('#ciPhotoInner');
         var url = URL.createObjectURL(f);
         inner.innerHTML = '<img src="' + esc(url) + '" alt="receipt" />';
+        // OCR autofill — reads the photo and pre-fills vendor + date + a cost-code
+        // guess. NEVER the amount (that's the error-prone field — stays manual).
+        // Only fills fields the user hasn't already entered.
+        if (!window.p86Api || !window.p86Api.receipts || !window.p86Api.receipts.ocr) return;
+        var tile = modal.querySelector('#ciPhotoTile');
+        var tag = document.createElement('div'); tag.className = 'ci-ocr-status'; tag.textContent = 'Reading receipt…';
+        if (tile) tile.appendChild(tag);
+        downscaleImage(f, 1280, function (dataUrl) {
+          if (!dataUrl) { if (tag.parentNode) tag.remove(); return; }
+          window.p86Api.receipts.ocr({ image_base64: dataUrl, media_type: 'image/jpeg' }).then(function (resp) {
+            if (tag.parentNode) tag.remove();
+            if (!resp || !resp.ok) return;
+            var vEl = modal.querySelector('#ciVendor'); if (vEl && !vEl.value && resp.vendor) vEl.value = resp.vendor;
+            var dEl = modal.querySelector('#ciDate'); if (dEl && !dEl.value && resp.date) dEl.value = resp.date;
+            if (resp.cost_code && !codeUserPicked && selType.value !== 'lead') {
+              var cb = codeSeg.querySelector('.ci-seg-btn[data-code="' + resp.cost_code + '"]');
+              if (cb) { chosenCode = resp.cost_code; codeSeg.querySelectorAll('.ci-seg-btn').forEach(function (b) { b.classList.toggle('active', b === cb); }); }
+            }
+          }).catch(function () { if (tag.parentNode) tag.remove(); });
+        });
       });
 
       function close() { modal.remove(); _pendingFile = null; }
