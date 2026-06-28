@@ -33,7 +33,12 @@
     return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
   }
   function toast(msg, kind) {
-    if (window.p86Toast) return window.p86Toast(msg, kind);
+    // p86Toast is an object with .show() — but stay defensive across shapes so a
+    // toast failure can never break the save/close flow.
+    try {
+      if (window.p86Toast && typeof window.p86Toast.show === 'function') return window.p86Toast.show(msg, kind);
+      if (typeof window.p86Toast === 'function') return window.p86Toast(msg, kind);
+    } catch (e) { /* non-fatal */ }
     if (kind === 'error') console.warn(msg);
   }
   function myUserId() {
