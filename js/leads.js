@@ -1635,7 +1635,9 @@
       if (window.appData && Array.isArray(window.appData.jobs)) window.appData.jobs.push(newJob);
       l.job_id = newId;
       l.status = 'sold';
-      if (chosen) chosen.job_id = newId;
+      // Mirror the server-side lock + sold-stamp on the local estimate so the
+      // editor shows it read-only immediately (no reload needed).
+      if (chosen) { chosen.job_id = newId; chosen.is_locked = true; chosen.status = 'sold'; }
       closeLeadEditorAny();
       reloadLeadsCache();
       if (typeof window.switchTab === 'function') window.switchTab('jobs');

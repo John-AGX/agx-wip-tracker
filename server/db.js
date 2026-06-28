@@ -867,6 +867,9 @@ async function initSchema() {
     ALTER TABLE estimates ADD COLUMN IF NOT EXISTS geocode_status TEXT;
     ALTER TABLE estimates ADD COLUMN IF NOT EXISTS geocode_at TIMESTAMPTZ;
     ALTER TABLE estimates ADD COLUMN IF NOT EXISTS geocode_addr TEXT;
+    -- Lock flag: set TRUE when a lead converts to a job (the estimate is "sold"
+    -- and becomes read-only). An admin can clear it via PUT /api/estimates/:id/lock.
+    ALTER TABLE estimates ADD COLUMN IF NOT EXISTS is_locked BOOLEAN NOT NULL DEFAULT FALSE;
 
     -- Polymorphic attachments — each row is a single uploaded photo (or doc)
     -- belonging to either a lead or an estimate. We store three size variants

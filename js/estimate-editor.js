@@ -12,6 +12,7 @@
   'use strict';
 
   var _currentId = null;
+  var _estimateLocked = false;  // sold estimate, locked on lead→job convert (read-only)
   var _saveTimer = null;
   // When the editor was opened from inside a lead detail (via
   // openEstimateFromLead), this holds the lead id so close → "Back"
@@ -51,6 +52,7 @@
   }
 
   function debouncedSave() {
+    if (_estimateLocked) return;  // sold/locked estimate — read-only, no saves
     if (_saveTimer) clearTimeout(_saveTimer);
     setSaveState('pending');
     _saveTimer = setTimeout(function() {
@@ -181,6 +183,41 @@
   // div is what gets populated by this module.
   // ──────────────────────────────────────────────────────────────────
 
+  // Locked (sold) estimates are read-only — toggle the .ee-locked class (CSS
+  // disables the inputs) and show a banner with an admin "Unlock" button.
+  function applyEstimateLockState(est, editorView) {
+    editorView = editorView || document.getElementById('estimate-editor-view');
+    if (!editorView) return;
+    var locked = !!(est && est.is_locked);
+    editorView.classList.toggle('ee-locked', locked);
+    var banner = document.getElementById('ee-lock-banner');
+    if (!locked) { if (banner) banner.remove(); return; }
+    if (!banner) {
+      banner = document.createElement('div');
+      banner.id = 'ee-lock-banner';
+      banner.className = 'ee-lock-banner';
+      editorView.insertBefore(banner, editorView.firstChild);
+    }
+    banner.innerHTML =
+      '<span><strong>🔒 Sold — locked.</strong> Won and converted to a job, so this estimate is read-only.</span>' +
+      '<button type="button" id="ee-unlock-btn" class="ee-btn small">Unlock to edit</button>';
+    var btn = document.getElementById('ee-unlock-btn');
+    if (btn && est) btn.onclick = function () { unlockEstimate(est.id); };
+  }
+
+  // Admin override — clear the lock so a sold estimate can be corrected.
+  function unlockEstimate(id) {
+    if (!id || !window.p86Api) return;
+    if (!window.confirm('Unlock this sold estimate for editing? It becomes editable again until re-locked.')) return;
+    window.p86Api.put('/api/estimates/' + encodeURIComponent(id) + '/lock', { locked: false })
+      .then(function () {
+        var e = getEstimate(); if (e) e.is_locked = false;
+        _estimateLocked = false;
+        applyEstimateLockState(getEstimate());
+      })
+      .catch(function (err) { alert('Unlock failed: ' + (err && err.message || '')); });
+  }
+
   // The estimate editor shows its PARENT LEAD's card in the sidebar — there is
   // no dedicated estimate card. estimate.lead_id → lead → p86MountLeadCard.
   // No linked lead → no card.
@@ -214,6 +251,8 @@
     var editorView = document.getElementById('estimate-editor-view');
     if (listView) listView.style.display = 'none';
     if (editorView) editorView.style.display = '';
+    _estimateLocked = !!(est && est.is_locked);
+    applyEstimateLockState(est, editorView);
     // The legacy Leads/Estimates/Clients/Subs sub-tab row
     // (#estimates-main-tabs) is permanently hidden now that Leads +
     // Estimates are top-level header tabs and Clients + Subs sit in

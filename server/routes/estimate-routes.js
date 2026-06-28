@@ -64,7 +64,7 @@ router.get('/', requireAuth, async (req, res) => {
     // Wave 1.A Phase 2 — org-scoped list. NULL org_id retained for
     // unbackfilled legacy until NOT NULL tightening.
     const { rows } = await pool.query(
-      'SELECT id, owner_id, data, created_at, updated_at, geocode_lat, geocode_lng FROM estimates WHERE organization_id = $1 OR organization_id IS NULL ORDER BY updated_at DESC',
+      'SELECT id, owner_id, data, created_at, updated_at, geocode_lat, geocode_lng, is_locked FROM estimates WHERE organization_id = $1 OR organization_id IS NULL ORDER BY updated_at DESC',
       [req.user.organization_id]
     );
     // Surface created_at/updated_at + geocode coords on the returned
@@ -78,7 +78,8 @@ router.get('/', requireAuth, async (req, res) => {
       created_at: r.created_at,
       updated_at: r.updated_at,
       geocode_lat: r.geocode_lat != null ? Number(r.geocode_lat) : null,
-      geocode_lng: r.geocode_lng != null ? Number(r.geocode_lng) : null
+      geocode_lng: r.geocode_lng != null ? Number(r.geocode_lng) : null,
+      is_locked: !!r.is_locked
     }));
     res.json({ estimates });
   } catch (e) {
@@ -111,7 +112,19 @@ router.put('/bulk/save', requireAuth, requireCapability('ESTIMATES_EDIT'), async
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
+      // Locked estimates (sold on lead→job convert) are immutable — skip them
+      // so a stale client can't overwrite a sold estimate. Admin unlock clears
+      // the flag via PUT /api/estimates/:id/lock.
+      const lockedIds = new Set();
+      try {
+        const _lr = await client.query(
+          'SELECT id FROM estimates WHERE is_locked = TRUE AND (organization_id = $1 OR organization_id IS NULL)',
+          [req.user.organization_id]
+        );
+        _lr.rows.forEach(function (r) { lockedIds.add(r.id); });
+      } catch (_) { /* if the column/query fails, fall through (no gate) */ }
       for (const est of estimates) {
+        if (lockedIds.has(est.id)) continue;
         const blob = {
           ...est,
           lines: (estimateLines || []).filter(l => l.estimateId === est.id),
@@ -250,6 +263,24 @@ router.put('/:id/workbook', requireAuth, requireCapability('ESTIMATES_EDIT'), as
     res.json({ ok: true });
   } catch (e) {
     console.error('PUT /api/estimates/:id/workbook error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// PUT /api/estimates/:id/lock — set/clear the lock. Estimates lock automatically
+// when their lead converts to a job (read-only / sold); this lets an admin
+// re-open one for corrections. Gated on ESTIMATES_EDIT.
+router.put('/:id/lock', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req, res) => {
+  try {
+    const locked = !!(req.body && req.body.locked);
+    const u = await pool.query(
+      'UPDATE estimates SET is_locked = $1, updated_at = NOW() WHERE id = $2 AND (organization_id = $3 OR organization_id IS NULL)',
+      [locked, req.params.id, req.user.organization_id]
+    );
+    if (u.rowCount === 0) return res.status(404).json({ error: 'Estimate not found' });
+    res.json({ ok: true, is_locked: locked });
+  } catch (e) {
+    console.error('PUT /api/estimates/:id/lock error:', e);
     res.status(500).json({ error: 'Server error' });
   }
 });
