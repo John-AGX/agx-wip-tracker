@@ -2057,7 +2057,7 @@ function renderInspector(){
   if(wireC && wrap && wrap.clientWidth>0 && wireC.width!==wrap.clientWidth) resize();
   var hdr=panel.querySelector('.ng-inspector-hdr');
   var body=panel.querySelector('.ng-inspector-body'); if(!body) return;
-  if(_jobChipEditing && body.querySelector('input')) return; // mid-edit: don't clobber the focused input
+  if((_jobChipEditing || editingId) && body.querySelector('input')) return; // mid-edit: don't clobber a focused WIP chip OR inline node/alloc input
   var sel=selN ? E.findNode(selN) : null;
   if(sel && sel.type==='t1'){
     if(hdr) hdr.innerHTML='<span class="ng-insp-ic">▤</span> '+luEsc(sel.label||'Building')+'<span class="ng-insp-type">Building</span>';
@@ -2066,7 +2066,7 @@ function renderInspector(){
   } else if(sel && sel.type!=='wip'){
     var d=E.DEFS[sel.type]||{};
     if(hdr) hdr.innerHTML='<span class="ng-insp-ic">'+(d.icon||'◆')+'</span> '+luEsc(sel.label||d.label||'Node')+'<span class="ng-insp-type">'+luEsc(d.label||sel.type)+'</span>';
-    body.innerHTML=inspectorGenericHtml(sel, d);
+    body.innerHTML=(sel.type==='t2'||sel.type==='co') ? inspectorAllocHtml(sel) : inspectorGenericHtml(sel, d);
   } else {
     if(hdr) hdr.innerHTML='<span class="ng-insp-ic">$</span> Project WIP';
     var wh=wipPanelHtml();
@@ -2088,6 +2088,44 @@ function inspectorGenericHtml(sel, d){
   h+='<div class="ng-insp-empty">Full detail &amp; editing for '+luEsc(d.label||sel.type)+' nodes lands in the next slice.</div>';
   return h;
 }
+// Scope(t2) + change-order(co) Inspector detail: editable revenue (t2) + the full
+// allocation table (lock / alloc% / per-wire % / $ share), using the SAME data-*
+// contract as the cards so the shared inline-edit handlers drive it. Mirrors the card
+// income/pct getters exactly (coIncome=E.getOutput, phaseRev=n.revenue, getT2WeightedPct).
+function inspectorAllocHtml(sel){
+  var isCO=sel.type==='co';
+  var income=isCO ? E.getOutput(sel,0) : (sel.revenue||0);
+  var pct=E.getT2WeightedPct(sel);                 // getT2WeightedPct handles co too
+  var wires=isCO ? E.getCOAllocWires(sel.id) : E.getPhaseAllocWires(sel.id);
+  var revCell=isCO ? E.fmtC(income)
+    : '<span class="ng-phase-rev" data-phase-rev="'+sel.id+'" style="cursor:pointer" title="Click to edit">'+E.fmtC(income)+'</span>';
+  var h='<div class="ng-insp-sec"><div class="ng-wip-ov">';
+  h+='<div class="ng-wip-ov-kpi ng-ov-hero"><span class="ng-ov-lbl">'+(isCO?'CO Income':'Revenue')+'</span><span class="ng-ov-val ng-ov-pos">'+revCell+'</span></div>';
+  h+='<div class="ng-wip-ov-kpi"><span class="ng-ov-lbl">% Complete</span><span class="ng-ov-val '+(pct>0?'ng-ov-pos':'ng-ov-zero')+'">'+pct.toFixed(1)+'%</span></div>';
+  h+='</div></div>';
+  if(wires.length){
+    h+='<div class="ng-insp-sec"><div class="ng-insp-sublabel">Allocation</div>';
+    h+='<table class="ng-alloc-tbl"><thead><tr><th></th><th>Target</th><th>Alloc</th><th>%&nbsp;Cmp</th><th>Share</th></tr></thead><tbody>';
+    wires.forEach(function(w){
+      var tgt=E.findNode(w.toNode);
+      var pctA=(w.allocPct==null?100:w.allocPct);
+      var wpc=(w.pctComplete!=null)?w.pctComplete:0;
+      var share=income*(pctA/100);
+      var locked=!w._auto;
+      h+='<tr>'
+        +'<td><span class="ng-alloc-lock" data-lock-co="'+sel.id+'" data-lock-wire="'+w.toNode+'" title="'+(locked?'Unlock':'Lock')+' this allocation" style="cursor:pointer">'+(locked?'🔒':'🔓')+'</span></td>'
+        +'<td class="ng-alloc-tgt">'+luEsc(tgt?(tgt.label||tgt.type).split(' › ')[0].trim():w.toNode)+'</td>'
+        +'<td><span class="ng-alloc-pct" data-alloc-phase="'+sel.id+'" data-alloc-bldg="'+w.toNode+'" style="cursor:pointer" title="Click to edit allocation %">'+pctA.toFixed(1)+'%</span></td>'
+        +'<td><span class="ng-wire-pct" data-wire-pct-phase="'+sel.id+'" data-wire-pct-bldg="'+w.toNode+'" style="cursor:pointer" title="Click to edit % complete">'+Number(wpc).toFixed(0)+'%</span></td>'
+        +'<td><span class="ng-alloc-share" data-share-co="'+sel.id+'" data-share-wire="'+w.toNode+'" data-share-income="'+income+'" style="cursor:pointer" title="Click to edit $ share">'+E.fmtC(share)+'</span></td>'
+        +'</tr>';
+    });
+    h+='</tbody></table></div>';
+  } else {
+    h+='<div class="ng-insp-empty">No allocations yet. Wire this '+(isCO?'change order':'scope')+' to a building on the map to allocate revenue + costs.</div>';
+  }
+  return h;
+}
 // Building KPI grid HTML — shared by the legacy left panel + the right Inspector.
 function buildingKpiGridHtml(sel){
   var bRev=E.getBuildingAllocatedRevenue(sel);
@@ -2097,7 +2135,7 @@ function buildingKpiGridHtml(sel){
   var gp=revEarned-(act+acc);
   var margin=bRev>0?(gp/bRev*100):0;
   var rows=[
-    {l:'% Complete', v:pct.toFixed(1)+'%', c:pct>0?'ng-ov-pos':'ng-ov-zero', hero:true},
+    {l:'% Complete', v:'<span class="ng-pct-val" data-prog-edit="'+sel.id+'" style="cursor:pointer" title="Click to edit %">'+pct.toFixed(1)+'%</span>', c:pct>0?'ng-ov-pos':'ng-ov-zero', hero:true},
     {l:'Revenue', v:E.fmtC(bRev), c:bRev>0?'ng-ov-pos':'ng-ov-zero'},
     {l:'Rev. Earned', v:E.fmtC(revEarned), c:revEarned>0?'ng-ov-pos':'ng-ov-zero'},
     {l:'Actual Cost', v:E.fmtC(act), c:act>0?'ng-ov-neg':'ng-ov-zero'},
@@ -2223,17 +2261,189 @@ function addCostToBuilding(bId, clientX, clientY){
 }
 
 // ── Events ──
+// ── Inline-edit handlers (Slice 3a) ────────────────────────────────────────
+// Shared by the on-card canvas delegate AND the right-Inspector delegate. Each
+// resolves its target node/wire from the CLICKED element's data-* attributes and
+// writes the edit input INTO that element, so it works whether the element is on
+// a card or in the inspector. The closing render() persists (engine render calls
+// saveGraph) and re-renders both surfaces; each sets editingId so an interim
+// render won't clobber the focused input (guarded in renderNodes + renderInspector).
+function progChipEdit(pe){
+  var pn=E.findNode(pe.getAttribute('data-prog-edit'));
+  if(!pn) return;
+  // Find the % span relative to the CLICKED element so this works from the inspector
+  // too: on a card pe is the wrap/label (descendant span); in the inspector pe IS the span.
+  var pctSpan=(pe.classList && pe.classList.contains('ng-pct-val')) ? pe
+            : (pe.querySelector && pe.querySelector('.ng-pct-val'))
+            || (function(){ var ne=canvasEl.querySelector('[data-id="'+pn.id+'"]'); return ne?ne.querySelector('.ng-pct-val'):null; })();
+  if(!pctSpan) return;
+  editingId=pn.id; // set BEFORE any DOM manipulation that could trigger render
+  var inp=document.createElement('input');
+  inp.type='number'; inp.min=0; inp.max=100; inp.step=1;
+  inp.value=Math.round(pn.pctComplete||0);
+  inp.dataset.progInput='1';
+  inp.style.cssText='width:54px;font-family:\'Courier New\',monospace;font-weight:700;background:var(--ng-input);border:1px solid #4f8cff;color:#fbbf24;border-radius:3px;padding:1px 4px;outline:none;text-align:right;font-size:11px';
+  pctSpan.textContent=''; pctSpan.appendChild(inp);
+  setTimeout(function(){ inp.focus(); inp.select(); }, 0);
+  var done=false;
+  function finish(){
+    if(done) return; done=true;
+    pn.pctComplete=Math.max(0,Math.min(100,parseFloat(inp.value)||0));
+    editingId=null; render();
+  }
+  inp.addEventListener('blur',finish);
+  inp.addEventListener('keydown',function(ev){
+    if(ev.key==='Enter'){ev.preventDefault();inp.blur();}
+    else if(ev.key==='Escape'){ev.preventDefault();done=true;editingId=null;render();}
+  });
+  inp.addEventListener('mousedown',function(ev){ev.stopPropagation();});
+}
+function phaseRevEdit(prc){
+  var prn=E.findNode(prc.getAttribute('data-phase-rev'));
+  if(!prn) return;
+  editingId=prn.id;
+  var prInp=document.createElement('input');
+  prInp.type='number'; prInp.step='0.01'; prInp.min=0;
+  prInp.value=prn.revenue||0;
+  prInp.className='ng-wip-chip-input';
+  prc.textContent=''; prc.appendChild(prInp);
+  setTimeout(function(){ prInp.focus(); prInp.select(); }, 0);
+  var prDone=false;
+  function prFinish(){
+    if(prDone) return; prDone=true;
+    prn.revenue=Math.max(0,parseFloat(prInp.value)||0);
+    editingId=null; render();
+  }
+  prInp.addEventListener('blur',prFinish);
+  prInp.addEventListener('keydown',function(ev){
+    if(ev.key==='Enter'){ev.preventDefault();prInp.blur();}
+    else if(ev.key==='Escape'){ev.preventDefault();prDone=true;editingId=null;render();}
+  });
+  prInp.addEventListener('mousedown',function(ev){ev.stopPropagation();});
+}
+function allocPctEdit(apc){
+  var aphId=apc.getAttribute('data-alloc-phase');
+  var abId=apc.getAttribute('data-alloc-bldg');
+  var aWire=E.wires().find(function(w){ return w.fromNode===aphId && w.toNode===abId; });
+  if(!aWire) return;
+  editingId=aphId;
+  var apInp=document.createElement('input');
+  apInp.type='number'; apInp.step='0.1'; apInp.min=0; apInp.max=100;
+  apInp.value=(aWire.allocPct||0).toFixed(1);
+  apInp.className='ng-wip-chip-input';
+  apc.textContent=''; apc.appendChild(apInp);
+  setTimeout(function(){ apInp.focus(); apInp.select(); }, 0);
+  var apDone=false;
+  function apFinish(){
+    if(apDone) return; apDone=true;
+    var nv=Math.max(0,Math.min(100,parseFloat(apInp.value)||0));
+    aWire.allocPct=nv;
+    aWire._auto=false;
+    var _apSrc=E.findNode(aphId);
+    if(_apSrc && _apSrc.type==='co') E.rebalanceCOAllocations(aphId);
+    else E.rebalancePhaseAllocations(aphId);
+    editingId=null; render();
+  }
+  apInp.addEventListener('blur',apFinish);
+  apInp.addEventListener('keydown',function(ev){
+    if(ev.key==='Enter'){ev.preventDefault();apInp.blur();}
+    else if(ev.key==='Escape'){ev.preventDefault();apDone=true;editingId=null;render();}
+  });
+  apInp.addEventListener('mousedown',function(ev){ev.stopPropagation();});
+}
+function allocLockToggle(lockEl){
+  var lCoId=lockEl.getAttribute('data-lock-co');
+  var lWireId=lockEl.getAttribute('data-lock-wire');
+  var lWire=E.wires().find(function(w){ return w.fromNode===lCoId && w.toNode===lWireId; });
+  if(!lWire) return;
+  lWire._auto=!lWire._auto;
+  var lSrc=E.findNode(lCoId);
+  if(lSrc && lSrc.type==='co') E.rebalanceCOAllocations(lCoId);
+  else E.rebalancePhaseAllocations(lCoId);
+  render();
+}
+function allocShareEdit(shareEl){
+  var shCoId=shareEl.getAttribute('data-share-co');
+  var shWireId=shareEl.getAttribute('data-share-wire');
+  var shIncome=parseFloat(shareEl.getAttribute('data-share-income'))||0;
+  var shWire=E.wires().find(function(w){ return w.fromNode===shCoId && w.toNode===shWireId; });
+  if(!shWire || shIncome<=0) return;
+  editingId=shCoId;
+  var shInp=document.createElement('input');
+  shInp.type='number'; shInp.step='0.01'; shInp.min=0;
+  shInp.value=((shWire.allocPct||0)/100*shIncome).toFixed(2);
+  shInp.className='ng-wip-chip-input';
+  shareEl.textContent=''; shareEl.appendChild(shInp);
+  setTimeout(function(){ shInp.focus(); shInp.select(); }, 0);
+  var shDone=false;
+  function shFinish(){
+    if(shDone) return; shDone=true;
+    var dollarVal=Math.max(0,parseFloat(shInp.value)||0);
+    shWire.allocPct=Math.min(100,(dollarVal/shIncome)*100);
+    shWire._auto=false;
+    var shSrc=E.findNode(shCoId);
+    if(shSrc && shSrc.type==='co') E.rebalanceCOAllocations(shCoId);
+    else E.rebalancePhaseAllocations(shCoId);
+    editingId=null; render();
+  }
+  shInp.addEventListener('blur',shFinish);
+  shInp.addEventListener('keydown',function(ev){
+    if(ev.key==='Enter'){ev.preventDefault();shInp.blur();}
+    else if(ev.key==='Escape'){ev.preventDefault();shDone=true;editingId=null;render();}
+  });
+  shInp.addEventListener('mousedown',function(ev){ev.stopPropagation();});
+}
+function wirePctEdit(wpc){
+  var wpPhId=wpc.getAttribute('data-wire-pct-phase');
+  var wpBId=wpc.getAttribute('data-wire-pct-bldg');
+  var wpWire=E.wires().find(function(w){ return w.fromNode===wpPhId && w.toNode===wpBId; });
+  if(!wpWire) return;
+  editingId=wpPhId;
+  var wpInp=document.createElement('input');
+  wpInp.type='number'; wpInp.step='1'; wpInp.min=0; wpInp.max=100;
+  wpInp.value=Math.round(wpWire.pctComplete||0);
+  wpInp.className='ng-wip-chip-input';
+  wpc.textContent=''; wpc.appendChild(wpInp);
+  setTimeout(function(){ wpInp.focus(); wpInp.select(); }, 0);
+  var wpDone=false;
+  function wpFinish(){
+    if(wpDone) return; wpDone=true;
+    wpWire.pctComplete=Math.max(0,Math.min(100,parseFloat(wpInp.value)||0));
+    editingId=null; render();
+  }
+  wpInp.addEventListener('blur',wpFinish);
+  wpInp.addEventListener('keydown',function(ev){
+    if(ev.key==='Enter'){ev.preventDefault();wpInp.blur();}
+    else if(ev.key==='Escape'){ev.preventDefault();wpDone=true;editingId=null;render();}
+  });
+  wpInp.addEventListener('mousedown',function(ev){ev.stopPropagation();});
+}
+
 function initEvents(){
   var SN=E.SNAP, z=function(){return E.zm();};
 
-  // Right-hand Inspector: its WIP chips + levels/units controls reuse the existing
-  // edit/persist paths (jobFieldEdit, luApply). Per-node-type field editing = Slice 3.
+  // Right-hand Inspector: its WIP chips + levels/units controls + per-node-type
+  // editors (Slice 3a) all reuse the existing edit/persist paths — the same shared
+  // inline-edit handlers the on-card canvas delegate uses, resolving their target
+  // from the element's data-* attributes (so they work off-card here).
   var insp=document.querySelector('.ng-inspector');
   if(insp) insp.addEventListener('click', function(e){
     var jchip=e.target.closest('[data-job-edit]');
     if(jchip && !e.target.closest('input')){ e.preventDefault(); e.stopPropagation(); jobFieldEdit(jchip); return; }
     var luEl=e.target.closest('[data-lu-act]');
     if(luEl){ e.preventDefault(); e.stopPropagation(); var bn=selN&&E.findNode(selN); if(!bn||bn.type!=='t1') return; luApply(bn, luEl.getAttribute('data-lu-act'), luEl.getAttribute('data-id')); if(E.saveGraph) E.saveGraph(); renderInspector(); return; }
+    var ipe=e.target.closest('[data-prog-edit]');
+    if(ipe && !e.target.closest('input')){ e.preventDefault(); e.stopPropagation(); progChipEdit(ipe); return; }
+    var iprc=e.target.closest('[data-phase-rev]');
+    if(iprc && !e.target.closest('input')){ e.preventDefault(); e.stopPropagation(); phaseRevEdit(iprc); return; }
+    var iapc=e.target.closest('[data-alloc-phase]');
+    if(iapc && !e.target.closest('input')){ e.preventDefault(); e.stopPropagation(); allocPctEdit(iapc); return; }
+    var iwpc=e.target.closest('[data-wire-pct-phase]');
+    if(iwpc && !e.target.closest('input')){ e.preventDefault(); e.stopPropagation(); wirePctEdit(iwpc); return; }
+    var ishareEl=e.target.closest('.ng-alloc-share');
+    if(ishareEl && !e.target.closest('input')){ e.preventDefault(); e.stopPropagation(); allocShareEdit(ishareEl); return; }
+    var ilockEl=e.target.closest('.ng-alloc-lock');
+    if(ilockEl){ e.preventDefault(); e.stopPropagation(); allocLockToggle(ilockEl); return; }
   });
 
   wrap.addEventListener('mousedown',function(e){
@@ -2653,38 +2863,7 @@ function initEvents(){
     if(cb){e.stopPropagation();var cn=E.findNode(cb.getAttribute('data-coll'));if(cn){cn.collapsed=!cn.collapsed;render();}return;}
     // Click progress bar / label to edit %
     var pe=e.target.closest('[data-prog-edit]');
-    if(pe && !e.target.closest('input')){
-      e.preventDefault();
-      e.stopPropagation();
-      var pn=E.findNode(pe.getAttribute('data-prog-edit'));
-      if(!pn) return;
-      var nodeEl=canvasEl.querySelector('[data-id="'+pn.id+'"]');
-      var pctSpan=nodeEl?nodeEl.querySelector('.ng-pct-val'):null;
-      if(!pctSpan) return;
-      editingId=pn.id; // set BEFORE any DOM manipulation that could trigger render
-      var inp=document.createElement('input');
-      inp.type='number'; inp.min=0; inp.max=100; inp.step=1;
-      inp.value=Math.round(pn.pctComplete||0);
-      inp.dataset.progInput='1';
-      inp.style.cssText='width:54px;font-family:\'Courier New\',monospace;font-weight:700;background:var(--ng-input);border:1px solid #4f8cff;color:#fbbf24;border-radius:3px;padding:1px 4px;outline:none;text-align:right;font-size:11px';
-      pctSpan.textContent=''; pctSpan.appendChild(inp);
-      // Focus on next tick so the mousedown finishes first and doesn't steal focus
-      setTimeout(function(){ inp.focus(); inp.select(); }, 0);
-      var done=false;
-      function finish(){
-        if(done) return; done=true;
-        pn.pctComplete=Math.max(0,Math.min(100,parseFloat(inp.value)||0));
-        editingId=null; render();
-      }
-      inp.addEventListener('blur',finish);
-      inp.addEventListener('keydown',function(ev){
-        if(ev.key==='Enter'){ev.preventDefault();inp.blur();}
-        else if(ev.key==='Escape'){ev.preventDefault();done=true;editingId=null;render();}
-      });
-      // Stop further mousedown propagation on the input itself
-      inp.addEventListener('mousedown',function(ev){ev.stopPropagation();});
-      return;
-    }
+    if(pe && !e.target.closest('input')){ e.preventDefault(); e.stopPropagation(); progChipEdit(pe); return; }
     // Click WIP field chip → reveal editable input
     var wc=e.target.closest('[data-wip-edit]');
     if(wc && !e.target.closest('input')){
@@ -2694,145 +2873,19 @@ function initEvents(){
     }
     // Click phase revenue → edit
     var prc=e.target.closest('[data-phase-rev]');
-    if(prc && !e.target.closest('input')){
-      e.preventDefault(); e.stopPropagation();
-      var prn=E.findNode(prc.getAttribute('data-phase-rev'));
-      if(!prn) return;
-      editingId=prn.id;
-      var prInp=document.createElement('input');
-      prInp.type='number'; prInp.step='0.01'; prInp.min=0;
-      prInp.value=prn.revenue||0;
-      prInp.className='ng-wip-chip-input';
-      prc.textContent=''; prc.appendChild(prInp);
-      setTimeout(function(){ prInp.focus(); prInp.select(); }, 0);
-      var prDone=false;
-      function prFinish(){
-        if(prDone) return; prDone=true;
-        prn.revenue=Math.max(0,parseFloat(prInp.value)||0);
-        editingId=null; render();
-      }
-      prInp.addEventListener('blur',prFinish);
-      prInp.addEventListener('keydown',function(ev){
-        if(ev.key==='Enter'){ev.preventDefault();prInp.blur();}
-        else if(ev.key==='Escape'){ev.preventDefault();prDone=true;editingId=null;render();}
-      });
-      prInp.addEventListener('mousedown',function(ev){ev.stopPropagation();});
-      return;
-    }
+    if(prc && !e.target.closest('input')){ e.preventDefault(); e.stopPropagation(); phaseRevEdit(prc); return; }
     // Click allocation % → edit (marks wire as manual, rebalances auto wires)
     var apc=e.target.closest('[data-alloc-phase]');
-    if(apc && !e.target.closest('input')){
-      e.preventDefault(); e.stopPropagation();
-      var aphId=apc.getAttribute('data-alloc-phase');
-      var abId=apc.getAttribute('data-alloc-bldg');
-      var aWire=E.wires().find(function(w){ return w.fromNode===aphId && w.toNode===abId; });
-      if(!aWire) return;
-      editingId=aphId;
-      var apInp=document.createElement('input');
-      apInp.type='number'; apInp.step='0.1'; apInp.min=0; apInp.max=100;
-      apInp.value=(aWire.allocPct||0).toFixed(1);
-      apInp.className='ng-wip-chip-input';
-      apc.textContent=''; apc.appendChild(apInp);
-      setTimeout(function(){ apInp.focus(); apInp.select(); }, 0);
-      var apDone=false;
-      function apFinish(){
-        if(apDone) return; apDone=true;
-        var nv=Math.max(0,Math.min(100,parseFloat(apInp.value)||0));
-        aWire.allocPct=nv;
-        aWire._auto=false;
-        var _apSrc=E.findNode(aphId);
-        if(_apSrc && _apSrc.type==='co') E.rebalanceCOAllocations(aphId);
-        else E.rebalancePhaseAllocations(aphId);
-        editingId=null; render();
-      }
-      apInp.addEventListener('blur',apFinish);
-      apInp.addEventListener('keydown',function(ev){
-        if(ev.key==='Enter'){ev.preventDefault();apInp.blur();}
-        else if(ev.key==='Escape'){ev.preventDefault();apDone=true;editingId=null;render();}
-      });
-      apInp.addEventListener('mousedown',function(ev){ev.stopPropagation();});
-      return;
-    }
+    if(apc && !e.target.closest('input')){ e.preventDefault(); e.stopPropagation(); allocPctEdit(apc); return; }
     // Click lock icon → toggle locked/unlocked
     var lockEl=e.target.closest('.ng-alloc-lock');
-    if(lockEl){
-      e.stopPropagation();
-      var lCoId=lockEl.getAttribute('data-lock-co');
-      var lWireId=lockEl.getAttribute('data-lock-wire');
-      var lWire=E.wires().find(function(w){ return w.fromNode===lCoId && w.toNode===lWireId; });
-      if(lWire){
-        lWire._auto=!lWire._auto;
-        var lSrc=E.findNode(lCoId);
-        if(lSrc && lSrc.type==='co') E.rebalanceCOAllocations(lCoId);
-        else E.rebalancePhaseAllocations(lCoId);
-        render();
-      }
-      return;
-    }
+    if(lockEl){ e.stopPropagation(); allocLockToggle(lockEl); return; }
     // Click share $ → edit dollar amount, recalc % from it
     var shareEl=e.target.closest('.ng-alloc-share');
-    if(shareEl && !e.target.closest('input')){
-      e.preventDefault(); e.stopPropagation();
-      var shCoId=shareEl.getAttribute('data-share-co');
-      var shWireId=shareEl.getAttribute('data-share-wire');
-      var shIncome=parseFloat(shareEl.getAttribute('data-share-income'))||0;
-      var shWire=E.wires().find(function(w){ return w.fromNode===shCoId && w.toNode===shWireId; });
-      if(!shWire || shIncome<=0) return;
-      editingId=shCoId;
-      var shInp=document.createElement('input');
-      shInp.type='number'; shInp.step='0.01'; shInp.min=0;
-      shInp.value=((shWire.allocPct||0)/100*shIncome).toFixed(2);
-      shInp.className='ng-wip-chip-input';
-      shareEl.textContent=''; shareEl.appendChild(shInp);
-      setTimeout(function(){ shInp.focus(); shInp.select(); }, 0);
-      var shDone=false;
-      function shFinish(){
-        if(shDone) return; shDone=true;
-        var dollarVal=Math.max(0,parseFloat(shInp.value)||0);
-        shWire.allocPct=Math.min(100,(dollarVal/shIncome)*100);
-        shWire._auto=false;
-        var shSrc=E.findNode(shCoId);
-        if(shSrc && shSrc.type==='co') E.rebalanceCOAllocations(shCoId);
-        else E.rebalancePhaseAllocations(shCoId);
-        editingId=null; render();
-      }
-      shInp.addEventListener('blur',shFinish);
-      shInp.addEventListener('keydown',function(ev){
-        if(ev.key==='Enter'){ev.preventDefault();shInp.blur();}
-        else if(ev.key==='Escape'){ev.preventDefault();shDone=true;editingId=null;render();}
-      });
-      shInp.addEventListener('mousedown',function(ev){ev.stopPropagation();});
-      return;
-    }
+    if(shareEl && !e.target.closest('input')){ e.preventDefault(); e.stopPropagation(); allocShareEdit(shareEl); return; }
     // Click per-wire % complete → edit
     var wpc=e.target.closest('[data-wire-pct-phase]');
-    if(wpc && !e.target.closest('input')){
-      e.preventDefault(); e.stopPropagation();
-      var wpPhId=wpc.getAttribute('data-wire-pct-phase');
-      var wpBId=wpc.getAttribute('data-wire-pct-bldg');
-      var wpWire=E.wires().find(function(w){ return w.fromNode===wpPhId && w.toNode===wpBId; });
-      if(!wpWire) return;
-      editingId=wpPhId;
-      var wpInp=document.createElement('input');
-      wpInp.type='number'; wpInp.step='1'; wpInp.min=0; wpInp.max=100;
-      wpInp.value=Math.round(wpWire.pctComplete||0);
-      wpInp.className='ng-wip-chip-input';
-      wpc.textContent=''; wpc.appendChild(wpInp);
-      setTimeout(function(){ wpInp.focus(); wpInp.select(); }, 0);
-      var wpDone=false;
-      function wpFinish(){
-        if(wpDone) return; wpDone=true;
-        wpWire.pctComplete=Math.max(0,Math.min(100,parseFloat(wpInp.value)||0));
-        editingId=null; render();
-      }
-      wpInp.addEventListener('blur',wpFinish);
-      wpInp.addEventListener('keydown',function(ev){
-        if(ev.key==='Enter'){ev.preventDefault();wpInp.blur();}
-        else if(ev.key==='Escape'){ev.preventDefault();wpDone=true;editingId=null;render();}
-      });
-      wpInp.addEventListener('mousedown',function(ev){ev.stopPropagation();});
-      return;
-    }
+    if(wpc && !e.target.closest('input')){ e.preventDefault(); e.stopPropagation(); wirePctEdit(wpc); return; }
     // PO → phase: unlink one phase from a PO. Removes the wire and
     // re-renders so the Linked Phases section + the canvas update.
     var poUnlink = e.target.closest('.ng-po-unlink');

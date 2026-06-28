@@ -124,6 +124,16 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
 .ng-insp-type{margin-left:auto;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--ng-dim);background:var(--ng-surface);border:1px solid var(--ng-border2);border-radius:5px;padding:2px 7px}
 .ng-insp-sec{margin-bottom:12px}
 .ng-insp-empty{color:var(--ng-dim);font-size:12px;line-height:1.5;padding:10px 2px}
+.ng-insp-sublabel{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ng-dim);margin:0 0 5px}
+.ng-alloc-tbl{width:100%;border-collapse:collapse;font-size:11px}
+.ng-alloc-tbl th{font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:.03em;color:var(--ng-dim);text-align:right;padding:2px 3px;border-bottom:1px solid var(--ng-border2)}
+.ng-alloc-tbl th:nth-child(2){text-align:left}
+.ng-alloc-tbl td{padding:3px;text-align:right;color:var(--ng-text);border-bottom:1px solid rgba(255,255,255,.05);font-family:'Courier New',monospace}
+.ng-alloc-tbl td.ng-alloc-tgt{text-align:left;font-family:inherit;max-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ng-alloc-tbl .ng-alloc-pct{color:#fbbf24;cursor:pointer}
+.ng-alloc-tbl .ng-wire-pct{color:#4f8cff;cursor:pointer}
+.ng-alloc-tbl .ng-alloc-share{color:#34d399;cursor:pointer}
+.ng-alloc-tbl .ng-alloc-lock{cursor:pointer}
 .ng-canvas-area.ng-panning{cursor:grabbing}
 .ng-canvas{position:absolute;top:0;left:0;width:20000px;height:20000px;transform-origin:0 0;z-index:5}
 .ng-grid-canvas,.ng-wire-canvas{position:absolute;top:0;left:0}
