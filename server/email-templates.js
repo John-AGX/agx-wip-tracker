@@ -19,6 +19,7 @@
 // own HTML.
 
 const { pool } = require('./db');
+const { getEvent } = require('./email-events');
 
 // ─── Tiny utilities ────────────────────────────────────────────────
 
@@ -40,6 +41,18 @@ function escapeHtml(s) {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+// Escape a value for use inside a double-quoted HTML attribute (src, href,
+// alt, …). Was referenced by renderBlock() but never defined — its absence
+// threw a ReferenceError on every block-mode render (header logo / button /
+// image / footer), so block emails were failing. Defined here.
+function escapeAttr(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
 function fmtMoney(n) {
@@ -110,8 +123,9 @@ function certTypeLabel(t) {
 // urgency badges) plus the auto-injected appUrl + appUrlHost.
 
 var COMMON_FOOTER = (
-  '<div style="margin-top:32px;padding-top:16px;border-top:1px solid #e5e7eb;font-size:12px;color:#6b7280;">' +
-    'Project 86 &middot; <a href="{{appUrl}}" style="color:#4f8cff;text-decoration:none;">{{appUrlHost}}</a><br/>' +
+  '<div style="margin-top:32px;padding-top:16px;border-top:1px solid #e5e7eb;text-align:center;font-size:12px;color:#6b7280;">' +
+    '<img src="{{appUrl}}/images/logo-p86-email.png" alt="Project 86" style="height:22px;display:inline-block;margin-bottom:8px;" /><br/>' +
+    'Powered by <a href="{{appUrl}}" style="color:#6b7280;text-decoration:none;">Project 86</a> &middot; {{appUrlHost}}<br/>' +
     'You\'re receiving this because of activity on your Project 86 account. ' +
     'Toggle notifications in <strong>My Account &rarr; Notifications</strong>.' +
   '</div>'
@@ -124,7 +138,7 @@ function shellWrap(title, bodyHtml) {
         // Project 86 logo. Email clients fetch this via absolute URL since the
         // email is rendered outside our domain. {{appUrl}} resolves at
         // render time so dev/staging/prod each load the right image.
-        '<div style="margin-bottom:12px;"><img src="{{appUrl}}/images/logo-color.png" alt="Project 86" style="height:40px;display:block;" /></div>' +
+        '<div style="margin-bottom:12px;"><img src="{{appUrl}}/images/logo-p86-email.png" alt="Project 86" style="height:40px;display:block;" /></div>' +
         '<h2 style="margin:0 0 16px 0;color:#111827;font-size:20px;">' + title + '</h2>' +
         bodyHtml +
         COMMON_FOOTER +
@@ -644,21 +658,30 @@ function sanitizeBlockHtml(html) {
 
 // Render a single block to HTML. Each block is one row in a stacked
 // table so it survives every email client's layout engine.
-function renderBlock(block, accent) {
+function renderBlock(block, ctx) {
   if (!block || typeof block !== 'object') return '';
+  ctx = ctx || {};
+  var accent = ctx.accent || '#4f8cff';
+  var appUrlStr = ctx.appUrl || appUrl();
+  var p86Logo = appUrlStr + '/images/logo-p86-email.png';
   var t = String(block.type || '').toLowerCase();
   switch (t) {
     case 'header': {
-      var logo = block.logo_url
-        ? '<img src="' + escapeAttr(block.logo_url) + '" alt="" style="max-height:42px;display:block;margin:0 auto 10px;" />'
-        : '';
+      // System emails always wear the Project 86 logo (full P86 theme).
+      // Org emails use the org's logo — an admin-set logo_url wins, then
+      // the org branding kit, then P86 as a last resort so the header is
+      // never empty.
+      var logoSrc = (ctx.scope === 'system')
+        ? p86Logo
+        : (block.logo_url || ctx.orgLogoUrl || p86Logo);
+      var logo = '<img src="' + escapeAttr(logoSrc) + '" alt="" style="max-height:42px;display:block;margin:0 auto 10px;" />';
       var title = escapeHtml(block.title || '');
       var subtitle = block.subtitle
         ? '<div style="font-size:13px;color:#6b7280;text-align:center;margin-top:4px;">' + escapeHtml(block.subtitle) + '</div>'
         : '';
       return '<tr><td style="padding:16px 24px 8px;text-align:center;">' +
         logo +
-        '<div style="font-size:22px;font-weight:700;color:#111827;line-height:1.2;">' + title + '</div>' +
+        (title ? '<div style="font-size:22px;font-weight:700;color:#111827;line-height:1.2;">' + title + '</div>' : '') +
         subtitle +
       '</td></tr>';
     }
@@ -674,7 +697,13 @@ function renderBlock(block, accent) {
     case 'button': {
       var label = escapeHtml(block.label || 'Click');
       var url = escapeAttr(block.url || '#');
-      var bg = /^#[0-9a-f]{3,8}$/i.test(block.bg_color || '') ? block.bg_color : (accent || '#4f8cff');
+      // A button left at the platform default (#4f8cff) or unset inherits the
+      // scope accent — the org's accent_color for org emails, the platform
+      // blue for system. An admin's custom non-default color is respected.
+      var bc = String(block.bg_color || '').toLowerCase();
+      var bg = (!bc || bc === '#4f8cff')
+        ? accent
+        : (/^#[0-9a-f]{3,8}$/i.test(bc) ? block.bg_color : accent);
       return '<tr><td style="padding:18px 24px;text-align:center;">' +
         '<a href="' + url + '" target="_blank" rel="noopener" ' +
           'style="display:inline-block;background:' + bg + ';color:#fff;text-decoration:none;padding:12px 24px;border-radius:6px;font-weight:600;font-size:15px;">' +
@@ -701,11 +730,16 @@ function renderBlock(block, accent) {
       '</td></tr>';
     }
     case 'footer': {
-      var addr = block.address ? escapeHtml(block.address) : '';
+      // Project 86 logo + "Powered by Project 86" anchor EVERY footer — the
+      // platform's brand presence on every email, org or system.
+      var p86 = '<img src="' + escapeAttr(p86Logo) + '" alt="Project 86" style="height:22px;display:inline-block;margin:0 auto 8px;" />';
+      var addr = block.address ? '<div style="margin-top:2px;">' + escapeHtml(block.address) + '</div>' : '';
       var unsubHtml = block.unsubscribe_url
         ? '<div style="margin-top:6px;"><a href="' + escapeAttr(block.unsubscribe_url) + '" style="color:#6b7280;text-decoration:underline;font-size:11px;">Unsubscribe</a></div>'
         : '';
-      return '<tr><td style="padding:16px 24px;text-align:center;color:#6b7280;font-size:11px;border-top:1px solid #e5e7eb;">' +
+      return '<tr><td style="padding:18px 24px;text-align:center;color:#6b7280;font-size:11px;border-top:1px solid #e5e7eb;">' +
+        p86 +
+        '<div>Powered by <a href="' + escapeAttr(appUrlStr) + '" style="color:#6b7280;text-decoration:none;">Project 86</a></div>' +
         addr +
         unsubHtml +
       '</td></tr>';
@@ -724,11 +758,23 @@ function renderBlock(block, accent) {
 //   header.logo_url        → branding.logo_url
 //   button.bg_color        → branding.accent_color  (or 'accent' arg)
 //   footer.address (empty) → branding.footer_address
-function renderBlocks(blocks, params, accent) {
+function renderBlocks(blocks, params, ctxIn) {
   if (!Array.isArray(blocks)) return '';
   var enriched = params || {};
   var branding = (enriched.__branding && typeof enriched.__branding === 'object') ? enriched.__branding : {};
-  var defaultAccent = accent || branding.accent_color || '#4f8cff';
+  ctxIn = ctxIn || {};
+  var scope = ctxIn.scope || 'org';
+  // System emails are locked to the platform blue; org emails use the org's
+  // accent color (falling back to the platform blue when unset).
+  var resolvedAccent = (scope === 'system')
+    ? '#4f8cff'
+    : (ctxIn.accent || branding.accent_color || '#4f8cff');
+  var ctx = {
+    accent: resolvedAccent,
+    scope: scope,
+    appUrl: ctxIn.appUrl || appUrl(),
+    orgLogoUrl: branding.logo_url || ''
+  };
   var rows = blocks.map(function(block) {
     // Interpolate every string field inside the block against params.
     var prepared = {};
@@ -738,15 +784,20 @@ function renderBlocks(blocks, params, accent) {
       else prepared[k] = v;
     });
     prepared.type = block.type;  // type is the dispatch key
-    // Apply branding fallbacks per block type.
-    if (prepared.type === 'header' && !prepared.logo_url && branding.logo_url) {
-      prepared.logo_url = branding.logo_url;
-    }
+    // Footer address still falls back to the org branding kit; the header
+    // logo + button accent are resolved per-scope inside renderBlock.
     if (prepared.type === 'footer' && !prepared.address && branding.footer_address) {
       prepared.address = branding.footer_address;
     }
-    return renderBlock(prepared, defaultAccent);
+    return renderBlock(prepared, ctx);
   }).join('');
+  // Guarantee a Project 86 footer on EVERY email — if the template has no
+  // footer block (admin removed it, or a starter without one), append the
+  // canonical footer so the P86 logo + "Powered by Project 86" always lands.
+  var hasFooter = blocks.some(function(b) { return b && String(b.type || '').toLowerCase() === 'footer'; });
+  if (!hasFooter) {
+    rows += renderBlock({ type: 'footer', address: branding.footer_address || '' }, ctx);
+  }
   // Wrap in a centered max-width table — email-safe centering.
   return '<table role="presentation" cellpadding="0" cellspacing="0" border="0" ' +
     'style="width:100%;max-width:600px;margin:0 auto;background:#fff;border:1px solid #e5e7eb;border-radius:8px;">' +
@@ -780,7 +831,8 @@ function renderDefault(eventKey, params) {
   // interpolated normally.
   if (Array.isArray(src.blocks)) {
     var subjectB = interpolate(src.subject, enriched);
-    var htmlB = renderBlocks(src.blocks, enriched);
+    var evDef = getEvent(eventKey);
+    var htmlB = renderBlocks(src.blocks, enriched, { scope: evDef ? evDef.scope : 'org', appUrl: appUrl() });
     return { subject: subjectB, html: htmlB, text: htmlToText(htmlB) };
   }
   var subject = interpolate(src.subject, enriched);
@@ -824,7 +876,8 @@ async function render(eventKey, params, opts) {
   var parsedBlocks = tryParseBlocks(bodySrc);
   var html;
   if (parsedBlocks && Array.isArray(parsedBlocks.blocks)) {
-    html = renderBlocks(parsedBlocks.blocks, enriched);
+    var evOv = getEvent(eventKey);
+    html = renderBlocks(parsedBlocks.blocks, enriched, { scope: evOv ? evOv.scope : 'org', appUrl: appUrl() });
   } else {
     html = interpolate(bodySrc, enriched);
   }
