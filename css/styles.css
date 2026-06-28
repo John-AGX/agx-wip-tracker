@@ -10697,3 +10697,37 @@ textarea.ci-input { height: auto; resize: vertical; font-family: inherit; }
 .ci-rollup-total { border-bottom: none; margin-top: 2px; font-weight: 700; }
 .ci-rollup-total > span:last-child { color: var(--accent, #4f8cff); }
 .ci-rollup-presale > span:last-child { color: #f0a020; }
+
+/* Jobs list → cards on mobile. The wide #jobs-table horizontally scrolls on a
+   phone (only # + Status show). Reflow each row into a stacked card; !important
+   overrides table-enhancements' column widths + frozen-column sticky. */
+@media (max-width: 640px) {
+  #jobs-table { width: 100% !important; min-width: 0 !important; table-layout: auto !important; }
+  #jobs-table thead { display: none; }
+  #jobs-table tbody, #jobs-table tr, #jobs-table td { display: block; width: auto !important; }
+  #jobs-table tr {
+    border: 1px solid var(--border, #2e3346); border-radius: 10px;
+    background: var(--card-bg, #0f0f1e); margin: 0 0 10px 0; padding: 8px 12px;
+  }
+  #jobs-table td {
+    border: none !important; padding: 4px 0 !important; min-width: 0 !important; max-width: none !important;
+    position: static !important; left: auto !important; z-index: auto !important;
+    display: flex !important; justify-content: space-between; align-items: baseline; gap: 12px;
+    white-space: normal !important; text-align: right;
+  }
+  #jobs-table td::before {
+    content: attr(data-label); text-align: left;
+    color: var(--text-dim, #c4c8d8); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em;
+    flex: 0 0 auto; margin-right: 10px;
+  }
+  #jobs-table td[data-col="idx"] { display: none !important; }
+  #jobs-table td[data-col="name"] { display: block !important; font-weight: 700; font-size: 15px; text-align: left; margin-bottom: 4px; }
+  #jobs-table td[data-col="name"]::before { display: none; }
+  #jobs-table td[data-col="client"]::before     { content: "Client"; }
+  #jobs-table td[data-col="pm"]::before         { content: "PM"; }
+  #jobs-table td[data-col="status"]::before     { content: "Status"; }
+  #jobs-table td[data-col="contract"]::before   { content: "Income"; }
+  #jobs-table td[data-col="pctcomplete"]::before { content: "% Complete"; }
+  #jobs-table td[data-col="profit"]::before     { content: "Profit"; }
+  #jobs-table td[data-col="margin"]::before     { content: "Margin"; }
+}
