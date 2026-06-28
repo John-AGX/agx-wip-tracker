@@ -246,7 +246,7 @@
     })();
     </script>
 
-    <link rel="stylesheet" href="css/styles.css?v=196">
+    <link rel="stylesheet" href="css/styles.css?v=197">
     <link rel="stylesheet" href="css/report-style-packs.css?v=3">
     <link rel="stylesheet" href="css/workspace-layout.css?v=61">
     <link rel="stylesheet" href="css/workspace.css?v=38">
@@ -3594,6 +3594,43 @@
             if (typeof window.p86TabSliderRefresh === 'function') {
               setTimeout(window.p86TabSliderRefresh, 220);
             }
+          });
+
+          // ── Drag-to-resize the sidebar (drag the right edge) ──────
+          var MINW = 220, MAXW = 480, WKEY = 'p86-sidebar-width';
+          var handle = document.createElement('div');
+          handle.className = 'app-sidebar-resize';
+          handle.title = 'Drag to resize';
+          sidebar.appendChild(handle);
+          try {
+            var savedW = parseInt(localStorage.getItem(WKEY), 10);
+            if (savedW >= MINW && savedW <= MAXW) sidebar.style.setProperty('--p86-sidebar-w', savedW + 'px');
+          } catch (e) { /* private mode */ }
+          var dragging = false, startX = 0, startW = 0;
+          handle.addEventListener('mousedown', function (e) {
+            if (sidebar.classList.contains('collapsed')) return;
+            dragging = true;
+            startX = e.clientX;
+            startW = sidebar.getBoundingClientRect().width;
+            sidebar.classList.add('resizing');
+            document.body.style.cursor = 'col-resize';
+            document.body.style.userSelect = 'none';
+            e.preventDefault();
+          });
+          window.addEventListener('mousemove', function (e) {
+            if (!dragging) return;
+            var w = Math.max(MINW, Math.min(MAXW, startW + (e.clientX - startX)));
+            sidebar.style.setProperty('--p86-sidebar-w', w + 'px');
+          });
+          window.addEventListener('mouseup', function () {
+            if (!dragging) return;
+            dragging = false;
+            sidebar.classList.remove('resizing');
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
+            var w = Math.round(sidebar.getBoundingClientRect().width);
+            try { localStorage.setItem(WKEY, String(w)); } catch (e) { /* private mode */ }
+            if (typeof window.p86TabSliderRefresh === 'function') setTimeout(window.p86TabSliderRefresh, 50);
           });
         }
         if (document.readyState === 'loading') {

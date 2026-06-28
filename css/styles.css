@@ -936,7 +936,8 @@
            Collapses to a 56px icon rail via #app-sidebar-toggle. */
         .app-sidebar {
             flex: 0 0 auto;
-            width: 290px;
+            position: relative;
+            width: var(--p86-sidebar-w, 290px);
             display: flex;
             flex-direction: column;
             background: var(--surface);
@@ -953,6 +954,26 @@
         .app-sidebar.collapsed {
             width: 48px;
         }
+        /* Drag-to-resize handle on the sidebar's right edge. Width lives in
+           --p86-sidebar-w (persisted to localStorage); .collapsed still wins
+           with its fixed 48px. .resizing kills the transition so the edge
+           tracks the cursor live. */
+        .app-sidebar.resizing { transition: none; }
+        .app-sidebar-resize {
+            position: absolute;
+            top: 0;
+            right: 0;
+            width: 6px;
+            height: 100%;
+            cursor: col-resize;
+            z-index: 5;
+        }
+        .app-sidebar-resize:hover,
+        .app-sidebar.resizing .app-sidebar-resize {
+            background: var(--accent, #4f8cff);
+            opacity: 0.5;
+        }
+        .app-sidebar.collapsed .app-sidebar-resize { display: none; }
         .app-sidebar-head {
             flex: 0 0 auto;
             display: flex;
