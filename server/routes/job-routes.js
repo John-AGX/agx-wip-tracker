@@ -204,6 +204,15 @@ router.post('/convert', requireAuth, requireRole('admin', 'pm'), async (req, res
         "UPDATE leads SET job_id = $1, status = 'sold', updated_at = NOW() WHERE id = $2 AND (organization_id = $3 OR organization_id IS NULL)",
         [id, leadId, orgId]
       );
+      // Carry the lead's captured receipts forward to the new job. They keep
+      // is_presale=true (pre-award pursuit costs) so they show under "Pre-sale"
+      // on the job — UNLESS roll_presale_to_cost is set, which folds them into
+      // job COGS (is_presale=false). status is unaffected (still entity+amount).
+      const rollPresale = !!(req.body && req.body.roll_presale_to_cost);
+      await client.query(
+        "UPDATE receipts SET entity_type = 'job', entity_id = $1, is_presale = CASE WHEN $2 THEN FALSE ELSE is_presale END, updated_at = NOW() WHERE entity_type = 'lead' AND entity_id = $3 AND organization_id = $4",
+        [id, rollPresale, leadId, orgId]
+      );
     }
     if (estimateId) {
       // Estimates keep their fields in a JSONB `data` blob — stamp job_id +

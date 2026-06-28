@@ -727,6 +727,13 @@
       return get('/api/receipts' + (qs.length ? '?' + qs.join('&') : ''));
     },
     get: function(id) { return get('/api/receipts/' + encodeURIComponent(id)); },
+    rollup: function(opts) {
+      opts = opts || {};
+      var qs = [];
+      if (opts.entity_type) qs.push('entity_type=' + encodeURIComponent(opts.entity_type));
+      if (opts.entity_id) qs.push('entity_id=' + encodeURIComponent(opts.entity_id));
+      return get('/api/receipts/rollup' + (qs.length ? '?' + qs.join('&') : ''));
+    },
     create: function(payload) { return post('/api/receipts', payload); },
     update: function(id, payload) { return patch('/api/receipts/' + encodeURIComponent(id), payload); },
     remove: function(id, hard) { return del('/api/receipts/' + encodeURIComponent(id) + (hard ? '?hard=1' : '')); }

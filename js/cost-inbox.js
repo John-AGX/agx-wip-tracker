@@ -368,5 +368,46 @@
     });
   }
 
-  window.p86CostInbox = { render: render, openNew: function () { openReceiptModal(null); } };
+  // ── Captured-cost rollup card (embed on a job/lead detail page) ────
+  // Reads /api/receipts/rollup and shows COGS by cost code + a Pre-sale line.
+  function mountRollup(host, opts) {
+    if (!host) return;
+    opts = opts || {};
+    var et = opts.entityType, eid = opts.entityId;
+    var api = window.p86Api;
+    if (!et || !eid || !api || !api.receipts || !api.receipts.rollup) { host.innerHTML = ''; return; }
+    host.innerHTML = '<div class="ci-rollup"><div class="ci-rollup-empty">Loading…</div></div>';
+    var link = '<a href="#" class="ci-rollup-link" data-ci-open>View / add receipts →</a>';
+    api.receipts.rollup({ entity_type: et, entity_id: eid }).then(function (r) {
+      var R = (r && r.rollup) || { by_code: {}, cogs_total: 0, presale_total: 0, grand_total: 0, count: 0 };
+      if (!R.count) {
+        host.innerHTML = '<div class="ci-rollup"><div class="ci-rollup-head"><span>Captured Costs</span></div>' +
+          '<div class="ci-rollup-empty">No receipts captured yet. ' + link + '</div></div>';
+      } else {
+        var rows = '';
+        COST_CODES.forEach(function (c) {
+          var b = R.by_code[c.v];
+          if (b && b.total) rows += '<div class="ci-rollup-row"><span>' + esc(c.label) + '</span><span>' + money(b.total) + ' <em>(' + b.count + ')</em></span></div>';
+        });
+        host.innerHTML = '<div class="ci-rollup"><div class="ci-rollup-head"><span>Captured Costs</span>' + link + '</div>' +
+          '<div class="ci-rollup-body">' +
+            (rows || '<div class="ci-rollup-row ci-rollup-muted"><span>No job-cost receipts yet</span><span></span></div>') +
+            '<div class="ci-rollup-row ci-rollup-total"><span>' + (et === 'lead' ? 'Captured (pre-sale)' : 'Job cost (captured)') + '</span><span>' + money(R.cogs_total) + '</span></div>' +
+            (R.presale_total ? '<div class="ci-rollup-row ci-rollup-presale"><span>Pre-sale costs</span><span>' + money(R.presale_total) + '</span></div>' : '') +
+          '</div></div>';
+      }
+      var lk = host.querySelector('[data-ci-open]');
+      if (lk) lk.addEventListener('click', function (e) { e.preventDefault(); openFor(et, eid); });
+    }).catch(function () { host.innerHTML = ''; });
+  }
+
+  // Open the Cost Inbox pre-filtered to one job/lead.
+  function openFor(entityType, entityId) {
+    _filters.job = entityType + ':' + entityId;
+    _filters.status = '';
+    _filters.q = '';
+    if (typeof window.switchTab === 'function') window.switchTab('cost-inbox');
+  }
+
+  window.p86CostInbox = { render: render, openNew: function () { openReceiptModal(null); }, mountRollup: mountRollup, openFor: openFor };
 })();

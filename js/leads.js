@@ -995,6 +995,26 @@
     renderLeadTasks(leadId, lead);
     renderLeadAttachments(leadId);
     renderLeadWeather(addr);
+    renderLeadCapturedCosts(leadId);
+  }
+
+  // Pre-sale captured costs (field receipts) for this lead — read-only rollup
+  // via the Cost Inbox. Appended to the right-panel column; carried to the job
+  // (still pre-sale) on conversion.
+  function renderLeadCapturedCosts(leadId) {
+    var anchor = document.getElementById('leadEditor_tasksHost');
+    var container = anchor && anchor.parentNode;
+    if (!container || !window.p86CostInbox || !window.p86CostInbox.mountRollup) return;
+    var card = document.getElementById('leadEditor_capturedCostsCard');
+    if (!leadId) { if (card) card.remove(); return; }
+    if (!card) {
+      card = document.createElement('div');
+      card.id = 'leadEditor_capturedCostsCard';
+      card.style.cssText = 'border:1px solid var(--border,#2e3346);border-radius:8px;padding:8px 10px;margin:0 0 10px 0;';
+      card.innerHTML = '<div id="leadEditor_capturedCostsInner"></div>';
+      container.appendChild(card);
+    }
+    window.p86CostInbox.mountRollup(document.getElementById('leadEditor_capturedCostsInner'), { entityType: 'lead', entityId: leadId, compact: true });
   }
 
   // Tasks panel — defers to window.p86Tasks.mountEntityPanel

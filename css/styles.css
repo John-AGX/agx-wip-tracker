@@ -10671,3 +10671,20 @@ textarea.ci-input { height: auto; resize: vertical; font-family: inherit; }
   .ci-field-2 { grid-template-columns: 1fr; }
   .ci-link-row { grid-template-columns: 110px 1fr; }
 }
+
+/* Captured-cost rollup card — embedded on job/lead detail (window.p86CostInbox.mountRollup) */
+.ci-rollup { font-size: 13px; }
+.ci-rollup-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 6px; }
+.ci-rollup-head > span:first-child { font-weight: 700; color: var(--text, #eef0f6); font-size: 13px; }
+.ci-rollup-link { font-size: 12px; color: var(--accent, #4f8cff); text-decoration: none; white-space: nowrap; }
+.ci-rollup-link:hover { text-decoration: underline; }
+.ci-rollup-empty { color: var(--text-dim, #c4c8d8); font-size: 12px; padding: 4px 0; }
+.ci-rollup-body { display: flex; flex-direction: column; gap: 2px; }
+.ci-rollup-row { display: flex; justify-content: space-between; gap: 10px; padding: 3px 0; border-bottom: 1px solid var(--border, #2e3346); font-size: 12px; }
+.ci-rollup-row > span:first-child { color: var(--text-dim, #c4c8d8); }
+.ci-rollup-row > span:last-child { font-variant-numeric: tabular-nums; color: var(--text, #eef0f6); }
+.ci-rollup-row em { color: var(--text-dim, #c4c8d8); font-style: normal; font-size: 11px; }
+.ci-rollup-muted > span:first-child { font-style: italic; }
+.ci-rollup-total { border-bottom: none; margin-top: 2px; font-weight: 700; }
+.ci-rollup-total > span:last-child { color: var(--accent, #4f8cff); }
+.ci-rollup-presale > span:last-child { color: #f0a020; }

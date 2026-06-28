@@ -147,6 +147,46 @@ router.get('/', requireAuth, async (req, res) => {
   }
 });
 
+// GET /api/receipts/rollup?entity_type=job&entity_id=X — captured-cost totals
+// for one job/lead, grouped by cost code, split COGS (non-presale) vs pre-sale.
+// Counts only 'processed' receipts (complete + counting). MUST be declared
+// before '/:id' or Express routes "rollup" into that param handler.
+router.get('/rollup', requireAuth, async (req, res) => {
+  try {
+    const orgId = callerOrgId(req);
+    const et = String(req.query.entity_type || '');
+    const eid = req.query.entity_id ? String(req.query.entity_id) : null;
+    const empty = { by_code: {}, cogs_total: 0, presale_total: 0, grand_total: 0, count: 0 };
+    if (!orgId || !LINKABLE.has(et) || !eid) return res.json({ rollup: empty });
+    const { rows } = await pool.query(
+      `SELECT cost_code, is_presale, COALESCE(SUM(amount), 0)::numeric(14, 2) AS total, COUNT(*)::int AS count
+         FROM receipts
+        WHERE organization_id = $1 AND entity_type = $2 AND entity_id = $3 AND status = 'processed'
+        GROUP BY cost_code, is_presale`,
+      [orgId, et, eid]
+    );
+    const out = { by_code: {}, cogs_total: 0, presale_total: 0, grand_total: 0, count: 0 };
+    rows.forEach((r) => {
+      const amt = Number(r.total) || 0;
+      out.grand_total += amt;
+      out.count += r.count;
+      if (r.is_presale) {
+        out.presale_total += amt;
+      } else {
+        const code = r.cost_code || 'materials';
+        out.by_code[code] = out.by_code[code] || { total: 0, count: 0 };
+        out.by_code[code].total += amt;
+        out.by_code[code].count += r.count;
+        out.cogs_total += amt;
+      }
+    });
+    res.json({ rollup: out });
+  } catch (e) {
+    console.error('GET /api/receipts/rollup error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // GET /api/receipts/:id — one receipt (org-scoped).
 router.get('/:id', requireAuth, async (req, res) => {
   try {

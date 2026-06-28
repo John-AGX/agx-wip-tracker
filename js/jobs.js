@@ -330,6 +330,24 @@ function renderJobsMain() {
             document.getElementById('wip-revised-est-costs2').textContent = formatCurrency(w.revisedEstCosts);
             document.getElementById('wip-remaining-costs').textContent = formatCurrency(w.remainingCosts);
             document.getElementById('wip-remaining-costs').style.color = w.remainingCosts >= 0 ? 'var(--text)' : 'var(--red)';
+
+            // Captured Costs (field receipts) — read-only rollup by cost code from
+            // the Cost Inbox. Appended once to the WIP pane, re-mounted each render.
+            try {
+                var wipPane = document.getElementById('job-wip-report');
+                if (wipPane && window.p86CostInbox && window.p86CostInbox.mountRollup) {
+                    var card = document.getElementById('wip-captured-costs-card');
+                    if (!card) {
+                        card = document.createElement('div');
+                        card.id = 'wip-captured-costs-card';
+                        card.className = 'card';
+                        card.style.marginTop = '10px';
+                        card.innerHTML = '<div id="wip-captured-costs-inner"></div>';
+                        wipPane.appendChild(card);
+                    }
+                    window.p86CostInbox.mountRollup(document.getElementById('wip-captured-costs-inner'), { entityType: 'job', entityId: jobId });
+                }
+            } catch (e) { /* rollup is best-effort */ }
         }
 
         function saveWipInputs() {
