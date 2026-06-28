@@ -890,69 +890,57 @@
                             </div>
                             <span id="job-detail-status" class="job-detail-status-pill"></span>
                             <div class="ee-header-icons" style="display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap;">
-                                <button class="header-icon-btn" data-p86-icon="edit" onclick="toggleEditJobInfo()" id="edit-job-info-btn" title="Edit job info" aria-label="Edit job info"></button>
                                 <button onclick="archiveCurrentJob()" id="archive-job-btn" title="Archive job" style="padding:6px 12px;font-size:12px;font-weight:600;white-space:nowrap;border-radius:7px;border:1px solid var(--border,#2e3346);background:var(--surface,#1a1d27);color:var(--text,#eef0f6);cursor:pointer;">Archive</button>
                                 <button onclick="deleteCurrentJob()" title="Delete job permanently" style="padding:6px 12px;font-size:12px;font-weight:600;white-space:nowrap;border-radius:7px;border:1px solid rgba(255,107,107,.45);background:var(--surface,#1a1d27);color:#ff6b6b;cursor:pointer;">Delete</button>
                             </div>
                         </div>
 
+                        <!-- Job Information card — "money first" layout (rework). The
+                             header carries the job name + address + status pill + a
+                             labeled Edit button (toggleEditJobInfo). All job-info-* ids
+                             are preserved so renderJobDetail keeps populating by id;
+                             editing swaps each value cell in place (layout-agnostic). -->
                         <div class="card" id="job-info-card">
-                            <div style="margin-bottom: 12px;">
-                                <h3 style="margin: 0; font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-dim, #c4c8d8);">Job Information</h3>
+                            <div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:14px;">
+                                <div style="flex:1;min-width:0;">
+                                    <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#c4c8d8);margin-bottom:4px;">Job Information</div>
+                                    <div style="font-size:16px;font-weight:600;color:var(--text,#eef0f6);line-height:1.3;word-break:break-word;" id="job-info-title"></div>
+                                    <div style="font-size:13px;color:var(--text-dim);margin-top:5px;display:flex;align-items:center;gap:4px;flex-wrap:wrap;" id="job-info-address">—</div>
+                                </div>
+                                <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
+                                    <span id="job-info-status" style="font-size:13px;"></span>
+                                    <button id="edit-job-info-btn" data-editing="0" onclick="toggleEditJobInfo()" title="Edit job info" aria-label="Edit job info" style="padding:6px 13px;font-size:12px;font-weight:600;white-space:nowrap;border-radius:7px;border:1px solid var(--border,#2e3346);background:var(--surface,#1a1d27);color:var(--text,#eef0f6);cursor:pointer;">&#9998; Edit</button>
+                                </div>
                             </div>
-                            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 15px;">
-                                <div style="grid-column: 1 / -1;">
-                                    <label style="font-size: 12px; color: var(--text-dim);">Project Address</label>
-                                    <div style="font-size: 14px; color: var(--text);" id="job-info-address">—</div>
+
+                            <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:16px;">
+                                <div style="background:var(--surface2,#222636);border-radius:9px;padding:10px 12px;min-width:0;">
+                                    <div style="font-size:11px;color:var(--text-dim);margin-bottom:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Contract (As Sold)</div>
+                                    <div style="font-size:19px;font-weight:700;color:var(--accent);overflow:hidden;text-overflow:ellipsis;" id="job-info-contract"></div>
                                 </div>
-                                <div>
-                                    <label style="font-size: 12px; color: var(--text-dim);">Job Number</label>
-                                    <div style="font-size: 14px; color: var(--text);" id="job-info-number"></div>
+                                <div style="background:var(--surface2,#222636);border-radius:9px;padding:10px 12px;min-width:0;">
+                                    <div style="font-size:11px;color:var(--text-dim);margin-bottom:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Est. Costs (As Sold)</div>
+                                    <div style="font-size:19px;font-weight:700;color:var(--text);overflow:hidden;text-overflow:ellipsis;" id="job-info-estcosts"></div>
                                 </div>
-                                <div>
-                                    <label style="font-size: 12px; color: var(--text-dim);">Job Name</label>
-                                    <div style="font-size: 14px; color: var(--text);" id="job-info-title"></div>
+                                <div style="background:var(--surface2,#222636);border-radius:9px;padding:10px 12px;min-width:0;">
+                                    <div style="font-size:11px;color:var(--text-dim);margin-bottom:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Target Margin %</div>
+                                    <div style="font-size:19px;font-weight:700;color:var(--text);" id="job-info-margin"></div>
                                 </div>
-                                <div>
-                                    <label style="font-size: 12px; color: var(--text-dim);">Client</label>
-                                    <div style="font-size: 14px; color: var(--text);" id="job-info-client"></div>
-                                </div>
-                                <div>
-                                    <label style="font-size: 12px; color: var(--text-dim);">PM</label>
-                                    <div style="font-size: 14px; color: var(--text);" id="job-info-pm"></div>
-                                </div>
-                                <div>
-                                    <label style="font-size: 12px; color: var(--text-dim);">Type</label>
-                                    <div style="font-size: 14px; color: var(--text);" id="job-info-type"></div>
-                                </div>
-                                <div>
-                                    <label style="font-size: 12px; color: var(--text-dim);">Work Type</label>
-                                    <div style="font-size: 14px; color: var(--text);" id="job-info-worktype"></div>
-                                </div>
-                                <div>
-                                    <label style="font-size: 12px; color: var(--text-dim);">Market</label>
-                                    <div style="font-size: 14px; color: var(--text);" id="job-info-market"></div>
-                                </div>
-                                <div>
-                                    <label style="font-size: 12px; color: var(--text-dim);">Contract (As Sold)</label>
-                                    <div style="font-size: 14px; color: var(--accent); font-weight: 700;" id="job-info-contract"></div>
-                                </div>
-                                <div>
-                                    <label style="font-size: 12px; color: var(--text-dim);">Est. Costs (As Sold)</label>
-                                    <div style="font-size: 14px; color: var(--text);" id="job-info-estcosts"></div>
-                                </div>
-                                <div>
-                                    <label style="font-size: 12px; color: var(--text-dim);">Target Margin %</label>
-                                    <div style="font-size: 14px; color: var(--text);" id="job-info-margin"></div>
-                                </div>
-                                <div>
-                                    <label style="font-size: 12px; color: var(--text-dim);">Status</label>
-                                    <div style="font-size: 14px;" id="job-info-status"></div>
-                                </div>
-                                <div>
-                                    <label style="font-size: 12px; color: var(--text-dim);">Notes</label>
-                                    <div style="font-size: 14px; color: var(--text);" id="job-info-notes"></div>
-                                </div>
+                            </div>
+
+                            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px 16px;">
+                                <div style="min-width:0;"><div style="font-size:11px;color:var(--text-dim);margin-bottom:2px;">Client</div><div style="font-size:13px;color:var(--text);" id="job-info-client"></div></div>
+                                <div style="min-width:0;"><div style="font-size:11px;color:var(--text-dim);margin-bottom:2px;">PM</div><div style="font-size:13px;color:var(--text);" id="job-info-pm"></div></div>
+                                <div style="min-width:0;"><div style="font-size:11px;color:var(--text-dim);margin-bottom:2px;">Type</div><div style="font-size:13px;color:var(--text);" id="job-info-type"></div></div>
+                                <div style="min-width:0;"><div style="font-size:11px;color:var(--text-dim);margin-bottom:2px;">Work Type</div><div style="font-size:13px;color:var(--text);" id="job-info-worktype"></div></div>
+                                <div style="min-width:0;"><div style="font-size:11px;color:var(--text-dim);margin-bottom:2px;">Market</div><div style="font-size:13px;color:var(--text);" id="job-info-market"></div></div>
+                                <div style="min-width:0;"><div style="font-size:11px;color:var(--text-dim);margin-bottom:2px;">Job Number</div><div style="font-size:13px;color:var(--text);" id="job-info-number"></div></div>
+                                <div style="min-width:0;"><div style="font-size:11px;color:var(--text-dim);margin-bottom:2px;">Production Days</div><div style="font-size:13px;color:var(--text);" id="job-info-prod-days"></div></div>
+                            </div>
+
+                            <div style="margin-top:14px;">
+                                <div style="font-size:11px;color:var(--text-dim);margin-bottom:4px;">Notes</div>
+                                <div style="font-size:13px;color:var(--text);line-height:1.55;background:var(--surface2,#222636);border-radius:8px;padding:9px 11px;max-height:120px;overflow:auto;white-space:pre-wrap;word-break:break-word;" id="job-info-notes"></div>
                             </div>
                         </div>
 
@@ -3230,7 +3218,7 @@
     <script src="js/tab-slider.js?v=1b"></script>
 
     <script src="js/workspace.js?v=45"></script>
-    <script src="js/workspace-layout.js?v=77"></script>
+    <script src="js/workspace-layout.js?v=78"></script>
 
     <!-- URL router — pathname-based navigation. Loads last so all
          top-level nav functions (switchTab, editJob, etc.) exist

@@ -366,7 +366,7 @@
         // "Open Estimate" — only when this job has a linked estimate (job.estimate_id).
         var estId = jobForActions && jobForActions.estimate_id ? String(jobForActions.estimate_id).replace(/['"\\]/g, '') : '';
         var openEstBtn = estId
-          ? '<button type="button" onclick="if(window.openEstimateFromJob)window.openEstimateFromJob(\'' + estId + '\')" title="Open the linked estimate (locked once sold)" style="' + btnBase + 'color:#4f8cff;border-color:rgba(79,140,255,.45);">Open Estimate</button>'
+          ? '<button type="button" data-co-open-est="1" onclick="if(window.openEstimateFromJob)window.openEstimateFromJob(\'' + estId + '\')" title="Open the linked estimate (locked once sold)" style="' + btnBase + 'color:#4f8cff;border-color:rgba(79,140,255,.45);">Open Estimate</button>'
           : '';
         jobActions.innerHTML =
           openEstBtn +
@@ -475,6 +475,20 @@
         // Keep the sidebar Pulse card in sync with the (correct) strip \u2014 fixes
         // the card showing $0 / 0% while the strip shows the real contract.
         paintJobSubnavCard(job, w);
+        // Ensure the "Open Estimate" action exists \u2014 the actions bar can be built
+        // before appData/currentJobId resolve, so the build-time button is missed.
+        var actionsBar = document.querySelector('.jh-job-actions');
+        if (actionsBar && job.estimate_id && !actionsBar.querySelector('[data-co-open-est]')) {
+          var estId2 = String(job.estimate_id).replace(/['"\\]/g, '');
+          var ob = document.createElement('button');
+          ob.type = 'button';
+          ob.setAttribute('data-co-open-est', '1');
+          ob.title = 'Open the linked estimate (locked once sold)';
+          ob.textContent = 'Open Estimate';
+          ob.style.cssText = 'padding:6px 12px;font-size:12px;font-weight:600;border-radius:7px;border:1px solid rgba(79,140,255,.45);background:var(--surface,#1a1d27);color:#4f8cff;cursor:pointer;';
+          ob.onclick = function () { if (window.openEstimateFromJob) window.openEstimateFromJob(estId2); };
+          actionsBar.insertBefore(ob, actionsBar.firstChild);
+        }
       }
     }
   }
