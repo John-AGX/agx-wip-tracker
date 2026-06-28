@@ -218,6 +218,7 @@
     paintLines();
     paintTotals();
     paintStatusPill();
+    applyCoLockState();
     paintSaveStatus();
 
     // Escape closes the editor (same as estimates / reports overlays).
@@ -508,7 +509,43 @@
     pill.innerHTML = '<span class="dot"></span>' + escapeHTML(label) + '<span class="caret">▾</span>';
     pill.title = s === 'applied'
       ? 'Applied — locked. WIP has consumed these costs.'
+      : s === 'approved'
+      ? 'Approved — locked / read-only. Move back to Draft (or unlock) to edit.'
       : 'Click to change status';
+  }
+
+  // Approved/applied COs are locked → read-only. Mirror of the estimate lock:
+  // a .co-locked class disables inputs via CSS + a banner with an admin unlock.
+  function applyCoLockState() {
+    var host = document.querySelector('#co-editor-overlay .p86-co-host');
+    if (!host) return;
+    var locked = !!(_state.co && _state.co.is_locked);
+    host.classList.toggle('co-locked', locked);
+    var banner = document.getElementById('co-lock-banner');
+    if (!locked) { if (banner) banner.remove(); return; }
+    if (!banner) {
+      banner = document.createElement('div');
+      banner.id = 'co-lock-banner';
+      banner.className = 'co-lock-banner';
+      host.insertBefore(banner, host.firstChild);
+    }
+    banner.innerHTML =
+      '<span><strong>🔒 Approved — locked.</strong> This change order is approved and read-only. ' +
+      'Move it back to Draft via the status pill, or unlock it to make corrections.</span>' +
+      '<button type="button" id="co-unlock-btn" class="ee-btn small">Unlock to edit</button>';
+    var btn = document.getElementById('co-unlock-btn');
+    if (btn) btn.onclick = unlockCo;
+  }
+
+  function unlockCo() {
+    var co = _state.co;
+    if (!co || !window.p86Api.changeOrders.lock) return;
+    if (!confirm('Unlock this approved change order for editing? It stays Approved but becomes editable until re-locked.')) return;
+    window.p86Api.changeOrders.lock(co.id, false).then(function () {
+      _state.co.is_locked = false;
+      applyCoLockState();
+      paintSaveStatus();
+    }).catch(function (e) { alert('Unlock failed: ' + (e && e.message || e)); });
   }
 
   function openStatusTransition() {
@@ -578,6 +615,7 @@
         Object.assign(_state.co, fresh);
       }
       paintStatusPill();
+      applyCoLockState();
       paintSaveStatus();
     }).catch(function(e) {
       alert('Status change failed: ' + (e.message || e));

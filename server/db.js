@@ -678,6 +678,13 @@ async function initSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_job_change_orders_job ON job_change_orders(job_id);
     CREATE INDEX IF NOT EXISTS idx_job_change_orders_status ON job_change_orders(status);
+    -- Lock flag: set TRUE when a CO is approved (or applied) — an approved CO is
+    -- a committed scope change and becomes read-only. Admin can clear it via
+    -- PUT /api/change-orders/:id/lock. Backfill locks any already approved/applied.
+    ALTER TABLE job_change_orders ADD COLUMN IF NOT EXISTS is_locked BOOLEAN NOT NULL DEFAULT FALSE;
+    UPDATE job_change_orders SET is_locked = TRUE
+      WHERE COALESCE(is_locked, FALSE) = FALSE
+        AND status IN ('approved', 'applied');
 
     -- Purchase Orders — the AGX <-> subcontractor scope-of-work contract
     -- (net-new entity modeled on Buildertrend POs; see the saved
@@ -873,6 +880,13 @@ async function initSchema() {
     -- Lock flag: set TRUE when a lead converts to a job (the estimate is "sold"
     -- and becomes read-only). An admin can clear it via PUT /api/estimates/:id/lock.
     ALTER TABLE estimates ADD COLUMN IF NOT EXISTS is_locked BOOLEAN NOT NULL DEFAULT FALSE;
+    -- One-time (idempotent) backfill: any estimate already linked to a job
+    -- (jobs.estimate_id) is "sold" and must be locked. Earlier conversions and
+    -- the /link-estimate path didn't set is_locked, so existing rows were left
+    -- editable. Re-run-safe: only flips currently-unlocked linked estimates.
+    UPDATE estimates SET is_locked = TRUE
+      WHERE COALESCE(is_locked, FALSE) = FALSE
+        AND id IN (SELECT estimate_id FROM jobs WHERE estimate_id IS NOT NULL);
 
     -- Polymorphic attachments — each row is a single uploaded photo (or doc)
     -- belonging to either a lead or an estimate. We store three size variants

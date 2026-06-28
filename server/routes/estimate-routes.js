@@ -254,6 +254,14 @@ router.put('/:id/workbook', requireAuth, requireCapability('ESTIMATES_EDIT'), as
     if (!wb || typeof wb !== 'object') {
       return res.status(400).json({ error: 'workbook body required' });
     }
+    // Locked (sold) estimates are immutable — the workbook is part of the
+    // estimate's takeoff data, so it must honor the same lock as bulk-save.
+    const lk = await pool.query(
+      'SELECT is_locked FROM estimates WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+      [req.params.id, req.user.organization_id]
+    );
+    if (lk.rowCount === 0) return res.status(404).json({ error: 'Estimate not found' });
+    if (lk.rows[0].is_locked) return res.status(409).json({ error: 'Estimate is locked (sold). Unlock it to edit.' });
     const u = await pool.query(
       `UPDATE estimates
           SET data = jsonb_set(COALESCE(data, '{}'::jsonb), '{workbook}', $1::jsonb, true),

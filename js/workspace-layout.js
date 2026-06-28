@@ -357,17 +357,63 @@
     // be unreachable. Surface them in an always-visible bar under the strip.
     try {
       if (strip.parentNode && !document.querySelector(".jh-job-actions")) {
+        var jobForActions = (typeof appData !== 'undefined' && appData.jobs)
+          ? appData.jobs.find(function (j) { return j.id === currentJobId; }) : null;
         var jobActions = document.createElement("div");
         jobActions.className = "jh-job-actions";
         jobActions.style.cssText = "display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;align-items:center;padding:6px 16px 0;";
         var btnBase = "padding:6px 12px;font-size:12px;font-weight:600;border-radius:7px;border:1px solid var(--border,#2e3346);background:var(--surface,#1a1d27);color:var(--text,#eef0f6);cursor:pointer;";
+        // "Open Estimate" — only when this job has a linked estimate (job.estimate_id).
+        var estId = jobForActions && jobForActions.estimate_id ? String(jobForActions.estimate_id).replace(/['"\\]/g, '') : '';
+        var openEstBtn = estId
+          ? '<button type="button" onclick="if(window.openEstimateFromJob)window.openEstimateFromJob(\'' + estId + '\')" title="Open the linked estimate (locked once sold)" style="' + btnBase + 'color:#4f8cff;border-color:rgba(79,140,255,.45);">Open Estimate</button>'
+          : '';
         jobActions.innerHTML =
+          openEstBtn +
           '<button type="button" onclick="if(window.toggleEditJobInfo)window.toggleEditJobInfo()" title="Edit job info" style="' + btnBase + '">Edit</button>' +
           '<button type="button" onclick="if(window.archiveCurrentJob)window.archiveCurrentJob()" title="Archive job" style="' + btnBase + '">Archive</button>' +
           '<button type="button" onclick="if(window.deleteCurrentJob)window.deleteCurrentJob()" title="Delete job permanently" style="' + btnBase + 'color:#ff6b6b;border-color:rgba(255,107,107,.45);">Delete</button>';
         strip.parentNode.insertBefore(jobActions, strip.nextSibling);
       }
     } catch (e) { /* actions bar is best-effort */ }
+  }
+
+  /** Paint the compact Pulse card (ring + contract/profit) in the sidebar jobnav.
+   *  Called on build AND from refreshHeaderMetrics so it never goes stale — the
+   *  build-time getJobWIP can run before NG/appData are ready (returns empty →
+   *  $0/0%); refreshHeaderMetrics runs post-ensureNGComputed so it carries the
+   *  same correct WIP the metrics strip shows. */
+  function paintJobSubnavCard(job, w) {
+    var jobnav = document.getElementById('app-jobnav');
+    if (!jobnav || !job || !window.p86EntityCard) return;
+    var infoEl = jobnav.querySelector('.app-jobnav-jobinfo');
+    if (!infoEl) return;
+    w = w || {};
+    var sm = function (n) {
+      n = Number(n) || 0; var a = Math.abs(n), s = n < 0 ? '-' : '';
+      if (a >= 1e6) return s + '$' + (a / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
+      if (a >= 1e3) return s + '$' + Math.round(a / 1e3) + 'k';
+      return s + '$' + Math.round(a);
+    };
+    var statusCol = window.p86EntityCard.jobStatusColor(job.status);
+    var accentCol = window.p86EntityCard.pinColor(job, 'job') || statusCol;
+    var profit = (w.jtdProfit != null) ? w.jtdProfit : 0;
+    // "Contract" = base contract (job.contractAmount). Total income (contract +
+    // change orders) is the strip's "Total Income" tile, not this. Fall back to
+    // job.contractAmount so a not-yet-computed WIP never blanks the card to $0.
+    var contract = (w.contractIncome != null) ? w.contractIncome
+                 : (w.totalIncome != null) ? w.totalIncome
+                 : (Number(job.contractAmount) || 0);
+    infoEl.innerHTML = window.p86EntityCard.render({
+      kind: 'job', accent: accentCol, status: { label: job.status || 'In Progress', color: statusCol },
+      number: job.jobNumber || '', title: job.title || job.name || '',
+      subtitle: job.client || '',
+      ring: { pct: (w.pctComplete || 0) },
+      stats: [
+        { label: 'Contract', value: sm(contract) },
+        { label: 'Profit', value: (profit < 0 ? '-' : '+') + sm(Math.abs(profit)), tone: profit < 0 ? 'neg' : 'pos' }
+      ]
+    }, { compact: true });
   }
 
   /** Refresh the sticky header metrics strip with current WIP data */
@@ -426,6 +472,9 @@
         if (titleEl) titleEl.textContent = (job.jobNumber || '') + ' \u2014 ' + (job.title || '');
         var statusEl = document.querySelector('.jh-status-badge');
         if (statusEl) statusEl.textContent = job.status || 'In Progress';
+        // Keep the sidebar Pulse card in sync with the (correct) strip \u2014 fixes
+        // the card showing $0 / 0% while the strip shows the real contract.
+        paintJobSubnavCard(job, w);
       }
     }
   }
@@ -502,31 +551,13 @@
     }
     // (Re)populate identity from the current job.
     if (job) {
-      var infoEl = jobnav.querySelector('.app-jobnav-jobinfo');
-      if (infoEl && window.p86EntityCard) {
+      if (window.p86EntityCard) {
         // Shared Pulse card (compact): ring + identity + contract/profit.
-        var sm = function (n) {
-          n = Number(n) || 0; var a = Math.abs(n), s = n < 0 ? '-' : '';
-          if (a >= 1e6) return s + '$' + (a / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
-          if (a >= 1e3) return s + '$' + Math.round(a / 1e3) + 'k';
-          return s + '$' + Math.round(a);
-        };
-        var w = (window.getJobWIP ? window.getJobWIP(job.id) : null) || {};
-        var statusCol = window.p86EntityCard.jobStatusColor(job.status);
-        var accentCol = window.p86EntityCard.pinColor(job, 'job') || statusCol;
-        var profit = (w.jtdProfit != null) ? w.jtdProfit : 0;
-        var contract = (w.totalIncome != null) ? w.totalIncome : (w.contractIncome || 0);
-        infoEl.innerHTML = window.p86EntityCard.render({
-          kind: 'job', accent: accentCol, status: { label: job.status || 'In Progress', color: statusCol },
-          number: job.jobNumber || '', title: job.title || job.name || '',
-          subtitle: job.client || '',
-          ring: { pct: (w.pctComplete || 0) },
-          stats: [
-            { label: 'Contract', value: sm(contract) },
-            { label: 'Profit', value: (profit < 0 ? '-' : '+') + sm(Math.abs(profit)), tone: profit < 0 ? 'neg' : 'pos' }
-          ]
-        }, { compact: true });
-      } else if (job) {
+        // Painted via paintJobSubnavCard so refreshHeaderMetrics can re-paint it
+        // — the build-time getJobWIP here can run before NG/appData are ready,
+        // which previously left the card stuck at $0 / 0% while the strip was right.
+        paintJobSubnavCard(job, (window.getJobWIP ? window.getJobWIP(job.id) : null));
+      } else {
         // Fallback (module not loaded): the original title + status text.
         var num = job.jobNumber || '';
         var nm = job.title || job.name || '';

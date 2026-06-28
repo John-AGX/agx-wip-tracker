@@ -299,6 +299,9 @@
     setStatus: function(id, status) {
       return post('/api/change-orders/' + encodeURIComponent(id) + '/status', { status: status });
     },
+    lock: function(id, locked) {
+      return put('/api/change-orders/' + encodeURIComponent(id) + '/lock', { locked: !!locked });
+    },
     linkNode: function(id, nodeId) {
       return post('/api/change-orders/' + encodeURIComponent(id) + '/link-node', { node_id: nodeId });
     },

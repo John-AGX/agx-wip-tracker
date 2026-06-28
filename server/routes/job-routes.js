@@ -305,7 +305,7 @@ router.post('/:id/link-estimate', requireAuth, async (req, res) => {
       [JSON.stringify(data), estimateId, newLeadId, req.params.id, orgId]
     );
     await client.query(
-      "UPDATE estimates SET data = jsonb_set(COALESCE(data, '{}'::jsonb), '{job_id}', to_jsonb($1::text)), updated_at = NOW() WHERE id = $2 AND (organization_id = $3 OR organization_id IS NULL)",
+      "UPDATE estimates SET data = jsonb_set(jsonb_set(COALESCE(data, '{}'::jsonb), '{job_id}', to_jsonb($1::text)), '{status}', to_jsonb('sold'::text)), is_locked = TRUE, updated_at = NOW() WHERE id = $2 AND (organization_id = $3 OR organization_id IS NULL)",
       [req.params.id, estimateId, orgId]
     );
     await client.query('COMMIT');

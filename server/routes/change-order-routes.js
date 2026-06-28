@@ -70,6 +70,7 @@ function shapeRow(r) {
     approved_at: r.approved_at,
     approved_by: r.approved_by,
     linked_node_id: r.linked_node_id,
+    is_locked: !!r.is_locked,
     created_at: r.created_at,
     updated_at: r.updated_at
   };
@@ -84,7 +85,7 @@ router.get('/jobs/:jobId/change-orders', requireAuth, async (req, res) => {
     if (!inOrg) return res.json({ change_orders: [] });
     const { rows } = await pool.query(
       `SELECT id, job_id, owner_id, status, co_number, data, approved_at,
-              approved_by, linked_node_id, created_at, updated_at
+              approved_by, linked_node_id, is_locked, created_at, updated_at
        FROM job_change_orders
        WHERE job_id = $1
        ORDER BY updated_at DESC`,
@@ -141,7 +142,7 @@ router.get('/change-orders', requireAuth, async (req, res) => {
     const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 300));
     const { rows } = await pool.query(
       `SELECT co.id, co.job_id, co.owner_id, co.status, co.co_number, co.data,
-              co.approved_at, co.approved_by, co.linked_node_id,
+              co.approved_at, co.approved_by, co.linked_node_id, co.is_locked,
               co.created_at, co.updated_at,
               j.data->>'jobNumber' AS job_number,
               j.data->>'title'     AS job_title
@@ -170,7 +171,7 @@ router.get('/change-orders/:id', requireAuth, async (req, res) => {
     // caller's org reads as 404 (no cross-tenant read by guessed id).
     const { rows } = await pool.query(
       `SELECT co.id, co.job_id, co.owner_id, co.status, co.co_number, co.data,
-              co.approved_at, co.approved_by, co.linked_node_id,
+              co.approved_at, co.approved_by, co.linked_node_id, co.is_locked,
               co.created_at, co.updated_at
          FROM job_change_orders co
          JOIN jobs j ON j.id = co.job_id
@@ -227,7 +228,7 @@ router.post('/jobs/:jobId/change-orders', requireAuth, requireCapability('ESTIMA
          (id, job_id, owner_id, status, co_number, data)
        VALUES ($1, $2, $3, 'draft', $4, $5)
        RETURNING id, job_id, owner_id, status, co_number, data, approved_at,
-                 approved_by, linked_node_id, created_at, updated_at`,
+                 approved_by, linked_node_id, is_locked, created_at, updated_at`,
       [id, jobId, req.user.id, coNumber, JSON.stringify(data)]
     );
     res.json({ change_order: shapeRow(rows[0]) });
@@ -246,7 +247,7 @@ router.put('/change-orders/:id', requireAuth, requireCapability('ESTIMATES_EDIT'
     // Org-scoped: a CO outside the caller's org reads as 404 (no
     // cross-tenant edit by guessed id).
     const existing = await pool.query(
-      `SELECT co.status FROM job_change_orders co
+      `SELECT co.status, co.is_locked FROM job_change_orders co
          JOIN jobs j ON j.id = co.job_id
         WHERE co.id = $1 AND (j.organization_id = $2 OR j.organization_id IS NULL)`,
       [id, req.user.organization_id]
@@ -256,6 +257,11 @@ router.put('/change-orders/:id', requireAuth, requireCapability('ESTIMATES_EDIT'
     // fed the WIP and changing the lines would create reporting drift.
     if (existing.rows[0].status === 'applied') {
       return res.status(409).json({ error: 'Cannot edit an applied change order' });
+    }
+    // Approved COs are locked (committed scope change). An admin can clear the
+    // lock via PUT /api/change-orders/:id/lock (or revert it to draft) to edit.
+    if (existing.rows[0].is_locked) {
+      return res.status(409).json({ error: 'Cannot edit an approved (locked) change order. Unlock it to edit.' });
     }
 
     const data = { ...req.body };
@@ -283,7 +289,7 @@ router.put('/change-orders/:id', requireAuth, requireCapability('ESTIMATES_EDIT'
            END
        WHERE id = $2
        RETURNING id, job_id, owner_id, status, co_number, data, approved_at,
-                 approved_by, linked_node_id, created_at, updated_at`,
+                 approved_by, linked_node_id, is_locked, created_at, updated_at`,
       [JSON.stringify(data), id]
     );
     res.json({ change_order: shapeRow(rows[0]) });
@@ -352,6 +358,9 @@ router.post('/change-orders/:id/status', requireAuth, async (req, res) => {
 
       let approvedAt = null;
       let approvedBy = null;
+      // Approved/applied COs lock (committed scope change → read-only). Reverting
+      // to draft (customer wants edits before signing) clears the lock.
+      const lockState = (next === 'approved' || next === 'applied');
       if (next === 'approved') {
         approvedAt = new Date();
         approvedBy = req.user.id;
@@ -398,13 +407,14 @@ router.post('/change-orders/:id/status', requireAuth, async (req, res) => {
       const upd = await client.query(
         `UPDATE job_change_orders
          SET status = $1,
+             is_locked = $5,
              approved_at = COALESCE($2, approved_at),
              approved_by = COALESCE($3, approved_by),
              updated_at = NOW()
          WHERE id = $4
          RETURNING id, job_id, owner_id, status, co_number, data, approved_at,
-                   approved_by, linked_node_id, created_at, updated_at`,
-        [next, approvedAt, approvedBy, id]
+                   approved_by, linked_node_id, is_locked, created_at, updated_at`,
+        [next, approvedAt, approvedBy, id, lockState]
       );
       await client.query('COMMIT');
       res.json({ change_order: shapeRow(upd.rows[0]) });
@@ -416,6 +426,32 @@ router.post('/change-orders/:id/status', requireAuth, async (req, res) => {
     }
   } catch (e) {
     console.error('POST /api/change-orders/:id/status error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// PUT /api/change-orders/:id/lock — set/clear the lock. COs lock automatically
+// on approval (committed scope change → read-only); this lets an admin re-open
+// one for corrections without reverting the approval. Gated on ESTIMATES_EDIT,
+// the same capability that governs CO create/edit.
+router.put('/change-orders/:id/lock', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req, res) => {
+  try {
+    const locked = !!(req.body && req.body.locked);
+    // Org-scoped existence check through the job join (no cross-tenant lock by id).
+    const chk = await pool.query(
+      `SELECT co.id FROM job_change_orders co
+         JOIN jobs j ON j.id = co.job_id
+        WHERE co.id = $1 AND (j.organization_id = $2 OR j.organization_id IS NULL)`,
+      [req.params.id, req.user.organization_id]
+    );
+    if (!chk.rowCount) return res.status(404).json({ error: 'Change order not found' });
+    await pool.query(
+      'UPDATE job_change_orders SET is_locked = $1, updated_at = NOW() WHERE id = $2',
+      [locked, req.params.id]
+    );
+    res.json({ ok: true, is_locked: locked });
+  } catch (e) {
+    console.error('PUT /api/change-orders/:id/lock error:', e);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -453,7 +489,7 @@ router.post('/change-orders/:id/link-node', requireAuth, requireCapability('ESTI
        SET linked_node_id = $1, updated_at = NOW()
        WHERE id = $2
        RETURNING id, job_id, owner_id, status, co_number, data, approved_at,
-                 approved_by, linked_node_id, created_at, updated_at`,
+                 approved_by, linked_node_id, is_locked, created_at, updated_at`,
       [nodeId, id]
     );
     res.json({ change_order: shapeRow(upd.rows[0]) });
