@@ -12,7 +12,7 @@ var selN=null, isPan=false, panSt={x:0,y:0};
 var editingId=null;
 var _spFocus=null; // site-plan drill-in: focused building id (view-state, not saved)
 // Phase 2-A satellite basemap state (view-state / localStorage only — no graph write):
-var basemapEl=null, _basemap=null, _basemapReady=false, _spOrigin=null, _spOriginGraph=null, _spOriginJob=null, _satHintEl=null, _geocoding=false;
+var basemapEl=null, _basemap=null, _basemapReady=false, _spOrigin=null, _spOriginGraph=null, _spOriginJob=null, _satHintEl=null, _geocoding=false, _basemapMounting=false;
 var _geoPick=false, _geoPickOverlay=null, _geoPickId=null; // Slice 3: map-picker state (captured building id)
 // Phase 1 — building polygons: trace state + the geo-anchored SVG layer
 var _tracing=false, _traceId=null, _tracePts=[], _traceOverlay=null, _traceClickTimer=null, _polyLayer=null;
@@ -968,7 +968,14 @@ function render(){
 function applyTx(){
   var p=E.pan(), z=E.zm();
   canvasEl.style.transform='translate('+(p.x*z)+'px,'+(p.y*z)+'px) scale('+z+')';
-  if(_spSatellite) syncBasemapCamera();   // keep the slaved basemap under the camera
+  if(_spSatellite){
+    // Self-heal: the first mount on open can miss (tab not yet sized, or the job/origin
+    // not loaded) and leave the user on the "add an address" hint even though the job IS
+    // geocoded. Once jobOrigin() resolves, mount it (guarded against re-entry); a no-coords
+    // job keeps jobOrigin() null so this never fires — the on-demand geocode path stands.
+    if(!_basemap && !_basemapMounting && E.viewMode && E.viewMode()==='siteplan' && jobOrigin()) mountBasemap();
+    syncBasemapCamera();   // keep the slaved basemap under the camera
+  }
   if(_spPhotos) layoutPhotoPins();        // keep photo pins on their spots
 }
 
@@ -1271,8 +1278,11 @@ function mountBasemap(){
   if(!_spOrigin){ tryGeocodeJobThenMount(); return; } // no coords yet — geocode on demand, then retry
   showSatHint(false);
   if(_basemap){ _basemapReady=true; syncBasemapCamera(); return; }
+  if(_basemapMounting) return;                             // a mount is already in flight (the self-heal can re-call this)
   if(!window.p86Maps){ showSatHint(true, 'Google Maps is not available.'); return; }
+  _basemapMounting=true;
   window.p86Maps.ready().then(function(maps){
+    _basemapMounting=false;
     if(!_spSatellite) return;                              // toggled off while the SDK loaded
     _basemap=new maps.Map(basemapEl, {
       center:{ lat:_spOrigin.lat, lng:_spOrigin.lng }, zoom:19,
@@ -1281,7 +1291,7 @@ function mountBasemap(){
       clickableIcons:false, backgroundColor:'#0b0e16', isFractionalZoomEnabled:false
     });
     _basemapReady=true; syncBasemapCamera();
-  }).catch(function(e){ showSatHint(true, (e&&e.message) || 'Satellite basemap unavailable.'); });
+  }).catch(function(e){ _basemapMounting=false; showSatHint(true, (e&&e.message) || 'Satellite basemap unavailable.'); });
 }
 // One-way camera sync. Raster satellite tiles exist only at integer zoom, so we
 // floor to an integer map zoom and CSS-scale the basemap div by the fractional
