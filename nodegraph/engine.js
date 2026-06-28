@@ -1307,26 +1307,12 @@ function drawWires(ctx, wrap, wiringFrom, wireMouse){
       var dx = Math.max(Math.abs(p2.x-p1.x)*0.4, 50);
       ctx.bezierCurveTo(p1.x+dx, p1.y, p2.x-dx, p2.y, p2.x, p2.y);
     }
-    if(cleanMode){
-      // n8n-style: calm flat single-color wire; bottom-port connectors dashed.
-      ctx.strokeStyle = hexToRgba(col, 0.5); ctx.lineWidth = 1.75; ctx.shadowBlur = 0;
-      if(vertIn) ctx.setLineDash([7,5]);
-      ctx.stroke();
-      ctx.setLineDash([]);
-    } else {
-      // Gradient: breathing fade — bright near nodes, dips in middle
-      var grad = ctx.createLinearGradient(p1.x, p1.y, p2.x, p2.y);
-      grad.addColorStop(0,    hexToRgba(col, 0.15));
-      grad.addColorStop(0.15, hexToRgba(col, 0.85));
-      grad.addColorStop(0.35, hexToRgba(col, 0.45));
-      grad.addColorStop(0.50, hexToRgba(col, 0.30));
-      grad.addColorStop(0.65, hexToRgba(col, 0.45));
-      grad.addColorStop(0.85, hexToRgba(col, 0.85));
-      grad.addColorStop(1,    hexToRgba(col, 0.15));
-      ctx.strokeStyle = grad; ctx.lineWidth = 3;
-      ctx.shadowColor = col; ctx.shadowBlur = 4;
-      ctx.stroke(); ctx.shadowBlur = 0;
-    }
+    // Solid connection line — one consistent colour end-to-end (no breathing-gradient
+    // dip in the middle, no clean-mode dashes), like the original wire style.
+    ctx.setLineDash([]);
+    ctx.strokeStyle = hexToRgba(col, 0.85); ctx.lineWidth = 2.5;
+    ctx.shadowColor = col; ctx.shadowBlur = 3;
+    ctx.stroke(); ctx.shadowBlur = 0;
   });
 
   // Preview wire
