@@ -10648,6 +10648,9 @@ textarea.ci-input { height: auto; resize: vertical; font-family: inherit; }
 .ci-ocr-status { position: absolute; left: 8px; bottom: 8px; background: rgba(0,0,0,.62); color: #fff; font-size: 11px; font-weight: 600; padding: 3px 9px; border-radius: 6px; pointer-events: none; display: flex; align-items: center; gap: 6px; }
 .ci-ocr-status::before { content: ''; width: 9px; height: 9px; border: 2px solid rgba(255,255,255,.4); border-top-color: #fff; border-radius: 50%; animation: ci-spin .7s linear infinite; }
 @keyframes ci-spin { to { transform: rotate(360deg); } }
+.ci-amt-hint { font-size: 11px; color: #f0a020; margin-top: 4px; }
+.ci-input.ci-amt-ai { border-color: rgba(240,160,32,.55); box-shadow: 0 0 0 1px rgba(240,160,32,.25); }
+.ci-ocr-stat { font-size: 11px; color: var(--text-dim, #c4c8d8); margin-top: 2px; }
 .ci-photo-inner {
   border: 2px dashed var(--border, #2e3346); border-radius: 12px; min-height: 150px; overflow: hidden;
   display: flex; align-items: center; justify-content: center; background: var(--input-bg, #0f1117);

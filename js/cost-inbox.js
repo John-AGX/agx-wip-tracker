@@ -74,6 +74,15 @@
       img.src = url;
     } catch (e) { cb(null); }
   }
+  function dataUrlToFile(dataUrl, name) {
+    try {
+      var arr = dataUrl.split(',');
+      var mime = (arr[0].match(/:(.*?);/) || [])[1] || 'image/jpeg';
+      var bstr = atob(arr[1]); var n = bstr.length; var u8 = new Uint8Array(n);
+      while (n--) u8[n] = bstr.charCodeAt(n);
+      return new File([u8], name || ('receipt_' + Date.now() + '.jpg'), { type: mime });
+    } catch (e) { return null; }
+  }
 
   // ── Entity (job/lead) cache for the picker + label resolution ──────
   var _jobs = [], _leads = [], _entLoaded = false;
@@ -97,12 +106,29 @@
   var _filters = { job: '', status: '', q: '' };
   var _receipts = [];
 
+  // "OCR accuracy" line — the model's hit-rate per field, so John can watch it
+  // improve as more receipts get captured/corrected (the learning loop).
+  function renderOcrStat() {
+    var el = document.getElementById('ciOcrStat');
+    if (!el || !window.p86Api || !window.p86Api.receipts || !window.p86Api.receipts.ocrStats) return;
+    window.p86Api.receipts.ocrStats().then(function (r) {
+      var s = r && r.stats;
+      if (!s || !s.samples) { el.textContent = ''; return; }
+      var parts = [];
+      [['amount', 'Amount'], ['vendor', 'Vendor'], ['date', 'Date'], ['cost_code', 'Cost type']].forEach(function (f) {
+        var d = s[f[0]];
+        if (d && d.rate != null) parts.push(f[1] + ' ' + d.rate + '%');
+      });
+      el.textContent = parts.length ? ('OCR accuracy · ' + parts.join(' · ') + '  (' + s.samples + ' scanned)') : '';
+    }).catch(function () { el.textContent = ''; });
+  }
+
   function render(host) {
     if (!host) return;
     host.innerHTML =
       '<div class="ci-wrap">' +
         '<div class="ci-head">' +
-          '<div class="ci-title">Cost Inbox</div>' +
+          '<div><div class="ci-title">Cost Inbox</div><div class="ci-ocr-stat" id="ciOcrStat"></div></div>' +
           '<button class="ci-btn ci-btn-primary" id="ciNew">+ New Receipt</button>' +
         '</div>' +
         '<div class="ci-toolbar">' +
@@ -120,6 +146,7 @@
       '</div>';
 
     document.getElementById('ciNew').addEventListener('click', function () { openReceiptModal(null); });
+    renderOcrStat();
     var sEl = document.getElementById('ciSearch');
     sEl.addEventListener('input', function () { _filters.q = sEl.value || ''; renderList(); });
     document.getElementById('ciStatusFilter').addEventListener('change', function (e) { _filters.status = e.target.value; reload(); });
@@ -259,6 +286,7 @@
             '<div class="ci-field">' +
               '<label>Amount</label>' +
               '<input type="number" inputmode="decimal" step="0.01" min="0" id="ciAmount" class="ci-input" placeholder="0.00" value="' + (r.amount != null ? esc(r.amount) : '') + '" />' +
+              '<div class="ci-amt-hint" id="ciAmtHint" style="display:none;">AI-read from the receipt — double-check it.</div>' +
             '</div>' +
             // Cost code (hidden when lead → pre-sale)
             '<div class="ci-field" id="ciCodeField">' +
@@ -289,6 +317,7 @@
       var codeSeg = modal.querySelector('#ciCodeSeg');
       var chosenCode = r.cost_code || 'materials';
       var codeUserPicked = isEdit; // true once the user (or an existing record) owns the cost code — OCR won't override
+      var ocrSuggestion = null;    // {vendor,date,cost_code,amount} from OCR — sent on save so accuracy is tracked
 
       function fillEntityOptions() {
         var type = selType.value;
@@ -330,17 +359,44 @@
         var tile = modal.querySelector('#ciPhotoTile');
         var tag = document.createElement('div'); tag.className = 'ci-ocr-status'; tag.textContent = 'Reading receipt…';
         if (tile) tile.appendChild(tag);
-        downscaleImage(f, 1280, function (dataUrl) {
+        downscaleImage(f, 1400, function (dataUrl) {
           if (!dataUrl) { if (tag.parentNode) tag.remove(); return; }
           window.p86Api.receipts.ocr({ image_base64: dataUrl, media_type: 'image/jpeg' }).then(function (resp) {
-            if (tag.parentNode) tag.remove();
-            if (!resp || !resp.ok) return;
+            if (!resp || !resp.ok) { if (tag.parentNode) tag.remove(); return; }
+            // Fill the error-free fields (only if the user hasn't typed there).
             var vEl = modal.querySelector('#ciVendor'); if (vEl && !vEl.value && resp.vendor) vEl.value = resp.vendor;
             var dEl = modal.querySelector('#ciDate'); if (dEl && !dEl.value && resp.date) dEl.value = resp.date;
             if (resp.cost_code && !codeUserPicked && selType.value !== 'lead') {
               var cb = codeSeg.querySelector('.ci-seg-btn[data-code="' + resp.cost_code + '"]');
               if (cb) { chosenCode = resp.cost_code; codeSeg.querySelectorAll('.ci-seg-btn').forEach(function (b) { b.classList.toggle('active', b === cb); }); }
             }
+            // Amount: now read too, but flagged "AI-read · verify" so the user
+            // double-checks the error-prone field. Accuracy is tracked on save.
+            var aEl = modal.querySelector('#ciAmount'), aHint = modal.querySelector('#ciAmtHint');
+            if (aEl && !aEl.value && resp.amount != null) {
+              aEl.value = resp.amount;
+              if (aHint) aHint.style.display = '';
+              aEl.classList.add('ci-amt-ai');
+              aEl.addEventListener('input', function () { if (aHint) aHint.style.display = 'none'; aEl.classList.remove('ci-amt-ai'); }, { once: true });
+            }
+            // Hold the suggestion so the save can log OCR-vs-final accuracy.
+            ocrSuggestion = { vendor: resp.vendor || null, date: resp.date || null, cost_code: resp.cost_code || null, amount: (resp.amount != null ? resp.amount : null) };
+            // Scan: AI gave the receipt's corners → crop + flatten + clean it,
+            // and make the cleaned image the one we store + show.
+            if (resp.corners && window.p86ReceiptScanner && window.p86ReceiptScanner.scanFromCorners) {
+              tag.textContent = 'Scanning…';
+              window.p86ReceiptScanner.scanFromCorners(f, resp.corners, function (scanned) {
+                if (tag.parentNode) tag.remove();
+                if (scanned) {
+                  var scanFile = dataUrlToFile(scanned);
+                  if (scanFile) {
+                    _pendingFile = scanFile;
+                    var innerEl = modal.querySelector('#ciPhotoInner');
+                    if (innerEl) innerEl.innerHTML = '<img src="' + esc(scanned) + '" alt="receipt" />';
+                  }
+                }
+              });
+            } else if (tag.parentNode) { tag.remove(); }
           }).catch(function () { if (tag.parentNode) tag.remove(); });
         });
       });
@@ -375,7 +431,8 @@
           cost_code: chosenCode,
           vendor: modal.querySelector('#ciVendor').value || null,
           notes: modal.querySelector('#ciNotes').value || null,
-          purchased_at: modal.querySelector('#ciDate').value || null
+          purchased_at: modal.querySelector('#ciDate').value || null,
+          ocr: ocrSuggestion || undefined // lets the server log OCR-vs-saved accuracy
         };
         // 1) create or update the receipt
         var save = isEdit

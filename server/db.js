@@ -1786,6 +1786,23 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_receipts_status ON receipts(organization_id, status);
     CREATE INDEX IF NOT EXISTS idx_receipts_date ON receipts(organization_id, purchased_at);
 
+    -- Receipt OCR feedback — one row per captured receipt that had an OCR
+    -- suggestion. Records what the model guessed vs what the user actually
+    -- saved, per field, so the hit-rate is measurable (GET /api/receipts/ocr/stats)
+    -- and the model can be tuned. amount_ok=false = the user corrected the total
+    -- (the "fail" John wants tracked). Org-scoped.
+    CREATE TABLE IF NOT EXISTS receipt_ocr_feedback (
+      id TEXT PRIMARY KEY,
+      organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE,
+      receipt_id TEXT,
+      ocr_vendor TEXT, final_vendor TEXT, vendor_ok BOOLEAN,
+      ocr_date TEXT, final_date TEXT, date_ok BOOLEAN,
+      ocr_cost_code TEXT, final_cost_code TEXT, cost_code_ok BOOLEAN,
+      ocr_amount NUMERIC(12, 2), final_amount NUMERIC(12, 2), amount_ok BOOLEAN,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_receipt_ocr_fb_org ON receipt_ocr_feedback(organization_id);
+
     -- Email send log — every transactional email goes through
     -- server/email.js which writes a row here so admins can see
     -- delivery state, retry failures, and audit who got what.

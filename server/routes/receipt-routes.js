@@ -114,6 +114,38 @@ async function entityInOrg(entityType, entityId, orgId) {
   } catch (_) { return false; }
 }
 
+// Log how the OCR suggestion compared to what the user actually saved, per
+// field — so the model's hit-rate is measurable + tunable. Best-effort, fire-
+// and-forget. `ocr` is the suggestion the client held from POST /ocr; `finals`
+// are the values being persisted. A field with no suggestion logs *_ok = null.
+async function logOcrFeedback(orgId, receiptId, ocr, finals) {
+  try {
+    if (!ocr || typeof ocr !== 'object' || !orgId) return;
+    const norm = (s) => (s == null ? null : String(s).trim().toLowerCase());
+    const ov = ocr.vendor != null ? String(ocr.vendor).slice(0, 200) : null;
+    const od = /^\d{4}-\d{2}-\d{2}$/.test(String(ocr.date || '')) ? String(ocr.date) : null;
+    const occ = COST_CODES.has(String(ocr.cost_code)) ? String(ocr.cost_code) : null;
+    let oa = null;
+    if (ocr.amount != null) { const n = Number(ocr.amount); if (Number.isFinite(n)) oa = Math.round(n * 100) / 100; }
+    const fAmount = (finals.amount == null) ? null : Math.round(Number(finals.amount) * 100) / 100;
+    const vendorOk = ov != null ? (norm(ov) === norm(finals.vendor)) : null;
+    const dateOk = od != null ? (od === (finals.date || null)) : null;
+    const codeOk = occ != null ? (occ === (finals.cost_code || null)) : null;
+    const amountOk = oa != null ? (fAmount != null && fAmount === oa) : null;
+    if (vendorOk === null && dateOk === null && codeOk === null && amountOk === null) return;
+    await pool.query(
+      `INSERT INTO receipt_ocr_feedback
+         (id, organization_id, receipt_id, ocr_vendor, final_vendor, vendor_ok,
+          ocr_date, final_date, date_ok, ocr_cost_code, final_cost_code, cost_code_ok,
+          ocr_amount, final_amount, amount_ok)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+      ['fb_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8), orgId, receiptId,
+       ov, finals.vendor || null, vendorOk, od, finals.date || null, dateOk,
+       occ, finals.cost_code || null, codeOk, oa, fAmount, amountOk]
+    );
+  } catch (_) { /* feedback is best-effort — never affects the save */ }
+}
+
 // GET /api/receipts — org's receipts, newest first. Filters:
 //   entity_type, entity_id (one job/lead) · status · cost_code · is_presale=1
 //   from / to (purchased_at range) · q (vendor / ref / notes / amount text)
@@ -215,14 +247,27 @@ router.get('/:id', requireAuth, async (req, res) => {
   }
 });
 
-// POST /api/receipts/ocr — read a receipt photo and pre-fill vendor + date +
-// a cost-code GUESS. INTENTIONALLY does not extract the dollar amount — that's
-// the error-prone field, kept manual (John's call). Body: { image_base64
-// (raw or data-URL), media_type }. Best-effort: returns { ok:false } on any
-// failure so the capture flow never breaks.
+// POST /api/receipts/ocr — read a receipt photo: vendor + date + cost-code
+// guess + the grand total (the amount IS read now, but the client flags it
+// "AI-read · verify" and the accuracy of every field is tracked on save so the
+// model's hit-rate is measurable — see POST / feedback logging) + the receipt's
+// 4 corner points (0..1 fractions) so the client can crop + flatten it.
+// Learns from the org: known vendor names are passed in to normalize matches.
+// Body: { image_base64 (raw or data-URL), media_type }. Best-effort: returns
+// { ok:false } on any failure so the capture flow never breaks.
 const OCR_MEDIA = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
+async function knownVendors(orgId) {
+  try {
+    const r = await pool.query(
+      "SELECT vendor, COUNT(*) AS c FROM receipts WHERE organization_id = $1 AND vendor IS NOT NULL AND TRIM(vendor) <> '' GROUP BY vendor ORDER BY c DESC LIMIT 40",
+      [orgId]
+    );
+    return r.rows.map((x) => x.vendor).filter(Boolean);
+  } catch (_) { return []; }
+}
 router.post('/ocr', requireAuth, async (req, res) => {
   try {
+    const orgId = callerOrgId(req);
     const b = req.body || {};
     let data = String(b.image_base64 || '');
     if (data.startsWith('data:')) { const i = data.indexOf(','); if (i >= 0) data = data.slice(i + 1); }
@@ -230,16 +275,22 @@ router.post('/ocr', requireAuth, async (req, res) => {
     if (!data || data.length > 9000000) return res.json({ ok: false });
     const client = anthropic();
     if (!client) return res.json({ ok: false, error: 'ocr-unavailable' });
+    const vendors = await knownVendors(orgId);
+    const vendorHint = vendors.length
+      ? '\nThis company already buys from these vendors — if the receipt is from one of them, return that exact spelling: ' + vendors.join(', ') + '.'
+      : '';
     const prompt =
       'You are reading a photographed receipt or invoice. Return ONLY a JSON object, no prose:\n' +
-      '{"vendor": string|null, "date": "YYYY-MM-DD"|null, "cost_code": "materials"|"labor"|"sub"|"gc"|null}\n' +
-      '- vendor: the store / supplier / company name (usually at the top).\n' +
+      '{"vendor": string|null, "date": "YYYY-MM-DD"|null, "cost_code": "materials"|"labor"|"sub"|"gc"|null, "amount": number|null, "corners": [[x,y],[x,y],[x,y],[x,y]]|null}\n' +
+      '- vendor: the store / supplier / company name (usually at the top).' + vendorHint + '\n' +
       '- date: the purchase/transaction date as YYYY-MM-DD; null if not visible.\n' +
       '- cost_code: best category guess — materials (supply/hardware/lumber/paint stores), sub (a subcontractor invoice), labor (payroll/labor), gc (permits, equipment rental, fuel, dump fees); null if unsure.\n' +
-      'Do NOT extract, guess, or return the dollar amount or total. Use null for anything you cannot read.';
+      '- amount: the GRAND TOTAL / total due as a plain number (no $ or commas); null if not clearly visible.\n' +
+      '- corners: the 4 outer corners of the RECEIPT/paper within the photo, as [x,y] FRACTIONS of image width and height (0=left/top, 1=right/bottom), ordered top-left, top-right, bottom-right, bottom-left. Use this to crop out the background. If the receipt fills the whole frame or you cannot tell, return null.\n' +
+      'Use null for anything you cannot read.';
     const msg = await client.messages.create({
       model: 'claude-haiku-4-5',
-      max_tokens: 200,
+      max_tokens: 400,
       messages: [{
         role: 'user',
         content: [
@@ -256,10 +307,55 @@ router.post('/ocr', requireAuth, async (req, res) => {
     const vendor = parsed.vendor ? String(parsed.vendor).trim().slice(0, 200) : null;
     const date = /^\d{4}-\d{2}-\d{2}$/.test(String(parsed.date || '')) ? String(parsed.date) : null;
     const cost_code = COST_CODES.has(String(parsed.cost_code)) ? String(parsed.cost_code) : null;
-    res.json({ ok: true, vendor: vendor, date: date, cost_code: cost_code });
+    // amount: accept number or "$1,234.56" string; reject non-finite / negative.
+    let amount = null;
+    if (parsed.amount != null) {
+      const n = (typeof parsed.amount === 'number') ? parsed.amount : Number(String(parsed.amount).replace(/[^0-9.\-]/g, ''));
+      if (Number.isFinite(n) && n >= 0 && n < 100000000) amount = Math.round(n * 100) / 100;
+    }
+    // corners: exactly 4 [x,y] in 0..1, else null (client validates the quad too).
+    let corners = null;
+    if (Array.isArray(parsed.corners) && parsed.corners.length === 4) {
+      const c = parsed.corners.map((p) => Array.isArray(p) ? [Number(p[0]), Number(p[1])] : null);
+      if (c.every((p) => p && Number.isFinite(p[0]) && Number.isFinite(p[1]) && p[0] >= -0.05 && p[0] <= 1.05 && p[1] >= -0.05 && p[1] <= 1.05)) {
+        corners = c.map((p) => [Math.min(1, Math.max(0, p[0])), Math.min(1, Math.max(0, p[1]))]);
+      }
+    }
+    res.json({ ok: true, vendor: vendor, date: date, cost_code: cost_code, amount: amount, corners: corners });
   } catch (e) {
     console.error('POST /api/receipts/ocr error:', e && e.message);
     res.json({ ok: false });
+  }
+});
+
+// GET /api/receipts/ocr/stats — the model's per-field OCR hit-rate for this org
+// (from receipt_ocr_feedback). Powers the "OCR accuracy" line in the Cost Inbox.
+router.get('/ocr/stats', requireAuth, async (req, res) => {
+  try {
+    const orgId = callerOrgId(req);
+    if (!orgId) return res.json({ stats: null });
+    const { rows } = await pool.query(
+      `SELECT
+         COUNT(*)::int AS samples,
+         COUNT(vendor_ok)::int AS vendor_n,    COUNT(*) FILTER (WHERE vendor_ok)::int    AS vendor_ok,
+         COUNT(date_ok)::int AS date_n,        COUNT(*) FILTER (WHERE date_ok)::int      AS date_ok,
+         COUNT(cost_code_ok)::int AS code_n,   COUNT(*) FILTER (WHERE cost_code_ok)::int AS code_ok,
+         COUNT(amount_ok)::int AS amount_n,    COUNT(*) FILTER (WHERE amount_ok)::int    AS amount_ok
+       FROM receipt_ocr_feedback WHERE organization_id = $1`,
+      [orgId]
+    );
+    const r = rows[0] || {};
+    const rate = (ok, n) => (n > 0 ? Math.round((100 * ok) / n) : null);
+    res.json({ stats: {
+      samples: r.samples || 0,
+      vendor: { n: r.vendor_n || 0, rate: rate(r.vendor_ok, r.vendor_n) },
+      date: { n: r.date_n || 0, rate: rate(r.date_ok, r.date_n) },
+      cost_code: { n: r.code_n || 0, rate: rate(r.code_ok, r.code_n) },
+      amount: { n: r.amount_n || 0, rate: rate(r.amount_ok, r.amount_n) }
+    } });
+  } catch (e) {
+    console.error('GET /api/receipts/ocr/stats error:', e);
+    res.json({ stats: null });
   }
 });
 
@@ -294,6 +390,12 @@ router.post('/', requireAuth, async (req, res) => {
        status, purchasedAt, callerUserId(req)]
     );
     res.json({ receipt: rows[0] });
+    // Record OCR-suggestion-vs-saved accuracy (fire-and-forget; after response).
+    if (b.ocr) {
+      logOcrFeedback(orgId, id, b.ocr, {
+        vendor: cleanStr(b.vendor, 200), date: purchasedAt, cost_code: costCode, amount: amount
+      });
+    }
   } catch (e) {
     console.error('POST /api/receipts error:', e);
     res.status(500).json({ error: 'Server error' });
