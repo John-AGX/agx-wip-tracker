@@ -2527,6 +2527,21 @@
           <button class="ws-right-tab" data-leadeditor-tab="photos" onclick="switchLeadEditorTab('photos')">&#x1F4CE; Attachments</button>
         </div>
 
+        <!-- Linked-job banner — when the lead is SOLD (has job_id) this sits
+             directly under the tab bar so it's front-and-center on EVERY tab
+             (was buried at the bottom of the General pane). Toggled by
+             refreshLinkedJobChip() in js/leads.js. -->
+        <div id="leadEditor_linkedJob" style="display:none;margin:12px 20px 0 20px;padding:10px 14px;background:rgba(52,211,153,0.08);border:1px solid rgba(52,211,153,0.3);border-radius:8px;align-items:center;justify-content:space-between;gap:10px;">
+          <div style="display:flex;align-items:center;gap:10px;">
+            <span style="color:#34d399;font-size:14px;">&#x2713;</span>
+            <div>
+              <div style="font-size:13px;font-weight:600;color:#34d399;">Sold &mdash; linked to a job</div>
+              <div id="leadEditor_linkedJobLabel" style="font-size:11px;color:var(--text-dim,#888);"></div>
+            </div>
+          </div>
+          <button class="ee-btn secondary" onclick="openLinkedJobFromLead()">Open Job &rarr;</button>
+        </div>
+
         <!-- General tab: original form fields on the left, contextual
              panels (photos, map, weather) on the right. Grid collapses
              to a single column below 900px so the right panels stack
@@ -2638,19 +2653,6 @@
             <legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Notes</legend>
             <textarea id="leadEditor_notes" rows="10" style="resize:vertical;flex:1;min-height:180px;width:100%;"></textarea>
           </fieldset>
-
-          <!-- Linked-job chip — shown when lead.job_id is set so the user
-               can jump from a sold lead straight to its job. -->
-          <div id="leadEditor_linkedJob" style="display:none;padding:10px 14px;background:rgba(52,211,153,0.08);border:1px solid rgba(52,211,153,0.3);border-radius:8px;display:none;align-items:center;justify-content:space-between;gap:10px;">
-            <div style="display:flex;align-items:center;gap:10px;">
-              <span style="color:#34d399;font-size:14px;">&#x2713;</span>
-              <div>
-                <div style="font-size:13px;font-weight:600;color:#34d399;">Sold &mdash; linked to a job</div>
-                <div id="leadEditor_linkedJobLabel" style="font-size:11px;color:var(--text-dim,#888);"></div>
-              </div>
-            </div>
-            <button class="ee-btn secondary" onclick="openLinkedJobFromLead()">Open Job &rarr;</button>
-          </div>
 
           <div id="leadEditor_status_msg" style="font-size:13px;"></div>
 
