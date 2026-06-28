@@ -54,6 +54,9 @@ async function initSchema() {
     -- system_admin/admin/corporate/pm — host on the Assistant; field crew +
     -- subs stay on 86 until the role-permission smoke-test rig lands).
     ALTER TABLE users ADD COLUMN IF NOT EXISTS ai_host_agent_key TEXT;
+    -- Job title (free text, e.g. "Project Manager") — shown on the My Account +
+    -- user-management cards; self-editable via PUT /api/auth/me. Nullable.
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS title TEXT;
     -- users.sub_id (sub portal) is added AFTER the subs table is
     -- created further down so the FK resolves on first run.
 

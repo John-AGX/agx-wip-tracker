@@ -95,7 +95,23 @@
       '  text-transform: none;',
       '  letter-spacing: normal;',
       '  font-weight: normal;',
-      '}'
+      '}',
+      '#p86AccountModal .p86-acct-card { display:flex; align-items:center; gap:14px; padding:6px 0 16px; border-bottom:1px solid var(--border,#333); margin-bottom:16px; }',
+      '#p86AccountModal .p86-acct-avatar { width:48px; height:48px; border-radius:50%; background:var(--accent,#4f8cff); color:#fff; display:flex; align-items:center; justify-content:center; font-weight:600; font-size:18px; flex:0 0 auto; }',
+      '#p86AccountModal .p86-acct-cardname { font-size:16px; font-weight:600; color:var(--text,#e4e6f0); }',
+      '#p86AccountModal .p86-acct-cardtitle { font-size:12px; color:var(--text-dim,#aaa); margin-top:1px; }',
+      '#p86AccountModal .p86-acct-cardemail { font-family:monospace; font-size:12px; color:var(--text-dim,#888); margin-top:2px; }',
+      '#p86AccountModal .p86-acct-meta { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }',
+      '#p86AccountModal .p86-acct-rolebadge { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.5px; background:rgba(79,140,255,0.16); color:#9cc0ff; border-radius:999px; padding:2px 9px; }',
+      '#p86AccountModal .p86-acct-chip { font-size:11px; color:var(--text-dim,#888); background:var(--card-bg,#0f0f1e); border:1px solid var(--border,#333); border-radius:999px; padding:2px 9px; }',
+      '#p86AccountModal .p86-acct-section { margin-bottom:18px; }',
+      '#p86AccountModal .p86-acct-sectlabel { font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:0.5px; color:var(--text-dim,#aaa); margin-bottom:10px; }',
+      '#p86AccountModal .p86-acct-grid { display:grid; grid-template-columns:1fr 1fr; gap:10px 12px; }',
+      '#p86AccountModal .p86-acct-field { min-width:0; }',
+      '#p86AccountModal .p86-acct-field label { display:block; font-size:10px; text-transform:uppercase; letter-spacing:0.4px; color:var(--text-dim,#888); margin-bottom:4px; font-weight:600; }',
+      '#p86AccountModal .p86-acct-field input { width:100%; background:var(--input-bg,#0f0f1e); color:var(--text,#e4e6f0); border:1px solid var(--border,#333); border-radius:6px; padding:8px 10px; font-size:13px; box-sizing:border-box; }',
+      '#p86AccountModal .p86-acct-actions { display:flex; align-items:center; gap:10px; margin-top:10px; }',
+      '#p86AccountModal .p86-acct-status { font-size:11px; min-height:14px; }'
     ].join('\n');
     document.head.appendChild(style);
   }
@@ -103,6 +119,32 @@
   // Open the My Account modal. Pre-loads the user's current prefs from
   // /api/auth/users (already cached by admin module if available) and
   // saves on toggle.
+  function initials(name) {
+    var p = String(name || '').trim().split(/\s+/);
+    return (((p[0] || '')[0] || '') + ((p[1] || '')[0] || '')).toUpperCase() || '?';
+  }
+  var ROLE_LABELS = { system_admin: 'System Admin', admin: 'Admin', corporate: 'Corporate', pm: 'Project Manager', field_crew: 'Field Crew', sub: 'Sub' };
+  function roleLabel(role) { return ROLE_LABELS[role] || (role ? String(role) : 'User'); }
+  function fmtMonthYear(iso) {
+    var d = new Date(iso); if (isNaN(d.getTime())) return '';
+    return d.toLocaleDateString(undefined, { month: 'short', year: 'numeric' });
+  }
+  function fmtAgo(iso) {
+    var d = new Date(iso); if (isNaN(d.getTime())) return '';
+    var s = Math.max(0, (Date.now() - d.getTime()) / 1000);
+    if (s < 90) return 'just now';
+    if (s < 3600) return Math.round(s / 60) + 'm ago';
+    if (s < 86400) return Math.round(s / 3600) + 'h ago';
+    if (s < 86400 * 7) return Math.round(s / 86400) + 'd ago';
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  }
+  function setStatus(el, txt, color) { if (!el) return; el.textContent = txt; el.style.color = color || ''; }
+  function acctField(id, label, val, type, ph) {
+    return '<div class="p86-acct-field"><label>' + escapeHTML(label) + '</label>' +
+      '<input id="' + id + '" type="' + (type || 'text') + '" value="' + escapeHTML(val || '').replace(/"/g, '&quot;') + '"' +
+      (ph ? ' placeholder="' + escapeHTML(ph) + '"' : '') + ' autocomplete="off" /></div>';
+  }
+
   function openMyAccount() {
     if (!window.p86Api || !window.p86Api.isAuthenticated || !window.p86Api.isAuthenticated()) {
       alert('Sign in to manage your account.');
@@ -121,14 +163,40 @@
     modal.id = 'p86AccountModal';
     modal.className = 'modal active';
     modal.innerHTML =
-      '<div class="modal-content" style="max-width:520px;">' +
+      '<div class="modal-content" style="max-width:560px;">' +
         '<div class="modal-header">My Account</div>' +
-        '<div style="display:flex;flex-direction:column;gap:8px;font-size:13px;color:var(--text-dim,#aaa);margin-bottom:14px;">' +
-          '<div><strong style="color:var(--text);">' + escapeHTML(me.name || '') + '</strong></div>' +
-          '<div style="font-family:monospace;font-size:12px;">' + escapeHTML(me.email || '') + '</div>' +
+        '<div class="p86-acct-card">' +
+          '<div class="p86-acct-avatar" id="p86-acct-avatar">' + escapeHTML(initials(me.name)) + '</div>' +
+          '<div style="min-width:0;flex:1;">' +
+            '<div class="p86-acct-cardname" id="p86-acct-cardname">' + escapeHTML(me.name || '') + '</div>' +
+            '<div class="p86-acct-cardtitle" id="p86-acct-cardtitle"></div>' +
+            '<div class="p86-acct-cardemail" id="p86-acct-cardemail">' + escapeHTML(me.email || '') + '</div>' +
+            '<div class="p86-acct-meta" id="p86-acct-meta"><span class="p86-acct-rolebadge">' + escapeHTML(roleLabel(me.role)) + '</span></div>' +
+          '</div>' +
         '</div>' +
-        '<div style="border-top:1px solid var(--border,#333);padding-top:14px;">' +
-          '<div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#aaa);margin-bottom:10px;">Email notifications</div>' +
+        '<div class="p86-acct-section">' +
+          '<div class="p86-acct-sectlabel">Your info</div>' +
+          '<div class="p86-acct-grid">' +
+            acctField('p86-acct-name', 'Name', me.name) +
+            acctField('p86-acct-email', 'Email', me.email, 'email') +
+            acctField('p86-acct-phone', 'Phone', '', 'tel', '(555) 555-5555') +
+            acctField('p86-acct-title', 'Title', '', 'text', 'e.g. Project Manager') +
+          '</div>' +
+          '<div class="p86-acct-actions"><button class="ee-btn primary" id="p86-acct-save">Save profile</button>' +
+            '<span class="p86-acct-status" id="p86-acct-profstatus"></span></div>' +
+        '</div>' +
+        '<div class="p86-acct-section">' +
+          '<div class="p86-acct-sectlabel">Change password</div>' +
+          '<div class="p86-acct-grid">' +
+            acctField('p86-acct-curpw', 'Current password', '', 'password') +
+            acctField('p86-acct-newpw', 'New password', '', 'password', 'min 8 characters') +
+            acctField('p86-acct-confpw', 'Confirm new', '', 'password') +
+          '</div>' +
+          '<div class="p86-acct-actions"><button class="ee-btn" id="p86-acct-pwsave">Update password</button>' +
+            '<span class="p86-acct-status" id="p86-acct-pwstatus"></span></div>' +
+        '</div>' +
+        '<div class="p86-acct-section">' +
+          '<div class="p86-acct-sectlabel">Email notifications</div>' +
           '<div id="p86-acct-prefs" style="display:flex;flex-direction:column;gap:14px;">' +
             '<div style="font-size:11px;color:var(--text-dim,#888);">Loading…</div>' +
           '</div>' +
@@ -138,25 +206,90 @@
         '</div>' +
       '</div>';
     document.body.appendChild(modal);
-    modal.addEventListener('click', function(e) {
-      if (e.target === modal) modal.remove();
-    });
+    modal.addEventListener('click', function(e) { if (e.target === modal) modal.remove(); });
     document.getElementById('p86AccountClose').addEventListener('click', function() { modal.remove(); });
+    document.getElementById('p86-acct-save').addEventListener('click', function() { saveProfile(me); });
+    document.getElementById('p86-acct-pwsave').addEventListener('click', changePassword);
 
-    // Load prefs from the server. We use the /users list because it's
-    // already authoritatively populated by admin.js, but we filter to
-    // self by email match.
+    // Load the full self row (phone / title / timezone / created / last-seen +
+    // prefs) from the staff directory; match self by id or email.
     window.p86Api.users.list().then(function(res) {
       var users = (res && res.users) || [];
       var meRow = users.find(function(u) {
         return Number(u.id) === Number(me.id) ||
                (u.email && me.email && u.email.toLowerCase() === me.email.toLowerCase());
-      });
-      var prefs = (meRow && meRow.notification_prefs) || {};
-      paintPrefs(prefs);
+      }) || {};
+      var phoneEl = document.getElementById('p86-acct-phone'); if (phoneEl) phoneEl.value = meRow.phone_number || '';
+      var titleEl = document.getElementById('p86-acct-title'); if (titleEl) titleEl.value = meRow.title || '';
+      var cardTitle = document.getElementById('p86-acct-cardtitle'); if (cardTitle) cardTitle.textContent = meRow.title || '';
+      var meta = document.getElementById('p86-acct-meta');
+      if (meta) {
+        var chips = '<span class="p86-acct-rolebadge">' + escapeHTML(roleLabel(meRow.role || me.role)) + '</span>';
+        if (meRow.created_at) chips += '<span class="p86-acct-chip">Member since ' + escapeHTML(fmtMonthYear(meRow.created_at)) + '</span>';
+        if (meRow.last_seen_at) chips += '<span class="p86-acct-chip">Last seen ' + escapeHTML(fmtAgo(meRow.last_seen_at)) + '</span>';
+        if (meRow.timezone) chips += '<span class="p86-acct-chip">' + escapeHTML(meRow.timezone) + '</span>';
+        meta.innerHTML = chips;
+      }
+      paintPrefs((meRow && meRow.notification_prefs) || {});
     }).catch(function(err) {
       var pane = document.getElementById('p86-acct-prefs');
       if (pane) pane.innerHTML = '<div style="color:#f87171;font-size:12px;">Failed to load: ' + escapeHTML(err.message || String(err)) + '</div>';
+    });
+  }
+
+  function saveProfile(me) {
+    var status = document.getElementById('p86-acct-profstatus');
+    var name = (document.getElementById('p86-acct-name') || {}).value || '';
+    var email = (document.getElementById('p86-acct-email') || {}).value || '';
+    var phone = (document.getElementById('p86-acct-phone') || {}).value || '';
+    var title = (document.getElementById('p86-acct-title') || {}).value || '';
+    if (!name.trim()) { setStatus(status, '✗ Name is required', '#f87171'); return; }
+    setStatus(status, 'Saving…', '#60a5fa');
+    var identityChanged = name.trim() !== String(me.name || '') ||
+      email.trim().toLowerCase() !== String(me.email || '').toLowerCase();
+    fetch('/api/auth/me', {
+      method: 'PUT', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name, email: email, phone_number: phone, title: title })
+    }).then(function(r) {
+      return r.json().then(function(b) { if (!r.ok) throw new Error(b.error || 'Save failed'); return b; });
+    }).then(function() {
+      var cn = document.getElementById('p86-acct-cardname'); if (cn) cn.textContent = name;
+      var ce = document.getElementById('p86-acct-cardemail'); if (ce) ce.textContent = email;
+      var ct = document.getElementById('p86-acct-cardtitle'); if (ct) ct.textContent = title;
+      var av = document.getElementById('p86-acct-avatar'); if (av) av.textContent = initials(name);
+      if (window.p86Auth && window.p86Auth.getUser) { var u = window.p86Auth.getUser(); if (u) { u.name = name.trim(); u.email = email.trim().toLowerCase(); } }
+      if (identityChanged) {
+        // Name/email drive the header avatar + every request's identity — reload
+        // so everything picks up the (server-re-signed) session cleanly.
+        setStatus(status, '✓ Saved — refreshing…', '#34d399');
+        setTimeout(function() { window.location.reload(); }, 700);
+      } else {
+        setStatus(status, '✓ Saved', '#34d399');
+        setTimeout(function() { setStatus(status, '', ''); }, 1800);
+      }
+    }).catch(function(err) {
+      setStatus(status, '✗ ' + (err.message || 'Save failed'), '#f87171');
+    });
+  }
+
+  function changePassword() {
+    var status = document.getElementById('p86-acct-pwstatus');
+    var cur = (document.getElementById('p86-acct-curpw') || {}).value || '';
+    var nw = (document.getElementById('p86-acct-newpw') || {}).value || '';
+    var conf = (document.getElementById('p86-acct-confpw') || {}).value || '';
+    if (nw.length < 8) { setStatus(status, '✗ New password must be 8+ characters', '#f87171'); return; }
+    if (nw !== conf) { setStatus(status, '✗ New passwords do not match', '#f87171'); return; }
+    setStatus(status, 'Updating…', '#60a5fa');
+    fetch('/api/auth/password', {
+      method: 'PUT', credentials: 'include', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ currentPassword: cur, newPassword: nw })
+    }).then(function(r) {
+      return r.json().then(function(b) { if (!r.ok) throw new Error(b.error || 'Update failed'); return b; });
+    }).then(function() {
+      setStatus(status, '✓ Password updated', '#34d399');
+      ['p86-acct-curpw', 'p86-acct-newpw', 'p86-acct-confpw'].forEach(function(id) { var e = document.getElementById(id); if (e) e.value = ''; });
+    }).catch(function(err) {
+      setStatus(status, '✗ ' + (err.message || 'Update failed'), '#f87171');
     });
   }
 

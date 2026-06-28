@@ -188,7 +188,7 @@ router.get('/users', requireAuth, async (req, res) => {
     let where = "WHERE role <> 'sub'";
     if (orgId) { params.push(orgId); where += ' AND (organization_id = $1 OR organization_id IS NULL)'; }
     const { rows } = await pool.query(
-      'SELECT id, email, name, role, active, phone_number, timezone, notification_prefs, created_at, last_seen_at FROM users ' +
+      'SELECT id, email, name, role, active, phone_number, timezone, title, notification_prefs, created_at, last_seen_at FROM users ' +
       where + ' ORDER BY name ASC',
       params
     );
@@ -259,6 +259,77 @@ router.put('/me/notification-prefs', requireAuth, async (req, res) => {
     res.json({ ok: true, prefs: prefs });
   } catch (e) {
     console.error('PUT /me/notification-prefs error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// PUT /api/auth/me — a user edits their OWN profile. Whitelisted to exactly
+// four fields on req.user.id (name / email / phone_number / title) — it can
+// NEVER touch role / active / organization_id, so there's no self-promotion
+// path here. Reuses the admin endpoint's email + phone validators. Re-signs
+// the auth cookie so a name/email change propagates without a re-login.
+router.put('/me', requireAuth, async (req, res) => {
+  try {
+    const { name, email, phone_number, title } = req.body;
+    const { rows } = await pool.query('SELECT * FROM users WHERE id = $1', [req.user.id]);
+    const user = rows[0];
+    if (!user) return res.status(404).json({ error: 'User not found' });
+
+    let nameUpdate = user.name;
+    if (Object.prototype.hasOwnProperty.call(req.body, 'name')) {
+      const n = String(name == null ? '' : name).trim();
+      if (!n) return res.status(400).json({ error: 'Name cannot be empty' });
+      nameUpdate = n;
+    }
+
+    let emailUpdate = user.email;
+    if (Object.prototype.hasOwnProperty.call(req.body, 'email') && email != null && String(email).trim() !== '') {
+      const normalized = String(email).trim().toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized)) {
+        return res.status(400).json({ error: 'Email is not a valid address' });
+      }
+      emailUpdate = normalized;
+    }
+
+    let phoneUpdate = user.phone_number;
+    if (Object.prototype.hasOwnProperty.call(req.body, 'phone_number')) {
+      if (phone_number == null || String(phone_number).trim() === '') {
+        phoneUpdate = null;
+      } else {
+        const sms = require('../sms');
+        const normalized = sms.normalizeUSPhone(phone_number);
+        if (!normalized) return res.status(400).json({ error: 'Phone number not recognized — use 10 digits or +1XXXXXXXXXX' });
+        phoneUpdate = normalized;
+      }
+    }
+
+    let titleUpdate = user.title;
+    if (Object.prototype.hasOwnProperty.call(req.body, 'title')) {
+      const t = String(title == null ? '' : title).trim();
+      titleUpdate = t === '' ? null : t.slice(0, 120);
+    }
+
+    await pool.query(
+      'UPDATE users SET name = $1, email = $2, phone_number = $3, title = $4, updated_at = NOW() WHERE id = $5',
+      [nameUpdate, emailUpdate, phoneUpdate, titleUpdate, req.user.id]
+    );
+
+    // Re-sign the cookie (mirrors POST /refresh-token) so name/email changes
+    // take effect immediately without re-login.
+    const fresh = (await pool.query('SELECT * FROM users WHERE id = $1', [req.user.id])).rows[0];
+    if (fresh) {
+      const token = signToken(fresh);
+      res.cookie('token', token, { httpOnly: true, sameSite: 'lax', maxAge: 7 * 24 * 60 * 60 * 1000 });
+    }
+    res.json({ ok: true, user: { id: user.id, name: nameUpdate, email: emailUpdate, phone_number: phoneUpdate, title: titleUpdate } });
+  } catch (e) {
+    if (e && e.code === '23505') {
+      const detail = (e.detail || '').toLowerCase();
+      if (detail.includes('email')) return res.status(409).json({ error: 'That email is already used by another user' });
+      if (detail.includes('phone')) return res.status(409).json({ error: 'That phone number is already used by another user' });
+      return res.status(409).json({ error: 'Conflict — value already in use' });
+    }
+    console.error('PUT /api/auth/me error:', e);
     res.status(500).json({ error: 'Server error' });
   }
 });
