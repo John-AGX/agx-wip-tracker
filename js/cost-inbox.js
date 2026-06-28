@@ -159,7 +159,7 @@
       var codeLabel = r.is_presale ? 'Pre-sale' : (CODE_LABEL[r.cost_code] || r.cost_code || '');
       var statusCls = 'ci-badge ci-badge-' + (r.status || 'unprocessed');
       return '<div class="ci-row" data-id="' + esc(r.id) + '">' +
-        '<div class="ci-thumb">' + (thumb ? '<img src="' + esc(thumb) + '" alt="" loading="lazy" />' : '<span class="ci-thumb-ph">🧾</span>') + '</div>' +
+        '<div class="ci-thumb">' + (thumb ? '<img src="' + esc(thumb) + '" alt="" loading="lazy" />' : '<span class="ci-thumb-ph"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2h12v20l-3-2-3 2-3-2-3 2z"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="9" y1="12" x2="15" y2="12"/></svg></span>') + '</div>' +
         '<div class="ci-row-main">' +
           '<div class="ci-row-top">' +
             '<span class="ci-row-vendor">' + esc(r.vendor || '(no vendor)') + '</span>' +
@@ -210,7 +210,7 @@
             '<label class="ci-photo" id="ciPhotoTile">' +
               '<input type="file" accept="image/*" capture="environment" id="ciPhotoInput" hidden />' +
               '<div class="ci-photo-inner" id="ciPhotoInner">' +
-                (existingThumb ? '<img src="' + esc(existingThumb) + '" alt="receipt" />' : '<span class="ci-photo-cta">📷<br/>Take / upload receipt</span>') +
+                (existingThumb ? '<img src="' + esc(existingThumb) + '" alt="receipt" />' : '<span class="ci-photo-cta"><svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg><br/>Take / upload receipt</span>') +
               '</div>' +
             '</label>' +
             // Link to job / lead
