@@ -20,7 +20,7 @@
 
 const express = require('express');
 const { pool } = require('../db');
-const { requireAuth } = require('../auth');
+const { requireAuth, getAttributedUserId } = require('../auth');
 
 const router = express.Router();
 const STATUSES = new Set(['pending', 'done', 'dismissed']);
@@ -83,7 +83,10 @@ router.post('/', requireAuth, async (req, res) => {
       `INSERT INTO reminders (id, organization_id, user_id, title, notes, remind_at, status, source, entity_type, entity_id)
        VALUES ($1, $2, $3, $4, $5, $6, 'pending', 'user', $7, $8)
        RETURNING ${COLS}`,
-      [newId(), orgId, callerUserId(req), title, notes, new Date(body.remind_at), et, eid]
+      // Reminder owner = attributed user (acted-as target when disguised).
+      // ONLY this CREATE binding flips — callerUserId(req) stays in the
+      // GET/PATCH/DELETE owner WHERE clauses (visibility/permission guards).
+      [newId(), orgId, getAttributedUserId(req), title, notes, new Date(body.remind_at), et, eid]
     );
     res.json({ reminder: rows[0] });
   } catch (e) {

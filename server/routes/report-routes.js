@@ -15,7 +15,7 @@
 
 const express = require('express');
 const { pool } = require('../db');
-const { requireAuth, requireCapability } = require('../auth');
+const { requireAuth, requireCapability, getAttributedUserId } = require('../auth');
 
 const router = express.Router({ mergeParams: true });
 
@@ -202,7 +202,9 @@ router.post('/', requireAuth, requireCapability('JOBS_EDIT_ANY JOBS_EDIT_OWN'),
       await pool.query(
         'INSERT INTO job_reports (id, job_id, title, summary, sections, created_by) ' +
         'VALUES ($1, $2, $3, $4, $5::jsonb, $6)',
-        [id, jobId, title, summary, JSON.stringify(seedSections), req.user.id]
+        // created_by = attributed user (acted-as target when disguised);
+        // display-only column, never a read filter or access guard.
+        [id, jobId, title, summary, JSON.stringify(seedSections), getAttributedUserId(req)]
       );
       res.json({ report: { id, job_id: jobId, title, summary, sections: seedSections } });
     } catch (e) {

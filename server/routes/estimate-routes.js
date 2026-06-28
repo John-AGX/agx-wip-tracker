@@ -1,6 +1,6 @@
 const express = require('express');
 const { pool } = require('../db');
-const { requireAuth, requireRole, requireCapability } = require('../auth');
+const { requireAuth, requireRole, requireCapability, getAttributedUserId } = require('../auth');
 const { geocodeAddress } = require('../geocoder');
 
 const router = express.Router();
@@ -179,7 +179,10 @@ router.put('/bulk/save', requireAuth, requireCapability('ESTIMATES_EDIT'), async
                    WHEN estimates.data IS DISTINCT FROM EXCLUDED.data THEN NOW()
                    ELSE estimates.updated_at
                  END`,
-          [est.id, req.user.id, JSON.stringify(blob), req.user.organization_id]
+          // owner_id = attributed user (acted-as target when disguised). Set
+          // on CREATE only (ON CONFLICT DO UPDATE doesn't re-stamp owner). The
+          // DELETE /:id 403 guard keeps comparing owner_id to req.user.id.
+          [est.id, getAttributedUserId(req), JSON.stringify(blob), req.user.organization_id]
         );
       }
       await client.query('COMMIT');

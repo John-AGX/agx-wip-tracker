@@ -21,7 +21,7 @@ const Anthropic = require('@anthropic-ai/sdk');
 // local packs to Anthropic native Skills via the approval flow.
 const { toFile } = require('@anthropic-ai/sdk');
 const { pool } = require('../db');
-const { requireAuth, requireCapability, hasCapability, requireOrg } = require('../auth');
+const { requireAuth, requireCapability, hasCapability, requireOrg, getAttributedUserId } = require('../auth');
 const { storage } = require('../storage');
 const { aiChatLimiter, aiChatHourlyLimiter } = require('../rate-limit');
 // Wave 1.B context registry — fire-and-forget event logger for
@@ -13061,7 +13061,11 @@ router.post('/86/chat', requireAuth, requireOrg, aiChatLimiter, aiChatHourlyLimi
         userMsgId,
         turnEntityType,
         turnEntityId,
-        req.user.id, userMessage, additionalImages.length,
+        // Human chat-message author = attributed user (acted-as target when
+        // disguised). ONLY this role='user' author flips — the session
+        // resolution + all read filters above stay on req.user.id, and every
+        // role='assistant' insert (86/Scribe output) keeps req.user.id too.
+        getAttributedUserId(req), userMessage, additionalImages.length,
         uploadedBlocks.length ? JSON.stringify(uploadedBlocks) : null
       ]
     );

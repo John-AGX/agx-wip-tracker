@@ -149,7 +149,7 @@ function requireEntitlement(featureKey) {
   };
 }
 
-function signToken(user) {
+function signToken(user, extraClaims = {}) {
   return jwt.sign(
     {
       id: user.id, email: user.email, role: user.role, name: user.name,
@@ -161,7 +161,15 @@ function signToken(user) {
       // JWT so every authed request has the tenant id without a
       // round-trip. Null only for legacy tokens issued before the
       // organizations table existed; those should re-login.
-      organization_id: user.organization_id || null
+      organization_id: user.organization_id || null,
+      // Act-as / disguise claim. When a system admin mints a "disguise"
+      // token via POST /api/auth/act-as it carries acting_as_user_id =
+      // the target user's id. The principal claims above STAY the real
+      // admin (so god-mode role/visibility is preserved); requireAuth
+      // only honors this claim if the real caller still passes the
+      // SYSTEM_ADMIN check. Hard-picked (not a blind spread) so a caller
+      // can never overwrite the core id/role/organization_id claims.
+      acting_as_user_id: extraClaims.acting_as_user_id || null
     },
     JWT_SECRET,
     { expiresIn: TOKEN_EXPIRY }
@@ -194,11 +202,39 @@ function requireAuth(req, res, next) {
   if (!token) return res.status(401).json({ error: 'Not authenticated' });
   try {
     req.user = jwt.verify(token, JWT_SECRET);
+    // realUser is ALWAYS the verified token subject — the actual logged-in
+    // human. Access guards, read filters, ownership checks, and god-mode
+    // capability checks must key off this (via req.user.id), never the
+    // attributed id below.
+    req.realUser = req.user;
+    // Act-as / disguise: only honored when the token explicitly carries
+    // acting_as_user_id AND the real caller currently passes the SYSTEM_ADMIN
+    // predicate. Re-checking the live capability on EVERY request is the
+    // security spine — a revoked/downgraded admin can't keep impersonating
+    // with an un-expired token. hasCapability (not isAdminish) so it's
+    // system_admin-tier only; a plain org admin can never act-as.
+    const actingAsId = req.user.acting_as_user_id;
+    if (actingAsId && hasCapability(req.user, 'SYSTEM_ADMIN')) {
+      req.attributedUserId = actingAsId;
+      req.actingAs = { id: actingAsId };
+    } else {
+      req.attributedUserId = req.user.id;
+    }
     bumpLastSeen(req.user.id);
     next();
   } catch (e) {
     return res.status(401).json({ error: 'Invalid or expired token' });
   }
+}
+
+// getAttributedUserId — the user id that should be STAMPED as the
+// author/owner of newly-created, user-facing content. When a system admin
+// is acting-as another user, requireAuth set req.attributedUserId to the
+// target's id; otherwise it equals req.user.id. NEVER use this for read
+// filters, access guards, or ownership checks — those must keep using
+// req.user.id (the real admin) so god-mode visibility/permissions hold.
+function getAttributedUserId(req) {
+  return req.attributedUserId || (req.user && req.user.id);
 }
 
 // Resolve the caller's organization. Handlers that need the org
@@ -302,7 +338,7 @@ async function requireOrg(req, res, next) {
 }
 
 module.exports = {
-  signToken, requireAuth, requireRole, requireOrg, requireSystemAdmin, resolveUserOrg, JWT_SECRET,
+  signToken, requireAuth, requireRole, requireOrg, requireSystemAdmin, resolveUserOrg, getAttributedUserId, JWT_SECRET,
   // Roles / capabilities
   CAPABILITY_KEYS, setRolePool, refreshRoleCache, hasCapability, requireCapability,
   isAdminish,

@@ -22,7 +22,7 @@
 
 const express = require('express');
 const { pool } = require('../db');
-const { requireAuth } = require('../auth');
+const { requireAuth, getAttributedUserId } = require('../auth');
 const { attachEntityLabels } = require('../services/entity-labels');
 const { resolveTz, localWallClockToInstant } = require('../timezone');
 
@@ -166,7 +166,10 @@ router.post('/', requireAuth, async (req, res) => {
          (id, organization_id, user_id, title, starts_at, ends_at, all_day, location, notes, color, status, recurrence, reminder_minutes, entity_type, entity_id)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
        RETURNING ${SELECT_COLS}`,
-      [id, orgId, callerUserId(req), title, startsAt, endsAt, allDay, location, notes, color, status, recurrence, reminder, entType, linkId]
+      // Event owner = attributed user (acted-as target when disguised). ONLY
+      // this CREATE binding flips — callerUserId(req) stays as-is in the GET
+      // where-clause, PATCH/DELETE WHERE, and callerTz lookup (owner guards).
+      [id, orgId, getAttributedUserId(req), title, startsAt, endsAt, allDay, location, notes, color, status, recurrence, reminder, entType, linkId]
     );
     res.json({ event: rows[0] });
   } catch (e) {

@@ -29,7 +29,7 @@
 
 const express = require('express');
 const { pool } = require('../db');
-const { requireAuth } = require('../auth');
+const { requireAuth, getAttributedUserId } = require('../auth');
 // Low-level transactional send. We deliberately use sendEmail (not
 // sendForEvent) so task notifications don't depend on a catalog entry +
 // template living in the protected email-events.js / email-templates.js
@@ -419,7 +419,12 @@ router.post('/', requireAuth, async (req, res) => {
     const id = newId();
     const cols = ['id', 'organization_id', 'title', 'created_by'];
     const vals = ['$1', '$2', '$3', '$4'];
-    const params = [id, orgId, title, Number(req.user.id)];
+    // created_by = attributed user (acted-as target when disguised). NOTE:
+    // owner_user_id (personal-todo block below) is deliberately NOT flipped —
+    // it doubles as the read/PATCH/DELETE owner guard, so flipping it would
+    // hide an acted-as personal to-do from the real admin. created_by is the
+    // safe author flip; all owner_user_id predicates stay on req.user.id.
+    const params = [id, orgId, title, Number(getAttributedUserId(req))];
     let pn = 5;
 
     // Stamp the private scope + owner from the SESSION (never the body's

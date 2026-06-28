@@ -29,7 +29,7 @@
 const express = require('express');
 const crypto = require('crypto');
 const { pool } = require('../db');
-const { requireAuth, isAdminish } = require('../auth');
+const { requireAuth, isAdminish, getAttributedUserId } = require('../auth');
 const { sendEmail } = require('../email');
 
 const router = express.Router();
@@ -346,7 +346,10 @@ router.post('/:threadKey', async (req, res) => {
     const id = genId();
     await pool.query(
       `INSERT INTO messages (id, thread_key, user_id, body) VALUES ($1, $2, $3, $4)`,
-      [id, key, req.user.id, body]
+      // Author = attributed user (the acted-as target when a system admin is
+      // disguised; otherwise the real user). Everything else below — read
+      // pointer, DM notify sender, delete-author guard — stays on req.user.id.
+      [id, key, getAttributedUserId(req), body]
     );
     // Auto-mark read for the poster so they don't see their own
     // message as unread.

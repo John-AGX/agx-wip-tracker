@@ -64,6 +64,10 @@
       var html = '';
       var me = window.p86Auth && window.p86Auth.getUser && window.p86Auth.getUser();
       var myId = me ? me.id : null;
+      // Act-as / disguise is system-admin-only. The server re-enforces this
+      // (POST /api/auth/act-as is requireSystemAdmin-gated); this is just the
+      // UI gate so the button only shows for the real god-mode operator.
+      var canActAs = window.p86Auth && typeof window.p86Auth.isSystemAdmin === 'function' && window.p86Auth.isSystemAdmin();
       _users.forEach(function(u) {
         var activeBadge = u.active
           ? '<span style="color:#34d399;">&#x2713;</span>'
@@ -82,6 +86,9 @@
           (u.timezone ? '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:3px;">' + escapeHTML(u.timezone) + '</div>' : '');
         var createdCell = '<div>' + fmtDate(u.created_at) + '</div>' +
           '<div style="font-size:11px;color:var(--text-dim,#888);">seen ' + escapeHTML(uSeenAgo(u.last_seen_at)) + '</div>';
+        var actAsBtn = (canActAs && u.id !== myId && u.active)
+          ? '<button class="ee-btn ghost" onclick="window.p86ActAs(' + u.id + ')" title="Act as this user (disguise)" style="margin-left:4px;">Act as</button>'
+          : '';
         html += '<tr>' +
           '<td>' + nameCell + '</td>' +
           '<td>' + emailCell + '</td>' +
@@ -90,6 +97,7 @@
           '<td>' + createdCell + '</td>' +
           '<td style="text-align:center;white-space:nowrap;">' +
             '<button class="ee-btn secondary" onclick="openEditUserModal(' + u.id + ')">Edit</button>' +
+            actAsBtn +
             deleteBtn +
           '</td>' +
         '</tr>';

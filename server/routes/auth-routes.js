@@ -1,7 +1,7 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const { pool, getOrgById } = require('../db');
-const { signToken, requireAuth, requireRole, resolveUserOrg, hasCapability } = require('../auth');
+const { signToken, requireAuth, requireRole, requireSystemAdmin, resolveUserOrg, hasCapability } = require('../auth');
 const { ipLoginLimiter } = require('../rate-limit');
 const { auditLog } = require('../audit');
 
@@ -78,7 +78,21 @@ router.get('/me', requireAuth, async (req, res) => {
     // flow now, so the "🧲 New Lead with AI" entry point gates on
     // agent_mode_job (= AGENT_MODE_86) rather than a separate flag.
   };
-  res.json({ user: req.user, organization: organization, feature_flags: featureFlags });
+  // Act-as / disguise — when a system admin is impersonating another user,
+  // requireAuth has stamped req.actingAs from the acting_as_user_id JWT
+  // claim. Resolve the target's display fields so the client can paint the
+  // "Acting as X — Exit" banner. DISPLAY ONLY: this never changes any read
+  // filter or guard (those still key off req.user.id = the real admin).
+  let actingAs = null;
+  if (req.actingAs && req.actingAs.id) {
+    try {
+      const r = await pool.query('SELECT id, name, email FROM users WHERE id = $1', [req.actingAs.id]);
+      if (r.rows.length) {
+        actingAs = { id: r.rows[0].id, name: r.rows[0].name, email: r.rows[0].email };
+      }
+    } catch (_) { /* keep /me functional even if the lookup blips */ }
+  }
+  res.json({ user: req.user, organization: organization, feature_flags: featureFlags, acting_as: actingAs });
 });
 
 // POST /api/auth/refresh-token
@@ -103,6 +117,87 @@ router.post('/refresh-token', requireAuth, async (req, res) => {
   } catch (e) {
     console.error('POST /api/auth/refresh-token error:', e);
     res.status(500).json({ error: e.message || 'Server error' });
+  }
+});
+
+// POST /api/auth/act-as  — a system admin begins impersonating ("disguising
+//   as") another user. The REAL admin's identity (id/role/org) stays in the
+//   JWT untouched, so god-mode visibility + permissions are fully preserved;
+//   we only ADD an acting_as_user_id claim that requireAuth turns into
+//   req.actingAs / req.attributedUserId. Author/owner columns on CREATE then
+//   attribute to the target, while every read filter + access guard still
+//   keys off req.user.id (the admin). Email/notification senders are
+//   intentionally NOT attributed — outbound mail stays from the real admin.
+router.post('/act-as', requireAuth, requireSystemAdmin, async (req, res) => {
+  try {
+    const targetId = parseInt(req.body && req.body.user_id, 10);
+    if (!targetId) return res.status(400).json({ error: 'user_id required' });
+    if (targetId === req.user.id) return res.status(400).json({ error: 'Already yourself — nothing to act as' });
+
+    // Target must be a real, ACTIVE user in the admin's OWN organization.
+    // The same-org guard keeps act-as from spanning tenants (cross-tenant
+    // god-mode is read-only by design).
+    const { rows } = await pool.query(
+      'SELECT id, name, email, role, active, organization_id FROM users WHERE id = $1',
+      [targetId]
+    );
+    const target = rows[0];
+    if (!target || !target.active) return res.status(404).json({ error: 'Target user not found or inactive' });
+    if (target.organization_id !== req.user.organization_id) {
+      return res.status(403).json({ error: 'Can only act as a user in your own organization' });
+    }
+
+    // Re-sign the cookie. We sign the REAL admin as principal and ADD the
+    // acting_as_user_id claim — never sign the target as principal, or the
+    // admin would lose god-mode. Mirrors the signToken + res.cookie pattern
+    // in /login and /refresh-token EXACTLY (same cookie name + options).
+    const admin = (await pool.query('SELECT * FROM users WHERE id = $1 AND active = true', [req.user.id])).rows[0];
+    if (!admin) return res.status(401).json({ error: 'Admin account not found or inactive' });
+    const token = signToken(admin, { acting_as_user_id: target.id });
+    res.cookie('token', token, { httpOnly: true, sameSite: 'lax', maxAge: 7 * 24 * 60 * 60 * 1000 });
+
+    // Audit the start. req.user is still the REAL admin, so auditLog
+    // snapshots the true operator as actor — accountability is preserved.
+    auditLog(req, {
+      action: 'user.act_as_start',
+      targetType: 'user',
+      targetId: String(target.id),
+      organizationId: target.organization_id || null,
+      detail: { target_email: target.email, target_role: target.role },
+    });
+
+    res.json({ ok: true, token, acting_as: { id: target.id, name: target.name, email: target.email } });
+  } catch (e) {
+    console.error('POST /api/auth/act-as error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /api/auth/act-as/exit  — drop the impersonation claim. Re-signs the
+//   cookie WITHOUT acting_as_user_id (back to plain admin) and audits the
+//   exit. Any authenticated caller may exit (it only ever clears a claim).
+router.post('/act-as/exit', requireAuth, async (req, res) => {
+  try {
+    const wasActingAs = (req.actingAs && req.actingAs.id) ? req.actingAs.id : null;
+    const admin = (await pool.query('SELECT * FROM users WHERE id = $1 AND active = true', [req.user.id])).rows[0];
+    if (!admin) return res.status(401).json({ error: 'User not found or inactive' });
+    // Sign with NO extra claims — clears acting_as_user_id from the cookie.
+    const token = signToken(admin);
+    res.cookie('token', token, { httpOnly: true, sameSite: 'lax', maxAge: 7 * 24 * 60 * 60 * 1000 });
+
+    if (wasActingAs) {
+      auditLog(req, {
+        action: 'user.act_as_exit',
+        targetType: 'user',
+        targetId: String(wasActingAs),
+        detail: {},
+      });
+    }
+
+    res.json({ ok: true, token, acting_as: null });
+  } catch (e) {
+    console.error('POST /api/auth/act-as/exit error:', e);
+    res.status(500).json({ error: 'Server error' });
   }
 });
 

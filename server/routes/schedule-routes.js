@@ -17,7 +17,7 @@
 
 const express = require('express');
 const { pool } = require('../db');
-const { requireAuth, requireCapability } = require('../auth');
+const { requireAuth, requireCapability, getAttributedUserId } = require('../auth');
 const { assertEntityInOrg } = require('../org-access');
 const { sendEmail } = require('../email');
 const { scheduleAssigned } = require('../email-templates');
@@ -255,7 +255,9 @@ router.post('/',
           !!v.includesWeekends,
           v.status || 'planned',
           v.notes || null,
-          req.user && req.user.id ? req.user.id : null
+          // created_by = attributed user (acted-as target when disguised).
+          // crew/org-scope/notify-name above stay on the real req.user.
+          getAttributedUserId(req) || null
         ]
       );
       const entry = rowToJson(ins.rows[0]);
