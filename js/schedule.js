@@ -2920,6 +2920,17 @@
         '</div>' +
       '</div>';
     document.body.appendChild(modal);
+    // Google Places address autocomplete on the Location field — reuse the
+    // shared helper (same as lead/job/estimate/client editors). Inserts a
+    // search box above the field; picking fills it with the formatted address.
+    // The field stays free-text too (so "Shop" / "Conference Room B" still work).
+    // Degrades silently to a plain field when Maps/Places isn't available.
+    try {
+      var _locEl = modal.querySelector('#schEventLocation');
+      if (_locEl && window.p86AddressAutocomplete && typeof window.p86AddressAutocomplete.attachToField === 'function') {
+        window.p86AddressAutocomplete.attachToField(_locEl, { placeholder: 'Search address…' });
+      }
+    } catch (_) {}
 
     function close() { modal.remove(); }
     modal.querySelector('#schEventCancel').addEventListener('click', close);
