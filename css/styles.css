@@ -936,7 +936,7 @@
            Collapses to a 56px icon rail via #app-sidebar-toggle. */
         .app-sidebar {
             flex: 0 0 auto;
-            width: 212px;
+            width: 290px;
             display: flex;
             flex-direction: column;
             background: var(--surface);

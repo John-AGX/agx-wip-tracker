@@ -484,12 +484,38 @@
     }
     // (Re)populate identity from the current job.
     if (job) {
-      var num = job.jobNumber || '';
-      var nm = job.title || job.name || '';
-      var titleEl = jobnav.querySelector('.app-jobnav-title');
-      var statusEl = jobnav.querySelector('.app-jobnav-status');
-      if (titleEl) titleEl.textContent = num + (num && nm ? ' — ' : '') + nm;
-      if (statusEl) statusEl.textContent = job.status || 'In Progress';
+      var infoEl = jobnav.querySelector('.app-jobnav-jobinfo');
+      if (infoEl && window.p86EntityCard) {
+        // Shared Pulse card (compact): ring + identity + contract/profit.
+        var sm = function (n) {
+          n = Number(n) || 0; var a = Math.abs(n), s = n < 0 ? '-' : '';
+          if (a >= 1e6) return s + '$' + (a / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
+          if (a >= 1e3) return s + '$' + Math.round(a / 1e3) + 'k';
+          return s + '$' + Math.round(a);
+        };
+        var w = (window.getJobWIP ? window.getJobWIP(job.id) : null) || {};
+        var col = window.p86EntityCard.jobStatusColor(job.status);
+        var profit = (w.jtdProfit != null) ? w.jtdProfit : 0;
+        var contract = (w.totalIncome != null) ? w.totalIncome : (w.contractIncome || 0);
+        infoEl.innerHTML = window.p86EntityCard.render({
+          kind: 'job', accent: col, status: { label: job.status || 'In Progress', color: col },
+          number: job.jobNumber || '', title: job.title || job.name || '',
+          subtitle: job.client || '',
+          ring: { pct: (w.pctComplete || 0) },
+          stats: [
+            { label: 'Contract', value: sm(contract) },
+            { label: 'Profit', value: (profit < 0 ? '-' : '+') + sm(Math.abs(profit)), tone: profit < 0 ? 'neg' : 'pos' }
+          ]
+        }, { compact: true });
+      } else if (job) {
+        // Fallback (module not loaded): the original title + status text.
+        var num = job.jobNumber || '';
+        var nm = job.title || job.name || '';
+        var titleEl = jobnav.querySelector('.app-jobnav-title');
+        var statusEl = jobnav.querySelector('.app-jobnav-status');
+        if (titleEl) titleEl.textContent = num + (num && nm ? ' — ' : '') + nm;
+        if (statusEl) statusEl.textContent = job.status || 'In Progress';
+      }
     }
     return jobnav;
   }

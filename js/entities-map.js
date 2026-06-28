@@ -641,40 +641,45 @@
       var pct = Math.max(0, Math.min(100, Number(w.pctComplete) || 0));
       var contract = (w.totalIncome != null) ? w.totalIncome : (w.contractIncome || 0);
       var profit = (w.jtdProfit != null) ? w.jtdProfit : 0;
-      var circ = 163.4, off = circ * (1 - pct / 100);
-      var pc = profit < 0 ? 'emap-neg' : 'emap-pos', psign = profit < 0 ? '' : '+';
-      setDetail(
-        '<div class="emap-jc"><div class="emap-jc-top">' +
-          '<svg class="emap-jc-ring" width="62" height="62" viewBox="0 0 62 62" aria-hidden="true">' +
-            '<circle cx="31" cy="31" r="26" fill="none" stroke="#0e1320" stroke-width="7"/>' +
-            '<circle cx="31" cy="31" r="26" fill="none" stroke="#4f8cff" stroke-width="7" stroke-linecap="round" stroke-dasharray="' + circ.toFixed(1) + '" stroke-dashoffset="' + off.toFixed(1) + '" transform="rotate(-90 31 31)"/>' +
-            '<text x="31" y="35" text-anchor="middle" font-size="14" font-weight="600" fill="#e2e8f0">' + Math.round(pct) + '%</text>' +
-          '</svg>' +
-          '<div class="emap-jc-meta">' +
-            '<div class="emap-jc-name">' + escapeHTML(it.title || '(untitled)') + '</div>' +
-            '<div class="emap-jc-statusrow">' + statusChip('job', it.status) + '</div>' +
-            '<div class="emap-jc-nums"><div><span class="emap-jc-lbl">Contract</span><span class="emap-jc-val">' + money(contract) + '</span></div>' +
-              '<div><span class="emap-jc-lbl">Profit</span><span class="emap-jc-val ' + pc + '">' + psign + money(profit) + '</span></div></div>' +
-          '</div></div>' +
-          (it.address ? '<div class="emap-jc-addr">' + escapeHTML(it.address) + '</div>' : '') +
-          '<div class="emap-jc-actions">' +
-            '<button type="button" class="emap-jc-btn emap-jc-wip" data-id="' + escapeAttr(id) + '">Open WIP →</button>' +
-            '<button type="button" class="emap-jc-btn emap-jc-ghost emap-jc-maps" data-lat="' + Number(it.lat) + '" data-lng="' + Number(it.lng) + '">Maps</button>' +
-          '</div></div>'
-      );
+      if (!window.p86EntityCard) {
+        setDetail('<div class="emap-jc"><div class="emap-jc-meta"><div class="emap-jc-name">' + escapeHTML(it.title || '(untitled)') + '</div></div></div>');
+        return;
+      }
+      var jobObj = null, jl = (window.appData && window.appData.jobs) || [];
+      for (var ji = 0; ji < jl.length; ji++) { if (jl[ji].id === id) { jobObj = jl[ji]; break; } }
+      var col = window.p86EntityCard.jobStatusColor(it.status);
+      setDetail(window.p86EntityCard.render({
+        kind: 'job', accent: col, status: { label: it.status || 'In Progress', color: col },
+        number: (jobObj && (jobObj.jobNumber || jobObj.job_number)) || '',
+        title: it.title || '(untitled)',
+        subtitle: (jobObj && (jobObj.client || jobObj.client_name)) || '',
+        address: it.address || '',
+        ring: { pct: pct },
+        stats: [
+          { label: 'Contract', value: money(contract) },
+          { label: 'Profit', value: (profit < 0 ? '-' : '+') + money(Math.abs(profit)), tone: profit < 0 ? 'neg' : 'pos' }
+        ],
+        icons: [ { act: 'info', title: 'Open job' }, { act: 'maps', title: 'Maps' } ],
+        actions: [ { label: 'Open WIP', act: 'open', primary: true, icon: 'arrow-right' }, { label: 'Maps', act: 'maps' } ],
+        data: { id: id, lat: it.lat, lng: it.lng }
+      }));
     }
     function showLeadDetail(it) {
       if (!it) return;
-      setDetail(
-        '<div class="emap-jc">' +
-          '<div class="emap-jc-statusrow"><span class="emap-kind">Lead</span> ' + statusChip('lead', it.status) + '</div>' +
-          '<div class="emap-jc-name" style="margin-top:6px;">' + escapeHTML(it.title || '(untitled)') + '</div>' +
-          (it.address ? '<div class="emap-jc-addr">' + escapeHTML(it.address) + '</div>' : '') +
-          '<div class="emap-jc-actions">' +
-            '<button type="button" class="emap-jc-btn emap-jc-open" data-kind="lead" data-id="' + escapeAttr(it.id) + '">Open lead →</button>' +
-            '<button type="button" class="emap-jc-btn emap-jc-ghost emap-jc-maps" data-lat="' + Number(it.lat) + '" data-lng="' + Number(it.lng) + '">Maps</button>' +
-          '</div></div>'
-      );
+      if (!window.p86EntityCard) {
+        setDetail('<div class="emap-jc"><div class="emap-jc-name">' + escapeHTML(it.title || '(untitled)') + '</div></div>');
+        return;
+      }
+      var col = window.p86EntityCard.leadStatusColor(it.status);
+      setDetail(window.p86EntityCard.render({
+        kind: 'lead', accent: col, status: { label: it.status || 'Open', color: col },
+        title: it.title || '(untitled)',
+        subtitle: it.client || '',
+        address: it.address || '',
+        icons: [ { act: 'info', title: 'Open lead' }, { act: 'maps', title: 'Maps' } ],
+        actions: [ { label: 'Open lead', act: 'open', primary: true, icon: 'arrow-right' }, { label: 'Maps', act: 'maps' } ],
+        data: { id: it.id, lat: it.lat, lng: it.lng }
+      }));
     }
     function showGroupDetail(members) {
       var addr = ''; for (var i = 0; i < members.length; i++) { if (members[i].address) { addr = members[i].address; break; } }
@@ -760,16 +765,32 @@
       detail.addEventListener('click', function (ev) {
         var t = ev.target;
         var go = function (sel) { return t.closest ? t.closest(sel) : null; };
-        var wip = go('.emap-jc-wip');
-        if (wip) { var jid = wip.getAttribute('data-id'); if (typeof _onJobHook === 'function') _onJobHook(jid); else openEntity('job', jid); return; }
-        var op = go('.emap-jc-open') || go('.emap-grp-row');
-        if (op) { openEntity(op.getAttribute('data-kind'), op.getAttribute('data-id')); return; }
-        var mp = go('.emap-jc-maps');
-        if (mp) {
-          var la = mp.getAttribute('data-lat'), ln = mp.getAttribute('data-lng');
-          if (la && ln) window.open('https://www.google.com/maps/search/?api=1&query=' + la + ',' + ln, '_blank');
+        // Shared entity-card actions (data-act on its buttons / icons).
+        var actEl = go('[data-act]');
+        if (actEl) {
+          var act = actEl.getAttribute('data-act');
+          var card = go('.p86-ecard');
+          var kind = card ? card.getAttribute('data-kind') : '';
+          var id = actEl.getAttribute('data-id');
+          if (act === 'maps') {
+            var la = actEl.getAttribute('data-lat'), ln = actEl.getAttribute('data-lng');
+            if (la && ln) window.open('https://www.google.com/maps/search/?api=1&query=' + la + ',' + ln, '_blank');
+            return;
+          }
+          if (act === 'open' || act === 'info') {
+            if (kind === 'job') { if (typeof _onJobHook === 'function') _onJobHook(id); else openEntity('job', id); }
+            else { openEntity(kind || 'lead', id); }
+            return;
+          }
+          if (act === 'msg') {
+            if (window.p86Messaging && typeof window.p86Messaging.openInbox === 'function') window.p86Messaging.openInbox();
+            return;
+          }
           return;
         }
+        // Group "N at this property" rows.
+        var op = go('.emap-grp-row');
+        if (op) { openEntity(op.getAttribute('data-kind'), op.getAttribute('data-id')); return; }
       });
     }
 
