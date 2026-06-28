@@ -2066,8 +2066,10 @@ function renderInspector(){
   } else if(sel && sel.type!=='wip'){
     var d=E.DEFS[sel.type]||{}, iType=d.itemType||'';
     if(hdr) hdr.innerHTML='<span class="ng-insp-ic">'+(d.icon||'◆')+'</span> '+luEsc(sel.label||d.label||'Node')+'<span class="ng-insp-type">'+luEsc(d.label||sel.type)+'</span>';
-    var LI_TYPES={labor:1,mat:1,gc:1,other:1,burden:1,inv:1}; // Slice 3b: line-item nodes (sub/po deferred to 3c)
+    var LI_TYPES={labor:1,mat:1,gc:1,other:1,burden:1,inv:1}; // line-item nodes
     body.innerHTML=(sel.type==='t2'||sel.type==='co') ? inspectorAllocHtml(sel)
+                  : iType==='po' ? inspectorPOHtml(sel)
+                  : iType==='sub' ? inspectorSubHtml(sel)
                   : LI_TYPES[iType] ? inspectorLineItemHtml(sel)
                   : inspectorGenericHtml(sel, d);
   } else {
@@ -2219,6 +2221,149 @@ function inspectorLineItemHtml(sel){
     h+='<div class="ng-insp-sec"><label class="ng-insp-sublabel">Manual Total</label>'
       +'<input class="ng-insp-num" type="number" value="'+(sel.value||0)+'" data-node="'+sel.id+'" step="0.01" placeholder="0.00" />';
     if(linkedCount>0) h+='<div class="ng-insp-qblink">↳ Linked QB lines: '+E.fmtC(linkedTotal)+' ('+linkedCount+')</div>';
+    h+='</div>';
+  }
+  h+='<div class="ng-insp-sec"><div class="ng-insp-sublabel">Line Items</div>'+lineItemsHtml(sel)+'</div>';
+  return h;
+}
+// ── Slice 3c: PO + Sub shared action handlers (extracted from the canvas click
+// delegate so the on-card AND inspector controls call one path) ────────────────
+function poUnlinkPhase(fromId, toId){
+  var ws=E.wires();
+  for(var wi=ws.length-1; wi>=0; wi--){ if(ws[wi].fromNode===fromId && ws[wi].toNode===toId) ws.splice(wi,1); }
+}
+// Open the "+ Link phase" picker next to the trigger button. Body-level picker so the
+// canvas transform/overflow can not clip it; works from card or inspector.
+function poLinkAddOpen(btn){
+  var poId=btn.getAttribute('data-po-node');
+  var poN=E.findNode(poId);
+  if(!poN) return;
+  var alreadyWired={};
+  E.wires().forEach(function(w){ if(w.fromNode===poId){ var tgt=E.findNode(w.toNode); if(tgt && tgt.type==='t2') alreadyWired[tgt.id]=true; } });
+  var candidates=E.nodes().filter(function(nd){ return nd.type==='t2' && !alreadyWired[nd.id]; }).sort(function(a,b){ return (a.label||'').localeCompare(b.label||''); });
+  if(!candidates.length){ alert('No more phases to link — every phase on this job is already wired from this PO. Drop a new phase onto the graph first if you need to.'); return; }
+  var prev=document.getElementById('ng-po-link-picker'); if(prev) prev.remove();
+  var pick=document.createElement('div'); pick.id='ng-po-link-picker';
+  var rect=btn.getBoundingClientRect();
+  var pickW=240, pickMaxH=320;
+  var pickLeft=Math.max(8, Math.min(window.innerWidth-pickW-8, Math.round(rect.left)));
+  var pickTop=Math.round(rect.bottom+4);
+  if(pickTop+pickMaxH > window.innerHeight-8){ pickTop=Math.max(8, Math.round(rect.top-pickMaxH-4)); }
+  pick.style.cssText='position:fixed;left:'+pickLeft+'px;top:'+pickTop+'px;background:#0f172a;border:1px solid rgba(255,255,255,0.22);border-radius:8px;padding:6px;z-index:99999;max-height:'+pickMaxH+'px;overflow-y:auto;width:'+pickW+'px;box-shadow:0 12px 28px rgba(0,0,0,0.6);font-family:inherit;';
+  var hdr=document.createElement('div');
+  hdr.style.cssText='font-size:9px;text-transform:uppercase;letter-spacing:0.5px;color:#8b90a5;font-weight:600;padding:2px 6px 6px;border-bottom:1px solid rgba(255,255,255,0.06);margin-bottom:4px;';
+  hdr.textContent='Pick a phase to link';
+  pick.appendChild(hdr);
+  candidates.forEach(function(c){
+    var b=document.createElement('div');
+    b.textContent=(c.label||c.type).split(' › ')[0];
+    b.style.cssText='padding:7px 10px;cursor:pointer;color:#e6e6e6;font-size:12px;border-radius:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
+    b.onmouseenter=function(){ b.style.background='rgba(255,255,255,0.06)'; };
+    b.onmouseleave=function(){ b.style.background='transparent'; };
+    b.onmousedown=function(ev){
+      ev.preventDefault(); ev.stopPropagation();
+      var existing=E.wires().filter(function(w){ if(w.fromNode!==poId) return false; var t=E.findNode(w.toNode); return t && t.type==='t2'; });
+      var defaultPct=100;
+      if(existing.length){ var share=100/(existing.length+1); existing.forEach(function(w){ w.allocPct=share; }); defaultPct=share; }
+      E.wires().push({ fromNode:poId, fromPort:0, toNode:c.id, toPort:0, allocPct:defaultPct });
+      cleanup(); render();
+    };
+    pick.appendChild(b);
+  });
+  pick.addEventListener('mousedown', function(ev){ ev.stopPropagation(); });
+  document.body.appendChild(pick);
+  function cleanup(){ try{ pick.remove(); }catch(_){} document.removeEventListener('mousedown', onDoc, true); document.removeEventListener('keydown', onKey, true); }
+  function onDoc(ev){ if(pick.contains(ev.target)) return; cleanup(); }
+  function onKey(ev){ if(ev.key==='Escape'){ ev.preventDefault(); cleanup(); } }
+  setTimeout(function(){ document.addEventListener('mousedown', onDoc, true); document.addEventListener('keydown', onKey, true); }, 0);
+}
+// Create a PO scoped to a sub's target phase/CO/T1 via the entity-create modal.
+function subCreatePO(btn){
+  var subNodeId=btn.getAttribute('data-sub-node');
+  var tgtType=btn.getAttribute('data-target-type');
+  var tgtId=btn.getAttribute('data-target-id');
+  var subNode=E.findNode(subNodeId);
+  if(!subNode) return;
+  var subName=(subNode.data && subNode.data.name) || subNode.label || '';
+  openEntityCreateModal('po', function(newEntry){
+    if(!newEntry) return;
+    newEntry.allocTarget={type:tgtType, id:tgtId};
+    newEntry.subId=subNode.data&&subNode.data.id?subNode.data.id:'';
+    if(!newEntry.vendor && subName) newEntry.vendor=subName;
+    if(typeof saveData==='function') saveData();
+    var pcx=subNode.x-300, pcy=subNode.y+80;
+    var lbl=entryLabel('po',newEntry);
+    var poNode=E.addNode('po',pcx,pcy,lbl,newEntry);
+    if(poNode){ poNode.allocTarget={type:tgtType, id:tgtId}; E.wires().push({fromNode:poNode.id,fromPort:0,toNode:subNode.id,toPort:0}); E.saveGraph(); }
+    render();
+  });
+  if(subName){
+    setTimeout(function(){
+      var vEl=document.getElementById('poVendor'); if(vEl && !vEl.value) vEl.value=subName;
+      var dEl=document.getElementById('poDescription');
+      if(dEl && !dEl.value){ var tgtNode=E.findNode(btn.getAttribute('data-target-node')); if(tgtNode) dEl.value=subName+' — '+(tgtNode.label||tgtNode.type); }
+    }, 0);
+  }
+}
+// PO Inspector detail (Slice 3c): Contract/Invoiced KPIs + editable Base Contract +
+// linked-phase allocation (alloc% / unlink / link) + amendment line items.
+function inspectorPOHtml(sel){
+  E.resetComp(); E.getOutput(sel,0);
+  var poContract=sel._poContract||0, poInv=sel._poInvoiced||0;
+  var h='<div class="ng-insp-sec"><div class="ng-wip-ov">'
+    +'<div class="ng-wip-ov-kpi"><span class="ng-ov-lbl">Contract</span><span class="ng-ov-val">'+E.fmtC(poContract)+'</span></div>'
+    +'<div class="ng-wip-ov-kpi"><span class="ng-ov-lbl">Invoiced</span><span class="ng-ov-val ng-ov-pos">'+E.fmtC(poInv)+'</span></div>'
+    +'</div></div>';
+  h+='<div class="ng-insp-sec"><label class="ng-insp-sublabel">Base Contract</label><input class="ng-insp-num" type="number" value="'+(sel.value||0)+'" data-node="'+sel.id+'" step="0.01" placeholder="0.00" /></div>';
+  var phaseWires=[];
+  E.wires().forEach(function(w){ if(w.fromNode!==sel.id) return; var tgt=E.findNode(w.toNode); if(tgt && tgt.type==='t2') phaseWires.push({wire:w, phase:tgt}); });
+  var totalAlloc=phaseWires.reduce(function(s,pw){ return s+(pw.wire.allocPct!=null?Number(pw.wire.allocPct)||0:100); },0);
+  var allocOk=phaseWires.length===0 || Math.abs(totalAlloc-100)<0.5;
+  h+='<div class="ng-insp-sec ng-po-linked-section"><div class="ng-insp-sublabel ng-po-linked-head">Linked Phases';
+  if(phaseWires.length) h+='<span class="ng-po-alloc-badge'+(allocOk?'':' ng-warn')+'" title="'+(allocOk?'Allocation totals 100%':'Allocation does not sum to 100% — phase rollups will under/over count')+'">'+totalAlloc.toFixed(0)+'%</span>';
+  h+='</div>';
+  if(!phaseWires.length){
+    h+='<div class="ng-insp-empty">No phases linked yet. Cost flows via the sub. Link a phase to split this PO across phases.</div>';
+  } else {
+    phaseWires.forEach(function(pw){
+      var pname=(pw.phase.label||pw.phase.type).split(' › ')[0].trim();
+      var pa=pw.wire.allocPct!=null?Number(pw.wire.allocPct):100;
+      h+='<div class="ng-po-row"><span class="ng-po-row-name">▤ '+luEsc(pname)+'</span>'
+        +'<input class="ng-po-alloc" type="number" min="0" max="100" step="1" value="'+pa.toFixed(0)+'" data-from="'+sel.id+'" data-to="'+pw.phase.id+'" title="Allocation % to this phase" />'
+        +'<span class="ng-po-pct">%</span>'
+        +'<span class="ng-po-unlink" data-from="'+sel.id+'" data-to="'+pw.phase.id+'" title="Unlink phase">✖</span></div>';
+    });
+  }
+  h+='<button class="ng-po-link-add" type="button" data-po-node="'+sel.id+'" title="Link this PO to a phase">+ Link phase</button></div>';
+  h+='<div class="ng-insp-sec"><div class="ng-insp-sublabel">Amendments</div>'+lineItemsHtml(sel)+'</div>';
+  return h;
+}
+// Sub Inspector detail (Slice 3c): Actual/Accrued + editable Manual Total + the scope
+// breakdown (per target, with Create-PO) + line items.
+function inspectorSubHtml(sel){
+  E.resetComp();
+  var subActual=E.getActual(sel), subAccrued=E.getAccrued(sel);
+  var h='<div class="ng-insp-sec"><div class="ng-wip-ov">'
+    +'<div class="ng-wip-ov-kpi"><span class="ng-ov-lbl">Actual</span><span class="ng-ov-val ng-ov-pos">'+E.fmtC(subActual)+'</span></div>'
+    +'<div class="ng-wip-ov-kpi"><span class="ng-ov-lbl">Accrued</span><span class="ng-ov-val ng-ov-neg">'+E.fmtC(subAccrued)+'</span></div>'
+    +'</div></div>';
+  h+='<div class="ng-insp-sec"><label class="ng-insp-sublabel">Manual Total</label><input class="ng-insp-num" type="number" value="'+(sel.value||0)+'" data-node="'+sel.id+'" step="0.01" placeholder="0.00" /></div>';
+  var subTargets=[];
+  E.wires().forEach(function(w){ if(w.fromNode!==sel.id) return; var tgt=E.findNode(w.toNode); if(tgt && (tgt.type==='t2'||tgt.type==='t1'||tgt.type==='co')) subTargets.push(tgt); });
+  if(subTargets.length){
+    var poNodes=[];
+    E.wires().forEach(function(w){ if(w.toNode!==sel.id) return; var src=E.findNode(w.fromNode); if(src && src.type==='po') poNodes.push(src); });
+    h+='<div class="ng-insp-sec"><div class="ng-insp-sublabel">Scope Breakdown</div>';
+    subTargets.forEach(function(tgt){
+      var tname=(tgt.label||tgt.type).split(' › ')[0].trim();
+      var tIcon=tgt.type==='t2'?'📋':tgt.type==='t1'?'🏗':'📄';
+      var tDataId=tgt.data&&tgt.data.id?tgt.data.id:'';
+      var poAmt=0, poCount=0;
+      poNodes.forEach(function(po){ var at=po.allocTarget; if(at && at.type===tgt.type && at.id===tDataId){ var poEntry=(typeof appData!=='undefined' && appData.purchaseOrders)?appData.purchaseOrders.find(function(p){return p.id===(po.data&&po.data.id);}):null; if(poEntry){ poAmt+=(poEntry.amount||0); poCount++; } } });
+      h+='<div class="ng-po-row"><span class="ng-po-row-name">'+tIcon+' '+luEsc(tname)+'</span>';
+      if(poCount>0) h+='<span class="ng-po-pocount">'+poCount+' PO '+E.fmtC(poAmt)+'</span>';
+      h+='<span class="ng-sub-add-po" data-sub-node="'+sel.id+'" data-target-type="'+tgt.type+'" data-target-id="'+tDataId+'" data-target-node="'+tgt.id+'" title="Create PO for '+luEsc(tname)+'">+</span></div>';
+    });
     h+='</div>';
   }
   h+='<div class="ng-insp-sec"><div class="ng-insp-sublabel">Line Items</div>'+lineItemsHtml(sel)+'</div>';
@@ -2547,11 +2692,28 @@ function initEvents(){
     if(iadd){ e.preventDefault(); e.stopPropagation(); lineItemAdd(E.findNode(iadd.getAttribute('data-node'))); render(); return; }
     var idel=e.target.closest('.ng-subitem-del');
     if(idel){ e.preventDefault(); e.stopPropagation(); var dn=E.findNode(idel.getAttribute('data-node')); var di=parseInt(idel.getAttribute('data-idx')); if(dn&&dn.items&&!isNaN(di)){ dn.items.splice(di,1); if(E.saveGraph) E.saveGraph(); render(); } return; }
+    // Slice 3c — PO/Sub actions (shared with the canvas handlers).
+    var ipu=e.target.closest('.ng-po-unlink');
+    if(ipu){ e.preventDefault(); e.stopPropagation(); poUnlinkPhase(ipu.getAttribute('data-from'), ipu.getAttribute('data-to')); render(); return; }
+    var ipl=e.target.closest('.ng-po-link-add');
+    if(ipl){ e.preventDefault(); e.stopPropagation(); poLinkAddOpen(ipl); return; }
+    var isp=e.target.closest('.ng-sub-add-po');
+    if(isp){ e.preventDefault(); e.stopPropagation(); subCreatePO(isp); return; }
   });
   // Slice 3b — line-item field inputs (ng-si-f) + the manual-total input persist LIVE
   // without a full render (so the caret survives), with a focus-preserving total refresh.
   if(insp) insp.addEventListener('input', function(e){
-    var t=e.target; if(t.tagName!=='INPUT' || t.dataset.node==null) return;
+    var t=e.target;
+    // Slice 3c — PO→phase allocation %: write the wire + refresh the inspector badge live.
+    if(t.tagName==='INPUT' && t.classList && t.classList.contains('ng-po-alloc')){
+      var aw=E.wires().find(function(w){ return w.fromNode===t.getAttribute('data-from') && w.toNode===t.getAttribute('data-to'); });
+      if(aw){ var raw=parseFloat(t.value); if(!isFinite(raw)) raw=0; aw.allocPct=Math.max(0,Math.min(100,raw)); E.resetComp(); if(E.saveGraph) E.saveGraph();
+        var ib=insp.querySelector('.ng-inspector-body'), pbadge=ib&&ib.querySelector('.ng-po-alloc-badge');
+        if(pbadge){ var psum=0; ib.querySelectorAll('.ng-po-alloc').forEach(function(inp){ psum+=parseFloat(inp.value)||0; }); pbadge.textContent=psum.toFixed(0)+'%'; pbadge.classList.toggle('ng-warn', Math.abs(psum-100)>=0.5); }
+      }
+      return;
+    }
+    if(t.tagName!=='INPUT' || t.dataset.node==null) return;
     var n=E.findNode(t.dataset.node); if(!n) return;
     if(t.dataset.idx!=null && t.dataset.field){
       var idx=parseInt(t.dataset.idx), f=t.dataset.field;
@@ -2572,8 +2734,8 @@ function initEvents(){
   // render won't clobber the field mid-type; cleared on blur WITHOUT a render so tabbing
   // between cells keeps the live inputs (the input handler already persisted each keystroke).
   if(insp){
-    insp.addEventListener('focusin', function(e){ var t=e.target; if(t.tagName==='INPUT' && t.dataset.node!=null && !t.classList.contains('ng-wip-chip-input')) editingId=t.dataset.node; });
-    insp.addEventListener('focusout', function(e){ var t=e.target; if(t.tagName==='INPUT' && t.dataset.node!=null && !t.classList.contains('ng-wip-chip-input')) editingId=null; });
+    insp.addEventListener('focusin', function(e){ var t=e.target; if(t.tagName==='INPUT' && !t.classList.contains('ng-wip-chip-input') && (t.dataset.node!=null||t.dataset.from!=null)) editingId=t.dataset.node||t.dataset.from; });
+    insp.addEventListener('focusout', function(e){ var t=e.target; if(t.tagName==='INPUT' && !t.classList.contains('ng-wip-chip-input') && (t.dataset.node!=null||t.dataset.from!=null)) editingId=null; });
   }
 
   wrap.addEventListener('mousedown',function(e){
@@ -3019,185 +3181,14 @@ function initEvents(){
     // PO → phase: unlink one phase from a PO. Removes the wire and
     // re-renders so the Linked Phases section + the canvas update.
     var poUnlink = e.target.closest('.ng-po-unlink');
-    if(poUnlink){
-      e.stopPropagation();
-      var fromId = poUnlink.getAttribute('data-from');
-      var toId   = poUnlink.getAttribute('data-to');
-      var ws = E.wires();
-      for(var wi = ws.length - 1; wi >= 0; wi--){
-        if(ws[wi].fromNode === fromId && ws[wi].toNode === toId) ws.splice(wi, 1);
-      }
-      render();
-      return;
-    }
+    if(poUnlink){ e.stopPropagation(); poUnlinkPhase(poUnlink.getAttribute('data-from'), poUnlink.getAttribute('data-to')); render(); return; }
     // PO → phase: open the "+ Link phase" picker. Shows phases on
     // this job that aren't already linked from this PO.
     var poLinkAdd = e.target.closest('.ng-po-link-add');
-    if(poLinkAdd){
-      e.preventDefault();
-      e.stopPropagation();
-      var poId = poLinkAdd.getAttribute('data-po-node');
-      var poN  = E.findNode(poId);
-      if(!poN) return;
-      var alreadyWired = {};
-      E.wires().forEach(function(w){
-        if(w.fromNode === poId){
-          var tgt = E.findNode(w.toNode);
-          if(tgt && tgt.type === 't2') alreadyWired[tgt.id] = true;
-        }
-      });
-      var candidates = E.nodes().filter(function(nd){
-        return nd.type === 't2' && !alreadyWired[nd.id];
-      }).sort(function(a, b){ return (a.label || '').localeCompare(b.label || ''); });
-      if(!candidates.length){
-        alert('No more phases to link — every phase on this job is already wired from this PO. Drop a new phase onto the graph first if you need to.');
-        return;
-      }
-      // Tiny dropdown picker rendered next to the click target. Lives
-      // in document.body so the canvas's transform / overflow:hidden
-      // doesn\'t clip it. Position is computed in viewport coords from
-      // getBoundingClientRect (already post-transform).
-      var prev = document.getElementById('ng-po-link-picker');
-      if(prev) prev.remove();
-      var pick = document.createElement('div');
-      pick.id = 'ng-po-link-picker';
-      // Clamp to the viewport so the picker doesn\'t spill off-screen
-      // when the user opens it near the right or bottom edge.
-      var rect = poLinkAdd.getBoundingClientRect();
-      var pickW = 240, pickMaxH = 320;
-      var pickLeft = Math.max(8, Math.min(window.innerWidth - pickW - 8, Math.round(rect.left)));
-      var pickTop  = Math.round(rect.bottom + 4);
-      if(pickTop + pickMaxH > window.innerHeight - 8){
-        // Flip above the trigger when there\'s no room below.
-        pickTop = Math.max(8, Math.round(rect.top - pickMaxH - 4));
-      }
-      pick.style.cssText =
-        'position:fixed;left:' + pickLeft + 'px;top:' + pickTop + 'px;' +
-        'background:#0f172a;border:1px solid rgba(255,255,255,0.22);border-radius:8px;' +
-        'padding:6px;z-index:99999;max-height:' + pickMaxH + 'px;overflow-y:auto;width:' + pickW + 'px;' +
-        'box-shadow:0 12px 28px rgba(0,0,0,0.6);font-family:inherit;';
-      // Heading row so the picker reads as a UI element, not a stray
-      // floating list.
-      var hdr = document.createElement('div');
-      hdr.style.cssText = 'font-size:9px;text-transform:uppercase;letter-spacing:0.5px;color:#8b90a5;font-weight:600;padding:2px 6px 6px;border-bottom:1px solid rgba(255,255,255,0.06);margin-bottom:4px;';
-      hdr.textContent = 'Pick a phase to link';
-      pick.appendChild(hdr);
-      candidates.forEach(function(c){
-        var btn = document.createElement('div');
-        btn.textContent = (c.label || c.type).split(' › ')[0];
-        btn.style.cssText = 'padding:7px 10px;cursor:pointer;color:#e6e6e6;font-size:12px;border-radius:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;';
-        btn.onmouseenter = function(){ btn.style.background = 'rgba(255,255,255,0.06)'; };
-        btn.onmouseleave = function(){ btn.style.background = 'transparent'; };
-        // Bind on mousedown — the canvas\'s mousedown handler does a
-        // pan-start; using mousedown here with stopPropagation makes
-        // the pick fire BEFORE the canvas can intercept. Click would
-        // race with the outside-click dismiss (it fires after a
-        // mousedown→mouseup pair, by which time the dismiss handler
-        // could have already removed the picker on the closing
-        // mousedown).
-        btn.onmousedown = function(ev){
-          ev.preventDefault();
-          ev.stopPropagation();
-          var existing = E.wires().filter(function(w){
-            if(w.fromNode !== poId) return false;
-            var t = E.findNode(w.toNode);
-            return t && t.type === 't2';
-          });
-          var defaultPct = 100;
-          if(existing.length){
-            var share = 100 / (existing.length + 1);
-            existing.forEach(function(w){ w.allocPct = share; });
-            defaultPct = share;
-          }
-          E.wires().push({ fromNode: poId, fromPort: 0, toNode: c.id, toPort: 0, allocPct: defaultPct });
-          cleanup();
-          render();
-        };
-        pick.appendChild(btn);
-      });
-      // Swallow mousedown anywhere INSIDE the picker so the outside-
-      // close handler doesn\'t fire when the user scrolls or clicks
-      // the heading.
-      pick.addEventListener('mousedown', function(ev){ ev.stopPropagation(); });
-      document.body.appendChild(pick);
-      // Outside-click dismiss + ESC. mousedown beats click so the
-      // canvas pan doesn\'t start before we close, and ESC works
-      // even when focus is elsewhere.
-      function cleanup(){
-        try { pick.remove(); } catch(_) {}
-        document.removeEventListener('mousedown', onDoc, true);
-        document.removeEventListener('keydown', onKey, true);
-      }
-      function onDoc(ev){
-        if(pick.contains(ev.target)) return;
-        cleanup();
-      }
-      function onKey(ev){
-        if(ev.key === 'Escape'){ ev.preventDefault(); cleanup(); }
-      }
-      // Use capture so the listener fires before the canvas handlers
-      // and we can dismiss without the canvas seeing the click.
-      setTimeout(function(){
-        document.addEventListener('mousedown', onDoc, true);
-        document.addEventListener('keydown', onKey, true);
-      }, 0);
-      return;
-    }
+    if(poLinkAdd){ e.preventDefault(); e.stopPropagation(); poLinkAddOpen(poLinkAdd); return; }
     // Create PO scoped to a sub's target phase/CO/T1
     var subAddPO=e.target.closest('.ng-sub-add-po');
-    if(subAddPO){
-      e.stopPropagation();
-      var subNodeId=subAddPO.getAttribute('data-sub-node');
-      var tgtType=subAddPO.getAttribute('data-target-type');
-      var tgtId=subAddPO.getAttribute('data-target-id');
-      var subNode=E.findNode(subNodeId);
-      if(!subNode) return;
-      // Resolve the sub's directory name so we can pre-fill the PO
-      // modal's vendor input — this is the user's "pull the sub from
-      // the sub list" expectation. subNode.data is the directory entry
-      // (Phase A wires sub nodes through appData.subsDirectory).
-      var subName = (subNode.data && subNode.data.name) ||
-                    subNode.label ||
-                    '';
-      openEntityCreateModal('po', function(newEntry){
-        if(!newEntry) return;
-        // Store allocTarget on the PO appData entry
-        newEntry.allocTarget={type:tgtType, id:tgtId};
-        newEntry.subId=subNode.data&&subNode.data.id?subNode.data.id:'';
-        // Make sure the PO record carries the sub's name as the vendor
-        // when the user accepted our pre-fill (or typed nothing else).
-        if(!newEntry.vendor && subName) newEntry.vendor = subName;
-        if(typeof saveData==='function') saveData();
-        // Create PO node wired to this sub
-        var p2=E.pan(),z2=E.zm();
-        var pcx=subNode.x-300, pcy=subNode.y+80;
-        var lbl=entryLabel('po',newEntry);
-        var poNode=E.addNode('po',pcx,pcy,lbl,newEntry);
-        if(poNode){
-          poNode.allocTarget={type:tgtType, id:tgtId};
-          E.wires().push({fromNode:poNode.id,fromPort:0,toNode:subNode.id,toPort:0});
-          E.saveGraph();
-        }
-        render();
-      });
-      // Pre-fill the vendor input AFTER openAddPOModal has cleared it
-      // (synchronous .value = '' inside the opener). Microtask is
-      // enough — the modal element is already in the DOM by then.
-      if (subName) {
-        setTimeout(function() {
-          var vEl = document.getElementById('poVendor');
-          if (vEl && !vEl.value) vEl.value = subName;
-          // If the description is empty, suggest the target's name as
-          // a starting hint — most POs are "scope on phase X".
-          var dEl = document.getElementById('poDescription');
-          if (dEl && !dEl.value) {
-            var tgtNode = E.findNode(subAddPO.getAttribute('data-target-node'));
-            if (tgtNode) dEl.value = subName + ' — ' + (tgtNode.label || tgtNode.type);
-          }
-        }, 0);
-      }
-      return;
-    }
+    if(subAddPO){ e.stopPropagation(); subCreatePO(subAddPO); return; }
     // Add sub-item (inline — just adds a blank row)
     var addSub=e.target.closest('.ng-add-sub');
     if(addSub){ e.stopPropagation(); lineItemAdd(E.findNode(addSub.getAttribute('data-node'))); render(); return; }

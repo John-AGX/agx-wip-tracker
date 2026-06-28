@@ -138,6 +138,21 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
 .ng-insp-num{width:100%;background:var(--ng-input);border:1px solid var(--ng-border2);color:var(--ng-text);border-radius:4px;padding:4px 7px;font-family:'Courier New',monospace;font-size:12px;text-align:right;outline:none}
 .ng-insp-num:focus{border-color:#4f8cff}
 .ng-insp-qblink{font-size:10px;color:#34d399;margin-top:3px}
+/* Slice 3c — PO linked-phases + Sub scope breakdown in the Inspector */
+.ng-po-linked-head{display:flex;justify-content:space-between;align-items:center}
+.ng-po-alloc-badge{font-family:'Courier New',monospace;font-weight:600;color:#6a7090}
+.ng-po-alloc-badge.ng-warn{color:#fbbf24}
+.ng-po-row{display:flex;align-items:center;gap:6px;padding:3px 0;font-size:12px;color:var(--ng-text)}
+.ng-po-row-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ng-po-alloc{width:48px;background:var(--ng-input);border:1px solid var(--ng-border2);color:var(--ng-text);border-radius:3px;padding:2px 4px;font-family:'Courier New',monospace;font-size:11px;text-align:right;outline:none}
+.ng-po-alloc:focus{border-color:#4f8cff}
+.ng-po-pct{color:var(--ng-dim);font-size:10px}
+.ng-po-unlink{cursor:pointer;color:#e07a8f;padding:2px 5px;border-radius:3px;font-size:11px}
+.ng-po-unlink:hover{background:rgba(224,122,143,.12)}
+.ng-po-pocount{color:var(--ng-dim);font-size:10px;font-family:'Courier New',monospace;margin-right:6px}
+.ng-sub-add-po{cursor:pointer;color:#4f8cff;font-size:16px;font-weight:700;line-height:1;padding:0 4px}
+.ng-po-link-add{margin-top:6px;cursor:pointer;background:rgba(79,140,255,0.12);color:#7da8ff;border:1px dashed rgba(79,140,255,0.4);border-radius:4px;padding:4px 10px;font-size:11px;font-weight:500;font-family:inherit;width:100%}
+.ng-po-link-add:hover{background:rgba(79,140,255,0.2)}
 .ng-canvas-area.ng-panning{cursor:grabbing}
 .ng-canvas{position:absolute;top:0;left:0;width:20000px;height:20000px;transform-origin:0 0;z-index:5}
 .ng-grid-canvas,.ng-wire-canvas{position:absolute;top:0;left:0}
