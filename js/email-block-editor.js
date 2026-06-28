@@ -558,9 +558,14 @@
   // a server round-trip per keystroke. The output is email-safe
   // HTML wrapped in a max-width table — same shape the server
   // produces. NOT a substitute for the server render at send time.
-  function renderBlocksToHtml(blocks, params) {
+  function renderBlocksToHtml(blocks, params, ctx) {
     if (!Array.isArray(blocks)) return '';
     var p = params || {};
+    ctx = ctx || {};
+    var scope = ctx.scope || 'org';
+    var p86Logo = ctx.p86Logo || '';
+    var orgLogo = ctx.orgLogo || '';
+    var accent = ctx.accent || '#4f8cff';
     function interp(str) {
       if (typeof str !== 'string') return '';
       return str
@@ -571,10 +576,21 @@
       var v = path.split('.').reduce(function(o, k) { return (o && o[k] != null) ? o[k] : null; }, obj);
       return v == null ? '' : String(v);
     }
+    // Project 86 footer (logo + powered-by) — mirrors the server so the live
+    // preview matches the sent email; appended when a template has no footer.
+    function footerRow(addr) {
+      var logo = p86Logo ? '<img src="' + escapeAttr(p86Logo) + '" alt="Project 86" style="height:22px;display:inline-block;margin:0 auto 8px;" />' : '';
+      return '<tr><td style="padding:18px 24px;text-align:center;color:#6b7280;font-size:11px;border-top:1px solid #e5e7eb;">' +
+        logo + '<div>Powered by Project 86</div>' +
+        (addr ? '<div style="margin-top:2px;">' + interp(addr) + '</div>' : '') + '</td></tr>';
+    }
+    var hasFooter = false;
     var rows = blocks.map(function(b) {
       var t = (b.type || '').toLowerCase();
       if (t === 'header') {
-        var logo = b.logo_url ? '<img src="' + escapeAttr(b.logo_url) + '" alt="" style="max-height:42px;display:block;margin:0 auto 10px;" />' : '';
+        // System emails wear the P86 logo; org emails use the block/org logo.
+        var logoSrc = (scope === 'system') ? p86Logo : (b.logo_url || orgLogo || p86Logo);
+        var logo = logoSrc ? '<img src="' + escapeAttr(logoSrc) + '" alt="" style="max-height:42px;display:block;margin:0 auto 10px;" />' : '';
         var sub = b.subtitle ? '<div style="font-size:13px;color:#6b7280;text-align:center;margin-top:4px;">' + interp(b.subtitle) + '</div>' : '';
         return '<tr><td style="padding:16px 24px 8px;text-align:center;">' + logo +
           '<div style="font-size:22px;font-weight:700;color:#111827;line-height:1.2;">' + interp(b.title || '') + '</div>' + sub + '</td></tr>';
@@ -583,7 +599,9 @@
         return '<tr><td style="padding:12px 24px;font-size:14px;line-height:1.55;color:#1f2937;">' + interp(b.html || '') + '</td></tr>';
       }
       if (t === 'button') {
-        var bg = /^#[0-9a-f]{3,8}$/i.test(b.bg_color || '') ? b.bg_color : '#4f8cff';
+        // Default/unset color inherits the scope accent (mirrors the server).
+        var bc = String(b.bg_color || '').toLowerCase();
+        var bg = (!bc || bc === '#4f8cff') ? accent : (/^#[0-9a-f]{3,8}$/i.test(bc) ? b.bg_color : accent);
         return '<tr><td style="padding:18px 24px;text-align:center;"><a href="' + escapeAttr(interp(b.url || '#')) + '" style="display:inline-block;background:' + bg + ';color:#fff;text-decoration:none;padding:12px 24px;border-radius:6px;font-weight:600;font-size:15px;">' + interp(b.label || 'Click') + '</a></td></tr>';
       }
       if (t === 'spacer') {
@@ -596,11 +614,12 @@
         return '<tr><td style="padding:12px 24px;text-align:center;"><img src="' + escapeAttr(interp(b.url)) + '" alt="' + escapeAttr(b.alt || '') + '" style="max-width:' + max + 'px;width:100%;height:auto;border-radius:4px;display:inline-block;" /></td></tr>';
       }
       if (t === 'footer') {
-        var unsubF = b.unsubscribe_url ? '<div style="margin-top:6px;"><a href="' + escapeAttr(interp(b.unsubscribe_url)) + '" style="color:#6b7280;text-decoration:underline;font-size:11px;">Unsubscribe</a></div>' : '';
-        return '<tr><td style="padding:16px 24px;text-align:center;color:#6b7280;font-size:11px;border-top:1px solid #e5e7eb;">' + (b.address ? interp(b.address) : '') + unsubF + '</td></tr>';
+        hasFooter = true;
+        return footerRow(b.address || '');
       }
       return '';
     }).join('');
+    if (!hasFooter) rows += footerRow('');
     return '<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px;margin:0 auto;background:#fff;border:1px solid #e5e7eb;border-radius:8px;">' + rows + '</table>';
   }
 

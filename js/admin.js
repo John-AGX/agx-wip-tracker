@@ -2752,6 +2752,94 @@
     });
   }
 
+  // ── Start-from-a-template gallery ────────────────────────────────
+  // Pre-built body LAYOUTS the admin can drop in instead of building
+  // blocks from scratch. Branding (the header logo by scope + the P86
+  // footer) is applied automatically at render time, so a starter only
+  // defines the content arrangement. Buttons omit bg_color so they
+  // inherit the scope accent (org accent for org emails, P86 blue for
+  // system).
+  var EMAIL_STARTERS = [
+    {
+      id: 'standard', label: 'Standard', desc: 'Header · message · button',
+      thumb: '<div style="height:6px;width:54%;background:#cbd5e1;border-radius:2px;margin:1px auto 5px;"></div>' +
+        '<div style="height:3px;width:90%;background:#e5e7eb;border-radius:2px;margin:0 auto 2px;"></div>' +
+        '<div style="height:3px;width:80%;background:#e5e7eb;border-radius:2px;margin:0 auto 5px;"></div>' +
+        '<div style="height:8px;width:34px;background:#4f8cff;border-radius:2px;margin:0 auto;"></div>' +
+        '<div style="border-top:1px solid #eef0f3;margin-top:6px;padding-top:3px;"><div style="height:3px;width:38px;background:#cbd5e1;border-radius:2px;margin:0 auto;"></div></div>',
+      blocks: [
+        { type: 'header', title: 'Your headline', subtitle: 'Optional subtitle' },
+        { type: 'text', html: '<p>Hi there,</p><p>Write your message here. Use the variable chips above to drop in details like {{name}}.</p>' },
+        { type: 'button', label: 'Open Project 86', url: '{{appUrl}}' },
+        { type: 'footer', address: '' }
+      ]
+    },
+    {
+      id: 'minimal', label: 'Minimal', desc: 'Message · button',
+      thumb: '<div style="height:3px;width:92%;background:#e5e7eb;border-radius:2px;margin:8px auto 2px;"></div>' +
+        '<div style="height:3px;width:78%;background:#e5e7eb;border-radius:2px;margin:0 auto 6px;"></div>' +
+        '<div style="height:8px;width:34px;background:#4f8cff;border-radius:2px;margin:0 auto;"></div>' +
+        '<div style="border-top:1px solid #eef0f3;margin-top:8px;padding-top:3px;"><div style="height:3px;width:38px;background:#cbd5e1;border-radius:2px;margin:0 auto;"></div></div>',
+      blocks: [
+        { type: 'text', html: '<p>Hi there,</p><p>Your short message goes here.</p>' },
+        { type: 'button', label: 'Open Project 86', url: '{{appUrl}}' }
+      ]
+    },
+    {
+      id: 'announcement', label: 'Announcement', desc: 'Hero · image · button',
+      thumb: '<div style="height:14px;background:#1e293b;border-radius:2px;display:flex;align-items:center;justify-content:center;margin-bottom:3px;"><div style="height:4px;width:40px;background:rgba(255,255,255,0.8);border-radius:2px;"></div></div>' +
+        '<div style="height:18px;background:#dbe3ee;border-radius:2px;margin-bottom:3px;"></div>' +
+        '<div style="height:3px;width:84%;background:#e5e7eb;border-radius:2px;margin:0 auto 4px;"></div>' +
+        '<div style="height:8px;width:34px;background:#4f8cff;border-radius:2px;margin:0 auto;"></div>',
+      blocks: [
+        { type: 'header', title: 'Big announcement', subtitle: '' },
+        { type: 'image', url: '', alt: '', max_width_px: 560 },
+        { type: 'text', html: '<p>Share the news here.</p>' },
+        { type: 'button', label: 'Learn more', url: '{{appUrl}}' },
+        { type: 'footer', address: '' }
+      ]
+    },
+    {
+      id: 'notification', label: 'Notification', desc: 'Header · details · button',
+      thumb: '<div style="height:6px;width:54%;background:#cbd5e1;border-radius:2px;margin:1px auto 4px;"></div>' +
+        '<div style="height:3px;width:88%;background:#e5e7eb;border-radius:2px;margin:0 auto 4px;"></div>' +
+        '<div style="background:#f1f4f8;border-radius:2px;padding:3px;margin-bottom:4px;"><div style="height:3px;width:70%;background:#cbd5e1;border-radius:2px;margin-bottom:2px;"></div><div style="height:3px;width:84%;background:#e5e7eb;border-radius:2px;"></div></div>' +
+        '<div style="height:8px;width:34px;background:#4f8cff;border-radius:2px;margin:0 auto;"></div>',
+      blocks: [
+        { type: 'header', title: 'You have an update', subtitle: '' },
+        { type: 'text', html: '<p>Hi {{name}},</p><p>Here\'s what happened:</p>' },
+        { type: 'text', html: '<p><strong>Details</strong><br>Add the specifics here.</p>' },
+        { type: 'button', label: 'View details', url: '{{appUrl}}' },
+        { type: 'footer', address: '' }
+      ]
+    }
+  ];
+
+  function starterThumbHTML(s) {
+    return '<button type="button" data-email-starter="' + s.id + '" ' +
+      'style="padding:0;border:1px solid var(--border,#333);border-radius:8px;background:var(--card-bg,#0f0f1e);cursor:pointer;width:112px;overflow:hidden;text-align:left;font-family:inherit;" ' +
+      'title="Load the ' + escapeHTML(s.label) + ' layout">' +
+      '<div style="background:#fff;height:78px;padding:7px 8px;box-sizing:border-box;">' + s.thumb + '</div>' +
+      '<div style="padding:5px 8px;">' +
+        '<div style="font-size:11px;font-weight:600;color:var(--text,#ddd);">' + escapeHTML(s.label) + '</div>' +
+        '<div style="font-size:9px;color:var(--text-dim,#888);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escapeHTML(s.desc) + '</div>' +
+      '</div>' +
+    '</button>';
+  }
+
+  function applyEmailStarter(id) {
+    var s = null;
+    for (var i = 0; i < EMAIL_STARTERS.length; i++) { if (EMAIL_STARTERS[i].id === id) { s = EMAIL_STARTERS[i]; break; } }
+    if (!s) return;
+    if (!window.confirm('Replace the email body with the "' + s.label + '" layout? Unsaved edits to the body will be lost.')) return;
+    if (_emailBlockEditor && typeof _emailBlockEditor.setBody === 'function') {
+      _emailBlockEditor.setBody(JSON.stringify({ blocks: s.blocks }));
+    }
+    scheduleLivePreview();
+    var status = document.getElementById('email-tpl-status');
+    if (status) status.innerHTML = '<span style="color:#34d399;">&#x2713; Loaded the ' + escapeHTML(s.label) + ' layout — edit the copy, then Save.</span>';
+  }
+
   function renderTemplateEditor() {
     var ed = document.getElementById('email-template-editor');
     if (!ed || !_templateDetail) return;
@@ -2798,6 +2886,16 @@
             '<strong>Trigger:</strong> ' + (ev.wired ? '<span style="color:#34d399;">Active</span>' : '<span style="color:#fbbf24;">Pending</span>') + ' &middot; ' +
             lastSavedLabel +
           '</div>' +
+        '</div>' +
+      '</div>' +
+      // Start-from-a-template gallery — multiple layouts to pick from.
+      '<div style="margin-bottom:12px;padding:10px 12px;background:rgba(255,255,255,0.03);border:1px solid var(--border,#2a2a3a);border-radius:8px;">' +
+        '<div style="font-size:11px;margin-bottom:8px;">' +
+          '<strong style="color:var(--text,#ddd);">Start from a template</strong>' +
+          '<span style="color:var(--text-dim,#888);"> &mdash; your logo and footer are added automatically on send</span>' +
+        '</div>' +
+        '<div id="email-tpl-starters" style="display:flex;gap:8px;flex-wrap:wrap;">' +
+          EMAIL_STARTERS.map(starterThumbHTML).join('') +
         '</div>' +
       '</div>' +
       // Variables hint chips.
@@ -2869,6 +2967,10 @@
     document.getElementById('email-tpl-test').addEventListener('click', sendTemplateTest);
     var resetBtn = document.getElementById('email-tpl-reset');
     if (resetBtn) resetBtn.addEventListener('click', resetTemplate);
+    // Start-from-a-template gallery: load the chosen layout into the editor.
+    ed.querySelectorAll('[data-email-starter]').forEach(function(btn) {
+      btn.addEventListener('click', function() { applyEmailStarter(btn.getAttribute('data-email-starter')); });
+    });
     var subjectInput = document.getElementById('email-tpl-subject');
     if (subjectInput) subjectInput.addEventListener('input', scheduleLivePreview);
 
@@ -3020,7 +3122,7 @@
       try {
         var parsed = JSON.parse(trimmed);
         if (Array.isArray(parsed.blocks)) {
-          setIframeContent('email-tpl-preview-frame', window.p86EmailBlocks.renderBlocksToHtml(parsed.blocks, params));
+          setIframeContent('email-tpl-preview-frame', window.p86EmailBlocks.renderBlocksToHtml(parsed.blocks, params, { scope: (_templateDetail.event || {}).scope, p86Logo: '/images/logo-p86-email.png' }));
           return;
         }
       } catch (e) { /* fall through */ }
