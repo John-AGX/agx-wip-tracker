@@ -2064,9 +2064,12 @@ function renderInspector(){
     body.innerHTML='<div class="ng-insp-sec">'+buildingKpiGridHtml(sel)+'</div><div class="ng-sp-struct"></div>';
     renderBuildingStructure(body, sel);
   } else if(sel && sel.type!=='wip'){
-    var d=E.DEFS[sel.type]||{};
+    var d=E.DEFS[sel.type]||{}, iType=d.itemType||'';
     if(hdr) hdr.innerHTML='<span class="ng-insp-ic">'+(d.icon||'◆')+'</span> '+luEsc(sel.label||d.label||'Node')+'<span class="ng-insp-type">'+luEsc(d.label||sel.type)+'</span>';
-    body.innerHTML=(sel.type==='t2'||sel.type==='co') ? inspectorAllocHtml(sel) : inspectorGenericHtml(sel, d);
+    var LI_TYPES={labor:1,mat:1,gc:1,other:1,burden:1,inv:1}; // Slice 3b: line-item nodes (sub/po deferred to 3c)
+    body.innerHTML=(sel.type==='t2'||sel.type==='co') ? inspectorAllocHtml(sel)
+                  : LI_TYPES[iType] ? inspectorLineItemHtml(sel)
+                  : inspectorGenericHtml(sel, d);
   } else {
     if(hdr) hdr.innerHTML='<span class="ng-insp-ic">$</span> Project WIP';
     var wh=wipPanelHtml();
@@ -2124,6 +2127,101 @@ function inspectorAllocHtml(sel){
   } else {
     h+='<div class="ng-insp-empty">No allocations yet. Wire this '+(isCO?'change order':'scope')+' to a building on the map to allocate revenue + costs.</div>';
   }
+  return h;
+}
+// Line-item table HTML for any n.items-bearing node (cost/sub/po/inv), keyed off
+// E.DEFS[type].itemType. Same ng-si-f / data-node / data-idx / data-field markup the
+// card uses, so the input/add/delete handlers resolve the same node + item.
+function lineItemsHtml(n){
+  var d=E.DEFS[n.type]||{}, iType=d.itemType||'';
+  if(!iType) return '';
+  var items=n.items||[];
+  var h='<div class="ng-subitems">';
+  if(iType==='labor') h+='<div class="ng-si-hdr"><span class="hd hd-date">Week Of</span><span class="hd hd-sm">Hrs</span><span class="hd hd-sm">Rate</span><span class="hd hd-sm">Total</span><span class="hd hd-del"></span></div>';
+  else if(iType==='mat') h+='<div class="ng-si-hdr"><span class="hd hd-date">Date</span><span class="hd hd-flex">Amount</span><span class="hd hd-del"></span></div>';
+  else if(iType==='burden') h+='<div class="ng-si-hdr"><span class="hd hd-date">Period</span><span class="hd hd-flex">Amount</span><span class="hd hd-del"></span></div>';
+  else if(iType==='gc') h+='<div class="ng-si-hdr"><span class="hd hd-date">Week Of</span><span class="hd hd-flex">Vendor</span><span class="hd hd-sm">Amount</span><span class="hd hd-del"></span></div>';
+  else if(iType==='other') h+='<div class="ng-si-hdr"><span class="hd hd-date">Date</span><span class="hd hd-sm">Qty</span><span class="hd hd-sm">$/Unit</span><span class="hd hd-sm">Total</span><span class="hd hd-del"></span></div>';
+  else if(iType==='sub') h+='<div class="ng-si-hdr"><span class="hd hd-date">Date</span><span class="hd hd-flex">Description</span><span class="hd hd-sm">Amount</span><span class="hd hd-del"></span></div>';
+  else if(iType==='po') h+='<div class="ng-si-hdr"><span class="hd hd-date">Date</span><span class="hd hd-flex">Amendment</span><span class="hd hd-sm">Amount</span><span class="hd hd-del"></span></div>';
+  else if(iType==='inv') h+='<div class="ng-si-hdr"><span class="hd hd-date">Date</span><span class="hd hd-flex">Invoice #</span><span class="hd hd-sm">Amount</span><span class="hd hd-del"></span></div>';
+  items.forEach(function(item,idx){
+    var pre='data-node="'+n.id+'" data-idx="'+idx+'"';
+    h+='<div class="ng-subitem">';
+    if(iType==='labor'){
+      h+='<input class="ng-si-f ng-si-date" type="date" '+pre+' data-field="date" value="'+(item.date||'')+'" />';
+      h+='<input class="ng-si-f ng-si-sm" type="number" '+pre+' data-field="hours" value="'+(item.hours||0)+'" step="0.5" />';
+      h+='<input class="ng-si-f ng-si-sm" type="number" '+pre+' data-field="rate" value="'+(item.rate||65)+'" step="0.01" />';
+      h+='<span class="ng-si-val">'+E.fmtC((item.hours||0)*(item.rate||65))+'</span>';
+    } else if(iType==='mat'){
+      h+='<input class="ng-si-f ng-si-date" type="date" '+pre+' data-field="date" value="'+(item.date||'')+'" />';
+      h+='<input class="ng-si-f ng-si-sm" type="number" '+pre+' data-field="amount" value="'+(item.amount||0)+'" step="0.01" style="flex:1" />';
+    } else if(iType==='burden'){
+      h+='<input class="ng-si-f ng-si-date" type="date" '+pre+' data-field="date" value="'+(item.date||'')+'" />';
+      h+='<input class="ng-si-f ng-si-sm" type="number" '+pre+' data-field="amount" value="'+(item.amount||0)+'" step="0.01" style="flex:1" />';
+    } else if(iType==='gc'){
+      h+='<input class="ng-si-f ng-si-date" type="date" '+pre+' data-field="date" value="'+(item.date||'')+'" />';
+      h+='<input class="ng-si-f" '+pre+' data-field="vendor" value="'+(item.vendor||'')+'" placeholder="Vendor" style="flex:1" />';
+      h+='<input class="ng-si-f ng-si-sm" type="number" '+pre+' data-field="amount" value="'+(item.amount||0)+'" step="0.01" />';
+    } else if(iType==='other'){
+      h+='<input class="ng-si-f ng-si-date" type="date" '+pre+' data-field="date" value="'+(item.date||'')+'" />';
+      h+='<input class="ng-si-f ng-si-sm" type="number" '+pre+' data-field="qty" value="'+(item.qty||0)+'" step="0.01" />';
+      h+='<input class="ng-si-f ng-si-sm" type="number" '+pre+' data-field="unitCost" value="'+(item.unitCost||0)+'" step="0.01" />';
+      h+='<span class="ng-si-val">'+E.fmtC((item.qty||0)*(item.unitCost||0))+'</span>';
+    } else if(iType==='sub'){
+      h+='<input class="ng-si-f ng-si-date" type="date" '+pre+' data-field="date" value="'+(item.date||'')+'" />';
+      h+='<input class="ng-si-f" '+pre+' data-field="desc" value="'+(item.desc||'')+'" placeholder="Description" style="flex:1" />';
+      h+='<input class="ng-si-f ng-si-sm" type="number" '+pre+' data-field="amount" value="'+(item.amount||0)+'" step="0.01" />';
+    } else if(iType==='po'){
+      h+='<input class="ng-si-f ng-si-date" type="date" '+pre+' data-field="date" value="'+(item.date||'')+'" />';
+      h+='<input class="ng-si-f" '+pre+' data-field="desc" value="'+(item.desc||'')+'" placeholder="Amendment desc" style="flex:1" />';
+      h+='<input class="ng-si-f ng-si-sm" type="number" '+pre+' data-field="amount" value="'+(item.amount||0)+'" step="0.01" />';
+    } else if(iType==='inv'){
+      h+='<input class="ng-si-f ng-si-date" type="date" '+pre+' data-field="date" value="'+(item.date||'')+'" />';
+      h+='<input class="ng-si-f" '+pre+' data-field="invNum" value="'+(item.invNum||'')+'" placeholder="Inv #" style="flex:1" />';
+      h+='<input class="ng-si-f ng-si-sm" type="number" '+pre+' data-field="amount" value="'+(item.amount||0)+'" step="0.01" />';
+    }
+    h+='<span class="ng-subitem-del" data-node="'+n.id+'" data-idx="'+idx+'">✖</span>';
+    h+='</div>';
+  });
+  h+='<div class="ng-add-sub" data-node="'+n.id+'">+ Add Entry</div>';
+  h+='<div class="ng-sub-total">'+E.fmtC(E.getOutput(n,0))+'</div>';
+  h+='</div>';
+  return h;
+}
+// Append a new blank line item with type-specific default fields. Extracted from the
+// canvas add handler so the on-card AND inspector "+ Add Entry" share one builder.
+function lineItemAdd(n){
+  if(!n) return;
+  var d2=E.DEFS[n.type], iT=d2?d2.itemType:'';
+  var newItem={date:''};
+  if(iT==='labor'){newItem.hours=0;newItem.rate=65;}
+  else if(iT==='mat'){newItem.amount=0;}
+  else if(iT==='gc'){newItem.vendor='';newItem.amount=0;}
+  else if(iT==='other'){newItem.qty=0;newItem.unitCost=0;}
+  else if(iT==='burden'){newItem.amount=0;}
+  else if(iT==='sub'){newItem.desc='';newItem.amount=0;}
+  else if(iT==='po'){newItem.desc='';newItem.amount=0;}
+  else if(iT==='inv'){newItem.invNum='';newItem.amount=0;}
+  else{newItem.amount=0;}
+  if(!n.items) n.items=[];
+  n.items.push(newItem);
+}
+// Cost/invoice Inspector detail (Slice 3b): total KPI + manual-total fallback (cost
+// types only) + the full editable line-item table.
+function inspectorLineItemHtml(sel){
+  var d=E.DEFS[sel.type]||{}, iType=d.itemType||'';
+  var total=E.getOutput(sel,0);
+  var h='<div class="ng-insp-sec"><div class="ng-wip-ov"><div class="ng-wip-ov-kpi ng-ov-hero"><span class="ng-ov-lbl">'+(iType==='inv'?'Invoiced':'Actual Cost')+'</span><span class="ng-ov-val '+(total>0?(iType==='inv'?'ng-ov-pos':'ng-ov-neg'):'ng-ov-zero')+'">'+E.fmtC(total)+'</span></div></div></div>';
+  if(iType!=='inv' && iType!=='po'){
+    var linkedTotal=0, linkedCount=0;
+    try { var qbLines=(window.appData && window.appData.qbCostLines)||[]; qbLines.forEach(function(l){ if((l.linked_node_id||l.linkedNodeId)===sel.id){ linkedTotal+=Number(l.amount||0); linkedCount++; } }); } catch(e){}
+    h+='<div class="ng-insp-sec"><label class="ng-insp-sublabel">Manual Total</label>'
+      +'<input class="ng-insp-num" type="number" value="'+(sel.value||0)+'" data-node="'+sel.id+'" step="0.01" placeholder="0.00" />';
+    if(linkedCount>0) h+='<div class="ng-insp-qblink">↳ Linked QB lines: '+E.fmtC(linkedTotal)+' ('+linkedCount+')</div>';
+    h+='</div>';
+  }
+  h+='<div class="ng-insp-sec"><div class="ng-insp-sublabel">Line Items</div>'+lineItemsHtml(sel)+'</div>';
   return h;
 }
 // Building KPI grid HTML — shared by the legacy left panel + the right Inspector.
@@ -2444,7 +2542,39 @@ function initEvents(){
     if(ishareEl && !e.target.closest('input')){ e.preventDefault(); e.stopPropagation(); allocShareEdit(ishareEl); return; }
     var ilockEl=e.target.closest('.ng-alloc-lock');
     if(ilockEl){ e.preventDefault(); e.stopPropagation(); allocLockToggle(ilockEl); return; }
+    // Slice 3b — line-item add / delete (cost/invoice). render() rebuilds the table.
+    var iadd=e.target.closest('.ng-add-sub');
+    if(iadd){ e.preventDefault(); e.stopPropagation(); lineItemAdd(E.findNode(iadd.getAttribute('data-node'))); render(); return; }
+    var idel=e.target.closest('.ng-subitem-del');
+    if(idel){ e.preventDefault(); e.stopPropagation(); var dn=E.findNode(idel.getAttribute('data-node')); var di=parseInt(idel.getAttribute('data-idx')); if(dn&&dn.items&&!isNaN(di)){ dn.items.splice(di,1); if(E.saveGraph) E.saveGraph(); render(); } return; }
   });
+  // Slice 3b — line-item field inputs (ng-si-f) + the manual-total input persist LIVE
+  // without a full render (so the caret survives), with a focus-preserving total refresh.
+  if(insp) insp.addEventListener('input', function(e){
+    var t=e.target; if(t.tagName!=='INPUT' || t.dataset.node==null) return;
+    var n=E.findNode(t.dataset.node); if(!n) return;
+    if(t.dataset.idx!=null && t.dataset.field){
+      var idx=parseInt(t.dataset.idx), f=t.dataset.field;
+      if(n.items && n.items[idx]){
+        if(f==='amount'||f==='hours'||f==='rate'||f==='qty'||f==='unitCost') n.items[idx][f]=parseFloat(t.value)||0;
+        else n.items[idx][f]=t.value;
+      }
+    } else { n.value=parseFloat(t.value)||0; }   // manual-total fallback input
+    E.resetComp(); if(E.saveGraph) E.saveGraph();
+    var body=insp.querySelector('.ng-inspector-body'); if(!body) return;
+    var totalEl=body.querySelector('.ng-sub-total'); if(totalEl) totalEl.textContent=E.fmtC(E.getOutput(n,0));
+    if(n.items){
+      var d2=E.DEFS[n.type], iT=d2?d2.itemType:'', rowTotals=body.querySelectorAll('.ng-si-val');
+      n.items.forEach(function(item,ri){ if(rowTotals[ri]){ var rv=0; if(iT==='labor') rv=(item.hours||0)*(item.rate||65); else if(iT==='other') rv=(item.qty||0)*(item.unitCost||0); rowTotals[ri].textContent=E.fmtC(rv); } });
+    }
+  });
+  // Focus on a line-item / manual-total input stamps editingId so an external interim
+  // render won't clobber the field mid-type; cleared on blur WITHOUT a render so tabbing
+  // between cells keeps the live inputs (the input handler already persisted each keystroke).
+  if(insp){
+    insp.addEventListener('focusin', function(e){ var t=e.target; if(t.tagName==='INPUT' && t.dataset.node!=null && !t.classList.contains('ng-wip-chip-input')) editingId=t.dataset.node; });
+    insp.addEventListener('focusout', function(e){ var t=e.target; if(t.tagName==='INPUT' && t.dataset.node!=null && !t.classList.contains('ng-wip-chip-input')) editingId=null; });
+  }
 
   wrap.addEventListener('mousedown',function(e){
     if(_geoPick) return; // map-picker active: the overlay handles the placement click
@@ -3070,26 +3200,7 @@ function initEvents(){
     }
     // Add sub-item (inline — just adds a blank row)
     var addSub=e.target.closest('.ng-add-sub');
-    if(addSub){
-      e.stopPropagation();
-      var n=E.findNode(addSub.getAttribute('data-node'));
-      if(n){
-        var d2=E.DEFS[n.type], iT=d2?d2.itemType:'';
-        var newItem={date:''};
-        if(iT==='labor'){newItem.hours=0;newItem.rate=65;}
-        else if(iT==='mat'){newItem.amount=0;}
-        else if(iT==='gc'){newItem.vendor='';newItem.amount=0;}
-        else if(iT==='other'){newItem.qty=0;newItem.unitCost=0;}
-        else if(iT==='burden'){newItem.amount=0;}
-        else if(iT==='sub'){newItem.desc='';newItem.amount=0;}
-        else if(iT==='po'){newItem.desc='';newItem.amount=0;}
-        else if(iT==='inv'){newItem.invNum='';newItem.amount=0;}
-        else{newItem.amount=0;}
-        n.items.push(newItem);
-        render();
-      }
-      return;
-    }
+    if(addSub){ e.stopPropagation(); lineItemAdd(E.findNode(addSub.getAttribute('data-node'))); render(); return; }
     // Delete sub-item
     var delSub=e.target.closest('.ng-subitem-del');
     if(delSub){

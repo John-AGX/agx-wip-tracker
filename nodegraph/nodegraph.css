@@ -115,7 +115,7 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
 /* Right-hand Inspector panel (Slice 1+2): WIP + building + node detail. Shown only in
    site-plan mode; the canvas-area flexes to fit it (min-width:0 lets it actually shrink).
    The legacy left WIP/building panels are hidden in site-plan since the inspector hosts them. */
-.ng-inspector{width:300px;flex-shrink:0;background:var(--ng-input);border-left:1px solid var(--ng-border2);display:none;flex-direction:column;overflow:hidden}
+.ng-inspector{width:340px;flex-shrink:0;background:var(--ng-input);border-left:1px solid var(--ng-border2);display:none;flex-direction:column;overflow:hidden}
 #nodeGraphTab.ng-siteplan .ng-inspector{display:flex}
 #nodeGraphTab.ng-siteplan .ng-sp-metrics,#nodeGraphTab.ng-siteplan .ng-sp-bldg{display:none !important}
 .ng-inspector-hdr{display:flex;align-items:center;gap:7px;padding:11px 13px;border-bottom:1px solid var(--ng-border2);font-size:13px;font-weight:600;color:var(--ng-text)}
@@ -134,6 +134,10 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
 .ng-alloc-tbl .ng-wire-pct{color:#4f8cff;cursor:pointer}
 .ng-alloc-tbl .ng-alloc-share{color:#34d399;cursor:pointer}
 .ng-alloc-tbl .ng-alloc-lock{cursor:pointer}
+/* Slice 3b — line-item editing in the Inspector */
+.ng-insp-num{width:100%;background:var(--ng-input);border:1px solid var(--ng-border2);color:var(--ng-text);border-radius:4px;padding:4px 7px;font-family:'Courier New',monospace;font-size:12px;text-align:right;outline:none}
+.ng-insp-num:focus{border-color:#4f8cff}
+.ng-insp-qblink{font-size:10px;color:#34d399;margin-top:3px}
 .ng-canvas-area.ng-panning{cursor:grabbing}
 .ng-canvas{position:absolute;top:0;left:0;width:20000px;height:20000px;transform-origin:0 0;z-index:5}
 .ng-grid-canvas,.ng-wire-canvas{position:absolute;top:0;left:0}
