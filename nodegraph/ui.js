@@ -1201,8 +1201,8 @@ function fanFocusNodes(bId){
   var _sat=!!_spSatellite && E.viewMode && E.viewMode()==='siteplan';
   // Slice 4: on satellite the kids are now native-small slim chips (~100x36px), so the
   // ring sits a fixed graph-unit distance off the building (not the old scaled-card math).
-  var R = _sat ? Math.max(120, 42*kids.length) : Math.max(220, 56*kids.length) * 1;
-  var _ox=_sat?52:85, _oy=_sat?18:30;                  // half the chip, to centre it on the ring point
+  var R = _sat ? Math.max(55, 18*kids.length) : Math.max(220, 56*kids.length);
+  var _ox=_sat?23:85, _oy=_sat?5:30;                   // half the scale(0.28) chip, to centre it on the ring point
   var arc=Math.min(330, Math.max(110, kids.length*46));
   var start=270-arc/2;                                  // 270° = above the building (y grows down)
   kids.forEach(function(k,i){
