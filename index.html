@@ -2672,7 +2672,7 @@
 
             <!-- Map panel -->
             <fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;">
-              <legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">&#x1F4CD; Map</legend>
+              <legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;"><span data-p86-icon="map-pin"></span> Map</legend>
               <div id="leadEditor_mapHost" style="width:100%;aspect-ratio:4/3;background:rgba(255,255,255,0.02);border:1px solid var(--border,#333);border-radius:6px;overflow:hidden;display:flex;align-items:center;justify-content:center;color:var(--text-dim,#888);font-size:12px;font-style:italic;text-align:center;padding:14px;">
                 Fill in the Project Address to see a map.
               </div>
@@ -3128,7 +3128,7 @@
     <script src="js/qb-costs-view.js?v=11"></script>
     <script src="js/insights.js?v=7"></script>
     <script src="js/schedule.js?v=48"></script>
-    <script src="js/my-day.js?v=2"></script>
+    <script src="js/my-day.js?v=3"></script>
     <!-- Shared entity card (job/lead/estimate Pulse card) — window.p86EntityCard.
          Loads before its callers (entities-map.js, workspace-layout.js). -->
     <script src="js/entity-card.js?v=4"></script>
@@ -3177,7 +3177,7 @@
          calls into window.p86ReportTemplates. -->
     <script src="js/report-templates.js?v=1"></script>
     <script src="js/report-style-packs.js?v=2"></script>
-    <script src="js/projects.js?v=66"></script>
+    <script src="js/projects.js?v=67"></script>
     <script src="js/receipt-scanner.js?v=2"></script>
     <script src="js/cost-inbox.js?v=8"></script>
     <script src="js/console.js?v=5"></script>
@@ -3209,7 +3209,7 @@
          BEFORE ai-panel.js so window.PayloadArtifact exists when the
          panel mounts. -->
     <script src="js/payload-artifact.js?v=6"></script>
-    <script src="js/ai-panel.js?v=136"></script>
+    <script src="js/ai-panel.js?v=137"></script>
     <!-- Save-from-chat bridge (Workstream ③). Owns p86SaveCodeBlock /
          p86SaveResponse / p86SaveToPicker, called by inline onclick
          handlers in ai-panel.js renderMarkdown / renderBubble. Loads
@@ -3354,7 +3354,7 @@
               <span class="ng-ribbon-label">3D</span>
             </button>
             <button class="ng-tbtn ng-ribbon-btn ng-geoplace-btn" id="ngGeoPlaceBtn" title="Place on map — select a building, click Place, then tap its real spot on the satellite imagery">
-              <span class="ng-ribbon-icon">&#x1F4CD;</span>
+              <span class="ng-ribbon-icon" data-p86-icon="map-pin"></span>
               <span class="ng-ribbon-label">Place</span>
             </button>
             <button class="ng-tbtn ng-ribbon-btn ng-trace-btn" id="ngTraceBtn" title="Trace Building — click Trace, then tap each corner of a building's roof on the imagery and double-click to close. That footprint becomes a new building node (auto-linked to WIP). Select an existing building first to re-trace it.">

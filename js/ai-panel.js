@@ -1143,7 +1143,7 @@
             // Opt-in location indicator — shown when we're sharing the
             // user's current position with the Assistant (auto when the
             // browser already grants it). Non-interactive; transparency only.
-            '<span id="ai-loc-indicator" title="Sharing your location with the Assistant" aria-label="Sharing your location" style="display:none;align-items:center;font-size:14px;color:#34d399;padding:0 4px;" tabindex="-1">&#x1F4CD;</span>' +
+            '<span id="ai-loc-indicator" title="Sharing your location with the Assistant" aria-label="Sharing your location" style="display:none;align-items:center;font-size:14px;color:#34d399;padding:0 4px;" tabindex="-1">' + (window.p86Icon ? window.p86Icon('map-pin') : '&#x1F4CD;') + '</span>' +
             '<input id="ai-file-input" type="file" accept="image/*,application/pdf,.xlsx,.xls,.xlsm,.csv,.tsv,.docx,.doc,.txt,.md,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/msword,text/plain" multiple style="display:none;" />' +
             '<input id="ai-camera-input" type="file" accept="image/*" capture="environment" style="display:none;" />' +
             '<div style="flex:1;"></div>' +

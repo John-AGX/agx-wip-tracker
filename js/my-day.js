@@ -229,7 +229,7 @@
             '<div class="myday-title">' + esc(e.title || '(untitled event)') +
               (translucent ? '<span class="myday-chip" style="background:rgba(148,163,184,0.2);color:#94a3b8;">tentative</span>' : '') +
               linkChip(e) + '</div>' +
-            (e.location ? '<div class="myday-meta">&#128205; ' + esc(e.location) + '</div>' : '') +
+            (e.location ? '<div class="myday-meta">' + (window.p86Icon ? window.p86Icon('map-pin') + ' ' : '') + esc(e.location) + '</div>' : '') +
           '</div></div>';
       });
       html += '</div>';
@@ -245,7 +245,7 @@
           '<div class="myday-body"><div class="myday-title">' + esc(e.title || '(untitled event)') +
             '<span class="myday-chip" style="background:rgba(99,102,241,0.18);color:#a5b4fc;">all day</span>' +
             linkChip(e) + '</div>' +
-            (e.location ? '<div class="myday-meta">&#128205; ' + esc(e.location) + '</div>' : '') +
+            (e.location ? '<div class="myday-meta">' + (window.p86Icon ? window.p86Icon('map-pin') + ' ' : '') + esc(e.location) + '</div>' : '') +
           '</div></div>';
       });
       sched.forEach(function (s) {

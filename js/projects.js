@@ -3443,7 +3443,7 @@
             '<option value="dot"' + (pinStyle === 'dot' ? ' selected' : '') + '>Plain dot</option>' +
           '</select>';
         mapBtns =
-          '<button class="ee-btn secondary p86-report-section-autopin" title="Add every project photo that has GPS data">&#x1F4CD; Auto-pin all</button>' +
+          '<button class="ee-btn secondary p86-report-section-autopin" title="Add every project photo that has GPS data">' + (window.p86Icon ? window.p86Icon('map-pin') + ' ' : '') + 'Auto-pin all</button>' +
           (pickCount
             ? '<button class="ee-btn secondary p86-report-section-unpin" title="Remove all photos from this map section">Unpin all</button>'
             : '') +
@@ -5447,7 +5447,7 @@
     else if (a.kind === 'status_changed'){ icon = (d.after === 'archived' ? '&#x1F5C4;' : '&#x21BA;'); verb = (d.after === 'archived' ? 'archived' : 'unarchived') + ' the project'; }
     else if (a.kind === 'renamed')       { icon = '&#x270F;'; verb = 'renamed the project'; }
     else if (a.kind === 'description_edited'){ icon = '&#x270F;'; verb = 'edited the description'; }
-    else if (a.kind === 'address_edited'){ icon = '&#x1F4CD;'; verb = 'edited the address'; }
+    else if (a.kind === 'address_edited'){ icon = (window.p86Icon ? window.p86Icon('map-pin') : '&#x1F4CD;'); verb = 'edited the address'; }
     else if (a.kind === 'pair_created')  { icon = '&#x1F500;'; verb = 'created a before/after pair'; detail = d.label || ''; }
     else if (a.kind === 'pair_deleted')  { icon = '&#x1F5D1;'; verb = 'deleted a before/after pair'; }
 
