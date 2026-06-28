@@ -901,8 +901,18 @@
     // re-opening the Schedule always lands on today's week (not the
     // oldest rendered week, and not wherever the user last scrolled).
     _focusedWeekStart = null;
+    _openToToday = true;
     renderSidebar();
     renderCalendar();
+    // Release the open-to-today lock on the first real user scroll, with
+    // a safety timeout so it never sticks past the initial data load.
+    var _schScroll = document.getElementById('schCalScroll');
+    if (_schScroll) {
+      var _releaseToday = function() { _openToToday = false; };
+      _schScroll.addEventListener('wheel', _releaseToday, { passive: true, once: true });
+      _schScroll.addEventListener('touchmove', _releaseToday, { passive: true, once: true });
+    }
+    setTimeout(function() { _openToToday = false; }, 2500);
 
     // Kick off user load in the background so the editor modal can
     // populate the crew picker as soon as the user clicks a day.
@@ -1353,6 +1363,11 @@
   var MONTHS_AHEAD = 6;
   var _io = null;            // IntersectionObserver instance
   var _focusedWeekStart = null; // ISO date of the currently-focused week
+  // While true (armed on mount, released on first user scroll / after the
+  // open settles), every grid render re-centers on today's week. This
+  // survives the async data-fetch re-renders that would otherwise let the
+  // focus observer snap the scroll back to the oldest week on open.
+  var _openToToday = false;
   // Flow mode: every week row is content-driven (height grows with the
   // number of items scheduled) and shows its full day cards, instead of the
   // scroll-position fisheye that enlarged only the centered week. The
@@ -1445,7 +1460,7 @@
     // time data updates. _focusedWeekStart is null only on the very
     // first render or after a full re-mount.
     var todayWeekIso = toISODate(startOfWeek(today));
-    var centerIso = _focusedWeekStart || todayWeekIso;
+    var centerIso = _openToToday ? todayWeekIso : (_focusedWeekStart || todayWeekIso);
     var centerRow = stack.querySelector('[data-week-start="' + centerIso + '"]');
     // Fallback if the preserved week scrolled out of the rendered
     // range (e.g. the user was viewing 5 months out and the new
