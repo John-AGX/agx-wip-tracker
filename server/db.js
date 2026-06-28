@@ -1750,6 +1750,39 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_material_purchases_org
       ON material_purchases(organization_id) WHERE organization_id IS NOT NULL;
 
+    -- Cost Inbox — field-captured cost receipts (photo + amount + cost code),
+    -- attached to a JOB or a LEAD (lead = pre-sale / pursuit cost). Distinct
+    -- from material_purchases (that's the Home-Depot CSV-history import). The
+    -- photo lives in attachments (attachment_id); bytes handled by storage.js.
+    -- status: 'unprocessed' = quick photo-only capture (still needs job +
+    -- amount), 'processed' = complete & counts toward the entity's actual
+    -- costs (no approval gate — completeness IS the gate), 'void' = discarded.
+    -- cost_code: materials | labor | sub | gc (Equipment/Permits/Fuel ride
+    -- under gc per AGX). is_presale flags lead/pre-award costs so job costing
+    -- can separate pursuit cost from build cost after a lead converts.
+    CREATE TABLE IF NOT EXISTS receipts (
+      id TEXT PRIMARY KEY,
+      organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE,
+      ref TEXT,                                  -- short 8-char display code (e.g. 2da04fc4)
+      entity_type TEXT,                          -- 'job' | 'lead' | NULL (unassigned capture)
+      entity_id TEXT,                            -- job id or lead id
+      amount NUMERIC(12, 2),
+      vendor TEXT,
+      cost_code TEXT DEFAULT 'materials',        -- materials | labor | sub | gc
+      is_presale BOOLEAN DEFAULT FALSE,          -- true for lead (pre-award) costs
+      notes TEXT,
+      attachment_id TEXT,                        -- the receipt photo (attachments.id)
+      status TEXT DEFAULT 'unprocessed',         -- unprocessed | processed | void
+      purchased_at DATE,                         -- receipt date (OCR/manual), defaults today
+      entered_by INTEGER,                        -- users.id who captured it
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_receipts_org ON receipts(organization_id);
+    CREATE INDEX IF NOT EXISTS idx_receipts_entity ON receipts(organization_id, entity_type, entity_id);
+    CREATE INDEX IF NOT EXISTS idx_receipts_status ON receipts(organization_id, status);
+    CREATE INDEX IF NOT EXISTS idx_receipts_date ON receipts(organization_id, purchased_at);
+
     -- Email send log — every transactional email goes through
     -- server/email.js which writes a row here so admins can see
     -- delivery state, retry failures, and audit who got what.

@@ -713,6 +713,25 @@
     remove: function(id) { return del('/api/reminders/' + encodeURIComponent(id)); }
   };
 
+  // Cost Inbox — receipts (job/lead-linked cost capture: photo + amount + cost
+  // code). See server/routes/receipt-routes.js. list() filters mirror the route
+  // query params (entity_type/entity_id, status, cost_code, from/to, q, limit).
+  var receipts = {
+    list: function(opts) {
+      opts = opts || {};
+      var qs = [];
+      ['entity_type', 'entity_id', 'status', 'cost_code', 'from', 'to', 'q', 'limit'].forEach(function(k) {
+        if (opts[k] !== undefined && opts[k] !== null && opts[k] !== '') qs.push(k + '=' + encodeURIComponent(opts[k]));
+      });
+      if (opts.is_presale) qs.push('is_presale=1');
+      return get('/api/receipts' + (qs.length ? '?' + qs.join('&') : ''));
+    },
+    get: function(id) { return get('/api/receipts/' + encodeURIComponent(id)); },
+    create: function(payload) { return post('/api/receipts', payload); },
+    update: function(id, payload) { return patch('/api/receipts/' + encodeURIComponent(id), payload); },
+    remove: function(id, hard) { return del('/api/receipts/' + encodeURIComponent(id) + (hard ? '?hard=1' : '')); }
+  };
+
   // Combined map feed — org-scoped leads + jobs with plottable coords
   // for the Summary combined map. See server/routes/map-routes.js.
   var map = {
@@ -812,7 +831,7 @@
   window.p86Api = {
     get: get, put: put, post: post, del: del, patch: patch,
     fileFolders: fileFolders,
-    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, qbCosts: qbCosts, subs: subsApi, schedule: schedule, adminSms: adminSms, messages: messages, weather: weather, projects: projects, tasks: tasks, notes: notes, reminders: reminders, map: map, calendar: calendar, plans: plans, orgTags: orgTags, org: org, folderTemplates: folderTemplates, reports: reports, changeOrders: changeOrders, workflowItems: workflowItems, purchaseOrders: purchaseOrders,
+    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, qbCosts: qbCosts, subs: subsApi, schedule: schedule, adminSms: adminSms, messages: messages, weather: weather, projects: projects, tasks: tasks, notes: notes, reminders: reminders, map: map, calendar: calendar, plans: plans, orgTags: orgTags, org: org, folderTemplates: folderTemplates, reports: reports, changeOrders: changeOrders, workflowItems: workflowItems, purchaseOrders: purchaseOrders, receipts: receipts,
     isOffline: isOffline,
     isAuthenticated: function() { return !!getToken() && !isOffline(); }
   };

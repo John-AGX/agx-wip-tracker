@@ -60,6 +60,7 @@ const folderTemplatesRoutes = require('./routes/folder-templates-routes');
 const tasksRoutes = require('./routes/tasks-routes');
 const notesRoutes = require('./routes/notes-routes');
 const remindersCrudRoutes = require('./routes/reminders-crud-routes');
+const receiptRoutes = require('./routes/receipt-routes');
 const mapRoutes = require('./routes/map-routes');
 const calendarRoutes = require('./routes/calendar-routes');
 const outlookRoutes = require('./routes/outlook-routes');
@@ -152,6 +153,8 @@ app.use('/api/notes', notesRoutes);
 // Personal Reminders CRUD — owner + org scoped (fail-closed). DISTINCT from
 // the admin cron-trigger at /api/admin/reminders. See reminders-crud-routes.js.
 app.use('/api/reminders', remindersCrudRoutes);
+// Cost Inbox — receipt capture (photo + amount + cost code), job/lead-linked.
+app.use('/api/receipts', receiptRoutes);
 // Map data — combined leads + jobs feed for the Summary combined map
 // (Phase 1 / Deliverable 2). Org-scoped, read-only. See map-routes.js.
 app.use('/api/map', mapRoutes);
