@@ -1913,3 +1913,133 @@ body.light-mode .sch-cal-grid { background: #d6dae3; }
   .sch-cal-toolbar .sch-btn-primary { font-size: 11px; padding: 5px 9px; min-height: 32px; }
 }
 
+/* ─── Exclusive view switch (Production ↔ Calendar) ───────── */
+.sch-view-switch {
+  display: inline-flex;
+  align-items: center;
+  background: var(--card-bg, #0f0f1e);
+  border: 1px solid var(--border, #2e3346);
+  border-radius: 7px;
+  padding: 2px;
+  gap: 2px;
+}
+.sch-view-seg {
+  font-family: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim, #aaa);
+  background: transparent;
+  border: 0;
+  padding: 5px 12px;
+  border-radius: 5px;
+  cursor: pointer;
+  line-height: 1.2;
+  transition: background 0.12s, color 0.12s;
+}
+.sch-view-seg:hover { color: var(--text, #e4e6f0); }
+.sch-view-seg.active { background: rgba(79, 140, 255, 0.18); color: #4f8cff; }
+
+/* ─── Calendar-layer task / reminder bars ────────────────── */
+/* Both reuse .sch-cal-event (absolute bar + --event-color bg). */
+.sch-cal-reminder { border: 1px dashed rgba(255, 255, 255, 0.45); }
+
+/* ─── Day-summary sidebar (calendar view) ────────────────── */
+.sch-dsum-header {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border, #2e3346);
+  background: linear-gradient(135deg, rgba(79, 140, 255, 0.10), rgba(139, 92, 246, 0.06));
+}
+.sch-dsum-eyebrow {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim, #8a90a6);
+}
+.sch-dsum-date {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text, #e4e6f0);
+  margin-top: 2px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.sch-dsum-today-tag {
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: #4f8cff;
+  background: rgba(79, 140, 255, 0.15);
+  border: 1px solid rgba(79, 140, 255, 0.4);
+  border-radius: 10px;
+  padding: 1px 7px;
+}
+.sch-dsum-nav { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+.sch-dsum-nav .sch-btn { font-size: 11px; }
+.sch-dsum-body {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.sch-dsum-sect { display: flex; flex-direction: column; gap: 5px; }
+.sch-dsum-sect-title {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-dim, #8a90a6);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.sch-dsum-sect-title span { color: var(--text-dim, #666); font-weight: 600; }
+.sch-dsr {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 7px 9px;
+  background: var(--card-bg, #0f0f1e);
+  border: 1px solid var(--border, #2e3346);
+  border-left: 3px solid var(--row-color, #4f8cff);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.sch-dsr:hover { filter: brightness(1.12); }
+.sch-dsr-dot {
+  width: 8px; height: 8px; border-radius: 50%;
+  background: var(--row-color, #4f8cff);
+  margin-top: 4px; flex: 0 0 auto;
+}
+.sch-dsr-check {
+  margin-top: 2px; width: 16px; height: 16px;
+  accent-color: var(--row-color, #4f8cff);
+  cursor: pointer; flex: 0 0 auto;
+}
+.sch-dsr-main { min-width: 0; flex: 1 1 auto; }
+.sch-dsr-title {
+  font-size: 12.5px; font-weight: 600;
+  color: var(--text, #e4e6f0);
+  white-space: normal; word-break: break-word;
+}
+.sch-dsr-title.sch-dsr-done { text-decoration: line-through; color: var(--text-dim, #8a90a6); }
+.sch-dsr-meta { font-size: 10.5px; color: var(--text-dim, #8a90a6); margin-top: 1px; }
+.sch-dsum-empty {
+  font-size: 12px; color: var(--text-dim, #8a90a6);
+  text-align: center; padding: 28px 16px; line-height: 1.6;
+}
+.sch-dsum-prod {
+  font-size: 11px; color: var(--text-dim, #8a90a6);
+  padding: 8px 10px; border-top: 1px dashed var(--border, #2e3346);
+}
+.sch-dsum-link {
+  background: none; border: 0; color: #4f8cff;
+  font-weight: 600; cursor: pointer; font-family: inherit; font-size: 11px; padding: 0;
+}
+.sch-dsum-footer { padding: 8px 10px; border-top: 1px solid var(--border, #2e3346); }
+.sch-dsum-footer .sch-btn { width: 100%; justify-content: center; }
+

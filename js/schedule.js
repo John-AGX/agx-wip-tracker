@@ -73,7 +73,13 @@
       // toolbar pills flip these. Merge-healed below so a legacy save
       // (no layers key) picks up the defaults without clobbering an
       // explicit user choice.
-      layers: { jobs: true, events: true }
+      layers: { jobs: true, events: true },
+      // Exclusive view switch (replaces the additive layer pills):
+      //   'production' — job bars on the grid + the draggable jobs list.
+      //   'calendar'   — events + tasks + to-dos + reminders on the grid
+      //                  + a day-summary sidebar for the selected day.
+      // Legacy saves (no key) default to production. Healed below.
+      view: 'production'
     };
     try {
       var saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
@@ -97,6 +103,10 @@
       } else {
         if (typeof merged.layers.jobs !== 'boolean') merged.layers.jobs = defaults.layers.jobs;
         if (typeof merged.layers.events !== 'boolean') merged.layers.events = defaults.layers.events;
+      }
+      // Heal the exclusive view — anything not a known mode → default.
+      if (merged.view !== 'production' && merged.view !== 'calendar') {
+        merged.view = defaults.view;
       }
       // Heal the legacy state where weekSummaryPinned was persisted
       // but focusWeekStart was a top-level _state key that never
@@ -200,6 +210,75 @@
       _state.events = [];
       return _state.events;
     });
+  }
+
+  // ── Calendar-view data: tasks / to-dos + reminders ─────────
+  // Both are owner+org scoped server-side. Fetched alongside events so
+  // the calendar view + day-summary sidebar have everything. Degrade
+  // silently to [] when the api is missing or the user is logged out.
+  function fetchTasks() {
+    if (!isCalendarApiReady() || !window.p86Api.tasks) {
+      _state.tasks = [];
+      return Promise.resolve(_state.tasks);
+    }
+    // exclude_done — keep the calendar to the live, actionable set.
+    return window.p86Api.tasks.list({ exclude_done: 1 }).then(function(res) {
+      _state.tasks = (res && (res.tasks || res.items)) || [];
+      return _state.tasks;
+    }).catch(function(err) {
+      console.warn('[schedule] task fetch failed:', err && err.message);
+      _state.tasks = [];
+      return _state.tasks;
+    });
+  }
+  function fetchReminders() {
+    if (!isCalendarApiReady() || !window.p86Api.reminders) {
+      _state.reminders = [];
+      return Promise.resolve(_state.reminders);
+    }
+    // Default list = pending only (done/dismissed drop off the grid).
+    return window.p86Api.reminders.list().then(function(res) {
+      _state.reminders = (res && (res.reminders || res.items)) || [];
+      return _state.reminders;
+    }).catch(function(err) {
+      console.warn('[schedule] reminder fetch failed:', err && err.message);
+      _state.reminders = [];
+      return _state.reminders;
+    });
+  }
+
+  // ── View + calendar-item helpers ───────────────────────────
+  // The Schedule has two exclusive views. 'production' paints job bars
+  // and shows the draggable jobs list in the sidebar; 'calendar' paints
+  // the user's events/tasks/reminders and shows a day-summary sidebar.
+  function currentView() {
+    return (_state.settings && _state.settings.view === 'calendar') ? 'calendar' : 'production';
+  }
+  // Tasks carry a date-only due_date; reminders a full remind_at instant.
+  // Both normalize to a local YYYY-MM-DD so they clip onto day columns
+  // the same way job entries + events do.
+  function taskDueISO(t) {
+    if (!t || !t.due_date) return null;
+    var d = parseISODate(t.due_date);
+    return d ? toISODate(d) : null;
+  }
+  function reminderISO(r) {
+    if (!r || !r.remind_at) return null;
+    var d = new Date(r.remind_at);
+    return isNaN(d.getTime()) ? null : toISODate(d);
+  }
+  function reminderTimeLabel(r) {
+    return (r && r.remind_at) ? fmtEventTime(r.remind_at) : '';
+  }
+  function isTaskDone(t) { return !!t && t.status === 'done'; }
+  // Calendar-item palette. Tasks (assignable) amber, personal to-dos
+  // teal, reminders violet — distinct from job/event colors.
+  var TASK_COLOR = '#f59e0b';
+  var TODO_COLOR = '#14b8a6';
+  var REMINDER_COLOR = '#a78bfa';
+  function taskColor(t) {
+    if (isTaskDone(t)) return '#64748b';
+    return (t && t.scope === 'personal') ? TODO_COLOR : TASK_COLOR;
   }
 
   // ── Date helpers ───────────────────────────────────────────
@@ -353,6 +432,14 @@
     // on the production grid. Hydrated by fetchEvents() from
     // window.p86Api.calendar; stays [] when the api is unavailable.
     events: [],
+    // Calendar-view layers: the user's tasks + to-dos (window.p86Api.tasks)
+    // and personal reminders (window.p86Api.reminders), hydrated alongside
+    // events. Stay [] in production view / when the api is unavailable.
+    tasks: [],
+    reminders: [],
+    // Selected day for the calendar-view day-summary sidebar (ISO date).
+    // Defaults to today on first calendar render.
+    selectedDay: null,
     settings: {
       showWeekends: true,
       viewMonth: null,
@@ -362,7 +449,9 @@
       jobTypeFilter: Object.assign({}, DEFAULT_JOB_TYPE_SET),
       // Slice C — which overlay layers paint on the grid. Both on
       // by default. Toggled via the toolbar pills.
-      layers: { jobs: true, events: true }
+      layers: { jobs: true, events: true },
+      // Exclusive view: 'production' or 'calendar'. See currentView().
+      view: 'production'
     },
     users: [],           // hydrated from /api/auth/users
     sidebarSearch: '',
@@ -806,18 +895,47 @@
       refreshUserWeatherForecast();
     });
 
-    // Slice C — personal calendar events, fetched on their own chain
-    // so they don't gate (or get gated by) the job-entry fetch. Repaint
-    // the grid when they land so the event layer appears.
-    fetchEvents().then(function() {
+    // Calendar-view data — events + tasks/to-dos + reminders, fetched in
+    // parallel on their own chain so they don't gate the job-entry fetch.
+    // Repaint the grid + sidebar when they land so the calendar layer and
+    // the day-summary sidebar fill in.
+    Promise.all([fetchEvents(), fetchTasks(), fetchReminders()]).then(function() {
       renderGrid();
+      renderSidebar();
     });
+  }
+
+  // Flip the exclusive view. Persists + repaints toolbar, grid, sidebar.
+  function setScheduleView(v) {
+    if (v !== 'production' && v !== 'calendar') return;
+    _state.settings.view = v;
+    if (v === 'calendar' && !_state.selectedDay) {
+      _state.selectedDay = toISODate(new Date());
+    }
+    saveSettings(_state.settings);
+    renderSidebar();
+    renderCalendar(); // rebuilds toolbar (active seg) + repaints grid
+  }
+  // Select a day from a grid click / chip tap. Calendar view fills the
+  // day-summary sidebar (and opens the mobile drawer); production view
+  // keeps the existing day-at-a-glance modal.
+  function selectDay(iso) {
+    _state.selectedDay = iso;
+    if (currentView() === 'calendar') {
+      renderSidebar();
+      var p = document.getElementById('schPage');
+      if (p && typeof isMobileCal === 'function' && isMobileCal()) p.classList.add('sch-sidebar-open');
+    } else {
+      openDaySheet(iso);
+    }
   }
 
   // ── Render: sidebar ────────────────────────────────────────
   function renderSidebar() {
     var el = document.getElementById('schSidebar');
     if (!el) return;
+    // Calendar view → day-summary sidebar; production → the jobs list.
+    if (currentView() === 'calendar') { renderDaySummarySidebar(el); return; }
     var jobs = filteredJobs();
     var q = _state.sidebarSearch.trim().toLowerCase();
     if (q) {
@@ -940,17 +1058,157 @@
     });
   }
 
+  // ── Day-summary sidebar (calendar view) ────────────────────
+  // Occupies the same sidebar slot as the production jobs list, but
+  // shows the selected day's personal items — appointments, tasks,
+  // to-dos, reminders — with a day stepper. Tapping any grid day (or a
+  // task/reminder chip) changes the selection via selectDay().
+  function renderDaySummarySidebar(el) {
+    var iso = _state.selectedDay || toISODate(new Date());
+    _state.selectedDay = iso;
+    var d = parseISODate(iso) || new Date();
+    var todayIso = toISODate(new Date());
+    var dateLabel = d.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
+    var isToday = (iso === todayIso);
+
+    var events = (_state.events || []).filter(function(ev) {
+      if (!ev || !ev.starts_at) return false;
+      var sd = parseISODate(ev.starts_at); if (!sd) return false;
+      var ed = parseISODate(ev.ends_at) || sd; if (ed < sd) ed = sd;
+      return iso >= toISODate(sd) && iso <= toISODate(ed);
+    }).sort(function(a, b) { return String(a.starts_at).localeCompare(String(b.starts_at)); });
+
+    var dayTasks = (_state.tasks || []).filter(function(t) { return taskDueISO(t) === iso; });
+    var orgTasks = dayTasks.filter(function(t) { return t.scope !== 'personal'; });
+    var todos = dayTasks.filter(function(t) { return t.scope === 'personal'; });
+    var reminders = (_state.reminders || []).filter(function(r) { return reminderISO(r) === iso; })
+      .sort(function(a, b) { return String(a.remind_at).localeCompare(String(b.remind_at)); });
+    var jobEntries = (_state.entries || []).filter(function(e) { return entrySpanDays(e).indexOf(iso) !== -1; });
+
+    function eventRow(ev) {
+      var tl = ev.all_day ? 'All day'
+        : (fmtEventTime(ev.starts_at) + (ev.ends_at ? '–' + fmtEventTime(ev.ends_at) : ''));
+      var st = (ev.status && ev.status !== 'confirmed') ? ev.status : '';
+      return '<div class="sch-dsr sch-dsr-event" data-event-id="' + escapeAttr(ev.id) + '" style="--row-color:' + escapeAttr(ev.color || EVENT_DEFAULT_COLOR) + ';">' +
+        '<span class="sch-dsr-dot"></span>' +
+        '<div class="sch-dsr-main">' +
+          '<div class="sch-dsr-title">' + escapeHTML(ev.title || '(untitled event)') + '</div>' +
+          '<div class="sch-dsr-meta">' + escapeHTML(tl) + (ev.location ? ' · ' + escapeHTML(ev.location) : '') + (st ? ' · ' + escapeHTML(st) : '') + '</div>' +
+        '</div>' +
+      '</div>';
+    }
+    function taskRow(t) {
+      return '<label class="sch-dsr sch-dsr-task" style="--row-color:' + escapeAttr(taskColor(t)) + ';">' +
+        '<input type="checkbox" class="sch-dsr-check" data-task-id="' + escapeAttr(t.id) + '"' + (isTaskDone(t) ? ' checked' : '') + ' />' +
+        '<div class="sch-dsr-main">' +
+          '<div class="sch-dsr-title' + (isTaskDone(t) ? ' sch-dsr-done' : '') + '">' + escapeHTML(t.title || '(task)') + '</div>' +
+        '</div>' +
+      '</label>';
+    }
+    function reminderRow(r) {
+      var tl = reminderTimeLabel(r);
+      return '<label class="sch-dsr sch-dsr-rem" style="--row-color:' + REMINDER_COLOR + ';">' +
+        '<input type="checkbox" class="sch-dsr-check" data-reminder-id="' + escapeAttr(r.id) + '" />' +
+        '<div class="sch-dsr-main">' +
+          '<div class="sch-dsr-title">' + escapeHTML(r.title || '(reminder)') + '</div>' +
+          (tl ? '<div class="sch-dsr-meta">' + escapeHTML(tl) + '</div>' : '') +
+        '</div>' +
+      '</label>';
+    }
+    function section(title, count, rowsHtml) {
+      if (!count) return '';
+      return '<div class="sch-dsum-sect">' +
+        '<div class="sch-dsum-sect-title">' + escapeHTML(title) + ' <span>' + count + '</span></div>' +
+        rowsHtml +
+      '</div>';
+    }
+
+    var body = '';
+    body += section('Appointments', events.length, events.map(eventRow).join(''));
+    body += section('Tasks', orgTasks.length, orgTasks.map(taskRow).join(''));
+    body += section('To-dos', todos.length, todos.map(taskRow).join(''));
+    body += section('Reminders', reminders.length, reminders.map(reminderRow).join(''));
+    if (jobEntries.length) {
+      body += '<div class="sch-dsum-prod">' + jobEntries.length + ' job' + (jobEntries.length > 1 ? 's' : '') +
+        ' on the production schedule this day. <button type="button" class="sch-dsum-link" id="schDsumToProd">View &rsaquo;</button></div>';
+    }
+    if (!events.length && !dayTasks.length && !reminders.length && !jobEntries.length) {
+      body = '<div class="sch-dsum-empty">Nothing on this day.<br/>Tap <strong>+ Event</strong> to add one, or pick another day.</div>';
+    }
+
+    el.innerHTML =
+      '<div class="sch-dsum-header">' +
+        '<div class="sch-dsum-eyebrow">My calendar</div>' +
+        '<div class="sch-dsum-date">' + escapeHTML(dateLabel) + (isToday ? ' <span class="sch-dsum-today-tag">Today</span>' : '') + '</div>' +
+        '<div class="sch-dsum-nav">' +
+          '<button type="button" class="sch-btn sch-btn-icon" id="schDsumPrev" title="Previous day">&lsaquo;</button>' +
+          '<button type="button" class="sch-btn" id="schDsumToday">Today</button>' +
+          '<button type="button" class="sch-btn sch-btn-icon" id="schDsumNext" title="Next day">&rsaquo;</button>' +
+        '</div>' +
+      '</div>' +
+      '<div class="sch-dsum-body" id="schDsumBody">' + body + '</div>' +
+      '<div class="sch-dsum-footer">' +
+        '<button type="button" class="sch-btn sch-btn-primary" id="schDsumAddEvent">+ Event</button>' +
+      '</div>';
+
+    function shiftDay(n) {
+      var nd = parseISODate(iso) || new Date();
+      nd.setDate(nd.getDate() + n);
+      _state.selectedDay = toISODate(nd);
+      renderDaySummarySidebar(el);
+    }
+    var prevBtn = document.getElementById('schDsumPrev');
+    if (prevBtn) prevBtn.addEventListener('click', function() { shiftDay(-1); });
+    var nextBtn = document.getElementById('schDsumNext');
+    if (nextBtn) nextBtn.addEventListener('click', function() { shiftDay(1); });
+    var todayBtn = document.getElementById('schDsumToday');
+    if (todayBtn) todayBtn.addEventListener('click', function() { _state.selectedDay = toISODate(new Date()); renderDaySummarySidebar(el); });
+    var addEvBtn = document.getElementById('schDsumAddEvent');
+    if (addEvBtn) addEvBtn.addEventListener('click', function() { openEventEditor(null, _state.selectedDay); });
+    var toProdBtn = document.getElementById('schDsumToProd');
+    if (toProdBtn) toProdBtn.addEventListener('click', function() { setScheduleView('production'); });
+
+    // Event rows open the read-only card.
+    el.querySelectorAll('.sch-dsr-event[data-event-id]').forEach(function(row) {
+      row.addEventListener('click', function() {
+        var ev = (_state.events || []).find(function(x) { return String(x.id) === String(row.getAttribute('data-event-id')); });
+        if (ev) openEventCard(ev);
+      });
+    });
+    // Task / to-do checkboxes → mark done (or reopen).
+    el.querySelectorAll('.sch-dsr-check[data-task-id]').forEach(function(cb) {
+      cb.addEventListener('change', function(e) {
+        e.stopPropagation();
+        var id = cb.getAttribute('data-task-id');
+        if (!window.p86Api || !window.p86Api.tasks) return;
+        window.p86Api.tasks.update(id, { status: cb.checked ? 'done' : 'open' })
+          .then(function() { return fetchTasks(); })
+          .then(function() { renderDaySummarySidebar(el); renderGrid(); })
+          .catch(function(err) { console.warn('[schedule] task update failed:', err && err.message); });
+      });
+    });
+    // Reminder checkboxes → mark done.
+    el.querySelectorAll('.sch-dsr-check[data-reminder-id]').forEach(function(cb) {
+      cb.addEventListener('change', function(e) {
+        e.stopPropagation();
+        var id = cb.getAttribute('data-reminder-id');
+        if (!window.p86Api || !window.p86Api.reminders) return;
+        window.p86Api.reminders.update(id, { status: 'done' })
+          .then(function() { return fetchReminders(); })
+          .then(function() { renderDaySummarySidebar(el); renderGrid(); })
+          .catch(function(err) { console.warn('[schedule] reminder update failed:', err && err.message); });
+      });
+    });
+  }
+
   // ── Render: calendar grid ──────────────────────────────────
   function renderCalendar() {
     var el = document.getElementById('schCalWrap');
     if (!el) return;
     var showW = !!_state.settings.showWeekends;
-    // Slice C — layer visibility. Defaults to on if the key is missing
-    // (defensive; loadSettings heals it but renderCalendar can run
-    // before a fresh load on re-render).
-    var layers = _state.settings.layers || (_state.settings.layers = { jobs: true, events: true });
-    var jobsOn = layers.jobs !== false;
-    var eventsOn = layers.events !== false;
+    // Exclusive view switch (production ↔ calendar) drives both the grid
+    // layers and the sidebar content. See currentView() / loadSettings.
+    var view = currentView();
 
     el.innerHTML =
       '<div class="sch-cal-toolbar">' +
@@ -966,20 +1224,22 @@
         '</div>' +
         '<div class="sch-toolbar-spacer"></div>' +
         '<span class="p86-ask86-mount"></span>' +
-        // Slice C — layer toggle pills. Flip which overlay layers the
-        // grid paints (production jobs vs the user's personal events).
-        '<div class="sch-layer-toggles" role="group" aria-label="Calendar layers">' +
-          '<button class="sch-btn sch-btn-toggle' + (jobsOn ? ' active' : '') + '" id="schLayerJobs" ' +
-            'title="Show / hide production job bars on the calendar.">Jobs</button>' +
-          '<button class="sch-btn sch-btn-toggle' + (eventsOn ? ' active' : '') + '" id="schLayerEvents" ' +
-            'title="Show / hide your personal calendar events on the calendar.">My Events</button>' +
+        // Exclusive view switch — Production (job bars + draggable jobs
+        // list) vs Calendar (events/tasks/to-dos/reminders + day summary).
+        '<div class="sch-view-switch" role="group" aria-label="Calendar view">' +
+          '<button class="sch-view-seg' + (view === 'production' ? ' active' : '') + '" id="schViewProduction" type="button" ' +
+            'title="Production calendar — job bars on the grid + the jobs list to drag-schedule.">Production</button>' +
+          '<button class="sch-view-seg' + (view === 'calendar' ? ' active' : '') + '" id="schViewCalendar" type="button" ' +
+            'title="My calendar — events, tasks, to-dos &amp; reminders + a day summary.">Calendar</button>' +
         '</div>' +
         '<button class="sch-btn sch-btn-toggle' + (showW ? ' active' : '') + '" id="schWeekendToggle" ' +
           'title="' + (showW ? 'Hide' : 'Show') + ' weekend columns. Display only — does not change how production days are counted on entries.">' +
           (showW ? '&#x1F441; 7-day' : '&#x1F441; 5-day') +
         '</button>' +
-        '<button class="sch-btn sch-btn-primary" id="schAddEvent">+ Event</button>' +
-        '<button class="sch-btn sch-btn-primary" id="schAddEntry">+ Schedule entry</button>' +
+        // Context the primary action to the active view.
+        (view === 'calendar'
+          ? '<button class="sch-btn sch-btn-primary" id="schAddEvent">+ Event</button>'
+          : '<button class="sch-btn sch-btn-primary" id="schAddEntry">+ Schedule entry</button>') +
       '</div>' +
       // Fisheye scroll container. Sticky day-of-week header rides
       // at the top; the week stack below scrolls continuously.
@@ -997,26 +1257,15 @@
       saveSettings(_state.settings);
       renderCalendar();
     });
-    document.getElementById('schAddEntry').addEventListener('click', function() {
+    var addEntryBtn = document.getElementById('schAddEntry');
+    if (addEntryBtn) addEntryBtn.addEventListener('click', function() {
       openEntryEditor(null, toISODate(new Date()));
     });
-    // Slice C — layer toggle pills + "+ Event" button.
-    var layerJobsBtn = document.getElementById('schLayerJobs');
-    if (layerJobsBtn) layerJobsBtn.addEventListener('click', function() {
-      _state.settings.layers = _state.settings.layers || { jobs: true, events: true };
-      _state.settings.layers.jobs = !( _state.settings.layers.jobs !== false );
-      saveSettings(_state.settings);
-      this.classList.toggle('active', _state.settings.layers.jobs !== false);
-      renderGrid();
-    });
-    var layerEventsBtn = document.getElementById('schLayerEvents');
-    if (layerEventsBtn) layerEventsBtn.addEventListener('click', function() {
-      _state.settings.layers = _state.settings.layers || { jobs: true, events: true };
-      _state.settings.layers.events = !( _state.settings.layers.events !== false );
-      saveSettings(_state.settings);
-      this.classList.toggle('active', _state.settings.layers.events !== false);
-      renderGrid();
-    });
+    // Exclusive view switch — flip the whole view (grid layers + sidebar).
+    var viewProdBtn = document.getElementById('schViewProduction');
+    if (viewProdBtn) viewProdBtn.addEventListener('click', function() { setScheduleView('production'); });
+    var viewCalBtn = document.getElementById('schViewCalendar');
+    if (viewCalBtn) viewCalBtn.addEventListener('click', function() { setScheduleView('calendar'); });
     var addEventBtn = document.getElementById('schAddEvent');
     if (addEventBtn) addEventBtn.addEventListener('click', function() {
       openEventEditor(null, toISODate(new Date()));
@@ -1331,8 +1580,9 @@
   // scheduling logic. `days` and `weekKeys` come from renderWeekRow.
   function renderMobileWeekRow(days, weekKeys) {
     var layers = _state.settings.layers || {};
-    var jobsOn = layers.jobs !== false;
-    var eventsOn = layers.events !== false;
+    var view = currentView();
+    var jobsOn = (view === 'production');
+    var eventsOn = (view === 'calendar');
 
     var weekStartIso = weekKeys[0];
     var html = '<div class="sch-cal-week-row sch-mweek" data-week-start="' +
@@ -1388,6 +1638,26 @@
           });
         });
       }
+      // Tasks / to-dos + reminders share the calendar layer with events.
+      if (eventsOn) {
+        (_state.tasks || []).forEach(function(t) {
+          if (taskDueISO(t) !== day.iso) return;
+          items.push({
+            kind: 'task', task: t, color: taskColor(t),
+            label: (isTaskDone(t) ? '✓ ' : '') + (t.title || 'Task'),
+            muted: isTaskDone(t), canceled: false, sortKey: 0.5
+          });
+        });
+        (_state.reminders || []).forEach(function(r) {
+          if (reminderISO(r) !== day.iso) return;
+          var tl = reminderTimeLabel(r);
+          items.push({
+            kind: 'reminder', reminder: r, color: REMINDER_COLOR,
+            label: '⏰ ' + (tl ? tl + ' ' : '') + (r.title || 'Reminder'),
+            muted: false, canceled: false, sortKey: 0.6
+          });
+        });
+      }
       // Stable sort: all-day/job first, then timed events by start.
       items.sort(function(a, b) { return a.sortKey - b.sortKey; });
 
@@ -1406,6 +1676,10 @@
         if (it.canceled) chipCls += ' sch-mchip-canceled';
         var idAttr = it.kind === 'job'
           ? 'data-entry-id="' + escapeAttr(it.entry.id) + '"'
+          : it.kind === 'task'
+          ? 'data-task-id="' + escapeAttr(it.task.id) + '"'
+          : it.kind === 'reminder'
+          ? 'data-reminder-id="' + escapeAttr(it.reminder.id) + '"'
           : 'data-event-id="' + escapeAttr(it.event.id) + '"';
         cellHtml += '<div class="' + chipCls + '" ' + idAttr +
           ' style="--chip-color:' + escapeAttr(it.color) + ';"' +
@@ -1642,8 +1916,9 @@
     // layer can stack below without overlapping. When jobs are hidden
     // maxRow stays -1 so events start at the base row.
     var layers = _state.settings.layers || {};
-    var jobsLayerOn = layers.jobs !== false;
-    var eventsLayerOn = layers.events !== false;
+    var view = currentView();
+    var jobsLayerOn = (view === 'production');
+    var calOn = (view === 'calendar');
     var maxRow = -1;
     if (jobsLayerOn) segments.forEach(function(seg) {
       // Note: when "Show Sat/Sun" is off but an entry's includesWeekends
@@ -1715,9 +1990,10 @@
     // span columns, single-day events occupy one. Events stack into
     // their own rows starting just below the lowest job-bar row used
     // this week (eventBaseRow), so the two layers never overlap.
-    if (eventsLayerOn && _state.events && _state.events.length) {
+    if (calOn) {
       var eventSegs = [];
-      _state.events.forEach(function(ev) {
+      // Personal calendar events (multi-day aware), clipped to this week.
+      (_state.events || []).forEach(function(ev) {
         if (!ev || !ev.starts_at) return;
         var sd = parseISODate(ev.starts_at);
         if (!sd) return;
@@ -1736,15 +2012,27 @@
         var run = [cols[0]];
         for (var k = 1; k < cols.length; k++) {
           if (cols[k] === cols[k - 1] + 1) { run.push(cols[k]); }
-          else { eventSegs.push({ event: ev, startCol: run[0], span: run.length }); run = [cols[k]]; }
+          else { eventSegs.push({ kind: 'event', event: ev, startCol: run[0], span: run.length }); run = [cols[k]]; }
         }
-        eventSegs.push({ event: ev, startCol: run[0], span: run.length });
+        eventSegs.push({ kind: 'event', event: ev, startCol: run[0], span: run.length });
+      });
+      // Tasks + to-dos — single-day, on their due_date.
+      (_state.tasks || []).forEach(function(t) {
+        var iso = taskDueISO(t); if (!iso) return;
+        var ci = weekKeys.indexOf(iso); if (ci === -1) return;
+        eventSegs.push({ kind: 'task', task: t, startCol: ci, span: 1 });
+      });
+      // Reminders — single-day, on the remind_at date.
+      (_state.reminders || []).forEach(function(r) {
+        var iso = reminderISO(r); if (!iso) return;
+        var ci = weekKeys.indexOf(iso); if (ci === -1) return;
+        eventSegs.push({ kind: 'reminder', reminder: r, startCol: ci, span: 1 });
       });
 
       if (eventSegs.length) {
-        // Greedy left-to-right row packing within the event layer,
+        // Greedy left-to-right row packing within the calendar layer,
         // identical to the job-bar packer. Row 0 here is the first
-        // event row; it's offset below the job rows when positioned.
+        // calendar row; it's offset below the job rows when positioned.
         eventSegs.sort(function(a, b) {
           if (a.startCol !== b.startCol) return a.startCol - b.startCol;
           return b.span - a.span;
@@ -1766,33 +2054,46 @@
           if (!placed) seg.row = 11;
         });
 
-        // Events start one row below the lowest job-bar row used this
-        // week. When jobs are hidden (maxRow === -1) they start at the
-        // base row, same vertical rhythm (22 + row*18).
+        // Calendar items start one row below the lowest job-bar row used
+        // this week. When jobs are hidden (maxRow === -1) they start at
+        // the base row, same vertical rhythm (22 + row*18).
         var eventBaseRow = maxRow + 1;
         eventSegs.forEach(function(seg) {
-          var ev = seg.event;
           var leftPct = colLeftPct(seg.startCol);
           var widthPct = colWidthPct(seg.startCol, seg.span);
           var rowIdx = eventBaseRow + seg.row;
           var topPx = 22 + rowIdx * 18;
-          var color = ev.color || EVENT_DEFAULT_COLOR;
-          var statusCls = '';
-          if (ev.status === 'tentative') statusCls = ' sch-cal-event-tentative';
-          else if (ev.status === 'canceled') statusCls = ' sch-cal-event-canceled';
-          var title = ev.title || '(untitled event)';
-          // Timed events get a compact local-time prefix; all-day
-          // events just show the title. Prefix only on the segment's
-          // first column so a wrapped run doesn't repeat the time.
-          var timePrefix = '';
-          if (!ev.all_day) {
-            var t = fmtEventTime(ev.starts_at);
-            if (t) timePrefix = t + ' ';
+          var cls = 'sch-cal-event';
+          var color, title, dataAttr, statusCls = '', timePrefix = '';
+          if (seg.kind === 'task') {
+            var t = seg.task;
+            color = taskColor(t);
+            title = (isTaskDone(t) ? '✓ ' : '') + (t.title || '(task)');
+            dataAttr = 'data-task-id="' + escapeAttr(t.id) + '"';
+            cls += ' sch-cal-task';
+            if (isTaskDone(t)) statusCls = ' sch-cal-event-canceled';
+          } else if (seg.kind === 'reminder') {
+            var r2 = seg.reminder;
+            color = REMINDER_COLOR;
+            var rt = reminderTimeLabel(r2);
+            timePrefix = (rt ? rt + ' ' : '') + '⏰ ';
+            title = r2.title || '(reminder)';
+            dataAttr = 'data-reminder-id="' + escapeAttr(r2.id) + '"';
+            cls += ' sch-cal-reminder';
+          } else {
+            var ev = seg.event;
+            color = ev.color || EVENT_DEFAULT_COLOR;
+            if (ev.status === 'tentative') statusCls = ' sch-cal-event-tentative';
+            else if (ev.status === 'canceled') statusCls = ' sch-cal-event-canceled';
+            title = ev.title || '(untitled event)';
+            // Timed events get a compact local-time prefix; all-day
+            // events just show the title.
+            if (!ev.all_day) { var et = fmtEventTime(ev.starts_at); if (et) timePrefix = et + ' '; }
+            dataAttr = 'data-event-id="' + escapeAttr(ev.id) + '"';
           }
-          html += '<div class="sch-cal-event' + statusCls + '" ' +
-            'data-event-id="' + escapeAttr(ev.id) + '" ' +
+          html += '<div class="' + cls + statusCls + '" ' + dataAttr + ' ' +
             'style="left:' + leftPct.toFixed(4) + '%;width:calc(' + widthPct.toFixed(4) + '% - 4px);top:' + topPx + 'px;--event-color:' + escapeAttr(color) + ';" ' +
-            'title="' + escapeAttr((timePrefix ? timePrefix : '') + title) + '">' +
+            'title="' + escapeAttr(timePrefix + title) + '">' +
             escapeHTML(timePrefix + title) +
           '</div>';
         });
@@ -1860,6 +2161,23 @@
         if (event) openEventCard(event);
       });
     });
+    // Calendar tasks / reminders (desktop bars + mobile chips both carry
+    // these attrs) — tap selects that day so its summary fills the
+    // sidebar, where the item can be checked off.
+    grid.querySelectorAll('[data-task-id]').forEach(function(el) {
+      el.addEventListener('click', function(e) {
+        e.stopPropagation();
+        var t = (_state.tasks || []).find(function(x) { return String(x.id) === String(el.getAttribute('data-task-id')); });
+        if (t && taskDueISO(t)) selectDay(taskDueISO(t));
+      });
+    });
+    grid.querySelectorAll('[data-reminder-id]').forEach(function(el) {
+      el.addEventListener('click', function(e) {
+        e.stopPropagation();
+        var r = (_state.reminders || []).find(function(x) { return String(x.id) === String(el.getAttribute('data-reminder-id')); });
+        if (r && reminderISO(r)) selectDay(reminderISO(r));
+      });
+    });
     // Per-day job cards inside focused weeks. Tap → open the read-only card.
     // Wired BEFORE the day-cell catch-all so the card click doesn't
     // bubble up and re-open the day sheet on top of the editor.
@@ -1877,13 +2195,10 @@
         if (e.target.closest('.sch-day-job-card')) return;
         if (e.target.closest('.sch-week-focus-rail')) return;
         var date = cell.getAttribute('data-date');
-        // New behavior: clicking an empty day opens a "day at a
-        // glance" sheet listing every entry on that date with quick
-        // edit/add actions. Direct click-to-create-blank was easy
-        // to trigger by accident and skipped any context — the
-        // sheet gives users a moment to see what's already on the
-        // day before deciding to add or edit.
-        openDaySheet(date);
+        // Calendar view: select the day so the sidebar shows its summary.
+        // Production view: open the day-at-a-glance sheet (job focus) —
+        // direct click-to-create-blank was easy to trigger by accident.
+        selectDay(date);
       });
     });
     // Week focus rails — click pins that week as the metrics target.
@@ -1938,12 +2253,12 @@
     });
     grid.querySelectorAll('.sch-mcell[data-date]').forEach(function(cell) {
       cell.addEventListener('click', function(e) {
-        // Only the bare cell tap opens the day sheet — chip / more
-        // taps handle themselves and stopPropagation above.
+        // Only the bare cell tap acts — chip / more taps handle
+        // themselves and stopPropagation above.
         if (e.target.closest('.sch-mchip')) return;
         if (e.target.closest('.sch-mmore')) return;
         var date = cell.getAttribute('data-date');
-        if (date) openDaySheet(date);
+        if (date) selectDay(date);
       });
     });
 
@@ -1985,6 +2300,12 @@
       var ed = parseISODate(ev.ends_at) || sd; if (ed < sd) ed = sd;
       return dateISO >= toISODate(sd) && dateISO <= toISODate(ed);
     }).sort(function(a, b) { return String(a.starts_at).localeCompare(String(b.starts_at)); });
+
+    // Tasks / to-dos + reminders due on this day — surfaced in the sheet
+    // so "day at a glance" really shows everything (not just jobs/events).
+    var dayTasks = (_state.tasks || []).filter(function(t) { return taskDueISO(t) === dateISO; });
+    var dayReminders = (_state.reminders || []).filter(function(r) { return reminderISO(r) === dateISO; })
+      .sort(function(a, b) { return String(a.remind_at).localeCompare(String(b.remind_at)); });
 
     // Aggregate metrics for this day so the sheet header has the
     // same "at a glance" feel as the week-summary widget.
@@ -2060,7 +2381,29 @@
       '</div>';
     }).join('');
 
-    var rowsHtml = (entryRowsHtml + eventRowsHtml) ||
+    var taskRowsHtml = dayTasks.map(function(t) {
+      return '<div class="sch-day-row" data-task-id="' + escapeAttr(t.id) + '" ' +
+              'style="--job-color:' + escapeAttr(taskColor(t)) + ';">' +
+        '<div class="sch-day-row-color"></div>' +
+        '<div class="sch-day-row-main">' +
+          '<div class="sch-day-row-title">' + (isTaskDone(t) ? '✓ ' : '') + escapeHTML(t.title || '(task)') + '</div>' +
+          '<div class="sch-day-row-meta"><span>' + (t.scope === 'personal' ? 'To-do' : 'Task') + '</span></div>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+    var reminderRowsHtml = dayReminders.map(function(r) {
+      var tl = reminderTimeLabel(r);
+      return '<div class="sch-day-row" data-reminder-id="' + escapeAttr(r.id) + '" ' +
+              'style="--job-color:' + REMINDER_COLOR + ';">' +
+        '<div class="sch-day-row-color"></div>' +
+        '<div class="sch-day-row-main">' +
+          '<div class="sch-day-row-title">⏰ ' + escapeHTML(r.title || '(reminder)') + '</div>' +
+          '<div class="sch-day-row-meta"><span>' + escapeHTML(tl || 'Reminder') + '</span></div>' +
+        '</div>' +
+      '</div>';
+    }).join('');
+
+    var rowsHtml = (entryRowsHtml + eventRowsHtml + taskRowsHtml + reminderRowsHtml) ||
       '<div class="sch-day-sheet-empty">Nothing scheduled for this day yet.</div>';
 
     var modal = document.createElement('div');
@@ -2078,7 +2421,7 @@
         '<div class="sch-day-sheet-stats">' +
           '<div class="sch-day-stat">' +
             '<div class="sch-day-stat-label">Items</div>' +
-            '<div class="sch-day-stat-val">' + (entries.length + dayEvents.length) + '</div>' +
+            '<div class="sch-day-stat-val">' + (entries.length + dayEvents.length + dayTasks.length + dayReminders.length) + '</div>' +
           '</div>' +
           '<div class="sch-day-stat">' +
             '<div class="sch-day-stat-label">Crew on site</div>' +
