@@ -1805,11 +1805,49 @@ function openEntityCreateModal(type, cb){
 }
 
 // ── Sidebar ──
+// Add a node of the given type — shared by the ribbon "+ Add" menu (and formerly the
+// left palette). Building (t1) initiates a footprint trace in satellite Site Plan;
+// data-backed types (PICKABLE_TYPES) open the entity picker; others drop at view center.
+function pickNodeType(type){
+  var d=E.DEFS[type]; if(!d) return;
+  if(type==='t1' && _spSatellite && E.viewMode && E.viewMode()==='siteplan'){
+    selN=null; toggleTraceMode(); return;
+  }
+  var p=E.pan(),z=E.zm();
+  var cx=-p.x+wrap.clientWidth/2/z, cy=-p.y+wrap.clientHeight/2/z;
+  if(PICKABLE_TYPES[type] && E.job()){
+    showDataPicker(type, function(entry, focused){
+      if(focused) return;
+      if(entry){
+        var lbl=entryLabel(type,entry);
+        var newNode=E.addNode(type,cx-85,cy-30,lbl,entry);
+        if(newNode) autoWireFromData(newNode, entry);
+        render();
+      } else {
+        // "+ Create New" — open the same overview-panel modal
+        openEntityCreateModal(type, function(newEntry){
+          if(newEntry){
+            var lbl=entryLabel(type,newEntry);
+            var newNode=E.addNode(type,cx-85,cy-30,lbl,newEntry);
+            if(newNode) autoWireFromData(newNode, newEntry);
+            render();
+          }
+        });
+      }
+    });
+  } else {
+    var label=d.label;
+    if(d.nameEdit) label=prompt('Name:',label)||label;
+    E.addNode(type,cx-85,cy-30,label);
+    render();
+  }
+}
+
 function buildSidebar(){
   var sb=document.querySelector('.ng-sidebar'); if(!sb) return;
   var html='<div class="ng-sidebar-header">' +
-    '<span class="ng-sidebar-header-text">Node Library</span>' +
-    '<button class="ng-sidebar-toggle" id="ngSidebarToggle" title="Collapse library">◀</button>' +
+    '<span class="ng-sidebar-header-text">Overview</span>' +
+    '<button class="ng-sidebar-toggle" id="ngSidebarToggle" title="Collapse">◀</button>' +
     '</div>';
   // Site Plan rework: live WIP-metrics panel (shown only in satellite Site Plan via
   // CSS). Body is filled by renderSidebarMetrics() on every render; chips inside are
@@ -1817,18 +1855,8 @@ function buildSidebar(){
   html+='<div class="ng-sp-metrics"><div class="ng-sp-metrics-head">Project WIP</div><div class="ng-sp-metrics-body"></div></div>';
   // Per-building cost panel (S2) — shown when a building polygon is selected.
   html+='<div class="ng-sp-bldg"><div class="ng-sp-metrics-head">Building · <span class="ng-sp-bldg-name"></span></div><div class="ng-sp-bldg-body"></div><button class="ng-sp-addcost">+ Add Cost</button><div class="ng-sp-struct"></div></div>';
-  html+='<div class="ng-sidebar-search"><input type="text" placeholder="Search..." id="ngSearch"/></div>';
-  E.CATS.forEach(function(cat,ci){
-    var isWipCat=(cat.items||[]).indexOf('wip')>-1;   // hidden in satellite (the WIP node lives in the sidebar there)
-    html+='<div class="ng-cat ng-open'+(isWipCat?' ng-cat-wip':'')+'">';
-    html+='<div class="ng-cat-header"><span class="ng-cat-arrow">\u25B6</span>'+cat.name+'</div>';
-    html+='<div class="ng-cat-items">';
-    cat.items.forEach(function(k){
-      var d=E.DEFS[k]; if(!d) return;
-      html+='<div class="ng-cat-item" data-type="'+k+'"><span>'+d.icon+'</span> '+d.label+'</div>';
-    });
-    html+='</div></div>';
-  });
+  // Node library moved to the ribbon "+ Add" menu (pickNodeType); this rail is now the
+  // job-overview surface (WIP + per-building panels today; full job overview in Slice 2).
   sb.innerHTML=html;
 
   // Restore collapsed state from previous session.
@@ -1836,7 +1864,7 @@ function buildSidebar(){
   var tog=document.getElementById('ngSidebarToggle');
   function syncToggle(){
     var c=sb.classList.contains('ng-collapsed');
-    if(tog){ tog.innerHTML=c?'▶':'◀'; tog.title=c?'Expand library':'Collapse library'; }
+    if(tog){ tog.innerHTML=c?'▶':'◀'; tog.title=c?'Expand':'Collapse'; }
   }
   syncToggle();
 
@@ -1888,57 +1916,8 @@ function buildSidebar(){
       syncToggle();
       return;
     }
-    var hdr=e.target.closest('.ng-cat-header');
-    if(hdr){hdr.parentElement.classList.toggle('ng-open');return;}
-    var item=e.target.closest('.ng-cat-item');
-    if(item){
-      var type=item.getAttribute('data-type');
-      var d=E.DEFS[type]; if(!d) return;
-      // In satellite Site Plan, the Building (t1) item INITIATES a footprint trace
-      // (trace-to-create) rather than dropping an abstract card — the polygon you
-      // draw becomes the new building node.
-      if(type==='t1' && _spSatellite && E.viewMode && E.viewMode()==='siteplan'){
-        selN=null; toggleTraceMode(); return;
-      }
-      var p=E.pan(),z=E.zm();
-      var cx=-p.x+wrap.clientWidth/2/z, cy=-p.y+wrap.clientHeight/2/z;
-      if(PICKABLE_TYPES[type] && E.job()){
-        showDataPicker(type, function(entry, focused){
-          if(focused) return;
-          if(entry){
-            var lbl=entryLabel(type,entry);
-            var newNode=E.addNode(type,cx-85,cy-30,lbl,entry);
-            if(newNode) autoWireFromData(newNode, entry);
-            render();
-          } else {
-            // "+ Create New" — open the same overview-panel modal
-            openEntityCreateModal(type, function(newEntry){
-              if(newEntry){
-                var lbl=entryLabel(type,newEntry);
-                var newNode=E.addNode(type,cx-85,cy-30,lbl,newEntry);
-                if(newNode) autoWireFromData(newNode, newEntry);
-                render();
-              }
-            });
-          }
-        });
-      } else {
-        var label=d.label;
-        if(d.nameEdit) label=prompt('Name:',label)||label;
-        E.addNode(type,cx-85,cy-30,label);
-        render();
-      }
-    }
   });
 
-  var si=document.getElementById('ngSearch');
-  if(si) si.addEventListener('input',function(){
-    var q=si.value.toLowerCase();
-    sb.querySelectorAll('.ng-cat-item').forEach(function(el){
-      el.style.display=el.textContent.toLowerCase().indexOf(q)>-1?'':'none';
-    });
-    if(q) sb.querySelectorAll('.ng-cat').forEach(function(el){el.classList.add('ng-open');});
-  });
 }
 
 // Inline-edit a WIP job-financial chip (Contract Amount, CO Income, …). Shared by
@@ -2698,6 +2677,7 @@ function wirePctEdit(wpc){
   wpInp.addEventListener('mousedown',function(ev){ev.stopPropagation();});
 }
 
+var ngOpenAddMenuFn=null;   // set inside initEvents (where openAddMenu is defined); used by the ribbon "+ Add" button wired in init()
 function initEvents(){
   var SN=E.SNAP, z=function(){return E.zm();};
 
@@ -2991,6 +2971,7 @@ function initEvents(){
   }
   function outsideAddMenu(ev){ if(addMenuEl && !addMenuEl.contains(ev.target)) closeAddMenu(); }
   function closeAddMenu(){ if(addMenuEl){ addMenuEl.remove(); addMenuEl=null; document.removeEventListener('mousedown', outsideAddMenu); } }
+  ngOpenAddMenuFn=openAddMenu;   // expose to init()'s ribbon "+ Add" wiring (openAddMenu is otherwise out of that scope)
 
   wrap.addEventListener('mouseup',function(e){
     isPan=false; wrap.classList.remove('ng-panning'); dragN=null;
@@ -4198,6 +4179,14 @@ function init(){
   if(eab) eab.addEventListener('click',function(){
     E.nodes().forEach(function(n){ n.collapsed=false; });
     render();
+  });
+
+  // "+ Add" ribbon button → searchable node-type menu (replaces the old left palette)
+  var addNodeBtn=tab.querySelector('.ng-add-node-btn');
+  if(addNodeBtn) addNodeBtn.addEventListener('click',function(e){
+    e.stopPropagation();
+    var r=addNodeBtn.getBoundingClientRect();
+    if(ngOpenAddMenuFn) ngOpenAddMenuFn(r.left, r.bottom+4, pickNodeType);
   });
 
   // Sync from data — add missing nodes without moving existing ones
