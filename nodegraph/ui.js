@@ -21,7 +21,7 @@ var _spMassing=(function(){ try{ return localStorage.getItem('ngSitePlanMassing'
 // Slice 4: photo-GPS pins
 var _photoPinsEl=null, _geoPhotos=[], _geoPhotosJob=null, _geoPhotosNoGps=0;
 var _spPhotos=(function(){ try{ return localStorage.getItem('ngSitePlanPhotos')==='1'; }catch(_){ return false; } })();
-var _spSatellite=(function(){ try{ return localStorage.getItem('ngSitePlanSatellite')==='1'; }catch(_){ return false; } })();
+var _spSatellite=true; // satellite is permanent now (the toggle is retired); never goes false
 // NG8: frames (group boxes) interaction state
 var selFrame=null, dragFrame=null, frameDragOff=null, frameMembers=null, resizeFrame=null, resizeStart=null;
 // When set to a note's id, the next click on a node attaches the note
@@ -1317,10 +1317,16 @@ function syncBasemapCamera(){
   basemapEl.style.transform='scale('+Math.pow(2, mz-rz)+')';
 }
 function updateBasemapVisibility(){
-  if(!basemapEl) return;
-  var show=_spSatellite && E.viewMode && E.viewMode()==='siteplan';
+  // .ng-sat now means "satellite Site Plan is active" (satellite is permanent), NOT
+  // "the basemap is painted". Set it for ANY siteplan job — even one with no geocode /
+  // no mounted basemap — so the building-card-blanking CSS always fires and buildings
+  // render as map polygons (imagery when geocoded, outlines when not), never the old
+  // abstract WIP cards. Done before the basemapEl null-check so it can't be skipped.
+  var sitePlan = E.viewMode && E.viewMode()==='siteplan';
   var t=document.getElementById('nodeGraphTab');
-  if(t) t.classList.toggle('ng-sat', !!show);
+  if(t) t.classList.toggle('ng-sat', !!sitePlan);
+  if(!basemapEl) return;
+  var show=_spSatellite && sitePlan;   // _spSatellite is always true now → show === sitePlan
   basemapEl.style.display = show ? 'block' : 'none';
   if(show){ mountBasemap(); } else { showSatHint(false); exitGeoPick(); exitTrace(); }
   updatePhotoLayer(); // photos ride on top of satellite — show/hide together
@@ -3928,18 +3934,11 @@ function init(){
     updateBasemapVisibility();            // show/hide the satellite basemap with the mode
   });
 
-  // Satellite basemap sub-toggle (Phase 2-A) — only meaningful in site-plan mode.
+  // Satellite is PERMANENT now (the toggle button is retired/hidden). The handler is
+  // intentionally gone so nothing can flip _spSatellite false — that was the only path
+  // that dropped .ng-sat and brought the old abstract building cards back. Keep the var
+  // ref so any later querySelector('.ng-sat-btn') still resolves harmlessly.
   var satBtn=tab.querySelector('.ng-sat-btn');
-  if(satBtn) satBtn.addEventListener('click',function(){
-    _spSatellite=!_spSatellite;
-    try{ localStorage.setItem('ngSitePlanSatellite', _spSatellite?'1':'0'); }catch(_){}
-    satBtn.classList.toggle('ng-on', _spSatellite);
-    // If the WIP node was selected, drop the selection before it gets hidden in
-    // satellite — otherwise its connected buildings keep an orphan amber highlight.
-    if(selN){ var _sn=E.findNode(selN); if(_sn && _sn.type==='wip') selN=null; }
-    updateBasemapVisibility();
-    render();   // re-run renderNodes/drawWires so the wip card+wires hide/show with satellite
-  });
 
   // 3D massing sub-toggle — extrude buildings into solid blocks (site-plan only).
   var massBtn=tab.querySelector('.ng-3d-btn');

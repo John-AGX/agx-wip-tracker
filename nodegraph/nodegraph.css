@@ -642,8 +642,18 @@ body.light-mode .ng-topbar.ng-ribbon .ng-ribbon-btn:hover{
    Plan toggle. Reversible (delete these lines). The sidebar (WIP + Add Cost), the
    ribbon (Trace/Place/Photos/3D/Audit/86), and the Satellite toggle stay. */
 #nodeGraphTab.ng-siteplan .ng-minimap{display:none !important}
-#nodeGraphTab.ng-siteplan .ng-clean-btn,
-#nodeGraphTab.ng-siteplan .ng-siteplan-btn{display:none !important}
+/* Mapping-only cleanup: retire the abstract-graph + redundant ribbon buttons (and the
+   Satellite toggle — satellite is permanent now). Hidden, not deleted — the handlers
+   stay wired so the abstract-graph paths never null-fault and this is trivially reverted. */
+#nodeGraphTab .ng-clean-btn,
+#nodeGraphTab .ng-siteplan-btn,
+#nodeGraphTab .ng-sat-btn,
+#nodeGraphTab .ng-collapse-all-btn,
+#nodeGraphTab .ng-expand-all-btn,
+#nodeGraphTab .ng-arrange-btn,
+#nodeGraphTab .ng-frame-btn,
+#nodeGraphTab .ng-snapshot-save-btn,
+#nodeGraphTab .ng-snapshot-restore-btn{display:none !important}
 #nodeGraphTab.ng-siteplan .ng-node.ng-tt-t1{
   border-width:2px;border-radius:12px;box-shadow:0 2px 16px var(--ng-shadow);
 }
