@@ -119,9 +119,10 @@ function spNodeVisible(type, id){
     return _spFocusSet[id] === 1;
   }
   if (type === 'wip') return false;            // whole-site: hub lives in the sidebar
-  if (type === 't1') return true;              // Site / building footprints
-  if (type === 't2') return true;              // Scope/phase nodes — shown on the whole-site map too (fanned around their buildings)
-  return false;                                // costs render on drill-in (focus set); shared-to-wip costs stay off-canvas
+  if (type === 't1' || type === 't2') return true;   // buildings + phases
+  var _dd = DEFS[type];
+  if (_dd && (_dd.cat === 'cost' || _dd.cat === 'sub' || _dd.cat === 'co')) return true; // costs/subs/POs/invoices/COs show on the whole-site map too (fanned around their building); so an added node never just vanishes
+  return false;                                // utility nodes (watch/note/math) stay off-canvas
 }
 // First ins/outs index on a def whose port type can connect with `type` in
 // the given direction ('in'|'out'). Used to auto-wire added/spliced nodes.
