@@ -26,6 +26,31 @@ const COLS =
   'id, ref, entity_type, entity_id, amount, vendor, cost_code, is_presale, ' +
   'notes, attachment_id, status, purchased_at, entered_by, created_at, updated_at';
 
+// Enrich receipt rows with the receipt photo's URLs (one batched query — the
+// photo lives in attachments, linked by attachment_id). Adds image_thumb_url
+// (grid thumbnail) + image_url (full) so the client renders without an extra
+// round-trip per row.
+async function attachImageUrls(rows) {
+  const ids = rows.map((r) => r.attachment_id).filter(Boolean);
+  if (!ids.length) return rows;
+  try {
+    const ar = await pool.query(
+      'SELECT id, thumb_url, web_url, original_url FROM attachments WHERE id = ANY($1::text[])',
+      [ids]
+    );
+    const m = {};
+    ar.rows.forEach((a) => { m[a.id] = a; });
+    rows.forEach((r) => {
+      const a = m[r.attachment_id];
+      if (a) {
+        r.image_thumb_url = a.thumb_url || a.web_url || a.original_url || null;
+        r.image_url = a.web_url || a.original_url || a.thumb_url || null;
+      }
+    });
+  } catch (_) { /* image URLs are best-effort */ }
+  return rows;
+}
+
 function newId() {
   return 'rcpt_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
 }
@@ -97,6 +122,7 @@ router.get('/', requireAuth, async (req, res) => {
       ' ORDER BY COALESCE(purchased_at, created_at::date) DESC, created_at DESC LIMIT $' + p,
       params
     );
+    await attachImageUrls(rows);
     res.json({ receipts: rows });
   } catch (e) {
     console.error('GET /api/receipts error:', e);

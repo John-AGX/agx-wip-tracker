@@ -246,7 +246,7 @@
     })();
     </script>
 
-    <link rel="stylesheet" href="css/styles.css?v=199">
+    <link rel="stylesheet" href="css/styles.css?v=200">
     <link rel="stylesheet" href="css/report-style-packs.css?v=3">
     <link rel="stylesheet" href="css/workspace-layout.css?v=62">
     <link rel="stylesheet" href="css/workspace.css?v=38">
@@ -624,6 +624,7 @@
                             </div>
                         </div>
                         <button class="tab-btn" data-tab="schedule" data-p86-icon="schedule" title="Schedule"><span class="app-nav-label">Schedule</span></button>
+                        <button class="tab-btn" data-tab="cost-inbox" data-p86-icon="materials" title="Cost Inbox — capture receipts &amp; field costs"><span class="app-nav-label">Cost Inbox</span></button>
                     </div>
                     <div class="app-nav-group">
                         <div class="app-nav-group-label">Directory</div>
@@ -1347,6 +1348,11 @@
                      folder still works for old links; the sidebar now comes here). -->
                 <div id="projects" class="tab-content">
                     <div id="projectsPageHost"></div>
+                </div>
+                <!-- Cost Inbox — receipt capture + filterable list. switchTab('cost-inbox')
+                     mounts js/cost-inbox.js window.p86CostInbox.render() here. -->
+                <div id="cost-inbox" class="tab-content">
+                    <div id="costInboxHost"></div>
                 </div>
 
                 <!-- Job Map (org-level "Google Earth") — every geocoded job on a
@@ -3178,6 +3184,7 @@
     <script src="js/report-templates.js?v=1"></script>
     <script src="js/report-style-packs.js?v=2"></script>
     <script src="js/projects.js?v=65"></script>
+    <script src="js/cost-inbox.js?v=1"></script>
     <script src="js/console.js?v=5"></script>
     <!-- Jobs Hub — cross-job index pages (Purchase Orders / Change Orders /
          RFIs / Submittals) for the Jobs sidebar dropdown. Uses p86Api +
