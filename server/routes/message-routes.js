@@ -344,12 +344,18 @@ router.post('/:threadKey', async (req, res) => {
     if (body.length > 5000) return res.status(400).json({ error: 'body too long (max 5000 chars)' });
 
     const id = genId();
+    // Author = attributed user (the acted-as target when a system admin is
+    // disguised) for ORG-SHARED entity threads (job/lead/estimate comments).
+    // But NOT for private DMs: the participant guard above checks req.user.id,
+    // so attributing a DM to an acted-as third party would forge a message
+    // "from" a non-participant into someone's private 2-person thread. Keep
+    // DM authorship on the real admin. Read pointer + delete-author guard +
+    // notify sender all stay on req.user.id regardless.
+    const isDm = key.indexOf('dm:') === 0;
+    const authorId = isDm ? req.user.id : getAttributedUserId(req);
     await pool.query(
       `INSERT INTO messages (id, thread_key, user_id, body) VALUES ($1, $2, $3, $4)`,
-      // Author = attributed user (the acted-as target when a system admin is
-      // disguised; otherwise the real user). Everything else below — read
-      // pointer, DM notify sender, delete-author guard — stays on req.user.id.
-      [id, key, getAttributedUserId(req), body]
+      [id, key, authorId, body]
     );
     // Auto-mark read for the poster so they don't see their own
     // message as unread.

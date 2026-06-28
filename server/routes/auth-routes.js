@@ -108,7 +108,13 @@ router.post('/refresh-token', requireAuth, async (req, res) => {
     );
     if (!r.rows.length) return res.status(401).json({ error: 'User not found or inactive' });
     const user = r.rows[0];
-    const token = signToken(user);
+    // Preserve an active act-as disguise across this re-sign. The client calls
+    // /refresh-token on every boot; without this the disguise would self-destruct
+    // on the first reload. requireAuth only sets req.actingAs when the caller
+    // still passes the live SYSTEM_ADMIN check, so a downgraded admin's claim is
+    // already absent here (fail-safe — it can only ever drop, never escalate).
+    const extra = (req.actingAs && req.actingAs.id) ? { acting_as_user_id: req.actingAs.id } : {};
+    const token = signToken(user, extra);
     res.cookie('token', token, { httpOnly: true, sameSite: 'lax', maxAge: 7 * 24 * 60 * 60 * 1000 });
     res.json({
       token,
@@ -166,7 +172,9 @@ router.post('/act-as', requireAuth, requireSystemAdmin, async (req, res) => {
       detail: { target_email: target.email, target_role: target.role },
     });
 
-    res.json({ ok: true, token, acting_as: { id: target.id, name: target.name, email: target.email } });
+    // Do NOT echo the token in the body — the httpOnly cookie carries auth.
+    // Returning it here would expose the disguise token to any page-level XSS.
+    res.json({ ok: true, acting_as: { id: target.id, name: target.name, email: target.email } });
   } catch (e) {
     console.error('POST /api/auth/act-as error:', e);
     res.status(500).json({ error: 'Server error' });
@@ -194,7 +202,7 @@ router.post('/act-as/exit', requireAuth, async (req, res) => {
       });
     }
 
-    res.json({ ok: true, token, acting_as: null });
+    res.json({ ok: true, acting_as: null });
   } catch (e) {
     console.error('POST /api/auth/act-as/exit error:', e);
     res.status(500).json({ error: 'Server error' });
@@ -413,7 +421,9 @@ router.put('/me', requireAuth, async (req, res) => {
     // take effect immediately without re-login.
     const fresh = (await pool.query('SELECT * FROM users WHERE id = $1', [req.user.id])).rows[0];
     if (fresh) {
-      const token = signToken(fresh);
+      // Preserve an active act-as disguise across this profile-edit re-sign.
+      const extra = (req.actingAs && req.actingAs.id) ? { acting_as_user_id: req.actingAs.id } : {};
+      const token = signToken(fresh, extra);
       res.cookie('token', token, { httpOnly: true, sameSite: 'lax', maxAge: 7 * 24 * 60 * 60 * 1000 });
     }
     res.json({ ok: true, user: { id: user.id, name: nameUpdate, email: emailUpdate, phone_number: phoneUpdate, title: titleUpdate } });

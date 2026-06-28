@@ -21,7 +21,7 @@ const Anthropic = require('@anthropic-ai/sdk');
 // local packs to Anthropic native Skills via the approval flow.
 const { toFile } = require('@anthropic-ai/sdk');
 const { pool } = require('../db');
-const { requireAuth, requireCapability, hasCapability, requireOrg, getAttributedUserId } = require('../auth');
+const { requireAuth, requireCapability, hasCapability, requireOrg } = require('../auth');
 const { storage } = require('../storage');
 const { aiChatLimiter, aiChatHourlyLimiter } = require('../rate-limit');
 // Wave 1.B context registry — fire-and-forget event logger for
@@ -13061,11 +13061,13 @@ router.post('/86/chat', requireAuth, requireOrg, aiChatLimiter, aiChatHourlyLimi
         userMsgId,
         turnEntityType,
         turnEntityId,
-        // Human chat-message author = attributed user (acted-as target when
-        // disguised). ONLY this role='user' author flips — the session
-        // resolution + all read filters above stay on req.user.id, and every
-        // role='assistant' insert (86/Scribe output) keeps req.user.id too.
-        getAttributedUserId(req), userMessage, additionalImages.length,
+        // NOT attributed to an acted-as target by design: ai_messages.user_id is
+        // ALSO the conversation read key (history loads WHERE user_id=req.user.id)
+        // and the clear-history delete key. Flipping it would orphan a disguised
+        // admin's own prompts under the target — desyncing the admin's transcript
+        // and leaking the prompts into the target's own 86 history. The 86 session
+        // belongs to the real admin; keep req.user.id.
+        req.user.id, userMessage, additionalImages.length,
         uploadedBlocks.length ? JSON.stringify(uploadedBlocks) : null
       ]
     );
