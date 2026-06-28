@@ -948,6 +948,7 @@ function render(){
   renderPolygons();                 // geo-anchored building footprints (satellite only)
   renderSidebarMetrics();           // live WIP totals in the sidebar (satellite only, via CSS)
   renderBuildingMetrics();          // S2: selected building's cost breakdown
+  renderInspector();                // right-hand Inspector: WIP / building / node detail
   E.drawGrid(gridCtx, gridC.width, gridC.height);
   E.drawWires(wireCtx, wrap, wiringFrom, wireMouse);
   E.saveGraph();
@@ -1833,19 +1834,7 @@ function buildSidebar(){
     if(luEl){
       e.preventDefault(); e.stopPropagation();
       var bn=selN&&E.findNode(selN); if(!bn||bn.type!=='t1') return;
-      if(!bn.levels) bn.levels=[]; if(!bn.units) bn.units=[];
-      var act=luEl.getAttribute('data-lu-act'), id=luEl.getAttribute('data-id'), nm;
-      if(act==='add-level'){ nm=prompt('Level name:', 'Level '+(bn.levels.length+1)); if(nm&&nm.trim()) bn.levels.push({id:luUid('lv'), name:nm.trim()}); }
-      else if(act==='add-unit'){ nm=prompt('Unit name:', 'Unit '+(bn.units.length+1)); if(nm&&nm.trim()) bn.units.push({id:luUid('un'), name:nm.trim(), levelId:null}); }
-      else if(act==='add-unit-lvl'){ nm=prompt('Unit name:', 'Unit '+(bn.units.length+1)); if(nm&&nm.trim()) bn.units.push({id:luUid('un'), name:nm.trim(), levelId:id}); }
-      else if(act==='rename-level'){ var L=luById(bn.levels,id); if(L){ nm=prompt('Level name:', L.name); if(nm&&nm.trim()) L.name=nm.trim(); } }
-      else if(act==='rename-unit'){ var U=luById(bn.units,id); if(U){ nm=prompt('Unit name:', U.name); if(nm&&nm.trim()) U.name=nm.trim(); } }
-      else if(act==='del-level'){ var L2=luById(bn.levels,id); var cnt=bn.units.filter(function(u){return u.levelId===id;}).length;
-        if(L2 && (cnt===0 || confirm('Remove "'+L2.name+'"? Its '+cnt+' unit'+(cnt===1?'':'s')+' become building-wide.'))){
-          bn.units.forEach(function(u){ if(u.levelId===id) u.levelId=null; });
-          bn.levels=bn.levels.filter(function(x){ return x.id!==id; });
-        } }
-      else if(act==='del-unit'){ var U2=luById(bn.units,id); if(U2 && confirm('Remove "'+U2.name+'"?')) bn.units=bn.units.filter(function(x){ return x.id!==id; }); }
+      luApply(bn, luEl.getAttribute('data-lu-act'), luEl.getAttribute('data-id'));
       if(E.saveGraph) E.saveGraph(); renderBuildingMetrics();
       return;
     }
@@ -1960,9 +1949,15 @@ function renderSidebarMetrics(){
   var body=document.querySelector('.ng-sp-metrics-body'); if(!body) return;
   if(!(E.viewMode && E.viewMode()==='siteplan')) return; // shown in all Site Plan modes (WIP lives in the sidebar, satellite or not)
   if(_jobChipEditing && body.querySelector('input')) return;             // mid-edit: don't clobber the focused input
+  var h=wipPanelHtml();
+  body.innerHTML = (h!=null) ? h : '<div class="ng-sp-metrics-empty">No job loaded</div>';
+}
+// Project WIP panel HTML — editable job-financial inputs + KPI tiles from getJobWIP.
+// Extracted so the legacy left sidebar AND the new right Inspector render the same WIP.
+function wipPanelHtml(){
   var jid=E.job();
   var job=(typeof appData!=='undefined' && appData.jobs) ? appData.jobs.find(function(j){return j.id===jid;}) : null;
-  if(!job || typeof window.getJobWIP!=='function'){ body.innerHTML='<div class="ng-sp-metrics-empty">No job loaded</div>'; return; }
+  if(!job || typeof window.getJobWIP!=='function') return null;
   var w=window.getJobWIP(jid)||{};
   // Editable job-financial inputs (write straight to the job; CO totals are derived).
   var h='<div class="ng-subitems" style="max-height:none;">';
@@ -2001,7 +1996,7 @@ function renderSidebarMetrics(){
     h+='<div class="ng-wip-ov-kpi'+(t.hero?' ng-ov-hero':'')+'"><span class="ng-ov-lbl">'+t.n+'</span><span class="ng-ov-val '+t.c+'">'+t.v+'</span></div>';
   });
   h+='</div>';
-  body.innerHTML=h;
+  return h;
 }
 // Inline-edit a job financial field from the WIP panel → write the job + persist via
 // saveData (the same path the WIP report uses); getJobWIP then recomputes on render.
@@ -2045,6 +2040,56 @@ function renderBuildingMetrics(){
   if(!sel || sel.type!=='t1'){ panel.style.display='none'; return; }
   panel.style.display='block';
   var nameEl=panel.querySelector('.ng-sp-bldg-name'); if(nameEl) nameEl.textContent=sel.label||'Building';
+  var bodyEl=panel.querySelector('.ng-sp-bldg-body'); if(bodyEl) bodyEl.innerHTML=buildingKpiGridHtml(sel);
+  renderBuildingStructure(panel, sel);   // L/U Phase 1: levels + units breakdown
+}
+
+// ── Right-hand Inspector (Slice 1+2) ───────────────────────────────────────
+// Persistent right panel: project WIP by default, building detail (KPIs +
+// levels/units) when a building is selected, a light header for other node types
+// (full per-type editing lands in Slice 3). Pure function of selN + getJobWIP,
+// re-rendered every render() pass so edits reflect immediately.
+function renderInspector(){
+  var panel=document.querySelector('.ng-inspector'); if(!panel) return;
+  if(!(E.viewMode && E.viewMode()==='siteplan')) return;
+  // Self-heal the canvas size: the inspector shrinks .ng-canvas-area, so the grid/wire
+  // buffers must match the (now narrower) wrap width or they clip on the right edge.
+  if(wireC && wrap && wrap.clientWidth>0 && wireC.width!==wrap.clientWidth) resize();
+  var hdr=panel.querySelector('.ng-inspector-hdr');
+  var body=panel.querySelector('.ng-inspector-body'); if(!body) return;
+  if(_jobChipEditing && body.querySelector('input')) return; // mid-edit: don't clobber the focused input
+  var sel=selN ? E.findNode(selN) : null;
+  if(sel && sel.type==='t1'){
+    if(hdr) hdr.innerHTML='<span class="ng-insp-ic">▤</span> '+luEsc(sel.label||'Building')+'<span class="ng-insp-type">Building</span>';
+    body.innerHTML='<div class="ng-insp-sec">'+buildingKpiGridHtml(sel)+'</div><div class="ng-sp-struct"></div>';
+    renderBuildingStructure(body, sel);
+  } else if(sel && sel.type!=='wip'){
+    var d=E.DEFS[sel.type]||{};
+    if(hdr) hdr.innerHTML='<span class="ng-insp-ic">'+(d.icon||'◆')+'</span> '+luEsc(sel.label||d.label||'Node')+'<span class="ng-insp-type">'+luEsc(d.label||sel.type)+'</span>';
+    body.innerHTML=inspectorGenericHtml(sel, d);
+  } else {
+    if(hdr) hdr.innerHTML='<span class="ng-insp-ic">$</span> Project WIP';
+    var wh=wipPanelHtml();
+    body.innerHTML=(wh!=null)?wh:'<div class="ng-insp-empty">No job loaded.</div>';
+  }
+}
+// Minimal detail for non-building node types until Slice 3 wires full per-type editing.
+function inspectorGenericHtml(sel, d){
+  var rows=[];
+  if(sel.value) rows.push({l:'Amount', v:E.fmtC(sel.value||0), c:'ng-ov-zero'});
+  if(sel.revenue) rows.push({l:'Revenue', v:E.fmtC(sel.revenue||0), c:'ng-ov-pos'});
+  if((sel.type==='t2'||sel.type==='co') && sel.pctComplete!=null) rows.push({l:'% Complete', v:(Number(sel.pctComplete)||0).toFixed(1)+'%', c:'ng-ov-pos'});
+  var h='';
+  if(rows.length){
+    h+='<div class="ng-insp-sec"><div class="ng-wip-ov">';
+    rows.forEach(function(r){ h+='<div class="ng-wip-ov-kpi"><span class="ng-ov-lbl">'+r.l+'</span><span class="ng-ov-val '+r.c+'">'+r.v+'</span></div>'; });
+    h+='</div></div>';
+  }
+  h+='<div class="ng-insp-empty">Full detail &amp; editing for '+luEsc(d.label||sel.type)+' nodes lands in the next slice.</div>';
+  return h;
+}
+// Building KPI grid HTML — shared by the legacy left panel + the right Inspector.
+function buildingKpiGridHtml(sel){
   var bRev=E.getBuildingAllocatedRevenue(sel);
   var pct=E.getT1WeightedPct(sel);
   var revEarned=bRev*(pct/100);
@@ -2066,8 +2111,7 @@ function renderBuildingMetrics(){
     h+='<div class="ng-wip-ov-kpi'+(r.hero?' ng-ov-hero':'')+'"><span class="ng-ov-lbl">'+r.l+'</span><span class="ng-ov-val '+r.c+'">'+r.v+'</span></div>';
   });
   h+='</div>';
-  var bodyEl=panel.querySelector('.ng-sp-bldg-body'); if(bodyEl) bodyEl.innerHTML=h;
-  renderBuildingStructure(panel, sel);   // L/U Phase 1: levels + units breakdown
+  return h;
 }
 
 // ── L/U Phase 1: building Levels & Units ───────────────────────────────────
@@ -2078,6 +2122,23 @@ function renderBuildingMetrics(){
 function luEsc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 function luUid(p){ return p+'_'+Math.random().toString(36).slice(2,7)+(Date.now()%100000).toString(36); }
 function luById(arr,id){ if(!arr) return null; for(var i=0;i<arr.length;i++){ if(arr[i].id===id) return arr[i]; } return null; }
+// Mutate a building's levels/units (add/rename/remove). Shared by the legacy left
+// panel + the right Inspector; callers persist (saveGraph) + re-render after.
+function luApply(bn, act, id){
+  if(!bn.levels) bn.levels=[]; if(!bn.units) bn.units=[];
+  var nm;
+  if(act==='add-level'){ nm=prompt('Level name:', 'Level '+(bn.levels.length+1)); if(nm&&nm.trim()) bn.levels.push({id:luUid('lv'), name:nm.trim()}); }
+  else if(act==='add-unit'){ nm=prompt('Unit name:', 'Unit '+(bn.units.length+1)); if(nm&&nm.trim()) bn.units.push({id:luUid('un'), name:nm.trim(), levelId:null}); }
+  else if(act==='add-unit-lvl'){ nm=prompt('Unit name:', 'Unit '+(bn.units.length+1)); if(nm&&nm.trim()) bn.units.push({id:luUid('un'), name:nm.trim(), levelId:id}); }
+  else if(act==='rename-level'){ var L=luById(bn.levels,id); if(L){ nm=prompt('Level name:', L.name); if(nm&&nm.trim()) L.name=nm.trim(); } }
+  else if(act==='rename-unit'){ var U=luById(bn.units,id); if(U){ nm=prompt('Unit name:', U.name); if(nm&&nm.trim()) U.name=nm.trim(); } }
+  else if(act==='del-level'){ var L2=luById(bn.levels,id); var cnt=bn.units.filter(function(u){return u.levelId===id;}).length;
+    if(L2 && (cnt===0 || confirm('Remove "'+L2.name+'"? Its '+cnt+' unit'+(cnt===1?'':'s')+' become building-wide.'))){
+      bn.units.forEach(function(u){ if(u.levelId===id) u.levelId=null; });
+      bn.levels=bn.levels.filter(function(x){ return x.id!==id; });
+    } }
+  else if(act==='del-unit'){ var U2=luById(bn.units,id); if(U2 && confirm('Remove "'+U2.name+'"?')) bn.units=bn.units.filter(function(x){ return x.id!==id; }); }
+}
 
 function renderBuildingStructure(panel, sel){
   var el=panel.querySelector('.ng-sp-struct'); if(!el) return;
@@ -2164,6 +2225,16 @@ function addCostToBuilding(bId, clientX, clientY){
 // ── Events ──
 function initEvents(){
   var SN=E.SNAP, z=function(){return E.zm();};
+
+  // Right-hand Inspector: its WIP chips + levels/units controls reuse the existing
+  // edit/persist paths (jobFieldEdit, luApply). Per-node-type field editing = Slice 3.
+  var insp=document.querySelector('.ng-inspector');
+  if(insp) insp.addEventListener('click', function(e){
+    var jchip=e.target.closest('[data-job-edit]');
+    if(jchip && !e.target.closest('input')){ e.preventDefault(); e.stopPropagation(); jobFieldEdit(jchip); return; }
+    var luEl=e.target.closest('[data-lu-act]');
+    if(luEl){ e.preventDefault(); e.stopPropagation(); var bn=selN&&E.findNode(selN); if(!bn||bn.type!=='t1') return; luApply(bn, luEl.getAttribute('data-lu-act'), luEl.getAttribute('data-id')); if(E.saveGraph) E.saveGraph(); renderInspector(); return; }
+  });
 
   wrap.addEventListener('mousedown',function(e){
     if(_geoPick) return; // map-picker active: the overlay handles the placement click
