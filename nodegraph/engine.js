@@ -21,7 +21,7 @@ function canConn(a,b){ return a===b||a===PT.A||b===PT.A||(a===PT.N&&b===PT.C); }
 
 // ── Node Definitions ──
 var DEFS = {
-  t1:    { cat:'t1',   icon:'🏗', label:'Site',         ins:[{n:'Costs',t:PT.C}], outs:[{n:'Total',t:PT.C}], hasProg:true, nameEdit:true },
+  t1:    { cat:'t1',   icon:'🏗', label:'Building',     ins:[{n:'Costs',t:PT.C}], outs:[{n:'Total',t:PT.C}], hasProg:true, nameEdit:true },
   t2:    { cat:'t2',   icon:'📋', label:'Scope',        ins:[{n:'Costs',t:PT.C}], outs:[{n:'Total',t:PT.C}], hasProg:true, nameEdit:true },
   labor: { cat:'cost', icon:'🛠', label:'Labor',        ins:[], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'labor' },
   mat:   { cat:'cost', icon:'🧱', label:'Materials',    ins:[], outs:[{n:'Total',t:PT.C}], hasItems:true, nameEdit:true, itemType:'mat' },

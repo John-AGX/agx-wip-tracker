@@ -177,6 +177,28 @@ function updateConnectedHighlight(){
     else el.classList.remove('ng-connected');
   });
 }
+// Slice 4: slim at-a-glance node chip for the satellite map — a % ring + name for t2/co,
+// an icon badge + name + compact amount for cost/sub/po/inv. Full detail lives in the
+// right Inspector; clicking the chip selects the node. Color-coded by type.
+var SLIM_COLOR={ t2:'#a78bfa', co:'#f472b6', sub:'#34d399', po:'#fbbf24', inv:'#60a5fa' };
+function slimChipHtml(n, d){
+  var hasPct = (n.type==='t2' || n.type==='co');
+  var color = SLIM_COLOR[n.type] || '#8aa0c0';
+  var left;
+  if(hasPct){
+    var pct = Math.max(0, Math.min(100, E.getT2WeightedPct(n)||0));
+    var circ = 2*Math.PI*13;
+    var off = circ*(1 - pct/100);
+    left = '<svg class="ng-slim-ring" width="30" height="30" viewBox="0 0 30 30">'
+      + '<circle cx="15" cy="15" r="13" fill="none" stroke="rgba(255,255,255,.14)" stroke-width="3.4"/>'
+      + '<circle cx="15" cy="15" r="13" fill="none" stroke="'+color+'" stroke-width="3.4" stroke-linecap="round" stroke-dasharray="'+circ.toFixed(1)+'" stroke-dashoffset="'+off.toFixed(1)+'" transform="rotate(-90 15 15)"/>'
+      + '<text x="15" y="18.5" text-anchor="middle" font-size="9" font-weight="700" fill="#e7ecf5" font-family="sans-serif">'+pct.toFixed(0)+'</text></svg>';
+  } else {
+    left = '<span class="ng-slim-badge" style="background:'+color+'">'+(d.icon||'•')+'</span>';
+  }
+  var sub = hasPct ? (d.label||n.type) : fmtCompactC(E.getOutput(n,0)||0);
+  return left + '<div class="ng-slim-txt"><span class="ng-slim-name">'+luEsc(n.label||d.label||'')+'</span><span class="ng-slim-sub">'+luEsc(sub)+'</span></div>';
+}
 function renderNodes(){
   var nodes=E.nodes(), wires=E.wires();
   canvasEl.querySelectorAll('.ng-node').forEach(function(el){
@@ -189,6 +211,7 @@ function renderNodes(){
   var sitePlan = E.viewMode && E.viewMode()==='siteplan';
   nodes.forEach(function(n){
     var d=E.DEFS[n.type]; if(!d) return;
+    var _slim = sitePlan && _spSatellite && n.type!=='t1'; // Slice 4: slim at-a-glance chip on the satellite map
     if(sitePlan && !E.spNodeVisible(n.type, n.id)) return; // site-plan: buildings + WIP hub, or a drilled-in building's subgraph
     if(editingId===n.id) return;
     // Watches are never collapsed — always show the flashy KPI
@@ -233,18 +256,18 @@ function renderNodes(){
         div.classList.add('ng-sp-massing');
       }
     } else if(sitePlan && _spSatellite){
-      // Every NON-building node (phase/sub/PO/materials/labor) is graph-unit sized;
-      // on the ~0.5 m/unit satellite basemap a ~190px card reads ~95m — dwarfing the
-      // building footprints. Scale it down so it sits proportional to them. transform
-      // keeps getBoundingClientRect (→ wire port anchors) consistent, and top-left
-      // origin keeps n.x/n.y the anchor. Reverts when satellite toggles off.
-      div.style.transformOrigin='top left';
-      div.style.transform='scale(0.16)';
+      // Slice 4: every NON-building node (phase/sub/PO/cost) renders as a slim
+      // at-a-glance chip — natively small (no scaled-down 190px card). The full
+      // detail now lives in the right Inspector; clicking the chip selects it.
+      div.classList.add('ng-slim');
     }
 
+    var h;
+    if(_slim){ h=slimChipHtml(n, d); }
+    else {
     var canColl = n.type!=='note' && n.type!=='watch';
     var canEdit = (n.type==='t1'||n.type==='t2'||n.type==='sub'||n.type==='co'||n.type==='po'||n.type==='inv') && n.data && n.data.id;
-    var h='<div class="ng-hdr"><span class="ng-hi">'+d.icon+'</span><span class="ng-hdr-name" data-rename="'+n.id+'" title="Double-click to rename">'+n.label+'</span>';
+    h='<div class="ng-hdr"><span class="ng-hi">'+d.icon+'</span><span class="ng-hdr-name" data-rename="'+n.id+'" title="Double-click to rename">'+n.label+'</span>';
     if(canEdit) h+='<span class="ng-editbtn" data-edit="'+n.id+'" title="Edit details">\u2699</span>';
     if(n.type==='note'){
       var _att = !!n.attachedTo;
@@ -934,6 +957,7 @@ function renderNodes(){
     h+='</div>';
     h+='<div class="ng-node-cap" data-rename="'+n.id+'" title="Double-click to rename">'+n.label+'</div>';
 
+    }
     div.innerHTML=h;
     canvasEl.appendChild(div);
   });
@@ -943,7 +967,7 @@ function render(){
   // Whole-site Site Plan: fan each building's phases around it (once per building, via
   // _fannedSet) so phase nodes show near their buildings on the map — not at abstract
   // layout positions. Skipped while drilled into one building (that path fans on click).
-  if(E.viewMode && E.viewMode()==='siteplan' && !_spFocus) fanAllBuildings();
+  if(E.viewMode && E.viewMode()==='siteplan' && !_spFocus && _spOrigin && _spOriginGraph) fanAllBuildings();
   updateTierLabels();
   updateT1Progress();
   pushToJobSilent();
@@ -1175,8 +1199,10 @@ function fanFocusNodes(bId){
   // On satellite the cost cards are scale(0.16) and 1 graph unit ≈ 0.5m, so the ring
   // + card-centre offsets shrink to match (else the nodes fly hundreds of metres off).
   var _sat=!!_spSatellite && E.viewMode && E.viewMode()==='siteplan';
-  var R=Math.max(220, 56*kids.length) * (_sat?0.14:1);
-  var _ox=_sat?15:85, _oy=_sat?5:30;                    // half the (scaled) card, to centre it on the ring point
+  // Slice 4: on satellite the kids are now native-small slim chips (~100x36px), so the
+  // ring sits a fixed graph-unit distance off the building (not the old scaled-card math).
+  var R = _sat ? Math.max(120, 42*kids.length) : Math.max(220, 56*kids.length) * 1;
+  var _ox=_sat?52:85, _oy=_sat?18:30;                  // half the chip, to centre it on the ring point
   var arc=Math.min(330, Math.max(110, kids.length*46));
   var start=270-arc/2;                                  // 270° = above the building (y grows down)
   kids.forEach(function(k,i){

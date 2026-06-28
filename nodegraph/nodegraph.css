@@ -153,6 +153,15 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
 .ng-sub-add-po{cursor:pointer;color:#4f8cff;font-size:16px;font-weight:700;line-height:1;padding:0 4px}
 .ng-po-link-add{margin-top:6px;cursor:pointer;background:rgba(79,140,255,0.12);color:#7da8ff;border:1px dashed rgba(79,140,255,0.4);border-radius:4px;padding:4px 10px;font-size:11px;font-weight:500;font-family:inherit;width:100%}
 .ng-po-link-add:hover{background:rgba(79,140,255,0.2)}
+/* Slice 4 — slim at-a-glance node chip on the satellite map (ring + name) */
+.ng-node.ng-slim{display:flex;align-items:center;gap:7px;width:auto!important;min-width:0!important;max-width:none!important;min-height:0!important;height:auto!important;padding:5px 11px 5px 6px;background:rgba(15,20,32,.93);border:1px solid rgba(255,255,255,.13);border-radius:11px;box-shadow:0 4px 13px rgba(0,0,0,.5);cursor:pointer;white-space:nowrap;overflow:visible}
+.ng-node.ng-slim.ng-sel{border-color:#4f8cff;box-shadow:0 0 0 2px rgba(79,140,255,.45),0 4px 13px rgba(0,0,0,.5)}
+.ng-node.ng-slim.ng-connected{border-color:rgba(79,140,255,.5)}
+.ng-slim-ring{flex:none;display:block}
+.ng-slim-badge{flex:none;width:24px;height:24px;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:12px}
+.ng-slim-txt{display:flex;flex-direction:column;line-height:1.2;min-width:0}
+.ng-slim-name{font-size:12px;font-weight:600;color:#e7ecf5;max-width:110px;overflow:hidden;text-overflow:ellipsis}
+.ng-slim-sub{font-size:9px;text-transform:uppercase;letter-spacing:.03em;color:#8b90a5}
 .ng-canvas-area.ng-panning{cursor:grabbing}
 .ng-canvas{position:absolute;top:0;left:0;width:20000px;height:20000px;transform-origin:0 0;z-index:5}
 .ng-grid-canvas,.ng-wire-canvas{position:absolute;top:0;left:0}
