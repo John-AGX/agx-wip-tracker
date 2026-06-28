@@ -396,6 +396,10 @@
   function mount(maps, host, data, opts) {
     opts = opts || {};
     _onJobHook = (typeof opts.onJob === 'function') ? opts.onJob : null; // org-map: pin → drill into Site Plan
+    // Single-kind maps: opts.only filters to one entity kind — Job Map = 'job',
+    // Leads Map = 'lead'. Unset keeps the original dual-kind behavior (Summary card).
+    if (opts.only === 'job') data.leads = [];
+    else if (opts.only === 'lead') data.jobs = [];
     var allItems = data.leads.concat(data.jobs);
     var total = allItems.length;
 
@@ -408,12 +412,13 @@
     // the relative host via absolute inset so it always has a definite
     // box for the Maps SDK to measure.
     host.innerHTML =
-      '<div style="position:absolute;top:10px;left:10px;z-index:5;display:flex;gap:6px;">' +
+      (opts.only ? '' :
+        '<div style="position:absolute;top:10px;left:10px;z-index:5;display:flex;gap:6px;">' +
         '<button type="button" data-emap-chip="lead" class="p86-emap-chip" ' +
           'style="font-size:11px;font-weight:600;padding:5px 10px;border-radius:14px;border:1px solid #4f8cff;background:#4f8cff;color:#fff;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,0.3);">Leads ' + data.leads.length + '</button>' +
         '<button type="button" data-emap-chip="job" class="p86-emap-chip" ' +
           'style="font-size:11px;font-weight:600;padding:5px 10px;border-radius:14px;border:1px solid #94a3b8;background:#94a3b8;color:#fff;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,0.3);">Jobs ' + data.jobs.length + '</button>' +
-      '</div>' +
+        '</div>') +
       '<button type="button" data-emap-recenter ' +
         'style="position:absolute;bottom:24px;right:10px;z-index:5;display:none;font-size:11px;font-weight:600;padding:6px 10px;border-radius:6px;border:1px solid var(--border,#333);background:#fff;color:#111;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,0.3);">\u{1F4CD} You</button>' +
       '<div data-emap-canvas style="position:absolute;inset:0;"></div>';
@@ -527,7 +532,7 @@
             icon: sIcon,
             content: (advOK && sIcon) ? pinImg({ url: sIcon.url, w: sIcon.scaledSize.width, h: sIcon.scaledSize.height }) : null,
             onClick: (function (it) { return function () {
-              if (opts.jobsSidebar) { flyTo(pos, marker); if (it.kind === 'job') { selectRow(it.id); showJobDetail(it.id); } else showLeadDetail(it); }
+              if (opts.jobsSidebar) { flyTo(pos, marker); selectRow(it.id); if (it.kind === 'job') showJobDetail(it.id); else showLeadDetail(it); }
               else { openInfo(infoContentHTML(it), marker); }
             }; })(item)
           });
@@ -547,7 +552,7 @@
         bounds.extend(pos);
         // Index every JOB at this location → its (group) marker, for the sidebar.
         g.members.forEach(function (m) {
-          if (m.kind === 'job') jobIndex[m.id] = { pos: pos, marker: marker, item: m };
+          jobIndex[m.id] = { pos: pos, marker: marker, item: m }; // index all kinds (single-kind maps hold only one)
         });
       });
 
@@ -748,21 +753,25 @@
     // pin + select; "Open WIP" → the job's drill hook (Site Plan).
     function buildJobsSidebar() {
       injectJobsSidebarStyle();
-      var jobs = data.jobs.slice().sort(function (a, b) {
+      var isLead = (opts.only === 'lead');
+      var headLabel = isLead ? 'Leads' : 'Jobs';
+      var openLabel = isLead ? 'Open lead →' : 'Open WIP →';
+      var rows = (isLead ? data.leads : data.jobs).slice().sort(function (a, b) {
         return String(a.title || '').localeCompare(String(b.title || ''));
       });
+      var byId = {}; rows.forEach(function (r) { byId[r.id] = r; });
       var panel = document.createElement('div');
       panel.className = 'emap-jobs-panel';
       panel.innerHTML =
-        '<div class="emap-jobs-head"><span class="emap-jobs-title">Jobs <b>' + jobs.length + '</b></span>' +
+        '<div class="emap-jobs-head"><span class="emap-jobs-title">' + headLabel + ' <b>' + rows.length + '</b></span>' +
           '<button type="button" class="emap-jobs-collapse" title="Collapse">››</button></div>' +
-        '<input type="text" class="emap-jobs-search" placeholder="Search jobs…">' +
+        '<input type="text" class="emap-jobs-search" placeholder="Search ' + headLabel.toLowerCase() + '…">' +
         '<div class="emap-jobs-list"></div>';
       host.appendChild(panel);
       var expandTab = document.createElement('button');
       expandTab.type = 'button';
       expandTab.className = 'emap-jobs-expand';
-      expandTab.innerHTML = '‹‹ Jobs';
+      expandTab.innerHTML = '‹‹ ' + headLabel;
       expandTab.style.display = 'none';
       host.appendChild(expandTab);
 
@@ -772,15 +781,15 @@
           '<div class="emap-job-main"><span class="emap-job-name">' + escapeHTML(j.title || '(untitled)') + '</span>' +
             (j.status ? '<span class="emap-job-status">' + escapeHTML(String(j.status).replace(/_/g, ' ')) + '</span>' : '') + '</div>' +
           (j.address ? '<div class="emap-job-addr">' + escapeHTML(j.address) + '</div>' : '') +
-          '<button type="button" class="emap-job-wip">Open WIP →</button>' +
+          '<button type="button" class="emap-job-wip">' + openLabel + '</button>' +
         '</div>';
       }
       function paint(filter) {
         var f = String(filter || '').toLowerCase().trim();
-        var shown = !f ? jobs : jobs.filter(function (j) {
+        var shown = !f ? rows : rows.filter(function (j) {
           return ((j.title || '') + ' ' + (j.address || '')).toLowerCase().indexOf(f) >= 0;
         });
-        listEl.innerHTML = shown.length ? shown.map(rowHTML).join('') : '<div class="emap-jobs-empty">No matching jobs</div>';
+        listEl.innerHTML = shown.length ? shown.map(rowHTML).join('') : '<div class="emap-jobs-empty">No matching ' + headLabel.toLowerCase() + '</div>';
       }
       paint('');
       panel.querySelector('.emap-jobs-search').addEventListener('input', function () { paint(this.value); });
@@ -795,13 +804,16 @@
         if (!row) return;
         var id = row.getAttribute('data-job-id');
         if (ev.target.closest('.emap-job-wip')) {
-          if (typeof _onJobHook === 'function') _onJobHook(id); else openEntity('job', id);
+          if (isLead) openEntity('lead', id);
+          else if (typeof _onJobHook === 'function') _onJobHook(id);
+          else openEntity('job', id);
           return;
         }
         var prev = listEl.querySelector('.emap-job-row.sel'); if (prev) prev.classList.remove('sel');
         row.classList.add('sel');
         flyToById(id);
-        showJobDetail(id);
+        if (isLead) { if (byId[id]) showLeadDetail(byId[id]); }
+        else showJobDetail(id);
       });
 
       // Clicking empty map closes the on-map popup.

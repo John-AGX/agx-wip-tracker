@@ -1779,6 +1779,7 @@
             admin:      'Admin',
             projects:   'Projects',
             orgmap:     'Job Map',
+            orgleadsmap: 'Leads Map',
             jobshub:    'Jobs',
             console:    'Command Center'
         };
@@ -1921,10 +1922,17 @@
                     projHost.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);">Projects module not loaded.</div>';
                 }
             } else if (tabName === 'orgmap') {
-                // Job Map (org "Google Earth") — every geocoded job on satellite;
+                // Job Map (org "Google Earth") — every geocoded JOB on satellite;
                 // a pin's Open drills into that job's Site Plan via openJobSitePlan.
                 if (window.p86EntitiesMap && typeof window.p86EntitiesMap.render === 'function') {
-                    window.p86EntitiesMap.render('orgMapHost', { satellite: true, onJob: window.openJobSitePlan, jobsSidebar: true, warmGeocode: true });
+                    window.p86EntitiesMap.render('orgMapHost', { satellite: true, onJob: window.openJobSitePlan, jobsSidebar: true, warmGeocode: true, only: 'job' });
+                }
+            } else if (tabName === 'orgleadsmap') {
+                // Leads Map — the same "Google Earth" treatment, LEADS only. A pin/row's
+                // Open opens the lead (via openEntity → openEditLeadModal). Leads are
+                // already geocoded, so no warm-up.
+                if (window.p86EntitiesMap && typeof window.p86EntitiesMap.render === 'function') {
+                    window.p86EntitiesMap.render('orgLeadsMapHost', { satellite: true, jobsSidebar: true, warmGeocode: false, only: 'lead' });
                 }
             } else if (tabName === 'console') {
                 // Project 86 Command Center — platform-owner surface.

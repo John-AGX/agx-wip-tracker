@@ -586,7 +586,7 @@
                             <div class="app-nav-children" role="group" aria-label="Leads sub-pages">
                                 <button class="tab-btn app-nav-child" data-tab="estimates" data-est-subtab="leads" data-leads-view="list" data-virtual-tab="leads" data-p86-icon="leads" title="Leads List"><span class="app-nav-label">Leads List</span></button>
                                 <button class="tab-btn app-nav-child" data-tab="estimates" data-est-subtab="leads" data-leads-view="activities" data-virtual-tab="leads-activities" data-p86-icon="graph" title="Lead Activities"><span class="app-nav-label">Lead Activities</span></button>
-                                <button class="tab-btn app-nav-child" data-tab="estimates" data-est-subtab="leads" data-leads-view="map" data-virtual-tab="leads-map" data-p86-icon="globe" title="Leads Map"><span class="app-nav-label">Leads Map</span></button>
+                                <button class="tab-btn app-nav-child" data-tab="orgleadsmap" data-virtual-tab="orgleadsmap" data-p86-icon="globe" title="Leads Map — all leads on a satellite map"><span class="app-nav-label">Leads Map</span></button>
                             </div>
                         </div>
                         <div class="app-nav-parent" data-accordion="estimates" data-cap="ESTIMATES_VIEW">
@@ -616,6 +616,7 @@
                             </button>
                             <div class="app-nav-children" role="group" aria-label="Jobs sub-pages">
                                 <button class="tab-btn app-nav-child" data-tab="jobs" data-virtual-tab="jobs" data-p86-icon="wip" title="Jobs List"><span class="app-nav-label">Jobs List</span></button>
+                                <button class="tab-btn app-nav-child" data-tab="orgmap" data-virtual-tab="orgmap" data-p86-icon="globe" title="Job Map — all jobs on a satellite map"><span class="app-nav-label">Job Map</span></button>
                                 <button class="tab-btn app-nav-child" data-tab="jobshub" data-jobshub-subtab="purchase-orders" data-virtual-tab="jobshub-purchase-orders" data-p86-icon="attachments" title="Purchase Orders"><span class="app-nav-label">Purchase Orders</span></button>
                                 <button class="tab-btn app-nav-child" data-tab="jobshub" data-jobshub-subtab="change-orders" data-virtual-tab="jobshub-change-orders" data-p86-icon="edit" title="Change Orders"><span class="app-nav-label">Change Orders</span></button>
                                 <button class="tab-btn app-nav-child" data-tab="jobshub" data-jobshub-subtab="rfis" data-virtual-tab="jobshub-rfis" data-p86-icon="magnifying-glass" title="RFIs"><span class="app-nav-label">RFIs</span></button>
@@ -702,7 +703,6 @@
                             <div class="app-nav-children" role="group" aria-label="My Files folders"></div>
                         </div>
                         <button class="tab-btn" data-tab="projects" data-p86-icon="folder" title="Projects"><span class="app-nav-label">Projects</span></button>
-                        <button class="tab-btn" data-tab="orgmap" data-p86-icon="globe" title="Job Map — all jobs on a satellite map"><span class="app-nav-label">Job Map</span></button>
                         <!-- Platform-owner only: the Project 86 Command Center.
                              Accordion parent — expands into platform sub-views
                              (Overview / Metrics / Tenants / Audit / Anthropic /
@@ -1354,6 +1354,12 @@
                      Mounted lazily by switchTab('orgmap') via window.p86EntitiesMap. -->
                 <div id="orgmap" class="tab-content">
                     <div id="orgMapHost" style="position:relative;height:calc(100vh - 130px);min-height:480px;"></div>
+                </div>
+
+                <!-- Leads Map — the same "Google Earth" treatment, leads only.
+                     Mounted lazily by switchTab('orgleadsmap') via window.p86EntitiesMap. -->
+                <div id="orgleadsmap" class="tab-content">
+                    <div id="orgLeadsMapHost" style="position:relative;height:calc(100vh - 130px);min-height:480px;"></div>
                 </div>
 
                 <!-- Project 86 Command Center — platform-owner (system_admin)
@@ -3124,7 +3130,7 @@
     <!-- Shared entity card (job/lead/estimate Pulse card) — window.p86EntityCard.
          Loads before its callers (entities-map.js, workspace-layout.js). -->
     <script src="js/entity-card.js?v=1"></script>
-    <script src="js/app.js?v=95"></script>
+    <script src="js/app.js?v=96"></script>
     <script src="js/compliance-review-ui.js?v=2"></script>
     <script src="js/messaging.js?v=3"></script>
     <script src="js/file-explorer.js?v=6"></script>
@@ -3158,7 +3164,7 @@
          map-pins + maps-loader + geolocation and lazy-loads Google
          MarkerClusterer from CDN for pin clustering. Loads after
          map-pins.js so window.p86MapPins is available. -->
-    <script src="js/entities-map.js?v=12"></script>
+    <script src="js/entities-map.js?v=13"></script>
     <script src="js/projects-pairs.js?v=1"></script>
     <!-- Report template registry (Wave B). Eight construction report
          templates (walkthrough, daily-log, weekly-progress, etc.)
@@ -3211,7 +3217,7 @@
     <!-- URL router — pathname-based navigation. Loads last so all
          top-level nav functions (switchTab, editJob, etc.) exist
          before the router wraps them. -->
-    <script src="js/router.js?v=16"></script>
+    <script src="js/router.js?v=17"></script>
 
     <!-- Sidebar Recents — client-side recently-opened list. Loads after
          router.js + the entity-open modules so it can wrap editJob /
