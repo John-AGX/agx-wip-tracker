@@ -90,10 +90,11 @@
       '.p86-ecard-btn.primary{flex:1;background:rgba(79,140,255,0.16);color:#9cc0ff;border-color:rgba(79,140,255,0.45);}' +
       '.p86-ecard-btn.primary:hover{background:rgba(79,140,255,0.24);}' +
       '.p86-ecard-btn i{font-size:13px;}' +
-      /* Compact (subnav) — tighter, no left-bar inset, no card chrome clash */
-      '.p86-ecard.compact{background:transparent;border:none;border-radius:0;}' +
-      '.p86-ecard.compact .p86-ecard-body{padding:2px 2px 8px;}' +
-      '.p86-ecard.compact .p86-ecard-accent{display:none;}';
+      /* Compact (subnav): keep the full card chrome (bg + border + left
+         accent) so it reads as the Pulse card; render() drops the icon row
+         and action buttons. Slightly tighter body padding. */
+      '.p86-ecard.compact{background:var(--surface2,#242836);}' +
+      '.p86-ecard.compact .p86-ecard-body{padding:11px 13px 12px 16px;}';
     var el = document.createElement('style');
     el.id = STYLE_ID;
     el.textContent = css;
@@ -156,7 +157,7 @@
 
     var titleRow =
       '<div class="p86-ecard-titlerow">' +
-        (vm.number ? '<span class="p86-ecard-num">' + esc(vm.number) + '</span>' : '') +
+        ((vm.number && String(vm.number).length <= 12) ? '<span class="p86-ecard-num">' + esc(vm.number) + '</span>' : '') +
         '<span class="p86-ecard-title">' + esc(vm.title || '(untitled)') + '</span>' +
       '</div>' +
       (vm.subtitle ? '<div class="p86-ecard-sub">' + esc(vm.subtitle) + '</div>' : '') +

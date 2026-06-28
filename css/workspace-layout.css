@@ -203,8 +203,7 @@
 
 /* Job identity block — number/title on top, status caption below. */
 .app-jobnav-jobinfo {
-  padding: 6px 11px 10px;
-  border-bottom: 1px solid var(--border, #2e3346);
+  padding: 4px 6px 8px;
   margin-bottom: 6px;
   min-width: 0;
 }
