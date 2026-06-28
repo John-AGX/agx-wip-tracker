@@ -1849,6 +1849,8 @@ function buildSidebar(){
     '<span class="ng-sidebar-header-text">Overview</span>' +
     '<button class="ng-sidebar-toggle" id="ngSidebarToggle" title="Collapse">◀</button>' +
     '</div>';
+  // Slice 2: live job-overview card atop the rail (reuses p86EntityCard, painted by renderSidebarJobCard()).
+  html+='<div class="ng-sidebar-jobcard"></div>';
   // Site Plan rework: live WIP-metrics panel (shown only in satellite Site Plan via
   // CSS). Body is filled by renderSidebarMetrics() on every render; chips inside are
   // click-to-edit (same data-wip-edit path as the old WIP card).
@@ -1960,9 +1962,33 @@ function wipChipEdit(wc){
 // job-level WIP and shows real numbers even on a graph that has no WIP node (e.g. a
 // freshly-traced Site Plan). The financial inputs edit the job fields directly.
 var _jobChipEditing=false;
+// Slice 2: paint the live job-overview card at the top of the left rail — same
+// p86EntityCard view-model the app subnav uses (paintJobSubnavCard), fed by getJobWIP.
+function renderSidebarJobCard(){
+  var host=document.querySelector('.ng-sidebar-jobcard'); if(!host) return;
+  var jid=E.job();
+  var job=(typeof appData!=='undefined' && appData.jobs) ? appData.jobs.find(function(j){return j.id===jid;}) : null;
+  if(!job || !window.p86EntityCard){ host.innerHTML=''; return; }
+  var w=(typeof window.getJobWIP==='function') ? (window.getJobWIP(jid)||{}) : {};
+  var sm=function(n){ n=Number(n)||0; var a=Math.abs(n), s=n<0?'-':''; if(a>=1e6) return s+'$'+(a/1e6).toFixed(1).replace(/\.0$/,'')+'M'; if(a>=1e3) return s+'$'+Math.round(a/1e3)+'k'; return s+'$'+Math.round(a); };
+  var statusCol=window.p86EntityCard.jobStatusColor?window.p86EntityCard.jobStatusColor(job.status):'#8aa0c0';
+  var accentCol=(window.p86EntityCard.pinColor?window.p86EntityCard.pinColor(job,'job'):null)||statusCol;
+  var profit=(w.jtdProfit!=null)?w.jtdProfit:0;
+  var contract=(w.contractIncome!=null)?w.contractIncome:(w.totalIncome!=null)?w.totalIncome:(Number(job.contractAmount)||0);
+  host.innerHTML=window.p86EntityCard.render({
+    kind:'job', accent:accentCol, status:{label:job.status||'In Progress', color:statusCol},
+    number:job.jobNumber||'', title:job.title||job.name||'', subtitle:job.client||'',
+    ring:{pct:(w.pctComplete||0)},
+    stats:[
+      {label:'Contract', value:sm(contract)},
+      {label:'Profit', value:(profit<0?'-':'+')+sm(Math.abs(profit)), tone:profit<0?'neg':'pos'}
+    ]
+  }, {compact:true});
+}
 function renderSidebarMetrics(){
+  if(!(E.viewMode && E.viewMode()==='siteplan')) return; // Site Plan only (the left rail is the job overview there)
+  renderSidebarJobCard();                                 // Slice 2: live job-overview card atop the rail
   var body=document.querySelector('.ng-sp-metrics-body'); if(!body) return;
-  if(!(E.viewMode && E.viewMode()==='siteplan')) return; // shown in all Site Plan modes (WIP lives in the sidebar, satellite or not)
   if(_jobChipEditing && body.querySelector('input')) return;             // mid-edit: don't clobber the focused input
   var h=wipPanelHtml();
   body.innerHTML = (h!=null) ? h : '<div class="ng-sp-metrics-empty">No job loaded</div>';
