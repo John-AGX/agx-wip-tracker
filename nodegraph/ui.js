@@ -4729,12 +4729,18 @@ window.openNodeGraph=function(jid){
     _spOrigin=null; _spOriginGraph=null; _spOriginJob=null; _geoPhotos=[]; _geoPhotosJob=null; _geocoding=false; // drop geo caches: avoid cross-job staleness
     E.setNodes([]); E.setWires([]); E.setNid(1);
     if(!E.loadGraph()){ populate(); }
+    // First-open fix: the early basemap mount stamped the geo origin over an empty node
+    // set (loadGraph runs AFTER it), then the cache was reset to null above — so
+    // syncBasemapCamera bailed and the map sat off-position/scale until a re-open. Now
+    // that the graph is loaded, re-stamp the origin before the first render.
+    _spOrigin=jobOrigin(); _spOriginGraph=siteplanCentroid(); _spOriginJob=E.job();
     ensureWatchFan();
     applyTx(); render();
     syncFromCloud();
   } else if(E.nodes().length===0){
     E.job(jid||(typeof appState!=='undefined'?appState.currentJobId:null));
     if(!E.loadGraph()){ populate(); }
+    _spOrigin=jobOrigin(); _spOriginGraph=siteplanCentroid(); _spOriginJob=E.job(); // re-stamp origin post-load (first-open fix)
     ensureWatchFan();
     applyTx(); render();
     syncFromCloud();
