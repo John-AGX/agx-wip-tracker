@@ -181,6 +181,34 @@
   // div is what gets populated by this module.
   // ──────────────────────────────────────────────────────────────────
 
+  // Mount the shared Pulse card into the sidebar while an estimate is open
+  // (mirrors the job subnav). Total + line count from the pricing pipeline;
+  // subtitle = the linked lead.
+  function mountEstimateSidebarCard(est) {
+    if (!window.p86EntitySubnav || !window.p86EntityCard || !est) return;
+    function sm(n) { n = Number(n) || 0; var a = Math.abs(n); if (a >= 1e6) return '$' + (a / 1e6).toFixed(1).replace(/\.0$/, '') + 'M'; if (a >= 1e3) return '$' + Math.round(a / 1e3) + 'k'; return '$' + Math.round(a); }
+    var status = est.bt_export_status || 'draft';
+    var col = window.p86EntityCard.estimateStatusColor(status);
+    var totals = (typeof window.computeEstimateTotals === 'function') ? window.computeEstimateTotals(est) : null;
+    var stats = [];
+    if (totals) {
+      stats.push({ label: 'Total', value: sm(totals.clientPrice || 0) });
+      stats.push({ label: 'Lines', value: String(totals.lineCount || 0) });
+    }
+    var sub = '';
+    if (est.lead_id && window.appData && Array.isArray(appData.leads)) {
+      var ld = appData.leads.find(function(x) { return x.id === est.lead_id; });
+      if (ld) sub = ld.title || ld.client_name || '';
+    }
+    window.p86EntitySubnav.mount('estimate', {
+      kind: 'estimate', accent: col,
+      status: { label: status, color: col },
+      title: est.title || 'Estimate',
+      subtitle: sub,
+      stats: stats
+    });
+  }
+
   function openEstimateEditor(estimateId) {
     // Block editor while the initial server fetch is in-flight — opens
     // during the gap could let the user type edits against stale cache
@@ -233,6 +261,7 @@
     // Persist nav state so a refresh lands back inside this estimate
     // editor rather than the estimates list.
     if (typeof window.p86NavSave === 'function') window.p86NavSave();
+    mountEstimateSidebarCard(est);
   }
 
   // Scope textarea — bound to the ACTIVE alternate's scope so Good /
@@ -319,6 +348,7 @@
     var actuallyClose = function() {
       _currentId = null;
       _saveState = 'idle';
+      if (window.p86EntitySubnav) window.p86EntitySubnav.unmount('estimate');
       var listView = document.getElementById('estimates-list-view');
       var editorView = document.getElementById('estimate-editor-view');
       if (editorView) editorView.style.display = 'none';

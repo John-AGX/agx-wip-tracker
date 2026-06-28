@@ -246,7 +246,7 @@
     })();
     </script>
 
-    <link rel="stylesheet" href="css/styles.css?v=197">
+    <link rel="stylesheet" href="css/styles.css?v=198">
     <link rel="stylesheet" href="css/report-style-packs.css?v=3">
     <link rel="stylesheet" href="css/workspace-layout.css?v=62">
     <link rel="stylesheet" href="css/workspace.css?v=38">
@@ -3123,7 +3123,7 @@
          Leads lists. Loads BEFORE those renderers so window.p86Tables is
          ready the first time they build their tables. -->
     <script src="js/table-enhancements.js?v=5"></script>
-    <script src="js/leads.js?v=49"></script>
+    <script src="js/leads.js?v=50"></script>
     <script src="js/job-costs-import.js?v=4"></script>
     <script src="js/qb-costs-view.js?v=11"></script>
     <script src="js/insights.js?v=7"></script>
@@ -3132,6 +3132,8 @@
     <!-- Shared entity card (job/lead/estimate Pulse card) — window.p86EntityCard.
          Loads before its callers (entities-map.js, workspace-layout.js). -->
     <script src="js/entity-card.js?v=3"></script>
+    <!-- Lead/estimate context card mounted into #app-sidebar (uses p86EntityCard). -->
+    <script src="js/entity-subnav.js?v=1"></script>
     <script src="js/app.js?v=97"></script>
     <script src="js/compliance-review-ui.js?v=2"></script>
     <script src="js/messaging.js?v=3"></script>
@@ -3166,7 +3168,7 @@
          map-pins + maps-loader + geolocation and lazy-loads Google
          MarkerClusterer from CDN for pin clustering. Loads after
          map-pins.js so window.p86MapPins is available. -->
-    <script src="js/entities-map.js?v=14"></script>
+    <script src="js/entities-map.js?v=15"></script>
     <script src="js/projects-pairs.js?v=1"></script>
     <!-- Report template registry (Wave B). Eight construction report
          templates (walkthrough, daily-log, weekly-progress, etc.)
@@ -3192,7 +3194,7 @@
     <script src="js/job-workflow-ui.js?v=4"></script>
     <script src="js/estimates.js?v=45"></script>
     <script src="js/proposal.js?v=25"></script>
-    <script src="js/estimate-editor.js?v=57"></script>
+    <script src="js/estimate-editor.js?v=58"></script>
     <!-- Change Order editor — overlay opened from the job detail's
          Change Orders tab. Loads after pricing-pipeline (which it
          consumes via window.p86Pricing) and after api.js (which

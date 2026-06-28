@@ -1269,6 +1269,7 @@
     // dropdown). Don't toggle it here.
     // Refresh the sticky-header title + status pill from the loaded form.
     refreshLeadDetailHeader();
+    mountLeadSidebarCard();
     // Scroll to top so the user lands at the form's start.
     window.scrollTo(0, 0);
   }
@@ -1303,6 +1304,30 @@
   }
   window.refreshLeadDetailHeader = refreshLeadDetailHeader;
 
+  // Mount the shared Pulse card into the sidebar while a lead is open
+  // (mirrors the job subnav). Value = highest attached-estimate price;
+  // age = days since created.
+  function mountLeadSidebarCard() {
+    if (!window.p86EntitySubnav || !window.p86EntityCard) return;
+    var l = _leads.find(function(x) { return x.id === _currentEditingLeadId; });
+    if (!l) { window.p86EntitySubnav.unmount('lead'); return; }
+    function sm(n) { n = Number(n) || 0; var a = Math.abs(n); if (a >= 1e6) return '$' + (a / 1e6).toFixed(1).replace(/\.0$/, '') + 'M'; if (a >= 1e3) return '$' + Math.round(a / 1e3) + 'k'; return '$' + Math.round(a); }
+    var col = window.p86EntityCard.leadStatusColor(l.status);
+    var rev = revenueFromAttachedEstimates(l.id);
+    var ageDays = l.created_at ? Math.max(0, Math.round((Date.now() - new Date(l.created_at).getTime()) / 86400000)) : null;
+    var stats = [{ label: 'Est. value', value: (rev != null ? sm(rev) : '—') }];
+    if (ageDays != null) stats.push({ label: 'Age', value: ageDays + 'd' });
+    var meta = (typeof statusMeta === 'function') ? statusMeta(l.status) : null;
+    window.p86EntitySubnav.mount('lead', {
+      kind: 'lead', accent: col,
+      status: { label: (meta && meta.label) || l.status || 'Open', color: col },
+      title: l.title || 'Lead',
+      subtitle: l.client_name || l.property_name || '',
+      address: [l.street_address, l.city].filter(Boolean).join(', '),
+      stats: stats
+    });
+  }
+
   // Reverse openLeadDetailView. Moves the form body back into the
   // modal so a subsequent "New Lead" click renders the same form as
   // a centered popup again.
@@ -1319,6 +1344,7 @@
     if (detailView) detailView.style.display = 'none';
     if (listView) listView.style.display = '';
     // (no #estimates-main-tabs restore — see openLeadDetailView comment)
+    if (window.p86EntitySubnav) window.p86EntitySubnav.unmount('lead');
     _currentEditingLeadId = null;
     reloadLeadsCache();
   }

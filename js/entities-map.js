@@ -720,11 +720,28 @@
         return;
       }
       var col = window.p86EntityCard.leadStatusColor(it.status);
+      // Value = highest attached-estimate clientPrice; age = days since created.
+      var leadObj = null, ll = (window.appData && window.appData.leads) || [];
+      for (var li = 0; li < ll.length; li++) { if (ll[li].id === it.id) { leadObj = ll[li]; break; } }
+      var val = null;
+      try {
+        var ests = (window.appData && window.appData.estimates) || [];
+        for (var ei = 0; ei < ests.length; ei++) {
+          if (ests[ei] && ests[ei].lead_id === it.id && typeof window.computeEstimateTotals === 'function') {
+            var p = (window.computeEstimateTotals(ests[ei]) || {}).clientPrice;
+            if (p != null && !isNaN(p) && (val == null || p > val)) val = p;
+          }
+        }
+      } catch (e) { /* estimates not loaded */ }
+      var ageDays = (leadObj && leadObj.created_at) ? Math.max(0, Math.round((Date.now() - new Date(leadObj.created_at).getTime()) / 86400000)) : null;
+      var leadStats = [ { label: 'Est. value', value: (val != null ? money(val) : '—') } ];
+      if (ageDays != null) leadStats.push({ label: 'Age', value: ageDays + 'd' });
       openPopup({ lat: it.lat, lng: it.lng }, window.p86EntityCard.render({
         kind: 'lead', accent: col, status: { label: it.status || 'Open', color: col },
         title: it.title || '(untitled)',
-        subtitle: it.client || '',
+        subtitle: it.client || (leadObj && (leadObj.client_name || leadObj.property_name)) || '',
         address: it.address || '',
+        stats: leadStats,
         icons: [ { act: 'info', title: 'Open lead' }, { act: 'maps', title: 'Maps' } ],
         actions: [ { label: 'Open lead', act: 'open', primary: true, icon: 'arrow-right' }, { label: 'Maps', act: 'maps' } ],
         data: { id: it.id, lat: it.lat, lng: it.lng }
