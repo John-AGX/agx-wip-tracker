@@ -28,8 +28,12 @@
   }
   function fmtDate(d) {
     if (!d) return '';
-    var dt = new Date(d);
-    if (isNaN(dt.getTime())) return String(d).slice(0, 10);
+    // purchased_at is a DATE (server serializes to UTC midnight) — parse the
+    // calendar day as LOCAL so it doesn't render one day early in US timezones.
+    var s = String(d);
+    var m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    var dt = m ? new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])) : new Date(s);
+    if (isNaN(dt.getTime())) return s.slice(0, 10);
     return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
   }
   function toast(msg, kind) {
@@ -97,7 +101,7 @@
     var sEl = document.getElementById('ciSearch');
     sEl.addEventListener('input', function () { _filters.q = sEl.value || ''; renderList(); });
     document.getElementById('ciStatusFilter').addEventListener('change', function (e) { _filters.status = e.target.value; reload(); });
-    document.getElementById('ciJobFilter').addEventListener('change', function (e) { _filters.job = e.target.value; renderList(); });
+    document.getElementById('ciJobFilter').addEventListener('change', function (e) { _filters.job = e.target.value; reload(); });
 
     loadEntities().then(function () {
       // populate the job/lead filter
@@ -116,8 +120,12 @@
   function reload() {
     var listEl = document.getElementById('ciList');
     if (!window.p86Api || !window.p86Api.receipts) { if (listEl) listEl.innerHTML = '<div class="ci-empty">Not connected.</div>'; return; }
-    var opts = {};
+    var opts = { limit: 500 };
     if (_filters.status) opts.status = _filters.status; // 'all' includes void; '' = default (hides void)
+    // Push the job/lead filter to the server so filtering + the row cap happen
+    // server-side (otherwise a busy org's per-job view/total would only reflect
+    // the most-recent page of receipts).
+    if (_filters.job) { var jf = _filters.job.split(':'); opts.entity_type = jf[0]; opts.entity_id = jf[1]; }
     window.p86Api.receipts.list(opts).then(function (r) {
       _receipts = (r && r.receipts) || [];
       renderList();
@@ -163,7 +171,7 @@
         '<div class="ci-row-main">' +
           '<div class="ci-row-top">' +
             '<span class="ci-row-vendor">' + esc(r.vendor || '(no vendor)') + '</span>' +
-            '<span class="ci-row-amt">' + (r.amount != null ? money(r.amount) : '<span class="ci-need">— add amount</span>') + '</span>' +
+            '<span class="ci-row-amt">' + ((r.amount != null && Number(r.amount) > 0) ? money(r.amount) : '<span class="ci-need">— add amount</span>') + '</span>' +
           '</div>' +
           '<div class="ci-row-sub">' +
             (ent ? '<span class="ci-chip">' + esc(ent) + '</span>' : '<span class="ci-chip ci-chip-warn">no job</span>') +
@@ -200,7 +208,8 @@
           '<div class="ci-modal-head">' +
             '<span>' + (isEdit ? 'Edit Receipt' : 'New Receipt') + '</span>' +
             '<div class="ci-modal-actions">' +
-              (isEdit ? '<button class="ci-btn ci-btn-danger" id="ciDel">Void</button>' : '') +
+              (isEdit && r.status === 'void' ? '<button class="ci-btn" id="ciRestore">Restore</button>' : '') +
+              (isEdit && r.status !== 'void' ? '<button class="ci-btn ci-btn-danger" id="ciDel">Void</button>' : '') +
               '<button class="ci-btn" id="ciCancel">Cancel</button>' +
               '<button class="ci-btn ci-btn-primary" id="ciSave">Save</button>' +
             '</div>' +
@@ -289,7 +298,7 @@
         _pendingFile = f;
         var inner = modal.querySelector('#ciPhotoInner');
         var url = URL.createObjectURL(f);
-        inner.innerHTML = '<img src="' + url + '" alt="receipt" />';
+        inner.innerHTML = '<img src="' + esc(url) + '" alt="receipt" />';
       });
 
       function close() { modal.remove(); _pendingFile = null; }
@@ -301,6 +310,13 @@
         if (!window.confirm('Void this receipt?')) return;
         window.p86Api.receipts.remove(r.id).then(function () { toast('Receipt voided', 'success'); close(); reload(); })
           .catch(function () { toast('Could not void', 'error'); });
+      });
+
+      // Soft-void is reversible: Restore re-derives the status from completeness.
+      var restoreBtn = modal.querySelector('#ciRestore');
+      if (restoreBtn) restoreBtn.addEventListener('click', function () {
+        window.p86Api.receipts.update(r.id, { status: 'unprocessed' }).then(function () { toast('Receipt restored', 'success'); close(); reload(); })
+          .catch(function () { toast('Could not restore', 'error'); });
       });
 
       modal.querySelector('#ciSave').addEventListener('click', function () {
@@ -321,6 +337,7 @@
         var save = isEdit
           ? window.p86Api.receipts.update(r.id, payload)
           : window.p86Api.receipts.create(payload);
+        var photoFailed = false;
         save.then(function (resp) {
           var saved = (resp && resp.receipt) || resp;
           // 2) if a new photo was picked, upload it (to the linked entity, else
@@ -328,17 +345,19 @@
           if (_pendingFile) {
             var bucketType = entityId ? entityType : 'user';
             var bucketId = entityId || myUserId();
-            if (bucketId) {
-              return window.p86Api.attachments.upload(bucketType, bucketId, _pendingFile, { geo: false })
-                .then(function (ar) {
-                  var att = (ar && (ar.attachment || ar.attachments && ar.attachments[0])) || ar;
-                  var attId = att && att.id;
-                  if (attId) return window.p86Api.receipts.update(saved.id, { attachment_id: attId });
-                }).catch(function () { /* photo optional — don't fail the receipt */ });
-            }
+            if (!bucketId) { photoFailed = true; return; }
+            return window.p86Api.attachments.upload(bucketType, bucketId, _pendingFile, { geo: false })
+              .then(function (ar) {
+                var att = (ar && (ar.attachment || ar.attachments && ar.attachments[0])) || ar;
+                var attId = att && att.id;
+                if (attId) return window.p86Api.receipts.update(saved.id, { attachment_id: attId });
+                photoFailed = true; // upload returned no id — receipt saved, photo not linked
+              }).catch(function () { photoFailed = true; }); // keep the receipt; warn below
           }
         }).then(function () {
-          toast('Receipt saved', 'success');
+          // The receipt itself saved either way; only the photo step is best-effort.
+          if (photoFailed) toast('Receipt saved, but the photo didn’t upload — re-open to retry', 'error');
+          else toast('Receipt saved', 'success');
           close();
           reload();
         }).catch(function (e2) {

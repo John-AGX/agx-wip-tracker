@@ -84,7 +84,22 @@ function validDate(v) {
 // 'unprocessed' in the inbox until completed. void is sticky (explicit).
 function deriveStatus(prev, entityType, entityId, amount) {
   if (prev === 'void') return 'void';
-  return (entityType && entityId && amount != null) ? 'processed' : 'unprocessed';
+  // "complete" = linked entity AND a real (> 0) amount. A $0 receipt is treated
+  // as an incomplete capture and stays in the Unprocessed bucket.
+  return (entityType && entityId && amount != null && Number(amount) > 0) ? 'processed' : 'unprocessed';
+}
+
+// Verify a job/lead link target actually belongs to the caller's org. Returns
+// true for a valid in-org link; on false the caller drops the dangling link so
+// a cost can't be (mis)attributed to a foreign/nonexistent entity id.
+async function entityInOrg(entityType, entityId, orgId) {
+  if (!entityType || !entityId) return false;
+  const table = entityType === 'job' ? 'jobs' : (entityType === 'lead' ? 'leads' : null);
+  if (!table) return false;
+  try {
+    const r = await pool.query('SELECT 1 FROM ' + table + ' WHERE id = $1 AND organization_id = $2', [String(entityId), orgId]);
+    return r.rows.length > 0;
+  } catch (_) { return false; }
 }
 
 // GET /api/receipts — org's receipts, newest first. Filters:
@@ -110,9 +125,11 @@ router.get('/', requireAuth, async (req, res) => {
     if (validDate(q.from)) { where.push('purchased_at >= $' + p++); params.push(q.from); }
     if (validDate(q.to))   { where.push('purchased_at <= $' + p++); params.push(q.to); }
     if (q.q) {
-      const term = '%' + String(q.q).trim() + '%';
-      where.push('(vendor ILIKE $' + p + ' OR ref ILIKE $' + p + ' OR notes ILIKE $' + p +
-                 ' OR CAST(amount AS TEXT) ILIKE $' + p + ')');
+      // Escape LIKE metacharacters so a literal % or _ in the term matches
+      // literally (parameterized already — this is about match semantics).
+      const term = '%' + String(q.q).trim().replace(/[\\%_]/g, '\\$&') + '%';
+      where.push("(vendor ILIKE $" + p + " ESCAPE '\\' OR ref ILIKE $" + p + " ESCAPE '\\' OR notes ILIKE $" + p +
+                 " ESCAPE '\\' OR CAST(amount AS TEXT) ILIKE $" + p + " ESCAPE '\\')");
       params.push(term); p++;
     }
     const limit = Math.max(1, Math.min(500, Number(q.limit) || 200));
@@ -157,6 +174,9 @@ router.post('/', requireAuth, async (req, res) => {
     let entityType = (b.entity_type && LINKABLE.has(String(b.entity_type))) ? String(b.entity_type) : null;
     let entityId = entityType && b.entity_id ? String(b.entity_id) : null;
     if (!entityId) entityType = null; // never store a dangling type
+    // Drop a link that doesn't point at one of THIS org's jobs/leads, so a cost
+    // can't be attributed to a foreign or nonexistent entity id.
+    if (entityId && !(await entityInOrg(entityType, entityId, orgId))) { entityType = null; entityId = null; }
     const amount = cleanAmount(b.amount);
     const costCode = (b.cost_code && COST_CODES.has(String(b.cost_code))) ? String(b.cost_code) : 'materials';
     const isPresale = (entityType === 'lead');
@@ -176,7 +196,7 @@ router.post('/', requireAuth, async (req, res) => {
     res.json({ receipt: rows[0] });
   } catch (e) {
     console.error('POST /api/receipts error:', e);
-    res.status(500).json({ error: 'Server error: ' + (e.message || 'unknown') });
+    res.status(500).json({ error: 'Server error' });
   }
 });
 
@@ -199,6 +219,10 @@ router.patch('/:id', requireAuth, async (req, res) => {
       : row.entity_type;
     let entityId = has('entity_id') ? (b.entity_id ? String(b.entity_id) : null) : row.entity_id;
     if (!entityId) entityType = null;
+    // Only when the link is actually being changed: drop it if it doesn't point
+    // at one of this org's jobs/leads (keeps unrelated PATCHes — e.g. attaching
+    // a photo — from re-validating an existing stored link).
+    if ((has('entity_type') || has('entity_id')) && entityId && !(await entityInOrg(entityType, entityId, orgId))) { entityType = null; entityId = null; }
     const amount = has('amount') ? cleanAmount(b.amount) : (row.amount == null ? null : Number(row.amount));
     const costCode = has('cost_code')
       ? ((b.cost_code && COST_CODES.has(String(b.cost_code))) ? String(b.cost_code) : row.cost_code)
@@ -227,7 +251,7 @@ router.patch('/:id', requireAuth, async (req, res) => {
     res.json({ receipt: rows[0] });
   } catch (e) {
     console.error('PATCH /api/receipts/:id error:', e);
-    res.status(500).json({ error: 'Server error: ' + (e.message || 'unknown') });
+    res.status(500).json({ error: 'Server error' });
   }
 });
 
