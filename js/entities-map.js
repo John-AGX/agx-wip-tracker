@@ -130,7 +130,12 @@
       '.emap-geocode-note{position:absolute;bottom:24px;left:10px;z-index:6;font-size:11px;font-weight:600;padding:6px 12px;border-radius:14px;background:rgba(17,20,28,0.92);color:#cbd5e1;border:1px solid rgba(255,255,255,0.12);box-shadow:0 1px 6px rgba(0,0,0,0.30);}' +
       '@keyframes emap-pin-bounce{0%,100%{transform:translateY(0)}25%{transform:translateY(-13px)}50%{transform:translateY(0)}75%{transform:translateY(-6px)}}' +
       '.emap-pin-bounce{animation:emap-pin-bounce .7s ease-in-out 2;transform-origin:bottom center}' +
-      '.emap-detail{flex-shrink:0;max-height:54%;overflow-y:auto;border-top:1px solid rgba(255,255,255,.10);padding:12px 12px 14px;background:rgba(8,11,17,.55);}' +
+      '.emap-pop{position:absolute;}' +
+      '.emap-pop::after{content:"";position:absolute;left:0;bottom:9px;transform:translateX(-50%);width:0;height:0;border-left:9px solid transparent;border-right:9px solid transparent;border-top:9px solid #11151f;}' +
+      '.emap-pop-bubble{position:absolute;left:0;bottom:17px;transform:translateX(-50%);width:300px;max-width:80vw;max-height:340px;overflow-y:auto;overflow-x:hidden;background:#11151f;border:1px solid rgba(255,255,255,.12);border-radius:13px;box-shadow:0 10px 30px rgba(0,0,0,.55);}' +
+      '.emap-pop-inner{position:relative;}' +
+      '.emap-pop-x{position:absolute;top:7px;right:8px;z-index:3;background:rgba(8,11,17,.55);border:none;color:#aeb6c5;font-size:16px;line-height:1;cursor:pointer;width:22px;height:22px;border-radius:50%;padding:0;}' +
+      '.emap-pop-x:hover{color:#fff;background:rgba(8,11,17,.85);}' +
       '.emap-jc-top{display:flex;gap:13px;align-items:center;}' +
       '.emap-jc-ring{flex-shrink:0;}' +
       '.emap-jc-meta{min-width:0;flex:1;}' +
@@ -617,16 +622,55 @@
       if (a >= 1e3) return s + '$' + (a / 1e3).toFixed(1).replace(/\.0$/, '') + 'k';
       return s + '$' + Math.round(a);
     }
-    function detailEl() { return host.querySelector('.emap-detail'); }
-    function expandPanel() {
-      var p = host.querySelector('.emap-jobs-panel'), t = host.querySelector('.emap-jobs-expand');
-      if (p && p.classList.contains('emap-collapsed')) { p.classList.remove('emap-collapsed'); if (t) t.style.display = 'none'; }
+    // ── On-map popup over the pin (the right sidebar stays the jobs list). A dark
+    // bubble anchored above the marker via OverlayView — fixed width + vertical-only
+    // scroll, so there are no off-center popup scrollbars. Reuses the shared
+    // p86EntityCard markup + its data-act protocol. ──
+    var _popup = null, _PopupClass = null;
+    function ensurePopupClass() {
+      if (_PopupClass || !maps.OverlayView) return _PopupClass;
+      function Popup(latlng, contentEl) {
+        this.position = latlng;
+        var bubble = document.createElement('div'); bubble.className = 'emap-pop-bubble'; bubble.appendChild(contentEl);
+        var container = document.createElement('div'); container.className = 'emap-pop'; container.appendChild(bubble);
+        if (maps.OverlayView.preventMapHitsAndGesturesFrom) maps.OverlayView.preventMapHitsAndGesturesFrom(container);
+        this.container = container;
+      }
+      Popup.prototype = Object.create(maps.OverlayView.prototype);
+      Popup.prototype.onAdd = function () { var p = this.getPanes(); if (p) p.floatPane.appendChild(this.container); };
+      Popup.prototype.onRemove = function () { if (this.container.parentNode) this.container.parentNode.removeChild(this.container); };
+      Popup.prototype.draw = function () {
+        var proj = this.getProjection(); if (!proj) return;
+        var d = proj.fromLatLngToDivPixel(this.position); if (!d) return;
+        this.container.style.left = d.x + 'px'; this.container.style.top = d.y + 'px';
+      };
+      _PopupClass = Popup; return _PopupClass;
     }
-    function setDetail(html) {
-      var d = detailEl(); if (!d) return;
-      d.innerHTML = html || '';
-      d.style.display = html ? 'block' : 'none';
-      if (html) { expandPanel(); d.scrollTop = 0; }
+    function closePopup() { if (_popup) { try { _popup.setMap(null); } catch (e) {} _popup = null; } }
+    function popupAction(ev) {
+      var t = ev.target, go = function (sel) { return t.closest ? t.closest(sel) : null; };
+      if (go('.emap-pop-x')) { closePopup(); return; }
+      var actEl = go('[data-act]');
+      if (actEl) {
+        var act = actEl.getAttribute('data-act');
+        var card = go('.p86-ecard'); var kind = card ? card.getAttribute('data-kind') : '';
+        var id = actEl.getAttribute('data-id');
+        if (act === 'maps') { var la = actEl.getAttribute('data-lat'), ln = actEl.getAttribute('data-lng'); if (la && ln) window.open('https://www.google.com/maps/search/?api=1&query=' + la + ',' + ln, '_blank'); return; }
+        if (act === 'open' || act === 'info') { if (kind === 'job') { if (typeof _onJobHook === 'function') _onJobHook(id); else openEntity('job', id); } else { openEntity(kind || 'lead', id); } return; }
+        if (act === 'msg') { if (window.p86Messaging && typeof window.p86Messaging.openInbox === 'function') window.p86Messaging.openInbox(); return; }
+        return;
+      }
+      var grp = go('.emap-grp-row'); if (grp) { openEntity(grp.getAttribute('data-kind'), grp.getAttribute('data-id')); return; }
+    }
+    function openPopup(pos, html) {
+      closePopup();
+      if (!pos || !isFinite(Number(pos.lat)) || !isFinite(Number(pos.lng))) return;
+      var content = document.createElement('div'); content.className = 'emap-pop-inner';
+      content.innerHTML = '<button type="button" class="emap-pop-x" aria-label="Close">×</button>' + (html || '');
+      content.addEventListener('click', popupAction);
+      var P = ensurePopupClass();
+      if (P) { _popup = new P(new maps.LatLng(Number(pos.lat), Number(pos.lng)), content); _popup.setMap(map); }
+      else { infoWindow.setContent(content); infoWindow.setPosition(new maps.LatLng(Number(pos.lat), Number(pos.lng))); infoWindow.open(map); }
     }
     function selectRow(id) {
       var prev = host.querySelector('.emap-job-row.sel'); if (prev) prev.classList.remove('sel');
@@ -642,13 +686,13 @@
       var contract = (w.totalIncome != null) ? w.totalIncome : (w.contractIncome || 0);
       var profit = (w.jtdProfit != null) ? w.jtdProfit : 0;
       if (!window.p86EntityCard) {
-        setDetail('<div class="emap-jc"><div class="emap-jc-meta"><div class="emap-jc-name">' + escapeHTML(it.title || '(untitled)') + '</div></div></div>');
+        openPopup(e.pos, '<div class="emap-jc"><div class="emap-jc-meta"><div class="emap-jc-name">' + escapeHTML(it.title || '(untitled)') + '</div></div></div>');
         return;
       }
       var jobObj = null, jl = (window.appData && window.appData.jobs) || [];
       for (var ji = 0; ji < jl.length; ji++) { if (jl[ji].id === id) { jobObj = jl[ji]; break; } }
       var col = window.p86EntityCard.jobStatusColor(it.status);
-      setDetail(window.p86EntityCard.render({
+      openPopup(e.pos, window.p86EntityCard.render({
         kind: 'job', accent: col, status: { label: it.status || 'In Progress', color: col },
         number: (jobObj && (jobObj.jobNumber || jobObj.job_number)) || '',
         title: it.title || '(untitled)',
@@ -667,11 +711,11 @@
     function showLeadDetail(it) {
       if (!it) return;
       if (!window.p86EntityCard) {
-        setDetail('<div class="emap-jc"><div class="emap-jc-name">' + escapeHTML(it.title || '(untitled)') + '</div></div>');
+        openPopup({ lat: it.lat, lng: it.lng }, '<div class="emap-jc"><div class="emap-jc-name">' + escapeHTML(it.title || '(untitled)') + '</div></div>');
         return;
       }
       var col = window.p86EntityCard.leadStatusColor(it.status);
-      setDetail(window.p86EntityCard.render({
+      openPopup({ lat: it.lat, lng: it.lng }, window.p86EntityCard.render({
         kind: 'lead', accent: col, status: { label: it.status || 'Open', color: col },
         title: it.title || '(untitled)',
         subtitle: it.client || '',
@@ -689,7 +733,8 @@
           '<span class="emap-grp-name">' + escapeHTML(m.title || '(untitled)') + '</span>' +
           '<span class="emap-chev">›</span></div>';
       }).join('');
-      setDetail(
+      var gp = members[0] ? { lat: members[0].lat, lng: members[0].lng } : null;
+      openPopup(gp,
         '<div class="emap-grp"><div class="emap-grp-head">' + members.length + ' at this property</div>' +
           (addr ? '<div class="emap-grp-addr">' + escapeHTML(addr) + '</div>' : '') +
           '<div class="emap-grp-list">' + rows + '</div></div>'
@@ -712,8 +757,7 @@
         '<div class="emap-jobs-head"><span class="emap-jobs-title">Jobs <b>' + jobs.length + '</b></span>' +
           '<button type="button" class="emap-jobs-collapse" title="Collapse">››</button></div>' +
         '<input type="text" class="emap-jobs-search" placeholder="Search jobs…">' +
-        '<div class="emap-jobs-list"></div>' +
-        '<div class="emap-detail" style="display:none;"></div>';
+        '<div class="emap-jobs-list"></div>';
       host.appendChild(panel);
       var expandTab = document.createElement('button');
       expandTab.type = 'button';
@@ -760,9 +804,12 @@
         showJobDetail(id);
       });
 
-      // Docked detail panel actions (Open WIP / Open lead / Maps / group rows).
+      // Clicking empty map closes the on-map popup.
+      if (map && map.addListener) map.addListener('click', closePopup);
+      // (legacy: the detail now lives in the on-map popup; this dock is gone, so the
+      // handler below is inert — guarded against the missing .emap-detail element.)
       var detail = panel.querySelector('.emap-detail');
-      detail.addEventListener('click', function (ev) {
+      if (detail) detail.addEventListener('click', function (ev) {
         var t = ev.target;
         var go = function (sel) { return t.closest ? t.closest(sel) : null; };
         // Shared entity-card actions (data-act on its buttons / icons).
@@ -814,6 +861,7 @@
       function next() {
         if (i >= missing.length) {
           try { note.remove(); } catch (e) {}
+          closePopup();
           render(host, assignOpts(opts, { warmGeocode: false }));
           return;
         }
