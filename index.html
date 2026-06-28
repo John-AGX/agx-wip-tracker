@@ -1873,8 +1873,8 @@
             <div class="modal-header">Add Job</div>
             <div class="form-row">
                 <div class="form-group">
-                    <label>Job Number</label>
-                    <input type="text" id="jobNumber" placeholder="e.g., S2062">
+                    <label>Job Number <span style="color:#f0a020;">*</span> <span style="font-weight:400;color:var(--text-dim,#888);font-size:11px;">S#### Service · RV#### Renovation</span></label>
+                    <input type="text" id="jobNumber" placeholder="S0000 or RV0000">
                 </div>
                 <div class="form-group">
                     <label>Job Name</label>
@@ -3134,7 +3134,8 @@
          Leads lists. Loads BEFORE those renderers so window.p86Tables is
          ready the first time they build their tables. -->
     <script src="js/table-enhancements.js?v=5"></script>
-    <script src="js/leads.js?v=53"></script>
+    <script src="js/job-finalize.js?v=1"></script>
+    <script src="js/leads.js?v=54"></script>
     <script src="js/job-costs-import.js?v=4"></script>
     <script src="js/qb-costs-view.js?v=11"></script>
     <script src="js/insights.js?v=7"></script>
@@ -3203,11 +3204,11 @@
          estimate-preview + the upcoming change-order-editor. Loads
          BEFORE any of them so window.p86Pricing is ready. -->
     <script src="js/pricing-pipeline.js?v=1"></script>
-    <script src="js/jobs.js?v=100"></script>
+    <script src="js/jobs.js?v=101"></script>
     <script src="js/job-workflow-ui.js?v=4"></script>
     <script src="js/estimates.js?v=45"></script>
     <script src="js/proposal.js?v=25"></script>
-    <script src="js/estimate-editor.js?v=60"></script>
+    <script src="js/estimate-editor.js?v=61"></script>
     <!-- Change Order editor — overlay opened from the job detail's
          Change Orders tab. Loads after pricing-pipeline (which it
          consumes via window.p86Pricing) and after api.js (which

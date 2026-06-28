@@ -1583,17 +1583,18 @@
 
     function money(n) { return Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
     var estLabel = chosen ? (chosen.name || chosen.title || ('Estimate ' + String(chosen.id).slice(0, 8))) : null;
-    var msg =
-      'Create a new job from this lead?\n\n' +
-      'This will:\n' +
-      '  • Add a job with the lead\'s title, client, and project info\n' +
-      (chosen
-        ? ('  • Set Contract Amount to ' + estLabel + '\'s total ($' + money(contractAmt) + ')\n' +
-           '  • Carry that estimate\'s workspace into the job and link them\n')
-        : ('  • Set Contract Amount to the lead\'s Estimated Revenue ($' + money(contractAmt) + ')\n')) +
-      '  • Mark the lead as Sold and link the new job to it\n\n' +
-      'You can edit the job number, costs, and other fields after.';
-    if (!confirm(msg)) return;
+    // Job title = client short name + the proposal (estimate) name it came from.
+    var shortName = c ? (c.short_name || c.company_name || c.name || '') : '';
+    var proposalName = chosen ? (chosen.name || chosen.title || '') : (l.title || '');
+    var suggestedTitle = ((shortName ? shortName + ' ' : '') + proposalName).trim() || (l.title || 'New Job');
+    // Require a job number (S#### Service / RV#### Renovation) + confirm the title.
+    var _sub = 'New job from this lead. ' +
+      (chosen ? ('Contract $' + money(contractAmt) + ' from ' + estLabel + '. ') : ('Contract $' + money(contractAmt) + '. ')) +
+      'Marks the lead Sold + links them.';
+    var fin = (window.p86JobFinalize && window.p86JobFinalize.open)
+      ? await window.p86JobFinalize.open({ title: suggestedTitle, subtitle: _sub })
+      : { jobNumber: (prompt('Job number (S#### or RV####):', '') || '').trim().toUpperCase(), title: suggestedTitle };
+    if (!fin || !fin.jobNumber) return;  // cancelled / no number
 
     var me = window.p86Auth && window.p86Auth.getUser && window.p86Auth.getUser();
     var ownerId = l.salesperson_id || (me && me.id) || null;
@@ -1601,8 +1602,8 @@
     var nowIso = new Date().toISOString();
     var newJob = {
       id: jobId,
-      jobNumber: '',
-      title: l.title,
+      jobNumber: fin.jobNumber,
+      title: fin.title || suggestedTitle,
       client: clientName,
       // Carry the client link + address from the lead so the job isn't a shell —
       // Link Client shows "Linked" and the map/weather have an address.

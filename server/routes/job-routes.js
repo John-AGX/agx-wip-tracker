@@ -170,6 +170,10 @@ router.post('/convert', requireAuth, requireRole('admin', 'pm'), async (req, res
     if (!leadId && !estimateId) {
       return res.status(400).json({ error: 'lead_id or estimate_id is required' });
     }
+    // Every job must carry a job number — S#### (Service) or RV#### (Renovation).
+    if (!/^(S|RV)\d{1,6}$/i.test(String((job && job.jobNumber) || '').trim())) {
+      return res.status(400).json({ error: 'A job number (S#### or RV####) is required to create a job.' });
+    }
     const orgId = req.user.organization_id;
 
     // Resolve owner (mirror POST /): admins may assign, others own their own.

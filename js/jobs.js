@@ -1593,6 +1593,12 @@ function renderJobsMain() {
         function saveJob() {
             const title = document.getElementById('jobTitle').value.trim();
             if (!title) { alert('Enter a job name'); return; }
+            // Require a job number: S#### (Service) or RV#### (Renovation), editable.
+            var _jnRaw = (document.getElementById('jobNumber').value || '');
+            var jobNum = (window.p86JobFinalize && window.p86JobFinalize.normalizeNumber)
+                ? window.p86JobFinalize.normalizeNumber(_jnRaw)
+                : (/^(S|RV)\d{1,6}$/i.test(_jnRaw.trim()) ? _jnRaw.trim().toUpperCase() : null);
+            if (!jobNum) { alert('Enter a valid job number: S#### (Service) or RV#### (Renovation).'); document.getElementById('jobNumber').focus(); return; }
             const pmSelect = document.getElementById('jobPM');
             const pmOpt = pmSelect.options[pmSelect.selectedIndex];
             const pmName = (pmOpt && pmOpt.dataset && pmOpt.dataset.name) ? pmOpt.dataset.name : pmSelect.value;
@@ -1610,7 +1616,7 @@ function renderJobsMain() {
             var pickedClientId = (document.getElementById('jobClientId') || {}).value || '';
             const job = {
                 id: 'j' + Date.now(),
-                jobNumber: document.getElementById('jobNumber').value.trim(),
+                jobNumber: jobNum,
                 title: title,
                 client: document.getElementById('jobClient').value.trim(),
                 clientId: pickedClientId || null,

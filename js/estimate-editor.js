@@ -749,19 +749,22 @@
     }
 
     function money(n) { return Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
-    var msg = 'Create a job from this estimate?\n\n' +
-      '  • Contract Amount = this estimate\'s total ($' + money(contractAmt) + ')\n' +
-      '  • Carries this estimate\'s workspace into the job\n' +
-      (leadId ? '  • Marks the linked lead as Sold and links it to the job\n' : '') +
-      '\nYou can edit the job number, costs, and other fields after.';
-    if (!confirm(msg)) return;
+    // Job title = client short name + the proposal (estimate) name.
+    var proposalName = est.name || est.title || '';
+    var shortName = (c && c.short_name) ? c.short_name : (clientName || '');
+    var suggestedTitle = ((shortName ? shortName + ' ' : '') + proposalName).trim() || 'New Job';
+    var _sub = 'New job from this estimate. Contract $' + money(contractAmt) + '.' + (leadId ? ' Marks the linked lead Sold.' : '');
+    var fin = (window.p86JobFinalize && window.p86JobFinalize.open)
+      ? await window.p86JobFinalize.open({ title: suggestedTitle, subtitle: _sub })
+      : { jobNumber: (prompt('Job number (S#### or RV####):', '') || '').trim().toUpperCase(), title: suggestedTitle };
+    if (!fin || !fin.jobNumber) return;
 
     var me = window.p86Auth && window.p86Auth.getUser && window.p86Auth.getUser();
     var ownerId = (lead && lead.salesperson_id) || (me && me.id) || null;
     var jobId = 'j' + Date.now();
     var nowIso = new Date().toISOString();
     var newJob = {
-      id: jobId, jobNumber: '', title: est.name || est.title || 'New Job',
+      id: jobId, jobNumber: fin.jobNumber, title: fin.title || suggestedTitle,
       client: clientName, pm: '', owner_id: ownerId,
       // Carry the client link + address (from the estimate / its lead) so the
       // job isn't a shell — Link Client shows "Linked" and map/weather have an address.
