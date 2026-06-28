@@ -1144,6 +1144,18 @@
         '</div>' +
       '</label>';
     }
+    // Unscheduled (no-due-date) to-do row — like taskRow but a <div> (not a
+    // <label>, so the date input doesn't toggle the checkbox) with an inline
+    // date picker to drop it onto a calendar day.
+    function undatedRow(t) {
+      return '<div class="sch-dsr sch-dsr-task sch-dsr-undated" style="--row-color:' + escapeAttr(taskColor(t)) + ';">' +
+        '<input type="checkbox" class="sch-dsr-check" data-task-id="' + escapeAttr(t.id) + '"' + (isTaskDone(t) ? ' checked' : '') + ' />' +
+        '<div class="sch-dsr-main">' +
+          '<div class="sch-dsr-title' + (isTaskDone(t) ? ' sch-dsr-done' : '') + '">' + escapeHTML(t.title || '(task)') + '</div>' +
+          '<label class="sch-dsr-setdate">Set due date <input type="date" class="sch-dsr-datein" data-task-id="' + escapeAttr(t.id) + '" /></label>' +
+        '</div>' +
+      '</div>';
+    }
     function reminderRow(r) {
       var tl = reminderTimeLabel(r);
       return '<label class="sch-dsr sch-dsr-rem" style="--row-color:' + REMINDER_COLOR + ';">' +
@@ -1179,7 +1191,7 @@
     }
     if (undatedTodos.length) {
       body += '<div class="sch-dsum-unsched">' +
-        section('Unscheduled — no due date', undatedTodos.length, undatedTodos.map(taskRow).join('')) +
+        section('Unscheduled — no due date', undatedTodos.length, undatedTodos.map(undatedRow).join('')) +
       '</div>';
     }
     if (!dayHasItems && !jobEntries.length && !undatedTodos.length) {
@@ -1198,7 +1210,9 @@
       '</div>' +
       '<div class="sch-dsum-body" id="schDsumBody">' + body + '</div>' +
       '<div class="sch-dsum-footer">' +
-        '<button type="button" class="sch-btn sch-btn-primary" id="schDsumAddEvent">+ Event</button>' +
+        '<button type="button" class="sch-btn sch-dsum-add sch-btn-primary" id="schDsumAddEvent">+ Event</button>' +
+        '<button type="button" class="sch-btn sch-dsum-add" id="schDsumAddTodo">+ To-do</button>' +
+        '<button type="button" class="sch-btn sch-dsum-add" id="schDsumAddTask">+ Task</button>' +
       '</div>';
 
     function shiftDay(n) {
@@ -1248,6 +1262,36 @@
           .then(function() { return fetchReminders(); })
           .then(function() { renderDaySummarySidebar(el); renderGrid(); })
           .catch(function(err) { console.warn('[schedule] reminder update failed:', err && err.message); });
+      });
+    });
+
+    // + To-do / + Task — create on the selected day via the shared quick-add
+    // modal (prefilled due date + scope) so you can put to-dos / tasks right
+    // on the calendar. Refetch + repaint when one lands.
+    function quickAddOnDay(scope) {
+      if (!(window.p86Tasks && window.p86Tasks.openQuickAdd)) return;
+      window.p86Tasks.openQuickAdd(
+        { scope: scope, due_date: _state.selectedDay },
+        { onCreated: function() { fetchTasks().then(function() { renderDaySummarySidebar(el); renderGrid(); }); } }
+      );
+    }
+    var addTodoBtn = document.getElementById('schDsumAddTodo');
+    if (addTodoBtn) addTodoBtn.addEventListener('click', function() { quickAddOnDay('personal'); });
+    var addTaskBtn = document.getElementById('schDsumAddTask');
+    if (addTaskBtn) addTaskBtn.addEventListener('click', function() { quickAddOnDay('org'); });
+
+    // Unscheduled rows: pick a due date to drop the to-do onto a calendar
+    // day (jumps the grid + summary to that day as confirmation).
+    el.querySelectorAll('.sch-dsr-datein[data-task-id]').forEach(function(inp) {
+      inp.addEventListener('change', function(e) {
+        e.stopPropagation();
+        var id = inp.getAttribute('data-task-id');
+        var val = inp.value;
+        if (!val || !(window.p86Api && window.p86Api.tasks)) return;
+        window.p86Api.tasks.update(id, { due_date: val })
+          .then(function() { return fetchTasks(); })
+          .then(function() { _state.selectedDay = val; renderDaySummarySidebar(el); renderGrid(); scrollToDate(val); })
+          .catch(function(err) { console.warn('[schedule] set due date failed:', err && err.message); });
       });
     });
   }

@@ -2040,8 +2040,11 @@ body.light-mode .sch-cal-grid { background: #d6dae3; }
   background: none; border: 0; color: #4f8cff;
   font-weight: 600; cursor: pointer; font-family: inherit; font-size: 11px; padding: 0;
 }
-.sch-dsum-footer { padding: 8px 10px; border-top: 1px solid var(--border, #2e3346); }
-.sch-dsum-footer .sch-btn { width: 100%; justify-content: center; }
+.sch-dsum-footer { display: flex; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--border, #2e3346); }
+.sch-dsum-add { flex: 1 1 0; justify-content: center; font-size: 11px; padding: 6px 4px; }
+/* Inline "set a due date" picker on unscheduled to-do rows. */
+.sch-dsr-setdate { display: inline-flex; align-items: center; gap: 5px; margin-top: 4px; font-size: 10px; color: var(--text-dim, #8a90a6); }
+.sch-dsr-datein { font-size: 11px; padding: 2px 5px; background: var(--card-bg, #0f0f1e); border: 1px solid var(--border, #2e3346); border-radius: 4px; color: var(--text, #e4e6f0); }
 /* Light "nothing today" line (vs the big empty state) — shown when the
    day is clear but there are still unscheduled to-dos below. */
 .sch-dsum-none { font-size: 11px; color: var(--text-dim, #8a90a6); padding: 2px 2px 4px; }

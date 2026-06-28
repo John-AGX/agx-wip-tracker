@@ -268,6 +268,8 @@
     if (!api()) { toast('Not connected', 'error'); return; }
     ensureStyles();
 
+    // Scope-aware noun: 'org' → assignable Task, else personal To-do.
+    var noun = (prefill.scope === 'org') ? 'task' : 'to-do';
     var linkLabel = prefill.entity_label || '';
     var hasLink = !!(prefill.entity_type && prefill.entity_id);
     var defAssignee = (prefill.assignee_user_id != null) ? prefill.assignee_user_id : currentUserId();
@@ -275,7 +277,7 @@
     loadUsers().then(function () {
       var html =
         '<div class="modal-content">' +
-          '<div class="modal-header"><span>New to-do</span>' +
+          '<div class="modal-header"><span>New ' + noun + '</span>' +
             '<button class="p86-modal-close" data-close>&times;</button></div>' +
           '<div style="padding:16px;">' +
             (hasLink
@@ -307,7 +309,7 @@
           '</div>' +
           '<div class="modal-footer">' +
             '<button class="ee-btn secondary" data-close>Cancel</button>' +
-            '<button class="primary" id="qaSave">Add task</button>' +
+            '<button class="primary" id="qaSave">Add ' + noun + '</button>' +
           '</div>' +
         '</div>';
 
@@ -344,6 +346,7 @@
           kind: prefill.kind || 'todo',
           priority: h.modal.querySelector('#qaPriority').value || 'normal'
         };
+        if (prefill.scope) payload.scope = prefill.scope;
         var due = h.modal.querySelector('#qaDue').value;
         if (due) payload.due_date = due;
         var asg = h.modal.querySelector('#qaAssignee').value;
@@ -364,7 +367,7 @@
           if (typeof opts.onCreated === 'function') opts.onCreated(res && res.task);
           else refreshOpenSurfaces();
         }).catch(function (e) {
-          btn.disabled = false; btn.textContent = 'Add task';
+          btn.disabled = false; btn.textContent = 'Add ' + noun;
           toast((e && e.message) || 'Could not add task', 'error');
         });
       }
