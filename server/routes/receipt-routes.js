@@ -16,6 +16,9 @@ const express = require('express');
 const { pool } = require('../db');
 const { requireAuth } = require('../auth');
 const { Anthropic } = require('@anthropic-ai/sdk');
+// Per-user AI-spend limiters (20/min, 200/hr; skip SYSTEM_ADMIN) — the OCR
+// route makes a real vision call, so it must be bounded like /api/ai/* (SEC A2).
+const { aiChatLimiter, aiChatHourlyLimiter } = require('../rate-limit');
 
 const router = express.Router();
 
@@ -118,7 +121,7 @@ async function entityInOrg(entityType, entityId, orgId) {
 // field — so the model's hit-rate is measurable + tunable. Best-effort, fire-
 // and-forget. `ocr` is the suggestion the client held from POST /ocr; `finals`
 // are the values being persisted. A field with no suggestion logs *_ok = null.
-async function logOcrFeedback(orgId, receiptId, ocr, finals) {
+async function logOcrFeedback(orgId, receiptId, ocr, finals, isPresale) {
   try {
     if (!ocr || typeof ocr !== 'object' || !orgId) return;
     const norm = (s) => (s == null ? null : String(s).trim().toLowerCase());
@@ -130,7 +133,9 @@ async function logOcrFeedback(orgId, receiptId, ocr, finals) {
     const fAmount = (finals.amount == null) ? null : Math.round(Number(finals.amount) * 100) / 100;
     const vendorOk = ov != null ? (norm(ov) === norm(finals.vendor)) : null;
     const dateOk = od != null ? (od === (finals.date || null)) : null;
-    const codeOk = occ != null ? (occ === (finals.cost_code || null)) : null;
+    // For a lead (pre-sale) receipt the cost code is hidden/irrelevant, so don't
+    // score it — it would otherwise log a spurious miss and skew the stat.
+    const codeOk = (occ != null && !isPresale) ? (occ === (finals.cost_code || null)) : null;
     const amountOk = oa != null ? (fAmount != null && fAmount === oa) : null;
     if (vendorOk === null && dateOk === null && codeOk === null && amountOk === null) return;
     await pool.query(
@@ -262,12 +267,16 @@ async function knownVendors(orgId) {
       "SELECT vendor, COUNT(*) AS c FROM receipts WHERE organization_id = $1 AND vendor IS NOT NULL AND TRIM(vendor) <> '' GROUP BY vendor ORDER BY c DESC LIMIT 40",
       [orgId]
     );
-    return r.rows.map((x) => x.vendor).filter(Boolean);
+    // Sanitize for prompt-content: strip newlines/control chars + clamp length
+    // so a stored vendor string can't reshape this org's own OCR prompt.
+    return r.rows.map((x) => x.vendor).filter(Boolean)
+      .map((v) => String(v).replace(/[\r\n\t]+/g, ' ').slice(0, 60));
   } catch (_) { return []; }
 }
-router.post('/ocr', requireAuth, async (req, res) => {
+router.post('/ocr', requireAuth, aiChatLimiter, aiChatHourlyLimiter, async (req, res) => {
   try {
     const orgId = callerOrgId(req);
+    if (!orgId) return res.json({ ok: false }); // fail closed like the sibling routes
     const b = req.body || {};
     let data = String(b.image_base64 || '');
     if (data.startsWith('data:')) { const i = data.indexOf(','); if (i >= 0) data = data.slice(i + 1); }
@@ -394,7 +403,7 @@ router.post('/', requireAuth, async (req, res) => {
     if (b.ocr) {
       logOcrFeedback(orgId, id, b.ocr, {
         vendor: cleanStr(b.vendor, 200), date: purchasedAt, cost_code: costCode, amount: amount
-      });
+      }, isPresale);
     }
   } catch (e) {
     console.error('POST /api/receipts error:', e);

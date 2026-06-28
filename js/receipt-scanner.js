@@ -13,7 +13,8 @@
 (function () {
   'use strict';
 
-  var MAX_OUT = 1400; // cap the long edge of the output scan (perf + filesize)
+  var MAX_OUT = 1400;  // cap the long edge of the output scan (perf + filesize)
+  var WORK_MAX = 2000; // cap the long edge of the SOURCE before getImageData (mobile memory)
 
   function dist(a, b) { var dx = a[0] - b[0], dy = a[1] - b[1]; return Math.sqrt(dx * dx + dy * dy); }
 
@@ -22,11 +23,14 @@
   function quadIsSane(p, w, h) {
     if (!p || p.length !== 4) return false;
     for (var i = 0; i < 4; i++) { if (!isFinite(p[i][0]) || !isFinite(p[i][1])) return false; }
-    // shoelace area
+    // SIGNED shoelace area. Canonical order TL,TR,BR,BL (clockwise in y-down
+    // image space) is POSITIVE. Requiring positive rejects a mirrored/reversed
+    // winding (which would warp to a flipped scan); the magnitude gate rejects
+    // tiny/junk quads. Either way we fall back to the original photo.
     var area = 0;
     for (var j = 0; j < 4; j++) { var k = (j + 1) % 4; area += p[j][0] * p[k][1] - p[k][0] * p[j][1]; }
-    area = Math.abs(area) / 2;
-    if (area < 0.12 * w * h) return false;       // < ~12% of frame → likely junk
+    area = area / 2;
+    if (area < 0.12 * w * h) return false;       // wrong winding (negative) OR < ~12% of frame
     // convexity: all cross products same sign
     var sign = 0;
     for (var m = 0; m < 4; m++) {
@@ -103,14 +107,15 @@
     var octx = oc.getContext('2d');
     var out = octx.createImageData(outW, outH);
     var odata = out.data;
+    var oob = 0;
     for (var y = 0; y < outH; y++) {
       for (var x = 0; x < outW; x++) {
         var w = g * x + h * y + 1;
         var sx = (a * x + b * y + c) / w;
         var sy = (d * x + e * y + f) / w;
         var oi = (y * outW + x) * 4;
-        if (sx < 0 || sy < 0 || sx >= sw - 1 || sy >= img.height - 1) {
-          odata[oi] = odata[oi + 1] = odata[oi + 2] = 255; odata[oi + 3] = 255; continue;
+        if (!(sx >= 0 && sy >= 0 && sx < sw - 1 && sy < img.height - 1)) {
+          odata[oi] = odata[oi + 1] = odata[oi + 2] = 255; odata[oi + 3] = 255; oob++; continue;
         }
         // bilinear sample
         var x0 = sx | 0, y0 = sy | 0, fx = sx - x0, fy = sy - y0;
@@ -123,6 +128,9 @@
         odata[oi + 3] = 255;
       }
     }
+    // If the warp left most of the frame empty (extreme/degenerate quad slipped
+    // through), discard it so the caller keeps the original photo.
+    if (oob > outW * outH * 0.45) return null;
     autoLevels(odata);
     octx.putImageData(out, 0, 0);
     return oc.toDataURL('image/jpeg', 0.85);
@@ -135,9 +143,18 @@
       var url = URL.createObjectURL(file);
       img.onload = function () {
         try {
-          var iw = img.width, ih = img.height;
-          var px = corners.map(function (p) { return [p[0] * iw, p[1] * ih]; });
-          if (!quadIsSane(px, iw, ih)) { URL.revokeObjectURL(url); cb(null); return; }
+          // Downscale the source to a working size FIRST so getImageData stays
+          // bounded on big phone photos (12MP+). Corners are 0..1 fractions, so
+          // re-derive pixel corners against the working dims.
+          var ws = Math.min(1, WORK_MAX / Math.max(img.width, img.height));
+          var src, sw, sh;
+          if (ws < 1) {
+            sw = Math.max(1, Math.round(img.width * ws)); sh = Math.max(1, Math.round(img.height * ws));
+            src = document.createElement('canvas'); src.width = sw; src.height = sh;
+            src.getContext('2d').drawImage(img, 0, 0, sw, sh);
+          } else { src = img; sw = img.width; sh = img.height; }
+          var px = corners.map(function (p) { return [p[0] * sw, p[1] * sh]; });
+          if (!quadIsSane(px, sw, sh)) { URL.revokeObjectURL(url); cb(null); return; }
           // output size from the receipt's own edge lengths, capped
           var wTop = dist(px[0], px[1]), wBot = dist(px[3], px[2]);
           var hL = dist(px[0], px[3]), hR = dist(px[1], px[2]);
@@ -145,7 +162,7 @@
           if (outW < 40 || outH < 40) { URL.revokeObjectURL(url); cb(null); return; }
           var scale = Math.min(1, MAX_OUT / Math.max(outW, outH));
           outW = Math.max(1, Math.round(outW * scale)); outH = Math.max(1, Math.round(outH * scale));
-          var dataUrl = warp(img, px, outW, outH);
+          var dataUrl = warp(src, px, outW, outH);
           URL.revokeObjectURL(url);
           cb(dataUrl || null);
         } catch (e) { try { URL.revokeObjectURL(url); } catch (_) {} cb(null); }
