@@ -33,6 +33,22 @@
            ';font-size:11px;text-transform:uppercase;letter-spacing:0.5px;">' + role + '</span>';
   }
 
+  // Small presentation helpers for the richer user cards.
+  function uInitials(name) {
+    var p = String(name || '').trim().split(/\s+/);
+    return (((p[0] || '')[0] || '') + ((p[1] || '')[0] || '')).toUpperCase() || '?';
+  }
+  function uSeenAgo(iso) {
+    if (!iso) return 'never';
+    var d = new Date(iso); if (isNaN(d.getTime())) return '';
+    var s = Math.max(0, (Date.now() - d.getTime()) / 1000);
+    if (s < 90) return 'just now';
+    if (s < 3600) return Math.round(s / 60) + 'm ago';
+    if (s < 86400) return Math.round(s / 3600) + 'h ago';
+    if (s < 86400 * 7) return Math.round(s / 86400) + 'd ago';
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  }
+
   function renderAdminUsers() {
     if (!isAdmin()) return;
     var tbody = document.getElementById('admin-users-tbody');
@@ -55,12 +71,23 @@
         var deleteBtn = (u.id === myId)
           ? '<button class="ee-btn ghost" disabled title="You cannot delete your own account" style="margin-left:4px;">Delete</button>'
           : '<button class="ee-btn danger" onclick="deleteAdminUser(' + u.id + ')" style="margin-left:4px;">Delete</button>';
+        var av = '<span style="display:inline-flex;width:30px;height:30px;border-radius:50%;background:var(--accent,#4f8cff);color:#fff;align-items:center;justify-content:center;font-weight:600;font-size:12px;flex:0 0 auto;">' + escapeHTML(uInitials(u.name)) + '</span>';
+        var nameCell = '<div style="display:flex;align-items:center;gap:9px;">' + av +
+          '<div style="min-width:0;"><div style="font-weight:600;color:var(--text,#e4e6f0);">' + escapeHTML(u.name || '') + '</div>' +
+          (u.title ? '<div style="font-size:11px;color:var(--text-dim,#888);">' + escapeHTML(u.title) + '</div>' : '') +
+          '</div></div>';
+        var emailCell = '<div style="font-size:12px;">' + escapeHTML(u.email || '') + '</div>' +
+          (u.phone_number ? '<div style="font-size:11px;color:var(--text-dim,#888);font-family:monospace;">' + escapeHTML(u.phone_number) + '</div>' : '');
+        var roleCell = roleBadge(u.role) +
+          (u.timezone ? '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:3px;">' + escapeHTML(u.timezone) + '</div>' : '');
+        var createdCell = '<div>' + fmtDate(u.created_at) + '</div>' +
+          '<div style="font-size:11px;color:var(--text-dim,#888);">seen ' + escapeHTML(uSeenAgo(u.last_seen_at)) + '</div>';
         html += '<tr>' +
-          '<td>' + escapeHTML(u.name || '') + '</td>' +
-          '<td>' + escapeHTML(u.email || '') + '</td>' +
-          '<td>' + roleBadge(u.role) + '</td>' +
+          '<td>' + nameCell + '</td>' +
+          '<td>' + emailCell + '</td>' +
+          '<td>' + roleCell + '</td>' +
           '<td style="text-align:center;">' + activeBadge + '</td>' +
-          '<td>' + fmtDate(u.created_at) + '</td>' +
+          '<td>' + createdCell + '</td>' +
           '<td style="text-align:center;white-space:nowrap;">' +
             '<button class="ee-btn secondary" onclick="openEditUserModal(' + u.id + ')">Edit</button>' +
             deleteBtn +
