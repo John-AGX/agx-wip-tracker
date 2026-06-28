@@ -3279,6 +3279,7 @@ function initEvents(){
       selN=nid2; dragN=nid2;
       nel.classList.add('ng-sel');
       updateConnectedHighlight();
+      renderInspector();   // populate the right Inspector with the clicked node (cost/scope/sub/PO/CO/invoice) — every type, same behavior
       var p=E.pan();
       dragOff={x:e.clientX/z()-p.x-n3.x, y:e.clientY/z()-p.y-n3.y};
     }
