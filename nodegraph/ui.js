@@ -940,6 +940,10 @@ function renderNodes(){
 }
 
 function render(){
+  // Whole-site Site Plan: fan each building's phases around it (once per building, via
+  // _fannedSet) so phase nodes show near their buildings on the map — not at abstract
+  // layout positions. Skipped while drilled into one building (that path fans on click).
+  if(E.viewMode && E.viewMode()==='siteplan' && !_spFocus) fanAllBuildings();
   updateTierLabels();
   updateT1Progress();
   pushToJobSilent();
@@ -1182,6 +1186,12 @@ function fanFocusNodes(bId){
     k.y=Math.round(center.y + Math.sin(a)*R - _oy);
   });
   _fannedSet[bId]=true;
+}
+// Whole-site: fan every building's phases/costs around it (each fans once via _fannedSet,
+// so manual moves stick). Phases (t2) are visible whole-site now; the costs it also
+// positions stay hidden until drill-in, then appear at the same fanned spots.
+function fanAllBuildings(){
+  E.nodes().forEach(function(n){ if(n.type==='t1') fanFocusNodes(n.id); });
 }
 // Frame the currently-visible site-plan nodes — mirrors zoomFitAll but scoped
 // via E.spNodeVisible (so it fits the whole site, or a drilled-in subgraph).
@@ -4881,7 +4891,7 @@ window.openNodeGraph=function(jid){
   }
   if(jid && jid!==E.job()){
     E.job(jid);
-    _spOrigin=null; _spOriginGraph=null; _spOriginJob=null; _geoPhotos=[]; _geoPhotosJob=null; _geocoding=false; // drop geo caches: avoid cross-job staleness
+    _spOrigin=null; _spOriginGraph=null; _spOriginJob=null; _geoPhotos=[]; _geoPhotosJob=null; _geocoding=false; _fannedSet={}; // drop geo caches + fan state: avoid cross-job staleness
     E.setNodes([]); E.setWires([]); E.setNid(1);
     if(!E.loadGraph()){ populate(); }
     // First-open fix: the early basemap mount stamped the geo origin over an empty node

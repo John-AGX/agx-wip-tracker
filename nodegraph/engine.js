@@ -120,7 +120,8 @@ function spNodeVisible(type, id){
   }
   if (type === 'wip') return false;            // whole-site: hub lives in the sidebar
   if (type === 't1') return true;              // Site / building footprints
-  return false;                                // Scope/cost render on drill-in (focus set); shared-to-wip costs stay off-canvas
+  if (type === 't2') return true;              // Scope/phase nodes — shown on the whole-site map too (fanned around their buildings)
+  return false;                                // costs render on drill-in (focus set); shared-to-wip costs stay off-canvas
 }
 // First ins/outs index on a def whose port type can connect with `type` in
 // the given direction ('in'|'out'). Used to auto-wire added/spliced nodes.
