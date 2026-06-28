@@ -2042,4 +2042,11 @@ body.light-mode .sch-cal-grid { background: #d6dae3; }
 }
 .sch-dsum-footer { padding: 8px 10px; border-top: 1px solid var(--border, #2e3346); }
 .sch-dsum-footer .sch-btn { width: 100%; justify-content: center; }
+/* Light "nothing today" line (vs the big empty state) — shown when the
+   day is clear but there are still unscheduled to-dos below. */
+.sch-dsum-none { font-size: 11px; color: var(--text-dim, #8a90a6); padding: 2px 2px 4px; }
+/* Unscheduled (no-due-date) to-dos bucket — separated from the day's
+   items so it reads as day-independent. */
+.sch-dsum-unsched { margin-top: 4px; padding-top: 10px; border-top: 1px dashed var(--border, #2e3346); }
+.sch-dsum-unsched .sch-dsum-sect-title { color: #f59e0b; }
 
