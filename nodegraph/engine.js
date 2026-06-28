@@ -951,6 +951,8 @@ function buildGraphState(){
         attachedTo: n.attachedTo||null,
         geoLatLng: (n.type==='t1' && n.geoLatLng) ? n.geoLatLng : null, // Phase 2-A: building's real lat/lng (additive; old graphs have none)
         polygon: (n.type==='t1' && n.polygon) ? n.polygon : null,       // Phase 1: traced building footprint (additive, no GRAPH_VER bump)
+        levels: (n.type==='t1' && n.levels && n.levels.length) ? n.levels : null, // L/U Phase 1: floors (additive; flat buildings have none)
+        units:  (n.type==='t1' && n.units  && n.units.length)  ? n.units  : null, // L/U Phase 1: units, each optionally on a level (unit.levelId)
         dataId: n.data ? n.data.id : null
       };
     }),
@@ -1246,6 +1248,8 @@ function loadGraph(){
       attachedTo:sn.attachedTo||null,
       geoLatLng:sn.geoLatLng||null, // Phase 2-A: building's real lat/lng (guard so pre-geo graphs load fine)
       polygon:sn.polygon||null, // traced building footprint (guard so pre-polygon graphs load fine)
+      levels:sn.levels||[], // L/U Phase 1: floors (guard so pre-L/U graphs load fine)
+      units:sn.units||[],   // L/U Phase 1: units, each optionally on a level (unit.levelId)
     };
     nodes.push(n);
   });

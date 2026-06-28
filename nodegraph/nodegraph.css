@@ -742,6 +742,27 @@ body.light-mode .ng-topbar.ng-ribbon .ng-ribbon-btn:hover{
 .ng-sp-addcost{margin-top:9px;width:100%;padding:6px;border:1px dashed var(--ng-border2);border-radius:6px;background:transparent;color:#4f8cff;font-size:12px;font-weight:600;cursor:pointer}
 .ng-sp-addcost:hover{background:var(--ng-surface);border-style:solid}
 .ng-sp-metrics-empty{color:var(--ng-dim);font-size:12px;padding:8px 2px}
+/* L/U Phase 1 — building Levels & Units breakdown on the per-building panel */
+.ng-sp-struct{margin-top:11px;border-top:1px solid var(--ng-border);padding-top:9px}
+.ng-sp-struct-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}
+.ng-sp-struct-ttl{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ng-dim)}
+.ng-lu-count{font-weight:400;text-transform:none;letter-spacing:0;color:#6b7689;margin-left:6px}
+.ng-sp-struct-add{display:flex;gap:4px;flex:none}
+.ng-lu-btn{font-size:11px;color:#bcd4f5;background:#16233b;border:1px solid rgba(79,140,255,.35);border-radius:6px;padding:2px 7px;cursor:pointer;white-space:nowrap}
+.ng-lu-btn:hover{background:#1d2f4d}
+.ng-sp-struct-empty{font-size:11px;color:#6b7689;line-height:1.45;padding:2px 0 4px}
+.ng-lu-level{margin-bottom:5px}
+.ng-lu-row{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:2px 0;min-height:20px}
+.ng-lu-lvl .ng-lu-name{font-size:12px;font-weight:600;color:#dbe6ff;cursor:pointer}
+.ng-lu-bw{font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#7c8699}
+.ng-lu-unit{padding-left:14px}
+.ng-lu-unit .ng-lu-name{font-size:12px;color:#c3ccdb;cursor:pointer}
+.ng-lu-name:hover{text-decoration:underline}
+.ng-lu-tools{display:flex;gap:3px;align-items:center;flex:none}
+.ng-lu-mini{font-size:10px;color:#8aa0c0;background:transparent;border:1px solid rgba(255,255,255,.14);border-radius:5px;padding:1px 5px;cursor:pointer;line-height:1.35;white-space:nowrap}
+.ng-lu-mini:hover{background:rgba(255,255,255,.06);color:#cbd5e1}
+.ng-lu-x{color:#e07a8f;border-color:rgba(224,122,143,.32)}
+.ng-lu-x:hover{background:rgba(224,122,143,.12);color:#f3a3b3}
 /* 2.5D massing: a building block in site-plan reads as solid mass — flatter
    "block" corners + a lit top edge over the budget-proportional extrusion
    (the depth shadow is set inline by renderNodes). */

@@ -1779,7 +1779,7 @@ function buildSidebar(){
   // click-to-edit (same data-wip-edit path as the old WIP card).
   html+='<div class="ng-sp-metrics"><div class="ng-sp-metrics-head">Project WIP</div><div class="ng-sp-metrics-body"></div></div>';
   // Per-building cost panel (S2) — shown when a building polygon is selected.
-  html+='<div class="ng-sp-bldg"><div class="ng-sp-metrics-head">Building · <span class="ng-sp-bldg-name"></span></div><div class="ng-sp-bldg-body"></div><button class="ng-sp-addcost">+ Add Cost</button></div>';
+  html+='<div class="ng-sp-bldg"><div class="ng-sp-metrics-head">Building · <span class="ng-sp-bldg-name"></span></div><div class="ng-sp-bldg-body"></div><button class="ng-sp-addcost">+ Add Cost</button><div class="ng-sp-struct"></div></div>';
   html+='<div class="ng-sidebar-search"><input type="text" placeholder="Search..." id="ngSearch"/></div>';
   E.CATS.forEach(function(cat,ci){
     var isWipCat=(cat.items||[]).indexOf('wip')>-1;   // hidden in satellite (the WIP node lives in the sidebar there)
@@ -1828,6 +1828,27 @@ function buildSidebar(){
     // S4: "+ Add Cost" on the selected-building panel → cost-type picker wired to it.
     var addc=e.target.closest('.ng-sp-addcost');
     if(addc){ e.preventDefault(); e.stopPropagation(); var sn=selN&&E.findNode(selN); if(sn&&sn.type==='t1'){ var br=addc.getBoundingClientRect(); addCostToBuilding(sn.id, br.left, br.bottom+4); } return; }
+    // L/U Phase 1: levels & units controls on the building panel.
+    var luEl=e.target.closest('[data-lu-act]');
+    if(luEl){
+      e.preventDefault(); e.stopPropagation();
+      var bn=selN&&E.findNode(selN); if(!bn||bn.type!=='t1') return;
+      if(!bn.levels) bn.levels=[]; if(!bn.units) bn.units=[];
+      var act=luEl.getAttribute('data-lu-act'), id=luEl.getAttribute('data-id'), nm;
+      if(act==='add-level'){ nm=prompt('Level name:', 'Level '+(bn.levels.length+1)); if(nm&&nm.trim()) bn.levels.push({id:luUid('lv'), name:nm.trim()}); }
+      else if(act==='add-unit'){ nm=prompt('Unit name:', 'Unit '+(bn.units.length+1)); if(nm&&nm.trim()) bn.units.push({id:luUid('un'), name:nm.trim(), levelId:null}); }
+      else if(act==='add-unit-lvl'){ nm=prompt('Unit name:', 'Unit '+(bn.units.length+1)); if(nm&&nm.trim()) bn.units.push({id:luUid('un'), name:nm.trim(), levelId:id}); }
+      else if(act==='rename-level'){ var L=luById(bn.levels,id); if(L){ nm=prompt('Level name:', L.name); if(nm&&nm.trim()) L.name=nm.trim(); } }
+      else if(act==='rename-unit'){ var U=luById(bn.units,id); if(U){ nm=prompt('Unit name:', U.name); if(nm&&nm.trim()) U.name=nm.trim(); } }
+      else if(act==='del-level'){ var L2=luById(bn.levels,id); var cnt=bn.units.filter(function(u){return u.levelId===id;}).length;
+        if(L2 && (cnt===0 || confirm('Remove "'+L2.name+'"? Its '+cnt+' unit'+(cnt===1?'':'s')+' become building-wide.'))){
+          bn.units.forEach(function(u){ if(u.levelId===id) u.levelId=null; });
+          bn.levels=bn.levels.filter(function(x){ return x.id!==id; });
+        } }
+      else if(act==='del-unit'){ var U2=luById(bn.units,id); if(U2 && confirm('Remove "'+U2.name+'"?')) bn.units=bn.units.filter(function(x){ return x.id!==id; }); }
+      if(E.saveGraph) E.saveGraph(); renderBuildingMetrics();
+      return;
+    }
     if(e.target.closest('.ng-sidebar-toggle')){
       e.stopPropagation();
       sb.classList.toggle('ng-collapsed');
@@ -2046,6 +2067,50 @@ function renderBuildingMetrics(){
   });
   h+='</div>';
   var bodyEl=panel.querySelector('.ng-sp-bldg-body'); if(bodyEl) bodyEl.innerHTML=h;
+  renderBuildingStructure(panel, sel);   // L/U Phase 1: levels + units breakdown
+}
+
+// ── L/U Phase 1: building Levels & Units ───────────────────────────────────
+// A building (t1) optionally breaks into levels (floors) and/or units. A unit
+// sits on a level (unit.levelId) or is building-wide (levelId null). Stored on
+// the node + persisted in the graph blob. Revenue allocation + assigning scope
+// nodes to a level/unit come in the next phases — this slice is the structure.
+function luEsc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function luUid(p){ return p+'_'+Math.random().toString(36).slice(2,7)+(Date.now()%100000).toString(36); }
+function luById(arr,id){ if(!arr) return null; for(var i=0;i<arr.length;i++){ if(arr[i].id===id) return arr[i]; } return null; }
+
+function renderBuildingStructure(panel, sel){
+  var el=panel.querySelector('.ng-sp-struct'); if(!el) return;
+  if(!sel.levels) sel.levels=[]; if(!sel.units) sel.units=[];
+  var lv=sel.levels, un=sel.units;
+  var count=(lv.length||un.length) ? ' <span class="ng-lu-count">'+lv.length+' lvl · '+un.length+' unit'+(un.length===1?'':'s')+'</span>' : '';
+  var h='<div class="ng-sp-struct-head"><span class="ng-sp-struct-ttl">Structure'+count+'</span>'
+      +'<span class="ng-sp-struct-add"><button class="ng-lu-btn" data-lu-act="add-level">+ Level</button><button class="ng-lu-btn" data-lu-act="add-unit">+ Unit</button></span></div>';
+  if(!lv.length && !un.length){
+    h+='<div class="ng-sp-struct-empty">Flat building. Add levels (floors) or units to break revenue down.</div>';
+  } else {
+    lv.forEach(function(L){
+      h+='<div class="ng-lu-level"><div class="ng-lu-row ng-lu-lvl">'
+        +'<span class="ng-lu-name" data-lu-act="rename-level" data-id="'+L.id+'" title="Rename">▤ '+luEsc(L.name)+'</span>'
+        +'<span class="ng-lu-tools"><button class="ng-lu-mini" data-lu-act="add-unit-lvl" data-id="'+L.id+'" title="Add unit to this level">+ unit</button>'
+        +'<button class="ng-lu-mini ng-lu-x" data-lu-act="del-level" data-id="'+L.id+'" title="Remove level">×</button></span></div>';
+      un.forEach(function(u){ if(u.levelId!==L.id) return;
+        h+='<div class="ng-lu-row ng-lu-unit"><span class="ng-lu-name" data-lu-act="rename-unit" data-id="'+u.id+'" title="Rename">◦ '+luEsc(u.name)+'</span>'
+          +'<button class="ng-lu-mini ng-lu-x" data-lu-act="del-unit" data-id="'+u.id+'" title="Remove unit">×</button></div>';
+      });
+      h+='</div>';
+    });
+    var bw=un.filter(function(u){ return !luById(lv, u.levelId); }); // levelId null OR an orphaned level → building-wide bucket
+    if(bw.length){
+      h+='<div class="ng-lu-level"><div class="ng-lu-row ng-lu-lvl ng-lu-bw">'+(lv.length?'Building-wide':'Units')+'</div>';
+      bw.forEach(function(u){
+        h+='<div class="ng-lu-row ng-lu-unit"><span class="ng-lu-name" data-lu-act="rename-unit" data-id="'+u.id+'" title="Rename">◦ '+luEsc(u.name)+'</span>'
+          +'<button class="ng-lu-mini ng-lu-x" data-lu-act="del-unit" data-id="'+u.id+'" title="Remove unit">×</button></div>';
+      });
+      h+='</div>';
+    }
+  }
+  el.innerHTML=h;
 }
 
 // S4: "+ Add Cost" on a selected building — a small cost-type picker that creates the
