@@ -494,11 +494,12 @@
           return s + '$' + Math.round(a);
         };
         var w = (window.getJobWIP ? window.getJobWIP(job.id) : null) || {};
-        var col = window.p86EntityCard.jobStatusColor(job.status);
+        var statusCol = window.p86EntityCard.jobStatusColor(job.status);
+        var accentCol = window.p86EntityCard.pinColor(job, 'job') || statusCol;
         var profit = (w.jtdProfit != null) ? w.jtdProfit : 0;
         var contract = (w.totalIncome != null) ? w.totalIncome : (w.contractIncome || 0);
         infoEl.innerHTML = window.p86EntityCard.render({
-          kind: 'job', accent: col, status: { label: job.status || 'In Progress', color: col },
+          kind: 'job', accent: accentCol, status: { label: job.status || 'In Progress', color: statusCol },
           number: job.jobNumber || '', title: job.title || job.name || '',
           subtitle: job.client || '',
           ring: { pct: (w.pctComplete || 0) },
@@ -556,6 +557,8 @@
   }
 
   function mountJobSubnav(job) {
+    // Single-card rule: a job must never show the lead/estimate context card.
+    if (window.p86EntitySubnav && window.p86EntitySubnav.clearAll) window.p86EntitySubnav.clearAll();
     buildJobSubnavShell(job);
     placeJobSubnav();
     // Follow the tabs across the breakpoint as the viewport resizes.

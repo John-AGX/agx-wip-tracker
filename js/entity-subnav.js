@@ -20,7 +20,7 @@
   function mount(kind, vm) {
     var sb = document.getElementById('app-sidebar');
     if (!sb || !window.p86EntityCard || !kind) return;
-    unmount(kind);
+    clearAll();  // single-card rule: only one lead/estimate context card at a time
     var wrap = document.createElement('div');
     wrap.id = 'app-' + kind + 'nav';
     wrap.className = 'app-entitynav';
@@ -37,5 +37,9 @@
     if (el && el.parentNode) el.parentNode.removeChild(el);
   }
 
-  window.p86EntitySubnav = { mount: mount, unmount: unmount };
+  // Remove every lead/estimate context card (the job uses its own #app-jobnav,
+  // torn down by workspace-layout). Called before any mount + on detail close.
+  function clearAll() { unmount('lead'); unmount('estimate'); }
+
+  window.p86EntitySubnav = { mount: mount, unmount: unmount, clearAll: clearAll };
 })();

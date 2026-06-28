@@ -696,9 +696,10 @@
       }
       var jobObj = null, jl = (window.appData && window.appData.jobs) || [];
       for (var ji = 0; ji < jl.length; ji++) { if (jl[ji].id === id) { jobObj = jl[ji]; break; } }
-      var col = window.p86EntityCard.jobStatusColor(it.status);
+      var statusCol = window.p86EntityCard.jobStatusColor(it.status);
+      var accentCol = window.p86EntityCard.pinColor(jobObj || it, 'job') || statusCol;
       openPopup(e.pos, window.p86EntityCard.render({
-        kind: 'job', accent: col, status: { label: it.status || 'In Progress', color: col },
+        kind: 'job', accent: accentCol, status: { label: it.status || 'In Progress', color: statusCol },
         number: (jobObj && (jobObj.jobNumber || jobObj.job_number)) || '',
         title: it.title || '(untitled)',
         subtitle: (jobObj && (jobObj.client || jobObj.client_name)) || '',
@@ -719,7 +720,8 @@
         openPopup({ lat: it.lat, lng: it.lng }, '<div class="emap-jc"><div class="emap-jc-name">' + escapeHTML(it.title || '(untitled)') + '</div></div>');
         return;
       }
-      var col = window.p86EntityCard.leadStatusColor(it.status);
+      var statusCol = window.p86EntityCard.leadStatusColor(it.status);
+      var accentCol = window.p86EntityCard.pinColor(it, 'lead') || '#4f8cff';
       // Value = highest attached-estimate clientPrice; age = days since created.
       var leadObj = null, ll = (window.appData && window.appData.leads) || [];
       for (var li = 0; li < ll.length; li++) { if (ll[li].id === it.id) { leadObj = ll[li]; break; } }
@@ -737,10 +739,11 @@
       var leadStats = [ { label: 'Est. value', value: (val != null ? money(val) : '—') } ];
       if (ageDays != null) leadStats.push({ label: 'Age', value: ageDays + 'd' });
       openPopup({ lat: it.lat, lng: it.lng }, window.p86EntityCard.render({
-        kind: 'lead', accent: col, status: { label: it.status || 'Open', color: col },
+        kind: 'lead', accent: accentCol, status: { label: it.status || 'Open', color: statusCol },
         title: it.title || '(untitled)',
         subtitle: it.client || (leadObj && (leadObj.client_name || leadObj.property_name)) || '',
         address: it.address || '',
+        ring: (leadObj && Number(leadObj.confidence) > 0 ? { pct: Number(leadObj.confidence) } : undefined),
         stats: leadStats,
         icons: [ { act: 'info', title: 'Open lead' }, { act: 'maps', title: 'Maps' } ],
         actions: [ { label: 'Open lead', act: 'open', primary: true, icon: 'arrow-right' }, { label: 'Maps', act: 'maps' } ],

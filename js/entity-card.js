@@ -94,7 +94,12 @@
          accent) so it reads as the Pulse card; render() drops the icon row
          and action buttons. Slightly tighter body padding. */
       '.p86-ecard.compact{background:var(--surface2,#242836);}' +
-      '.p86-ecard.compact .p86-ecard-body{padding:11px 13px 12px 16px;}';
+      '.p86-ecard.compact .p86-ecard-body{padding:11px 13px 12px 16px;}' +
+      // Compact: ring sits TOP-RIGHT of the header so the title runs full-width.
+      '.p86-ecard.compact .p86-ecard-head{align-items:flex-start;}' +
+      '.p86-ecard.compact .p86-ecard-headring{flex:0 0 auto;margin:-2px -2px 0 8px;}' +
+      '.p86-ecard.compact .p86-ecard-headring svg{width:42px;height:42px;display:block;}' +
+      '.p86-ecard.compact .p86-ecard-title{white-space:normal;overflow:visible;text-overflow:clip;}';
     var el = document.createElement('style');
     el.id = STYLE_ID;
     el.textContent = css;
@@ -149,10 +154,16 @@
       : '';
     var kindChip = vm.kind && vm.kind !== 'job' ? '<span class="p86-ecard-kind">' + esc(String(vm.kind).toUpperCase()) + '</span>' : '';
 
+    var hasRing = vm.ring && vm.ring.pct != null;
+    // Compact cards put the ring top-right of the header (full-width title);
+    // full cards keep it inline (see main below) and show the icon row.
+    var headRing = (compact && hasRing)
+      ? '<span class="p86-ecard-headring">' + ringSVG(vm.ring.pct, accent) + '</span>'
+      : '';
     var head =
       '<div class="p86-ecard-head">' +
         '<span class="p86-ecard-statuswrap">' + kindChip + statusPill + '</span>' +
-        (compact ? '' : iconRow(vm.icons, baseData)) +
+        (compact ? headRing : iconRow(vm.icons, baseData)) +
       '</div>';
 
     var titleRow =
@@ -163,8 +174,8 @@
       (vm.subtitle ? '<div class="p86-ecard-sub">' + esc(vm.subtitle) + '</div>' : '') +
       (vm.address ? '<div class="p86-ecard-addr"><i class="ti ti-map-pin" aria-hidden="true"></i><span>' + esc(vm.address) + '</span></div>' : '');
 
-    var hasRing = vm.ring && vm.ring.pct != null;
-    var main = hasRing
+    var ringInMain = hasRing && !compact;
+    var main = ringInMain
       ? '<div class="p86-ecard-main"><div>' + ringSVG(vm.ring.pct, accent) + '</div>' +
           '<div class="p86-ecard-meta">' + titleRow + '</div></div>'
       : '<div class="p86-ecard-main no-ring"><div class="p86-ecard-meta">' + titleRow + '</div></div>';
@@ -230,12 +241,27 @@
     return '#8b90a5'; // draft
   }
 
+  // Map-pin color for an entity (via window.p86MapPins) — used as the card
+  // accent so the card's left bar + ring match the entity's map pin. Leads →
+  // blue; jobs → reno/wo/service/slate by number/type. Null if unavailable.
+  function pinColor(entity, kind) {
+    try {
+      if (window.p86MapPins && window.p86MapPins.typeForEntity && window.p86MapPins.getConfig) {
+        var t = window.p86MapPins.typeForEntity(entity, kind);
+        var cfg = window.p86MapPins.getConfig();
+        if (cfg && cfg[t] && cfg[t].color) return cfg[t].color;
+      }
+    } catch (e) {}
+    return null;
+  }
+
   window.p86EntityCard = {
     render: render,
     injectStyle: injectStyle,
     jobStatusColor: jobStatusColor,
     leadStatusColor: leadStatusColor,
     estimateStatusColor: estimateStatusColor,
+    pinColor: pinColor,
     _esc: esc
   };
 })();

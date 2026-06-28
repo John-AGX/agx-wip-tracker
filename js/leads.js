@@ -1304,28 +1304,40 @@
   }
   window.refreshLeadDetailHeader = refreshLeadDetailHeader;
 
-  // Mount the shared Pulse card into the sidebar while a lead is open
-  // (mirrors the job subnav). Value = highest attached-estimate price;
-  // age = days since created.
-  function mountLeadSidebarCard() {
-    if (!window.p86EntitySubnav || !window.p86EntityCard) return;
-    var l = _leads.find(function(x) { return x.id === _currentEditingLeadId; });
-    if (!l) { window.p86EntitySubnav.unmount('lead'); return; }
+  // Mount the shared Pulse card into the sidebar for a lead. Accent + ring
+  // color = the lead's MAP PIN color; the ring shows confidence %; status pill
+  // keeps the pipeline status color; stats = Est. value (highest attached
+  // estimate) + Age. Exposed as window.p86MountLeadCard so the estimate editor
+  // can show the PARENT LEAD's card instead of its own.
+  function mountLeadCard(l) {
+    if (!window.p86EntitySubnav || !window.p86EntityCard || !l) return;
     function sm(n) { n = Number(n) || 0; var a = Math.abs(n); if (a >= 1e6) return '$' + (a / 1e6).toFixed(1).replace(/\.0$/, '') + 'M'; if (a >= 1e3) return '$' + Math.round(a / 1e3) + 'k'; return '$' + Math.round(a); }
-    var col = window.p86EntityCard.leadStatusColor(l.status);
+    var accent = window.p86EntityCard.pinColor(l, 'lead') || '#4f8cff';
+    var statusCol = window.p86EntityCard.leadStatusColor(l.status);
     var rev = revenueFromAttachedEstimates(l.id);
     var ageDays = l.created_at ? Math.max(0, Math.round((Date.now() - new Date(l.created_at).getTime()) / 86400000)) : null;
+    var conf = Number(l.confidence) || 0;
     var stats = [{ label: 'Est. value', value: (rev != null ? sm(rev) : '—') }];
     if (ageDays != null) stats.push({ label: 'Age', value: ageDays + 'd' });
     var meta = (typeof statusMeta === 'function') ? statusMeta(l.status) : null;
     window.p86EntitySubnav.mount('lead', {
-      kind: 'lead', accent: col,
-      status: { label: (meta && meta.label) || l.status || 'Open', color: col },
+      kind: 'lead', accent: accent,
+      status: { label: (meta && meta.label) || l.status || 'Open', color: statusCol },
       title: l.title || 'Lead',
       subtitle: l.client_name || l.property_name || '',
       address: [l.street_address, l.city].filter(Boolean).join(', '),
+      ring: (conf > 0 ? { pct: conf } : undefined),
       stats: stats
     });
+  }
+  window.p86MountLeadCard = mountLeadCard;
+
+  // Back-compat shim — openLeadDetailView calls this (no arg). Resolves the
+  // current lead, then delegates to the shared mounter.
+  function mountLeadSidebarCard() {
+    var l = _leads.find(function(x) { return x.id === _currentEditingLeadId; });
+    if (!l) { if (window.p86EntitySubnav) window.p86EntitySubnav.unmount('lead'); return; }
+    mountLeadCard(l);
   }
 
   // Reverse openLeadDetailView. Moves the form body back into the
@@ -1344,7 +1356,7 @@
     if (detailView) detailView.style.display = 'none';
     if (listView) listView.style.display = '';
     // (no #estimates-main-tabs restore — see openLeadDetailView comment)
-    if (window.p86EntitySubnav) window.p86EntitySubnav.unmount('lead');
+    if (window.p86EntitySubnav) window.p86EntitySubnav.clearAll();
     _currentEditingLeadId = null;
     reloadLeadsCache();
   }
