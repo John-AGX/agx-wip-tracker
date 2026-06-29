@@ -10751,6 +10751,12 @@ textarea.ci-input { height: auto; resize: vertical; font-family: inherit; }
   .ci-view-row { grid-template-columns: 110px 1fr; }
 }
 
+/* Plain full-screen image view (original receipt photo, no editor chrome) */
+.ci-img-overlay { position: fixed; inset: 0; z-index: 9200; background: rgba(0,0,0,.88); display: flex; align-items: center; justify-content: center; padding: 24px; cursor: zoom-out; }
+.ci-img-overlay img { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 6px; box-shadow: 0 10px 40px rgba(0,0,0,.6); }
+.ci-img-close { position: absolute; top: 14px; right: 18px; width: 40px; height: 40px; border: none; border-radius: 50%; background: rgba(0,0,0,.55); color: #fff; font-size: 26px; line-height: 1; cursor: pointer; }
+.ci-img-close:hover { background: rgba(0,0,0,.8); }
+
 /* Jobs list → cards on mobile. The wide #jobs-table horizontally scrolls on a
    phone (only # + Status show). Reflow each row into a stacked card; !important
    overrides table-enhancements' column widths + frozen-column sticky. */

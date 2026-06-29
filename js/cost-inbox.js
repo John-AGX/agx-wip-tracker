@@ -113,9 +113,7 @@
   // ── List page ─────────────────────────────────────────────────────
   var _filters = { job: '', status: '', q: '' };
   var _receipts = [];
-  // List presentation: 'card' (rich rows) or 'table' (column/row like leads/jobs).
-  var _view = (function () { try { return localStorage.getItem('ciView') === 'table' ? 'table' : 'card'; } catch (_) { return 'card'; } })();
-  // Table sort state (only used in table view).
+  // Column/row table is the only list view. Table sort state:
   var _tsort = { key: '', dir: 'desc' };
 
   // "OCR accuracy" line — the model's hit-rate per field, so John can watch it
@@ -153,10 +151,6 @@
           '</select>' +
           '<input type="text" id="ciSearch" class="ci-input ci-search" placeholder="Search vendor, amount, notes, ID…" />' +
           '<div class="ci-total" id="ciTotal"></div>' +
-          '<div class="ci-viewtoggle" id="ciViewToggle">' +
-            '<button type="button" class="ci-vt-btn" data-view="card" title="Card view">Cards</button>' +
-            '<button type="button" class="ci-vt-btn" data-view="table" title="Table view">Table</button>' +
-          '</div>' +
         '</div>' +
         '<div class="ci-list" id="ciList"><div class="ci-empty">Loading…</div></div>' +
       '</div>';
@@ -167,20 +161,6 @@
     sEl.addEventListener('input', function () { _filters.q = sEl.value || ''; renderList(); });
     document.getElementById('ciStatusFilter').addEventListener('change', function (e) { _filters.status = e.target.value; reload(); });
     document.getElementById('ciJobFilter').addEventListener('change', function (e) { _filters.job = e.target.value; reload(); });
-
-    // Card ⇄ Table view toggle (persisted).
-    var vt = document.getElementById('ciViewToggle');
-    if (vt) {
-      vt.querySelectorAll('.ci-vt-btn').forEach(function (b) {
-        b.classList.toggle('active', b.getAttribute('data-view') === _view);
-        b.addEventListener('click', function () {
-          _view = b.getAttribute('data-view');
-          try { localStorage.setItem('ciView', _view); } catch (_) {}
-          vt.querySelectorAll('.ci-vt-btn').forEach(function (x) { x.classList.toggle('active', x.getAttribute('data-view') === _view); });
-          renderList();
-        });
-      });
-    }
 
     loadEntities().then(function () {
       // populate the job/lead filter
@@ -233,8 +213,7 @@
 
     if (!rows.length) { listEl.className = 'ci-list'; listEl.innerHTML = '<div class="ci-empty">No receipts yet. Tap <strong>+ New Receipt</strong> to capture one.</div>'; return; }
 
-    if (_view === 'table') { renderTableView(listEl, rows); }
-    else { renderCardView(listEl, rows); }
+    renderTableView(listEl, rows);
   }
 
   // Default ordering: Unprocessed first, then newest by date.
@@ -259,30 +238,18 @@
 
   var THUMB_PH = '<span class="ci-thumb-ph"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2h12v20l-3-2-3 2-3-2-3 2z"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="9" y1="12" x2="15" y2="12"/></svg></span>';
 
-  function renderCardView(listEl, rows) {
-    defaultSort(rows);
-    listEl.className = 'ci-list';
-    listEl.innerHTML = rows.map(function (r) {
-      var thumb = r.image_thumb_url || r.image_url;
-      var ent = entityLabel(r.entity_type, r.entity_id);
-      var statusCls = 'ci-badge ci-badge-' + (r.status || 'unprocessed');
-      return '<div class="ci-row" data-id="' + esc(r.id) + '">' +
-        '<div class="ci-thumb">' + (thumb ? '<img src="' + esc(thumb) + '" alt="" loading="lazy" />' : THUMB_PH) + '</div>' +
-        '<div class="ci-row-main">' +
-          '<div class="ci-row-top">' +
-            '<span class="ci-row-vendor">' + esc(r.vendor || '(no vendor)') + '</span>' +
-            '<span class="ci-row-amt">' + ((r.amount != null && Number(r.amount) > 0) ? money(r.amount) : '<span class="ci-need">— add amount</span>') + '</span>' +
-          '</div>' +
-          '<div class="ci-row-sub">' +
-            (ent ? '<span class="ci-chip">' + esc(ent) + '</span>' : '<span class="ci-chip ci-chip-warn">no job</span>') +
-            '<span class="ci-chip ci-chip-code">' + esc(ciCodeLabel(r)) + '</span>' +
-            '<span class="ci-row-date">' + esc(fmtDate(r.purchased_at || r.created_at)) + '</span>' +
-            '<span class="' + statusCls + '">' + esc(r.status || 'unprocessed') + '</span>' +
-          '</div>' +
-        '</div>' +
-      '</div>';
-    }).join('');
-    wireRowOpen(listEl);
+  // Plain full-screen view of the ORIGINAL uploaded image — just the photo, no
+  // tags / description / comments editor. Click anywhere or Esc to close.
+  function openImageOverlay(url) {
+    if (!url) return;
+    var ov = document.createElement('div');
+    ov.className = 'ci-img-overlay';
+    ov.innerHTML = '<img src="' + esc(url) + '" alt="receipt" /><button type="button" class="ci-img-close" aria-label="Close">&times;</button>';
+    function close() { ov.remove(); document.removeEventListener('keydown', onKey); }
+    function onKey(e) { if (e.key === 'Escape') close(); }
+    ov.addEventListener('click', close);
+    document.addEventListener('keydown', onKey);
+    document.body.appendChild(ov);
   }
 
   // Column/row table view (like Leads / Jobs): photo · vendor · amount · cost
@@ -419,18 +386,12 @@
     // Edit gate → hand off to the existing capture/edit form.
     modal.querySelector('#ciVEdit').addEventListener('click', function () { close(); openReceiptModal(r); });
 
-    // Photo → lightbox (reuse the shared CompanyCam-style viewer).
+    // Photo → plain full-screen view of the ORIGINAL uploaded image. No tag /
+    // description / comments editor — just the picture.
     if (fullImg) {
       var photoEl = modal.querySelector('#ciVPhoto');
       if (photoEl) photoEl.addEventListener('click', function () {
-        if (window.p86Attachments && window.p86Attachments.openLightbox && r.attachment_id) {
-          window.p86Attachments.openLightbox(
-            [{ id: r.attachment_id, url: r.image_url || fullImg, thumb_url: r.image_thumb_url || fullImg, mime_type: 'image/jpeg' }],
-            0, { parentLabel: r.vendor || 'Receipt' }
-          );
-        } else {
-          window.open(r.image_url || fullImg, '_blank', 'noopener');
-        }
+        openImageOverlay(r.image_url || fullImg);
       });
     }
 
