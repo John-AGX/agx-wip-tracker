@@ -1104,6 +1104,18 @@ body.light-mode .jh-strip-card[data-tone="amber"] .jh-strip-label { color: #b453
   z-index: 30;
 }
 
+/* screen-mode (Item B): a floating WINDOW over the map, anchored to the
+   non-transformed .ng-canvas-area so it never pans or zooms like a node.
+   Position/size come from inline styles; this just gives it window chrome. */
+.ws-floating-panel.ws-floating-screen-mode {
+  position: absolute;
+  z-index: 46;
+  box-shadow:
+    0 12px 40px rgba(0, 0, 0, 0.6),
+    0 0 0 1px rgba(79, 140, 255, 0.28);
+  border-radius: 12px;
+}
+
 /* ── AGX logo in panel header ────────────────────────────── */
 .ws-floating-logo {
   height: 18px;

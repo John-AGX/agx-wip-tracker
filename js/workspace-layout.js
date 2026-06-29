@@ -925,6 +925,82 @@
     if (panel) panel.style.display = 'none';
   }
 
+  // ── Screen-anchored workspace window (Item B) ───────────────
+  // Float the spreadsheet OVER the node-graph at a FIXED screen position
+  // (inside the non-transformed .ng-canvas-area) instead of anchoring it
+  // inside the transformed .ng-canvas — where it panned/zoomed like a node
+  // on the map. Toggled from the node-graph ribbon's Workspace button.
+  function workspaceScreenKey() {
+    var jid = (window.appState && appState.currentJobId) || null;
+    return jid ? 'p86-ws-screenrect:' + jid : null;
+  }
+  function loadWorkspaceScreenRect() {
+    var key = workspaceScreenKey(); if (!key) return null;
+    try { var raw = localStorage.getItem(key); return raw ? JSON.parse(raw) : null; } catch (e) { return null; }
+  }
+  function saveWorkspaceScreenRect() {
+    var panel = document.getElementById('wsFloatingPanel'); var key = workspaceScreenKey();
+    if (!panel || !key) return;
+    try {
+      localStorage.setItem(key, JSON.stringify({
+        left: parseInt(panel.style.left, 10) || 64,
+        top: parseInt(panel.style.top, 10) || 72,
+        w: parseInt(panel.style.width, 10) || 760,
+        h: parseInt(panel.style.height, 10) || 520
+      }));
+    } catch (e) {}
+  }
+  function workspaceWindowHost() {
+    return document.querySelector('#nodeGraphTab .ng-canvas-area')
+        || document.getElementById('nodeGraphTab')
+        || null;
+  }
+  function syncWorkspaceRibbonBtn(on) {
+    var b = document.querySelector('#nodeGraphTab .ng-workspace-btn');
+    if (b) b.classList.toggle('ng-on', !!on);
+  }
+  function isWorkspaceWindowOpen() {
+    var panel = document.getElementById('wsFloatingPanel');
+    return !!(panel && panel.classList.contains('ws-floating-screen-mode') && panel.style.display !== 'none');
+  }
+  function showWorkspaceWindow() {
+    var panel = document.getElementById('wsFloatingPanel');
+    var host = workspaceWindowHost();
+    if (!panel || !host) return;
+    initFloatingPanel();
+    panel.classList.remove('ws-floating-graph-mode', 'ws-floating-tab-mode', 'ws-floating-folder', 'ws-floating-maximized');
+    _floatingState.maximized = false;
+    panel.classList.add('ws-floating-screen-mode');
+    var r = loadWorkspaceScreenRect() || {};
+    var hr = host.getBoundingClientRect();
+    var w = r.w || Math.round(Math.min(820, Math.max(520, hr.width - 120)));
+    var h = r.h || Math.round(Math.min(560, Math.max(360, hr.height - 120)));
+    panel.style.position = 'absolute';
+    panel.style.width = w + 'px';
+    panel.style.height = h + 'px';
+    panel.style.left = (r.left != null ? r.left : Math.max(16, Math.round(hr.width - w - 32))) + 'px';
+    panel.style.top = (r.top != null ? r.top : 72) + 'px';
+    panel.style.zIndex = '46';
+    host.appendChild(panel);
+    panel.style.display = 'flex';
+    wireGraphToolbarWorkspaceButtons();
+    syncWorkspaceRibbonBtn(true);
+  }
+  function hideWorkspaceWindow() {
+    var panel = document.getElementById('wsFloatingPanel');
+    if (!panel) return;
+    saveWorkspaceScreenRect();
+    panel.style.display = 'none';
+    syncWorkspaceRibbonBtn(false);
+  }
+  function toggleWorkspaceWindow() {
+    if (isWorkspaceWindowOpen()) hideWorkspaceWindow(); else showWorkspaceWindow();
+  }
+  // Exposed for the node-graph ribbon's Workspace toggle button (ui.js).
+  window.p86WorkspaceToggle = toggleWorkspaceWindow;
+  window.p86WorkspaceShow = showWorkspaceWindow;
+  window.p86WorkspaceHide = hideWorkspaceWindow;
+
   // ── Graph integration: workspace as a pseudo-node ──────────
   // Attach the floating panel to the node-graph's transformed .ng-canvas
   // element. The panel lives in graph coordinate space — pan/zoom of
@@ -1010,6 +1086,10 @@
   function detachWorkspaceFromGraph() {
     var panel = document.getElementById('wsFloatingPanel');
     if (!panel) return;
+    if (panel.classList.contains('ws-floating-screen-mode')) {
+      saveWorkspaceScreenRect();
+      syncWorkspaceRibbonBtn(false);
+    }
     if (panel.classList.contains('ws-floating-graph-mode')) {
       var x = parseInt(panel.style.left, 10) || 100;
       var y = parseInt(panel.style.top, 10) || 100;
@@ -1026,8 +1106,9 @@
     }
     var twoCol = document.getElementById('ws-two-col');
     if (twoCol) twoCol.appendChild(panel);
-    panel.classList.remove('ws-floating-graph-mode', 'ws-floating-folder', 'ws-floating-maximized');
+    panel.classList.remove('ws-floating-graph-mode', 'ws-floating-screen-mode', 'ws-floating-folder', 'ws-floating-maximized');
     panel.classList.add('ws-floating-tab-mode');
+    panel.style.zIndex = '';
     panel.style.position = '';
     panel.style.display = 'none';
     _floatingState.maximized = false;
@@ -1044,7 +1125,7 @@
     var obs = new MutationObserver(function() {
       if (!tab.classList.contains('active')) {
         var panel = document.getElementById('wsFloatingPanel');
-        if (panel && panel.classList.contains('ws-floating-graph-mode')) {
+        if (panel && (panel.classList.contains('ws-floating-graph-mode') || panel.classList.contains('ws-floating-screen-mode'))) {
           detachWorkspaceFromGraph();
         }
         // Bring the header back so other tabs aren't missing it.
@@ -1488,6 +1569,10 @@
           && !floatingPanel.classList.contains('ws-floating-folder')) {
         try { minimizeWorkspace(); } catch (_) { /* don't let UX polish crash tab switching */ }
       }
+      // Item B: a lingering screen-mode window has no folder fallback — just detach it.
+      if (floatingPanel && floatingPanel.classList.contains('ws-floating-screen-mode')) {
+        try { detachWorkspaceFromGraph(); } catch (_) {}
+      }
       var allPanels = Array.from(rc.children);
       allPanels.forEach(function(p) { if (!p.classList.contains('ws-job-info-details')) p.style.display = 'none'; });
       var target = document.getElementById(targetId);
@@ -1527,7 +1612,9 @@
           window.openNodeGraph(jobId);
           setTimeout(function() {
             watchGraphTabClose();
-            attachWorkspaceToGraph();
+            // Item B: bring the spreadsheet up as a screen-anchored window
+            // over the map (not a node inside the panning/zooming canvas).
+            showWorkspaceWindow();
           }, 50);
         }
       };

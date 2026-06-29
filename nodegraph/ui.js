@@ -4769,6 +4769,14 @@ function init(){
     });
   }
 
+  // Workspace — open the spreadsheet workspace as a floating window OVER the
+  // map (toggle) instead of as a node anchored inside the canvas. Wired to
+  // workspace-layout.js's window.p86WorkspaceToggle.
+  var wsBtn=tab.querySelector('.ng-workspace-btn');
+  if(wsBtn) wsBtn.addEventListener('click', function(){
+    if(typeof window.p86WorkspaceToggle==='function') window.p86WorkspaceToggle();
+  });
+
   // Measure (distance + area) — tap points on the imagery for real ft / sq ft.
   var measureBtn=tab.querySelector('.ng-measure-btn');
   if(measureBtn) measureBtn.addEventListener('click', toggleMeasure);
