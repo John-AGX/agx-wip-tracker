@@ -1188,8 +1188,15 @@ function applySpFocus(){
 // only; financial rollups never read x/y, so this is calc-safe.
 var _fannedSet={};
 function fanFocusNodes(bId){
-  if(!bId || _fannedSet[bId]) return;
+  if(!bId) return;
+  // On satellite, re-fan EVERY render so children track their building's real geo
+  // spot. The old one-shot _fannedSet lock stranded children when the first fan ran
+  // before the geo origin was ready (they kept their abstract saved x/y, far off).
+  // Off-satellite keeps the once-only behavior so manual moves stick.
+  if(!_spSatellite && _fannedSet[bId]) return;
   var b=E.findNode(bId); if(!b) return;
+  // Geo origin not resolved yet → skip (don't fan around the tree fallback); retry next render.
+  if(b.geoLatLng && !(_spOrigin && _spOriginGraph)) return;
   var center=(b.geoLatLng)?geoRenderPos(b):{x:b.x, y:b.y};
   var seen={}, kids=[];
   E.wires().forEach(function(w){
