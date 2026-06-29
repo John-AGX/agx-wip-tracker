@@ -16,6 +16,9 @@ var basemapEl=null, _basemap=null, _basemapReady=false, _spOrigin=null, _spOrigi
 var _geoPick=false, _geoPickOverlay=null, _geoPickId=null; // Slice 3: map-picker state (captured building id)
 // Phase 1 — building polygons: trace state + the geo-anchored SVG layer
 var _tracing=false, _traceId=null, _tracePts=[], _traceOverlay=null, _traceClickTimer=null, _polyLayer=null;
+// Measure tool: real distance (ft) + area (sq ft) on the satellite imagery.
+// Ephemeral view-state only (no graph write); points cleared when the tool is off.
+var _measuring=false, _measureMode='distance', _measurePts=[], _measureOverlay=null, _measurePanel=null, _measureRoofPitch=0;
 var _SVGNS='http://www.w3.org/2000/svg';
 var _spMassing=(function(){ try{ return localStorage.getItem('ngSitePlanMassing')!=='0'; }catch(_){ return true; } })(); // 2.5D building massing — on by default
 // Slice 4: photo-GPS pins
@@ -1365,7 +1368,7 @@ function updateBasemapVisibility(){
   if(!basemapEl) return;
   var show=_spSatellite && sitePlan;   // _spSatellite is always true now → show === sitePlan
   basemapEl.style.display = show ? 'block' : 'none';
-  if(show){ mountBasemap(); } else { showSatHint(false); exitGeoPick(); exitTrace(); }
+  if(show){ mountBasemap(); } else { showSatHint(false); exitGeoPick(); exitTrace(); exitMeasure(); }
   updatePhotoLayer(); // photos ride on top of satellite — show/hide together
   renderPolygons();   // show/hide the building footprint layer with satellite
 }
@@ -1415,6 +1418,7 @@ function toggleGeoPick(){
   if(!_spSatellite){ return; }
   if(_geoPick){ exitGeoPick(); showSatHint(false); return; }
   if(_tracing) exitTrace();                                   // don't run both picker modes at once
+  if(_measuring) exitMeasure();
   var sel=selN && E.findNode(selN);
   if(!sel || sel.type!=='t1'){ showSatHint(true, 'Select a building first, then click Place and tap its spot on the map.'); return; }
   if(!_spOrigin){ showSatHint(true); return; }
@@ -1486,6 +1490,14 @@ function renderPolygons(){
     kpi.setAttribute('x', cx); kpi.setAttribute('y', cy+7); kpi.setAttribute('class','ng-poly-kpi');
     kpi.textContent=Math.round(n.pctComplete||0)+'% complete';
     _polyLayer.appendChild(kpi);
+    // Footprint area (sq ft) under the % — computed from the traced lat/lng path.
+    var _fa=measureStats(n.polygon);
+    if(_fa.areaSqft>0){
+      var sq=document.createElementNS(_SVGNS,'text');
+      sq.setAttribute('x', cx); sq.setAttribute('y', cy+16); sq.setAttribute('class','ng-poly-sqft');
+      sq.textContent=fmtSqft(_fa.areaSqft);
+      _polyLayer.appendChild(sq);
+    }
   });
   if(_tracing && _tracePts.length){
     var pstr=_tracePts.map(function(v){ var p=gp(v); return p.x+','+p.y; }).join(' ');
@@ -1508,6 +1520,51 @@ function renderPolygons(){
       c.setAttribute('class','ng-poly-vert'+(i===0?' ng-poly-vert0':''));
       _polyLayer.appendChild(c);
     });
+  }
+  // Measure overlay graphics — distance polyline (per-segment ft) or area polygon
+  // (sq ft at centroid). Drawn here so it re-projects with every pan/zoom render.
+  if(_measuring && _measurePts.length){
+    var mpts=_measurePts.map(function(v){ return gp(v); });
+    var mIsArea=(_measureMode==='area');
+    var mstr=mpts.map(function(p){ return p.x+','+p.y; }).join(' ');
+    if(mIsArea && mpts.length>=3){
+      var mpg=document.createElementNS(_SVGNS,'polygon');
+      mpg.setAttribute('points', mstr); mpg.setAttribute('class','ng-measure-poly');
+      _polyLayer.appendChild(mpg);
+    } else if(mpts.length>=2){
+      var mpl=document.createElementNS(_SVGNS,'polyline');
+      mpl.setAttribute('points', mstr); mpl.setAttribute('class','ng-measure-line');
+      _polyLayer.appendChild(mpl);
+    }
+    var mstat=measureStats(_measurePts);
+    if(!mIsArea){
+      for(var msi=1;msi<mpts.length;msi++){
+        var aMid=mpts[msi-1], bMid=mpts[msi];
+        var tx=document.createElementNS(_SVGNS,'text');
+        tx.setAttribute('x',(aMid.x+bMid.x)/2); tx.setAttribute('y',(aMid.y+bMid.y)/2-2);
+        tx.setAttribute('class','ng-measure-seglbl'); tx.textContent=fmtFt(mstat.segFt[msi-1]);
+        _polyLayer.appendChild(tx);
+      }
+    }
+    mpts.forEach(function(p,i){
+      var mc=document.createElementNS(_SVGNS,'circle');
+      mc.setAttribute('cx',p.x); mc.setAttribute('cy',p.y); mc.setAttribute('r',3.2);
+      mc.setAttribute('class','ng-measure-vert'+(i===0?' ng-measure-vert0':''));
+      _polyLayer.appendChild(mc);
+    });
+    if(mIsArea && mpts.length>=3){
+      var mcx=0,mcy=0; mpts.forEach(function(p){ mcx+=p.x; mcy+=p.y; }); mcx/=mpts.length; mcy/=mpts.length;
+      var atx=document.createElementNS(_SVGNS,'text');
+      atx.setAttribute('x',mcx); atx.setAttribute('y',mcy); atx.setAttribute('class','ng-measure-arealbl');
+      atx.textContent=fmtSqft(mstat.areaSqft*_pitchFactor());
+      _polyLayer.appendChild(atx);
+    } else if(!mIsArea && mpts.length>=2){
+      var lp=mpts[mpts.length-1];
+      var ltx=document.createElementNS(_SVGNS,'text');
+      ltx.setAttribute('x',lp.x+6); ltx.setAttribute('y',lp.y-6); ltx.setAttribute('class','ng-measure-totlbl');
+      ltx.textContent=fmtFt(mstat.lengthFt);
+      _polyLayer.appendChild(ltx);
+    }
   }
 }
 function ensureTraceOverlay(){
@@ -1571,6 +1628,7 @@ function toggleTraceMode(){
   if(!_spSatellite) return;
   if(_tracing){ exitTrace(); showSatHint(false); renderPolygons(); return; }
   if(_geoPick) exitGeoPick();                                   // don't run both picker modes at once
+  if(_measuring) exitMeasure();
   // A selected building → re-trace its footprint; otherwise draw a NEW building.
   var sel=selN && E.findNode(selN);
   var existing=(sel && sel.type==='t1') ? sel : null;
@@ -1582,6 +1640,137 @@ function toggleTraceMode(){
   showSatHint(true, existing
     ? ('Re-trace “'+(existing.label||'building')+'” — click each corner, double-click to finish.')
     : 'Draw the new building — click each corner of its roof, double-click to finish.');
+}
+
+// ── Measure tool: real distance + area on the satellite imagery ──────────
+// Computes in the SAME equirectangular meter frame the renderer/engine use, so a
+// measured length matches the drawn line exactly at any zoom. Points are captured
+// as lat/lng (pickLatLngFromEvent), drawn into _polyLayer each renderPolygons(),
+// and read out live in a floating panel. Ephemeral — nothing is persisted.
+function _llMeters(lat,lng,oLat,oLng){
+  var my=(oLat-lat)*111320;
+  var mx=(lng-oLng)*111320*Math.cos(oLat*Math.PI/180);
+  return { mx:mx, my:my };
+}
+function measureStats(pts){
+  var out={ lengthFt:0, closedFt:0, areaSqft:0, segFt:[] };
+  if(!pts || pts.length<2) return out;
+  var o=pts[0];
+  var m=pts.map(function(v){ return _llMeters(Number(v.lat), Number(v.lng), o.lat, o.lng); });
+  for(var i=1;i<m.length;i++){
+    var d=Math.hypot(m[i].mx-m[i-1].mx, m[i].my-m[i-1].my)*3.28084;
+    out.lengthFt+=d; out.segFt.push(d);
+  }
+  if(m.length>=3){
+    var a=0;
+    for(var j=0;j<m.length;j++){ var p=m[j], q=m[(j+1)%m.length]; a+=(p.mx*q.my - q.mx*p.my); }
+    out.areaSqft=Math.abs(a)/2*10.7639;
+    var last=m[m.length-1];
+    out.closedFt=out.lengthFt + Math.hypot(last.mx-m[0].mx, last.my-m[0].my)*3.28084;
+  }
+  return out;
+}
+function _pitchFactor(){ var r=Number(_measureRoofPitch)||0; return r>0 ? Math.sqrt(1+(r/12)*(r/12)) : 1; }
+function fmtFt(ft){ ft=Number(ft)||0; if(ft>=5280) return (ft/5280).toFixed(2)+' mi'; return (ft<100?ft.toFixed(1):Math.round(ft).toLocaleString())+' ft'; }
+function fmtSqft(a){ a=Number(a)||0; if(a>=43560) return (a/43560).toFixed(2)+' ac'; return Math.round(a).toLocaleString()+' sq ft'; }
+
+function ensureMeasureOverlay(){
+  if(_measureOverlay) return _measureOverlay;
+  _measureOverlay=document.createElement('div');
+  _measureOverlay.className='ng-geopick-overlay';            // reuse the crosshair overlay styling
+  _measureOverlay.addEventListener('mousedown',function(e){ e.stopPropagation(); });
+  _measureOverlay.addEventListener('pointerdown',function(e){ e.stopPropagation(); });
+  _measureOverlay.addEventListener('mouseup',function(e){ e.stopPropagation(); });
+  _measureOverlay.addEventListener('click',function(e){
+    if(!_measuring || !_spOrigin || !_spOriginGraph) return;
+    _measurePts.push(pickLatLngFromEvent(e));
+    renderPolygons(); updateMeasurePanel();
+  });
+  _measureOverlay.addEventListener('dblclick',function(e){
+    e.preventDefault();
+    if(_measurePts.length>=2) _measurePts.pop();             // drop the dup the dblclick just added
+    renderPolygons(); updateMeasurePanel();
+  });
+  wrap.appendChild(_measureOverlay);
+  return _measureOverlay;
+}
+function buildMeasurePanel(){
+  if(_measurePanel) return _measurePanel;
+  var d=document.createElement('div'); d.className='ng-measure-panel';
+  d.innerHTML=
+    '<div class="ng-measure-modes">'+
+      '<button type="button" data-mmode="distance" class="ng-on">Distance</button>'+
+      '<button type="button" data-mmode="area">Area</button>'+
+    '</div>'+
+    '<div class="ng-measure-pitchrow" style="display:none;">'+
+      '<label>Roof pitch</label>'+
+      '<select class="ng-measure-pitch">'+
+        '<option value="0">Flat / ground</option>'+
+        '<option value="4">4 / 12</option>'+
+        '<option value="6">6 / 12</option>'+
+        '<option value="8">8 / 12</option>'+
+        '<option value="10">10 / 12</option>'+
+        '<option value="12">12 / 12</option>'+
+      '</select>'+
+    '</div>'+
+    '<div class="ng-measure-readout">Tap points on the map…</div>'+
+    '<div class="ng-measure-actions">'+
+      '<button type="button" data-mact="undo">Undo</button>'+
+      '<button type="button" data-mact="clear">Clear</button>'+
+      '<button type="button" data-mact="done">Done</button>'+
+    '</div>';
+  // Keep clicks on the panel from reaching the engine canvas behind it.
+  d.addEventListener('mousedown',function(e){ e.stopPropagation(); });
+  d.addEventListener('click',function(e){ e.stopPropagation(); });
+  d.querySelectorAll('[data-mmode]').forEach(function(b){
+    b.addEventListener('click',function(){
+      _measureMode=b.getAttribute('data-mmode');
+      d.querySelectorAll('[data-mmode]').forEach(function(x){ x.classList.toggle('ng-on', x===b); });
+      var pr=d.querySelector('.ng-measure-pitchrow'); if(pr) pr.style.display=(_measureMode==='area')?'flex':'none';
+      renderPolygons(); updateMeasurePanel();
+    });
+  });
+  var ps=d.querySelector('.ng-measure-pitch');
+  if(ps) ps.addEventListener('change',function(){ _measureRoofPitch=Number(ps.value)||0; renderPolygons(); updateMeasurePanel(); });
+  d.querySelector('[data-mact="undo"]').addEventListener('click',function(){ _measurePts.pop(); renderPolygons(); updateMeasurePanel(); });
+  d.querySelector('[data-mact="clear"]').addEventListener('click',function(){ _measurePts=[]; renderPolygons(); updateMeasurePanel(); });
+  d.querySelector('[data-mact="done"]').addEventListener('click',function(){ exitMeasure(); renderPolygons(); });
+  wrap.appendChild(d);
+  _measurePanel=d;
+  return d;
+}
+function updateMeasurePanel(){
+  if(!_measurePanel) return;
+  var ro=_measurePanel.querySelector('.ng-measure-readout'); if(!ro) return;
+  var s=measureStats(_measurePts);
+  if(_measureMode==='area'){
+    if(_measurePts.length<3){ ro.textContent='Tap 3+ points to enclose an area…'; return; }
+    var pf=_pitchFactor();
+    var txt='Area: '+fmtSqft(s.areaSqft)+'  ·  Perimeter: '+fmtFt(s.closedFt);
+    ro.innerHTML = txt + (pf>1 ? ('<br><span class="ng-measure-roof">Roof @ '+_measureRoofPitch+'/12: '+fmtSqft(s.areaSqft*pf)+'</span>') : '');
+  } else {
+    if(_measurePts.length<2){ ro.textContent='Tap points to measure distance…'; return; }
+    ro.textContent='Length: '+fmtFt(s.lengthFt)+'   ('+_measurePts.length+' pts)';
+  }
+}
+function exitMeasure(){
+  _measuring=false; _measurePts=[];
+  var mb=document.getElementById('ngMeasureBtn'); if(mb) mb.classList.remove('ng-on');
+  if(_measureOverlay) _measureOverlay.style.display='none';
+  if(_measurePanel){ _measurePanel.remove(); _measurePanel=null; }
+}
+function toggleMeasure(){
+  if(!_spSatellite) return;
+  if(_measuring){ exitMeasure(); renderPolygons(); return; }
+  if(_tracing) exitTrace();
+  if(_geoPick) exitGeoPick();
+  _spOrigin=_spOrigin||jobOrigin(); _spOriginGraph=_spOriginGraph||siteplanCentroid();
+  if(!_spOrigin){ showSatHint(true); return; }
+  _measuring=true; _measureMode='distance'; _measurePts=[];
+  var mb=document.getElementById('ngMeasureBtn'); if(mb) mb.classList.add('ng-on');
+  ensureMeasureOverlay().style.display='block';
+  buildMeasurePanel(); updateMeasurePanel();
+  renderPolygons();
 }
 
 // ── Photo-GPS pins (Slice 4) ───────────────────────────────────────────
@@ -4435,6 +4624,10 @@ function init(){
     photosBtn.classList.toggle('ng-on', _spPhotos);
     updatePhotoLayer();
   });
+
+  // Measure (distance + area) — tap points on the imagery for real ft / sq ft.
+  var measureBtn=tab.querySelector('.ng-measure-btn');
+  if(measureBtn) measureBtn.addEventListener('click', toggleMeasure);
 
   // Save Layout — checkpoint the current node graph to a separate
   // localStorage slot (independent of auto-save) so the user can
