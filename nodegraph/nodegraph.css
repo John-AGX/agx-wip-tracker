@@ -144,7 +144,12 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
 /* Right-hand Inspector panel (Slice 1+2): WIP + building + node detail. Shown only in
    site-plan mode; the canvas-area flexes to fit it (min-width:0 lets it actually shrink).
    The legacy left WIP/building panels are hidden in site-plan since the inspector hosts them. */
-.ng-inspector{width:340px;flex-shrink:0;background:var(--ng-input);border-left:1px solid var(--ng-border2);display:none;flex-direction:column;overflow:hidden}
+.ng-inspector{position:relative;width:var(--ng-insp-w,340px);flex-shrink:0;background:var(--ng-input);border-left:1px solid var(--ng-border2);display:none;flex-direction:column;overflow:hidden}
+.ng-inspector.resizing{transition:none;user-select:none}
+/* Drag-to-resize handle on the inspector's LEFT edge (mirrors the app sidebar resizer) */
+.ng-inspector-resize{position:absolute;left:-3px;top:0;width:7px;height:100%;cursor:col-resize;z-index:8}
+.ng-inspector-resize:hover,.ng-inspector.resizing .ng-inspector-resize{background:linear-gradient(90deg,transparent,rgba(79,140,255,.55),transparent)}
+@media (max-width:768px){ .ng-inspector-resize{display:none} }  /* bottom sheet on mobile — no edge resize */
 #nodeGraphTab.ng-siteplan .ng-inspector{display:flex}
 #nodeGraphTab.ng-siteplan .ng-sp-metrics,#nodeGraphTab.ng-siteplan .ng-sp-bldg{display:none !important}
 .ng-inspector-hdr{display:flex;align-items:center;gap:7px;padding:11px 13px;border-bottom:1px solid var(--ng-border2);font-size:13px;font-weight:600;color:var(--ng-text)}

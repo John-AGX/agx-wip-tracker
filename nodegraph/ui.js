@@ -4301,6 +4301,34 @@ function init(){
     if(ngOpenAddMenuFn) ngOpenAddMenuFn(r.left, r.bottom+4, pickNodeType);
   });
 
+  // Drag-to-resize the right Inspector (drag its LEFT edge) — mirrors the app sidebar resizer.
+  // Inspector is right-aligned, so dragging the handle left WIDENS it (invert dx). The map
+  // canvas re-syncs to the new center width on release.
+  (function(){
+    var insp=tab.querySelector('.ng-inspector'), handle=insp&&insp.querySelector('.ng-inspector-resize');
+    if(!insp||!handle) return;
+    var MINW=260, MAXW=680, WKEY='p86-ng-insp-w';
+    try{ var sv=parseInt(localStorage.getItem(WKEY),10); if(sv>=MINW&&sv<=MAXW) insp.style.setProperty('--ng-insp-w', sv+'px'); }catch(_){}
+    var dragging=false, startX=0, startW=0;
+    handle.addEventListener('mousedown', function(e){
+      dragging=true; startX=e.clientX; startW=insp.getBoundingClientRect().width;
+      insp.classList.add('resizing'); document.body.style.cursor='col-resize'; document.body.style.userSelect='none';
+      e.preventDefault(); e.stopPropagation();
+    });
+    window.addEventListener('mousemove', function(e){
+      if(!dragging) return;
+      var w=Math.max(MINW, Math.min(MAXW, startW - (e.clientX-startX)));
+      insp.style.setProperty('--ng-insp-w', w+'px');
+    });
+    window.addEventListener('mouseup', function(){
+      if(!dragging) return; dragging=false;
+      insp.classList.remove('resizing'); document.body.style.cursor=''; document.body.style.userSelect='';
+      try{ localStorage.setItem(WKEY, String(Math.round(insp.getBoundingClientRect().width))); }catch(_){}
+      if(typeof resize==='function') resize();
+      if(typeof render==='function') render();
+    });
+  })();
+
   // Mobile segmented control: Map (default) / Overview / Detail — the left + right panels
   // become slide-up bottom sheets <768px so the map stays full-bleed and touch-pannable.
   var mseg=tab.querySelector('.ng-mobile-seg');
