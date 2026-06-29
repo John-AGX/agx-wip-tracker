@@ -36,6 +36,14 @@
     if (isNaN(dt.getTime())) return s.slice(0, 10);
     return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
   }
+  // created_at / updated_at are full timestamps — show date + time (local).
+  function fmtDateTime(d) {
+    if (!d) return '';
+    var dt = new Date(String(d));
+    if (isNaN(dt.getTime())) return fmtDate(d);
+    return dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) +
+      ' · ' + dt.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  }
   function toast(msg, kind) {
     // p86Toast is an object with .show() — but stay defensive across shapes so a
     // toast failure can never break the save/close flow.
@@ -105,6 +113,10 @@
   // ── List page ─────────────────────────────────────────────────────
   var _filters = { job: '', status: '', q: '' };
   var _receipts = [];
+  // List presentation: 'card' (rich rows) or 'table' (column/row like leads/jobs).
+  var _view = (function () { try { return localStorage.getItem('ciView') === 'table' ? 'table' : 'card'; } catch (_) { return 'card'; } })();
+  // Table sort state (only used in table view).
+  var _tsort = { key: '', dir: 'desc' };
 
   // "OCR accuracy" line — the model's hit-rate per field, so John can watch it
   // improve as more receipts get captured/corrected (the learning loop).
@@ -141,6 +153,10 @@
           '</select>' +
           '<input type="text" id="ciSearch" class="ci-input ci-search" placeholder="Search vendor, amount, notes, ID…" />' +
           '<div class="ci-total" id="ciTotal"></div>' +
+          '<div class="ci-viewtoggle" id="ciViewToggle">' +
+            '<button type="button" class="ci-vt-btn" data-view="card" title="Card view">Cards</button>' +
+            '<button type="button" class="ci-vt-btn" data-view="table" title="Table view">Table</button>' +
+          '</div>' +
         '</div>' +
         '<div class="ci-list" id="ciList"><div class="ci-empty">Loading…</div></div>' +
       '</div>';
@@ -151,6 +167,20 @@
     sEl.addEventListener('input', function () { _filters.q = sEl.value || ''; renderList(); });
     document.getElementById('ciStatusFilter').addEventListener('change', function (e) { _filters.status = e.target.value; reload(); });
     document.getElementById('ciJobFilter').addEventListener('change', function (e) { _filters.job = e.target.value; reload(); });
+
+    // Card ⇄ Table view toggle (persisted).
+    var vt = document.getElementById('ciViewToggle');
+    if (vt) {
+      vt.querySelectorAll('.ci-vt-btn').forEach(function (b) {
+        b.classList.toggle('active', b.getAttribute('data-view') === _view);
+        b.addEventListener('click', function () {
+          _view = b.getAttribute('data-view');
+          try { localStorage.setItem('ciView', _view); } catch (_) {}
+          vt.querySelectorAll('.ci-vt-btn').forEach(function (x) { x.classList.toggle('active', x.getAttribute('data-view') === _view); });
+          renderList();
+        });
+      });
+    }
 
     loadEntities().then(function () {
       // populate the job/lead filter
@@ -201,22 +231,43 @@
     var totEl = document.getElementById('ciTotal');
     if (totEl) totEl.textContent = rows.length + ' receipt' + (rows.length === 1 ? '' : 's') + ' · ' + money(total);
 
-    if (!rows.length) { listEl.innerHTML = '<div class="ci-empty">No receipts yet. Tap <strong>+ New Receipt</strong> to capture one.</div>'; return; }
+    if (!rows.length) { listEl.className = 'ci-list'; listEl.innerHTML = '<div class="ci-empty">No receipts yet. Tap <strong>+ New Receipt</strong> to capture one.</div>'; return; }
 
-    // group: Unprocessed first, then everything else by date desc
+    if (_view === 'table') { renderTableView(listEl, rows); }
+    else { renderCardView(listEl, rows); }
+  }
+
+  // Default ordering: Unprocessed first, then newest by date.
+  function defaultSort(rows) {
     rows.sort(function (a, b) {
       var au = a.status === 'unprocessed' ? 0 : 1, bu = b.status === 'unprocessed' ? 0 : 1;
       if (au !== bu) return au - bu;
       return String(b.purchased_at || b.created_at).localeCompare(String(a.purchased_at || a.created_at));
     });
+    return rows;
+  }
+  function ciCodeLabel(r) { return r.is_presale ? 'Pre-sale' : (CODE_LABEL[r.cost_code] || r.cost_code || ''); }
+  // Clicking a row opens the read-only viewer (NOT straight to edit).
+  function wireRowOpen(listEl) {
+    listEl.querySelectorAll('[data-id]').forEach(function (row) {
+      row.addEventListener('click', function () {
+        var rec = _receipts.find(function (x) { return String(x.id) === String(row.getAttribute('data-id')); });
+        if (rec) openReceiptViewer(rec);
+      });
+    });
+  }
 
+  var THUMB_PH = '<span class="ci-thumb-ph"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2h12v20l-3-2-3 2-3-2-3 2z"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="9" y1="12" x2="15" y2="12"/></svg></span>';
+
+  function renderCardView(listEl, rows) {
+    defaultSort(rows);
+    listEl.className = 'ci-list';
     listEl.innerHTML = rows.map(function (r) {
       var thumb = r.image_thumb_url || r.image_url;
       var ent = entityLabel(r.entity_type, r.entity_id);
-      var codeLabel = r.is_presale ? 'Pre-sale' : (CODE_LABEL[r.cost_code] || r.cost_code || '');
       var statusCls = 'ci-badge ci-badge-' + (r.status || 'unprocessed');
       return '<div class="ci-row" data-id="' + esc(r.id) + '">' +
-        '<div class="ci-thumb">' + (thumb ? '<img src="' + esc(thumb) + '" alt="" loading="lazy" />' : '<span class="ci-thumb-ph"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M6 2h12v20l-3-2-3 2-3-2-3 2z"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="9" y1="12" x2="15" y2="12"/></svg></span>') + '</div>' +
+        '<div class="ci-thumb">' + (thumb ? '<img src="' + esc(thumb) + '" alt="" loading="lazy" />' : THUMB_PH) + '</div>' +
         '<div class="ci-row-main">' +
           '<div class="ci-row-top">' +
             '<span class="ci-row-vendor">' + esc(r.vendor || '(no vendor)') + '</span>' +
@@ -224,19 +275,176 @@
           '</div>' +
           '<div class="ci-row-sub">' +
             (ent ? '<span class="ci-chip">' + esc(ent) + '</span>' : '<span class="ci-chip ci-chip-warn">no job</span>') +
-            '<span class="ci-chip ci-chip-code">' + esc(codeLabel) + '</span>' +
+            '<span class="ci-chip ci-chip-code">' + esc(ciCodeLabel(r)) + '</span>' +
             '<span class="ci-row-date">' + esc(fmtDate(r.purchased_at || r.created_at)) + '</span>' +
             '<span class="' + statusCls + '">' + esc(r.status || 'unprocessed') + '</span>' +
           '</div>' +
         '</div>' +
       '</div>';
     }).join('');
+    wireRowOpen(listEl);
+  }
 
-    listEl.querySelectorAll('.ci-row').forEach(function (row) {
-      row.addEventListener('click', function () {
-        var rec = _receipts.find(function (x) { return String(x.id) === String(row.getAttribute('data-id')); });
-        if (rec) openReceiptModal(rec);
+  // Column/row table view (like Leads / Jobs): photo · vendor · amount · cost
+  // type · linked job/lead · date · uploaded-by · status. Sortable headers.
+  var CI_COLS = [
+    { key: 'photo', label: '', sort: false },
+    { key: 'vendor', label: 'Vendor', sort: true },
+    { key: 'amount', label: 'Amount', sort: true, num: true },
+    { key: 'cost', label: 'Cost type', sort: true },
+    { key: 'linked', label: 'Linked to', sort: true },
+    { key: 'date', label: 'Date', sort: true },
+    { key: 'uploaded', label: 'Uploaded by', sort: true },
+    { key: 'status', label: 'Status', sort: true }
+  ];
+  function ciSortVal(r, key) {
+    switch (key) {
+      case 'vendor': return (r.vendor || '').toLowerCase();
+      case 'amount': return Number(r.amount || 0);
+      case 'cost': return ciCodeLabel(r).toLowerCase();
+      case 'linked': return entityLabel(r.entity_type, r.entity_id).toLowerCase();
+      case 'date': return String(r.purchased_at || r.created_at || '');
+      case 'uploaded': return (r.entered_by_name || '').toLowerCase();
+      case 'status': return (r.status || '');
+      default: return '';
+    }
+  }
+  function renderTableView(listEl, rows) {
+    if (_tsort.key) {
+      var dir = _tsort.dir === 'asc' ? 1 : -1;
+      rows.sort(function (a, b) {
+        var av = ciSortVal(a, _tsort.key), bv = ciSortVal(b, _tsort.key);
+        if (av < bv) return -1 * dir; if (av > bv) return 1 * dir; return 0;
       });
+    } else { defaultSort(rows); }
+    listEl.className = '';
+    var thead = '<thead><tr>' + CI_COLS.map(function (c) {
+      if (!c.sort) return '<th class="ci-th-photo"></th>';
+      var sc = (_tsort.key === c.key) ? (' sortable sort-' + (_tsort.dir === 'asc' ? 'asc' : 'desc')) : ' sortable';
+      return '<th class="' + (c.num ? 'num' : '') + sc + '" data-sort="' + c.key + '">' + esc(c.label) + '</th>';
+    }).join('') + '</tr></thead>';
+    var tbody = '<tbody>' + rows.map(function (r) {
+      var thumb = r.image_thumb_url || r.image_url;
+      var ent = entityLabel(r.entity_type, r.entity_id);
+      var amt = (r.amount != null && Number(r.amount) > 0) ? money(r.amount) : '<span class="ci-need">—</span>';
+      return '<tr class="ci-trow" data-id="' + esc(r.id) + '">' +
+        '<td class="ci-td-photo"><span class="ci-thumb ci-thumb-sm">' + (thumb ? '<img src="' + esc(thumb) + '" alt="" loading="lazy" />' : THUMB_PH) + '</span></td>' +
+        '<td class="ci-td-vendor">' + esc(r.vendor || '(no vendor)') + '</td>' +
+        '<td class="num">' + amt + '</td>' +
+        '<td>' + esc(ciCodeLabel(r)) + '</td>' +
+        '<td>' + (ent ? esc(ent) : '<span class="ci-chip-warn" style="font-size:11px;">no job</span>') + '</td>' +
+        '<td>' + esc(fmtDate(r.purchased_at || r.created_at)) + '</td>' +
+        '<td>' + esc(r.entered_by_name || (r.entered_by ? ('User ' + r.entered_by) : '—')) + '</td>' +
+        '<td><span class="ci-badge ci-badge-' + (r.status || 'unprocessed') + '">' + esc(r.status || 'unprocessed') + '</span></td>' +
+      '</tr>';
+    }).join('') + '</tbody>';
+    listEl.innerHTML = '<div class="p86-tbl-scroll"><table class="dense-table ci-table" id="ciTable">' + thead + tbody + '</table></div>';
+    listEl.querySelectorAll('th[data-sort]').forEach(function (th) {
+      th.addEventListener('click', function () {
+        var k = th.getAttribute('data-sort');
+        if (_tsort.key === k) { _tsort.dir = (_tsort.dir === 'asc') ? 'desc' : 'asc'; }
+        else { _tsort.key = k; _tsort.dir = (k === 'amount' || k === 'date') ? 'desc' : 'asc'; }
+        renderList();
+      });
+    });
+    wireRowOpen(listEl);
+  }
+
+  // ── Read-only viewer (with an Edit gate) ──────────────────────────
+  // Clicking a receipt opens THIS (not the edit form). A robust detail card +
+  // large photo; Edit re-opens the existing capture/edit form, Void/Restore work
+  // here too so a quick void doesn't require entering edit mode.
+  function viewRow(label, value, opts) {
+    opts = opts || {};
+    var v = (value == null || value === '') ? '<span class="ci-view-empty">—</span>' : (opts.raw ? value : esc(value));
+    return '<div class="ci-view-row' + (opts.cls ? ' ' + opts.cls : '') + '">' +
+      '<span class="ci-view-k">' + esc(label) + '</span>' +
+      '<span class="ci-view-v">' + v + '</span>' +
+    '</div>';
+  }
+
+  function openReceiptViewer(receipt) {
+    var r = receipt || {};
+    if (!r.id) { openReceiptModal(r); return; } // brand-new capture → straight to the form
+    var fullImg = r.image_url || r.image_thumb_url;
+    var ent = entityLabel(r.entity_type, r.entity_id);
+    var amtBig = (r.amount != null && Number(r.amount) > 0) ? money(r.amount) : '— no amount';
+    var statusCls = 'ci-badge ci-badge-' + (r.status || 'unprocessed');
+    var isVoid = r.status === 'void';
+
+    var modal = document.createElement('div');
+    modal.className = 'ci-modal';
+    modal.innerHTML =
+      '<div class="ci-modal-card ci-view-card">' +
+        '<div class="ci-modal-head">' +
+          '<span>Receipt' + (r.ref ? ' · ' + esc(r.ref) : '') + '</span>' +
+          '<div class="ci-modal-actions">' +
+            (isVoid ? '<button class="ci-btn" id="ciVRestore">Restore</button>'
+                    : '<button class="ci-btn ci-btn-danger" id="ciVVoid">Void</button>') +
+            '<button class="ci-btn" id="ciVClose">Close</button>' +
+            '<button class="ci-btn ci-btn-primary" id="ciVEdit">Edit</button>' +
+          '</div>' +
+        '</div>' +
+        '<div class="ci-modal-body">' +
+          '<div class="ci-view-hero">' +
+            '<div class="ci-view-photo" id="ciVPhoto">' +
+              (fullImg
+                ? '<img src="' + esc(fullImg) + '" alt="receipt" /><span class="ci-view-zoom">Click to enlarge</span>'
+                : '<div class="ci-view-nophoto">' + THUMB_PH + '<div>No photo</div></div>') +
+            '</div>' +
+            '<div class="ci-view-heroside">' +
+              '<div class="ci-view-amt">' + esc(amtBig) + '</div>' +
+              '<div><span class="' + statusCls + '">' + esc(r.status || 'unprocessed') + '</span></div>' +
+              '<div class="ci-view-vendor">' + esc(r.vendor || '(no vendor)') + '</div>' +
+            '</div>' +
+          '</div>' +
+          '<div class="ci-view-grid">' +
+            viewRow('Cost type', r.is_presale ? 'Pre-sale' : ciCodeLabel(r)) +
+            viewRow('Linked to', ent ? ent : '<span class="ci-chip-warn" style="font-size:12px;">No job — cost not flowing</span>', { raw: !ent }) +
+            viewRow('Date', fmtDate(r.purchased_at) || null) +
+            viewRow('Uploaded by', r.entered_by_name || (r.entered_by ? ('User ' + r.entered_by) : null)) +
+            viewRow('Captured', fmtDateTime(r.created_at) || null) +
+            (r.updated_at && r.updated_at !== r.created_at ? viewRow('Last updated', fmtDateTime(r.updated_at)) : '') +
+            viewRow('Receipt ID', r.ref || null) +
+          '</div>' +
+          (r.notes ? '<div class="ci-view-notes"><div class="ci-view-k">Notes</div><div>' + esc(r.notes) + '</div></div>' : '') +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(modal);
+
+    function close() { modal.remove(); }
+    modal.querySelector('#ciVClose').addEventListener('click', close);
+    modal.addEventListener('click', function (e) { if (e.target === modal) close(); });
+
+    // Edit gate → hand off to the existing capture/edit form.
+    modal.querySelector('#ciVEdit').addEventListener('click', function () { close(); openReceiptModal(r); });
+
+    // Photo → lightbox (reuse the shared CompanyCam-style viewer).
+    if (fullImg) {
+      var photoEl = modal.querySelector('#ciVPhoto');
+      if (photoEl) photoEl.addEventListener('click', function () {
+        if (window.p86Attachments && window.p86Attachments.openLightbox && r.attachment_id) {
+          window.p86Attachments.openLightbox(
+            [{ id: r.attachment_id, url: r.image_url || fullImg, thumb_url: r.image_thumb_url || fullImg, mime_type: 'image/jpeg' }],
+            0, { parentLabel: r.vendor || 'Receipt' }
+          );
+        } else {
+          window.open(r.image_url || fullImg, '_blank', 'noopener');
+        }
+      });
+    }
+
+    // Void / Restore inline (no need to enter edit mode).
+    var voidBtn = modal.querySelector('#ciVVoid');
+    if (voidBtn) voidBtn.addEventListener('click', function () {
+      if (!window.confirm('Void this receipt?')) return;
+      window.p86Api.receipts.remove(r.id).then(function () { toast('Receipt voided', 'success'); close(); reload(); })
+        .catch(function () { toast('Could not void', 'error'); });
+    });
+    var vRestore = modal.querySelector('#ciVRestore');
+    if (vRestore) vRestore.addEventListener('click', function () {
+      window.p86Api.receipts.update(r.id, { status: 'unprocessed' }).then(function () { toast('Receipt restored', 'success'); close(); reload(); })
+        .catch(function () { toast('Could not restore', 'error'); });
     });
   }
 

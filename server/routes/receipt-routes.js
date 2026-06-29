@@ -66,6 +66,24 @@ async function attachImageUrls(rows) {
   return rows;
 }
 
+// Enrich rows with the uploader's display name (entered_by -> users.name). One
+// batched query; best-effort (the name is display-only — never gates anything).
+// Adds entered_by_name so the Cost Inbox can show an "Uploaded by" column/field.
+async function attachUploaderNames(rows) {
+  const ids = [...new Set(rows.map((r) => r.entered_by).filter((v) => v != null))];
+  if (!ids.length) return rows;
+  try {
+    const ur = await pool.query('SELECT id, name, email FROM users WHERE id = ANY($1::int[])', [ids]);
+    const m = {};
+    ur.rows.forEach((u) => { m[u.id] = u; });
+    rows.forEach((r) => {
+      const u = m[r.entered_by];
+      if (u) r.entered_by_name = u.name || u.email || null;
+    });
+  } catch (_) { /* uploader name is best-effort */ }
+  return rows;
+}
+
 function newId() {
   return 'rcpt_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
 }
@@ -189,6 +207,7 @@ router.get('/', requireAuth, async (req, res) => {
       params
     );
     await attachImageUrls(rows);
+    await attachUploaderNames(rows);
     res.json({ receipts: rows });
   } catch (e) {
     console.error('GET /api/receipts error:', e);
