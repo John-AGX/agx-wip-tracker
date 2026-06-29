@@ -148,6 +148,12 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
 .ng-insp-type{margin-left:auto;font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:.04em;color:var(--ng-dim);background:var(--ng-surface);border:1px solid var(--ng-border2);border-radius:5px;padding:2px 7px}
 .ng-insp-sec{margin-bottom:12px}
 .ng-insp-empty{color:var(--ng-dim);font-size:12px;line-height:1.5;padding:10px 2px}
+/* Slice 3c: collapsible Tasks/Files sections (lazy-mounted on first open) */
+.ng-insp-coll{margin-top:10px;border-top:1px solid rgba(255,255,255,.07);padding-top:6px}
+.ng-insp-coll-hdr{font-size:12px;font-weight:700;color:#c5d2e6;cursor:pointer;padding:4px 0;display:flex;align-items:center;gap:6px;user-select:none}
+.ng-insp-coll-hdr::before{content:"\25B8";font-size:9px;color:#8aa0c0;transition:transform .12s}
+.ng-insp-coll-hdr.ng-open::before{transform:rotate(90deg)}
+.ng-insp-coll-body{padding-top:6px}
 .ng-insp-sublabel{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ng-dim);margin:0 0 5px}
 .ng-alloc-tbl{width:100%;border-collapse:collapse;font-size:11px}
 .ng-alloc-tbl th{font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:.03em;color:var(--ng-dim);text-align:right;padding:2px 3px;border-bottom:1px solid var(--ng-border2)}

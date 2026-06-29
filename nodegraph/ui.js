@@ -2131,11 +2131,13 @@ function renderInspector(){
 // synchronous appData renderers that own their expand state, so rebuilding every render()
 // would thrash them. A selected node takes over the panel (branches above); clearing the
 // selection (body no longer has .ng-insp-jobdetail) rebuilds this with fresh numbers.
-var _inspJobKey=null;
+var _inspJobKey=null, _inspFilesHandle=null;
 function renderInspectorJobDetail(body){
   var jid=E.job(); var jk='job:'+(jid||'');
   if(_inspJobKey===jk && body.querySelector('.ng-insp-jobdetail')) return;
   _inspJobKey=jk;
+  // Slice 3c: tear down a previously-mounted file explorer before the panel rebuilds.
+  if(_inspFilesHandle && _inspFilesHandle.destroy){ try{ _inspFilesHandle.destroy(); }catch(e){} } _inspFilesHandle=null;
   var job=(typeof appData!=='undefined'&&appData.jobs)?appData.jobs.find(function(j){return j.id===jid;}):null;
   if(!job){ body.innerHTML='<div class="ng-insp-empty">No job loaded.</div>'; return; }
   body.innerHTML='<div class="ng-insp-jobdetail">'+
@@ -2145,6 +2147,9 @@ function renderInspectorJobDetail(body){
     '<div class="ng-insp-sec" id="insp-cos"></div>'+   // renderJobChangeOrdersInto creates #insp-co inside (server-fetched)
     '<div class="ng-insp-sec" id="insp-pos"></div>'+   // renderJobPurchaseOrdersInto creates #insp-po inside (server-fetched)
     inspectorInvoicesHtml(jid)+                        // synchronous invoice table (appData.invoices)
+    // Slice 3c: Tasks + Files — collapsed by default, lazy-mounted on first expand (heavy mounts).
+    '<div class="ng-insp-coll"><div class="ng-insp-coll-hdr" data-coll-toggle="tasks">Tasks</div><div class="ng-insp-coll-body" id="insp-tasks" style="display:none"></div></div>'+
+    '<div class="ng-insp-coll"><div class="ng-insp-coll-hdr" data-coll-toggle="files">Files</div><div class="ng-insp-coll-body" id="insp-files" style="display:none"></div></div>'+
   '</div>';
   try{
     var phases=(appData.phases||[]).filter(function(p){return p.jobId===jid;});
@@ -2155,6 +2160,26 @@ function renderInspectorJobDetail(body){
     if(typeof window.renderJobChangeOrdersInto==='function') window.renderJobChangeOrdersInto(document.getElementById('insp-cos'),jid,'insp-co');
     if(typeof window.renderJobPurchaseOrdersInto==='function') window.renderJobPurchaseOrdersInto(document.getElementById('insp-pos'),jid,'insp-po');
   }catch(e){ if(window.console) console.warn('inspector job-detail render failed', e); }
+}
+// Slice 3c: expand/collapse a Tasks/Files section and lazy-mount its heavy panel on first
+// open (p86Tasks / p86Explorer fetch on mount — don't pay that on every job open).
+function inspToggleCollapse(key, hdrEl){
+  var box=document.getElementById('insp-'+key); if(!box) return;
+  var open=box.style.display!=='none';
+  box.style.display=open?'none':'block';
+  if(hdrEl) hdrEl.classList.toggle('ng-open', !open);
+  if(open || box.getAttribute('data-mounted')) return;   // collapsing, or already mounted
+  box.setAttribute('data-mounted','1');
+  var jid=E.job();
+  var job=(typeof appData!=='undefined'&&appData.jobs)?appData.jobs.find(function(j){return j.id===jid;}):null;
+  try{
+    if(key==='tasks' && window.p86Tasks && window.p86Tasks.mountEntityPanel){
+      var lbl=job?((job.jobNumber?job.jobNumber+' — ':'')+(job.title||'')):('Job '+jid);
+      window.p86Tasks.mountEntityPanel(box,'job',jid,lbl);
+    } else if(key==='files' && window.p86Explorer && window.p86Explorer.mount){
+      _inspFilesHandle=window.p86Explorer.mount(box,{entityType:'job',entityId:String(jid),canEdit:true,embedded:true});
+    }
+  }catch(e){ if(window.console) console.warn('inspector lazy-mount '+key, e); box.removeAttribute('data-mounted'); }
 }
 // Compact invoice table for the Inspector (appData.invoices for this job). Narrower than
 // the classic 7-col overview table to fit the 340px panel; rows open the invoice editor.
@@ -2771,6 +2796,9 @@ function initEvents(){
   // from the element's data-* attributes (so they work off-card here).
   var insp=document.querySelector('.ng-inspector');
   if(insp) insp.addEventListener('click', function(e){
+    // Slice 3c — Tasks/Files collapsible headers (lazy-mount the heavy panel on first open).
+    var ict=e.target.closest('[data-coll-toggle]');
+    if(ict){ e.preventDefault(); e.stopPropagation(); inspToggleCollapse(ict.getAttribute('data-coll-toggle'), ict); return; }
     var jchip=e.target.closest('[data-job-edit]');
     if(jchip && !e.target.closest('input')){ e.preventDefault(); e.stopPropagation(); jobFieldEdit(jchip); return; }
     var luEl=e.target.closest('[data-lu-act]');
