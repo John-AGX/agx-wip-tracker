@@ -3253,7 +3253,7 @@
     <script src="js/edit-gate.js?v=1"></script>
 
     <!-- Node Graph (Beta) -->
-    <link rel="stylesheet" href="nodegraph/nodegraph.css?v=137" />
+    <link rel="stylesheet" href="nodegraph/nodegraph.css?v=138" />
     <div id="nodeGraphTab">
       <!-- Workspace canvas toolbar — Outlook ribbon style. Each
            button is icon-on-top + label-below, buttons cluster into
@@ -3375,6 +3375,10 @@
               <span class="ng-ribbon-icon">&#x1F4F7;</span>
               <span class="ng-ribbon-label">Photos</span>
             </button>
+            <button class="ng-tbtn ng-ribbon-btn ng-tasks-btn" id="ngTasksBtn" title="Tasks — plot this job's geolocated tasks as pins on the satellite imagery (toggle). Click a pin to open the task.">
+              <span class="ng-ribbon-icon" data-p86-icon="check-circle"></span>
+              <span class="ng-ribbon-label">Tasks</span>
+            </button>
             <button class="ng-tbtn ng-ribbon-btn ng-audit-btn" id="ngAuditBtn" title="Audit — connectivity + completeness check (orphan nodes, missing %complete, unlinked QB lines, margin drift)">
               <span class="ng-ribbon-icon">&#x1F50D;</span>
               <span class="ng-ribbon-label">Audit<span id="ngAuditBadge" style="display:none;margin-left:3px;font-size:9px;padding:1px 5px;border-radius:8px;background:rgba(248,113,113,0.25);color:#f87171;font-weight:700;"></span></span>
@@ -3423,7 +3427,7 @@
       </div>
     </div>
     <script src="nodegraph/engine.js?v=99"></script>
-    <script src="nodegraph/ui.js?v=214"></script>
+    <script src="nodegraph/ui.js?v=215"></script>
 
     <!-- ── Mobile bottom nav (M1) ─────────────────────────────────
          Visible only below 768px (CSS-gated). Five slots with the raised

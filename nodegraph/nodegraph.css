@@ -790,6 +790,15 @@ body.light-mode .ng-topbar.ng-ribbon .ng-ribbon-btn:hover{
 /* Slice 5: "+task" affordance on a photo pin (shows on hover). */
 .ng-photopin-task{position:absolute;top:-7px;right:-7px;width:17px;height:17px;line-height:15px;padding:0;border-radius:50%;border:1px solid #fff;background:#22c55e;color:#fff;font-size:13px;font-weight:700;cursor:pointer;display:none;text-align:center}
 .ng-photopin:hover .ng-photopin-task{display:block}
+/* Geolocated task pins — teardrop markers, colored by status/priority. */
+.ng-taskpins{position:absolute;inset:0;z-index:8;pointer-events:none;display:none}
+.ng-taskpin{position:absolute;width:20px;height:20px;transform:translate(-50%,-100%);cursor:pointer;pointer-events:auto}
+.ng-taskpin .ng-taskpin-dot{display:block;width:15px;height:15px;margin:0 auto;border-radius:50% 50% 50% 0;transform:rotate(-45deg);background:#4f8cff;border:2px solid #fff;box-shadow:0 2px 6px var(--ng-shadow,rgba(0,0,0,.5))}
+.ng-taskpin-open .ng-taskpin-dot{background:#4f8cff}
+.ng-taskpin-hot .ng-taskpin-dot{background:#f87171}
+.ng-taskpin-done .ng-taskpin-dot{background:#34d399}
+.ng-taskpin:hover{z-index:9}
+.ng-taskpin:hover .ng-taskpin-dot{filter:brightness(1.18)}
 /* Building polygons (Phase 1): footprint traced on the basemap. The SVG layer
    lives inside .ng-canvas so it inherits the same scale(z)+translate(pan) as the
    nodes; coords are graph units. vector-effect keeps strokes crisp at any zoom. */

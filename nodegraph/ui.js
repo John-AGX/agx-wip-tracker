@@ -24,6 +24,9 @@ var _spMassing=(function(){ try{ return localStorage.getItem('ngSitePlanMassing'
 // Slice 4: photo-GPS pins
 var _photoPinsEl=null, _geoPhotos=[], _geoPhotosJob=null, _geoPhotosNoGps=0;
 var _spPhotos=(function(){ try{ return localStorage.getItem('ngSitePlanPhotos')==='1'; }catch(_){ return false; } })();
+// Geolocated task pins on the satellite map — mirrors the photo-pin layer.
+var _taskPinsEl=null, _geoTasks=[], _geoTasksJob=null;
+var _spTasks=(function(){ try{ return localStorage.getItem('ngSitePlanTasks')==='1'; }catch(_){ return false; } })();
 var _spSatellite=true; // satellite is permanent now (the toggle is retired); never goes false
 // NG8: frames (group boxes) interaction state
 var selFrame=null, dragFrame=null, frameDragOff=null, frameMembers=null, resizeFrame=null, resizeStart=null;
@@ -1009,6 +1012,7 @@ function applyTx(){
     syncBasemapCamera();   // keep the slaved basemap under the camera
   }
   if(_spPhotos) layoutPhotoPins();        // keep photo pins on their spots
+  if(_spTasks) layoutTaskPins();          // keep task pins on their spots
 }
 
 // ── NG-R3: compact currency ($120k / $1.3M) for at-a-glance round cost chips ──
@@ -1313,7 +1317,7 @@ function tryGeocodeJobThenMount(){
       var job=(typeof appData!=='undefined'&&appData.jobs)?appData.jobs.find(function(j){return j.id===jid;}):null;
       if(job){ job.geocode_lat=lat; job.geocode_lng=lng; }   // so jobOrigin() resolves on retry
       showSatHint(false);
-      if(_spSatellite && E.viewMode && E.viewMode()==='siteplan'){ mountBasemap(); updatePhotoLayer(); }
+      if(_spSatellite && E.viewMode && E.viewMode()==='siteplan'){ mountBasemap(); updatePhotoLayer(); updateTaskLayer(); }
     } else {
       showSatHint(true, 'Add a street address to this job to enable the satellite map.');
     }
@@ -1377,6 +1381,7 @@ function updateBasemapVisibility(){
   basemapEl.style.display = show ? 'block' : 'none';
   if(show){ mountBasemap(); } else { showSatHint(false); exitGeoPick(); exitTrace(); exitMeasure(); }
   updatePhotoLayer(); // photos ride on top of satellite — show/hide together
+  updateTaskLayer();  // task pins ride alongside photos
   renderPolygons();   // show/hide the building footprint layer with satellite
 }
 
@@ -1851,6 +1856,71 @@ function updatePhotoLayer(){
     if(_geoPhotosNoGps) showSatHint(true, _geoPhotosNoGps+' photo'+(_geoPhotosNoGps===1?'':'s')+' have no GPS and aren’t shown.');
   });
 }
+// ── Geolocated task pins (filterable) — same projection + lifecycle as photo pins.
+function taskScreenPos(t){
+  var g=E.spLatLngToGraph(Number(t.lat), Number(t.lng), _spOrigin.lat, _spOrigin.lng);
+  var z=E.zm(), p=E.pan();
+  return { x:(p.x + _spOriginGraph.x + g.x)*z, y:(p.y + _spOriginGraph.y + g.y)*z };
+}
+function ensureTaskPinsLayer(){
+  if(_taskPinsEl) return _taskPinsEl;
+  _taskPinsEl=document.createElement('div');
+  _taskPinsEl.className='ng-taskpins';
+  wrap.appendChild(_taskPinsEl);
+  return _taskPinsEl;
+}
+function layoutTaskPins(){
+  if(!_taskPinsEl || !_spTasks || !_spOrigin || !_spOriginGraph) return;
+  if(!_spSatellite || (E.viewMode && E.viewMode()!=='siteplan')) return;
+  var pins=_taskPinsEl.children;
+  for(var i=0;i<pins.length && i<_geoTasks.length;i++){
+    var s=taskScreenPos(_geoTasks[i]);
+    pins[i].style.left=s.x+'px'; pins[i].style.top=s.y+'px';
+  }
+}
+function renderTaskPins(){
+  var layer=ensureTaskPinsLayer();
+  layer.innerHTML='';
+  _geoTasks.forEach(function(t){
+    var done=t.status==='done';
+    var hot=!done && (t.priority==='urgent'||t.priority==='high');
+    var pin=document.createElement('div');
+    pin.className='ng-taskpin '+(done?'ng-taskpin-done':(hot?'ng-taskpin-hot':'ng-taskpin-open'));
+    pin.title=(t.title||'Task')+(t.due_date?(' · due '+String(t.due_date).slice(0,10)):'');
+    pin.innerHTML='<span class="ng-taskpin-dot"></span>';
+    pin.addEventListener('click', function(e){
+      e.stopPropagation();
+      if(window.p86Tasks && window.p86Tasks.openDetail) window.p86Tasks.openDetail(t.id);
+    });
+    layer.appendChild(pin);
+  });
+  layoutTaskPins();
+}
+function loadGeoTasks(cb){
+  var jid=E.job();
+  if(!jid || typeof p86Api==='undefined' || !p86Api.tasks){ _geoTasks=[]; if(cb)cb(); return; }
+  if(_geoTasksJob===jid){ if(cb)cb(); return; } // cached per job
+  p86Api.tasks.list({ entity_type:'job', entity_id:jid, limit:200 }).then(function(resp){
+    var rows=(resp && resp.tasks) || [], ok=[];
+    rows.forEach(function(t){
+      var lat=Number(t.lat), lng=Number(t.lng);
+      if(isFinite(lat)&&isFinite(lng)&&!(lat===0&&lng===0)&&lat>=-90&&lat<=90&&lng>=-180&&lng<=180) ok.push(t);
+    });
+    _geoTasks=ok; _geoTasksJob=jid; if(cb)cb();
+  }).catch(function(){ _geoTasks=[]; if(cb)cb(); });
+}
+function updateTaskLayer(){
+  var show=_spTasks && _spSatellite && E.viewMode && E.viewMode()==='siteplan';
+  if(!show){ if(_taskPinsEl) _taskPinsEl.style.display='none'; return; }
+  if(_spOriginJob!==E.job()){ _spOrigin=jobOrigin(); _spOriginGraph=siteplanCentroid(); _spOriginJob=E.job(); }
+  if(!_spOrigin){ return; }
+  if(_taskPinsEl) _taskPinsEl.style.display='block';
+  loadGeoTasks(function(){ renderTaskPins(); });
+}
+// Force a re-fetch of task pins next updateTaskLayer (after a task pin is edited).
+function invalidateGeoTasks(){ _geoTasksJob=null; if(_spTasks) updateTaskLayer(); }
+window.p86NGTasksRefresh = invalidateGeoTasks;
+
 // Slice 5: create an org task FROM a geotagged photo. The task is linked to the
 // job and its notes capture the photo + its real location, so the field photo on
 // the map turns into an action item in one tap. Uses the well-tested tasks.create
@@ -1866,10 +1936,14 @@ function createTaskFromPhoto(ph){
   if(title===null) return;                                          // cancelled
   title=(title||'').trim()||def;
   var lat=Number(ph.lat), lng=Number(ph.lng);
-  var loc=(isFinite(lat)&&isFinite(lng)) ? (' at '+lat.toFixed(5)+', '+lng.toFixed(5)) : '';
+  var hasGeo=isFinite(lat)&&isFinite(lng);
+  var loc=hasGeo ? (' at '+lat.toFixed(5)+', '+lng.toFixed(5)) : '';
   var notes='Created from a geotagged field photo'+loc+'.'+(ph.thumb_url?('\nPhoto: '+ph.thumb_url):'');
-  p86Api.tasks.create({ title:title, notes:notes, entity_type:'job', entity_id:jid })
-    .then(function(){ showSatHint(true, '✓ Task created: '+title); })
+  // Carry the photo's GPS onto the task so it drops a pin on the map too.
+  var payload={ title:title, notes:notes, entity_type:'job', entity_id:jid };
+  if(hasGeo){ payload.lat=lat; payload.lng=lng; if(ph.geo_accuracy!=null) payload.geo_accuracy=Number(ph.geo_accuracy); }
+  p86Api.tasks.create(payload)
+    .then(function(){ showSatHint(true, '✓ Task created: '+title); invalidateGeoTasks(); })
     .catch(function(e){ showSatHint(true, 'Could not create task: '+((e&&e.message)||'error')); });
 }
 
@@ -4675,6 +4749,18 @@ function init(){
     photosBtn.classList.toggle('ng-on', _spPhotos);
     updatePhotoLayer();
   });
+
+  // Task pins — plot the job's geolocated tasks on the imagery (filterable on/off).
+  var tasksBtn=tab.querySelector('.ng-tasks-btn');
+  if(tasksBtn){
+    tasksBtn.classList.toggle('ng-on', _spTasks);
+    tasksBtn.addEventListener('click', function(){
+      _spTasks=!_spTasks;
+      try{ localStorage.setItem('ngSitePlanTasks', _spTasks?'1':'0'); }catch(_){}
+      tasksBtn.classList.toggle('ng-on', _spTasks);
+      updateTaskLayer();
+    });
+  }
 
   // Measure (distance + area) — tap points on the imagery for real ft / sq ft.
   var measureBtn=tab.querySelector('.ng-measure-btn');
