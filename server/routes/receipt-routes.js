@@ -14,7 +14,7 @@
 
 const express = require('express');
 const { pool } = require('../db');
-const { requireAuth } = require('../auth');
+const { requireAuth, requireCapability } = require('../auth');
 const { Anthropic } = require('@anthropic-ai/sdk');
 // Per-user AI-spend limiters (20/min, 200/hr; skip SYSTEM_ADMIN) — the OCR
 // route makes a real vision call, so it must be bounded like /api/ai/* (SEC A2).
@@ -384,6 +384,22 @@ router.get('/ocr/stats', requireAuth, async (req, res) => {
   } catch (e) {
     console.error('GET /api/receipts/ocr/stats error:', e);
     res.json({ stats: null });
+  }
+});
+
+// DELETE /api/receipts/ocr/feedback/reset — wipe this org's OCR accuracy
+// history (receipt_ocr_feedback) so the stats start fresh. Admin-gated
+// (ROLES_MANAGE) + org-scoped. Receipts + their photos are NOT touched.
+// 3-segment path — no conflict with the '/:id' param routes.
+router.delete('/ocr/feedback/reset', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const orgId = callerOrgId(req);
+    if (!orgId) return res.status(400).json({ error: 'Organization required' });
+    const { rowCount } = await pool.query('DELETE FROM receipt_ocr_feedback WHERE organization_id = $1', [orgId]);
+    res.json({ ok: true, deleted: rowCount || 0 });
+  } catch (e) {
+    console.error('DELETE /api/receipts/ocr/feedback/reset error:', e);
+    res.status(500).json({ error: 'Server error' });
   }
 });
 

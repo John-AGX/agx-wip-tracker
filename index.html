@@ -1738,6 +1738,8 @@
                         <button class="ws-right-tab" data-admin-subtab="context" data-p86-icon="academic-cap" onclick="switchAdminSubTab('context')">Context</button>
                         <!-- Observability -->
                         <button class="ws-right-tab" data-admin-subtab="metrics" data-p86-icon="insights" onclick="switchAdminSubTab('metrics')">Metrics</button>
+                        <!-- Cost Inbox OCR accuracy stats -->
+                        <button class="ws-right-tab" data-admin-subtab="ocr-inbox" data-p86-icon="chart-bar" onclick="switchAdminSubTab('ocr-inbox')">OCR</button>
 
                         <!-- ⚙ System sub-tab retired — its cross-tenant surface
                              (tenants, cross-org metrics, audit, Anthropic
@@ -1807,6 +1809,19 @@
                                 </thead>
                                 <tbody id="admin-metrics-jobs-tbody"></tbody>
                             </table>
+                        </div>
+                    </div>
+
+                    <!-- Cost Inbox · OCR accuracy sub-tab -->
+                    <div id="admin-subtab-ocr-inbox" class="admin-subtab-content" style="display:none;">
+                        <p style="margin:0 0 14px 0;color:var(--text-dim,#888);font-size:12px;">
+                            How accurately the AI reads field receipts in the <strong>Cost Inbox</strong>. Each sample is one captured receipt where the AI made a guess; the rate is how often that guess matched what was actually saved. <strong>Amount</strong> is the error-prone field worth watching.
+                        </p>
+                        <div id="admin-ocr-cards" style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:16px;"></div>
+                        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+                            <button class="secondary" onclick="renderAdminOcrInbox()">Refresh</button>
+                            <button class="secondary" style="color:#ff6b6b;border-color:#5a2230;" onclick="resetAdminOcrStats(this)">Reset OCR accuracy</button>
+                            <span id="admin-ocr-note" style="font-size:12px;color:var(--text-dim,#888);"></span>
                         </div>
                     </div>
 
@@ -3082,7 +3097,7 @@
     <script src="js/auth.js?v=17"></script>
     <script src="js/dialogs.js?v=1b"></script>
     <script src="js/geolocation.js?v=1"></script>
-    <script src="js/api.js?v=55"></script>
+    <script src="js/api.js?v=56"></script>
     <script src="js/header-weather.js?v=2"></script>
     <script src="js/account.js?v=2c"></script>
     <script src="js/voice-input.js?v=11"></script>
@@ -3096,7 +3111,7 @@
          BEFORE admin.js so window.p86EmailBlocks is available at the
          time renderTemplateEditor() runs its mount call. -->
     <script src="js/email-block-editor.js?v=4"></script>
-    <script src="js/admin.js?v=106"></script>
+    <script src="js/admin.js?v=107"></script>
     <!-- Act-as / disguise mode: persistent "Acting as NAME — Exit" banner +
          window.p86ActAs(userId). Self-contained; re-fetches /api/auth/me. -->
     <script src="js/actas.js?v=1"></script>

@@ -1130,6 +1130,7 @@
     else if (name === 'context' && window.renderAdminContextRegistry) renderAdminContextRegistry();
     else if (name === 'organization') renderAdminOrganization();
     else if (name === 'system') renderAdminSystem();
+    else if (name === 'ocr-inbox') renderAdminOcrInbox();
     // Persist nav state so a refresh lands back on this admin sub-tab.
     if (typeof window.p86NavSave === 'function') window.p86NavSave();
   }
@@ -4490,6 +4491,74 @@
     tbody.innerHTML = html;
   }
 
+  // ── Cost Inbox · OCR accuracy (admin) ──────────────────────────────
+  // Reads /api/receipts/ocr/stats and paints metric cards: total samples + the
+  // AI's per-field hit-rate. Amount is the field worth watching (error-prone).
+  function renderAdminOcrInbox() {
+    if (!isAdmin()) return;
+    var cardsEl = document.getElementById('admin-ocr-cards');
+    if (!cardsEl) return;
+    var note = document.getElementById('admin-ocr-note');
+    if (note) note.textContent = '';
+    if (!(window.p86Api && window.p86Api.receipts && window.p86Api.receipts.ocrStats)) {
+      cardsEl.innerHTML = '<div style="color:var(--text-dim,#888);font-size:13px;">Not connected.</div>';
+      return;
+    }
+    cardsEl.innerHTML = '<div style="color:var(--text-dim,#888);font-size:13px;padding:8px 0;">Loading…</div>';
+    function ocrCard(label, value, sub, color) {
+      return '<div style="flex:1 1 150px;min-width:150px;background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:10px;padding:14px 16px;">' +
+        '<div style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">' + label + '</div>' +
+        '<div style="font-size:20px;font-weight:600;color:' + (color || 'var(--text,#fff)') + ';">' + value + '</div>' +
+        (sub ? '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:4px;">' + sub + '</div>' : '') +
+      '</div>';
+    }
+    function rateColor(rate) {
+      if (rate == null) return 'var(--text-dim,#888)';
+      if (rate >= 85) return '#34c77b';
+      if (rate >= 65) return '#f0a020';
+      return '#ff6b6b';
+    }
+    function fieldCard(label, f) {
+      f = f || {};
+      var val = (f.rate == null) ? '—' : (f.rate + '%');
+      var sub = (f.n || 0) + ' sample' + ((f.n === 1) ? '' : 's');
+      return ocrCard(label, val, sub, rateColor(f.rate));
+    }
+    window.p86Api.receipts.ocrStats().then(function(r) {
+      var s = (r && r.stats) || null;
+      if (!s || !s.samples) {
+        cardsEl.innerHTML = '<div style="color:var(--text-dim,#888);font-size:13px;padding:8px 0;">No OCR samples yet. Once a receipt is captured with a photo (the AI reads it), its read-accuracy shows up here.</div>';
+        return;
+      }
+      cardsEl.innerHTML =
+        ocrCard('Samples', s.samples, 'receipts the AI read') +
+        fieldCard('Amount', s.amount) +
+        fieldCard('Vendor', s.vendor) +
+        fieldCard('Date', s.date) +
+        fieldCard('Cost type', s.cost_code);
+    }).catch(function() {
+      cardsEl.innerHTML = '<div style="color:#ff6b6b;font-size:13px;">Could not load OCR stats.</div>';
+    });
+  }
+
+  // Wipe this org's OCR accuracy history (receipt_ocr_feedback). Server-side is
+  // admin-gated (ROLES_MANAGE) + org-scoped. Receipts + their photos are NOT touched.
+  function resetAdminOcrStats(btn) {
+    if (!(window.p86Api && window.p86Api.receipts && window.p86Api.receipts.resetOcrStats)) return;
+    if (!confirm('Reset OCR accuracy?\n\nThis clears the AI read-accuracy history for your org so the stats start fresh. Your receipts and photos are NOT affected.')) return;
+    var note = document.getElementById('admin-ocr-note');
+    if (btn) { btn.disabled = true; btn.textContent = 'Resetting…'; }
+    window.p86Api.receipts.resetOcrStats().then(function(r) {
+      if (btn) { btn.disabled = false; btn.textContent = 'Reset OCR accuracy'; }
+      var n = (r && r.deleted) || 0;
+      if (note) note.textContent = 'Cleared ' + n + ' sample' + (n === 1 ? '' : 's') + '.';
+      renderAdminOcrInbox();
+    }).catch(function(e) {
+      if (btn) { btn.disabled = false; btn.textContent = 'Reset OCR accuracy'; }
+      if (note) note.textContent = 'Could not reset' + (e && e.message ? (': ' + e.message) : '') + '.';
+    });
+  }
+
   // Toggle a job's liveStatus between 'live' and 'draft'. Pure client-side
   // mutation — saveData() already syncs to the server via bulk save.
   // Going Live also captures an immediate baseline snapshot so the job has
@@ -4560,6 +4629,8 @@
   window.revokeAdminJobAccess = revokeAdminJobAccess;
   window.switchAdminSubTab = switchAdminSubTab;
   window.renderAdminMetrics = renderAdminMetrics;
+  window.renderAdminOcrInbox = renderAdminOcrInbox;
+  window.resetAdminOcrStats = resetAdminOcrStats;
   window.toggleJobLiveStatus = toggleJobLiveStatus;
   window.captureNowForJob = captureNowForJob;
   window.renderAdminRoles = renderAdminRoles;

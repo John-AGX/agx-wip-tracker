@@ -739,6 +739,8 @@
     },
     ocr: function(payload) { return post('/api/receipts/ocr', payload); },
     ocrStats: function() { return get('/api/receipts/ocr/stats'); },
+    // Wipe this org's OCR accuracy history (admin-gated server-side).
+    resetOcrStats: function() { return del('/api/receipts/ocr/feedback/reset'); },
     create: function(payload) { return post('/api/receipts', payload); },
     update: function(id, payload) { return patch('/api/receipts/' + encodeURIComponent(id), payload); },
     remove: function(id, hard) { return del('/api/receipts/' + encodeURIComponent(id) + (hard ? '?hard=1' : '')); }
