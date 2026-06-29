@@ -52,18 +52,20 @@
     var modal = document.createElement('div');
     modal.id = 'messagingInboxModal';
     modal.className = 'modal active';
+    ensurePageStyles();  // shares the responsive rules with the full Messages page
     modal.innerHTML =
       '<div class="modal-content" style="max-width:920px;width:96vw;height:80vh;max-height:720px;display:flex;flex-direction:column;padding:0;">' +
         '<div style="padding:12px 18px;border-bottom:1px solid var(--border,#333);display:flex;align-items:center;gap:10px;">' +
+          '<button type="button" class="msg-modal-back" data-modal-back title="Back to inbox">&#8592;</button>' +
           '<strong style="font-size:15px;flex:1;">Inbox</strong>' +
           '<button type="button" data-new-msg class="primary" style="padding:5px 12px;font-size:12px;font-weight:600;">&#x270E; New message</button>' +
           '<button type="button" data-close style="background:transparent;border:none;color:var(--text-dim,#888);font-size:20px;cursor:pointer;padding:0 4px;">&times;</button>' +
         '</div>' +
-        '<div style="flex:1;display:grid;grid-template-columns:280px minmax(0,1fr);overflow:hidden;">' +
-          '<div id="msgInboxList" style="border-right:1px solid var(--border,#333);overflow-y:auto;background:var(--card-bg,#0f0f1e);">' +
+        '<div class="msg-modal-body">' +
+          '<div class="msg-modal-list" id="msgInboxList">' +
             '<div style="padding:18px;color:var(--text-dim,#888);font-size:12px;text-align:center;">Loading threads&hellip;</div>' +
           '</div>' +
-          '<div id="msgInboxThread" style="overflow:hidden;display:flex;flex-direction:column;">' +
+          '<div class="msg-modal-thread" id="msgInboxThread">' +
             '<div style="padding:32px;color:var(--text-dim,#888);font-size:12px;text-align:center;">Pick a thread to view it.</div>' +
           '</div>' +
         '</div>' +
@@ -77,12 +79,19 @@
       b.addEventListener('click', function() { modal.remove(); });
     });
 
+    var bodyEl = modal.querySelector('.msg-modal-body');
     var listEl = modal.querySelector('#msgInboxList');
     var threadEl = modal.querySelector('#msgInboxThread');
     var newBtn = modal.querySelector('[data-new-msg]');
-    if (newBtn) newBtn.addEventListener('click', function() { startNewMessage(listEl, threadEl); });
+    var backBtn = modal.querySelector('[data-modal-back]');
+    // On mobile the list + thread share the modal width — opening a thread swaps
+    // to the thread view; Back returns to the list. (Without this the thread got
+    // ~100px and bubbles wrapped one character per line.)
+    function showThreadMobile() { if (bodyEl) bodyEl.classList.add('show-thread'); }
+    if (backBtn) backBtn.addEventListener('click', function() { if (bodyEl) bodyEl.classList.remove('show-thread'); });
+    if (newBtn) newBtn.addEventListener('click', function() { startNewMessage(listEl, threadEl, showThreadMobile); });
 
-    loadInboxList(listEl, threadEl);
+    loadInboxList(listEl, threadEl, showThreadMobile);
   }
 
   // ──────────────────────────────────────────────────────────────────
@@ -398,6 +407,19 @@
         '#messages .msg-page-body.show-thread .msg-page-list{display:none;}' +
         '#messages .msg-page-body:not(.show-thread) .msg-page-thread{display:none;}' +
         '#messages .msg-page-back{display:inline-flex;align-items:center;gap:4px;background:transparent;border:none;color:var(--accent,#22d3ee);font-size:13px;cursor:pointer;padding:6px 4px;}' +
+      '}' +
+      // Inbox MODAL — same two-pane model; collapses to a single pane on phones.
+      // Was a fixed `280px minmax(0,1fr)` grid, so at ~380px the thread got ~100px
+      // and message bubbles wrapped one character per line.
+      '#messagingInboxModal .msg-modal-body{flex:1;display:grid;grid-template-columns:280px minmax(0,1fr);overflow:hidden;}' +
+      '#messagingInboxModal .msg-modal-list{border-right:1px solid var(--border,#333);overflow-y:auto;background:var(--card-bg,#0f0f1e);}' +
+      '#messagingInboxModal .msg-modal-thread{overflow:hidden;display:flex;flex-direction:column;min-width:0;}' +
+      '#messagingInboxModal .msg-modal-back{display:none;}' +
+      '@media (max-width:640px){' +
+        '#messagingInboxModal .msg-modal-body{grid-template-columns:minmax(0,1fr);}' +
+        '#messagingInboxModal .msg-modal-body.show-thread .msg-modal-list{display:none;}' +
+        '#messagingInboxModal .msg-modal-body:not(.show-thread) .msg-modal-thread{display:none;}' +
+        '#messagingInboxModal .msg-modal-back{display:inline-flex;align-items:center;justify-content:center;background:transparent;border:none;color:var(--accent,#22d3ee);font-size:18px;line-height:1;cursor:pointer;padding:0 4px;}' +
       '}';
     var st = document.createElement('style');
     st.id = 'p86-messaging-styles';
