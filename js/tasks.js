@@ -422,6 +422,26 @@
               assigneeSelectHTML('tdAssignee', task.assignee_user_id) + '</label>' +
           '</div>' +
           (task.entity_type ? '<div style="margin-top:10px;"><span class="p86-task-linkchip">Linked: ' + esc(task.linked_label || (task.entity_type + ' ' + task.entity_id)) + '</span></div>' : '') +
+          // Location pin — geotag from the device, or type/clear coords manually.
+          '<div class="p86-field" style="margin-top:12px;"><span>Location pin</span>' +
+            '<div style="display:flex;gap:6px;flex-wrap:wrap;">' +
+              '<input id="tdLat" type="number" step="0.000001" placeholder="Latitude" style="flex:1;min-width:120px;" value="' + escAttr(task.lat != null ? task.lat : '') + '" />' +
+              '<input id="tdLng" type="number" step="0.000001" placeholder="Longitude" style="flex:1;min-width:120px;" value="' + escAttr(task.lng != null ? task.lng : '') + '" />' +
+            '</div>' +
+            '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px;">' +
+              '<button type="button" id="tdGeoMe" class="ee-btn secondary">Use my location</button>' +
+              '<a id="tdGeoLink" target="_blank" rel="noopener" style="font-size:12px;color:#4f8cff;text-decoration:none;">Open in Maps &#8599;</a>' +
+              '<button type="button" id="tdGeoClear" class="ee-btn secondary" style="font-size:11px;">Clear pin</button>' +
+              '<span id="tdGeoAcc" style="font-size:11px;color:var(--text-dim,#888);"></span>' +
+            '</div>' +
+          '</div>' +
+          '<label class="p86-field" style="margin-top:10px;"><span>Directions / access notes</span>' +
+            '<textarea id="tdDirections" rows="2" placeholder="Gate code, where to park, which unit…">' + esc(task.directions || '') + '</textarea></label>' +
+          '<div class="p86-field" style="margin-top:10px;"><span>Photos</span>' +
+            '<div id="tdPhotos" class="p86-task-photos" style="display:flex;gap:6px;flex-wrap:wrap;"></div>' +
+            '<input id="tdPhotoInput" type="file" accept="image/*" capture="environment" multiple style="display:none;" />' +
+            '<button type="button" id="tdAddPhoto" class="ee-btn secondary" style="align-self:flex-start;margin-top:6px;">+ Add photo</button>' +
+          '</div>' +
           '<div class="p86-field" style="margin-top:12px;"><span>Checklist</span>' +
             '<div id="tdChecklist" class="p86-task-checklist"></div>' +
             '<button type="button" id="tdAddCl" class="ee-btn secondary" style="align-self:flex-start;margin-top:4px;">+ Add item</button>' +
@@ -464,10 +484,90 @@
       if (inputs.length) inputs[inputs.length - 1].focus();
     });
 
+    // ── Geo pin: device location, manual edit, maps link ──
+    var _geoAcc = (task.geo_accuracy != null) ? Number(task.geo_accuracy) : null;
+    function syncGeoLink() {
+      var lat = parseFloat(h.modal.querySelector('#tdLat').value);
+      var lng = parseFloat(h.modal.querySelector('#tdLng').value);
+      var link = h.modal.querySelector('#tdGeoLink'), accEl = h.modal.querySelector('#tdGeoAcc');
+      var ok = isFinite(lat) && isFinite(lng);
+      link.style.display = ok ? '' : 'none';
+      if (ok && window.p86MapLink) link.href = window.p86MapLink.url(lat, lng);
+      accEl.textContent = (ok && _geoAcc) ? ('±' + Math.round(_geoAcc) + 'm') : '';
+    }
+    syncGeoLink();
+    h.modal.querySelector('#tdLat').addEventListener('input', function () { _geoAcc = null; syncGeoLink(); });
+    h.modal.querySelector('#tdLng').addEventListener('input', function () { _geoAcc = null; syncGeoLink(); });
+    h.modal.querySelector('#tdGeoClear').addEventListener('click', function () {
+      h.modal.querySelector('#tdLat').value = ''; h.modal.querySelector('#tdLng').value = ''; _geoAcc = null; syncGeoLink();
+    });
+    h.modal.querySelector('#tdGeoMe').addEventListener('click', function () {
+      var b = this, t0 = b.textContent; b.disabled = true; b.textContent = 'Locating…';
+      var done = function () { b.disabled = false; b.textContent = t0; };
+      var apply = function (lat, lng, acc) {
+        h.modal.querySelector('#tdLat').value = Number(lat).toFixed(6);
+        h.modal.querySelector('#tdLng').value = Number(lng).toFixed(6);
+        _geoAcc = (acc != null) ? acc : null; syncGeoLink();
+      };
+      if (window.p86Geo && window.p86Geo.get) {
+        window.p86Geo.get(60000).then(function (g) {
+          done(); if (g) apply(g.lat, g.lng, g.accuracy); else toast('Location unavailable', 'error');
+        }).catch(function () { done(); toast('Location unavailable', 'error'); });
+      } else if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+          function (p) { done(); apply(p.coords.latitude, p.coords.longitude, p.coords.accuracy); },
+          function () { done(); toast('Location unavailable', 'error'); },
+          { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 });
+      } else { done(); toast('Geolocation not supported', 'error'); }
+    });
+
+    // ── Photos (attachments on entity_type='task'). Upload auto-geotags images;
+    // the first geotagged photo seeds the task pin when none is set yet. ──
+    function loadTaskPhotos() {
+      var host = h.modal.querySelector('#tdPhotos'); if (!host) return;
+      if (!window.p86Api || !p86Api.attachments) { host.innerHTML = ''; return; }
+      p86Api.attachments.list('task', task.id).then(function (resp) {
+        var atts = (resp && resp.attachments) || [];
+        if (!atts.length) { host.innerHTML = '<span style="font-size:12px;color:var(--text-dim,#888);">No photos yet.</span>'; return; }
+        host.innerHTML = atts.map(function (a) {
+          var u = a.thumb_url || a.web_url || '';
+          return '<a href="' + escAttr(a.web_url || u) + '" target="_blank" rel="noopener" title="' + escAttr(a.filename || '') + '" ' +
+            'style="display:block;width:54px;height:54px;border-radius:6px;overflow:hidden;border:1px solid var(--border,#333);background:#0f1420;">' +
+            (u ? '<img src="' + escAttr(u) + '" alt="" style="width:100%;height:100%;object-fit:cover;" />' : '') + '</a>';
+        }).join('');
+      }).catch(function () { host.innerHTML = ''; });
+    }
+    loadTaskPhotos();
+    h.modal.querySelector('#tdAddPhoto').addEventListener('click', function () { h.modal.querySelector('#tdPhotoInput').click(); });
+    h.modal.querySelector('#tdPhotoInput').addEventListener('change', function () {
+      var files = Array.prototype.slice.call(this.files || []); if (!files.length) return;
+      var input = this, btn = h.modal.querySelector('#tdAddPhoto'), t0 = btn.textContent;
+      btn.disabled = true; btn.textContent = 'Uploading…';
+      var seq = Promise.resolve();
+      files.forEach(function (f) {
+        seq = seq.then(function () {
+          return p86Api.attachments.upload('task', task.id, f).then(function (r) {
+            var att = (r && (r.attachment || r)) || {};
+            var latEl = h.modal.querySelector('#tdLat'), lngEl = h.modal.querySelector('#tdLng');
+            if ((!latEl.value || !lngEl.value) && att.lat != null && att.lng != null) {
+              latEl.value = Number(att.lat).toFixed(6); lngEl.value = Number(att.lng).toFixed(6);
+              if (att.geo_accuracy != null) _geoAcc = Number(att.geo_accuracy);
+              syncGeoLink();
+            }
+          });
+        });
+      });
+      seq.then(function () { btn.disabled = false; btn.textContent = t0; input.value = ''; loadTaskPhotos(); toast('Photo added', 'success'); })
+         .catch(function (e) { btn.disabled = false; btn.textContent = t0; input.value = ''; loadTaskPhotos(); toast((e && e.message) || 'Upload failed', 'error'); });
+    });
+
     h.modal.querySelector('#tdSave').addEventListener('click', function () {
       var title = (h.modal.querySelector('#tdTitle').value || '').trim();
       if (!title) { h.modal.querySelector('#tdTitle').focus(); return; }
       var asg = h.modal.querySelector('#tdAssignee').value;
+      var _lat = parseFloat(h.modal.querySelector('#tdLat').value);
+      var _lng = parseFloat(h.modal.querySelector('#tdLng').value);
+      var _hasPin = isFinite(_lat) && isFinite(_lng);
       var payload = {
         title: title,
         notes: h.modal.querySelector('#tdNotes').value || '',
@@ -476,7 +576,11 @@
         kind: h.modal.querySelector('#tdKind').value,
         due_date: h.modal.querySelector('#tdDue').value || null,
         assignee_user_id: asg ? Number(asg) : null,
-        checklist: clState.filter(function (c) { return (c.text || '').trim(); })
+        checklist: clState.filter(function (c) { return (c.text || '').trim(); }),
+        directions: h.modal.querySelector('#tdDirections').value || null,
+        lat: _hasPin ? _lat : null,
+        lng: _hasPin ? _lng : null,
+        geo_accuracy: _hasPin ? (_geoAcc || null) : null
       };
       var btn = h.modal.querySelector('#tdSave');
       btn.disabled = true; btn.textContent = 'Saving…';
