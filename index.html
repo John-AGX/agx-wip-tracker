@@ -3253,7 +3253,7 @@
     <script src="js/edit-gate.js?v=1"></script>
 
     <!-- Node Graph (Beta) -->
-    <link rel="stylesheet" href="nodegraph/nodegraph.css?v=131" />
+    <link rel="stylesheet" href="nodegraph/nodegraph.css?v=132" />
     <div id="nodeGraphTab">
       <!-- Workspace canvas toolbar — Outlook ribbon style. Each
            button is icon-on-top + label-below, buttons cluster into
@@ -3410,9 +3410,15 @@
           <div class="ng-inspector-body"></div>
         </div>
       </div>
+      <!-- Mobile-only segmented control: switch Map / Overview / Detail (panels become bottom sheets <768px) -->
+      <div class="ng-mobile-seg" role="tablist">
+        <button class="ng-mseg-btn" data-mseg="overview">Overview</button>
+        <button class="ng-mseg-btn ng-on" data-mseg="map">Map</button>
+        <button class="ng-mseg-btn" data-mseg="detail">Detail</button>
+      </div>
     </div>
     <script src="nodegraph/engine.js?v=99"></script>
-    <script src="nodegraph/ui.js?v=207"></script>
+    <script src="nodegraph/ui.js?v=208"></script>
 
     <!-- ── Mobile bottom nav (M1) ─────────────────────────────────
          Visible only below 768px (CSS-gated). Five slots with the raised

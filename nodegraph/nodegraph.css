@@ -99,6 +99,24 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
 .ng-jobcard-actions{display:flex;gap:6px;margin-top:7px}
 .ng-jobcard-btn{flex:1;background:rgba(79,140,255,.12);border:1px solid rgba(79,140,255,.3);color:#9cc0ff;font-size:11px;font-weight:600;padding:5px 8px;border-radius:6px;cursor:pointer}
 .ng-jobcard-btn:hover{background:rgba(79,140,255,.22);border-color:#4f8cff}
+
+/* ── Mobile (Slice 5): map full-bleed; left overview + right detail become slide-up bottom sheets,
+   switched by the .ng-mobile-seg control. Keeps the map touch-pannable instead of fighting page scroll. ── */
+.ng-mobile-seg{display:none}
+@media (max-width:768px){
+  .ng-mobile-seg{display:flex;position:fixed;left:0;right:0;bottom:0;z-index:60;gap:6px;padding:6px;background:rgba(12,16,26,.97);border-top:1px solid rgba(255,255,255,.1)}
+  .ng-mseg-btn{flex:1;background:transparent;border:1px solid rgba(255,255,255,.14);color:#9cc0ff;font-size:12px;font-weight:600;padding:9px 6px;border-radius:7px;cursor:pointer}
+  .ng-mseg-btn.ng-on{background:rgba(79,140,255,.22);border-color:#4f8cff;color:#fff}
+  #nodeGraphTab .ng-sidebar,
+  #nodeGraphTab .ng-inspector{position:fixed!important;left:0;right:0;top:auto;bottom:46px;height:62vh;width:auto!important;max-width:none!important;min-width:0!important;z-index:55;border:none;border-top:1px solid rgba(255,255,255,.14);box-shadow:0 -8px 24px rgba(0,0,0,.55);transform:translateY(115%);transition:transform .22s ease}
+  #nodeGraphTab.ng-m-overview .ng-sidebar{transform:translateY(0)}
+  #nodeGraphTab.ng-m-detail .ng-inspector{transform:translateY(0);display:flex!important}
+  /* un-collapse the rail content when it's a sheet (the desktop collapse state would blank it) */
+  #nodeGraphTab .ng-sidebar.ng-collapsed{width:auto!important;overflow-y:auto!important}
+  #nodeGraphTab .ng-sidebar.ng-collapsed .ng-sidebar-jobcard,
+  #nodeGraphTab .ng-sidebar.ng-collapsed .ng-sp-metrics{display:block}
+  .ng-canvas-area{padding-bottom:46px}
+}
 .ng-sidebar-toggle{background:transparent;border:1px solid var(--ng-border2);color:var(--ng-dim2);width:18px;height:18px;border-radius:3px;font-size:9px;line-height:1;cursor:pointer;padding:0;flex-shrink:0}
 .ng-sidebar-toggle:hover{color:#6aa3ff;border-color:#4f8cff}
 .ng-sidebar-search{padding:8px 10px;border-bottom:1px solid var(--ng-border2)}

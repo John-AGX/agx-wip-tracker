@@ -4273,6 +4273,18 @@ function init(){
     if(ngOpenAddMenuFn) ngOpenAddMenuFn(r.left, r.bottom+4, pickNodeType);
   });
 
+  // Mobile segmented control: Map (default) / Overview / Detail — the left + right panels
+  // become slide-up bottom sheets <768px so the map stays full-bleed and touch-pannable.
+  var mseg=tab.querySelector('.ng-mobile-seg');
+  if(mseg) mseg.addEventListener('click',function(e){
+    var b=e.target.closest('[data-mseg]'); if(!b) return;
+    var m=b.getAttribute('data-mseg');
+    tab.classList.remove('ng-m-overview','ng-m-detail');
+    if(m==='overview') tab.classList.add('ng-m-overview');
+    else if(m==='detail') tab.classList.add('ng-m-detail');
+    mseg.querySelectorAll('.ng-mseg-btn').forEach(function(x){ x.classList.toggle('ng-on', x===b); });
+  });
+
   // Sync from data — add missing nodes without moving existing ones
   var syncBtn=tab.querySelector('.ng-sync-btn');
   if(syncBtn) syncBtn.addEventListener('click',function(){ syncFromData(); render(); });
