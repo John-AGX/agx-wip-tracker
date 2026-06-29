@@ -2324,6 +2324,12 @@ function showSectionInInspector(pid, tabBtn){
   var jid=E.job(), fn=WS_SECTION_RENDERERS[pid];
   if(fn && typeof window[fn]==='function'){ try{ window[fn](jid); }catch(err){ if(window.console) console.warn('section render '+pid, err); } }
 }
+// Called by workspace-layout.js activateTab when the map is open: route the section into the
+// right Inspector (keeping the map open) instead of activateTab's tear-down + center render.
+window.p86NgShowSection=function(pid){
+  var btn=document.querySelector('.ws-right-tab[data-panel="'+pid+'"]');
+  showSectionInInspector(pid, btn);
+};
 function renderInspector(){
   var panel=document.querySelector('.ng-inspector'); if(!panel) return;
   if(!(E.viewMode && E.viewMode()==='siteplan')) return;
@@ -4532,15 +4538,8 @@ function init(){
     if(ngOpenAddMenuFn) ngOpenAddMenuFn(r.left, r.bottom+4, pickNodeType);
   });
 
-  // Map-as-job-page: route app-sidebar SECTION clicks into the right Inspector while the map is
-  // open (instead of activateTab closing the map). Capture-phase pre-empts the tab's own onclick.
-  document.addEventListener('click', function(e){
-    var st=e.target.closest && e.target.closest('.ws-right-tab'); if(!st) return;
-    if(!tab.classList.contains('active')) return;     // map closed → let activateTab run normally
-    var pid=st.getAttribute('data-panel'); if(!pid) return;
-    e.stopPropagation();                              // pre-empt activateTab (which would close the map)
-    showSectionInInspector(pid, st);
-  }, true);
+  // (Section-click routing is handled at the source in workspace-layout.js's activateTab via
+  //  window.p86NgShowSection — a capture listener here was racy against the tab's own onclick.)
 
   // Drag-to-resize the right Inspector (drag its LEFT edge) — mirrors the app sidebar resizer.
   // Inspector is right-aligned, so dragging the handle left WIDENS it (invert dx). The map
@@ -5266,6 +5265,11 @@ window.openNodeGraph=function(jid){
   var _appSb=document.getElementById('app-sidebar');
   tab.style.left=(_appSb && _appSb.offsetParent!==null && _appSb.offsetWidth>0) ? (_appSb.offsetWidth+'px') : '0';
   tab.classList.add('active');
+  // Fresh start for the right Inspector on every open: clear any stale section view (which would
+  // make renderInspector bail) and reset the build-once key so the job detail rebuilds. Fixes the
+  // "right bar empty on the first try" race after a prior job/section was open.
+  try { restoreSectionPanel(); } catch(e){}
+  _inspJobKey=null;
   // Restore the persisted Clean Mode look + sync the toggle button.
   try {
     var _clean = E && E.cleanMode && E.cleanMode();

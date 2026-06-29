@@ -1454,6 +1454,13 @@
 
     function activateTab(targetId) {
       var jobId = (typeof appState !== 'undefined') ? appState.currentJobId : null;
+      // Map-as-job-page: while the node-graph map is open, route the section into the right
+      // Inspector and KEEP the map open (instead of the tear-down + hidden-center render below).
+      var _ngt = document.getElementById('nodeGraphTab');
+      if (_ngt && _ngt.classList.contains('active') && typeof window.p86NgShowSection === 'function') {
+        window.p86NgShowSection(targetId);
+        return;
+      }
       tabs.forEach(function(t) {
         t.classList.toggle('active', t.getAttribute('data-panel') === targetId);
       });
