@@ -2286,6 +2286,37 @@ function renderBuildingMetrics(){
 // levels/units) when a building is selected, a light header for other node types
 // (full per-type editing lands in Slice 3). Pure function of selN + getJobWIP,
 // re-rendered every render() pass so edits reflect immediately.
+// ── Left-sidebar SECTION → right Inspector (map-as-job-page) ─────────────────────────────
+// With the map open, clicking a section tab in the app sidebar routes that section into the
+// right Inspector (instead of activateTab closing the map). We MOVE the real section panel
+// (#job-overview etc.) into the inspector body + call its global renderer, and move it back
+// to #wsRightContent on node-select or map close.
+var _inspSection=null, _inspSectionPanel=null;
+var WS_SECTION_RENDERERS={'job-overview':'renderJobOverview','job-wip-report':'renderWipTab','job-qb-costs':'renderJobQBCosts','job-subs':'renderJobSubs','job-changeorders':'renderChangeOrders','job-purchaseorders':'renderPurchaseOrders','job-invoices':'renderInvoices','job-reports':'renderJobReports'};
+function restoreSectionPanel(){
+  if(_inspSectionPanel){
+    var rc=document.getElementById('wsRightContent');
+    _inspSectionPanel.style.display='none';
+    if(rc) rc.appendChild(_inspSectionPanel);   // return the panel to the classic right-content host
+  }
+  _inspSection=null; _inspSectionPanel=null;
+}
+function showSectionInInspector(pid, tabBtn){
+  var insp=document.querySelector('.ng-inspector'); if(!insp) return;
+  var body=insp.querySelector('.ng-inspector-body'); if(!body) return;
+  restoreSectionPanel();                 // return any prior section panel first
+  selN=null;
+  document.querySelectorAll('.ws-right-tab').forEach(function(x){ x.classList.toggle('active', x===tabBtn); });
+  var hdr=insp.querySelector('.ng-inspector-hdr');
+  var lbl=tabBtn ? (tabBtn.getAttribute('aria-label')||tabBtn.textContent||'Section').trim() : 'Section';
+  if(hdr) hdr.innerHTML='<span class="ng-insp-ic">▤</span> '+luEsc(lbl)+'<span class="ng-insp-type">Section</span>';
+  var panel=document.getElementById(pid);
+  if(!panel){ _inspSection=pid; body.innerHTML='<div class="ng-insp-empty">Section unavailable.</div>'; return; }
+  _inspSection=pid; _inspSectionPanel=panel;
+  body.innerHTML=''; panel.style.display='block'; body.appendChild(panel);
+  var jid=E.job(), fn=WS_SECTION_RENDERERS[pid];
+  if(fn && typeof window[fn]==='function'){ try{ window[fn](jid); }catch(err){ if(window.console) console.warn('section render '+pid, err); } }
+}
 function renderInspector(){
   var panel=document.querySelector('.ng-inspector'); if(!panel) return;
   if(!(E.viewMode && E.viewMode()==='siteplan')) return;
@@ -2296,6 +2327,10 @@ function renderInspector(){
   var body=panel.querySelector('.ng-inspector-body'); if(!body) return;
   if((_jobChipEditing || editingId) && body.querySelector('input')) return; // mid-edit: don't clobber a focused WIP chip OR inline node/alloc input
   var sel=selN ? E.findNode(selN) : null;
+  // A left-sidebar SECTION is showing in this panel (routed here when the map is open) — keep it
+  // unless a node is now selected; selecting a node drops the section view to show node detail.
+  if(sel && _inspSectionPanel){ restoreSectionPanel(); }
+  else if(!sel && _inspSection){ return; }
   if(sel && sel.type==='t1'){
     if(hdr) hdr.innerHTML='<span class="ng-insp-ic">▤</span> '+luEsc(sel.label||'Building')+'<span class="ng-insp-type">Building</span>';
     body.innerHTML='<div class="ng-insp-sec">'+buildingKpiGridHtml(sel)+'</div><div class="ng-sp-struct"></div>';
@@ -4490,6 +4525,16 @@ function init(){
     if(ngOpenAddMenuFn) ngOpenAddMenuFn(r.left, r.bottom+4, pickNodeType);
   });
 
+  // Map-as-job-page: route app-sidebar SECTION clicks into the right Inspector while the map is
+  // open (instead of activateTab closing the map). Capture-phase pre-empts the tab's own onclick.
+  document.addEventListener('click', function(e){
+    var st=e.target.closest && e.target.closest('.ws-right-tab'); if(!st) return;
+    if(!tab.classList.contains('active')) return;     // map closed → let activateTab run normally
+    var pid=st.getAttribute('data-panel'); if(!pid) return;
+    e.stopPropagation();                              // pre-empt activateTab (which would close the map)
+    showSectionInInspector(pid, st);
+  }, true);
+
   // Drag-to-resize the right Inspector (drag its LEFT edge) — mirrors the app sidebar resizer.
   // Inspector is right-aligned, so dragging the handle left WIDENS it (invert dx). The map
   // canvas re-syncs to the new center width on release.
@@ -5188,6 +5233,7 @@ window.ngMarkSaved = function(state){ flashSaveIndicator(state || 'saved'); };
 // stays hidden after exit).
 window.closeNodeGraph=function(){
   var tab=document.getElementById('nodeGraphTab'); if(!tab) return;
+  try { restoreSectionPanel(); } catch(e){}   // return any inspector-held section panel to #wsRightContent
   if(typeof window.E !== 'undefined' && window.E && typeof window.E.saveGraph === 'function'){
     try { window.E.saveGraph(); } catch(e){ /* defensive */ }
   } else if(typeof NG !== 'undefined' && NG.saveGraph){
