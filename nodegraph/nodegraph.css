@@ -100,6 +100,11 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
 .ng-jobcard-btn{flex:1;background:rgba(79,140,255,.12);border:1px solid rgba(79,140,255,.3);color:#9cc0ff;font-size:11px;font-weight:600;padding:5px 8px;border-radius:6px;cursor:pointer}
 .ng-jobcard-btn:hover{background:rgba(79,140,255,.22);border-color:#4f8cff}
 
+/* Map-as-job-page: on desktop the app's left job-subnav sidebar is the left rail (the overlay
+   starts at its right edge via openNodeGraph), so hide the node-graph's own duplicate sidebar.
+   Mobile (<768px) keeps .ng-sidebar as the Overview bottom sheet — the app sidebar is hidden there. */
+@media (min-width:769px){ #nodeGraphTab .ng-sidebar{display:none} }
+
 /* ── Mobile (Slice 5): map full-bleed; left overview + right detail become slide-up bottom sheets,
    switched by the .ng-mobile-seg control. Keeps the map touch-pannable instead of fighting page scroll. ── */
 .ng-mobile-seg{display:none}

@@ -4987,6 +4987,10 @@ window.openNodeGraph=function(jid){
   // Position below the sticky header
   var header=document.querySelector('header');
   if(header) tab.style.top=header.offsetHeight+'px';
+  // Keep the app's left job-subnav sidebar visible: start the overlay at the sidebar's right
+  // edge (or full-width at left:0 when the sidebar is hidden, e.g. mobile <768px).
+  var _appSb=document.getElementById('app-sidebar');
+  tab.style.left=(_appSb && _appSb.offsetParent!==null && _appSb.offsetWidth>0) ? (_appSb.offsetWidth+'px') : '0';
   tab.classList.add('active');
   // Restore the persisted Clean Mode look + sync the toggle button.
   try {

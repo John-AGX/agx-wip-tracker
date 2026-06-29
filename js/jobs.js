@@ -1646,17 +1646,16 @@ function renderJobsMain() {
             renderJobsMain();
         }
 
-        // Map-as-job-page: opening a job now LANDS on the Site Plan map (the job view).
-        // The classic card page is reached as an editor via openJobClassicEditor().
+        // Map-as-job-page: opening a job renders the job detail (so workspace-layout mounts the
+        // job subnav into the LEFT app sidebar — the "normal" sidebar) and opens the Site Plan
+        // map overlay beside it (the overlay starts at the sidebar's right edge, not over it).
         function editJob(jobId) {
             appState.currentJobId = jobId;
-            prepJobForView(jobId);
-            // Keep the jobs LIST behind the map overlay so closing the map (Back) returns to it.
-            var _mv = document.getElementById('jobs-main-view'); if (_mv) _mv.style.display = 'block';
-            var _dv = document.getElementById('jobs-job-detail-view'); if (_dv) _dv.style.display = 'none';
+            renderJobDetail(jobId);
+            var _mv = document.getElementById('jobs-main-view'); if (_mv) _mv.style.display = 'none';
+            var _dv = document.getElementById('jobs-job-detail-view'); if (_dv) _dv.style.display = 'block';
             if (typeof window.p86NavSave === 'function') window.p86NavSave();
-            if (typeof window.openNodeGraph === 'function') { window.openNodeGraph(jobId); return; }
-            openJobClassicEditor(jobId);   // fallback if the node graph isn't available
+            if (typeof window.openNodeGraph === 'function') window.openNodeGraph(jobId);
         }
 
         // The job-level side effects renderJobDetail performs, WITHOUT building the classic
