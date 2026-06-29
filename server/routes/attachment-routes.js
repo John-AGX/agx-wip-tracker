@@ -471,6 +471,10 @@ function readCapForEntity(entityType) {
   // posture as leads (anyone on the team can see; org isolation is
   // enforced by the project's row org_id elsewhere).
   if (entityType === 'project')  return 'LEADS_VIEW';
+  // Task photos — any content-editor on the team can view a task's photos
+  // (tasks are a general productivity primitive: job tasks for the field, plus
+  // office to-dos). Org isolation is enforced by the task's row org_id.
+  if (entityType === 'task')     return 'JOBS_VIEW_ALL JOBS_VIEW_ASSIGNED JOBS_EDIT_ANY JOBS_EDIT_OWN LEADS_VIEW LEADS_EDIT';
   return 'LEADS_VIEW';
 }
 function writeCapForEntity(entityType) {
@@ -496,6 +500,9 @@ function writeCapForEntity(entityType) {
   // tighter (e.g. behind a per-project ACL) was considered overkill
   // for the v1 ship.
   if (entityType === 'project')  return 'LEADS_EDIT';
+  // Task photo uploads — field crew (JOBS_EDIT_OWN) attach photos to job tasks;
+  // office staff (LEADS_EDIT) can attach to their to-dos. Org-scoped by row.
+  if (entityType === 'task')     return 'JOBS_EDIT_ANY JOBS_EDIT_OWN LEADS_EDIT';
   return 'LEADS_EDIT';
 }
 

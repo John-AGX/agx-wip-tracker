@@ -234,7 +234,8 @@ function maybeNotifyAssignee(task, actorUserId, opts) {
 // dynamic-SET pattern against injection).
 const EDITABLE_FIELDS = new Set([
   'title', 'notes', 'kind', 'status', 'priority',
-  'due_date', 'assignee_user_id', 'entity_type', 'entity_id', 'checklist'
+  'due_date', 'assignee_user_id', 'entity_type', 'entity_id', 'checklist',
+  'lat', 'lng', 'geo_accuracy', 'directions'
 ]);
 
 // Validate that a candidate assignee belongs to the caller's org.
@@ -447,6 +448,14 @@ router.post('/', requireAuth, async (req, res) => {
     if (Array.isArray(body.checklist)) {
       cols.push('checklist'); vals.push('$' + pn++ + '::jsonb'); params.push(JSON.stringify(normalizeChecklist(body.checklist)));
     }
+    if (typeof body.directions === 'string') { cols.push('directions'); vals.push('$' + pn++); params.push(body.directions.slice(0, 3000)); }
+    // Geo pin — only persist when BOTH coords are valid (a half-set pin is meaningless).
+    const _glat = Number(body.lat), _glng = Number(body.lng), _gacc = Number(body.geo_accuracy);
+    if (Number.isFinite(_glat) && _glat >= -90 && _glat <= 90 && Number.isFinite(_glng) && _glng >= -180 && _glng <= 180) {
+      cols.push('lat'); vals.push('$' + pn++); params.push(_glat);
+      cols.push('lng'); vals.push('$' + pn++); params.push(_glng);
+      if (Number.isFinite(_gacc) && _gacc > 0) { cols.push('geo_accuracy'); vals.push('$' + pn++); params.push(_gacc); }
+    }
     // If created already-done, stamp completed_at.
     if (body.status === 'done') { cols.push('completed_at'); vals.push('NOW()'); }
 
@@ -505,6 +514,17 @@ router.patch('/:id', requireAuth, async (req, res) => {
         if (!PRIORITIES.has(String(val))) continue; val = String(val);
       } else if (key === 'due_date') {
         val = (val === '' || val == null) ? null : String(val);
+      } else if (key === 'directions') {
+        val = (val == null) ? null : String(val).slice(0, 3000);
+      } else if (key === 'lat' || key === 'lng' || key === 'geo_accuracy') {
+        if (val === '' || val == null) { val = null; }
+        else {
+          const _n = Number(val);
+          if (!Number.isFinite(_n)) continue;
+          if (key === 'lat' && (_n < -90 || _n > 90)) continue;
+          if (key === 'lng' && (_n < -180 || _n > 180)) continue;
+          val = _n;
+        }
       } else if (key === 'assignee_user_id') {
         if (val === '' || val == null) {
           val = null;

@@ -1105,7 +1105,7 @@ async function initSchema() {
     END $$;
     ALTER TABLE attachments
       ADD CONSTRAINT attachments_entity_type_check
-      CHECK (entity_type IN ('lead', 'estimate', 'client', 'job', 'sub', 'user', 'org', 'project'));
+      CHECK (entity_type IN ('lead', 'estimate', 'client', 'job', 'sub', 'user', 'org', 'project', 'task'));
 
     -- Folder grouping (Phase 3). Free-text folder name per attachment;
     -- 'general' is the default catch-all. Users can move files into
@@ -3151,6 +3151,14 @@ async function initSchema() {
       created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+    -- Geolocated tasks: optional map pin (lat/lng) + field-capture accuracy +
+    -- written directions/access notes. All optional; rendered as filterable pins
+    -- on the job Site Plan map.
+    ALTER TABLE tasks ADD COLUMN IF NOT EXISTS lat REAL;
+    ALTER TABLE tasks ADD COLUMN IF NOT EXISTS lng REAL;
+    ALTER TABLE tasks ADD COLUMN IF NOT EXISTS geo_accuracy REAL;
+    ALTER TABLE tasks ADD COLUMN IF NOT EXISTS directions TEXT;
+    CREATE INDEX IF NOT EXISTS idx_tasks_geo ON tasks (lat, lng) WHERE lat IS NOT NULL AND lng IS NOT NULL;
     -- "My open tasks" — powers the My Tasks page default query.
     CREATE INDEX IF NOT EXISTS idx_tasks_assignee
       ON tasks(organization_id, assignee_user_id, status)
