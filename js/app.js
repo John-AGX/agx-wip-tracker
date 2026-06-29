@@ -1798,21 +1798,15 @@
         // buttons are wired, we click Site Plan / Satellite ON if not already on (read
         // via the button's .ng-on class, since _spSatellite is module-private). The
         // node graph's own Back button (closeNodeGraph) then reveals this Map tab.
+        // Map-as-job-page: open a job from the Job Map the SAME way as the Jobs list — via editJob,
+        // so the workspace-layout job subnav mounts in the left sidebar. editJob shows
+        // #jobs-job-detail-view (the observer mounts the subnav) then opens the map, which already
+        // forces Site Plan + Satellite. (The old open-then-click-the-toggle dance skipped editJob,
+        // so the subnav never mounted and the global nav stayed.)
         window.openJobSitePlan = function (jobId) {
-            if (!jobId || typeof window.openNodeGraph !== 'function') return;
-            window.openNodeGraph(jobId);
-            var tries = 0;
-            (function force() {
-                var tab = document.getElementById('nodeGraphTab');
-                var spBtn = document.getElementById('ngSitePlanBtn');
-                var satBtn = document.getElementById('ngSatelliteBtn');
-                if ((!tab || tab.offsetWidth <= 0 || !spBtn || !satBtn) && tries++ < 40) {
-                    return void setTimeout(force, 60); // wait for overlay sizing + init() to wire the buttons
-                }
-                if (!tab || !spBtn || !satBtn) return;
-                if (!spBtn.classList.contains('ng-on')) spBtn.click();          // enter Site Plan if not already
-                setTimeout(function () { if (satBtn && !satBtn.classList.contains('ng-on')) satBtn.click(); }, 90); // then Satellite
-            })();
+            if (!jobId) return;
+            if (typeof window.editJob === 'function') { window.editJob(jobId); return; }
+            if (typeof window.openNodeGraph === 'function') window.openNodeGraph(jobId);
         };
 
         function switchTab(tabName) {
