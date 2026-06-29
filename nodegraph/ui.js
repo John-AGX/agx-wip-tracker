@@ -2114,10 +2114,35 @@ function renderInspector(){
                   : LI_TYPES[iType] ? inspectorLineItemHtml(sel)
                   : inspectorGenericHtml(sel, d);
   } else {
-    if(hdr) hdr.innerHTML='<span class="ng-insp-ic">$</span> Project WIP';
-    var wh=wipPanelHtml();
-    body.innerHTML=(wh!=null)?wh:'<div class="ng-insp-empty">No job loaded.</div>';
+    var _jb=(typeof appData!=='undefined'&&appData.jobs)?appData.jobs.find(function(j){return j.id===E.job();}):null;
+    if(hdr) hdr.innerHTML='<span class="ng-insp-ic">$</span> '+luEsc((_jb&&(_jb.title||_jb.name))||'Job Detail')+'<span class="ng-insp-type">Job</span>';
+    renderInspectorJobDetail(body);
   }
+}
+// Slice 3: the no-node Inspector hosts the JOB detail — reuses the classic job-overview
+// renderers (buildings / phases / subs). Built ONCE per job-detail entry: these mount
+// synchronous appData renderers that own their expand state, so rebuilding every render()
+// would thrash them. A selected node takes over the panel (branches above); clearing the
+// selection (body no longer has .ng-insp-jobdetail) rebuilds this with fresh numbers.
+var _inspJobKey=null;
+function renderInspectorJobDetail(body){
+  var jid=E.job(); var jk='job:'+(jid||'');
+  if(_inspJobKey===jk && body.querySelector('.ng-insp-jobdetail')) return;
+  _inspJobKey=jk;
+  var job=(typeof appData!=='undefined'&&appData.jobs)?appData.jobs.find(function(j){return j.id===jid;}):null;
+  if(!job){ body.innerHTML='<div class="ng-insp-empty">No job loaded.</div>'; return; }
+  body.innerHTML='<div class="ng-insp-jobdetail">'+
+    '<div class="ng-insp-sec" id="insp-buildings"></div>'+
+    '<div class="ng-insp-sec" id="insp-phases"></div>'+
+    '<div class="ng-insp-sec" id="insp-subs"></div><div id="insp-subs-totals"></div>'+
+  '</div>';
+  try{
+    var phases=(appData.phases||[]).filter(function(p){return p.jobId===jid;});
+    var subs=(appData.subs||[]).filter(function(s){return s.jobId===jid;});
+    if(typeof window.renderJobBuildings==='function') window.renderJobBuildings(jid,'insp-buildings');
+    if(typeof window.renderOverviewPhasesInto==='function') window.renderOverviewPhasesInto(document.getElementById('insp-phases'),jid,phases);
+    if(typeof window.renderOverviewSubsInto==='function') window.renderOverviewSubsInto(document.getElementById('insp-subs'),jid,subs);
+  }catch(e){ if(window.console) console.warn('inspector job-detail render failed', e); }
 }
 // Minimal detail for non-building node types until Slice 3 wires full per-type editing.
 function inspectorGenericHtml(sel, d){

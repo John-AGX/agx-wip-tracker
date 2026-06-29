@@ -2477,9 +2477,10 @@ function renderJobsMain() {
             return Math.max(60000, diffMs);
         }
 
-        function renderJobBuildings(jobId) {
+        function renderJobBuildings(jobId, hostId) {
             const buildings = appData.buildings.filter(b => b.jobId === jobId);
-            const container = document.getElementById('job-buildings-content');
+            const container = document.getElementById(hostId || 'job-buildings-content');
+            if (!container) return;   // host may be absent (e.g. node-graph inspector passes its own id)
             if (!buildings.length) { container.innerHTML = ''; return; }
 
             const totalBudget = buildings.reduce((s, b) => s + (b.budget || 0), 0);
