@@ -3851,7 +3851,7 @@ async function resyncDriftedAgents(force) {
          FROM managed_agent_registry r
          JOIN organizations o ON o.id = r.organization_id
         WHERE r.anthropic_agent_id IS NOT NULL
-          AND r.agent_key = 'job'`
+          AND r.agent_key IN ('job', 'assistant')`
     );
     for (const row of r.rows) {
       try {
