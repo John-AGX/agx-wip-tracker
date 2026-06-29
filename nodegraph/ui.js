@@ -2135,6 +2135,9 @@ function renderInspectorJobDetail(body){
     '<div class="ng-insp-sec" id="insp-buildings"></div>'+
     '<div class="ng-insp-sec" id="insp-phases"></div>'+
     '<div class="ng-insp-sec" id="insp-subs"></div><div id="insp-subs-totals"></div>'+
+    '<div class="ng-insp-sec" id="insp-cos"></div>'+   // renderJobChangeOrdersInto creates #insp-co inside (server-fetched)
+    '<div class="ng-insp-sec" id="insp-pos"></div>'+   // renderJobPurchaseOrdersInto creates #insp-po inside (server-fetched)
+    inspectorInvoicesHtml(jid)+                        // synchronous invoice table (appData.invoices)
   '</div>';
   try{
     var phases=(appData.phases||[]).filter(function(p){return p.jobId===jid;});
@@ -2142,7 +2145,30 @@ function renderInspectorJobDetail(body){
     if(typeof window.renderJobBuildings==='function') window.renderJobBuildings(jid,'insp-buildings');
     if(typeof window.renderOverviewPhasesInto==='function') window.renderOverviewPhasesInto(document.getElementById('insp-phases'),jid,phases);
     if(typeof window.renderOverviewSubsInto==='function') window.renderOverviewSubsInto(document.getElementById('insp-subs'),jid,subs);
+    if(typeof window.renderJobChangeOrdersInto==='function') window.renderJobChangeOrdersInto(document.getElementById('insp-cos'),jid,'insp-co');
+    if(typeof window.renderJobPurchaseOrdersInto==='function') window.renderJobPurchaseOrdersInto(document.getElementById('insp-pos'),jid,'insp-po');
   }catch(e){ if(window.console) console.warn('inspector job-detail render failed', e); }
+}
+// Compact invoice table for the Inspector (appData.invoices for this job). Narrower than
+// the classic 7-col overview table to fit the 340px panel; rows open the invoice editor.
+function inspectorInvoicesHtml(jid){
+  var invs=(typeof appData!=='undefined'&&appData.invoices)?appData.invoices.filter(function(i){return i.jobId===jid;}):[];
+  if(!invs.length) return '';
+  var total=0, paid=0;
+  invs.forEach(function(i){ total+=i.amount||0; if(i.status==='Paid') paid+=i.amount||0; });
+  var rows=invs.map(function(i){
+    var sc=i.status==='Paid'?'#34d399':i.status==='Sent'?'#fbbf24':'#8aa0c0';
+    return '<tr style="cursor:pointer;border-top:1px solid rgba(255,255,255,.05);" onclick="editInvoice(\''+luEsc(i.id)+'\')" title="Edit invoice">'+
+      '<td style="padding:5px 8px;font-weight:600;white-space:nowrap;">'+luEsc(i.invNumber||'INV')+'</td>'+
+      '<td style="padding:5px 8px;color:#aab;">'+luEsc(i.vendor||'')+'</td>'+
+      '<td style="padding:5px 8px;text-align:right;font-weight:600;white-space:nowrap;">'+E.fmtC(i.amount||0)+'</td>'+
+      '<td style="padding:5px 8px;"><span style="font-size:10px;padding:2px 7px;border-radius:9px;background:rgba(255,255,255,.06);color:'+sc+';">'+luEsc(i.status||'Draft')+'</span></td>'+
+    '</tr>';
+  }).join('');
+  return '<div class="ng-insp-sec"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;">'+
+    '<b style="font-size:12px;">Invoices ('+invs.length+')</b>'+
+    '<span style="font-size:11px;color:#8aa0c0;">Outstanding '+E.fmtC(total-paid)+'</span></div>'+
+    '<div style="overflow-x:auto;border:1px solid rgba(255,255,255,.08);border-radius:8px;"><table style="width:100%;border-collapse:collapse;font-size:12px;"><tbody>'+rows+'</tbody></table></div></div>';
 }
 // Minimal detail for non-building node types until Slice 3 wires full per-type editing.
 function inspectorGenericHtml(sel, d){
