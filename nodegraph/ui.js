@@ -1325,7 +1325,14 @@ function tryGeocodeJobThenMount(){
 }
 function mountBasemap(){
   if(!basemapEl) return;
-  _spOrigin=jobOrigin(); _spOriginGraph=siteplanCentroid(); _spOriginJob=E.job(); // stamp origin with its job
+  // Stamp the geo origin ONCE per job and FREEZE it. mountBasemap is called on every re-mount
+  // (resize → updateBasemapVisibility → mountBasemap), and _spOriginGraph = siteplanCentroid()
+  // is the AVERAGE of live node positions — re-deriving it each time made the anchor follow the
+  // nodes, so moving a node (or dragging a rail, which triggers resize) snapped every geo-anchored
+  // building. Keep the cached anchor for the current job; only (re)stamp on a job change or cold cache.
+  if(_spOriginJob!==E.job() || !_spOrigin || !_spOriginGraph){
+    _spOrigin=jobOrigin(); _spOriginGraph=siteplanCentroid(); _spOriginJob=E.job();
+  }
   if(!_spOrigin){ tryGeocodeJobThenMount(); return; } // no coords yet — geocode on demand, then retry
   showSatHint(false);
   if(_basemap){ _basemapReady=true; syncBasemapCamera(); return; }
