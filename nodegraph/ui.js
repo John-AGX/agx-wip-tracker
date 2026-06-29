@@ -1892,6 +1892,12 @@ function buildSidebar(){
     // Legacy WIP-node chip (still used by the on-canvas WIP card in non-satellite mode).
     var wchip=e.target.closest('[data-wip-edit]');
     if(wchip && !e.target.closest('input')){ e.preventDefault(); e.stopPropagation(); wipChipEdit(wchip); return; }
+    // Slice 4: left job-card "Edit details" → classic job editor (job meta: name/client/address/dates/notes).
+    var jact=e.target.closest('[data-jobact]');
+    if(jact){ e.preventDefault(); e.stopPropagation();
+      if(jact.getAttribute('data-jobact')==='edit' && typeof window.openJobClassicEditor==='function') window.openJobClassicEditor(E.job());
+      return;
+    }
     // S4: "+ Add Cost" on the selected-building panel → cost-type picker wired to it.
     var addc=e.target.closest('.ng-sp-addcost');
     if(addc){ e.preventDefault(); e.stopPropagation(); var sn=selN&&E.findNode(selN); if(sn&&sn.type==='t1'){ var br=addc.getBoundingClientRect(); addCostToBuilding(sn.id, br.left, br.bottom+4); } return; }
@@ -1983,7 +1989,8 @@ function renderSidebarJobCard(){
       {label:'Contract', value:sm(contract)},
       {label:'Profit', value:(profit<0?'-':'+')+sm(Math.abs(profit)), tone:profit<0?'neg':'pos'}
     ]
-  }, {compact:true});
+  }, {compact:true})+
+    '<div class="ng-jobcard-actions"><button class="ng-jobcard-btn" data-jobact="edit" title="Edit job details — name, client, address, dates, notes">Edit details</button></div>';
 }
 function renderSidebarMetrics(){
   if(!(E.viewMode && E.viewMode()==='siteplan')) return; // Site Plan only (the left rail is the job overview there)

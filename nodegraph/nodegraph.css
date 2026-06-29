@@ -96,6 +96,9 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
 .ng-sidebar-header{padding:10px 12px;font-size:11px;font-weight:700;color:var(--ng-dim2);text-transform:uppercase;letter-spacing:.5px;border-bottom:1px solid var(--ng-border2);display:flex;align-items:center;justify-content:space-between;gap:6px}
 .ng-sidebar-jobcard{padding:8px 8px 4px}
 .ng-sidebar-jobcard:empty{display:none}
+.ng-jobcard-actions{display:flex;gap:6px;margin-top:7px}
+.ng-jobcard-btn{flex:1;background:rgba(79,140,255,.12);border:1px solid rgba(79,140,255,.3);color:#9cc0ff;font-size:11px;font-weight:600;padding:5px 8px;border-radius:6px;cursor:pointer}
+.ng-jobcard-btn:hover{background:rgba(79,140,255,.22);border-color:#4f8cff}
 .ng-sidebar-toggle{background:transparent;border:1px solid var(--ng-border2);color:var(--ng-dim2);width:18px;height:18px;border-radius:3px;font-size:9px;line-height:1;cursor:pointer;padding:0;flex-shrink:0}
 .ng-sidebar-toggle:hover{color:#6aa3ff;border-color:#4f8cff}
 .ng-sidebar-search{padding:8px 10px;border-bottom:1px solid var(--ng-border2)}

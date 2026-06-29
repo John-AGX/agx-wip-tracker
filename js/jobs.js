@@ -1646,15 +1646,48 @@ function renderJobsMain() {
             renderJobsMain();
         }
 
+        // Map-as-job-page: opening a job now LANDS on the Site Plan map (the job view).
+        // The classic card page is reached as an editor via openJobClassicEditor().
         function editJob(jobId) {
+            appState.currentJobId = jobId;
+            prepJobForView(jobId);
+            // Keep the jobs LIST behind the map overlay so closing the map (Back) returns to it.
+            var _mv = document.getElementById('jobs-main-view'); if (_mv) _mv.style.display = 'block';
+            var _dv = document.getElementById('jobs-job-detail-view'); if (_dv) _dv.style.display = 'none';
+            if (typeof window.p86NavSave === 'function') window.p86NavSave();
+            if (typeof window.openNodeGraph === 'function') { window.openNodeGraph(jobId); return; }
+            openJobClassicEditor(jobId);   // fallback if the node graph isn't available
+        }
+
+        // The job-level side effects renderJobDetail performs, WITHOUT building the classic
+        // DOM — so the map view (left card + Inspector) reads accurate numbers.
+        function prepJobForView(jobId) {
+            const job = appData.jobs.find(j => j.id === jobId);
+            if (!job || job._canEdit === false) return;
+            recalcSubCosts(jobId, { force: true });
+            if (!job.pctCompleteManual) {
+                const hasPhases = appData.phases.filter(p => p.jobId === jobId).length > 0;
+                const hasBuildings = appData.buildings.filter(b => b.jobId === jobId).length > 0;
+                if (hasPhases || hasBuildings) job.pctComplete = Math.round(calcJobPctComplete(jobId) * 10) / 10;
+            }
+            saveData();
+        }
+
+        // The classic card detail page — now an "Edit details" editor reached from the map
+        // (job meta: name / client / address / dates / notes). Closes the map overlay if open.
+        function openJobClassicEditor(jobId) {
             appState.currentJobId = jobId;
             renderJobDetail(jobId);
             document.getElementById('jobs-main-view').style.display = 'none';
             document.getElementById('jobs-job-detail-view').style.display = 'block';
-            // Persist nav state so a refresh lands back on this job
-            // detail rather than the Jobs list root.
+            const ng = document.getElementById('nodeGraphTab');
+            if (ng && ng.classList.contains('active')) {
+                if (typeof window.closeNodeGraph === 'function') window.closeNodeGraph();
+                else ng.classList.remove('active');
+            }
             if (typeof window.p86NavSave === 'function') window.p86NavSave();
         }
+        window.openJobClassicEditor = openJobClassicEditor;
 
         function backToJobsMain() {
             // If the node graph is up as a fullscreen overlay, save +
