@@ -7080,6 +7080,31 @@ const READ_TOOLS = [
       },
     },
   },
+  {
+    name: 'read_receipts',
+    description:
+      'Read the COST INBOX — field-captured cost receipts (photo + amount + cost code) linked to a job or lead. ' +
+      'Use this for ANY question about uploaded receipts: "how many receipts have I uploaded", "what\'s my total in the cost inbox", ' +
+      '"receipts on job X", "materials receipts this month", "how much have we spent on subs", "which receipts are missing an amount". ' +
+      'Returns counts + DOLLAR TOTALS overall and broken down by cost type, plus how many are still unprocessed or missing an amount, ' +
+      'and pre-sale (lead) totals. Org-scoped to the caller. ' +
+      'Filters (all optional): entity_type ("job"|"lead") + entity_id to scope to one job/lead; cost_code (materials|labor|sub|gc); ' +
+      'status (unprocessed|processed|void|all — default excludes voided); from/to (YYYY-MM-DD on the purchase date). ' +
+      'Pass limit:N (1-50) to ALSO list the most recent N receipts individually (vendor, amount, date, link, status).',
+    tier: 'auto',
+    input_schema: {
+      type: 'object',
+      properties: {
+        entity_type: { type: 'string', enum: ['job', 'lead'], description: 'Scope to receipts linked to a job or a lead. Pair with entity_id.' },
+        entity_id: { type: 'string', description: 'The job/lead id (use with entity_type). Find it via search_entities if you only know the name.' },
+        cost_code: { type: 'string', enum: ['materials', 'labor', 'sub', 'gc'], description: 'Filter to one cost type.' },
+        status: { type: 'string', enum: ['unprocessed', 'processed', 'void', 'all'], description: 'Default excludes voided; "all" includes voided.' },
+        from: { type: 'string', description: 'Earliest purchase date, YYYY-MM-DD.' },
+        to: { type: 'string', description: 'Latest purchase date, YYYY-MM-DD.' },
+        limit: { type: 'integer', minimum: 1, maximum: 50, description: 'Also list the most recent N receipts individually.' },
+      },
+    },
+  },
 ];
 
 // Wave 3 — workflow + compliance read tools. Auto-tier so 86 can
@@ -8789,6 +8814,90 @@ async function execStaffTool(name, input, ctx) {
           (days != null ? ' · age ' + days + 'd' : ''));
       }
       return out.join('\n');
+    }
+
+    case 'read_receipts': {
+      // Cost Inbox read — counts + $ totals, org-scoped. Resolve the caller's
+      // org from ctx.userId (receipts are shared org data; never cross-org).
+      let orgId = null;
+      try {
+        if (ctx && ctx.userId) {
+          const orgRow = await pool.query('SELECT organization_id FROM users WHERE id = $1', [ctx.userId]);
+          orgId = orgRow.rows[0] && orgRow.rows[0].organization_id;
+        }
+      } catch (_) { /* fall through to the guard below */ }
+      if (!orgId) return 'Could not determine your organization, so I can\'t read the Cost Inbox right now.';
+
+      const inp = input || {};
+      const where = ['r.organization_id = $1'];
+      const params = [orgId];
+      let p = 2;
+      const status = String(inp.status || '').toLowerCase();
+      if (status === 'unprocessed' || status === 'processed' || status === 'void') { where.push('r.status = $' + p++); params.push(status); }
+      else if (status !== 'all') where.push("r.status <> 'void'"); // default hides voided
+      if (inp.cost_code && ['materials', 'labor', 'sub', 'gc'].includes(String(inp.cost_code))) { where.push('r.cost_code = $' + p++); params.push(String(inp.cost_code)); }
+      if (inp.entity_type === 'job' || inp.entity_type === 'lead') {
+        where.push('r.entity_type = $' + p++); params.push(inp.entity_type);
+        if (inp.entity_id) { where.push('r.entity_id = $' + p++); params.push(String(inp.entity_id)); }
+      }
+      if (inp.from && /^\d{4}-\d{2}-\d{2}$/.test(String(inp.from))) { where.push('r.purchased_at >= $' + p++); params.push(String(inp.from)); }
+      if (inp.to && /^\d{4}-\d{2}-\d{2}$/.test(String(inp.to))) { where.push('r.purchased_at <= $' + p++); params.push(String(inp.to)); }
+      const W = where.join(' AND ');
+
+      const sum = await pool.query(
+        `SELECT COUNT(*)::int AS n,
+                COALESCE(SUM(r.amount), 0)::numeric(14,2) AS total,
+                COUNT(*) FILTER (WHERE r.status = 'unprocessed')::int AS unprocessed,
+                COUNT(*) FILTER (WHERE r.amount IS NULL OR r.amount = 0)::int AS missing_amount,
+                COALESCE(SUM(r.amount) FILTER (WHERE r.is_presale), 0)::numeric(14,2) AS presale_total
+           FROM receipts r WHERE ${W}`,
+        params
+      );
+      const byCode = await pool.query(
+        `SELECT r.cost_code, COUNT(*)::int AS n, COALESCE(SUM(r.amount), 0)::numeric(14,2) AS total
+           FROM receipts r WHERE ${W} GROUP BY r.cost_code ORDER BY total DESC`,
+        params
+      );
+      const s = sum.rows[0] || {};
+      const fmt = (n) => '$' + Number(n || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      const scopeBits = [];
+      if (inp.entity_type) scopeBits.push(inp.entity_type + (inp.entity_id ? ' ' + inp.entity_id : 's'));
+      if (inp.cost_code) scopeBits.push(inp.cost_code);
+      if (status && status !== 'all') scopeBits.push(status);
+      if (inp.from || inp.to) scopeBits.push((inp.from || '…') + ' to ' + (inp.to || '…'));
+      const scope = scopeBits.length ? ' (' + scopeBits.join(', ') + ')' : '';
+      const lines = [];
+      lines.push('Cost Inbox' + scope + ' — ' + (s.n || 0) + ' receipt' + ((s.n === 1) ? '' : 's') + ', total ' + fmt(s.total) + '.');
+      if (s.unprocessed) lines.push((s.unprocessed) + ' still unprocessed (incomplete).');
+      if (s.missing_amount) lines.push((s.missing_amount) + ' have no amount entered yet.');
+      if (Number(s.presale_total) > 0) lines.push('Pre-sale (lead) costs included: ' + fmt(s.presale_total) + '.');
+      if (byCode.rows.length && (s.n || 0) > 0) {
+        lines.push('By cost type:');
+        for (const c of byCode.rows) lines.push('  - ' + (c.cost_code || 'uncoded') + ': ' + c.n + ' · ' + fmt(c.total));
+      }
+      const listLimit = Math.max(0, Math.min(50, Number(inp.limit) || 0));
+      if (listLimit && (s.n || 0) > 0) {
+        const rowsQ = await pool.query(
+          `SELECT r.vendor, r.amount, r.cost_code, r.is_presale, r.status, r.purchased_at, r.entity_type, r.entity_id
+             FROM receipts r WHERE ${W}
+            ORDER BY COALESCE(r.purchased_at, r.created_at::date) DESC, r.created_at DESC
+            LIMIT ${listLimit}`,
+          params
+        );
+        if (rowsQ.rows.length) {
+          lines.push('');
+          lines.push('Receipts:');
+          for (const x of rowsQ.rows) {
+            lines.push('  - ' + (x.vendor || '(no vendor)') +
+              ' · ' + (x.amount != null && Number(x.amount) > 0 ? fmt(x.amount) : 'no amount') +
+              ' · ' + (x.is_presale ? 'pre-sale' : (x.cost_code || 'uncoded')) +
+              (x.purchased_at ? ' · ' + String(x.purchased_at).slice(0, 10) : '') +
+              ' · ' + (x.status || 'unprocessed') +
+              (x.entity_type ? ' · ' + x.entity_type + ' ' + x.entity_id : ' · unlinked'));
+          }
+        }
+      }
+      return lines.join('\n');
     }
 
     case 'read_clients': {
@@ -12403,6 +12512,8 @@ const ALLOWED_AUTO_TIER_TOOLS = new Set([
   // Location-aware "near me" — jobs/leads near a lat/lng (haversine).
   // Auto-tier read; routed through execConsolidatedRead like the two above.
   'find_entities_near',
+  // Cost Inbox receipts — counts + $ totals (executor: execStaffTool below). Pure read.
+  'read_receipts',
   // Project 86 Payload DSL — 86's ONE write primitive. Validates +
   // INSERTs a payloads row inline so the file artifact appears in
   // chat immediately. Auto-tier because the commit gate is the user
