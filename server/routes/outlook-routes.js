@@ -24,6 +24,7 @@ const { requireAuth } = require('../auth');
 const secretbox = require('../util/secretbox');
 const oauthState = require('../util/oauth-state');
 const msal = require('../services/msal');
+const outlookMail = require('../services/outlook-mail');
 
 const router = express.Router();
 const PROVIDER = 'microsoft';
@@ -162,6 +163,29 @@ router.delete('/api/me/outlook', requireAuth, async (req, res) => {
   } catch (e) {
     console.error('[outlook] disconnect failed:', e && e.message);
     res.status(500).json({ error: 'Could not disconnect Outlook.' });
+  }
+});
+
+// GET /api/me/outlook/messages — read the caller's own inbox (metadata only:
+// sender / subject / received / read-flag / webLink). Read-only Mail.ReadBasic.
+// Query: top (1-25, default 10), unread=1. Owner-scoped to the caller.
+router.get('/api/me/outlook/messages', requireAuth, async (req, res) => {
+  try {
+    const orgId = callerOrgId(req);
+    if (!orgId) return res.status(403).json({ error: 'No organization on the current user.' });
+    const out = await outlookMail.readInbox(orgId, callerUserId(req), {
+      top: req.query.top,
+      unread: String(req.query.unread || '') === '1',
+    });
+    if (!out.ok) {
+      const code = (out.error === 'not_connected' || out.error === 'reauth') ? 409
+                 : (out.error === 'unconfigured') ? 503 : 502;
+      return res.status(code).json({ error: out.error });
+    }
+    res.json(out);
+  } catch (e) {
+    console.error('[outlook] messages failed:', e && e.message);
+    res.status(500).json({ error: 'Could not read Outlook mail.' });
   }
 });
 

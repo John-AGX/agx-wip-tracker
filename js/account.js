@@ -196,6 +196,10 @@
             '<span class="p86-acct-status" id="p86-acct-pwstatus"></span></div>' +
         '</div>' +
         '<div class="p86-acct-section">' +
+          '<div class="p86-acct-sectlabel">Outlook</div>' +
+          '<div id="p86-acct-outlook" style="font-size:13px;color:var(--text-dim,#888);">Checking…</div>' +
+        '</div>' +
+        '<div class="p86-acct-section">' +
           '<div class="p86-acct-sectlabel">Email notifications</div>' +
           '<div id="p86-acct-prefs" style="display:flex;flex-direction:column;gap:14px;">' +
             '<div style="font-size:11px;color:var(--text-dim,#888);">Loading…</div>' +
@@ -210,6 +214,7 @@
     document.getElementById('p86AccountClose').addEventListener('click', function() { modal.remove(); });
     document.getElementById('p86-acct-save').addEventListener('click', function() { saveProfile(me); });
     document.getElementById('p86-acct-pwsave').addEventListener('click', changePassword);
+    loadOutlook();
 
     // Load the full self row (phone / title / timezone / created / last-seen +
     // prefs) from the staff directory; match self by id or email.
@@ -354,10 +359,78 @@
     });
   }
 
+  // Outlook connection — read-only mail link (Phase 4). Shows connect /
+  // connected+disconnect based on /api/me/outlook/status.
+  function loadOutlook() {
+    var el = document.getElementById('p86-acct-outlook');
+    if (!el || !window.p86Api || !window.p86Api.outlook) { if (el) el.textContent = ''; return; }
+    el.textContent = 'Checking…';
+    window.p86Api.outlook.status().then(function(s) {
+      if (!s || !s.configured) {
+        el.innerHTML = '<span style="color:var(--text-dim,#888);">Outlook isn\'t set up on this server yet.</span>';
+        return;
+      }
+      if (s.connected) {
+        el.innerHTML =
+          '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
+            '<span>✅ Connected: <strong>' + escapeHTML(s.email || '') + '</strong></span>' +
+            '<button class="ee-btn" id="p86-acct-ol-disc">Disconnect</button>' +
+          '</div>' +
+          '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:5px;">Read-only — 86 can read your inbox (senders &amp; subjects), never send.</div>';
+        var d = document.getElementById('p86-acct-ol-disc');
+        if (d) d.addEventListener('click', function() {
+          d.disabled = true; d.textContent = 'Disconnecting…';
+          window.p86Api.outlook.disconnect().then(function() { loadOutlook(); })
+            .catch(function() { d.disabled = false; d.textContent = 'Disconnect'; });
+        });
+      } else {
+        el.innerHTML =
+          '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
+            '<button class="ee-btn primary" id="p86-acct-ol-conn">Connect Outlook</button>' +
+            '<span style="font-size:12px;color:var(--text-dim,#888);">Read-only — lets 86 read your inbox.</span>' +
+          '</div>';
+        var c = document.getElementById('p86-acct-ol-conn');
+        if (c) c.addEventListener('click', function() {
+          c.disabled = true; c.textContent = 'Connecting…';
+          window.p86Api.outlook.connect().then(function(r) {
+            if (r && r.url) { window.location.href = r.url; }
+            else { c.disabled = false; c.textContent = 'Connect Outlook'; }
+          }).catch(function(e) {
+            c.disabled = false; c.textContent = 'Connect Outlook';
+            el.insertAdjacentHTML('beforeend', '<div style="color:#f87171;font-size:12px;margin-top:6px;">' + escapeHTML((e && e.message) || 'Could not start the connection.') + '</div>');
+          });
+        });
+      }
+    }).catch(function() { el.textContent = ''; });
+  }
+
+  // Surface the Outlook OAuth callback result. The /auth/microsoft/callback
+  // route redirects to /?outlook=<status>; show a toast + strip the param.
+  function handleOutlookCallback() {
+    var m = /[?&]outlook=([a-z]+)/.exec(location.search || '');
+    if (!m) return;
+    var code = m[1];
+    var ok = code === 'connected';
+    var msg = ok ? 'Outlook connected — 86 can now read your inbox.'
+            : code === 'denied' ? 'Outlook connection was cancelled.'
+            : code === 'unconfigured' ? 'Outlook isn\'t set up on this server yet.'
+            : 'Outlook connection failed (' + code + ').';
+    try {
+      if (window.p86Toast && window.p86Toast.show) window.p86Toast.show(msg, ok ? 'success' : 'error');
+      else if (typeof window.p86Toast === 'function') window.p86Toast(msg, ok ? 'success' : 'error');
+      else alert(msg);
+    } catch (_) {}
+    try {
+      var clean = (location.search || '').replace(/([?&])outlook=[a-z]+/, '$1').replace(/[?&]+$/, '').replace(/[?&]&/, '?');
+      history.replaceState(null, '', location.pathname + (clean && clean !== '?' ? clean : '') + (location.hash || ''));
+    } catch (_) {}
+  }
+
   // Wire the header button.
   document.addEventListener('DOMContentLoaded', function() {
     var btn = document.getElementById('account-btn');
     if (btn) btn.addEventListener('click', openMyAccount);
+    handleOutlookCallback();
   });
 
   window.openMyAccount = openMyAccount;

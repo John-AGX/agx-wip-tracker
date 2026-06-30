@@ -7105,6 +7105,22 @@ const READ_TOOLS = [
       },
     },
   },
+  {
+    name: 'read_outlook_mail',
+    description:
+      'Read the signed-in user\'s OWN Outlook inbox — read-only, metadata only (sender, subject, received time, read/unread, link). ' +
+      'Use for "what\'s in my inbox", "any new emails", "did I get anything from [person]", "what are my unread emails". ' +
+      'Only the user who connected their own mailbox can read it — you can never read anyone else\'s. Email bodies + attachments are NOT available. ' +
+      'If the user has not connected Outlook, the tool says so — tell them to connect it from My Account.',
+    tier: 'auto',
+    input_schema: {
+      type: 'object',
+      properties: {
+        top: { type: 'integer', minimum: 1, maximum: 25, description: 'How many recent messages to return (default 10).' },
+        unread: { type: 'boolean', description: 'true = only unread messages.' },
+      },
+    },
+  },
 ];
 
 // Wave 3 — workflow + compliance read tools. Auto-tier so 86 can
@@ -8897,6 +8913,35 @@ async function execStaffTool(name, input, ctx) {
           }
         }
       }
+      return lines.join('\n');
+    }
+
+    case 'read_outlook_mail': {
+      // The caller's OWN inbox only. Resolve org + user from ctx; never another mailbox.
+      const userId = (ctx && ctx.userId) || null;
+      let orgId = (ctx && ctx.orgId) || null;
+      try {
+        if (userId && !orgId) {
+          const r = await pool.query('SELECT organization_id FROM users WHERE id = $1', [userId]);
+          orgId = r.rows[0] && r.rows[0].organization_id;
+        }
+      } catch (_) { /* fall through to guard */ }
+      if (!userId || !orgId) return 'I could not identify your account, so I can\'t read your Outlook inbox.';
+      const outlookMail = require('../services/outlook-mail');
+      const wantUnread = !!(input && input.unread);
+      const out = await outlookMail.readInbox(orgId, userId, { top: (input && input.top) || 10, unread: wantUnread });
+      if (!out.ok) {
+        if (out.error === 'not_connected') return 'Your Outlook isn\'t connected yet. Connect it from My Account (the "Connect Outlook" button), then ask me again.';
+        if (out.error === 'reauth') return 'Your Outlook connection expired — reconnect it from My Account, then ask me again.';
+        if (out.error === 'unconfigured') return 'Outlook isn\'t set up on this server yet.';
+        return 'Could not read your Outlook inbox right now (' + out.error + ').';
+      }
+      if (!out.messages.length) return 'Your inbox' + (wantUnread ? ' (unread)' : '') + ' is empty' + (out.email ? ' — ' + out.email : '') + '.';
+      const fmtWhen = (s) => { if (!s) return ''; const d = new Date(s); return isNaN(d.getTime()) ? '' : d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); };
+      const lines = ['Inbox' + (out.email ? ' — ' + out.email : '') + ' (' + out.messages.length + (wantUnread ? ' unread' : ' most recent') + '):'];
+      out.messages.forEach((m) => {
+        lines.push('- ' + (m.isRead ? '' : '● ') + m.from + ' — ' + m.subject + (m.received ? ' · ' + fmtWhen(m.received) : ''));
+      });
       return lines.join('\n');
     }
 
@@ -12514,6 +12559,8 @@ const ALLOWED_AUTO_TIER_TOOLS = new Set([
   'find_entities_near',
   // Cost Inbox receipts — counts + $ totals (executor: execStaffTool below). Pure read.
   'read_receipts',
+  // Outlook inbox — the caller's own mail (metadata only). Pure read.
+  'read_outlook_mail',
   // Project 86 Payload DSL — 86's ONE write primitive. Validates +
   // INSERTs a payloads row inline so the file artifact appears in
   // chat immediately. Auto-tier because the commit gate is the user

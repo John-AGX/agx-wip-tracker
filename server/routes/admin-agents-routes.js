@@ -2352,7 +2352,7 @@ function customToolsFor(agentKey, opts) {
   if (agentKey === 'assistant') {
     const ASSISTANT_TOOL_NAMES = new Set([
       // Reads
-      'read_entity', 'search_entities', 'find_entities_near', 'search_reference_sheet', 'read_receipts',
+      'read_entity', 'search_entities', 'find_entities_near', 'search_reference_sheet', 'read_receipts', 'read_outlook_mail',
       'read_attachment_text', 'view_attachment_image',
       // Memory
       'remember', 'recall', 'list_memories', 'forget',
@@ -2440,6 +2440,7 @@ function customToolsFor(agentKey, opts) {
       'search_entities',       // by-filter search (any entity_type)
       'find_entities_near',    // jobs/leads near a lat/lng (location-aware)
       'read_receipts',         // Cost Inbox — receipt counts + $ totals (by job/lead/cost code)
+      'read_outlook_mail',     // the caller's own Outlook inbox (read-only, metadata)
       'search_reference_sheet',// live SharePoint reference data
       // ── Attachments (2) ──
       'read_attachment_text',  // read PDFs/Word the user uploads
