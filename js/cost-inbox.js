@@ -120,8 +120,10 @@
   }
 
   // ── List page ─────────────────────────────────────────────────────
-  var _filters = { job: '', status: '', q: '' };
+  var _filters = { job: '', status: '', q: '', user: '' };
   var _receipts = [];
+  var _selected = {};        // id -> true (multi-select for export)
+  var _visibleRows = [];     // the currently filtered/sorted rows on screen
   // Column/row table is the only list view. Table sort state:
   var _tsort = { key: '', dir: 'desc' };
 
@@ -148,10 +150,14 @@
       '<div class="ci-wrap">' +
         '<div class="ci-head">' +
           '<div><div class="ci-title">Cost Inbox</div><div class="ci-ocr-stat" id="ciOcrStat"></div></div>' +
-          '<button class="ci-btn ci-btn-primary" id="ciNew">+ New Receipt</button>' +
+          '<div style="display:flex;gap:8px;align-items:center;">' +
+            '<button class="ci-btn" id="ciExport" type="button" title="Export to Excel">⬇ Export to Excel</button>' +
+            '<button class="ci-btn ci-btn-primary" id="ciNew">+ New Receipt</button>' +
+          '</div>' +
         '</div>' +
         '<div class="ci-toolbar">' +
           '<select id="ciJobFilter" class="ci-input"><option value="">All jobs, leads &amp; categories</option></select>' +
+          '<select id="ciUserFilter" class="ci-input"><option value="">All uploaders</option></select>' +
           '<select id="ciStatusFilter" class="ci-input">' +
             '<option value="">Unprocessed + Processed</option>' +
             '<option value="unprocessed">Unprocessed</option>' +
@@ -160,16 +166,21 @@
           '</select>' +
           '<input type="text" id="ciSearch" class="ci-input ci-search" placeholder="Search vendor, amount, notes, ID…" />' +
           '<div class="ci-total" id="ciTotal"></div>' +
+          '<span class="ci-selinfo" id="ciSelInfo"></span>' +
         '</div>' +
         '<div class="ci-list" id="ciList"><div class="ci-empty">Loading…</div></div>' +
       '</div>';
 
     document.getElementById('ciNew').addEventListener('click', function () { openReceiptModal(null); });
+    var expBtn = document.getElementById('ciExport');
+    if (expBtn) expBtn.addEventListener('click', function () { exportToExcel(currentExportRows()); });
     renderOcrStat();
     var sEl = document.getElementById('ciSearch');
     sEl.addEventListener('input', function () { _filters.q = sEl.value || ''; renderList(); });
     document.getElementById('ciStatusFilter').addEventListener('change', function (e) { _filters.status = e.target.value; reload(); });
     document.getElementById('ciJobFilter').addEventListener('change', function (e) { _filters.job = e.target.value; reload(); });
+    var uEl = document.getElementById('ciUserFilter');
+    if (uEl) uEl.addEventListener('change', function (e) { _filters.user = e.target.value; renderList(); });
 
     loadEntities().then(function () {
       // populate the job/lead filter
@@ -200,10 +211,31 @@
     if (_filters.job) { var jf = _filters.job.split(':'); opts.entity_type = jf[0]; opts.entity_id = jf[1]; }
     window.p86Api.receipts.list(opts).then(function (r) {
       _receipts = (r && r.receipts) || [];
+      populateUserFilter();
       renderList();
     }).catch(function () {
       if (listEl) listEl.innerHTML = '<div class="ci-empty">Could not load receipts.</div>';
     });
+  }
+
+  // Build the "uploaded by" filter from the distinct uploaders in the loaded set,
+  // preserving the current pick. Lets you scope to one user, then Select all.
+  function populateUserFilter() {
+    var sel = document.getElementById('ciUserFilter');
+    if (!sel) return;
+    var seen = {};
+    var users = [];
+    _receipts.forEach(function (r) {
+      if (r.entered_by == null) return;
+      var k = String(r.entered_by);
+      if (seen[k]) return; seen[k] = true;
+      users.push({ id: k, name: r.entered_by_name || ('User ' + k) });
+    });
+    users.sort(function (a, b) { return a.name.toLowerCase().localeCompare(b.name.toLowerCase()); });
+    var opts = ['<option value="">All uploaders</option>'];
+    users.forEach(function (u) { opts.push('<option value="' + esc(u.id) + '">' + esc(u.name) + '</option>'); });
+    sel.innerHTML = opts.join('');
+    sel.value = _filters.user || '';
   }
 
   function renderList() {
@@ -213,12 +245,14 @@
     var jobF = _filters.job ? _filters.job.split(':') : null; // ['job', id]
     var rows = _receipts.filter(function (r) {
       if (jobF && !(r.entity_type === jobF[0] && String(r.entity_id) === jobF[1])) return false;
+      if (_filters.user && String(r.entered_by) !== String(_filters.user)) return false;
       if (q) {
         var hay = [(r.vendor || ''), (r.ref || ''), (r.notes || ''), String(r.amount || ''), entityLabel(r.entity_type, r.entity_id)].join(' ').toLowerCase();
         if (hay.indexOf(q) === -1) return false;
       }
       return true;
     });
+    _visibleRows = rows;
     // running total of the visible (non-void) set
     var total = rows.reduce(function (s, r) { return s + (r.status === 'void' ? 0 : Number(r.amount || 0)); }, 0);
     var totEl = document.getElementById('ciTotal');
@@ -241,8 +275,9 @@
   function ciCodeLabel(r) { return r.is_presale ? 'Pre-sale' : (CODE_LABEL[r.cost_code] || r.cost_code || ''); }
   // Clicking a row opens the read-only viewer (NOT straight to edit).
   function wireRowOpen(listEl) {
-    listEl.querySelectorAll('[data-id]').forEach(function (row) {
-      row.addEventListener('click', function () {
+    listEl.querySelectorAll('tr[data-id]').forEach(function (row) {
+      row.addEventListener('click', function (e) {
+        if (e.target.closest('.ci-td-check')) return; // checkbox cell — never opens the viewer
         var rec = _receipts.find(function (x) { return String(x.id) === String(row.getAttribute('data-id')); });
         if (rec) openReceiptViewer(rec);
       });
@@ -298,7 +333,9 @@
       });
     } else { defaultSort(rows); }
     listEl.className = '';
-    var thead = '<thead><tr>' + CI_COLS.map(function (c) {
+    var thead = '<thead><tr>' +
+      '<th class="ci-th-check"><input type="checkbox" id="ciSelAll" title="Select all" /></th>' +
+      CI_COLS.map(function (c) {
       if (!c.sort) return '<th class="ci-th-photo"></th>';
       var sc = (_tsort.key === c.key) ? (' sortable sort-' + (_tsort.dir === 'asc' ? 'asc' : 'desc')) : ' sortable';
       return '<th class="' + (c.num ? 'num' : '') + sc + '" data-sort="' + c.key + '">' + esc(c.label) + '</th>';
@@ -308,6 +345,7 @@
       var ent = entityLabel(r.entity_type, r.entity_id);
       var amt = (r.amount != null && Number(r.amount) > 0) ? money(r.amount) : '<span class="ci-need">—</span>';
       return '<tr class="ci-trow" data-id="' + esc(r.id) + '">' +
+        '<td class="ci-td-check"><input type="checkbox" class="ci-rowcheck" data-id="' + esc(r.id) + '"' + (_selected[r.id] ? ' checked' : '') + ' /></td>' +
         '<td class="ci-td-photo"><span class="ci-thumb ci-thumb-sm">' + (thumb ? '<img src="' + esc(thumb) + '" alt="" loading="lazy" />' : THUMB_PH) + '</span></td>' +
         '<td class="ci-td-vendor">' + esc(r.vendor || '(no vendor)') + '</td>' +
         '<td class="num">' + amt + '</td>' +
@@ -327,7 +365,115 @@
         renderList();
       });
     });
+    // Per-row select. stopPropagation so checking a box never opens the viewer.
+    listEl.querySelectorAll('.ci-rowcheck').forEach(function (cb) {
+      cb.addEventListener('click', function (e) { e.stopPropagation(); });
+      cb.addEventListener('change', function () {
+        var id = cb.getAttribute('data-id');
+        if (cb.checked) _selected[id] = true; else delete _selected[id];
+        syncSelAll(); updateSelInfo();
+      });
+    });
+    // Master "select all" = all CURRENTLY VISIBLE rows (respects job/user/search
+    // filters), so "select all for this job" / "for this user" = filter then tick.
+    var selAll = document.getElementById('ciSelAll');
+    if (selAll) {
+      selAll.addEventListener('change', function () {
+        _visibleRows.forEach(function (r) { if (selAll.checked) _selected[r.id] = true; else delete _selected[r.id]; });
+        renderTableView(listEl, _visibleRows); // re-render to reflect every checkbox
+      });
+    }
+    syncSelAll(); updateSelInfo();
     wireRowOpen(listEl);
+  }
+
+  // Reflect how many visible rows are selected in the master checkbox (checked /
+  // unchecked / indeterminate).
+  function syncSelAll() {
+    var selAll = document.getElementById('ciSelAll');
+    if (!selAll) return;
+    var vis = _visibleRows.length;
+    var sel = _visibleRows.reduce(function (n, r) { return n + (_selected[r.id] ? 1 : 0); }, 0);
+    selAll.checked = vis > 0 && sel === vis;
+    selAll.indeterminate = sel > 0 && sel < vis;
+  }
+
+  // Selection-count chip + a Clear link in the toolbar; tells the Export button
+  // whether it'll send the selection or the whole filtered view.
+  function updateSelInfo() {
+    var el = document.getElementById('ciSelInfo');
+    if (!el) return;
+    var n = Object.keys(_selected).length;
+    if (!n) { el.innerHTML = ''; return; }
+    el.innerHTML = '<strong>' + n + '</strong> selected · <a href="#" id="ciSelClear">clear</a>';
+    var clr = document.getElementById('ciSelClear');
+    if (clr) clr.addEventListener('click', function (e) { e.preventDefault(); _selected = {}; renderList(); });
+  }
+
+  // Rows the Export should write: the explicit selection (across the loaded set)
+  // if any boxes are ticked, otherwise everything in the current filtered view.
+  function currentExportRows() {
+    var ids = Object.keys(_selected);
+    if (ids.length) return _receipts.filter(function (r) { return _selected[r.id]; });
+    return _visibleRows.slice();
+  }
+
+  // SheetJS loads lazily from CDN (same as job-costs-import / leads import).
+  function ensureXLSX() {
+    return new Promise(function (resolve, reject) {
+      if (typeof XLSX !== 'undefined') return resolve(window.XLSX);
+      var existing = document.getElementById('p86-xlsx-cdn');
+      if (existing) {
+        existing.addEventListener('load', function () { resolve(window.XLSX); });
+        existing.addEventListener('error', function () { reject(new Error('Could not load the Excel library.')); });
+        return;
+      }
+      var s = document.createElement('script');
+      s.id = 'p86-xlsx-cdn';
+      s.src = 'https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js';
+      s.onload = function () { resolve(window.XLSX); };
+      s.onerror = function () { reject(new Error('Could not load the Excel library.')); };
+      document.head.appendChild(s);
+    });
+  }
+
+  // Export the given receipts to a real .xlsx (Amount as a number so Excel sums;
+  // a TOTAL row at the bottom). Exports the selection, else the filtered view.
+  function exportToExcel(rows) {
+    if (!rows || !rows.length) { toast('Nothing to export — select rows or adjust the filters.', 'error'); return; }
+    var btn = document.getElementById('ciExport');
+    if (btn) { btn.disabled = true; btn.textContent = 'Exporting…'; }
+    ensureXLSX().then(function (XLSX) {
+      var header = ['Date', 'Vendor', 'Amount', 'Cost type', 'Linked to', 'Link type', 'Uploaded by', 'Status', 'Receipt ID', 'Notes'];
+      var aoa = [header];
+      rows.forEach(function (r) {
+        aoa.push([
+          String(r.purchased_at || r.created_at || '').slice(0, 10),
+          r.vendor || '',
+          (r.amount != null ? Number(r.amount) : ''),
+          (r.entity_type === 'category') ? '' : ciCodeLabel(r),
+          entityLabel(r.entity_type, r.entity_id) || '',
+          r.entity_type || 'unlinked',
+          r.entered_by_name || (r.entered_by ? ('User ' + r.entered_by) : ''),
+          r.status || '',
+          r.ref || '',
+          r.notes || ''
+        ]);
+      });
+      var total = rows.reduce(function (s, r) { return s + (r.status === 'void' ? 0 : Number(r.amount || 0)); }, 0);
+      aoa.push([]); aoa.push(['', 'TOTAL', total]);
+      var ws = XLSX.utils.aoa_to_sheet(aoa);
+      ws['!cols'] = [{ wch: 12 }, { wch: 24 }, { wch: 12 }, { wch: 14 }, { wch: 30 }, { wch: 11 }, { wch: 18 }, { wch: 12 }, { wch: 12 }, { wch: 40 }];
+      var wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Cost Inbox');
+      var stamp = new Date().toISOString().slice(0, 10);
+      XLSX.writeFile(wb, 'Cost_Inbox_' + stamp + '.xlsx');
+      if (btn) { btn.disabled = false; btn.textContent = '⬇ Export to Excel'; }
+      toast('Exported ' + rows.length + ' receipt' + (rows.length === 1 ? '' : 's') + '.', 'success');
+    }).catch(function (e) {
+      if (btn) { btn.disabled = false; btn.textContent = '⬇ Export to Excel'; }
+      toast('Export failed: ' + (e && e.message || 'error'), 'error');
+    });
   }
 
   // ── Read-only viewer (with an Edit gate) ──────────────────────────

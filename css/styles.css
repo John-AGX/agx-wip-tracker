@@ -10627,6 +10627,10 @@ body.light-mode .p86-pv-tag-modal-chip {
 textarea.ci-input { height: auto; resize: vertical; font-family: inherit; }
 .ci-search { flex: 1 1 220px; min-width: 160px; }
 .ci-total { margin-left: auto; font-size: 13px; color: var(--text-dim, #c4c8d8); font-weight: 600; white-space: nowrap; }
+.ci-selinfo { font-size: 12px; color: var(--text-dim, #c4c8d8); white-space: nowrap; }
+.ci-selinfo a { color: var(--accent, #6ea8fe); text-decoration: none; }
+.ci-th-check, .ci-td-check { width: 34px; text-align: center; padding-left: 8px !important; padding-right: 4px !important; }
+.ci-td-check input, .ci-th-check input { cursor: pointer; width: 16px; height: 16px; }
 
 .ci-list { display: flex; flex-direction: column; gap: 8px; }
 .ci-empty { padding: 40px 16px; text-align: center; color: var(--text-dim, #c4c8d8); font-size: 14px; }
