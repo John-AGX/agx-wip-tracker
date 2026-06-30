@@ -376,7 +376,7 @@
             '<span>✅ Connected: <strong>' + escapeHTML(s.email || '') + '</strong></span>' +
             '<button class="ee-btn" id="p86-acct-ol-disc">Disconnect</button>' +
           '</div>' +
-          '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:5px;">Read-only — 86 can read your inbox (senders &amp; subjects), never send.</div>';
+          '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:5px;">86 can read your mail and help draft replies. Nothing is ever sent without you confirming it first.</div>';
         var d = document.getElementById('p86-acct-ol-disc');
         if (d) d.addEventListener('click', function() {
           d.disabled = true; d.textContent = 'Disconnecting…';
@@ -387,7 +387,7 @@
         el.innerHTML =
           '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
             '<button class="ee-btn primary" id="p86-acct-ol-conn">Connect Outlook</button>' +
-            '<span style="font-size:12px;color:var(--text-dim,#888);">Read-only — lets 86 read your inbox.</span>' +
+            '<span style="font-size:12px;color:var(--text-dim,#888);">Lets 86 read your mail &amp; help draft replies — sends only with your OK.</span>' +
           '</div>';
         var c = document.getElementById('p86-acct-ol-conn');
         if (c) c.addEventListener('click', function() {
@@ -411,7 +411,7 @@
     if (!m) return;
     var code = m[1];
     var ok = code === 'connected';
-    var msg = ok ? 'Outlook connected — 86 can now read your inbox.'
+    var msg = ok ? 'Outlook connected — 86 can now read your mail and help draft replies.'
             : code === 'denied' ? 'Outlook connection was cancelled.'
             : code === 'unconfigured' ? 'Outlook isn\'t set up on this server yet.'
             : 'Outlook connection failed (' + code + ').';

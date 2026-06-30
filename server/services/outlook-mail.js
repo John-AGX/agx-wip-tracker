@@ -68,7 +68,8 @@ async function readInbox(orgId, userId, opts) {
   const top = Math.max(1, Math.min(25, Number(opts.top) || 10));
   const qs = new URLSearchParams();
   qs.set('$top', String(top));
-  qs.set('$select', 'subject,from,receivedDateTime,isRead,webLink');
+  // Mail.Read lets us pull bodyPreview (a snippet) for the list view.
+  qs.set('$select', 'id,subject,from,receivedDateTime,isRead,hasAttachments,bodyPreview,webLink');
   qs.set('$orderby', 'receivedDateTime desc');
   if (opts.unread) qs.set('$filter', 'isRead eq false');
 
@@ -84,15 +85,100 @@ async function readInbox(orgId, userId, opts) {
   const messages = (data.value || []).map((m) => {
     const ea = (m.from && m.from.emailAddress) || {};
     return {
+      id: m.id || null,
       from: ea.name || ea.address || '(unknown)',
       fromEmail: ea.address || null,
       subject: m.subject || '(no subject)',
       received: m.receivedDateTime || null,
       isRead: !!m.isRead,
+      hasAttachments: !!m.hasAttachments,
+      preview: (m.bodyPreview || '').slice(0, 280),
       webLink: m.webLink || null,
     };
   });
   return { ok: true, email: tok.email, count: messages.length, messages: messages };
 }
 
-module.exports = { readInbox, getAccessToken };
+// Read ONE message in full (plain-text body) so 86 can summarize / draft a reply.
+// Returns { ok, message:{id,from,fromEmail,to,subject,received,body,webLink} } or { ok:false, error }.
+async function readMessage(orgId, userId, messageId) {
+  if (!orgId || !userId || !messageId) return { ok: false, error: 'bad_args' };
+  if (!(msal.isConfigured() && secretbox.isConfigured())) return { ok: false, error: 'unconfigured' };
+  const tok = await getAccessToken(orgId, userId);
+  if (tok.error) return { ok: false, error: tok.error };
+  const qs = 'id,subject,from,toRecipients,receivedDateTime,webLink,body';
+  let res;
+  try {
+    res = await fetch(GRAPH + '/me/messages/' + encodeURIComponent(messageId) + '?$select=' + qs, {
+      headers: { Authorization: 'Bearer ' + tok.token, Prefer: 'outlook.body-content-type="text"' },
+    });
+  } catch (_) { return { ok: false, error: 'graph_unreachable' }; }
+  if (!res.ok) return { ok: false, error: 'graph_' + res.status };
+  const m = await res.json().catch(() => ({}));
+  const ea = (m.from && m.from.emailAddress) || {};
+  return {
+    ok: true,
+    message: {
+      id: m.id || messageId,
+      from: ea.name || ea.address || '(unknown)',
+      fromEmail: ea.address || null,
+      to: (m.toRecipients || []).map((r) => (r.emailAddress && (r.emailAddress.address || r.emailAddress.name)) || '').filter(Boolean),
+      subject: m.subject || '(no subject)',
+      received: m.receivedDateTime || null,
+      body: ((m.body && m.body.content) || '').slice(0, 8000),
+      webLink: m.webLink || null,
+    },
+  };
+}
+
+// SEND a reply to a message (Graph /reply — keeps the thread + recipients). Only
+// ever called from the user-confirmed POST /send/reply route, NEVER from an AI
+// tool directly. body is plain text. Returns { ok } or { ok:false, error }.
+async function replyToMessage(orgId, userId, messageId, bodyText) {
+  if (!orgId || !userId || !messageId) return { ok: false, error: 'bad_args' };
+  if (!(msal.isConfigured() && secretbox.isConfigured())) return { ok: false, error: 'unconfigured' };
+  const tok = await getAccessToken(orgId, userId);
+  if (tok.error) return { ok: false, error: tok.error };
+  let res;
+  try {
+    res = await fetch(GRAPH + '/me/messages/' + encodeURIComponent(messageId) + '/reply', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + tok.token, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ comment: String(bodyText || '') }),
+    });
+  } catch (_) { return { ok: false, error: 'graph_unreachable' }; }
+  if (!(res.status === 202 || res.ok)) return { ok: false, error: 'graph_' + res.status };
+  return { ok: true };
+}
+
+// SEND a brand-new email. Same confirmed-UI-only rule as replyToMessage.
+// to = array of addresses (or comma string). Returns { ok } or { ok:false, error }.
+async function sendMail(orgId, userId, opts) {
+  opts = opts || {};
+  if (!orgId || !userId) return { ok: false, error: 'bad_args' };
+  if (!(msal.isConfigured() && secretbox.isConfigured())) return { ok: false, error: 'unconfigured' };
+  const toList = (Array.isArray(opts.to) ? opts.to : String(opts.to || '').split(',')).map((s) => String(s).trim()).filter(Boolean);
+  if (!toList.length) return { ok: false, error: 'no_recipient' };
+  const tok = await getAccessToken(orgId, userId);
+  if (tok.error) return { ok: false, error: tok.error };
+  const payload = {
+    message: {
+      subject: String(opts.subject || '(no subject)'),
+      body: { contentType: 'Text', content: String(opts.body || '') },
+      toRecipients: toList.map((a) => ({ emailAddress: { address: a } })),
+    },
+    saveToSentItems: true,
+  };
+  let res;
+  try {
+    res = await fetch(GRAPH + '/me/sendMail', {
+      method: 'POST',
+      headers: { Authorization: 'Bearer ' + tok.token, 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+  } catch (_) { return { ok: false, error: 'graph_unreachable' }; }
+  if (!(res.status === 202 || res.ok)) return { ok: false, error: 'graph_' + res.status };
+  return { ok: true };
+}
+
+module.exports = { readInbox, readMessage, replyToMessage, sendMail, getAccessToken };

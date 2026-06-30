@@ -7108,9 +7108,10 @@ const READ_TOOLS = [
   {
     name: 'read_outlook_mail',
     description:
-      'Read the signed-in user\'s OWN Outlook inbox — read-only, metadata only (sender, subject, received time, read/unread, link). ' +
+      'List the signed-in user\'s OWN Outlook inbox — read-only. Returns, per message: id, sender, subject, received time, read/unread, has-attachments, and a short body PREVIEW (snippet). ' +
       'Use for "what\'s in my inbox", "any new emails", "did I get anything from [person]", "what are my unread emails". ' +
-      'Only the user who connected their own mailbox can read it — you can never read anyone else\'s. Email bodies + attachments are NOT available. ' +
+      'Only the user who connected their own mailbox can read it — you can never read anyone else\'s. ' +
+      'To read a message IN FULL (whole body, to summarize it or draft a reply), call read_outlook_message with the id from this list. ' +
       'If the user has not connected Outlook, the tool says so — tell them to connect it from My Account.',
     tier: 'auto',
     input_schema: {
@@ -7119,6 +7120,23 @@ const READ_TOOLS = [
         top: { type: 'integer', minimum: 1, maximum: 25, description: 'How many recent messages to return (default 10).' },
         unread: { type: 'boolean', description: 'true = only unread messages.' },
       },
+    },
+  },
+  {
+    name: 'read_outlook_message',
+    description:
+      'Read ONE of the signed-in user\'s OWN Outlook messages IN FULL — the complete plain-text body plus sender, recipients, subject, received time, and link. Read-only. ' +
+      'Use after read_outlook_mail when the user wants you to summarize an email, explain what it needs, or DRAFT A REPLY to it — pass the message id from the inbox list. ' +
+      'Only the user who connected their own mailbox can read it — never anyone else\'s. ' +
+      'NOTE: reading a message never sends anything. To actually send a reply you must use propose_outlook_reply, which asks the user to confirm before anything leaves their mailbox.',
+    tier: 'auto',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        message_id: { type: 'string', description: 'The id of the message to read in full (from read_outlook_mail).' },
+      },
+      required: ['message_id'],
     },
   },
 ];
@@ -8940,9 +8958,47 @@ async function execStaffTool(name, input, ctx) {
       const fmtWhen = (s) => { if (!s) return ''; const d = new Date(s); return isNaN(d.getTime()) ? '' : d.toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); };
       const lines = ['Inbox' + (out.email ? ' — ' + out.email : '') + ' (' + out.messages.length + (wantUnread ? ' unread' : ' most recent') + '):'];
       out.messages.forEach((m) => {
-        lines.push('- ' + (m.isRead ? '' : '● ') + m.from + ' — ' + m.subject + (m.received ? ' · ' + fmtWhen(m.received) : ''));
+        lines.push('- ' + (m.isRead ? '' : '● ') + m.from + ' — ' + m.subject + (m.received ? ' · ' + fmtWhen(m.received) : '') + (m.hasAttachments ? ' 📎' : ''));
+        if (m.preview) lines.push('    ' + m.preview.replace(/\s+/g, ' ').trim());
+        if (m.id) lines.push('    [id: ' + m.id + ']');
       });
+      lines.push('\nTo read one in full or draft a reply, use read_outlook_message with its [id].');
       return lines.join('\n');
+    }
+
+    case 'read_outlook_message': {
+      // Read ONE of the caller's OWN messages in full. Owner-scoped via ctx.
+      const userId = (ctx && ctx.userId) || null;
+      let orgId = (ctx && ctx.orgId) || null;
+      try {
+        if (userId && !orgId) {
+          const r = await pool.query('SELECT organization_id FROM users WHERE id = $1', [userId]);
+          orgId = r.rows[0] && r.rows[0].organization_id;
+        }
+      } catch (_) { /* fall through to guard */ }
+      if (!userId || !orgId) return 'I could not identify your account, so I can\'t read that message.';
+      const messageId = String((input && input.message_id) || '').trim();
+      if (!messageId) return 'I need the message id (from your inbox list) to read it in full.';
+      const outlookMail = require('../services/outlook-mail');
+      const out = await outlookMail.readMessage(orgId, userId, messageId);
+      if (!out.ok) {
+        if (out.error === 'not_connected') return 'Your Outlook isn\'t connected yet. Connect it from My Account, then ask me again.';
+        if (out.error === 'reauth') return 'Your Outlook connection expired — reconnect it from My Account, then ask me again.';
+        if (out.error === 'unconfigured') return 'Outlook isn\'t set up on this server yet.';
+        return 'Could not read that message right now (' + out.error + ').';
+      }
+      const m = out.message;
+      const fmtWhen2 = (s) => { if (!s) return ''; const d = new Date(s); return isNaN(d.getTime()) ? '' : d.toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }); };
+      const parts = [
+        'From: ' + m.from + (m.fromEmail ? ' <' + m.fromEmail + '>' : ''),
+        m.to && m.to.length ? 'To: ' + m.to.join(', ') : null,
+        'Subject: ' + m.subject,
+        m.received ? 'Received: ' + fmtWhen2(m.received) : null,
+        '[message id: ' + m.id + ']',
+        '',
+        m.body || '(no body)',
+      ].filter((x) => x !== null);
+      return parts.join('\n');
     }
 
     case 'read_clients': {
@@ -12559,8 +12615,9 @@ const ALLOWED_AUTO_TIER_TOOLS = new Set([
   'find_entities_near',
   // Cost Inbox receipts — counts + $ totals (executor: execStaffTool below). Pure read.
   'read_receipts',
-  // Outlook inbox — the caller's own mail (metadata only). Pure read.
+  // Outlook inbox — the caller's own mail. Pure reads (list + one full message).
   'read_outlook_mail',
+  'read_outlook_message',
   // Project 86 Payload DSL — 86's ONE write primitive. Validates +
   // INSERTs a payloads row inline so the file artifact appears in
   // chat immediately. Auto-tier because the commit gate is the user

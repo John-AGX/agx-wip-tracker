@@ -746,9 +746,11 @@
     remove: function(id, hard) { return del('/api/receipts/' + encodeURIComponent(id) + (hard ? '?hard=1' : '')); }
   };
 
-  // Outlook / Microsoft 365 — per-user read-only mail connection (Phase 4).
-  // connect() returns { url } to send the browser to; status()/messages() are
-  // owner-scoped; disconnect() drops the local token. See outlook-routes.js.
+  // Outlook / Microsoft 365 — per-user mail connection (Phase 4: read + send).
+  // connect() returns { url } to send the browser to; status()/messages()/
+  // message() are owner-scoped reads; sendReply()/sendMail() are CONFIRMED sends
+  // (only call from a user-confirmed UI action); disconnect() drops the local
+  // token. See outlook-routes.js.
   var outlook = {
     connect: function() { return get('/api/me/outlook/connect'); },
     status: function() { return get('/api/me/outlook/status'); },
@@ -758,6 +760,10 @@
       if (opts.unread) qs.push('unread=1');
       return get('/api/me/outlook/messages' + (qs.length ? '?' + qs.join('&') : ''));
     },
+    message: function(id) { return get('/api/me/outlook/messages/' + encodeURIComponent(id)); },
+    // CONFIRMED send — only call after the user confirms (approval card / Send click).
+    sendReply: function(messageId, body) { return post('/api/me/outlook/send/reply', { message_id: messageId, body: body }); },
+    sendMail: function(opts) { opts = opts || {}; return post('/api/me/outlook/send', { to: opts.to, subject: opts.subject, body: opts.body }); },
     disconnect: function() { return del('/api/me/outlook'); }
   };
 

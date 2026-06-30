@@ -8,13 +8,17 @@
 // and the config comes from env, so the server boots fine before the dependency
 // installs or the env vars are set. isConfigured() lets callers gate cleanly.
 //
-// Locked scope set (read-only first): Mail.ReadBasic = senders/subjects/snippets
-// only, NO full bodies or attachments. offline_access for a refresh token,
-// openid + User.Read to identify the connected mailbox. Mail.Send / Mail.ReadWrite
-// are deliberately ABSENT — even a perfect prompt injection has no outward API.
+// Scope set: Mail.Read = full read incl. message bodies (so 86 can read an email
+// and draft a reply); Mail.Send = send mail on the user's behalf. offline_access
+// for a refresh token, openid + User.Read to identify the connected mailbox.
+// SAFETY: Mail.Send means there IS an outward API now, so SENDING is never done
+// by a tool directly — every send is gated behind a per-send approval card the
+// user must confirm in the app (server/routes/outlook-routes.js POST /send/reply
+// is only reachable from that confirmed UI action, not auto-tier AI). Reading is
+// auto; sending requires an explicit human click.
 'use strict';
 
-const SCOPES = ['offline_access', 'openid', 'User.Read', 'Mail.ReadBasic'];
+const SCOPES = ['offline_access', 'openid', 'User.Read', 'Mail.Read', 'Mail.Send'];
 
 function isConfigured() {
   return !!(process.env.MS_CLIENT_ID && process.env.MS_CLIENT_SECRET &&

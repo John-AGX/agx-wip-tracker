@@ -1,4 +1,4 @@
-// Outlook / Microsoft 365 connection (Phase 4, READ-ONLY first).
+// Outlook / Microsoft 365 connection (Phase 4: full read + send).
 //
 // SECURITY POSTURE:
 //  - Per-user delegated OAuth. The token belongs to exactly one user in one
@@ -8,13 +8,20 @@
 //    HttpOnly, SameSite=Lax state cookie (server/util/oauth-state.js): defends
 //    login-CSRF and lets the callback identify the user WITHOUT depending on
 //    the auth cookie surviving Microsoft's cross-site redirect.
-//  - Scope is Mail.ReadBasic only (set in services/msal.js) — the token
-//    physically cannot send/forward/delete. There are NO write/send routes here.
+//  - Scope is Mail.Read + Mail.Send (services/msal.js). Reading is auto; SENDING
+//    is gated: the AI never sends directly — it can only PROPOSE a reply, which
+//    surfaces an approval card the user must confirm. The confirmed click is the
+//    only thing that calls POST /send/reply | /send (both requireAuth + owner-
+//    scoped + rate-limited). No AI tool can reach these without a human click.
 //
-// Routes:  GET  /api/me/outlook/connect    (authed) -> { url }
-//          GET  /auth/microsoft/callback   (state-cookie authed) -> redirect
-//          GET  /api/me/outlook/status     (authed) -> { connected, email, ... }
-//          DELETE /api/me/outlook          (authed) -> disconnect (local + advisory)
+// Routes:  GET  /api/me/outlook/connect       (authed) -> { url }
+//          GET  /auth/microsoft/callback      (state-cookie authed) -> redirect
+//          GET  /api/me/outlook/status        (authed) -> { connected, email, ... }
+//          GET  /api/me/outlook/messages      (authed) -> inbox list
+//          GET  /api/me/outlook/messages/:id  (authed) -> one message, full body
+//          POST /api/me/outlook/send/reply    (authed+limited) -> reply to a message
+//          POST /api/me/outlook/send          (authed+limited) -> new email
+//          DELETE /api/me/outlook             (authed) -> disconnect (local + advisory)
 // Mounted at root in server/index.js (the callback path matches MS_REDIRECT_URI).
 'use strict';
 
@@ -25,6 +32,9 @@ const secretbox = require('../util/secretbox');
 const oauthState = require('../util/oauth-state');
 const msal = require('../services/msal');
 const outlookMail = require('../services/outlook-mail');
+// Reuse the per-user AI limiter (20/min) to bound send calls — sends are
+// irreversible + hit an external mailbox, so they must be rate-bounded.
+const { aiChatLimiter } = require('../rate-limit');
 
 const router = express.Router();
 const PROVIDER = 'microsoft';
@@ -186,6 +196,77 @@ router.get('/api/me/outlook/messages', requireAuth, async (req, res) => {
   } catch (e) {
     console.error('[outlook] messages failed:', e && e.message);
     res.status(500).json({ error: 'Could not read Outlook mail.' });
+  }
+});
+
+// GET /api/me/outlook/messages/:id — one message in full (plain-text body) so 86
+// can summarize it / draft a reply. Owner-scoped to the caller. Read-only.
+router.get('/api/me/outlook/messages/:id', requireAuth, async (req, res) => {
+  try {
+    const orgId = callerOrgId(req);
+    if (!orgId) return res.status(403).json({ error: 'No organization on the current user.' });
+    const out = await outlookMail.readMessage(orgId, callerUserId(req), String(req.params.id || ''));
+    if (!out.ok) {
+      const code = (out.error === 'not_connected' || out.error === 'reauth') ? 409
+                 : (out.error === 'unconfigured') ? 503
+                 : (out.error === 'bad_args') ? 400 : 502;
+      return res.status(code).json({ error: out.error });
+    }
+    res.json(out);
+  } catch (e) {
+    console.error('[outlook] message read failed:', e && e.message);
+    res.status(500).json({ error: 'Could not read the message.' });
+  }
+});
+
+// POST /api/me/outlook/send/reply — reply to a message. body: { message_id, body }.
+// This is the CONFIRMED-SEND endpoint: it is only reached when the user clicks
+// Send on the approval card (the AI cannot call it). requireAuth + owner-scoped +
+// rate-limited. Sends as the caller's own mailbox.
+router.post('/api/me/outlook/send/reply', requireAuth, aiChatLimiter, async (req, res) => {
+  try {
+    const orgId = callerOrgId(req);
+    if (!orgId) return res.status(403).json({ error: 'No organization on the current user.' });
+    const messageId = String((req.body && req.body.message_id) || '').trim();
+    const body = String((req.body && req.body.body) || '');
+    if (!messageId) return res.status(400).json({ error: 'message_id is required.' });
+    if (!body.trim()) return res.status(400).json({ error: 'Reply body is empty.' });
+    const out = await outlookMail.replyToMessage(orgId, callerUserId(req), messageId, body);
+    if (!out.ok) {
+      const code = (out.error === 'not_connected' || out.error === 'reauth') ? 409
+                 : (out.error === 'unconfigured') ? 503
+                 : (out.error === 'bad_args') ? 400 : 502;
+      return res.status(code).json({ error: out.error });
+    }
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[outlook] send reply failed:', e && e.message);
+    res.status(500).json({ error: 'Could not send the reply.' });
+  }
+});
+
+// POST /api/me/outlook/send — send a brand-new email. body: { to, subject, body }.
+// Same confirmed-send rule + guards as /send/reply.
+router.post('/api/me/outlook/send', requireAuth, aiChatLimiter, async (req, res) => {
+  try {
+    const orgId = callerOrgId(req);
+    if (!orgId) return res.status(403).json({ error: 'No organization on the current user.' });
+    const to = (req.body && req.body.to) || '';
+    const subject = String((req.body && req.body.subject) || '').trim();
+    const body = String((req.body && req.body.body) || '');
+    if (!(Array.isArray(to) ? to.length : String(to).trim())) return res.status(400).json({ error: 'At least one recipient is required.' });
+    if (!body.trim()) return res.status(400).json({ error: 'Email body is empty.' });
+    const out = await outlookMail.sendMail(orgId, callerUserId(req), { to, subject, body });
+    if (!out.ok) {
+      const code = (out.error === 'not_connected' || out.error === 'reauth') ? 409
+                 : (out.error === 'unconfigured') ? 503
+                 : (out.error === 'no_recipient' || out.error === 'bad_args') ? 400 : 502;
+      return res.status(code).json({ error: out.error });
+    }
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[outlook] send failed:', e && e.message);
+    res.status(500).json({ error: 'Could not send the email.' });
   }
 });
 
