@@ -452,6 +452,57 @@
     }
     var map = new maps.Map(canvas, mapOpts);
 
+    // ── 3D tilt + rotate nav cluster (vector Job Map only — raster can't tilt). A
+    // compact dark control near the left edge: 3D toggle (top-down <-> 47.5deg tilt),
+    // rotate +/-45deg, and a compass needle that points to map-north (click = reset
+    // heading + flatten). Tilt/rotate already work via Ctrl-drag / two-finger
+    // gestures on the vector map; this just surfaces them as discoverable buttons.
+    if (advOK && maps.ControlPosition && map.controls) {
+      (function () {
+        if (!document.getElementById('p86-map-nav-css')) {
+          var st = document.createElement('style'); st.id = 'p86-map-nav-css';
+          st.textContent =
+            '.p86-map-nav{display:flex;flex-direction:column;margin:10px;background:rgba(17,20,28,.92);border:1px solid rgba(255,255,255,.14);border-radius:10px;overflow:hidden;box-shadow:0 2px 10px rgba(0,0,0,.45)}' +
+            '.p86-map-nav button{width:38px;height:34px;border:none;background:transparent;color:#cdd3e0;font-size:14px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1;transition:background .12s,color .12s}' +
+            '.p86-map-nav button+button{border-top:1px solid rgba(255,255,255,.08)}' +
+            '.p86-map-nav button:hover{background:rgba(255,255,255,.08);color:#fff}' +
+            '.p86-map-nav button.on{background:rgba(79,140,255,.22);color:#7eb0ff}' +
+            '.p86-map-nav-needle{display:inline-block;transition:transform .2s}';
+          document.head.appendChild(st);
+        }
+        var wrap = document.createElement('div');
+        wrap.className = 'p86-map-nav';
+        wrap.innerHTML =
+          '<button data-act="3d" title="Toggle 3D tilt">3D</button>' +
+          '<button data-act="rotl" title="Rotate left">↺</button>' +
+          '<button data-act="rotr" title="Rotate right">↻</button>' +
+          '<button data-act="north" title="Reset to North (top-down)"><span class="p86-map-nav-needle">▲</span></button>';
+        var t3d = wrap.querySelector('[data-act="3d"]');
+        var needle = wrap.querySelector('.p86-map-nav-needle');
+        function curTilt() { return (map.getTilt && map.getTilt()) || 0; }
+        function curHead() { return (map.getHeading && map.getHeading()) || 0; }
+        function sync() {
+          if (t3d) t3d.classList.toggle('on', curTilt() >= 10);
+          if (needle) needle.style.transform = 'rotate(' + (-curHead()) + 'deg)';
+        }
+        wrap.addEventListener('click', function (e) {
+          var b = e.target.closest && e.target.closest('button'); if (!b) return;
+          var act = b.getAttribute('data-act');
+          try {
+            if (act === '3d') map.setTilt(curTilt() < 10 ? 47.5 : 0);
+            else if (act === 'rotl') map.setHeading((curHead() - 45 + 360) % 360);
+            else if (act === 'rotr') map.setHeading((curHead() + 45) % 360);
+            else if (act === 'north') { map.setHeading(0); map.setTilt(0); }
+          } catch (err) {}
+          setTimeout(sync, 80);
+        });
+        map.addListener('tilt_changed', sync);
+        map.addListener('heading_changed', sync);
+        map.controls[maps.ControlPosition.LEFT_CENTER].push(wrap);
+        setTimeout(sync, 0);
+      })();
+    }
+
     var infoWindow = new maps.InfoWindow();
     var shown = { lead: true, job: true };
     var markers = [];
