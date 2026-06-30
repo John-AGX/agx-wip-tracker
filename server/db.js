@@ -1817,6 +1817,23 @@ async function initSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_receipt_ocr_fb_org ON receipt_ocr_feedback(organization_id);
 
+    -- Cost categories — org-defined non-job coding buckets a receipt can link to
+    -- instead of a job/lead (entity_type='category', entity_id=cost_categories.id):
+    -- Tools, Overhead, Fuel, etc. "Tools" is lazily seeded on first list. The
+    -- category IS the coding, so cost_code is irrelevant for category receipts.
+    CREATE TABLE IF NOT EXISTS cost_categories (
+      id TEXT PRIMARY KEY,
+      organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      position INTEGER DEFAULT 0,
+      archived BOOLEAN DEFAULT FALSE,
+      created_by INTEGER,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_cost_categories_org_name ON cost_categories(organization_id, lower(name));
+    CREATE INDEX IF NOT EXISTS idx_cost_categories_org ON cost_categories(organization_id);
+
     -- Email send log — every transactional email goes through
     -- server/email.js which writes a row here so admins can see
     -- delivery state, retry failures, and audit who got what.
