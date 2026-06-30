@@ -1781,8 +1781,8 @@ async function initSchema() {
       id TEXT PRIMARY KEY,
       organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE,
       ref TEXT,                                  -- short 8-char display code (e.g. 2da04fc4)
-      entity_type TEXT,                          -- 'job' | 'lead' | NULL (unassigned capture)
-      entity_id TEXT,                            -- job id or lead id
+      entity_type TEXT,                          -- 'job' | 'lead' | 'category' | NULL (unassigned capture)
+      entity_id TEXT,                            -- job id | lead id | cost_categories.id
       amount NUMERIC(12, 2),
       vendor TEXT,
       cost_code TEXT DEFAULT 'materials',        -- materials | labor | sub | gc

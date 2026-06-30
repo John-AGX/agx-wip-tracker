@@ -4496,6 +4496,7 @@
   // AI's per-field hit-rate. Amount is the field worth watching (error-prone).
   function renderAdminOcrInbox() {
     if (!isAdmin()) return;
+    try { renderAdminCostCategories(); } catch (e) { /* categories card is independent of OCR stats */ }
     var cardsEl = document.getElementById('admin-ocr-cards');
     if (!cardsEl) return;
     var note = document.getElementById('admin-ocr-note');
@@ -4557,6 +4558,66 @@
       if (btn) { btn.disabled = false; btn.textContent = 'Reset OCR accuracy'; }
       if (note) note.textContent = 'Could not reset' + (e && e.message ? (': ' + e.message) : '') + '.';
     });
+  }
+
+  // ── Cost categories (admin) — org-defined non-job coding buckets for receipts.
+  function _catEsc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+  function renderAdminCostCategories() {
+    var listEl = document.getElementById('admin-cat-list');
+    if (!listEl) return;
+    if (!(window.p86Api && window.p86Api.receipts && window.p86Api.receipts.categories)) {
+      listEl.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;">Not connected.</div>';
+      return;
+    }
+    listEl.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;">Loading…</div>';
+    window.p86Api.receipts.categories(true).then(function (r) {  // all=1 → include archived
+      var cats = (r && (r.categories || r)) || [];
+      if (!cats.length) { listEl.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;">No categories yet.</div>'; return; }
+      listEl.innerHTML = cats.map(function (c) {
+        var dim = c.archived ? 'opacity:0.5;' : '';
+        return '<div data-cat-id="' + _catEsc(c.id) + '" style="display:flex;align-items:center;gap:8px;background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:8px;padding:7px 10px;' + dim + '">' +
+          '<span style="flex:1;color:var(--text,#fff);font-size:13px;">' + _catEsc(c.name) + (c.archived ? ' <span style="font-size:11px;color:var(--text-dim,#888);">(archived)</span>' : '') + '</span>' +
+          '<button class="secondary" style="padding:3px 9px;font-size:12px;" onclick="renameAdminCostCategory(\'' + _catEsc(c.id) + '\',\'' + _catEsc((c.name || '').replace(/'/g, '\\\'')) + '\')">Rename</button>' +
+          '<button class="secondary" style="padding:3px 9px;font-size:12px;' + (c.archived ? '' : 'color:#ff6b6b;border-color:#5a2230;') + '" onclick="archiveAdminCostCategory(\'' + _catEsc(c.id) + '\',' + (c.archived ? 'false' : 'true') + ')">' + (c.archived ? 'Restore' : 'Archive') + '</button>' +
+        '</div>';
+      }).join('');
+    }).catch(function () { listEl.innerHTML = '<div style="color:#ff6b6b;font-size:12px;">Could not load categories.</div>'; });
+  }
+  function addAdminCostCategory(btn) {
+    var inp = document.getElementById('admin-cat-new');
+    var note = document.getElementById('admin-cat-note');
+    var name = (inp && inp.value || '').trim();
+    if (note) note.textContent = '';
+    if (!name) { if (note) note.textContent = 'Enter a name.'; return; }
+    if (!(window.p86Api && window.p86Api.receipts && window.p86Api.receipts.createCategory)) return;
+    if (btn) btn.disabled = true;
+    window.p86Api.receipts.createCategory(name).then(function () {
+      if (btn) btn.disabled = false;
+      if (inp) inp.value = '';
+      renderAdminCostCategories();
+    }).catch(function (e) {
+      if (btn) btn.disabled = false;
+      if (note) note.textContent = (e && e.message) ? e.message : 'Could not add.';
+    });
+  }
+  function renameAdminCostCategory(id, current) {
+    var name = window.prompt('Rename category', current || '');
+    if (name == null) return;
+    name = String(name).trim();
+    if (!name) return;
+    if (!(window.p86Api && window.p86Api.receipts && window.p86Api.receipts.updateCategory)) return;
+    window.p86Api.receipts.updateCategory(id, { name: name }).then(renderAdminCostCategories)
+      .catch(function (e) { var n = document.getElementById('admin-cat-note'); if (n) n.textContent = (e && e.message) || 'Could not rename.'; });
+  }
+  function archiveAdminCostCategory(id, archived) {
+    if (archived && !window.confirm('Archive this category? It will no longer appear in the receipt picker. Existing receipts keep their link.')) return;
+    if (!(window.p86Api && window.p86Api.receipts && window.p86Api.receipts.updateCategory)) return;
+    window.p86Api.receipts.updateCategory(id, { archived: !!archived }).then(renderAdminCostCategories)
+      .catch(function (e) { var n = document.getElementById('admin-cat-note'); if (n) n.textContent = (e && e.message) || 'Could not update.'; });
   }
 
   // Toggle a job's liveStatus between 'live' and 'draft'. Pure client-side
@@ -4631,6 +4692,10 @@
   window.renderAdminMetrics = renderAdminMetrics;
   window.renderAdminOcrInbox = renderAdminOcrInbox;
   window.resetAdminOcrStats = resetAdminOcrStats;
+  window.renderAdminCostCategories = renderAdminCostCategories;
+  window.addAdminCostCategory = addAdminCostCategory;
+  window.renameAdminCostCategory = renameAdminCostCategory;
+  window.archiveAdminCostCategory = archiveAdminCostCategory;
   window.toggleJobLiveStatus = toggleJobLiveStatus;
   window.captureNowForJob = captureNowForJob;
   window.renderAdminRoles = renderAdminRoles;

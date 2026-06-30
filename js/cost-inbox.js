@@ -92,21 +92,25 @@
     } catch (e) { return null; }
   }
 
-  // ── Entity (job/lead) cache for the picker + label resolution ──────
-  var _jobs = [], _leads = [], _entLoaded = false;
+  // ── Entity (job/lead/category) cache for the picker + label resolution ──
+  var _jobs = [], _leads = [], _categories = [], _entLoaded = false;
   function loadEntities() {
     if (_entLoaded) return Promise.resolve();
     var a = window.p86Api;
     if (!a) return Promise.resolve();
     return Promise.all([
       a.jobs.list().then(function (r) { _jobs = (r && (r.jobs || r)) || []; }).catch(function () { _jobs = []; }),
-      a.leads.list().then(function (r) { _leads = (r && (r.leads || r)) || []; }).catch(function () { _leads = []; })
+      a.leads.list().then(function (r) { _leads = (r && (r.leads || r)) || []; }).catch(function () { _leads = []; }),
+      (a.receipts && a.receipts.categories ? a.receipts.categories() : Promise.resolve(null))
+        .then(function (r) { _categories = (r && (r.categories || r)) || []; }).catch(function () { _categories = []; })
     ]).then(function () { _entLoaded = true; });
   }
   function jobLabel(j) { return (j.jobNumber ? '[' + j.jobNumber + '] ' : '') + (j.title || j.name || j.id); }
+  function catLabel(c) { return c.name || ('Category ' + c.id); }
   function entityLabel(type, id) {
     if (!type || !id) return '';
     if (type === 'job') { var j = _jobs.find(function (x) { return String(x.id) === String(id); }); return j ? jobLabel(j) : ('Job ' + id); }
+    if (type === 'category') { var c = _categories.find(function (x) { return String(x.id) === String(id); }); return c ? catLabel(c) : ('Category ' + id); }
     var l = _leads.find(function (x) { return String(x.id) === String(id); }); return l ? (l.title || ('Lead ' + id)) : ('Lead ' + id);
   }
 
@@ -142,7 +146,7 @@
           '<button class="ci-btn ci-btn-primary" id="ciNew">+ New Receipt</button>' +
         '</div>' +
         '<div class="ci-toolbar">' +
-          '<select id="ciJobFilter" class="ci-input"><option value="">All jobs &amp; leads</option></select>' +
+          '<select id="ciJobFilter" class="ci-input"><option value="">All jobs, leads &amp; categories</option></select>' +
           '<select id="ciStatusFilter" class="ci-input">' +
             '<option value="">Unprocessed + Processed</option>' +
             '<option value="unprocessed">Unprocessed</option>' +
@@ -166,9 +170,13 @@
       // populate the job/lead filter
       var sel = document.getElementById('ciJobFilter');
       if (sel) {
-        var opts = ['<option value="">All jobs &amp; leads</option>'];
+        var opts = ['<option value="">All jobs, leads &amp; categories</option>'];
         _jobs.forEach(function (j) { opts.push('<option value="job:' + esc(j.id) + '">' + esc(jobLabel(j)) + '</option>'); });
         _leads.forEach(function (l) { opts.push('<option value="lead:' + esc(l.id) + '">' + esc(l.title || ('Lead ' + l.id)) + '</option>'); });
+        if (_categories.length) {
+          opts.push('<option disabled>──────────</option>');
+          _categories.forEach(function (c) { opts.push('<option value="category:' + esc(c.id) + '">' + esc(catLabel(c)) + '</option>'); });
+        }
         sel.innerHTML = opts.join('');
         sel.value = _filters.job;
       }
@@ -440,16 +448,18 @@
                 (existingThumb ? '<img src="' + esc(existingThumb) + '" alt="receipt" />' : '<span class="ci-photo-cta"><svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg><br/>Take / upload receipt</span>') +
               '</div>' +
             '</label>' +
-            // Link to job / lead
+            // Link to job / lead / category
             '<div class="ci-field">' +
               '<label>Link to</label>' +
               '<div class="ci-link-row">' +
                 '<select id="ciLinkType" class="ci-input">' +
                   '<option value="job"' + (linkType === 'job' ? ' selected' : '') + '>Job</option>' +
                   '<option value="lead"' + (linkType === 'lead' ? ' selected' : '') + '>Lead (pre-sale)</option>' +
+                  '<option value="category"' + (linkType === 'category' ? ' selected' : '') + '>Tools / Category</option>' +
                 '</select>' +
-                '<select id="ciLinkId" class="ci-input"></select>' +
+                '<input type="text" id="ciLinkSearch" class="ci-input" placeholder="Search…" autocomplete="off" />' +
               '</div>' +
+              '<select id="ciLinkId" class="ci-input" style="width:100%;margin-top:6px;"></select>' +
             '</div>' +
             // Amount
             '<div class="ci-field">' +
@@ -468,6 +478,7 @@
               '</div>' +
             '</div>' +
             '<div class="ci-presale-note" id="ciPresaleNote" style="display:none;">Lead receipt — logged as <strong>Pre-sale</strong> cost.</div>' +
+            '<div class="ci-presale-note" id="ciCatNote" style="display:none;">Category cost — the category <strong>is</strong> the coding (no cost type needed).</div>' +
             // Vendor + date
             '<div class="ci-field-2">' +
               '<div class="ci-field"><label>Vendor</label><input type="text" id="ciVendor" class="ci-input" placeholder="Sherwin Williams…" value="' + esc(r.vendor || '') + '" /></div>' +
@@ -481,29 +492,40 @@
 
       var selType = modal.querySelector('#ciLinkType');
       var selId = modal.querySelector('#ciLinkId');
+      var searchEl = modal.querySelector('#ciLinkSearch');
       var codeField = modal.querySelector('#ciCodeField');
       var presaleNote = modal.querySelector('#ciPresaleNote');
+      var catNote = modal.querySelector('#ciCatNote');
       var codeSeg = modal.querySelector('#ciCodeSeg');
       var chosenCode = r.cost_code || 'materials';
       var codeUserPicked = isEdit; // true once the user (or an existing record) owns the cost code — OCR won't override
       var ocrSuggestion = null;    // {vendor,date,cost_code,amount} from OCR — sent on save so accuracy is tracked
 
-      function fillEntityOptions() {
+      function fillEntityOptions(filter) {
         var type = selType.value;
-        var list = type === 'lead' ? _leads : _jobs;
-        var opts = ['<option value="">— select a ' + type + ' —</option>'];
-        list.forEach(function (it) {
-          opts.push('<option value="' + esc(it.id) + '">' + esc(type === 'lead' ? (it.title || ('Lead ' + it.id)) : jobLabel(it)) + '</option>');
-        });
+        filter = (filter || '').trim().toLowerCase();
+        var list, labelOf, word;
+        if (type === 'lead') { list = _leads; labelOf = function (it) { return it.title || ('Lead ' + it.id); }; word = 'lead'; }
+        else if (type === 'category') { list = _categories; labelOf = catLabel; word = 'category'; }
+        else { list = _jobs; labelOf = jobLabel; word = 'job'; }
+        var filtered = filter ? list.filter(function (it) { return labelOf(it).toLowerCase().indexOf(filter) >= 0; }) : list;
+        var opts = ['<option value="">— select a ' + word + ' —</option>'];
+        filtered.forEach(function (it) { opts.push('<option value="' + esc(it.id) + '">' + esc(labelOf(it)) + '</option>'); });
+        if (filter && !filtered.length) opts.push('<option value="" disabled>No ' + word + 's match “' + esc(filter) + '”</option>');
         selId.innerHTML = opts.join('');
         if (r.entity_type === type && r.entity_id) selId.value = r.entity_id;
-        // lead → pre-sale: hide cost code
-        var isLead = type === 'lead';
-        codeField.style.display = isLead ? 'none' : '';
-        presaleNote.style.display = isLead ? '' : 'none';
+        // Search box only helps the long job/lead lists; categories are few.
+        if (searchEl) searchEl.style.display = (type === 'category') ? 'none' : '';
+        if (searchEl && type !== 'category') searchEl.placeholder = 'Search ' + word + 's…';
+        // lead → pre-sale, category → category IS the coding: both hide cost type.
+        var hideCode = (type === 'lead' || type === 'category');
+        codeField.style.display = hideCode ? 'none' : '';
+        presaleNote.style.display = (type === 'lead') ? '' : 'none';
+        if (catNote) catNote.style.display = (type === 'category') ? '' : 'none';
       }
-      fillEntityOptions();
-      selType.addEventListener('change', fillEntityOptions);
+      fillEntityOptions('');
+      selType.addEventListener('change', function () { if (searchEl) searchEl.value = ''; fillEntityOptions(''); });
+      if (searchEl) searchEl.addEventListener('input', function () { fillEntityOptions(searchEl.value); });
 
       codeSeg.addEventListener('click', function (e) {
         var btn = e.target.closest('.ci-seg-btn'); if (!btn) return;
@@ -535,7 +557,7 @@
             // Fill the error-free fields (only if the user hasn't typed there).
             var vEl = modal.querySelector('#ciVendor'); if (vEl && !vEl.value && resp.vendor) vEl.value = resp.vendor;
             var dEl = modal.querySelector('#ciDate'); if (dEl && !dEl.value && resp.date) dEl.value = resp.date;
-            if (resp.cost_code && !codeUserPicked && selType.value !== 'lead') {
+            if (resp.cost_code && !codeUserPicked && selType.value === 'job') {
               var cb = codeSeg.querySelector('.ci-seg-btn[data-code="' + resp.cost_code + '"]');
               if (cb) { chosenCode = resp.cost_code; codeSeg.querySelectorAll('.ci-seg-btn').forEach(function (b) { b.classList.toggle('active', b === cb); }); }
             }
@@ -613,8 +635,12 @@
           // 2) if a new photo was picked, upload it (to the linked entity, else
           //    the user's bucket — both valid attachment entity_types) and link.
           if (_pendingFile) {
-            var bucketType = entityId ? entityType : 'user';
-            var bucketId = entityId || myUserId();
+            // Photos attach to jobs/leads (real attachment buckets); a category
+            // isn't an attachment entity, so its receipt photo goes to the user
+            // bucket (same as an unlinked capture).
+            var canBucket = (entityId && (entityType === 'job' || entityType === 'lead'));
+            var bucketType = canBucket ? entityType : 'user';
+            var bucketId = canBucket ? entityId : myUserId();
             if (!bucketId) { photoFailed = true; return; }
             return window.p86Api.attachments.upload(bucketType, bucketId, _pendingFile, { geo: false })
               .then(function (ar) {

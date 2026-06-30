@@ -35,7 +35,10 @@ function anthropic() {
 
 const COST_CODES = new Set(['materials', 'labor', 'sub', 'gc']);
 const STATUSES = new Set(['unprocessed', 'processed', 'void']);
-const LINKABLE = new Set(['job', 'lead']);
+// What a receipt can link to: a job, a lead (pre-sale), or an org cost category
+// (a non-job coding bucket like Tools/Overhead). 'category' is the coding itself,
+// so the cost_code segment is irrelevant for it (client hides it).
+const LINKABLE = new Set(['job', 'lead', 'category']);
 
 const COLS =
   'id, ref, entity_type, entity_id, amount, vendor, cost_code, is_presale, ' +
@@ -127,8 +130,11 @@ function deriveStatus(prev, entityType, entityId, amount) {
 // a cost can't be (mis)attributed to a foreign/nonexistent entity id.
 async function entityInOrg(entityType, entityId, orgId) {
   if (!entityType || !entityId) return false;
-  const table = entityType === 'job' ? 'jobs' : (entityType === 'lead' ? 'leads' : null);
+  const table = entityType === 'job' ? 'jobs'
+    : (entityType === 'lead' ? 'leads'
+    : (entityType === 'category' ? 'cost_categories' : null));
   if (!table) return false;
+  // Categories use a TEXT id like receipts/jobs; cost_categories is keyed by text id too.
   try {
     const r = await pool.query('SELECT 1 FROM ' + table + ' WHERE id = $1 AND organization_id = $2', [String(entityId), orgId]);
     return r.rows.length > 0;
@@ -251,6 +257,97 @@ router.get('/rollup', requireAuth, async (req, res) => {
     res.json({ rollup: out });
   } catch (e) {
     console.error('GET /api/receipts/rollup error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── Cost categories (org-defined non-job coding buckets) ───────────────────
+// These literal paths MUST sit before '/:id' or Express routes "categories"
+// into the param handler.
+const CAT_COLS = 'id, name, position, archived, created_at';
+
+// GET /api/receipts/categories — the org's active cost categories (Tools, etc.).
+// Lazily seeds a default "Tools" category the first time an org has none, so the
+// feature works out of the box. ?all=1 includes archived (for the Admin pane).
+router.get('/categories', requireAuth, async (req, res) => {
+  try {
+    const orgId = callerOrgId(req);
+    if (!orgId) return res.json({ categories: [] });
+    let { rows } = await pool.query(
+      `SELECT ${CAT_COLS} FROM cost_categories WHERE organization_id = $1 ORDER BY position, lower(name)`,
+      [orgId]
+    );
+    if (!rows.length) {
+      // Seed the default bucket once. ON CONFLICT no-ops if a race created it.
+      await pool.query(
+        `INSERT INTO cost_categories (id, organization_id, name, position, created_by)
+         VALUES ($1, $2, 'Tools', 0, $3)
+         ON CONFLICT (organization_id, lower(name)) DO NOTHING`,
+        ['cat_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8), orgId, callerUserId(req)]
+      );
+      rows = (await pool.query(
+        `SELECT ${CAT_COLS} FROM cost_categories WHERE organization_id = $1 ORDER BY position, lower(name)`,
+        [orgId]
+      )).rows;
+    }
+    if (String(req.query.all || '') !== '1') rows = rows.filter((r) => !r.archived);
+    res.json({ categories: rows });
+  } catch (e) {
+    console.error('GET /api/receipts/categories error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /api/receipts/categories — add a category. Org config → admin-gated.
+router.post('/categories', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const orgId = callerOrgId(req);
+    if (!orgId) return res.status(400).json({ error: 'Organization required' });
+    const name = cleanStr((req.body || {}).name, 60);
+    if (!name) return res.status(400).json({ error: 'Name required' });
+    const id = 'cat_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
+    try {
+      const { rows } = await pool.query(
+        `INSERT INTO cost_categories (id, organization_id, name, position, created_by)
+         VALUES ($1, $2, $3, COALESCE((SELECT MAX(position) + 1 FROM cost_categories WHERE organization_id = $2), 0), $4)
+         RETURNING ${CAT_COLS}`,
+        [id, orgId, name, callerUserId(req)]
+      );
+      res.json({ category: rows[0] });
+    } catch (dup) {
+      if (dup && dup.code === '23505') return res.status(409).json({ error: 'A category with that name already exists.' });
+      throw dup;
+    }
+  } catch (e) {
+    console.error('POST /api/receipts/categories error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// PATCH /api/receipts/categories/:id — rename / archive / restore. Admin-gated.
+router.patch('/categories/:id', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const orgId = callerOrgId(req);
+    if (!orgId) return res.status(400).json({ error: 'Organization required' });
+    const b = req.body || {};
+    const has = (k) => Object.prototype.hasOwnProperty.call(b, k);
+    const cur = await pool.query('SELECT * FROM cost_categories WHERE id = $1 AND organization_id = $2', [req.params.id, orgId]);
+    if (!cur.rows.length) return res.status(404).json({ error: 'Category not found' });
+    const name = has('name') ? (cleanStr(b.name, 60) || cur.rows[0].name) : cur.rows[0].name;
+    const archived = has('archived') ? !!b.archived : cur.rows[0].archived;
+    try {
+      const { rows } = await pool.query(
+        `UPDATE cost_categories SET name = $3, archived = $4, updated_at = NOW()
+          WHERE id = $1 AND organization_id = $2 RETURNING ${CAT_COLS}`,
+        [req.params.id, orgId, name, archived]
+      );
+      res.json({ category: rows[0] });
+    } catch (dup) {
+      if (dup && dup.code === '23505') return res.status(409).json({ error: 'A category with that name already exists.' });
+      throw dup;
+    }
+  } catch (e) {
+    console.error('PATCH /api/receipts/categories/:id error:', e);
     res.status(500).json({ error: 'Server error' });
   }
 });

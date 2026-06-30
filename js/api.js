@@ -743,7 +743,12 @@
     resetOcrStats: function() { return del('/api/receipts/ocr/feedback/reset'); },
     create: function(payload) { return post('/api/receipts', payload); },
     update: function(id, payload) { return patch('/api/receipts/' + encodeURIComponent(id), payload); },
-    remove: function(id, hard) { return del('/api/receipts/' + encodeURIComponent(id) + (hard ? '?hard=1' : '')); }
+    remove: function(id, hard) { return del('/api/receipts/' + encodeURIComponent(id) + (hard ? '?hard=1' : '')); },
+    // Org cost categories (non-job coding buckets — Tools, Overhead, …). list()
+    // lazily seeds "Tools"; create/update are admin-gated server-side.
+    categories: function(all) { return get('/api/receipts/categories' + (all ? '?all=1' : '')); },
+    createCategory: function(name) { return post('/api/receipts/categories', { name: name }); },
+    updateCategory: function(id, payload) { return patch('/api/receipts/categories/' + encodeURIComponent(id), payload); }
   };
 
   // Outlook / Microsoft 365 — per-user mail connection (Phase 4: read + send).
