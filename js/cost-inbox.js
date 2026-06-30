@@ -95,15 +95,20 @@
   // ── Entity (job/lead/category) cache for the picker + label resolution ──
   var _jobs = [], _leads = [], _categories = [], _entLoaded = false;
   function loadEntities() {
-    if (_entLoaded) return Promise.resolve();
     var a = window.p86Api;
     if (!a) return Promise.resolve();
-    return Promise.all([
-      a.jobs.list().then(function (r) { _jobs = (r && (r.jobs || r)) || []; }).catch(function () { _jobs = []; }),
-      a.leads.list().then(function (r) { _leads = (r && (r.leads || r)) || []; }).catch(function () { _leads = []; }),
-      (a.receipts && a.receipts.categories ? a.receipts.categories() : Promise.resolve(null))
-        .then(function (r) { _categories = (r && (r.categories || r)) || []; }).catch(function () { _categories = []; })
-    ]).then(function () { _entLoaded = true; });
+    var tasks = [];
+    // Jobs + leads are heavier — cache them after the first load.
+    if (!_entLoaded) {
+      tasks.push(a.jobs.list().then(function (r) { _jobs = (r && (r.jobs || r)) || []; }).catch(function () { _jobs = []; }));
+      tasks.push(a.leads.list().then(function (r) { _leads = (r && (r.leads || r)) || []; }).catch(function () { _leads = []; }));
+    }
+    // Categories are tiny — ALWAYS refresh: self-heals a transient miss + picks
+    // up any category just added in Admin without a full page reload. On error,
+    // keep whatever we already have (don't wipe a good list).
+    tasks.push((a.receipts && a.receipts.categories ? a.receipts.categories() : Promise.resolve(null))
+      .then(function (r) { var c = r && (r.categories || r); if (Array.isArray(c)) _categories = c; }).catch(function () {}));
+    return Promise.all(tasks).then(function () { _entLoaded = true; });
   }
   function jobLabel(j) { return (j.jobNumber ? '[' + j.jobNumber + '] ' : '') + (j.title || j.name || j.id); }
   function catLabel(c) { return c.name || ('Category ' + c.id); }
@@ -455,7 +460,7 @@
                 '<select id="ciLinkType" class="ci-input">' +
                   '<option value="job"' + (linkType === 'job' ? ' selected' : '') + '>Job</option>' +
                   '<option value="lead"' + (linkType === 'lead' ? ' selected' : '') + '>Lead (pre-sale)</option>' +
-                  '<option value="category"' + (linkType === 'category' ? ' selected' : '') + '>Tools / Category</option>' +
+                  '<option value="category"' + (linkType === 'category' ? ' selected' : '') + '>Tools</option>' +
                 '</select>' +
                 '<input type="text" id="ciLinkSearch" class="ci-input" placeholder="Search…" autocomplete="off" />' +
               '</div>' +
@@ -509,11 +514,14 @@
         else if (type === 'category') { list = _categories; labelOf = catLabel; word = 'category'; }
         else { list = _jobs; labelOf = jobLabel; word = 'job'; }
         var filtered = filter ? list.filter(function (it) { return labelOf(it).toLowerCase().indexOf(filter) >= 0; }) : list;
-        var opts = ['<option value="">— select a ' + word + ' —</option>'];
+        // Categories: no empty placeholder — you always pick one, so default to
+        // the first (Tools) so a category receipt "sticks" without a 2nd click.
+        var opts = (type === 'category' && filtered.length) ? [] : ['<option value="">— select a ' + word + ' —</option>'];
         filtered.forEach(function (it) { opts.push('<option value="' + esc(it.id) + '">' + esc(labelOf(it)) + '</option>'); });
         if (filter && !filtered.length) opts.push('<option value="" disabled>No ' + word + 's match “' + esc(filter) + '”</option>');
         selId.innerHTML = opts.join('');
         if (r.entity_type === type && r.entity_id) selId.value = r.entity_id;
+        else if (type === 'category' && filtered.length) selId.value = filtered[0].id;  // default → Tools
         // Search box only helps the long job/lead lists; categories are few.
         if (searchEl) searchEl.style.display = (type === 'category') ? 'none' : '';
         if (searchEl && type !== 'category') searchEl.placeholder = 'Search ' + word + 's…';
