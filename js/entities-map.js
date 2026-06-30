@@ -474,9 +474,9 @@
         wrap.className = 'p86-map-nav';
         wrap.innerHTML =
           '<button data-act="3d" title="Toggle 3D tilt">3D</button>' +
-          '<button data-act="rotl" title="Rotate left">↺</button>' +
-          '<button data-act="rotr" title="Rotate right">↻</button>' +
-          '<button data-act="north" title="Reset to North (top-down)"><span class="p86-map-nav-needle">▲</span></button>';
+          '<button data-act="rotl" title="Rotate left">&#8634;</button>' +
+          '<button data-act="rotr" title="Rotate right">&#8635;</button>' +
+          '<button data-act="north" title="Reset to North (top-down)"><span class="p86-map-nav-needle">&#9650;</span></button>';
         var t3d = wrap.querySelector('[data-act="3d"]');
         var needle = wrap.querySelector('.p86-map-nav-needle');
         function curTilt() { return (map.getTilt && map.getTilt()) || 0; }
