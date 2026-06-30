@@ -1004,7 +1004,7 @@
                 '<div class="p86-cmd-workspace" data-seg="today">' +
                     // Col 1 (money) — combined leads + jobs map + sales pipeline.
                     '<div class="p86-cmd-col" data-seg-group="money">' +
-                        '<div class="p86-cmd-mod">' +
+                        '<div class="p86-cmd-mod p86-cmd-mod--fill">' +
                             '<div class="p86-cmd-modhead"><span>Map</span></div>' +
                             '<div id="summaryMapHost" class="p86-cmd-modbody" style="padding:0;min-height:420px;overflow:hidden;position:relative;"></div>' +
                         '</div>' +
@@ -1014,7 +1014,7 @@
                     '</div>' +
                     // Col 2 (today) — assistant hub + this-week agenda.
                     '<div class="p86-cmd-col" data-seg-group="today">' +
-                        '<div class="p86-cmd-mod">' +
+                        '<div class="p86-cmd-mod p86-cmd-mod--fill">' +
                             '<div class="p86-cmd-modhead"><span>Assistant Hub</span>' +
                                 '<button class="ee-btn ghost small" onclick="if(window.p86AI&amp;&amp;window.p86AI.open)window.p86AI.open({entityType:\'ask86\'});" style="font-size:11px;padding:2px 8px;">Ask 86 &rarr;</button>' +
                             '</div>' +
@@ -1039,7 +1039,7 @@
                             '<div class="p86-cmd-modhead"><span>Recent Files</span></div>' +
                             '<div id="summary-files" class="p86-cmd-modbody" style="text-align:center;">Loading recent files&hellip;</div>' +
                         '</div>' +
-                        '<div class="p86-cmd-mod">' +
+                        '<div class="p86-cmd-mod p86-cmd-mod--fill">' +
                             '<div class="p86-cmd-modhead"><span>My Notes</span></div>' +
                             '<div id="summary-notes" class="p86-cmd-modbody">Loading notes&hellip;</div>' +
                         '</div>' +

@@ -3046,6 +3046,24 @@
         .p86-cmd-modhead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; font-size: 11px; color: var(--text-dim, #888); text-transform: uppercase; letter-spacing: 0.5px; font-weight: 700; }
         .p86-cmd-modbody { border: 1px solid var(--border, #333); border-radius: 10px; background: var(--card-bg, #0f0f1e); padding: 12px; color: var(--text-dim, #888); font-size: 12px; min-height: 80px; }
 
+        /* Fill the scroll viewport on desktop. The dashboard is content-height
+           inside main (flex:1; overflow-y:auto), so a short page left an empty
+           band at the bottom + a ragged gap under the shorter middle column.
+           This flex chain stretches #summary-root to main's height; the
+           workspace absorbs the slack and its columns equalize. One designated
+           "fill" module per column (Map / Assistant Hub / My Notes) takes the
+           extra height so no column has an internal ragged gap. Scoped to the
+           active Summary tab via :has() so other views are untouched; mobile
+           (<769px) keeps its segmented single-column layout. */
+        @media (min-width: 769px) {
+            .main-inner:has(> #summary.tab-content.active) { display: flex; flex-direction: column; min-height: 100%; }
+            #summary.tab-content.active { display: flex; flex-direction: column; flex: 1 1 auto; }
+            #summary-root { display: flex; flex-direction: column; flex: 1 1 auto; }
+            #summary-root .p86-cmd-workspace { flex: 1 1 auto; align-items: stretch; }
+            #summary-root .p86-cmd-mod--fill { flex: 1 1 auto; }
+            #summary-root .p86-cmd-mod--fill .p86-cmd-modbody { flex: 1 1 auto; min-height: 0; }
+        }
+
         /* RESPONSIVE */
         @media (max-width: 768px) {
             .main-inner {
