@@ -776,6 +776,17 @@ body.light-mode .ng-topbar.ng-ribbon .ng-ribbon-btn:hover{
 #nodeGraphTab.ng-sat .ng-grid-canvas{opacity:0}            /* hide the dot grid under imagery */
 #nodeGraphTab:not(.ng-siteplan) .ng-sat-btn{display:none}  /* satellite toggle is site-plan only */
 #nodeGraphTab:not(.ng-siteplan) .ng-3d-btn{display:none}   /* 3D massing toggle is site-plan only */
+#nodeGraphTab:not(.ng-siteplan) .ng-orbit-btn{display:none} /* 3D orbit view is site-plan only */
+
+/* 3D Orbit view — an isolated, interactive vector map (Google's real tilted 3D
+   buildings) layered over the canvas area. Shown only while .ng-orbit-on; the flat
+   working map + node overlay underneath are untouched, so Exit just hides this. */
+#nodeGraphTab .ng-orbit-3d{position:absolute;inset:0;z-index:40;display:none;background:#0b0e16}
+#nodeGraphTab.ng-orbit-on .ng-orbit-3d{display:block}
+.ng-orbit-3d-map{position:absolute;inset:0}
+.ng-orbit-exit{position:absolute;top:12px;right:12px;z-index:5;display:inline-flex;align-items:center;gap:6px;background:rgba(17,20,28,.92);color:#fff;border:1px solid rgba(255,255,255,.18);border-radius:9px;padding:8px 13px;font-size:12px;font-weight:600;cursor:pointer;box-shadow:0 2px 12px rgba(0,0,0,.5)}
+.ng-orbit-exit:hover{background:rgba(40,46,60,.96)}
+.ng-orbit-hint{position:absolute;left:12px;bottom:12px;z-index:5;background:rgba(17,20,28,.86);color:#aeb4c4;border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:7px 11px;font-size:11px;max-width:280px;line-height:1.45;pointer-events:none}
 .ng-sat-hint{position:absolute;left:50%;top:14px;transform:translateX(-50%);z-index:30;background:var(--ng-surface);border:1px solid var(--ng-border);color:var(--ng-dim);padding:6px 12px;border-radius:8px;font-size:12px;display:none;pointer-events:none;max-width:80%;text-align:center}
 /* Map-picker (Slice 3): the Place button shows only in satellite mode; the
    crosshair overlay captures the placement click ABOVE the engine. */

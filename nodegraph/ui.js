@@ -28,6 +28,11 @@ var _spPhotos=(function(){ try{ return localStorage.getItem('ngSitePlanPhotos')=
 var _taskPinsEl=null, _geoTasks=[], _geoTasksJob=null;
 var _spTasks=(function(){ try{ return localStorage.getItem('ngSitePlanTasks')==='1'; }catch(_){ return false; } })();
 var _spSatellite=true; // satellite is permanent now (the toggle is retired); never goes false
+// 3D Orbit view (real Google 3D buildings). An ISOLATED full-cover vector map layered
+// OVER the flat working map — a "look around the site" mode. The working basemap + node
+// overlay are never touched, so exiting just hides this layer (zero regression risk).
+var _spOrbit=false, _orbitMap=null, _orbitEl=null;
+var NG_ORBIT_MAP_ID='285034f23d385f2e9f756209'; // same vector mapId the org Job Map uses
 // NG8: frames (group boxes) interaction state
 var selFrame=null, dragFrame=null, frameDragOff=null, frameMembers=null, resizeFrame=null, resizeStart=null;
 // When set to a note's id, the next click on a node attaches the note
@@ -1390,6 +1395,66 @@ function updateBasemapVisibility(){
   updatePhotoLayer(); // photos ride on top of satellite — show/hide together
   updateTaskLayer();  // task pins ride alongside photos
   renderPolygons();   // show/hide the building footprint layer with satellite
+}
+
+// ── 3D Orbit view (real Google 3D buildings) ───────────────────────────────
+// John's "use the view with the buildings on" 3D feel. Tilting the WORKING basemap
+// would float its flat node overlay off the buildings (the overlay is screen-space,
+// slaved to a 2D projection — see syncBasemapCamera). So instead we drop a SEPARATE,
+// fully-interactive vector map OVER the canvas area, centered on the job and tilted
+// into Google's 3D buildings. The working map underneath is untouched; Exit just
+// hides this layer. Site-plan only + needs a geocoded job.
+function toggleOrbit3D(){
+  if(_spOrbit){ exitOrbit3D(); return; }
+  var o=jobOrigin();
+  if(!o){ showSatHint(true,'Add a job address to use the 3D orbit view.'); setTimeout(function(){ showSatHint(false); },2400); return; }
+  if(_measuring){ try{ exitMeasure(); }catch(_){} }
+  try{ exitGeoPick(); }catch(_){}
+  try{ exitTrace(); }catch(_){}
+  _spOrbit=true;
+  var tab=document.getElementById('nodeGraphTab');
+  if(tab) tab.classList.add('ng-orbit-on');
+  var ob=tab&&tab.querySelector('.ng-orbit-btn'); if(ob) ob.classList.add('ng-on');
+  ensureOrbit3D(o);
+}
+function exitOrbit3D(){
+  _spOrbit=false;
+  var tab=document.getElementById('nodeGraphTab');
+  if(tab) tab.classList.remove('ng-orbit-on');
+  var ob=tab&&tab.querySelector('.ng-orbit-btn'); if(ob) ob.classList.remove('ng-on');
+}
+function ensureOrbit3D(o){
+  var tab=document.getElementById('nodeGraphTab'); if(!tab) return;
+  if(!_orbitEl){
+    _orbitEl=document.createElement('div'); _orbitEl.className='ng-orbit-3d';
+    var mapDiv=document.createElement('div'); mapDiv.className='ng-orbit-3d-map'; _orbitEl.appendChild(mapDiv);
+    var exitB=document.createElement('button'); exitB.type='button'; exitB.className='ng-orbit-exit';
+    exitB.innerHTML='&#x2715; Exit 3D'; exitB.addEventListener('click', exitOrbit3D); _orbitEl.appendChild(exitB);
+    var hint=document.createElement('div'); hint.className='ng-orbit-hint';
+    hint.textContent='Drag to pan · Ctrl-drag (or two fingers) to tilt & spin · scroll to zoom. Look-around 3D view — Exit to return to the working map.';
+    _orbitEl.appendChild(hint);
+    (tab.querySelector('.ng-canvas-area')||tab).appendChild(_orbitEl);
+    _orbitEl.__mapDiv=mapDiv;
+  }
+  if(!window.p86Maps){ return; }
+  window.p86Maps.ready().then(function(maps){
+    if(!_spOrbit) return;                                   // exited while the SDK loaded
+    if(!_orbitMap){
+      _orbitMap=new maps.Map(_orbitEl.__mapDiv, {
+        center:{ lat:o.lat, lng:o.lng }, zoom:18,
+        mapId:NG_ORBIT_MAP_ID, mapTypeId:maps.MapTypeId.HYBRID,
+        tilt:47.5, heading:0,
+        rotateControl:true, zoomControl:true, streetViewControl:false,
+        fullscreenControl:false, mapTypeControl:false, clickableIcons:false,
+        gestureHandling:'greedy', keyboardShortcuts:true, backgroundColor:'#0b0e16'
+      });
+    } else {
+      _orbitMap.setCenter({ lat:o.lat, lng:o.lng }); _orbitMap.setZoom(18);
+      _orbitMap.setTilt(47.5); _orbitMap.setHeading(0);
+    }
+    // The div was display:none until the class flipped — nudge a resize so tiles fill it.
+    setTimeout(function(){ try{ maps.event.trigger(_orbitMap,'resize'); _orbitMap.setCenter({ lat:o.lat, lng:o.lng }); }catch(_){ } }, 60);
+  }).catch(function(){});
 }
 
 // ── Map-picker (Slice 3): the ONLY building-geo write path ──────────────
@@ -4723,6 +4788,7 @@ function init(){
     _spFocus=null; applySpFocus();        // always start at the whole-site view
     if(on) fitSiteplan(); else render();  // auto-fit to the buildings on enter
     updateBasemapVisibility();            // show/hide the satellite basemap with the mode
+    if(!on && _spOrbit) exitOrbit3D();    // the 3D orbit view is a site-plan layer — leave it with the mode
   });
 
   // Satellite is PERMANENT now (the toggle button is retired/hidden). The handler is
@@ -4747,6 +4813,10 @@ function init(){
   // Trace Building (Phase 1) — select a building, then click its footprint corners.
   var traceBtn=tab.querySelector('.ng-trace-btn');
   if(traceBtn) traceBtn.addEventListener('click', toggleTraceMode);
+
+  // 3D Orbit — Google's real tilted 3D buildings in an isolated look-around layer.
+  var orbitBtn=tab.querySelector('.ng-orbit-btn');
+  if(orbitBtn) orbitBtn.addEventListener('click', toggleOrbit3D);
 
   // Photo-GPS pins (Slice 4) — plot the job's geotagged photos on the imagery.
   var photosBtn=tab.querySelector('.ng-photos-btn');
@@ -5341,6 +5411,7 @@ window.ngMarkSaved = function(state){ flashSaveIndicator(state || 'saved'); };
 window.closeNodeGraph=function(){
   var tab=document.getElementById('nodeGraphTab'); if(!tab) return;
   try { restoreSectionPanel(); } catch(e){}   // return any inspector-held section panel to #wsRightContent
+  try { exitOrbit3D(); } catch(e){}           // drop the 3D orbit layer on close
   if(typeof window.E !== 'undefined' && window.E && typeof window.E.saveGraph === 'function'){
     try { window.E.saveGraph(); } catch(e){ /* defensive */ }
   } else if(typeof NG !== 'undefined' && NG.saveGraph){
@@ -5371,6 +5442,7 @@ window.openNodeGraph=function(jid){
   // "right bar empty on the first try" race after a prior job/section was open.
   try { restoreSectionPanel(); } catch(e){}
   _inspJobKey=null;
+  try { exitOrbit3D(); } catch(e){}           // never reopen stuck in the 3D orbit layer
   // Restore the persisted Clean Mode look + sync the toggle button.
   try {
     var _clean = E && E.cleanMode && E.cleanMode();
