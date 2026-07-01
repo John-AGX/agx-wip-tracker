@@ -2597,6 +2597,38 @@ function wrapUserData(source, text) {
 // hints rather than crashing.)
 const STAFF_HINT_BY_SURFACE = {};
 
+// Day-orient — a compact "today's plate" digest injected ONCE on the first turn of a
+// fresh session, so the assistant/86 opens like a teammate who already read the
+// standup instead of a cold bot. Reads the user's own org tasks (overdue + due
+// today). Fail-safe by design: ANY error returns '' — never breaks the turn. The
+// prompt guidance tells the model to use it with restraint (surface it when it bears
+// on the ask; do not recite the list unprompted).
+async function buildTodayDigest(userId) {
+  try {
+    if (!userId) return '';
+    const r = await pool.query(
+      "SELECT title, priority, (due_date < CURRENT_DATE) AS overdue " +
+      "  FROM tasks " +
+      " WHERE assignee_user_id = $1 AND archived_at IS NULL AND status <> 'done' AND scope = 'org' " +
+      "   AND due_date IS NOT NULL AND due_date <= CURRENT_DATE " +
+      " ORDER BY due_date ASC LIMIT 10",
+      [userId]
+    );
+    if (!r.rows.length) return '';
+    const label = function (t) { return String(t.title || '(untitled)') + (t.priority && t.priority !== 'normal' ? ' [' + t.priority + ']' : ''); };
+    const overdue = r.rows.filter(function (t) { return t.overdue; });
+    const today = r.rows.filter(function (t) { return !t.overdue; });
+    const lines = ['<today_digest>'];
+    lines.push("The user just opened a session — this is their plate today (their assigned org tasks). Be a teammate who already knows the day: surface an overdue item or a conflict when it bears on what they ask. Do NOT recite this list unprompted; use it for a brief, relevant, proactive orientation only.");
+    if (overdue.length) lines.push('OVERDUE (' + overdue.length + '): ' + overdue.map(label).join('; '));
+    if (today.length) lines.push('DUE TODAY (' + today.length + '): ' + today.map(label).join('; '));
+    lines.push('</today_digest>');
+    return lines.join('\n');
+  } catch (e) {
+    return '';
+  }
+}
+
 async function buildTurnContext({ entityType, entityId, clientContext, aiPhase, userId, organization }) {
   let turnContextText = '';
   let photoBlocks = [];
@@ -13354,6 +13386,17 @@ router.post('/86/chat', requireAuth, requireOrg, aiChatLimiter, aiChatHourlyLimi
       extraPhotoBlocks = turnCtx.photoBlocks;
     } catch (e) {
       console.warn('[/86/chat] per-entity context build skipped:', e.message);
+    }
+
+    // Day-orient (team-feel): on the FIRST turn of a fresh session, prepend a
+    // compact "today's plate" digest so the agent opens already knowing the day.
+    // First-turn only (freshlyCreated) → injected once, never re-sent. Fail-safe:
+    // buildTodayDigest returns '' on any error, so this can never break the turn.
+    if (session && session._freshlyCreated) {
+      try {
+        const digest = await buildTodayDigest(req.user.id);
+        if (digest) turnContextText = turnContextText ? (digest + '\n\n' + turnContextText) : digest;
+      } catch (_) { /* never blocks the chat */ }
     }
 
     // Auto-attach uploaded photos to whichever entity is open (best-
