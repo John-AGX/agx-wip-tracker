@@ -60,7 +60,8 @@
       frozenBg: 'var(--bg,#0f1117)',
       widths: { title: 280, client: 220, status: 130, revenue: 130,
                 confidence: 90, salesperson: 160, project_type: 160,
-                projected_sale_date: 130, updated_at: 120 }
+                projected_sale_date: 130, next_followup_at: 120,
+                status_changed_at: 90, updated_at: 120 }
     },
     // Cost Inbox: no frozen column (the leading select-all checkbox column has
     // no data-col, so it stays pinned at index 0 on its own). Reorder + resize

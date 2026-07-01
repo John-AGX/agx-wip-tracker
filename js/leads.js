@@ -161,6 +161,21 @@
       if (!terminal && !isNaN(pd) && pd < Date.now() - 86400000) projOverdue = true;
     }
 
+    // Next follow-up: red when past-due and the lead is still active.
+    var nfuStr = l.next_followup_at ? fmtDate(l.next_followup_at) : '';
+    var nfuOverdue = false;
+    if (l.next_followup_at) {
+      var nd = new Date(l.next_followup_at).getTime();
+      var nTerminal = ['sold', 'lost', 'no_opportunity'].indexOf(l.status) !== -1;
+      if (!nTerminal && !isNaN(nd) && nd < Date.now() - 86400000) nfuOverdue = true;
+    }
+    // Days in the current stage, from status_changed_at (pipeline velocity).
+    var stageDays = '';
+    if (l.status_changed_at) {
+      var sc = new Date(l.status_changed_at).getTime();
+      if (!isNaN(sc)) stageDays = Math.max(0, Math.floor((Date.now() - sc) / 86400000)) + 'd';
+    }
+
     // Single-line title: bold title + small inline grey suffix for
     // location. Mirrors the Jobs "Job # / Name" cell pattern.
     var location = [l.city, l.state].filter(Boolean).join(', ');
@@ -185,6 +200,8 @@
       '<td data-col="salesperson">' + escapeHTML(l.salesperson_name || '') + '</td>' +
       '<td data-col="project_type">' + escapeHTML(l.project_type || '') + '</td>' +
       '<td data-col="projected_sale_date"' + (projOverdue ? ' style="color:#f87171;"' : '') + '>' + escapeHTML(projDateStr) + '</td>' +
+      '<td data-col="next_followup_at"' + (nfuOverdue ? ' style="color:#f87171;font-weight:600;"' : '') + '>' + escapeHTML(nfuStr) + '</td>' +
+      '<td data-col="status_changed_at" class="num" title="Days in the current stage">' + escapeHTML(stageDays) + '</td>' +
       '<td data-col="updated_at" title="created ' + escapeAttr(fmtDate(l.created_at)) + '">' + escapeHTML(fmtDate(l.updated_at || l.created_at)) + '</td>' +
     '</tr>';
   }
@@ -214,6 +231,14 @@
       // the unscheduled leads land at the end of the pipeline view.
       av = a.projected_sale_date ? new Date(a.projected_sale_date).getTime() : Infinity;
       bv = b.projected_sale_date ? new Date(b.projected_sale_date).getTime() : Infinity;
+    } else if (key === 'next_followup_at') {
+      // No follow-up scheduled sorts last on ascending (soonest-first).
+      av = a.next_followup_at ? new Date(a.next_followup_at).getTime() : Infinity;
+      bv = b.next_followup_at ? new Date(b.next_followup_at).getTime() : Infinity;
+    } else if (key === 'status_changed_at') {
+      // Oldest status change first on ascending = longest time-in-stage.
+      av = a.status_changed_at ? new Date(a.status_changed_at).getTime() : Infinity;
+      bv = b.status_changed_at ? new Date(b.status_changed_at).getTime() : Infinity;
     } else if (key === 'client') {
       av = (a.client_name || '').toLowerCase(); bv = (b.client_name || '').toLowerCase();
     } else if (key === 'salesperson') {
@@ -370,6 +395,8 @@
       leadsHeaderCell('Salesperson',   'salesperson') +
       leadsHeaderCell('Project Type',  'project_type') +
       leadsHeaderCell('Proj. Sale',    'projected_sale_date') +
+      leadsHeaderCell('Next F/U',      'next_followup_at') +
+      leadsHeaderCell('In Stage',      'status_changed_at', { num: true }) +
       leadsHeaderCell('Updated',       'updated_at');
 
     // Outer wrapper drops the heavy inline border / bg / radius — the
@@ -617,6 +644,7 @@
     'source', 'project_type',
     'salesperson_id',
     'property_name', 'gate_code', 'market',
+    'next_followup_at', 'lost_reason',
     'notes'
   ];
 

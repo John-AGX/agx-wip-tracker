@@ -2642,6 +2642,25 @@
                 <input id="leadEditor_projected_sale_date" type="date" />
               </div>
             </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px;align-items:end;">
+              <div>
+                <label style="display:block;">Next Follow-up</label>
+                <input id="leadEditor_next_followup_at" type="date" />
+              </div>
+              <div>
+                <label style="display:block;">Lost Reason</label>
+                <select id="leadEditor_lost_reason">
+                  <option value="">— None —</option>
+                  <option value="budget">Budget</option>
+                  <option value="timeline">Timeline</option>
+                  <option value="competitor">Went with competitor</option>
+                  <option value="no_response">No response / ghosted</option>
+                  <option value="not_qualified">Not qualified</option>
+                  <option value="scope">Scope mismatch</option>
+                  <option value="other">Other</option>
+                </select>
+              </div>
+            </div>
             <div style="margin-top:10px;">
               <label style="display:block;">Estimated Revenue</label>
               <input id="leadEditor_estimated_revenue_low" type="number" step="100" placeholder="0" />
@@ -3150,9 +3169,9 @@
          internal scroll / persisted layout) for the Jobs, Estimates and
          Leads lists. Loads BEFORE those renderers so window.p86Tables is
          ready the first time they build their tables. -->
-    <script src="js/table-enhancements.js?v=6"></script>
+    <script src="js/table-enhancements.js?v=7"></script>
     <script src="js/job-finalize.js?v=1"></script>
-    <script src="js/leads.js?v=55"></script>
+    <script src="js/leads.js?v=56"></script>
     <script src="js/job-costs-import.js?v=4"></script>
     <script src="js/qb-costs-view.js?v=11"></script>
     <script src="js/insights.js?v=7"></script>

@@ -205,7 +205,7 @@ router.post('/convert', requireAuth, requireRole('admin', 'pm'), async (req, res
     );
     if (leadId) {
       await client.query(
-        "UPDATE leads SET job_id = $1, status = 'sold', updated_at = NOW() WHERE id = $2 AND (organization_id = $3 OR organization_id IS NULL)",
+        "UPDATE leads SET job_id = $1, status = 'sold', converted_at = COALESCE(converted_at, NOW()), status_changed_at = NOW(), lost_at = NULL, updated_at = NOW() WHERE id = $2 AND (organization_id = $3 OR organization_id IS NULL)",
         [id, leadId, orgId]
       );
       // Carry the lead's captured receipts forward to the new job. They keep

@@ -49,6 +49,7 @@ const EDITABLE_FIELDS = [
   'salesperson_id',
   'property_name', 'gate_code', 'market',
   'notes',
+  'lost_reason', 'next_followup_at',   // lifecycle: loss category + scheduled next contact
   'job_id',
   'geocode_lat', 'geocode_lng'   // accepted from a Places-picked address (skips Census re-geocode)
 ];
@@ -75,7 +76,7 @@ function pickEditable(body) {
     out[k] = isNaN(n) ? null : n;
   });
   // Empty-string -> null for optional FK / date fields so Postgres accepts them
-  ['client_id', 'salesperson_id', 'projected_sale_date', 'job_id'].forEach(function(k) {
+  ['client_id', 'salesperson_id', 'projected_sale_date', 'job_id', 'next_followup_at'].forEach(function(k) {
     if (out[k] === '') out[k] = null;
   });
   return out;
@@ -192,6 +193,16 @@ router.put('/:id', requireAuth, requireCapability('LEADS_EDIT'), async (req, res
       params.push(fields[k]);
     }
     if (!sets.length) return res.json({ ok: true, unchanged: true });
+    // Lifecycle auto-stamps on a real status change (literal SQL, no params).
+    // status_changed_at bumps every time; converted_at/lost_at stamp on entry
+    // to a terminal stage (COALESCE = first time); moving back to an active
+    // stage clears the terminal stamps so a re-opened lead reads correctly.
+    if (fields.status && fields.status !== oldStatus) {
+      sets.push('status_changed_at = NOW()');
+      if (fields.status === 'sold') sets.push('converted_at = COALESCE(converted_at, NOW())');
+      else if (fields.status === 'lost' || fields.status === 'no_opportunity') sets.push('lost_at = COALESCE(lost_at, NOW())');
+      else { sets.push('converted_at = NULL'); sets.push('lost_at = NULL'); }
+    }
     sets.push('updated_at = NOW()');
     params.push(req.params.id);
     // Wave 1.A Phase 2 — org filter on the UPDATE WHERE.

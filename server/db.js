@@ -866,6 +866,24 @@ async function initSchema() {
     ALTER TABLE leads ADD COLUMN IF NOT EXISTS geocode_lng NUMERIC(8, 5);
     ALTER TABLE leads ADD COLUMN IF NOT EXISTS geocode_status TEXT;
     ALTER TABLE leads ADD COLUMN IF NOT EXISTS geocode_at TIMESTAMPTZ;
+    -- Lead lifecycle timestamps: WHEN each stage change happened, distinct from
+    -- created_at/updated_at. status_changed_at bumps on every status change
+    -- (drives days-in-stage); converted_at set when a lead goes 'sold';
+    -- lost_at when it goes 'lost'/'no_opportunity'; lost_reason categorizes the
+    -- loss; next_followup_at is a user-set date (overdue-follow-up filtering).
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS status_changed_at TIMESTAMPTZ;
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS converted_at TIMESTAMPTZ;
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS lost_at TIMESTAMPTZ;
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS lost_reason TEXT;
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS next_followup_at DATE;
+    -- Idempotent backfill so history isn't blank: converted_at from the linked
+    -- job's created_at; lost_at from updated_at for already-lost leads;
+    -- status_changed_at defaults to updated_at for every existing row.
+    UPDATE leads l SET converted_at = j.created_at
+      FROM jobs j WHERE j.lead_id = l.id AND l.converted_at IS NULL;
+    UPDATE leads SET lost_at = updated_at
+      WHERE lost_at IS NULL AND status IN ('lost', 'no_opportunity');
+    UPDATE leads SET status_changed_at = updated_at WHERE status_changed_at IS NULL;
 
     -- Geocode cache for the Estimates map view. Estimates store their
     -- address as a single free-form data->>'propertyAddr' string (not split
