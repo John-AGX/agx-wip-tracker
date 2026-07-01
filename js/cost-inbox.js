@@ -120,12 +120,97 @@
   }
 
   // ── List page ─────────────────────────────────────────────────────
-  var _filters = { job: '', status: '', q: '', user: '' };
+  var _filters = { q: '' };       // inline quick-search
+  var _drawer = null;             // rich filter-drawer values (null = none)
   var _receipts = [];
   var _selected = {};        // id -> true (multi-select for export)
   var _visibleRows = [];     // the currently filtered/sorted rows on screen
   // Column/row table is the only list view. Table sort state:
   var _tsort = { key: '', dir: 'desc' };
+
+  // Field spec for the filter drawer (uploaded-by options come from the loaded set).
+  var COST_CODE_OPTS = [
+    { v: 'materials', label: 'Materials' }, { v: 'labor', label: 'Labor' },
+    { v: 'sub', label: 'Subcontractor' }, { v: 'gc', label: 'General Conditions' },
+    { v: 'presale', label: 'Pre-sale' }
+  ];
+  function ciFilterFields() {
+    var seen = {}, users = [{ v: '', label: 'All uploaders' }];
+    _receipts.forEach(function (r) {
+      if (r.entered_by == null) return; var k = String(r.entered_by);
+      if (seen[k]) return; seen[k] = true;
+      users.push({ v: k, label: r.entered_by_name || ('User ' + k) });
+    });
+    return [
+      { key: 'status', label: 'Status', type: 'chips', options: [{ v: 'unprocessed', label: 'Unprocessed' }, { v: 'processed', label: 'Processed' }, { v: 'void', label: 'Voided' }] },
+      { key: 'linked', label: 'Job / Lead / Category', type: 'text', placeholder: 'Type a job, lead, or category…' },
+      { key: 'cost_code', label: 'Cost Code', type: 'chips', options: COST_CODE_OPTS },
+      { key: 'purchase_date', label: 'Purchase Date', type: 'daterange' },
+      { key: 'upload_date', label: 'Upload Date', type: 'daterange' },
+      { key: 'vendor', label: 'Sub / Vendor', type: 'text', placeholder: 'Vendor name…' },
+      { key: 'uploaded_by', label: 'Uploaded By', type: 'select', options: users },
+      { key: 'amount', label: 'Total Amount', type: 'numrange' }
+    ];
+  }
+  // Does a receipt pass the current drawer filters? (null drawer = default: hide void.)
+  function matchesDrawer(r) {
+    var d = _drawer;
+    // status
+    if (d && d.status && d.status.length) { if (d.status.indexOf(r.status) < 0) return false; }
+    else if (r.status === 'void') return false; // no status chosen → hide voided
+    if (!d) return true;
+    if (d.linked && d.linked.trim()) { if (entityLabel(r.entity_type, r.entity_id).toLowerCase().indexOf(d.linked.trim().toLowerCase()) < 0) return false; }
+    if (d.cost_code && d.cost_code.length) { var code = r.is_presale ? 'presale' : (r.cost_code || ''); if (d.cost_code.indexOf(code) < 0) return false; }
+    var pr = window.p86FilterDrawer.resolveDateRange(d.purchase_date);
+    if (pr.from || pr.to) { var pd = String(r.purchased_at || '').slice(0, 10); if (!pd) return false; if (pr.from && pd < pr.from) return false; if (pr.to && pd > pr.to) return false; }
+    var ur = window.p86FilterDrawer.resolveDateRange(d.upload_date);
+    if (ur.from || ur.to) { var ud = String(r.created_at || '').slice(0, 10); if (!ud) return false; if (ur.from && ud < ur.from) return false; if (ur.to && ud > ur.to) return false; }
+    if (d.vendor && d.vendor.trim()) { if ((r.vendor || '').toLowerCase().indexOf(d.vendor.trim().toLowerCase()) < 0) return false; }
+    if (d.uploaded_by) { if (String(r.entered_by) !== String(d.uploaded_by)) return false; }
+    var nr = window.p86FilterDrawer.resolveNumRange(d.amount);
+    if (nr.min != null || nr.max != null) { var amt = Number(r.amount || 0); if (nr.min != null && amt < nr.min) return false; if (nr.max != null && amt > nr.max) return false; }
+    return true;
+  }
+  function openFilterDrawer() {
+    var fields = ciFilterFields();
+    window.p86FilterDrawer.open({
+      title: 'Filter',
+      fields: fields,
+      values: _drawer || window.p86FilterDrawer.emptyValues(fields),
+      onApply: function (v) { _drawer = v; updateFilterUI(); renderList(); },
+      onClear: function () { _drawer = null; updateFilterUI(); renderList(); }
+    });
+  }
+  // "Filter (N)" badge + removable active-filter chips above the list.
+  function updateFilterUI() {
+    var fields = ciFilterFields();
+    var n = _drawer ? window.p86FilterDrawer.countActive(fields, _drawer) : 0;
+    var btn = document.getElementById('ciFilterBtn');
+    if (btn) { btn.classList.toggle('pf-on', n > 0); btn.innerHTML = 'Filter' + (n ? ' <strong>(' + n + ')</strong>' : ''); }
+    var af = document.getElementById('ciActiveFilters');
+    if (!af) return;
+    if (!n) { af.innerHTML = ''; return; }
+    function summary(f) {
+      var v = _drawer[f.key];
+      if (f.type === 'chips') { return v.map(function (x) { var o = (f.options || []).find(function (o) { return o.v === x; }); return o ? o.label : x; }).join(', '); }
+      if (f.type === 'select') { var o = (f.options || []).find(function (o) { return String(o.v) === String(v); }); return o ? o.label : v; }
+      if (f.type === 'daterange') { var r = window.p86FilterDrawer.resolveDateRange(v); return (r.from || '…') + ' → ' + (r.to || '…'); }
+      if (f.type === 'numrange') { var r2 = window.p86FilterDrawer.resolveNumRange(v); return (r2.min != null ? ('$' + r2.min) : '$0') + ' → ' + (r2.max != null ? ('$' + r2.max) : '∞'); }
+      return String(v);
+    }
+    af.innerHTML = fields.filter(function (f) { return _drawer && window.p86FilterDrawer.countActive([f], _drawer); }).map(function (f) {
+      return '<span class="ci-fchip">' + esc(f.label) + ': ' + esc(summary(f)) + ' <button type="button" data-clr="' + esc(f.key) + '" aria-label="remove">&times;</button></span>';
+    }).join('');
+    af.querySelectorAll('button[data-clr]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var k = b.getAttribute('data-clr');
+        var f = fields.find(function (x) { return x.key === k; });
+        if (_drawer && f) { _drawer[k] = window.p86FilterDrawer.emptyValues([f])[k]; }
+        if (_drawer && !window.p86FilterDrawer.countActive(fields, _drawer)) _drawer = null;
+        updateFilterUI(); renderList();
+      });
+    });
+  }
 
   // "OCR accuracy" line — the model's hit-rate per field, so John can watch it
   // improve as more receipts get captured/corrected (the learning loop).
@@ -156,96 +241,47 @@
           '</div>' +
         '</div>' +
         '<div class="ci-toolbar">' +
-          '<select id="ciJobFilter" class="ci-input"><option value="">All jobs, leads &amp; categories</option></select>' +
-          '<select id="ciUserFilter" class="ci-input"><option value="">All uploaders</option></select>' +
-          '<select id="ciStatusFilter" class="ci-input">' +
-            '<option value="">Unprocessed + Processed</option>' +
-            '<option value="unprocessed">Unprocessed</option>' +
-            '<option value="processed">Processed</option>' +
-            '<option value="all">Include voided</option>' +
-          '</select>' +
+          '<button class="ci-btn" id="ciFilterBtn" type="button">Filter</button>' +
           '<input type="text" id="ciSearch" class="ci-input ci-search" placeholder="Search vendor, amount, notes, ID…" />' +
           '<div class="ci-total" id="ciTotal"></div>' +
           '<span class="ci-selinfo" id="ciSelInfo"></span>' +
         '</div>' +
+        '<div class="ci-activefilters" id="ciActiveFilters"></div>' +
         '<div class="ci-list" id="ciList"><div class="ci-empty">Loading…</div></div>' +
       '</div>';
 
     document.getElementById('ciNew').addEventListener('click', function () { openReceiptModal(null); });
     var expBtn = document.getElementById('ciExport');
     if (expBtn) expBtn.addEventListener('click', function () { exportToExcel(currentExportRows()); });
+    var filterBtn = document.getElementById('ciFilterBtn');
+    if (filterBtn) filterBtn.addEventListener('click', openFilterDrawer);
     renderOcrStat();
     var sEl = document.getElementById('ciSearch');
     sEl.addEventListener('input', function () { _filters.q = sEl.value || ''; renderList(); });
-    document.getElementById('ciStatusFilter').addEventListener('change', function (e) { _filters.status = e.target.value; reload(); });
-    document.getElementById('ciJobFilter').addEventListener('change', function (e) { _filters.job = e.target.value; reload(); });
-    var uEl = document.getElementById('ciUserFilter');
-    if (uEl) uEl.addEventListener('change', function (e) { _filters.user = e.target.value; renderList(); });
 
-    loadEntities().then(function () {
-      // populate the job/lead filter
-      var sel = document.getElementById('ciJobFilter');
-      if (sel) {
-        var opts = ['<option value="">All jobs, leads &amp; categories</option>'];
-        _jobs.forEach(function (j) { opts.push('<option value="job:' + esc(j.id) + '">' + esc(jobLabel(j)) + '</option>'); });
-        _leads.forEach(function (l) { opts.push('<option value="lead:' + esc(l.id) + '">' + esc(l.title || ('Lead ' + l.id)) + '</option>'); });
-        if (_categories.length) {
-          opts.push('<option disabled>──────────</option>');
-          _categories.forEach(function (c) { opts.push('<option value="category:' + esc(c.id) + '">' + esc(catLabel(c)) + '</option>'); });
-        }
-        sel.innerHTML = opts.join('');
-        sel.value = _filters.job;
-      }
-      reload();
-    });
+    loadEntities().then(function () { updateFilterUI(); reload(); });
   }
 
   function reload() {
     var listEl = document.getElementById('ciList');
     if (!window.p86Api || !window.p86Api.receipts) { if (listEl) listEl.innerHTML = '<div class="ci-empty">Not connected.</div>'; return; }
-    var opts = { limit: 500 };
-    if (_filters.status) opts.status = _filters.status; // 'all' includes void; '' = default (hides void)
-    // Push the job/lead filter to the server so filtering + the row cap happen
-    // server-side (otherwise a busy org's per-job view/total would only reflect
-    // the most-recent page of receipts).
-    if (_filters.job) { var jf = _filters.job.split(':'); opts.entity_type = jf[0]; opts.entity_id = jf[1]; }
-    window.p86Api.receipts.list(opts).then(function (r) {
+    // Load the full set (incl. void, up to 500); the filter drawer narrows it
+    // client-side — status/void is just one of the drawer's filters now.
+    window.p86Api.receipts.list({ limit: 500, status: 'all' }).then(function (r) {
       _receipts = (r && r.receipts) || [];
-      populateUserFilter();
+      updateFilterUI(); // refresh uploader options in the drawer spec
       renderList();
     }).catch(function () {
       if (listEl) listEl.innerHTML = '<div class="ci-empty">Could not load receipts.</div>';
     });
   }
 
-  // Build the "uploaded by" filter from the distinct uploaders in the loaded set,
-  // preserving the current pick. Lets you scope to one user, then Select all.
-  function populateUserFilter() {
-    var sel = document.getElementById('ciUserFilter');
-    if (!sel) return;
-    var seen = {};
-    var users = [];
-    _receipts.forEach(function (r) {
-      if (r.entered_by == null) return;
-      var k = String(r.entered_by);
-      if (seen[k]) return; seen[k] = true;
-      users.push({ id: k, name: r.entered_by_name || ('User ' + k) });
-    });
-    users.sort(function (a, b) { return a.name.toLowerCase().localeCompare(b.name.toLowerCase()); });
-    var opts = ['<option value="">All uploaders</option>'];
-    users.forEach(function (u) { opts.push('<option value="' + esc(u.id) + '">' + esc(u.name) + '</option>'); });
-    sel.innerHTML = opts.join('');
-    sel.value = _filters.user || '';
-  }
-
   function renderList() {
     var listEl = document.getElementById('ciList');
     if (!listEl) return;
     var q = (_filters.q || '').trim().toLowerCase();
-    var jobF = _filters.job ? _filters.job.split(':') : null; // ['job', id]
     var rows = _receipts.filter(function (r) {
-      if (jobF && !(r.entity_type === jobF[0] && String(r.entity_id) === jobF[1])) return false;
-      if (_filters.user && String(r.entered_by) !== String(_filters.user)) return false;
+      if (!matchesDrawer(r)) return false;
       if (q) {
         var hay = [(r.vendor || ''), (r.ref || ''), (r.notes || ''), String(r.amount || ''), entityLabel(r.entity_type, r.entity_id)].join(' ').toLowerCase();
         if (hay.indexOf(q) === -1) return false;
