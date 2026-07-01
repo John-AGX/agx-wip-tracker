@@ -2362,6 +2362,8 @@ function customToolsFor(agentKey, opts) {
       'read_projects', 'read_purchase_orders',
       // Navigation
       'navigate',
+      // Background tasks — hand a bigger task to the background worker
+      'start_background_task',
       // The one write — delegated to the Scribe
       'scribe_write',
       // Deep business reasoning — handed up to 86 (Opus)
@@ -2457,6 +2459,8 @@ function customToolsFor(agentKey, opts) {
       'read_projects', 'read_purchase_orders',
       // ── Navigation (1) ──
       'navigate',
+      // ── Background tasks (1) ── hand a bigger task to the background worker
+      'start_background_task',
       // ── The ONE write — delegated to the Scribe (1) ──
       'scribe_write',
       // ── Wave 3 (2) ── RFI/sub/trans + compliance reads

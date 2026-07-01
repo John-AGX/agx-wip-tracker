@@ -661,6 +661,20 @@ const ESTIMATE_TOOLS = [
 // ──────────────────────────────────────────────────────────────────
 const JOB_TOOLS = [
   {
+    name: 'start_background_task',
+    description:
+      'Hand a BIGGER task off to run in the background so the user can leave — like a background coworker. Use this when the ask is broad or slow (e.g. "audit every active job for margin drift", "go through all my open leads and draft next steps", "reconcile these receipts", "check every job for a missing %-complete"). OFFER it proactively when a request will take real work, and ALWAYS use it when the user says "do this in the background", "work on it and let me know", "ping me when done", or similar. The task then runs on its own with your read tools; when it finishes OR needs a decision it notifies the user. Reads run freely; if it needs to CHANGE data it pauses and asks the user to approve. After calling this, reply briefly ("On it — I\'ll ping you when it\'s done."). Do NOT use it for quick lookups you can answer right now.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        title: { type: 'string', description: 'A short label (a few words), e.g. "Margin-drift audit" — shown in the user\'s Background Tasks list.' },
+        prompt: { type: 'string', description: 'The COMPLETE, self-contained instruction for the background run — everything it needs to do the work without you: the scope/entities to cover and what a good result looks like. The background agent starts fresh, so restate the full task here.' }
+      },
+      required: ['prompt']
+    }
+  },
+  {
     name: 'set_phase_pct_complete',
     description:
       'Update % complete. The id parameter accepts FOUR shapes:\n' +
@@ -11435,6 +11449,12 @@ function make86OnCustomToolUse(userId, parentSession, turnContextText, gateUser)
     if (tu.name === 'escalate_to_86') {
       return await execEscalateTo86(tu, { userId, parentSession, orgId: ctx.orgId, gateUser: capUser, readLog });
     }
+    // start_background_task — hand a bigger task to the background worker
+    // (agent_jobs). Queues it for this user's host agent; the worker runs it
+    // headless and notifies on done / needs-input. Auto-tier: just enqueues.
+    if (tu.name === 'start_background_task') {
+      return await execStartBackgroundTask(tu, userId);
+    }
     // Auto-tier: any tool in ALLOWED_AUTO_TIER_TOOLS executes inline
     // and returns its summary to the model. Mirrors the /exec-tool
     // HTTP dispatcher exactly so the V2-session path (this handler)
@@ -12187,6 +12207,36 @@ async function runWatchFire(watchRunId) {
       try { await anthropic.beta.sessions.archive(sessionId); } catch (_) {}
     }
   }
+}
+
+// start_background_task tool handler — the FOREGROUND side: 86 / the assistant
+// calls this during a live turn to hand a bigger task to the background worker.
+// Resolve the user's org + host agent, queue an agent_jobs row, and return a short
+// confirmation. The worker (agent-jobs-worker.js → runAgentJob) does the rest.
+async function execStartBackgroundTask(tu, userId) {
+  const input = tu.input || {};
+  const prompt = String(input.prompt || input.task || '').trim();
+  const title = String(input.title || '').trim() || prompt.slice(0, 60);
+  if (!prompt) return { tier: 'auto', error: 'start_background_task needs a `prompt` — the full, self-contained task to run on its own.' };
+  const orgRow = await pool.query('SELECT organization_id FROM users WHERE id = $1', [userId]);
+  const orgId = orgRow.rows[0] && orgRow.rows[0].organization_id;
+  if (!orgId) return { tier: 'auto', error: 'Could not resolve your organization to queue the task.' };
+  const hostKey = await resolveHostKeyForUser(userId);
+  let sessionId = null;
+  try {
+    const s = await pool.query(
+      "SELECT id FROM ai_sessions WHERE user_id=$1 AND session_kind='user_thread' AND archived_at IS NULL ORDER BY last_used_at DESC LIMIT 1",
+      [userId]
+    );
+    if (s.rows.length) sessionId = s.rows[0].id;
+  } catch (_) {}
+  const jobId = 'aj_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+  await pool.query(
+    "INSERT INTO agent_jobs (id, organization_id, user_id, session_id, agent_key, status, title, prompt) " +
+    "VALUES ($1, $2, $3, $4, $5, 'queued', $6, $7)",
+    [jobId, orgId, userId, sessionId, hostKey, title, prompt]
+  );
+  return { tier: 'auto', summary: 'Started background task: "' + title + '". It will run on its own — I\'ll notify you when it\'s done, or if it needs a decision from you. (task ' + jobId + ')' };
 }
 
 // Background-task runner — the agent_jobs analogue of runWatchFire. The worker
