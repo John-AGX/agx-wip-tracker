@@ -675,6 +675,19 @@ const JOB_TOOLS = [
     }
   },
   {
+    name: 'ask_user',
+    description:
+      'ONLY inside a background task: pause and ask the user a question when you hit a genuine fork you cannot decide on your own (e.g. "which sub — Alpha or Beta?", "the address is ambiguous, which one?"). The task pauses, the user is notified, and you are resumed automatically with their answer. Do NOT use it for things you can look up or reasonably decide yourself, and do NOT use it in a live chat (there, just ask in your reply). Ask ONE clear, specific question with the options/context they need.',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        question: { type: 'string', description: 'One clear, specific question for the user — include the options or context they need to answer quickly.' }
+      },
+      required: ['question']
+    }
+  },
+  {
     name: 'set_phase_pct_complete',
     description:
       'Update % complete. The id parameter accepts FOUR shapes:\n' +
@@ -11487,6 +11500,11 @@ function make86OnCustomToolUse(userId, parentSession, turnContextText, gateUser)
     if (tu.name === 'start_background_task') {
       return await execStartBackgroundTask(tu, userId);
     }
+    // ask_user is a BACKGROUND-only pause tool (the background job callback handles
+    // it). In a live chat there's no one to pause for — just ask directly.
+    if (tu.name === 'ask_user') {
+      return { tier: 'auto', summary: 'You are in a live chat — ask the user your question directly in your reply. (ask_user only pauses BACKGROUND tasks.)' };
+    }
     // Auto-tier: any tool in ALLOWED_AUTO_TIER_TOOLS executes inline
     // and returns its summary to the model. Mirrors the /exec-tool
     // HTTP dispatcher exactly so the V2-session path (this handler)
@@ -12316,23 +12334,12 @@ async function runAgentJob(jobId) {
       [jobId, sessionId]
     );
 
-    // 86's normal auto-exec for read tools; block subtask fan-out; approval-tier
-    // writes are rejected-with-a-note in S2 (S5 turns these into a pause-and-ask).
-    const baseCallback = make86OnCustomToolUse(job.user_id, null);
-    const jobCallback = async (tu) => {
-      if (tu.name === 'spawn_subtask' || tu.name === 'await_subtasks' || tu.name === 'subtask_status') {
-        return { tier: 'auto', error: 'Background tasks cannot spawn subtasks (recursion guard). Do the work directly in this run.' };
-      }
-      const decision = await baseCallback(tu);
-      if (decision && decision.tier === 'approval') {
-        return { tier: 'auto', error: 'Tool "' + tu.name + '" would change data and needs the user\'s approval. State clearly what you would do; the user will approve it.' };
-      }
-      return decision;
-    };
+    const pauseRef = { question: null };
+    const jobCallback = makeBackgroundJobCallback(job.user_id, pauseRef);
 
     const prompt =
       '[You are running as a Project 86 BACKGROUND TASK — the user asked you to do this on your own and will read the result asynchronously (they are not watching live). ' +
-      'Do the work with your read tools, then reply with ONE clear final message: what you found or did, and anything that needs the user\'s decision. No conversational filler.]\n\n' +
+      'Do the work with your read tools. If you hit a genuine fork you cannot decide on your own, call ask_user to ask them — you will be paused and resumed automatically with their answer. Otherwise reply with ONE clear final message: what you found or did. No conversational filler.]\n\n' +
       String(job.prompt || '');
 
     const result = await driveSubtaskTurn({
@@ -12341,24 +12348,120 @@ async function runAgentJob(jobId) {
       eventsToSend: [{ type: 'user.message', content: [{ type: 'text', text: prompt }] }],
       onCustomToolUse: jobCallback
     });
-    const usage = result.usage || {};
-
-    await pool.query(
-      "UPDATE agent_jobs SET status=$2, result=$3, error=$4, " +
-      " input_tokens=COALESCE(input_tokens,0)+$5, output_tokens=COALESCE(output_tokens,0)+$6, " +
-      " cache_creation_tokens=COALESCE(cache_creation_tokens,0)+$7, cache_read_tokens=COALESCE(cache_read_tokens,0)+$8, " +
-      " completed_at=NOW(), updated_at=NOW() WHERE id=$1",
-      [jobId, result.error ? 'failed' : 'done', result.text || null, result.error || null,
-       usage.input_tokens || 0, usage.output_tokens || 0,
-       usage.cache_creation_input_tokens || 0, usage.cache_read_input_tokens || 0]
-    );
-    try { await notifyAgentJobDone(job, result); } catch (_) {}
+    await finalizeAgentJob(jobId, job, result, pauseRef, anthropic, sessionId);
   } catch (e) {
     console.error('[agent-jobs] runner failed for', jobId, e);
     await pool.query("UPDATE agent_jobs SET status='failed', error=$2, completed_at=NOW(), updated_at=NOW() WHERE id=$1", [jobId, (e && e.message) || 'Background task runner error']);
     try { await notifyAgentJobDone(job, { error: (e && e.message) || 'Background task runner error' }); } catch (_) {}
-  } finally {
     if (sessionId) { try { await anthropic.beta.sessions.archive(sessionId); } catch (_) {} }
+  }
+}
+
+// Shared tool-callback for background + resumed job runs. Reads auto-exec via 86's
+// normal dispatcher; ask_user PAUSES the job (records the question on pauseRef and
+// tells the agent to stop — the worker flips to needs_input and resumes on the
+// user's answer); subtask fan-out is blocked; approval-tier WRITES are still
+// rejected-with-a-note (background write-approval is a follow-up).
+function makeBackgroundJobCallback(userId, pauseRef) {
+  const baseCallback = make86OnCustomToolUse(userId, null);
+  return async function (tu) {
+    if (tu.name === 'ask_user') {
+      const q = String((tu.input && tu.input.question) || '').trim();
+      if (!q) return { tier: 'auto', error: 'ask_user needs a `question` — the specific decision you need from the user.' };
+      pauseRef.question = q;
+      return { tier: 'auto', summary: 'Your question was sent to the user. STOP now: end your turn with one short line saying you are waiting on their answer, and make NO further tool calls. You will be resumed automatically once they reply.' };
+    }
+    if (tu.name === 'spawn_subtask' || tu.name === 'await_subtasks' || tu.name === 'subtask_status') {
+      return { tier: 'auto', error: 'Background tasks cannot spawn subtasks (recursion guard). Do the work directly in this run.' };
+    }
+    const decision = await baseCallback(tu);
+    if (decision && decision.tier === 'approval') {
+      return { tier: 'auto', error: 'Tool "' + tu.name + '" would change data and needs the user\'s approval, which isn\'t wired for background writes yet. State clearly what you would change; the user will apply it.' };
+    }
+    return decision;
+  };
+}
+
+// Finalize a background run: PAUSE (needs_input, keep the session ALIVE for resume)
+// if the agent asked a question; else terminal (done/failed → archive + notify).
+async function finalizeAgentJob(jobId, job, result, pauseRef, anthropic, sessionId) {
+  const usage = (result && result.usage) || {};
+  if (pauseRef && pauseRef.question) {
+    await pool.query(
+      "UPDATE agent_jobs SET status='needs_input', pause_kind='question', pause_question=$2, pause_answer=NULL, paused_at=NOW(), " +
+      " input_tokens=COALESCE(input_tokens,0)+$3, output_tokens=COALESCE(output_tokens,0)+$4, " +
+      " cache_creation_tokens=COALESCE(cache_creation_tokens,0)+$5, cache_read_tokens=COALESCE(cache_read_tokens,0)+$6, updated_at=NOW() WHERE id=$1",
+      [jobId, pauseRef.question, usage.input_tokens || 0, usage.output_tokens || 0, usage.cache_creation_input_tokens || 0, usage.cache_read_input_tokens || 0]
+    );
+    try { await notifyAgentJobNeedsInput(job, pauseRef.question); } catch (_) {}
+    return;   // session kept ALIVE for resume — caller must NOT archive
+  }
+  await pool.query(
+    "UPDATE agent_jobs SET status=$2, result=$3, error=$4, " +
+    " input_tokens=COALESCE(input_tokens,0)+$5, output_tokens=COALESCE(output_tokens,0)+$6, " +
+    " cache_creation_tokens=COALESCE(cache_creation_tokens,0)+$7, cache_read_tokens=COALESCE(cache_read_tokens,0)+$8, " +
+    " completed_at=NOW(), updated_at=NOW() WHERE id=$1",
+    [jobId, (result && result.error) ? 'failed' : 'done', (result && result.text) || null, (result && result.error) || null,
+     usage.input_tokens || 0, usage.output_tokens || 0, usage.cache_creation_input_tokens || 0, usage.cache_read_input_tokens || 0]
+  );
+  try { await notifyAgentJobDone(job, result); } catch (_) {}
+  if (sessionId) { try { await anthropic.beta.sessions.archive(sessionId); } catch (_) {} }
+}
+
+// Resume a paused (needs_input) job once the user answered — reuses the SAME managed
+// session kept alive at pause, so the agent continues with full context. Fail-safe:
+// if the session is gone, fail with a clear message.
+async function resumeAgentJob(jobId) {
+  const anthropic = getAnthropic();
+  const jr = await pool.query('SELECT * FROM agent_jobs WHERE id=$1', [jobId]);
+  if (!jr.rows.length) return;
+  const job = jr.rows[0];
+  const sessionId = job.payload && job.payload.anthropic_session_id;
+  if (!anthropic || !sessionId) {
+    await pool.query("UPDATE agent_jobs SET status='failed', error=$2, completed_at=NOW(), updated_at=NOW() WHERE id=$1", [jobId, 'Could not resume — the task session is no longer available. Please re-run the task.']);
+    try { await notifyAgentJobDone(job, { error: 'session unavailable on resume' }); } catch (_) {}
+    return;
+  }
+  try {
+    const answer = String(job.pause_answer || '').trim() || '(the user did not give a specific answer — use your best judgment)';
+    const pauseRef = { question: null };
+    const jobCallback = makeBackgroundJobCallback(job.user_id, pauseRef);
+    const result = await driveSubtaskTurn({
+      anthropic, sessionId,
+      eventsToSend: [{ type: 'user.message', content: [{ type: 'text', text: 'The user answered your question:\n\n' + answer + '\n\nContinue the task using that answer and finish. If you need another decision, call ask_user again; otherwise reply with ONE final message.' }] }],
+      onCustomToolUse: jobCallback
+    });
+    await pool.query("UPDATE agent_jobs SET pause_answer=NULL WHERE id=$1", [jobId]);
+    await finalizeAgentJob(jobId, job, result, pauseRef, anthropic, sessionId);
+  } catch (e) {
+    console.error('[agent-jobs] resume failed for', jobId, e);
+    await pool.query("UPDATE agent_jobs SET status='failed', error=$2, completed_at=NOW(), updated_at=NOW() WHERE id=$1", [jobId, (e && e.message) || 'Resume failed']);
+    try { await notifyAgentJobDone(job, { error: (e && e.message) || 'Resume failed' }); } catch (_) {}
+    if (sessionId) { try { await anthropic.beta.sessions.archive(sessionId); } catch (_) {} }
+  }
+}
+
+// Email the user that their background task has a QUESTION (needs their answer).
+async function notifyAgentJobNeedsInput(job, question) {
+  try {
+    if (!job || !job.user_id) return;
+    const u = await pool.query('SELECT email, notification_prefs FROM users WHERE id = $1', [job.user_id]);
+    const user = u.rows[0];
+    if (!user || !user.email) return;
+    if ((user.notification_prefs || {}).agent_tasks === false) return;
+    const esc = function (s) { return String(s == null ? '' : s).replace(/[&<>]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]; }); };
+    const appUrl = process.env.APP_URL || process.env.PUBLIC_URL || 'https://project86.net';
+    const title = job.title || 'Background task';
+    const html =
+      '<div style="font:14px/1.6 system-ui,-apple-system,sans-serif;color:#1a1a2e;max-width:560px">' +
+      '<p>Your background task <strong>' + esc(title) + '</strong> has a question for you:</p>' +
+      '<div style="background:#fff8e6;border:1px solid #f4d98a;border-radius:8px;padding:12px 14px">' + esc(String(question).slice(0, 2000)) + '</div>' +
+      '<p style="margin-top:16px"><a href="' + esc(appUrl) + '" style="background:#4f8cff;color:#fff;text-decoration:none;padding:9px 16px;border-radius:8px;display:inline-block">Answer in Project 86</a></p>' +
+      '<p style="color:#8b90a5;font-size:12px;margin-top:12px">Answer it in your Background Tasks panel and it\'ll pick up right where it left off.</p></div>';
+    const { sendEmail } = require('../email');
+    await sendEmail({ to: user.email, subject: '❓ ' + title + ' needs your answer', html: html, text: String(question).slice(0, 1000), tag: 'agent_task', organizationId: job.organization_id });
+  } catch (e) {
+    console.warn('[agent-jobs] needs-input notify failed:', e && e.message);
   }
 }
 
@@ -13798,6 +13901,7 @@ router.post('/86/chat/continue', requireAuth, requireOrg, aiChatLimiter, aiChatH
 module.exports = router;
 module.exports.startWatchScheduler = startWatchScheduler;
 module.exports.runAgentJob = runAgentJob;  // background-task runner (agent-jobs-worker.js)
+module.exports.resumeAgentJob = resumeAgentJob;  // resume a needs_input job on the user's answer
 // Exposed for ai-sessions-routes.js (sidebar CRUD shares the Anthropic
 // session lifecycle helpers so there's one code path that talks to
 // beta.sessions.*).

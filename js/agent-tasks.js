@@ -65,7 +65,12 @@
       '.p86-bgt-pill{font-size:11px;font-weight:700;padding:2px 8px;border-radius:9px;white-space:nowrap}',
       '.p86-bgt-body{margin-top:7px;color:#aeb4c4;font:400 12px/1.5 system-ui,sans-serif;white-space:pre-wrap;word-break:break-word}',
       '.p86-bgt-q{margin-top:7px;color:#fbbf24;font:600 12px/1.5 system-ui,sans-serif}',
-      '.p86-bgt-empty{color:#8b90a5;text-align:center;padding:30px 14px;font:400 13px/1.6 system-ui,sans-serif}'
+      '.p86-bgt-empty{color:#8b90a5;text-align:center;padding:30px 14px;font:400 13px/1.6 system-ui,sans-serif}',
+      '.p86-bgt-answer{display:flex;gap:6px;margin-top:8px}',
+      '.p86-bgt-answer-in{flex:1;min-width:0;background:#0f1320;border:1px solid rgba(255,255,255,.16);border-radius:8px;padding:7px 10px;color:#e6e9f0;font:400 12px/1.3 system-ui,sans-serif;outline:none}',
+      '.p86-bgt-answer-in:focus{border-color:#4f8cff}',
+      '.p86-bgt-answer-btn{background:#4f8cff;color:#fff;border:none;border-radius:8px;padding:0 14px;font:600 12px/1 system-ui,sans-serif;cursor:pointer}',
+      '.p86-bgt-answer-btn:hover{background:#3d7aef}'
     ].join('');
     document.head.appendChild(st);
   }
@@ -84,6 +89,16 @@
     ov.addEventListener('click', function (e) { if (e.target === ov) close(); });
     ov.querySelector('.p86-bgt-x').addEventListener('click', close);
     document.body.appendChild(ov);
+    var listEl = ov.querySelector('.p86-bgt-list');
+    listEl.addEventListener('click', function (e) {
+      var btn = e.target.closest && e.target.closest('.p86-bgt-answer-btn');
+      if (btn) submitAnswerFor(btn.getAttribute('data-jid'), listEl);
+    });
+    listEl.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' && e.target.classList && e.target.classList.contains('p86-bgt-answer-in')) {
+        e.preventDefault(); submitAnswerFor(e.target.getAttribute('data-jid'), listEl);
+      }
+    });
   }
 
   function renderLauncher() {
@@ -108,8 +123,8 @@
       var pill = '<span class="p86-bgt-pill" style="background:' + m.color + '22;color:' + m.color + '">' + esc(m.label) + '</span>';
       var body = '';
       if (j.status === 'needs_input' && j.pause_question) {
-        body = '<div class="p86-bgt-q">❓ ' + esc(j.pause_question) +
-          '<br><span style="color:#8b90a5;font-weight:400">Answering from here is coming shortly — for now, reply in your 86 chat.</span></div>';
+        body = '<div class="p86-bgt-q">❓ ' + esc(j.pause_question) + '</div>' +
+          '<div class="p86-bgt-answer"><input class="p86-bgt-answer-in" type="text" placeholder="Your answer…" autocomplete="off" data-jid="' + esc(j.id) + '"><button class="p86-bgt-answer-btn" data-jid="' + esc(j.id) + '">Send</button></div>';
       } else if (j.status === 'done' && j.result) {
         body = '<div class="p86-bgt-body">' + esc(j.result) + '</div>';
       } else if (j.status === 'failed' && j.error) {
@@ -119,6 +134,17 @@
       }
       return '<div class="p86-bgt-item"><div class="p86-bgt-t"><span>' + esc(j.title || 'Task') + '</span>' + pill + '</div>' + body + '</div>';
     }).join('');
+  }
+
+  function submitAnswerFor(jid, listEl) {
+    var input = listEl.querySelector('.p86-bgt-answer-in[data-jid="' + jid + '"]');
+    if (!input) return;
+    var val = String(input.value || '').trim();
+    if (!val) { input.focus(); return; }
+    input.disabled = true;
+    apiPost('/' + encodeURIComponent(jid) + '/answer', { answer: val })
+      .then(function () { refresh(); })
+      .catch(function () { input.disabled = false; });
   }
 
   function refresh() {

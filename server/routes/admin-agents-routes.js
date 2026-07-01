@@ -2459,8 +2459,9 @@ function customToolsFor(agentKey, opts) {
       'read_projects', 'read_purchase_orders',
       // ── Navigation (1) ──
       'navigate',
-      // ── Background tasks (1) ── hand a bigger task to the background worker
+      // ── Background tasks (2) ── hand a bigger task off + pause-to-ask
       'start_background_task',
+      'ask_user',
       // ── The ONE write — delegated to the Scribe (1) ──
       'scribe_write',
       // ── Wave 3 (2) ── RFI/sub/trans + compliance reads

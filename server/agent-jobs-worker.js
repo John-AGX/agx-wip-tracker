@@ -27,9 +27,12 @@ async function runJob(job) {
   await ai.runAgentJob(job.id);
 }
 
-// ── S5 fills this in: resume a needs_input job once the user answered. ──
+// Resume a needs_input job once the user answered. The heavy lifting lives in
+// ai-routes.resumeAgentJob (reuses the managed session kept alive at pause). Lazy
+// require avoids startup load-order coupling.
 async function resumeJob(job) {
-  console.log('[agent-jobs] resumeJob stub for ' + job.id + ' — S5 not wired yet');
+  const ai = require('./routes/ai-routes');
+  await ai.resumeAgentJob(job.id);
 }
 
 async function failJob(id, e) {
@@ -43,15 +46,24 @@ async function failJob(id, e) {
 
 async function tick() {
   try {
-    // 1. Resume answered pauses (user provided pause_answer). One per tick.
-    const resumeR = await pool.query(
-      "SELECT * FROM agent_jobs " +
-      " WHERE status = 'needs_input' AND pause_answer IS NOT NULL " +
-      " ORDER BY paused_at ASC NULLS FIRST LIMIT 1"
-    );
-    for (const row of resumeR.rows) {
-      try { await resumeJob(row); }
-      catch (e) { await failJob(row.id, e); }
+    // 1. Resume answered pauses (user provided pause_answer) — atomic claim so a
+    //    job resumes once, fired async so a long resume never blocks the tick.
+    if (_running < MAX_CONCURRENT) {
+      const resumeR = await pool.query(
+        "UPDATE agent_jobs SET status='running', updated_at=NOW() " +
+        " WHERE id = (" +
+        "   SELECT id FROM agent_jobs WHERE status='needs_input' AND pause_answer IS NOT NULL " +
+        "   ORDER BY paused_at ASC NULLS FIRST LIMIT 1 FOR UPDATE SKIP LOCKED" +
+        " ) RETURNING id"
+      );
+      if (resumeR.rows.length) {
+        const rjob = resumeR.rows[0];
+        _running++;
+        Promise.resolve()
+          .then(function () { return resumeJob(rjob); })
+          .catch(function (e) { return failJob(rjob.id, e); })
+          .finally(function () { _running--; });
+      }
     }
 
     // 2. Claim + run one queued job, respecting the concurrency cap. The

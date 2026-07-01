@@ -73,4 +73,24 @@ router.post('/:id/seen', async (req, res) => {
   }
 });
 
+// POST /api/agent-jobs/:id/answer  { answer } — answer a paused (needs_input) task.
+// Stores the answer; the background worker resumes the task on its next tick,
+// reusing the kept-alive session so the agent continues right where it left off.
+router.post('/:id/answer', async (req, res) => {
+  try {
+    const answer = String((req.body && req.body.answer) || '').trim();
+    if (!answer) return res.status(400).json({ error: 'An answer is required' });
+    const r = await pool.query(
+      "UPDATE agent_jobs SET pause_answer = $1, seen_at = NOW(), updated_at = NOW() " +
+      " WHERE id = $2 AND user_id = $3 AND status = 'needs_input' RETURNING id",
+      [answer.slice(0, 4000), req.params.id, req.user.id]
+    );
+    if (!r.rows.length) return res.status(404).json({ error: 'Task not found or not awaiting an answer' });
+    res.json({ ok: true, status: 'resuming' });
+  } catch (e) {
+    console.error('POST /api/agent-jobs/:id/answer error:', e);
+    res.status(500).json({ error: 'Failed to submit answer' });
+  }
+});
+
 module.exports = router;
