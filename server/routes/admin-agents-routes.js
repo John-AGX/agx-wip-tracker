@@ -2275,9 +2275,19 @@ function builtinToolsetFor(agentKey) {
   // The 8-tool agent_toolset_20260401 schema was ~30k cached tokens of dead
   // weight on every assistant session's first turn. It has 0 linked skills,
   // so there's no skill-content read-gate to satisfy (same reason as Scribe).
-  // (If the Assistant later needs web lookups, give it just web_search +
-  // web_fetch via a per-tool config rather than the whole bundle.)
-  if (agentKey === 'assistant') return [];
+  // The Assistant gets a SURGICAL web bundle — web_search + web_fetch ONLY — for
+  // quick in-chat lookups, NOT the full 8-tool sandbox (~30k of schema on session
+  // init) it was stripped of in dae1a53. Heavy sandbox work (bash/Python → Excel/PDF)
+  // stays on 86 via the background-tasks path. default_config off + per-tool opt-in;
+  // the Assistant has 0 linked skills, so there's no `read` skill-gate to satisfy.
+  if (agentKey === 'assistant') return [{
+    type: 'agent_toolset_20260401',
+    default_config: { enabled: false },
+    configs: [
+      { name: 'web_search', enabled: true },
+      { name: 'web_fetch', enabled: true }
+    ]
+  }];
   return [{
     type: 'agent_toolset_20260401',
     default_config: { enabled: true }
