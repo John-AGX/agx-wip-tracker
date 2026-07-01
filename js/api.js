@@ -751,6 +751,15 @@
     updateCategory: function(id, payload) { return patch('/api/receipts/categories/' + encodeURIComponent(id), payload); }
   };
 
+  // Saved list views — per-user column/filter configs for a list page.
+  // See server/routes/list-views-routes.js. config = { columns:[...], filters:{...} }.
+  var listViews = {
+    list: function(page) { return get('/api/list-views?page=' + encodeURIComponent(page)); },
+    create: function(payload) { return post('/api/list-views', payload); },
+    update: function(id, payload) { return patch('/api/list-views/' + encodeURIComponent(id), payload); },
+    remove: function(id) { return del('/api/list-views/' + encodeURIComponent(id)); }
+  };
+
   // Outlook / Microsoft 365 — per-user mail connection (Phase 4: read + send).
   // connect() returns { url } to send the browser to; status()/messages()/
   // message() are owner-scoped reads; sendReply()/sendMail() are CONFIRMED sends
@@ -871,7 +880,7 @@
   window.p86Api = {
     get: get, put: put, post: post, del: del, patch: patch,
     fileFolders: fileFolders,
-    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, qbCosts: qbCosts, subs: subsApi, schedule: schedule, adminSms: adminSms, messages: messages, weather: weather, projects: projects, tasks: tasks, notes: notes, reminders: reminders, map: map, calendar: calendar, plans: plans, orgTags: orgTags, org: org, folderTemplates: folderTemplates, reports: reports, changeOrders: changeOrders, workflowItems: workflowItems, purchaseOrders: purchaseOrders, receipts: receipts, outlook: outlook,
+    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, qbCosts: qbCosts, subs: subsApi, schedule: schedule, adminSms: adminSms, messages: messages, weather: weather, projects: projects, tasks: tasks, notes: notes, reminders: reminders, map: map, calendar: calendar, plans: plans, orgTags: orgTags, org: org, folderTemplates: folderTemplates, reports: reports, changeOrders: changeOrders, workflowItems: workflowItems, purchaseOrders: purchaseOrders, receipts: receipts, outlook: outlook, listViews: listViews,
     isOffline: isOffline,
     isAuthenticated: function() { return !!getToken() && !isOffline(); }
   };

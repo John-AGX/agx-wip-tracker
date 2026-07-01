@@ -1834,6 +1834,22 @@ async function initSchema() {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_cost_categories_org_name ON cost_categories(organization_id, lower(name));
     CREATE INDEX IF NOT EXISTS idx_cost_categories_org ON cost_categories(organization_id);
 
+    -- Saved list views — per-USER grid configuration for a list page (Cost Inbox
+    -- first, then Jobs/Leads/Estimates). config holds { columns:[...], filters:{...} }.
+    -- One default per (user, page) auto-applies on load. Personal (no sharing yet).
+    CREATE TABLE IF NOT EXISTS list_views (
+      id TEXT PRIMARY KEY,
+      organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE,
+      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      page TEXT NOT NULL,                        -- 'cost_inbox' | 'jobs' | 'leads' | ...
+      name TEXT NOT NULL,
+      config JSONB DEFAULT '{}'::jsonb,          -- { columns:[...], filters:{...} }
+      is_default BOOLEAN DEFAULT FALSE,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_list_views_owner ON list_views(organization_id, user_id, page);
+
     -- Email send log — every transactional email goes through
     -- server/email.js which writes a row here so admins can see
     -- delivery state, retry failures, and audit who got what.

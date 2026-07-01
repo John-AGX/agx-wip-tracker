@@ -122,11 +122,22 @@
   // ── List page ─────────────────────────────────────────────────────
   var _filters = { q: '' };       // inline quick-search
   var _drawer = null;             // rich filter-drawer values (null = none)
+  var _pinnedEntity = null;       // {type,id} — exact deep-link pin from openFor()
+  var _pinArmed = false;          // keep the pin for the next render only
   var _receipts = [];
   var _selected = {};        // id -> true (multi-select for export)
   var _visibleRows = [];     // the currently filtered/sorted rows on screen
   // Column/row table is the only list view. Table sort state:
   var _tsort = { key: '', dir: 'desc' };
+  // Saved-view state (Slice 2): which columns show + the user's saved views.
+  var _cols = null;            // visible column keys; null → all (set on first render)
+  var _views = [];             // this user's saved views for the Cost Inbox
+  var _activeViewId = null;    // id of the currently-applied saved view (null = ad-hoc)
+  var CI_COL_LABEL = { photo: 'Photo', vendor: 'Vendor', amount: 'Amount', cost: 'Cost type', linked: 'Linked to', date: 'Date', uploaded: 'Uploaded by', status: 'Status' };
+  function allColKeys() { return CI_COLS.map(function (c) { return c.key; }); }
+  function visibleCols() { var keys = _cols || allColKeys(); return CI_COLS.filter(function (c) { return keys.indexOf(c.key) >= 0; }); }
+  function persistCols() { try { localStorage.setItem('p86-ci-cols', JSON.stringify(_cols || allColKeys())); } catch (e) {} }
+  function restoreCols() { try { var s = JSON.parse(localStorage.getItem('p86-ci-cols') || 'null'); if (Array.isArray(s) && s.length) _cols = s; } catch (e) {} }
 
   // Field spec for the filter drawer (uploaded-by options come from the loaded set).
   var COST_CODE_OPTS = [
@@ -154,6 +165,7 @@
   }
   // Does a receipt pass the current drawer filters? (null drawer = default: hide void.)
   function matchesDrawer(r) {
+    if (_pinnedEntity && !(r.entity_type === _pinnedEntity.type && String(r.entity_id) === String(_pinnedEntity.id))) return false;
     var d = _drawer;
     // status
     if (d && d.status && d.status.length) { if (d.status.indexOf(r.status) < 0) return false; }
@@ -184,12 +196,13 @@
   // "Filter (N)" badge + removable active-filter chips above the list.
   function updateFilterUI() {
     var fields = ciFilterFields();
-    var n = _drawer ? window.p86FilterDrawer.countActive(fields, _drawer) : 0;
+    var dn = _drawer ? window.p86FilterDrawer.countActive(fields, _drawer) : 0;
+    var total = dn + (_pinnedEntity ? 1 : 0);
     var btn = document.getElementById('ciFilterBtn');
-    if (btn) { btn.classList.toggle('pf-on', n > 0); btn.innerHTML = 'Filter' + (n ? ' <strong>(' + n + ')</strong>' : ''); }
+    if (btn) { btn.classList.toggle('pf-on', total > 0); btn.innerHTML = 'Filter' + (total ? ' <strong>(' + total + ')</strong>' : ''); }
     var af = document.getElementById('ciActiveFilters');
     if (!af) return;
-    if (!n) { af.innerHTML = ''; return; }
+    if (!total) { af.innerHTML = ''; return; }
     function summary(f) {
       var v = _drawer[f.key];
       if (f.type === 'chips') { return v.map(function (x) { var o = (f.options || []).find(function (o) { return o.v === x; }); return o ? o.label : x; }).join(', '); }
@@ -198,15 +211,23 @@
       if (f.type === 'numrange') { var r2 = window.p86FilterDrawer.resolveNumRange(v); return (r2.min != null ? ('$' + r2.min) : '$0') + ' → ' + (r2.max != null ? ('$' + r2.max) : '∞'); }
       return String(v);
     }
-    af.innerHTML = fields.filter(function (f) { return _drawer && window.p86FilterDrawer.countActive([f], _drawer); }).map(function (f) {
-      return '<span class="ci-fchip">' + esc(f.label) + ': ' + esc(summary(f)) + ' <button type="button" data-clr="' + esc(f.key) + '" aria-label="remove">&times;</button></span>';
-    }).join('');
+    var chips = [];
+    if (_pinnedEntity) {
+      chips.push('<span class="ci-fchip">Linked: ' + esc(entityLabel(_pinnedEntity.type, _pinnedEntity.id) || (_pinnedEntity.type + ' ' + _pinnedEntity.id)) + ' <button type="button" data-clr="__pin__" aria-label="remove">&times;</button></span>');
+    }
+    fields.filter(function (f) { return _drawer && window.p86FilterDrawer.countActive([f], _drawer); }).forEach(function (f) {
+      chips.push('<span class="ci-fchip">' + esc(f.label) + ': ' + esc(summary(f)) + ' <button type="button" data-clr="' + esc(f.key) + '" aria-label="remove">&times;</button></span>');
+    });
+    af.innerHTML = chips.join('');
     af.querySelectorAll('button[data-clr]').forEach(function (b) {
       b.addEventListener('click', function () {
         var k = b.getAttribute('data-clr');
-        var f = fields.find(function (x) { return x.key === k; });
-        if (_drawer && f) { _drawer[k] = window.p86FilterDrawer.emptyValues([f])[k]; }
-        if (_drawer && !window.p86FilterDrawer.countActive(fields, _drawer)) _drawer = null;
+        if (k === '__pin__') { _pinnedEntity = null; }
+        else {
+          var f = fields.find(function (x) { return x.key === k; });
+          if (_drawer && f) { _drawer[k] = window.p86FilterDrawer.emptyValues([f])[k]; }
+          if (_drawer && !window.p86FilterDrawer.countActive(fields, _drawer)) _drawer = null;
+        }
         updateFilterUI(); renderList();
       });
     });
@@ -229,8 +250,110 @@
     }).catch(function () { el.textContent = ''; });
   }
 
+  // ── Columns + Saved Views (Slice 2) ────────────────────────────────
+  function closePopover() {
+    var p = document.getElementById('ciPop');
+    if (p) { if (p._outside) document.removeEventListener('mousedown', p._outside); p.remove(); }
+  }
+  function openPopover(anchor, html, onWire) {
+    closePopover();
+    var pop = document.createElement('div');
+    pop.className = 'ci-pop'; pop.id = 'ciPop'; pop.innerHTML = html;
+    document.body.appendChild(pop);
+    var r = anchor.getBoundingClientRect();
+    pop.style.top = (r.bottom + 6) + 'px';
+    pop.style.left = Math.max(8, Math.min(r.left, window.innerWidth - pop.offsetWidth - 12)) + 'px';
+    if (onWire) onWire(pop);
+    function outside(e) { if (!pop.contains(e.target) && e.target !== anchor) closePopover(); }
+    pop._outside = outside;
+    setTimeout(function () { document.addEventListener('mousedown', outside); }, 0);
+  }
+  function openColumnsMenu(anchor) {
+    var keys = _cols || allColKeys();
+    var html = '<div class="ci-pop-head">Columns</div>' +
+      CI_COLS.map(function (c) {
+        var on = keys.indexOf(c.key) >= 0;
+        return '<label class="ci-pop-row"><input type="checkbox" data-col="' + esc(c.key) + '"' + (on ? ' checked' : '') + ' /> ' + esc(CI_COL_LABEL[c.key] || c.key) + '</label>';
+      }).join('') +
+      '<div class="ci-pop-foot"><button type="button" class="ci-btn" id="ciColsReset">Reset</button></div>';
+    openPopover(anchor, html, function (pop) {
+      pop.querySelectorAll('input[data-col]').forEach(function (cb) {
+        cb.addEventListener('change', function () {
+          var set = allColKeys().filter(function (k) { var el = pop.querySelector('input[data-col="' + k + '"]'); return el && el.checked; });
+          if (!set.length) { cb.checked = true; return; } // never hide every column
+          _cols = set; _activeViewId = null; persistCols(); updateViewsBtn(); renderList();
+        });
+      });
+      var rb = pop.querySelector('#ciColsReset');
+      if (rb) rb.addEventListener('click', function () { _cols = allColKeys(); _activeViewId = null; persistCols(); closePopover(); updateViewsBtn(); renderList(); });
+    });
+  }
+  function loadViews() {
+    if (!(window.p86Api && window.p86Api.listViews)) return Promise.resolve();
+    return window.p86Api.listViews.list('cost_inbox').then(function (r) { _views = (r && r.views) || []; }).catch(function () { _views = []; });
+  }
+  function applyDefaultView() { var def = _views.find(function (v) { return v.is_default; }); if (def) applyView(def, true); }
+  function applyView(v, silent) {
+    _activeViewId = v.id;
+    var cfg = v.config || {};
+    _cols = (Array.isArray(cfg.columns) && cfg.columns.length) ? cfg.columns.slice() : allColKeys();
+    _drawer = (cfg.filters && Object.keys(cfg.filters).length) ? cfg.filters : null;
+    persistCols();
+    if (!silent) { updateFilterUI(); updateViewsBtn(); renderList(); }
+  }
+  function updateViewsBtn() {
+    var btn = document.getElementById('ciViewsBtn');
+    if (!btn) return;
+    var v = _views.find(function (x) { return x.id === _activeViewId; });
+    btn.innerHTML = (v ? esc(v.name) : 'Views') + ' ▾';
+    btn.classList.toggle('pf-on', !!v);
+  }
+  function openViewsMenu(anchor) {
+    var rows = _views.length ? _views.map(function (v) {
+      return '<div class="ci-pop-row ci-pop-view' + (v.id === _activeViewId ? ' on' : '') + '" data-view="' + esc(v.id) + '">' +
+        '<span class="ci-pop-vname">' + (v.id === _activeViewId ? '✓ ' : '') + esc(v.name) + (v.is_default ? ' <em>· default</em>' : '') + '</span>' +
+        '<span class="ci-pop-vacts"><button type="button" title="Set as default" data-def="' + esc(v.id) + '">★</button>' +
+        '<button type="button" title="Delete" data-del="' + esc(v.id) + '">🗑</button></span></div>';
+    }).join('') : '<div class="ci-pop-empty">No saved views yet.</div>';
+    var html = '<div class="ci-pop-head">Your saved views</div>' + rows +
+      '<div class="ci-pop-foot"><button type="button" class="ci-btn ci-btn-primary" id="ciSaveView">＋ Save current as view…</button></div>';
+    openPopover(anchor, html, function (pop) {
+      pop.querySelectorAll('.ci-pop-view').forEach(function (row) {
+        row.addEventListener('click', function (e) {
+          if (e.target.closest('button')) return;
+          var v = _views.find(function (x) { return x.id === row.getAttribute('data-view'); });
+          if (v) { closePopover(); applyView(v); }
+        });
+      });
+      pop.querySelectorAll('button[data-def]').forEach(function (b) {
+        b.addEventListener('click', function (e) {
+          e.stopPropagation(); var id = b.getAttribute('data-def');
+          window.p86Api.listViews.update(id, { is_default: true }).then(loadViews).then(function () { closePopover(); updateViewsBtn(); toast('Default view set', 'success'); });
+        });
+      });
+      pop.querySelectorAll('button[data-del]').forEach(function (b) {
+        b.addEventListener('click', function (e) {
+          e.stopPropagation(); var id = b.getAttribute('data-del');
+          if (!confirm('Delete this saved view?')) return;
+          window.p86Api.listViews.remove(id).then(function () { if (_activeViewId === id) _activeViewId = null; return loadViews(); }).then(function () { closePopover(); updateViewsBtn(); });
+        });
+      });
+      var sv = pop.querySelector('#ciSaveView');
+      if (sv) sv.addEventListener('click', function () {
+        var name = window.prompt('Name this view (saves the current columns + filters):', '');
+        if (name == null) return; name = String(name).trim(); if (!name) return;
+        window.p86Api.listViews.create({ page: 'cost_inbox', name: name, config: { columns: _cols || allColKeys(), filters: _drawer || {} }, is_default: false })
+          .then(function (r) { _activeViewId = (r && r.view && r.view.id) || null; return loadViews(); })
+          .then(function () { closePopover(); updateViewsBtn(); toast('View saved', 'success'); })
+          .catch(function (e) { toast('Could not save view: ' + (e && e.message || 'error'), 'error'); });
+      });
+    });
+  }
+
   function render(host) {
     if (!host) return;
+    // A deep-link pin (openFor) survives exactly one render; a normal open clears it.
+    if (_pinArmed) { _pinArmed = false; } else { _pinnedEntity = null; }
     host.innerHTML =
       '<div class="ci-wrap">' +
         '<div class="ci-head">' +
@@ -242,6 +365,8 @@
         '</div>' +
         '<div class="ci-toolbar">' +
           '<button class="ci-btn" id="ciFilterBtn" type="button">Filter</button>' +
+          '<button class="ci-btn" id="ciColsBtn" type="button">Columns ▾</button>' +
+          '<button class="ci-btn" id="ciViewsBtn" type="button">Views ▾</button>' +
           '<input type="text" id="ciSearch" class="ci-input ci-search" placeholder="Search vendor, amount, notes, ID…" />' +
           '<div class="ci-total" id="ciTotal"></div>' +
           '<span class="ci-selinfo" id="ciSelInfo"></span>' +
@@ -255,11 +380,18 @@
     if (expBtn) expBtn.addEventListener('click', function () { exportToExcel(currentExportRows()); });
     var filterBtn = document.getElementById('ciFilterBtn');
     if (filterBtn) filterBtn.addEventListener('click', openFilterDrawer);
+    var colsBtn = document.getElementById('ciColsBtn');
+    if (colsBtn) colsBtn.addEventListener('click', function () { openColumnsMenu(colsBtn); });
+    var viewsBtn = document.getElementById('ciViewsBtn');
+    if (viewsBtn) viewsBtn.addEventListener('click', function () { openViewsMenu(viewsBtn); });
     renderOcrStat();
     var sEl = document.getElementById('ciSearch');
     sEl.addEventListener('input', function () { _filters.q = sEl.value || ''; renderList(); });
 
-    loadEntities().then(function () { updateFilterUI(); reload(); });
+    restoreCols();
+    loadEntities()
+      .then(function () { return loadViews(); })
+      .then(function () { applyDefaultView(); updateFilterUI(); updateViewsBtn(); reload(); });
   }
 
   function reload() {
@@ -360,6 +492,18 @@
       default: return '';
     }
   }
+  // Render one <td> for a given column key (used so columns can be hidden/shown).
+  function cellFor(r, key) {
+    if (key === 'photo') { var thumb = r.image_thumb_url || r.image_url; return '<td class="ci-td-photo"><span class="ci-thumb ci-thumb-sm">' + (thumb ? '<img src="' + esc(thumb) + '" alt="" loading="lazy" />' : THUMB_PH) + '</span></td>'; }
+    if (key === 'vendor') return '<td class="ci-td-vendor">' + esc(r.vendor || '(no vendor)') + '</td>';
+    if (key === 'amount') { var amt = (r.amount != null && Number(r.amount) > 0) ? money(r.amount) : '<span class="ci-need">—</span>'; return '<td class="num">' + amt + '</td>'; }
+    if (key === 'cost') return '<td>' + esc(ciCodeLabel(r)) + '</td>';
+    if (key === 'linked') { var ent = entityLabel(r.entity_type, r.entity_id); return '<td>' + (ent ? esc(ent) : '<span class="ci-chip-warn" style="font-size:11px;">no job</span>') + '</td>'; }
+    if (key === 'date') return '<td>' + esc(fmtDate(r.purchased_at || r.created_at)) + '</td>';
+    if (key === 'uploaded') return '<td>' + esc(r.entered_by_name || (r.entered_by ? ('User ' + r.entered_by) : '—')) + '</td>';
+    if (key === 'status') return '<td><span class="ci-badge ci-badge-' + (r.status || 'unprocessed') + '">' + esc(r.status || 'unprocessed') + '</span></td>';
+    return '<td></td>';
+  }
   function renderTableView(listEl, rows) {
     if (_tsort.key) {
       var dir = _tsort.dir === 'asc' ? 1 : -1;
@@ -369,27 +513,18 @@
       });
     } else { defaultSort(rows); }
     listEl.className = '';
+    var cols = visibleCols();
     var thead = '<thead><tr>' +
       '<th class="ci-th-check"><input type="checkbox" id="ciSelAll" title="Select all" /></th>' +
-      CI_COLS.map(function (c) {
-      if (!c.sort) return '<th class="ci-th-photo"></th>';
-      var sc = (_tsort.key === c.key) ? (' sortable sort-' + (_tsort.dir === 'asc' ? 'asc' : 'desc')) : ' sortable';
-      return '<th class="' + (c.num ? 'num' : '') + sc + '" data-sort="' + c.key + '">' + esc(c.label) + '</th>';
-    }).join('') + '</tr></thead>';
+      cols.map(function (c) {
+        if (!c.sort) return '<th class="ci-th-photo"></th>';
+        var sc = (_tsort.key === c.key) ? (' sortable sort-' + (_tsort.dir === 'asc' ? 'asc' : 'desc')) : ' sortable';
+        return '<th class="' + (c.num ? 'num' : '') + sc + '" data-sort="' + c.key + '">' + esc(c.label) + '</th>';
+      }).join('') + '</tr></thead>';
     var tbody = '<tbody>' + rows.map(function (r) {
-      var thumb = r.image_thumb_url || r.image_url;
-      var ent = entityLabel(r.entity_type, r.entity_id);
-      var amt = (r.amount != null && Number(r.amount) > 0) ? money(r.amount) : '<span class="ci-need">—</span>';
       return '<tr class="ci-trow" data-id="' + esc(r.id) + '">' +
         '<td class="ci-td-check"><input type="checkbox" class="ci-rowcheck" data-id="' + esc(r.id) + '"' + (_selected[r.id] ? ' checked' : '') + ' /></td>' +
-        '<td class="ci-td-photo"><span class="ci-thumb ci-thumb-sm">' + (thumb ? '<img src="' + esc(thumb) + '" alt="" loading="lazy" />' : THUMB_PH) + '</span></td>' +
-        '<td class="ci-td-vendor">' + esc(r.vendor || '(no vendor)') + '</td>' +
-        '<td class="num">' + amt + '</td>' +
-        '<td>' + esc(ciCodeLabel(r)) + '</td>' +
-        '<td>' + (ent ? esc(ent) : '<span class="ci-chip-warn" style="font-size:11px;">no job</span>') + '</td>' +
-        '<td>' + esc(fmtDate(r.purchased_at || r.created_at)) + '</td>' +
-        '<td>' + esc(r.entered_by_name || (r.entered_by ? ('User ' + r.entered_by) : '—')) + '</td>' +
-        '<td><span class="ci-badge ci-badge-' + (r.status || 'unprocessed') + '">' + esc(r.status || 'unprocessed') + '</span></td>' +
+        cols.map(function (c) { return cellFor(r, c.key); }).join('') +
       '</tr>';
     }).join('') + '</tbody>';
     listEl.innerHTML = '<div class="p86-tbl-scroll"><table class="dense-table ci-table" id="ciTable">' + thead + tbody + '</table></div>';
@@ -889,8 +1024,9 @@
 
   // Open the Cost Inbox pre-filtered to one job/lead.
   function openFor(entityType, entityId) {
-    _filters.job = entityType + ':' + entityId;
-    _filters.status = '';
+    _pinnedEntity = { type: entityType, id: String(entityId) };
+    _pinArmed = true;   // survive the one render triggered by switchTab
+    _drawer = null;
     _filters.q = '';
     if (typeof window.switchTab === 'function') window.switchTab('cost-inbox');
   }
