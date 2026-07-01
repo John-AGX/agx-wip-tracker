@@ -663,7 +663,7 @@ const JOB_TOOLS = [
   {
     name: 'start_background_task',
     description:
-      'Hand a BIGGER task off to run in the background so the user can leave — like a background coworker. Use this when the ask is broad or slow (e.g. "audit every active job for margin drift", "go through all my open leads and draft next steps", "reconcile these receipts", "check every job for a missing %-complete"). OFFER it proactively when a request will take real work, and ALWAYS use it when the user says "do this in the background", "work on it and let me know", "ping me when done", or similar. The task then runs on its own with your read tools; when it finishes OR needs a decision it notifies the user. Reads run freely; if it needs to CHANGE data it pauses and asks the user to approve. After calling this, reply briefly ("On it — I\'ll ping you when it\'s done."). Do NOT use it for quick lookups you can answer right now.',
+      'Hand a BIGGER task off to run in the background so the user can leave — like a background coworker. It runs with the FULL SANDBOX: web_search + web_fetch, and Python (pandas, numpy, openpyxl, reportlab) via bash — so it can do real web research, heavy number-crunching, and GENERATE EXCEL/PDF REPORTS that are delivered to the user as a download. Use this when the ask is broad, slow, or needs a file (e.g. "audit every active job for margin drift", "research permit costs for Wesley Chapel", "build me an Excel WIP report for all active jobs", "reconcile these receipts"). OFFER it proactively when a request will take real work, and ALWAYS use it when the user asks for a report/export/spreadsheet, for web research, or says "do this in the background", "work on it and let me know", "ping me when done". The task runs on its own; when it finishes OR needs a decision it notifies the user. Reads run freely; if it needs to CHANGE org data it pauses and asks the user to approve. After calling this, reply briefly ("On it — I\'ll ping you when it\'s done."). Do NOT use it for quick lookups you can answer right now.',
     input_schema: {
       type: 'object',
       additionalProperties: false,
@@ -12221,7 +12221,12 @@ async function execStartBackgroundTask(tu, userId) {
   const orgRow = await pool.query('SELECT organization_id FROM users WHERE id = $1', [userId]);
   const orgId = orgRow.rows[0] && orgRow.rows[0].organization_id;
   if (!orgId) return { tier: 'auto', error: 'Could not resolve your organization to queue the task.' };
-  const hostKey = await resolveHostKeyForUser(userId);
+  // Background tasks run on the SANDBOX agent (86/'job' = Opus + the full
+  // agent_toolset: bash, Python with pandas/numpy/openpyxl/reportlab, web_search +
+  // web_fetch). So "do this in the background" gets FULL capability — deep web
+  // research, heavy analysis, and generating Excel/PDF reports (auto-delivered as a
+  // download) — even when the lean foreground assistant is the one that dispatched it.
+  const agentKey = 'job';
   let sessionId = null;
   try {
     const s = await pool.query(
@@ -12234,7 +12239,7 @@ async function execStartBackgroundTask(tu, userId) {
   await pool.query(
     "INSERT INTO agent_jobs (id, organization_id, user_id, session_id, agent_key, status, title, prompt) " +
     "VALUES ($1, $2, $3, $4, $5, 'queued', $6, $7)",
-    [jobId, orgId, userId, sessionId, hostKey, title, prompt]
+    [jobId, orgId, userId, sessionId, agentKey, title, prompt]
   );
   return { tier: 'auto', summary: 'Started background task: "' + title + '". It will run on its own — I\'ll notify you when it\'s done, or if it needs a decision from you. (task ' + jobId + ')' };
 }
