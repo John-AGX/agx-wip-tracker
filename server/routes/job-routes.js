@@ -223,7 +223,7 @@ router.post('/convert', requireAuth, requireRole('admin', 'pm'), async (req, res
       // status:'sold' there, and lock the row so it can't be edited after the
       // lead is won (an admin can unlock via PUT /api/estimates/:id/lock).
       await client.query(
-        "UPDATE estimates SET data = jsonb_set(jsonb_set(COALESCE(data, '{}'::jsonb), '{job_id}', to_jsonb($1::text)), '{status}', to_jsonb('sold'::text)), is_locked = TRUE, updated_at = NOW() WHERE id = $2 AND (organization_id = $3 OR organization_id IS NULL)",
+        "UPDATE estimates SET data = jsonb_set(jsonb_set(COALESCE(data, '{}'::jsonb), '{job_id}', to_jsonb($1::text)), '{status}', to_jsonb('sold'::text)), is_locked = TRUE, accepted_at = COALESCE(accepted_at, NOW()), updated_at = NOW() WHERE id = $2 AND (organization_id = $3 OR organization_id IS NULL)",
         [id, estimateId, orgId]
       );
     }

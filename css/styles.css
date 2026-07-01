@@ -10631,6 +10631,11 @@ textarea.ci-input { height: auto; resize: vertical; font-family: inherit; }
 .ci-selinfo a { color: var(--accent, #6ea8fe); text-decoration: none; }
 .ci-th-check, .ci-td-check { width: 34px; text-align: center; padding-left: 8px !important; padding-right: 4px !important; }
 .ci-td-check input, .ci-th-check input { cursor: pointer; width: 16px; height: 16px; }
+/* Estimates lifecycle status badge + Mark-sent action */
+.est-status-badge { display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11px; font-weight: 700; letter-spacing: .02em; }
+.est-mark-sent { margin-left: 6px; font-size: 11px; padding: 1px 7px; border-radius: 6px; border: 1px solid var(--border, #2e3346); background: transparent; color: var(--accent, #6ea8fe); cursor: pointer; }
+.est-mark-sent:hover { background: rgba(110,168,254,.12); }
+.est-mark-sent.est-unsend { color: var(--text-dim, #94a3b8); }
 
 /* ── Reusable filter drawer (window.p86FilterDrawer) ────────────────────── */
 .pf-overlay { position: fixed; inset: 0; z-index: 6000; background: rgba(0,0,0,.42); opacity: 0; transition: opacity .18s ease; }

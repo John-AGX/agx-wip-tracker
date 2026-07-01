@@ -64,13 +64,13 @@ router.get('/', requireAuth, async (req, res) => {
     // Wave 1.A Phase 2 — org-scoped list. NULL org_id retained for
     // unbackfilled legacy until NOT NULL tightening.
     const { rows } = await pool.query(
-      'SELECT id, owner_id, data, created_at, updated_at, geocode_lat, geocode_lng, is_locked FROM estimates WHERE organization_id = $1 OR organization_id IS NULL ORDER BY updated_at DESC',
+      'SELECT id, owner_id, data, created_at, updated_at, geocode_lat, geocode_lng, is_locked, sent_at, viewed_at, accepted_at, sent_count FROM estimates WHERE organization_id = $1 OR organization_id IS NULL ORDER BY updated_at DESC',
       [req.user.organization_id]
     );
-    // Surface created_at/updated_at + geocode coords on the returned
-    // estimate so the list/map views can sort/display/plot them. Spread
-    // data first so any mistakenly-stored canonical field inside the JSONB
-    // blob doesn't shadow the real column-derived value.
+    // Surface created_at/updated_at + geocode coords + lifecycle timestamps on
+    // the returned estimate so the list/map views can sort/display/plot them.
+    // Spread data first so any mistakenly-stored canonical field inside the
+    // JSONB blob doesn't shadow the real column-derived value.
     const estimates = rows.map(r => ({
       ...r.data,
       id: r.id,
@@ -79,7 +79,11 @@ router.get('/', requireAuth, async (req, res) => {
       updated_at: r.updated_at,
       geocode_lat: r.geocode_lat != null ? Number(r.geocode_lat) : null,
       geocode_lng: r.geocode_lng != null ? Number(r.geocode_lng) : null,
-      is_locked: !!r.is_locked
+      is_locked: !!r.is_locked,
+      sent_at: r.sent_at,
+      viewed_at: r.viewed_at,
+      accepted_at: r.accepted_at,
+      sent_count: r.sent_count || 0
     }));
     res.json({ estimates });
   } catch (e) {
@@ -292,6 +296,29 @@ router.put('/:id/lock', requireAuth, requireCapability('ESTIMATES_EDIT'), async 
     res.json({ ok: true, is_locked: locked });
   } catch (e) {
     console.error('PUT /api/estimates/:id/lock error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /api/estimates/:id/sent — record that the proposal was SENT (the "sent vs
+// created" tracker). { sent:true } stamps sent_at the first time + bumps
+// sent_count on every (re)send; { sent:false } clears it (undo a misclick).
+// Org-scoped + gated on ESTIMATES_EDIT.
+router.post('/:id/sent', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req, res) => {
+  try {
+    const sent = !(req.body && req.body.sent === false);
+    const sql = sent
+      ? `UPDATE estimates SET sent_at = COALESCE(sent_at, NOW()), sent_count = COALESCE(sent_count, 0) + 1, updated_at = NOW()
+           WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)
+         RETURNING sent_at, sent_count`
+      : `UPDATE estimates SET sent_at = NULL, sent_count = 0, updated_at = NOW()
+           WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)
+         RETURNING sent_at, sent_count`;
+    const u = await pool.query(sql, [req.params.id, req.user.organization_id]);
+    if (u.rowCount === 0) return res.status(404).json({ error: 'Estimate not found' });
+    res.json({ ok: true, sent_at: u.rows[0].sent_at, sent_count: u.rows[0].sent_count });
+  } catch (e) {
+    console.error('POST /api/estimates/:id/sent error:', e);
     res.status(500).json({ error: 'Server error' });
   }
 });

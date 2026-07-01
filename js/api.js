@@ -124,7 +124,10 @@
   var estimates = {
     list: function() { return get('/api/estimates'); },
     bulkSave: function(payload) { return put('/api/estimates/bulk/save', payload); },
-    remove: function(id) { return del('/api/estimates/' + encodeURIComponent(id)); }
+    remove: function(id) { return del('/api/estimates/' + encodeURIComponent(id)); },
+    // Record/clear that a proposal was sent (the "sent vs created" tracker).
+    markSent: function(id, sent) { return post('/api/estimates/' + encodeURIComponent(id) + '/sent', { sent: sent !== false }); },
+    lock: function(id, locked) { return put('/api/estimates/' + encodeURIComponent(id) + '/lock', { locked: !!locked }); }
   };
 
   var users = {

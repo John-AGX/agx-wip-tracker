@@ -888,6 +888,22 @@ async function initSchema() {
       WHERE COALESCE(is_locked, FALSE) = FALSE
         AND id IN (SELECT estimate_id FROM jobs WHERE estimate_id IS NOT NULL);
 
+    -- Estimate lifecycle timestamps: track WHEN a proposal was sent / accepted,
+    -- distinct from created_at/updated_at. sent_at is set by the "Mark Sent"
+    -- action; accepted_at is stamped when the estimate is sold (lead→job convert
+    -- / link). sent_count bumps each time it's (re)marked sent. viewed_at is
+    -- reserved for a future client-facing proposal-view link.
+    ALTER TABLE estimates ADD COLUMN IF NOT EXISTS sent_at     TIMESTAMPTZ;
+    ALTER TABLE estimates ADD COLUMN IF NOT EXISTS viewed_at   TIMESTAMPTZ;
+    ALTER TABLE estimates ADD COLUMN IF NOT EXISTS accepted_at TIMESTAMPTZ;
+    ALTER TABLE estimates ADD COLUMN IF NOT EXISTS sent_count  INTEGER NOT NULL DEFAULT 0;
+    -- Backfill accepted_at for already-sold estimates (linked to a job) so the
+    -- "Accepted" date isn't blank on historical wins. Use the job's created_at.
+    UPDATE estimates e SET accepted_at = j.created_at
+      FROM jobs j
+     WHERE j.estimate_id = e.id
+       AND e.accepted_at IS NULL;
+
     -- Polymorphic attachments — each row is a single uploaded photo (or doc)
     -- belonging to either a lead or an estimate. We store three size variants
     -- per upload (thumbnail, web, original) so the UI can show a fast grid,

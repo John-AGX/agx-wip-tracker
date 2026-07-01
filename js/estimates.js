@@ -158,6 +158,11 @@ function compareEstimates(a, b, key, dir) {
     else if (key === 'updated_at') {
         av = a.updated_at ? new Date(a.updated_at).getTime() : 0;
         bv = b.updated_at ? new Date(b.updated_at).getTime() : 0;
+    } else if (key === 'sent_at') {
+        av = a.sent_at ? new Date(a.sent_at).getTime() : 0;
+        bv = b.sent_at ? new Date(b.sent_at).getTime() : 0;
+    } else if (key === 'status') {
+        av = estStatusRank(a); bv = estStatusRank(b);
     } else if (key === 'client') {
         av = (a.client || a.community || '').toLowerCase();
         bv = (b.client || b.community || '').toLowerCase();
@@ -177,11 +182,41 @@ function sortEstimatesBy(key) {
         // Numerics + dates default to descending so "biggest/newest first"
         // matches how a user usually wants to scan the list.
         _estimatesSort.dir = (key === 'baseCost' || key === 'markup' || key === 'clientPrice' ||
-                              key === 'margin' || key === 'lines' || key === 'updated_at') ? 'desc' : 'asc';
+                              key === 'margin' || key === 'lines' || key === 'updated_at' ||
+                              key === 'sent_at' || key === 'status') ? 'desc' : 'asc';
     }
     renderEstimatesList();
 }
 window.sortEstimatesBy = sortEstimatesBy;
+
+// Estimate lifecycle status, derived from the linked job + sent_at timestamp:
+//   Won  = converted to a job (job_id set)
+//   Sent = proposal marked sent (sent_at) but not yet won
+//   Draft = not sent yet
+function estStatusMeta(est) {
+    if (est && est.job_id) return { key: 'won',  label: 'Won',   color: '#34d399', bg: 'rgba(52,211,153,.14)' };
+    if (est && est.sent_at) return { key: 'sent', label: 'Sent',  color: '#60a5fa', bg: 'rgba(96,165,250,.14)' };
+    return { key: 'draft', label: 'Draft', color: '#94a3b8', bg: 'rgba(148,163,184,.14)' };
+}
+function estStatusRank(est) { var k = estStatusMeta(est).key; return k === 'won' ? 2 : k === 'sent' ? 1 : 0; }
+
+// Mark an estimate Sent (or clear it). Optimistic: stamp locally + re-render,
+// then persist. sent=false undoes a misclick.
+function markEstimateSent(id, sent) {
+    var est = (appData.estimates || []).find(function(e) { return e.id === id; });
+    if (!est) return;
+    var api = window.p86Api;
+    if (!api || !api.estimates || !api.estimates.markSent) return;
+    api.estimates.markSent(id, sent).then(function(r) {
+        est.sent_at = (r && 'sent_at' in r) ? r.sent_at : (sent ? new Date().toISOString() : null);
+        if (r && 'sent_count' in r) est.sent_count = r.sent_count;
+        renderEstimatesList();
+        if (window.p86Toast) window.p86Toast(sent ? 'Marked sent.' : 'Sent status cleared.', 'success');
+    }).catch(function() {
+        if (window.p86Toast) window.p86Toast('Could not update sent status.', 'error');
+    });
+}
+window.markEstimateSent = markEstimateSent;
 // Exposed so the lead-side "Create Job" flow can compute a chosen estimate's
 // proposal total (the bid) without opening the estimate editor.
 window.computeEstimateTotals = computeEstimateTotals;
@@ -347,11 +382,13 @@ function renderEstimatesList() {
             const headerRow =
                 estimatesHeaderCell('Title',         'title') +
                 estimatesHeaderCell('Client / Community', 'client') +
+                estimatesHeaderCell('Status',        'status') +
                 estimatesHeaderCell('Lines',         'lines',       { num: true }) +
                 estimatesHeaderCell('Base Cost',     'baseCost',    { num: true }) +
                 estimatesHeaderCell('Markup %',      'markup',      { num: true }) +
                 estimatesHeaderCell('Client Price',  'clientPrice', { num: true }) +
                 estimatesHeaderCell('Margin %',      'margin',      { num: true }) +
+                estimatesHeaderCell('Sent',          'sent_at') +
                 estimatesHeaderCell('Updated',       'updated_at');
 
             if (!enriched.length) {
@@ -362,7 +399,7 @@ function renderEstimatesList() {
                     '<div class="p86-tbl-scroll">' +
                         '<table id="estimates-table" class="dense-table">' +
                             '<thead><tr>' + headerRow + '</tr></thead>' +
-                            '<tbody><tr><td colspan="8" style="padding:24px;text-align:center;color:var(--text-dim,#888);">' + msg + '</td></tr></tbody>' +
+                            '<tbody><tr><td colspan="10" style="padding:24px;text-align:center;color:var(--text-dim,#888);">' + msg + '</td></tr></tbody>' +
                         '</table>' +
                     '</div>';
                 return;
@@ -397,14 +434,25 @@ function renderEstimatesList() {
                 const marginCell = margin > 0
                     ? '<span style="color:' + marginColor + ';font-weight:600;">' + margin.toFixed(1) + '%</span>'
                     : '<span style="color:var(--text-dim,#888);">—</span>';
+                var sm = estStatusMeta(est);
+                var statusAction = sm.key === 'draft'
+                    ? ' <button type="button" class="est-mark-sent" onclick="event.stopPropagation();markEstimateSent(\'' + est.id + '\',true)" title="Record that this proposal was sent">Mark sent</button>'
+                    : (sm.key === 'sent'
+                        ? ' <button type="button" class="est-mark-sent est-unsend" onclick="event.stopPropagation();markEstimateSent(\'' + est.id + '\',false)" title="Clear the sent status">undo</button>'
+                        : '');
+                var sentCell = est.sent_at
+                    ? escapeHTML(fmtRelativeDate(est.sent_at)) + (est.sent_count > 1 ? '<span style="color:var(--text-dim,#888);"> ·' + est.sent_count + '×</span>' : '')
+                    : '<span style="color:var(--text-dim,#666);">—</span>';
                 return '<tr style="cursor:pointer;" onclick="editEstimate(\'' + est.id + '\')">' +
                     '<td data-col="title"><strong>' + escapeHTML(est.title || '(untitled)') + '</strong>' + titleSuffix + '</td>' +
                     '<td data-col="client">' + clientLabel + '</td>' +
+                    '<td data-col="status" style="white-space:nowrap;"><span class="est-status-badge" style="color:' + sm.color + ';background:' + sm.bg + ';">' + sm.label + '</span>' + statusAction + '</td>' +
                     '<td data-col="lines" class="num">' + t.lineCount + '</td>' +
                     '<td data-col="baseCost" class="num">' + formatCurrency(t.baseCost) + '</td>' +
                     '<td data-col="markup" class="num" style="color:#fbbf24;">' + t.blendedMarkup.toFixed(1) + '%</td>' +
                     '<td data-col="clientPrice" class="num" style="color:#34d399;font-weight:600;">' + formatCurrency(t.clientPrice) + '</td>' +
                     '<td data-col="margin" class="num">' + marginCell + '</td>' +
+                    '<td data-col="sent_at" style="white-space:nowrap;color:var(--text-dim,#888);" title="' + escapeHTML(est.sent_at || '') + '">' + sentCell + '</td>' +
                     '<td data-col="updated_at" style="white-space:nowrap;color:var(--text-dim,#888);" title="' + escapeHTML(est.updated_at || '') + '">' +
                         escapeHTML(fmtRelativeDate(est.updated_at)) +
                     '</td>' +
