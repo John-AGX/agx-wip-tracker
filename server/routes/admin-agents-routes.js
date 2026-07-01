@@ -2275,19 +2275,13 @@ function builtinToolsetFor(agentKey) {
   // The 8-tool agent_toolset_20260401 schema was ~30k cached tokens of dead
   // weight on every assistant session's first turn. It has 0 linked skills,
   // so there's no skill-content read-gate to satisfy (same reason as Scribe).
-  // The Assistant gets a SURGICAL web bundle — web_search + web_fetch ONLY — for
-  // quick in-chat lookups, NOT the full 8-tool sandbox (~30k of schema on session
-  // init) it was stripped of in dae1a53. Heavy sandbox work (bash/Python → Excel/PDF)
-  // stays on 86 via the background-tasks path. default_config off + per-tool opt-in;
-  // the Assistant has 0 linked skills, so there's no `read` skill-gate to satisfy.
-  if (agentKey === 'assistant') return [{
-    type: 'agent_toolset_20260401',
-    default_config: { enabled: false },
-    configs: [
-      { name: 'web_search', enabled: true },
-      { name: 'web_fetch', enabled: true }
-    ]
-  }];
+  // TEMP REVERT (no-response fix): enabling web_search+web_fetch alone (read
+  // DISABLED) can fail session.create for an agent with linked Skills — "skills
+  // require the read tool to be usable on the session's agent_toolset" — which
+  // surfaces as a blank/no-response turn. Back to no builtin toolset (the known-good
+  // state). To re-add web safely, enable read/glob/grep alongside it (below), so the
+  // skill read-gate is satisfied.
+  if (agentKey === 'assistant') return [];
   return [{
     type: 'agent_toolset_20260401',
     default_config: { enabled: true }
