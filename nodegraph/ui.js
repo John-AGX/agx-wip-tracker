@@ -1431,7 +1431,7 @@ function ensureOrbit3D(o){
     var exitB=document.createElement('button'); exitB.type='button'; exitB.className='ng-orbit-exit';
     exitB.innerHTML='&#x2715; Exit 3D'; exitB.addEventListener('click', exitOrbit3D); _orbitEl.appendChild(exitB);
     var hint=document.createElement('div'); hint.className='ng-orbit-hint';
-    hint.textContent='Drag to pan · Ctrl-drag (or two fingers) to tilt & spin · scroll to zoom. Look-around 3D view — Exit to return to the working map.';
+    hint.textContent='Switch to “Map” (top-left) + tilt for Google’s 3D buildings. Drag to pan · Ctrl-drag or two fingers to tilt & spin · scroll to zoom · Exit to return.';
     _orbitEl.appendChild(hint);
     (tab.querySelector('.ng-canvas-area')||tab).appendChild(_orbitEl);
     _orbitEl.__mapDiv=mapDiv;
@@ -1445,7 +1445,14 @@ function ensureOrbit3D(o){
         mapId:NG_ORBIT_MAP_ID, mapTypeId:maps.MapTypeId.HYBRID,
         tilt:47.5, heading:0,
         rotateControl:true, zoomControl:true, streetViewControl:false,
-        fullscreenControl:false, mapTypeControl:false, clickableIcons:false,
+        fullscreenControl:false, clickableIcons:false,
+        // Map/Satellite switch: on the vector "Map" (roadmap) type, tilt renders
+        // Google's gray 3D building extrusions (broad suburban coverage, unlike the
+        // satellite 45deg imagery) — the reliable 3D-buildings view for job sites.
+        mapTypeControl:true,
+        mapTypeControlOptions:{ mapTypeIds:['hybrid','roadmap'],
+          style:(maps.MapTypeControlStyle&&maps.MapTypeControlStyle.HORIZONTAL_BAR)||undefined,
+          position:(maps.ControlPosition&&maps.ControlPosition.TOP_LEFT)||undefined },
         gestureHandling:'greedy', keyboardShortcuts:true, backgroundColor:'#0b0e16'
       });
     } else {
