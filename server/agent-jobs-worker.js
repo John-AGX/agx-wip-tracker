@@ -18,10 +18,13 @@ const MAX_CONCURRENT = 2;              // cap parallel running jobs (each is an 
 
 let _running = 0;
 
-// ── S2 fills this in: run a claimed job's agent loop to completion or a pause. ──
+// Run a claimed job's agent loop to completion (or, from S5, a pause). The heavy
+// lifting lives in ai-routes.runAgentJob so it can reuse the in-scope agent
+// machinery (getAnthropic, ensureManagedAgent, make86OnCustomToolUse,
+// driveSubtaskTurn). Lazy require avoids any startup load-order coupling.
 async function runJob(job) {
-  console.log('[agent-jobs] runJob stub for ' + job.id + ' — S2 not wired yet; parking as failed');
-  await failJob(job.id, new Error('background worker not yet wired (S2)'));
+  const ai = require('./routes/ai-routes');
+  await ai.runAgentJob(job.id);
 }
 
 // ── S5 fills this in: resume a needs_input job once the user answered. ──

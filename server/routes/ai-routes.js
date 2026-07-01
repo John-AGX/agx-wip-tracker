@@ -12189,6 +12189,90 @@ async function runWatchFire(watchRunId) {
   }
 }
 
+// Background-task runner — the agent_jobs analogue of runWatchFire. The worker
+// (server/agent-jobs-worker.js) claims a queued job (status→running) then calls
+// this. We spin up a fresh headless session on the job's host agent and run the
+// same driveSubtaskTurn loop 86 uses. Reads run auto; subtask fan-out is blocked
+// (recursion/spend guard); any approval-tier WRITE is rejected-with-a-note in S2
+// (S5 upgrades that to a real pause-for-approval). Result + tokens persisted.
+async function runAgentJob(jobId) {
+  const anthropic = getAnthropic();
+  const jr = await pool.query('SELECT * FROM agent_jobs WHERE id=$1', [jobId]);
+  if (!jr.rows.length) return;
+  const job = jr.rows[0];
+  if (!anthropic) {
+    await pool.query("UPDATE agent_jobs SET status='failed', error=$2, completed_at=NOW(), updated_at=NOW() WHERE id=$1", [jobId, 'ANTHROPIC_API_KEY not configured.']);
+    return;
+  }
+  const orgRow = await pool.query('SELECT * FROM organizations WHERE id=$1', [job.organization_id]);
+  const organization = orgRow.rows[0];
+  if (!organization) {
+    await pool.query("UPDATE agent_jobs SET status='failed', error=$2, completed_at=NOW(), updated_at=NOW() WHERE id=$1", [jobId, 'Job organization not found.']);
+    return;
+  }
+
+  let sessionId = null;
+  try {
+    const adminAgents = require('./admin-agents-routes');
+    const env = await adminAgents.ensureManagedEnvironment();
+    const agentKey = (job.agent_key === 'assistant') ? 'assistant' : 'job';
+    const agent = await adminAgents.ensureManagedAgent(agentKey, organization);
+
+    const created = await anthropic.beta.sessions.create({
+      agent: agent.anthropic_agent_id,
+      environment_id: env.anthropic_environment_id,
+      title: 'Project 86 background task · ' + organization.slug + ' · ' + String(job.title || job.prompt || '').slice(0, 60)
+    });
+    sessionId = created.id;
+    await pool.query(
+      "UPDATE agent_jobs SET payload = jsonb_set(COALESCE(payload,'{}'::jsonb), '{anthropic_session_id}', to_jsonb($2::text)), updated_at=NOW() WHERE id=$1",
+      [jobId, sessionId]
+    );
+
+    // 86's normal auto-exec for read tools; block subtask fan-out; approval-tier
+    // writes are rejected-with-a-note in S2 (S5 turns these into a pause-and-ask).
+    const baseCallback = make86OnCustomToolUse(job.user_id, null);
+    const jobCallback = async (tu) => {
+      if (tu.name === 'spawn_subtask' || tu.name === 'await_subtasks' || tu.name === 'subtask_status') {
+        return { tier: 'auto', error: 'Background tasks cannot spawn subtasks (recursion guard). Do the work directly in this run.' };
+      }
+      const decision = await baseCallback(tu);
+      if (decision && decision.tier === 'approval') {
+        return { tier: 'auto', error: 'Tool "' + tu.name + '" would change data and needs the user\'s approval. State clearly what you would do; the user will approve it.' };
+      }
+      return decision;
+    };
+
+    const prompt =
+      '[You are running as a Project 86 BACKGROUND TASK — the user asked you to do this on your own and will read the result asynchronously (they are not watching live). ' +
+      'Do the work with your read tools, then reply with ONE clear final message: what you found or did, and anything that needs the user\'s decision. No conversational filler.]\n\n' +
+      String(job.prompt || '');
+
+    const result = await driveSubtaskTurn({
+      anthropic,
+      sessionId,
+      eventsToSend: [{ type: 'user.message', content: [{ type: 'text', text: prompt }] }],
+      onCustomToolUse: jobCallback
+    });
+    const usage = result.usage || {};
+
+    await pool.query(
+      "UPDATE agent_jobs SET status=$2, result=$3, error=$4, " +
+      " input_tokens=COALESCE(input_tokens,0)+$5, output_tokens=COALESCE(output_tokens,0)+$6, " +
+      " cache_creation_tokens=COALESCE(cache_creation_tokens,0)+$7, cache_read_tokens=COALESCE(cache_read_tokens,0)+$8, " +
+      " completed_at=NOW(), updated_at=NOW() WHERE id=$1",
+      [jobId, result.error ? 'failed' : 'done', result.text || null, result.error || null,
+       usage.input_tokens || 0, usage.output_tokens || 0,
+       usage.cache_creation_input_tokens || 0, usage.cache_read_input_tokens || 0]
+    );
+  } catch (e) {
+    console.error('[agent-jobs] runner failed for', jobId, e);
+    await pool.query("UPDATE agent_jobs SET status='failed', error=$2, completed_at=NOW(), updated_at=NOW() WHERE id=$1", [jobId, (e && e.message) || 'Background task runner error']);
+  } finally {
+    if (sessionId) { try { await anthropic.beta.sessions.archive(sessionId); } catch (_) {} }
+  }
+}
+
 // Scheduler tick. Looks for due watches, creates one ai_watch_runs row
 // per fire, advances next_fire_at, then enqueues the runner. Race-safe
 // via an atomic UPDATE-with-WHERE on next_fire_at — if two ticks fire
@@ -13581,6 +13665,7 @@ router.post('/86/chat/continue', requireAuth, requireOrg, aiChatLimiter, aiChatH
 
 module.exports = router;
 module.exports.startWatchScheduler = startWatchScheduler;
+module.exports.runAgentJob = runAgentJob;  // background-task runner (agent-jobs-worker.js)
 // Exposed for ai-sessions-routes.js (sidebar CRUD shares the Anthropic
 // session lifecycle helpers so there's one code path that talks to
 // beta.sessions.*).
