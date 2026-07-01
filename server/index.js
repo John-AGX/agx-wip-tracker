@@ -379,6 +379,14 @@ function startServer() {
       } catch (e) {
         console.warn('[watch] failed to start scheduler:', e && e.message);
       }
+      // Background AI-agent task worker. Ticks every 10s: claims queued agent_jobs
+      // and runs the headless 86/assistant loop, resumes needs_input jobs the user
+      // answered. Inert until a job is created (via the start_background_task tool).
+      try {
+        require('./agent-jobs-worker').start();
+      } catch (e) {
+        console.warn('[agent-jobs] failed to start worker:', e && e.message);
+      }
     }
   });
 }

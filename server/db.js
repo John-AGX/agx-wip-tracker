@@ -2820,6 +2820,46 @@ async function initSchema() {
       ON ai_watch_runs (status)
       WHERE status IN ('pending','running');
 
+    -- agent_jobs — user-initiated BACKGROUND agent tasks. 86 / the assistant hands
+    -- a bigger task to the in-process worker (server/agent-jobs-worker.js), which runs
+    -- the same headless agent loop (driveSubtaskTurn), pauses to ask the user when it
+    -- needs a decision (status='needs_input' + pause_question), and resumes when they
+    -- answer (pause_answer). Reads run free; any write pauses for approval. Notifies
+    -- in-app + email + push on each state change.
+    CREATE TABLE IF NOT EXISTS agent_jobs (
+      id TEXT PRIMARY KEY,
+      organization_id INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      session_id BIGINT REFERENCES ai_sessions(id) ON DELETE SET NULL,
+      agent_key TEXT,
+      status TEXT NOT NULL DEFAULT 'queued',
+      title TEXT,
+      prompt TEXT NOT NULL,
+      payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+      pause_question TEXT,
+      pause_kind TEXT,
+      pause_answer TEXT,
+      result TEXT,
+      error TEXT,
+      input_tokens INTEGER NOT NULL DEFAULT 0,
+      output_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+      cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      started_at TIMESTAMPTZ,
+      paused_at TIMESTAMPTZ,
+      completed_at TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      notified_at TIMESTAMPTZ
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_jobs_claim
+      ON agent_jobs (status, created_at)
+      WHERE status IN ('queued','needs_input','running');
+    CREATE INDEX IF NOT EXISTS idx_agent_jobs_user
+      ON agent_jobs (user_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_agent_jobs_org
+      ON agent_jobs (organization_id, created_at DESC);
+
     -- Extend ai_watches for agent-based watchers (Payload DSL v1).
     -- kind='rule' is the legacy SQL-condition watch; kind='agent' is a
     -- new LLM-driven scan where the watch-runner spins up a one-shot
