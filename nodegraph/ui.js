@@ -31,7 +31,7 @@ var _spSatellite=true; // satellite is permanent now (the toggle is retired); ne
 // 3D Orbit view (real Google 3D buildings). An ISOLATED full-cover vector map layered
 // OVER the flat working map — a "look around the site" mode. The working basemap + node
 // overlay are never touched, so exiting just hides this layer (zero regression risk).
-var _spOrbit=false, _orbitMap=null, _orbitEl=null;
+var _spOrbit=false, _orbitMap=null, _orbitEl=null, _orbitPolys=null;
 var NG_ORBIT_MAP_ID='285034f23d385f2e9f756209'; // same vector mapId the org Job Map uses
 // NG8: frames (group boxes) interaction state
 var selFrame=null, dragFrame=null, frameDragOff=null, frameMembers=null, resizeFrame=null, resizeStart=null;
@@ -1452,6 +1452,29 @@ function ensureOrbit3D(o){
       _orbitMap.setCenter({ lat:o.lat, lng:o.lng }); _orbitMap.setZoom(18);
       _orbitMap.setTilt(47.5); _orbitMap.setHeading(0);
     }
+    // Highlight THIS job's buildings on the 3D view: draw each traced footprint
+    // (n.polygon = lat/lng corners) as a colored polygon + a labeled marker, then fit
+    // the camera to them so you land looking at your building, not the bare address
+    // point. Same geometry we'd extrude once Photorealistic 3D Tiles is enabled.
+    if(_orbitPolys){ _orbitPolys.forEach(function(x){ try{ if(x.setMap) x.setMap(null); else x.map=null; }catch(_){} }); }
+    _orbitPolys=[];
+    var obounds=new maps.LatLngBounds(), hasB=false;
+    E.nodes().forEach(function(n){
+      if(n.type!=='t1' || !n.polygon || n.polygon.length<3) return;
+      var path=n.polygon.map(function(v){ return { lat:Number(v.lat), lng:Number(v.lng) }; });
+      var gpoly=new maps.Polygon({ paths:path, strokeColor:'#4f8cff', strokeOpacity:0.95, strokeWeight:2, fillColor:'#4f8cff', fillOpacity:0.30, clickable:false, map:_orbitMap, zIndex:5 });
+      _orbitPolys.push(gpoly);
+      var cLat=0, cLng=0; path.forEach(function(pt){ cLat+=pt.lat; cLng+=pt.lng; obounds.extend(pt); hasB=true; });
+      cLat/=path.length; cLng/=path.length;
+      if(maps.marker && maps.marker.AdvancedMarkerElement){
+        var tag=document.createElement('div');
+        tag.textContent=(n.label||'Building')+' · '+Math.round(n.pctComplete||0)+'%';
+        tag.style.cssText='background:rgba(79,140,255,.94);color:#fff;font:600 11px/1 system-ui,sans-serif;padding:4px 8px;border-radius:8px;white-space:nowrap;box-shadow:0 1px 6px rgba(0,0,0,.5)';
+        _orbitPolys.push(new maps.marker.AdvancedMarkerElement({ position:{ lat:cLat, lng:cLng }, map:_orbitMap, content:tag }));
+      }
+    });
+    if(hasB){ try{ _orbitMap.fitBounds(obounds, 90); }catch(_){} setTimeout(function(){ try{ if(_spOrbit) _orbitMap.setTilt(47.5); }catch(_){} }, 220); }
+    else { _orbitMap.setCenter({ lat:o.lat, lng:o.lng }); _orbitMap.setZoom(19); }
     // The div was display:none until the class flipped — nudge a resize so tiles fill it.
     setTimeout(function(){ try{ maps.event.trigger(_orbitMap,'resize'); _orbitMap.setCenter({ lat:o.lat, lng:o.lng }); }catch(_){ } }, 60);
   }).catch(function(){});
