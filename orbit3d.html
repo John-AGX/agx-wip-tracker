@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>3D Site View — Project 86</title>
+<style>
+  html,body{margin:0;height:100%;background:#0b0e16;overflow:hidden;font-family:system-ui,-apple-system,'Segoe UI',sans-serif}
+  #host,gmp-map-3d{display:block;width:100%;height:100%}
+  #err{position:absolute;inset:0;display:none;flex-direction:column;gap:8px;align-items:center;justify-content:center;color:#aeb4c4;font-size:13px;text-align:center;padding:28px;line-height:1.55}
+  #err.on{display:flex}
+  #err b{color:#e6e9f2;font-size:14px}
+</style>
+</head>
+<body>
+<div id="host"></div>
+<div id="err"></div>
+<script>
+/* Isolated Photorealistic 3D page. Loads Google Maps on the BETA channel (3D Maps /
+   Map3DElement are Preview-only) so the parent app can stay on the production "weekly"
+   channel. Renders the real Google-Earth 3D tiles + the job's building footprints as
+   extruded, highlighted 3D blocks. The parent (nodegraph/ui.js) feeds the job via
+   postMessage; this page never holds app data of its own. */
+(function(){
+  'use strict';
+  var errEl=document.getElementById('err'), host=document.getElementById('host');
+  function fail(title, detail){ errEl.innerHTML='<b>'+title+'</b>'+(detail?('<div>'+detail+'</div>'):''); errEl.classList.add('on'); }
+  var Lib=null, map3d=null, pending=null, drawn=[];
+
+  // Standard Google inline bootstrap, pinned to the beta release channel.
+  function boot(key){
+    (g=>{var h,a,k,p="The Google Maps JavaScript API",c="google",l="importLibrary",q="__ib__",m=document,b=window;b=b[c]||(b[c]={});var d=b.maps||(b.maps={}),r=new Set,e=new URLSearchParams,u=()=>h||(h=new Promise(async(f,n)=>{await (a=m.createElement("script"));e.set("libraries",[...r]+"");for(k in g)e.set(k.replace(/[A-Z]/g,t=>"_"+t[0].toLowerCase()),g[k]);e.set("callback",c+".maps."+q);a.src="https://maps."+c+"apis.com/maps/api/js?"+e;d[q]=f;a.onerror=()=>h=n(Error(p+" could not load."));a.nonce=m.querySelector("script[nonce]")?.nonce||"";m.head.append(a)}));d[l]?console.warn(p+" only loads once. Ignoring:",g):d[l]=(f,...n)=>r.add(f)&&u().then(()=>d[l](f,...n))})({key:key, v:"beta"});
+    google.maps.importLibrary("maps3d").then(function(lib){
+      Lib=lib;
+      try{ parent.postMessage({ type:'p86-orbit3d-ready' }, '*'); }catch(_){}
+      if(pending){ render(pending); }
+    }).catch(function(e){ fail('3D view unavailable', 'The Maps 3D library failed to load. '+((e&&e.message)||'')); });
+  }
+
+  function clearDrawn(){ drawn.forEach(function(el){ try{ el.remove(); }catch(_){} }); drawn=[]; }
+
+  function render(data){
+    if(!Lib){ pending=data; return; }
+    pending=null;
+    var c=data && data.center; if(!c) return;
+    var Map3DElement=Lib.Map3DElement, Polygon3DElement=Lib.Polygon3DElement, AltitudeMode=Lib.AltitudeMode, MapMode=Lib.MapMode;
+    try{
+      if(!map3d){
+        map3d=new Map3DElement({
+          center:{ lat:c.lat, lng:c.lng, altitude:0 },
+          range:340, tilt:62, heading:0,
+          mode:(MapMode && MapMode.SATELLITE) || undefined
+        });
+        map3d.style.width='100%'; map3d.style.height='100%';
+        host.appendChild(map3d);
+      } else {
+        map3d.center={ lat:c.lat, lng:c.lng, altitude:0 };
+        map3d.range=340; map3d.tilt=62; map3d.heading=0;
+      }
+    }catch(e){ fail('3D view unavailable', (e&&e.message)||''); return; }
+
+    // Highlight this job's buildings: each traced footprint becomes an extruded,
+    // translucent-blue 3D block (drawsOccludedSegments keeps it visible through the mesh).
+    clearDrawn();
+    (data.buildings||[]).forEach(function(b){
+      if(!b.path || b.path.length<3) return;
+      var h=b.heightM || 8;
+      var coords=b.path.map(function(p){ return { lat:p.lat, lng:p.lng, altitude:h }; });
+      try{
+        var poly=new Polygon3DElement({
+          outerCoordinates:coords,
+          fillColor:'rgba(79,140,255,0.32)',
+          strokeColor:'#7eb0ff',
+          strokeWidth:2,
+          extruded:true,
+          altitudeMode:(AltitudeMode && AltitudeMode.RELATIVE_TO_GROUND) || undefined,
+          drawsOccludedSegments:true
+        });
+        map3d.appendChild(poly);
+        drawn.push(poly);
+      }catch(_){}
+    });
+
+    // Gentle intro orbit around the site; the user can grab it to look around freely.
+    try{
+      map3d.flyCameraAround({
+        camera:{ center:{ lat:c.lat, lng:c.lng, altitude:0 }, tilt:62, range:340, heading:0 },
+        durationMillis:70000, repeatCount:Infinity
+      });
+    }catch(_){}
+  }
+
+  window.addEventListener('message', function(ev){
+    if(ev.origin!==location.origin) return;                 // only trust the parent app
+    if(ev.data && ev.data.type==='p86-orbit3d-render'){ render(ev.data); }
+  });
+
+  // Fetch the referrer-locked Maps key (same-origin → session cookie flows), then boot.
+  fetch('/api/config/maps-key', { credentials:'same-origin' })
+    .then(function(r){ return r.json(); })
+    .then(function(j){ if(j && j.key){ boot(j.key); } else { fail('Map key not configured', 'Set the Google Maps key on the server.'); } })
+    .catch(function(){ fail('Could not load the map', 'Failed to fetch the map key.'); });
+})();
+</script>
+</body>
+</html>

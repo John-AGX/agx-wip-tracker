@@ -784,6 +784,7 @@ body.light-mode .ng-topbar.ng-ribbon .ng-ribbon-btn:hover{
 #nodeGraphTab .ng-orbit-3d{position:absolute;inset:0;z-index:40;display:none;background:#0b0e16}
 #nodeGraphTab.ng-orbit-on .ng-orbit-3d{display:block}
 .ng-orbit-3d-map{position:absolute;inset:0}
+.ng-orbit-3d-frame{position:absolute;inset:0;width:100%;height:100%;border:0;display:block}
 .ng-orbit-exit{position:absolute;top:12px;right:12px;z-index:5;display:inline-flex;align-items:center;gap:6px;background:rgba(17,20,28,.92);color:#fff;border:1px solid rgba(255,255,255,.18);border-radius:9px;padding:8px 13px;font-size:12px;font-weight:600;cursor:pointer;box-shadow:0 2px 12px rgba(0,0,0,.5)}
 .ng-orbit-exit:hover{background:rgba(40,46,60,.96)}
 .ng-orbit-hint{position:absolute;left:12px;bottom:12px;z-index:5;background:rgba(17,20,28,.86);color:#aeb4c4;border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:7px 11px;font-size:11px;max-width:280px;line-height:1.45;pointer-events:none}

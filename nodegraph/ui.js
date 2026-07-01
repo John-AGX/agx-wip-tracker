@@ -28,11 +28,11 @@ var _spPhotos=(function(){ try{ return localStorage.getItem('ngSitePlanPhotos')=
 var _taskPinsEl=null, _geoTasks=[], _geoTasksJob=null;
 var _spTasks=(function(){ try{ return localStorage.getItem('ngSitePlanTasks')==='1'; }catch(_){ return false; } })();
 var _spSatellite=true; // satellite is permanent now (the toggle is retired); never goes false
-// 3D Orbit view (real Google 3D buildings). An ISOLATED full-cover vector map layered
-// OVER the flat working map — a "look around the site" mode. The working basemap + node
-// overlay are never touched, so exiting just hides this layer (zero regression risk).
-var _spOrbit=false, _orbitMap=null, _orbitEl=null, _orbitPolys=null;
-var NG_ORBIT_MAP_ID='285034f23d385f2e9f756209'; // same vector mapId the org Job Map uses
+// 3D Orbit view (Photorealistic 3D Tiles / Google-Earth engine). Rendered in an ISOLATED
+// same-origin iframe (/orbit3d.html) that loads Maps on the BETA channel + Map3DElement, so
+// the main app's maps stay on the production "weekly" channel, untouched. We feed the iframe
+// the job center + building footprints via postMessage; it extrudes/highlights them in 3D.
+var _spOrbit=false, _orbitEl=null, _orbitReady=false, _orbitPending=null;
 // NG8: frames (group boxes) interaction state
 var selFrame=null, dragFrame=null, frameDragOff=null, frameMembers=null, resizeFrame=null, resizeStart=null;
 // When set to a note's id, the next click on a node attaches the note
@@ -1427,64 +1427,43 @@ function ensureOrbit3D(o){
   var tab=document.getElementById('nodeGraphTab'); if(!tab) return;
   if(!_orbitEl){
     _orbitEl=document.createElement('div'); _orbitEl.className='ng-orbit-3d';
-    var mapDiv=document.createElement('div'); mapDiv.className='ng-orbit-3d-map'; _orbitEl.appendChild(mapDiv);
+    // Photorealistic 3D runs in an isolated same-origin iframe (loads Maps beta + Map3DElement).
+    var frame=document.createElement('iframe'); frame.className='ng-orbit-3d-frame';
+    frame.src='/orbit3d.html'; frame.setAttribute('title','3D site view'); frame.setAttribute('allow','fullscreen');
+    _orbitEl.appendChild(frame); _orbitEl.__frame=frame;
     var exitB=document.createElement('button'); exitB.type='button'; exitB.className='ng-orbit-exit';
     exitB.innerHTML='&#x2715; Exit 3D'; exitB.addEventListener('click', exitOrbit3D); _orbitEl.appendChild(exitB);
     var hint=document.createElement('div'); hint.className='ng-orbit-hint';
-    hint.textContent='Switch to “Map” (top-left) + tilt for Google’s 3D buildings. Drag to pan · Ctrl-drag or two fingers to tilt & spin · scroll to zoom · Exit to return.';
+    hint.textContent='Photorealistic 3D — drag to orbit · scroll to zoom · your building is highlighted · Exit to return to the working map.';
     _orbitEl.appendChild(hint);
     (tab.querySelector('.ng-canvas-area')||tab).appendChild(_orbitEl);
-    _orbitEl.__mapDiv=mapDiv;
-  }
-  if(!window.p86Maps){ return; }
-  window.p86Maps.ready().then(function(maps){
-    if(!_spOrbit) return;                                   // exited while the SDK loaded
-    if(!_orbitMap){
-      _orbitMap=new maps.Map(_orbitEl.__mapDiv, {
-        center:{ lat:o.lat, lng:o.lng }, zoom:18,
-        mapId:NG_ORBIT_MAP_ID, mapTypeId:maps.MapTypeId.HYBRID,
-        tilt:47.5, heading:0,
-        rotateControl:true, zoomControl:true, streetViewControl:false,
-        fullscreenControl:false, clickableIcons:false,
-        // Map/Satellite switch: on the vector "Map" (roadmap) type, tilt renders
-        // Google's gray 3D building extrusions (broad suburban coverage, unlike the
-        // satellite 45deg imagery) — the reliable 3D-buildings view for job sites.
-        mapTypeControl:true,
-        mapTypeControlOptions:{ mapTypeIds:['hybrid','roadmap'],
-          style:(maps.MapTypeControlStyle&&maps.MapTypeControlStyle.HORIZONTAL_BAR)||undefined,
-          position:(maps.ControlPosition&&maps.ControlPosition.TOP_LEFT)||undefined },
-        gestureHandling:'greedy', keyboardShortcuts:true, backgroundColor:'#0b0e16'
-      });
-    } else {
-      _orbitMap.setCenter({ lat:o.lat, lng:o.lng }); _orbitMap.setZoom(18);
-      _orbitMap.setTilt(47.5); _orbitMap.setHeading(0);
-    }
-    // Highlight THIS job's buildings on the 3D view: draw each traced footprint
-    // (n.polygon = lat/lng corners) as a colored polygon + a labeled marker, then fit
-    // the camera to them so you land looking at your building, not the bare address
-    // point. Same geometry we'd extrude once Photorealistic 3D Tiles is enabled.
-    if(_orbitPolys){ _orbitPolys.forEach(function(x){ try{ if(x.setMap) x.setMap(null); else x.map=null; }catch(_){} }); }
-    _orbitPolys=[];
-    var obounds=new maps.LatLngBounds(), hasB=false;
-    E.nodes().forEach(function(n){
-      if(n.type!=='t1' || !n.polygon || n.polygon.length<3) return;
-      var path=n.polygon.map(function(v){ return { lat:Number(v.lat), lng:Number(v.lng) }; });
-      var gpoly=new maps.Polygon({ paths:path, strokeColor:'#4f8cff', strokeOpacity:0.95, strokeWeight:2, fillColor:'#4f8cff', fillOpacity:0.30, clickable:false, map:_orbitMap, zIndex:5 });
-      _orbitPolys.push(gpoly);
-      var cLat=0, cLng=0; path.forEach(function(pt){ cLat+=pt.lat; cLng+=pt.lng; obounds.extend(pt); hasB=true; });
-      cLat/=path.length; cLng/=path.length;
-      if(maps.marker && maps.marker.AdvancedMarkerElement){
-        var tag=document.createElement('div');
-        tag.textContent=(n.label||'Building')+' · '+Math.round(n.pctComplete||0)+'%';
-        tag.style.cssText='background:rgba(79,140,255,.94);color:#fff;font:600 11px/1 system-ui,sans-serif;padding:4px 8px;border-radius:8px;white-space:nowrap;box-shadow:0 1px 6px rgba(0,0,0,.5)';
-        _orbitPolys.push(new maps.marker.AdvancedMarkerElement({ position:{ lat:cLat, lng:cLng }, map:_orbitMap, content:tag }));
-      }
+    // The 3D page posts "ready" once its Maps SDK + tiles are loaded; then we (re)feed it.
+    window.addEventListener('message', function(ev){
+      if(ev.origin!==location.origin) return;               // only trust the parent-origin iframe
+      if(!ev.data || ev.data.type!=='p86-orbit3d-ready') return;
+      _orbitReady=true;
+      if(_spOrbit) postOrbitData();
     });
-    if(hasB){ try{ _orbitMap.fitBounds(obounds, 90); }catch(_){} setTimeout(function(){ try{ if(_spOrbit) _orbitMap.setTilt(47.5); }catch(_){} }, 220); }
-    else { _orbitMap.setCenter({ lat:o.lat, lng:o.lng }); _orbitMap.setZoom(19); }
-    // The div was display:none until the class flipped — nudge a resize so tiles fill it.
-    setTimeout(function(){ try{ maps.event.trigger(_orbitMap,'resize'); _orbitMap.setCenter({ lat:o.lat, lng:o.lng }); }catch(_){ } }, 60);
-  }).catch(function(){});
+  }
+  _orbitPending=o;                    // remember the job origin for postOrbitData
+  if(_orbitReady) postOrbitData();    // frame already loaded → (re)feed it now
+}
+// Feed the 3D iframe the job center + building footprints (t1 node.polygon = lat/lng corners,
+// height estimated from stories). It extrudes each as a highlighted 3D block over the tiles.
+function postOrbitData(){
+  var f=_orbitEl && _orbitEl.__frame; if(!f || !f.contentWindow) return;
+  var o=_orbitPending || jobOrigin(); if(!o) return;
+  var buildings=[];
+  E.nodes().forEach(function(n){
+    if(n.type!=='t1' || !n.polygon || n.polygon.length<3) return;
+    buildings.push({
+      path: n.polygon.map(function(v){ return { lat:Number(v.lat), lng:Number(v.lng) }; }),
+      label: n.label||'Building',
+      pct: Math.round(n.pctComplete||0),
+      heightM: (n.levels && n.levels.length) ? n.levels.length*3.2 : 8
+    });
+  });
+  try{ f.contentWindow.postMessage({ type:'p86-orbit3d-render', center:{ lat:o.lat, lng:o.lng }, buildings:buildings }, location.origin); }catch(_){}
 }
 
 // ── Map-picker (Slice 3): the ONLY building-geo write path ──────────────
