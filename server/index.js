@@ -199,6 +199,7 @@ app.use('/api/subs', subRoutes);
 // through to here only for the invite endpoints it doesn't define.
 app.use('/api', subPortalRoutes);
 app.use('/api/messages', messageRoutes);
+app.use('/api/agent-jobs', require('./routes/agent-jobs-routes'));
 app.use('/api/schedule', scheduleRoutes);
 app.use('/api/weather', weatherRoutes);
 // Campaigns routes mount BEFORE the generic email mount so the more

@@ -2859,6 +2859,7 @@ async function initSchema() {
       ON agent_jobs (user_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_agent_jobs_org
       ON agent_jobs (organization_id, created_at DESC);
+    ALTER TABLE agent_jobs ADD COLUMN IF NOT EXISTS seen_at TIMESTAMPTZ;
 
     -- Extend ai_watches for agent-based watchers (Payload DSL v1).
     -- kind='rule' is the legacy SQL-condition watch; kind='agent' is a
