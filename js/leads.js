@@ -129,65 +129,92 @@
   }
   window.setLeadsView = setLeadsView;
 
+  // ── Column catalog (add/remove which fields show; all available for export) ──
+  // Comprehensive BT-style field set. DEFAULT_COLS is the "standard" visible set;
+  // the Views ▾ → Columns chooser toggles any of these on/off, and Export writes
+  // every column regardless of what's visible.
+  var LEAD_COLS = [
+    { key: 'title', label: 'Title', sort: true },
+    { key: 'client', label: 'Client', sort: true },
+    { key: 'status', label: 'Status', sort: true },
+    { key: 'confidence', label: 'Conf', sort: true, num: true },
+    { key: 'revenue', label: 'Est. Revenue', sort: true, num: true },
+    { key: 'est_rev_low', label: 'Rev Low', sort: true, num: true },
+    { key: 'est_rev_high', label: 'Rev High', sort: true, num: true },
+    { key: 'salesperson', label: 'Salesperson', sort: true },
+    { key: 'source', label: 'Source', sort: true },
+    { key: 'project_type', label: 'Project Type', sort: true },
+    { key: 'market', label: 'Market', sort: true },
+    { key: 'property_name', label: 'Property / Community', sort: true },
+    { key: 'street_address', label: 'Street', sort: true },
+    { key: 'city', label: 'City', sort: true },
+    { key: 'state', label: 'State', sort: true },
+    { key: 'zip', label: 'Zip', sort: true },
+    { key: 'gate_code', label: 'Gate Code', sort: false },
+    { key: 'projected_sale_date', label: 'Proj. Sale', sort: true },
+    { key: 'next_followup_at', label: 'Next F/U', sort: true },
+    { key: 'status_changed_at', label: 'In Stage', sort: true, num: true },
+    { key: 'converted_at', label: 'Converted', sort: true },
+    { key: 'lost_at', label: 'Lost', sort: true },
+    { key: 'lost_reason', label: 'Lost Reason', sort: true },
+    { key: 'notes', label: 'Notes', sort: false },
+    { key: 'created_at', label: 'Created', sort: true },
+    { key: 'updated_at', label: 'Updated', sort: true },
+    { key: 'id', label: 'Lead ID', sort: false }
+  ];
+  var LEADS_DEFAULT_COLS = ['title', 'client', 'status', 'revenue', 'confidence', 'salesperson', 'project_type', 'projected_sale_date', 'next_followup_at', 'status_changed_at', 'updated_at'];
+  var _leadCols = null;   // visible column keys; null → LEADS_DEFAULT_COLS
+  function leadAllColKeys() { return LEAD_COLS.map(function (c) { return c.key; }); }
+  function leadVisibleCols() { var keys = _leadCols || LEADS_DEFAULT_COLS; return LEAD_COLS.filter(function (c) { return keys.indexOf(c.key) >= 0; }); }
+  function persistLeadCols() { try { localStorage.setItem('p86-leads-cols', JSON.stringify(_leadCols || LEADS_DEFAULT_COLS)); } catch (e) {} }
+  function restoreLeadCols() { try { var s = JSON.parse(localStorage.getItem('p86-leads-cols') || 'null'); if (Array.isArray(s) && s.length) _leadCols = s; } catch (e) {} }
+  var _isTerminalLead = function (l) { return ['sold', 'lost', 'no_opportunity'].indexOf(l.status) !== -1; };
+  var _overdueDate = function (val, active) { if (!val) return false; var t = new Date(val).getTime(); return active && !isNaN(t) && t < Date.now() - 86400000; };
+
+  // Render one <td data-col> for a lead + column key. Used by both the list
+  // (visible subset) and consistent across the app.
+  function leadCellFor(l, key) {
+    switch (key) {
+      case 'title': {
+        var loc = [l.city, l.state].filter(Boolean).join(', ');
+        var suffix = loc ? '<span style="font-size:11px;color:var(--text-dim,#888);font-weight:normal;margin-left:6px;">' + escapeHTML(loc) + '</span>' : '';
+        return '<td data-col="title" class="lead-title-cell" title="' + escapeAttr(l.title) + (loc ? ' · ' + loc : '') + '"><strong>' + escapeHTML(l.title || '') + '</strong>' + suffix + '</td>';
+      }
+      case 'client': return '<td data-col="client">' + (l.client_name ? escapeHTML(l.client_name) : '<span style="color:var(--text-dim,#666);font-style:italic;">no client</span>') + '</td>';
+      case 'status': return '<td data-col="status"><span class="badge lead-' + (l.status || 'new') + '">' + escapeHTML(statusMeta(l.status).label) + '</span></td>';
+      case 'confidence': { var c = (l.confidence != null && l.confidence > 0) ? Number(l.confidence) : 0; var col = c >= 75 ? '#34d399' : c >= 50 ? '#fbbf24' : 'var(--text-dim,#aaa)'; return '<td data-col="confidence" class="num" style="text-align:right;">' + (c > 0 ? '<span style="color:' + col + ';font-weight:600;">' + c + '%</span>' : '') + '</td>'; }
+      case 'revenue': { var r = revenueFromAttachedEstimates(l.id); return '<td data-col="revenue" class="num" style="color:#34d399;font-weight:600;">' + escapeHTML(r != null ? fmtCurrencyFull(r) : '') + '</td>'; }
+      case 'est_rev_low': return '<td data-col="est_rev_low" class="num">' + escapeHTML(l.estimated_revenue_low != null ? fmtCurrencyFull(l.estimated_revenue_low) : '') + '</td>';
+      case 'est_rev_high': return '<td data-col="est_rev_high" class="num">' + escapeHTML(l.estimated_revenue_high != null ? fmtCurrencyFull(l.estimated_revenue_high) : '') + '</td>';
+      case 'salesperson': return '<td data-col="salesperson">' + escapeHTML(l.salesperson_name || '') + '</td>';
+      case 'source': return '<td data-col="source">' + escapeHTML(l.source || '') + '</td>';
+      case 'project_type': return '<td data-col="project_type">' + escapeHTML(l.project_type || '') + '</td>';
+      case 'market': return '<td data-col="market">' + escapeHTML(l.market || '') + '</td>';
+      case 'property_name': return '<td data-col="property_name">' + escapeHTML(l.property_name || '') + '</td>';
+      case 'street_address': return '<td data-col="street_address">' + escapeHTML(l.street_address || '') + '</td>';
+      case 'city': return '<td data-col="city">' + escapeHTML(l.city || '') + '</td>';
+      case 'state': return '<td data-col="state">' + escapeHTML(l.state || '') + '</td>';
+      case 'zip': return '<td data-col="zip">' + escapeHTML(l.zip || '') + '</td>';
+      case 'gate_code': return '<td data-col="gate_code">' + escapeHTML(l.gate_code || '') + '</td>';
+      case 'projected_sale_date': { var od = _overdueDate(l.projected_sale_date, !_isTerminalLead(l)); return '<td data-col="projected_sale_date"' + (od ? ' style="color:#f87171;"' : '') + '>' + escapeHTML(l.projected_sale_date ? fmtDate(l.projected_sale_date) : '') + '</td>'; }
+      case 'next_followup_at': { var od2 = _overdueDate(l.next_followup_at, !_isTerminalLead(l)); return '<td data-col="next_followup_at"' + (od2 ? ' style="color:#f87171;font-weight:600;"' : '') + '>' + escapeHTML(l.next_followup_at ? fmtDate(l.next_followup_at) : '') + '</td>'; }
+      case 'status_changed_at': { var sd = ''; if (l.status_changed_at) { var sc = new Date(l.status_changed_at).getTime(); if (!isNaN(sc)) sd = Math.max(0, Math.floor((Date.now() - sc) / 86400000)) + 'd'; } return '<td data-col="status_changed_at" class="num" title="Days in the current stage">' + escapeHTML(sd) + '</td>'; }
+      case 'converted_at': return '<td data-col="converted_at">' + escapeHTML(l.converted_at ? fmtDate(l.converted_at) : '') + '</td>';
+      case 'lost_at': return '<td data-col="lost_at">' + escapeHTML(l.lost_at ? fmtDate(l.lost_at) : '') + '</td>';
+      case 'lost_reason': return '<td data-col="lost_reason">' + escapeHTML(l.lost_reason || '') + '</td>';
+      case 'notes': return '<td data-col="notes" title="' + escapeAttr(l.notes || '') + '">' + escapeHTML((l.notes || '').slice(0, 60)) + '</td>';
+      case 'created_at': return '<td data-col="created_at">' + escapeHTML(l.created_at ? fmtDate(l.created_at) : '') + '</td>';
+      case 'updated_at': return '<td data-col="updated_at" title="created ' + escapeAttr(fmtDate(l.created_at)) + '">' + escapeHTML(fmtDate(l.updated_at || l.created_at)) + '</td>';
+      case 'id': return '<td data-col="id" style="font-size:11px;color:var(--text-dim,#888);">' + escapeHTML(l.id || '') + '</td>';
+      default: return '<td data-col="' + escapeAttr(key) + '">' + escapeHTML(l[key] != null ? String(l[key]) : '') + '</td>';
+    }
+  }
+
   function leadRowHTML(l) {
     // Status: use the global .badge + per-status color class instead of
     // an inline-styled span. Shape inherits from the .badge rule in
     // styles.css — same character as the Jobs list, with lead-specific
     // colors for the 6-stage pipeline.
-    var sm = statusMeta(l.status);
-    var statusPill = '<span class="badge lead-' + (l.status || 'new') + '">' + escapeHTML(sm.label) + '</span>';
-
-    var clientCell = l.client_name
-      ? escapeHTML(l.client_name)
-      : '<span style="color:var(--text-dim,#666);font-style:italic;">no client</span>';
-
-    // Revenue column = highest clientPrice across attached estimates.
-    // Blank when no estimate is linked. Full-precision dollars.
-    var estRev = revenueFromAttachedEstimates(l.id);
-    var revenue = estRev != null ? fmtCurrencyFull(estRev) : '';
-
-    // Confidence as plain colored % text — same pattern Jobs uses for
-    // its Margin column. Tried a progress-bar here but the
-    // `p86Tables.enhance` overflow:hidden clips it in the narrow CONF
-    // column. Tinted by tier: ≥75 green, ≥50 yellow, below dim.
-    var confNum = (l.confidence != null && l.confidence > 0) ? Number(l.confidence) : 0;
-    var confColor = confNum >= 75 ? '#34d399' : confNum >= 50 ? '#fbbf24' : 'var(--text-dim,#aaa)';
-    var confCell = confNum > 0
-      ? '<span style="color:' + confColor + ';font-weight:600;">' + confNum + '%</span>'
-      : '';
-
-    // Projected sale: show the date if set; flag as overdue in red when
-    // the date has passed and the lead isn't terminal.
-    var projDateStr = l.projected_sale_date ? fmtDate(l.projected_sale_date) : '';
-    var projOverdue = false;
-    if (l.projected_sale_date) {
-      var pd = new Date(l.projected_sale_date).getTime();
-      var terminal = ['sold', 'lost', 'no_opportunity'].indexOf(l.status) !== -1;
-      if (!terminal && !isNaN(pd) && pd < Date.now() - 86400000) projOverdue = true;
-    }
-
-    // Next follow-up: red when past-due and the lead is still active.
-    var nfuStr = l.next_followup_at ? fmtDate(l.next_followup_at) : '';
-    var nfuOverdue = false;
-    if (l.next_followup_at) {
-      var nd = new Date(l.next_followup_at).getTime();
-      var nTerminal = ['sold', 'lost', 'no_opportunity'].indexOf(l.status) !== -1;
-      if (!nTerminal && !isNaN(nd) && nd < Date.now() - 86400000) nfuOverdue = true;
-    }
-    // Days in the current stage, from status_changed_at (pipeline velocity).
-    var stageDays = '';
-    if (l.status_changed_at) {
-      var sc = new Date(l.status_changed_at).getTime();
-      if (!isNaN(sc)) stageDays = Math.max(0, Math.floor((Date.now() - sc) / 86400000)) + 'd';
-    }
-
-    // Single-line title: bold title + small inline grey suffix for
-    // location. Mirrors the Jobs "Job # / Name" cell pattern.
-    var location = [l.city, l.state].filter(Boolean).join(', ');
-    var titleSuffix = location
-      ? '<span style="font-size:11px;color:var(--text-dim,#888);font-weight:normal;margin-left:6px;">' + escapeHTML(location) + '</span>'
-      : '';
-
     var selCell = canBulkEditLeads()
       ? '<td class="lead-check-cell" style="width:34px;text-align:center;" onclick="event.stopPropagation();">' +
           '<input type="checkbox" class="lead-check" data-id="' + escapeAttr(l.id) + '"' + (_leadsSelected.has(l.id) ? ' checked' : '') +
@@ -195,19 +222,7 @@
       : '';
     return '<tr class="leads-row" onclick="openEditLeadModal(\'' + escapeAttr(l.id) + '\')">' +
       selCell +
-      '<td data-col="title" class="lead-title-cell" title="' + escapeAttr(l.title) + (location ? ' · ' + location : '') + '">' +
-        '<strong>' + escapeHTML(l.title) + '</strong>' + titleSuffix +
-      '</td>' +
-      '<td data-col="client">' + clientCell + '</td>' +
-      '<td data-col="status">' + statusPill + '</td>' +
-      '<td data-col="revenue" class="num" style="color:#34d399;font-weight:600;">' + escapeHTML(revenue) + '</td>' +
-      '<td data-col="confidence" class="num" style="text-align:right;">' + confCell + '</td>' +
-      '<td data-col="salesperson">' + escapeHTML(l.salesperson_name || '') + '</td>' +
-      '<td data-col="project_type">' + escapeHTML(l.project_type || '') + '</td>' +
-      '<td data-col="projected_sale_date"' + (projOverdue ? ' style="color:#f87171;"' : '') + '>' + escapeHTML(projDateStr) + '</td>' +
-      '<td data-col="next_followup_at"' + (nfuOverdue ? ' style="color:#f87171;font-weight:600;"' : '') + '>' + escapeHTML(nfuStr) + '</td>' +
-      '<td data-col="status_changed_at" class="num" title="Days in the current stage">' + escapeHTML(stageDays) + '</td>' +
-      '<td data-col="updated_at" title="created ' + escapeAttr(fmtDate(l.created_at)) + '">' + escapeHTML(fmtDate(l.updated_at || l.created_at)) + '</td>' +
+      leadVisibleCols().map(function (c) { return leadCellFor(l, c.key); }).join('') +
     '</tr>';
   }
 
@@ -252,8 +267,12 @@
       av = (a.project_type || '').toLowerCase(); bv = (b.project_type || '').toLowerCase();
     } else if (key === 'source') {
       av = (a.source || '').toLowerCase(); bv = (b.source || '').toLowerCase();
-    } else { // title
-      av = (a.title || '').toLowerCase(); bv = (b.title || '').toLowerCase();
+    } else if (key === 'est_rev_low' || key === 'est_rev_high') {
+      av = Number(a[key] || 0); bv = Number(b[key] || 0);
+    } else {
+      // Generic: string (or ISO-date string, which sorts chronologically) on l[key].
+      av = String(a[key] != null ? a[key] : '').toLowerCase();
+      bv = String(b[key] != null ? b[key] : '').toLowerCase();
     }
     if (av < bv) return dir === 'desc' ? 1 : -1;
     if (av > bv) return dir === 'desc' ? -1 : 1;
@@ -389,6 +408,8 @@
     _leadsActiveViewId = v.id;
     var cfg = v.config || {};
     _leadsDrawer = (cfg.filters && Object.keys(cfg.filters).length) ? cfg.filters : null;
+    _leadCols = (Array.isArray(cfg.columns) && cfg.columns.length) ? cfg.columns.slice() : null;
+    persistLeadCols();
     updateLeadsFilterBtn(); updateLeadsViewsBtn(); renderLeadsList();
   }
   window.leadsOpenViews = function(anchor) {
@@ -404,7 +425,14 @@
         '<a href="#" data-del="' + escapeAttr(v.id) + '" title="Delete" style="text-decoration:none;color:#f87171;">✕</a>' +
       '</div>';
     }).join('') : '<div style="padding:6px 8px;color:var(--text-dim,#888);">No saved views yet.</div>';
-    pop.innerHTML = rows + '<div style="border-top:1px solid var(--border,#333);margin-top:6px;padding-top:6px;"><button type="button" class="ee-btn" id="leads-save-view" style="width:100%;">＋ Save current filters as view…</button></div>';
+    var curCols = _leadCols || LEADS_DEFAULT_COLS;
+    var colsHtml = '<div style="border-top:1px solid var(--border,#333);margin-top:6px;padding-top:6px;">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;"><strong style="font-size:11px;text-transform:uppercase;letter-spacing:.03em;color:var(--text-dim,#888);">Columns shown</strong>' +
+      '<span><a href="#" id="lc-all" style="font-size:11px;text-decoration:none;">All</a> · <a href="#" id="lc-reset" style="font-size:11px;text-decoration:none;">Reset</a></span></div>' +
+      '<div style="max-height:230px;overflow:auto;display:grid;grid-template-columns:1fr 1fr;gap:1px 10px;">' +
+        LEAD_COLS.map(function(c) { return '<label style="display:flex;align-items:center;gap:5px;font-size:12px;cursor:pointer;white-space:nowrap;padding:1px 0;"><input type="checkbox" class="lc-box" data-key="' + escapeAttr(c.key) + '"' + (curCols.indexOf(c.key) >= 0 ? ' checked' : '') + '>' + escapeHTML(c.label) + '</label>'; }).join('') +
+      '</div></div>';
+    pop.innerHTML = rows + colsHtml + '<div style="border-top:1px solid var(--border,#333);margin-top:6px;padding-top:6px;"><button type="button" class="ee-btn" id="leads-save-view" style="width:100%;">＋ Save current view (filters + columns)…</button></div>';
     document.body.appendChild(pop);
     var r = anchor.getBoundingClientRect();
     pop.style.top = (r.bottom + 4) + 'px';
@@ -417,13 +445,78 @@
     });
     pop.querySelectorAll('[data-def]').forEach(function(a) { a.addEventListener('click', function(e) { e.preventDefault(); e.stopPropagation(); window.p86Api.listViews.update(a.getAttribute('data-def'), { is_default: true }).then(leadsLoadViews).then(function() { close(); if (window.p86Toast) window.p86Toast('Default view set', 'success'); }); }); });
     pop.querySelectorAll('[data-del]').forEach(function(a) { a.addEventListener('click', function(e) { e.preventDefault(); e.stopPropagation(); if (!confirm('Delete this saved view?')) return; var id = a.getAttribute('data-del'); window.p86Api.listViews.remove(id).then(function() { if (_leadsActiveViewId === id) _leadsActiveViewId = null; return leadsLoadViews(); }).then(close); }); });
+    // Column chooser: toggle visible columns (never allow zero).
+    pop.querySelectorAll('.lc-box').forEach(function(cb) {
+      cb.addEventListener('change', function() {
+        var set = []; pop.querySelectorAll('.lc-box').forEach(function(x) { if (x.checked) set.push(x.getAttribute('data-key')); });
+        if (!set.length) { cb.checked = true; return; }
+        _leadCols = set; _leadsActiveViewId = null; persistLeadCols(); updateLeadsViewsBtn(); renderLeadsList();
+      });
+    });
+    var lcAll = pop.querySelector('#lc-all');
+    if (lcAll) lcAll.addEventListener('click', function(e) { e.preventDefault(); _leadCols = leadAllColKeys(); _leadsActiveViewId = null; persistLeadCols(); updateLeadsViewsBtn(); renderLeadsList(); pop.querySelectorAll('.lc-box').forEach(function(x) { x.checked = true; }); });
+    var lcReset = pop.querySelector('#lc-reset');
+    if (lcReset) lcReset.addEventListener('click', function(e) { e.preventDefault(); _leadCols = LEADS_DEFAULT_COLS.slice(); _leadsActiveViewId = null; persistLeadCols(); updateLeadsViewsBtn(); renderLeadsList(); pop.querySelectorAll('.lc-box').forEach(function(x) { x.checked = LEADS_DEFAULT_COLS.indexOf(x.getAttribute('data-key')) >= 0; }); });
     var sv = pop.querySelector('#leads-save-view');
     if (sv) sv.addEventListener('click', function() {
       var name = prompt('Name this view:'); if (name == null) return; name = String(name).trim(); if (!name) return;
-      window.p86Api.listViews.create({ page: 'leads', name: name, config: { filters: _leadsDrawer || {} }, is_default: false })
+      window.p86Api.listViews.create({ page: 'leads', name: name, config: { filters: _leadsDrawer || {}, columns: _leadCols || LEADS_DEFAULT_COLS }, is_default: false })
         .then(function(res) { _leadsActiveViewId = (res && res.view && res.view.id) || null; return leadsLoadViews(); })
         .then(function() { close(); if (window.p86Toast) window.p86Toast('View saved', 'success'); })
         .catch(function() { if (window.p86Toast) window.p86Toast('Could not save view', 'error'); });
+    });
+  };
+
+  // ── Export to Excel (ALL fields, current filtered set) ──────────────
+  var _leadsFiltered = [];   // last rendered filtered set (drives export)
+  function leadRawVal(l, key) {
+    switch (key) {
+      case 'title': return l.title || '';
+      case 'client': return l.client_name || '';
+      case 'status': return statusMeta(l.status).label;
+      case 'confidence': return l.confidence != null ? Number(l.confidence) : '';
+      case 'revenue': { var r = revenueFromAttachedEstimates(l.id); return r != null ? Number(r) : ''; }
+      case 'est_rev_low': return l.estimated_revenue_low != null ? Number(l.estimated_revenue_low) : '';
+      case 'est_rev_high': return l.estimated_revenue_high != null ? Number(l.estimated_revenue_high) : '';
+      case 'salesperson': return l.salesperson_name || '';
+      case 'status_changed_at': { if (!l.status_changed_at) return ''; var sc = new Date(l.status_changed_at).getTime(); return isNaN(sc) ? '' : Math.max(0, Math.floor((Date.now() - sc) / 86400000)); }
+      case 'projected_sale_date': case 'next_followup_at': case 'converted_at': case 'lost_at': case 'created_at': case 'updated_at': return l[key] ? String(l[key]).slice(0, 10) : '';
+      default: return l[key] != null ? String(l[key]) : '';
+    }
+  }
+  function ensureXLSX() {
+    return new Promise(function(resolve, reject) {
+      if (typeof XLSX !== 'undefined') return resolve(window.XLSX);
+      var existing = document.getElementById('p86-xlsx-cdn');
+      if (existing) { existing.addEventListener('load', function() { resolve(window.XLSX); }); existing.addEventListener('error', function() { reject(new Error('lib')); }); return; }
+      var s = document.createElement('script');
+      s.id = 'p86-xlsx-cdn';
+      s.src = 'https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js';
+      s.onload = function() { resolve(window.XLSX); };
+      s.onerror = function() { reject(new Error('Could not load the Excel library.')); };
+      document.head.appendChild(s);
+    });
+  }
+  window.leadsExportExcel = function() {
+    var rows = (_leadsFiltered && _leadsFiltered.length) ? _leadsFiltered : _leads;
+    if (!rows.length) { if (window.p86Toast) window.p86Toast('No leads to export.', 'error'); return; }
+    var btn = document.getElementById('leads-export-btn');
+    if (btn) { btn.disabled = true; }
+    ensureXLSX().then(function(XLSX) {
+      // Export EVERY field (full BT-style record), not just the visible columns.
+      var header = LEAD_COLS.map(function(c) { return c.label; });
+      var aoa = [header];
+      rows.forEach(function(l) { aoa.push(LEAD_COLS.map(function(c) { return leadRawVal(l, c.key); })); });
+      var ws = XLSX.utils.aoa_to_sheet(aoa);
+      ws['!cols'] = LEAD_COLS.map(function(c) { return { wch: c.key === 'title' || c.key === 'notes' || c.key === 'property_name' ? 30 : c.key === 'id' ? 24 : 15 }; });
+      var wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Leads');
+      XLSX.writeFile(wb, 'Leads_' + new Date().toISOString().slice(0, 10) + '.xlsx');
+      if (btn) btn.disabled = false;
+      if (window.p86Toast) window.p86Toast('Exported ' + rows.length + ' lead' + (rows.length === 1 ? '' : 's') + '.', 'success');
+    }).catch(function(e) {
+      if (btn) btn.disabled = false;
+      if (window.p86Toast) window.p86Toast('Export failed: ' + (e && e.message || 'error'), 'error');
     });
   };
 
@@ -431,7 +524,7 @@
     var listEl = document.getElementById('leads-list');
     var summaryEl = document.getElementById('leads-summary');
     if (!listEl) return;
-    if (!_leadsViewsLoaded) { _leadsViewsLoaded = true; leadsLoadViews(); }
+    if (!_leadsViewsLoaded) { _leadsViewsLoaded = true; restoreLeadCols(); leadsLoadViews(); }
     updateLeadsFilterBtn(); updateLeadsViewsBtn();
     var statusFilter = document.getElementById('leads-filter-status');
     var searchEl = document.getElementById('leads-search');
@@ -458,6 +551,7 @@
       if (_leadsDrawer && !matchesLeadDrawer(l, _leadsDrawer)) return false;
       return matchesSearch(l, q);
     });
+    _leadsFiltered = filtered;   // drives Export to Excel
     if (summaryEl) {
       var byStatus = {};
       _leads.forEach(function(l) { byStatus[l.status] = (byStatus[l.status] || 0) + 1; });
@@ -522,17 +616,7 @@
       (canBulkEditLeads()
         ? '<th class="lead-check-cell" style="width:34px;text-align:center;"><input type="checkbox" id="leads-check-all" title="Select all shown" onclick="window.p86LeadsSelectAll(this.checked)"></th>'
         : '') +
-      leadsHeaderCell('Title',         'title') +
-      leadsHeaderCell('Client',        'client') +
-      leadsHeaderCell('Status',        'status') +
-      leadsHeaderCell('Revenue',       'revenue', { num: true }) +
-      leadsHeaderCell('Conf',          'confidence', { num: true }) +
-      leadsHeaderCell('Salesperson',   'salesperson') +
-      leadsHeaderCell('Project Type',  'project_type') +
-      leadsHeaderCell('Proj. Sale',    'projected_sale_date') +
-      leadsHeaderCell('Next F/U',      'next_followup_at') +
-      leadsHeaderCell('In Stage',      'status_changed_at', { num: true }) +
-      leadsHeaderCell('Updated',       'updated_at');
+      leadVisibleCols().map(function (c) { return leadsHeaderCell(c.label, c.key, { num: c.num }); }).join('');
 
     // Outer wrapper drops the heavy inline border / bg / radius — the
     // global `.leads-table` + `table` + `th` rules already carry the
