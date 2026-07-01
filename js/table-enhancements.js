@@ -61,6 +61,17 @@
       widths: { title: 280, client: 220, status: 130, revenue: 130,
                 confidence: 90, salesperson: 160, project_type: 160,
                 projected_sale_date: 130, updated_at: 120 }
+    },
+    // Cost Inbox: no frozen column (the leading select-all checkbox column has
+    // no data-col, so it stays pinned at index 0 on its own). Reorder + resize
+    // only. Column visibility is owned by the Cost Inbox's own Views chooser.
+    costinbox: {
+      selector: '#ciTable',
+      frozen: null,
+      frozenBg: 'var(--bg,#0f1117)',
+      widths: { photo: 54, vendor: 200, amount: 110, cost: 120, linked: 190,
+                sub: 160, tags: 190, payment: 130, billable: 100, invoice: 130,
+                date: 110, uploaded: 150, uploaded_at: 165, status: 120 }
     }
   };
 

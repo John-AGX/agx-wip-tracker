@@ -506,9 +506,10 @@
     { key: 'uploaded_at', label: 'Uploaded', sort: true },
     { key: 'status', label: 'Status', sort: true }
   ];
-  // Sensible default column set (the new Slice-3 fields ship hidden — reveal them
-  // via Views ▾ → Columns). Keeps the table from being overwhelmingly wide.
-  var DEFAULT_COLS = ['photo', 'vendor', 'amount', 'cost', 'linked', 'date', 'uploaded', 'uploaded_at', 'status'];
+  // "Standard" default = EVERY column visible; the user hides what they don't
+  // want via Views ▾ → Columns (and can drag headers to reorder). Derived from
+  // CI_COLS so a newly-added column is shown by default automatically.
+  var DEFAULT_COLS = CI_COLS.map(function (c) { return c.key; });
   function ciSortVal(r, key) {
     switch (key) {
       case 'vendor': return (r.vendor || '').toLowerCase();
@@ -557,14 +558,18 @@
     var thead = '<thead><tr>' +
       '<th class="ci-th-check"><input type="checkbox" id="ciSelAll" title="Select all" /></th>' +
       cols.map(function (c) {
-        if (!c.sort) return '<th class="ci-th-photo"></th>';
+        var dc = ' data-col="' + c.key + '"';
+        if (c.key === 'photo') return '<th class="ci-th-photo"' + dc + '></th>';
+        // Non-sortable columns (e.g. Tags) still show their label.
+        if (!c.sort) return '<th' + dc + '>' + esc(c.label) + '</th>';
         var sc = (_tsort.key === c.key) ? (' sortable sort-' + (_tsort.dir === 'asc' ? 'asc' : 'desc')) : ' sortable';
-        return '<th class="' + (c.num ? 'num' : '') + sc + '" data-sort="' + c.key + '">' + esc(c.label) + '</th>';
+        return '<th class="' + (c.num ? 'num' : '') + sc + '"' + dc + ' data-sort="' + c.key + '">' + esc(c.label) + '</th>';
       }).join('') + '</tr></thead>';
     var tbody = '<tbody>' + rows.map(function (r) {
       return '<tr class="ci-trow" data-id="' + esc(r.id) + '">' +
         '<td class="ci-td-check"><input type="checkbox" class="ci-rowcheck" data-id="' + esc(r.id) + '"' + (_selected[r.id] ? ' checked' : '') + ' /></td>' +
-        cols.map(function (c) { return cellFor(r, c.key); }).join('') +
+        // Tag each cell with data-col so p86Tables can reorder/resize columns.
+        cols.map(function (c) { return cellFor(r, c.key).replace('<td', '<td data-col="' + c.key + '"'); }).join('') +
       '</tr>';
     }).join('') + '</tbody>';
     listEl.innerHTML = '<div class="p86-tbl-scroll"><table class="dense-table ci-table" id="ciTable">' + thead + tbody + '</table></div>';
@@ -596,6 +601,9 @@
     }
     syncSelAll(); updateSelInfo();
     wireRowOpen(listEl);
+    // Drag-to-reorder + resize columns (shared with Jobs/Leads/Estimates). Runs
+    // after every render; idempotent — re-applies the user's saved order/widths.
+    if (window.p86Tables && window.p86Tables.enhance) { try { window.p86Tables.enhance('costinbox'); } catch (e) {} }
   }
 
   // Reflect how many visible rows are selected in the master checkbox (checked /
