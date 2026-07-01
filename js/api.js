@@ -459,6 +459,7 @@
     create: function(payload) { return post('/api/leads', payload); },
     update: function(id, payload) { return put('/api/leads/' + encodeURIComponent(id), payload); },
     remove: function(id) { return del('/api/leads/' + encodeURIComponent(id)); },
+    bulkDelete: function(ids) { return post('/api/leads/bulk-delete', { ids: ids }); },
     importBatch: function(rows) { return post('/api/leads/import', { rows: rows }); }
   };
 

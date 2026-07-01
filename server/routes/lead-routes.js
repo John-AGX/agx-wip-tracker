@@ -421,6 +421,28 @@ router.post('/geocode-selftest', requireAuth, requireCapability('LEADS_EDIT'), a
   }
 });
 
+// POST /api/leads/bulk-delete — delete many leads in one shot (bulk purge from
+// the leads list). Org-scoped like the single DELETE; LEADS_EDIT-gated (a user
+// who can delete one lead can delete many). Uses id = ANY(...) so it's a single
+// statement regardless of count. Returns the number actually removed.
+router.post('/bulk-delete', requireAuth, requireCapability('LEADS_EDIT'), async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body && req.body.ids)
+      ? req.body.ids.filter(function (x) { return typeof x === 'string' && x; })
+      : null;
+    if (!ids || !ids.length) return res.status(400).json({ error: 'ids array is required' });
+    if (ids.length > 5000) return res.status(400).json({ error: 'Too many ids (max 5000)' });
+    const r = await pool.query(
+      'DELETE FROM leads WHERE id = ANY($1::text[]) AND (organization_id = $2 OR organization_id IS NULL)',
+      [ids, req.user.organization_id]
+    );
+    res.json({ ok: true, deleted: r.rowCount });
+  } catch (e) {
+    console.error('POST /api/leads/bulk-delete error:', e);
+    res.status(500).json({ error: 'Server error: ' + e.message });
+  }
+});
+
 router.delete('/:id', requireAuth, requireCapability('LEADS_EDIT'), async (req, res) => {
   try {
     // Wave 1.A Phase 2 — org-scoped DELETE.

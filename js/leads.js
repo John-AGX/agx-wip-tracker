@@ -88,6 +88,14 @@
   // editor.
   var _leadsSort = { key: 'updated_at', dir: 'desc' };
   var _leadsView = 'list';   // 'list' | 'map' — toggled by the toolbar 🗺 button
+  var _leadsSelected = new Set(); // lead ids ticked for bulk delete (survives re-render)
+
+  // Bulk delete is a destructive edit — only surface the checkboxes to users who
+  // can actually delete leads. The server re-enforces LEADS_EDIT regardless.
+  function canBulkEditLeads() {
+    try { return !!(window.p86Auth && window.p86Auth.hasCapability && window.p86Auth.hasCapability('LEADS_EDIT')); }
+    catch (e) { return false; }
+  }
 
   function _syncLeadsMapToggleBtn() {
     var b = document.getElementById('leads-map-toggle');
@@ -160,7 +168,13 @@
       ? '<span style="font-size:11px;color:var(--text-dim,#888);font-weight:normal;margin-left:6px;">' + escapeHTML(location) + '</span>'
       : '';
 
+    var selCell = canBulkEditLeads()
+      ? '<td class="lead-check-cell" style="width:34px;text-align:center;" onclick="event.stopPropagation();">' +
+          '<input type="checkbox" class="lead-check" data-id="' + escapeAttr(l.id) + '"' + (_leadsSelected.has(l.id) ? ' checked' : '') +
+          ' onclick="event.stopPropagation();window.p86LeadsSelect(\'' + escapeAttr(l.id) + '\',this.checked);"></td>'
+      : '';
     return '<tr class="leads-row" onclick="openEditLeadModal(\'' + escapeAttr(l.id) + '\')">' +
+      selCell +
       '<td data-col="title" class="lead-title-cell" title="' + escapeAttr(l.title) + (location ? ' · ' + location : '') + '">' +
         '<strong>' + escapeHTML(l.title) + '</strong>' + titleSuffix +
       '</td>' +
@@ -345,6 +359,9 @@
     });
 
     var headerRow =
+      (canBulkEditLeads()
+        ? '<th class="lead-check-cell" style="width:34px;text-align:center;"><input type="checkbox" id="leads-check-all" title="Select all shown" onclick="window.p86LeadsSelectAll(this.checked)"></th>'
+        : '') +
       leadsHeaderCell('Title',         'title') +
       leadsHeaderCell('Client',        'client') +
       leadsHeaderCell('Status',        'status') +
@@ -360,6 +377,7 @@
     // Jobs-list look. `.p86-tbl-scroll` is the standard container the
     // p86Tables enhancement module hangs its bounded-scroll logic on.
     listEl.innerHTML =
+      '<div id="leads-bulkbar" style="display:none;"></div>' +
       '<div class="p86-tbl-scroll">' +
         '<table id="leads-table" class="leads-table">' +
           '<thead><tr>' + headerRow + '</tr></thead>' +
@@ -369,7 +387,74 @@
 
     // Reorderable / resizable / freezable columns + internal scroll.
     if (window.p86Tables) window.p86Tables.enhance('leads');
+    updateLeadsBulkBar();
+    syncLeadsSelectAll();
   }
+
+  // ── Bulk delete ───────────────────────────────────────────────────
+  // Multi-select purge for the leads list (backs the "replace all leads"
+  // workflow). Selection is by id in _leadsSelected and survives re-render;
+  // the bar updates in place (no table rebuild) as boxes are ticked.
+  function updateLeadsBulkBar() {
+    var bar = document.getElementById('leads-bulkbar');
+    if (!bar) return;
+    var n = _leadsSelected.size;
+    if (!n) { bar.style.display = 'none'; bar.innerHTML = ''; return; }
+    bar.style.cssText = 'display:flex;align-items:center;gap:12px;padding:8px 12px;margin-bottom:8px;background:rgba(248,113,113,0.10);border:1px solid rgba(248,113,113,0.35);border-radius:8px;';
+    bar.innerHTML =
+      '<span style="font-size:13px;color:var(--text,#eef0f6);font-weight:600;">' + n + ' selected</span>' +
+      '<button type="button" onclick="window.p86LeadsDeleteSelected()" style="padding:5px 12px;font-size:12px;font-weight:600;border-radius:7px;border:1px solid rgba(248,113,113,.5);background:#f87171;color:#1a1d27;cursor:pointer;">Delete ' + n + ' lead' + (n > 1 ? 's' : '') + '</button>' +
+      '<button type="button" onclick="window.p86LeadsClearSelection()" style="padding:5px 10px;font-size:12px;border-radius:7px;border:1px solid var(--border,#2e3346);background:transparent;color:var(--text-dim,#c4c8d8);cursor:pointer;">Clear</button>';
+  }
+
+  function syncLeadsSelectAll() {
+    var all = document.getElementById('leads-check-all');
+    if (!all) return;
+    var boxes = document.querySelectorAll('#leads-table .lead-check');
+    var checked = 0;
+    boxes.forEach(function (b) { if (b.checked) checked++; });
+    all.checked = boxes.length > 0 && checked === boxes.length;
+    all.indeterminate = checked > 0 && checked < boxes.length;
+  }
+
+  function p86LeadsSelect(id, checked) {
+    if (checked) _leadsSelected.add(id); else _leadsSelected.delete(id);
+    updateLeadsBulkBar();
+    syncLeadsSelectAll();
+  }
+  function p86LeadsSelectAll(checked) {
+    document.querySelectorAll('#leads-table .lead-check').forEach(function (b) {
+      b.checked = checked;
+      var id = b.getAttribute('data-id');
+      if (checked) _leadsSelected.add(id); else _leadsSelected.delete(id);
+    });
+    updateLeadsBulkBar();
+  }
+  function p86LeadsClearSelection() {
+    _leadsSelected.clear();
+    document.querySelectorAll('#leads-table .lead-check').forEach(function (b) { b.checked = false; });
+    syncLeadsSelectAll();
+    updateLeadsBulkBar();
+  }
+  function p86LeadsDeleteSelected() {
+    var ids = Array.from(_leadsSelected);
+    if (!ids.length) return;
+    if (!window.p86Api || !window.p86Api.leads || !window.p86Api.leads.bulkDelete) { alert('Bulk delete is not available (refresh the app).'); return; }
+    if (!confirm('Delete ' + ids.length + ' lead' + (ids.length > 1 ? 's' : '') + '? This cannot be undone.\n\n' +
+                 'Linked estimates will be orphaned; converted jobs are NOT deleted.')) return;
+    window.p86Api.leads.bulkDelete(ids).then(function (res) {
+      _leadsSelected.clear();
+      var n = (res && typeof res.deleted === 'number') ? res.deleted : ids.length;
+      if (typeof window.p86Toast === 'function') { try { window.p86Toast('Deleted ' + n + ' lead' + (n === 1 ? '' : 's') + '.'); } catch (e) {} }
+      reloadLeadsCache();
+    }).catch(function (err) {
+      alert('Bulk delete failed: ' + ((err && err.message) || 'unknown error'));
+    });
+  }
+  window.p86LeadsSelect = p86LeadsSelect;
+  window.p86LeadsSelectAll = p86LeadsSelectAll;
+  window.p86LeadsClearSelection = p86LeadsClearSelection;
+  window.p86LeadsDeleteSelected = p86LeadsDeleteSelected;
 
   // ── Activities: pipeline board + follow-ups ───────────────────────
   // Open follow-up tasks linked to leads (entity_type='lead'), fetched
