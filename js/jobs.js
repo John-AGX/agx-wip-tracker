@@ -1022,11 +1022,127 @@ function renderJobsMain() {
         // looped over EVERY job (including Archived) while the table
         // default-hid Archived → user saw $2.1M on the tile but the
         // rows visible summed to $1.2M.
+        // ── Shared filter drawer + saved views (mirrors Cost Inbox/Leads/Estimates)
+        let _jobsDrawer = null, _jobsViews = [], _jobsActiveViewId = null, _jobsViewsLoaded = false;
+        function jobsDistinct(accessor) {
+            var seen = {}, out = [];
+            (appData.jobs || []).forEach(function(j) { var v = accessor(j); if (v == null || v === '') return; v = String(v); if (seen[v]) return; seen[v] = true; out.push(v); });
+            out.sort(function(a, b) { return a.toLowerCase().localeCompare(b.toLowerCase()); });
+            return out;
+        }
+        function jobsFilterFields() {
+            var statusOpts = jobsDistinct(function(j) { return j.status; }).map(function(s) { return { v: s, label: s }; });
+            var pmOpts = jobsDistinct(function(j) { return getJobOwnerName(j); }).map(function(s) { return { v: s, label: s }; });
+            var jtOpts = jobsDistinct(function(j) { return j.jobType; }).map(function(s) { return { v: s, label: s }; });
+            var mktOpts = jobsDistinct(function(j) { return j.market; }).map(function(s) { return { v: s, label: s }; });
+            return [
+                { key: 'status', label: 'Status', type: 'chips', options: statusOpts },
+                { key: 'pm', label: 'PM', type: 'select', options: [{ v: '', label: 'Anyone' }].concat(pmOpts) },
+                { key: 'jobType', label: 'Job Type', type: 'select', options: [{ v: '', label: 'Any' }].concat(jtOpts) },
+                { key: 'market', label: 'Market', type: 'select', options: [{ v: '', label: 'Any' }].concat(mktOpts) },
+                { key: 'contract', label: 'Contract $', type: 'numrange' },
+                { key: 'pctcomplete', label: '% Complete', type: 'numrange' },
+                { key: 'margin', label: 'Margin %', type: 'numrange' },
+                { key: 'linkage', label: 'Source', type: 'chips', options: [{ v: 'from_lead', label: 'From a lead' }, { v: 'has_estimate', label: 'Has estimate' }] }
+            ];
+        }
+        function matchesJobDrawer(j, d) {
+            if (!d) return true;
+            var FD = window.p86FilterDrawer; if (!FD) return true;
+            if (d.status && d.status.length && d.status.indexOf(j.status) < 0) return false;
+            if (d.pm && String(getJobOwnerName(j)) !== String(d.pm)) return false;
+            if (d.jobType && String(j.jobType || '') !== String(d.jobType)) return false;
+            if (d.market && String(j.market || '') !== String(d.market)) return false;
+            var w = null;
+            var cr = FD.resolveNumRange(d.contract);
+            if (cr.min != null || cr.max != null) { w = w || getJobWIP(j.id); var c = Number(w.totalIncome || 0); if (cr.min != null && c < cr.min) return false; if (cr.max != null && c > cr.max) return false; }
+            var pr = FD.resolveNumRange(d.pctcomplete);
+            if (pr.min != null || pr.max != null) { var p = Number(j.pctComplete || 0); if (pr.min != null && p < pr.min) return false; if (pr.max != null && p > pr.max) return false; }
+            var mr = FD.resolveNumRange(d.margin);
+            if (mr.min != null || mr.max != null) { w = w || getJobWIP(j.id); var m = Number(w.jtdMargin || 0); if (mr.min != null && m < mr.min) return false; if (mr.max != null && m > mr.max) return false; }
+            if (d.linkage && d.linkage.length) { if (d.linkage.indexOf('from_lead') >= 0 && !j.lead_id) return false; if (d.linkage.indexOf('has_estimate') >= 0 && !j.estimate_id) return false; }
+            return true;
+        }
+        function updateJobsFilterBtn() {
+            var btn = document.getElementById('jobs-filter-btn'); if (!btn) return;
+            var FD = window.p86FilterDrawer;
+            var n = (_jobsDrawer && FD) ? FD.countActive(jobsFilterFields(), _jobsDrawer) : 0;
+            btn.innerHTML = (window.p86Icon ? window.p86Icon('funnel') : 'Filter') + (n ? ' <strong>(' + n + ')</strong>' : '');
+            btn.classList.toggle('pf-on', n > 0);
+        }
+        function updateJobsViewsBtn() {
+            var btn = document.getElementById('jobs-views-btn'); if (!btn) return;
+            var v = _jobsViews.find(function(x) { return x.id === _jobsActiveViewId; });
+            btn.innerHTML = (v ? escapeHTML(v.name) : 'Views') + ' ▾';
+        }
+        function jobsRerender() { if (typeof renderJobsTable === 'function') renderJobsTable(); }
+        window.jobsOpenFilter = function() {
+            var FD = window.p86FilterDrawer; if (!FD) return;
+            var fields = jobsFilterFields();
+            FD.open({
+                title: 'Filter Jobs', fields: fields,
+                values: _jobsDrawer || FD.emptyValues(fields),
+                onApply: function(v) { _jobsDrawer = v; _jobsActiveViewId = null; updateJobsFilterBtn(); updateJobsViewsBtn(); jobsRerender(); },
+                onClear: function() { _jobsDrawer = null; _jobsActiveViewId = null; updateJobsFilterBtn(); updateJobsViewsBtn(); jobsRerender(); }
+            });
+        };
+        function jobsLoadViews() {
+            if (!(window.p86Api && window.p86Api.listViews)) return Promise.resolve();
+            return window.p86Api.listViews.list('jobs').then(function(r) {
+                _jobsViews = (r && r.views) || [];
+                var def = _jobsViews.find(function(v) { return v.is_default; });
+                if (def && !_jobsDrawer && !_jobsActiveViewId) { _jobsActiveViewId = def.id; var cfg = def.config || {}; _jobsDrawer = (cfg.filters && Object.keys(cfg.filters).length) ? cfg.filters : null; jobsRerender(); }
+                updateJobsFilterBtn(); updateJobsViewsBtn();
+            }).catch(function() { _jobsViews = []; });
+        }
+        function applyJobsView(v) {
+            _jobsActiveViewId = v.id;
+            var cfg = v.config || {};
+            _jobsDrawer = (cfg.filters && Object.keys(cfg.filters).length) ? cfg.filters : null;
+            updateJobsFilterBtn(); updateJobsViewsBtn(); jobsRerender();
+        }
+        window.jobsOpenViews = function(anchor) {
+            var existing = document.getElementById('jobs-views-pop');
+            if (existing) { existing.remove(); return; }
+            var pop = document.createElement('div');
+            pop.id = 'jobs-views-pop';
+            pop.style.cssText = 'position:fixed;z-index:100000;min-width:244px;background:var(--card-bg,#161a2b);border:1px solid var(--border,#333);border-radius:8px;padding:6px;box-shadow:0 8px 24px rgba(0,0,0,.45);font-size:13px;';
+            var rows = _jobsViews.length ? _jobsViews.map(function(v) {
+                return '<div data-view="' + escapeHTML(v.id) + '" style="display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:6px;">' +
+                    '<span class="jv-apply" style="flex:1;cursor:pointer;">' + escapeHTML(v.name) + (v.is_default ? ' <span style="color:var(--text-dim,#888);font-size:10px;">(default)</span>' : '') + '</span>' +
+                    '<a href="#" data-def="' + escapeHTML(v.id) + '" title="Set as default" style="text-decoration:none;">★</a>' +
+                    '<a href="#" data-del="' + escapeHTML(v.id) + '" title="Delete" style="text-decoration:none;color:#f87171;">✕</a>' +
+                '</div>';
+            }).join('') : '<div style="padding:6px 8px;color:var(--text-dim,#888);">No saved views yet.</div>';
+            pop.innerHTML = rows + '<div style="border-top:1px solid var(--border,#333);margin-top:6px;padding-top:6px;"><button type="button" class="ee-btn" id="jobs-save-view" style="width:100%;">＋ Save current filters as view…</button></div>';
+            document.body.appendChild(pop);
+            var r = anchor.getBoundingClientRect();
+            pop.style.top = (r.bottom + 4) + 'px';
+            pop.style.left = Math.max(8, Math.min(r.right - 244, window.innerWidth - 252)) + 'px';
+            function close() { pop.remove(); document.removeEventListener('mousedown', onOut, true); }
+            function onOut(e) { if (!pop.contains(e.target) && e.target !== anchor) close(); }
+            setTimeout(function() { document.addEventListener('mousedown', onOut, true); }, 0);
+            pop.querySelectorAll('.jv-apply').forEach(function(sp) { sp.addEventListener('click', function() { var id = sp.parentNode.getAttribute('data-view'); var v = _jobsViews.find(function(x) { return x.id === id; }); if (v) { close(); applyJobsView(v); } }); });
+            pop.querySelectorAll('[data-def]').forEach(function(a) { a.addEventListener('click', function(e) { e.preventDefault(); e.stopPropagation(); window.p86Api.listViews.update(a.getAttribute('data-def'), { is_default: true }).then(jobsLoadViews).then(function() { close(); if (window.p86Toast) window.p86Toast('Default view set', 'success'); }); }); });
+            pop.querySelectorAll('[data-del]').forEach(function(a) { a.addEventListener('click', function(e) { e.preventDefault(); e.stopPropagation(); if (!confirm('Delete this saved view?')) return; var id = a.getAttribute('data-del'); window.p86Api.listViews.remove(id).then(function() { if (_jobsActiveViewId === id) _jobsActiveViewId = null; return jobsLoadViews(); }).then(close); }); });
+            var sv = pop.querySelector('#jobs-save-view');
+            if (sv) sv.addEventListener('click', function() {
+                var name = prompt('Name this view:'); if (name == null) return; name = String(name).trim(); if (!name) return;
+                window.p86Api.listViews.create({ page: 'jobs', name: name, config: { filters: _jobsDrawer || {} }, is_default: false })
+                    .then(function(res) { _jobsActiveViewId = (res && res.view && res.view.id) || null; return jobsLoadViews(); })
+                    .then(function() { close(); if (window.p86Toast) window.p86Toast('View saved', 'success'); })
+                    .catch(function() { if (window.p86Toast) window.p86Toast('Could not save view', 'error'); });
+            });
+        };
+
         function getFilteredJobs() {
             let jobs = appData.jobs;
             const filter = appState.currentStatusFilter;
+            var drawerHasStatus = !!(_jobsDrawer && _jobsDrawer.status && _jobsDrawer.status.length);
             if (filter) {
                 jobs = jobs.filter(j => j.status === filter);
+            } else if (drawerHasStatus) {
+                // The drawer's Status chips control the status set (may include Archived).
             } else {
                 // "All Active" = hide Archived by default
                 jobs = jobs.filter(j => j.status !== 'Archived');
@@ -1035,6 +1151,7 @@ function renderJobsMain() {
             if (typeFilter) {
                 jobs = jobs.filter(j => (j.jobType || getJobTypeLabel(getJobType(j.jobNumber))) === typeFilter);
             }
+            if (_jobsDrawer) jobs = jobs.filter(j => matchesJobDrawer(j, _jobsDrawer));
             return jobs;
         }
 
@@ -1109,6 +1226,8 @@ function renderJobsMain() {
         function renderJobsTable() {
             const tbody = document.querySelector('#jobs-table tbody');
             tbody.innerHTML = '';
+            if (!_jobsViewsLoaded) { _jobsViewsLoaded = true; jobsLoadViews(); }
+            updateJobsFilterBtn(); updateJobsViewsBtn();
 
             // Shared filter logic via getFilteredJobs so the table
             // and dashboard tiles always reflect the same set.

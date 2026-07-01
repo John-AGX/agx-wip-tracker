@@ -815,6 +815,8 @@
                             <button class="ee-btn ghost" data-p86-icon="exports" onclick="exportJobsToCSV()" title="Export the job list as CSV">Export CSV</button>
                             <button class="ee-btn ghost" onclick="window.print()" title="Print the job list">Print</button>
                             <button class="ee-btn ghost" onclick="showArchivedJobs()" title="Show archived jobs">Archived</button>
+                            <button class="ee-btn ghost" id="jobs-filter-btn" onclick="jobsOpenFilter()" title="Filter jobs" aria-label="Filter"></button>
+                            <button class="ee-btn ghost" id="jobs-views-btn" onclick="jobsOpenViews(this)" title="Saved views">Views ▾</button>
                             <button class="ee-btn ghost" id="jobs-map-toggle" onclick="toggleJobsMapView()" title="Show jobs on a map (pins come from each job's geocoded address)">&#x1F5FA; Map</button>
                             <span class="p86-ask86-mount" style="margin-left:auto;"></span>
                         </div>
@@ -3237,7 +3239,7 @@
          estimate-preview + the upcoming change-order-editor. Loads
          BEFORE any of them so window.p86Pricing is ready. -->
     <script src="js/pricing-pipeline.js?v=1"></script>
-    <script src="js/jobs.js?v=107"></script>
+    <script src="js/jobs.js?v=108"></script>
     <script src="js/job-workflow-ui.js?v=4"></script>
     <script src="js/estimates.js?v=47"></script>
     <script src="js/proposal.js?v=25"></script>
