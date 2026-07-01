@@ -1799,6 +1799,15 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_receipts_entity ON receipts(organization_id, entity_type, entity_id);
     CREATE INDEX IF NOT EXISTS idx_receipts_status ON receipts(organization_id, status);
     CREATE INDEX IF NOT EXISTS idx_receipts_date ON receipts(organization_id, purchased_at);
+    -- Slice 3 richer fields (idempotent ALTERs; existing rows keep NULL/false):
+    ALTER TABLE receipts ADD COLUMN IF NOT EXISTS tags JSONB NOT NULL DEFAULT '[]'::jsonb;  -- chip labels
+    ALTER TABLE receipts ADD COLUMN IF NOT EXISTS sub_id TEXT;              -- optional link to subs directory (subs.id)
+    ALTER TABLE receipts ADD COLUMN IF NOT EXISTS payment_method TEXT;      -- cash|company_card|personal_card|check|ach|other
+    ALTER TABLE receipts ADD COLUMN IF NOT EXISTS reimbursable BOOLEAN DEFAULT FALSE;
+    ALTER TABLE receipts ADD COLUMN IF NOT EXISTS reimburse_to TEXT;        -- who to reimburse (free-text name)
+    ALTER TABLE receipts ADD COLUMN IF NOT EXISTS is_billable BOOLEAN DEFAULT FALSE;  -- pass-through vs overhead
+    ALTER TABLE receipts ADD COLUMN IF NOT EXISTS invoice_no TEXT;          -- vendor's invoice # (vs our internal ref)
+    CREATE INDEX IF NOT EXISTS idx_receipts_tags ON receipts USING gin (tags jsonb_path_ops);
 
     -- Receipt OCR feedback — one row per captured receipt that had an OCR
     -- suggestion. Records what the model guessed vs what the user actually

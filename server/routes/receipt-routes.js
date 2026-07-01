@@ -42,7 +42,22 @@ const LINKABLE = new Set(['job', 'lead', 'category']);
 
 const COLS =
   'id, ref, entity_type, entity_id, amount, vendor, cost_code, is_presale, ' +
-  'notes, attachment_id, status, purchased_at, entered_by, created_at, updated_at';
+  'notes, attachment_id, status, purchased_at, entered_by, created_at, updated_at, ' +
+  'tags, sub_id, payment_method, reimbursable, reimburse_to, is_billable, invoice_no';
+
+const PAY_METHODS = new Set(['cash', 'company_card', 'personal_card', 'check', 'ach', 'other']);
+// Normalize a tags input (array or comma string) → lowercased, trimmed, deduped,
+// ≤32 chars each, max 20. Mirrors the attachments tag rules.
+function normalizeTags(v) {
+  var arr = Array.isArray(v) ? v : (typeof v === 'string' ? v.split(',') : []);
+  var out = [];
+  var seen = {};
+  arr.forEach(function (t) {
+    var s = String(t == null ? '' : t).trim().toLowerCase().slice(0, 32);
+    if (!s || seen[s]) return; seen[s] = true; out.push(s);
+  });
+  return out.slice(0, 20);
+}
 
 // Enrich receipt rows with the receipt photo's URLs (one batched query — the
 // photo lives in attachments, linked by attachment_id). Adds image_thumb_url
@@ -84,6 +99,19 @@ async function attachUploaderNames(rows) {
       if (u) r.entered_by_name = u.name || u.email || null;
     });
   } catch (_) { /* uploader name is best-effort */ }
+  return rows;
+}
+
+// Resolve linked sub names (sub_id -> sub_name) for display/filter. Batched, best-effort.
+async function attachSubNames(rows) {
+  const ids = [...new Set(rows.map((r) => r.sub_id).filter(Boolean))];
+  if (!ids.length) return rows;
+  try {
+    const sr = await pool.query('SELECT id, name FROM subs WHERE id = ANY($1::text[])', [ids]);
+    const m = {};
+    sr.rows.forEach((s) => { m[s.id] = s.name; });
+    rows.forEach((r) => { if (r.sub_id && m[r.sub_id]) r.sub_name = m[r.sub_id]; });
+  } catch (_) { /* sub name is best-effort */ }
   return rows;
 }
 
@@ -137,6 +165,15 @@ async function entityInOrg(entityType, entityId, orgId) {
   // Categories use a TEXT id like receipts/jobs; cost_categories is keyed by text id too.
   try {
     const r = await pool.query('SELECT 1 FROM ' + table + ' WHERE id = $1 AND organization_id = $2', [String(entityId), orgId]);
+    return r.rows.length > 0;
+  } catch (_) { return false; }
+}
+
+// Verify a sub link belongs to the caller's org (subs may be org-scoped or global).
+async function subInOrg(subId, orgId) {
+  if (!subId) return false;
+  try {
+    const r = await pool.query('SELECT 1 FROM subs WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)', [String(subId), orgId]);
     return r.rows.length > 0;
   } catch (_) { return false; }
 }
@@ -214,6 +251,7 @@ router.get('/', requireAuth, async (req, res) => {
     );
     await attachImageUrls(rows);
     await attachUploaderNames(rows);
+    await attachSubNames(rows);
     res.json({ receipts: rows });
   } catch (e) {
     console.error('GET /api/receipts error:', e);
@@ -519,16 +557,27 @@ router.post('/', requireAuth, async (req, res) => {
     const isPresale = (entityType === 'lead');
     const purchasedAt = validDate(b.purchased_at) || new Date().toISOString().slice(0, 10);
     const status = deriveStatus(null, entityType, entityId, amount);
+    // Slice 3 fields
+    const tags = normalizeTags(b.tags);
+    let subId = b.sub_id ? String(b.sub_id) : null;
+    if (subId && !(await subInOrg(subId, orgId))) subId = null; // drop a foreign/unknown sub
+    const paymentMethod = (b.payment_method && PAY_METHODS.has(String(b.payment_method))) ? String(b.payment_method) : null;
+    const reimbursable = !!b.reimbursable;
+    const reimburseTo = cleanStr(b.reimburse_to, 120);
+    const isBillable = !!b.is_billable;
+    const invoiceNo = cleanStr(b.invoice_no, 80);
     const id = newId();
     const { rows } = await pool.query(
       `INSERT INTO receipts
          (id, organization_id, ref, entity_type, entity_id, amount, vendor,
-          cost_code, is_presale, notes, attachment_id, status, purchased_at, entered_by)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+          cost_code, is_presale, notes, attachment_id, status, purchased_at, entered_by,
+          tags, sub_id, payment_method, reimbursable, reimburse_to, is_billable, invoice_no)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
        RETURNING ${COLS}`,
       [id, orgId, newRef(), entityType, entityId, amount, cleanStr(b.vendor, 200),
        costCode, isPresale, cleanStr(b.notes, 5000), cleanStr(b.attachment_id, 200),
-       status, purchasedAt, callerUserId(req)]
+       status, purchasedAt, callerUserId(req),
+       JSON.stringify(tags), subId, paymentMethod, reimbursable, reimburseTo, isBillable, invoiceNo]
     );
     res.json({ receipt: rows[0] });
     // Record OCR-suggestion-vs-saved accuracy (fire-and-forget; after response).
@@ -580,16 +629,28 @@ router.patch('/:id', requireAuth, async (req, res) => {
     status = deriveStatus(status === 'void' ? 'void' : null, entityType, entityId, amount);
     if (has('status') && String(b.status) === 'void') status = 'void';
     const isPresale = (entityType === 'lead');
+    // Slice 3 fields (preserve existing on unrelated PATCHes)
+    const tags = has('tags') ? normalizeTags(b.tags) : (row.tags || []);
+    let subId = has('sub_id') ? (b.sub_id ? String(b.sub_id) : null) : row.sub_id;
+    if (has('sub_id') && subId && !(await subInOrg(subId, orgId))) subId = null;
+    const paymentMethod = has('payment_method') ? ((b.payment_method && PAY_METHODS.has(String(b.payment_method))) ? String(b.payment_method) : null) : row.payment_method;
+    const reimbursable = has('reimbursable') ? !!b.reimbursable : row.reimbursable;
+    const reimburseTo = has('reimburse_to') ? cleanStr(b.reimburse_to, 120) : row.reimburse_to;
+    const isBillable = has('is_billable') ? !!b.is_billable : row.is_billable;
+    const invoiceNo = has('invoice_no') ? cleanStr(b.invoice_no, 80) : row.invoice_no;
 
     const { rows } = await pool.query(
       `UPDATE receipts SET
          entity_type = $3, entity_id = $4, amount = $5, vendor = $6, cost_code = $7,
          is_presale = $8, notes = $9, attachment_id = $10, status = $11,
-         purchased_at = $12, updated_at = NOW()
+         purchased_at = $12, tags = $13, sub_id = $14, payment_method = $15,
+         reimbursable = $16, reimburse_to = $17, is_billable = $18, invoice_no = $19,
+         updated_at = NOW()
        WHERE id = $1 AND organization_id = $2
        RETURNING ${COLS}`,
       [req.params.id, orgId, entityType, entityId, amount, vendor, costCode,
-       isPresale, notes, attachmentId, status, purchasedAt]
+       isPresale, notes, attachmentId, status, purchasedAt,
+       JSON.stringify(tags), subId, paymentMethod, reimbursable, reimburseTo, isBillable, invoiceNo]
     );
     res.json({ receipt: rows[0] });
   } catch (e) {

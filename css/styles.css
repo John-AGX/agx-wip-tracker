@@ -10681,6 +10681,17 @@ textarea.ci-input { height: auto; resize: vertical; font-family: inherit; }
 .ci-pop-empty { padding: 10px 8px; font-size: 12px; color: var(--text-dim, #8a90a6); }
 .ci-pop-foot { border-top: 1px solid var(--border, #2e3346); margin-top: 4px; padding-top: 6px; }
 .ci-pop-foot .ci-btn { width: 100%; }
+.ci-pop-divide { border-top: 1px solid var(--border, #2e3346); margin: 6px 0; }
+/* icon-only toolbar buttons (Filter / Export) */
+.ci-iconbtn { display: inline-flex; align-items: center; justify-content: center; gap: 5px; padding: 7px 10px; font-size: 15px; }
+.ci-iconbtn .p86-icon { width: 17px; height: 17px; }
+.ci-iconbtn strong { font-size: 12px; }
+/* tag / flag chips in table cells + viewer */
+.ci-tagchip { display: inline-block; background: rgba(110,168,254,.14); border: 1px solid var(--border, #2e3346); border-radius: 999px; padding: 1px 8px; font-size: 11px; color: var(--text, #e8ebf5); margin: 1px 0; }
+.ci-tagchip-bill { background: rgba(52,199,123,.16); border-color: #2e6b4b; color: #7ee2a8; }
+/* inline checkbox label in the receipt form */
+.ci-check { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--text, #e8ebf5); cursor: pointer; }
+.ci-check input { width: 16px; height: 16px; cursor: pointer; }
 
 .ci-list { display: flex; flex-direction: column; gap: 8px; }
 .ci-empty { padding: 40px 16px; text-align: center; color: var(--text-dim, #c4c8d8); font-size: 14px; }

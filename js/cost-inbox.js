@@ -9,6 +9,13 @@
 (function () {
   if (window.p86CostInbox) return;
 
+  // Inline an AGX icon SVG (dynamic innerHTML buttons need the SVG embedded now;
+  // the data-p86-icon swapper won't catch dynamically-rendered content).
+  function ciIcon(name) { try { return (window.p86Icon ? window.p86Icon(name) : ''); } catch (e) { return ''; } }
+  var PAY_LABEL = { cash: 'Cash', company_card: 'Company card', personal_card: 'Personal card', check: 'Check', ach: 'ACH / transfer', other: 'Other' };
+  // subs cache for the receipt sub-picker + name resolution (loaded on demand)
+  var _subs = [];
+
   var COST_CODES = [
     { v: 'materials', label: 'Materials' },
     { v: 'labor',     label: 'Labor' },
@@ -102,6 +109,8 @@
     if (!_entLoaded) {
       tasks.push(a.jobs.list().then(function (r) { _jobs = (r && (r.jobs || r)) || []; }).catch(function () { _jobs = []; }));
       tasks.push(a.leads.list().then(function (r) { _leads = (r && (r.leads || r)) || []; }).catch(function () { _leads = []; }));
+      // Subs for the receipt Sub/Vendor picker (needs JOBS_VIEW_ALL — 403 => empty).
+      tasks.push((a.subs && a.subs.list ? a.subs.list() : Promise.resolve(null)).then(function (r) { var s = r && (r.subs || r); if (Array.isArray(s)) _subs = s; }).catch(function () { _subs = []; }));
     }
     // Categories are tiny — ALWAYS refresh: self-heals a transient miss + picks
     // up any category just added in Admin without a full page reload. On error,
@@ -133,10 +142,10 @@
   var _cols = null;            // visible column keys; null → all (set on first render)
   var _views = [];             // this user's saved views for the Cost Inbox
   var _activeViewId = null;    // id of the currently-applied saved view (null = ad-hoc)
-  var CI_COL_LABEL = { photo: 'Photo', vendor: 'Vendor', amount: 'Amount', cost: 'Cost type', linked: 'Linked to', date: 'Date', uploaded: 'Uploaded by', status: 'Status' };
+  var CI_COL_LABEL = { photo: 'Photo', vendor: 'Vendor', amount: 'Amount', cost: 'Cost type', linked: 'Linked to', sub: 'Sub/Vendor', tags: 'Tags', payment: 'Payment', billable: 'Billable', invoice: 'Invoice #', date: 'Purchased', uploaded: 'Uploaded by', uploaded_at: 'Uploaded (date/time)', status: 'Status' };
   function allColKeys() { return CI_COLS.map(function (c) { return c.key; }); }
-  function visibleCols() { var keys = _cols || allColKeys(); return CI_COLS.filter(function (c) { return keys.indexOf(c.key) >= 0; }); }
-  function persistCols() { try { localStorage.setItem('p86-ci-cols', JSON.stringify(_cols || allColKeys())); } catch (e) {} }
+  function visibleCols() { var keys = _cols || DEFAULT_COLS; return CI_COLS.filter(function (c) { return keys.indexOf(c.key) >= 0; }); }
+  function persistCols() { try { localStorage.setItem('p86-ci-cols', JSON.stringify(_cols || DEFAULT_COLS)); } catch (e) {} }
   function restoreCols() { try { var s = JSON.parse(localStorage.getItem('p86-ci-cols') || 'null'); if (Array.isArray(s) && s.length) _cols = s; } catch (e) {} }
 
   // Field spec for the filter drawer (uploaded-by options come from the loaded set).
@@ -159,6 +168,9 @@
       { key: 'purchase_date', label: 'Purchase Date', type: 'daterange' },
       { key: 'upload_date', label: 'Upload Date', type: 'daterange' },
       { key: 'vendor', label: 'Sub / Vendor', type: 'text', placeholder: 'Vendor name…' },
+      { key: 'tags', label: 'Tags', type: 'text', placeholder: 'Tag contains…' },
+      { key: 'payment', label: 'Payment Method', type: 'select', options: [{ v: '', label: 'Any' }].concat(Object.keys(PAY_LABEL).map(function (k) { return { v: k, label: PAY_LABEL[k] }; })) },
+      { key: 'flags', label: 'Flags', type: 'chips', options: [{ v: 'billable', label: 'Billable' }, { v: 'reimbursable', label: 'Reimbursable' }] },
       { key: 'uploaded_by', label: 'Uploaded By', type: 'select', options: users },
       { key: 'amount', label: 'Total Amount', type: 'numrange' }
     ];
@@ -177,7 +189,13 @@
     if (pr.from || pr.to) { var pd = String(r.purchased_at || '').slice(0, 10); if (!pd) return false; if (pr.from && pd < pr.from) return false; if (pr.to && pd > pr.to) return false; }
     var ur = window.p86FilterDrawer.resolveDateRange(d.upload_date);
     if (ur.from || ur.to) { var ud = String(r.created_at || '').slice(0, 10); if (!ud) return false; if (ur.from && ud < ur.from) return false; if (ur.to && ud > ur.to) return false; }
-    if (d.vendor && d.vendor.trim()) { if ((r.vendor || '').toLowerCase().indexOf(d.vendor.trim().toLowerCase()) < 0) return false; }
+    if (d.vendor && d.vendor.trim()) { var vhay = ((r.vendor || '') + ' ' + (r.sub_name || '')).toLowerCase(); if (vhay.indexOf(d.vendor.trim().toLowerCase()) < 0) return false; }
+    if (d.tags && d.tags.trim()) { var tq = d.tags.trim().toLowerCase(); if (!(r.tags || []).some(function (t) { return String(t).toLowerCase().indexOf(tq) >= 0; })) return false; }
+    if (d.payment) { if (r.payment_method !== d.payment) return false; }
+    if (d.flags && d.flags.length) {
+      if (d.flags.indexOf('billable') >= 0 && !r.is_billable) return false;
+      if (d.flags.indexOf('reimbursable') >= 0 && !r.reimbursable) return false;
+    }
     if (d.uploaded_by) { if (String(r.entered_by) !== String(d.uploaded_by)) return false; }
     var nr = window.p86FilterDrawer.resolveNumRange(d.amount);
     if (nr.min != null || nr.max != null) { var amt = Number(r.amount || 0); if (nr.min != null && amt < nr.min) return false; if (nr.max != null && amt > nr.max) return false; }
@@ -199,7 +217,7 @@
     var dn = _drawer ? window.p86FilterDrawer.countActive(fields, _drawer) : 0;
     var total = dn + (_pinnedEntity ? 1 : 0);
     var btn = document.getElementById('ciFilterBtn');
-    if (btn) { btn.classList.toggle('pf-on', total > 0); btn.innerHTML = 'Filter' + (total ? ' <strong>(' + total + ')</strong>' : ''); }
+    if (btn) { btn.classList.toggle('pf-on', total > 0); btn.innerHTML = ciIcon('funnel') + (total ? ' <strong>(' + total + ')</strong>' : ''); }
     var af = document.getElementById('ciActiveFilters');
     if (!af) return;
     if (!total) { af.innerHTML = ''; return; }
@@ -268,25 +286,26 @@
     pop._outside = outside;
     setTimeout(function () { document.addEventListener('mousedown', outside); }, 0);
   }
-  function openColumnsMenu(anchor) {
-    var keys = _cols || allColKeys();
-    var html = '<div class="ci-pop-head">Columns</div>' +
+  // Column chooser, rendered INSIDE the Views menu ("Manage views"). Toggling a
+  // column is ad-hoc (clears the active saved view) + persists per-user.
+  function columnsSectionHtml() {
+    var keys = _cols || DEFAULT_COLS;
+    return '<div class="ci-pop-head">Columns shown</div>' +
       CI_COLS.map(function (c) {
         var on = keys.indexOf(c.key) >= 0;
         return '<label class="ci-pop-row"><input type="checkbox" data-col="' + esc(c.key) + '"' + (on ? ' checked' : '') + ' /> ' + esc(CI_COL_LABEL[c.key] || c.key) + '</label>';
-      }).join('') +
-      '<div class="ci-pop-foot"><button type="button" class="ci-btn" id="ciColsReset">Reset</button></div>';
-    openPopover(anchor, html, function (pop) {
-      pop.querySelectorAll('input[data-col]').forEach(function (cb) {
-        cb.addEventListener('change', function () {
-          var set = allColKeys().filter(function (k) { var el = pop.querySelector('input[data-col="' + k + '"]'); return el && el.checked; });
-          if (!set.length) { cb.checked = true; return; } // never hide every column
-          _cols = set; _activeViewId = null; persistCols(); updateViewsBtn(); renderList();
-        });
+      }).join('');
+  }
+  function wireColumnsSection(pop) {
+    pop.querySelectorAll('input[data-col]').forEach(function (cb) {
+      cb.addEventListener('change', function () {
+        var set = allColKeys().filter(function (k) { var el = pop.querySelector('input[data-col="' + k + '"]'); return el && el.checked; });
+        if (!set.length) { cb.checked = true; return; } // never hide every column
+        _cols = set; _activeViewId = null; persistCols(); updateViewsBtn(); renderList();
       });
-      var rb = pop.querySelector('#ciColsReset');
-      if (rb) rb.addEventListener('click', function () { _cols = allColKeys(); _activeViewId = null; persistCols(); closePopover(); updateViewsBtn(); renderList(); });
     });
+    var rb = pop.querySelector('#ciColsReset');
+    if (rb) rb.addEventListener('click', function () { _cols = DEFAULT_COLS.slice(); _activeViewId = null; persistCols(); closePopover(); updateViewsBtn(); renderList(); });
   }
   function loadViews() {
     if (!(window.p86Api && window.p86Api.listViews)) return Promise.resolve();
@@ -316,8 +335,12 @@
         '<button type="button" title="Delete" data-del="' + esc(v.id) + '">🗑</button></span></div>';
     }).join('') : '<div class="ci-pop-empty">No saved views yet.</div>';
     var html = '<div class="ci-pop-head">Your saved views</div>' + rows +
-      '<div class="ci-pop-foot"><button type="button" class="ci-btn ci-btn-primary" id="ciSaveView">＋ Save current as view…</button></div>';
+      '<div class="ci-pop-foot"><button type="button" class="ci-btn ci-btn-primary" id="ciSaveView">＋ Save current as view…</button></div>' +
+      '<div class="ci-pop-divide"></div>' +
+      columnsSectionHtml() +
+      '<div class="ci-pop-foot"><button type="button" class="ci-btn" id="ciColsReset">Reset columns</button></div>';
     openPopover(anchor, html, function (pop) {
+      wireColumnsSection(pop);
       pop.querySelectorAll('.ci-pop-view').forEach(function (row) {
         row.addEventListener('click', function (e) {
           if (e.target.closest('button')) return;
@@ -359,13 +382,12 @@
         '<div class="ci-head">' +
           '<div><div class="ci-title">Cost Inbox</div><div class="ci-ocr-stat" id="ciOcrStat"></div></div>' +
           '<div style="display:flex;gap:8px;align-items:center;">' +
-            '<button class="ci-btn" id="ciExport" type="button" title="Export to Excel">⬇ Export to Excel</button>' +
+            '<button class="ci-btn ci-iconbtn" id="ciExport" type="button" title="Export to Excel" aria-label="Export to Excel">' + ciIcon('exports') + '</button>' +
             '<button class="ci-btn ci-btn-primary" id="ciNew">+ New Receipt</button>' +
           '</div>' +
         '</div>' +
         '<div class="ci-toolbar">' +
-          '<button class="ci-btn" id="ciFilterBtn" type="button">Filter</button>' +
-          '<button class="ci-btn" id="ciColsBtn" type="button">Columns ▾</button>' +
+          '<button class="ci-btn ci-iconbtn" id="ciFilterBtn" type="button" title="Filter" aria-label="Filter">' + ciIcon('funnel') + '</button>' +
           '<button class="ci-btn" id="ciViewsBtn" type="button">Views ▾</button>' +
           '<input type="text" id="ciSearch" class="ci-input ci-search" placeholder="Search vendor, amount, notes, ID…" />' +
           '<div class="ci-total" id="ciTotal"></div>' +
@@ -380,8 +402,6 @@
     if (expBtn) expBtn.addEventListener('click', function () { exportToExcel(currentExportRows()); });
     var filterBtn = document.getElementById('ciFilterBtn');
     if (filterBtn) filterBtn.addEventListener('click', openFilterDrawer);
-    var colsBtn = document.getElementById('ciColsBtn');
-    if (colsBtn) colsBtn.addEventListener('click', function () { openColumnsMenu(colsBtn); });
     var viewsBtn = document.getElementById('ciViewsBtn');
     if (viewsBtn) viewsBtn.addEventListener('click', function () { openViewsMenu(viewsBtn); });
     renderOcrStat();
@@ -476,18 +496,32 @@
     { key: 'amount', label: 'Amount', sort: true, num: true },
     { key: 'cost', label: 'Cost type', sort: true },
     { key: 'linked', label: 'Linked to', sort: true },
-    { key: 'date', label: 'Date', sort: true },
+    { key: 'sub', label: 'Sub/Vendor', sort: true },
+    { key: 'tags', label: 'Tags', sort: false },
+    { key: 'payment', label: 'Payment', sort: true },
+    { key: 'billable', label: 'Billable', sort: true },
+    { key: 'invoice', label: 'Invoice #', sort: true },
+    { key: 'date', label: 'Purchased', sort: true },
     { key: 'uploaded', label: 'Uploaded by', sort: true },
+    { key: 'uploaded_at', label: 'Uploaded', sort: true },
     { key: 'status', label: 'Status', sort: true }
   ];
+  // Sensible default column set (the new Slice-3 fields ship hidden — reveal them
+  // via Views ▾ → Columns). Keeps the table from being overwhelmingly wide.
+  var DEFAULT_COLS = ['photo', 'vendor', 'amount', 'cost', 'linked', 'date', 'uploaded', 'uploaded_at', 'status'];
   function ciSortVal(r, key) {
     switch (key) {
       case 'vendor': return (r.vendor || '').toLowerCase();
       case 'amount': return Number(r.amount || 0);
       case 'cost': return ciCodeLabel(r).toLowerCase();
       case 'linked': return entityLabel(r.entity_type, r.entity_id).toLowerCase();
+      case 'sub': return (r.sub_name || '').toLowerCase();
+      case 'payment': return (PAY_LABEL[r.payment_method] || '').toLowerCase();
+      case 'billable': return r.is_billable ? 1 : 0;
+      case 'invoice': return (r.invoice_no || '').toLowerCase();
       case 'date': return String(r.purchased_at || r.created_at || '');
       case 'uploaded': return (r.entered_by_name || '').toLowerCase();
+      case 'uploaded_at': return String(r.created_at || '');
       case 'status': return (r.status || '');
       default: return '';
     }
@@ -499,8 +533,14 @@
     if (key === 'amount') { var amt = (r.amount != null && Number(r.amount) > 0) ? money(r.amount) : '<span class="ci-need">—</span>'; return '<td class="num">' + amt + '</td>'; }
     if (key === 'cost') return '<td>' + esc(ciCodeLabel(r)) + '</td>';
     if (key === 'linked') { var ent = entityLabel(r.entity_type, r.entity_id); return '<td>' + (ent ? esc(ent) : '<span class="ci-chip-warn" style="font-size:11px;">no job</span>') + '</td>'; }
+    if (key === 'sub') return '<td>' + esc(r.sub_name || '—') + '</td>';
+    if (key === 'tags') { var tg = (r.tags || []); return '<td>' + (tg.length ? tg.map(function (t) { return '<span class="ci-tagchip">' + esc(t) + '</span>'; }).join(' ') : '—') + '</td>'; }
+    if (key === 'payment') return '<td>' + esc(PAY_LABEL[r.payment_method] || '—') + (r.reimbursable ? ' <span class="ci-tagchip">reimb.</span>' : '') + '</td>';
+    if (key === 'billable') return '<td>' + (r.is_billable ? '<span class="ci-tagchip ci-tagchip-bill">Billable</span>' : '—') + '</td>';
+    if (key === 'invoice') return '<td>' + esc(r.invoice_no || '—') + '</td>';
     if (key === 'date') return '<td>' + esc(fmtDate(r.purchased_at || r.created_at)) + '</td>';
     if (key === 'uploaded') return '<td>' + esc(r.entered_by_name || (r.entered_by ? ('User ' + r.entered_by) : '—')) + '</td>';
+    if (key === 'uploaded_at') return '<td>' + esc(fmtDateTime(r.created_at)) + '</td>';
     if (key === 'status') return '<td><span class="ci-badge ci-badge-' + (r.status || 'unprocessed') + '">' + esc(r.status || 'unprocessed') + '</span></td>';
     return '<td></td>';
   }
@@ -613,36 +653,44 @@
   function exportToExcel(rows) {
     if (!rows || !rows.length) { toast('Nothing to export — select rows or adjust the filters.', 'error'); return; }
     var btn = document.getElementById('ciExport');
-    if (btn) { btn.disabled = true; btn.textContent = 'Exporting…'; }
+    if (btn) { btn.disabled = true; }
     ensureXLSX().then(function (XLSX) {
-      var header = ['Date', 'Vendor', 'Amount', 'Cost type', 'Linked to', 'Link type', 'Uploaded by', 'Status', 'Receipt ID', 'Notes'];
+      var header = ['Purchased', 'Vendor', 'Sub/Vendor', 'Amount', 'Cost type', 'Linked to', 'Link type', 'Tags', 'Payment', 'Reimbursable', 'Reimburse to', 'Billable', 'Invoice #', 'Uploaded by', 'Uploaded', 'Status', 'Receipt ID', 'Notes'];
       var aoa = [header];
       rows.forEach(function (r) {
         aoa.push([
           String(r.purchased_at || r.created_at || '').slice(0, 10),
           r.vendor || '',
+          r.sub_name || '',
           (r.amount != null ? Number(r.amount) : ''),
           (r.entity_type === 'category') ? '' : ciCodeLabel(r),
           entityLabel(r.entity_type, r.entity_id) || '',
           r.entity_type || 'unlinked',
+          (r.tags || []).join(', '),
+          PAY_LABEL[r.payment_method] || '',
+          r.reimbursable ? 'Yes' : '',
+          r.reimburse_to || '',
+          r.is_billable ? 'Yes' : '',
+          r.invoice_no || '',
           r.entered_by_name || (r.entered_by ? ('User ' + r.entered_by) : ''),
+          r.created_at ? fmtDateTime(r.created_at) : '',
           r.status || '',
           r.ref || '',
           r.notes || ''
         ]);
       });
       var total = rows.reduce(function (s, r) { return s + (r.status === 'void' ? 0 : Number(r.amount || 0)); }, 0);
-      aoa.push([]); aoa.push(['', 'TOTAL', total]);
+      aoa.push([]); aoa.push(['', '', 'TOTAL', total]);
       var ws = XLSX.utils.aoa_to_sheet(aoa);
-      ws['!cols'] = [{ wch: 12 }, { wch: 24 }, { wch: 12 }, { wch: 14 }, { wch: 30 }, { wch: 11 }, { wch: 18 }, { wch: 12 }, { wch: 12 }, { wch: 40 }];
+      ws['!cols'] = [{ wch: 12 }, { wch: 22 }, { wch: 22 }, { wch: 12 }, { wch: 13 }, { wch: 26 }, { wch: 10 }, { wch: 20 }, { wch: 14 }, { wch: 12 }, { wch: 16 }, { wch: 9 }, { wch: 13 }, { wch: 16 }, { wch: 20 }, { wch: 11 }, { wch: 12 }, { wch: 36 }];
       var wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, 'Cost Inbox');
       var stamp = new Date().toISOString().slice(0, 10);
       XLSX.writeFile(wb, 'Cost_Inbox_' + stamp + '.xlsx');
-      if (btn) { btn.disabled = false; btn.textContent = '⬇ Export to Excel'; }
+      if (btn) { btn.disabled = false; }
       toast('Exported ' + rows.length + ' receipt' + (rows.length === 1 ? '' : 's') + '.', 'success');
     }).catch(function (e) {
-      if (btn) { btn.disabled = false; btn.textContent = '⬇ Export to Excel'; }
+      if (btn) { btn.disabled = false; }
       toast('Export failed: ' + (e && e.message || 'error'), 'error');
     });
   }
@@ -698,12 +746,18 @@
           '<div class="ci-view-grid">' +
             viewRow('Cost type', r.is_presale ? 'Pre-sale' : ciCodeLabel(r)) +
             viewRow('Linked to', ent ? ent : '<span class="ci-chip-warn" style="font-size:12px;">No job — cost not flowing</span>', { raw: !ent }) +
-            viewRow('Date', fmtDate(r.purchased_at) || null) +
+            viewRow('Purchased', fmtDate(r.purchased_at) || null) +
+            viewRow('Sub / Vendor', r.sub_name || null) +
+            viewRow('Payment', PAY_LABEL[r.payment_method] || null) +
+            viewRow('Reimbursable', r.reimbursable ? ('Yes' + (r.reimburse_to ? (' → ' + r.reimburse_to) : '')) : null) +
+            viewRow('Billable', r.is_billable ? 'Billable to client' : null) +
+            viewRow('Invoice #', r.invoice_no || null) +
             viewRow('Uploaded by', r.entered_by_name || (r.entered_by ? ('User ' + r.entered_by) : null)) +
-            viewRow('Captured', fmtDateTime(r.created_at) || null) +
+            viewRow('Uploaded', fmtDateTime(r.created_at) || null) +
             (r.updated_at && r.updated_at !== r.created_at ? viewRow('Last updated', fmtDateTime(r.updated_at)) : '') +
             viewRow('Receipt ID', r.ref || null) +
           '</div>' +
+          ((r.tags && r.tags.length) ? '<div class="ci-view-notes"><div class="ci-view-k">Tags</div><div>' + r.tags.map(function (t) { return '<span class="ci-tagchip">' + esc(t) + '</span>'; }).join(' ') + '</div></div>' : '') +
           (r.notes ? '<div class="ci-view-notes"><div class="ci-view-k">Notes</div><div>' + esc(r.notes) + '</div></div>' : '') +
         '</div>' +
       '</div>';
@@ -808,6 +862,23 @@
             '</div>' +
             // Notes
             '<div class="ci-field"><label>Notes</label><textarea id="ciNotes" class="ci-input" rows="2" placeholder="Optional">' + esc(r.notes || '') + '</textarea></div>' +
+            // More details (Slice 3): sub link, tags, payment, reimbursable, billable, invoice
+            '<div class="ci-field"><label>Sub / Vendor (from directory)</label>' +
+              '<select id="ciSub" class="ci-input"><option value="">— none / free-text vendor above —</option>' +
+              _subs.map(function (s) { return '<option value="' + esc(s.id) + '"' + (r.sub_id === s.id ? ' selected' : '') + '>' + esc(s.name || s.id) + (s.trade ? (' · ' + esc(s.trade)) : '') + '</option>'; }).join('') +
+              '</select></div>' +
+            '<div class="ci-field"><label>Tags</label><input type="text" id="ciTags" class="ci-input" placeholder="comma-separated — e.g. tools, warranty" value="' + esc((r.tags || []).join(', ')) + '" /></div>' +
+            '<div class="ci-field-2">' +
+              '<div class="ci-field"><label>Payment method</label><select id="ciPay" class="ci-input"><option value="">—</option>' +
+                Object.keys(PAY_LABEL).map(function (k) { return '<option value="' + k + '"' + (r.payment_method === k ? ' selected' : '') + '>' + esc(PAY_LABEL[k]) + '</option>'; }).join('') +
+              '</select></div>' +
+              '<div class="ci-field"><label>Invoice #</label><input type="text" id="ciInvoice" class="ci-input" placeholder="Vendor invoice #" value="' + esc(r.invoice_no || '') + '" /></div>' +
+            '</div>' +
+            '<div class="ci-field-2">' +
+              '<div class="ci-field"><label class="ci-check"><input type="checkbox" id="ciReimb"' + (r.reimbursable ? ' checked' : '') + ' /> Reimbursable</label>' +
+                '<input type="text" id="ciReimbTo" class="ci-input" placeholder="Reimburse to (name)" value="' + esc(r.reimburse_to || '') + '" style="margin-top:5px;' + (r.reimbursable ? '' : 'display:none;') + '" /></div>' +
+              '<div class="ci-field"><label class="ci-check"><input type="checkbox" id="ciBillable"' + (r.is_billable ? ' checked' : '') + ' /> Billable to client</label></div>' +
+            '</div>' +
           '</div>' +
         '</div>';
       document.body.appendChild(modal);
@@ -858,6 +929,9 @@
         codeUserPicked = true;
         codeSeg.querySelectorAll('.ci-seg-btn').forEach(function (b) { b.classList.toggle('active', b === btn); });
       });
+      // Reimbursable → reveal "reimburse to" name field.
+      var reimbEl = modal.querySelector('#ciReimb'), reimbToEl = modal.querySelector('#ciReimbTo');
+      if (reimbEl && reimbToEl) reimbEl.addEventListener('change', function () { reimbToEl.style.display = reimbEl.checked ? '' : 'none'; });
 
       // photo pick → preview, hold File for upload on save
       var photoInput = modal.querySelector('#ciPhotoInput');
@@ -940,6 +1014,7 @@
         saveBtn.disabled = true; saveBtn.textContent = 'Saving…';
         var entityType = selType.value;
         var entityId = selId.value || null;
+        var tagsVal = (modal.querySelector('#ciTags').value || '').split(',').map(function (t) { return t.trim(); }).filter(Boolean);
         var payload = {
           entity_type: entityId ? entityType : null,
           entity_id: entityId,
@@ -948,6 +1023,14 @@
           vendor: modal.querySelector('#ciVendor').value || null,
           notes: modal.querySelector('#ciNotes').value || null,
           purchased_at: modal.querySelector('#ciDate').value || null,
+          // Slice 3 fields
+          sub_id: (modal.querySelector('#ciSub').value || null),
+          tags: tagsVal,
+          payment_method: (modal.querySelector('#ciPay').value || null),
+          reimbursable: modal.querySelector('#ciReimb').checked,
+          reimburse_to: (modal.querySelector('#ciReimbTo').value || null),
+          is_billable: modal.querySelector('#ciBillable').checked,
+          invoice_no: (modal.querySelector('#ciInvoice').value || null),
           ocr: ocrSuggestion || undefined // lets the server log OCR-vs-saved accuracy
         };
         // 1) create or update the receipt
