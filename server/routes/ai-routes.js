@@ -12320,11 +12320,45 @@ async function runAgentJob(jobId) {
        usage.input_tokens || 0, usage.output_tokens || 0,
        usage.cache_creation_input_tokens || 0, usage.cache_read_input_tokens || 0]
     );
+    try { await notifyAgentJobDone(job, result); } catch (_) {}
   } catch (e) {
     console.error('[agent-jobs] runner failed for', jobId, e);
     await pool.query("UPDATE agent_jobs SET status='failed', error=$2, completed_at=NOW(), updated_at=NOW() WHERE id=$1", [jobId, (e && e.message) || 'Background task runner error']);
+    try { await notifyAgentJobDone(job, { error: (e && e.message) || 'Background task runner error' }); } catch (_) {}
   } finally {
     if (sessionId) { try { await anthropic.beta.sessions.archive(sessionId); } catch (_) {} }
+  }
+}
+
+// Notify the user that their background task finished (or failed) — the "you left
+// the app, here's your result" ping. Reuses the email transport (Resend) + the
+// per-user notification_prefs opt-out. The IN-APP side is already covered by the
+// Background Tasks panel + its attention badge (S4); this adds email.
+async function notifyAgentJobDone(job, result) {
+  try {
+    if (!job || !job.user_id) return;
+    const u = await pool.query('SELECT email, notification_prefs FROM users WHERE id = $1', [job.user_id]);
+    const user = u.rows[0];
+    if (!user || !user.email) return;
+    const prefs = user.notification_prefs || {};
+    if (prefs.agent_tasks === false) return;   // user opted out
+    const ok = !(result && result.error);
+    const title = job.title || 'Background task';
+    const bodyText = ok
+      ? String((result && result.text) || 'Completed.')
+      : ('It ran into a problem: ' + String((result && result.error) || 'unknown error'));
+    const esc = function (s) { return String(s == null ? '' : s).replace(/[&<>]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]; }); };
+    const appUrl = process.env.APP_URL || process.env.PUBLIC_URL || 'https://project86.net';
+    const subject = ok ? ('✓ Done: ' + title) : ('Background task needs attention: ' + title);
+    const html =
+      '<div style="font:14px/1.6 system-ui,-apple-system,sans-serif;color:#1a1a2e;max-width:560px">' +
+      '<p>Your background task <strong>' + esc(title) + '</strong> ' + (ok ? 'is done' : 'needs your attention') + ':</p>' +
+      '<div style="background:#f4f6fb;border:1px solid #e3e8f3;border-radius:8px;padding:12px 14px;white-space:pre-wrap">' + esc(bodyText.slice(0, 4000)) + '</div>' +
+      '<p style="margin-top:16px"><a href="' + esc(appUrl) + '" style="background:#4f8cff;color:#fff;text-decoration:none;padding:9px 16px;border-radius:8px;display:inline-block">Open Project 86</a></p></div>';
+    const { sendEmail } = require('../email');
+    await sendEmail({ to: user.email, subject: subject, html: html, text: bodyText.slice(0, 2000), tag: 'agent_task', organizationId: job.organization_id });
+  } catch (e) {
+    console.warn('[agent-jobs] notify failed:', e && e.message);
   }
 }
 
