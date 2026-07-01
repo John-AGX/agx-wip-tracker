@@ -4,6 +4,12 @@
 // list so the two sub-tabs feel consistent).
 var _estimatesSort = { key: 'updated_at', dir: 'desc' };
 
+// Shared filter drawer + saved views (mirrors Cost Inbox / Leads).
+var _estDrawer = null;         // active filter values, or null
+var _estViews = [];            // this user's saved Estimates views
+var _estActiveViewId = null;
+var _estViewsLoaded = false;
+
 // Pre-compute the totals + line count once per estimate. Used both by
 // the row renderer and the sort comparator so sorting by Base Cost /
 // Client Price doesn't recalculate on every comparison.
@@ -344,6 +350,123 @@ function renderEstimatesMap(listEl, filtered) {
     }
 }
 
+// ── Filter drawer + saved views ────────────────────────────────────
+function estDistinct(field) {
+    var seen = {}, out = [];
+    (appData.estimates || []).forEach(function(e) { var v = e[field]; if (v == null || v === '') return; v = String(v); if (seen[v]) return; seen[v] = true; out.push(v); });
+    out.sort(function(a, b) { return a.toLowerCase().localeCompare(b.toLowerCase()); });
+    return out;
+}
+function estFilterFields() {
+    var jt = estDistinct('jobType').map(function(s) { return { v: s, label: s }; });
+    return [
+        { key: 'status', label: 'Status', type: 'chips', options: [{ v: 'draft', label: 'Draft' }, { v: 'sent', label: 'Sent' }, { v: 'won', label: 'Won' }] },
+        { key: 'jobType', label: 'Job Type', type: 'select', options: [{ v: '', label: 'Any' }].concat(jt) },
+        { key: 'clientPrice', label: 'Client Price', type: 'numrange' },
+        { key: 'margin', label: 'Margin %', type: 'numrange' },
+        { key: 'sent_at', label: 'Sent', type: 'daterange' },
+        { key: 'created_at', label: 'Created', type: 'daterange' }
+    ];
+}
+function estDateInRange(val, range) {
+    if (!range || (!range.from && !range.to)) return true;
+    if (!val) return false;
+    var d = String(val).slice(0, 10);
+    if (range.from && d < range.from) return false;
+    if (range.to && d > range.to) return false;
+    return true;
+}
+function matchesEstimateDrawer(e, d) {
+    if (!d) return true;
+    var FD = window.p86FilterDrawer; if (!FD) return true;
+    if (d.status && d.status.length && d.status.indexOf(estStatusMeta(e).key) < 0) return false;
+    if (d.jobType && String(e.jobType || '') !== String(d.jobType)) return false;
+    var t = e.__totals || computeEstimateTotals(e);
+    var pr = FD.resolveNumRange(d.clientPrice);
+    if (pr.min != null || pr.max != null) { var cp = Number(t.clientPrice || 0); if (pr.min != null && cp < pr.min) return false; if (pr.max != null && cp > pr.max) return false; }
+    var mr = FD.resolveNumRange(d.margin);
+    if (mr.min != null || mr.max != null) { var m = (t.markedUp > 0) ? ((t.markedUp - t.baseCost) / t.markedUp) * 100 : 0; if (mr.min != null && m < mr.min) return false; if (mr.max != null && m > mr.max) return false; }
+    if (!estDateInRange(e.sent_at, FD.resolveDateRange(d.sent_at))) return false;
+    if (!estDateInRange(e.created_at, FD.resolveDateRange(d.created_at))) return false;
+    return true;
+}
+function updateEstFilterBtn() {
+    var btn = document.getElementById('estimates-filter-btn');
+    if (!btn) return;
+    var FD = window.p86FilterDrawer;
+    var n = (_estDrawer && FD) ? FD.countActive(estFilterFields(), _estDrawer) : 0;
+    btn.innerHTML = (window.p86Icon ? window.p86Icon('funnel') : 'Filter') + (n ? ' <strong>(' + n + ')</strong>' : '');
+    btn.classList.toggle('pf-on', n > 0);
+}
+function updateEstViewsBtn() {
+    var btn = document.getElementById('estimates-views-btn');
+    if (!btn) return;
+    var v = _estViews.find(function(x) { return x.id === _estActiveViewId; });
+    btn.innerHTML = (v ? escapeHTML(v.name) : 'Views') + ' ▾';
+}
+function estimatesOpenFilter() {
+    var FD = window.p86FilterDrawer; if (!FD) return;
+    var fields = estFilterFields();
+    FD.open({
+        title: 'Filter Estimates', fields: fields,
+        values: _estDrawer || FD.emptyValues(fields),
+        onApply: function(v) { _estDrawer = v; _estActiveViewId = null; updateEstFilterBtn(); updateEstViewsBtn(); renderEstimatesList(); },
+        onClear: function() { _estDrawer = null; _estActiveViewId = null; updateEstFilterBtn(); updateEstViewsBtn(); renderEstimatesList(); }
+    });
+}
+function estLoadViews() {
+    if (!(window.p86Api && window.p86Api.listViews)) return Promise.resolve();
+    return window.p86Api.listViews.list('estimates').then(function(r) {
+        _estViews = (r && r.views) || [];
+        var def = _estViews.find(function(v) { return v.is_default; });
+        if (def && !_estDrawer && !_estActiveViewId) applyEstView(def);
+        updateEstViewsBtn();
+    }).catch(function() { _estViews = []; });
+}
+function applyEstView(v) {
+    _estActiveViewId = v.id;
+    var cfg = v.config || {};
+    _estDrawer = (cfg.filters && Object.keys(cfg.filters).length) ? cfg.filters : null;
+    updateEstFilterBtn(); updateEstViewsBtn(); renderEstimatesList();
+}
+function estimatesOpenViews(anchor) {
+    var existing = document.getElementById('est-views-pop');
+    if (existing) { existing.remove(); return; }
+    var pop = document.createElement('div');
+    pop.id = 'est-views-pop';
+    pop.style.cssText = 'position:fixed;z-index:100000;min-width:244px;background:var(--card-bg,#161a2b);border:1px solid var(--border,#333);border-radius:8px;padding:6px;box-shadow:0 8px 24px rgba(0,0,0,.45);font-size:13px;';
+    var rows = _estViews.length ? _estViews.map(function(v) {
+        return '<div data-view="' + escapeHTML(v.id) + '" style="display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:6px;">' +
+            '<span class="ev-apply" style="flex:1;cursor:pointer;">' + escapeHTML(v.name) + (v.is_default ? ' <span style="color:var(--text-dim,#888);font-size:10px;">(default)</span>' : '') + '</span>' +
+            '<a href="#" data-def="' + escapeHTML(v.id) + '" title="Set as default" style="text-decoration:none;">★</a>' +
+            '<a href="#" data-del="' + escapeHTML(v.id) + '" title="Delete" style="text-decoration:none;color:#f87171;">✕</a>' +
+        '</div>';
+    }).join('') : '<div style="padding:6px 8px;color:var(--text-dim,#888);">No saved views yet.</div>';
+    pop.innerHTML = rows + '<div style="border-top:1px solid var(--border,#333);margin-top:6px;padding-top:6px;"><button type="button" class="ee-btn" id="est-save-view" style="width:100%;">＋ Save current filters as view…</button></div>';
+    document.body.appendChild(pop);
+    var r = anchor.getBoundingClientRect();
+    pop.style.top = (r.bottom + 4) + 'px';
+    pop.style.left = Math.max(8, Math.min(r.right - 244, window.innerWidth - 252)) + 'px';
+    function close() { pop.remove(); document.removeEventListener('mousedown', onOut, true); }
+    function onOut(e) { if (!pop.contains(e.target) && e.target !== anchor) close(); }
+    setTimeout(function() { document.addEventListener('mousedown', onOut, true); }, 0);
+    pop.querySelectorAll('.ev-apply').forEach(function(sp) {
+        sp.addEventListener('click', function() { var id = sp.parentNode.getAttribute('data-view'); var v = _estViews.find(function(x) { return x.id === id; }); if (v) { close(); applyEstView(v); } });
+    });
+    pop.querySelectorAll('[data-def]').forEach(function(a) { a.addEventListener('click', function(e) { e.preventDefault(); e.stopPropagation(); window.p86Api.listViews.update(a.getAttribute('data-def'), { is_default: true }).then(estLoadViews).then(function() { close(); if (window.p86Toast) window.p86Toast('Default view set', 'success'); }); }); });
+    pop.querySelectorAll('[data-del]').forEach(function(a) { a.addEventListener('click', function(e) { e.preventDefault(); e.stopPropagation(); if (!confirm('Delete this saved view?')) return; var id = a.getAttribute('data-del'); window.p86Api.listViews.remove(id).then(function() { if (_estActiveViewId === id) _estActiveViewId = null; return estLoadViews(); }).then(close); }); });
+    var sv = pop.querySelector('#est-save-view');
+    if (sv) sv.addEventListener('click', function() {
+        var name = prompt('Name this view:'); if (name == null) return; name = String(name).trim(); if (!name) return;
+        window.p86Api.listViews.create({ page: 'estimates', name: name, config: { filters: _estDrawer || {} }, is_default: false })
+            .then(function(res) { _estActiveViewId = (res && res.view && res.view.id) || null; return estLoadViews(); })
+            .then(function() { close(); if (window.p86Toast) window.p86Toast('View saved', 'success'); })
+            .catch(function() { if (window.p86Toast) window.p86Toast('Could not save view', 'error'); });
+    });
+}
+window.estimatesOpenFilter = estimatesOpenFilter;
+window.estimatesOpenViews = estimatesOpenViews;
+
 function renderEstimatesList() {
             const listEl = document.getElementById('estimates-list');
             const searchEl = document.getElementById('estimates-search');
@@ -352,11 +475,17 @@ function renderEstimatesList() {
 
             // Search across title + client + community + addresses so the
             // user can filter by any visible piece of info.
+            if (!_estViewsLoaded) { _estViewsLoaded = true; estLoadViews(); }
+            updateEstFilterBtn(); updateEstViewsBtn();
             const q = searchEl ? searchEl.value.trim().toLowerCase() : '';
             const all = appData.estimates || [];
-            const filtered = !q ? all : all.filter(function(e) {
-                return [e.title, e.client, e.community, e.propertyAddr, e.jobType, e.nickName]
-                    .filter(Boolean).join(' ').toLowerCase().indexOf(q) !== -1;
+            const filtered = all.filter(function(e) {
+                if (_estDrawer && !matchesEstimateDrawer(e, _estDrawer)) return false;
+                if (q) {
+                    var hay = [e.title, e.client, e.community, e.propertyAddr, e.jobType, e.nickName].filter(Boolean).join(' ').toLowerCase();
+                    if (hay.indexOf(q) === -1) return false;
+                }
+                return true;
             });
 
             if (summaryEl) {

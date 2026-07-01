@@ -1469,6 +1469,8 @@
                                      get injected dynamically by proposal.js. -->
                                 <button onclick="openNewEstimateForm()" data-p86-icon="plus">New Estimate</button>
                                 <button onclick="renderEstimatesList()" data-p86-icon="refresh">Refresh</button>
+                                <button class="ee-btn ghost" id="estimates-filter-btn" onclick="estimatesOpenFilter()" title="Filter estimates" aria-label="Filter" style="margin-left:6px;"></button>
+                                <button class="ee-btn ghost" id="estimates-views-btn" onclick="estimatesOpenViews(this)" title="Saved views" style="margin-left:4px;">Views ▾</button>
                                 <input type="text" id="estimates-search" oninput="renderEstimatesList()" placeholder="Search estimates…" style="margin-left:auto;min-width:220px;" />
                                 <span class="p86-ask86-mount"></span>
                             </div>
@@ -3237,7 +3239,7 @@
     <script src="js/pricing-pipeline.js?v=1"></script>
     <script src="js/jobs.js?v=107"></script>
     <script src="js/job-workflow-ui.js?v=4"></script>
-    <script src="js/estimates.js?v=46"></script>
+    <script src="js/estimates.js?v=47"></script>
     <script src="js/proposal.js?v=25"></script>
     <script src="js/estimate-editor.js?v=61"></script>
     <!-- Change Order editor — overlay opened from the job detail's
