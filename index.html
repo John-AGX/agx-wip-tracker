@@ -1419,15 +1419,8 @@
                                 <button onclick="document.getElementById('leads-import-file').click()" data-cap="LEADS_EDIT" title="Import a Buildertrend Leads xlsx export" data-p86-icon="import">Import from BT</button>
                                 <input type="file" id="leads-import-file" accept=".xlsx" style="display:none;" onchange="handleLeadsImportFile(event)" />
                                 <button onclick="reloadLeadsCache()" data-p86-icon="refresh">Refresh</button>
-                                <select id="leads-filter-status" onchange="renderLeadsList()" style="width:auto;min-width:140px;margin-left:6px;">
-                                    <option value="">All statuses</option>
-                                    <option value="new">New</option>
-                                    <option value="in_progress">In Progress</option>
-                                    <option value="sent">Sent</option>
-                                    <option value="sold">Sold</option>
-                                    <option value="lost">Lost</option>
-                                    <option value="no_opportunity">No Opportunity</option>
-                                </select>
+                                <button class="ee-btn ghost" id="leads-filter-btn" onclick="leadsOpenFilter()" title="Filter leads" aria-label="Filter" style="margin-left:6px;"></button>
+                                <button class="ee-btn ghost" id="leads-views-btn" onclick="leadsOpenViews(this)" title="Saved views" style="margin-left:4px;">Views ▾</button>
                                 <input type="text" id="leads-search" oninput="renderLeadsList()" placeholder="Search leads…" style="margin-left:auto;min-width:220px;" />
                                 <button class="ee-btn ghost" id="leads-map-toggle" onclick="toggleLeadsMapView()" title="Show leads on a map (pins come from each lead's geocoded address)" style="margin-left:8px;white-space:nowrap;">&#x1F5FA; Map</button>
                                 <!-- Global Ask 86 badge in the right corner of the action bar. -->
@@ -3171,7 +3164,7 @@
          ready the first time they build their tables. -->
     <script src="js/table-enhancements.js?v=7"></script>
     <script src="js/job-finalize.js?v=1"></script>
-    <script src="js/leads.js?v=56"></script>
+    <script src="js/leads.js?v=57"></script>
     <script src="js/job-costs-import.js?v=4"></script>
     <script src="js/qb-costs-view.js?v=11"></script>
     <script src="js/insights.js?v=7"></script>

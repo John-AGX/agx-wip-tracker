@@ -7,6 +7,11 @@
   'use strict';
 
   var _leads = [];
+  // Shared filter drawer + saved views (mirrors Cost Inbox).
+  var _leadsDrawer = null;      // active filter values, or null
+  var _leadsViews = [];         // this user's saved Leads views
+  var _leadsActiveViewId = null;
+  var _leadsViewsLoaded = false;
 
   // Status enum metadata. Drives the filter dropdown, the editor modal,
   // the list pill colors, and the status flow comments. Keep order in
@@ -295,10 +300,139 @@
     return hay.indexOf(q) !== -1;
   }
 
+  // ── Filter drawer + saved views ────────────────────────────────────
+  function leadsDistinct(field) {
+    var seen = {}, out = [];
+    _leads.forEach(function(l) { var v = l[field]; if (v == null || v === '') return; v = String(v); if (seen[v]) return; seen[v] = true; out.push(v); });
+    out.sort(function(a, b) { return a.toLowerCase().localeCompare(b.toLowerCase()); });
+    return out;
+  }
+  function leadsFilterFields() {
+    var pms = (window.p86Admin && window.p86Admin.getActivePMs && window.p86Admin.getActivePMs()) || [];
+    var spOpts = [{ v: '', label: 'Anyone' }].concat(pms.map(function(u) { return { v: String(u.id), label: u.name }; }));
+    var srcOpts = leadsDistinct('source').map(function(s) { return { v: s, label: s }; });
+    var mktOpts = leadsDistinct('market').map(function(s) { return { v: s, label: s }; });
+    return [
+      { key: 'status', label: 'Status', type: 'chips', options: STATUSES.map(function(s) { return { v: s.key, label: s.label }; }) },
+      { key: 'salesperson_id', label: 'Salesperson', type: 'select', options: spOpts },
+      { key: 'source', label: 'Source', type: 'select', options: [{ v: '', label: 'Any' }].concat(srcOpts) },
+      { key: 'project_type', label: 'Project Type', type: 'chips', options: [{ v: 'Renovation', label: 'Renovation' }, { v: 'Service & Repair', label: 'Service & Repair' }, { v: 'Work Order', label: 'Work Order' }] },
+      { key: 'market', label: 'Market', type: 'select', options: [{ v: '', label: 'Any' }].concat(mktOpts) },
+      { key: 'lost_reason', label: 'Lost Reason', type: 'chips', options: [{ v: 'budget', label: 'Budget' }, { v: 'timeline', label: 'Timeline' }, { v: 'competitor', label: 'Competitor' }, { v: 'no_response', label: 'No response' }, { v: 'not_qualified', label: 'Not qualified' }, { v: 'scope', label: 'Scope' }, { v: 'other', label: 'Other' }] },
+      { key: 'confidence', label: 'Confidence %', type: 'numrange' },
+      { key: 'revenue', label: 'Est. Revenue', type: 'numrange' },
+      { key: 'projected_sale_date', label: 'Projected Sale', type: 'daterange' },
+      { key: 'next_followup_at', label: 'Next Follow-up', type: 'daterange' },
+      { key: 'created_at', label: 'Created', type: 'daterange' }
+    ];
+  }
+  function leadDateInRange(val, range) {
+    if (!range || (!range.from && !range.to)) return true;
+    if (!val) return false;
+    var d = String(val).slice(0, 10);
+    if (range.from && d < range.from) return false;
+    if (range.to && d > range.to) return false;
+    return true;
+  }
+  function matchesLeadDrawer(l, d) {
+    if (!d) return true;
+    var FD = window.p86FilterDrawer; if (!FD) return true;
+    if (d.status && d.status.length && d.status.indexOf(l.status) < 0) return false;
+    if (d.salesperson_id && String(l.salesperson_id) !== String(d.salesperson_id)) return false;
+    if (d.source && String(l.source || '') !== String(d.source)) return false;
+    if (d.project_type && d.project_type.length && d.project_type.indexOf(l.project_type) < 0) return false;
+    if (d.market && String(l.market || '') !== String(d.market)) return false;
+    if (d.lost_reason && d.lost_reason.length && d.lost_reason.indexOf(l.lost_reason) < 0) return false;
+    var cr = FD.resolveNumRange(d.confidence);
+    if (cr.min != null || cr.max != null) { var c = Number(l.confidence || 0); if (cr.min != null && c < cr.min) return false; if (cr.max != null && c > cr.max) return false; }
+    var rr = FD.resolveNumRange(d.revenue);
+    if (rr.min != null || rr.max != null) { var rev = Number(revenueFromAttachedEstimates(l.id) || l.estimated_revenue_low || 0); if (rr.min != null && rev < rr.min) return false; if (rr.max != null && rev > rr.max) return false; }
+    if (!leadDateInRange(l.projected_sale_date, FD.resolveDateRange(d.projected_sale_date))) return false;
+    if (!leadDateInRange(l.next_followup_at, FD.resolveDateRange(d.next_followup_at))) return false;
+    if (!leadDateInRange(l.created_at, FD.resolveDateRange(d.created_at))) return false;
+    return true;
+  }
+  function updateLeadsFilterBtn() {
+    var btn = document.getElementById('leads-filter-btn');
+    if (!btn) return;
+    var FD = window.p86FilterDrawer;
+    var n = (_leadsDrawer && FD) ? FD.countActive(leadsFilterFields(), _leadsDrawer) : 0;
+    btn.innerHTML = (window.p86Icon ? window.p86Icon('funnel') : 'Filter') + (n ? ' <strong>(' + n + ')</strong>' : '');
+    btn.classList.toggle('pf-on', n > 0);
+  }
+  function updateLeadsViewsBtn() {
+    var btn = document.getElementById('leads-views-btn');
+    if (!btn) return;
+    var v = _leadsViews.find(function(x) { return x.id === _leadsActiveViewId; });
+    btn.innerHTML = (v ? escapeHTML(v.name) : 'Views') + ' ▾';
+  }
+  window.leadsOpenFilter = function() {
+    var FD = window.p86FilterDrawer; if (!FD) return;
+    var fields = leadsFilterFields();
+    FD.open({
+      title: 'Filter Leads', fields: fields,
+      values: _leadsDrawer || FD.emptyValues(fields),
+      onApply: function(v) { _leadsDrawer = v; _leadsActiveViewId = null; updateLeadsFilterBtn(); updateLeadsViewsBtn(); renderLeadsList(); },
+      onClear: function() { _leadsDrawer = null; _leadsActiveViewId = null; updateLeadsFilterBtn(); updateLeadsViewsBtn(); renderLeadsList(); }
+    });
+  };
+  function leadsLoadViews() {
+    if (!(window.p86Api && window.p86Api.listViews)) return Promise.resolve();
+    return window.p86Api.listViews.list('leads').then(function(r) {
+      _leadsViews = (r && r.views) || [];
+      var def = _leadsViews.find(function(v) { return v.is_default; });
+      if (def && !_leadsDrawer && !_leadsActiveViewId) applyLeadsView(def);
+      updateLeadsViewsBtn();
+    }).catch(function() { _leadsViews = []; });
+  }
+  function applyLeadsView(v) {
+    _leadsActiveViewId = v.id;
+    var cfg = v.config || {};
+    _leadsDrawer = (cfg.filters && Object.keys(cfg.filters).length) ? cfg.filters : null;
+    updateLeadsFilterBtn(); updateLeadsViewsBtn(); renderLeadsList();
+  }
+  window.leadsOpenViews = function(anchor) {
+    var existing = document.getElementById('leads-views-pop');
+    if (existing) { existing.remove(); return; }
+    var pop = document.createElement('div');
+    pop.id = 'leads-views-pop';
+    pop.style.cssText = 'position:fixed;z-index:100000;min-width:244px;background:var(--card-bg,#161a2b);border:1px solid var(--border,#333);border-radius:8px;padding:6px;box-shadow:0 8px 24px rgba(0,0,0,.45);font-size:13px;';
+    var rows = _leadsViews.length ? _leadsViews.map(function(v) {
+      return '<div data-view="' + escapeAttr(v.id) + '" style="display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:6px;">' +
+        '<span class="lv-apply" style="flex:1;cursor:pointer;">' + escapeHTML(v.name) + (v.is_default ? ' <span style="color:var(--text-dim,#888);font-size:10px;">(default)</span>' : '') + '</span>' +
+        '<a href="#" data-def="' + escapeAttr(v.id) + '" title="Set as default" style="text-decoration:none;">★</a>' +
+        '<a href="#" data-del="' + escapeAttr(v.id) + '" title="Delete" style="text-decoration:none;color:#f87171;">✕</a>' +
+      '</div>';
+    }).join('') : '<div style="padding:6px 8px;color:var(--text-dim,#888);">No saved views yet.</div>';
+    pop.innerHTML = rows + '<div style="border-top:1px solid var(--border,#333);margin-top:6px;padding-top:6px;"><button type="button" class="ee-btn" id="leads-save-view" style="width:100%;">＋ Save current filters as view…</button></div>';
+    document.body.appendChild(pop);
+    var r = anchor.getBoundingClientRect();
+    pop.style.top = (r.bottom + 4) + 'px';
+    pop.style.left = Math.max(8, Math.min(r.right - 244, window.innerWidth - 252)) + 'px';
+    function close() { pop.remove(); document.removeEventListener('mousedown', onOut, true); }
+    function onOut(e) { if (!pop.contains(e.target) && e.target !== anchor) close(); }
+    setTimeout(function() { document.addEventListener('mousedown', onOut, true); }, 0);
+    pop.querySelectorAll('.lv-apply').forEach(function(sp) {
+      sp.addEventListener('click', function() { var id = sp.parentNode.getAttribute('data-view'); var v = _leadsViews.find(function(x) { return x.id === id; }); if (v) { close(); applyLeadsView(v); } });
+    });
+    pop.querySelectorAll('[data-def]').forEach(function(a) { a.addEventListener('click', function(e) { e.preventDefault(); e.stopPropagation(); window.p86Api.listViews.update(a.getAttribute('data-def'), { is_default: true }).then(leadsLoadViews).then(function() { close(); if (window.p86Toast) window.p86Toast('Default view set', 'success'); }); }); });
+    pop.querySelectorAll('[data-del]').forEach(function(a) { a.addEventListener('click', function(e) { e.preventDefault(); e.stopPropagation(); if (!confirm('Delete this saved view?')) return; var id = a.getAttribute('data-del'); window.p86Api.listViews.remove(id).then(function() { if (_leadsActiveViewId === id) _leadsActiveViewId = null; return leadsLoadViews(); }).then(close); }); });
+    var sv = pop.querySelector('#leads-save-view');
+    if (sv) sv.addEventListener('click', function() {
+      var name = prompt('Name this view:'); if (name == null) return; name = String(name).trim(); if (!name) return;
+      window.p86Api.listViews.create({ page: 'leads', name: name, config: { filters: _leadsDrawer || {} }, is_default: false })
+        .then(function(res) { _leadsActiveViewId = (res && res.view && res.view.id) || null; return leadsLoadViews(); })
+        .then(function() { close(); if (window.p86Toast) window.p86Toast('View saved', 'success'); })
+        .catch(function() { if (window.p86Toast) window.p86Toast('Could not save view', 'error'); });
+    });
+  };
+
   function renderLeadsList() {
     var listEl = document.getElementById('leads-list');
     var summaryEl = document.getElementById('leads-summary');
     if (!listEl) return;
+    if (!_leadsViewsLoaded) { _leadsViewsLoaded = true; leadsLoadViews(); }
+    updateLeadsFilterBtn(); updateLeadsViewsBtn();
     var statusFilter = document.getElementById('leads-filter-status');
     var searchEl = document.getElementById('leads-search');
     var filterStatus = statusFilter ? statusFilter.value : '';
@@ -321,6 +455,7 @@
 
     var filtered = _leads.filter(function(l) {
       if (filterStatus && l.status !== filterStatus) return false;
+      if (_leadsDrawer && !matchesLeadDrawer(l, _leadsDrawer)) return false;
       return matchesSearch(l, q);
     });
     if (summaryEl) {
