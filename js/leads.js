@@ -497,8 +497,8 @@
       document.head.appendChild(s);
     });
   }
-  window.leadsExportExcel = function() {
-    var rows = (_leadsFiltered && _leadsFiltered.length) ? _leadsFiltered : _leads;
+  window.leadsExportExcel = function(rowsArg) {
+    var rows = (rowsArg && rowsArg.length) ? rowsArg : ((_leadsFiltered && _leadsFiltered.length) ? _leadsFiltered : _leads);
     if (!rows.length) { if (window.p86Toast) window.p86Toast('No leads to export.', 'error'); return; }
     var btn = document.getElementById('leads-export-btn');
     if (btn) { btn.disabled = true; }
@@ -646,12 +646,45 @@
     if (!bar) return;
     var n = _leadsSelected.size;
     if (!n) { bar.style.display = 'none'; bar.innerHTML = ''; return; }
-    bar.style.cssText = 'display:flex;align-items:center;gap:12px;padding:8px 12px;margin-bottom:8px;background:rgba(248,113,113,0.10);border:1px solid rgba(248,113,113,0.35);border-radius:8px;';
+    bar.style.cssText = 'display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 12px;margin-bottom:8px;background:rgba(79,140,255,0.08);border:1px solid rgba(79,140,255,0.30);border-radius:8px;';
+    var selStyle = 'padding:4px 6px;font-size:12px;border-radius:6px;border:1px solid var(--border,#2e3346);background:var(--card-bg,#161a2b);color:var(--text,#eef0f6);cursor:pointer;';
+    var btnStyle = 'padding:5px 10px;font-size:12px;border-radius:7px;border:1px solid var(--border,#2e3346);background:transparent;color:var(--text,#eef0f6);cursor:pointer;';
+    var statusOpts = '<option value="">Set status…</option>' + STATUSES.map(function(s) { return '<option value="' + s.key + '">' + escapeHTML(s.label) + '</option>'; }).join('');
+    var pms = (window.p86Admin && window.p86Admin.getActivePMs && window.p86Admin.getActivePMs()) || [];
+    var assignOpts = '<option value="">Assign to…</option><option value="__none__">— Unassign —</option>' + pms.map(function(u) { return '<option value="' + u.id + '">' + escapeHTML(u.name) + '</option>'; }).join('');
+    var lostReasons = [['budget', 'Budget'], ['timeline', 'Timeline'], ['competitor', 'Competitor'], ['no_response', 'No response'], ['not_qualified', 'Not qualified'], ['scope', 'Scope'], ['other', 'Other']];
+    var lostOpts = '<option value="">Mark lost…</option>' + lostReasons.map(function(r) { return '<option value="' + r[0] + '">' + r[1] + '</option>'; }).join('');
     bar.innerHTML =
-      '<span style="font-size:13px;color:var(--text,#eef0f6);font-weight:600;">' + n + ' selected</span>' +
-      '<button type="button" onclick="window.p86LeadsDeleteSelected()" style="padding:5px 12px;font-size:12px;font-weight:600;border-radius:7px;border:1px solid rgba(248,113,113,.5);background:#f87171;color:#1a1d27;cursor:pointer;">Delete ' + n + ' lead' + (n > 1 ? 's' : '') + '</button>' +
-      '<button type="button" onclick="window.p86LeadsClearSelection()" style="padding:5px 10px;font-size:12px;border-radius:7px;border:1px solid var(--border,#2e3346);background:transparent;color:var(--text-dim,#c4c8d8);cursor:pointer;">Clear</button>';
+      '<span style="font-size:13px;color:var(--text,#eef0f6);font-weight:600;white-space:nowrap;">' + n + ' selected</span>' +
+      '<button type="button" onclick="window.p86LeadsExportSelected()" style="' + btnStyle + '" title="Export selected to Excel">⬇ Export</button>' +
+      '<select onchange="window.p86LeadsBulkStatus(this.value);this.value=\'\';" style="' + selStyle + '">' + statusOpts + '</select>' +
+      '<select onchange="window.p86LeadsBulkAssign(this.value);this.value=\'\';" style="' + selStyle + '">' + assignOpts + '</select>' +
+      '<label style="font-size:12px;color:var(--text-dim,#c4c8d8);white-space:nowrap;">Follow-up <input type="date" onchange="window.p86LeadsBulkFollowup(this.value);this.value=\'\';" style="' + selStyle + '"></label>' +
+      '<select onchange="window.p86LeadsBulkLost(this.value);this.value=\'\';" style="' + selStyle + '">' + lostOpts + '</select>' +
+      '<span style="flex:1 1 auto;"></span>' +
+      '<button type="button" onclick="window.p86LeadsDeleteSelected()" style="padding:5px 12px;font-size:12px;font-weight:600;border-radius:7px;border:1px solid rgba(248,113,113,.5);background:#f87171;color:#1a1d27;cursor:pointer;">Delete ' + n + '</button>' +
+      '<button type="button" onclick="window.p86LeadsClearSelection()" style="' + btnStyle + '">Clear</button>';
   }
+
+  // Apply a field update to every selected lead (server auto-stamps status
+  // transitions). Reloads the list after. Used by the bulk-action bar.
+  function leadsBulkApply(body, label) {
+    var ids = Array.from(_leadsSelected);
+    if (!ids.length) return;
+    if (!(window.p86Api && window.p86Api.leads && window.p86Api.leads.update)) { alert('Bulk edit is not available (refresh the app).'); return; }
+    var proms = ids.map(function(id) { return window.p86Api.leads.update(id, body).then(function() { return true; }).catch(function() { return false; }); });
+    Promise.all(proms).then(function(res) {
+      var ok = res.filter(Boolean).length, fail = res.length - ok;
+      if (window.p86Toast) window.p86Toast(label + ': ' + ok + ' updated' + (fail ? (', ' + fail + ' failed') : '') + '.', fail ? 'error' : 'success');
+      _leadsSelected.clear();
+      reloadLeadsCache();
+    });
+  }
+  window.p86LeadsBulkStatus = function(v) { if (!v) return; var term = ['sold', 'lost', 'no_opportunity'].indexOf(v) >= 0; if (term && !confirm('Set ' + _leadsSelected.size + ' lead(s) to "' + v + '"?')) return; leadsBulkApply({ status: v }, 'Status updated'); };
+  window.p86LeadsBulkAssign = function(v) { if (v === '') return; leadsBulkApply({ salesperson_id: v === '__none__' ? null : v }, 'Reassigned'); };
+  window.p86LeadsBulkFollowup = function(d) { if (!d) return; leadsBulkApply({ next_followup_at: d }, 'Follow-up set'); };
+  window.p86LeadsBulkLost = function(reason) { if (!reason) return; if (!confirm('Mark ' + _leadsSelected.size + ' lead(s) as Lost?')) return; leadsBulkApply({ status: 'lost', lost_reason: reason }, 'Marked lost'); };
+  window.p86LeadsExportSelected = function() { var sel = _leads.filter(function(l) { return _leadsSelected.has(l.id); }); if (!sel.length) { if (window.p86Toast) window.p86Toast('Nothing selected.', 'error'); return; } window.leadsExportExcel(sel); };
 
   function syncLeadsSelectAll() {
     var all = document.getElementById('leads-check-all');
