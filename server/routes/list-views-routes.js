@@ -10,7 +10,8 @@ const { requireAuth } = require('../auth');
 
 const router = express.Router();
 const COLS = 'id, page, name, config, is_default, created_at, updated_at';
-const PAGES = new Set(['cost_inbox', 'jobs', 'leads', 'estimates', 'clients', 'subs']);
+const PAGES = new Set(['cost_inbox', 'jobs', 'leads', 'estimates', 'clients', 'subs',
+                       'change_orders', 'purchase_orders', 'rfis', 'submittals']);
 
 function callerOrgId(req) { const o = req.user && req.user.organization_id; return o ? Number(o) : null; }
 function callerUserId(req) { return Number(req.user && req.user.id); }

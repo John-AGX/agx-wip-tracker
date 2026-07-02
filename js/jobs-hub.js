@@ -169,14 +169,159 @@
           '<input id="jh-search" class="jobshub-search" type="text" placeholder="Search…" value="' + esc(st.q) + '" autocomplete="off">' +
           jobFilterHTML(st.job) +
           statusFilterHTML(cfg.statusOptions, st.status) +
+          (cfg.viewsPage ? '<button id="jh-views" class="ee-btn ghost" type="button" title="Saved views">Views ▾</button>' : '') +
           (cfg.extraActionHTML || '') +
           '<button id="jh-new" class="ee-btn primary jobshub-new" type="button">+ New</button>' +
         '</div>' +
       '</div>' +
       '<div class="jobshub-summary" id="jh-summary"></div>' +
+      '<div id="jh-bulkbar" style="display:none;"></div>' +
       '<div class="jobshub-list" id="jh-list"><div class="jobshub-loading">Loading…</div></div>';
 
     var _rows = [];
+    var _selected = new Set();   // bulk-select ids (cfg.bulk views only)
+
+    // ── Multi-select + bulk bar (CO / PO) ─────────────────────────────
+    // Checkboxes are injected AFTER the per-view tableHTML renders so the
+    // per-entity table builders stay untouched. Row ids come from
+    // cfg.bulk.idAttr (data-co-id / data-po-id).
+    function injectCheckboxes(listEl) {
+      if (!cfg.bulk) return;
+      var hr = listEl.querySelector('thead tr');
+      if (hr && !hr.querySelector('.jh-check-th')) {
+        var th = document.createElement('th');
+        th.className = 'jh-check-th';
+        th.style.cssText = 'width:34px;text-align:center;';
+        th.innerHTML = '<input type="checkbox" id="jh-check-all" title="Select all shown">';
+        hr.insertBefore(th, hr.firstChild);
+        th.querySelector('input').addEventListener('click', function (e) {
+          e.stopPropagation();
+          var on = e.target.checked;
+          listEl.querySelectorAll('.jh-check').forEach(function (b) {
+            b.checked = on;
+            var id = b.getAttribute('data-id');
+            if (on) _selected.add(id); else _selected.delete(id);
+          });
+          updateBulkBar();
+        });
+      }
+      listEl.querySelectorAll('tbody tr').forEach(function (tr) {
+        var id = tr.getAttribute(cfg.bulk.idAttr);
+        if (!id || tr.querySelector('.jh-check-td')) return;
+        var td = document.createElement('td');
+        td.className = 'jh-check-td';
+        td.style.cssText = 'width:34px;text-align:center;';
+        td.innerHTML = '<input type="checkbox" class="jh-check" data-id="' + esc(id) + '"' + (_selected.has(id) ? ' checked' : '') + '>';
+        td.addEventListener('click', function (e) { e.stopPropagation(); });
+        td.querySelector('input').addEventListener('change', function (e) {
+          if (e.target.checked) _selected.add(id); else _selected.delete(id);
+          updateBulkBar(); syncCheckAll(listEl);
+        });
+        tr.insertBefore(td, tr.firstChild);
+      });
+      syncCheckAll(listEl);
+    }
+    function syncCheckAll(listEl) {
+      var all = listEl.querySelector('#jh-check-all');
+      if (!all) return;
+      var boxes = listEl.querySelectorAll('.jh-check');
+      var checked = 0;
+      boxes.forEach(function (b) { if (b.checked) checked++; });
+      all.checked = boxes.length > 0 && checked === boxes.length;
+      all.indeterminate = checked > 0 && checked < boxes.length;
+    }
+    function updateBulkBar() {
+      var bar = host.querySelector('#jh-bulkbar');
+      if (!bar || !cfg.bulk) return;
+      var n = _selected.size;
+      if (!n) { bar.style.display = 'none'; bar.innerHTML = ''; return; }
+      bar.style.cssText = 'display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 12px;margin-bottom:8px;background:rgba(79,140,255,0.08);border:1px solid rgba(79,140,255,0.30);border-radius:8px;';
+      var selStyle = 'padding:4px 6px;font-size:12px;border-radius:6px;border:1px solid var(--border,#2e3346);background:var(--card-bg,#161a2b);color:var(--text,#eef0f6);cursor:pointer;';
+      var btnStyle = 'padding:5px 10px;font-size:12px;border-radius:7px;border:1px solid var(--border,#2e3346);background:transparent;color:var(--text,#eef0f6);cursor:pointer;';
+      bar.innerHTML =
+        '<span style="font-size:13px;font-weight:600;white-space:nowrap;">' + n + ' selected</span>' +
+        '<select class="jh-bulk-status" style="' + selStyle + '"><option value="">Set status…</option>' +
+          cfg.bulk.statusOptions.map(function (s) { return '<option value="' + esc(s) + '">' + esc(s.replace(/_/g, ' ')) + '</option>'; }).join('') +
+        '</select>' +
+        '<span style="flex:1 1 auto;"></span>' +
+        '<button type="button" class="jh-bulk-delete" style="padding:5px 12px;font-size:12px;font-weight:600;border-radius:7px;border:1px solid rgba(248,113,113,.5);background:#f87171;color:#1a1d27;cursor:pointer;">Delete ' + n + '</button>' +
+        '<button type="button" class="jh-bulk-clear" style="' + btnStyle + '">Clear</button>';
+      bar.querySelector('.jh-bulk-status').addEventListener('change', function (e) {
+        var v = e.target.value; e.target.value = '';
+        if (!v) return;
+        var ids = Array.from(_selected);
+        if (!confirm('Set ' + ids.length + ' item(s) to "' + v.replace(/_/g, ' ') + '"?')) return;
+        Promise.all(ids.map(function (id) { return cfg.bulk.setStatus(id, v).then(function () { return true; }).catch(function () { return false; }); }))
+          .then(function (res) {
+            var ok = res.filter(Boolean).length, fail = res.length - ok;
+            if (window.p86Toast) window.p86Toast('Status set on ' + ok + (fail ? ', ' + fail + ' failed' : '') + '.', fail ? 'error' : 'success');
+            _selected.clear(); refetch();
+          });
+      });
+      bar.querySelector('.jh-bulk-delete').addEventListener('click', function () {
+        var ids = Array.from(_selected);
+        if (!confirm('Delete ' + ids.length + ' item(s)? This cannot be undone.')) return;
+        Promise.all(ids.map(function (id) { return cfg.bulk.remove(id).then(function () { return true; }).catch(function () { return false; }); }))
+          .then(function (res) {
+            var ok = res.filter(Boolean).length, fail = res.length - ok;
+            if (window.p86Toast) window.p86Toast('Deleted ' + ok + (fail ? ', ' + fail + ' failed (locked or no access)' : '') + '.', fail ? 'error' : 'success');
+            _selected.clear(); refetch();
+          });
+      });
+      bar.querySelector('.jh-bulk-clear').addEventListener('click', function () {
+        _selected.clear();
+        host.querySelectorAll('.jh-check').forEach(function (b) { b.checked = false; });
+        var all = host.querySelector('#jh-check-all');
+        if (all) { all.checked = false; all.indeterminate = false; }
+        updateBulkBar();
+      });
+    }
+
+    // ── Saved views: presets of {status, job, q} per hub list ─────────
+    function openViewsPopover(anchor) {
+      var existing = document.getElementById('jh-views-pop');
+      if (existing) { existing.remove(); return; }
+      if (!(window.p86Api && window.p86Api.listViews)) return;
+      window.p86Api.listViews.list(cfg.viewsPage).then(function (r) {
+        var views = (r && r.views) || [];
+        var pop = document.createElement('div');
+        pop.id = 'jh-views-pop';
+        pop.style.cssText = 'position:fixed;z-index:100000;min-width:244px;background:var(--card-bg,#161a2b);border:1px solid var(--border,#333);border-radius:8px;padding:6px;box-shadow:0 8px 24px rgba(0,0,0,.45);font-size:13px;';
+        pop.innerHTML = (views.length ? views.map(function (v) {
+          return '<div data-view="' + esc(v.id) + '" style="display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:6px;">' +
+            '<span class="jhv-apply" style="flex:1;cursor:pointer;">' + esc(v.name) + (v.is_default ? ' <span style="color:var(--text-dim,#888);font-size:10px;">(default)</span>' : '') + '</span>' +
+            '<a href="#" data-def="' + esc(v.id) + '" title="Set as default" style="text-decoration:none;">★</a>' +
+            '<a href="#" data-del="' + esc(v.id) + '" title="Delete" style="text-decoration:none;color:#f87171;">✕</a>' +
+          '</div>';
+        }).join('') : '<div style="padding:6px 8px;color:var(--text-dim,#888);">No saved views yet.</div>') +
+        '<div style="border-top:1px solid var(--border,#333);margin-top:6px;padding-top:6px;"><button type="button" class="ee-btn jhv-save" style="width:100%;">＋ Save current filters as view…</button></div>';
+        document.body.appendChild(pop);
+        var r2 = anchor.getBoundingClientRect();
+        pop.style.top = (r2.bottom + 4) + 'px';
+        pop.style.left = Math.max(8, Math.min(r2.right - 244, window.innerWidth - 252)) + 'px';
+        function close() { pop.remove(); document.removeEventListener('mousedown', onOut, true); }
+        function onOut(e) { if (!pop.contains(e.target) && e.target !== anchor) close(); }
+        setTimeout(function () { document.addEventListener('mousedown', onOut, true); }, 0);
+        pop.querySelectorAll('.jhv-apply').forEach(function (sp) {
+          sp.addEventListener('click', function () {
+            var v = views.find(function (x) { return x.id === sp.parentNode.getAttribute('data-view'); });
+            if (!v) return;
+            var f = (v.config && v.config.filters) || {};
+            st.status = f.status || 'open'; st.job = f.job || ''; st.q = f.q || '';
+            close();
+            buildView(host, cfg);   // rebuild so the selects reflect the preset
+          });
+        });
+        pop.querySelectorAll('[data-def]').forEach(function (a) { a.addEventListener('click', function (e) { e.preventDefault(); e.stopPropagation(); window.p86Api.listViews.update(a.getAttribute('data-def'), { is_default: true }).then(function () { close(); if (window.p86Toast) window.p86Toast('Default view set', 'success'); }); }); });
+        pop.querySelectorAll('[data-del]').forEach(function (a) { a.addEventListener('click', function (e) { e.preventDefault(); e.stopPropagation(); if (!confirm('Delete this saved view?')) return; window.p86Api.listViews.remove(a.getAttribute('data-del')).then(close); }); });
+        pop.querySelector('.jhv-save').addEventListener('click', function () {
+          var name = prompt('Name this view:'); if (name == null) return; name = String(name).trim(); if (!name) return;
+          window.p86Api.listViews.create({ page: cfg.viewsPage, name: name, config: { filters: { status: st.status, job: st.job, q: st.q } }, is_default: false })
+            .then(function () { close(); if (window.p86Toast) window.p86Toast('View saved', 'success'); })
+            .catch(function () { if (window.p86Toast) window.p86Toast('Could not save view', 'error'); });
+        });
+      });
+    }
     // All lookups are scoped to THIS section host, not document-global ids.
     // Combined with switchJobsHubSubTab clearing inactive sections, a stale
     // fetch that resolves after the user switched away finds a cleared host
@@ -195,6 +340,8 @@
       }
       listEl.innerHTML = cfg.tableHTML(rows);
       wireRows(listEl, cfg);
+      injectCheckboxes(listEl);
+      updateBulkBar();
     }
     function refetch() {
       var listEl = host.querySelector('#jh-list');
@@ -213,6 +360,8 @@
     if (jobEl) jobEl.addEventListener('change', function () { st.job = jobEl.value; refetch(); });
     if (statusEl) statusEl.addEventListener('change', function () { st.status = statusEl.value; refetch(); });
     if (newBtn) newBtn.addEventListener('click', function () { openCreateModal(cfg.createKind, refetch); });
+    var viewsBtn = host.querySelector('#jh-views');
+    if (viewsBtn) viewsBtn.addEventListener('click', function () { openViewsPopover(viewsBtn); });
     if (typeof cfg.wireExtra === 'function') cfg.wireExtra(host);
     refetch();
   }
@@ -234,6 +383,13 @@
       title: 'Change Orders',
       subtab: 'job-changeorders',
       createKind: 'co',
+      viewsPage: 'change_orders',
+      bulk: {
+        idAttr: 'data-co-id',
+        statusOptions: ['draft', 'approved', 'applied'],
+        setStatus: function (id, v) { return window.p86Api.changeOrders.setStatus(id, v); },
+        remove: function (id) { return window.p86Api.changeOrders.remove(id); }
+      },
       onRow: function (tr) {
         var id = tr.getAttribute('data-co-id');
         if (id && window.p86ChangeOrders && typeof window.p86ChangeOrders.open === 'function') {
@@ -280,6 +436,7 @@
       title: title,
       subtab: 'job-workflow',
       createKind: type,
+      viewsPage: (type === 'rfi') ? 'rfis' : 'submittals',
       statusOptions: statusOpts,
       onRow: function (tr) {
         var jobId = tr.getAttribute('data-job-id');
@@ -325,6 +482,13 @@
       key: 'purchase-orders',
       title: 'Purchase Orders',
       createKind: 'po',
+      viewsPage: 'purchase_orders',
+      bulk: {
+        idAttr: 'data-po-id',
+        statusOptions: ['draft', 'issued', 'approved', 'work_complete', 'closed'],
+        setStatus: function (id, v) { return window.p86Api.purchaseOrders.setStatus(id, v); },
+        remove: function (id) { return window.p86Api.purchaseOrders.remove(id); }
+      },
       extraActionHTML: '<button id="jh-po-template" class="ee-btn jobshub-tpl-btn" type="button" title="Edit the org-wide scope-of-work template seeded into new POs">⚙ Template</button>',
       wireExtra: function (h) { var b = h.querySelector('#jh-po-template'); if (b) b.addEventListener('click', openScopeTemplateModal); },
       onRow: function (tr) {
