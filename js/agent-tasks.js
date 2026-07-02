@@ -265,6 +265,10 @@
 
   function start() {
     if (_timer) return;
+    // Mount the pill immediately — refresh() skips hidden tabs and its API call
+    // can fail, and neither should leave the panel unreachable.
+    ensureDom();
+    renderLauncher();
     refresh();
     _timer = setInterval(refresh, POLL_MS);
     document.addEventListener('visibilitychange', function () { if (!document.hidden) refresh(); });
