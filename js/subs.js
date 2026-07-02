@@ -142,6 +142,7 @@
     var summaryEl = document.getElementById('subs-summary');
     var tradeFilterEl = document.getElementById('subs-filter-trade');
     if (!listEl) return;
+    updateSubsFilterBtn();   // paint the funnel icon even on empty/early-return paths
 
     // Populate trade dropdown the first time (idempotent — only if empty)
     if (tradeFilterEl && tradeFilterEl.options.length <= 1) {
