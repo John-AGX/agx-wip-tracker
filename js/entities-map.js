@@ -708,6 +708,22 @@
       _PopupClass = Popup; return _PopupClass;
     }
     function closePopup() { if (_popup) { try { _popup.setMap(null); } catch (e) {} _popup = null; } }
+    // The legacy InfoWindow auto-panned the map so the bubble fit on screen;
+    // the custom OverlayView doesn't, so a pin near the top of the viewport
+    // opened a card with its head (title/status/zoom) clipped. Pan to fit.
+    function panPopupIntoView() {
+      if (!_popup || !_popup.container) return;
+      try {
+        var bubble = _popup.container.querySelector('.emap-pop-bubble') || _popup.container;
+        var br = bubble.getBoundingClientRect(); if (!br.width) return;
+        var mr = map.getDiv().getBoundingClientRect();
+        var pad = 10, dx = 0, dy = 0;
+        if (br.right > mr.right - pad) dx = br.right - (mr.right - pad);
+        if (br.left < mr.left + pad) dx = br.left - (mr.left + pad);
+        if (br.top < mr.top + pad) dy = br.top - (mr.top + pad);
+        if (dx || dy) map.panBy(dx, dy);
+      } catch (e) {}
+    }
     function popupAction(ev) {
       var t = ev.target, go = function (sel) { return t.closest ? t.closest(sel) : null; };
       if (go('.emap-pop-x')) { closePopup(); return; }
@@ -733,7 +749,7 @@
       content.innerHTML = '<button type="button" class="emap-pop-x" aria-label="Close">×</button>' + (html || '');
       content.addEventListener('click', popupAction);
       var P = ensurePopupClass();
-      if (P) { _popup = new P(new maps.LatLng(Number(pos.lat), Number(pos.lng)), content); _popup.setMap(map); }
+      if (P) { _popup = new P(new maps.LatLng(Number(pos.lat), Number(pos.lng)), content); _popup.setMap(map); setTimeout(panPopupIntoView, 160); }
       else { infoWindow.setContent(content); infoWindow.setPosition(new maps.LatLng(Number(pos.lat), Number(pos.lng))); infoWindow.open(map); }
     }
     function selectRow(id) {
