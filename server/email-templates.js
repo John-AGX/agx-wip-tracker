@@ -1004,8 +1004,12 @@ function sampleParams(eventKey) {
   }
 }
 
-async function renderSample(eventKey) {
-  return render(eventKey, sampleParams(eventKey));
+async function renderSample(eventKey, overrides) {
+  // overrides let the test-send route swap sample placeholders for real
+  // values (e.g. the caller's own name as the inviter) so a test email
+  // reads like the real thing instead of "John Project 86 invited you".
+  var params = Object.assign({}, sampleParams(eventKey), overrides || {});
+  return render(eventKey, params);
 }
 
 function renderSampleDefault(eventKey) {

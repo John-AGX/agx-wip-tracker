@@ -468,7 +468,16 @@ router.post('/templates/:key/test',
 
       let rendered;
       try {
-        rendered = await emailTemplates.renderSample(eventKey);
+        // Swap the sample "acting person" placeholders for the caller's
+        // real name so a test invite reads like a real one ("John Thilking
+        // just created…" instead of the canned "John Project 86"). Only
+        // string-typed actor params (system emails); assignedBy is an
+        // object on some org samples, so it keeps its canned value.
+        const actor = req.user && req.user.name;
+        rendered = await emailTemplates.renderSample(
+          eventKey,
+          actor ? { invitedBy: actor, resetBy: actor } : undefined
+        );
       } catch (e) {
         return res.status(400).json({ error: 'Cannot render: ' + e.message });
       }
