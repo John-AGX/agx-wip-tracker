@@ -710,8 +710,7 @@
         if (!this._panned) {
           this._panned = true;
           var self = this;
-          (window.__emapPan = window.__emapPan || []).push(['hook-scheduled']);
-          setTimeout(function () { (window.__emapPan = window.__emapPan || []).push(['hook-fired', _popup === self]); if (_popup === self) panPopupIntoView(); }, 80);
+          setTimeout(function () { if (_popup === self) panPopupIntoView(); }, 80);
         }
       };
       _PopupClass = Popup; return _PopupClass;
@@ -721,23 +720,21 @@
     // the custom OverlayView doesn't, so a pin near the top of the viewport
     // opened a card with its head (title/status/zoom) clipped. Pan to fit.
     function panPopupIntoView(attempt) {
-      var dbg = (window.__emapPan = window.__emapPan || []);
-      if (!_popup || !_popup.container) { dbg.push(['bail-nopopup']); return; }
+      if (!_popup || !_popup.container) return;
       attempt = attempt || 0;
       try {
         var bubble = _popup.container.querySelector('.emap-pop-bubble') || _popup.container;
         var br = bubble.getBoundingClientRect();
         // The OverlayView attaches + draws on the map's next render frame, so
         // the bubble can still be unmeasured here — retry until it has layout.
-        if (!br.width) { dbg.push(['width0', attempt]); if (attempt < 12) setTimeout(function () { panPopupIntoView(attempt + 1); }, 120); return; }
+        if (!br.width) { if (attempt < 12) setTimeout(function () { panPopupIntoView(attempt + 1); }, 120); return; }
         var mr = map.getDiv().getBoundingClientRect();
         var pad = 10, dx = 0, dy = 0;
         if (br.right > mr.right - pad) dx = br.right - (mr.right - pad);
         if (br.left < mr.left + pad) dx = br.left - (mr.left + pad);
         if (br.top < mr.top + pad) dy = br.top - (mr.top + pad);
-        dbg.push(['measured', Math.round(br.top), Math.round(br.left), Math.round(br.right), Math.round(mr.top), dx, dy]);
-        if (dx || dy) { map.panBy(dx, dy); dbg.push(['panned', dx, dy]); }
-      } catch (e) { dbg.push(['error', String(e)]); }
+        if (dx || dy) map.panBy(dx, dy);
+      } catch (e) {}
     }
     function popupAction(ev) {
       var t = ev.target, go = function (sel) { return t.closest ? t.closest(sel) : null; };
