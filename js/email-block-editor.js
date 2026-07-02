@@ -647,7 +647,7 @@
       return '';
     }).join('');
     if (!hasFooter) rows += footerRow('');
-    return '<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px;margin:0 auto;background:#fff;border:1px solid #e5e7eb;border-radius:8px;">' + rows + '</table>';
+    return '<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px;margin:0 auto;background:#fff;border:1px solid #e5e7eb;border-radius:8px;font-family:Inter,\'Segoe UI\',Roboto,Helvetica,Arial,sans-serif;">' + rows + '</table>';
   }
 
   window.p86EmailBlocks = { mount: mount, renderBlocksToHtml: renderBlocksToHtml };

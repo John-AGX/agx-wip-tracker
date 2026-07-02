@@ -454,13 +454,20 @@ function enrichParams(eventKey, raw) {
     if (!p.org_name) p.org_name = 'your organization';
     // accept_url + expires_at come from the caller; we pre-format
     // expires_at for the email body (e.g. "Tuesday, May 27, 2026").
-    if (p.expires_at && typeof p.expires_at !== 'string') {
+    // Callers pass ISO STRINGS ('2026-06-15T00:00:00Z') — the old
+    // non-string-only check skipped those, so recipients saw the raw
+    // timestamp. Format anything that parses as a date; a value that
+    // doesn't parse (e.g. 'in 7 days') passes through untouched.
+    if (p.expires_at) {
       try {
-        p.expires_at = new Date(p.expires_at).toLocaleDateString(undefined, {
-          weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
-        });
+        var expDate = new Date(p.expires_at);
+        if (!isNaN(expDate.getTime())) {
+          p.expires_at = expDate.toLocaleDateString('en-US', {
+            weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
+          });
+        }
       } catch (e) { /* leave as-is */ }
-    } else if (!p.expires_at) {
+    } else {
       p.expires_at = 'in 7 days';
     }
     if (!p.accept_url) p.accept_url = appUrl();
@@ -844,8 +851,13 @@ function renderBlocks(blocks, params, ctxIn) {
     rows += renderBlock({ type: 'footer', address: branding.footer_address || '' }, ctx);
   }
   // Wrap in a centered max-width table — email-safe centering.
+  // font-family on the wrapper: without it, clients that default <body>
+  // to a serif (and the admin preview iframe) rendered every title/text
+  // block in Times. Gmail/Apple inherit from the table; Outlook falls
+  // back to its own Segoe default, which matches the stack anyway.
   return '<table role="presentation" cellpadding="0" cellspacing="0" border="0" ' +
-    'style="width:100%;max-width:600px;margin:0 auto;background:#fff;border:1px solid #e5e7eb;border-radius:8px;">' +
+    'style="width:100%;max-width:600px;margin:0 auto;background:#fff;border:1px solid #e5e7eb;border-radius:8px;' +
+    "font-family:Inter,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;" + '">' +
     rows +
   '</table>';
 }
