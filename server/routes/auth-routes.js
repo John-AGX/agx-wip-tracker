@@ -246,11 +246,18 @@ router.post('/register', requireAuth, requireRole('admin'), async (req, res) => 
     try {
       const { sendEmail } = require('../email');
       const { newUserInvite } = require('../email-templates');
+      // Inviter name: the CURRENT name on file, not the JWT claim (which
+      // is frozen at login and goes stale if the name was edited since).
+      let inviterName = req.user && req.user.name;
+      try {
+        const inv = await pool.query('SELECT name FROM users WHERE id = $1', [req.user.id]);
+        if (inv.rows[0] && inv.rows[0].name) inviterName = inv.rows[0].name;
+      } catch (_) { /* JWT-claim fallback */ }
       const tpl = newUserInvite({
         name: name,
         email: email.toLowerCase().trim(),
         password: password,
-        invitedBy: req.user && req.user.name ? req.user.name : 'An admin'
+        invitedBy: inviterName || 'An admin'
       });
       sendEmail({
         to: email.toLowerCase().trim(),
@@ -596,11 +603,17 @@ router.put('/users/:id/password', requireAuth, requireRole('admin'), async (req,
     try {
       const { sendEmail } = require('../email');
       const { passwordReset } = require('../email-templates');
+      // Current name on file, not the (possibly stale) JWT claim.
+      let resetterName = req.user && req.user.name;
+      try {
+        const rn = await pool.query('SELECT name FROM users WHERE id = $1', [req.user.id]);
+        if (rn.rows[0] && rn.rows[0].name) resetterName = rn.rows[0].name;
+      } catch (_) { /* JWT-claim fallback */ }
       const tpl = passwordReset({
         name: targetUser.name,
         email: targetUser.email,
         password: newPassword,
-        resetBy: req.user && req.user.name ? req.user.name : 'An admin'
+        resetBy: resetterName || 'An admin'
       });
       sendEmail({
         to: targetUser.email,

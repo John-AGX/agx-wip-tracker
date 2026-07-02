@@ -196,10 +196,16 @@ router.post('/invites', requireAuth, requireSystemAdmin, async (req, res) => {
     // (with token + accept URL) so the admin can copy/paste even if
     // the email fails.
     try {
+      // Inviter name: current name on file, not the (possibly stale) JWT claim.
+      let inviterName = req.user.name;
+      try {
+        const inv = await pool.query('SELECT name FROM users WHERE id = $1', [req.user.id]);
+        if (inv.rows[0] && inv.rows[0].name) inviterName = inv.rows[0].name;
+      } catch (_) { /* JWT-claim fallback */ }
       await sendForEvent('org_invite', {
         platform_name: process.env.PLATFORM_NAME || 'Project 86',
         org_name: orgName,
-        invited_by: req.user.name || req.user.email || 'A system admin',
+        invited_by: inviterName || req.user.email || 'A system admin',
         accept_url: acceptUrl,
         expires_at: expiresAt
       }, { to: email });
