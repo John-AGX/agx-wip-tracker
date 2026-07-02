@@ -3886,11 +3886,14 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
   const MAX_BUILTIN_REOPENS = 6;
   let builtinReopens = 0;
   let carriedBuiltinText = '';
-  // A reopened stream REPLAYS the in-flight turn's events (same sevt_* ids) —
-  // without this dedupe the client saw the answer text twice and duplicate tool
-  // chips after a builtin-tool reopen. Track processed event ids across passes and
-  // skip replays entirely.
+  // A reopened stream REPLAYS the in-flight turn's events — without dedupe the
+  // client saw the answer text twice after a builtin-tool reopen. Replayed events
+  // can arrive with DIFFERENT sevt_* ids (observed live), so we dedupe BOTH ways:
+  // by event id (cheap, catches same-id replays) and by text-block content
+  // (catches re-issued ids; skip is gated on builtinReopens>0 so a normal
+  // single-pass turn can never false-skip a legitimately repeated block).
   const seenTurnEventIds = new Set();
+  const relayedTextBlocks = new Set();
   const SILENT_STOP_NUDGE_TEXTS = [
     'The tool results above completed successfully. Please summarize ' +
     'them in one or two sentences for the user before ending your turn.',
@@ -4135,6 +4138,13 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
               if (!b || !b.type) continue;
               seenBlockTypes[b.type] = (seenBlockTypes[b.type] || 0) + 1;
               if (b.type === 'text' && typeof b.text === 'string') {
+                // Content-level replay dedupe: replayed messages can carry NEW
+                // event ids, so the id guard alone missed them (answers arrived
+                // doubled). Skip an exact-duplicate block — but only once a
+                // builtin reopen actually happened, so a normal single-pass turn
+                // can never false-skip a legitimately repeated block.
+                if (builtinReopens > 0 && relayedTextBlocks.has(b.text)) continue;
+                relayedTextBlocks.add(b.text);
                 assistantText += b.text;
                 send({ delta: b.text });
               } else if (b.type === 'server_tool_use') {
