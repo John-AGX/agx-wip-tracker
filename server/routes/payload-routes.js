@@ -60,6 +60,32 @@ const VALID_SOURCES = new Set([
 const { generateFilename, sanitizeShortName, newPayloadId } = dispatcher;
 
 // ──────────────────────────────────────────────────────────────────
+// GET /api/payloads — recent payloads for the caller (own rows + org-wide
+// watcher rows). Lean columns only; drives the Crew Activity panel's
+// "Scribe drafts" section. Declared BEFORE /:id so the root path can't be
+// swallowed by the param route.
+// ──────────────────────────────────────────────────────────────────
+router.get('/', requireAuth, requireOrg, async (req, res) => {
+  try {
+    const limit = Math.min(Number(req.query.limit) || 15, 50);
+    const r = await pool.query(
+      `SELECT id, title, summary, status, apply_summary, emitting_agent_key,
+              created_at, applied_at
+         FROM payloads
+        WHERE organization_id = $1
+          AND (user_id = $2 OR user_id IS NULL)
+        ORDER BY created_at DESC
+        LIMIT $3`,
+      [req.user.organization_id, req.user.id, limit]
+    );
+    res.json({ payloads: r.rows });
+  } catch (e) {
+    console.error('[payloads] GET / error:', e && e.stack || e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ──────────────────────────────────────────────────────────────────
 // GET /api/payloads/:id
 //   Single-row fetch for preview drawer. Authorization: same as list
 //   (own row OR org-wide watcher row).

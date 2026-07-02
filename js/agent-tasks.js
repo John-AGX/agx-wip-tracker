@@ -85,7 +85,7 @@
     document.body.appendChild(b);
     var ov = document.createElement('div');
     ov.className = 'p86-bgt-overlay';
-    ov.innerHTML = '<div class="p86-bgt-panel"><div class="p86-bgt-head"><span>Background tasks</span><span style="display:flex;gap:8px;align-items:center"><button class="p86-bgt-bell" title="Get phone/desktop notifications when a task finishes or needs you" style="display:none;background:none;border:1px solid rgba(255,255,255,.18);border-radius:8px;color:#aeb4c4;font:600 11px/1 system-ui,sans-serif;padding:5px 9px;cursor:pointer">🔔 Enable notifications</button><button class="p86-bgt-x" title="Close">✕</button></span></div><div class="p86-bgt-list"></div></div>';
+    ov.innerHTML = '<div class="p86-bgt-panel"><div class="p86-bgt-head"><span>Crew activity</span><span style="display:flex;gap:8px;align-items:center"><button class="p86-bgt-bell" title="Get phone/desktop notifications when a task finishes or needs you" style="display:none;background:none;border:1px solid rgba(255,255,255,.18);border-radius:8px;color:#aeb4c4;font:600 11px/1 system-ui,sans-serif;padding:5px 9px;cursor:pointer">🔔 Enable notifications</button><button class="p86-bgt-x" title="Close">✕</button></span></div><div class="p86-bgt-list"></div><div class="p86-bgt-scribe"></div></div>';
     ov.addEventListener('click', function (e) { if (e.target === ov) close(); });
     ov.querySelector('.p86-bgt-x').addEventListener('click', close);
     ov.querySelector('.p86-bgt-bell').addEventListener('click', enablePush);
@@ -111,7 +111,7 @@
     if (_attention > 0) { badge.style.display = ''; badge.textContent = _attention; }
     else { badge.style.display = 'none'; }
     var running = _jobs.filter(function (j) { return j.status === 'running'; }).length;
-    b.querySelector('.p86-bgt-txt').textContent = running ? (running + ' running…') : 'Background tasks';
+    b.querySelector('.p86-bgt-txt').textContent = running ? (running + ' running…') : 'Crew activity';
   }
 
   function renderPanel() {
@@ -208,8 +208,37 @@
       _attention = (d && d.attention) || 0;
       ensureDom();
       renderLauncher();
-      if (_panelOpen) renderPanel();
+      if (_panelOpen) { renderPanel(); renderScribe(); }
     }).catch(function () { /* not authed / offline — stay quiet */ });
+  }
+
+  // "Scribe drafts" section — the crew's write work (payloads), so the panel is a
+  // one-stop crew-activity summary: tasks above, drafts below.
+  function renderScribe() {
+    var host = document.querySelector('.p86-bgt-scribe'); if (!host) return;
+    fetch('/api/payloads?limit=8', { credentials: 'same-origin' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        var rows = (d && d.payloads) || [];
+        if (!rows.length) { host.innerHTML = ''; return; }
+        var sMeta = function (s) {
+          if (s === 'applied') return { label: 'Applied', color: '#34d399' };
+          if (s === 'rejected') return { label: 'Rejected', color: '#8b90a5' };
+          if (s === 'apply_failed' || s === 'failed') return { label: 'Failed', color: '#f87171' };
+          return { label: 'Awaiting review', color: '#fbbf24' };
+        };
+        host.innerHTML =
+          '<div style="padding:4px 14px 2px;color:#8b90a5;font:700 11px/1 system-ui,sans-serif;letter-spacing:.4px;text-transform:uppercase">Scribe drafts</div>' +
+          '<div style="padding:4px 8px 10px">' +
+          rows.map(function (p) {
+            var m = sMeta(p.status);
+            return '<div class="p86-bgt-item"><div class="p86-bgt-t"><span>' + esc(p.title || p.id) + '</span>' +
+              '<span class="p86-bgt-pill" style="background:' + m.color + '22;color:' + m.color + '">' + esc(m.label) + '</span></div>' +
+              (p.apply_summary || p.summary ? '<div class="p86-bgt-body">' + esc(String(p.apply_summary || p.summary).slice(0, 140)) + '</div>' : '') +
+              '</div>';
+          }).join('') + '</div>';
+      })
+      .catch(function () { host.innerHTML = ''; });
   }
 
   function markAllSeen() {
@@ -223,6 +252,7 @@
     _panelOpen = true;
     document.querySelector('.p86-bgt-overlay').classList.add('on');
     renderPanel();
+    renderScribe();
     markAllSeen();
     refresh();
   }

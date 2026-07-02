@@ -2275,12 +2275,23 @@ function acquireUserTurnLock(res, userId) {
     return false;
   }
   _activeChatTurns.set(userId, Date.now());
-  // Clear on ANY response termination — normal end (res.end → 'finish'),
-  // client disconnect ('close'), or crash. Idempotent.
-  const clear = () => { _activeChatTurns.delete(userId); };
-  res.on('finish', clear);
-  res.on('close', clear);
+  // Deliberately NO release on res 'close': a client disconnect does NOT end the
+  // turn — the server keeps driving the session and persists the reply (that's the
+  // "close the app, nothing is lost" continuity). Releasing on 'close' let a
+  // returning user start a SECOND turn that raced the still-running first one on
+  // the same session — the "server error" John hit. The turn's OWN completion
+  // releases (releaseUserTurnLock at each runV2SessionStream call site + catch);
+  // the TTL above backstops crashes.
   return true;
+}
+function releaseUserTurnLock(userId) {
+  if (userId != null) _activeChatTurns.delete(userId);
+}
+// Is a turn currently in flight for this user? Powers the client's "still working
+// on your last message" resume banner after an app close / reload.
+function userTurnInFlight(userId) {
+  const startedAt = _activeChatTurns.get(userId);
+  return !!(startedAt && (Date.now() - startedAt) < ACTIVE_TURN_TTL_MS);
 }
 
 // Build an Anthropic image content block from a base64-encoded image
@@ -11854,27 +11865,34 @@ async function execScribeWrite(tu, ctx) {
       if (r.rows.length) orgId = r.rows[0].organization_id;
     } catch (_) {}
   }
-  const result = await driveScribeWrite(
-    { instruction: String(instruction) },
-    { userId: (ctx && ctx.userId) || null, orgId, parentSession: (ctx && ctx.parentSession) || null }
-  );
-  if (!result || !result.ok) {
-    return { tier: 'auto', error: 'The Scribe could not complete that write: ' + ((result && result.error) || 'unknown error') + '. Refine the instruction (resolve the entity ids + exact fields) and try again.' };
-  }
-  // Keep the SSE meta LEAN. The dry-run changeset captures the full
-  // before/after entity blob — for a real job that's hundreds of KB, which
-  // blows up the tool_applied SSE `data:` line and breaks the client's line
-  // parser (the event silently never renders). Carry only a short
-  // apply_summary string; the card fetches the full dry-run diff on demand
-  // (POST /api/payloads/:id/apply?dry_run=true) via its Preview button.
-  const meta = result.meta
-    ? Object.assign({}, result.meta, { scribe: true, apply_summary: result.applySummary || null })
-    : null;
-  const summaryForModel =
-    'Scribe drafted the change' +
-    (result.applySummary ? ': ' + result.applySummary : (result.title ? ' (' + result.title + ')' : '')) +
-    '. The review card is now in the chat — do NOT narrate it; let the user approve or reject.';
-  return { tier: 'auto', summary: summaryForModel, meta };
+  // ALWAYS-BACKGROUND SCRIBE (John's call, 2026-07-01): the hand-off returns
+  // immediately; the Scribe drafts in a DETACHED run (it took 30-60s of dead air
+  // blocking 86's turn), and when the draft is ready the user gets a push + a chat
+  // message pointing at the review card in the Payloads panel. Nothing is lost if
+  // they leave mid-draft. Failures notify the same way.
+  const scribeCtx = { userId: (ctx && ctx.userId) || null, orgId, parentSession: (ctx && ctx.parentSession) || null };
+  const instr = String(instruction);
+  Promise.resolve()
+    .then(function () { return driveScribeWrite({ instruction: instr }, scribeCtx); })
+    .then(async function (result) {
+      const uid = scribeCtx.userId;
+      if (!uid) return;
+      if (result && result.ok) {
+        const title = (result.meta && result.meta.title) || result.title || 'a change';
+        const line = result.applySummary ? ('\n\n' + String(result.applySummary).slice(0, 500)) : '';
+        try { await postAgentJobToThread({ user_id: uid }, '✍️ **Scribe finished drafting — ' + title + '**' + line + '\n\n_Review & approve it in the Payloads section of the chat sidebar._'); } catch (_) {}
+        try { const push = require('../push'); await push.sendPush(uid, { title: '✍️ Scribe drafted: ' + String(title).slice(0, 80), body: String(result.applySummary || 'Review & approve in Project 86').slice(0, 200), url: '/', tag: 'scribe' }); } catch (_) {}
+      } else {
+        const errMsg = (result && result.error) || 'unknown error';
+        try { await postAgentJobToThread({ user_id: uid }, '⚠️ **Scribe couldn\'t complete that draft**: ' + String(errMsg).slice(0, 400) + '\n\n_Re-ask with more specifics (exact entity + fields) and I\'ll hand it back to the Scribe._'); } catch (_) {}
+        try { const push = require('../push'); await push.sendPush(uid, { title: '⚠️ Scribe draft failed', body: String(errMsg).slice(0, 200), url: '/', tag: 'scribe' }); } catch (_) {}
+      }
+    })
+    .catch(function (e) { console.warn('[scribe-bg] detached draft failed:', e && e.message); });
+  return {
+    tier: 'auto',
+    summary: 'The Scribe is drafting that change in the BACKGROUND. Tell the user it\'s being drafted and they\'ll get a notification with the review card when it\'s ready (usually under a minute) — do NOT wait for it, do NOT narrate a card, and do NOT call scribe_write again for this same change.'
+  };
 }
 
 // driveEscalateTo86 — the Assistant → 86 handoff (mirror of driveScribeWrite).
@@ -13866,14 +13884,24 @@ router.post('/86/chat', requireAuth, requireOrg, aiChatLimiter, aiChatHourlyLimi
         }
       }
     });
+    releaseUserTurnLock(req.user && req.user.id);
   } catch (e) {
     console.error('POST /86/chat error:', e);
+    releaseUserTurnLock(req.user && req.user.id);
     try {
       res.write('data: ' + JSON.stringify({ error: e.message || 'Server error' }) + '\n\n');
       res.write('data: [DONE]\n\n');
       res.end();
     } catch (_) {}
   }
+});
+
+// GET /api/ai/turn-status — is a chat turn still running server-side for this
+// user? The client shows a "still working on your last message" resume banner
+// after an app close / reload, then reloads history when it flips false.
+router.get('/turn-status', requireAuth, (req, res) => {
+  const inFlight = userTurnInFlight(req.user && req.user.id);
+  res.json({ in_flight: inFlight });
 });
 
 router.post('/86/chat/continue', requireAuth, requireOrg, aiChatLimiter, aiChatHourlyLimiter, async (req, res) => {
@@ -14057,8 +14085,10 @@ router.post('/86/chat/continue', requireAuth, requireOrg, aiChatLimiter, aiChatH
         );
       }
     });
+    releaseUserTurnLock(req.user && req.user.id);
   } catch (e) {
     console.error('POST /86/chat/continue error:', e);
+    releaseUserTurnLock(req.user && req.user.id);
     try {
       res.write('data: ' + JSON.stringify({ error: e.message || 'Server error' }) + '\n\n');
       res.write('data: [DONE]\n\n');

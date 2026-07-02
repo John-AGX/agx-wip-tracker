@@ -1838,10 +1838,51 @@
       .then(function(res) {
         _messages = res.messages || [];
         renderMessages();
+        checkResumeInFlight();
       }).catch(function() {
         _messages = [];
         renderMessages();
       });
+  }
+
+  // Turn-continuity resume ("close the app, nothing is lost"): if a chat turn is
+  // still running SERVER-side when the panel (re)opens — the user sent a message
+  // and closed/reloaded — show a working banner instead of silence, poll
+  // /api/ai/turn-status, and reload history when the turn lands so the persisted
+  // answer appears right where they left off.
+  var _resumePolling = false;
+  function checkResumeInFlight() {
+    if (_streaming || _resumePolling) return;   // this tab owns a live stream — nothing to resume
+    fetch('/api/ai/turn-status', { headers: authHeaders() })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        if (!d || !d.in_flight || _streaming) return;
+        var box = document.getElementById('ai-messages');
+        if (!box) return;
+        var note = document.createElement('div');
+        note.id = 'ai-resume-note';
+        note.style.cssText = 'margin:8px 0;padding:9px 12px;border:1px dashed rgba(79,140,255,.5);border-radius:9px;color:#7eb0ff;font-size:12px;';
+        note.textContent = '⏳ Still working on your last message — the answer will appear here when it’s done.';
+        box.appendChild(note);
+        if (typeof scrollToBottom === 'function') { try { scrollToBottom(); } catch (_) {} }
+        _resumePolling = true;
+        var tries = 0;
+        (function poll() {
+          if (tries++ > 70) { _resumePolling = false; return; }   // ~6 min cap (matches the lock TTL)
+          setTimeout(function () {
+            fetch('/api/ai/turn-status', { headers: authHeaders() })
+              .then(function (r) { return r.ok ? r.json() : null; })
+              .then(function (d2) {
+                if (d2 && d2.in_flight) return poll();
+                _resumePolling = false;
+                var n = document.getElementById('ai-resume-note'); if (n) n.remove();
+                loadHistory();   // the finished turn is persisted — pull it in
+              })
+              .catch(function () { _resumePolling = false; });
+          }, 5000);
+        })();
+      })
+      .catch(function () {});
   }
 
   // ──────────────────────────────────────────────────────────────
