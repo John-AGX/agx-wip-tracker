@@ -467,6 +467,135 @@ function estimatesOpenViews(anchor) {
 window.estimatesOpenFilter = estimatesOpenFilter;
 window.estimatesOpenViews = estimatesOpenViews;
 
+// ── Multi-select + bulk actions (mirrors the Leads/Jobs bulk bars) ────
+var _estSelected = new Set();   // estimate ids ticked; survives re-render
+function p86EstSelect(id, checked) {
+    if (checked) _estSelected.add(id); else _estSelected.delete(id);
+    updateEstimatesBulkBar(); syncEstimatesSelectAll();
+}
+function p86EstSelectAll(checked) {
+    document.querySelectorAll('#estimates-table .est-check').forEach(function(b) {
+        b.checked = checked;
+        var id = b.getAttribute('data-id');
+        if (checked) _estSelected.add(id); else _estSelected.delete(id);
+    });
+    updateEstimatesBulkBar();
+}
+function p86EstClearSelection() {
+    _estSelected.clear();
+    document.querySelectorAll('#estimates-table .est-check').forEach(function(b) { b.checked = false; });
+    syncEstimatesSelectAll(); updateEstimatesBulkBar();
+}
+function syncEstimatesSelectAll() {
+    var all = document.getElementById('estimates-check-all');
+    if (!all) return;
+    var boxes = document.querySelectorAll('#estimates-table .est-check');
+    var checked = 0;
+    boxes.forEach(function(b) { if (b.checked) checked++; });
+    all.checked = boxes.length > 0 && checked === boxes.length;
+    all.indeterminate = checked > 0 && checked < boxes.length;
+}
+function updateEstimatesBulkBar() {
+    var bar = document.getElementById('estimates-bulkbar');
+    if (!bar) return;
+    var n = _estSelected.size;
+    if (!n) { bar.style.display = 'none'; bar.innerHTML = ''; return; }
+    bar.style.cssText = 'display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 12px;margin-bottom:8px;background:rgba(79,140,255,0.08);border:1px solid rgba(79,140,255,0.30);border-radius:8px;';
+    var btnStyle = 'padding:5px 10px;font-size:12px;border-radius:7px;border:1px solid var(--border,#2e3346);background:transparent;color:var(--text,#eef0f6);cursor:pointer;';
+    bar.innerHTML =
+        '<span style="font-size:13px;color:var(--text,#eef0f6);font-weight:600;white-space:nowrap;">' + n + ' selected</span>' +
+        '<button type="button" onclick="window.p86EstExportSelected()" style="' + btnStyle + '" title="Export selected to Excel">⬇ Export</button>' +
+        '<button type="button" onclick="window.p86EstBulkMarkSent()" style="' + btnStyle + '" title="Record that these proposals were sent">Mark sent</button>' +
+        '<span style="flex:1 1 auto;"></span>' +
+        '<button type="button" onclick="window.p86EstDeleteSelected()" style="padding:5px 12px;font-size:12px;font-weight:600;border-radius:7px;border:1px solid rgba(248,113,113,.5);background:#f87171;color:#1a1d27;cursor:pointer;">Delete ' + n + '</button>' +
+        '<button type="button" onclick="window.p86EstClearSelection()" style="' + btnStyle + '">Clear</button>';
+}
+function p86EstBulkMarkSent() {
+    var ids = Array.from(_estSelected);
+    if (!ids.length) return;
+    var proms = ids.map(function(id) {
+        return window.p86Api.estimates.markSent(id, true).then(function(r) {
+            var est = (appData.estimates || []).find(function(e) { return e.id === id; });
+            if (est) { est.sent_at = (r && r.sent_at) || new Date().toISOString(); if (r && 'sent_count' in r) est.sent_count = r.sent_count; }
+            return true;
+        }).catch(function() { return false; });
+    });
+    Promise.all(proms).then(function(res) {
+        var ok = res.filter(Boolean).length, fail = res.length - ok;
+        if (window.p86Toast) window.p86Toast('Marked sent: ' + ok + (fail ? ', ' + fail + ' failed' : '') + '.', fail ? 'error' : 'success');
+        _estSelected.clear();
+        renderEstimatesList();
+    });
+}
+function p86EstDeleteSelected() {
+    var ids = Array.from(_estSelected);
+    if (!ids.length) return;
+    if (!confirm('Delete ' + ids.length + ' estimate(s)? This cannot be undone.\n\nLocked (sold) estimates and ones you don\'t own may be skipped by the server.')) return;
+    var proms = ids.map(function(id) {
+        return window.p86Api.estimates.remove(id).then(function() { return id; }).catch(function(err) {
+            // 404 = already gone server-side — treat as deleted locally too.
+            return (err && err.status === 404) ? id : null;
+        });
+    });
+    Promise.all(proms).then(function(res) {
+        var deleted = res.filter(Boolean);
+        var delSet = new Set(deleted);
+        appData.estimates = (appData.estimates || []).filter(function(e) { return !delSet.has(e.id); });
+        if (appData.estimateLines) appData.estimateLines = appData.estimateLines.filter(function(l) { return !delSet.has(l.estimateId); });
+        if (appData.estimateAlternates) appData.estimateAlternates = appData.estimateAlternates.filter(function(a) { return !delSet.has(a.estimateId); });
+        var fail = ids.length - deleted.length;
+        if (window.p86Toast) window.p86Toast('Deleted ' + deleted.length + ' estimate(s)' + (fail ? ' (' + fail + ' skipped — locked or not yours)' : '') + '.', fail ? 'error' : 'success');
+        _estSelected.clear();
+        renderEstimatesList();
+    });
+}
+function p86EstExportSelected() {
+    var rows = (appData.estimates || []).filter(function(e) { return _estSelected.has(e.id); });
+    if (!rows.length) { if (window.p86Toast) window.p86Toast('Nothing selected.', 'error'); return; }
+    var load = (typeof XLSX !== 'undefined') ? Promise.resolve(window.XLSX) : new Promise(function(resolve, reject) {
+        var ex = document.getElementById('p86-xlsx-cdn');
+        if (ex) { ex.addEventListener('load', function() { resolve(window.XLSX); }); ex.addEventListener('error', reject); return; }
+        var s = document.createElement('script');
+        s.id = 'p86-xlsx-cdn';
+        s.src = 'https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js';
+        s.onload = function() { resolve(window.XLSX); };
+        s.onerror = function() { reject(new Error('Could not load the Excel library.')); };
+        document.head.appendChild(s);
+    });
+    load.then(function(XLSX) {
+        var header = ['Title', 'Client', 'Community', 'Job Type', 'Status', 'Lines', 'Base Cost', 'Markup %', 'Client Price', 'Margin %', 'Sent', 'Created', 'Updated', 'Estimate ID'];
+        var aoa = [header];
+        rows.forEach(function(e) {
+            var t = e.__totals || computeEstimateTotals(e);
+            var margin = t.markedUp > 0 ? ((t.markedUp - t.baseCost) / t.markedUp) * 100 : 0;
+            aoa.push([
+                e.title || '', e.client || '', e.community || '', e.jobType || '',
+                estStatusMeta(e).label, t.lineCount,
+                Number(t.baseCost || 0), Number((t.blendedMarkup || 0).toFixed(1)),
+                Number(t.clientPrice || 0), Number(margin.toFixed(1)),
+                e.sent_at ? String(e.sent_at).slice(0, 10) : '',
+                e.created_at ? String(e.created_at).slice(0, 10) : '',
+                e.updated_at ? String(e.updated_at).slice(0, 10) : '',
+                e.id
+            ]);
+        });
+        var ws = XLSX.utils.aoa_to_sheet(aoa);
+        ws['!cols'] = header.map(function(h) { return { wch: h === 'Title' ? 32 : h === 'Estimate ID' ? 26 : 14 }; });
+        var wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'Estimates');
+        XLSX.writeFile(wb, 'Estimates_' + new Date().toISOString().slice(0, 10) + '.xlsx');
+        if (window.p86Toast) window.p86Toast('Exported ' + rows.length + ' estimate(s).', 'success');
+    }).catch(function(e) {
+        if (window.p86Toast) window.p86Toast('Export failed: ' + (e && e.message || 'error'), 'error');
+    });
+}
+window.p86EstSelect = p86EstSelect;
+window.p86EstSelectAll = p86EstSelectAll;
+window.p86EstClearSelection = p86EstClearSelection;
+window.p86EstBulkMarkSent = p86EstBulkMarkSent;
+window.p86EstDeleteSelected = p86EstDeleteSelected;
+window.p86EstExportSelected = p86EstExportSelected;
+
 function renderEstimatesList() {
             const listEl = document.getElementById('estimates-list');
             const searchEl = document.getElementById('estimates-search');
@@ -509,6 +638,7 @@ function renderEstimatesList() {
             });
 
             const headerRow =
+                '<th class="est-check-cell" style="width:34px;text-align:center;"><input type="checkbox" id="estimates-check-all" title="Select all shown" onclick="window.p86EstSelectAll(this.checked)"></th>' +
                 estimatesHeaderCell('Title',         'title') +
                 estimatesHeaderCell('Client / Community', 'client') +
                 estimatesHeaderCell('Status',        'status') +
@@ -528,7 +658,7 @@ function renderEstimatesList() {
                     '<div class="p86-tbl-scroll">' +
                         '<table id="estimates-table" class="dense-table">' +
                             '<thead><tr>' + headerRow + '</tr></thead>' +
-                            '<tbody><tr><td colspan="10" style="padding:24px;text-align:center;color:var(--text-dim,#888);">' + msg + '</td></tr></tbody>' +
+                            '<tbody><tr><td colspan="11" style="padding:24px;text-align:center;color:var(--text-dim,#888);">' + msg + '</td></tr></tbody>' +
                         '</table>' +
                     '</div>';
                 return;
@@ -573,6 +703,7 @@ function renderEstimatesList() {
                     ? escapeHTML(fmtRelativeDate(est.sent_at)) + (est.sent_count > 1 ? '<span style="color:var(--text-dim,#888);"> ·' + est.sent_count + '×</span>' : '')
                     : '<span style="color:var(--text-dim,#666);">—</span>';
                 return '<tr style="cursor:pointer;" onclick="editEstimate(\'' + est.id + '\')">' +
+                    '<td class="est-check-cell" style="width:34px;text-align:center;" onclick="event.stopPropagation();"><input type="checkbox" class="est-check" data-id="' + est.id + '"' + (_estSelected.has(est.id) ? ' checked' : '') + ' onclick="event.stopPropagation();window.p86EstSelect(\'' + est.id + '\',this.checked);"></td>' +
                     '<td data-col="title"><strong>' + escapeHTML(est.title || '(untitled)') + '</strong>' + titleSuffix + '</td>' +
                     '<td data-col="client">' + clientLabel + '</td>' +
                     '<td data-col="status" style="white-space:nowrap;"><span class="est-status-badge" style="color:' + sm.color + ';background:' + sm.bg + ';">' + sm.label + '</span>' + statusAction + '</td>' +
@@ -592,12 +723,14 @@ function renderEstimatesList() {
             // overrides — `.dense-table` already carries the look. This
             // matches how the Jobs list renders.
             listEl.innerHTML =
+                '<div id="estimates-bulkbar" style="display:none;"></div>' +
                 '<div class="p86-tbl-scroll">' +
                     '<table id="estimates-table" class="dense-table">' +
                         '<thead><tr>' + headerRow + '</tr></thead>' +
                         '<tbody>' + rowsHtml + '</tbody>' +
                     '</table>' +
                 '</div>';
+            syncEstimatesSelectAll(); updateEstimatesBulkBar();
 
             // Reorderable / resizable / freezable columns + internal scroll.
             if (window.p86Tables) window.p86Tables.enhance('estimates');
