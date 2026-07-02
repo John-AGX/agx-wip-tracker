@@ -848,10 +848,12 @@
                             </label>
                         </div>
 
+                        <div id="jobs-bulkbar" style="display:none;"></div>
                         <div class="table-container">
                             <table id="jobs-table">
                                 <thead>
                                     <tr>
+                                        <th class="job-check-cell" style="width:34px;text-align:center;"><input type="checkbox" id="jobs-check-all" title="Select all shown" onclick="window.p86JobsSelectAll(this.checked)"></th>
                                         <th data-col="idx" style="width: 40px;">#</th>
                                         <th class="sortable" data-col="name" data-sort="name" onclick="sortJobsTable('name')">Job # / Name</th>
                                         <th class="sortable" data-col="client" data-sort="client" onclick="sortJobsTable('client')">Client</th>
@@ -3240,7 +3242,7 @@
          estimate-preview + the upcoming change-order-editor. Loads
          BEFORE any of them so window.p86Pricing is ready. -->
     <script src="js/pricing-pipeline.js?v=1"></script>
-    <script src="js/jobs.js?v=108"></script>
+    <script src="js/jobs.js?v=109"></script>
     <script src="js/job-workflow-ui.js?v=4"></script>
     <script src="js/estimates.js?v=47"></script>
     <script src="js/proposal.js?v=25"></script>

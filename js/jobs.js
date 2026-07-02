@@ -1135,6 +1135,167 @@ function renderJobsMain() {
             });
         };
 
+        // ── Multi-select + bulk actions (mirrors the Leads bulk bar) ─────
+        let _jobsSelected = new Set();   // job ids ticked; survives re-render
+        function p86JobsSelect(id, checked) {
+            if (checked) _jobsSelected.add(id); else _jobsSelected.delete(id);
+            updateJobsBulkBar(); syncJobsSelectAll();
+        }
+        function p86JobsSelectAll(checked) {
+            document.querySelectorAll('#jobs-table .job-check').forEach(function(b) {
+                b.checked = checked;
+                var id = b.getAttribute('data-id');
+                if (checked) _jobsSelected.add(id); else _jobsSelected.delete(id);
+            });
+            updateJobsBulkBar();
+        }
+        function p86JobsClearSelection() {
+            _jobsSelected.clear();
+            document.querySelectorAll('#jobs-table .job-check').forEach(function(b) { b.checked = false; });
+            syncJobsSelectAll(); updateJobsBulkBar();
+        }
+        function syncJobsSelectAll() {
+            var all = document.getElementById('jobs-check-all');
+            if (!all) return;
+            var boxes = document.querySelectorAll('#jobs-table .job-check');
+            var checked = 0;
+            boxes.forEach(function(b) { if (b.checked) checked++; });
+            all.checked = boxes.length > 0 && checked === boxes.length;
+            all.indeterminate = checked > 0 && checked < boxes.length;
+        }
+        function updateJobsBulkBar() {
+            var bar = document.getElementById('jobs-bulkbar');
+            if (!bar) return;
+            var n = _jobsSelected.size;
+            if (!n) { bar.style.display = 'none'; bar.innerHTML = ''; return; }
+            bar.style.cssText = 'display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 12px;margin-bottom:8px;background:rgba(79,140,255,0.08);border:1px solid rgba(79,140,255,0.30);border-radius:8px;';
+            var selStyle = 'padding:4px 6px;font-size:12px;border-radius:6px;border:1px solid var(--border,#2e3346);background:var(--card-bg,#161a2b);color:var(--text,#eef0f6);cursor:pointer;';
+            var btnStyle = 'padding:5px 10px;font-size:12px;border-radius:7px;border:1px solid var(--border,#2e3346);background:transparent;color:var(--text,#eef0f6);cursor:pointer;';
+            // Status options: the standard lifecycle set + any other statuses in use.
+            var std = ['In Progress', 'On Hold', 'Completed', 'Archived'];
+            var seen = {}; std.forEach(function(s) { seen[s] = true; });
+            (appData.jobs || []).forEach(function(j) { if (j.status && !seen[j.status]) { seen[j.status] = true; std.push(j.status); } });
+            var statusOpts = '<option value="">Set status…</option>' + std.map(function(s) { return '<option value="' + escapeHTML(s) + '">' + escapeHTML(s) + '</option>'; }).join('');
+            var assignHtml = '';
+            if (window.p86Auth && window.p86Auth.isAdmin && window.p86Auth.isAdmin()) {
+                var pms = (window.p86Admin && window.p86Admin.getActivePMs && window.p86Admin.getActivePMs()) || [];
+                assignHtml = '<select onchange="window.p86JobsBulkAssign(this.value,this.selectedOptions[0]&&this.selectedOptions[0].textContent);this.value=\'\';" style="' + selStyle + '"><option value="">Assign PM…</option>' +
+                    pms.map(function(u) { return '<option value="' + u.id + '">' + escapeHTML(u.name) + '</option>'; }).join('') + '</select>';
+            }
+            bar.innerHTML =
+                '<span style="font-size:13px;color:var(--text,#eef0f6);font-weight:600;white-space:nowrap;">' + n + ' selected</span>' +
+                '<button type="button" onclick="window.p86JobsExportSelected()" style="' + btnStyle + '" title="Export selected to Excel">⬇ Export</button>' +
+                '<select onchange="window.p86JobsBulkStatus(this.value);this.value=\'\';" style="' + selStyle + '">' + statusOpts + '</select>' +
+                assignHtml +
+                '<span style="flex:1 1 auto;"></span>' +
+                '<button type="button" onclick="window.p86JobsDeleteSelected()" style="padding:5px 12px;font-size:12px;font-weight:600;border-radius:7px;border:1px solid rgba(248,113,113,.5);background:#f87171;color:#1a1d27;cursor:pointer;">Delete ' + n + '</button>' +
+                '<button type="button" onclick="window.p86JobsClearSelection()" style="' + btnStyle + '">Clear</button>';
+        }
+        function jobsSelectedEditable() {
+            return appData.jobs.filter(function(j) { return _jobsSelected.has(j.id) && j._canEdit !== false; });
+        }
+        function p86JobsBulkStatus(v) {
+            if (!v) return;
+            var jobs = jobsSelectedEditable();
+            if (!jobs.length) { alert('No editable jobs selected.'); return; }
+            if (!confirm('Set ' + jobs.length + ' job(s) to "' + v + '"?')) return;
+            jobs.forEach(function(j) { j.status = v; });
+            saveData();
+            var skipped = _jobsSelected.size - jobs.length;
+            if (window.p86Toast) window.p86Toast('Status set on ' + jobs.length + ' job(s)' + (skipped ? ' (' + skipped + ' view-only skipped)' : '') + '.', 'success');
+            _jobsSelected.clear();
+            renderJobsTable();
+        }
+        function p86JobsBulkAssign(uid, uname) {
+            if (!uid) return;
+            var ids = Array.from(_jobsSelected);
+            if (!ids.length) return;
+            if (!confirm('Assign ' + ids.length + ' job(s) to ' + (uname || 'this PM') + '?')) return;
+            var proms = ids.map(function(id) {
+                return window.p86Api.jobs.reassignOwner(id, uid, false).then(function() {
+                    var j = appData.jobs.find(function(x) { return x.id === id; });
+                    if (j) { j.owner_id = Number(uid); j.pm = uname || j.pm; }
+                    return true;
+                }).catch(function() { return false; });
+            });
+            Promise.all(proms).then(function(res) {
+                var ok = res.filter(Boolean).length, fail = res.length - ok;
+                if (window.p86Toast) window.p86Toast('Reassigned ' + ok + ' job(s)' + (fail ? ', ' + fail + ' failed' : '') + '.', fail ? 'error' : 'success');
+                _jobsSelected.clear();
+                renderJobsTable();
+            });
+        }
+        function p86JobsDeleteSelected() {
+            var ids = Array.from(_jobsSelected);
+            if (!ids.length) return;
+            if (!confirm('Permanently delete ' + ids.length + ' job(s) and all their data? This cannot be undone.')) return;
+            var idSet = new Set(ids);
+            appData.jobs = appData.jobs.filter(function(j) { return !idSet.has(j.id); });
+            appData.buildings = appData.buildings.filter(function(b) { return !idSet.has(b.jobId); });
+            appData.phases = appData.phases.filter(function(p) { return !idSet.has(p.jobId); });
+            appData.changeOrders = appData.changeOrders.filter(function(c) { return !idSet.has(c.jobId); });
+            appData.subs = appData.subs.filter(function(s) { return !idSet.has(s.jobId); });
+            appData.purchaseOrders = (appData.purchaseOrders || []).filter(function(p) { return !idSet.has(p.jobId); });
+            appData.invoices = (appData.invoices || []).filter(function(i) { return !idSet.has(i.jobId); });
+            try {
+                var all = JSON.parse(localStorage.getItem('p86-nodegraphs') || '{}');
+                ids.forEach(function(id) { delete all[id]; });
+                localStorage.setItem('p86-nodegraphs', JSON.stringify(all));
+            } catch (e) {}
+            saveData();
+            // bulk-save only upserts — server-side delete per id or they resurrect.
+            if (window.p86Api && window.p86Api.isAuthenticated()) {
+                ids.forEach(function(id) { window.p86Api.jobs.remove(id).catch(function(err) { console.warn('Server delete failed for ' + id + ':', err.message); }); });
+            }
+            _jobsSelected.clear();
+            if (window.p86Toast) window.p86Toast('Deleted ' + ids.length + ' job(s).', 'success');
+            renderJobsTable();
+        }
+        function p86JobsExportSelected() {
+            var rows = appData.jobs.filter(function(j) { return _jobsSelected.has(j.id); });
+            if (!rows.length) { if (window.p86Toast) window.p86Toast('Nothing selected.', 'error'); return; }
+            var load = (typeof XLSX !== 'undefined') ? Promise.resolve(window.XLSX) : new Promise(function(resolve, reject) {
+                var ex = document.getElementById('p86-xlsx-cdn');
+                if (ex) { ex.addEventListener('load', function() { resolve(window.XLSX); }); ex.addEventListener('error', reject); return; }
+                var s = document.createElement('script');
+                s.id = 'p86-xlsx-cdn';
+                s.src = 'https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js';
+                s.onload = function() { resolve(window.XLSX); };
+                s.onerror = function() { reject(new Error('Could not load the Excel library.')); };
+                document.head.appendChild(s);
+            });
+            load.then(function(XLSX) {
+                var header = ['Job #', 'Title', 'Client', 'PM', 'Status', 'Type', 'Market', 'Total Income', '% Complete', 'Gross Profit', 'Margin %', 'Address', 'Job ID'];
+                var aoa = [header];
+                rows.forEach(function(j) {
+                    var w = getJobWIP(j.id);
+                    aoa.push([
+                        j.jobNumber || '', j.title || '', j.client || '', getJobOwnerName(j) || '',
+                        j.status || '', j.jobType || '', j.market || '',
+                        Number(w.totalIncome || 0), Number(j.pctComplete || 0),
+                        Number(w.jtdProfit || 0), Number((w.jtdMargin || 0).toFixed(1)),
+                        j.address || [j.street_address, j.city, j.state].filter(Boolean).join(', ') || '',
+                        j.id
+                    ]);
+                });
+                var ws = XLSX.utils.aoa_to_sheet(aoa);
+                ws['!cols'] = header.map(function(h) { return { wch: h === 'Title' || h === 'Address' ? 32 : h === 'Job ID' ? 24 : 14 }; });
+                var wb = XLSX.utils.book_new();
+                XLSX.utils.book_append_sheet(wb, ws, 'Jobs');
+                XLSX.writeFile(wb, 'Jobs_' + new Date().toISOString().slice(0, 10) + '.xlsx');
+                if (window.p86Toast) window.p86Toast('Exported ' + rows.length + ' job(s).', 'success');
+            }).catch(function(e) {
+                if (window.p86Toast) window.p86Toast('Export failed: ' + (e && e.message || 'error'), 'error');
+            });
+        }
+        window.p86JobsSelect = p86JobsSelect;
+        window.p86JobsSelectAll = p86JobsSelectAll;
+        window.p86JobsClearSelection = p86JobsClearSelection;
+        window.p86JobsBulkStatus = p86JobsBulkStatus;
+        window.p86JobsBulkAssign = p86JobsBulkAssign;
+        window.p86JobsDeleteSelected = p86JobsDeleteSelected;
+        window.p86JobsExportSelected = p86JobsExportSelected;
+
         function getFilteredJobs() {
             let jobs = appData.jobs;
             const filter = appState.currentStatusFilter;
@@ -1311,6 +1472,7 @@ function renderJobsMain() {
                 var pmCell = escapeHTML(getJobOwnerName(job));
                 if (readOnly) pmCell += ' <span style="font-size:9px;color:var(--text-dim,#888);margin-left:4px;">view only</span>';
                 row.innerHTML = `
+                    <td class="job-check-cell" style="width:34px;text-align:center;" onclick="event.stopPropagation();"><input type="checkbox" class="job-check" data-id="${escapeHTML(job.id)}" ${_jobsSelected.has(job.id) ? 'checked' : ''} onclick="event.stopPropagation();window.p86JobsSelect('${escapeHTML(job.id)}',this.checked);"></td>
                     <td data-col="idx">${index + 1}</td>
                     <td data-col="name"><strong>${job.jobNumber ? escapeHTML(job.jobNumber) + ' — ' : ''}${escapeHTML(job.title)}</strong>${typeLabel}</td>
                     <td data-col="client">${escapeHTML(job.client) || '—'}</td>
@@ -1326,6 +1488,7 @@ function renderJobsMain() {
 
             // Reorderable / resizable / freezable columns + internal scroll.
             if (window.p86Tables) window.p86Tables.enhance('jobs');
+            syncJobsSelectAll(); updateJobsBulkBar();
         }
 
         function sortJobsTable(column) {
