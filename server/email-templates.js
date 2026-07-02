@@ -657,6 +657,43 @@ function sanitizeBlockHtml(html) {
 }
 
 // Render a single block to HTML. Each block is one row in a stacked
+// ── System brand header — the app's sticky-header lockup, email-safe ──
+// Colors from the brand kit (images/project-86-lockup-dark.svg): navy
+// #0F172A, cyan #22D3EE, wordmark #F8FAFC. The wordmark mirrors
+// .header-wordmark in styles.css (Inter 200, 2.5px tracking); email
+// clients that strip webfonts fall back to Segoe/Roboto light.
+var BRAND_NAVY = '#0F172A';
+var BRAND_CYAN = '#22D3EE';
+var WORDMARK_CSS = "font-family:Inter,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-weight:200;letter-spacing:2.5px;";
+function brandLockupRow(style, appUrlStr) {
+  var icon = escapeAttr(appUrlStr + '/images/pwa/icon-192.png');
+  var s = String(style || 'bar').toLowerCase();
+  if (s === 'light') {
+    return '<tr><td style="padding:20px 24px 0;text-align:center;">' +
+      '<img src="' + icon + '" width="34" height="34" alt="" style="display:inline-block;vertical-align:middle;border-radius:7px;" />' +
+      '<span style="' + WORDMARK_CSS + 'font-size:16px;color:' + BRAND_NAVY + ';vertical-align:middle;padding-left:12px;">PROJECT&nbsp;86</span>' +
+      '<div style="height:2px;line-height:2px;font-size:2px;background:' + BRAND_CYAN + ';margin-top:14px;">&nbsp;</div>' +
+    '</td></tr>';
+  }
+  if (s === 'banner') {
+    return '<tr><td style="padding:0;">' +
+      '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:' + BRAND_NAVY + ';border-bottom:2px solid ' + BRAND_CYAN + ';"><tr>' +
+        '<td style="padding:22px 24px 18px;text-align:center;">' +
+          '<img src="' + icon + '" width="44" height="44" alt="Project 86" style="display:inline-block;border-radius:9px;" />' +
+          '<div style="' + WORDMARK_CSS + 'font-size:17px;color:#F8FAFC;margin-top:10px;">PROJECT&nbsp;86</div>' +
+        '</td></tr></table>' +
+    '</td></tr>';
+  }
+  // Default 'bar' — the app's sticky header, left-aligned.
+  return '<tr><td style="padding:0;">' +
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:' + BRAND_NAVY + ';border-bottom:2px solid ' + BRAND_CYAN + ';"><tr>' +
+      '<td style="padding:14px 24px;">' +
+        '<img src="' + icon + '" width="32" height="32" alt="Project 86" style="display:inline-block;vertical-align:middle;border-radius:6px;" />' +
+        '<span style="' + WORDMARK_CSS + 'font-size:16px;color:#F8FAFC;vertical-align:middle;padding-left:12px;">PROJECT&nbsp;86</span>' +
+      '</td></tr></table>' +
+  '</td></tr>';
+}
+
 // table so it survives every email client's layout engine.
 function renderBlock(block, ctx) {
   if (!block || typeof block !== 'object') return '';
@@ -667,23 +704,31 @@ function renderBlock(block, ctx) {
   var t = String(block.type || '').toLowerCase();
   switch (t) {
     case 'header': {
-      // System emails always wear the Project 86 logo (full P86 theme).
-      // Org emails use the org's logo — an admin-set logo_url wins, then
-      // the org branding kit, then P86 as a last resort so the header is
-      // never empty.
-      var logoSrc = (ctx.scope === 'system')
-        ? p86Logo
-        : (block.logo_url || ctx.orgLogoUrl || p86Logo);
-      var logo = '<img src="' + escapeAttr(logoSrc) + '" alt="" style="max-height:42px;display:block;margin:0 auto 10px;" />';
       var title = escapeHtml(block.title || '');
       var subtitle = block.subtitle
         ? '<div style="font-size:13px;color:#6b7280;text-align:center;margin-top:4px;">' + escapeHtml(block.subtitle) + '</div>'
         : '';
-      return '<tr><td style="padding:16px 24px 8px;text-align:center;">' +
-        logo +
+      var titleRow = '<tr><td style="padding:16px 24px 8px;text-align:center;">' +
         (title ? '<div style="font-size:22px;font-weight:700;color:#111827;line-height:1.2;">' + title + '</div>' : '') +
         subtitle +
       '</td></tr>';
+      if (ctx.scope === 'system') {
+        // System emails wear the APP'S STICKY-HEADER lockup (John's call,
+        // 2026-07-02): cube icon + tracked-out ultra-light "PROJECT 86"
+        // wordmark on the brand navy, cyan hairline under. Email-safe:
+        // PNG icon (Gmail blocks SVG), wordmark as real text with the
+        // Inter→Segoe/Roboto stack (webfonts don't survive most clients;
+        // letter-spacing does). block.brand_style picks the variant:
+        //   'bar' (default) — left-aligned navy bar, exactly like the app
+        //   'banner'        — centered navy banner, stacked lockup
+        //   'light'         — white header, navy wordmark, cyan hairline
+        return brandLockupRow(block.brand_style, appUrlStr) + titleRow;
+      }
+      // Org emails keep the centered-logo header: admin-set logo_url wins,
+      // then the org branding kit, then P86 so the header is never empty.
+      var logoSrc = block.logo_url || ctx.orgLogoUrl || p86Logo;
+      var logo = '<img src="' + escapeAttr(logoSrc) + '" alt="" style="max-height:42px;display:block;margin:0 auto 10px;" />';
+      return '<tr><td style="padding:16px 24px 0;text-align:center;">' + logo + '</td></tr>' + titleRow;
     }
     case 'text': {
       // text.html has already been sanitized on save, but re-sanitize

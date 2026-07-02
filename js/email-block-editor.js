@@ -588,12 +588,39 @@
     var rows = blocks.map(function(b) {
       var t = (b.type || '').toLowerCase();
       if (t === 'header') {
-        // System emails wear the P86 logo; org emails use the block/org logo.
-        var logoSrc = (scope === 'system') ? p86Logo : (b.logo_url || orgLogo || p86Logo);
-        var logo = logoSrc ? '<img src="' + escapeAttr(logoSrc) + '" alt="" style="max-height:42px;display:block;margin:0 auto 10px;" />' : '';
         var sub = b.subtitle ? '<div style="font-size:13px;color:#6b7280;text-align:center;margin-top:4px;">' + interp(b.subtitle) + '</div>' : '';
-        return '<tr><td style="padding:16px 24px 8px;text-align:center;">' + logo +
+        var titleRow = '<tr><td style="padding:16px 24px 8px;text-align:center;">' +
           '<div style="font-size:22px;font-weight:700;color:#111827;line-height:1.2;">' + interp(b.title || '') + '</div>' + sub + '</td></tr>';
+        if (scope === 'system') {
+          // Mirrors brandLockupRow in server/email-templates.js — the app's
+          // sticky-header lockup (navy bar + cube + tracked-out wordmark).
+          // b.brand_style: 'bar' (default) | 'banner' | 'light'.
+          var WM = "font-family:Inter,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-weight:200;letter-spacing:2.5px;";
+          var NAVY = '#0F172A', CYAN = '#22D3EE';
+          var icon = '/images/pwa/icon-192.png';
+          var s = String(b.brand_style || 'bar').toLowerCase();
+          var lockup;
+          if (s === 'light') {
+            lockup = '<tr><td style="padding:20px 24px 0;text-align:center;">' +
+              '<img src="' + icon + '" width="34" height="34" alt="" style="display:inline-block;vertical-align:middle;border-radius:7px;" />' +
+              '<span style="' + WM + 'font-size:16px;color:' + NAVY + ';vertical-align:middle;padding-left:12px;">PROJECT&nbsp;86</span>' +
+              '<div style="height:2px;line-height:2px;font-size:2px;background:' + CYAN + ';margin-top:14px;">&nbsp;</div></td></tr>';
+          } else if (s === 'banner') {
+            lockup = '<tr><td style="padding:0;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:' + NAVY + ';border-bottom:2px solid ' + CYAN + ';"><tr>' +
+              '<td style="padding:22px 24px 18px;text-align:center;">' +
+              '<img src="' + icon + '" width="44" height="44" alt="" style="display:inline-block;border-radius:9px;" />' +
+              '<div style="' + WM + 'font-size:17px;color:#F8FAFC;margin-top:10px;">PROJECT&nbsp;86</div></td></tr></table></td></tr>';
+          } else {
+            lockup = '<tr><td style="padding:0;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:' + NAVY + ';border-bottom:2px solid ' + CYAN + ';"><tr>' +
+              '<td style="padding:14px 24px;">' +
+              '<img src="' + icon + '" width="32" height="32" alt="" style="display:inline-block;vertical-align:middle;border-radius:6px;" />' +
+              '<span style="' + WM + 'font-size:16px;color:#F8FAFC;vertical-align:middle;padding-left:12px;">PROJECT&nbsp;86</span></td></tr></table></td></tr>';
+          }
+          return lockup + titleRow;
+        }
+        var logoSrc = b.logo_url || orgLogo || p86Logo;
+        var logo = logoSrc ? '<img src="' + escapeAttr(logoSrc) + '" alt="" style="max-height:42px;display:block;margin:0 auto 10px;" />' : '';
+        return '<tr><td style="padding:16px 24px 0;text-align:center;">' + logo + '</td></tr>' + titleRow;
       }
       if (t === 'text') {
         return '<tr><td style="padding:12px 24px;font-size:14px;line-height:1.55;color:#1f2937;">' + interp(b.html || '') + '</td></tr>';
