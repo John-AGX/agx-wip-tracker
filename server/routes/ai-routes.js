@@ -3911,7 +3911,10 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
   // loop forever — when retries are exhausted, we still send a final
   // `user.interrupt` so the NEXT /chat call from the client starts
   // clean instead of failing on a still-stuck session.
-  const MAX_NUDGES = 1;
+  // 2 attempts (was 1): the first nudge often lands on a model still
+  // confused by substituted / 'Continue.' tool results; the silent-stop
+  // side observed most turns recover on attempt 2.
+  const MAX_NUDGES = 2;
   let nudgeAttempts = 0;
   const NUDGE_TEXT =
     'Continue. The previous tool calls completed — please respond now ' +
@@ -3942,11 +3945,23 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
   const MAX_BUILTIN_REOPENS = 6;
   let builtinReopens = 0;
   let carriedBuiltinText = '';
+  // Total stream reopens of ANY kind this turn (builtin continuation,
+  // auto-tier result flush, stall-recovery nudge). Replay dedupe keys on
+  // this, not builtinReopens — auto-flush reopens replay in-flight events
+  // too, and text streamed before the flush must not double-relay.
+  let totalReopens = 0;
+  // Loop guard on the auto-flush→reopen cycle. A reopened stream replays
+  // the turn's custom_tool_use events (re-queued on purpose), so a session
+  // whose flushed result ids never match its blocked ids would otherwise
+  // flush→reopen→replay forever. Past the cap we drop the replayed results
+  // and fall through to the bounded stall-recovery path instead.
+  const MAX_AUTO_FLUSH_REOPENS = 4;
+  let autoFlushReopens = 0;
   // A reopened stream REPLAYS the in-flight turn's events — without dedupe the
   // client saw the answer text twice after a builtin-tool reopen. Replayed events
   // can arrive with DIFFERENT sevt_* ids (observed live), so we dedupe BOTH ways:
   // by event id (cheap, catches same-id replays) and by text-block content
-  // (catches re-issued ids; skip is gated on builtinReopens>0 so a normal
+  // (catches re-issued ids; skip is gated on totalReopens>0 so a normal
   // single-pass turn can never false-skip a legitimately repeated block).
   const seenTurnEventIds = new Set();
   const relayedTextBlocks = new Set();
@@ -4127,9 +4142,13 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
   // event counts) resets each iteration; nudge counter persists.
   let nextEventsToSend = eventsToSend;
   while (true) {
-    // Seed with any text carried across a builtin-tool stream reopen, so the
-    // idle-side persist writes the SAME text the client already saw streamed.
+    // Seed with any text carried across a stream reopen (builtin
+    // continuation, auto-flush, stall recovery), so the idle-side persist
+    // writes the SAME text the client already saw streamed. passSeedLen
+    // lets "did THIS pass produce new text?" checks (silent-stop) ignore
+    // the carried seed.
     let assistantText = carriedBuiltinText;
+    const passSeedLen = assistantText.length;
     carriedBuiltinText = '';
     const pendingToolUses = [];
     // Auto-tier batch buffer (Phase B refactor): when the model emits
@@ -4199,7 +4218,7 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
                 // doubled). Skip an exact-duplicate block — but only once a
                 // builtin reopen actually happened, so a normal single-pass turn
                 // can never false-skip a legitimately repeated block.
-                if (builtinReopens > 0 && relayedTextBlocks.has(b.text)) continue;
+                if (totalReopens > 0 && relayedTextBlocks.has(b.text)) continue;
                 relayedTextBlocks.add(b.text);
                 assistantText += b.text;
                 send({ delta: b.text });
@@ -4406,6 +4425,14 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
             // is the parallel-tool-call race fix — sending results
             // sequentially while the stream is mid-flight left the
             // session believing the tool_use ids were still blocked.
+            if (pendingAutoResults.length && stopType === 'requires_action' &&
+                autoFlushReopens >= MAX_AUTO_FLUSH_REOPENS) {
+              console.warn('[v2-stream] auto-flush reopen cap hit on', sessionId,
+                '(' + autoFlushReopens + ' reopens) — dropping',
+                pendingAutoResults.length,
+                'replayed result(s), falling through to stall recovery');
+              pendingAutoResults.length = 0; // the originals were flushed on earlier passes
+            }
             if (pendingAutoResults.length && stopType === 'requires_action') {
               // ID-mismatch fix: the event.id we captured from
               // agent.custom_tool_use isn't always the same id the
@@ -4502,6 +4529,14 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
                 // detect "auto-results flushed, but the resumed turn
                 // produced no text" → fire the silent-stop nudge once.
                 autoResultsFlushedThisTurn = true;
+                // Preserve any preamble prose the model streamed BEFORE its
+                // tool batch ("Let me pull those leads…") across the reopen —
+                // the per-pass reset would otherwise drop it from the final
+                // persist, and the resumed pass's replay dedupe (totalReopens
+                // gate) keeps it from double-relaying.
+                carriedBuiltinText = assistantText;
+                totalReopens++;
+                autoFlushReopens++;
                 stallNudgeQueued = true; // signals "reopen stream"
                 break; // exit switch; post-switch check exits for-await
               }
@@ -4516,10 +4551,16 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
             // responses to events". Two-step recovery: send interrupt,
             // then queue a fresh nudge user.message for the next pass
             // of the outer while loop, which reopens the stream.
+            // NOTE: no assistantText condition here. A turn that streams a
+            // preamble ("Let me pull those leads…") before its tool batch and
+            // THEN wedges in requires_action is just as stuck as a silent one
+            // — gating recovery on empty text made every prose-first wedge
+            // exit as an invisible awaiting_approval with zero tools (the
+            // 2026-07-02 "assistant never answered" reports).
             const stalled =
               stopType === 'requires_action' &&
               pendingToolUses.length === 0 &&
-              assistantText.length === 0;
+              pendingAutoResults.length === 0;
             if (stalled && nudgeAttempts < MAX_NUDGES) {
               nudgeAttempts++;
               console.warn('[v2-stream] stall detected on', sessionId,
@@ -4545,6 +4586,8 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
                 content: [{ type: 'text', text: NUDGE_TEXT }]
               });
               nextEventsToSend = recoveryEvents;
+              carriedBuiltinText = assistantText; // keep prose across the recovery reopen
+              totalReopens++;
               stallNudgeQueued = true;
               // Break the switch; the post-switch check exits the
               // for-await so the outer while reopens the stream.
@@ -4574,9 +4617,24 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
               } catch (e) {
                 console.warn('Final clear failed (non-fatal):', e && e.message);
               }
+              // Recovery failed — tell the user instead of ending the turn
+              // invisibly. The note streams live AND rides assistantText into
+              // the done-branch persist below, so the thread always shows a
+              // row for this turn (previously: empty awaiting_approval, no
+              // message persisted, user saw pure silence).
+              const stallNote = assistantText.length
+                ? '\n\n_⚠️ I hit a snag finishing that request — the steps above ran, but I couldn\'t complete the final answer. Please send it again._'
+                : '⚠️ I hit a snag finishing that request — my tool calls stalled mid-turn and recovery didn\'t take. Nothing was changed. Please send it again.';
+              send({ delta: stallNote });
+              assistantText += stallNote;
             }
 
-            if (pendingToolUses.length || stopType === 'requires_action') {
+            // Approval cards only when there are actual pending tools.
+            // requires_action with ZERO pending tools is always a wedge —
+            // it now exits through the done branch below (with the stall
+            // note persisted) instead of emitting an awaiting_approval the
+            // client has nothing to render for.
+            if (pendingToolUses.length) {
               for (const tu of pendingToolUses) {
                 // Tag each tool_use with its approval tier so the client
                 // can render talk_through tools as a single inline
@@ -4712,9 +4770,9 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
             // Chip replay dedupe (mirrors the text-block dedupe above): replayed
             // agent.tool_use events also arrive with NEW ids after a builtin
             // reopen, stacking duplicate chips. Skip an already-shown summary —
-            // gated on builtinReopens>0 so genuine repeat calls on a normal
+            // gated on totalReopens>0 so genuine repeat calls on a normal
             // single-pass turn still get their own chips.
-            if (builtinReopens > 0 && relayedTextBlocks.has('chip|' + summary)) break;
+            if (totalReopens > 0 && relayedTextBlocks.has('chip|' + summary)) break;
             relayedTextBlocks.add('chip|' + summary);
             send({ tool_started: { id: event.id, name: name } });
             send({ tool_applied: { id: event.id, name: name, summary: summary } });
@@ -4761,6 +4819,7 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
       // chip. Carried text survives the per-pass reset above.
       if ((eventCounts['agent.tool_use'] || 0) > 0 && builtinReopens < MAX_BUILTIN_REOPENS) {
         builtinReopens++;
+        totalReopens++;
         carriedBuiltinText = assistantText;
         console.log('[v2-stream] builtin tool ended stream without idle on', sessionId,
           '— reopening for the continuation (reopen', builtinReopens, 'of', MAX_BUILTIN_REOPENS + ')');
@@ -4776,9 +4835,12 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
       // an explicit "summarize the tool results" user.message and
       // reopen the stream. Capped at MAX_SILENT_STOP_NUDGES so a
       // model that just refuses doesn't drive endless API calls.
+      // "No NEW text this pass" — compare against the carried seed, not
+      // zero. Carried preamble prose from a pre-flush pass must not mask
+      // a model that fell silent after its tool results.
       const silentStop =
         autoResultsFlushedThisTurn &&
-        assistantText.length === 0 &&
+        assistantText.length === passSeedLen &&
         pendingToolUses.length === 0;
       if (silentStop && silentStopNudges < MAX_SILENT_STOP_NUDGES) {
         silentStopNudges++;
@@ -4791,6 +4853,8 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
           type: 'user.message',
           content: [{ type: 'text', text: nudgeText }]
         }];
+        carriedBuiltinText = assistantText; // keep carried prose across the nudge reopen
+        totalReopens++;
         stallNudgeQueued = true;
         continue; // loop back, reopen stream with the summary nudge
       }
@@ -4810,8 +4874,15 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
         'autoResultsFlushedThisTurn:', autoResultsFlushedThisTurn,
         'events:', JSON.stringify(eventCounts));
 
-      // Stream ended without idle (rare — abort, network drop). Close
-      // out so the client gets [DONE] instead of a hung response.
+      // Stream ended without idle (rare — abort, network drop). Persist
+      // whatever text the user already watched stream (carried prose
+      // included) so the turn survives a refresh, then close out so the
+      // client gets [DONE] instead of a hung response.
+      if (assistantText && persistAssistantText) {
+        try {
+          await persistAssistantText(assistantText, usage, {});
+        } catch (e) { console.error('persistAssistantText (terminal-end) failed:', e); }
+      }
       endWithDone();
       return;
     }
