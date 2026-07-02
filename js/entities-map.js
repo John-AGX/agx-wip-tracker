@@ -583,8 +583,13 @@
             icon: sIcon,
             content: (advOK && sIcon) ? pinImg({ url: sIcon.url, w: sIcon.scaledSize.width, h: sIcon.scaledSize.height }) : null,
             onClick: (function (it) { return function () {
-              if (opts.jobsSidebar) { flyTo(pos, marker); selectRow(it.id); if (it.kind === 'job') showJobDetail(it.id); else showLeadDetail(it); }
-              else { openInfo(infoContentHTML(it), marker); }
+              // First click = open the card ONLY (no zoom). The old behavior
+              // flew the camera way in before showing detail; zooming is now a
+              // deliberate action via the card's 🔍 button. All mounts share the
+              // same dark entity-card popup (the Summary map previously got the
+              // legacy white info window).
+              if (opts.jobsSidebar) selectRow(it.id);
+              if (it.kind === 'job') showJobDetail(it.id); else showLeadDetail(it);
             }; })(item)
           });
         } else {
@@ -594,8 +599,8 @@
             icon: gIcon,
             content: advOK ? pinImg({ url: gIcon.url, w: gIcon.scaledSize.width, h: gIcon.scaledSize.height }) : null,
             onClick: (function (members) { return function () {
-              if (opts.jobsSidebar) { flyTo(pos, marker); showGroupDetail(members); }
-              else { openInfo(groupContentHTML(members), marker); }
+              // Same contract as single pins: card first, zoom only via 🔍.
+              showGroupDetail(members);
             }; })(g.members)
           });
         }
@@ -712,6 +717,9 @@
         var card = go('.p86-ecard'); var kind = card ? card.getAttribute('data-kind') : '';
         var id = actEl.getAttribute('data-id');
         if (act === 'maps') { var la = actEl.getAttribute('data-lat'), ln = actEl.getAttribute('data-lng'); if (la && ln) window.open('https://www.google.com/maps/search/?api=1&query=' + la + ',' + ln, '_blank'); return; }
+        // 🔍 — the deliberate zoom. Pin clicks no longer fly the camera in;
+        // this button does (cinematic on the vector map, stepped on raster).
+        if (act === 'zoom') { var zla = actEl.getAttribute('data-lat'), zln = actEl.getAttribute('data-lng'); if (zla && zln) flyTo({ lat: Number(zla), lng: Number(zln) }); return; }
         if (act === 'open' || act === 'info') { if (kind === 'job') { if (typeof _onJobHook === 'function') _onJobHook(id); else openEntity('job', id); } else { openEntity(kind || 'lead', id); } return; }
         if (act === 'msg') { if (window.p86Messaging && typeof window.p86Messaging.openInbox === 'function') window.p86Messaging.openInbox(); return; }
         return;
@@ -761,7 +769,7 @@
           { label: 'Profit', value: (profit < 0 ? '-' : '+') + money(Math.abs(profit)), tone: profit < 0 ? 'neg' : 'pos' }
         ],
         icons: [ { act: 'info', title: 'Open job' }, { act: 'maps', title: 'Maps' } ],
-        actions: [ { label: 'Open WIP', act: 'open', primary: true, icon: 'arrow-right' }, { label: 'Maps', act: 'maps' } ],
+        actions: [ { label: 'Open WIP', act: 'open', primary: true, icon: 'arrow-right' }, { label: '🔍', act: 'zoom' }, { label: 'Maps', act: 'maps' } ],
         data: { id: id, lat: it.lat, lng: it.lng }
       }));
     }
@@ -797,7 +805,7 @@
         ring: (leadObj && Number(leadObj.confidence) > 0 ? { pct: Number(leadObj.confidence) } : undefined),
         stats: leadStats,
         icons: [ { act: 'info', title: 'Open lead' }, { act: 'maps', title: 'Maps' } ],
-        actions: [ { label: 'Open lead', act: 'open', primary: true, icon: 'arrow-right' }, { label: 'Maps', act: 'maps' } ],
+        actions: [ { label: 'Open lead', act: 'open', primary: true, icon: 'arrow-right' }, { label: '🔍', act: 'zoom' }, { label: 'Maps', act: 'maps' } ],
         data: { id: it.id, lat: it.lat, lng: it.lng }
       }));
     }
@@ -810,13 +818,20 @@
           '<span class="emap-chev">›</span></div>';
       }).join('');
       var gp = members[0] ? { lat: members[0].lat, lng: members[0].lng } : null;
+      var zoomBtn = gp
+        ? '<button type="button" data-act="zoom" data-lat="' + gp.lat + '" data-lng="' + gp.lng + '" title="Zoom to property" ' +
+            'style="background:none;border:1px solid rgba(255,255,255,.18);border-radius:7px;color:#aeb6c5;font-size:12px;padding:2px 7px;cursor:pointer;margin-left:8px;">🔍</button>'
+        : '';
       openPopup(gp,
-        '<div class="emap-grp"><div class="emap-grp-head">' + members.length + ' at this property</div>' +
+        '<div class="emap-grp"><div class="emap-grp-head">' + members.length + ' at this property' + zoomBtn + '</div>' +
           (addr ? '<div class="emap-grp-addr">' + escapeHTML(addr) + '</div>' : '') +
           '<div class="emap-grp-list">' + rows + '</div></div>'
       );
     }
 
+    // The dark popup + entity-card styles were only injected with the jobs
+    // sidebar; every mount uses the card popup now (Summary map included).
+    injectJobsSidebarStyle();
     if (opts.jobsSidebar) buildJobsSidebar();
     if (opts.warmGeocode) warmGeocodeJobs();
 
