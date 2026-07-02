@@ -663,7 +663,6 @@ function sanitizeBlockHtml(html) {
   return s;
 }
 
-// Render a single block to HTML. Each block is one row in a stacked
 // ── System brand header — the app's sticky-header lockup, email-safe ──
 // Colors from the brand kit (images/project-86-lockup-dark.svg): navy
 // #0F172A, cyan #22D3EE, wordmark #F8FAFC. The wordmark mirrors
@@ -686,16 +685,20 @@ function brandLockupRow(style, appUrlStr) {
     return '<tr><td style="padding:0;">' +
       '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:' + BRAND_NAVY + ';border-bottom:2px solid ' + BRAND_CYAN + ';"><tr>' +
         '<td style="padding:22px 24px 18px;text-align:center;">' +
-          '<img src="' + icon + '" width="44" height="44" alt="Project 86" style="display:inline-block;border-radius:9px;" />' +
+          '<img src="' + icon + '" width="44" height="44" alt="" style="display:inline-block;border-radius:9px;" />' +
           '<div style="' + WORDMARK_CSS + 'font-size:17px;color:#F8FAFC;margin-top:10px;">PROJECT&nbsp;86</div>' +
         '</td></tr></table>' +
     '</td></tr>';
   }
-  // Default 'bar' — the app's sticky header, left-aligned.
+  // Default 'bar' — the app's sticky header, left-aligned. alt="" on all
+  // variants: when a client blocks remote images (default for new
+  // senders), alt text wraps awkwardly beside the broken-image glyph
+  // ("Pr / ojec…" observed live in John's inbox) — with an empty alt the
+  // blocked state collapses and the TEXT wordmark carries the brand.
   return '<tr><td style="padding:0;">' +
     '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:' + BRAND_NAVY + ';border-bottom:2px solid ' + BRAND_CYAN + ';"><tr>' +
       '<td style="padding:14px 24px;">' +
-        '<img src="' + icon + '" width="32" height="32" alt="Project 86" style="display:inline-block;vertical-align:middle;border-radius:6px;" />' +
+        '<img src="' + icon + '" width="32" height="32" alt="" style="display:inline-block;vertical-align:middle;border-radius:6px;" />' +
         '<span style="' + WORDMARK_CSS + 'font-size:16px;color:#F8FAFC;vertical-align:middle;padding-left:12px;">PROJECT&nbsp;86</span>' +
       '</td></tr></table>' +
   '</td></tr>';
