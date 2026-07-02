@@ -105,8 +105,10 @@
 
   function renderLauncher() {
     var b = document.querySelector('.p86-bgt-launch'); if (!b) return;
-    var active = _jobs.filter(function (j) { return j.status === 'running' || j.status === 'queued' || j.status === 'needs_input'; }).length;
-    b.classList.toggle('on', active > 0 || _attention > 0);
+    // ALWAYS visible (was: only when a task was active/unseen — which made the
+    // panel undiscoverable exactly when you wanted to find the 🔔 toggle or the
+    // Scribe drafts). The badge still only shows when something needs attention.
+    b.classList.add('on');
     var badge = b.querySelector('.p86-bgt-badge');
     if (_attention > 0) { badge.style.display = ''; badge.textContent = _attention; }
     else { badge.style.display = 'none'; }
