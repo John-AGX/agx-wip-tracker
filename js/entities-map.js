@@ -711,11 +711,15 @@
     // The legacy InfoWindow auto-panned the map so the bubble fit on screen;
     // the custom OverlayView doesn't, so a pin near the top of the viewport
     // opened a card with its head (title/status/zoom) clipped. Pan to fit.
-    function panPopupIntoView() {
+    function panPopupIntoView(attempt) {
       if (!_popup || !_popup.container) return;
+      attempt = attempt || 0;
       try {
         var bubble = _popup.container.querySelector('.emap-pop-bubble') || _popup.container;
-        var br = bubble.getBoundingClientRect(); if (!br.width) return;
+        var br = bubble.getBoundingClientRect();
+        // The OverlayView attaches + draws on the map's next render frame, so
+        // the bubble can still be unmeasured here — retry until it has layout.
+        if (!br.width) { if (attempt < 12) setTimeout(function () { panPopupIntoView(attempt + 1); }, 120); return; }
         var mr = map.getDiv().getBoundingClientRect();
         var pad = 10, dx = 0, dy = 0;
         if (br.right > mr.right - pad) dx = br.right - (mr.right - pad);
