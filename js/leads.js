@@ -645,8 +645,10 @@
     var bar = document.getElementById('leads-bulkbar');
     if (!bar) return;
     var n = _leadsSelected.size;
-    if (!n) { bar.style.display = 'none'; bar.innerHTML = ''; return; }
-    bar.style.cssText = 'display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 12px;margin-bottom:8px;background:rgba(79,140,255,0.08);border:1px solid rgba(79,140,255,0.30);border-radius:8px;';
+    if (!n) { bar.className = ''; bar.style.display = 'none'; bar.innerHTML = ''; return; }
+    // Floating bottom-center ribbon (shared .p86-bulkbar-float in styles.css).
+    bar.style.cssText = '';
+    bar.className = 'p86-bulkbar-float';
     var selStyle = 'padding:4px 6px;font-size:12px;border-radius:6px;border:1px solid var(--border,#2e3346);background:var(--card-bg,#161a2b);color:var(--text,#eef0f6);cursor:pointer;';
     var btnStyle = 'padding:5px 10px;font-size:12px;border-radius:7px;border:1px solid var(--border,#2e3346);background:transparent;color:var(--text,#eef0f6);cursor:pointer;';
     var statusOpts = '<option value="">Set status…</option>' + STATUSES.map(function(s) { return '<option value="' + s.key + '">' + escapeHTML(s.label) + '</option>'; }).join('');
@@ -661,7 +663,6 @@
       '<select onchange="window.p86LeadsBulkAssign(this.value);this.value=\'\';" style="' + selStyle + '">' + assignOpts + '</select>' +
       '<label style="font-size:12px;color:var(--text-dim,#c4c8d8);white-space:nowrap;">Follow-up <input type="date" onchange="window.p86LeadsBulkFollowup(this.value);this.value=\'\';" style="' + selStyle + '"></label>' +
       '<select onchange="window.p86LeadsBulkLost(this.value);this.value=\'\';" style="' + selStyle + '">' + lostOpts + '</select>' +
-      '<span style="flex:1 1 auto;"></span>' +
       '<button type="button" onclick="window.p86LeadsDeleteSelected()" style="padding:5px 12px;font-size:12px;font-weight:600;border-radius:7px;border:1px solid rgba(248,113,113,.5);background:#f87171;color:#1a1d27;cursor:pointer;">Delete ' + n + '</button>' +
       '<button type="button" onclick="window.p86LeadsClearSelection()" style="' + btnStyle + '">Clear</button>';
   }

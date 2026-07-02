@@ -1167,8 +1167,10 @@ function renderJobsMain() {
             var bar = document.getElementById('jobs-bulkbar');
             if (!bar) return;
             var n = _jobsSelected.size;
-            if (!n) { bar.style.display = 'none'; bar.innerHTML = ''; return; }
-            bar.style.cssText = 'display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 12px;margin-bottom:8px;background:rgba(79,140,255,0.08);border:1px solid rgba(79,140,255,0.30);border-radius:8px;';
+            if (!n) { bar.className = ''; bar.style.display = 'none'; bar.innerHTML = ''; return; }
+            // Floating bottom-center ribbon (shared .p86-bulkbar-float in styles.css).
+            bar.style.cssText = '';
+            bar.className = 'p86-bulkbar-float';
             var selStyle = 'padding:4px 6px;font-size:12px;border-radius:6px;border:1px solid var(--border,#2e3346);background:var(--card-bg,#161a2b);color:var(--text,#eef0f6);cursor:pointer;';
             var btnStyle = 'padding:5px 10px;font-size:12px;border-radius:7px;border:1px solid var(--border,#2e3346);background:transparent;color:var(--text,#eef0f6);cursor:pointer;';
             // Status options: the standard lifecycle set + any other statuses in use.
@@ -1187,7 +1189,6 @@ function renderJobsMain() {
                 '<button type="button" onclick="window.p86JobsExportSelected()" style="' + btnStyle + '" title="Export selected to Excel">⬇ Export</button>' +
                 '<select onchange="window.p86JobsBulkStatus(this.value);this.value=\'\';" style="' + selStyle + '">' + statusOpts + '</select>' +
                 assignHtml +
-                '<span style="flex:1 1 auto;"></span>' +
                 '<button type="button" onclick="window.p86JobsDeleteSelected()" style="padding:5px 12px;font-size:12px;font-weight:600;border-radius:7px;border:1px solid rgba(248,113,113,.5);background:#f87171;color:#1a1d27;cursor:pointer;">Delete ' + n + '</button>' +
                 '<button type="button" onclick="window.p86JobsClearSelection()" style="' + btnStyle + '">Clear</button>';
         }

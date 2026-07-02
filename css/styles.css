@@ -10637,6 +10637,35 @@ textarea.ci-input { height: auto; resize: vertical; font-family: inherit; }
 .est-mark-sent:hover { background: rgba(110,168,254,.12); }
 .est-mark-sent.est-unsend { color: var(--text-dim, #94a3b8); }
 
+/* Floating bulk-actions ribbon — shared by the Leads / Jobs / Estimates /
+   Jobs-Hub multi-select bars. Fixed bottom-center pill that overlays the
+   page instead of pushing the table down. */
+.p86-bulkbar-float {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-width: min(94vw, 980px);
+  padding: 10px 16px;
+  background: var(--card-bg, #161a2b);
+  border: 1px solid rgba(79, 140, 255, 0.45);
+  border-radius: 14px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+  animation: p86BulkbarIn 0.18s ease-out;
+}
+@keyframes p86BulkbarIn {
+  from { opacity: 0; transform: translate(-50%, 10px); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
+}
+/* Sit above the mobile bottom nav. */
+@media (max-width: 768px) { .p86-bulkbar-float { bottom: 78px; } }
+
 /* ── Reusable filter drawer (window.p86FilterDrawer) ────────────────────── */
 .pf-overlay { position: fixed; inset: 0; z-index: 6000; background: rgba(0,0,0,.42); opacity: 0; transition: opacity .18s ease; }
 .pf-overlay.pf-in { opacity: 1; }
