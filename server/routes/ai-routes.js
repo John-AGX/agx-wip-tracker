@@ -2642,6 +2642,11 @@ async function buildTodayDigest(userId) {
   }
 }
 
+// Entity-context dedup state (see the /86/chat handler): anthropic_session_id +
+// entity → { hash, at } of the last FULL snapshot sent. In-memory by design — a
+// server restart just re-sends full snapshots once. Capped at 500 entries.
+const _entityCtxSent = new Map();
+
 async function buildTurnContext({ entityType, entityId, clientContext, aiPhase, userId, organization }) {
   let turnContextText = '';
   let photoBlocks = [];
@@ -2677,6 +2682,12 @@ async function buildTurnContext({ entityType, entityId, clientContext, aiPhase, 
   // falls back to its full registered tool list. ('admin' and 'staff'
   // both route through buildStaffContext, so we coerce 'admin' to the
   // shared 'staff' hint key for the available-tools block.)
+  // Snapshot the ENTITY portion before the extras append — the handler's
+  // entity-context dedup hashes exactly this text (see /86/chat), so an unchanged
+  // snapshot can be swapped for a one-line marker while the volatile layers
+  // (available_tools, applied/failed payloads) still ride every turn.
+  const entityText = turnContextText;
+
   const hintKey = (entityType === 'admin') ? 'staff' : entityType;
   const availableBlock = renderAvailableToolsBlock(hintKey);
   if (availableBlock) {
@@ -2829,7 +2840,7 @@ async function buildTurnContext({ entityType, entityId, clientContext, aiPhase, 
     } catch (e) { /* non-fatal: identity is best-effort */ }
   }
 
-  return { turnContextText, photoBlocks };
+  return { turnContextText, photoBlocks, entityText };
 }
 
 // Compose the full system prompt for an agent at registration / sync
@@ -13627,6 +13638,31 @@ router.post('/86/chat', requireAuth, requireOrg, aiChatLimiter, aiChatHourlyLimi
     // ai_sessions (pre-fix); coalesce to 'global' at every insert so
     // the chat path never trips the constraint.
     const sessionEntityId = session.entity_id || 'global';
+
+    // Entity-context dedup (the audit's biggest token lever): the managed session
+    // already HOLDS the last entity snapshot in its server-side history, so an
+    // UNCHANGED snapshot doesn't need re-sending (2-5k tokens/turn). Hash the
+    // rendered entity text; on a match within the TTL, swap it for a one-line
+    // marker. Keyed by the ANTHROPIC session id, so a recreated/recovered session
+    // (new id) automatically gets the full snapshot again. 15-min TTL forces a
+    // periodic full re-send as a compaction hedge. Volatile layers (available
+    // tools, applied/failed payloads, acting_user) still ride every turn.
+    try {
+      const et = turnCtx && turnCtx.entityText;
+      if (et && et.length > 400 && cctxEntityType && cctxEntityId && turnContextText) {
+        const _ch = require('crypto').createHash('sha1').update(et).digest('hex');
+        const dk = session.anthropic_session_id + '|' + cctxEntityType + '|' + cctxEntityId;
+        if (_entityCtxSent.size > 500) _entityCtxSent.clear();
+        const prev = _entityCtxSent.get(dk);
+        if (prev && prev.hash === _ch && (Date.now() - prev.at) < 15 * 60 * 1000) {
+          const marker = '<entity_snapshot_unchanged>The ' + cctxEntityType + ' ' + cctxEntityId +
+            ' snapshot is UNCHANGED since your last view earlier in this conversation — work from that snapshot; do not re-read it unless the user asks about something it did not cover.</entity_snapshot_unchanged>';
+          turnContextText = turnContextText.replace(et, marker);
+        } else {
+          _entityCtxSent.set(dk, { hash: _ch, at: Date.now() });
+        }
+      }
+    } catch (_) { /* dedup is an optimization — never block the turn */ }
 
     // Day-orient (team-feel): on the FIRST turn of a fresh session, prepend a
     // compact "today's plate" digest so the agent opens already knowing the day.
