@@ -4449,22 +4449,45 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
               const capturedIds = pendingAutoResults.map(e => e.custom_tool_use_id);
               const allMatch = capturedIds.length === blockedEventIds.length &&
                                capturedIds.every(id => blockedEventIds.indexOf(id) >= 0);
-              if (!allMatch && blockedEventIds.length === pendingAutoResults.length) {
-                console.warn('[v2-stream] tool_use_id mismatch — substituting captured ids',
-                  'with blockedEventIds positionally for', sessionId,
+              if (!allMatch && blockedEventIds.length) {
+                // Re-key strictly onto stop_reason.event_ids. Per the SDK
+                // contract (BetaManagedAgentsUserCustomToolResultEvent),
+                // custom_tool_use_id must be an id "found in the last
+                // session.status_idle event's stop_reason.event_ids" —
+                // captured stream-event ids can be re-issued and are NOT
+                // authoritative. Keep exact-id matches, hand the remaining
+                // results to the remaining blocked ids in emission order,
+                // and pad any leftover blocked ids with a generic result so
+                // the session ALWAYS unblocks. The old code only re-keyed on
+                // an exact count match and otherwise "flushed as captured",
+                // which left unmatched ids permanently blocked — the wedge
+                // behind the 2026-07-02 silent-turn reports.
+                console.warn('[v2-stream] tool_use_id mismatch — re-keying onto blockedEventIds for', sessionId,
                   'captured:', JSON.stringify(capturedIds),
                   'blocked:',  JSON.stringify(blockedEventIds));
-                pendingAutoResults.forEach((evt, i) => {
-                  evt.custom_tool_use_id = blockedEventIds[i];
+                const byId = new Map(pendingAutoResults.map(e => [e.custom_tool_use_id, e]));
+                const spareResults = pendingAutoResults.filter(e => blockedEventIds.indexOf(e.custom_tool_use_id) < 0);
+                const rekeyed = blockedEventIds.map(id => {
+                  if (byId.has(id)) return byId.get(id);
+                  const next = spareResults.shift();
+                  if (next) { next.custom_tool_use_id = id; return next; }
+                  return {
+                    type: 'user.custom_tool_result',
+                    custom_tool_use_id: id,
+                    content: [{ type: 'text', text: 'Continue.' }]
+                  };
                 });
+                if (spareResults.length) {
+                  console.warn('[v2-stream] dropping', spareResults.length,
+                    'captured result(s) with no blocked id to attach to');
+                }
+                pendingAutoResults.length = 0;
+                Array.prototype.push.apply(pendingAutoResults, rekeyed);
               } else if (!allMatch) {
-                // Count divergence — we have N results but M blocked
-                // ids. Don't risk positional substitution since the
-                // pairing is ambiguous. Flush as captured and let the
-                // stall-recovery branch clean up any unresolved ids.
-                console.warn('[v2-stream] tool_use_id mismatch with count divergence — flushing as captured',
-                  'captured:', JSON.stringify(capturedIds),
-                  'blocked:',  JSON.stringify(blockedEventIds));
+                // requires_action but the session reported no event_ids —
+                // nothing to re-key onto; flush as captured (rare).
+                console.warn('[v2-stream] tool_use_id mismatch with EMPTY blockedEventIds — flushing as captured',
+                  'captured:', JSON.stringify(capturedIds));
               }
               if (pendingToolUses.length > 0) {
                 // MIXED TURN — the model emitted both auto-tier AND
