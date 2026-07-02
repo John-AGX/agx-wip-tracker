@@ -73,11 +73,27 @@
   // Open action drills into that job instead of the default editJob.
   var _onJobHook = null;
   function openEntity(kind, id) {
+    if (!id) return;
+    // The client-dashboard map lives in a modal — close it so the opened
+    // entity isn't hidden underneath. No-op on every other mount.
+    if (typeof window.closeClientDashboard === 'function') window.closeClientDashboard();
     if (kind === 'lead') {
-      if (typeof window.openEditLeadModal === 'function') { window.openEditLeadModal(id); return; }
+      // The lead detail view lives inside the estimates→leads tab, so from
+      // any other page (Summary map, Leads Map, client dashboard) the open
+      // is invisible unless we navigate there first — same steps the AI
+      // panel's navigate tool uses.
+      if (typeof window.openEditLeadModal === 'function') {
+        if (typeof window.switchTab === 'function') window.switchTab('estimates');
+        if (typeof window.switchEstimatesSubTab === 'function') window.switchEstimatesSubTab('leads');
+        if (typeof window.markVirtualTabActive === 'function') window.markVirtualTabActive('leads');
+        window.openEditLeadModal(id); return;
+      }
     } else if (kind === 'job') {
       if (typeof _onJobHook === 'function') { _onJobHook(id); return; }
-      if (typeof window.editJob === 'function') { window.editJob(id); return; }
+      if (typeof window.editJob === 'function') {
+        if (typeof window.switchTab === 'function') window.switchTab('jobs');
+        window.editJob(id); return;
+      }
     }
     // Last resort — no-op rather than throwing.
   }
@@ -748,11 +764,11 @@
         // 🔍 — the deliberate zoom. Pin clicks no longer fly the camera in;
         // this button does (cinematic on the vector map, stepped on raster).
         if (act === 'zoom') { var zla = actEl.getAttribute('data-lat'), zln = actEl.getAttribute('data-lng'); if (zla && zln) flyTo({ lat: Number(zla), lng: Number(zln) }); return; }
-        if (act === 'open' || act === 'info') { if (kind === 'job') { if (typeof _onJobHook === 'function') _onJobHook(id); else openEntity('job', id); } else { openEntity(kind || 'lead', id); } return; }
+        if (act === 'open' || act === 'info') { closePopup(); if (kind === 'job') { if (typeof _onJobHook === 'function') _onJobHook(id); else openEntity('job', id); } else { openEntity(kind || 'lead', id); } return; }
         if (act === 'msg') { if (window.p86Messaging && typeof window.p86Messaging.openInbox === 'function') window.p86Messaging.openInbox(); return; }
         return;
       }
-      var grp = go('.emap-grp-row'); if (grp) { openEntity(grp.getAttribute('data-kind'), grp.getAttribute('data-id')); return; }
+      var grp = go('.emap-grp-row'); if (grp) { closePopup(); openEntity(grp.getAttribute('data-kind'), grp.getAttribute('data-id')); return; }
     }
     function openPopup(pos, html) {
       closePopup();
