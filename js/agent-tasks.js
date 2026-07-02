@@ -59,7 +59,8 @@
       '.p86-bgt-panel{margin:0 16px 16px 0;width:min(440px,calc(100vw - 32px));max-height:min(72vh,660px);display:flex;flex-direction:column;background:#0f1320;border:1px solid rgba(255,255,255,.14);border-radius:14px;overflow:hidden;box-shadow:0 12px 44px rgba(0,0,0,.6)}',
       '.p86-bgt-head{display:flex;align-items:center;justify-content:space-between;padding:13px 15px;border-bottom:1px solid rgba(255,255,255,.08);color:#e6e9f0;font:700 14px/1 system-ui,sans-serif}',
       '.p86-bgt-x{background:none;border:none;color:#9aa0b2;font-size:18px;cursor:pointer;line-height:1}',
-      '.p86-bgt-list{overflow:auto;padding:8px}',
+      '.p86-bgt-body{overflow:auto;flex:1 1 auto;min-height:0;-webkit-overflow-scrolling:touch}',
+      '.p86-bgt-list{padding:8px}',
       '.p86-bgt-item{border:1px solid rgba(255,255,255,.08);border-radius:10px;padding:11px 12px;margin-bottom:8px;background:#141824}',
       '.p86-bgt-t{display:flex;align-items:center;justify-content:space-between;gap:8px;color:#e6e9f0;font:600 13px/1.3 system-ui,sans-serif}',
       '.p86-bgt-pill{font-size:11px;font-weight:700;padding:2px 8px;border-radius:9px;white-space:nowrap}',
@@ -85,7 +86,7 @@
     document.body.appendChild(b);
     var ov = document.createElement('div');
     ov.className = 'p86-bgt-overlay';
-    ov.innerHTML = '<div class="p86-bgt-panel"><div class="p86-bgt-head"><span>Crew activity</span><span style="display:flex;gap:8px;align-items:center"><button class="p86-bgt-bell" title="Get phone/desktop notifications when a task finishes or needs you" style="display:none;background:none;border:1px solid rgba(255,255,255,.18);border-radius:8px;color:#aeb4c4;font:600 11px/1 system-ui,sans-serif;padding:5px 9px;cursor:pointer">🔔 Enable notifications</button><button class="p86-bgt-x" title="Close">✕</button></span></div><div class="p86-bgt-list"></div><div class="p86-bgt-scribe"></div></div>';
+    ov.innerHTML = '<div class="p86-bgt-panel"><div class="p86-bgt-head"><span>Crew activity</span><span style="display:flex;gap:8px;align-items:center"><button class="p86-bgt-bell" title="Get phone/desktop notifications when a task finishes or needs you" style="display:none;background:none;border:1px solid rgba(255,255,255,.18);border-radius:8px;color:#aeb4c4;font:600 11px/1 system-ui,sans-serif;padding:5px 9px;cursor:pointer">🔔 Enable notifications</button><button class="p86-bgt-x" title="Close">✕</button></span></div><div class="p86-bgt-body"><div class="p86-bgt-list"></div><div class="p86-bgt-scribe"></div></div></div>';
     ov.addEventListener('click', function (e) { if (e.target === ov) close(); });
     ov.querySelector('.p86-bgt-x').addEventListener('click', close);
     ov.querySelector('.p86-bgt-bell').addEventListener('click', enablePush);

@@ -43,7 +43,10 @@
       '#p86CrewChip.p86-crew-active .p86-crew-dot{animation:p86crewpulse 1.1s ease-in-out infinite}',
       '#p86CrewChip .p86-crew-txt{overflow:hidden;text-overflow:ellipsis}',
       '@keyframes p86crewpulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.45;transform:scale(.72)}}',
-      '@media (max-width:700px){#p86CrewChip .p86-crew-txt{display:none}#p86CrewChip{padding:0 9px}}'
+      // Narrow screens: swap the full status text for a compact "AI" tag so the
+      // chip stays legible (a bare dot read as "mystery blue dot" on mobile).
+      '@media (max-width:700px){#p86CrewChip .p86-crew-txt{display:none}#p86CrewChip .p86-crew-mini{display:inline}#p86CrewChip{padding:0 9px}}',
+      '#p86CrewChip .p86-crew-mini{display:none;font:700 10px/1 system-ui,sans-serif;letter-spacing:.4px}'
     ].join('');
     document.head.appendChild(st);
   }
@@ -57,7 +60,7 @@
     b.type = 'button';
     b.id = 'p86CrewChip';
     b.title = 'Your AI crew — click to chat';
-    b.innerHTML = '<span class="p86-crew-dot"></span><span class="p86-crew-txt">Assistant</span>';
+    b.innerHTML = '<span class="p86-crew-dot"></span><span class="p86-crew-txt">Assistant</span><span class="p86-crew-mini">AI</span>';
     b.addEventListener('click', function () {
       try { if (window.p86AI && window.p86AI.open) window.p86AI.open(); } catch (_) {}
     });
