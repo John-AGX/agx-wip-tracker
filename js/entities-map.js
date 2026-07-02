@@ -704,6 +704,14 @@
         var proj = this.getProjection(); if (!proj) return;
         var d = proj.fromLatLngToDivPixel(this.position); if (!d) return;
         this.container.style.left = d.x + 'px'; this.container.style.top = d.y + 'px';
+        // Pan-into-view must wait for the FIRST real draw — before this the
+        // container sits at the float-pane origin, which can measure as
+        // "already visible" and make an earlier check a silent no-op.
+        if (!this._panned) {
+          this._panned = true;
+          var self = this;
+          setTimeout(function () { if (_popup === self) panPopupIntoView(); }, 80);
+        }
       };
       _PopupClass = Popup; return _PopupClass;
     }
@@ -753,7 +761,7 @@
       content.innerHTML = '<button type="button" class="emap-pop-x" aria-label="Close">×</button>' + (html || '');
       content.addEventListener('click', popupAction);
       var P = ensurePopupClass();
-      if (P) { _popup = new P(new maps.LatLng(Number(pos.lat), Number(pos.lng)), content); _popup.setMap(map); setTimeout(panPopupIntoView, 160); }
+      if (P) { _popup = new P(new maps.LatLng(Number(pos.lat), Number(pos.lng)), content); _popup.setMap(map); }
       else { infoWindow.setContent(content); infoWindow.setPosition(new maps.LatLng(Number(pos.lat), Number(pos.lng))); infoWindow.open(map); }
     }
     function selectRow(id) {
