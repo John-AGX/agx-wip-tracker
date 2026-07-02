@@ -971,19 +971,19 @@ function sampleParams(eventKey) {
         expires_at: '2026-06-15T00:00:00Z'
       };
     case 'user_invite':
-      return { name: 'Jane Smith', email: 'jane@example.com', password: 'temp-pass-123', invitedBy: 'John Project 86' };
+      return { name: 'Jane Smith', email: 'jane@example.com', password: 'temp-pass-123', invitedBy: 'Sample Admin' };
     case 'password_reset':
-      return { name: 'Jane Smith', email: 'jane@example.com', password: 'new-pass-123', resetBy: 'John Project 86' };
+      return { name: 'Jane Smith', email: 'jane@example.com', password: 'new-pass-123', resetBy: 'Sample Admin' };
     case 'job_assigned':
-      return { recipientName: 'Jane Smith', job: { title: 'Madeira Bay Restoration', jobNumber: 'S2245', client: 'Madeira Bay HOA', contractAmount: 125000, status: 'In Progress' }, assignedBy: 'John Project 86', action: 'assigned' };
+      return { recipientName: 'Jane Smith', job: { title: 'Madeira Bay Restoration', jobNumber: 'S2245', client: 'Madeira Bay HOA', contractAmount: 125000, status: 'In Progress' }, assignedBy: 'Sample Admin', action: 'assigned' };
     case 'schedule_entry':
-      return { recipientName: 'Mike Crew', entry: { startDate: '2026-05-10', days: 3, includesWeekends: false, notes: 'Bring scaffold' }, job: { title: 'Madeira Bay Restoration', jobNumber: 'S2245' }, assignedBy: 'John Project 86' };
+      return { recipientName: 'Mike Crew', entry: { startDate: '2026-05-10', days: 3, includesWeekends: false, notes: 'Bring scaffold' }, job: { title: 'Madeira Bay Restoration', jobNumber: 'S2245' }, assignedBy: 'Sample Admin' };
     case 'sub_assigned':
-      return { sub: { name: 'Summit Sealants', primaryContactFirst: 'Mike' }, job: { title: 'Madeira Bay Restoration', jobNumber: 'S2245' }, contractAmt: 12500, assignedBy: { name: 'John Project 86' } };
+      return { sub: { name: 'Summit Sealants', primaryContactFirst: 'Mike' }, job: { title: 'Madeira Bay Restoration', jobNumber: 'S2245' }, contractAmt: 12500, assignedBy: { name: 'Sample Admin' } };
     case 'lead_status_sold':
-      return { lead: { title: 'Solace Powerwash', client_company: 'Solace Communities', estimated_revenue_high: 18000 }, salesperson: { name: 'Jane Smith' }, changedBy: { name: 'John Project 86' } };
+      return { lead: { title: 'Solace Powerwash', client_company: 'Solace Communities', estimated_revenue_high: 18000 }, salesperson: { name: 'Jane Smith' }, changedBy: { name: 'Sample Admin' } };
     case 'lead_status_lost':
-      return { lead: { title: 'Solace Powerwash', client_company: 'Solace Communities' }, salesperson: { name: 'Jane Smith' }, changedBy: { name: 'John Project 86' }, reason: 'Lost to competitor', status: 'lost' };
+      return { lead: { title: 'Solace Powerwash', client_company: 'Solace Communities' }, salesperson: { name: 'Jane Smith' }, changedBy: { name: 'Sample Admin' }, reason: 'Lost to competitor', status: 'lost' };
     case 'cert_expiring':
       return { sub: { name: 'Summit Sealants', primaryContactFirst: 'Mike' }, cert: { type: 'gl', expirationDate: '2026-05-15', daysUntilExpiry: 12 } };
     case 'weekly_digest_pm':
@@ -1019,7 +1019,7 @@ function sampleParams(eventKey) {
 async function renderSample(eventKey, overrides) {
   // overrides let the test-send route swap sample placeholders for real
   // values (e.g. the caller's own name as the inviter) so a test email
-  // reads like the real thing instead of "John Project 86 invited you".
+  // reads like the real thing instead of "Sample Admin invited you".
   var params = Object.assign({}, sampleParams(eventKey), overrides || {});
   return render(eventKey, params);
 }
