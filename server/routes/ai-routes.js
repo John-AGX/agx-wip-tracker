@@ -3886,6 +3886,11 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
   const MAX_BUILTIN_REOPENS = 6;
   let builtinReopens = 0;
   let carriedBuiltinText = '';
+  // A reopened stream REPLAYS the in-flight turn's events (same sevt_* ids) —
+  // without this dedupe the client saw the answer text twice and duplicate tool
+  // chips after a builtin-tool reopen. Track processed event ids across passes and
+  // skip replays entirely.
+  const seenTurnEventIds = new Set();
   const SILENT_STOP_NUDGE_TEXTS = [
     'The tool results above completed successfully. Please summarize ' +
     'them in one or two sentences for the user before ending your turn.',
@@ -4099,6 +4104,16 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
     try {
       for await (const event of stream) {
         eventCounts[event.type] = (eventCounts[event.type] || 0) + 1;
+        // Replay dedupe (builtin-reopen): a reopened stream re-emits the turn's
+        // prior events with the SAME ids. Skip display events we already processed
+        // so the client never sees doubled text or duplicate chips. Deliberately
+        // NOT applied to agent.custom_tool_use — re-processing those re-queues
+        // their tool_results (pendingAutoResults resets per pass), and the
+        // per-request dedupeCache already prevents double execution.
+        if (event.id && (event.type === 'agent.message' || event.type === 'agent.tool_use')) {
+          if (seenTurnEventIds.has(event.id)) continue;
+          seenTurnEventIds.add(event.id);
+        }
         switch (event.type) {
           case 'agent.message': {
             // The session's agent.message arrives as a list of content
