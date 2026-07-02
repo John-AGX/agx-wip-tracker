@@ -200,7 +200,7 @@
           '<div id="p86-acct-outlook" style="font-size:13px;color:var(--text-dim,#888);">Checking…</div>' +
         '</div>' +
         '<div class="p86-acct-section">' +
-          '<div class="p86-acct-sectlabel">Email notifications</div>' +
+          '<div class="p86-acct-sectlabel">Notifications</div>' +
           '<div id="p86-acct-prefs" style="display:flex;flex-direction:column;gap:14px;">' +
             '<div style="font-size:11px;color:var(--text-dim,#888);">Loading…</div>' +
           '</div>' +
@@ -298,30 +298,66 @@
     });
   }
 
+  // Notification prefs — driven by the SERVER catalog (/api/push/events =
+  // server/notify-events.js: every notification, what it's for, which channels).
+  // Each row gets an Email and/or Push toggle: email writes prefs[key] (the
+  // long-standing flat opt-out the email senders check), push writes
+  // prefs.push[key]. Falls back to the local EVENT_DEFS (email-only) if the
+  // catalog endpoint is unreachable.
   function paintPrefs(prefs) {
     var pane = document.getElementById('p86-acct-prefs');
     if (!pane) return;
+    fetch('/api/push/events', { credentials: 'include' })
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .then(function(d) {
+        var events = (d && d.events && d.events.length) ? d.events
+          : EVENT_DEFS.map(function(ev) { return { key: ev.key, label: ev.label, desc: ev.desc, channels: { email: true, push: false } }; });
+        renderPrefRows(pane, prefs, events, !!(d && d.push_configured));
+      })
+      .catch(function() {
+        renderPrefRows(pane, prefs,
+          EVENT_DEFS.map(function(ev) { return { key: ev.key, label: ev.label, desc: ev.desc, channels: { email: true, push: false } }; }),
+          false);
+      });
+  }
+
+  function renderPrefRows(pane, prefs, events, pushConfigured) {
+    var pushPrefs = prefs.push || {};
     var html = '';
-    EVENT_DEFS.forEach(function(ev) {
-      // Default ON (send). false in the prefs blob = explicitly muted.
-      var on = prefs[ev.key] !== false;
-      html += '<label class="p86-pref-row">' +
-        '<input type="checkbox" data-pref-key="' + ev.key + '"' + (on ? ' checked' : '') + ' />' +
-        '<div class="p86-pref-body">' +
+    events.forEach(function(ev) {
+      var ch = ev.channels || { email: true, push: false };
+      var toggles = '';
+      if (ch.email) {
+        toggles += '<label style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--text-dim,#999);text-transform:none;cursor:pointer;">' +
+          '<input type="checkbox" data-pref-email="' + ev.key + '"' + (prefs[ev.key] !== false ? ' checked' : '') + ' style="width:auto;margin:0;" /> Email</label>';
+      }
+      if (ch.push && pushConfigured) {
+        toggles += '<label style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--text-dim,#999);text-transform:none;cursor:pointer;margin-left:12px;">' +
+          '<input type="checkbox" data-pref-push="' + ev.key + '"' + (pushPrefs[ev.key] !== false ? ' checked' : '') + ' style="width:auto;margin:0;" /> Push</label>';
+      }
+      html += '<div class="p86-pref-row" style="cursor:default;">' +
+        '<div class="p86-pref-body" style="flex:1;">' +
           '<div class="p86-pref-title">' + escapeHTML(ev.label) + '</div>' +
           '<div class="p86-pref-desc">' + escapeHTML(ev.desc) + '</div>' +
         '</div>' +
-      '</label>';
+        '<div style="flex:0 0 auto;display:flex;align-items:center;">' + toggles + '</div>' +
+      '</div>';
     });
+    html += '<div style="font-size:10px;color:var(--text-dim,#777);">Push reaches this device once you\'ve enabled notifications (🔔 in the Crew activity panel, bottom-right). On iPhone, add the app to your home screen first.</div>';
     html += '<div id="p86-acct-status" style="font-size:11px;color:var(--text-dim,#888);min-height:16px;"></div>';
     pane.innerHTML = html;
 
-    // Wire change handlers — autosave to server on every toggle so
-    // the user doesn't need a Save button.
-    pane.querySelectorAll('input[data-pref-key]').forEach(function(input) {
+    // Autosave on every toggle — email flat key, push nested under prefs.push.
+    pane.querySelectorAll('input[data-pref-email]').forEach(function(input) {
       input.addEventListener('change', function() {
-        var key = input.getAttribute('data-pref-key');
-        prefs[key] = !!input.checked; // explicit value — easier to debug than "delete on true"
+        prefs[input.getAttribute('data-pref-email')] = !!input.checked;
+        savePrefs(prefs);
+      });
+    });
+    pane.querySelectorAll('input[data-pref-push]').forEach(function(input) {
+      input.addEventListener('change', function() {
+        prefs.push = prefs.push || {};
+        prefs.push[input.getAttribute('data-pref-push')] = !!input.checked;
         savePrefs(prefs);
       });
     });

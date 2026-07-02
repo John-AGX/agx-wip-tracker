@@ -354,6 +354,13 @@ async function runOnce(opts) {
         var dueToday = relevant.filter(function (t) { return t.due_iso === localToday; });
         var de = buildTaskDigestEmail(u, overdue, dueToday);
         await sendEmail({ to: u.email, subject: de.subject, html: de.html, text: de.text, tag: 'task_due' });
+        try {
+          var pushBody = (overdue.length ? overdue.length + ' overdue' : '') +
+            (overdue.length && dueToday.length ? ' · ' : '') +
+            (dueToday.length ? dueToday.length + ' due today' : '');
+          require('./notify-events').sendPushForEvent(u.uid, 'task_due',
+            { title: '📋 ' + de.subject, body: pushBody, url: '/' }, u.prefs).catch(function () {});
+        } catch (_) {}
         fires[dkey] = Date.now();
         dirty = true;
         out.tasks.sent++;
@@ -377,6 +384,10 @@ async function runOnce(opts) {
         var zone = tz.resolveTz(ev.user_tz, ev.org_tz);
         var ee = buildEventReminderEmail(ev, zone);
         await sendEmail({ to: ev.email, subject: ee.subject, html: ee.html, text: ee.text, tag: 'event_reminder' });
+        try {
+          require('./notify-events').sendPushForEvent(ev.uid, 'event_reminder',
+            { title: '📅 ' + (ev.title || 'Upcoming event'), body: ee.subject, url: '/' }, ev.notification_prefs || {}).catch(function () {});
+        } catch (_) {}
         fires[ekey] = Date.now();
         dirty = true;
         out.events.sent++;
@@ -406,6 +417,10 @@ async function runOnce(opts) {
         var rzone = tz.resolveTz(rem.user_tz, rem.org_tz);
         var re = buildReminderEmail(rem, rzone);
         await sendEmail({ to: rem.email, subject: re.subject, html: re.html, text: re.text, tag: 'reminder' });
+        try {
+          require('./notify-events').sendPushForEvent(rem.uid, 'reminder',
+            { title: '⏰ ' + (rem.title || 'Reminder'), body: (rem.notes || re.subject).slice(0, 200), url: '/' }, rem.notification_prefs || {}).catch(function () {});
+        } catch (_) {}
         out.reminders.sent++;
       } catch (e) {
         // Claimed but send failed — leave it fired (at-most-once), matching

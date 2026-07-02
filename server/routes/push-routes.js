@@ -17,6 +17,23 @@ console.log('[push-routes] mounted at /api/push');
 
 router.use(requireAuth);
 
+// GET /api/push/events — the notification catalog (what each event says + which
+// channels it rides) plus the caller's current prefs. Drives the My Account UI.
+router.get('/events', async (req, res) => {
+  try {
+    const { NOTIFY_EVENTS } = require('../notify-events');
+    const r = await pool.query('SELECT notification_prefs FROM users WHERE id = $1', [req.user.id]);
+    res.json({
+      events: NOTIFY_EVENTS,
+      prefs: (r.rows[0] && r.rows[0].notification_prefs) || {},
+      push_configured: push.isConfigured()
+    });
+  } catch (e) {
+    console.error('GET /api/push/events error:', e);
+    res.status(500).json({ error: 'Failed to load notification catalog' });
+  }
+});
+
 router.get('/public-key', async (req, res) => {
   // ensureInit self-generates + persists a VAPID pair on first call if no env
   // override exists — so this endpoint flips to configured:true on its own.

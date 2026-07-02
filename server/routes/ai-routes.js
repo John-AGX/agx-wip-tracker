@@ -11881,11 +11881,11 @@ async function execScribeWrite(tu, ctx) {
         const title = (result.meta && result.meta.title) || result.title || 'a change';
         const line = result.applySummary ? ('\n\n' + String(result.applySummary).slice(0, 500)) : '';
         try { await postAgentJobToThread({ user_id: uid }, '✍️ **Scribe finished drafting — ' + title + '**' + line + '\n\n_Review & approve it in the Payloads section of the chat sidebar._'); } catch (_) {}
-        try { const push = require('../push'); await push.sendPush(uid, { title: '✍️ Scribe drafted: ' + String(title).slice(0, 80), body: String(result.applySummary || 'Review & approve in Project 86').slice(0, 200), url: '/', tag: 'scribe' }); } catch (_) {}
+        try { const { sendPushForEvent } = require('../notify-events'); await sendPushForEvent(uid, 'scribe_draft', { title: '✍️ Scribe drafted: ' + String(title).slice(0, 80), body: String(result.applySummary || 'Review & approve in Project 86').slice(0, 200), url: '/' }); } catch (_) {}
       } else {
         const errMsg = (result && result.error) || 'unknown error';
         try { await postAgentJobToThread({ user_id: uid }, '⚠️ **Scribe couldn\'t complete that draft**: ' + String(errMsg).slice(0, 400) + '\n\n_Re-ask with more specifics (exact entity + fields) and I\'ll hand it back to the Scribe._'); } catch (_) {}
-        try { const push = require('../push'); await push.sendPush(uid, { title: '⚠️ Scribe draft failed', body: String(errMsg).slice(0, 200), url: '/', tag: 'scribe' }); } catch (_) {}
+        try { const { sendPushForEvent } = require('../notify-events'); await sendPushForEvent(uid, 'scribe_draft', { title: '⚠️ Scribe draft failed', body: String(errMsg).slice(0, 200), url: '/' }); } catch (_) {}
       }
     })
     .catch(function (e) { console.warn('[scribe-bg] detached draft failed:', e && e.message); });
@@ -12611,10 +12611,10 @@ async function notifyAgentJobNeedsInput(job, question) {
       '<p style="color:#8b90a5;font-size:12px;margin-top:12px">Answer it in your Background Tasks panel and it\'ll pick up right where it left off.</p></div>';
     const { sendEmail } = require('../email');
     await sendEmail({ to: user.email, subject: '❓ ' + title + ' needs your answer', html: html, text: String(question).slice(0, 1000), tag: 'agent_task', organizationId: job.organization_id });
-    // Phone/desktop push (S7) — best-effort, no-ops until VAPID env is set.
+    // Phone/desktop push — gated on the user's notification prefs (agent_task).
     try {
-      const push = require('../push');
-      await push.sendPush(job.user_id, { title: '❓ ' + title + ' needs your answer', body: String(question).slice(0, 300), url: '/', tag: 'agent_task_' + job.id });
+      const { sendPushForEvent } = require('../notify-events');
+      await sendPushForEvent(job.user_id, 'agent_task', { title: '❓ ' + title + ' needs your answer', body: String(question).slice(0, 300), url: '/' }, user.notification_prefs || {});
     } catch (_) {}
   } catch (e) {
     console.warn('[agent-jobs] needs-input notify failed:', e && e.message);
@@ -12648,10 +12648,10 @@ async function notifyAgentJobDone(job, result) {
       '<p style="margin-top:16px"><a href="' + esc(appUrl) + '" style="background:#4f8cff;color:#fff;text-decoration:none;padding:9px 16px;border-radius:8px;display:inline-block">Open Project 86</a></p></div>';
     const { sendEmail } = require('../email');
     await sendEmail({ to: user.email, subject: subject, html: html, text: bodyText.slice(0, 2000), tag: 'agent_task', organizationId: job.organization_id });
-    // Phone/desktop push (S7) — best-effort, no-ops until VAPID env is set.
+    // Phone/desktop push — gated on the user's notification prefs (agent_task).
     try {
-      const push = require('../push');
-      await push.sendPush(job.user_id, { title: subject, body: bodyText.slice(0, 300), url: '/', tag: 'agent_task_' + job.id });
+      const { sendPushForEvent } = require('../notify-events');
+      await sendPushForEvent(job.user_id, 'agent_task', { title: subject, body: bodyText.slice(0, 300), url: '/' }, prefs);
     } catch (_) {}
   } catch (e) {
     console.warn('[agent-jobs] notify failed:', e && e.message);

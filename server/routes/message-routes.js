@@ -218,6 +218,17 @@ async function notifyMessageDM(key, senderId, body) {
       text: text,
       tag: 'message'
     }).catch((e) => console.warn('[messages] notify email failed:', e && e.message));
+
+    // Phone/desktop push (catalog key 'messages' — same key the email gate uses,
+    // push side gated on notification_prefs.push.messages).
+    try {
+      const { sendPushForEvent } = require('../notify-events');
+      sendPushForEvent(recipientId, 'messages', {
+        title: '💬 ' + senderName,
+        body: preview.slice(0, 200),
+        url: '/'
+      }, prefs).catch(() => {});
+    } catch (_) {}
   } catch (e) {
     console.warn('[messages] notify lookup failed:', e && e.message);
   }
