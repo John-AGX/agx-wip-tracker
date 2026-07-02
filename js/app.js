@@ -3,11 +3,13 @@
 
         // ==================== THEME TOGGLE ====================
         (function() {
+            // DARK is the default for everyone — first visit, new users, and
+            // regardless of the OS/browser color-scheme preference. Light mode
+            // applies ONLY when the user explicitly chose it via the toggle
+            // (saved as p86-theme='light'). The old prefers-color-scheme
+            // fallback made light-OS users land in light mode uninvited.
             var saved = localStorage.getItem('p86-theme');
             if (saved === 'light') document.body.classList.add('light-mode');
-            else if (!saved && window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches) {
-                document.body.classList.add('light-mode');
-            }
             // The toggle now lives inside the user-avatar dropdown as a
             // menu item, so we update both the label text and prepend a
             // small icon. Light mode -> moon glyph + "Switch to dark
