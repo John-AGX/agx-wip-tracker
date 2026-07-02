@@ -28,6 +28,15 @@
   var _includePhotos = true;    // default-on with toggle, per the user
   var _abortController = null;
 
+  // Crew chip bridge (js/crew-chip.js) — narrates the turn's baton-passing in the
+  // header ("Assistant is thinking…" → "Pulling 86 in…" → "Scribe is drafting…").
+  // Fire-and-forget; if no listener is mounted this is a no-op.
+  function crewEmit(kind, extra) {
+    try {
+      window.dispatchEvent(new CustomEvent('p86:crew', { detail: Object.assign({ kind: kind }, extra || {}) }));
+    } catch (_) {}
+  }
+
   // Auto-rendered PDF page images for the current estimate. Populated
   // lazily on panel open so by the time the user sends a turn, scanned
   // PDFs (no extracted text layer) have already been rasterized client-
@@ -2932,6 +2941,7 @@
     // "Reading file.ts" becomes "Read file.ts · 12 matched" on the
     // same line.
     var liveChip = null;
+    var crewReplied = false; // crew chip: emit 'replying' once per turn
     // Approval-tier metadata per-tool_use_id, set from the per-event
     // `tier` field on tool_use SSE events. Used by finalizeProposalBubble
     // to decide: structured cards (approval) or one inline Approve /
@@ -2940,6 +2950,7 @@
     var turnTier = null;
     _streaming = true;
     setSendDisabled(true);
+    crewEmit('turn_start');
 
     _abortController = new AbortController();
     return fetch(endpoint, {
@@ -2965,6 +2976,7 @@
             if (payload.session_resolved.agent_key) {
               _activeAgentKey = payload.session_resolved.agent_key;
               renderAgentBadge();
+              crewEmit('agent', { agent: _activeAgentKey });
             }
             var resolvedId = payload.session_resolved.db_session_id;
             if (resolvedId != null && resolvedId !== _currentSessionId) {
@@ -2990,6 +3002,7 @@
           return;
         }
         if (payload.delta) {
+          if (!crewReplied) { crewReplied = true; crewEmit('replying'); }
           assistantText += payload.delta;
           if (contentEl) contentEl.innerHTML = renderMarkdown(assistantText) +
             '<span style="display:inline-block;width:7px;height:13px;background:#34d399;margin-left:2px;animation:p86-blink 0.9s step-end infinite;"></span>';
@@ -3006,10 +3019,12 @@
           liveChip = appendLiveToolChip(streamDiv,
             payload.tool_started.name || 'tool',
             payload.tool_started.input || null);
+          crewEmit('tool', { name: payload.tool_started.name });
           var label = TOOL_VERBS[payload.tool_started.name] || (payload.tool_started.name + '…');
           brainYoga.override(label, true);
           scrollToBottom();
         } else if (payload.tool_applied) {
+          crewEmit('tool_done', { name: payload.tool_applied.name });
           // Payload DSL — emit_payload_file lands here with meta
           // carrying the full file_content. Render a dedicated file
           // artifact in the message stream AND refresh the sidebar
@@ -3164,6 +3179,7 @@
       _streaming = false;
       setSendDisabled(false);
       _abortController = null;
+      crewEmit('turn_end');
 
       if (pendingToolUses.length) {
         // Tool-use turn. The server tags the turn with a tier:
@@ -3236,6 +3252,7 @@
       _streaming = false;
       setSendDisabled(false);
       _abortController = null;
+      crewEmit('turn_end');
       if (err && err.name === 'AbortError') {
         if (streamDiv && streamDiv.parentNode) streamDiv.parentNode.removeChild(streamDiv);
         return;
