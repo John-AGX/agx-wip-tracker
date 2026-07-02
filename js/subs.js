@@ -28,8 +28,110 @@
   function escapeAttr(s) { return escapeHTML(s).replace(/"/g, '&quot;'); }
 
   // Filter state survives across re-renders within a session.
-  var _state = { trade: '', status: 'active', search: '' };
+  var _state = { trade: '', status: 'active', search: '', drawer: null };
   var _editingId = null;
+
+  // ── Filter drawer + saved views (shared p86FilterDrawer / list_views) ──
+  function subsFilterFields() {
+    return [
+      { key: 'city', label: 'City', type: 'text', placeholder: 'City…' },
+      { key: 'state', label: 'State', type: 'text', placeholder: 'FL…' },
+      { key: 'w9', label: 'W-9', type: 'chips', options: [{ v: 'on_file', label: 'On file' }, { v: 'missing', label: 'Missing' }] },
+      { key: 'w9_expires', label: 'W-9 Expires', type: 'daterange' },
+      { key: 'insurance_expires', label: 'Insurance Expires', type: 'daterange' },
+      { key: 'payment_hold', label: 'Payment Hold', type: 'chips', options: [{ v: 'hold', label: 'On hold' }, { v: 'clear', label: 'Clear' }] }
+    ];
+  }
+  function subDateInRange(val, range) {
+    if (!range || (!range.from && !range.to)) return true;
+    if (!val) return false;
+    var d = String(val).slice(0, 10);
+    if (range.from && d < range.from) return false;
+    if (range.to && d > range.to) return false;
+    return true;
+  }
+  function matchesSubsDrawer(s, d) {
+    if (!d) return true;
+    var FD = window.p86FilterDrawer; if (!FD) return true;
+    if (d.city && String(s.city || '').toLowerCase().indexOf(String(d.city).toLowerCase()) < 0) return false;
+    if (d.state && String(s.state || '').toLowerCase().indexOf(String(d.state).toLowerCase()) < 0) return false;
+    if (d.w9 && d.w9.length) {
+      var w9key = s.w9_on_file ? 'on_file' : 'missing';
+      if (d.w9.indexOf(w9key) < 0) return false;
+    }
+    if (!subDateInRange(s.w9_expires, FD.resolveDateRange(d.w9_expires))) return false;
+    if (!subDateInRange(s.insurance_expires, FD.resolveDateRange(d.insurance_expires))) return false;
+    if (d.payment_hold && d.payment_hold.length) {
+      var phkey = s.payment_hold ? 'hold' : 'clear';
+      if (d.payment_hold.indexOf(phkey) < 0) return false;
+    }
+    return true;
+  }
+  function updateSubsFilterBtn() {
+    var btn = document.getElementById('subs-filter-btn');
+    if (!btn) return;
+    var FD = window.p86FilterDrawer;
+    var n = (_state.drawer && FD) ? FD.countActive(subsFilterFields(), _state.drawer) : 0;
+    btn.innerHTML = (window.p86Icon ? window.p86Icon('funnel') : 'Filter') + (n ? ' <strong>(' + n + ')</strong>' : '');
+    btn.classList.toggle('pf-on', n > 0);
+  }
+  function openFilter() {
+    var FD = window.p86FilterDrawer; if (!FD) return;
+    var fields = subsFilterFields();
+    FD.open({
+      title: 'Filter Subs', fields: fields,
+      values: _state.drawer || FD.emptyValues(fields),
+      onApply: function(v) { _state.drawer = v; updateSubsFilterBtn(); renderDirectory(); },
+      onClear: function() { _state.drawer = null; updateSubsFilterBtn(); renderDirectory(); }
+    });
+  }
+  function openViews(anchor) {
+    var existing = document.getElementById('subs-views-pop');
+    if (existing) { existing.remove(); return; }
+    if (!(window.p86Api && window.p86Api.listViews)) return;
+    window.p86Api.listViews.list('subs').then(function(r) {
+      var views = (r && r.views) || [];
+      var pop = document.createElement('div');
+      pop.id = 'subs-views-pop';
+      pop.style.cssText = 'position:fixed;z-index:100000;min-width:244px;background:var(--card-bg,#161a2b);border:1px solid var(--border,#333);border-radius:8px;padding:6px;box-shadow:0 8px 24px rgba(0,0,0,.45);font-size:13px;';
+      pop.innerHTML = (views.length ? views.map(function(v) {
+        return '<div data-view="' + escapeAttr(v.id) + '" style="display:flex;align-items:center;gap:6px;padding:4px 6px;border-radius:6px;">' +
+          '<span class="sv-apply" style="flex:1;cursor:pointer;">' + escapeHTML(v.name) + (v.is_default ? ' <span style="color:var(--text-dim,#888);font-size:10px;">(default)</span>' : '') + '</span>' +
+          '<a href="#" data-def="' + escapeAttr(v.id) + '" title="Set as default" style="text-decoration:none;">★</a>' +
+          '<a href="#" data-del="' + escapeAttr(v.id) + '" title="Delete" style="text-decoration:none;color:#f87171;">✕</a>' +
+        '</div>';
+      }).join('') : '<div style="padding:6px 8px;color:var(--text-dim,#888);">No saved views yet.</div>') +
+      '<div style="border-top:1px solid var(--border,#333);margin-top:6px;padding-top:6px;"><button type="button" class="ee-btn sv-save" style="width:100%;">＋ Save current filters as view…</button></div>';
+      document.body.appendChild(pop);
+      var r2 = anchor.getBoundingClientRect();
+      pop.style.top = (r2.bottom + 4) + 'px';
+      pop.style.left = Math.max(8, Math.min(r2.right - 244, window.innerWidth - 252)) + 'px';
+      function close() { pop.remove(); document.removeEventListener('mousedown', onOut, true); }
+      function onOut(e) { if (!pop.contains(e.target) && e.target !== anchor) close(); }
+      setTimeout(function() { document.addEventListener('mousedown', onOut, true); }, 0);
+      pop.querySelectorAll('.sv-apply').forEach(function(sp) {
+        sp.addEventListener('click', function() {
+          var v = views.find(function(x) { return x.id === sp.parentNode.getAttribute('data-view'); });
+          if (!v) return;
+          var f = (v.config && v.config.filters) || {};
+          _state.trade = f.trade || ''; _state.status = ('status' in f) ? f.status : 'active'; _state.search = f.search || '';
+          _state.drawer = f.drawer || null;
+          var tEl = document.getElementById('subs-filter-trade'); if (tEl) tEl.value = _state.trade;
+          var sEl = document.getElementById('subs-filter-status'); if (sEl) sEl.value = _state.status;
+          var qEl = document.getElementById('subs-search'); if (qEl) qEl.value = _state.search;
+          close(); updateSubsFilterBtn(); renderDirectory();
+        });
+      });
+      pop.querySelectorAll('[data-def]').forEach(function(a) { a.addEventListener('click', function(e) { e.preventDefault(); e.stopPropagation(); window.p86Api.listViews.update(a.getAttribute('data-def'), { is_default: true }).then(function() { close(); }); }); });
+      pop.querySelectorAll('[data-del]').forEach(function(a) { a.addEventListener('click', function(e) { e.preventDefault(); e.stopPropagation(); if (!confirm('Delete this saved view?')) return; window.p86Api.listViews.remove(a.getAttribute('data-del')).then(close); }); });
+      pop.querySelector('.sv-save').addEventListener('click', function() {
+        var name = prompt('Name this view:'); if (name == null) return; name = String(name).trim(); if (!name) return;
+        window.p86Api.listViews.create({ page: 'subs', name: name, config: { filters: { trade: _state.trade, status: _state.status, search: _state.search, drawer: _state.drawer } }, is_default: false })
+          .then(function() { close(); })
+          .catch(function() { alert('Could not save view.'); });
+      });
+    });
+  }
 
   // ──────────────────────────────────────────────────────────────────
   // Directory render
@@ -81,6 +183,8 @@
     var filtered = all.slice();
     if (_state.trade) filtered = filtered.filter(function(s) { return (s.trade || '') === _state.trade; });
     if (_state.status) filtered = filtered.filter(function(s) { return (s.status || 'active') === _state.status; });
+    if (_state.drawer) filtered = filtered.filter(function(s) { return matchesSubsDrawer(s, _state.drawer); });
+    updateSubsFilterBtn();
     if (_state.search) {
       var q = _state.search.toLowerCase();
       filtered = filtered.filter(function(s) {
@@ -1488,6 +1592,8 @@
   window.p86Subs = {
     render: renderDirectory,
     refresh: refresh,
+    openFilter: openFilter,
+    openViews: openViews,
     openNew: openNew,
     openEdit: openEdit,
     setFilter: setFilter,

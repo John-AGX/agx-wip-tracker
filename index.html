@@ -1664,6 +1664,8 @@
                                 <option value="paused">Paused</option>
                                 <option value="closed">Closed</option>
                             </select>
+                            <button class="ee-btn ghost" id="subs-filter-btn" onclick="window.p86Subs && window.p86Subs.openFilter && window.p86Subs.openFilter()" title="Filter subs" aria-label="Filter"></button>
+                            <button class="ee-btn ghost" id="subs-views-btn" onclick="window.p86Subs && window.p86Subs.openViews && window.p86Subs.openViews(this)" title="Saved views">Views ▾</button>
                             <input type="text" id="subs-search" oninput="window.p86Subs && window.p86Subs.setFilter && window.p86Subs.setFilter('search', this.value)" placeholder="Search subs…" style="min-width:200px;" />
                             <span class="p86-ask86-mount"></span>
                         </div>
@@ -3162,7 +3164,7 @@
          my-files.js, which merge it with live folders for the grant
          dropdown and the My Files tree. -->
     <script src="js/folder-taxonomy.js?v=2"></script>
-    <script src="js/subs.js?v=8c"></script>
+    <script src="js/subs.js?v=9c"></script>
     <script src="js/job-audit.js?v=3c"></script>
     <script src="js/job-reports.js?v=1b"></script>
     <!-- Shared table enhancements (reorder / resize / freeze first column /
