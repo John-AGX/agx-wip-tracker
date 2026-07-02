@@ -1466,6 +1466,11 @@
     }
     if (!requiresEntity) entityId = '__global__';
     var panel = ensurePanel();
+    // Always check for background-Scribe drafts on open — same-entity
+    // reopens skip the loadHistory path entirely, so this is the one
+    // hook that runs on EVERY open. (Async; populates when the fetch
+    // lands.)
+    try { refreshPendingApprovals(); } catch (_) {}
     // Prefetch the session list once per panel lifetime so auto-anchor
     // has data to work with on the first navigation. Subsequent opens
     // skip the fetch (cached); the sidebar's own open handler refreshes
