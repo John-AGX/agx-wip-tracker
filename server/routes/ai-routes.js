@@ -3876,6 +3876,16 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
   const MAX_SILENT_STOP_NUDGES = 2;
   let silentStopNudges = 0;
   let autoResultsFlushedThisTurn = false;
+  // Built-in-tool continuation state. When a BUILTIN tool (web_search / web_fetch /
+  // bash / …) executes server-side in the session container, Anthropic can end the
+  // current events.stream WITHOUT a session.status_idle — an execution boundary,
+  // not a drop (observed intermittently on assistant web_search turns). We reopen
+  // the stream (no new events) to collect the post-tool continuation; without this
+  // the relay hung up right after the web_search chip and the user saw silence.
+  // Capped; carried text preserves pre-tool deltas across the per-pass reset.
+  const MAX_BUILTIN_REOPENS = 6;
+  let builtinReopens = 0;
+  let carriedBuiltinText = '';
   const SILENT_STOP_NUDGE_TEXTS = [
     'The tool results above completed successfully. Please summarize ' +
     'them in one or two sentences for the user before ending your turn.',
@@ -4053,7 +4063,10 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
   // event counts) resets each iteration; nudge counter persists.
   let nextEventsToSend = eventsToSend;
   while (true) {
-    let assistantText = '';
+    // Seed with any text carried across a builtin-tool stream reopen, so the
+    // idle-side persist writes the SAME text the client already saw streamed.
+    let assistantText = carriedBuiltinText;
+    carriedBuiltinText = '';
     const pendingToolUses = [];
     // Auto-tier batch buffer (Phase B refactor): when the model emits
     // parallel `agent.custom_tool_use` events, we run the auto-tier
@@ -4651,6 +4664,22 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
     }
 
     if (!stallNudgeQueued) {
+      // Built-in-tool continuation. Reaching here means the stream ended WITHOUT
+      // session.status_idle (the idle case returns directly). If a builtin tool
+      // (agent.tool_use — web_search/web_fetch/bash/…) fired this pass, that end is
+      // an execution boundary while the tool runs server-side — NOT the turn's end.
+      // Reopen the stream with no new events and keep listening for the post-tool
+      // continuation; without this the response hung up right after the web_search
+      // chip. Carried text survives the per-pass reset above.
+      if ((eventCounts['agent.tool_use'] || 0) > 0 && builtinReopens < MAX_BUILTIN_REOPENS) {
+        builtinReopens++;
+        carriedBuiltinText = assistantText;
+        console.log('[v2-stream] builtin tool ended stream without idle on', sessionId,
+          '— reopening for the continuation (reopen', builtinReopens, 'of', MAX_BUILTIN_REOPENS + ')');
+        nextEventsToSend = [];
+        continue;
+      }
+
       // Fix 2 — silent-stop recovery. If we already flushed auto-tier
       // tool_results this turn AND the resumed turn produced zero
       // text AND no approval-tier tools are pending, the model fell
