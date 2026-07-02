@@ -22,6 +22,7 @@ router.use(requireAuth);
 router.get('/events', async (req, res) => {
   try {
     const { NOTIFY_EVENTS } = require('../notify-events');
+    await push.ensureInit();   // lazy VAPID init — without this a fresh process reports configured:false
     const r = await pool.query('SELECT notification_prefs FROM users WHERE id = $1', [req.user.id]);
     res.json({
       events: NOTIFY_EVENTS,
