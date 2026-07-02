@@ -13491,17 +13491,6 @@ router.post('/86/chat', requireAuth, requireOrg, aiChatLimiter, aiChatHourlyLimi
       console.warn('[/86/chat] per-entity context build skipped:', e.message);
     }
 
-    // Day-orient (team-feel): on the FIRST turn of a fresh session, prepend a
-    // compact "today's plate" digest so the agent opens already knowing the day.
-    // First-turn only (freshlyCreated) → injected once, never re-sent. Fail-safe:
-    // buildTodayDigest returns '' on any error, so this can never break the turn.
-    if (session && session._freshlyCreated) {
-      try {
-        const digest = await buildTodayDigest(req.user.id);
-        if (digest) turnContextText = turnContextText ? (digest + '\n\n' + turnContextText) : digest;
-      } catch (_) { /* never blocks the chat */ }
-    }
-
     // Auto-attach uploaded photos to whichever entity is open (best-
     // effort — failures don't block the chat from sending).
     if (additionalImages.length) {
@@ -13567,6 +13556,18 @@ router.post('/86/chat', requireAuth, requireOrg, aiChatLimiter, aiChatHourlyLimi
     // ai_sessions (pre-fix); coalesce to 'global' at every insert so
     // the chat path never trips the constraint.
     const sessionEntityId = session.entity_id || 'global';
+
+    // Day-orient (team-feel): on the FIRST turn of a fresh session, prepend a
+    // compact "today's plate" digest so the agent opens already knowing the day.
+    // MUST live AFTER resolveSessionForChat — an earlier placement referenced
+    // `session` inside its TDZ and 500'd every turn ("Cannot access 'session'
+    // before initialization"). First-turn only; fail-safe ('' on any error).
+    if (session._freshlyCreated) {
+      try {
+        const digest = await buildTodayDigest(req.user.id);
+        if (digest) turnContextText = turnContextText ? (digest + '\n\n' + turnContextText) : digest;
+      } catch (_) { /* never blocks the chat */ }
+    }
 
     // Persist the user's message under the resolved session's keys.
     // estimate_id is the legacy column name for "entity_id" on
