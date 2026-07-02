@@ -643,28 +643,23 @@
   // the bar updates in place (no table rebuild) as boxes are ticked.
   function updateLeadsBulkBar() {
     var bar = document.getElementById('leads-bulkbar');
-    if (!bar) return;
+    if (!bar || !window.p86BulkRibbon) return;
     var n = _leadsSelected.size;
-    if (!n) { bar.className = ''; bar.style.display = 'none'; bar.innerHTML = ''; return; }
-    // Floating bottom-center ribbon (shared .p86-bulkbar-float in styles.css).
-    bar.style.cssText = '';
-    bar.className = 'p86-bulkbar-float';
-    var selStyle = 'padding:4px 6px;font-size:12px;border-radius:6px;border:1px solid var(--border,#2e3346);background:var(--card-bg,#161a2b);color:var(--text,#eef0f6);cursor:pointer;';
-    var btnStyle = 'padding:5px 10px;font-size:12px;border-radius:7px;border:1px solid var(--border,#2e3346);background:transparent;color:var(--text,#eef0f6);cursor:pointer;';
-    var statusOpts = '<option value="">Set status…</option>' + STATUSES.map(function(s) { return '<option value="' + s.key + '">' + escapeHTML(s.label) + '</option>'; }).join('');
+    if (!n) { window.p86BulkRibbon.hide(bar); return; }
     var pms = (window.p86Admin && window.p86Admin.getActivePMs && window.p86Admin.getActivePMs()) || [];
-    var assignOpts = '<option value="">Assign to…</option><option value="__none__">— Unassign —</option>' + pms.map(function(u) { return '<option value="' + u.id + '">' + escapeHTML(u.name) + '</option>'; }).join('');
     var lostReasons = [['budget', 'Budget'], ['timeline', 'Timeline'], ['competitor', 'Competitor'], ['no_response', 'No response'], ['not_qualified', 'Not qualified'], ['scope', 'Scope'], ['other', 'Other']];
-    var lostOpts = '<option value="">Mark lost…</option>' + lostReasons.map(function(r) { return '<option value="' + r[0] + '">' + r[1] + '</option>'; }).join('');
-    bar.innerHTML =
-      '<span style="font-size:13px;color:var(--text,#eef0f6);font-weight:600;white-space:nowrap;">' + n + ' selected</span>' +
-      '<button type="button" onclick="window.p86LeadsExportSelected()" style="' + btnStyle + '" title="Export selected to Excel">⬇ Export</button>' +
-      '<select onchange="window.p86LeadsBulkStatus(this.value);this.value=\'\';" style="' + selStyle + '">' + statusOpts + '</select>' +
-      '<select onchange="window.p86LeadsBulkAssign(this.value);this.value=\'\';" style="' + selStyle + '">' + assignOpts + '</select>' +
-      '<label style="font-size:12px;color:var(--text-dim,#c4c8d8);white-space:nowrap;">Follow-up <input type="date" onchange="window.p86LeadsBulkFollowup(this.value);this.value=\'\';" style="' + selStyle + '"></label>' +
-      '<select onchange="window.p86LeadsBulkLost(this.value);this.value=\'\';" style="' + selStyle + '">' + lostOpts + '</select>' +
-      '<button type="button" onclick="window.p86LeadsDeleteSelected()" style="padding:5px 12px;font-size:12px;font-weight:600;border-radius:7px;border:1px solid rgba(248,113,113,.5);background:#f87171;color:#1a1d27;cursor:pointer;">Delete ' + n + '</button>' +
-      '<button type="button" onclick="window.p86LeadsClearSelection()" style="' + btnStyle + '">Clear</button>';
+    window.p86BulkRibbon.render(bar, {
+      count: n,
+      onClear: function() { window.p86LeadsClearSelection(); },
+      actions: [
+        { icon: 'exports', title: 'Export selected to Excel', onClick: function() { window.p86LeadsExportSelected(); } },
+        { icon: 'bookmark', title: 'Set status', menu: STATUSES.map(function(s) { return { label: s.label, onClick: function() { window.p86LeadsBulkStatus(s.key); } }; }) },
+        { icon: 'users', title: 'Assign to', menu: [{ label: '— Unassign —', onClick: function() { window.p86LeadsBulkAssign('__none__'); } }].concat(pms.map(function(u) { return { label: u.name, onClick: function() { window.p86LeadsBulkAssign(String(u.id)); } }; })) },
+        { icon: 'schedule', title: 'Set follow-up date', date: true, onPick: function(d) { window.p86LeadsBulkFollowup(d); } },
+        { icon: 'x-circle', title: 'Mark lost', menu: lostReasons.map(function(r) { return { label: r[1], onClick: function() { window.p86LeadsBulkLost(r[0]); } }; }) },
+        { icon: 'delete', title: 'Delete ' + n, danger: true, onClick: function() { window.p86LeadsDeleteSelected(); } }
+      ]
+    });
   }
 
   // Apply a field update to every selected lead (server auto-stamps status

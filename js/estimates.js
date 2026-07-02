@@ -497,19 +497,18 @@ function syncEstimatesSelectAll() {
 }
 function updateEstimatesBulkBar() {
     var bar = document.getElementById('estimates-bulkbar');
-    if (!bar) return;
+    if (!bar || !window.p86BulkRibbon) return;
     var n = _estSelected.size;
-    if (!n) { bar.className = ''; bar.style.display = 'none'; bar.innerHTML = ''; return; }
-    // Floating bottom-center ribbon (shared .p86-bulkbar-float in styles.css).
-    bar.style.cssText = '';
-    bar.className = 'p86-bulkbar-float';
-    var btnStyle = 'padding:5px 10px;font-size:12px;border-radius:7px;border:1px solid var(--border,#2e3346);background:transparent;color:var(--text,#eef0f6);cursor:pointer;';
-    bar.innerHTML =
-        '<span style="font-size:13px;color:var(--text,#eef0f6);font-weight:600;white-space:nowrap;">' + n + ' selected</span>' +
-        '<button type="button" onclick="window.p86EstExportSelected()" style="' + btnStyle + '" title="Export selected to Excel">⬇ Export</button>' +
-        '<button type="button" onclick="window.p86EstBulkMarkSent()" style="' + btnStyle + '" title="Record that these proposals were sent">Mark sent</button>' +
-        '<button type="button" onclick="window.p86EstDeleteSelected()" style="padding:5px 12px;font-size:12px;font-weight:600;border-radius:7px;border:1px solid rgba(248,113,113,.5);background:#f87171;color:#1a1d27;cursor:pointer;">Delete ' + n + '</button>' +
-        '<button type="button" onclick="window.p86EstClearSelection()" style="' + btnStyle + '">Clear</button>';
+    if (!n) { window.p86BulkRibbon.hide(bar); return; }
+    window.p86BulkRibbon.render(bar, {
+        count: n,
+        onClear: function() { window.p86EstClearSelection(); },
+        actions: [
+            { icon: 'exports', title: 'Export selected to Excel', onClick: function() { window.p86EstExportSelected(); } },
+            { icon: 'composer-send', title: 'Mark sent (records that these proposals went out)', onClick: function() { window.p86EstBulkMarkSent(); } },
+            { icon: 'delete', title: 'Delete ' + n, danger: true, onClick: function() { window.p86EstDeleteSelected(); } }
+        ]
+    });
 }
 function p86EstBulkMarkSent() {
     var ids = Array.from(_estSelected);

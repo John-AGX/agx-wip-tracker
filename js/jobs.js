@@ -1165,32 +1165,27 @@ function renderJobsMain() {
         }
         function updateJobsBulkBar() {
             var bar = document.getElementById('jobs-bulkbar');
-            if (!bar) return;
+            if (!bar || !window.p86BulkRibbon) return;
             var n = _jobsSelected.size;
-            if (!n) { bar.className = ''; bar.style.display = 'none'; bar.innerHTML = ''; return; }
-            // Floating bottom-center ribbon (shared .p86-bulkbar-float in styles.css).
-            bar.style.cssText = '';
-            bar.className = 'p86-bulkbar-float';
-            var selStyle = 'padding:4px 6px;font-size:12px;border-radius:6px;border:1px solid var(--border,#2e3346);background:var(--card-bg,#161a2b);color:var(--text,#eef0f6);cursor:pointer;';
-            var btnStyle = 'padding:5px 10px;font-size:12px;border-radius:7px;border:1px solid var(--border,#2e3346);background:transparent;color:var(--text,#eef0f6);cursor:pointer;';
+            if (!n) { window.p86BulkRibbon.hide(bar); return; }
             // Status options: the standard lifecycle set + any other statuses in use.
             var std = ['In Progress', 'On Hold', 'Completed', 'Archived'];
             var seen = {}; std.forEach(function(s) { seen[s] = true; });
             (appData.jobs || []).forEach(function(j) { if (j.status && !seen[j.status]) { seen[j.status] = true; std.push(j.status); } });
-            var statusOpts = '<option value="">Set status…</option>' + std.map(function(s) { return '<option value="' + escapeHTML(s) + '">' + escapeHTML(s) + '</option>'; }).join('');
-            var assignHtml = '';
+            var actions = [
+                { icon: 'exports', title: 'Export selected to Excel', onClick: function() { window.p86JobsExportSelected(); } },
+                { icon: 'bookmark', title: 'Set status', menu: std.map(function(s) { return { label: s, onClick: function() { window.p86JobsBulkStatus(s); } }; }) }
+            ];
             if (window.p86Auth && window.p86Auth.isAdmin && window.p86Auth.isAdmin()) {
                 var pms = (window.p86Admin && window.p86Admin.getActivePMs && window.p86Admin.getActivePMs()) || [];
-                assignHtml = '<select onchange="window.p86JobsBulkAssign(this.value,this.selectedOptions[0]&&this.selectedOptions[0].textContent);this.value=\'\';" style="' + selStyle + '"><option value="">Assign PM…</option>' +
-                    pms.map(function(u) { return '<option value="' + u.id + '">' + escapeHTML(u.name) + '</option>'; }).join('') + '</select>';
+                if (pms.length) actions.push({ icon: 'users', title: 'Assign PM', menu: pms.map(function(u) { return { label: u.name, onClick: function() { window.p86JobsBulkAssign(String(u.id), u.name); } }; }) });
             }
-            bar.innerHTML =
-                '<span style="font-size:13px;color:var(--text,#eef0f6);font-weight:600;white-space:nowrap;">' + n + ' selected</span>' +
-                '<button type="button" onclick="window.p86JobsExportSelected()" style="' + btnStyle + '" title="Export selected to Excel">⬇ Export</button>' +
-                '<select onchange="window.p86JobsBulkStatus(this.value);this.value=\'\';" style="' + selStyle + '">' + statusOpts + '</select>' +
-                assignHtml +
-                '<button type="button" onclick="window.p86JobsDeleteSelected()" style="padding:5px 12px;font-size:12px;font-weight:600;border-radius:7px;border:1px solid rgba(248,113,113,.5);background:#f87171;color:#1a1d27;cursor:pointer;">Delete ' + n + '</button>' +
-                '<button type="button" onclick="window.p86JobsClearSelection()" style="' + btnStyle + '">Clear</button>';
+            actions.push({ icon: 'delete', title: 'Delete ' + n, danger: true, onClick: function() { window.p86JobsDeleteSelected(); } });
+            window.p86BulkRibbon.render(bar, {
+                count: n,
+                onClear: function() { window.p86JobsClearSelection(); },
+                actions: actions
+            });
         }
         function jobsSelectedEditable() {
             return appData.jobs.filter(function(j) { return _jobsSelected.has(j.id) && j._canEdit !== false; });

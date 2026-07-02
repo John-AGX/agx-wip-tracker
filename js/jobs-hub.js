@@ -234,22 +234,9 @@
       var bar = host.querySelector('#jh-bulkbar');
       if (!bar || !cfg.bulk) return;
       var n = _selected.size;
-      if (!n) { bar.className = ''; bar.style.display = 'none'; bar.innerHTML = ''; return; }
-      // Floating bottom-center ribbon (shared .p86-bulkbar-float in styles.css).
-      bar.style.cssText = '';
-      bar.className = 'p86-bulkbar-float';
-      var selStyle = 'padding:4px 6px;font-size:12px;border-radius:6px;border:1px solid var(--border,#2e3346);background:var(--card-bg,#161a2b);color:var(--text,#eef0f6);cursor:pointer;';
-      var btnStyle = 'padding:5px 10px;font-size:12px;border-radius:7px;border:1px solid var(--border,#2e3346);background:transparent;color:var(--text,#eef0f6);cursor:pointer;';
-      bar.innerHTML =
-        '<span style="font-size:13px;font-weight:600;white-space:nowrap;">' + n + ' selected</span>' +
-        '<select class="jh-bulk-status" style="' + selStyle + '"><option value="">Set status…</option>' +
-          cfg.bulk.statusOptions.map(function (s) { return '<option value="' + esc(s) + '">' + esc(s.replace(/_/g, ' ')) + '</option>'; }).join('') +
-        '</select>' +
-        '<button type="button" class="jh-bulk-delete" style="padding:5px 12px;font-size:12px;font-weight:600;border-radius:7px;border:1px solid rgba(248,113,113,.5);background:#f87171;color:#1a1d27;cursor:pointer;">Delete ' + n + '</button>' +
-        '<button type="button" class="jh-bulk-clear" style="' + btnStyle + '">Clear</button>';
-      bar.querySelector('.jh-bulk-status').addEventListener('change', function (e) {
-        var v = e.target.value; e.target.value = '';
-        if (!v) return;
+      if (!window.p86BulkRibbon) return;
+      if (!n) { window.p86BulkRibbon.hide(bar); return; }
+      function bulkSetStatus(v) {
         var ids = Array.from(_selected);
         if (!confirm('Set ' + ids.length + ' item(s) to "' + v.replace(/_/g, ' ') + '"?')) return;
         Promise.all(ids.map(function (id) { return cfg.bulk.setStatus(id, v).then(function () { return true; }).catch(function () { return false; }); }))
@@ -258,8 +245,8 @@
             if (window.p86Toast) window.p86Toast('Status set on ' + ok + (fail ? ', ' + fail + ' failed' : '') + '.', fail ? 'error' : 'success');
             _selected.clear(); refetch();
           });
-      });
-      bar.querySelector('.jh-bulk-delete').addEventListener('click', function () {
+      }
+      function bulkDelete() {
         var ids = Array.from(_selected);
         if (!confirm('Delete ' + ids.length + ' item(s)? This cannot be undone.')) return;
         Promise.all(ids.map(function (id) { return cfg.bulk.remove(id).then(function () { return true; }).catch(function () { return false; }); }))
@@ -268,13 +255,20 @@
             if (window.p86Toast) window.p86Toast('Deleted ' + ok + (fail ? ', ' + fail + ' failed (locked or no access)' : '') + '.', fail ? 'error' : 'success');
             _selected.clear(); refetch();
           });
-      });
-      bar.querySelector('.jh-bulk-clear').addEventListener('click', function () {
-        _selected.clear();
-        host.querySelectorAll('.jh-check').forEach(function (b) { b.checked = false; });
-        var all = host.querySelector('#jh-check-all');
-        if (all) { all.checked = false; all.indeterminate = false; }
-        updateBulkBar();
+      }
+      window.p86BulkRibbon.render(bar, {
+        count: n,
+        onClear: function () {
+          _selected.clear();
+          host.querySelectorAll('.jh-check').forEach(function (b) { b.checked = false; });
+          var all = host.querySelector('#jh-check-all');
+          if (all) { all.checked = false; all.indeterminate = false; }
+          updateBulkBar();
+        },
+        actions: [
+          { icon: 'bookmark', title: 'Set status', menu: cfg.bulk.statusOptions.map(function (s) { return { label: s.replace(/_/g, ' '), onClick: function () { bulkSetStatus(s); } }; }) },
+          { icon: 'delete', title: 'Delete ' + n, danger: true, onClick: bulkDelete }
+        ]
       });
     }
 
