@@ -107,6 +107,8 @@
     _state.dirty = false;
     _state.saving = false;
     _state.saveError = null;
+    // The hub list underneath may show stale title/status — refresh it.
+    if (typeof window.p86JobsHubRefresh === 'function') window.p86JobsHubRefresh();
   }
 
   // ──────────────────────────────────────────────────────────────────
@@ -621,6 +623,9 @@
       paintStatusPill();
       applyCoLockState();
       paintSaveStatus();
+      // Keep the Jobs-hub CO list behind the overlay in sync (no-ops
+      // harmlessly when the hub isn't mounted).
+      if (typeof window.p86JobsHubRefresh === 'function') window.p86JobsHubRefresh();
     }).catch(function(e) {
       alert('Status change failed: ' + (e.message || e));
     });

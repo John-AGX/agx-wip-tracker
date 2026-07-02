@@ -224,6 +224,8 @@ router.get('/purchase-orders/:id', requireAuth, async (req, res) => {
     const { rows } = await pool.query(
       `SELECT po.id, po.job_id, po.owner_id, po.sub_id, po.status, po.po_number,
               po.data, po.approved_at, po.approved_by, po.created_at, po.updated_at,
+              j.data->>'jobNumber' AS job_number,
+              j.data->>'title'     AS job_title,
               s.name AS sub_name
          FROM job_purchase_orders po
          JOIN jobs j ON j.id = po.job_id
@@ -232,7 +234,11 @@ router.get('/purchase-orders/:id', requireAuth, async (req, res) => {
       [req.params.id, req.user.organization_id]
     );
     if (!rows.length) return res.status(404).json({ error: 'Not found' });
-    res.json({ purchase_order: Object.assign(shapeRow(rows[0]), { sub_name: rows[0].sub_name }) });
+    res.json({
+      purchase_order: Object.assign(shapeRow(rows[0]), {
+        job_number: rows[0].job_number, job_title: rows[0].job_title, sub_name: rows[0].sub_name
+      })
+    });
   } catch (e) {
     console.error('GET /api/purchase-orders/:id error:', e);
     res.status(500).json({ error: 'Server error' });
@@ -246,7 +252,8 @@ router.post('/jobs/:jobId/purchase-orders', requireAuth, requireCapability('ESTI
   try {
     const jobId = req.params.jobId;
     const job = await pool.query(
-      'SELECT id FROM jobs WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+      `SELECT id, data->>'jobNumber' AS job_number, data->>'title' AS job_title
+         FROM jobs WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)`,
       [jobId, req.user.organization_id]
     );
     if (!job.rowCount) return res.status(404).json({ error: 'Job not found' });
@@ -269,7 +276,11 @@ router.post('/jobs/:jobId/purchase-orders', requireAuth, requireCapability('ESTI
                  approved_at, approved_by, created_at, updated_at`,
       [id, jobId, req.user.organization_id, req.user.id, subId, poNumber, JSON.stringify(data)]
     );
-    res.json({ purchase_order: shapeRow(rows[0]) });
+    res.json({
+      purchase_order: Object.assign(shapeRow(rows[0]), {
+        job_number: job.rows[0].job_number, job_title: job.rows[0].job_title
+      })
+    });
   } catch (e) {
     console.error('POST /api/jobs/:jobId/purchase-orders error:', e);
     res.status(500).json({ error: 'Server error' });
@@ -283,7 +294,10 @@ router.put('/purchase-orders/:id', requireAuth, requireCapability('ESTIMATES_EDI
   try {
     const id = req.params.id;
     const existing = await pool.query(
-      `SELECT po.status FROM job_purchase_orders po
+      `SELECT po.status,
+              j.data->>'jobNumber' AS job_number,
+              j.data->>'title'     AS job_title
+         FROM job_purchase_orders po
          JOIN jobs j ON j.id = po.job_id
         WHERE po.id = $1 AND (j.organization_id = $2 OR j.organization_id IS NULL)`,
       [id, req.user.organization_id]
@@ -309,7 +323,11 @@ router.put('/purchase-orders/:id', requireAuth, requireCapability('ESTIMATES_EDI
                   approved_at, approved_by, created_at, updated_at`,
       [JSON.stringify(data), !!subProvided, subId === undefined ? null : subId, id]
     );
-    res.json({ purchase_order: shapeRow(rows[0]) });
+    res.json({
+      purchase_order: Object.assign(shapeRow(rows[0]), {
+        job_number: existing.rows[0].job_number, job_title: existing.rows[0].job_title
+      })
+    });
   } catch (e) {
     console.error('PUT /api/purchase-orders/:id error:', e);
     res.status(500).json({ error: 'Server error' });
@@ -327,7 +345,10 @@ router.post('/purchase-orders/:id/status', requireAuth, requireCapability('ESTIM
     if (!STATUS_VALUES.includes(next)) return res.status(400).json({ error: 'Invalid status' });
 
     const cur = await pool.query(
-      `SELECT po.status, po.data FROM job_purchase_orders po
+      `SELECT po.status, po.data,
+              j.data->>'jobNumber' AS job_number,
+              j.data->>'title'     AS job_title
+         FROM job_purchase_orders po
          JOIN jobs j ON j.id = po.job_id
         WHERE po.id = $1 AND (j.organization_id = $2 OR j.organization_id IS NULL)`,
       [id, req.user.organization_id]
@@ -338,32 +359,44 @@ router.post('/purchase-orders/:id/status', requireAuth, requireCapability('ESTIM
       return res.status(409).json({ error: 'Transition not allowed: ' + current + ' -> ' + next });
     }
 
+    // Only the 'approved' transition touches data (the acceptance merge) —
+    // and only when the caller actually sent an acceptance. Every other
+    // transition updates status/timestamps alone, so a status POST can
+    // never clobber a concurrently-saved data blob (or forge an e-sign
+    // block on the bulk path, which sends no acceptance).
     let approvedAt = null, approvedBy = null;
-    const data = cur.rows[0].data || {};
+    let newData = null;
     if (next === 'approved') {
       approvedAt = new Date();
       approvedBy = req.user.id;
-      const acc = req.body.acceptance || {};
-      data.acceptance = {
-        name: acc.name ? String(acc.name).slice(0, 200) : '',
-        date: acc.date || new Date().toISOString().slice(0, 10),
-        accepted: true
-      };
+      const acc = req.body.acceptance;
+      if (acc) {
+        newData = { ...(cur.rows[0].data || {}) };
+        newData.acceptance = {
+          name: acc.name ? String(acc.name).slice(0, 200) : '',
+          date: acc.date || new Date().toISOString().slice(0, 10),
+          accepted: true
+        };
+      }
     }
 
     const { rows } = await pool.query(
       `UPDATE job_purchase_orders
           SET status = $1,
-              data = $2::jsonb,
-              approved_at = COALESCE($3, approved_at),
-              approved_by = COALESCE($4, approved_by),
+              data = CASE WHEN $2::boolean THEN $3::jsonb ELSE data END,
+              approved_at = COALESCE($4, approved_at),
+              approved_by = COALESCE($5, approved_by),
               updated_at = NOW()
-        WHERE id = $5
+        WHERE id = $6
         RETURNING id, job_id, owner_id, sub_id, status, po_number, data,
                   approved_at, approved_by, created_at, updated_at`,
-      [next, JSON.stringify(data), approvedAt, approvedBy, id]
+      [next, newData !== null, newData !== null ? JSON.stringify(newData) : null, approvedAt, approvedBy, id]
     );
-    res.json({ purchase_order: shapeRow(rows[0]) });
+    res.json({
+      purchase_order: Object.assign(shapeRow(rows[0]), {
+        job_number: cur.rows[0].job_number, job_title: cur.rows[0].job_title
+      })
+    });
   } catch (e) {
     console.error('POST /api/purchase-orders/:id/status error:', e);
     res.status(500).json({ error: 'Server error' });

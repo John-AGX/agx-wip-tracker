@@ -1982,6 +1982,13 @@ function renderJobsMain() {
             document.getElementById('jobs-job-detail-view').style.display = 'none';
             appState.currentJobId = null;
             renderJobsMain();
+            // Sync nav-state + URL back to /jobs. backToJobsMain isn't
+            // router-wrapped, so without this the address bar keeps
+            // /jobs/:id while the LIST is on screen — and a refresh (URL
+            // wins over nav-state) drags the user back into the job they
+            // just left.
+            if (typeof window.p86NavSave === 'function') window.p86NavSave();
+            if (window.p86Router && typeof window.p86Router.sync === 'function') window.p86Router.sync();
         }
 
         function archiveCurrentJob() {
@@ -3685,16 +3692,37 @@ function renderJobsMain() {
 
         function deleteBuilding() {
             if (!appState.editBuildingId) return;
-            const phases = appData.phases.filter(p => p.buildingId === appState.editBuildingId);
+            const bldgId = appState.editBuildingId;
+            const phases = appData.phases.filter(p => p.buildingId === bldgId);
             if (phases.length > 0) {
                 if (!confirm('This building has ' + phases.length + ' phase(s). Delete the building AND all its phases?')) return;
-                appData.phases = appData.phases.filter(p => p.buildingId !== appState.editBuildingId);
+                appData.phases = appData.phases.filter(p => p.buildingId !== bldgId);
             } else {
                 if (!confirm('Delete this building?')) return;
             }
-            appData.buildings = appData.buildings.filter(b => b.id !== appState.editBuildingId);
+            appData.buildings = appData.buildings.filter(b => b.id !== bldgId);
             appState.editBuildingId = null;
             saveData();
+            // Mirror deletePhaseGroup's node-graph cleanup: strip the
+            // building's t1 node, the deleted phases' t2 nodes, and every
+            // wire touching them — otherwise ghost nodes (footprint, wires,
+            // costs) survive on the map and keep feeding WIP totals.
+            if (typeof NG !== 'undefined') {
+                try {
+                    const phaseIds = phases.map(p => p.id);
+                    const ngNodes = NG.nodes();
+                    const ngWires = NG.wires();
+                    const nodeIdsToRemove = ngNodes.filter(n =>
+                        (n.type === 't1' && n.data && n.data.id === bldgId) ||
+                        (n.type === 't2' && n.data && phaseIds.indexOf(n.data.id) !== -1)
+                    ).map(n => n.id);
+                    if (nodeIdsToRemove.length) {
+                        NG.setNodes(ngNodes.filter(n => nodeIdsToRemove.indexOf(n.id) === -1));
+                        NG.setWires(ngWires.filter(w => nodeIdsToRemove.indexOf(w.fromNode) === -1 && nodeIdsToRemove.indexOf(w.toNode) === -1));
+                        NG.saveGraph();
+                    }
+                } catch(e) {}
+            }
             closeModal('addBuildingModal');
             renderJobDetail(appState.currentJobId);
         }
@@ -3932,9 +3960,25 @@ function renderJobsMain() {
         function deletePhase() {
             if (!appState.editPhaseId) return;
             if (!confirm('Delete this phase entry? This cannot be undone.')) return;
-            appData.phases = appData.phases.filter(p => p.id !== appState.editPhaseId);
+            const phaseId = appState.editPhaseId;
+            appData.phases = appData.phases.filter(p => p.id !== phaseId);
             appState.editPhaseId = null;
             saveData();
+            // Mirror deletePhaseGroup's node-graph cleanup: strip the phase's
+            // t2 node + its wires so no ghost chip stays on the map feeding
+            // WIP totals.
+            if (typeof NG !== 'undefined') {
+                try {
+                    const ngNodes = NG.nodes();
+                    const ngWires = NG.wires();
+                    const nodeIdsToRemove = ngNodes.filter(n => n.type === 't2' && n.data && n.data.id === phaseId).map(n => n.id);
+                    if (nodeIdsToRemove.length) {
+                        NG.setNodes(ngNodes.filter(n => nodeIdsToRemove.indexOf(n.id) === -1));
+                        NG.setWires(ngWires.filter(w => nodeIdsToRemove.indexOf(w.fromNode) === -1 && nodeIdsToRemove.indexOf(w.toNode) === -1));
+                        NG.saveGraph();
+                    }
+                } catch(e) {}
+            }
             closeModal('addPhaseModal');
             renderJobDetail(appState.currentJobId);
         }

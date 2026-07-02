@@ -3174,7 +3174,7 @@
     <script src="js/table-enhancements.js?v=7"></script>
     <script src="js/bulk-ribbon.js?v=1"></script>
     <script src="js/job-finalize.js?v=1"></script>
-    <script src="js/leads.js?v=62"></script>
+    <script src="js/leads.js?v=63"></script>
     <script src="js/job-costs-import.js?v=4"></script>
     <script src="js/qb-costs-view.js?v=11"></script>
     <script src="js/insights.js?v=7"></script>
@@ -3185,7 +3185,7 @@
     <script src="js/entity-card.js?v=4"></script>
     <!-- Lead/estimate context card mounted into #app-sidebar (uses p86EntityCard). -->
     <script src="js/entity-subnav.js?v=2"></script>
-    <script src="js/app.js?v=102"></script>
+    <script src="js/app.js?v=103"></script>
     <script src="js/compliance-review-ui.js?v=2"></script>
     <script src="js/messaging.js?v=4"></script>
     <script src="js/agent-tasks.js?v=7"></script>
@@ -3238,15 +3238,15 @@
     <!-- Jobs Hub — cross-job index pages (Purchase Orders / Change Orders /
          RFIs / Submittals) for the Jobs sidebar dropdown. Uses p86Api +
          appData.jobs + editJob/switchJobSubTab at runtime. -->
-    <script src="js/jobs-hub.js?v=13"></script>
+    <script src="js/jobs-hub.js?v=14"></script>
     <!-- Purchase Order editor — full-window overlay opened from the Jobs
          hub Purchase Orders list. Uses p86Api.purchaseOrders + subs. -->
-    <script src="js/purchase-order-editor.js?v=3"></script>
+    <script src="js/purchase-order-editor.js?v=4"></script>
     <!-- Shared pricing pipeline — math used by estimate-editor +
          estimate-preview + the upcoming change-order-editor. Loads
          BEFORE any of them so window.p86Pricing is ready. -->
     <script src="js/pricing-pipeline.js?v=1"></script>
-    <script src="js/jobs.js?v=111"></script>
+    <script src="js/jobs.js?v=112"></script>
     <script src="js/job-workflow-ui.js?v=4"></script>
     <script src="js/estimates.js?v=50"></script>
     <script src="js/proposal.js?v=25"></script>
@@ -3255,7 +3255,7 @@
          Change Orders tab. Loads after pricing-pipeline (which it
          consumes via window.p86Pricing) and after api.js (which
          carries the window.p86Api.changeOrders wrapper). -->
-    <script src="js/change-order-editor.js?v=3"></script>
+    <script src="js/change-order-editor.js?v=4"></script>
     <script src="js/materials-drawer.js?v=5"></script>
     <script src="js/estimate-preview.js?v=14"></script>
     <script src="js/bt-export.js?v=6b"></script>
@@ -3272,12 +3272,12 @@
     <script src="js/tab-slider.js?v=1b"></script>
 
     <script src="js/workspace.js?v=45"></script>
-    <script src="js/workspace-layout.js?v=80"></script>
+    <script src="js/workspace-layout.js?v=81"></script>
 
     <!-- URL router — pathname-based navigation. Loads last so all
          top-level nav functions (switchTab, editJob, etc.) exist
          before the router wraps them. -->
-    <script src="js/router.js?v=17"></script>
+    <script src="js/router.js?v=18"></script>
 
     <!-- Sidebar Recents — client-side recently-opened list. Loads after
          router.js + the entity-open modules so it can wrap editJob /
@@ -3488,8 +3488,8 @@
         <button class="ng-mseg-btn" data-mseg="detail">Detail</button>
       </div>
     </div>
-    <script src="nodegraph/engine.js?v=99"></script>
-    <script src="nodegraph/ui.js?v=220"></script>
+    <script src="nodegraph/engine.js?v=100"></script>
+    <script src="nodegraph/ui.js?v=221"></script>
 
     <!-- ── Mobile bottom nav (M1) ─────────────────────────────────
          Visible only below 768px (CSS-gated). Five slots with the raised

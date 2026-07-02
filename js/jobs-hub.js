@@ -76,6 +76,24 @@
     }
   }
 
+  // Per-entity status state machines — MUST mirror the server's
+  // ALLOWED_TRANSITIONS (server/routes/change-order-routes.js and
+  // server/routes/purchase-order-routes.js). Used to filter the bulk
+  // "Set status" menu to transitions the server will actually accept,
+  // so bulk changes don't 409-fail on illegal jumps.
+  var CO_TRANSITIONS = {
+    draft: ['approved'],
+    approved: ['draft', 'applied'],
+    applied: []
+  };
+  var PO_TRANSITIONS = {
+    draft: ['issued'],
+    issued: ['approved', 'draft'],
+    approved: ['work_complete', 'issued'],
+    work_complete: ['closed', 'approved'],
+    closed: []
+  };
+
   // ── Status badges ──────────────────────────────────────────────────
   var STATUS_COLOR = {
     draft: '#94a3b8', approved: '#34d399', applied: '#2dd4bf',
@@ -256,6 +274,24 @@
             _selected.clear(); refetch();
           });
       }
+      // Offer only the statuses legally reachable (per the server's state
+      // machine) from at least one selected row's CURRENT status — the
+      // union across the selection. Anything else would just 409.
+      var statuses = cfg.bulk.statusOptions;
+      if (cfg.bulk.transitions) {
+        var legal = {};
+        _selected.forEach(function (id) {
+          var row = _rows.find(function (r) { return String(r.id) === String(id); });
+          var curSt = row ? String(row.status || 'draft').toLowerCase() : '';
+          (cfg.bulk.transitions[curSt] || []).forEach(function (s) { legal[s] = true; });
+        });
+        statuses = cfg.bulk.statusOptions.filter(function (s) { return legal[s]; });
+      }
+      var actions = [];
+      if (statuses.length) {
+        actions.push({ icon: 'bookmark', title: 'Set status', menu: statuses.map(function (s) { return { label: s.replace(/_/g, ' '), onClick: function () { bulkSetStatus(s); } }; }) });
+      }
+      actions.push({ icon: 'delete', title: 'Delete ' + n, danger: true, onClick: bulkDelete });
       window.p86BulkRibbon.render(bar, {
         count: n,
         onClear: function () {
@@ -265,10 +301,7 @@
           if (all) { all.checked = false; all.indeterminate = false; }
           updateBulkBar();
         },
-        actions: [
-          { icon: 'bookmark', title: 'Set status', menu: cfg.bulk.statusOptions.map(function (s) { return { label: s.replace(/_/g, ' '), onClick: function () { bulkSetStatus(s); } }; }) },
-          { icon: 'delete', title: 'Delete ' + n, danger: true, onClick: bulkDelete }
-        ]
+        actions: actions
       });
     }
 
@@ -330,7 +363,7 @@
       var rows = !q ? _rows : _rows.filter(function (r) { return cfg.matches(r, q); });
       if (sumEl) sumEl.textContent = rows.length + (rows.length === 1 ? ' item' : ' items');
       if (!rows.length) {
-        listEl.innerHTML = '<div class="jobshub-empty">No ' + esc(cfg.title.toLowerCase()) + ' match.</div>';
+        listEl.innerHTML = '<div class="jobshub-empty">No ' + esc(cfg.title) + ' match.</div>';
         return;
       }
       listEl.innerHTML = cfg.tableHTML(rows);
@@ -382,6 +415,7 @@
       bulk: {
         idAttr: 'data-co-id',
         statusOptions: ['draft', 'approved', 'applied'],
+        transitions: CO_TRANSITIONS,
         setStatus: function (id, v) { return window.p86Api.changeOrders.setStatus(id, v); },
         remove: function (id) { return window.p86Api.changeOrders.remove(id); }
       },
@@ -481,6 +515,7 @@
       bulk: {
         idAttr: 'data-po-id',
         statusOptions: ['draft', 'issued', 'approved', 'work_complete', 'closed'],
+        transitions: PO_TRANSITIONS,
         setStatus: function (id, v) { return window.p86Api.purchaseOrders.setStatus(id, v); },
         remove: function (id) { return window.p86Api.purchaseOrders.remove(id); }
       },

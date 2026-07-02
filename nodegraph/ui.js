@@ -60,11 +60,14 @@ function updateTierLabels(){
     if(n.type==='t2'){
       // Strip ' › Building' suffix OR all accumulated ' +N' suffixes from prior labels
       var baseName = n.label.split(' \u203A ')[0].trim().replace(/(\s+\+\d+)+$/g, '').trim();
-      var t1s = [];
+      var t1s = [], _seenT1 = {};
       wires.forEach(function(w){
         if(w.fromNode===n.id){
           var target=E.findNode(w.toNode);
-          if(target&&target.type==='t1'){ t1s.push({ name:target.label.split(' \u203A ')[0].trim(), data:target.data }); }
+          // Count UNIQUE t1 targets, not raw wires - a transient duplicate
+          // wire to the same building must not read as "2 buildings" and
+          // wipe phase.buildingId below.
+          if(target&&target.type==='t1'&&!_seenT1[target.id]){ _seenT1[target.id]=1; t1s.push({ name:target.label.split(' \u203A ')[0].trim(), data:target.data }); }
         }
       });
       // 0 or 2+ connections → just name; 1 connection → name › bldg
@@ -2473,11 +2476,28 @@ function showSectionInInspector(pid, tabBtn){
   var lbl=tabBtn ? (tabBtn.getAttribute('aria-label')||tabBtn.textContent||'Section').trim() : 'Section';
   if(hdr) hdr.innerHTML='<span class="ng-insp-ic">▤</span> '+luEsc(lbl)+'<span class="ng-insp-type">Section</span>';
   var panel=document.getElementById(pid);
+  if(!panel && WS_SECTION_RENDERERS[pid]){
+    // Lazily-built sections have no pane until their renderer runs
+    // (#job-qb-costs is created by renderJobQBCosts/ensurePanel; #job-subs
+    // only ever had an inner cards div). Create the expected container here
+    // so the renderer call below can populate it — same lifecycle as the
+    // pre-existing panes (moved into the inspector, restored on close).
+    panel=document.createElement('div');
+    panel.id=pid; panel.className='sub-tab-content-job';
+    if(pid==='job-subs') panel.innerHTML='<div id="job-subs-cards"></div>';
+  }
   if(!panel){ _inspSection=pid; body.innerHTML='<div class="ng-insp-empty">Section unavailable.</div>'; return; }
   _inspSection=pid; _inspSectionPanel=panel;
   body.innerHTML=''; panel.style.display='block'; body.appendChild(panel);
   var jid=E.job(), fn=WS_SECTION_RENDERERS[pid];
   if(fn && typeof window[fn]==='function'){ try{ window[fn](jid); }catch(err){ if(window.console) console.warn('section render '+pid, err); } }
+  // Keep the URL on the section actually being viewed. replaceState (not
+  // push) — section flips inside the map shouldn't stack history entries.
+  try{
+    if(jid && window.history && history.replaceState){
+      history.replaceState(null, '', '/jobs/'+encodeURIComponent(jid)+'/'+pid);
+    }
+  }catch(e){}
 }
 // Called by workspace-layout.js activateTab when the map is open: route the section into the
 // right Inspector (keeping the map open) instead of activateTab's tear-down + center render.
@@ -2629,7 +2649,7 @@ function inspectorAllocHtml(sel){
     h+='<table class="ng-alloc-tbl"><thead><tr><th></th><th>Target</th><th>Alloc</th><th>%&nbsp;Cmp</th><th>Share</th></tr></thead><tbody>';
     wires.forEach(function(w){
       var tgt=E.findNode(w.toNode);
-      var pctA=(w.allocPct==null?100:w.allocPct);
+      var pctA=(w.allocPct==null?0:w.allocPct); // null = unallocated: engine computes 0% — display must match the math (was shown as 100%)
       var wpc=(w.pctComplete!=null)?w.pctComplete:0;
       var share=income*(pctA/100);
       var locked=!w._auto;
@@ -2996,7 +3016,18 @@ function addCostToBuilding(bId, clientX, clientY){
     function wireToBuilding(nn){
       if(!nn) return;
       var toPort=E.firstCompatPort(E.DEFS[b.type], nn.type, 'in');
-      E.wires().push({ fromNode:nn.id, fromPort:0, toNode:b.id, toPort:toPort||0 });
+      // Dedupe: autoWireFromData may already have wired this node to the same
+      // building (duplicate wires double-count costs and make updateTierLabels
+      // clear phase.buildingId).
+      var _ws=E.wires();
+      var _dup=_ws.some(function(w){ return w.fromNode===nn.id && w.toNode===b.id; });
+      if(!_dup) _ws.push({ fromNode:nn.id, fromPort:0, toNode:b.id, toPort:toPort||0 });
+      // New wires carry no allocPct (engine computes null as 0%) — run the
+      // standard rebalance so the fresh link contributes immediately.
+      try{
+        if(nn.type==='t2' && E.rebalancePhaseAllocations) E.rebalancePhaseAllocations(nn.id);
+        else if(nn.type==='co' && E.rebalanceCOAllocations) E.rebalanceCOAllocations(nn.id);
+      }catch(e){}
       delete _fannedSet[bId];
       // Cost nodes are only visible when drilled into the building, so drill in (if
       // not already) — otherwise the node you just added stays invisible on the
@@ -4348,6 +4379,11 @@ function autoWireFromData(n, entry){
   if(!n || !entry) return;
   var nodes=E.nodes(), wires=E.wires();
   var addWire=function(fromId,fromPort,toId,toPort){
+    // No-op when an identical link already exists — addCostToBuilding runs
+    // both autoWireFromData and wireToBuilding, and duplicate wires
+    // double-count costs + wipe phase.buildingId in updateTierLabels.
+    var dup=wires.some(function(w){ return w.fromNode===fromId && w.toNode===toId; });
+    if(dup) return;
     wires.push({fromNode:fromId,fromPort:fromPort||0,toNode:toId,toPort:toPort||0});
   };
   if(n.type==='t1'){
@@ -4396,6 +4432,13 @@ function autoWireFromData(n, entry){
       if(po) addWire(n.id,0,po.id,0);
     }
   }
+  // New wires carry no allocPct (the engine computes null as 0%, so the link
+  // would contribute nothing) — run the standard rebalance so fresh phase/CO
+  // links immediately carry their share.
+  try{
+    if(n.type==='t2' && E.rebalancePhaseAllocations) E.rebalancePhaseAllocations(n.id);
+    else if(n.type==='co' && E.rebalanceCOAllocations) E.rebalanceCOAllocations(n.id);
+  }catch(e){}
 }
 
 // ── Populate from job ──
@@ -4446,7 +4489,11 @@ function syncFromData(){
     var n=E.addNode('t2',pos.x,pos.y,ph.phase+(bl?' › '+bl.name:''),ph);
     if(n){
       n.budget=ph.phaseBudget||0; n.pctComplete=ph.pctComplete||0; n.revenue=ph.asSoldRevenue||0;
-      if(bl&&t1Map[bl.id]) wires.push({fromNode:n.id,fromPort:0,toNode:t1Map[bl.id].id,toPort:0});
+      if(bl&&t1Map[bl.id]){
+        wires.push({fromNode:n.id,fromPort:0,toNode:t1Map[bl.id].id,toPort:0});
+        // Assign allocPct at creation — a null allocPct computes as 0%.
+        try{ if(E.rebalancePhaseAllocations) E.rebalancePhaseAllocations(n.id); }catch(e){}
+      }
       t2Map[ph.id]=n;
     }
   });
@@ -5427,6 +5474,17 @@ window.closeNodeGraph=function(){
     try { NG.saveGraph(); } catch(e){ /* defensive */ }
   }
   tab.classList.remove('active');
+  // Re-activate the highlighted section tab so the pane restoreSectionPanel
+  // just returned (display:none) actually shows — otherwise the job detail
+  // under the closed map renders with every section pane hidden. Must run
+  // AFTER the overlay's .active is removed so activateTab takes its normal
+  // (non-map) path instead of routing back into p86NgShowSection.
+  try {
+    var _secTab=document.querySelector('.ws-right-tab[data-panel].active') ||
+                document.querySelector('.ws-right-tab[data-panel="job-overview"]') ||
+                document.querySelector('.ws-right-tab[data-panel]');
+    if(_secTab) _secTab.click();
+  } catch(e){}
   // If the user maximized the graph (hid the AGX nav header), restore
   // the header so they're not stuck in fullscreen on the job detail.
   if(document.body.classList.contains('ng-graph-fullscreen')){

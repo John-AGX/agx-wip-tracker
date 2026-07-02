@@ -1810,6 +1810,16 @@
     var l = _leads.find(function(x) { return x.id === leadId; });
     if (!l || !l.job_id) return;
     closeLeadEditorAny();
+    // Canonical router open — stamps /jobs/:id in the URL + history + title
+    // and runs the data-aware switchTab→editJob sequence atomically (same
+    // path as the jobs-hub row click). The old manual switchTab +
+    // setTimeout(editJob) combo raced the nav-state sync and left the URL /
+    // title / underlying view stuck on Leads while the job page was showing.
+    if (window.p86Router && typeof window.p86Router.navigate === 'function') {
+      window.p86Router.navigate({ top: 'jobs', jobId: l.job_id });
+      return;
+    }
+    // Fallback only if the router isn't present.
     if (typeof window.switchTab === 'function') {
       window.switchTab('jobs');
       // editJob is defined in jobs.js; give the Jobs render a tick before opening
@@ -2037,10 +2047,17 @@
       if (chosen) { chosen.job_id = newId; chosen.is_locked = true; chosen.status = 'sold'; }
       closeLeadEditorAny();
       reloadLeadsCache();
-      if (typeof window.switchTab === 'function') window.switchTab('jobs');
-      setTimeout(function() {
-        if (typeof window.editJob === 'function') window.editJob(newId);
-      }, 250);
+      // Canonical router open (see openLinkedJobFromLead) — the manual
+      // switchTab + setTimeout(editJob) combo left the URL on /leads while
+      // the new job's page was on screen.
+      if (window.p86Router && typeof window.p86Router.navigate === 'function') {
+        window.p86Router.navigate({ top: 'jobs', jobId: newId });
+      } else {
+        if (typeof window.switchTab === 'function') window.switchTab('jobs');
+        setTimeout(function() {
+          if (typeof window.editJob === 'function') window.editJob(newId);
+        }, 250);
+      }
     } catch (err) {
       var m = (err && err.message) || '';
       if (/already linked/i.test(m)) {

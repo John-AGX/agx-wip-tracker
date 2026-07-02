@@ -2168,13 +2168,41 @@
         window.applyReadOnlyButtonGuard = applyReadOnlyButtonGuard;
 
         function switchJobSubTab(subtabName) {
+            const currentJobId = appState.currentJobId;
+
+            // Map-as-job-page: while the node-graph map overlay is open
+            // (#nodeGraphTab is .active — a position:fixed layer over the
+            // legacy panes), the class toggles below would swap panes UNDER
+            // the map, invisibly. Route the subtab into the map's right
+            // Inspector instead (mirrors workspace-layout's activateTab), so
+            // hub CO/RFI/Submittal row clicks, /jobs/:id/:sub deep links and
+            // popstate all land on the requested section. Keep the legacy
+            // strip's .active in sync so the router's captureRouteFromDOM
+            // serializes the right /jobs/:id/:sub URL.
+            var ngTab = document.getElementById('nodeGraphTab');
+            if (ngTab && ngTab.classList.contains('active') && typeof window.p86NgShowSection === 'function') {
+                document.querySelectorAll('.sub-tab-btn-job').forEach(btn => btn.classList.remove('active'));
+                document.querySelector(`.sub-tab-btn-job[data-subtab="${subtabName}"]`)?.classList.add('active');
+                // Panes whose renderer is NOT in the inspector's registry
+                // (WS_SECTION_RENDERERS in nodegraph/ui.js) must be rendered
+                // here before the pane is handed to the inspector.
+                if (subtabName === 'job-workflow' && window.p86JobWorkflowUI) {
+                    window.p86JobWorkflowUI.mount(currentJobId);
+                } else if (subtabName === 'job-buildings') {
+                    renderJobBuildings(currentJobId);
+                } else if (subtabName === 'job-labor') {
+                    renderJobLabor(currentJobId);
+                }
+                window.p86NgShowSection(subtabName);
+                setTimeout(applyReadOnlyButtonGuard, 0);
+                return;
+            }
+
             document.querySelectorAll('.sub-tab-content-job').forEach(stc => stc.classList.remove('active'));
             document.querySelectorAll('.sub-tab-btn-job').forEach(btn => btn.classList.remove('active'));
 
             document.getElementById(subtabName)?.classList.add('active');
             document.querySelector(`[data-subtab="${subtabName}"]`)?.classList.add('active');
-
-            const currentJobId = appState.currentJobId;
             if (subtabName === 'job-overview') renderJobOverview(currentJobId);
             else if (subtabName === 'job-buildings') renderJobBuildings(currentJobId);
             else if (subtabName === 'job-phases') renderJobPhases(currentJobId);

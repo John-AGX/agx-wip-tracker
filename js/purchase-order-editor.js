@@ -104,6 +104,8 @@
     var ov = document.getElementById('po-editor-overlay');
     if (ov) ov.style.display = 'none';
     _po = null;
+    // The hub list underneath may show stale title/sub/status — refresh it.
+    if (typeof window.p86JobsHubRefresh === 'function') window.p86JobsHubRefresh();
   }
   window.addEventListener('keydown', function (e) {
     if (e.key === 'Escape') {
@@ -505,14 +507,14 @@
   }
   function saveNow() {
     _saveTimer = null;
-    if (!_po || !window.p86Api || !window.p86Api.purchaseOrders) return;
+    if (!_po || !window.p86Api || !window.p86Api.purchaseOrders) return Promise.resolve();
     var payload = {
       title: _po.title || '', scope: _po.scope || '', internalNotes: _po.internalNotes || '',
       scheduledCompletion: _po.scheduledCompletion || '', materialsOnly: !!_po.materialsOnly,
       lines: _po.lines || [], bills: _po.bills || [], linkedRfiIds: _po.linkedRfiIds || [],
       sub_id: _po.sub_id || null
     };
-    window.p86Api.purchaseOrders.update(_po.id, payload)
+    return window.p86Api.purchaseOrders.update(_po.id, payload)
       .then(function () { setSaved('Saved'); })
       .catch(function () { setSaved('Save failed'); });
   }
@@ -531,9 +533,14 @@
       if (!window.confirm('Move this PO to "' + (STATUS_LABEL[step.to] || step.to) + '"?')) return;
     }
     // Flush any pending data save first so the status call sees latest body.
+    // saveNow() returns its PUT promise — await it so the status POST can't
+    // race the autosave (mirrors change-order-editor's flushSaveSync).
     if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; }
-    saveNow();
-    window.p86Api.purchaseOrders.setStatus(_po.id, step.to, acceptance)
+    var poId = _po.id;
+    saveNow()
+      .then(function () {
+        return window.p86Api.purchaseOrders.setStatus(poId, step.to, acceptance);
+      })
       .then(function (r) {
         _po = (r && r.purchase_order) || _po;
         if (!Array.isArray(_po.lines)) _po.lines = [];

@@ -9677,19 +9677,26 @@ async function execStaffTool(name, input, ctx) {
       const d = r.rows[0].data || {};
       const buildings = Array.isArray(d.buildings) ? d.buildings : [];
       const phases    = Array.isArray(d.phases)    ? d.phases    : [];
-      const graph     = d.nodeGraph || {};
+      // The node graph lives in the node_graphs table (one row per job),
+      // NOT in jobs.data — same source change-order-routes reads.
+      let graph = {};
+      const gRes = await pool.query(
+        'SELECT data FROM node_graphs WHERE job_id = $1', [jobId]
+      );
+      if (gRes.rowCount) graph = gRes.rows[0].data || {};
       const nodes     = Array.isArray(graph.nodes) ? graph.nodes : [];
       const wires     = Array.isArray(graph.wires) ? graph.wires : [];
 
       // Resolve target: a specific building (b1 record id, or t1 node id)
       // or fall through to a per-building summary if none given.
+      // t1 nodes reference their building record via dataId.
       const targetId = String(input.building_id || '').trim();
       const buildingsList = targetId
         ? (function () {
             let b = buildings.find(x => x.id === targetId);
             if (!b) {
               const t1 = nodes.find(n => n.id === targetId && n.type === 't1');
-              if (t1) b = buildings.find(x => x.id === t1.buildingId);
+              if (t1) b = buildings.find(x => x.id === t1.dataId);
             }
             return b ? [b] : [];
           })()
@@ -9714,22 +9721,23 @@ async function execStaffTool(name, input, ctx) {
         bPhases.slice(0, phaseLimit).forEach(ph => {
           const budget = Number(ph.phaseBudget || ph.budget || 0);
           const weight = totalBudget > 0 ? (budget / totalBudget * 100) : 0;
-          blocks.push('  • [' + ph.id + '] ' + (ph.name || '(unnamed)') +
+          blocks.push('  • [' + ph.id + '] ' + (ph.phase || ph.name || '(unnamed)') +
             ' · pct=' + Math.round(Number(ph.pctComplete || 0)) + '%' +
             ' · budget=' + fmtMoney(budget) +
             ' · weight=' + weight.toFixed(1) + '%');
         });
         if (bPhases.length > phaseLimit) blocks.push('  • …and ' + (bPhases.length - phaseLimit) + ' more');
 
-        // Wires feeding this building (t2/co → t1 with buildingId=b.id).
-        const t1Nodes = nodes.filter(n => n.type === 't1' && n.buildingId === b.id).map(n => n.id);
-        const feedingWires = wires.filter(w => t1Nodes.indexOf(w.to) !== -1);
+        // Wires feeding this building (t2/co → t1 with dataId=b.id).
+        // Real graph shape: wires use fromNode/toNode.
+        const t1Nodes = nodes.filter(n => n.type === 't1' && n.dataId === b.id).map(n => n.id);
+        const feedingWires = wires.filter(w => t1Nodes.indexOf(w.toNode) !== -1);
         if (feedingWires.length) {
           blocks.push('### Graph wires feeding this building (' + feedingWires.length + ')');
           feedingWires.slice(0, 30).forEach(w => {
-            const src = nodes.find(n => n.id === w.from);
-            const srcLabel = src ? (src.type + ' "' + (src.label || '?') + '"') : w.from;
-            blocks.push('  • ' + srcLabel + ' → [' + w.to + '] · allocPct=' + Math.round(Number(w.allocPct || 0)) +
+            const src = nodes.find(n => n.id === w.fromNode);
+            const srcLabel = src ? (src.type + ' "' + (src.label || '?') + '"') : w.fromNode;
+            blocks.push('  • ' + srcLabel + ' → [' + w.toNode + '] · allocPct=' + Math.round(Number(w.allocPct || 0)) +
               '% · pctComplete=' + (w.pctComplete != null ? Math.round(Number(w.pctComplete)) + '%' : '(falls back to source)'));
           });
           if (feedingWires.length > 30) blocks.push('  • …and ' + (feedingWires.length - 30) + ' more');
@@ -9760,7 +9768,13 @@ async function execStaffTool(name, input, ctx) {
       const d = r.rows[0].data || {};
       const buildings = Array.isArray(d.buildings) ? d.buildings : [];
       const phases    = Array.isArray(d.phases)    ? d.phases    : [];
-      const graph     = d.nodeGraph || {};
+      // The node graph lives in the node_graphs table (one row per job),
+      // NOT in jobs.data — same source change-order-routes reads.
+      let graph = {};
+      const gRes = await pool.query(
+        'SELECT data FROM node_graphs WHERE job_id = $1', [jobId]
+      );
+      if (gRes.rowCount) graph = gRes.rows[0].data || {};
       const nodes     = Array.isArray(graph.nodes) ? graph.nodes : [];
       const wires     = Array.isArray(graph.wires) ? graph.wires : [];
       const buildingIds = new Set(buildings.map(b => b.id));
@@ -9768,30 +9782,32 @@ async function execStaffTool(name, input, ctx) {
       const orphanPhases = phases.filter(ph => !ph.buildingId || !buildingIds.has(ph.buildingId));
       const phasesNoBudget = phases.filter(ph => !(Number(ph.phaseBudget || ph.budget) > 0));
       const buildingsNoPhases = buildings.filter(b => !phases.some(ph => ph.buildingId === b.id));
-      const danglingT1 = nodes.filter(n => n.type === 't1' && (!n.buildingId || !buildingIds.has(n.buildingId)));
+      // t1 nodes reference their building record via dataId; wires use
+      // fromNode/toNode (the engine's real shapes).
+      const danglingT1 = nodes.filter(n => n.type === 't1' && (!n.dataId || !buildingIds.has(n.dataId)));
       const staleT1 = nodes.filter(n =>
         n.type === 't1' &&
         Number(n.pctComplete || 0) > 0 &&
-        wires.some(w => w.to === n.id)
+        wires.some(w => w.toNode === n.id)
       );
       const zeroAllocWires = wires.filter(w => Number(w.allocPct || 0) === 0);
 
       const out = ['PCT audit for job ' + jobId + ':'];
       const sections = [
         ['Orphan phases (invisible to rollup)', orphanPhases, (p) =>
-          '[' + p.id + '] ' + (p.name || '(unnamed)') +
+          '[' + p.id + '] ' + (p.phase || p.name || '(unnamed)') +
           (p.buildingId ? ' · points at deleted building ' + p.buildingId : ' · no buildingId')],
         ['Dangling t1 nodes (graph t1 with no underlying building record)', danglingT1, (n) =>
           '[' + n.id + '] ' + (n.label || '(no label)') +
-          (n.buildingId ? ' · buildingId=' + n.buildingId : '')],
+          (n.dataId ? ' · dataId=' + n.dataId : '')],
         ['Stale t1 pctComplete (own pct set AND has wired children — value ignored)', staleT1, (n) =>
           '[' + n.id + '] ' + (n.label || '(no label)') + ' · pct=' + Math.round(Number(n.pctComplete || 0)) + '%'],
         ['Zero-alloc wires (contribute nothing to rollup)', zeroAllocWires, (w) =>
-          w.from + ' → ' + w.to + ' · allocPct=0'],
+          w.fromNode + ' → ' + w.toNode + ' · allocPct=0'],
         ['Buildings with no phases (always read 0%)', buildingsNoPhases, (b) =>
           '[' + b.id + '] ' + (b.name || '(unnamed)')],
         ['Phases without budget (equal-weighted in rollup; can over/under-count)', phasesNoBudget, (p) =>
-          '[' + p.id + '] ' + (p.name || '(unnamed)')],
+          '[' + p.id + '] ' + (p.phase || p.name || '(unnamed)')],
       ];
       let hasFindings = false;
       sections.forEach(([title, list, fmt]) => {

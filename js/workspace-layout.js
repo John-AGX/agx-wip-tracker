@@ -59,12 +59,20 @@
   var _jobSubnavMqlHandler = null;
 
   // ── CSS injection ─────────────────────────────────────────
+  // index.html already ships css/workspace-layout.css with a maintained
+  // cache-buster; injecting a SECOND link with a frozen ?v here let a
+  // stale cached copy override the current sheet (the injected link sits
+  // later in <head> and wins at equal specificity). Only inject as a
+  // fallback when the static link is genuinely absent, and reuse ITS
+  // versioned href when present so the two can never diverge again.
   function injectCSS() {
     if (document.getElementById('ws-layout-v2-css')) return;
+    var existing = document.querySelector('link[href*="workspace-layout.css"]');
+    if (existing) { existing.id = existing.id || 'ws-layout-v2-css'; return; }
     var link = document.createElement('link');
     link.id = 'ws-layout-v2-css';
     link.rel = 'stylesheet';
-    link.href = 'css/workspace-layout.css?v=61';
+    link.href = 'css/workspace-layout.css?v=63';
     document.head.appendChild(link);
   }
 
@@ -1482,8 +1490,25 @@
       extraPanels.forEach(function(p) { rc.appendChild(p); });
       var allPanels = Array.from(rc.children);
       allPanels.forEach(function(p) { if (!p.classList.contains('ws-job-info-details')) p.style.display = 'none'; });
-      var activeTab = document.querySelector('.ws-right-tab.active');
-      var activeId = activeTab ? activeTab.getAttribute('data-panel') : 'job-wip-report';
+      // The router (switchJobSubTab) marks the legacy .sub-tab-btn-job strip
+      // BEFORE this layout pass runs — honor that routed subtab instead of
+      // clobbering it with whichever ws-right-tab happens to be .active
+      // (buildLayout hardcodes index 0 = Overview, which silently overrode
+      // /jobs/:id/:sub deep links). Fall back to the ws-right-tab state when
+      // the legacy strip points at a pane that doesn't exist here.
+      var activeId = null;
+      var routedBtn = document.querySelector('.sub-tab-btn-job.active');
+      var routedId = routedBtn ? routedBtn.getAttribute('data-subtab') : null;
+      if (routedId && document.getElementById(routedId)) {
+        activeId = routedId;
+        // Keep the visible ws-right-tab strip in sync with the routed subtab.
+        document.querySelectorAll('.ws-right-tab[data-panel]').forEach(function(t) {
+          t.classList.toggle('active', t.getAttribute('data-panel') === activeId);
+        });
+      } else {
+        var activeTab = document.querySelector('.ws-right-tab.active');
+        activeId = activeTab ? activeTab.getAttribute('data-panel') : 'job-wip-report';
+      }
       var target = document.getElementById(activeId);
       if (target) target.style.display = 'block';
       wireTabSwitching();
@@ -1535,6 +1560,14 @@
 
     function activateTab(targetId) {
       var jobId = (typeof appState !== 'undefined') ? appState.currentJobId : null;
+      // Keep the legacy .sub-tab-btn-job strip in sync with the picked
+      // section. It's hidden, but the router's captureRouteFromDOM reads it
+      // for the /jobs/:id/:sub URL segment and populateRightPanels honors it
+      // when re-picking the visible pane — without this sync a layout re-run
+      // would revert the user's tab choice back to the stale legacy state.
+      document.querySelectorAll('.sub-tab-btn-job').forEach(function(b) {
+        b.classList.toggle('active', b.getAttribute('data-subtab') === targetId);
+      });
       // Map-as-job-page: while the node-graph map is open, route the section into the right
       // Inspector and KEEP the map open (instead of the tear-down + hidden-center render below).
       var _ngt = document.getElementById('nodeGraphTab');

@@ -51,7 +51,10 @@
   // user might add later without touching the router.
   var KNOWN_JOB_SUBS = [
     'job-overview', 'job-buildings', 'job-wip-report',
-    'job-changeorders', 'job-invoices', 'job-labor', 'job-purchaseorders'
+    'job-changeorders', 'job-invoices', 'job-labor', 'job-purchaseorders',
+    // Workflow (RFIs / Submittals / Transmittals) — jobs-hub row clicks
+    // navigate with jobSub:'job-workflow', so the URL must round-trip.
+    'job-workflow'
   ];
   // Legacy sub-tab id → new id. Old shared links / bookmarks using
   // /jobs/:id/job-wip transparently route to job-wip-report (the new
@@ -71,7 +74,7 @@
   // TAB_TITLES key); the URL slug for it is '/files' — friendlier and
   // matches the header icon's purpose. parsePath/serializeRoute do the
   // translation.
-  var KNOWN_TOP_TABS = ['summary', 'my-files', 'field-tools', 'jobs', 'jobshub', 'estimates', 'schedule', 'plans', 'insights', 'admin', 'projects', 'orgmap', 'orgleadsmap', 'console'];
+  var KNOWN_TOP_TABS = ['summary', 'my-files', 'field-tools', 'jobs', 'jobshub', 'estimates', 'schedule', 'plans', 'insights', 'admin', 'projects', 'orgmap', 'orgleadsmap', 'console', 'cost-inbox', 'my-day', 'my-tasks', 'messages'];
 
   // ── URL <-> route object ──────────────────────────────────────
   function parsePath(pathname) {
@@ -377,9 +380,13 @@
         origSwitchTab(route.top);
       }
 
-      if (route.top === 'estimates' && route.estSub && typeof window.switchEstimatesSubTab === 'function') {
+      if (route.top === 'estimates' && typeof window.switchEstimatesSubTab === 'function') {
         var origEstSub = window.switchEstimatesSubTab.__p86RouterOrig || window.switchEstimatesSubTab;
-        origEstSub(route.estSub);
+        // A bare /estimates deep link must land on the Estimate LIST subtab
+        // (what the sidebar "Estimate List" button sets). switchTab alone
+        // leaves whichever subtab pane is .active in the static DOM — Leads,
+        // the first one — so /estimates used to render the Leads list.
+        origEstSub(route.estSub || 'list');
       }
       // Drive the virtual-tab highlight so the right sibling lights up
       // on refresh. switchTab() above always activates the FIRST

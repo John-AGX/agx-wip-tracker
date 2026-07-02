@@ -716,7 +716,10 @@ function getT1WeightedPct(t1n){
     var src = findNode(w.fromNode);
     if(src && (src.type === 't2' || src.type === 'co')) incoming.push({w:w, src:src});
   });
-  if(!incoming.length) return 0;
+  // No phase/CO wires feed this building — fall back to its own manually-set
+  // pct (matches the doc-comment; returning 0 here made updateT1Progress wipe
+  // hand-entered building % on every render).
+  if(!incoming.length) return t1n.pctComplete || 0;
   var sumW = 0, sumPct = 0;
   incoming.forEach(function(r){
     var ap = (r.w.allocPct != null) ? r.w.allocPct : 100;
@@ -1145,6 +1148,7 @@ function restoreSnapshot(){
   // Re-hydrate, mirroring loadGraph's data-pointer logic so node
   // entries that reference appData rows still resolve.
   nodes = []; wires = snap.wires || []; nid = snap.nid || 1;
+  frames = snap.frames || []; // guard so pre-frames snapshots restore fine
   panX = snap.panX || 0; panY = snap.panY || 0; zoom = snap.zoom || 1;
   snap.nodes.forEach(function(sn){
     var d = DEFS[sn.type]; if(!d) return;
@@ -1178,7 +1182,11 @@ function restoreSnapshot(){
       jobFields:sn.jobFields||{},
       _coRevApplied:sn._coRevApplied||0,
       allocTarget:sn.allocTarget||null,
-      attachedTo:sn.attachedTo||null
+      attachedTo:sn.attachedTo||null,
+      geoLatLng:sn.geoLatLng||null, // Phase 2-A: building's real lat/lng (guard so pre-geo snapshots restore fine)
+      polygon:sn.polygon||null, // traced building footprint (guard so pre-polygon snapshots restore fine)
+      levels:sn.levels||[], // L/U Phase 1: floors (guard so pre-L/U snapshots restore fine)
+      units:sn.units||[]    // L/U Phase 1: units, each optionally on a level (unit.levelId)
     });
   });
   // Persist the restore as the new auto-save state too, so the user
@@ -1258,6 +1266,23 @@ function loadGraph(){
   // Prune any attachedTo references to nodes that no longer exist.
   var existingIds = {}; nodes.forEach(function(n){ existingIds[n.id]=1; });
   nodes.forEach(function(n){ if(n.attachedTo && !existingIds[n.attachedTo]) n.attachedTo=null; });
+  // Self-heal: older wire-creation paths pushed t2/co→parent wires with no
+  // allocPct, which the engine computes as 0% — those links contributed
+  // nothing to building cost/revenue rollups. When EVERY alloc wire on a
+  // source is still null (i.e. the user never set one), run the standard
+  // rebalance so existing links start computing. Any user-set value on a
+  // source blocks the heal for that source, so real allocations are never
+  // overwritten.
+  nodes.forEach(function(n){
+    if(n.type !== 't2' && n.type !== 'co') return;
+    var aw = (n.type === 'co') ? getCOAllocWires(n.id) : getPhaseAllocWires(n.id);
+    if(!aw.length) return;
+    var allNull = aw.every(function(w){ return w.allocPct == null; });
+    if(allNull){
+      if(n.type === 'co') rebalanceCOAllocations(n.id);
+      else rebalancePhaseAllocations(n.id);
+    }
+  });
   return true;
 }
 
