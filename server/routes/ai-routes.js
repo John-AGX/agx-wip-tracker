@@ -11974,7 +11974,7 @@ async function execScribeWrite(tu, ctx) {
       if (result && result.ok) {
         const title = (result.meta && result.meta.title) || result.title || 'a change';
         const line = result.applySummary ? ('\n\n' + String(result.applySummary).slice(0, 500)) : '';
-        try { await postAgentJobToThread({ user_id: uid }, '✍️ **Scribe finished drafting — ' + title + '**' + line + '\n\n_Review & approve it in the Payloads section of the chat sidebar._'); } catch (_) {}
+        try { await postAgentJobToThread({ user_id: uid }, '✍️ **Scribe finished drafting — ' + title + '**' + line + '\n\n_Review & approve it in **Pending approvals**, just above the chat box._'); } catch (_) {}
         try { const { sendPushForEvent } = require('../notify-events'); await sendPushForEvent(uid, 'scribe_draft', { title: '✍️ Scribe drafted: ' + String(title).slice(0, 80), body: String(result.applySummary || 'Review & approve in Project 86').slice(0, 200), url: '/' }); } catch (_) {}
       } else {
         const errMsg = (result && result.error) || 'unknown error';

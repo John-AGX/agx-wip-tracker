@@ -1125,6 +1125,12 @@
       // as the right pane of the row layout.
       '<div id="ai-content" style="flex:1;display:flex;flex-direction:column;min-width:0;min-height:0;">' +
       '<div id="ai-messages" style="flex:1;overflow-y:auto;overflow-x:hidden;min-width:0;padding:22px 20px;display:flex;flex-direction:column;gap:20px;font-size:13px;color:var(--text,#e6e6e6);"></div>' +
+      // Pending approvals — Scribe drafts from DETACHED/background runs.
+      // Inline cards only render during a live turn's SSE stream, so
+      // background drafts had no reachable Approve button (especially on
+      // mobile, which has no sidebar Payloads section). Pinned above the
+      // composer; hidden when nothing is waiting.
+      '<div id="ai-pending-approvals" style="display:none;max-height:38vh;overflow-y:auto;padding:8px 14px 4px;border-top:1px solid var(--border,#333);background:rgba(79,140,255,0.04);"></div>' +
       // Preset prompts
       '<div id="ai-presets" style="padding:8px 12px;border-top:1px solid var(--border,#333);display:flex;flex-wrap:wrap;gap:6px;background:rgba(255,255,255,0.02);"></div>' +
       // Input row. Photos are auto-included via the entity's attachments
@@ -1238,6 +1244,8 @@
     // a manual page reload.
     document.addEventListener('p86:payload-applied', function(ev) {
       try {
+        // Drop the applied/rejected card from the pending strip.
+        try { refreshPendingApprovals(); } catch (_) {}
         var targets = (ev && ev.detail && ev.detail.affected_targets) || [];
         var types = {};
         targets.forEach(function(t) { if (t && t.entity_type) types[t.entity_type] = true; });
@@ -1839,10 +1847,47 @@
         _messages = res.messages || [];
         renderMessages();
         checkResumeInFlight();
+        refreshPendingApprovals();
       }).catch(function() {
         _messages = [];
         renderMessages();
       });
+  }
+
+  // Pending-approval payloads (Scribe drafts from detached/background
+  // runs). A background Scribe posts a text notice to the thread but its
+  // approval card never streams — this strip fetches every still-`ready`
+  // payload and renders the standard PayloadArtifact card (Approve /
+  // Reject / Preview) pinned above the composer, on every device.
+  var _pendingApprovalsBusy = false;
+  function refreshPendingApprovals() {
+    var host = document.getElementById('ai-pending-approvals');
+    if (!host || _pendingApprovalsBusy) return;
+    if (!(window.PayloadArtifact && typeof window.PayloadArtifact.render === 'function')) return;
+    _pendingApprovalsBusy = true;
+    fetch('/api/payloads?limit=30', { headers: authHeaders() })
+      .then(function(r) { return r.ok ? r.json() : null; })
+      .then(function(d) {
+        var ready = ((d && d.payloads) || []).filter(function(p) { return p.status === 'ready'; });
+        if (!ready.length) { host.style.display = 'none'; host.innerHTML = ''; return; }
+        // The list endpoint is lean — hydrate each row so the card shows
+        // targets / rationale and Download works. Cap the strip at 8.
+        return Promise.all(ready.slice(0, 8).map(function(p) {
+          return fetch('/api/payloads/' + encodeURIComponent(p.id), { headers: authHeaders() })
+            .then(function(r) { return r.ok ? r.json() : null; })
+            .then(function(dd) { return (dd && dd.payload) || p; })
+            .catch(function() { return p; });
+        })).then(function(rows) {
+          host.innerHTML =
+            '<div style="font-size:11.5px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--text-dim,#9aa3b8);margin-bottom:2px;">Pending approvals (' + ready.length + ')</div>';
+          rows.forEach(function(pl) {
+            try { window.PayloadArtifact.render(pl, host); } catch (e) { console.warn('[pending-approvals] card render failed:', e); }
+          });
+          host.style.display = 'block';
+        });
+      })
+      .catch(function() { /* non-fatal — strip just stays as-is */ })
+      .then(function() { _pendingApprovalsBusy = false; });
   }
 
   // Turn-continuity resume ("close the app, nothing is lost"): if a chat turn is
@@ -3246,6 +3291,9 @@
         if (streamDiv && streamDiv.parentNode) streamDiv.parentNode.removeChild(streamDiv);
         _messages.push({ role: 'assistant', content: assistantText, usage: turnUsage, elapsed_ms: elapsed, payloads: turnPayloads.slice() });
         renderMessages();
+        // A background Scribe may have finished drafting mid-turn — pick
+        // up any newly-ready payloads for the pending-approvals strip.
+        refreshPendingApprovals();
       } else if (chipsAppended > 0) {
         // No final narration but built-in tools (web_search /
         // web_fetch / etc.) DID fire — keep the streaming bubble in
