@@ -200,6 +200,7 @@ app.use('/api/subs', subRoutes);
 app.use('/api', subPortalRoutes);
 app.use('/api/messages', messageRoutes);
 app.use('/api/agent-jobs', require('./routes/agent-jobs-routes'));
+app.use('/api/push', require('./routes/push-routes'));
 app.use('/api/schedule', scheduleRoutes);
 app.use('/api/weather', weatherRoutes);
 // Campaigns routes mount BEFORE the generic email mount so the more

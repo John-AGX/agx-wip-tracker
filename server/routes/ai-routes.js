@@ -12521,6 +12521,11 @@ async function notifyAgentJobNeedsInput(job, question) {
       '<p style="color:#8b90a5;font-size:12px;margin-top:12px">Answer it in your Background Tasks panel and it\'ll pick up right where it left off.</p></div>';
     const { sendEmail } = require('../email');
     await sendEmail({ to: user.email, subject: '❓ ' + title + ' needs your answer', html: html, text: String(question).slice(0, 1000), tag: 'agent_task', organizationId: job.organization_id });
+    // Phone/desktop push (S7) — best-effort, no-ops until VAPID env is set.
+    try {
+      const push = require('../push');
+      await push.sendPush(job.user_id, { title: '❓ ' + title + ' needs your answer', body: String(question).slice(0, 300), url: '/', tag: 'agent_task_' + job.id });
+    } catch (_) {}
   } catch (e) {
     console.warn('[agent-jobs] needs-input notify failed:', e && e.message);
   }
@@ -12553,6 +12558,11 @@ async function notifyAgentJobDone(job, result) {
       '<p style="margin-top:16px"><a href="' + esc(appUrl) + '" style="background:#4f8cff;color:#fff;text-decoration:none;padding:9px 16px;border-radius:8px;display:inline-block">Open Project 86</a></p></div>';
     const { sendEmail } = require('../email');
     await sendEmail({ to: user.email, subject: subject, html: html, text: bodyText.slice(0, 2000), tag: 'agent_task', organizationId: job.organization_id });
+    // Phone/desktop push (S7) — best-effort, no-ops until VAPID env is set.
+    try {
+      const push = require('../push');
+      await push.sendPush(job.user_id, { title: subject, body: bodyText.slice(0, 300), url: '/', tag: 'agent_task_' + job.id });
+    } catch (_) {}
   } catch (e) {
     console.warn('[agent-jobs] notify failed:', e && e.message);
   }

@@ -44,7 +44,7 @@
 // Local dev (no Railway env var) → sw.js is served byte-for-byte
 // from this file, so the base version below IS the active version.
 
-const CACHE_VERSION = 'p86-shell-v13';
+const CACHE_VERSION = 'p86-shell-v14';
 
 // NOTE: /index.html and / are deliberately NOT in this list. HTML
 // goes through the network-first handler below; pre-caching it with
@@ -95,6 +95,36 @@ self.addEventListener('message', function (event) {
   if (event.data && event.data.type === 'SKIP_WAITING') {
     self.skipWaiting();
   }
+});
+
+// ── Web Push (S7) ────────────────────────────────────────────────────
+// The server (server/push.js) sends { title, body, url, tag } JSON. Show it as a
+// system notification; clicking focuses an open Project 86 tab (or opens one) at
+// the payload's url. Defensive parsing — a malformed payload still shows something.
+self.addEventListener('push', function (event) {
+  var data = { title: 'Project 86', body: '', url: '/', tag: 'p86' };
+  try { Object.assign(data, event.data ? event.data.json() : {}); } catch (e) {
+    try { data.body = event.data ? event.data.text() : ''; } catch (_) {}
+  }
+  event.waitUntil(self.registration.showNotification(data.title || 'Project 86', {
+    body: data.body || '',
+    tag: data.tag || 'p86',
+    icon: '/images/pwa/icon-192.png',
+    badge: '/images/pwa/icon-192.png',
+    data: { url: data.url || '/' }
+  }));
+});
+
+self.addEventListener('notificationclick', function (event) {
+  event.notification.close();
+  var url = (event.notification.data && event.notification.data.url) || '/';
+  event.waitUntil(clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function (list) {
+    for (var i = 0; i < list.length; i++) {
+      // Reuse an existing Project 86 tab when one is open.
+      if ('focus' in list[i]) { list[i].navigate(url); return list[i].focus(); }
+    }
+    if (clients.openWindow) return clients.openWindow(url);
+  }));
 });
 
 self.addEventListener('fetch', function (event) {

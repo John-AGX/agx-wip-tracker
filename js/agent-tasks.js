@@ -85,10 +85,12 @@
     document.body.appendChild(b);
     var ov = document.createElement('div');
     ov.className = 'p86-bgt-overlay';
-    ov.innerHTML = '<div class="p86-bgt-panel"><div class="p86-bgt-head"><span>Background tasks</span><button class="p86-bgt-x" title="Close">✕</button></div><div class="p86-bgt-list"></div></div>';
+    ov.innerHTML = '<div class="p86-bgt-panel"><div class="p86-bgt-head"><span>Background tasks</span><span style="display:flex;gap:8px;align-items:center"><button class="p86-bgt-bell" title="Get phone/desktop notifications when a task finishes or needs you" style="display:none;background:none;border:1px solid rgba(255,255,255,.18);border-radius:8px;color:#aeb4c4;font:600 11px/1 system-ui,sans-serif;padding:5px 9px;cursor:pointer">🔔 Enable notifications</button><button class="p86-bgt-x" title="Close">✕</button></span></div><div class="p86-bgt-list"></div></div>';
     ov.addEventListener('click', function (e) { if (e.target === ov) close(); });
     ov.querySelector('.p86-bgt-x').addEventListener('click', close);
+    ov.querySelector('.p86-bgt-bell').addEventListener('click', enablePush);
     document.body.appendChild(ov);
+    updateBellVisibility();
     var listEl = ov.querySelector('.p86-bgt-list');
     listEl.addEventListener('click', function (e) {
       var btn = e.target.closest && e.target.closest('.p86-bgt-answer-btn');
@@ -134,6 +136,58 @@
       }
       return '<div class="p86-bgt-item"><div class="p86-bgt-t"><span>' + esc(j.title || 'Task') + '</span>' + pill + '</div>' + body + '</div>';
     }).join('');
+  }
+
+  // ── Web Push (S7): the "🔔 Enable notifications" bell ──
+  // Shows only when the server has VAPID configured, the browser supports push,
+  // permission isn't denied, and there's no existing subscription. No-ops cleanly
+  // everywhere else (incl. iOS Safari not installed to home screen).
+  function urlB64ToU8(base64) {
+    var pad = '='.repeat((4 - base64.length % 4) % 4);
+    var b64 = (base64 + pad).replace(/-/g, '+').replace(/_/g, '/');
+    var raw = atob(b64); var arr = new Uint8Array(raw.length);
+    for (var i = 0; i < raw.length; i++) arr[i] = raw.charCodeAt(i);
+    return arr;
+  }
+  function updateBellVisibility() {
+    var bell = document.querySelector('.p86-bgt-bell'); if (!bell) return;
+    if (!('serviceWorker' in navigator) || !('PushManager' in window) || !('Notification' in window)) return;
+    if (Notification.permission === 'denied') return;
+    fetch('/api/push/public-key', { credentials: 'same-origin' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        if (!d || !d.configured || !d.key) return;   // VAPID not set yet — stay hidden
+        navigator.serviceWorker.ready.then(function (reg) {
+          return reg.pushManager.getSubscription();
+        }).then(function (sub) {
+          if (!sub) bell.style.display = '';         // configured + not subscribed → show
+        }).catch(function () {});
+      }).catch(function () {});
+  }
+  function enablePush() {
+    var bell = document.querySelector('.p86-bgt-bell');
+    Notification.requestPermission().then(function (perm) {
+      if (perm !== 'granted') return;
+      return fetch('/api/push/public-key', { credentials: 'same-origin' })
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (!d || !d.key) return null;
+          return navigator.serviceWorker.ready.then(function (reg) {
+            return reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlB64ToU8(d.key) });
+          });
+        })
+        .then(function (sub) {
+          if (!sub) return;
+          return fetch('/api/push/subscribe', {
+            method: 'POST', credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(sub.toJSON())
+          }).then(function () {
+            if (bell) { bell.textContent = '🔔 Notifications on'; setTimeout(function () { bell.style.display = 'none'; }, 1800); }
+          });
+        })
+        .catch(function () {});
+    }).catch(function () {});
   }
 
   function submitAnswerFor(jid, listEl) {

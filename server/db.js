@@ -2879,6 +2879,22 @@ async function initSchema() {
       ON agent_jobs (organization_id, created_at DESC);
     ALTER TABLE agent_jobs ADD COLUMN IF NOT EXISTS seen_at TIMESTAMPTZ;
 
+    -- push_subscriptions — Web Push endpoints (S7). One row per browser/device the
+    -- user enabled notifications on (a user can have several devices); endpoint is
+    -- the unique key. 404/410 from the push service prunes the row on send.
+    CREATE TABLE IF NOT EXISTS push_subscriptions (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      endpoint TEXT NOT NULL UNIQUE,
+      p256dh TEXT NOT NULL,
+      auth TEXT NOT NULL,
+      user_agent TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      last_used_at TIMESTAMPTZ
+    );
+    CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user
+      ON push_subscriptions (user_id);
+
     -- Extend ai_watches for agent-based watchers (Payload DSL v1).
     -- kind='rule' is the legacy SQL-condition watch; kind='agent' is a
     -- new LLM-driven scan where the watch-runner spins up a one-shot
