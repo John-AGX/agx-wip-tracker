@@ -17,8 +17,11 @@ console.log('[push-routes] mounted at /api/push');
 
 router.use(requireAuth);
 
-router.get('/public-key', (req, res) => {
-  res.json({ key: push.publicKey(), configured: push.isConfigured() });
+router.get('/public-key', async (req, res) => {
+  // ensureInit self-generates + persists a VAPID pair on first call if no env
+  // override exists — so this endpoint flips to configured:true on its own.
+  const key = await push.getPublicKey();
+  res.json({ key: key, configured: push.isConfigured() });
 });
 
 router.post('/subscribe', async (req, res) => {
