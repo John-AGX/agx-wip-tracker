@@ -2739,6 +2739,40 @@ async function buildTurnContext({ entityType, entityId, clientContext, aiPhase, 
       console.warn('[buildTurnContext] recent_applied_payloads inject failed:', e.message);
     }
 
+    // Background-task awareness — the chat agent should KNOW what its background
+    // runs did (John: "it goes to a popup but the agent doesn't know"). Surface the
+    // user's recently finished / waiting background tasks so a follow-up like
+    // "what did that audit find?" answers from the result instead of a shrug.
+    try {
+      const bg = await pool.query(
+        `SELECT id, status, title, result, error, pause_question, updated_at
+           FROM agent_jobs
+          WHERE user_id = $1
+            AND status IN ('done','failed','needs_input')
+            AND updated_at > NOW() - INTERVAL '24 hours'
+          ORDER BY updated_at DESC
+          LIMIT 4`,
+        [userId]
+      );
+      if (bg.rows.length) {
+        const lines = ['<recent_background_tasks>'];
+        lines.push('Background tasks you (or your background runner) completed for this user recently. Reference them when the user asks about them or when relevant — do NOT recite this list unprompted. A needs_input task is PAUSED waiting on the user\'s answer in their Background Tasks panel.');
+        bg.rows.forEach((j, i) => {
+          const body = j.status === 'needs_input'
+            ? ('WAITING ON USER — asked: ' + String(j.pause_question || '').slice(0, 200))
+            : (j.status === 'failed'
+              ? ('FAILED — ' + String(j.error || '').slice(0, 150))
+              : String(j.result || 'done').slice(0, 300));
+          lines.push('  ' + (i + 1) + '. [' + j.status + '] ' + String(j.title || j.id) + ' — ' + body);
+        });
+        lines.push('</recent_background_tasks>');
+        const block = lines.join('\n');
+        turnContextText = turnContextText ? turnContextText + '\n\n' + block : block;
+      }
+    } catch (e) {
+      console.warn('[buildTurnContext] recent_background_tasks inject failed:', e.message);
+    }
+
     // Wave 1.D — feedback loop. Parallel block for payloads that
     // FAILED with structured detail. If the user just dragged a file
     // and it bounced for a known field-shape reason, surface the
@@ -12466,6 +12500,7 @@ async function finalizeAgentJob(jobId, job, result, pauseRef, anthropic, session
       [jobId, pauseRef.question, usage.input_tokens || 0, usage.output_tokens || 0, usage.cache_creation_input_tokens || 0, usage.cache_read_input_tokens || 0]
     );
     try { await notifyAgentJobNeedsInput(job, pauseRef.question); } catch (_) {}
+    try { await postAgentJobToThread(job, '❓ **Background task — ' + (job.title || 'task') + '** needs your answer:\n\n' + pauseRef.question + '\n\n_Reply in your Background Tasks panel (bottom-right) and it\'ll pick up where it left off._'); } catch (_) {}
     return;   // session kept ALIVE for resume — caller must NOT archive
   }
   await pool.query(
@@ -12477,6 +12512,12 @@ async function finalizeAgentJob(jobId, job, result, pauseRef, anthropic, session
      usage.input_tokens || 0, usage.output_tokens || 0, usage.cache_creation_input_tokens || 0, usage.cache_read_input_tokens || 0]
   );
   try { await notifyAgentJobDone(job, result); } catch (_) {}
+  try {
+    const ok = !(result && result.error);
+    await postAgentJobToThread(job, ok
+      ? ('📋 **Background task — ' + (job.title || 'task') + '** finished:\n\n' + String((result && result.text) || 'Completed.').slice(0, 6000))
+      : ('⚠️ **Background task — ' + (job.title || 'task') + '** hit a problem: ' + String((result && result.error) || 'unknown error').slice(0, 500)));
+  } catch (_) {}
   if (sessionId) { try { await anthropic.beta.sessions.archive(sessionId); } catch (_) {} }
 }
 
@@ -12510,6 +12551,26 @@ async function resumeAgentJob(jobId) {
     await pool.query("UPDATE agent_jobs SET status='failed', error=$2, completed_at=NOW(), updated_at=NOW() WHERE id=$1", [jobId, (e && e.message) || 'Resume failed']);
     try { await notifyAgentJobDone(job, { error: (e && e.message) || 'Resume failed' }); } catch (_) {}
     if (sessionId) { try { await anthropic.beta.sessions.archive(sessionId); } catch (_) {} }
+  }
+}
+
+// Post a background task's outcome INTO the user's chat thread as a visible
+// assistant message — the conversation is the primary surface (John: results
+// shouldn't live only in a popup the agent can't see). Pairs with the
+// <recent_background_tasks> turn-context block, which gives the agent the same
+// awareness on its next turn. Lands in the General thread (entity 'general'/
+// 'global' — the rolling user-thread's home view). Best-effort; never throws.
+async function postAgentJobToThread(job, text) {
+  try {
+    if (!job || !job.user_id || !text) return;
+    const msgId = 'aim_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
+    await pool.query(
+      `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content)
+       VALUES ($1, 'general', 'global', $2, 'assistant', $3)`,
+      [msgId, job.user_id, String(text).slice(0, 8000)]
+    );
+  } catch (e) {
+    console.warn('[agent-jobs] thread post failed:', e && e.message);
   }
 }
 
