@@ -4653,6 +4653,13 @@ async function runV2SessionStream({ anthropic, res, session, eventsToSend, persi
               name === 'grep'       ? 'grep · '       + (i.pattern || '').slice(0, 80) :
               name === 'code_execution' ? 'code_execution · ' + ceFirstLine :
               name;
+            // Chip replay dedupe (mirrors the text-block dedupe above): replayed
+            // agent.tool_use events also arrive with NEW ids after a builtin
+            // reopen, stacking duplicate chips. Skip an already-shown summary —
+            // gated on builtinReopens>0 so genuine repeat calls on a normal
+            // single-pass turn still get their own chips.
+            if (builtinReopens > 0 && relayedTextBlocks.has('chip|' + summary)) break;
+            relayedTextBlocks.add('chip|' + summary);
             send({ tool_started: { id: event.id, name: name } });
             send({ tool_applied: { id: event.id, name: name, summary: summary } });
             break;
