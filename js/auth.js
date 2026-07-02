@@ -184,10 +184,21 @@
       var caps = (role && Array.isArray(role.capabilities)) ? role.capabilities : [];
       capabilities = new Set(caps);
       applyRoleVisibility();
+      capsReadyBroadcast();
     }).catch(function() {
       capabilities = new Set();
       applyRoleVisibility();
+      capsReadyBroadcast();
     });
+  }
+
+  // Capabilities arrive ASYNC (/api/roles) — anything that rendered before they
+  // landed saw hasCapability() === false (e.g. the Leads list's bulk-select column
+  // was missing on slow networks, then "came back in incorrectly" after a manual
+  // Refresh). Broadcast when caps settle so capability-gated renderers can
+  // re-render themselves. Fired on failure too, so listeners always settle.
+  function capsReadyBroadcast() {
+    try { window.dispatchEvent(new CustomEvent('p86:caps-ready')); } catch (e) {}
   }
 
   function showError(msg) {

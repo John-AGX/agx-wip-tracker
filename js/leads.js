@@ -731,6 +731,21 @@
   window.p86LeadsClearSelection = p86LeadsClearSelection;
   window.p86LeadsDeleteSelected = p86LeadsDeleteSelected;
 
+  // Capabilities load ASYNC (/api/roles) — on a slow network the list can render
+  // BEFORE they land, so canBulkEditLeads() reads false and the bulk-select column
+  // is missing; a later manual Refresh then popped it in against a layout captured
+  // without it ("checkboxes come back in incorrectly"). When caps settle
+  // (p86:caps-ready from auth.js), re-render IF the mounted table's column state
+  // disagrees with the now-known capability.
+  window.addEventListener('p86:caps-ready', function () {
+    try {
+      var table = document.getElementById('leads-table');
+      if (!table) return; // leads list not on screen — next render is correct anyway
+      var hasCheckCol = !!table.querySelector('thead th.lead-check-cell');
+      if (hasCheckCol !== canBulkEditLeads()) renderLeadsList();
+    } catch (e) { /* never break on a visibility refresh */ }
+  });
+
   // ── Activities: pipeline board + follow-ups ───────────────────────
   // Open follow-up tasks linked to leads (entity_type='lead'), fetched
   // once and cached. Each board card surfaces its lead's open tasks.
