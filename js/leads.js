@@ -11,6 +11,11 @@
   // openEditLeadModal join a fetch that just wiped the cache instead of
   // racing it with an extra get-by-id round trip.
   var _leadsFetchInflight = null;
+  // True once a leads.list() fetch has completed successfully. Distinguishes
+  // "not fetched yet" (→ load) from "fetched, org genuinely has zero leads"
+  // (→ empty state) so renderLeadsList doesn't refetch forever on an empty
+  // response. Cleared by reloadLeadsCache so a refresh actually re-fetches.
+  var _leadsLoaded = false;
   // Shared filter drawer + saved views (mirrors Cost Inbox).
   var _leadsDrawer = null;      // active filter values, or null
   var _leadsViews = [];         // this user's saved Leads views
@@ -536,13 +541,28 @@
     var q = searchEl ? searchEl.value.trim() : '';
 
     if (!_leads.length) {
+      // Already fetched and the org genuinely has zero leads (e.g. right
+      // after a clean-slate reset) — render a real empty state. Refetching
+      // here would loop forever: the empty response leaves _leads.length 0,
+      // re-entering this branch. reloadLeadsCache() clears _leadsLoaded so a
+      // manual refresh still re-fetches.
+      if (_leadsLoaded) {
+        listEl.innerHTML = '<div style="padding:32px 20px;color:var(--text-dim,#888);text-align:center;">No leads yet. Create a lead to get started.</div>';
+        if (summaryEl) summaryEl.textContent = '0 leads';
+        _leadsFiltered = [];
+        return;
+      }
       listEl.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);text-align:center;">Loading leads…</div>';
       if (!window.p86Api || !window.p86Api.isAuthenticated()) {
         listEl.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);text-align:center;">Leads aren\'t available in offline mode.</div>';
         return;
       }
+      // A list fetch is already running (e.g. a map-card open joined it) —
+      // wait for its .then to re-render rather than stacking another GET.
+      if (_leadsFetchInflight) return;
       var p = window.p86Api.leads.list().then(function(res) {
         if (_leadsFetchInflight === p) _leadsFetchInflight = null;
+        _leadsLoaded = true;
         _leads = res.leads || [];
         renderLeadsList();
       }).catch(function(err) {
@@ -897,6 +917,7 @@
 
   function reloadLeadsCache() {
     _leads = [];
+    _leadsLoaded = false;   // force a re-fetch (not the loaded-but-empty state)
     _leadTasks = [];
     _leadTasksLoaded = false;
     renderLeadsList();
