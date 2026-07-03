@@ -733,118 +733,12 @@
         }
         window.renderSummaryDashboard = renderSummaryDashboard;
 
-        // ── Help overlay (opened from avatar dropdown) ────────────────
-        // Modal that surfaces the Features catalog + What's New list
-        // from the org manifest. No entity cards — this is purely the
-        // "what's in the app + where do I find it" reference + the
-        // "what changed lately" log. Reuses fetchManifest() above so
-        // a single network round-trip covers both the Today snapshot
-        // and the Help content.
-        function openHelpOverlay() {
-            var prior = document.getElementById('p86-help-overlay');
-            if (prior) prior.remove();
-            var overlay = document.createElement('div');
-            overlay.id = 'p86-help-overlay';
-            overlay.className = 'p86-help-overlay';
-            overlay.innerHTML =
-                '<div class="p86-help-card" role="dialog" aria-labelledby="p86-help-title">' +
-                    '<div class="p86-help-header">' +
-                        '<div>' +
-                            '<div id="p86-help-title" class="p86-help-title">Help &amp; What\'s New</div>' +
-                            '<div class="p86-help-subtitle">Every capability in the system + where to find it.</div>' +
-                        '</div>' +
-                        '<button type="button" class="p86-help-close" aria-label="Close">&times;</button>' +
-                    '</div>' +
-                    '<div class="p86-help-body">' +
-                        '<div class="p86-help-loading">Loading help&hellip;</div>' +
-                    '</div>' +
-                '</div>';
-            document.body.appendChild(overlay);
-            document.body.style.overflow = 'hidden';
-
-            function close() {
-                overlay.remove();
-                document.body.style.overflow = '';
-                document.removeEventListener('keydown', onEsc);
-            }
-            function onEsc(e) { if (e.key === 'Escape') close(); }
-            overlay.addEventListener('click', function (e) { if (e.target === overlay) close(); });
-            overlay.querySelector('.p86-help-close').addEventListener('click', close);
-            document.addEventListener('keydown', onEsc);
-
-            // Ack "What's New" the moment the help overlay opens — the
-            // badge on the avatar (future hook) can clear from this.
-            try { localStorage.setItem('p86-whatsnew-last-ack', new Date().toISOString()); } catch (e) {}
-
-            fetchManifest().then(function (m) {
-                var body = overlay.querySelector('.p86-help-body');
-                if (!body) return;
-                if (!m) {
-                    body.innerHTML = '<div class="p86-help-loading p86-help-error">Could not load help content. Try again later.</div>';
-                    return;
-                }
-                body.innerHTML = renderHelpContentHTML(m);
-            });
-        }
-        window.openHelpOverlay = openHelpOverlay;
-
-        // Features + What's New rendering for the Help overlay. Lifted
-        // from the old System Map pane with the entity-card section
-        // stripped out.
-        function renderHelpContentHTML(m) {
-            // ── Features section — group by area, render as rows. ───
-            var features = m.features || [];
-            var areas = {};
-            features.forEach(function (f) {
-                var a = f.area || 'Other';
-                if (!areas[a]) areas[a] = [];
-                areas[a].push(f);
-            });
-            var areaOrder = ['Photos', 'Reports', 'Schedule', 'Estimating', 'Jobs', 'Org', 'AI', 'Mobile', 'Other'];
-            var featuresHTML = '<div class="p86-help-section">' +
-                '<div class="p86-help-section-header"><h3>Features</h3>' +
-                    '<div class="p86-help-section-sub">What\'s in the system + where to find each thing.</div>' +
-                '</div>' +
-                areaOrder.filter(function (a) { return areas[a]; }).map(function (area) {
-                    return '<div class="p86-help-area">' +
-                        '<div class="p86-help-area-label">' + escapeHTML(area) + '</div>' +
-                        '<div class="p86-help-feature-list">' +
-                            areas[area].map(function (f) {
-                                return '<div class="p86-help-feature">' +
-                                    '<div class="p86-help-feature-label">' + escapeHTML(f.label) + '</div>' +
-                                    '<div class="p86-help-feature-blurb">' + escapeHTML(f.blurb) + '</div>' +
-                                    '<div class="p86-help-feature-path">' +
-                                        '<span class="p86-help-feature-path-icon">' + (window.p86Icon ? window.p86Icon('map-pin') : '') + '</span> ' +
-                                        escapeHTML(f.access_path) +
-                                    '</div>' +
-                                '</div>';
-                            }).join('') +
-                        '</div>' +
-                    '</div>';
-                }).join('') +
-            '</div>';
-
-            // ── What's New section ───────────────────────────────────
-            var whatsNew = m.whats_new || [];
-            var whatsNewHTML = '<div class="p86-help-section">' +
-                '<div class="p86-help-section-header"><h3>What\'s New</h3>' +
-                    '<div class="p86-help-section-sub">Recently shipped — newest first.</div>' +
-                '</div>' +
-                (whatsNew.length === 0
-                    ? '<div class="p86-help-empty">Nothing shipped yet.</div>'
-                    : '<div class="p86-help-whatsnew">' +
-                        whatsNew.map(function (w) {
-                            return '<div class="p86-help-whatsnew-row">' +
-                                '<div class="p86-help-whatsnew-row-label">' + escapeHTML(w.label) + '</div>' +
-                                '<div class="p86-help-whatsnew-row-blurb">' + escapeHTML(w.blurb) + '</div>' +
-                                (w.shipped ? '<div class="p86-help-whatsnew-row-date">shipped ' + escapeHTML(w.shipped) + '</div>' : '') +
-                            '</div>';
-                        }).join('') +
-                    '</div>') +
-            '</div>';
-
-            return whatsNewHTML + featuresHTML;
-        }
+        // ── Help center ───────────────────────────────────────────────
+        // The Help & What's New overlay moved to js/help-center.js
+        // (window.p86HelpCenter / window.openHelpOverlay) — versioned
+        // patch notes, guided tours, and the searchable feature atlas.
+        // It reuses this module's manifest fetch + cache:
+        window.p86FetchManifest = fetchManifest;
 
         function paintSummaryToday(root) {
             if (!root) return;

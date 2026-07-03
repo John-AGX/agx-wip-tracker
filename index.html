@@ -246,7 +246,7 @@
     })();
     </script>
 
-    <link rel="stylesheet" href="css/styles.css?v=216">
+    <link rel="stylesheet" href="css/styles.css?v=217">
     <link rel="stylesheet" href="css/report-style-packs.css?v=3">
     <link rel="stylesheet" href="css/workspace-layout.css?v=63">
     <link rel="stylesheet" href="css/workspace.css?v=38">
@@ -3185,7 +3185,12 @@
     <script src="js/entity-card.js?v=4"></script>
     <!-- Lead/estimate context card mounted into #app-sidebar (uses p86EntityCard). -->
     <script src="js/entity-subnav.js?v=2"></script>
-    <script src="js/app.js?v=103"></script>
+    <script src="js/app.js?v=104"></script>
+    <!-- Guided tours engine + the Help & What's New center (patch
+         notes, guides, feature atlas). help-center.js owns
+         window.openHelpOverlay — must load after app.js. -->
+    <script src="js/guide.js?v=1"></script>
+    <script src="js/help-center.js?v=1"></script>
     <script src="js/compliance-review-ui.js?v=2"></script>
     <script src="js/messaging.js?v=4"></script>
     <script src="js/agent-tasks.js?v=7"></script>

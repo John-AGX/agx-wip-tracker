@@ -21,7 +21,12 @@
 const express = require('express');
 const { pool } = require('../db');
 const { requireAuth, requireOrg, requireCapability } = require('../auth');
-const { features, whats_new } = require('../feature-catalog');
+const { features, releases, APP_VERSION } = require('../feature-catalog');
+
+// Short deploy SHA (Railway bakes the commit into the env). Lets the
+// Help center show "v1.8 · build abc1234" so support conversations can
+// pin the exact running code.
+const BUILD_SHA = String(process.env.RAILWAY_GIT_COMMIT_SHA || '').slice(0, 8) || null;
 const entitlements = require('../entitlements');
 const { safeFetch } = require('../util/ssrf-guard'); // P1-3 SSRF guard
 
@@ -421,8 +426,10 @@ router.get('/manifest', requireAuth, async (req, res) => {
         style_packs: STYLE_PACK_IDS,
         section_layouts: SECTION_LAYOUT_IDS,
       },
+      app_version: APP_VERSION,
+      build: BUILD_SHA,
       features: features,
-      whats_new: whats_new,
+      releases: releases,
       recent_activity: recentActivity,
     });
   } catch (e) {

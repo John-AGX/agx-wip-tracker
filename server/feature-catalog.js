@@ -1,19 +1,21 @@
 // Feature catalog — the discoverability source of truth.
 //
-// Two ordered arrays:
-//   features  — every user-facing capability in the app, grouped by area.
-//               Rendered in the Help & What's New overlay (avatar
-//               dropdown → "Help & What's New") as the Features matrix
-//               (name + blurb + where to find it). When a new feature
-//               ships, add an entry here.
-//   whats_new — newest-first list of recently shipped things. Drives
-//               the What's New section of that same overlay + the
-//               "(N new)" badge (badge clears when user opens it).
+// Exports:
+//   features    — every user-facing capability in the app, grouped by
+//                 area. Rendered in the Help center (avatar dropdown →
+//                 "Help & What's New" → Features) as the searchable
+//                 atlas (name + blurb + where to find it). When a new
+//                 feature ships, add an entry here.
+//   releases    — versioned patch notes, newest first (see the block
+//                 comment above the array). Drives the Help center's
+//                 What's New timeline + the "N new" badge (badge
+//                 clears when the user opens the Help center).
+//   APP_VERSION — the current version string; mirrors releases[0].
 //
-// Both arrays are also exposed via GET /api/org/manifest so any future
-// 86 introspection tool could read them without database access.
+// All three are exposed via GET /api/org/manifest so any future 86
+// introspection tool could read them without database access.
 //
-// Conventions:
+// Feature conventions:
 //   id          unique kebab-case string (used in localStorage keys)
 //   label       short, sentence-case title (under ~40 chars)
 //   blurb       one-line value prop (under ~120 chars)
@@ -22,7 +24,7 @@
 //               find this feature in the UI.
 //   area        bucket for grouping: 'Photos' | 'Reports' | 'Schedule'
 //               | 'Estimating' | 'Jobs' | 'Org' | 'AI' | 'Mobile'
-//   shipped     ISO date string. Drives whats_new ordering.
+//   shipped     ISO date string.
 
 'use strict';
 
@@ -366,96 +368,208 @@ const features = [
     area: 'Mobile',
     shipped: '2026-06-01',
   },
-];
 
-// Newest first — the order this array appears IS the order What's New
-// renders. Drop the bottom entries once they age out (>30 days) but
-// keep the feature in the `features` array above forever.
-const whats_new = [
+  // ── Cost Inbox / Comms / AI crew (late-June wave) ───────────
   {
-    id: 'location-aware-ai',
-    label: 'Location-aware AI',
-    blurb: 'Share your location and ask "what jobs or leads are near me" — answered by distance.',
-    shipped: '2026-06-24',
+    id: 'cost-inbox',
+    label: 'Cost Inbox (receipt capture)',
+    blurb: 'Snap a receipt, AI reads the vendor + total, tag it to a cost code and job — costs roll up on the job automatically.',
+    access_path: 'Cost Inbox (left sidebar), or header + → Scan Receipt',
+    area: 'Jobs',
+    shipped: '2026-06-30',
   },
   {
-    id: 'assistant-quick-adds',
-    label: 'Instant AI quick-adds',
-    blurb: 'Reminders, to-dos, and calendar events the assistant adds now commit instantly — no approval card.',
-    shipped: '2026-06-24',
+    id: 'schedule-calendar-view',
+    label: 'Schedule Calendar view',
+    blurb: 'Flip the schedule between Production bars and a Calendar that paints events, tasks, to-dos, and reminders as per-day cards.',
+    access_path: 'Schedule → Production / Calendar switch',
+    area: 'Schedule',
+    shipped: '2026-06-29',
   },
   {
-    id: 'lead-to-job',
-    label: 'Create a job from a lead or estimate',
-    blurb: 'One click; the contract pulls the estimate total and the job links back to its source.',
-    shipped: '2026-06-24',
+    id: 'email-template-studio',
+    label: 'Email template studio',
+    blurb: 'Block-based email editor with drag-to-reorder, org branding kit, open/click tracking, weekly digests, and bulk sends.',
+    access_path: 'Admin → Organization → Templates → Email',
+    area: 'Org',
+    shipped: '2026-06-28',
   },
   {
-    id: 'site-plan',
-    label: 'Site Plan view',
-    blurb: 'Trace a job\'s buildings on a satellite map with photo-GPS pins and a 3D toggle.',
-    shipped: '2026-06-22',
+    id: 'background-ai-tasks',
+    label: 'Background AI tasks',
+    blurb: 'Hand the crew a big job and close the app — it runs in the background, pauses to ask when it needs you, and the results land back in your chat.',
+    access_path: 'Ask 86 / Assistant → "do this in the background"',
+    area: 'AI',
+    shipped: '2026-07-01',
   },
   {
-    id: 'summary-command-center',
-    label: 'Redesigned Summary dashboard',
-    blurb: 'A dense command-center home: attention ribbon + money snapshot + workspace.',
-    shipped: '2026-06-20',
+    id: 'crew-activity',
+    label: 'Crew activity panel',
+    blurb: 'Every background task and Scribe draft in one panel — answer questions, approve drafts, and watch live progress.',
+    access_path: 'Crew activity pill (bottom-right corner)',
+    area: 'AI',
+    shipped: '2026-07-01',
   },
   {
-    id: 'calendar',
-    label: 'Personal calendar',
-    blurb: 'Appointments + events on the schedule, color-coded, with reminders.',
-    shipped: '2026-06-19',
+    id: 'push-notifications',
+    label: 'Push notifications',
+    blurb: 'Phone + desktop pings for finished AI tasks, Scribe drafts, DMs, reminders, and assignments — each channel toggleable per event.',
+    access_path: 'Avatar → My Account & Notifications → Notifications',
+    area: 'Org',
+    shipped: '2026-07-01',
   },
   {
-    id: 'my-day',
-    label: 'My Day',
-    blurb: 'Today\'s events, reminders, and due tasks in one time-ordered view.',
-    shipped: '2026-06-16',
-  },
-  {
-    id: 'messages-dm',
-    label: 'Messages (DMs)',
-    blurb: 'Direct-message teammates inside the app, with unread badges.',
-    shipped: '2026-06-16',
-  },
-  {
-    id: 'purchase-orders',
-    label: 'Purchase Orders',
-    blurb: 'Sub scope-of-work contracts on a job — amounts, attachments, approval.',
-    shipped: '2026-06-15',
-  },
-  {
-    id: 'tasks-3tier',
-    label: 'Tasks, to-dos & reminders',
-    blurb: 'Assignable org tasks, your private to-dos, and timed reminders.',
-    shipped: '2026-06-12',
-  },
-  {
-    id: 'drafting-sheets',
-    label: 'Drafting sheets (CAD)',
-    blurb: 'Precision plan drawing — dimensions, layers, hatch, snaps, DXF/PDF export.',
-    shipped: '2026-06-12',
-  },
-  {
-    id: 'projects',
-    label: 'Projects',
-    blurb: 'Project workspaces with photo feeds, reports, before/after pairs, and a map.',
-    shipped: '2026-06-08',
-  },
-  {
-    id: 'plans-takeoffs',
-    label: 'Plans & Takeoffs',
-    blurb: 'Import a plan, calibrate scale, and measure LF / SF / counts / angles.',
-    shipped: '2026-06-08',
-  },
-  {
-    id: 'file-explorer',
-    label: 'File system everywhere',
-    blurb: 'Windows-style folders on every job, client, project, lead, and estimate.',
-    shipped: '2026-06-05',
+    id: 'guided-tours',
+    label: 'Guided tours',
+    blurb: 'Interactive walkthroughs that spotlight the actual buttons on your screen, step by step.',
+    access_path: 'Avatar → Help & What\'s New → Guides',
+    area: 'Org',
+    shipped: '2026-07-02',
   },
 ];
 
-module.exports = { features, whats_new };
+// ── Releases (patch notes) ─────────────────────────────────────
+// Newest first — the order this array appears IS the order the Help
+// center's What's New timeline renders. Curated versions, not every
+// deploy: when a meaningful wave ships, cut a new release at the top,
+// bump APP_VERSION to match, and list the changes.
+//
+// Shape:
+//   version   'major.minor' string ('1.8'). APP_VERSION mirrors the
+//             newest entry.
+//   date      ISO date the release was cut.
+//   name      short codename shown next to the version chip.
+//   summary   one-liner for the release header.
+//   changes   [{ type, text, tour? }] where type is one of
+//             'new' | 'improved' | 'fixed' and `tour` (optional) is a
+//             client-side guided-tour id (js/guide.js registry) that
+//             renders a "Show me" button on that row.
+const APP_VERSION = '1.8';
+
+const releases = [
+  {
+    version: '1.8',
+    date: '2026-07-02',
+    name: 'Guided',
+    summary: 'One card language across every map, and a Help center that can walk you through the app.',
+    changes: [
+      { type: 'new', text: 'Patch notes + versioning — this page. Every release is now logged here, newest first.' },
+      { type: 'new', text: 'Guided tours — interactive walkthroughs that spotlight the real buttons on your screen.', tour: 'welcome' },
+      { type: 'new', text: 'The Help center got a full rework: release timeline, searchable feature atlas, and guides.' },
+      { type: 'improved', text: 'Every map pin now opens the same dark info card — first tap opens the card, the magnifier zooms in.', tour: 'map-cards' },
+      { type: 'improved', text: 'Map cards auto-pan into view so pins near the top edge don\'t open half-hidden.' },
+      { type: 'fixed', text: '"Open lead" / "Open WIP" on map cards now actually leaves the map and opens the record.' },
+    ],
+  },
+  {
+    version: '1.7',
+    date: '2026-07-01',
+    name: 'The AI crew',
+    summary: 'Your assistant, 86, and the Scribe now work like a real crew — in the background, with pings.',
+    changes: [
+      { type: 'new', text: 'Background AI tasks — hand off a big job and close the app; it keeps working and pings you.', tour: 'ai-crew' },
+      { type: 'new', text: 'Pause-and-ask — a background task that needs a decision stops and asks, then resumes on your answer.' },
+      { type: 'new', text: 'Crew activity panel — every task and Scribe draft in one place (pill in the bottom-right corner).', tour: 'ai-crew' },
+      { type: 'new', text: 'Push notifications on phone + desktop, with per-event Email / Push toggles under My Account.' },
+      { type: 'new', text: 'Crew chip in the header shows who\'s working — Assistant, 86, or Scribe — in real time.' },
+      { type: 'improved', text: 'The Scribe always drafts in the background now and pushes you when the draft is ready.' },
+      { type: 'improved', text: 'Close the app mid-question and nothing is lost — the turn finishes and the answer is waiting.' },
+      { type: 'improved', text: 'Dark mode is now the default everywhere (light mode stays if you saved it).' },
+    ],
+  },
+  {
+    version: '1.6',
+    date: '2026-06-29',
+    name: 'Org polish',
+    summary: 'Receipts, richer lists, branded email, and admin tooling.',
+    changes: [
+      { type: 'new', text: 'Cost Inbox — snap receipts, AI reads the total, costs roll up on the job.', tour: 'receipts' },
+      { type: 'new', text: 'Email template studio — block editor, org branding, open/click tracking, weekly digests.' },
+      { type: 'new', text: 'Schedule Calendar view — events, tasks, to-dos, and reminders painted per day.' },
+      { type: 'new', text: 'Filters, saved views, column chooser, Excel export, and bulk-action bars on every list page.' },
+      { type: 'new', text: 'Admin act-as mode — support a teammate by seeing the app exactly as they do (fully audited).' },
+      { type: 'improved', text: 'My Account is self-serve now — name, title, phone, password, and notification prefs.' },
+      { type: 'improved', text: 'Every lead geocoded — the whole pipeline shows up on the map.' },
+    ],
+  },
+  {
+    version: '1.5',
+    date: '2026-06-24',
+    name: 'Command center',
+    summary: 'The Summary became a command center and the pipeline went spatial.',
+    changes: [
+      { type: 'new', text: 'Redesigned Summary — attention ribbon, money snapshot, three-column workspace.' },
+      { type: 'new', text: 'Site Plan view — trace buildings on satellite, photo-GPS pins, 3D massing toggle.' },
+      { type: 'new', text: 'Leads + Jobs map with address grouping.', tour: 'map-cards' },
+      { type: 'new', text: 'Create a job from a lead or estimate in one click — contract + costs flow automatically.', tour: 'lead-to-job' },
+      { type: 'new', text: 'Address autocomplete on every address field, capturing exact coordinates.' },
+      { type: 'new', text: 'Personal calendar layered on the schedule.' },
+      { type: 'improved', text: 'The assistant knows where you are — "what\'s near me" answered by distance.' },
+      { type: 'improved', text: 'Quick-adds (reminders, to-dos, events) commit instantly — no approval card.' },
+    ],
+  },
+  {
+    version: '1.4',
+    date: '2026-06-16',
+    name: 'Operations pack',
+    summary: 'The day-to-day layer: tasks, messages, purchase orders, and your day.',
+    changes: [
+      { type: 'new', text: 'Tasks, To-dos & Reminders — org-assignable, private, and timed, attachable to any record.' },
+      { type: 'new', text: 'Purchase Orders — sub scope-of-work contracts with amounts, attachments, and approval.' },
+      { type: 'new', text: 'Messages — direct-message teammates inside the app.' },
+      { type: 'new', text: 'My Day — today\'s appointments, reminders, and due tasks in one time-ordered view.' },
+      { type: 'new', text: 'Drafting sheets — CAD-style precision drawing with dimensions, layers, and DXF/PDF export.' },
+    ],
+  },
+  {
+    version: '1.3',
+    date: '2026-06-08',
+    name: 'Pipeline & Projects',
+    summary: 'Sales pipeline, project workspaces, and files that behave like files.',
+    changes: [
+      { type: 'new', text: 'Leads pipeline with statuses, values, photos, weather, and Buildertrend import.', tour: 'lead-to-job' },
+      { type: 'new', text: 'Projects — dedicated workspaces with photo feeds, reports, and before/after pairs.' },
+      { type: 'new', text: 'A real folder tree on every job, client, project, lead, and estimate.' },
+      { type: 'new', text: 'Plans & Takeoffs — calibrate a plan PDF and measure LF / SF / counts / angles.' },
+      { type: 'improved', text: 'Install on your phone — full PWA with a native-feeling bottom nav.' },
+    ],
+  },
+  {
+    version: '1.2',
+    date: '2026-05-27',
+    name: 'Photos & Reports',
+    summary: 'The documentation wave — capture it, mark it up, report it.',
+    changes: [
+      { type: 'new', text: 'Photo viewer with tags, comments, and annotate-in-place.' },
+      { type: 'new', text: 'Eight report templates with five section layouts and eight visual style packs.' },
+      { type: 'new', text: 'Change Orders on jobs.' },
+      { type: 'new', text: 'Voice input on chat + caption fields.' },
+      { type: 'improved', text: 'Edit-gate — forms lock until you tap the pencil, so stray taps can\'t mutate data.' },
+      { type: 'improved', text: 'Schedule works one-handed on a phone (drawer sidebar + day-at-glance).' },
+    ],
+  },
+  {
+    version: '1.1',
+    date: '2026-05-12',
+    name: 'Field kit',
+    summary: 'Tools the crew actually opens on site.',
+    changes: [
+      { type: 'new', text: 'Field Tools — calculators, lookups, and forms built for phones; 86 can spin one up on demand.' },
+      { type: 'new', text: 'Printouts — save any calculation as a receipt-style record.' },
+    ],
+  },
+  {
+    version: '1.0',
+    date: '2026-04-15',
+    name: 'Foundation',
+    summary: 'Where it started: WIP tracking with an AI that knows your jobs.',
+    changes: [
+      { type: 'new', text: 'Job WIP tracking — contracts, costs, billings, percent-complete.' },
+      { type: 'new', text: 'Ask 86 — an AI that reads your real data and works your calendar, tasks, and records.', tour: 'ai-crew' },
+      { type: 'new', text: 'My Files, the schedule, and the day-at-glance sheet.' },
+    ],
+  },
+];
+
+
+module.exports = { features, releases, APP_VERSION };
