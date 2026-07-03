@@ -5533,16 +5533,47 @@ window.closeNodeGraph=function(){
   }
 };
 
+// Size the fixed graph overlay around the app chrome: below the sticky
+// header, right of the left job-subnav sidebar (or full-bleed at left:0
+// when the sidebar is hidden, e.g. mobile <768px). Measured LIVE — not
+// once at open — because a cold deep-link boot (PWA update relaunch) can
+// open the graph while the shell is still hidden behind the auth check:
+// header/sidebar measure 0 and the overlay paints over both until the
+// user exits and re-enters the job. wireGraphTabPositioning() re-runs
+// this when the sidebar lays out late, gets drag-resized, or collapses.
+function positionGraphTab(){
+  var tab=document.getElementById('nodeGraphTab');
+  if(!tab||!tab.classList.contains('active')) return;
+  var header=document.querySelector('header');
+  tab.style.top=(header&&header.offsetHeight>0)?(header.offsetHeight+'px'):'0px';
+  var _appSb=document.getElementById('app-sidebar');
+  tab.style.left=(_appSb&&_appSb.offsetParent!==null&&_appSb.offsetWidth>0)?(_appSb.offsetWidth+'px'):'0';
+}
+var _tabPosWired=false;
+function wireGraphTabPositioning(){
+  if(_tabPosWired) return; _tabPosWired=true;
+  window.addEventListener('resize', positionGraphTab);
+  var _sb=document.getElementById('app-sidebar');
+  if(_sb&&typeof ResizeObserver!=='undefined'){
+    var _lastW=-1;
+    new ResizeObserver(function(){
+      var tab=document.getElementById('nodeGraphTab');
+      if(!tab||!tab.classList.contains('active')) return;
+      var w=_sb.offsetWidth;
+      if(w===_lastW) return;
+      _lastW=w;
+      positionGraphTab();
+      // The overlay's width changed → re-fit the graph canvas/basemap.
+      if(typeof resize==='function'){ try{ resize(); }catch(_){} }
+    }).observe(_sb);
+  }
+}
+
 window.openNodeGraph=function(jid){
   var tab=document.getElementById('nodeGraphTab'); if(!tab) return;
-  // Position below the sticky header
-  var header=document.querySelector('header');
-  if(header) tab.style.top=header.offsetHeight+'px';
-  // Keep the app's left job-subnav sidebar visible: start the overlay at the sidebar's right
-  // edge (or full-width at left:0 when the sidebar is hidden, e.g. mobile <768px).
-  var _appSb=document.getElementById('app-sidebar');
-  tab.style.left=(_appSb && _appSb.offsetParent!==null && _appSb.offsetWidth>0) ? (_appSb.offsetWidth+'px') : '0';
   tab.classList.add('active');
+  wireGraphTabPositioning();
+  positionGraphTab();
   // Fresh start for the right Inspector on every open: clear any stale section view (which would
   // make renderInspector bail) and reset the build-once key so the job detail rebuilds. Fixes the
   // "right bar empty on the first try" race after a prior job/section was open.

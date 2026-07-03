@@ -598,10 +598,22 @@
     // who haven't migrated yet don't lose their last-place.
     var initial = parsePath(location.pathname);
     if (initial.top) {
-      // Wait for the rest of init to settle (auth.js resolves on
-      // DOMContentLoaded too) before replaying — without this,
-      // switchTab would run against a still-hidden app shell.
-      setTimeout(function () { applyRoute(initial); }, 200);
+      // Replay only once the app shell is actually visible. auth.js boot
+      // is async (token refresh → /me → capabilities → showApp()) and can
+      // outlast any fixed delay — on a slow start (PWA update relaunch,
+      // cold server) a timed replay ran against the still-hidden shell,
+      // so views that measure the app chrome at open time (the job map
+      // overlay) sized themselves to 0 and painted over the sidebar.
+      // No cap: if the user is on the login screen, the deep link
+      // replays right after login shows the shell instead of being lost
+      // (showApp() skips its own nav restore whenever the URL has a
+      // route, expecting this replay to run).
+      var replayIv = setInterval(function () {
+        var ac = document.getElementById('app-container');
+        if (!ac || ac.offsetParent === null) return; // shell still hidden
+        clearInterval(replayIv);
+        applyRoute(initial);
+      }, 150);
     }
   }
 
