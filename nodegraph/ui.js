@@ -18,7 +18,7 @@ var _geoPick=false, _geoPickOverlay=null, _geoPickId=null; // Slice 3: map-picke
 var _tracing=false, _traceId=null, _tracePts=[], _traceOverlay=null, _traceClickTimer=null, _polyLayer=null;
 // Measure tool: real distance (ft) + area (sq ft) on the satellite imagery.
 // Ephemeral view-state only (no graph write); points cleared when the tool is off.
-var _measuring=false, _measureMode='distance', _measurePts=[], _measureOverlay=null, _measurePanel=null, _measureRoofPitch=0, _measureKeyHandler=null;
+var _measuring=false, _measureMode='line', _measurePts=[], _measureOverlay=null, _measurePanel=null, _measureRoofPitch=0, _measureKeyHandler=null;
 var _SVGNS='http://www.w3.org/2000/svg';
 var _spMassing=(function(){ try{ return localStorage.getItem('ngSitePlanMassing')!=='0'; }catch(_){ return true; } })(); // 2.5D building massing — on by default
 // Slice 4: photo-GPS pins
@@ -1880,6 +1880,10 @@ function ensureMeasureOverlay(){
   _measureOverlay.addEventListener('click',function(e){
     if(!_measuring || !_spOrigin || !_spOriginGraph) return;
     _measurePts.push(pickLatLngFromEvent(e));
+    // Line mode = discrete point-to-point: the 2nd click closes ONE segment,
+    // which auto-saves and starts a fresh, disconnected measurement for the
+    // next two clicks. Poly/Area chain points until Save/Done/Esc.
+    if(_measureMode==='line' && _measurePts.length>=2){ commitMeasurement(false); return; }
     renderPolygons(); updateMeasurePanel();
   });
   _measureOverlay.addEventListener('dblclick',function(e){
@@ -1895,7 +1899,8 @@ function buildMeasurePanel(){
   var d=document.createElement('div'); d.className='ng-measure-panel';
   d.innerHTML=
     '<div class="ng-measure-modes">'+
-      '<button type="button" data-mmode="distance" class="ng-on">Distance</button>'+
+      '<button type="button" data-mmode="line" class="ng-on">Line</button>'+
+      '<button type="button" data-mmode="poly">Poly</button>'+
       '<button type="button" data-mmode="area">Area</button>'+
     '</div>'+
     '<div class="ng-measure-pitchrow" style="display:none;">'+
@@ -1922,6 +1927,7 @@ function buildMeasurePanel(){
   d.querySelectorAll('[data-mmode]').forEach(function(b){
     b.addEventListener('click',function(){
       _measureMode=b.getAttribute('data-mmode');
+      _measurePts=[];   // switching styles starts a fresh measurement
       d.querySelectorAll('[data-mmode]').forEach(function(x){ x.classList.toggle('ng-on', x===b); });
       var pr=d.querySelector('.ng-measure-pitchrow'); if(pr) pr.style.display=(_measureMode==='area')?'flex':'none';
       renderPolygons(); updateMeasurePanel();
@@ -1946,8 +1952,11 @@ function updateMeasurePanel(){
     var pf=_pitchFactor();
     var txt='Area: '+fmtSqft(s.areaSqft)+'  ·  Perimeter: '+fmtFt(s.closedFt);
     ro.innerHTML = txt + (pf>1 ? ('<br><span class="ng-measure-roof">Roof @ '+_measureRoofPitch+'/12: '+fmtSqft(s.areaSqft*pf)+'</span>') : '');
-  } else {
-    if(_measurePts.length<2){ ro.textContent='Tap points to measure distance…'; return; }
+  } else if(_measureMode==='line'){
+    if(_measurePts.length<1){ ro.textContent='Tap 2 points — each pair is its own measurement…'; return; }
+    ro.textContent='Tap the second point…';
+  } else { // poly — connected path, total length across all points
+    if(_measurePts.length<2){ ro.textContent='Tap points to trace a path (Esc / Done ends it)…'; return; }
     ro.textContent='Length: '+fmtFt(s.lengthFt)+'   ('+_measurePts.length+' pts)';
   }
 }
@@ -1956,16 +1965,21 @@ function updateMeasurePanel(){
 // ("Done" = save & close); exit=false keeps measuring so several can be captured in a
 // row ("Save"). An invalid/partial draft is a no-op on Save; Done still just closes it.
 function commitMeasurement(exit){
-  var valid = (_measureMode==='area') ? _measurePts.length>=3 : _measurePts.length>=2;
+  var isArea = (_measureMode==='area');
+  var valid = isArea ? _measurePts.length>=3 : _measurePts.length>=2;
   if(!valid){ if(exit){ exitMeasure(); renderPolygons(); } return; }
   if(E.addMeasurement){
+    // Line + Poly both persist as a 'distance' measurement (open path); Area as
+    // 'area'. The saved-measurement renderer keys on 'distance'|'area', so the
+    // draw-mode split (line vs poly) is purely an input style.
+    var storedMode = isArea ? 'area' : 'distance';
     var existing = E.measurements ? E.measurements() : [];
-    var n = existing.filter(function(x){ return x.mode===_measureMode; }).length + 1;
+    var n = existing.filter(function(x){ return x.mode===storedMode; }).length + 1;
     E.addMeasurement({
-      mode:_measureMode,
+      mode:storedMode,
       pts:_measurePts.map(function(v){ return { lat:Number(v.lat), lng:Number(v.lng) }; }),
-      pitch:(_measureMode==='area' ? (Number(_measureRoofPitch)||0) : 0),
-      label:(_measureMode==='area'?'Area ':'Distance ')+n
+      pitch:(isArea ? (Number(_measureRoofPitch)||0) : 0),
+      label:(isArea?'Area ':'Distance ')+n
     });
     if(E.saveGraph) E.saveGraph();
   }
@@ -1988,13 +2002,20 @@ function toggleMeasure(){
   if(_geoPick) exitGeoPick();
   _spOrigin=_spOrigin||jobOrigin(); _spOriginGraph=_spOriginGraph||siteplanCentroid();
   if(!_spOrigin){ showSatHint(true); return; }
-  _measuring=true; _measureMode='distance'; _measurePts=[];
+  _measuring=true; _measureMode='line'; _measurePts=[];
   var mb=document.getElementById('ngMeasureBtn'); if(mb) mb.classList.add('ng-on');
   ensureMeasureOverlay().style.display='block';
   buildMeasurePanel(); updateMeasurePanel();
-  // Esc cancels the measure session (capture-phase so it wins before other
-  // handlers; removed in exitMeasure). Fixes "won't stop drawing on Esc".
-  _measureKeyHandler=function(e){ if(e.key==='Escape'){ e.preventDefault(); e.stopPropagation(); exitMeasure(); renderPolygons(); } };
+  // Esc ENDS the in-progress shape: a valid poly/area (or 2-pt line) commits and
+  // a fresh one begins; with nothing drawn, Esc exits the tool. Capture-phase so
+  // it wins before other handlers; removed in exitMeasure.
+  _measureKeyHandler=function(e){
+    if(e.key!=='Escape') return;
+    e.preventDefault(); e.stopPropagation();
+    var need=(_measureMode==='area')?3:2;
+    if(_measurePts.length>=need){ commitMeasurement(false); }   // end (commit) the current shape, keep measuring
+    else { exitMeasure(); renderPolygons(); }                   // nothing to end → leave the tool
+  };
   document.addEventListener('keydown', _measureKeyHandler, true);
   renderPolygons();
 }
