@@ -2226,21 +2226,24 @@
         }
         /* Always-visible column divider so it's obvious the columns can be
            resized (the 7px edge was invisible until hovered — users
-           couldn't tell drag-to-resize existed). A faint vertical bar sits
-           on each header's right edge and brightens to blue on hover. */
+           couldn't tell drag-to-resize existed). A grey vertical bar sits
+           on each header's right edge and brightens to blue on hover. The
+           colour is a semi-opaque grey so it reads on BOTH the dark theme
+           (lighter than the header) and light mode (darker than the header)
+           — the old --border value was near-black and vanished on dark. */
         .p86-col-resizer::after {
             content: '';
             position: absolute;
-            top: 22%;
+            top: 16%;
             right: 4px;
             width: 2px;
-            height: 56%;
+            height: 68%;
             border-radius: 1px;
-            background: var(--border, rgba(255, 255, 255, 0.18));
+            background: rgba(148, 158, 178, 0.65);
             transition: background 0.12s ease;
         }
         .p86-col-resizer:hover {
-            background: rgba(79, 140, 255, 0.4);
+            background: rgba(79, 140, 255, 0.18);
         }
         .p86-col-resizer:hover::after {
             background: #4f8cff;
