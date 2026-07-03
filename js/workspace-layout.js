@@ -511,7 +511,10 @@
   // tabs must remain in the page column. Above it, they move into the
   // sidebar. Single source of truth for the breakpoint test.
   function jobSubnavIsMobile() {
-    return !!(window.matchMedia && window.matchMedia('(max-width: 768px)').matches);
+    // Touch-gated to match the CSS sidebar-hide: on a narrow MOUSE desktop
+    // the sidebar stays visible, so the job subtabs must stay routed into
+    // it (not left in the page column). Coarse pointer = real phone/tablet.
+    return !!(window.matchMedia && window.matchMedia('(max-width: 768px) and (pointer: coarse)').matches);
   }
 
   // Build (once) the job-context wrapper that holds the Back-to-Jobs

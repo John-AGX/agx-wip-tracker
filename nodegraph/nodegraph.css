@@ -103,12 +103,20 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
 /* Map-as-job-page: on desktop the app's left job-subnav sidebar is the left rail (the overlay
    starts at its right edge via openNodeGraph), so hide the node-graph's own duplicate sidebar.
    Mobile (<768px) keeps .ng-sidebar as the Overview bottom sheet — the app sidebar is hidden there. */
-@media (min-width:769px){ #nodeGraphTab .ng-sidebar{display:none} }
+/* Hide the node-graph's OWN duplicate sidebar on any wide viewport OR any
+   fine-pointer device. The (pointer:fine) arm is the companion to the
+   coarse-gated bottom-sheet block below: a mouse-driven desktop scaled below
+   769 CSS px must still hide this duplicate rail (the app sidebar is the real
+   left column there) rather than render it in-flow on the canvas. */
+@media (min-width:769px), (pointer:fine){ #nodeGraphTab .ng-sidebar{display:none} }
 
 /* ── Mobile (Slice 5): map full-bleed; left overview + right detail become slide-up bottom sheets,
    switched by the .ng-mobile-seg control. Keeps the map touch-pannable instead of fighting page scroll. ── */
 .ng-mobile-seg{display:none}
-@media (max-width:768px){
+/* Phone-chrome takeover gated on TOUCH (pointer:coarse) — a narrow mouse
+   desktop keeps the desktop split (real app sidebar left · map · docked
+   inspector right), NOT the bottom-sheet phone layout. */
+@media (max-width:768px) and (pointer:coarse){
   .ng-mobile-seg{display:flex;position:fixed;left:0;right:0;bottom:0;z-index:60;gap:6px;padding:6px;background:rgba(12,16,26,.97);border-top:1px solid rgba(255,255,255,.1)}
   .ng-mseg-btn{flex:1;background:transparent;border:1px solid rgba(255,255,255,.14);color:#9cc0ff;font-size:12px;font-weight:600;padding:9px 6px;border-radius:7px;cursor:pointer}
   .ng-mseg-btn.ng-on{background:rgba(79,140,255,.22);border-color:#4f8cff;color:#fff}
@@ -149,7 +157,7 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
 /* Drag-to-resize handle on the inspector's LEFT edge (mirrors the app sidebar resizer) */
 .ng-inspector-resize{position:absolute;left:-3px;top:0;width:7px;height:100%;cursor:col-resize;z-index:8}
 .ng-inspector-resize:hover,.ng-inspector.resizing .ng-inspector-resize{background:linear-gradient(90deg,transparent,rgba(79,140,255,.55),transparent)}
-@media (max-width:768px){ .ng-inspector-resize{display:none} }  /* bottom sheet on mobile — no edge resize */
+@media (max-width:768px) and (pointer:coarse){ .ng-inspector-resize{display:none} }  /* bottom sheet on touch — no edge resize; a narrow mouse desktop keeps the docked resizable inspector */
 #nodeGraphTab.ng-siteplan .ng-inspector{display:flex}
 #nodeGraphTab.ng-siteplan .ng-sp-metrics,#nodeGraphTab.ng-siteplan .ng-sp-bldg{display:none !important}
 .ng-inspector-hdr{display:flex;align-items:center;gap:7px;padding:11px 13px;border-bottom:1px solid var(--ng-border2);font-size:13px;font-weight:600;color:var(--ng-text)}

@@ -1559,23 +1559,24 @@ body.light-mode .sch-cal-grid { background: #d6dae3; }
   display: none;
 }
 
-@media (max-width: 768px) {
-  /* Show the hamburger toggle on mobile. */
+/* Schedule phone-chrome — gated on TOUCH (pointer:coarse) so a mouse-driven
+   narrow desktop keeps the side-by-side sidebar + calendar instead of the
+   hamburger off-canvas drawer takeover. Split from the width-only reflow
+   block below (toolbar wrap / cell sizing / tap-targets stay width-driven). */
+@media (max-width: 768px) and (pointer: coarse) {
+  /* Show the hamburger toggle. */
   .sch-mobile-only { display: inline-flex; }
 
-  /* Drop the fixed-row layout — calendar takes the whole
-     viewport. The sidebar shifts to fixed-positioned drawer
-     overlaid on top. */
+  /* Drop the fixed-row layout — calendar takes the whole viewport; the
+     sidebar shifts to a fixed-positioned drawer overlaid on top. */
   .sch-page {
     display: block;
     height: calc(100vh - 90px);
     gap: 0;
   }
 
-  /* Sidebar becomes an off-canvas drawer. Closed by default
-     (translateX(-100%) hides it off the left edge); the
-     toolbar hamburger toggles .sch-sidebar-open on the page
-     to slide it in. */
+  /* Sidebar becomes an off-canvas drawer (closed by default; the toolbar
+     hamburger toggles .sch-sidebar-open on the page to slide it in). */
   .sch-sidebar {
     position: fixed;
     top: 0;
@@ -1606,7 +1607,9 @@ body.light-mode .sch-cal-grid { background: #d6dae3; }
     height: 100%;
     min-width: 0;
   }
+}
 
+@media (max-width: 768px) {
   /* Toolbar: wrap the controls so they don't fight for space.
      Nav (hamburger / prev / month / next / today) stays on
      row 1; week-summary chips drop to row 2; right-side

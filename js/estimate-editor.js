@@ -1511,7 +1511,10 @@
   // Buildertrend / CoConstruct / ServiceTitan handle line items on phones.
   // ──────────────────────────────────────────────────────────────────
   function eeLineIsMobile() {
-    return !!(window.matchMedia && window.matchMedia('(max-width: 760px)').matches);
+    // Touch-gated: the tap-to-open bottom-sheet line editor is for real
+    // phones. A narrow mouse desktop still gets the card LAYOUT (CSS @760,
+    // width-only) but keeps inline table editing, not the bottom sheet.
+    return !!(window.matchMedia && window.matchMedia('(max-width: 760px) and (pointer: coarse)').matches);
   }
   function eeFindLine(id) {
     var lines = getLines() || [];

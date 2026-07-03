@@ -385,7 +385,7 @@
   // desktop spanning-bar / fisheye path is untouched above the
   // breakpoint. 640px matches the existing @media (max-width:640px)
   // CSS section so the JS branch and the CSS section flip together.
-  function isMobileCal() { return (window.innerWidth || 0) <= 640; }
+  function isMobileCal() { return ((window.innerWidth || 0) <= 640) && !!(window.matchMedia && window.matchMedia('(pointer: coarse)').matches); }
   // Track the mode used at the last render so the resize handler only
   // re-renders when the breakpoint actually flips (not on every tick).
   var _lastCalMobileMode = null;

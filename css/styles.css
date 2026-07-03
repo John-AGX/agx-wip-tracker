@@ -3175,25 +3175,10 @@
                 align-items: flex-start;
             }
 
-            /* ── Mobile bottom-nav (M1) takeover ─────────────────
-               Below 768px the top tab strip + floating Ask 86 badge
-               are replaced by the fixed bottom navigation bar. The
-               header slims to brand + user-menu only; the bottom
-               nav owns navigation duty. */
-            nav.tabs { display: none !important; }
-            /* Desktop left sidebar is hidden on phones — the fixed
-               bottom-nav owns navigation here. .app-body collapses to
-               just the content column (flex:1) so nothing reflows. */
-            .app-sidebar { display: none !important; }
-            .p86-ask86-badge.floating { display: none !important; }
-            /* The in-header Ask 86 button is redundant on mobile — the
-               bottom-nav center slot owns the Ask 86 entry point. The
-               account avatar re-appears in the header here (it's the
-               account surface since the sidebar footer is hidden). */
-            .p86-ask86-badge.in-header { display: none !important; }
             /* Keep the PROJECT 86 wordmark visible on mobile (was
                hidden previously) but shrink it so logo + wordmark +
-               icon cluster all fit on a single 390px row. */
+               icon cluster all fit on a single 390px row. Content
+               reflow — stays width-only (benign on a narrow desktop). */
             .header-wordmark {
                 font-size: 12px;
                 letter-spacing: 1.6px;
@@ -3202,9 +3187,25 @@
                 white-space: nowrap;
                 min-width: 0;
             }
-            /* Reserve room at the bottom of the page so content
-               doesn't get hidden behind the fixed nav. 64px nav
-               + iPhone safe-area for the home indicator. */
+        }
+
+        /* ── Phone-chrome takeover — gated on TOUCH (pointer:coarse) ──────
+           so a mouse-driven desktop window that is merely narrow (e.g. a
+           PWA at high Windows display scaling, where the CSS viewport drops
+           below 768px) keeps its DESKTOP shell: top tabs, left sidebar,
+           docked Ask-86. Real phones/tablets (coarse pointer) still get the
+           fixed bottom-nav + hidden top nav/sidebar. Split out of the
+           width-only block above so its content-reflow rules stay width-
+           driven regardless of input device. */
+        @media (max-width: 768px) and (pointer: coarse) {
+            /* Top tab strip + floating/in-header Ask 86 give way to the
+               fixed bottom navigation bar; the desktop left sidebar hides
+               (bottom-nav owns navigation); the page reserves bottom room
+               so content clears the fixed nav (64px + iPhone safe-area). */
+            nav.tabs { display: none !important; }
+            .app-sidebar { display: none !important; }
+            .p86-ask86-badge.floating { display: none !important; }
+            .p86-ask86-badge.in-header { display: none !important; }
             body {
                 padding-bottom: calc(64px + env(safe-area-inset-bottom, 0px));
             }
@@ -3217,7 +3218,7 @@
            via display:none). */
         .p86-mobile-nav { display: none; }
 
-        @media (max-width: 768px) {
+        @media (max-width: 768px) and (pointer: coarse) {
             .p86-mobile-nav {
                 position: fixed;
                 left: 0; right: 0; bottom: 0;
@@ -3450,7 +3451,7 @@
            drop the desktop chrome (left border, shadow, resize grabber).
            Safe-area padding keeps the header below the notch and the
            composer above the home indicator in standalone PWA mode. */
-        @media (max-width: 768px) {
+        @media (max-width: 768px) and (pointer: coarse) {
             #p86-ai-panel {
                 width: 100vw !important;
                 max-width: 100vw !important;
@@ -10664,7 +10665,10 @@ textarea.ci-input { height: auto; resize: vertical; font-family: inherit; }
   to   { opacity: 1; transform: translate(-50%, 0); }
 }
 /* Sit above the mobile bottom nav. */
-@media (max-width: 768px) { .p86-bulkbar-float { bottom: 78px; } }
+/* Lift the floating bulk-action ribbon to clear the mobile bottom-nav —
+   must stay gated in lockstep with the bottom-nav (pointer:coarse), else a
+   narrow desktop (no bottom-nav) would float the bar above empty space. */
+@media (max-width: 768px) and (pointer: coarse) { .p86-bulkbar-float { bottom: 78px; } }
 .p86-bulkbar-count {
   font-size: 13.5px;
   font-weight: 700;

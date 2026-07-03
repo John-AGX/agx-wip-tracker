@@ -324,7 +324,10 @@
   // comment block above for the rationale.
   // ──────────────────────────────────────────────────────────────────
   function filesSubnavIsMobile() {
-    return !!(window.matchMedia && window.matchMedia('(max-width: 768px)').matches);
+    // Touch-gated: only a real touch device (coarse pointer) hides the
+    // desktop sidebar, so a narrow mouse desktop keeps the folder rail in
+    // the sidebar. Mirrors the CSS .app-sidebar hide (styles.css, gated).
+    return !!(window.matchMedia && window.matchMedia('(max-width: 768px) and (pointer: coarse)').matches);
   }
 
   // Build (once) the #app-filesnav wrapper inside #app-sidebar. It is
