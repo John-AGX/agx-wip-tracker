@@ -846,6 +846,15 @@ body.light-mode .ng-topbar.ng-ribbon .ng-ribbon-btn:hover{
 .ng-measure-seglbl{fill:#ffe9a8;font:700 6px sans-serif;text-anchor:middle;dominant-baseline:middle;pointer-events:none;paint-order:stroke;stroke:#0b1020;stroke-width:2;stroke-linejoin:round}
 .ng-measure-totlbl{fill:#fff;font:800 8px sans-serif;text-anchor:start;dominant-baseline:middle;pointer-events:none;paint-order:stroke;stroke:#0b1020;stroke-width:2.4;stroke-linejoin:round}
 .ng-measure-arealbl{fill:#fff;font:800 9px sans-serif;text-anchor:middle;dominant-baseline:middle;pointer-events:none;paint-order:stroke;stroke:#0b1020;stroke-width:2.6;stroke-linejoin:round}
+/* Saved (persisted) survey measurements — teal so they read distinct from the
+   amber in-progress draft. Shapes stay click-through; only the label (rename) and
+   the ✕ (delete) are interactive. */
+.ng-measure-line.ng-msaved{stroke:#38d9c0;stroke-dasharray:none}
+.ng-measure-poly.ng-msaved{fill:rgba(56,217,192,.12);stroke:#38d9c0}
+.ng-msaved-vert{fill:#38d9c0}
+.ng-msaved-lbl{fill:#eafffb;font:800 8px sans-serif;text-anchor:start;dominant-baseline:middle;cursor:pointer;pointer-events:auto;paint-order:stroke;stroke:#08201c;stroke-width:2.4;stroke-linejoin:round}
+.ng-msaved-del{fill:#ff8a8a;font:800 8px sans-serif;text-anchor:start;dominant-baseline:middle;cursor:pointer;pointer-events:auto;paint-order:stroke;stroke:#08201c;stroke-width:2.4;stroke-linejoin:round}
+.ng-msaved-lbl.ng-msaved-lbl-area,.ng-msaved-del.ng-msaved-lbl-area{text-anchor:middle}
 .ng-measure-panel{position:absolute;top:12px;left:12px;z-index:30;width:212px;background:rgba(16,20,30,.96);border:1px solid #2a3550;border-radius:10px;padding:10px;box-shadow:0 8px 28px rgba(0,0,0,.45);color:#e7ecf6}
 .ng-measure-modes{display:flex;gap:4px;margin-bottom:8px}
 .ng-measure-modes button{flex:1;padding:6px 0;font-size:12px;font-weight:700;border:1px solid #2a3550;border-radius:7px;background:#161c2a;color:#9fb0cc;cursor:pointer}
@@ -858,6 +867,7 @@ body.light-mode .ng-topbar.ng-ribbon .ng-ribbon-btn:hover{
 .ng-measure-actions{display:flex;gap:5px}
 .ng-measure-actions button{flex:1;padding:5px 0;font-size:11px;font-weight:600;border:1px solid #2a3550;border-radius:6px;background:#161c2a;color:#cdd8ec;cursor:pointer}
 .ng-measure-actions button:hover{background:#1e2638}
+.ng-measure-actions button[data-mact="save"]{background:rgba(56,217,192,.16);border-color:rgba(56,217,192,.5);color:#38d9c0} /* commit = teal, matches saved measurements */
 /* A traced building IS its polygon — the old massing-block card is hidden entirely
    (the polygon owns the visual, label, selection + drill-in via the polygon layer).
    Selector out-specifies .ng-sp-building (1,0,5,0) so its !important roof gradient

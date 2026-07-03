@@ -1589,6 +1589,10 @@ function renderPolygons(){
     // drill in via the same _spFocus path the card uses.
     _polyLayer.addEventListener('mousedown',function(e){
       if(_tracing) return;
+      // A saved-measurement label/✕ mousedown must NOT bubble to the wrap-level
+      // handler (which would deselect the current building + arm pan before our
+      // click handler runs). Swallow it here; the 'click' listener does the work.
+      if(e.target.closest && e.target.closest('[data-mdel],[data-mrename]')){ e.stopPropagation(); return; }
       var pe=e.target.closest('[data-id]'); if(!pe) return;
       e.stopPropagation();
       var id=pe.getAttribute('data-id');
@@ -1600,6 +1604,16 @@ function renderPolygons(){
       e.stopPropagation(); e.preventDefault();
       var id=pe.getAttribute('data-id');
       _spFocus=(id && id!==_spFocus) ? id : null; applySpFocus(); if(_spFocus) fanFocusNodes(_spFocus); fitSiteplan();
+    });
+    // Saved-measurement management: ✕ deletes, label renames. (Only reachable when
+    // not actively measuring — the measure overlay sits above and eats clicks then.)
+    _polyLayer.addEventListener('click',function(e){
+      var del=e.target.closest && e.target.closest('[data-mdel]');
+      if(del){ e.stopPropagation(); e.preventDefault(); var mid=del.getAttribute('data-mdel');
+        if(E.removeMeasurement) E.removeMeasurement(mid); if(E.saveGraph) E.saveGraph(); renderPolygons(); return; }
+      var rn=e.target.closest && e.target.closest('[data-mrename]');
+      if(rn){ e.stopPropagation(); var rid=rn.getAttribute('data-mrename'); var mm=E.findMeasurement&&E.findMeasurement(rid); if(!mm) return;
+        var nv=prompt('Rename measurement', mm.label||''); if(nv!=null){ mm.label=String(nv).trim(); if(E.saveGraph) E.saveGraph(); renderPolygons(); } return; }
     });
   }
   if(_polyLayer.parentNode!==canvasEl) canvasEl.insertBefore(_polyLayer, canvasEl.firstChild); // behind nodes; re-attach if renderNodes cleared the canvas
@@ -1660,6 +1674,49 @@ function renderPolygons(){
       _polyLayer.appendChild(c);
     });
   }
+  // Saved survey measurements — persisted distance/area shapes with labels. Drawn
+  // whenever the satellite site plan is up (independent of an active measure session)
+  // so they re-project every pan/zoom. Each label is clickable to rename and carries
+  // a ✕ to delete; both routed by the _polyLayer click listener above.
+  (E.measurements ? E.measurements() : []).forEach(function(m){
+    if(!m || !m.pts || m.pts.length<2) return;
+    var sIsArea=(m.mode==='area');
+    var spts=m.pts.map(function(v){ return gp(v); });
+    var sstr=spts.map(function(p){ return p.x+','+p.y; }).join(' ');
+    if(sIsArea && spts.length>=3){
+      var spg=document.createElementNS(_SVGNS,'polygon');
+      spg.setAttribute('points', sstr); spg.setAttribute('class','ng-measure-poly ng-msaved');
+      _polyLayer.appendChild(spg);
+    } else {
+      var spl=document.createElementNS(_SVGNS,'polyline');
+      spl.setAttribute('points', sstr); spl.setAttribute('class','ng-measure-line ng-msaved');
+      _polyLayer.appendChild(spl);
+    }
+    spts.forEach(function(p){
+      var sc=document.createElementNS(_SVGNS,'circle');
+      sc.setAttribute('cx',p.x); sc.setAttribute('cy',p.y); sc.setAttribute('r',2.6);
+      sc.setAttribute('class','ng-measure-vert ng-msaved-vert');
+      _polyLayer.appendChild(sc);
+    });
+    var sst=measureStats(m.pts);
+    var pf=(sIsArea && m.pitch>0) ? Math.sqrt(1+(m.pitch/12)*(m.pitch/12)) : 1;
+    var val=sIsArea ? fmtSqft(sst.areaSqft*pf) : fmtFt(sst.lengthFt);
+    var lx, ly;
+    if(sIsArea && spts.length>=3){ var scx=0,scy=0; spts.forEach(function(p){ scx+=p.x; scy+=p.y; }); lx=scx/spts.length; ly=scy/spts.length; }
+    else { var lp=spts[spts.length-1]; lx=lp.x+6; ly=lp.y-6; }
+    var lbl=document.createElementNS(_SVGNS,'text');
+    lbl.setAttribute('x', lx); lbl.setAttribute('y', ly);
+    lbl.setAttribute('class','ng-msaved-lbl'+(sIsArea?' ng-msaved-lbl-area':''));
+    lbl.setAttribute('data-mrename', m.id);
+    lbl.textContent=(m.label? m.label+': ':'')+val;
+    _polyLayer.appendChild(lbl);
+    var del=document.createElementNS(_SVGNS,'text');
+    del.setAttribute('x', lx); del.setAttribute('y', ly-11);
+    del.setAttribute('class','ng-msaved-del'+(sIsArea?' ng-msaved-lbl-area':''));
+    del.setAttribute('data-mdel', m.id);
+    del.textContent='✕';
+    _polyLayer.appendChild(del);
+  });
   // Measure overlay graphics — distance polyline (per-segment ft) or area polygon
   // (sq ft at centroid). Drawn here so it re-projects with every pan/zoom render.
   if(_measuring && _measurePts.length){
@@ -1856,6 +1913,7 @@ function buildMeasurePanel(){
     '<div class="ng-measure-actions">'+
       '<button type="button" data-mact="undo">Undo</button>'+
       '<button type="button" data-mact="clear">Clear</button>'+
+      '<button type="button" data-mact="save">Save</button>'+
       '<button type="button" data-mact="done">Done</button>'+
     '</div>';
   // Keep clicks on the panel from reaching the engine canvas behind it.
@@ -1873,7 +1931,8 @@ function buildMeasurePanel(){
   if(ps) ps.addEventListener('change',function(){ _measureRoofPitch=Number(ps.value)||0; renderPolygons(); updateMeasurePanel(); });
   d.querySelector('[data-mact="undo"]').addEventListener('click',function(){ _measurePts.pop(); renderPolygons(); updateMeasurePanel(); });
   d.querySelector('[data-mact="clear"]').addEventListener('click',function(){ _measurePts=[]; renderPolygons(); updateMeasurePanel(); });
-  d.querySelector('[data-mact="done"]').addEventListener('click',function(){ exitMeasure(); renderPolygons(); });
+  d.querySelector('[data-mact="save"]').addEventListener('click',function(){ commitMeasurement(false); }); // save & keep measuring
+  d.querySelector('[data-mact="done"]').addEventListener('click',function(){ commitMeasurement(true); });  // save (if valid) & close
   wrap.appendChild(d);
   _measurePanel=d;
   return d;
@@ -1891,6 +1950,29 @@ function updateMeasurePanel(){
     if(_measurePts.length<2){ ro.textContent='Tap points to measure distance…'; return; }
     ro.textContent='Length: '+fmtFt(s.lengthFt)+'   ('+_measurePts.length+' pts)';
   }
+}
+// Commit the active measure draft into the persisted measurements[] (survives reload
+// via the graph blob + carries into the job). exit=true also leaves measure mode
+// ("Done" = save & close); exit=false keeps measuring so several can be captured in a
+// row ("Save"). An invalid/partial draft is a no-op on Save; Done still just closes it.
+function commitMeasurement(exit){
+  var valid = (_measureMode==='area') ? _measurePts.length>=3 : _measurePts.length>=2;
+  if(!valid){ if(exit){ exitMeasure(); renderPolygons(); } return; }
+  if(E.addMeasurement){
+    var existing = E.measurements ? E.measurements() : [];
+    var n = existing.filter(function(x){ return x.mode===_measureMode; }).length + 1;
+    E.addMeasurement({
+      mode:_measureMode,
+      pts:_measurePts.map(function(v){ return { lat:Number(v.lat), lng:Number(v.lng) }; }),
+      pitch:(_measureMode==='area' ? (Number(_measureRoofPitch)||0) : 0),
+      label:(_measureMode==='area'?'Area ':'Distance ')+n
+    });
+    if(E.saveGraph) E.saveGraph();
+  }
+  _measurePts=[];
+  if(exit){ exitMeasure(); }
+  renderPolygons();
+  if(!exit && _measurePanel) updateMeasurePanel();
 }
 function exitMeasure(){
   _measuring=false; _measurePts=[];
@@ -4843,7 +4925,7 @@ function init(){
       : Promise.resolve(window.confirm('Reset graph?'));
     go.then(function(ok) {
       if (!ok) return;
-      E.setNodes([]); E.setWires([]); E.setNid(1); if(E.setFrames) E.setFrames([]);
+      E.setNodes([]); E.setWires([]); E.setNid(1); if(E.setFrames) E.setFrames([]); if(E.setMeasurements) E.setMeasurements([]);
       populate(); ensureWatchFan(); render();
     });
   });
@@ -5680,6 +5762,7 @@ window.openNodeGraph=function(jid){
     E.job(jid);
     _spOrigin=null; _spOriginGraph=null; _spOriginJob=null; _geoPhotos=[]; _geoPhotosJob=null; _geocoding=false; _fannedSet={}; // drop geo caches + fan state: avoid cross-job staleness
     E.setNodes([]); E.setWires([]); E.setNid(1);
+    if(E.setMeasurements) E.setMeasurements([]); // drop survey measurements too, so a fresh job (populate path) never inherits the previous job's
     if(!E.loadGraph()){ populate(); }
     // First-open fix: the early basemap mount stamped the geo origin over an empty node
     // set (loadGraph runs AFTER it), then the cache was reset to null above — so

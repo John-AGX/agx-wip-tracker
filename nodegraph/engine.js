@@ -62,6 +62,9 @@ var CATS = [
 // ── State ──
 var nodes = [], wires = [], nid = 1;
 var frames = []; // NG8: group boxes — additive overlay, never wired, never in calcs
+var measurements = []; // Site-plan survey measurements (distance/area). Additive geometry:
+                       // { id, mode:'distance'|'area', pts:[{lat,lng}], pitch, label }.
+                       // Never wired, never in cost calcs — pure annotation persisted on the blob.
 var panX = 0, panY = 0, zoom = 1;
 var jobId = null;
 // n8n-style "Clean Mode" — flat calm nodes + wires. Default ON; persisted
@@ -964,6 +967,7 @@ function buildGraphState(){
     }),
     wires: wires,
     frames: frames, // NG8: persisted group boxes (additive; old graphs simply have none)
+    measurements: measurements, // survey measurements (additive; old graphs simply have none)
     panX:panX, panY:panY, zoom:zoom, nid:nid
   };
 }
@@ -1150,6 +1154,7 @@ function restoreSnapshot(){
   // entries that reference appData rows still resolve.
   nodes = []; wires = snap.wires || []; nid = snap.nid || 1;
   frames = snap.frames || []; // guard so pre-frames snapshots restore fine
+  measurements = snap.measurements || []; // guard so pre-measurement snapshots restore fine
   panX = snap.panX || 0; panY = snap.panY || 0; zoom = snap.zoom || 1;
   snap.nodes.forEach(function(sn){
     var d = DEFS[sn.type]; if(!d) return;
@@ -1214,6 +1219,7 @@ function loadGraph(){
 
   nodes = []; wires = state.wires || []; nid = state.nid || 1;
   frames = state.frames || []; // NG8: guard so pre-frames graphs load fine
+  measurements = state.measurements || []; // guard so pre-measurement graphs load fine
   panX = state.panX || 0; panY = state.panY || 0; zoom = state.zoom || 1;
 
   state.nodes.forEach(function(sn){
@@ -1478,6 +1484,13 @@ function drawGrid(ctx, w, h){
 function getFrames(){ return frames; }
 function setFrames(f){ frames = f || []; return frames; }
 function findFrame(id){ for(var i=0;i<frames.length;i++){ if(frames[i].id===id) return frames[i]; } return null; }
+
+// Survey measurements — persisted geometry, never wired, never in cost calcs.
+function getMeasurements(){ return measurements; }
+function setMeasurements(a){ measurements = a || []; return measurements; }
+function addMeasurement(m){ m = m || {}; if(!m.id) m.id = 'ms'+(nid++); measurements.push(m); return m; }
+function removeMeasurement(id){ measurements = measurements.filter(function(m){ return m.id!==id; }); }
+function findMeasurement(id){ for(var i=0;i<measurements.length;i++){ if(measurements[i].id===id) return measurements[i]; } return null; }
 function addFrame(x,y,w,h,label){
   var f={ id:'frm'+(nid++), frame:true, x:Math.round(x), y:Math.round(y),
           w:Math.round(Math.max(160,w)), h:Math.round(Math.max(100,h)),
@@ -1517,5 +1530,6 @@ return {
   portPos:portPos, setCanvasEl:setCanvasEl, setGeoPortAnchor:setGeoPortAnchor, setSatelliteActive:setSatelliteActive,
   genId:genId,
   frames:getFrames, setFrames:setFrames, addFrame:addFrame, removeFrame:removeFrame, findFrame:findFrame,
+  measurements:getMeasurements, setMeasurements:setMeasurements, addMeasurement:addMeasurement, removeMeasurement:removeMeasurement, findMeasurement:findMeasurement,
 };
 })();
