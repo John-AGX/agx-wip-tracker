@@ -138,6 +138,22 @@
   var cardEl=document.getElementById('card'), cardBody=document.getElementById('cardBody');
   var orbitBtn=document.getElementById('orbitBtn');
   function fail(title, detail){ errEl.innerHTML='<b>'+title+'</b>'+(detail?('<div>'+detail+'</div>'):''); errEl.classList.add('on'); }
+  // Lightweight dismissable note (bottom-left) — used to explain WHY the 3D
+  // massing model fell back to the flat outline block, instead of failing silently.
+  function showDiag(msg){
+    var d=document.getElementById('orbdiag');
+    if(!d){
+      d=document.createElement('div'); d.id='orbdiag';
+      d.style.cssText='position:absolute;left:12px;bottom:12px;max-width:340px;z-index:60;background:rgba(18,22,32,.96);border:1px solid #38455f;border-radius:9px;padding:9px 30px 9px 11px;color:#e7ecf6;font:12px/1.45 system-ui,sans-serif;box-shadow:0 8px 26px rgba(0,0,0,.5)';
+      var s=document.createElement('span'); s.id='orbdiagtxt'; d.appendChild(s);
+      var x=document.createElement('button'); x.textContent='×';
+      x.style.cssText='position:absolute;top:4px;right:8px;background:none;border:none;color:#9fb0cc;font-size:16px;cursor:pointer;line-height:1';
+      x.addEventListener('click',function(){ d.style.display='none'; });
+      d.appendChild(x); document.body.appendChild(d);
+    }
+    document.getElementById('orbdiagtxt').textContent=msg; d.style.display='block';
+  }
+  function hideDiag(){ var d=document.getElementById('orbdiag'); if(d) d.style.display='none'; }
   var Lib=null, MarkerLib=null, map3d=null, pending=null, drawn=[], center=null, orbiting=false;
 
   function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
@@ -521,8 +537,10 @@
     var Polygon3DElement=Lib.Polygon3DElement, AltitudeMode=Lib.AltitudeMode;
     var MarkerEl=Lib.Marker3DInteractiveElement || Lib.Marker3DElement;
     clearDrawn();
+    var _modelsDrawn=0, _modelErr='', _nBldg=0;
     (lastData.buildings||[]).forEach(function(b){
       if(!b.path || b.path.length<3) return;
+      _nBldg++;
       var h=b.heightM || 8;
       var pct=Math.max(0,Math.min(100,Number(b.pct)||0));
       var shade=design.byProgress ? pctColor(pct) : design.shade;
@@ -543,8 +561,8 @@
           });
           map3d.appendChild(mdl);
           drawn.push(mdl); blobUrls.push(murl);
-          massingDrawn=true;
-        }catch(_){ massingDrawn=false; }
+          massingDrawn=true; _modelsDrawn++;
+        }catch(e){ massingDrawn=false; if(!_modelErr) _modelErr=(e&&e.message)||String(e); }
       }
       if(!massingDrawn && design.blocks){
         // Buffer the roofline trace ~2.2m outward so the block ENGULFS the
@@ -603,6 +621,17 @@
         drawn.push(mk);
       }catch(_){}
     });
+
+    // Surface WHY the 3D massing models aren't showing (instead of the flat
+    // outline block), so it's never a silent mystery.
+    if(_nBldg>0 && _modelsDrawn===0){
+      var why;
+      if(!design.massing) why='"Massing models" is turned OFF — open the ⚙ Design panel (top-right) and switch it on to see the 3D buildings + crane/jobsite props.';
+      else if(!Lib.Model3DElement) why='This browser\'s Google Maps 3D build doesn\'t support 3D models (Model3DElement). Try Chrome, or the blocks are the fallback.';
+      else why='A 3D model failed to load'+(_modelErr?(' ('+_modelErr+')'):'')+' — showing outline blocks instead.';
+      showDiag(why);
+      try{ console.warn('[orbit3d] no massing models drawn:', { massingOn:!!design.massing, model3dAvail:!!Lib.Model3DElement, err:_modelErr, buildings:_nBldg }); }catch(_){}
+    } else { hideDiag(); }
 
     // Keep the docked card alive across redraws (height changes, design
     // changes): re-bind it to the same building's fresh data, or hide it.
