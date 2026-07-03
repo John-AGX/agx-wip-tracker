@@ -419,7 +419,7 @@
     { label: 'Search material price', prompt: 'Use web_search to find current pricing on [paste material / SKU]. Compare a couple of suppliers and tell me the typical Central-FL range.' },
     { label: 'WIP snapshot',          prompt: 'Pull the WIP report from the live reference sheets and summarize what\'s under contract right now — total value, top 5 jobs by remaining backlog, anything that looks behind schedule.' },
     { label: 'Brainstorm scope',      prompt: 'I\'m thinking through a [scope] at [property type / size / age]. Walk me through the line items, gotchas, and questions I should ask the property manager before I quote.' },
-    { label: 'How does X work here?', prompt: 'Explain how [feature / process — e.g., "the node graph", "lead intake", "change orders"] works in Project 86. Reference the live reference sheets if relevant.' }
+    { label: 'How does X work here?', prompt: 'Explain how [feature / process — e.g., "the Site Plan", "lead intake", "change orders"] works in Project 86. Reference the live reference sheets if relevant.' }
   ];
   function getActivePresets() {
     if (isJobMode())    return JOB_PRESETS;
@@ -601,7 +601,7 @@
     return '86 · estimator — draft, edit, price. Every change is a card you approve.';
   }
   function fullHelpFor() {
-    if (isJobMode())    return 'I\'m 86 — Project 86\'s operator. Estimating, scope, line items, leads, jobs, margin, schedule, the node graph, and the customer directory — I do all of it. I propose changes; you approve before they land. Type / for commands.';
+    if (isJobMode())    return 'I\'m 86 — Project 86\'s operator. Estimating, scope, line items, leads, jobs, margin, schedule, the Site Plan, and the customer directory — I do all of it. I propose changes; you approve before they land. Type / for commands.';
     if (isClientMode()) return 'Client directory mode — I can split parent+property compounds, link unparented properties, capture durable client notes, and propose mutations. Same brain as everywhere else, scoped to your directory snapshot. Type / for commands.';
     if (isStaffMode())  return 'Admin mode — I see cross-agent metrics, recent conversations, and your skill packs, and can propose skill-pack edits when a workflow should be standardized. Type / for commands.';
     if (isIntakeMode()) return 'New lead intake — I\'m 86. Tell me what the lead is (property name, scope, salesperson) and drop any photos. I\'ll dedupe against existing clients/leads, propose the new lead for your approval, and tee up the estimate.';
@@ -2514,7 +2514,7 @@
           : '';
       };
       if (isAsk86Mode()) hint = '<strong style="color:var(--text,#fff);">' + hintIcon('dna') + 'Ask 86</strong><br>Talk to 86 directly. I can create leads, update clients, audit conversations, push skill-pack changes, and search the web — and I have the live reference sheets (job numbers, WIP, etc.).<br><span style="font-size:11px;opacity:0.7;">For per-line edits on a specific estimate or job, open that entity\'s AI panel.</span>';
-      else if (isJobMode()) hint = '<strong style="color:var(--text,#fff);">' + hintIcon('dna') + '86 · Lead Agent</strong><br>Pick a preset below or ask anything about this job.<br><span style="font-size:11px;opacity:0.7;">I see contract, costs, COs, %complete, billing — plus the node graph wiring and QuickBooks cost lines.</span>';
+      else if (isJobMode()) hint = '<strong style="color:var(--text,#fff);">' + hintIcon('dna') + '86 · Lead Agent</strong><br>Pick a preset below or ask anything about this job.<br><span style="font-size:11px;opacity:0.7;">I see contract, costs, COs, %complete, billing — plus the Site Plan wiring and QuickBooks cost lines.</span>';
       else if (isClientMode()) hint = '<strong style="color:var(--text,#fff);">' + hintIcon('chart-pie') + '86 · Client Directory</strong><br>Tap <strong>Run full audit</strong> to clean up the directory in one pass — I\'ll split parent+property compounds, link unparented entries, merge dupes, and surface anything ambiguous for you.<br><span style="font-size:11px;opacity:0.7;">Hierarchy: parent management company → property/community → CAM contact.</span>';
       else if (isStaffMode()) hint = '<strong style="color:var(--text,#fff);">' + hintIcon('briefcase') + '86 · Admin</strong><br>Cross-agent metrics, recent conversations, skill-pack curation. Ask about usage patterns or propose skill-pack edits.<br><span style="font-size:11px;opacity:0.7;">Same brain as the rest of 86 — admin context just narrows the snapshot.</span>';
       else hint = '<strong style="color:var(--text,#fff);">' + hintIcon('dna') + '86 · Estimator</strong><br>Pick a preset or describe what you need. I can read the estimate, scope, client, and photos — and propose adds, edits, deletes, and pricing changes for you to approve.<br><span style="font-size:11px;opacity:0.7;">Try "tighten this estimate" or "build my line items".</span>';

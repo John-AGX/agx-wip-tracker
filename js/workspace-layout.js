@@ -679,7 +679,7 @@
     // Global Ask 86 badge embeds right next to it via the slot mount.
     tabsHtml += '<div class="ws-right-tabs-actions">' +
       '<span class="p86-ask86-mount"></span>' +
-      '<button class="ws-workspace-toggle" id="wsWorkspaceToggle" type="button" data-p86-icon="graph" title="Open the node-graph workspace — click again to return to this tab" aria-label="Workspace"></button>' +
+      '<button class="ws-workspace-toggle" id="wsWorkspaceToggle" type="button" data-p86-icon="graph" title="Open the workspace over the Site Plan — click again to return to this tab" aria-label="Workspace"></button>' +
     '</div>';
     tabsHtml += '</div>';
 

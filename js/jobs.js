@@ -2881,7 +2881,7 @@ function renderJobsMain() {
                 // Phases (from node graph wiring)
                 body += '<div class="p86-bldg-section-head">PHASES (' + wiredPhases.length + ')</div>';
                 if (wiredPhases.length === 0) {
-                    body += '<div class="p86-bldg-section-empty">No phases wired to this building in the node graph</div>';
+                    body += '<div class="p86-bldg-section-empty">No phases wired to this building on the Site Plan</div>';
                 } else {
                     body += '<div class="p86-bldg-chip-list">';
                     wiredPhases.forEach(function(wp) {
@@ -3334,7 +3334,7 @@ function renderJobsMain() {
                 if (sub.notes) {
                     body += '<div style="font-size:11px;color:var(--text-dim);margin-bottom:8px;">' + escapeHTML(sub.notes) + '</div>';
                 }
-                body += '<div style="font-size:12px;font-weight:600;color:var(--text-dim);margin-bottom:6px;">Node Graph Connections</div>';
+                body += '<div style="font-size:12px;font-weight:600;color:var(--text-dim);margin-bottom:6px;">Site Plan Connections</div>';
                 if (conns.length === 0) {
                     body += '<div style="font-size:11px;color:var(--text-dim);font-style:italic;">Not placed on graph yet</div>';
                 } else {
