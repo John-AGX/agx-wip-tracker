@@ -370,6 +370,11 @@
       wireRows(listEl, cfg);
       injectCheckboxes(listEl);
       updateBulkBar();
+      // Draggable / resizable columns (shared enhancer) — run AFTER
+      // injectCheckboxes so the leading checkbox column already sits at
+      // index 0 before the enhancer measures/reorders (CO/PO use frozen:null
+      // so nothing sticky overlaps that checkbox).
+      if (window.p86Tables && cfg.enhanceKey) window.p86Tables.enhance(cfg.enhanceKey);
     }
     function refetch() {
       var listEl = host.querySelector('#jh-list');
@@ -408,6 +413,7 @@
   function renderCO(host) {
     buildView(host, {
       key: 'change-orders',
+      enhanceKey: 'jobshubCO',
       title: 'Change Orders',
       subtab: 'job-changeorders',
       createKind: 'co',
@@ -440,15 +446,15 @@
       },
       tableHTML: function (rows) {
         return '<div class="p86-tbl-scroll"><table class="leads-table jobshub-table"><thead><tr>' +
-          '<th>CO #</th><th>Job</th><th>Title</th><th>Status</th><th>Updated</th>' +
+          '<th data-col="co">CO #</th><th data-col="job">Job</th><th data-col="title">Title</th><th data-col="status">Status</th><th data-col="updated">Updated</th>' +
           '</tr></thead><tbody>' +
           rows.map(function (r) {
             return '<tr data-job-id="' + esc(r.job_id) + '" data-co-id="' + esc(r.id) + '">' +
-              '<td><strong>' + esc(r.co_number || '') + '</strong></td>' +
-              '<td>' + esc(jobLabelFromRow(r)) + '</td>' +
-              '<td>' + esc(r.title || '(untitled)') + '</td>' +
-              '<td>' + statusBadge(r.status) + '</td>' +
-              '<td>' + esc(fmtDate(r.updated_at)) + '</td>' +
+              '<td data-col="co"><strong>' + esc(r.co_number || '') + '</strong></td>' +
+              '<td data-col="job">' + esc(jobLabelFromRow(r)) + '</td>' +
+              '<td data-col="title">' + esc(r.title || '(untitled)') + '</td>' +
+              '<td data-col="status">' + statusBadge(r.status) + '</td>' +
+              '<td data-col="updated">' + esc(fmtDate(r.updated_at)) + '</td>' +
             '</tr>';
           }).join('') + '</tbody></table></div>';
       }
@@ -462,6 +468,7 @@
       : [{ v: 'open', label: 'Open' }, { v: 'all', label: 'All' }, { v: 'submitted', label: 'Submitted' }, { v: 'approved', label: 'Approved' }, { v: 'revise_resubmit', label: 'Revise & Resubmit' }, { v: 'rejected', label: 'Rejected' }, { v: 'closed', label: 'Closed' }];
     buildView(host, {
       key: (type === 'rfi') ? 'rfis' : 'submittals',
+      enhanceKey: (type === 'rfi') ? 'jobshubRFI' : 'jobshubSubmittal',
       title: title,
       subtab: 'job-workflow',
       createKind: type,
@@ -486,17 +493,17 @@
       },
       tableHTML: function (rows) {
         return '<div class="p86-tbl-scroll"><table class="leads-table jobshub-table"><thead><tr>' +
-          '<th>#</th><th>Job</th><th>Subject</th><th>Status</th><th>Due</th><th>Updated</th>' +
+          '<th data-col="num">#</th><th data-col="job">Job</th><th data-col="subject">Subject</th><th data-col="status">Status</th><th data-col="due">Due</th><th data-col="updated">Updated</th>' +
           '</tr></thead><tbody>' +
           rows.map(function (r) {
             var overdue = r.due_date && !r.closed_at && new Date(r.due_date).getTime() < Date.now();
             return '<tr data-job-id="' + esc(r.job_id) + '" data-wf-id="' + esc(r.id) + '">' +
-              '<td><strong>' + esc(r.number || '') + '</strong></td>' +
-              '<td>' + esc(jobLabelFromRow(r)) + '</td>' +
-              '<td>' + esc(r.subject || '') + '</td>' +
-              '<td>' + statusBadge(r.status) + '</td>' +
-              '<td' + (overdue ? ' style="color:#f87171;font-weight:600;"' : '') + '>' + esc(fmtDate(r.due_date)) + '</td>' +
-              '<td>' + esc(fmtDate(r.updated_at)) + '</td>' +
+              '<td data-col="num"><strong>' + esc(r.number || '') + '</strong></td>' +
+              '<td data-col="job">' + esc(jobLabelFromRow(r)) + '</td>' +
+              '<td data-col="subject">' + esc(r.subject || '') + '</td>' +
+              '<td data-col="status">' + statusBadge(r.status) + '</td>' +
+              '<td data-col="due"' + (overdue ? ' style="color:#f87171;font-weight:600;"' : '') + '>' + esc(fmtDate(r.due_date)) + '</td>' +
+              '<td data-col="updated">' + esc(fmtDate(r.updated_at)) + '</td>' +
             '</tr>';
           }).join('') + '</tbody></table></div>';
       }
@@ -509,6 +516,7 @@
   function renderPO(host) {
     buildView(host, {
       key: 'purchase-orders',
+      enhanceKey: 'jobshubPO',
       title: 'Purchase Orders',
       createKind: 'po',
       viewsPage: 'purchase_orders',
@@ -541,16 +549,16 @@
       },
       tableHTML: function (rows) {
         return '<div class="p86-tbl-scroll"><table class="leads-table jobshub-table"><thead><tr>' +
-          '<th>PO #</th><th>Job</th><th>Sub</th><th>Title</th><th class="num">Total</th><th>Status</th>' +
+          '<th data-col="po">PO #</th><th data-col="job">Job</th><th data-col="sub">Sub</th><th data-col="title">Title</th><th class="num" data-col="total">Total</th><th data-col="status">Status</th>' +
           '</tr></thead><tbody>' +
           rows.map(function (r) {
             return '<tr data-po-id="' + esc(r.id) + '">' +
-              '<td><strong>' + esc(r.po_number || '') + '</strong></td>' +
-              '<td>' + esc(jobLabelFromRow(r)) + '</td>' +
-              '<td>' + esc(r.sub_name || '—') + '</td>' +
-              '<td>' + esc(r.title || '(untitled)') + '</td>' +
-              '<td class="num">' + money(poSum(r)) + '</td>' +
-              '<td>' + statusBadge(r.status) + '</td>' +
+              '<td data-col="po"><strong>' + esc(r.po_number || '') + '</strong></td>' +
+              '<td data-col="job">' + esc(jobLabelFromRow(r)) + '</td>' +
+              '<td data-col="sub">' + esc(r.sub_name || '—') + '</td>' +
+              '<td data-col="title">' + esc(r.title || '(untitled)') + '</td>' +
+              '<td class="num" data-col="total">' + money(poSum(r)) + '</td>' +
+              '<td data-col="status">' + statusBadge(r.status) + '</td>' +
             '</tr>';
           }).join('') + '</tbody></table></div>';
       }

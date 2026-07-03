@@ -73,6 +73,46 @@
       widths: { photo: 54, vendor: 200, amount: 110, cost: 120, linked: 190,
                 sub: 160, tags: 190, payment: 130, billable: 100, invoice: 130,
                 date: 110, uploaded: 150, uploaded_at: 165, status: 120 }
+    },
+    subs: {
+      selector: '#subs-list table',
+      frozen: 'name',
+      frozenBg: 'var(--bg,#0f1117)',
+      widths: { name: 240, trade: 140, contact: 220, activeJobs: 110,
+                contracted: 150, compliance: 200, status: 110, actions: 70 }
+    },
+    clients: {
+      selector: '#clients-list table',
+      frozen: 'name',
+      frozenBg: 'var(--bg,#0f1117)',
+      widths: { name: 320, contact: 260, location: 200, actions: 140 }
+    },
+    // Jobs Hub cross-job lists. CO + PO carry an injected select-all checkbox
+    // column (no data-col) pinned at index 0, so frozen:null (costinbox
+    // precedent). RFIs/Submittals have no checkbox → freeze the # column.
+    jobshubCO: {
+      selector: '#jobshub-change-orders table',
+      frozen: null,
+      frozenBg: 'var(--bg,#0f1117)',
+      widths: { co: 110, job: 240, title: 280, status: 130, updated: 120 }
+    },
+    jobshubPO: {
+      selector: '#jobshub-purchase-orders table',
+      frozen: null,
+      frozenBg: 'var(--bg,#0f1117)',
+      widths: { po: 110, job: 220, sub: 180, title: 260, total: 120, status: 130 }
+    },
+    jobshubRFI: {
+      selector: '#jobshub-rfis table',
+      frozen: 'num',
+      frozenBg: 'var(--bg,#0f1117)',
+      widths: { num: 90, job: 220, subject: 300, status: 130, due: 110, updated: 120 }
+    },
+    jobshubSubmittal: {
+      selector: '#jobshub-submittals table',
+      frozen: 'num',
+      frozenBg: 'var(--bg,#0f1117)',
+      widths: { num: 90, job: 220, subject: 300, status: 150, due: 110, updated: 120 }
     }
   };
 

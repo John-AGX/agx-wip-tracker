@@ -182,10 +182,10 @@
     // it instead of across the full table, which renders as a stray
     // vertical seam halfway across the body.
     return '<tr ' + rowAttrs + ' style="cursor:pointer;' + rowStyle + '" onclick="openClientDashboard(\'' + escapeAttr(c.id) + '\')">' +
-      '<td><div style="display:flex;align-items:center;gap:8px;">' + nameCell + '</div></td>' +
-      '<td>' + escapeHTML(contact) + '</td>' +
-      '<td>' + escapeHTML(location) + '</td>' +
-      '<td style="text-align:right;white-space:nowrap;">' +
+      '<td data-col="name"><div style="display:flex;align-items:center;gap:8px;">' + nameCell + '</div></td>' +
+      '<td data-col="contact">' + escapeHTML(contact) + '</td>' +
+      '<td data-col="location">' + escapeHTML(location) + '</td>' +
+      '<td data-col="actions" style="text-align:right;white-space:nowrap;">' +
         '<div style="display:inline-flex;gap:4px;">' + actions + '</div>' +
       '</td>' +
     '</tr>';
@@ -243,7 +243,7 @@
     var color = active ? '#4f8cff' : 'var(--text-dim,#888)';
     var align = opts.align || 'left';
     var width = opts.width ? ('width:' + opts.width + ';') : '';
-    return '<th style="text-align:' + align + ';' + width + '" onclick="sortClientsBy(\'' + key + '\')">' +
+    return '<th data-col="' + key + '" style="text-align:' + align + ';' + width + '" onclick="sortClientsBy(\'' + key + '\')">' +
       '<span style="cursor:pointer;color:' + color + ';font-size:10px;text-transform:uppercase;letter-spacing:0.5px;font-weight:700;user-select:none;">' +
       label + arrow +
       '</span>' +
@@ -340,7 +340,7 @@
           clientsHeaderCell('Name', 'name') +
           clientsHeaderCell('Contact', 'contact') +
           clientsHeaderCell('Location', 'location') +
-          '<th style="text-align:right;width:140px;color:var(--text-dim,#888);font-size:10px;text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">Actions</th>' +
+          '<th data-col="actions" style="text-align:right;width:140px;color:var(--text-dim,#888);font-size:10px;text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">Actions</th>' +
         '</tr></thead>' +
         '<tbody>';
 
@@ -409,6 +409,8 @@
 
     html += '</tbody></table>';
     listEl.innerHTML = html;
+    // Draggable / resizable columns (shared enhancer) — same as Jobs.
+    if (window.p86Tables) window.p86Tables.enhance('clients');
   }
 
   function toggleClientParent(id) {

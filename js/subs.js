@@ -217,19 +217,21 @@
         '<table class="dense-table" style="width:100%;border-collapse:collapse;">' +
           '<thead style="background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border,#333);">' +
             '<tr>' +
-              th('Sub') + th('Trade') + th('Contact') +
-              th('Active Jobs', 'right') + th('Total Contracted', 'right') +
-              th('Compliance') + th('Status') + th('', 'right') +
+              th('Sub', 'left', 'name') + th('Trade', 'left', 'trade') + th('Contact', 'left', 'contact') +
+              th('Active Jobs', 'right', 'activeJobs') + th('Total Contracted', 'right', 'contracted') +
+              th('Compliance', 'left', 'compliance') + th('Status', 'left', 'status') + th('', 'right', 'actions') +
             '</tr>' +
           '</thead><tbody>' +
             filtered.map(rowHTML).join('') +
           '</tbody>' +
         '</table>' +
       '</div>';
+    // Draggable / resizable columns (shared enhancer) — same as Jobs.
+    if (window.p86Tables) window.p86Tables.enhance('subs');
   }
 
-  function th(label, align) {
-    return '<th style="padding:8px 10px;text-align:' + (align || 'left') + ';font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">' + label + '</th>';
+  function th(label, align, col) {
+    return '<th' + (col ? ' data-col="' + col + '"' : '') + ' style="padding:8px 10px;text-align:' + (align || 'left') + ';font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">' + label + '</th>';
   }
   function td(content, opts) {
     opts = opts || {};
@@ -239,7 +241,7 @@
     else if (opts.dim) s += 'color:var(--text-dim,#aaa);';
     if (opts.align) s += 'text-align:' + opts.align + ';';
     if (opts.mono) s += "font-family:'SF Mono',Consolas,monospace;";
-    return '<td style="' + s + '">' + content + '</td>';
+    return '<td' + (opts.col ? ' data-col="' + opts.col + '"' : '') + ' style="' + s + '">' + content + '</td>';
   }
 
   function rowHTML(s) {
@@ -265,20 +267,20 @@
     };
 
     return '<tr style="border-bottom:1px solid var(--border,#333);cursor:pointer;" onclick="window.p86Subs.openEdit(\'' + escapeAttr(s.id) + '\')">' +
-      td('<strong>' + escapeHTML(s.name) + '</strong>' + (s.parent_sub_id ? ' <span style="font-size:10px;color:var(--text-dim,#888);">(child)</span>' : '')) +
-      td(s.trade || '<span style="color:var(--text-dim,#666);">—</span>', { dim: !s.trade, size: 12 }) +
+      td('<strong>' + escapeHTML(s.name) + '</strong>' + (s.parent_sub_id ? ' <span style="font-size:10px;color:var(--text-dim,#888);">(child)</span>' : ''), { col: 'name' }) +
+      td(s.trade || '<span style="color:var(--text-dim,#666);">—</span>', { dim: !s.trade, size: 12, col: 'trade' }) +
       td(
         (s.contact_name ? escapeHTML(s.contact_name) : '<span style="color:var(--text-dim,#666);">—</span>') +
           (s.phone || s.email ? '<div style="font-size:11px;color:var(--text-dim,#888);">' + escapeHTML([s.phone, s.email].filter(Boolean).join(' · ')) + '</div>' : ''),
-        { size: 12 }
+        { size: 12, col: 'contact' }
       ) +
-      td(s.active_job_count || 0, { mono: true, align: 'right' }) +
-      td(fmtMoney(s.total_contracted || 0), { mono: true, align: 'right', color: '#34d399' }) +
-      td(compliance, { size: 11 }) +
-      td(statusChip(s.status), { align: 'left' }) +
+      td(s.active_job_count || 0, { mono: true, align: 'right', col: 'activeJobs' }) +
+      td(fmtMoney(s.total_contracted || 0), { mono: true, align: 'right', color: '#34d399', col: 'contracted' }) +
+      td(compliance, { size: 11, col: 'compliance' }) +
+      td(statusChip(s.status), { align: 'left', col: 'status' }) +
       td(
         '<button class="ee-btn-icon ghost" style="font-size:11px;padding:2px 8px;" onclick="event.stopPropagation();window.p86Subs.openEdit(\'' + escapeAttr(s.id) + '\')" title="Edit">&#x270F;</button>',
-        { align: 'right' }
+        { align: 'right', col: 'actions' }
       ) +
     '</tr>';
   }
