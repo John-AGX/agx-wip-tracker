@@ -458,6 +458,45 @@
     saveLayout(key, layout);
   }
 
+  // ── fit column(s) to content ────────────────────────────────────
+  // "Shrink to fit": size a column to its widest content. Cells are
+  // white-space:nowrap + overflow:hidden, so we first CLIP the column to
+  // the minimum, forcing every cell's scrollWidth to report its TRUE
+  // content width (a wide column's scrollWidth would otherwise just equal
+  // its current width and never shrink), then set the column to that max.
+  function recomputeTableWidth(table) {
+    var order = currentOrder(table), widths = currentWidths(table), total = 0;
+    order.forEach(function (c) { total += widths[c]; });
+    table.style.width = total + 'px';
+    table.style.minWidth = total + 'px';
+  }
+  function fitColumnNoPersist(table, col) {
+    var th = table.tHead && table.tHead.rows.length && table.tHead.rows[0].querySelector('[data-col="' + col + '"]');
+    if (!th) return;
+    th.style.width = MIN_COL_W + 'px';
+    void th.offsetWidth;                    // force reflow so scrollWidth = true content width
+    var w = th.scrollWidth;
+    var tb = table.tBodies[0];
+    if (tb) {
+      Array.prototype.forEach.call(tb.rows, function (tr) {
+        var td = tr.querySelector('[data-col="' + col + '"]');
+        if (td) w = Math.max(w, td.scrollWidth);
+      });
+    }
+    // +6 breathing room; cap so a single very long cell can't blow the column out.
+    th.style.width = Math.min(640, Math.max(MIN_COL_W, w + 6)) + 'px';
+  }
+  function fitColumn(key, table, col) {
+    fitColumnNoPersist(table, col);
+    recomputeTableWidth(table);
+    persistWidths(key, table);
+  }
+  function fitAllColumns(key, table) {
+    currentOrder(table).forEach(function (c) { fitColumnNoPersist(table, c); });
+    recomputeTableWidth(table);
+    persistWidths(key, table);
+  }
+
   // ── header wiring (resizer + drag + reset menu) ─────────────────
   function wireHeader(key, table) {
     var frozen = REGISTRY[key].frozen;
@@ -484,8 +523,11 @@
 
       var rz = document.createElement('div');
       rz.className = 'p86-col-resizer';
+      rz.title = 'Drag to resize · double-click to shrink to fit';
       rz.addEventListener('mousedown', function (e) { startResize(e, key, table, th, c); });
       rz.addEventListener('click', function (e) { e.stopPropagation(); });
+      // Double-click the edge → shrink this column to its content (Excel-style).
+      rz.addEventListener('dblclick', function (e) { e.stopPropagation(); e.preventDefault(); fitColumn(key, table, c); });
       th.appendChild(rz);
 
       if (c !== frozen) {
@@ -506,6 +548,18 @@
     menuEl.className = 'p86-tbl-menu';
     menuEl.style.left = x + 'px';
     menuEl.style.top = y + 'px';
+    // Fit-to-content — shrink every column to its widest cell so the whole
+    // table fits with less horizontal scrolling.
+    var fitBtn = document.createElement('button');
+    fitBtn.type = 'button';
+    fitBtn.className = 'p86-tbl-menu-item';
+    fitBtn.textContent = 'Fit columns to content';
+    fitBtn.addEventListener('click', function () {
+      hideResetMenu();
+      var tbl = document.querySelector(REGISTRY[key].selector);
+      if (tbl) fitAllColumns(key, tbl);
+    });
+    menuEl.appendChild(fitBtn);
     var btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'p86-tbl-menu-item';
