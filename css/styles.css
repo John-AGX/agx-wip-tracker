@@ -2212,19 +2212,38 @@
             }
         }
 
-        /* Resize grabber on the right edge of each header cell. */
+        /* Resize grabber on the right edge of each header cell. Slightly
+           wider hit zone (10px) so the col-resize edge is easy to grab. */
         .p86-col-resizer {
             position: absolute;
             top: 0;
             right: 0;
-            width: 7px;
+            width: 10px;
             height: 100%;
             cursor: col-resize;
             z-index: 20;
             user-select: none;
         }
+        /* Always-visible column divider so it's obvious the columns can be
+           resized (the 7px edge was invisible until hovered — users
+           couldn't tell drag-to-resize existed). A faint vertical bar sits
+           on each header's right edge and brightens to blue on hover. */
+        .p86-col-resizer::after {
+            content: '';
+            position: absolute;
+            top: 22%;
+            right: 4px;
+            width: 2px;
+            height: 56%;
+            border-radius: 1px;
+            background: var(--border, rgba(255, 255, 255, 0.18));
+            transition: background 0.12s ease;
+        }
         .p86-col-resizer:hover {
             background: rgba(79, 140, 255, 0.4);
+        }
+        .p86-col-resizer:hover::after {
+            background: #4f8cff;
         }
 
         /* Header being dragged to reorder. */
