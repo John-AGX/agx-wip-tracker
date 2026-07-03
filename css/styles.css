@@ -2199,6 +2199,19 @@
             background-image: linear-gradient(rgba(79, 140, 255, 0.06), rgba(79, 140, 255, 0.06));
         }
 
+        /* Touch devices: drop the sticky first-column pin. On a phone/tablet
+           the pinned column occludes content and fights the finger's
+           horizontal swipe (the column appears "stuck" while the rest of
+           the table scrolls under it). The column becomes an ordinary
+           scrolling column. Desktop (mouse) keeps the freeze — it's useful
+           there for keeping the title in view while scrolling wide tables. */
+        @media (pointer: coarse) {
+            .p86-enhanced .p86-frozen-col {
+                position: static;
+                left: auto;
+            }
+        }
+
         /* Resize grabber on the right edge of each header cell. */
         .p86-col-resizer {
             position: absolute;
