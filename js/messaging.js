@@ -501,7 +501,7 @@
   window.renderMessagesTab = renderMessagesTab;
 
   // Keep the nav badge fresh: on auth-ready and on a light interval.
-  document.addEventListener('p86:auth-ready', function() { refreshNavMessagesBadge(); });
+  window.addEventListener('p86:auth-ready', function() { refreshNavMessagesBadge(); });
   if (!window._p86MsgBadgeTimer) {
     window._p86MsgBadgeTimer = setInterval(function() {
       if (window.p86Api && window.p86Api.isAuthenticated && window.p86Api.isAuthenticated()) {
