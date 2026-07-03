@@ -1653,6 +1653,69 @@
             max-width: none;
         }
 
+        /* ── Sidebar: Claude Console look ─────────────────────────────
+           John: "the current is too gray." Match the Claude Console
+           sidebar: neutral near-black surface (no blue-gray cast),
+           near-white labels, larger type + icons, text-only indented
+           sub-items, quieter section labels.
+
+           The palette swap works by RE-SCOPING the theme variables on
+           .app-sidebar — every descendant rule that reads
+           var(--surface2)/--border/--text/--text-dim (nav hovers, the
+           active pill, search box, recents, carets, account footer,
+           entity context cards) picks up the neutral scheme with no
+           per-rule overrides. Dark mode only — light mode keeps the
+           global palette. */
+        body:not(.light-mode) .app-sidebar {
+            --surface: #101014;                      /* neutral near-black (was blue-gray #1a1d27) */
+            --surface2: rgba(255, 255, 255, 0.08);   /* hover / active pill fill */
+            --border: rgba(255, 255, 255, 0.09);
+            --text: #f5f5f7;
+            --text-dim: #9d9da8;                     /* neutral gray, not blue-gray */
+        }
+        /* Console rows: a step larger and brighter than the old 12px. */
+        .app-nav .tab-btn {
+            font-size: 13px;
+            padding: 6px 10px;
+            gap: 10px;
+            letter-spacing: 0;
+        }
+        .app-nav .tab-btn .p86-icon {
+            width: 17px;
+            height: 17px;
+        }
+        /* Sub-items: console style — indented text only, no icons, no
+           left guide line. Indent lines the label up under the parent's
+           label (10px btn pad + 17px icon + 10px gap = 27px). */
+        .app-nav .app-nav-child .p86-icon-slot {
+            display: none;
+        }
+        .app-nav .app-nav-child {
+            font-size: 12.5px;
+            padding: 5px 10px;
+        }
+        .app-nav-children {
+            margin-left: 27px;
+            padding-left: 0;
+            border-left: none;
+        }
+        /* Section labels: quieter so the bright items carry the sidebar. */
+        .app-nav-group + .app-nav-group {
+            margin-top: 14px;
+        }
+        .app-nav-group-label {
+            letter-spacing: 0.5px;
+            opacity: 0.5;
+        }
+        /* Caret hover was var(--surface) — invisible on the re-scoped
+           near-black surface. Give it its own white-alpha fill. */
+        .app-nav-caret:hover {
+            background: rgba(255, 255, 255, 0.10);
+        }
+        body.light-mode .app-nav-caret:hover {
+            background: var(--surface2);
+        }
+
         /* Read-only mode for job detail when the current PM doesn't own the job. */
 
         /* Form controls always disabled (typing is meaningless if save is blocked). */
