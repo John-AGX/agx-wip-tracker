@@ -843,17 +843,17 @@ body.light-mode .ng-topbar.ng-ribbon .ng-ribbon-btn:hover{
 .ng-measure-poly{fill:rgba(255,209,102,.14);stroke:#ffd166;stroke-width:1;vector-effect:non-scaling-stroke;stroke-linejoin:round;pointer-events:none}
 .ng-measure-vert{fill:#ffd166;stroke:#0b1020;stroke-width:1;vector-effect:non-scaling-stroke;pointer-events:none}
 .ng-measure-vert0{fill:#fff}
-.ng-measure-seglbl{fill:#ffe9a8;font:700 6px sans-serif;text-anchor:middle;dominant-baseline:middle;pointer-events:none;paint-order:stroke;stroke:#0b1020;stroke-width:2;stroke-linejoin:round}
-.ng-measure-totlbl{fill:#fff;font:800 8px sans-serif;text-anchor:start;dominant-baseline:middle;pointer-events:none;paint-order:stroke;stroke:#0b1020;stroke-width:2.4;stroke-linejoin:round}
-.ng-measure-arealbl{fill:#fff;font:800 9px sans-serif;text-anchor:middle;dominant-baseline:middle;pointer-events:none;paint-order:stroke;stroke:#0b1020;stroke-width:2.6;stroke-linejoin:round}
+.ng-measure-seglbl{fill:#ffe9a8;font:600 5px sans-serif;text-anchor:middle;dominant-baseline:middle;pointer-events:none;paint-order:stroke;stroke:#0b1020;stroke-width:1.5;stroke-linejoin:round}
+.ng-measure-totlbl{fill:#fff;font:700 6px sans-serif;text-anchor:start;dominant-baseline:middle;pointer-events:none;paint-order:stroke;stroke:#0b1020;stroke-width:1.8;stroke-linejoin:round}
+.ng-measure-arealbl{fill:#fff;font:700 6.5px sans-serif;text-anchor:middle;dominant-baseline:middle;pointer-events:none;paint-order:stroke;stroke:#0b1020;stroke-width:1.9;stroke-linejoin:round}
 /* Saved (persisted) survey measurements — teal so they read distinct from the
    amber in-progress draft. Shapes stay click-through; only the label (rename) and
    the ✕ (delete) are interactive. */
 .ng-measure-line.ng-msaved{stroke:#38d9c0;stroke-dasharray:none}
 .ng-measure-poly.ng-msaved{fill:rgba(56,217,192,.12);stroke:#38d9c0}
 .ng-msaved-vert{fill:#38d9c0}
-.ng-msaved-lbl{fill:#eafffb;font:800 8px sans-serif;text-anchor:start;dominant-baseline:middle;cursor:pointer;pointer-events:auto;paint-order:stroke;stroke:#08201c;stroke-width:2.4;stroke-linejoin:round}
-.ng-msaved-del{fill:#ff8a8a;font:800 8px sans-serif;text-anchor:start;dominant-baseline:middle;cursor:pointer;pointer-events:auto;paint-order:stroke;stroke:#08201c;stroke-width:2.4;stroke-linejoin:round}
+.ng-msaved-lbl{fill:#eafffb;font:700 6px sans-serif;text-anchor:start;dominant-baseline:middle;cursor:pointer;pointer-events:auto;paint-order:stroke;stroke:#08201c;stroke-width:1.8;stroke-linejoin:round}
+.ng-msaved-del{fill:#ff8a8a;font:700 6px sans-serif;text-anchor:start;dominant-baseline:middle;cursor:pointer;pointer-events:auto;paint-order:stroke;stroke:#08201c;stroke-width:1.8;stroke-linejoin:round}
 .ng-msaved-lbl.ng-msaved-lbl-area,.ng-msaved-del.ng-msaved-lbl-area{text-anchor:middle}
 /* z-index MUST sit above the click-capturing measure overlay (.ng-geopick-overlay, z40),
    or the overlay eats the panel's button clicks (adds a point instead of firing Undo/Save/Done). */
