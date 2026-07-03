@@ -10999,10 +10999,10 @@ textarea.ci-input { height: auto; resize: vertical; font-family: inherit; }
 .p86-hc { display: flex; flex-direction: column; padding: 0; overflow: hidden; }
 .p86-hc-head {
   display: flex; align-items: center; justify-content: space-between; gap: 14px;
-  padding: 16px 20px 12px; background: var(--surface, #1a1d27);
+  padding: 18px 22px 14px; background: var(--surface, #1a1d27);
   border-bottom: 1px solid var(--border, #2e3346);
 }
-.p86-hc-title { font-size: 17px; font-weight: 800; color: var(--text, #fff); letter-spacing: -0.01em; }
+.p86-hc-title { font-size: 16px; font-weight: 600; color: var(--text, #fff); }
 .p86-hc-version { font-size: 11px; color: var(--text-dim, #9aa1b5); margin-top: 2px; font-variant-numeric: tabular-nums; }
 .p86-hc-head-tools { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .p86-hc-search {
@@ -11016,21 +11016,24 @@ textarea.ci-input { height: auto; resize: vertical; font-family: inherit; }
   font-size: 22px; cursor: pointer; line-height: 1; padding: 2px 6px;
 }
 .p86-hc-tabs {
-  display: flex; gap: 4px; padding: 8px 20px 0; background: var(--surface, #1a1d27);
+  display: flex; gap: 4px; padding: 8px 22px 0; background: var(--surface, #1a1d27);
   border-bottom: 1px solid var(--border, #2e3346);
 }
 .p86-hc-tabbtn {
   background: none; border: none; border-bottom: 2px solid transparent;
-  color: var(--text-dim, #9aa1b5); font-size: 12.5px; font-weight: 700;
+  color: var(--text-dim, #9aa1b5); font-size: 12.5px; font-weight: 600;
   padding: 8px 12px 10px; cursor: pointer;
 }
 .p86-hc-tabbtn.active { color: var(--text, #fff); border-bottom-color: #2f6fed; }
-.p86-hc-body { padding: 16px 20px 22px; overflow-y: auto; flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; }
+.p86-hc-body { padding: 16px 22px 22px; overflow-y: auto; flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 12px; }
+/* Flex children default to shrink-to-fit, which compresses the collapsed
+   release cards into each other instead of letting the body scroll. */
+.p86-hc-body > * { flex-shrink: 0; }
 .p86-hc-empty { padding: 28px; text-align: center; color: var(--text-dim, #9aa1b5); font-size: 12.5px; }
 
 /* What's New — release timeline */
 .p86-hc-sincebar {
-  display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700;
+  display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600;
   color: #60a5fa; background: rgba(96,165,250,.08); border: 1px solid rgba(96,165,250,.25);
   border-radius: 10px; padding: 9px 13px;
 }
@@ -11040,11 +11043,11 @@ textarea.ci-input { height: auto; resize: vertical; font-family: inherit; }
   background: none; border: none; cursor: pointer; padding: 12px 14px; color: inherit;
 }
 .p86-hc-verchip {
-  font-size: 11px; font-weight: 800; color: #fff; background: #2f6fed;
+  font-size: 10.5px; font-weight: 700; color: #fff; background: #2f6fed;
   border-radius: 7px; padding: 3px 8px; letter-spacing: .02em; flex-shrink: 0;
   font-variant-numeric: tabular-nums;
 }
-.p86-hc-relname { font-size: 13.5px; font-weight: 800; color: var(--text, #fff); flex: 1; min-width: 0; }
+.p86-hc-relname { font-size: 13px; font-weight: 600; color: var(--text, #fff); flex: 1; min-width: 0; }
 .p86-hc-newdot {
   font-size: 9px; font-weight: 800; letter-spacing: .08em; color: #34d399;
   border: 1px solid rgba(52,211,153,.4); background: rgba(52,211,153,.1);
@@ -11075,7 +11078,7 @@ textarea.ci-input { height: auto; resize: vertical; font-family: inherit; }
   border: 1px solid rgba(96,165,250,.3); background: rgba(96,165,250,.06);
   border-radius: 12px; padding: 14px 16px;
 }
-.p86-hc-ask-title { display: flex; align-items: center; gap: 7px; font-size: 13.5px; font-weight: 800; color: var(--text, #fff); }
+.p86-hc-ask-title { display: flex; align-items: center; gap: 7px; font-size: 13.5px; font-weight: 600; color: var(--text, #fff); }
 .p86-hc-ask-blurb { font-size: 12px; color: var(--text-dim, #b6bdcd); margin: 5px 0 10px; }
 .p86-hc-ask-btn {
   background: #2f6fed; border: none; border-radius: 8px; color: #fff;
@@ -11088,7 +11091,7 @@ textarea.ci-input { height: auto; resize: vertical; font-family: inherit; }
 .p86-hc-guide-ico { color: #60a5fa; font-size: 20px; flex-shrink: 0; display: flex; }
 .p86-hc-guide-ico .p86-icon { width: 22px; height: 22px; }
 .p86-hc-guide-main { flex: 1; min-width: 0; }
-.p86-hc-guide-title { font-size: 13.5px; font-weight: 800; color: var(--text, #fff); }
+.p86-hc-guide-title { font-size: 13.5px; font-weight: 600; color: var(--text, #fff); }
 .p86-hc-guide-blurb { font-size: 12px; color: var(--text-dim, #b6bdcd); margin-top: 2px; }
 .p86-hc-guide-start {
   flex-shrink: 0; background: none; border: 1px solid rgba(96,165,250,.4);
@@ -11099,7 +11102,7 @@ textarea.ci-input { height: auto; resize: vertical; font-family: inherit; }
 
 /* Features atlas */
 .p86-hc-area-label {
-  font-size: 10.5px; font-weight: 800; letter-spacing: .09em; text-transform: uppercase;
+  font-size: 10.5px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase;
   color: var(--text-dim, #9aa1b5); margin: 6px 0 7px;
 }
 .p86-hc-feat {
@@ -11108,7 +11111,7 @@ textarea.ci-input { height: auto; resize: vertical; font-family: inherit; }
   border-radius: 11px; padding: 11px 13px; margin-bottom: 8px;
 }
 .p86-hc-feat-main { flex: 1; min-width: 0; }
-.p86-hc-feat-label { font-size: 13px; font-weight: 700; color: var(--text, #fff); }
+.p86-hc-feat-label { font-size: 13px; font-weight: 600; color: var(--text, #fff); }
 .p86-hc-feat-blurb { font-size: 12px; color: var(--text-dim, #b6bdcd); margin-top: 2px; line-height: 1.45; }
 .p86-hc-feat-path { display: flex; align-items: center; gap: 5px; font-size: 11px; color: #60a5fa; margin-top: 6px; }
 .p86-hc-feat-ask {
