@@ -2157,6 +2157,10 @@
            set inline by the module so they can track the viewport.) */
         .p86-tbl-scroll {
             position: relative;
+            /* Reserve the vertical scrollbar's gutter so the rightmost
+               column's edge (and its resize handle) never sits under the
+               scrollbar when the table is scrolled fully right on desktop. */
+            scrollbar-gutter: stable;
         }
 
         /* Fixed layout makes column widths honor the px values we assign,
@@ -2210,6 +2214,11 @@
                 position: static;
                 left: auto;
             }
+            /* Column resize is a mouse edge-drag (mousedown-based) — it can't
+               work by touch, so hide the grip + its divider on touch devices.
+               Left visible, the bar sat by the scrollbar implying you could
+               grab it, which was misleading on a phone/tablet. */
+            .p86-col-resizer { display: none; }
         }
 
         /* Resize grabber on the right edge of each header cell. Slightly
