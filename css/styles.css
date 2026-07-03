@@ -10996,6 +10996,15 @@ textarea.ci-input { height: auto; resize: vertical; font-family: inherit; }
   #jobs-table td[data-col="margin"]::before     { content: "Margin"; }
 }
 
+/* Un-pin the frozen first column on phone widths. A sticky column fights
+   finger-swipe on a narrow screen (the original "it's freezing the first
+   column on mobile"). Width-based, NOT pointer:coarse — a wide touchscreen
+   laptop keeps the desktop frozen column; only true phone widths un-stick. */
+@media (max-width: 640px) {
+  .p86-enhanced td.p86-frozen-col,
+  .p86-enhanced th.p86-frozen-col { position: static; left: auto; }
+}
+
 /* ── Help center v2 (js/help-center.js) — versioned patch notes,
    guided tours, searchable feature atlas. Rides the .p86-help-overlay
    backdrop + .p86-help-card shell above; .p86-hc re-skins the card
