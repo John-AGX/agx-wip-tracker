@@ -2341,7 +2341,14 @@
             padding: 10px 12px;
             background: rgba(255,255,255,0.025);
             border-bottom: 1px solid var(--border, #333);
-            position: static; /* override the global sticky default */
+            /* `relative` (not the global `sticky`) keeps the header in normal
+               flow AND makes the th a positioning context so the absolutely-
+               positioned `.p86-col-resizer` grip anchors to the column's right
+               edge. This was `static`, which is NOT a positioning context — so
+               the resize grip anchored to a distant ancestor and drag-to-resize
+               silently failed on every list except Jobs (whose global th is
+               already `sticky`). */
+            position: relative;
         }
         .leads-table td,
         .dense-table td {
@@ -2370,6 +2377,17 @@
         }
         .leads-table .lead-title-cell {
             max-width: 320px;
+        }
+
+        /* Jobs list header — match the Leads/Estimates (.dense-table) header
+           theme (the subtle light-on-dark fill) instead of the lighter
+           --surface2 block the global `th` rule paints. The jobs header stays
+           sticky, so the fill must be OPAQUE or rows would bleed through on
+           scroll: an opaque --bg base carries the exact same 2.5%-white lift
+           the dense-table header uses on top. */
+        #jobs-table thead th {
+            background-color: var(--bg, #0f1117);
+            background-image: linear-gradient(rgba(255,255,255,0.025), rgba(255,255,255,0.025));
         }
 
         /* ── Lead Activities: pipeline board + follow-ups ─────────────── */
