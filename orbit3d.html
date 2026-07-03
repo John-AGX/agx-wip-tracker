@@ -114,7 +114,7 @@
   </div>
   <div class="dsec"><label>Models</label>
     <label class="dtoggle"><span>Massing models (replace blocks)</span><input type="checkbox" id="dMassing"></label>
-    <label class="dtoggle"><span>Status equipment (crane · flag · cones)</span><input type="checkbox" id="dEquip"></label>
+    <label class="dtoggle"><span>Jobsite props (crane · dumpster · trailer · laydown · stockpiles · trees)</span><input type="checkbox" id="dEquip"></label>
   </div>
   <div class="dsec"><label>Options</label>
     <label class="dtoggle"><span>Building name labels</span><input type="checkbox" id="dLabels"></label>
@@ -317,21 +317,34 @@
     var n=parseInt(String(hex).replace('#',''),16);
     return [((n>>16)&255)/255, ((n>>8)&255)/255, (n&255)/255, a];
   }
-  // One model per building: tinted massing + status equipment.
-  //   MAT 0 = massing tint · 1 = crane yellow · 2 = pole silver ·
-  //   3 = flag green · 4 = cone orange
+  // One model per building: tinted massing + a status-driven jobsite of props.
+  //   MAT 0 = massing tint · 1 = equipment yellow · 2 = pole silver ·
+  //   3 = flag green · 4 = cone orange · 5 = dumpster rust · 6 = dirt brown ·
+  //   7 = lumber tan · 8 = trailer off-white · 9 = tree green · 10 = trunk brown
   function buildBuildingModel(localPts, h, pct, tintHex, equip){
     var ghost=(pct<=0);
     var g=GltfBuilder([
-      hexToRgb01(tintHex, ghost?0.35:0.92),
-      hexToRgb01('#f2b632',1), hexToRgb01('#d9dee9',1),
-      hexToRgb01('#34d399',1), hexToRgb01('#f2762e',1)
+      hexToRgb01(tintHex, ghost?0.35:0.92),   // 0 massing tint
+      hexToRgb01('#f2b632',1),                // 1 equipment yellow
+      hexToRgb01('#d9dee9',1),                // 2 pole silver
+      hexToRgb01('#34d399',1),                // 3 flag green
+      hexToRgb01('#f2762e',1),                // 4 cone orange
+      hexToRgb01('#b5533a',1),                // 5 dumpster rust
+      hexToRgb01('#8a6d4b',1),                // 6 dirt / gravel brown
+      hexToRgb01('#c9a36a',1),                // 7 lumber / material tan
+      hexToRgb01('#e8e2d4',1),                // 8 site trailer off-white
+      hexToRgb01('#3f8f52',1),                // 9 tree canopy green
+      hexToRgb01('#6b4f2a',1)                 // 10 tree trunk brown
     ]);
     g.prism(localPts, h, 0);
     if(equip){
-      var maxX=-Infinity, maxZ=-Infinity;
-      localPts.forEach(function(p){ if(p[0]>maxX)maxX=p[0]; if(p[1]>maxZ)maxZ=p[1]; });
+      var maxX=-Infinity, maxZ=-Infinity, mnX=Infinity, mnZ=Infinity;
+      localPts.forEach(function(p){
+        if(p[0]>maxX)maxX=p[0]; if(p[1]>maxZ)maxZ=p[1];
+        if(p[0]<mnX)mnX=p[0]; if(p[1]<mnZ)mnZ=p[1];
+      });
       if(pct>0 && pct<100){
+        // ── Active build: tower crane + material laydown + dumpster + trailer ──
         // Tower crane beside the building: lattice mast + jib + counter-jib + cab.
         var mastH=h+14, mx2=maxX+7;
         g.box(mx2, mastH/2, 0, 1.6, mastH, 1.6, 1);
@@ -340,15 +353,27 @@
         g.box(mx2, mastH+0.4, 0, 2.6, 2.2, 2.6, 1);
         g.box(mx2+16, mastH-2.2, 0, 0.25, 5, 0.25, 2);   // hoist line
         g.box(mx2+16, mastH-5.2, 0, 1.2, 1.2, 1.2, 1);   // hook block
+        // Material laydown: stacked lumber/pallet bundles on the far side.
+        g.box(mnX-6, 0.6, -1.5, 5, 1.2, 1.7, 7);
+        g.box(mnX-6, 1.9, -1.5, 5, 1.2, 1.7, 7);
+        g.box(mnX-6.4, 0.6, 2.5, 4.4, 1.2, 1.7, 7);
+        // Roll-off dumpster at the near edge.
+        g.box(4, 1.2, maxZ+4, 6, 2.4, 2.4, 5);
+        // Site trailer / field office set off the front corner.
+        g.box(mnX-7, 1.6, maxZ+8, 9, 3.2, 3.2, 8);
       } else if(pct>=100){
-        // Completion flag on the roof.
+        // ── Complete: completion flag + a little landscaping ──
         g.box(0, h+3.5, 0, 0.28, 7, 0.28, 2);
         g.quad([0.2,h+6.8,0],[2.6,h+6.3,0],[2.6,h+5.5,0],[0.2,h+6.0,0], 3);
+        var tree=function(tx,tz){ g.box(tx,1.6,tz, 0.5,3.2,0.5, 10); g.box(tx,4.6,tz, 3.4,3.2,3.4, 9); };
+        tree(mnX-4, mnZ-4); tree(maxX+4, mnZ-4.5); tree(mnX-3.5, maxZ+4.5);
       } else {
-        // Not started: traffic cones at the near edge.
+        // ── Not started: traffic cones + cleared-site dirt stockpiles ──
         g.pyramid(0,    maxZ+3.5, 1.0, 1.4, 4);
         g.pyramid(3.2,  maxZ+4.2, 1.0, 1.4, 4);
         g.pyramid(-3.0, maxZ+4.0, 1.0, 1.4, 4);
+        g.pyramid(maxX+7, 0, 10, 2.8, 6);
+        g.pyramid(maxX+13, -7, 6, 1.8, 6);
       }
     }
     return g.build();
