@@ -647,6 +647,18 @@ async function initSchema() {
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );
 
+    -- Lead-scoped survey Site Plan graph — the pre-sale mirror of node_graphs.
+    -- A lead's survey is geometry only (traced footprints + measurements[] +
+    -- photo pins), no cost dataflow. Same {data JSONB} shape so the same engine
+    -- serializes it; separate table keeps the leads row flat and the job graph
+    -- RMW paths (CO/dispatcher/org-reset) strictly job-only. On lead→job
+    -- conversion the blob is copied into node_graphs (see /api/jobs/convert).
+    CREATE TABLE IF NOT EXISTS lead_graphs (
+      lead_id TEXT PRIMARY KEY REFERENCES leads(id) ON DELETE CASCADE,
+      data JSONB NOT NULL,
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
     CREATE TABLE IF NOT EXISTS estimates (
       id TEXT PRIMARY KEY,
       owner_id INTEGER REFERENCES users(id),

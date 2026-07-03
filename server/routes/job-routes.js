@@ -217,6 +217,16 @@ router.post('/convert', requireAuth, requireRole('admin', 'pm'), async (req, res
         "UPDATE receipts SET entity_type = 'job', entity_id = $1, is_presale = CASE WHEN $2 THEN FALSE ELSE is_presale END, updated_at = NOW() WHERE entity_type = 'lead' AND entity_id = $3 AND organization_id = $4",
         [id, rollPresale, leadId, orgId]
       );
+      // Carry the lead's Site Plan survey graph (traced footprints + saved
+      // measurements + photo pins) forward into the new job's node_graph, so
+      // the salesperson's field survey becomes the PM's starting site plan.
+      // No-op when the lead has no survey (SELECT returns 0 rows).
+      await client.query(
+        `INSERT INTO node_graphs (job_id, data)
+         SELECT $1, data FROM lead_graphs WHERE lead_id = $2
+         ON CONFLICT (job_id) DO NOTHING`,
+        [id, leadId]
+      );
     }
     if (estimateId) {
       // Estimates keep their fields in a JSONB `data` blob — stamp job_id +

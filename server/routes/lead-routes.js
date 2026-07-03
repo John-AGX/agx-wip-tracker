@@ -454,6 +454,46 @@ router.post('/bulk-delete', requireAuth, requireCapability('LEADS_EDIT'), async 
   }
 });
 
+// ── Lead survey Site Plan graph ─────────────────────────────────────
+// The pre-sale mirror of the job graph routes (job-routes.js /:id/graph),
+// backed by lead_graphs instead of node_graphs. Survey geometry only
+// (footprints + measurements + photo pins). Org-scoped via the lead row;
+// on lead→job conversion this blob is copied into node_graphs.
+router.get('/:id/graph', requireAuth, requireCapability('LEADS_VIEW'), async (req, res) => {
+  try {
+    // Confirm the lead is in the caller's org before returning its graph.
+    const lead = await pool.query(
+      'SELECT 1 FROM leads WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+      [req.params.id, req.user.organization_id]
+    );
+    if (!lead.rows.length) return res.status(404).json({ error: 'Lead not found' });
+    const { rows } = await pool.query('SELECT data FROM lead_graphs WHERE lead_id = $1', [req.params.id]);
+    res.json({ graph: rows.length ? rows[0].data : null });
+  } catch (e) {
+    console.error('GET /api/leads/:id/graph error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+router.put('/:id/graph', requireAuth, requireCapability('LEADS_EDIT'), async (req, res) => {
+  try {
+    const lead = await pool.query(
+      'SELECT 1 FROM leads WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+      [req.params.id, req.user.organization_id]
+    );
+    if (!lead.rows.length) return res.status(404).json({ error: 'Lead not found' });
+    await pool.query(
+      `INSERT INTO lead_graphs (lead_id, data) VALUES ($1, $2)
+       ON CONFLICT (lead_id) DO UPDATE SET data = $2, updated_at = NOW()`,
+      [req.params.id, JSON.stringify(req.body)]
+    );
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('PUT /api/leads/:id/graph error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 router.delete('/:id', requireAuth, requireCapability('LEADS_EDIT'), async (req, res) => {
   try {
     // Wave 1.A Phase 2 — org-scoped DELETE.

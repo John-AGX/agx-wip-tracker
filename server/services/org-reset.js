@@ -15,6 +15,7 @@
 //              job_purchase_orders, qb_cost_lines, schedule_entries,
 //              job_workflow_items, JOB-scoped job_reports, (job_subs — also
 //              explicit)
+//       leads → lead_graphs (survey Site Plan)
 //       projects → project_pairs, project_activity
 //   Polymorphic / non-FK "attached" rows (NO cascade — deleted explicitly,
 //     keyed to the exact anchor IDs being removed):
