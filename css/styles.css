@@ -2214,15 +2214,13 @@
                 position: static;
                 left: auto;
             }
-        }
-        /* Hide the resize grip ONLY on pure-touch devices (no mouse/trackpad
-           at all). A touchscreen laptop reports pointer:coarse but ALSO
-           any-pointer:fine — those users have a mouse and DO want to
-           drag-resize / double-click-to-fit, so the grip stays for them.
-           Only a real phone/tablet with no fine pointer loses it (where the
-           bar would be misleading since resize needs a mouse). */
-        @media (pointer: coarse) and (not (any-pointer: fine)) {
-            .p86-col-resizer { display: none; }
+            /* Touch: the resize grip is a real control now (tap = shrink to
+               fit, drag = resize), so keep it visible AND give it a
+               finger-sized hit target instead of the thin mouse edge. */
+            .p86-col-resizer {
+                width: 18px;
+                touch-action: none;
+            }
         }
 
         /* Resize grabber on the right edge of each header cell. Slightly
