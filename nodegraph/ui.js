@@ -18,7 +18,7 @@ var _geoPick=false, _geoPickOverlay=null, _geoPickId=null; // Slice 3: map-picke
 var _tracing=false, _traceId=null, _tracePts=[], _traceOverlay=null, _traceClickTimer=null, _polyLayer=null;
 // Measure tool: real distance (ft) + area (sq ft) on the satellite imagery.
 // Ephemeral view-state only (no graph write); points cleared when the tool is off.
-var _measuring=false, _measureMode='distance', _measurePts=[], _measureOverlay=null, _measurePanel=null, _measureRoofPitch=0;
+var _measuring=false, _measureMode='distance', _measurePts=[], _measureOverlay=null, _measurePanel=null, _measureRoofPitch=0, _measureKeyHandler=null;
 var _SVGNS='http://www.w3.org/2000/svg';
 var _spMassing=(function(){ try{ return localStorage.getItem('ngSitePlanMassing')!=='0'; }catch(_){ return true; } })(); // 2.5D building massing — on by default
 // Slice 4: photo-GPS pins
@@ -1979,6 +1979,7 @@ function exitMeasure(){
   var mb=document.getElementById('ngMeasureBtn'); if(mb) mb.classList.remove('ng-on');
   if(_measureOverlay) _measureOverlay.style.display='none';
   if(_measurePanel){ _measurePanel.remove(); _measurePanel=null; }
+  if(_measureKeyHandler){ document.removeEventListener('keydown', _measureKeyHandler, true); _measureKeyHandler=null; }
 }
 function toggleMeasure(){
   if(!_spSatellite) return;
@@ -1991,6 +1992,10 @@ function toggleMeasure(){
   var mb=document.getElementById('ngMeasureBtn'); if(mb) mb.classList.add('ng-on');
   ensureMeasureOverlay().style.display='block';
   buildMeasurePanel(); updateMeasurePanel();
+  // Esc cancels the measure session (capture-phase so it wins before other
+  // handlers; removed in exitMeasure). Fixes "won't stop drawing on Esc".
+  _measureKeyHandler=function(e){ if(e.key==='Escape'){ e.preventDefault(); e.stopPropagation(); exitMeasure(); renderPolygons(); } };
+  document.addEventListener('keydown', _measureKeyHandler, true);
   renderPolygons();
 }
 
