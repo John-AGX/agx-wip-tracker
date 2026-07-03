@@ -64,10 +64,35 @@
 
   var _range = '7d';
 
+  var RESTRICTED_HTML = '<div style="padding:40px;text-align:center;color:var(--text-dim,#888);">Command Center is restricted to the platform owner (system administrator).</div>';
+
   function renderConsoleInto(host) {
     if (!host) return;
-    if (!(window.p86Auth && window.p86Auth.isSystemAdmin && window.p86Auth.isSystemAdmin())) {
-      host.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-dim,#888);">Command Center is restricted to the platform owner (system administrator).</div>';
+    var user = window.p86Auth && window.p86Auth.getUser && window.p86Auth.getUser();
+    if (!user) {
+      // A cold new-tab load can render this pane before /api/auth/me
+      // resolves — a null user means "auth pending", NOT "not allowed".
+      // Painting the restriction message here made a system_admin see
+      // "restricted to the platform owner" until they refreshed. Show a
+      // loading state, re-render once auth settles (auth.js dispatches
+      // p86:auth-ready on window), and only fall back to the restriction
+      // message if auth never settles (dead session — the login screen
+      // is covering this pane anyway).
+      host.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-dim,#888);">Loading…</div>';
+      var settled = false;
+      var onReady = function () { settled = true; renderConsoleInto(host); };
+      window.addEventListener('p86:auth-ready', onReady, { once: true });
+      setTimeout(function () {
+        if (settled) return;
+        window.removeEventListener('p86:auth-ready', onReady);
+        var u2 = window.p86Auth && window.p86Auth.getUser && window.p86Auth.getUser();
+        if (u2) { renderConsoleInto(host); return; }
+        host.innerHTML = RESTRICTED_HTML;
+      }, 12000);
+      return;
+    }
+    if (!(window.p86Auth.isSystemAdmin && window.p86Auth.isSystemAdmin())) {
+      host.innerHTML = RESTRICTED_HTML;
       return;
     }
     host.innerHTML =
