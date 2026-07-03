@@ -622,6 +622,19 @@
     if(ev.data && ev.data.type==='p86-orbit3d-render'){ render(ev.data); }
   });
 
+  // Self-heal a latched inner viewport. The parent creates this iframe once
+  // and can't reach our layout viewport; if the frame was laid out while the
+  // window was mid-restore (PWA update-relaunch), gmp-map-3d (height:100% of
+  // a then-short viewport) fills only a top band. On resize (parent nudges
+  // the frame element) and once on pageshow, re-assert the 3D element's size
+  // so Maps re-measures against the settled viewport.
+  function reassertSize(){
+    if(!map3d) return;
+    try{ map3d.style.height='calc(100% - 1px)'; requestAnimationFrame(function(){ map3d.style.height='100%'; }); }catch(_){}
+  }
+  window.addEventListener('resize', reassertSize);
+  window.addEventListener('pageshow', reassertSize);
+
   // Fetch the referrer-locked Maps key (same-origin → session cookie flows), then boot.
   fetch('/api/config/maps-key', { credentials:'same-origin' })
     .then(function(r){ return r.json(); })

@@ -1419,6 +1419,10 @@ function toggleOrbit3D(){
   if(tab) tab.classList.add('ng-orbit-on');
   var ob=tab&&tab.querySelector('.ng-orbit-btn'); if(ob) ob.classList.add('ng-on');
   ensureOrbit3D(o);
+  // Re-assert the iframe's inner viewport on every orbit entry — the frame
+  // is created once and reused, so if it was last laid out at a stale size
+  // (e.g. created during a mid-relaunch small window) this heals it.
+  reflowGraphSurfaces();
 }
 function exitOrbit3D(){
   _spOrbit=false;
@@ -1432,7 +1436,7 @@ function ensureOrbit3D(o){
     _orbitEl=document.createElement('div'); _orbitEl.className='ng-orbit-3d';
     // Photorealistic 3D runs in an isolated same-origin iframe (loads Maps beta + Map3DElement).
     var frame=document.createElement('iframe'); frame.className='ng-orbit-3d-frame';
-    frame.src='/orbit3d.html?v=5'; frame.setAttribute('title','3D site view'); frame.setAttribute('allow','fullscreen');
+    frame.src='/orbit3d.html?v=6'; frame.setAttribute('title','3D site view'); frame.setAttribute('allow','fullscreen');
     _orbitEl.appendChild(frame); _orbitEl.__frame=frame;
     var exitB=document.createElement('button'); exitB.type='button'; exitB.className='ng-orbit-exit';
     exitB.innerHTML='&#x2715; Exit 3D'; exitB.addEventListener('click', exitOrbit3D); _orbitEl.appendChild(exitB);
@@ -5549,12 +5553,64 @@ function positionGraphTab(){
   var _appSb=document.getElementById('app-sidebar');
   tab.style.left=(_appSb&&_appSb.offsetParent!==null&&_appSb.offsetWidth>0)?(_appSb.offsetWidth+'px'):'0';
 }
+// Re-assert the size of EVERY graph surface that latches a pixel/tile
+// dimension: the fixed overlay position, the wire/grid canvas bitmaps, the
+// google.maps satellite raster, and the 3D orbit iframe's inner viewport.
+// The graph used to react only to window WIDTH (the sidebar RO) but was
+// blind to window HEIGHT — a PWA update-relaunch opens the overlay while
+// the window is mid-restore at a transient small size; the two Google
+// surfaces latch that size and nothing ever re-measured them once the
+// window settled, so the map paints short with a black band below (torn
+// layout). Debounced so a resize-drag / relaunch storm collapses to one.
+var _reflowT=null;
+function reflowGraphSurfaces(){
+  clearTimeout(_reflowT);
+  _reflowT=setTimeout(function(){
+    var tab=document.getElementById('nodeGraphTab');
+    if(!tab||!tab.classList.contains('active')) return;
+    positionGraphTab();
+    if(wrap && typeof resize==='function'){ try{ resize(); }catch(_){} } // wire/grid canvas bitmaps + basemap visibility
+    // 2D satellite raster: force Google to re-measure its container, then
+    // re-center. Modern Maps auto-detects container resize, but a settle
+    // after a mid-restore latch can miss it — trigger explicitly.
+    if(_basemap && _basemapReady){
+      try{ if(window.google && google.maps && google.maps.event) google.maps.event.trigger(_basemap,'resize'); }catch(_){}
+      try{ syncBasemapCamera(); }catch(_){}
+    }
+    // 3D orbit iframe: nudge the element so its inner page receives a resize
+    // event (orbit3d.html's own self-heal restores the 3D layout), then
+    // re-feed data. The parent can't reach the iframe's inner viewport.
+    if(_spOrbit && _orbitEl && _orbitEl.__frame){
+      var f=_orbitEl.__frame;
+      try{ f.style.height='calc(100% - 1px)'; requestAnimationFrame(function(){ f.style.height=''; }); }catch(_){}
+      try{ postOrbitData(); }catch(_){}
+    }
+  }, 120);
+}
 var _tabPosWired=false;
 function wireGraphTabPositioning(){
   if(_tabPosWired) return; _tabPosWired=true;
-  window.addEventListener('resize', positionGraphTab);
+  window.addEventListener('resize', reflowGraphSurfaces);
+  if(typeof ResizeObserver==='undefined') return;
+  // Core height-blindness fix: watch the canvas area itself. Fires on
+  // window HEIGHT changes and display:none→flex transitions that the
+  // width-gated sidebar observer below never sees. The size guard breaks
+  // the position→resize→observe feedback loop (positionGraphTab is
+  // idempotent, so a settled size re-fires nothing).
+  var _ca=document.querySelector('#nodeGraphTab .ng-canvas-area');
+  if(_ca){
+    var _lastCAW=-1,_lastCAH=-1;
+    new ResizeObserver(function(){
+      var tab=document.getElementById('nodeGraphTab');
+      if(!tab||!tab.classList.contains('active')) return;
+      var r=_ca.getBoundingClientRect(), w=Math.round(r.width), h=Math.round(r.height);
+      if(w===_lastCAW && h===_lastCAH) return;
+      _lastCAW=w; _lastCAH=h;
+      reflowGraphSurfaces();
+    }).observe(_ca);
+  }
   var _sb=document.getElementById('app-sidebar');
-  if(_sb&&typeof ResizeObserver!=='undefined'){
+  if(_sb){
     var _lastW=-1;
     new ResizeObserver(function(){
       var tab=document.getElementById('nodeGraphTab');
@@ -5562,9 +5618,7 @@ function wireGraphTabPositioning(){
       var w=_sb.offsetWidth;
       if(w===_lastW) return;
       _lastW=w;
-      positionGraphTab();
-      // The overlay's width changed → re-fit the graph canvas/basemap.
-      if(typeof resize==='function'){ try{ resize(); }catch(_){} }
+      reflowGraphSurfaces();
     }).observe(_sb);
   }
 }

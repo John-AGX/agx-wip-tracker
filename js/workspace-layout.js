@@ -1399,6 +1399,11 @@
       maxBtn.title = on
         ? 'Restore the AGX nav header (toggle)'
         : 'Hide the AGX nav header to give the graph the entire viewport (toggle)';
+      // Maximize hides/shows the app header → the graph overlay's top offset
+      // and every map surface must re-measure. positionGraphTab/reflow keys
+      // off window resize, so fire one. (Also fixes the edge where a resize
+      // during Maximize wrote inline top:0 that survived Restore.)
+      try { window.dispatchEvent(new Event('resize')); } catch (e) {}
     });
     // Audit — opens the connectivity+completeness modal scoped to
     // the current job. The badge count refreshes on every render
