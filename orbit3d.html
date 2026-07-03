@@ -112,6 +112,10 @@
       <button type="button" class="dchip" data-pin="dot">Dot</button>
     </div>
   </div>
+  <div class="dsec"><label>Models</label>
+    <label class="dtoggle"><span>Massing models (replace blocks)</span><input type="checkbox" id="dMassing"></label>
+    <label class="dtoggle"><span>Status equipment (crane · flag · cones)</span><input type="checkbox" id="dEquip"></label>
+  </div>
   <div class="dsec"><label>Options</label>
     <label class="dtoggle"><span>Building name labels</span><input type="checkbox" id="dLabels"></label>
     <label class="dtoggle"><span>Show building blocks</span><input type="checkbox" id="dBlocks"></label>
@@ -158,6 +162,28 @@
       return { lat:c.lat+(dy*f)/M_PER_DEG_LAT, lng:c.lng+(dx*f)/mLng };
     });
   }
+  // Pin glyphs must be IMAGE URLS: the 3D pin is rasterized by the engine,
+  // and a DOM-element glyph comes out as an empty (solid-filled) balloon —
+  // observed live. A data-URI SVG survives rasterization.
+  function donutGlyphUrl(pct){
+    var r=15, c=18, circ=2*Math.PI*r, dash=(circ*Math.max(0.01,pct/100)).toFixed(2);
+    var svg='<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36" width="30" height="30">'+
+      '<circle cx="'+c+'" cy="'+c+'" r="'+r+'" fill="none" stroke="rgba(255,255,255,0.22)" stroke-width="3.5"/>'+
+      '<circle cx="'+c+'" cy="'+c+'" r="'+r+'" fill="none" stroke="'+pctColor(pct)+'" stroke-width="3.5" stroke-linecap="round" stroke-dasharray="'+dash+' '+circ.toFixed(2)+'" transform="rotate(-90 '+c+' '+c+')"/>'+
+      '<text x="'+c+'" y="'+(c+0.5)+'" text-anchor="middle" dominant-baseline="middle" fill="#fff" font-size="11" font-weight="700" font-family="Arial,sans-serif">'+pct+'</text>'+
+      '</svg>';
+    try{ return new URL('data:image/svg+xml;charset=UTF-8,'+encodeURIComponent(svg)); }catch(_){ return null; }
+  }
+  function detailGlyphUrl(b,pct){
+    var r=15, c=18, circ=2*Math.PI*r, dash=(circ*Math.max(0.01,pct/100)).toFixed(2);
+    var svg='<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36" width="30" height="30">'+
+      '<circle cx="'+c+'" cy="'+c+'" r="'+r+'" fill="none" stroke="rgba(255,255,255,0.22)" stroke-width="3.5"/>'+
+      '<circle cx="'+c+'" cy="'+c+'" r="'+r+'" fill="none" stroke="'+pctColor(pct)+'" stroke-width="3.5" stroke-linecap="round" stroke-dasharray="'+dash+' '+circ.toFixed(2)+'" transform="rotate(-90 '+c+' '+c+')"/>'+
+      '<text x="'+c+'" y="15" text-anchor="middle" dominant-baseline="middle" fill="#fff" font-size="9.5" font-weight="700" font-family="Arial,sans-serif">'+pct+'%</text>'+
+      '<text x="'+c+'" y="24" text-anchor="middle" dominant-baseline="middle" fill="#9be9f5" font-size="6.5" font-weight="600" font-family="Arial,sans-serif">'+fmtK(b.total)+'</text>'+
+      '</svg>';
+    try{ return new URL('data:image/svg+xml;charset=UTF-8,'+encodeURIComponent(svg)); }catch(_){ return null; }
+  }
   // Donut progress glyph for the pin: a ring arc showing pct + the number.
   function donutGlyph(pct){
     var NS='http://www.w3.org/2000/svg';
@@ -198,10 +224,144 @@
     }).catch(function(e){ fail('3D view unavailable', 'The Maps 3D library failed to load. '+((e&&e.message)||'')); });
   }
 
+  // ── Procedural glTF builder ─────────────────────────────────────────
+  // Generates real 3D models in-browser (no external files, no CDN): a
+  // massing prism extruded from the building's ACTUAL traced footprint +
+  // status equipment (tower crane / completion flag / traffic cones). One
+  // .gltf per building, geometry in meters around the footprint centroid
+  // (x=east, y=up, z=south), delivered to Model3DElement as a blob URL.
+  // All materials are doubleSided so triangle winding can never cull a face.
+  function GltfBuilder(materials){
+    var pos=[], nrm=[], idx=[], groups=[];
+    function tri(a,b,c,m){
+      var ux=b[0]-a[0],uy=b[1]-a[1],uz=b[2]-a[2];
+      var vx=c[0]-a[0],vy=c[1]-a[1],vz=c[2]-a[2];
+      var nx=uy*vz-uz*vy, ny=uz*vx-ux*vz, nz=ux*vy-uy*vx;
+      var l=Math.sqrt(nx*nx+ny*ny+nz*nz)||1; nx/=l; ny/=l; nz/=l;
+      var base=pos.length/3;
+      pos.push(a[0],a[1],a[2], b[0],b[1],b[2], c[0],c[1],c[2]);
+      nrm.push(nx,ny,nz, nx,ny,nz, nx,ny,nz);
+      idx.push(base,base+1,base+2);
+      var g=groups[groups.length-1];
+      if(!g || g.mat!==m) groups.push({mat:m, first:idx.length-3, count:3});
+      else g.count+=3;
+    }
+    function quad(a,b,c,d,m){ tri(a,b,c,m); tri(a,c,d,m); }
+    function box(cx,cy,cz,sx,sy,sz,m){
+      var x0=cx-sx/2,x1=cx+sx/2,y0=cy-sy/2,y1=cy+sy/2,z0=cz-sz/2,z1=cz+sz/2;
+      quad([x0,y0,z1],[x1,y0,z1],[x1,y1,z1],[x0,y1,z1],m);
+      quad([x1,y0,z0],[x0,y0,z0],[x0,y1,z0],[x1,y1,z0],m);
+      quad([x1,y0,z1],[x1,y0,z0],[x1,y1,z0],[x1,y1,z1],m);
+      quad([x0,y0,z0],[x0,y0,z1],[x0,y1,z1],[x0,y1,z0],m);
+      quad([x0,y1,z1],[x1,y1,z1],[x1,y1,z0],[x0,y1,z0],m);
+      quad([x0,y0,z0],[x1,y0,z0],[x1,y0,z1],[x0,y0,z1],m);
+    }
+    // Extruded footprint: walls per edge + roof fan from the local centroid.
+    // (Fan roofs are exact for convex footprints — fine for building traces.)
+    function prism(pts,h,m){
+      var n=pts.length, cx=0, cz=0;
+      pts.forEach(function(p){ cx+=p[0]; cz+=p[1]; }); cx/=n; cz/=n;
+      for(var i=0;i<n;i++){
+        var p=pts[i], q=pts[(i+1)%n];
+        quad([p[0],0,p[1]],[q[0],0,q[1]],[q[0],h,q[1]],[p[0],h,p[1]],m);
+        tri([cx,h,cz],[p[0],h,p[1]],[q[0],h,q[1]],m);
+      }
+    }
+    function pyramid(cx,cz,base,h,m){
+      var b2=base/2, apex=[cx,h,cz];
+      var c0=[cx-b2,0,cz-b2], c1=[cx+b2,0,cz-b2], c2=[cx+b2,0,cz+b2], c3=[cx-b2,0,cz+b2];
+      tri(apex,c0,c1,m); tri(apex,c1,c2,m); tri(apex,c2,c3,m); tri(apex,c3,c0,m);
+      quad(c0,c1,c2,c3,m);
+    }
+    function build(){
+      var posA=new Float32Array(pos), nrmA=new Float32Array(nrm), idxA=new Uint16Array(idx);
+      var mn=[Infinity,Infinity,Infinity], mx=[-Infinity,-Infinity,-Infinity];
+      for(var i=0;i<pos.length;i+=3){
+        for(var k=0;k<3;k++){ if(pos[i+k]<mn[k])mn[k]=pos[i+k]; if(pos[i+k]>mx[k])mx[k]=pos[i+k]; }
+      }
+      var bin=new Uint8Array(posA.byteLength+nrmA.byteLength+idxA.byteLength+(idxA.byteLength%4?2:0));
+      bin.set(new Uint8Array(posA.buffer),0);
+      bin.set(new Uint8Array(nrmA.buffer),posA.byteLength);
+      bin.set(new Uint8Array(idxA.buffer),posA.byteLength+nrmA.byteLength);
+      var b64='', CH=8192;
+      for(var o=0;o<bin.length;o+=CH){ b64+=String.fromCharCode.apply(null, bin.subarray(o,Math.min(o+CH,bin.length))); }
+      b64=btoa(b64);
+      var gltf={
+        asset:{version:'2.0'},
+        scene:0, scenes:[{nodes:[0]}], nodes:[{mesh:0}],
+        meshes:[{primitives:groups.map(function(g,i){
+          return { attributes:{POSITION:0,NORMAL:1}, indices:2+i, material:g.mat, mode:4 };
+        })}],
+        materials:materials.map(function(m){
+          return { pbrMetallicRoughness:{ baseColorFactor:m, metallicFactor:0.05, roughnessFactor:0.9 },
+                   doubleSided:true, alphaMode:(m[3]<1?'BLEND':'OPAQUE') };
+        }),
+        buffers:[{ uri:'data:application/octet-stream;base64,'+b64, byteLength:bin.length }],
+        bufferViews:[
+          { buffer:0, byteOffset:0, byteLength:posA.byteLength, target:34962 },
+          { buffer:0, byteOffset:posA.byteLength, byteLength:nrmA.byteLength, target:34962 },
+          { buffer:0, byteOffset:posA.byteLength+nrmA.byteLength, byteLength:idxA.byteLength, target:34963 }
+        ],
+        accessors:[
+          { bufferView:0, componentType:5126, count:posA.length/3, type:'VEC3', min:mn, max:mx },
+          { bufferView:1, componentType:5126, count:nrmA.length/3, type:'VEC3' }
+        ].concat(groups.map(function(g){
+          return { bufferView:2, byteOffset:g.first*2, componentType:5123, count:g.count, type:'SCALAR' };
+        }))
+      };
+      return URL.createObjectURL(new Blob([JSON.stringify(gltf)],{type:'model/gltf+json'}));
+    }
+    return { tri:tri, quad:quad, box:box, prism:prism, pyramid:pyramid, build:build };
+  }
+  function hexToRgb01(hex,a){
+    var n=parseInt(String(hex).replace('#',''),16);
+    return [((n>>16)&255)/255, ((n>>8)&255)/255, (n&255)/255, a];
+  }
+  // One model per building: tinted massing + status equipment.
+  //   MAT 0 = massing tint · 1 = crane yellow · 2 = pole silver ·
+  //   3 = flag green · 4 = cone orange
+  function buildBuildingModel(localPts, h, pct, tintHex, equip){
+    var ghost=(pct<=0);
+    var g=GltfBuilder([
+      hexToRgb01(tintHex, ghost?0.35:0.92),
+      hexToRgb01('#f2b632',1), hexToRgb01('#d9dee9',1),
+      hexToRgb01('#34d399',1), hexToRgb01('#f2762e',1)
+    ]);
+    g.prism(localPts, h, 0);
+    if(equip){
+      var maxX=-Infinity, maxZ=-Infinity;
+      localPts.forEach(function(p){ if(p[0]>maxX)maxX=p[0]; if(p[1]>maxZ)maxZ=p[1]; });
+      if(pct>0 && pct<100){
+        // Tower crane beside the building: lattice mast + jib + counter-jib + cab.
+        var mastH=h+14, mx2=maxX+7;
+        g.box(mx2, mastH/2, 0, 1.6, mastH, 1.6, 1);
+        g.box(mx2+9, mastH+0.8, 0, 22, 1.1, 1.1, 1);
+        g.box(mx2-4.5, mastH+0.8, 0, 7, 1.1, 1.1, 1);
+        g.box(mx2, mastH+0.4, 0, 2.6, 2.2, 2.6, 1);
+        g.box(mx2+16, mastH-2.2, 0, 0.25, 5, 0.25, 2);   // hoist line
+        g.box(mx2+16, mastH-5.2, 0, 1.2, 1.2, 1.2, 1);   // hook block
+      } else if(pct>=100){
+        // Completion flag on the roof.
+        g.box(0, h+3.5, 0, 0.28, 7, 0.28, 2);
+        g.quad([0.2,h+6.8,0],[2.6,h+6.3,0],[2.6,h+5.5,0],[0.2,h+6.0,0], 3);
+      } else {
+        // Not started: traffic cones at the near edge.
+        g.pyramid(0,    maxZ+3.5, 1.0, 1.4, 4);
+        g.pyramid(3.2,  maxZ+4.2, 1.0, 1.4, 4);
+        g.pyramid(-3.0, maxZ+4.0, 1.0, 1.4, 4);
+      }
+    }
+    return g.build();
+  }
+  var blobUrls=[];
+
   // Card survives scene re-renders (e.g. a height change re-feeds the data)
   // by remembering which building it shows and re-binding after render.
   var selId=null;
-  function clearDrawn(){ drawn.forEach(function(el){ try{ el.remove(); }catch(_){} }); drawn=[]; }
+  function clearDrawn(){
+    drawn.forEach(function(el){ try{ el.remove(); }catch(_){} }); drawn=[];
+    blobUrls.forEach(function(u){ try{ URL.revokeObjectURL(u); }catch(_){} }); blobUrls=[];
+  }
   function hideCard(){ cardEl.classList.remove('on'); selId=null; }
   document.getElementById('cardX').addEventListener('click', hideCard);
 
@@ -273,7 +433,7 @@
   orbitBtn.addEventListener('click', startOrbit);
 
   // ── Design settings (device-local, survive across jobs/sessions) ──
-  var design={ shade:'#4f8cff', opacity:0.42, edge:'#22D3EE', pin:'donut', labels:true, blocks:true, byProgress:false };
+  var design={ shade:'#4f8cff', opacity:0.42, edge:'#22D3EE', pin:'donut', labels:true, blocks:true, byProgress:false, massing:true, equip:true };
   try{ var savedD=JSON.parse(localStorage.getItem('p86_orbit3d_design')||'{}'); Object.keys(design).forEach(function(k){ if(savedD[k]!==undefined) design[k]=savedD[k]; }); }catch(_){}
   function saveDesign(){ try{ localStorage.setItem('p86_orbit3d_design', JSON.stringify(design)); }catch(_){} }
   function hexToRgba(hex,a){ var n=parseInt(String(hex).replace('#',''),16); return 'rgba('+((n>>16)&255)+','+((n>>8)&255)+','+(n&255)+','+a+')'; }
@@ -341,7 +501,27 @@
       var h=b.heightM || 8;
       var pct=Math.max(0,Math.min(100,Number(b.pct)||0));
       var shade=design.byProgress ? pctColor(pct) : design.shade;
-      if(design.blocks){
+      // Massing model: a real shaded 3D form generated from the traced
+      // footprint replaces the translucent block. Falls back to the block
+      // path when Model3DElement is unavailable or generation fails.
+      var massingDrawn=false;
+      if(design.massing && Lib.Model3DElement){
+        try{
+          var mc=centroid(b.path);
+          var mLng2=M_PER_DEG_LAT*Math.cos(mc.lat*Math.PI/180)||M_PER_DEG_LAT;
+          var local=b.path.map(function(p){ return [ (p.lng-mc.lng)*mLng2, -(p.lat-mc.lat)*M_PER_DEG_LAT ]; });
+          var murl=buildBuildingModel(local, h, pct, shade, !!design.equip);
+          var mdl=new Lib.Model3DElement({
+            src:murl,
+            position:{ lat:mc.lat, lng:mc.lng, altitude:0 },
+            altitudeMode:(Lib.AltitudeMode && Lib.AltitudeMode.RELATIVE_TO_GROUND) || undefined
+          });
+          map3d.appendChild(mdl);
+          drawn.push(mdl); blobUrls.push(murl);
+          massingDrawn=true;
+        }catch(_){ massingDrawn=false; }
+      }
+      if(!massingDrawn && design.blocks){
         // Buffer the roofline trace ~2.2m outward so the block ENGULFS the
         // building (walls, eaves) instead of slicing through the roof edge.
         var fat=expandPath(b.path, 2.2);
@@ -377,11 +557,19 @@
             // Minimal: small status-colored pin, no glyph — least visual noise.
             pin=new MarkerLib.PinElement({ background:pctColor(pct), borderColor:'#0F172A', glyphColor:'#fff', scale:0.9 });
           } else if(design.pin==='detailed'){
-            // Big pin: donut % + compact total $ inside the ring.
-            pin=new MarkerLib.PinElement({ background:'#0F172A', borderColor:'#22D3EE', glyph:detailGlyph(b,pct), scale:2.0 });
+            // Big pin: donut % + compact total $ inside the ring. Glyph must be
+            // an image URL (DOM glyphs rasterize to an empty filled balloon).
+            var dg=detailGlyphUrl(b,pct);
+            pin=new MarkerLib.PinElement(dg
+              ? { background:'#0F172A', borderColor:'#22D3EE', glyph:dg, scale:2.0 }
+              : { background:'#0F172A', borderColor:'#22D3EE', glyphColor:'#fff', glyph:pct+'%', scale:2.0 });
           } else {
-            // Default donut: navy balloon, cyan ring, progress-arc glyph.
-            pin=new MarkerLib.PinElement({ background:'#0F172A', borderColor:'#22D3EE', glyph:donutGlyph(pct), scale:1.5 });
+            // Default donut: navy balloon, cyan ring, progress-arc image glyph
+            // (falls back to plain % text if URL construction fails).
+            var gg=donutGlyphUrl(pct);
+            pin=new MarkerLib.PinElement(gg
+              ? { background:'#0F172A', borderColor:'#22D3EE', glyph:gg, scale:1.5 }
+              : { background:'#0F172A', borderColor:'#22D3EE', glyphColor:'#fff', glyph:pct+'%', scale:1.5 });
           }
           mk.append(pin);
         }
@@ -411,6 +599,8 @@
     document.getElementById('dLabels').checked=!!design.labels;
     document.getElementById('dBlocks').checked=!!design.blocks;
     document.getElementById('dByProgress').checked=!!design.byProgress;
+    document.getElementById('dMassing').checked=!!design.massing;
+    document.getElementById('dEquip').checked=!!design.equip;
   }
   function applyDesign(){ saveDesign(); syncDesignUI(); drawScene(); }
   designEl.addEventListener('click', function(e){
@@ -424,6 +614,8 @@
   document.getElementById('dLabels').addEventListener('change', function(){ design.labels=this.checked; applyDesign(); });
   document.getElementById('dBlocks').addEventListener('change', function(){ design.blocks=this.checked; applyDesign(); });
   document.getElementById('dByProgress').addEventListener('change', function(){ design.byProgress=this.checked; applyDesign(); });
+  document.getElementById('dMassing').addEventListener('change', function(){ design.massing=this.checked; applyDesign(); });
+  document.getElementById('dEquip').addEventListener('change', function(){ design.equip=this.checked; applyDesign(); });
 
   window.addEventListener('message', function(ev){
     if(ev.origin!==location.origin) return;                 // only trust the parent app
