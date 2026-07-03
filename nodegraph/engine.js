@@ -958,6 +958,7 @@ function buildGraphState(){
         polygon: (n.type==='t1' && n.polygon) ? n.polygon : null,       // Phase 1: traced building footprint (additive, no GRAPH_VER bump)
         levels: (n.type==='t1' && n.levels && n.levels.length) ? n.levels : null, // L/U Phase 1: floors (additive; flat buildings have none)
         units:  (n.type==='t1' && n.units  && n.units.length)  ? n.units  : null, // L/U Phase 1: units, each optionally on a level (unit.levelId)
+        heightM: (n.type==='t1' && isFinite(n.heightM) && n.heightM>0) ? n.heightM : null, // 3D extrusion override in meters (additive; levels-derived when absent)
         dataId: n.data ? n.data.id : null
       };
     }),
@@ -1186,7 +1187,8 @@ function restoreSnapshot(){
       geoLatLng:sn.geoLatLng||null, // Phase 2-A: building's real lat/lng (guard so pre-geo snapshots restore fine)
       polygon:sn.polygon||null, // traced building footprint (guard so pre-polygon snapshots restore fine)
       levels:sn.levels||[], // L/U Phase 1: floors (guard so pre-L/U snapshots restore fine)
-      units:sn.units||[]    // L/U Phase 1: units, each optionally on a level (unit.levelId)
+      units:sn.units||[],   // L/U Phase 1: units, each optionally on a level (unit.levelId)
+      heightM:sn.heightM||null // 3D extrusion override (guard so pre-height snapshots restore fine)
     });
   });
   // Persist the restore as the new auto-save state too, so the user
@@ -1260,6 +1262,7 @@ function loadGraph(){
       polygon:sn.polygon||null, // traced building footprint (guard so pre-polygon graphs load fine)
       levels:sn.levels||[], // L/U Phase 1: floors (guard so pre-L/U graphs load fine)
       units:sn.units||[],   // L/U Phase 1: units, each optionally on a level (unit.levelId)
+      heightM:sn.heightM||null, // 3D extrusion override (guard so pre-height graphs load fine)
     };
     nodes.push(n);
   });

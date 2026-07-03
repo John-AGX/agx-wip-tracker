@@ -29,6 +29,9 @@
   .kpi{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07);border-radius:8px;padding:6px 9px}
   .kpi label{display:block;font-size:9.5px;color:#8b93a7;letter-spacing:.5px;text-transform:uppercase}
   .kpi div{font-size:13px;font-weight:600;color:#fff;margin-top:1px}
+  .hstep{width:26px;height:26px;border:1px solid rgba(34,211,238,.4);border-radius:7px;background:transparent;
+    color:#9be9f5;font-size:15px;line-height:1;cursor:pointer}
+  .hstep:hover{background:rgba(34,211,238,.14)}
   .ph-head{font-size:10px;color:#8b93a7;letter-spacing:.5px;text-transform:uppercase;margin-bottom:6px}
   .ph{display:flex;align-items:center;gap:8px;margin-bottom:6px}
   .ph .nm{flex:1;min-width:0;font-size:12px;color:#dbe1ee;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -74,6 +77,47 @@
     var la=0,ln=0; path.forEach(function(p){ la+=p.lat; ln+=p.lng; });
     return { lat:la/path.length, lng:ln/path.length };
   }
+  // Push every footprint vertex OUTWARD from the centroid by a fixed number
+  // of meters. The trace follows the ROOFLINE, so the raw extrusion slices
+  // through walls/eaves — a ~2m buffer makes the block engulf the whole
+  // building instead of clipping it.
+  var M_PER_DEG_LAT=111320;
+  function expandPath(path, meters){
+    var c=centroid(path);
+    var mLng=M_PER_DEG_LAT*Math.cos(c.lat*Math.PI/180)||M_PER_DEG_LAT;
+    return path.map(function(p){
+      var dx=(p.lng-c.lng)*mLng, dy=(p.lat-c.lat)*M_PER_DEG_LAT;   // vertex offset in meters
+      var len=Math.sqrt(dx*dx+dy*dy)||1;
+      var f=(len+meters)/len;                                       // scale outward by +meters
+      return { lat:c.lat+(dy*f)/M_PER_DEG_LAT, lng:c.lng+(dx*f)/mLng };
+    });
+  }
+  // Donut progress glyph for the pin: a ring arc showing pct + the number.
+  function donutGlyph(pct){
+    var NS='http://www.w3.org/2000/svg';
+    var svg=document.createElementNS(NS,'svg');
+    svg.setAttribute('viewBox','0 0 36 36'); svg.setAttribute('width','30'); svg.setAttribute('height','30');
+    var r=15, cxy=18, circ=2*Math.PI*r;
+    var track=document.createElementNS(NS,'circle');
+    track.setAttribute('cx',cxy); track.setAttribute('cy',cxy); track.setAttribute('r',r);
+    track.setAttribute('fill','none'); track.setAttribute('stroke','rgba(255,255,255,0.22)'); track.setAttribute('stroke-width','3.5');
+    svg.appendChild(track);
+    var arc=document.createElementNS(NS,'circle');
+    arc.setAttribute('cx',cxy); arc.setAttribute('cy',cxy); arc.setAttribute('r',r);
+    arc.setAttribute('fill','none'); arc.setAttribute('stroke',pctColor(pct)); arc.setAttribute('stroke-width','3.5');
+    arc.setAttribute('stroke-linecap','round');
+    arc.setAttribute('stroke-dasharray',(circ*Math.max(0.01,pct/100))+' '+circ);
+    arc.setAttribute('transform','rotate(-90 '+cxy+' '+cxy+')');
+    svg.appendChild(arc);
+    var txt=document.createElementNS(NS,'text');
+    txt.setAttribute('x',cxy); txt.setAttribute('y',cxy+0.5);
+    txt.setAttribute('text-anchor','middle'); txt.setAttribute('dominant-baseline','middle');
+    txt.setAttribute('fill','#fff'); txt.setAttribute('font-size','11'); txt.setAttribute('font-weight','700');
+    txt.setAttribute('font-family','Inter,system-ui,sans-serif');
+    txt.textContent=pct;
+    svg.appendChild(txt);
+    return svg;
+  }
 
   // Standard Google inline bootstrap, pinned to the beta release channel.
   function boot(key){
@@ -88,12 +132,17 @@
     }).catch(function(e){ fail('3D view unavailable', 'The Maps 3D library failed to load. '+((e&&e.message)||'')); });
   }
 
-  function clearDrawn(){ drawn.forEach(function(el){ try{ el.remove(); }catch(_){} }); drawn=[]; hideCard(); }
-  function hideCard(){ cardEl.classList.remove('on'); }
+  // Card survives scene re-renders (e.g. a height change re-feeds the data)
+  // by remembering which building it shows and re-binding after render.
+  var selId=null;
+  function clearDrawn(){ drawn.forEach(function(el){ try{ el.remove(); }catch(_){} }); drawn=[]; }
+  function hideCard(){ cardEl.classList.remove('on'); selId=null; }
   document.getElementById('cardX').addEventListener('click', hideCard);
 
   function showCard(b){
+    selId=b.nodeId||b.label;
     var pct=Math.max(0, Math.min(100, Number(b.pct)||0));
+    var ft=Math.round((Number(b.heightM)||8)*3.2808);
     var html='';
     html+='<h3>'+esc(b.label)+'</h3>';
     html+='<div class="sub">'+(b.levels?b.levels+' level'+(b.levels===1?'':'s'):'')+(b.levels&&b.units?' · ':'')+(b.units?b.units+' units':'')+((b.levels||b.units)?'':'Traced building')+'</div>';
@@ -102,6 +151,13 @@
     html+='<div class="kpis">'+
       '<div class="kpi"><label>Total</label><div>'+money(b.total)+'</div></div>'+
       '<div class="kpi"><label>Spent</label><div>'+money(b.actual)+'</div></div>'+
+      '<div class="kpi" style="grid-column:1 / -1"><label>3D height</label>'+
+        '<div style="display:flex;align-items:center;gap:10px;">'+
+          '<button type="button" class="hstep" data-hstep="-4">−</button>'+
+          '<span style="min-width:52px;text-align:center;">'+ft+' ft</span>'+
+          '<button type="button" class="hstep" data-hstep="4">+</button>'+
+        '</div>'+
+      '</div>'+
     '</div>';
     var phs=(b.phases||[]);
     if(phs.length){
@@ -116,7 +172,21 @@
     }
     cardBody.innerHTML=html;
     cardEl.classList.add('on');
+    _selB=b;
   }
+  // Height stepper: ±4 ft per tap, persisted by the parent app on the
+  // building node (survives reloads + drives this scene's extrusion).
+  var _selB=null;
+  cardBody.addEventListener('click', function(e){
+    var btn=e.target.closest ? e.target.closest('.hstep') : null;
+    if(!btn || !_selB) return;
+    var stepFt=Number(btn.getAttribute('data-hstep'))||0;
+    var curFt=Math.round((Number(_selB.heightM)||8)*3.2808);
+    var nextFt=Math.max(4, Math.min(400, curFt+stepFt));
+    var m=nextFt/3.2808;
+    _selB.heightM=m; // optimistic — parent will re-feed the authoritative scene
+    try{ parent.postMessage({ type:'p86-orbit3d-setheight', nodeId:_selB.nodeId, heightM:m }, location.origin); }catch(_){}
+  });
 
   function startOrbit(){
     if(!map3d || !center) return;
@@ -130,6 +200,7 @@
   }
   function stopOrbit(){
     if(!map3d) return;
+    map3d.__userTookControl=true;   // data re-feeds must not restart the spin
     if(orbiting){ try{ map3d.stopCameraAnimation(); }catch(_){} orbiting=false; }
     orbitBtn.classList.add('on');
   }
@@ -167,13 +238,16 @@
     (data.buildings||[]).forEach(function(b){
       if(!b.path || b.path.length<3) return;
       var h=b.heightM || 8;
-      var coords=b.path.map(function(p){ return { lat:p.lat, lng:p.lng, altitude:h }; });
+      // Buffer the roofline trace ~2.2m outward so the block ENGULFS the
+      // building (walls, eaves) instead of slicing through the roof edge.
+      var fat=expandPath(b.path, 2.2);
+      var coords=fat.map(function(p){ return { lat:p.lat, lng:p.lng, altitude:h }; });
       try{
         var poly=new Polygon3DElement({
           outerCoordinates:coords,
-          fillColor:'rgba(79,140,255,0.32)',
-          strokeColor:'#7eb0ff',
-          strokeWidth:2,
+          fillColor:'rgba(79,140,255,0.42)',
+          strokeColor:'#22D3EE',
+          strokeWidth:2.5,
           extruded:true,
           altitudeMode:(AltitudeMode && AltitudeMode.RELATIVE_TO_GROUND) || undefined,
           drawsOccludedSegments:true
@@ -194,12 +268,14 @@
           label:b.label||''
         });
         if(MarkerLib && MarkerLib.PinElement){
+          // Brand-styled pin: navy balloon, cyan ring, and a donut-progress
+          // glyph (arc = % complete, number centered) instead of the stock
+          // red balloon — matches the app's status-ring language.
           var pin=new MarkerLib.PinElement({
-            background:pctColor(pct),
-            borderColor:'#0F172A',
-            glyphColor:'#fff',
-            glyph:pct+'%',
-            scale:1.25
+            background:'#0F172A',
+            borderColor:'#22D3EE',
+            glyph:donutGlyph(pct),
+            scale:1.5
           });
           mk.append(pin);
         }
@@ -209,8 +285,18 @@
       }catch(_){}
     });
 
-    // Gentle intro orbit around the site; the user can grab it to look around freely.
-    startOrbit();
+    // Keep the docked card alive across scene re-feeds (height changes,
+    // graph edits): re-bind it to the same building's fresh data, or hide
+    // it if that building is gone.
+    if(selId){
+      var still=(data.buildings||[]).find(function(x){ return (x.nodeId||x.label)===selId; });
+      if(still){ showCard(still); } else { hideCard(); }
+    }
+
+    // Gentle intro orbit around the site; the user can grab it to look around
+    // freely. Skip the restart when they've already taken control (a data
+    // re-feed mid-session shouldn't yank the camera away).
+    if(orbiting || !map3d.__userTookControl) startOrbit();
   }
 
   window.addEventListener('message', function(ev){

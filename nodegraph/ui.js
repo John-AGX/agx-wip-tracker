@@ -1432,7 +1432,7 @@ function ensureOrbit3D(o){
     _orbitEl=document.createElement('div'); _orbitEl.className='ng-orbit-3d';
     // Photorealistic 3D runs in an isolated same-origin iframe (loads Maps beta + Map3DElement).
     var frame=document.createElement('iframe'); frame.className='ng-orbit-3d-frame';
-    frame.src='/orbit3d.html?v=2'; frame.setAttribute('title','3D site view'); frame.setAttribute('allow','fullscreen');
+    frame.src='/orbit3d.html?v=3'; frame.setAttribute('title','3D site view'); frame.setAttribute('allow','fullscreen');
     _orbitEl.appendChild(frame); _orbitEl.__frame=frame;
     var exitB=document.createElement('button'); exitB.type='button'; exitB.className='ng-orbit-exit';
     exitB.innerHTML='&#x2715; Exit 3D'; exitB.addEventListener('click', exitOrbit3D); _orbitEl.appendChild(exitB);
@@ -1441,11 +1441,25 @@ function ensureOrbit3D(o){
     _orbitEl.appendChild(hint);
     (tab.querySelector('.ng-canvas-area')||tab).appendChild(_orbitEl);
     // The 3D page posts "ready" once its Maps SDK + tiles are loaded; then we (re)feed it.
+    // It also posts "setheight" when the user adjusts a building's 3D elevation
+    // from the docked card — persist it on the node and re-feed the scene.
     window.addEventListener('message', function(ev){
       if(ev.origin!==location.origin) return;               // only trust the parent-origin iframe
-      if(!ev.data || ev.data.type!=='p86-orbit3d-ready') return;
-      _orbitReady=true;
-      if(_spOrbit) postOrbitData();
+      if(!ev.data) return;
+      if(ev.data.type==='p86-orbit3d-ready'){
+        _orbitReady=true;
+        if(_spOrbit) postOrbitData();
+        return;
+      }
+      if(ev.data.type==='p86-orbit3d-setheight'){
+        var hn=E.nodes().find(function(x){ return x.id===ev.data.nodeId; });
+        var hv=Number(ev.data.heightM);
+        if(!hn || hn.type!=='t1' || !isFinite(hv)) return;
+        hn.heightM=Math.max(1.2, Math.min(120, hv));        // 4ft..~400ft sanity clamp
+        try{ if(E.saveGraph) E.saveGraph(); }catch(_){}
+        postOrbitData();
+        return;
+      }
     });
   }
   _orbitPending=o;                    // remember the job origin for postOrbitData
@@ -1477,10 +1491,13 @@ function postOrbitData(){
     try{ E.resetComp(); total=E.getOutput(n,0)||0; }catch(_){}
     try{ E.resetComp(); actual=E.getActual(n)||0; }catch(_){}
     buildings.push({
+      nodeId: n.id,
       path: n.polygon.map(function(v){ return { lat:Number(v.lat), lng:Number(v.lng) }; }),
       label: n.label||'Building',
       pct: Math.round(n.pctComplete||0),
-      heightM: (n.levels && n.levels.length) ? n.levels.length*3.2 : 8,
+      // Per-building 3D height: an explicit override (set from the 3D card's
+      // stepper, persisted on the node) wins over the levels-derived estimate.
+      heightM: (isFinite(n.heightM) && n.heightM>0) ? n.heightM : ((n.levels && n.levels.length) ? n.levels.length*3.2 : 8),
       levels: (n.levels && n.levels.length) || 0,
       units: (function(){ var u=0; try{ (n.levels||[]).forEach(function(l){ u += (l.units && l.units.length) || (Number(l.unitCount)||0); }); }catch(_){} return u; })(),
       total: total,
