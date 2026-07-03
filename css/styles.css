@@ -2216,10 +2216,17 @@
             }
             /* Touch: the resize grip is a real control now (tap = shrink to
                fit, drag = resize), so keep it visible AND give it a
-               finger-sized hit target instead of the thin mouse edge. */
-            .p86-col-resizer {
-                width: 18px;
+               finger-sized hit target instead of the thin mouse edge.
+               `.p86-enhanced` prefix raises specificity so this beats the
+               base `.p86-col-resizer{width:10px}` defined later in the file. */
+            .p86-enhanced .p86-col-resizer {
+                width: 20px;
                 touch-action: none;
+            }
+            /* Nudge the visible divider bar in from the wider hit zone so it
+               still reads as the column's right edge. */
+            .p86-enhanced .p86-col-resizer::after {
+                right: 9px;
             }
         }
 
