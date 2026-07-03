@@ -7,6 +7,10 @@
   'use strict';
 
   var _leads = [];
+  // In-flight leads.list() promise while a (re)load is loading. Lets
+  // openEditLeadModal join a fetch that just wiped the cache instead of
+  // racing it with an extra get-by-id round trip.
+  var _leadsFetchInflight = null;
   // Shared filter drawer + saved views (mirrors Cost Inbox).
   var _leadsDrawer = null;      // active filter values, or null
   var _leadsViews = [];         // this user's saved Leads views
@@ -537,12 +541,15 @@
         listEl.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);text-align:center;">Leads aren\'t available in offline mode.</div>';
         return;
       }
-      window.p86Api.leads.list().then(function(res) {
+      var p = window.p86Api.leads.list().then(function(res) {
+        if (_leadsFetchInflight === p) _leadsFetchInflight = null;
         _leads = res.leads || [];
         renderLeadsList();
       }).catch(function(err) {
+        if (_leadsFetchInflight === p) _leadsFetchInflight = null;
         listEl.innerHTML = '<div style="padding:20px;color:#e74c3c;text-align:center;">Failed to load leads: ' + escapeHTML(err.message) + '</div>';
       });
+      _leadsFetchInflight = p;
       return;
     }
 
@@ -1085,14 +1092,29 @@
     applyLeadFieldsetGates(true);
   }
 
+  // Last-resort open: the lead isn't in the cache and no list fetch is in
+  // flight — fetch just this lead, seed the cache, and re-enter the open.
+  function fetchLeadThenOpen(id) {
+    window.p86Api.leads.get(id).then(function(res) {
+      _leads.push(res.lead);
+      openEditLeadModal(id);
+    }).catch(function() { alert('Lead not found.'); });
+  }
+
   function openEditLeadModal(id) {
     var l = _leads.find(function(x) { return x.id === id; });
     if (!l) {
-      // Fall back to fetching by id if not in cache (rare — list is fresh)
-      window.p86Api.leads.get(id).then(function(res) {
-        _leads.push(res.lead);
-        openEditLeadModal(id);
-      }).catch(function() { alert('Lead not found.'); });
+      // Not in cache. A tab-open reload may have just wiped it (opening a
+      // lead from a map card navigates to the Leads tab, which re-fetches
+      // the list) — join that fetch rather than firing a get-by-id too.
+      if (_leadsFetchInflight) {
+        _leadsFetchInflight.then(function() {
+          if (_leads.some(function(x) { return x.id === id; })) openEditLeadModal(id);
+          else fetchLeadThenOpen(id);
+        });
+        return;
+      }
+      fetchLeadThenOpen(id);
       return;
     }
     clearEditor();

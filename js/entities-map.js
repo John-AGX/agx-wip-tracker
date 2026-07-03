@@ -84,7 +84,13 @@
       // panel's navigate tool uses.
       if (typeof window.openEditLeadModal === 'function') {
         if (typeof window.switchTab === 'function') window.switchTab('estimates');
-        if (typeof window.switchEstimatesSubTab === 'function') window.switchEstimatesSubTab('leads');
+        // switchTab re-runs the ACTIVE sub-tab's render — when that's already
+        // 'leads' it just reloaded the leads cache, so switching again here
+        // would wipe + refetch the same list a second time. Only switch
+        // explicitly when some other sub-tab is active.
+        var activeSub = document.querySelector('#estimates [data-estimates-subtab].active');
+        var onLeads = !!(activeSub && activeSub.getAttribute('data-estimates-subtab') === 'leads');
+        if (!onLeads && typeof window.switchEstimatesSubTab === 'function') window.switchEstimatesSubTab('leads');
         if (typeof window.markVirtualTabActive === 'function') window.markVirtualTabActive('leads');
         window.openEditLeadModal(id); return;
       }
@@ -235,88 +241,6 @@
     };
   }
 
-  // Small kind tag (matches the filter-chip colors).
-  function kindTag(kind) {
-    var c = kind === 'lead' ? '#4f8cff' : '#94a3b8';
-    var label = kind === 'lead' ? 'LEAD' : 'JOB';
-    return '<span style="display:inline-block;font-size:9px;font-weight:700;letter-spacing:0.4px;' +
-      'color:#fff;background:' + c + ';border-radius:4px;padding:1px 5px;flex-shrink:0;">' + label + '</span>';
-  }
-
-  // Status chip — lead-pipeline colors come from the SHARED encoding
-  // (js/map-pins.js → p86MapStatus) so a status reads identically here and on
-  // the per-entity maps. Jobs get a neutral slate chip with their raw label.
-  function statusChip(kind, status) {
-    if (!status) return '';
-    var color = '#64748b', label = String(status).slice(0, 24).replace(/_/g, ' ');
-    if (kind === 'lead' && window.p86MapStatus && window.p86MapStatus.pipeline) {
-      var pl = window.p86MapStatus.pipeline(status);
-      if (pl) { color = pl.color; label = pl.label; }
-    }
-    return '<span style="display:inline-block;font-size:9px;font-weight:700;letter-spacing:0.3px;' +
-      'color:#fff;background:' + color + ';border-radius:4px;padding:1px 6px;text-transform:capitalize;flex-shrink:0;">' +
-      escapeHTML(label) + '</span>';
-  }
-  // Compact "Open" pill used in BOTH the single window and the group rows so
-  // the affordance reads consistently. inline=true drops the top margin for
-  // use inside a flex row.
-  function openBtn(kind, id, label, inline) {
-    return '<a href="#" style="display:inline-block;font-size:11px;color:#fff;background:#0a66c2;' +
-      'text-decoration:none;font-weight:600;border-radius:6px;padding:4px 10px;flex-shrink:0;' +
-      (inline ? '' : 'margin-top:8px;') + '" ' +
-      'onclick="event.preventDefault();window.__p86EntitiesMapOpen&&window.__p86EntitiesMapOpen(\'' +
-        escapeAttr(kind) + '\',\'' + escapeAttr(id) + '\');">' + (label || 'Open') + ' &rarr;</a>';
-  }
-
-  // Info window for a SINGLE entity.
-  function infoContentHTML(item) {
-    var addr = item.address || '';
-    return '<div style="min-width:200px;max-width:280px;font-family:system-ui,sans-serif;">' +
-      '<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">' +
-        kindTag(item.kind) + statusChip(item.kind, item.status) +
-      '</div>' +
-      '<div style="font-size:14px;font-weight:600;color:#111;line-height:1.3;">' + escapeHTML(item.title || '(untitled)') + '</div>' +
-      (addr ? '<div style="font-size:11px;color:#555;margin-top:3px;">' + escapeHTML(addr) + '</div>' : '') +
-      openBtn(item.kind, item.id, 'Open', false) +
-      mapsLinkRow(item) +
-    '</div>';
-  }
-
-  // "Open in Google Maps" row for an info window. Prefers the pin's exact
-  // coords (always present) and falls back to the entity address label.
-  function mapsLinkRow(item) {
-    if (!item || !window.p86MapLink || !window.p86MapLink.linkHTML) return '';
-    var link = window.p86MapLink.linkHTML('Open in Google Maps', item.address || '',
-      { lat: Number(item.lat), lng: Number(item.lng),
-        style: 'display:inline-block;margin-top:6px;font-size:12px;color:#0a66c2;text-decoration:none;font-weight:600;' });
-    return link ? '<div>' + link + '</div>' : '';
-  }
-
-  // Info window for a GROUP of co-located entities — one row per item. The
-  // shared property address (first member with one) heads the list.
-  function groupContentHTML(members) {
-    var addr = '';
-    for (var i = 0; i < members.length; i++) { if (members[i].address) { addr = members[i].address; break; } }
-    var rows = members.map(function (m) {
-      return '<div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-top:1px solid #eee;">' +
-        kindTag(m.kind) +
-        '<span style="flex:1;font-size:13px;color:#111;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' +
-          escapeHTML(m.title || '(untitled)') + '</span>' +
-        statusChip(m.kind, m.status) +
-        openBtn(m.kind, m.id, 'Open', true) +
-      '</div>';
-    }).join('');
-    return '<div style="min-width:240px;max-width:320px;font-family:system-ui,sans-serif;">' +
-      '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;color:#4f46e5;margin-bottom:2px;">' +
-        members.length + ' items at this property</div>' +
-      (addr ? '<div style="font-size:11px;color:#555;margin-bottom:4px;">' + escapeHTML(addr) + '</div>' : '') +
-      // One "Open in Google Maps" link for the shared coordinate (grouped
-      // pins are all at the same lat/lng), so rows stay clean.
-      (members[0] ? mapsLinkRow(members[0]) : '') +
-      rows +
-    '</div>';
-  }
-
   function render(hostId, opts) {
     opts = opts || {};
     var host = (typeof hostId === 'string') ? document.getElementById(hostId) : hostId;
@@ -442,9 +366,6 @@
     var canvas = host.querySelector('[data-emap-canvas]');
     var recenterBtn = host.querySelector('[data-emap-recenter]');
 
-    // Wire the open-entity dispatcher (info-window anchors call it).
-    window.__p86EntitiesMapOpen = openEntity;
-
     var mapOpts = {
       center: { lat: allItems[0].lat, lng: allItems[0].lng },
       zoom: 11,
@@ -558,11 +479,6 @@
       return mk;
     }
     function removeMarker(m) { if (!m) return; if (m.__adv) { m.map = null; } else { m.setMap(null); } }
-    function openInfo(content, m) {
-      infoWindow.setContent(content);
-      if (m && m.__adv) infoWindow.open({ anchor: m, map: map });
-      else infoWindow.open(map, m);
-    }
     function bounceMarker(m) {
       if (!m) return;
       if (m.__adv) {
@@ -948,39 +864,6 @@
 
       // Clicking empty map closes the on-map popup.
       if (map && map.addListener) map.addListener('click', closePopup);
-      // (legacy: the detail now lives in the on-map popup; this dock is gone, so the
-      // handler below is inert — guarded against the missing .emap-detail element.)
-      var detail = panel.querySelector('.emap-detail');
-      if (detail) detail.addEventListener('click', function (ev) {
-        var t = ev.target;
-        var go = function (sel) { return t.closest ? t.closest(sel) : null; };
-        // Shared entity-card actions (data-act on its buttons / icons).
-        var actEl = go('[data-act]');
-        if (actEl) {
-          var act = actEl.getAttribute('data-act');
-          var card = go('.p86-ecard');
-          var kind = card ? card.getAttribute('data-kind') : '';
-          var id = actEl.getAttribute('data-id');
-          if (act === 'maps') {
-            var la = actEl.getAttribute('data-lat'), ln = actEl.getAttribute('data-lng');
-            if (la && ln) window.open('https://www.google.com/maps/search/?api=1&query=' + la + ',' + ln, '_blank');
-            return;
-          }
-          if (act === 'open' || act === 'info') {
-            if (kind === 'job') { if (typeof _onJobHook === 'function') _onJobHook(id); else openEntity('job', id); }
-            else { openEntity(kind || 'lead', id); }
-            return;
-          }
-          if (act === 'msg') {
-            if (window.p86Messaging && typeof window.p86Messaging.openInbox === 'function') window.p86Messaging.openInbox();
-            return;
-          }
-          return;
-        }
-        // Group "N at this property" rows.
-        var op = go('.emap-grp-row');
-        if (op) { openEntity(op.getAttribute('data-kind'), op.getAttribute('data-id')); return; }
-      });
     }
 
     // Phase 0 warm-up: geocode jobs that have no coordinates yet — the weather
