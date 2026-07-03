@@ -839,8 +839,8 @@ body.light-mode .ng-topbar.ng-ribbon .ng-ribbon-btn:hover{
 .ng-poly-kpi{fill:#bcd6ff;font:600 5.5px sans-serif;text-anchor:middle;dominant-baseline:middle;pointer-events:none;paint-order:stroke;stroke:#0b1020;stroke-width:1.6;stroke-linejoin:round}
 .ng-poly-sqft{fill:#9ad8a6;font:600 5px sans-serif;text-anchor:middle;dominant-baseline:middle;pointer-events:none;paint-order:stroke;stroke:#0b1020;stroke-width:1.5;stroke-linejoin:round}
 /* ── Measure tool (distance + area) — overlay graphics + floating panel ── */
-.ng-measure-line{fill:none;stroke:#ffd166;stroke-width:2;vector-effect:non-scaling-stroke;stroke-linejoin:round;stroke-linecap:round;stroke-dasharray:5 4;pointer-events:none}
-.ng-measure-poly{fill:rgba(255,209,102,.14);stroke:#ffd166;stroke-width:2;vector-effect:non-scaling-stroke;stroke-linejoin:round;pointer-events:none}
+.ng-measure-line{fill:none;stroke:#ffd166;stroke-width:1;vector-effect:non-scaling-stroke;stroke-linejoin:round;stroke-linecap:round;stroke-dasharray:5 4;pointer-events:none}
+.ng-measure-poly{fill:rgba(255,209,102,.14);stroke:#ffd166;stroke-width:1;vector-effect:non-scaling-stroke;stroke-linejoin:round;pointer-events:none}
 .ng-measure-vert{fill:#ffd166;stroke:#0b1020;stroke-width:1;vector-effect:non-scaling-stroke;pointer-events:none}
 .ng-measure-vert0{fill:#fff}
 .ng-measure-seglbl{fill:#ffe9a8;font:700 6px sans-serif;text-anchor:middle;dominant-baseline:middle;pointer-events:none;paint-order:stroke;stroke:#0b1020;stroke-width:2;stroke-linejoin:round}

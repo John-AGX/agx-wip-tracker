@@ -1344,8 +1344,11 @@ function drawWires(ctx, wrap, wiringFrom, wireMouse){
     // Solid connection line — one consistent colour end-to-end (no breathing-gradient
     // dip in the middle, no clean-mode dashes), like the original wire style.
     ctx.setLineDash([]);
-    ctx.strokeStyle = hexToRgba(col, 0.85); ctx.lineWidth = 2.5;
-    ctx.shadowColor = col; ctx.shadowBlur = 3;
+    // The ctx is scaled by zoom, so a fixed lineWidth balloons at high zoom (the
+    // "fluffy" wires). Divide by zoom → a constant ~1px on screen, matching the
+    // building polygon outline (.ng-poly stroke-width:1, non-scaling). Trim the glow.
+    ctx.strokeStyle = hexToRgba(col, 0.9); ctx.lineWidth = 1/zoom;
+    ctx.shadowColor = col; ctx.shadowBlur = 1;
     ctx.stroke(); ctx.shadowBlur = 0;
   });
 
@@ -1359,7 +1362,7 @@ function drawWires(ctx, wrap, wiringFrom, wireMouse){
     ctx.beginPath();
     ctx.moveTo(p1.x, p1.y);
     ctx.bezierCurveTo(p1.x+dx, p1.y, mx-dx, my, mx, my);
-    ctx.strokeStyle = pcol; ctx.lineWidth = 2;
+    ctx.strokeStyle = pcol; ctx.lineWidth = 1.5/zoom;
     ctx.setLineDash([6,4]); ctx.stroke(); ctx.setLineDash([]);
   }
 
@@ -1379,7 +1382,7 @@ function drawWires(ctx, wrap, wiringFrom, wireMouse){
     ctx.beginPath();
     ctx.moveTo(s.x, s.y); ctx.lineTo(e.x, e.y);
     ctx.strokeStyle = 'rgba(251,191,36,0.65)'; // amber, matches note vibe
-    ctx.lineWidth = 1.5;
+    ctx.lineWidth = 1/zoom;   // constant ~1px on screen (ctx is zoom-scaled)
     ctx.setLineDash([5,5]); ctx.stroke(); ctx.setLineDash([]);
     // Small dot at the target end so it reads as "this note is about that"
     ctx.beginPath();
