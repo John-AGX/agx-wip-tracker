@@ -46,12 +46,78 @@
     color:#9be9f5;font-size:12px;font-weight:600;cursor:pointer}
   #orbitBtn.on{display:flex}
   #orbitBtn:hover{background:rgba(34,211,238,.14)}
+  /* Design settings — right-hand drawer */
+  #designBtn{position:absolute;top:52px;right:14px;z-index:20;display:flex;align-items:center;gap:6px;
+    padding:7px 13px;border:1px solid rgba(34,211,238,.4);border-radius:9px;background:rgba(15,23,42,.9);
+    color:#9be9f5;font-size:12px;font-weight:600;cursor:pointer}
+  #designBtn:hover{background:rgba(34,211,238,.14)}
+  #design{position:absolute;top:0;right:0;height:100%;width:248px;z-index:25;box-sizing:border-box;
+    background:rgba(15,23,42,.96);border-left:1px solid rgba(34,211,238,.35);padding:16px 16px 24px;
+    overflow-y:auto;color:#e6e9f2;transform:translateX(100%);transition:transform .18s ease}
+  #design.on{transform:translateX(0)}
+  #design h2{margin:0 0 14px;font-size:13px;font-weight:700;color:#fff;letter-spacing:.4px}
+  #design .dx{position:absolute;top:10px;right:10px;width:26px;height:26px;border:none;border-radius:7px;
+    background:transparent;color:#aeb4c4;font-size:14px;cursor:pointer}
+  #design .dx:hover{background:rgba(255,255,255,.08)}
+  .dsec{margin-bottom:16px}
+  .dsec label{display:block;font-size:9.5px;color:#8b93a7;letter-spacing:.6px;text-transform:uppercase;margin-bottom:7px}
+  .swatches{display:flex;gap:8px;flex-wrap:wrap}
+  .sw{width:24px;height:24px;border-radius:50%;border:2px solid transparent;cursor:pointer;box-sizing:border-box}
+  .sw.on{border-color:#fff;box-shadow:0 0 0 2px rgba(34,211,238,.6)}
+  .sw.auto{background:conic-gradient(#64748b,#4f8cff,#34d399,#64748b);display:flex;align-items:center;justify-content:center;
+    font-size:8px;color:#fff;font-weight:700}
+  .dchips{display:flex;gap:6px;flex-wrap:wrap}
+  .dchip{padding:5px 11px;border:1px solid rgba(255,255,255,.14);border-radius:999px;background:transparent;
+    color:#c6ccdb;font-size:11.5px;cursor:pointer}
+  .dchip.on{border-color:#22D3EE;color:#9be9f5;background:rgba(34,211,238,.12);font-weight:600}
+  .dtoggle{display:flex;align-items:center;justify-content:space-between;font-size:12px;color:#dbe1ee;margin-bottom:9px;cursor:pointer}
+  .dtoggle input{accent-color:#22D3EE;width:15px;height:15px;cursor:pointer}
+  input[type=range]{width:100%;accent-color:#22D3EE}
 </style>
 </head>
 <body>
 <div id="host"></div>
 <div id="card"><button class="x" id="cardX" type="button">✕</button><div id="cardBody"></div></div>
 <button id="orbitBtn" type="button">⟳ Orbit</button>
+<button id="designBtn" type="button">🎨 Design</button>
+<div id="design">
+  <button class="dx" id="designX" type="button">✕</button>
+  <h2>3D Design</h2>
+  <div class="dsec"><label>Building shading</label>
+    <div class="swatches" id="dShade">
+      <div class="sw" data-shade="#4f8cff" style="background:#4f8cff"></div>
+      <div class="sw" data-shade="#22D3EE" style="background:#22D3EE"></div>
+      <div class="sw" data-shade="#34d399" style="background:#34d399"></div>
+      <div class="sw" data-shade="#fbbf24" style="background:#fbbf24"></div>
+      <div class="sw" data-shade="#f87171" style="background:#f87171"></div>
+      <div class="sw" data-shade="#a78bfa" style="background:#a78bfa"></div>
+    </div>
+  </div>
+  <div class="dsec"><label>Shading opacity</label>
+    <input type="range" id="dOpacity" min="0.10" max="0.80" step="0.05">
+  </div>
+  <div class="dsec"><label>Edge / line color</label>
+    <div class="swatches" id="dEdge">
+      <div class="sw" data-edge="#22D3EE" style="background:#22D3EE"></div>
+      <div class="sw" data-edge="#ffffff" style="background:#fff"></div>
+      <div class="sw" data-edge="#7eb0ff" style="background:#7eb0ff"></div>
+      <div class="sw" data-edge="#fbbf24" style="background:#fbbf24"></div>
+      <div class="sw auto" data-edge="auto">A</div>
+    </div>
+  </div>
+  <div class="dsec"><label>Pin style</label>
+    <div class="dchips" id="dPin">
+      <button type="button" class="dchip" data-pin="donut">Donut %</button>
+      <button type="button" class="dchip" data-pin="detailed">Detailed</button>
+      <button type="button" class="dchip" data-pin="dot">Dot</button>
+    </div>
+  </div>
+  <div class="dsec"><label>Options</label>
+    <label class="dtoggle"><span>Building name labels</span><input type="checkbox" id="dLabels"></label>
+    <label class="dtoggle"><span>Show building blocks</span><input type="checkbox" id="dBlocks"></label>
+    <label class="dtoggle"><span>Shade by progress</span><input type="checkbox" id="dByProgress"></label>
+  </div>
+</div>
 <div id="err"></div>
 <script>
 /* Isolated Photorealistic 3D page. Loads Google Maps on the BETA channel (3D Maps /
@@ -206,13 +272,36 @@
   }
   orbitBtn.addEventListener('click', startOrbit);
 
+  // ── Design settings (device-local, survive across jobs/sessions) ──
+  var design={ shade:'#4f8cff', opacity:0.42, edge:'#22D3EE', pin:'donut', labels:true, blocks:true, byProgress:false };
+  try{ var savedD=JSON.parse(localStorage.getItem('p86_orbit3d_design')||'{}'); Object.keys(design).forEach(function(k){ if(savedD[k]!==undefined) design[k]=savedD[k]; }); }catch(_){}
+  function saveDesign(){ try{ localStorage.setItem('p86_orbit3d_design', JSON.stringify(design)); }catch(_){} }
+  function hexToRgba(hex,a){ var n=parseInt(String(hex).replace('#',''),16); return 'rgba('+((n>>16)&255)+','+((n>>8)&255)+','+(n&255)+','+a+')'; }
+  function fmtK(n){ n=Number(n)||0; if(n>=1e6) return '$'+(n/1e6).toFixed(1)+'M'; if(n>=1e3) return '$'+Math.round(n/1e3)+'k'; return '$'+Math.round(n); }
+  // "Detailed" pin glyph: donut ring + pct on top, compact total $ under it.
+  function detailGlyph(b,pct){
+    var svg=donutGlyph(pct);
+    var t=svg.querySelector('text');
+    if(t){ t.setAttribute('y','15'); t.setAttribute('font-size','9.5'); }
+    var NS='http://www.w3.org/2000/svg';
+    var m=document.createElementNS(NS,'text');
+    m.setAttribute('x','18'); m.setAttribute('y','24');
+    m.setAttribute('text-anchor','middle'); m.setAttribute('dominant-baseline','middle');
+    m.setAttribute('fill','#9be9f5'); m.setAttribute('font-size','6.5'); m.setAttribute('font-weight','600');
+    m.setAttribute('font-family','Inter,system-ui,sans-serif');
+    m.textContent=fmtK(b.total);
+    svg.appendChild(m);
+    return svg;
+  }
+
+  var lastData=null, lastCenterKey='';
   function render(data){
     if(!Lib){ pending=data; return; }
     pending=null;
     var c=data && data.center; if(!c) return;
-    center=c;
-    var Map3DElement=Lib.Map3DElement, Polygon3DElement=Lib.Polygon3DElement, AltitudeMode=Lib.AltitudeMode, MapMode=Lib.MapMode;
-    var MarkerEl=Lib.Marker3DInteractiveElement || Lib.Marker3DElement;
+    center=c; lastData=data;
+    var Map3DElement=Lib.Map3DElement, MapMode=Lib.MapMode;
+    var ck=Number(c.lat).toFixed(6)+','+Number(c.lng).toFixed(6);
     try{
       if(!map3d){
         map3d=new Map3DElement({
@@ -226,57 +315,74 @@
         // spin (and reveals the ⟳ Orbit button to bring it back).
         map3d.addEventListener('pointerdown', stopOrbit, { capture:true });
         map3d.addEventListener('wheel', stopOrbit, { capture:true, passive:true });
-      } else {
+      } else if(ck!==lastCenterKey){
+        // Only recenter the camera when the JOB changed — a same-job data
+        // re-feed (height step, graph edit) must not yank the view around.
         map3d.center={ lat:c.lat, lng:c.lng, altitude:0 };
         map3d.range=340; map3d.tilt=62; map3d.heading=0;
       }
     }catch(e){ fail('3D view unavailable', (e&&e.message)||''); return; }
+    lastCenterKey=ck;
+    drawScene();
+    // Gentle intro orbit around the site; skipped once the user has taken
+    // the camera (a data re-feed mid-session shouldn't restart the spin).
+    if(orbiting || !map3d.__userTookControl) startOrbit();
+  }
 
-    // Highlight this job's buildings: each traced footprint becomes an extruded,
-    // translucent-blue 3D block (drawsOccludedSegments keeps it visible through the mesh).
+  // Draw (or redraw) every building block + pin from lastData using the
+  // current design settings. Cheap enough to run on every settings change.
+  function drawScene(){
+    if(!map3d || !Lib || !lastData) return;
+    var Polygon3DElement=Lib.Polygon3DElement, AltitudeMode=Lib.AltitudeMode;
+    var MarkerEl=Lib.Marker3DInteractiveElement || Lib.Marker3DElement;
     clearDrawn();
-    (data.buildings||[]).forEach(function(b){
+    (lastData.buildings||[]).forEach(function(b){
       if(!b.path || b.path.length<3) return;
       var h=b.heightM || 8;
-      // Buffer the roofline trace ~2.2m outward so the block ENGULFS the
-      // building (walls, eaves) instead of slicing through the roof edge.
-      var fat=expandPath(b.path, 2.2);
-      var coords=fat.map(function(p){ return { lat:p.lat, lng:p.lng, altitude:h }; });
-      try{
-        var poly=new Polygon3DElement({
-          outerCoordinates:coords,
-          fillColor:'rgba(79,140,255,0.42)',
-          strokeColor:'#22D3EE',
-          strokeWidth:2.5,
-          extruded:true,
-          altitudeMode:(AltitudeMode && AltitudeMode.RELATIVE_TO_GROUND) || undefined,
-          drawsOccludedSegments:true
-        });
-        map3d.appendChild(poly);
-        drawn.push(poly);
-      }catch(_){}
+      var pct=Math.max(0,Math.min(100,Number(b.pct)||0));
+      var shade=design.byProgress ? pctColor(pct) : design.shade;
+      if(design.blocks){
+        // Buffer the roofline trace ~2.2m outward so the block ENGULFS the
+        // building (walls, eaves) instead of slicing through the roof edge.
+        var fat=expandPath(b.path, 2.2);
+        var coords=fat.map(function(p){ return { lat:p.lat, lng:p.lng, altitude:h }; });
+        try{
+          var poly=new Polygon3DElement({
+            outerCoordinates:coords,
+            fillColor:hexToRgba(shade, design.opacity),
+            strokeColor:(design.edge==='auto') ? shade : design.edge,
+            strokeWidth:2.5,
+            extruded:true,
+            altitudeMode:(AltitudeMode && AltitudeMode.RELATIVE_TO_GROUND) || undefined,
+            drawsOccludedSegments:true
+          });
+          map3d.appendChild(poly);
+          drawn.push(poly);
+        }catch(_){}
+      }
       // Interactive data pin floating above the roof: % complete at a glance,
       // click for the full building card. Extruded stem ties it to the block.
       if(!MarkerEl) return;
       try{
         var cen=centroid(b.path);
-        var pct=Math.max(0,Math.min(100,Number(b.pct)||0));
         var mk=new MarkerEl({
           position:{ lat:cen.lat, lng:cen.lng, altitude:h+12 },
           altitudeMode:(AltitudeMode && AltitudeMode.RELATIVE_TO_GROUND) || undefined,
           extruded:true,
-          label:b.label||''
+          label:(design.labels && b.label) ? b.label : ''
         });
         if(MarkerLib && MarkerLib.PinElement){
-          // Brand-styled pin: navy balloon, cyan ring, and a donut-progress
-          // glyph (arc = % complete, number centered) instead of the stock
-          // red balloon — matches the app's status-ring language.
-          var pin=new MarkerLib.PinElement({
-            background:'#0F172A',
-            borderColor:'#22D3EE',
-            glyph:donutGlyph(pct),
-            scale:1.5
-          });
+          var pin;
+          if(design.pin==='dot'){
+            // Minimal: small status-colored pin, no glyph — least visual noise.
+            pin=new MarkerLib.PinElement({ background:pctColor(pct), borderColor:'#0F172A', glyphColor:'#fff', scale:0.9 });
+          } else if(design.pin==='detailed'){
+            // Big pin: donut % + compact total $ inside the ring.
+            pin=new MarkerLib.PinElement({ background:'#0F172A', borderColor:'#22D3EE', glyph:detailGlyph(b,pct), scale:2.0 });
+          } else {
+            // Default donut: navy balloon, cyan ring, progress-arc glyph.
+            pin=new MarkerLib.PinElement({ background:'#0F172A', borderColor:'#22D3EE', glyph:donutGlyph(pct), scale:1.5 });
+          }
           mk.append(pin);
         }
         mk.addEventListener('gmp-click', function(){ stopOrbit(); showCard(b); });
@@ -285,19 +391,39 @@
       }catch(_){}
     });
 
-    // Keep the docked card alive across scene re-feeds (height changes,
-    // graph edits): re-bind it to the same building's fresh data, or hide
-    // it if that building is gone.
+    // Keep the docked card alive across redraws (height changes, design
+    // changes): re-bind it to the same building's fresh data, or hide it.
     if(selId){
-      var still=(data.buildings||[]).find(function(x){ return (x.nodeId||x.label)===selId; });
+      var still=(lastData.buildings||[]).find(function(x){ return (x.nodeId||x.label)===selId; });
       if(still){ showCard(still); } else { hideCard(); }
     }
-
-    // Gentle intro orbit around the site; the user can grab it to look around
-    // freely. Skip the restart when they've already taken control (a data
-    // re-feed mid-session shouldn't yank the camera away).
-    if(orbiting || !map3d.__userTookControl) startOrbit();
   }
+
+  // ── Design drawer wiring ──
+  var designEl=document.getElementById('design');
+  document.getElementById('designBtn').addEventListener('click', function(){ syncDesignUI(); designEl.classList.add('on'); });
+  document.getElementById('designX').addEventListener('click', function(){ designEl.classList.remove('on'); });
+  function syncDesignUI(){
+    designEl.querySelectorAll('#dShade .sw').forEach(function(s){ s.classList.toggle('on', s.getAttribute('data-shade')===design.shade); });
+    designEl.querySelectorAll('#dEdge .sw').forEach(function(s){ s.classList.toggle('on', s.getAttribute('data-edge')===design.edge); });
+    designEl.querySelectorAll('#dPin .dchip').forEach(function(s){ s.classList.toggle('on', s.getAttribute('data-pin')===design.pin); });
+    document.getElementById('dOpacity').value=design.opacity;
+    document.getElementById('dLabels').checked=!!design.labels;
+    document.getElementById('dBlocks').checked=!!design.blocks;
+    document.getElementById('dByProgress').checked=!!design.byProgress;
+  }
+  function applyDesign(){ saveDesign(); syncDesignUI(); drawScene(); }
+  designEl.addEventListener('click', function(e){
+    var sw=e.target.closest ? e.target.closest('.sw') : null;
+    var chip=e.target.closest ? e.target.closest('.dchip') : null;
+    if(sw && sw.parentElement.id==='dShade'){ design.shade=sw.getAttribute('data-shade'); applyDesign(); }
+    else if(sw && sw.parentElement.id==='dEdge'){ design.edge=sw.getAttribute('data-edge'); applyDesign(); }
+    else if(chip){ design.pin=chip.getAttribute('data-pin'); applyDesign(); }
+  });
+  document.getElementById('dOpacity').addEventListener('input', function(){ design.opacity=Number(this.value)||0.42; applyDesign(); });
+  document.getElementById('dLabels').addEventListener('change', function(){ design.labels=this.checked; applyDesign(); });
+  document.getElementById('dBlocks').addEventListener('change', function(){ design.blocks=this.checked; applyDesign(); });
+  document.getElementById('dByProgress').addEventListener('change', function(){ design.byProgress=this.checked; applyDesign(); });
 
   window.addEventListener('message', function(ev){
     if(ev.origin!==location.origin) return;                 // only trust the parent app
