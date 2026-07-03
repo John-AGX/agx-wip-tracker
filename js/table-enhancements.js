@@ -355,69 +355,44 @@
     });
   }
 
-  // ── resize gesture (mouse AND touch) ────────────────────────────
-  // Works with a finger too: the resize grip is a real control on phones/
-  // tablets, not just a mouse edge. TAP the grip (no drag) → shrink the
-  // column to fit its content; DRAG the grip → set the width by hand.
-  var TAP_SLOP = 3; // px of finger jitter still counted as a tap, not a drag
-  function pointX(e) {
-    if (e.touches && e.touches.length) return e.touches[0].clientX;
-    if (e.changedTouches && e.changedTouches.length) return e.changedTouches[0].clientX;
-    return e.clientX;
-  }
-  function addMoveListeners() {
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
-    document.addEventListener('touchmove', onMove, { passive: false });
-    document.addEventListener('touchend', onUp);
-    document.addEventListener('touchcancel', onUp);
-  }
-  function removeMoveListeners() {
-    document.removeEventListener('mousemove', onMove);
-    document.removeEventListener('mouseup', onUp);
-    document.removeEventListener('touchmove', onMove);
-    document.removeEventListener('touchend', onUp);
-    document.removeEventListener('touchcancel', onUp);
-  }
+  // ── resize gesture ──────────────────────────────────────────────
   function startResize(e, key, table, th, col) {
     e.preventDefault();
     e.stopPropagation();
     active = {
       type: 'resize', key: key, table: table, th: th, col: col,
-      startX: pointX(e), startW: th.offsetWidth, widths: currentWidths(table), moved: false
+      startX: e.clientX, startW: th.offsetWidth, widths: currentWidths(table)
     };
     document.body.style.userSelect = 'none';
     document.body.style.cursor = 'col-resize';
-    addMoveListeners();
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
   }
 
-  // ── reorder gesture (mouse) ─────────────────────────────────────
+  // ── reorder gesture ─────────────────────────────────────────────
   function startReorder(e, key, table, th, col) {
     active = {
       type: 'reorder', key: key, table: table, th: th, col: col,
-      startX: pointX(e), dragging: false
+      startX: e.clientX, dragging: false
     };
-    addMoveListeners();
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
   }
 
   function onMove(e) {
     if (!active) return;
     if (active.type === 'resize') {
-      var dx = pointX(e) - active.startX;
-      if (!active.moved && Math.abs(dx) < TAP_SLOP) return; // still a tap, not a drag yet
-      if (e.type === 'touchmove' && e.cancelable) e.preventDefault(); // stop the page scrolling mid-resize
-      var nw = Math.max(MIN_COL_W, active.startW + dx);
+      var nw = Math.max(MIN_COL_W, active.startW + (e.clientX - active.startX));
       active.th.style.width = nw + 'px';
       active.widths[active.col] = nw;
       var total = 0;
       for (var k in active.widths) { if (active.widths.hasOwnProperty(k)) total += active.widths[k]; }
       active.table.style.width = total + 'px';
       active.table.style.minWidth = total + 'px';
-      active.moved = true;
       suppressClick = true;
     } else if (active.type === 'reorder') {
       if (!active.dragging) {
-        if (Math.abs(pointX(e) - active.startX) < DRAG_THRESHOLD) return;
+        if (Math.abs(e.clientX - active.startX) < DRAG_THRESHOLD) return;
         active.dragging = true;
         active.th.classList.add('p86-th-dragging');
         document.body.style.userSelect = 'none';
@@ -429,16 +404,10 @@
   function onUp(e) {
     if (!active) { cleanupMove(); return; }
     if (active.type === 'resize') {
-      if (active.moved) {
-        persistWidths(active.key, active.table);
-      } else {
-        // Tap/click on the grip with no drag → shrink this column to fit
-        // its content. Single-tap so it's usable with a finger on mobile.
-        fitColumn(active.key, active.table, active.col);
-      }
+      persistWidths(active.key, active.table);
     } else if (active.type === 'reorder' && active.dragging) {
       active.th.classList.remove('p86-th-dragging');
-      var order = computeDropOrder(active.key, active.table, active.col, pointX(e));
+      var order = computeDropOrder(active.key, active.table, active.col, e.clientX);
       applyOrder(active.table, order);
       applyFrozen(active.table, REGISTRY[active.key].frozen);
       persistOrder(active.key, active.table, order);
@@ -450,7 +419,8 @@
     active = null;
     document.body.style.userSelect = '';
     document.body.style.cursor = '';
-    removeMoveListeners();
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
   }
 
   // Where does the dragged column land? Count how many OTHER columns'
@@ -488,45 +458,6 @@
     saveLayout(key, layout);
   }
 
-  // ── fit column(s) to content ────────────────────────────────────
-  // "Shrink to fit": size a column to its widest content. Cells are
-  // white-space:nowrap + overflow:hidden, so we first CLIP the column to
-  // the minimum, forcing every cell's scrollWidth to report its TRUE
-  // content width (a wide column's scrollWidth would otherwise just equal
-  // its current width and never shrink), then set the column to that max.
-  function recomputeTableWidth(table) {
-    var order = currentOrder(table), widths = currentWidths(table), total = 0;
-    order.forEach(function (c) { total += widths[c]; });
-    table.style.width = total + 'px';
-    table.style.minWidth = total + 'px';
-  }
-  function fitColumnNoPersist(table, col) {
-    var th = table.tHead && table.tHead.rows.length && table.tHead.rows[0].querySelector('[data-col="' + col + '"]');
-    if (!th) return;
-    th.style.width = MIN_COL_W + 'px';
-    void th.offsetWidth;                    // force reflow so scrollWidth = true content width
-    var w = th.scrollWidth;
-    var tb = table.tBodies[0];
-    if (tb) {
-      Array.prototype.forEach.call(tb.rows, function (tr) {
-        var td = tr.querySelector('[data-col="' + col + '"]');
-        if (td) w = Math.max(w, td.scrollWidth);
-      });
-    }
-    // +6 breathing room; cap so a single very long cell can't blow the column out.
-    th.style.width = Math.min(640, Math.max(MIN_COL_W, w + 6)) + 'px';
-  }
-  function fitColumn(key, table, col) {
-    fitColumnNoPersist(table, col);
-    recomputeTableWidth(table);
-    persistWidths(key, table);
-  }
-  function fitAllColumns(key, table) {
-    currentOrder(table).forEach(function (c) { fitColumnNoPersist(table, c); });
-    recomputeTableWidth(table);
-    persistWidths(key, table);
-  }
-
   // ── header wiring (resizer + drag + reset menu) ─────────────────
   function wireHeader(key, table) {
     var frozen = REGISTRY[key].frozen;
@@ -553,9 +484,7 @@
 
       var rz = document.createElement('div');
       rz.className = 'p86-col-resizer';
-      rz.title = 'Tap to shrink-to-fit · drag to resize';
       rz.addEventListener('mousedown', function (e) { startResize(e, key, table, th, c); });
-      rz.addEventListener('touchstart', function (e) { startResize(e, key, table, th, c); }, { passive: false });
       rz.addEventListener('click', function (e) { e.stopPropagation(); });
       th.appendChild(rz);
 
@@ -577,18 +506,6 @@
     menuEl.className = 'p86-tbl-menu';
     menuEl.style.left = x + 'px';
     menuEl.style.top = y + 'px';
-    // Fit-to-content — shrink every column to its widest cell so the whole
-    // table fits with less horizontal scrolling.
-    var fitBtn = document.createElement('button');
-    fitBtn.type = 'button';
-    fitBtn.className = 'p86-tbl-menu-item';
-    fitBtn.textContent = 'Fit columns to content';
-    fitBtn.addEventListener('click', function () {
-      hideResetMenu();
-      var tbl = document.querySelector(REGISTRY[key].selector);
-      if (tbl) fitAllColumns(key, tbl);
-    });
-    menuEl.appendChild(fitBtn);
     var btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'p86-tbl-menu-item';

@@ -2157,10 +2157,6 @@
            set inline by the module so they can track the viewport.) */
         .p86-tbl-scroll {
             position: relative;
-            /* Reserve the vertical scrollbar's gutter so the rightmost
-               column's edge (and its resize handle) never sits under the
-               scrollbar when the table is scrolled fully right on desktop. */
-            scrollbar-gutter: stable;
         }
 
         /* Fixed layout makes column widths honor the px values we assign,
@@ -2203,68 +2199,19 @@
             background-image: linear-gradient(rgba(79, 140, 255, 0.06), rgba(79, 140, 255, 0.06));
         }
 
-        /* Touch devices: drop the sticky first-column pin. On a phone/tablet
-           the pinned column occludes content and fights the finger's
-           horizontal swipe (the column appears "stuck" while the rest of
-           the table scrolls under it). The column becomes an ordinary
-           scrolling column. Desktop (mouse) keeps the freeze — it's useful
-           there for keeping the title in view while scrolling wide tables. */
-        @media (pointer: coarse) {
-            .p86-enhanced .p86-frozen-col {
-                position: static;
-                left: auto;
-            }
-            /* Touch: the resize grip is a real control now (tap = shrink to
-               fit, drag = resize), so keep it visible AND give it a
-               finger-sized hit target instead of the thin mouse edge.
-               `.p86-enhanced` prefix raises specificity so this beats the
-               base `.p86-col-resizer{width:10px}` defined later in the file. */
-            .p86-enhanced .p86-col-resizer {
-                width: 20px;
-                touch-action: none;
-            }
-            /* Nudge the visible divider bar in from the wider hit zone so it
-               still reads as the column's right edge. */
-            .p86-enhanced .p86-col-resizer::after {
-                right: 9px;
-            }
-        }
-
-        /* Resize grabber on the right edge of each header cell. Slightly
-           wider hit zone (10px) so the col-resize edge is easy to grab. */
+        /* Resize grabber on the right edge of each header cell. */
         .p86-col-resizer {
             position: absolute;
             top: 0;
             right: 0;
-            width: 10px;
+            width: 7px;
             height: 100%;
             cursor: col-resize;
             z-index: 20;
             user-select: none;
         }
-        /* Always-visible column divider so it's obvious the columns can be
-           resized (the 7px edge was invisible until hovered — users
-           couldn't tell drag-to-resize existed). A grey vertical bar sits
-           on each header's right edge and brightens to blue on hover. The
-           colour is a semi-opaque grey so it reads on BOTH the dark theme
-           (lighter than the header) and light mode (darker than the header)
-           — the old --border value was near-black and vanished on dark. */
-        .p86-col-resizer::after {
-            content: '';
-            position: absolute;
-            top: 16%;
-            right: 4px;
-            width: 2px;
-            height: 68%;
-            border-radius: 1px;
-            background: rgba(148, 158, 178, 0.65);
-            transition: background 0.12s ease;
-        }
         .p86-col-resizer:hover {
-            background: rgba(79, 140, 255, 0.18);
-        }
-        .p86-col-resizer:hover::after {
-            background: #4f8cff;
+            background: rgba(79, 140, 255, 0.4);
         }
 
         /* Header being dragged to reorder. */
