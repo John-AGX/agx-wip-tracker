@@ -1432,12 +1432,12 @@ function ensureOrbit3D(o){
     _orbitEl=document.createElement('div'); _orbitEl.className='ng-orbit-3d';
     // Photorealistic 3D runs in an isolated same-origin iframe (loads Maps beta + Map3DElement).
     var frame=document.createElement('iframe'); frame.className='ng-orbit-3d-frame';
-    frame.src='/orbit3d.html'; frame.setAttribute('title','3D site view'); frame.setAttribute('allow','fullscreen');
+    frame.src='/orbit3d.html?v=2'; frame.setAttribute('title','3D site view'); frame.setAttribute('allow','fullscreen');
     _orbitEl.appendChild(frame); _orbitEl.__frame=frame;
     var exitB=document.createElement('button'); exitB.type='button'; exitB.className='ng-orbit-exit';
     exitB.innerHTML='&#x2715; Exit 3D'; exitB.addEventListener('click', exitOrbit3D); _orbitEl.appendChild(exitB);
     var hint=document.createElement('div'); hint.className='ng-orbit-hint';
-    hint.textContent='Photorealistic 3D — drag to orbit · scroll to zoom · your building is highlighted · Exit to return to the working map.';
+    hint.textContent='Photorealistic 3D — drag to look around · scroll to zoom · tap a building’s % pin for its phases & numbers · Exit to return to the working map.';
     _orbitEl.appendChild(hint);
     (tab.querySelector('.ng-canvas-area')||tab).appendChild(_orbitEl);
     // The 3D page posts "ready" once its Maps SDK + tiles are loaded; then we (re)feed it.
@@ -1452,18 +1452,40 @@ function ensureOrbit3D(o){
   if(_orbitReady) postOrbitData();    // frame already loaded → (re)feed it now
 }
 // Feed the 3D iframe the job center + building footprints (t1 node.polygon = lat/lng corners,
-// height estimated from stories). It extrudes each as a highlighted 3D block over the tiles.
+// height estimated from stories). The iframe extrudes each as a highlighted 3D block AND
+// floats an interactive data pin above it (% complete), with a docked info card on click —
+// so the 3D view carries the same working data as the flat map, not just scenery. The
+// per-building phases/financials are computed HERE (the iframe never holds app data).
 function postOrbitData(){
   var f=_orbitEl && _orbitEl.__frame; if(!f || !f.contentWindow) return;
   var o=_orbitPending || jobOrigin(); if(!o) return;
   var buildings=[];
   E.nodes().forEach(function(n){
     if(n.type!=='t1' || !n.polygon || n.polygon.length<3) return;
+    // Phases + change orders wired into this building, with their own %.
+    var phases=[];
+    try{
+      E.wires().forEach(function(w){
+        if(w.toNode!==n.id) return;
+        var s=E.findNode(w.fromNode);
+        if(!s || (s.type!=='t2' && s.type!=='co')) return;
+        var nm=(s.data && (s.data.phase || s.data.name || s.data.title)) || s.label || (s.type==='co'?'Change order':'Phase');
+        phases.push({ name:String(nm), pct:Math.round(s.pctComplete||0), co:s.type==='co' });
+      });
+    }catch(_){}
+    var total=0, actual=0;
+    try{ E.resetComp(); total=E.getOutput(n,0)||0; }catch(_){}
+    try{ E.resetComp(); actual=E.getActual(n)||0; }catch(_){}
     buildings.push({
       path: n.polygon.map(function(v){ return { lat:Number(v.lat), lng:Number(v.lng) }; }),
       label: n.label||'Building',
       pct: Math.round(n.pctComplete||0),
-      heightM: (n.levels && n.levels.length) ? n.levels.length*3.2 : 8
+      heightM: (n.levels && n.levels.length) ? n.levels.length*3.2 : 8,
+      levels: (n.levels && n.levels.length) || 0,
+      units: (function(){ var u=0; try{ (n.levels||[]).forEach(function(l){ u += (l.units && l.units.length) || (Number(l.unitCount)||0); }); }catch(_){} return u; })(),
+      total: total,
+      actual: actual,
+      phases: phases
     });
   });
   try{ f.contentWindow.postMessage({ type:'p86-orbit3d-render', center:{ lat:o.lat, lng:o.lng }, buildings:buildings }, location.origin); }catch(_){}

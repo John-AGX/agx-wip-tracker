@@ -5,45 +5,143 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>3D Site View — Project 86</title>
 <style>
-  html,body{margin:0;height:100%;background:#0b0e16;overflow:hidden;font-family:system-ui,-apple-system,'Segoe UI',sans-serif}
+  html,body{margin:0;height:100%;background:#0b0e16;overflow:hidden;font-family:Inter,system-ui,-apple-system,'Segoe UI',sans-serif}
   #host,gmp-map-3d{display:block;width:100%;height:100%}
   #err{position:absolute;inset:0;display:none;flex-direction:column;gap:8px;align-items:center;justify-content:center;color:#aeb4c4;font-size:13px;text-align:center;padding:28px;line-height:1.55}
   #err.on{display:flex}
   #err b{color:#e6e9f2;font-size:14px}
+  /* Docked building card — same brand surface as the app inspector. */
+  #card{position:absolute;left:14px;bottom:44px;width:280px;max-height:62vh;overflow-y:auto;display:none;
+    background:rgba(15,23,42,.94);border:1px solid rgba(34,211,238,.35);border-radius:12px;
+    box-shadow:0 12px 32px rgba(0,0,0,.55);color:#e6e9f2;padding:14px 16px 12px;z-index:20}
+  #card.on{display:block}
+  #card h3{margin:0 34px 2px 0;font-size:14.5px;font-weight:700;color:#fff;line-height:1.3}
+  #card .sub{font-size:11px;color:#8b93a7;margin-bottom:10px}
+  #card .x{position:absolute;top:8px;right:8px;width:26px;height:26px;border:none;border-radius:7px;
+    background:transparent;color:#aeb4c4;font-size:15px;cursor:pointer}
+  #card .x:hover{background:rgba(255,255,255,.08)}
+  .bigpct{display:flex;align-items:baseline;gap:8px;margin-bottom:4px}
+  .bigpct b{font-size:26px;color:#22D3EE;font-weight:700}
+  .bigpct span{font-size:11px;color:#8b93a7;letter-spacing:.4px;text-transform:uppercase}
+  .bar{height:6px;border-radius:4px;background:rgba(255,255,255,.10);overflow:hidden;margin-bottom:12px}
+  .bar i{display:block;height:100%;border-radius:4px;background:#22D3EE}
+  .kpis{display:grid;grid-template-columns:1fr 1fr;gap:6px 10px;margin-bottom:12px}
+  .kpi{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.07);border-radius:8px;padding:6px 9px}
+  .kpi label{display:block;font-size:9.5px;color:#8b93a7;letter-spacing:.5px;text-transform:uppercase}
+  .kpi div{font-size:13px;font-weight:600;color:#fff;margin-top:1px}
+  .ph-head{font-size:10px;color:#8b93a7;letter-spacing:.5px;text-transform:uppercase;margin-bottom:6px}
+  .ph{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+  .ph .nm{flex:1;min-width:0;font-size:12px;color:#dbe1ee;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .ph .pbar{flex:0 0 72px;height:5px;border-radius:3px;background:rgba(255,255,255,.10);overflow:hidden}
+  .ph .pbar i{display:block;height:100%;background:#4f8cff}
+  .ph .pv{flex:0 0 34px;text-align:right;font-size:11px;color:#9bbcff;font-variant-numeric:tabular-nums}
+  .ph.co .pbar i{background:#fbbf24}
+  .ph.co .pv{color:#fbd77a}
+  /* Orbit control */
+  #orbitBtn{position:absolute;right:14px;bottom:44px;z-index:20;display:none;align-items:center;gap:6px;
+    padding:7px 13px;border:1px solid rgba(34,211,238,.4);border-radius:9px;background:rgba(15,23,42,.9);
+    color:#9be9f5;font-size:12px;font-weight:600;cursor:pointer}
+  #orbitBtn.on{display:flex}
+  #orbitBtn:hover{background:rgba(34,211,238,.14)}
 </style>
 </head>
 <body>
 <div id="host"></div>
+<div id="card"><button class="x" id="cardX" type="button">✕</button><div id="cardBody"></div></div>
+<button id="orbitBtn" type="button">⟳ Orbit</button>
 <div id="err"></div>
 <script>
 /* Isolated Photorealistic 3D page. Loads Google Maps on the BETA channel (3D Maps /
    Map3DElement are Preview-only) so the parent app can stay on the production "weekly"
-   channel. Renders the real Google-Earth 3D tiles + the job's building footprints as
-   extruded, highlighted 3D blocks. The parent (nodegraph/ui.js) feeds the job via
-   postMessage; this page never holds app data of its own. */
+   channel. Renders the Google-Earth 3D tiles, the job's building footprints as extruded
+   highlighted blocks, an INTERACTIVE data pin above each building (% complete, colored
+   by status), and a docked building card (phases + financials) on pin click. The intro
+   orbit stops the moment the user grabs the map; the ⟳ Orbit button restarts it. The
+   parent (nodegraph/ui.js postOrbitData) feeds everything via postMessage; this page
+   never holds app data of its own. */
 (function(){
   'use strict';
   var errEl=document.getElementById('err'), host=document.getElementById('host');
+  var cardEl=document.getElementById('card'), cardBody=document.getElementById('cardBody');
+  var orbitBtn=document.getElementById('orbitBtn');
   function fail(title, detail){ errEl.innerHTML='<b>'+title+'</b>'+(detail?('<div>'+detail+'</div>'):''); errEl.classList.add('on'); }
-  var Lib=null, map3d=null, pending=null, drawn=[];
+  var Lib=null, MarkerLib=null, map3d=null, pending=null, drawn=[], center=null, orbiting=false;
+
+  function esc(s){ return String(s==null?'':s).replace(/[&<>"']/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];}); }
+  function money(n){ n=Number(n)||0; return '$'+Math.round(n).toLocaleString('en-US'); }
+  function pctColor(p){ return p>=100 ? '#34d399' : (p>0 ? '#4f8cff' : '#64748b'); }
+  function centroid(path){
+    var la=0,ln=0; path.forEach(function(p){ la+=p.lat; ln+=p.lng; });
+    return { lat:la/path.length, lng:ln/path.length };
+  }
 
   // Standard Google inline bootstrap, pinned to the beta release channel.
   function boot(key){
     (g=>{var h,a,k,p="The Google Maps JavaScript API",c="google",l="importLibrary",q="__ib__",m=document,b=window;b=b[c]||(b[c]={});var d=b.maps||(b.maps={}),r=new Set,e=new URLSearchParams,u=()=>h||(h=new Promise(async(f,n)=>{await (a=m.createElement("script"));e.set("libraries",[...r]+"");for(k in g)e.set(k.replace(/[A-Z]/g,t=>"_"+t[0].toLowerCase()),g[k]);e.set("callback",c+".maps."+q);a.src="https://maps."+c+"apis.com/maps/api/js?"+e;d[q]=f;a.onerror=()=>h=n(Error(p+" could not load."));a.nonce=m.querySelector("script[nonce]")?.nonce||"";m.head.append(a)}));d[l]?console.warn(p+" only loads once. Ignoring:",g):d[l]=(f,...n)=>r.add(f)&&u().then(()=>d[l](f,...n))})({key:key, v:"beta"});
-    google.maps.importLibrary("maps3d").then(function(lib){
-      Lib=lib;
+    Promise.all([
+      google.maps.importLibrary("maps3d"),
+      google.maps.importLibrary("marker").catch(function(){ return null; })
+    ]).then(function(libs){
+      Lib=libs[0]; MarkerLib=libs[1];
       try{ parent.postMessage({ type:'p86-orbit3d-ready' }, '*'); }catch(_){}
       if(pending){ render(pending); }
     }).catch(function(e){ fail('3D view unavailable', 'The Maps 3D library failed to load. '+((e&&e.message)||'')); });
   }
 
-  function clearDrawn(){ drawn.forEach(function(el){ try{ el.remove(); }catch(_){} }); drawn=[]; }
+  function clearDrawn(){ drawn.forEach(function(el){ try{ el.remove(); }catch(_){} }); drawn=[]; hideCard(); }
+  function hideCard(){ cardEl.classList.remove('on'); }
+  document.getElementById('cardX').addEventListener('click', hideCard);
+
+  function showCard(b){
+    var pct=Math.max(0, Math.min(100, Number(b.pct)||0));
+    var html='';
+    html+='<h3>'+esc(b.label)+'</h3>';
+    html+='<div class="sub">'+(b.levels?b.levels+' level'+(b.levels===1?'':'s'):'')+(b.levels&&b.units?' · ':'')+(b.units?b.units+' units':'')+((b.levels||b.units)?'':'Traced building')+'</div>';
+    html+='<div class="bigpct"><b>'+pct+'%</b><span>complete</span></div>';
+    html+='<div class="bar"><i style="width:'+pct+'%;background:'+pctColor(pct)+'"></i></div>';
+    html+='<div class="kpis">'+
+      '<div class="kpi"><label>Total</label><div>'+money(b.total)+'</div></div>'+
+      '<div class="kpi"><label>Spent</label><div>'+money(b.actual)+'</div></div>'+
+    '</div>';
+    var phs=(b.phases||[]);
+    if(phs.length){
+      html+='<div class="ph-head">Phases &amp; change orders</div>';
+      phs.forEach(function(p){
+        var pp=Math.max(0,Math.min(100,Number(p.pct)||0));
+        html+='<div class="ph'+(p.co?' co':'')+'"><span class="nm">'+esc(p.name)+'</span>'+
+          '<span class="pbar"><i style="width:'+pp+'%"></i></span><span class="pv">'+pp+'%</span></div>';
+      });
+    } else {
+      html+='<div class="ph-head">No phases linked yet</div>';
+    }
+    cardBody.innerHTML=html;
+    cardEl.classList.add('on');
+  }
+
+  function startOrbit(){
+    if(!map3d || !center) return;
+    try{
+      map3d.flyCameraAround({
+        camera:{ center:{ lat:center.lat, lng:center.lng, altitude:0 }, tilt:62, range:340, heading:map3d.heading||0 },
+        durationMillis:70000, repeatCount:Infinity
+      });
+      orbiting=true; orbitBtn.classList.remove('on');
+    }catch(_){}
+  }
+  function stopOrbit(){
+    if(!map3d) return;
+    if(orbiting){ try{ map3d.stopCameraAnimation(); }catch(_){} orbiting=false; }
+    orbitBtn.classList.add('on');
+  }
+  orbitBtn.addEventListener('click', startOrbit);
 
   function render(data){
     if(!Lib){ pending=data; return; }
     pending=null;
     var c=data && data.center; if(!c) return;
+    center=c;
     var Map3DElement=Lib.Map3DElement, Polygon3DElement=Lib.Polygon3DElement, AltitudeMode=Lib.AltitudeMode, MapMode=Lib.MapMode;
+    var MarkerEl=Lib.Marker3DInteractiveElement || Lib.Marker3DElement;
     try{
       if(!map3d){
         map3d=new Map3DElement({
@@ -53,6 +151,10 @@
         });
         map3d.style.width='100%'; map3d.style.height='100%';
         host.appendChild(map3d);
+        // The intro orbit yields to the user: any grab of the map stops the
+        // spin (and reveals the ⟳ Orbit button to bring it back).
+        map3d.addEventListener('pointerdown', stopOrbit, { capture:true });
+        map3d.addEventListener('wheel', stopOrbit, { capture:true, passive:true });
       } else {
         map3d.center={ lat:c.lat, lng:c.lng, altitude:0 };
         map3d.range=340; map3d.tilt=62; map3d.heading=0;
@@ -79,15 +181,36 @@
         map3d.appendChild(poly);
         drawn.push(poly);
       }catch(_){}
+      // Interactive data pin floating above the roof: % complete at a glance,
+      // click for the full building card. Extruded stem ties it to the block.
+      if(!MarkerEl) return;
+      try{
+        var cen=centroid(b.path);
+        var pct=Math.max(0,Math.min(100,Number(b.pct)||0));
+        var mk=new MarkerEl({
+          position:{ lat:cen.lat, lng:cen.lng, altitude:h+12 },
+          altitudeMode:(AltitudeMode && AltitudeMode.RELATIVE_TO_GROUND) || undefined,
+          extruded:true,
+          label:b.label||''
+        });
+        if(MarkerLib && MarkerLib.PinElement){
+          var pin=new MarkerLib.PinElement({
+            background:pctColor(pct),
+            borderColor:'#0F172A',
+            glyphColor:'#fff',
+            glyph:pct+'%',
+            scale:1.25
+          });
+          mk.append(pin);
+        }
+        mk.addEventListener('gmp-click', function(){ stopOrbit(); showCard(b); });
+        map3d.appendChild(mk);
+        drawn.push(mk);
+      }catch(_){}
     });
 
     // Gentle intro orbit around the site; the user can grab it to look around freely.
-    try{
-      map3d.flyCameraAround({
-        camera:{ center:{ lat:c.lat, lng:c.lng, altitude:0 }, tilt:62, range:340, heading:0 },
-        durationMillis:70000, repeatCount:Infinity
-      });
-    }catch(_){}
+    startOrbit();
   }
 
   window.addEventListener('message', function(ev){
