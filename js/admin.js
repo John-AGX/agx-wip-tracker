@@ -1624,6 +1624,8 @@
   var _orgBrandingSaveTimer = null;
   var _orgLogos = [];        // [{url,label}] logo library
   var _orgPrimary = '';      // primary logo url (used by titleblock + email)
+  var _orgLight = '';        // logo url shown in LIGHT-mode app UI ('' = use primary)
+  var _orgDark = '';         // logo url shown in DARK-mode app UI  ('' = use primary)
   function loadOrgBranding() {
     var box = document.getElementById('org-branding-form');
     if (!box) return;
@@ -1646,6 +1648,9 @@
     _orgLogos = Array.isArray(b.logos) ? b.logos.filter(function (l) { return l && l.url; }).map(function (l) { return { url: l.url, label: l.label || '' }; }) : [];
     if (!_orgLogos.length && b.logo_url) _orgLogos = [{ url: b.logo_url, label: 'Primary' }];
     _orgPrimary = (b.logo_url && _orgLogos.some(function (l) { return l.url === b.logo_url; })) ? b.logo_url : ((_orgLogos[0] && _orgLogos[0].url) || '');
+    // Per-mode logo picks — keep only if still present in the library.
+    _orgLight = (b.logo_light_url && _orgLogos.some(function (l) { return l.url === b.logo_light_url; })) ? b.logo_light_url : '';
+    _orgDark  = (b.logo_dark_url  && _orgLogos.some(function (l) { return l.url === b.logo_dark_url;  })) ? b.logo_dark_url  : '';
     var primary = b.primary_color || '#4f8cff';
     var accent  = b.accent_color  || '#4f8cff';
     var footer  = b.footer_address || '';
@@ -1653,7 +1658,7 @@
       '<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">' +
         '<div style="grid-column:1 / -1;">' +
           '<label style="font-size:11px;color:var(--text-dim,#aaa);text-transform:uppercase;letter-spacing:0.5px;font-weight:600;display:block;margin-bottom:2px;">Logos</label>' +
-          '<div style="font-size:10px;color:var(--text-dim,#888);margin-bottom:8px;">Upload as many as you need (color, white/knockout, mark, horizontal…). The ⭐ Primary one is used on titleblocks &amp; emails.</div>' +
+          '<div style="font-size:10px;color:var(--text-dim,#888);margin-bottom:8px;">Upload as many as you need (color, white/knockout, mark, horizontal…). The ⭐ Primary one is used on titleblocks &amp; emails; ☀ Light / 🌙 Dark pick which logo shows in the sidebar per theme (falls back to Primary).</div>' +
           '<div id="org-brand-logos" style="display:flex;flex-wrap:wrap;gap:10px;"></div>' +
           '<div style="display:flex;gap:8px;align-items:center;margin-top:10px;">' +
             '<button type="button" id="org-brand-upload-btn" class="ee-btn secondary" style="font-size:11px;white-space:nowrap;">&#x1F4E4; Upload logo…</button>' +
@@ -1753,6 +1758,7 @@
     if (!_orgLogos.length) { host.innerHTML = '<div style="font-size:12px;color:var(--text-dim,#888);padding:6px 0;">No logos yet — upload one or paste a URL.</div>'; return; }
     host.innerHTML = _orgLogos.map(function(l, i) {
       var isP = l.url === _orgPrimary;
+      var isL = l.url === _orgLight, isD = l.url === _orgDark;
       return '<div style="width:158px;border:1px solid ' + (isP ? '#f5a623' : 'var(--border,#333)') + ';border-radius:8px;padding:8px;">' +
         '<div style="background:#fff;border-radius:5px;padding:6px;height:60px;display:flex;align-items:center;justify-content:center;position:relative;">' +
           (isP ? '<span title="Primary" style="position:absolute;top:2px;right:4px;font-size:13px;">⭐</span>' : '') +
@@ -1763,16 +1769,24 @@
           '<label style="font-size:10.5px;color:' + (isP ? '#f5a623' : 'var(--text-dim,#aaa)') + ';display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="radio" name="org-brand-primary-pick" data-logo-primary="' + i + '" ' + (isP ? 'checked' : '') + ' /> Primary</label>' +
           '<button type="button" data-logo-remove="' + i + '" title="Remove" style="background:transparent;border:0;color:#f87171;cursor:pointer;font-size:13px;">✕</button>' +
         '</div>' +
+        '<div style="display:flex;gap:12px;align-items:center;margin-top:5px;font-size:10px;">' +
+          '<label title="Show this logo in light mode" style="display:flex;align-items:center;gap:3px;cursor:pointer;color:' + (isL ? 'var(--accent,#4f8cff)' : 'var(--text-dim,#aaa)') + ';"><input type="checkbox" data-logo-light="' + i + '" ' + (isL ? 'checked' : '') + ' /> ☀ Light</label>' +
+          '<label title="Show this logo in dark mode" style="display:flex;align-items:center;gap:3px;cursor:pointer;color:' + (isD ? 'var(--accent,#4f8cff)' : 'var(--text-dim,#aaa)') + ';"><input type="checkbox" data-logo-dark="' + i + '" ' + (isD ? 'checked' : '') + ' /> 🌙 Dark</label>' +
+        '</div>' +
       '</div>';
     }).join('');
     host.querySelectorAll('[data-logo-label]').forEach(function(inp) { inp.addEventListener('input', function() { var i = +inp.getAttribute('data-logo-label'); if (_orgLogos[i]) { _orgLogos[i].label = inp.value; scheduleSaveOrgBranding(); } }); });
     host.querySelectorAll('[data-logo-primary]').forEach(function(r) { r.addEventListener('change', function() { var i = +r.getAttribute('data-logo-primary'); if (_orgLogos[i]) { _orgPrimary = _orgLogos[i].url; renderLogoList(); scheduleSaveOrgBranding(); } }); });
-    host.querySelectorAll('[data-logo-remove]').forEach(function(btn) { btn.addEventListener('click', function() { var i = +btn.getAttribute('data-logo-remove'); var was = _orgLogos[i] && _orgLogos[i].url; _orgLogos.splice(i, 1); if (was === _orgPrimary) _orgPrimary = (_orgLogos[0] && _orgLogos[0].url) || ''; renderLogoList(); scheduleSaveOrgBranding(); }); });
+    host.querySelectorAll('[data-logo-remove]').forEach(function(btn) { btn.addEventListener('click', function() { var i = +btn.getAttribute('data-logo-remove'); var was = _orgLogos[i] && _orgLogos[i].url; _orgLogos.splice(i, 1); if (was === _orgPrimary) _orgPrimary = (_orgLogos[0] && _orgLogos[0].url) || ''; if (was === _orgLight) _orgLight = ''; if (was === _orgDark) _orgDark = ''; renderLogoList(); scheduleSaveOrgBranding(); }); });
+    host.querySelectorAll('[data-logo-light]').forEach(function(cb) { cb.addEventListener('change', function() { var i = +cb.getAttribute('data-logo-light'); _orgLight = (cb.checked && _orgLogos[i]) ? _orgLogos[i].url : ''; renderLogoList(); scheduleSaveOrgBranding(); }); });
+    host.querySelectorAll('[data-logo-dark]').forEach(function(cb) { cb.addEventListener('change', function() { var i = +cb.getAttribute('data-logo-dark'); _orgDark = (cb.checked && _orgLogos[i]) ? _orgLogos[i].url : ''; renderLogoList(); scheduleSaveOrgBranding(); }); });
   }
 
   function currentOrgBrandingFromInputs() {
     return {
       logo_url: _orgPrimary || '',
+      logo_light_url: _orgLight || '',
+      logo_dark_url: _orgDark || '',
       logos: _orgLogos.map(function(l) { return { url: l.url, label: l.label || '' }; }),
       primary_color: (document.getElementById('org-brand-primary-text') || {}).value || '',
       accent_color: (document.getElementById('org-brand-accent-text') || {}).value || '',
@@ -1796,6 +1810,8 @@
         statusEl.innerHTML = '<span style="color:#34d399;">&#x2713; Saved ' + new Date().toLocaleTimeString() + '</span>';
         setTimeout(function() { if (statusEl && /Saved/.test(statusEl.textContent || '')) statusEl.textContent = ''; }, 2500);
       }
+      // Live-update the sidebar brand lockup (logo/name may have changed).
+      if (window.p86RefreshOrgBrand) window.p86RefreshOrgBrand();
     }).catch(function(err) {
       if (statusEl) { statusEl.innerHTML = '<span style="color:#f87171;">Save failed: ' + escapeHTML(err.message || '') + '</span>'; }
     });

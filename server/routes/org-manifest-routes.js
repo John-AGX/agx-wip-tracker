@@ -495,6 +495,8 @@ router.get('/branding', requireAuth, async (req, res) => {
       name: row.name || '',
       branding: {
         logo_url: typeof b.logo_url === 'string' ? b.logo_url : '',
+        logo_light_url: typeof b.logo_light_url === 'string' ? b.logo_light_url : '',
+        logo_dark_url: typeof b.logo_dark_url === 'string' ? b.logo_dark_url : '',
         logos: normLogos(b.logos),
         primary_color: typeof b.primary_color === 'string' ? b.primary_color : '',
         accent_color: typeof b.accent_color === 'string' ? b.accent_color : '',
@@ -521,6 +523,10 @@ router.put('/branding', requireAuth, requireOrg, requireCapability('ROLES_MANAGE
     const b = (cur.branding && typeof cur.branding === 'object') ? Object.assign({}, cur.branding) : {};
     const body = req.body || {};
     if (typeof body.logo_url === 'string') b.logo_url = body.logo_url.slice(0, 2000);
+    // Per-mode logo choices (which library logo shows in light vs dark UI).
+    // Empty string = "use primary" (falls back client-side).
+    if (typeof body.logo_light_url === 'string') b.logo_light_url = body.logo_light_url.slice(0, 2000);
+    if (typeof body.logo_dark_url === 'string') b.logo_dark_url = body.logo_dark_url.slice(0, 2000);
     if (Array.isArray(body.logos)) b.logos = normLogos(body.logos);
     if (typeof body.primary_color === 'string' && /^#[0-9a-f]{3,8}$/i.test(body.primary_color)) b.primary_color = body.primary_color;
     if (typeof body.accent_color === 'string' && /^#[0-9a-f]{3,8}$/i.test(body.accent_color)) b.accent_color = body.accent_color;
