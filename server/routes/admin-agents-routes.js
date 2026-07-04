@@ -2028,7 +2028,7 @@ const AGENT_SYSTEM_BASELINE = {
     '  • job: `{field_updates?, phase_updates?, node_values?, wire_updates?, qb_assignments?, change_orders?, purchase_orders?, invoices?, notes?, graph?}`',
     '  • lead: `{op:\'create\'|\'update\', fields, notes?}`',
     '  • schedule: `{blocks: [{op, entry_id?, jobId, startDate, days, crew, ...}]}`',
-    '  • system: `{watch_ops?, skill_pack_ops?, field_tool_ops?, link_ops?}`. link_ops includes `{op:\'attach_files\', attachment_ids:[...], target_entity_type, target_entity_id}`.',
+    '  • system: `{skill_pack_ops?, field_tool_ops?, link_ops?}`. link_ops includes `{op:\'attach_files\', attachment_ids:[...], target_entity_type, target_entity_id}`.',
     '  • report: `{op, template_type, parent_type, parent_id, title?, cover_page?, sections?, section_adds?, section_updates?, section_deletes?}`',
     '',
     'Canonical field names (do NOT invent fields — the dispatcher rejects unknown columns and lists the valid set in its error):',
@@ -2064,28 +2064,11 @@ const AGENT_SYSTEM_BASELINE = {
     "You're capable, but you are NOT the estimator/analyst. For DEEP business reasoning — estimating, WIP, job-costing, margins, scope analysis, pricing, anything needing heavy number-crunching or construction judgment — hand it to 86 with `escalate_to_86` (frame the ask + the resolved entity ids + any figures you already pulled). 86 reasons and answers; you relay it in your own words. 86 does NOT write during an escalation, so if its answer implies a change, YOU apply it via scribe_write. Keep your own analysis light and factual — escalate the heavy lifting rather than winging it.",
   ].join('\n'),
 
-  // Legacy 'cra' (directory) and 'staff' (Chief of Staff) baselines have been
-  // retired. 86 absorbs both roles. These keys remain only as null
-  // back-compat shims so any old `managed_agent_registry` row pointing
-  // at 'cra' or 'staff' resolves to 86's baseline at sync time, and
-  // the Anthropic-side agents can be archived via /managed/<key>/delete
-  // without breaking the sync loop.
-  cra:   null,
-  staff: null,
-
-  // The legacy 'ag' key — back-compat alias for 'job'. The DB migration
-  // renamed any 'ag' rows to 'job' on boot, so this key should never
-  // be resolved against managed_agent_registry. customToolsFor still
-  // has a dead-code 'ag' branch; pointing it at 86's baseline ensures
-  // nothing surfaces an old persona if it ever does fire.
-  ag:    null, // resolved at lookup time to AGENT_SYSTEM_BASELINE.job
+  // Legacy 'ag' / 'cra' / 'staff' alias shims removed 2026-07-03 — the
+  // registry has been clean (assistant/job/scribe only, 0 stale) since
+  // the 2026-06-18 staff archive, and the boot migration renames any
+  // old 'ag' rows to 'job'. The three live keys above are the whole map.
 };
-// Resolve the back-compat aliases after the literal initializer runs.
-// Every retired agent_key now resolves to 86's baseline so a stale
-// registry row sync-loops harmlessly until the row is deleted.
-AGENT_SYSTEM_BASELINE.ag = AGENT_SYSTEM_BASELINE.job;
-AGENT_SYSTEM_BASELINE.cra = AGENT_SYSTEM_BASELINE.job;
-AGENT_SYSTEM_BASELINE.staff = AGENT_SYSTEM_BASELINE.job;
 
 // Convert one of our local tool definitions (the ESTIMATE_TOOLS /
 // JOB_TOOLS / ClientDirectoryTools / STAFF_TOOLS shape) into Anthropic's
@@ -2319,27 +2302,11 @@ function modelForAgentKey(agentKey) {
 
 // Resolve the Project 86-side custom tools for an agent. Goes through the
 // internals export from ai-routes so we don't duplicate definitions.
-// Returns true iff agentKey has its own dedicated branch in
-// customToolsFor below. Used by the Tier 3 inherit-from path to
-// detect "fall through to parent template" cases.
-function agentKeyHasOwnBranch(agentKey) {
-  return (
-    agentKey === 'job' || agentKey === 'ag' ||
-    agentKey === 'cra' || agentKey === 'staff' ||
-    agentKey === 'scribe' || agentKey === 'assistant'
-  );
-}
-
+// (Tier-3 dynamic staff inherit-from recursion removed 2026-07-03 with
+// the staff-spawn feature — the three live keys each have a branch.)
 function customToolsFor(agentKey, opts) {
   const aiInternals = require('./ai-routes-internals');
   if (!aiInternals) return [];
-  // Phase S6 — Tier 3 (dynamic) staff agents inherit the tool set of
-  // a standing staff via opts.inheritFromKey. Callers (ensureManagedAgent
-  // for dynamic keys) pass the parent template; we recurse on it so the
-  // dynamic agent reuses an already-vetted, focused tool subset.
-  if (opts && opts.inheritFromKey && !agentKeyHasOwnBranch(agentKey)) {
-    return customToolsFor(opts.inheritFromKey);
-  }
   // Scribe — the write-only worker. ONE custom tool: emit_payload_file.
   // No reads, memory, navigate, or builtin toolset. 86 plans + hands off a
   // fully-specified write intent; the Scribe authors the payload, dry-runs
@@ -2413,7 +2380,7 @@ function customToolsFor(agentKey, opts) {
   // the WEB_TOOLS prefix; strip those because we configure web_search
   // / web_fetch through the built-in toolset above instead.
   let tools = [];
-  if (agentKey === 'job' || agentKey === 'ag' || agentKey === 'cra' || agentKey === 'staff') {
+  if (agentKey === 'job') {
     // Principal = router. Slim toolset: handoffs + light routing reads
     // + CoS introspection + memory + watches + skill-pack curation +
     // dynamic spawning + self-diagnose + navigation. All domain-specific
@@ -2442,11 +2409,7 @@ function customToolsFor(agentKey, opts) {
     //   detail
     //   search_my_kb          → consolidated into `recall` (which
     //   search_org_kb           queries memories org-wide by default).
-    //   list_watches          → admin tool (watches are configured
-    //   read_recent_watch_runs   via emit_payload_file system.watch_ops
-    //                            now anyway).
-    //   propose_create_staff_  → very rare operation; run via direct
-    //     agent                   admin endpoint when needed.
+    //   (watch + staff-spawn tools removed 2026-07-03 with their features.)
     //
     // Net: 22 → 11 custom tools (+1 builtin toolset wrapper = 12 total).
     // System prompt + tool schemas drop another ~5-6K tokens per turn.
@@ -2589,32 +2552,12 @@ async function ensureManagedAgent(agentKey, organization) {
     throw new Error('ensureManagedAgent requires an organization row (Phase 2c — every agent is per-tenant now).');
   }
 
-  // Phase S6 — Tier 3 dynamic agents don't have a literal entry in
-  // AGENT_SYSTEM_BASELINE. Look up the spec row and build a baseline
-  // from role_card + the inherits_from template's system prompt.
-  let baseline = AGENT_SYSTEM_BASELINE[agentKey];
-  let inheritFromKey = null;
+  // Only the three live keys (job / assistant / scribe) have baselines.
+  // (Tier-3 dynamic staff-agent spawning removed 2026-07-03 — zero ever
+  // spawned; the staff_agents table remains, unread.)
+  const baseline = AGENT_SYSTEM_BASELINE[agentKey];
   if (!baseline) {
-    const specRes = await pool.query(
-      `SELECT role_card, system_prompt, routing_hints, tier, archived_at
-         FROM staff_agents
-        WHERE agent_key = $1 AND organization_id = $2`,
-      [agentKey, organization.id]
-    );
-    const spec = specRes.rows[0];
-    if (!spec || spec.archived_at) {
-      throw new Error('Unknown agent key: ' + agentKey + ' (no static baseline and no live staff_agents row).');
-    }
-    inheritFromKey = (spec.routing_hints && spec.routing_hints.inherits_from) || null;
-    if (inheritFromKey) {
-      const parentBaseline = AGENT_SYSTEM_BASELINE[inheritFromKey] || '';
-      baseline = (spec.system_prompt && spec.system_prompt.trim()) ||
-        'You are ' + agentKey + ' — a Project 86 Tier 3 staff agent spawned for: ' + (spec.role_card || '(no role card)') + '\n\n' +
-        'You receive requests from the Principal (also "86"). Behave like your parent template (' + inheritFromKey + '): focused on your domain, do NOT speak directly to the user, return structured findings or proposals for the Principal to weave into the conversation.\n\n' +
-        '--- Parent template baseline ---\n' + parentBaseline;
-    } else {
-      throw new Error('Tier 3 staff agent ' + agentKey + ' has no inherits_from in routing_hints — cannot build baseline.');
-    }
+    throw new Error('Unknown agent key: ' + agentKey + ' (live keys: job, assistant, scribe).');
   }
 
   const existing = await pool.query(
@@ -2628,7 +2571,7 @@ async function ensureManagedAgent(agentKey, organization) {
   const aiInternals = require('./ai-routes-internals');
   const model = modelForAgentKey(agentKey);
   const skills = await collectSkillsFor(agentKey, organization);
-  const customTools = customToolsFor(agentKey, inheritFromKey ? { inheritFromKey } : undefined);
+  const customTools = customToolsFor(agentKey);
   const builtinTools = builtinToolsetFor(agentKey);
   const mcpServers = await collectMcpServersFor(organization);
 
@@ -2671,107 +2614,14 @@ async function ensureManagedAgent(agentKey, organization) {
 // Project 86 Agent Platform — Phase S2 (Crew scaffolding)
 // ──────────────────────────────────────────────────────────────────
 
-// Canonical "standing staff" — the Tier 2 agents seeded for every
-// org when the platform flag is on. Phase S2 ships ONE entry
-// (Estimator) end-to-end as the foundation pilot. S3 expands this
-// list to PM / Scheduler / Directory / Sales / etc.
-//
-// Each entry mirrors the staff_agents table schema. Adding a row
-// here makes the agent available org-wide; the seed helper below
-// upserts the spec into the DB and triggers ensureManagedAgent to
-// register the Anthropic-side agent.
-// ARCHIVED 2026-06-18: the 5 standing staff/watcher agents (86-estimator/pm/
-// scheduler/directory/sales) were retired and archived. The sync-handoff path
-// that invoked them was already a stub; the live architecture is the 3-tier
-// assistant → job(86) → scribe. Emptied (not deleted) so every consumer
-// (liveStaffKeys in reregister/sync/audit, seedStandingStaffAgents, sync-all
-// staff inclusion) resolves to "no staff" and cannot re-register them. The
-// per-spec data lives in git history if the proactive-watcher feature is ever
-// revived. See the agent-audit report.
-const STANDING_STAFF_SPECS = [];
-
-// Seed the standing-staff spec rows for this org and register their
-// Anthropic-side agents via ensureManagedAgent. Router mode is the
-// default; the legacy P86_STAFF_AGENTS env-flag gate has been removed.
-// Idempotent — re-running on an org that already has the rows is a
-// no-op for the DB upsert, and ensureManagedAgent itself short-
-// circuits when the registry row already exists.
-//
-// Called from the platform-bootstrap admin endpoint and the
-// per-org first-boot path. Returns the list of staff_agents rows
-// (now persisted) so callers can attach skills, surface to the UI,
-// etc.
-async function seedStandingStaffAgents(organization) {
-  if (!organization || !organization.id) {
-    throw new Error('seedStandingStaffAgents requires an organization row');
-  }
-  const seeded = [];
-  for (const spec of STANDING_STAFF_SPECS) {
-    // Upsert the spec row.
-    const insert = await pool.query(
-      `INSERT INTO staff_agents
-         (organization_id, agent_key, display_name, tier, role_card,
-          tool_keys, routing_hints, spawned_by)
-       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, 'system')
-       ON CONFLICT (organization_id, agent_key) DO UPDATE
-         SET display_name = EXCLUDED.display_name,
-             tier         = EXCLUDED.tier,
-             role_card    = EXCLUDED.role_card,
-             routing_hints= EXCLUDED.routing_hints
-       RETURNING *`,
-      [
-        organization.id,
-        spec.agent_key,
-        spec.display_name,
-        spec.tier,
-        spec.role_card,
-        JSON.stringify(spec.tool_keys || []),
-        JSON.stringify(spec.routing_hints || {})
-      ]
-    );
-    seeded.push(insert.rows[0]);
-
-    // Always register the Anthropic-side staff agent. Router mode is
-    // the default; the Principal needs the handoff targets to exist.
-    try {
-      await ensureManagedAgent(spec.agent_key, organization);
-    } catch (e) {
-      console.warn('[seedStandingStaffAgents] register failed for',
-        spec.agent_key, organization.slug || organization.id, ':', e && e.message);
-    }
-  }
-  return seeded;
-}
-
-// POST /api/admin/agents/staff/seed
-//   Trigger seedStandingStaffAgents for the caller's organization.
-//   Use after first deploy (or after adding a new spec) so the
-//   staff_agents table reflects the canonical roster.
+// Standing-staff specs + seeding removed 2026-07-03 (archived 2026-06-18,
+// zero rows ever live in prod). The staff_agents table remains, unread.
+// POST /api/admin/agents/staff/seed stays as an explicit 410 tombstone.
 router.post('/staff/seed', requireAuth, requireCapability('ROLES_MANAGE'), require('../auth').requireOrg, async (req, res) => {
-  // RETIRED 2026-06-18 — STANDING_STAFF_SPECS is now empty (staff agents
-  // archived); seeding is a no-op. Return 410 so the intent is explicit.
   return res.status(410).json({ error: 'Standing-staff seeding is retired — the staff/watcher agents were archived.' });
-  /* eslint-disable no-unreachable */
-  try {
-    const seeded = await seedStandingStaffAgents(req.organization);
-    res.json({
-      ok: true,
-      organization_id: req.organization.id,
-      seeded_count: seeded.length,
-      seeded: seeded.map(s => ({
-        agent_key: s.agent_key,
-        display_name: s.display_name,
-        tier: s.tier,
-        spawned_at: s.spawned_at
-      }))
-    });
-  } catch (e) {
-    console.error('POST /api/admin/agents/staff/seed error:', e);
-    res.status(500).json({ error: 'Server error: ' + (e.message || 'unknown') });
-  }
 });
 
-// POST /api/admin/agents/managed/reregister?key=ag|job|cra|staff
+// POST /api/admin/agents/managed/reregister?key=job
 //   Force a fresh agents.create + replace the local registry row.
 //   Use this when the local tool definitions or system prompt have
 //   drifted from what the registered Anthropic-side agent has — e.g.
@@ -2782,12 +2632,9 @@ router.post('/staff/seed', requireAuth, requireCapability('ROLES_MANAGE'), requi
 router.post('/managed/reregister', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
   try {
     const key = String(req.query.key || '').toLowerCase();
-    // Phase S2/S3 — staff_agents keys are also valid (their baselines
-    // live in AGENT_SYSTEM_BASELINE).
-    const legacyKeys = ['ag', 'job', 'cra', 'staff'];
-    const liveStaffKeys = STANDING_STAFF_SPECS.map(s => s.agent_key);
-    if (!legacyKeys.includes(key) && !liveStaffKeys.includes(key)) {
-      return res.status(400).json({ error: 'key must be one of: ' + legacyKeys.concat(liveStaffKeys).join(', ') });
+    const liveKeys = ['job', 'assistant', 'scribe'];
+    if (!liveKeys.includes(key)) {
+      return res.status(400).json({ error: 'key must be one of: ' + liveKeys.join(', ') });
     }
     const anthropic = getAnthropic();
     if (!anthropic) throw new Error('ANTHROPIC_API_KEY not set on this deployment.');
@@ -4036,11 +3883,9 @@ setInterval(backgroundRefreshAll, REFRESH_INTERVAL_MS);
 router.get('/managed/:agentKey/anthropic-state', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
   try {
     const agentKey = String(req.params.agentKey || '').toLowerCase();
-    // Phase S2/S3 — staff_agents keys are also valid sync targets.
-    const legacyKeys = ['ag', 'job', 'cra', 'staff'];
-    const liveStaffKeys = STANDING_STAFF_SPECS.map(s => s.agent_key);
-    if (!legacyKeys.includes(agentKey) && !liveStaffKeys.includes(agentKey)) {
-      return res.status(400).json({ error: 'agentKey must be one of: ' + legacyKeys.concat(liveStaffKeys).join(', ') });
+    const liveKeys = ['job', 'assistant', 'scribe'];
+    if (!liveKeys.includes(agentKey)) {
+      return res.status(400).json({ error: 'agentKey must be one of: ' + liveKeys.join(', ') });
     }
     const anthropic = getAnthropic();
     if (!anthropic) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not set on this deployment.' });
@@ -4193,13 +4038,9 @@ router.post('/managed/:agentKey/sync',
   async (req, res) => {
   try {
     const agentKey = String(req.params.agentKey || '').toLowerCase();
-    // Phase S2/S3 — staff_agents keys are also valid sync targets.
-    // 'scribe' (write worker) + 'assistant' (personal host) have their own
-    // static baselines — both syncable.
-    const legacyKeys = ['ag', 'job', 'cra', 'staff', 'scribe', 'assistant'];
-    const liveStaffKeys = STANDING_STAFF_SPECS.map(s => s.agent_key);
-    if (!legacyKeys.includes(agentKey) && !liveStaffKeys.includes(agentKey)) {
-      return res.status(400).json({ error: 'agentKey must be one of: ' + legacyKeys.concat(liveStaffKeys).join(', ') });
+    const liveKeys = ['job', 'assistant', 'scribe'];
+    if (!liveKeys.includes(agentKey)) {
+      return res.status(400).json({ error: 'agentKey must be one of: ' + liveKeys.join(', ') });
     }
     const anthropic = getAnthropic();
     if (!anthropic) return res.status(503).json({ error: 'ANTHROPIC_API_KEY not set on this deployment.' });
@@ -4695,9 +4536,4 @@ module.exports = router;
 module.exports.ensureManagedAgent = ensureManagedAgent;
 module.exports.ensureManagedEnvironment = ensureManagedEnvironment;
 module.exports.buildReferenceLinksBlock = buildReferenceLinksBlock;
-// Project 86 Agent Platform (S2) — exposed so ai-routes.js can
-// read the canonical staff roster when registering handoff tools
-// on the Principal.
-module.exports.STANDING_STAFF_SPECS = STANDING_STAFF_SPECS;
-module.exports.seedStandingStaffAgents = seedStandingStaffAgents;
 module.exports.collectMcpServersFor = collectMcpServersFor;

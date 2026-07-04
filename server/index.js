@@ -39,7 +39,6 @@ const emailRoutes = require('./routes/email-routes');
 const emailCampaignsRoutes = require('./routes/email-campaigns-routes');
 const adminAgentsRoutes = require('./routes/admin-agents-routes');
 const contextRegistryRoutes = require('./routes/context-registry-routes');
-const adminBatchRoutes = require('./routes/admin-batch-routes');
 const adminFilesRoutes = require('./routes/admin-files-routes');
 const adminAnthropicRoutes = require('./routes/admin-anthropic-routes');
 const adminSmsRoutes = require('./routes/admin-sms-routes');
@@ -221,7 +220,8 @@ app.use('/api/jobs/:jobId', jobWorkflowRoutes.jobNested);
 // Wave 3 — compliance tracking (client COIs, license renewals,
 // lien waivers, WC certs).
 app.use('/api/compliance-items', require('./routes/compliance-routes'));
-app.use('/api/admin/batch', adminBatchRoutes);
+// /api/admin/batch removed 2026-07-03 — the Batches admin surface was
+// never used (0 batches ever submitted); bulk audits run as agent_jobs now.
 app.use('/api/admin/files', adminFilesRoutes);
 app.use('/api/admin/anthropic', adminAnthropicRoutes);
 app.use('/api/admin/sms', adminSmsRoutes);
@@ -372,15 +372,8 @@ function startServer() {
       } catch (e) {
         console.warn('[campaigns] failed to start worker:', e && e.message);
       }
-      // Phase 5 — proactive-watch scheduler. Ticks every 60s,
-      // fires watches with next_fire_at <= NOW. Runs in-process; one
-      // tick per app instance (multiple Railway instances would each
-      // tick, but the CAS update on next_fire_at prevents double fires).
-      try {
-        if (aiRoutes.startWatchScheduler) aiRoutes.startWatchScheduler();
-      } catch (e) {
-        console.warn('[watch] failed to start scheduler:', e && e.message);
-      }
+      // Proactive-watch scheduler removed 2026-07-03 (feature retired —
+      // zero watches ever configured; ai_watches/ai_watch_runs tables stay).
       // Background AI-agent task worker. Ticks every 10s: claims queued agent_jobs
       // and runs the headless 86/assistant loop, resumes needs_input jobs the user
       // answered. Inert until a job is created (via the start_background_task tool).

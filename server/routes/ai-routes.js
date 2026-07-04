@@ -7132,109 +7132,11 @@ const MEMORY_TOOLS = [
   }
 ];
 
-// Phase 5 — proactive watching tools. Watches are recurring 86
-// instructions that fire on a cadence (hourly / daily / weekly).
-// Each fire creates a fresh Anthropic session and runs the watch's
-// prompt to completion; results are stored in ai_watch_runs for
-// later review.
-//
-// propose_watch_create is approval-tier because each watch becomes
-// recurring API spend — the user should explicitly opt in via the
-// chat approval card. Reads are auto-tier.
-const WATCH_TOOLS = [
-  {
-    name: 'propose_watch_create',
-    tier: 'approval',
-    description:
-      'Set up a recurring instruction that you (86) will run on a schedule, without the user prompting you. Use for periodic audits / reviews ("every day at 6am, summarize yesterday\'s estimate activity"), proactive alerts ("every Monday at 9am, list any active jobs with margin under 18%"), or follow-up nudges. Each fire spends API tokens — propose conservative cadences. The user must approve this card before the watch starts running.',
-    input_schema: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        name:            { type: 'string', description: 'Short label shown in the watches list (e.g. "Daily margin scan"). Max 100 chars.' },
-        description:     { type: 'string', description: 'One-sentence explanation of what this watch does and why. Shown to admins reviewing recurring spend.' },
-        cadence:         { type: 'string', enum: ['hourly', 'daily', 'weekly'], description: 'How often it fires.' },
-        time_of_day_utc: { type: 'string', description: 'HH:MM UTC for daily/weekly fires (ignored for hourly). Default 03:00 UTC.' },
-        prompt:          { type: 'string', description: 'The instruction to run on each fire. Treat like briefing a fresh teammate — include every detail; the runner does NOT see the conversation it was created in.' }
-      },
-      required: ['name', 'cadence', 'prompt']
-    }
-  },
-  {
-    name: 'list_watches',
-    tier: 'auto',
-    description:
-      'List currently active watches with their cadence, last fire, next fire, and whether they are enabled. Use to answer "what am I watching?" or before proposing a new watch (so we don\'t stack duplicates).',
-    input_schema: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        include_archived: { type: 'boolean', description: 'Include archived watches. Default false.' }
-      },
-      required: []
-    }
-  },
-  {
-    name: 'read_recent_watch_runs',
-    tier: 'auto',
-    description:
-      'Read the most recent watch fires (across all watches in this org). Each row has the watch name, status, triggered_at, duration, tokens, and the result text. Use this for "what did your watches find this week?" or to debug a failing watch.',
-    input_schema: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        watch_id: { type: 'string', description: 'Limit to one watch.' },
-        limit:    { type: 'integer', minimum: 1, maximum: 50, description: 'Max runs to return. Default 10.' }
-      },
-      required: []
-    }
-  },
-  {
-    name: 'propose_watch_archive',
-    tier: 'approval',
-    description:
-      'Disable and archive a watch so it stops firing. Soft delete — the row stays for audit. Use when the watch is no longer useful or when the user asks to stop a specific scheduled review.',
-    input_schema: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        id:        { type: 'string', description: 'Watch id from list_watches.' },
-        rationale: { type: 'string', description: 'One short sentence explaining why this watch is being archived (shown on the approval card).' }
-      },
-      required: ['id', 'rationale']
-    }
-  },
-  // ────────────────────────────────────────────────────────────────────
-  // P86 Crew Agent Platform — Phase S6
-  // Dynamic Tier 3 staff spawning. The Principal proposes a new staff
-  // agent (with a focused role + tool subset); on user approval the
-  // applier inserts a staff_agents row, registers the Anthropic agent,
-  // and re-syncs the Principal so the new handoff_to_<key> surfaces.
-  //
-  // Tool template inheritance — for v1 the new agent inherits its tool
-  // set from a standing staff "template" (estimator/pm/scheduler/
-  // directory/sales). The Principal picks the template that best fits
-  // the new role's domain. Full custom tool_keys come in a later phase.
-  // ────────────────────────────────────────────────────────────────────
-  {
-    name: 'propose_create_staff_agent',
-    tier: 'approval',
-    description:
-      'Propose creating a new Tier 3 staff agent. Surfaces an approval card; on approval the server inserts a staff_agents row, registers the new agent on Anthropic, attaches the same tool template as the inherits_from staff, and re-syncs the Principal so handoff_to_<key> works. Use when the user asks for a dedicated agent for a recurring task ("I do sub-compliance checks every week — can we have an agent for that?") or when you notice a pattern that justifies one. Naming convention: agent_key must start with "86-" and use lowercase letters / digits / dashes.',
-    input_schema: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        agent_key:      { type: 'string', description: 'Stable identifier. Must start with "86-" and contain only lowercase letters, digits, and dashes. Example: "86-sub-compliance".' },
-        display_name:   { type: 'string', description: 'Human-readable name shown on approval cards and admin UI. Example: "86 · Sub Compliance".' },
-        role_card:      { type: 'string', description: 'One-paragraph description of the agent\'s job — what it owns, what it returns, how it differs from existing staff. Read by the Principal at delegation time.' },
-        inherits_from:  { type: 'string', enum: ['86-estimator', '86-pm', '86-scheduler', '86-directory', '86-sales'], description: 'Which standing staff agent\'s tool set to inherit. Pick the closest match to the new role\'s domain.' },
-        rationale:      { type: 'string', description: 'Why this agent should exist (shown on the approval card). 1-2 sentences.' }
-      },
-      required: ['agent_key', 'display_name', 'role_card', 'inherits_from', 'rationale']
-    }
-  }
-];
+// Watches (Phase 5 proactive scheduler) + Tier-3 staff spawning were
+// REMOVED 2026-07-03 — zero watches ever configured / zero staff ever
+// spawned in production. The ai_watches / ai_watch_runs / staff_agents
+// tables remain (empty, harmless). Recurring work is expected to become
+// scheduled background tasks (agent_jobs) if ever wanted.
 
 // ──────────────────────────────────────────────────────────────────
 // PAYLOAD_TOOLS — Project 86 Payload DSL (v1).
@@ -7489,7 +7391,7 @@ const PAYLOAD_TOOLS = [
       'sections (full replace) OR granular section_adds/updates/deletes. ' +
       'Section layout is one of photo-grid|single-photo|before-after| ' +
       'text-block|attachment-list. ' +
-      'system: {skill_pack_ops,watch_ops,field_tool_ops,link_ops,staff_agent_ops} ' +
+      'system: {skill_pack_ops,field_tool_ops,link_ops} ' +
       '— link_ops includes {op:attach_files, attachment_ids[], target_entity_type, target_entity_id} to link existing files to an entity. ' +
       'FOUR personal/org scheduling+work types — pick by what the user means: ' +
       'calendar_event: {op:create, fields:{title, starts_at (ISO 8601 local datetime, e.g. 2026-06-25T09:00:00), ends_at?, all_day?, location?, notes?, reminder_minutes?, status?, entity_type?, entity_id?}} ' +
@@ -10234,150 +10136,11 @@ async function execStaffApprovalTool(name, input, ctx) {
       );
       return 'Deleted skill pack "' + input.name + '" (local soft-archive + Anthropic mirror removed).';
     }
-    // Phase 5 — proactive watching writes (approval-tier).
-    case 'propose_watch_create': {
-      if (!input || !input.name) throw new Error('name is required');
-      if (!input.prompt) throw new Error('prompt is required');
-      const cadence = input.cadence;
-      if (!['hourly', 'daily', 'weekly'].includes(cadence)) {
-        throw new Error('cadence must be one of: hourly, daily, weekly');
-      }
-      const timeOfDay = String(input.time_of_day_utc || '03:00').trim();
-      if (!/^\d{1,2}:\d{2}$/.test(timeOfDay)) {
-        throw new Error('time_of_day_utc must be HH:MM');
-      }
-      const orgId = await resolveOrgIdFromCtx(ctx);
-      const watchId = 'wch_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
-      const nextFire = computeNextFireAt(cadence, timeOfDay, new Date());
-      await pool.query(
-        `INSERT INTO ai_watches
-           (id, organization_id, created_by_user_id, name, description,
-            cadence, time_of_day_utc, prompt, enabled, next_fire_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true, $9)`,
-        [
-          watchId, orgId, ctx.userId,
-          String(input.name).slice(0, 100),
-          input.description ? String(input.description).slice(0, 500) : null,
-          cadence, timeOfDay, String(input.prompt).slice(0, 8000), nextFire
-        ]
-      );
-      return 'Created watch ' + watchId + ' "' + input.name + '" — cadence: ' + cadence +
-        (cadence !== 'hourly' ? ' at ' + timeOfDay + ' UTC' : '') +
-        '. First fire: ' + nextFire.toISOString() + '.';
-    }
-    case 'propose_watch_archive': {
-      if (!input || !input.id) throw new Error('id is required');
-      const orgId = await resolveOrgIdFromCtx(ctx);
-      const r = await pool.query(
-        `UPDATE ai_watches SET archived_at = NOW(), enabled = false, updated_at = NOW()
-          WHERE id = $1 AND organization_id = $2 AND archived_at IS NULL
-        RETURNING name`,
-        [input.id, orgId]
-      );
-      if (!r.rows.length) throw new Error('No active watch found with id ' + input.id);
-      return 'Archived watch ' + input.id + ' ("' + r.rows[0].name + '"). It will not fire again.';
-    }
-    case 'propose_create_staff_agent': {
-      // P86 Crew Phase S6 — spawn a new Tier 3 staff agent on approval.
-      // Inserts the staff_agents row, registers the Anthropic agent,
-      // re-registers the Principal so the new handoff_to_<key> shows
-      // up in its tool list. Inheritance from a standing staff means
-      // the new agent reuses an already-vetted tool subset for v1.
-      if (!input || !input.agent_key || !input.display_name || !input.role_card || !input.inherits_from) {
-        throw new Error('agent_key, display_name, role_card, and inherits_from are all required');
-      }
-      const keyPattern = /^86-[a-z0-9-]+$/;
-      if (!keyPattern.test(input.agent_key)) {
-        throw new Error('agent_key must match /^86-[a-z0-9-]+$/ (lowercase, starts with "86-")');
-      }
-      const validParents = ['86-estimator', '86-pm', '86-scheduler', '86-directory', '86-sales'];
-      if (!validParents.includes(input.inherits_from)) {
-        throw new Error('inherits_from must be one of: ' + validParents.join(', '));
-      }
-      if (input.agent_key === input.inherits_from || validParents.includes(input.agent_key)) {
-        throw new Error('agent_key collides with a standing staff agent — pick a different key');
-      }
-      const adminAgents = require('./admin-agents-routes');
-      const orgId = await resolveOrgIdFromCtx(ctx);
-      const orgRow = await pool.query('SELECT * FROM organizations WHERE id = $1', [orgId]);
-      const organization = orgRow.rows[0];
-      if (!organization) throw new Error('Organization row not found.');
-
-      // 1. Insert spec. Mark spawned_by with the proposing user.
-      let insertedId = null;
-      try {
-        const ins = await pool.query(
-          `INSERT INTO staff_agents
-             (organization_id, agent_key, display_name, tier, role_card,
-              tool_keys, routing_hints, spawned_by)
-           VALUES ($1, $2, $3, 3, $4, $5::jsonb, $6::jsonb, $7)
-           RETURNING id`,
-          [
-            orgId, input.agent_key, input.display_name, input.role_card,
-            JSON.stringify({ inherits_from: input.inherits_from }),
-            JSON.stringify({ trigger_phrases: [] }),
-            ctx.userId ? String(ctx.userId) : 'system'
-          ]
-        );
-        insertedId = ins.rows[0].id;
-      } catch (e) {
-        if (e && e.code === '23505') {
-          throw new Error('A staff agent with agent_key="' + input.agent_key + '" already exists for this org.');
-        }
-        throw e;
-      }
-
-      // 2. Register the new agent on Anthropic. Inherits tools + system
-      //    baseline from the parent template via AGENT_SYSTEM_BASELINE
-      //    + customToolsFor lookup, both of which consult the spec row.
-      try {
-        await adminAgents.ensureManagedAgent(input.agent_key, organization);
-      } catch (e) {
-        // Roll back the spec row so we don't leave a dangling
-        // unregistered agent.
-        await pool.query('DELETE FROM staff_agents WHERE id = $1', [insertedId]).catch(() => {});
-        throw new Error('Could not register Anthropic agent: ' + (e.message || 'unknown'));
-      }
-
-      // The new staff agent is registered against Anthropic and its
-      // spec row persisted; it runs as an async background watcher and
-      // emits its findings as payloads into the user's sidebar queue.
-      // No Principal re-sync needed.
-      return 'Spawned staff agent "' + input.display_name + '" (agent_key=' +
-        input.agent_key + ', inherits ' + input.inherits_from + ' tool set).';
-    }
+    // Watch + staff-spawn approval handlers removed 2026-07-03 (features
+    // retired — zero production usage; see the WATCH_TOOLS removal note).
     default:
       throw new Error('Unknown approval-tier staff tool: ' + name);
   }
-}
-
-// Phase 5 — next-fire-at computation for a watch cadence.
-// Pure function so it's testable in isolation; called both at watch
-// create time and after each fire.
-function computeNextFireAt(cadence, timeOfDayUtc, from) {
-  const now = new Date(from);
-  if (cadence === 'hourly') {
-    const next = new Date(now);
-    next.setUTCMinutes(0, 0, 0);
-    next.setUTCHours(next.getUTCHours() + 1);
-    return next;
-  }
-  const [hh, mm] = String(timeOfDayUtc || '03:00').split(':').map(Number);
-  const next = new Date(now);
-  next.setUTCHours(hh, mm, 0, 0);
-  if (cadence === 'daily') {
-    if (next <= now) next.setUTCDate(next.getUTCDate() + 1);
-    return next;
-  }
-  if (cadence === 'weekly') {
-    // Monday in UTC.
-    const dayUTC = next.getUTCDay(); // 0=Sun..6=Sat
-    const daysUntilMonday = ((1 - dayUTC) + 7) % 7;
-    next.setUTCDate(next.getUTCDate() + daysUntilMonday);
-    if (next <= now) next.setUTCDate(next.getUTCDate() + 7);
-    return next;
-  }
-  return next;
 }
 
 // /staff/chat + /staff/chat/continue stubs removed — already caught
@@ -11208,102 +10971,6 @@ async function execWave3Tool(name, input, ctx) {
   throw new Error('Unknown Wave 3 tool: ' + name);
 }
 
-// Phase 5 — auto-tier read handlers for watches. Same pattern as
-// execMemoryTool: called from make86OnCustomToolUse when 86 emits
-// list_watches or read_recent_watch_runs. ctx = { userId }.
-async function execWatchTool(name, input, ctx) {
-  const { userId } = ctx;
-  const orgRow = await pool.query(`SELECT organization_id FROM users WHERE id = $1`, [userId]);
-  const orgId = orgRow.rows[0] && orgRow.rows[0].organization_id;
-  if (!orgId) throw new Error('User has no organization — cannot use watch tools.');
-
-  // Wave 1.B Phase 2 — log every watch-tool invocation so the
-  // registry's Watch card lights up. Pre-tool log so failures still
-  // record the attempt.
-  try {
-    logContextLoad(pool, {
-      organization_id: orgId,
-      user_id: userId,
-      layer: 'watch',
-      item_id: name,
-      item_name: name,
-      item_meta: {
-        watch_id: input && input.watch_id ? String(input.watch_id) : null,
-        limit: input && input.limit ? Number(input.limit) : null
-      }
-    });
-  } catch (_) { /* observation, not load-bearing */ }
-
-  if (name === 'list_watches') {
-    const includeArchived = input && input.include_archived === true;
-    const r = await pool.query(`
-      SELECT id, name, description, cadence, time_of_day_utc, enabled,
-             last_fired_at, next_fire_at, created_at, archived_at,
-             SUBSTRING(prompt, 1, 200) AS prompt_preview
-        FROM ai_watches
-       WHERE organization_id = $1
-         ${includeArchived ? '' : 'AND archived_at IS NULL'}
-       ORDER BY (CASE WHEN enabled AND archived_at IS NULL THEN 0 ELSE 1 END), created_at DESC
-       LIMIT 50
-    `, [orgId]);
-    if (!r.rows.length) return 'No watches configured yet.';
-    const lines = r.rows.map(row => {
-      const state =
-        row.archived_at ? '[ARCHIVED]' :
-        row.enabled ? '[ACTIVE]' : '[DISABLED]';
-      const when = row.cadence === 'hourly'
-        ? 'every hour'
-        : row.cadence + ' at ' + (row.time_of_day_utc || '03:00') + ' UTC';
-      const last = row.last_fired_at ? new Date(row.last_fired_at).toISOString() : 'never';
-      const next = row.next_fire_at ? new Date(row.next_fire_at).toISOString() : '—';
-      return '── ' + row.id + ' ' + state + ' "' + row.name + '" · ' + when +
-        '\n   last: ' + last + ' · next: ' + next +
-        '\n   prompt: ' + (row.prompt_preview || '') + (row.prompt_preview && row.prompt_preview.length === 200 ? '…' : '');
-    });
-    return 'Watches (' + r.rows.length + '):\n\n' + lines.join('\n\n');
-  }
-
-  if (name === 'read_recent_watch_runs') {
-    const limit = Math.max(1, Math.min(50, Number(input && input.limit) || 10));
-    const params = [orgId];
-    let watchClause = '';
-    if (input && input.watch_id) {
-      params.push(String(input.watch_id));
-      watchClause = ' AND r.watch_id = $2';
-    }
-    params.push(limit);
-    const r = await pool.query(`
-      SELECT r.id, r.watch_id, r.status, r.triggered_at, r.started_at, r.finished_at,
-             r.input_tokens, r.output_tokens, r.result, r.error,
-             w.name AS watch_name,
-             EXTRACT(EPOCH FROM (r.finished_at - r.started_at))::int AS duration_seconds
-        FROM ai_watch_runs r
-        JOIN ai_watches w ON w.id = r.watch_id
-       WHERE r.organization_id = $1${watchClause}
-       ORDER BY r.triggered_at DESC
-       LIMIT $${params.length}
-    `, params);
-    if (!r.rows.length) return 'No watch runs yet.';
-    const lines = r.rows.map(row => {
-      const tokens = (Number(row.input_tokens) || 0) + (Number(row.output_tokens) || 0);
-      const head = '── ' + row.id + ' [' + row.status + '] "' + row.watch_name + '" · ' +
-        new Date(row.triggered_at).toISOString() +
-        (row.duration_seconds != null ? ' · ' + row.duration_seconds + 's' : '') +
-        ' · ' + tokens + ' tokens';
-      if (row.status === 'completed') {
-        return head + '\n' + (row.result || '(no result text)').slice(0, 2000);
-      }
-      if (row.status === 'failed') {
-        return head + '\nFAILED: ' + (row.error || 'unknown');
-      }
-      return head + '\n(' + row.status + ')';
-    });
-    return 'Recent watch runs (' + r.rows.length + '):\n\n' + lines.join('\n\n');
-  }
-
-  throw new Error('Unknown watch read tool: ' + name);
-}
-
 // ──────────────────────────────────────────────────────────────────
 // execEmitPayloadFile — handle the Principal's emit_payload_file tool
 // inline. Validates ops against PAYLOAD_OPS_SCHEMAS, generates a
@@ -11762,8 +11429,6 @@ function make86OnCustomToolUse(userId, parentSession, turnContextText, gateUser)
           result = await execClientDirectoryTool(name, input, ctx);
         } else if (MEMORY_EXECUTOR_TOOLS.has(name)) {
           result = await execMemoryTool(name, input, ctx);
-        } else if (WATCH_EXECUTOR_TOOLS.has(name)) {
-          result = await execWatchTool(name, input, ctx);
         } else if (WAVE3_EXECUTOR_TOOLS.has(name)) {
           result = await execWave3Tool(name, input, ctx);
         } else if (PROJECT_INLINE_EXECUTOR_TOOLS.has(name)) {
@@ -12363,135 +12028,8 @@ async function driveSubtaskTurn({ anthropic, sessionId, eventsToSend, onCustomTo
   return { text: collectedText, usage: aggUsage, error: 'Subtask hit turn cap (' + MAX_SUBTASK_TURNS + '). Likely a tool loop.' };
 }
 
-// ─── Phase 5: watch runner + scheduler ────────────────────────────────
-//
-// A watch fire = creating a fresh Anthropic session, running the
-// watch's prompt to completion, persisting the result. Same shape as
-// runSubtaskInBackground; reuses driveSubtaskTurn so we keep one
-// streaming driver instead of two.
-//
-// runWatchFire(watchRunId) is the unit of work; the scheduler creates
-// one ai_watch_runs row per due watch and enqueues a fire.
-
-async function runWatchFire(watchRunId) {
-  const anthropic = getAnthropic();
-  if (!anthropic) {
-    await pool.query(
-      `UPDATE ai_watch_runs SET status='failed', error=$2, finished_at=NOW() WHERE id=$1`,
-      [watchRunId, 'ANTHROPIC_API_KEY not configured.']
-    );
-    return;
-  }
-
-  const lookup = await pool.query(
-    `SELECT r.*, w.prompt AS watch_prompt, w.name AS watch_name,
-            w.created_by_user_id AS user_id, w.organization_id AS watch_org_id,
-            w.kind AS watch_kind, w.agent_key AS watch_agent_key,
-            w.scope_filter AS watch_scope_filter, w.last_scan_at AS watch_last_scan_at,
-            w.model AS watch_model
-       FROM ai_watch_runs r
-       JOIN ai_watches w ON w.id = r.watch_id
-      WHERE r.id = $1`,
-    [watchRunId]
-  );
-  if (!lookup.rows.length) return;
-  const row = lookup.rows[0];
-
-  const orgRow = await pool.query(`SELECT * FROM organizations WHERE id = $1`, [row.watch_org_id]);
-  const organization = orgRow.rows[0];
-  if (!organization) {
-    await pool.query(
-      `UPDATE ai_watch_runs SET status='failed', error=$2, finished_at=NOW() WHERE id=$1`,
-      [watchRunId, 'Watch organization not found.']
-    );
-    return;
-  }
-
-  const flip = await pool.query(
-    `UPDATE ai_watch_runs SET status='running', started_at=NOW()
-      WHERE id=$1 AND status='pending' RETURNING id`,
-    [watchRunId]
-  );
-  if (!flip.rows.length) return;
-
-  let sessionId = null;
-  try {
-    const adminAgents = require('./admin-agents-routes');
-    const env = await adminAgents.ensureManagedEnvironment();
-    const agent = await adminAgents.ensureManagedAgent('job', organization);
-
-    const created = await anthropic.beta.sessions.create({
-      agent: agent.anthropic_agent_id,
-      environment_id: env.anthropic_environment_id,
-      title: 'Project 86 watch · ' + organization.slug + ' · ' + row.watch_name.slice(0, 60)
-    });
-    sessionId = created.id;
-    await pool.query(`UPDATE ai_watch_runs SET anthropic_session_id=$2 WHERE id=$1`, [watchRunId, sessionId]);
-
-    // Use 86's normal auto-exec, but reject subtask-spawning attempts
-    // (a watch is itself a top-level fire; nested fan-out would burn
-    // unbounded spend without a user gate). parentSession=null so the
-    // wrapper rejects spawn/await/status.
-    const baseCallback = make86OnCustomToolUse(row.user_id, null);
-    const watchCallback = async (tu) => {
-      if (tu.name === 'spawn_subtask' || tu.name === 'await_subtasks' || tu.name === 'subtask_status') {
-        return { tier: 'auto', error: 'Watches cannot spawn subtasks (recursion guard). Do the work directly in this fire.' };
-      }
-      const decision = await baseCallback(tu);
-      if (decision && decision.tier === 'approval') {
-        return {
-          tier: 'auto',
-          error: 'Tool "' + tu.name + '" is approval-tier and cannot run inside a watch. Summarize what you would propose instead.'
-        };
-      }
-      return decision;
-    };
-
-    const prompt =
-      '[You are running as a Project 86 watch — a scheduled fire of a recurring instruction set up by the user. ' +
-      'Do the work, then reply with ONE final message containing your findings. ' +
-      'No conversational filler; the user will read this asynchronously.]\n\n' +
-      String(row.watch_prompt || '');
-
-    const result = await driveSubtaskTurn({
-      anthropic,
-      sessionId,
-      eventsToSend: [{ type: 'user.message', content: [{ type: 'text', text: prompt }] }],
-      onCustomToolUse: watchCallback
-    });
-
-    await pool.query(
-      `UPDATE ai_watch_runs SET
-         status = $2, result = $3, error = $4,
-         input_tokens = COALESCE(input_tokens,0) + $5,
-         output_tokens = COALESCE(output_tokens,0) + $6,
-         cache_creation_tokens = COALESCE(cache_creation_tokens,0) + $7,
-         cache_read_tokens = COALESCE(cache_read_tokens,0) + $8,
-         finished_at = NOW()
-       WHERE id = $1`,
-      [
-        watchRunId,
-        result.error ? 'failed' : 'completed',
-        result.text || null,
-        result.error || null,
-        result.usage.input_tokens || 0,
-        result.usage.output_tokens || 0,
-        result.usage.cache_creation_input_tokens || 0,
-        result.usage.cache_read_input_tokens || 0
-      ]
-    );
-  } catch (e) {
-    console.error('[watch] runner failed for', watchRunId, e);
-    await pool.query(
-      `UPDATE ai_watch_runs SET status='failed', error=$2, finished_at=NOW() WHERE id=$1`,
-      [watchRunId, (e && e.message) || 'Watch runner error']
-    );
-  } finally {
-    if (sessionId) {
-      try { await anthropic.beta.sessions.archive(sessionId); } catch (_) {}
-    }
-  }
-}
+// Watch runner + scheduler removed 2026-07-03 (feature retired — zero
+// watches ever configured). Recurring work belongs to agent_jobs now.
 
 // start_background_task tool handler — the FOREGROUND side: 86 / the assistant
 // calls this during a live turn to hand a bigger task to the background worker.
@@ -12528,7 +12066,7 @@ async function execStartBackgroundTask(tu, userId) {
   return { tier: 'auto', summary: 'Started background task: "' + title + '". It will run on its own — I\'ll notify you when it\'s done, or if it needs a decision from you. (task ' + jobId + ')' };
 }
 
-// Background-task runner — the agent_jobs analogue of runWatchFire. The worker
+// Background-task runner. The worker
 // (server/agent-jobs-worker.js) claims a queued job (status→running) then calls
 // this. We spin up a fresh headless session on the job's host agent and run the
 // same driveSubtaskTurn loop 86 uses. Reads run auto; subtask fan-out is blocked
@@ -12768,64 +12306,6 @@ async function notifyAgentJobDone(job, result) {
   }
 }
 
-// Scheduler tick. Looks for due watches, creates one ai_watch_runs row
-// per fire, advances next_fire_at, then enqueues the runner. Race-safe
-// via an atomic UPDATE-with-WHERE on next_fire_at — if two ticks fire
-// simultaneously, only one will see the row in the "due" state.
-async function tickWatchScheduler() {
-  try {
-    const due = await pool.query(`
-      SELECT id, organization_id, cadence, time_of_day_utc, next_fire_at
-        FROM ai_watches
-       WHERE enabled = true
-         AND archived_at IS NULL
-         AND next_fire_at <= NOW()
-       LIMIT 20
-    `);
-    for (const w of due.rows) {
-      const newNext = computeNextFireAt(w.cadence, w.time_of_day_utc, new Date());
-      // CAS update: only fire if next_fire_at still matches what we
-      // read. If another scheduler beat us, this row will get 0 rows
-      // updated and we skip.
-      const cas = await pool.query(
-        `UPDATE ai_watches
-            SET last_fired_at = NOW(), next_fire_at = $2, updated_at = NOW()
-          WHERE id = $1 AND next_fire_at = $3
-        RETURNING id`,
-        [w.id, newNext, w.next_fire_at]
-      );
-      if (!cas.rows.length) continue;
-      const runId = 'wrn_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
-      await pool.query(
-        `INSERT INTO ai_watch_runs (id, watch_id, organization_id, status)
-         VALUES ($1, $2, $3, 'pending')`,
-        [runId, w.id, w.organization_id]
-      );
-      setImmediate(() => {
-        runWatchFire(runId).catch(err => {
-          console.error('[watch] fire crashed for', runId, err);
-        });
-      });
-    }
-  } catch (e) {
-    console.error('[watch] scheduler tick failed:', e);
-  }
-}
-
-// Start the scheduler. Called once at boot from server/index.js.
-// SCHEDULER_INTERVAL_MS = 60s. Calls tickWatchScheduler immediately
-// then on each interval. unref() so a leftover timer doesn't keep the
-// process alive at shutdown.
-function startWatchScheduler() {
-  const intervalMs = Number(process.env.WATCH_SCHEDULER_MS) || 60000;
-  console.log('[watch] scheduler starting (tick every ' + intervalMs + 'ms)');
-  // First tick after 10s to let DB init finish.
-  setTimeout(tickWatchScheduler, 10000);
-  const handle = setInterval(tickWatchScheduler, intervalMs);
-  if (handle.unref) handle.unref();
-  return handle;
-}
-
 // Legacy /v2/intake/chat (+ /continue) removed — intake now runs
 // through /api/ai/86/chat with entity_type='intake'. Caught by
 // the LEGACY_CHAT_PATHS 410 intercept at the top of this file.
@@ -12859,8 +12339,8 @@ function startWatchScheduler() {
 // of them in one click.
 //
 // Excluded: high-stakes / irreversible / structured-form mutations
-// (propose_skill_pack_*, delete_client, merge_clients, propose_*_field_
-// _tool, propose_watch_*). Those keep the full approval card so the
+// (propose_skill_pack_*, delete_client, merge_clients,
+// propose_*_field_tool). Those keep the full approval card so the
 // admin can review fields one by one.
 const TALK_THROUGH_TOOLS = new Set([
   // Scope + line items
@@ -13264,10 +12744,6 @@ const ALLOWED_AUTO_TIER_TOOLS = new Set([
   'read_active_lines',
   // Phase 4 — long-term semantic memory tools (executor: execMemoryTool).
   'remember', 'recall', 'list_memories', 'forget',
-  // Phase 5 — proactive watch READS (executor: execWatchTool). The
-  // WRITES (propose_watch_create / propose_watch_archive) stay
-  // approval-tier and surface as cards.
-  'list_watches', 'read_recent_watch_runs',
   // Client-directory write tools that are explicitly tier:'auto' in
   // their tool definitions. Routed through execClientDirectoryToolWithCtx
   // (executor needs userId for tools that write attributable rows).
@@ -13296,8 +12772,6 @@ const INTAKE_EXECUTOR_TOOLS = new Set(['read_existing_clients', 'read_existing_l
 const FIELD_TOOLS_EXECUTOR_TOOLS = new Set(['read_field_tools']);
 // Phase 4 — memory tools route to execMemoryTool.
 const MEMORY_EXECUTOR_TOOLS = new Set(['remember', 'recall', 'list_memories', 'forget']);
-// Phase 5 — watch READS route to execWatchTool (writes stay approval-tier).
-const WATCH_EXECUTOR_TOOLS = new Set(['list_watches', 'read_recent_watch_runs']);
 // Wave 3 — RFI / submittal / transmittal + compliance reads.
 const WAVE3_EXECUTOR_TOOLS = new Set(['list_workflow_items', 'list_compliance_expiring']);
 
@@ -14104,14 +13578,11 @@ router.post('/86/chat/continue', requireAuth, requireOrg, aiChatLimiter, aiChatH
         catch (e) { summary = 'Error: ' + (e.message || 'failed'); isError = true; }
       } else if (r.name === 'propose_skill_pack_add'
               || r.name === 'propose_skill_pack_edit'
-              || r.name === 'propose_skill_pack_delete'
-              || r.name === 'propose_watch_archive'
-              || r.name === 'propose_create_staff_agent') {
+              || r.name === 'propose_skill_pack_delete') {
         // Skill-pack mutations (formerly CoS-only — 86 owns these
         // now that the staff agent is being absorbed). Same handler
-        // as the legacy /staff/chat/continue path.
-        // P86 Crew Phase S6 — propose_create_staff_agent uses the
-        // same approval-applier dispatcher.
+        // as the legacy /staff/chat/continue path. (Watch + staff-spawn
+        // approvals removed 2026-07-03 with their features.)
         try { summary = await execStaffApprovalTool(r.name, r.input || {}, { userId: req.user.id }); }
         catch (e) { summary = 'Error: ' + (e.message || 'failed'); isError = true; }
       } else if (ClientDirectoryTools.some(t => t.name === r.name)) {
@@ -14208,7 +13679,6 @@ router.post('/86/chat/continue', requireAuth, requireOrg, aiChatLimiter, aiChatH
 });
 
 module.exports = router;
-module.exports.startWatchScheduler = startWatchScheduler;
 module.exports.runAgentJob = runAgentJob;  // background-task runner (agent-jobs-worker.js)
 module.exports.resumeAgentJob = resumeAgentJob;  // resume a needs_input job on the user's answer
 // Exposed for ai-sessions-routes.js (sidebar CRUD shares the Anthropic
@@ -14255,9 +13725,9 @@ module.exports.internals = {
   // Auto-tier; routed through execProjectInlineTool. Surfaces in the
   // Principal's tool set via ROUTER_TOOL_NAMES in admin-agents-routes.
   projectInlineTools: () => PROJECT_INLINE_TOOLS.map(({ tier, ...t }) => t),
-  // Phase 5 — proactive watching tools (3 of 4 are auto; the writes
-  // are approval-tier and surface as cards).
-  watchTools:    () => WATCH_TOOLS.map(({ tier, ...t }) => t),
+  // Watch tools removed 2026-07-03 (feature retired). Export kept as
+  // () => [] so any stale caller degrades to "no tools" instead of crashing.
+  watchTools:    () => [],
   // Project 86 Payload DSL — the Principal's ONE write tool. Handled
   // inline by execEmitPayloadFile in make86OnCustomToolUse; the meta
   // it returns rides the SSE tool_applied event so the file artifact

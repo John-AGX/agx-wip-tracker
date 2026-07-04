@@ -212,13 +212,12 @@ const PAYLOAD_OPS_SCHEMAS = Object.freeze({
     allowedTopKeys: new Set(['blocks']),
   },
   system: {
-    // watch_ops: [{op:'create'|'archive', watch_id?, name, cadence, ...}]
     // skill_pack_ops: [{op:'add'|'edit'|'delete', pack_id?, fields:{name, body, description?, agents?, category?, triggers?}}]
     // field_tool_ops: [{op:'create'|'edit'|'delete', tool_id?, fields:{name, description?, category?, html_body}}]
     // link_ops: [{op:'link_job_to_client', job_id, client_id} | {op:'link_property_to_parent', property_id, parent_client_id} | {op:'attach_files', attachment_ids[], target_entity_type, target_entity_id}]
-    // staff_agent_ops: deferred (needs Anthropic SDK calls)
+    // (watch_ops + staff_agent_ops removed 2026-07-03 — features retired.)
     allowedTopKeys: new Set([
-      'watch_ops', 'skill_pack_ops', 'field_tool_ops', 'link_ops', 'staff_agent_ops',
+      'skill_pack_ops', 'field_tool_ops', 'link_ops',
     ]),
   },
   report: {
@@ -452,7 +451,7 @@ function validateOps(entityType, ops) {
     }
   }
   if (entityType === 'system') {
-    for (const k of ['watch_ops', 'skill_pack_ops', 'field_tool_ops', 'link_ops', 'staff_agent_ops']) {
+    for (const k of ['skill_pack_ops', 'field_tool_ops', 'link_ops']) {
       if (ops[k] != null && !Array.isArray(ops[k])) {
         throw new Error(`system.ops.${k} must be an array`);
       }
@@ -1880,31 +1879,14 @@ async function dispatchSchedule(dbClient, target, refTable, ctx) {
 }
 
 // ──────────────────────────────────────────────────────────────────
-// dispatchSystem — platform-side writes (watches, future skill packs).
-//
-// v1 implements `watch_ops` only — create/archive rule-based watches.
-// Skill packs / field tools / staff agent definitions stay as
-// approval-card tools on the Principal for now.
+// dispatchSystem — platform-side writes (skill packs, field tools,
+// entity links). watch_ops + staff_agent_ops removed 2026-07-03 —
+// both features retired with zero production usage.
 // ──────────────────────────────────────────────────────────────────
-
-function newWatchId() {
-  return 'watch_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
-}
 
 async function dispatchSystem(dbClient, target, refTable, ctx) {
   const ops = target.ops || {};
   resolveRefsInOps(ops, refTable);
-
-  // staff_agent_ops still pending — requires Anthropic SDK calls
-  // (beta.agents.create/update/archive). The propose_create_staff_agent
-  // tool remains on the Principal until that lands.
-  if (Array.isArray(ops.staff_agent_ops) && ops.staff_agent_ops.length) {
-    throw new Error(
-      'system.ops.staff_agent_ops not yet implemented — Anthropic-side ' +
-      'agent registration needs the beta.agents.* API path. Use the ' +
-      'propose_create_staff_agent approval-card tool for now.'
-    );
-  }
 
   const created = [];
   const archived = [];
@@ -2114,58 +2096,6 @@ async function dispatchSystem(dbClient, target, refTable, ctx) {
         updated.push({ kind: 'attach_files', count: ar.rowCount, target_entity_type: et, target_entity_id: String(eid) });
       } else {
         throw new Error(`link_ops[].op unsupported: ${lk.op}`);
-      }
-    }
-  }
-
-  if (Array.isArray(ops.watch_ops)) {
-    const orgId = (ctx && ctx.organizationId) || null;
-    const userId = (ctx && ctx.userId) || null;
-
-    for (const w of ops.watch_ops) {
-      if (!w || !w.op) throw new Error('watch_ops[].op required');
-      if (w.op === 'create') {
-        if (!orgId) throw new Error('watch create requires organization context');
-        const id = (w.watch_id && !isRef(w.watch_id)) ? w.watch_id : newWatchId();
-        const cadence = w.cadence || (w.kind === 'agent' ? 'daily' : 'daily');
-        const timeOfDay = w.time_of_day_utc || '12:00';
-        const prompt = w.prompt || w.name || 'Scan';
-        // next_fire_at: roughly +1h to avoid firing immediately.
-        await dbClient.query(
-          `INSERT INTO ai_watches
-            (id, organization_id, created_by_user_id, name, description,
-             cadence, time_of_day_utc, prompt, kind, agent_key,
-             scope_filter, model, schedule_hours, next_fire_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW() + INTERVAL '1 hour')`,
-          [
-            id, orgId, userId,
-            w.name || 'Untitled watch',
-            w.description || null,
-            cadence, timeOfDay, prompt,
-            w.kind || 'rule',
-            w.agent_key || null,
-            w.scope_filter ? JSON.stringify(w.scope_filter) : null,
-            w.model || 'haiku',
-            w.schedule_hours || 12,
-          ]
-        );
-        if (isRef(w.watch_id)) refTable[w.watch_id] = id;
-        created.push(id);
-      } else if (w.op === 'archive') {
-        const id = resolveRef(w.watch_id, refTable);
-        // P0-2 — scope archive to the caller's org (ai_watches.organization_id
-        // is NOT NULL, so a strict equality is correct here).
-        const r = orgId
-          ? await dbClient.query(
-              `UPDATE ai_watches SET archived_at = NOW(), enabled = false WHERE id = $1 AND organization_id = $2`,
-              [id, orgId])
-          : await dbClient.query(
-              `UPDATE ai_watches SET archived_at = NOW(), enabled = false WHERE id = $1`,
-              [id]);
-        if (!r.rowCount) throw new Error(`watch ${id} not found`);
-        archived.push(id);
-      } else {
-        throw new Error(`watch_ops[].op must be create|archive, got: ${w.op}`);
       }
     }
   }
