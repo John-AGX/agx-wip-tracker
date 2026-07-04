@@ -12109,12 +12109,15 @@ async function execStartBackgroundTask(tu, userId) {
   const orgRow = await pool.query('SELECT organization_id FROM users WHERE id = $1', [userId]);
   const orgId = orgRow.rows[0] && orgRow.rows[0].organization_id;
   if (!orgId) return { tier: 'auto', error: 'Could not resolve your organization to queue the task.' };
-  // Background tasks run on the SCRIBE (Sonnet + the full agent_toolset:
-  // bash, Python with pandas/numpy/openpyxl/reportlab, web_search + web_fetch,
-  // read_entity/search_entities, ask_user). 2026-07-03 cutover: the Scribe is
-  // THE background executor — conversation reasons + approves, Scribe executes,
-  // then notifies. ~half the Opus rate for the same capability.
-  const agentKey = 'scribe';
+  // Background tasks run on the SANDBOX agent (86/'job' + the full
+  // agent_toolset: bash, Python with pandas/numpy/openpyxl/reportlab,
+  // web_search + web_fetch). So "do this in the background" gets FULL
+  // capability — deep web research, heavy analysis, Excel/PDF reports —
+  // even when the lean foreground assistant dispatched it. (2026-07-03:
+  // briefly cut over to the Scribe, reverted same day — John: the Scribe
+  // only WORKS in the background as the write drafter; it is not the
+  // general background executor.)
+  const agentKey = 'job';
   let sessionId = null;
   try {
     const s = await pool.query(
@@ -12158,9 +12161,8 @@ async function runAgentJob(jobId) {
   try {
     const adminAgents = require('./admin-agents-routes');
     const env = await adminAgents.ensureManagedEnvironment();
-    // 2026-07-03: ALL background tasks run on the Scribe (Sonnet + full
-    // sandbox) regardless of which chat agent queued them.
-    const agent = await adminAgents.ensureManagedAgent('scribe', organization);
+    const agentKey = (job.agent_key === 'assistant') ? 'assistant' : 'job';
+    const agent = await adminAgents.ensureManagedAgent(agentKey, organization);
 
     const created = await anthropic.beta.sessions.create({
       agent: agent.anthropic_agent_id,

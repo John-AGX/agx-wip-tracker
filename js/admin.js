@@ -6990,7 +6990,7 @@
 
       // ── Section: Background tasks (headless Scribe runner)
       '<div style="margin-bottom:18px;">' +
-        '<div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#888);margin-bottom:8px;">Background tasks (Scribe)</div>' +
+        '<div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#888);margin-bottom:8px;">Background tasks (86)</div>' +
         bgBody +
       '</div>' +
 

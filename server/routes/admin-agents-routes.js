@@ -320,9 +320,14 @@ router.get('/metrics',
     });
     const totalCost = Math.round(models.reduce((s, m) => s + (m.cost_usd || 0), 0) * 100) / 100;
 
-    // Background-task cost — jobs run on their own agent (Sonnet after the
-    // Scribe-executor cutover; Opus before it). Price at the scribe model.
-    const bgCost = cacheCost(SCRIBE_MODEL, bg.input_tokens, bg.output_tokens, bg.cache_creation, bg.cache_read);
+    // Background-task cost — jobs run on 86 ('job' agent, the live default
+    // model). Price with it so cost tracks model upgrades.
+    let bgModel = 'claude-opus-4-8';
+    try {
+      const ai = require('./ai-routes-internals');
+      if (ai && typeof ai.defaultModel === 'function') bgModel = ai.defaultModel();
+    } catch (_) { /* keep fallback */ }
+    const bgCost = cacheCost(bgModel, bg.input_tokens, bg.output_tokens, bg.cache_creation, bg.cache_read);
 
     const cacheReads = Number(agg.cache_read_tokens || 0);
     const directInputs = Number(agg.input_tokens || 0);
@@ -2072,15 +2077,9 @@ const AGENT_SYSTEM_BASELINE = {
   // it, self-corrects on validation errors, and returns the diff. It never
   // reads org data, never plans, never talks to the user. Runs on Sonnet.
   scribe: [
-    'You are the Scribe — Project 86\'s shared execution worker. You operate in ONE of two modes, selected by the kickoff message:',
+    'You are the Scribe — the write-only worker for 86. You receive an approved, fully-specified change plus a snapshot of the target entity\'s current state, and you emit EXACTLY ONE `emit_payload_file` payload that performs it. You do not read data, plan, or talk to the user. Output the payload tool call and nothing else — no prose, no preamble.',
     '',
-    '## Mode 1 — WRITE DRAFTING (default: the kickoff carries an `instruction` + a target-entity snapshot)',
-    'You receive an approved, fully-specified change plus a snapshot of the target entity\'s current state, and you emit EXACTLY ONE `emit_payload_file` payload that performs it. In this mode you do not read data, plan, or talk to the user. Output the payload tool call and nothing else — no prose, no preamble.',
-    '',
-    '## Mode 2 — BACKGROUND EXECUTOR (the kickoff says you are running as a BACKGROUND TASK)',
-    'The user handed you a bigger job to run on your own — research, audits, number-crunching, building Excel/PDF reports. Do the work: use read_entity / search_entities to pull org data, web_search / web_fetch for outside facts, and bash/Python (pandas, openpyxl, reportlab) for analysis and file generation. If you hit a genuine fork you cannot decide, call ask_user (you will be paused and resumed with the answer) — never for things you can look up or reasonably decide. Any data CHANGE still goes through emit_payload_file (never edit directly). Finish with ONE clear final message: what you found or produced, no conversational filler — the user reads it asynchronously.',
-    '',
-    '# Rules (Mode 1 drafting)',
+    '# Rules',
     '- Address entities by their real `entity_id` (from the snapshot you were given) or a `$new_<name>` ref — NEVER by array index or position.',
     '- Do NOT invent fields. The dispatcher rejects unknown columns and lists the valid set in its error — use the exact keys from the snapshot / the vocabulary below.',
     '- If the plan is ambiguous or missing an id you need, return a one-line note saying what is missing instead of guessing.',
@@ -2319,16 +2318,11 @@ async function collectSkillsFor(agentKey, organization) {
 // Persistent writes against org data ALWAYS route through the
 // custom tool emit_payload_file — the sandbox is throwaway.
 function builtinToolsetFor(agentKey) {
-  // The Scribe is the shared writer AND (2026-07-03) THE background-task
-  // executor — research, audits, Excel/PDF generation all run on it now
-  // (Sonnet ≈ half the Opus rate). It gets the full sandbox bundle
-  // (web_search/web_fetch + bash/Python + read/write) like 86.
-  // NOTE: with a `read` tool present, the skills read-gate is satisfied —
-  // but Scribe deliberately keeps 0 skills (collectSkillsFor short-circuit).
-  if (agentKey === 'scribe') return [{
-    type: 'agent_toolset_20260401',
-    default_config: { enabled: true }
-  }];
+  // The Scribe is a write-only worker — it never authors files, runs code,
+  // or browses the web. No agent toolset bundle (bash/write/web) for it.
+  // (It always RUNS detached/in the background, but background TASKS —
+  // research/audits/Excel — run on 86, not the Scribe.)
+  if (agentKey === 'scribe') return [];
   // The Assistant (personal aide) likewise needs NO sandbox/web bundle: it
   // delegates ALL writes to the Scribe and escalates research/analysis to 86.
   // The 8-tool agent_toolset_20260401 schema was ~30k cached tokens of dead
@@ -2383,33 +2377,20 @@ function modelForAgentKey(agentKey) {
 function customToolsFor(agentKey, opts) {
   const aiInternals = require('./ai-routes-internals');
   if (!aiInternals) return [];
-  // Scribe — the shared writer AND the background-task executor
-  // (2026-07-03 cutover: all agent_jobs run on the Scribe/Sonnet).
-  // Tools: emit_payload_file (the write primitive), read_entity +
-  // search_entities (executor runs need to see the data they're
-  // working), and ask_user (pause-&-ask inside background tasks).
-  // The kickoff prompt selects the mode — the strict "author ONE
-  // payload" contract still governs scribe_write drafting runs.
+  // Scribe — the write-only worker. ONE custom tool: emit_payload_file.
+  // No reads, memory, navigate, or builtin toolset. The chat agent plans
+  // + hands off a fully-specified write intent; the Scribe (always in a
+  // detached background run) authors the payload, dry-runs it, and it
+  // auto-applies (approve-in-chat) or renders the review card. It is NOT
+  // the general background-task executor — agent_jobs run on 86.
   if (agentKey === 'scribe') {
-    const SCRIBE_TOOL_NAMES = new Set([
-      'emit_payload_file', 'read_entity', 'search_entities', 'ask_user'
-    ]);
-    const seenS = new Set();
-    const mergedS = [];
-    [
-      ...(aiInternals.payloadTools ? aiInternals.payloadTools() : []),
-      ...(aiInternals.readTools ? aiInternals.readTools() : []),
-      ...aiInternals.jobTools()
-    ].forEach(t => {
-      if (!t || !t.name || seenS.has(t.name)) return;
-      if (!SCRIBE_TOOL_NAMES.has(t.name)) return;
-      seenS.add(t.name);
-      mergedS.push(t);
-    });
+    const payloadDefs = (aiInternals.payloadTools ? aiInternals.payloadTools() : []);
     // .map(toCustomToolParam) is REQUIRED — it shapes the raw tool def into
     // the {type:'custom', name, description, input_schema} the Agents API
     // expects, or agents.create rejects the Scribe.
-    return mergedS.map(toCustomToolParam);
+    return payloadDefs
+      .filter(t => t && t.name === 'emit_payload_file')
+      .map(toCustomToolParam);
   }
   // Assistant — the personal aide that HOSTS the conversation (Haiku). Full
   // read surface + memory + navigate + the one write primitive (scribe_write,
