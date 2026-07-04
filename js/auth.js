@@ -335,7 +335,10 @@
   }
 
   function doLogout() {
-    fetch('/api/auth/logout', { method: 'POST' }).catch(function() {});
+    // keepalive: the POST must survive any navigation/teardown that
+    // follows, or the cookie never clears and a role=sub session
+    // boomerangs back into /portal (the sub-portal logout-loop bug).
+    fetch('/api/auth/logout', { method: 'POST', credentials: 'include', keepalive: true }).catch(function() {});
     localStorage.removeItem('p86-auth-token');
     token = null;
     currentUser = null;

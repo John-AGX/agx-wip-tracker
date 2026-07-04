@@ -302,14 +302,49 @@
     });
   }
 
+  // Sign out that SURVIVES navigation: keepalive keeps the POST alive
+  // even if the page unloads mid-flight, and we only navigate AFTER the
+  // cookie is actually cleared. (The old fetch().finally(navigate) raced
+  // the loadProfile redirect below — the POST got aborted, the cookie
+  // survived, and '/' bounced role=sub straight back here. A sub account
+  // with a broken sub link was an inescapable loop.)
+  function doPortalLogout() {
+    fetch('/api/auth/logout', { method: 'POST', credentials: 'include', keepalive: true })
+      .catch(function() {})
+      .then(function() { window.location.replace('/'); });
+  }
+
+  // Full-page dead-end for a signed-in account that is NOT a valid
+  // sub-portal user (no sub_id, or the subs row is gone). Do NOT bounce
+  // to '/' — the main app redirects role=sub right back here.
+  function renderNotLinked() {
+    document.getElementById('sub-name').textContent = 'Account not linked';
+    document.getElementById('sub-trade').textContent = '';
+    document.getElementById('portal-content').innerHTML =
+      '<div class="portal-empty">' +
+        '<div style="font-size:18px;margin-bottom:8px;">This account isn\'t linked to a subcontractor</div>' +
+        '<div style="margin-bottom:16px;">The sign-in worked, but there\'s no subcontractor record behind it, so there\'s nothing to show. Sign out and use your invite link, or ask your project manager to re-invite you.</div>' +
+        '<button class="portal-logout" type="button" id="btn-logout-inline">Sign out</button>' +
+      '</div>';
+    var b = document.getElementById('btn-logout-inline');
+    if (b) b.onclick = doPortalLogout;
+  }
+
   function loadProfile() {
     return fetch('/api/sub-portal/me', { credentials: 'include' })
       .then(function(r) {
         if (!r.ok) {
-          // 401 / 403 → not signed in or wrong role; bounce to login.
-          if (r.status === 401 || r.status === 403) {
+          // 401 → genuinely signed out; back to the login screen.
+          if (r.status === 401) {
             window.location.href = '/';
             return Promise.reject(new Error('not signed in'));
+          }
+          // 403 / 404 → signed in but not a (valid) sub-portal user.
+          // Show the dead-end with a working sign-out instead of
+          // bouncing into the '/' ↔ '/portal' redirect loop.
+          if (r.status === 403 || r.status === 404) {
+            renderNotLinked();
+            return Promise.reject(new Error('not linked'));
           }
           return r.json().then(function(d) { throw new Error(d.error || 'Failed'); });
         }
