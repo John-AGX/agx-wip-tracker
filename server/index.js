@@ -70,14 +70,15 @@ const { storage } = require('./storage');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Trust the first proxy hop — Railway terminates TLS at its edge and
-// forwards the real client IP in X-Forwarded-For. Without this setting,
-// req.ip resolves to the proxy's internal IP and the per-IP rate
-// limiters in rate-limit.js would treat ALL traffic as coming from a
-// single source — defeating their purpose. The integer 1 = trust one
-// hop (Railway's edge). If Cloudflare or another reverse proxy is
-// added in front later, bump this to 2.
-app.set('trust proxy', 1);
+// Trust TWO proxy hops: client → Cloudflare → Railway edge → app.
+// Verified 2026-07-04 (Server: cloudflare + CF-RAY on responses):
+// Cloudflare fronts project86.net, so with only 1 trusted hop req.ip
+// resolved to CLOUDFLARE's edge IP — every user riding the same edge
+// shared one per-IP rate-limit bucket, and the sub-portal redirect
+// loop locked John (and anyone on that edge) out of login with
+// "Too many requests". 2 hops = req.ip is the real client again.
+// If another proxy is ever added in front of Cloudflare, bump to 3.
+app.set('trust proxy', 2);
 
 // Defense-in-depth: never let an unhandled response error kill the
 // process. SSE handlers in ai-routes write asynchronously after the
