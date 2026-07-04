@@ -41,7 +41,9 @@
         }
 
         body.light-mode {
-            --bg: #f0f2f5;
+            /* White main panel (not gray) — the reference look is white-on-
+               white with hairline borders doing the separation. */
+            --bg: #ffffff;
             --surface: #ffffff;
             --surface2: #e8eaef;
             --border: #e5e7eb;
@@ -1724,6 +1726,13 @@
         .app-nav .app-nav-child {
             font-size: 12.5px;
             padding: 5px 10px;
+            /* Dropdown sub-items stay regular weight — including the active
+               one (the parent .tab-btn.active rule bolds to 600; children
+               keep the pill fill but not the bold). */
+            font-weight: 400;
+        }
+        .app-nav .app-nav-child.active {
+            font-weight: 400;
         }
         .app-nav-children {
             margin-left: 27px;
