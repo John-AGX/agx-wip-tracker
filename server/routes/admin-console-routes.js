@@ -106,4 +106,160 @@ router.get('/metrics', requireAuth, requireSystemAdmin, async (req, res) => {
   }
 });
 
+// GET /api/admin/console/usage-forensics?from=ISO&to=ISO — token-usage
+// forensics across EVERY Anthropic consumer the server records (chat
+// turns, watch runs, background agent jobs, subtasks, replays), bucketed
+// so an Anthropic-Console usage spike can be attributed to a specific
+// agent / conversation / job. Read-only, parameterized, SYSTEM_ADMIN.
+// Defaults to the last 48h; span clamped to 31 days. All timestamps UTC
+// to line up with the Console's hour buckets.
+router.get('/usage-forensics', requireAuth, requireSystemAdmin, async (req, res) => {
+  try {
+    const to = req.query.to ? new Date(req.query.to) : new Date();
+    const from = req.query.from ? new Date(req.query.from) : new Date(to.getTime() - 48 * 3600e3);
+    if (isNaN(from) || isNaN(to) || from >= to) {
+      return res.status(400).json({ error: 'Bad from/to' });
+    }
+    if (to - from > 31 * 86400e3) {
+      return res.status(400).json({ error: 'Range too large (max 31 days)' });
+    }
+    const P = [from.toISOString(), to.toISOString()];
+
+    // Chat turns by UTC hour x model. total_in = uncached input + cache
+    // writes + cache reads = what the Anthropic console charts as
+    // "tokens in" for the request.
+    const byHour = await pool.query(`
+      SELECT to_char(date_trunc('hour', created_at AT TIME ZONE 'UTC'), 'YYYY-MM-DD"T"HH24:00"Z"') AS hour_utc,
+             COALESCE(model, 'unknown') AS model,
+             COUNT(*)::int AS turns,
+             COALESCE(SUM(input_tokens), 0)::bigint AS input_tokens,
+             COALESCE(SUM(cache_creation_input_tokens), 0)::bigint AS cache_creation,
+             COALESCE(SUM(cache_read_input_tokens), 0)::bigint AS cache_read,
+             COALESCE(SUM(input_tokens), 0)::bigint
+               + COALESCE(SUM(cache_creation_input_tokens), 0)::bigint
+               + COALESCE(SUM(cache_read_input_tokens), 0)::bigint AS total_in,
+             COALESCE(SUM(output_tokens), 0)::bigint AS output_tokens
+        FROM ai_messages
+       WHERE role = 'assistant' AND created_at >= $1 AND created_at < $2
+       GROUP BY 1, 2
+       ORDER BY 1, 2`, P);
+
+    // Which surface (entity_type) drove it.
+    const bySurface = await pool.query(`
+      SELECT entity_type,
+             COUNT(*)::int AS turns,
+             COUNT(DISTINCT (estimate_id, user_id))::int AS conversations,
+             COALESCE(SUM(input_tokens), 0)::bigint AS input_tokens,
+             COALESCE(SUM(cache_creation_input_tokens), 0)::bigint AS cache_creation,
+             COALESCE(SUM(cache_read_input_tokens), 0)::bigint AS cache_read,
+             COALESCE(SUM(output_tokens), 0)::bigint AS output_tokens
+        FROM ai_messages
+       WHERE role = 'assistant' AND created_at >= $1 AND created_at < $2
+       GROUP BY 1
+       ORDER BY (COALESCE(SUM(input_tokens),0) + COALESCE(SUM(cache_creation_input_tokens),0) + COALESCE(SUM(cache_read_input_tokens),0)) DESC`, P);
+
+    // The specific conversations that burned it. total_in DESC.
+    const topConversations = await pool.query(`
+      SELECT m.entity_type, m.estimate_id AS entity_id, m.user_id,
+             u.name AS user_name,
+             COUNT(*)::int AS turns,
+             COALESCE(SUM(m.tool_use_count), 0)::int AS tool_uses,
+             array_agg(DISTINCT m.model) FILTER (WHERE m.model IS NOT NULL) AS models,
+             MIN(m.created_at) AS first_turn,
+             MAX(m.created_at) AS last_turn,
+             COALESCE(SUM(m.input_tokens), 0)::bigint AS input_tokens,
+             COALESCE(SUM(m.cache_creation_input_tokens), 0)::bigint AS cache_creation,
+             COALESCE(SUM(m.cache_read_input_tokens), 0)::bigint AS cache_read,
+             COALESCE(SUM(m.input_tokens), 0)::bigint
+               + COALESCE(SUM(m.cache_creation_input_tokens), 0)::bigint
+               + COALESCE(SUM(m.cache_read_input_tokens), 0)::bigint AS total_in,
+             COALESCE(SUM(m.output_tokens), 0)::bigint AS output_tokens
+        FROM ai_messages m
+        LEFT JOIN users u ON u.id = m.user_id
+       WHERE m.role = 'assistant' AND m.created_at >= $1 AND m.created_at < $2
+       GROUP BY m.entity_type, m.estimate_id, m.user_id, u.name
+       ORDER BY total_in DESC
+       LIMIT 25`, P);
+
+    // Assistant turns that recorded NO usage — undercount detector
+    // (managed-session turns whose usage event never landed, crashes, etc).
+    const unlogged = await pool.query(`
+      SELECT entity_type, COUNT(*)::int AS turns_without_usage
+        FROM ai_messages
+       WHERE role = 'assistant' AND input_tokens IS NULL
+         AND created_at >= $1 AND created_at < $2
+       GROUP BY 1 ORDER BY 2 DESC`, P);
+
+    // Watches (proactive runs).
+    const watchRuns = await pool.query(`
+      SELECT w.name, r.watch_id, COUNT(*)::int AS runs,
+             COALESCE(SUM(r.input_tokens), 0)::bigint AS input_tokens,
+             COALESCE(SUM(r.cache_creation_tokens), 0)::bigint AS cache_creation,
+             COALESCE(SUM(r.cache_read_tokens), 0)::bigint AS cache_read,
+             COALESCE(SUM(r.output_tokens), 0)::bigint AS output_tokens
+        FROM ai_watch_runs r
+        LEFT JOIN ai_watches w ON w.id = r.watch_id
+       WHERE r.triggered_at >= $1 AND r.triggered_at < $2
+       GROUP BY w.name, r.watch_id
+       ORDER BY (COALESCE(SUM(r.input_tokens),0) + COALESCE(SUM(r.cache_creation_tokens),0) + COALESCE(SUM(r.cache_read_tokens),0)) DESC
+       LIMIT 20`, P);
+
+    // Background agent jobs.
+    const agentJobs = await pool.query(`
+      SELECT id, title, agent_key, status, created_at, started_at, completed_at,
+             input_tokens, output_tokens, cache_creation_tokens, cache_read_tokens,
+             (input_tokens + cache_creation_tokens + cache_read_tokens)::bigint AS total_in
+        FROM agent_jobs
+       WHERE created_at >= $1 AND created_at < $2
+       ORDER BY total_in DESC
+       LIMIT 20`, P);
+
+    // Subtasks + replays (usually zero these days, but count them so the
+    // ledger is complete).
+    const subtasks = await pool.query(`
+      SELECT COUNT(*)::int AS n,
+             COALESCE(SUM(input_tokens), 0)::bigint AS input_tokens,
+             COALESCE(SUM(cache_creation_tokens), 0)::bigint AS cache_creation,
+             COALESCE(SUM(cache_read_tokens), 0)::bigint AS cache_read,
+             COALESCE(SUM(output_tokens), 0)::bigint AS output_tokens
+        FROM ai_subtasks WHERE created_at >= $1 AND created_at < $2`, P);
+    const replays = await pool.query(`
+      SELECT COUNT(*)::int AS n,
+             COALESCE(SUM(input_tokens), 0)::bigint AS input_tokens,
+             COALESCE(SUM(output_tokens), 0)::bigint AS output_tokens
+        FROM ai_replays WHERE run_at >= $1 AND run_at < $2`, P);
+
+    // Grand ledger — everything the server recorded, to hold against the
+    // Anthropic console total for the same window.
+    const s = (rows, k) => rows.reduce((a, r) => a + Number(r[k] || 0), 0);
+    const chat = bySurface.rows;
+    const grand = {
+      chat_total_in: s(chat, 'input_tokens') + s(chat, 'cache_creation') + s(chat, 'cache_read'),
+      chat_output: s(chat, 'output_tokens'),
+      watches_total_in: s(watchRuns.rows, 'input_tokens') + s(watchRuns.rows, 'cache_creation') + s(watchRuns.rows, 'cache_read'),
+      agent_jobs_total_in: s(agentJobs.rows, 'total_in'),
+      subtasks_total_in: s(subtasks.rows, 'input_tokens') + s(subtasks.rows, 'cache_creation') + s(subtasks.rows, 'cache_read'),
+      replays_in: s(replays.rows, 'input_tokens'),
+    };
+    grand.everything_total_in = grand.chat_total_in + grand.watches_total_in
+      + grand.agent_jobs_total_in + grand.subtasks_total_in + grand.replays_in;
+
+    res.json({
+      from: P[0], to: P[1],
+      byHour: byHour.rows,
+      bySurface: bySurface.rows,
+      topConversations: topConversations.rows,
+      unlogged: unlogged.rows,
+      watchRuns: watchRuns.rows,
+      agentJobs: agentJobs.rows,
+      subtasks: subtasks.rows[0],
+      replays: replays.rows[0],
+      grand,
+    });
+  } catch (e) {
+    console.error('GET /api/admin/console/usage-forensics error:', e);
+    res.status(500).json({ error: e.message || 'Server error' });
+  }
+});
+
 module.exports = router;
