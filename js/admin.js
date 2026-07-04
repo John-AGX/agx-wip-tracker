@@ -3965,7 +3965,7 @@
     html += '<fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:12px 14px;margin-bottom:14px;">';
     html += '<legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Agent Skill Packs</legend>';
     html += '<p style="margin:0 0 10px 0;color:var(--text-dim,#888);font-size:12px;">' +
-      'Reusable instruction blocks. Each pack appears in the agent\'s per-turn manifest by name + description; the agent calls <code>load_skill_pack({name})</code> to pull the full body when relevant. No always-on injection — packs cost zero tokens until the agent actually loads one.' +
+      'Reusable instruction blocks — the local source for native Anthropic Skills. Edit here, then mirror/sync to Anthropic; the model loads a skill on demand by its description. Packs cost zero tokens until the model actually uses one.' +
       '</p>';
 
     if (!_skillsDraft.skills.length) {
@@ -7640,7 +7640,7 @@
       '<span style="font-size:18px;">🔗</span>' +
       '<h3 style="margin:0;font-size:14px;font-weight:600;color:var(--text,#fff);">Native Skill Assignments (per agent)</h3>' +
     '</div>' +
-    '<p style="margin:0 0 12px 0;font-size:12px;color:var(--text-dim,#888);">Which native Anthropic Skills load on which agent. Saved to <code>managed_agent_skills</code>; reaches the registered agent on the next <strong>Sync agents now</strong> click above. Attach/detach is local-only until you sync.</p>';
+    '<p style="margin:0 0 12px 0;font-size:12px;color:var(--text-dim,#888);">Which native Anthropic Skills load on which agent. Saved to <code>managed_agent_skills</code>; reaches the registered agent the next time you sync (any <strong>Sync</strong> button on this page). Attach/detach is local-only until you sync.</p>';
     host.innerHTML = header + agents.map(function(k) {
       return '<div id="agent-skills-card-' + k + '" style="margin-bottom:12px;padding:10px;border:1px solid var(--border,#333);border-radius:6px;background:var(--bg-elev,#1a1a1a);">' +
         '<div style="font-size:13px;font-weight:600;color:var(--text,#fff);margin-bottom:6px;">' + escapeHTML(labels[k] || k) + ' <span style="font-family:\'SF Mono\',monospace;font-size:11px;color:var(--text-dim,#888);">[' + k + ']</span></div>' +
@@ -7731,7 +7731,7 @@
       // added here so the admin UI doesn't mark them as "stale" and
       // offer a Delete button next to them.
       var labels = {
-        assistant: 'Assistant (Haiku — personal host; escalates to 86, delegates writes to Scribe)',
+        assistant: 'Assistant (Sonnet — personal host; escalates to 86, delegates writes to Scribe)',
         job:       '86 (operator — Opus; estimating / WIP / job-costing reasoning)',
         scribe:    'Scribe (Sonnet — shared writer; authors + dry-runs the approval card)'
       };
@@ -8288,7 +8288,7 @@
           '<div style="font-weight:600;color:#4f8cff;margin-bottom:4px;">&#x1F9E0; Native Anthropic Skills</div>' +
           'Skills attached to each managed agent on Anthropic\'s platform. The model loads these on-demand via Anthropic\'s built-in Skills mechanism — they don\'t ship in every turn\'s prompt, so they\'re effectively free until the model uses one. ' +
           'After attaching or detaching, click <strong>Sync agents now</strong> below so the change reaches the registered agent definition. ' +
-          'Local skill packs (the editor at the bottom of this page) are also on-demand only now — they appear in 86\'s per-turn manifest by name + description, and the agent calls <code>load_skill_pack({name})</code> when relevant.' +
+          'Local skill packs (the editor at the bottom of this page) are the SOURCE copies — edit and version them there, then mirror/sync to upload each one to Anthropic as a native Skill. Nothing loads server-side at runtime anymore.' +
         '</div>' +
         '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;gap:8px;">' +
           '<div style="font-size:13px;font-weight:600;color:var(--text,#fff);">Per-agent skill attachments</div>' +
@@ -8309,8 +8309,7 @@
         '<details style="margin-top:14px;border-top:1px solid var(--border,#333);padding-top:12px;">' +
           '<summary style="cursor:pointer;font-size:13px;font-weight:600;color:var(--text,#fff);">Local skill packs (' + _skillsDraft.skills.length + ' — on-demand only, edit body / agents here)</summary>' +
           '<p style="margin:10px 0 12px 0;font-size:11px;color:var(--text-dim,#888);line-height:1.55;">' +
-            'Reusable instruction blocks stored locally. Each pack appears in the per-turn manifest by name + description; 86 calls <code>load_skill_pack({name})</code> to pull the full body when starting a kind of work that maps to it. No always-on injection. ' +
-            'You can also mirror packs to native Anthropic Skills with the per-pack &#x1F310; button so the same content is available via Anthropic\'s platform mechanism.' +
+            'Reusable instruction blocks stored locally — the editable source of truth. Packs reach 86 only as native Anthropic Skills: mirror one with the per-pack &#x1F310; button (or Mirror all), and Anthropic loads it on demand by its description. Nothing here is injected per turn or fetched server-side at runtime.' +
           '</p>' +
           '<div id="agents-skills-body">' + renderAgentSkillsHTML() + '</div>' +
           '<div style="display:flex;gap:8px;align-items:center;margin-top:14px;padding:10px 12px;background:rgba(255,255,255,0.03);border:1px solid var(--border,#333);border-radius:6px;">' +
@@ -8374,7 +8373,7 @@
       var rows = (resp && resp.evals) || [];
       var btn = '<button class="ee-btn primary" onclick="openNewEvalModal()" style="margin-bottom:14px;">+ Add fixture</button>';
       var help = '<p style="margin:0 0 10px;font-size:12px;color:var(--text-dim,#888);">' +
-        'Curated fixtures replayed against AG to catch regressions. Each fixture references an existing estimate id; the runner rebuilds AG\'s normal context, sends a known prompt, and scores the response against expected_signals.' +
+        'Curated fixtures replayed against 86 to catch regressions. Each fixture references an existing estimate id; the runner rebuilds 86\'s normal context, sends a known prompt, and scores the response against expected_signals.' +
         '</p>';
       if (!rows.length) {
         host.innerHTML = btn + help + '<div style="color:var(--text-dim,#888);font-size:12px;font-style:italic;padding:20px 0;">No fixtures yet. Add one to start tracking AG quality across changes.</div>';

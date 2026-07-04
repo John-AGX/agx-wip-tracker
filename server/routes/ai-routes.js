@@ -6639,11 +6639,10 @@ async function buildClientDirectoryContext(organization) {
   const stable = [];
   const out = []; // dynamic directory snapshot
 
-  // Skill packs — manifest only. 86 can call load_skill_pack({name})
-  // to pull a body on demand. The `alwaysOn` flag is no longer
-  // consulted at runtime.
   // Skill packs ship as native Anthropic Skills registered on the
   // agent — the runtime auto-discovers them by description each turn.
+  // (The old manifest + load_skill_pack path was retired with the
+  // native-skills migration; see the note near the top of this file.)
 
   out.push('# Directory snapshot (' + rows.length + ' clients total' + (truncated ? '; showing top ' + parents.length + ' parent subtrees by recency' : '') + ')');
   if (truncated) {
