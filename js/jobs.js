@@ -2740,11 +2740,11 @@ function renderJobsMain() {
                 buildings: buildings.map(function(b) {
                     var bPct = calcBuildingPctComplete(b.id, jobId);
                     var bCost = (b.materials||0)+(b.labor||0)+(b.sub||0)+(b.equipment||0);
-                    return { id:b.id, name:b.name, pctComplete:bPct, budget:b.budget||0, cost:bCost };
+                    return { id:b.id, name:b.name, pctComplete:bPct, budget:buildingEffectiveBudget(b, jobId).amount, cost:bCost };
                 }),
                 phases: phases.map(function(p) {
                     var pCost = (p.materials||0)+(p.labor||0)+(p.sub||0)+(p.equipment||0);
-                    return { id:p.id, name:p.phase, pctComplete:p.pctComplete||0, revenue:p.asSoldRevenue||0, cost:pCost, buildingId:p.buildingId };
+                    return { id:p.id, name:p.phase, pctComplete:p.pctComplete||0, revenue:phaseRevenue(p), cost:pCost, buildingId:p.buildingId };
                 }),
                 changeOrders: cos.map(function(c) {
                     return { id:c.id, coNumber:c.coNumber, income:c.income||0, estimatedCosts:c.estimatedCosts||0, pctComplete:c.pctComplete||0 };
@@ -2819,13 +2819,45 @@ function renderJobsMain() {
             return Math.max(60000, diffMs);
         }
 
+        // ── Cost-flow accessors (legacy-tolerant) ─────────────────────
+        // Phase revenue lives in three generations of fields:
+        // asSoldRevenue (current; asSoldPhaseBudget mirrors it), with
+        // phaseBudget as the original single field (new saves keep it
+        // = asSold + CO income). Legacy rows only carry phaseBudget —
+        // read through the chain so pre-rework phases stop rendering $0.
+        function phaseRevenue(p) {
+            if (!p) return 0;
+            if (p.asSoldRevenue != null) return p.asSoldRevenue || 0;
+            if (p.asSoldPhaseBudget != null) return p.asSoldPhaseBudget || 0;
+            return p.phaseBudget || 0;
+        }
+        // A building with no explicit budget derives one from its phases:
+        // graph-wired phases (× allocation) plus phases assigned via
+        // buildingId that aren't wired. Returns { amount, derived }.
+        function buildingEffectiveBudget(building, jobId) {
+            if ((building.budget || 0) > 0) return { amount: building.budget, derived: false };
+            var seen = {};
+            var sum = 0;
+            getPhasesWiredToBuilding(building.id).forEach(function(wp) {
+                if (seen[wp.phase.id]) return;
+                seen[wp.phase.id] = 1;
+                sum += phaseRevenue(wp.phase) * ((wp.allocPct != null ? wp.allocPct : 100) / 100);
+            });
+            (appData.phases || []).forEach(function(p) {
+                if (p.jobId !== jobId || p.buildingId !== building.id || seen[p.id]) return;
+                seen[p.id] = 1;
+                sum += phaseRevenue(p);
+            });
+            return { amount: sum, derived: sum > 0 };
+        }
+
         function renderJobBuildings(jobId, hostId) {
             const buildings = appData.buildings.filter(b => b.jobId === jobId);
             const container = document.getElementById(hostId || 'job-buildings-content');
             if (!container) return;   // host may be absent (e.g. node-graph inspector passes its own id)
             if (!buildings.length) { container.innerHTML = ''; return; }
 
-            const totalBudget = buildings.reduce((s, b) => s + (b.budget || 0), 0);
+            const totalBudget = buildings.reduce((s, b) => s + buildingEffectiveBudget(b, jobId).amount, 0);
 
             const rowsHTML = buildings.map(function(building) {
                 const wiredPhases = getPhasesWiredToBuilding(building.id);
@@ -2838,8 +2870,9 @@ function renderJobsMain() {
                 const bMat = building.materials || 0, bLab = building.labor || 0, bSub = building.sub || 0, bEquip = building.equipment || 0;
                 const bldgDirectCost = bMat + bLab + bSub + bEquip;
                 const buildingCost = phaseCost + bldgDirectCost;
-                const variance = (building.budget || 0) - buildingCost;
-                const bldgPct = totalBudget > 0 ? ((building.budget || 0) / totalBudget * 100).toFixed(1) : '—';
+                const eff = buildingEffectiveBudget(building, jobId);
+                const variance = eff.amount - buildingCost;
+                const bldgPct = totalBudget > 0 ? (eff.amount / totalBudget * 100).toFixed(1) : '—';
                 const pctComplete = calcBuildingPctComplete(building.id, jobId).toFixed(1);
                 const scope = building.workScope || 'in-house';
                 // Scope chip color modifier: 'in-house' (accent blue) / 'sub'
@@ -2869,7 +2902,8 @@ function renderJobsMain() {
                               : '') +
                         '</td>' +
                         '<td class="p86-bldg-cell p86-bldg-cell-num accent">' +
-                            formatCurrency(building.budget) +
+                            formatCurrency(eff.amount) +
+                            (eff.derived ? '<span class="p86-bldg-co-tag" title="No explicit building budget — derived from this building\'s phase revenue">auto</span>' : '') +
                             (building.coBudget ? '<span class="p86-bldg-co-tag">+' + formatCurrency(building.coBudget) + '</span>' : '') +
                         '</td>' +
                         '<td class="p86-bldg-cell p86-bldg-cell-num accent">' +
@@ -2979,7 +3013,7 @@ function renderJobsMain() {
                 if (!ph) return '';
                 var cost = (ph.materials || 0) + (ph.labor || 0) + (ph.sub || 0) + (ph.equipment || 0);
                 var pColor = ph.pctComplete >= 100 ? 'var(--green)' : ph.pctComplete >= 50 ? '#f59e0b' : 'var(--text-dim)';
-                return '<span style="color:var(--text-dim);font-size:10px;">Rev: <b style="color:var(--green);">' + formatCurrency(ph.asSoldRevenue || 0) + '</b> Cost: <b>' + formatCurrency(cost) + '</b> <b style="color:' + pColor + ';">' + (ph.pctComplete || 0) + '%</b></span>';
+                return '<span style="color:var(--text-dim);font-size:10px;">Rev: <b style="color:var(--green);">' + formatCurrency(phaseRevenue(ph)) + '</b> Cost: <b>' + formatCurrency(cost) + '</b> <b style="color:' + pColor + ';">' + (ph.pctComplete || 0) + '%</b></span>';
             }
             if (type === 't1') {
                 var bldg = appData.buildings.find(function(b) { return b.id === d.id; });
@@ -3197,7 +3231,7 @@ function renderJobsMain() {
             let totalRev = 0, totalCost = 0;
             groupKeys.forEach(k => {
                 phaseGroups[k].forEach(r => {
-                    totalRev += r.asSoldRevenue || 0;
+                    totalRev += phaseRevenue(r);
                     totalCost += (r.materials || 0) + (r.labor || 0) + (r.sub || 0) + (r.equipment || 0);
                 });
             });
@@ -3220,7 +3254,7 @@ function renderJobsMain() {
 
             const rowsHTML = groupKeys.map(function(phaseName) {
                 const phaseList = phaseGroups[phaseName];
-                const revTotal = phaseList.reduce((s, p) => s + (p.asSoldRevenue || 0), 0);
+                const revTotal = phaseList.reduce((s, p) => s + phaseRevenue(p), 0);
                 const matTotal = phaseList.reduce((s, p) => s + (p.materials || 0), 0);
                 const labTotal = phaseList.reduce((s, p) => s + (p.labor || 0), 0);
                 const subTotal = phaseList.reduce((s, p) => s + (p.sub || 0), 0);
@@ -3264,7 +3298,7 @@ function renderJobsMain() {
                         '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px;">' +
                         '<div>' +
                         '<span style="font-size:13px;font-weight:600;color:var(--text);">' + escapeHTML(bldgName) + '</span>' +
-                        '<span style="font-size:11px;color:var(--text-dim);margin-left:8px;">Rev: ' + formatCurrency(p.asSoldRevenue || 0) + ' | Mat: ' + formatCurrency(p.materials || 0) + ' | Lab: ' + formatCurrency(p.labor || 0) + ' | Sub: ' + formatCurrency(p.sub || 0) + ' | Equip: ' + formatCurrency(p.equipment || 0) + ' | <b style="color:var(--accent);">' + (p.pctComplete || 0) + '%</b></span>' +
+                        '<span style="font-size:11px;color:var(--text-dim);margin-left:8px;">Rev: ' + formatCurrency(phaseRevenue(p)) + ' | Mat: ' + formatCurrency(p.materials || 0) + ' | Lab: ' + formatCurrency(p.labor || 0) + ' | Sub: ' + formatCurrency(p.sub || 0) + ' | Equip: ' + formatCurrency(p.equipment || 0) + ' | <b style="color:var(--accent);">' + (p.pctComplete || 0) + '%</b></span>' +
                         '</div>' +
                         '<button class="ee-btn ghost" onclick="event.stopPropagation();editPhase(\'' + escapeHTML(p.id) + '\')">&#x270F;&#xFE0F; Edit</button>' +
                         '</div>' +
@@ -4033,7 +4067,7 @@ function renderJobsMain() {
             Object.keys(groups).sort().forEach(key => {
                 const g = groups[key];
                 const count = g.records.length;
-                const totalRev = g.records.reduce((s, r) => s + (r.asSoldRevenue || 0), 0);
+                const totalRev = g.records.reduce((s, r) => s + phaseRevenue(r), 0);
                 const isDup = count > 1;
                 const bldgNames = g.records.map(r => {
                     const b = appData.buildings.find(bb => bb.id === r.buildingId);
@@ -4069,7 +4103,7 @@ function renderJobsMain() {
             const nameInput = document.querySelector('[data-mp-name="' + key + '"]');
             const revInput = document.querySelector('[data-mp-rev="' + key + '"]');
             const newName = nameInput ? nameInput.value.trim() : phases[0].phase;
-            const newRev = revInput ? (parseFloat(revInput.value) || 0) : phases.reduce((s, r) => s + (r.asSoldRevenue || 0), 0);
+            const newRev = revInput ? (parseFloat(revInput.value) || 0) : phases.reduce((s, r) => s + phaseRevenue(r), 0);
             // Keep the first record, absorb the rest
             const keeper = phases[0];
             const absorbed = phases.slice(1);
