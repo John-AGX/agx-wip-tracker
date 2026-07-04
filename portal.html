@@ -309,6 +309,12 @@
   // survived, and '/' bounced role=sub straight back here. A sub account
   // with a broken sub link was an inescapable loop.)
   function doPortalLogout() {
+    // BOTH halves of the session must die: the httpOnly cookie (server
+    // clears it) AND the localStorage token the main login form stashes —
+    // auth.js re-authenticates from p86-auth-token on '/' and would bounce
+    // a role=sub session right back here (the resurrection half of the
+    // logout-loop bug).
+    try { localStorage.removeItem('p86-auth-token'); } catch (e) {}
     fetch('/api/auth/logout', { method: 'POST', credentials: 'include', keepalive: true })
       .catch(function() {})
       .then(function() { window.location.replace('/'); });
