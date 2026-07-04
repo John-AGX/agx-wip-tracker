@@ -1163,6 +1163,15 @@ function renderJobsMain() {
             all.checked = boxes.length > 0 && checked === boxes.length;
             all.indeterminate = checked > 0 && checked < boxes.length;
         }
+        // In-app confirm — native confirm() silently returns false inside an
+        // installed (standalone) PWA, so any bulk action gated on it would no-op
+        // there (menu opens, option does nothing). p86Confirm is a DOM overlay
+        // that works everywhere; fall back to native only if dialogs.js is absent.
+        function bulkConfirm(opts) {
+            return (typeof window.p86Confirm === 'function')
+                ? window.p86Confirm(opts)
+                : Promise.resolve(window.confirm(opts.message || 'Are you sure?'));
+        }
         function updateJobsBulkBar() {
             var bar = document.getElementById('jobs-bulkbar');
             if (!bar || !window.p86BulkRibbon) return;
@@ -1193,59 +1202,65 @@ function renderJobsMain() {
         function p86JobsBulkStatus(v) {
             if (!v) return;
             var jobs = jobsSelectedEditable();
-            if (!jobs.length) { alert('No editable jobs selected.'); return; }
-            if (!confirm('Set ' + jobs.length + ' job(s) to "' + v + '"?')) return;
-            jobs.forEach(function(j) { j.status = v; });
-            saveData();
-            var skipped = _jobsSelected.size - jobs.length;
-            if (window.p86Toast) window.p86Toast('Status set on ' + jobs.length + ' job(s)' + (skipped ? ' (' + skipped + ' view-only skipped)' : '') + '.', 'success');
-            _jobsSelected.clear();
-            renderJobsTable();
+            if (!jobs.length) { if (window.p86Toast) window.p86Toast('No editable jobs selected.', 'error'); return; }
+            bulkConfirm({ title: 'Set status', message: 'Set ' + jobs.length + ' job(s) to "' + v + '"?', confirmLabel: 'Set status' }).then(function(ok) {
+                if (!ok) return;
+                jobs.forEach(function(j) { j.status = v; });
+                saveData();
+                var skipped = _jobsSelected.size - jobs.length;
+                if (window.p86Toast) window.p86Toast('Status set on ' + jobs.length + ' job(s)' + (skipped ? ' (' + skipped + ' view-only skipped)' : '') + '.', 'success');
+                _jobsSelected.clear();
+                renderJobsTable();
+            });
         }
         function p86JobsBulkAssign(uid, uname) {
             if (!uid) return;
             var ids = Array.from(_jobsSelected);
             if (!ids.length) return;
-            if (!confirm('Assign ' + ids.length + ' job(s) to ' + (uname || 'this PM') + '?')) return;
-            var proms = ids.map(function(id) {
-                return window.p86Api.jobs.reassignOwner(id, uid, false).then(function() {
-                    var j = appData.jobs.find(function(x) { return x.id === id; });
-                    if (j) { j.owner_id = Number(uid); j.pm = uname || j.pm; }
-                    return true;
-                }).catch(function() { return false; });
-            });
-            Promise.all(proms).then(function(res) {
-                var ok = res.filter(Boolean).length, fail = res.length - ok;
-                if (window.p86Toast) window.p86Toast('Reassigned ' + ok + ' job(s)' + (fail ? ', ' + fail + ' failed' : '') + '.', fail ? 'error' : 'success');
-                _jobsSelected.clear();
-                renderJobsTable();
+            bulkConfirm({ title: 'Assign PM', message: 'Assign ' + ids.length + ' job(s) to ' + (uname || 'this PM') + '?', confirmLabel: 'Assign' }).then(function(ok) {
+                if (!ok) return;
+                var proms = ids.map(function(id) {
+                    return window.p86Api.jobs.reassignOwner(id, uid, false).then(function() {
+                        var j = appData.jobs.find(function(x) { return x.id === id; });
+                        if (j) { j.owner_id = Number(uid); j.pm = uname || j.pm; }
+                        return true;
+                    }).catch(function() { return false; });
+                });
+                Promise.all(proms).then(function(res) {
+                    var ok2 = res.filter(Boolean).length, fail = res.length - ok2;
+                    if (window.p86Toast) window.p86Toast('Reassigned ' + ok2 + ' job(s)' + (fail ? ', ' + fail + ' failed' : '') + '.', fail ? 'error' : 'success');
+                    _jobsSelected.clear();
+                    renderJobsTable();
+                });
             });
         }
         function p86JobsDeleteSelected() {
             var ids = Array.from(_jobsSelected);
             if (!ids.length) return;
-            if (!confirm('Permanently delete ' + ids.length + ' job(s) and all their data? This cannot be undone.')) return;
-            var idSet = new Set(ids);
-            appData.jobs = appData.jobs.filter(function(j) { return !idSet.has(j.id); });
-            appData.buildings = appData.buildings.filter(function(b) { return !idSet.has(b.jobId); });
-            appData.phases = appData.phases.filter(function(p) { return !idSet.has(p.jobId); });
-            appData.changeOrders = appData.changeOrders.filter(function(c) { return !idSet.has(c.jobId); });
-            appData.subs = appData.subs.filter(function(s) { return !idSet.has(s.jobId); });
-            appData.purchaseOrders = (appData.purchaseOrders || []).filter(function(p) { return !idSet.has(p.jobId); });
-            appData.invoices = (appData.invoices || []).filter(function(i) { return !idSet.has(i.jobId); });
-            try {
-                var all = JSON.parse(localStorage.getItem('p86-nodegraphs') || '{}');
-                ids.forEach(function(id) { delete all[id]; });
-                localStorage.setItem('p86-nodegraphs', JSON.stringify(all));
-            } catch (e) {}
-            saveData();
-            // bulk-save only upserts — server-side delete per id or they resurrect.
-            if (window.p86Api && window.p86Api.isAuthenticated()) {
-                ids.forEach(function(id) { window.p86Api.jobs.remove(id).catch(function(err) { console.warn('Server delete failed for ' + id + ':', err.message); }); });
-            }
-            _jobsSelected.clear();
-            if (window.p86Toast) window.p86Toast('Deleted ' + ids.length + ' job(s).', 'success');
-            renderJobsTable();
+            bulkConfirm({ title: 'Delete jobs', message: 'Permanently delete ' + ids.length + ' job(s) and all their data? This cannot be undone.', confirmLabel: 'Delete', danger: true }).then(function(ok) {
+                if (!ok) return;
+                var idSet = new Set(ids);
+                appData.jobs = appData.jobs.filter(function(j) { return !idSet.has(j.id); });
+                appData.buildings = appData.buildings.filter(function(b) { return !idSet.has(b.jobId); });
+                appData.phases = appData.phases.filter(function(p) { return !idSet.has(p.jobId); });
+                appData.changeOrders = appData.changeOrders.filter(function(c) { return !idSet.has(c.jobId); });
+                appData.subs = appData.subs.filter(function(s) { return !idSet.has(s.jobId); });
+                appData.purchaseOrders = (appData.purchaseOrders || []).filter(function(p) { return !idSet.has(p.jobId); });
+                appData.invoices = (appData.invoices || []).filter(function(i) { return !idSet.has(i.jobId); });
+                try {
+                    var all = JSON.parse(localStorage.getItem('p86-nodegraphs') || '{}');
+                    ids.forEach(function(id) { delete all[id]; });
+                    localStorage.setItem('p86-nodegraphs', JSON.stringify(all));
+                } catch (e) {}
+                saveData();
+                // bulk-save only upserts — server-side delete per id or they resurrect.
+                if (window.p86Api && window.p86Api.isAuthenticated()) {
+                    ids.forEach(function(id) { window.p86Api.jobs.remove(id).catch(function(err) { console.warn('Server delete failed for ' + id + ':', err.message); }); });
+                }
+                _jobsSelected.clear();
+                if (window.p86Toast) window.p86Toast('Deleted ' + ids.length + ' job(s).', 'success');
+                renderJobsTable();
+            });
         }
         function p86JobsExportSelected() {
             var rows = appData.jobs.filter(function(j) { return _jobsSelected.has(j.id); });

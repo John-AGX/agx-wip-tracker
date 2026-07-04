@@ -689,12 +689,20 @@
     });
   }
 
+  // In-app confirm — native confirm() silently returns false inside an
+  // installed (standalone) PWA, so bulk actions gated on it would no-op there.
+  // p86Confirm is a DOM overlay that works everywhere.
+  function bulkConfirm(opts) {
+    return (typeof window.p86Confirm === 'function')
+      ? window.p86Confirm(opts)
+      : Promise.resolve(window.confirm(opts.message || 'Are you sure?'));
+  }
   // Apply a field update to every selected lead (server auto-stamps status
   // transitions). Reloads the list after. Used by the bulk-action bar.
   function leadsBulkApply(body, label) {
     var ids = Array.from(_leadsSelected);
     if (!ids.length) return;
-    if (!(window.p86Api && window.p86Api.leads && window.p86Api.leads.update)) { alert('Bulk edit is not available (refresh the app).'); return; }
+    if (!(window.p86Api && window.p86Api.leads && window.p86Api.leads.update)) { if (window.p86Toast) window.p86Toast('Bulk edit is not available (refresh the app).', 'error'); return; }
     var proms = ids.map(function(id) { return window.p86Api.leads.update(id, body).then(function() { return true; }).catch(function() { return false; }); });
     Promise.all(proms).then(function(res) {
       var ok = res.filter(Boolean).length, fail = res.length - ok;
@@ -703,10 +711,10 @@
       reloadLeadsCache();
     });
   }
-  window.p86LeadsBulkStatus = function(v) { if (!v) return; var term = ['sold', 'lost', 'no_opportunity'].indexOf(v) >= 0; if (term && !confirm('Set ' + _leadsSelected.size + ' lead(s) to "' + v + '"?')) return; leadsBulkApply({ status: v }, 'Status updated'); };
+  window.p86LeadsBulkStatus = function(v) { if (!v) return; var term = ['sold', 'lost', 'no_opportunity'].indexOf(v) >= 0; if (!term) { leadsBulkApply({ status: v }, 'Status updated'); return; } bulkConfirm({ title: 'Set status', message: 'Set ' + _leadsSelected.size + ' lead(s) to "' + v + '"?', confirmLabel: 'Set status' }).then(function(ok) { if (!ok) return; leadsBulkApply({ status: v }, 'Status updated'); }); };
   window.p86LeadsBulkAssign = function(v) { if (v === '') return; leadsBulkApply({ salesperson_id: v === '__none__' ? null : v }, 'Reassigned'); };
   window.p86LeadsBulkFollowup = function(d) { if (!d) return; leadsBulkApply({ next_followup_at: d }, 'Follow-up set'); };
-  window.p86LeadsBulkLost = function(reason) { if (!reason) return; if (!confirm('Mark ' + _leadsSelected.size + ' lead(s) as Lost?')) return; leadsBulkApply({ status: 'lost', lost_reason: reason }, 'Marked lost'); };
+  window.p86LeadsBulkLost = function(reason) { if (!reason) return; bulkConfirm({ title: 'Mark lost', message: 'Mark ' + _leadsSelected.size + ' lead(s) as Lost?', confirmLabel: 'Mark lost', danger: true }).then(function(ok) { if (!ok) return; leadsBulkApply({ status: 'lost', lost_reason: reason }, 'Marked lost'); }); };
   window.p86LeadsExportSelected = function() { var sel = _leads.filter(function(l) { return _leadsSelected.has(l.id); }); if (!sel.length) { if (window.p86Toast) window.p86Toast('Nothing selected.', 'error'); return; } window.leadsExportExcel(sel); };
 
   function syncLeadsSelectAll() {
@@ -741,16 +749,22 @@
   function p86LeadsDeleteSelected() {
     var ids = Array.from(_leadsSelected);
     if (!ids.length) return;
-    if (!window.p86Api || !window.p86Api.leads || !window.p86Api.leads.bulkDelete) { alert('Bulk delete is not available (refresh the app).'); return; }
-    if (!confirm('Delete ' + ids.length + ' lead' + (ids.length > 1 ? 's' : '') + '? This cannot be undone.\n\n' +
-                 'Linked estimates will be orphaned; converted jobs are NOT deleted.')) return;
-    window.p86Api.leads.bulkDelete(ids).then(function (res) {
-      _leadsSelected.clear();
-      var n = (res && typeof res.deleted === 'number') ? res.deleted : ids.length;
-      if (typeof window.p86Toast === 'function') { try { window.p86Toast('Deleted ' + n + ' lead' + (n === 1 ? '' : 's') + '.'); } catch (e) {} }
-      reloadLeadsCache();
-    }).catch(function (err) {
-      alert('Bulk delete failed: ' + ((err && err.message) || 'unknown error'));
+    if (!window.p86Api || !window.p86Api.leads || !window.p86Api.leads.bulkDelete) { if (window.p86Toast) window.p86Toast('Bulk delete is not available (refresh the app).', 'error'); return; }
+    bulkConfirm({
+      title: 'Delete leads',
+      message: 'Delete ' + ids.length + ' lead' + (ids.length > 1 ? 's' : '') + '? This cannot be undone. Linked estimates will be orphaned; converted jobs are NOT deleted.',
+      confirmLabel: 'Delete',
+      danger: true
+    }).then(function(ok) {
+      if (!ok) return;
+      window.p86Api.leads.bulkDelete(ids).then(function (res) {
+        _leadsSelected.clear();
+        var n = (res && typeof res.deleted === 'number') ? res.deleted : ids.length;
+        if (typeof window.p86Toast === 'function') { try { window.p86Toast('Deleted ' + n + ' lead' + (n === 1 ? '' : 's') + '.'); } catch (e) {} }
+        reloadLeadsCache();
+      }).catch(function (err) {
+        if (window.p86Toast) window.p86Toast('Bulk delete failed: ' + ((err && err.message) || 'unknown error'), 'error');
+      });
     });
   }
   window.p86LeadsSelect = p86LeadsSelect;
