@@ -497,6 +497,7 @@ router.get('/branding', requireAuth, async (req, res) => {
         logo_url: typeof b.logo_url === 'string' ? b.logo_url : '',
         logo_light_url: typeof b.logo_light_url === 'string' ? b.logo_light_url : '',
         logo_dark_url: typeof b.logo_dark_url === 'string' ? b.logo_dark_url : '',
+        sidebar_show_name: b.sidebar_show_name === true,
         logos: normLogos(b.logos),
         primary_color: typeof b.primary_color === 'string' ? b.primary_color : '',
         accent_color: typeof b.accent_color === 'string' ? b.accent_color : '',
@@ -527,6 +528,8 @@ router.put('/branding', requireAuth, requireOrg, requireCapability('ROLES_MANAGE
     // Empty string = "use primary" (falls back client-side).
     if (typeof body.logo_light_url === 'string') b.logo_light_url = body.logo_light_url.slice(0, 2000);
     if (typeof body.logo_dark_url === 'string') b.logo_dark_url = body.logo_dark_url.slice(0, 2000);
+    // Show the company name under the sidebar logo (for icon-only logos).
+    if (typeof body.sidebar_show_name === 'boolean') b.sidebar_show_name = body.sidebar_show_name;
     if (Array.isArray(body.logos)) b.logos = normLogos(body.logos);
     if (typeof body.primary_color === 'string' && /^#[0-9a-f]{3,8}$/i.test(body.primary_color)) b.primary_color = body.primary_color;
     if (typeof body.accent_color === 'string' && /^#[0-9a-f]{3,8}$/i.test(body.accent_color)) b.accent_color = body.accent_color;

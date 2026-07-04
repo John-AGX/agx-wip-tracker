@@ -1063,9 +1063,19 @@
             border: 1px solid var(--border);
             color: var(--text-dim);
             cursor: pointer;
-            z-index: 70;
+            /* Above sticky page toolbars/headers (z 50-150) so the pill's
+               content-side half is always clickable; below modals (1000+). */
+            z-index: 300;
             box-shadow: 0 1px 5px var(--shadow);
             transition: left 0.18s ease, color 0.12s, border-color 0.12s;
+        }
+        /* Invisible hit halo — a 26px circle is easy to just-miss; pad the
+           click target ~6px all around without changing the visual. */
+        .app-sidebar-edge-toggle::after {
+            content: "";
+            position: absolute;
+            inset: -6px;
+            border-radius: 50%;
         }
         .app-sidebar-edge-toggle:hover {
             color: var(--text);

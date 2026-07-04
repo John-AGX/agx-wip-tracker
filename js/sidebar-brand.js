@@ -58,9 +58,13 @@
     var name = _brand.name || '';
     var logo = pickLogo(b);
     if (!logo && !name) { el.style.display = 'none'; return; }
+    // Company name is opt-in when a logo exists (branding.sidebar_show_name,
+    // for icon-only logos that need the wordmark); with NO logo it always
+    // shows so the sidebar isn't headless.
+    var showName = !!name && (!logo || b.sidebar_show_name === true);
     var html = '';
     if (logo) html += '<img class="app-sidebar-brand-logo" src="' + escHtml(logo) + '" alt="" />';
-    if (name) html += '<span class="app-sidebar-brand-name">' + escHtml(name) + '</span>';
+    if (showName) html += '<span class="app-sidebar-brand-name">' + escHtml(name) + '</span>';
     el.innerHTML = html;
     el.style.display = '';
   }

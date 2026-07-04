@@ -1666,6 +1666,10 @@
             '<input type="text" id="org-brand-addurl" placeholder="…or paste an image URL" style="flex:1;min-width:120px;background:var(--input-bg,#0f0f1e);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:6px 9px;font-size:12px;" />' +
             '<button type="button" id="org-brand-addurl-btn" class="ee-btn secondary" style="font-size:11px;">+ Add</button>' +
           '</div>' +
+          '<label style="display:flex;align-items:center;gap:7px;margin-top:10px;font-size:12px;color:var(--text-dim,#aaa);cursor:pointer;">' +
+            '<input type="checkbox" id="org-brand-showname" ' + (b.sidebar_show_name === true ? 'checked' : '') + ' style="cursor:pointer;" />' +
+            'Show the company name under the sidebar logo <span style="font-size:10px;">(for icon-only logos — hide it when the logo already carries the name)</span>' +
+          '</label>' +
         '</div>' +
         '<div>' +
           '<label style="font-size:11px;color:var(--text-dim,#aaa);text-transform:uppercase;letter-spacing:0.5px;font-weight:600;display:block;margin-bottom:4px;">Footer / company line</label>' +
@@ -1704,6 +1708,8 @@
     bindColorPair(document.getElementById('org-brand-primary'), document.getElementById('org-brand-primary-text'));
     bindColorPair(document.getElementById('org-brand-accent'), document.getElementById('org-brand-accent-text'));
     document.getElementById('org-brand-footer').addEventListener('input', scheduleSaveOrgBranding);
+    var showNameCb = document.getElementById('org-brand-showname');
+    if (showNameCb) showNameCb.addEventListener('change', scheduleSaveOrgBranding);
 
     // Multi-logo: upload (one or many) + paste-URL add. Each appends to the
     // _orgLogos library; the first becomes Primary if none is set yet.
@@ -1787,6 +1793,7 @@
       logo_url: _orgPrimary || '',
       logo_light_url: _orgLight || '',
       logo_dark_url: _orgDark || '',
+      sidebar_show_name: !!((document.getElementById('org-brand-showname') || {}).checked),
       logos: _orgLogos.map(function(l) { return { url: l.url, label: l.label || '' }; }),
       primary_color: (document.getElementById('org-brand-primary-text') || {}).value || '',
       accent_color: (document.getElementById('org-brand-accent-text') || {}).value || '',
