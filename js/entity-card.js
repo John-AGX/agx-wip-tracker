@@ -73,11 +73,13 @@
       '.p86-ecard-addr{display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--text-dim,#7f8699);margin-top:4px;}' +
       '.p86-ecard-addr i{font-size:13px;flex:0 0 auto;}' +
       '.p86-ecard-addr span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}' +
-      '.p86-ecard-stats{display:flex;gap:8px;margin-top:11px;}' +
+      // Compact stat tiles — exact-dollar values made the old 14px/6x9 tiles
+      // bulky; tightened per John ("smaller, more compact").
+      '.p86-ecard-stats{display:flex;gap:6px;margin-top:8px;}' +
       '.p86-ecard-stat{flex:1;min-width:0;background:var(--card-bg,#12151f);border:1px solid var(--border,#2a2f3e);' +
-        'border-radius:8px;padding:6px 9px;}' +
-      '.p86-ecard-stat-lbl{font-size:10px;color:var(--text-dim,#7f8699);text-transform:uppercase;letter-spacing:.4px;}' +
-      '.p86-ecard-stat-val{font-size:14px;font-weight:500;color:var(--text,#e9ecf5);' +
+        'border-radius:7px;padding:4px 7px;}' +
+      '.p86-ecard-stat-lbl{font-size:8.5px;color:var(--text-dim,#7f8699);text-transform:uppercase;letter-spacing:.4px;}' +
+      '.p86-ecard-stat-val{font-size:11.5px;font-weight:600;color:var(--text,#e9ecf5);' +
         'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}' +
       '.p86-ecard-stat-val.pos{color:var(--green,#34d399);}' +
       '.p86-ecard-stat-val.neg{color:var(--red,#f87171);}' +
