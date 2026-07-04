@@ -1147,8 +1147,13 @@
   // Marks the active inner-view button in the sidebar group. The group
   // wrappers themselves are shown/hidden by switchAdminSubTab.
   function syncAdminViewSidebar(group, key) {
-    document.querySelectorAll('.app-nav-grandchildren[data-admin-group="' + group + '"] [data-admin-view]')
-      .forEach(function(btn) { btn.classList.toggle('active', btn.dataset.adminView === key); });
+    // Deferred a tick: on boot-restore, switchTab's global .tab-btn
+    // active-wipe runs AFTER the render path that calls this — a
+    // same-tick set would be cleared before it ever paints.
+    setTimeout(function() {
+      document.querySelectorAll('.app-nav-grandchildren[data-admin-group="' + group + '"] [data-admin-view]')
+        .forEach(function(btn) { btn.classList.toggle('active', btn.dataset.adminView === key); });
+    }, 0);
   }
   // Open a specific inner view of an admin page. Called by the generic
   // sidebar click handler (app.js) AFTER switchAdminSubTab painted the
