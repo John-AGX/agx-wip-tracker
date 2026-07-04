@@ -1436,7 +1436,7 @@ function ensureOrbit3D(o){
     _orbitEl=document.createElement('div'); _orbitEl.className='ng-orbit-3d';
     // Photorealistic 3D runs in an isolated same-origin iframe (loads Maps beta + Map3DElement).
     var frame=document.createElement('iframe'); frame.className='ng-orbit-3d-frame';
-    frame.src='/orbit3d.html?v=8'; frame.setAttribute('title','3D site view'); frame.setAttribute('allow','fullscreen');
+    frame.src='/orbit3d.html?v=9'; frame.setAttribute('title','3D site view'); frame.setAttribute('allow','fullscreen');
     _orbitEl.appendChild(frame); _orbitEl.__frame=frame;
     var exitB=document.createElement('button'); exitB.type='button'; exitB.className='ng-orbit-exit';
     exitB.innerHTML='&#x2715; Exit 3D'; exitB.addEventListener('click', exitOrbit3D); _orbitEl.appendChild(exitB);

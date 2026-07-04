@@ -113,8 +113,6 @@
     </div>
   </div>
   <div class="dsec"><label>Models</label>
-    <label class="dtoggle"><span>Massing models (replace blocks)</span><input type="checkbox" id="dMassing"></label>
-    <label class="dtoggle"><span>Jobsite props (crane · dumpster · trailer · laydown · stockpiles · trees)</span><input type="checkbox" id="dEquip"></label>
   </div>
   <div class="dsec"><label>Options</label>
     <label class="dtoggle"><span>Building name labels</span><input type="checkbox" id="dLabels"></label>
@@ -183,7 +181,7 @@
   // observed live. A data-URI SVG survives rasterization.
   function donutGlyphUrl(pct){
     var r=15, c=18, circ=2*Math.PI*r, dash=(circ*Math.max(0.01,pct/100)).toFixed(2);
-    var svg='<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36" width="30" height="30">'+
+    var svg='<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36" width="96" height="96">'+
       '<circle cx="'+c+'" cy="'+c+'" r="'+r+'" fill="none" stroke="rgba(255,255,255,0.22)" stroke-width="3.5"/>'+
       '<circle cx="'+c+'" cy="'+c+'" r="'+r+'" fill="none" stroke="'+pctColor(pct)+'" stroke-width="3.5" stroke-linecap="round" stroke-dasharray="'+dash+' '+circ.toFixed(2)+'" transform="rotate(-90 '+c+' '+c+')"/>'+
       '<text x="'+c+'" y="'+(c+0.5)+'" text-anchor="middle" dominant-baseline="middle" fill="#fff" font-size="11" font-weight="700" font-family="Arial,sans-serif">'+pct+'</text>'+
@@ -192,7 +190,7 @@
   }
   function detailGlyphUrl(b,pct){
     var r=15, c=18, circ=2*Math.PI*r, dash=(circ*Math.max(0.01,pct/100)).toFixed(2);
-    var svg='<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36" width="30" height="30">'+
+    var svg='<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 36" width="96" height="96">'+
       '<circle cx="'+c+'" cy="'+c+'" r="'+r+'" fill="none" stroke="rgba(255,255,255,0.22)" stroke-width="3.5"/>'+
       '<circle cx="'+c+'" cy="'+c+'" r="'+r+'" fill="none" stroke="'+pctColor(pct)+'" stroke-width="3.5" stroke-linecap="round" stroke-dasharray="'+dash+' '+circ.toFixed(2)+'" transform="rotate(-90 '+c+' '+c+')"/>'+
       '<text x="'+c+'" y="15" text-anchor="middle" dominant-baseline="middle" fill="#fff" font-size="9.5" font-weight="700" font-family="Arial,sans-serif">'+pct+'%</text>'+
@@ -474,7 +472,7 @@
   orbitBtn.addEventListener('click', startOrbit);
 
   // ── Design settings (device-local, survive across jobs/sessions) ──
-  var design={ shade:'#4f8cff', opacity:0.42, edge:'#22D3EE', pin:'donut', labels:true, blocks:true, byProgress:false, massing:true, equip:true };
+  var design={ shade:'#4f8cff', opacity:0.42, edge:'#22D3EE', pin:'donut', labels:true, blocks:true, byProgress:false };
   try{ var savedD=JSON.parse(localStorage.getItem('p86_orbit3d_design')||'{}'); Object.keys(design).forEach(function(k){ if(savedD[k]!==undefined) design[k]=savedD[k]; }); }catch(_){}
   function saveDesign(){ try{ localStorage.setItem('p86_orbit3d_design', JSON.stringify(design)); }catch(_){} }
   function hexToRgba(hex,a){ var n=parseInt(String(hex).replace('#',''),16); return 'rgba('+((n>>16)&255)+','+((n>>8)&255)+','+(n&255)+','+a+')'; }
@@ -537,34 +535,15 @@
     var Polygon3DElement=Lib.Polygon3DElement, AltitudeMode=Lib.AltitudeMode;
     var MarkerEl=Lib.Marker3DInteractiveElement || Lib.Marker3DElement;
     clearDrawn();
-    var _modelsDrawn=0, _modelErr='', _nBldg=0;
     (lastData.buildings||[]).forEach(function(b){
       if(!b.path || b.path.length<3) return;
-      _nBldg++;
       var h=b.heightM || 8;
       var pct=Math.max(0,Math.min(100,Number(b.pct)||0));
       var shade=design.byProgress ? pctColor(pct) : design.shade;
-      // Massing model: a real shaded 3D form generated from the traced
-      // footprint replaces the translucent block. Falls back to the block
-      // path when Model3DElement is unavailable or generation fails.
-      var massingDrawn=false;
-      if(design.massing && Lib.Model3DElement){
-        try{
-          var mc=centroid(b.path);
-          var mLng2=M_PER_DEG_LAT*Math.cos(mc.lat*Math.PI/180)||M_PER_DEG_LAT;
-          var local=b.path.map(function(p){ return [ (p.lng-mc.lng)*mLng2, -(p.lat-mc.lat)*M_PER_DEG_LAT ]; });
-          var murl=buildBuildingModel(local, h, pct, shade, !!design.equip);
-          var mdl=new Lib.Model3DElement({
-            src:murl,
-            position:{ lat:mc.lat, lng:mc.lng, altitude:0 },
-            altitudeMode:(Lib.AltitudeMode && Lib.AltitudeMode.RELATIVE_TO_GROUND) || undefined
-          });
-          map3d.appendChild(mdl);
-          drawn.push(mdl); blobUrls.push(murl);
-          massingDrawn=true; _modelsDrawn++;
-        }catch(e){ massingDrawn=false; if(!_modelErr) _modelErr=(e&&e.message)||String(e); }
-      }
-      if(!massingDrawn && design.blocks){
+      // Buildings render as a shaded, extruded outline block over the 3D
+      // tiles. (The procedural glTF "massing models" + jobsite props were
+      // removed — low value and finicky to render.)
+      if(design.blocks){
         // Buffer the roofline trace ~2.2m outward so the block ENGULFS the
         // building (walls, eaves) instead of slicing through the roof edge.
         var fat=expandPath(b.path, 2.2);
@@ -622,17 +601,6 @@
       }catch(_){}
     });
 
-    // Surface WHY the 3D massing models aren't showing (instead of the flat
-    // outline block), so it's never a silent mystery.
-    if(_nBldg>0 && _modelsDrawn===0){
-      var why;
-      if(!design.massing) why='"Massing models" is turned OFF — open the ⚙ Design panel (top-right) and switch it on to see the 3D buildings + crane/jobsite props.';
-      else if(!Lib.Model3DElement) why='This browser\'s Google Maps 3D build doesn\'t support 3D models (Model3DElement). Try Chrome, or the blocks are the fallback.';
-      else why='A 3D model failed to load'+(_modelErr?(' ('+_modelErr+')'):'')+' — showing outline blocks instead.';
-      showDiag(why);
-      try{ console.warn('[orbit3d] no massing models drawn:', { massingOn:!!design.massing, model3dAvail:!!Lib.Model3DElement, err:_modelErr, buildings:_nBldg }); }catch(_){}
-    } else { hideDiag(); }
-
     // Keep the docked card alive across redraws (height changes, design
     // changes): re-bind it to the same building's fresh data, or hide it.
     if(selId){
@@ -653,8 +621,6 @@
     document.getElementById('dLabels').checked=!!design.labels;
     document.getElementById('dBlocks').checked=!!design.blocks;
     document.getElementById('dByProgress').checked=!!design.byProgress;
-    document.getElementById('dMassing').checked=!!design.massing;
-    document.getElementById('dEquip').checked=!!design.equip;
   }
   function applyDesign(){ saveDesign(); syncDesignUI(); drawScene(); }
   designEl.addEventListener('click', function(e){
@@ -668,8 +634,6 @@
   document.getElementById('dLabels').addEventListener('change', function(){ design.labels=this.checked; applyDesign(); });
   document.getElementById('dBlocks').addEventListener('change', function(){ design.blocks=this.checked; applyDesign(); });
   document.getElementById('dByProgress').addEventListener('change', function(){ design.byProgress=this.checked; applyDesign(); });
-  document.getElementById('dMassing').addEventListener('change', function(){ design.massing=this.checked; applyDesign(); });
-  document.getElementById('dEquip').addEventListener('change', function(){ design.equip=this.checked; applyDesign(); });
 
   window.addEventListener('message', function(ev){
     if(ev.origin!==location.origin) return;                 // only trust the parent app
