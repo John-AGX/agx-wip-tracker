@@ -17,6 +17,22 @@
   var VIEWS = ['purchase-orders', 'change-orders', 'rfis', 'submittals'];
   var DEFAULT_VIEW = 'change-orders';
   var _view = null;
+
+  // In-app confirm — native confirm() silently no-ops in an installed PWA,
+  // so a bulk action gated on it does nothing there. Pass both p86Confirm
+  // impls' option keys (app.js + dialogs.js).
+  function bulkConfirm(opts) {
+    opts = opts || {};
+    var o = {
+      title: opts.title, message: opts.message,
+      confirmLabel: opts.confirmLabel, confirmText: opts.confirmLabel,
+      cancelLabel: opts.cancelLabel, cancelText: opts.cancelLabel,
+      danger: !!opts.danger, destructive: !!opts.danger
+    };
+    return (typeof window.p86Confirm === 'function')
+      ? window.p86Confirm(o)
+      : Promise.resolve(window.confirm(opts.message || 'Are you sure?'));
+  }
   // Per-view filter state persists for the session so flipping between
   // sub-tabs keeps your filters.
   var _state = {
@@ -256,23 +272,27 @@
       if (!n) { window.p86BulkRibbon.hide(bar); return; }
       function bulkSetStatus(v) {
         var ids = Array.from(_selected);
-        if (!confirm('Set ' + ids.length + ' item(s) to "' + v.replace(/_/g, ' ') + '"?')) return;
-        Promise.all(ids.map(function (id) { return cfg.bulk.setStatus(id, v).then(function () { return true; }).catch(function () { return false; }); }))
-          .then(function (res) {
-            var ok = res.filter(Boolean).length, fail = res.length - ok;
-            if (window.p86Toast) window.p86Toast('Status set on ' + ok + (fail ? ', ' + fail + ' failed' : '') + '.', fail ? 'error' : 'success');
-            _selected.clear(); refetch();
-          });
+        bulkConfirm({ title: 'Set status', message: 'Set ' + ids.length + ' item(s) to "' + v.replace(/_/g, ' ') + '"?', confirmLabel: 'Set status' }).then(function (ok) {
+          if (!ok) return;
+          Promise.all(ids.map(function (id) { return cfg.bulk.setStatus(id, v).then(function () { return true; }).catch(function () { return false; }); }))
+            .then(function (res) {
+              var okc = res.filter(Boolean).length, fail = res.length - okc;
+              if (typeof window.p86Toast === 'function') window.p86Toast('Status set on ' + okc + (fail ? ', ' + fail + ' failed' : '') + '.', fail ? 'error' : 'success');
+              _selected.clear(); refetch();
+            });
+        });
       }
       function bulkDelete() {
         var ids = Array.from(_selected);
-        if (!confirm('Delete ' + ids.length + ' item(s)? This cannot be undone.')) return;
-        Promise.all(ids.map(function (id) { return cfg.bulk.remove(id).then(function () { return true; }).catch(function () { return false; }); }))
-          .then(function (res) {
-            var ok = res.filter(Boolean).length, fail = res.length - ok;
-            if (window.p86Toast) window.p86Toast('Deleted ' + ok + (fail ? ', ' + fail + ' failed (locked or no access)' : '') + '.', fail ? 'error' : 'success');
-            _selected.clear(); refetch();
-          });
+        bulkConfirm({ title: 'Delete items', message: 'Delete ' + ids.length + ' item(s)? This cannot be undone.', confirmLabel: 'Delete', danger: true }).then(function (ok) {
+          if (!ok) return;
+          Promise.all(ids.map(function (id) { return cfg.bulk.remove(id).then(function () { return true; }).catch(function () { return false; }); }))
+            .then(function (res) {
+              var okc = res.filter(Boolean).length, fail = res.length - okc;
+              if (typeof window.p86Toast === 'function') window.p86Toast('Deleted ' + okc + (fail ? ', ' + fail + ' failed (locked or no access)' : '') + '.', fail ? 'error' : 'success');
+              _selected.clear(); refetch();
+            });
+        });
       }
       // Offer only the statuses legally reachable (per the server's state
       // machine) from at least one selected row's CURRENT status — the
@@ -340,13 +360,13 @@
             buildView(host, cfg);   // rebuild so the selects reflect the preset
           });
         });
-        pop.querySelectorAll('[data-def]').forEach(function (a) { a.addEventListener('click', function (e) { e.preventDefault(); e.stopPropagation(); window.p86Api.listViews.update(a.getAttribute('data-def'), { is_default: true }).then(function () { close(); if (window.p86Toast) window.p86Toast('Default view set', 'success'); }); }); });
+        pop.querySelectorAll('[data-def]').forEach(function (a) { a.addEventListener('click', function (e) { e.preventDefault(); e.stopPropagation(); window.p86Api.listViews.update(a.getAttribute('data-def'), { is_default: true }).then(function () { close(); if (typeof window.p86Toast === 'function') window.p86Toast('Default view set', 'success'); }); }); });
         pop.querySelectorAll('[data-del]').forEach(function (a) { a.addEventListener('click', function (e) { e.preventDefault(); e.stopPropagation(); if (!confirm('Delete this saved view?')) return; window.p86Api.listViews.remove(a.getAttribute('data-del')).then(close); }); });
         pop.querySelector('.jhv-save').addEventListener('click', function () {
           var name = prompt('Name this view:'); if (name == null) return; name = String(name).trim(); if (!name) return;
           window.p86Api.listViews.create({ page: cfg.viewsPage, name: name, config: { filters: { status: st.status, job: st.job, q: st.q } }, is_default: false })
-            .then(function () { close(); if (window.p86Toast) window.p86Toast('View saved', 'success'); })
-            .catch(function () { if (window.p86Toast) window.p86Toast('Could not save view', 'error'); });
+            .then(function () { close(); if (typeof window.p86Toast === 'function') window.p86Toast('View saved', 'success'); })
+            .catch(function () { if (typeof window.p86Toast === 'function') window.p86Toast('Could not save view', 'error'); });
         });
       });
     }

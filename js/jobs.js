@@ -1123,15 +1123,15 @@ function renderJobsMain() {
             function onOut(e) { if (!pop.contains(e.target) && e.target !== anchor) close(); }
             setTimeout(function() { document.addEventListener('mousedown', onOut, true); }, 0);
             pop.querySelectorAll('.jv-apply').forEach(function(sp) { sp.addEventListener('click', function() { var id = sp.parentNode.getAttribute('data-view'); var v = _jobsViews.find(function(x) { return x.id === id; }); if (v) { close(); applyJobsView(v); } }); });
-            pop.querySelectorAll('[data-def]').forEach(function(a) { a.addEventListener('click', function(e) { e.preventDefault(); e.stopPropagation(); window.p86Api.listViews.update(a.getAttribute('data-def'), { is_default: true }).then(jobsLoadViews).then(function() { close(); if (window.p86Toast) window.p86Toast('Default view set', 'success'); }); }); });
+            pop.querySelectorAll('[data-def]').forEach(function(a) { a.addEventListener('click', function(e) { e.preventDefault(); e.stopPropagation(); window.p86Api.listViews.update(a.getAttribute('data-def'), { is_default: true }).then(jobsLoadViews).then(function() { close(); if (typeof window.p86Toast === 'function') window.p86Toast('Default view set', 'success'); }); }); });
             pop.querySelectorAll('[data-del]').forEach(function(a) { a.addEventListener('click', function(e) { e.preventDefault(); e.stopPropagation(); if (!confirm('Delete this saved view?')) return; var id = a.getAttribute('data-del'); window.p86Api.listViews.remove(id).then(function() { if (_jobsActiveViewId === id) _jobsActiveViewId = null; return jobsLoadViews(); }).then(close); }); });
             var sv = pop.querySelector('#jobs-save-view');
             if (sv) sv.addEventListener('click', function() {
                 var name = prompt('Name this view:'); if (name == null) return; name = String(name).trim(); if (!name) return;
                 window.p86Api.listViews.create({ page: 'jobs', name: name, config: { filters: _jobsDrawer || {} }, is_default: false })
                     .then(function(res) { _jobsActiveViewId = (res && res.view && res.view.id) || null; return jobsLoadViews(); })
-                    .then(function() { close(); if (window.p86Toast) window.p86Toast('View saved', 'success'); })
-                    .catch(function() { if (window.p86Toast) window.p86Toast('Could not save view', 'error'); });
+                    .then(function() { close(); if (typeof window.p86Toast === 'function') window.p86Toast('View saved', 'success'); })
+                    .catch(function() { if (typeof window.p86Toast === 'function') window.p86Toast('Could not save view', 'error'); });
             });
         };
 
@@ -1212,13 +1212,13 @@ function renderJobsMain() {
         function p86JobsBulkStatus(v) {
             if (!v) return;
             var jobs = jobsSelectedEditable();
-            if (!jobs.length) { if (window.p86Toast) window.p86Toast('No editable jobs selected.', 'error'); return; }
+            if (!jobs.length) { if (typeof window.p86Toast === 'function') window.p86Toast('No editable jobs selected.', 'error'); return; }
             bulkConfirm({ title: 'Set status', message: 'Set ' + jobs.length + ' job(s) to "' + v + '"?', confirmLabel: 'Set status' }).then(function(ok) {
                 if (!ok) return;
                 jobs.forEach(function(j) { j.status = v; });
                 saveData();
                 var skipped = _jobsSelected.size - jobs.length;
-                if (window.p86Toast) window.p86Toast('Status set on ' + jobs.length + ' job(s)' + (skipped ? ' (' + skipped + ' view-only skipped)' : '') + '.', 'success');
+                if (typeof window.p86Toast === 'function') window.p86Toast('Status set on ' + jobs.length + ' job(s)' + (skipped ? ' (' + skipped + ' view-only skipped)' : '') + '.', 'success');
                 _jobsSelected.clear();
                 renderJobsTable();
             });
@@ -1238,7 +1238,7 @@ function renderJobsMain() {
                 });
                 Promise.all(proms).then(function(res) {
                     var ok2 = res.filter(Boolean).length, fail = res.length - ok2;
-                    if (window.p86Toast) window.p86Toast('Reassigned ' + ok2 + ' job(s)' + (fail ? ', ' + fail + ' failed' : '') + '.', fail ? 'error' : 'success');
+                    if (typeof window.p86Toast === 'function') window.p86Toast('Reassigned ' + ok2 + ' job(s)' + (fail ? ', ' + fail + ' failed' : '') + '.', fail ? 'error' : 'success');
                     _jobsSelected.clear();
                     renderJobsTable();
                 });
@@ -1268,13 +1268,13 @@ function renderJobsMain() {
                     ids.forEach(function(id) { window.p86Api.jobs.remove(id).catch(function(err) { console.warn('Server delete failed for ' + id + ':', err.message); }); });
                 }
                 _jobsSelected.clear();
-                if (window.p86Toast) window.p86Toast('Deleted ' + ids.length + ' job(s).', 'success');
+                if (typeof window.p86Toast === 'function') window.p86Toast('Deleted ' + ids.length + ' job(s).', 'success');
                 renderJobsTable();
             });
         }
         function p86JobsExportSelected() {
             var rows = appData.jobs.filter(function(j) { return _jobsSelected.has(j.id); });
-            if (!rows.length) { if (window.p86Toast) window.p86Toast('Nothing selected.', 'error'); return; }
+            if (!rows.length) { if (typeof window.p86Toast === 'function') window.p86Toast('Nothing selected.', 'error'); return; }
             var load = (typeof XLSX !== 'undefined') ? Promise.resolve(window.XLSX) : new Promise(function(resolve, reject) {
                 var ex = document.getElementById('p86-xlsx-cdn');
                 if (ex) { ex.addEventListener('load', function() { resolve(window.XLSX); }); ex.addEventListener('error', reject); return; }
@@ -1304,9 +1304,9 @@ function renderJobsMain() {
                 var wb = XLSX.utils.book_new();
                 XLSX.utils.book_append_sheet(wb, ws, 'Jobs');
                 XLSX.writeFile(wb, 'Jobs_' + new Date().toISOString().slice(0, 10) + '.xlsx');
-                if (window.p86Toast) window.p86Toast('Exported ' + rows.length + ' job(s).', 'success');
+                if (typeof window.p86Toast === 'function') window.p86Toast('Exported ' + rows.length + ' job(s).', 'success');
             }).catch(function(e) {
-                if (window.p86Toast) window.p86Toast('Export failed: ' + (e && e.message || 'error'), 'error');
+                if (typeof window.p86Toast === 'function') window.p86Toast('Export failed: ' + (e && e.message || 'error'), 'error');
             });
         }
         window.p86JobsSelect = p86JobsSelect;

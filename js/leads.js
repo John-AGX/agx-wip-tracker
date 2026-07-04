@@ -452,7 +452,7 @@
     pop.querySelectorAll('.lv-apply').forEach(function(sp) {
       sp.addEventListener('click', function() { var id = sp.parentNode.getAttribute('data-view'); var v = _leadsViews.find(function(x) { return x.id === id; }); if (v) { close(); applyLeadsView(v); } });
     });
-    pop.querySelectorAll('[data-def]').forEach(function(a) { a.addEventListener('click', function(e) { e.preventDefault(); e.stopPropagation(); window.p86Api.listViews.update(a.getAttribute('data-def'), { is_default: true }).then(leadsLoadViews).then(function() { close(); if (window.p86Toast) window.p86Toast('Default view set', 'success'); }); }); });
+    pop.querySelectorAll('[data-def]').forEach(function(a) { a.addEventListener('click', function(e) { e.preventDefault(); e.stopPropagation(); window.p86Api.listViews.update(a.getAttribute('data-def'), { is_default: true }).then(leadsLoadViews).then(function() { close(); if (typeof window.p86Toast === 'function') window.p86Toast('Default view set', 'success'); }); }); });
     pop.querySelectorAll('[data-del]').forEach(function(a) { a.addEventListener('click', function(e) { e.preventDefault(); e.stopPropagation(); if (!confirm('Delete this saved view?')) return; var id = a.getAttribute('data-del'); window.p86Api.listViews.remove(id).then(function() { if (_leadsActiveViewId === id) _leadsActiveViewId = null; return leadsLoadViews(); }).then(close); }); });
     // Column chooser: toggle visible columns (never allow zero).
     pop.querySelectorAll('.lc-box').forEach(function(cb) {
@@ -471,8 +471,8 @@
       var name = prompt('Name this view:'); if (name == null) return; name = String(name).trim(); if (!name) return;
       window.p86Api.listViews.create({ page: 'leads', name: name, config: { filters: _leadsDrawer || {}, columns: _leadCols || LEADS_DEFAULT_COLS }, is_default: false })
         .then(function(res) { _leadsActiveViewId = (res && res.view && res.view.id) || null; return leadsLoadViews(); })
-        .then(function() { close(); if (window.p86Toast) window.p86Toast('View saved', 'success'); })
-        .catch(function() { if (window.p86Toast) window.p86Toast('Could not save view', 'error'); });
+        .then(function() { close(); if (typeof window.p86Toast === 'function') window.p86Toast('View saved', 'success'); })
+        .catch(function() { if (typeof window.p86Toast === 'function') window.p86Toast('Could not save view', 'error'); });
     });
   };
 
@@ -508,7 +508,7 @@
   }
   window.leadsExportExcel = function(rowsArg) {
     var rows = (rowsArg && rowsArg.length) ? rowsArg : ((_leadsFiltered && _leadsFiltered.length) ? _leadsFiltered : _leads);
-    if (!rows.length) { if (window.p86Toast) window.p86Toast('No leads to export.', 'error'); return; }
+    if (!rows.length) { if (typeof window.p86Toast === 'function') window.p86Toast('No leads to export.', 'error'); return; }
     var btn = document.getElementById('leads-export-btn');
     if (btn) { btn.disabled = true; }
     ensureXLSX().then(function(XLSX) {
@@ -522,10 +522,10 @@
       XLSX.utils.book_append_sheet(wb, ws, 'Leads');
       XLSX.writeFile(wb, 'Leads_' + new Date().toISOString().slice(0, 10) + '.xlsx');
       if (btn) btn.disabled = false;
-      if (window.p86Toast) window.p86Toast('Exported ' + rows.length + ' lead' + (rows.length === 1 ? '' : 's') + '.', 'success');
+      if (typeof window.p86Toast === 'function') window.p86Toast('Exported ' + rows.length + ' lead' + (rows.length === 1 ? '' : 's') + '.', 'success');
     }).catch(function(e) {
       if (btn) btn.disabled = false;
-      if (window.p86Toast) window.p86Toast('Export failed: ' + (e && e.message || 'error'), 'error');
+      if (typeof window.p86Toast === 'function') window.p86Toast('Export failed: ' + (e && e.message || 'error'), 'error');
     });
   };
 
@@ -712,11 +712,11 @@
   function leadsBulkApply(body, label) {
     var ids = Array.from(_leadsSelected);
     if (!ids.length) return;
-    if (!(window.p86Api && window.p86Api.leads && window.p86Api.leads.update)) { if (window.p86Toast) window.p86Toast('Bulk edit is not available (refresh the app).', 'error'); return; }
+    if (!(window.p86Api && window.p86Api.leads && window.p86Api.leads.update)) { if (typeof window.p86Toast === 'function') window.p86Toast('Bulk edit is not available (refresh the app).', 'error'); return; }
     var proms = ids.map(function(id) { return window.p86Api.leads.update(id, body).then(function() { return true; }).catch(function() { return false; }); });
     Promise.all(proms).then(function(res) {
       var ok = res.filter(Boolean).length, fail = res.length - ok;
-      if (window.p86Toast) window.p86Toast(label + ': ' + ok + ' updated' + (fail ? (', ' + fail + ' failed') : '') + '.', fail ? 'error' : 'success');
+      if (typeof window.p86Toast === 'function') window.p86Toast(label + ': ' + ok + ' updated' + (fail ? (', ' + fail + ' failed') : '') + '.', fail ? 'error' : 'success');
       _leadsSelected.clear();
       reloadLeadsCache();
     });
@@ -725,7 +725,7 @@
   window.p86LeadsBulkAssign = function(v) { if (v === '') return; leadsBulkApply({ salesperson_id: v === '__none__' ? null : v }, 'Reassigned'); };
   window.p86LeadsBulkFollowup = function(d) { if (!d) return; leadsBulkApply({ next_followup_at: d }, 'Follow-up set'); };
   window.p86LeadsBulkLost = function(reason) { if (!reason) return; bulkConfirm({ title: 'Mark lost', message: 'Mark ' + _leadsSelected.size + ' lead(s) as Lost?', confirmLabel: 'Mark lost', danger: true }).then(function(ok) { if (!ok) return; leadsBulkApply({ status: 'lost', lost_reason: reason }, 'Marked lost'); }); };
-  window.p86LeadsExportSelected = function() { var sel = _leads.filter(function(l) { return _leadsSelected.has(l.id); }); if (!sel.length) { if (window.p86Toast) window.p86Toast('Nothing selected.', 'error'); return; } window.leadsExportExcel(sel); };
+  window.p86LeadsExportSelected = function() { var sel = _leads.filter(function(l) { return _leadsSelected.has(l.id); }); if (!sel.length) { if (typeof window.p86Toast === 'function') window.p86Toast('Nothing selected.', 'error'); return; } window.leadsExportExcel(sel); };
 
   function syncLeadsSelectAll() {
     var all = document.getElementById('leads-check-all');
@@ -759,7 +759,7 @@
   function p86LeadsDeleteSelected() {
     var ids = Array.from(_leadsSelected);
     if (!ids.length) return;
-    if (!window.p86Api || !window.p86Api.leads || !window.p86Api.leads.bulkDelete) { if (window.p86Toast) window.p86Toast('Bulk delete is not available (refresh the app).', 'error'); return; }
+    if (!window.p86Api || !window.p86Api.leads || !window.p86Api.leads.bulkDelete) { if (typeof window.p86Toast === 'function') window.p86Toast('Bulk delete is not available (refresh the app).', 'error'); return; }
     bulkConfirm({
       title: 'Delete leads',
       message: 'Delete ' + ids.length + ' lead' + (ids.length > 1 ? 's' : '') + '? This cannot be undone. Linked estimates will be orphaned; converted jobs are NOT deleted.',
@@ -773,7 +773,7 @@
         if (typeof window.p86Toast === 'function') { try { window.p86Toast('Deleted ' + n + ' lead' + (n === 1 ? '' : 's') + '.'); } catch (e) {} }
         reloadLeadsCache();
       }).catch(function (err) {
-        if (window.p86Toast) window.p86Toast('Bulk delete failed: ' + ((err && err.message) || 'unknown error'), 'error');
+        if (typeof window.p86Toast === 'function') window.p86Toast('Bulk delete failed: ' + ((err && err.message) || 'unknown error'), 'error');
       });
     });
   }

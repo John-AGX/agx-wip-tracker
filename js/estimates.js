@@ -217,9 +217,9 @@ function markEstimateSent(id, sent) {
         est.sent_at = (r && 'sent_at' in r) ? r.sent_at : (sent ? new Date().toISOString() : null);
         if (r && 'sent_count' in r) est.sent_count = r.sent_count;
         renderEstimatesList();
-        if (window.p86Toast) window.p86Toast(sent ? 'Marked sent.' : 'Sent status cleared.', 'success');
+        if (typeof window.p86Toast === 'function') window.p86Toast(sent ? 'Marked sent.' : 'Sent status cleared.', 'success');
     }).catch(function() {
-        if (window.p86Toast) window.p86Toast('Could not update sent status.', 'error');
+        if (typeof window.p86Toast === 'function') window.p86Toast('Could not update sent status.', 'error');
     });
 }
 window.markEstimateSent = markEstimateSent;
@@ -453,15 +453,15 @@ function estimatesOpenViews(anchor) {
     pop.querySelectorAll('.ev-apply').forEach(function(sp) {
         sp.addEventListener('click', function() { var id = sp.parentNode.getAttribute('data-view'); var v = _estViews.find(function(x) { return x.id === id; }); if (v) { close(); applyEstView(v); } });
     });
-    pop.querySelectorAll('[data-def]').forEach(function(a) { a.addEventListener('click', function(e) { e.preventDefault(); e.stopPropagation(); window.p86Api.listViews.update(a.getAttribute('data-def'), { is_default: true }).then(estLoadViews).then(function() { close(); if (window.p86Toast) window.p86Toast('Default view set', 'success'); }); }); });
+    pop.querySelectorAll('[data-def]').forEach(function(a) { a.addEventListener('click', function(e) { e.preventDefault(); e.stopPropagation(); window.p86Api.listViews.update(a.getAttribute('data-def'), { is_default: true }).then(estLoadViews).then(function() { close(); if (typeof window.p86Toast === 'function') window.p86Toast('Default view set', 'success'); }); }); });
     pop.querySelectorAll('[data-del]').forEach(function(a) { a.addEventListener('click', function(e) { e.preventDefault(); e.stopPropagation(); if (!confirm('Delete this saved view?')) return; var id = a.getAttribute('data-del'); window.p86Api.listViews.remove(id).then(function() { if (_estActiveViewId === id) _estActiveViewId = null; return estLoadViews(); }).then(close); }); });
     var sv = pop.querySelector('#est-save-view');
     if (sv) sv.addEventListener('click', function() {
         var name = prompt('Name this view:'); if (name == null) return; name = String(name).trim(); if (!name) return;
         window.p86Api.listViews.create({ page: 'estimates', name: name, config: { filters: _estDrawer || {} }, is_default: false })
             .then(function(res) { _estActiveViewId = (res && res.view && res.view.id) || null; return estLoadViews(); })
-            .then(function() { close(); if (window.p86Toast) window.p86Toast('View saved', 'success'); })
-            .catch(function() { if (window.p86Toast) window.p86Toast('Could not save view', 'error'); });
+            .then(function() { close(); if (typeof window.p86Toast === 'function') window.p86Toast('View saved', 'success'); })
+            .catch(function() { if (typeof window.p86Toast === 'function') window.p86Toast('Could not save view', 'error'); });
     });
 }
 window.estimatesOpenFilter = estimatesOpenFilter;
@@ -510,6 +510,20 @@ function updateEstimatesBulkBar() {
         ]
     });
 }
+// In-app confirm — native confirm() silently no-ops in an installed PWA.
+// Pass both p86Confirm impls' option keys (app.js + dialogs.js).
+function estBulkConfirm(opts) {
+    opts = opts || {};
+    var o = {
+        title: opts.title, message: opts.message,
+        confirmLabel: opts.confirmLabel, confirmText: opts.confirmLabel,
+        cancelLabel: opts.cancelLabel, cancelText: opts.cancelLabel,
+        danger: !!opts.danger, destructive: !!opts.danger
+    };
+    return (typeof window.p86Confirm === 'function')
+        ? window.p86Confirm(o)
+        : Promise.resolve(window.confirm(opts.message || 'Are you sure?'));
+}
 function p86EstBulkMarkSent() {
     var ids = Array.from(_estSelected);
     if (!ids.length) return;
@@ -522,7 +536,7 @@ function p86EstBulkMarkSent() {
     });
     Promise.all(proms).then(function(res) {
         var ok = res.filter(Boolean).length, fail = res.length - ok;
-        if (window.p86Toast) window.p86Toast('Marked sent: ' + ok + (fail ? ', ' + fail + ' failed' : '') + '.', fail ? 'error' : 'success');
+        if (typeof window.p86Toast === 'function') window.p86Toast('Marked sent: ' + ok + (fail ? ', ' + fail + ' failed' : '') + '.', fail ? 'error' : 'success');
         _estSelected.clear();
         renderEstimatesList();
     });
@@ -530,28 +544,30 @@ function p86EstBulkMarkSent() {
 function p86EstDeleteSelected() {
     var ids = Array.from(_estSelected);
     if (!ids.length) return;
-    if (!confirm('Delete ' + ids.length + ' estimate(s)? This cannot be undone.\n\nLocked (sold) estimates and ones you don\'t own may be skipped by the server.')) return;
-    var proms = ids.map(function(id) {
-        return window.p86Api.estimates.remove(id).then(function() { return id; }).catch(function(err) {
-            // 404 = already gone server-side — treat as deleted locally too.
-            return (err && err.status === 404) ? id : null;
+    estBulkConfirm({ title: 'Delete estimates', message: 'Delete ' + ids.length + ' estimate(s)? This cannot be undone. Locked (sold) estimates and ones you don\'t own may be skipped by the server.', confirmLabel: 'Delete', danger: true }).then(function(ok) {
+        if (!ok) return;
+        var proms = ids.map(function(id) {
+            return window.p86Api.estimates.remove(id).then(function() { return id; }).catch(function(err) {
+                // 404 = already gone server-side — treat as deleted locally too.
+                return (err && err.status === 404) ? id : null;
+            });
         });
-    });
-    Promise.all(proms).then(function(res) {
-        var deleted = res.filter(Boolean);
-        var delSet = new Set(deleted);
-        appData.estimates = (appData.estimates || []).filter(function(e) { return !delSet.has(e.id); });
-        if (appData.estimateLines) appData.estimateLines = appData.estimateLines.filter(function(l) { return !delSet.has(l.estimateId); });
-        if (appData.estimateAlternates) appData.estimateAlternates = appData.estimateAlternates.filter(function(a) { return !delSet.has(a.estimateId); });
-        var fail = ids.length - deleted.length;
-        if (window.p86Toast) window.p86Toast('Deleted ' + deleted.length + ' estimate(s)' + (fail ? ' (' + fail + ' skipped — locked or not yours)' : '') + '.', fail ? 'error' : 'success');
-        _estSelected.clear();
-        renderEstimatesList();
+        Promise.all(proms).then(function(res) {
+            var deleted = res.filter(Boolean);
+            var delSet = new Set(deleted);
+            appData.estimates = (appData.estimates || []).filter(function(e) { return !delSet.has(e.id); });
+            if (appData.estimateLines) appData.estimateLines = appData.estimateLines.filter(function(l) { return !delSet.has(l.estimateId); });
+            if (appData.estimateAlternates) appData.estimateAlternates = appData.estimateAlternates.filter(function(a) { return !delSet.has(a.estimateId); });
+            var fail = ids.length - deleted.length;
+            if (typeof window.p86Toast === 'function') window.p86Toast('Deleted ' + deleted.length + ' estimate(s)' + (fail ? ' (' + fail + ' skipped — locked or not yours)' : '') + '.', fail ? 'error' : 'success');
+            _estSelected.clear();
+            renderEstimatesList();
+        });
     });
 }
 function p86EstExportSelected() {
     var rows = (appData.estimates || []).filter(function(e) { return _estSelected.has(e.id); });
-    if (!rows.length) { if (window.p86Toast) window.p86Toast('Nothing selected.', 'error'); return; }
+    if (!rows.length) { if (typeof window.p86Toast === 'function') window.p86Toast('Nothing selected.', 'error'); return; }
     var load = (typeof XLSX !== 'undefined') ? Promise.resolve(window.XLSX) : new Promise(function(resolve, reject) {
         var ex = document.getElementById('p86-xlsx-cdn');
         if (ex) { ex.addEventListener('load', function() { resolve(window.XLSX); }); ex.addEventListener('error', reject); return; }
@@ -584,9 +600,9 @@ function p86EstExportSelected() {
         var wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, 'Estimates');
         XLSX.writeFile(wb, 'Estimates_' + new Date().toISOString().slice(0, 10) + '.xlsx');
-        if (window.p86Toast) window.p86Toast('Exported ' + rows.length + ' estimate(s).', 'success');
+        if (typeof window.p86Toast === 'function') window.p86Toast('Exported ' + rows.length + ' estimate(s).', 'success');
     }).catch(function(e) {
-        if (window.p86Toast) window.p86Toast('Export failed: ' + (e && e.message || 'error'), 'error');
+        if (typeof window.p86Toast === 'function') window.p86Toast('Export failed: ' + (e && e.message || 'error'), 'error');
     });
 }
 window.p86EstSelect = p86EstSelect;

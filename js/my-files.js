@@ -1274,6 +1274,13 @@
   };
   // Context-free entry point for the header "+" menu's "New Photo" item.
   window.p86QuickPhoto = quickPhoto;
-  // Backfill the toast helper other modules already probe for.
-  if (!window.p86Toast) window.p86Toast = { show: function(m, k) { notify(m, k); } };
+  // Backfill the toast helper other modules already probe for. Every caller
+  // invokes it as a function — window.p86Toast(msg, kind) — so it MUST be
+  // callable (an object here silently killed every toast app-wide AND made
+  // unsafe `if (window.p86Toast) window.p86Toast(...)` guards throw). Keep a
+  // .show alias for anything that probed the older object shape.
+  if (typeof window.p86Toast !== 'function') {
+    window.p86Toast = function(m, k) { notify(m, k); };
+    window.p86Toast.show = function(m, k) { notify(m, k); };
+  }
 })();
