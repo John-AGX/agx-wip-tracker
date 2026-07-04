@@ -29,8 +29,12 @@
   // "Detailed") is a SEPARATE QuickBooks cost-line viewer, NOT a
   // re-introduction of the retired Costs tab. They share "cost" in
   // the name but have nothing to do with each other.
+  // 'job-overview' (the retired classic overview page) is intentionally
+  // NOT a visible tab anymore — the Site Plan's right Inspector IS the
+  // job overview. The id still routes (see p86NgShowSection) so stale
+  // /jobs/:id/job-overview deep links resolve to the map overview
+  // instead of 404-ing, and the "‹ Overview" home chip can target it.
   const RIGHT_TABS = [
-    { id: 'job-overview',      label: 'Overview',  icon: 'insights' },
     { id: 'job-wip-report',    label: 'WIP Report', icon: 'wip' },
     { id: 'job-qb-costs',      label: 'Detailed',  icon: 'daily-logs' },
     { id: 'job-changeorders',  label: 'CO\'s',     icon: 'links' },
@@ -248,6 +252,10 @@
       backBtn.className = "jh-back-btn";
       backBtn.textContent = "\u2190 Back to Jobs";
       backBtn.addEventListener("click", function() {
+        // Site Plan is the job page now \u2014 Back goes to the jobs LIST,
+        // never the retired classic overview. Fall back to the old
+        // in-detail back link only if the global isn't loaded yet.
+        if (typeof window.backToJobsMain === "function") { window.backToJobsMain(); return; }
         var backLink = detail.querySelector("a[href], button");
         if (backLink) backLink.click();
       });

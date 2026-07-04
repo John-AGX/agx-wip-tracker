@@ -2620,6 +2620,18 @@ function restoreSectionPanel(){
 function showSectionInInspector(pid, tabBtn){
   var insp=document.querySelector('.ng-inspector'); if(!insp) return;
   var body=insp.querySelector('.ng-inspector-body'); if(!body) return;
+  // 'job-overview' is no longer a classic section — it routes to the Site
+  // Plan's NATIVE overview (renderInspectorJobDetail via renderInspector).
+  // Keeps stale /jobs/:id/job-overview deep links + the "‹ Overview" home
+  // chip working without ever surfacing the retired classic overview page.
+  if(pid==='job-overview'){
+    restoreSectionPanel(); selN=null; _inspSection=null;
+    document.querySelectorAll('.ws-right-tab').forEach(function(x){ x.classList.remove('active'); });
+    var _oj=E.job();
+    try{ if(_oj && window.history && history.replaceState){ history.replaceState(null,'','/jobs/'+encodeURIComponent(_oj)+'/job-overview'); } }catch(e){}
+    renderInspector();
+    return;
+  }
   restoreSectionPanel();                 // return any prior section panel first
   selN=null;
   document.querySelectorAll('.ws-right-tab').forEach(function(x){ x.classList.toggle('active', x===tabBtn); });
@@ -2639,7 +2651,15 @@ function showSectionInInspector(pid, tabBtn){
   }
   if(!panel){ _inspSection=pid; body.innerHTML='<div class="ng-insp-empty">Section unavailable.</div>'; return; }
   _inspSection=pid; _inspSectionPanel=panel;
-  body.innerHTML=''; panel.style.display='block'; body.appendChild(panel);
+  body.innerHTML='';
+  // Home affordance: with no Overview tab, a section needs a way back to
+  // the Site Plan's native overview.
+  var homeChip=document.createElement('button');
+  homeChip.type='button'; homeChip.className='ng-insp-home';
+  homeChip.innerHTML='&#x2039; Overview';
+  homeChip.onclick=function(){ if(window.p86NgShowOverview) window.p86NgShowOverview(); };
+  body.appendChild(homeChip);
+  panel.style.display='block'; body.appendChild(panel);
   var jid=E.job(), fn=WS_SECTION_RENDERERS[pid];
   if(fn && typeof window[fn]==='function'){ try{ window[fn](jid); }catch(err){ if(window.console) console.warn('section render '+pid, err); } }
   // Keep the URL on the section actually being viewed. replaceState (not
@@ -2656,6 +2676,9 @@ window.p86NgShowSection=function(pid){
   var btn=document.querySelector('.ws-right-tab[data-panel="'+pid+'"]');
   showSectionInInspector(pid, btn);
 };
+// Return the right Inspector to the Site Plan's native job overview
+// (used by the "‹ Overview" home chip + stale job-overview deep links).
+window.p86NgShowOverview=function(){ showSectionInInspector('job-overview', null); };
 function renderInspector(){
   var panel=document.querySelector('.ng-inspector'); if(!panel) return;
   if(!(E.viewMode && E.viewMode()==='siteplan')) return;
@@ -2703,7 +2726,24 @@ function renderInspectorJobDetail(body){
   if(_inspFilesHandle && _inspFilesHandle.destroy){ try{ _inspFilesHandle.destroy(); }catch(e){} } _inspFilesHandle=null;
   var job=(typeof appData!=='undefined'&&appData.jobs)?appData.jobs.find(function(j){return j.id===jid;}):null;
   if(!job){ body.innerHTML='<div class="ng-insp-empty">No job loaded.</div>'; return; }
+  // Top-line metrics — the numbers that used to live on the retired
+  // classic overview page. Now they lead the Site Plan's own overview so
+  // this panel is a complete job summary on its own.
+  var _w=(typeof window.getJobWIP==='function')?(window.getJobWIP(jid)||{}):{};
+  function _m(n){ n=(n==null||isNaN(n))?0:n; var neg=n<0; return (neg?'-$':'$')+Math.round(Math.abs(n)).toLocaleString(); }
+  function _p(n){ return ((n==null||isNaN(n))?0:n).toFixed(0)+'%'; }
+  var _pp=(_w.jtdProfit||0)>=0;
+  var _tiles=[
+    {k:'Income',v:_m(_w.totalIncome),c:'inc'},
+    {k:'Costs',v:_m(_w.actualCosts),c:'cost'},
+    {k:'% Complete',v:_p(_w.pctComplete),c:''},
+    {k:'Revenue',v:_m(_w.revenueEarned),c:'inc'},
+    {k:'Profit',v:_m(_w.jtdProfit),c:(_pp?'gain':'neg')},
+    {k:'Margin',v:_p(_w.jtdMargin),c:''}
+  ];
+  var _metrics='<div class="ng-insp-metrics">'+_tiles.map(function(t){ return '<div class="ng-im '+t.c+'"><span class="ng-im-k">'+t.k+'</span><span class="ng-im-v">'+t.v+'</span></div>'; }).join('')+'</div>';
   body.innerHTML='<div class="ng-insp-jobdetail">'+
+    _metrics+
     '<div class="ng-insp-sec" id="insp-buildings"></div>'+
     '<div class="ng-insp-sec" id="insp-phases"></div>'+
     '<div class="ng-insp-sec" id="insp-subs"></div><div id="insp-subs-totals"></div>'+

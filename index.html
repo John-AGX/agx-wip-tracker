@@ -3295,7 +3295,7 @@
          estimate-preview + the upcoming change-order-editor. Loads
          BEFORE any of them so window.p86Pricing is ready. -->
     <script src="js/pricing-pipeline.js?v=1"></script>
-    <script src="js/jobs.js?v=121"></script>
+    <script src="js/jobs.js?v=122"></script>
     <script src="js/job-workflow-ui.js?v=5"></script>
     <script src="js/estimates.js?v=52"></script>
     <script src="js/proposal.js?v=25"></script>
@@ -3321,7 +3321,7 @@
     <script src="js/tab-slider.js?v=1b"></script>
 
     <script src="js/workspace.js?v=46"></script>
-    <script src="js/workspace-layout.js?v=86"></script>
+    <script src="js/workspace-layout.js?v=87"></script>
 
     <!-- URL router — pathname-based navigation. Loads last so all
          top-level nav functions (switchTab, editJob, etc.) exist
@@ -3356,7 +3356,7 @@
     <script src="js/edit-gate.js?v=1"></script>
 
     <!-- Node Graph (Beta) -->
-    <link rel="stylesheet" href="nodegraph/nodegraph.css?v=147" />
+    <link rel="stylesheet" href="nodegraph/nodegraph.css?v=148" />
     <div id="nodeGraphTab">
       <!-- Workspace canvas toolbar — Outlook ribbon style. Each
            button is icon-on-top + label-below, buttons cluster into
@@ -3367,7 +3367,7 @@
       <div class="ng-topbar ng-ribbon">
         <!-- Back button — exits the graph overlay back to the job detail
              that opened it. Saves graph state before closing. -->
-        <button id="ngBackBtn" class="ng-tbtn ng-ribbon-btn ng-ribbon-back-btn" title="Back to the jobs list" onclick="closeNodeGraph()">
+        <button id="ngBackBtn" class="ng-tbtn ng-ribbon-btn ng-ribbon-back-btn" title="Back to the jobs list" onclick="(window.backToJobsMain?window.backToJobsMain():closeNodeGraph())">
           <span class="ng-ribbon-icon">&#x2190;</span>
           <span class="ng-ribbon-label">Back</span>
         </button>
@@ -3567,7 +3567,7 @@
       </div>
     </div>
     <script src="nodegraph/engine.js?v=103"></script>
-    <script src="nodegraph/ui.js?v=233"></script>
+    <script src="nodegraph/ui.js?v=234"></script>
     <!-- Ribbon popovers (Layers / More) + layer visibility persistence.
          Loads after ui.js; only owns the popover chrome — the moved
          ribbon buttons stay wired by ui.js itself. -->

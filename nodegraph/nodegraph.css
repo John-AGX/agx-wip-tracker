@@ -974,3 +974,16 @@ body.light-mode .ng-pop-check:hover{background:rgba(15,23,42,.05);}
 #nodeGraphTab.ngl-no-nodes .ng-wire-canvas{display:none!important;}
 #nodeGraphTab.ngl-no-minimap .ng-minimap{display:none!important;}
 #nodeGraphTab.ngl-no-help .ng-help{display:none!important;}
+
+/* ── Site Plan overview: top-line metric tiles + Overview home chip ──── */
+.ng-insp-metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin:2px 0 12px;}
+.ng-im{background:var(--ng-surface,#14171c);border:1px solid var(--ng-border,#262b33);border-radius:9px;padding:7px 9px;display:flex;flex-direction:column;gap:2px;min-width:0;}
+.ng-im-k{font-size:8.5px;font-weight:700;letter-spacing:.5px;text-transform:uppercase;color:var(--text-dim,#8b929e);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.ng-im-v{font-size:14px;font-weight:700;font-family:'SF Mono',ui-monospace,monospace;color:var(--text,#e8eaed);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.ng-im.inc .ng-im-v{color:#34d399;}
+.ng-im.cost .ng-im-v{color:#fbbf24;}
+.ng-im.gain .ng-im-v{color:#4f8cff;}
+.ng-im.neg .ng-im-v{color:#f87171;}
+body.light-mode .ng-im{background:#fff;border-color:#e2e8f0;}
+.ng-insp-home{display:inline-flex;align-items:center;gap:5px;margin:0 0 10px;padding:5px 11px;background:transparent;border:1px solid var(--ng-border,#262b33);border-radius:8px;color:var(--text-dim,#8b929e);font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;}
+.ng-insp-home:hover{color:var(--text,#e8eaed);border-color:#4f8cff;background:rgba(79,140,255,.08);}

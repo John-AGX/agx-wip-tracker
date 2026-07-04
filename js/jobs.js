@@ -2015,6 +2015,10 @@ function renderJobsMain() {
             if (typeof window.p86NavSave === 'function') window.p86NavSave();
             if (window.p86Router && typeof window.p86Router.sync === 'function') window.p86Router.sync();
         }
+        // Exposed so the Site Plan's Back button + the sticky-header
+        // "← Back to Jobs" go to the actual jobs LIST (not the retired
+        // classic overview that used to sit under the map overlay).
+        window.backToJobsMain = backToJobsMain;
 
         function archiveCurrentJob() {
             const job = appData.jobs.find(j => j.id === appState.currentJobId);
