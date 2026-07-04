@@ -397,11 +397,10 @@
     var infoEl = jobnav.querySelector('.app-jobnav-jobinfo');
     if (!infoEl) return;
     w = w || {};
+    // Exact dollars on the job card — no $128k rounding.
     var sm = function (n) {
-      n = Number(n) || 0; var a = Math.abs(n), s = n < 0 ? '-' : '';
-      if (a >= 1e6) return s + '$' + (a / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
-      if (a >= 1e3) return s + '$' + Math.round(a / 1e3) + 'k';
-      return s + '$' + Math.round(a);
+      n = Number(n) || 0;
+      return (n < 0 ? '-' : '') + '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     };
     var statusCol = window.p86EntityCard.jobStatusColor(job.status);
     var accentCol = window.p86EntityCard.pinColor(job, 'job') || statusCol;

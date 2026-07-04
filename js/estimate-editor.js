@@ -220,15 +220,39 @@
 
   // The estimate editor shows its PARENT LEAD's card in the sidebar — there is
   // no dedicated estimate card. estimate.lead_id → lead → p86MountLeadCard.
-  // No linked lead → no card.
+  // No linked lead → no card. Leads live in the p86Leads cache (NOT
+  // appData.leads — the old lookup there never matched, so the card never
+  // mounted); when the editor is opened straight from the Estimates list the
+  // cache may be cold, so fall back to fetching the lead by id (same pattern
+  // renderHeaderChips used). The card doubles as the jump-to-lead affordance
+  // now that the header "From lead" chip is gone — click opens the lead.
   function mountEstimateSidebarCard(est) {
     if (!window.p86EntitySubnav) return;
-    var lead = null;
-    if (est && est.lead_id && window.appData && Array.isArray(appData.leads)) {
-      lead = appData.leads.find(function (x) { return x.id === est.lead_id; });
+    var leadId = est && est.lead_id;
+    if (!leadId) { window.p86EntitySubnav.clearAll(); return; }
+    var estId = est.id;
+    function mountFor(lead) {
+      if (!lead || typeof window.p86MountLeadCard !== 'function') { window.p86EntitySubnav.clearAll(); return; }
+      window.p86MountLeadCard(lead);
+      var wrap = document.getElementById('app-leadnav');
+      if (wrap) {
+        wrap.style.cursor = 'pointer';
+        wrap.title = 'Open lead: ' + (lead.title || '');
+        wrap.onclick = function () { jumpToLeadFromEstimate(lead.id); };
+      }
     }
-    if (lead && typeof window.p86MountLeadCard === 'function') window.p86MountLeadCard(lead);
-    else window.p86EntitySubnav.clearAll();
+    var leads = (window.p86Leads && window.p86Leads.getCached && window.p86Leads.getCached()) || [];
+    var lead = leads.find(function (x) { return x.id === leadId; });
+    if (lead) { mountFor(lead); return; }
+    if (window.p86Api && window.p86Api.leads && typeof window.p86Api.leads.get === 'function') {
+      window.p86Api.leads.get(leadId).then(function (res) {
+        // Only mount if this estimate is still the open one.
+        if (res && res.lead && _currentId === estId) {
+          if (window.p86Leads && typeof window.p86Leads.cacheLead === 'function') window.p86Leads.cacheLead(res.lead);
+          mountFor(res.lead);
+        }
+      }).catch(function () { /* lead deleted or no perms — no card */ });
+    }
   }
 
   function openEstimateEditor(estimateId) {
@@ -608,73 +632,9 @@
     if (!chipsEl) return;
     var html = '';
 
-    if (est.client_id) {
-      var clients = (window.p86Clients && window.p86Clients.getCached && window.p86Clients.getCached()) || [];
-      var c = clients.find(function(x) { return x.id === est.client_id; });
-      if (c) {
-        // Show only the leaf client name. The old code appended
-        // " · community_name" when it differed from c.name, but AGX
-        // client records frequently store the community in both
-        // fields (name="PAC - Indigo West Apartments",
-        // community_name="Indigo West Apartments"), which printed
-        // the same information twice. The leaf name already carries
-        // the parent/property-management prefix; PMs who need the
-        // disambiguation have the full client editor a click away.
-        html += '<span style="display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:14px;background:rgba(79,140,255,0.12);color:#4f8cff;font-size:11px;font-weight:600;">' +
-          '<span>&#x1F465;</span>' + escapeHTML(c.name) +
-        '</span>';
-      } else {
-        // Client isn't in the local cache yet (estimate was opened
-        // without first visiting Clients) OR the client was deleted.
-        // Mirror the lead-chip pattern below: render a yellow
-        // placeholder NOW so the user knows the linkage exists,
-        // then fetch the client by id and re-render once resolved.
-        // Audit finding W4 — without this fallback the chip silently
-        // disappeared and the user couldn't tell whether the estimate
-        // had a client at all.
-        html += '<span style="display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:14px;background:rgba(251,191,36,0.10);color:var(--yellow,#fbbf24);font-size:11px;font-weight:600;" title="Client id ' + escapeHTML(est.client_id) + ' — not in local cache yet">' +
-          '<span>&#x1F465;</span>Loading client…' +
-        '</span>';
-        if (window.p86Api && window.p86Api.clients && typeof window.p86Api.clients.get === 'function') {
-          window.p86Api.clients.get(est.client_id).then(function(res) {
-            if (res && res.client) {
-              if (window.p86Clients && typeof window.p86Clients.cacheClient === 'function') {
-                window.p86Clients.cacheClient(res.client);
-              }
-              renderHeaderChips();
-            }
-          }).catch(function() { /* client deleted or no perms — leave the "Loading…" placeholder */ });
-        }
-      }
-    }
-    if (est.lead_id) {
-      var leads = (window.p86Leads && window.p86Leads.getCached && window.p86Leads.getCached()) || [];
-      var lead = leads.find(function(x) { return x.id === est.lead_id; });
-      if (lead) {
-        html += '<button class="ee-btn secondary" onclick="jumpToLeadFromEstimate(\'' + escapeHTML(lead.id) + '\')" style="display:inline-flex;align-items:center;gap:6px;">' +
-          '<span>&#x1F4CB;</span>From lead: ' + escapeHTML(lead.title) + ' &rarr;' +
-        '</button>';
-      } else {
-        // Lead isn't in the local cache yet (user opened the estimate
-        // without first visiting the Leads tab). Render a clickable
-        // placeholder, fetch the lead by id, and re-render once it
-        // resolves so the title shows up.
-        html += '<button class="ee-btn secondary" onclick="jumpToLeadFromEstimate(\'' + escapeHTML(est.lead_id) + '\')" style="display:inline-flex;align-items:center;gap:6px;background:rgba(251,191,36,0.10);color:var(--yellow,#fbbf24);">' +
-          '<span>&#x1F4CB;</span>Linked to lead &rarr;' +
-        '</button>';
-        if (window.p86Api && window.p86Api.leads && typeof window.p86Api.leads.get === 'function') {
-          window.p86Api.leads.get(est.lead_id).then(function(res) {
-            if (res && res.lead) {
-              // Push into the cache so subsequent renders are instant.
-              if (window.p86Leads && typeof window.p86Leads.cacheLead === 'function') {
-                window.p86Leads.cacheLead(res.lead);
-              }
-              renderHeaderChips();
-            }
-          }).catch(function() { /* lead deleted or no perms — leave placeholder */ });
-        }
-      }
-    }
+    // The client chip + "From lead" chip are gone — that context now lives on
+    // the parent LEAD's card in the sidebar (mountEstimateSidebarCard), which
+    // is also the click-through to the lead. Only the job ACTIONS remain here.
 
     // Create Job (or Open Job) from this estimate — the estimate-side entry
     // point for lead/estimate -> job conversion. Flips to "Open job" once the

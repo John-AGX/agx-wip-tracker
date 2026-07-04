@@ -1498,9 +1498,15 @@
                                     <!-- Back: text-only with transparent chrome, matches the
                                          overlay-close pattern used elsewhere. -->
                                     <button onclick="closeEstimateEditor()" class="ee-header-back" title="Back to estimates list">&larr; Back</button>
-                                    <input id="ee-title" type="text" placeholder="Estimate title" style="flex:1;min-width:160px;font-size:15px;font-weight:600;padding:5px 10px;background:transparent;border:1px solid transparent;border-radius:6px;color:var(--text,#fff);" onfocus="this.style.borderColor='var(--border,#333)'" onblur="this.style.borderColor='transparent'" />
-                                    <!-- Linked-lead/client chips. -->
-                                    <div id="ee-linked-chips" style="display:flex;gap:6px;flex-wrap:wrap;"></div>
+                                    <!-- Title input is hidden — the estimate title is edited on the
+                                         Details tab (#ee-titleDetails, kept in sync); the parent
+                                         LEAD's card in the sidebar carries the working context.
+                                         The element stays in the DOM because the sync code and
+                                         open-handler still read/write it. -->
+                                    <input id="ee-title" type="text" placeholder="Estimate title" style="display:none;" />
+                                    <!-- Job-action buttons (Create Job / Open job / Sync). flex:1 keeps
+                                         the save indicator + icon cluster pinned right. -->
+                                    <div id="ee-linked-chips" style="display:flex;gap:6px;flex-wrap:wrap;flex:1;min-width:0;"></div>
                                     <!-- Save-state indicator. Same text + colored states as before
                                          (No changes / Unsaved / Saving… / ✓ Saved / Retrying / Error).
                                          Clicking forces an immediate save. -->
@@ -3174,7 +3180,7 @@
     <script src="js/table-enhancements.js?v=11"></script>
     <script src="js/bulk-ribbon.js?v=1"></script>
     <script src="js/job-finalize.js?v=1"></script>
-    <script src="js/leads.js?v=69"></script>
+    <script src="js/leads.js?v=70"></script>
     <script src="js/job-costs-import.js?v=4"></script>
     <script src="js/qb-costs-view.js?v=11"></script>
     <script src="js/insights.js?v=7"></script>
@@ -3227,7 +3233,7 @@
          map-pins + maps-loader + geolocation and lazy-loads Google
          MarkerClusterer from CDN for pin clustering. Loads after
          map-pins.js so window.p86MapPins is available. -->
-    <script src="js/entities-map.js?v=26"></script>
+    <script src="js/entities-map.js?v=27"></script>
     <script src="js/projects-pairs.js?v=1"></script>
     <!-- Report template registry (Wave B). Eight construction report
          templates (walkthrough, daily-log, weekly-progress, etc.)
@@ -3256,7 +3262,7 @@
     <script src="js/job-workflow-ui.js?v=4"></script>
     <script src="js/estimates.js?v=52"></script>
     <script src="js/proposal.js?v=25"></script>
-    <script src="js/estimate-editor.js?v=63"></script>
+    <script src="js/estimate-editor.js?v=64"></script>
     <!-- Change Order editor — overlay opened from the job detail's
          Change Orders tab. Loads after pricing-pipeline (which it
          consumes via window.p86Pricing) and after api.js (which
@@ -3278,7 +3284,7 @@
     <script src="js/tab-slider.js?v=1b"></script>
 
     <script src="js/workspace.js?v=45"></script>
-    <script src="js/workspace-layout.js?v=84"></script>
+    <script src="js/workspace-layout.js?v=85"></script>
 
     <!-- URL router — pathname-based navigation. Loads last so all
          top-level nav functions (switchTab, editJob, etc.) exist

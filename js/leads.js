@@ -1775,7 +1775,8 @@
   // can show the PARENT LEAD's card instead of its own.
   function mountLeadCard(l) {
     if (!window.p86EntitySubnav || !window.p86EntityCard || !l) return;
-    function sm(n) { n = Number(n) || 0; var a = Math.abs(n); if (a >= 1e6) return '$' + (a / 1e6).toFixed(1).replace(/\.0$/, '') + 'M'; if (a >= 1e3) return '$' + Math.round(a / 1e3) + 'k'; return '$' + Math.round(a); }
+    // Exact dollars on the card — John wants $9,317.48, not $9k.
+    function sm(n) { n = Number(n) || 0; return (n < 0 ? '-' : '') + fmtCurrencyFull(Math.abs(n)); }
     var accent = window.p86EntityCard.pinColor(l, 'lead') || '#4f8cff';
     var statusCol = window.p86EntityCard.leadStatusColor(l.status);
     var rev = revenueFromAttachedEstimates(l.id);

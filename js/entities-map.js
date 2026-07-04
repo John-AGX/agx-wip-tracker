@@ -609,11 +609,10 @@
     // ── Docked detail panel (under the jobs list) — replaces the floating info
     // window, so there are no off-center popup scrollbars. Job → pulse card,
     // lead → compact card, shared address → property list. ──
+    // Exact dollars on the map cards — no $9.3k rounding.
     function money(n) {
-      n = Number(n) || 0; var a = Math.abs(n), s = n < 0 ? '-' : '';
-      if (a >= 1e6) return s + '$' + (a / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
-      if (a >= 1e3) return s + '$' + (a / 1e3).toFixed(1).replace(/\.0$/, '') + 'k';
-      return s + '$' + Math.round(a);
+      n = Number(n) || 0;
+      return (n < 0 ? '-' : '') + '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     }
     // ── On-map popup over the pin (the right sidebar stays the jobs list). A dark
     // bubble anchored above the marker via OverlayView — fixed width + vertical-only
