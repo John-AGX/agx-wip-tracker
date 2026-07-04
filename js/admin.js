@@ -4742,7 +4742,7 @@
 
   // ──────────────────────── Organization admin tab ─────────────────
   // Four inner pill-tabs: Identity (system-prompt body), Company KB
-  // (org-wide files), Skill Packs (load_skill_pack body library), MCP
+  // (org-wide files), Skill Packs (native-Skill source bodies), MCP
   // Connectors (Phase 6 external tool reach). Each tab renders its
   // own fieldset only — keeps the long scroll under control.
   var _orgDraft = null;          // currently-loaded organization row (clone)
@@ -4752,7 +4752,7 @@
   var ORG_TABS = [
     { key: 'identity', label: '\u{1FAAA} Identity',     desc: 'Company name + the prose composed into 86\'s system prompt. After saving, click Sync managed agent to push to Anthropic.' },
     { key: 'kb',       label: '\u{1F4DA} Company KB',   desc: 'Org-wide reference files every user can read; only admins upload. 86 searches these via search_org_kb.' },
-    { key: 'packs',    label: '\u{1F9E0} Section Playbooks',  desc: 'On-demand instruction blocks. 86 sees the list and calls load_skill_pack({name}) when one maps to the work. (Distinct from the "Skills" tab inside Admin → Agents, which manages native Anthropic Skills attached to the managed agent.)' },
+    { key: 'packs',    label: '\u{1F9E0} Section Playbooks',  desc: 'On-demand instruction blocks — the local source copies. Sync uploads each one to Anthropic as a native Skill, which the model loads by description when it maps to the work. (Same content as the "Skills" tab inside Admin → Agents.)' },
     { key: 'refs',     label: '\u{1F4D1} Reference Links', desc: 'Live SharePoint / Google Sheets URLs the company exposes to 86 (Job Numbers, Short Names, WIP report). Each sheet refreshes every 15 min. Lookup-mode is the default; flip a sheet to Inline if 86 should always have its rows in context.' },
     { key: 'mcp',      label: '\u{1F50C} MCP Connectors', desc: 'External tool reach via Model Context Protocol (Gmail, Calendar, QuickBooks, custom). Registers on next sync.' },
     // Phase F additions — features that were previously top-level admin
@@ -5648,7 +5648,7 @@
         +     '<div><label style="display:block;margin-bottom:3px;">Category</label>'
         +       '<input type="text" data-pack-field="category" value="' + escapeAttr(p.category || '') + '" placeholder="(optional)" /></div>'
         +   '</div>'
-        +   '<textarea data-pack-field="body" rows="6" style="width:100%;font-family:\'SF Mono\',ui-monospace,monospace;font-size:12px;line-height:1.5;resize:vertical;" placeholder="Pack body — what 86 sees when he calls load_skill_pack on this pack.">' + escapeHTML(p.body || '') + '</textarea>'
+        +   '<textarea data-pack-field="body" rows="6" style="width:100%;font-family:\'SF Mono\',ui-monospace,monospace;font-size:12px;line-height:1.5;resize:vertical;" placeholder="Pack body — what 86 sees when Anthropic loads this pack\'s native Skill.">' + escapeHTML(p.body || '') + '</textarea>'
         + '</div>';
     }).join('');
   }
@@ -8271,10 +8271,10 @@
     var host = document.getElementById('agents-content');
     if (!host) return;
     // Skills tab: native Anthropic Skills per agent (primary) + the
-    // legacy local-pack editor mounted as a collapsed <details> at the
-    // bottom for back-compat editing. Local packs are NOT injected into
-    // any /86/chat path anymore — they only show up as on-demand
-    // manifest entries that 86 pulls via load_skill_pack({name}).
+    // local-pack editor mounted as a collapsed <details> at the bottom.
+    // Local packs are the SOURCE copies only — they reach the model
+    // exclusively as native Anthropic Skills after a mirror/sync; no
+    // server-side injection or loading path remains.
     Promise.all([
       window.p86Api.settings.get('agent_skills'),
       fetchOverridableSections()
