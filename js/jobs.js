@@ -1168,8 +1168,18 @@ function renderJobsMain() {
         // there (menu opens, option does nothing). p86Confirm is a DOM overlay
         // that works everywhere; fall back to native only if dialogs.js is absent.
         function bulkConfirm(opts) {
+            opts = opts || {};
+            // Two p86Confirm impls ship (dialogs.js + app.js) with different
+            // option names — pass both so the button label + danger styling
+            // apply whichever one is active.
+            var o = {
+                title: opts.title, message: opts.message,
+                confirmLabel: opts.confirmLabel, confirmText: opts.confirmLabel,
+                cancelLabel: opts.cancelLabel, cancelText: opts.cancelLabel,
+                danger: !!opts.danger, destructive: !!opts.danger
+            };
             return (typeof window.p86Confirm === 'function')
-                ? window.p86Confirm(opts)
+                ? window.p86Confirm(o)
                 : Promise.resolve(window.confirm(opts.message || 'Are you sure?'));
         }
         function updateJobsBulkBar() {
