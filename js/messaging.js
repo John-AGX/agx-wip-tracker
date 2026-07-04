@@ -156,9 +156,9 @@
           '<button type="button" data-close style="background:transparent;border:none;color:var(--text-dim,#888);font-size:20px;cursor:pointer;padding:0 4px;">&times;</button>' +
         '</div>' +
         '<div style="padding:10px 14px;border-bottom:1px solid var(--border,#222);">' +
-          '<input type="text" data-recip-search placeholder="Search teammates&hellip;" style="width:100%;padding:8px 10px;font-size:13px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);" />' +
+          '<input type="text" data-recip-search placeholder="Search teammates&hellip;" style="width:100%;padding:8px 10px;font-size:13px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#141419);color:var(--text,#fff);" />' +
         '</div>' +
-        '<div data-recip-list style="flex:1;overflow-y:auto;background:var(--card-bg,#0f0f1e);">' +
+        '<div data-recip-list style="flex:1;overflow-y:auto;background:var(--card-bg,#141419);">' +
           '<div style="padding:18px;color:var(--text-dim,#888);font-size:12px;text-align:center;">Loading teammates&hellip;</div>' +
         '</div>' +
       '</div>';
@@ -292,11 +292,11 @@
         '<span style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;color:var(--accent,#22d3ee);background:rgba(34,211,238,0.10);padding:2px 6px;border-radius:4px;">Thread</span>' +
         '<span data-thread-title style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(opts.title || threadKey) + '</span>' +
       '</div>' +
-      '<div data-thread-list style="flex:1;overflow-y:auto;padding:12px 14px;background:var(--card-bg,#0f0f1e);">' +
+      '<div data-thread-list style="flex:1;overflow-y:auto;padding:12px 14px;background:var(--card-bg,#141419);">' +
         '<div style="text-align:center;color:var(--text-dim,#888);font-size:12px;padding:20px;">Loading&hellip;</div>' +
       '</div>' +
-      '<div style="border-top:1px solid var(--border,#333);padding:10px;display:flex;gap:8px;background:var(--surface,#1a1d27);">' +
-        '<textarea data-thread-input rows="2" placeholder="Write a message&hellip;" style="flex:1;padding:8px 10px;font-size:13px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);resize:none;font-family:inherit;"></textarea>' +
+      '<div style="border-top:1px solid var(--border,#333);padding:10px;display:flex;gap:8px;background:var(--surface,#17171c);">' +
+        '<textarea data-thread-input rows="2" placeholder="Write a message&hellip;" style="flex:1;padding:8px 10px;font-size:13px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#141419);color:var(--text,#fff);resize:none;font-family:inherit;"></textarea>' +
         '<button data-thread-send class="primary" style="padding:6px 14px;font-size:13px;align-self:stretch;">Send</button>' +
       '</div>';
 
@@ -397,7 +397,7 @@
       '#messages .msg-page{display:flex;flex-direction:column;height:calc(100vh - 130px);min-height:420px;}' +
       '#messages .msg-page-head{display:flex;align-items:center;gap:10px;padding:0 4px 12px;}' +
       '#messages .msg-page-head h2{margin:0;font-size:19px;flex:1;}' +
-      '#messages .msg-page-body{flex:1;display:grid;grid-template-columns:300px minmax(0,1fr);gap:0;border:1px solid var(--border,#2a2a3a);border-radius:10px;overflow:hidden;background:var(--card-bg,#0f0f1e);}' +
+      '#messages .msg-page-body{flex:1;display:grid;grid-template-columns:300px minmax(0,1fr);gap:0;border:1px solid var(--border,#2a2a3a);border-radius:10px;overflow:hidden;background:var(--card-bg,#141419);}' +
       '#messages .msg-page-list{border-right:1px solid var(--border,#2a2a3a);overflow-y:auto;}' +
       '#messages .msg-page-thread{overflow:hidden;display:flex;flex-direction:column;}' +
       '#messages .msg-page-back{display:none;}' +
@@ -412,7 +412,7 @@
       // Was a fixed `280px minmax(0,1fr)` grid, so at ~380px the thread got ~100px
       // and message bubbles wrapped one character per line.
       '#messagingInboxModal .msg-modal-body{flex:1;display:grid;grid-template-columns:280px minmax(0,1fr);overflow:hidden;}' +
-      '#messagingInboxModal .msg-modal-list{border-right:1px solid var(--border,#333);overflow-y:auto;background:var(--card-bg,#0f0f1e);}' +
+      '#messagingInboxModal .msg-modal-list{border-right:1px solid var(--border,#333);overflow-y:auto;background:var(--card-bg,#141419);}' +
       '#messagingInboxModal .msg-modal-thread{overflow:hidden;display:flex;flex-direction:column;min-width:0;}' +
       '#messagingInboxModal .msg-modal-back{display:none;}' +
       '@media (max-width:640px){' +

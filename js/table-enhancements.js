@@ -47,7 +47,7 @@
       selector: '#estimates-list table',
       frozen: 'title',
       // Match Jobs' frozenBg — --card-bg has a slight blue tint
-      // (#0f0f1e) that made the title column stand out against the
+      // (#141419) that made the title column stand out against the
       // page background. --bg (#101014) blends with the surrounding
       // surface so the frozen column reads as part of the table.
       frozenBg: 'var(--bg,#101014)',

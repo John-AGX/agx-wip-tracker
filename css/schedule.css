@@ -23,7 +23,7 @@
   width: 280px;
   flex: 0 0 280px;
   background: var(--surface, #181820);
-  border: 1px solid var(--border, #2e3346);
+  border: 1px solid var(--border, #2a2a32);
   border-radius: 10px;
   display: flex;
   flex-direction: column;
@@ -31,7 +31,7 @@
 }
 .sch-sidebar-header {
   padding: 10px 12px;
-  border-bottom: 1px solid var(--border, #2e3346);
+  border-bottom: 1px solid var(--border, #2a2a32);
   background: linear-gradient(135deg, rgba(79, 140, 255, 0.10), rgba(139, 92, 246, 0.06));
 }
 .sch-sidebar-title {
@@ -48,13 +48,13 @@
 }
 .sch-sidebar-search {
   padding: 8px 10px;
-  border-bottom: 1px solid var(--border, #2e3346);
+  border-bottom: 1px solid var(--border, #2a2a32);
 }
 .sch-sidebar-search input {
   width: 100%;
-  background: var(--card-bg, #0f0f1e);
+  background: var(--card-bg, #141419);
   color: var(--text, #e4e6f0);
-  border: 1px solid var(--border, #2e3346);
+  border: 1px solid var(--border, #2a2a32);
   border-radius: 6px;
   padding: 6px 10px;
   font-size: 12px;
@@ -67,7 +67,7 @@
    second line on narrow viewports rather than overflowing. */
 .sch-sidebar-status-bar {
   padding: 8px 10px;
-  border-bottom: 1px solid var(--border, #2e3346);
+  border-bottom: 1px solid var(--border, #2a2a32);
 }
 .sch-sidebar-status-label {
   font-size: 10px;
@@ -84,7 +84,7 @@
 }
 .sch-status-pill {
   background: transparent;
-  border: 1px solid var(--border, #2e3346);
+  border: 1px solid var(--border, #2a2a32);
   color: var(--text-dim, #aaa);
   font-size: 10px;
   font-weight: 600;
@@ -124,8 +124,8 @@
    visible at once. Title truncates with ellipsis (single-line)
    rather than the old two-line clamp. */
 .sch-job-card {
-  background: var(--card-bg, #0f0f1e);
-  border: 1px solid var(--border, #2e3346);
+  background: var(--card-bg, #141419);
+  border: 1px solid var(--border, #2a2a32);
   border-left: 3px solid var(--job-color, #4f8cff);
   border-radius: 5px;
   padding: 5px 8px;
@@ -185,7 +185,7 @@
   display: flex;
   flex-direction: column;
   background: var(--surface, #181820);
-  border: 1px solid var(--border, #2e3346);
+  border: 1px solid var(--border, #2a2a32);
   /* Anchor for the absolute-positioned week-summary floater. */
   position: relative;
   border-radius: 10px;
@@ -197,7 +197,7 @@
   align-items: center;
   gap: 10px;
   padding: 10px 14px;
-  border-bottom: 1px solid var(--border, #2e3346);
+  border-bottom: 1px solid var(--border, #2a2a32);
   background: linear-gradient(135deg, rgba(79, 140, 255, 0.06), rgba(139, 92, 246, 0.04));
   flex-wrap: wrap;
 }
@@ -215,9 +215,9 @@
   text-align: center;
 }
 .sch-btn {
-  background: var(--card-bg, #0f0f1e);
+  background: var(--card-bg, #141419);
   color: var(--text, #e4e6f0);
-  border: 1px solid var(--border, #2e3346);
+  border: 1px solid var(--border, #2a2a32);
   border-radius: 6px;
   padding: 5px 12px;
   font-size: 12px;
@@ -275,7 +275,7 @@
      which left a tall empty strip below the grid on large viewports. */
   grid-template-rows: auto repeat(6, minmax(78px, 1fr));
   gap: 1px;
-  background: var(--border, #2e3346);
+  background: var(--border, #2a2a32);
   min-height: 0;
   /* If stacked entries push a week row past its 1fr share, scroll
      instead of clipping or pushing other rows out of view. */
@@ -320,8 +320,8 @@
   z-index: 10;
   display: grid;
   grid-template-columns: 0.5fr 1fr 1fr 1fr 1fr 1fr 0.5fr;
-  background: var(--card-bg, #0f0f1e);
-  border-bottom: 1px solid var(--border, #2e3346);
+  background: var(--card-bg, #141419);
+  border-bottom: 1px solid var(--border, #2a2a32);
   flex: 0 0 auto;
 }
 .sch-cal-dow-row.sch-no-weekends {
@@ -331,7 +331,7 @@
   display: flex;
   flex-direction: column;
   flex: 1 0 auto;
-  background: var(--border, #2e3346);
+  background: var(--border, #2a2a32);
   position: relative;
   min-height: 200px;
 }
@@ -345,13 +345,13 @@
    stealing attention from the focused week below. */
 .sch-month-header {
   background: var(--surface, #181820);
-  color: var(--text-dim, #c4c8d8);
+  color: var(--text-dim, #b4b4bf);
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.8px;
   text-transform: uppercase;
   padding: 14px 16px 8px;
-  border-bottom: 1px solid var(--border, #2e3346);
+  border-bottom: 1px solid var(--border, #2a2a32);
 }
 
 /* Lens tiers — height + content visibility per state. Transitions on
@@ -382,7 +382,7 @@
 .sch-cal-week-row[data-lens="focused"] {
   min-height: 280px;
   max-height: 360px;
-  background: linear-gradient(180deg, rgba(34,211,238,0.04) 0%, rgba(34,211,238,0.02) 100%), var(--border, #2e3346);
+  background: linear-gradient(180deg, rgba(34,211,238,0.04) 0%, rgba(34,211,238,0.02) 100%), var(--border, #2a2a32);
 }
 .sch-cal-week-row[data-lens="near"] {
   min-height: 80px;
@@ -535,7 +535,7 @@
 }
 
 .sch-cal-dow {
-  background: var(--card-bg, #0f0f1e);
+  background: var(--card-bg, #141419);
   font-size: 9px;
   font-weight: 700;
   text-transform: uppercase;
@@ -556,7 +556,7 @@
   display: grid;
   grid-template-columns: 0.5fr 1fr 1fr 1fr 1fr 1fr 0.5fr;
   gap: 1px;
-  background: var(--border, #2e3346);
+  background: var(--border, #2a2a32);
   position: relative;
   /* 78px tightens the rows further now that the week-summary lives
      in the toolbar instead of a footer strip — the calendar uses
@@ -628,7 +628,7 @@
 /* Very faint AGX-green wash so the row reads as "selected" in
    addition to the glowing bars. Subtle — the borders do the work. */
 .sch-cal-week-row.sch-week-focused {
-  background: linear-gradient(90deg, rgba(27, 133, 65, 0.06) 0%, rgba(27, 133, 65, 0.02) 100%), var(--border, #2e3346);
+  background: linear-gradient(90deg, rgba(27, 133, 65, 0.06) 0%, rgba(27, 133, 65, 0.02) 100%), var(--border, #2a2a32);
 }
 body.light-mode .sch-week-focus-rail {
   background: rgba(27, 133, 65, 0.20);
@@ -1011,7 +1011,7 @@ body.light-mode .sch-week-summary-pin:hover {
   justify-content: space-between;
   gap: 12px;
   padding: 16px 18px 10px;
-  border-bottom: 1px solid var(--border, #2e3346);
+  border-bottom: 1px solid var(--border, #2a2a32);
 }
 .sch-day-sheet-eyebrow {
   font-size: 10px;
@@ -1034,7 +1034,7 @@ body.light-mode .sch-week-summary-pin:hover {
   display: flex;
   gap: 0;
   padding: 10px 18px;
-  border-bottom: 1px solid var(--border, #2e3346);
+  border-bottom: 1px solid var(--border, #2a2a32);
   background: linear-gradient(135deg, rgba(79, 140, 255, 0.04), rgba(139, 92, 246, 0.03));
 }
 .sch-day-stat {
@@ -1135,7 +1135,7 @@ body.light-mode .sch-day-row:hover {
   justify-content: flex-end;
   gap: 8px;
   padding: 12px 18px;
-  border-top: 1px solid var(--border, #2e3346);
+  border-top: 1px solid var(--border, #2a2a32);
 }
 
 /* ─── Weather chips + panels ───────────────────────────────
@@ -1309,7 +1309,7 @@ body.light-mode .sch-day-row-wx.sch-wx-red {
    than crushing. */
 .sch-job-wx-widget {
   background: var(--surface, #181820);
-  border: 1px solid var(--border, #2e3346);
+  border: 1px solid var(--border, #2a2a32);
   border-radius: 8px;
   padding: 10px 12px;
 }
@@ -1349,8 +1349,8 @@ body.light-mode .sch-day-row-wx.sch-wx-red {
   min-width: 96px;
   padding: 8px 8px 6px;
   border-radius: 6px;
-  background: var(--card-bg, #0f0f1e);
-  border: 1px solid var(--border, #2e3346);
+  background: var(--card-bg, #141419);
+  border: 1px solid var(--border, #2a2a32);
   border-top-width: 3px;
   text-align: center;
 }
@@ -1421,8 +1421,8 @@ body.light-mode .sch-day-row-wx.sch-wx-red {
   font-size: 11px;
   font-weight: 600;
   color: var(--text-dim, #aaa);
-  background: var(--card-bg, #0f0f1e);
-  border: 1px solid var(--border, #2e3346);
+  background: var(--card-bg, #141419);
+  border: 1px solid var(--border, #2a2a32);
 }
 .sch-btn.sch-btn-toggle.active {
   background: rgba(79, 140, 255, 0.15);
@@ -1452,9 +1452,9 @@ body.light-mode .sch-day-row-wx.sch-wx-red {
 .sch-modal-form select,
 .sch-modal-form textarea {
   width: 100%;
-  background: var(--card-bg, #0f0f1e);
+  background: var(--card-bg, #141419);
   color: var(--text, #e4e6f0);
-  border: 1px solid var(--border, #2e3346);
+  border: 1px solid var(--border, #2a2a32);
   border-radius: 6px;
   padding: 7px 10px;
   font-size: 13px;
@@ -1475,8 +1475,8 @@ body.light-mode .sch-day-row-wx.sch-wx-red {
   flex-wrap: wrap;
   gap: 4px;
   padding: 8px;
-  background: var(--card-bg, #0f0f1e);
-  border: 1px solid var(--border, #2e3346);
+  background: var(--card-bg, #141419);
+  border: 1px solid var(--border, #2a2a32);
   border-radius: 6px;
   min-height: 40px;
   max-height: 140px;
@@ -1491,7 +1491,7 @@ body.light-mode .sch-day-row-wx.sch-wx-red {
   font-size: 11px;
   cursor: pointer;
   background: rgba(255, 255, 255, 0.04);
-  border: 1px solid var(--border, #2e3346);
+  border: 1px solid var(--border, #2a2a32);
   color: var(--text-dim, #aaa);
   transition: background 0.1s, color 0.1s, border-color 0.1s;
   user-select: none;
@@ -1703,7 +1703,7 @@ body.light-mode .sch-cal-grid { background: #d6dae3; }
   }
   .sch-day-stat {
     border-left: 0 !important;
-    border-top: 1px solid var(--border, #2e3346);
+    border-top: 1px solid var(--border, #2a2a32);
     padding: 8px 10px;
     text-align: left;
   }
@@ -1831,7 +1831,7 @@ body.light-mode .sch-cal-grid { background: #d6dae3; }
     min-height: 108px;
     min-height: max(92px, calc((100dvh - 172px) / 6));
     padding: 3px;
-    border: 1px solid var(--border, #2e3346);
+    border: 1px solid var(--border, #2a2a32);
     display: flex;
     flex-direction: column;
     gap: 2px;
@@ -1931,8 +1931,8 @@ body.light-mode .sch-cal-grid { background: #d6dae3; }
 .sch-view-switch {
   display: inline-flex;
   align-items: center;
-  background: var(--card-bg, #0f0f1e);
-  border: 1px solid var(--border, #2e3346);
+  background: var(--card-bg, #141419);
+  border: 1px solid var(--border, #2a2a32);
   border-radius: 7px;
   padding: 2px;
   gap: 2px;
@@ -1960,7 +1960,7 @@ body.light-mode .sch-cal-grid { background: #d6dae3; }
 /* ─── Day-summary sidebar (calendar view) ────────────────── */
 .sch-dsum-header {
   padding: 10px 12px;
-  border-bottom: 1px solid var(--border, #2e3346);
+  border-bottom: 1px solid var(--border, #2a2a32);
   background: linear-gradient(135deg, rgba(79, 140, 255, 0.10), rgba(139, 92, 246, 0.06));
 }
 .sch-dsum-eyebrow {
@@ -2017,8 +2017,8 @@ body.light-mode .sch-cal-grid { background: #d6dae3; }
   align-items: flex-start;
   gap: 8px;
   padding: 7px 9px;
-  background: var(--card-bg, #0f0f1e);
-  border: 1px solid var(--border, #2e3346);
+  background: var(--card-bg, #141419);
+  border: 1px solid var(--border, #2a2a32);
   border-left: 3px solid var(--row-color, #4f8cff);
   border-radius: 6px;
   cursor: pointer;
@@ -2048,17 +2048,17 @@ body.light-mode .sch-cal-grid { background: #d6dae3; }
 }
 .sch-dsum-prod {
   font-size: 11px; color: var(--text-dim, #8a90a6);
-  padding: 8px 10px; border-top: 1px dashed var(--border, #2e3346);
+  padding: 8px 10px; border-top: 1px dashed var(--border, #2a2a32);
 }
 .sch-dsum-link {
   background: none; border: 0; color: #4f8cff;
   font-weight: 600; cursor: pointer; font-family: inherit; font-size: 11px; padding: 0;
 }
-.sch-dsum-footer { display: flex; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--border, #2e3346); }
+.sch-dsum-footer { display: flex; gap: 6px; padding: 8px 10px; border-top: 1px solid var(--border, #2a2a32); }
 .sch-dsum-add { flex: 1 1 0; justify-content: center; font-size: 11px; padding: 6px 4px; }
 /* Inline "set a due date" picker on unscheduled to-do rows. */
 .sch-dsr-setdate { display: inline-flex; align-items: center; gap: 5px; margin-top: 4px; font-size: 10px; color: var(--text-dim, #8a90a6); }
-.sch-dsr-datein { font-size: 11px; padding: 2px 5px; background: var(--card-bg, #0f0f1e); border: 1px solid var(--border, #2e3346); border-radius: 4px; color: var(--text, #e4e6f0); }
+.sch-dsr-datein { font-size: 11px; padding: 2px 5px; background: var(--card-bg, #141419); border: 1px solid var(--border, #2a2a32); border-radius: 4px; color: var(--text, #e4e6f0); }
 /* Selected day on the mobile month grid — blue highlight box. */
 .sch-mcell-selected { outline: 2px solid #4f8cff; outline-offset: -2px; border-radius: 4px; }
 /* Tappable event-location → Google Maps link. */
@@ -2069,6 +2069,6 @@ body.light-mode .sch-cal-grid { background: #d6dae3; }
 .sch-dsum-none { font-size: 11px; color: var(--text-dim, #8a90a6); padding: 2px 2px 4px; }
 /* Unscheduled (no-due-date) to-dos bucket — separated from the day's
    items so it reads as day-independent. */
-.sch-dsum-unsched { margin-top: 4px; padding-top: 10px; border-top: 1px dashed var(--border, #2e3346); }
+.sch-dsum-unsched { margin-top: 4px; padding-top: 10px; border-top: 1px dashed var(--border, #2a2a32); }
 .sch-dsum-unsched .sch-dsum-sect-title { color: #f59e0b; }
 

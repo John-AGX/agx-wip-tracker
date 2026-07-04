@@ -79,13 +79,13 @@
     var html = '';
 
     // Header — title, window selector, refresh.
-    html += '<div style="padding:14px 16px;border-bottom:1px solid var(--border,#2e3346);display:flex;align-items:center;gap:12px;">';
+    html += '<div style="padding:14px 16px;border-bottom:1px solid var(--border,#2a2a32);display:flex;align-items:center;gap:12px;">';
     html += '<div style="flex:1;">';
     html += '<div style="font-size:13px;font-weight:700;color:var(--text,#fff);letter-spacing:0.3px;">Context Registry</div>';
     html += '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:2px;">Observability across memory / skill / watch / entity-read layers. ' +
             '<a href="#" data-context-help="1" style="color:#4f8cff;text-decoration:none;">What\'s this?</a></div>';
     html += '</div>';
-    html += '<select data-context-days style="background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#2e3346);color:var(--text,#fff);padding:6px 10px;border-radius:6px;font-size:12px;">';
+    html += '<select data-context-days style="background:var(--card-bg,#141419);border:1px solid var(--border,#2a2a32);color:var(--text,#fff);padding:6px 10px;border-radius:6px;font-size:12px;">';
     [1, 7, 30, 90].forEach(function(d) {
       html += '<option value="' + d + '"' + (d === _state.days ? ' selected' : '') + '>Last ' + d + 'd</option>';
     });
@@ -104,7 +104,7 @@
     } else {
       layers.forEach(function(L) {
         var meta = LAYER_LABELS[L.layer] || { label: L.layer, glyph: '•', desc: '' };
-        html += '<div data-layer-card="' + esc(L.layer) + '" style="background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#2e3346);border-radius:8px;padding:12px;cursor:pointer;transition:border-color 0.15s;">';
+        html += '<div data-layer-card="' + esc(L.layer) + '" style="background:var(--card-bg,#141419);border:1px solid var(--border,#2a2a32);border-radius:8px;padding:12px;cursor:pointer;transition:border-color 0.15s;">';
         html += '<div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">';
         html += '<span style="font-size:18px;">' + meta.glyph + '</span>';
         html += '<div style="flex:1;"><div style="font-size:12px;font-weight:700;color:var(--text,#fff);">' + esc(meta.label) + '</div>';
@@ -117,7 +117,7 @@
         html += '</div>';
         // Top 3 items inline.
         if (L.top_items && L.top_items.length) {
-          html += '<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--ng-border2,#2e3346);">';
+          html += '<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--ng-border2,#2a2a32);">';
           L.top_items.slice(0, 3).forEach(function(it) {
             html += '<div style="display:flex;align-items:center;gap:8px;padding:2px 0;font-size:11px;color:var(--text-dim,#aaa);">';
             html += '<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(it.item_name || it.item_id || '(unnamed)') + '</span>';
@@ -140,22 +140,22 @@
 
     var stale = (_state.stale && _state.stale.stale_items) || [];
     if (!stale.length) {
-      html += '<div style="padding:14px;background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#2e3346);border-radius:6px;font-size:11px;color:var(--text-dim,#888);font-style:italic;">';
+      html += '<div style="padding:14px;background:var(--card-bg,#141419);border:1px solid var(--border,#2a2a32);border-radius:6px;font-size:11px;color:var(--text-dim,#888);font-style:italic;">';
       html += 'Every active memory has been recalled in the window. Healthy registry.';
       html += '</div>';
     } else {
-      html += '<div style="background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#2e3346);border-radius:6px;overflow:hidden;">';
-      html += '<div style="display:grid;grid-template-columns:1fr 70px 50px 90px 60px;gap:8px;padding:8px 12px;background:rgba(124,58,237,0.08);border-bottom:1px solid var(--border,#2e3346);font-size:10px;color:var(--text-dim,#aaa);text-transform:uppercase;letter-spacing:0.5px;">';
+      html += '<div style="background:var(--card-bg,#141419);border:1px solid var(--border,#2a2a32);border-radius:6px;overflow:hidden;">';
+      html += '<div style="display:grid;grid-template-columns:1fr 70px 50px 90px 60px;gap:8px;padding:8px 12px;background:rgba(124,58,237,0.08);border-bottom:1px solid var(--border,#2a2a32);font-size:10px;color:var(--text-dim,#aaa);text-transform:uppercase;letter-spacing:0.5px;">';
       html += '<div>Memory</div><div>Kind</div><div style="text-align:right;">Imp</div><div style="text-align:right;">Last recall</div><div></div>';
       html += '</div>';
       stale.forEach(function(m) {
-        html += '<div style="display:grid;grid-template-columns:1fr 70px 50px 90px 60px;gap:8px;padding:8px 12px;border-bottom:1px solid var(--ng-border2,#2e3346);font-size:11px;color:var(--text,#fff);align-items:center;">';
+        html += '<div style="display:grid;grid-template-columns:1fr 70px 50px 90px 60px;gap:8px;padding:8px 12px;border-bottom:1px solid var(--ng-border2,#2a2a32);font-size:11px;color:var(--text,#fff);align-items:center;">';
         html += '<div><span style="font-weight:600;">' + esc(m.topic) + '</span><span style="color:var(--text-dim,#888);font-size:10px;"> [' + esc(m.scope) + ']</span></div>';
         html += '<div style="color:var(--text-dim,#aaa);">' + esc(m.kind) + '</div>';
         html += '<div style="text-align:right;color:#fbbf24;font-family:\'Courier New\',monospace;">' + m.importance + '</div>';
         html += '<div style="text-align:right;color:var(--text-dim,#888);">' + fmtAgo(m.last_recalled_at) + '</div>';
         html += '<div style="text-align:right;">';
-        html += '<button data-archive-memory="' + esc(m.id) + '" data-archive-topic="' + esc(m.topic) + '" title="Archive this memory — it stops surfacing on recall" style="background:transparent;border:1px solid var(--border,#2e3346);color:#f87171;padding:3px 8px;border-radius:4px;font-size:10px;cursor:pointer;">Archive</button>';
+        html += '<button data-archive-memory="' + esc(m.id) + '" data-archive-topic="' + esc(m.topic) + '" title="Archive this memory — it stops surfacing on recall" style="background:transparent;border:1px solid var(--border,#2a2a32);color:#f87171;padding:3px 8px;border-radius:4px;font-size:10px;cursor:pointer;">Archive</button>';
         html += '</div>';
         html += '</div>';
       });
@@ -231,8 +231,8 @@
     modal.id = 'contextDrilldown';
     modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
     modal.innerHTML =
-      '<div style="background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#2e3346);border-radius:10px;max-width:780px;width:100%;max-height:85vh;display:flex;flex-direction:column;overflow:hidden;">' +
-        '<div style="padding:14px 18px;border-bottom:1px solid var(--border,#2e3346);display:flex;align-items:center;gap:12px;">' +
+      '<div style="background:var(--card-bg,#141419);border:1px solid var(--border,#2a2a32);border-radius:10px;max-width:780px;width:100%;max-height:85vh;display:flex;flex-direction:column;overflow:hidden;">' +
+        '<div style="padding:14px 18px;border-bottom:1px solid var(--border,#2a2a32);display:flex;align-items:center;gap:12px;">' +
           '<span style="font-size:22px;">' + meta.glyph + '</span>' +
           '<div style="flex:1;"><div style="font-size:14px;font-weight:700;color:var(--text,#fff);">' + esc(meta.label) + ' — drilldown</div>' +
           '<div style="font-size:11px;color:var(--text-dim,#888);">Recent load events in the last ' + _state.days + ' days</div></div>' +
@@ -258,10 +258,10 @@
         }
         var html = '<table style="width:100%;border-collapse:collapse;font-size:11px;">';
         html += '<thead><tr style="color:var(--text-dim,#aaa);text-transform:uppercase;font-size:9px;letter-spacing:0.5px;">';
-        html += '<th style="text-align:left;padding:6px 4px;border-bottom:1px solid var(--border,#2e3346);">When</th>';
-        html += '<th style="text-align:left;padding:6px 4px;border-bottom:1px solid var(--border,#2e3346);">Item</th>';
-        html += '<th style="text-align:left;padding:6px 4px;border-bottom:1px solid var(--border,#2e3346);">User</th>';
-        html += '<th style="text-align:left;padding:6px 4px;border-bottom:1px solid var(--border,#2e3346);">Meta</th>';
+        html += '<th style="text-align:left;padding:6px 4px;border-bottom:1px solid var(--border,#2a2a32);">When</th>';
+        html += '<th style="text-align:left;padding:6px 4px;border-bottom:1px solid var(--border,#2a2a32);">Item</th>';
+        html += '<th style="text-align:left;padding:6px 4px;border-bottom:1px solid var(--border,#2a2a32);">User</th>';
+        html += '<th style="text-align:left;padding:6px 4px;border-bottom:1px solid var(--border,#2a2a32);">Meta</th>';
         html += '</tr></thead><tbody>';
         events.forEach(function(e) {
           var metaSnippet = '';

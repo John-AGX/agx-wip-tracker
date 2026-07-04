@@ -33,7 +33,7 @@
     '#fecaca', '#1f2937', '#dc2626', '#ea580c', '#d97706', '#059669',
     '#2563eb', '#7c3aed', '#db2777', '#374151',
     '#fee2e2', '#111827', '#991b1b', '#9a3412', '#92400e', '#065f46',
-    '#1e40af', '#5b21b6', '#9d174d', '#1e2130'
+    '#1e40af', '#5b21b6', '#9d174d', '#1a1a20'
   ];
 
   // Cell style presets
@@ -42,7 +42,7 @@
     { name: 'Header Dark', style: { bold: true, bg: '#1f2937', color: '#ffffff', align: 'center' } },
     { name: 'Header Green', style: { bold: true, bg: '#059669', color: '#ffffff', align: 'center' } },
     { name: 'Subheader', style: { bold: true, bg: '#374151', color: '#e4e6f0', align: 'left' } },
-    { name: 'Total Row', style: { bold: true, bg: '#1e2130', color: '#4f8cff', align: 'right' } },
+    { name: 'Total Row', style: { bold: true, bg: '#1a1a20', color: '#4f8cff', align: 'right' } },
     { name: 'Highlight', style: { bg: '#fef3c7', color: '#92400e' } },
     { name: 'Success', style: { bg: '#d1fae5', color: '#065f46' } },
     { name: 'Warning', style: { bg: '#fee2e2', color: '#991b1b' } },
@@ -1812,7 +1812,7 @@
         mount.style.height = '100%';
         mount.style.overflowY = 'auto';
         mount.style.boxSizing = 'border-box';
-        mount.style.background = 'var(--surface, #1a1d27)';
+        mount.style.background = 'var(--surface, #17171c)';
         // Header strip — matches the look of the QB Costs sheet so
         // the two embedded tabs feel like siblings.
         var header = document.createElement('div');
@@ -3055,7 +3055,7 @@
                 <div class="ws-color-grid" id="wsFillGrid"></div>
                 <div class="ws-color-recent-label">Recent</div>
                 <div class="ws-color-recent" id="wsFillRecent"></div>
-                <div class="ws-color-custom"><label>Custom <input type="color" id="wsFillCustom" value="#1e2130" /></label></div>
+                <div class="ws-color-custom"><label>Custom <input type="color" id="wsFillCustom" value="#1a1a20" /></label></div>
               </div>
             </div>
             <div class="ws-color-dropdown" id="wsFontDropdown">
@@ -3868,7 +3868,7 @@
     // Color swatches
     var fillSwatch = document.getElementById('wsFillSwatch');
     var fontSwatch = document.getElementById('wsFontSwatch');
-    if (fillSwatch) fillSwatch.style.background = s.bg || '#1e2130';
+    if (fillSwatch) fillSwatch.style.background = s.bg || '#1a1a20';
     if (fontSwatch) fontSwatch.style.background = s.color || '#e4e6f0';
 
     // Merge/unmerge button states

@@ -82,7 +82,7 @@
     overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.92);z-index:9000;display:flex;flex-direction:column;';
 
     var header = document.createElement('div');
-    header.style.cssText = 'flex:0 0 auto;padding:10px 16px;background:#0f0f1e;border-bottom:1px solid #2a2a3a;display:flex;align-items:center;gap:10px;color:#fff;';
+    header.style.cssText = 'flex:0 0 auto;padding:10px 16px;background:#141419;border-bottom:1px solid #2a2a3a;display:flex;align-items:center;gap:10px;color:#fff;';
     header.innerHTML =
       '<div style="font-size:14px;font-weight:600;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="' + escapeHTMLLocal(attachment.filename) + '">📕 ' + escapeHTMLLocal(attachment.filename) + '</div>' +
       '<div data-pdf-status style="font-size:11px;color:rgba(255,255,255,0.6);"></div>' +

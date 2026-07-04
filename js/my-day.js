@@ -88,7 +88,7 @@
       '#my-day .myday-summary{color:var(--text-dim,#9aa);font-size:13px;margin:8px 0 18px;}' +
       '#my-day .myday-sec{margin-bottom:22px;}' +
       '#my-day .myday-sec-h{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#8a8a9a);margin:0 0 8px 2px;}' +
-      '#my-day .myday-card{display:flex;gap:12px;align-items:flex-start;padding:11px 14px;border:1px solid var(--border,#2a2a3a);border-radius:9px;background:var(--card-bg,#0f0f1e);margin-bottom:8px;cursor:pointer;transition:border-color .12s,background .12s;}' +
+      '#my-day .myday-card{display:flex;gap:12px;align-items:flex-start;padding:11px 14px;border:1px solid var(--border,#2a2a3a);border-radius:9px;background:var(--card-bg,#141419);margin-bottom:8px;cursor:pointer;transition:border-color .12s,background .12s;}' +
       '#my-day .myday-card:hover{border-color:var(--accent,#22d3ee);background:rgba(34,211,238,0.05);}' +
       '#my-day .myday-time{flex:0 0 76px;font-size:13px;font-weight:600;color:var(--text,#fff);padding-top:1px;}' +
       '#my-day .myday-time small{display:block;font-size:10px;font-weight:500;color:var(--text-dim,#8a8a9a);}' +

@@ -121,7 +121,7 @@
     var overlay = document.createElement('div');
     overlay.style.cssText = 'position:fixed;inset:0;z-index:10600;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(2px);';
     var box = document.createElement('div');
-    box.style.cssText = 'background:#0f0f1e;border:1px solid #353545;border-radius:12px;padding:20px 22px;max-width:420px;width:100%;box-shadow:0 16px 48px rgba(0,0,0,0.6);color:#e6e6e6;';
+    box.style.cssText = 'background:#141419;border:1px solid #353545;border-radius:12px;padding:20px 22px;max-width:420px;width:100%;box-shadow:0 16px 48px rgba(0,0,0,0.6);color:#e6e6e6;';
     box.innerHTML =
       '<div style="font-size:15px;font-weight:700;color:#fff;margin-bottom:4px;">📐 New Drawing</div>' +
       '<div style="font-size:12px;color:#9aa;margin-bottom:12px;">A CAD-style drafting sheet — titleblock, plan + elevation views to scale, ortho snapping, dimensions, layers, PDF output.<br><span style="color:#64748b;">Marking up a photo or PDF? Open it from <strong>Files</strong> and use ✏️ annotate / 📐 Measure.</span></div>' +

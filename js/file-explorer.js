@@ -30,8 +30,8 @@
     if (document.getElementById(STYLE_ID)) return;
     var css =
       '.p86fx{display:flex;flex-direction:column;height:100%;min-height:calc(100dvh - 160px);font-size:13px;}' +
-      '.p86fx-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 4px;border-bottom:1px solid var(--border,#2e3346);}' +
-      '.p86fx-btn{font:inherit;font-size:12.5px;padding:6px 10px;border-radius:8px;border:1px solid var(--border,#2e3346);background:var(--surface,#181820);color:inherit;cursor:pointer;display:inline-flex;align-items:center;gap:6px;}' +
+      '.p86fx-toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:8px 4px;border-bottom:1px solid var(--border,#2a2a32);}' +
+      '.p86fx-btn{font:inherit;font-size:12.5px;padding:6px 10px;border-radius:8px;border:1px solid var(--border,#2a2a32);background:var(--surface,#181820);color:inherit;cursor:pointer;display:inline-flex;align-items:center;gap:6px;}' +
       '.p86fx-btn:hover{background:var(--hover,#23232e);}' +
       '.p86fx-btn.primary{background:var(--accent,#22d3ee);border-color:var(--accent,#22d3ee);color:#06141a;font-weight:600;}' +
       '.p86fx-crumbs{display:flex;align-items:center;gap:2px;flex:1 1 200px;min-width:0;flex-wrap:wrap;font-size:13px;}' +
@@ -39,9 +39,9 @@
       '.p86fx-crumb:hover{background:var(--hover,#23232e);}' +
       '.p86fx-crumb.drop-ok{outline:2px dashed var(--accent,#22d3ee);}' +
       '.p86fx-crumb-sep{color:var(--muted,#6b7280);}' +
-      '.p86fx-search{font:inherit;font-size:12.5px;padding:6px 9px;border-radius:8px;border:1px solid var(--border,#2e3346);background:var(--surface,#181820);color:inherit;width:160px;}' +
+      '.p86fx-search{font:inherit;font-size:12.5px;padding:6px 9px;border-radius:8px;border:1px solid var(--border,#2a2a32);background:var(--surface,#181820);color:inherit;width:160px;}' +
       '.p86fx-body{display:flex;flex:1 1 0;min-height:0;}' +
-      '.p86fx-tree{flex:0 0 210px;overflow:auto;border-right:1px solid var(--border,#2e3346);padding:6px 4px;}' +
+      '.p86fx-tree{flex:0 0 210px;overflow:auto;border-right:1px solid var(--border,#2a2a32);padding:6px 4px;}' +
       '@media(max-width:760px){.p86fx-tree{display:none;}}' +
       '.p86fx-tnode{display:flex;align-items:center;gap:2px;padding:4px 6px;border-radius:6px;cursor:pointer;white-space:nowrap;color:var(--text,#e5e7eb);}' +
       '.p86fx-tnode:hover{background:var(--hover,#23232e);}' +
@@ -50,17 +50,17 @@
       '.p86fx-tcaret{width:14px;text-align:center;color:var(--muted,#6b7280);flex:0 0 auto;}' +
       '.p86fx-tlabel{overflow:hidden;text-overflow:ellipsis;}' +
       '.p86fx-main{flex:1 1 0;min-width:0;display:flex;flex-direction:column;overflow:hidden;}' +
-      '.p86fx-selbar{display:flex;align-items:center;gap:10px;padding:7px 10px;background:rgba(34,211,238,0.10);border-bottom:1px solid var(--border,#2e3346);font-size:12.5px;}' +
+      '.p86fx-selbar{display:flex;align-items:center;gap:10px;padding:7px 10px;background:rgba(34,211,238,0.10);border-bottom:1px solid var(--border,#2a2a32);font-size:12.5px;}' +
       '.p86fx-items{flex:1 1 0;overflow:auto;padding:8px;}' +
       '.p86fx-items.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;align-content:start;}' +
       '.p86fx-items.list{display:flex;flex-direction:column;gap:1px;}' +
       // grid tiles
-      '.p86fx-tile{position:relative;border:1px solid var(--border,#2e3346);border-radius:10px;overflow:hidden;cursor:pointer;background:var(--surface,#181820);}' +
+      '.p86fx-tile{position:relative;border:1px solid var(--border,#2a2a32);border-radius:10px;overflow:hidden;cursor:pointer;background:var(--surface,#181820);}' +
       '.p86fx-tile.sel{outline:2px solid var(--accent,#22d3ee);border-color:var(--accent,#22d3ee);}' +
       '.p86fx-tile.drop-ok{outline:2px dashed var(--accent,#22d3ee);}' +
       '.p86fx-thumb{aspect-ratio:4/3;display:flex;align-items:center;justify-content:center;background:var(--bg,#0f0f15);font-size:34px;color:var(--muted,#6b7280);overflow:hidden;}' +
       '.p86fx-thumb img{width:100%;height:100%;object-fit:cover;}' +
-      '.p86fx-cap{padding:6px 8px;font-size:11.5px;line-height:1.3;word-break:break-word;border-top:1px solid var(--border,#2e3346);}' +
+      '.p86fx-cap{padding:6px 8px;font-size:11.5px;line-height:1.3;word-break:break-word;border-top:1px solid var(--border,#2a2a32);}' +
       '.p86fx-cap .nm{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}' +
       '.p86fx-cap .mt{color:var(--muted,#6b7280);font-size:10.5px;}' +
       '.p86fx-folder .p86fx-thumb{color:var(--accent,#22d3ee);}' +
@@ -82,19 +82,19 @@
       '.p86fx-row .meta{color:var(--muted,#6b7280);font-size:11.5px;text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
       '.p86fx-empty{padding:36px 12px;text-align:center;color:var(--muted,#6b7280);}' +
       // context menu
-      '.p86fx-menu{position:fixed;z-index:9999;min-width:170px;background:var(--surface,#1b1b24);border:1px solid var(--border,#2e3346);border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,0.4);padding:5px;font-size:13px;}' +
+      '.p86fx-menu{position:fixed;z-index:9999;min-width:170px;background:var(--surface,#1b1b24);border:1px solid var(--border,#2a2a32);border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,0.4);padding:5px;font-size:13px;}' +
       '.p86fx-menu button{display:flex;width:100%;text-align:left;gap:8px;align-items:center;font:inherit;font-size:13px;padding:7px 10px;border:none;background:transparent;color:inherit;border-radius:7px;cursor:pointer;}' +
       '.p86fx-menu button:hover{background:var(--hover,#23232e);}' +
       '.p86fx-menu button.danger{color:#f87171;}' +
-      '.p86fx-menu .sep{height:1px;background:var(--border,#2e3346);margin:4px 2px;}' +
+      '.p86fx-menu .sep{height:1px;background:var(--border,#2a2a32);margin:4px 2px;}' +
       // name dialog
       '.p86fx-modal{position:fixed;inset:0;z-index:10000;background:rgba(0,0,0,0.45);display:flex;align-items:center;justify-content:center;}' +
-      '.p86fx-modal-box{background:var(--surface,#1b1b24);border:1px solid var(--border,#2e3346);border-radius:12px;padding:16px;width:min(420px,92vw);}' +
+      '.p86fx-modal-box{background:var(--surface,#1b1b24);border:1px solid var(--border,#2a2a32);border-radius:12px;padding:16px;width:min(420px,92vw);}' +
       '.p86fx-modal-box h4{margin:0 0 10px;font-size:15px;}' +
-      '.p86fx-modal-box input{width:100%;font:inherit;padding:9px 11px;border-radius:8px;border:1px solid var(--border,#2e3346);background:var(--bg,#0f0f15);color:inherit;}' +
+      '.p86fx-modal-box input{width:100%;font:inherit;padding:9px 11px;border-radius:8px;border:1px solid var(--border,#2a2a32);background:var(--bg,#0f0f15);color:inherit;}' +
       '.p86fx-modal-foot{display:flex;justify-content:flex-end;gap:8px;margin-top:14px;}' +
-      '.p86fx-modal .pick-list{max-height:46vh;overflow:auto;margin-top:8px;border:1px solid var(--border,#2e3346);border-radius:8px;}' +
-      '.p86fx-modal .pick-row{padding:8px 10px;cursor:pointer;border-bottom:1px solid var(--border,#2e3346);}' +
+      '.p86fx-modal .pick-list{max-height:46vh;overflow:auto;margin-top:8px;border:1px solid var(--border,#2a2a32);border-radius:8px;}' +
+      '.p86fx-modal .pick-row{padding:8px 10px;cursor:pointer;border-bottom:1px solid var(--border,#2a2a32);}' +
       '.p86fx-modal .pick-row:hover{background:var(--hover,#23232e);}';
     var st = document.createElement('style');
     st.id = STYLE_ID;
@@ -225,7 +225,7 @@
       // Embedded contexts (entity modals, an overview fieldset) get a
       // bounded height with internal scroll; full-pane mounts (My Files,
       // a Files subtab) keep the default 100dvh fill.
-      var rootStyle = opts.embedded ? ' style="height:' + (opts.height || 520) + 'px;min-height:' + (opts.height || 520) + 'px;border:1px solid var(--border,#2e3346);border-radius:10px;"' : '';
+      var rootStyle = opts.embedded ? ' style="height:' + (opts.height || 520) + 'px;min-height:' + (opts.height || 520) + 'px;border:1px solid var(--border,#2a2a32);border-radius:10px;"' : '';
       host.innerHTML =
         '<div class="p86fx" data-view="' + S.view + '"' + rootStyle + '>' +
           '<div class="p86fx-toolbar">' +
@@ -294,7 +294,7 @@
       // Read-only inherited files (e.g. an estimate's parent lead) as a
       // pinned pseudo-folder — not a real folder, no drag/drop.
       if (S.parent) {
-        html += '<div class="p86fx-tnode' + (S.cur === PARENT_ID ? ' active' : '') + '" data-fid="' + PARENT_ID + '" style="margin-top:6px;border-top:1px solid var(--border,#2e3346);padding-top:8px;">' +
+        html += '<div class="p86fx-tnode' + (S.cur === PARENT_ID ? ' active' : '') + '" data-fid="' + PARENT_ID + '" style="margin-top:6px;border-top:1px solid var(--border,#2a2a32);padding-top:8px;">' +
           '<span class="p86fx-tcaret"></span><span class="p86fx-tlabel">\u{1F4CE} ' + esc((S.parent.label) || 'Inherited') + '</span></div>';
       }
       t.innerHTML = html;

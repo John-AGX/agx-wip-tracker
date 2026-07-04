@@ -491,7 +491,7 @@ function renderJobsMain() {
                     '</tr>';
                 }).join('');
                 bodyHTML =
-                    '<div style="border:1px solid var(--border,#333);border-radius:10px;overflow-x:auto;background:var(--card-bg,#0f0f1e);">' +
+                    '<div style="border:1px solid var(--border,#333);border-radius:10px;overflow-x:auto;background:var(--card-bg,#141419);">' +
                         '<table style="width:100%;border-collapse:collapse;">' +
                             '<thead style="background:var(--overlay-light,rgba(255,255,255,0.02));border-bottom:1px solid var(--border,#333);"><tr>' +
                                 thCell('CO #', 'left') +
@@ -748,7 +748,7 @@ function renderJobsMain() {
                     '</tr>';
                 }).join('');
                 bodyHTML =
-                    '<div style="border:1px solid var(--border,#333);border-radius:10px;overflow-x:auto;background:var(--card-bg,#0f0f1e);">' +
+                    '<div style="border:1px solid var(--border,#333);border-radius:10px;overflow-x:auto;background:var(--card-bg,#141419);">' +
                         '<table style="width:100%;border-collapse:collapse;">' +
                             '<thead style="background:var(--overlay-light,rgba(255,255,255,0.02));border-bottom:1px solid var(--border,#333);"><tr>' +
                                 thCell('PO #', 'left') +
@@ -2102,8 +2102,8 @@ function renderJobsMain() {
             if (job._canEdit === false) return; // gate: no editing assigned-away jobs
             const isEditing = btn.getAttribute('data-editing') === '1';
 
-            const IST = 'width:100%;box-sizing:border-box;background:var(--input-bg,#0f111a);color:var(--text);border:1px solid var(--border,#2e3346);border-radius:6px;padding:5px 7px;font-size:13px;';
-            const SST = 'box-sizing:border-box;background:var(--input-bg,#0f111a);color:var(--text);border:1px solid var(--border,#2e3346);border-radius:6px;padding:4px 6px;font-size:12px;';
+            const IST = 'width:100%;box-sizing:border-box;background:var(--input-bg,#0f111a);color:var(--text);border:1px solid var(--border,#2a2a32);border-radius:6px;padding:5px 7px;font-size:13px;';
+            const SST = 'box-sizing:border-box;background:var(--input-bg,#0f111a);color:var(--text);border:1px solid var(--border,#2a2a32);border-radius:6px;padding:4px 6px;font-size:12px;';
             const opts = (arr, cur) => arr.map(v => '<option' + (v === cur ? ' selected' : '') + '>' + escapeHTML(v) + '</option>').join('');
 
             if (isEditing) {
@@ -2237,7 +2237,7 @@ function renderJobsMain() {
                     '</button>';
             }).join('');
             var card = document.createElement('div');
-            card.style.cssText = 'background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:12px;max-width:520px;width:100%;max-height:80vh;overflow:auto;padding:18px;';
+            card.style.cssText = 'background:var(--card-bg,#141419);border:1px solid var(--border,#333);border-radius:12px;max-width:520px;width:100%;max-height:80vh;overflow:auto;padding:18px;';
             card.innerHTML =
                 '<div style="font-size:15px;font-weight:700;margin-bottom:4px;">Add an estimate to this job</div>' +
                 '<div style="font-size:12px;color:var(--text-muted,#9aa);margin-bottom:10px;">The estimate is the source of truth for estimated costs — linking sets the job’s Contract + Estimated Costs and carries the workspace.</div>' +
@@ -2678,7 +2678,7 @@ function renderJobsMain() {
                         '<h3 style="font-size:13px;margin:0;">&#x1F4B3; Invoices (' + invs.length + ')</h3>' +
                         '<div style="font-size:12px;color:var(--text-dim);">Total: <b>' + formatCurrency(invTotalAmt) + '</b> &nbsp; Paid: <b style="color:var(--green);">' + formatCurrency(invTotalPaid) + '</b> &nbsp; Outstanding: <b style="color:var(--yellow);">' + formatCurrency(invTotalAmt - invTotalPaid) + '</b></div>' +
                     '</div>' +
-                    '<div style="border:1px solid var(--border,#333);border-radius:10px;overflow-x:auto;background:var(--card-bg,#0f0f1e);">' +
+                    '<div style="border:1px solid var(--border,#333);border-radius:10px;overflow-x:auto;background:var(--card-bg,#141419);">' +
                         '<table style="width:100%;border-collapse:collapse;table-layout:auto;">' +
                             '<thead style="background:var(--overlay-light,rgba(255,255,255,0.02));border-bottom:1px solid var(--border,#333);"><tr>' +
                                 thCell('Inv #', 'left') +
@@ -3276,7 +3276,7 @@ function renderJobsMain() {
             }).join('');
 
             container.innerHTML = titleHTML +
-                '<div style="border:1px solid var(--border,#333);border-radius:10px;overflow-x:auto;background:var(--card-bg,#0f0f1e);">' +
+                '<div style="border:1px solid var(--border,#333);border-radius:10px;overflow-x:auto;background:var(--card-bg,#141419);">' +
                     '<table style="width:100%;border-collapse:collapse;table-layout:auto;">' +
                         '<thead style="background:var(--overlay-light,rgba(255,255,255,0.02));border-bottom:1px solid var(--border,#333);"><tr>' +
                             thCell('Phase', 'left') +
@@ -3378,7 +3378,7 @@ function renderJobsMain() {
             }).join('');
 
             container.innerHTML = titleHTML +
-                '<div style="border:1px solid var(--border,#333);border-radius:10px;overflow-x:auto;background:var(--card-bg,#0f0f1e);">' +
+                '<div style="border:1px solid var(--border,#333);border-radius:10px;overflow-x:auto;background:var(--card-bg,#141419);">' +
                     '<table style="width:100%;border-collapse:collapse;table-layout:auto;">' +
                         '<thead style="background:var(--overlay-light,rgba(255,255,255,0.02));border-bottom:1px solid var(--border,#333);"><tr>' +
                             thCell('Subcontractor', 'left') +

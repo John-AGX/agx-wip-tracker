@@ -23,8 +23,8 @@
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  background: var(--surface, #1a1d27);
-  border: 1px solid var(--border, #2e3346);
+  background: var(--surface, #17171c);
+  border: 1px solid var(--border, #2a2a32);
   border-radius: 10px;
   padding: 10px 12px;
   box-shadow: 0 0 16px rgba(79, 140, 255, 0.05);
@@ -36,7 +36,7 @@
   gap: 8px;
   margin-bottom: 8px;
   padding-bottom: 6px;
-  border-bottom: 1px solid var(--border, #2e3346);
+  border-bottom: 1px solid var(--border, #2a2a32);
 }
 .ws-left-logo {
   height: 22px;
@@ -100,7 +100,7 @@
   gap: 0;
   margin-top: 4px;
   margin-bottom: 12px;
-  border-bottom: 1px solid var(--border, #2e3346);
+  border-bottom: 1px solid var(--border, #2a2a32);
   /* Background was transparent, but once we pin this with position:
      sticky the scrolling content underneath will bleed through. Use
      var(--bg) so the bar reads as an opaque header strip. */
@@ -192,7 +192,7 @@
   transition: background 0.12s, color 0.12s;
 }
 .app-jobnav-back:hover {
-  background: var(--surface2, #242836);
+  background: var(--surface2, #202027);
   color: var(--text, #e4e6f0);
 }
 .app-jobnav-back-arrow {
@@ -273,11 +273,11 @@
   position: relative;
 }
 .app-jobnav .ws-right-tab:hover {
-  background: var(--surface2, #242836);
+  background: var(--surface2, #202027);
   color: var(--text, #e4e6f0);
 }
 .app-jobnav .ws-right-tab.active {
-  background: var(--surface2, #242836);
+  background: var(--surface2, #202027);
   color: var(--text, #e4e6f0);
   font-weight: 600;
 }
@@ -313,7 +313,7 @@
   gap: 8px;
   margin-top: 8px;
   padding-top: 8px;
-  border-top: 1px solid var(--border, #2e3346);
+  border-top: 1px solid var(--border, #2a2a32);
 }
 .app-jobnav .ws-workspace-toggle {
   width: 100%;
@@ -349,8 +349,8 @@
 /* ââ Right Tab Content âââââââââââââââââââââââââââââââââââââ */
 .ws-right-content {
   flex: 1;
-  background: var(--surface, #1a1d27);
-  border: 1px solid var(--border, #2e3346);
+  background: var(--surface, #17171c);
+  border: 1px solid var(--border, #2a2a32);
   border-radius: 8px;
   padding: 12px;
   overflow-y: auto;
@@ -369,8 +369,8 @@
 /* ââ Job Info Collapsible ââââââââââââââââââââââââââââââââââ */
 .ws-job-info-details {
   margin-bottom: 8px;
-  background: var(--surface2, #242836);
-  border: 1px solid var(--border, #2e3346);
+  background: var(--surface2, #202027);
+  border: 1px solid var(--border, #2a2a32);
   border-radius: 6px;
   overflow: hidden;
 }
@@ -601,8 +601,8 @@ header .jh-job-info ~ #user-menu {
      so the pinned strip reads as the same clean chip bar used on the
      job overview, rather than the old dark glowing gradient. */
   background: rgba(255,255,255,0.02);
-  border-top: 1px solid var(--border, #2e3346);
-  border-bottom: 1px solid var(--border, #2e3346);
+  border-top: 1px solid var(--border, #2a2a32);
+  border-bottom: 1px solid var(--border, #2a2a32);
   box-sizing: border-box;
 }
 body.light-mode #jh-strip-detached {
@@ -649,7 +649,7 @@ body.light-mode #jh-strip-detached {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(180deg, rgba(255,255,255,0.04) 0%, rgba(255,255,255,0.015) 100%), var(--surface, #1a1d27);
+  background: linear-gradient(180deg, rgba(255,255,255,0.04) 0%, rgba(255,255,255,0.015) 100%), var(--surface, #17171c);
   border: 1px solid rgba(255,255,255,0.06);
   border-radius: 8px;
   padding: 10px 12px;
@@ -781,7 +781,7 @@ body.light-mode .jh-strip-card[data-tone="amber"] .jh-strip-label { color: #b453
    contrasting block. Border + value text glow stay punchy. */
 .jh-strip-card[data-tone="gain"] {
   border-color: rgba(52,211,153,0.30);
-  background: linear-gradient(180deg, rgba(52,211,153,0.10) 0%, rgba(52,211,153,0.03) 100%), var(--surface, #1a1d27);
+  background: linear-gradient(180deg, rgba(52,211,153,0.10) 0%, rgba(52,211,153,0.03) 100%), var(--surface, #17171c);
 }
 .jh-strip-card[data-tone="gain"] .jh-strip-value {
   color: #34d399;
@@ -791,7 +791,7 @@ body.light-mode .jh-strip-card[data-tone="amber"] .jh-strip-label { color: #b453
 
 .jh-strip-card[data-tone="cost"] {
   border-color: rgba(248,113,113,0.28);
-  background: linear-gradient(180deg, rgba(248,113,113,0.10) 0%, rgba(248,113,113,0.03) 100%), var(--surface, #1a1d27);
+  background: linear-gradient(180deg, rgba(248,113,113,0.10) 0%, rgba(248,113,113,0.03) 100%), var(--surface, #17171c);
 }
 .jh-strip-card[data-tone="cost"] .jh-strip-value {
   color: #f87171;
@@ -801,7 +801,7 @@ body.light-mode .jh-strip-card[data-tone="amber"] .jh-strip-label { color: #b453
 
 .jh-strip-card[data-tone="income"] {
   border-color: rgba(96,165,250,0.30);
-  background: linear-gradient(180deg, rgba(96,165,250,0.10) 0%, rgba(96,165,250,0.03) 100%), var(--surface, #1a1d27);
+  background: linear-gradient(180deg, rgba(96,165,250,0.10) 0%, rgba(96,165,250,0.03) 100%), var(--surface, #17171c);
 }
 .jh-strip-card[data-tone="income"] .jh-strip-value {
   color: #60a5fa;
@@ -811,7 +811,7 @@ body.light-mode .jh-strip-card[data-tone="amber"] .jh-strip-label { color: #b453
 
 .jh-strip-card[data-tone="amber"] {
   border-color: rgba(251,191,36,0.32);
-  background: linear-gradient(180deg, rgba(251,191,36,0.10) 0%, rgba(251,191,36,0.03) 100%), var(--surface, #1a1d27);
+  background: linear-gradient(180deg, rgba(251,191,36,0.10) 0%, rgba(251,191,36,0.03) 100%), var(--surface, #17171c);
 }
 .jh-strip-card[data-tone="amber"] .jh-strip-value {
   color: #fbbf24;
@@ -974,7 +974,7 @@ body.light-mode .jh-strip-card[data-tone="amber"] .jh-strip-label { color: #b453
   background-size: 24px 24px;
   /* Subtle gradient for depth */
   box-shadow: inset 0 0 60px rgba(0, 0, 0, 0.45);
-  border: 1px solid var(--border, #2e3346);
+  border: 1px solid var(--border, #2a2a32);
   border-radius: 6px;
 }
 

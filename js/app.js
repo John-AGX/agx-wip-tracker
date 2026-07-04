@@ -1159,7 +1159,7 @@
                     '<div style="font-size:11px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">Sales Pipeline</div>' +
                     '<button class="ee-btn ghost small" onclick="' + leadsClick + '" style="font-size:11px;padding:2px 8px;">All leads &rarr;</button>' +
                 '</div>' +
-                '<div style="border:1px solid var(--border,#333);border-radius:10px;background:var(--card-bg,#0f0f1e);overflow:hidden;">' +
+                '<div style="border:1px solid var(--border,#333);border-radius:10px;background:var(--card-bg,#141419);overflow:hidden;">' +
                     // Stat strip
                     '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--border,#222);">' +
                         salesStat('Pipeline',     fmtMoney(pipelineValue), '#22d3ee') +
@@ -1171,7 +1171,7 @@
                 '</div>';
         }
         function salesStat(label, value, color) {
-            return '<div style="background:var(--card-bg,#0f0f1e);padding:10px 12px;text-align:center;">' +
+            return '<div style="background:var(--card-bg,#141419);padding:10px 12px;text-align:center;">' +
                 '<div style="font-size:9px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.4px;font-weight:600;margin-bottom:2px;">' + label + '</div>' +
                 '<div style="font-size:18px;font-weight:700;color:' + color + ';font-variant-numeric:tabular-nums;line-height:1;">' + value + '</div>' +
             '</div>';
@@ -1207,7 +1207,7 @@
                         var ext = (fname.split('.').pop() || '').slice(0, 4).toUpperCase() || 'DOC';
                         inner = '<div style="height:64px;display:flex;align-items:center;justify-content:center;background:rgba(34,211,238,0.06);font-size:10px;font-weight:700;color:var(--accent,#22d3ee);letter-spacing:0.4px;">' + escapeHTML(ext) + '</div>';
                     }
-                    html += '<a href="' + (a.original_url || a.web_url || '#') + '" target="_blank" rel="noopener" title="' + escapeHTML(title) + '" style="display:block;border:1px solid var(--border,#333);border-radius:6px;overflow:hidden;background:var(--card-bg,#0f0f1e);text-decoration:none;">' +
+                    html += '<a href="' + (a.original_url || a.web_url || '#') + '" target="_blank" rel="noopener" title="' + escapeHTML(title) + '" style="display:block;border:1px solid var(--border,#333);border-radius:6px;overflow:hidden;background:var(--card-bg,#141419);text-decoration:none;">' +
                         inner +
                         '<div style="padding:4px 6px;font-size:9px;color:var(--text-dim,#888);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(fname) + '</div>' +
                     '</a>';
@@ -1346,7 +1346,7 @@
                     html += '<div style="display:flex;flex-direction:column;gap:1px;background:var(--border,#222);border-radius:8px;overflow:hidden;margin-bottom:12px;">';
                     pendRems.slice(0, 3).forEach(function(r) {
                         var rOver = new Date(r.remind_at).getTime() < nowD.getTime();
-                        html += '<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;background:var(--card-bg,#0f0f1e);">' +
+                        html += '<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;background:var(--card-bg,#141419);">' +
                             '<span style="color:#a855f7;font-size:11px;flex-shrink:0;">&#9200;</span>' +
                             '<span style="flex:1;font-size:12px;color:var(--text,#fff);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(r.title || '(untitled)') + '</span>' +
                             '<span style="font-size:10px;font-weight:600;flex-shrink:0;color:' + (rOver ? '#f87171' : 'var(--text-dim,#888)') + ';">' + escapeHTML(fmtWhenShort(r.remind_at)) + '</span>' +
@@ -1368,7 +1368,7 @@
                             else if (y === todayStr) dueLabel = '<span style="color:#22d3ee;">today</span>';
                             else dueLabel = '<span style="color:var(--text-dim,#888);">' + escapeHTML(y.slice(5)) + '</span>';
                         }
-                        html += '<button class="ee-btn" onclick="if(window.p86Tasks&amp;&amp;window.p86Tasks.openDetail)window.p86Tasks.openDetail(\'' + String(t.id).replace(/'/g, "\\'") + '\')" style="text-align:left;padding:7px 10px;background:var(--card-bg,#0f0f1e);border:none;cursor:pointer;display:flex;align-items:center;gap:8px;">' +
+                        html += '<button class="ee-btn" onclick="if(window.p86Tasks&amp;&amp;window.p86Tasks.openDetail)window.p86Tasks.openDetail(\'' + String(t.id).replace(/'/g, "\\'") + '\')" style="text-align:left;padding:7px 10px;background:var(--card-bg,#141419);border:none;cursor:pointer;display:flex;align-items:center;gap:8px;">' +
                             '<span style="flex:1;font-size:12px;color:var(--text,#fff);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(t.title || '(untitled)') + '</span>' +
                             (dueLabel ? '<span style="font-size:10px;font-weight:600;flex-shrink:0;">' + dueLabel + '</span>' : '') +
                         '</button>';
@@ -1421,7 +1421,7 @@
                     notes.forEach(function(n) {
                         var label = (n.title && n.title.trim()) || (n.body && n.body.trim()) || '(empty note)';
                         var oneLine = String(label).replace(/\s+/g, ' ').slice(0, 80);
-                        html += '<div data-note-row data-note-id="' + escapeHTML(String(n.id)) + '" style="display:flex;align-items:center;gap:8px;padding:7px 10px;background:var(--card-bg,#0f0f1e);">' +
+                        html += '<div data-note-row data-note-id="' + escapeHTML(String(n.id)) + '" style="display:flex;align-items:center;gap:8px;padding:7px 10px;background:var(--card-bg,#141419);">' +
                             '<button data-note-pin title="' + (n.pinned ? 'Unpin' : 'Pin') + '" style="background:none;border:none;cursor:pointer;font-size:13px;flex-shrink:0;padding:0;line-height:1;" >' + (n.pinned ? '\u{1F4CC}' : '\u{1F4CD}') + '</button>' +
                             '<span data-note-open style="flex:1;font-size:12px;color:var(--text,#fff);cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="Click to edit">' + escapeHTML(oneLine) + '</span>' +
                             '<button data-note-del title="Delete" style="background:none;border:none;cursor:pointer;font-size:12px;color:var(--text-dim,#888);flex-shrink:0;padding:0;line-height:1;">✕</button>' +
@@ -1537,7 +1537,7 @@
                     var unread = Number(t.unread_count || 0);
                     var preview = (t.last_body || '').replace(/\s+/g, ' ').slice(0, 60);
                     var who = t.last_user_name || 'Someone';
-                    html += '<button class="ee-btn" onclick="if (window.p86Messaging) window.p86Messaging.openInbox();" style="text-align:left;padding:8px 10px;background:var(--card-bg,#0f0f1e);border:none;cursor:pointer;display:flex;flex-direction:column;gap:2px;">' +
+                    html += '<button class="ee-btn" onclick="if (window.p86Messaging) window.p86Messaging.openInbox();" style="text-align:left;padding:8px 10px;background:var(--card-bg,#141419);border:none;cursor:pointer;display:flex;flex-direction:column;gap:2px;">' +
                         '<div style="display:flex;align-items:center;gap:6px;">' +
                             '<span style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;color:var(--accent,#22d3ee);">' + escapeHTML(t.kind || 'thread') + '</span>' +
                             (unread ? '<span style="margin-left:auto;background:#f87171;color:#fff;font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;line-height:1.4;">' + unread + '</span>'
@@ -2179,7 +2179,7 @@
                 overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:10000;display:flex;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(2px);';
 
                 var box = document.createElement('div');
-                box.style.cssText = 'background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:12px;padding:24px 26px;max-width:420px;width:100%;box-shadow:0 16px 48px rgba(0,0,0,0.6);';
+                box.style.cssText = 'background:var(--card-bg,#141419);border:1px solid var(--border,#333);border-radius:12px;padding:24px 26px;max-width:420px;width:100%;box-shadow:0 16px 48px rgba(0,0,0,0.6);';
                 box.innerHTML =
                     '<div style="font-size:16px;font-weight:700;color:var(--text,#fff);margin-bottom:' + (message ? '10px' : '20px') + ';">' +
                         (typeof window.escapeHTML === 'function' ? window.escapeHTML(title) : title) +

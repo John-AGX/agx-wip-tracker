@@ -54,12 +54,12 @@
     modal.id = 'complianceReviewModal';
     modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
     modal.innerHTML =
-      '<div style="background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#2e3346);border-radius:10px;max-width:780px;width:100%;max-height:85vh;display:flex;flex-direction:column;overflow:hidden;">' +
-        '<div style="padding:14px 18px;border-bottom:1px solid var(--border,#2e3346);display:flex;align-items:center;gap:12px;">' +
+      '<div style="background:var(--card-bg,#141419);border:1px solid var(--border,#2a2a32);border-radius:10px;max-width:780px;width:100%;max-height:85vh;display:flex;flex-direction:column;overflow:hidden;">' +
+        '<div style="padding:14px 18px;border-bottom:1px solid var(--border,#2a2a32);display:flex;align-items:center;gap:12px;">' +
           '<span style="font-size:22px;">📋</span>' +
           '<div style="flex:1;"><div style="font-size:14px;font-weight:700;color:var(--text,#fff);">Compliance Review</div>' +
           '<div style="font-size:11px;color:var(--text-dim,#888);">Certificates of insurance, licenses, lien waivers, WC certs</div></div>' +
-          '<button data-compliance-new style="background:#34d399;color:#0f0f1e;border:none;padding:7px 14px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">+ New</button>' +
+          '<button data-compliance-new style="background:#34d399;color:#141419;border:none;padding:7px 14px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">+ New</button>' +
           '<button data-compliance-close style="background:transparent;border:none;color:var(--text-dim,#888);font-size:24px;cursor:pointer;line-height:1;">&times;</button>' +
         '</div>' +
         '<div data-compliance-body style="flex:1;overflow-y:auto;padding:14px 18px;">Loading…</div>' +
@@ -144,7 +144,7 @@
       var v = meta[k];
       return k + ': ' + String(v).slice(0, 30);
     }).join(' · ');
-    var html = '<div data-compliance-row="' + esc(it.id) + '" class="cmp-row" style="padding:10px 12px;background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#2e3346);border-radius:6px;margin-bottom:6px;cursor:pointer;' +
+    var html = '<div data-compliance-row="' + esc(it.id) + '" class="cmp-row" style="padding:10px 12px;background:var(--card-bg,#141419);border:1px solid var(--border,#2a2a32);border-radius:6px;margin-bottom:6px;cursor:pointer;' +
       (STATE.expandedId === it.id ? 'border-color:#4f8cff;' : '') + '">';
     // Grid: on desktop, 4 columns (icon · title · date · days). On
     // narrow phones (<640px), CSS reflows this to 2 rows via the
@@ -166,16 +166,16 @@
   }
 
   function renderEditPanel(it) {
-    var html = '<div data-compliance-edit="' + esc(it.id) + '" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--ng-border2,#2e3346);">';
+    var html = '<div data-compliance-edit="' + esc(it.id) + '" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--ng-border2,#2a2a32);">';
     html += '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:10px;">';
     html += '<div><label style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;display:block;margin-bottom:3px;">Status</label>';
-    html += '<select data-cmp-edit-field="status" style="width:100%;background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#2e3346);color:var(--text,#fff);padding:6px 8px;border-radius:5px;font-size:12px;">';
+    html += '<select data-cmp-edit-field="status" style="width:100%;background:var(--card-bg,#141419);border:1px solid var(--border,#2a2a32);color:var(--text,#fff);padding:6px 8px;border-radius:5px;font-size:12px;">';
     ['active', 'pending', 'expired'].forEach(function(s) {
       html += '<option value="' + s + '"' + (it.status === s ? ' selected' : '') + '>' + s + '</option>';
     });
     html += '</select></div>';
     html += '<div><label style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;display:block;margin-bottom:3px;">Expiration</label>';
-    html += '<input type="date" data-cmp-edit-field="expiration_date" value="' + esc((it.expiration_date || '').slice(0, 10)) + '" style="width:100%;background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#2e3346);color:var(--text,#fff);padding:6px 8px;border-radius:5px;font-size:12px;">';
+    html += '<input type="date" data-cmp-edit-field="expiration_date" value="' + esc((it.expiration_date || '').slice(0, 10)) + '" style="width:100%;background:var(--card-bg,#141419);border:1px solid var(--border,#2a2a32);color:var(--text,#fff);padding:6px 8px;border-radius:5px;font-size:12px;">';
     html += '</div></div>';
     html += '<div style="display:flex;gap:8px;justify-content:flex-end;">';
     html += '<button data-cmp-archive="' + esc(it.id) + '" style="background:transparent;border:1px solid rgba(248,113,113,0.4);color:#f87171;padding:6px 12px;border-radius:5px;font-size:11px;cursor:pointer;">Archive</button>';
@@ -230,11 +230,11 @@
     modal.id = 'complianceCreateModal';
     modal.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:10000;display:flex;align-items:center;justify-content:center;padding:20px;';
     modal.innerHTML =
-      '<div style="background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#2e3346);border-radius:10px;max-width:560px;width:100%;padding:18px 22px;">' +
+      '<div style="background:var(--card-bg,#141419);border:1px solid var(--border,#2a2a32);border-radius:10px;max-width:560px;width:100%;padding:18px 22px;">' +
         '<div style="font-size:14px;font-weight:700;color:var(--text,#fff);margin-bottom:14px;">New Compliance Item</div>' +
         '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;">' +
           '<div><label style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;display:block;margin-bottom:3px;">Type *</label>' +
-          '<select id="cmpCreateType" style="width:100%;background:rgba(0,0,0,0.3);border:1px solid var(--border,#2e3346);color:var(--text,#fff);padding:7px 10px;border-radius:6px;font-size:13px;">' +
+          '<select id="cmpCreateType" style="width:100%;background:rgba(0,0,0,0.3);border:1px solid var(--border,#2a2a32);color:var(--text,#fff);padding:7px 10px;border-radius:6px;font-size:13px;">' +
             '<option value="client_coi">Client COI</option>' +
             '<option value="license">License</option>' +
             '<option value="wc_cert">Workers Comp</option>' +
@@ -242,7 +242,7 @@
             '<option value="other">Other</option>' +
           '</select></div>' +
           '<div><label style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;display:block;margin-bottom:3px;">Anchor *</label>' +
-          '<select id="cmpCreateEntityType" style="width:100%;background:rgba(0,0,0,0.3);border:1px solid var(--border,#2e3346);color:var(--text,#fff);padding:7px 10px;border-radius:6px;font-size:13px;">' +
+          '<select id="cmpCreateEntityType" style="width:100%;background:rgba(0,0,0,0.3);border:1px solid var(--border,#2a2a32);color:var(--text,#fff);padding:7px 10px;border-radius:6px;font-size:13px;">' +
             '<option value="client">Client</option>' +
             '<option value="sub">Sub</option>' +
             '<option value="user">User (employee)</option>' +
@@ -250,18 +250,18 @@
           '</select></div>' +
         '</div>' +
         '<label style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;display:block;margin-bottom:3px;">Entity ID *</label>' +
-        '<input type="text" id="cmpCreateEntityId" placeholder="e.g. cli_X or sub_Y" style="width:100%;background:rgba(0,0,0,0.3);border:1px solid var(--border,#2e3346);color:var(--text,#fff);padding:8px 10px;border-radius:6px;font-size:13px;margin-bottom:12px;">' +
+        '<input type="text" id="cmpCreateEntityId" placeholder="e.g. cli_X or sub_Y" style="width:100%;background:rgba(0,0,0,0.3);border:1px solid var(--border,#2a2a32);color:var(--text,#fff);padding:8px 10px;border-radius:6px;font-size:13px;margin-bottom:12px;">' +
         '<label style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;display:block;margin-bottom:3px;">Title *</label>' +
-        '<input type="text" id="cmpCreateTitle" autofocus placeholder="e.g. PAC General Liability — Travelers" style="width:100%;background:rgba(0,0,0,0.3);border:1px solid var(--border,#2e3346);color:var(--text,#fff);padding:8px 10px;border-radius:6px;font-size:13px;margin-bottom:12px;">' +
+        '<input type="text" id="cmpCreateTitle" autofocus placeholder="e.g. PAC General Liability — Travelers" style="width:100%;background:rgba(0,0,0,0.3);border:1px solid var(--border,#2a2a32);color:var(--text,#fff);padding:8px 10px;border-radius:6px;font-size:13px;margin-bottom:12px;">' +
         '<div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:18px;">' +
           '<div><label style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;display:block;margin-bottom:3px;">Effective</label>' +
-          '<input type="date" id="cmpCreateEffective" style="width:100%;background:rgba(0,0,0,0.3);border:1px solid var(--border,#2e3346);color:var(--text,#fff);padding:8px 10px;border-radius:6px;font-size:13px;"></div>' +
+          '<input type="date" id="cmpCreateEffective" style="width:100%;background:rgba(0,0,0,0.3);border:1px solid var(--border,#2a2a32);color:var(--text,#fff);padding:8px 10px;border-radius:6px;font-size:13px;"></div>' +
           '<div><label style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;display:block;margin-bottom:3px;">Expires</label>' +
-          '<input type="date" id="cmpCreateExpires" style="width:100%;background:rgba(0,0,0,0.3);border:1px solid var(--border,#2e3346);color:var(--text,#fff);padding:8px 10px;border-radius:6px;font-size:13px;"></div>' +
+          '<input type="date" id="cmpCreateExpires" style="width:100%;background:rgba(0,0,0,0.3);border:1px solid var(--border,#2a2a32);color:var(--text,#fff);padding:8px 10px;border-radius:6px;font-size:13px;"></div>' +
         '</div>' +
         '<div style="display:flex;gap:8px;justify-content:flex-end;">' +
-          '<button id="cmpCreateCancel" style="background:transparent;border:1px solid var(--border,#2e3346);color:var(--text-dim,#888);padding:8px 16px;border-radius:6px;font-size:12px;cursor:pointer;">Cancel</button>' +
-          '<button id="cmpCreateSubmit" style="background:#34d399;color:#0f0f1e;border:none;padding:8px 18px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">Create</button>' +
+          '<button id="cmpCreateCancel" style="background:transparent;border:1px solid var(--border,#2a2a32);color:var(--text-dim,#888);padding:8px 16px;border-radius:6px;font-size:12px;cursor:pointer;">Cancel</button>' +
+          '<button id="cmpCreateSubmit" style="background:#34d399;color:#141419;border:none;padding:8px 18px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">Create</button>' +
         '</div>' +
       '</div>';
     document.body.appendChild(modal);

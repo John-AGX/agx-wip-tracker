@@ -327,7 +327,7 @@
             '<td style="padding:6px 8px;">' + escapeHTML(s.name || '') + '</td>' +
             '<td style="padding:6px 8px;font-size:11px;color:var(--text-dim,#888);">' + escapeHTML(s.role || '') + '</td>' +
             '<td style="padding:6px 8px;">' +
-              '<select onchange="updateJobAccessLevel(' + s.user_id + ', this.value)" style="font-size:11px;padding:2px 4px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);border:1px solid var(--border,#333);border-radius:4px;">' +
+              '<select onchange="updateJobAccessLevel(' + s.user_id + ', this.value)" style="font-size:11px;padding:2px 4px;background:var(--card-bg,#141419);color:var(--text,#fff);border:1px solid var(--border,#333);border-radius:4px;">' +
                 '<option value="edit"' + (s.access_level === 'edit' ? ' selected' : '') + '>edit</option>' +
                 '<option value="view"' + (s.access_level === 'view' ? ' selected' : '') + '>view</option>' +
               '</select>' +
@@ -471,7 +471,7 @@
           '<td><span class="badge">' + escapeHTML(j.status || '—') + '</span></td>' +
           '<td>' +
             '<select onchange="reassignJobOwner(\'' + escapeHTML(j.id) + '\', this.value)" ' +
-              'style="font-size:12px;padding:4px 8px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);border:1px solid var(--border,#333);border-radius:4px;min-width:180px;">' +
+              'style="font-size:12px;padding:4px 8px;background:var(--card-bg,#141419);color:var(--text,#fff);border:1px solid var(--border,#333);border-radius:4px;min-width:180px;">' +
               ownerOpts +
             '</select>' +
           '</td>' +
@@ -588,7 +588,7 @@
           '<td style="padding:6px 8px;">' + escapeHTML(s.name || '') + '</td>' +
           '<td style="padding:6px 8px;font-size:11px;color:var(--text-dim,#888);">' + escapeHTML(s.role || '') + '</td>' +
           '<td style="padding:6px 8px;">' +
-            '<select onchange="updateAdminJobAccessLevel(' + s.user_id + ', this.value)" style="font-size:11px;padding:2px 4px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);border:1px solid var(--border,#333);border-radius:4px;">' +
+            '<select onchange="updateAdminJobAccessLevel(' + s.user_id + ', this.value)" style="font-size:11px;padding:2px 4px;background:var(--card-bg,#141419);color:var(--text,#fff);border:1px solid var(--border,#333);border-radius:4px;">' +
               '<option value="edit"' + (s.access_level === 'edit' ? ' selected' : '') + '>edit</option>' +
               '<option value="view"' + (s.access_level === 'view' ? ' selected' : '') + '>view</option>' +
             '</select>' +
@@ -1239,7 +1239,7 @@
           '<p style="margin:0 0 12px 0;color:var(--text-dim,#888);font-size:12px;">Fires a hardcoded test message — useful for verifying provider config + DNS.</p>' +
           '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">' +
             '<input type="email" id="email-test-to" placeholder="recipient@example.com" ' +
-              'style="flex:1;min-width:240px;background:var(--input-bg,#0f0f1e);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:8px 10px;font-size:13px;" />' +
+              'style="flex:1;min-width:240px;background:var(--input-bg,#141419);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:8px 10px;font-size:13px;" />' +
             '<button class="ee-btn primary" id="email-test-send">&#x1F4E7; Send test</button>' +
           '</div>' +
           '<div id="email-test-result" style="margin-top:10px;font-size:12px;"></div>' +
@@ -1254,7 +1254,7 @@
                 'Tracking requires the recipient\'s email client to load images (opens) or follow a link (clicks).</p>' +
             '</div>' +
             '<div style="display:flex;gap:6px;align-items:center;">' +
-              '<select id="email-analytics-window" style="background:var(--input-bg,#0f0f1e);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:4px 8px;font-size:12px;">' +
+              '<select id="email-analytics-window" style="background:var(--input-bg,#141419);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:4px 8px;font-size:12px;">' +
                 '<option value="7">Last 7 days</option>' +
                 '<option value="30" selected>Last 30 days</option>' +
                 '<option value="90">Last 90 days</option>' +
@@ -1269,7 +1269,7 @@
           '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">' +
             '<h3 style="margin:0;">Recent send log</h3>' +
             '<div style="display:flex;gap:6px;align-items:center;">' +
-              '<select id="email-log-status-filter" style="background:var(--input-bg,#0f0f1e);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:4px 8px;font-size:12px;">' +
+              '<select id="email-log-status-filter" style="background:var(--input-bg,#141419);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:4px 8px;font-size:12px;">' +
                 '<option value="">All statuses</option>' +
                 '<option value="sent">Sent</option>' +
                 '<option value="failed">Failed</option>' +
@@ -1406,7 +1406,7 @@
           '</td>' +
           '<td style="padding:8px;vertical-align:top;">' +
             '<input type="text" data-email-event-bcc="' + escapeHTML(e.key) + '" value="' + escapeHTML(bccVal).replace(/"/g, '&quot;') + '" placeholder="ops@example.com" ' +
-              'style="width:100%;background:var(--input-bg,#0f0f1e);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:5px 8px;font-size:12px;" />' +
+              'style="width:100%;background:var(--input-bg,#141419);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:5px 8px;font-size:12px;" />' +
           '</td>' +
           '<td style="padding:8px;vertical-align:top;text-align:center;">' +
             (e.wired ?
@@ -1575,7 +1575,7 @@
           '</td>' +
           '<td style="padding:8px;vertical-align:top;">' +
             '<input type="text" data-email-event-bcc="' + escapeHTML(e.key) + '" value="' + escapeHTML(bccVal).replace(/"/g, '&quot;') + '" placeholder="ops@example.com" ' +
-              'style="width:100%;background:var(--input-bg,#0f0f1e);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:5px 8px;font-size:12px;" />' +
+              'style="width:100%;background:var(--input-bg,#141419);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:5px 8px;font-size:12px;" />' +
           '</td>' +
           '<td style="padding:8px;vertical-align:top;text-align:center;">' +
             (e.wired ?
@@ -1663,7 +1663,7 @@
           '<div style="display:flex;gap:8px;align-items:center;margin-top:10px;">' +
             '<button type="button" id="org-brand-upload-btn" class="ee-btn secondary" style="font-size:11px;white-space:nowrap;">&#x1F4E4; Upload logo…</button>' +
             '<input type="file" id="org-brand-upload-file" accept="image/*" multiple style="display:none;" />' +
-            '<input type="text" id="org-brand-addurl" placeholder="…or paste an image URL" style="flex:1;min-width:120px;background:var(--input-bg,#0f0f1e);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:6px 9px;font-size:12px;" />' +
+            '<input type="text" id="org-brand-addurl" placeholder="…or paste an image URL" style="flex:1;min-width:120px;background:var(--input-bg,#141419);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:6px 9px;font-size:12px;" />' +
             '<button type="button" id="org-brand-addurl-btn" class="ee-btn secondary" style="font-size:11px;">+ Add</button>' +
           '</div>' +
           '<label style="display:flex;align-items:center;gap:7px;margin-top:10px;font-size:12px;color:var(--text-dim,#aaa);cursor:pointer;">' +
@@ -1674,13 +1674,13 @@
         '<div>' +
           '<label style="font-size:11px;color:var(--text-dim,#aaa);text-transform:uppercase;letter-spacing:0.5px;font-weight:600;display:block;margin-bottom:4px;">Footer / company line</label>' +
           '<textarea id="org-brand-footer" rows="3" placeholder="123 Main St, Tampa, FL 33602" ' +
-            'style="width:100%;background:var(--input-bg,#0f0f1e);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:8px 10px;font-size:13px;resize:vertical;">' + escapeHTML(footer) + '</textarea>' +
+            'style="width:100%;background:var(--input-bg,#141419);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:8px 10px;font-size:13px;resize:vertical;">' + escapeHTML(footer) + '</textarea>' +
         '</div>' +
         '<div>' +
           '<label style="font-size:11px;color:var(--text-dim,#aaa);text-transform:uppercase;letter-spacing:0.5px;font-weight:600;display:block;margin-bottom:4px;">Primary color</label>' +
           '<div style="display:flex;align-items:center;gap:8px;">' +
             '<input type="color" id="org-brand-primary" value="' + escapeAttr(primary) + '" style="width:40px;height:34px;border:0;background:transparent;cursor:pointer;" />' +
-            '<input type="text" id="org-brand-primary-text" value="' + escapeAttr(primary) + '" maxlength="9" style="flex:1;background:var(--input-bg,#0f0f1e);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:6px 8px;font-size:12px;font-family:monospace;" />' +
+            '<input type="text" id="org-brand-primary-text" value="' + escapeAttr(primary) + '" maxlength="9" style="flex:1;background:var(--input-bg,#141419);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:6px 8px;font-size:12px;font-family:monospace;" />' +
           '</div>' +
           '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:2px;">Used by app chrome; reserved for future surfaces.</div>' +
         '</div>' +
@@ -1688,7 +1688,7 @@
           '<label style="font-size:11px;color:var(--text-dim,#aaa);text-transform:uppercase;letter-spacing:0.5px;font-weight:600;display:block;margin-bottom:4px;">Accent color</label>' +
           '<div style="display:flex;align-items:center;gap:8px;">' +
             '<input type="color" id="org-brand-accent" value="' + escapeAttr(accent) + '" style="width:40px;height:34px;border:0;background:transparent;cursor:pointer;" />' +
-            '<input type="text" id="org-brand-accent-text" value="' + escapeAttr(accent) + '" maxlength="9" style="flex:1;background:var(--input-bg,#0f0f1e);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:6px 8px;font-size:12px;font-family:monospace;" />' +
+            '<input type="text" id="org-brand-accent-text" value="' + escapeAttr(accent) + '" maxlength="9" style="flex:1;background:var(--input-bg,#141419);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:6px 8px;font-size:12px;font-family:monospace;" />' +
           '</div>' +
           '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:2px;">Used for button blocks when no per-block color is set.</div>' +
         '</div>' +
@@ -1770,7 +1770,7 @@
           (isP ? '<span title="Primary" style="position:absolute;top:2px;right:4px;font-size:13px;">⭐</span>' : '') +
           '<img src="' + escapeAttr(l.url) + '" alt="" style="max-height:50px;max-width:138px;" />' +
         '</div>' +
-        '<input type="text" data-logo-label="' + i + '" value="' + escapeAttr(l.label || '') + '" placeholder="Label (e.g. White)" style="width:100%;box-sizing:border-box;margin-top:6px;background:var(--input-bg,#0f0f1e);color:var(--text);border:1px solid var(--border,#333);border-radius:5px;padding:4px 6px;font-size:11px;" />' +
+        '<input type="text" data-logo-label="' + i + '" value="' + escapeAttr(l.label || '') + '" placeholder="Label (e.g. White)" style="width:100%;box-sizing:border-box;margin-top:6px;background:var(--input-bg,#141419);color:var(--text);border:1px solid var(--border,#333);border-radius:5px;padding:4px 6px;font-size:11px;" />' +
         '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:6px;">' +
           '<label style="font-size:10.5px;color:' + (isP ? '#f5a623' : 'var(--text-dim,#aaa)') + ';display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="radio" name="org-brand-primary-pick" data-logo-primary="' + i + '" ' + (isP ? 'checked' : '') + ' /> Primary</label>' +
           '<button type="button" data-logo-remove="' + i + '" title="Remove" style="background:transparent;border:0;color:#f87171;cursor:pointer;font-size:13px;">✕</button>' +
@@ -2028,7 +2028,7 @@
           '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:4px;">Available variables: {{name}}, {{first_name}}, {{company}}, {{email}}</div>' +
         '</div>' +
         '<label style="display:block;font-size:11px;text-transform:uppercase;color:var(--text-dim,#888);margin-bottom:4px;">Body</label>' +
-        '<div id="camp-body-host" style="border:1px solid var(--border,#333);border-radius:6px;padding:8px;background:var(--input-bg,#0f0f1e);"></div>' +
+        '<div id="camp-body-host" style="border:1px solid var(--border,#333);border-radius:6px;padding:8px;background:var(--input-bg,#141419);"></div>' +
       '</div>' +
 
       // Action footer
@@ -2325,7 +2325,7 @@
       overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.65);z-index:10000;display:flex;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(2px);';
 
       var box = document.createElement('div');
-      box.style.cssText = 'background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:12px;padding:22px 24px;max-width:560px;width:100%;box-sizing:border-box;box-shadow:0 16px 48px rgba(0,0,0,0.6);';
+      box.style.cssText = 'background:var(--card-bg,#141419);border:1px solid var(--border,#333);border-radius:12px;padding:22px 24px;max-width:560px;width:100%;box-sizing:border-box;box-shadow:0 16px 48px rgba(0,0,0,0.6);';
       // Common card style — flex column with align-items:stretch so
       // each child fills the card\'s cross axis (otherwise inline spans
       // size to content-width and the description text bleeds out of
@@ -2531,7 +2531,7 @@
         '<label style="font-weight:600;color:var(--text);">Global BCC</label>' +
         '<div style="color:var(--text-dim,#888);font-size:11px;">Always BCC these addresses on every outbound email. Comma-separated.</div>' +
         '<input type="text" id="email-global-bcc" value="' + escapeHTML(s.globalBcc || '').replace(/"/g, '&quot;') + '" placeholder="ops@agxco.com, owner@agxco.com" ' +
-          'style="background:var(--input-bg,#0f0f1e);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:7px 10px;font-size:13px;" />' +
+          'style="background:var(--input-bg,#141419);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:7px 10px;font-size:13px;" />' +
       '</div>' +
       // Digest mode (placeholder — pending implementation in E3).
       '<div style="display:flex;align-items:center;gap:10px;">' +
@@ -2550,9 +2550,9 @@
         '</div>' +
         '<div style="display:flex;align-items:center;gap:10px;padding-left:28px;">' +
           '<label style="color:var(--text-dim,#aaa);font-size:12px;">Start</label>' +
-          '<input type="time" id="email-quiet-start" value="' + escapeHTML(qh.start || '21:00') + '" style="background:var(--input-bg,#0f0f1e);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:5px 8px;font-size:12px;" />' +
+          '<input type="time" id="email-quiet-start" value="' + escapeHTML(qh.start || '21:00') + '" style="background:var(--input-bg,#141419);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:5px 8px;font-size:12px;" />' +
           '<label style="color:var(--text-dim,#aaa);font-size:12px;">End</label>' +
-          '<input type="time" id="email-quiet-end" value="' + escapeHTML(qh.end || '07:00') + '" style="background:var(--input-bg,#0f0f1e);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:5px 8px;font-size:12px;" />' +
+          '<input type="time" id="email-quiet-end" value="' + escapeHTML(qh.end || '07:00') + '" style="background:var(--input-bg,#141419);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:5px 8px;font-size:12px;" />' +
         '</div>' +
       '</div>' +
       '<div id="email-globals-status" style="font-size:12px;color:var(--text-dim,#888);"></div>';
@@ -2876,7 +2876,7 @@
 
   function starterThumbHTML(s) {
     return '<button type="button" data-email-starter="' + s.id + '" ' +
-      'style="padding:0;border:1px solid var(--border,#333);border-radius:8px;background:var(--card-bg,#0f0f1e);cursor:pointer;width:112px;overflow:hidden;text-align:left;font-family:inherit;" ' +
+      'style="padding:0;border:1px solid var(--border,#333);border-radius:8px;background:var(--card-bg,#141419);cursor:pointer;width:112px;overflow:hidden;text-align:left;font-family:inherit;" ' +
       'title="Load the ' + escapeHTML(s.label) + ' layout">' +
       '<div style="background:#fff;height:78px;padding:7px 8px;box-sizing:border-box;">' + s.thumb + '</div>' +
       '<div style="padding:5px 8px;">' +
@@ -2971,7 +2971,7 @@
       '<div style="display:flex;flex-direction:column;gap:10px;">' +
         '<label style="font-size:12px;color:var(--text-dim,#aaa);">Subject</label>' +
         '<input type="text" id="email-tpl-subject" value="' + escapeHTML(subjectVal).replace(/"/g, '&quot;') + '" ' +
-          'style="background:var(--input-bg,#0f0f1e);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:8px 10px;font-size:13px;" />' +
+          'style="background:var(--input-bg,#141419);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:8px 10px;font-size:13px;" />' +
         '<label style="font-size:12px;color:var(--text-dim,#aaa);">Body</label>' +
         // The block editor mounts here. If window.p86EmailBlocks is
         // unavailable (e.g. cached JS without the new module) we
@@ -3069,7 +3069,7 @@
     } else if (host) {
       // Fallback for very stale caches — emit a plain textarea so
       // editing still works.
-      host.innerHTML = '<textarea id="email-tpl-body" spellcheck="false" style="width:100%;background:var(--input-bg,#0f0f1e);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:8px 10px;font-size:12px;font-family:Menlo,Consolas,monospace;min-height:240px;resize:vertical;">' +
+      host.innerHTML = '<textarea id="email-tpl-body" spellcheck="false" style="width:100%;background:var(--input-bg,#141419);color:var(--text);border:1px solid var(--border,#333);border-radius:6px;padding:8px 10px;font-size:12px;font-family:Menlo,Consolas,monospace;min-height:240px;resize:vertical;">' +
         escapeHTML(bodyVal) + '</textarea>';
       var ta = document.getElementById('email-tpl-body');
       if (ta) ta.addEventListener('input', scheduleLivePreview);
@@ -4430,7 +4430,7 @@
     var activeUsers = users.filter(function(u) { return u.active; }).length;
 
     function metricCard(label, value, sub) {
-      return '<div style="flex:1 1 160px;min-width:160px;background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:10px;padding:14px 16px;">' +
+      return '<div style="flex:1 1 160px;min-width:160px;background:var(--card-bg,#141419);border:1px solid var(--border,#333);border-radius:10px;padding:14px 16px;">' +
         '<div style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">' + label + '</div>' +
         '<div style="font-size:20px;font-weight:600;color:var(--text,#fff);">' + value + '</div>' +
         (sub ? '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:4px;">' + sub + '</div>' : '') +
@@ -4525,7 +4525,7 @@
     }
     cardsEl.innerHTML = '<div style="color:var(--text-dim,#888);font-size:13px;padding:8px 0;">Loading…</div>';
     function ocrCard(label, value, sub, color) {
-      return '<div style="flex:1 1 150px;min-width:150px;background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:10px;padding:14px 16px;">' +
+      return '<div style="flex:1 1 150px;min-width:150px;background:var(--card-bg,#141419);border:1px solid var(--border,#333);border-radius:10px;padding:14px 16px;">' +
         '<div style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">' + label + '</div>' +
         '<div style="font-size:20px;font-weight:600;color:' + (color || 'var(--text,#fff)') + ';">' + value + '</div>' +
         (sub ? '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:4px;">' + sub + '</div>' : '') +
@@ -4597,7 +4597,7 @@
       if (!cats.length) { listEl.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;">No categories yet.</div>'; return; }
       listEl.innerHTML = cats.map(function (c) {
         var dim = c.archived ? 'opacity:0.5;' : '';
-        return '<div data-cat-id="' + _catEsc(c.id) + '" style="display:flex;align-items:center;gap:8px;background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:8px;padding:7px 10px;' + dim + '">' +
+        return '<div data-cat-id="' + _catEsc(c.id) + '" style="display:flex;align-items:center;gap:8px;background:var(--card-bg,#141419);border:1px solid var(--border,#333);border-radius:8px;padding:7px 10px;' + dim + '">' +
           '<span style="flex:1;color:var(--text,#fff);font-size:13px;">' + _catEsc(c.name) + (c.archived ? ' <span style="font-size:11px;color:var(--text-dim,#888);">(archived)</span>' : '') + '</span>' +
           '<button class="secondary" style="padding:3px 9px;font-size:12px;" onclick="renameAdminCostCategory(\'' + _catEsc(c.id) + '\',\'' + _catEsc((c.name || '').replace(/'/g, '\\\'')) + '\')">Rename</button>' +
           '<button class="secondary" style="padding:3px 9px;font-size:12px;' + (c.archived ? '' : 'color:#ff6b6b;border-color:#5a2230;') + '" onclick="archiveAdminCostCategory(\'' + _catEsc(c.id) + '\',' + (c.archived ? 'false' : 'true') + ')">' + (c.archived ? 'Restore' : 'Archive') + '</button>' +
@@ -5289,7 +5289,7 @@
       '<fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:14px;">' +
         '<legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Tag Catalog</legend>' +
         '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap;">' +
-          '<input id="tagCatalogSearch" type="search" placeholder="Search…" value="' + escapeHTML(_tagCatalogState.q) + '" style="padding:6px 10px;font-size:12px;background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:6px;color:var(--text,#fff);width:200px;" />' +
+          '<input id="tagCatalogSearch" type="search" placeholder="Search…" value="' + escapeHTML(_tagCatalogState.q) + '" style="padding:6px 10px;font-size:12px;background:var(--card-bg,#141419);border:1px solid var(--border,#333);border-radius:6px;color:var(--text,#fff);width:200px;" />' +
           '<button class="ee-btn primary" onclick="window.adminTagCatalog.openCreate()" style="font-size:12px;">&#x2795; New tag</button>' +
           (selCount >= 2
             ? '<button class="ee-btn secondary" onclick="window.adminTagCatalog.openMerge()" style="font-size:12px;">&#x21AA; Merge ' + selCount + ' selected…</button>'
@@ -6341,12 +6341,12 @@
       }).join('');
       host.innerHTML =
         '<div style="display:flex;gap:14px;margin-bottom:14px;">' +
-          '<div style="flex:1 1 160px;min-width:160px;background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:10px;padding:14px 16px;">' +
+          '<div style="flex:1 1 160px;min-width:160px;background:var(--card-bg,#141419);border:1px solid var(--border,#333);border-radius:10px;padding:14px 16px;">' +
             '<div style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">Active orgs</div>' +
             '<div style="font-size:20px;font-weight:600;color:var(--text,#fff);">' + activeOrgs.length + '</div>' +
             '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:4px;">' + orgs.length + ' total (incl. archived)</div>' +
           '</div>' +
-          '<div style="flex:1 1 160px;min-width:160px;background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:10px;padding:14px 16px;">' +
+          '<div style="flex:1 1 160px;min-width:160px;background:var(--card-bg,#141419);border:1px solid var(--border,#333);border-radius:10px;padding:14px 16px;">' +
             '<div style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">Cross-org cost rollup</div>' +
             '<div style="font-size:14px;color:var(--text-dim,#aaa);font-style:italic;">Pending server endpoint</div>' +
             '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:4px;">Sum ai_messages.cost_usd across orgs</div>' +
@@ -6723,7 +6723,7 @@
             ' &middot; ' + (l.last_fetched_row_count != null ? l.last_fetched_row_count + ' rows' : '—') +
             ' &middot; status: ' + escapeHTML(l.last_fetch_status || '?') +
           '</div>' +
-          '<pre style="flex:1;overflow:auto;font-family:\'SF Mono\',monospace;font-size:11px;line-height:1.5;background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:6px;padding:12px;white-space:pre-wrap;">' +
+          '<pre style="flex:1;overflow:auto;font-family:\'SF Mono\',monospace;font-size:11px;line-height:1.5;background:var(--card-bg,#141419);border:1px solid var(--border,#333);border-radius:6px;padding:12px;white-space:pre-wrap;">' +
             escapeHTML(l.last_fetched_text || '(no parsed content yet — try Refresh)') +
           '</pre>' +
           '<div class="modal-footer" style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;">' +
@@ -6810,7 +6810,7 @@
     window.p86Api.get('/api/admin/agents/training-data').then(function(resp) {
       var tasks = (resp && resp.tasks) || [];
       var card = document.createElement('div');
-      card.style.cssText = 'margin-top:14px;background:var(--surface,#1a1d27);border:1px solid var(--border,#2e3346);border-radius:12px;padding:16px 18px;';
+      card.style.cssText = 'margin-top:14px;background:var(--surface,#17171c);border:1px solid var(--border,#2a2a32);border-radius:12px;padding:16px 18px;';
       var rows = tasks.map(function(t) {
         var th = t.threshold ? Number(t.threshold) : null;
         var n = Number(t.examples) || 0;

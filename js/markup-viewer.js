@@ -52,7 +52,7 @@
     overlay.style.cssText = 'position:fixed;inset:0;z-index:10500;background:rgba(0,0,0,0.65);display:flex;align-items:center;justify-content:center;padding:20px;backdrop-filter:blur(2px);';
 
     var box = document.createElement('div');
-    box.style.cssText = 'background:#0f0f1e;border:1px solid #353545;border-radius:12px;padding:20px 22px;max-width:440px;width:100%;box-shadow:0 16px 48px rgba(0,0,0,0.6);color:#e6e6e6;';
+    box.style.cssText = 'background:#141419;border:1px solid #353545;border-radius:12px;padding:20px 22px;max-width:440px;width:100%;box-shadow:0 16px 48px rgba(0,0,0,0.6);color:#e6e6e6;';
 
     function unitChipsHTML() {
       return '<div style="display:flex;gap:6px;margin-bottom:10px;">' +

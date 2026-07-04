@@ -340,7 +340,7 @@
           '<div style="font-size:11px;color:#4f8cff;font-weight:600;">' + escapeHTML(alt.name || 'Alternate') + '</div>' +
         '</div>' +
         '<textarea id="' + taId + '" rows="18" placeholder="Bulleted scope, narrative, or whatever the proposal needs. This is per-alternate." ' +
-          'style="width:100%;resize:vertical;font-family:inherit;font-size:13px;line-height:1.55;padding:12px 14px;background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:8px;color:var(--text,#fff);">' +
+          'style="width:100%;resize:vertical;font-family:inherit;font-size:13px;line-height:1.55;padding:12px 14px;background:var(--card-bg,#141419);border:1px solid var(--border,#333);border-radius:8px;color:var(--text,#fff);">' +
           escapeHTML(alt.scope || '') +
         '</textarea>' +
         '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:6px;">Saved per alternate. Used by the Preview tab and PDF/Buildertrend exports.</div>';
@@ -1168,7 +1168,7 @@
         '<span>' + label + '</span>' +
         '<button type="button" id="ee-margin-pencil" class="edit-gate-toggle" ' +
           'aria-pressed="false" title="Edit target margin" ' +
-          'style="background:transparent;border:0;cursor:pointer;padding:0;line-height:1;display:inline-flex;align-items:center;color:var(--text-dim,#c4c8d8);">' +
+          'style="background:transparent;border:0;cursor:pointer;padding:0;line-height:1;display:inline-flex;align-items:center;color:var(--text-dim,#b4b4bf);">' +
           pencilIcon +
         '</button>' +
       '</div>' +
@@ -2212,7 +2212,7 @@
       opts = opts || {};
       var input = '';
       if (opts.textarea) {
-        input = '<textarea id="' + id + '" rows="' + (opts.rows || 4) + '" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);resize:vertical;">' + escapeHTML(value || '') + '</textarea>';
+        input = '<textarea id="' + id + '" rows="' + (opts.rows || 4) + '" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#141419);color:var(--text,#fff);resize:vertical;">' + escapeHTML(value || '') + '</textarea>';
       } else if (opts.options && opts.options.length) {
         // Select with a fixed option list. The current value is always
         // included as a fallback option even if it's not in the list, so

@@ -1048,7 +1048,7 @@
     // so 86 slides in over the graph rather than being
     // covered by it. Modals (.modal z:1000) still trump the panel.
     var initialWidth = clampAIPanelWidth(loadAIPanelWidth());
-    panel.style.cssText = 'position:fixed;top:0;right:0;bottom:0;width:' + initialWidth + 'px;max-width:92vw;min-width:' + AI_PANEL_WIDTH_MIN + 'px;background:var(--surface,#0f0f1e);border-left:1px solid var(--border,#333);box-shadow:-4px 0 22px rgba(0,0,0,0.6);z-index:200;display:flex;flex-direction:column;transform:translateX(100%);transition:transform 0.22s ease;';
+    panel.style.cssText = 'position:fixed;top:0;right:0;bottom:0;width:' + initialWidth + 'px;max-width:92vw;min-width:' + AI_PANEL_WIDTH_MIN + 'px;background:var(--surface,#141419);border-left:1px solid var(--border,#333);box-shadow:-4px 0 22px rgba(0,0,0,0.6);z-index:200;display:flex;flex-direction:column;transform:translateX(100%);transition:transform 0.22s ease;';
     panel.innerHTML =
       // Left-edge resize grabber. Wider than it looks (12px hit area)
       // for easy targeting, but visually only a thin 2px line that
@@ -1177,7 +1177,7 @@
         // of the flex row (it's the 2nd DOM child but the ☰ toggle
         // sits top-left, so the rail must open on the left under it);
         // the divider border lives on its right edge against the chat.
-        '<div id="ai-sessions-sidebar" aria-hidden="true" style="width:0;flex-shrink:0;order:-1;background:var(--surface,#0f0f1e);border-right:1px solid rgba(255,255,255,0.06);overflow:hidden;display:flex;flex-direction:column;transition:width 0.22s ease;">' +
+        '<div id="ai-sessions-sidebar" aria-hidden="true" style="width:0;flex-shrink:0;order:-1;background:var(--surface,#141419);border-right:1px solid rgba(255,255,255,0.06);overflow:hidden;display:flex;flex-direction:column;transition:width 0.22s ease;">' +
           // Inner wrapper at the target width so content doesn\'t
           // squish during the width animation.
           '<div style="width:260px;height:100%;display:flex;flex-direction:column;">' +
@@ -3599,7 +3599,7 @@
     function ensureGroup(name) {
       if (groupGrids[name]) return groupGrids[name];
       var box = document.createElement('div');
-      box.style.cssText = 'border:1px solid var(--border,#2e3346);border-left:3px solid #4f8cff;border-radius:6px;background:rgba(79,140,255,0.04);padding:8px 10px;display:flex;flex-direction:column;gap:8px;';
+      box.style.cssText = 'border:1px solid var(--border,#2a2a32);border-left:3px solid #4f8cff;border-radius:6px;background:rgba(79,140,255,0.04);padding:8px 10px;display:flex;flex-direction:column;gap:8px;';
       var header = document.createElement('div');
       header.style.cssText = 'display:flex;align-items:center;gap:8px;font-size:11px;color:var(--text-dim,#aaa);flex-wrap:wrap;';
       header.innerHTML =
@@ -3764,7 +3764,7 @@
     var rect = anchorBtn.getBoundingClientRect();
     pop.style.cssText =
       'position:fixed;top:' + (rect.bottom + 4) + 'px;right:' + Math.max(8, window.innerWidth - rect.right) + 'px;' +
-      'background:var(--surface,#0f0f1e);border:1px solid var(--border,#333);border-radius:8px;' +
+      'background:var(--surface,#141419);border:1px solid var(--border,#333);border-radius:8px;' +
       'box-shadow:0 8px 24px rgba(0,0,0,0.6);padding:10px 12px;z-index:1100;width:300px;';
     pop.innerHTML =
       '<div style="font-size:11px;font-weight:700;color:var(--text-dim,#aaa);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">Trust auto-apply</div>' +

@@ -191,7 +191,7 @@
         embed.style.height = '100%';
         embed.style.overflowY = 'auto';
         embed.style.boxSizing = 'border-box';
-        embed.style.background = 'var(--surface, #1a1d27)';
+        embed.style.background = 'var(--surface, #17171c)';
         customTarget.innerHTML = '';
         customTarget.appendChild(embed);
       }
@@ -339,7 +339,7 @@
         // Surface orphans only when there are any — keeps the row
         // tight in the common (clean) case.
         (orphan > 0
-          ? '<div style="background:var(--card-bg,#0f0f1e);border:1px solid rgba(248,113,113,0.4);border-radius:8px;padding:10px 12px;cursor:pointer;" ' +
+          ? '<div style="background:var(--card-bg,#141419);border:1px solid rgba(248,113,113,0.4);border-radius:8px;padding:10px 12px;cursor:pointer;" ' +
             'onclick="window.qbCostsView.cleanOrphans()" title="Click to null out the broken links in one batch.">' +
             '<div style="font-size:10px;color:#f87171;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Orphan links</div>' +
             '<div style="font-size:16px;font-weight:700;color:#f87171;">' + orphan + ' &middot; clean &rarr;</div>' +
@@ -354,7 +354,7 @@
       function chipPalette(label, bucket, activeKey, setterName) {
         var keys = Object.keys(bucket).sort(function(a, b) { return bucket[b] - bucket[a]; });
         if (!keys.length) return '';
-        var html = '<div style="background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:8px;padding:8px 12px;margin-bottom:10px;">' +
+        var html = '<div style="background:var(--card-bg,#141419);border:1px solid var(--border,#333);border-radius:8px;padding:8px 12px;margin-bottom:10px;">' +
           '<div style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">' + label + ' (click to filter)</div>' +
           '<div style="display:flex;flex-wrap:wrap;gap:5px;">';
         keys.forEach(function(k) {
@@ -455,13 +455,13 @@
     // ── Lines table ─────────────────────────────────────────────
     var tableHtml = '';
     if (!allLines.length) {
-      tableHtml = '<div style="padding:30px;text-align:center;color:var(--text-dim,#888);background:var(--card-bg,#0f0f1e);border:1px dashed var(--border,#333);border-radius:10px;font-size:13px;">' +
+      tableHtml = '<div style="padding:30px;text-align:center;color:var(--text-dim,#888);background:var(--card-bg,#141419);border:1px dashed var(--border,#333);border-radius:10px;font-size:13px;">' +
         '<div style="margin-bottom:8px;font-size:24px;">&#x1F4CB;</div>' +
         '<div style="font-weight:600;margin-bottom:4px;">No QB cost data for this job yet</div>' +
         '<div style="font-size:12px;">Import the weekly Detailed Job Cost xlsx from the Jobs page to populate.</div>' +
       '</div>';
     } else if (!lines.length) {
-      tableHtml = '<div style="padding:20px;text-align:center;color:var(--text-dim,#888);background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:10px;">' +
+      tableHtml = '<div style="padding:20px;text-align:center;color:var(--text-dim,#888);background:var(--card-bg,#141419);border:1px solid var(--border,#333);border-radius:10px;">' +
         'No lines match the current filter.' +
       '</div>';
     } else {
@@ -471,9 +471,9 @@
       var allVisibleSelected = lines.length > 0 && lines.every(function(l) { return isSelected(l.id); });
       var someVisibleSelected = lines.some(function(l) { return isSelected(l.id); }) && !allVisibleSelected;
 
-      tableHtml = '<div style="border:1px solid var(--border,#333);border-radius:10px;overflow-y:auto;overflow-x:auto;background:var(--card-bg,#0f0f1e);max-height:calc(100vh - 380px);min-height:200px;">' +
+      tableHtml = '<div style="border:1px solid var(--border,#333);border-radius:10px;overflow-y:auto;overflow-x:auto;background:var(--card-bg,#141419);max-height:calc(100vh - 380px);min-height:200px;">' +
         '<table class="dense-table" style="width:100%;border-collapse:collapse;table-layout:auto;">' +
-          '<thead style="background:var(--card-bg,#0f0f1e);border-bottom:1px solid var(--border,#333);position:sticky;top:0;z-index:1;">' +
+          '<thead style="background:var(--card-bg,#141419);border-bottom:1px solid var(--border,#333);position:sticky;top:0;z-index:1;">' +
             '<tr>' +
               '<th style="padding:6px 8px;width:28px;">' +
                 '<input type="checkbox" id="qbcSelectAll" ' + (allVisibleSelected ? 'checked' : '') + ' ' +
@@ -517,7 +517,7 @@
   }
 
   function statCard(label, value, color) {
-    return '<div style="background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:8px;padding:10px 12px;">' +
+    return '<div style="background:var(--card-bg,#141419);border:1px solid var(--border,#333);border-radius:8px;padding:10px 12px;">' +
       '<div style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">' + escapeHTML(label) + '</div>' +
       '<div style="font-size:16px;font-weight:700;color:' + color + ';">' + escapeHTML(String(value)) + '</div>' +
     '</div>';
@@ -776,7 +776,7 @@
         '</div>' +
         '<input type="text" id="qbLinkPickerSearch" placeholder="Search nodes…" autocomplete="off" ' +
           'style="width:100%;margin-bottom:10px;padding:8px 10px;font-size:13px;" />' +
-        '<div id="qbLinkPickerList" style="max-height:50vh;overflow-y:auto;border:1px solid var(--border,#2e3346);border-radius:6px;background:var(--card-bg,#0f0f1e);"></div>' +
+        '<div id="qbLinkPickerList" style="max-height:50vh;overflow-y:auto;border:1px solid var(--border,#2a2a32);border-radius:6px;background:var(--card-bg,#141419);"></div>' +
         '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;">' +
           '<button class="ee-btn secondary" id="qbLinkPickerCancel">Cancel</button>' +
         '</div>' +
@@ -814,12 +814,12 @@
           var group = byType[t].slice().sort(function(a, b) {
             return (a.label || '').localeCompare(b.label || '');
           });
-          html += '<div style="padding:6px 10px;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#888);background:rgba(255,255,255,0.03);border-bottom:1px solid var(--border,#2e3346);">' +
+          html += '<div style="padding:6px 10px;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#888);background:rgba(255,255,255,0.03);border-bottom:1px solid var(--border,#2a2a32);">' +
             (TYPE_LABEL[t] || t) + ' &middot; ' + group.length +
           '</div>';
           group.forEach(function(n) {
             html += '<button class="qb-link-pick-row" data-node-id="' + escapeAttr(n.id) + '" ' +
-              'style="display:block;width:100%;text-align:left;padding:8px 12px;background:transparent;border:none;border-bottom:1px solid var(--border,#2e3346);color:var(--text,#e4e6f0);font-size:13px;cursor:pointer;">' +
+              'style="display:block;width:100%;text-align:left;padding:8px 12px;background:transparent;border:none;border-bottom:1px solid var(--border,#2a2a32);color:var(--text,#e4e6f0);font-size:13px;cursor:pointer;">' +
               '<span style="font-weight:600;">' + escapeHTML(n.label || n.type) + '</span>' +
               '<span style="margin-left:8px;font-size:11px;color:var(--text-dim,#888);">' + escapeHTML(n.type || '') + '</span>' +
             '</button>';

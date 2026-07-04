@@ -1454,7 +1454,7 @@
     if (!card) {
       card = document.createElement('div');
       card.id = 'leadEditor_capturedCostsCard';
-      card.style.cssText = 'border:1px solid var(--border,#2e3346);border-radius:8px;padding:8px 10px;margin:0 0 10px 0;';
+      card.style.cssText = 'border:1px solid var(--border,#2a2a32);border-radius:8px;padding:8px 10px;margin:0 0 10px 0;';
       card.innerHTML = '<div id="leadEditor_capturedCostsInner"></div>';
       container.appendChild(card);
     }
@@ -1946,7 +1946,7 @@
           '</button>';
       }).join('');
       var card = document.createElement('div');
-      card.style.cssText = 'background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:12px;max-width:520px;width:100%;max-height:80vh;overflow:auto;padding:18px;';
+      card.style.cssText = 'background:var(--card-bg,#141419);border:1px solid var(--border,#333);border-radius:12px;max-width:520px;width:100%;max-height:80vh;overflow:auto;padding:18px;';
       card.innerHTML =
         '<div style="font-size:15px;font-weight:700;margin-bottom:4px;">Which estimate becomes the job?</div>' +
         '<div style="font-size:12px;color:var(--text-muted,#9aa);margin-bottom:10px;">Its proposal total seeds the job\'s Contract Amount, and its workspace carries over.</div>' +

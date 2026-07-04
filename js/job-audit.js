@@ -363,7 +363,7 @@
 
   function buildAuditHTML(result, bySeverity) {
     var headStat = function(label, value, color) {
-      return '<div style="background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:8px;padding:8px 12px;">' +
+      return '<div style="background:var(--card-bg,#141419);border:1px solid var(--border,#333);border-radius:8px;padding:8px 12px;">' +
         '<div style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:3px;">' + label + '</div>' +
         '<div style="font-size:22px;font-weight:700;color:' + color + ';">' + value + '</div>' +
       '</div>';
@@ -385,7 +385,7 @@
           }
           var aiPrompt = 'I just ran an audit and found this: "' + f.title + ' — ' + (f.detail || '').replace(/<[^>]+>/g, '') + '". Walk me through how to fix it.';
           actions += '<button class="ee-btn ghost" style="font-size:11px;padding:3px 10px;" data-ai="' + escapeAttr(aiPrompt) + '">&#x2728; Ask AI</button>';
-          return '<div style="background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:8px;padding:10px 12px;margin-bottom:8px;">' +
+          return '<div style="background:var(--card-bg,#141419);border:1px solid var(--border,#333);border-radius:8px;padding:10px 12px;margin-bottom:8px;">' +
             '<div style="font-weight:600;font-size:13px;margin-bottom:4px;color:' + color + ';">' + escapeHTML(f.title) + '</div>' +
             '<div style="font-size:12px;color:var(--text-dim,#aaa);margin-bottom:8px;line-height:1.45;">' + (f.detail || '') + '</div>' +
             '<div style="display:flex;gap:6px;flex-wrap:wrap;">' + actions + '</div>' +

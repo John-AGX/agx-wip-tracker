@@ -246,11 +246,11 @@
     })();
     </script>
 
-    <link rel="stylesheet" href="css/styles.css?v=238">
-    <link rel="stylesheet" href="css/report-style-packs.css?v=3">
-    <link rel="stylesheet" href="css/workspace-layout.css?v=64">
-    <link rel="stylesheet" href="css/workspace.css?v=39">
-    <link rel="stylesheet" href="css/schedule.css?v=37">
+    <link rel="stylesheet" href="css/styles.css?v=239">
+    <link rel="stylesheet" href="css/report-style-packs.css?v=4">
+    <link rel="stylesheet" href="css/workspace-layout.css?v=65">
+    <link rel="stylesheet" href="css/workspace.css?v=40">
+    <link rel="stylesheet" href="css/schedule.css?v=38">
     <!-- Accidental-edit protection layer. Two attribute-driven gates
          ([data-edit-gate], [data-row-edit-gate]) lock form inputs
          behind a pencil toggle / row-tap so stray taps can't mutate
@@ -900,8 +900,8 @@
                             </div>
                             <span id="job-detail-status" class="job-detail-status-pill"></span>
                             <div class="ee-header-icons" style="display:inline-flex;align-items:center;gap:6px;flex-wrap:wrap;">
-                                <button onclick="archiveCurrentJob()" id="archive-job-btn" title="Archive job" style="padding:6px 12px;font-size:12px;font-weight:600;white-space:nowrap;border-radius:7px;border:1px solid var(--border,#2e3346);background:var(--surface,#1a1d27);color:var(--text,#eef0f6);cursor:pointer;">Archive</button>
-                                <button onclick="deleteCurrentJob()" title="Delete job permanently" style="padding:6px 12px;font-size:12px;font-weight:600;white-space:nowrap;border-radius:7px;border:1px solid rgba(255,107,107,.45);background:var(--surface,#1a1d27);color:#ff6b6b;cursor:pointer;">Delete</button>
+                                <button onclick="archiveCurrentJob()" id="archive-job-btn" title="Archive job" style="padding:6px 12px;font-size:12px;font-weight:600;white-space:nowrap;border-radius:7px;border:1px solid var(--border,#2a2a32);background:var(--surface,#17171c);color:var(--text,#eef0f6);cursor:pointer;">Archive</button>
+                                <button onclick="deleteCurrentJob()" title="Delete job permanently" style="padding:6px 12px;font-size:12px;font-weight:600;white-space:nowrap;border-radius:7px;border:1px solid rgba(255,107,107,.45);background:var(--surface,#17171c);color:#ff6b6b;cursor:pointer;">Delete</button>
                             </div>
                         </div>
 
@@ -913,13 +913,13 @@
                         <div class="card" id="job-info-card">
                             <div style="display:flex;align-items:flex-start;gap:12px;margin-bottom:14px;">
                                 <div style="flex:1;min-width:0;">
-                                    <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#c4c8d8);margin-bottom:4px;">Job Information</div>
+                                    <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#b4b4bf);margin-bottom:4px;">Job Information</div>
                                     <div style="font-size:16px;font-weight:600;color:var(--text,#eef0f6);line-height:1.3;word-break:break-word;" id="job-info-title"></div>
                                     <div style="font-size:13px;color:var(--text-dim);margin-top:5px;display:flex;align-items:center;gap:4px;flex-wrap:wrap;" id="job-info-address">—</div>
                                 </div>
                                 <div style="display:flex;align-items:center;gap:8px;flex-shrink:0;">
                                     <span id="job-info-status" style="font-size:13px;"></span>
-                                    <button id="edit-job-info-btn" data-editing="0" onclick="toggleEditJobInfo()" title="Edit job info" aria-label="Edit job info" style="padding:6px 13px;font-size:12px;font-weight:600;white-space:nowrap;border-radius:7px;border:1px solid var(--border,#2e3346);background:var(--surface,#1a1d27);color:var(--text,#eef0f6);cursor:pointer;">&#9998; Edit</button>
+                                    <button id="edit-job-info-btn" data-editing="0" onclick="toggleEditJobInfo()" title="Edit job info" aria-label="Edit job info" style="padding:6px 13px;font-size:12px;font-weight:600;white-space:nowrap;border-radius:7px;border:1px solid var(--border,#2a2a32);background:var(--surface,#17171c);color:var(--text,#eef0f6);cursor:pointer;">&#9998; Edit</button>
                                 </div>
                             </div>
 
@@ -1578,7 +1578,7 @@
                                     <div style="font-size:11px;color:var(--text-dim,#888);">Edits autosave on blur. Drag the &#x2630; handle to reorder. Per-line markup overrides the default.</div>
                                     <!-- Pricing breakdown — moved below the line items now that scope
                                          lives in its own modal/tab. Lets line items take the full width. -->
-                                    <div style="background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:10px;padding:12px 14px;max-width:520px;">
+                                    <div style="background:var(--card-bg,#141419);border:1px solid var(--border,#333);border-radius:10px;padding:12px 14px;max-width:520px;">
                                         <div style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">Pricing</div>
                                         <div id="ee-pricing-breakdown"></div>
                                     </div>
@@ -1594,7 +1594,7 @@
                                  active alternate. Same edits as the popup modal; both
                                  read/write the same per-alternate scope text. -->
                             <div id="ee-tab-scope" class="ee-tab-content" style="display:none;">
-                                <div id="ee-scope-panel-page" style="background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:10px;padding:14px 16px;"></div>
+                                <div id="ee-scope-panel-page" style="background:var(--card-bg,#141419);border:1px solid var(--border,#333);border-radius:10px;padding:14px 16px;"></div>
                             </div>
 
                             <!-- Photos tab — drag-drop upload + thumbnail grid + lightbox.
@@ -1847,7 +1847,7 @@
                         <div id="admin-cat-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:12px;max-width:520px;"></div>
                         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
                             <input id="admin-cat-new" type="text" placeholder="New category name…" maxlength="60"
-                                   style="flex:0 1 220px;background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:8px;color:var(--text,#fff);padding:8px 10px;font-size:13px;" />
+                                   style="flex:0 1 220px;background:var(--card-bg,#141419);border:1px solid var(--border,#333);border-radius:8px;color:var(--text,#fff);padding:8px 10px;font-size:13px;" />
                             <button class="secondary" onclick="addAdminCostCategory(this)">+ Add category</button>
                             <span id="admin-cat-note" style="font-size:12px;color:var(--text-dim,#888);"></span>
                         </div>
@@ -2974,16 +2974,16 @@
           <input type="hidden" id="roleEditor_origName" />
           <div>
             <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Internal Name</label>
-            <input id="roleEditor_name" type="text" placeholder="lowercase_with_underscores" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);font-family:monospace;" />
+            <input id="roleEditor_name" type="text" placeholder="lowercase_with_underscores" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#141419);color:var(--text,#fff);font-family:monospace;" />
             <div style="font-size:11px;color:var(--text-dim,#888);margin-top:4px;">Lowercase letters, digits, and underscores only. Used internally and as the role on users.</div>
           </div>
           <div>
             <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Display Name</label>
-            <input id="roleEditor_label" type="text" placeholder="e.g. Field Crew" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);" />
+            <input id="roleEditor_label" type="text" placeholder="e.g. Field Crew" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#141419);color:var(--text,#fff);" />
           </div>
           <div>
             <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Description (optional)</label>
-            <textarea id="roleEditor_description" rows="2" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);resize:vertical;"></textarea>
+            <textarea id="roleEditor_description" rows="2" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#141419);color:var(--text,#fff);resize:vertical;"></textarea>
           </div>
           <div>
             <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:6px;">Capabilities</label>
@@ -3023,11 +3023,11 @@
         <div style="padding:20px;display:flex;flex-direction:column;gap:12px;">
           <div>
             <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">User</label>
-            <select id="grantAccess_userSelect" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);"></select>
+            <select id="grantAccess_userSelect" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#141419);color:var(--text,#fff);"></select>
           </div>
           <div>
             <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Access Level</label>
-            <select id="grantAccess_level" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);">
+            <select id="grantAccess_level" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#141419);color:var(--text,#fff);">
               <option value="edit">Edit &mdash; can change job data</option>
               <option value="view">View &mdash; read-only</option>
             </select>
@@ -3048,23 +3048,23 @@
         <div style="padding:20px;display:flex;flex-direction:column;gap:12px;">
           <div>
             <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Full Name</label>
-            <input id="newUser_name" type="text" placeholder="Jane Doe" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);" />
+            <input id="newUser_name" type="text" placeholder="Jane Doe" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#141419);color:var(--text,#fff);" />
           </div>
           <div>
             <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Email</label>
-            <input id="newUser_email" type="email" placeholder="jane@agxco.com" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);" />
+            <input id="newUser_email" type="email" placeholder="jane@agxco.com" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#141419);color:var(--text,#fff);" />
           </div>
           <div>
             <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Initial Password</label>
-            <input id="newUser_password" type="text" placeholder="min 4 chars (tell the user out-of-band)" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);" />
+            <input id="newUser_password" type="text" placeholder="min 4 chars (tell the user out-of-band)" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#141419);color:var(--text,#fff);" />
           </div>
           <div>
             <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Role</label>
-            <select id="newUser_role" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);"></select>
+            <select id="newUser_role" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#141419);color:var(--text,#fff);"></select>
           </div>
           <div>
             <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Phone Number <span style="color:var(--text-dim,#666);font-weight:400;">(optional — for SMS scheduling agent)</span></label>
-            <input id="newUser_phone" type="tel" placeholder="(407) 555-1234" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);" />
+            <input id="newUser_phone" type="tel" placeholder="(407) 555-1234" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#141419);color:var(--text,#fff);" />
           </div>
           <div id="newUser_status" style="font-size:13px;"></div>
         </div>
@@ -3083,23 +3083,23 @@
           <input type="hidden" id="editUser_id" />
           <div>
             <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Email (read-only)</label>
-            <input id="editUser_email" type="email" readonly style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text-dim,#888);" />
+            <input id="editUser_email" type="email" readonly style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#141419);color:var(--text-dim,#888);" />
           </div>
           <div>
             <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Full Name</label>
-            <input id="editUser_name" type="text" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);" />
+            <input id="editUser_name" type="text" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#141419);color:var(--text,#fff);" />
           </div>
           <div>
             <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Role</label>
-            <select id="editUser_role" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);"></select>
+            <select id="editUser_role" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#141419);color:var(--text,#fff);"></select>
           </div>
           <div>
             <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Phone Number <span style="color:var(--text-dim,#666);font-weight:400;">(optional — for SMS scheduling agent)</span></label>
-            <input id="editUser_phone" type="tel" placeholder="(407) 555-1234" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);" />
+            <input id="editUser_phone" type="tel" placeholder="(407) 555-1234" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#141419);color:var(--text,#fff);" />
           </div>
           <div>
             <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Timezone <span style="color:var(--text-dim,#666);font-weight:400;">(optional — overrides the org timezone for this user's reminders)</span></label>
-            <select id="editUser_timezone" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);"></select>
+            <select id="editUser_timezone" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#141419);color:var(--text,#fff);"></select>
           </div>
           <label class="p86-check-row">
             <input type="checkbox" id="editUser_active" />
@@ -3108,7 +3108,7 @@
           <hr style="border:none;border-top:1px solid var(--border,#333);margin:8px 0;" />
           <div>
             <label style="display:block;font-size:12px;color:var(--text-dim,#888);margin-bottom:4px;">Reset Password (optional)</label>
-            <input id="editUser_newPassword" type="text" placeholder="Leave blank to keep current password" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);" />
+            <input id="editUser_newPassword" type="text" placeholder="Leave blank to keep current password" style="width:100%;padding:8px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#141419);color:var(--text,#fff);" />
           </div>
           <div id="editUser_status" style="font-size:13px;"></div>
         </div>
@@ -3142,73 +3142,73 @@
 
     <script src="js/modal-drag.js?v=1b"></script>
     <script src="js/auth.js?v=19"></script>
-    <script src="js/dialogs.js?v=1b"></script>
+    <script src="js/dialogs.js?v=2b"></script>
     <script src="js/geolocation.js?v=1"></script>
     <script src="js/api.js?v=62"></script>
     <script src="js/header-weather.js?v=2"></script>
-    <script src="js/account.js?v=5"></script>
+    <script src="js/account.js?v=6"></script>
     <script src="js/voice-input.js?v=11"></script>
     <script src="js/voice-output.js?v=4"></script>
     <script src="js/attachments.js?v=24"></script>
-    <script src="js/markup-viewer.js?v=28"></script>
-    <script src="js/sheet-editor.js?v=44"></script>
-    <script src="js/plans.js?v=5"></script>
-    <script src="js/pdf-viewer.js?v=3b"></script>
+    <script src="js/markup-viewer.js?v=29"></script>
+    <script src="js/sheet-editor.js?v=45"></script>
+    <script src="js/plans.js?v=6"></script>
+    <script src="js/pdf-viewer.js?v=4b"></script>
     <!-- Visual block editor for email templates (Wave 3). Loads
          BEFORE admin.js so window.p86EmailBlocks is available at the
          time renderTemplateEditor() runs its mount call. -->
     <script src="js/email-block-editor.js?v=6"></script>
-    <script src="js/admin.js?v=115"></script>
+    <script src="js/admin.js?v=116"></script>
     <!-- Act-as / disguise mode: persistent "Acting as NAME — Exit" banner +
          window.p86ActAs(userId). Self-contained; re-fetches /api/auth/me. -->
     <script src="js/actas.js?v=1"></script>
-    <script src="js/admin-context-registry.js?v=3"></script>
-    <script src="js/field-tools.js?v=10"></script>
+    <script src="js/admin-context-registry.js?v=4"></script>
+    <script src="js/field-tools.js?v=11"></script>
     <div id="clientDashboardModal" class="modal">
       <div class="modal-content" style="max-width:1120px;width:96vw;max-height:92vh;display:flex;flex-direction:column;">
         <div id="clientDashboard_body" style="padding:20px 22px;overflow-y:auto;flex:1;"></div>
       </div>
     </div>
-    <script src="js/clients.js?v=21"></script>
+    <script src="js/clients.js?v=22"></script>
     <script src="js/clients-dashboard.js?v=2"></script>
     <!-- Folder taxonomy — default folder structure per entity type
          (lead / estimate / job / client). Loads before subs.js and
          my-files.js, which merge it with live folders for the grant
          dropdown and the My Files tree. -->
     <script src="js/folder-taxonomy.js?v=2"></script>
-    <script src="js/subs.js?v=11"></script>
-    <script src="js/job-audit.js?v=3c"></script>
+    <script src="js/subs.js?v=12"></script>
+    <script src="js/job-audit.js?v=4c"></script>
     <script src="js/job-reports.js?v=1b"></script>
     <!-- Shared table enhancements (reorder / resize / freeze first column /
          internal scroll / persisted layout) for the Jobs, Estimates and
          Leads lists. Loads BEFORE those renderers so window.p86Tables is
          ready the first time they build their tables. -->
-    <script src="js/table-enhancements.js?v=12"></script>
+    <script src="js/table-enhancements.js?v=13"></script>
     <script src="js/bulk-ribbon.js?v=1"></script>
-    <script src="js/job-finalize.js?v=2"></script>
-    <script src="js/leads.js?v=70"></script>
-    <script src="js/job-costs-import.js?v=4"></script>
-    <script src="js/qb-costs-view.js?v=11"></script>
+    <script src="js/job-finalize.js?v=3"></script>
+    <script src="js/leads.js?v=71"></script>
+    <script src="js/job-costs-import.js?v=5"></script>
+    <script src="js/qb-costs-view.js?v=12"></script>
     <script src="js/insights.js?v=7"></script>
     <script src="js/schedule.js?v=49"></script>
-    <script src="js/my-day.js?v=3"></script>
+    <script src="js/my-day.js?v=4"></script>
     <!-- Shared entity card (job/lead/estimate Pulse card) — window.p86EntityCard.
          Loads before its callers (entities-map.js, workspace-layout.js). -->
-    <script src="js/entity-card.js?v=4"></script>
+    <script src="js/entity-card.js?v=5"></script>
     <!-- Lead/estimate context card mounted into #app-sidebar (uses p86EntityCard). -->
     <script src="js/entity-subnav.js?v=2"></script>
-    <script src="js/app.js?v=105"></script>
+    <script src="js/app.js?v=106"></script>
     <script src="js/sidebar-brand.js?v=2"></script>
     <!-- Guided tours engine + the Help & What's New center (patch
          notes, guides, feature atlas). help-center.js owns
          window.openHelpOverlay — must load after app.js. -->
     <script src="js/guide.js?v=1"></script>
     <script src="js/help-center.js?v=1"></script>
-    <script src="js/compliance-review-ui.js?v=2"></script>
-    <script src="js/messaging.js?v=6"></script>
+    <script src="js/compliance-review-ui.js?v=3"></script>
+    <script src="js/messaging.js?v=7"></script>
     <script src="js/agent-tasks.js?v=8"></script>
     <script src="js/crew-chip.js?v=2"></script>
-    <script src="js/file-explorer.js?v=6"></script>
+    <script src="js/file-explorer.js?v=7"></script>
     <script src="js/my-files.js?v=22"></script>
     <!-- Tasks / To-Do UI. Loads after my-files.js (reuses window.p86Toast)
          and after api.js/auth.js (p86Api.tasks + p86Auth). -->
@@ -3264,11 +3264,11 @@
          estimate-preview + the upcoming change-order-editor. Loads
          BEFORE any of them so window.p86Pricing is ready. -->
     <script src="js/pricing-pipeline.js?v=1"></script>
-    <script src="js/jobs.js?v=118"></script>
-    <script src="js/job-workflow-ui.js?v=4"></script>
+    <script src="js/jobs.js?v=119"></script>
+    <script src="js/job-workflow-ui.js?v=5"></script>
     <script src="js/estimates.js?v=52"></script>
     <script src="js/proposal.js?v=25"></script>
-    <script src="js/estimate-editor.js?v=64"></script>
+    <script src="js/estimate-editor.js?v=65"></script>
     <!-- Change Order editor — overlay opened from the job detail's
          Change Orders tab. Loads after pricing-pipeline (which it
          consumes via window.p86Pricing) and after api.js (which
@@ -3281,7 +3281,7 @@
          BEFORE ai-panel.js so window.PayloadArtifact exists when the
          panel mounts. -->
     <script src="js/payload-artifact.js?v=7"></script>
-    <script src="js/ai-panel.js?v=142"></script>
+    <script src="js/ai-panel.js?v=143"></script>
     <!-- Save-from-chat bridge (Workstream ③). Owns p86SaveCodeBlock /
          p86SaveResponse / p86SaveToPicker, called by inline onclick
          handlers in ai-panel.js renderMarkdown / renderBubble. Loads
@@ -3289,8 +3289,8 @@
     <script src="js/save-from-chat.js?v=1"></script>
     <script src="js/tab-slider.js?v=1b"></script>
 
-    <script src="js/workspace.js?v=45"></script>
-    <script src="js/workspace-layout.js?v=85"></script>
+    <script src="js/workspace.js?v=46"></script>
+    <script src="js/workspace-layout.js?v=86"></script>
 
     <!-- URL router — pathname-based navigation. Loads last so all
          top-level nav functions (switchTab, editJob, etc.) exist
@@ -3325,7 +3325,7 @@
     <script src="js/edit-gate.js?v=1"></script>
 
     <!-- Node Graph (Beta) -->
-    <link rel="stylesheet" href="nodegraph/nodegraph.css?v=145" />
+    <link rel="stylesheet" href="nodegraph/nodegraph.css?v=146" />
     <div id="nodeGraphTab">
       <!-- Workspace canvas toolbar — Outlook ribbon style. Each
            button is icon-on-top + label-below, buttons cluster into

@@ -167,7 +167,7 @@
         banner.style.gap = '12px';
         if (bannerText) bannerText.innerHTML = '<strong>' + inline.length + ' legacy sub record' + (inline.length === 1 ? '' : 's') + '</strong> from job-side entries — roll them up into the directory.';
       }
-      listEl.innerHTML = '<div style="padding:30px;text-align:center;color:var(--text-dim,#888);background:var(--card-bg,#0f0f1e);border:1px dashed var(--border,#333);border-radius:10px;">' +
+      listEl.innerHTML = '<div style="padding:30px;text-align:center;color:var(--text-dim,#888);background:var(--card-bg,#141419);border:1px dashed var(--border,#333);border-radius:10px;">' +
         '<div style="font-size:32px;margin-bottom:8px;">&#x1F477;</div>' +
         '<div style="font-weight:600;font-size:14px;margin-bottom:4px;">No subs in the directory yet</div>' +
         '<div style="font-size:12px;">Click <strong>+ New Sub</strong> to onboard one — or migrate your existing job-side sub entries.</div>' +
@@ -213,7 +213,7 @@
     filtered.sort(function(a, b) { return Number(b.total_contracted || 0) - Number(a.total_contracted || 0); });
 
     listEl.innerHTML =
-      '<div style="border:1px solid var(--border,#333);border-radius:10px;overflow:hidden;background:var(--card-bg,#0f0f1e);">' +
+      '<div style="border:1px solid var(--border,#333);border-radius:10px;overflow:hidden;background:var(--card-bg,#141419);">' +
         '<table class="dense-table" style="width:100%;border-collapse:collapse;">' +
           '<thead style="background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border,#333);">' +
             '<tr>' +
@@ -457,7 +457,7 @@
       '<div style="min-width:0;">' +
         '<div style="font-size:12px;font-weight:600;color:var(--text,#e6e6e6);margin-bottom:4px;">' + escapeHTML(type.label) + '</div>' +
         '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
-          '<button type="button" data-cert-upload="' + type.key + '" style="padding:5px 12px;font-size:11px;border:1px solid var(--border,#333);border-radius:5px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);cursor:pointer;">⬆ ' + (hasFile ? 'Replace' : 'Upload') + '</button>' +
+          '<button type="button" data-cert-upload="' + type.key + '" style="padding:5px 12px;font-size:11px;border:1px solid var(--border,#333);border-radius:5px;background:var(--card-bg,#141419);color:var(--text,#fff);cursor:pointer;">⬆ ' + (hasFile ? 'Replace' : 'Upload') + '</button>' +
           '<input type="file" data-cert-file="' + type.key + '" accept="application/pdf,image/*" style="display:none;" />' +
           '<span data-cert-status="' + type.key + '" style="font-size:11px;min-width:0;overflow:hidden;text-overflow:ellipsis;">' + fileLink + '</span>' +
         '</div>' +
@@ -465,22 +465,22 @@
       // Col 2: expiration date
       '<div>' +
         '<label style="display:block;font-size:10px;color:var(--text-dim,#888);margin-bottom:2px;">Expiration date</label>' +
-        '<input type="date" data-cert-field="expiration_date" data-cert-key="' + type.key + '" value="' + escapeAttr(expVal) + '" style="width:100%;padding:5px 8px;border:1px solid var(--border,#333);border-radius:5px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);font-size:12px;" />' +
+        '<input type="date" data-cert-field="expiration_date" data-cert-key="' + type.key + '" value="' + escapeAttr(expVal) + '" style="width:100%;padding:5px 8px;border:1px solid var(--border,#333);border-radius:5px;background:var(--card-bg,#141419);color:var(--text,#fff);font-size:12px;" />' +
       '</div>' +
       // Col 3: reminder days
       '<div>' +
         '<label style="display:block;font-size:10px;color:var(--text-dim,#888);margin-bottom:2px;">Reminder (days)</label>' +
-        '<input type="number" min="0" data-cert-field="reminder_days" data-cert-key="' + type.key + '" value="' + escapeAttr(String(rDays)) + '" style="width:100%;padding:5px 8px;border:1px solid var(--border,#333);border-radius:5px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);font-size:12px;" />' +
+        '<input type="number" min="0" data-cert-field="reminder_days" data-cert-key="' + type.key + '" value="' + escapeAttr(String(rDays)) + '" style="width:100%;padding:5px 8px;border:1px solid var(--border,#333);border-radius:5px;background:var(--card-bg,#141419);color:var(--text,#fff);font-size:12px;" />' +
       '</div>' +
       // Col 4: direction
       '<div>' +
         '<label style="display:block;font-size:10px;color:var(--text-dim,#888);margin-bottom:2px;">Direction</label>' +
-        '<select data-cert-field="reminder_direction" data-cert-key="' + type.key + '" style="width:100%;padding:5px 8px;border:1px solid var(--border,#333);border-radius:5px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);font-size:12px;">' + dirOptions + '</select>' +
+        '<select data-cert-field="reminder_direction" data-cert-key="' + type.key + '" style="width:100%;padding:5px 8px;border:1px solid var(--border,#333);border-radius:5px;background:var(--card-bg,#141419);color:var(--text,#fff);font-size:12px;">' + dirOptions + '</select>' +
       '</div>' +
       // Col 5: reminder limit
       '<div>' +
         '<label style="display:block;font-size:10px;color:var(--text-dim,#888);margin-bottom:2px;">Reminder limit</label>' +
-        '<input type="number" min="0" data-cert-field="reminder_limit" data-cert-key="' + type.key + '" value="' + escapeAttr(String(rLimit)) + '" style="width:100%;padding:5px 8px;border:1px solid var(--border,#333);border-radius:5px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);font-size:12px;" />' +
+        '<input type="number" min="0" data-cert-field="reminder_limit" data-cert-key="' + type.key + '" value="' + escapeAttr(String(rLimit)) + '" style="width:100%;padding:5px 8px;border:1px solid var(--border,#333);border-radius:5px;background:var(--card-bg,#141419);color:var(--text,#fff);font-size:12px;" />' +
       '</div>' +
       // Col 6: × remove (only when a file is uploaded)
       '<div style="align-self:end;padding-bottom:5px;">' +
@@ -857,7 +857,7 @@
           '<div style="display:grid;grid-template-columns:1fr 2fr 1.2fr auto;gap:10px;align-items:end;">' +
             '<div>' +
               '<label style="display:block;font-size:10px;color:var(--text-dim,#888);margin-bottom:3px;text-transform:uppercase;letter-spacing:0.4px;">Entity</label>' +
-              '<select id="fg_entity_type" style="width:100%;padding:6px 10px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);font-size:12px;">' +
+              '<select id="fg_entity_type" style="width:100%;padding:6px 10px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#141419);color:var(--text,#fff);font-size:12px;">' +
                 '<option value="job">Job</option>' +
                 '<option value="lead">Lead</option>' +
                 '<option value="estimate">Estimate</option>' +
@@ -866,17 +866,17 @@
             '</div>' +
             '<div>' +
               '<label style="display:block;font-size:10px;color:var(--text-dim,#888);margin-bottom:3px;text-transform:uppercase;letter-spacing:0.4px;">Job</label>' +
-              '<select id="fg_entity_id" style="width:100%;padding:6px 10px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);font-size:12px;">' +
+              '<select id="fg_entity_id" style="width:100%;padding:6px 10px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#141419);color:var(--text,#fff);font-size:12px;">' +
                 '<option value="">— select a job —</option>' + jobOptions +
               '</select>' +
-              '<input id="fg_entity_id_text" type="text" placeholder="…or paste an entity id" style="width:100%;margin-top:4px;padding:5px 10px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);font-size:11px;display:none;" />' +
+              '<input id="fg_entity_id_text" type="text" placeholder="…or paste an entity id" style="width:100%;margin-top:4px;padding:5px 10px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#141419);color:var(--text,#fff);font-size:11px;display:none;" />' +
             '</div>' +
             '<div>' +
               '<label style="display:block;font-size:10px;color:var(--text-dim,#888);margin-bottom:3px;text-transform:uppercase;letter-spacing:0.4px;">Folder</label>' +
-              '<select id="fg_folder" style="width:100%;padding:6px 10px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);font-size:12px;">' +
+              '<select id="fg_folder" style="width:100%;padding:6px 10px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#141419);color:var(--text,#fff);font-size:12px;">' +
                 folderOptionsHTML('job', null, null) +
               '</select>' +
-              '<input id="fg_folder_custom" type="text" placeholder="custom folder name" style="width:100%;margin-top:4px;padding:5px 10px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);font-size:11px;display:none;" />' +
+              '<input id="fg_folder_custom" type="text" placeholder="custom folder name" style="width:100%;margin-top:4px;padding:5px 10px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#141419);color:var(--text,#fff);font-size:11px;display:none;" />' +
             '</div>' +
             '<button type="button" data-add-grant style="background:#4f8cff;color:#fff;border:none;border-radius:6px;padding:7px 16px;font-size:12px;font-weight:600;cursor:pointer;">Grant</button>' +
           '</div>' +
@@ -1034,7 +1034,7 @@
           '<div style="display:grid;grid-template-columns:1fr auto;gap:10px;align-items:end;">' +
             '<div>' +
               '<label style="display:block;font-size:10px;color:var(--text-dim,#888);margin-bottom:3px;text-transform:uppercase;letter-spacing:0.4px;">Email</label>' +
-              '<input id="portal_invite_email" type="email" value="' + escapeAttr(defaultEmail) + '" placeholder="sub@example.com" style="width:100%;padding:6px 10px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);font-size:12px;" />' +
+              '<input id="portal_invite_email" type="email" value="' + escapeAttr(defaultEmail) + '" placeholder="sub@example.com" style="width:100%;padding:6px 10px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#141419);color:var(--text,#fff);font-size:12px;" />' +
             '</div>' +
             '<button type="button" data-send-invite style="background:#22d3ee;color:#0f172a;border:none;border-radius:6px;padding:7px 16px;font-size:12px;font-weight:700;cursor:pointer;">Send invite</button>' +
           '</div>' +
@@ -1056,7 +1056,7 @@
             resultEl.innerHTML =
               '<span style="color:#fbbf24;">Email send not configured or failed' + (res.email_error ? ' (' + escapeHTML(res.email_error) + ')' : '') + '. Copy the link instead:</span>' +
               '<div style="margin-top:6px;display:flex;gap:6px;align-items:center;">' +
-                '<input type="text" readonly value="' + escapeAttr(res.link) + '" style="flex:1;padding:5px 8px;font-size:10px;font-family:monospace;border:1px solid var(--border,#333);border-radius:4px;background:var(--card-bg,#0f0f1e);color:var(--text-dim,#aaa);" onclick="this.select()" />' +
+                '<input type="text" readonly value="' + escapeAttr(res.link) + '" style="flex:1;padding:5px 8px;font-size:10px;font-family:monospace;border:1px solid var(--border,#333);border-radius:4px;background:var(--card-bg,#141419);color:var(--text-dim,#aaa);" onclick="this.select()" />' +
               '</div>';
           }
           setTimeout(reload, 600);
@@ -1158,7 +1158,7 @@
         '<label style="display:block;font-size:11px;color:var(--text-dim,#aaa);margin-bottom:3px;text-transform:uppercase;letter-spacing:0.4px;font-weight:600;">' + escapeHTML(label) + '</label>' +
         '<input id="' + id + '" type="' + type + '" value="' + escapeAttr(value || '') + '" ' +
           (opts.placeholder ? 'placeholder="' + escapeAttr(opts.placeholder) + '" ' : '') +
-          'style="width:100%;padding:6px 10px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);font-size:13px;line-height:1.35;" />' +
+          'style="width:100%;padding:6px 10px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#141419);color:var(--text,#fff);font-size:13px;line-height:1.35;" />' +
       '</div>';
     };
 
@@ -1201,7 +1201,7 @@
           // Trade dropdown — uses the curated list with selected sticky
           '<div>' +
             '<label style="display:block;font-size:11px;color:var(--text-dim,#aaa);margin-bottom:3px;text-transform:uppercase;letter-spacing:0.4px;font-weight:600;">Division / Trade</label>' +
-            '<select id="subDir_trade" style="width:100%;padding:6px 10px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);font-size:13px;line-height:1.35;">' + tradeOptions + '</select>' +
+            '<select id="subDir_trade" style="width:100%;padding:6px 10px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#141419);color:var(--text,#fff);font-size:13px;line-height:1.35;">' + tradeOptions + '</select>' +
           '</div>' +
           input('subDir_primaryFirst', 'Primary contact (first)', sub.primary_contact_first || '') +
           input('subDir_primaryLast',  'Primary contact (last)',  sub.primary_contact_last  || '') +
@@ -1244,7 +1244,7 @@
         // Notes
         '<div style="margin-bottom:14px;">' +
           '<label style="display:block;font-size:11px;color:var(--text-dim,#aaa);margin-bottom:3px;text-transform:uppercase;letter-spacing:0.4px;font-weight:600;">Notes</label>' +
-          '<textarea id="subDir_notes" rows="3" style="width:100%;padding:7px 10px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);font-size:13px;resize:vertical;">' + escapeHTML(sub.notes || '') + '</textarea>' +
+          '<textarea id="subDir_notes" rows="3" style="width:100%;padding:7px 10px;border:1px solid var(--border,#333);border-radius:6px;background:var(--card-bg,#141419);color:var(--text,#fff);font-size:13px;resize:vertical;">' + escapeHTML(sub.notes || '') + '</textarea>' +
         '</div>' +
         // Default payment email
         '<div style="margin-bottom:14px;">' +
@@ -1533,7 +1533,7 @@
   function buildMigrationModalHTML(preview) {
     var newCount = preview.uniqueSubs - preview.existingMatches;
     var headStat = function(label, value, color) {
-      return '<div style="background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:8px;padding:8px 12px;">' +
+      return '<div style="background:var(--card-bg,#141419);border:1px solid var(--border,#333);border-radius:8px;padding:8px 12px;">' +
         '<div style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:3px;">' + label + '</div>' +
         '<div style="font-size:18px;font-weight:700;color:' + color + ';">' + value + '</div>' +
       '</div>';
@@ -1567,7 +1567,7 @@
           headStat('New to directory', newCount, '#34d399') +
           headStat('Reuse existing', preview.existingMatches, '#fbbf24') +
         '</div>' +
-        '<div style="border:1px solid var(--border,#333);border-radius:8px;overflow:hidden;background:var(--card-bg,#0f0f1e);max-height:50vh;overflow-y:auto;">' +
+        '<div style="border:1px solid var(--border,#333);border-radius:8px;overflow:hidden;background:var(--card-bg,#141419);max-height:50vh;overflow-y:auto;">' +
           '<table style="width:100%;border-collapse:collapse;">' +
             '<thead style="background:rgba(255,255,255,0.02);position:sticky;top:0;z-index:1;">' +
               '<tr>' +

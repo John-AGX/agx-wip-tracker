@@ -38,7 +38,7 @@
   function buildWorkspaceSection() {
     const section = document.createElement('div');
     section.id = 'wsJobCostsWorkspace';
-    section.style.cssText = 'margin: 16px 0; border-top: 1px solid var(--border,#2e3346); padding-top: 12px;';
+    section.style.cssText = 'margin: 16px 0; border-top: 1px solid var(--border,#2a2a32); padding-top: 12px;';
 
     section.innerHTML =
       '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">' +

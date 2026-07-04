@@ -191,8 +191,8 @@
   align-items: center;
   gap: 6px;
   padding: 4px 6px;
-  background: var(--surface2, #242836);
-  border: 1px solid var(--border, #2e3346);
+  background: var(--surface2, #202027);
+  border: 1px solid var(--border, #2a2a32);
   border-radius: 6px 6px 0 0;
   flex-wrap: nowrap;
 }
@@ -213,8 +213,8 @@
   align-items: stretch;
   gap: 0;
   padding: 6px 6px 0;
-  background: var(--surface2, #242836);
-  border: 1px solid var(--border, #2e3346);
+  background: var(--surface2, #202027);
+  border: 1px solid var(--border, #2a2a32);
   border-top: none;
   border-radius: 0 0 6px 6px;
   flex-wrap: nowrap;
@@ -234,7 +234,7 @@
      the caption\'s top border. Drop the inter-group right border
      and let the section caption + caption-top-border carry the
      visual divide. */
-  border-right: 1px solid var(--border, #2e3346);
+  border-right: 1px solid var(--border, #2a2a32);
   min-width: 0;
 }
 .ws-ribbon-group:last-child {
@@ -254,7 +254,7 @@
   letter-spacing: 0.6px;
   color: var(--text-dim, #8b90a5);
   padding: 3px 4px 4px;
-  border-top: 1px solid var(--border, #2e3346);
+  border-top: 1px solid var(--border, #2a2a32);
   white-space: nowrap;
   text-align: center;
   width: 100%;
@@ -353,7 +353,7 @@
   padding: 4px 4px 4px 6px;
   background: var(--card-bg, #0c0c14);
   color: var(--text);
-  border: 1px solid var(--border, #2e3346);
+  border: 1px solid var(--border, #2a2a32);
   border-radius: 4px;
   font-size: 12px;
   height: 26px;
@@ -384,8 +384,8 @@
   align-items: center;
   gap: 3px;
   padding: 3px 6px;
-  background: var(--surface2, #242836);
-  border: 1px solid var(--border, #2e3346);
+  background: var(--surface2, #202027);
+  border: 1px solid var(--border, #2a2a32);
   border-top: none;
   flex-wrap: wrap;
 }
@@ -573,7 +573,7 @@
   font-weight: 600;
   color: var(--text, #e4e6f0);
   background: var(--bg, #101014);
-  border: 1px solid var(--border, #2e3346);
+  border: 1px solid var(--border, #2a2a32);
   border-radius: 3px;
   padding: 4px 8px;
   min-width: 44px;
@@ -596,7 +596,7 @@
   font-size: 12px;
   color: var(--text, #e4e6f0);
   background: var(--bg, #101014);
-  border: 1px solid var(--border, #2e3346);
+  border: 1px solid var(--border, #2a2a32);
   border-radius: 3px;
   padding: 4px 8px;
   outline: none;
@@ -634,7 +634,7 @@
 .ws-separator {
   width: 1px;
   height: 18px;
-  background: var(--border, #2e3346);
+  background: var(--border, #2a2a32);
   margin: 0 3px;
 }
 
@@ -643,9 +643,9 @@
 .ws-btn {
   font-size: 11px;
   padding: 3px 8px;
-  border: 1px solid var(--border, #2e3346);
+  border: 1px solid var(--border, #2a2a32);
   border-radius: 3px;
-  background: var(--surface, #1a1d27);
+  background: var(--surface, #17171c);
   color: var(--text-dim, #8b90a5);
   cursor: pointer;
   transition: all 0.12s;
@@ -654,7 +654,7 @@
 }
 
 .ws-btn:hover {
-  background: var(--surface2, #242836);
+  background: var(--surface2, #202027);
   color: var(--text, #e4e6f0);
   border-color: var(--accent-dim, #2a4a8a);
 }
@@ -688,8 +688,8 @@
      visible — every workspace render starts hidden, period. */
   display: none;
   padding: 8px 10px;
-  background: var(--surface, #1a1d27);
-  border: 1px solid var(--border, #2e3346);
+  background: var(--surface, #17171c);
+  border: 1px solid var(--border, #2a2a32);
   border-top: none;
   max-height: 280px;
   overflow-y: auto;
@@ -789,7 +789,7 @@
 .ws-link-opt {
   font-size: 10px;
   padding: 2px 7px;
-  border: 1px solid var(--border, #2e3346);
+  border: 1px solid var(--border, #2a2a32);
   border-radius: 10px;
   background: transparent;
   color: var(--text-dim, #8b90a5);
@@ -1073,7 +1073,7 @@
   position: fixed;
   display: none;
   z-index: 100000;
-  background: var(--surface, #1a1d27);
+  background: var(--surface, #17171c);
   color: var(--text, #fff);
   border: 1px solid rgba(79, 140, 255, 0.45);
   border-radius: 4px;
@@ -1145,7 +1145,7 @@
   top: 28px; /* matches default ROW_HEIGHT = thead row height */
   z-index: 2;
   background: var(--surface,#181820);
-  box-shadow: 0 1px 0 var(--grid-border,#2e3346); /* subtle separator */
+  box-shadow: 0 1px 0 var(--grid-border,#2a2a32); /* subtle separator */
 }
 .ws-grid.ws-freeze-row tbody tr:first-child td.ws-row-header {
   z-index: 3; /* row-header corner stacks above the regular cells */
@@ -1257,7 +1257,7 @@
    bottom main strip so they read as nested. */
 .ws-workbook-inner-tabs {
   background: var(--bg, #101014);
-  border: 1px solid var(--border, #2e3346);
+  border: 1px solid var(--border, #2a2a32);
   border-top: none;
   padding: 4px 8px;
 }
@@ -1275,7 +1275,7 @@
   color: #93c5fd;
   margin-right: 8px;
   padding: 4px 8px;
-  border-right: 1px solid var(--border, #2e3346);
+  border-right: 1px solid var(--border, #2a2a32);
 }
 .ws-workbook-inner-tab {
   padding: 4px 12px;
@@ -1295,9 +1295,9 @@
 }
 .ws-workbook-inner-tab.active {
   color: #ffffff;
-  background: var(--surface, #1a1d27);
-  border-color: var(--border, #2e3346);
-  border-bottom-color: var(--surface, #1a1d27);
+  background: var(--surface, #17171c);
+  border-color: var(--border, #2a2a32);
+  border-bottom-color: var(--surface, #17171c);
   font-weight: 600;
 }
 .ws-workbook-inner-tab-unhide {

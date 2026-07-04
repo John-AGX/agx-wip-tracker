@@ -294,7 +294,7 @@
         '</tr></thead><tbody>';
       m.matched.forEach(function(x) {
         var existing = sheetExistsForJob(x.job.id, _lastParse.reportDate);
-        html += '<tr style="border-top:1px solid var(--border,#2e3346);">' +
+        html += '<tr style="border-top:1px solid var(--border,#2a2a32);">' +
           '<td style="padding:8px 10px;font-family:\'SF Mono\',monospace;color:#4f8cff;">' + escapeHTML(x.job.jobNumber || '') + '</td>' +
           '<td style="padding:8px 10px;color:var(--text,#fff);">' + escapeHTML(x.job.title || x.parsed.name) +
             (existing ? ' <span style="color:#fbbf24;font-size:11px;margin-left:6px;" title="A sheet for this date already exists and will be overwritten">⚠ will overwrite</span>' : '') +
@@ -320,7 +320,7 @@
           '<th style="padding:8px 10px;"></th>' +
         '</tr></thead><tbody>';
       m.unmatched.forEach(function(p, idx) {
-        html += '<tr style="border-top:1px solid var(--border,#2e3346);">' +
+        html += '<tr style="border-top:1px solid var(--border,#2a2a32);">' +
           '<td style="padding:8px 10px;font-family:\'SF Mono\',monospace;color:#fbbf24;">' + escapeHTML(p.code || '(none)') + '</td>' +
           '<td style="padding:8px 10px;color:var(--text,#fff);">' + escapeHTML(p.name) + '</td>' +
           '<td style="text-align:right;padding:8px 10px;font-family:\'SF Mono\',monospace;color:var(--text-dim,#aaa);">' + fmtMoney(p.computedTotal) + '</td>' +
@@ -434,7 +434,7 @@
   function buildCostSheet(name, parsedJob) {
     var cells = {};
     var headerStyle = { bold: true, bg: '#1f2937', color: '#ffffff', align: 'center' };
-    var totalStyle = { bold: true, bg: '#1e2130', color: '#4f8cff', align: 'right' };
+    var totalStyle = { bold: true, bg: '#1a1a20', color: '#4f8cff', align: 'right' };
     var titleStyle = { bold: true };
 
     setCell(cells, 0, 0, 'QB Costs — ' + parsedJob.rawHeader, { style: titleStyle });

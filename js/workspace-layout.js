@@ -370,7 +370,7 @@
         var jobActions = document.createElement("div");
         jobActions.className = "jh-job-actions";
         jobActions.style.cssText = "display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end;align-items:center;padding:6px 16px 0;";
-        var btnBase = "padding:6px 12px;font-size:12px;font-weight:600;border-radius:7px;border:1px solid var(--border,#2e3346);background:var(--surface,#1a1d27);color:var(--text,#eef0f6);cursor:pointer;";
+        var btnBase = "padding:6px 12px;font-size:12px;font-weight:600;border-radius:7px;border:1px solid var(--border,#2a2a32);background:var(--surface,#17171c);color:var(--text,#eef0f6);cursor:pointer;";
         // "Open Estimate" — only when this job has a linked estimate (job.estimate_id).
         var estId = jobForActions && jobForActions.estimate_id ? String(jobForActions.estimate_id).replace(/['"\\]/g, '') : '';
         var openEstBtn = estId
@@ -492,7 +492,7 @@
           ob.setAttribute('data-co-open-est', '1');
           ob.title = 'Open the linked estimate (locked once sold)';
           ob.textContent = 'Open Estimate';
-          ob.style.cssText = 'padding:6px 12px;font-size:12px;font-weight:600;border-radius:7px;border:1px solid rgba(79,140,255,.45);background:var(--surface,#1a1d27);color:#4f8cff;cursor:pointer;';
+          ob.style.cssText = 'padding:6px 12px;font-size:12px;font-weight:600;border-radius:7px;border:1px solid rgba(79,140,255,.45);background:var(--surface,#17171c);color:#4f8cff;cursor:pointer;';
           ob.onclick = function () { if (window.openEstimateFromJob) window.openEstimateFromJob(estId2); };
           actionsBar.insertBefore(ob, actionsBar.firstChild);
         }
@@ -734,20 +734,20 @@
         '<div id="wsWorkspaceContainer" tabindex="0"></div>' +
         '<svg class="ws-floating-mini-graphic" viewBox="0 0 120 90" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">' +
           // outer frame
-          '<rect x="1" y="1" width="118" height="88" rx="5" ry="5" fill="#1a1d27" stroke="#3a4058" stroke-width="1.5"/>' +
+          '<rect x="1" y="1" width="118" height="88" rx="5" ry="5" fill="#17171c" stroke="#34343e" stroke-width="1.5"/>' +
           // top-left corner cell + column header strip
-          '<rect x="1" y="1" width="14" height="14" fill="#2d3348"/>' +
-          '<rect x="15" y="1" width="103" height="14" fill="#2d3348"/>' +
+          '<rect x="1" y="1" width="14" height="14" fill="#26262e"/>' +
+          '<rect x="15" y="1" width="103" height="14" fill="#26262e"/>' +
           // row-number strip
-          '<rect x="1" y="15" width="14" height="73" fill="#242836"/>' +
+          '<rect x="1" y="15" width="14" height="73" fill="#202027"/>' +
           // column dividers
-          '<line x1="40" y1="1" x2="40" y2="89" stroke="#3a4058" stroke-width="0.5"/>' +
-          '<line x1="65" y1="1" x2="65" y2="89" stroke="#3a4058" stroke-width="0.5"/>' +
-          '<line x1="90" y1="1" x2="90" y2="89" stroke="#3a4058" stroke-width="0.5"/>' +
+          '<line x1="40" y1="1" x2="40" y2="89" stroke="#34343e" stroke-width="0.5"/>' +
+          '<line x1="65" y1="1" x2="65" y2="89" stroke="#34343e" stroke-width="0.5"/>' +
+          '<line x1="90" y1="1" x2="90" y2="89" stroke="#34343e" stroke-width="0.5"/>' +
           // row dividers
-          '<line x1="1" y1="33" x2="119" y2="33" stroke="#3a4058" stroke-width="0.5"/>' +
-          '<line x1="1" y1="51" x2="119" y2="51" stroke="#3a4058" stroke-width="0.5"/>' +
-          '<line x1="1" y1="69" x2="119" y2="69" stroke="#3a4058" stroke-width="0.5"/>' +
+          '<line x1="1" y1="33" x2="119" y2="33" stroke="#34343e" stroke-width="0.5"/>' +
+          '<line x1="1" y1="51" x2="119" y2="51" stroke="#34343e" stroke-width="0.5"/>' +
+          '<line x1="1" y1="69" x2="119" y2="69" stroke="#34343e" stroke-width="0.5"/>' +
           // column header dashes (mock A/B/C/D labels)
           '<rect x="22" y="6" width="10" height="3" fill="#8b90a5" rx="1"/>' +
           '<rect x="48" y="6" width="10" height="3" fill="#8b90a5" rx="1"/>' +

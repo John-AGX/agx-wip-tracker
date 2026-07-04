@@ -43,7 +43,7 @@
   function injectStyle() {
     if (document.getElementById(STYLE_ID)) return;
     var css =
-      '.p86-ecard{position:relative;background:var(--surface,#1b1f2b);border:1px solid var(--border,#2e3346);' +
+      '.p86-ecard{position:relative;background:var(--surface,#1b1f2b);border:1px solid var(--border,#2a2a32);' +
         'border-radius:12px;overflow:hidden;}' +
       '.p86-ecard-accent{position:absolute;left:0;top:10px;bottom:10px;width:4px;border-radius:0 4px 4px 0;}' +
       '.p86-ecard-body{padding:11px 13px 12px 17px;}' +
@@ -58,7 +58,7 @@
       '.p86-ecard-ico{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;' +
         'border:none;background:transparent;color:var(--text-dim,#8b91a7);border-radius:7px;cursor:pointer;' +
         'font-size:16px;transition:background .12s,color .12s;}' +
-      '.p86-ecard-ico:hover{background:var(--surface2,#242836);color:var(--text,#e9ecf5);}' +
+      '.p86-ecard-ico:hover{background:var(--surface2,#202027);color:var(--text,#e9ecf5);}' +
       '.p86-ecard-main{display:flex;gap:11px;align-items:center;}' +
       '.p86-ecard-main.no-ring{display:block;}' +
       '.p86-ecard-ring{flex:0 0 auto;}' +
@@ -86,14 +86,14 @@
         'background:var(--card-bg,#12151f);color:var(--text-dim,#9aa0b4);border:1px solid var(--border,#2a2f3e);' +
         'border-radius:8px;padding:7px 12px;font-size:12px;font-weight:500;cursor:pointer;font-family:inherit;' +
         'transition:background .12s,border-color .12s;}' +
-      '.p86-ecard-btn:hover{background:var(--surface2,#242836);}' +
+      '.p86-ecard-btn:hover{background:var(--surface2,#202027);}' +
       '.p86-ecard-btn.primary{flex:1;background:rgba(79,140,255,0.16);color:#9cc0ff;border-color:rgba(79,140,255,0.45);}' +
       '.p86-ecard-btn.primary:hover{background:rgba(79,140,255,0.24);}' +
       '.p86-ecard-btn i{font-size:13px;}' +
       /* Compact (subnav): keep the full card chrome (bg + border + left
          accent) so it reads as the Pulse card; render() drops the icon row
          and action buttons. Slightly tighter body padding. */
-      '.p86-ecard.compact{background:var(--surface2,#242836);}' +
+      '.p86-ecard.compact{background:var(--surface2,#202027);}' +
       '.p86-ecard.compact .p86-ecard-body{padding:11px 13px 12px 16px;}' +
       // Compact: ring sits TOP-RIGHT of the header so the title runs full-width.
       '.p86-ecard.compact .p86-ecard-head{align-items:flex-start;}' +

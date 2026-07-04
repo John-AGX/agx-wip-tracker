@@ -34,20 +34,20 @@
       var modal = document.createElement('div');
       modal.className = 'p86-jobfin-modal';
       modal.style.cssText = 'position:fixed;inset:0;z-index:9200;background:rgba(0,0,0,.6);display:flex;align-items:flex-start;justify-content:center;padding:40px 16px;overflow-y:auto;';
-      var card = 'background:var(--surface,#1a1d27);border:1px solid var(--border,#2e3346);border-radius:14px;width:100%;max-width:440px;box-shadow:0 20px 60px rgba(0,0,0,.5);';
-      var lbl = 'font-size:12px;font-weight:600;color:var(--text-dim,#c4c8d8);display:block;margin-bottom:5px;';
-      var inp = 'appearance:none;width:100%;box-sizing:border-box;background:var(--input-bg,#101014);border:1px solid var(--border,#2e3346);color:var(--text,#eef0f6);border-radius:8px;padding:9px 10px;font-size:14px;';
-      var btn = 'appearance:none;border:1px solid var(--border,#2e3346);background:var(--surface,#1a1d27);color:var(--text,#eef0f6);border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer;';
+      var card = 'background:var(--surface,#17171c);border:1px solid var(--border,#2a2a32);border-radius:14px;width:100%;max-width:440px;box-shadow:0 20px 60px rgba(0,0,0,.5);';
+      var lbl = 'font-size:12px;font-weight:600;color:var(--text-dim,#b4b4bf);display:block;margin-bottom:5px;';
+      var inp = 'appearance:none;width:100%;box-sizing:border-box;background:var(--input-bg,#101014);border:1px solid var(--border,#2a2a32);color:var(--text,#eef0f6);border-radius:8px;padding:9px 10px;font-size:14px;';
+      var btn = 'appearance:none;border:1px solid var(--border,#2a2a32);background:var(--surface,#17171c);color:var(--text,#eef0f6);border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer;';
       var btnPri = 'appearance:none;border:1px solid var(--accent,#4f8cff);background:var(--accent,#4f8cff);color:#fff;border-radius:8px;padding:8px 14px;font-size:13px;font-weight:700;cursor:pointer;';
       modal.innerHTML =
         '<div style="' + card + '">' +
           '<div style="padding:16px;">' +
             '<div style="font-size:16px;font-weight:700;color:var(--text,#eef0f6);margin-bottom:' + (opts.subtitle ? '4px' : '14px') + ';">Finalize Job</div>' +
-            (opts.subtitle ? '<div style="font-size:12px;color:var(--text-dim,#c4c8d8);margin-bottom:14px;line-height:1.5;">' + esc(opts.subtitle) + '</div>' : '') +
+            (opts.subtitle ? '<div style="font-size:12px;color:var(--text-dim,#b4b4bf);margin-bottom:14px;line-height:1.5;">' + esc(opts.subtitle) + '</div>' : '') +
             '<div style="margin-bottom:14px;">' +
               '<label style="' + lbl + '">Job Number <span style="color:#f0a020;">*</span></label>' +
               '<input id="p86jfNum" style="' + inp + '" placeholder="S0000 or RV0000" autocomplete="off" />' +
-              '<div style="font-size:11px;color:var(--text-dim,#c4c8d8);margin-top:5px;">Required — <strong>S####</strong> for Service or <strong>RV####</strong> for Renovation. Editable.</div>' +
+              '<div style="font-size:11px;color:var(--text-dim,#b4b4bf);margin-top:5px;">Required — <strong>S####</strong> for Service or <strong>RV####</strong> for Renovation. Editable.</div>' +
               '<div id="p86jfErr" style="font-size:11px;color:#ff6b6b;margin-top:5px;display:none;">Enter a valid job number: S#### (Service) or RV#### (Renovation).</div>' +
             '</div>' +
             '<div style="margin-bottom:18px;">' +

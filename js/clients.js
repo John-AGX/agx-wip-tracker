@@ -1526,7 +1526,7 @@
     var trigger = document.createElement('button');
     trigger.type = 'button';
     trigger.className = 'p86-cli-picker-trigger';
-    trigger.style.cssText = 'width:100%;text-align:left;padding:8px 30px 8px 10px;background:var(--card-bg,#0f0f1e);color:var(--text,#fff);border:1px solid var(--border,#333);border-radius:6px;cursor:pointer;font-size:13px;font-family:inherit;position:relative;';
+    trigger.style.cssText = 'width:100%;text-align:left;padding:8px 30px 8px 10px;background:var(--card-bg,#141419);color:var(--text,#fff);border:1px solid var(--border,#333);border-radius:6px;cursor:pointer;font-size:13px;font-family:inherit;position:relative;';
     var triggerLabel = document.createElement('span');
     triggerLabel.className = 'p86-cli-picker-label';
     triggerLabel.style.cssText = 'display:inline-block;max-width:calc(100% - 18px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;vertical-align:middle;';
@@ -1539,7 +1539,7 @@
 
     var pop = document.createElement('div');
     pop.className = 'p86-cli-picker-pop';
-    pop.style.cssText = 'display:none;position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:1000;background:var(--card-bg,#0f0f1e);border:1px solid var(--border,#333);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.5);max-height:380px;overflow:hidden;flex-direction:column;';
+    pop.style.cssText = 'display:none;position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:1000;background:var(--card-bg,#141419);border:1px solid var(--border,#333);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,0.5);max-height:380px;overflow:hidden;flex-direction:column;';
 
     var search = document.createElement('input');
     search.type = 'text';

@@ -1279,7 +1279,7 @@
     var inCss = 'width:100%;box-sizing:border-box;background:#1a1a2e;color:#fff;border:1px solid #444;border-radius:6px;padding:7px 10px;font-size:13px;outline:none;';
     var hdrCss = 'font-size:10px;font-weight:800;letter-spacing:.7px;color:#7c8aa0;text-transform:uppercase;margin:16px 0 6px;';
     var box = document.createElement('div');
-    box.style.cssText = 'background:#0f0f1e;border:1px solid #353545;border-radius:12px;padding:20px 22px;max-width:520px;width:100%;max-height:88vh;overflow-y:auto;color:#e6e6e6;box-shadow:0 16px 48px rgba(0,0,0,0.6);';
+    box.style.cssText = 'background:#141419;border:1px solid #353545;border-radius:12px;padding:20px 22px;max-width:520px;width:100%;max-height:88vh;overflow-y:auto;color:#e6e6e6;box-shadow:0 16px 48px rgba(0,0,0,0.6);';
     box.innerHTML = '<div style="font-size:15px;font-weight:700;color:#fff;margin-bottom:4px;">Titleblock</div>' +
       '<div style="' + hdrCss + 'margin-top:6px;">Fields</div>' +
       '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 12px;">' +
@@ -1412,7 +1412,7 @@
       ['type a number', 'Exact length while drawing'], [', (comma) or Tab', 'Jump to the angle field'], ['?', 'This cheat-sheet']
     ];
     var box = document.createElement('div');
-    box.style.cssText = 'background:#0f0f1e;border:1px solid #353545;border-radius:12px;padding:20px 22px;max-width:440px;width:100%;max-height:88vh;overflow-y:auto;color:#e6e6e6;box-shadow:0 16px 48px rgba(0,0,0,0.6);';
+    box.style.cssText = 'background:#141419;border:1px solid #353545;border-radius:12px;padding:20px 22px;max-width:440px;width:100%;max-height:88vh;overflow-y:auto;color:#e6e6e6;box-shadow:0 16px 48px rgba(0,0,0,0.6);';
     box.innerHTML = '<div style="font-size:15px;font-weight:700;color:#fff;margin-bottom:10px;">⌨ Keyboard shortcuts</div>' +
       rows.map(function (r) {
         if (!r[1]) return '<div style="font-size:10px;font-weight:800;letter-spacing:.7px;color:#7c8aa0;text-transform:uppercase;margin:13px 0 4px;">' + esc(r[0]) + '</div>';
@@ -1434,7 +1434,7 @@
     var ov = document.createElement('div');
     ov.style.cssText = 'position:fixed;inset:0;z-index:5400;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;padding:20px;';
     var box = document.createElement('div');
-    box.style.cssText = 'background:#0f0f1e;border:1px solid #353545;border-radius:12px;padding:20px 22px;max-width:400px;width:100%;max-height:88vh;overflow-y:auto;color:#e6e6e6;box-shadow:0 16px 48px rgba(0,0,0,0.6);';
+    box.style.cssText = 'background:#141419;border:1px solid #353545;border-radius:12px;padding:20px 22px;max-width:400px;width:100%;max-height:88vh;overflow-y:auto;color:#e6e6e6;box-shadow:0 16px 48px rgba(0,0,0,0.6);';
     var selCss = 'width:100%;box-sizing:border-box;background:#1a1a2e;color:#fff;border:1px solid #444;border-radius:6px;padding:7px 10px;font-size:13px;outline:none;';
     var labCss = 'display:block;font-size:11px;color:#9aa;margin:10px 0 3px;';
     function opt(v, label, sel) { return '<option value="' + esc(v) + '"' + (sel ? ' selected' : '') + '>' + esc(label) + '</option>'; }
@@ -2197,7 +2197,7 @@
     hideContextMenu();
     var menu = document.createElement('div');
     menu.id = 'p86-sheet-ctx';
-    menu.style.cssText = 'position:fixed;z-index:5300;background:#0f0f1e;border:1px solid #353545;border-radius:8px;padding:4px;min-width:172px;box-shadow:0 12px 34px rgba(0,0,0,0.6);font-size:12px;color:#e6e6e6;user-select:none;';
+    menu.style.cssText = 'position:fixed;z-index:5300;background:#141419;border:1px solid #353545;border-radius:8px;padding:4px;min-width:172px;box-shadow:0 12px 34px rgba(0,0,0,0.6);font-size:12px;color:#e6e6e6;user-select:none;';
     menu.style.left = Math.max(4, Math.min(e.clientX, window.innerWidth - 188)) + 'px';
     menu.style.top = Math.max(4, Math.min(e.clientY, window.innerHeight - 280)) + 'px';
     var items = [];
@@ -2551,7 +2551,7 @@
     var ov = document.createElement('div');
     ov.style.cssText = 'position:fixed;inset:0;z-index:5400;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;padding:20px;';
     var box = document.createElement('div');
-    box.style.cssText = 'background:#0f0f1e;border:1px solid #353545;border-radius:12px;padding:18px 20px;max-width:380px;width:100%;color:#e6e6e6;box-shadow:0 16px 48px rgba(0,0,0,0.6);';
+    box.style.cssText = 'background:#141419;border:1px solid #353545;border-radius:12px;padding:18px 20px;max-width:380px;width:100%;color:#e6e6e6;box-shadow:0 16px 48px rgba(0,0,0,0.6);';
     box.innerHTML = '<div style="font-size:14px;font-weight:700;color:#fff;margin-bottom:10px;">' + esc(title) + '</div>' +
       '<input data-pt-input value="' + esc(initial || '') + '" style="width:100%;box-sizing:border-box;background:#1a1a2e;color:#fff;border:1px solid #444;border-radius:6px;padding:8px 10px;font-size:13px;outline:none;" />' +
       '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px;">' +
@@ -3052,7 +3052,7 @@
     var ov = document.createElement('div');
     ov.style.cssText = 'position:fixed;inset:0;z-index:5400;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;padding:20px;';
     var box = document.createElement('div');
-    box.style.cssText = 'background:#0f0f1e;border:1px solid #353545;border-radius:12px;padding:20px 22px;max-width:340px;width:100%;color:#e6e6e6;box-shadow:0 16px 48px rgba(0,0,0,0.6);';
+    box.style.cssText = 'background:#141419;border:1px solid #353545;border-radius:12px;padding:20px 22px;max-width:340px;width:100%;color:#e6e6e6;box-shadow:0 16px 48px rgba(0,0,0,0.6);';
     box.innerHTML = '<div style="font-size:15px;font-weight:700;color:#fff;margin-bottom:12px;">' + esc(title) + '</div>' + rowsHtml +
       '<div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px;">' +
         '<button data-op-cancel style="padding:8px 16px;background:rgba(255,255,255,0.06);color:#ddd;border:1px solid #444;border-radius:6px;cursor:pointer;font-weight:600;">Cancel</button>' +
