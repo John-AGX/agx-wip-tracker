@@ -104,7 +104,7 @@
   /* Background was transparent, but once we pin this with position:
      sticky the scrolling content underneath will bleed through. Use
      var(--bg) so the bar reads as an opaque header strip. */
-  background: var(--bg, #0f1117);
+  background: var(--bg, #101014);
   border-radius: 0;
   padding: 0;
   flex-wrap: wrap;
@@ -641,7 +641,7 @@ body.light-mode #jh-strip-detached {
 }
 
 /* Card backgrounds tuned to feel raised (not punched-out) against the
-   page bg (#0f1117). Old gradient ran #05→#0e→#0a, all DARKER than
+   page bg (#101014). Old gradient ran #05→#0e→#0a, all DARKER than
    the page, so cards looked like holes. New gradient lifts ~6-12% above
    surface so they read as raised tiles with a subtle vertical sheen. */
 .jh-strip-card {

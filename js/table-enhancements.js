@@ -39,7 +39,7 @@
     jobs: {
       selector: '#jobs-table',
       frozen: 'name',
-      frozenBg: 'var(--bg,#0f1117)',
+      frozenBg: 'var(--bg,#101014)',
       widths: { idx: 50, name: 320, client: 200, pm: 170, status: 130,
                 contract: 150, pctcomplete: 150, profit: 150, margin: 110 }
     },
@@ -48,16 +48,16 @@
       frozen: 'title',
       // Match Jobs' frozenBg — --card-bg has a slight blue tint
       // (#0f0f1e) that made the title column stand out against the
-      // page background. --bg (#0f1117) blends with the surrounding
+      // page background. --bg (#101014) blends with the surrounding
       // surface so the frozen column reads as part of the table.
-      frozenBg: 'var(--bg,#0f1117)',
+      frozenBg: 'var(--bg,#101014)',
       widths: { title: 280, client: 220, lines: 70, baseCost: 130,
                 markup: 110, clientPrice: 140, margin: 110, updated_at: 120 }
     },
     leads: {
       selector: '#leads-list table',
       frozen: 'title',
-      frozenBg: 'var(--bg,#0f1117)',
+      frozenBg: 'var(--bg,#101014)',
       widths: { title: 280, client: 220, status: 130, revenue: 130,
                 confidence: 90, salesperson: 160, project_type: 160,
                 projected_sale_date: 130, next_followup_at: 120,
@@ -69,7 +69,7 @@
     costinbox: {
       selector: '#ciTable',
       frozen: null,
-      frozenBg: 'var(--bg,#0f1117)',
+      frozenBg: 'var(--bg,#101014)',
       widths: { photo: 54, vendor: 200, amount: 110, cost: 120, linked: 190,
                 sub: 160, tags: 190, payment: 130, billable: 100, invoice: 130,
                 date: 110, uploaded: 150, uploaded_at: 165, status: 120 }
@@ -77,14 +77,14 @@
     subs: {
       selector: '#subs-list table',
       frozen: 'name',
-      frozenBg: 'var(--bg,#0f1117)',
+      frozenBg: 'var(--bg,#101014)',
       widths: { name: 240, trade: 140, contact: 220, activeJobs: 110,
                 contracted: 150, compliance: 200, status: 110, actions: 70 }
     },
     clients: {
       selector: '#clients-list table',
       frozen: 'name',
-      frozenBg: 'var(--bg,#0f1117)',
+      frozenBg: 'var(--bg,#101014)',
       widths: { name: 320, contact: 260, location: 200, actions: 140 }
     },
     // Jobs Hub cross-job lists. CO + PO carry an injected select-all checkbox
@@ -93,25 +93,25 @@
     jobshubCO: {
       selector: '#jobshub-change-orders table',
       frozen: null,
-      frozenBg: 'var(--bg,#0f1117)',
+      frozenBg: 'var(--bg,#101014)',
       widths: { co: 110, job: 240, title: 280, status: 130, updated: 120 }
     },
     jobshubPO: {
       selector: '#jobshub-purchase-orders table',
       frozen: null,
-      frozenBg: 'var(--bg,#0f1117)',
+      frozenBg: 'var(--bg,#101014)',
       widths: { po: 110, job: 220, sub: 180, title: 260, total: 120, status: 130 }
     },
     jobshubRFI: {
       selector: '#jobshub-rfis table',
       frozen: 'num',
-      frozenBg: 'var(--bg,#0f1117)',
+      frozenBg: 'var(--bg,#101014)',
       widths: { num: 90, job: 220, subject: 300, status: 130, due: 110, updated: 120 }
     },
     jobshubSubmittal: {
       selector: '#jobshub-submittals table',
       frozen: 'num',
-      frozenBg: 'var(--bg,#0f1117)',
+      frozenBg: 'var(--bg,#101014)',
       widths: { num: 90, job: 220, subject: 300, status: 150, due: 110, updated: 120 }
     }
   };

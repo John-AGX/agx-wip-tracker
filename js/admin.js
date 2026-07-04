@@ -7565,7 +7565,7 @@
       // the live editor without leaving the admin tab.
       var w = window.open('', '_blank', 'width=800,height=900');
       if (!w) { alert('Popup blocked. Allow popups for this domain to view version contents.'); return; }
-      w.document.write('<!doctype html><html><head><title>agent_skills version ' + id + '</title></head><body style="font-family:\'SF Mono\',Menlo,monospace;font-size:12px;background:#0f1117;color:#e4e6f0;padding:20px;"><h2>Version ' + id + '</h2><pre style="white-space:pre-wrap;">' + escapeHTML(pretty) + '</pre></body></html>');
+      w.document.write('<!doctype html><html><head><title>agent_skills version ' + id + '</title></head><body style="font-family:\'SF Mono\',Menlo,monospace;font-size:12px;background:#101014;color:#e4e6f0;padding:20px;"><h2>Version ' + id + '</h2><pre style="white-space:pre-wrap;">' + escapeHTML(pretty) + '</pre></body></html>');
       w.document.close();
     }).catch(function(err) { alert('Failed: ' + (err.message || 'unknown')); });
   }

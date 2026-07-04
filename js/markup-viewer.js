@@ -1698,7 +1698,7 @@
   // squares of known real length to set the scale.
   function drawGrid(ctx, w, h, step) {
     ctx.save();
-    ctx.fillStyle = '#0f1117';
+    ctx.fillStyle = '#101014';
     ctx.fillRect(0, 0, w, h);
     var x, y;
     ctx.strokeStyle = 'rgba(255,255,255,0.07)';

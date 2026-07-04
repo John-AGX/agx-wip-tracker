@@ -4041,9 +4041,9 @@ function renderJobsMain() {
                 });
                 html += '<div style="border:1px solid var(--border);border-radius:6px;padding:10px 12px;margin-bottom:8px;background:var(--surface);">';
                 html += '<div style="display:flex;gap:10px;align-items:center;">';
-                html += '<input type="text" data-mp-name="' + key + '" value="' + escapeHTML(g.name) + '" style="flex:1;padding:6px 8px;background:var(--input-bg,#0f1117);color:var(--text);border:1px solid var(--border);border-radius:4px;font-size:13px;font-weight:600;" />';
+                html += '<input type="text" data-mp-name="' + key + '" value="' + escapeHTML(g.name) + '" style="flex:1;padding:6px 8px;background:var(--input-bg,#101014);color:var(--text);border:1px solid var(--border);border-radius:4px;font-size:13px;font-weight:600;" />';
                 html += '<div style="font-size:11px;color:var(--text-dim);white-space:nowrap;">' + count + ' record' + (count > 1 ? 's' : '') + '</div>';
-                html += '<input type="text" inputmode="decimal" data-mp-rev="' + key + '" value="' + totalRev.toFixed(2) + '" style="width:120px;padding:6px 8px;background:var(--input-bg,#0f1117);color:var(--text);border:1px solid var(--border);border-radius:4px;font-size:13px;text-align:right;" title="Total revenue" />';
+                html += '<input type="text" inputmode="decimal" data-mp-rev="' + key + '" value="' + totalRev.toFixed(2) + '" style="width:120px;padding:6px 8px;background:var(--input-bg,#101014);color:var(--text);border:1px solid var(--border);border-radius:4px;font-size:13px;text-align:right;" title="Total revenue" />';
                 if (isDup) {
                     html += '<button class="btn btn-primary small" style="padding:5px 10px;font-size:11px;" onclick="mergePhaseGroup(\'' + key + '\')">Merge</button>';
                 } else {

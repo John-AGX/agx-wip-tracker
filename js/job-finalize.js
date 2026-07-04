@@ -36,7 +36,7 @@
       modal.style.cssText = 'position:fixed;inset:0;z-index:9200;background:rgba(0,0,0,.6);display:flex;align-items:flex-start;justify-content:center;padding:40px 16px;overflow-y:auto;';
       var card = 'background:var(--surface,#1a1d27);border:1px solid var(--border,#2e3346);border-radius:14px;width:100%;max-width:440px;box-shadow:0 20px 60px rgba(0,0,0,.5);';
       var lbl = 'font-size:12px;font-weight:600;color:var(--text-dim,#c4c8d8);display:block;margin-bottom:5px;';
-      var inp = 'appearance:none;width:100%;box-sizing:border-box;background:var(--input-bg,#0f1117);border:1px solid var(--border,#2e3346);color:var(--text,#eef0f6);border-radius:8px;padding:9px 10px;font-size:14px;';
+      var inp = 'appearance:none;width:100%;box-sizing:border-box;background:var(--input-bg,#101014);border:1px solid var(--border,#2e3346);color:var(--text,#eef0f6);border-radius:8px;padding:9px 10px;font-size:14px;';
       var btn = 'appearance:none;border:1px solid var(--border,#2e3346);background:var(--surface,#1a1d27);color:var(--text,#eef0f6);border-radius:8px;padding:8px 14px;font-size:13px;font-weight:600;cursor:pointer;';
       var btnPri = 'appearance:none;border:1px solid var(--accent,#4f8cff);background:var(--accent,#4f8cff);color:#fff;border-radius:8px;padding:8px 14px;font-size:13px;font-weight:700;cursor:pointer;';
       modal.innerHTML =

@@ -100,7 +100,7 @@
     var when = p.updated_at ? new Date(p.updated_at).toLocaleDateString() : '';
     return '<div data-plan-open="' + esc(p.id) + '" style="border:1px solid var(--border,#333);border-radius:12px;overflow:hidden;cursor:pointer;background:rgba(255,255,255,0.02);transition:border-color 0.15s;" ' +
       'onmouseenter="this.style.borderColor=\'#4f8cff\'" onmouseleave="this.style.borderColor=\'\'">' +
-      '<div style="height:120px;background:repeating-linear-gradient(0deg,#0f1117,#0f1117 19px,rgba(255,255,255,0.06) 20px),repeating-linear-gradient(90deg,transparent,transparent 19px,rgba(255,255,255,0.06) 20px);display:flex;align-items:center;justify-content:center;font-size:30px;">📐</div>' +
+      '<div style="height:120px;background:repeating-linear-gradient(0deg,#101014,#101014 19px,rgba(255,255,255,0.06) 20px),repeating-linear-gradient(90deg,transparent,transparent 19px,rgba(255,255,255,0.06) 20px);display:flex;align-items:center;justify-content:center;font-size:30px;">📐</div>' +
       '<div style="padding:10px 12px;">' +
         '<div style="font-weight:600;font-size:13.5px;color:var(--text,#fff);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(p.name) + '</div>' +
         '<div style="font-size:11px;color:#86efac;margin-top:3px;">' + esc(totalsLine) + '</div>' +

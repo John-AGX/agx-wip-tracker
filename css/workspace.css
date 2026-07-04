@@ -572,7 +572,7 @@
   font-size: 12px;
   font-weight: 600;
   color: var(--text, #e4e6f0);
-  background: var(--bg, #0f1117);
+  background: var(--bg, #101014);
   border: 1px solid var(--border, #2e3346);
   border-radius: 3px;
   padding: 4px 8px;
@@ -595,7 +595,7 @@
   font-family: 'Courier New', monospace;
   font-size: 12px;
   color: var(--text, #e4e6f0);
-  background: var(--bg, #0f1117);
+  background: var(--bg, #101014);
   border: 1px solid var(--border, #2e3346);
   border-radius: 3px;
   padding: 4px 8px;
@@ -1256,7 +1256,7 @@
    below the toolbar; its tabs are smaller and lighter than the
    bottom main strip so they read as nested. */
 .ws-workbook-inner-tabs {
-  background: var(--bg, #0f1117);
+  background: var(--bg, #101014);
   border: 1px solid var(--border, #2e3346);
   border-top: none;
   padding: 4px 8px;
