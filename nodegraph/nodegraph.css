@@ -936,3 +936,41 @@ body.light-mode .ng-topbar.ng-ribbon .ng-ribbon-btn:hover{
   overflow:visible;
 }
 #nodeGraphTab.ng-siteplan.ng-sat .ng-node.ng-tt-t1.ng-sp-building.ng-sel{border-color:#4f8cff !important}
+
+/* ── Sleek ribbon + popovers (2026-07-04) ─────────────────────────────
+   Quieter Console-style strip: transparent buttons, hover pill, tighter
+   type. The 👁 Layers and ⋯ More popovers re-home the low-frequency
+   tools; inside a popover the same ribbon buttons render as menu rows. */
+.ng-topbar{position:relative;}
+.ng-ribbon{gap:2px;padding:4px 10px;}
+.ng-ribbon .ng-ribbon-btn{min-width:46px;padding:3px 8px;border:1px solid transparent;background:transparent;border-radius:8px;box-shadow:none;}
+.ng-ribbon .ng-ribbon-btn:hover{background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.09);}
+.ng-ribbon .ng-ribbon-icon{font-size:14px;}
+.ng-ribbon .ng-ribbon-label{font-size:9.5px;letter-spacing:.2px;}
+.ng-ribbon .ng-ribbon-btn.ng-on{background:rgba(79,140,255,.15);border-color:rgba(79,140,255,.38);}
+.ng-ribbon-sep{height:24px;opacity:.55;}
+.ng-ribbon-group{background:transparent;border:none;box-shadow:none;padding:0;}
+.ng-ribbon-group-buttons{gap:1px;}
+
+.ng-pop{position:absolute;top:calc(100% + 6px);right:10px;min-width:210px;background:#14171c;border:1px solid #2a2f38;border-radius:10px;box-shadow:0 14px 36px rgba(0,0,0,.55);padding:6px;z-index:420;}
+.ng-pop[hidden]{display:none;}
+body.light-mode .ng-pop{background:#fff;border-color:#d9dee6;box-shadow:0 14px 36px rgba(15,23,42,.18);}
+.ng-pop-title{font-size:9px;font-weight:700;letter-spacing:.8px;text-transform:uppercase;color:#5c6470;padding:7px 8px 3px;}
+.ng-pop .ng-ribbon-btn{display:flex;flex-direction:row;align-items:center;gap:9px;width:100%;justify-content:flex-start;min-width:0;padding:6px 8px;border-radius:7px;}
+.ng-pop .ng-ribbon-icon{font-size:13px;width:18px;text-align:center;flex-shrink:0;}
+.ng-pop .ng-ribbon-label{font-size:12px;letter-spacing:0;}
+.ng-pop-check{display:flex;align-items:center;gap:9px;width:100%;padding:6px 8px;background:transparent;border:none;border-radius:7px;color:var(--ng-text,#dfe3ea);font-size:12px;cursor:pointer;text-align:left;font-family:inherit;}
+body.light-mode .ng-pop-check{color:#1f2937;}
+.ng-pop-check:hover{background:rgba(255,255,255,.06);}
+body.light-mode .ng-pop-check:hover{background:rgba(15,23,42,.05);}
+.ng-pop-check::before{content:'';width:14px;height:14px;border:1px solid #3a4150;border-radius:4px;flex-shrink:0;display:flex;align-items:center;justify-content:center;font-size:10px;line-height:1;color:#fff;}
+.ng-pop-check.on::before{content:'\2713';background:#4f8cff;border-color:#4f8cff;}
+
+/* Layer visibility classes — flipped by js/ng-toolbar.js, persisted in
+   localStorage p86-ng-layers. Hiding node chips hides wires too (wires
+   without endpoints read as noise). */
+#nodeGraphTab.ngl-no-wires .ng-wire-canvas{display:none!important;}
+#nodeGraphTab.ngl-no-nodes .ng-canvas{visibility:hidden!important;}
+#nodeGraphTab.ngl-no-nodes .ng-wire-canvas{display:none!important;}
+#nodeGraphTab.ngl-no-minimap .ng-minimap{display:none!important;}
+#nodeGraphTab.ngl-no-help .ng-help{display:none!important;}
