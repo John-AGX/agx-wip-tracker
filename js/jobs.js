@@ -2827,9 +2827,12 @@ function renderJobsMain() {
         // read through the chain so pre-rework phases stop rendering $0.
         function phaseRevenue(p) {
             if (!p) return 0;
-            if (p.asSoldRevenue != null) return p.asSoldRevenue || 0;
-            if (p.asSoldPhaseBudget != null) return p.asSoldPhaseBudget || 0;
-            return p.phaseBudget || 0;
+            // Truthy chain on purpose: legacy rows carry an explicit
+            // asSoldRevenue: 0 written by old save paths while the real
+            // number sits in asSoldPhaseBudget/phaseBudget (verified on
+            // Saddlebrook: {asSoldRevenue:0, asSoldPhaseBudget:5000}).
+            // A null-check chain would stop at that dead 0.
+            return p.asSoldRevenue || p.asSoldPhaseBudget || p.phaseBudget || 0;
         }
         // A building with no explicit budget derives one from its phases:
         // graph-wired phases (× allocation) plus phases assigned via
