@@ -44,7 +44,7 @@
             --bg: #f0f2f5;
             --surface: #ffffff;
             --surface2: #e8eaef;
-            --border: #d1d5db;
+            --border: #e5e7eb;
             /* Darkened a step for better contrast against the light bg.
                --text: #111827 → #0a0e15 (almost-black) so body copy
                carries more weight; --text-dim: #4b5563 → #374151 so
@@ -62,9 +62,9 @@
             --cell-border: #d1d5db;
             --row-alt: #f9fafb;
             --row-hover: #f3f4f6;
-            --grid-header-bg: #e5e7eb;
+            --grid-header-bg: #f3f4f6;
             --grid-header-text: #1f2937;
-            --grid-border: #d1d5db;
+            --grid-border: #eceff2;
             --scrollbar-thumb: #9ca3af;
             --context-bg: #ffffff;
             --input-bg: #ffffff;
@@ -2691,6 +2691,54 @@
         .badge.lead-sold           { background: rgba(52, 211, 153, 0.18);  color: #34d399; }
         .badge.lead-lost           { background: rgba(248, 113, 113, 0.14); color: #f87171; }
         .badge.lead-no_opportunity { background: rgba(139, 144, 165, 0.12); color: #8b90a5; }
+
+        /* ── Light-mode chip polish — clean tinted pills (Buildertrend-style
+           reference look). Scoped to body.light-mode so dark mode is
+           untouched. The base rule fixes shape/case/size for ALL .badge and
+           .est-status-badge chips (including the inline-styled ones in
+           jobs-hub / estimates, which only set color via --c). The status
+           rules below refine the class-based tints so text stays readable on
+           white instead of the dark-tuned bright colors. */
+        body.light-mode .badge,
+        body.light-mode .est-status-badge {
+            border-radius: 999px;
+            text-transform: none;
+            letter-spacing: .01em;
+            font-weight: 600;
+            font-size: 11px;
+            padding: 3px 9px;
+            line-height: 1.35;
+        }
+        body.light-mode .badge.on-track,
+        body.light-mode .badge.lead-sold        { background: rgba(5,150,105,.12);  color: #047857; }
+        body.light-mode .badge.at-risk,
+        body.light-mode .badge.lead-in_progress { background: rgba(217,119,6,.13);   color: #b45309; }
+        body.light-mode .badge.not-started,
+        body.light-mode .badge.lead-no_opportunity { background: #eef1f4;             color: #4b5563; }
+        body.light-mode .badge.over-budget,
+        body.light-mode .badge.lead-lost        { background: rgba(220,38,38,.10);   color: #b91c1c; }
+        body.light-mode .badge.lead-new         { background: rgba(37,99,235,.10);   color: #1d4ed8; }
+        body.light-mode .badge.lead-sent        { background: rgba(37,99,235,.09);   color: #2563eb; }
+
+        /* Inline-colored chips (jobs-hub PO/RFI/Submittal, estimates list)
+           now carry only a single --c color var; derive tint + text from it
+           so light mode auto-darkens the text for contrast on white. */
+        .p86-statuschip {
+            background: color-mix(in srgb, var(--c, #8b90a5) 15%, transparent);
+            color: var(--c, #8b90a5);
+            border: 1px solid color-mix(in srgb, var(--c, #8b90a5) 27%, transparent);
+        }
+        body.light-mode .p86-statuschip {
+            background: color-mix(in srgb, var(--c, #8b90a5) 13%, #fff);
+            color: color-mix(in srgb, var(--c, #8b90a5) 78%, #000);
+            border-color: color-mix(in srgb, var(--c, #8b90a5) 30%, #fff);
+        }
+
+        /* CO status pills — the dark draft text (#cbd5e1) is near-invisible on
+           white; give all three readable light-mode tints. */
+        body.light-mode .p86-co-status-pill.status-draft    { background: #eef1f4;              border-color: #d7dce3;               color: #475569; }
+        body.light-mode .p86-co-status-pill.status-approved { background: rgba(5,150,105,.12);  border-color: rgba(5,150,105,.35);   color: #047857; }
+        body.light-mode .p86-co-status-pill.status-applied  { background: rgba(37,99,235,.12);  border-color: rgba(37,99,235,.35);   color: #1d4ed8; }
 
         /* PROGRESS BARS */
         .progress-bar {

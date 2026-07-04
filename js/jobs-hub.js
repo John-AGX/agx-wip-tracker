@@ -128,7 +128,7 @@
     var s = String(status || '').toLowerCase();
     var c = STATUS_COLOR[s] || '#8b90a5';
     var label = s.replace(/_/g, ' ').replace(/\b\w/g, function (m) { return m.toUpperCase(); });
-    return '<span class="badge" style="background:' + c + '22;color:' + c + ';border:1px solid ' + c + '44;">' + esc(label) + '</span>';
+    return '<span class="badge p86-statuschip" style="--c:' + c + ';">' + esc(label) + '</span>';
   }
 
   // ── Shell + sub-tab switching ──────────────────────────────────────

@@ -127,7 +127,7 @@
         '<div class="po-ed-head">' +
           '<div class="po-ed-head-l">' +
             '<span class="po-ed-num">' + esc(_po.po_number || 'PO') + '</span>' +
-            '<span class="badge" style="background:' + STATUS_COLOR[st] + '22;color:' + STATUS_COLOR[st] + ';border:1px solid ' + STATUS_COLOR[st] + '44;">' + esc(STATUS_LABEL[st] || st) + '</span>' +
+            '<span class="badge p86-statuschip" style="--c:' + STATUS_COLOR[st] + ';">' + esc(STATUS_LABEL[st] || st) + '</span>' +
             (jobLabel ? '<span class="po-ed-job">' + esc(jobLabel) + '</span>' : '') +
           '</div>' +
           '<div class="po-ed-head-r">' +
