@@ -932,6 +932,9 @@
             flex: 1;
             min-height: 0;
             width: 100%;
+            /* Anchor for the .app-sidebar-edge-toggle pill (absolute child
+               straddling the sidebar's dividing line). */
+            position: relative;
         }
         .app-content-col {
             display: flex;
@@ -1000,64 +1003,86 @@
         .co-lock-banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; background: rgba(251,191,36,0.12); border: 1px solid rgba(251,191,36,0.4); color: var(--text, #e4e6f0); border-radius: 8px; padding: 10px 14px; margin: 0 0 12px; font-size: 13px; }
         .co-lock-banner strong { color: #fbbf24; }
         .co-lock-banner button { pointer-events: auto; }
-        /* Org brand lockup at the very top of the sidebar (logo + org name).
-           Injected by js/sidebar-brand.js; logo image swaps per theme. */
+        /* Org brand header at the top of the sidebar (injected by
+           js/sidebar-brand.js; logo swaps per theme). Centered column:
+           larger logo over a small company-name title block, closed by a
+           hairline — the BT-style lockup John asked for. */
         .app-sidebar-brand {
             flex: 0 0 auto;
             display: flex;
+            flex-direction: column;
             align-items: center;
-            gap: 9px;
-            padding: 12px 14px 6px;
+            gap: 8px;
+            padding: 18px 14px 12px;
             cursor: pointer;
             text-decoration: none;
             overflow: hidden;
+            border-bottom: 1px solid var(--border);
+            margin-bottom: 6px;
         }
         .app-sidebar-brand-logo {
-            height: 26px;
+            height: 44px;
             width: auto;
-            max-width: 150px;
+            max-width: calc(100% - 12px);
             object-fit: contain;
             flex: 0 0 auto;
         }
         .app-sidebar-brand-name {
-            font-size: 14px;
-            font-weight: 700;
+            font-size: 12.5px;
+            font-weight: 650;
             color: var(--text);
-            letter-spacing: .2px;
+            letter-spacing: .05em;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
+            max-width: 100%;
         }
-        .app-sidebar.collapsed .app-sidebar-brand { justify-content: center; padding: 12px 4px 6px; gap: 0; }
+        .app-sidebar.collapsed .app-sidebar-brand { padding: 14px 4px 10px; gap: 0; }
         .app-sidebar.collapsed .app-sidebar-brand-name { display: none; }
         .app-sidebar.collapsed .app-sidebar-brand-logo { height: 24px; max-width: 34px; }
-        .app-sidebar-head {
-            flex: 0 0 auto;
-            display: flex;
-            align-items: center;
-            justify-content: flex-end;
-            padding: 8px 10px 4px;
-        }
-        .app-sidebar.collapsed .app-sidebar-head {
-            justify-content: center;
-        }
-        .app-sidebar-toggle {
+
+        /* ── Sidebar collapse pill — Buildertrend-style circular toggle
+           centered ON the dividing line between sidebar and content. It is
+           the sidebar's next SIBLING inside .app-body (the sidebar clips
+           overflow, so a straddling child would be cut in half); `left`
+           tracks --p86-sidebar-w, which the drag-resize code sets on
+           .app-body so both elements can read it. */
+        .app-sidebar-edge-toggle {
+            position: absolute;
+            left: var(--p86-sidebar-w, 290px);
+            top: 34px;
+            transform: translateX(-50%);
+            width: 26px;
+            height: 26px;
+            padding: 0;
+            border-radius: 50%;
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            width: 32px;
-            height: 32px;
-            border: 1px solid transparent;
-            border-radius: 8px;
-            background: transparent;
+            background: var(--surface);
+            border: 1px solid var(--border);
             color: var(--text-dim);
             cursor: pointer;
-            transition: background 0.12s, color 0.12s;
+            z-index: 70;
+            box-shadow: 0 1px 5px var(--shadow);
+            transition: left 0.18s ease, color 0.12s, border-color 0.12s;
         }
-        .app-sidebar-toggle:hover {
-            background: var(--surface2);
+        .app-sidebar-edge-toggle:hover {
             color: var(--text);
+            border-color: var(--accent, #4f8cff);
         }
+        .app-sidebar-edge-toggle svg {
+            width: 14px;
+            height: 14px;
+            transition: transform 0.18s ease;
+        }
+        .app-sidebar.collapsed + .app-sidebar-edge-toggle { left: 48px; }
+        .app-sidebar.collapsed + .app-sidebar-edge-toggle svg { transform: rotate(180deg); }
+        /* Track the cursor live during drag-resize (sidebar kills its own
+           width transition via .resizing — mirror that). */
+        .app-sidebar.resizing + .app-sidebar-edge-toggle { transition: none; }
+        /* (.app-sidebar-head / .app-sidebar-toggle removed — the collapse
+           control is now the .app-sidebar-edge-toggle pill on the divider.) */
 
         /* Quick "+ New" sidebar button removed — create actions live in the sticky header's quick-add ("+") menu. */
 
@@ -3415,6 +3440,7 @@
                so content clears the fixed nav (64px + iPhone safe-area). */
             nav.tabs { display: none !important; }
             .app-sidebar { display: none !important; }
+            .app-sidebar-edge-toggle { display: none !important; }
             .p86-ask86-badge.floating { display: none !important; }
             .p86-ask86-badge.in-header { display: none !important; }
             body {
