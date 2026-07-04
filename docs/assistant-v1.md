@@ -105,3 +105,30 @@ Assistant (Haiku)  ── hosts every conversation; full read/write (bounded by 
 - Whether the assistant gets its own native Skills (playbooks) vs. inheriting 86's.
 - Per-user assistant context builder (calendar/location/tasks) — the one net-new
   context layer; reuse `buildTurnContext` patterns.
+
+## Addendum — 2026-07-04 agent rework (shipped)
+
+State as deployed (commits 69b5cf0 → 0354e22); supersedes the approval-lever
+sketch above where they differ:
+
+- **Approve-in-chat**: when the user explicitly confirms a write IN the
+  conversation, the host agent passes `approved: true` on `scribe_write`.
+  The server re-checks capability + org, applies the payload directly
+  (`applyPayloadForUser`, same dispatcher rails as the card path), and the
+  chat shows "✅ Applied" + a push. No card round-trip for pre-approved work.
+- **High-risk always cards** regardless of the approved flag
+  (`isHighRiskPayload`): deletes, `entity_type: system`, outbound sends
+  (email/invites), malformed payloads. Personal-scope auto-apply unchanged.
+- **Scribe stays a pure write-drafter** (1 tool: `emit_payload_file`, no
+  sandbox), always running detached. It is NOT the background executor —
+  background tasks (`agent_jobs`) run on 86 (`agentKey 'job'`). A same-day
+  cutover to Scribe-as-executor was reverted at John's direction (5c3200e).
+- **Assistant trim**: 8 business tools removed; the baseline names
+  `escalate_to_86` as the NORMAL move for business/tooling questions.
+  Assistant keeps the personal core (reads/memory/navigate/scribe_write/
+  web) — live registry: 19 tools, sonnet-4-6.
+- **Dead weight removed**: watches (0 runs), the Batch admin surface
+  (0 batches ever), staff/CoS remnants. Admin metrics now report actuals
+  (background jobs, cache-aware token costs, escalations, unmetered turns).
+- Resynced + audited 2026-07-04: job (opus-4-8, 27 tools) · assistant
+  (19 tools) · scribe (1 tool); managed audit flags = 0.

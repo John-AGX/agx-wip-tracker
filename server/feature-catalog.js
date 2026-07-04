@@ -444,9 +444,27 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.8';
+const APP_VERSION = '1.9';
 
 const releases = [
+  {
+    version: '1.9',
+    date: '2026-07-04',
+    name: 'Direct',
+    summary: 'Say yes in chat and it\'s done — plus measuring on the Site Plan and columns you can shape.',
+    changes: [
+      { type: 'new', text: 'Approve in chat — confirm a change in the conversation and the Scribe applies it on the spot. Only deletes, system changes, and outbound sends still show the approval card.' },
+      { type: 'new', text: 'Measure tool on the Site Plan — Line / Poly / Area modes with real-world units, saved with the plan.' },
+      { type: 'new', text: 'Resizable columns on every list — drag the divider on Leads, Estimates, Jobs, Subs, Cost Inbox, and the Jobs hub.' },
+      { type: 'improved', text: 'The Assistant hands business questions to 86 sooner — escalating is now her normal move, not a last resort.' },
+      { type: 'improved', text: 'Sidebar restyle — Console-style neutral black with brighter labels, plus your org logo lockup and a per-org light/dark logo picker.' },
+      { type: 'improved', text: 'Light-mode sweep — white main panel, tinted chips, and panels/dropdowns that used to open dark.' },
+      { type: 'improved', text: 'Admin agent metrics now show actuals — background runs, cache-aware costs, escalations, and a usage-forensics view.' },
+      { type: 'fixed', text: 'Bulk-action bars work in the installed app — confirm dialogs silently no-op\'d in the PWA.' },
+      { type: 'fixed', text: 'Sub portal sign-out could trap you in a redirect loop, and login could wrongly say "Too many requests."' },
+      { type: 'fixed', text: 'Site Plan / Orbit 3D no longer render torn after a PWA update relaunch.' },
+    ],
+  },
   {
     version: '1.8',
     date: '2026-07-02',
