@@ -619,8 +619,11 @@ router.get('/raw/:id', requireAuth, async (req, res) => {
     if (!key) return res.status(404).json({ error: 'No bytes for this variant' });
 
     const buf = await storage.getBuffer(key);
-    // Variants are JPEG; originals carry their original mime type.
-    const mime = (key === att.original_key) ? (att.mime_type || 'application/octet-stream') : 'image/jpeg';
+    // Originals carry their original mime; derivatives are JPEG except
+    // alpha-preserving PNGs (key extension is authoritative).
+    const mime = (key === att.original_key)
+      ? (att.mime_type || 'application/octet-stream')
+      : (String(key).toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg');
     // P0-4 — never let the browser MIME-sniff, and force a download for
     // anything that isn't safe to render inline (SVG, HTML, octet-stream),
     // so an uploaded SVG carrying <script> can't execute in our origin.
@@ -940,13 +943,22 @@ router.post('/:entityType/:entityId',
         const meta = await sharp(buf, { limitInputPixels: 50000000 }).rotate().metadata();
         width = meta.width || null;
         height = meta.height || null;
-        const thumbBuf = await sharp(buf, { limitInputPixels: 50000000 }).rotate().resize(200, 200, { fit: 'cover' }).jpeg({ quality: 80 }).toBuffer();
-        const webBuf = await sharp(buf, { limitInputPixels: 50000000 }).rotate().resize(1600, 1600, { fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 82 }).toBuffer();
-        thumbKey = baseKey + '_thumb.jpg';
-        webKey = baseKey + '_web.jpg';
+        // JPEG has no alpha channel — transparent PNGs (org logos etc.) were
+        // coming out of this pipeline with the background baked into a solid
+        // box that blocked out on the sidebar brand / titleblock. Sources
+        // WITH alpha keep PNG derivatives; opaque photos stay JPEG (smaller).
+        const hasAlpha = !!meta.hasAlpha;
+        const derivExt = hasAlpha ? 'png' : 'jpg';
+        const derivMime = hasAlpha ? 'image/png' : 'image/jpeg';
+        const thumbPipe = sharp(buf, { limitInputPixels: 50000000 }).rotate().resize(200, 200, { fit: 'cover' });
+        const webPipe = sharp(buf, { limitInputPixels: 50000000 }).rotate().resize(1600, 1600, { fit: 'inside', withoutEnlargement: true });
+        const thumbBuf = await (hasAlpha ? thumbPipe.png({ compressionLevel: 9 }) : thumbPipe.jpeg({ quality: 80 })).toBuffer();
+        const webBuf = await (hasAlpha ? webPipe.png({ compressionLevel: 9 }) : webPipe.jpeg({ quality: 82 })).toBuffer();
+        thumbKey = baseKey + '_thumb.' + derivExt;
+        webKey = baseKey + '_web.' + derivExt;
         originalKey = baseKey + '_orig.' + ext;
-        thumbUrl = await storage.put(thumbKey, thumbBuf, 'image/jpeg');
-        webUrl = await storage.put(webKey, webBuf, 'image/jpeg');
+        thumbUrl = await storage.put(thumbKey, thumbBuf, derivMime);
+        webUrl = await storage.put(webKey, webBuf, derivMime);
         originalUrl = await storage.put(originalKey, buf, mime);
       } else {
         // Document pipeline: just stash the original. No thumbnail or web
@@ -1370,15 +1382,20 @@ router.post('/:id/copy', requireAuth, async (req, res) => {
     let newThumbKey = null, newWebKey = null, newOriginalKey = null;
     let newThumbUrl = null, newWebUrl = null, newOriginalUrl;
 
+    // Preserve each variant's real extension/mime — alpha sources have PNG
+    // derivatives; blindly renaming to .jpg would mislabel the bytes.
+    const variantExt = function (k) { const m = String(k || '').match(/\.([a-z0-9]+)$/i); return m ? m[1].toLowerCase() : 'jpg'; };
     if (src.thumb_key) {
       const buf = await storage.getBuffer(src.thumb_key);
-      newThumbKey = baseKey + '_thumb.jpg';
-      newThumbUrl = await storage.put(newThumbKey, buf, 'image/jpeg');
+      const te = variantExt(src.thumb_key);
+      newThumbKey = baseKey + '_thumb.' + te;
+      newThumbUrl = await storage.put(newThumbKey, buf, te === 'png' ? 'image/png' : 'image/jpeg');
     }
     if (src.web_key) {
       const buf = await storage.getBuffer(src.web_key);
-      newWebKey = baseKey + '_web.jpg';
-      newWebUrl = await storage.put(newWebKey, buf, 'image/jpeg');
+      const we = variantExt(src.web_key);
+      newWebKey = baseKey + '_web.' + we;
+      newWebUrl = await storage.put(newWebKey, buf, we === 'png' ? 'image/png' : 'image/jpeg');
     }
     if (src.original_key) {
       const buf = await storage.getBuffer(src.original_key);
