@@ -4622,6 +4622,80 @@ router.delete('/:agentKey/native-skills/:skillId', requireAuth, requireCapabilit
   }
 });
 
+// ── Training-data flywheel (proprietary-model program) ─────────────
+// Readiness counts + JSONL export over ai_training_examples (see
+// server/services/training-capture.js + docs/proprietary-model-v1.md).
+// SYSTEM_ADMIN: training data is account-level IP, same tier as the
+// other cross-org Anthropic resources (CC-3 precedent).
+
+// GET /api/admin/agents/training-data — per-task example counts vs the
+// fine-tune viability thresholds. Drives the admin "Training data" card.
+router.get('/training-data', requireAuth, require('../auth').requireSystemAdmin, async (req, res) => {
+  try {
+    const { taskCounts } = require('../services/training-capture');
+    res.json({ tasks: await taskCounts() });
+  } catch (e) {
+    console.error('GET /api/admin/agents/training-data error:', e);
+    res.status(500).json({ error: e.message || 'Server error' });
+  }
+});
+
+// GET /api/admin/agents/training-export?task=&since=&include_rejected=1
+// Streams OpenAI-chat-format JSONL (the format Together / Fireworks /
+// Bedrock all ingest). Default: only rows with a human_final (SFT
+// targets). include_rejected=1 adds accepted=false rows labeled
+// "rejected" (preference/negative mining). Image BYTES never appear —
+// capture stores attachment refs only.
+const TRAINING_SYSTEM_PROMPTS = {
+  receipt_fields: 'Extract vendor, date (YYYY-MM-DD), cost_code (materials|labor|sub|gc), and total amount from the receipt. Reply with JSON only.',
+  cost_code: 'Classify this receipt into exactly one cost code: materials, labor, sub, or gc. Reply with JSON only.',
+  scribe_payload: 'Author a Project 86 payload — a targets[] array of entity ops — for the requested change. Reply with JSON only.',
+  lead_extract: 'Extract structured lead fields from a Buildertrend lead print. Reply with JSON only.',
+  material_normalize: 'Normalize the raw vendor purchase line into a clean description, category, agx_subgroup (materials|labor|gc|sub), and unit. Reply with JSON only.'
+};
+router.get('/training-export', requireAuth, require('../auth').requireSystemAdmin, async (req, res) => {
+  try {
+    const task = req.query.task ? String(req.query.task) : null;
+    const since = req.query.since ? new Date(req.query.since) : null;
+    const includeRejected = String(req.query.include_rejected || '') === '1';
+    const where = [];
+    const params = [];
+    let p = 1;
+    if (task) { where.push('task = $' + p++); params.push(task); }
+    if (since && !isNaN(since)) { where.push('created_at >= $' + p++); params.push(since.toISOString()); }
+    if (!includeRejected) where.push('human_final IS NOT NULL');
+    const sql =
+      `SELECT id, task, input, model_output, human_final, accepted, model, created_at
+         FROM ai_training_examples
+        ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
+        ORDER BY created_at ASC
+        LIMIT 50000`;
+    const r = await pool.query(sql, params);
+    res.setHeader('Content-Type', 'application/jsonl');
+    res.setHeader('Content-Disposition',
+      'attachment; filename="p86-training-' + (task || 'all') + '-' + new Date().toISOString().slice(0, 10) + '.jsonl"');
+    for (const row of r.rows) {
+      const system = TRAINING_SYSTEM_PROMPTS[row.task] || ('Perform the ' + row.task + ' task. Reply with JSON only.');
+      const assistant = row.human_final != null ? row.human_final : row.model_output;
+      const line = {
+        messages: [
+          { role: 'system', content: system },
+          { role: 'user', content: JSON.stringify(row.input || {}) },
+          { role: 'assistant', content: JSON.stringify(assistant || {}) }
+        ],
+        meta: { id: row.id, task: row.task, accepted: row.accepted, model: row.model, created_at: row.created_at }
+      };
+      if (row.human_final == null) line.meta.label = 'rejected';
+      res.write(JSON.stringify(line) + '\n');
+    }
+    res.end();
+  } catch (e) {
+    console.error('GET /api/admin/agents/training-export error:', e);
+    if (!res.headersSent) res.status(500).json({ error: e.message || 'Server error' });
+    else res.end();
+  }
+});
+
 // Exported so ai-routes.js (Phase 1b chat path) can resolve the
 // environment + agent ids without duplicating the SQL.
 module.exports = router;

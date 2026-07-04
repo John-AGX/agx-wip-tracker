@@ -6777,6 +6777,7 @@
       var a86 = resp && resp.agent86;
       if (a86) {
         host.innerHTML = render86MetricsCard(a86);
+        appendTrainingDataCard(host);
         return;
       }
       // Legacy fallback if a stale server lacks the rich payload.
@@ -6788,9 +6789,48 @@
           agents.map(renderAgentMetricsCard).join('') +
         '</div>';
       }
+      appendTrainingDataCard(host);
     }).catch(function(err) {
       host.innerHTML = '<div style="color:#e74c3c;font-size:12px;padding:20px 0;">Failed: ' + escapeHTML(err.message || 'unknown') + '</div>';
     });
+  }
+
+  // "Training data" readiness card — the proprietary-model flywheel.
+  // Per-task example counts vs the fine-tune viability threshold, with a
+  // JSONL download per task. SYSTEM_ADMIN endpoint: a 403 (org admin)
+  // just skips the card. Appended below the metrics card.
+  function appendTrainingDataCard(host) {
+    window.p86Api.get('/api/admin/agents/training-data').then(function(resp) {
+      var tasks = (resp && resp.tasks) || [];
+      var card = document.createElement('div');
+      card.style.cssText = 'margin-top:14px;background:var(--surface,#1a1d27);border:1px solid var(--border,#2e3346);border-radius:12px;padding:16px 18px;';
+      var rows = tasks.map(function(t) {
+        var th = t.threshold ? Number(t.threshold) : null;
+        var n = Number(t.examples) || 0;
+        var pct = th ? Math.min(100, Math.round(n / th * 100)) : null;
+        var ready = th && n >= th;
+        var corrected = Number(t.corrected) || 0;
+        var corrPct = n ? Math.round(corrected / n * 100) : 0;
+        return '<tr>' +
+          '<td style="padding:5px 10px 5px 0;font-weight:600;">' + escapeHTML(t.task) + '</td>' +
+          '<td style="padding:5px 10px;white-space:nowrap;">' + n.toLocaleString() + (th ? ' / ' + th.toLocaleString() : '') +
+            (th ? ' <span style="color:' + (ready ? '#34d399' : 'var(--text-dim,#888)') + ';font-size:11px;">' + (ready ? '✓ fine-tune viable' : pct + '%') + '</span>' : '') + '</td>' +
+          '<td style="padding:5px 10px;color:var(--text-dim,#888);font-size:11px;white-space:nowrap;">' + corrPct + '% corrected</td>' +
+          '<td style="padding:5px 10px;color:var(--text-dim,#888);font-size:11px;white-space:nowrap;">' + (t.last_at ? new Date(t.last_at).toLocaleDateString() : '—') + '</td>' +
+          '<td style="padding:5px 0;text-align:right;"><a href="/api/admin/agents/training-export?task=' + encodeURIComponent(t.task) + '" style="font-size:11px;color:var(--accent,#4f8cff);text-decoration:none;">JSONL ↓</a></td>' +
+        '</tr>';
+      }).join('');
+      card.innerHTML =
+        '<div style="display:flex;align-items:baseline;justify-content:space-between;gap:10px;margin-bottom:8px;">' +
+          '<div style="font-weight:700;font-size:14px;">Training data <span style="color:var(--text-dim,#888);font-weight:400;font-size:11px;">— proprietary-model flywheel</span></div>' +
+          '<a href="/api/admin/agents/training-export" style="font-size:11px;color:var(--accent,#4f8cff);text-decoration:none;">Export all ↓</a>' +
+        '</div>' +
+        (tasks.length
+          ? '<table style="width:100%;border-collapse:collapse;font-size:12.5px;"><tbody>' + rows + '</tbody></table>'
+          : '<div style="color:var(--text-dim,#888);font-size:12px;font-style:italic;">No examples captured yet — receipt OCR corrections, Scribe approve/reject verdicts, PDF-lead imports and material overrides all land here automatically.</div>') +
+        '<div style="margin-top:8px;color:var(--text-dim,#888);font-size:11px;">Counts vs fine-tune viability thresholds (docs/proprietary-model-v1.md). Export = OpenAI-chat JSONL, ready for Together/Fireworks LoRA or Bedrock.</div>';
+      host.appendChild(card);
+    }).catch(function() { /* 403 for non-system-admins — card simply absent */ });
   }
 
   // Unified 86 metrics card — one wide block with sections for activity,
