@@ -11397,3 +11397,18 @@ textarea.ci-input { height: auto; resize: vertical; font-family: inherit; }
   .p86-hc-change { flex-wrap: wrap; }
   .p86-hc-showme { margin-left: 47px; }
 }
+
+/* ── Sidebar-deep admin nav (Option B, 2026-07-04) ──────────────────
+   Admin sub-tab pill strips live on ONLY as the phone fallback: the
+   sidebar (the desktop nav home) is hidden under the phone-chrome
+   breakpoint, so phones still need an in-page switcher. */
+.p86-mobile-subnav { display: none !important; }
+@media (max-width: 768px) and (pointer: coarse) {
+  .p86-mobile-subnav { display: flex !important; flex-wrap: wrap; }
+}
+/* Level-3 sidebar children (Agents ▸ Overview…, Organization ▸ Identity…):
+   text-only, one indent step deeper than .app-nav-child. */
+.app-nav .app-nav-child2 {
+  padding-left: 22px;
+  font-size: 11px;
+}

@@ -246,7 +246,7 @@
     })();
     </script>
 
-    <link rel="stylesheet" href="css/styles.css?v=239">
+    <link rel="stylesheet" href="css/styles.css?v=240">
     <link rel="stylesheet" href="css/report-style-packs.css?v=4">
     <link rel="stylesheet" href="css/workspace-layout.css?v=65">
     <link rel="stylesheet" href="css/workspace.css?v=40">
@@ -657,9 +657,37 @@
                                 <button class="tab-btn app-nav-child" data-tab="admin" data-admin-subtab="users" data-virtual-tab="admin-users" data-p86-icon="clients" title="Users"><span class="app-nav-label">Users</span></button>
                                 <button class="tab-btn app-nav-child" data-tab="admin" data-admin-subtab="roles" data-virtual-tab="admin-roles" data-p86-icon="admin" title="Roles"><span class="app-nav-label">Roles</span></button>
                                 <button class="tab-btn app-nav-child" data-tab="admin" data-admin-subtab="organization" data-virtual-tab="admin-organization" data-p86-icon="briefcase" title="Organization"><span class="app-nav-label">Organization</span></button>
+                                <!-- Sidebar-deep (Option B): each level-2 page exposes its
+                                     views as level-3 text-only children. Only the ACTIVE
+                                     page's group is shown — switchAdminSubTab toggles the
+                                     [data-admin-group] wrappers. Clicks route through the
+                                     generic handler via data-admin-view → p86AdminOpenView. -->
+                                <div class="app-nav-grandchildren" data-admin-group="organization" style="display:none;" role="group" aria-label="Organization views">
+                                    <button class="tab-btn app-nav-child app-nav-child2" data-tab="admin" data-admin-subtab="organization" data-admin-view="identity" title="Identity"><span class="app-nav-label">Identity</span></button>
+                                    <button class="tab-btn app-nav-child app-nav-child2" data-tab="admin" data-admin-subtab="organization" data-admin-view="kb" title="Company KB"><span class="app-nav-label">Company KB</span></button>
+                                    <button class="tab-btn app-nav-child app-nav-child2" data-tab="admin" data-admin-subtab="organization" data-admin-view="packs" title="Playbooks"><span class="app-nav-label">Playbooks</span></button>
+                                    <button class="tab-btn app-nav-child app-nav-child2" data-tab="admin" data-admin-subtab="organization" data-admin-view="refs" title="Reference Links"><span class="app-nav-label">Reference Links</span></button>
+                                    <button class="tab-btn app-nav-child app-nav-child2" data-tab="admin" data-admin-subtab="organization" data-admin-view="mcp" title="MCP Connectors"><span class="app-nav-label">MCP Connectors</span></button>
+                                    <button class="tab-btn app-nav-child app-nav-child2" data-tab="admin" data-admin-subtab="organization" data-admin-view="templates" title="Templates"><span class="app-nav-label">Templates</span></button>
+                                    <button class="tab-btn app-nav-child app-nav-child2" data-tab="admin" data-admin-subtab="organization" data-admin-view="materials" title="Materials"><span class="app-nav-label">Materials</span></button>
+                                    <button class="tab-btn app-nav-child app-nav-child2" data-tab="admin" data-admin-subtab="organization" data-admin-view="jobs" title="Job Assignments"><span class="app-nav-label">Job Assignments</span></button>
+                                    <button class="tab-btn app-nav-child app-nav-child2" data-tab="admin" data-admin-subtab="organization" data-admin-view="sms" title="SMS"><span class="app-nav-label">SMS</span></button>
+                                    <button class="tab-btn app-nav-child app-nav-child2" data-tab="admin" data-admin-subtab="organization" data-admin-view="tags" title="Tag Catalog"><span class="app-nav-label">Tag Catalog</span></button>
+                                    <button class="tab-btn app-nav-child app-nav-child2" data-tab="admin" data-admin-subtab="organization" data-admin-view="mappins" title="Map Pins"><span class="app-nav-label">Map Pins</span></button>
+                                </div>
                                 <button class="tab-btn app-nav-child" data-tab="admin" data-admin-subtab="agents" data-virtual-tab="admin-agents" data-p86-icon="discord" title="Agents"><span class="app-nav-label">Agents</span></button>
+                                <div class="app-nav-grandchildren" data-admin-group="agents" style="display:none;" role="group" aria-label="Agents views">
+                                    <button class="tab-btn app-nav-child app-nav-child2" data-tab="admin" data-admin-subtab="agents" data-admin-view="metrics" title="Overview"><span class="app-nav-label">Overview</span></button>
+                                    <button class="tab-btn app-nav-child app-nav-child2" data-tab="admin" data-admin-subtab="agents" data-admin-view="conversations" title="Conversations"><span class="app-nav-label">Conversations</span></button>
+                                    <button class="tab-btn app-nav-child app-nav-child2" data-tab="admin" data-admin-subtab="agents" data-admin-view="evals" title="Evals"><span class="app-nav-label">Evals</span></button>
+                                    <button class="tab-btn app-nav-child app-nav-child2" data-tab="admin" data-admin-subtab="agents" data-admin-view="skills" title="Skills"><span class="app-nav-label">Skills</span></button>
+                                    <button class="tab-btn app-nav-child app-nav-child2" data-tab="admin" data-admin-subtab="agents" data-admin-view="preview" title="Prompt preview"><span class="app-nav-label">Prompt preview</span></button>
+                                    <button class="tab-btn app-nav-child app-nav-child2" data-tab="admin" data-admin-subtab="agents" data-admin-view="anthropic" title="Anthropic"><span class="app-nav-label">Anthropic</span></button>
+                                    <button class="tab-btn app-nav-child app-nav-child2" data-tab="admin" data-admin-subtab="agents" data-admin-view="references" title="References"><span class="app-nav-label">References</span></button>
+                                </div>
                                 <button class="tab-btn app-nav-child" data-tab="admin" data-admin-subtab="context" data-virtual-tab="admin-context" data-p86-icon="academic-cap" title="Context"><span class="app-nav-label">Context</span></button>
                                 <button class="tab-btn app-nav-child" data-tab="admin" data-admin-subtab="metrics" data-virtual-tab="admin-metrics" data-p86-icon="insights" title="Metrics"><span class="app-nav-label">Metrics</span></button>
+                                <button class="tab-btn app-nav-child" data-tab="admin" data-admin-subtab="ocr-inbox" data-p86-icon="chart-bar" title="OCR"><span class="app-nav-label">OCR</span></button>
                                 <!-- ⚙ System retired → top-level ⚙ Command Center -->
                             </div>
                         </div>
@@ -1738,7 +1766,10 @@
                      the Organization sub-tab so everything org-scoped is
                      immediately adjacent. -->
                 <div id="admin" class="tab-content" data-admin-only style="display:none;">
-                    <div class="ws-right-tabs">
+                    <!-- Sidebar-deep (Option B): this strip is the MOBILE fallback only —
+                         the sidebar is hidden under the phone-chrome breakpoint, so phones
+                         still need an in-page switcher. Desktop nav lives in the sidebar. -->
+                    <div class="ws-right-tabs p86-mobile-subnav">
                         <!-- People & access (top-level convenience — user mgmt + RBAC) -->
                         <button class="ws-right-tab active" data-admin-subtab="users" data-p86-icon="clients" onclick="switchAdminSubTab('users')">Users</button>
                         <button class="ws-right-tab" data-admin-subtab="roles" data-p86-icon="admin" onclick="switchAdminSubTab('roles')">Roles</button>
@@ -3158,7 +3189,7 @@
          BEFORE admin.js so window.p86EmailBlocks is available at the
          time renderTemplateEditor() runs its mount call. -->
     <script src="js/email-block-editor.js?v=6"></script>
-    <script src="js/admin.js?v=116"></script>
+    <script src="js/admin.js?v=117"></script>
     <!-- Act-as / disguise mode: persistent "Acting as NAME — Exit" banner +
          window.p86ActAs(userId). Self-contained; re-fetches /api/auth/me. -->
     <script src="js/actas.js?v=1"></script>
@@ -3197,7 +3228,7 @@
     <script src="js/entity-card.js?v=5"></script>
     <!-- Lead/estimate context card mounted into #app-sidebar (uses p86EntityCard). -->
     <script src="js/entity-subnav.js?v=2"></script>
-    <script src="js/app.js?v=106"></script>
+    <script src="js/app.js?v=107"></script>
     <script src="js/sidebar-brand.js?v=2"></script>
     <!-- Guided tours engine + the Help & What's New center (patch
          notes, guides, feature atlas). help-center.js owns

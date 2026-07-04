@@ -1112,7 +1112,15 @@
     }
 
     document.querySelectorAll('[data-admin-subtab]').forEach(function(btn) {
+      // Level-3 sidebar children (data-admin-view) get their active state
+      // from syncAdminViewSidebar — the page-level toggle must not paint
+      // the whole group.
+      if (btn.dataset.adminView) return;
       btn.classList.toggle('active', btn.dataset.adminSubtab === name);
+    });
+    // Sidebar-deep: reveal only the active page's level-3 view group.
+    document.querySelectorAll('.app-nav-grandchildren').forEach(function(g) {
+      g.style.display = (g.dataset.adminGroup === name) ? '' : 'none';
     });
     document.querySelectorAll('.admin-subtab-content').forEach(function(c) {
       c.style.display = 'none';
@@ -1134,6 +1142,29 @@
     // Persist nav state so a refresh lands back on this admin sub-tab.
     if (typeof window.p86NavSave === 'function') window.p86NavSave();
   }
+
+  // ── Sidebar-deep (Option B) level-3 routing ──────────────────────
+  // Marks the active inner-view button in the sidebar group. The group
+  // wrappers themselves are shown/hidden by switchAdminSubTab.
+  function syncAdminViewSidebar(group, key) {
+    document.querySelectorAll('.app-nav-grandchildren[data-admin-group="' + group + '"] [data-admin-view]')
+      .forEach(function(btn) { btn.classList.toggle('active', btn.dataset.adminView === key); });
+  }
+  // Open a specific inner view of an admin page. Called by the generic
+  // sidebar click handler (app.js) AFTER switchAdminSubTab painted the
+  // pane, so the host elements exist.
+  window.p86AdminOpenView = function(sub, view) {
+    if (sub === 'agents') {
+      switchAgentsView(view);
+    } else if (sub === 'organization') {
+      _orgActiveTab = view;
+      try { sessionStorage.setItem('agx_org_tab', view); } catch (e) { /* ignore */ }
+      // Data already loaded → repaint now; otherwise the in-flight
+      // renderAdminOrganization fetch paints the new view when it lands.
+      if (_orgDraft) switchOrgTab(view);
+      else syncAdminViewSidebar('organization', view);
+    }
+  };
 
   // ==================== EMAIL ADMIN ====================
   // Sectioned admin surface for the notifications feature:
@@ -4794,6 +4825,7 @@
       _orgPacksDirty = new Set();
       host.innerHTML = renderOrgHTML();
       attachOrgHandlers();
+      syncAdminViewSidebar('organization', _orgActiveTab);
     }).catch(function(err) {
       host.innerHTML = '<div style="color:#e74c3c;padding:14px 0;">Failed to load organization: ' + escapeHTML(err.message || 'unknown') + '</div>';
     });
@@ -4824,6 +4856,7 @@
     syncOrgFromInputs();
     _orgActiveTab = key;
     try { sessionStorage.setItem('agx_org_tab', key); } catch (e) { /* ignore */ }
+    syncAdminViewSidebar('organization', key);
     var host = document.getElementById('admin-organization-content');
     if (host) {
       host.innerHTML = renderOrgHTML();
@@ -4838,8 +4871,11 @@
     }
     var activeTab = ORG_TABS.find(function(t) { return t.key === _orgActiveTab; });
 
-    // Pill-style tab strip — same pattern as Admin → Templates.
-    var tabsHTML = '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px;border-bottom:1px solid var(--border,#333);padding-bottom:10px;">';
+    // Sidebar-deep (Option B): the pill strip is the PHONE fallback only
+    // (.p86-mobile-subnav) — desktop switches views via the sidebar's
+    // Organization ▸ children. Title line carries the active view name.
+    var titleHTML = '<div style="font-size:16px;font-weight:700;margin-bottom:6px;">Organization <span style="color:var(--text-dim,#888);font-weight:400;">· ' + (activeTab ? activeTab.label : '') + '</span></div>';
+    var tabsHTML = '<div class="p86-mobile-subnav" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px;border-bottom:1px solid var(--border,#333);padding-bottom:10px;">';
     ORG_TABS.forEach(function(tab) {
       var isActive = (tab.key === _orgActiveTab);
       var bg = isActive ? 'rgba(79,140,255,0.18)' : 'transparent';
@@ -4908,7 +4944,7 @@
       '</div>';
     }
 
-    return tabsHTML + hintHTML + bodyHTML;
+    return titleHTML + tabsHTML + hintHTML + bodyHTML;
   }
 
   // Multi-market timezone menu. The field accepts ANY valid IANA zone;
@@ -6466,25 +6502,19 @@
     // Range selector + refresh button hide on the Skills view since neither
     // applies to skill-pack editing.
     var showRange = _agentsView !== 'skills';
+    // Sidebar-deep (Option B): desktop nav for the views lives in the
+    // app sidebar (Agents ▸ Overview/Conversations/…). The pill strip
+    // below survives ONLY as the phone fallback (.p86-mobile-subnav) —
+    // the sidebar is hidden under the phone-chrome breakpoint.
+    var VIEW_LABELS = {
+      metrics: 'Overview', conversations: 'Conversations', evals: 'Evals',
+      skills: 'Skills', preview: 'Prompt preview', anthropic: 'Anthropic',
+      references: 'References'
+    };
     pane.innerHTML =
-      '<p style="margin:0 0 14px 0;color:var(--text-dim,#888);font-size:12px;">' +
-        'Observability and configuration for the three in-app AI agents — usage, cost, conversations, and the skill packs they can load on demand.' +
-      '</p>' +
-      '<div id="agents-server-config" style="margin-bottom:10px;font-size:11px;color:var(--text-dim,#666);font-family:\'SF Mono\',monospace;">Loading server config…</div>' +
-      '<div style="display:flex;gap:8px;align-items:center;margin-bottom:14px;flex-wrap:wrap;">' +
-        '<div class="ws-right-tabs" style="margin:0;">' +
-          '<button class="ws-right-tab' + (_agentsView === 'metrics' ? ' active' : '') + '" onclick="switchAgentsView(\'metrics\')">&#x1F4CA; Metrics</button>' +
-          '<button class="ws-right-tab' + (_agentsView === 'conversations' ? ' active' : '') + '" onclick="switchAgentsView(\'conversations\')">&#x1F4AC; Conversations</button>' +
-          '<button class="ws-right-tab' + (_agentsView === 'evals' ? ' active' : '') + '" onclick="switchAgentsView(\'evals\')">&#x1F9EA; Evals</button>' +
-          '<button class="ws-right-tab' + (_agentsView === 'skills' ? ' active' : '') + '" onclick="switchAgentsView(\'skills\')">&#x1F9E0; Skills</button>' +
-          '<button class="ws-right-tab' + (_agentsView === 'preview' ? ' active' : '') + '" onclick="switchAgentsView(\'preview\')">&#x1F50D; Prompt Preview</button>' +
-          '<button class="ws-right-tab' + (_agentsView === 'anthropic' ? ' active' : '') + '" onclick="switchAgentsView(\'anthropic\')">&#x1F310; Anthropic</button>' +
-          '<button class="ws-right-tab' + (_agentsView === 'references' ? ' active' : '') + '" onclick="switchAgentsView(\'references\')">&#x1F4D2; References</button>' +
-        '</div>' +
+      '<div style="display:flex;gap:8px;align-items:center;margin-bottom:6px;flex-wrap:wrap;">' +
+        '<div style="font-size:16px;font-weight:700;">Agents <span style="color:var(--text-dim,#888);font-weight:400;">· ' + (VIEW_LABELS[_agentsView] || 'Overview') + '</span></div>' +
         '<div style="flex:1;"></div>' +
-        // "Ask Chief of Staff" button + "Window" label removed —
-        // Chief of Staff was rolled into 86 in Phase 1 unification,
-        // and the bare range dropdown is self-explanatory.
         (showRange
           ? ('<select id="agents-range-select" onchange="setAgentsRange(this.value)" style="font-size:12px;padding:4px 8px;">' +
                '<option value="7d"' + (_agentsRange === '7d' ? ' selected' : '') + '>Last 7 days</option>' +
@@ -6493,7 +6523,21 @@
              '<button class="ee-btn ghost" onclick="renderAdminAgents()" title="Refresh">&#x21BB;</button>')
           : '') +
       '</div>' +
+      '<p style="margin:0 0 10px 0;color:var(--text-dim,#888);font-size:12px;">' +
+        'Observability and configuration for the three in-app AI agents — usage, cost, conversations, and the skill packs they can load on demand.' +
+      '</p>' +
+      '<div id="agents-server-config" style="margin-bottom:10px;font-size:11px;color:var(--text-dim,#666);font-family:\'SF Mono\',monospace;">Loading server config…</div>' +
+      '<div class="ws-right-tabs p86-mobile-subnav" style="margin:0 0 12px 0;">' +
+        '<button class="ws-right-tab' + (_agentsView === 'metrics' ? ' active' : '') + '" onclick="switchAgentsView(\'metrics\')">&#x1F4CA; Overview</button>' +
+        '<button class="ws-right-tab' + (_agentsView === 'conversations' ? ' active' : '') + '" onclick="switchAgentsView(\'conversations\')">&#x1F4AC; Conversations</button>' +
+        '<button class="ws-right-tab' + (_agentsView === 'evals' ? ' active' : '') + '" onclick="switchAgentsView(\'evals\')">&#x1F9EA; Evals</button>' +
+        '<button class="ws-right-tab' + (_agentsView === 'skills' ? ' active' : '') + '" onclick="switchAgentsView(\'skills\')">&#x1F9E0; Skills</button>' +
+        '<button class="ws-right-tab' + (_agentsView === 'preview' ? ' active' : '') + '" onclick="switchAgentsView(\'preview\')">&#x1F50D; Prompt Preview</button>' +
+        '<button class="ws-right-tab' + (_agentsView === 'anthropic' ? ' active' : '') + '" onclick="switchAgentsView(\'anthropic\')">&#x1F310; Anthropic</button>' +
+        '<button class="ws-right-tab' + (_agentsView === 'references' ? ' active' : '') + '" onclick="switchAgentsView(\'references\')">&#x1F4D2; References</button>' +
+      '</div>' +
       '<div id="agents-content"></div>';
+    syncAdminViewSidebar('agents', _agentsView);
     loadAgentsServerConfig();
     if (_agentsView === 'metrics')                   renderAgentsMetrics();
     else if (_agentsView === 'evals' && _agentsEvalId) renderAgentEvalDetail(_agentsEvalId);
@@ -6772,6 +6816,7 @@
     _agentsConvKey = null;
     _agentsEvalId = null;
     _agentsEvalNew = false;
+    syncAdminViewSidebar('agents', v);
     renderAdminAgents();
   }
 

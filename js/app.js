@@ -371,6 +371,14 @@
                     if (adminSub && typeof window.switchAdminSubTab === 'function') {
                         window.switchAdminSubTab(adminSub);
                     }
+                    // Level-3 admin children (sidebar-deep) carry data-admin-view —
+                    // the inner view inside Agents (metrics/skills/…) or
+                    // Organization (identity/kb/…). Routed after the sub-tab
+                    // switch so the pane exists before the view swaps.
+                    const adminView = btn.getAttribute('data-admin-view');
+                    if (adminSub && adminView && typeof window.p86AdminOpenView === 'function') {
+                        window.p86AdminOpenView(adminSub, adminView);
+                    }
                     // Command Center accordion children carry data-console-subtab
                     // so the sidebar dropdown drives which platform section shows
                     // (Overview / Metrics / Tenants / Audit / Anthropic / Email /
