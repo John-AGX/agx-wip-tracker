@@ -2710,6 +2710,7 @@ function renderInspector(){
     var _jb=(typeof appData!=='undefined'&&appData.jobs)?appData.jobs.find(function(j){return j.id===E.job();}):null;
     if(hdr) hdr.innerHTML='<span class="ng-insp-ic">$</span> '+luEsc((_jb&&(_jb.title||_jb.name))||'Job Detail')+'<span class="ng-insp-type">Job</span>';
     renderInspectorJobDetail(body);
+    refreshInspMetrics();   // always repaint tiles (job-detail build is keyed; numbers settle late)
   }
 }
 // Slice 3: the no-node Inspector hosts the JOB detail — reuses the classic job-overview
@@ -2718,6 +2719,25 @@ function renderInspector(){
 // would thrash them. A selected node takes over the panel (branches above); clearing the
 // selection (body no longer has .ng-insp-jobdetail) rebuilds this with fresh numbers.
 var _inspJobKey=null, _inspFilesHandle=null;
+// Fill the #ng-insp-metrics tiles from getJobWIP. Called on every inspector
+// render (not gated by the job-detail build key) so late-settling node-graph
+// numbers (pctComplete / revenue / profit) land instead of freezing at $0.
+function refreshInspMetrics(){
+  var host=document.getElementById('ng-insp-metrics'); if(!host) return;
+  var jid=E.job();
+  var w=(typeof window.getJobWIP==='function')?(window.getJobWIP(jid)||{}):{};
+  function m(n){ n=(n==null||isNaN(n))?0:n; return (n<0?'-$':'$')+Math.round(Math.abs(n)).toLocaleString(); }
+  function p(n){ return ((n==null||isNaN(n))?0:n).toFixed(0)+'%'; }
+  var tiles=[
+    {k:'Income',v:m(w.totalIncome),c:'inc'},
+    {k:'Costs',v:m(w.actualCosts),c:'cost'},
+    {k:'% Complete',v:p(w.pctComplete),c:''},
+    {k:'Revenue',v:m(w.revenueEarned),c:'inc'},
+    {k:'Profit',v:m(w.jtdProfit),c:((w.jtdProfit||0)>=0?'gain':'neg')},
+    {k:'Margin',v:p(w.jtdMargin),c:''}
+  ];
+  host.innerHTML=tiles.map(function(t){ return '<div class="ng-im '+t.c+'"><span class="ng-im-k">'+t.k+'</span><span class="ng-im-v">'+t.v+'</span></div>'; }).join('');
+}
 function renderInspectorJobDetail(body){
   var jid=E.job(); var jk='job:'+(jid||'');
   if(_inspJobKey===jk && body.querySelector('.ng-insp-jobdetail')) return;
@@ -2726,24 +2746,12 @@ function renderInspectorJobDetail(body){
   if(_inspFilesHandle && _inspFilesHandle.destroy){ try{ _inspFilesHandle.destroy(); }catch(e){} } _inspFilesHandle=null;
   var job=(typeof appData!=='undefined'&&appData.jobs)?appData.jobs.find(function(j){return j.id===jid;}):null;
   if(!job){ body.innerHTML='<div class="ng-insp-empty">No job loaded.</div>'; return; }
-  // Top-line metrics — the numbers that used to live on the retired
-  // classic overview page. Now they lead the Site Plan's own overview so
-  // this panel is a complete job summary on its own.
-  var _w=(typeof window.getJobWIP==='function')?(window.getJobWIP(jid)||{}):{};
-  function _m(n){ n=(n==null||isNaN(n))?0:n; var neg=n<0; return (neg?'-$':'$')+Math.round(Math.abs(n)).toLocaleString(); }
-  function _p(n){ return ((n==null||isNaN(n))?0:n).toFixed(0)+'%'; }
-  var _pp=(_w.jtdProfit||0)>=0;
-  var _tiles=[
-    {k:'Income',v:_m(_w.totalIncome),c:'inc'},
-    {k:'Costs',v:_m(_w.actualCosts),c:'cost'},
-    {k:'% Complete',v:_p(_w.pctComplete),c:''},
-    {k:'Revenue',v:_m(_w.revenueEarned),c:'inc'},
-    {k:'Profit',v:_m(_w.jtdProfit),c:(_pp?'gain':'neg')},
-    {k:'Margin',v:_p(_w.jtdMargin),c:''}
-  ];
-  var _metrics='<div class="ng-insp-metrics">'+_tiles.map(function(t){ return '<div class="ng-im '+t.c+'"><span class="ng-im-k">'+t.k+'</span><span class="ng-im-v">'+t.v+'</span></div>'; }).join('')+'</div>';
+  // Top-line metrics lead the panel; the actual numbers fill in via
+  // refreshInspMetrics() so they track late-settling node-graph values
+  // (pctComplete / ngRevenueEarned land after ensureNGComputed + cloud
+  // sync) instead of freezing at the build-time snapshot.
   body.innerHTML='<div class="ng-insp-jobdetail">'+
-    _metrics+
+    '<div class="ng-insp-metrics" id="ng-insp-metrics"></div>'+
     '<div class="ng-insp-sec" id="insp-buildings"></div>'+
     '<div class="ng-insp-sec" id="insp-phases"></div>'+
     '<div class="ng-insp-sec" id="insp-subs"></div><div id="insp-subs-totals"></div>'+
@@ -2763,6 +2771,7 @@ function renderInspectorJobDetail(body){
     if(typeof window.renderJobChangeOrdersInto==='function') window.renderJobChangeOrdersInto(document.getElementById('insp-cos'),jid,'insp-co');
     if(typeof window.renderJobPurchaseOrdersInto==='function') window.renderJobPurchaseOrdersInto(document.getElementById('insp-pos'),jid,'insp-po');
   }catch(e){ if(window.console) console.warn('inspector job-detail render failed', e); }
+  refreshInspMetrics();   // first-paint fill
 }
 // Slice 3c: expand/collapse a Tasks/Files section and lazy-mount its heavy panel on first
 // open (p86Tasks / p86Explorer fetch on mount — don't pay that on every job open).
