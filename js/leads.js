@@ -1313,9 +1313,9 @@
       var hi = (d.tempHigh != null) ? d.tempHigh + '°' : '—';
       var lo = (d.tempLow != null) ? d.tempLow + '°' : '';
       var precip = d.precipPct ? d.precipPct + '%' : '';
-      var border = d.risk === 'high' ? '#f87171' : (d.risk === 'med' ? '#fbbf24' : 'rgba(255,255,255,0.08)');
+      var border = d.risk === 'high' ? '#f87171' : (d.risk === 'med' ? '#fbbf24' : 'var(--border, rgba(255,255,255,0.08))');
       var emoji = _weatherEmojiFor(d);
-      return '<div title="' + escapeAttr(d.summary || '') + '" style="flex:1 1 60px;min-width:60px;padding:8px 4px 6px;background:rgba(255,255,255,0.02);border:1px solid var(--border,#333);border-top:2px solid ' + border + ';border-radius:6px;text-align:center;font-size:11px;">' +
+      return '<div title="' + escapeAttr(d.summary || '') + '" style="flex:1 1 60px;min-width:60px;padding:8px 4px 6px;background:var(--overlay-light,rgba(255,255,255,0.02));border:1px solid var(--border,#333);border-top:2px solid ' + border + ';border-radius:6px;text-align:center;font-size:11px;">' +
         '<div style="color:var(--text-dim,#aaa);font-size:10px;text-transform:uppercase;letter-spacing:0.4px;font-weight:600;">' + escapeHTML(dow) + '</div>' +
         '<div style="font-size:20px;line-height:1.2;margin:2px 0;">' + emoji + '</div>' +
         '<div style="color:var(--text,#fff);font-weight:600;">' + escapeHTML(hi) + '</div>' +
@@ -1371,8 +1371,8 @@
       var rows = items.map(function(a) {
         var thumb = a.is_image
           ? '<img src="/api/attachments/raw/' + encodeURIComponent(a.id) + '?thumb=1" style="width:48px;height:48px;object-fit:cover;border-radius:4px;border:1px solid var(--border,#333);" alt="" loading="lazy" />'
-          : '<div style="width:48px;height:48px;background:rgba(255,255,255,0.04);border:1px solid var(--border,#333);border-radius:4px;display:flex;align-items:center;justify-content:center;color:var(--text-dim,#888);font-size:18px;">' + (a.mime_type && a.mime_type.indexOf('pdf') >= 0 ? '\u{1F4C4}' : '\u{1F4CE}') + '</div>';
-        return '<a href="/api/attachments/raw/' + encodeURIComponent(a.id) + '" target="_blank" rel="noopener" style="display:flex;align-items:center;gap:10px;padding:6px;border-radius:6px;text-decoration:none;color:var(--text,#fff);transition:background 0.12s;" onmouseover="this.style.background=\'rgba(255,255,255,0.04)\'" onmouseout="this.style.background=\'transparent\'">' +
+          : '<div style="width:48px;height:48px;background:var(--overlay-light,rgba(255,255,255,0.04));border:1px solid var(--border,#333);border-radius:4px;display:flex;align-items:center;justify-content:center;color:var(--text-dim,#888);font-size:18px;">' + (a.mime_type && a.mime_type.indexOf('pdf') >= 0 ? '\u{1F4C4}' : '\u{1F4CE}') + '</div>';
+        return '<a href="/api/attachments/raw/' + encodeURIComponent(a.id) + '" target="_blank" rel="noopener" style="display:flex;align-items:center;gap:10px;padding:6px;border-radius:6px;text-decoration:none;color:var(--text,#fff);transition:background 0.12s;" onmouseover="this.style.background=\'var(--overlay-light, rgba(255,255,255,0.04))\'" onmouseout="this.style.background=\'transparent\'">' +
           thumb +
           '<div style="flex:1;min-width:0;overflow:hidden;">' +
             '<div style="font-size:12px;color:var(--text,#fff);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escapeHTML(a.caption || a.original_filename || 'Attachment') + '</div>' +
@@ -2272,9 +2272,9 @@
     var calc = _computeEstimateCostMargin(est);
     var created = est.created_at ? new Date(est.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
     return '<div onclick="openEstimateFromLead(\'' + escapeAttr(est.id) + '\', false);" ' +
-      'style="cursor:pointer;padding:8px 10px;border:1px solid var(--border,#333);border-radius:6px;margin-bottom:6px;background:rgba(255,255,255,0.02);transition:border-color 0.12s, background 0.12s;" ' +
+      'style="cursor:pointer;padding:8px 10px;border:1px solid var(--border,#333);border-radius:6px;margin-bottom:6px;background:var(--overlay-light,rgba(255,255,255,0.02));transition:border-color 0.12s, background 0.12s;" ' +
       'onmouseover="this.style.borderColor=\'rgba(79,140,255,0.5)\';this.style.background=\'rgba(79,140,255,0.04)\';" ' +
-      'onmouseout="this.style.borderColor=\'var(--border,#333)\';this.style.background=\'rgba(255,255,255,0.02)\';">' +
+      'onmouseout="this.style.borderColor=\'var(--border,#333)\';this.style.background=\'var(--overlay-light, rgba(255,255,255,0.02))\';">' +
       '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;">' +
         '<div style="font-weight:600;font-size:12.5px;color:var(--text,#fff);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0;">' + escapeHTML(est.title || '(untitled)') + '</div>' +
         '<div style="font-size:10px;color:var(--text-dim,#888);white-space:nowrap;">' + escapeHTML(created) + '</div>' +
@@ -2766,7 +2766,7 @@
   }
 
   function statBlock(label, value, color) {
-    return '<div style="background:rgba(255,255,255,0.03);border:1px solid var(--border,#333);border-radius:6px;padding:10px 12px;">' +
+    return '<div style="background:var(--overlay-light,rgba(255,255,255,0.03));border:1px solid var(--border,#333);border-radius:6px;padding:10px 12px;">' +
       '<div style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">' + label + '</div>' +
       '<div style="font-size:18px;font-weight:700;color:' + color + ';">' + value + '</div>' +
     '</div>';

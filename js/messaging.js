@@ -188,14 +188,14 @@
           var nm = u.name || u.email || ('User ' + u.id);
           html += '<button class="msg-recip-row" data-uid="' + escapeAttr(u.id) + '" data-uname="' + escapeAttr(nm) + '" ' +
             'style="display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:10px 14px;background:transparent;border:none;border-bottom:1px solid var(--border,#222);color:var(--text,#fff);cursor:pointer;">' +
-            '<span style="width:28px;height:28px;border-radius:50%;background:rgba(34,211,238,0.18);color:var(--accent,#22d3ee);font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;">' + escapeHTML(initials(nm)) + '</span>' +
+            '<span style="width:28px;height:28px;border-radius:50%;background:var(--msg-chip, rgba(34,211,238,0.18));color:var(--accent,#22d3ee);font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;">' + escapeHTML(initials(nm)) + '</span>' +
             '<span style="overflow:hidden;"><span style="display:block;font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(nm) + '</span>' +
             (u.email ? '<span style="display:block;font-size:11px;color:var(--text-dim,#888);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(u.email) + '</span>' : '') + '</span>' +
           '</button>';
         });
         recipListEl.innerHTML = html;
         recipListEl.querySelectorAll('.msg-recip-row').forEach(function(btn) {
-          btn.addEventListener('mouseenter', function() { btn.style.background = 'rgba(34,211,238,0.06)'; });
+          btn.addEventListener('mouseenter', function() { btn.style.background = 'var(--msg-hover, rgba(34,211,238,0.06))'; });
           btn.addEventListener('mouseleave', function() { btn.style.background = 'transparent'; });
           btn.addEventListener('click', function() {
             var uid = btn.getAttribute('data-uid');
@@ -220,7 +220,7 @@
 
   function loadInboxList(listEl, threadEl, onThreadOpen) {
     if (!window.p86Api || !window.p86Api.messages) {
-      listEl.innerHTML = '<div style="padding:18px;color:#f87171;font-size:12px;">Messaging API not available.</div>';
+      listEl.innerHTML = '<div style="padding:18px;color:var(--red,#f87171);font-size:12px;">Messaging API not available.</div>';
       return;
     }
     window.p86Api.messages.recent().then(function(res) {
@@ -243,7 +243,7 @@
           'style="display:block;width:100%;text-align:left;padding:10px 14px;background:transparent;border:none;border-bottom:1px solid var(--border,#222);color:var(--text,#fff);cursor:pointer;">' +
           '<div style="display:flex;align-items:center;gap:6px;margin-bottom:2px;">' +
             '<span style="font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;color:var(--accent,#22d3ee);">' + escapeHTML(t.kind || 'thread') + '</span>' +
-            (unread ? '<span style="margin-left:auto;background:#f87171;color:#fff;font-size:10px;font-weight:700;padding:1px 7px;border-radius:10px;line-height:1.4;">' + unread + '</span>'
+            (unread ? '<span style="margin-left:auto;background:var(--red,#f87171);color:#fff;font-size:10px;font-weight:700;padding:1px 7px;border-radius:10px;line-height:1.4;">' + unread + '</span>'
                     : '<span style="margin-left:auto;font-size:10px;color:var(--text-dim,#888);">' + escapeHTML(timeAgo(t.last_created_at)) + '</span>') +
           '</div>' +
           '<div style="font-size:12px;font-weight:600;color:var(--text,#fff);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(t.label || t.thread_key) + '</div>' +
@@ -254,13 +254,13 @@
       });
       listEl.innerHTML = html;
       listEl.querySelectorAll('.msg-thread-row').forEach(function(btn) {
-        btn.addEventListener('mouseenter', function() { btn.style.background = 'rgba(34,211,238,0.06)'; });
+        btn.addEventListener('mouseenter', function() { btn.style.background = 'var(--msg-hover, rgba(34,211,238,0.06))'; });
         btn.addEventListener('mouseleave', function() { btn.style.background = 'transparent'; });
         btn.addEventListener('click', function() {
           var key = btn.getAttribute('data-key');
           var label = btn.getAttribute('data-label');
           listEl.querySelectorAll('.msg-thread-row').forEach(function(b) { b.style.background = 'transparent'; });
-          btn.style.background = 'rgba(34,211,238,0.10)';
+          btn.style.background = 'var(--msg-selected, rgba(34,211,238,0.10))';
           renderThreadIntoPanel(threadEl, key, { title: label, autofocus: true, onPosted: function() {
             // refresh list to update unread + last message
             loadInboxList(listEl, threadEl, onThreadOpen);
@@ -277,7 +277,7 @@
         });
       });
     }).catch(function(err) {
-      listEl.innerHTML = '<div style="padding:18px;color:#f87171;font-size:12px;">Could not load: ' + escapeHTML(err.message || '') + '</div>';
+      listEl.innerHTML = '<div style="padding:18px;color:var(--red,#f87171);font-size:12px;">Could not load: ' + escapeHTML(err.message || '') + '</div>';
     });
   }
 

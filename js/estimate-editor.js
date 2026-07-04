@@ -1225,7 +1225,7 @@
       // is editable now."
       '<style>' +
         '#ee-margin-chip[data-edit-gate="unlocked"] #ee-margin-input { ' +
-          'background:rgba(255,255,255,0.03); ' +
+          'background:var(--overlay-light, rgba(255,255,255,0.03)); ' +
           'border-color:' + ringRGBA + '; ' +
           'caret-color:' + accent + '; ' +
         '}' +

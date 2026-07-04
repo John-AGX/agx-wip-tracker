@@ -38,6 +38,11 @@
             --bg-dark: #0a0c12;
             --shadow: rgba(0,0,0,0.3);
             --overlay-light: rgba(255,255,255,0.06);
+            /* Messaging accent tints (inbox hover/selected rows, avatar chip)
+               — cyan on dark, remapped for readability on white in light. */
+            --msg-chip: rgba(34,211,238,0.18);
+            --msg-hover: rgba(34,211,238,0.06);
+            --msg-selected: rgba(34,211,238,0.10);
         }
 
         body.light-mode {
@@ -77,6 +82,9 @@
             --bg-dark: #e5e7eb;
             --shadow: rgba(0,0,0,0.1);
             --overlay-light: rgba(0,0,0,0.04);
+            --msg-chip: rgba(8,145,178,0.14);
+            --msg-hover: #f3f4f6;
+            --msg-selected: rgba(37,99,235,0.10);
         }
 
         * {
@@ -2779,6 +2787,30 @@
         body.light-mode .p86-co-status-pill.status-draft    { background: #eef1f4;              border-color: #d7dce3;               color: #475569; }
         body.light-mode .p86-co-status-pill.status-approved { background: rgba(5,150,105,.12);  border-color: rgba(5,150,105,.35);   color: #047857; }
         body.light-mode .p86-co-status-pill.status-applied  { background: rgba(37,99,235,.12);  border-color: rgba(37,99,235,.35);   color: #1d4ed8; }
+
+        /* ── Light-mode panel/dropdown sweep ───────────────────────────
+           Header popovers (avatar menu, notifications, directory) were a
+           hardcoded dark island (#1d1d28) — go white in light mode so they
+           match the light app (the dark TOP BAR itself stays dark). */
+        body.light-mode .header-popover {
+            background: #ffffff;
+            border-color: var(--border, #e5e7eb);
+            color: #1f2937;
+            box-shadow: 0 12px 32px rgba(15, 23, 42, 0.16);
+        }
+        body.light-mode .header-popover-section { border-bottom-color: #eef1f4; }
+        body.light-mode .header-popover-title { color: #6b7280; }
+        body.light-mode .header-popover-name { color: #111827; }
+        body.light-mode .header-popover-role { color: #6b7280; }
+        body.light-mode .header-popover-item { color: #1f2937; }
+        body.light-mode .header-popover-item:hover { background: #f3f4f6; color: #0a0e15; }
+        body.light-mode .header-popover-empty { color: #6b7280; }
+        /* Faint white-alpha fills that vanish on white */
+        body.light-mode .p86-proj-report-row-thumb { background: var(--surface2, #e8eaef); }
+        body.light-mode .p86-proj-report-row-menu { background: rgba(0, 0, 0, 0.05); }
+        body.light-mode .p86-report-section { background: rgba(0, 0, 0, 0.02); }
+        body.light-mode .p86-report-section-toggles { background: rgba(0, 0, 0, 0.04); }
+        body.light-mode .ee-sheet-readouts > div { background: var(--surface2, #e8eaef); }
 
         /* PROGRESS BARS */
         .progress-bar {

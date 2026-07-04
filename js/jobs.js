@@ -482,7 +482,7 @@ function renderJobsMain() {
             } else {
                 var rowsHTML = rows.map(function(c) {
                     var total = coTotal(c);
-                    return '<tr class="overview-row" style="cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.04);" data-co-open="' + escapeHTML(c.id) + '" title="Click to open">' +
+                    return '<tr class="overview-row" style="cursor:pointer;border-bottom:1px solid var(--overlay-light,rgba(255,255,255,0.04));" data-co-open="' + escapeHTML(c.id) + '" title="Click to open">' +
                         '<td style="white-space:nowrap;padding:8px 10px;"><strong style="color:var(--text,#fff);font-size:13px;">' + escapeHTML(c.co_number || 'CO') + '</strong></td>' +
                         '<td style="padding:8px 10px;font-size:12.5px;color:var(--text,#fff);">' + escapeHTML(c.title || '(untitled)') + '</td>' +
                         '<td style="white-space:nowrap;padding:8px 10px;">' + statusBadge(c.status || 'draft') + '</td>' +
@@ -493,7 +493,7 @@ function renderJobsMain() {
                 bodyHTML =
                     '<div style="border:1px solid var(--border,#333);border-radius:10px;overflow-x:auto;background:var(--card-bg,#0f0f1e);">' +
                         '<table style="width:100%;border-collapse:collapse;">' +
-                            '<thead style="background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border,#333);"><tr>' +
+                            '<thead style="background:var(--overlay-light,rgba(255,255,255,0.02));border-bottom:1px solid var(--border,#333);"><tr>' +
                                 thCell('CO #', 'left') +
                                 thCell('Title', 'left') +
                                 thCell('Status', 'left') +
@@ -737,7 +737,7 @@ function renderJobsMain() {
                     var total = poRowTotal(p);
                     var billed = poRowBilled(p);
                     var outstanding = total - billed;
-                    return '<tr class="overview-row" style="cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.04);" data-po-open="' + escapeHTML(p.id) + '" title="Click to open">' +
+                    return '<tr class="overview-row" style="cursor:pointer;border-bottom:1px solid var(--overlay-light,rgba(255,255,255,0.04));" data-po-open="' + escapeHTML(p.id) + '" title="Click to open">' +
                         '<td style="white-space:nowrap;padding:8px 10px;"><strong style="color:var(--text,#fff);font-size:13px;">' + escapeHTML(p.po_number || 'PO') + '</strong></td>' +
                         '<td style="padding:8px 10px;font-size:12.5px;color:var(--text-dim,#aaa);">' + escapeHTML(p.sub_name || '—') + '</td>' +
                         '<td style="padding:8px 10px;font-size:12.5px;color:var(--text,#fff);">' + escapeHTML(p.title || '(untitled)') + '</td>' +
@@ -750,7 +750,7 @@ function renderJobsMain() {
                 bodyHTML =
                     '<div style="border:1px solid var(--border,#333);border-radius:10px;overflow-x:auto;background:var(--card-bg,#0f0f1e);">' +
                         '<table style="width:100%;border-collapse:collapse;">' +
-                            '<thead style="background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border,#333);"><tr>' +
+                            '<thead style="background:var(--overlay-light,rgba(255,255,255,0.02));border-bottom:1px solid var(--border,#333);"><tr>' +
                                 thCell('PO #', 'left') +
                                 thCell('Sub', 'left') +
                                 thCell('Title', 'left') +
@@ -2663,7 +2663,7 @@ function renderJobsMain() {
                 invs.forEach(i => { invTotalAmt += i.amount || 0; if (i.status === 'Paid') invTotalPaid += i.amount || 0; });
                 const invRows = invs.map(function(i) {
                     const statusColor = i.status === 'Paid' ? 'var(--green)' : i.status === 'Sent' ? 'var(--yellow)' : 'var(--text-dim)';
-                    return '<tr class="overview-row" style="cursor:pointer;border-bottom:1px solid rgba(255,255,255,0.04);" onclick="editInvoice(\'' + escapeHTML(i.id) + '\')" title="Click to edit">' +
+                    return '<tr class="overview-row" style="cursor:pointer;border-bottom:1px solid var(--overlay-light,rgba(255,255,255,0.04));" onclick="editInvoice(\'' + escapeHTML(i.id) + '\')" title="Click to edit">' +
                         '<td style="white-space:nowrap;padding:6px 10px;"><strong style="color:var(--text,#fff);font-size:13px;">' + escapeHTML(i.invNumber || 'INV') + '</strong></td>' +
                         '<td style="padding:6px 10px;font-size:12px;color:var(--text-dim,#aaa);">' + escapeHTML(i.vendor || '') + '</td>' +
                         '<td style="padding:6px 10px;font-size:11px;color:var(--text-dim,#888);">' + escapeHTML(i.description || '') + '</td>' +
@@ -2680,7 +2680,7 @@ function renderJobsMain() {
                     '</div>' +
                     '<div style="border:1px solid var(--border,#333);border-radius:10px;overflow-x:auto;background:var(--card-bg,#0f0f1e);">' +
                         '<table style="width:100%;border-collapse:collapse;table-layout:auto;">' +
-                            '<thead style="background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border,#333);"><tr>' +
+                            '<thead style="background:var(--overlay-light,rgba(255,255,255,0.02));border-bottom:1px solid var(--border,#333);"><tr>' +
                                 thCell('Inv #', 'left') +
                                 thCell('Vendor', 'left') +
                                 thCell('Description', 'left') +
@@ -3232,7 +3232,7 @@ function renderJobsMain() {
                 const arrowId = uid + '-arrow';
 
                 const summaryRow =
-                    '<tr class="ph-row" style="cursor:pointer;user-select:none;border-bottom:1px solid rgba(255,255,255,0.04);" ' +
+                    '<tr class="ph-row" style="cursor:pointer;user-select:none;border-bottom:1px solid var(--overlay-light,rgba(255,255,255,0.04));" ' +
                         'onclick="(function(){var d=document.getElementById(\'' + uid + '\');var a=document.getElementById(\'' + arrowId + '\');var closed=d.style.display===\'none\';d.style.display=closed?\'table-row\':\'none\';var open=closed;a.textContent=open?\'' + ARROW_DOWN + '\':\'' + ARROW_RIGHT + '\';})()">' +
                         '<td style="white-space:nowrap;padding:6px 10px;">' +
                             '<span id="' + arrowId + '" style="font-size:10px;color:var(--text-dim);display:inline-block;width:10px;">' + ARROW_RIGHT + '</span> ' +
@@ -3278,7 +3278,7 @@ function renderJobsMain() {
             container.innerHTML = titleHTML +
                 '<div style="border:1px solid var(--border,#333);border-radius:10px;overflow-x:auto;background:var(--card-bg,#0f0f1e);">' +
                     '<table style="width:100%;border-collapse:collapse;table-layout:auto;">' +
-                        '<thead style="background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border,#333);"><tr>' +
+                        '<thead style="background:var(--overlay-light,rgba(255,255,255,0.02));border-bottom:1px solid var(--border,#333);"><tr>' +
                             thCell('Phase', 'left') +
                             thCell('Instances', 'right') +
                             thCell('Revenue', 'right') +
@@ -3328,7 +3328,7 @@ function renderJobsMain() {
                 const arrowId = uid + '-arrow';
 
                 const summaryRow =
-                    '<tr class="sub-row" style="cursor:pointer;user-select:none;border-bottom:1px solid rgba(255,255,255,0.04);" ' +
+                    '<tr class="sub-row" style="cursor:pointer;user-select:none;border-bottom:1px solid var(--overlay-light,rgba(255,255,255,0.04));" ' +
                         'onclick="(function(){var d=document.getElementById(\'' + uid + '\');var a=document.getElementById(\'' + arrowId + '\');var closed=d.style.display===\'none\';d.style.display=closed?\'table-row\':\'none\';var open=closed;a.textContent=open?\'' + ARROW_DOWN + '\':\'' + ARROW_RIGHT + '\';})()">' +
                         '<td style="white-space:nowrap;padding:6px 10px;">' +
                             '<span id="' + arrowId + '" style="font-size:10px;color:var(--text-dim);display:inline-block;width:10px;">' + ARROW_RIGHT + '</span> ' +
@@ -3380,7 +3380,7 @@ function renderJobsMain() {
             container.innerHTML = titleHTML +
                 '<div style="border:1px solid var(--border,#333);border-radius:10px;overflow-x:auto;background:var(--card-bg,#0f0f1e);">' +
                     '<table style="width:100%;border-collapse:collapse;table-layout:auto;">' +
-                        '<thead style="background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border,#333);"><tr>' +
+                        '<thead style="background:var(--overlay-light,rgba(255,255,255,0.02));border-bottom:1px solid var(--border,#333);"><tr>' +
                             thCell('Subcontractor', 'left') +
                             thCell('Trade', 'left') +
                             thCell('Contract', 'right') +

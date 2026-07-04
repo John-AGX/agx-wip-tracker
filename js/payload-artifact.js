@@ -19,11 +19,14 @@
   // Card styling shared across instances — keep visual cohesion with
   // existing approval cards in ai-panel.js. Dark theme aware (uses
   // CSS var --surface where the panel sets it).
+  // Colors route through the theme vars (dark values as fallbacks) so cards
+  // read correctly in light mode too — the raw white-alpha fills + light text
+  // were invisible on a white panel.
   const CARD_CSS = {
     container:
-      'border:1px solid rgba(255,255,255,0.10);background:rgba(255,255,255,0.03);' +
+      'border:1px solid var(--border,rgba(255,255,255,0.10));background:var(--overlay-light,rgba(255,255,255,0.03));' +
       'border-radius:10px;padding:12px 14px;margin:8px 0;font-size:12.5px;' +
-      'color:#e6e6e6;display:flex;flex-direction:column;gap:8px;' +
+      'color:var(--text,#e6e6e6);display:flex;flex-direction:column;gap:8px;' +
       'transition:background 0.15s, border-color 0.15s;user-select:none;',
     containerApplied:
       'border-color:rgba(46,204,113,0.45);background:rgba(46,204,113,0.06);',
@@ -39,30 +42,30 @@
       'flex:1;min-width:0;',
     filename:
       'font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11.5px;' +
-      'color:rgba(255,255,255,0.92);word-break:break-all;line-height:1.3;',
+      'color:var(--text,rgba(255,255,255,0.92));word-break:break-all;line-height:1.3;',
     meta:
-      'font-size:11px;color:rgba(255,255,255,0.55);margin-top:2px;',
+      'font-size:11px;color:var(--text-dim,rgba(255,255,255,0.55));margin-top:2px;',
     title:
-      'font-size:13px;font-weight:600;color:#fff;margin-bottom:1px;',
+      'font-size:13px;font-weight:600;color:var(--text,#fff);margin-bottom:1px;',
     badge:
       'display:inline-block;padding:2px 7px;border-radius:10px;font-size:10.5px;' +
       'font-weight:600;letter-spacing:0.3px;text-transform:uppercase;',
     badgeReady:    'background:rgba(79,140,255,0.18);color:#9bbcff;',
     badgeApplied:  'background:rgba(46,204,113,0.22);color:#7ee2a5;',
     badgeRejected: 'background:rgba(231,76,60,0.20);color:#f0a59e;',
-    badgeExpired:  'background:rgba(255,255,255,0.10);color:rgba(255,255,255,0.55);',
+    badgeExpired:  'background:var(--surface2,rgba(255,255,255,0.10));color:var(--text-dim,rgba(255,255,255,0.55));',
     badgeFailed:   'background:rgba(231,76,60,0.30);color:#ffb4ad;',
     rationale:
-      'font-size:11.5px;color:rgba(255,255,255,0.62);line-height:1.4;' +
-      'border-left:2px solid rgba(255,255,255,0.10);padding-left:8px;margin-top:2px;',
+      'font-size:11.5px;color:var(--text-dim,rgba(255,255,255,0.62));line-height:1.4;' +
+      'border-left:2px solid var(--border,rgba(255,255,255,0.10));padding-left:8px;margin-top:2px;',
     actionsRow:
       'display:flex;gap:6px;flex-wrap:wrap;',
     btn:
-      'background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);' +
-      'color:#e6e6e6;border-radius:6px;padding:5px 10px;font-size:11.5px;' +
+      'background:var(--overlay-light,rgba(255,255,255,0.06));border:1px solid var(--border,rgba(255,255,255,0.12));' +
+      'color:var(--text,#e6e6e6);border-radius:6px;padding:5px 10px;font-size:11.5px;' +
       'cursor:pointer;transition:background 0.12s, border-color 0.12s;',
     btnHover:
-      'background:rgba(255,255,255,0.10);border-color:rgba(255,255,255,0.20);',
+      'background:var(--row-hover,rgba(255,255,255,0.10));border-color:var(--accent-dim,rgba(255,255,255,0.20));',
     btnPrimary:
       'background:rgba(46,204,113,0.16);border:1px solid rgba(46,204,113,0.45);' +
       'color:#7ee2a5;border-radius:6px;padding:5px 12px;font-size:11.5px;' +
