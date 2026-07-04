@@ -12,6 +12,8 @@
 const express = require('express');
 const { pool } = require('../db');
 const { requireAuth, requireCapability } = require('../auth');
+// Training flywheel — admin normalization overrides become examples (PUT /:id).
+const { captureExample, TASKS } = require('../services/training-capture');
 
 const router = express.Router();
 
@@ -422,6 +424,20 @@ router.put('/:id', requireAuth, requireCapability('ROLES_MANAGE'), async (req, r
       }
     }
     if (!sets.length) return res.json({ ok: true, unchanged: true });
+    // Normalization-field edits become training examples (raw vendor text →
+    // human-corrected clean form). Read the pre-edit machine values first —
+    // UPDATE..RETURNING only yields post-update values.
+    const NORMALIZE_FIELDS = ['description', 'agx_subgroup', 'category', 'unit'];
+    const touchesNormalize = NORMALIZE_FIELDS.some((k) => Object.prototype.hasOwnProperty.call(req.body, k));
+    let prior = null;
+    if (touchesNormalize) {
+      const pr = await pool.query(
+        `SELECT raw_description, description, agx_subgroup, category, unit, hd_department, hd_class, hd_subclass, vendor
+           FROM materials WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)`,
+        [req.params.id, req.user.organization_id]
+      );
+      prior = pr.rows[0] || null;
+    }
     sets.push('manual_override = true');
     sets.push('updated_at = NOW()');
     params.push(req.params.id);
@@ -429,6 +445,31 @@ router.put('/:id', requireAuth, requireCapability('ROLES_MANAGE'), async (req, r
     // SAFE: column names iterate the hardcoded `allowed` array above (description / agx_subgroup / category / unit / is_hidden / notes).
     await pool.query(`UPDATE materials SET ${sets.join(', ')} WHERE id = $${p} AND (organization_id = $${p + 1} OR organization_id IS NULL)`, params);
     res.json({ ok: true });
+    if (prior && prior.raw_description) {
+      const finals = {};
+      NORMALIZE_FIELDS.forEach((k) => {
+        finals[k] = Object.prototype.hasOwnProperty.call(req.body, k) ? req.body[k] : prior[k];
+      });
+      captureExample({
+        // Latest correction wins per material: timestamped id (no dedupe) —
+        // an admin refining twice yields two examples, both real signal.
+        orgId: req.user.organization_id,
+        task: TASKS.MATERIAL_NORMALIZE,
+        sourceKind: 'material',
+        sourceId: String(req.params.id),
+        input: {
+          raw_description: prior.raw_description,
+          vendor: prior.vendor || null,
+          hd_department: prior.hd_department || null,
+          hd_class: prior.hd_class || null,
+          hd_subclass: prior.hd_subclass || null
+        },
+        modelOutput: { description: prior.description, agx_subgroup: prior.agx_subgroup, category: prior.category, unit: prior.unit },
+        humanFinal: finals,
+        accepted: false, // an override IS a correction by definition
+        model: null // current normalizer is deterministic (cleanDescription), not a model
+      });
+    }
   } catch (e) {
     console.error('PUT /api/materials/:id error:', e);
     res.status(500).json({ error: e.message || 'Server error' });

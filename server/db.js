@@ -1872,6 +1872,60 @@ async function initSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_receipt_ocr_fb_org ON receipt_ocr_feedback(organization_id);
 
+    -- AI training examples — the proprietary-model flywheel. One row per
+    -- (model output, human correction) pair captured anywhere in the app:
+    -- receipt OCR saves, Scribe payload approve/reject, lead extraction,
+    -- materials normalization overrides. Generalizes receipt_ocr_feedback:
+    -- input/model_output/human_final are task-shaped JSONB; accepted = the
+    -- human kept the model's output unchanged. Exported as JSONL via
+    -- GET /api/admin/agents/training-export to fine-tune small models
+    -- (see docs/proprietary-model-v1.md). Image BYTES never stored here —
+    -- refs (attachment ids) only.
+    CREATE TABLE IF NOT EXISTS ai_training_examples (
+      id TEXT PRIMARY KEY,
+      organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE,
+      task TEXT NOT NULL,              -- receipt_fields | cost_code | scribe_payload | lead_extract | material_normalize
+      source_kind TEXT,                -- originating table/flow (receipt_ocr_feedback, payload, ...)
+      source_id TEXT,                  -- id in the originating table (dedupe key basis)
+      input JSONB,
+      model_output JSONB,
+      human_final JSONB,
+      accepted BOOLEAN,                -- true = human kept the model output as-is
+      model TEXT,                      -- model that produced model_output (if known)
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_ai_training_examples_task ON ai_training_examples(task, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_ai_training_examples_org ON ai_training_examples(organization_id);
+
+    -- Idempotent backfill: every existing receipt_ocr_feedback row becomes
+    -- (a) a receipt_fields example and (b) a cost_code example when the code
+    -- was actually scored. Deterministic ids + ON CONFLICT DO NOTHING make
+    -- this safe to run every boot; original timestamps preserved so the
+    -- readiness trend reads true.
+    INSERT INTO ai_training_examples
+      (id, organization_id, task, source_kind, source_id, input, model_output, human_final, accepted, model, created_at)
+    SELECT 'tex_' || fb.id || '_fields', fb.organization_id, 'receipt_fields', 'receipt_ocr_feedback', fb.id,
+           jsonb_strip_nulls(jsonb_build_object('receipt_id', fb.receipt_id, 'image_ref', r.attachment_id)),
+           jsonb_strip_nulls(jsonb_build_object('vendor', fb.ocr_vendor, 'date', fb.ocr_date, 'cost_code', fb.ocr_cost_code, 'amount', fb.ocr_amount)),
+           jsonb_strip_nulls(jsonb_build_object('vendor', fb.final_vendor, 'date', fb.final_date, 'cost_code', fb.final_cost_code, 'amount', fb.final_amount)),
+           (COALESCE(fb.vendor_ok, TRUE) AND COALESCE(fb.date_ok, TRUE) AND COALESCE(fb.cost_code_ok, TRUE) AND COALESCE(fb.amount_ok, TRUE)),
+           'claude-haiku-4-5', fb.created_at
+      FROM receipt_ocr_feedback fb
+      LEFT JOIN receipts r ON r.id = fb.receipt_id
+    ON CONFLICT (id) DO NOTHING;
+
+    INSERT INTO ai_training_examples
+      (id, organization_id, task, source_kind, source_id, input, model_output, human_final, accepted, model, created_at)
+    SELECT 'tex_' || fb.id || '_code', fb.organization_id, 'cost_code', 'receipt_ocr_feedback', fb.id,
+           jsonb_strip_nulls(jsonb_build_object('receipt_id', fb.receipt_id, 'vendor', fb.final_vendor, 'date', fb.final_date, 'amount', fb.final_amount, 'image_ref', r.attachment_id)),
+           jsonb_build_object('cost_code', fb.ocr_cost_code),
+           jsonb_build_object('cost_code', fb.final_cost_code),
+           fb.cost_code_ok, 'claude-haiku-4-5', fb.created_at
+      FROM receipt_ocr_feedback fb
+      LEFT JOIN receipts r ON r.id = fb.receipt_id
+     WHERE fb.ocr_cost_code IS NOT NULL AND fb.cost_code_ok IS NOT NULL
+    ON CONFLICT (id) DO NOTHING;
+
     -- Cost categories — org-defined non-job coding buckets a receipt can link to
     -- instead of a job/lead (entity_type='category', entity_id=cost_categories.id):
     -- Tools, Overhead, Fuel, etc. "Tools" is lazily seeded on first list. The

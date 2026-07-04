@@ -979,6 +979,7 @@
 
   function clearEditor() {
     _pickedGeo = null; // drop any address picked in a prior editor session
+    _pendingLeadExtraction = null; // drop any AI-extracted prefill from a prior session
     EDITABLE_FIELDS.forEach(function(f) { setField(f, ''); });
     setField('status', 'new');
     setField('confidence', 0);
@@ -2501,11 +2502,16 @@
     statusEl.style.color = 'var(--text-dim,#888)';
     statusEl.textContent = 'Saving…';
 
+    // New lead that started from a PDF extraction: ride the raw AI output
+    // along so the server can log extraction-vs-saved (training example).
+    if (!id && _pendingLeadExtraction) payload.extraction = _pendingLeadExtraction;
+
     var p = id
       ? window.p86Api.leads.update(id, payload)
       : window.p86Api.leads.create(payload);
 
     p.then(function() {
+      _pendingLeadExtraction = null;
       statusEl.style.color = '#34d399';
       statusEl.textContent = 'Saved.';
       setTimeout(function() {
@@ -2838,6 +2844,10 @@
         return window.p86Api.ai.extractLead(images);
       }).then(function(res) {
         if (!res || !res.lead) throw new Error('Empty response from AI.');
+        // Hold the raw extraction so the create POST can carry it — the
+        // server logs extraction-vs-saved as a training example (same
+        // pattern as receipts' b.ocr). Cleared by clearEditor()/save.
+        _pendingLeadExtraction = res.lead;
         prefillFromExtractedLead(res.lead);
         setPdfStatus('✓ Fields prefilled from PDF — review and save below.', '#34d399');
       }).catch(function(err) {

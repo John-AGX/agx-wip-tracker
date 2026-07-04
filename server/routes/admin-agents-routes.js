@@ -198,10 +198,69 @@ router.get('/metrics',
     `;
     const modelRes = await pool.query(modelSql, [ENTITY_TYPES_FOR_86]);
 
-    // Phase 3 subtask rollup retired — fan-out replaced by native
-    // parallel tool calls within one session. The ai_subtasks table
-    // is preserved for historical reads but no longer populated.
-    const sub = { total: 0, completed: 0, failed: 0, in_flight: 0, input_tokens: 0, output_tokens: 0 };
+    // Background tasks (agent_jobs) — the ACTUAL biggest token consumer
+    // (headless runs roll tokens up per job, not per ai_messages row).
+    const bgSql = `
+      SELECT
+        COUNT(*)::int                                                    AS jobs,
+        COUNT(*) FILTER (WHERE status = 'done')::int                     AS done,
+        COUNT(*) FILTER (WHERE status = 'failed')::int                   AS failed,
+        COUNT(*) FILTER (WHERE status = 'needs_input')::int              AS needs_input,
+        COUNT(*) FILTER (WHERE status IN ('queued','running'))::int      AS active,
+        COALESCE(SUM(input_tokens), 0)::bigint                           AS input_tokens,
+        COALESCE(SUM(output_tokens), 0)::bigint                          AS output_tokens,
+        COALESCE(SUM(cache_creation_tokens), 0)::bigint                  AS cache_creation,
+        COALESCE(SUM(cache_read_tokens), 0)::bigint                      AS cache_read
+      FROM agent_jobs
+      WHERE organization_id = $1
+        AND created_at >= NOW() - INTERVAL '${range}'
+    `;
+    const bgRes = await pool.query(bgSql, [orgId]);
+    const bg = bgRes.rows[0] || {};
+    const bgTopRes = await pool.query(`
+      SELECT id, title, status, agent_key, created_at,
+             (input_tokens + cache_creation_tokens + cache_read_tokens)::bigint AS total_in,
+             output_tokens
+        FROM agent_jobs
+       WHERE organization_id = $1
+         AND created_at >= NOW() - INTERVAL '${range}'
+       ORDER BY total_in DESC
+       LIMIT 5
+    `, [orgId]);
+
+    // Scribe drafts (payloads) — approve/reject funnel over the window.
+    const draftsRes = await pool.query(`
+      SELECT
+        COUNT(*)::int                                              AS total,
+        COUNT(*) FILTER (WHERE status = 'applied')::int            AS applied,
+        COUNT(*) FILTER (WHERE status = 'rejected')::int           AS rejected,
+        COUNT(*) FILTER (WHERE status = 'ready')::int              AS ready,
+        COUNT(*) FILTER (WHERE status IN ('apply_failed','failed'))::int AS failed
+      FROM payloads
+      WHERE organization_id = $1
+        AND created_at >= NOW() - INTERVAL '${range}'
+    `, [orgId]);
+    const drafts = draftsRes.rows[0] || {};
+
+    // Escalations (assistant → 86) + unmetered turns (usage never landed —
+    // stream drops / crashes; keeps the token totals honest).
+    const escRes = await pool.query(`
+      SELECT COUNT(*)::int AS n
+        FROM ai_messages
+       WHERE created_at >= NOW() - INTERVAL '${range}'
+         AND role = 'assistant'
+         AND tool_uses IS NOT NULL AND jsonb_typeof(tool_uses) = 'array'
+         AND EXISTS (
+           SELECT 1 FROM jsonb_array_elements(tool_uses) tu
+            WHERE tu->>'name' = 'escalate_to_86'
+         )
+    `);
+    const unmeteredRes = await pool.query(`
+      SELECT COUNT(*)::int AS n
+        FROM ai_messages
+       WHERE created_at >= NOW() - INTERVAL '${range}'
+         AND role = 'assistant' AND input_tokens IS NULL
+    `);
 
     // Phase 4 — memory counts (active + recently saved).
     const memorySql = `
@@ -215,30 +274,7 @@ router.get('/metrics',
     const memoryRes = await pool.query(memorySql, [orgId]);
     const mem = memoryRes.rows[0] || {};
 
-    // Phase 5 — watch configuration + run rollup.
-    const watchSql = `
-      SELECT
-        COUNT(*) FILTER (WHERE enabled = true AND archived_at IS NULL)::int AS active,
-        COUNT(*) FILTER (WHERE archived_at IS NULL)::int                    AS configured
-      FROM ai_watches
-      WHERE organization_id = $1
-    `;
-    const watchRes = await pool.query(watchSql, [orgId]);
-    const watch = watchRes.rows[0] || {};
-
-    const watchRunsSql = `
-      SELECT
-        COUNT(*)::int                                       AS runs,
-        COUNT(*) FILTER (WHERE status = 'completed')::int   AS completed,
-        COUNT(*) FILTER (WHERE status = 'failed')::int      AS failed,
-        COALESCE(SUM(input_tokens),  0)::bigint             AS input_tokens,
-        COALESCE(SUM(output_tokens), 0)::bigint             AS output_tokens
-      FROM ai_watch_runs
-      WHERE organization_id = $1
-        AND triggered_at >= NOW() - INTERVAL '${range}'
-    `;
-    const watchRunsRes = await pool.query(watchRunsSql, [orgId]);
-    const watchRuns = watchRunsRes.rows[0] || {};
+    // (Watches removed 2026-07-03 — feature retired, zero runs ever.)
 
     // MCP servers — Phase 6.
     const mcpSql = `
@@ -251,26 +287,42 @@ router.get('/metrics',
     const mcpRes = await pool.query(mcpSql, [orgId]);
     const mcp = mcpRes.rows[0] || {};
 
-    // Compose the rich 86 payload.
-    const models = modelRes.rows.map(r => ({
-      model: r.model,
-      turns: Number(r.turns),
-      input_tokens: Number(r.input_tokens),
-      output_tokens: Number(r.output_tokens),
-      cost_usd: costFor(r.model, r.input_tokens, r.output_tokens)
-    }));
-    const totalCost = models.reduce((s, m) => s + (m.cost_usd || 0), 0);
-    const subtaskCost = 0; // Phase 3 subtasks retired — fan-out replaced by native parallel tool calls.
-    // Watch runs execute on the live default model — price them with it
-    // (not a pinned version) so the cost tracks model upgrades. aiInternals
-    // is lazily required (it isn't in scope in this handler); fall back to
-    // the current default string if the internals module isn't wired.
-    let watchModel = 'claude-opus-4-8';
-    try {
-      const ai = require('./ai-routes-internals');
-      if (ai && typeof ai.defaultModel === 'function') watchModel = ai.defaultModel();
-    } catch (_) { /* keep fallback */ }
-    const watchCost = costFor(watchModel, watchRuns.input_tokens, watchRuns.output_tokens);
+    // Cache-aware cost: input at the model rate, cache WRITES at 1.25x
+    // input, cache READS at 0.10x input, output at the output rate.
+    // This is what the Anthropic invoice actually charges — the old
+    // input+output-only math understated writes and ignored reads.
+    const cacheCost = (model, inTok, outTok, cw, cr) => {
+      const rate = MODEL_COSTS[model] || DEFAULT_MODEL_COST;
+      const usd = (Number(inTok || 0) * rate.in
+        + Number(cw || 0) * rate.in * 1.25
+        + Number(cr || 0) * rate.in * 0.10) / 1e6
+        + (Number(outTok || 0) * rate.out) / 1e6;
+      return Math.round(usd * 100) / 100;
+    };
+
+    // Compose the rich 86 payload. Chat cost is cache-aware but the
+    // per-model SQL doesn't split cache classes per model — apportion
+    // the org-wide cache totals by each model's share of direct input.
+    const totalDirectIn = modelRes.rows.reduce((s, r) => s + Number(r.input_tokens || 0), 0) || 1;
+    const models = modelRes.rows.map(r => {
+      const share = Number(r.input_tokens || 0) / totalDirectIn;
+      return {
+        model: r.model,
+        turns: Number(r.turns),
+        input_tokens: Number(r.input_tokens),
+        output_tokens: Number(r.output_tokens),
+        cost_usd: cacheCost(
+          r.model, r.input_tokens, r.output_tokens,
+          Number(agg.cache_creation_tokens || 0) * share,
+          Number(agg.cache_read_tokens || 0) * share
+        )
+      };
+    });
+    const totalCost = Math.round(models.reduce((s, m) => s + (m.cost_usd || 0), 0) * 100) / 100;
+
+    // Background-task cost — jobs run on their own agent (Sonnet after the
+    // Scribe-executor cutover; Opus before it). Price at the scribe model.
+    const bgCost = cacheCost(SCRIBE_MODEL, bg.input_tokens, bg.output_tokens, bg.cache_creation, bg.cache_read);
 
     const cacheReads = Number(agg.cache_read_tokens || 0);
     const directInputs = Number(agg.input_tokens || 0);
@@ -303,29 +355,40 @@ router.get('/metrics',
       })),
       tools_top: toolRes.rows.map(r => ({ name: r.tool_name, uses: Number(r.uses) })),
       models,
-      subtasks: {
-        total: Number(sub.total || 0),
-        completed: Number(sub.completed || 0),
-        failed: Number(sub.failed || 0),
-        in_flight: Number(sub.in_flight || 0),
-        input_tokens: Number(sub.input_tokens || 0),
-        output_tokens: Number(sub.output_tokens || 0),
-        cost_usd: subtaskCost
+      // Background tasks — the headless agent_jobs runs (research, audits,
+      // Excel/PDF generation). These tokens never hit ai_messages, so this
+      // block is what makes the card match the Anthropic console.
+      background: {
+        jobs: Number(bg.jobs || 0),
+        done: Number(bg.done || 0),
+        failed: Number(bg.failed || 0),
+        needs_input: Number(bg.needs_input || 0),
+        active: Number(bg.active || 0),
+        input_tokens: Number(bg.input_tokens || 0),
+        output_tokens: Number(bg.output_tokens || 0),
+        cache_creation: Number(bg.cache_creation || 0),
+        cache_read: Number(bg.cache_read || 0),
+        cost_usd: bgCost,
+        top: bgTopRes.rows.map(r => ({
+          id: r.id, title: r.title, status: r.status, agent_key: r.agent_key,
+          created_at: r.created_at, total_in: Number(r.total_in || 0),
+          output_tokens: Number(r.output_tokens || 0)
+        }))
       },
+      // Scribe drafts — the approve/reject funnel.
+      scribe_drafts: {
+        total: Number(drafts.total || 0),
+        applied: Number(drafts.applied || 0),
+        rejected: Number(drafts.rejected || 0),
+        ready: Number(drafts.ready || 0),
+        failed: Number(drafts.failed || 0)
+      },
+      escalations: Number((escRes.rows[0] || {}).n || 0),
+      unmetered_turns: Number((unmeteredRes.rows[0] || {}).n || 0),
       memory: {
         active: Number(mem.active || 0),
         recent_saves: Number(mem.recent_saves || 0),
         recent_recalls: Number(mem.recent_recalls || 0)
-      },
-      watches: {
-        active: Number(watch.active || 0),
-        configured: Number(watch.configured || 0),
-        runs: Number(watchRuns.runs || 0),
-        runs_completed: Number(watchRuns.completed || 0),
-        runs_failed: Number(watchRuns.failed || 0),
-        input_tokens: Number(watchRuns.input_tokens || 0),
-        output_tokens: Number(watchRuns.output_tokens || 0),
-        cost_usd: watchCost
       },
       mcp_servers: {
         active: Number(mcp.active || 0),
@@ -1967,7 +2030,7 @@ const AGENT_SYSTEM_BASELINE = {
     '  • If a single turn has fired 5+ tool calls, STOP and either summarize or ask the user one question. More tool calls past that point rarely add value.',
     '',
     '# Writing — delegate to the Scribe (`scribe_write`)',
-    'You do NOT author writes yourself. To change anything — field updates, line-item edits, phase changes, change orders, lead/client creates, schedule blocks, reports, watch/skill/field-tool config, etc. — call `scribe_write` with a plain-words `instruction`. A separate cheap write agent (the Scribe) turns it into the actual change, dry-runs it, and the user gets a review/approve card.',
+    'You do NOT author writes yourself. To change anything — field updates, line-item edits, phase changes, change orders, lead/client creates, schedule blocks, reports, skill/field-tool config, etc. — call `scribe_write` with a plain-words `instruction`. The Scribe turns it into the actual change and dry-runs it. APPROVALS LIVE IN THE CONVERSATION: state exactly what will change; when the user plainly confirms it ("yes", "do it"), pass approved:true — the Scribe applies it directly and the user gets an "Applied" notification, no card. Without clear confirmation, leave approved off and they get the review/approve card. Deletes and system/config changes ALWAYS card.',
     'The Scribe has NO read access — it sees ONLY your `instruction`. So make it COMPLETE and unambiguous: resolve the entity_type + entity_id with your reads FIRST, then state exactly what to change (the fields/values) and any current values relevant to the edit. One scribe_write per change.',
     'Ambiguity: if a user reference matches multiple entities, ASK which one — do NOT guess.',
     'Do NOT pre-narrate ("I\'ll update…"). Call scribe_write and stop; the card speaks for itself.',
@@ -2009,9 +2072,15 @@ const AGENT_SYSTEM_BASELINE = {
   // it, self-corrects on validation errors, and returns the diff. It never
   // reads org data, never plans, never talks to the user. Runs on Sonnet.
   scribe: [
-    'You are the Scribe — the write-only worker for 86. You receive an approved, fully-specified change plus a snapshot of the target entity\'s current state, and you emit EXACTLY ONE `emit_payload_file` payload that performs it. You do not read data, plan, or talk to the user. Output the payload tool call and nothing else — no prose, no preamble.',
+    'You are the Scribe — Project 86\'s shared execution worker. You operate in ONE of two modes, selected by the kickoff message:',
     '',
-    '# Rules',
+    '## Mode 1 — WRITE DRAFTING (default: the kickoff carries an `instruction` + a target-entity snapshot)',
+    'You receive an approved, fully-specified change plus a snapshot of the target entity\'s current state, and you emit EXACTLY ONE `emit_payload_file` payload that performs it. In this mode you do not read data, plan, or talk to the user. Output the payload tool call and nothing else — no prose, no preamble.',
+    '',
+    '## Mode 2 — BACKGROUND EXECUTOR (the kickoff says you are running as a BACKGROUND TASK)',
+    'The user handed you a bigger job to run on your own — research, audits, number-crunching, building Excel/PDF reports. Do the work: use read_entity / search_entities to pull org data, web_search / web_fetch for outside facts, and bash/Python (pandas, openpyxl, reportlab) for analysis and file generation. If you hit a genuine fork you cannot decide, call ask_user (you will be paused and resumed with the answer) — never for things you can look up or reasonably decide. Any data CHANGE still goes through emit_payload_file (never edit directly). Finish with ONE clear final message: what you found or produced, no conversational filler — the user reads it asynchronously.',
+    '',
+    '# Rules (Mode 1 drafting)',
     '- Address entities by their real `entity_id` (from the snapshot you were given) or a `$new_<name>` ref — NEVER by array index or position.',
     '- Do NOT invent fields. The dispatcher rejects unknown columns and lists the valid set in its error — use the exact keys from the snapshot / the vocabulary below.',
     '- If the plan is ambiguous or missing an id you need, return a one-line note saying what is missing instead of guessing.',
@@ -2050,18 +2119,18 @@ const AGENT_SYSTEM_BASELINE = {
     "You are the Assistant — a personal aide inside Project 86 for the signed-in user. You host the conversation: proactive, concise, and on top of the day. You help with the calendar, schedule, tasks, reminders, a daily rundown, finding jobs/people/info, and general questions — like a sharp executive assistant who happens to know the construction business.",
     '',
     '# How you work',
-    '- READ freely to answer (read_entity, search_entities, the schedule, attachments, the reference sheets). You only ever see what the signed-in user is allowed to see.',
-    '- Personal + work reads at your fingertips: the user\'s CALENDAR (read_calendar_events — for "what\'s on my calendar / today / this week"), reminders (read_reminders), production schedule (read_schedule_blocks), projects (read_projects), purchase orders (read_purchase_orders, read-only), and nearby jobs/leads (find_entities_near). Reach for these before saying you do not have something.',
+    '- READ freely to answer (read_entity, search_entities, the schedule, attachments). You only ever see what the signed-in user is allowed to see.',
+    '- Personal + work reads at your fingertips: the user\'s CALENDAR (read_calendar_events — for "what\'s on my calendar / today / this week"), reminders (read_reminders), production schedule (read_schedule_blocks), and nearby jobs/leads (find_entities_near). Reach for these before saying you do not have something.',
     "- NEVER ASSUME — resolve before you act or answer. Look up the real entity_type + entity_id, current field values, names, dates, prices, and statuses with a READ first. If something is ambiguous or you cannot find it, ask ONE short clarifying question (or escalate) — do NOT guess ids, amounts, addresses, statuses, or which job/client/person the user means. A wrong assumption that writes data is worse than a quick question.",
     "- NEVER say records don't exist unless an actual UNFILTERED read came back empty. If a narrow or failed search returns nothing — a proximity search with no location, or a filtered query — that is NOT proof the system is empty. Run a plain `search_entities(entity_type)` with no filter and report what it returns. This org has real leads, jobs, clients, and estimates; \"I can't find any leads\" is almost always a too-narrow query, not an empty system. You DO have full read access to all of them — never tell the user you lack a search tool or can't see their data.",
-    '- To CHANGE anything, you do NOT edit data yourself — you hand a fully-specified change to the Scribe via `scribe_write`. For the user\'s OWN calendar events, personal to-dos, and reminders, the change COMMITS IMMEDIATELY with no approval card — just make it and read the result back to confirm. For everything else (estimates, jobs, tasks assigned to other staff, etc.) the Scribe dry-runs it and the user gets an approve/reject card. When EDITING an existing record, resolve its entity_type + entity_id from your reads FIRST, then describe the change in plain words including every field and value to set.',
+    '- To CHANGE anything, you do NOT edit data yourself — you hand a fully-specified change to the Scribe via `scribe_write`. APPROVALS LIVE IN THE CONVERSATION: state exactly what will change; when the user plainly says yes to it, call scribe_write with approved:true — it applies directly and they get an "Applied" notification (no card). If they have not clearly confirmed, leave approved off and they get a review card. The user\'s OWN calendar events, personal to-dos, and reminders always commit card-free. Deletes and system/config changes ALWAYS get a card. When EDITING an existing record, resolve its entity_type + entity_id from your reads FIRST, then describe the change in plain words including every field and value to set.',
     '- SCHEDULING is first-class and does NOT require a job. To add a calendar event or appointment use scribe_write entity_type:`calendar_event`; for a reminder use a `calendar_event` (timed, set reminder_minutes) or a `task` (date-only). These are created standalone for the user by default — you do NOT need a job, client, or any other record. ONLY link them when the item is about a specific record: add fields.entity_type + fields.entity_id and DEFAULT to the CLIENT when it concerns a property/relationship, the JOB for active work. Never refuse a reminder/event for lack of a job.',
     '- Use memory (remember / recall) to keep the user\'s preferences, routines, and people straight across days. A good assistant remembers.',
     '- LOCATION + "near me": if page_context carries `user_location`, use it with find_entities_near to answer "what\'s near me", surface nearby jobs/leads, and reason about travel / the next stop. If user_location is ABSENT you simply cannot sort by distance — that means "I can\'t rank by distance," NEVER "there is nothing." Do one of: ask the user for a city or zip and search that, OR fall back to a plain search_entities and list what exists. Do not silently assume where they are.',
     '- Be brief. Lead with the answer, then offer the next useful step. Do not narrate your tool use.',
     '',
     '# Your lane',
-    "You're capable, but you are NOT the estimator/analyst. For DEEP business reasoning — estimating, WIP, job-costing, margins, scope analysis, pricing, anything needing heavy number-crunching or construction judgment — hand it to 86 with `escalate_to_86` (frame the ask + the resolved entity ids + any figures you already pulled). 86 reasons and answers; you relay it in your own words. 86 does NOT write during an escalation, so if its answer implies a change, YOU apply it via scribe_write. Keep your own analysis light and factual — escalate the heavy lifting rather than winging it.",
+    "You're capable, but you are NOT the estimator/analyst — you are the front door. Your OWN tools cover the personal core: finding records, the calendar/schedule/reminders, the user's mail, memory, and quick web lookups. For BUSINESS tooling and analysis — receipts/Cost Inbox, purchase orders, projects, workflow items (RFIs/submittals), compliance, reference sheets, estimating, WIP, job-costing, margins, scope, pricing — you do NOT have those tools: hand the ask to 86 with `escalate_to_86` (frame it + the resolved entity ids + anything you already pulled), or queue it as a background task for bigger work. Escalating is the NORMAL move, not a failure — do it early rather than improvising. 86 reasons and answers; you relay it in your own words. 86 does NOT write during an escalation, so if its answer implies a change, YOU apply it via scribe_write.",
   ].join('\n'),
 
   // Legacy 'ag' / 'cra' / 'staff' alias shims removed 2026-07-03 — the
@@ -2250,9 +2319,16 @@ async function collectSkillsFor(agentKey, organization) {
 // Persistent writes against org data ALWAYS route through the
 // custom tool emit_payload_file — the sandbox is throwaway.
 function builtinToolsetFor(agentKey) {
-  // The Scribe is a write-only worker — it never authors files, runs code,
-  // or browses the web. No agent toolset bundle (bash/write/web) for it.
-  if (agentKey === 'scribe') return [];
+  // The Scribe is the shared writer AND (2026-07-03) THE background-task
+  // executor — research, audits, Excel/PDF generation all run on it now
+  // (Sonnet ≈ half the Opus rate). It gets the full sandbox bundle
+  // (web_search/web_fetch + bash/Python + read/write) like 86.
+  // NOTE: with a `read` tool present, the skills read-gate is satisfied —
+  // but Scribe deliberately keeps 0 skills (collectSkillsFor short-circuit).
+  if (agentKey === 'scribe') return [{
+    type: 'agent_toolset_20260401',
+    default_config: { enabled: true }
+  }];
   // The Assistant (personal aide) likewise needs NO sandbox/web bundle: it
   // delegates ALL writes to the Scribe and escalates research/analysis to 86.
   // The 8-tool agent_toolset_20260401 schema was ~30k cached tokens of dead
@@ -2307,20 +2383,33 @@ function modelForAgentKey(agentKey) {
 function customToolsFor(agentKey, opts) {
   const aiInternals = require('./ai-routes-internals');
   if (!aiInternals) return [];
-  // Scribe — the write-only worker. ONE custom tool: emit_payload_file.
-  // No reads, memory, navigate, or builtin toolset. 86 plans + hands off a
-  // fully-specified write intent; the Scribe authors the payload, dry-runs
-  // it, and returns the diff.
+  // Scribe — the shared writer AND the background-task executor
+  // (2026-07-03 cutover: all agent_jobs run on the Scribe/Sonnet).
+  // Tools: emit_payload_file (the write primitive), read_entity +
+  // search_entities (executor runs need to see the data they're
+  // working), and ask_user (pause-&-ask inside background tasks).
+  // The kickoff prompt selects the mode — the strict "author ONE
+  // payload" contract still governs scribe_write drafting runs.
   if (agentKey === 'scribe') {
-    const payloadDefs = (aiInternals.payloadTools ? aiInternals.payloadTools() : []);
+    const SCRIBE_TOOL_NAMES = new Set([
+      'emit_payload_file', 'read_entity', 'search_entities', 'ask_user'
+    ]);
+    const seenS = new Set();
+    const mergedS = [];
+    [
+      ...(aiInternals.payloadTools ? aiInternals.payloadTools() : []),
+      ...(aiInternals.readTools ? aiInternals.readTools() : []),
+      ...aiInternals.jobTools()
+    ].forEach(t => {
+      if (!t || !t.name || seenS.has(t.name)) return;
+      if (!SCRIBE_TOOL_NAMES.has(t.name)) return;
+      seenS.add(t.name);
+      mergedS.push(t);
+    });
     // .map(toCustomToolParam) is REQUIRED — it shapes the raw tool def into
     // the {type:'custom', name, description, input_schema} the Agents API
-    // expects. The shared return at the bottom does this for the job branch;
-    // this early return must do it too, or agents.create rejects the Scribe
-    // with "tool definition missing its type field".
-    return payloadDefs
-      .filter(t => t && t.name === 'emit_payload_file')
-      .map(toCustomToolParam);
+    // expects, or agents.create rejects the Scribe.
+    return mergedS.map(toCustomToolParam);
   }
   // Assistant — the personal aide that HOSTS the conversation (Haiku). Full
   // read surface + memory + navigate + the one write primitive (scribe_write,
@@ -2331,16 +2420,21 @@ function customToolsFor(agentKey, opts) {
   // after. Same candidate pool as the job branch, filtered to the assistant's
   // allowlist, so scribe_write + every read resolve identically.
   if (agentKey === 'assistant') {
+    // TRIMMED 2026-07-03 (John: "trim the assistant so she hands off to 86
+    // more often for the main tooling"). CUT → escalate_to_86 instead:
+    // read_receipts, search_reference_sheet, read_projects,
+    // read_purchase_orders, list_workflow_items, list_compliance_expiring,
+    // read_photo_comments, add_photo_comment. She keeps the personal core
+    // (entity resolution, calendar/reminders/schedule, memory, her Outlook
+    // lane, chat uploads, near-me) + surgical web + the handoffs.
     const ASSISTANT_TOOL_NAMES = new Set([
-      // Reads
-      'read_entity', 'search_entities', 'find_entities_near', 'search_reference_sheet', 'read_receipts', 'read_outlook_mail', 'read_outlook_message',
+      // Reads — entity resolution + her personal lanes
+      'read_entity', 'search_entities', 'find_entities_near', 'read_outlook_mail', 'read_outlook_message',
       'read_attachment_text', 'view_attachment_image',
       // Memory
       'remember', 'recall', 'list_memories', 'forget',
-      // Inline (photo comments, schedule read, personal reminders + calendar read)
-      'read_photo_comments', 'add_photo_comment', 'read_schedule_blocks', 'read_reminders', 'read_calendar_events',
-      // Projects + Purchase Orders (read-only)
-      'read_projects', 'read_purchase_orders',
+      // Personal domain (schedule read, reminders + calendar read)
+      'read_schedule_blocks', 'read_reminders', 'read_calendar_events',
       // Navigation
       'navigate',
       // Background tasks — hand a bigger task to the background worker
@@ -2349,8 +2443,6 @@ function customToolsFor(agentKey, opts) {
       'scribe_write',
       // Deep business reasoning — handed up to 86 (Opus)
       'escalate_to_86',
-      // Workflow + compliance reads
-      'list_workflow_items', 'list_compliance_expiring',
     ]);
     const seenA = new Set();
     const mergedA = [];

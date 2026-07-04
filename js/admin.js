@@ -6794,13 +6794,23 @@
   }
 
   // Unified 86 metrics card — one wide block with sections for activity,
-  // tokens & cache, surface mix, tools used, memory (Phase 4), watches
-  // (Phase 5), MCP connectors (Phase 6). Phase 3 sub-agent fan-out was
-  // retired; only those capability sections remain.
+  // tokens & cache, surface mix, tools used, background tasks (headless
+  // Scribe runner), memory (Phase 4), Scribe drafts, MCP connectors
+  // (Phase 6). Phase 3 sub-agent fan-out and Phase 5 proactive watches
+  // were retired; only the live capability sections remain.
   function render86MetricsCard(a) {
     var t = a.tokens || {};
     var cacheRatioPct = (t.cache_hit_ratio || 0) * 100;
     var totalInputFootprint = (t.input || 0) + (t.cache_read || 0);
+
+    // bigStat variant with an optional value color + hover tooltip, for
+    // the colored/annotated stats in the reworked metrics payload.
+    function statC(label, value, color, tooltip) {
+      return '<div' + (tooltip ? ' title="' + escapeHTML(tooltip) + '"' : '') + '>' +
+        '<div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#666);margin-bottom:2px;">' + escapeHTML(label) + '</div>' +
+        '<div style="font-size:20px;font-weight:700;color:' + (color || 'var(--text,#fff)') + ';line-height:1.2;">' + escapeHTML(String(value == null ? '—' : value)) + '</div>' +
+      '</div>';
+    }
 
     var surfaceRows = (a.surfaces || []).map(function(s) {
       return '<tr>' +
@@ -6835,8 +6845,46 @@
     }
 
     var mem = a.memory || {};
-    var wch = a.watches || {};
     var mcp = a.mcp_servers || {};
+    var bg = a.background || {};
+    var sd = a.scribe_drafts || {};
+    var unmetered = a.unmetered_turns || 0;
+
+    // Background tasks (headless Scribe runner) — compact top-jobs list.
+    var bgTopRows = (bg.top || []).map(function(j) {
+      var title = String(j.title || '(untitled)');
+      if (title.length > 60) title = title.slice(0, 60) + '…';
+      var d = j.created_at ? new Date(j.created_at) : null;
+      var dateStr = (d && !isNaN(d.getTime())) ? d.toLocaleDateString() : '';
+      return '<div style="font-size:11px;font-family:\'SF Mono\',monospace;color:var(--text-dim,#aaa);padding:2px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' +
+        '<span style="color:var(--text,#fff);">' + escapeHTML(title) + '</span>' +
+        ' — ' + escapeHTML(j.status || '?') +
+        ' · ' + tokFmt(j.total_in) + ' in / ' + tokFmt(j.output_tokens) + ' out' +
+        (dateStr ? ' · ' + dateStr : '') +
+      '</div>';
+    }).join('');
+
+    var bgBody;
+    if ((bg.jobs || 0) === 0) {
+      bgBody = '<div style="font-size:11px;color:var(--text-dim,#666);font-style:italic;">No background tasks in this window.</div>';
+    } else {
+      bgBody =
+        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;margin-bottom:12px;">' +
+          statC('Jobs', bg.jobs || 0) +
+          statC('Done', bg.done || 0) +
+          statC('Failed', bg.failed || 0, (bg.failed || 0) > 0 ? '#f87171' : null) +
+          statC('Needs you', bg.needs_input || 0, (bg.needs_input || 0) > 0 ? '#fbbf24' : null) +
+          statC('Running', bg.active || 0) +
+          statC('Est. cost', '$' + (bg.cost_usd || 0).toFixed(2)) +
+        '</div>' +
+        '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:10px 14px;font-size:12px;margin-bottom:10px;">' +
+          tokenStat('Input', bg.input_tokens) +
+          tokenStat('Output', bg.output_tokens) +
+          tokenStat('Cache writes', bg.cache_creation) +
+          tokenStat('Cache reads', bg.cache_read) +
+        '</div>' +
+        bgTopRows;
+    }
 
     return '<div style="background:linear-gradient(135deg,rgba(59,130,246,0.04),rgba(124,58,237,0.04));border:1px solid var(--border,#333);border-radius:10px;padding:18px;">' +
 
@@ -6855,7 +6903,9 @@
         bigStat('Unique users', a.unique_users) +
         bigStat('Tool uses', a.tool_uses) +
         bigStat('Photos attached', a.photos_attached) +
-        bigStat('Est. cost', '$' + (a.cost_usd || 0).toFixed(2)) +
+        statC('Escalations', a.escalations || 0, null, 'Assistant → 86 hand-ups') +
+        statC('Unmetered turns', unmetered, unmetered > 0 ? '#fbbf24' : 'var(--text-dim,#666)', 'assistant turns whose usage never landed (stream drops) — token totals exclude these') +
+        statC('Est. cost (cache-aware)', '$' + (a.cost_usd || 0).toFixed(2)) +
       '</div>' +
 
       // ── Section: Tokens & cache
@@ -6898,7 +6948,13 @@
         '</div>' +
       '</div>' +
 
-      // ── Section: capability summary (Phase 4 / 5 / 6)
+      // ── Section: Background tasks (headless Scribe runner)
+      '<div style="margin-bottom:18px;">' +
+        '<div style="font-size:10px;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#888);margin-bottom:8px;">Background tasks (Scribe)</div>' +
+        bgBody +
+      '</div>' +
+
+      // ── Section: capability summary (memory / Scribe drafts / MCP)
       '<div style="border-top:1px solid var(--border,#333);padding-top:14px;display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;">' +
         '<div>' +
           '<div style="font-size:11px;font-weight:600;color:#fbbf24;margin-bottom:4px;">&#x1F9E0; Long-term memory</div>' +
@@ -6910,12 +6966,14 @@
           '</div>' +
         '</div>' +
         '<div>' +
-          '<div style="font-size:11px;font-weight:600;color:#34d399;margin-bottom:4px;">&#x23F0; Proactive watches</div>' +
+          '<div style="font-size:11px;font-weight:600;color:#60a5fa;margin-bottom:4px;">&#x1F4DD; Scribe drafts</div>' +
           '<div style="font-size:11px;color:var(--text-dim,#aaa);line-height:1.55;">' +
-            (wch.active || 0) + ' active / ' + (wch.configured || 0) + ' configured<br>' +
-            (wch.runs || 0) + ' fires (' + (wch.runs_completed || 0) + ' ok, ' + (wch.runs_failed || 0) + ' failed)<br>' +
-            '<span style="color:var(--text-dim,#666);">Spend: ' + tokFmt((wch.input_tokens || 0) + (wch.output_tokens || 0)) + ' tokens' +
-            (wch.cost_usd != null ? ' · $' + wch.cost_usd.toFixed(2) : '') + '</span>' +
+            (sd.total || 0) + ' total · ' +
+            '<span style="color:#34d399;">' + (sd.applied || 0) + ' applied</span> · ' +
+            (sd.rejected || 0) + ' rejected<br>' +
+            '<span style="color:' + ((sd.ready || 0) > 0 ? '#fbbf24' : 'inherit') + ';">' + (sd.ready || 0) + ' awaiting</span> · ' +
+            '<span style="color:' + ((sd.failed || 0) > 0 ? '#f87171' : 'inherit') + ';">' + (sd.failed || 0) + ' failed</span><br>' +
+            '<span style="color:var(--text-dim,#666);">Structured writes drafted by 86 for approval</span>' +
           '</div>' +
         '</div>' +
         '<div>' +

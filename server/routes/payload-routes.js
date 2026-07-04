@@ -26,6 +26,39 @@ const express = require('express');
 const { pool } = require('../db');
 const { requireAuth, requireOrg, hasCapability } = require('../auth');
 const dispatcher = require('../services/payload-dispatcher');
+// Training flywheel — every approve/reject verdict on a Scribe-authored
+// payload is a labeled example (accepted true/false). Deterministic id
+// 'tex_pl_<payloadId>' + terminal statuses (applied XOR rejected) = at
+// most one example per payload, however many times a route re-fires.
+const { captureExample, TASKS } = require('../services/training-capture');
+
+// Capture the human verdict on a payload as a training example. Never
+// throws (captureExample swallows). `payload` needs targets/title/summary/
+// rationale/emitting_agent_key; pass what the route already fetched.
+function capturePayloadVerdict(orgId, payload, accepted, applySummary) {
+  const targets = Array.isArray(payload.targets) ? payload.targets : [];
+  const entityTypes = Array.from(new Set(
+    targets.map((t) => t && t.entity_type).filter(Boolean)
+  ));
+  captureExample({
+    id: 'tex_pl_' + payload.id,
+    orgId,
+    task: TASKS.SCRIBE_PAYLOAD,
+    sourceKind: 'payload',
+    sourceId: payload.id,
+    input: {
+      title: payload.title || null,
+      summary: payload.summary || null,
+      rationale: payload.rationale || null,
+      entity_types: entityTypes,
+      emitting_agent_key: payload.emitting_agent_key || null
+    },
+    modelOutput: { targets },
+    humanFinal: accepted ? { targets, apply_summary: applySummary || null } : null,
+    accepted,
+    model: payload.emitting_agent_key === 'scribe' ? 'claude-sonnet-4-6' : null
+  });
+}
 
 const router = express.Router();
 
@@ -166,13 +199,15 @@ router.post('/:id/reject', requireAuth, requireOrg, async (req, res) => {
           AND organization_id = $2
           AND (user_id = $3 OR user_id IS NULL)
           AND status IN ('ready', 'rejected')
-        RETURNING id, status`,
+        RETURNING id, status, targets, title, summary, rationale, emitting_agent_key`,
       [req.params.id, orgId, userId]
     );
     if (!r.rows.length) {
       return res.status(404).json({ error: 'Not found or wrong status' });
     }
-    res.json({ ok: true, payload: r.rows[0] });
+    // Rejection = a negative training example (deduped by payload id).
+    capturePayloadVerdict(orgId, r.rows[0], false, null);
+    res.json({ ok: true, payload: { id: r.rows[0].id, status: r.rows[0].status } });
   } catch (e) {
     console.error('[payloads] POST /:id/reject error:', e && e.stack || e);
     res.status(500).json({ error: 'Server error' });
@@ -372,6 +407,8 @@ router.post('/:id/apply', requireAuth, requireOrg, async (req, res) => {
           payload.id,
         ]
       );
+      // Approval = a positive training example (deduped by payload id).
+      capturePayloadVerdict(orgId, payload, true, result.apply_summary);
     }
 
     res.json({
@@ -388,11 +425,101 @@ router.post('/:id/apply', requireAuth, requireOrg, async (req, res) => {
   }
 });
 
+// ── Approve-in-chat helpers (2026-07-03) ──────────────────────────
+// isHighRiskPayload — payloads that must ALWAYS render an approval
+// card, even when the user already said "yes" in conversation:
+// anything that DELETES data, anything touching the `system` entity
+// (skills/tools/links config), and (when it lands) outbound sends.
+// Conservative string-scan over the targets JSONB: false negatives
+// auto-apply a destructive change, false positives just show a card —
+// so we err inclusive.
+function isHighRiskPayload(payload) {
+  try {
+    const targets = Array.isArray(payload.targets) ? payload.targets
+      : (typeof payload.targets === 'string' ? JSON.parse(payload.targets) : payload.targets);
+    if (!Array.isArray(targets)) return true; // malformed → card
+    for (const t of targets) {
+      if (!t) continue;
+      if (t.entity_type === 'system') return true;
+      const s = JSON.stringify(t.ops || {});
+      if (/"op"\s*:\s*"delete"/.test(s)) return true;                 // blocks/items with op:'delete'
+      if (/_deletes"\s*:\s*\[\s*[^\]\s]/.test(s)) return true;        // non-empty line_deletes / section_deletes / ...
+      if (/"(delete|remove)_[a-z_]*"\s*:\s*(\[\s*[^\]\s]|true)/.test(s)) return true;
+      if (/"send_email"|"outbound"|"mail_send"/.test(s)) return true; // future outbound kinds
+    }
+    return false;
+  } catch (_) {
+    return true; // unparseable → card
+  }
+}
+
+// applyPayloadForUser — server-side twin of POST /:id/apply for the
+// approve-in-chat flow (the user already confirmed in conversation;
+// the Scribe's detached draft run applies it directly). SAME safety
+// rails as the route: org+ownership row filter, ready/expiry checks,
+// denyPayloadApply capability gate, dispatcher real run, status +
+// changeset persist, training-verdict capture. `user` must carry
+// id / organization_id / role (a users-table row or req.user).
+async function applyPayloadForUser(user, payloadId) {
+  const orgId = user && user.organization_id;
+  const userId = user && user.id;
+  if (!orgId || !userId) return { ok: false, error: 'applyPayloadForUser requires a user with id + organization_id' };
+  const r = await pool.query(
+    `SELECT id, organization_id, user_id, source, emitting_agent_key,
+            filename, file_content, targets, title, summary, rationale,
+            status, expires_at
+       FROM payloads
+      WHERE id = $1 AND organization_id = $2 AND (user_id = $3 OR user_id IS NULL)`,
+    [payloadId, orgId, userId]
+  );
+  if (!r.rows.length) return { ok: false, error: 'Payload not found' };
+  const payload = r.rows[0];
+  if (payload.status !== 'ready') return { ok: false, error: 'Payload not in ready state (' + payload.status + ')' };
+  if (payload.expires_at && new Date(payload.expires_at) < new Date()) return { ok: false, error: 'Payload expired' };
+  const denial = await denyPayloadApply(user, payload);
+  if (denial) return { ok: false, error: denial };
+  let result;
+  try {
+    result = await dispatcher.applyPayload(payload, {
+      userId,
+      organizationId: orgId,
+      sourceAgent: payload.emitting_agent_key === 'job' ? '86' : (payload.emitting_agent_key || null),
+      dryRun: false,
+    });
+  } catch (err) {
+    const msg = (err && err.message) || String(err);
+    const isStructured = err && err.name === 'PayloadValidationError' && err.detail;
+    try {
+      await pool.query(
+        `UPDATE payloads SET status = 'failed', apply_error = $1, apply_error_detail = $2::jsonb
+          WHERE id = $3 AND status = 'ready'`,
+        [msg.slice(0, 1000), isStructured ? JSON.stringify(err.detail) : null, payload.id]
+      );
+    } catch (_) {}
+    return { ok: false, error: msg };
+  }
+  await pool.query(
+    `UPDATE payloads
+        SET status = 'applied', applied_at = NOW(), apply_summary = $1, apply_changeset = $2::jsonb
+      WHERE id = $3`,
+    [
+      result.apply_summary,
+      (Array.isArray(result.apply_changeset) && result.apply_changeset.length)
+        ? JSON.stringify(result.apply_changeset) : null,
+      payload.id,
+    ]
+  );
+  capturePayloadVerdict(orgId, payload, true, result.apply_summary);
+  return { ok: true, apply_summary: result.apply_summary, affected_targets: result.affected_targets };
+}
+
 // Export internals for cross-file imports (ai-routes will pull these
 // when wiring emit_payload_file in C4). The dispatcher module is the
 // canonical source for PAYLOAD_OPS_SCHEMAS and validateOps — we just
 // re-expose them here so callers have one require() target.
 module.exports = router;
+module.exports.isHighRiskPayload = isHighRiskPayload;
+module.exports.applyPayloadForUser = applyPayloadForUser;
 module.exports.internals = {
   PAYLOAD_OPS_SCHEMAS: dispatcher.PAYLOAD_OPS_SCHEMAS,
   validateOps: dispatcher.validateOps,

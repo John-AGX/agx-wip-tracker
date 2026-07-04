@@ -3,6 +3,8 @@ const { pool } = require('../db');
 const { requireAuth, requireCapability } = require('../auth');
 const { sendForEvent } = require('../email');
 const { geocodeAddress, geocodeViaGoogle, geocodeViaCensus } = require('../geocoder');
+// Training flywheel — PDF-extraction-vs-saved pairs (see POST / create).
+const { captureExample, TASKS } = require('../services/training-capture');
 
 // ── Lead geocoding (for the leads map view) ─────────────────────────
 // Compose a one-line address from the lead's address fields. Returns null
@@ -164,6 +166,28 @@ router.post('/', requireAuth, requireCapability('LEADS_EDIT'), async (req, res) 
     // Skip when the client already supplied real (Places-picked) coords.
     if (LEAD_ADDRESS_FIELDS.some(k => fields[k]) && fields.geocode_lat == null) {
       geocodeLead(id).catch(() => {});
+    }
+    // Lead created from a PDF extraction (client rode the raw AI output
+    // along, mirroring receipts' b.ocr): log extraction-vs-saved as a
+    // training example. accepted = every field the model proposed was
+    // kept as-is. Fire-and-forget; after the response.
+    const extraction = req.body && req.body.extraction;
+    if (extraction && typeof extraction === 'object' && !Array.isArray(extraction)) {
+      const norm = (v) => (v == null ? null : String(v).trim().toLowerCase());
+      const proposed = pickEditable(extraction);
+      const kept = Object.keys(proposed).every((k) => norm(proposed[k]) === norm(fields[k]));
+      captureExample({
+        id: 'tex_lead_' + id,
+        orgId: req.user.organization_id,
+        task: TASKS.LEAD_EXTRACT,
+        sourceKind: 'lead',
+        sourceId: id,
+        input: { source: 'bt_lead_print_pdf' },
+        modelOutput: proposed,
+        humanFinal: fields,
+        accepted: kept,
+        model: process.env.AI_MODEL || 'claude-opus-4-8'
+      });
     }
   } catch (e) {
     console.error('POST /api/leads error:', e);

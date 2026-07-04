@@ -19,8 +19,13 @@ const { Anthropic } = require('@anthropic-ai/sdk');
 // Per-user AI-spend limiters (20/min, 200/hr; skip SYSTEM_ADMIN) — the OCR
 // route makes a real vision call, so it must be bounded like /api/ai/* (SEC A2).
 const { aiChatLimiter, aiChatHourlyLimiter } = require('../rate-limit');
+// Training-example flywheel — OCR-vs-saved pairs feed future fine-tunes.
+const { captureExample, TASKS } = require('../services/training-capture');
 
 const router = express.Router();
+
+// Single source of truth for the OCR model — also stamped onto training examples.
+const OCR_MODEL = 'claude-haiku-4-5';
 
 // Lazy Anthropic client for receipt OCR (vision). Mirrors the pattern in
 // admin-batch-routes.js — reads ANTHROPIC_API_KEY on first use.
@@ -199,16 +204,41 @@ async function logOcrFeedback(orgId, receiptId, ocr, finals, isPresale) {
     const codeOk = (occ != null && !isPresale) ? (occ === (finals.cost_code || null)) : null;
     const amountOk = oa != null ? (fAmount != null && fAmount === oa) : null;
     if (vendorOk === null && dateOk === null && codeOk === null && amountOk === null) return;
+    const fbId = 'fb_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
     await pool.query(
       `INSERT INTO receipt_ocr_feedback
          (id, organization_id, receipt_id, ocr_vendor, final_vendor, vendor_ok,
           ocr_date, final_date, date_ok, ocr_cost_code, final_cost_code, cost_code_ok,
           ocr_amount, final_amount, amount_ok)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
-      ['fb_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8), orgId, receiptId,
+      [fbId, orgId, receiptId,
        ov, finals.vendor || null, vendorOk, od, finals.date || null, dateOk,
        occ, finals.cost_code || null, codeOk, oa, fAmount, amountOk]
     );
+    // Mirror into the training-example flywheel. Ids reuse the feedback row's
+    // id in the SAME scheme the db.js backfill uses ('tex_<fbId>_fields' /
+    // '_code'), so boot backfills and live captures can never double-insert.
+    const imageRef = finals.attachment_id || null;
+    captureExample({
+      id: 'tex_' + fbId + '_fields', orgId, task: TASKS.RECEIPT_FIELDS,
+      sourceKind: 'receipt_ocr_feedback', sourceId: fbId,
+      input: { receipt_id: receiptId, image_ref: imageRef },
+      modelOutput: { vendor: ov, date: od, cost_code: occ, amount: oa },
+      humanFinal: { vendor: finals.vendor || null, date: finals.date || null, cost_code: finals.cost_code || null, amount: fAmount },
+      accepted: (vendorOk !== false && dateOk !== false && codeOk !== false && amountOk !== false),
+      model: OCR_MODEL
+    });
+    if (occ != null && codeOk !== null) {
+      captureExample({
+        id: 'tex_' + fbId + '_code', orgId, task: TASKS.COST_CODE,
+        sourceKind: 'receipt_ocr_feedback', sourceId: fbId,
+        input: { receipt_id: receiptId, vendor: finals.vendor || null, date: finals.date || null, amount: fAmount, image_ref: imageRef },
+        modelOutput: { cost_code: occ },
+        humanFinal: { cost_code: finals.cost_code || null },
+        accepted: codeOk,
+        model: OCR_MODEL
+      });
+    }
   } catch (_) { /* feedback is best-effort — never affects the save */ }
 }
 
@@ -452,7 +482,7 @@ router.post('/ocr', requireAuth, aiChatLimiter, aiChatHourlyLimiter, async (req,
       '- corners: the 4 outer corners of the RECEIPT/paper within the photo, as [x,y] FRACTIONS of image width and height (0=left/top, 1=right/bottom), ordered top-left, top-right, bottom-right, bottom-left. Use this to crop out the background. If the receipt fills the whole frame or you cannot tell, return null.\n' +
       'Use null for anything you cannot read.';
     const msg = await client.messages.create({
-      model: 'claude-haiku-4-5',
+      model: OCR_MODEL,
       max_tokens: 400,
       messages: [{
         role: 'user',
@@ -583,7 +613,8 @@ router.post('/', requireAuth, async (req, res) => {
     // Record OCR-suggestion-vs-saved accuracy (fire-and-forget; after response).
     if (b.ocr) {
       logOcrFeedback(orgId, id, b.ocr, {
-        vendor: cleanStr(b.vendor, 200), date: purchasedAt, cost_code: costCode, amount: amount
+        vendor: cleanStr(b.vendor, 200), date: purchasedAt, cost_code: costCode, amount: amount,
+        attachment_id: cleanStr(b.attachment_id, 200)
       }, isPresale);
     }
   } catch (e) {

@@ -7510,8 +7510,14 @@ const PAYLOAD_TOOLS = [
       'EVERY write — field updates, line-item edits, phase changes, change ' +
       'orders, lead/client creates, schedule blocks, reports, etc. You do NOT ' +
       'author the payload yourself; you describe the change in plain words and ' +
-      'the Scribe produces it, dry-runs it, and the user gets a review/approve ' +
-      'card. CRITICAL: fully specify the change — the Scribe has NO read access ' +
+      'the Scribe produces it and dry-runs it. APPROVALS LIVE IN THE ' +
+      'CONVERSATION: when the user has EXPLICITLY confirmed this specific ' +
+      'change in the current conversation ("yes", "do it", "go ahead" after you ' +
+      'stated exactly what will change), set approved:true — the Scribe applies ' +
+      'it directly and the user gets an "Applied" notification, no card. If they ' +
+      'have NOT clearly confirmed, leave approved off and they get a ' +
+      'review/approve card. Deletes and system/config changes ALWAYS get a card ' +
+      'regardless. CRITICAL: fully specify the change — the Scribe has NO read access ' +
       'and sees ONLY your `instruction`. Resolve the entity_type + entity_id with ' +
       'your reads FIRST, then include them plus every field/value to set (and any ' +
       'current values relevant to the edit). One scribe_write per change. Do NOT ' +
@@ -7531,6 +7537,15 @@ const PAYLOAD_TOOLS = [
             'reference it by its jobNumber (e.g. "RV2000") — the Scribe resolves the ' +
             'jobNumber to the canonical row id for you, so you do NOT need to dig up the ' +
             'j-style id first. For other entity types, pass the resolved id from your reads.'
+        },
+        approved: {
+          type: 'boolean',
+          description:
+            'Set true ONLY when the user explicitly confirmed THIS specific change in the ' +
+            'current conversation after you stated exactly what will change. When true and ' +
+            'the change is not high-risk, it applies immediately (no review card). Never set ' +
+            'it on your own initiative, for inferred intent, or for anything the user has ' +
+            'not plainly said yes to.'
         }
       }
     }
@@ -11642,31 +11657,82 @@ async function execScribeWrite(tu, ctx) {
   }
   // ALWAYS-BACKGROUND SCRIBE (John's call, 2026-07-01): the hand-off returns
   // immediately; the Scribe drafts in a DETACHED run (it took 30-60s of dead air
-  // blocking 86's turn), and when the draft is ready the user gets a push + a chat
-  // message pointing at the review card in the Payloads panel. Nothing is lost if
-  // they leave mid-draft. Failures notify the same way.
-  const scribeCtx = { userId: (ctx && ctx.userId) || null, orgId, parentSession: (ctx && ctx.parentSession) || null };
+  // blocking 86's turn). APPROVE-IN-CHAT (2026-07-03): when the chat agent sets
+  // approved:true (the user explicitly confirmed the change in conversation) and
+  // the payload is NOT high-risk (no deletes / system / outbound), the draft is
+  // APPLIED server-side right after a clean dry-run — the user gets an
+  // "✓ Applied" chat message + push instead of a review card. High-risk or
+  // unapproved drafts keep today's review-card flow. Failures notify the same way.
+  const approved = !!(tu && tu.input && tu.input.approved === true);
+  const scribeCtx = {
+    userId: (ctx && ctx.userId) || null, orgId,
+    parentSession: (ctx && ctx.parentSession) || null,
+    gateUser: (ctx && ctx.gateUser) || null
+  };
   const instr = String(instruction);
   Promise.resolve()
     .then(function () { return driveScribeWrite({ instruction: instr }, scribeCtx); })
     .then(async function (result) {
       const uid = scribeCtx.userId;
       if (!uid) return;
+      const { sendPushForEvent } = require('../notify-events');
       if (result && result.ok) {
         const title = (result.meta && result.meta.title) || result.title || 'a change';
         const line = result.applySummary ? ('\n\n' + String(result.applySummary).slice(0, 500)) : '';
+
+        // Approve-in-chat: user already said yes → apply now unless high-risk.
+        if (approved && result.payloadId) {
+          try {
+            const payloadRoutes = require('./payload-routes');
+            const rowRes = await pool.query('SELECT * FROM payloads WHERE id = $1', [result.payloadId]);
+            const row = rowRes.rows[0];
+            const highRisk = !row || payloadRoutes.isHighRiskPayload(row);
+            if (!highRisk) {
+              // Capability gate runs with the ORIGINATING user (req.user when
+              // available, else their users row) — same rails as the card's
+              // Approve button.
+              let gateUser = scribeCtx.gateUser;
+              if (!gateUser) {
+                const u = await pool.query('SELECT * FROM users WHERE id = $1', [uid]);
+                gateUser = u.rows[0] || null;
+              }
+              const applied = gateUser ? await payloadRoutes.applyPayloadForUser(gateUser, result.payloadId) : { ok: false, error: 'no user context' };
+              if (applied && applied.ok) {
+                const doneLine = applied.apply_summary ? ('\n\n' + String(applied.apply_summary).slice(0, 500)) : line;
+                try { await postAgentJobToThread({ user_id: uid }, '✅ **Applied — ' + title + '**' + doneLine); } catch (_) {}
+                try { await sendPushForEvent(uid, 'scribe_draft', { title: '✅ Applied: ' + String(title).slice(0, 80), body: String(applied.apply_summary || 'Done').slice(0, 200), url: '/' }); } catch (_) {}
+                return;
+              }
+              // Apply failed → fall through to the review-card notify with the error.
+              const whyNot = (applied && applied.error) ? (' (auto-apply failed: ' + String(applied.error).slice(0, 200) + ')') : '';
+              try { await postAgentJobToThread({ user_id: uid }, '✍️ **Scribe drafted — ' + title + '**' + line + '\n\n_Auto-apply didn\'t go through' + whyNot + ' — review & approve it in **Pending approvals**._'); } catch (_) {}
+              try { await sendPushForEvent(uid, 'scribe_draft', { title: '✍️ Needs your approval: ' + String(title).slice(0, 80), body: String(result.applySummary || 'Review & approve in Project 86').slice(0, 200), url: '/' }); } catch (_) {}
+              return;
+            }
+            // High-risk → always card, even when approved in chat.
+            try { await postAgentJobToThread({ user_id: uid }, '✍️ **Scribe drafted — ' + title + '**' + line + '\n\n_This change is high-risk (delete / config), so it needs an explicit approval — review it in **Pending approvals**._'); } catch (_) {}
+            try { await sendPushForEvent(uid, 'scribe_draft', { title: '✍️ Needs your approval: ' + String(title).slice(0, 80), body: String(result.applySummary || 'Review & approve in Project 86').slice(0, 200), url: '/' }); } catch (_) {}
+            return;
+          } catch (e) {
+            console.warn('[scribe-bg] approve-in-chat apply failed:', e && e.message);
+            // fall through to the standard draft notify below
+          }
+        }
+
         try { await postAgentJobToThread({ user_id: uid }, '✍️ **Scribe finished drafting — ' + title + '**' + line + '\n\n_Review & approve it in **Pending approvals**, just above the chat box._'); } catch (_) {}
-        try { const { sendPushForEvent } = require('../notify-events'); await sendPushForEvent(uid, 'scribe_draft', { title: '✍️ Scribe drafted: ' + String(title).slice(0, 80), body: String(result.applySummary || 'Review & approve in Project 86').slice(0, 200), url: '/' }); } catch (_) {}
+        try { await sendPushForEvent(uid, 'scribe_draft', { title: '✍️ Scribe drafted: ' + String(title).slice(0, 80), body: String(result.applySummary || 'Review & approve in Project 86').slice(0, 200), url: '/' }); } catch (_) {}
       } else {
         const errMsg = (result && result.error) || 'unknown error';
         try { await postAgentJobToThread({ user_id: uid }, '⚠️ **Scribe couldn\'t complete that draft**: ' + String(errMsg).slice(0, 400) + '\n\n_Re-ask with more specifics (exact entity + fields) and I\'ll hand it back to the Scribe._'); } catch (_) {}
-        try { const { sendPushForEvent } = require('../notify-events'); await sendPushForEvent(uid, 'scribe_draft', { title: '⚠️ Scribe draft failed', body: String(errMsg).slice(0, 200), url: '/' }); } catch (_) {}
+        try { await sendPushForEvent(uid, 'scribe_draft', { title: '⚠️ Scribe draft failed', body: String(errMsg).slice(0, 200), url: '/' }); } catch (_) {}
       }
     })
     .catch(function (e) { console.warn('[scribe-bg] detached draft failed:', e && e.message); });
   return {
     tier: 'auto',
-    summary: 'The Scribe is drafting that change in the BACKGROUND. Tell the user it\'s being drafted and they\'ll get a notification with the review card when it\'s ready (usually under a minute) — do NOT wait for it, do NOT narrate a card, and do NOT call scribe_write again for this same change.'
+    summary: approved
+      ? 'The Scribe is executing that APPROVED change in the background — it will apply automatically (no card) and the user gets an "Applied" notification, usually under a minute. Tell the user it\'s being handled; do NOT wait for it and do NOT call scribe_write again for this same change.'
+      : 'The Scribe is drafting that change in the BACKGROUND. Tell the user it\'s being drafted and they\'ll get a notification with the review card when it\'s ready (usually under a minute) — do NOT wait for it, do NOT narrate a card, and do NOT call scribe_write again for this same change.'
   };
 }
 
@@ -12043,12 +12109,12 @@ async function execStartBackgroundTask(tu, userId) {
   const orgRow = await pool.query('SELECT organization_id FROM users WHERE id = $1', [userId]);
   const orgId = orgRow.rows[0] && orgRow.rows[0].organization_id;
   if (!orgId) return { tier: 'auto', error: 'Could not resolve your organization to queue the task.' };
-  // Background tasks run on the SANDBOX agent (86/'job' = Opus + the full
-  // agent_toolset: bash, Python with pandas/numpy/openpyxl/reportlab, web_search +
-  // web_fetch). So "do this in the background" gets FULL capability — deep web
-  // research, heavy analysis, and generating Excel/PDF reports (auto-delivered as a
-  // download) — even when the lean foreground assistant is the one that dispatched it.
-  const agentKey = 'job';
+  // Background tasks run on the SCRIBE (Sonnet + the full agent_toolset:
+  // bash, Python with pandas/numpy/openpyxl/reportlab, web_search + web_fetch,
+  // read_entity/search_entities, ask_user). 2026-07-03 cutover: the Scribe is
+  // THE background executor — conversation reasons + approves, Scribe executes,
+  // then notifies. ~half the Opus rate for the same capability.
+  const agentKey = 'scribe';
   let sessionId = null;
   try {
     const s = await pool.query(
@@ -12092,8 +12158,9 @@ async function runAgentJob(jobId) {
   try {
     const adminAgents = require('./admin-agents-routes');
     const env = await adminAgents.ensureManagedEnvironment();
-    const agentKey = (job.agent_key === 'assistant') ? 'assistant' : 'job';
-    const agent = await adminAgents.ensureManagedAgent(agentKey, organization);
+    // 2026-07-03: ALL background tasks run on the Scribe (Sonnet + full
+    // sandbox) regardless of which chat agent queued them.
+    const agent = await adminAgents.ensureManagedAgent('scribe', organization);
 
     const created = await anthropic.beta.sessions.create({
       agent: agent.anthropic_agent_id,
