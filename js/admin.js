@@ -6521,7 +6521,7 @@
         '<div style="font-size:16px;font-weight:700;">Agents <span style="color:var(--text-dim,#888);font-weight:400;">· ' + (VIEW_LABELS[_agentsView] || 'Overview') + '</span></div>' +
         '<div style="flex:1;"></div>' +
         (showRange
-          ? ('<select id="agents-range-select" onchange="setAgentsRange(this.value)" style="font-size:12px;padding:4px 8px;">' +
+          ? ('<select id="agents-range-select" onchange="setAgentsRange(this.value)" style="font-size:12px;padding:4px 8px;width:auto;flex:0 0 auto;">' +
                '<option value="7d"' + (_agentsRange === '7d' ? ' selected' : '') + '>Last 7 days</option>' +
                '<option value="30d"' + (_agentsRange === '30d' ? ' selected' : '') + '>Last 30 days</option>' +
              '</select>' +
