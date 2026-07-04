@@ -1255,13 +1255,23 @@
             background: var(--surface2);
             color: var(--text);
         }
-        /* Active destination — a clean filled pill (Claude style): no left
-           accent bar, just a persistent fill + full-strength text/icon and a
-           slightly heavier weight to read as "you are here". */
+        /* Active destination — filled pill + the Site Plan sidebar's left
+           accent bar + accent-tinted icon (John liked that look on the
+           .app-jobnav section rows and asked for it here too). */
         .app-nav .tab-btn.active {
             background: var(--surface2);
             color: var(--text);
             font-weight: 600;
+        }
+        .app-nav .tab-btn.active::before {
+            content: "";
+            position: absolute;
+            left: 0;
+            top: 6px;
+            bottom: 6px;
+            width: 3px;
+            border-radius: 0 3px 3px 0;
+            background: var(--accent, #4f8cff);
         }
         /* Icon — the .p86-icon-slot is auto-prepended by agx-icons.js. */
         .app-nav .tab-btn .p86-icon-slot {
@@ -1280,7 +1290,7 @@
             text-overflow: ellipsis;
         }
         .app-nav .tab-btn.active .p86-icon {
-            color: var(--text);
+            color: var(--accent, #4f8cff);
         }
 
         /* ── Expandable accordion sub-nav ─────────────────────────────
