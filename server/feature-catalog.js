@@ -406,7 +406,7 @@ const features = [
     id: 'crew-activity',
     label: 'Crew activity panel',
     blurb: 'Every background task and Scribe draft in one panel — answer questions, approve drafts, and watch live progress.',
-    access_path: 'Crew activity pill (bottom-right corner)',
+    access_path: 'Crew activity button — in the 86 chat header',
     area: 'AI',
     shipped: '2026-07-01',
   },
@@ -487,7 +487,7 @@ const releases = [
     changes: [
       { type: 'new', text: 'Background AI tasks — hand off a big job and close the app; it keeps working and pings you.', tour: 'ai-crew' },
       { type: 'new', text: 'Pause-and-ask — a background task that needs a decision stops and asks, then resumes on your answer.' },
-      { type: 'new', text: 'Crew activity panel — every task and Scribe draft in one place (pill in the bottom-right corner).', tour: 'ai-crew' },
+      { type: 'new', text: 'Crew activity panel — every task and Scribe draft in one place (open the 86 chat and tap the Crew activity button in its header).', tour: 'ai-crew' },
       { type: 'new', text: 'Push notifications on phone + desktop, with per-event Email / Push toggles under My Account.' },
       { type: 'new', text: 'Crew chip in the header shows who\'s working — Assistant, 86, or Scribe — in real time.' },
       { type: 'improved', text: 'The Scribe always drafts in the background now and pushes you when the draft is ready.' },

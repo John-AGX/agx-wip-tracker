@@ -84,9 +84,9 @@
           body: 'Watch it narrate in real time — Assistant thinking, 86 digging, Scribe drafting. Idle means everyone\'s ready.'
         },
         {
-          sel: '.p86-bgt-launch',
+          sel: '#ai-crew-activity, #header-ask86-btn, #p86-mobile-nav [data-mobile-nav="ask86"]',
           title: 'Background work lives in Crew activity',
-          body: 'Hand off something big ("audit all my job costs in the background") and close the app. This pill tracks it — running tasks, questions waiting on you, and Scribe drafts to approve.'
+          body: 'Hand off something big ("audit all my job costs in the background") and close the app. Open the 86 chat and tap the Crew activity button in its header — running tasks, questions waiting on you, and Scribe drafts to approve.'
         },
         {
           title: 'It pings you when it matters',

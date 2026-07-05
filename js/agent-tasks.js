@@ -52,14 +52,21 @@
       // Colors route through the theme vars (dark values as fallbacks) so the
       // panel renders correctly in BOTH modes — hardcoded darks made it an
       // unreadable dark island in light mode.
-      '.p86-bgt-launch{position:fixed;right:18px;bottom:90px;z-index:9000;display:none;align-items:center;gap:8px;background:var(--surface,#141824);color:var(--text,#e6e9f0);border:1px solid var(--border,rgba(255,255,255,.16));border-radius:22px;padding:9px 14px;font:600 13px/1 system-ui,sans-serif;cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,.45)}',
-      '.p86-bgt-launch:hover{background:var(--surface2,#1c2130)}',
-      '.p86-bgt-launch.on{display:inline-flex}',
+      // The crew-activity trigger now lives in the 86 chat header
+      // (#ai-crew-activity, built by ai-panel.js); the old floating pill is
+      // retired. .p86-bgt-dot/.p86-bgt-badge are reused by that button + panel.
       '.p86-bgt-dot{width:8px;height:8px;border-radius:50%;background:#4f8cff}',
       '.p86-bgt-badge{background:#fbbf24;color:#1a1400;border-radius:10px;padding:1px 7px;font-size:11px;font-weight:800}',
-      '.p86-bgt-overlay{position:fixed;inset:0;z-index:9001;background:rgba(4,6,12,.5);display:none;align-items:flex-end;justify-content:flex-end}',
-      '.p86-bgt-overlay.on{display:flex}',
-      '.p86-bgt-panel{margin:0 16px 16px 0;width:min(440px,calc(100vw - 32px));max-height:min(72vh,660px);display:flex;flex-direction:column;background:var(--surface,#0f1320);border:1px solid var(--border,rgba(255,255,255,.14));border-radius:14px;overflow:hidden;box-shadow:0 12px 44px rgba(0,0,0,.6)}',
+      // Soft blue pulse ring on the header button while the crew is working.
+      '#ai-crew-activity.p86-bgt-running{animation:p86CrewPulse 1.8s ease-in-out infinite}',
+      '@keyframes p86CrewPulse{0%,100%{box-shadow:0 0 0 0 rgba(79,140,255,0)}50%{box-shadow:0 0 0 3px rgba(79,140,255,.30)}}',
+      // Panel: dim overlay + bottom-right card, now with a smooth fade + slide
+      // in/out (was an instant display toggle).
+      '.p86-bgt-overlay{position:fixed;inset:0;z-index:9001;background:rgba(4,6,12,.5);display:flex;align-items:flex-end;justify-content:flex-end;opacity:0;visibility:hidden;pointer-events:none;transition:opacity .2s ease, visibility .2s ease}',
+      '.p86-bgt-overlay.on{opacity:1;visibility:visible;pointer-events:auto}',
+      '.p86-bgt-panel{margin:0 16px 16px 0;width:min(440px,calc(100vw - 32px));max-height:min(72vh,660px);display:flex;flex-direction:column;background:var(--surface,#0f1320);border:1px solid var(--border,rgba(255,255,255,.14));border-radius:14px;overflow:hidden;box-shadow:0 12px 44px rgba(0,0,0,.6);transform:translateY(14px) scale(.985);opacity:0;transition:transform .26s cubic-bezier(.2,.8,.2,1), opacity .2s ease;will-change:transform,opacity}',
+      '.p86-bgt-overlay.on .p86-bgt-panel{transform:none;opacity:1}',
+      '@media (prefers-reduced-motion:reduce){.p86-bgt-overlay,.p86-bgt-panel{transition:none}}',
       '.p86-bgt-head{display:flex;align-items:center;justify-content:space-between;padding:13px 15px;border-bottom:1px solid var(--border,rgba(255,255,255,.08));color:var(--text,#e6e9f0);font:700 14px/1 system-ui,sans-serif}',
       '.p86-bgt-x{background:none;border:none;color:var(--text-dim,#9aa0b2);font-size:18px;cursor:pointer;line-height:1}',
       '.p86-bgt-body{overflow:auto;flex:1 1 auto;min-height:0;-webkit-overflow-scrolling:touch}',
@@ -81,12 +88,7 @@
 
   function ensureDom() {
     ensureStyle();
-    if (document.querySelector('.p86-bgt-launch')) return;
-    var b = document.createElement('button');
-    b.className = 'p86-bgt-launch';
-    b.innerHTML = '<span class="p86-bgt-dot"></span><span class="p86-bgt-txt">Background tasks</span><span class="p86-bgt-badge" style="display:none"></span>';
-    b.addEventListener('click', open);
-    document.body.appendChild(b);
+    if (document.querySelector('.p86-bgt-overlay')) return;
     var ov = document.createElement('div');
     ov.className = 'p86-bgt-overlay';
     ov.innerHTML = '<div class="p86-bgt-panel"><div class="p86-bgt-head"><span>Crew activity</span><span style="display:flex;gap:8px;align-items:center"><button class="p86-bgt-bell" title="Get phone/desktop notifications when a task finishes or needs you" style="display:none;background:none;border:1px solid rgba(255,255,255,.18);border-radius:8px;color:#aeb4c4;font:600 11px/1 system-ui,sans-serif;padding:5px 9px;cursor:pointer">🔔 Enable notifications</button><button class="p86-bgt-x" title="Close">✕</button></span></div><div class="p86-bgt-body"><div class="p86-bgt-list"></div><div class="p86-bgt-scribe"></div></div></div>';
@@ -107,17 +109,21 @@
     });
   }
 
+  // Reflect state onto the crew-activity button in the 86 chat header
+  // (built lazily by ai-panel.js). No-op until the chat panel exists; the
+  // 20s poll + the panel's own refresh() call keep it current after that.
   function renderLauncher() {
-    var b = document.querySelector('.p86-bgt-launch'); if (!b) return;
-    // ALWAYS visible (was: only when a task was active/unseen — which made the
-    // panel undiscoverable exactly when you wanted to find the 🔔 toggle or the
-    // Scribe drafts). The badge still only shows when something needs attention.
-    b.classList.add('on');
-    var badge = b.querySelector('.p86-bgt-badge');
-    if (_attention > 0) { badge.style.display = ''; badge.textContent = _attention; }
-    else { badge.style.display = 'none'; }
+    var btn = document.getElementById('ai-crew-activity'); if (!btn) return;
+    var badge = btn.querySelector('.p86-bgt-badge');
+    if (badge) {
+      if (_attention > 0) { badge.style.display = ''; badge.textContent = _attention; }
+      else { badge.style.display = 'none'; }
+    }
     var running = _jobs.filter(function (j) { return j.status === 'running'; }).length;
-    b.querySelector('.p86-bgt-txt').textContent = running ? (running + ' running…') : 'Crew activity';
+    btn.classList.toggle('p86-bgt-running', running > 0);
+    btn.title = running
+      ? (running + ' task' + (running > 1 ? 's' : '') + ' running — Crew activity')
+      : 'Crew activity — background tasks & Scribe drafts';
   }
 
   function renderPanel() {

@@ -1067,6 +1067,13 @@
        // padding 12px → 7px so the header sits ~10px shorter.
       '<div style="padding:7px 14px;border-bottom:1px solid rgba(34,211,238,0.35);background:linear-gradient(135deg,#1a1a20 0%,#23232b 100%);display:flex;align-items:center;gap:10px;">' +
         '<button id="ai-sidebar-toggle" title="Sessions" aria-label="Open sessions sidebar" style="background:rgba(255,255,255,0.08);color:#fff;border:1px solid rgba(255,255,255,0.15);border-radius:6px;width:30px;height:30px;font-size:16px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;line-height:1;">&#x2630;</button>' +
+        // Crew activity — background tasks + Scribe drafts. Moved here from the
+        // old floating pill so it lives inside the 86 chat. Badge (attention)
+        // + pulse (running) driven by js/agent-tasks.js renderLauncher().
+        '<button id="ai-crew-activity" title="Crew activity — background tasks & Scribe drafts" aria-label="Crew activity" style="position:relative;background:rgba(255,255,255,0.08);color:#fff;border:1px solid rgba(255,255,255,0.15);border-radius:6px;width:30px;height:30px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;line-height:0;">' +
+          (typeof p86Icon === 'function' ? p86Icon('users') : '&#x1F465;') +
+          '<span class="p86-bgt-badge" style="display:none;position:absolute;top:-6px;right:-6px;min-width:16px;height:16px;box-sizing:border-box;padding:0 4px;font-size:10px;line-height:16px;text-align:center;border-radius:8px;"></span>' +
+        '</button>' +
         '<button id="ai-close" title="Close (Esc)" style="background:rgba(255,255,255,0.12);color:#fff;border:1px solid rgba(255,255,255,0.2);border-radius:6px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:6px;">&rarr; Close</button>' +
         '<div class="p86-ai-title" style="font-size:14px;font-weight:700;color:#fff;flex:1;text-align:right;">&#x2728; AI Assistant</div>' +
         // Live "who am I talking to" badge — Assistant (Haiku) vs 86
@@ -1236,6 +1243,13 @@
     }
     wireAIPanelResizer(panel);
     panel.querySelector('#ai-sidebar-toggle').onclick = toggleSidebar;
+    // Crew activity opens the background-tasks / Scribe-drafts panel.
+    var crewBtn = panel.querySelector('#ai-crew-activity');
+    if (crewBtn) crewBtn.onclick = function () {
+      if (window.p86AgentTasks && window.p86AgentTasks.open) window.p86AgentTasks.open();
+    };
+    // Populate its badge/pulse now that the button exists in the DOM.
+    if (window.p86AgentTasks && window.p86AgentTasks.refresh) window.p86AgentTasks.refresh();
 
     // Listen for cross-component signals so the sidebar updates when a
     // payload is applied (badge flip) or a fresh ready-payload arrives

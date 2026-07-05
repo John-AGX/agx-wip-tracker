@@ -343,7 +343,7 @@
         '<div style="flex:0 0 auto;display:flex;align-items:center;">' + toggles + '</div>' +
       '</div>';
     });
-    html += '<div style="font-size:10px;color:var(--text-dim,#777);">Push reaches this device once you\'ve enabled notifications (🔔 in the Crew activity panel, bottom-right). On iPhone, add the app to your home screen first.</div>';
+    html += '<div style="font-size:10px;color:var(--text-dim,#777);">Push reaches this device once you\'ve enabled notifications (🔔 in the Crew activity panel — open it from the 86 chat header). On iPhone, add the app to your home screen first.</div>';
     html += '<div id="p86-acct-status" style="font-size:11px;color:var(--text-dim,#888);min-height:16px;"></div>';
     pane.innerHTML = html;
 
