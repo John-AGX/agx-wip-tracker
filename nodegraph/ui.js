@@ -2731,9 +2731,9 @@ function renderInspector(){
     renderInspectorJobDetail(body);
     refreshInspMetrics();   // always repaint tiles (job-detail build is keyed; numbers settle late)
   }
-  // Hybrid inline-spawn (RS-A): prepend the header quick-add chip row so the selected
-  // node's allowed children can be spawned straight from the inspector surface.
-  if(sel && sel.type!=='wip') injectSpawnRow(body, sel);
+  // Hybrid inline-spawn (RS-A + RS-B): header quick-add chip row (prepended) + per-type
+  // grouped child lists (appended) so children can be spawned + browsed inline.
+  if(sel && sel.type!=='wip'){ injectSpawnRow(body, sel); body.insertAdjacentHTML('beforeend', childGroupsHtml(sel)); }
 }
 // Slice 3: the no-node Inspector hosts the JOB detail — reuses the classic job-overview
 // renderers (buildings / phases / subs). Built ONCE per job-detail entry: these mount
@@ -3391,6 +3391,42 @@ window.p86NgCostMenu=function(pid, anchor){
   menu.addEventListener('click',function(ev){ var it=ev.target.closest('.ng-add-item'); if(!it) return; var t=it.getAttribute('data-type'); close(); spawnChildNode(pid, t); });
 };
 
+// ── RS-B: per-type grouped child lists in the inspector ────────────────────
+// Complements the header quick-add chips: shows what's already attached to the
+// selected node, grouped by type, each group with its own inline "+" that spawns
+// into that bucket. Rows select + reveal the child on the canvas.
+function childGroupsHtml(sel){
+  var kids=SPAWN_CHILDREN[sel.type]; if(!kids || !kids.length) return '';
+  var wired={};
+  E.wires().forEach(function(w){ if(w.toNode!==sel.id) return; var k=E.findNode(w.fromNode); if(!k) return;
+    var key=((E.DEFS[k.type]||{}).cat==='cost')?'cost':k.type;
+    (wired[key]=wired[key]||[]).push(k);
+  });
+  var groups=kids.map(function(t){
+    var list=wired[t]||[];
+    var label=(t==='cost')?'Costs':((SPAWN_LABEL[t]||t)+'s');
+    var add=(t==='cost')
+      ? "window.p86NgCostMenu&&window.p86NgCostMenu('"+sel.id+"',this)"
+      : "window.p86NgSpawn&&window.p86NgSpawn('"+sel.id+"','"+t+"')";
+    var rows=list.length ? list.map(function(k){
+      return '<div class="ng-cg-row" onclick="event.stopPropagation();window.p86NgSelect&&window.p86NgSelect(\''+k.id+'\')" title="Open on canvas">'
+        +'<span class="ng-cg-ic">'+((E.DEFS[k.type]||{}).icon||'◆')+'</span><span class="ng-cg-nm">'+luEsc(k.label||k.type)+'</span></div>';
+    }).join('') : '<div class="ng-cg-empty">None yet</div>';
+    return '<div class="ng-cg-group"><div class="ng-cg-head"><span class="ng-cg-lbl">'+label+' · '+list.length+'</span>'
+      +'<button class="ng-cg-add" aria-label="Add '+label+'" onclick="event.stopPropagation();'+add+'">+</button></div>'+rows+'</div>';
+  }).join('');
+  return '<div class="ng-cg">'+groups+'</div>';
+}
+// Select + reveal a node from an inspector list row (drills into its owning building).
+window.p86NgSelect=function(id){
+  var n=E.findNode(id); if(!n) return;
+  selN=id;
+  var b=owningBuildingId(id)||(n.type==='t1'?id:null);
+  if(b){ if(_spFocus!==b){ _spFocus=b; applySpFocus(); } fanFocusNodes(b); }
+  render(); renderInspector();
+  if(E.viewMode && E.viewMode()==='siteplan') fitSiteplan();
+};
+
 // ── Events ──
 // ── Inline-edit handlers (Slice 3a) ────────────────────────────────────────
 // Shared by the on-card canvas delegate AND the right-Inspector delegate. Each
@@ -3821,15 +3857,19 @@ function initEvents(){
   function openAddMenu(clientX, clientY, onPick){
     closeAddMenu();
     addMenuEl=document.createElement('div'); addMenuEl.className='ng-add-menu';
-    addMenuEl.innerHTML='<input class="ng-add-search" placeholder="Add node…" /><div class="ng-add-list"></div>';
+    addMenuEl.innerHTML='<input class="ng-add-search" placeholder="Add building or utility…" /><div class="ng-add-list"></div>';
     document.body.appendChild(addMenuEl);
     addMenuEl.style.left=Math.max(8,Math.min(clientX, window.innerWidth-248))+'px';
     addMenuEl.style.top=Math.max(8,Math.min(clientY, window.innerHeight-340))+'px';
     var listEl=addMenuEl.querySelector('.ng-add-list'), inp=addMenuEl.querySelector('.ng-add-search');
     function build(filter){
       var f=(filter||'').toLowerCase(), out='';
+      // RS-C: the node "library" is retired — attachable nodes (scope/sub/PO/cost/CO)
+      // now spawn inline from a node's inspector. This menu keeps only what doesn't
+      // attach to a parent: the Building (map-placed) + the Math/Note/Watch utilities.
+      var LIB_KEEP={t1:1,sum:1,sub2:1,mul:1,pct:1,note:1,watch:1};
       E.CATS.forEach(function(c){
-        var items=c.items.filter(function(t){ var d=E.DEFS[t]; return d && ((d.label||t).toLowerCase().indexOf(f)>=0 || c.name.toLowerCase().indexOf(f)>=0); });
+        var items=c.items.filter(function(t){ if(!LIB_KEEP[t]) return false; var d=E.DEFS[t]; return d && ((d.label||t).toLowerCase().indexOf(f)>=0 || c.name.toLowerCase().indexOf(f)>=0); });
         if(!items.length) return;
         out+='<div class="ng-add-cat">'+c.name+'</div>';
         items.forEach(function(t){ var d=E.DEFS[t]; out+='<div class="ng-add-item" data-type="'+t+'"><span class="ng-add-ic">'+d.icon+'</span>'+(d.label||t)+'</div>'; });
