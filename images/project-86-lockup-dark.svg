@@ -2,7 +2,7 @@
 <svg width="680" height="200" viewBox="0 0 680 200" xmlns="http://www.w3.org/2000/svg" role="img">
   <title>Project 86 - dark mode horizontal lockup</title>
   <desc>Project 86 brand lockup with cube icon, divider, wordmark, and tagline on a dark navy background.</desc>
-  <rect x="0" y="0" width="680" height="200" fill="#0F172A"/>
+  <rect x="0" y="0" width="680" height="200" fill="#101014"/>
   <g stroke="#22D3EE" stroke-width="3.5" stroke-linejoin="round" stroke-linecap="round" fill="none">
     <polygon points="180,50 223.3,75 223.3,125 180,150 136.7,125 136.7,75"/>
     <line x1="180" y1="100" x2="223.3" y2="75"/>
