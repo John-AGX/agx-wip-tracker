@@ -2775,7 +2775,7 @@ function renderSidebarJobCard(){
   var sm=function(n){ n=Number(n)||0; var a=Math.abs(n), s=n<0?'-':''; if(a>=1e6) return s+'$'+(a/1e6).toFixed(1).replace(/\.0$/,'')+'M'; if(a>=1e3) return s+'$'+Math.round(a/1e3)+'k'; return s+'$'+Math.round(a); };
   var statusCol=window.p86EntityCard.jobStatusColor?window.p86EntityCard.jobStatusColor(job.status):'#8aa0c0';
   var accentCol=(window.p86EntityCard.pinColor?window.p86EntityCard.pinColor(job,'job'):null)||statusCol;
-  var profit=(w.jtdProfit!=null)?w.jtdProfit:0;
+  var profit=(w.displayProfit!=null)?w.displayProfit:0;
   var contract=(w.contractIncome!=null)?w.contractIncome:(w.totalIncome!=null)?w.totalIncome:(Number(job.contractAmount)||0);
   host.innerHTML=window.p86EntityCard.render({
     kind:'job', accent:accentCol, status:{label:job.status||'In Progress', color:statusCol},
@@ -2830,7 +2830,7 @@ function wipPanelHtml(){
     {n:'Revised Costs', v:E.fmtC(w.revisedEstCosts||0), c:_c(-(w.revisedEstCosts||0))},
     {n:'Actual Costs',  v:E.fmtC(w.actualCosts||0),     c:_c(-(w.actualCosts||0))},
     {n:'Revenue Earned',v:E.fmtC(w.revenueEarned||0),   c:_c(w.revenueEarned||0)},
-    {n:'Gross Profit',  v:E.fmtC(w.jtdProfit||0),       c:_c(w.jtdProfit||0),       hero:true},
+    {n:'Gross Profit',  v:E.fmtC(w.displayProfit||0),       c:_c(w.displayProfit||0),       hero:true},
     {n:'Margin JTD',    v:(Number(w.jtdMargin)||0).toFixed(1)+'%', c:_c(w.jtdMargin||0)},
     {n:'Invoiced',      v:E.fmtC(w.invoiced||0),        c:_c(w.invoiced||0)},
     {n:'Backlog',       v:E.fmtC(w.backlog||0),         c:_c(w.backlog||0)}
@@ -2981,7 +2981,7 @@ function inspectorJobCardHtml(){
   var sm=function(n){ n=Number(n)||0; var a=Math.abs(n), s=n<0?'-':''; if(a>=1e6) return s+'$'+(a/1e6).toFixed(1).replace(/\.0$/,'')+'M'; if(a>=1e3) return s+'$'+Math.round(a/1e3)+'k'; return s+'$'+Math.round(a); };
   var statusCol=window.p86EntityCard.jobStatusColor?window.p86EntityCard.jobStatusColor(job.status):'#8aa0c0';
   var accentCol=(window.p86EntityCard.pinColor?window.p86EntityCard.pinColor(job,'job'):null)||statusCol;
-  var profit=(w.jtdProfit!=null)?w.jtdProfit:0;
+  var profit=(w.displayProfit!=null)?w.displayProfit:0;
   var contract=(w.contractIncome!=null)?w.contractIncome:(w.totalIncome!=null)?w.totalIncome:(Number(job.contractAmount)||0);
   return '<div class="ng-insp-jobcard">'+window.p86EntityCard.render({
     kind:'job', accent:accentCol, status:{label:job.status||'In Progress', color:statusCol},
@@ -3054,8 +3054,8 @@ function refreshInspMetrics(){
     {k:'Costs',v:m(w.actualCosts),c:'cost'},
     {k:'% Complete',v:p(w.pctComplete),c:''},
     {k:'Revenue',v:m(w.revenueEarned),c:'inc'},
-    {k:'Profit',v:m(w.jtdProfit),c:((w.jtdProfit||0)>=0?'gain':'neg')},
-    {k:'Margin',v:p(w.jtdMargin),c:''}
+    {k:'Profit',v:m(w.displayProfit),c:((w.displayProfit||0)>=0?'gain':'neg')},
+    {k:'Margin',v:p(w.displayMargin),c:''}
   ];
   host.innerHTML=tiles.map(function(t){ return '<div class="ng-im '+t.c+'"><span class="ng-im-k">'+t.k+'</span><span class="ng-im-v">'+t.v+'</span></div>'; }).join('');
 }

@@ -707,7 +707,7 @@
       var w = (window.getJobWIP ? window.getJobWIP(id) : null) || {};
       var pct = Math.max(0, Math.min(100, Number(w.pctComplete) || 0));
       var contract = (w.totalIncome != null) ? w.totalIncome : (w.contractIncome || 0);
-      var profit = (w.jtdProfit != null) ? w.jtdProfit : 0;
+      var profit = (w.displayProfit != null) ? w.displayProfit : 0;
       if (!window.p86EntityCard) {
         openPopup(e.pos, '<div class="emap-jc"><div class="emap-jc-meta"><div class="emap-jc-name">' + escapeHTML(it.title || '(untitled)') + '</div></div></div>');
         return;

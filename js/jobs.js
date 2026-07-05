@@ -283,11 +283,20 @@ function renderJobsMain() {
                 ? job.ngBacklog
                 : totalIncome - revenueEarned;
             const remainingCosts = revisedEstCosts - actualCosts;
+            // Headline Profit/Margin for the job card + Jobs List: use job-to-date
+            // once there's real progress (node-graph computed, or actual costs
+            // logged); otherwise fall back to the AS-SOLD projection (contract −
+            // estimated cost, incl. COs) so a freshly estimate-linked job shows its
+            // expected gross profit instead of $0 (RV2012 migration bug).
+            const hasActuals = (job.ngJtdProfit != null) || actualCosts > 0;
+            const displayProfit = hasActuals ? jtdProfit : revisedProfit;
+            const displayMargin = hasActuals ? jtdMargin : revisedMargin;
             return {
                 contractIncome, estimatedCosts, coIncome: co.income, coCosts: co.costs,
                 totalIncome, totalEstCosts, revisedCostChanges, revisedEstCosts,
                 asSoldProfit, asSoldMargin, revisedProfit, revisedMargin,
                 pctComplete, revenueEarned, actualCosts, jtdProfit, jtdMargin,
+                displayProfit, displayMargin,
                 invoiced, unbilled, backlog, remainingCosts
             };
         }
@@ -1092,7 +1101,7 @@ function renderJobsMain() {
             var pr = FD.resolveNumRange(d.pctcomplete);
             if (pr.min != null || pr.max != null) { var p = Number(j.pctComplete || 0); if (pr.min != null && p < pr.min) return false; if (pr.max != null && p > pr.max) return false; }
             var mr = FD.resolveNumRange(d.margin);
-            if (mr.min != null || mr.max != null) { w = w || getJobWIP(j.id); var m = Number(w.jtdMargin || 0); if (mr.min != null && m < mr.min) return false; if (mr.max != null && m > mr.max) return false; }
+            if (mr.min != null || mr.max != null) { w = w || getJobWIP(j.id); var m = Number(w.displayMargin || 0); if (mr.min != null && m < mr.min) return false; if (mr.max != null && m > mr.max) return false; }
             if (d.linkage && d.linkage.length) { if (d.linkage.indexOf('from_lead') >= 0 && !j.lead_id) return false; if (d.linkage.indexOf('has_estimate') >= 0 && !j.estimate_id) return false; }
             return true;
         }
@@ -1327,7 +1336,7 @@ function renderJobsMain() {
                         j.jobNumber || '', j.title || '', j.client || '', getJobOwnerName(j) || '',
                         j.status || '', j.jobType || '', j.market || '',
                         Number(w.totalIncome || 0), Number(j.pctComplete || 0),
-                        Number(w.jtdProfit || 0), Number((w.jtdMargin || 0).toFixed(1)),
+                        Number(w.displayProfit || 0), Number((w.displayMargin || 0).toFixed(1)),
                         j.address || [j.street_address, j.city, j.state].filter(Boolean).join(', ') || '',
                         j.id
                     ]);
@@ -1480,9 +1489,9 @@ function renderJobsMain() {
                         case 'pctcomplete':
                             return ((a.pctComplete || 0) - (b.pctComplete || 0)) * dir;
                         case 'profit':
-                            return (getJobWIP(a.id).jtdProfit - getJobWIP(b.id).jtdProfit) * dir;
+                            return (getJobWIP(a.id).displayProfit - getJobWIP(b.id).displayProfit) * dir;
                         case 'margin':
-                            return (getJobWIP(a.id).jtdMargin - getJobWIP(b.id).jtdMargin) * dir;
+                            return (getJobWIP(a.id).displayMargin - getJobWIP(b.id).displayMargin) * dir;
                         default:
                             return 0;
                     }
@@ -1534,8 +1543,8 @@ function renderJobsMain() {
                     <td data-col="status"><span class="badge ${statusClass}">${escapeHTML(job.status)}</span></td>
                     <td data-col="contract" style="text-align: right;">${formatCurrency(w.totalIncome)}</td>
                     <td data-col="pctcomplete" style="text-align: right;"><div class="progress-bar" style="margin-bottom: 2px; height: 6px;"><div class="progress-fill" style="width: ${w.pctComplete}%"></div></div><span style="font-size: 12px;">${w.pctComplete.toFixed(1)}%</span></td>
-                    <td data-col="profit" style="text-align: right; color: ${w.jtdProfit >= 0 ? 'var(--green)' : 'var(--red)'};">${formatCurrency(w.jtdProfit)}</td>
-                    <td data-col="margin" style="text-align: right;">${w.jtdMargin.toFixed(1)}%</td>
+                    <td data-col="profit" style="text-align: right; color: ${w.displayProfit >= 0 ? 'var(--green)' : 'var(--red)'};">${formatCurrency(w.displayProfit)}</td>
+                    <td data-col="margin" style="text-align: right;">${w.displayMargin.toFixed(1)}%</td>
                 `;
                 tbody.appendChild(row);
             });
@@ -2620,9 +2629,9 @@ function renderJobsMain() {
             document.getElementById('job-summary-accrued-note').textContent = accruedCosts > 0 ? 'Earned but unbilled' : '';
             document.getElementById('job-summary-pctcomplete').textContent = w.pctComplete.toFixed(1) + '%';
             document.getElementById('job-summary-revenue').textContent = formatCurrency(w.revenueEarned);
-            document.getElementById('job-summary-profit').textContent = formatCurrency(w.jtdProfit);
-            document.getElementById('job-summary-profit').style.color = w.jtdProfit >= 0 ? 'var(--green)' : 'var(--red)';
-            const jtdMarginStr = w.jtdMargin.toFixed(1) + '%';
+            document.getElementById('job-summary-profit').textContent = formatCurrency(w.displayProfit);
+            document.getElementById('job-summary-profit').style.color = w.displayProfit >= 0 ? 'var(--green)' : 'var(--red)';
+            const jtdMarginStr = w.displayMargin.toFixed(1) + '%';
             document.getElementById('job-summary-margin').textContent = jtdMarginStr;
             } catch (e) { console.warn('[job detail] legacy field render skipped (missing element):', e && e.message); }
 

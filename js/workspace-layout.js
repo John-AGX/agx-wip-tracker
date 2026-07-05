@@ -414,7 +414,7 @@
     };
     var statusCol = window.p86EntityCard.jobStatusColor(job.status);
     var accentCol = window.p86EntityCard.pinColor(job, 'job') || statusCol;
-    var profit = (w.jtdProfit != null) ? w.jtdProfit : 0;
+    var profit = (w.displayProfit != null) ? w.displayProfit : 0;
     // "Contract" = base contract (job.contractAmount). Total income (contract +
     // change orders) is the strip's "Total Income" tile, not this. Fall back to
     // job.contractAmount so a not-yet-computed WIP never blanks the card to $0.
@@ -455,8 +455,8 @@
       'Revenue Earned': formatCurrency(w.revenueEarned),
       // JTD profit (revenueEarned − actualCosts) so the tile matches
       // the GROSS PROFIT watch node in the graph.
-      'Gross Profit': formatCurrency(w.jtdProfit),
-      'Margin %': w.jtdMargin.toFixed(1) + '%'
+      'Gross Profit': formatCurrency(w.displayProfit),
+      'Margin %': w.displayMargin.toFixed(1) + '%'
     };
     // Sub-line captions keyed by label.
     var subMap = {
@@ -473,7 +473,7 @@
       if (map[key] !== undefined) val.textContent = map[key];
       // Gross Profit takes a +/- tone color.
       if (key === 'Gross Profit') {
-        val.style.color = (w.jtdProfit >= 0) ? 'var(--green)' : 'var(--red)';
+        val.style.color = (w.displayProfit >= 0) ? 'var(--green)' : 'var(--red)';
       }
       // Populate sub-line caption when present.
       if (subMap[key] !== undefined) {
