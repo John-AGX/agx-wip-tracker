@@ -36,6 +36,8 @@
   // instead of 404-ing, and the "‹ Overview" home chip can target it.
   const RIGHT_TABS = [
     { id: 'job-wip-report',    label: 'WIP Report', icon: 'wip' },
+    { id: 'job-details',       label: 'Details',   icon: 'edit' },
+    { id: 'job-estimates',     label: 'Estimates', icon: 'estimates' },
     { id: 'job-qb-costs',      label: 'Detailed',  icon: 'daily-logs' },
     { id: 'job-changeorders',  label: 'CO\'s',     icon: 'links' },
     { id: 'job-purchaseorders',label: 'PO\'s',     icon: 'materials' },
@@ -1192,6 +1194,8 @@
     if (!jobId) return;
     var renderers = {
       'job-overview': 'renderJobOverview',
+      'job-details': 'renderJobDetails',
+      'job-estimates': 'renderJobEstimates',
       'job-qb-costs': 'renderJobQBCosts',
       'job-subs': 'renderJobSubs',
       'job-changeorders': 'renderChangeOrders',
@@ -1561,6 +1565,8 @@
     // the workspace-toggle's restore path.
     var TAB_RENDERERS = {
       'job-overview': 'renderJobOverview',
+      'job-details': 'renderJobDetails',
+      'job-estimates': 'renderJobEstimates',
       'job-qb-costs': 'renderJobQBCosts',
       'job-subs': 'renderJobSubs',
       'job-changeorders': 'renderChangeOrders',

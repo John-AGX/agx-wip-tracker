@@ -2290,6 +2290,163 @@ function renderJobsMain() {
         }
         window.addEstimateToJob = addEstimateToJob;
 
+        // ── Job sidebar sections: Details + Estimates ─────────────────────
+        // Surfaced as their own RIGHT_TABS panels (workspace-layout.js). The
+        // ESTIMATE is the source of truth for Contract price + Estimated cost —
+        // both are pulled from the linked estimate (computeEstimateTotals →
+        // proposalTotal/baseCost via linkEstimate) and are read-only here.
+        function _jdStyles() {
+            if (document.getElementById('p86-jd-styles')) return;
+            var s = document.createElement('style'); s.id = 'p86-jd-styles';
+            s.textContent =
+              '.jd-sec{padding:16px 18px;max-width:680px;}' +
+              '.jd-h{display:flex;align-items:center;gap:8px;font-size:16px;font-weight:700;color:var(--text,#e9ecf5);margin-bottom:4px;}' +
+              '.jd-h svg{width:18px;height:18px;}' +
+              '.jd-h2{font-size:11px;font-weight:700;letter-spacing:.4px;text-transform:uppercase;color:var(--text-dim,#8aa0c0);margin:16px 0 6px;}' +
+              '.jd-sub{font-size:12.5px;color:var(--text-dim,#8aa0c0);margin-bottom:14px;line-height:1.5;}' +
+              '.jd-cost{background:var(--surface,rgba(255,255,255,.05));border:1px solid var(--border,rgba(255,255,255,.1));border-radius:12px;padding:13px 15px;margin-bottom:16px;}' +
+              '.jd-cost-h{font-size:11px;font-weight:700;letter-spacing:.3px;text-transform:uppercase;color:var(--text-dim,#8aa0c0);margin-bottom:9px;}' +
+              '.jd-cost-h em{color:#34d399;font-style:normal;text-transform:none;letter-spacing:0;}' +
+              '.jd-cost-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;}' +
+              '.jd-cost-grid label{display:block;font-size:10px;text-transform:uppercase;letter-spacing:.4px;color:var(--text-dim,#8aa0c0);margin-bottom:2px;}' +
+              '.jd-cost-grid b{font-family:ui-monospace,Menlo,monospace;font-size:18px;color:var(--text,#e9ecf5);}' +
+              '.jd-link{margin-top:11px;background:none;border:none;color:#4f8cff;font-size:12.5px;font-weight:600;cursor:pointer;padding:0;}' +
+              '.jd-link:hover{text-decoration:underline;}' +
+              '.jd-grid{display:grid;grid-template-columns:1fr 1fr;gap:11px 14px;}' +
+              '.jd-fld{display:flex;flex-direction:column;gap:4px;}.jd-fld.jd-full{grid-column:1/-1;margin-top:11px;}' +
+              '.jd-fld>span{font-size:10.5px;font-weight:600;letter-spacing:.3px;text-transform:uppercase;color:var(--text-dim,#8aa0c0);}' +
+              '.jd-fld input,.jd-fld textarea{background:var(--input-bg,rgba(0,0,0,.25));border:1px solid var(--border,rgba(255,255,255,.12));border-radius:8px;color:var(--text,#e9ecf5);font-size:13px;padding:8px 10px;font-family:inherit;}' +
+              '.jd-fld input:focus,.jd-fld textarea:focus{outline:none;border-color:#4f8cff;}' +
+              '.jd-btn{background:var(--surface,rgba(255,255,255,.06));border:1px solid var(--border,rgba(255,255,255,.14));border-radius:9px;color:var(--text,#e9ecf5);font-size:13px;font-weight:600;padding:9px 14px;cursor:pointer;display:inline-flex;align-items:center;gap:7px;}' +
+              '.jd-btn svg{width:15px;height:15px;}.jd-btn:hover{border-color:#4f8cff;}' +
+              '.jd-btn-primary{background:#4f8cff;border-color:#4f8cff;color:#fff;margin-top:16px;}.jd-btn-primary:hover{background:#3d7bef;}' +
+              '.jd-est{border:1px solid var(--border,rgba(255,255,255,.1));border-radius:11px;padding:12px 14px;margin-bottom:9px;cursor:pointer;}' +
+              '.jd-est:hover{border-color:#4f8cff;}' +
+              '.jd-est-primary{background:var(--surface,rgba(255,255,255,.05));border-color:rgba(52,211,153,.35);}' +
+              '.jd-est-top{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;}' +
+              '.jd-est-nm{font-size:14px;font-weight:600;color:var(--text,#e9ecf5);}' +
+              '.jd-est-badge{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:#34d399;background:rgba(52,211,153,.14);border-radius:999px;padding:3px 9px;}' +
+              '.jd-est-nums{display:flex;gap:22px;}' +
+              '.jd-est-nums label{display:block;font-size:9.5px;text-transform:uppercase;letter-spacing:.4px;color:var(--text-dim,#8aa0c0);}' +
+              '.jd-est-nums b{font-family:ui-monospace,Menlo,monospace;font-size:15px;color:var(--text,#e9ecf5);}' +
+              '.jd-est-act{margin-top:10px;}' +
+              '.jd-est-none{font-size:13px;color:var(--text-dim,#8aa0c0);border:1px dashed var(--border,rgba(255,255,255,.14));border-radius:10px;padding:14px;text-align:center;}' +
+              '.jd-saved{color:#34d399;font-size:12.5px;margin-top:10px;}.jd-empty{padding:24px;color:var(--text-dim,#8aa0c0);}';
+            document.head.appendChild(s);
+        }
+        function _ensureJobSectionPanel(id) {
+            var panel = document.getElementById(id);
+            if (!panel) {
+                var rc = document.getElementById('wsRightContent');
+                if (!rc) return null;
+                panel = document.createElement('div');
+                panel.id = id;
+                panel.className = 'sub-tab-content-job';
+                rc.appendChild(panel);
+            }
+            var rcEl = document.getElementById('wsRightContent');
+            if (rcEl) {
+                Array.prototype.forEach.call(rcEl.children, function (c) {
+                    if (c.classList.contains('ws-job-info-details')) return;
+                    c.style.display = c === panel ? 'block' : 'none';
+                });
+            } else { panel.style.display = 'block'; }
+            return panel;
+        }
+        function _jdEsc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+        function _jdIco(n) { return (typeof window.p86Icon === 'function') ? window.p86Icon(n) : ''; }
+        function _jdGotoSection(id) { var b = document.querySelector('.ws-right-tab[data-panel="' + id + '"]'); if (b) b.click(); }
+
+        function renderJobEstimates(jobId) {
+            _jdStyles();
+            var panel = _ensureJobSectionPanel('job-estimates');
+            if (!panel) return;
+            var job = appData.jobs.find(function (j) { return j.id === jobId; });
+            if (!job) { panel.innerHTML = '<div class="jd-empty">No job loaded.</div>'; return; }
+            var ests = (window.appData && window.appData.estimates) || [];
+            var linked = job.estimate_id ? ests.find(function (e) { return e.id === job.estimate_id; }) : null;
+            var leadEsts = job.lead_id ? ests.filter(function (e) { return e.lead_id === job.lead_id && (!linked || e.id !== linked.id); }) : [];
+            var h = '<div class="jd-sec"><div class="jd-h">' + _jdIco('estimates') + ' Estimates</div>' +
+                '<div class="jd-sub">The estimate is the <b>source of truth</b> for this job’s Contract price and Estimated cost. Linking an estimate — or editing it — updates the job automatically.</div>';
+            if (linked) {
+                var t = _jobEstTotals(linked), nm = linked.name || linked.title || ('Estimate ' + String(linked.id).slice(0, 8));
+                h += '<div class="jd-est jd-est-primary" data-open="' + _jdEsc(linked.id) + '">' +
+                    '<div class="jd-est-top"><span class="jd-est-nm">' + _jdEsc(nm) + '</span><span class="jd-est-badge">Source of truth</span></div>' +
+                    '<div class="jd-est-nums"><span><label>Contract</label><b>$' + _jobMoney(t.proposalTotal) + '</b></span><span><label>Est. cost</label><b>$' + _jobMoney(t.baseCost) + '</b></span></div>' +
+                    '<div class="jd-est-act"><button class="jd-btn" data-open="' + _jdEsc(linked.id) + '">Open &amp; edit estimate</button></div></div>';
+            } else {
+                h += '<div class="jd-est-none">No estimate linked yet — Contract + Estimated Cost stay $0 until you link one.</div>';
+            }
+            h += '<button class="jd-btn jd-btn-primary" data-add="1">' + _jdIco('plus') + ' Add / link estimate</button>';
+            if (leadEsts.length) {
+                h += '<div class="jd-h2">Other estimates on this lead</div>';
+                leadEsts.forEach(function (e) {
+                    var t2 = _jobEstTotals(e), nm2 = e.name || e.title || ('Estimate ' + String(e.id).slice(0, 8));
+                    h += '<div class="jd-est" data-open="' + _jdEsc(e.id) + '"><div class="jd-est-top"><span class="jd-est-nm">' + _jdEsc(nm2) + '</span></div>' +
+                        '<div class="jd-est-nums"><span><label>Contract</label><b>$' + _jobMoney(t2.proposalTotal) + '</b></span><span><label>Est. cost</label><b>$' + _jobMoney(t2.baseCost) + '</b></span></div></div>';
+                });
+            }
+            h += '</div>';
+            panel.innerHTML = h;
+            panel.onclick = function (ev) {
+                var add = ev.target.closest && ev.target.closest('[data-add]');
+                if (add) { if (window.addEstimateToJob) window.addEstimateToJob(jobId); return; }
+                var op = ev.target.closest && ev.target.closest('[data-open]');
+                if (op && window.openEstimateFromJob) window.openEstimateFromJob(op.getAttribute('data-open'));
+            };
+        }
+        window.renderJobEstimates = renderJobEstimates;
+
+        function renderJobDetails(jobId) {
+            _jdStyles();
+            var panel = _ensureJobSectionPanel('job-details');
+            if (!panel) return;
+            var job = appData.jobs.find(function (j) { return j.id === jobId; });
+            if (!job) { panel.innerHTML = '<div class="jd-empty">No job loaded.</div>'; return; }
+            var ro = job._canEdit === false;
+            var ests = (window.appData && window.appData.estimates) || [];
+            var linked = job.estimate_id ? ests.find(function (e) { return e.id === job.estimate_id; }) : null;
+            var t = linked ? _jobEstTotals(linked) : {};
+            var contract = (typeof job.contractAmount === 'number') ? job.contractAmount : (t.proposalTotal || 0);
+            var estCost = (typeof job.estimatedCosts === 'number') ? job.estimatedCosts : (t.baseCost || 0);
+            function fld(label, key, val) {
+                return '<label class="jd-fld"><span>' + _jdEsc(label) + '</span><input data-k="' + key + '" type="text" value="' + _jdEsc(val == null ? '' : val) + '"' + (ro ? ' disabled' : '') + '></label>';
+            }
+            var h = '<div class="jd-sec"><div class="jd-h">' + _jdIco('edit') + ' Job Details</div>';
+            h += '<div class="jd-cost"><div class="jd-cost-h">Contract &amp; cost — <em>from the estimate</em></div>' +
+                '<div class="jd-cost-grid"><div><label>Contract price</label><b>$' + _jobMoney(contract) + '</b></div><div><label>Estimated cost</label><b>$' + _jobMoney(estCost) + '</b></div></div>' +
+                (linked
+                    ? '<button class="jd-link" data-openest="' + _jdEsc(linked.id) + '">Edit on the estimate →</button>'
+                    : '<button class="jd-link" data-gotoest="1">No estimate linked — Add one to set these →</button>') +
+                '</div>';
+            h += '<div class="jd-grid">' +
+                fld('Job name', 'title', job.title || job.name) +
+                fld('Client', 'client', job.client) +
+                fld('PM', 'pm', job.pm) +
+                fld('Type', 'type', job.type) +
+                fld('Market', 'market', job.market) +
+                fld('Address', 'address', job.address) +
+                '</div>';
+            h += '<label class="jd-fld jd-full"><span>Notes</span><textarea data-k="notes" rows="3"' + (ro ? ' disabled' : '') + '>' + _jdEsc(job.notes || '') + '</textarea></label>';
+            if (!ro) h += '<button class="jd-btn jd-btn-primary" data-save="1">Save details</button><span class="jd-saved" style="display:none;"> ✓ Saved</span>';
+            h += '</div>';
+            panel.innerHTML = h;
+            panel.onclick = function (ev) {
+                var oe = ev.target.closest && ev.target.closest('[data-openest]');
+                if (oe) { if (window.openEstimateFromJob) window.openEstimateFromJob(oe.getAttribute('data-openest')); return; }
+                var ge = ev.target.closest && ev.target.closest('[data-gotoest]');
+                if (ge) { _jdGotoSection('job-estimates'); return; }
+                var sv = ev.target.closest && ev.target.closest('[data-save]');
+                if (sv) {
+                    panel.querySelectorAll('[data-k]').forEach(function (inp) { job[inp.getAttribute('data-k')] = inp.value; });
+                    if (typeof saveData === 'function') saveData(); else if (window.saveData) window.saveData();
+                    var s = panel.querySelector('.jd-saved'); if (s) { s.style.display = 'inline'; setTimeout(function () { s.style.display = 'none'; }, 1800); }
+                    if (typeof window.refreshHeaderMetrics === 'function') { try { window.refreshHeaderMetrics(); } catch (e) {} }
+                }
+            };
+        }
+        window.renderJobDetails = renderJobDetails;
+
         function renderJobDetail(jobId) {
             const job = appData.jobs.find(j => j.id === jobId);
             if (!job) return;
