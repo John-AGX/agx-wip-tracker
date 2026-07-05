@@ -580,6 +580,16 @@ function renderJobsMain() {
 
         // ── CO Modal Functions ──
         function openAddChangeOrderModal() {
+            // Route to the modern server-backed CO editor (same one the CO
+            // list's "+ New Change Order" uses). The legacy inline addCOModal
+            // below wrote to appData.changeOrders — a dead store the current
+            // list (appData.jobChangeOrders) never reads, so those COs were
+            // invisible. Kept only as a defensive fallback if the editor
+            // module hasn't loaded.
+            if (window.p86ChangeOrders && typeof window.p86ChangeOrders.openNew === 'function') {
+                window.p86ChangeOrders.openNew(appState.currentJobId);
+                return;
+            }
             document.getElementById('coModalHeader').textContent = 'Add Change Order';
             document.getElementById('coSaveBtn').innerHTML = '&#x1F4DD; Add Change Order';
             document.getElementById('coNumber').value = '';
@@ -821,6 +831,15 @@ function renderJobsMain() {
         }
 
         function openAddPOModal() {
+            // Route to the modern server-backed PO editor (same one the PO
+            // list's "+ New Purchase Order" uses). The legacy inline
+            // addPOModal below wrote to appData.purchaseOrders — a dead store
+            // the current list (appData.jobPurchaseOrders) never reads, so
+            // those POs were invisible. Kept only as a defensive fallback.
+            if (window.p86PurchaseOrders && typeof window.p86PurchaseOrders.openNew === 'function') {
+                window.p86PurchaseOrders.openNew(appState.currentJobId);
+                return;
+            }
             document.getElementById('poModalHeader').textContent = 'Add Purchase Order';
             document.getElementById('poSaveBtn').innerHTML = '&#x1F4C4; Add Purchase Order';
             document.getElementById('poNumber').value = '';

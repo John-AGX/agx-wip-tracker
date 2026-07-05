@@ -2285,6 +2285,20 @@ function openEntityCreateModal(type, cb){
     }, 200);
     return;
   }
+  // PO + CO are server-backed entities now (appData.jobPurchaseOrders /
+  // jobChangeOrders) with dedicated full-screen editors — NOT the legacy
+  // inline addPOModal/addCOModal that wrote to the dead appData.purchaseOrders
+  // /changeOrders stores. Route "+ Create New" to the modern editor; the new
+  // record lands in the right-panel list (the source of truth). We don't
+  // auto-create a wired cost node here (the editor is async/full-screen) —
+  // wiring an existing PO/CO as a canvas node is the picker path, a separate
+  // follow-up. cb(null) so pickNodeType doesn't spawn an orphan node.
+  if(type==='po' && window.p86PurchaseOrders && typeof window.p86PurchaseOrders.openNew==='function'){
+    window.p86PurchaseOrders.openNew(E.job()); return cb(null);
+  }
+  if(type==='co' && window.p86ChangeOrders && typeof window.p86ChangeOrders.openNew==='function'){
+    window.p86ChangeOrders.openNew(E.job()); return cb(null);
+  }
   var spec=CREATE_MODAL[type]; if(!spec) return cb(null);
   var fn=window[spec.opener];
   var modalEl=document.getElementById(spec.modal);
