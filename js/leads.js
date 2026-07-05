@@ -21,6 +21,11 @@
   var _leadsViews = [];         // this user's saved Leads views
   var _leadsActiveViewId = null;
   var _leadsViewsLoaded = false;
+  // AI-extracted lead prefill held between the "extract from document" step and the
+  // next lead save (attached as payload.extraction). MUST be declared here: strict mode
+  // makes the bare `_pendingLeadExtraction = null` in clearEditor throw a ReferenceError
+  // otherwise, which broke New Lead + opening any existing lead.
+  var _pendingLeadExtraction = null;
 
   // Status enum metadata. Drives the filter dropdown, the editor modal,
   // the list pill colors, and the status flow comments. Keep order in
