@@ -1126,6 +1126,7 @@ function renderBldgDocks(){
           +'<button class="ng-dock-x" data-nc-del="'+k.id+'" title="Delete" aria-label="Delete">×</button>'
         +'</div>'
         +(open ? ('<div class="ng-dock-body">'+(subs.length ? subs.map(function(s){ return nestedCardHtml(s,0,seen); }).join('') : '<div class="ng-dock-empty">No items yet — add from the inspector</div>')+'</div>') : '');
+      attachDockDrag(el.querySelector('.ng-dock-hd'), k, el);   // pointer-capture drag (per header)
     });
   });
   [].forEach.call(area.querySelectorAll('.ng-dock'), function(e){ var id=e.id.replace('ngDock-',''); if(!live[id]) e.remove(); });
@@ -1150,20 +1151,27 @@ function layoutBldgDocks(){
   });
   [].forEach.call(svg.querySelectorAll('line'), function(l){ var id=l.id.replace('ngDockWire-',''); if(!document.getElementById('ngDock-'+id)) l.remove(); });
 }
-// Drag a building's cost-card by its header to place it where you want (offset from
-// the building, in graph units so it tracks pan/zoom); persists on release.
-document.addEventListener('mousedown', function(e){
-  var hd=e.target.closest('.ng-dock-hd'); if(!hd) return;
-  if(e.target.closest('[data-nc-dock-toggle],[data-nc-del]')) return;   // caret=collapse, ×=delete — not drag
-  var dock=hd.closest('.ng-dock'); if(!dock) return;
-  var b=E.findNode(dock.id.replace('ngDock-','')); if(!b) return;
-  e.preventDefault();
-  var z=E.zm(), sx=e.clientX, sy=e.clientY, off0=b._ncDockOff?{x:b._ncDockOff.x,y:b._ncDockOff.y}:{x:70,y:-30};
-  dock.classList.add('ng-dock-dragging');
-  function mv(ev){ b._ncDockOff={x:off0.x+(ev.clientX-sx)/z, y:off0.y+(ev.clientY-sy)/z}; layoutBldgDocks(); }
-  function up(){ document.removeEventListener('mousemove',mv); document.removeEventListener('mouseup',up); dock.classList.remove('ng-dock-dragging'); if(E.saveGraph) E.saveGraph(); }
-  document.addEventListener('mousemove',mv); document.addEventListener('mouseup',up);
-});
+// Drag a scope card by its header to place it where you want (offset from the building, in
+// graph units so it tracks pan/zoom); persists on release. Bound PER-HEADER with Pointer
+// Events + setPointerCapture + stopPropagation so the drag can't leak to the satellite
+// basemap pan underneath (which made the card feel "inverted" / not move). node = the child
+// node the dock represents; dockEl = its .ng-dock element.
+function attachDockDrag(hd, node, dockEl){
+  if(!hd || !node || !dockEl || hd._ncDragBound) return;
+  hd._ncDragBound=1;
+  hd.addEventListener('pointerdown', function(e){
+    if(e.button!==0) return;
+    if(e.target.closest('[data-nc-dock-toggle],[data-nc-del]')) return;   // caret=collapse, ×=delete — not drag
+    e.preventDefault(); e.stopPropagation();
+    var z=E.zm()||1, sx=e.clientX, sy=e.clientY;
+    var off0=node._ncDockOff?{x:node._ncDockOff.x,y:node._ncDockOff.y}:{x:88,y:-72};
+    dockEl.classList.add('ng-dock-dragging');
+    try{ hd.setPointerCapture(e.pointerId); }catch(_){}
+    function mv(ev){ ev.preventDefault(); node._ncDockOff={x:off0.x+(ev.clientX-sx)/z, y:off0.y+(ev.clientY-sy)/z}; layoutBldgDocks(); }
+    function up(){ hd.removeEventListener('pointermove',mv); hd.removeEventListener('pointerup',up); hd.removeEventListener('pointercancel',up); dockEl.classList.remove('ng-dock-dragging'); try{ hd.releasePointerCapture(e.pointerId); }catch(_){}; if(E.saveGraph) E.saveGraph(); }
+    hd.addEventListener('pointermove',mv); hd.addEventListener('pointerup',up); hd.addEventListener('pointercancel',up);
+  });
+}
 function renderNestedOverlay(){
   var tab=document.getElementById('nodeGraphTab'); if(!tab) return;
   var area=tab.querySelector('.ng-canvas-area')||tab;
