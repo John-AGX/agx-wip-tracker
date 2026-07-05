@@ -3601,7 +3601,7 @@
             max-height: calc(100vh - 92px);
             overflow-y: auto;
             -webkit-overflow-scrolling: touch;
-            background: #0f172a;
+            background: var(--surface, #17171c);
             border-top: 1px solid rgba(34, 211, 238, 0.35);
             border-radius: 16px 16px 0 0;
             padding: 6px 14px 18px;
@@ -9275,7 +9275,7 @@ body.light-mode .p86-pv-tag-modal-chip {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 120;
   display: none; align-items: center; justify-content: space-between; gap: 12px;
   padding: 8px 16px calc(8px + env(safe-area-inset-bottom, 0px));
-  background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+  background: linear-gradient(135deg, #1a1a20 0%, #23232b 100%);
   border-top: 1px solid rgba(34, 211, 238, 0.35);
   box-shadow: 0 -4px 14px rgba(0,0,0,0.4);
 }
@@ -10466,7 +10466,7 @@ body.light-mode .p86-pv-tag-modal-chip {
   transform: translate(-50%, 24px);
   opacity: 0;
   z-index: 9000;
-  background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+  background: linear-gradient(135deg, #1a1a20 0%, #23232b 100%);
   border: 1px solid rgba(34, 211, 238, 0.45);
   border-radius: 999px;
   padding: 8px 8px 8px 16px;
@@ -10901,7 +10901,7 @@ textarea.ci-input { height: auto; resize: vertical; font-family: inherit; }
   max-width: 94vw;
   overflow-x: auto;
   padding: 8px 14px;
-  background: var(--card-bg, #131a2e);
+  background: var(--card-bg, #141419);
   border: 1px solid rgba(79, 140, 255, 0.45);
   border-radius: 12px;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);

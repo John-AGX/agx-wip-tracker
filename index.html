@@ -246,7 +246,7 @@
     })();
     </script>
 
-    <link rel="stylesheet" href="css/styles.css?v=241">
+    <link rel="stylesheet" href="css/styles.css?v=242">
     <link rel="stylesheet" href="css/report-style-packs.css?v=4">
     <link rel="stylesheet" href="css/workspace-layout.css?v=65">
     <link rel="stylesheet" href="css/workspace.css?v=40">
@@ -265,7 +265,7 @@
          we just stack the form over it with hardcoded dark surface
          colors so a user who's set light mode still sees a coherent
          brand surface here. -->
-    <div id="login-screen" style="position:fixed;inset:0;z-index:99999;background:#0F172A;color:#F8FAFC;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:36px;">
+    <div id="login-screen" style="position:fixed;inset:0;z-index:99999;background:#101014;color:#F8FAFC;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:36px;">
         <img src="images/project-86-lockup-dark.svg" alt="Project 86" style="width:min(520px,82vw);height:auto;display:block;" />
         <div style="width:340px;max-width:88vw;text-align:center;">
             <div id="login-error" style="display:none;background:rgba(248,113,113,0.1);border:1px solid #f87171;color:#f87171;padding:8px 12px;border-radius:6px;font-size:12px;margin-bottom:12px;"></div>
@@ -3312,7 +3312,7 @@
          BEFORE ai-panel.js so window.PayloadArtifact exists when the
          panel mounts. -->
     <script src="js/payload-artifact.js?v=7"></script>
-    <script src="js/ai-panel.js?v=143"></script>
+    <script src="js/ai-panel.js?v=144"></script>
     <!-- Save-from-chat bridge (Workstream ③). Owns p86SaveCodeBlock /
          p86SaveResponse / p86SaveToPicker, called by inline onclick
          handlers in ai-panel.js renderMarkdown / renderBubble. Loads

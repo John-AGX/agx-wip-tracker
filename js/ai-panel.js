@@ -1065,7 +1065,7 @@
       // (#0d1f12 → #14351d). Charcoal gradient with a thin cyan
        // hairline matches the main site header. Trimmed vertical
        // padding 12px → 7px so the header sits ~10px shorter.
-      '<div style="padding:7px 14px;border-bottom:1px solid rgba(34,211,238,0.35);background:linear-gradient(135deg,#0f172a 0%,#1e293b 100%);display:flex;align-items:center;gap:10px;">' +
+      '<div style="padding:7px 14px;border-bottom:1px solid rgba(34,211,238,0.35);background:linear-gradient(135deg,#1a1a20 0%,#23232b 100%);display:flex;align-items:center;gap:10px;">' +
         '<button id="ai-sidebar-toggle" title="Sessions" aria-label="Open sessions sidebar" style="background:rgba(255,255,255,0.08);color:#fff;border:1px solid rgba(255,255,255,0.15);border-radius:6px;width:30px;height:30px;font-size:16px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;line-height:1;">&#x2630;</button>' +
         '<button id="ai-close" title="Close (Esc)" style="background:rgba(255,255,255,0.12);color:#fff;border:1px solid rgba(255,255,255,0.2);border-radius:6px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:6px;">&rarr; Close</button>' +
         '<div class="p86-ai-title" style="font-size:14px;font-weight:700;color:#fff;flex:1;text-align:right;">&#x2728; AI Assistant</div>' +
