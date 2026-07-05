@@ -226,6 +226,7 @@ function renderNodes(){
   nodes.forEach(function(n){
     var d=E.DEFS[n.type]; if(!d) return;
     var _slim = sitePlan && _spSatellite && n.type!=='t1'; // Slice 4: slim at-a-glance chip on the satellite map
+    if(sitePlan && window._p86NcDefault && n.type!=='t1') return; // NC-5: children live in the building's docked card stack, not as fanned nodes
     if(sitePlan && !E.spNodeVisible(n.type, n.id)) return; // site-plan: buildings + WIP hub, or a drilled-in building's subgraph
     if(editingId===n.id) return;
     // Watches are never collapsed — always show the flashy KPI
@@ -992,7 +993,7 @@ function render(){
   renderBuildingMetrics();          // S2: selected building's cost breakdown
   renderInspector();                // right-hand Inspector: WIP / building / node detail
   E.drawGrid(gridCtx, gridC.width, gridC.height);
-  E.drawWires(wireCtx, wrap, wiringFrom, wireMouse);
+  if(!(window._p86NcDefault && E.viewMode && E.viewMode()==='siteplan')) E.drawWires(wireCtx, wrap, wiringFrom, wireMouse);  // NC-5: no wires — containment is shown by the docked cards
   E.saveGraph();
   drawMinimap();
   var z=document.querySelector('.ng-zoom');
@@ -1073,10 +1074,41 @@ window.p86NcBldgToggle=function(bId){
   if(p && p.style.display!=='none' && p._bId===bId){ p.style.display='none'; return; }
   renderBldgPanel(bId);
 };
-// Re-render whichever nested surfaces are open (full overlay and/or the floating panel).
+// Re-render whichever nested surfaces are open (full overlay, floating panel, docks).
 function ncRefreshOpen(){
   if(window._p86Nested) renderNestedCards();
   var p=document.getElementById('ngBldgCards'); if(p && p.style.display!=='none' && p._bId) renderBldgPanel(p._bId);
+  if(window._p86NcDefault) renderBldgDocks();
+}
+// NC-5: each building's children as a card stack DOCKED to it on the satellite map
+// (no wires). renderBldgDocks builds/refreshes the stacks; layoutBldgDocks keeps each
+// pinned to its building's on-screen spot (called from applyTx on pan/zoom).
+function renderBldgDocks(){
+  var tab=document.getElementById('nodeGraphTab'); if(!tab) return;
+  var area=tab.querySelector('.ng-canvas-area')||tab;
+  var sitePlan=E.viewMode && E.viewMode()==='siteplan';
+  if(!window._p86NcDefault || !sitePlan){ [].forEach.call(area.querySelectorAll('.ng-dock'), function(e){ e.remove(); }); return; }
+  var t1s=E.nodes().filter(function(n){ return n.type==='t1'; }), live={};
+  t1s.forEach(function(b){
+    live[b.id]=1;
+    var el=document.getElementById('ngDock-'+b.id);
+    if(!el){ el=document.createElement('div'); el.id='ngDock-'+b.id; el.className='ng-dock'; area.appendChild(el); ncAttachDnd(el); }
+    var kids=getNestedChildren(b.id), seen={};
+    el.innerHTML='<div class="ng-dock-hd" data-nc-sel="'+b.id+'">'+luEsc(b.label||'Building')+'</div>'
+      +(kids.length ? kids.map(function(k){ return nestedCardHtml(k,0,seen); }).join('') : '<div class="ng-dock-empty">No costs yet — add from the inspector</div>');
+  });
+  [].forEach.call(area.querySelectorAll('.ng-dock'), function(e){ var id=e.id.replace('ngDock-',''); if(!live[id]) e.remove(); });
+  layoutBldgDocks();
+}
+function layoutBldgDocks(){
+  var tab=document.getElementById('nodeGraphTab'); if(!tab) return;
+  var z=E.zm(), p=E.pan();
+  E.nodes().forEach(function(n){ if(n.type!=='t1') return;
+    var el=document.getElementById('ngDock-'+n.id); if(!el) return;
+    var c=(n.geoLatLng)?geoRenderPos(n):{x:n.x,y:n.y};
+    el.style.left=Math.round((p.x+c.x)*z + 18)+'px';
+    el.style.top=Math.round((p.y+c.y)*z - 10)+'px';
+  });
 }
 function renderNestedOverlay(){
   var tab=document.getElementById('nodeGraphTab'); if(!tab) return;
@@ -1113,6 +1145,7 @@ function renderNestedOverlay(){
   host.style.display = on ? 'block' : 'none';
   if(on) renderNestedCards();
   var bp=document.getElementById('ngBldgCards'); if(bp && bp.style.display!=='none' && bp._bId) renderBldgPanel(bp._bId);
+  renderBldgDocks();   // NC-5: keep the per-building docked card stacks in sync
 }
 window.p86NestedRefresh=renderNestedOverlay;
 // Nested-card interactions (collapse / delete / select) — delegated once at module load.
@@ -1195,6 +1228,7 @@ function applyTx(){
   }
   if(_spPhotos) layoutPhotoPins();        // keep photo pins on their spots
   if(_spTasks) layoutTaskPins();          // keep task pins on their spots
+  if(window._p86NcDefault) layoutBldgDocks();  // NC-5: keep each building's docked card stack on its spot
 }
 
 // ── NG-R3: compact currency ($120k / $1.3M) for at-a-glance round cost chips ──

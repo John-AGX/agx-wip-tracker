@@ -1020,6 +1020,10 @@ body.light-mode .ng-topbar.ng-ribbon .ng-ribbon-btn:hover{
 .ng-bcards-body{padding:12px}
 .ng-insp-cards{margin-left:8px;font-size:11px;font-weight:600;color:#bcd4f5;background:#16233b;border:1px solid rgba(79,140,255,.35);border-radius:6px;padding:2px 8px;cursor:pointer;white-space:nowrap}
 .ng-insp-cards:hover{background:#1d2f4d}
+/* NC-5: per-building card stack docked to its building on the map (no wires) */
+.ng-dock{position:absolute;z-index:45;width:290px;max-height:64%;overflow:auto;padding:8px;background:rgba(14,22,38,.94);border:1px solid rgba(255,255,255,.14);border-radius:11px;box-shadow:0 14px 40px rgba(0,0,0,.5);display:flex;flex-direction:column;gap:8px}
+.ng-dock-hd{font-size:12.5px;font-weight:600;color:#eaf0fb;padding:2px 4px 6px;border-bottom:1px solid rgba(255,255,255,.08);cursor:pointer}
+.ng-dock-empty{font-size:11px;color:#6b7689;padding:4px}
 .ng-lu-x:hover{background:rgba(224,122,143,.12);color:#f3a3b3}
 /* 2.5D massing: a building block in site-plan reads as solid mass — flatter
    "block" corners + a lit top edge over the budget-proportional extrusion
