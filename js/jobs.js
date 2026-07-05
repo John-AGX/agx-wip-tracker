@@ -2934,7 +2934,9 @@ function renderJobsMain() {
                     NG.nodes().forEach(function(n) {
                         if (n.data && n.data.id === id) {
                             if (field === 'asSoldRevenue') n.revenue = val;
-                            if (field === 'pctComplete') n.pct = val;
+                            // ensureNGComputed reads n.pctComplete (n.pct is the
+                            // display mirror) — set both so the edit survives recompute.
+                            if (field === 'pctComplete') { n.pct = val; n.pctComplete = val; }
                         }
                     });
                     NG.saveGraph();
@@ -3054,11 +3056,13 @@ function renderJobsMain() {
                 let body = '<tr id="' + uid + '" class="p86-bldg-body"><td colspan="8">';
 
                 // Cost breakdown
+                // Building cost buckets are computed from wired phases/cost nodes
+                // (read-outs) — inline editing them fights ensureNGComputed.
                 body += '<div class="p86-bldg-cost-row">' +
-                    '<span>Mat: <b>' + inlNum('building', building.id, 'materials', bMat, 'cur') + '</b></span>' +
-                    '<span>Lab: <b>' + inlNum('building', building.id, 'labor', bLab, 'cur') + '</b></span>' +
-                    '<span>Sub: <b>' + inlNum('building', building.id, 'sub', bSub, 'cur') + '</b></span>' +
-                    '<span>Equip: <b>' + inlNum('building', building.id, 'equipment', bEquip, 'cur') + '</b></span>' +
+                    '<span>Mat: <b>' + formatCurrency(bMat) + '</b></span>' +
+                    '<span>Lab: <b>' + formatCurrency(bLab) + '</b></span>' +
+                    '<span>Sub: <b>' + formatCurrency(bSub) + '</b></span>' +
+                    '<span>Equip: <b>' + formatCurrency(bEquip) + '</b></span>' +
                     ((building.hoursTotal || building.rate) ? '<span class="p86-bldg-cost-meta">' + (building.hoursTotal || 0) + 'hrs' + (building.hoursWeek ? ' (' + building.hoursWeek + '/wk)' : '') + ' @ ' + formatCurrency(building.rate || 40) + '/hr</span>' : '') +
                     '</div>';
 
@@ -3423,7 +3427,10 @@ function renderJobsMain() {
                         '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px;">' +
                         '<div>' +
                         '<span style="font-size:13px;font-weight:600;color:var(--text);">' + escapeHTML(bldgName) + '</span>' +
-                        '<span style="font-size:11px;color:var(--text-dim);margin-left:8px;">Rev: ' + inlNum('phase', p.id, 'asSoldRevenue', phaseRevenue(p), 'cur') + ' | Mat: ' + inlNum('phase', p.id, 'materials', p.materials || 0, 'cur') + ' | Lab: ' + inlNum('phase', p.id, 'labor', p.labor || 0, 'cur') + ' | Sub: ' + inlNum('phase', p.id, 'sub', p.sub || 0, 'cur') + ' | Equip: ' + inlNum('phase', p.id, 'equipment', p.equipment || 0, 'cur') + ' | <b style="color:var(--accent);">' + inlNum('phase', p.id, 'pctComplete', p.pctComplete || 0, 'pct') + '</b></span>' +
+                        // Rev + %Complete are user-set (they sync the wired t2 node and
+                        // survive ensureNGComputed) → click-to-edit. Mat/Lab/Sub/Equip are
+                        // ACTUAL costs computed from wired cost nodes/receipts — read-outs.
+                        '<span style="font-size:11px;color:var(--text-dim);margin-left:8px;">Rev: ' + inlNum('phase', p.id, 'asSoldRevenue', phaseRevenue(p), 'cur') + ' | Mat: ' + formatCurrency(p.materials || 0) + ' | Lab: ' + formatCurrency(p.labor || 0) + ' | Sub: ' + formatCurrency(p.sub || 0) + ' | Equip: ' + formatCurrency(p.equipment || 0) + ' | <b style="color:var(--accent);">' + inlNum('phase', p.id, 'pctComplete', p.pctComplete || 0, 'pct') + '</b></span>' +
                         '</div>' +
                         '<button class="ee-btn ghost" onclick="event.stopPropagation();editPhase(\'' + escapeHTML(p.id) + '\')">&#x270F;&#xFE0F; Edit</button>' +
                         '</div>' +
