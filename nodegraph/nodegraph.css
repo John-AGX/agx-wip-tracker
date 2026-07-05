@@ -1,5 +1,5 @@
 /* AGX Node Graph v5 — T1/T2, Cost w/ sub-items, progress bars */
-#nodeGraphTab{display:none;position:fixed;left:0;right:0;bottom:0;z-index:99;background:var(--ng-bg,#0b0e16);overflow:hidden;font-family:'Segoe UI',system-ui,sans-serif}
+#nodeGraphTab{display:none;position:fixed;left:0;right:0;bottom:0;z-index:99;background:var(--ng-bg,#0e0e12);overflow:hidden;font-family:'Segoe UI',system-ui,sans-serif}
 #nodeGraphTab.active{display:flex;flex-direction:column}
 /* Maximize toggle — hide the AGX nav header AND the job-detail
    metrics strip + sub-tab nav so the graph claims the full
@@ -18,7 +18,7 @@ body.ng-graph-fullscreen #nodeGraphTab.active {
   height: 100vh;
 }
 /* Theme vars */
-:root{--ng-bg:#0b0e16;--ng-surface:#12162a;--ng-surface2:#10141e;--ng-border:#242e50;--ng-border2:#1c2236;--ng-text:#e4e6f0;--ng-dim:#6a7090;--ng-dim2:#4a5068;--ng-input:#0d1019;--ng-grid-dot:#161b2a;--ng-grid-line:#141828;--ng-port-bg:#0b0e16;--ng-shadow:rgba(0,0,0,.5)}
+:root{--ng-bg:#0e0e12;--ng-surface:#1a1a20;--ng-surface2:#16161b;--ng-border:#33333d;--ng-border2:#26262e;--ng-text:#f0f0f3;--ng-dim:#9a9aa6;--ng-dim2:#6b6b78;--ng-input:#131318;--ng-grid-dot:#23232b;--ng-grid-line:#1a1a20;--ng-port-bg:#0e0e12;--ng-shadow:rgba(0,0,0,.5)}
 body.light-mode{--ng-bg:#f7f8fa;--ng-surface:#ffffff;--ng-surface2:#eceef2;--ng-border:#6b7280;--ng-border2:#9ca3af;--ng-text:#1f2937;--ng-dim:#4b5563;--ng-dim2:#6b7280;--ng-input:#f9fafb;--ng-grid-dot:#dde0e6;--ng-grid-line:#eef0f3;--ng-port-bg:#f7f8fa;--ng-shadow:rgba(0,0,0,.12)}
 
 /* Light-mode overrides for hardcoded dark-mode colors */
@@ -117,7 +117,7 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
    desktop keeps the desktop split (real app sidebar left · map · docked
    inspector right), NOT the bottom-sheet phone layout. */
 @media (max-width:768px) and (pointer:coarse){
-  .ng-mobile-seg{display:flex;position:fixed;left:0;right:0;bottom:0;z-index:60;gap:6px;padding:6px;background:rgba(12,16,26,.97);border-top:1px solid rgba(255,255,255,.1)}
+  .ng-mobile-seg{display:flex;position:fixed;left:0;right:0;bottom:0;z-index:60;gap:6px;padding:6px;background:rgba(20,20,25,.97);border-top:1px solid rgba(255,255,255,.1)}
   .ng-mseg-btn{flex:1;background:transparent;border:1px solid rgba(255,255,255,.14);color:#9cc0ff;font-size:12px;font-weight:600;padding:9px 6px;border-radius:7px;cursor:pointer}
   .ng-mseg-btn.ng-on{background:rgba(79,140,255,.22);border-color:#4f8cff;color:#fff}
   #nodeGraphTab .ng-sidebar,
@@ -169,7 +169,7 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
 /* Slice 3c: collapsible Tasks/Files sections (lazy-mounted on first open) */
 .ng-insp-coll{margin-top:10px;border-top:1px solid rgba(255,255,255,.07);padding-top:6px}
 .ng-insp-coll-hdr{font-size:12px;font-weight:700;color:#c5d2e6;cursor:pointer;padding:4px 0;display:flex;align-items:center;gap:6px;user-select:none}
-.ng-insp-coll-hdr::before{content:"\25B8";font-size:9px;color:#8aa0c0;transition:transform .12s}
+.ng-insp-coll-hdr::before{content:"\25B8";font-size:9px;color:#b4b4bf;transition:transform .12s}
 .ng-insp-coll-hdr.ng-open::before{transform:rotate(90deg)}
 .ng-insp-coll-body{padding-top:6px}
 .ng-insp-sublabel{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ng-dim);margin:0 0 5px}
@@ -188,7 +188,7 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
 .ng-insp-qblink{font-size:10px;color:#34d399;margin-top:3px}
 /* Slice 3c — PO linked-phases + Sub scope breakdown in the Inspector */
 .ng-po-linked-head{display:flex;justify-content:space-between;align-items:center}
-.ng-po-alloc-badge{font-family:'Courier New',monospace;font-weight:600;color:#6a7090}
+.ng-po-alloc-badge{font-family:'Courier New',monospace;font-weight:600;color:#9a9aa6}
 .ng-po-alloc-badge.ng-warn{color:#fbbf24}
 .ng-po-row{display:flex;align-items:center;gap:6px;padding:3px 0;font-size:12px;color:var(--ng-text)}
 .ng-po-row-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -323,7 +323,7 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
 .ng-pv-top:hover,.ng-pv-bot:hover{transform:translateX(-50%) scale(1.4)}
 /* Port labels — input labels left-aligned, output labels right-aligned */
 .ng-pl{font-size:13px;color:var(--ng-dim);flex:1}
-.ng-pv{font-family:'Courier New',monospace;font-size:13px;color:#8899cc;font-weight:600;text-align:right}
+.ng-pv{font-family:'Courier New',monospace;font-size:13px;color:#c4c4cd;font-weight:600;text-align:right}
 /* Progress bar — click to edit */
 .ng-progress-wrap{padding:6px 12px 4px;cursor:pointer}
 .ng-progress-wrap:hover .ng-progress{box-shadow:0 0 0 1px rgba(79,140,255,.4)}
@@ -374,7 +374,7 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
 .ng-si-f{background:var(--ng-input);border:1px solid var(--ng-border2);color:var(--ng-dim);font-size:11px;padding:3px 5px;border-radius:3px;outline:none;font-family:inherit;min-width:0}
 .ng-si-f:focus{border-color:#4f8cff}
 .ng-si-date{width:105px;flex-shrink:0}
-.ng-si-sm{width:55px;flex-shrink:0;text-align:right;font-family:'Courier New',monospace;color:#8899cc;font-weight:600}
+.ng-si-sm{width:55px;flex-shrink:0;text-align:right;font-family:'Courier New',monospace;color:#c4c4cd;font-weight:600}
 .ng-si-sel{width:48px;flex-shrink:0;font-size:10px;padding:3px 3px;cursor:pointer}
 .ng-si-val{font-family:'Courier New',monospace;font-size:11px;color:#fbbf24;font-weight:600;text-align:right;min-width:55px;flex-shrink:0}
 .ng-subitem-del{color:#f87171;cursor:pointer;font-size:9px;opacity:.5;padding:0 3px;flex-shrink:0}
@@ -403,14 +403,14 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
 .ng-coll-inline .ng-cv-bud{font-size:13px}
 .ng-coll-inline .ng-coll-val{font-size:13px}
 .ng-coll-inline .ng-coll-pct{font-size:13px}
-.ng-coll-sep{color:#4a5068;font-weight:400;font-size:13px}
+.ng-coll-sep{color:#6b6b78;font-weight:400;font-size:13px}
 .ng-coll-pct{font-family:'Courier New',monospace;font-size:11px;font-weight:700;color:#fbbf24}
 /* Collapsed ports sit on the node edges, centered to full node height */
 .ng-node.ng-coll .ng-coll-pi{position:absolute;left:-5px;top:50%;transform:translateY(-50%);width:10px;height:10px;border-radius:50%;background:#4f8cff;border:2px solid #4f8cff;cursor:crosshair;z-index:5}
 .ng-node.ng-coll .ng-coll-po{position:absolute;right:-5px;top:50%;transform:translateY(-50%);width:10px;height:10px;border-radius:50%;background:#4f8cff;border:2px solid #4f8cff;cursor:crosshair;z-index:5}
-.ng-coll-val{font-family:'Courier New',monospace;font-size:14px;font-weight:700;color:#8899cc;text-align:right}
+.ng-coll-val{font-family:'Courier New',monospace;font-size:14px;font-weight:700;color:#c4c4cd;text-align:right}
 .ng-coll-detail{display:flex;justify-content:space-between;align-items:center;gap:6px}
-.ng-coll-lbl{font-size:9px;color:#6a7090;text-transform:uppercase;letter-spacing:.3px;white-space:nowrap}
+.ng-coll-lbl{font-size:9px;color:#9a9aa6;text-transform:uppercase;letter-spacing:.3px;white-space:nowrap}
 .ng-coll-detail .ng-coll-val{font-size:12px}
 .ng-cv-bud{color:#a78bfa}
 .ng-cv-grn{color:#34d399}
@@ -800,13 +800,13 @@ body.light-mode .ng-topbar.ng-ribbon .ng-ribbon-btn:hover{
 /* 3D Orbit view — an isolated, interactive vector map (Google's real tilted 3D
    buildings) layered over the canvas area. Shown only while .ng-orbit-on; the flat
    working map + node overlay underneath are untouched, so Exit just hides this. */
-#nodeGraphTab .ng-orbit-3d{position:absolute;inset:0;z-index:40;display:none;background:#0b0e16}
+#nodeGraphTab .ng-orbit-3d{position:absolute;inset:0;z-index:40;display:none;background:#0e0e12}
 #nodeGraphTab.ng-orbit-on .ng-orbit-3d{display:block}
 .ng-orbit-3d-map{position:absolute;inset:0}
 .ng-orbit-3d-frame{position:absolute;inset:0;width:100%;height:100%;border:0;display:block}
-.ng-orbit-exit{position:absolute;top:12px;right:12px;z-index:5;display:inline-flex;align-items:center;gap:6px;background:rgba(17,20,28,.92);color:#fff;border:1px solid rgba(255,255,255,.18);border-radius:9px;padding:8px 13px;font-size:12px;font-weight:600;cursor:pointer;box-shadow:0 2px 12px rgba(0,0,0,.5)}
+.ng-orbit-exit{position:absolute;top:12px;right:12px;z-index:5;display:inline-flex;align-items:center;gap:6px;background:rgba(24,24,29,.92);color:#fff;border:1px solid rgba(255,255,255,.18);border-radius:9px;padding:8px 13px;font-size:12px;font-weight:600;cursor:pointer;box-shadow:0 2px 12px rgba(0,0,0,.5)}
 .ng-orbit-exit:hover{background:rgba(40,46,60,.96)}
-.ng-orbit-hint{position:absolute;left:12px;bottom:12px;z-index:5;background:rgba(17,20,28,.86);color:#aeb4c4;border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:7px 11px;font-size:11px;max-width:280px;line-height:1.45;pointer-events:none}
+.ng-orbit-hint{position:absolute;left:12px;bottom:12px;z-index:5;background:rgba(24,24,29,.86);color:#aeb4c4;border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:7px 11px;font-size:11px;max-width:280px;line-height:1.45;pointer-events:none}
 .ng-sat-hint{position:absolute;left:50%;top:14px;transform:translateX(-50%);z-index:30;background:var(--ng-surface);border:1px solid var(--ng-border);color:var(--ng-dim);padding:6px 12px;border-radius:8px;font-size:12px;display:none;pointer-events:none;max-width:80%;text-align:center}
 /* Map-picker (Slice 3): the Place button shows only in satellite mode; the
    crosshair overlay captures the placement click ABOVE the engine. */
@@ -868,17 +868,17 @@ body.light-mode .ng-topbar.ng-ribbon .ng-ribbon-btn:hover{
 .ng-msaved-lbl.ng-msaved-lbl-area,.ng-msaved-del.ng-msaved-lbl-area{text-anchor:middle}
 /* z-index MUST sit above the click-capturing measure overlay (.ng-geopick-overlay, z40),
    or the overlay eats the panel's button clicks (adds a point instead of firing Undo/Save/Done). */
-.ng-measure-panel{position:absolute;top:12px;left:12px;z-index:50;width:212px;background:rgba(16,20,30,.96);border:1px solid #2a3550;border-radius:10px;padding:10px;box-shadow:0 8px 28px rgba(0,0,0,.45);color:#e7ecf6}
+.ng-measure-panel{position:absolute;top:12px;left:12px;z-index:50;width:212px;background:rgba(24,24,29,.97);border:1px solid #33333d;border-radius:10px;padding:10px;box-shadow:0 8px 28px rgba(0,0,0,.45);color:#f0f0f3}
 .ng-measure-modes{display:flex;gap:4px;margin-bottom:8px}
-.ng-measure-modes button{flex:1;padding:6px 0;font-size:12px;font-weight:700;border:1px solid #2a3550;border-radius:7px;background:#161c2a;color:#9fb0cc;cursor:pointer}
+.ng-measure-modes button{flex:1;padding:6px 0;font-size:12px;font-weight:700;border:1px solid #33333d;border-radius:7px;background:#1e1e25;color:#b4b4bf;cursor:pointer}
 .ng-measure-modes button.ng-on{background:rgba(255,209,102,.16);border-color:rgba(255,209,102,.5);color:#ffd166}
 .ng-measure-pitchrow{display:flex;align-items:center;gap:6px;margin-bottom:8px}
-.ng-measure-pitchrow label{font-size:11px;color:#9fb0cc;white-space:nowrap}
-.ng-measure-pitch{flex:1;padding:4px 6px;font-size:12px;border:1px solid #2a3550;border-radius:6px;background:#0f1420;color:#e7ecf6}
-.ng-measure-readout{font-size:12.5px;font-weight:600;line-height:1.45;color:#fff;min-height:30px;padding:6px 8px;background:#0f1420;border:1px solid #222c44;border-radius:7px;margin-bottom:8px}
+.ng-measure-pitchrow label{font-size:11px;color:#b4b4bf;white-space:nowrap}
+.ng-measure-pitch{flex:1;padding:4px 6px;font-size:12px;border:1px solid #33333d;border-radius:6px;background:#131318;color:#f0f0f3}
+.ng-measure-readout{font-size:12.5px;font-weight:600;line-height:1.45;color:#fff;min-height:30px;padding:6px 8px;background:#131318;border:1px solid #222c44;border-radius:7px;margin-bottom:8px}
 .ng-measure-roof{color:#ffd166;font-weight:700}
 .ng-measure-actions{display:flex;gap:5px}
-.ng-measure-actions button{flex:1;padding:5px 0;font-size:11px;font-weight:600;border:1px solid #2a3550;border-radius:6px;background:#161c2a;color:#cdd8ec;cursor:pointer}
+.ng-measure-actions button{flex:1;padding:5px 0;font-size:11px;font-weight:600;border:1px solid #33333d;border-radius:6px;background:#1e1e25;color:#d0d0d8;cursor:pointer}
 .ng-measure-actions button:hover{background:#1e2638}
 .ng-measure-actions button[data-mact="save"]{background:rgba(56,217,192,.16);border-color:rgba(56,217,192,.5);color:#38d9c0} /* commit = teal, matches saved measurements */
 /* A traced building IS its polygon — the old massing-block card is hidden entirely
@@ -922,7 +922,7 @@ body.light-mode .ng-topbar.ng-ribbon .ng-ribbon-btn:hover{
 .ng-lu-unit .ng-lu-name{font-size:12px;color:#c3ccdb;cursor:pointer}
 .ng-lu-name:hover{text-decoration:underline}
 .ng-lu-tools{display:flex;gap:3px;align-items:center;flex:none}
-.ng-lu-mini{font-size:10px;color:#8aa0c0;background:transparent;border:1px solid rgba(255,255,255,.14);border-radius:5px;padding:1px 5px;cursor:pointer;line-height:1.35;white-space:nowrap}
+.ng-lu-mini{font-size:10px;color:#b4b4bf;background:transparent;border:1px solid rgba(255,255,255,.14);border-radius:5px;padding:1px 5px;cursor:pointer;line-height:1.35;white-space:nowrap}
 .ng-lu-mini:hover{background:rgba(255,255,255,.06);color:#cbd5e1}
 .ng-lu-x{color:#e07a8f;border-color:rgba(224,122,143,.32)}
 /* ST-1: Structure completion tracker — level chip stack + unit cube grid */
@@ -937,7 +937,7 @@ body.light-mode .ng-topbar.ng-ribbon .ng-ribbon-btn:hover{
 .ng-lu-chip{display:flex;align-items:center;gap:8px;padding:7px 9px;background:#141f33;border:1px solid rgba(255,255,255,.07);border-left:3px solid rgba(255,255,255,.18);border-radius:0 7px 7px 0}
 .ng-lu-chip.done{border-left-color:#34d399;background:rgba(30,158,117,.15)}
 .ng-lu-chip-nm{flex:1;font-size:12.5px;font-weight:600;color:#dbe6ff;cursor:pointer}
-.ng-lu-chip-prog{font-size:11px;color:#8aa0c0}
+.ng-lu-chip-prog{font-size:11px;color:#b4b4bf}
 .ng-lu-mark{width:22px;height:22px;padding:0;border:none;background:transparent;font-size:15px;color:#7c8699;cursor:pointer;line-height:1}
 .ng-lu-chip.done .ng-lu-mark{color:#34d399}
 .ng-lu-progline{font-size:10.5px;color:#6b7689;margin-top:6px}
