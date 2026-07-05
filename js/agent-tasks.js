@@ -57,6 +57,9 @@
       // retired. .p86-bgt-dot/.p86-bgt-badge are reused by that button + panel.
       '.p86-bgt-dot{width:8px;height:8px;border-radius:50%;background:#4f8cff}',
       '.p86-bgt-badge{background:#fbbf24;color:#1a1400;border-radius:10px;padding:1px 7px;font-size:11px;font-weight:800}',
+      // Ambient "needs you" badge on the header/mobile Ask-86 button, so a
+      // paused background task is visible without opening the chat.
+      '.p86-ask86-attn{position:absolute;top:-4px;right:-4px;min-width:16px;height:16px;box-sizing:border-box;padding:0 4px;border-radius:8px;background:#fbbf24;color:#1a1400;font:800 10px/16px system-ui,sans-serif;text-align:center;pointer-events:none;box-shadow:0 0 0 2px rgba(15,15,20,.85);z-index:3}',
       // Soft blue pulse ring on the header button while the crew is working.
       '#ai-crew-activity.p86-bgt-running{animation:p86CrewPulse 1.8s ease-in-out infinite}',
       '@keyframes p86CrewPulse{0%,100%{box-shadow:0 0 0 0 rgba(79,140,255,0)}50%{box-shadow:0 0 0 3px rgba(79,140,255,.30)}}',
@@ -109,10 +112,35 @@
     });
   }
 
+  // Ambient "needs you" badge on the header + mobile Ask-86 buttons — visible
+  // WITHOUT opening the chat. Self-heals if the icon system re-decorates the
+  // button (recreates the badge span when absent).
+  function updateAskBadge() {
+    var hosts = [
+      document.getElementById('header-ask86-btn'),
+      document.querySelector('#p86-mobile-nav [data-mobile-nav="ask86"]')
+    ];
+    hosts.forEach(function (host) {
+      if (!host) return;
+      var b = host.querySelector('.p86-ask86-attn');
+      if (_attention > 0) {
+        if (getComputedStyle(host).position === 'static') host.style.position = 'relative';
+        if (!b) { b = document.createElement('span'); b.className = 'p86-ask86-attn'; host.appendChild(b); }
+        b.textContent = _attention > 9 ? '9+' : _attention;
+        b.style.display = '';
+        host.setAttribute('data-crew-attn', _attention);
+      } else if (b) {
+        b.style.display = 'none';
+        host.removeAttribute('data-crew-attn');
+      }
+    });
+  }
+
   // Reflect state onto the crew-activity button in the 86 chat header
   // (built lazily by ai-panel.js). No-op until the chat panel exists; the
   // 20s poll + the panel's own refresh() call keep it current after that.
   function renderLauncher() {
+    updateAskBadge();  // ambient signal — runs regardless of chat-open state
     var btn = document.getElementById('ai-crew-activity'); if (!btn) return;
     var badge = btn.querySelector('.p86-bgt-badge');
     if (badge) {
