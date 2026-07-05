@@ -5,6 +5,10 @@
 'use strict';
 
 var E = NG; // engine reference
+// NC-7: the site plan defaults to the clean scope-card view (building = map object, each
+// scope/CO = a card wired to it). No legacy fanned nodes/wires. Toggle off via ▤ Cards.
+// Only affects siteplan (docks + non-t1 node-skip are both gated on viewMode==='siteplan').
+if(typeof window._p86NcDefault==='undefined') window._p86NcDefault=true;
 var wrap, canvasEl, wireC, wireCtx, gridC, gridCtx;
 var dragN=null, dragOff={x:0,y:0}, _didDragNode=false;
 var wiringFrom=null, wireMouse=null;
