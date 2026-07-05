@@ -2962,6 +2962,29 @@ window.p86NgShowSection=function(pid){
 // Return the right Inspector to the Site Plan's native job overview
 // (used by the "‹ Overview" home chip + stale job-overview deep links).
 window.p86NgShowOverview=function(){ showSectionInInspector('job-overview', null); };
+// The job's live overview card (same p86EntityCard view-model as the left-rail card) for
+// the top of the right Inspector — the Site Plan is the job page, so the card is the
+// persistent job context. Contract + Profit + % ring from getJobWIP.
+function inspectorJobCardHtml(){
+  var jid=E.job();
+  var job=(typeof appData!=='undefined' && appData.jobs) ? appData.jobs.find(function(j){return j.id===jid;}) : null;
+  if(!job || !window.p86EntityCard) return '';
+  var w=(typeof window.getJobWIP==='function') ? (window.getJobWIP(jid)||{}) : {};
+  var sm=function(n){ n=Number(n)||0; var a=Math.abs(n), s=n<0?'-':''; if(a>=1e6) return s+'$'+(a/1e6).toFixed(1).replace(/\.0$/,'')+'M'; if(a>=1e3) return s+'$'+Math.round(a/1e3)+'k'; return s+'$'+Math.round(a); };
+  var statusCol=window.p86EntityCard.jobStatusColor?window.p86EntityCard.jobStatusColor(job.status):'#8aa0c0';
+  var accentCol=(window.p86EntityCard.pinColor?window.p86EntityCard.pinColor(job,'job'):null)||statusCol;
+  var profit=(w.jtdProfit!=null)?w.jtdProfit:0;
+  var contract=(w.contractIncome!=null)?w.contractIncome:(w.totalIncome!=null)?w.totalIncome:(Number(job.contractAmount)||0);
+  return '<div class="ng-insp-jobcard">'+window.p86EntityCard.render({
+    kind:'job', accent:accentCol, status:{label:job.status||'In Progress', color:statusCol},
+    number:job.jobNumber||'', title:job.title||job.name||'', subtitle:job.client||'',
+    ring:{pct:(w.pctComplete||0)},
+    stats:[
+      {label:'Contract', value:sm(contract)},
+      {label:'Profit', value:(profit<0?'-':'+')+sm(Math.abs(profit)), tone:profit<0?'neg':'pos'}
+    ]
+  }, {compact:true})+'</div>';
+}
 function renderInspector(){
   var panel=document.querySelector('.ng-inspector'); if(!panel) return;
   if(!(E.viewMode && E.viewMode()==='siteplan')) return;
@@ -2977,13 +3000,13 @@ function renderInspector(){
   if(sel && _inspSectionPanel){ restoreSectionPanel(); }
   else if(!sel && _inspSection){ return; }
   if(sel && sel.type==='t1'){
-    if(hdr) hdr.innerHTML='<span class="ng-insp-ic">▤</span> '+luEsc(sel.label||'Building')+'<span class="ng-insp-type">Building</span>'
-      +'<button class="ng-insp-cards" onclick="event.stopPropagation();window.p86NcBldgToggle&&window.p86NcBldgToggle(\''+sel.id+'\')" title="Open this building as nested cards on the map">▤ Cards</button>';
+    if(hdr) hdr.innerHTML='<span class="ng-insp-ic">'+ngIco('buildings')+'</span> '+luEsc(sel.label||'Building')+'<span class="ng-insp-type">Building</span>'
+      +'<button class="ng-insp-cards" onclick="event.stopPropagation();window.p86NcBldgToggle&&window.p86NcBldgToggle(\''+sel.id+'\')" title="Open this building as nested cards on the map">Cards</button>';
     body.innerHTML='<div class="ng-insp-sec">'+buildingKpiGridHtml(sel)+'</div><div class="ng-sp-struct"></div>';
     renderBuildingStructure(body, sel);
   } else if(sel && sel.type!=='wip'){
     var d=E.DEFS[sel.type]||{}, iType=d.itemType||'';
-    if(hdr) hdr.innerHTML='<span class="ng-insp-ic">'+(d.icon||'◆')+'</span> '+luEsc(sel.label||d.label||'Node')+'<span class="ng-insp-type">'+luEsc(d.label||sel.type)+'</span>';
+    if(hdr) hdr.innerHTML='<span class="ng-insp-ic">'+ngTypeIco(sel.type)+'</span> '+luEsc(sel.label||d.label||'Node')+'<span class="ng-insp-type">'+luEsc(d.label||sel.type)+'</span>';
     var LI_TYPES={labor:1,mat:1,gc:1,other:1,burden:1,inv:1}; // line-item nodes
     body.innerHTML=(sel.type==='t2'||sel.type==='co') ? inspectorAllocHtml(sel)
                   : iType==='po' ? inspectorPOHtml(sel)
@@ -2992,13 +3015,16 @@ function renderInspector(){
                   : inspectorGenericHtml(sel, d);
   } else {
     var _jb=(typeof appData!=='undefined'&&appData.jobs)?appData.jobs.find(function(j){return j.id===E.job();}):null;
-    if(hdr) hdr.innerHTML='<span class="ng-insp-ic">$</span> '+luEsc((_jb&&(_jb.title||_jb.name))||'Job Detail')+'<span class="ng-insp-type">Job</span>';
+    if(hdr) hdr.innerHTML='<span class="ng-insp-ic">'+ngIco('wip')+'</span> '+luEsc((_jb&&(_jb.title||_jb.name))||'Job Detail')+'<span class="ng-insp-type">Job</span>';
     renderInspectorJobDetail(body);
     refreshInspMetrics();   // always repaint tiles (job-detail build is keyed; numbers settle late)
   }
-  // Hybrid inline-spawn (RS-A + RS-B): header quick-add chip row (prepended) + per-type
+  // Hybrid inline-spawn (RS-A + RS-B): a single "+ Add" button (prepended) + per-type
   // grouped child lists (appended) so children can be spawned + browsed inline.
   if(sel && sel.type!=='wip'){ injectSpawnRow(body, sel); body.insertAdjacentHTML('beforeend', childGroupsHtml(sel)); }
+  // The job's live overview card leads the right panel — the map IS the job page, so the
+  // job card is the persistent context above whatever node is selected.
+  if(body && !_inspSection){ body.insertAdjacentHTML('afterbegin', inspectorJobCardHtml()); }
 }
 // Slice 3: the no-node Inspector hosts the JOB detail — reuses the classic job-overview
 // renderers (buildings / phases / subs). Built ONCE per job-detail entry: these mount
@@ -3041,7 +3067,7 @@ function renderInspectorJobDetail(body){
   // (pctComplete / ngRevenueEarned land after ensureNGComputed + cloud
   // sync) instead of freezing at the build-time snapshot.
   body.innerHTML='<div class="ng-insp-jobdetail">'+
-    '<div class="ng-insp-metrics" id="ng-insp-metrics"></div>'+
+    // (job headline now lives in the leading job card — inspectorJobCardHtml)
     '<div class="ng-insp-sec" id="insp-buildings"></div>'+
     '<div class="ng-insp-sec" id="insp-phases"></div>'+
     '<div class="ng-insp-sec" id="insp-subs"></div><div id="insp-subs-totals"></div>'+
@@ -3396,29 +3422,30 @@ function inspectorSubHtml(sel){
   return h;
 }
 // Building KPI grid HTML — shared by the legacy left panel + the right Inspector.
+// Condensed, professional building metric strip: a lead % Complete (editable) with a
+// progress bar, then a tight 4-cell row (Revenue · Cost · Profit · Margin). Replaces the
+// old 8-tile sprawl; Rev.Earned/Accrued/Budget fold into Cost (act+acc) + the drill-downs.
 function buildingKpiGridHtml(sel){
   var bRev=E.getBuildingAllocatedRevenue(sel);
   var pct=E.getT1WeightedPct(sel);
   var revEarned=bRev*(pct/100);
-  var act=E.getActual(sel), acc=E.getAccrued(sel);
-  var gp=revEarned-(act+acc);
+  var act=E.getActual(sel), acc=E.getAccrued(sel), cost=act+acc;
+  var gp=revEarned-cost;
   var margin=bRev>0?(gp/bRev*100):0;
-  var rows=[
-    {l:'% Complete', v:'<span class="ng-pct-val" data-prog-edit="'+sel.id+'" style="cursor:pointer" title="Click to edit %">'+pct.toFixed(1)+'%</span>', c:pct>0?'ng-ov-pos':'ng-ov-zero', hero:true},
-    {l:'Revenue', v:E.fmtC(bRev), c:bRev>0?'ng-ov-pos':'ng-ov-zero'},
-    {l:'Rev. Earned', v:E.fmtC(revEarned), c:revEarned>0?'ng-ov-pos':'ng-ov-zero'},
-    {l:'Actual Cost', v:E.fmtC(act), c:act>0?'ng-ov-neg':'ng-ov-zero'},
-    {l:'Accrued', v:E.fmtC(acc), c:acc>0?'ng-ov-neg':'ng-ov-zero'},
-    {l:'Gross Profit', v:E.fmtC(gp), c:gp>0?'ng-ov-pos':gp<0?'ng-ov-neg':'ng-ov-zero', hero:true},
-    {l:'Margin', v:margin.toFixed(1)+'%', c:margin>0?'ng-ov-pos':margin<0?'ng-ov-neg':'ng-ov-zero'},
-    {l:'Budget', v:E.fmtC(sel.budget||0), c:'ng-ov-zero'}
-  ];
-  var h='<div class="ng-wip-ov">';
-  rows.forEach(function(r){
-    h+='<div class="ng-wip-ov-kpi'+(r.hero?' ng-ov-hero':'')+'"><span class="ng-ov-lbl">'+r.l+'</span><span class="ng-ov-val '+r.c+'">'+r.v+'</span></div>';
-  });
-  h+='</div>';
-  return h;
+  function cls(n){ return n>0?'ng-ov-pos':n<0?'ng-ov-neg':'ng-ov-zero'; }
+  var pw=Math.max(0,Math.min(100,pct));
+  return '<div class="ng-kpi">'
+    +'<div class="ng-kpi-lead">'
+      +'<div class="ng-kpi-lead-top"><span class="ng-kpi-lead-l">% Complete</span>'
+        +'<span class="ng-pct-val '+(pct>0?'ng-ov-pos':'ng-ov-zero')+'" data-prog-edit="'+sel.id+'" style="cursor:pointer" title="Click to edit %">'+pct.toFixed(1)+'%</span></div>'
+      +'<div class="ng-kpi-bar"><span style="width:'+pw+'%"></span></div>'
+    +'</div>'
+    +'<div class="ng-kpi-row">'
+      +'<div class="ng-kpi-cell"><span class="ng-kpi-k">Revenue</span><span class="ng-kpi-v '+cls(bRev)+'">'+E.fmtC(bRev)+'</span></div>'
+      +'<div class="ng-kpi-cell"><span class="ng-kpi-k">Cost</span><span class="ng-kpi-v '+(cost>0?'ng-ov-neg':'ng-ov-zero')+'">'+E.fmtC(cost)+'</span></div>'
+      +'<div class="ng-kpi-cell"><span class="ng-kpi-k">Profit</span><span class="ng-kpi-v '+cls(gp)+'">'+E.fmtC(gp)+'</span></div>'
+      +'<div class="ng-kpi-cell"><span class="ng-kpi-k">Margin</span><span class="ng-kpi-v '+cls(margin)+'">'+margin.toFixed(0)+'%</span></div>'
+    +'</div></div>';
 }
 
 // ── L/U Phase 1: building Levels & Units ───────────────────────────────────
@@ -3562,6 +3589,10 @@ var SPAWN_CHILDREN={
 };
 var COST_BUCKETS=['mat','labor','gc','burden','other'];
 var SPAWN_LABEL={ t2:'Scope', sub:'Sub', po:'PO', co:'CO', inv:'Invoice', mat:'Materials', labor:'Labor', gc:'Gen Cond', burden:'Burden', other:'Other' };
+// Heroicon (window.p86Icon) concept per node type — always heroicons here, never emoji.
+var SPAWN_ICON={ t1:'buildings', t2:'wip', sub:'subs', po:'estimates', cost:'banknotes', co:'edit', inv:'banknotes', mat:'materials', labor:'wrench', gc:'briefcase', burden:'scale', other:'banknotes' };
+function ngIco(name){ return (typeof window.p86Icon==='function' && name) ? window.p86Icon(name) : ''; }
+function ngTypeIco(type){ var d=E.DEFS[type]||{}; var cat=(d.cat==='cost')?'cost':type; return ngIco(SPAWN_ICON[type]||SPAWN_ICON[cat]||'cube'); }
 
 // Follow out-wires (child.Total → parent.Costs) up to the owning Building (t1) so a
 // freshly-spawned deep child can be revealed by drilling into its building.
@@ -3628,24 +3659,47 @@ function spawnChildNode(parentId, childType){
 }
 window.p86NgSpawn=function(pid,type){ try{ spawnChildNode(pid,type); }catch(e){ if(window.console) console.warn('spawn failed',e); } };
 
-// Prepend the header quick-add chip row into a selected node's inspector body.
+// Prepend a single "+ Add" button to the selected node's inspector; it opens a dropdown of
+// the spawnable child types (Scope / Sub / PO / Cost / CO) — heroicons, no emoji.
 function injectSpawnRow(body, sel){
   if(!body || !sel) return;
   var kids=SPAWN_CHILDREN[sel.type]; if(!kids || !kids.length) return;
-  var chips=kids.map(function(k){
-    if(k==='cost') return '<button class="ng-spawn-chip" title="Add a cost bucket" onclick="event.stopPropagation();window.p86NgCostMenu&&window.p86NgCostMenu(\''+sel.id+'\',this)"><span class="ng-spawn-plus">+</span><span class="ng-spawn-ic">💲</span>Cost<span class="ng-spawn-caret">▾</span></button>';
-    var d=E.DEFS[k]||{};
-    return '<button class="ng-spawn-chip" title="Add '+(d.label||k)+'" onclick="event.stopPropagation();window.p86NgSpawn&&window.p86NgSpawn(\''+sel.id+'\',\''+k+'\')"><span class="ng-spawn-plus">+</span><span class="ng-spawn-ic">'+(d.icon||'◆')+'</span>'+luEsc(SPAWN_LABEL[k]||d.label||k)+'</button>';
-  }).join('');
-  body.insertAdjacentHTML('afterbegin','<div class="ng-spawn-row">'+chips+'</div>');
+  body.insertAdjacentHTML('afterbegin',
+    '<div class="ng-addbar"><button class="ng-addbtn" title="Add to '+luEsc(sel.label||sel.type)+'" onclick="event.stopPropagation();window.p86NgAddMenu&&window.p86NgAddMenu(\''+sel.id+'\',this)">'
+    +'<span class="ng-addbtn-ic">'+ngIco('plus')+'</span><span>Add</span><span class="ng-addbtn-caret">▾</span></button></div>');
 }
+// The "+ Add" dropdown — one row per spawnable child type. 'Cost' opens the bucket submenu.
+window.p86NgAddMenu=function(pid, anchor){
+  var p=E.findNode(pid); if(!p) return;
+  var kids=SPAWN_CHILDREN[p.type]||[]; if(!kids.length) return;
+  var ex=document.querySelector('.ng-add-menu.ng-addmenu'); if(ex){ ex.remove(); return; }   // toggle off
+  var menu=document.createElement('div'); menu.className='ng-add-menu ng-addmenu';
+  var h='<div class="ng-add-cat">Add to '+luEsc(p.label||p.type)+'</div>';
+  kids.forEach(function(k){
+    var lbl=(k==='cost')?'Cost':(SPAWN_LABEL[k]||((E.DEFS[k]||{}).label)||k);
+    var ic=(k==='cost')?ngIco('banknotes'):ngTypeIco(k);
+    h+='<div class="ng-add-item" data-type="'+k+'"><span class="ng-add-ic">'+ic+'</span><span class="ng-add-lbl">'+luEsc(lbl)+'</span>'+(k==='cost'?'<span class="ng-add-sub">&#9656;</span>':'')+'</div>';
+  });
+  menu.innerHTML=h; document.body.appendChild(menu);
+  var r=anchor.getBoundingClientRect();
+  menu.style.left=Math.max(8,Math.min(r.left, window.innerWidth-248))+'px';
+  menu.style.top=Math.min(r.bottom+4, window.innerHeight-300)+'px';
+  function close(){ if(menu){ menu.remove(); menu=null; document.removeEventListener('mousedown', outside, true); } }
+  function outside(ev){ if(menu && !menu.contains(ev.target)) close(); }
+  setTimeout(function(){ document.addEventListener('mousedown', outside, true); }, 0);
+  menu.addEventListener('click',function(ev){ var it=ev.target.closest('.ng-add-item'); if(!it) return; var t=it.getAttribute('data-type');
+    close();
+    if(t==='cost'){ window.p86NgCostMenu && window.p86NgCostMenu(pid, anchor); return; }
+    spawnChildNode(pid, t);
+  });
+};
 
 // The 'Cost ▾' chip → a small bucket popover (reuses .ng-add-menu chrome).
 window.p86NgCostMenu=function(pid, anchor){
   var ex=document.querySelector('.ng-add-menu.ng-costmenu'); if(ex) ex.remove();
   var menu=document.createElement('div'); menu.className='ng-add-menu ng-costmenu';
   var h='<div class="ng-add-cat">Add cost</div>';
-  COST_BUCKETS.forEach(function(t){ var d=E.DEFS[t]; if(d) h+='<div class="ng-add-item" data-type="'+t+'"><span class="ng-add-ic">'+d.icon+'</span>'+(d.label||t)+'</div>'; });
+  COST_BUCKETS.forEach(function(t){ var d=E.DEFS[t]; if(d) h+='<div class="ng-add-item" data-type="'+t+'"><span class="ng-add-ic">'+ngTypeIco(t)+'</span><span class="ng-add-lbl">'+(d.label||t)+'</span></div>'; });
   menu.innerHTML=h; document.body.appendChild(menu);
   var r=anchor.getBoundingClientRect();
   menu.style.left=Math.max(8,Math.min(r.left, window.innerWidth-248))+'px';
@@ -3675,7 +3729,7 @@ function childGroupsHtml(sel){
       : "window.p86NgSpawn&&window.p86NgSpawn('"+sel.id+"','"+t+"')";
     var rows=list.length ? list.map(function(k){
       return '<div class="ng-cg-row" onclick="event.stopPropagation();window.p86NgSelect&&window.p86NgSelect(\''+k.id+'\')" title="Open on canvas">'
-        +'<span class="ng-cg-ic">'+((E.DEFS[k.type]||{}).icon||'◆')+'</span><span class="ng-cg-nm">'+luEsc(k.label||k.type)+'</span></div>';
+        +'<span class="ng-cg-ic">'+ngTypeIco(k.type)+'</span><span class="ng-cg-nm">'+luEsc(k.label||k.type)+'</span></div>';
     }).join('') : '<div class="ng-cg-empty">None yet</div>';
     return '<div class="ng-cg-group"><div class="ng-cg-head"><span class="ng-cg-lbl">'+label+' · '+list.length+'</span>'
       +'<button class="ng-cg-add" aria-label="Add '+label+'" onclick="event.stopPropagation();'+add+'">+</button></div>'+rows+'</div>';
