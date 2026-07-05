@@ -284,11 +284,16 @@ function renderJobsMain() {
                 : totalIncome - revenueEarned;
             const remainingCosts = revisedEstCosts - actualCosts;
             // Headline Profit/Margin for the job card + Jobs List: use job-to-date
-            // once there's real progress (node-graph computed, or actual costs
-            // logged); otherwise fall back to the AS-SOLD projection (contract −
-            // estimated cost, incl. COs) so a freshly estimate-linked job shows its
-            // expected gross profit instead of $0 (RV2012 migration bug).
-            const hasActuals = (job.ngJtdProfit != null) || actualCosts > 0;
+            // once there's REAL progress (actual costs logged OR revenue earned);
+            // otherwise fall back to the AS-SOLD projection (contract − estimated
+            // cost, incl. COs) so a freshly estimate-linked job shows its expected
+            // gross profit instead of $0.
+            //   Prior bug: gated on `job.ngJtdProfit != null`, but Renovation jobs
+            //   get a Site-Plan node graph that pushes ngJtdProfit = 0 at 0% done —
+            //   a non-null zero — so every Renovation job showed $0 while Service &
+            //   Repair jobs (no graph → ngJtdProfit null) correctly showed as-sold.
+            //   Basing it on genuine activity fixes the job-type split.
+            const hasActuals = actualCosts > 0 || revenueEarned > 0;
             const displayProfit = hasActuals ? jtdProfit : revisedProfit;
             const displayMargin = hasActuals ? jtdMargin : revisedMargin;
             return {
