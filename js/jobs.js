@@ -2877,6 +2877,108 @@ function renderJobsMain() {
             return { amount: sum, derived: sum > 0 };
         }
 
+        // ── Inline click-to-edit for the right-panel building/phase cards ──
+        // Renders a number as a click-to-edit chip. On click it swaps to an
+        // input; Enter/blur writes the field to the phase/building record
+        // (same persistence as saveManagedPhase: saveData + NG t2 sync +
+        // ensureNGComputed) and repaints the cards. NO canvas node editing —
+        // this is the cards only, per John.
+        function inlNum(ent, id, field, raw, fmt) {
+            raw = raw || 0;
+            var disp = (fmt === 'pct') ? (Math.round(raw * 10) / 10 + '%') : formatCurrency(raw);
+            return '<span class="p86-inl" role="button" tabindex="0"' +
+                ' data-inl-ent="' + ent + '" data-inl-id="' + escapeHTML(String(id)) + '"' +
+                ' data-inl-field="' + field + '" data-inl-raw="' + raw + '" data-inl-fmt="' + (fmt || 'cur') + '"' +
+                ' title="Click to edit" onclick="event.stopPropagation();">' + disp + '</span>';
+        }
+        // Re-render whichever building/phase card hosts are mounted (map
+        // inspector OR classic page), preserving expand state + refreshing
+        // the map metric tiles.
+        function p86RerenderJobCards(jobId) {
+            var openIds = [];
+            document.querySelectorAll('.p86-bldg-body, .ph-body').forEach(function(el) {
+                if (el.style.display === 'table-row') openIds.push(el.id);
+            });
+            var bHost = document.getElementById('insp-buildings') || document.getElementById('job-buildings-content');
+            if (bHost) { try { renderJobBuildings(jobId, bHost.id); } catch (e) {} }
+            var pHost = document.getElementById('insp-phases');
+            if (pHost && typeof renderOverviewPhasesInto === 'function') {
+                var phs = (appData.phases || []).filter(function(p) { return p.jobId === jobId; });
+                try { renderOverviewPhasesInto(pHost, jobId, phs); } catch (e) {}
+            }
+            if (typeof window.refreshInspMetrics === 'function') { try { window.refreshInspMetrics(); } catch (e) {} }
+            openIds.forEach(function(id) {
+                var el = document.getElementById(id); if (!el) return;
+                el.style.display = 'table-row';
+                var arrow = document.getElementById(id + '-arrow'); if (arrow) arrow.textContent = '▼';
+            });
+        }
+        function p86CommitInline(span, rawStr) {
+            var ent = span.getAttribute('data-inl-ent'),
+                id = span.getAttribute('data-inl-id'),
+                field = span.getAttribute('data-inl-field');
+            var val = parseFloat(rawStr); if (isNaN(val) || val < 0) val = 0;
+            if (field === 'pctComplete') val = Math.max(0, Math.min(100, val));
+            var rec = (ent === 'phase')
+                ? (appData.phases || []).find(function(p) { return p.id === id; })
+                : (appData.buildings || []).find(function(b) { return b.id === id; });
+            if (!rec) return;
+            rec[field] = val;
+            // asSold mirror + manual-% flag so the value survives recompute.
+            if (ent === 'phase' && field === 'asSoldRevenue') { rec.asSoldPhaseBudget = val; }
+            if (field === 'pctComplete') { rec.pctCompleteManual = true; }
+            saveData();
+            // Sync the wired t2/t1 node so the canvas + watch chips agree.
+            if (typeof NG !== 'undefined') {
+                try {
+                    NG.nodes().forEach(function(n) {
+                        if (n.data && n.data.id === id) {
+                            if (field === 'asSoldRevenue') n.revenue = val;
+                            if (field === 'pctComplete') n.pct = val;
+                        }
+                    });
+                    NG.saveGraph();
+                } catch (e) {}
+            }
+            var jid = appState.currentJobId;
+            try { ensureNGComputed(jid); } catch (e) {}
+            p86RerenderJobCards(jid);
+        }
+        // Idempotent document-delegated wiring: one click handler swaps any
+        // .p86-inl chip to an input and commits on Enter/blur (Esc cancels).
+        function p86WireInlineEdits() {
+            if (window._p86InlWired) return; window._p86InlWired = true;
+            document.addEventListener('click', function(e) {
+                var span = e.target.closest && e.target.closest('.p86-inl');
+                if (!span || span.querySelector('input') || span.dataset.editing === '1') return;
+                span.dataset.editing = '1';
+                var raw = span.getAttribute('data-inl-raw') || '0';
+                var fmt = span.getAttribute('data-inl-fmt') || 'cur';
+                var input = document.createElement('input');
+                input.type = 'text'; input.inputMode = 'decimal'; input.value = raw;
+                input.className = 'p86-inl-input';
+                var prevHTML = span.innerHTML;
+                span.innerHTML = ''; span.appendChild(input);
+                input.focus(); input.select();
+                var done = false;
+                function commit() {
+                    if (done) return; done = true;
+                    p86CommitInline(span, input.value); // triggers a full card re-render
+                }
+                function cancel() {
+                    if (done) return; done = true;
+                    span.dataset.editing = '0'; span.innerHTML = prevHTML;
+                }
+                input.addEventListener('keydown', function(ev) {
+                    if (ev.key === 'Enter') { ev.preventDefault(); commit(); }
+                    else if (ev.key === 'Escape') { ev.preventDefault(); cancel(); }
+                });
+                input.addEventListener('blur', function() { commit(); });
+                input.addEventListener('click', function(ev) { ev.stopPropagation(); });
+            });
+        }
+        window.p86WireInlineEdits = p86WireInlineEdits;
+
         function renderJobBuildings(jobId, hostId) {
             const buildings = appData.buildings.filter(b => b.jobId === jobId);
             const container = document.getElementById(hostId || 'job-buildings-content');
@@ -2956,10 +3058,10 @@ function renderJobsMain() {
 
                 // Cost breakdown
                 body += '<div class="p86-bldg-cost-row">' +
-                    '<span>Mat: <b>' + formatCurrency(bMat) + '</b></span>' +
-                    '<span>Lab: <b>' + formatCurrency(bLab) + '</b></span>' +
-                    '<span>Sub: <b>' + formatCurrency(bSub) + '</b></span>' +
-                    '<span>Equip: <b>' + formatCurrency(bEquip) + '</b></span>' +
+                    '<span>Mat: <b>' + inlNum('building', building.id, 'materials', bMat, 'cur') + '</b></span>' +
+                    '<span>Lab: <b>' + inlNum('building', building.id, 'labor', bLab, 'cur') + '</b></span>' +
+                    '<span>Sub: <b>' + inlNum('building', building.id, 'sub', bSub, 'cur') + '</b></span>' +
+                    '<span>Equip: <b>' + inlNum('building', building.id, 'equipment', bEquip, 'cur') + '</b></span>' +
                     ((building.hoursTotal || building.rate) ? '<span class="p86-bldg-cost-meta">' + (building.hoursTotal || 0) + 'hrs' + (building.hoursWeek ? ' (' + building.hoursWeek + '/wk)' : '') + ' @ ' + formatCurrency(building.rate || 40) + '/hr</span>' : '') +
                     '</div>';
 
@@ -3019,6 +3121,7 @@ function renderJobsMain() {
                         '<tbody>' + rowsHTML + '</tbody>' +
                     '</table>' +
                 '</div>';
+            p86WireInlineEdits();   // idempotent — ensures the inline click-to-edit handler is live
         }
 
         // Shared <th> renderer used by renderJobBuildings AND a handful
@@ -3324,7 +3427,7 @@ function renderJobsMain() {
                         '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px;">' +
                         '<div>' +
                         '<span style="font-size:13px;font-weight:600;color:var(--text);">' + escapeHTML(bldgName) + '</span>' +
-                        '<span style="font-size:11px;color:var(--text-dim);margin-left:8px;">Rev: ' + formatCurrency(phaseRevenue(p)) + ' | Mat: ' + formatCurrency(p.materials || 0) + ' | Lab: ' + formatCurrency(p.labor || 0) + ' | Sub: ' + formatCurrency(p.sub || 0) + ' | Equip: ' + formatCurrency(p.equipment || 0) + ' | <b style="color:var(--accent);">' + (p.pctComplete || 0) + '%</b></span>' +
+                        '<span style="font-size:11px;color:var(--text-dim);margin-left:8px;">Rev: ' + inlNum('phase', p.id, 'asSoldRevenue', phaseRevenue(p), 'cur') + ' | Mat: ' + inlNum('phase', p.id, 'materials', p.materials || 0, 'cur') + ' | Lab: ' + inlNum('phase', p.id, 'labor', p.labor || 0, 'cur') + ' | Sub: ' + inlNum('phase', p.id, 'sub', p.sub || 0, 'cur') + ' | Equip: ' + inlNum('phase', p.id, 'equipment', p.equipment || 0, 'cur') + ' | <b style="color:var(--accent);">' + inlNum('phase', p.id, 'pctComplete', p.pctComplete || 0, 'pct') + '</b></span>' +
                         '</div>' +
                         '<button class="ee-btn ghost" onclick="event.stopPropagation();editPhase(\'' + escapeHTML(p.id) + '\')">&#x270F;&#xFE0F; Edit</button>' +
                         '</div>' +

@@ -2752,6 +2752,9 @@ function refreshInspMetrics(){
   ];
   host.innerHTML=tiles.map(function(t){ return '<div class="ng-im '+t.c+'"><span class="ng-im-k">'+t.k+'</span><span class="ng-im-v">'+t.v+'</span></div>'; }).join('');
 }
+// Exposed so jobs.js can repaint the tiles after an inline card edit
+// changes the underlying WIP numbers.
+window.refreshInspMetrics = refreshInspMetrics;
 function renderInspectorJobDetail(body){
   var jid=E.job(); var jk='job:'+(jid||'');
   if(_inspJobKey===jk && body.querySelector('.ng-insp-jobdetail')) return;
