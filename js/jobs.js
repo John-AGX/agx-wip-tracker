@@ -2889,7 +2889,7 @@ function renderJobsMain() {
             return '<span class="p86-inl" role="button" tabindex="0"' +
                 ' data-inl-ent="' + ent + '" data-inl-id="' + escapeHTML(String(id)) + '"' +
                 ' data-inl-field="' + field + '" data-inl-raw="' + raw + '" data-inl-fmt="' + (fmt || 'cur') + '"' +
-                ' title="Click to edit" onclick="event.stopPropagation();">' + disp + '</span>';
+                ' title="Click to edit" onclick="event.stopPropagation();window.p86InlStart&&window.p86InlStart(this);">' + disp + '</span>';
         }
         // Re-render whichever building/phase card hosts are mounted (map
         // inspector OR classic page), preserving expand state + refreshing
@@ -2944,40 +2944,37 @@ function renderJobsMain() {
             try { ensureNGComputed(jid); } catch (e) {}
             p86RerenderJobCards(jid);
         }
-        // Idempotent document-delegated wiring: one click handler swaps any
-        // .p86-inl chip to an input and commits on Enter/blur (Esc cancels).
-        function p86WireInlineEdits() {
-            if (window._p86InlWired) return; window._p86InlWired = true;
-            document.addEventListener('click', function(e) {
-                var span = e.target.closest && e.target.closest('.p86-inl');
-                if (!span || span.querySelector('input') || span.dataset.editing === '1') return;
-                span.dataset.editing = '1';
-                var raw = span.getAttribute('data-inl-raw') || '0';
-                var fmt = span.getAttribute('data-inl-fmt') || 'cur';
-                var input = document.createElement('input');
-                input.type = 'text'; input.inputMode = 'decimal'; input.value = raw;
-                input.className = 'p86-inl-input';
-                var prevHTML = span.innerHTML;
-                span.innerHTML = ''; span.appendChild(input);
-                input.focus(); input.select();
-                var done = false;
-                function commit() {
-                    if (done) return; done = true;
-                    p86CommitInline(span, input.value); // triggers a full card re-render
-                }
-                function cancel() {
-                    if (done) return; done = true;
-                    span.dataset.editing = '0'; span.innerHTML = prevHTML;
-                }
-                input.addEventListener('keydown', function(ev) {
-                    if (ev.key === 'Enter') { ev.preventDefault(); commit(); }
-                    else if (ev.key === 'Escape') { ev.preventDefault(); cancel(); }
-                });
-                input.addEventListener('blur', function() { commit(); });
-                input.addEventListener('click', function(ev) { ev.stopPropagation(); });
+        // Called directly from a chip's onclick (the chip stops propagation so
+        // it never toggles its parent row, which is why a document-delegated
+        // listener can't see it — hence the direct call). Swaps the chip to an
+        // input; commits on Enter/blur, cancels on Esc.
+        function p86InlStart(span) {
+            if (!span || span.querySelector('input') || span.dataset.editing === '1') return;
+            span.dataset.editing = '1';
+            var raw = span.getAttribute('data-inl-raw') || '0';
+            var input = document.createElement('input');
+            input.type = 'text'; input.inputMode = 'decimal'; input.value = raw;
+            input.className = 'p86-inl-input';
+            var prevHTML = span.innerHTML;
+            span.innerHTML = ''; span.appendChild(input);
+            input.focus(); input.select();
+            var done = false;
+            function commit() {
+                if (done) return; done = true;
+                p86CommitInline(span, input.value); // triggers a full card re-render
+            }
+            function cancel() {
+                if (done) return; done = true;
+                span.dataset.editing = '0'; span.innerHTML = prevHTML;
+            }
+            input.addEventListener('keydown', function(ev) {
+                if (ev.key === 'Enter') { ev.preventDefault(); commit(); }
+                else if (ev.key === 'Escape') { ev.preventDefault(); cancel(); }
             });
+            input.addEventListener('blur', function() { commit(); });
+            input.addEventListener('click', function(ev) { ev.stopPropagation(); });
         }
-        window.p86WireInlineEdits = p86WireInlineEdits;
+        window.p86InlStart = p86InlStart;
 
         function renderJobBuildings(jobId, hostId) {
             const buildings = appData.buildings.filter(b => b.jobId === jobId);
@@ -3121,7 +3118,6 @@ function renderJobsMain() {
                         '<tbody>' + rowsHTML + '</tbody>' +
                     '</table>' +
                 '</div>';
-            p86WireInlineEdits();   // idempotent — ensures the inline click-to-edit handler is live
         }
 
         // Shared <th> renderer used by renderJobBuildings AND a handful
