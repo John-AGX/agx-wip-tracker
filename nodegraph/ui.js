@@ -6,7 +6,7 @@
 
 var E = NG; // engine reference
 var wrap, canvasEl, wireC, wireCtx, gridC, gridCtx;
-var dragN=null, dragOff={x:0,y:0};
+var dragN=null, dragOff={x:0,y:0}, _didDragNode=false;
 var wiringFrom=null, wireMouse=null;
 var selN=null, isPan=false, panSt={x:0,y:0};
 var editingId=null;
@@ -1228,10 +1228,15 @@ function fanFocusNodes(bId){
   var arc=Math.min(330, Math.max(110, kids.length*46));
   var start=270-arc/2;                                  // 270° = above the building (y grows down)
   kids.forEach(function(k,i){
+    // Respect a manually-set / spawned offset: keep the node anchored to the building
+    // (so it still tracks the building's geo spot) but at the user's chosen position —
+    // the per-render re-fan re-applies this instead of clobbering it.
+    if(k.spOff){ k.x=Math.round(center.x+k.spOff.x); k.y=Math.round(center.y+k.spOff.y); return; }
     var deg=kids.length>1 ? start+arc*i/(kids.length-1) : 270;
     var a=deg*Math.PI/180;
     k.x=Math.round(center.x + Math.cos(a)*R - _ox);
     k.y=Math.round(center.y + Math.sin(a)*R - _oy);
+    k.spOff={x:k.x-center.x, y:k.y-center.y};   // freeze the initial fan spot: stops re-jitter + lets manual moves stick
   });
   _fannedSet[bId]=true;
 }
@@ -3314,7 +3319,11 @@ function spawnChildNode(parentId, childType){
   var bId=(p.type==='t1')?parentId:owningBuildingId(parentId);
   var center=(p.geoLatLng)?geoRenderPos(p):{x:p.x, y:p.y};
   var _sat=!!_spSatellite && E.viewMode && E.viewMode()==='siteplan';
-  var px=Math.round(center.x), py=Math.round(center.y-(_sat?40:220)); // just above the parent
+  // Spawn just above the parent, staggered by how many children it already has so
+  // repeated adds don't stack on one spot. The user can then drag them (position sticks).
+  var _sibs=E.wires().filter(function(w){ return w.toNode===p.id; }).length;
+  var px=Math.round(center.x + ((_sibs%4)-1.5)*(_sat?34:120));
+  var py=Math.round(center.y - (_sat?46:200) - Math.floor(_sibs/4)*(_sat?30:70));
   function wireToParent(nn){
     if(!nn) return;
     var toPort=E.firstCompatPort(E.DEFS[p.type], nn.type, 'in');
@@ -3328,6 +3337,12 @@ function spawnChildNode(parentId, childType){
       if(nn.type==='t2' && E.rebalancePhaseAllocations) E.rebalancePhaseAllocations(nn.id);
       else if(nn.type==='co' && E.rebalanceCOAllocations) E.rebalanceCOAllocations(nn.id);
     }catch(e){}
+    // Anchor the new node near its parent via a building-relative offset so the geo
+    // re-fan keeps it where it spawned (not arced away) and it survives reload.
+    if(bId && nn.type!=='t1'){
+      var _b2=E.findNode(bId), _bc=_b2?((_b2.geoLatLng)?geoRenderPos(_b2):{x:_b2.x,y:_b2.y}):null;
+      if(_bc) nn.spOff={x:nn.x-_bc.x, y:nn.y-_bc.y};
+    }
     // Reveal the new node by drilling into its owning building (its subgraph is
     // hidden on the whole-site view). No building (free node) → skip the drill.
     if(bId){ delete _fannedSet[bId]; if(_spFocus!==bId){ _spFocus=bId; applySpFocus(); } fanFocusNodes(bId); }
@@ -3646,6 +3661,7 @@ function initEvents(){
     }
     if(dragN){
       var n=E.findNode(dragN); if(!n) return;
+      _didDragNode=true;
       var p=E.pan();
       n.x=Math.round((e.clientX/z()-p.x-dragOff.x)/SN)*SN;
       n.y=Math.round((e.clientY/z()-p.y-dragOff.y)/SN)*SN;
@@ -3835,7 +3851,21 @@ function initEvents(){
   ngOpenAddMenuFn=openAddMenu;   // expose to init()'s ribbon "+ Add" wiring (openAddMenu is otherwise out of that scope)
 
   wrap.addEventListener('mouseup',function(e){
+    var _wasDrag=dragN, _moved=_didDragNode; _didDragNode=false;
     isPan=false; wrap.classList.remove('ng-panning'); dragN=null;
+    if(_wasDrag && _moved){
+      // A node was actually dragged (not just clicked) → persist it. On the Site Plan,
+      // anchor a dragged child to its building via a stored offset so the per-render geo
+      // re-fan re-applies it (instead of clobbering) and it survives reload.
+      var _dn=E.findNode(_wasDrag);
+      if(_dn){
+        if(_dn.type!=='t1'){
+          var _bId=owningBuildingId(_wasDrag), _b=_bId&&E.findNode(_bId);
+          if(_b){ var _c=(_b.geoLatLng)?geoRenderPos(_b):{x:_b.x,y:_b.y}; _dn.spOff={x:_dn.x-_c.x, y:_dn.y-_c.y}; }
+        }
+        if(E.saveGraph) E.saveGraph();
+      }
+    }
     if(dragFrame || resizeFrame){ dragFrame=null; resizeFrame=null; frameMembers=null; frameDragOff=null; resizeStart=null; E.saveGraph(); }
     if(wiringFrom){
       var tp=e.target.closest('[data-dir="in"]');
