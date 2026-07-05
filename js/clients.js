@@ -197,7 +197,7 @@
     var hay = [
       c.name, c.company_name, c.community_name,
       c.first_name, c.last_name, c.email,
-      c.city, c.state,
+      c.city, c.state, c.zip,
       c.phone, c.cell,
       c.community_manager, c.maintenance_manager,
       c.market
@@ -266,6 +266,23 @@
     sel.innerHTML = opts;
   }
 
+  // State filter dropdown — unique states present in the cache. Mirrors the
+  // market filter; keeps the directory filterable by location. City/ZIP stay
+  // in the free-text search (too many distinct values for a clean dropdown).
+  function refreshStateFilter() {
+    var sel = document.getElementById('clients-filter-state');
+    if (!sel) return;
+    var current = sel.value || '';
+    var states = {};
+    _clients.forEach(function(c) { if (c.state) states[String(c.state)] = true; });
+    var keys = Object.keys(states).sort();
+    var opts = '<option value="">All states</option>';
+    keys.forEach(function(s) {
+      opts += '<option value="' + escapeAttr(s) + '"' + (s === current ? ' selected' : '') + '>' + escapeHTML(s) + '</option>';
+    });
+    sel.innerHTML = opts;
+  }
+
   function renderClientsList() {
     var listEl = document.getElementById('clients-list');
     var summaryEl = document.getElementById('clients-summary');
@@ -278,6 +295,8 @@
     var roleFilter = roleFilterEl ? roleFilterEl.value : '';
     var statusFilter = statusFilterEl ? statusFilterEl.value : '';
     var marketFilter = marketFilterEl ? marketFilterEl.value : '';
+    var stateFilterEl = document.getElementById('clients-filter-state');
+    var stateFilter = stateFilterEl ? stateFilterEl.value : '';
 
     if (!_clients.length) {
       listEl.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);text-align:center;">Loading clients…</div>';
@@ -292,6 +311,7 @@
     }
 
     refreshMarketFilter();
+    refreshStateFilter();
 
     // Pre-compute role per client so the role filter is consistent with
     // the hierarchical badges shown on the row.
@@ -313,6 +333,7 @@
       if (statusFilter === 'active' && c.activation_status === 'inactive') return;
       if (statusFilter === 'inactive' && c.activation_status !== 'inactive') return;
       if (marketFilter && c.market !== marketFilter) return;
+      if (stateFilter && String(c.state || '') !== stateFilter) return;
       if (roleFilter && roleOf[c.id] !== roleFilter) return;
       passes[c.id] = true;
     });
@@ -382,6 +403,7 @@
           if (statusFilter === 'active' && top.activation_status === 'inactive') return false;
           if (statusFilter === 'inactive' && top.activation_status !== 'inactive') return false;
           if (marketFilter && top.market !== marketFilter) return false;
+          if (stateFilter && String(top.state || '') !== stateFilter) return false;
           if (roleFilter === 'flat' && roleOf[top.id] !== 'flat') return false;
           return true;
         })
@@ -771,13 +793,42 @@
     });
   }
 
+  // Wire Google Places autocomplete onto the client's address fields. Property
+  // is the primary — a pick fills the separate, filterable city/state/zip
+  // inputs (previously it filled only the property_address box). Billing fills
+  // just its own street. Idempotent per field (attachToField guards re-wiring).
+  function attachClientAddressAutocomplete() {
+    if (!window.p86AddressAutocomplete) return;
+    var setC = function(name, v) {
+      var el = document.getElementById('clientEditor_' + name);
+      if (el && v) {
+        el.value = v;
+        try { el.dispatchEvent(new Event('input', { bubbles: true })); el.dispatchEvent(new Event('change', { bubbles: true })); } catch (e) {}
+      }
+    };
+    var propEl = document.getElementById('clientEditor_property_address');
+    if (propEl) {
+      window.p86AddressAutocomplete.attachToField(propEl, {
+        placeholder: 'Search property address…',
+        onPlace: function(r) {
+          var cc = (r && r.components) || {};
+          setC('city', cc.city); setC('state', cc.state); setC('zip', cc.zip);
+        }
+      });
+    }
+    var billEl = document.getElementById('clientEditor_address');
+    if (billEl) {
+      window.p86AddressAutocomplete.attachToField(billEl, { mode: 'street', placeholder: 'Search billing address…' });
+    }
+  }
+
   function openNewClientModal() {
     ensureClientsCache().then(function() {
       clearEditor();
       document.getElementById('clientEditor_title').textContent = 'New Client';
       populateParentSelect(null, null);
       openModal('clientEditorModal');
-      if (window.p86AddressAutocomplete) window.p86AddressAutocomplete.attachToField(document.getElementById('clientEditor_property_address'), { placeholder: 'Search property address…' });
+      attachClientAddressAutocomplete();
       // Create mode — sections open unlocked so the user can fill in
       // a new client without tapping every pencil first.
       applyClientFieldsetGates(true);
@@ -803,7 +854,7 @@
       renderAgentNotesPanel(id);
       mountClientTasksPanel(c);
       openModal('clientEditorModal');
-      if (window.p86AddressAutocomplete) window.p86AddressAutocomplete.attachToField(document.getElementById('clientEditor_property_address'), { placeholder: 'Search property address…' });
+      attachClientAddressAutocomplete();
       // Edit mode — sections render locked. Per-section pencil arms
       // a fieldset for editing; Save commits the whole form.
       applyClientFieldsetGates(false);

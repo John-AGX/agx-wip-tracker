@@ -1679,6 +1679,9 @@
                             <select id="clients-filter-market" onchange="renderClientsList()" style="width:auto;min-width:130px;">
                                 <option value="">All markets</option>
                             </select>
+                            <select id="clients-filter-state" onchange="renderClientsList()" style="width:auto;min-width:110px;">
+                                <option value="">All states</option>
+                            </select>
                             <input type="text" id="clients-search" oninput="renderClientsList()" placeholder="Search clients…" style="min-width:200px;" />
                             <!-- Global Ask 86 badge in the right corner. -->
                             <span class="p86-ask86-mount"></span>
@@ -3200,7 +3203,7 @@
         <div id="clientDashboard_body" style="padding:20px 22px;overflow-y:auto;flex:1;"></div>
       </div>
     </div>
-    <script src="js/clients.js?v=22"></script>
+    <script src="js/clients.js?v=23"></script>
     <script src="js/clients-dashboard.js?v=2"></script>
     <!-- Folder taxonomy — default folder structure per entity type
          (lead / estimate / job / client). Loads before subs.js and
