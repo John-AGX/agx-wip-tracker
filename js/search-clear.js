@@ -42,25 +42,22 @@
     wrap.style.display = block ? 'flex' : 'inline-flex';
 
     var inl = input.style;
+    // Does the input stretch to fill its slot (block, or a flex-grow item, or width:100%)?
+    var grows = block || (cs && (parseFloat(cs.flexGrow) || 0) > 0) || inl.width === '100%';
+    // Move only POSITIONING props (margin/flex/align) onto the wrapper so it sits exactly
+    // where the input did — e.g. margin-left:auto keeps the bar right-aligned. Keep SIZING
+    // (width / min-width) on the INPUT so a fixed/min-width search box stays compact and
+    // the wrapper shrinks to fit it (the previous width:100% made every bar balloon).
     ['margin', 'marginLeft', 'marginRight', 'marginTop', 'marginBottom', 'flex', 'flexGrow', 'flexShrink', 'flexBasis', 'alignSelf'].forEach(function (p) {
-      if (inl[p]) wrap.style[p] = inl[p];
+      if (inl[p]) { wrap.style[p] = inl[p]; inl[p] = ''; }
     });
-    if (inl.width || block) wrap.style.width = inl.width || '100%';
-    var mw = inl.minWidth || (cs && cs.minWidth !== '0px' ? cs.minWidth : '');
-    if (mw) wrap.style.minWidth = mw;
-    var xw = inl.maxWidth || (cs && cs.maxWidth !== 'none' ? cs.maxWidth : '');
-    if (xw) wrap.style.maxWidth = xw;
+    if (block || inl.width) wrap.style.width = inl.width || '100%';
 
     if (!input.parentNode) return;
     input.parentNode.insertBefore(wrap, input);
     wrap.appendChild(input);
 
-    // neutralize the moved layout props on the input; make it fill the wrapper
-    input.style.margin = '0';
-    input.style.width = '100%';
-    input.style.minWidth = '0';
-    input.style.maxWidth = 'none';
-    input.style.flex = '';
+    if (grows) { input.style.width = '100%'; input.style.minWidth = '0'; }
     input.style.boxSizing = 'border-box';
     var pr = cs ? (parseFloat(cs.paddingRight) || 0) : 0;
     if (pr < 26) input.style.paddingRight = '26px';
