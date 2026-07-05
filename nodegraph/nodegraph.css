@@ -858,6 +858,10 @@ body.light-mode .ng-topbar.ng-ribbon .ng-ribbon-btn:hover{
 .ng-taskpin-done .ng-taskpin-dot{background:#34d399}
 .ng-taskpin:hover{z-index:9}
 .ng-taskpin:hover .ng-taskpin-dot{filter:brightness(1.18)}
+/* Default-location pins (task inherits the job's location, no specific pin) —
+   faded so tasks with a real chosen spot read as solid/primary. */
+.ng-taskpin-default{opacity:.6}
+.ng-taskpin-default:hover{opacity:1}
 /* Building polygons (Phase 1): footprint traced on the basemap. The SVG layer
    lives inside .ng-canvas so it inherits the same scale(z)+translate(pan) as the
    nodes; coords are graph units. vector-effect keeps strokes crisp at any zoom. */

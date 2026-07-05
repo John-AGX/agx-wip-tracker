@@ -2370,7 +2370,10 @@ function updatePhotoLayer(){
 }
 // ── Geolocated task pins (filterable) — same projection + lifecycle as photo pins.
 function taskScreenPos(t){
-  var g=E.spLatLngToGraph(Number(t.lat), Number(t.lng), _spOrigin.lat, _spOrigin.lng);
+  // Use the DISPLAY coords (_dlat/_dlng) — own pin when set, else the job's
+  // location (assigned in loadGeoTasks). Falls back to raw lat/lng defensively.
+  var la=(t._dlat!=null)?t._dlat:t.lat, ln=(t._dlng!=null)?t._dlng:t.lng;
+  var g=E.spLatLngToGraph(Number(la), Number(ln), _spOrigin.lat, _spOrigin.lng);
   var z=E.zm(), p=E.pan();
   return { x:(p.x + _spOriginGraph.x + g.x)*z, y:(p.y + _spOriginGraph.y + g.y)*z };
 }
@@ -2397,8 +2400,8 @@ function renderTaskPins(){
     var done=t.status==='done';
     var hot=!done && (t.priority==='urgent'||t.priority==='high');
     var pin=document.createElement('div');
-    pin.className='ng-taskpin '+(done?'ng-taskpin-done':(hot?'ng-taskpin-hot':'ng-taskpin-open'));
-    pin.title=(t.title||'Task')+(t.due_date?(' · due '+String(t.due_date).slice(0,10)):'');
+    pin.className='ng-taskpin '+(done?'ng-taskpin-done':(hot?'ng-taskpin-hot':'ng-taskpin-open'))+(t._defaultLoc?' ng-taskpin-default':'');
+    pin.title=(t.title||'Task')+(t._defaultLoc?' · at job (default location)':'')+(t.due_date?(' · due '+String(t.due_date).slice(0,10)):'');
     pin.innerHTML='<span class="ng-taskpin-dot"></span>';
     pin.addEventListener('click', function(e){
       e.stopPropagation();
@@ -2413,10 +2416,20 @@ function loadGeoTasks(cb){
   if(!jid || typeof p86Api==='undefined' || !p86Api.tasks){ _geoTasks=[]; if(cb)cb(); return; }
   if(_geoTasksJob===jid){ if(cb)cb(); return; } // cached per job
   p86Api.tasks.list({ entity_type:'job', entity_id:jid, limit:200 }).then(function(resp){
-    var rows=(resp && resp.tasks) || [], ok=[];
+    var rows=(resp && resp.tasks) || [], ok=[], dflt=0;
+    var origin=_spOrigin; // the job's geocoded location — the default when a task has no pin
     rows.forEach(function(t){
       var lat=Number(t.lat), lng=Number(t.lng);
-      if(isFinite(lat)&&isFinite(lng)&&!(lat===0&&lng===0)&&lat>=-90&&lat<=90&&lng>=-180&&lng<=180) ok.push(t);
+      var own=isFinite(lat)&&isFinite(lng)&&!(lat===0&&lng===0)&&lat>=-90&&lat<=90&&lng>=-180&&lng<=180;
+      if(own){ t._dlat=lat; t._dlng=lng; t._defaultLoc=false; ok.push(t); return; }
+      // No pin of its own → fall back to the job's location (the editor default),
+      // scattered slightly by index so multiple unpinned tasks don't stack.
+      if(origin){
+        var k=dflt++, ring=1+Math.floor(k/8), ang=(k%8)*(Math.PI/4), r=0.00004*ring;
+        t._dlat=origin.lat + r*Math.cos(ang);
+        t._dlng=origin.lng + r*Math.sin(ang);
+        t._defaultLoc=true; ok.push(t);
+      }
     });
     _geoTasks=ok; _geoTasksJob=jid; if(cb)cb();
   }).catch(function(){ _geoTasks=[]; if(cb)cb(); });
