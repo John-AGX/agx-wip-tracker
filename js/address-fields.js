@@ -41,7 +41,7 @@
     obj = obj || {};
     var has = obj.street_address || obj.city || obj.state || obj.zip;
     if (has) return { street: obj.street_address || '', city: obj.city || '', state: obj.state || '', zip: obj.zip || '' };
-    return parse(obj.address || obj.jobAddress || obj.projectAddress || '');
+    return parse(obj.address || obj.jobAddress || obj.projectAddress || obj.propertyAddr || '');
   }
 
   // Populate obj.{street_address,city,state,zip} from its freeform address if

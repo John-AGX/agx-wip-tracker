@@ -719,6 +719,19 @@
       : { jobNumber: (prompt('Job number (S#### or RV####):', '') || '').trim().toUpperCase(), title: suggestedTitle };
     if (!fin || !fin.jobNumber) return;
 
+    // Guard against a duplicate job record for the same number (the RV2012
+    // migration created one via "Add Job" and a second via this flow). Warn
+    // before minting another job with a number that already exists.
+    var _dupJob = (appData.jobs || []).find(function(j) {
+      return j && String(j.jobNumber || '').trim().toUpperCase() === String(fin.jobNumber).trim().toUpperCase();
+    });
+    if (_dupJob) {
+      var _proceed = (typeof window.p86Confirm === 'function')
+        ? await window.p86Confirm({ title: 'Job number already exists', message: 'A job "' + fin.jobNumber + '" already exists. Creating another makes a duplicate record. Continue anyway?', confirmText: 'Create duplicate', destructive: true })
+        : confirm('A job "' + fin.jobNumber + '" already exists. Create another?');
+      if (!_proceed) return;
+    }
+
     var me = window.p86Auth && window.p86Auth.getUser && window.p86Auth.getUser();
     var ownerId = (lead && lead.salesperson_id) || (me && me.id) || null;
     var jobId = 'j' + Date.now();
@@ -729,11 +742,13 @@
       // Carry the client link + address (from the estimate / its lead) so the
       // job isn't a shell — Link Client shows "Linked" and map/weather have an address.
       clientId: est.client_id || (lead && lead.client_id) || null,
-      street_address: (lead && lead.street_address) || '',
-      city: (lead && lead.city) || '',
-      state: (lead && lead.state) || '',
-      zip: (lead && lead.zip) || '',
-      address: lead ? [lead.street_address, lead.city, lead.state, lead.zip].filter(Boolean).join(', ') : '',
+      // Address: prefer the lead's, else fall back to the estimate's own
+      // structured property address so an estimate-only → job still carries it.
+      street_address: (lead && lead.street_address) || est.street_address || '',
+      city: (lead && lead.city) || est.city || '',
+      state: (lead && lead.state) || est.state || '',
+      zip: (lead && lead.zip) || est.zip || '',
+      address: [ (lead && lead.street_address) || est.street_address, (lead && lead.city) || est.city, (lead && lead.state) || est.state, (lead && lead.zip) || est.zip ].filter(Boolean).join(', '),
       jobType: (lead && lead.project_type) || est.jobType || '', workType: '',
       market: (lead && lead.market) || est.market || '', status: 'New',
       // Estimate is the source of truth for estimated costs (its base cost).
@@ -1385,16 +1400,23 @@
     // compat. The header row sits OUTSIDE the row flex so the drag
     // handle column doesn't get a header label (the rows still align
     // because both use the same flex widths via the helper functions).
+    // Header columns must mirror the DATA row's cells one-for-one — same
+    // count, same order, same flex widths — or the labels drift and sit
+    // over the wrong column (the "Description overlaps Unit Cost" bug).
+    // The row is: handle · desc · Qty · Unit · Unit Cost · Markup % · Ext ·
+    // Marked-Up · delete. min-width:0 lets a <80px basis win over the
+    // .ee-th-num class's min-width:80px.
     var headerHTML =
       '<div class="ee-line-tbl-head">' +
         '<div class="ee-th-handle"></div>' +
         '<div class="ee-th-desc">Description</div>' +
-        '<div class="ee-th-num">Qty</div>' +
-        '<div class="ee-th-num">Unit Cost</div>' +
-        '<div class="ee-th-num">Ext.</div>' +
-        '<div class="ee-th-num">Markup %</div>' +
-        '<div class="ee-th-num">Marked-Up</div>' +
-        '<div class="ee-th-del"></div>' +
+        '<div class="ee-th-num" style="flex:0 0 70px;min-width:0;">Qty</div>' +
+        '<div class="ee-th-num" style="flex:0 0 70px;min-width:0;">Unit</div>' +
+        '<div class="ee-th-num" style="flex:0 0 110px;min-width:0;">Unit Cost</div>' +
+        '<div class="ee-th-num" style="flex:0 0 90px;min-width:0;">Markup %</div>' +
+        '<div class="ee-th-num" style="flex:0 0 110px;min-width:0;">Ext.</div>' +
+        '<div class="ee-th-num" style="flex:0 0 120px;min-width:0;">Marked-Up</div>' +
+        '<div class="ee-th-del" style="flex:0 0 36px;"></div>' +
       '</div>';
     var html = bannerHtml + '<div class="ee-line-table ee-line-tbl" style="border:1px solid var(--border,#333);border-radius:8px;overflow:hidden;">' + headerHTML;
 
@@ -1939,19 +1961,25 @@
   function addEstimateSectionFromEditor() {
     var est = getEstimate();
     if (!est) return;
-    var name = prompt('Subgroup name:', '');
-    if (name == null) return;
-    var newHeader = {
-      id: 's' + Date.now(),
-      estimateId: est.id,
-      alternateId: est.activeAlternateId,
-      section: '__section_header__',
-      description: name || 'Untitled Section'
-    };
-    appData.estimateLines.push(newHeader);
-    debouncedSave();
-    renderLineItems();
-    renderTotals();
+    // Native prompt() silently no-ops inside the installed PWA (it froze the
+    // "+ Section › Custom" flow). Route through the in-app p86Prompt modal.
+    var ask = (typeof window.p86Prompt === 'function')
+      ? window.p86Prompt({ title: 'New section', message: 'Name this section (subgroup).', placeholder: 'e.g. Sitework', defaultValue: '' })
+      : Promise.resolve(prompt('Subgroup name:', ''));
+    ask.then(function(name) {
+      if (name == null) return;
+      var newHeader = {
+        id: 's' + Date.now(),
+        estimateId: est.id,
+        alternateId: est.activeAlternateId,
+        section: '__section_header__',
+        description: name || 'Untitled Section'
+      };
+      appData.estimateLines.push(newHeader);
+      debouncedSave();
+      renderLineItems();
+      renderTotals();
+    });
   }
 
   function deleteLineFromEditor(lineId) {
@@ -2256,8 +2284,15 @@
           field('Job Type', 'ee-jobType', est.jobType, { options: ['Renovation', 'Service & Repair', 'Work Order'] }) +
           field('Client Company Name', 'ee-client', est.client) +
           field('Community / Property Name', 'ee-community', est.community) +
-          field('Property Address', 'ee-propertyAddr', est.propertyAddr) +
-          field('Client Billing Address', 'ee-billingAddr', est.billingAddr) +
+          // Structured address — property maps to the canonical filterable
+          // fields (street_address/city/state/zip, same as leads/jobs so
+          // convert inherits + lists filter). Billing keeps its own set.
+          (window.p86Address
+            ? '<div style="margin-bottom:12px;"><label style="display:block;">Property Address</label>' + window.p86Address.fieldsHtml(est, { id: 'ee-propAddr' }) + '</div>'
+            : field('Property Address', 'ee-propertyAddr', est.propertyAddr)) +
+          (window.p86Address
+            ? '<div style="margin-bottom:12px;"><label style="display:block;">Client Billing Address</label>' + window.p86Address.fieldsHtml({ street_address: est.billing_street_address, city: est.billing_city, state: est.billing_state, zip: est.billing_zip, address: est.billingAddr }, { id: 'ee-billAddr' }) + '</div>'
+            : field('Client Billing Address', 'ee-billingAddr', est.billingAddr)) +
         '</div>' +
         '<div>' +
           field('Issue / Repair (proposal headline)', 'ee-issue', est.issue, { placeholder: 'e.g. Metal Stair Repairs' }) +
@@ -2320,8 +2355,6 @@
       'ee-jobType': 'jobType',
       'ee-client': 'client',
       'ee-community': 'community',
-      'ee-propertyAddr': 'propertyAddr',
-      'ee-billingAddr': 'billingAddr',
       'ee-issue': 'issue',
       'ee-managerName': 'managerName',
       'ee-managerEmail': 'managerEmail',
@@ -2356,6 +2389,37 @@
         renderTotals();
       };
     });
+    // Structured address wiring — collect the 4 sub-inputs on change and
+    // persist to both the canonical filterable fields (street_address/city/
+    // state/zip) and the formatted string the preview reads. Autocomplete
+    // fills all four (+ lat/lng onto the estimate for the property address).
+    if (window.p86Address) {
+      var _propRoot = document.getElementById('ee-propAddr');
+      var _billRoot = document.getElementById('ee-billAddr');
+      var _saveProp = function() {
+        var e = getEstimate(); if (!e) return;
+        var c = window.p86Address.collect(_propRoot); if (!c) return;
+        e.street_address = c.street; e.city = c.city; e.state = c.state; e.zip = c.zip;
+        e.address = c.formatted; e.propertyAddr = c.formatted;
+        debouncedSave();
+      };
+      var _saveBill = function() {
+        var e = getEstimate(); if (!e) return;
+        var c = window.p86Address.collect(_billRoot); if (!c) return;
+        e.billing_street_address = c.street; e.billing_city = c.city; e.billing_state = c.state; e.billing_zip = c.zip;
+        e.billingAddr = c.formatted;
+        debouncedSave();
+      };
+      if (_propRoot) {
+        _propRoot.querySelectorAll('[data-addr]').forEach(function(inp) { inp.addEventListener('change', _saveProp); });
+        window.p86Address.wire(_propRoot, est, _saveProp);
+      }
+      if (_billRoot) {
+        _billRoot.querySelectorAll('[data-addr]').forEach(function(inp) { inp.addEventListener('change', _saveBill); });
+        window.p86Address.wire(_billRoot, null, _saveBill);
+      }
+    }
+
     // Hidden client_id field — the picker writes into it. Mirror to the
     // estimate record on every change.
     var clientIdEl = document.getElementById('editEst_clientId');
@@ -2422,10 +2486,25 @@
       setIf('ee-nickName', c.short_name || '');
       setIf('ee-client', c.company_name || c.name || '');
       setIf('ee-community', c.community_name || c.name || '');
-      var pAddr = [c.property_address || c.address, c.city, c.state, c.zip].filter(Boolean).join(', ');
-      var bAddr = [c.address, c.city, c.state, c.zip].filter(Boolean).join(', ');
-      setIf('ee-propertyAddr', pAddr);
-      setIf('ee-billingAddr', bAddr);
+      // Fill the structured address sub-inputs (property = the canonical
+      // filterable set); dispatch change so the collect-on-change persists.
+      // Fall back to the legacy single fields if the structured block isn't
+      // rendered (p86Address unavailable).
+      var _fillAddr = function(rootId, street) {
+        var root = document.getElementById(rootId); if (!root) return false;
+        var parts = { street: street || '', city: c.city || '', state: c.state || '', zip: c.zip || '' };
+        Object.keys(parts).forEach(function(k) {
+          var el = root.querySelector('[data-addr="' + k + '"]');
+          if (el && parts[k]) { el.value = parts[k]; el.dispatchEvent(new Event('change', { bubbles: true })); }
+        });
+        return true;
+      };
+      if (!_fillAddr('ee-propAddr', c.property_address || c.address)) {
+        setIf('ee-propertyAddr', [c.property_address || c.address, c.city, c.state, c.zip].filter(Boolean).join(', '));
+      }
+      if (!_fillAddr('ee-billAddr', c.address)) {
+        setIf('ee-billingAddr', [c.address, c.city, c.state, c.zip].filter(Boolean).join(', '));
+      }
       setIf('ee-managerName', c.community_manager || '');
       setIf('ee-managerEmail', c.cm_email || c.email || '');
       setIf('ee-managerPhone', c.cm_phone || c.phone || c.cell || '');

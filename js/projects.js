@@ -1380,7 +1380,7 @@
             '</div>';
           })() +
           '<button class="primary" onclick="document.getElementById(\'projPhotoFileInput\').click();">&#x2795; Upload Photos</button>' +
-          '<input type="file" id="projPhotoFileInput" multiple accept="image/*,application/pdf" capture="environment" style="display:none;" />' +
+          '<input type="file" id="projPhotoFileInput" multiple accept="image/*,application/pdf,.xlsx,.xls,.xlsm,.csv,.tsv,.docx,.doc,.txt,.md" capture="environment" style="display:none;" />' +
         '</div>' +
       '</div>' +
 
@@ -5072,7 +5072,7 @@
     host.innerHTML =
       '<div class="p86-proj-upload-row">' +
         '<button class="primary" onclick="document.getElementById(\'projPhotoFileInput\').click();">&#x2795; Upload photos</button>' +
-        '<input type="file" id="projPhotoFileInput" multiple accept="image/*,application/pdf" capture="environment" style="display:none;" />' +
+        '<input type="file" id="projPhotoFileInput" multiple accept="image/*,application/pdf,.xlsx,.xls,.xlsm,.csv,.tsv,.docx,.doc,.txt,.md" capture="environment" style="display:none;" />' +
         '<span class="p86-proj-upload-hint">or drag &amp; drop photos onto this area.</span>' +
       '</div>';
     var fileInput = host.querySelector('#projPhotoFileInput');

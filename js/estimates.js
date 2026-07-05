@@ -357,11 +357,27 @@ function estDistinct(field) {
     out.sort(function(a, b) { return a.toLowerCase().localeCompare(b.toLowerCase()); });
     return out;
 }
+// Structured address parts for an estimate — derives city/state/zip from the
+// canonical fields, falling back to parsing the legacy freeform propertyAddr.
+function estAddr(e) {
+    return (window.p86Address && window.p86Address.get)
+        ? window.p86Address.get(e)
+        : { street: e.street_address || '', city: e.city || '', state: e.state || '', zip: e.zip || '' };
+}
+function estAddrDistinct(part) {
+    var seen = {}, out = [];
+    (appData.estimates || []).forEach(function(e) { var v = estAddr(e)[part]; if (!v) return; v = String(v); if (seen[v]) return; seen[v] = true; out.push({ v: v, label: v }); });
+    out.sort(function(a, b) { return a.label.toLowerCase().localeCompare(b.label.toLowerCase()); });
+    return out;
+}
 function estFilterFields() {
     var jt = estDistinct('jobType').map(function(s) { return { v: s, label: s }; });
     return [
         { key: 'status', label: 'Status', type: 'chips', options: [{ v: 'draft', label: 'Draft' }, { v: 'sent', label: 'Sent' }, { v: 'won', label: 'Won' }] },
         { key: 'jobType', label: 'Job Type', type: 'select', options: [{ v: '', label: 'Any' }].concat(jt) },
+        { key: 'city', label: 'City', type: 'select', options: [{ v: '', label: 'Any' }].concat(estAddrDistinct('city')) },
+        { key: 'state', label: 'State', type: 'select', options: [{ v: '', label: 'Any' }].concat(estAddrDistinct('state')) },
+        { key: 'zip', label: 'ZIP', type: 'select', options: [{ v: '', label: 'Any' }].concat(estAddrDistinct('zip')) },
         { key: 'clientPrice', label: 'Client Price', type: 'numrange' },
         { key: 'margin', label: 'Margin %', type: 'numrange' },
         { key: 'sent_at', label: 'Sent', type: 'daterange' },
@@ -381,6 +397,12 @@ function matchesEstimateDrawer(e, d) {
     var FD = window.p86FilterDrawer; if (!FD) return true;
     if (d.status && d.status.length && d.status.indexOf(estStatusMeta(e).key) < 0) return false;
     if (d.jobType && String(e.jobType || '') !== String(d.jobType)) return false;
+    if (d.city || d.state || d.zip) {
+        var ea = estAddr(e);
+        if (d.city && String(ea.city || '') !== String(d.city)) return false;
+        if (d.state && String(ea.state || '') !== String(d.state)) return false;
+        if (d.zip && String(ea.zip || '') !== String(d.zip)) return false;
+    }
     var t = e.__totals || computeEstimateTotals(e);
     var pr = FD.resolveNumRange(d.clientPrice);
     if (pr.min != null || pr.max != null) { var cp = Number(t.clientPrice || 0); if (pr.min != null && cp < pr.min) return false; if (pr.max != null && cp > pr.max) return false; }
