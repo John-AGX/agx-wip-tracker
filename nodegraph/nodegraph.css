@@ -1012,6 +1012,14 @@ body.light-mode .ng-topbar.ng-ribbon .ng-ribbon-btn:hover{
 .ng-ncv.ng-outline .ng-nc-dot{width:7px;height:7px}
 .ng-ncv.ng-outline .ng-nc-nm{font-size:12.5px;font-weight:500}
 .ng-ncv.ng-outline .ng-ncv-inner{gap:0}
+/* NC-4: floating per-building nested panel on the map */
+.ng-bcards-hd{position:sticky;top:0;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;background:#0e1626;border-bottom:1px solid rgba(255,255,255,.08)}
+.ng-bcards-ttl{font-size:13px;font-weight:600;color:#eaf0fb}
+.ng-bcards-x{width:22px;height:22px;padding:0;background:none;border:none;color:#8aa0c0;font-size:17px;cursor:pointer;border-radius:5px;line-height:1}
+.ng-bcards-x:hover{background:rgba(255,255,255,.08);color:#fff}
+.ng-bcards-body{padding:12px}
+.ng-insp-cards{margin-left:8px;font-size:11px;font-weight:600;color:#bcd4f5;background:#16233b;border:1px solid rgba(79,140,255,.35);border-radius:6px;padding:2px 8px;cursor:pointer;white-space:nowrap}
+.ng-insp-cards:hover{background:#1d2f4d}
 .ng-lu-x:hover{background:rgba(224,122,143,.12);color:#f3a3b3}
 /* 2.5D massing: a building block in site-plan reads as solid mass — flatter
    "block" corners + a lit top edge over the budget-proportional extrusion

@@ -1050,6 +1050,34 @@ function renderNestedCards(){
   var seen={};
   host.innerHTML='<div class="ng-ncv-inner">'+roots.map(function(r){ return nestedCardHtml(r,0,seen); }).join('')+'</div>';
 }
+// NC-4: one building's nested tree as a floating panel over the satellite map (no wires),
+// opened from the building inspector's "Cards" button. Reuses the same cards + drag/delete/collapse.
+function renderBldgPanel(bId){
+  var b=E.findNode(bId); if(!b) return;
+  var tab=document.getElementById('nodeGraphTab'); if(!tab) return;
+  var area=tab.querySelector('.ng-canvas-area')||tab;
+  var p=document.getElementById('ngBldgCards');
+  if(!p){
+    p=document.createElement('div'); p.id='ngBldgCards'; p.className='ng-bcards';
+    p.style.cssText='position:absolute;left:20px;top:64px;width:360px;max-height:72%;z-index:60;overflow:auto;background:#0e1626;border:1px solid rgba(255,255,255,.12);border-radius:12px;box-shadow:0 16px 48px rgba(0,0,0,.5);';
+    area.appendChild(p); ncAttachDnd(p);
+  }
+  p._bId=bId; p.style.display='block';
+  var seen={};
+  p.innerHTML='<div class="ng-bcards-hd"><span class="ng-bcards-ttl">'+luEsc(b.label||'Building')+'</span>'
+    +'<button class="ng-bcards-x" onclick="var e=document.getElementById(\'ngBldgCards\');if(e)e.style.display=\'none\';" aria-label="Close">×</button></div>'
+    +'<div class="ng-bcards-body">'+nestedCardHtml(b,0,seen)+'</div>';
+}
+window.p86NcBldgToggle=function(bId){
+  var p=document.getElementById('ngBldgCards');
+  if(p && p.style.display!=='none' && p._bId===bId){ p.style.display='none'; return; }
+  renderBldgPanel(bId);
+};
+// Re-render whichever nested surfaces are open (full overlay and/or the floating panel).
+function ncRefreshOpen(){
+  if(window._p86Nested) renderNestedCards();
+  var p=document.getElementById('ngBldgCards'); if(p && p.style.display!=='none' && p._bId) renderBldgPanel(p._bId);
+}
 function renderNestedOverlay(){
   var tab=document.getElementById('nodeGraphTab'); if(!tab) return;
   var area=tab.querySelector('.ng-canvas-area')||tab;
@@ -1084,12 +1112,13 @@ function renderNestedOverlay(){
   host.classList.toggle('ng-outline', !!window._p86NcOutline);
   host.style.display = on ? 'block' : 'none';
   if(on) renderNestedCards();
+  var bp=document.getElementById('ngBldgCards'); if(bp && bp.style.display!=='none' && bp._bId) renderBldgPanel(bp._bId);
 }
 window.p86NestedRefresh=renderNestedOverlay;
 // Nested-card interactions (collapse / delete / select) — delegated once at module load.
 document.addEventListener('click', function(e){
   var cb=e.target.closest('[data-nc-coll]');
-  if(cb){ e.stopPropagation(); var n=E.findNode(cb.getAttribute('data-nc-coll')); if(n){ n._ncColl=!n._ncColl; renderNestedCards(); } return; }
+  if(cb){ e.stopPropagation(); var n=E.findNode(cb.getAttribute('data-nc-coll')); if(n){ n._ncColl=!n._ncColl; ncRefreshOpen(); } return; }
   var del=e.target.closest('[data-nc-del]');
   if(del){ e.stopPropagation(); var dn=E.findNode(del.getAttribute('data-nc-del')); if(dn && typeof showDeleteDialog==='function') showDeleteDialog(dn); return; }
   var sel=e.target.closest('[data-nc-sel]');
@@ -2858,7 +2887,8 @@ function renderInspector(){
   if(sel && _inspSectionPanel){ restoreSectionPanel(); }
   else if(!sel && _inspSection){ return; }
   if(sel && sel.type==='t1'){
-    if(hdr) hdr.innerHTML='<span class="ng-insp-ic">▤</span> '+luEsc(sel.label||'Building')+'<span class="ng-insp-type">Building</span>';
+    if(hdr) hdr.innerHTML='<span class="ng-insp-ic">▤</span> '+luEsc(sel.label||'Building')+'<span class="ng-insp-type">Building</span>'
+      +'<button class="ng-insp-cards" onclick="event.stopPropagation();window.p86NcBldgToggle&&window.p86NcBldgToggle(\''+sel.id+'\')" title="Open this building as nested cards on the map">▤ Cards</button>';
     body.innerHTML='<div class="ng-insp-sec">'+buildingKpiGridHtml(sel)+'</div><div class="ng-sp-struct"></div>';
     renderBuildingStructure(body, sel);
   } else if(sel && sel.type!=='wip'){
