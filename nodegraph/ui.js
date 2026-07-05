@@ -1029,7 +1029,7 @@ function nestedCardHtml(n, depth, seen){
   if(seen[n.id]) return ''; seen[n.id]=1;    // cycle guard
   var d=E.DEFS[n.type]||{}, kids=getNestedChildren(n.id);
   var typ=(d.cat==='cost')?'cost':n.type, coll=!!n._ncColl, pct=ncNodePct(n), val=ncNodeVal(n);
-  var h='<div class="ng-ncard ng-nc-'+typ+(coll?' ng-nc-coll':'')+'" data-nc="'+n.id+'">';
+  var h='<div class="ng-ncard ng-nc-'+typ+(coll?' ng-nc-coll':'')+(n.type!=='t1'?' ng-nc-drag':'')+'" data-nc="'+n.id+'"'+(n.type!=='t1'?' draggable="true"':'')+'>';
   h+='<div class="ng-nc-h" data-nc-sel="'+n.id+'">';
   h+= kids.length ? '<button class="ng-nc-caret" data-nc-coll="'+n.id+'" aria-label="Collapse">'+(coll?'▸':'▾')+'</button>' : '<span class="ng-nc-caret ng-nc-leaf"></span>';
   h+='<span class="ng-nc-dot"></span><span class="ng-nc-nm">'+luEsc(n.label||d.label||n.type)+'</span><span class="ng-nc-ty">'+luEsc(d.label||n.type)+'</span>';
@@ -1037,6 +1037,7 @@ function nestedCardHtml(n, depth, seen){
   if(val!=null && !isNaN(val)) meta+='<span class="ng-nc-val">'+E.fmtC(val)+'</span>';
   if(pct!=null && !isNaN(pct)) meta+='<span class="ng-nc-pct">'+Math.round(pct)+'%</span>';
   if(meta) h+='<span class="ng-nc-meta">'+meta+'</span>';
+  if(n.type!=='t1') h+='<span class="ng-nc-actions"><button class="ng-nc-xbtn" data-nc-del="'+n.id+'" title="Delete" aria-label="Delete">×</button></span>';
   h+='</div>';
   if(kids.length && !coll) h+='<div class="ng-nc-kids">'+kids.map(function(k){ return nestedCardHtml(k, depth+1, seen); }).join('')+'</div>';
   h+='</div>';
@@ -1057,7 +1058,9 @@ function renderNestedOverlay(){
     // Critical layout is set inline (not just via .ng-ncv) so the overlay still stacks
     // above the canvas even if a stale service-worker cache hasn't picked up the CSS yet.
     host.style.cssText='position:absolute;left:0;top:0;right:0;bottom:0;z-index:500;overflow:auto;background:#0e1626;padding:20px 18px;';
-    area.appendChild(host); }
+    area.appendChild(host);
+    ncAttachDnd(host);   // NC-3: drag-a-card-into-another to re-parent
+  }
   var btn=document.getElementById('ngNestedToggle');
   if(!btn){
     btn=document.createElement('button'); btn.id='ngNestedToggle'; btn.className='ng-nc-toggle';
@@ -1066,19 +1069,89 @@ function renderNestedOverlay(){
     btn.addEventListener('click', function(){ window._p86Nested=!window._p86Nested; renderNestedOverlay(); });
     area.appendChild(btn);
   }
+  var obtn=document.getElementById('ngOutlineToggle');
+  if(!obtn){
+    obtn=document.createElement('button'); obtn.id='ngOutlineToggle'; obtn.className='ng-nc-toggle';
+    obtn.style.cssText='position:absolute;top:10px;right:96px;z-index:501;';
+    obtn.innerHTML='<span class="ng-nc-tgi">≡</span> Outline'; obtn.title='Switch between cards and a compact outline';
+    obtn.addEventListener('click', function(){ window._p86NcOutline=!window._p86NcOutline; renderNestedOverlay(); });
+    area.appendChild(obtn);
+  }
   var on=!!window._p86Nested;
   btn.classList.toggle('ng-nc-on', on);
+  obtn.style.display = on ? '' : 'none';
+  obtn.classList.toggle('ng-nc-on', !!window._p86NcOutline);
+  host.classList.toggle('ng-outline', !!window._p86NcOutline);
   host.style.display = on ? 'block' : 'none';
   if(on) renderNestedCards();
 }
 window.p86NestedRefresh=renderNestedOverlay;
-// Nested-card interactions (collapse + select) — delegated once at module load.
+// Nested-card interactions (collapse / delete / select) — delegated once at module load.
 document.addEventListener('click', function(e){
   var cb=e.target.closest('[data-nc-coll]');
   if(cb){ e.stopPropagation(); var n=E.findNode(cb.getAttribute('data-nc-coll')); if(n){ n._ncColl=!n._ncColl; renderNestedCards(); } return; }
+  var del=e.target.closest('[data-nc-del]');
+  if(del){ e.stopPropagation(); var dn=E.findNode(del.getAttribute('data-nc-del')); if(dn && typeof showDeleteDialog==='function') showDeleteDialog(dn); return; }
   var sel=e.target.closest('[data-nc-sel]');
   if(sel){ selN=sel.getAttribute('data-nc-sel'); if(typeof renderInspector==='function') renderInspector(); }
 });
+
+// NC-3: drag-a-card-into-another to re-parent (re-wire) — the replacement for dragging wires.
+var _ncDragId=null, _ncDragParent=null;
+function ncCanReparent(childId, parentId){
+  if(!childId || !parentId || childId===parentId) return false;
+  var c=E.findNode(childId), p=E.findNode(parentId); if(!c||!p) return false;
+  var d=E.DEFS[c.type]||{}, grp=(d.cat==='cost')?'cost':c.type;
+  if((SPAWN_CHILDREN[p.type]||[]).indexOf(grp)<0) return false;   // parent must accept this child type
+  var stack=[childId], seen={};                                    // parent must not be the child's own descendant (cycle guard)
+  while(stack.length){ var id=stack.pop(); if(seen[id]) continue; seen[id]=1; getNestedChildren(id).forEach(function(k){ stack.push(k.id); }); }
+  return !seen[parentId];
+}
+function ncReparent(childId, newParentId, oldParentId){
+  if(!ncCanReparent(childId, newParentId)) return false;
+  var ws=E.wires();
+  for(var i=ws.length-1;i>=0;i--){ if(ws[i].fromNode===childId && (!oldParentId || ws[i].toNode===oldParentId)) ws.splice(i,1); }
+  var c=E.findNode(childId), p=E.findNode(newParentId);
+  var toPort=E.firstCompatPort(E.DEFS[p.type], c.type, 'in');
+  ws.push({ fromNode:childId, fromPort:0, toNode:newParentId, toPort:toPort||0 });
+  try{
+    if(c.type==='t2' && E.rebalancePhaseAllocations) E.rebalancePhaseAllocations(childId);
+    else if(c.type==='co' && E.rebalanceCOAllocations) E.rebalanceCOAllocations(childId);
+  }catch(e){}
+  try{ delete c.spOff; }catch(e){}   // drop stale offset so it re-fans under its new parent's building on the canvas
+  if(E.saveGraph) E.saveGraph();
+  if(typeof render==='function') render(); else renderNestedCards();
+  return true;
+}
+function ncAttachDnd(host){
+  host.addEventListener('dragstart', function(e){
+    var card=e.target.closest('.ng-ncard'); if(!card) return;
+    var n=E.findNode(card.getAttribute('data-nc'));
+    if(!n || n.type==='t1'){ e.preventDefault(); return; }   // buildings are roots — not draggable
+    _ncDragId=n.id;
+    var pc=card.parentElement && card.parentElement.closest('.ng-ncard');
+    _ncDragParent=pc?pc.getAttribute('data-nc'):null;
+    try{ e.dataTransfer.effectAllowed='move'; e.dataTransfer.setData('text/plain', n.id); }catch(_){}
+    card.classList.add('ng-nc-dragging');
+  });
+  host.addEventListener('dragover', function(e){
+    if(!_ncDragId) return;
+    [].forEach.call(host.querySelectorAll('.ng-nc-drop'), function(el){ el.classList.remove('ng-nc-drop'); });
+    var card=e.target.closest('.ng-ncard');
+    if(card && ncCanReparent(_ncDragId, card.getAttribute('data-nc'))){ e.preventDefault(); try{ e.dataTransfer.dropEffect='move'; }catch(_){} card.classList.add('ng-nc-drop'); }
+  });
+  host.addEventListener('drop', function(e){
+    if(!_ncDragId) return;
+    var card=e.target.closest('.ng-ncard');
+    if(card){ e.preventDefault(); ncReparent(_ncDragId, card.getAttribute('data-nc'), _ncDragParent); }
+    _ncDragId=null; _ncDragParent=null;
+  });
+  host.addEventListener('dragend', function(){
+    _ncDragId=null; _ncDragParent=null;
+    [].forEach.call(host.querySelectorAll('.ng-nc-drop'), function(el){ el.classList.remove('ng-nc-drop'); });
+    [].forEach.call(host.querySelectorAll('.ng-nc-dragging'), function(el){ el.classList.remove('ng-nc-dragging'); });
+  });
+}
 
 function applyTx(){
   var p=E.pan(), z=E.zm();

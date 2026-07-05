@@ -994,6 +994,24 @@ body.light-mode .ng-topbar.ng-ribbon .ng-ribbon-btn:hover{
 .ng-nc-po{--nc-accent:#EF9F27}
 .ng-nc-co{--nc-accent:#D4537E}
 .ng-nc-inv{--nc-accent:#5DCAA5}
+/* NC-3: per-card delete + drag-to-reparent */
+.ng-nc-actions{display:flex;align-items:center;gap:4px;margin-left:8px;opacity:0;transition:opacity .12s;flex:none}
+.ng-nc-h:hover .ng-nc-actions{opacity:1}
+.ng-nc-xbtn{width:20px;height:20px;padding:0;background:none;border:none;color:#8aa0c0;font-size:16px;line-height:1;cursor:pointer;border-radius:4px}
+.ng-nc-xbtn:hover{background:rgba(224,122,143,.16);color:#e07a8f}
+.ng-nc-drag>.ng-nc-h{cursor:grab}
+.ng-nc-dragging{opacity:.4}
+.ng-ncard.ng-nc-drop{outline:2px dashed #4f8cff;outline-offset:-2px}
+.ng-ncard.ng-nc-drop>.ng-nc-h{background:rgba(79,140,255,.14)}
+.ng-picker-overlay{z-index:700}
+/* NC-2: compact outline mode (same tree, denser rows) */
+.ng-ncv.ng-outline .ng-ncard{border:none;background:none;border-radius:0}
+.ng-ncv.ng-outline .ng-nc-h{padding:3px 8px;border-left:none}
+.ng-ncv.ng-outline .ng-nc-h:hover{background:rgba(79,140,255,.08)}
+.ng-ncv.ng-outline .ng-nc-kids{padding:0 0 0 16px;gap:0;margin-left:9px;border-left:1px solid rgba(255,255,255,.08)}
+.ng-ncv.ng-outline .ng-nc-dot{width:7px;height:7px}
+.ng-ncv.ng-outline .ng-nc-nm{font-size:12.5px;font-weight:500}
+.ng-ncv.ng-outline .ng-ncv-inner{gap:0}
 .ng-lu-x:hover{background:rgba(224,122,143,.12);color:#f3a3b3}
 /* 2.5D massing: a building block in site-plan reads as solid mass — flatter
    "block" corners + a lit top edge over the budget-proportional extrusion
