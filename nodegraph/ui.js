@@ -213,6 +213,14 @@ function slimChipHtml(n, d){
   var sub = hasPct ? (d.label||n.type) : fmtCompactC(E.getOutput(n,0)||0);
   return left + '<div class="ng-slim-txt"><span class="ng-slim-name">'+luEsc(n.label||d.label||'')+'</span><span class="ng-slim-sub">'+luEsc(sub)+'</span></div>';
 }
+// NC-5/6: single guarded wire-draw. In docked cost-cards mode on the site plan the
+// wire canvas is CLEARED (containment is shown by the cards + their SVG connectors);
+// otherwise wires draw normally. Every drawWires call routes through here so pan/drag
+// redraws can't resurrect the old wires.
+function _drawWires(){
+  if(window._p86NcDefault && E.viewMode && E.viewMode()==='siteplan'){ if(wireCtx&&wireC) wireCtx.clearRect(0,0,wireC.width,wireC.height); return; }
+  if(E.drawWires && wireCtx && wrap) E.drawWires(wireCtx, wrap, wiringFrom, wireMouse);
+}
 function renderNodes(){
   var nodes=E.nodes(), wires=E.wires();
   canvasEl.querySelectorAll('.ng-node').forEach(function(el){
@@ -993,7 +1001,7 @@ function render(){
   renderBuildingMetrics();          // S2: selected building's cost breakdown
   renderInspector();                // right-hand Inspector: WIP / building / node detail
   E.drawGrid(gridCtx, gridC.width, gridC.height);
-  if(!(window._p86NcDefault && E.viewMode && E.viewMode()==='siteplan')) E.drawWires(wireCtx, wrap, wiringFrom, wireMouse);  // NC-5: no wires — containment is shown by the docked cards
+  _drawWires();  // NC-5/6: clears the wire canvas in docked mode, draws wires otherwise
   E.saveGraph();
   drawMinimap();
   var z=document.querySelector('.ng-zoom');
@@ -2643,7 +2651,7 @@ function buildSidebar(){
       E.drawGrid(gridCtx, gridC.width, gridC.height);
     }
     if (typeof E !== 'undefined' && E.drawWires && wireCtx && wrap) {
-      E.drawWires(wireCtx, wrap, null, null);
+      _drawWires();
     }
   });
 
@@ -3932,7 +3940,7 @@ function initEvents(){
       E.pan(e.clientX/z()-panSt.x, e.clientY/z()-panSt.y);
       applyTx();
       E.drawGrid(gridCtx,gridC.width,gridC.height);
-      E.drawWires(wireCtx,wrap,wiringFrom,wireMouse);
+      _drawWires();
     }
     if(dragN){
       var n=E.findNode(dragN); if(!n) return;
@@ -3942,12 +3950,12 @@ function initEvents(){
       n.y=Math.round((e.clientY/z()-p.y-dragOff.y)/SN)*SN;
       var el=canvasEl.querySelector('[data-id="'+n.id+'"]');
       if(el){el.style.left=n.x+'px';el.style.top=n.y+'px';}
-      E.drawWires(wireCtx,wrap,wiringFrom,wireMouse);
+      _drawWires();
     }
     if(wiringFrom){
       var r=wrap.getBoundingClientRect();
       wireMouse={x:e.clientX-r.left,y:e.clientY-r.top};
-      E.drawWires(wireCtx,wrap,wiringFrom,wireMouse);
+      _drawWires();
     }
     if(dragFrame){
       var f=E.findFrame(dragFrame); if(f){
@@ -3962,7 +3970,7 @@ function initEvents(){
           var mel=canvasEl.querySelector('.ng-node[data-id="'+mn.id+'"]');
           if(mel){ mel.style.left=mn.x+'px'; mel.style.top=mn.y+'px'; }
         });
-        E.drawWires(wireCtx,wrap,wiringFrom,wireMouse);
+        _drawWires();
       }
       return;
     }
@@ -4574,7 +4582,7 @@ function initEvents(){
           if(fill){fill.style.width=Math.min(pc,100)+'%';fill.style.background='linear-gradient(90deg, #4f8cff, #a78bfa)';}
           if(lbl)lbl.textContent=pc.toFixed(0)+'%';
         }
-        E.drawWires(wireCtx,wrap,wiringFrom,wireMouse);
+        _drawWires();
       } else {
         n.value=parseFloat(t.value)||0;
       }
