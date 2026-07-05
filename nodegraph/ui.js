@@ -1053,10 +1053,15 @@ function renderNestedOverlay(){
   var tab=document.getElementById('nodeGraphTab'); if(!tab) return;
   var area=tab.querySelector('.ng-canvas-area')||tab;
   var host=document.getElementById('ngNestedView');
-  if(!host){ host=document.createElement('div'); host.id='ngNestedView'; host.className='ng-ncv'; area.appendChild(host); }
+  if(!host){ host=document.createElement('div'); host.id='ngNestedView'; host.className='ng-ncv';
+    // Critical layout is set inline (not just via .ng-ncv) so the overlay still stacks
+    // above the canvas even if a stale service-worker cache hasn't picked up the CSS yet.
+    host.style.cssText='position:absolute;left:0;top:0;right:0;bottom:0;z-index:500;overflow:auto;background:#0e1626;padding:20px 18px;';
+    area.appendChild(host); }
   var btn=document.getElementById('ngNestedToggle');
   if(!btn){
     btn=document.createElement('button'); btn.id='ngNestedToggle'; btn.className='ng-nc-toggle';
+    btn.style.cssText='position:absolute;top:10px;right:12px;z-index:501;';
     btn.innerHTML='<span class="ng-nc-tgi">▤</span> Cards'; btn.title='Toggle nested-cards view (no wires)';
     btn.addEventListener('click', function(){ window._p86Nested=!window._p86Nested; renderNestedOverlay(); });
     area.appendChild(btn);
