@@ -3247,7 +3247,7 @@
     <script src="js/my-files.js?v=22"></script>
     <!-- Tasks / To-Do UI. Loads after my-files.js (reuses window.p86Toast)
          and after api.js/auth.js (p86Api.tasks + p86Auth). -->
-    <script src="js/tasks.js?v=6"></script>
+    <script src="js/tasks.js?v=7"></script>
     <!-- Google Maps JS API loader + tag-icon registry for photo pins.
          Both load before projects-map.js so the map renderer can
          reference window.p86Maps + window.p86TagIcons. -->
@@ -3255,6 +3255,10 @@
     <!-- Google Places address autocomplete helper (window.p86AddressAutocomplete) -->
     <script src="js/address-autocomplete.js?v=2"></script>
     <script src="js/address-fields.js?v=3"></script>
+    <!-- Reusable map location picker (window.p86MapPicker) — drop/drag a pin on
+         a Google map. Uses p86Maps + p86AddressAutocomplete + p86MapLink at call
+         time, so it loads after them. -->
+    <script src="js/map-picker.js?v=1"></script>
     <style>
       /* Places autocomplete search box — color-scheme:dark renders the gmp
          dropdown to match the dark UI; full width inside the address fieldset. */

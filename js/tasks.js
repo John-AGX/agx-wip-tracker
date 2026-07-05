@@ -430,10 +430,12 @@
             '</div>' +
             '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:6px;">' +
               '<button type="button" id="tdGeoMe" class="ee-btn secondary">Use my location</button>' +
+              '<button type="button" id="tdGeoPick" class="ee-btn secondary">Pick on map</button>' +
               '<a id="tdGeoLink" target="_blank" rel="noopener" style="font-size:12px;color:#4f8cff;text-decoration:none;">Open in Maps &#8599;</a>' +
               '<button type="button" id="tdGeoClear" class="ee-btn secondary" style="font-size:11px;">Clear pin</button>' +
               '<span id="tdGeoAcc" style="font-size:11px;color:var(--text-dim,#888);"></span>' +
             '</div>' +
+            '<div id="tdGeoDefault" style="font-size:11px;color:var(--text-dim,#888);margin-top:6px;line-height:1.5;"></div>' +
           '</div>' +
           '<label class="p86-field" style="margin-top:10px;"><span>Directions / access notes</span>' +
             '<textarea id="tdDirections" rows="2" placeholder="Gate code, where to park, which unit…">' + esc(task.directions || '') + '</textarea></label>' +
@@ -484,22 +486,75 @@
       if (inputs.length) inputs[inputs.length - 1].focus();
     });
 
-    // ── Geo pin: device location, manual edit, maps link ──
+    // ── Geo pin: device location, manual edit, map picker, maps link ──
+    // A task linked to a job DEFAULTS to that job's location; a task-specific
+    // pin (lat/lng) overrides it. The default is derived at display time and is
+    // never written onto the task — clearing the pin reverts to the default.
     var _geoAcc = (task.geo_accuracy != null) ? Number(task.geo_accuracy) : null;
+    var _linkedJob = (task.entity_type === 'job' && window.appData && window.appData.jobs)
+      ? window.appData.jobs.find(function (j) { return String(j.id) === String(task.entity_id); }) : null;
+    function _jobCoords(j) {
+      if (!j) return null;
+      var la = Number(j.geocode_lat != null ? j.geocode_lat : j.lat);
+      var ln = Number(j.geocode_lng != null ? j.geocode_lng : j.lng);
+      return (window.p86MapLink && window.p86MapLink.isUsableCoord(la, ln)) ? { lat: la, lng: ln } : null;
+    }
+    function _jobAddress(j) {
+      if (!j) return '';
+      if (j.address) return j.address;
+      return (window.p86Address && window.p86Address.get) ? window.p86Address.format(window.p86Address.get(j)) : '';
+    }
+    var _jobDef = _linkedJob ? { coords: _jobCoords(_linkedJob), address: _jobAddress(_linkedJob) } : null;
     function syncGeoLink() {
       var lat = parseFloat(h.modal.querySelector('#tdLat').value);
       var lng = parseFloat(h.modal.querySelector('#tdLng').value);
       var link = h.modal.querySelector('#tdGeoLink'), accEl = h.modal.querySelector('#tdGeoAcc');
-      var ok = isFinite(lat) && isFinite(lng);
-      link.style.display = ok ? '' : 'none';
-      if (ok && window.p86MapLink) link.href = window.p86MapLink.url(lat, lng);
-      accEl.textContent = (ok && _geoAcc) ? ('±' + Math.round(_geoAcc) + 'm') : '';
+      var note = h.modal.querySelector('#tdGeoDefault');
+      var hasPin = isFinite(lat) && isFinite(lng);
+      // The "Open in Maps" link routes to the OWN pin, else the job default.
+      var eff = hasPin ? { lat: lat, lng: lng } : (_jobDef && _jobDef.coords ? _jobDef.coords : null);
+      var effAddr = hasPin ? '' : (_jobDef ? _jobDef.address : '');
+      var href = window.p86MapLink ? window.p86MapLink.url({ lat: eff && eff.lat, lng: eff && eff.lng, address: effAddr }) : '';
+      link.style.display = href ? '' : 'none';
+      if (href) link.href = href;
+      accEl.textContent = (hasPin && _geoAcc) ? ('±' + Math.round(_geoAcc) + 'm') : '';
+      if (note) {
+        if (hasPin) {
+          note.innerHTML = _jobDef ? 'Custom pin set — overrides the job’s location. “Clear pin” reverts to the job default.' : '';
+          note.style.display = _jobDef ? '' : 'none';
+        } else if (_jobDef && (_jobDef.coords || _jobDef.address)) {
+          note.innerHTML = 'Defaults to the job’s location' + (_jobDef.address ? ': <b style="color:var(--text,#e9ecf5);">' + esc(_jobDef.address) + '</b>' : '') + '. Use “Pick on map” to set a specific spot.';
+          note.style.display = '';
+        } else {
+          note.style.display = 'none';
+        }
+      }
     }
     syncGeoLink();
     h.modal.querySelector('#tdLat').addEventListener('input', function () { _geoAcc = null; syncGeoLink(); });
     h.modal.querySelector('#tdLng').addEventListener('input', function () { _geoAcc = null; syncGeoLink(); });
     h.modal.querySelector('#tdGeoClear').addEventListener('click', function () {
       h.modal.querySelector('#tdLat').value = ''; h.modal.querySelector('#tdLng').value = ''; _geoAcc = null; syncGeoLink();
+    });
+    var _pickBtn = h.modal.querySelector('#tdGeoPick');
+    if (_pickBtn) _pickBtn.addEventListener('click', function () {
+      if (!window.p86MapPicker) { toast('Map picker unavailable', 'error'); return; }
+      var lat = parseFloat(h.modal.querySelector('#tdLat').value);
+      var lng = parseFloat(h.modal.querySelector('#tdLng').value);
+      var hasPin = isFinite(lat) && isFinite(lng);
+      window.p86MapPicker.open({
+        title: 'Set task location',
+        lat: hasPin ? lat : undefined,
+        lng: hasPin ? lng : undefined,
+        fallbackLat: (_jobDef && _jobDef.coords) ? _jobDef.coords.lat : undefined,
+        fallbackLng: (_jobDef && _jobDef.coords) ? _jobDef.coords.lng : undefined,
+        address: (!hasPin && (!_jobDef || !_jobDef.coords) && _jobDef) ? _jobDef.address : undefined
+      }).then(function (res) {
+        if (!res) return;
+        h.modal.querySelector('#tdLat').value = Number(res.lat).toFixed(6);
+        h.modal.querySelector('#tdLng').value = Number(res.lng).toFixed(6);
+        _geoAcc = null; syncGeoLink();
+      });
     });
     h.modal.querySelector('#tdGeoMe').addEventListener('click', function () {
       var b = this, t0 = b.textContent; b.disabled = true; b.textContent = 'Locating…';
