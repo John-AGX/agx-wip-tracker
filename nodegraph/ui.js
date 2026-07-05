@@ -2726,6 +2726,9 @@ function renderInspector(){
     renderInspectorJobDetail(body);
     refreshInspMetrics();   // always repaint tiles (job-detail build is keyed; numbers settle late)
   }
+  // Hybrid inline-spawn (RS-A): prepend the header quick-add chip row so the selected
+  // node's allowed children can be spawned straight from the inspector surface.
+  if(sel && sel.type!=='wip') injectSpawnRow(body, sel);
 }
 // Slice 3: the no-node Inspector hosts the JOB detail — reuses the classic job-overview
 // renderers (buildings / phases / subs). Built ONCE per job-detail entry: these mount
@@ -3216,7 +3219,7 @@ function addCostToBuilding(bId, clientX, clientY){
   var existing=document.querySelector('.ng-add-menu.ng-addcost'); if(existing) existing.remove();
   var menu=document.createElement('div'); menu.className='ng-add-menu ng-addcost';
   var h='<div class="ng-add-cat">Add to '+(b.label||'building')+'</div>';
-  ['t2','sub','po','mat','labor'].forEach(function(t){ var d=E.DEFS[t]; if(d) h+='<div class="ng-add-item" data-type="'+t+'"><span class="ng-add-ic">'+d.icon+'</span>'+(d.label||t)+'</div>'; });
+  ['t2','sub','po','co','mat','labor','gc','burden','other'].forEach(function(t){ var d=E.DEFS[t]; if(d) h+='<div class="ng-add-item" data-type="'+t+'"><span class="ng-add-ic">'+d.icon+'</span>'+(d.label||t)+'</div>'; });
   menu.innerHTML=h;
   document.body.appendChild(menu);
   menu.style.left=Math.max(8,Math.min(clientX, window.innerWidth-248))+'px';
@@ -3227,45 +3230,108 @@ function addCostToBuilding(bId, clientX, clientY){
   menu.addEventListener('click',function(ev){
     var it=ev.target.closest('.ng-add-item'); if(!it) return;
     var type=it.getAttribute('data-type'); close();
-    var center=(b.geoLatLng)?geoRenderPos(b):{x:b.x, y:b.y};
-    var _satAdd=!!_spSatellite && E.viewMode && E.viewMode()==='siteplan';
-    var px=Math.round(center.x), py=Math.round(center.y-(_satAdd?40:220)); // sit it just above the building (scaled on satellite)
-    function wireToBuilding(nn){
-      if(!nn) return;
-      var toPort=E.firstCompatPort(E.DEFS[b.type], nn.type, 'in');
-      // Dedupe: autoWireFromData may already have wired this node to the same
-      // building (duplicate wires double-count costs and make updateTierLabels
-      // clear phase.buildingId).
-      var _ws=E.wires();
-      var _dup=_ws.some(function(w){ return w.fromNode===nn.id && w.toNode===b.id; });
-      if(!_dup) _ws.push({ fromNode:nn.id, fromPort:0, toNode:b.id, toPort:toPort||0 });
-      // New wires carry no allocPct (engine computes null as 0%) — run the
-      // standard rebalance so the fresh link contributes immediately.
-      try{
-        if(nn.type==='t2' && E.rebalancePhaseAllocations) E.rebalancePhaseAllocations(nn.id);
-        else if(nn.type==='co' && E.rebalanceCOAllocations) E.rebalanceCOAllocations(nn.id);
-      }catch(e){}
-      delete _fannedSet[bId];
-      // Cost nodes are only visible when drilled into the building, so drill in (if
-      // not already) — otherwise the node you just added stays invisible on the
-      // whole-site view. applySpFocus reveals the subgraph; fan + fit show it.
-      if(_spFocus!==bId){ _spFocus=bId; applySpFocus(); }
-      fanFocusNodes(bId);
-      selN=nn.id; if(E.saveGraph) E.saveGraph(); render(); fitSiteplan();
-    }
-    if(PICKABLE_TYPES[type] && E.job()){
-      showDataPicker(type, function(entry, focused){
-        if(focused) return;
-        if(entry){ var nn=E.addNode(type, px, py, entryLabel(type,entry), entry); if(nn){ autoWireFromData(nn, entry); wireToBuilding(nn); } }
-        else openEntityCreateModal(type, function(ne){ if(ne){ var n2=E.addNode(type, px, py, entryLabel(type,ne), ne); if(n2){ autoWireFromData(n2, ne); wireToBuilding(n2); } } });
-      });
-    } else {
-      var d=E.DEFS[type], label=d.label;
-      if(d.nameEdit){ label=prompt('Name for this '+(d.label||type)+':', label)||label; }
-      wireToBuilding(E.addNode(type, px, py, label));
-    }
+    spawnChildNode(bId, type);   // RS-A: unified spawn-and-wire (also drills into the owning building)
   });
 }
+
+// ── Hybrid inline node-spawning (RS-A) ─────────────────────────────────────
+// "Spawn from the node's own surface": the right-Inspector carries a header row of
+// quick-add chips for whatever child types the SELECTED node accepts, and each chip
+// spawns + wires the child straight in — no floating node library needed. This
+// generalizes addCostToBuilding to ANY parent node.
+// What each parent type may spawn. 'cost' is a group → the concrete cost buckets.
+var SPAWN_CHILDREN={
+  t1:['t2','sub','po','cost','co'],   // Building
+  t2:['sub','po','cost','co'],        // Scope / Phase
+  sub:['po','cost'],
+  po:['inv'],
+  co:['cost']
+};
+var COST_BUCKETS=['mat','labor','gc','burden','other'];
+var SPAWN_LABEL={ t2:'Scope', sub:'Sub', po:'PO', co:'CO', inv:'Invoice', mat:'Materials', labor:'Labor', gc:'Gen Cond', burden:'Burden', other:'Other' };
+
+// Follow out-wires (child.Total → parent.Costs) up to the owning Building (t1) so a
+// freshly-spawned deep child can be revealed by drilling into its building.
+function owningBuildingId(nodeId){
+  var seen={}, stack=[nodeId];
+  while(stack.length){
+    var id=stack.pop(); if(seen[id]) continue; seen[id]=1;
+    var n=E.findNode(id); if(!n) continue;
+    if(n.type==='t1') return id;
+    E.wires().forEach(function(w){ if(w.fromNode===id && !seen[w.toNode]) stack.push(w.toNode); });
+  }
+  return null;
+}
+
+// Spawn a child of childType under parentId, wire it in, drill into the owning
+// building, and select it. Mirrors addCostToBuilding's wire+reveal, generalized to
+// any parent (Building / Scope / Sub / PO / CO).
+function spawnChildNode(parentId, childType){
+  var p=E.findNode(parentId); if(!p) return;
+  var bId=(p.type==='t1')?parentId:owningBuildingId(parentId);
+  var center=(p.geoLatLng)?geoRenderPos(p):{x:p.x, y:p.y};
+  var _sat=!!_spSatellite && E.viewMode && E.viewMode()==='siteplan';
+  var px=Math.round(center.x), py=Math.round(center.y-(_sat?40:220)); // just above the parent
+  function wireToParent(nn){
+    if(!nn) return;
+    var toPort=E.firstCompatPort(E.DEFS[p.type], nn.type, 'in');
+    // Dedupe: autoWireFromData may already have wired this node to the same parent
+    // (duplicate wires double-count costs and can clear buildingId links).
+    var _ws=E.wires();
+    var _dup=_ws.some(function(w){ return w.fromNode===nn.id && w.toNode===p.id; });
+    if(!_dup) _ws.push({ fromNode:nn.id, fromPort:0, toNode:p.id, toPort:toPort||0 });
+    // Fresh wires carry no allocPct — rebalance so the new link contributes now.
+    try{
+      if(nn.type==='t2' && E.rebalancePhaseAllocations) E.rebalancePhaseAllocations(nn.id);
+      else if(nn.type==='co' && E.rebalanceCOAllocations) E.rebalanceCOAllocations(nn.id);
+    }catch(e){}
+    // Reveal the new node by drilling into its owning building (its subgraph is
+    // hidden on the whole-site view). No building (free node) → skip the drill.
+    if(bId){ delete _fannedSet[bId]; if(_spFocus!==bId){ _spFocus=bId; applySpFocus(); } fanFocusNodes(bId); }
+    selN=nn.id; if(E.saveGraph) E.saveGraph(); render();
+    if(E.viewMode && E.viewMode()==='siteplan') fitSiteplan();
+  }
+  if(PICKABLE_TYPES[childType] && E.job()){
+    showDataPicker(childType, function(entry, focused){
+      if(focused) return;
+      if(entry){ var nn=E.addNode(childType, px, py, entryLabel(childType,entry), entry); if(nn){ autoWireFromData(nn, entry); wireToParent(nn); } }
+      else openEntityCreateModal(childType, function(ne){ if(ne){ var n2=E.addNode(childType, px, py, entryLabel(childType,ne), ne); if(n2){ autoWireFromData(n2, ne); wireToParent(n2); } } });
+    });
+  } else {
+    var d=E.DEFS[childType]||{}, label=d.label||childType;
+    if(d.nameEdit){ label=prompt('Name for this '+(d.label||childType)+':', label)||label; }
+    wireToParent(E.addNode(childType, px, py, label));
+  }
+}
+window.p86NgSpawn=function(pid,type){ try{ spawnChildNode(pid,type); }catch(e){ if(window.console) console.warn('spawn failed',e); } };
+
+// Prepend the header quick-add chip row into a selected node's inspector body.
+function injectSpawnRow(body, sel){
+  if(!body || !sel) return;
+  var kids=SPAWN_CHILDREN[sel.type]; if(!kids || !kids.length) return;
+  var chips=kids.map(function(k){
+    if(k==='cost') return '<button class="ng-spawn-chip" title="Add a cost bucket" onclick="event.stopPropagation();window.p86NgCostMenu&&window.p86NgCostMenu(\''+sel.id+'\',this)"><span class="ng-spawn-plus">+</span><span class="ng-spawn-ic">💲</span>Cost<span class="ng-spawn-caret">▾</span></button>';
+    var d=E.DEFS[k]||{};
+    return '<button class="ng-spawn-chip" title="Add '+(d.label||k)+'" onclick="event.stopPropagation();window.p86NgSpawn&&window.p86NgSpawn(\''+sel.id+'\',\''+k+'\')"><span class="ng-spawn-plus">+</span><span class="ng-spawn-ic">'+(d.icon||'◆')+'</span>'+luEsc(SPAWN_LABEL[k]||d.label||k)+'</button>';
+  }).join('');
+  body.insertAdjacentHTML('afterbegin','<div class="ng-spawn-row">'+chips+'</div>');
+}
+
+// The 'Cost ▾' chip → a small bucket popover (reuses .ng-add-menu chrome).
+window.p86NgCostMenu=function(pid, anchor){
+  var ex=document.querySelector('.ng-add-menu.ng-costmenu'); if(ex) ex.remove();
+  var menu=document.createElement('div'); menu.className='ng-add-menu ng-costmenu';
+  var h='<div class="ng-add-cat">Add cost</div>';
+  COST_BUCKETS.forEach(function(t){ var d=E.DEFS[t]; if(d) h+='<div class="ng-add-item" data-type="'+t+'"><span class="ng-add-ic">'+d.icon+'</span>'+(d.label||t)+'</div>'; });
+  menu.innerHTML=h; document.body.appendChild(menu);
+  var r=anchor.getBoundingClientRect();
+  menu.style.left=Math.max(8,Math.min(r.left, window.innerWidth-248))+'px';
+  menu.style.top=Math.min(r.bottom+4, window.innerHeight-260)+'px';
+  function close(){ if(menu){ menu.remove(); menu=null; document.removeEventListener('mousedown', outside, true); } }
+  function outside(ev){ if(menu && !menu.contains(ev.target)) close(); }
+  setTimeout(function(){ document.addEventListener('mousedown', outside, true); }, 0);
+  menu.addEventListener('click',function(ev){ var it=ev.target.closest('.ng-add-item'); if(!it) return; var t=it.getAttribute('data-type'); close(); spawnChildNode(pid, t); });
+};
 
 // ── Events ──
 // ── Inline-edit handlers (Slice 3a) ────────────────────────────────────────

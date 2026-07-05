@@ -715,6 +715,17 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
 .ng-add-ic{font-size:15px;width:20px;text-align:center;flex-shrink:0}
 .ng-add-empty{padding:14px;text-align:center;color:var(--ng-dim2);font-size:12px}
 
+/* Hybrid inline-spawn (RS-A): header quick-add chip row in the node inspector */
+.ng-spawn-row{display:flex;flex-wrap:wrap;gap:5px;padding:2px 0 10px;margin-bottom:10px;border-bottom:1px solid var(--ng-border)}
+.ng-spawn-chip{display:inline-flex;align-items:center;gap:4px;font-size:11.5px;font-weight:600;line-height:1;color:var(--ng-text);background:rgba(255,255,255,.05);border:1px solid var(--ng-border2);border-radius:7px;padding:5px 8px;cursor:pointer;transition:background .12s,border-color .12s,color .12s}
+.ng-spawn-chip:hover{background:rgba(79,140,255,.16);border-color:#4f8cff;color:#fff}
+.ng-spawn-plus{font-size:12px;font-weight:800;opacity:.65}
+.ng-spawn-chip:hover .ng-spawn-plus{opacity:1}
+.ng-spawn-ic{font-size:12px}
+.ng-spawn-caret{font-size:9px;opacity:.55;margin-left:1px}
+body.light-mode .ng-spawn-chip{background:rgba(0,0,0,.035)}
+body.light-mode .ng-spawn-chip:hover{color:#0b2a6b}
+
 /* Light-mode parity for the ribbon dividers + hover */
 body.light-mode .ng-topbar.ng-ribbon .ng-ribbon-group-name{
   border-top-color:var(--ng-border2,#d4d8e0);
