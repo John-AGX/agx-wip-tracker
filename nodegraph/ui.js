@@ -1006,7 +1006,74 @@ function render(){
   if (typeof window._wsRefreshAuditBadge === 'function') {
     try { window._wsRefreshAuditBadge(); } catch(e) {}
   }
+  renderNestedOverlay();   // NC-1: nested-cards overlay (shown only when toggled on)
 }
+
+// ── NC-1: Nested-cards view (containment instead of wires) ─────────────────
+// A SEPARATE overlay renderer that draws the wire tree as cards-inside-cards, so
+// the hierarchy reads by containment with no drawn wires. Lives over .ng-canvas-area,
+// toggled by window._p86Nested. The wires stay in the data (all rollups read them) —
+// this only changes how the canvas looks. NC-2..5 add the outline toggle, in-card
+// editing/spawn, satellite anchoring, then make it the default + retire wire drawing.
+function getNestedChildren(id){
+  var ks=[], seen={};
+  E.wires().forEach(function(w){ if(w.toNode!==id) return; var k=E.findNode(w.fromNode); if(k && !seen[k.id]){ seen[k.id]=1; ks.push(k); } });
+  return ks;
+}
+function ncNodePct(n){
+  if(n.type==='t1') return (E.getT1WeightedPct?E.getT1WeightedPct(n):(n.pctComplete||0));
+  var d=E.DEFS[n.type]||{}; return d.hasProg ? (n.pctComplete||0) : null;
+}
+function ncNodeVal(n){ try{ return (typeof E.getOutput==='function') ? E.getOutput(n,0) : null; }catch(e){ return null; } }
+function nestedCardHtml(n, depth, seen){
+  if(seen[n.id]) return ''; seen[n.id]=1;    // cycle guard
+  var d=E.DEFS[n.type]||{}, kids=getNestedChildren(n.id);
+  var typ=(d.cat==='cost')?'cost':n.type, coll=!!n._ncColl, pct=ncNodePct(n), val=ncNodeVal(n);
+  var h='<div class="ng-ncard ng-nc-'+typ+(coll?' ng-nc-coll':'')+'" data-nc="'+n.id+'">';
+  h+='<div class="ng-nc-h" data-nc-sel="'+n.id+'">';
+  h+= kids.length ? '<button class="ng-nc-caret" data-nc-coll="'+n.id+'" aria-label="Collapse">'+(coll?'▸':'▾')+'</button>' : '<span class="ng-nc-caret ng-nc-leaf"></span>';
+  h+='<span class="ng-nc-dot"></span><span class="ng-nc-nm">'+luEsc(n.label||d.label||n.type)+'</span><span class="ng-nc-ty">'+luEsc(d.label||n.type)+'</span>';
+  var meta='';
+  if(val!=null && !isNaN(val)) meta+='<span class="ng-nc-val">'+E.fmtC(val)+'</span>';
+  if(pct!=null && !isNaN(pct)) meta+='<span class="ng-nc-pct">'+Math.round(pct)+'%</span>';
+  if(meta) h+='<span class="ng-nc-meta">'+meta+'</span>';
+  h+='</div>';
+  if(kids.length && !coll) h+='<div class="ng-nc-kids">'+kids.map(function(k){ return nestedCardHtml(k, depth+1, seen); }).join('')+'</div>';
+  h+='</div>';
+  return h;
+}
+function renderNestedCards(){
+  var host=document.getElementById('ngNestedView'); if(!host) return;
+  var roots=E.nodes().filter(function(n){ return n.type==='t1'; });
+  if(!roots.length){ host.innerHTML='<div class="ng-nc-empty">No buildings yet — add one to start the cost tree.</div>'; return; }
+  var seen={};
+  host.innerHTML='<div class="ng-ncv-inner">'+roots.map(function(r){ return nestedCardHtml(r,0,seen); }).join('')+'</div>';
+}
+function renderNestedOverlay(){
+  var tab=document.getElementById('nodeGraphTab'); if(!tab) return;
+  var area=tab.querySelector('.ng-canvas-area')||tab;
+  var host=document.getElementById('ngNestedView');
+  if(!host){ host=document.createElement('div'); host.id='ngNestedView'; host.className='ng-ncv'; area.appendChild(host); }
+  var btn=document.getElementById('ngNestedToggle');
+  if(!btn){
+    btn=document.createElement('button'); btn.id='ngNestedToggle'; btn.className='ng-nc-toggle';
+    btn.innerHTML='<span class="ng-nc-tgi">▤</span> Cards'; btn.title='Toggle nested-cards view (no wires)';
+    btn.addEventListener('click', function(){ window._p86Nested=!window._p86Nested; renderNestedOverlay(); });
+    area.appendChild(btn);
+  }
+  var on=!!window._p86Nested;
+  btn.classList.toggle('ng-nc-on', on);
+  host.style.display = on ? 'block' : 'none';
+  if(on) renderNestedCards();
+}
+window.p86NestedRefresh=renderNestedOverlay;
+// Nested-card interactions (collapse + select) — delegated once at module load.
+document.addEventListener('click', function(e){
+  var cb=e.target.closest('[data-nc-coll]');
+  if(cb){ e.stopPropagation(); var n=E.findNode(cb.getAttribute('data-nc-coll')); if(n){ n._ncColl=!n._ncColl; renderNestedCards(); } return; }
+  var sel=e.target.closest('[data-nc-sel]');
+  if(sel){ selN=sel.getAttribute('data-nc-sel'); if(typeof renderInspector==='function') renderInspector(); }
+});
 
 function applyTx(){
   var p=E.pan(), z=E.zm();

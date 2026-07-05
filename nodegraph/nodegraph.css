@@ -968,6 +968,32 @@ body.light-mode .ng-topbar.ng-ribbon .ng-ribbon-btn:hover{
 .ng-cg-ic{font-size:13px;width:16px;text-align:center;flex:none}
 .ng-cg-nm{font-size:12.5px;color:#dbe6ff;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ng-cg-empty{font-size:11px;color:#6b7689;padding:3px 7px}
+/* NC-1: nested-cards view (containment instead of wires) */
+.ng-ncv{position:absolute;inset:0;z-index:40;overflow:auto;background:#0e1626;padding:20px 18px;display:none}
+.ng-ncv-inner{max-width:840px;margin:0 auto;display:flex;flex-direction:column;gap:12px}
+.ng-nc-empty{color:#8aa0c0;font-size:14px;text-align:center;padding:48px 20px}
+.ng-nc-toggle{position:absolute;top:10px;right:12px;z-index:41;display:flex;align-items:center;gap:5px;background:#16233b;border:1px solid rgba(79,140,255,.35);color:#cdd8ea;border-radius:8px;padding:6px 11px;font-size:12px;font-weight:600;cursor:pointer}
+.ng-nc-toggle:hover{background:#1d2f4d}
+.ng-nc-toggle.ng-nc-on{background:#2563eb;border-color:#2563eb;color:#fff}
+.ng-ncard{border:1px solid rgba(255,255,255,.09);border-radius:10px;background:#141f33;overflow:hidden}
+.ng-nc-h{display:flex;align-items:center;gap:8px;padding:9px 11px;cursor:pointer;border-left:3px solid var(--nc-accent,#5a6b8c)}
+.ng-nc-h:hover{background:rgba(79,140,255,.08)}
+.ng-nc-caret{width:16px;height:16px;padding:0;background:none;border:none;color:#8aa0c0;font-size:11px;cursor:pointer;flex:none;line-height:1}
+.ng-nc-leaf{visibility:hidden}
+.ng-nc-dot{width:9px;height:9px;border-radius:3px;background:var(--nc-accent,#5a6b8c);flex:none}
+.ng-nc-nm{font-size:13.5px;font-weight:600;color:#eaf0fb}
+.ng-nc-ty{font-size:11px;color:#7c8699}
+.ng-nc-meta{margin-left:auto;display:flex;align-items:center;gap:10px;flex:none}
+.ng-nc-val{font-size:12.5px;font-weight:600;color:#cdd8ea;white-space:nowrap}
+.ng-nc-pct{font-size:11px;font-weight:600;color:#34d399;background:rgba(52,211,153,.12);padding:1px 7px;border-radius:999px}
+.ng-nc-kids{padding:4px 8px 9px 22px;display:flex;flex-direction:column;gap:8px}
+.ng-nc-t1{--nc-accent:#378ADD}
+.ng-nc-t2{--nc-accent:#7F77DD}
+.ng-nc-sub{--nc-accent:#1D9E75}
+.ng-nc-cost{--nc-accent:#D85A30}
+.ng-nc-po{--nc-accent:#EF9F27}
+.ng-nc-co{--nc-accent:#D4537E}
+.ng-nc-inv{--nc-accent:#5DCAA5}
 .ng-lu-x:hover{background:rgba(224,122,143,.12);color:#f3a3b3}
 /* 2.5D massing: a building block in site-plan reads as solid mass — flatter
    "block" corners + a lit top edge over the budget-proportional extrusion
