@@ -713,6 +713,13 @@ function getT2WeightedPct(t2n){
 // pct set. Once any wire has a pct, unset wires count as 0%.
 function getT1WeightedPct(t1n){
   if(!t1n || t1n.type !== 't1') return (t1n && t1n.pctComplete) || 0;
+  // ST-2: a building with a level/unit breakdown is driven by units-done ÷ total
+  // (crews check off unit cubes on the Site Plan). Buildings with no units fall
+  // through to the phase/CO-weighted (or manually-set) pct below.
+  if(t1n.units && t1n.units.length){
+    var _ud=0; for(var _i=0;_i<t1n.units.length;_i++){ if(t1n.units[_i].done) _ud++; }
+    return _ud / t1n.units.length * 100;
+  }
   var incoming = [];
   wires.forEach(function(w){
     if(w.toNode !== t1n.id) return;

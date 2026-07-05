@@ -3161,53 +3161,96 @@ function luUid(p){ return p+'_'+Math.random().toString(36).slice(2,7)+(Date.now(
 function luById(arr,id){ if(!arr) return null; for(var i=0;i<arr.length;i++){ if(arr[i].id===id) return arr[i]; } return null; }
 // Mutate a building's levels/units (add/rename/remove). Shared by the legacy left
 // panel + the right Inspector; callers persist (saveGraph) + re-render after.
+// L/U rework (ST-1): counts + completion. Levels/units are count-based (name
+// optional) and each carries a `done` flag. Levels are set by total; units by a
+// building-wide total OR per-level count. Marking off toggles `done`; a level with
+// units auto-completes when all its units are done.
 function luApply(bn, act, id){
   if(!bn.levels) bn.levels=[]; if(!bn.units) bn.units=[];
-  var nm;
-  if(act==='add-level'){ nm=prompt('Level name:', 'Level '+(bn.levels.length+1)); if(nm&&nm.trim()) bn.levels.push({id:luUid('lv'), name:nm.trim()}); }
-  else if(act==='add-unit'){ nm=prompt('Unit name:', 'Unit '+(bn.units.length+1)); if(nm&&nm.trim()) bn.units.push({id:luUid('un'), name:nm.trim(), levelId:null}); }
-  else if(act==='add-unit-lvl'){ nm=prompt('Unit name:', 'Unit '+(bn.units.length+1)); if(nm&&nm.trim()) bn.units.push({id:luUid('un'), name:nm.trim(), levelId:id}); }
-  else if(act==='rename-level'){ var L=luById(bn.levels,id); if(L){ nm=prompt('Level name:', L.name); if(nm&&nm.trim()) L.name=nm.trim(); } }
-  else if(act==='rename-unit'){ var U=luById(bn.units,id); if(U){ nm=prompt('Unit name:', U.name); if(nm&&nm.trim()) U.name=nm.trim(); } }
-  else if(act==='del-level'){ var L2=luById(bn.levels,id); var cnt=bn.units.filter(function(u){return u.levelId===id;}).length;
-    if(L2 && (cnt===0 || confirm('Remove "'+L2.name+'"? Its '+cnt+' unit'+(cnt===1?'':'s')+' become building-wide.'))){
-      bn.units.forEach(function(u){ if(u.levelId===id) u.levelId=null; });
-      bn.levels=bn.levels.filter(function(x){ return x.id!==id; });
-    } }
-  else if(act==='del-unit'){ var U2=luById(bn.units,id); if(U2 && confirm('Remove "'+U2.name+'"?')) bn.units=bn.units.filter(function(x){ return x.id!==id; }); }
+  var nm, n, L, U;
+  function lUnits(lid){ return bn.units.filter(function(u){ return u.levelId===lid; }); }
+  function bwUnits(){ return bn.units.filter(function(u){ return u.levelId==null; }); }
+  function addUnit(lid){ bn.units.push({id:luUid('un'), name:'Unit '+(bn.units.length+1), levelId:lid, done:false}); }
+  function setLevels(cnt){ cnt=Math.max(0, cnt|0);
+    while(bn.levels.length<cnt) bn.levels.push({id:luUid('lv'), name:'Level '+(bn.levels.length+1), done:false});
+    while(bn.levels.length>cnt){ var last=bn.levels.pop(); bn.units.forEach(function(u){ if(u.levelId===last.id) u.levelId=null; }); } }
+  function setCount(lid, cnt){ cnt=Math.max(0, cnt|0); var cur=lUnits(lid).length;
+    while(cur<cnt){ addUnit(lid); cur++; }
+    while(cur>cnt){ for(var i=bn.units.length-1;i>=0;i--){ if(bn.units[i].levelId===lid){ bn.units.splice(i,1); break; } } cur--; } }
+  function setBW(cnt){ cnt=Math.max(0, cnt|0); var cur=bwUnits().length;
+    while(cur<cnt){ addUnit(null); cur++; }
+    while(cur>cnt){ for(var i=bn.units.length-1;i>=0;i--){ if(bn.units[i].levelId==null){ bn.units.splice(i,1); break; } } cur--; } }
+  // ── Levels ──
+  if(act==='lvl-inc') setLevels(bn.levels.length+1);
+  else if(act==='lvl-dec') setLevels(bn.levels.length-1);
+  else if(act==='lvl-set'){ n=parseInt(prompt('How many levels (floors)?', bn.levels.length||1),10); if(!isNaN(n)) setLevels(n); }
+  else if(act==='rename-level'){ L=luById(bn.levels,id); if(L){ nm=prompt('Level name:', L.name); if(nm&&nm.trim()) L.name=nm.trim(); } }
+  else if(act==='lvl-done'){ L=luById(bn.levels,id); if(L){ var lu=lUnits(id); if(lu.length){ var allD=lu.every(function(u){return u.done;}); lu.forEach(function(u){ u.done=!allD; }); } else { L.done=!L.done; } } }
+  // ── Units ──
+  else if(act==='unit-inc') addUnit(null);
+  else if(act==='unit-dec') setBW(bwUnits().length-1);
+  else if(act==='unit-set'){ n=parseInt(prompt('How many building-wide units?', bwUnits().length),10); if(!isNaN(n)) setBW(n); }
+  else if(act==='lvl-unit-set'){ n=parseInt(prompt('How many units on this level?', lUnits(id).length),10); if(!isNaN(n)) setCount(id, n); }
+  else if(act==='unit-done'){ U=luById(bn.units,id); if(U) U.done=!U.done; }
+  else if(act==='del-unit'){ U=luById(bn.units,id); if(U) bn.units=bn.units.filter(function(x){ return x.id!==id; }); }
 }
 
 function renderBuildingStructure(panel, sel){
   var el=panel.querySelector('.ng-sp-struct'); if(!el) return;
   if(!sel.levels) sel.levels=[]; if(!sel.units) sel.units=[];
   var lv=sel.levels, un=sel.units;
-  var count=(lv.length||un.length) ? ' <span class="ng-lu-count">'+lv.length+' lvl · '+un.length+' unit'+(un.length===1?'':'s')+'</span>' : '';
-  var h='<div class="ng-sp-struct-head"><span class="ng-sp-struct-ttl">Structure'+count+'</span>'
-      +'<span class="ng-sp-struct-add"><button class="ng-lu-btn" data-lu-act="add-level">+ Level</button><button class="ng-lu-btn" data-lu-act="add-unit">+ Unit</button></span></div>';
-  if(!lv.length && !un.length){
-    h+='<div class="ng-sp-struct-empty">Flat building. Add levels (floors) or units to break revenue down.</div>';
+  function lUnits(lid){ return un.filter(function(u){ return u.levelId===lid; }); }
+  function bwUnits(){ return un.filter(function(u){ return !luById(lv, u.levelId); }); } // null OR orphaned level
+  function lvlDone(L){ var lu=lUnits(L.id); return lu.length ? lu.every(function(u){return u.done;}) : !!L.done; }
+  function cubes(list){ return list.map(function(u){ return '<i class="ng-lu-cube'+(u.done?' done':'')+'" data-lu-act="unit-done" data-id="'+u.id+'" title="'+(u.done?'Done — tap to clear':'Tap to mark done')+'"></i>'; }).join(''); }
+  var totalUnits=un.length, doneUnits=un.filter(function(u){return u.done;}).length;
+  var floorsDone=lv.filter(lvlDone).length;
+
+  var h='<div class="ng-sp-struct-head"><span class="ng-sp-struct-ttl">Structure</span>'
+      +'<span class="ng-lu-sum">'+lv.length+' level'+(lv.length===1?'':'s')+' · '+totalUnits+' unit'+(totalUnits===1?'':'s')+'</span></div>';
+
+  // ── Levels ──
+  h+='<div class="ng-lu-sec-head"><span class="ng-lu-sec-lbl">Levels</span>'
+    +'<span class="ng-lu-stepper">total<button class="ng-lu-step" data-lu-act="lvl-dec" title="Remove top level">−</button>'
+    +'<button class="ng-lu-num" data-lu-act="lvl-set" title="Set number of levels">'+lv.length+'</button>'
+    +'<button class="ng-lu-step" data-lu-act="lvl-inc" title="Add a level">+</button></span></div>';
+  if(!lv.length){
+    h+='<div class="ng-sp-struct-empty">No floors yet. Set how many levels this building has.</div>';
   } else {
-    lv.forEach(function(L){
-      h+='<div class="ng-lu-level"><div class="ng-lu-row ng-lu-lvl">'
-        +'<span class="ng-lu-name" data-lu-act="rename-level" data-id="'+L.id+'" title="Rename">▤ '+luEsc(L.name)+'</span>'
-        +'<span class="ng-lu-tools"><button class="ng-lu-mini" data-lu-act="add-unit-lvl" data-id="'+L.id+'" title="Add unit to this level">+ unit</button>'
-        +'<button class="ng-lu-mini ng-lu-x" data-lu-act="del-level" data-id="'+L.id+'" title="Remove level">×</button></span></div>';
-      un.forEach(function(u){ if(u.levelId!==L.id) return;
-        h+='<div class="ng-lu-row ng-lu-unit"><span class="ng-lu-name" data-lu-act="rename-unit" data-id="'+u.id+'" title="Rename">◦ '+luEsc(u.name)+'</span>'
-          +'<button class="ng-lu-mini ng-lu-x" data-lu-act="del-unit" data-id="'+u.id+'" title="Remove unit">×</button></div>';
-      });
-      h+='</div>';
+    h+='<div class="ng-lu-chipstack">';
+    lv.slice().reverse().forEach(function(L){
+      var lu=lUnits(L.id), done=lvlDone(L), hasU=lu.length>0, luDone=lu.filter(function(u){return u.done;}).length;
+      h+='<div class="ng-lu-chip'+(done?' done':'')+'">'
+        +'<span class="ng-lu-chip-nm" data-lu-act="rename-level" data-id="'+L.id+'" title="Rename">'+luEsc(L.name)+'</span>'
+        +(hasU?'<span class="ng-lu-chip-prog">'+luDone+' / '+lu.length+'</span>':'')
+        +'<button class="ng-lu-mark" data-lu-act="lvl-done" data-id="'+L.id+'" title="'+(hasU?'Mark all units on this floor':'Mark floor complete')+'">'+(done?'✓':'○')+'</button>'
+        +'</div>';
     });
-    var bw=un.filter(function(u){ return !luById(lv, u.levelId); }); // levelId null OR an orphaned level → building-wide bucket
-    if(bw.length){
-      h+='<div class="ng-lu-level"><div class="ng-lu-row ng-lu-lvl ng-lu-bw">'+(lv.length?'Building-wide':'Units')+'</div>';
-      bw.forEach(function(u){
-        h+='<div class="ng-lu-row ng-lu-unit"><span class="ng-lu-name" data-lu-act="rename-unit" data-id="'+u.id+'" title="Rename">◦ '+luEsc(u.name)+'</span>'
-          +'<button class="ng-lu-mini ng-lu-x" data-lu-act="del-unit" data-id="'+u.id+'" title="Remove unit">×</button></div>';
-      });
-      h+='</div>';
-    }
+    h+='</div><div class="ng-lu-progline">'+floorsDone+' of '+lv.length+' floors complete</div>';
   }
+
+  // ── Units ──
+  var bwu=bwUnits();
+  h+='<div class="ng-lu-sec-head" style="margin-top:14px"><span class="ng-lu-sec-lbl">Units</span>'
+    +'<span class="ng-lu-stepper">total<button class="ng-lu-step" data-lu-act="unit-dec" title="Remove a building-wide unit">−</button>'
+    +'<button class="ng-lu-num" data-lu-act="unit-set" title="Set building-wide unit count">'+bwu.length+'</button>'
+    +'<button class="ng-lu-step" data-lu-act="unit-inc" title="Add a building-wide unit">+</button></span></div>';
+  if(!totalUnits){
+    h+='<div class="ng-sp-struct-empty">No units yet. Set a building-wide total, or add units to a level.</div>';
+  } else {
+    lv.forEach(function(L){ var lu=lUnits(L.id);
+      h+='<div class="ng-lu-ugroup"><div class="ng-lu-ghead"><span>'+luEsc(L.name)+' · '+lu.length+' unit'+(lu.length===1?'':'s')+'</span>'
+        +'<button class="ng-lu-mini" data-lu-act="lvl-unit-set" data-id="'+L.id+'" title="Set units on this level">+ units</button></div>'
+        +'<div class="ng-lu-cubes">'+(lu.length?cubes(lu):'<span class="ng-lu-none">none</span>')+'</div></div>';
+    });
+    if(bwu.length){
+      h+='<div class="ng-lu-ugroup"><div class="ng-lu-ghead"><span>'+(lv.length?'Building-wide':'Units')+' · '+bwu.length+' unit'+(bwu.length===1?'':'s')+'</span></div>'
+        +'<div class="ng-lu-cubes">'+cubes(bwu)+'</div></div>';
+    }
+    var pct=Math.round(doneUnits/totalUnits*100);
+    h+='<div class="ng-lu-barrow"><div class="ng-lu-bar"><i style="width:'+pct+'%"></i></div><span class="ng-lu-barlbl">'+doneUnits+' / '+totalUnits+' units</span></div>';
+  }
+  h+='<div class="ng-lu-legend"><span><i class="ng-lu-cube"></i>to do</span><span><i class="ng-lu-cube done"></i>done</span><span class="ng-lu-hint">tap a cube or floor to mark off</span></div>';
   el.innerHTML=h;
 }
 

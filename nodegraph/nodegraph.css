@@ -925,6 +925,37 @@ body.light-mode .ng-topbar.ng-ribbon .ng-ribbon-btn:hover{
 .ng-lu-mini{font-size:10px;color:#8aa0c0;background:transparent;border:1px solid rgba(255,255,255,.14);border-radius:5px;padding:1px 5px;cursor:pointer;line-height:1.35;white-space:nowrap}
 .ng-lu-mini:hover{background:rgba(255,255,255,.06);color:#cbd5e1}
 .ng-lu-x{color:#e07a8f;border-color:rgba(224,122,143,.32)}
+/* ST-1: Structure completion tracker — level chip stack + unit cube grid */
+.ng-lu-sum{font-size:10.5px;color:#6b7689}
+.ng-lu-sec-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:2px 0 7px}
+.ng-lu-sec-lbl{font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:#7c8699}
+.ng-lu-stepper{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;color:#7c8699}
+.ng-lu-step{width:22px;height:22px;font-size:14px;padding:0;display:inline-flex;align-items:center;justify-content:center;background:#16233b;border:1px solid rgba(79,140,255,.3);color:#bcd4f5;border-radius:6px;cursor:pointer;line-height:1}
+.ng-lu-num{min-width:28px;height:22px;font-size:12px;font-weight:600;padding:0 7px;background:#16233b;border:1px solid rgba(79,140,255,.3);color:#dbe6ff;border-radius:6px;cursor:pointer;line-height:1}
+.ng-lu-step:hover,.ng-lu-num:hover{background:#1d2f4d}
+.ng-lu-chipstack{display:flex;flex-direction:column;gap:3px}
+.ng-lu-chip{display:flex;align-items:center;gap:8px;padding:7px 9px;background:#141f33;border:1px solid rgba(255,255,255,.07);border-left:3px solid rgba(255,255,255,.18);border-radius:0 7px 7px 0}
+.ng-lu-chip.done{border-left-color:#34d399;background:rgba(30,158,117,.15)}
+.ng-lu-chip-nm{flex:1;font-size:12.5px;font-weight:600;color:#dbe6ff;cursor:pointer}
+.ng-lu-chip-prog{font-size:11px;color:#8aa0c0}
+.ng-lu-mark{width:22px;height:22px;padding:0;border:none;background:transparent;font-size:15px;color:#7c8699;cursor:pointer;line-height:1}
+.ng-lu-chip.done .ng-lu-mark{color:#34d399}
+.ng-lu-progline{font-size:10.5px;color:#6b7689;margin-top:6px}
+.ng-lu-ugroup{margin-bottom:9px}
+.ng-lu-ghead{display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:5px;font-size:11px;color:#aab6c9}
+.ng-lu-cubes{display:flex;flex-wrap:wrap;gap:6px}
+.ng-lu-none{font-size:11px;color:#6b7689}
+.ng-lu-cube{display:inline-block;width:24px;height:24px;border-radius:5px;cursor:pointer;box-sizing:border-box;background:#131e30;border:1px solid rgba(255,255,255,.14);box-shadow:inset 0 -2px 3px rgba(0,0,0,.22)}
+.ng-lu-cube.done{background:#1e9e75;border-color:#2fbe8e;box-shadow:inset 0 2px 0 rgba(255,255,255,.22),inset 0 -3px 5px rgba(0,0,0,.3)}
+.ng-lu-cube:hover{border-color:#4f8cff}
+.ng-lu-barrow{display:flex;align-items:center;gap:8px;margin-top:8px}
+.ng-lu-bar{flex:1;height:6px;border-radius:4px;background:#0e1626;overflow:hidden}
+.ng-lu-bar>i{display:block;height:100%;background:#1e9e75}
+.ng-lu-barlbl{font-size:11px;font-weight:600;color:#34d399;white-space:nowrap}
+.ng-lu-legend{display:flex;align-items:center;gap:12px;margin-top:11px;padding-top:8px;border-top:1px solid var(--ng-border);font-size:10.5px;color:#6b7689}
+.ng-lu-legend span{display:flex;align-items:center;gap:5px}
+.ng-lu-legend .ng-lu-cube{width:13px;height:13px;cursor:default}
+.ng-lu-hint{margin-left:auto}
 .ng-lu-x:hover{background:rgba(224,122,143,.12);color:#f3a3b3}
 /* 2.5D massing: a building block in site-plan reads as solid mass — flatter
    "block" corners + a lit top edge over the budget-proportional extrusion
