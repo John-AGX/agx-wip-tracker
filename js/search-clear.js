@@ -1,10 +1,11 @@
 // Universal search-input clear (×) button.
-// Decorates every "search" input across the app with a right-side clear button
-// that appears when there's text, clears the field, and fires input/change so the
-// list re-filters. Self-mounting via a wrapper span so the × travels with the
-// input (no orphaned buttons when a list re-renders). Author layout intent
-// (inline margin/flex/width/min-width) is carried to the wrapper so the search
-// bar keeps its position (e.g. margin-left:auto pushing it to the right).
+// Overlay approach: instead of wrapping the input (which fought the app's global
+// `input{display:block}` + inline min-width/margin-left:auto and made search bars
+// balloon), we float a position:fixed × over the input's right edge and leave the
+// input's own layout 100% untouched (only a little padding-right so text clears the
+// ×). The × shows when the field is visible + has text, clears it, and fires
+// input/change so the list re-filters. Works for every search bar across the app,
+// including lazily-rendered lists (MutationObserver + a light reposition tick).
 (function () {
   'use strict';
   if (window.__p86SearchClear) return; window.__p86SearchClear = true;
@@ -13,70 +14,62 @@
     if (document.getElementById('p86-srch-clear-css')) return;
     var s = document.createElement('style'); s.id = 'p86-srch-clear-css';
     s.textContent =
-      '.p86-srch-wrap{position:relative;align-items:center;vertical-align:middle;}' +
-      '.p86-srch-x{position:absolute;right:6px;top:50%;transform:translateY(-50%);width:18px;height:18px;padding:0;border:0;' +
-      'border-radius:50%;background:rgba(140,145,160,.30);color:#fff;font-size:15px;line-height:1;cursor:pointer;display:none;' +
-      'align-items:center;justify-content:center;opacity:.82;z-index:2;transition:background .12s,opacity .12s;}' +
+      '.p86-srch-x{position:fixed;width:18px;height:18px;padding:0;border:0;border-radius:50%;' +
+      'background:rgba(140,145,160,.32);color:#fff;font-size:14px;line-height:1;cursor:pointer;' +
+      'display:none;align-items:center;justify-content:center;opacity:.85;z-index:2147483000;' +
+      'transition:opacity .12s,background .12s;}' +
       '.p86-srch-x:hover{opacity:1;background:rgba(140,145,160,.55);}' +
-      'body.light-mode .p86-srch-x{background:rgba(20,24,40,.32);}' +
-      'body.light-mode .p86-srch-x:hover{background:rgba(20,24,40,.5);}';
+      'body.light-mode .p86-srch-x{background:rgba(20,24,40,.34);}' +
+      'body.light-mode .p86-srch-x:hover{background:rgba(20,24,40,.52);}';
     document.head.appendChild(s);
+  }
+
+  var recs = [];   // { input, btn, dead }
+
+  function place(rec) {
+    var input = rec.input, btn = rec.btn;
+    if (!document.contains(input)) { btn.remove(); rec.dead = true; return; }
+    var visible = input.offsetParent !== null && input.getClientRects().length > 0;
+    if (!visible || !input.value) { btn.style.display = 'none'; return; }
+    var r = input.getBoundingClientRect();
+    if (r.width === 0) { btn.style.display = 'none'; return; }
+    btn.style.display = 'flex';
+    btn.style.left = Math.round(r.right - 23) + 'px';
+    btn.style.top = Math.round(r.top + r.height / 2 - 9) + 'px';
+  }
+  function placeAll() {
+    var live = [];
+    for (var i = 0; i < recs.length; i++) { var rec = recs[i]; if (rec.dead) continue; place(rec); if (!rec.dead) live.push(rec); }
+    recs = live;
   }
 
   function skip(input) {
     if (!input || input.dataset.p86SrchClear || input.type === 'hidden') return true;
-    var ph = input.getAttribute('placeholder') || '';
-    if (/create/i.test(ph)) return true;                 // tag comboboxes ("Search or create…") aren't search bars
+    if (/create/i.test(input.getAttribute('placeholder') || '')) return true;   // tag comboboxes aren't search bars
     if (input.closest && input.closest('[data-p86-no-clear]')) return true;
     return false;
   }
-
   function decorate(input) {
     if (skip(input)) return;
     input.dataset.p86SrchClear = '1';
-    var cs;
-    try { cs = window.getComputedStyle(input); } catch (e) { cs = null; }
-    var block = cs && cs.display === 'block';
-    var wrap = document.createElement('span');
-    wrap.className = 'p86-srch-wrap';
-    wrap.style.display = block ? 'flex' : 'inline-flex';
-
-    var inl = input.style;
-    // Does the input stretch to fill its slot (block, or a flex-grow item, or width:100%)?
-    var grows = block || (cs && (parseFloat(cs.flexGrow) || 0) > 0) || inl.width === '100%';
-    // Move only POSITIONING props (margin/flex/align) onto the wrapper so it sits exactly
-    // where the input did — e.g. margin-left:auto keeps the bar right-aligned. Keep SIZING
-    // (width / min-width) on the INPUT so a fixed/min-width search box stays compact and
-    // the wrapper shrinks to fit it (the previous width:100% made every bar balloon).
-    ['margin', 'marginLeft', 'marginRight', 'marginTop', 'marginBottom', 'flex', 'flexGrow', 'flexShrink', 'flexBasis', 'alignSelf'].forEach(function (p) {
-      if (inl[p]) { wrap.style[p] = inl[p]; inl[p] = ''; }
-    });
-    if (block || inl.width) wrap.style.width = inl.width || '100%';
-
-    if (!input.parentNode) return;
-    input.parentNode.insertBefore(wrap, input);
-    wrap.appendChild(input);
-
-    if (grows) { input.style.width = '100%'; input.style.minWidth = '0'; }
-    input.style.boxSizing = 'border-box';
-    var pr = cs ? (parseFloat(cs.paddingRight) || 0) : 0;
-    if (pr < 26) input.style.paddingRight = '26px';
-
-    var x = document.createElement('button');
-    x.type = 'button'; x.className = 'p86-srch-x'; x.tabIndex = -1;
-    x.setAttribute('aria-label', 'Clear search'); x.innerHTML = '&times;';
-    wrap.appendChild(x);
-
-    function sync() { x.style.display = (input.value && input.value.length) ? 'flex' : 'none'; }
-    input.addEventListener('input', sync);
-    x.addEventListener('mousedown', function (e) { e.preventDefault(); });   // don't steal focus/blur
-    x.addEventListener('click', function () {
+    try { var cs = window.getComputedStyle(input); if ((parseFloat(cs.paddingRight) || 0) < 24) input.style.paddingRight = '24px'; } catch (e) {}
+    var btn = document.createElement('button');
+    btn.type = 'button'; btn.className = 'p86-srch-x'; btn.tabIndex = -1;
+    btn.setAttribute('aria-label', 'Clear search'); btn.innerHTML = '&times;';
+    document.body.appendChild(btn);
+    var rec = { input: input, btn: btn, dead: false };
+    recs.push(rec);
+    btn.addEventListener('mousedown', function (e) { e.preventDefault(); });   // keep the input's focus
+    btn.addEventListener('click', function () {
       input.value = '';
       input.dispatchEvent(new Event('input', { bubbles: true }));
       input.dispatchEvent(new Event('change', { bubbles: true }));
-      input.focus(); sync();
+      input.focus(); place(rec);
     });
-    sync();
+    input.addEventListener('input', function () { place(rec); });
+    input.addEventListener('focus', function () { place(rec); });
+    input.addEventListener('blur', function () { setTimeout(function () { place(rec); }, 0); });
+    place(rec);
   }
 
   var SEL = 'input[type="search"], input[placeholder*="Search"], input[placeholder*="search"]';
@@ -95,9 +88,14 @@
             else if (n.querySelectorAll) scan(n);
           }
         }
+        placeAll();
       });
       mo.observe(document.documentElement, { childList: true, subtree: true });
     } catch (e) {}
+    window.addEventListener('scroll', placeAll, true);
+    window.addEventListener('resize', placeAll);
+    // Catches tab switches / list re-renders that don't fire scroll/resize/input.
+    setInterval(placeAll, 500);
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
   else boot();
