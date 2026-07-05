@@ -1021,18 +1021,23 @@ body.light-mode .ng-topbar.ng-ribbon .ng-ribbon-btn:hover{
 .ng-bcards-body{padding:12px}
 .ng-insp-cards{margin-left:8px;font-size:11px;font-weight:600;color:#bcd4f5;background:#16233b;border:1px solid rgba(79,140,255,.35);border-radius:6px;padding:2px 8px;cursor:pointer;white-space:nowrap}
 .ng-insp-cards:hover{background:#1d2f4d}
-/* NC-6: building cost-card — placeable, collapsible, wired to its building */
+/* NC-7: per-scope cost-card — one per building child (scope/CO), placeable, collapsible,
+   wired to its building. Type-colored accent inherited from .ng-nc-<type> (--nc-accent). */
 .ng-dock{position:absolute;z-index:45;width:272px;max-width:272px;max-height:60%;overflow:auto;background:rgba(18,24,38,.97);border:1px solid var(--border,rgba(255,255,255,.12));border-radius:12px;box-shadow:0 16px 44px rgba(0,0,0,.55);display:flex;flex-direction:column}
-.ng-dock::before{content:"";position:absolute;left:0;top:11px;bottom:11px;width:4px;border-radius:0 4px 4px 0;background:#378ADD;z-index:1}
+.ng-dock::before{content:"";position:absolute;left:0;top:11px;bottom:11px;width:4px;border-radius:0 4px 4px 0;background:var(--nc-accent,#378ADD);z-index:1}
 .ng-dock .ng-dock-hd{padding-left:14px}
-.ng-dock:not(.ng-dock-open){width:auto;max-width:246px}
+.ng-dock:not(.ng-dock-open){width:auto;max-width:262px}
 .ng-dock-hd{display:flex;align-items:center;gap:7px;padding:8px 11px;cursor:grab;user-select:none}
 .ng-dock.ng-dock-open .ng-dock-hd{border-bottom:1px solid rgba(255,255,255,.08)}
 .ng-dock-dragging{opacity:.9;cursor:grabbing;box-shadow:0 20px 54px rgba(0,0,0,.6)}
 .ng-dock-caret{width:18px;height:18px;padding:0;background:none;border:none;color:#9fb2d6;font-size:11px;cursor:pointer;flex:none;line-height:1}
-.ng-dock-dot{width:9px;height:9px;border-radius:3px;background:#378ADD;flex:none;box-shadow:0 0 0 3px rgba(55,138,221,.18)}
-.ng-dock-ttl{font-size:13px;font-weight:600;color:#eaf0fb;cursor:pointer;white-space:nowrap}
-.ng-dock-sum{margin-left:auto;font-size:10.5px;color:#8aa0c0;white-space:nowrap;padding-left:8px}
+.ng-dock-caret.ng-nc-leaf{cursor:default;background:none}
+.ng-dock-dot{width:9px;height:9px;border-radius:3px;background:var(--nc-accent,#378ADD);flex:none}
+.ng-dock-ttl{font-size:13px;font-weight:600;color:#eaf0fb;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.ng-dock-ty{font-size:9px;letter-spacing:.4px;text-transform:uppercase;color:#7f8aa3;font-family:var(--font-mono,ui-monospace,monospace);white-space:nowrap;flex:none}
+.ng-dock-sum{margin-left:auto;font-size:10.5px;color:#8aa0c0;white-space:nowrap;padding-left:8px;flex:none}
+.ng-dock-x{width:18px;height:18px;margin-left:4px;padding:0;background:none;border:none;color:#7f8aa3;font-size:14px;line-height:1;cursor:pointer;flex:none;border-radius:5px}
+.ng-dock-x:hover{background:rgba(224,122,143,.14);color:#f3a3b3}
 .ng-dock-body{padding:9px;display:flex;flex-direction:column;gap:8px}
 .ng-dock-empty{font-size:11px;color:#6b7689;padding:4px}
 .ng-dock-wires{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:44;overflow:visible}

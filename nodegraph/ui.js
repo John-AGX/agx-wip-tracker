@@ -1088,9 +1088,11 @@ function ncRefreshOpen(){
   var p=document.getElementById('ngBldgCards'); if(p && p.style.display!=='none' && p._bId) renderBldgPanel(p._bId);
   if(window._p86NcDefault) renderBldgDocks();
 }
-// NC-5: each building's children as a card stack DOCKED to it on the satellite map
-// (no wires). renderBldgDocks builds/refreshes the stacks; layoutBldgDocks keeps each
-// pinned to its building's on-screen spot (called from applyTx on pan/zoom).
+// NC-7: each building's DIRECT children (scopes, change orders, any direct cost) dock as their
+// OWN card wired to the building — the cards "start at the scope tier". The building itself is
+// the map object (click it for building info); adding a scope/CO to a building pops its card
+// onto the canvas wired to the building. Deeper children (subs/POs/costs) nest inside the card.
+// renderBldgDocks builds/refreshes the cards; layoutBldgDocks keeps each pinned to its building.
 function renderBldgDocks(){
   var tab=document.getElementById('nodeGraphTab'); if(!tab) return;
   var area=tab.querySelector('.ng-canvas-area')||tab;
@@ -1098,18 +1100,29 @@ function renderBldgDocks(){
   if(!window._p86NcDefault || !sitePlan){ [].forEach.call(area.querySelectorAll('.ng-dock'), function(e){ e.remove(); }); var _sv=document.getElementById('ngDockWires'); if(_sv) _sv.innerHTML=''; return; }
   var t1s=E.nodes().filter(function(n){ return n.type==='t1'; }), live={};
   t1s.forEach(function(b){
-    live[b.id]=1;
-    var el=document.getElementById('ngDock-'+b.id);
-    if(!el){ el=document.createElement('div'); el.id='ngDock-'+b.id; el.className='ng-dock'; area.appendChild(el); ncAttachDnd(el); }
-    var open=!!b._ncDockOpen, kids=getNestedChildren(b.id), seen={}, pct=ncNodePct(b);
-    el.classList.toggle('ng-dock-open', open);
-    el.innerHTML='<div class="ng-dock-hd" title="Drag to move · click ▸ to expand">'
-        +'<button class="ng-dock-caret" data-nc-dock-toggle="'+b.id+'" aria-label="Expand or collapse">'+(open?'▾':'▸')+'</button>'
-        +'<span class="ng-dock-dot"></span>'
-        +'<span class="ng-dock-ttl" data-nc-sel="'+b.id+'">'+luEsc(b.label||'Building')+'</span>'
-        +'<span class="ng-dock-sum">'+kids.length+' item'+(kids.length===1?'':'s')+(pct!=null&&!isNaN(pct)?' · '+Math.round(pct)+'%':'')+'</span>'
-      +'</div>'
-      +(open ? ('<div class="ng-dock-body">'+(kids.length ? kids.map(function(k){ return nestedCardHtml(k,0,seen); }).join('') : '<div class="ng-dock-empty">No costs yet — add from the inspector</div>')+'</div>') : '');
+    getNestedChildren(b.id).forEach(function(k, idx){   // one card per scope / CO / direct cost
+      live[k.id]=1;
+      var el=document.getElementById('ngDock-'+k.id);
+      if(!el){ el=document.createElement('div'); el.id='ngDock-'+k.id; area.appendChild(el); ncAttachDnd(el); }
+      el._bldg=b.id;                                     // the building this card wires to (for layout)
+      if(!k._ncDockOff) k._ncDockOff={x:88, y:-72+idx*66};  // spawn near the building, then placeable
+      var d=E.DEFS[k.type]||{}, typ=(d.cat==='cost')?'cost':k.type;
+      var open=!!k._ncDockOpen, subs=getNestedChildren(k.id), seen={}, pct=ncNodePct(k), val=ncNodeVal(k);
+      el.className='ng-dock ng-nc-'+typ+(open?' ng-dock-open':'');
+      var sum='';
+      if(val!=null && !isNaN(val)) sum+=E.fmtC(val);
+      if(pct!=null && !isNaN(pct)) sum+=(sum?' · ':'')+Math.round(pct)+'%';
+      if(!sum) sum=subs.length+' item'+(subs.length===1?'':'s');
+      el.innerHTML='<div class="ng-dock-hd" title="Drag to move · click ▸ to expand">'
+          +(subs.length ? '<button class="ng-dock-caret" data-nc-dock-toggle="'+k.id+'" aria-label="Expand or collapse">'+(open?'▾':'▸')+'</button>' : '<span class="ng-dock-caret ng-nc-leaf"></span>')
+          +'<span class="ng-dock-dot"></span>'
+          +'<span class="ng-dock-ttl" data-nc-sel="'+k.id+'">'+luEsc(k.label||d.label||k.type)+'</span>'
+          +'<span class="ng-dock-ty">'+luEsc(d.label||k.type)+'</span>'
+          +'<span class="ng-dock-sum">'+sum+'</span>'
+          +'<button class="ng-dock-x" data-nc-del="'+k.id+'" title="Delete" aria-label="Delete">×</button>'
+        +'</div>'
+        +(open ? ('<div class="ng-dock-body">'+(subs.length ? subs.map(function(s){ return nestedCardHtml(s,0,seen); }).join('') : '<div class="ng-dock-empty">No items yet — add from the inspector</div>')+'</div>') : '');
+    });
   });
   [].forEach.call(area.querySelectorAll('.ng-dock'), function(e){ var id=e.id.replace('ngDock-',''); if(!live[id]) e.remove(); });
   layoutBldgDocks();
@@ -1119,15 +1132,16 @@ function layoutBldgDocks(){
   var area=tab.querySelector('.ng-canvas-area')||tab, z=E.zm(), p=E.pan();
   var svg=document.getElementById('ngDockWires');
   if(!svg){ svg=document.createElementNS('http://www.w3.org/2000/svg','svg'); svg.id='ngDockWires'; svg.setAttribute('class','ng-dock-wires'); area.insertBefore(svg, area.firstChild); }
-  E.nodes().forEach(function(n){ if(n.type!=='t1') return;
-    var el=document.getElementById('ngDock-'+n.id); if(!el) return;
-    var off=n._ncDockOff||{x:70,y:-30};
-    var c=(n.geoLatLng)?geoRenderPos(n):{x:n.x,y:n.y};
+  [].forEach.call(area.querySelectorAll('.ng-dock'), function(el){
+    var k=E.findNode(el.id.replace('ngDock-','')); if(!k) return;
+    var b=E.findNode(el._bldg||''); if(!b) return;                          // the building this card wires to
+    var off=k._ncDockOff||{x:88,y:-72};
+    var c=(b.geoLatLng)?geoRenderPos(b):{x:b.x,y:b.y};
     var bx=Math.round((p.x+c.x)*z), by=Math.round((p.y+c.y)*z);              // building anchor (screen)
     var cx=Math.round((p.x+c.x+off.x)*z), cy=Math.round((p.y+c.y+off.y)*z);  // card top-left (screen)
     el.style.left=cx+'px'; el.style.top=cy+'px';
-    var ln=document.getElementById('ngDockWire-'+n.id);
-    if(!ln){ ln=document.createElementNS('http://www.w3.org/2000/svg','line'); ln.id='ngDockWire-'+n.id; ln.setAttribute('class','ng-dock-wire'); svg.appendChild(ln); }
+    var ln=document.getElementById('ngDockWire-'+k.id);
+    if(!ln){ ln=document.createElementNS('http://www.w3.org/2000/svg','line'); ln.id='ngDockWire-'+k.id; ln.setAttribute('class','ng-dock-wire'); svg.appendChild(ln); }
     ln.setAttribute('x1',bx); ln.setAttribute('y1',by); ln.setAttribute('x2',cx+10); ln.setAttribute('y2',cy+12);
   });
   [].forEach.call(svg.querySelectorAll('line'), function(l){ var id=l.id.replace('ngDockWire-',''); if(!document.getElementById('ngDock-'+id)) l.remove(); });
@@ -1136,7 +1150,7 @@ function layoutBldgDocks(){
 // the building, in graph units so it tracks pan/zoom); persists on release.
 document.addEventListener('mousedown', function(e){
   var hd=e.target.closest('.ng-dock-hd'); if(!hd) return;
-  if(e.target.closest('[data-nc-dock-toggle]')) return;   // the caret handles collapse, not drag
+  if(e.target.closest('[data-nc-dock-toggle],[data-nc-del]')) return;   // caret=collapse, ×=delete — not drag
   var dock=hd.closest('.ng-dock'); if(!dock) return;
   var b=E.findNode(dock.id.replace('ngDock-','')); if(!b) return;
   e.preventDefault();
