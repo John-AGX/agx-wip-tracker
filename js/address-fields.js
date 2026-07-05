@@ -35,21 +35,23 @@
 
   // Read an entity's components, deriving them from the freeform `address`
   // when the structured fields are empty (legacy rows). Does NOT mutate.
+  // Field names match the EXISTING lead model (street_address/city/state/zip)
+  // so jobs/estimates/tasks are consistent with leads + convert inherits them.
   function get(obj) {
     obj = obj || {};
-    var has = obj.addr_street || obj.addr_city || obj.addr_state || obj.addr_zip;
-    if (has) return { street: obj.addr_street || '', city: obj.addr_city || '', state: obj.addr_state || '', zip: obj.addr_zip || '' };
+    var has = obj.street_address || obj.city || obj.state || obj.zip;
+    if (has) return { street: obj.street_address || '', city: obj.city || '', state: obj.state || '', zip: obj.zip || '' };
     return parse(obj.address || obj.jobAddress || obj.projectAddress || '');
   }
 
-  // Populate obj.addr_* from its freeform address if missing (idempotent).
-  // Lets lists filter legacy records without a destructive migration.
+  // Populate obj.{street_address,city,state,zip} from its freeform address if
+  // missing (idempotent). Lets lists filter legacy records without a migration.
   function ensure(obj) {
     if (!obj) return obj;
-    if (obj.addr_street || obj.addr_city || obj.addr_state || obj.addr_zip) return obj;
+    if (obj.street_address || obj.city || obj.state || obj.zip) return obj;
     var c = parse(obj.address || obj.jobAddress || '');
     if (c.street || c.city || c.state || c.zip) {
-      obj.addr_street = c.street; obj.addr_city = c.city; obj.addr_state = c.state; obj.addr_zip = c.zip;
+      obj.street_address = c.street; obj.city = c.city; obj.state = c.state; obj.zip = c.zip;
     }
     return obj;
   }
@@ -87,7 +89,7 @@
   // Write collected components onto an entity object (+ the formatted string).
   function apply(obj, c) {
     if (!obj || !c) return;
-    obj.addr_street = c.street; obj.addr_city = c.city; obj.addr_state = c.state; obj.addr_zip = c.zip;
+    obj.street_address = c.street; obj.city = c.city; obj.state = c.state; obj.zip = c.zip;
     obj.address = c.formatted;
   }
 

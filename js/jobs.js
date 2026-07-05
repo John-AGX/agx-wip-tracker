@@ -1049,16 +1049,26 @@ function renderJobsMain() {
             out.sort(function(a, b) { return a.toLowerCase().localeCompare(b.toLowerCase()); });
             return out;
         }
+        // Address parts, derived from the structured fields or parsed from the
+        // legacy freeform `address` (via the shared p86Address module) so both
+        // new + old jobs filter correctly without a migration.
+        function _jobAddr(j) { return (window.p86Address ? window.p86Address.get(j) : { street: '', city: j.city || '', state: j.state || '', zip: j.zip || '' }); }
         function jobsFilterFields() {
             var statusOpts = jobsDistinct(function(j) { return j.status; }).map(function(s) { return { v: s, label: s }; });
             var pmOpts = jobsDistinct(function(j) { return getJobOwnerName(j); }).map(function(s) { return { v: s, label: s }; });
             var jtOpts = jobsDistinct(function(j) { return j.jobType; }).map(function(s) { return { v: s, label: s }; });
             var mktOpts = jobsDistinct(function(j) { return j.market; }).map(function(s) { return { v: s, label: s }; });
+            var cityOpts = jobsDistinct(function(j) { return _jobAddr(j).city; }).map(function(s) { return { v: s, label: s }; });
+            var stateOpts = jobsDistinct(function(j) { return _jobAddr(j).state; }).map(function(s) { return { v: s, label: s }; });
+            var zipOpts = jobsDistinct(function(j) { return _jobAddr(j).zip; }).map(function(s) { return { v: s, label: s }; });
             return [
                 { key: 'status', label: 'Status', type: 'chips', options: statusOpts },
                 { key: 'pm', label: 'PM', type: 'select', options: [{ v: '', label: 'Anyone' }].concat(pmOpts) },
                 { key: 'jobType', label: 'Job Type', type: 'select', options: [{ v: '', label: 'Any' }].concat(jtOpts) },
                 { key: 'market', label: 'Market', type: 'select', options: [{ v: '', label: 'Any' }].concat(mktOpts) },
+                { key: 'city', label: 'City', type: 'select', options: [{ v: '', label: 'Any' }].concat(cityOpts) },
+                { key: 'state', label: 'State', type: 'select', options: [{ v: '', label: 'Any' }].concat(stateOpts) },
+                { key: 'zip', label: 'ZIP', type: 'select', options: [{ v: '', label: 'Any' }].concat(zipOpts) },
                 { key: 'contract', label: 'Contract $', type: 'numrange' },
                 { key: 'pctcomplete', label: '% Complete', type: 'numrange' },
                 { key: 'margin', label: 'Margin %', type: 'numrange' },
@@ -1072,6 +1082,10 @@ function renderJobsMain() {
             if (d.pm && String(getJobOwnerName(j)) !== String(d.pm)) return false;
             if (d.jobType && String(j.jobType || '') !== String(d.jobType)) return false;
             if (d.market && String(j.market || '') !== String(d.market)) return false;
+            if (d.city || d.state || d.zip) { var _a = _jobAddr(j);
+                if (d.city && String(_a.city || '') !== String(d.city)) return false;
+                if (d.state && String(_a.state || '') !== String(d.state)) return false;
+                if (d.zip && String(_a.zip || '') !== String(d.zip)) return false; }
             var w = null;
             var cr = FD.resolveNumRange(d.contract);
             if (cr.min != null || cr.max != null) { w = w || getJobWIP(j.id); var c = Number(w.totalIncome || 0); if (cr.min != null && c < cr.min) return false; if (cr.max != null && c > cr.max) return false; }
