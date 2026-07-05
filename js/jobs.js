@@ -2331,6 +2331,7 @@ function renderJobsMain() {
               '.jd-est-nums b{font-family:ui-monospace,Menlo,monospace;font-size:15px;color:var(--text,#e9ecf5);}' +
               '.jd-est-act{margin-top:10px;}' +
               '.jd-est-none{font-size:13px;color:var(--text-dim,#8aa0c0);border:1px dashed var(--border,rgba(255,255,255,.14));border-radius:10px;padding:14px;text-align:center;}' +
+              '.jd-backlead{margin:0 0 14px;}' +
               '.jd-saved{color:#34d399;font-size:12.5px;margin-top:10px;}.jd-empty{padding:24px;color:var(--text-dim,#8aa0c0);}';
             document.head.appendChild(s);
         }
@@ -2413,6 +2414,7 @@ function renderJobsMain() {
                 return '<label class="jd-fld"><span>' + _jdEsc(label) + '</span><input data-k="' + key + '" type="text" value="' + _jdEsc(val == null ? '' : val) + '"' + (ro ? ' disabled' : '') + '></label>';
             }
             var h = '<div class="jd-sec"><div class="jd-h">' + _jdIco('edit') + ' Job Details</div>';
+            if (job.lead_id) h += '<div class="jd-backlead"><button class="jd-btn" data-backlead="' + _jdEsc(job.lead_id) + '">' + _jdIco('leads') + ' Back to lead</button></div>';
             h += '<div class="jd-cost"><div class="jd-cost-h">Contract &amp; cost — <em>from the estimate</em></div>' +
                 '<div class="jd-cost-grid"><div><label>Contract price</label><b>$' + _jobMoney(contract) + '</b></div><div><label>Estimated cost</label><b>$' + _jobMoney(estCost) + '</b></div></div>' +
                 (linked
@@ -2425,13 +2427,17 @@ function renderJobsMain() {
                 fld('PM', 'pm', job.pm) +
                 fld('Type', 'type', job.type) +
                 fld('Market', 'market', job.market) +
-                fld('Address', 'address', job.address) +
                 '</div>';
+            h += '<label class="jd-fld jd-full"><span>Address</span>' +
+                (window.p86Address ? window.p86Address.fieldsHtml(job, { disabled: ro }) : '<input data-k="address" value="' + _jdEsc(job.address || '') + '"' + (ro ? ' disabled' : '') + '>') + '</label>';
             h += '<label class="jd-fld jd-full"><span>Notes</span><textarea data-k="notes" rows="3"' + (ro ? ' disabled' : '') + '>' + _jdEsc(job.notes || '') + '</textarea></label>';
             if (!ro) h += '<button class="jd-btn jd-btn-primary" data-save="1">Save details</button><span class="jd-saved" style="display:none;"> ✓ Saved</span>';
             h += '</div>';
             panel.innerHTML = h;
+            if (window.p86Address && window.p86Address.wire) { try { window.p86Address.wire(panel, job); } catch (e) {} }
             panel.onclick = function (ev) {
+                var bl = ev.target.closest && ev.target.closest('[data-backlead]');
+                if (bl) { if (window.openLeadFromJob) window.openLeadFromJob(bl.getAttribute('data-backlead')); return; }
                 var oe = ev.target.closest && ev.target.closest('[data-openest]');
                 if (oe) { if (window.openEstimateFromJob) window.openEstimateFromJob(oe.getAttribute('data-openest')); return; }
                 var ge = ev.target.closest && ev.target.closest('[data-gotoest]');
@@ -2439,6 +2445,7 @@ function renderJobsMain() {
                 var sv = ev.target.closest && ev.target.closest('[data-save]');
                 if (sv) {
                     panel.querySelectorAll('[data-k]').forEach(function (inp) { job[inp.getAttribute('data-k')] = inp.value; });
+                    if (window.p86Address) { var c = window.p86Address.collect(panel); if (c) window.p86Address.apply(job, c); }
                     if (typeof saveData === 'function') saveData(); else if (window.saveData) window.saveData();
                     var s = panel.querySelector('.jd-saved'); if (s) { s.style.display = 'inline'; setTimeout(function () { s.style.display = 'none'; }, 1800); }
                     if (typeof window.refreshHeaderMetrics === 'function') { try { window.refreshHeaderMetrics(); } catch (e) {} }
