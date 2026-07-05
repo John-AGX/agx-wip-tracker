@@ -547,12 +547,9 @@
       });
       jobnav.appendChild(back);
 
-      var info = document.createElement('div');
-      info.className = 'app-jobnav-jobinfo';
-      info.innerHTML =
-        '<div class="app-jobnav-title"></div>' +
-        '<div class="app-jobnav-status"></div>';
-      jobnav.appendChild(info);
+      // (Job overview card removed from the left contextual sidebar — it now lives at the
+      //  top of the right Inspector on the Site Plan. The left sidebar stays "standard":
+      //  Back → All Jobs, then the Sections nav. paintJobSubnavCard no-ops without .app-jobnav-jobinfo.)
 
       // Uppercase section header above the relocated tabs strip, mirroring
       // the main nav's .app-nav-group-label so the contextual sidebar reads
