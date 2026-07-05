@@ -1087,29 +1087,57 @@ function renderBldgDocks(){
   var tab=document.getElementById('nodeGraphTab'); if(!tab) return;
   var area=tab.querySelector('.ng-canvas-area')||tab;
   var sitePlan=E.viewMode && E.viewMode()==='siteplan';
-  if(!window._p86NcDefault || !sitePlan){ [].forEach.call(area.querySelectorAll('.ng-dock'), function(e){ e.remove(); }); return; }
+  if(!window._p86NcDefault || !sitePlan){ [].forEach.call(area.querySelectorAll('.ng-dock'), function(e){ e.remove(); }); var _sv=document.getElementById('ngDockWires'); if(_sv) _sv.innerHTML=''; return; }
   var t1s=E.nodes().filter(function(n){ return n.type==='t1'; }), live={};
   t1s.forEach(function(b){
     live[b.id]=1;
     var el=document.getElementById('ngDock-'+b.id);
     if(!el){ el=document.createElement('div'); el.id='ngDock-'+b.id; el.className='ng-dock'; area.appendChild(el); ncAttachDnd(el); }
-    var kids=getNestedChildren(b.id), seen={};
-    el.innerHTML='<div class="ng-dock-hd" data-nc-sel="'+b.id+'">'+luEsc(b.label||'Building')+'</div>'
-      +(kids.length ? kids.map(function(k){ return nestedCardHtml(k,0,seen); }).join('') : '<div class="ng-dock-empty">No costs yet — add from the inspector</div>');
+    var open=!!b._ncDockOpen, kids=getNestedChildren(b.id), seen={}, pct=ncNodePct(b);
+    el.classList.toggle('ng-dock-open', open);
+    el.innerHTML='<div class="ng-dock-hd" title="Drag to move · click ▸ to expand">'
+        +'<button class="ng-dock-caret" data-nc-dock-toggle="'+b.id+'" aria-label="Expand or collapse">'+(open?'▾':'▸')+'</button>'
+        +'<span class="ng-dock-dot"></span>'
+        +'<span class="ng-dock-ttl" data-nc-sel="'+b.id+'">'+luEsc(b.label||'Building')+'</span>'
+        +'<span class="ng-dock-sum">'+kids.length+' item'+(kids.length===1?'':'s')+(pct!=null&&!isNaN(pct)?' · '+Math.round(pct)+'%':'')+'</span>'
+      +'</div>'
+      +(open ? ('<div class="ng-dock-body">'+(kids.length ? kids.map(function(k){ return nestedCardHtml(k,0,seen); }).join('') : '<div class="ng-dock-empty">No costs yet — add from the inspector</div>')+'</div>') : '');
   });
   [].forEach.call(area.querySelectorAll('.ng-dock'), function(e){ var id=e.id.replace('ngDock-',''); if(!live[id]) e.remove(); });
   layoutBldgDocks();
 }
 function layoutBldgDocks(){
-  var tab=document.getElementById('nodeGraphTab'); if(!tab) return;
-  var z=E.zm(), p=E.pan();
+  var tab=document.getElementById('nodeGraphTab'); if(!tab || !window._p86NcDefault) return;
+  var area=tab.querySelector('.ng-canvas-area')||tab, z=E.zm(), p=E.pan();
+  var svg=document.getElementById('ngDockWires');
+  if(!svg){ svg=document.createElementNS('http://www.w3.org/2000/svg','svg'); svg.id='ngDockWires'; svg.setAttribute('class','ng-dock-wires'); area.insertBefore(svg, area.firstChild); }
   E.nodes().forEach(function(n){ if(n.type!=='t1') return;
     var el=document.getElementById('ngDock-'+n.id); if(!el) return;
+    var off=n._ncDockOff||{x:70,y:-30};
     var c=(n.geoLatLng)?geoRenderPos(n):{x:n.x,y:n.y};
-    el.style.left=Math.round((p.x+c.x)*z + 18)+'px';
-    el.style.top=Math.round((p.y+c.y)*z - 10)+'px';
+    var bx=Math.round((p.x+c.x)*z), by=Math.round((p.y+c.y)*z);              // building anchor (screen)
+    var cx=Math.round((p.x+c.x+off.x)*z), cy=Math.round((p.y+c.y+off.y)*z);  // card top-left (screen)
+    el.style.left=cx+'px'; el.style.top=cy+'px';
+    var ln=document.getElementById('ngDockWire-'+n.id);
+    if(!ln){ ln=document.createElementNS('http://www.w3.org/2000/svg','line'); ln.id='ngDockWire-'+n.id; ln.setAttribute('class','ng-dock-wire'); svg.appendChild(ln); }
+    ln.setAttribute('x1',bx); ln.setAttribute('y1',by); ln.setAttribute('x2',cx+10); ln.setAttribute('y2',cy+12);
   });
+  [].forEach.call(svg.querySelectorAll('line'), function(l){ var id=l.id.replace('ngDockWire-',''); if(!document.getElementById('ngDock-'+id)) l.remove(); });
 }
+// Drag a building's cost-card by its header to place it where you want (offset from
+// the building, in graph units so it tracks pan/zoom); persists on release.
+document.addEventListener('mousedown', function(e){
+  var hd=e.target.closest('.ng-dock-hd'); if(!hd) return;
+  if(e.target.closest('[data-nc-dock-toggle]')) return;   // the caret handles collapse, not drag
+  var dock=hd.closest('.ng-dock'); if(!dock) return;
+  var b=E.findNode(dock.id.replace('ngDock-','')); if(!b) return;
+  e.preventDefault();
+  var z=E.zm(), sx=e.clientX, sy=e.clientY, off0=b._ncDockOff?{x:b._ncDockOff.x,y:b._ncDockOff.y}:{x:70,y:-30};
+  dock.classList.add('ng-dock-dragging');
+  function mv(ev){ b._ncDockOff={x:off0.x+(ev.clientX-sx)/z, y:off0.y+(ev.clientY-sy)/z}; layoutBldgDocks(); }
+  function up(){ document.removeEventListener('mousemove',mv); document.removeEventListener('mouseup',up); dock.classList.remove('ng-dock-dragging'); if(E.saveGraph) E.saveGraph(); }
+  document.addEventListener('mousemove',mv); document.addEventListener('mouseup',up);
+});
 function renderNestedOverlay(){
   var tab=document.getElementById('nodeGraphTab'); if(!tab) return;
   var area=tab.querySelector('.ng-canvas-area')||tab;
@@ -1125,8 +1153,8 @@ function renderNestedOverlay(){
   if(!btn){
     btn=document.createElement('button'); btn.id='ngNestedToggle'; btn.className='ng-nc-toggle';
     btn.style.cssText='position:absolute;top:10px;right:12px;z-index:501;';
-    btn.innerHTML='<span class="ng-nc-tgi">▤</span> Cards'; btn.title='Toggle nested-cards view (no wires)';
-    btn.addEventListener('click', function(){ window._p86Nested=!window._p86Nested; renderNestedOverlay(); });
+    btn.innerHTML='<span class="ng-nc-tgi">▤</span> Cards'; btn.title='Toggle cost cards on the map';
+    btn.addEventListener('click', function(){ window._p86NcDefault=!window._p86NcDefault; if(typeof render==='function') render(); else renderNestedOverlay(); });
     area.appendChild(btn);
   }
   var obtn=document.getElementById('ngOutlineToggle');
@@ -1138,7 +1166,7 @@ function renderNestedOverlay(){
     area.appendChild(obtn);
   }
   var on=!!window._p86Nested;
-  btn.classList.toggle('ng-nc-on', on);
+  btn.classList.toggle('ng-nc-on', !!window._p86NcDefault);   // "Cards" now toggles the docked cost-cards-on-map mode
   obtn.style.display = on ? '' : 'none';
   obtn.classList.toggle('ng-nc-on', !!window._p86NcOutline);
   host.classList.toggle('ng-outline', !!window._p86NcOutline);
@@ -1152,6 +1180,8 @@ window.p86NestedRefresh=renderNestedOverlay;
 document.addEventListener('click', function(e){
   var cb=e.target.closest('[data-nc-coll]');
   if(cb){ e.stopPropagation(); var n=E.findNode(cb.getAttribute('data-nc-coll')); if(n){ n._ncColl=!n._ncColl; ncRefreshOpen(); } return; }
+  var dtg=e.target.closest('[data-nc-dock-toggle]');
+  if(dtg){ e.stopPropagation(); var db=E.findNode(dtg.getAttribute('data-nc-dock-toggle')); if(db){ db._ncDockOpen=!db._ncDockOpen; renderBldgDocks(); if(E.saveGraph) E.saveGraph(); } return; }
   var del=e.target.closest('[data-nc-del]');
   if(del){ e.stopPropagation(); var dn=E.findNode(del.getAttribute('data-nc-del')); if(dn && typeof showDeleteDialog==='function') showDeleteDialog(dn); return; }
   var sel=e.target.closest('[data-nc-sel]');
