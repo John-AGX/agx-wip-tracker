@@ -3670,6 +3670,10 @@ function renderJobsMain() {
             phases.forEach(function(p) { var n = p.phase || 'Unnamed'; if (names.indexOf(n) === -1) names.push(n); });
             names.sort();
             if (!names.length || !buildings.length) { container.innerHTML = ''; return; }
+            // Local attribute escaper — jobs.js has no escapeAttr, and using an
+            // undefined one silently threw (empty matrix). Quote-safe for the
+            // data-* attrs + input values below.
+            var attr = function(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
             var cols = buildings.map(function(b) { return { id: b.id, name: b.name || 'Building' }; });
             function slice(name, bid) {
                 var r = phases.find(function(p) { return (p.phase || 'Unnamed') === name && (p.buildingId || null) === (bid || null); });
@@ -3685,7 +3689,7 @@ function renderJobsMain() {
 
             function cellInput(name, bid, v, dashed) {
                 return '<td style="text-align:right;padding:3px 4px;"><input type="number" min="0" step="100" value="' + (v || '') + '" ' +
-                    'data-mx-phase="' + escapeAttr(name) + '" data-mx-bldg="' + escapeAttr(bid || '') + '" oninput="onPhaseMatrixCell(this)" ' +
+                    'data-mx-phase="' + attr(name) + '" data-mx-bldg="' + attr(bid || '') + '" oninput="onPhaseMatrixCell(this)" ' +
                     'style="width:76px;font-size:12px;padding:3px 5px;text-align:right;background:var(--bg);border:1px ' + (dashed ? 'dashed' : 'solid') + ' var(--border);border-radius:4px;color:var(--text' + (dashed ? '-dim' : '') + ');"/></td>';
             }
             var body = names.map(function(name) {
@@ -3695,11 +3699,11 @@ function renderJobsMain() {
                 grand += rowTot;
                 return '<tr><td style="text-align:left;padding:4px 8px;font-size:12.5px;font-weight:600;color:var(--text);white-space:nowrap;' + stickL + '">' + escapeHTML(name) + '</td>' +
                     cells + cellInput(name, null, u, true) +
-                    '<td data-mx-rowtot="' + escapeAttr(name) + '" style="text-align:right;padding:4px 8px;font-size:12.5px;font-weight:700;color:var(--accent);font-family:monospace;">' + formatCurrency(rowTot) + '</td></tr>';
+                    '<td data-mx-rowtot="' + attr(name) + '" style="text-align:right;padding:4px 8px;font-size:12.5px;font-weight:700;color:var(--accent);font-family:monospace;">' + formatCurrency(rowTot) + '</td></tr>';
             }).join('');
 
             var foot = '<tr style="border-top:2px solid var(--border);"><td style="text-align:left;padding:5px 8px;font-size:11px;font-weight:700;color:var(--text-dim);' + stickL + '">Building total</td>';
-            cols.forEach(function(c) { foot += '<td data-mx-coltot="' + escapeAttr(c.id) + '" style="text-align:right;padding:5px 8px;font-size:12px;font-weight:700;font-family:monospace;">' + formatCurrency(colTot[c.id]) + '</td>'; });
+            cols.forEach(function(c) { foot += '<td data-mx-coltot="' + attr(c.id) + '" style="text-align:right;padding:5px 8px;font-size:12px;font-weight:700;font-family:monospace;">' + formatCurrency(colTot[c.id]) + '</td>'; });
             foot += '<td data-mx-coltot="__un__" style="text-align:right;padding:5px 8px;font-size:12px;font-weight:700;font-family:monospace;color:var(--text-dim);">' + formatCurrency(unTot) + '</td>';
             foot += '<td data-mx-grand style="text-align:right;padding:5px 8px;font-size:13px;font-weight:800;font-family:monospace;color:var(--accent);">' + formatCurrency(grand) + '</td></tr>';
 
