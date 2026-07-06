@@ -34,7 +34,27 @@ router.get('/:entityType/:entityId',
   async (req, res) => {
     if (!checkEntity(req, res)) return;
     try {
-      const folders = await ff.listFolders(req.params.entityType, req.params.entityId);
+      const { entityType, entityId } = req.params;
+      let folders = await ff.listFolders(entityType, entityId);
+      if (!folders.length) {
+        // Preload the org's default folder structure the first time an
+        // entity's tree is viewed (lead/estimate/job/client only — other
+        // types have no taxonomy). Best-effort: a seed failure must never
+        // break the (empty) tree response.
+        try {
+          const orgId = req.user && req.user.organization_id;
+          const defaults = await ff.effectiveDefaultFolders(orgId, entityType);
+          if (defaults.length) {
+            await ff.seedDefaultFolders(entityType, entityId, defaults, {
+              organizationId: orgId || null,
+              createdBy: (req.user && req.user.id) || null
+            });
+            folders = await ff.listFolders(entityType, entityId);
+          }
+        } catch (seedErr) {
+          console.error('[file-folders] seed defaults failed (non-fatal):', seedErr && seedErr.message);
+        }
+      }
       res.json({ folders });
     } catch (e) {
       console.error('GET /api/file-folders error:', e);
