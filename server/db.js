@@ -726,6 +726,35 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_job_purchase_orders_job ON job_purchase_orders(job_id);
     CREATE INDEX IF NOT EXISTS idx_job_purchase_orders_org ON job_purchase_orders(organization_id, status, created_at DESC) WHERE organization_id IS NOT NULL;
 
+    -- AIA-style Applications for Payment (G702 certificate + G703 continuation).
+    -- One row per pay application on a job. data JSONB holds the frozen
+    -- Schedule-of-Values snapshot for that period:
+    --   data.lines[] = { id, description, buildingId, type('scope'|'co'),
+    --                    scheduledValue, previous (completed-to-date from the
+    --                    prior app), pctComplete, stored (materials presently
+    --                    stored, G703 col F), retainagePct (per-line variable
+    --                    rate; falls back to the app-level retainage_pct) }
+    --   data.notes, data.summary (computed G702 totals, snapshotted on certify)
+    -- app_no = sequential G702 application number. Status workflow:
+    --   draft -> submitted -> certified (owner/architect) -> paid.
+    CREATE TABLE IF NOT EXISTS pay_applications (
+      id TEXT PRIMARY KEY,
+      job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+      organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE,
+      owner_id INTEGER REFERENCES users(id),
+      app_no INTEGER NOT NULL DEFAULT 1,
+      status TEXT NOT NULL DEFAULT 'draft',
+      period_to DATE,
+      retainage_pct NUMERIC NOT NULL DEFAULT 10,
+      data JSONB NOT NULL DEFAULT '{}'::jsonb,
+      certified_at TIMESTAMPTZ,
+      certified_by INTEGER REFERENCES users(id),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_pay_applications_job ON pay_applications(job_id, app_no DESC);
+    CREATE INDEX IF NOT EXISTS idx_pay_applications_org ON pay_applications(organization_id, status, created_at DESC) WHERE organization_id IS NOT NULL;
+
     -- Role definitions. users.role is a TEXT FK by name (no schema change to
     -- users), so existing 'admin'/'corporate'/'pm' values keep working as
     -- soon as the matching rows are seeded below. capabilities is a JSONB

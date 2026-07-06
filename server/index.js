@@ -134,6 +134,10 @@ app.use('/api', changeOrderRoutes);
 // (/api/jobs/:jobId/purchase-orders + /api/purchase-orders/*).
 const purchaseOrderRoutes = require('./routes/purchase-order-routes');
 app.use('/api', purchaseOrderRoutes);
+// Applications for Payment — AIA G702/G703 billing
+// (/api/jobs/:jobId/pay-applications + /api/pay-applications/*).
+const payApplicationRoutes = require('./routes/pay-application-routes');
+app.use('/api', payApplicationRoutes);
 app.use('/api/roles', roleRoutes);
 app.use('/api/clients', clientRoutes);
 app.use('/api/leads', leadRoutes);
