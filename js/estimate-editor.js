@@ -331,34 +331,40 @@
     if (!hosts.length) return;
     var est = getEstimate();
     var alt = getActiveAlternate();
+    var rts = [];
     hosts.forEach(function(pane, i) {
       if (!est || !alt) { pane.innerHTML = ''; return; }
-      var taId = 'ee-alt-scope-' + i;
       pane.innerHTML =
         '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:8px;">' +
           '<div style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;">Scope of Work</div>' +
           '<div style="font-size:11px;color:#4f8cff;font-weight:600;">' + escapeHTML(alt.name || 'Alternate') + '</div>' +
         '</div>' +
-        '<textarea id="' + taId + '" rows="18" placeholder="Bulleted scope, narrative, or whatever the proposal needs. This is per-alternate." ' +
-          'style="width:100%;resize:vertical;font-family:inherit;font-size:13px;line-height:1.55;padding:12px 14px;background:var(--card-bg,#141419);border:1px solid var(--border,#333);border-radius:8px;color:var(--text,#fff);">' +
-          escapeHTML(alt.scope || '') +
-        '</textarea>' +
-        '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:6px;">Saved per alternate. Used by the Preview tab and PDF/Buildertrend exports.</div>';
-      var ta = document.getElementById(taId);
-      if (ta) {
-        ta.oninput = function() {
-          var a = getActiveAlternate();
-          if (!a) return;
-          a.scope = ta.value;
-          debouncedSave();
-          // Mirror across the other open scope textareas so modal +
-          // sub-tab stay in sync without a full re-render.
-          hosts.forEach(function(otherPane, j) {
-            if (j === i) return;
-            var otherTa = otherPane.querySelector('textarea');
-            if (otherTa && otherTa.value !== ta.value) otherTa.value = ta.value;
-          });
-        };
+        '<div class="ee-scope-rt" id="ee-scope-host-' + i + '"></div>' +
+        '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:6px;">Saved per alternate. Rich text — used by the Preview tab and PDF/Buildertrend exports.</div>';
+      var host = pane.querySelector('#ee-scope-host-' + i);
+      if (host && window.p86RichText && window.p86RichText.mount) {
+        // Capture `alt` in the closure (NOT getActiveAlternate() at fire time) so a
+        // debounced change landing AFTER an alternate switch still writes to the
+        // right alternate. onChange mirrors into the other open scope editors.
+        rts[i] = window.p86RichText.mount(host, {
+          value: alt.scope || '',
+          placeholder: 'Bulleted scope, narrative, or whatever the proposal needs. This is per-alternate.',
+          minHeight: 340,
+          onChange: function(html) {
+            alt.scope = html;
+            debouncedSave();
+            rts.forEach(function(other, j) { if (j !== i && other) other.setHTML(html); });
+          }
+        });
+      } else if (host) {
+        // Fallback: plain textarea if the rich-text module didn't load.
+        var ta = document.createElement('textarea');
+        ta.rows = 18;
+        ta.placeholder = 'Bulleted scope, narrative, or whatever the proposal needs. This is per-alternate.';
+        ta.style.cssText = 'width:100%;resize:vertical;font-family:inherit;font-size:13px;line-height:1.55;padding:12px 14px;background:var(--card-bg,#141419);border:1px solid var(--border,#333);border-radius:8px;color:var(--text,#fff);';
+        ta.value = (window.p86RichText && window.p86RichText.toPlainText) ? window.p86RichText.toPlainText(alt.scope || '') : (alt.scope || '');
+        host.appendChild(ta);
+        ta.oninput = function() { alt.scope = ta.value; debouncedSave(); };
       }
     });
   }
@@ -795,7 +801,12 @@
           '<span style="font-weight:700;color:#334155;">Proposal total</span>' +
           '<span style="font-weight:800;font-size:20px;color:#0f172a;">' + money(total) + '</span>' +
         '</div>' +
-        (est.scopeOfWork ? '<div style="font-size:13px;line-height:1.6;white-space:pre-wrap;">' + esc(String(est.scopeOfWork).slice(0, 1200)) + '</div>' : '') +
+        (function () {
+          var _a = (typeof getActiveAlternate === 'function') ? getActiveAlternate() : null;
+          var _s = (_a && _a.scope) || est.scopeOfWork || '';
+          var _h = window.p86RichText ? window.p86RichText.toDisplayHTML(_s) : (_s ? '<div style="white-space:pre-wrap;">' + esc(_s) + '</div>' : '');
+          return _h ? '<div style="font-size:13px;line-height:1.6;">' + _h + '</div>' : '';
+        })() +
         '<p style="font-size:13px;color:#555;margin-top:18px;">Please reply to this email to approve, or reach out with any questions. Thank you for the opportunity.</p>' +
       '</div></div>';
   }
@@ -811,7 +822,10 @@
     if (est.client) lines.push(est.client);
     if (addr) lines.push(addr);
     lines.push('', 'Proposal total: ' + money(total));
-    if (est.scopeOfWork) { lines.push('', String(est.scopeOfWork).slice(0, 1200)); }
+    var _sa = (typeof getActiveAlternate === 'function') ? getActiveAlternate() : null;
+    var _sv = (_sa && _sa.scope) || est.scopeOfWork || '';
+    var _st = window.p86RichText ? window.p86RichText.toPlainText(_sv) : _sv;
+    if (_st) { lines.push('', _st.slice(0, 1500)); }
     lines.push('', 'Reply to this email to approve, or let me know if you have any questions.', '', 'Thank you,', 'AGX');
     return lines.join('\n');
   }

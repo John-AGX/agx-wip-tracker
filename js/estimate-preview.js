@@ -288,17 +288,26 @@
       if (total == null) return '';
       return ' (' + fmtProposalCurrency(total) + ')';
     }
+    // Render a scope narrative body. New scopes are sanitized rich-text HTML
+    // (p86RichText.toDisplayHTML re-sanitizes); legacy plain-text scopes fall
+    // back to newline→paragraph splitting so old records still read correctly.
+    function scopeBody(s) {
+      s = (s || '').trim();
+      if (!s) return '';
+      if (window.p86RichText && window.p86RichText.toDisplayHTML) return window.p86RichText.toDisplayHTML(s);
+      return s.split(/\n+/).map(function(p) { return '<p>' + escapeHTMLLocal(p) + '</p>'; }).join('');
+    }
     var scopeHTML;
     if (!includedAlts.length || (includedAlts.length === 1 && !includedAlts[0].scope && estimate.scopeOfWork)) {
       // Legacy path
       var legacyScope = ((includedAlts[0] && includedAlts[0].scope) || estimate.scopeOfWork || '').trim();
       scopeHTML = legacyScope
-        ? '<div class="scope-text">' + legacyScope.split(/\n+/).map(function(p) { return '<p>' + escapeHTMLLocal(p) + '</p>'; }).join('') + '</div>'
+        ? '<div class="scope-text">' + scopeBody(legacyScope) + '</div>'
         : '<p style="color:#999;font-style:italic;">Scope of work not yet entered.</p>';
     } else if (includedAlts.length === 1) {
       var soloScope = (includedAlts[0].scope || '').trim();
       scopeHTML = soloScope
-        ? '<div class="scope-text">' + soloScope.split(/\n+/).map(function(p) { return '<p>' + escapeHTMLLocal(p) + '</p>'; }).join('') + '</div>'
+        ? '<div class="scope-text">' + scopeBody(soloScope) + '</div>'
         : '<p style="color:#999;font-style:italic;">Scope of work not yet entered.</p>';
     } else {
       scopeHTML = '<div class="scope-text">';
@@ -308,7 +317,7 @@
           escapeHTMLLocal(alt.name) +
           escapeHTMLLocal(groupTotalSuffix(alt)) +
           '</h4>';
-        if (s) scopeHTML += s.split(/\n+/).map(function(p) { return '<p>' + escapeHTMLLocal(p) + '</p>'; }).join('');
+        if (s) scopeHTML += scopeBody(s);
         else scopeHTML += '<p style="color:#999;font-style:italic;">Scope not entered for this group.</p>';
       });
       scopeHTML += '</div>';

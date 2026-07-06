@@ -235,7 +235,14 @@ function exportEstimate(estId) {
   row = 27;
   ws.mergeCells(row, 1, row, 7);
   const sowCell = ws.getCell(row, 1);
-  sowCell.value = estimate.scopeOfWork || 'Scope TBD \u2014 pending site visit';
+  // Scope is now per-alternate rich-text HTML; use the active (or first)
+  // alternate, fall back to the legacy field, and flatten HTML \u2192 plain text
+  // so the cell shows clean text instead of raw tags.
+  var _alts = Array.isArray(estimate.alternates) ? estimate.alternates : [];
+  var _act = _alts.find(function (a) { return a.id === estimate.activeAlternateId; }) || _alts[0] || null;
+  var _sowRaw = (_act && _act.scope) || estimate.scopeOfWork || '';
+  var _sowText = (window.p86RichText && window.p86RichText.toPlainText) ? window.p86RichText.toPlainText(_sowRaw) : _sowRaw;
+  sowCell.value = _sowText || 'Scope TBD \u2014 pending site visit';
   sowCell.font = bodyFont;
   sowCell.alignment = { wrapText: true, vertical: 'top' };
 
