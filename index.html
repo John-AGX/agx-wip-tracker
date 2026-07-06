@@ -2682,7 +2682,7 @@
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;align-items:end;">
               <div>
                 <label style="display:block;">Confidence <span id="leadEditor_confidenceLabel" style="color:var(--text-dim,#888);font-weight:normal;">— 0%</span></label>
-                <input id="leadEditor_confidence" type="range" min="0" max="100" step="5" value="0"
+                <input id="leadEditor_confidence" type="range" min="0" max="100" step="1" value="0"
                        oninput="document.getElementById('leadEditor_confidenceLabel').textContent='— '+this.value+'%'" />
               </div>
               <div>
@@ -3312,7 +3312,7 @@
     <script src="js/rich-text.js?v=1"></script>
     <script src="js/estimates.js?v=53"></script>
     <script src="js/proposal.js?v=26"></script>
-    <script src="js/estimate-editor.js?v=71"></script>
+    <script src="js/estimate-editor.js?v=72"></script>
     <!-- Change Order editor — overlay opened from the job detail's
          Change Orders tab. Loads after pricing-pipeline (which it
          consumes via window.p86Pricing) and after api.js (which
@@ -3366,7 +3366,7 @@
          input edits. Must load AFTER agx-icons.js because attachSection
          calls p86Icon('edit') for the pencil glyph. CSS lives in
          css/edit-gate.css (already loaded in <head>). -->
-    <script src="js/edit-gate.js?v=1"></script>
+    <script src="js/edit-gate.js?v=2"></script>
 
     <!-- Node Graph (Beta) -->
     <link rel="stylesheet" href="nodegraph/nodegraph.css?v=162" />

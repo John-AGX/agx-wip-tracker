@@ -1109,6 +1109,23 @@
     } catch (e) {}
     try {
       await window.p86Api.jobs.linkEstimate(est.job_id, { estimate_id: est.id, contractAmount: contractAmount, estimatedCosts: estimatedCosts, workbook: workbook });
+      // CRITICAL: mirror the new values onto the LOCAL job. The server route
+      // persists them, but if appData.jobs stays stale (a) Job Details / WIP /
+      // Jobs List keep showing old numbers, and (b) the next saveData() re-uploads
+      // the stale local job and CLOBBERS the server's fresh values — the "✓ Saved
+      // but nothing updated, even after reload" bug (RV2007).
+      var job = (window.appData && appData.jobs || []).find(function (j) { return j.id === est.job_id; });
+      if (job) {
+        if (contractAmount != null) job.contractAmount = contractAmount;
+        if (estimatedCosts != null) job.estimatedCosts = estimatedCosts;
+        if (workbook) job.workbook = workbook;
+        job.estimate_id = est.id;
+        if (typeof window.saveData === 'function') { try { window.saveData(); } catch (e) {} }
+      }
+      // Refresh any open job surfaces so the fresh contract/cost show without a reload.
+      if (typeof window.renderJobsList === 'function') { try { window.renderJobsList(); } catch (e) {} }
+      if (typeof window.p86JobsHubRefresh === 'function') { try { window.p86JobsHubRefresh(); } catch (e) {} }
+      if (typeof window.p86RerenderJobCards === 'function') { try { window.p86RerenderJobCards(); } catch (e) {} }
       function money(n) { return Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
       if (typeof window.p86Toast === 'function') window.p86Toast('Synced to job — contract $' + money(contractAmount) + ' · est. cost $' + money(estimatedCosts) + '.');
       else alert('Synced to the job.');

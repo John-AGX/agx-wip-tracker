@@ -120,7 +120,7 @@
             // row, leave it alone — that's normal editing.
             if (row.getAttribute('data-editing') === 'true') return;
 
-            unlockRow(containerEl, row, rowSelector);
+            unlockRow(containerEl, row, rowSelector, e.target);
         });
 
         // Click anywhere on the document — if it's outside this
@@ -133,19 +133,24 @@
         });
     }
 
-    function unlockRow(containerEl, row, rowSelector) {
+    function unlockRow(containerEl, row, rowSelector, clickTarget) {
         // Lock every sibling first so only one row is armed at a time.
         var rows = containerEl.querySelectorAll(rowSelector);
         for (var i = 0; i < rows.length; i++) {
             if (rows[i] !== row) rows[i].setAttribute('data-editing', 'false');
         }
         row.setAttribute('data-editing', 'true');
-        // Auto-focus the first input so the user can start typing
-        // immediately — saves a second tap. Skips if focus moved to an
-        // input directly via the click (e.g. clicking a button).
-        var firstInput = row.querySelector('input:not([type=hidden]), textarea, select');
-        if (firstInput && document.activeElement !== firstInput) {
-            try { firstInput.focus({ preventScroll: true }); } catch (_) { firstInput.focus(); }
+        // Focus the control the user ACTUALLY clicked (so clicking the markup
+        // field arms the row AND lands the cursor there). Falling back to the
+        // first input was the bug: on a line row the description textarea is
+        // first, so a click on markup% armed the row then stole focus to the
+        // description — markup digits ended up typed into the description text.
+        var clicked = (clickTarget && row.contains(clickTarget) &&
+            /^(INPUT|TEXTAREA|SELECT)$/.test(clickTarget.tagName || '') &&
+            clickTarget.type !== 'hidden') ? clickTarget : null;
+        var toFocus = clicked || row.querySelector('input:not([type=hidden]), textarea, select');
+        if (toFocus && document.activeElement !== toFocus) {
+            try { toFocus.focus({ preventScroll: true }); } catch (_) { toFocus.focus(); }
         }
     }
 
