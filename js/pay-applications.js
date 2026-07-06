@@ -255,9 +255,7 @@
       // a subtle field — the clean look from the Billing mockup while staying editable.
       '#job-payapps .pa-cell:hover:not([disabled]),#job-payapps .pa-cell:focus{outline:none;border-color:var(--border,#d1d5db)!important;background:var(--input-bg,#fff)!important;}' +
       '#job-payapps .pa-cell:focus{border-color:var(--accent,#2563eb)!important;}' +
-      '#job-payapps .ee-btn[disabled],#job-payapps .pa-input[disabled],#job-payapps .pa-cell[disabled]{opacity:.6;cursor:not-allowed;}' +
-      '@media(max-width:720px){#job-payapps .pa-sumgrid{grid-template-columns:repeat(2,minmax(0,1fr))!important;}}' +
-      '@media(max-width:480px){#job-payapps .pa-sumgrid{grid-template-columns:1fr!important;}}';
+      '#job-payapps .ee-btn[disabled],#job-payapps .pa-input[disabled],#job-payapps .pa-cell[disabled]{opacity:.6;cursor:not-allowed;}';
     document.head.appendChild(st);
   }
 
@@ -351,16 +349,16 @@
       var valColor = hi ? 'var(--accent,#2563eb)' : 'var(--text,#0a0e15)';
       return '<div style="background:' + bg + ';border:1px solid ' + border + ';border-radius:14px;padding:15px 17px;display:flex;flex-direction:column;gap:5px;min-width:0;">' +
         '<div style="font-size:13px;font-weight:500;color:' + labelColor + ';">' + o.label + '</div>' +
-        '<div' + (o.key ? ' data-live="sum:' + o.key + '"' : '') + ' style="font-size:26px;line-height:1.08;font-weight:700;letter-spacing:-.015em;font-variant-numeric:tabular-nums;color:' + valColor + ';">' + esc(o.val) + '</div>' +
+        '<div' + (o.key ? ' data-live="sum:' + o.key + '"' : '') + ' style="font-size:22px;line-height:1.1;font-weight:700;letter-spacing:-.015em;font-variant-numeric:tabular-nums;color:' + valColor + ';overflow-wrap:break-word;">' + esc(o.val) + '</div>' +
         (o.sub ? '<div style="font-size:12.5px;color:' + (o.subColor || 'var(--text-dim,#8a90a0)') + ';">' + o.sub + '</div>' : '') +
       '</div>';
     }
-    return '<div class="pa-sumgrid" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-bottom:18px;">' +
+    return '<div class="pa-sumgrid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(158px,1fr));gap:12px;margin-bottom:18px;">' +
       tile({ label: 'Contract sum to date', key: 'contract', val: fmtC(s.contract),
              sub: (s.co > 0 ? 'incl. <span data-live="sub:co">' + fmtC(s.co) + '</span> in change orders' : 'base contract') }) +
       tile({ label: 'Completed &amp; stored', key: 'completedStored', val: fmtC(s.completedStored),
              sub: '<span data-live="sub:pct">' + fmtPct(pctOfContract) + '</span> of contract', subColor: 'var(--green,#059669)' }) +
-      tile({ label: 'Less retainage (' + retPct + '%)', key: 'retainage', val: '&minus;' + fmtC(s.retainage),
+      tile({ label: 'Less retainage (' + retPct + '%)', key: 'retainage', val: '−' + fmtC(s.retainage),
              sub: 'held to closeout', subColor: 'var(--text-dim,#8a90a0)' }) +
       tile({ label: 'Current payment due', key: 'dueThis', val: fmtC(s.dueThis), sub: 'this period&rsquo;s draw', highlight: true }) +
       tile({ label: 'Balance to finish', key: 'balance9', val: fmtC(bal9), sub: 'incl. retainage' }) +
