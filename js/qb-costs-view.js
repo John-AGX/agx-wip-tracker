@@ -876,6 +876,11 @@
       });
     }
     reRender();
+    // Recompute the job's WIP so Actual Costs reflects the (un)link immediately —
+    // fires only if this job's Site Plan graph is the one currently loaded
+    // (otherwise it recomputes next time the graph runs). Reads the optimistic
+    // local appData.qbCostLines update above.
+    if (window.ngRecomputeIfJob && _state.jobId) window.ngRecomputeIfJob(_state.jobId);
   }
 
   // Single-line picker (orchestrates openNodePicker with line-specific
@@ -969,6 +974,7 @@
     });
     clearSelection();
     reRender();
+    if (window.ngRecomputeIfJob && _state.jobId) window.ngRecomputeIfJob(_state.jobId);
 
     if (window.p86Api && window.p86Api.isAuthenticated && window.p86Api.isAuthenticated()) {
       window.p86Api.qbCosts.bulkLink(ids, nodeId).then(function() {
@@ -980,6 +986,7 @@
           if (l) l.linked_node_id = p.prev;
         });
         reRender();
+        if (window.ngRecomputeIfJob && _state.jobId) window.ngRecomputeIfJob(_state.jobId);
         alert('Bulk link failed: ' + (err.message || 'server error'));
       });
     }

@@ -3112,6 +3112,7 @@ function renderInspectorJobDetail(body){
     // (job headline now lives in the leading job card — inspectorJobCardHtml)
     '<div class="ng-insp-sec" id="insp-buildings"></div>'+
     '<div class="ng-insp-sec" id="insp-phases"></div>'+
+    '<div class="ng-insp-sec" id="insp-jobcosts"></div>'+
     '<div class="ng-insp-sec" id="insp-subs"></div><div id="insp-subs-totals"></div>'+
     '<div class="ng-insp-sec" id="insp-cos"></div>'+   // renderJobChangeOrdersInto creates #insp-co inside (server-fetched)
     '<div class="ng-insp-sec" id="insp-pos"></div>'+   // renderJobPurchaseOrdersInto creates #insp-po inside (server-fetched)
@@ -3125,12 +3126,106 @@ function renderInspectorJobDetail(body){
     var subs=(appData.subs||[]).filter(function(s){return s.jobId===jid;});
     if(typeof window.renderJobBuildings==='function') window.renderJobBuildings(jid,'insp-buildings');
     if(typeof window.renderOverviewPhasesInto==='function') window.renderOverviewPhasesInto(document.getElementById('insp-phases'),jid,phases);
+    renderJobLevelCostsInto(document.getElementById('insp-jobcosts'));
     if(typeof window.renderOverviewSubsInto==='function') window.renderOverviewSubsInto(document.getElementById('insp-subs'),jid,subs);
     if(typeof window.renderJobChangeOrdersInto==='function') window.renderJobChangeOrdersInto(document.getElementById('insp-cos'),jid,'insp-co');
     if(typeof window.renderJobPurchaseOrdersInto==='function') window.renderJobPurchaseOrdersInto(document.getElementById('insp-pos'),jid,'insp-po');
   }catch(e){ if(window.console) console.warn('inspector job-detail render failed', e); }
   refreshInspMetrics();   // first-paint fill
 }
+
+// ── Job-Level Costs (overview panel) ───────────────────────────────
+// Add a category cost node — Materials / Labor / Equipment / GC / Burden —
+// straight at the JOB level from the overview. It drops a free-floating
+// (unwired) cost node, which counts on the job's total until you wire it
+// down to a building/phase/CO, and recomputes immediately. Link QuickBooks
+// costs to it in the Detailed sub-tab and they flow into Actual Costs.
+var JOB_COST_CATS = [
+  { t:'mat',    label:'Materials' },
+  { t:'labor',  label:'Labor' },
+  { t:'other',  label:'Equipment' },
+  { t:'gc',     label:'Gen Conditions' },
+  { t:'burden', label:'Burden' }
+];
+function _jlcEsc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+// Cost nodes NOT wired up to any building/phase/WIP = job-level costs.
+function jobLevelCostNodes(){
+  return E.nodes().filter(function(n){
+    if(n.type!=='labor'&&n.type!=='mat'&&n.type!=='gc'&&n.type!=='other'&&n.type!=='burden') return false;
+    return !E.wires().some(function(w){
+      if(w.fromNode!==n.id) return false;
+      var tgt=E.findNode(w.toNode);
+      return tgt&&(tgt.type==='t1'||tgt.type==='t2'||tgt.type==='wip');
+    });
+  });
+}
+
+function renderJobLevelCostsInto(host){
+  if(!host) return;
+  var list=jobLevelCostNodes();
+  if(E.resetComp) E.resetComp();
+  var h='<div class="ng-insp-sublabel" style="display:flex;align-items:center;justify-content:space-between;gap:8px;">'+
+    '<span>Job-Level Costs</span>'+
+    '<span style="font-size:9px;color:#6a7090;font-weight:500;text-transform:none;letter-spacing:0;">counts on the job total</span>'+
+  '</div>';
+  h+='<div style="display:flex;flex-wrap:wrap;gap:4px;margin:4px 0 8px;">';
+  JOB_COST_CATS.forEach(function(c){
+    h+='<button data-jlc-add="'+c.t+'" title="Add a job-level '+_jlcEsc(c.label)+' cost node" '+
+      'style="font-size:10px;padding:3px 8px;border:1px solid #2e3350;border-radius:5px;background:#171a2e;color:#c9cee8;cursor:pointer;">+ '+_jlcEsc(c.label)+'</button>';
+  });
+  h+='</div>';
+  if(list.length){
+    list.forEach(function(n){
+      var d=E.DEFS[n.type]||{};
+      var total=E.getOutput?E.getOutput(n,0):(n.value||0);
+      h+='<div data-jlc-sel="'+n.id+'" title="Show on the graph" style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 8px;border:1px solid #23273f;border-radius:5px;margin-bottom:4px;cursor:pointer;">'+
+        '<span style="font-size:11px;color:#dfe3f5;">'+(d.icon||'')+' '+_jlcEsc(n.label||d.label||'Cost')+'</span>'+
+        '<span style="font-size:11px;font-weight:600;color:#8fb8ff;font-family:monospace;">'+(E.fmtC?E.fmtC(total):('$'+Math.round(total)))+'</span>'+
+      '</div>';
+    });
+  } else {
+    h+='<div style="font-size:10px;color:#6a7090;padding:2px 2px 4px;line-height:1.4;">None yet. Add one above, then link QuickBooks costs to it in the job’s Detailed sub-tab.</div>';
+  }
+  host.innerHTML=h;
+  host.querySelectorAll('[data-jlc-add]').forEach(function(b){
+    b.addEventListener('click', function(e){ e.stopPropagation(); addJobLevelCostNode(b.getAttribute('data-jlc-add')); });
+  });
+  host.querySelectorAll('[data-jlc-sel]').forEach(function(r){
+    r.addEventListener('click', function(e){ e.stopPropagation(); selN=r.getAttribute('data-jlc-sel'); render(); });
+  });
+}
+
+function addJobLevelCostNode(cat){
+  var d=E.DEFS[cat]; if(!d) return;
+  var p=E.pan(), z=E.zm();
+  var cx=-p.x+(wrap?wrap.clientWidth:800)/2/z, cy=-p.y+(wrap?wrap.clientHeight:600)/2/z;
+  var nn=E.addNode(cat, Math.round(cx-85), Math.round(cy-30), d.label);
+  if(!nn) return;
+  selN=nn.id;
+  try{ pushToJobSilent(); }catch(e){}
+  if(E.saveGraph) E.saveGraph();
+  render();
+  try{ refreshInspMetrics(); }catch(e){}
+  var host=document.getElementById('insp-jobcosts');
+  if(host) renderJobLevelCostsInto(host);
+}
+
+// Recompute a job's WIP from its live graph IF that graph is the one
+// currently loaded — lets other surfaces (e.g. linking a QB cost in the
+// Detailed sub-tab) refresh Actual Costs without opening the Site Plan.
+window.ngRecomputeIfJob=function(jid){
+  try{
+    if(!jid || !E.job || E.job()!==jid) return false;
+    pushToJobSilent();
+    if(E.saveGraph) E.saveGraph();
+    if(typeof refreshInspMetrics==='function') refreshInspMetrics();
+    var host=document.getElementById('insp-jobcosts');
+    if(host) renderJobLevelCostsInto(host);
+    return true;
+  }catch(e){ return false; }
+};
+
 // Slice 3c: expand/collapse a Tasks/Files section and lazy-mount its heavy panel on first
 // open (p86Tasks / p86Explorer fetch on mount — don't pay that on every job open).
 function inspToggleCollapse(key, hdrEl){
