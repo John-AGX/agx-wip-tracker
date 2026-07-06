@@ -2927,7 +2927,7 @@ function renderBuildingMetrics(){
 // (#job-overview etc.) into the inspector body + call its global renderer, and move it back
 // to #wsRightContent on node-select or map close.
 var _inspSection=null, _inspSectionPanel=null;
-var WS_SECTION_RENDERERS={'job-overview':'renderJobOverview','job-wip-report':'renderWipTab','job-details':'renderJobDetails','job-estimates':'renderJobEstimates','job-qb-costs':'renderJobQBCosts','job-subs':'renderJobSubs','job-changeorders':'renderChangeOrders','job-purchaseorders':'renderPurchaseOrders','job-invoices':'renderInvoices','job-reports':'renderJobReports'};
+var WS_SECTION_RENDERERS={'job-overview':'renderJobOverview','job-wip-report':'renderWipTab','job-details':'renderJobDetails','job-estimates':'renderJobEstimates','job-qb-costs':'renderJobQBCosts','job-subs':'renderJobSubs','job-changeorders':'renderChangeOrders','job-purchaseorders':'renderPurchaseOrders','job-invoices':'renderInvoices','job-payapps':'renderPayApps','job-reports':'renderJobReports'};
 function restoreSectionPanel(){
   if(_inspSectionPanel){
     var rc=document.getElementById('wsRightContent');

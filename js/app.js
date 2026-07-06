@@ -2111,6 +2111,7 @@
             else if (subtabName === 'job-subs') renderJobSubs(currentJobId);
             else if (subtabName === 'job-purchaseorders') renderPurchaseOrders(currentJobId);
             else if (subtabName === 'job-invoices') renderInvoices(currentJobId);
+            else if (subtabName === 'job-payapps' && typeof renderPayApps === 'function') renderPayApps(currentJobId);
             else if (subtabName === 'job-labor') renderJobLabor(currentJobId);
             // Wave 3 — RFI / submittal / transmittal pane.
             else if (subtabName === 'job-workflow' && window.p86JobWorkflowUI) {

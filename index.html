@@ -1035,6 +1035,7 @@
                             <button class="sub-tab-btn-job" data-subtab="job-changeorders" data-p86-icon="links">Change Orders</button>
                             <button class="sub-tab-btn-job" data-subtab="job-purchaseorders" data-p86-icon="materials">Purchase Orders</button>
                             <button class="sub-tab-btn-job" data-subtab="job-invoices" data-p86-icon="exports">Invoices</button>
+                            <button class="sub-tab-btn-job" data-subtab="job-payapps" data-p86-icon="exports">Billing</button>
                             <button class="sub-tab-btn-job" data-subtab="job-buildings" data-p86-icon="buildings">Buildings</button>
                             <button class="sub-tab-btn-job" data-subtab="job-labor" data-p86-icon="subs">Labor / Burden</button>
                             <!-- Wave 3 — RFIs / submittals / transmittals tab -->
@@ -1252,6 +1253,9 @@
                                 </table>
                             </div>
                         </div>
+
+                        <!-- Applications for Payment (AIA G702/G703) -->
+                        <div id="job-payapps" class="sub-tab-content-job"></div>
 
                         <!-- Invoices -->
                         <div id="job-invoices" class="sub-tab-content-job">
@@ -3302,6 +3306,7 @@
          hub Purchase Orders list. Uses p86Api.purchaseOrders + subs. -->
     <script src="js/purchase-order-import.js?v=1"></script>
     <script src="js/purchase-order-editor.js?v=7"></script>
+    <script src="js/pay-applications.js?v=1"></script>
     <!-- Shared pricing pipeline — math used by estimate-editor +
          estimate-preview + the upcoming change-order-editor. Loads
          BEFORE any of them so window.p86Pricing is ready. -->

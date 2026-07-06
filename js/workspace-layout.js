@@ -42,6 +42,7 @@
     { id: 'job-changeorders',  label: 'CO\'s',     icon: 'links' },
     { id: 'job-purchaseorders',label: 'PO\'s',     icon: 'materials' },
     { id: 'job-invoices',      label: 'Invoices',  icon: 'exports' },
+    { id: 'job-payapps',       label: 'Billing',   icon: 'exports' },
     { id: 'job-subs',          label: 'Subs',      icon: 'subs' },
     { id: 'job-reports',       label: 'Reports',   icon: 'photos' }
   ];
