@@ -64,7 +64,7 @@ router.get('/', requireAuth, async (req, res) => {
     // Wave 1.A Phase 2 — org-scoped list. NULL org_id retained for
     // unbackfilled legacy until NOT NULL tightening.
     const { rows } = await pool.query(
-      'SELECT id, owner_id, data, created_at, updated_at, geocode_lat, geocode_lng, is_locked, sent_at, viewed_at, accepted_at, sent_count FROM estimates WHERE organization_id = $1 OR organization_id IS NULL ORDER BY updated_at DESC',
+      'SELECT id, owner_id, data, created_at, updated_at, geocode_lat, geocode_lng, is_locked, sent_at, viewed_at, accepted_at, sent_count, approval_status, sent_to, sent_method, approved_at, approved_by, approval_method, declined_at, decline_reason FROM estimates WHERE organization_id = $1 OR organization_id IS NULL ORDER BY updated_at DESC',
       [req.user.organization_id]
     );
     // Surface created_at/updated_at + geocode coords + lifecycle timestamps on
@@ -83,7 +83,16 @@ router.get('/', requireAuth, async (req, res) => {
       sent_at: r.sent_at,
       viewed_at: r.viewed_at,
       accepted_at: r.accepted_at,
-      sent_count: r.sent_count || 0
+      sent_count: r.sent_count || 0,
+      // Proposal approval workflow
+      approval_status: r.approval_status || null,
+      sent_to: r.sent_to || null,
+      sent_method: r.sent_method || null,
+      approved_at: r.approved_at,
+      approved_by: r.approved_by || null,
+      approval_method: r.approval_method || null,
+      declined_at: r.declined_at,
+      decline_reason: r.decline_reason || null
     }));
     res.json({ estimates });
   } catch (e) {
@@ -319,6 +328,88 @@ router.post('/:id/sent', requireAuth, requireCapability('ESTIMATES_EDIT'), async
     res.json({ ok: true, sent_at: u.rows[0].sent_at, sent_count: u.rows[0].sent_count });
   } catch (e) {
     console.error('POST /api/estimates/:id/sent error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /api/estimates/:id/send — record that the proposal was sent to a SPECIFIC
+// recipient (any address, not just the client on file) by print or email; when
+// method='email' and proposal html is supplied, actually email it (best-effort).
+// Distinct from /:id/sent (the legacy toggle) — this carries the recipient + method.
+router.post('/:id/send', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req, res) => {
+  try {
+    const b = req.body || {};
+    const to = (b.to || '').toString().trim();
+    const method = (b.method === 'print' || b.method === 'link') ? b.method : 'email';
+    const u = await pool.query(
+      `UPDATE estimates
+          SET sent_to = $3, sent_method = $4,
+              sent_at = COALESCE(sent_at, NOW()), sent_count = COALESCE(sent_count, 0) + 1,
+              approval_status = CASE WHEN approval_status IN ('approved','declined') THEN approval_status ELSE 'sent' END,
+              updated_at = NOW()
+        WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)
+      RETURNING sent_at, sent_count, sent_to, sent_method, approval_status`,
+      [req.params.id, req.user.organization_id, to || null, method]
+    );
+    if (u.rowCount === 0) return res.status(404).json({ error: 'Estimate not found' });
+    let emailed = false, emailError = null;
+    if (method === 'email' && to && b.html) {
+      try {
+        const mailer = require('../email');
+        const send = mailer.sendEmail || mailer.send;
+        if (typeof send === 'function') {
+          await send({ to: to, subject: (b.subject || '').toString().trim() || 'Your proposal from AGX', html: String(b.html), tag: 'proposal_sent' });
+          emailed = true;
+        } else { emailError = 'mailer unavailable'; }
+      } catch (e) { emailError = (e && e.message) || 'send failed'; console.error('proposal /send email error:', e); }
+    }
+    res.json({ ok: true, emailed, emailError, ...u.rows[0] });
+  } catch (e) {
+    console.error('POST /api/estimates/:id/send error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /api/estimates/:id/approve — record a proposal approval (manual print-sign,
+// in person, phone, email, or a client e-signature). Body: { approved_by, method,
+// signature? }. Flips approval_status='approved' + stamps who/when/how.
+router.post('/:id/approve', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req, res) => {
+  try {
+    const b = req.body || {};
+    const by = (b.approved_by || '').toString().trim() || null;
+    const method = (b.method || 'manual').toString().trim().slice(0, 40);
+    const sig = (b.signature && typeof b.signature === 'object') ? JSON.stringify(b.signature) : null;
+    const u = await pool.query(
+      `UPDATE estimates
+          SET approval_status = 'approved', approved_at = NOW(), approved_by = $3,
+              approval_method = $4, signature = COALESCE($5::jsonb, signature),
+              declined_at = NULL, decline_reason = NULL, updated_at = NOW()
+        WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)
+      RETURNING approval_status, approved_at, approved_by, approval_method`,
+      [req.params.id, req.user.organization_id, by, method, sig]
+    );
+    if (u.rowCount === 0) return res.status(404).json({ error: 'Estimate not found' });
+    res.json({ ok: true, ...u.rows[0] });
+  } catch (e) {
+    console.error('POST /api/estimates/:id/approve error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /api/estimates/:id/decline — record that the client declined the proposal.
+router.post('/:id/decline', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req, res) => {
+  try {
+    const reason = ((req.body && req.body.reason) || '').toString().trim().slice(0, 500) || null;
+    const u = await pool.query(
+      `UPDATE estimates SET approval_status = 'declined', declined_at = NOW(), decline_reason = $3, updated_at = NOW()
+        WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)
+      RETURNING approval_status, declined_at, decline_reason`,
+      [req.params.id, req.user.organization_id, reason]
+    );
+    if (u.rowCount === 0) return res.status(404).json({ error: 'Estimate not found' });
+    res.json({ ok: true, ...u.rows[0] });
+  } catch (e) {
+    console.error('POST /api/estimates/:id/decline error:', e);
     res.status(500).json({ error: 'Server error' });
   }
 });

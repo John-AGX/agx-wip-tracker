@@ -127,6 +127,11 @@
     remove: function(id) { return del('/api/estimates/' + encodeURIComponent(id)); },
     // Record/clear that a proposal was sent (the "sent vs created" tracker).
     markSent: function(id, sent) { return post('/api/estimates/' + encodeURIComponent(id) + '/sent', { sent: sent !== false }); },
+    // Proposal approval workflow: record a send to any recipient, an approval
+    // (manual / e-sign), or a decline.
+    send: function(id, payload) { return post('/api/estimates/' + encodeURIComponent(id) + '/send', payload || {}); },
+    approve: function(id, payload) { return post('/api/estimates/' + encodeURIComponent(id) + '/approve', payload || {}); },
+    decline: function(id, reason) { return post('/api/estimates/' + encodeURIComponent(id) + '/decline', { reason: reason || '' }); },
     lock: function(id, locked) { return put('/api/estimates/' + encodeURIComponent(id) + '/lock', { locked: !!locked }); }
   };
 

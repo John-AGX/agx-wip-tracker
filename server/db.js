@@ -934,6 +934,24 @@ async function initSchema() {
      WHERE j.estimate_id = e.id
        AND e.accepted_at IS NULL;
 
+    -- Proposal approval + e-signature workflow. approval_status: NULL/'draft' →
+    -- 'sent' → 'approved' | 'declined'. sent_to is the ACTUAL recipient (can be
+    -- any address, not just the client on file). approved_* record who/when/how
+    -- (manual print-sign, in-person, phone, email, or client e-sign). signature
+    -- holds the client e-sign payload (typed/drawn + consent + ip/ua); sign_token
+    -- backs the public no-login signing link.
+    ALTER TABLE estimates ADD COLUMN IF NOT EXISTS approval_status TEXT;
+    ALTER TABLE estimates ADD COLUMN IF NOT EXISTS sent_to         TEXT;
+    ALTER TABLE estimates ADD COLUMN IF NOT EXISTS sent_method     TEXT;
+    ALTER TABLE estimates ADD COLUMN IF NOT EXISTS approved_at     TIMESTAMPTZ;
+    ALTER TABLE estimates ADD COLUMN IF NOT EXISTS approved_by     TEXT;
+    ALTER TABLE estimates ADD COLUMN IF NOT EXISTS approval_method TEXT;
+    ALTER TABLE estimates ADD COLUMN IF NOT EXISTS declined_at     TIMESTAMPTZ;
+    ALTER TABLE estimates ADD COLUMN IF NOT EXISTS decline_reason  TEXT;
+    ALTER TABLE estimates ADD COLUMN IF NOT EXISTS signature       JSONB;
+    ALTER TABLE estimates ADD COLUMN IF NOT EXISTS sign_token      TEXT;
+    CREATE UNIQUE INDEX IF NOT EXISTS estimates_sign_token_idx ON estimates(sign_token) WHERE sign_token IS NOT NULL;
+
     -- Polymorphic attachments — each row is a single uploaded photo (or doc)
     -- belonging to either a lead or an estimate. We store three size variants
     -- per upload (thumbnail, web, original) so the UI can show a fast grid,

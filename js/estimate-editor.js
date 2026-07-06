@@ -632,6 +632,9 @@
     if (!chipsEl) return;
     var html = '';
 
+    // Proposal approval workflow — status pill + Send / Record-approval actions.
+    html += proposalActionsHtml(est);
+
     // The client chip + "From lead" chip are gone — that context now lives on
     // the parent LEAD's card in the sidebar (mountEstimateSidebarCard), which
     // is also the click-through to the lead. Only the job ACTIONS remain here.
@@ -649,12 +652,163 @@
         '<span>&#x21BB;</span>Sync costs &rarr; job' +
       '</button>';
     } else {
-      html += '<button class="ee-btn secondary" data-cap="JOBS_EDIT_ANY JOBS_EDIT_OWN" onclick="convertEstimateToJob()" style="display:inline-flex;align-items:center;gap:6px;">' +
-        '<span>&#x1F3D7;&#xFE0F;</span>Create Job' +
+      var _appr = (est.approval_status === 'approved');
+      html += '<button class="ee-btn ' + (_appr ? 'primary' : 'secondary') + '" data-cap="JOBS_EDIT_ANY JOBS_EDIT_OWN" onclick="convertEstimateToJob()" title="' + (_appr ? 'Create the job from this approved &amp; signed estimate' : 'Create a job from this estimate') + '" style="display:inline-flex;align-items:center;gap:6px;' + (_appr ? 'background:#34d399;border-color:#34d399;color:#04210f;' : '') + '">' +
+        '<span>&#x1F3D7;&#xFE0F;</span>' + (_appr ? 'Create Job from approved' : 'Create Job') +
       '</button>';
     }
     chipsEl.innerHTML = html;
   }
+
+  // ── Proposal approval workflow (status pill + Send / Approve / Decline) ──────
+  function proposalActionsHtml(est) {
+    if (!est) return '';
+    var st = est.approval_status || (est.sent_at ? 'sent' : 'draft');
+    var lbl, col;
+    if (st === 'approved') { lbl = '✓ Approved' + (est.approved_by ? ' · ' + escapeHTML(est.approved_by) : ''); col = '#34d399'; }
+    else if (st === 'declined') { lbl = 'Declined'; col = '#f87171'; }
+    else if (st === 'sent') { lbl = 'Sent' + (est.sent_to ? ' · ' + escapeHTML(est.sent_to) : ''); col = '#fbbf24'; }
+    else { lbl = 'Draft'; col = 'var(--text-dim,#8b90a5)'; }
+    var h = '<span class="ee-prop-pill" title="Proposal status" style="display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:700;padding:4px 10px;border-radius:999px;background:rgba(255,255,255,0.05);color:' + col + ';border:1px solid ' + col + '44;">' + lbl + '</span>';
+    if (est.job_id) return h;   // already converted — proposal actions no longer apply
+    h += '<button class="ee-btn secondary" onclick="openProposalSend(\'' + escapeHTML(est.id) + '\')" title="Print or email this proposal to any recipient" style="display:inline-flex;align-items:center;gap:6px;"><span>📤</span>Send</button>';
+    if (st !== 'approved') {
+      h += '<button class="ee-btn secondary" onclick="openProposalApprove(\'' + escapeHTML(est.id) + '\')" title="Record that the proposal was approved / signed" style="display:inline-flex;align-items:center;gap:6px;"><span>✍️</span>Record approval</button>';
+    }
+    if (st === 'sent') {
+      h += '<button class="ee-btn secondary" onclick="proposalDecline(\'' + escapeHTML(est.id) + '\')" title="Record that the client declined" style="font-size:11px;opacity:.85;">Declined?</button>';
+    }
+    return h;
+  }
+
+  function _propToast(msg, kind) { if (typeof window.p86Toast === 'function') window.p86Toast(msg, kind || 'info'); }
+  function _findEst(id) { return (window.appData && appData.estimates || []).find(function(e){ return e.id === id; }); }
+  function _defaultRecipient(est) { return (est && (est.managerEmail || est.cm_email || est.email)) || ''; }
+  function _refreshEstList() { if (typeof window.renderEstimatesList === 'function') { try { window.renderEstimatesList(); } catch (e) {} } }
+
+  // Send / print the proposal to ANY recipient. Records recipient + method; when
+  // Email is chosen, the server emails a branded summary to that address (Resend).
+  function openProposalSend(estId) {
+    var est = _findEst(estId); if (!est) return;
+    var back = document.createElement('div');
+    back.style.cssText = 'position:fixed;inset:0;z-index:2147483200;background:rgba(6,9,17,.6);display:flex;align-items:center;justify-content:center;padding:16px;';
+    back.innerHTML =
+      '<div class="modal-content" style="width:min(460px,96vw);">' +
+        '<div class="p86-dialog-title">Send proposal</div>' +
+        '<label style="display:block;font-size:12px;margin:10px 0 4px;">Recipient email (any address)</label>' +
+        '<input class="p86-dialog-input" id="propSendTo" type="email" placeholder="name@company.com" value="' + escapeHTML(_defaultRecipient(est)) + '" />' +
+        '<label style="display:block;font-size:12px;margin:12px 0 4px;">How</label>' +
+        '<div style="display:flex;gap:8px;">' +
+          '<label style="flex:1;display:flex;align-items:center;gap:6px;font-size:13px;border:1px solid var(--border,#333);border-radius:8px;padding:8px 10px;cursor:pointer;"><input type="radio" name="propMethod" value="print" checked> Print / PDF</label>' +
+          '<label style="flex:1;display:flex;align-items:center;gap:6px;font-size:13px;border:1px solid var(--border,#333);border-radius:8px;padding:8px 10px;cursor:pointer;"><input type="radio" name="propMethod" value="email"> Email now</label>' +
+        '</div>' +
+        '<div class="p86-dialog-actions" style="margin-top:16px;">' +
+          '<button class="p86-dialog-btn" data-cancel>Cancel</button>' +
+          '<button class="p86-dialog-btn p86-dialog-btn-primary" data-send>Send</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(back);
+    function close() { if (back.parentNode) back.parentNode.removeChild(back); }
+    back.addEventListener('click', function (e) { if (e.target === back) close(); });
+    back.querySelector('[data-cancel]').addEventListener('click', close);
+    back.querySelector('[data-send]').addEventListener('click', function () {
+      var to = (back.querySelector('#propSendTo').value || '').trim();
+      var method = (back.querySelector('input[name="propMethod"]:checked') || {}).value || 'print';
+      if (method === 'email' && !/.+@.+\..+/.test(to)) { _propToast('Enter a valid recipient email.', 'error'); return; }
+      var btn = back.querySelector('[data-send]'); btn.disabled = true; btn.textContent = 'Sending…';
+      var payload = { to: to, method: method };
+      if (method === 'email') { payload.subject = 'Proposal: ' + (est.title || est.name || 'AGX'); payload.html = buildProposalEmailHtml(est); }
+      window.p86Api.estimates.send(estId, payload).then(function (r) {
+        est.approval_status = (r && r.approval_status) || est.approval_status || 'sent';
+        est.sent_to = to || est.sent_to; est.sent_method = method;
+        if (r && 'sent_at' in r) est.sent_at = r.sent_at;
+        if (r && 'sent_count' in r) est.sent_count = r.sent_count;
+        close(); renderHeaderChips(); _refreshEstList();
+        if (method === 'print') { setTimeout(function () { try { window.print(); } catch (e) {} }, 80); _propToast('Recorded — opening the print dialog…', 'success'); }
+        else if (r && r.emailed) _propToast('Proposal emailed to ' + to, 'success');
+        else _propToast('Recorded. Email not sent' + (r && r.emailError ? ' (' + r.emailError + ')' : '') + '.', 'error');
+      }).catch(function (e) { btn.disabled = false; btn.textContent = 'Send'; _propToast((e && e.message) || 'Could not send.', 'error'); });
+    });
+    setTimeout(function () { var i = back.querySelector('#propSendTo'); if (i) i.focus(); }, 0);
+  }
+  window.openProposalSend = openProposalSend;
+
+  // A compact branded proposal email body (Slice 1). The full line-item proposal
+  // PDF + hosted signing page come in later slices.
+  function buildProposalEmailHtml(est) {
+    var totals = (window.computeEstimateTotals ? window.computeEstimateTotals(est) : {}) || {};
+    var total = (totals.proposalTotal != null) ? totals.proposalTotal : 0;
+    var money = function (n) { return '$' + Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
+    var esc = escapeHTML, addr = est.propertyAddr || est.address || '';
+    return '<div style="font-family:Arial,Helvetica,sans-serif;max-width:640px;margin:0 auto;color:#1a1a1a;">' +
+      '<div style="background:#0f172a;color:#fff;padding:18px 22px;border-radius:10px 10px 0 0;"><div style="font-size:20px;font-weight:800;letter-spacing:1px;">AGX</div><div style="font-size:11px;opacity:.8;letter-spacing:2px;">AG EXTERIORS</div></div>' +
+      '<div style="border:1px solid #e5e7eb;border-top:0;border-radius:0 0 10px 10px;padding:22px;">' +
+        '<h2 style="margin:0 0 4px;font-size:18px;">' + esc(est.title || est.issue || 'Proposal') + '</h2>' +
+        (est.client ? '<div style="color:#555;">' + esc(est.client) + '</div>' : '') +
+        (addr ? '<div style="color:#555;font-size:13px;">' + esc(addr) + '</div>' : '') +
+        '<div style="margin:18px 0;padding:14px 16px;background:#f1f5f9;border-radius:8px;display:flex;justify-content:space-between;align-items:center;">' +
+          '<span style="font-weight:700;color:#334155;">Proposal total</span>' +
+          '<span style="font-weight:800;font-size:20px;color:#0f172a;">' + money(total) + '</span>' +
+        '</div>' +
+        (est.scopeOfWork ? '<div style="font-size:13px;line-height:1.6;white-space:pre-wrap;">' + esc(String(est.scopeOfWork).slice(0, 1200)) + '</div>' : '') +
+        '<p style="font-size:13px;color:#555;margin-top:18px;">Please reply to this email to approve, or reach out with any questions. Thank you for the opportunity.</p>' +
+      '</div></div>';
+  }
+
+  // Record a manual / e-sign approval. Captures approver name + method → flips
+  // the estimate to Approved; the linked lead then shows the "create job" flag.
+  function openProposalApprove(estId) {
+    var est = _findEst(estId); if (!est) return;
+    var back = document.createElement('div');
+    back.style.cssText = 'position:fixed;inset:0;z-index:2147483200;background:rgba(6,9,17,.6);display:flex;align-items:center;justify-content:center;padding:16px;';
+    back.innerHTML =
+      '<div class="modal-content" style="width:min(460px,96vw);">' +
+        '<div class="p86-dialog-title">Record proposal approval</div>' +
+        '<div class="p86-dialog-message">Marks this proposal approved &amp; signed. The linked lead flags it as ready to create a job.</div>' +
+        '<label style="display:block;font-size:12px;margin:10px 0 4px;">Approved by (client name)</label>' +
+        '<input class="p86-dialog-input" id="propApprBy" type="text" placeholder="e.g. Jane Smith, Property Manager" />' +
+        '<label style="display:block;font-size:12px;margin:12px 0 4px;">Method</label>' +
+        '<select class="p86-dialog-input" id="propApprMethod"><option value="signed_doc">Signed document</option><option value="in_person">In person</option><option value="phone">Phone</option><option value="email">Email</option></select>' +
+        '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:8px;">Tip: attach the signed PDF in the estimate’s Files after saving.</div>' +
+        '<div class="p86-dialog-actions" style="margin-top:16px;">' +
+          '<button class="p86-dialog-btn" data-cancel>Cancel</button>' +
+          '<button class="p86-dialog-btn p86-dialog-btn-primary" data-approve>Mark approved</button>' +
+        '</div>' +
+      '</div>';
+    document.body.appendChild(back);
+    function close() { if (back.parentNode) back.parentNode.removeChild(back); }
+    back.addEventListener('click', function (e) { if (e.target === back) close(); });
+    back.querySelector('[data-cancel]').addEventListener('click', close);
+    back.querySelector('[data-approve]').addEventListener('click', function () {
+      var by = (back.querySelector('#propApprBy').value || '').trim();
+      var method = back.querySelector('#propApprMethod').value || 'signed_doc';
+      var btn = back.querySelector('[data-approve]'); btn.disabled = true; btn.textContent = 'Saving…';
+      window.p86Api.estimates.approve(estId, { approved_by: by, method: method }).then(function (r) {
+        est.approval_status = 'approved'; est.approved_by = by || (r && r.approved_by) || null; est.approval_method = method;
+        if (r && 'approved_at' in r) est.approved_at = r.approved_at;
+        close(); renderHeaderChips(); _refreshEstList();
+        _propToast('Proposal approved — create the job when ready.', 'success');
+      }).catch(function (e) { btn.disabled = false; btn.textContent = 'Mark approved'; _propToast((e && e.message) || 'Could not save.', 'error'); });
+    });
+    setTimeout(function () { var i = back.querySelector('#propApprBy'); if (i) i.focus(); }, 0);
+  }
+  window.openProposalApprove = openProposalApprove;
+
+  function proposalDecline(estId) {
+    var est = _findEst(estId); if (!est) return;
+    var ask = (typeof window.p86Prompt === 'function')
+      ? window.p86Prompt({ title: 'Mark proposal declined', message: 'Optional reason', placeholder: 'e.g. went with another bid' })
+      : Promise.resolve(prompt('Reason (optional):', ''));
+    ask.then(function (reason) {
+      if (reason === null) return;
+      window.p86Api.estimates.decline(estId, reason || '').then(function (r) {
+        est.approval_status = 'declined'; est.decline_reason = reason || '';
+        if (r && 'declined_at' in r) est.declined_at = r.declined_at;
+        renderHeaderChips(); _refreshEstList(); _propToast('Marked declined.', 'success');
+      }).catch(function (e) { _propToast((e && e.message) || 'Could not update.', 'error'); });
+    });
+  }
+  window.proposalDecline = proposalDecline;
 
   // Closes the editor, switches to the Leads sub-tab, then opens the
   // lead detail page. The sub-tab switch matters now that the lead
@@ -684,6 +838,16 @@
     var est = getEstimate();
     if (!est) return;
     if (est.job_id) { alert('This estimate is already linked to a job. Use the Open job button.'); return; }
+
+    // Soft approval gate — if the proposal isn't marked approved/signed yet, confirm
+    // before creating the job (surface, don't hard-block; migration + edge cases stay open).
+    if (est.approval_status !== 'approved') {
+      var _apMsg = 'This proposal isn’t marked approved/signed yet. Create the job anyway?';
+      var _apOk = (typeof window.p86Confirm === 'function')
+        ? await window.p86Confirm({ title: 'Not approved yet', message: _apMsg, confirmText: 'Create job anyway' })
+        : confirm(_apMsg);
+      if (!_apOk) return;
+    }
 
     // Flush pending edits so the total + workbook we snapshot are current.
     try { if (typeof window.saveEstimateNow === 'function') await window.saveEstimateNow(); } catch (e) {}
