@@ -277,6 +277,7 @@
     host.innerHTML =
       '<div class="pa-wrap" style="max-width:1180px;margin:0 auto;padding:4px 2px 40px;">' +
         headerHTML(app) +
+        billingLedgerHTML() +
         (app ? appBodyHTML(app) : emptyHTML()) +
       '</div>';
     wire(host, app);
@@ -510,8 +511,10 @@
     if (app.status === 'paid') btns.push(pbtn('pa-unpaid', '&larr; Reopen (uncertify-pay)', ''));
     var left = '<div style="display:flex;gap:8px;flex-wrap:wrap;">' + btns.join('') + '</div>';
     var right = '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
-      (editable ? '<button id="pa-resync" class="ee-btn" style="font-size:12px;" title="Re-pull scheduled values from the Site Plan (keeps your % and stored)">&#8635; Resync from Site Plan</button>' : '') +
-      '<button id="pa-export" class="ee-btn" style="font-size:12px;" title="Export G702/G703 (coming soon)">&#x2913; Export</button>' +
+      (editable ? '<button id="pa-pullpct" class="ee-btn" style="font-size:12px;" title="Set each line\'s % complete from Site Plan unit/phase progress">&#8635; % from progress</button>' : '') +
+      (editable ? '<button id="pa-resync" class="ee-btn" style="font-size:12px;" title="Re-pull scheduled values from the Site Plan (keeps your % and stored)">&#8635; Resync values</button>' : '') +
+      '<button id="pa-export-pdf" class="ee-btn" style="font-size:12px;" title="Print / Save the G702 + G703 as a PDF">&#x2913; PDF</button>' +
+      '<button id="pa-export-xlsx" class="ee-btn" style="font-size:12px;" title="Download the schedule of values as Excel">&#x2913; Excel</button>' +
       ((app.status === 'draft' && jobCanEdit()) ? '<button id="pa-delete" class="ee-btn" style="font-size:12px;color:var(--red,#f87171);border-color:var(--red,#f87171);">Delete</button>' : '') +
     '</div>';
     return '<div style="display:flex;gap:12px;justify-content:space-between;flex-wrap:wrap;align-items:center;">' + left + right + '</div>';
@@ -549,10 +552,10 @@
       b.addEventListener('click', function () { removeLine(app, b.getAttribute('data-lid')); });
     });
 
+    bindClick(host, '#pa-pullpct', function () { pullProgress(app); });
     bindClick(host, '#pa-resync', function () { doResync(app); });
-    bindClick(host, '#pa-export', function () {
-      toast('G702/G703 export is coming in the next slice.');
-    });
+    bindClick(host, '#pa-export-pdf', function () { exportPDF(app); });
+    bindClick(host, '#pa-export-xlsx', function () { exportXLSX(app); });
     bindClick(host, '#pa-delete', function () { delApp(app); });
     bindClick(host, '#pa-submit', function () { setStatus(app, 'submitted'); });
     bindClick(host, '#pa-unsubmit', function () { setStatus(app, 'draft'); });
@@ -718,6 +721,67 @@
     toast('Scheduled values resynced from the Site Plan.');
   }
 
+  // S5 — pull each graph-linked line's % complete from the Site Plan's live
+  // progress (unit/level check-off drives building %, phase-weighted % for
+  // phases). Manual (hand-added) lines are left alone.
+  function pullProgress(app) {
+    if (!appEditable(app)) return;
+    var NG = window.NG;
+    if (!NG || typeof NG.nodes !== 'function' || NG.job() !== _st.jobId) {
+      toast('Open the Site Plan for this job to pull progress.', true); return;
+    }
+    var nodes = NG.nodes() || [], changed = 0;
+    (app.lines || []).forEach(function (l) {
+      if (!l.nodeId) return; // manual line — skip
+      var node = nodes.find(function (n) { return n.id === l.nodeId; });
+      if (!node) return;
+      var pct = null;
+      try {
+        if (node.type === 't1') pct = NG.getT1WeightedPct(node);
+        else if (node.type === 't2') pct = NG.getT2WeightedPct(node);
+        else pct = node.pctComplete;
+      } catch (e) {}
+      if (pct != null && isFinite(pct)) { l.pctComplete = clamp(round2(pct), 0, 100); changed++; }
+    });
+    if (!changed) { toast('No Site-Plan-linked lines to update.'); return; }
+    _st.dirty = true; paint(); scheduleSave();
+    toast('Pulled % complete from Site Plan progress (' + changed + ' line' + (changed > 1 ? 's' : '') + ').');
+  }
+
+  // S4 — billing-to-date ledger, derived from CERTIFIED + PAID applications
+  // (the officially-billed draws). Cumulative figures come from the highest-
+  // numbered certified/paid app (each app carries the running schedule).
+  function billingLedger() {
+    var certs = _st.apps.filter(function (a) { return a.status === 'certified' || a.status === 'paid'; });
+    if (!certs.length) return null;
+    certs.sort(function (a, b) { return (b.app_no || 0) - (a.app_no || 0); });
+    var s = computeSummary(certs[0]);
+    var paid = _st.apps.filter(function (a) { return a.status === 'paid'; });
+    paid.sort(function (a, b) { return (b.app_no || 0) - (a.app_no || 0); });
+    var paidToDate = paid.length ? computeSummary(paid[0]).earnedLessRet : 0;
+    return { contract: s.contract, completedStored: s.completedStored, retainage: s.retainage,
+             billedNet: s.earnedLessRet, remaining: round2(s.contract - s.completedStored),
+             paidToDate: paidToDate, outstanding: round2(s.earnedLessRet - paidToDate), latestNo: certs[0].app_no };
+  }
+  function billingLedgerHTML() {
+    var b = billingLedger();
+    if (!b) return '';
+    function cell(label, val, color) {
+      return '<div style="flex:1 1 130px;min-width:120px;"><div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-dim,#8b93a7);margin-bottom:2px;">' + esc(label) + '</div>' +
+        '<div style="font-family:\'SF Mono\',monospace;font-size:13px;font-weight:700;color:' + (color || 'var(--text,#fff)') + ';">' + esc(fmtC(val)) + '</div></div>';
+    }
+    return '<div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;padding:10px 14px;margin-bottom:12px;background:linear-gradient(90deg,rgba(52,211,153,.06),transparent);border:1px solid var(--border,#2a2f3a);border-left:3px solid var(--green,#34d399);border-radius:10px;">' +
+      '<div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--green,#34d399);flex:0 0 auto;">Billed to Date<br><span style="font-weight:400;color:var(--text-dim,#8b93a7);">thru App ' + esc(b.latestNo) + '</span></div>' +
+      cell('Contract Sum', b.contract) +
+      cell('Completed & Stored', b.completedStored) +
+      cell('Retainage Held', b.retainage, 'var(--yellow,#fbbf24)') +
+      cell('Billed (net of ret.)', b.billedNet, 'var(--green,#34d399)') +
+      cell('Paid to Date', b.paidToDate) +
+      cell('Outstanding', b.outstanding, b.outstanding > 0.005 ? 'var(--accent,#4f8cff)' : 'var(--text-dim,#8b93a7)') +
+      cell('Remaining to Bill', b.remaining, 'var(--text-dim,#c3c9d6)') +
+    '</div>';
+  }
+
   // Manual schedule-of-values editing — build the SOV by hand when the node
   // graph doesn't carry per-scope revenue (or to split a Base Contract line).
   function addLine(app) {
@@ -768,6 +832,171 @@
         toast('Application deleted.');
       }).catch(function (e) { toast('Delete failed: ' + ((e && e.message) || 'error'), true); });
     });
+  }
+
+  // ── G702/G703 export (PDF via print window · Excel via SheetJS) ──
+  // Header fields for the document (contractor / project / owner).
+  function docContext() {
+    var job = (window.appData && appData.jobs) ? appData.jobs.find(function (j) { return j.id === _st.jobId; }) : null;
+    job = job || {};
+    var contractor = '';
+    try {
+      contractor = (window.appData && (appData.organizationName || (appData.organization && appData.organization.name))) ||
+                   (window.p86Branding && window.p86Branding.name) || '';
+    } catch (e) {}
+    if (!contractor) contractor = 'AG Exteriors';
+    var addr = job.address || [job.street, job.city, job.state, job.zip].filter(Boolean).join(', ');
+    return {
+      contractor: contractor,
+      project: (job.jobNumber ? job.jobNumber + ' — ' : '') + (job.title || job.name || 'Project'),
+      jobNumber: job.jobNumber || '',
+      address: addr || '',
+      owner: job.clientName || job.client || job.ownerName || '',
+      logo: location.origin + '/images/logo-color.png'
+    };
+  }
+  // Per-line G703 columns (D+E = G; F is a memo breakdown of stored inside G).
+  function g703Row(l, app) {
+    var C = num(l.scheduledValue), D = num(l.previous), G = lineG(l);
+    return { C: C, D: D, E: round2(G - D), F: num(l.stored), G: G,
+             pctG: C ? (G / C * 100) : 0, bal: round2(C - G), I: round2(G * lineRetPct(l, app) / 100) };
+  }
+
+  function exportPDF(app) {
+    var s = computeSummary(app), ctx = docContext();
+    var lines = Array.isArray(app.lines) ? app.lines : [];
+    var idx = 0, rows = '', tot = { C: 0, D: 0, E: 0, F: 0, G: 0, I: 0, bal: 0 };
+    lines.forEach(function (l) {
+      idx++;
+      var r = g703Row(l, app);
+      tot.C += r.C; tot.D += r.D; tot.E += r.E; tot.F += r.F; tot.G += r.G; tot.I += r.I; tot.bal += r.bal;
+      rows += '<tr>' +
+        '<td class="c">' + idx + '</td>' +
+        '<td>' + esc(l.description || '') + (l.type === 'co' ? ' <em>(CO)</em>' : '') + '</td>' +
+        '<td class="n">' + fmtC(r.C) + '</td><td class="n">' + fmtC(r.D) + '</td><td class="n">' + fmtC(r.E) + '</td>' +
+        '<td class="n">' + fmtC(r.F) + '</td><td class="n b">' + fmtC(r.G) + '</td><td class="c">' + fmtPct(r.pctG) + '</td>' +
+        '<td class="n">' + fmtC(r.bal) + '</td><td class="n">' + fmtC(r.I) + '</td>' +
+      '</tr>';
+    });
+    var pctTot = tot.C ? (tot.G / tot.C * 100) : 0;
+    var totalRow = '<tr class="tot"><td></td><td>GRAND TOTAL</td>' +
+      '<td class="n">' + fmtC(tot.C) + '</td><td class="n">' + fmtC(tot.D) + '</td><td class="n">' + fmtC(tot.E) + '</td>' +
+      '<td class="n">' + fmtC(tot.F) + '</td><td class="n b">' + fmtC(tot.G) + '</td><td class="c">' + fmtPct(pctTot) + '</td>' +
+      '<td class="n">' + fmtC(tot.bal) + '</td><td class="n">' + fmtC(tot.I) + '</td></tr>';
+    var bal9 = round2(s.contract - s.earnedLessRet);
+    function g702line(no, label, val, strong) {
+      return '<tr' + (strong ? ' class="hi"' : '') + '><td class="ln">' + no + '</td><td>' + label + '</td><td class="n">' + fmtC(val) + '</td></tr>';
+    }
+    var doc =
+      '<!doctype html><html><head><meta charset="utf-8"><title>Application for Payment No. ' + esc(app.app_no) + ' — ' + esc(ctx.project) + '</title><style>' +
+      '*{box-sizing:border-box;} body{font-family:Arial,Helvetica,sans-serif;color:#111;margin:0;padding:26px;font-size:12px;}' +
+      '.page{max-width:1000px;margin:0 auto 26px;} .page+.page{page-break-before:always;}' +
+      '.hd{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #1B3A5C;padding-bottom:10px;margin-bottom:12px;}' +
+      '.hd img{height:44px;} .hd .t{text-align:right;} .doctitle{font-size:19px;font-weight:bold;color:#1B3A5C;} .docsub{font-size:11px;color:#666;letter-spacing:.5px;}' +
+      '.meta{display:flex;flex-wrap:wrap;gap:6px 28px;font-size:11.5px;margin-bottom:14px;} .meta div span{color:#888;text-transform:uppercase;font-size:9.5px;letter-spacing:.5px;display:block;}' +
+      'table{width:100%;border-collapse:collapse;} .g702 td{padding:5px 8px;border-bottom:1px solid #e5e7eb;} .g702 .ln{color:#888;width:26px;text-align:center;} .g702 tr.hi td{background:#eef4fb;font-weight:bold;color:#1B3A5C;}' +
+      '.g703{font-size:10.5px;} .g703 th{background:#1B3A5C;color:#fff;padding:6px 5px;font-size:9px;text-transform:uppercase;letter-spacing:.3px;border:1px solid #16304d;} .g703 td{padding:4px 5px;border:1px solid #d5dbe3;} .g703 .n{text-align:right;font-variant-numeric:tabular-nums;} .g703 .c{text-align:center;} .g703 .b{font-weight:bold;} .g703 tr.tot td{background:#eef4fb;font-weight:bold;}' +
+      '.sec{font-size:13px;font-weight:bold;color:#1B3A5C;margin:0 0 8px;} .cert{font-size:10.5px;color:#333;margin:16px 0;line-height:1.5;}' +
+      '.sig{display:flex;gap:36px;margin-top:26px;} .sig .b{flex:1;} .sig .l{border-bottom:1px solid #333;height:30px;} .sig .cap{font-size:9.5px;color:#666;margin-top:3px;}' +
+      '.bar{position:fixed;top:10px;right:10px;} .bar button{font:inherit;padding:8px 16px;border-radius:8px;border:0;background:#1B8541;color:#fff;cursor:pointer;font-weight:bold;}' +
+      '@media print{.bar{display:none;} body{padding:0;}}' +
+      '</style></head><body>' +
+      '<div class="bar"><button onclick="window.print()">Print / Save PDF</button></div>' +
+      // ---- G702 ----
+      '<div class="page">' +
+        '<div class="hd"><img src="' + esc(ctx.logo) + '" onerror="this.style.display=\'none\'"/>' +
+          '<div class="t"><div class="doctitle">Application for Payment</div><div class="docsub">AIA G702 — Application &amp; Certificate</div></div></div>' +
+        '<div class="meta">' +
+          '<div><span>From (Contractor)</span>' + esc(ctx.contractor) + '</div>' +
+          '<div><span>To (Owner)</span>' + esc(ctx.owner || '—') + '</div>' +
+          '<div><span>Project</span>' + esc(ctx.project) + (ctx.address ? '<br>' + esc(ctx.address) : '') + '</div>' +
+          '<div><span>Application No.</span>' + esc(app.app_no) + '</div>' +
+          '<div><span>Period To</span>' + esc(fmtDate(app.period_to)) + '</div>' +
+          '<div><span>Retainage</span>' + esc(app.retainage_pct) + '%</div>' +
+        '</div>' +
+        '<table class="g702">' +
+          g702line(1, 'Original Contract Sum', s.original) +
+          g702line(2, 'Net change by Change Orders', s.co) +
+          g702line(3, 'Contract Sum to Date (1 &plusmn; 2)', s.contract, true) +
+          g702line(4, 'Total Completed &amp; Stored to Date', s.completedStored) +
+          g702line(5, 'Retainage', s.retainage) +
+          g702line(6, 'Total Earned Less Retainage (4 &minus; 5)', s.earnedLessRet, true) +
+          g702line(7, 'Less Previous Certificates for Payment', s.lessPrevious) +
+          g702line(8, 'CURRENT PAYMENT DUE', s.dueThis, true) +
+          g702line(9, 'Balance to Finish, incl. Retainage (3 &minus; 6)', bal9) +
+        '</table>' +
+        '<div class="cert">The undersigned Contractor certifies that to the best of the Contractor&rsquo;s knowledge, information and belief the Work covered by this Application for Payment has been completed in accordance with the Contract Documents, that all amounts have been paid by the Contractor for Work for which previous Certificates for Payment were issued and payments received from the Owner, and that current payment shown herein is now due.</div>' +
+        '<div class="sig"><div class="b"><div class="l"></div><div class="cap">Contractor &mdash; ' + esc(ctx.contractor) + '</div></div>' +
+          '<div class="b"><div class="l"></div><div class="cap">Date</div></div></div>' +
+        '<div class="sig"><div class="b"><div class="l"></div><div class="cap">Owner / Architect &mdash; Amount Certified ' + fmtC(s.dueThis) + '</div></div>' +
+          '<div class="b"><div class="l"></div><div class="cap">Date</div></div></div>' +
+      '</div>' +
+      // ---- G703 ----
+      '<div class="page">' +
+        '<div class="hd"><img src="' + esc(ctx.logo) + '" onerror="this.style.display=\'none\'"/>' +
+          '<div class="t"><div class="doctitle">Continuation Sheet</div><div class="docsub">AIA G703 — Schedule of Values &middot; App No. ' + esc(app.app_no) + '</div></div></div>' +
+        '<table class="g703"><thead><tr>' +
+          '<th>#</th><th style="text-align:left;">Description of Work</th><th>Scheduled Value</th><th>From Previous</th><th>This Period</th>' +
+          '<th>Materials Stored</th><th>Total Compl. &amp; Stored</th><th>%</th><th>Balance to Finish</th><th>Retainage</th>' +
+        '</tr></thead><tbody>' + rows + totalRow + '</tbody></table>' +
+        '<div style="font-size:9px;color:#888;margin-top:8px;">Columns: D (From Previous) + E (This Period) = G (Total Completed &amp; Stored). F (Materials Stored) is the portion of G presently stored but not yet installed.</div>' +
+      '</div>' +
+      '</body></html>';
+    var w = window.open('', '_blank');
+    if (!w) { toast('Allow pop-ups to open the printable PDF.', true); return; }
+    w.document.open(); w.document.write(doc); w.document.close();
+  }
+
+  function loadSheetJS() {
+    return new Promise(function (resolve, reject) {
+      if (window.XLSX) return resolve(window.XLSX);
+      var sc = document.createElement('script');
+      sc.src = 'https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js';
+      sc.onload = function () { resolve(window.XLSX); };
+      sc.onerror = function () { reject(new Error('Could not load the spreadsheet library.')); };
+      document.head.appendChild(sc);
+    });
+  }
+  function exportXLSX(app) {
+    loadSheetJS().then(function (XLSX) {
+      var s = computeSummary(app), ctx = docContext();
+      var aoa = [
+        ['Application for Payment (AIA G702 / G703)'],
+        ['Contractor', ctx.contractor], ['Owner', ctx.owner || ''], ['Project', ctx.project], ['Address', ctx.address || ''],
+        ['Application No.', app.app_no], ['Period To', fmtDate(app.period_to)], ['Retainage %', num(app.retainage_pct)], ['Status', app.status],
+        [],
+        ['G702 — Certificate Summary'],
+        ['1  Original Contract Sum', num(s.original)],
+        ['2  Net change by Change Orders', num(s.co)],
+        ['3  Contract Sum to Date', num(s.contract)],
+        ['4  Total Completed & Stored to Date', num(s.completedStored)],
+        ['5  Retainage', num(s.retainage)],
+        ['6  Total Earned Less Retainage', num(s.earnedLessRet)],
+        ['7  Less Previous Certificates', num(s.lessPrevious)],
+        ['8  CURRENT PAYMENT DUE', num(s.dueThis)],
+        ['9  Balance to Finish incl. Retainage', round2(s.contract - s.earnedLessRet)],
+        [],
+        ['G703 — Schedule of Values'],
+        ['#', 'Description of Work', 'Scheduled Value', 'From Previous', 'This Period', 'Materials Stored', 'Total Completed & Stored', '% (G/C)', 'Balance to Finish', 'Retainage']
+      ];
+      var lines = Array.isArray(app.lines) ? app.lines : [];
+      var tot = { C: 0, D: 0, E: 0, F: 0, G: 0, bal: 0, I: 0 };
+      lines.forEach(function (l, i) {
+        var r = g703Row(l, app);
+        tot.C += r.C; tot.D += r.D; tot.E += r.E; tot.F += r.F; tot.G += r.G; tot.bal += r.bal; tot.I += r.I;
+        aoa.push([i + 1, (l.description || '') + (l.type === 'co' ? ' (CO)' : ''),
+          num(r.C), num(r.D), num(r.E), num(r.F), num(r.G), Math.round(r.pctG * 10) / 10, num(r.bal), num(r.I)]);
+      });
+      aoa.push(['', 'GRAND TOTAL', num(tot.C), num(tot.D), num(tot.E), num(tot.F), num(tot.G),
+        tot.C ? Math.round(tot.G / tot.C * 1000) / 10 : 0, num(tot.bal), num(tot.I)]);
+      var ws = XLSX.utils.aoa_to_sheet(aoa);
+      ws['!cols'] = [{ wch: 5 }, { wch: 40 }, { wch: 16 }, { wch: 14 }, { wch: 13 }, { wch: 15 }, { wch: 18 }, { wch: 9 }, { wch: 16 }, { wch: 13 }];
+      var wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Pay App ' + app.app_no);
+      var safe = String(ctx.jobNumber || ctx.project || 'job').replace(/[^\w]+/g, '_').slice(0, 24);
+      XLSX.writeFile(wb, 'PayApp_' + app.app_no + '_' + safe + '.xlsx');
+      toast('Excel downloaded.');
+    }).catch(function (e) { toast((e && e.message) || 'Excel export failed.', true); });
   }
 
   // ── small UX utils (PWA-safe confirm + toast) ─────────────
