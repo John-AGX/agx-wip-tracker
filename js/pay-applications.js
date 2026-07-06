@@ -181,10 +181,12 @@
         if (rev <= 0.005) rev = num(t1.revenue);
         if (rev > 0.005) {
           var bp = 0; try { bp = NG.getT1WeightedPct(t1); } catch (e) { bp = num(t1.pctComplete); }
+          var uD = 0, uT = 0;
+          if (t1.units && t1.units.length) { uT = t1.units.length; t1.units.forEach(function (u) { if (u.done) uD++; }); }
           lines.push({ id: 'ln_bld_' + t1.id, nodeId: t1.id, buildingId: t1.id,
             buildingName: baseName(t1, 'Building'), description: baseName(t1, 'Building'),
             type: 'phase', scheduledValue: round2(rev), pctComplete: round2(num(bp)),
-            stored: 0, retainagePct: null, previous: 0 });
+            stored: 0, retainagePct: null, previous: 0, unitsDone: uD || undefined, unitsTotal: uT || undefined });
         }
       });
     }
@@ -249,8 +251,13 @@
       '.pa-input{background:var(--input-bg,#0f131a);border:1px solid var(--border,#2a2f3a);border-radius:6px;' +
       'color:var(--text,#fff);font-size:12.5px;padding:5px 8px;font-family:inherit;}' +
       '.pa-input:focus{outline:none;border-color:var(--accent,#4f8cff);}' +
-      '.pa-cell:focus{outline:none;border-color:var(--accent,#4f8cff);}' +
-      '#job-payapps .ee-btn[disabled],#job-payapps .pa-input[disabled],#job-payapps .pa-cell[disabled]{opacity:.55;cursor:not-allowed;}';
+      // Inline table inputs read as plain text until hovered/focused, then reveal
+      // a subtle field — the clean look from the Billing mockup while staying editable.
+      '#job-payapps .pa-cell:hover:not([disabled]),#job-payapps .pa-cell:focus{outline:none;border-color:var(--border,#d1d5db)!important;background:var(--input-bg,#fff)!important;}' +
+      '#job-payapps .pa-cell:focus{border-color:var(--accent,#2563eb)!important;}' +
+      '#job-payapps .ee-btn[disabled],#job-payapps .pa-input[disabled],#job-payapps .pa-cell[disabled]{opacity:.6;cursor:not-allowed;}' +
+      '@media(max-width:720px){#job-payapps .pa-sumgrid{grid-template-columns:repeat(2,minmax(0,1fr))!important;}}' +
+      '@media(max-width:480px){#job-payapps .pa-sumgrid{grid-template-columns:1fr!important;}}';
     document.head.appendChild(st);
   }
 
@@ -329,29 +336,34 @@
     return summaryStripHTML(app, s) + metaRowHTML(app, editable) + sovTableHTML(app, s, editable) + actionBarHTML(app, editable);
   }
 
-  // G702 certificate summary — metric tiles. Each value span carries a
-  // data-live key so updateLive() can rewrite it without a full repaint.
+  // G702 certificate summary — a refined 5-tile scorecard (Contract sum · Completed
+  // & stored · Retainage · Current payment due [highlighted] · Balance). Values +
+  // dynamic subtexts carry data-live keys so updateLive() rewrites them in place.
   function summaryStripHTML(app, s) {
-    function tile(label, key, val, opts) {
-      opts = opts || {};
-      var color = opts.color || 'var(--text,#fff)';
-      var big = opts.big;
-      return '<div style="flex:1 1 150px;min-width:140px;background:var(--card-bg,#141821);border:1px solid var(--border,#2a2f3a);' +
-        (big ? 'border-color:var(--accent,#4f8cff);box-shadow:0 0 0 1px var(--accent,#4f8cff) inset;' : '') +
-        'border-radius:10px;padding:10px 12px;">' +
-        '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-dim,#8b93a7);margin-bottom:4px;">' + esc(label) + '</div>' +
-        '<div data-live="sum:' + key + '" style="font-family:\'SF Mono\',ui-monospace,monospace;font-size:' + (big ? '17px' : '14px') + ';font-weight:700;color:' + color + ';">' + esc(fmtC(val)) + '</div>' +
+    var pctOfContract = s.contract ? (s.completedStored / s.contract * 100) : 0;
+    var bal9 = round2(s.contract - s.earnedLessRet);
+    var retPct = Math.round(num(app.retainage_pct) * 10) / 10;
+    function tile(o) {
+      var hi = o.highlight;
+      var border = hi ? 'var(--accent,#2563eb)' : 'var(--border,#e5e7eb)';
+      var bg = hi ? 'var(--msg-selected,rgba(37,99,235,.09))' : 'var(--card-bg,#fff)';
+      var labelColor = hi ? 'var(--accent,#2563eb)' : 'var(--text-dim,#6b7280)';
+      var valColor = hi ? 'var(--accent,#2563eb)' : 'var(--text,#0a0e15)';
+      return '<div style="background:' + bg + ';border:1px solid ' + border + ';border-radius:14px;padding:15px 17px;display:flex;flex-direction:column;gap:5px;min-width:0;">' +
+        '<div style="font-size:13px;font-weight:500;color:' + labelColor + ';">' + o.label + '</div>' +
+        '<div' + (o.key ? ' data-live="sum:' + o.key + '"' : '') + ' style="font-size:26px;line-height:1.08;font-weight:700;letter-spacing:-.015em;font-variant-numeric:tabular-nums;color:' + valColor + ';">' + esc(o.val) + '</div>' +
+        (o.sub ? '<div style="font-size:12.5px;color:' + (o.subColor || 'var(--text-dim,#8a90a0)') + ';">' + o.sub + '</div>' : '') +
       '</div>';
     }
-    return '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">' +
-      tile('Original Contract', 'original', s.original) +
-      tile('Net Change (COs)', 'co', s.co, { color: s.co ? 'var(--accent,#4f8cff)' : 'var(--text,#fff)' }) +
-      tile('Contract Sum to Date', 'contract', s.contract) +
-      tile('Completed & Stored', 'completedStored', s.completedStored) +
-      tile('Retainage', 'retainage', s.retainage, { color: 'var(--yellow,#fbbf24)' }) +
-      tile('Less Previous', 'lessPrevious', s.lessPrevious) +
-      tile('Current Payment Due', 'dueThis', s.dueThis, { big: true, color: 'var(--green,#34d399)' }) +
-      tile('Balance to Finish', 'balance', s.balance, { color: 'var(--text-dim,#c3c9d6)' }) +
+    return '<div class="pa-sumgrid" style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-bottom:18px;">' +
+      tile({ label: 'Contract sum to date', key: 'contract', val: fmtC(s.contract),
+             sub: (s.co > 0 ? 'incl. <span data-live="sub:co">' + fmtC(s.co) + '</span> in change orders' : 'base contract') }) +
+      tile({ label: 'Completed &amp; stored', key: 'completedStored', val: fmtC(s.completedStored),
+             sub: '<span data-live="sub:pct">' + fmtPct(pctOfContract) + '</span> of contract', subColor: 'var(--green,#059669)' }) +
+      tile({ label: 'Less retainage (' + retPct + '%)', key: 'retainage', val: '&minus;' + fmtC(s.retainage),
+             sub: 'held to closeout', subColor: 'var(--text-dim,#8a90a0)' }) +
+      tile({ label: 'Current payment due', key: 'dueThis', val: fmtC(s.dueThis), sub: 'this period&rsquo;s draw', highlight: true }) +
+      tile({ label: 'Balance to finish', key: 'balance9', val: fmtC(bal9), sub: 'incl. retainage' }) +
     '</div>';
   }
 
@@ -417,12 +429,13 @@
         var C = num(l.scheduledValue), G = lineG(l), tp = lineThisPeriod(l), rp = lineRetPct(l, app),
             ret = round2(G * rp / 100), bal = round2(C - G), pctG = C ? (G / C * 100) : 0;
         gt.C += C; gt.prev += num(l.previous); gt.G += G; gt.ret += ret; gt.tp += tp; gt.stored += num(l.stored);
-        var coBadge = (l.type === 'co') ? ' <span style="font-size:9px;color:var(--accent,#4f8cff);border:1px solid var(--accent,#4f8cff);border-radius:4px;padding:0 3px;">CO</span>' : '';
+        var coBadge = (l.type === 'co') ? ' <span style="font-size:9px;color:var(--accent,#2563eb);border:1px solid var(--accent,#2563eb);border-radius:4px;padding:0 3px;">CO</span>' : '';
+        var unitsChip = l.unitsTotal ? ' <span style="display:inline-flex;align-items:center;gap:3px;font-size:10.5px;color:var(--accent,#2563eb);background:var(--msg-selected,rgba(37,99,235,.09));border-radius:999px;padding:1px 8px;margin-left:2px;white-space:nowrap;">&#9635; ' + num(l.unitsDone) + '/' + num(l.unitsTotal) + ' units earned</span>' : '';
         var descCell = editable
-          ? '<td style="padding:4px 8px;vertical-align:middle;"><input type="text" class="pa-desc pa-cell" data-lid="' + esc(l.id) + '" value="' + esc(l.description) + '" placeholder="Description" style="width:190px;background:var(--input-bg,#0f131a);border:1px solid var(--border,#2a2f3a);border-radius:5px;color:var(--text,#fff);font-size:12px;padding:4px 6px;">' + coBadge + '</td>'
-          : tdL('<span style="color:var(--text,#fff);font-size:12.5px;">' + esc(l.description) + coBadge + '</span>');
+          ? '<td style="padding:5px 8px;vertical-align:middle;"><input type="text" class="pa-desc pa-cell" data-lid="' + esc(l.id) + '" value="' + esc(l.description) + '" placeholder="Description" style="width:180px;background:transparent;border:1px solid transparent;border-radius:5px;color:var(--text,#0a0e15);font-size:13px;padding:4px 6px;">' + coBadge + unitsChip + '</td>'
+          : tdL('<span style="color:var(--text,#0a0e15);font-size:13px;">' + esc(l.description) + coBadge + unitsChip + '</span>');
         var schedCell = editable
-          ? '<td class="num" style="padding:4px 8px;text-align:right;vertical-align:middle;"><input type="number" class="pa-sched pa-cell" data-lid="' + esc(l.id) + '" value="' + esc(C) + '" step="0.01" min="0" style="width:104px;text-align:right;background:var(--input-bg,#0f131a);border:1px solid var(--border,#2a2f3a);border-radius:5px;color:var(--text,#fff);font-family:\'SF Mono\',monospace;font-size:12px;padding:3px 5px;"></td>'
+          ? '<td class="num" style="padding:4px 8px;text-align:right;vertical-align:middle;"><input type="number" class="pa-sched pa-cell" data-lid="' + esc(l.id) + '" value="' + esc(C) + '" step="0.01" min="0" style="width:104px;text-align:right;background:transparent;border:1px solid transparent;border-radius:5px;color:var(--text,#0a0e15);font-variant-numeric:tabular-nums;font-size:12.5px;padding:3px 5px;"></td>'
           : tdN(fmtC(C));
         var delCell = editable
           ? '<td style="text-align:center;vertical-align:middle;padding:4px 6px;"><button class="pa-del" data-lid="' + esc(l.id) + '" title="Remove line" style="background:none;border:none;color:var(--text-dim,#8b93a7);cursor:pointer;font-size:16px;line-height:1;">&times;</button></td>'
@@ -431,7 +444,7 @@
           tdL('<span style="color:var(--text-dim,#8b93a7);font-size:11px;">' + idx + '</span>') +
           descCell + schedCell +
           tdN(live('ln-prev:' + l.id, fmtC(l.previous), 'var(--text-dim,#8b93a7)')) +
-          tdInput('pa-pct', l.id, l.pctComplete, dis, '%') +
+          pctCell(l, dis) +
           tdN(live('ln-tp:' + l.id, fmtC(tp), tpColor(tp), true)) +
           tdInput('pa-stored', l.id, l.stored, dis, '$') +
           tdN(live('ln-g:' + l.id, fmtC(G), 'var(--text,#fff)', true)) +
@@ -442,9 +455,10 @@
           delCell +
         '</tr>';
       }).join('');
-      var groupHdr = '<tr style="background:var(--overlay,rgba(255,255,255,.05));"><td colspan="13" style="padding:6px 10px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--accent-2,#7dd3fc);">' + esc(g.name) + '</td></tr>';
+      var bldgIcon = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-3px;margin-right:8px;opacity:.7;"><rect x="4" y="3" width="16" height="18" rx="1"/><path d="M9 8h.01M15 8h.01M9 12h.01M15 12h.01M9 16h6"/></svg>';
+      var groupHdr = '<tr style="background:var(--overlay-light,rgba(0,0,0,.03));"><td colspan="13" style="padding:9px 12px;font-size:13px;font-weight:600;color:var(--text,#0a0e15);">' + bldgIcon + esc(g.name) + '</td></tr>';
       var pctGt = gt.C ? (gt.G / gt.C * 100) : 0, k = g.key;
-      var subtotal = '<tr style="background:var(--overlay-light,rgba(255,255,255,.02));border-top:1px solid var(--border,#2a2f3a);border-bottom:1px solid var(--border,#2a2f3a);">' +
+      var subtotal = '<tr style="background:var(--overlay-light,rgba(0,0,0,.02));border-top:1px solid var(--border,#2a2f3a);border-bottom:1px solid var(--border,#2a2f3a);">' +
         tdL('') + tdL('<span style="font-size:11px;color:var(--text-dim,#8b93a7);font-weight:600;">Subtotal &mdash; ' + esc(g.name) + '</span>') +
         tdN(live('gt-C:' + k, fmtC(gt.C), 'var(--text,#fff)', true)) + tdN(live('gt-prev:' + k, fmtC(gt.prev), 'var(--text-dim,#8b93a7)')) +
         tdN('') + tdN(live('gt-tp:' + k, fmtC(gt.tp), 'var(--text,#fff)')) + tdN(live('gt-stored:' + k, fmtC(gt.stored), 'var(--text-dim,#8b93a7)')) +
@@ -455,7 +469,7 @@
       bodyRows += groupHdr + rows + (multi ? subtotal : '');
     });
     var pctGrand = s.contract ? (s.completedStored / s.contract * 100) : 0;
-    var grand = '<tr style="background:var(--overlay,rgba(255,255,255,.06));border-top:2px solid var(--border,#3a4150);">' +
+    var grand = '<tr style="background:var(--overlay-light,rgba(0,0,0,.045));border-top:2px solid var(--border,#3a4150);">' +
       tdL('') + tdL('<span style="font-size:12px;color:var(--text,#fff);font-weight:800;letter-spacing:.3px;">GRAND TOTAL</span>') +
       tdN(live('grand-contract', fmtC(s.contract), 'var(--text,#fff)', true)) +
       tdN(live('grand-prev', fmtC(sumField(app, 'previous')), 'var(--text-dim,#8b93a7)')) +
@@ -480,7 +494,23 @@
     return '<th style="text-align:' + align + ';padding:8px 10px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;color:var(--text-dim,#8b93a7);white-space:nowrap;">' + esc(label) + '</th>';
   }
   function tdL(inner) { return '<td style="padding:7px 10px;font-size:12.5px;vertical-align:middle;">' + inner + '</td>'; }
-  function tdN(inner) { return '<td class="num" style="padding:7px 10px;text-align:right;white-space:nowrap;font-family:\'SF Mono\',ui-monospace,monospace;font-size:12.5px;vertical-align:middle;">' + inner + '</td>'; }
+  function tdN(inner) { return '<td class="num" style="padding:7px 10px;text-align:right;white-space:nowrap;font-variant-numeric:tabular-nums;font-size:12.5px;vertical-align:middle;">' + inner + '</td>'; }
+  // % complete cell — a progress bar (blue → green at 100%) + an inline editable
+  // number. The bar reflects the line's % complete (the billing driver); its
+  // width/color update live via updateLive(). Matches the Billing mockup.
+  function pctCell(l, dis) {
+    var pct = clamp(num(l.pctComplete), 0, 100);
+    var color = pct >= 99.5 ? 'var(--green,#059669)' : 'var(--accent,#2563eb)';
+    return '<td class="num" style="padding:5px 10px;white-space:nowrap;vertical-align:middle;">' +
+      '<div style="display:flex;align-items:center;gap:8px;justify-content:flex-end;">' +
+        '<div style="width:56px;height:6px;border-radius:999px;background:var(--overlay-light,rgba(0,0,0,.08));overflow:hidden;flex:0 0 auto;">' +
+          '<div class="pa-barfill" data-lid="' + esc(l.id) + '" style="height:100%;border-radius:999px;width:' + pct + '%;background:' + color + ';transition:width .18s ease;"></div>' +
+        '</div>' +
+        '<input type="number" class="pa-pct pa-cell" data-lid="' + esc(l.id) + '"' + dis + ' value="' + esc(l.pctComplete) + '" step="1" min="0" max="100" ' +
+          'style="width:42px;text-align:right;background:transparent;border:1px solid transparent;border-radius:5px;color:var(--text,#0a0e15);font-size:12.5px;font-weight:600;font-variant-numeric:tabular-nums;padding:2px 3px;">' +
+        '<span style="font-size:11px;color:var(--text-dim,#8a90a0);">%</span>' +
+      '</div></td>';
+  }
   // A live-updatable value span. updateLive() rewrites its text + color in place.
   function live(key, text, color, bold) {
     return '<span data-live="' + esc(key) + '" style="color:' + color + ';' + (bold ? 'font-weight:700;' : '') + '">' + esc(text) + '</span>';
@@ -623,11 +653,11 @@
       el.textContent = text;
       if (color) el.style.color = color;
     }
-    // G702 summary tiles
-    set('sum:original', fmtC(s.original)); set('sum:co', fmtC(s.co), s.co ? 'var(--accent,#4f8cff)' : 'var(--text,#fff)');
+    // G702 summary scorecard (refined 5-tile set) + dynamic subtexts
     set('sum:contract', fmtC(s.contract)); set('sum:completedStored', fmtC(s.completedStored));
-    set('sum:retainage', fmtC(s.retainage)); set('sum:lessPrevious', fmtC(s.lessPrevious));
-    set('sum:dueThis', fmtC(s.dueThis)); set('sum:balance', fmtC(s.balance));
+    set('sum:retainage', '−' + fmtC(s.retainage)); set('sum:dueThis', fmtC(s.dueThis));
+    set('sum:balance9', fmtC(round2(s.contract - s.earnedLessRet)));
+    set('sub:co', fmtC(s.co)); set('sub:pct', fmtPct(s.contract ? (s.completedStored / s.contract * 100) : 0));
     // per-line + group subtotals
     var groups = {}, order = [];
     (app.lines || []).forEach(function (l) {
@@ -636,6 +666,9 @@
       set('ln-tp:' + l.id, fmtC(tp), tpColor(tp));
       set('ln-g:' + l.id, fmtC(G)); set('ln-pctg:' + l.id, fmtPct(pctG));
       set('ln-bal:' + l.id, fmtC(bal)); set('ln-ret:' + l.id, fmtC(ret));
+      // progress-bar fill reflects the line's % complete (the billing driver)
+      var bar = host.querySelector('.pa-barfill[data-lid="' + l.id + '"]');
+      if (bar) { var pc = clamp(num(l.pctComplete), 0, 100); bar.style.width = pc + '%'; bar.style.background = pc >= 99.5 ? 'var(--green,#059669)' : 'var(--accent,#2563eb)'; }
       var k = l.buildingId || '__gen';
       if (!groups[k]) { groups[k] = { C: 0, prev: 0, G: 0, ret: 0, tp: 0, stored: 0 }; order.push(k); }
       var gt = groups[k];
