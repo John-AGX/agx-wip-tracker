@@ -199,6 +199,99 @@
   }
 
   // ──────────────────────────────────────────────────────────────────
+  // Customer-facing Change Order document (print / Save-as-PDF)
+  // ──────────────────────────────────────────────────────────────────
+  // Opens a clean, self-contained document in a new window rendering the
+  // rich Scope of Work + included-work list + the authoritative Total +
+  // rich Terms & Conditions + a signature block. Cost/markup are never
+  // shown — only the customer price (Total). Rich fields are sanitized via
+  // p86RichText.toDisplayHTML before injection.
+  function openCoCustomerDoc() {
+    var co = _state.co;
+    if (!co) return;
+    // Best-effort flush so the persisted CO matches what we print (the doc
+    // itself reads the live in-memory record regardless).
+    if (_state.dirty) { try { flushSave(); } catch (e) {} }
+
+    var RT = window.p86RichText;
+    var toHTML = function (v) { return (RT && RT.toDisplayHTML) ? RT.toDisplayHTML(v) : escapeHTML(v || ''); };
+    var money = function (n) { return '$' + Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
+    var t = computeTotals() || {};
+    var job = (window.appData && window.appData.jobs || []).find(function (j) { return j.id === co.job_id; }) || {};
+    var jobNo = job.jobNumber || '';
+    var jobTitle = job.title || job.name || '';
+    var addr = job.address || [job.street_address, job.city, job.state, job.zip].filter(Boolean).join(', ');
+    var client = job.client || '';
+    var coNo = co.co_number || '';
+    var dateStr = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' });
+
+    // Included-work: section headers → group titles, priced lines → bullets
+    // (descriptions only — no per-line pricing so cost/margin never leak and
+    // the single Total is always the authoritative number).
+    var lines = Array.isArray(co.lines) ? co.lines : [];
+    var workHTML = '', listOpen = false;
+    lines.forEach(function (l) {
+      if (l.section === '__section_header__') {
+        if (listOpen) { workHTML += '</ul>'; listOpen = false; }
+        workHTML += '<h3 class="co-sec">' + escapeHTML(l.label || 'Section') + '</h3>';
+      } else {
+        var d = (l.description || '').trim();
+        if (!d) return;
+        if (!listOpen) { workHTML += '<ul class="co-lines">'; listOpen = true; }
+        var qty = parseFloat(l.qty);
+        var qtyLabel = (qty && qty !== 1) ? ' <span class="co-qty">(&times;' + escapeHTML(String(qty)) + ')</span>' : '';
+        workHTML += '<li>' + escapeHTML(d) + qtyLabel + '</li>';
+      }
+    });
+    if (listOpen) workHTML += '</ul>';
+
+    var logoUrl = location.origin + '/images/logo-color.png';
+    var doc =
+      '<!doctype html><html><head><meta charset="utf-8"><title>Change Order' + (coNo ? ' ' + escapeHTML(coNo) : '') + '</title>' +
+      '<style>' +
+        '*{box-sizing:border-box;} body{font-family:Georgia,"Times New Roman",serif;color:#1a1a1a;margin:0;padding:32px;line-height:1.5;}' +
+        '.doc{max-width:800px;margin:0 auto;}' +
+        '.hd{text-align:center;border-bottom:2px solid #1B8541;padding-bottom:14px;margin-bottom:16px;}' +
+        '.hd img{height:60px;} .hd .co{font-size:12px;color:#555;letter-spacing:1px;margin-top:6px;}' +
+        '.ttl{font-size:24px;font-weight:bold;color:#1B3A5C;text-align:center;margin:6px 0 14px;}' +
+        '.meta{display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px;gap:20px;}' +
+        '.meta .lbl{color:#888;font-size:11px;text-transform:uppercase;letter-spacing:.5px;}' +
+        'h2.sec{font-size:15px;color:#1B3A5C;border-bottom:1px solid #ddd;padding-bottom:4px;margin:22px 0 10px;}' +
+        'h3.co-sec{font-size:13px;color:#333;margin:12px 0 4px;} ul.co-lines{margin:0 0 8px;padding-left:22px;} ul.co-lines li{margin:2px 0;} .co-qty{color:#888;font-size:12px;}' +
+        '.scope,.terms{font-size:13.5px;} .scope p,.terms p{margin:0 0 8px;}' +
+        '.total{margin:20px 0 4px;padding:14px 18px;background:#f1f5f9;border-radius:8px;display:flex;justify-content:space-between;align-items:center;}' +
+        '.total .l{font-weight:bold;color:#1B3A5C;font-size:15px;} .total .v{font-weight:bold;font-size:22px;color:#1B3A5C;}' +
+        '.tax{font-size:12px;color:#666;text-align:right;margin:0 4px 16px;}' +
+        '.sig{margin-top:40px;display:flex;gap:40px;} .sig .box{flex:1;} .sig .line{border-bottom:1px solid #333;height:34px;} .sig .cap{font-size:11px;color:#666;margin-top:4px;}' +
+        '.bar{position:fixed;top:10px;right:10px;} .bar button{font:inherit;padding:8px 16px;border-radius:8px;border:0;background:#1B8541;color:#fff;cursor:pointer;font-weight:bold;}' +
+        '@media print{.bar{display:none;} body{padding:0;}}' +
+      '</style></head><body>' +
+      '<div class="bar"><button onclick="window.print()">Print / Save PDF</button></div>' +
+      '<div class="doc">' +
+        '<div class="hd"><img src="' + escapeAttr(logoUrl) + '" alt="AG Exteriors" onerror="this.style.display=\'none\'"/>' +
+          '<div class="co">CHANGE ORDER' + (coNo ? ' ' + escapeHTML(coNo) : '') + '</div></div>' +
+        '<div class="ttl">' + escapeHTML(co.title || 'Change Order') + '</div>' +
+        '<div class="meta">' +
+          '<div><div class="lbl">Job</div>' + escapeHTML((jobNo ? jobNo + ' — ' : '') + jobTitle) + (addr ? '<br>' + escapeHTML(addr) : '') + '</div>' +
+          '<div style="text-align:right;">' + (client ? '<div class="lbl">Client</div>' + escapeHTML(client) + '<br>' : '') + '<span class="lbl">Date</span> ' + escapeHTML(dateStr) + '</div>' +
+        '</div>' +
+        '<h2 class="sec">Scope of Work</h2><div class="scope">' + toHTML(co.scope) + '</div>' +
+        (workHTML ? '<h2 class="sec">Included Work</h2>' + workHTML : '') +
+        '<div class="total"><span class="l">Change Order Total</span><span class="v">' + money(t.total) + '</span></div>' +
+        ((t.taxAmount && t.taxAmount > 0) ? '<div class="tax">Includes tax ' + money(t.taxAmount) + '</div>' : '') +
+        (co.terms ? '<h2 class="sec">Terms &amp; Conditions</h2><div class="terms">' + toHTML(co.terms) + '</div>' : '') +
+        '<div class="sig">' +
+          '<div class="box"><div class="line"></div><div class="cap">Client signature</div></div>' +
+          '<div class="box"><div class="line"></div><div class="cap">Date</div></div>' +
+        '</div>' +
+      '</div></body></html>';
+
+    var w = window.open('', '_blank');
+    if (!w) { alert('Please allow pop-ups to preview the Change Order PDF.'); return; }
+    w.document.open(); w.document.write(doc); w.document.close();
+  }
+
+  // ──────────────────────────────────────────────────────────────────
   // Mount + paint
   // ──────────────────────────────────────────────────────────────────
   function mount() {
@@ -363,11 +456,7 @@
       paintTotals();
     });
     var previewBtn = overlay.querySelector('[data-co-preview]');
-    if (previewBtn) previewBtn.addEventListener('click', function() {
-      // Preview hook lands in Phase 7. For now, alert so the user
-      // knows the button is intentional and waiting on the PDF pipe.
-      alert('Customer PDF preview lands in the next phase. For now, totals + lines are saved and the CO can be approved.');
-    });
+    if (previewBtn) previewBtn.addEventListener('click', openCoCustomerDoc);
   }
 
   // ── Rich-text fields (Scope + Terms) ───────────────────────────
