@@ -3637,6 +3637,7 @@ function renderJobsMain() {
             }).join('');
 
             container.innerHTML = titleHTML +
+                '<div class="phase-matrix-host"></div>' +
                 '<div style="border:1px solid var(--border,#333);border-radius:10px;overflow-x:auto;background:var(--card-bg,#141419);">' +
                     '<table style="width:100%;border-collapse:collapse;table-layout:auto;">' +
                         '<thead style="background:var(--overlay-light,rgba(255,255,255,0.02));border-bottom:1px solid var(--border,#333);"><tr>' +
@@ -3650,6 +3651,108 @@ function renderJobsMain() {
                         '<tbody>' + rowsHTML + '</tbody>' +
                     '</table>' +
                 '</div>';
+            try { renderPhaseMatrixInto(container.querySelector('.phase-matrix-host'), jobId); } catch (e) {}
+        }
+
+        // ── Buildings × Phases matrix — the job-first budget breakdown ──────
+        // Rows = phase names, columns = buildings + Unassigned + Total. Each
+        // cell = that phase's as-sold budget slice for that building (editable).
+        // Row total = the phase's job-level total (sum of its slices); column
+        // total = each building's roll-up; grand total = the job's phased
+        // budget. Editing a cell writes the per-(phase,building) phase record's
+        // asSoldPhaseBudget (create-on-demand) — the same survivable field the
+        // building breakdown modal uses (SP-1: building budget derives from it).
+        function renderPhaseMatrixInto(container, jobId) {
+            if (!container) return;
+            var phases = (appData.phases || []).filter(function(p) { return p.jobId === jobId; });
+            var buildings = (appData.buildings || []).filter(function(b) { return b.jobId === jobId; });
+            var names = [];
+            phases.forEach(function(p) { var n = p.phase || 'Unnamed'; if (names.indexOf(n) === -1) names.push(n); });
+            names.sort();
+            if (!names.length || !buildings.length) { container.innerHTML = ''; return; }
+            var cols = buildings.map(function(b) { return { id: b.id, name: b.name || 'Building' }; });
+            function slice(name, bid) {
+                var r = phases.find(function(p) { return (p.phase || 'Unnamed') === name && (p.buildingId || null) === (bid || null); });
+                return r ? (r.asSoldPhaseBudget || r.phaseBudget || 0) : 0;
+            }
+            var colTot = {}; cols.forEach(function(c) { colTot[c.id] = 0; }); var unTot = 0, grand = 0;
+            var stickL = 'position:sticky;left:0;background:var(--card-bg,#141419);z-index:1;';
+
+            var head = '<tr><th style="text-align:left;padding:5px 8px;font-size:11px;color:var(--text-dim);' + stickL + '">Phase</th>';
+            cols.forEach(function(c) { head += '<th style="text-align:right;padding:5px 8px;font-size:11px;color:var(--text-dim);white-space:nowrap;">' + escapeHTML(c.name) + '</th>'; });
+            head += '<th style="text-align:right;padding:5px 8px;font-size:11px;color:var(--text-dim);">Unassigned</th>';
+            head += '<th style="text-align:right;padding:5px 8px;font-size:11px;color:var(--accent);">Total</th></tr>';
+
+            function cellInput(name, bid, v, dashed) {
+                return '<td style="text-align:right;padding:3px 4px;"><input type="number" min="0" step="100" value="' + (v || '') + '" ' +
+                    'data-mx-phase="' + escapeAttr(name) + '" data-mx-bldg="' + escapeAttr(bid || '') + '" oninput="onPhaseMatrixCell(this)" ' +
+                    'style="width:76px;font-size:12px;padding:3px 5px;text-align:right;background:var(--bg);border:1px ' + (dashed ? 'dashed' : 'solid') + ' var(--border);border-radius:4px;color:var(--text' + (dashed ? '-dim' : '') + ');"/></td>';
+            }
+            var body = names.map(function(name) {
+                var rowTot = 0;
+                var cells = cols.map(function(c) { var v = slice(name, c.id); colTot[c.id] += v; rowTot += v; return cellInput(name, c.id, v, false); }).join('');
+                var u = slice(name, null); unTot += u; rowTot += u;
+                grand += rowTot;
+                return '<tr><td style="text-align:left;padding:4px 8px;font-size:12.5px;font-weight:600;color:var(--text);white-space:nowrap;' + stickL + '">' + escapeHTML(name) + '</td>' +
+                    cells + cellInput(name, null, u, true) +
+                    '<td data-mx-rowtot="' + escapeAttr(name) + '" style="text-align:right;padding:4px 8px;font-size:12.5px;font-weight:700;color:var(--accent);font-family:monospace;">' + formatCurrency(rowTot) + '</td></tr>';
+            }).join('');
+
+            var foot = '<tr style="border-top:2px solid var(--border);"><td style="text-align:left;padding:5px 8px;font-size:11px;font-weight:700;color:var(--text-dim);' + stickL + '">Building total</td>';
+            cols.forEach(function(c) { foot += '<td data-mx-coltot="' + escapeAttr(c.id) + '" style="text-align:right;padding:5px 8px;font-size:12px;font-weight:700;font-family:monospace;">' + formatCurrency(colTot[c.id]) + '</td>'; });
+            foot += '<td data-mx-coltot="__un__" style="text-align:right;padding:5px 8px;font-size:12px;font-weight:700;font-family:monospace;color:var(--text-dim);">' + formatCurrency(unTot) + '</td>';
+            foot += '<td data-mx-grand style="text-align:right;padding:5px 8px;font-size:13px;font-weight:800;font-family:monospace;color:var(--accent);">' + formatCurrency(grand) + '</td></tr>';
+
+            container.innerHTML =
+                '<div style="display:flex;justify-content:space-between;align-items:center;margin:2px 0 6px;gap:8px;flex-wrap:wrap;">' +
+                    '<h4 style="font-size:12px;margin:0;color:var(--text-dim);text-transform:uppercase;letter-spacing:.5px;">Buildings &times; Phases</h4>' +
+                    '<span style="font-size:11px;color:var(--text-dim);">Split each phase’s total down to buildings. Row = job-level total.</span>' +
+                '</div>' +
+                '<div style="border:1px solid var(--border,#333);border-radius:10px;overflow-x:auto;background:var(--card-bg,#141419);margin-bottom:12px;">' +
+                    '<table style="width:100%;border-collapse:collapse;"><thead>' + head + '</thead><tbody>' + body + '</tbody><tfoot>' + foot + '</tfoot></table>' +
+                '</div>';
+        }
+
+        // Edit a matrix cell → find-or-create the (phase, building) record,
+        // write its as-sold budget slice, persist, and live-update the totals.
+        function onPhaseMatrixCell(input) {
+            var name = input.getAttribute('data-mx-phase');
+            var bid = input.getAttribute('data-mx-bldg') || null;
+            var jobId = (typeof appState !== 'undefined' && appState.currentJobId);
+            if (!name || !jobId) return;
+            var val = parseFloat(input.value) || 0;
+            var rec = appData.phases.find(function(p) { return p.jobId === jobId && (p.phase || 'Unnamed') === name && (p.buildingId || null) === (bid || null); });
+            if (!rec) {
+                if (val === 0) return;
+                rec = { id: 'p' + Date.now() + Math.floor(Math.random() * 1000), jobId: jobId, buildingId: bid,
+                    phase: name, workScope: 'in-house', locked: false, pctComplete: 0,
+                    materials: 0, labor: 0, sub: 0, equipment: 0,
+                    asSoldRevenue: 0, asSoldPhaseBudget: 0, coPhaseBudget: 0, phaseBudget: 0,
+                    hoursWeek: 0, hoursTotal: 0, rate: 40, notes: '' };
+                appData.phases.push(rec);
+            }
+            rec.asSoldPhaseBudget = val;
+            rec.phaseBudget = val + (rec.coPhaseBudget || 0);
+            if (typeof saveData === 'function') saveData();
+            recomputePhaseMatrixTotals(input, jobId);
+        }
+        window.onPhaseMatrixCell = onPhaseMatrixCell;
+
+        function recomputePhaseMatrixTotals(input, jobId) {
+            var table = input.closest('table'); if (!table) return;
+            var phases = (appData.phases || []).filter(function(p) { return p.jobId === jobId; });
+            function sum(pred) { return phases.filter(pred).reduce(function(s, p) { return s + (p.asSoldPhaseBudget || p.phaseBudget || 0); }, 0); }
+            table.querySelectorAll('[data-mx-rowtot]').forEach(function(td) {
+                var name = td.getAttribute('data-mx-rowtot');
+                td.textContent = formatCurrency(sum(function(p) { return (p.phase || 'Unnamed') === name; }));
+            });
+            table.querySelectorAll('[data-mx-coltot]').forEach(function(td) {
+                var bid = td.getAttribute('data-mx-coltot');
+                var pred = (bid === '__un__') ? function(p) { return !p.buildingId; } : function(p) { return p.buildingId === bid; };
+                td.textContent = formatCurrency(sum(pred));
+            });
+            var g = table.querySelector('[data-mx-grand]');
+            if (g) g.textContent = formatCurrency(sum(function() { return true; }));
         }
 
         function renderJobPhases(jobId) {
