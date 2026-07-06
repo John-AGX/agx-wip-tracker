@@ -1145,12 +1145,24 @@ function layoutBldgDocks(){
     var b=E.findNode(el._bldg||''); if(!b) return;                          // the building this card wires to
     var off=k._ncDockOff||{x:88,y:-72};
     var c=(b.geoLatLng)?geoRenderPos(b):{x:b.x,y:b.y};
-    var bx=Math.round((p.x+c.x)*z), by=Math.round((p.y+c.y)*z);              // building anchor (screen)
+    var bx=Math.round((p.x+c.x)*z), by=Math.round((p.y+c.y)*z);              // building CENTER (screen)
     var cx=Math.round((p.x+c.x+off.x)*z), cy=Math.round((p.y+c.y+off.y)*z);  // card top-left (screen)
     el.style.left=cx+'px'; el.style.top=cy+'px';
     var ln=document.getElementById('ngDockWire-'+k.id);
     if(!ln){ ln=document.createElementNS('http://www.w3.org/2000/svg','line'); ln.id='ngDockWire-'+k.id; ln.setAttribute('class','ng-dock-wire'); svg.appendChild(ln); }
-    ln.setAttribute('x1',bx); ln.setAttribute('y1',by); ln.setAttribute('x2',cx+10); ln.setAttribute('y2',cy+12);
+    // Dynamic anchors: the wire exits the building toward the card and lands on the
+    // card BORDER facing the building — so the anchor point slides around as you drag
+    // the card, keeping the fan clean and never folding under the building or the card.
+    var cw=el.offsetWidth||180, ch=el.offsetHeight||40;
+    var ccx=cx+cw/2, ccy=cy+ch/2;                                            // card center (screen)
+    var ddx=ccx-bx, ddy=ccy-by, dl=Math.sqrt(ddx*ddx+ddy*ddy)||1;
+    var ux=ddx/dl, uy=ddy/dl;                                               // building -> card unit vector
+    var BR=Math.min(30, dl*0.4);                                            // building-side lift-off the center
+    var x1=Math.round(bx+ux*BR), y1=Math.round(by+uy*BR);
+    // Card-border point where the (card-center -> building) ray exits the card rect.
+    var sx=ux!==0?(cw/2)/Math.abs(ux):Infinity, sy=uy!==0?(ch/2)/Math.abs(uy):Infinity, s=Math.min(sx,sy);
+    var x2=Math.round(ccx-ux*s), y2=Math.round(ccy-uy*s);
+    ln.setAttribute('x1',x1); ln.setAttribute('y1',y1); ln.setAttribute('x2',x2); ln.setAttribute('y2',y2);
   });
   [].forEach.call(svg.querySelectorAll('line'), function(l){ var id=l.id.replace('ngDockWire-',''); if(!document.getElementById('ngDock-'+id)) l.remove(); });
 }

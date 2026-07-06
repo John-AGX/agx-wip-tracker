@@ -1418,7 +1418,7 @@
         '<div class="ee-th-num" style="flex:0 0 120px;min-width:0;">Marked-Up</div>' +
         '<div class="ee-th-del" style="flex:0 0 36px;"></div>' +
       '</div>';
-    var html = bannerHtml + '<div class="ee-line-table ee-line-tbl" style="border:1px solid var(--border,#333);border-radius:8px;overflow:hidden;">' + headerHTML;
+    var html = bannerHtml + '<div class="ee-line-tbl-scroll"><div class="ee-line-table ee-line-tbl" style="border:1px solid var(--border,#333);border-radius:8px;overflow:hidden;">' + headerHTML;
 
     // Group rendering: walk lines in order, render section headers + lines
     // + per-section subtotals. Markup is now per-section — every line
@@ -1458,7 +1458,7 @@
     }
     if (currentSection != null) flushSectionSubtotal(lines.length);
 
-    html += '</div>';
+    html += '</div></div>';
     container.innerHTML = html;
 
     // Auto-size every description textarea to fit its current content.

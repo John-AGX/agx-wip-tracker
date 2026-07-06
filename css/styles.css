@@ -9118,6 +9118,10 @@ body.light-mode .p86-pv-tag-modal-chip {
    renderSectionHeaderRow in estimate-editor.js) keep their inline
    styles for backwards compat; these rules just lift the
    presentation. */
+/* Horizontal scroll when the editor pane is narrower than the row — keeps the
+   Description column usable instead of collapsing to one character per line. */
+.ee-line-tbl-scroll { overflow-x: auto; overflow-y: visible; }
+.ee-line-tbl { min-width: 880px; }
 .ee-line-tbl .ee-line-tbl-head {
   display: flex;
   align-items: center;
@@ -9149,6 +9153,9 @@ body.light-mode .p86-pv-tag-modal-chip {
      the 601–760 range (iPad mini, landscape phones) doesn't fall back to
      the clipped desktop row. Targets ONLY [data-row-edit-gate] line rows. */
   .ee-line-tbl .ee-line-tbl-head { display: none; }
+  /* Phone: rows reflow to stacked cards, so drop the desktop min-width + scroll. */
+  .ee-line-tbl { min-width: 0; }
+  .ee-line-tbl-scroll { overflow-x: visible; }
 
   .ee-line-tbl [data-row-edit-gate] {
     display: grid !important;
