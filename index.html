@@ -622,6 +622,7 @@
                         </div>
                         <button class="tab-btn" data-tab="schedule" data-p86-icon="schedule" title="Schedule"><span class="app-nav-label">Schedule</span></button>
                         <button class="tab-btn" data-tab="cost-inbox" data-p86-icon="materials" title="Cost Inbox — capture receipts &amp; field costs"><span class="app-nav-label">Cost Inbox</span></button>
+                        <button class="tab-btn" data-tab="invoices" data-p86-icon="exports" title="Invoices &amp; accounts receivable"><span class="app-nav-label">Invoices</span></button>
                     </div>
                     <div class="app-nav-group">
                         <div class="app-nav-group-label">Directory</div>
@@ -1386,6 +1387,12 @@
                      mounts js/cost-inbox.js window.p86CostInbox.render() here. -->
                 <div id="cost-inbox" class="tab-content">
                     <div id="costInboxHost"></div>
+                </div>
+
+                <!-- Invoices / AR — switchTab('invoices') mounts js/invoices.js
+                     window.p86Invoices.render() here. -->
+                <div id="invoices" class="tab-content">
+                    <div id="invoicesHost"></div>
                 </div>
 
                 <!-- Job Map (org-level "Google Earth") — every geocoded job on a
@@ -3236,7 +3243,7 @@
     <script src="js/entity-card.js?v=6"></script>
     <!-- Lead/estimate context card mounted into #app-sidebar (uses p86EntityCard). -->
     <script src="js/entity-subnav.js?v=2"></script>
-    <script src="js/app.js?v=108"></script>
+    <script src="js/app.js?v=109"></script>
     <script src="js/search-clear.js?v=3"></script>
     <script src="js/sidebar-brand.js?v=2"></script>
     <!-- Guided tours engine + the Help & What's New center (patch
@@ -3297,6 +3304,7 @@
     <script src="js/receipt-scanner.js?v=2"></script>
     <script src="js/list-filter.js?v=1"></script>
     <script src="js/cost-inbox.js?v=17"></script>
+    <script src="js/invoices.js?v=1"></script>
     <script src="js/console.js?v=6"></script>
     <!-- Jobs Hub — cross-job index pages (Purchase Orders / Change Orders /
          RFIs / Submittals) for the Jobs sidebar dropdown. Uses p86Api +
@@ -3306,7 +3314,7 @@
          hub Purchase Orders list. Uses p86Api.purchaseOrders + subs. -->
     <script src="js/purchase-order-import.js?v=1"></script>
     <script src="js/purchase-order-editor.js?v=7"></script>
-    <script src="js/pay-applications.js?v=3"></script>
+    <script src="js/pay-applications.js?v=4"></script>
     <!-- Shared pricing pipeline — math used by estimate-editor +
          estimate-preview + the upcoming change-order-editor. Loads
          BEFORE any of them so window.p86Pricing is ready. -->
@@ -3346,7 +3354,7 @@
     <!-- URL router — pathname-based navigation. Loads last so all
          top-level nav functions (switchTab, editJob, etc.) exist
          before the router wraps them. -->
-    <script src="js/router.js?v=19"></script>
+    <script src="js/router.js?v=20"></script>
 
     <!-- Sidebar Recents — client-side recently-opened list. Loads after
          router.js + the entity-open modules so it can wrap editJob /

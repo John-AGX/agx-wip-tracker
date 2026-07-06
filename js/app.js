@@ -1683,6 +1683,7 @@
             admin:      'Admin',
             projects:   'Projects',
             'cost-inbox': 'Cost Inbox',
+            'invoices': 'Invoices',
             orgmap:     'Job Map',
             orgleadsmap: 'Leads Map',
             jobshub:    'Jobs',
@@ -1827,6 +1828,14 @@
                     window.p86CostInbox.render(ciHost);
                 } else if (ciHost) {
                     ciHost.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);">Cost Inbox module not loaded.</div>';
+                }
+            } else if (tabName === 'invoices') {
+                // Invoices / AR — list + aging + editor (js/invoices.js).
+                var invHost = document.getElementById('invoicesHost');
+                if (invHost && window.p86Invoices && typeof window.p86Invoices.render === 'function') {
+                    window.p86Invoices.render(invHost);
+                } else if (invHost) {
+                    invHost.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);">Invoices module not loaded.</div>';
                 }
             } else if (tabName === 'orgmap') {
                 // Job Map (org "Google Earth") — every geocoded JOB on satellite;

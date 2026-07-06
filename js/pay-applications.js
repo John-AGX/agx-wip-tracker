@@ -509,6 +509,10 @@
     if (app.status === 'submitted') { btns.push(pbtn('pa-certify', 'Certify', 'primary')); btns.push(pbtn('pa-unsubmit', '&larr; Back to Draft', '')); }
     if (app.status === 'certified') { btns.push(pbtn('pa-paid', 'Mark Paid', 'primary')); btns.push(pbtn('pa-uncertify', '&larr; Back to Submitted', '')); }
     if (app.status === 'paid') btns.push(pbtn('pa-unpaid', '&larr; Reopen (uncertify-pay)', ''));
+    // Bill this draw: turn a certified/paid application into an AR invoice.
+    if ((app.status === 'certified' || app.status === 'paid') && jobCanEdit() && window.p86Api && window.p86Api.invoices) {
+      btns.push(pbtn('pa-invoice', '&#x1F9FE; Create Invoice', ''));
+    }
     var left = '<div style="display:flex;gap:8px;flex-wrap:wrap;">' + btns.join('') + '</div>';
     var right = '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
       (editable ? '<button id="pa-pullpct" class="ee-btn" style="font-size:12px;" title="Set each line\'s % complete from Site Plan unit/phase progress">&#8635; % from progress</button>' : '') +
@@ -563,6 +567,18 @@
     bindClick(host, '#pa-uncertify', function () { setStatus(app, 'submitted'); });
     bindClick(host, '#pa-paid', function () { setStatus(app, 'paid'); });
     bindClick(host, '#pa-unpaid', function () { setStatus(app, 'certified'); });
+    bindClick(host, '#pa-invoice', function () { createInvoiceFromApp(app); });
+  }
+
+  // Bill a certified draw: create an AR invoice from it (server bridge) + open
+  // the invoice editor. See [[project_86_accounting]] invoice-routes.js.
+  function createInvoiceFromApp(app) {
+    if (!window.p86Api || !window.p86Api.invoices) { toast('Invoices module unavailable.', true); return; }
+    window.p86Api.invoices.fromPayApplication(_st.jobId, app.id).then(function (r) {
+      var invoice = r && r.invoice;
+      toast('Invoice ' + (invoice ? invoice.invoice_number : '') + ' created from Application No. ' + app.app_no + '.');
+      if (invoice && window.p86Invoices && window.p86Invoices.openInvoice) window.p86Invoices.openInvoice(invoice);
+    }).catch(function (e) { toast((e && e.message) || 'Could not create invoice.', true); });
   }
   function bindClick(host, q, fn) { var b = host.querySelector(q); if (b) b.addEventListener('click', fn); }
   function bindMeta(host, id, field, app) {
