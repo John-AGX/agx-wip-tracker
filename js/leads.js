@@ -971,7 +971,12 @@
   function setField(name, value) {
     var el = document.getElementById('leadEditor_' + (name === 'title' ? 'title_field' : name));
     if (!el) return;
-    el.value = (value == null ? '' : value);
+    var v = (value == null ? '' : value);
+    // A type="date" input only accepts "YYYY-MM-DD" — a full ISO timestamp
+    // (e.g. "2025-07-15T00:00:00.000Z") is silently REJECTED and the field
+    // renders BLANK on reopen (D2: Projected Sale Date). Slice date values down.
+    if (el.type === 'date' && typeof v === 'string' && v.length > 10) v = v.slice(0, 10);
+    el.value = v;
     if (name === 'confidence') {
       var lbl = document.getElementById('leadEditor_confidenceLabel');
       if (lbl) lbl.textContent = '— ' + (el.value || '0') + '%';
@@ -2014,7 +2019,22 @@
   // atomic server call (POST /api/jobs/convert) that also sets lead.job_id +
   // status='sold' and estimate.data.job_id — so a failure can't leave an
   // orphan job. With >1 estimate the user picks which one.
+  // Compose a job title from client short-name + proposal name WITHOUT
+  // duplicating the client name. Users often name estimates "Client - Project",
+  // so blindly prepending the short-name yields "Client Client - Project" (D3).
+  function _composeJobTitle(shortName, proposalName) {
+    var sn = (shortName || '').trim(), pn = (proposalName || '').trim();
+    if (!sn) return pn;
+    if (!pn) return sn;
+    var re = new RegExp('^' + sn.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'i');
+    return re.test(pn) ? pn : (sn + ' ' + pn);
+  }
+  window.p86ComposeJobTitle = _composeJobTitle;
+
   async function convertLeadToJob(preChosenEstId) {
+    if (window._p86ConvertingJob) return;   // D4: block double-submit / dual-side convert
+    window._p86ConvertingJob = true;
+    try {
     var leadId = _currentEditingLeadId;
     var l = _leads.find(function(x) { return x.id === leadId; });
     if (!l) return;
@@ -2051,7 +2071,7 @@
     // Job title = client short name + the proposal (estimate) name it came from.
     var shortName = c ? (c.short_name || c.company_name || c.name || '') : '';
     var proposalName = chosen ? (chosen.name || chosen.title || '') : (l.title || '');
-    var suggestedTitle = ((shortName ? shortName + ' ' : '') + proposalName).trim() || (l.title || 'New Job');
+    var suggestedTitle = _composeJobTitle(shortName, proposalName) || (l.title || 'New Job');
     // Require a job number (S#### Service / RV#### Renovation) + confirm the title.
     var _sub = 'New job from this lead. ' +
       (chosen ? ('Contract $' + money(contractAmt) + ' from ' + estLabel + '. ') : ('Contract $' + money(contractAmt) + '. ')) +
@@ -2145,6 +2165,9 @@
       } else {
         alert('Could not create the job: ' + (m || 'unknown error') + '\n\nNothing was changed — try again.');
       }
+    }
+    } finally {
+      window._p86ConvertingJob = false;
     }
   }
 
@@ -2381,11 +2404,17 @@
         typeof window.estimateEditorAPI.setReturnToLead === 'function') {
       window.estimateEditorAPI.setReturnToLead(leadId);
     }
-    if (asPreview) {
-      if (typeof window.previewEstimate === 'function') window.previewEstimate(estimateId);
-    } else {
-      if (typeof window.editEstimate === 'function') window.editEstimate(estimateId);
-    }
+    // Defer the open one tick so the estimates tab + "list" sub-tab have
+    // mounted first — calling editEstimate synchronously lands the user on
+    // the LIST because the editor's mount point isn't in the visible flow
+    // yet (C1: "Open & edit" / "New estimate from lead" bouncing to the list).
+    setTimeout(function () {
+      if (asPreview) {
+        if (typeof window.previewEstimate === 'function') window.previewEstimate(estimateId);
+      } else {
+        if (typeof window.editEstimate === 'function') window.editEstimate(estimateId);
+      }
+    }, 60);
   }
   window.openEstimateFromLead = openEstimateFromLead;
 

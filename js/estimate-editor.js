@@ -208,14 +208,31 @@
   // Admin override — clear the lock so a sold estimate can be corrected.
   function unlockEstimate(id) {
     if (!id || !window.p86Api) return;
-    if (!window.confirm('Unlock this sold estimate for editing? It becomes editable again until re-locked.')) return;
-    window.p86Api.put('/api/estimates/' + encodeURIComponent(id) + '/lock', { locked: false })
-      .then(function () {
-        var e = getEstimate(); if (e) e.is_locked = false;
-        _estimateLocked = false;
-        applyEstimateLockState(getEstimate());
-      })
-      .catch(function (err) { alert('Unlock failed: ' + (err && err.message || '')); });
+    var btn = document.getElementById('ee-unlock-btn');
+    // C2: the old native window.confirm() SILENTLY NO-OPS in the installed PWA
+    // (see reference_pwa_native_dialogs) — first click did nothing, so it felt
+    // like it needed two clicks. Use the PWA-safe p86Confirm modal, and disable
+    // the button on confirm so a fast double-click can't fire two PUTs.
+    var doUnlock = function () {
+      if (btn) { btn.disabled = true; btn.textContent = 'Unlocking…'; }
+      window.p86Api.put('/api/estimates/' + encodeURIComponent(id) + '/lock', { locked: false })
+        .then(function () {
+          var e = getEstimate(); if (e) e.is_locked = false;
+          _estimateLocked = false;
+          applyEstimateLockState(getEstimate());
+        })
+        .catch(function (err) {
+          if (btn) { btn.disabled = false; btn.textContent = 'Unlock to edit'; }
+          alert('Unlock failed: ' + (err && err.message || ''));
+        });
+    };
+    var msg = 'Unlock this sold estimate for editing? It becomes editable again until re-locked.';
+    if (typeof window.p86Confirm === 'function') {
+      window.p86Confirm({ title: 'Unlock estimate', message: msg, confirmText: 'Unlock' })
+        .then(function (ok) { if (ok) doUnlock(); });
+    } else if (window.confirm(msg)) {
+      doUnlock();
+    }
   }
 
   // The estimate editor shows its PARENT LEAD's card in the sidebar — there is
@@ -960,6 +977,13 @@
     if (!est) return;
     if (est.job_id) { alert('This estimate is already linked to a job. Use the Open job button.'); return; }
 
+    // Double-submit guard (D4): a second click — or a click while the finalize
+    // modal is open — must not mint a second job. Shared flag with the lead-side
+    // convertLeadToJob; the finally clears it on every exit path.
+    if (window._p86ConvertingJob) return;
+    window._p86ConvertingJob = true;
+    try {
+
     // Soft approval gate — if the proposal isn't marked approved/signed yet, confirm
     // before creating the job (surface, don't hard-block; migration + edge cases stay open).
     if (est.approval_status !== 'approved') {
@@ -997,7 +1021,11 @@
     // Job title = client short name + the proposal (estimate) name.
     var proposalName = est.name || est.title || '';
     var shortName = (c && c.short_name) ? c.short_name : (clientName || '');
-    var suggestedTitle = ((shortName ? shortName + ' ' : '') + proposalName).trim() || 'New Job';
+    // Dedup the client name so "Client - Project" estimates don't yield
+    // "Client Client - Project" (D3). Shared helper defined in leads.js.
+    var suggestedTitle = (window.p86ComposeJobTitle
+      ? window.p86ComposeJobTitle(shortName, proposalName)
+      : ((shortName ? shortName + ' ' : '') + proposalName)).trim() || 'New Job';
     var _sub = 'New job from this estimate. Contract $' + money(contractAmt) + '.' + (leadId ? ' Marks the linked lead Sold.' : '');
     var fin = (window.p86JobFinalize && window.p86JobFinalize.open)
       ? await window.p86JobFinalize.open({ title: suggestedTitle, subtitle: _sub })
@@ -1071,6 +1099,7 @@
       if (/already linked/i.test(m)) alert('That lead is already linked to a job.');
       else alert('Could not create the job: ' + (m || 'unknown error') + '\n\nNothing was changed — try again.');
     }
+    } finally { window._p86ConvertingJob = false; }
   }
 
   function openJobFromEstimate(jobId) {
