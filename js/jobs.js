@@ -807,7 +807,10 @@ function renderJobsMain() {
             mount.innerHTML =
                 '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">' +
                     '<h3 style="font-size:13px;margin:0;">&#x1F4C4; Purchase Orders (' + rows.length + ')</h3>' +
-                    '<button class="ee-btn primary" data-po-new="' + escapeHTML(jobId) + '" style="font-size:12px;">+ New Purchase Order</button>' +
+                    '<div style="display:flex;gap:6px;">' +
+                        '<button class="ee-btn" data-po-import="' + escapeHTML(jobId) + '" style="font-size:12px;" title="Import a Buildertrend Purchase Order PDF export">&#x2913; Import PDF</button>' +
+                        '<button class="ee-btn primary" data-po-new="' + escapeHTML(jobId) + '" style="font-size:12px;">+ New Purchase Order</button>' +
+                    '</div>' +
                 '</div>' +
                 bodyHTML;
             mount.querySelectorAll('[data-po-open]').forEach(function(tr) {
@@ -825,6 +828,17 @@ function renderJobsMain() {
                     setTimeout(function() {
                         loadPurchaseOrdersForJob(jobId).then(function() { paintJobPurchaseOrdersInto(mount, jobId); });
                     }, 600);
+                }
+            });
+            var impBtn = mount.querySelector('[data-po-import]');
+            if (impBtn) impBtn.addEventListener('click', function() {
+                if (window.p86PurchaseOrders && window.p86PurchaseOrders.importNew) {
+                    // Extracts the PDF, matches the job from it (defaults to THIS
+                    // job, confirms via picker on mismatch), then opens the PO.
+                    window.p86PurchaseOrders.importNew(jobId);
+                    setTimeout(function() {
+                        loadPurchaseOrdersForJob(jobId).then(function() { paintJobPurchaseOrdersInto(mount, jobId); });
+                    }, 1500);
                 }
             });
         }

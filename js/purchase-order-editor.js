@@ -15,6 +15,7 @@
   var _po = null;            // current PO object (server shape)
   var _saveTimer = null;
   var _subsCache = null;
+  var _pendingPOExtraction = null; // raw PDF extraction, sent once on close for training
 
   var STATUS_LABEL = {
     draft: 'Draft', issued: 'Issued', approved: 'Approved',
@@ -84,6 +85,9 @@
       if (!_po) { mountShell('Could not create the purchase order.'); return; }
       if (!Array.isArray(_po.lines)) _po.lines = [];
       render();
+      // Standalone import path: a Buildertrend extraction was resolved before
+      // create (job matched from the PDF), so apply it now onto the fresh PO.
+      if (opts.extraction) applyExtractedPO(opts.extraction);
     }).catch(function (e) { mountShell('Could not create: ' + esc((e && e.message) || 'error')); });
   }
 
@@ -100,7 +104,11 @@
     ov.style.display = 'flex';
   }
   function close() {
-    if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; saveNow(); }
+    var hadTimer = !!_saveTimer;
+    if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; }
+    // Final flush — carry the import extraction (if any) so the server logs
+    // extraction-vs-final for the training flywheel.
+    if (_po && (hadTimer || _pendingPOExtraction)) saveNow(!!_pendingPOExtraction);
     var ov = document.getElementById('po-editor-overlay');
     if (ov) ov.style.display = 'none';
     _po = null;
@@ -546,6 +554,7 @@
 
   function applyExtractedPO(p) {
     if (!_po) return;
+    _pendingPOExtraction = p; // logged once on close for the training flywheel
     if (p.title) _po.title = p.title;
     if (p.scheduled_completion) _po.scheduledCompletion = p.scheduled_completion;
     _po.materialsOnly = !!p.materials_only;
@@ -606,7 +615,7 @@
     if (_saveTimer) clearTimeout(_saveTimer);
     _saveTimer = setTimeout(saveNow, SAVE_DEBOUNCE_MS);
   }
-  function saveNow() {
+  function saveNow(withExtraction) {
     _saveTimer = null;
     if (!_po || !window.p86Api || !window.p86Api.purchaseOrders) return Promise.resolve();
     var payload = {
@@ -615,6 +624,9 @@
       lines: _po.lines || [], bills: _po.bills || [], linkedRfiIds: _po.linkedRfiIds || [],
       sub_id: _po.sub_id || null
     };
+    // Carry the PDF extraction once (close-flush) so the server logs
+    // extraction-vs-final as a training example, then drop it.
+    if (withExtraction && _pendingPOExtraction) { payload.extraction = _pendingPOExtraction; _pendingPOExtraction = null; }
     return window.p86Api.purchaseOrders.update(_po.id, payload)
       .then(function () { setSaved('Saved'); })
       .catch(function () { setSaved('Save failed'); });
@@ -691,5 +703,95 @@
     setTimeout(function () { try { w.print(); } catch (e) {} }, 300);
   }
 
-  window.p86PurchaseOrders = { open: open, openNew: openNew, close: close };
+  // ── Standalone import: pick PDF, match the job from the PDF, then create ──
+  // Lets you import a Buildertrend PO without pre-selecting the job — the
+  // printed job reference is matched to a P86 job (confirmed via a picker when
+  // it's uncertain). defaultJobId (optional) is the job you launched from.
+  function matchJob(ref, jobs) {
+    var q = String(ref || '').trim();
+    if (!q) return null;
+    var Q = q.toUpperCase();
+    var token = Q.split(/\s+/)[0];
+    var byNum = jobs.filter(function (j) {
+      var n = String(j.jobNumber || '').toUpperCase();
+      return n && (n === Q || n === token);
+    });
+    if (byNum.length === 1) return byNum[0];
+    var nq = q.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+    if (nq) {
+      var byTitle = jobs.filter(function (j) {
+        var t = String(j.title || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+        return t && (t.indexOf(nq) !== -1 || nq.indexOf(t) !== -1);
+      });
+      if (byTitle.length === 1) return byTitle[0];
+    }
+    return null;
+  }
+
+  function pickJob(prefillId, hint) {
+    return new Promise(function (resolve) {
+      var jobs = ((window.appData && appData.jobs) || []).slice().sort(function (a, b) {
+        return String(b.jobNumber || '').localeCompare(String(a.jobNumber || ''));
+      });
+      var ov = document.createElement('div');
+      ov.className = 'po-ed-overlay';
+      ov.style.zIndex = '100001';
+      var opts = jobs.map(function (j) {
+        return '<option value="' + escAttr(j.id) + '"' + (String(j.id) === String(prefillId) ? ' selected' : '') + '>' +
+          esc((j.jobNumber ? j.jobNumber + ' — ' : '') + (j.title || j.id)) + '</option>';
+      }).join('');
+      ov.innerHTML = '<div class="po-ed" style="max-width:520px;margin:auto;padding:22px;">' +
+        '<div class="po-ed-sec-title">Import into which job?</div>' +
+        (hint ? '<div class="po-ed-hint" style="margin:6px 0 12px;">' + esc(hint) + '</div>' : '') +
+        '<select id="po-pick-job" class="po-ed-input" style="width:100%;">' + (opts || '<option value="">No jobs</option>') + '</select>' +
+        '<div style="display:flex;gap:8px;justify-content:flex-end;margin-top:16px;">' +
+          '<button class="ee-btn" id="po-pick-cancel">Cancel</button>' +
+          '<button class="ee-btn primary" id="po-pick-ok">Import here</button>' +
+        '</div></div>';
+      document.body.appendChild(ov);
+      ov.style.display = 'flex';
+      function done(v) { if (ov.parentNode) ov.parentNode.removeChild(ov); resolve(v); }
+      ov.querySelector('#po-pick-cancel').addEventListener('click', function () { done(null); });
+      ov.querySelector('#po-pick-ok').addEventListener('click', function () {
+        var s = ov.querySelector('#po-pick-job'); done((s && s.value) || null);
+      });
+    });
+  }
+
+  function importNew(defaultJobId) {
+    if (!window.p86POImport || !window.p86POImport.pickAndExtract) {
+      alert('Importer not loaded — hard-refresh the page and try again.');
+      return;
+    }
+    var shown = false;
+    function hideShell() { var ov = document.getElementById('po-editor-overlay'); if (ov) ov.style.display = 'none'; }
+    window.p86POImport.pickAndExtract({ onStatus: function (m) { shown = true; mountShell(m); } })
+      .then(function (parsed) {
+        if (!parsed) { if (shown) hideShell(); return; } // cancelled
+        var jobs = (window.appData && appData.jobs) || [];
+        var matched = matchJob(parsed.job_reference, jobs);
+        var proceed = function (jobId) {
+          if (!jobId) { hideShell(); return; }
+          window.p86PurchaseOrders.openNew(jobId, { extraction: parsed });
+        };
+        // Confident, unambiguous match that agrees with where we launched → go.
+        if (matched && (!defaultJobId || String(matched.id) === String(defaultJobId))) {
+          proceed(matched.id);
+          return;
+        }
+        // Otherwise confirm the job with a picker.
+        var hint = parsed.job_reference
+          ? ('Buildertrend job reference: “' + parsed.job_reference + '”' +
+             (matched ? ' — best match: ' + ((matched.jobNumber ? matched.jobNumber + ' ' : '') + (matched.title || '')) : ' — no confident match, please pick'))
+          : 'The PDF didn’t clearly name a job — pick the one it belongs to.';
+        pickJob(matched ? matched.id : defaultJobId, hint).then(proceed);
+      })
+      .catch(function (err) {
+        hideShell();
+        console.error('PO import (standalone) failed:', err);
+        alert('Import failed: ' + ((err && err.message) || err));
+      });
+  }
+
+  window.p86PurchaseOrders = { open: open, openNew: openNew, close: close, importNew: importNew };
 })();

@@ -23,6 +23,9 @@
 const express = require('express');
 const { pool } = require('../db');
 const { requireAuth, requireCapability, hasCapability } = require('../auth');
+const { captureExample, TASKS } = require('../services/training-capture');
+
+function _norm(v) { return v == null ? '' : String(v).trim().toLowerCase(); }
 
 const router = express.Router();
 
@@ -112,7 +115,8 @@ function shapeRow(r) {
 function cleanData(body) {
   const data = { ...(body || {}) };
   ['id', 'job_id', 'owner_id', 'sub_id', 'status', 'po_number',
-   'approved_at', 'approved_by', 'created_at', 'updated_at'].forEach(k => delete data[k]);
+   'approved_at', 'approved_by', 'created_at', 'updated_at',
+   'extraction'].forEach(k => delete data[k]); // 'extraction' is a training artifact, not PO data
   if (!Array.isArray(data.lines)) data.lines = [];
   return data;
 }
@@ -323,6 +327,35 @@ router.put('/purchase-orders/:id', requireAuth, requireCapability('ESTIMATES_EDI
                   approved_at, approved_by, created_at, updated_at`,
       [JSON.stringify(data), !!subProvided, subId === undefined ? null : subId, id]
     );
+
+    // Training flywheel: when this save carries the PDF extraction (from the
+    // Buildertrend PO importer's close-flush), log extraction-vs-final ONCE.
+    // Deterministic id + ON CONFLICT DO NOTHING captures the first flush — the
+    // reviewed/edited values — and ignores later re-imports.
+    const _ext = req.body && req.body.extraction;
+    if (_ext && typeof _ext === 'object' && !Array.isArray(_ext)) {
+      const kept =
+        _norm(_ext.title) === _norm(data.title) &&
+        ((_ext.lines || []).length === (data.lines || []).length) &&
+        (!!_ext.materials_only === !!data.materialsOnly);
+      captureExample({
+        id: 'tex_po_' + id,
+        orgId: req.user.organization_id,
+        task: TASKS.PO_EXTRACT,
+        sourceKind: 'purchase_order',
+        sourceId: id,
+        input: { source: 'bt_po_pdf' },
+        modelOutput: _ext,
+        humanFinal: {
+          title: data.title || '', scope: data.scope || '',
+          materialsOnly: !!data.materialsOnly, scheduledCompletion: data.scheduledCompletion || '',
+          sub_id: subProvided ? (subId || null) : null, lines: data.lines || []
+        },
+        accepted: kept,
+        model: process.env.AI_MODEL || 'claude-opus-4-8'
+      });
+    }
+
     res.json({
       purchase_order: Object.assign(shapeRow(rows[0]), {
         job_number: existing.rows[0].job_number, job_title: existing.rows[0].job_title

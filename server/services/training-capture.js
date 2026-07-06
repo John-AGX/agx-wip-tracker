@@ -20,6 +20,7 @@ const TASKS = {
   COST_CODE: 'cost_code',                 // receipt context -> materials|labor|sub|gc
   SCRIBE_PAYLOAD: 'scribe_payload',       // write intent -> payload ops (approve/reject signal)
   LEAD_EXTRACT: 'lead_extract',           // lead doc pages -> structured lead fields
+  PO_EXTRACT: 'po_extract',               // Buildertrend PO PDF pages -> structured PO fields
   MATERIAL_NORMALIZE: 'material_normalize' // raw vendor description -> clean desc/category/unit
 };
 
@@ -31,6 +32,7 @@ const THRESHOLDS = {
   [TASKS.RECEIPT_FIELDS]: 1500,
   [TASKS.SCRIBE_PAYLOAD]: 1000,
   [TASKS.LEAD_EXTRACT]: 300,
+  [TASKS.PO_EXTRACT]: 300,
   [TASKS.MATERIAL_NORMALIZE]: 400
 };
 
