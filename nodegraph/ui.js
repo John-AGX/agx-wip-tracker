@@ -5189,6 +5189,17 @@ function pushToJob(){
   // between the strip and the watch nodes).
   var wipNode=nodes.find(function(n){return n.type==='wip';});
   if(wipNode){
+    // % complete drives revenue-earned. Use the budget-weighted value from the
+    // phases/buildings; when there's NO progress signal, fall back to a MANUAL
+    // override only — never a stale auto-synced value. Otherwise, once a job's
+    // phases are removed (or were never seeded), an old pctComplete keeps
+    // inflating revenue-earned / profit forever (the "New job stuck at 99%,
+    // 100% margin, +$47k profit on $0 cost" bug). Push the effective % onto the
+    // WIP node's jobFields BEFORE computing the ng* rollups so they use it.
+    E.resetComp();
+    var _wipPct=E.getWIPWeightedPct(wipNode);
+    var _effPct=(_wipPct!=null) ? _wipPct : (job.pctCompleteManual ? (job.pctComplete||0) : 0);
+    if(wipNode.jobFields) wipNode.jobFields.pctComplete=_effPct;
     E.resetComp();
     job.ngTotalIncome=E.getOutput(wipNode,0);
     E.resetComp();
@@ -5212,11 +5223,10 @@ function pushToJob(){
     // Sync computed % complete (budget-weighted from phases/buildings)
     // back to the job unless user is overriding manually. Keep FULL
     // precision in storage — display rounds to 1 decimal where shown.
+    // Sync the effective % back — including 0 when there's no progress, so a
+    // stale value can't survive the phases that produced it being removed.
     if(!job.pctCompleteManual){
-      var wipPct=E.getWIPWeightedPct(wipNode);
-      if(wipPct!=null){
-        job.pctComplete=wipPct;
-      }
+      job.pctComplete=_effPct;
     }
   }
 
