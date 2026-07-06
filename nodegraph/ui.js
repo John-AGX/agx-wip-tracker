@@ -3047,8 +3047,14 @@ function renderInspector(){
   // grouped child lists (appended) so children can be spawned + browsed inline.
   if(sel && sel.type!=='wip'){ injectSpawnRow(body, sel); body.insertAdjacentHTML('beforeend', childGroupsHtml(sel)); }
   // The job's live overview card leads the right panel — the map IS the job page, so the
-  // job card is the persistent context above whatever node is selected.
-  if(body && !_inspSection){ body.insertAdjacentHTML('afterbegin', inspectorJobCardHtml()); }
+  // job card is the persistent context above whatever node is selected. Remove any prior
+  // card first: the no-node job-detail branch is build-once and doesn't clear the body, so
+  // without this the card was re-prepended on every render and stacked up (multiplying cards).
+  if(body && !_inspSection){
+    var _oldCard=body.querySelector('.ng-insp-jobcard');
+    if(_oldCard) _oldCard.remove();
+    body.insertAdjacentHTML('afterbegin', inspectorJobCardHtml());
+  }
 }
 // Slice 3: the no-node Inspector hosts the JOB detail — reuses the classic job-overview
 // renderers (buildings / phases / subs). Built ONCE per job-detail entry: these mount

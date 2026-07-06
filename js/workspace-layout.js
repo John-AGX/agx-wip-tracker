@@ -529,6 +529,17 @@
   // Build (once) the job-context wrapper that holds the Back-to-Jobs
   // control + job identity block. The .ws-right-tabs strip is appended
   // into it by placeJobSubnav(); it is NOT rebuilt here.
+  // Styling for the sidebar Workspace opener (injected once).
+  function ensureJobnavWsCss() {
+    if (document.getElementById('p86-jobnav-ws-css')) return;
+    var s = document.createElement('style'); s.id = 'p86-jobnav-ws-css';
+    s.textContent =
+      '.app-jobnav-ws{display:flex;align-items:center;gap:10px;width:100%;box-sizing:border-box;padding:8px 12px;margin:2px 0;background:transparent;border:0;border-radius:8px;color:var(--text,#e9ecf5);font:inherit;font-size:13px;cursor:pointer;text-align:left;}' +
+      '.app-jobnav-ws:hover{background:var(--hover,rgba(255,255,255,.06));}' +
+      '.app-jobnav-ws.active{background:var(--accent-soft,rgba(79,140,255,.16));color:#fff;}' +
+      '.app-jobnav-ws .app-jobnav-ws-ic{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;opacity:.85;flex:0 0 auto;}';
+    document.head.appendChild(s);
+  }
   function buildJobSubnavShell(job) {
     var jobnav = document.getElementById('app-jobnav');
     if (!jobnav) {
@@ -548,6 +559,22 @@
         else if (typeof window.backToJobsMain === 'function') window.backToJobsMain();
       });
       jobnav.appendChild(back);
+
+      // Workspace opener — relocated here from the Site Plan ribbon so the left
+      // sidebar is the single entry point (toggles the floating workspace window).
+      ensureJobnavWsCss();
+      var wsItem = document.createElement('button');
+      wsItem.type = 'button';
+      wsItem.className = 'app-jobnav-ws';
+      wsItem.id = 'appJobnavWorkspace';
+      wsItem.title = 'Open the spreadsheet workspace over the map (toggle)';
+      wsItem.innerHTML =
+        '<span class="app-jobnav-ws-ic"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M3 14h18M9 4v16M15 4v16"/></svg></span>' +
+        '<span class="app-nav-label">Workspace</span>';
+      wsItem.addEventListener('click', function () {
+        if (typeof window.p86WorkspaceToggle === 'function') window.p86WorkspaceToggle();
+      });
+      jobnav.appendChild(wsItem);
 
       // (Job overview card removed from the left contextual sidebar — it now lives at the
       //  top of the right Inspector on the Site Plan. The left sidebar stays "standard":
@@ -682,13 +709,10 @@
     RIGHT_TABS.forEach(function(tab, i) {
       tabsHtml += '<button class="ws-right-tab' + (i === 0 ? ' active' : '') + '" data-panel="' + tab.id + '"' + (tab.icon ? ' data-p86-icon="' + tab.icon + '"' : '') + '>' + tab.label + '</button>';
     });
-    // Workspace is a prominent icon-only action button (not a tab).
-    // Clicking it toggles the node-graph canvas + floating workspace
-    // panel; clicking it again restores whichever tab was active before.
-    // Global Ask 86 badge embeds right next to it via the slot mount.
+    // Only the global Ask 86 badge lives here now. The Workspace opener moved to
+    // the left sidebar (app-jobnav) so it's the single entry point.
     tabsHtml += '<div class="ws-right-tabs-actions">' +
       '<span class="p86-ask86-mount"></span>' +
-      '<button class="ws-workspace-toggle" id="wsWorkspaceToggle" type="button" data-p86-icon="graph" title="Open the workspace over the Site Plan — click again to return to this tab" aria-label="Workspace"></button>' +
     '</div>';
     tabsHtml += '</div>';
 
@@ -735,6 +759,7 @@
           '<button class="ws-floating-btn" id="wsClearBtnHeader" title="Clear workspace">&#x1F5D1;</button>' +
           '<button class="ws-floating-btn" id="wsSaveBtnHeader" title="Save workspace (Ctrl+S)">&#x1F4BE;</button>' +
           '<button class="ws-floating-btn" id="wsFloatingMinBtn" title="Minimize to folder icon">&#x2013;</button>' +
+          '<button class="ws-floating-btn" id="wsFloatingCloseBtn" title="Close workspace">&#x2715;</button>' +
         '</div>' +
       '</div>' +
       '<div class="ws-floating-body">' +
@@ -928,6 +953,12 @@
       minimizeWorkspace();
     });
 
+    var closeBtn = document.getElementById('wsFloatingCloseBtn');
+    if (closeBtn) closeBtn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      hideWorkspaceWindow();
+    });
+
     _floatingState.inited = true;
   }
 
@@ -975,6 +1006,9 @@
   function syncWorkspaceRibbonBtn(on) {
     var b = document.querySelector('#nodeGraphTab .ng-workspace-btn');
     if (b) b.classList.toggle('ng-on', !!on);
+    // The Workspace opener now lives in the left sidebar — reflect open state there.
+    var s = document.getElementById('appJobnavWorkspace');
+    if (s) s.classList.toggle('active', !!on);
   }
   function isWorkspaceWindowOpen() {
     var panel = document.getElementById('wsFloatingPanel');
