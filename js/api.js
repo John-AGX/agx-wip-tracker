@@ -210,7 +210,8 @@
   }
 
   var ai = {
-    extractLead: function(images) { return post('/api/ai/extract-lead', { images: images }); }
+    extractLead: function(images) { return post('/api/ai/extract-lead', { images: images }); },
+    extractPurchaseOrder: function(images) { return post('/api/ai/extract-purchase-order', { images: images }); }
   };
 
   // Team messaging — per-entity comment threads.

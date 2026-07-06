@@ -5773,6 +5773,116 @@ router.post('/extract-lead',
 );
 
 // ════════════════════════════════════════════════════════════════════
+// POST /api/ai/extract-purchase-order
+// Vision extraction of a Buildertrend Purchase Order PDF (a subcontractor
+// scope-of-work contract) → structured PO fields the PO editor prefills.
+// Mirrors /extract-lead: client renders the PDF to page images, posts them
+// here, we hand them to Claude with a PO-specific schema. Deliberately does
+// NOT capture the long standard Terms & Conditions boilerplate — that's AGX's
+// standard subcontract, seeded per-org as the default scope template.
+// ════════════════════════════════════════════════════════════════════
+const PO_EXTRACTION_SCHEMA = {
+  type: 'object',
+  properties: {
+    po_number: { type: 'string', description: 'Purchase Order number as printed (e.g., "0001"). Empty string if absent.' },
+    title: { type: 'string', description: 'PO title / scope name — the short heading (e.g., "Framing and Decking"). Empty string if absent.' },
+    vendor_name: { type: 'string', description: 'The subcontractor / vendor the PO is Assigned To (e.g., "A Tree Surgeons Enterprise LLC"). Empty string if absent.' },
+    job_reference: { type: 'string', description: 'The linked Job as printed — its name and/or job number (e.g., "Solace Timacuan" or "RV2001 ..."). Empty string if absent. Used to match the job; do NOT invent one.' },
+    materials_only: { type: 'boolean', description: 'True only if the PO is explicitly flagged "Materials Only". Default false.' },
+    scheduled_completion: { type: 'string', description: 'Scheduled Completion / Completion Date as YYYY-MM-DD. Empty string if absent.' },
+    scope_of_work: { type: 'string', description: 'The JOB-SPECIFIC scope of work only — the text under "ATTACHMENT A - SCOPE OF WORK" (or the equivalent job-specific description). Preserve line breaks. DO NOT include the long standard TERMS & CONDITIONS boilerplate (Invoicing, Insurance, Indemnification, Warranty, Dispute Resolution, etc.) — omit all of it. Empty string if none.' },
+    lines: {
+      type: 'array',
+      description: 'The cost / line-item table rows. Empty array if none.',
+      items: {
+        type: 'object',
+        properties: {
+          description: { type: 'string', description: 'Item / line description.' },
+          cost_type: { type: 'string', description: 'Cost type column (e.g., "Subcontractors Costs"). Empty string if absent.' },
+          cost_category: { type: 'string', description: 'Cost category column (e.g., "Subcontractor"). Empty string if absent.' },
+          unit_cost: { type: 'number', description: 'Unit cost as a number. 0 if absent.' },
+          quantity: { type: 'number', description: 'Quantity as a number. Default 1 when a line has a cost but no explicit quantity.' },
+          unit: { type: 'string', description: 'Unit of measure (e.g., "EA", "LS", "SF"). Empty string if absent.' }
+        },
+        required: ['description', 'cost_type', 'cost_category', 'unit_cost', 'quantity', 'unit'],
+        additionalProperties: false
+      }
+    },
+    total_cost: { type: 'number', description: 'The PO Total Cost / Builder Cost total as a number, for cross-checking the line items. 0 if absent.' },
+    internal_notes: { type: 'string', description: 'Internal-only notes if present (not the scope, not the T&C). Empty string if none.' },
+    confidence_pct: { type: 'integer', description: 'Your confidence in the extraction, 0-100.' }
+  },
+  required: ['po_number', 'title', 'vendor_name', 'job_reference', 'materials_only', 'scheduled_completion', 'scope_of_work', 'lines', 'total_cost', 'internal_notes', 'confidence_pct'],
+  additionalProperties: false
+};
+
+const PO_EXTRACTION_SYSTEM = [
+  'You are extracting a structured Purchase Order from a Buildertrend Purchase Order PDF for Project 86, a Central Florida construction services company. A Buildertrend PO is a subcontractor scope-of-work CONTRACT.',
+  '',
+  'The PDF pages are attached as images. Read every page. Return ONLY the JSON described by the schema — no prose, no markdown.',
+  '',
+  'Field rules:',
+  '- Use empty strings for missing text, 0 for missing numbers, false for a missing boolean — never null, never "N/A".',
+  '- vendor_name is the sub the PO is ASSIGNED TO (the "Assigned to" / subcontractor). job_reference is the linked JOB (its name and/or job number) exactly as printed — do not guess.',
+  '- Line items come from the cost table. Map columns: Item → description; Cost type → cost_type; Cost category → cost_category; Unit cost → unit_cost; Quantity → quantity; Unit → unit. "Builder Cost" is the line total (unit_cost × quantity) — you do not need to output it separately. If a line shows a total but no quantity, set quantity to 1 and unit_cost to that total.',
+  '- CRITICAL — scope_of_work: capture ONLY the job-specific scope (usually under "ATTACHMENT A - SCOPE OF WORK", or the specific work description for THIS job). DO NOT include the long standard TERMS & CONDITIONS boilerplate that follows it (Invoicing & Payments, Performance Time, Changes & Change Orders, Indemnification, Insurance, Warranty, Execution & Additional Obligations, Dispute Resolution, Entire Agreement, and any mention of "Parsky LLC dba AG Exteriors"). That boilerplate is AGX\'s standard subcontract and is already on file — omit every word of it.',
+  '- Money: parse "$18,275.80" as 18275.80. Percentages like "75%" → 75.',
+  '- scheduled_completion must be YYYY-MM-DD (convert from any printed date format). Empty string if none.'
+].join('\n');
+
+router.post('/extract-purchase-order',
+  requireAuth, requireCapability('ESTIMATES_EDIT'),
+  async (req, res) => {
+    const anthropic = getAnthropic();
+    if (!anthropic) {
+      return res.status(503).json({ error: 'AI assistant is not configured. Set ANTHROPIC_API_KEY.' });
+    }
+    const images = Array.isArray(req.body && req.body.images) ? req.body.images : [];
+    if (!images.length) {
+      return res.status(400).json({ error: 'images array is required' });
+    }
+    if (images.length > 12) {
+      return res.status(400).json({ error: 'Up to 12 page images per extraction request.' });
+    }
+
+    try {
+      const imageBlocks = images.map(b64 => inlineImageBlock(b64)).filter(Boolean);
+      const userContent = [
+        ...imageBlocks,
+        { type: 'text', text: 'Extract the purchase order from these pages. Return only the JSON.' }
+      ];
+
+      const response = await anthropic.messages.create({
+        model: MODEL,
+        max_tokens: 3500,
+        system: PO_EXTRACTION_SYSTEM,
+        messages: [{ role: 'user', content: userContent }],
+        output_config: {
+          format: {
+            type: 'json_schema',
+            schema: PO_EXTRACTION_SCHEMA
+          }
+        }
+      });
+
+      const textBlock = (response.content || []).find(b => b.type === 'text');
+      if (!textBlock) throw new Error('No text response from the model.');
+      let parsed;
+      try {
+        parsed = JSON.parse(textBlock.text);
+      } catch (e) {
+        throw new Error('Model returned non-JSON response: ' + textBlock.text.slice(0, 200));
+      }
+
+      res.json({ ok: true, purchase_order: parsed, usage: response.usage });
+    } catch (e) {
+      console.error('AI extract-purchase-order error:', e);
+      res.status(500).json({ error: e.message || 'Server error' });
+    }
+  }
+);
+
+// ════════════════════════════════════════════════════════════════════
 // CLIENT DIRECTORY ASSISTANT
 //
 // Helps with parent-company / property hierarchy management. Each tool

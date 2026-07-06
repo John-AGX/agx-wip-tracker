@@ -132,6 +132,7 @@
           '</div>' +
           '<div class="po-ed-head-r">' +
             '<span class="po-ed-saved" id="po-ed-saved"></span>' +
+            (st === 'draft' ? '<button class="ee-btn" id="po-ed-import" title="Prefill this PO from a Buildertrend Purchase Order PDF export">&#x2913; Import PDF</button>' : '') +
             (step && !locked ? '<button class="ee-btn primary" id="po-ed-step">' + esc(step.label) + '</button>' : '') +
             '<button class="ee-btn" id="po-ed-print">Print</button>' +
             '<button class="ee-btn" id="po-ed-close">Close</button>' +
@@ -356,6 +357,7 @@
     var closeBtn = byId('po-ed-close'); if (closeBtn) closeBtn.addEventListener('click', close);
     var printBtn = byId('po-ed-print'); if (printBtn) printBtn.addEventListener('click', printPO);
     var stepBtn = byId('po-ed-step'); if (stepBtn) stepBtn.addEventListener('click', advanceStatus);
+    var importBtn = byId('po-ed-import'); if (importBtn) importBtn.addEventListener('click', importFromPdf);
 
     // Sub picker — populate from cache.
     var subSel = byId('po-f-sub');
@@ -497,6 +499,105 @@
     if (tot) tot.textContent = money(poTotal(_po));
     wireLineInputs();
     recomputePay(); // adding/removing lines shifts the PO total
+  }
+
+  // ── Import from Buildertrend PDF (AI-vision OCR) ────────────────────
+  // Prefills THIS draft PO from a Buildertrend PO PDF export, then leaves it
+  // for the user to review before it saves (mirrors the lead PDF importer).
+  function importFromPdf() {
+    if (!window.p86POImport || !window.p86POImport.pickAndExtract) {
+      alert('Importer not loaded — hard-refresh the page and try again.');
+      return;
+    }
+    setSaved('Importing…');
+    window.p86POImport.pickAndExtract({ onStatus: function (m) { setSaved(m); } })
+      .then(function (parsed) {
+        if (!parsed) { setSaved('Saved'); return; } // cancelled
+        applyExtractedPO(parsed);
+      })
+      .catch(function (err) {
+        console.error('PO import failed:', err);
+        setSaved('Import failed');
+        alert('Import failed: ' + ((err && err.message) || err));
+      });
+  }
+
+  // Normalize a company name for fuzzy matching: lowercase, drop punctuation
+  // and the common LLC/Inc/Corp suffixes so "A Tree Surgeons Enterprise LLC"
+  // matches "A Tree Surgeons Enterprises".
+  function normCompany(s) {
+    return String(s || '').toLowerCase()
+      .replace(/[^a-z0-9]+/g, ' ')
+      .replace(/\b(llc|inc|incorporated|corp|corporation|co|company|enterprises?|the)\b/g, ' ')
+      .replace(/\s+/g, ' ').trim();
+  }
+  function matchSub(vendorName, subs) {
+    var target = normCompany(vendorName);
+    if (!target) return null;
+    var exact = subs.find(function (s) { return normCompany(s.name) === target; });
+    if (exact) return exact;
+    // Substring either direction — but only accept when it's unambiguous.
+    var partial = subs.filter(function (s) {
+      var n = normCompany(s.name);
+      return n && (n.indexOf(target) !== -1 || target.indexOf(n) !== -1);
+    });
+    return partial.length === 1 ? partial[0] : null;
+  }
+
+  function applyExtractedPO(p) {
+    if (!_po) return;
+    if (p.title) _po.title = p.title;
+    if (p.scheduled_completion) _po.scheduledCompletion = p.scheduled_completion;
+    _po.materialsOnly = !!p.materials_only;
+    // The job-specific scope goes ABOVE the standard subcontract template that
+    // create() already seeded — so the PO carries both the job scope and the
+    // boilerplate terms.
+    if (p.scope_of_work && p.scope_of_work.trim()) {
+      var existing = (_po.scope || '').trim();
+      _po.scope = existing ? (p.scope_of_work.trim() + '\n\n' + existing) : p.scope_of_work.trim();
+    }
+    if (Array.isArray(p.lines) && p.lines.length) {
+      _po.lines = p.lines.map(function (l) {
+        return {
+          description: l.description || '',
+          costType: l.cost_type || '',
+          costCategory: l.cost_category || '',
+          unitCost: num(l.unit_cost),
+          qty: (l.quantity != null && l.quantity !== '') ? num(l.quantity) : 1,
+          unit: l.unit || ''
+        };
+      });
+    }
+    // Keep P86's own po_number; record the Buildertrend number + any internal
+    // notes in the internal notes so nothing is lost.
+    var noteBits = [];
+    if (p.po_number) noteBits.push('Imported from Buildertrend PO #' + p.po_number + '.');
+    if (p.internal_notes && p.internal_notes.trim()) noteBits.push(p.internal_notes.trim());
+    if (noteBits.length) {
+      var curNotes = (_po.internalNotes || '').trim();
+      _po.internalNotes = noteBits.join(' ') + (curNotes ? '\n\n' + curNotes : '');
+    }
+    // Fuzzy-match the vendor to a sub, then re-render + save for review.
+    loadSubs(function (subs) {
+      var m = matchSub(p.vendor_name, subs);
+      if (m) { _po.sub_id = m.id; _po.sub_name = m.name; }
+      render();
+      queueSave();
+      var tot = poTotal(_po);
+      var n = (_po.lines || []).length;
+      var warn = [];
+      if (p.total_cost && Math.abs(num(p.total_cost) - tot) > 1) {
+        warn.push('Printed total was ' + money(p.total_cost) + ' but line items sum to ' + money(tot) + ' — review the lines.');
+      }
+      if (p.vendor_name && !m) warn.push('Vendor “' + p.vendor_name + '” didn’t match a sub — pick one from the dropdown.');
+      if (p.job_reference) warn.push('Buildertrend job reference: “' + p.job_reference + '” — confirm this is the right job.');
+      setSaved('Imported — review & saved');
+      if (warn.length) {
+        setTimeout(function () {
+          alert('✓ Imported ' + n + ' line item' + (n === 1 ? '' : 's') + ' · ' + money(tot) + '.\n\n⚠ Please check:\n• ' + warn.join('\n• '));
+        }, 80);
+      }
+    });
   }
 
   // ── save ────────────────────────────────────────────────────────────
