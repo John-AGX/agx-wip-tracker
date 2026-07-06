@@ -22,6 +22,7 @@ const express = require('express');
 const { pool } = require('../db');
 const { requireAuth, requireCapability, hasCapability } = require('../auth');
 const { assertEntityInOrg } = require('../org-access');
+const { sanitizeRichText } = require('../util/rich-text');
 
 const router = express.Router();
 
@@ -276,6 +277,10 @@ router.put('/change-orders/:id', requireAuth, requireCapability('ESTIMATES_EDIT'
     delete data.created_at;
     delete data.updated_at;
     if (!Array.isArray(data.lines)) data.lines = [];
+    // Rich-text fields hold sanitized HTML from the p86RichText editor; clean
+    // them again server-side so a direct API POST can't store unsafe markup.
+    if (typeof data.scope === 'string') data.scope = sanitizeRichText(data.scope);
+    if (typeof data.terms === 'string') data.terms = sanitizeRichText(data.terms);
 
     // IS DISTINCT FROM keeps updated_at stable when nothing actually
     // changed — same trick estimate-routes.js uses to keep the

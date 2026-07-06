@@ -56,6 +56,12 @@
   // ──────────────────────────────────────────────────────────────────
   // Public API
   // ──────────────────────────────────────────────────────────────────
+  // Default Terms & Conditions seeded on a NEW change order (fully editable
+  // in the rich-text field; existing COs are never overwritten).
+  var DEFAULT_CO_TERMS =
+    '<p>Please review and approve this Change Order to confirm the adjustment to your original Scope of Work.</p>' +
+    '<p>By approving, you acknowledge the updated construction schedule and understand that invoicing will occur either upon approval or at completion of the project. Timely payment helps us keep the project moving smoothly and on schedule.</p>';
+
   function openNew(jobId) {
     if (!jobId) { console.warn('openNew: jobId required'); return; }
     if (!window.p86Api || !window.p86Api.changeOrders) {
@@ -64,6 +70,7 @@
     window.p86Api.changeOrders.create(jobId, {
       title: '',
       scope: '',
+      terms: DEFAULT_CO_TERMS,
       targetMargin: '',
       defaultMarkup: '',
       feeFlat: 0, feePct: 0,
@@ -129,6 +136,7 @@
     var data = {
       title: co.title || '',
       scope: co.scope || '',
+      terms: co.terms || '',
       targetMargin: co.targetMargin || '',
       defaultMarkup: co.defaultMarkup || '',
       feeFlat: co.feeFlat || 0,
@@ -217,6 +225,7 @@
 
     wireHeader(overlay);
     wireSidePanel(overlay);
+    wireRichFields(overlay);
     paintLines();
     paintTotals();
     paintStatusPill();
@@ -255,10 +264,14 @@
         '<div class="p86-co-body">' +
           // Side panel — title/scope/margins/fees/tax
           '<aside class="p86-co-side">' +
-            '<label class="p86-co-field">' +
+            '<div class="p86-co-field">' +
               '<span>Scope of Work</span>' +
-              '<textarea data-field="scope" rows="6" placeholder="Describe the work this change order covers. Customer sees this text on the proposal PDF.">' + escapeHTML(co.scope || '') + '</textarea>' +
-            '</label>' +
+              '<div id="p86CoScopeHost" class="p86-co-rt"></div>' +
+            '</div>' +
+            '<div class="p86-co-field">' +
+              '<span>Terms &amp; Conditions</span>' +
+              '<div id="p86CoTermsHost" class="p86-co-rt"></div>' +
+            '</div>' +
             '<label class="p86-co-field">' +
               '<span>Target Margin %</span>' +
               '<input type="number" min="0" max="99" step="0.1" data-field="targetMargin" placeholder="(optional — overrides line markups)" value="' + escapeAttr(co.targetMargin == null ? '' : co.targetMargin) + '" />' +
@@ -357,9 +370,41 @@
     });
   }
 
+  // ── Rich-text fields (Scope + Terms) ───────────────────────────
+  // Mount the shared p86RichText editor onto each host; onChange writes the
+  // sanitized HTML straight into the in-memory CO and debounce-saves. Falls
+  // back to a plain textarea if the rich-text module didn't load.
+  function mountCoRichField(overlay, sel, field, ph) {
+    var host = overlay.querySelector(sel);
+    if (!host) return;
+    if (window.p86RichText && window.p86RichText.mount) {
+      _state['rt_' + field] = window.p86RichText.mount(host, {
+        value: _state.co[field] || '',
+        placeholder: ph,
+        minHeight: 110,
+        compact: true,
+        onChange: function (html) { if (_state.co) { _state.co[field] = html; markDirty(); } }
+      });
+    } else {
+      var ta = document.createElement('textarea');
+      ta.rows = 6; ta.placeholder = ph;
+      ta.value = (window.p86RichText && window.p86RichText.toPlainText)
+        ? window.p86RichText.toPlainText(_state.co[field] || '')
+        : (_state.co[field] || '');
+      host.appendChild(ta);
+      ta.addEventListener('input', function () { if (_state.co) { _state.co[field] = ta.value; markDirty(); } });
+    }
+  }
+  function wireRichFields(overlay) {
+    mountCoRichField(overlay, '#p86CoScopeHost', 'scope',
+      'Describe the work this change order covers. The customer sees this on the change order.');
+    mountCoRichField(overlay, '#p86CoTermsHost', 'terms',
+      'Terms the customer agrees to when they approve this change order.');
+  }
+
   // ── Side-panel field wiring ────────────────────────────────────
   function wireSidePanel(overlay) {
-    var fields = ['scope', 'targetMargin', 'defaultMarkup', 'feeFlat', 'feePct', 'taxPct', 'roundTo'];
+    var fields = ['targetMargin', 'defaultMarkup', 'feeFlat', 'feePct', 'taxPct', 'roundTo'];
     fields.forEach(function(f) {
       var el = overlay.querySelector('[data-field="' + f + '"]');
       if (!el) return;
@@ -639,6 +684,7 @@
     var data = {
       title: co.title || '',
       scope: co.scope || '',
+      terms: co.terms || '',
       targetMargin: co.targetMargin || '',
       defaultMarkup: co.defaultMarkup || '',
       feeFlat: co.feeFlat || 0,
