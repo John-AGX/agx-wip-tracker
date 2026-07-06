@@ -3483,6 +3483,11 @@
           <button type="button" class="ng-pop-check" data-ngl="nodes">Node chips</button>
           <button type="button" class="ng-pop-check" data-ngl="minimap">Minimap</button>
           <button type="button" class="ng-pop-check" data-ngl="help">Shortcut bar</button>
+          <div class="ng-pop-title">Basemap</div>
+          <button class="ng-tbtn ng-ribbon-btn ng-basemap-btn" id="ngBasemapBtn" title="Map view — switch the basemap from satellite imagery to a street/road map. Useful for locations with no or poor satellite coverage; toggle back for satellite.">
+            <span class="ng-ribbon-icon">&#x1F6E3;&#xFE0F;</span>
+            <span class="ng-ribbon-label">Map view</span>
+          </button>
         </div>
         <!-- More popover: the lower-frequency ribbon tools, re-homed as menu rows -->
         <div id="ngMorePop" class="ng-pop" hidden>
@@ -3576,7 +3581,7 @@
       </div>
     </div>
     <script src="nodegraph/engine.js?v=104"></script>
-    <script src="nodegraph/ui.js?v=255"></script>
+    <script src="nodegraph/ui.js?v=256"></script>
     <!-- Ribbon popovers (Layers / More) + layer visibility persistence.
          Loads after ui.js; only owns the popover chrome — the moved
          ribbon buttons stay wired by ui.js itself. -->

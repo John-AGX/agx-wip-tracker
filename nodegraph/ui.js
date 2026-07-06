@@ -32,6 +32,9 @@ var _spPhotos=(function(){ try{ return localStorage.getItem('ngSitePlanPhotos')=
 var _taskPinsEl=null, _geoTasks=[], _geoTasksJob=null;
 var _spTasks=(function(){ try{ return localStorage.getItem('ngSitePlanTasks')==='1'; }catch(_){ return false; } })();
 var _spSatellite=true; // satellite is permanent now (the toggle is retired); never goes false
+// Basemap imagery type: 'satellite' (default) or 'roadmap' (street map) — for
+// job locations with no/poor satellite coverage. Persisted; switched live via setMapTypeId.
+var _spBasemapType=(function(){ try{ return localStorage.getItem('ngSitePlanBasemap')==='roadmap' ? 'roadmap' : 'satellite'; }catch(_){ return 'satellite'; } })();
 // 3D Orbit view (Photorealistic 3D Tiles / Google-Earth engine). Rendered in an ISOLATED
 // same-origin iframe (/orbit3d.html) that loads Maps on the BETA channel + Map3DElement, so
 // the main app's maps stay on the production "weekly" channel, untouched. We feed the iframe
@@ -1629,7 +1632,7 @@ function mountBasemap(){
     if(!_spSatellite) return;                              // toggled off while the SDK loaded
     _basemap=new maps.Map(basemapEl, {
       center:{ lat:_spOrigin.lat, lng:_spOrigin.lng }, zoom:19,
-      mapTypeId:maps.MapTypeId.SATELLITE, tilt:0,
+      mapTypeId:(_spBasemapType==='roadmap' ? maps.MapTypeId.ROADMAP : maps.MapTypeId.SATELLITE), tilt:0,
       disableDefaultUI:true, gestureHandling:'none', keyboardShortcuts:false,
       clickableIcons:false, backgroundColor:'#0b0e16', isFractionalZoomEnabled:false
     });
@@ -5628,6 +5631,23 @@ function init(){
       try{ localStorage.setItem('ngSitePlanTasks', _spTasks?'1':'0'); }catch(_){}
       tasksBtn.classList.toggle('ng-on', _spTasks);
       updateTaskLayer();
+    });
+  }
+
+  // Basemap type — flip the imagery between satellite and a street/road map
+  // (for locations with no/poor satellite coverage). setMapTypeId is instant, no
+  // remount; the building footprints + geo overlays ride on top either way, so you
+  // can still place/trace buildings on the map view.
+  var basemapBtn=tab.querySelector('.ng-basemap-btn');
+  if(basemapBtn){
+    var _syncBasemapBtn=function(){ basemapBtn.classList.toggle('ng-on', _spBasemapType==='roadmap'); };
+    _syncBasemapBtn();
+    basemapBtn.addEventListener('click', function(){
+      _spBasemapType = (_spBasemapType==='roadmap') ? 'satellite' : 'roadmap';
+      try{ localStorage.setItem('ngSitePlanBasemap', _spBasemapType); }catch(_){}
+      _syncBasemapBtn();
+      if(_basemap && _basemapReady){ try{ _basemap.setMapTypeId(_spBasemapType); }catch(_){} syncBasemapCamera(); }
+      else if(E.viewMode && E.viewMode()==='siteplan'){ mountBasemap(); }
     });
   }
 
