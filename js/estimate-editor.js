@@ -686,22 +686,41 @@
   function _defaultRecipient(est) { return (est && (est.managerEmail || est.cm_email || est.email)) || ''; }
   function _refreshEstList() { if (typeof window.renderEstimatesList === 'function') { try { window.renderEstimatesList(); } catch (e) {} } }
 
-  // Send / print the proposal to ANY recipient. Records recipient + method; when
-  // Email is chosen, the server emails a branded summary to that address (Resend).
-  function openProposalSend(estId) {
+  // Send / print the proposal to ANY recipient. Records recipient + method. Three
+  // paths: Print/PDF (record only), Email (system/Resend branded summary), and —
+  // when the user has connected their Microsoft 365 mailbox — "Send from my
+  // Outlook", which sends from the user's OWN mailbox (Graph Mail.Send) so replies
+  // land in their inbox + it shows in Sent. Outlook is the DEFAULT when connected
+  // (John's real workflow: email the proposal, get a signed scan / "approved" reply
+  // back, then Record approval + attach the signed doc to the lead).
+  async function openProposalSend(estId) {
     var est = _findEst(estId); if (!est) return;
+    var outlookOn = false, outlookEmail = '';
+    try {
+      if (window.p86Api && window.p86Api.outlook && window.p86Api.outlook.status) {
+        var _st = await window.p86Api.outlook.status();
+        outlookOn = !!(_st && _st.connected);
+        outlookEmail = (_st && _st.email) || '';
+      }
+    } catch (e) {}
+
     var back = document.createElement('div');
     back.style.cssText = 'position:fixed;inset:0;z-index:2147483200;background:rgba(6,9,17,.6);display:flex;align-items:center;justify-content:center;padding:16px;';
+    var outlookOpt = outlookOn
+      ? '<label style="flex:1 1 100%;display:flex;align-items:center;gap:6px;font-size:13px;border:1px solid #34d39955;border-radius:8px;padding:8px 10px;cursor:pointer;background:rgba(52,211,153,0.06);"><input type="radio" name="propMethod" value="outlook" checked> <span>Send from my Outlook' + (outlookEmail ? ' <span style="color:var(--text-dim,#888);font-size:11px;">(' + escapeHTML(outlookEmail) + ')</span>' : '') + '</span></label>'
+      : '';
     back.innerHTML =
       '<div class="modal-content" style="width:min(460px,96vw);">' +
         '<div class="p86-dialog-title">Send proposal</div>' +
         '<label style="display:block;font-size:12px;margin:10px 0 4px;">Recipient email (any address)</label>' +
         '<input class="p86-dialog-input" id="propSendTo" type="email" placeholder="name@company.com" value="' + escapeHTML(_defaultRecipient(est)) + '" />' +
         '<label style="display:block;font-size:12px;margin:12px 0 4px;">How</label>' +
-        '<div style="display:flex;gap:8px;">' +
-          '<label style="flex:1;display:flex;align-items:center;gap:6px;font-size:13px;border:1px solid var(--border,#333);border-radius:8px;padding:8px 10px;cursor:pointer;"><input type="radio" name="propMethod" value="print" checked> Print / PDF</label>' +
-          '<label style="flex:1;display:flex;align-items:center;gap:6px;font-size:13px;border:1px solid var(--border,#333);border-radius:8px;padding:8px 10px;cursor:pointer;"><input type="radio" name="propMethod" value="email"> Email now</label>' +
+        '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
+          outlookOpt +
+          '<label style="flex:1;display:flex;align-items:center;gap:6px;font-size:13px;border:1px solid var(--border,#333);border-radius:8px;padding:8px 10px;cursor:pointer;"><input type="radio" name="propMethod" value="print"' + (outlookOn ? '' : ' checked') + '> Print / PDF</label>' +
+          '<label style="flex:1;display:flex;align-items:center;gap:6px;font-size:13px;border:1px solid var(--border,#333);border-radius:8px;padding:8px 10px;cursor:pointer;"><input type="radio" name="propMethod" value="email"> Email (system)</label>' +
         '</div>' +
+        (outlookOn ? '' : '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:8px;">Connect Outlook in My Account to send proposals from your own mailbox.</div>') +
         '<div class="p86-dialog-actions" style="margin-top:16px;">' +
           '<button class="p86-dialog-btn" data-cancel>Cancel</button>' +
           '<button class="p86-dialog-btn p86-dialog-btn-primary" data-send>Send</button>' +
@@ -711,19 +730,45 @@
     function close() { if (back.parentNode) back.parentNode.removeChild(back); }
     back.addEventListener('click', function (e) { if (e.target === back) close(); });
     back.querySelector('[data-cancel]').addEventListener('click', close);
-    back.querySelector('[data-send]').addEventListener('click', function () {
-      var to = (back.querySelector('#propSendTo').value || '').trim();
-      var method = (back.querySelector('input[name="propMethod"]:checked') || {}).value || 'print';
-      if (method === 'email' && !/.+@.+\..+/.test(to)) { _propToast('Enter a valid recipient email.', 'error'); return; }
-      var btn = back.querySelector('[data-send]'); btn.disabled = true; btn.textContent = 'Sending…';
-      var payload = { to: to, method: method };
-      if (method === 'email') { payload.subject = 'Proposal: ' + (est.title || est.name || 'AGX'); payload.html = buildProposalEmailHtml(est); }
-      window.p86Api.estimates.send(estId, payload).then(function (r) {
+
+    // Record the send server-side (approval_status→sent, sent_to/method/at). The
+    // print/email path may pass html for the Resend fallback; outlook never does.
+    function recordSend(payload) {
+      return window.p86Api.estimates.send(estId, payload).then(function (r) {
         est.approval_status = (r && r.approval_status) || est.approval_status || 'sent';
-        est.sent_to = to || est.sent_to; est.sent_method = method;
+        est.sent_to = payload.to || est.sent_to; est.sent_method = payload.method;
         if (r && 'sent_at' in r) est.sent_at = r.sent_at;
         if (r && 'sent_count' in r) est.sent_count = r.sent_count;
         close(); renderHeaderChips(); _refreshEstList();
+        return r;
+      });
+    }
+
+    back.querySelector('[data-send]').addEventListener('click', function () {
+      var to = (back.querySelector('#propSendTo').value || '').trim();
+      var method = (back.querySelector('input[name="propMethod"]:checked') || {}).value || 'print';
+      if ((method === 'email' || method === 'outlook') && !/.+@.+\..+/.test(to)) { _propToast('Enter a valid recipient email.', 'error'); return; }
+      var btn = back.querySelector('[data-send]'); btn.disabled = true; btn.textContent = 'Sending…';
+
+      if (method === 'outlook') {
+        // Send through the user's own Microsoft 365 mailbox, THEN record it
+        // (method='outlook' → server records but does NOT also Resend).
+        var subject = 'Proposal: ' + (est.title || est.name || 'AGX');
+        window.p86Api.outlook.sendMail({ to: to, subject: subject, body: buildProposalEmailText(est) })
+          .then(function () { return recordSend({ to: to, method: 'outlook' }); })
+          .then(function () { _propToast('Proposal sent from your Outlook to ' + to, 'success'); })
+          .catch(function (e) {
+            btn.disabled = false; btn.textContent = 'Send';
+            var m = (e && e.message) || 'Could not send from Outlook.';
+            if (/not_connected|reauth/i.test(m)) m = 'Outlook needs reconnecting (My Account → Outlook).';
+            _propToast(m, 'error');
+          });
+        return;
+      }
+
+      var payload = { to: to, method: method };
+      if (method === 'email') { payload.subject = 'Proposal: ' + (est.title || est.name || 'AGX'); payload.html = buildProposalEmailHtml(est); }
+      recordSend(payload).then(function (r) {
         if (method === 'print') { setTimeout(function () { try { window.print(); } catch (e) {} }, 80); _propToast('Recorded — opening the print dialog…', 'success'); }
         else if (r && r.emailed) _propToast('Proposal emailed to ' + to, 'success');
         else _propToast('Recorded. Email not sent' + (r && r.emailError ? ' (' + r.emailError + ')' : '') + '.', 'error');
@@ -755,8 +800,53 @@
       '</div></div>';
   }
 
-  // Record a manual / e-sign approval. Captures approver name + method → flips
-  // the estimate to Approved; the linked lead then shows the "create job" flag.
+  // Plain-text proposal summary for the Outlook send path (Graph sendMail uses
+  // contentType:'Text'). Mirrors buildProposalEmailHtml's content without markup.
+  function buildProposalEmailText(est) {
+    var totals = (window.computeEstimateTotals ? window.computeEstimateTotals(est) : {}) || {};
+    var total = (totals.proposalTotal != null) ? totals.proposalTotal : 0;
+    var money = function (n) { return '$' + Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
+    var addr = est.propertyAddr || est.address || '';
+    var lines = ['Hi,', '', 'Please find our proposal summary below.', '', (est.title || est.issue || 'Proposal')];
+    if (est.client) lines.push(est.client);
+    if (addr) lines.push(addr);
+    lines.push('', 'Proposal total: ' + money(total));
+    if (est.scopeOfWork) { lines.push('', String(est.scopeOfWork).slice(0, 1200)); }
+    lines.push('', 'Reply to this email to approve, or let me know if you have any questions.', '', 'Thank you,', 'AGX');
+    return lines.join('\n');
+  }
+
+  // Upload a signed proposal / contract as proof of approval. Files to the parent
+  // LEAD when present (so it shows on the lead AND, via inheritance, on the
+  // estimate); else to the estimate. Uploads at ROOT first (reliable), then best-
+  // effort moves it into the target folder — the Explorer reads folder_id, and
+  // upload only sets the legacy folder STRING, so a move is what actually files it.
+  function _attachSignedDoc(est, file) {
+    var et = est.lead_id ? 'lead' : 'estimate';
+    var eid = est.lead_id || est.id;
+    var folderName = est.lead_id ? 'Proposals' : 'Contract';
+    var caption = ('Signed proposal — ' + (est.title || est.name || '')).slice(0, 160);
+    var api = window.p86Api;
+    return api.attachments.upload(et, eid, file, { geo: false, caption: caption }).then(function (up) {
+      var result = { et: et, eid: eid, attachment: up && up.attachment };
+      var attId = up && up.attachment && up.attachment.id;
+      if (!attId || !api.fileFolders) return result;
+      // tree() seeds the default buckets, so the target folder exists to file into.
+      return api.fileFolders.tree(et, eid).then(function (tr) {
+        var folders = (tr && tr.folders) || [];
+        var match = folders.find(function (f) { return String(f.name || '').toLowerCase() === folderName.toLowerCase(); });
+        if (match && match.id) return match.id;
+        return api.fileFolders.create(et, eid, { name: folderName }).then(function (cr) { return cr && cr.folder && cr.folder.id; });
+      }).then(function (fid) {
+        if (!fid) return result;
+        return api.fileFolders.moveFiles(et, eid, [attId], fid).then(function () { return result; });
+      }).catch(function () { return result; });  // filed-at-root is an acceptable fallback
+    });
+  }
+
+  // Record a manual / e-sign approval. Captures approver name + method (+ an
+  // optional signed doc → filed to the lead) → flips the estimate to Approved;
+  // the linked lead then shows the "create job" flag.
   function openProposalApprove(estId) {
     var est = _findEst(estId); if (!est) return;
     var back = document.createElement('div');
@@ -769,7 +859,9 @@
         '<input class="p86-dialog-input" id="propApprBy" type="text" placeholder="e.g. Jane Smith, Property Manager" />' +
         '<label style="display:block;font-size:12px;margin:12px 0 4px;">Method</label>' +
         '<select class="p86-dialog-input" id="propApprMethod"><option value="signed_doc">Signed document</option><option value="in_person">In person</option><option value="phone">Phone</option><option value="email">Email</option></select>' +
-        '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:8px;">Tip: attach the signed PDF in the estimate’s Files after saving.</div>' +
+        '<label style="display:block;font-size:12px;margin:12px 0 4px;">Signed document / contract <span style="color:var(--text-dim,#888);font-weight:400;">(optional — proof of approval)</span></label>' +
+        '<input id="propApprFile" type="file" accept="application/pdf,image/*" class="p86-dialog-input" style="padding:7px 9px;" />' +
+        '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:6px;">Files to the ' + (est.lead_id ? 'lead’s Proposals folder' : 'estimate’s Contract folder') + ' as proof of approval.</div>' +
         '<div class="p86-dialog-actions" style="margin-top:16px;">' +
           '<button class="p86-dialog-btn" data-cancel>Cancel</button>' +
           '<button class="p86-dialog-btn p86-dialog-btn-primary" data-approve>Mark approved</button>' +
@@ -782,12 +874,27 @@
     back.querySelector('[data-approve]').addEventListener('click', function () {
       var by = (back.querySelector('#propApprBy').value || '').trim();
       var method = back.querySelector('#propApprMethod').value || 'signed_doc';
+      var fileInput = back.querySelector('#propApprFile');
+      var file = (fileInput && fileInput.files && fileInput.files[0]) || null;
       var btn = back.querySelector('[data-approve]'); btn.disabled = true; btn.textContent = 'Saving…';
       window.p86Api.estimates.approve(estId, { approved_by: by, method: method }).then(function (r) {
         est.approval_status = 'approved'; est.approved_by = by || (r && r.approved_by) || null; est.approval_method = method;
         if (r && 'approved_at' in r) est.approved_at = r.approved_at;
-        close(); renderHeaderChips(); _refreshEstList();
-        _propToast('Proposal approved — create the job when ready.', 'success');
+        if (!file) {
+          close(); renderHeaderChips(); _refreshEstList();
+          _propToast('Proposal approved — create the job when ready.', 'success');
+          return;
+        }
+        // Approval is the critical write; the signed-doc attach is best-effort so a
+        // flaky upload never blocks (or reverts) the recorded approval.
+        btn.textContent = 'Attaching…';
+        _attachSignedDoc(est, file).then(function (info) {
+          close(); renderHeaderChips(); _refreshEstList();
+          _propToast('Approved — signed doc filed to the ' + (info && info.et === 'lead' ? 'lead' : 'estimate') + '.', 'success');
+        }).catch(function () {
+          close(); renderHeaderChips(); _refreshEstList();
+          _propToast('Approved. The signed file didn’t attach — add it in Files.', 'error');
+        });
       }).catch(function (e) { btn.disabled = false; btn.textContent = 'Mark approved'; _propToast((e && e.message) || 'Could not save.', 'error'); });
     });
     setTimeout(function () { var i = back.querySelector('#propApprBy'); if (i) i.focus(); }, 0);

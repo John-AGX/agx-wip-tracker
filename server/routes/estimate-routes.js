@@ -340,7 +340,10 @@ router.post('/:id/send', requireAuth, requireCapability('ESTIMATES_EDIT'), async
   try {
     const b = req.body || {};
     const to = (b.to || '').toString().trim();
-    const method = (b.method === 'print' || b.method === 'link') ? b.method : 'email';
+    // 'outlook' = the client already sent the mail through the user's own
+    // Microsoft 365 mailbox (Graph Mail.Send); we only RECORD it here and must
+    // NOT also fire the Resend fallback below. 'print'/'link' record only too.
+    const method = (b.method === 'print' || b.method === 'link' || b.method === 'outlook') ? b.method : 'email';
     const u = await pool.query(
       `UPDATE estimates
           SET sent_to = $3, sent_method = $4,

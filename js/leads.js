@@ -2014,7 +2014,7 @@
   // atomic server call (POST /api/jobs/convert) that also sets lead.job_id +
   // status='sold' and estimate.data.job_id — so a failure can't leave an
   // orphan job. With >1 estimate the user picks which one.
-  async function convertLeadToJob() {
+  async function convertLeadToJob(preChosenEstId) {
     var leadId = _currentEditingLeadId;
     var l = _leads.find(function(x) { return x.id === leadId; });
     if (!l) return;
@@ -2027,13 +2027,18 @@
     var c = l.client_id ? clientCache.find(function(x) { return x.id === l.client_id; }) : null;
     var clientName = c ? (c.company_name || c.name) : '';
 
-    // Choose the estimate whose bid + workspace seed the job.
+    // Choose the estimate whose bid + workspace seed the job. When an
+    // approved-proposal row triggers the convert it passes that estimate's
+    // id, so we skip the picker and use it directly.
     var ests = _estimatesForLead(leadId);
     var chosen = null;
-    if (ests.length === 1) chosen = ests[0];
-    else if (ests.length > 1) {
-      chosen = await _pickEstimate(ests);
-      if (chosen === null) return;  // user cancelled the picker
+    if (preChosenEstId) chosen = ests.find(function(e) { return e.id === preChosenEstId; }) || null;
+    if (!chosen) {
+      if (ests.length === 1) chosen = ests[0];
+      else if (ests.length > 1) {
+        chosen = await _pickEstimate(ests);
+        if (chosen === null) return;  // user cancelled the picker
+      }
     }
 
     // Contract Amount = chosen estimate's proposal total (the bid). Falls back
@@ -2274,15 +2279,45 @@
   // line, cost/price/margin on a second compact line. Click anywhere
   // on the row opens the estimate (no separate Edit/Preview buttons —
   // the full tab still has those).
+  // Proposal-status metadata for a lead's estimate row (mirrors the estimate
+  // editor's proposalActionsHtml vocabulary): draft / sent / approved / declined.
+  function _propStatusMeta(est) {
+    var st = (est && est.approval_status) || (est && est.sent_at ? 'sent' : 'draft');
+    if (st === 'approved') return { st: 'approved', lbl: '✓ Approved', col: '#34d399' };
+    if (st === 'declined') return { st: 'declined', lbl: 'Declined', col: '#f87171' };
+    if (st === 'sent') return { st: 'sent', lbl: 'Sent', col: '#fbbf24' };
+    return { st: 'draft', lbl: 'Draft', col: 'var(--text-dim,#8b90a5)' };
+  }
+
   function _compactEstimateRowHTML(est) {
     var calc = _computeEstimateCostMargin(est);
     var created = est.created_at ? new Date(est.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '';
+    var meta = _propStatusMeta(est);
+    var converted = !!est.job_id;
+    var readyToConvert = (meta.st === 'approved') && !converted;
+    // Approved-and-not-yet-converted rows get a green left accent so the lead
+    // "flags" at a glance which proposal is signed and ready to become a job.
+    var accent = readyToConvert ? 'border-left:3px solid #34d399;' : '';
+    var pill = '<span title="Proposal status" style="flex:0 0 auto;font-size:9.5px;font-weight:700;padding:2px 7px;border-radius:999px;color:' + meta.col + ';background:rgba(255,255,255,0.05);border:1px solid ' + meta.col + '44;white-space:nowrap;">' + escapeHTML(meta.lbl) + '</span>';
+    // Footer action: approved → "Create Job from approved" (skips the estimate
+    // picker via the pre-chosen id); already converted → a muted "Job created" chip.
+    var footer = '';
+    if (readyToConvert) {
+      footer = '<div style="margin-top:7px;">' +
+        '<button onclick="event.stopPropagation(); convertLeadToJob(\'' + escapeAttr(est.id) + '\'); return false;" ' +
+        'style="display:inline-flex;align-items:center;gap:5px;font:inherit;font-size:11px;font-weight:700;padding:5px 10px;border-radius:7px;border:1px solid #34d399;background:#34d399;color:#04210f;cursor:pointer;">' +
+        '<span>&#x1F3D7;&#xFE0F;</span>Create Job from approved &rarr;</button>' +
+      '</div>';
+    } else if (converted) {
+      footer = '<div style="margin-top:7px;font-size:10.5px;color:#34d399;font-weight:600;">&#x2713; Job created</div>';
+    }
     return '<div onclick="openEstimateFromLead(\'' + escapeAttr(est.id) + '\', false);" ' +
-      'style="cursor:pointer;padding:8px 10px;border:1px solid var(--border,#333);border-radius:6px;margin-bottom:6px;background:var(--overlay-light,rgba(255,255,255,0.02));transition:border-color 0.12s, background 0.12s;" ' +
+      'style="cursor:pointer;padding:8px 10px;border:1px solid var(--border,#333);' + accent + 'border-radius:6px;margin-bottom:6px;background:var(--overlay-light,rgba(255,255,255,0.02));transition:border-color 0.12s, background 0.12s;" ' +
       'onmouseover="this.style.borderColor=\'rgba(79,140,255,0.5)\';this.style.background=\'rgba(79,140,255,0.04)\';" ' +
       'onmouseout="this.style.borderColor=\'var(--border,#333)\';this.style.background=\'var(--overlay-light, rgba(255,255,255,0.02))\';">' +
-      '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:8px;">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">' +
         '<div style="font-weight:600;font-size:12.5px;color:var(--text,#fff);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;min-width:0;">' + escapeHTML(est.title || '(untitled)') + '</div>' +
+        pill +
         '<div style="font-size:10px;color:var(--text-dim,#888);white-space:nowrap;">' + escapeHTML(created) + '</div>' +
       '</div>' +
       '<div style="display:flex;gap:10px;margin-top:4px;font-size:10.5px;color:var(--text-dim,#aaa);">' +
@@ -2290,6 +2325,7 @@
         '<span>Price <strong style="color:#34d399;">' + fmtCurrencyShort(calc.clientPrice) + '</strong></span>' +
         '<span>Margin <strong style="color:#4f8cff;">' + calc.margin.toFixed(1) + '%</strong></span>' +
       '</div>' +
+      footer +
     '</div>';
   }
 
