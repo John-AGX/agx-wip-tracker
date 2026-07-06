@@ -170,6 +170,36 @@
         }
       }
     });
+    // Tier 2 — phases carry no revenue (common while the node-graph cost model
+    // is still being wired: revenue lives on the job, not distributed to phase
+    // nodes). Fall back to buildings that DO carry an allocated/derived budget,
+    // one SOV line per building.
+    if (!lines.length) {
+      t1s.forEach(function (t1) {
+        var rev = 0;
+        try { rev = NG.getBuildingAllocatedRevenue(t1) || 0; } catch (e) {}
+        if (rev <= 0.005) rev = num(t1.revenue);
+        if (rev > 0.005) {
+          var bp = 0; try { bp = NG.getT1WeightedPct(t1); } catch (e) { bp = num(t1.pctComplete); }
+          lines.push({ id: 'ln_bld_' + t1.id, nodeId: t1.id, buildingId: t1.id,
+            buildingName: baseName(t1, 'Building'), description: baseName(t1, 'Building'),
+            type: 'phase', scheduledValue: round2(rev), pctComplete: round2(num(bp)),
+            stored: 0, retainagePct: null, previous: 0 });
+        }
+      });
+    }
+    // Tier 3 — nothing in the graph carries revenue yet. Seed a single Base
+    // Contract line from the job's contract so there's a billable schedule to
+    // start from; the user can split it into scope lines by hand (+ Add line).
+    if (!lines.length) {
+      var job = (window.appData && appData.jobs) ? appData.jobs.find(function (j) { return j.id === jobId; }) : null;
+      var contract = job ? num(job.contractAmount || job.asSoldRevenue || job.contractValue || job.totalIncome || 0) : 0;
+      if (contract > 0.005) {
+        lines.push({ id: 'ln_base', nodeId: null, buildingId: '__gen', buildingName: 'General',
+          description: 'Base Contract', type: 'phase', scheduledValue: round2(contract),
+          pctComplete: 0, stored: 0, retainagePct: null, previous: 0, manual: true });
+      }
+    }
     return { ok: lines.length > 0, reason: lines.length ? '' : 'empty', lines: lines };
   }
 
@@ -356,8 +386,9 @@
   function sovTableHTML(app, s, editable) {
     var lines = Array.isArray(app.lines) ? app.lines : [];
     if (!lines.length) {
-      return '<div style="border:1px dashed var(--border,#2a2f3a);border-radius:10px;padding:26px;text-align:center;color:var(--text-dim,#8b93a7);font-size:12.5px;">' +
-        'No schedule-of-values lines. Add buildings, phases and change orders on the Site Plan, then use &ldquo;&#8635; Resync from Site Plan&rdquo; below.' +
+      return '<div style="border:1px dashed var(--border,#2a2f3a);border-radius:10px;padding:26px;text-align:center;color:var(--text-dim,#8b93a7);font-size:12.5px;margin-bottom:14px;">' +
+        '<div style="margin-bottom:12px;">No schedule-of-values lines yet. Build the schedule by hand, or add buildings / phases / change orders on the Site Plan and use &ldquo;&#8635; Resync from Site Plan&rdquo;.</div>' +
+        (editable ? '<button id="pa-addline" class="ee-btn primary" style="font-size:12px;">+ Add line</button>' : '') +
       '</div>';
     }
     // group by building, preserving first-seen order
@@ -374,7 +405,7 @@
         th('#', 'left') + th('Description of Work', 'left') + th('Scheduled Value', 'right') +
         th('Previous', 'right') + th('% Compl.', 'right') + th('This Period', 'right') +
         th('Stored', 'right') + th('Compl. + Stored', 'right') + th('%', 'right') +
-        th('Balance', 'right') + th('Ret %', 'right') + th('Retainage', 'right') +
+        th('Balance', 'right') + th('Ret %', 'right') + th('Retainage', 'right') + th('', 'right') +
       '</tr></thead>';
     var bodyRows = '';
     var idx = 0;
@@ -385,11 +416,19 @@
         var C = num(l.scheduledValue), G = lineG(l), tp = lineThisPeriod(l), rp = lineRetPct(l, app),
             ret = round2(G * rp / 100), bal = round2(C - G), pctG = C ? (G / C * 100) : 0;
         gt.C += C; gt.prev += num(l.previous); gt.G += G; gt.ret += ret; gt.tp += tp; gt.stored += num(l.stored);
+        var coBadge = (l.type === 'co') ? ' <span style="font-size:9px;color:var(--accent,#4f8cff);border:1px solid var(--accent,#4f8cff);border-radius:4px;padding:0 3px;">CO</span>' : '';
+        var descCell = editable
+          ? '<td style="padding:4px 8px;vertical-align:middle;"><input type="text" class="pa-desc pa-cell" data-lid="' + esc(l.id) + '" value="' + esc(l.description) + '" placeholder="Description" style="width:190px;background:var(--input-bg,#0f131a);border:1px solid var(--border,#2a2f3a);border-radius:5px;color:var(--text,#fff);font-size:12px;padding:4px 6px;">' + coBadge + '</td>'
+          : tdL('<span style="color:var(--text,#fff);font-size:12.5px;">' + esc(l.description) + coBadge + '</span>');
+        var schedCell = editable
+          ? '<td class="num" style="padding:4px 8px;text-align:right;vertical-align:middle;"><input type="number" class="pa-sched pa-cell" data-lid="' + esc(l.id) + '" value="' + esc(C) + '" step="0.01" min="0" style="width:104px;text-align:right;background:var(--input-bg,#0f131a);border:1px solid var(--border,#2a2f3a);border-radius:5px;color:var(--text,#fff);font-family:\'SF Mono\',monospace;font-size:12px;padding:3px 5px;"></td>'
+          : tdN(fmtC(C));
+        var delCell = editable
+          ? '<td style="text-align:center;vertical-align:middle;padding:4px 6px;"><button class="pa-del" data-lid="' + esc(l.id) + '" title="Remove line" style="background:none;border:none;color:var(--text-dim,#8b93a7);cursor:pointer;font-size:16px;line-height:1;">&times;</button></td>'
+          : '<td></td>';
         return '<tr data-lid="' + esc(l.id) + '" style="border-bottom:1px solid var(--overlay-light,rgba(255,255,255,.04));">' +
           tdL('<span style="color:var(--text-dim,#8b93a7);font-size:11px;">' + idx + '</span>') +
-          tdL('<span style="color:var(--text,#fff);font-size:12.5px;">' + esc(l.description) +
-              (l.type === 'co' ? ' <span style="font-size:9px;color:var(--accent,#4f8cff);border:1px solid var(--accent,#4f8cff);border-radius:4px;padding:0 3px;">CO</span>' : '') + '</span>') +
-          tdN(fmtC(C)) +
+          descCell + schedCell +
           tdN(live('ln-prev:' + l.id, fmtC(l.previous), 'var(--text-dim,#8b93a7)')) +
           tdInput('pa-pct', l.id, l.pctComplete, dis, '%') +
           tdN(live('ln-tp:' + l.id, fmtC(tp), tpColor(tp), true)) +
@@ -399,34 +438,38 @@
           tdN(live('ln-bal:' + l.id, fmtC(bal), 'var(--text-dim,#8b93a7)')) +
           tdInput('pa-ret', l.id, (l.retainagePct == null || l.retainagePct === '') ? '' : l.retainagePct, dis, 'r', num(app.retainage_pct)) +
           tdN(live('ln-ret:' + l.id, fmtC(ret), 'var(--yellow,#fbbf24)')) +
+          delCell +
         '</tr>';
       }).join('');
-      var groupHdr = '<tr style="background:var(--overlay,rgba(255,255,255,.05));"><td colspan="12" style="padding:6px 10px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--accent-2,#7dd3fc);">' + esc(g.name) + '</td></tr>';
+      var groupHdr = '<tr style="background:var(--overlay,rgba(255,255,255,.05));"><td colspan="13" style="padding:6px 10px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--accent-2,#7dd3fc);">' + esc(g.name) + '</td></tr>';
       var pctGt = gt.C ? (gt.G / gt.C * 100) : 0, k = g.key;
       var subtotal = '<tr style="background:var(--overlay-light,rgba(255,255,255,.02));border-top:1px solid var(--border,#2a2f3a);border-bottom:1px solid var(--border,#2a2f3a);">' +
         tdL('') + tdL('<span style="font-size:11px;color:var(--text-dim,#8b93a7);font-weight:600;">Subtotal &mdash; ' + esc(g.name) + '</span>') +
-        tdN('<strong>' + fmtC(gt.C) + '</strong>') + tdN(live('gt-prev:' + k, fmtC(gt.prev), 'var(--text-dim,#8b93a7)')) +
+        tdN(live('gt-C:' + k, fmtC(gt.C), 'var(--text,#fff)', true)) + tdN(live('gt-prev:' + k, fmtC(gt.prev), 'var(--text-dim,#8b93a7)')) +
         tdN('') + tdN(live('gt-tp:' + k, fmtC(gt.tp), 'var(--text,#fff)')) + tdN(live('gt-stored:' + k, fmtC(gt.stored), 'var(--text-dim,#8b93a7)')) +
         tdN(live('gt-g:' + k, fmtC(gt.G), 'var(--text,#fff)')) + tdN(live('gt-pctg:' + k, fmtPct(pctGt), 'var(--text-dim,#8b93a7)')) +
         tdN(live('gt-bal:' + k, fmtC(gt.C - gt.G), 'var(--text-dim,#8b93a7)')) + tdN('') +
-        tdN(live('gt-ret:' + k, fmtC(gt.ret), 'var(--yellow,#fbbf24)')) +
+        tdN(live('gt-ret:' + k, fmtC(gt.ret), 'var(--yellow,#fbbf24)')) + tdN('') +
       '</tr>';
       bodyRows += groupHdr + rows + (multi ? subtotal : '');
     });
     var pctGrand = s.contract ? (s.completedStored / s.contract * 100) : 0;
     var grand = '<tr style="background:var(--overlay,rgba(255,255,255,.06));border-top:2px solid var(--border,#3a4150);">' +
       tdL('') + tdL('<span style="font-size:12px;color:var(--text,#fff);font-weight:800;letter-spacing:.3px;">GRAND TOTAL</span>') +
-      tdN('<strong style="color:var(--text,#fff);">' + fmtC(s.contract) + '</strong>') +
+      tdN(live('grand-contract', fmtC(s.contract), 'var(--text,#fff)', true)) +
       tdN(live('grand-prev', fmtC(sumField(app, 'previous')), 'var(--text-dim,#8b93a7)')) +
       tdN('') + tdN(live('grand-tp', fmtC(s.thisPeriod), 'var(--green,#34d399)')) +
       tdN(live('grand-stored', fmtC(s.storedTotal), 'var(--text-dim,#8b93a7)')) +
       tdN(live('grand-g', fmtC(s.completedStored), 'var(--text,#fff)')) +
       tdN(live('grand-pctg', fmtPct(pctGrand), 'var(--text-dim,#8b93a7)')) +
       tdN(live('grand-bal', fmtC(s.balance), 'var(--text-dim,#8b93a7)')) + tdN('') +
-      tdN(live('grand-ret', fmtC(s.retainage), 'var(--yellow,#fbbf24)')) +
+      tdN(live('grand-ret', fmtC(s.retainage), 'var(--yellow,#fbbf24)')) + tdN('') +
     '</tr>';
+    var addRow = editable
+      ? '<tr><td colspan="13" style="padding:8px 10px;"><button id="pa-addline" class="ee-btn" style="font-size:12px;">+ Add line</button></td></tr>'
+      : '';
     return '<div style="border:1px solid var(--border,#2a2f3a);border-radius:10px;overflow-x:auto;background:var(--card-bg,#141821);margin-bottom:14px;">' +
-      '<table style="width:100%;border-collapse:collapse;min-width:1040px;">' + head + '<tbody>' + bodyRows + grand + '</tbody></table>' +
+      '<table style="width:100%;border-collapse:collapse;min-width:1080px;">' + head + '<tbody>' + bodyRows + grand + addRow + '</tbody></table>' +
     '</div>';
   }
   function sumField(app, f) {
@@ -500,6 +543,11 @@
       inp.addEventListener('input', function () { onCell(inp, app); });
       inp.addEventListener('change', function () { onCell(inp, app); });
     });
+    // manual schedule-of-values editing: add + remove lines
+    bindClick(host, '#pa-addline', function () { addLine(app); });
+    host.querySelectorAll('.pa-del').forEach(function (b) {
+      b.addEventListener('click', function () { removeLine(app, b.getAttribute('data-lid')); });
+    });
 
     bindClick(host, '#pa-resync', function () { doResync(app); });
     bindClick(host, '#pa-export', function () {
@@ -534,6 +582,8 @@
     if (inp.classList.contains('pa-pct')) line.pctComplete = clamp(num(inp.value), 0, 100);
     else if (inp.classList.contains('pa-stored')) line.stored = Math.max(0, num(inp.value));
     else if (inp.classList.contains('pa-ret')) line.retainagePct = (String(inp.value).trim() === '') ? null : clamp(num(inp.value), 0, 100);
+    else if (inp.classList.contains('pa-sched')) { line.scheduledValue = Math.max(0, num(inp.value)); line.manual = true; }
+    else if (inp.classList.contains('pa-desc')) { line.description = inp.value; line.manual = true; }
     _st.dirty = true;
     updateLive();
     updateSaveChip();
@@ -574,12 +624,13 @@
     });
     order.forEach(function (k) {
       var gt = groups[k], pctGt = gt.C ? (gt.G / gt.C * 100) : 0;
-      set('gt-tp:' + k, fmtC(gt.tp)); set('gt-stored:' + k, fmtC(gt.stored));
+      set('gt-C:' + k, fmtC(gt.C)); set('gt-tp:' + k, fmtC(gt.tp)); set('gt-stored:' + k, fmtC(gt.stored));
       set('gt-g:' + k, fmtC(gt.G)); set('gt-pctg:' + k, fmtPct(pctGt));
       set('gt-bal:' + k, fmtC(gt.C - gt.G)); set('gt-ret:' + k, fmtC(gt.ret));
     });
     // grand total
     var pctGrand = s.contract ? (s.completedStored / s.contract * 100) : 0;
+    set('grand-contract', fmtC(s.contract));
     set('grand-tp', fmtC(s.thisPeriod)); set('grand-stored', fmtC(s.storedTotal));
     set('grand-g', fmtC(s.completedStored)); set('grand-pctg', fmtPct(pctGrand));
     set('grand-bal', fmtC(s.balance)); set('grand-ret', fmtC(s.retainage));
@@ -627,21 +678,16 @@
   function createApp() {
     if (!jobCanEdit()) { toast('You don’t have permission to create billing applications.', true); return; }
     if (_st.dirty) flushSave();
+    // Best-effort seed of the schedule of values from the node graph (phases →
+    // buildings → job contract). If nothing derives, the app is created with an
+    // empty schedule the user builds by hand with "+ Add line".
     var sov = deriveSOV(_st.jobId);
-    if (!sov.ok) {
-      if (sov.reason === 'notloaded' || sov.reason === 'engine') {
-        toast('Open the Site Plan for this job first so the schedule of values can be built.', true);
-      } else {
-        toast('No buildings/phases with contract value found on the Site Plan yet.', true);
-      }
-      return;
-    }
     var prevApp = _st.apps[0]; // highest app_no (sorted desc)
     var payload = {
       period_to: todayISO(),
       retainage_pct: prevApp ? num(prevApp.retainage_pct) : 10,
       notes: '',
-      lines: sov.lines
+      lines: (sov && sov.lines) || []
     };
     _st.saving = true; paint();
     window.p86Api.payApplications.create(_st.jobId, payload).then(function (r) {
@@ -663,11 +709,37 @@
   function doResync(app) {
     var r = resyncSOV(app);
     if (!r.ok) { toast('Open the Site Plan first to resync the schedule of values.', true); return; }
-    app.lines = r.lines;
+    // keep any hand-added (manual) lines the graph doesn't know about
+    var manual = (app.lines || []).filter(function (l) { return l.manual && String(l.id).indexOf('ln_m_') === 0; });
+    app.lines = r.lines.concat(manual);
     _st.dirty = true;
     paint();
     scheduleSave();
     toast('Scheduled values resynced from the Site Plan.');
+  }
+
+  // Manual schedule-of-values editing — build the SOV by hand when the node
+  // graph doesn't carry per-scope revenue (or to split a Base Contract line).
+  function addLine(app) {
+    if (!appEditable(app)) return;
+    app.lines = app.lines || [];
+    var id = 'ln_m_' + Date.now().toString(36) + Math.floor(Math.random() * 1e4).toString(36);
+    app.lines.push({ id: id, nodeId: null, buildingId: '__gen', buildingName: 'General',
+      description: '', type: 'phase', scheduledValue: 0, pctComplete: 0, stored: 0,
+      retainagePct: null, previous: 0, manual: true });
+    _st.dirty = true;
+    paint();
+    scheduleSave();
+    var host = document.getElementById('job-payapps');
+    var inp = host && host.querySelector('.pa-desc[data-lid="' + id + '"]');
+    if (inp) inp.focus();
+  }
+  function removeLine(app, lid) {
+    if (!appEditable(app)) return;
+    app.lines = (app.lines || []).filter(function (l) { return l.id !== lid; });
+    _st.dirty = true;
+    paint();
+    scheduleSave();
   }
 
   function setStatus(app, next) {
