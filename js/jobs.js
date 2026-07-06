@@ -296,12 +296,29 @@ function renderJobsMain() {
             const hasActuals = actualCosts > 0 || revenueEarned > 0;
             const displayProfit = hasActuals ? jtdProfit : revisedProfit;
             const displayMargin = hasActuals ? jtdMargin : revisedMargin;
+            // QuickBooks imported actuals for this job (server-hydrated into
+            // appData.qbCostLines on load). Surfaced as its OWN figure and
+            // deliberately NOT folded into actualCosts: QB lines only reach the
+            // WIP cost-to-date once they're attributed to a cost node
+            // (linked_node_id), so adding them here too would double-count.
+            let qbActualCosts = 0, qbCostLineCount = 0, qbCostsAsOf = null;
+            try {
+                const qbLines = (window.appData && Array.isArray(appData.qbCostLines))
+                    ? appData.qbCostLines.filter(l => (l.job_id || l.jobId) === jobId) : [];
+                qbCostLineCount = qbLines.length;
+                qbLines.forEach(l => {
+                    qbActualCosts += Number(l.amount || 0);
+                    const d = l.report_date || l.reportDate;
+                    if (d && (!qbCostsAsOf || String(d) > String(qbCostsAsOf))) qbCostsAsOf = String(d).slice(0, 10);
+                });
+            } catch (e) {}
             return {
                 contractIncome, estimatedCosts, coIncome: co.income, coCosts: co.costs,
                 totalIncome, totalEstCosts, revisedCostChanges, revisedEstCosts,
                 asSoldProfit, asSoldMargin, revisedProfit, revisedMargin,
                 pctComplete, revenueEarned, actualCosts, jtdProfit, jtdMargin,
                 displayProfit, displayMargin,
+                qbActualCosts, qbCostLineCount, qbCostsAsOf,
                 invoiced, unbilled, backlog, remainingCosts
             };
         }
@@ -2629,6 +2646,22 @@ function renderJobsMain() {
             document.getElementById('job-summary-totalincome').textContent = formatCurrency(w.totalIncome);
             document.getElementById('job-summary-income-breakdown').textContent = coInfo;
             document.getElementById('job-summary-cost').textContent = formatCurrency(w.actualCosts);
+            // QuickBooks imported actuals — surfaced under the Actual Costs chip so
+            // a QB cost import is visibly reflected on the overview. It reads off
+            // its own figure (w.qbActualCosts) and does NOT change the WIP actual
+            // above (QB lines flow into that only once attributed to cost nodes).
+            var _qbNote = document.getElementById('job-summary-cost-note');
+            if (_qbNote) {
+                if (w.qbActualCosts > 0) {
+                    _qbNote.textContent = 'QuickBooks: ' + formatCurrency(w.qbActualCosts) +
+                        ' · ' + w.qbCostLineCount + ' line' + (w.qbCostLineCount === 1 ? '' : 's') +
+                        (w.qbCostsAsOf ? ' · as of ' + w.qbCostsAsOf : '');
+                    _qbNote.style.display = '';
+                } else {
+                    _qbNote.textContent = '';
+                    _qbNote.style.display = 'none';
+                }
+            }
             const accruedCosts = getJobAccruedCosts(jobId);
             document.getElementById('job-summary-accrued').textContent = formatCurrency(accruedCosts);
             document.getElementById('job-summary-accrued-note').textContent = accruedCosts > 0 ? 'Earned but unbilled' : '';

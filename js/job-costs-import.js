@@ -266,6 +266,7 @@
     if (!body || !_lastParse) return;
     var m = matchJobs(_lastParse.jobs);
     var totalMatched = m.matched.reduce(function(s, x) { return s + x.parsed.computedTotal; }, 0);
+    var totalUnmatched = m.unmatched.reduce(function(s, p) { return s + p.computedTotal; }, 0);
 
     var html = '';
     html += '<div style="margin-bottom:16px;font-size:12px;color:var(--text-dim,#888);">' +
@@ -276,8 +277,23 @@
     html += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px;">' +
       statBlock('Matched jobs', m.matched.length, '#34d399') +
       statBlock('Total $', fmtMoney(totalMatched), '#34d399') +
-      statBlock('Unmatched', m.unmatched.length, m.unmatched.length ? '#fbbf24' : 'var(--text-dim,#888)') +
+      statBlock('Unmatched', m.unmatched.length + (m.unmatched.length ? ' · ' + fmtMoney(totalUnmatched) : ''), m.unmatched.length ? '#fbbf24' : 'var(--text-dim,#888)') +
     '</div>';
+
+    // Flag mismatches LOUDLY. A QB project whose code doesn't match a P86 job
+    // number silently imports nothing — that's how 20% of a real export can
+    // vanish unnoticed. Surface the count + $ + the usual cause so the user can
+    // fix the code in QuickBooks (or stub it) instead of losing the costs.
+    if (m.unmatched.length) {
+      html += '<div style="display:flex;gap:10px;align-items:flex-start;background:rgba(251,191,36,0.10);border:1px solid rgba(251,191,36,0.4);border-radius:8px;padding:12px 14px;margin-bottom:16px;">' +
+        '<span style="font-size:18px;line-height:1;">&#9888;&#xFE0F;</span>' +
+        '<div style="font-size:12px;color:var(--text,#fff);line-height:1.5;">' +
+          '<strong>' + m.unmatched.length + ' project' + (m.unmatched.length === 1 ? '' : 's') + ' (' + fmtMoney(totalUnmatched) + ') won’t import.</strong> ' +
+          'Their QuickBooks code doesn’t match a Project&nbsp;86 job number — usually a QB auto-number (e.g. <code>437775</code>) or a customer name instead of your <code>S####</code> / <code>RV####</code> code. ' +
+          'Fix the project name in QuickBooks to lead with the job number, or create a stub below. They’re listed under <em>Unmatched</em>.' +
+        '</div>' +
+      '</div>';
+    }
 
     if (m.matched.length) {
       html += '<div style="font-weight:600;margin-bottom:6px;color:var(--text,#fff);font-size:13px;">' +
@@ -604,8 +620,16 @@
     if (typeof renderJobsMain === 'function') renderJobsMain();
 
     var totalImported = m.matched.reduce(function(s, x) { return s + x.parsed.computedTotal; }, 0);
-    alert('Imported ' + m.matched.length + ' job' + (m.matched.length === 1 ? '' : 's') +
-      ' — ' + fmtMoney(totalImported) + ' total.');
+    var skippedTotal = m.unmatched.reduce(function(s, p) { return s + p.computedTotal; }, 0);
+    var doneMsg = 'Imported ' + m.matched.length + ' job' + (m.matched.length === 1 ? '' : 's') +
+      ' — ' + fmtMoney(totalImported) + ' total.';
+    // Never report a silent partial success — call out skipped $ explicitly.
+    if (m.unmatched.length) {
+      doneMsg += '\n\n⚠️ Skipped ' + m.unmatched.length + ' unmatched project' +
+        (m.unmatched.length === 1 ? '' : 's') + ' (' + fmtMoney(skippedTotal) +
+        ') — their QB code didn’t match a job number. Fix the code in QuickBooks or create a stub, then re-import.';
+    }
+    alert(doneMsg);
 
     _lastParse = null;
   }
