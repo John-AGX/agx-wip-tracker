@@ -3559,9 +3559,12 @@ function renderJobsMain() {
             const totalProfit = totalRev - totalCost;
 
             const titleHTML =
-                '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">' +
+                '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;gap:10px;flex-wrap:wrap;">' +
                     '<h3 style="font-size:13px;margin:0;">&#x1F4CB; Phases (' + groupKeys.length + ')</h3>' +
-                    '<div style="font-size:12px;color:var(--text-dim);">Rev: <b style="color:var(--green);">' + formatCurrency(totalRev) + '</b> &nbsp; Cost: <b>' + formatCurrency(totalCost) + '</b> &nbsp; Profit: <b style="color:' + (totalProfit >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(totalProfit) + '</b></div>' +
+                    '<div style="display:flex;align-items:center;gap:10px;">' +
+                        '<div style="font-size:12px;color:var(--text-dim);">Rev: <b style="color:var(--green);">' + formatCurrency(totalRev) + '</b> &nbsp; Cost: <b>' + formatCurrency(totalCost) + '</b> &nbsp; Profit: <b style="color:' + (totalProfit >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(totalProfit) + '</b></div>' +
+                        '<button class="ee-btn ghost" style="font-size:12px;padding:3px 10px;white-space:nowrap;" onclick="addJobLevelPhase(\'' + escapeHTML(jobId) + '\')">+ Phase</button>' +
+                    '</div>' +
                 '</div>';
 
             if (groupKeys.length === 0) {
@@ -3613,7 +3616,7 @@ function renderJobsMain() {
                 let body = '<tr id="' + uid + '" class="ph-body" style="display:none;"><td colspan="6" style="padding:8px 12px;background:var(--surface2);border-bottom:1px solid var(--border,#333);">';
                 phaseList.forEach(function(p) {
                     var bldg = appData.buildings.find(function(b) { return b.id === p.buildingId; });
-                    var bldgName = bldg ? bldg.name : '?';
+                    var bldgName = bldg ? bldg.name : (p.buildingId ? '?' : 'Job-level (unassigned)');
                     var conns = getNodeGraphConnections('t2', p.id);
                     body += '<div style="padding:6px 0;border-bottom:1px solid var(--border);">' +
                         '<div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:6px;">' +
@@ -3966,6 +3969,70 @@ function renderJobsMain() {
             appData.phases.push(phase);
             renderBuildingPhaseBreakdown(appState.editBuildingId);
         }
+
+        // Create a JOB-LEVEL phase (not pinned to a building) — the job-first
+        // model: set the phase total on the job, then split it across buildings
+        // in the breakdown/matrix. buildingId=null marks it unassigned/job-level.
+        // Uses a modal (native prompt() no-ops in the installed PWA).
+        function addJobLevelPhase(jobId) {
+            jobId = jobId || (typeof appState !== 'undefined' && appState.currentJobId);
+            if (!jobId) return;
+            var back = document.createElement('div');
+            back.style.cssText = 'position:fixed;inset:0;z-index:2147483200;background:rgba(6,9,17,.6);display:flex;align-items:center;justify-content:center;padding:16px;';
+            back.innerHTML =
+                '<div class="modal-content" style="width:min(430px,96vw);">' +
+                    '<div class="p86-dialog-title">Add job-level phase</div>' +
+                    '<div class="p86-dialog-message">Create a phase on the job and set its total. You then split it across buildings in the breakdown.</div>' +
+                    '<label style="display:block;font-size:12px;margin:10px 0 4px;">Phase name</label>' +
+                    '<input class="p86-dialog-input" id="jlpName" type="text" placeholder="e.g. Roofing, Framing, Sitework" />' +
+                    '<div style="display:flex;gap:10px;">' +
+                        '<div style="flex:1;"><label style="display:block;font-size:12px;margin:12px 0 4px;">Budget / cost ($)</label>' +
+                        '<input class="p86-dialog-input" id="jlpBudget" type="number" min="0" step="100" placeholder="0" /></div>' +
+                        '<div style="flex:1;"><label style="display:block;font-size:12px;margin:12px 0 4px;">Revenue ($)</label>' +
+                        '<input class="p86-dialog-input" id="jlpRev" type="number" min="0" step="100" placeholder="0" /></div>' +
+                    '</div>' +
+                    '<div class="p86-dialog-actions" style="margin-top:16px;">' +
+                        '<button class="p86-dialog-btn" data-cancel>Cancel</button>' +
+                        '<button class="p86-dialog-btn p86-dialog-btn-primary" data-create>Add phase</button>' +
+                    '</div>' +
+                '</div>';
+            document.body.appendChild(back);
+            function close() { if (back.parentNode) back.parentNode.removeChild(back); }
+            back.addEventListener('click', function(e) { if (e.target === back) close(); });
+            back.querySelector('[data-cancel]').addEventListener('click', close);
+            back.querySelector('[data-create]').addEventListener('click', function() {
+                var name = (back.querySelector('#jlpName').value || '').trim();
+                if (!name) { back.querySelector('#jlpName').focus(); return; }
+                var budget = parseFloat(back.querySelector('#jlpBudget').value) || 0;
+                var revenue = parseFloat(back.querySelector('#jlpRev').value) || 0;
+                var phase = {
+                    id: 'p' + Date.now(),
+                    jobId: jobId,
+                    buildingId: null,                 // job-level — split to buildings in the matrix
+                    phase: name,
+                    workScope: 'in-house',
+                    locked: false,
+                    pctComplete: 0,
+                    materials: 0, labor: 0, sub: 0, equipment: 0,
+                    asSoldRevenue: revenue,
+                    asSoldPhaseBudget: budget,
+                    coPhaseBudget: 0,
+                    phaseBudget: budget,
+                    hoursWeek: 0, hoursTotal: 0, rate: 40,
+                    notes: ''
+                };
+                if (!Array.isArray(appData.phases)) appData.phases = [];
+                appData.phases.push(phase);
+                if (typeof saveData === 'function') saveData();
+                close();
+                // Re-render the overview Phases section (Site Plan right panel).
+                var host = document.getElementById('insp-phases');
+                if (host) { try { renderOverviewPhasesInto(host, jobId, appData.phases.filter(function(p) { return p.jobId === jobId; })); } catch (e) {} }
+                if (typeof window.p86Toast === 'function') window.p86Toast('Phase "' + name + '" added at the job level', 'success');
+            });
+            setTimeout(function() { var i = back.querySelector('#jlpName'); if (i) i.focus(); }, 0);
+        }
+        window.addJobLevelPhase = addJobLevelPhase;
 
         function removePhaseFromBreakdown(phaseId) {
             if (!confirm('Delete this phase?')) return;
