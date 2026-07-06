@@ -770,6 +770,13 @@
     try {
       var res = await window.p86Api.jobs.convert({ job: newJob, lead_id: leadId, estimate_id: est.id });
       var newId = (res && (res.job_id || res.id)) || jobId;
+      newJob.id = newId;
+      // Keep local caches consistent so the immediate open finds the job — without
+      // this the Site Plan showed "No job loaded" / "Locating the job address…" and
+      // you had to refresh (the lead-side convert already does this push).
+      if (window.appData && Array.isArray(window.appData.jobs) && !window.appData.jobs.some(function(j){ return j.id === newId; })) {
+        window.appData.jobs.push(newJob);
+      }
       est.job_id = newId;
       if (lead) { lead.job_id = newId; lead.status = 'sold'; }
       if (typeof renderHeaderChips === 'function') renderHeaderChips();
@@ -783,6 +790,13 @@
 
   function openJobFromEstimate(jobId) {
     closeEstimateEditor();
+    // Canonical router open (mirrors the lead-side convert). The manual
+    // switchTab + setTimeout(editJob) combo could open the job page before the
+    // route settled; use the router when present, fall back otherwise.
+    if (window.p86Router && typeof window.p86Router.navigate === 'function') {
+      window.p86Router.navigate({ top: 'jobs', jobId: jobId });
+      return;
+    }
     setTimeout(function() {
       if (typeof window.switchTab === 'function') window.switchTab('jobs');
       setTimeout(function() { if (typeof window.editJob === 'function') window.editJob(jobId); }, 200);
