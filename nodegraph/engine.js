@@ -293,9 +293,14 @@ function getOutput(n, pi){
     });
   }
 
-  // Cost nodes (labor, mat, gc, other, burden): items total or direct value
+  // Cost nodes (labor, mat, gc, other, burden). Line-level data — manual
+  // items + any QuickBooks cost lines linked to this node — is the actual
+  // total; n.value (the manual "QuickBooks Total" shortcut field) is only the
+  // fallback "used if no line entries". So linked QB lines SUPERSEDE a typed
+  // total rather than adding to it (no double-count), while still flowing
+  // through when the node has no manual entry — previously they were ignored.
   if(n.type === 'labor' || n.type === 'mat' || n.type === 'gc' || n.type === 'other' || n.type === 'burden'){
-    v = itemsTotal || n.value || 0;
+    v = (itemsTotal + _qbLinked(n.id)) || n.value || 0;
     _comp[n.id] = false; return v;
   }
 
@@ -440,12 +445,34 @@ function _itemsTotal(n){
   return t;
 }
 
+// Sum of QuickBooks cost lines the user has LINKED to this node
+// (qb_cost_lines.linked_node_id === node.id, hydrated into
+// appData.qbCostLines on load). Linking a QB actual to a cost node is how
+// real spend is meant to flow into the WIP actual-cost track — this helper
+// is the ONE place that sum enters the engine, so getOutput + getActual
+// both add it and stay consistent. Added to (not replacing) the node's
+// manual total, matching the side-by-side "Linked QB lines" node hint.
+function _qbLinked(nodeId){
+  try {
+    var lines = (typeof appData !== 'undefined' && appData && appData.qbCostLines) || null;
+    if(!lines || !lines.length) return 0;
+    var t = 0;
+    for(var i=0;i<lines.length;i++){
+      var l = lines[i];
+      if((l.linked_node_id || l.linkedNodeId) === nodeId) t += Number(l.amount || 0);
+    }
+    return t;
+  } catch(e){ return 0; }
+}
+
 function getActual(n){
   if(!n) return 0;
   if(_compA[n.id]) return 0;
   _compA[n.id] = true;
   var v = 0, iT = _itemsTotal(n);
-  if(n.type==='labor'||n.type==='mat'||n.type==='gc'||n.type==='other'||n.type==='burden'){ v = iT || n.value || 0; }
+  // Line-level data (manual items + linked QB) supersedes the manual "QB Total"
+  // fallback (n.value) — same rule as getOutput; keeps actual = output.
+  if(n.type==='labor'||n.type==='mat'||n.type==='gc'||n.type==='other'||n.type==='burden'){ v = (iT + _qbLinked(n.id)) || n.value || 0; }
   else if(n.type==='inv'){ v = iT; }
   else if(n.type==='po'){
     // Sum wired Invoice amounts on the PO's input port

@@ -5009,9 +5009,13 @@ function pushToJob(){
     var wiredToTier=wires.some(function(w){
       if(w.fromNode!==n.id) return false;
       var target=E.findNode(w.toNode);
-      return target&&(target.type==='t1'||target.type==='t2');
+      // Wired to a building/phase (counted there) OR straight to WIP (counted
+      // in the WIP node's own actual-cost sum). Either way it is NOT a
+      // standalone job-level node, so keep it OUT of the job-level bucket —
+      // otherwise folding that bucket into ngActualCosts would double-count it.
+      return target&&(target.type==='t1'||target.type==='t2'||target.type==='wip');
     });
-    if(wiredToTier) return; // already counted at building/phase level
+    if(wiredToTier) return; // already counted at building/phase/WIP level
     hasJobCostNodes=true;
     var val=E.getOutput(n,0);
     if(n.type==='labor' || n.type==='burden') jobLab+=val;
@@ -5093,7 +5097,13 @@ function pushToJob(){
     E.resetComp();
     job.ngTotalIncome=E.getOutput(wipNode,0);
     E.resetComp();
-    job.ngActualCosts=E.getOutput(wipNode,1);
+    // Standalone job-level cost nodes (not wired to any building/phase/WIP) are
+    // NOT summed by the WIP node itself, so add the disjoint job-level bucket
+    // (jobMat/Lab/Equip/GC, computed above — each already includes any linked
+    // QB actuals via the engine) onto the actual-cost track. This is what makes
+    // "add a category cost node at the job level + link QB costs" actually move
+    // the job's actual costs / margin.
+    job.ngActualCosts=E.getOutput(wipNode,1) + jobMat + jobLab + jobEquip + jobGC;
     E.resetComp();
     job.ngRevenueEarned=E.getOutput(wipNode,2);
     E.resetComp();
