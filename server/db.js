@@ -755,6 +755,65 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_pay_applications_job ON pay_applications(job_id, app_no DESC);
     CREATE INDEX IF NOT EXISTS idx_pay_applications_org ON pay_applications(organization_id, status, created_at DESC) WHERE organization_id IS NOT NULL;
 
+    -- ── Accounts receivable: invoices + payments ─────────────────────────
+    -- Promotes billing OFF the old localStorage job.data.invoices blob into a
+    -- first-class, org-scoped, cross-device record — the AR foundation for
+    -- taking billing in-house (see the Accounting Readiness assessment).
+    -- data JSONB: data.lines[] = { id, description, qty, unitPrice, amount,
+    -- taxable }; data.billTo (name/address snapshot); data.notes.
+    -- invoice_number = org-wide sequential (INV-####). May be standalone or
+    -- created from a certified pay application (pay_application_id link).
+    -- Status: draft -> sent -> partial -> paid ; void is terminal. client_id is
+    -- a loose reference (no hard FK — clients + standalone invoices vary).
+    CREATE TABLE IF NOT EXISTS invoices (
+      id TEXT PRIMARY KEY,
+      organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE,
+      owner_id INTEGER REFERENCES users(id),
+      job_id TEXT REFERENCES jobs(id) ON DELETE SET NULL,
+      client_id TEXT,
+      pay_application_id TEXT REFERENCES pay_applications(id) ON DELETE SET NULL,
+      invoice_number TEXT,
+      status TEXT NOT NULL DEFAULT 'draft',
+      issue_date DATE,
+      due_date DATE,
+      terms TEXT,
+      subtotal NUMERIC(14, 2) NOT NULL DEFAULT 0,
+      tax_pct NUMERIC(7, 4) NOT NULL DEFAULT 0,
+      tax_amount NUMERIC(14, 2) NOT NULL DEFAULT 0,
+      retainage_amount NUMERIC(14, 2) NOT NULL DEFAULT 0,
+      total NUMERIC(14, 2) NOT NULL DEFAULT 0,
+      amount_paid NUMERIC(14, 2) NOT NULL DEFAULT 0,
+      data JSONB NOT NULL DEFAULT '{}'::jsonb,
+      sent_at TIMESTAMPTZ,
+      paid_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_invoices_org ON invoices(organization_id, status, issue_date DESC) WHERE organization_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_invoices_job ON invoices(job_id);
+    CREATE INDEX IF NOT EXISTS idx_invoices_client ON invoices(client_id);
+    CREATE INDEX IF NOT EXISTS idx_invoices_number ON invoices(organization_id, invoice_number);
+
+    -- Customer payments (cash receipts). One payment can be applied across
+    -- several invoices: data.applications[] = [{ invoice_id, amount }]. The
+    -- unapplied balance = amount - SUM(applications). On save the affected
+    -- invoices' amount_paid + status are recomputed (partial / paid).
+    CREATE TABLE IF NOT EXISTS payments (
+      id TEXT PRIMARY KEY,
+      organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE,
+      owner_id INTEGER REFERENCES users(id),
+      client_id TEXT,
+      payment_date DATE,
+      amount NUMERIC(14, 2) NOT NULL DEFAULT 0,
+      method TEXT,
+      reference TEXT,
+      data JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_payments_org ON payments(organization_id, payment_date DESC) WHERE organization_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_payments_client ON payments(client_id);
+
     -- Role definitions. users.role is a TEXT FK by name (no schema change to
     -- users), so existing 'admin'/'corporate'/'pm' values keep working as
     -- soon as the matching rows are seeded below. capabilities is a JSONB

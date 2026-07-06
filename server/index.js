@@ -138,6 +138,10 @@ app.use('/api', purchaseOrderRoutes);
 // (/api/jobs/:jobId/pay-applications + /api/pay-applications/*).
 const payApplicationRoutes = require('./routes/pay-application-routes');
 app.use('/api', payApplicationRoutes);
+// Accounts receivable — invoices + payments + AR aging
+// (/api/invoices, /api/payments, /api/ar/aging, + the pay-app→invoice bridge).
+const invoiceRoutes = require('./routes/invoice-routes');
+app.use('/api', invoiceRoutes);
 app.use('/api/roles', roleRoutes);
 app.use('/api/clients', clientRoutes);
 app.use('/api/leads', leadRoutes);

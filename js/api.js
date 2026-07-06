@@ -368,6 +368,36 @@
     remove: function(id) { return del('/api/pay-applications/' + encodeURIComponent(id)); }
   };
 
+  // Accounts receivable — invoices + payments (see server/routes/invoice-routes.js).
+  var invoices = {
+    list: function(opts) {
+      opts = opts || {}; var qs = [];
+      if (opts.status) qs.push('status=' + encodeURIComponent(opts.status));
+      if (opts.job_id) qs.push('job_id=' + encodeURIComponent(opts.job_id));
+      if (opts.client_id) qs.push('client_id=' + encodeURIComponent(opts.client_id));
+      return get('/api/invoices' + (qs.length ? '?' + qs.join('&') : ''));
+    },
+    listForJob: function(jobId) { return get('/api/jobs/' + encodeURIComponent(jobId) + '/invoices'); },
+    get: function(id) { return get('/api/invoices/' + encodeURIComponent(id)); },
+    create: function(payload) { return post('/api/invoices', payload || {}); },
+    fromPayApplication: function(jobId, payAppId) {
+      return post('/api/jobs/' + encodeURIComponent(jobId) + '/invoices/from-pay-application/' + encodeURIComponent(payAppId), {});
+    },
+    update: function(id, payload) { return put('/api/invoices/' + encodeURIComponent(id), payload || {}); },
+    setStatus: function(id, status) { return post('/api/invoices/' + encodeURIComponent(id) + '/status', { status: status }); },
+    remove: function(id) { return del('/api/invoices/' + encodeURIComponent(id)); },
+    aging: function() { return get('/api/ar/aging'); }
+  };
+  var payments = {
+    list: function(opts) {
+      opts = opts || {};
+      return get('/api/payments' + (opts.client_id ? '?client_id=' + encodeURIComponent(opts.client_id) : ''));
+    },
+    create: function(payload) { return post('/api/payments', payload || {}); },
+    update: function(id, payload) { return put('/api/payments/' + encodeURIComponent(id), payload || {}); },
+    remove: function(id) { return del('/api/payments/' + encodeURIComponent(id)); }
+  };
+
   var purchaseOrders = {
     listForJob: function(jobId) {
       return get('/api/jobs/' + encodeURIComponent(jobId) + '/purchase-orders');
@@ -900,7 +930,7 @@
   window.p86Api = {
     get: get, put: put, post: post, del: del, patch: patch,
     fileFolders: fileFolders,
-    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, qbCosts: qbCosts, subs: subsApi, schedule: schedule, adminSms: adminSms, messages: messages, weather: weather, projects: projects, tasks: tasks, notes: notes, reminders: reminders, map: map, calendar: calendar, plans: plans, orgTags: orgTags, org: org, folderTemplates: folderTemplates, reports: reports, changeOrders: changeOrders, workflowItems: workflowItems, purchaseOrders: purchaseOrders, payApplications: payApplications, receipts: receipts, outlook: outlook, listViews: listViews,
+    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, qbCosts: qbCosts, subs: subsApi, schedule: schedule, adminSms: adminSms, messages: messages, weather: weather, projects: projects, tasks: tasks, notes: notes, reminders: reminders, map: map, calendar: calendar, plans: plans, orgTags: orgTags, org: org, folderTemplates: folderTemplates, reports: reports, changeOrders: changeOrders, workflowItems: workflowItems, purchaseOrders: purchaseOrders, payApplications: payApplications, invoices: invoices, payments: payments, receipts: receipts, outlook: outlook, listViews: listViews,
     isOffline: isOffline,
     isAuthenticated: function() { return !!getToken() && !isOffline(); }
   };
