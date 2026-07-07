@@ -2104,6 +2104,18 @@
 
             document.getElementById(subtabName)?.classList.add('active');
             document.querySelector(`[data-subtab="${subtabName}"]`)?.classList.add('active');
+            // The section panes live in #wsRightContent (workspace layout), which
+            // controls visibility via INLINE display — that overrides the .active
+            // class above. Reconcile it here so the activated pane actually shows
+            // (mirrors workspace-layout activateTab's hide-all / show-target).
+            var _rc = document.getElementById('wsRightContent');
+            if (_rc) {
+                Array.prototype.forEach.call(_rc.children, function (p) {
+                    if (!(p.classList && p.classList.contains('ws-job-info-details'))) p.style.display = 'none';
+                });
+                var _tgt = document.getElementById(subtabName);
+                if (_tgt) _tgt.style.display = 'block';
+            }
             if (subtabName === 'job-overview') renderJobOverview(currentJobId);
             else if (subtabName === 'job-buildings') renderJobBuildings(currentJobId);
             else if (subtabName === 'job-phases') renderJobPhases(currentJobId);
