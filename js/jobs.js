@@ -2879,6 +2879,39 @@ function renderJobsMain() {
                 }
             }
 
+            // ── Self-heal stuck async widgets (belt-and-suspenders) ──
+            // The weather / projects / tasks panels each mount a placeholder and
+            // paint on their own fetch. If anything strands the first paint on a
+            // superseded node (see the insertAdjacentHTML note below re: the
+            // no-buildings branch), the panel sits on "Loading…" forever. Re-mount
+            // any panel still showing its loading text once the layout has settled.
+            // Guarded on `container` still being the live #job-overview so we never
+            // paint a job the user has since navigated away from. No-op (guards
+            // fail) once a panel has painted, so healthy jobs pay nothing.
+            (function scheduleOverviewHeal() {
+                var healJobId = jobId, healContainer = container;
+                function heal() {
+                    if (document.getElementById('job-overview') !== healContainer || !document.body.contains(healContainer)) return;
+                    var wxBody = document.getElementById('schJobWxBody-' + healJobId);
+                    if (wxBody && /Loading forecast/i.test(wxBody.textContent || '') && window.p86Weather && window.p86Weather.renderJobWidget) {
+                        var wxm = document.getElementById('job-overview-weather');
+                        if (wxm) { try { window.p86Weather.renderJobWidget(wxm, healJobId); } catch (e) {} }
+                    }
+                    var pjHost = document.getElementById('job-overview-projects-host');
+                    if (pjHost && /Loading projects/i.test(pjHost.textContent || '') && typeof window.renderLinkedProjectsPanel === 'function') {
+                        try { window.renderLinkedProjectsPanel(pjHost, { kind: 'job', id: healJobId }); } catch (e) {}
+                    }
+                    var tkHost = document.getElementById('job-overview-tasks-host');
+                    if (tkHost && /Loading/i.test(tkHost.textContent || '') && window.p86Tasks && window.p86Tasks.mountEntityPanel) {
+                        var jb = appData.jobs.find(function(j) { return j.id === healJobId; });
+                        var jl = (jb && ((jb.jobNumber ? jb.jobNumber + ' — ' : '') + (jb.title || ''))) || ('Job ' + healJobId);
+                        try { window.p86Tasks.mountEntityPanel(tkHost, 'job', healJobId, jl); } catch (e) {}
+                    }
+                }
+                setTimeout(heal, 1300);
+                setTimeout(heal, 3000);
+            })();
+
             // ── Building cards ──
             const buildings = appData.buildings.filter(b => b.jobId === jobId);
             if (buildings.length > 0) {
@@ -2889,7 +2922,13 @@ function renderJobsMain() {
             }
 
             if (buildings.length === 0) {
-                container.innerHTML += '<div style="text-align:center;padding:30px;color:var(--text-dim);font-size:13px;">No buildings or phases yet. Use the buttons above to get started.</div>';
+                // insertAdjacentHTML, NOT innerHTML += : `+=` reparses the whole
+                // container and recreates every child, orphaning the async widget
+                // mounts (weather / projects / tasks / files) that were appended
+                // moments earlier — their in-flight fetches then paint detached
+                // nodes and the panels stay stuck on "Loading…". Only jobs with
+                // zero buildings hit this branch, which is why it looked random.
+                container.insertAdjacentHTML('beforeend', '<div style="text-align:center;padding:30px;color:var(--text-dim);font-size:13px;">No buildings or phases yet. Use the buttons above to get started.</div>');
             }
 
             // ── Phases summary (grouped, expandable, with node connections) ──
