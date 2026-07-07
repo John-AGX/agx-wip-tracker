@@ -250,8 +250,22 @@
       var jobId = (window.appState && window.appState.currentJobId) || null;
       if (detail && detail.style.display === 'block' && jobId) {
         route.jobId = jobId;
-        var subBtn = document.querySelector('.sub-tab-btn-job.active');
-        var jobSub = subBtn ? subBtn.getAttribute('data-subtab') : null;
+        // Job-sub detection follows the CURRENT nav model (the map overlay
+        // + the .ws-right-tab strip), not the retired .sub-tab-btn-job
+        // buttons. Precedence: (1) Site Map overlay active → job-site-map;
+        // (2) the active right-tab's data-panel; (3) legacy sub-btn.
+        var jobSub = null;
+        var ngTab = document.getElementById('nodeGraphTab');
+        if (ngTab && ngTab.classList.contains('active')) {
+          jobSub = 'job-site-map';
+        } else {
+          var rTab = document.querySelector('.ws-right-tab.active');
+          jobSub = rTab ? rTab.getAttribute('data-panel') : null;
+          if (!jobSub) {
+            var subBtn = document.querySelector('.sub-tab-btn-job.active');
+            jobSub = subBtn ? subBtn.getAttribute('data-subtab') : null;
+          }
+        }
         if (jobSub && KNOWN_JOB_SUBS.indexOf(jobSub) !== -1) route.jobSub = jobSub;
       } else {
         var archiveView = document.getElementById('archived-jobs-list');

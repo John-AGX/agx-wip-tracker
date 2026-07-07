@@ -1628,6 +1628,10 @@
       // full-width pane in #wsRightContent.
       if (targetId === 'job-site-map') {
         if (typeof window.openNodeGraph === 'function') window.openNodeGraph(jobId);
+        // Push /jobs/:id/job-site-map (the .ws-right-tab strip calls activateTab,
+        // which the router doesn't wrap — so sync the URL explicitly). No-op
+        // during a route replay (syncUrlFromDOM guards on `replaying`).
+        if (window.p86Router && window.p86Router.sync) window.p86Router.sync();
         return;
       }
       // Any non-map section: if the Site Map overlay is open it's covering the
@@ -1674,6 +1678,8 @@
       allPanels.forEach(function(p) { if (!p.classList.contains('ws-job-info-details')) p.style.display = 'none'; });
       var target = document.getElementById(targetId);
       if (target) target.style.display = 'block';
+      // Sync /jobs/:id/:sub for the picked full-width section (see note above).
+      if (window.p86Router && window.p86Router.sync) window.p86Router.sync();
       if (!jobId) return;
       safeRenderTabContent(targetId, target, jobId, TAB_RENDERERS[targetId]);
     }
