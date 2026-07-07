@@ -52,6 +52,9 @@
   var KNOWN_JOB_SUBS = [
     'job-overview', 'job-buildings', 'job-wip-report',
     'job-changeorders', 'job-invoices', 'job-labor', 'job-purchaseorders',
+    'job-payapps', 'job-subs', 'job-reports', 'job-qb-costs', 'job-details', 'job-estimates',
+    // Site Map — the node-graph structural-editing overlay, now a dedicated tab.
+    'job-site-map',
     // Workflow (RFIs / Submittals / Transmittals) — jobs-hub row clicks
     // navigate with jobSub:'job-workflow', so the URL must round-trip.
     'job-workflow'

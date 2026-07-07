@@ -35,6 +35,8 @@
   // /jobs/:id/job-overview deep links resolve to the map overview
   // instead of 404-ing, and the "‹ Overview" home chip can target it.
   const RIGHT_TABS = [
+    { id: 'job-overview',      label: 'Overview',  icon: 'insights' },
+    { id: 'job-site-map',      label: 'Site Map',  icon: 'map-pin' },
     { id: 'job-wip-report',    label: 'WIP Report', icon: 'wip' },
     { id: 'job-details',       label: 'Details',   icon: 'edit' },
     { id: 'job-estimates',     label: 'Estimates', icon: 'estimates' },
@@ -1621,12 +1623,21 @@
       document.querySelectorAll('.sub-tab-btn-job').forEach(function(b) {
         b.classList.toggle('active', b.getAttribute('data-subtab') === targetId);
       });
-      // Map-as-job-page: while the node-graph map is open, route the section into the right
-      // Inspector and KEEP the map open (instead of the tear-down + hidden-center render below).
-      var _ngt = document.getElementById('nodeGraphTab');
-      if (_ngt && _ngt.classList.contains('active') && typeof window.p86NgShowSection === 'function') {
-        window.p86NgShowSection(targetId);
+      // "Site Map" is a dedicated tab: it OPENS the node-graph overlay (used
+      // for job/building/phase structural editing). Every other section is a
+      // full-width pane in #wsRightContent.
+      if (targetId === 'job-site-map') {
+        if (typeof window.openNodeGraph === 'function') window.openNodeGraph(jobId);
         return;
+      }
+      // Any non-map section: if the Site Map overlay is open it's covering the
+      // full-width panes, so close it first, then render the pane below.
+      var _ngt = document.getElementById('nodeGraphTab');
+      if (_ngt && _ngt.classList.contains('active')) {
+        try { if (typeof NG !== 'undefined' && NG.saveGraph) NG.saveGraph(); } catch (e) {}
+        try { detachWorkspaceFromGraph(); } catch (e) {}
+        _ngt.classList.remove('active');
+        _inWorkspaceMode = false;
       }
       tabs.forEach(function(t) {
         t.classList.toggle('active', t.getAttribute('data-panel') === targetId);

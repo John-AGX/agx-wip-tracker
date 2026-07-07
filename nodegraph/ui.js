@@ -2992,6 +2992,11 @@ function showSectionInInspector(pid, tabBtn){
 // Called by workspace-layout.js activateTab when the map is open: route the section into the
 // right Inspector (keeping the map open) instead of activateTab's tear-down + center render.
 window.p86NgShowSection=function(pid){
+  // Sections are no longer hosted inside the map inspector — they're full-width
+  // panes (the map is a dedicated "Site Map" tab). Route the request out to the
+  // normal tab handler, which closes the Site Map overlay and shows the
+  // full-width pane. Kept as a shim so any residual caller behaves correctly.
+  if(typeof window.switchJobSubTab==='function'){ window.switchJobSubTab(pid); return; }
   var btn=document.querySelector('.ws-right-tab[data-panel="'+pid+'"]');
   showSectionInInspector(pid, btn);
 };

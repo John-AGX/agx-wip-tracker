@@ -2036,7 +2036,9 @@ function renderJobsMain() {
             var _mv = document.getElementById('jobs-main-view'); if (_mv) _mv.style.display = 'none';
             var _dv = document.getElementById('jobs-job-detail-view'); if (_dv) _dv.style.display = 'block';
             if (typeof window.p86NavSave === 'function') window.p86NavSave();
-            if (typeof window.openNodeGraph === 'function') window.openNodeGraph(jobId);
+            // Jobs now land on the full-width Overview (renderJobDetail →
+            // switchJobSubTab). The node-graph map is a dedicated "Site Map"
+            // tab, opened on demand — no longer auto-opened over the page.
         }
 
         // The job-level side effects renderJobDetail performs, WITHOUT building the classic
