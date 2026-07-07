@@ -5648,6 +5648,23 @@ function init(){
     });
   })();
 
+  // Collapse / expand the right Inspector (RS-B). Collapsed = width 0 so the Site
+  // Map runs full-bleed for building/phase node work; a slim right-edge "Details"
+  // tab brings it back. State persists per-browser. The map canvas re-fits after
+  // the CSS width transition settles so grid/wire buffers match the new width.
+  (function(){
+    var cbtn=tab.querySelector('.ng-insp-collapse'), rbtn=tab.querySelector('.ng-insp-reopen');
+    var CKEY='p86-ng-insp-collapsed';
+    function apply(on){
+      tab.classList.toggle('ng-insp-collapsed', on);
+      try{ localStorage.setItem(CKEY, on?'1':'0'); }catch(_){}
+      setTimeout(function(){ if(typeof resize==='function') resize(); if(typeof render==='function') render(); }, 230);
+    }
+    try{ if(localStorage.getItem(CKEY)==='1') tab.classList.add('ng-insp-collapsed'); }catch(_){}
+    if(cbtn) cbtn.addEventListener('click', function(e){ e.preventDefault(); e.stopPropagation(); apply(true); });
+    if(rbtn) rbtn.addEventListener('click', function(e){ e.preventDefault(); e.stopPropagation(); apply(false); });
+  })();
+
   // Mobile segmented control: Map (default) / Overview / Detail — the left + right panels
   // become slide-up bottom sheets <768px so the map stays full-bleed and touch-pannable.
   var mseg=tab.querySelector('.ng-mobile-seg');
