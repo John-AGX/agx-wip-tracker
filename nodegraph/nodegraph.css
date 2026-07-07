@@ -1126,10 +1126,13 @@ body.light-mode .ng-topbar.ng-ribbon .ng-ribbon-btn:hover{
    type. The 👁 Layers and ⋯ More popovers re-home the low-frequency
    tools; inside a popover the same ribbon buttons render as menu rows. */
 .ng-topbar{position:relative;}
-.ng-ribbon{gap:2px;padding:4px 10px;}
-.ng-ribbon .ng-ribbon-btn{min-width:46px;padding:3px 8px;border:1px solid transparent;background:transparent;border-radius:8px;box-shadow:none;}
+.ng-ribbon{gap:2px;padding:3px 10px;}
+.ng-ribbon .ng-ribbon-btn{min-width:44px;padding:3px 7px;border:1px solid transparent;background:transparent;border-radius:8px;box-shadow:none;}
 .ng-ribbon .ng-ribbon-btn:hover{background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.09);}
-.ng-ribbon .ng-ribbon-icon{font-size:14px;}
+.ng-ribbon .ng-ribbon-icon{font-size:14px;display:inline-flex;align-items:center;justify-content:center;line-height:1;}
+/* Heroicon SVGs (data-p86-icon) inside ribbon buttons size to the icon font. */
+.ng-ribbon .ng-ribbon-icon svg,.ng-ribbon .ng-ribbon-icon .p86-icon{width:15px;height:15px;}
+.ng-pop .ng-ribbon-icon svg,.ng-pop .ng-ribbon-icon .p86-icon{width:15px;height:15px;}
 .ng-ribbon .ng-ribbon-label{font-size:9.5px;letter-spacing:.2px;}
 .ng-ribbon .ng-ribbon-btn.ng-on{background:rgba(79,140,255,.15);border-color:rgba(79,140,255,.38);}
 .ng-ribbon-sep{height:24px;opacity:.55;}

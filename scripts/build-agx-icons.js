@@ -71,7 +71,11 @@ const MAP = {
   'command-line':    'heroicons/command-line',         // alt for prompt preview / terminal
   'globe':           'heroicons/globe-alt',            // admin Anthropic tab
   'map-pin':         'heroicons/map-pin',              // location pin — address lines, 86 chat location indicator, schedule
-  'cube':            'heroicons/cube',                 // admin Batch tab
+  'map':             'heroicons/map',                  // street/road basemap toggle (Site Map ribbon)
+  'eye':             'heroicons/eye',                  // Layers / visibility toggle (Site Map ribbon)
+  // NOTE: 'check-circle' is defined as a CUSTOM_ICONS (Phosphor) entry below —
+  // no MAP line here or the two would collide.
+  'cube':            'heroicons/cube',                 // admin Batch tab, Site Map 3D toggle
   'chart-bar':       'heroicons/chart-bar',            // admin Metrics tab
   'chart-pie':       'heroicons/chart-pie',
   'funnel':          'heroicons/funnel',
@@ -242,7 +246,7 @@ const FOOTER = `
     '🔍': 'magnifying-glass',  // 1F50D magnifier (Prompt Preview)
     '📦': 'cube',              // 1F4E6 package (Batch jobs)
     '🌐': 'globe',             // 1F310 globe with meridians (Anthropic)
-    '🤖': 'discord',           // 1F916 robot face — admin Agents tab
+    '🤖': 'cpu-chip',          // 1F916 robot face — admin Agents tab / AI (was mis-mapped to discord)
     '✉':       'envelope',     // 2709  envelope (light variant)
     '📧': 'envelope',          // 1F4E7 e-mail symbol
     '📨': 'envelope',          // 1F4E8 incoming envelope
