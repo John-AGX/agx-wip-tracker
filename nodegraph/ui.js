@@ -5663,6 +5663,15 @@ function init(){
     try{ if(localStorage.getItem(CKEY)==='1') tab.classList.add('ng-insp-collapsed'); }catch(_){}
     if(cbtn) cbtn.addEventListener('click', function(e){ e.preventDefault(); e.stopPropagation(); apply(true); });
     if(rbtn) rbtn.addEventListener('click', function(e){ e.preventDefault(); e.stopPropagation(); apply(false); });
+    // The re-open "Details" tab lives INSIDE .ng-canvas-area, whose pan handler
+    // starts a drag on mousedown/pointerdown and pre-empts the click — so a real
+    // mouse press never fires the click (only a synthetic .click() would). Every
+    // other in-canvas control (zoom ctrl, add-FAB, tool overlays) guards the same
+    // way. Without this, the tab renders but "won't open" on click.
+    ['mousedown','pointerdown','touchstart'].forEach(function(ev){
+      if(cbtn) cbtn.addEventListener(ev, function(e){ e.stopPropagation(); });
+      if(rbtn) rbtn.addEventListener(ev, function(e){ e.stopPropagation(); });
+    });
   })();
 
   // Mobile segmented control: Map (default) / Overview / Detail — the left + right panels
