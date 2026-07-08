@@ -300,7 +300,10 @@ function getOutput(n, pi){
   // total rather than adding to it (no double-count), while still flowing
   // through when the node has no manual entry — previously they were ignored.
   if(n.type === 'labor' || n.type === 'mat' || n.type === 'gc' || n.type === 'other' || n.type === 'burden'){
-    v = (itemsTotal + _qbLinked(n.id)) || n.value || 0;
+    // QB import is now folded into the job's actual cost as a single job-level
+    // total (see ui.js ngActualCosts assembly) — NOT per-node here — so it can't
+    // double-count. This node reflects only manual line entries / typed total.
+    v = itemsTotal || n.value || 0;
     _comp[n.id] = false; return v;
   }
 
@@ -472,7 +475,7 @@ function getActual(n){
   var v = 0, iT = _itemsTotal(n);
   // Line-level data (manual items + linked QB) supersedes the manual "QB Total"
   // fallback (n.value) — same rule as getOutput; keeps actual = output.
-  if(n.type==='labor'||n.type==='mat'||n.type==='gc'||n.type==='other'||n.type==='burden'){ v = (iT + _qbLinked(n.id)) || n.value || 0; }
+  if(n.type==='labor'||n.type==='mat'||n.type==='gc'||n.type==='other'||n.type==='burden'){ v = iT || n.value || 0; } // QB folded once at job level (ui.js), not per-node — see getOutput note
   else if(n.type==='inv'){ v = iT; }
   else if(n.type==='po'){
     // Sum wired Invoice amounts on the PO's input port

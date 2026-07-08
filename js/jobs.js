@@ -250,7 +250,27 @@ function renderJobsMain() {
             const job = appData.jobs.find(j => j.id === jobId);
             if (!job) return {};
             const co = getJobCOTotals(jobId);
-            const actualCosts = (job.ngActualCosts != null) ? job.ngActualCosts : getJobTotalCost(jobId).total;
+            // QuickBooks imported cost total for this job (server-hydrated into
+            // appData.qbCostLines). QB is the cost source of truth until costs are
+            // wired to nodes, so it flows into actual cost. When the node graph has
+            // computed, its ngActualCosts ALREADY folds this QB total in (see
+            // nodegraph/ui.js) — use it as-is. With no graph yet, add QB onto the
+            // manual cost total here. Counted exactly once either way (the engine
+            // no longer folds QB per-node).
+            let qbActualCosts = 0, qbCostLineCount = 0, qbCostsAsOf = null;
+            try {
+                const qbLines = (window.appData && Array.isArray(appData.qbCostLines))
+                    ? appData.qbCostLines.filter(l => (l.job_id || l.jobId) === jobId) : [];
+                qbCostLineCount = qbLines.length;
+                qbLines.forEach(l => {
+                    qbActualCosts += Number(l.amount || 0);
+                    const d = l.report_date || l.reportDate;
+                    if (d && (!qbCostsAsOf || String(d) > String(qbCostsAsOf))) qbCostsAsOf = String(d).slice(0, 10);
+                });
+            } catch (e) {}
+            const actualCosts = (job.ngActualCosts != null)
+                ? job.ngActualCosts
+                : (getJobTotalCost(jobId).total + qbActualCosts);
             const contractIncome = job.contractAmount || 0;
             const estimatedCosts = job.estimatedCosts || 0;
             const totalIncome = contractIncome + co.income;
@@ -296,22 +316,9 @@ function renderJobsMain() {
             const hasActuals = actualCosts > 0 || revenueEarned > 0;
             const displayProfit = hasActuals ? jtdProfit : revisedProfit;
             const displayMargin = hasActuals ? jtdMargin : revisedMargin;
-            // QuickBooks imported actuals for this job (server-hydrated into
-            // appData.qbCostLines on load). Surfaced as its OWN figure and
-            // deliberately NOT folded into actualCosts: QB lines only reach the
-            // WIP cost-to-date once they're attributed to a cost node
-            // (linked_node_id), so adding them here too would double-count.
-            let qbActualCosts = 0, qbCostLineCount = 0, qbCostsAsOf = null;
-            try {
-                const qbLines = (window.appData && Array.isArray(appData.qbCostLines))
-                    ? appData.qbCostLines.filter(l => (l.job_id || l.jobId) === jobId) : [];
-                qbCostLineCount = qbLines.length;
-                qbLines.forEach(l => {
-                    qbActualCosts += Number(l.amount || 0);
-                    const d = l.report_date || l.reportDate;
-                    if (d && (!qbCostsAsOf || String(d) > String(qbCostsAsOf))) qbCostsAsOf = String(d).slice(0, 10);
-                });
-            } catch (e) {}
+            // qbActualCosts / qbCostLineCount / qbCostsAsOf computed above and now
+            // folded into actualCosts; still returned as their own figures for the
+            // "QB actuals as of <date>" chip + mismatch flag on the overview.
             return {
                 contractIncome, estimatedCosts, coIncome: co.income, coCosts: co.costs,
                 totalIncome, totalEstCosts, revisedCostChanges, revisedEstCosts,

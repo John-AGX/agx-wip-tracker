@@ -5210,11 +5210,17 @@ function pushToJob(){
     E.resetComp();
     // Standalone job-level cost nodes (not wired to any building/phase/WIP) are
     // NOT summed by the WIP node itself, so add the disjoint job-level bucket
-    // (jobMat/Lab/Equip/GC, computed above — each already includes any linked
-    // QB actuals via the engine) onto the actual-cost track. This is what makes
-    // "add a category cost node at the job level + link QB costs" actually move
-    // the job's actual costs / margin.
-    job.ngActualCosts=E.getOutput(wipNode,1) + jobMat + jobLab + jobEquip + jobGC;
+    // (jobMat/Lab/Equip/GC, computed above — manual entries only now) onto the
+    // actual-cost track.
+    // QuickBooks import is the job's cost source of truth until costs are wired
+    // to nodes: fold the FULL QB total for this job in here — the ONE place it
+    // enters the WIP math — so actual cost / profit / margin / backlog + the job
+    // overview + the jobs list all reflect real spend. Per-node _qbLinked
+    // folding was removed from the engine so this can't double-count. (Per-
+    // building/phase QB attribution is a later refinement.)
+    var _qbJobTotal=0;
+    try{ var _ql=(window.appData&&appData.qbCostLines)||[]; for(var _qi=0;_qi<_ql.length;_qi++){ var _qll=_ql[_qi]; if((_qll.job_id||_qll.jobId)===job.id) _qbJobTotal+=Number(_qll.amount||0); } }catch(_e){}
+    job.ngActualCosts=E.getOutput(wipNode,1) + jobMat + jobLab + jobEquip + jobGC + _qbJobTotal;
     E.resetComp();
     job.ngRevenueEarned=E.getOutput(wipNode,2);
     E.resetComp();
