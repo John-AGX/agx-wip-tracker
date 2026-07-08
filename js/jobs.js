@@ -268,9 +268,14 @@ function renderJobsMain() {
                     if (d && (!qbCostsAsOf || String(d) > String(qbCostsAsOf))) qbCostsAsOf = String(d).slice(0, 10);
                 });
             } catch (e) {}
-            const actualCosts = (job.ngActualCosts != null)
-                ? job.ngActualCosts
-                : (getJobTotalCost(jobId).total + qbActualCosts);
+            // Graph's manual/wired cost (prefer the engine's value; fall back to
+            // the phase/building manual total before the graph has computed).
+            const baseActualCosts = (job.ngActualCosts != null) ? job.ngActualCosts : getJobTotalCost(jobId).total;
+            // Add the full QB import total on top — QB is the cost source of truth
+            // until costs are wired to nodes. Stateless (correct on the jobs list +
+            // unopened jobs, not just after a graph recompute) and counted exactly
+            // once (the engine no longer folds QB per-node).
+            const actualCosts = baseActualCosts + qbActualCosts;
             const contractIncome = job.contractAmount || 0;
             const estimatedCosts = job.estimatedCosts || 0;
             const totalIncome = contractIncome + co.income;
@@ -291,12 +296,12 @@ function renderJobsMain() {
             const revenueEarned = (job.ngRevenueEarned != null)
                 ? job.ngRevenueEarned
                 : totalIncome * (pctComplete / 100);
-            const jtdProfit = (job.ngJtdProfit != null)
-                ? job.ngJtdProfit
-                : revenueEarned - actualCosts;
-            const jtdMargin = (job.ngJtdMargin != null)
-                ? job.ngJtdMargin
-                : (revenueEarned > 0 ? (jtdProfit / revenueEarned * 100) : 0);
+            // Recompute JTD from the QB-inclusive actual cost. Do NOT prefer the
+            // engine's ngJtdProfit/ngJtdMargin — those are computed from the graph's
+            // MANUAL cost only (QB excluded), so they'd overstate profit. Revenue
+            // still uses the engine's weighted-pct value (revenueEarned above).
+            const jtdProfit = revenueEarned - actualCosts;
+            const jtdMargin = revenueEarned > 0 ? (jtdProfit / revenueEarned * 100) : 0;
             const invoiced = job.invoicedToDate || 0;
             const unbilled = revenueEarned - invoiced;
             const backlog = (job.ngBacklog != null)
