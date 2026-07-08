@@ -3791,7 +3791,7 @@ function renderJobsMain() {
 
             function cellInput(name, bid, v, dashed) {
                 return '<td style="text-align:right;padding:3px 4px;"><input type="number" min="0" step="100" value="' + (v || '') + '" ' +
-                    'data-mx-phase="' + attr(name) + '" data-mx-bldg="' + attr(bid || '') + '" oninput="onPhaseMatrixCell(this)" ' +
+                    'data-mx-phase="' + attr(name) + '" data-mx-bldg="' + attr(bid || '') + '" oninput="onPhaseMatrixCell(this)" onchange="onPhaseMatrixCellCommit(this)" ' +
                     'style="width:76px;font-size:12px;padding:3px 5px;text-align:right;background:var(--bg);border:1px ' + (dashed ? 'dashed' : 'solid') + ' var(--border);border-radius:4px;color:var(--text' + (dashed ? '-dim' : '') + ');"/></td>';
             }
             var body = names.map(function(name) {
@@ -3839,10 +3839,43 @@ function renderJobsMain() {
             }
             rec.asSoldPhaseBudget = val;
             rec.phaseBudget = val + (rec.coPhaseBudget || 0);
+            // Matrix = source of truth: mirror the cell into the phase's as-sold
+            // REVENUE, not just its budget. The graph's WIP roll-up weights each
+            // phase by revenue — leaving this at 0 was why the job % never totaled.
+            rec.asSoldRevenue = val;
             if (typeof saveData === 'function') saveData();
             recomputePhaseMatrixTotals(input, jobId);
         }
         window.onPhaseMatrixCell = onPhaseMatrixCell;
+
+        // Blur/commit on a matrix cell: push the money onto the wired phase node's
+        // revenue and recompute the job roll-up, so the header % + the phase/
+        // building tables total from the numbers just typed. oninput keeps typing
+        // light (writes the record + in-table totals); the heavier graph recompute
+        // + repaint run once here, and only after the user leaves the grid so
+        // tabbing across cells for rapid entry isn't interrupted. The matrix-side
+        // twin of p86CommitInline.
+        function onPhaseMatrixCellCommit(input) {
+            var name = input.getAttribute('data-mx-phase');
+            var bid = input.getAttribute('data-mx-bldg') || null;
+            var jobId = (typeof appState !== 'undefined' && appState.currentJobId);
+            if (!name || !jobId) return;
+            var rec = appData.phases.find(function(p) { return p.jobId === jobId && (p.phase || 'Unnamed') === name && (p.buildingId || null) === (bid || null); });
+            if (rec && typeof NG !== 'undefined') {
+                try {
+                    NG.nodes().forEach(function(n) { if (n.type === 't2' && n.data && n.data.id === rec.id) { n.revenue = rec.asSoldRevenue || 0; } });
+                    NG.saveGraph();
+                } catch (e) {}
+            }
+            setTimeout(function() {
+                var ae = document.activeElement;
+                if (ae && ae.getAttribute && ae.getAttribute('data-mx-phase') != null) return; // still in the grid
+                try { if (typeof ensureNGComputed === 'function') ensureNGComputed(jobId); } catch (e) {}
+                try { if (typeof p86RerenderJobCards === 'function') p86RerenderJobCards(jobId); } catch (e) {}
+                try { if (typeof renderJobPhases === 'function') renderJobPhases(jobId); } catch (e) {}
+            }, 60);
+        }
+        window.onPhaseMatrixCellCommit = onPhaseMatrixCellCommit;
 
         function recomputePhaseMatrixTotals(input, jobId) {
             var table = input.closest('table'); if (!table) return;
@@ -4140,6 +4173,7 @@ function renderJobsMain() {
             const val = parseFloat(input.value) || 0;
             phase.asSoldPhaseBudget = val;
             phase.phaseBudget = val + (phase.coPhaseBudget || 0);
+            phase.asSoldRevenue = val; // mirror — keep revenue == as-sold budget (matrix = source of truth)
             const totalSpan = input.parentElement.querySelector('span[style*="width:90px"]');
             if (totalSpan) totalSpan.textContent = formatCurrency(phase.phaseBudget);
             updatePhaseBreakdownRemaining();
