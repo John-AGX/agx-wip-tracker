@@ -271,11 +271,13 @@ function renderJobsMain() {
             // Graph's manual/wired cost (prefer the engine's value; fall back to
             // the phase/building manual total before the graph has computed).
             const baseActualCosts = (job.ngActualCosts != null) ? job.ngActualCosts : getJobTotalCost(jobId).total;
-            // Add the full QB import total on top — QB is the cost source of truth
-            // until costs are wired to nodes. Stateless (correct on the jobs list +
-            // unopened jobs, not just after a graph recompute) and counted exactly
-            // once (the engine no longer folds QB per-node).
-            const actualCosts = baseActualCosts + qbActualCosts;
+            // QB import IS the actual cost when the job has QB lines (John's cost
+            // source of truth): use the QB total DIRECTLY, not base+QB — some jobs
+            // have QB linked to nodes whose amounts already materialized into the
+            // graph cost, so base+QB would double-count them. Fall back to the
+            // graph's manual/wired cost only when there are no QB lines for the job.
+            // Stateless — correct on the jobs list + unopened jobs.
+            const actualCosts = (qbActualCosts > 0) ? qbActualCosts : baseActualCosts;
             const contractIncome = job.contractAmount || 0;
             const estimatedCosts = job.estimatedCosts || 0;
             const totalIncome = contractIncome + co.income;
