@@ -5361,12 +5361,25 @@ function syncFromData(){
 
   // Phases
   appData.phases.filter(function(p){return p.jobId===jid;}).forEach(function(ph){
-    if(t2Map[ph.id]) return;
+    if(t2Map[ph.id]){
+      // Heal legacy nodes: the old Buildings×Phases matrix wrote asSoldPhaseBudget
+      // only (revenue stayed 0), and this sync is otherwise create-only — so an
+      // existing phase node keeps a stale revenue=0 and drops out of the revenue-
+      // weighted WIP % roll-up. If the node has no revenue but the record carries
+      // a budget, pull it up (same truthy fallback as jobs.js phaseRevenue()).
+      // Never clobber a node that already has a revenue value.
+      var exist=t2Map[ph.id];
+      if(exist && !(exist.revenue>0)){
+        var recRev=ph.asSoldRevenue||ph.asSoldPhaseBudget||ph.phaseBudget||0;
+        if(recRev>0) exist.revenue=recRev;
+      }
+      return;
+    }
     var bl=appData.buildings.find(function(b){return b.id===ph.buildingId;});
     var pos=nextPos();
     var n=E.addNode('t2',pos.x,pos.y,ph.phase+(bl?' › '+bl.name:''),ph);
     if(n){
-      n.budget=ph.phaseBudget||0; n.pctComplete=ph.pctComplete||0; n.revenue=ph.asSoldRevenue||0;
+      n.budget=ph.phaseBudget||0; n.pctComplete=ph.pctComplete||0; n.revenue=ph.asSoldRevenue||ph.asSoldPhaseBudget||ph.phaseBudget||0;
       if(bl&&t1Map[bl.id]){
         wires.push({fromNode:n.id,fromPort:0,toNode:t1Map[bl.id].id,toPort:0});
         // Assign allocPct at creation — a null allocPct computes as 0%.
