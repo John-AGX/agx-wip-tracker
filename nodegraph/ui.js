@@ -4972,6 +4972,20 @@ function pushToJob(){
   if(!job) return;
   var nodes=E.nodes(), wires=E.wires();
 
+  // Heal legacy phase nodes whose revenue is stuck at 0 (entered via the old
+  // budget-only Buildings×Phases matrix). This is the single compute chokepoint
+  // (overview, jobs list, and Site Map all reach the roll-up through here), so
+  // pulling revenue up from the phase record's fallback here — rather than only
+  // in syncFromData (Sync button) — makes the % + revenue total on every surface
+  // without the user re-touching cells. Records are source of truth; never
+  // clobber a node that already carries a revenue value.
+  nodes.forEach(function(n){
+    if(n.type==='t2' && n.data && n.data.id && !(n.revenue>0)){
+      var ph=appData.phases.find(function(p){return p.id===n.data.id;});
+      if(ph){ var rr=ph.asSoldRevenue||ph.asSoldPhaseBudget||ph.phaseBudget||0; if(rr>0) n.revenue=rr; }
+    }
+  });
+
   // Sync WIP node's jobFields from current appData before computing outputs,
   // so the engine always uses the latest values the user entered on the WIP tab.
   var wipNode0=nodes.find(function(n){return n.type==='wip';});
