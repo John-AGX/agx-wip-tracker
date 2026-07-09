@@ -171,6 +171,8 @@
           '<input id="po-f-title" type="text" class="po-ed-input" value="' + escAttr(_po.title || '') + '" placeholder="e.g. Framing and Decking"' + dis + '></label>' +
         '<label class="po-ed-field"><span>Subcontractor</span>' +
           '<select id="po-f-sub" class="po-ed-input"' + dis + '><option value="">— Select sub —</option></select></label>' +
+        '<label class="po-ed-field"><span>Phase</span>' +
+          '<select id="po-f-phase" class="po-ed-input"' + dis + '><option value="">— Job-level —</option></select></label>' +
         '<label class="po-ed-field"><span>Scheduled completion</span>' +
           '<input id="po-f-sched" type="date" class="po-ed-input" value="' + escAttr(_po.scheduledCompletion || '') + '"' + dis + '></label>' +
         '<label class="po-ed-field po-ed-check"><input id="po-f-materials" type="checkbox"' + (_po.materialsOnly ? ' checked' : '') + dis + '> <span>Materials only</span></label>' +
@@ -383,6 +385,22 @@
         if (cur) cur.innerHTML = _po.sub_name ? 'Assigned: <strong>' + esc(_po.sub_name) + '</strong>' : '';
         queueSave();
       });
+    }
+
+    // Phase picker — attribute the PO's committed cost to a specific phase so it
+    // lands on that phase's accrued (else job-level). Explicit link beats the
+    // name-match heuristic in getJobPOAccrued.
+    var phaseSel = byId('po-f-phase');
+    if (phaseSel) {
+      var _phNames = [];
+      ((window.appData && window.appData.phases) || []).forEach(function (p) {
+        if (p.jobId === _po.job_id) { var n = (p.phase || '').trim(); if (n && _phNames.indexOf(n) === -1) _phNames.push(n); }
+      });
+      _phNames.sort();
+      phaseSel.innerHTML = '<option value="">— Job-level —</option>' + _phNames.map(function (n) {
+        return '<option value="' + escAttr(n) + '"' + (n === _po.phaseName ? ' selected' : '') + '>' + esc(n) + '</option>';
+      }).join('');
+      phaseSel.addEventListener('change', function () { _po.phaseName = phaseSel.value || null; queueSave(); });
     }
 
     // Read-only sections load regardless of lock state.
@@ -622,6 +640,7 @@
       title: _po.title || '', scope: _po.scope || '', internalNotes: _po.internalNotes || '',
       scheduledCompletion: _po.scheduledCompletion || '', materialsOnly: !!_po.materialsOnly,
       lines: _po.lines || [], bills: _po.bills || [], linkedRfiIds: _po.linkedRfiIds || [],
+      phaseName: _po.phaseName || null,
       sub_id: _po.sub_id || null
     };
     // Carry the PDF extraction once (close-flush) so the server logs

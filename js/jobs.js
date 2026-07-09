@@ -786,9 +786,15 @@ function renderJobsMain() {
                 var open = Math.max(0, poRowTotal(po) - poRowBilled(po));
                 if (open <= 0) return;
                 total += open;
-                var hay = ((po.title || '') + ' ' + (po.lines || []).map(function(l) { return l.description || ''; }).join(' ')).toLowerCase();
                 var matched = null;
-                phaseNames.forEach(function(n) { if (!matched && hay.indexOf(n.toLowerCase()) >= 0) matched = n; });
+                // Explicit phase link (PO editor's Phase dropdown) wins; else fall
+                // back to matching the PO title/line text against a phase name.
+                if (po.phaseName && phaseNames.indexOf(po.phaseName) >= 0) {
+                    matched = po.phaseName;
+                } else {
+                    var hay = ((po.title || '') + ' ' + (po.lines || []).map(function(l) { return l.description || ''; }).join(' ')).toLowerCase();
+                    phaseNames.forEach(function(n) { if (!matched && hay.indexOf(n.toLowerCase()) >= 0) matched = n; });
+                }
                 var key = matched || '__job__';
                 byPhase[key] = (byPhase[key] || 0) + open;
             });
