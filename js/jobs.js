@@ -3738,21 +3738,22 @@ function renderJobsMain() {
                 return summaryRow + body;
             }).join('');
 
-            container.innerHTML = titleHTML +
-                '<div class="phase-matrix-host"></div>' +
-                '<div style="border:1px solid var(--border,#333);border-radius:10px;overflow-x:auto;background:var(--card-bg,#141419);">' +
+            // The Buildings × Phases matrix now folds in revenue/cost/profit/%
+            // per phase, so the legacy flat Phase table is only a fallback for
+            // jobs with NO buildings (where the matrix renders nothing).
+            var _bldgs = (appData.buildings || []).filter(function(b) { return b.jobId === jobId; });
+            var legacyTable = (_bldgs.length === 0)
+                ? ('<div style="border:1px solid var(--border,#333);border-radius:10px;overflow-x:auto;background:var(--card-bg,#141419);">' +
                     '<table style="width:100%;border-collapse:collapse;table-layout:auto;">' +
                         '<thead style="background:var(--overlay-light,rgba(255,255,255,0.02));border-bottom:1px solid var(--border,#333);"><tr>' +
-                            thCell('Phase', 'left') +
-                            thCell('Instances', 'right') +
-                            thCell('Revenue', 'right') +
-                            thCell('Cost', 'right') +
-                            thCell('Profit', 'right') +
-                            thCell('Avg %', 'right') +
+                            thCell('Phase', 'left') + thCell('Instances', 'right') + thCell('Revenue', 'right') +
+                            thCell('Cost', 'right') + thCell('Profit', 'right') + thCell('Avg %', 'right') +
                         '</tr></thead>' +
                         '<tbody>' + rowsHTML + '</tbody>' +
                     '</table>' +
-                '</div>';
+                  '</div>')
+                : '';
+            container.innerHTML = titleHTML + '<div class="phase-matrix-host"></div>' + legacyTable;
             try { renderPhaseMatrixInto(container.querySelector('.phase-matrix-host'), jobId); } catch (e) {}
         }
 
@@ -3864,13 +3865,16 @@ function renderJobsMain() {
             // data-* attrs + input values below.
             var attr = function(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
             var cols = buildings.map(function(b) { return { id: b.id, name: b.name || 'Building' }; });
-            var colTot = {}; cols.forEach(function(c) { colTot[c.id] = 0; }); var unTot = 0, grand = 0;
+            var colTot = {}, colCost = {}; cols.forEach(function(c) { colTot[c.id] = 0; colCost[c.id] = 0; }); var unTot = 0, unCost = 0, grand = 0, grandCost = 0;
             var stickL = 'position:sticky;left:0;background:var(--card-bg,#141419);z-index:1;';
 
             var head = '<tr><th style="text-align:left;padding:5px 8px;font-size:11px;color:var(--text-dim);' + stickL + '">Phase</th>';
             cols.forEach(function(c) { head += '<th style="text-align:right;padding:5px 8px;font-size:11px;color:var(--text-dim);white-space:nowrap;">' + escapeHTML(c.name) + '</th>'; });
             head += '<th style="text-align:right;padding:5px 8px;font-size:11px;color:var(--text-dim);">Unassigned</th>';
-            head += '<th style="text-align:right;padding:5px 8px;font-size:11px;color:var(--accent);">Total</th></tr>';
+            head += '<th style="text-align:right;padding:5px 8px;font-size:11px;color:var(--accent);">Total</th>';
+            head += '<th style="text-align:right;padding:5px 8px;font-size:11px;color:var(--text-dim);border-left:1px solid var(--border);">Cost</th>';
+            head += '<th style="text-align:right;padding:5px 8px;font-size:11px;color:var(--text-dim);">Profit</th>';
+            head += '<th style="text-align:right;padding:5px 8px;font-size:11px;color:var(--text-dim);">% Done</th></tr>';
 
             function pctCell(name, bid, pct, auto) {
                 return '<td style="text-align:right;padding:3px 4px;"><span style="display:inline-flex;align-items:center;gap:1px;">' +
@@ -3891,29 +3895,45 @@ function renderJobsMain() {
                 var isPct = info.mode === 'pct';
                 var shares = isPct ? phasePctShares(jobId, name).shares : null;
                 var rowTot = 0;
+                var recCost = function(r) { return r ? (r.materials || 0) + (r.labor || 0) + (r.sub || 0) + (r.equipment || 0) : 0; };
                 var cells = cols.map(function(c) {
                     var rec = info.recs.find(function(r) { return (r.buildingId || null) === c.id; });
-                    var d = phaseDollar(rec); colTot[c.id] += d; rowTot += d;
+                    var d = phaseDollar(rec); colTot[c.id] += d; rowTot += d; colCost[c.id] += recCost(rec);
                     if (isPct) { var sh = shares[c.id] || { pct: 0, auto: true }; return pctCell(name, c.id, sh.pct, sh.auto); }
                     return dollarCell(name, c.id, d, false);
                 }).join('');
                 var urec = info.recs.find(function(r) { return !(r.buildingId); });
-                var ud = phaseDollar(urec); unTot += ud; rowTot += ud;
+                var ud = phaseDollar(urec); unTot += ud; rowTot += ud; unCost += recCost(urec);
                 var unSh = isPct ? (shares['__un__'] || { pct: 0, auto: true }) : null;
                 var unCell = isPct ? pctCell(name, null, unSh.pct, unSh.auto) : dollarCell(name, null, ud, true);
                 grand += rowTot;
+                // Fold-in of the legacy Phase table: cost / profit / progress per phase.
+                var pcost = info.recs.reduce(function(s, r) { return s + recCost(r); }, 0); grandCost += pcost;
+                var pprofit = rowTot - pcost;
+                var avgPct = info.recs.length ? Math.round(info.recs.reduce(function(s, r) { return s + (r.pctComplete || 0); }, 0) / info.recs.length) : 0;
                 var modeChip = '<button type="button" data-mx-phase="' + attr(name) + '" onclick="onPhaseMatrixModeToggle(this)" title="Toggle percent / dollar allocation for this phase" style="margin-left:6px;font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;border:1px solid var(--border);background:var(--overlay-light,rgba(255,255,255,0.05));color:var(--accent);cursor:pointer;">' + (isPct ? '%' : '$') + '</button>';
                 var totalCell = isPct
                     ? '<td style="text-align:right;padding:3px 4px;"><input type="number" min="0" step="100" value="' + (info.total || '') + '" data-mx-phase="' + attr(name) + '" oninput="onPhaseMatrixTotal(this)" onchange="onPhaseMatrixCommit(this)" placeholder="total $" style="width:90px;font-size:12.5px;font-weight:700;padding:3px 5px;text-align:right;background:var(--bg);border:1px solid var(--accent);border-radius:4px;color:var(--accent);font-family:monospace;"/></td>'
                     : '<td data-mx-rowtot="' + attr(name) + '" style="text-align:right;padding:4px 8px;font-size:12.5px;font-weight:700;color:var(--accent);font-family:monospace;">' + formatCurrency(rowTot) + '</td>';
+                var costCell = '<td style="text-align:right;padding:4px 8px;font-size:12px;font-family:monospace;color:var(--orange,#e0a458);border-left:1px solid var(--border);">' + formatCurrency(pcost) + '</td>';
+                var profitCell = '<td style="text-align:right;padding:4px 8px;font-size:12px;font-family:monospace;color:' + (pprofit >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(pprofit) + '</td>';
+                var doneCell = '<td style="text-align:right;padding:3px 4px;"><span style="display:inline-flex;align-items:center;gap:1px;justify-content:flex-end;"><input type="number" min="0" max="100" step="5" value="' + (avgPct || '') + '" data-mx-phase="' + attr(name) + '" oninput="onPhaseMatrixPctDone(this)" onchange="onPhaseMatrixCommit(this)" title="Phase % complete — drives the WIP roll-up" style="width:46px;font-size:12px;padding:3px 4px;text-align:right;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--accent);font-weight:700;"/><span style="font-size:10px;color:var(--text-dim);">%</span></span></td>';
                 return '<tr><td style="text-align:left;padding:4px 8px;font-size:12.5px;font-weight:600;color:var(--text);white-space:nowrap;' + stickL + '">' + escapeHTML(name) + modeChip + '</td>' +
-                    cells + unCell + totalCell + '</tr>';
+                    cells + unCell + totalCell + costCell + profitCell + doneCell + '</tr>';
             }).join('');
 
-            var foot = '<tr style="border-top:2px solid var(--border);"><td style="text-align:left;padding:5px 8px;font-size:11px;font-weight:700;color:var(--text-dim);' + stickL + '">Building total</td>';
+            var foot = '<tr style="border-top:2px solid var(--border);"><td style="text-align:left;padding:5px 8px;font-size:11px;font-weight:700;color:var(--text-dim);' + stickL + '">Building revenue</td>';
             cols.forEach(function(c) { foot += '<td data-mx-coltot="' + attr(c.id) + '" style="text-align:right;padding:5px 8px;font-size:12px;font-weight:700;font-family:monospace;">' + formatCurrency(colTot[c.id]) + '</td>'; });
             foot += '<td data-mx-coltot="__un__" style="text-align:right;padding:5px 8px;font-size:12px;font-weight:700;font-family:monospace;color:var(--text-dim);">' + formatCurrency(unTot) + '</td>';
-            foot += '<td data-mx-grand style="text-align:right;padding:5px 8px;font-size:13px;font-weight:800;font-family:monospace;color:var(--accent);">' + formatCurrency(grand) + '</td></tr>';
+            foot += '<td data-mx-grand style="text-align:right;padding:5px 8px;font-size:13px;font-weight:800;font-family:monospace;color:var(--accent);">' + formatCurrency(grand) + '</td>';
+            foot += '<td style="text-align:right;padding:5px 8px;font-size:12px;font-weight:800;font-family:monospace;color:var(--orange,#e0a458);border-left:1px solid var(--border);">' + formatCurrency(grandCost) + '</td>';
+            foot += '<td style="text-align:right;padding:5px 8px;font-size:12px;font-weight:800;font-family:monospace;color:' + ((grand - grandCost) >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(grand - grandCost) + '</td>';
+            foot += '<td></td></tr>';
+            // Second footer row — per-building cost (folds the legacy Building table's Spent column).
+            foot += '<tr><td style="text-align:left;padding:4px 8px;font-size:11px;color:var(--text-dim);' + stickL + '">Building cost</td>';
+            cols.forEach(function(c) { foot += '<td style="text-align:right;padding:4px 8px;font-size:11.5px;font-family:monospace;color:var(--orange,#e0a458);">' + formatCurrency(colCost[c.id]) + '</td>'; });
+            foot += '<td style="text-align:right;padding:4px 8px;font-size:11.5px;font-family:monospace;color:var(--text-dim);">' + formatCurrency(unCost) + '</td>';
+            foot += '<td></td><td></td><td></td><td></td></tr>';
 
             container.innerHTML =
                 '<div style="display:flex;justify-content:space-between;align-items:center;margin:2px 0 6px;gap:8px;flex-wrap:wrap;">' +
@@ -3977,6 +3997,18 @@ function renderJobsMain() {
         }
         window.onPhaseMatrixTotal = onPhaseMatrixTotal;
 
+        // % -Done cell (oninput): set every record of the phase to this % complete
+        // (a phase progresses as a unit); the graph sync + WIP roll-up run on commit.
+        function onPhaseMatrixPctDone(input) {
+            var name = input.getAttribute('data-mx-phase');
+            var jobId = (typeof appState !== 'undefined' && appState.currentJobId);
+            if (!name || !jobId) return;
+            var val = parseFloat(input.value); if (isNaN(val) || val < 0) val = 0; if (val > 100) val = 100;
+            (appData.phases || []).filter(function(p) { return p.jobId === jobId && (p.phase || 'Unnamed') === name; })
+                .forEach(function(r) { r.pctComplete = val; r.pctCompleteManual = true; });
+        }
+        window.onPhaseMatrixPctDone = onPhaseMatrixPctDone;
+
         // Flip a phase row between % and $ allocation. Switching to % seeds the
         // total + each building's % from the current dollars so nothing moves;
         // switching to $ just leaves the dollars in place.
@@ -4018,7 +4050,7 @@ function renderJobsMain() {
                 try {
                     var recs = (appData.phases || []).filter(function(p) { return p.jobId === jobId && (p.phase || 'Unnamed') === name; });
                     var byId = {}; recs.forEach(function(r) { byId[r.id] = r; });
-                    NG.nodes().forEach(function(n) { if (n.type === 't2' && n.data && byId[n.data.id]) { n.revenue = phaseDollar(byId[n.data.id]); } });
+                    NG.nodes().forEach(function(n) { if (n.type === 't2' && n.data && byId[n.data.id]) { var r = byId[n.data.id]; n.revenue = phaseDollar(r); n.pct = r.pctComplete || 0; n.pctComplete = r.pctComplete || 0; } });
                     NG.saveGraph();
                 } catch (e) {}
             }
