@@ -759,6 +759,33 @@ function renderJobsMain() {
             }, 0);
         }
 
+        // Open Purchase Order commitments = ACCRUED cost (John's model: a PO rolls
+        // up as accrued = ordered − billed until the sub invoices/gets paid, at
+        // which point the paid amount becomes ACTUAL via the QB import — so it never
+        // double-counts). Attributed to the phase whose name appears in the PO
+        // title/line description (else job-level). Reads appData.jobPurchaseOrders,
+        // which loads on-demand — returns 0 until the overview's PO section fetches.
+        function getJobPOAccrued(jobId) {
+            var pos = (appData.jobPurchaseOrders || []).filter(function(p) {
+                return p.job_id === jobId && p.status !== 'draft' && p.status !== 'cancelled' && p.status !== 'void';
+            });
+            var phaseNames = [];
+            (appData.phases || []).forEach(function(p) { if (p.jobId === jobId) { var n = (p.phase || '').trim(); if (n && phaseNames.indexOf(n) === -1) phaseNames.push(n); } });
+            var total = 0, byPhase = {};
+            pos.forEach(function(po) {
+                var open = Math.max(0, poRowTotal(po) - poRowBilled(po));
+                if (open <= 0) return;
+                total += open;
+                var hay = ((po.title || '') + ' ' + (po.lines || []).map(function(l) { return l.description || ''; }).join(' ')).toLowerCase();
+                var matched = null;
+                phaseNames.forEach(function(n) { if (!matched && hay.indexOf(n.toLowerCase()) >= 0) matched = n; });
+                var key = matched || '__job__';
+                byPhase[key] = (byPhase[key] || 0) + open;
+            });
+            return { total: total, byPhase: byPhase };
+        }
+        window.getJobPOAccrued = getJobPOAccrued;
+
         function renderJobPurchaseOrdersInto(container, jobId, mountId) {
             var mount = document.createElement('div');
             mount.id = mountId || 'job-overview-purchase-orders';
@@ -767,6 +794,19 @@ function renderJobsMain() {
             paintJobPurchaseOrdersInto(mount, jobId);
             loadPurchaseOrdersForJob(jobId).then(function() {
                 paintJobPurchaseOrdersInto(mount, jobId);
+                // POs feed ACCRUED cost — now that they've loaded, refresh the
+                // accrued tile + the phase matrix (per-phase accrued chip).
+                try {
+                    var accEl = document.getElementById('job-summary-accrued');
+                    if (accEl && typeof getJobAccruedCosts === 'function') {
+                        var poAcc = getJobPOAccrued(jobId).total || 0;
+                        var acc = getJobAccruedCosts(jobId) + poAcc;
+                        accEl.textContent = formatCurrency(acc);
+                        var noteEl = document.getElementById('job-summary-accrued-note');
+                        if (noteEl) noteEl.textContent = poAcc > 0 ? 'Open POs + earned/unbilled' : (acc > 0 ? 'Earned but unbilled' : '');
+                    }
+                    if (typeof renderJobPhases === 'function') renderJobPhases(jobId);
+                } catch (e) {}
             });
         }
         function paintJobPurchaseOrdersInto(mount, jobId) {
@@ -2692,9 +2732,10 @@ function renderJobsMain() {
                     _qbNote.style.display = 'none';
                 }
             }
-            const accruedCosts = getJobAccruedCosts(jobId);
+            var _poAccr = (typeof getJobPOAccrued === 'function') ? (getJobPOAccrued(jobId).total || 0) : 0;
+            const accruedCosts = getJobAccruedCosts(jobId) + _poAccr;
             document.getElementById('job-summary-accrued').textContent = formatCurrency(accruedCosts);
-            document.getElementById('job-summary-accrued-note').textContent = accruedCosts > 0 ? 'Earned but unbilled' : '';
+            document.getElementById('job-summary-accrued-note').textContent = _poAccr > 0 ? 'Open POs + earned/unbilled' : (accruedCosts > 0 ? 'Earned but unbilled' : '');
             document.getElementById('job-summary-pctcomplete').textContent = w.pctComplete.toFixed(1) + '%';
             document.getElementById('job-summary-revenue').textContent = formatCurrency(w.revenueEarned);
             document.getElementById('job-summary-profit').textContent = formatCurrency(w.displayProfit);
@@ -3866,6 +3907,7 @@ function renderJobsMain() {
             var attr = function(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
             var cols = buildings.map(function(b) { return { id: b.id, name: b.name || 'Building' }; });
             var colTot = {}, colCost = {}; cols.forEach(function(c) { colTot[c.id] = 0; colCost[c.id] = 0; }); var unTot = 0, unCost = 0, grand = 0, grandCost = 0;
+            var poAccr = (typeof getJobPOAccrued === 'function') ? getJobPOAccrued(jobId).byPhase : {};
             var stickL = 'position:sticky;left:0;background:var(--card-bg,#141419);z-index:1;';
 
             var head = '<tr><th style="text-align:left;padding:5px 8px;font-size:11px;color:var(--text-dim);' + stickL + '">Phase</th>';
@@ -3912,13 +3954,14 @@ function renderJobsMain() {
                 var pprofit = rowTot - pcost;
                 var avgPct = info.recs.length ? Math.round(info.recs.reduce(function(s, r) { return s + (r.pctComplete || 0); }, 0) / info.recs.length) : 0;
                 var modeChip = '<button type="button" data-mx-phase="' + attr(name) + '" onclick="onPhaseMatrixModeToggle(this)" title="Toggle percent / dollar allocation for this phase" style="margin-left:6px;font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;border:1px solid var(--border);background:var(--overlay-light,rgba(255,255,255,0.05));color:var(--accent);cursor:pointer;">' + (isPct ? '%' : '$') + '</button>';
+                var accrChip = (poAccr[name] > 0) ? '<span title="Open PO commitment — accrued until billed/paid" style="margin-left:6px;font-size:10px;padding:1px 6px;border-radius:10px;background:rgba(224,164,88,0.15);color:var(--orange,#e0a458);white-space:nowrap;">&#9203; ' + formatCurrency(poAccr[name]) + '</span>' : '';
                 var totalCell = isPct
                     ? '<td style="text-align:right;padding:3px 4px;"><input type="number" min="0" step="100" value="' + (info.total || '') + '" data-mx-phase="' + attr(name) + '" oninput="onPhaseMatrixTotal(this)" onchange="onPhaseMatrixCommit(this)" placeholder="total $" style="width:90px;font-size:12.5px;font-weight:700;padding:3px 5px;text-align:right;background:var(--bg);border:1px solid var(--accent);border-radius:4px;color:var(--accent);font-family:monospace;"/></td>'
                     : '<td data-mx-rowtot="' + attr(name) + '" style="text-align:right;padding:4px 8px;font-size:12.5px;font-weight:700;color:var(--accent);font-family:monospace;">' + formatCurrency(rowTot) + '</td>';
                 var costCell = '<td style="text-align:right;padding:4px 8px;font-size:12px;font-family:monospace;color:var(--orange,#e0a458);border-left:1px solid var(--border);">' + formatCurrency(pcost) + '</td>';
                 var profitCell = '<td style="text-align:right;padding:4px 8px;font-size:12px;font-family:monospace;color:' + (pprofit >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(pprofit) + '</td>';
                 var doneCell = '<td style="text-align:right;padding:3px 4px;"><span style="display:inline-flex;align-items:center;gap:1px;justify-content:flex-end;"><input type="number" min="0" max="100" step="5" value="' + (avgPct || '') + '" data-mx-phase="' + attr(name) + '" oninput="onPhaseMatrixPctDone(this)" onchange="onPhaseMatrixCommit(this)" title="Phase % complete — drives the WIP roll-up" style="width:46px;font-size:12px;padding:3px 4px;text-align:right;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--accent);font-weight:700;"/><span style="font-size:10px;color:var(--text-dim);">%</span></span></td>';
-                return '<tr><td style="text-align:left;padding:4px 8px;font-size:12.5px;font-weight:600;color:var(--text);white-space:nowrap;' + stickL + '">' + escapeHTML(name) + modeChip + '</td>' +
+                return '<tr><td style="text-align:left;padding:4px 8px;font-size:12.5px;font-weight:600;color:var(--text);white-space:nowrap;' + stickL + '">' + escapeHTML(name) + modeChip + accrChip + '</td>' +
                     cells + unCell + totalCell + costCell + profitCell + doneCell + '</tr>';
             }).join('');
 
