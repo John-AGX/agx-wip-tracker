@@ -2251,6 +2251,10 @@
             appData.subs = safeLoadJSON('p86-jobs-subs', []);
             appData.changeOrders = safeLoadJSON('p86-jobs-changeorders', []);
             appData.purchaseOrders = safeLoadJSON('p86-jobs-purchaseorders', []);
+            // The REAL per-job PO store (server-backed job_purchase_orders). Cached
+            // so ACCRUED cost paints its true value on the first synchronous render
+            // after a hard reload — before the boot PO fetch resolves — no $0 flash.
+            appData.jobPurchaseOrders = safeLoadJSON('p86-jobs-jobpurchaseorders', []);
             appData.invoices = safeLoadJSON('p86-jobs-invoices', []);
             appData.estimates = safeLoadJSON('p86-estimates', []);
             appData.estimateLines = safeLoadJSON('p86-estimate-lines', []);
@@ -2270,6 +2274,7 @@
             localStorage.setItem('p86-jobs-subs', JSON.stringify(appData.subs));
             localStorage.setItem('p86-jobs-changeorders', JSON.stringify(appData.changeOrders));
             localStorage.setItem('p86-jobs-purchaseorders', JSON.stringify(appData.purchaseOrders));
+            localStorage.setItem('p86-jobs-jobpurchaseorders', JSON.stringify(appData.jobPurchaseOrders || []));
             localStorage.setItem('p86-jobs-invoices', JSON.stringify(appData.invoices));
             localStorage.setItem('p86-estimates', JSON.stringify(appData.estimates));
             localStorage.setItem('p86-estimate-lines', JSON.stringify(appData.estimateLines));
