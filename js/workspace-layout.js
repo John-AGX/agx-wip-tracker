@@ -448,7 +448,9 @@
       try { ensureNGComputed(currentJobId); } finally { _ngComputing = false; }
     }
     var w = getJobWIP(currentJobId);
-    var accrued = (typeof getJobAccruedCosts === 'function') ? getJobAccruedCosts(currentJobId) : 0;
+    // getJobWIP.accruedCosts folds in open-PO commitments (via getJobPOAccrued);
+    // getJobAccruedCosts alone is sub-earned-unbilled only (misses POs).
+    var accrued = (w && w.accruedCosts != null) ? w.accruedCosts : ((typeof getJobAccruedCosts === 'function') ? getJobAccruedCosts(currentJobId) : 0);
     // 7-card simplified set — must mirror buildHeader's metricsData labels.
     var map = {
       'Total Income': formatCurrency(w.totalIncome),
@@ -466,7 +468,7 @@
       'Total Income': (w.coIncome > 0)
         ? 'Contract: ' + formatCurrency(w.contractIncome) + ' + CO: ' + formatCurrency(w.coIncome)
         : '',
-      'Accrued Costs': (accrued > 0) ? 'Earned but unbilled' : ''
+      'Accrued Costs': (w && w.poAccrued > 0) ? 'Open POs + earned/unbilled' : ((accrued > 0) ? 'Earned but unbilled' : '')
     };
     strip.querySelectorAll('.p86-totals-chip').forEach(function (card) {
       var lbl = card.querySelector('.p86-totals-chip-label');
