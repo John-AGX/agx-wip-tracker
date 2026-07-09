@@ -3815,8 +3815,12 @@ function renderJobsMain() {
             targets.forEach(function(bid) {
                 var key = bid || '__un__';
                 var rec = info.recs.find(function(r) { return (r.buildingId || null) === (bid || null); });
-                if (rec && rec.allocPct != null && rec.allocAuto === false) { out[key] = { pct: rec.allocPct, auto: false }; manualSum += rec.allocPct; }
-                else if (rec && rec.allocPct == null && phaseDollar(rec) > 0 && total > 0) { var dp = phaseDollar(rec) / total * 100; out[key] = { pct: dp, auto: false }; manualSum += dp; }
+                // Order matters: an explicit allocAuto===true share always rebalances,
+                // even once recompute has stamped dollars on it — checking dollars
+                // first would freeze auto cells as "manual" and break the rebalance.
+                if (rec && rec.allocAuto === true) { out[key] = { pct: null, auto: true }; autoKeys.push(key); }
+                else if (rec && rec.allocPct != null) { out[key] = { pct: rec.allocPct, auto: false }; manualSum += rec.allocPct; }
+                else if (rec && phaseDollar(rec) > 0 && total > 0) { var dp = phaseDollar(rec) / total * 100; out[key] = { pct: dp, auto: false }; manualSum += dp; } // legacy $-only row → preserve as manual
                 else { out[key] = { pct: null, auto: true }; autoKeys.push(key); }
             });
             var each = autoKeys.length ? Math.max(0, 100 - manualSum) / autoKeys.length : 0;
