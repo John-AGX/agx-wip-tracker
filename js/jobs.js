@@ -3764,6 +3764,89 @@ function renderJobsMain() {
         // budget. Editing a cell writes the per-(phase,building) phase record's
         // asSoldPhaseBudget (create-on-demand) — the same survivable field the
         // building breakdown modal uses (SP-1: building budget derives from it).
+        // ── Buildings × Phases allocation helpers ───────────────────────────
+        // Stored source of truth is always each (phase,building) record's as-sold
+        // REVENUE (mirrored to asSoldPhaseBudget/phaseBudget). % mode is an entry
+        // convenience that computes those dollars from a phase total. Fields on
+        // the phase records: allocMode ('pct'|'dollar', synced across a phase's
+        // records), phaseAllocTotal (phase total $ in % mode), allocPct (a
+        // building's share 0-100), allocAuto (is that share auto-even-split).
+        function phaseDollar(r) { return r ? (r.asSoldRevenue || r.asSoldPhaseBudget || r.phaseBudget || 0) : 0; }
+
+        function phaseAllocInfo(jobId, name) {
+            var recs = (appData.phases || []).filter(function(p) { return p.jobId === jobId && (p.phase || 'Unnamed') === name; });
+            var mode = 'pct', totalStored = null;
+            recs.forEach(function(r) { if (r.allocMode) mode = r.allocMode; if (r.phaseAllocTotal != null) totalStored = r.phaseAllocTotal; });
+            var sumD = recs.reduce(function(s, r) { return s + phaseDollar(r); }, 0);
+            var total = (mode === 'pct' && totalStored != null) ? totalStored : sumD;
+            return { recs: recs, mode: mode, total: total, sumDollars: sumD };
+        }
+
+        function phaseRecFor(jobId, name, bid) {
+            var rec = appData.phases.find(function(p) { return p.jobId === jobId && (p.phase || 'Unnamed') === name && (p.buildingId || null) === (bid || null); });
+            if (!rec) {
+                rec = { id: 'p' + Date.now() + Math.floor(Math.random() * 1000), jobId: jobId, buildingId: bid || null,
+                    phase: name, workScope: 'in-house', locked: false, pctComplete: 0,
+                    materials: 0, labor: 0, sub: 0, equipment: 0,
+                    asSoldRevenue: 0, asSoldPhaseBudget: 0, coPhaseBudget: 0, phaseBudget: 0,
+                    hoursWeek: 0, hoursTotal: 0, rate: 40, notes: '' };
+                appData.phases.push(rec);
+            }
+            return rec;
+        }
+
+        function setPhaseDollar(rec, val) {
+            rec.asSoldPhaseBudget = val;
+            rec.phaseBudget = val + (rec.coPhaseBudget || 0);
+            rec.asSoldRevenue = val; // mirror — the graph weights phases by revenue
+        }
+
+        // Resolve each building's % share for a % -mode phase. A share is MANUAL
+        // if the record carries an explicit allocPct override OR carries dollars
+        // (legacy/$-entered → derive its % so nothing moves); everything else is
+        // AUTO and splits the remaining % evenly. This keeps % the default WITHOUT
+        // ever rewriting an existing dollar split to an even one.
+        function phasePctShares(jobId, name) {
+            var info = phaseAllocInfo(jobId, name);
+            var total = info.total || 0;
+            var buildings = (appData.buildings || []).filter(function(b) { return b.jobId === jobId; });
+            var targets = buildings.map(function(b) { return b.id; }); targets.push(null);
+            var manualSum = 0, autoKeys = [], out = {};
+            targets.forEach(function(bid) {
+                var key = bid || '__un__';
+                var rec = info.recs.find(function(r) { return (r.buildingId || null) === (bid || null); });
+                if (rec && rec.allocPct != null && rec.allocAuto === false) { out[key] = { pct: rec.allocPct, auto: false }; manualSum += rec.allocPct; }
+                else if (rec && rec.allocPct == null && phaseDollar(rec) > 0 && total > 0) { var dp = phaseDollar(rec) / total * 100; out[key] = { pct: dp, auto: false }; manualSum += dp; }
+                else { out[key] = { pct: null, auto: true }; autoKeys.push(key); }
+            });
+            var each = autoKeys.length ? Math.max(0, 100 - manualSum) / autoKeys.length : 0;
+            autoKeys.forEach(function(k) { out[k].pct = each; });
+            return { targets: targets, shares: out };
+        }
+
+        // Write dollars from the resolved % shares × the phase total. Creates a
+        // record for any building whose computed share is non-zero.
+        function recomputePhasePctAllocation(jobId, name) {
+            var info = phaseAllocInfo(jobId, name);
+            if (info.mode !== 'pct') return;
+            var total = info.total || 0;
+            var res = phasePctShares(jobId, name);
+            res.targets.forEach(function(bid) {
+                var key = bid || '__un__';
+                var share = res.shares[key] || { pct: 0, auto: true };
+                var pct = share.pct || 0;
+                var dollars = Math.round(total * pct / 100);
+                var rec = info.recs.find(function(r) { return (r.buildingId || null) === (bid || null); });
+                if (!rec && dollars === 0) return; // don't materialize empty cells
+                rec = rec || phaseRecFor(jobId, name, bid);
+                rec.allocMode = 'pct';
+                rec.phaseAllocTotal = total;
+                if (share.auto) { rec.allocAuto = true; }
+                else { rec.allocPct = pct; rec.allocAuto = false; }
+                setPhaseDollar(rec, dollars);
+            });
+        }
+
         function renderPhaseMatrixInto(container, jobId) {
             if (!container) return;
             var phases = (appData.phases || []).filter(function(p) { return p.jobId === jobId; });
@@ -3777,10 +3860,6 @@ function renderJobsMain() {
             // data-* attrs + input values below.
             var attr = function(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
             var cols = buildings.map(function(b) { return { id: b.id, name: b.name || 'Building' }; });
-            function slice(name, bid) {
-                var r = phases.find(function(p) { return (p.phase || 'Unnamed') === name && (p.buildingId || null) === (bid || null); });
-                return r ? (r.asSoldPhaseBudget || r.phaseBudget || 0) : 0;
-            }
             var colTot = {}; cols.forEach(function(c) { colTot[c.id] = 0; }); var unTot = 0, grand = 0;
             var stickL = 'position:sticky;left:0;background:var(--card-bg,#141419);z-index:1;';
 
@@ -3789,19 +3868,42 @@ function renderJobsMain() {
             head += '<th style="text-align:right;padding:5px 8px;font-size:11px;color:var(--text-dim);">Unassigned</th>';
             head += '<th style="text-align:right;padding:5px 8px;font-size:11px;color:var(--accent);">Total</th></tr>';
 
-            function cellInput(name, bid, v, dashed) {
+            function pctCell(name, bid, pct, auto) {
+                return '<td style="text-align:right;padding:3px 4px;"><span style="display:inline-flex;align-items:center;gap:1px;">' +
+                    '<input type="number" min="0" max="100" step="1" value="' + (pct != null ? Math.round(pct * 10) / 10 : '') + '" ' +
+                    'data-mx-phase="' + attr(name) + '" data-mx-bldg="' + attr(bid || '') + '" oninput="onPhaseMatrixPctCell(this)" onchange="onPhaseMatrixCommit(this)" ' +
+                    'title="' + (auto ? 'Auto-split — type to override' : 'Manual override') + '" ' +
+                    'style="width:50px;font-size:12px;padding:3px 4px;text-align:right;background:var(--bg);border:1px ' + (auto ? 'dashed' : 'solid') + ' var(--border);border-radius:4px;color:var(--text' + (auto ? '-dim' : '') + ');"/>' +
+                    '<span style="font-size:10px;color:var(--text-dim);">%</span></span></td>';
+            }
+            function dollarCell(name, bid, v, dashed) {
                 return '<td style="text-align:right;padding:3px 4px;"><input type="number" min="0" step="100" value="' + (v || '') + '" ' +
-                    'data-mx-phase="' + attr(name) + '" data-mx-bldg="' + attr(bid || '') + '" oninput="onPhaseMatrixCell(this)" onchange="onPhaseMatrixCellCommit(this)" ' +
+                    'data-mx-phase="' + attr(name) + '" data-mx-bldg="' + attr(bid || '') + '" oninput="onPhaseMatrixCell(this)" onchange="onPhaseMatrixCommit(this)" ' +
                     'style="width:76px;font-size:12px;padding:3px 5px;text-align:right;background:var(--bg);border:1px ' + (dashed ? 'dashed' : 'solid') + ' var(--border);border-radius:4px;color:var(--text' + (dashed ? '-dim' : '') + ');"/></td>';
             }
+
             var body = names.map(function(name) {
+                var info = phaseAllocInfo(jobId, name);
+                var isPct = info.mode === 'pct';
+                var shares = isPct ? phasePctShares(jobId, name).shares : null;
                 var rowTot = 0;
-                var cells = cols.map(function(c) { var v = slice(name, c.id); colTot[c.id] += v; rowTot += v; return cellInput(name, c.id, v, false); }).join('');
-                var u = slice(name, null); unTot += u; rowTot += u;
+                var cells = cols.map(function(c) {
+                    var rec = info.recs.find(function(r) { return (r.buildingId || null) === c.id; });
+                    var d = phaseDollar(rec); colTot[c.id] += d; rowTot += d;
+                    if (isPct) { var sh = shares[c.id] || { pct: 0, auto: true }; return pctCell(name, c.id, sh.pct, sh.auto); }
+                    return dollarCell(name, c.id, d, false);
+                }).join('');
+                var urec = info.recs.find(function(r) { return !(r.buildingId); });
+                var ud = phaseDollar(urec); unTot += ud; rowTot += ud;
+                var unSh = isPct ? (shares['__un__'] || { pct: 0, auto: true }) : null;
+                var unCell = isPct ? pctCell(name, null, unSh.pct, unSh.auto) : dollarCell(name, null, ud, true);
                 grand += rowTot;
-                return '<tr><td style="text-align:left;padding:4px 8px;font-size:12.5px;font-weight:600;color:var(--text);white-space:nowrap;' + stickL + '">' + escapeHTML(name) + '</td>' +
-                    cells + cellInput(name, null, u, true) +
-                    '<td data-mx-rowtot="' + attr(name) + '" style="text-align:right;padding:4px 8px;font-size:12.5px;font-weight:700;color:var(--accent);font-family:monospace;">' + formatCurrency(rowTot) + '</td></tr>';
+                var modeChip = '<button type="button" data-mx-phase="' + attr(name) + '" onclick="onPhaseMatrixModeToggle(this)" title="Toggle percent / dollar allocation for this phase" style="margin-left:6px;font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;border:1px solid var(--border);background:var(--overlay-light,rgba(255,255,255,0.05));color:var(--accent);cursor:pointer;">' + (isPct ? '%' : '$') + '</button>';
+                var totalCell = isPct
+                    ? '<td style="text-align:right;padding:3px 4px;"><input type="number" min="0" step="100" value="' + (info.total || '') + '" data-mx-phase="' + attr(name) + '" oninput="onPhaseMatrixTotal(this)" onchange="onPhaseMatrixCommit(this)" placeholder="total $" style="width:90px;font-size:12.5px;font-weight:700;padding:3px 5px;text-align:right;background:var(--bg);border:1px solid var(--accent);border-radius:4px;color:var(--accent);font-family:monospace;"/></td>'
+                    : '<td data-mx-rowtot="' + attr(name) + '" style="text-align:right;padding:4px 8px;font-size:12.5px;font-weight:700;color:var(--accent);font-family:monospace;">' + formatCurrency(rowTot) + '</td>';
+                return '<tr><td style="text-align:left;padding:4px 8px;font-size:12.5px;font-weight:600;color:var(--text);white-space:nowrap;' + stickL + '">' + escapeHTML(name) + modeChip + '</td>' +
+                    cells + unCell + totalCell + '</tr>';
             }).join('');
 
             var foot = '<tr style="border-top:2px solid var(--border);"><td style="text-align:left;padding:5px 8px;font-size:11px;font-weight:700;color:var(--text-dim);' + stickL + '">Building total</td>';
@@ -3812,7 +3914,7 @@ function renderJobsMain() {
             container.innerHTML =
                 '<div style="display:flex;justify-content:space-between;align-items:center;margin:2px 0 6px;gap:8px;flex-wrap:wrap;">' +
                     '<h4 style="font-size:12px;margin:0;color:var(--text-dim);text-transform:uppercase;letter-spacing:.5px;">Buildings &times; Phases</h4>' +
-                    '<span style="font-size:11px;color:var(--text-dim);">Split each phase’s total down to buildings. Row = job-level total.</span>' +
+                    '<span style="font-size:11px;color:var(--text-dim);">Split each phase by % (auto-even, type any cell to override) or $ — the [% / $] chip toggles a row.</span>' +
                 '</div>' +
                 '<div style="border:1px solid var(--border,#333);border-radius:10px;overflow-x:auto;background:var(--card-bg,#141419);margin-bottom:12px;">' +
                     '<table style="width:100%;border-collapse:collapse;"><thead>' + head + '</thead><tbody>' + body + '</tbody><tfoot>' + foot + '</tfoot></table>' +
@@ -3848,22 +3950,71 @@ function renderJobsMain() {
         }
         window.onPhaseMatrixCell = onPhaseMatrixCell;
 
-        // Blur/commit on a matrix cell: push the money onto the wired phase node's
-        // revenue and recompute the job roll-up, so the header % + the phase/
-        // building tables total from the numbers just typed. oninput keeps typing
-        // light (writes the record + in-table totals); the heavier graph recompute
-        // + repaint run once here, and only after the user leaves the grid so
-        // tabbing across cells for rapid entry isn't interrupted. The matrix-side
-        // twin of p86CommitInline.
-        function onPhaseMatrixCellCommit(input) {
-            var name = input.getAttribute('data-mx-phase');
-            var bid = input.getAttribute('data-mx-bldg') || null;
+        // % -mode cell (oninput): record the building's % override; the dollar
+        // recompute + rebalance of the auto cells happens on commit (blur).
+        function onPhaseMatrixPctCell(input) {
+            var name = input.getAttribute('data-mx-phase'), bid = input.getAttribute('data-mx-bldg') || null;
             var jobId = (typeof appState !== 'undefined' && appState.currentJobId);
             if (!name || !jobId) return;
-            var rec = appData.phases.find(function(p) { return p.jobId === jobId && (p.phase || 'Unnamed') === name && (p.buildingId || null) === (bid || null); });
-            if (rec && typeof NG !== 'undefined') {
+            var val = parseFloat(input.value); if (isNaN(val) || val < 0) val = 0; if (val > 100) val = 100;
+            var rec = phaseRecFor(jobId, name, bid);
+            rec.allocMode = 'pct'; rec.allocPct = val; rec.allocAuto = false;
+        }
+        window.onPhaseMatrixPctCell = onPhaseMatrixPctCell;
+
+        // % -mode total (oninput): record the phase total that the shares divide.
+        function onPhaseMatrixTotal(input) {
+            var name = input.getAttribute('data-mx-phase');
+            var jobId = (typeof appState !== 'undefined' && appState.currentJobId);
+            if (!name || !jobId) return;
+            var val = parseFloat(input.value) || 0;
+            (appData.phases || []).filter(function(p) { return p.jobId === jobId && (p.phase || 'Unnamed') === name; })
+                .forEach(function(r) { r.allocMode = 'pct'; r.phaseAllocTotal = val; });
+        }
+        window.onPhaseMatrixTotal = onPhaseMatrixTotal;
+
+        // Flip a phase row between % and $ allocation. Switching to % seeds the
+        // total + each building's % from the current dollars so nothing moves;
+        // switching to $ just leaves the dollars in place.
+        function onPhaseMatrixModeToggle(el) {
+            var name = el && el.getAttribute && el.getAttribute('data-mx-phase');
+            var jobId = (typeof appState !== 'undefined' && appState.currentJobId);
+            if (!name || !jobId) return;
+            var info = phaseAllocInfo(jobId, name);
+            var newMode = info.mode === 'pct' ? 'dollar' : 'pct';
+            if (newMode === 'pct') {
+                var total = info.sumDollars;
+                info.recs.forEach(function(r) {
+                    r.allocMode = 'pct';
+                    r.phaseAllocTotal = total;
+                    r.allocPct = total > 0 ? (phaseDollar(r) / total * 100) : null;
+                    r.allocAuto = total > 0 ? false : true; // preserve existing split; even-split when empty
+                });
+            } else {
+                info.recs.forEach(function(r) { r.allocMode = 'dollar'; });
+            }
+            if (typeof saveData === 'function') saveData();
+            if (typeof renderJobPhases === 'function') renderJobPhases(jobId);
+        }
+        window.onPhaseMatrixModeToggle = onPhaseMatrixModeToggle;
+
+        // Commit (blur) for any matrix input: in % mode, resolve the shares →
+        // dollars; then push each wired phase node's revenue + recompute the job
+        // roll-up + repaint — but only once focus leaves the grid, so tabbing
+        // across cells for rapid entry isn't interrupted. Matrix-side twin of
+        // p86CommitInline.
+        function onPhaseMatrixCommit(input) {
+            var name = input.getAttribute('data-mx-phase');
+            var jobId = (typeof appState !== 'undefined' && appState.currentJobId);
+            if (!name || !jobId) return;
+            var info = phaseAllocInfo(jobId, name);
+            if (info.mode === 'pct') recomputePhasePctAllocation(jobId, name);
+            if (typeof saveData === 'function') saveData();
+            if (typeof NG !== 'undefined') {
                 try {
-                    NG.nodes().forEach(function(n) { if (n.type === 't2' && n.data && n.data.id === rec.id) { n.revenue = rec.asSoldRevenue || 0; } });
+                    var recs = (appData.phases || []).filter(function(p) { return p.jobId === jobId && (p.phase || 'Unnamed') === name; });
+                    var byId = {}; recs.forEach(function(r) { byId[r.id] = r; });
+                    NG.nodes().forEach(function(n) { if (n.type === 't2' && n.data && byId[n.data.id]) { n.revenue = phaseDollar(byId[n.data.id]); } });
                     NG.saveGraph();
                 } catch (e) {}
             }
@@ -3875,7 +4026,8 @@ function renderJobsMain() {
                 try { if (typeof renderJobPhases === 'function') renderJobPhases(jobId); } catch (e) {}
             }, 60);
         }
-        window.onPhaseMatrixCellCommit = onPhaseMatrixCellCommit;
+        window.onPhaseMatrixCommit = onPhaseMatrixCommit;
+        window.onPhaseMatrixCellCommit = onPhaseMatrixCommit; // legacy alias
 
         function recomputePhaseMatrixTotals(input, jobId) {
             var table = input.closest('table'); if (!table) return;
