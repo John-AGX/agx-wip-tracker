@@ -2374,13 +2374,19 @@
                 // can reason about them without per-tab fetches.
                 window.p86Api.qbCosts.list().catch(function() { return { lines: [] }; }),
                 // Subs directory (Phase A) — global sub records.
-                window.p86Api.subs.list().catch(function() { return { subs: [], trades: [] }; })
+                window.p86Api.subs.list().catch(function() { return { subs: [], trades: [] }; }),
+                // All POs at boot so ACCRUED (committed) cost is a live metric on
+                // the jobs list + job tiles without waiting for a per-job fetch —
+                // and so the accrued tile paints its real value on first render
+                // (no $0 flash). getJobPOAccrued reads appData.jobPurchaseOrders.
+                window.p86Api.purchaseOrders.listAll().catch(function() { return { purchase_orders: [] }; })
             ]).then(function(results) {
                 hydrateFromServerJobs(results[0].jobs);
                 hydrateFromServerEstimates(results[1].estimates);
                 appData.qbCostLines = (results[2] && results[2].lines) || [];
                 appData.subsDirectory = (results[3] && results[3].subs) || [];
                 appData.knownTrades = (results[3] && results[3].trades) || [];
+                appData.jobPurchaseOrders = (results[4] && results[4].purchase_orders) || [];
                 writeToLocalStorage();
                 _serverLoadComplete = true;
                 _serverLoadInFlight = false;

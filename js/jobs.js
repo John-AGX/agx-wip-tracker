@@ -310,6 +310,15 @@ function renderJobsMain() {
                 ? job.ngBacklog
                 : totalIncome - revenueEarned;
             const remainingCosts = revisedEstCosts - actualCosts;
+            // Accrued (committed) cost = sub earned-but-unbilled + open PO
+            // commitments (ordered − billed, via getJobPOAccrued). Made a
+            // first-class metric here so EVERY surface (tiles, jobs list, WIP
+            // report) reflects it — distinct from actual (QB), into which it
+            // rolls as bills get paid. Projected = actual + accrued.
+            const poAccrued = (typeof getJobPOAccrued === 'function') ? (getJobPOAccrued(jobId).total || 0) : 0;
+            const accruedCosts = getJobAccruedCosts(jobId) + poAccrued;
+            const projectedCost = actualCosts + accruedCosts;
+            const projectedProfit = totalIncome - projectedCost;
             // Headline Profit/Margin for the job card + Jobs List: use job-to-date
             // once there's REAL progress (actual costs logged OR revenue earned);
             // otherwise fall back to the AS-SOLD projection (contract − estimated
@@ -333,7 +342,8 @@ function renderJobsMain() {
                 pctComplete, revenueEarned, actualCosts, jtdProfit, jtdMargin,
                 displayProfit, displayMargin,
                 qbActualCosts, qbCostLineCount, qbCostsAsOf,
-                invoiced, unbilled, backlog, remainingCosts
+                invoiced, unbilled, backlog, remainingCosts,
+                accruedCosts, poAccrued, projectedCost, projectedProfit
             };
         }
         // Exposed for js/job-audit.js (R8 margin-drift + R10 underbilled rules).
@@ -2732,10 +2742,9 @@ function renderJobsMain() {
                     _qbNote.style.display = 'none';
                 }
             }
-            var _poAccr = (typeof getJobPOAccrued === 'function') ? (getJobPOAccrued(jobId).total || 0) : 0;
-            const accruedCosts = getJobAccruedCosts(jobId) + _poAccr;
-            document.getElementById('job-summary-accrued').textContent = formatCurrency(accruedCosts);
-            document.getElementById('job-summary-accrued-note').textContent = _poAccr > 0 ? 'Open POs + earned/unbilled' : (accruedCosts > 0 ? 'Earned but unbilled' : '');
+            var _accrued = (w.accruedCosts != null) ? w.accruedCosts : getJobAccruedCosts(jobId);
+            document.getElementById('job-summary-accrued').textContent = formatCurrency(_accrued);
+            document.getElementById('job-summary-accrued-note').textContent = (w.poAccrued > 0) ? 'Open POs + earned/unbilled' : (_accrued > 0 ? 'Earned but unbilled' : '');
             document.getElementById('job-summary-pctcomplete').textContent = w.pctComplete.toFixed(1) + '%';
             document.getElementById('job-summary-revenue').textContent = formatCurrency(w.revenueEarned);
             document.getElementById('job-summary-profit').textContent = formatCurrency(w.displayProfit);
