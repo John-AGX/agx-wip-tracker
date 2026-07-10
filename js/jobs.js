@@ -308,17 +308,20 @@ function renderJobsMain() {
                     if (d && (!qbCostsAsOf || String(d) > String(qbCostsAsOf))) qbCostsAsOf = String(d).slice(0, 10);
                 });
             } catch (e) {}
-            // Graph's manual/wired cost (prefer the engine's value; fall back to
-            // the phase/building manual total before the graph has computed).
+            // Graph's MANUAL/wired cost only. ngActualCosts explicitly EXCLUDES QB
+            // — the ui.js assembly is `getOutput(wipNode,1) + jobMat/Lab/Equip/GC`
+            // and cost-node getActual/getOutput return `items || n.value` (no QB);
+            // "QB is folded in by getJobWIP, NOT here." Falls back to the phase/
+            // building manual total before the graph has computed.
             const baseActualCosts = (job.ngActualCosts != null) ? job.ngActualCosts : getJobTotalCost(jobId).total;
-            // When the node graph has computed, ngActualCosts ALREADY folds LINKED
-            // QB in (via the engine's _qbLinked) alongside manual node cost — use it
-            // as-is. With no graph yet, add the linked QB onto the manual/phase
-            // cost. Either way unlinked QB never enters actual and linked QB is
-            // counted exactly once. Stateless — correct on the jobs list + unopened
-            // jobs. (Was: prefer the raw ALL-QB sum, which pulled unlinked QB into
-            // actual — the behavior John asked to remove.)
-            const actualCosts = (job.ngActualCosts != null) ? baseActualCosts : (baseActualCosts + qbActualCosts);
+            // ACTUAL = manual/wired graph cost + every LINKED QB line for the job.
+            // qbActualCosts is summed at the JOB level (all lines with a
+            // linked_node_id, above), so linked QB totals no matter which tier the
+            // line is linked to — job, building, phase, or a specific cost node —
+            // and it's added exactly once regardless of graph topology. Unlinked QB
+            // is excluded (John's rule). Stateless — correct on the jobs list +
+            // unopened jobs. (No double-count: ngActualCosts carries no QB.)
+            const actualCosts = baseActualCosts + qbActualCosts;
             const contractIncome = job.contractAmount || 0;
             const estimatedCosts = job.estimatedCosts || 0;
             const totalIncome = contractIncome + co.income;
