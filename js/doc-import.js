@@ -14,9 +14,9 @@
   'use strict';
 
   var ENTITIES = {
-    po:      { label: 'Purchase Order', plural: "PO's",      accept: 'image/*,application/pdf', icon: '📄' },
-    co:      { label: 'Change Order',   plural: "CO's",      accept: 'image/*,application/pdf', icon: '📝' },
-    invoice: { label: 'Invoice',        plural: 'Invoices',  accept: 'image/*,application/pdf', icon: '🧾' }
+    po:      { label: 'Purchase Order', plural: "PO's",      accept: 'image/*,application/pdf,.xlsx,.xls,.csv', icon: '📄' },
+    co:      { label: 'Change Order',   plural: "CO's",      accept: 'image/*,application/pdf,.xlsx,.xls,.csv', icon: '📝' },
+    invoice: { label: 'Invoice',        plural: 'Invoices',  accept: 'image/*,application/pdf,.xlsx,.xls,.csv', icon: '🧾' }
   };
 
   var state = null; // { entityType, items: [ ... ], processing }
@@ -43,6 +43,108 @@
       fr.onload = function () { resolve({ base64: String(fr.result || ''), mediaType: file.type || 'image/jpeg' }); };
       fr.onerror = function () { reject(new Error('read-failed')); };
       fr.readAsDataURL(file);
+    });
+  }
+
+  // ---- Buildertrend spreadsheet (.xlsx) import ---------------------------
+  // The BT "Purchase Orders" export is ONE ROW PER PO (header-level, lump-sum
+  // Cost — no line items). Parse it client-side with SheetJS and turn each row
+  // into the SAME review item the OCR path produces, so it flows through the
+  // existing review grid + bulk create. SheetJS is lazy-loaded from the CDN
+  // (same source js/job-costs-import.js uses).
+  var _xlsxP = null;
+  function ensureXLSX() {
+    if (window.XLSX) return Promise.resolve(window.XLSX);
+    if (_xlsxP) return _xlsxP;
+    _xlsxP = new Promise(function (resolve, reject) {
+      var s = document.createElement('script');
+      s.src = 'https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js';
+      s.onload = function () { resolve(window.XLSX); };
+      s.onerror = function () { reject(new Error('xlsx-load-failed')); };
+      document.head.appendChild(s);
+    });
+    return _xlsxP;
+  }
+  function isSpreadsheet(f) {
+    return /\.(xlsx|xls|csv)$/i.test(f.name || '') || /spreadsheet|excel|csv/.test(f.type || '');
+  }
+  // Excel serial (1900 system) -> YYYY-MM-DD; passes real date strings through.
+  // Serial 25569 = 1970-01-01.
+  function xlDate(v) {
+    if (v == null || v === '') return null;
+    var n = Number(v);
+    if (isFinite(n) && n > 20000 && n < 90000) {
+      var d = new Date(Math.round((n - 25569) * 86400000));
+      return isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+    }
+    var d2 = new Date(v);
+    return isNaN(d2.getTime()) ? null : d2.toISOString().slice(0, 10);
+  }
+  // BT PO Status -> P86 status (draft|issued|approved|work_complete|closed).
+  function mapBtPoStatus(s) {
+    s = String(s || '').toLowerCase();
+    if (s.indexOf('draft') >= 0) return 'draft';
+    if (s.indexOf('approv') >= 0) return 'approved';
+    if (s.indexOf('complet') >= 0) return 'work_complete';
+    if (s.indexOf('clos') >= 0) return 'closed';
+    return 'issued'; // "Sent" and anything else
+  }
+  // Find the header row + map BT column labels -> indices (order-independent).
+  function btColMap(aoa) {
+    for (var r = 0; r < Math.min(aoa.length, 8); r++) {
+      var row = (aoa[r] || []).map(function (x) { return String(x == null ? '' : x).trim().toLowerCase(); });
+      if (row.indexOf('job') >= 0 && (row.indexOf('po #') >= 0 || row.indexOf('cost') >= 0)) {
+        var map = {};
+        row.forEach(function (h, i) { if (h) map[h] = i; });
+        return { headerRow: r, map: map };
+      }
+    }
+    return null;
+  }
+  function parseSpreadsheet(file) {
+    ensureXLSX().then(function (XLSX) {
+      return file.arrayBuffer().then(function (buf) {
+        if (!state) return;
+        var wb = XLSX.read(new Uint8Array(buf), { type: 'array' });
+        var sheet = wb.Sheets[wb.SheetNames[0]];
+        var aoa = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: true, defval: '' });
+        var hm = btColMap(aoa);
+        if (!hm) throw new Error('not-a-bt-po-export');
+        var m = hm.map;
+        function cell(row, key) { var i = m[key]; return (i == null) ? '' : row[i]; }
+        state.entityType = 'po'; // the BT Purchase Orders export is a PO import
+        var added = 0;
+        for (var r = hm.headerRow + 1; r < aoa.length; r++) {
+          var row = aoa[r] || [];
+          var job = String(cell(row, 'job') == null ? '' : cell(row, 'job')).trim();
+          var poNo = String(cell(row, 'po #') == null ? '' : cell(row, 'po #')).trim();
+          if (!job && !poNo) continue; // totals / footer row
+          var cost = Number(cell(row, 'cost')) || 0;
+          var title = String(cell(row, 'title') || '').trim();
+          var vendor = String(cell(row, 'performed by') || '').trim();
+          var costCode = String(cell(row, 'cost code') || '').trim();
+          var extracted = {
+            entity_type: 'po', job_hint: job, number: poNo, vendor: vendor,
+            title: title || ('PO ' + poNo), date: xlDate(cell(row, 'created date')),
+            status: mapBtPoStatus(cell(row, 'po status')), costCode: costCode,
+            lines: [{ description: title || costCode || 'Purchase order', qty: 1, unit_cost: cost, amount: cost }],
+            total: cost, lines_total: cost
+          };
+          state.items.push({ id: uid(), file: null, fileName: 'BT · PO ' + poNo + ' — ' + job, status: 'review', extracted: extracted, jobId: matchJob(job).jobId, error: null });
+          added++;
+        }
+        if (!added) throw new Error('no-rows');
+        render();
+      });
+    }).catch(function (err) {
+      if (!state) return;
+      var code = err && err.message;
+      var msg = code === 'not-a-bt-po-export' ? 'That spreadsheet doesn\'t look like a Buildertrend Purchase Orders export.'
+        : code === 'no-rows' ? 'No purchase-order rows found in that file.'
+        : code === 'xlsx-load-failed' ? 'Could not load the spreadsheet reader (offline?).'
+        : 'Could not read that spreadsheet.';
+      state.items.push({ id: uid(), file: null, fileName: file.name || 'spreadsheet', status: 'error', extracted: null, jobId: '', error: msg });
+      render();
     });
   }
 
@@ -178,7 +280,7 @@
       '<input id="di-file" type="file" accept="' + ent.accept + '" multiple style="display:none;">' +
       '<div style="font-size:' + (empty ? '30px' : '18px') + ';margin-bottom:6px;">⬆</div>' +
       '<div style="font-size:13.5px;color:var(--text,#fff);font-weight:600;">Drop ' + esc(ent.plural) + ' here, or click to choose files</div>' +
-      '<div style="font-size:11.5px;color:var(--text-dim,#8b8b96);margin-top:3px;">Images or PDFs · many at once</div>' +
+      '<div style="font-size:11.5px;color:var(--text-dim,#8b8b96);margin-top:3px;">Images, PDFs, or a Buildertrend .xlsx export · many at once</div>' +
     '</div>';
   }
 
@@ -340,6 +442,7 @@
   function addFiles(fileList) {
     var files = Array.prototype.slice.call(fileList || []);
     files.forEach(function (f) {
+      if (isSpreadsheet(f)) { parseSpreadsheet(f); return; } // BT .xlsx → parse rows, no OCR
       if (!/^image\//.test(f.type) && f.type !== 'application/pdf') return;
       state.items.push({ id: uid(), file: f, fileName: f.name || 'document', status: 'queued', extracted: null, jobId: '', error: null });
     });
@@ -388,7 +491,7 @@
     var e = it.extracted, t = state.entityType;
     var lines = (e.lines || []).map(function (l) { return toLine(l, t); });
     if (t === 'po') {
-      return { po_number: e.number || undefined, status: 'issued', title: e.title || ('Imported PO' + (e.vendor ? ' — ' + e.vendor : '')), vendorName: e.vendor || null, orderedDate: e.date || null, lines: lines };
+      return { po_number: e.number || undefined, status: e.status || 'issued', title: e.title || ('Imported PO' + (e.vendor ? ' — ' + e.vendor : '')), vendorName: e.vendor || null, costCode: e.costCode || null, orderedDate: e.date || null, lines: lines };
     }
     if (t === 'co') {
       return { co_number: e.number || undefined, status: 'approved', title: e.title || 'Imported change order', vendorName: e.vendor || null, date: e.date || null, defaultMarkup: 0, lines: lines };
