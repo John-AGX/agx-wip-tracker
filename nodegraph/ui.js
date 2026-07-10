@@ -5047,7 +5047,26 @@ function pushToJob(){
   nodes.forEach(function(n){
     if(n.type!=='t1') return;
     var bldg=n.data&&n.data.id?appData.buildings.find(function(b){return b.id===n.data.id;}):null;
-    if(!bldg) return;
+    // Fall back to a name match when the node's data.id is stale/missing.
+    var _bnm=n.label.split(' › ')[0].trim();
+    if(!bldg && _bnm) bldg=appData.buildings.find(function(b){return b.jobId===jid&&(b.name||'')===_bnm;});
+    if(!bldg){
+      // ORPHAN building node: its appData.buildings record was lost (graph/appData
+      // divergence — the graph kept the node, the job data dropped the record), so
+      // the building vanished from the Buildings list (renderJobBuildings reads
+      // appData.buildings) even though it still carries wired scopes on the map.
+      // Recreate the record from the node so it reappears. Reuse the node's own
+      // data.id when present; the name-match above keeps this idempotent across
+      // reloads (saveData persists the record, so the next run finds it by name).
+      // Carry over the node's units/levels for the by-units/levels allocation split.
+      bldg={ id:(n.data&&n.data.id)||('b'+Date.now()+Math.floor(Math.random()*1000)),
+             jobId:jid, name:_bnm||'Building', address:'', budget:0, budgetPct:0,
+             materials:0, labor:0, sub:0, equipment:0, hoursWeek:0, hoursTotal:0,
+             rate:40, workScope:'in-house', locked:false, excludeFromSubDist:false,
+             units:Array.isArray(n.units)?n.units.slice():[], levels:Array.isArray(n.levels)?n.levels.slice():[] };
+      appData.buildings.push(bldg);
+      if(!n.data||!n.data.id) n.data=bldg;   // re-link the node to the fresh record
+    }
     // Sync name
     var bName=n.label.split(' \u203A ')[0].trim();
     if(bName) bldg.name=bName;
