@@ -2255,6 +2255,11 @@
             // so ACCRUED cost paints its true value on the first synchronous render
             // after a hard reload — before the boot PO fetch resolves — no $0 flash.
             appData.jobPurchaseOrders = safeLoadJSON('p86-jobs-jobpurchaseorders', []);
+            // The REAL per-job CO store (server-backed job_change_orders). Cached
+            // like POs so approved/applied CO income folds into Total Income + the
+            // metrics on the first synchronous render after a hard reload, before
+            // the boot CO fetch resolves — no "contract only" flash.
+            appData.jobChangeOrders = safeLoadJSON('p86-jobs-jobchangeorders', []);
             appData.invoices = safeLoadJSON('p86-jobs-invoices', []);
             appData.estimates = safeLoadJSON('p86-estimates', []);
             appData.estimateLines = safeLoadJSON('p86-estimate-lines', []);
@@ -2275,6 +2280,7 @@
             localStorage.setItem('p86-jobs-changeorders', JSON.stringify(appData.changeOrders));
             localStorage.setItem('p86-jobs-purchaseorders', JSON.stringify(appData.purchaseOrders));
             localStorage.setItem('p86-jobs-jobpurchaseorders', JSON.stringify(appData.jobPurchaseOrders || []));
+            localStorage.setItem('p86-jobs-jobchangeorders', JSON.stringify(appData.jobChangeOrders || []));
             localStorage.setItem('p86-jobs-invoices', JSON.stringify(appData.invoices));
             localStorage.setItem('p86-estimates', JSON.stringify(appData.estimates));
             localStorage.setItem('p86-estimate-lines', JSON.stringify(appData.estimateLines));
@@ -2384,7 +2390,12 @@
                 // the jobs list + job tiles without waiting for a per-job fetch —
                 // and so the accrued tile paints its real value on first render
                 // (no $0 flash). getJobPOAccrued reads appData.jobPurchaseOrders.
-                window.p86Api.purchaseOrders.listAll().catch(function() { return { purchase_orders: [] }; })
+                window.p86Api.purchaseOrders.listAll().catch(function() { return { purchase_orders: [] }; }),
+                // All change orders at boot so approved/applied CO income adds to
+                // Total Income (contract + CO) on the jobs list + job tiles without
+                // waiting for a per-job fetch — no "contract only" flash. Rows carry
+                // data.lines, so getJobCOTotals can price each from its line items.
+                window.p86Api.changeOrders.listAll().catch(function() { return { change_orders: [] }; })
             ]).then(function(results) {
                 hydrateFromServerJobs(results[0].jobs);
                 hydrateFromServerEstimates(results[1].estimates);
@@ -2392,6 +2403,7 @@
                 appData.subsDirectory = (results[3] && results[3].subs) || [];
                 appData.knownTrades = (results[3] && results[3].trades) || [];
                 appData.jobPurchaseOrders = (results[4] && results[4].purchase_orders) || [];
+                appData.jobChangeOrders = (results[5] && results[5].change_orders) || [];
                 writeToLocalStorage();
                 _serverLoadComplete = true;
                 _serverLoadInFlight = false;

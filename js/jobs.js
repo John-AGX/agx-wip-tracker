@@ -238,11 +238,36 @@ function renderJobsMain() {
 
         // ==================== WIP CALCULATIONS ====================
         function getJobCOTotals(jobId) {
-            const cos = appData.changeOrders.filter(co => co.jobId === jobId);
+            // Change orders are server-backed and live in appData.jobChangeOrders
+            // (loaded per-job on demand + boot-loaded in app.js). A CO adds to the
+            // contract once it's approved or applied; its income/cost come from its
+            // line items via the shared pricing pipeline — there is NO flat
+            // co.income field, money lives in c.lines + fee/tax/markup, exactly
+            // like the CO editor's own total (coTotal below). The legacy
+            // appData.changeOrders store is a dead localStorage relic kept only as
+            // a fallback for any pre-server COs.
+            const server = (appData.jobChangeOrders || []).filter(c =>
+                c && c.job_id === jobId && (c.status === 'approved' || c.status === 'applied'));
+            if (server.length && window.p86Pricing) {
+                let income = 0, costs = 0;
+                server.forEach(c => {
+                    const lines = Array.isArray(c.lines) ? c.lines : [];
+                    const per = window.p86Pricing.computeForLines(c, lines);
+                    let markedUp = per.markedUp;
+                    if (window.p86Pricing.targetMarginActive(c)) {
+                        markedUp = window.p86Pricing.applyTargetMargin(per.subtotal, c);
+                    }
+                    income += window.p86Pricing.applyFeesAndTax(markedUp, c).total;
+                    costs += per.subtotal; // raw line cost (before markup/fee/tax)
+                });
+                return { income, costs, count: server.length };
+            }
+            // Legacy fallback: old localStorage COs carried flat income/cost fields.
+            const legacy = (appData.changeOrders || []).filter(co => co.jobId === jobId);
             return {
-                income: cos.reduce((sum, co) => sum + (co.income || 0), 0),
-                costs: cos.reduce((sum, co) => sum + (co.estimatedCosts || 0), 0),
-                count: cos.length
+                income: legacy.reduce((sum, co) => sum + (co.income || 0), 0),
+                costs: legacy.reduce((sum, co) => sum + (co.estimatedCosts || 0), 0),
+                count: legacy.length
             };
         }
 
