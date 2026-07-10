@@ -291,10 +291,16 @@ function renderJobsMain() {
             // nodegraph/ui.js) — use it as-is. With no graph yet, add QB onto the
             // manual cost total here. Counted exactly once either way (the engine
             // no longer folds QB per-node).
+            // ACTUAL cost counts ONLY QuickBooks lines LINKED to a cost node
+            // (linked_node_id). Unlinked QB is excluded entirely — John's rule:
+            // "if a cost from QuickBooks isn't linked, don't show it in actual
+            // costs." Link a cost to a node (Site Map / cost inbox) to make it
+            // count. qbActualCosts/qbCostLineCount reflect the LINKED set only.
             let qbActualCosts = 0, qbCostLineCount = 0, qbCostsAsOf = null;
             try {
                 const qbLines = (window.appData && Array.isArray(appData.qbCostLines))
-                    ? appData.qbCostLines.filter(l => (l.job_id || l.jobId) === jobId) : [];
+                    ? appData.qbCostLines.filter(l => (l.job_id || l.jobId) === jobId
+                        && (l.linked_node_id != null || l.linkedNodeId != null)) : [];
                 qbCostLineCount = qbLines.length;
                 qbLines.forEach(l => {
                     qbActualCosts += Number(l.amount || 0);
@@ -305,13 +311,14 @@ function renderJobsMain() {
             // Graph's manual/wired cost (prefer the engine's value; fall back to
             // the phase/building manual total before the graph has computed).
             const baseActualCosts = (job.ngActualCosts != null) ? job.ngActualCosts : getJobTotalCost(jobId).total;
-            // QB import IS the actual cost when the job has QB lines (John's cost
-            // source of truth): use the QB total DIRECTLY, not base+QB — some jobs
-            // have QB linked to nodes whose amounts already materialized into the
-            // graph cost, so base+QB would double-count them. Fall back to the
-            // graph's manual/wired cost only when there are no QB lines for the job.
-            // Stateless — correct on the jobs list + unopened jobs.
-            const actualCosts = (qbActualCosts > 0) ? qbActualCosts : baseActualCosts;
+            // When the node graph has computed, ngActualCosts ALREADY folds LINKED
+            // QB in (via the engine's _qbLinked) alongside manual node cost — use it
+            // as-is. With no graph yet, add the linked QB onto the manual/phase
+            // cost. Either way unlinked QB never enters actual and linked QB is
+            // counted exactly once. Stateless — correct on the jobs list + unopened
+            // jobs. (Was: prefer the raw ALL-QB sum, which pulled unlinked QB into
+            // actual — the behavior John asked to remove.)
+            const actualCosts = (job.ngActualCosts != null) ? baseActualCosts : (baseActualCosts + qbActualCosts);
             const contractIncome = job.contractAmount || 0;
             const estimatedCosts = job.estimatedCosts || 0;
             const totalIncome = contractIncome + co.income;
@@ -814,13 +821,18 @@ function renderJobsMain() {
             }, 0);
         }
 
-        // Open Purchase Order commitments = ACCRUED cost (John's model: a PO rolls
-        // up as accrued = ordered − billed until the sub invoices/gets paid, at
-        // which point the paid amount becomes ACTUAL via the QB import — so it never
-        // double-counts). Attributed to the phase whose name appears in the PO
-        // title/line description (else job-level). Reads appData.jobPurchaseOrders,
-        // which loads on-demand — returns 0 until the overview's PO section fetches.
+        // Open Purchase Order commitments = ACCRUED cost (John's model: accrued =
+        // the EARNED share of the PO by progress − what the sub has billed. Earned =
+        // ordered × the job's overall % complete; accrued = max(0, earned − billed).
+        // So a PO on a 0%-done job accrues nothing, and at 100% it's ordered −
+        // billed. As the sub bills / gets paid, that amount lands in ACTUAL via the
+        // QB import (billed rises → accrued falls) — never double-counted.
+        // Attributed to the phase whose name appears in the PO title/line
+        // description (else job-level). Reads appData.jobPurchaseOrders, which loads
+        // on-demand — returns 0 until the overview's PO section fetches.
         function getJobPOAccrued(jobId) {
+            var job = (appData.jobs || []).find(function(j) { return j.id === jobId; });
+            var jobPct = job ? (Number(job.pctComplete) || 0) : 0;
             var pos = (appData.jobPurchaseOrders || []).filter(function(p) {
                 return p.job_id === jobId && p.status !== 'draft' && p.status !== 'cancelled' && p.status !== 'void';
             });
@@ -828,7 +840,11 @@ function renderJobsMain() {
             (appData.phases || []).forEach(function(p) { if (p.jobId === jobId) { var n = (p.phase || '').trim(); if (n && phaseNames.indexOf(n) === -1) phaseNames.push(n); } });
             var total = 0, byPhase = {};
             pos.forEach(function(po) {
-                var open = Math.max(0, poRowTotal(po) - poRowBilled(po));
+                // Earned by progress (ordered × job % complete), net of what the
+                // sub has already billed. Only the still-unbilled earned amount is
+                // accrued (unbilled cost you've incurred but QB hasn't caught yet).
+                var earned = poRowTotal(po) * (jobPct / 100);
+                var open = Math.max(0, earned - poRowBilled(po));
                 if (open <= 0) return;
                 total += open;
                 var matched = null;

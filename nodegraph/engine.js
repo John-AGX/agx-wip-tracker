@@ -750,6 +750,14 @@ function getT1WeightedPct(t1n){
     var _ud=0; for(var _i=0;_i<t1n.units.length;_i++){ if(t1n.units[_i].done) _ud++; }
     return _ud / t1n.units.length * 100;
   }
+  // No units, but a level (floor) breakdown → drive by levels-done ÷ total
+  // (John: "units if present, else levels"). Each level carries its own `done`
+  // flag (a level auto-completes when all its units are done). A building with
+  // neither units nor levels falls through to the phase/CO-weighted pct below.
+  if(t1n.levels && t1n.levels.length){
+    var _ld=0; for(var _k=0;_k<t1n.levels.length;_k++){ if(t1n.levels[_k].done) _ld++; }
+    return _ld / t1n.levels.length * 100;
+  }
   var incoming = [];
   wires.forEach(function(w){
     if(w.toNode !== t1n.id) return;
