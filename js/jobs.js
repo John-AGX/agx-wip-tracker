@@ -3944,8 +3944,32 @@ function renderJobsMain() {
                 else if (rec && phaseDollar(rec) > 0 && total > 0) { var dp = phaseDollar(rec) / total * 100; out[key] = { pct: dp, auto: false }; manualSum += dp; } // legacy $-only row → preserve as manual
                 else { out[key] = { pct: null, auto: true }; autoKeys.push(key); }
             });
-            var each = autoKeys.length ? Math.max(0, 100 - manualSum) / autoKeys.length : 0;
-            autoKeys.forEach(function(k) { out[k].pct = each; });
+            // Split the remaining % across the AUTO buildings, weighted by each
+            // building's units (preferred) or levels. A building with none of
+            // either is filled with the average of the ones that do, so it still
+            // gets a fair share (never $0 by accident). If NO auto building has any
+            // units/levels, fall back to an even split (John's call). The
+            // Unassigned column carries no unit weight, so a units/levels split
+            // sends the whole phase to buildings.
+            var remaining = Math.max(0, 100 - manualSum);
+            var weightFor = function(key) {
+                if (key === '__un__') return 0;
+                var b = buildings.find(function(x) { return x.id === key; });
+                if (!b) return 0;
+                var u = (b.units || []).length, l = (b.levels || []).length;
+                return u > 0 ? u : (l > 0 ? l : 0);
+            };
+            var weights = {}, nonZero = [];
+            autoKeys.forEach(function(k) { var w = weightFor(k); weights[k] = w; if (w > 0) nonZero.push(w); });
+            if (nonZero.length) {
+                var avgNZ = nonZero.reduce(function(s, x) { return s + x; }, 0) / nonZero.length;
+                var wSum = 0;
+                autoKeys.forEach(function(k) { if (k !== '__un__' && weights[k] === 0) weights[k] = avgNZ; wSum += weights[k]; });
+                autoKeys.forEach(function(k) { out[k].pct = wSum > 0 ? remaining * weights[k] / wSum : 0; });
+            } else {
+                var each = autoKeys.length ? remaining / autoKeys.length : 0;
+                autoKeys.forEach(function(k) { out[k].pct = each; });
+            }
             return { targets: targets, shares: out };
         }
 

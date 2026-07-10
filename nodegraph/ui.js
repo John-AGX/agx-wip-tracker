@@ -5074,6 +5074,11 @@ function pushToJob(){
     if(n.budget) bldg.budget=n.budget;
     // % complete
     bldg.pctComplete=n.pctComplete||0;
+    // Mirror the node's units/levels onto the record — they live on the graph
+    // node, but jobs.js reads appData.buildings for the Buildings list AND the
+    // phase-allocation split (phasePctShares weights by units/levels).
+    bldg.units=Array.isArray(n.units)?n.units.slice():[];
+    bldg.levels=Array.isArray(n.levels)?n.levels.slice():[];
     // Sum costs from wired cost nodes
     var mat=0,lab=0,equip=0,gc=0;
     wires.forEach(function(w){
