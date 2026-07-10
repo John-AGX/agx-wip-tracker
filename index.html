@@ -496,6 +496,12 @@
                              assignee-driven model). Context-free → personal task. -->
                         <button type="button" class="header-popover-item" data-p86-icon="check-circle" role="menuitem"
                                 onclick="if (window.p86Tasks &amp;&amp; window.p86Tasks.openQuickAdd) window.p86Tasks.openQuickAdd();">New To-Do</button>
+                        <!-- Bulk Document Import — upload many PO/CO/Invoice files at
+                             once, OCR each (image or PDF) into header + line items,
+                             review, then create them. Gated on ESTIMATES_EDIT to
+                             match the PO/CO/invoice create routes. -->
+                        <button type="button" class="header-popover-item" data-p86-icon="receipt" data-cap="ESTIMATES_EDIT" role="menuitem"
+                                onclick="if (window.p86DocImport &amp;&amp; window.p86DocImport.open) window.p86DocImport.open('po');">Import Documents (PO / CO / Invoice)</button>
                         <!-- Capture — field-first actions that don't need an
                              entity open. New Photo streams straight into the
                              user's My Files (quick-captures folder); on mobile
@@ -3324,6 +3330,7 @@
          BEFORE any of them so window.p86Pricing is ready. -->
     <script src="js/pricing-pipeline.js?v=1"></script>
     <script src="js/jobs.js?v=153"></script>
+    <script src="js/doc-import.js?v=1"></script>
     <script src="js/job-workflow-ui.js?v=5"></script>
     <!-- Reusable rich-text field (window.p86RichText) — shared WYSIWYG for
          Scope / Terms / notes / proposals / reports. Load before the editors
