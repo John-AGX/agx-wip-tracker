@@ -927,10 +927,19 @@
     }
   };
 
+  // Bulk Document Import — OCR a PO/CO/Invoice file (image or PDF) to a
+  // structured header + line items. entity_type is 'po' | 'co' | 'invoice';
+  // file_base64 may be a raw base64 string or a data-URL.
+  var docImport = {
+    ocr: function(entityType, fileBase64, mediaType) {
+      return post('/api/doc-import/ocr', { entity_type: entityType, file_base64: fileBase64, media_type: mediaType });
+    }
+  };
+
   window.p86Api = {
     get: get, put: put, post: post, del: del, patch: patch,
     fileFolders: fileFolders,
-    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, qbCosts: qbCosts, subs: subsApi, schedule: schedule, adminSms: adminSms, messages: messages, weather: weather, projects: projects, tasks: tasks, notes: notes, reminders: reminders, map: map, calendar: calendar, plans: plans, orgTags: orgTags, org: org, folderTemplates: folderTemplates, reports: reports, changeOrders: changeOrders, workflowItems: workflowItems, purchaseOrders: purchaseOrders, payApplications: payApplications, invoices: invoices, payments: payments, receipts: receipts, outlook: outlook, listViews: listViews,
+    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, qbCosts: qbCosts, subs: subsApi, schedule: schedule, adminSms: adminSms, messages: messages, weather: weather, projects: projects, tasks: tasks, notes: notes, reminders: reminders, map: map, calendar: calendar, plans: plans, orgTags: orgTags, org: org, folderTemplates: folderTemplates, reports: reports, changeOrders: changeOrders, workflowItems: workflowItems, purchaseOrders: purchaseOrders, payApplications: payApplications, invoices: invoices, payments: payments, receipts: receipts, docImport: docImport, outlook: outlook, listViews: listViews,
     isOffline: isOffline,
     isAuthenticated: function() { return !!getToken() && !isOffline(); }
   };

@@ -60,6 +60,7 @@ const tasksRoutes = require('./routes/tasks-routes');
 const notesRoutes = require('./routes/notes-routes');
 const remindersCrudRoutes = require('./routes/reminders-crud-routes');
 const receiptRoutes = require('./routes/receipt-routes');
+const docImportRoutes = require('./routes/doc-import-routes');
 const listViewsRoutes = require('./routes/list-views-routes');
 const mapRoutes = require('./routes/map-routes');
 const calendarRoutes = require('./routes/calendar-routes');
@@ -164,6 +165,7 @@ app.use('/api/notes', notesRoutes);
 app.use('/api/reminders', remindersCrudRoutes);
 // Cost Inbox — receipt capture (photo + amount + cost code), job/lead-linked.
 app.use('/api/receipts', receiptRoutes);
+app.use('/api/doc-import', docImportRoutes);
 // Saved list views — per-user column/filter configs for list pages.
 app.use('/api/list-views', listViewsRoutes);
 // Map data — combined leads + jobs feed for the Summary combined map
