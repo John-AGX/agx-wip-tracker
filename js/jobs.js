@@ -3392,8 +3392,16 @@ function renderJobsMain() {
         }
         window.p86InlStart = p86InlStart;
 
+        // Natural sort by the building name's number (B1, B2, … B10) so a
+        // re-added/healed building lands in order, not appended at the end.
+        function _bldgNumSort(a, b) {
+            var na = parseInt(String(a.name || '').replace(/\D/g, ''), 10);
+            var nb = parseInt(String(b.name || '').replace(/\D/g, ''), 10);
+            if (!isNaN(na) && !isNaN(nb) && na !== nb) return na - nb;
+            return String(a.name || '').localeCompare(String(b.name || ''));
+        }
         function renderJobBuildings(jobId, hostId) {
-            const buildings = appData.buildings.filter(b => b.jobId === jobId);
+            const buildings = appData.buildings.filter(b => b.jobId === jobId).slice().sort(_bldgNumSort);
             const container = document.getElementById(hostId || 'job-buildings-content');
             if (!container) return;   // host may be absent (e.g. node-graph inspector passes its own id)
             if (!buildings.length) { container.innerHTML = ''; return; }
@@ -3999,7 +4007,7 @@ function renderJobsMain() {
         function renderPhaseMatrixInto(container, jobId) {
             if (!container) return;
             var phases = (appData.phases || []).filter(function(p) { return p.jobId === jobId; });
-            var buildings = (appData.buildings || []).filter(function(b) { return b.jobId === jobId; });
+            var buildings = (appData.buildings || []).filter(function(b) { return b.jobId === jobId; }).slice().sort(_bldgNumSort);
             var names = [];
             phases.forEach(function(p) { var n = p.phase || 'Unnamed'; if (names.indexOf(n) === -1) names.push(n); });
             names.sort();
