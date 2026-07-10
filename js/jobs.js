@@ -330,8 +330,12 @@ function renderJobsMain() {
             //   Repair jobs (no graph → ngJtdProfit null) correctly showed as-sold.
             //   Basing it on genuine activity fixes the job-type split.
             const hasActuals = actualCosts > 0 || revenueEarned > 0;
-            const displayProfit = hasActuals ? jtdProfit : revisedProfit;
-            const displayMargin = hasActuals ? jtdMargin : revisedMargin;
+            // Headline profit/margin roll ACCRUED (committed) cost in alongside
+            // actual — job-to-date, net of commitments (John's call). jtdProfit /
+            // jtdMargin above stay PURE (revenue − actual) for the WIP report + the
+            // job-audit margin-drift rule; only the display figures net out accrued.
+            const displayProfit = hasActuals ? (jtdProfit - accruedCosts) : revisedProfit;
+            const displayMargin = hasActuals ? (revenueEarned > 0 ? (displayProfit / revenueEarned * 100) : 0) : revisedMargin;
             // qbActualCosts / qbCostLineCount / qbCostsAsOf computed above and now
             // folded into actualCosts; still returned as their own figures for the
             // "QB actuals as of <date>" chip + mismatch flag on the overview.

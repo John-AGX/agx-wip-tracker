@@ -239,7 +239,7 @@
       { label: "Accrued Costs", value: "--", sub: true },
       { label: "% Complete", value: extractVal(allText, "% Complete") },
       { label: "Revenue Earned", value: revVal },
-      { label: "Gross Profit", value: extractVal(allText, "Revised Gross Profit") },
+      { label: "Gross Profit", value: extractVal(allText, "Revised Gross Profit"), sub: true },
       { label: "Margin %", value: extractVal(allText, "Revised Margin %") }
     ];
 
@@ -468,7 +468,10 @@
       'Total Income': (w.coIncome > 0)
         ? 'Contract: ' + formatCurrency(w.contractIncome) + ' + CO: ' + formatCurrency(w.coIncome)
         : '',
-      'Accrued Costs': (w && w.poAccrued > 0) ? 'Open POs + earned/unbilled' : ((accrued > 0) ? 'Earned but unbilled' : '')
+      'Accrued Costs': (w && w.poAccrued > 0) ? 'Open POs + earned/unbilled' : ((accrued > 0) ? 'Earned but unbilled' : ''),
+      // Gross Profit / Margin are now net of accrued (committed) cost — flag it so
+      // the drop from pure job-to-date is legible.
+      'Gross Profit': (accrued > 0) ? 'net of ' + formatCurrency(accrued) + ' accrued' : ''
     };
     strip.querySelectorAll('.p86-totals-chip').forEach(function (card) {
       var lbl = card.querySelector('.p86-totals-chip-label');
