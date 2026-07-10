@@ -249,7 +249,7 @@ function renderJobsMain() {
             const server = (appData.jobChangeOrders || []).filter(c =>
                 c && c.job_id === jobId && (c.status === 'approved' || c.status === 'applied'));
             if (server.length && window.p86Pricing) {
-                let income = 0, costs = 0;
+                let income = 0, costs = 0, unlinkedIncome = 0;
                 server.forEach(c => {
                     const lines = Array.isArray(c.lines) ? c.lines : [];
                     const per = window.p86Pricing.computeForLines(c, lines);
@@ -257,16 +257,25 @@ function renderJobsMain() {
                     if (window.p86Pricing.targetMarginActive(c)) {
                         markedUp = window.p86Pricing.applyTargetMargin(per.subtotal, c);
                     }
-                    income += window.p86Pricing.applyFeesAndTax(markedUp, c).total;
+                    const sell = window.p86Pricing.applyFeesAndTax(markedUp, c).total;
+                    income += sell;
                     costs += per.subtotal; // raw line cost (before markup/fee/tax)
+                    // A CO linked to a graph node already has its lines folded into
+                    // that node's revenue (ngRevenueEarned). Only UNLINKED COs need
+                    // their earned share added to revenueEarned downstream — tracking
+                    // that separately here prevents double-counting linked ones.
+                    if (!c.linked_node_id) unlinkedIncome += sell;
                 });
-                return { income, costs, count: server.length };
+                return { income, costs, unlinkedIncome, count: server.length };
             }
-            // Legacy fallback: old localStorage COs carried flat income/cost fields.
+            // Legacy fallback: old localStorage COs carried flat income/cost fields
+            // and were never graph-linked, so all of it is "unlinked".
             const legacy = (appData.changeOrders || []).filter(co => co.jobId === jobId);
+            const legacyIncome = legacy.reduce((sum, co) => sum + (co.income || 0), 0);
             return {
-                income: legacy.reduce((sum, co) => sum + (co.income || 0), 0),
+                income: legacyIncome,
                 costs: legacy.reduce((sum, co) => sum + (co.estimatedCosts || 0), 0),
+                unlinkedIncome: legacyIncome,
                 count: legacy.length
             };
         }
@@ -320,8 +329,15 @@ function renderJobsMain() {
             // already pushed them — they use unrounded weighted pct and
             // match the watch-node displays. Fall back to local formula
             // when the graph hasn't run yet (job has no graph state).
+            // Earned share of change-order income. The node graph's
+            // ngRevenueEarned only knows about GRAPH revenue (the base contract),
+            // so unlinked-CO income never reaches it — add its pct-complete share
+            // here so an applied CO flows through to Revenue Earned → Gross Profit
+            // → Margin, not just the Total Income headline. The no-graph fallback
+            // already folds ALL CO income in via totalIncome, so it needs nothing.
+            const coEarned = (co.unlinkedIncome || 0) * (pctComplete / 100);
             const revenueEarned = (job.ngRevenueEarned != null)
-                ? job.ngRevenueEarned
+                ? job.ngRevenueEarned + coEarned
                 : totalIncome * (pctComplete / 100);
             // Recompute JTD from the QB-inclusive actual cost. Do NOT prefer the
             // engine's ngJtdProfit/ngJtdMargin — those are computed from the graph's
