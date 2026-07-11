@@ -3060,6 +3060,7 @@ function renderInspector(){
     renderInspectorJobDetail(body);
     refreshInspMetrics();   // always repaint tiles (job-detail build is keyed; numbers settle late)
     refreshInspKpis();      // + KPI ribbon / attention band (same late-settle reason)
+    refreshInspAccSums();   // + section rollup summaries
   }
   // Hybrid inline-spawn (RS-A + RS-B): a single "+ Add" button (prepended) + per-type
   // grouped child lists (appended) so children can be spawned + browsed inline.
@@ -3142,6 +3143,26 @@ function refreshInspKpis(){
   }
 }
 window.refreshInspKpis = refreshInspKpis;
+// Fill each self-summarizing section header with its rollup. Synchronous from
+// appData + getJobWIP, refreshed on every inspector render.
+function refreshInspAccSums(){
+  var jid=E.job();
+  function set(id,txt){ var el=document.getElementById(id); if(el) el.textContent=txt; }
+  function sm(n){ n=Number(n)||0; var a=Math.abs(n),s=n<0?'-':''; if(a>=1e6)return s+'$'+(a/1e6).toFixed(1).replace(/\.0$/,'')+'M'; if(a>=1e3)return s+'$'+Math.round(a/1e3)+'k'; return s+'$'+Math.round(a); }
+  var pd=function(r){ return r?(r.asSoldRevenue||r.asSoldPhaseBudget||r.phaseBudget||0):0; };
+  var phasesJob=(appData.phases||[]).filter(function(p){ return p.jobId===jid; });
+  var nB=(appData.buildings||[]).filter(function(b){ return b.jobId===jid; }).length;
+  var pnames={}; phasesJob.forEach(function(p){ pnames[p.phase||'Unnamed']=1; });
+  var nPh=Object.keys(pnames).length;
+  var alloc=phasesJob.reduce(function(s,r){ return s+pd(r); },0);
+  var w=(typeof window.getJobWIP==='function')?(window.getJobWIP(jid)||{}):{};
+  var nSubs=(appData.subs||[]).filter(function(s){ return s.jobId===jid; }).length;
+  set('accsum-buildings', nB+' building'+(nB===1?'':'s'));
+  set('accsum-phases', nPh+(nPh?' · '+sm(alloc)+' allocated':' phases'));
+  set('accsum-jobcosts', sm(w.actualCosts||0)+' linked');
+  set('accsum-subs', nSubs+' sub'+(nSubs===1?'':'s'));
+}
+window.refreshInspAccSums = refreshInspAccSums;
 function renderInspectorJobDetail(body){
   var jid=E.job(); var jk='job:'+(jid||'');
   if(_inspJobKey===jk && body.querySelector('.ng-insp-jobdetail')) return;
@@ -3160,10 +3181,14 @@ function renderInspectorJobDetail(body){
     // the body; both filled by refreshInspKpis() so late-settling numbers land.
     '<div class="ng-insp-kpis" id="ng-insp-kpis"></div>'+
     '<div id="ng-insp-attn-host"></div>'+
-    '<div class="ng-insp-sec" id="insp-buildings"></div>'+
-    '<div class="ng-insp-sec" id="insp-phases"></div>'+
-    '<div class="ng-insp-sec" id="insp-jobcosts"></div>'+
-    '<div class="ng-insp-sec" id="insp-subs"></div><div id="insp-subs-totals"></div>'+
+    // Self-summarizing sections: each header carries its own rollup (filled by
+    // refreshInspAccSums) and collapses. Buildings + Phases lead open; Job Costs
+    // + Subs start collapsed (their number is in the header). The #insp-* ids stay
+    // INSIDE each body so the existing section renderers keep targeting them.
+    '<div class="ng-insp-acc ng-open" id="acc-buildings"><button class="ng-insp-acc-hdr" data-acc-toggle="buildings"><span class="acc-dot" style="background:#4f8cff"></span><span class="acc-t">Buildings</span><span class="acc-sum" id="accsum-buildings"></span><span class="acc-chev"></span></button><div class="ng-insp-acc-body"><div class="ng-insp-sec" id="insp-buildings"></div></div></div>'+
+    '<div class="ng-insp-acc ng-open" id="acc-phases"><button class="ng-insp-acc-hdr" data-acc-toggle="phases"><span class="acc-dot" style="background:#a78bfa"></span><span class="acc-t">Phases</span><span class="acc-sum" id="accsum-phases"></span><span class="acc-chev"></span></button><div class="ng-insp-acc-body"><div class="ng-insp-sec" id="insp-phases"></div></div></div>'+
+    '<div class="ng-insp-acc" id="acc-jobcosts"><button class="ng-insp-acc-hdr" data-acc-toggle="jobcosts"><span class="acc-dot" style="background:#f2a55c"></span><span class="acc-t">Job Costs</span><span class="acc-sum" id="accsum-jobcosts"></span><span class="acc-chev"></span></button><div class="ng-insp-acc-body"><div class="ng-insp-sec" id="insp-jobcosts"></div></div></div>'+
+    '<div class="ng-insp-acc" id="acc-subs"><button class="ng-insp-acc-hdr" data-acc-toggle="subs"><span class="acc-dot" style="background:#35d0a5"></span><span class="acc-t">Subcontractors</span><span class="acc-sum" id="accsum-subs"></span><span class="acc-chev"></span></button><div class="ng-insp-acc-body"><div class="ng-insp-sec" id="insp-subs"></div><div id="insp-subs-totals"></div></div></div>'+
     '<div class="ng-insp-sec" id="insp-cos"></div>'+   // renderJobChangeOrdersInto creates #insp-co inside (server-fetched)
     '<div class="ng-insp-sec" id="insp-pos"></div>'+   // renderJobPurchaseOrdersInto creates #insp-po inside (server-fetched)
     inspectorInvoicesHtml(jid)+                        // synchronous invoice table (appData.invoices)
@@ -3183,6 +3208,7 @@ function renderInspectorJobDetail(body){
   }catch(e){ if(window.console) console.warn('inspector job-detail render failed', e); }
   refreshInspMetrics();   // first-paint fill
   refreshInspKpis();      // first-paint KPI ribbon + attention band
+  refreshInspAccSums();   // first-paint section rollups
 }
 
 // ── Job-Level Costs (overview panel) ───────────────────────────────
@@ -4135,6 +4161,9 @@ function initEvents(){
     // Slice 3c — Tasks/Files collapsible headers (lazy-mount the heavy panel on first open).
     var ict=e.target.closest('[data-coll-toggle]');
     if(ict){ e.preventDefault(); e.stopPropagation(); inspToggleCollapse(ict.getAttribute('data-coll-toggle'), ict); return; }
+    // Command Center self-summarizing sections — toggle open/closed (no lazy-mount).
+    var iac=e.target.closest('[data-acc-toggle]');
+    if(iac){ e.preventDefault(); e.stopPropagation(); var acc=iac.closest('.ng-insp-acc'); if(acc) acc.classList.toggle('ng-open'); return; }
     var jchip=e.target.closest('[data-job-edit]');
     if(jchip && !e.target.closest('input')){ e.preventDefault(); e.stopPropagation(); jobFieldEdit(jchip); return; }
     var luEl=e.target.closest('[data-lu-act]');

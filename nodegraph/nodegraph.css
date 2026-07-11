@@ -204,6 +204,18 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
 .ng-insp-attn .as{font-family:'Courier New',monospace;font-size:9px;color:#f77066;letter-spacing:.04em;margin-top:1px}
 body.light-mode .ng-insp-attn{border-color:rgba(180,35,24,.35);background:linear-gradient(180deg,rgba(247,112,102,.14),rgba(247,112,102,.04))}
 body.light-mode .ng-insp-attn .at{color:#b42318}
+/* Command Center — self-summarizing collapsible sections */
+.ng-insp-acc{border:1px solid var(--ng-border2);border-radius:10px;margin-bottom:8px;background:var(--ng-surface2);overflow:hidden}
+.ng-insp-acc-hdr{width:100%;display:flex;align-items:center;gap:9px;padding:10px 11px;background:transparent;border:0;color:var(--ng-text);font-size:12.5px;font-weight:600;cursor:pointer;text-align:left;font-family:inherit}
+.ng-insp-acc-hdr:hover{background:rgba(255,255,255,.03)}
+.acc-dot{width:7px;height:7px;border-radius:50%;flex:none}
+.acc-t{flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.acc-sum{font-family:'Courier New',monospace;font-size:10.5px;color:var(--ng-dim);font-weight:600;white-space:nowrap}
+.acc-chev::before{content:"\25B8";font-size:9px;color:var(--ng-dim2);display:inline-block;transition:transform .12s}
+.ng-insp-acc.ng-open .acc-chev::before{transform:rotate(90deg);color:#7fb0ff}
+.ng-insp-acc-body{display:none;padding:2px 11px 11px;border-top:1px solid var(--ng-border2)}
+.ng-insp-acc.ng-open .ng-insp-acc-body{display:block}
+.ng-insp-acc-body .ng-insp-sec{margin-bottom:0}
 .ng-alloc-tbl{width:100%;border-collapse:collapse;font-size:11px}
 .ng-alloc-tbl th{font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:.03em;color:var(--ng-dim);text-align:right;padding:2px 3px;border-bottom:1px solid var(--ng-border2)}
 .ng-alloc-tbl th:nth-child(2){text-align:left}
