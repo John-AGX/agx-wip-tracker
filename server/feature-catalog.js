@@ -444,9 +444,26 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.9';
+const APP_VERSION = '1.10';
 
 const releases = [
+  {
+    version: '1.10',
+    date: '2026-07-11',
+    name: 'Command',
+    summary: 'The Site Plan panel becomes a command center, phases link across buildings in one move, and paperwork imports itself.',
+    changes: [
+      { type: 'new', text: 'Link a scope across buildings in one move — tick the phases, tick the buildings, and Link; the budget splits automatically by units or levels.' },
+      { type: 'new', text: 'Command Center job panel — the Site Plan\'s right panel opens with your live numbers (Cost · Margin · Billed · AR), flags trouble at the top, and folds every section (Buildings, Phases, Costs, Subs, COs, POs, Invoices) into a header that shows its own total.' },
+      { type: 'new', text: 'Bulk Document Import — drop in a stack of PO / CO / Invoice files, or a Buildertrend export, and it reads each one, pulls the line items, matches it to a job, and lets you review before creating.' },
+      { type: 'new', text: 'Status chips in the job sidebar — each section shows a live figure beside it (buildings, WIP margin, open POs, AR), with an alert when a job\'s margin goes negative.' },
+      { type: 'improved', text: 'Change orders now roll into the contract and the job\'s metrics automatically.' },
+      { type: 'improved', text: 'Truer costs & progress — actual costs come only from linked QuickBooks lines, building levels and units drive % complete, and open POs accrue by progress instead of only what\'s been billed.' },
+      { type: 'improved', text: 'QuickBooks cost links now show right on the job overview.' },
+      { type: 'fixed', text: 'A building could show $0 while its money sat on a hidden duplicate record — cleaned up, and future duplicates self-heal.' },
+      { type: 'fixed', text: 'The Buildings × Phases table no longer renders twice on the Site Plan.' },
+    ],
+  },
   {
     version: '1.9',
     date: '2026-07-04',

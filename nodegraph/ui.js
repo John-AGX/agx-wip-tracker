@@ -3161,6 +3161,15 @@ function refreshInspAccSums(){
   set('accsum-phases', nPh+(nPh?' · '+sm(alloc)+' allocated':' phases'));
   set('accsum-jobcosts', sm(w.actualCosts||0)+' linked');
   set('accsum-subs', nSubs+' sub'+(nSubs===1?'':'s'));
+  // CO / PO / Invoices — counts from the server stores (may fill in after their
+  // async section fetch lands; refreshed on the next inspector render either way).
+  var cos=(appData.jobChangeOrders||[]).filter(function(c){ return (c.jobId||c.job_id)===jid; });
+  var pos=(appData.jobPurchaseOrders||[]).filter(function(p){ return (p.jobId||p.job_id)===jid; });
+  var invs=(appData.invoices||[]).filter(function(i){ return i.jobId===jid; });
+  var invBilled=0; invs.forEach(function(i){ var st=String(i.status||'').toLowerCase(); if(st!=='void'&&st!=='draft') invBilled+=Number(i.amount||0)||0; });
+  set('accsum-cos', cos.length+' CO'+(cos.length===1?'':'s'));
+  set('accsum-pos', pos.length+' PO'+(pos.length===1?'':'s'));
+  set('accsum-invoices', invs.length? (invs.length+' · '+sm(invBilled)) : '0');
 }
 window.refreshInspAccSums = refreshInspAccSums;
 function renderInspectorJobDetail(body){
@@ -3189,9 +3198,12 @@ function renderInspectorJobDetail(body){
     '<div class="ng-insp-acc ng-open" id="acc-phases"><button class="ng-insp-acc-hdr" data-acc-toggle="phases"><span class="acc-dot" style="background:#a78bfa"></span><span class="acc-t">Phases</span><span class="acc-sum" id="accsum-phases"></span><span class="acc-chev"></span></button><div class="ng-insp-acc-body"><div class="ng-insp-sec" id="insp-phases"></div></div></div>'+
     '<div class="ng-insp-acc" id="acc-jobcosts"><button class="ng-insp-acc-hdr" data-acc-toggle="jobcosts"><span class="acc-dot" style="background:#f2a55c"></span><span class="acc-t">Job Costs</span><span class="acc-sum" id="accsum-jobcosts"></span><span class="acc-chev"></span></button><div class="ng-insp-acc-body"><div class="ng-insp-sec" id="insp-jobcosts"></div></div></div>'+
     '<div class="ng-insp-acc" id="acc-subs"><button class="ng-insp-acc-hdr" data-acc-toggle="subs"><span class="acc-dot" style="background:#35d0a5"></span><span class="acc-t">Subcontractors</span><span class="acc-sum" id="accsum-subs"></span><span class="acc-chev"></span></button><div class="ng-insp-acc-body"><div class="ng-insp-sec" id="insp-subs"></div><div id="insp-subs-totals"></div></div></div>'+
-    '<div class="ng-insp-sec" id="insp-cos"></div>'+   // renderJobChangeOrdersInto creates #insp-co inside (server-fetched)
-    '<div class="ng-insp-sec" id="insp-pos"></div>'+   // renderJobPurchaseOrdersInto creates #insp-po inside (server-fetched)
-    inspectorInvoicesHtml(jid)+                        // synchronous invoice table (appData.invoices)
+    // Change Orders / Purchase Orders / Invoices — same self-summarizing accordion
+    // treatment, collapsed by default. The section renderers still target the same
+    // #insp-cos / #insp-pos ids nested inside; invoices are synchronous HTML.
+    '<div class="ng-insp-acc" id="acc-cos"><button class="ng-insp-acc-hdr" data-acc-toggle="cos"><span class="acc-dot" style="background:#e879a6"></span><span class="acc-t">Change Orders</span><span class="acc-sum" id="accsum-cos"></span><span class="acc-chev"></span></button><div class="ng-insp-acc-body"><div class="ng-insp-sec" id="insp-cos"></div></div></div>'+
+    '<div class="ng-insp-acc" id="acc-pos"><button class="ng-insp-acc-hdr" data-acc-toggle="pos"><span class="acc-dot" style="background:#f4c152"></span><span class="acc-t">Purchase Orders</span><span class="acc-sum" id="accsum-pos"></span><span class="acc-chev"></span></button><div class="ng-insp-acc-body"><div class="ng-insp-sec" id="insp-pos"></div></div></div>'+
+    '<div class="ng-insp-acc" id="acc-invoices"><button class="ng-insp-acc-hdr" data-acc-toggle="invoices"><span class="acc-dot" style="background:#7fb0ff"></span><span class="acc-t">Invoices</span><span class="acc-sum" id="accsum-invoices"></span><span class="acc-chev"></span></button><div class="ng-insp-acc-body">'+inspectorInvoicesHtml(jid)+'</div></div>'+
     // Slice 3c: Tasks + Files — collapsed by default, lazy-mounted on first expand (heavy mounts).
     '<div class="ng-insp-coll"><div class="ng-insp-coll-hdr" data-coll-toggle="tasks">Tasks</div><div class="ng-insp-coll-body" id="insp-tasks" style="display:none"></div></div>'+
     '<div class="ng-insp-coll"><div class="ng-insp-coll-hdr" data-coll-toggle="files">Files</div><div class="ng-insp-coll-body" id="insp-files" style="display:none"></div></div>'+

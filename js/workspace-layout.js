@@ -584,6 +584,14 @@
       });
       jobnav.appendChild(wsItem);
 
+      // Command Center attention strip — filled by refreshJobNavChips only when
+      // the job needs attention (e.g. negative margin); empty + display:none otherwise.
+      var attn = document.createElement('div');
+      attn.className = 'app-jobnav-attn';
+      attn.id = 'appJobnavAttn';
+      attn.style.display = 'none';
+      jobnav.appendChild(attn);
+
       // (Job overview card removed from the left contextual sidebar — it now lives at the
       //  top of the right Inspector on the Site Plan. The left sidebar stays "standard":
       //  Back → All Jobs, then the Sections nav. paintJobSubnavCard no-ops without .app-jobnav-jobinfo.)
@@ -671,11 +679,60 @@
     if (appNav) appNav.style.display = 'none';
   }
 
+  // Command Center: fill the live status chips beside each job section + the
+  // attention strip. Fully guarded — a throw here must never break the nav.
+  // Called on mount + a short delay (late-settling getJobWIP numbers), and
+  // exposed so data-reload code can re-run it.
+  function refreshJobNavChips(jobId) {
+    try {
+      jobId = jobId || (window.appState && window.appState.currentJobId);
+      if (!jobId) return;
+      var A = window.appData || {};
+      function sm(n){ n=Number(n)||0; var a=Math.abs(n),s=n<0?'-':''; if(a>=1e6)return s+'$'+(a/1e6).toFixed(1).replace(/\.0$/,'')+'M'; if(a>=1e3)return s+'$'+Math.round(a/1e3)+'k'; return s+'$'+Math.round(a); }
+      function chip(tabId, text, tone){
+        var el = document.querySelector('[data-jobchip="'+tabId+'"]'); if(!el) return;
+        el.textContent = (text==null?'':text);
+        if(tone) el.setAttribute('data-tone', tone); else el.removeAttribute('data-tone');
+      }
+      var w = (typeof window.getJobWIP==='function') ? (window.getJobWIP(jobId)||{}) : {};
+      // Site Map — building count
+      var nB = (A.buildings||[]).filter(function(b){ return b.jobId===jobId; }).length;
+      chip('job-site-map', nB ? String(nB) : '', '');
+      // WIP Report — margin %
+      var m = w.displayMargin;
+      chip('job-wip-report', (m!=null && !isNaN(m)) ? (Math.round(m)+'%') : '', (m<0?'r':'g'));
+      // Change Orders — count
+      var nCO = (A.jobChangeOrders||[]).filter(function(c){ return (c.jobId||c.job_id)===jobId; }).length;
+      chip('job-changeorders', nCO ? String(nCO) : '', '');
+      // Purchase Orders — open accrued $ (falls back to count)
+      var poAccr = 0; try { if(typeof window.getJobPOAccrued==='function'){ var pa=window.getJobPOAccrued(jobId); poAccr=(pa&&pa.total)||0; } } catch(e){}
+      if (poAccr) chip('job-purchaseorders', sm(poAccr), 'o');
+      else { var nPO=(A.jobPurchaseOrders||[]).filter(function(p){ return (p.jobId||p.job_id)===jobId; }).length; chip('job-purchaseorders', nPO?String(nPO):'', ''); }
+      // Invoices — AR (billed − paid)
+      var invs=(A.invoices||[]).filter(function(i){ return i.jobId===jobId; });
+      var billed=0, paid=0; invs.forEach(function(i){ var st=String(i.status||'').toLowerCase(); if(st==='void'||st==='draft') return; billed+=Number(i.amount||0)||0; if(st==='paid') paid+=Number(i.amount||0)||0; });
+      var ar=Math.max(0, billed-paid);
+      chip('job-invoices', ar ? sm(ar) : '', 'b');
+      // Attention strip
+      var attn=document.getElementById('appJobnavAttn');
+      if (attn) {
+        var flags=[];
+        if (m!=null && !isNaN(m) && m<0) flags.push('Margin ' + Math.round(m) + '%');
+        if (flags.length) { attn.innerHTML='<span class="app-jobnav-attn-dot"></span>'+flags.join(' · '); attn.style.display=''; }
+        else { attn.innerHTML=''; attn.style.display='none'; }
+      }
+    } catch (e) { /* never break the nav */ }
+  }
+  window.refreshJobNavChips = refreshJobNavChips;
+
   function mountJobSubnav(job) {
     // Single-card rule: a job must never show the lead/estimate context card.
     if (window.p86EntitySubnav && window.p86EntitySubnav.clearAll) window.p86EntitySubnav.clearAll();
     buildJobSubnavShell(job);
     placeJobSubnav();
+    var _jid = job && job.id;
+    refreshJobNavChips(_jid);
+    setTimeout(function(){ refreshJobNavChips(_jid); }, 500);   // catch late-settling WIP numbers
     // Follow the tabs across the breakpoint as the viewport resizes.
     if (window.matchMedia && !_jobSubnavMql) {
       _jobSubnavMql = window.matchMedia('(max-width: 768px)');
@@ -715,7 +772,7 @@
 
     var tabsHtml = '<div class="ws-right-tabs">';
     RIGHT_TABS.forEach(function(tab, i) {
-      tabsHtml += '<button class="ws-right-tab' + (i === 0 ? ' active' : '') + '" data-panel="' + tab.id + '"' + (tab.icon ? ' data-p86-icon="' + tab.icon + '"' : '') + '>' + tab.label + '</button>';
+      tabsHtml += '<button class="ws-right-tab' + (i === 0 ? ' active' : '') + '" data-panel="' + tab.id + '"' + (tab.icon ? ' data-p86-icon="' + tab.icon + '"' : '') + '>' + tab.label + '<span class="ws-right-tab-chip" data-jobchip="' + tab.id + '"></span></button>';
     });
     // Only the global Ask 86 badge lives here now. The Workspace opener moved to
     // the left sidebar (app-jobnav) so it's the single entry point.
