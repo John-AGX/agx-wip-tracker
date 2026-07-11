@@ -4006,10 +4006,10 @@ function renderJobsMain() {
 
         // Selected building ids for the matrix multi-select ("Apply to selected").
         // Reset when the job changes so a stale selection can't leak across jobs.
-        var _mxSel = {}, _mxSelJob = null;
+        var _mxSel = {}, _mxPhaseSel = {}, _mxSelJob = null;
         function renderPhaseMatrixInto(container, jobId) {
             if (!container) return;
-            if (_mxSelJob !== jobId) { _mxSel = {}; _mxSelJob = jobId; }
+            if (_mxSelJob !== jobId) { _mxSel = {}; _mxPhaseSel = {}; _mxSelJob = jobId; }
             var phases = (appData.phases || []).filter(function(p) { return p.jobId === jobId; });
             var buildings = (appData.buildings || []).filter(function(b) { return b.jobId === jobId; }).slice().sort(_bldgNumSort);
             var names = [];
@@ -4024,10 +4024,17 @@ function renderJobsMain() {
             var colTot = {}, colCost = {}; cols.forEach(function(c) { colTot[c.id] = 0; colCost[c.id] = 0; }); var unTot = 0, unCost = 0, grand = 0, grandCost = 0;
             var poAccr = (typeof getJobPOAccrued === 'function') ? getJobPOAccrued(jobId).byPhase : {};
             var stickL = 'position:sticky;left:0;background:var(--card-bg,#141419);z-index:1;';
+            var stickLSel = 'position:sticky;left:0;background:rgba(59,95,163,0.20);z-index:1;';
+            // Phase-first selection state (drives the Link toolbar below).
+            var selPhaseCount = names.filter(function(n) { return _mxPhaseSel[n]; }).length;
+            var selBldgCount = buildings.filter(function(b) { return _mxSel[b.id]; }).length;
+            var allPhasesTicked = names.length > 0 && selPhaseCount === names.length;
 
-            var head = '<tr><th style="text-align:left;padding:5px 8px;font-size:11px;color:var(--text-dim);' + stickL + '">Phase</th>';
+            var head = '<tr><th style="text-align:left;padding:5px 8px;font-size:11px;color:var(--text-dim);' + stickL + '">' +
+                '<label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;" title="Select all / no phases">' +
+                    '<input type="checkbox"' + (allPhasesTicked ? ' checked' : '') + ' onchange="onMxTogglePhaseAll(this)" style="cursor:pointer;margin:0;"/>Phase</label></th>';
             cols.forEach(function(c) { head += '<th style="text-align:right;padding:5px 8px;font-size:11px;color:var(--text-dim);white-space:nowrap;">' +
-                '<label style="display:inline-flex;align-items:center;gap:3px;cursor:pointer;justify-content:flex-end;" title="Tick to include this building when you use → sel">' +
+                '<label style="display:inline-flex;align-items:center;gap:3px;cursor:pointer;justify-content:flex-end;" title="Tick buildings to link the selected phases to (leave all unticked = every building)">' +
                     '<input type="checkbox"' + (_mxSel[c.id] ? ' checked' : '') + ' data-mx-bcol="' + attr(c.id) + '" onchange="onMxToggleBldgSel(this)" style="cursor:pointer;margin:0;"/>' +
                     escapeHTML(c.name) +
                 '</label></th>'; });
@@ -4080,11 +4087,10 @@ function renderJobsMain() {
                 var costCell = '<td style="text-align:right;padding:4px 8px;font-size:12px;font-family:monospace;color:var(--orange,#e0a458);border-left:1px solid var(--border);">' + formatCurrency(pcost) + '</td>';
                 var profitCell = '<td style="text-align:right;padding:4px 8px;font-size:12px;font-family:monospace;color:' + (pprofit >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(pprofit) + '</td>';
                 var doneCell = '<td style="text-align:right;padding:3px 4px;"><span style="display:inline-flex;align-items:center;gap:1px;justify-content:flex-end;"><input type="number" min="0" max="100" step="5" value="' + (avgPct || '') + '" data-mx-phase="' + attr(name) + '" oninput="onPhaseMatrixPctDone(this)" onchange="onPhaseMatrixCommit(this)" title="Phase % complete — drives the WIP roll-up" style="width:46px;font-size:12px;padding:3px 4px;text-align:right;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--accent);font-weight:700;"/><span style="font-size:10px;color:var(--text-dim);">%</span></span></td>';
-                var _selN = 0; for (var _k in _mxSel) { if (_mxSel[_k]) _selN++; }
-                var pillBase = 'margin-left:4px;font-size:10px;font-weight:600;padding:1px 6px;border-radius:10px;cursor:pointer;white-space:nowrap;';
-                var spreadBtns = '<button type="button" data-mx-phase="' + attr(name) + '" data-mx-spread="all" onclick="onPhaseMatrixSpread(this)" title="Split this phase across ALL buildings, weighted by units/levels" style="' + pillBase + 'border:1px solid var(--border);background:var(--overlay-light,rgba(255,255,255,0.05));color:var(--text-dim);">&rarr; all</button>' +
-                    (_selN ? '<button type="button" data-mx-phase="' + attr(name) + '" data-mx-spread="sel" onclick="onPhaseMatrixSpread(this)" title="Split this phase across the ' + _selN + ' selected building(s), weighted by units/levels" style="' + pillBase + 'border:1px solid var(--accent);background:rgba(79,140,255,0.12);color:var(--accent);">&rarr; sel (' + _selN + ')</button>' : '');
-                return '<tr><td style="text-align:left;padding:4px 8px;font-size:12.5px;font-weight:600;color:var(--text);white-space:nowrap;' + stickL + '">' + escapeHTML(name) + modeChip + accrChip + spreadBtns + '</td>' +
+                var phaseChk = '<input type="checkbox"' + (_mxPhaseSel[name] ? ' checked' : '') + ' data-mx-prow="' + attr(name) + '" onchange="onMxTogglePhaseSel(this)" title="Select this phase to link to buildings" style="cursor:pointer;margin:0 6px 0 0;vertical-align:middle;"/>';
+                var pCellStick = _mxPhaseSel[name] ? stickLSel : stickL;
+                return '<tr>' +
+                    '<td style="text-align:left;padding:4px 8px;font-size:12.5px;font-weight:600;color:var(--text);white-space:nowrap;' + pCellStick + '">' + phaseChk + escapeHTML(name) + modeChip + accrChip + '</td>' +
                     cells + unCell + totalCell + costCell + profitCell + doneCell + '</tr>';
             }).join('');
 
@@ -4101,10 +4107,14 @@ function renderJobsMain() {
             foot += '<td style="text-align:right;padding:4px 8px;font-size:11.5px;font-family:monospace;color:var(--text-dim);">' + formatCurrency(unCost) + '</td>';
             foot += '<td></td><td></td><td></td><td></td></tr>';
 
+            var linkTarget = selBldgCount ? (selBldgCount + ' building' + (selBldgCount === 1 ? '' : 's')) : 'all buildings';
+            var actionZone = selPhaseCount
+                ? '<button type="button" onclick="onPhaseMatrixLinkSelected(this)" title="Distribute each selected phase across ' + (selBldgCount ? 'the selected buildings' : 'every building') + ', split by units/levels" style="font-size:11px;font-weight:700;padding:5px 12px;border-radius:8px;border:1px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer;white-space:nowrap;">&#128279; Link ' + selPhaseCount + ' phase' + (selPhaseCount === 1 ? '' : 's') + ' &rarr; ' + linkTarget + '</button>'
+                : '<span style="font-size:11px;color:var(--text-dim);">Tick <b>phases</b> (left) + <b>buildings</b> (headers), then <b>Link</b> — each phase splits across the buildings by units/levels. Untick all buildings to link to every one. Type any cell to override; the [% / $] chip toggles a row.</span>';
             container.innerHTML =
                 '<div style="display:flex;justify-content:space-between;align-items:center;margin:2px 0 6px;gap:8px;flex-wrap:wrap;">' +
                     '<h4 style="font-size:12px;margin:0;color:var(--text-dim);text-transform:uppercase;letter-spacing:.5px;">Buildings &times; Phases</h4>' +
-                    '<span style="font-size:11px;color:var(--text-dim);">Per phase, <b>&rarr; all</b> spreads it across every building; tick building headers then <b>&rarr; sel</b> for a subset — both split weighted by units/levels. Type any cell to override; the [% / $] chip toggles a row.</span>' +
+                    actionZone +
                 '</div>' +
                 '<div style="border:1px solid var(--border,#333);border-radius:10px;overflow-x:auto;background:var(--card-bg,#141419);margin-bottom:12px;">' +
                     '<table style="width:100%;border-collapse:collapse;"><thead>' + head + '</thead><tbody>' + body + '</tbody><tfoot>' + foot + '</tfoot></table>' +
@@ -4242,11 +4252,50 @@ function renderJobsMain() {
         }
         window.onMxToggleBldgSel = onMxToggleBldgSel;
 
-        // "Apply to all / selected buildings" for a phase: put it in % mode and make
-        // the TARGET buildings auto (units/levels-weighted share via phasePctShares),
-        // every other building + Unassigned an explicit 0. One click spreads a phase
-        // across the whole site (or a ticked subset). Mirrors onPhaseMatrixCommit's
-        // save + graph-sync + roll-up refresh.
+        // ---- Buildings×Phases bulk linking --------------------------------
+        // Core: put ONE phase in % mode with the TARGET buildings auto (units/
+        // levels-weighted share via phasePctShares) and every OTHER building +
+        // Unassigned pinned to an explicit 0 — so the whole phase lands on the
+        // targets. Mutates appData ONLY; the caller runs commitMatrixChange once
+        // (a bulk link over many phases must not save + recompute + repaint per
+        // phase).
+        function spreadPhaseCore(jobId, name, targetIds) {
+            var buildings = (appData.buildings || []).filter(function(b) { return b.jobId === jobId; });
+            var tset = {}; (targetIds || []).forEach(function(id) { tset[id] = 1; });
+            var info = phaseAllocInfo(jobId, name);
+            var total = info.total || info.sumDollars || 0;
+            buildings.forEach(function(b) {
+                var rec = phaseRecFor(jobId, name, b.id);
+                rec.allocMode = 'pct'; rec.phaseAllocTotal = total;
+                if (tset[b.id]) { rec.allocPct = null; rec.allocAuto = true; }
+                else { rec.allocPct = 0; rec.allocAuto = false; setPhaseDollar(rec, 0); }
+            });
+            var urec = (appData.phases || []).find(function(p) { return p.jobId === jobId && (p.phase || 'Unnamed') === name && !p.buildingId; });
+            if (urec) { urec.allocMode = 'pct'; urec.phaseAllocTotal = total; urec.allocPct = 0; urec.allocAuto = false; setPhaseDollar(urec, 0); }
+            recomputePhasePctAllocation(jobId, name);
+        }
+
+        // Shared post-change tail: persist, re-sync EVERY wired t2 phase node's
+        // revenue/pct from its record (a bulk link touches many phases), save the
+        // graph, then re-render the matrix + roll-up cards.
+        function commitMatrixChange(jobId, host) {
+            if (typeof saveData === 'function') saveData();
+            if (typeof NG !== 'undefined') {
+                try {
+                    var recs = (appData.phases || []).filter(function(p) { return p.jobId === jobId; });
+                    var byId = {}; recs.forEach(function(r) { byId[r.id] = r; });
+                    NG.nodes().forEach(function(n) { if (n.type === 't2' && n.data && byId[n.data.id]) { var r = byId[n.data.id]; n.revenue = phaseDollar(r); n.pct = r.pctComplete || 0; n.pctComplete = r.pctComplete || 0; } });
+                    NG.saveGraph();
+                } catch (e) {}
+            }
+            if (host) { try { renderPhaseMatrixInto(host, jobId); } catch (e) {} }
+            try { if (typeof ensureNGComputed === 'function') ensureNGComputed(jobId); } catch (e) {}
+            try { if (typeof p86RerenderJobCards === 'function') p86RerenderJobCards(jobId); } catch (e) {}
+            try { if (typeof renderJobPhases === 'function') renderJobPhases(jobId); } catch (e) {}
+        }
+
+        // Single-phase spread — kept for programmatic use (el carries data-mx-phase
+        // + data-mx-spread 'all'|'sel'). The UI drives the bulk path below.
         function onPhaseMatrixSpread(el) {
             var name = el && el.getAttribute && el.getAttribute('data-mx-phase');
             var mode = el && el.getAttribute && el.getAttribute('data-mx-spread');
@@ -4257,35 +4306,49 @@ function renderJobsMain() {
                 ? buildings.filter(function(b) { return _mxSel[b.id]; }).map(function(b) { return b.id; })
                 : buildings.map(function(b) { return b.id; });
             if (!targetIds.length) return;
-            var tset = {}; targetIds.forEach(function(id) { tset[id] = 1; });
-            var info = phaseAllocInfo(jobId, name);
-            var total = info.total || info.sumDollars || 0;
-            buildings.forEach(function(b) {
-                var rec = phaseRecFor(jobId, name, b.id);
-                rec.allocMode = 'pct'; rec.phaseAllocTotal = total;
-                if (tset[b.id]) { rec.allocPct = null; rec.allocAuto = true; }
-                else { rec.allocPct = 0; rec.allocAuto = false; setPhaseDollar(rec, 0); }
-            });
-            // Unassigned → 0 so the whole phase lands on the target buildings.
-            var urec = (appData.phases || []).find(function(p) { return p.jobId === jobId && (p.phase || 'Unnamed') === name && !p.buildingId; });
-            if (urec) { urec.allocMode = 'pct'; urec.phaseAllocTotal = total; urec.allocPct = 0; urec.allocAuto = false; setPhaseDollar(urec, 0); }
-            recomputePhasePctAllocation(jobId, name);
-            if (typeof saveData === 'function') saveData();
-            if (typeof NG !== 'undefined') {
-                try {
-                    var recs = (appData.phases || []).filter(function(p) { return p.jobId === jobId && (p.phase || 'Unnamed') === name; });
-                    var byId = {}; recs.forEach(function(r) { byId[r.id] = r; });
-                    NG.nodes().forEach(function(n) { if (n.type === 't2' && n.data && byId[n.data.id]) { var r = byId[n.data.id]; n.revenue = phaseDollar(r); n.pct = r.pctComplete || 0; n.pctComplete = r.pctComplete || 0; } });
-                    NG.saveGraph();
-                } catch (e) {}
-            }
-            var host = el.closest ? el.closest('.phase-matrix-host') : null;
-            if (host) { try { renderPhaseMatrixInto(host, jobId); } catch (e) {} }
-            try { if (typeof ensureNGComputed === 'function') ensureNGComputed(jobId); } catch (e) {}
-            try { if (typeof p86RerenderJobCards === 'function') p86RerenderJobCards(jobId); } catch (e) {}
-            try { if (typeof renderJobPhases === 'function') renderJobPhases(jobId); } catch (e) {}
+            spreadPhaseCore(jobId, name, targetIds);
+            commitMatrixChange(jobId, el.closest ? el.closest('.phase-matrix-host') : null);
         }
         window.onPhaseMatrixSpread = onPhaseMatrixSpread;
+
+        // Toggle one phase-row's selection (checkbox in the Phase column).
+        function onMxTogglePhaseSel(el) {
+            var name = el && el.getAttribute && el.getAttribute('data-mx-prow'); if (name == null) return;
+            if (el.checked) _mxPhaseSel[name] = true; else delete _mxPhaseSel[name];
+            var host = el.closest ? el.closest('.phase-matrix-host') : null;
+            var jobId = (typeof appState !== 'undefined' && appState.currentJobId);
+            if (host && jobId) { try { renderPhaseMatrixInto(host, jobId); } catch (e) {} }
+        }
+        window.onMxTogglePhaseSel = onMxTogglePhaseSel;
+
+        // Select-all / none phases (checkbox in the Phase header).
+        function onMxTogglePhaseAll(el) {
+            var jobId = (typeof appState !== 'undefined' && appState.currentJobId); if (!jobId) return;
+            var names = []; (appData.phases || []).forEach(function(p) { if (p.jobId === jobId) { var n = p.phase || 'Unnamed'; if (names.indexOf(n) === -1) names.push(n); } });
+            _mxPhaseSel = {};
+            if (el && el.checked) names.forEach(function(n) { _mxPhaseSel[n] = true; });
+            var host = el.closest ? el.closest('.phase-matrix-host') : null;
+            if (host) { try { renderPhaseMatrixInto(host, jobId); } catch (e) {} }
+        }
+        window.onMxTogglePhaseAll = onMxTogglePhaseAll;
+
+        // Bulk phase-first link: distribute EVERY selected phase across the
+        // selected buildings (or ALL buildings when none are ticked), each split
+        // weighted by units/levels. Pick phases, pick buildings, one click.
+        function onPhaseMatrixLinkSelected(el) {
+            var jobId = (typeof appState !== 'undefined' && appState.currentJobId); if (!jobId) return;
+            var buildings = (appData.buildings || []).filter(function(b) { return b.jobId === jobId; });
+            var selNames = Object.keys(_mxPhaseSel).filter(function(n) { return _mxPhaseSel[n]; });
+            if (!selNames.length) return;
+            var selBldgIds = buildings.filter(function(b) { return _mxSel[b.id]; }).map(function(b) { return b.id; });
+            var targetIds = selBldgIds.length ? selBldgIds : buildings.map(function(b) { return b.id; });
+            if (!targetIds.length) return;
+            selNames.forEach(function(name) { spreadPhaseCore(jobId, name, targetIds); });
+            _mxPhaseSel = {}; // clear phase selection after linking (keep building ticks)
+            var host = el && el.closest ? el.closest('.phase-matrix-host') : document.querySelector('.phase-matrix-host');
+            commitMatrixChange(jobId, host);
+        }
+        window.onPhaseMatrixLinkSelected = onPhaseMatrixLinkSelected;
 
         function recomputePhaseMatrixTotals(input, jobId) {
             var table = input.closest('table'); if (!table) return;
