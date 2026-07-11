@@ -192,6 +192,18 @@ body.light-mode .ng-del-cancel:hover{background:#e5e7eb}
 .ng-insp-coll-hdr.ng-open::before{transform:rotate(90deg)}
 .ng-insp-coll-body{padding-top:6px}
 .ng-insp-sublabel{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ng-dim);margin:0 0 5px}
+/* Command Center — KPI ribbon + attention band (right inspector overview) */
+.ng-insp-kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--ng-border2);border:1px solid var(--ng-border2);border-radius:10px;overflow:hidden;margin:0 0 10px}
+.ng-kpi{background:var(--ng-surface2);padding:8px 8px 9px;min-width:0}
+.ng-kpi .k{display:block;font-size:8.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--ng-dim2);font-family:'Courier New',monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ng-kpi .v{display:block;font-family:'Courier New',monospace;font-size:13px;font-weight:700;margin-top:3px;line-height:1;color:var(--ng-text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ng-kpi .v.o{color:#f2a55c}.ng-kpi .v.r{color:#f77066}.ng-kpi .v.g{color:#35d0a5}.ng-kpi .v.b{color:#7fb0ff}
+.ng-insp-attn{display:flex;align-items:center;gap:9px;padding:9px 11px;border-radius:9px;border:1px solid rgba(247,112,102,.32);background:linear-gradient(180deg,rgba(247,112,102,.12),rgba(247,112,102,.03));margin:0 0 11px}
+.ng-insp-attn svg{width:15px;height:15px;color:#f77066;flex:none}
+.ng-insp-attn .at{font-size:11.5px;font-weight:600;color:#ffd7d3;line-height:1.25}
+.ng-insp-attn .as{font-family:'Courier New',monospace;font-size:9px;color:#f77066;letter-spacing:.04em;margin-top:1px}
+body.light-mode .ng-insp-attn{border-color:rgba(180,35,24,.35);background:linear-gradient(180deg,rgba(247,112,102,.14),rgba(247,112,102,.04))}
+body.light-mode .ng-insp-attn .at{color:#b42318}
 .ng-alloc-tbl{width:100%;border-collapse:collapse;font-size:11px}
 .ng-alloc-tbl th{font-size:9px;font-weight:600;text-transform:uppercase;letter-spacing:.03em;color:var(--ng-dim);text-align:right;padding:2px 3px;border-bottom:1px solid var(--ng-border2)}
 .ng-alloc-tbl th:nth-child(2){text-align:left}

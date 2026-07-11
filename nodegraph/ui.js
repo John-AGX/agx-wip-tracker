@@ -3059,6 +3059,7 @@ function renderInspector(){
     if(hdr) hdr.innerHTML='<span class="ng-insp-ic">'+ngIco('wip')+'</span> '+luEsc((_jb&&(_jb.title||_jb.name))||'Job Detail')+'<span class="ng-insp-type">Job</span>';
     renderInspectorJobDetail(body);
     refreshInspMetrics();   // always repaint tiles (job-detail build is keyed; numbers settle late)
+    refreshInspKpis();      // + KPI ribbon / attention band (same late-settle reason)
   }
   // Hybrid inline-spawn (RS-A + RS-B): a single "+ Add" button (prepended) + per-type
   // grouped child lists (appended) so children can be spawned + browsed inline.
@@ -3101,6 +3102,46 @@ function refreshInspMetrics(){
 // Exposed so jobs.js can repaint the tiles after an inline card edit
 // changes the underlying WIP numbers.
 window.refreshInspMetrics = refreshInspMetrics;
+// Command Center KPI ribbon (Cost · Margin · Billed · AR) + a conditional
+// attention band. The leading job card already carries Contract + Profit + %,
+// so the ribbon adds the operational spread and flags trouble (negative margin,
+// unbilled earned work). Called every inspector render so late-settling
+// node-graph numbers land instead of freezing at the build-time snapshot.
+function refreshInspKpis(){
+  var host=document.getElementById('ng-insp-kpis'); if(!host) return;
+  var jid=E.job();
+  var w=(typeof window.getJobWIP==='function')?(window.getJobWIP(jid)||{}):{};
+  function sm(n){ n=Number(n)||0; var a=Math.abs(n),s=n<0?'-':''; if(a>=1e6)return s+'$'+(a/1e6).toFixed(1).replace(/\.0$/,'')+'M'; if(a>=1e3)return s+'$'+Math.round(a/1e3)+'k'; return s+'$'+Math.round(a); }
+  var cost=w.actualCosts||0;
+  var margin=(w.displayMargin!=null&&!isNaN(w.displayMargin))?w.displayMargin:0;
+  var earned=w.revenueEarned||0;
+  var billed=0, paid=0;
+  (appData.invoices||[]).forEach(function(iv){
+    if((iv.job_id||iv.jobId)!==jid) return;
+    var st=String(iv.status||'').toLowerCase();
+    if(st==='void'||st==='draft'||st==='cancelled') return;
+    billed+=Number(iv.total||iv.amount||0)||0;
+    paid+=Number(iv.amount_paid||iv.amountPaid||iv.paid||0)||0;
+  });
+  var ar=Math.max(0, billed-paid);
+  var tiles=[
+    {k:'Cost',v:sm(cost),c:'o'},
+    {k:'Margin',v:margin.toFixed(1)+'%',c:(margin<0?'r':'g')},
+    {k:'Billed',v:sm(billed),c:''},
+    {k:'AR',v:sm(ar),c:'b'}
+  ];
+  host.innerHTML=tiles.map(function(t){ return '<div class="ng-kpi"><span class="k">'+t.k+'</span><span class="v '+t.c+'">'+t.v+'</span></div>'; }).join('');
+  var attn=document.getElementById('ng-insp-attn-host'); if(attn){
+    var flags=[], subs=[];
+    if(margin<0){ flags.push('Margin negative'); subs.push('MARGIN '+margin.toFixed(1)+'%'); }
+    var unbilled=earned-billed;
+    if(unbilled>1000){ flags.push('Unbilled '+sm(unbilled)); subs.push('EARNED '+sm(earned)+' · BILLED '+sm(billed)); }
+    attn.innerHTML=flags.length
+      ? '<div class="ng-insp-attn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg><div><div class="at">'+flags.join(' · ')+'</div><div class="as">'+subs.join(' · ')+'</div></div></div>'
+      : '';
+  }
+}
+window.refreshInspKpis = refreshInspKpis;
 function renderInspectorJobDetail(body){
   var jid=E.job(); var jk='job:'+(jid||'');
   if(_inspJobKey===jk && body.querySelector('.ng-insp-jobdetail')) return;
@@ -3115,6 +3156,10 @@ function renderInspectorJobDetail(body){
   // sync) instead of freezing at the build-time snapshot.
   body.innerHTML='<div class="ng-insp-jobdetail">'+
     // (job headline now lives in the leading job card — inspectorJobCardHtml)
+    // Command Center: a financial KPI ribbon + a conditional attention band lead
+    // the body; both filled by refreshInspKpis() so late-settling numbers land.
+    '<div class="ng-insp-kpis" id="ng-insp-kpis"></div>'+
+    '<div id="ng-insp-attn-host"></div>'+
     '<div class="ng-insp-sec" id="insp-buildings"></div>'+
     '<div class="ng-insp-sec" id="insp-phases"></div>'+
     '<div class="ng-insp-sec" id="insp-jobcosts"></div>'+
@@ -3137,6 +3182,7 @@ function renderInspectorJobDetail(body){
     if(typeof window.renderJobPurchaseOrdersInto==='function') window.renderJobPurchaseOrdersInto(document.getElementById('insp-pos'),jid,'insp-po');
   }catch(e){ if(window.console) console.warn('inspector job-detail render failed', e); }
   refreshInspMetrics();   // first-paint fill
+  refreshInspKpis();      // first-paint KPI ribbon + attention band
 }
 
 // ── Job-Level Costs (overview panel) ───────────────────────────────
