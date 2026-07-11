@@ -3888,8 +3888,12 @@ function renderJobsMain() {
             // matrix; any background host shows the compact table instead.
             var _bldgs = (appData.buildings || []).filter(function(b) { return b.jobId === jobId; });
             var _ng = document.getElementById('nodeGraphTab');
-            var _ngLive = !!(_ng && _ng.offsetParent !== null && getComputedStyle(_ng).display !== 'none');
-            var _suppressMatrix = _ngLive && !(_ng && _ng.contains(container));
+            // Use ROUTE / element EXISTENCE, not offsetParent visibility: during the
+            // initial paint the classic overview renders before the node-graph overlay
+            // is laid out, so a visibility check would miss it and BOTH would draw the
+            // matrix. The pathname + #nodeGraphTab existence are known from first paint.
+            var _onMap = !!_ng || /job-site-map/i.test((location && location.pathname) || '');
+            var _suppressMatrix = _onMap && !(_ng && _ng.contains(container));
             if (_bldgs.length === 0 || _suppressMatrix) {
                 container.innerHTML = titleHTML + compactTable;
             } else {
