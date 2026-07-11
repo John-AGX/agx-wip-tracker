@@ -4004,12 +4004,39 @@ function renderJobsMain() {
             });
         }
 
+        // Collapse duplicate (phase, building) records for a job into one. The
+        // graph↔appData orphan-heal can leave a building with two records for the
+        // same phase — a $-carrying twin plus a $0 phantom — so a cell edit /
+        // spread writes one while the matrix's find() reads the other (B1 showing
+        // $0 while its money sits on the twin). Keep the richest rec (dollars then
+        // % complete), drop the rest. Returns the count removed. Mutates appData;
+        // callers persist when removed > 0.
+        function dedupePhaseRecords(jobId) {
+            var groups = {}, order = [];
+            (appData.phases || []).forEach(function(p) {
+                if (p.jobId !== jobId) return;
+                var k = (p.phase || 'Unnamed') + '|' + (p.buildingId || '__un__');
+                if (!groups[k]) { groups[k] = []; order.push(k); }
+                groups[k].push(p);
+            });
+            var dropIds = {}, removed = 0;
+            var val = function(r) { return r.asSoldRevenue || r.asSoldPhaseBudget || r.phaseBudget || 0; };
+            order.forEach(function(k) {
+                var arr = groups[k]; if (arr.length < 2) return;
+                arr.sort(function(a, b) { var d = val(b) - val(a); return d !== 0 ? d : (b.pctComplete || 0) - (a.pctComplete || 0); });
+                for (var i = 1; i < arr.length; i++) { dropIds[arr[i].id] = 1; removed++; }
+            });
+            if (removed) appData.phases = (appData.phases || []).filter(function(p) { return !dropIds[p.id]; });
+            return removed;
+        }
+
         // Selected building ids for the matrix multi-select ("Apply to selected").
         // Reset when the job changes so a stale selection can't leak across jobs.
         var _mxSel = {}, _mxPhaseSel = {}, _mxSelJob = null;
         function renderPhaseMatrixInto(container, jobId) {
             if (!container) return;
             if (_mxSelJob !== jobId) { _mxSel = {}; _mxPhaseSel = {}; _mxSelJob = jobId; }
+            dedupePhaseRecords(jobId); // self-heal orphan-twin phase records before painting
             var phases = (appData.phases || []).filter(function(p) { return p.jobId === jobId; });
             var buildings = (appData.buildings || []).filter(function(b) { return b.jobId === jobId; }).slice().sort(_bldgNumSort);
             var names = [];
@@ -4279,6 +4306,7 @@ function renderJobsMain() {
         // revenue/pct from its record (a bulk link touches many phases), save the
         // graph, then re-render the matrix + roll-up cards.
         function commitMatrixChange(jobId, host) {
+            dedupePhaseRecords(jobId); // collapse any orphan-twin recs so the heal persists
             if (typeof saveData === 'function') saveData();
             if (typeof NG !== 'undefined') {
                 try {
