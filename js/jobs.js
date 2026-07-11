@@ -3866,12 +3866,11 @@ function renderJobsMain() {
                 return summaryRow + body;
             }).join('');
 
-            // The Buildings × Phases matrix now folds in revenue/cost/profit/%
-            // per phase, so the legacy flat Phase table is only a fallback for
-            // jobs with NO buildings (where the matrix renders nothing).
-            var _bldgs = (appData.buildings || []).filter(function(b) { return b.jobId === jobId; });
-            var legacyTable = (_bldgs.length === 0)
-                ? ('<div style="border:1px solid var(--border,#333);border-radius:10px;overflow-x:auto;background:var(--card-bg,#141419);">' +
+            // Compact flat phase table (Phase / Instances / Rev / Cost / Profit /
+            // Avg%). Used for jobs with NO buildings (matrix renders nothing) AND
+            // as the non-duplicating stand-in in any background host — see below.
+            var compactTable =
+                '<div style="border:1px solid var(--border,#333);border-radius:10px;overflow-x:auto;background:var(--card-bg,#141419);">' +
                     '<table style="width:100%;border-collapse:collapse;table-layout:auto;">' +
                         '<thead style="background:var(--overlay-light,rgba(255,255,255,0.02));border-bottom:1px solid var(--border,#333);"><tr>' +
                             thCell('Phase', 'left') + thCell('Instances', 'right') + thCell('Revenue', 'right') +
@@ -3879,10 +3878,24 @@ function renderJobsMain() {
                         '</tr></thead>' +
                         '<tbody>' + rowsHTML + '</tbody>' +
                     '</table>' +
-                  '</div>')
-                : '';
-            container.innerHTML = titleHTML + '<div class="phase-matrix-host"></div>' + legacyTable;
-            try { renderPhaseMatrixInto(container.querySelector('.phase-matrix-host'), jobId); } catch (e) {}
+                '</div>';
+            // The wide Buildings × Phases matrix must render in ONE surface only.
+            // On the Site-Plan route the node-graph is a fixed full-screen overlay
+            // whose INSPECTOR (#insp-phases) shows the matrix — but the classic job
+            // overview (#job-overview-phases) is still mounted behind it and would
+            // render an identical second copy (double work + the dedupe/heal firing
+            // twice). So when the overlay is live, only hosts INSIDE it get the
+            // matrix; any background host shows the compact table instead.
+            var _bldgs = (appData.buildings || []).filter(function(b) { return b.jobId === jobId; });
+            var _ng = document.getElementById('nodeGraphTab');
+            var _ngLive = !!(_ng && _ng.offsetParent !== null && getComputedStyle(_ng).display !== 'none');
+            var _suppressMatrix = _ngLive && !(_ng && _ng.contains(container));
+            if (_bldgs.length === 0 || _suppressMatrix) {
+                container.innerHTML = titleHTML + compactTable;
+            } else {
+                container.innerHTML = titleHTML + '<div class="phase-matrix-host"></div>';
+                try { renderPhaseMatrixInto(container.querySelector('.phase-matrix-host'), jobId); } catch (e) {}
+            }
         }
 
         // ── Buildings × Phases matrix — the job-first budget breakdown ──────
