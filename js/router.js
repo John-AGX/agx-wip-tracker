@@ -27,7 +27,10 @@
 //                                     serialized — a relaunch/session-restore
 //                                     must not reopen an edit form)
 //   /subs                             subs/vendors directory
-//   /subs/:subId                      sub editor modal open
+//   /subs/:subId                      legacy — replays to the subs directory
+//                                     (the sub editor is transient and not
+//                                     URL-addressable; no read-only sub view
+//                                     exists yet to deep-link into)
 //   /schedule
 //   /insights
 //   /admin
@@ -306,13 +309,9 @@
           ? window.p86ClientDossier.getOpenId() : null;
         if (dossOpen && cid) { route.estSub = 'clients'; route.clientId = cid; return route; }
       }
-      if (estSub === 'subs') {
-        // Sub directory modal — built on the fly with id=subDirModal,
-        // we stash the open sub's id on the modal element via dataset.
-        var subModal = document.getElementById('subDirModal');
-        var subId = subModal && subModal.dataset ? subModal.dataset.subId : null;
-        if (subModal && subId) { route.estSub = 'subs'; route.subId = subId; return route; }
-      }
+      // Subs: the editor modal is intentionally NOT captured (same relaunch
+      // trap as the client editor — a session restore must not reopen an
+      // edit form). The URL stays /subs while the editor is up.
       if (estSub && KNOWN_EST_SUBS.indexOf(estSub) !== -1) route.estSub = estSub;
     } else if (top === 'admin') {
       var adEl = document.querySelector('[data-admin-subtab].active');
@@ -498,10 +497,10 @@
           // Deep-link replays into the read-only dossier, never the editor.
           var origOpenClient = window.openClientDashboard.__p86RouterOrig || window.openClientDashboard;
           origOpenClient(route.clientId);
-        } else if (route.top === 'estimates' && route.estSub === 'subs' && route.subId &&
-                   window.p86Subs && typeof window.p86Subs.openEdit === 'function') {
-          var origOpenSub = window.p86Subs.openEdit.__p86RouterOrig || window.p86Subs.openEdit;
-          origOpenSub(route.subId);
+        } else if (route.top === 'estimates' && route.estSub === 'subs' && route.subId) {
+          // Legacy /subs/:id link — land on the directory, clean the URL.
+          // Deliberately does NOT open the sub editor (relaunch trap).
+          try { history.replaceState({ route: { top: 'estimates', estSub: 'subs' } }, '', '/subs'); } catch (e) {}
         } else if (route.top === 'admin' && route.adSub === 'agents') {
           // Three drill-downs share /admin/agents — pick the right one
           // by which route field is set, then call switchAgentsView for
