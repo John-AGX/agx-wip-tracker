@@ -1976,6 +1976,31 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_assembly_items_child ON assembly_items(child_assembly_id)
       WHERE child_assembly_id IS NOT NULL;
 
+    -- Tuning Center: rationale = the documented WHY behind a row's rates
+    -- ("2 coats ÷ ~180 SF/gal effective on knockdown"). Prices prove
+    -- themselves from purchase history; rates need a written reason.
+    ALTER TABLE assembly_items ADD COLUMN IF NOT EXISTS rationale TEXT;
+
+    -- Every recipe change is evidence: old→new per field, who/why, and
+    -- an evidence blob (for flywheel suggestions: the observed data that
+    -- justified it). This log doubles as training data for the model
+    -- program — approved/dismissed suggestions become examples.
+    CREATE TABLE IF NOT EXISTS assembly_tuning_log (
+      id SERIAL PRIMARY KEY,
+      organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE,
+      assembly_id INTEGER NOT NULL REFERENCES assemblies(id) ON DELETE CASCADE,
+      item_desc TEXT,                        -- which recipe row (display identity)
+      field TEXT NOT NULL,                   -- qty_per_unit | unit_cost | waste_pct | rationale | header | items | created
+      old_value TEXT,
+      new_value TEXT,
+      reason TEXT,                           -- the human/agent's why
+      evidence JSONB,                        -- flywheel: observed data behind a suggestion
+      source TEXT NOT NULL DEFAULT 'manual', -- manual | 86 | scribe | flywheel | seed
+      changed_by INTEGER REFERENCES users(id),
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_asm_tuning_assembly ON assembly_tuning_log(assembly_id, created_at DESC);
+
     -- Cost Inbox — field-captured cost receipts (photo + amount + cost code),
     -- attached to a JOB or a LEAD (lead = pre-sale / pursuit cost). Distinct
     -- from material_purchases (that's the Home-Depot CSV-history import). The

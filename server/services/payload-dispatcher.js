@@ -301,7 +301,8 @@ const PAYLOAD_OPS_SCHEMAS = Object.freeze({
     //   child_assembly_id?, description?, qty_per_unit (per 1 output unit),
     //   unit?, unit_cost? (null on material rows = live catalog price),
     //   cost_code?, waste_pct? }
-    allowedTopKeys: new Set(['op', 'fields', 'items']),
+    // 'reason' — the agent's stated why; lands in assembly_tuning_log.
+    allowedTopKeys: new Set(['op', 'fields', 'items', 'reason']),
   },
 });
 
@@ -2631,6 +2632,12 @@ async function dispatchAssembly(dbClient, target, refTable, ctx) {
   const orgId = ctx.organizationId;
   const opType = ops.op || (target.entity_id ? 'update' : 'create');
 
+  const tuneOpts = {
+    userId: ctx.userId || null,
+    source: (ctx.sourceAgent === 'scribe' || ctx.emittingAgentKey === 'scribe') ? 'scribe' : '86',
+    reason: ops.reason ? String(ops.reason).slice(0, 500) : null,
+  };
+
   if (opType === 'create') {
     const fields = ops.fields || {};
     let id;
@@ -2638,9 +2645,13 @@ async function dispatchAssembly(dbClient, target, refTable, ctx) {
       id = await asmSvc.createAssembly(dbClient, orgId, fields, ctx.userId || null);
     } catch (ve) { throw new Error('assembly.create: ' + ve.message); }
     if (Array.isArray(ops.items) && ops.items.length) {
-      const err = await asmSvc.replaceItems(dbClient, id, ops.items, orgId);
+      const err = await asmSvc.replaceItems(dbClient, id, ops.items, orgId, tuneOpts);
       if (err) throw new Error('assembly.create items: ' + err);
     }
+    try {
+      await asmSvc.logTuning(dbClient, orgId, id,
+        [{ field: 'created', new_value: (fields.name || '') + ' (' + ((ops.items || []).length) + ' items)' }], tuneOpts);
+    } catch (e) { /* log only */ }
     if (isRef(target.entity_id)) refTable[target.entity_id] = id;
     return {
       entity_type: 'assembly', entity_id: id, op: 'create',
@@ -2664,7 +2675,7 @@ async function dispatchAssembly(dbClient, target, refTable, ctx) {
       changes.push({ field: 'header', after: Object.keys(ops.fields).join(', ') });
     }
     if (Array.isArray(ops.items)) {
-      const err = await asmSvc.replaceItems(dbClient, asmId, ops.items, orgId);
+      const err = await asmSvc.replaceItems(dbClient, asmId, ops.items, orgId, tuneOpts);
       if (err) throw new Error('assembly.update items: ' + err);
       changes.push({ field: 'items', after: ops.items.length + ' recipe row(s) (full replace)' });
     }

@@ -35,6 +35,9 @@
   function cdel(path) {
     return fetch(path, { method: 'DELETE', headers: authHeaders(false), credentials: 'same-origin' }).then(parseRes);
   }
+  function cput(path, body) {
+    return fetch(path, { method: 'PUT', headers: authHeaders(true), credentials: 'same-origin', body: JSON.stringify(body || {}) }).then(parseRes);
+  }
 
   function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
@@ -108,6 +111,7 @@
         // (anthropic/email/btmapping/settings) mount the existing
         // host-parameterized admin.js renderers — single source of truth.
         '<div id="cc-overview"  class="cc-section" style="display:none;"></div>' +
+        '<div id="cc-assemblies" class="cc-section" style="display:none;"></div>' +
         '<div id="cc-metrics"   class="cc-section" style="display:none;"></div>' +
         '<div id="cc-tenants"   class="cc-section" style="display:none;"></div>' +
         '<div id="cc-audit"     class="cc-section" style="display:none;"></div>' +
@@ -124,12 +128,13 @@
   }
 
   // The platform sub-views, in sidebar order.
-  var CONSOLE_VIEWS = ['overview', 'metrics', 'tenants', 'audit', 'anthropic', 'email', 'btmapping', 'settings', 'danger'];
+  var CONSOLE_VIEWS = ['overview', 'assemblies', 'metrics', 'tenants', 'audit', 'anthropic', 'email', 'btmapping', 'settings', 'danger'];
 
   // Each view's loader. The system-service views mount the existing
   // host-parameterized admin.js renderers (re-runs fresh each visit).
   function loadConsoleView(view) {
     if (view === 'overview') return loadOverview();
+    if (view === 'assemblies') return loadAssemblyTuning();
     if (view === 'metrics') return loadMetrics();
     if (view === 'tenants') return loadTenants();
     if (view === 'audit') return loadAudit();
@@ -191,6 +196,246 @@
   }
   function errBox(where, e) {
     return '<div style="padding:14px;color:var(--danger,#e66);font-size:12.5px;">Couldn\'t load ' + esc(where) + ': ' + esc((e && e.message) || e) + '</div>';
+  }
+
+  // ── Assembly Tuning Center — Cost Intelligence ─────────────────────
+  // Every number shows its work: component costs render as derivation
+  // chains (price × rate × waste), each factor expandable to its proof —
+  // purchase history for prices, written rationale for rates. Edits save
+  // with a reason and land in assembly_tuning_log (the flywheel's
+  // training trail).
+  var _asmT = { ov: null, sel: null, det: null, open: {} };
+
+  function loadAssemblyTuning() {
+    var el = document.getElementById('cc-assemblies');
+    if (!el) return;
+    el.innerHTML = sectionTitle('⚙ Assembly Tuning Center') + '<div style="color:var(--text-dim,#888);font-size:12px;padding:4px;">Loading…</div>';
+    cget('/api/assemblies/tuning/overview').then(function (d) {
+      _asmT.ov = d;
+      if (!_asmT.sel && d.queue && d.queue.length) _asmT.sel = d.queue[0].id;
+      paintAsmTuning();
+      if (_asmT.sel) loadAsmDetail(_asmT.sel);
+    }).catch(function (e) { el.innerHTML = errBox('assembly tuning', e); });
+  }
+
+  function loadAsmDetail(id) {
+    _asmT.sel = id; _asmT.det = null; _asmT.open = {};
+    paintAsmTuning();
+    cget('/api/assemblies/' + id + '/tuning').then(function (d) {
+      _asmT.det = d;
+      paintAsmTuning();
+    }).catch(function (e) {
+      var ws = document.getElementById('cc-asm-ws');
+      if (ws) ws.innerHTML = errBox('assembly detail', e);
+    });
+  }
+
+  function asmFlags(q) {
+    var f = [];
+    if (q.flags.drift_items) f.push('<span style="font-size:8.5px;font-weight:700;padding:1px 6px;border-radius:7px;background:rgba(247,112,102,.14);color:#f77066;">DRIFT×' + q.flags.drift_items + '</span>');
+    if (q.flags.seed_untuned) f.push('<span style="font-size:8.5px;font-weight:700;padding:1px 6px;border-radius:7px;background:rgba(242,165,92,.14);color:#f2a55c;">SEED</span>');
+    if (q.flags.unlinked_items) f.push('<span style="font-size:8.5px;font-weight:700;padding:1px 6px;border-radius:7px;background:rgba(167,139,250,.14);color:#a78bfa;">' + q.flags.unlinked_items + ' UNLINKED</span>');
+    if (!f.length) f.push('<span style="font-size:8.5px;font-weight:700;padding:1px 6px;border-radius:7px;background:rgba(74,222,128,.12);color:#4ade80;">OK</span>');
+    return f.join(' ');
+  }
+
+  function paintAsmTuning() {
+    var el = document.getElementById('cc-assemblies');
+    if (!el || !_asmT.ov) return;
+    var s = _asmT.ov.stats || {};
+    var tile = function (n, label, color) {
+      return '<div style="flex:1;min-width:110px;background:var(--panel,#1c1c22);border:1px solid var(--border,#33333a);border-radius:10px;padding:10px 12px;">' +
+        '<div style="font-size:20px;font-weight:700;font-family:Consolas,monospace;color:' + (color || 'var(--text,#e8e8ea)') + ';">' + n + '</div>' +
+        '<div style="font-size:9.5px;text-transform:uppercase;letter-spacing:.06em;color:var(--text-dim,#9a9aa2);margin-top:2px;">' + label + '</div></div>';
+    };
+    var queueHtml = (_asmT.ov.queue || []).map(function (q) {
+      var sel = q.id === _asmT.sel;
+      return '<div data-asmt-sel="' + q.id + '" style="padding:8px 9px;border-radius:8px;cursor:pointer;margin-bottom:4px;border:1px solid ' + (sel ? 'rgba(79,140,255,.4)' : 'transparent') + ';background:' + (sel ? 'rgba(79,140,255,.08)' : 'transparent') + ';">' +
+        '<div style="font-size:12px;font-weight:600;">🧩 ' + esc(q.name) + '</div>' +
+        '<div style="font-size:10px;color:var(--text-dim,#9a9aa2);margin-top:2px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">' +
+          '<span style="font-family:Consolas,monospace;">$' + (Number(q.unit_cost) || 0).toFixed(2) + '/' + esc(q.unit || 'EA') + '</span>' + asmFlags(q) +
+        '</div></div>';
+    }).join('');
+
+    el.innerHTML = sectionTitle('⚙ Assembly Tuning Center', ghostBtn('↻ Refresh', 'data-asmt-refresh')) +
+      '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;">' +
+        tile(s.total || 0, 'Assemblies') +
+        tile(s.seed_untuned || 0, 'Seed — never tuned', s.seed_untuned ? '#f2a55c' : null) +
+        tile(s.drift || 0, 'Price drift >10%', s.drift ? '#f77066' : null) +
+        tile(s.unlinked_items || 0, 'Items not catalog-linked', s.unlinked_items ? '#a78bfa' : null) +
+        tile(s.suggestions || 0, 'Suggestions (flywheel — T4)', '#4fd1c5') +
+      '</div>' +
+      '<div style="display:grid;grid-template-columns:290px 1fr;gap:12px;align-items:start;">' +
+        '<div style="background:var(--panel,#1c1c22);border:1px solid var(--border,#33333a);border-radius:10px;padding:8px;max-height:70vh;overflow:auto;">' +
+          '<div style="font-size:9.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-dim,#9a9aa2);padding:2px 6px 8px;">Tuning queue — worst first</div>' +
+          (queueHtml || '<div style="padding:12px;color:var(--text-dim,#888);font-size:12px;">No assemblies yet.</div>') +
+        '</div>' +
+        '<div id="cc-asm-ws" style="background:var(--panel,#1c1c22);border:1px solid var(--border,#33333a);border-radius:10px;padding:14px;min-height:200px;">' +
+          (_asmT.det ? asmWorkspaceHtml(_asmT.det) : '<div style="color:var(--text-dim,#888);font-size:12px;">Loading recipe…</div>') +
+        '</div>' +
+      '</div>';
+
+    el.querySelectorAll('[data-asmt-sel]').forEach(function (r) {
+      r.addEventListener('click', function () { loadAsmDetail(Number(r.dataset.asmtSel)); });
+    });
+    var rf = el.querySelector('[data-asmt-refresh]');
+    if (rf) rf.addEventListener('click', loadAssemblyTuning);
+    if (_asmT.det) wireAsmWorkspace(el);
+  }
+
+  function asmItemPerUnit(it) {
+    var eff = (it.unit_cost != null && it.unit_cost !== '') ? Number(it.unit_cost)
+      : (it.child ? Number(it.child.unit_cost) : (it.live_unit_cost != null ? Number(it.live_unit_cost) : null));
+    if (eff == null) return null;
+    return eff * (Number(it.qty_per_unit) || 0) * (1 + (Number(it.waste_pct) || 0) / 100);
+  }
+
+  function asmWorkspaceHtml(d) {
+    var a = d.assembly;
+    var html = '<div style="display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;">' +
+      '<div style="font-size:15px;font-weight:700;">🧩 ' + esc(a.name) + '</div>' +
+      '<div style="font-family:Consolas,monospace;font-size:14px;color:#4fd1c5;font-weight:700;">$' + (Number(a.unit_cost) || 0).toFixed(2) + ' / ' + esc(a.unit || 'EA') + '</div>' +
+      (a.incomplete ? '<span style="color:#f2a55c;font-size:11px;">⚠ has unpriced items</span>' : '') +
+    '</div>' +
+    '<div style="font-size:11px;color:var(--text-dim,#9a9aa2);margin:3px 0 14px;">' +
+      esc(a.code || '') + (a.trade ? ' · ' + esc(a.trade) : '') + ' · ' + esc(a.source || 'manual') +
+      ' · used on <b>' + (d.usage.estimate_count || 0) + ' estimate(s)</b>' +
+      (d.usage.quoted_total ? ' ($' + Number(d.usage.quoted_total).toLocaleString(undefined, { maximumFractionDigits: 0 }) + ' quoted)' : '') +
+    '</div>' +
+    '<div style="font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-dim,#9a9aa2);margin-bottom:8px;">Component derivations — click a row for proofs + tuning</div>';
+
+    (d.items || []).forEach(function (it, i) {
+      var per = asmItemPerUnit(it);
+      var open = !!_asmT.open[i];
+      var priceTxt, priceKind;
+      if (it.kind === 'assembly' && it.child) {
+        priceTxt = '$' + Number(it.child.unit_cost).toFixed(2) + '/' + esc(it.child.unit || 'EA') + ' — sub-assembly';
+        priceKind = 'sub';
+      } else if (it.unit_cost != null && it.unit_cost !== '') {
+        priceTxt = '$' + Number(it.unit_cost).toFixed(2) + '/' + esc(it.unit || 'EA') + ' — ' + (it.material_id ? 'FROZEN (live is $' + (it.live_unit_cost != null ? Number(it.live_unit_cost).toFixed(2) : '?') + ')' : 'manual rate');
+        priceKind = it.material_id ? 'frozen' : 'manual';
+      } else if (it.price_proof) {
+        priceTxt = '$' + (it.price_proof.last != null ? Number(it.price_proof.last).toFixed(2) : '—') + '/' + esc(it.unit || 'EA') + ' — catalog live';
+        priceKind = 'live';
+      } else {
+        priceTxt = 'UNPRICED';
+        priceKind = 'none';
+      }
+      var pc = priceKind === 'live' ? '#4fd1c5' : priceKind === 'frozen' ? '#f2a55c' : priceKind === 'manual' ? '#7eb0ff' : priceKind === 'sub' ? '#a78bfa' : '#f77066';
+      html += '<div style="border:1px solid var(--border,#33333a);border-radius:9px;margin-bottom:7px;overflow:hidden;">' +
+        '<div data-asmt-row="' + i + '" style="display:flex;align-items:center;gap:9px;padding:8px 11px;cursor:pointer;background:rgba(255,255,255,.02);">' +
+          '<span style="color:#4f8cff;">' + (open ? '▾' : '▸') + '</span>' +
+          '<span style="flex:1;font-size:12px;font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(it.description || '(item)') +
+            (it.material_id ? ' <span title="catalog-linked" style="font-size:10px;">🔗</span>' : '') + '</span>' +
+          '<span style="font-family:Consolas,monospace;font-size:12.5px;color:#4fd1c5;font-weight:700;">' + (per != null ? '$' + per.toFixed(3) : '—') + ' /' + esc(a.unit || 'EA') + '</span>' +
+        '</div>' +
+        '<div style="padding:6px 12px 8px 30px;font-family:Consolas,monospace;font-size:11px;border-top:1px solid rgba(255,255,255,.04);color:var(--text-dim,#9a9aa2);">' +
+          '<span style="color:' + pc + ';">' + esc(priceTxt) + '</span>' +
+          ' <span>×</span> <span style="color:#7eb0ff;">' + (Number(it.qty_per_unit) || 0) + ' ' + esc(it.unit || '') + '/' + esc(a.unit || 'EA') + '</span>' +
+          ((Number(it.waste_pct) || 0) > 0 ? ' <span>×</span> <span style="color:#f2a55c;">1.' + String(Math.round(Number(it.waste_pct))).padStart(2, '0') + ' waste</span>' : '') +
+          ' <span>=</span> <b style="color:var(--text,#e8e8ea);">' + (per != null ? '$' + per.toFixed(3) : '—') + '</b>' +
+        '</div>';
+      if (open) html += asmProofHtml(d, it, i);
+      html += '</div>';
+    });
+
+    html += '<div style="border:1px dashed rgba(167,139,250,.4);border-radius:10px;padding:9px 13px;font-size:11px;color:#a78bfa;margin:14px 0;">🔮 Flywheel suggestions land here (T4): observed GAL/SF + HR/SF from job receipts &amp; QB actuals vs these assumptions — evidence-backed, always human-approved, every verdict a training example.</div>';
+
+    html += '<div style="font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-dim,#9a9aa2);margin:14px 0 6px;">Tuning log</div>';
+    if (!(d.log || []).length) {
+      html += '<div style="font-size:11.5px;color:var(--text-dim,#888);">No changes logged yet — the trail starts with the next save.</div>';
+    } else {
+      d.log.forEach(function (l) {
+        var when = l.created_at ? new Date(l.created_at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+        var delta = l.field === 'created' ? ('created — ' + esc(l.new_value || ''))
+          : l.field === 'items' ? (esc(l.item_desc || '') + ' ' + esc(l.new_value || ''))
+          : esc(l.item_desc || '') + ' · ' + esc(l.field) + ' <span style="font-family:Consolas,monospace;"><span style="color:#f77066;text-decoration:line-through;">' + esc(l.old_value == null ? '—' : l.old_value) + '</span> → <span style="color:#4ade80;">' + esc(l.new_value == null ? '—' : l.new_value) + '</span></span>';
+        html += '<div style="display:flex;gap:9px;padding:5px 2px;border-bottom:1px solid rgba(255,255,255,.04);font-size:11px;">' +
+          '<span style="color:var(--text-dim,#888);flex:0 0 100px;font-family:Consolas,monospace;font-size:10px;">' + esc(when) + '</span>' +
+          '<span style="color:#4f8cff;flex:0 0 66px;">' + esc(l.changed_by_name || l.source || '') + '</span>' +
+          '<span style="flex:1;">' + delta + (l.reason ? ' <span style="color:var(--text-dim,#888);">— "' + esc(l.reason) + '"</span>' : '') + '</span>' +
+        '</div>';
+      });
+    }
+    return html;
+  }
+
+  function asmProofHtml(d, it, i) {
+    var html = '<div style="background:rgba(0,0,0,.22);border-top:1px solid var(--border,#33333a);padding:10px 14px;font-size:11.5px;">';
+    if (it.price_proof) {
+      var pp = it.price_proof;
+      html += '<div style="font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-dim,#9a9aa2);margin-bottom:5px;">Price proof — ' + esc(pp.material_description || '') + '</div>';
+      if ((pp.purchases || []).length) {
+        html += '<table style="width:100%;border-collapse:collapse;font-size:10.5px;color:var(--text-dim,#9a9aa2);"><tr><th style="text-align:left;padding:2px 6px;">Date</th><th style="text-align:left;padding:2px 6px;">Store</th><th style="text-align:right;padding:2px 6px;">Qty</th><th style="text-align:right;padding:2px 6px;">Unit price</th></tr>' +
+          pp.purchases.map(function (p) {
+            return '<tr><td style="padding:2px 6px;">' + esc(String(p.purchase_date || '').slice(0, 10)) + '</td><td style="padding:2px 6px;">' + esc(p.store_number || '') + '</td><td style="text-align:right;padding:2px 6px;font-family:Consolas,monospace;">' + (Number(p.quantity) || 0) + '</td><td style="text-align:right;padding:2px 6px;font-family:Consolas,monospace;">$' + (Number(p.net_unit_price != null ? p.net_unit_price : p.unit_price) || 0).toFixed(2) + '</td></tr>';
+          }).join('') + '</table>';
+      } else {
+        html += '<div style="color:var(--text-dim,#888);">No purchase rows imported for this SKU yet.</div>';
+      }
+      html += '<div style="margin-top:5px;color:var(--text-dim,#9a9aa2);">last <span style="font-family:Consolas,monospace;">$' + (pp.last != null ? Number(pp.last).toFixed(2) : '—') + '</span> · avg <span style="font-family:Consolas,monospace;">$' + (pp.avg != null ? Number(pp.avg).toFixed(2) : '—') + '</span>' +
+        (pp.trend_pct != null ? ' · <b style="color:' + (pp.trend_pct > 0 ? '#f77066' : '#4ade80') + ';">' + (pp.trend_pct > 0 ? '+' : '') + pp.trend_pct + '% vs avg</b>' : '') +
+        ' · price mode: <b>' + esc(pp.price_mode) + '</b></div>';
+    }
+    html += '<div style="font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-dim,#9a9aa2);margin:9px 0 4px;">Rate rationale — the written why</div>' +
+      '<div style="border-left:3px solid #4f8cff;background:rgba(79,140,255,.05);padding:7px 10px;border-radius:0 6px 6px 0;color:var(--text-dim,#9a9aa2);line-height:1.5;">' +
+        (it.rationale ? esc(it.rationale) : '<i>No rationale recorded — tune below and say why.</i>') +
+      '</div>' +
+      '<div style="font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-dim,#9a9aa2);margin:10px 0 5px;">Tune this row</div>' +
+      '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:7px;margin-bottom:7px;">' +
+        asmInp('Qty / unit', 'qty', i, it.qty_per_unit) +
+        asmInp('Unit cost (blank = live)', 'cost', i, it.unit_cost != null ? it.unit_cost : '') +
+        asmInp('Waste %', 'waste', i, it.waste_pct) +
+      '</div>' +
+      '<input data-asmt-f="rat" data-asmt-i="' + i + '" placeholder="Rationale — the why behind these rates…" value="' + esc(it.rationale || '') + '" style="width:100%;box-sizing:border-box;background:rgba(255,255,255,.05);border:1px solid var(--border,#33333a);border-radius:6px;padding:6px 8px;color:var(--text,#e8e8ea);font-size:11.5px;margin-bottom:7px;" />' +
+      '<div style="display:flex;gap:7px;align-items:center;">' +
+        '<input data-asmt-f="reason" data-asmt-i="' + i + '" placeholder="Reason for this change (goes in the log)…" style="flex:1;background:rgba(255,255,255,.05);border:1px solid var(--border,#33333a);border-radius:6px;padding:6px 8px;color:var(--text,#e8e8ea);font-size:11.5px;" />' +
+        btn('Save tune', 'data-asmt-save="' + i + '"') +
+      '</div>' +
+    '</div>';
+    return html;
+  }
+
+  function asmInp(label, f, i, val) {
+    return '<label style="display:flex;flex-direction:column;gap:3px;font-size:9px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-dim,#9a9aa2);">' + label +
+      '<input data-asmt-f="' + f + '" data-asmt-i="' + i + '" value="' + esc(val == null ? '' : val) + '" inputmode="decimal" style="background:rgba(255,255,255,.05);border:1px solid var(--border,#33333a);border-radius:6px;padding:5px 7px;color:var(--text,#e8e8ea);font-family:Consolas,monospace;font-size:11.5px;" /></label>';
+  }
+
+  function wireAsmWorkspace(el) {
+    el.querySelectorAll('[data-asmt-row]').forEach(function (r) {
+      r.addEventListener('click', function () {
+        var i = Number(r.dataset.asmtRow);
+        _asmT.open[i] = !_asmT.open[i];
+        paintAsmTuning();
+      });
+    });
+    el.querySelectorAll('[data-asmt-save]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var i = Number(b.dataset.asmtSave);
+        var get = function (f) { var inp = el.querySelector('[data-asmt-f="' + f + '"][data-asmt-i="' + i + '"]'); return inp ? inp.value : ''; };
+        var det = _asmT.det;
+        if (!det) return;
+        var items = det.items.map(function (it, idx) {
+          var row = {
+            kind: it.kind, material_id: it.material_id, child_assembly_id: it.child_assembly_id,
+            description: it.description, qty_per_unit: it.qty_per_unit, unit: it.unit,
+            unit_cost: it.unit_cost, cost_code: it.cost_code, waste_pct: it.waste_pct,
+            notes: it.notes, rationale: it.rationale,
+          };
+          if (idx === i) {
+            row.qty_per_unit = parseFloat(get('qty')) || row.qty_per_unit;
+            var c = get('cost');
+            row.unit_cost = (c === '' ? null : parseFloat(c));
+            row.waste_pct = parseFloat(get('waste')) || 0;
+            row.rationale = get('rat');
+          }
+          return row;
+        });
+        cput('/api/assemblies/' + det.assembly.id + '/items', { items: items, reason: get('reason') || null })
+          .then(function () { toast('Tuned — logged with reason'); loadAsmDetail(det.assembly.id); })
+          .catch(function (e) { toast('Save failed: ' + (e.message || 'unknown'), true); });
+      });
+    });
   }
 
   function loadOverview() {

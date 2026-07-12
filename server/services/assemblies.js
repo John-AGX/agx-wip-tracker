@@ -129,7 +129,33 @@ function shapeItem(it) {
     live_unit_cost: itemUnitCost(it),
     cost_code: it.cost_code || KIND_DEFAULT_CODE[it.kind] || 'materials',
     waste_pct: num(it.waste_pct), notes: it.notes || '',
+    rationale: it.rationale || '',
   };
+}
+
+// Display identity for a recipe row — used to match old↔new rows when
+// diffing a full-replace save into tuning-log entries.
+function itemKey(it) {
+  return [it.kind || 'material', it.material_id || '', it.child_assembly_id || '',
+          String(it.description || '').trim().toLowerCase()].join('|');
+}
+
+// Write tuning-log rows. entries: [{item_desc?, field, old_value?, new_value?, evidence?}]
+async function logTuning(db, orgId, assemblyId, entries, opts) {
+  opts = opts || {};
+  for (const e of entries) {
+    await db.query(
+      `INSERT INTO assembly_tuning_log
+         (organization_id, assembly_id, item_desc, field, old_value, new_value, reason, evidence, source, changed_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      [orgId, assemblyId, e.item_desc || null, e.field,
+       e.old_value != null ? String(e.old_value) : null,
+       e.new_value != null ? String(e.new_value) : null,
+       opts.reason || null,
+       e.evidence ? JSON.stringify(e.evidence) : null,
+       opts.source || 'manual', opts.userId || null]
+    );
+  }
 }
 
 // Header field whitelist for create/update.
@@ -174,9 +200,12 @@ async function updateHeader(db, orgId, assemblyId, header) {
 
 // Full-replace the recipe rows. Validates kinds, org ownership of linked
 // materials/children, and the cycle guard. Returns an error string or null.
-async function replaceItems(db, assemblyId, items, orgId) {
+// opts {userId, source, reason} — when present, the old→new field diffs are
+// written to assembly_tuning_log (the Tuning Center's evidence trail).
+async function replaceItems(db, assemblyId, items, orgId, opts) {
   const graph = await loadGraph(db, orgId);
   if (!graph.assemblies.get(assemblyId)) return 'Assembly not found';
+  const oldItems = (graph.itemsBy.get(assemblyId) || []).slice();
   for (const it of items) {
     const kind = String(it.kind || 'material');
     if (!KINDS.has(kind)) return `Bad kind "${kind}"`;
@@ -201,8 +230,8 @@ async function replaceItems(db, assemblyId, items, orgId) {
     await db.query(
       `INSERT INTO assembly_items
         (assembly_id, sort_order, kind, material_id, child_assembly_id, description,
-         qty_per_unit, unit, unit_cost, cost_code, waste_pct, notes)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+         qty_per_unit, unit, unit_cost, cost_code, waste_pct, notes, rationale)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
       [assemblyId, sort++, kind,
        kind === 'material' && it.material_id != null ? parseInt(it.material_id, 10) : null,
        kind === 'assembly' ? parseInt(it.child_assembly_id, 10) : null,
@@ -212,15 +241,49 @@ async function replaceItems(db, assemblyId, items, orgId) {
        it.unit_cost != null && it.unit_cost !== '' ? num(it.unit_cost) : null,
        COST_CODES.has(it.cost_code) ? it.cost_code : (KIND_DEFAULT_CODE[kind] || 'materials'),
        num(it.waste_pct) || 0,
-       it.notes != null ? String(it.notes).slice(0, 500) : null]
+       it.notes != null ? String(it.notes).slice(0, 500) : null,
+       it.rationale != null ? String(it.rationale).slice(0, 2000) : null]
     );
   }
   await db.query('UPDATE assemblies SET updated_at = NOW() WHERE id = $1', [assemblyId]);
+
+  // Diff old→new into the tuning log (best-effort — a log failure must
+  // never fail the save itself).
+  if (opts && (opts.userId || opts.source)) {
+    try {
+      const entries = [];
+      const oldBy = new Map();
+      oldItems.forEach((o) => oldBy.set(itemKey(o), o));
+      const seenKeys = new Set();
+      items.forEach((n) => {
+        const key = itemKey(n);
+        seenKeys.add(key);
+        const o = oldBy.get(key);
+        const desc = n.description || (o && (o.description || o.material_description)) || n.kind;
+        if (!o) {
+          entries.push({ item_desc: desc, field: 'items', new_value: '+ added' });
+          return;
+        }
+        [['qty_per_unit', num], ['unit_cost', (v) => (v == null || v === '' ? null : num(v))], ['waste_pct', num]].forEach(([f, cast]) => {
+          const ov = cast(o[f]); const nv = cast(n[f]);
+          if (String(ov) !== String(nv)) entries.push({ item_desc: desc, field: f, old_value: ov, new_value: nv });
+        });
+        const or = (o.rationale || '').trim(); const nr = (n.rationale || '').trim();
+        if (or !== nr && nr) entries.push({ item_desc: desc, field: 'rationale', old_value: or || null, new_value: nr });
+      });
+      oldItems.forEach((o) => {
+        if (!seenKeys.has(itemKey(o))) {
+          entries.push({ item_desc: o.description || o.material_description || o.kind, field: 'items', new_value: '− removed' });
+        }
+      });
+      if (entries.length) await logTuning(db, orgId, assemblyId, entries, opts);
+    } catch (e) { /* tuning log is observability, not correctness */ }
+  }
   return null;
 }
 
 module.exports = {
   KINDS, COST_CODES, SOURCES, KIND_DEFAULT_CODE, MAX_DEPTH,
   loadGraph, itemUnitCost, resolveCost, flatten, wouldCycle, shapeItem,
-  pickHeader, createAssembly, updateHeader, replaceItems,
+  pickHeader, createAssembly, updateHeader, replaceItems, logTuning,
 };
