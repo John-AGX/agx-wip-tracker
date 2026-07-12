@@ -1419,12 +1419,40 @@
 
   /** Recalculate all cells (simple multi-pass for dependency chains) */
   function recalcAll() {
-    // 3 passes handles most dependency depths
-    for (let pass = 0; pass < 3; pass++) {
-      Object.keys(grid.cells).forEach(key => {
-        const cell = grid.cells[key];
+    // WORKBOOK-WIDE recalc. Cross-sheet refs (`='903'!C22`) read other
+    // sheets' cell VALUES — the old active-sheet-only loop left never-
+    // activated sheets holding their raw formula strings as values, so
+    // an imported summary tab full of cross-refs evaluated to #ERR /
+    // garbage until every tab had been visited. Point the engine's
+    // active-grid context at each grid sheet in turn; grid.cells and the
+    // active sheet's cells are the SAME object, so results land in the
+    // sheets either way.
+    const saved = { cells: grid.cells, merges: grid.merges, rows: grid.rows, cols: grid.cols };
+    let sheetCtxs = [];
+    try {
+      sheetCtxs = (workbook && Array.isArray(workbook.sheets))
+        ? workbook.sheets.filter(function (s) {
+            return s && s.cells && (!s.kind || s.kind === 'grid') && !isEmbedSheet(s);
+          })
+        : [];
+    } catch (e) { sheetCtxs = []; }
+
+    const evalCellsOf = function (cells, merges, rows, cols) {
+      grid.cells = cells;
+      grid.merges = merges || [];
+      if (rows) grid.rows = rows;
+      if (cols) grid.cols = cols;
+      Object.keys(cells).forEach(key => {
+        const cell = cells[key];
         const result = evaluate(cell.raw);
-        if (typeof result === 'string' && (result === '#ERR' || result === '#DIV/0!')) {
+        const isErr = (typeof result === 'string' && (result === '#ERR' || result === '#DIV/0!'));
+        if (isErr && cell.importedValue != null) {
+          // Untouched imported formula the engine couldn't evaluate —
+          // fall back to Excel's cached result from the .xlsx (any user
+          // edit deletes importedValue, so this never masks live edits).
+          cell.value = cell.importedValue;
+          cell.error = null;
+        } else if (isErr) {
           cell.value = result;
           cell.error = result;
         } else {
@@ -1432,7 +1460,27 @@
           cell.error = null;
         }
       });
+    };
+
+    // One extra pass when multiple sheets exist — cross-sheet chains
+    // (summary → cluster totals → cluster rows) need values to settle in
+    // whatever order the tabs happen to sit.
+    const passes = sheetCtxs.length > 1 ? 4 : 3;
+    for (let pass = 0; pass < passes; pass++) {
+      if (sheetCtxs.length) {
+        sheetCtxs.forEach(function (s) { evalCellsOf(s.cells, s.merges, s.rows, s.cols); });
+        // Fresh unsaved edits can live in a grid.cells object that isn't
+        // (yet) any sheet's cells — evaluate those too.
+        const inSheets = sheetCtxs.some(function (s) { return s.cells === saved.cells; });
+        if (!inSheets) evalCellsOf(saved.cells, saved.merges, saved.rows, saved.cols);
+      } else {
+        evalCellsOf(saved.cells, saved.merges, saved.rows, saved.cols);
+      }
     }
+    grid.cells = saved.cells;
+    grid.merges = saved.merges;
+    grid.rows = saved.rows;
+    grid.cols = saved.cols;
   }
 
   // ── Cell → Job Field Linking ───────────────────────────────
@@ -2718,8 +2766,18 @@
         if (!cell) continue;
         const ourAddr = colLetter(c) + (r + 1);
         let raw;
+        let importedValue;
         if (cell.f) {
           raw = '=' + cell.f;
+          // Keep Excel's CACHED RESULT for the formula — correct display
+          // straight after import (before recalc), and recalcAll's
+          // fallback whenever our engine can't evaluate a function the
+          // file uses. Cleared on any user edit of the cell.
+          if (cell.v != null && typeof cell.v !== 'object') {
+            importedValue = cell.v;
+          } else if (cell.v instanceof Date) {
+            importedValue = cell.v.toISOString().slice(0, 10);
+          }
         } else if (cell.v instanceof Date) {
           raw = cell.v.toISOString().slice(0, 10);
         } else if (cell.v != null) {
@@ -2730,7 +2788,11 @@
         // (background fills) that we should preserve.
         const style = xlsxStyleToAgx(cell.s);
         if (raw == null && !style) continue;
-        const out = { raw: raw == null ? '' : raw, value: raw == null ? '' : raw };
+        const out = {
+          raw: raw == null ? '' : raw,
+          value: raw == null ? '' : (importedValue != null ? importedValue : raw)
+        };
+        if (importedValue != null) out.importedValue = importedValue;
         if (style) out.style = style;
         // Number format pass-through. Maps Excel format strings to
         // (fmt, decimals) so values render with the right family +
@@ -3952,6 +4014,7 @@
     const cell = getCell(r, c);
     pushUndo();
     cell.raw = raw;
+    delete cell.importedValue; // user edit — stop falling back to the imported cache
 
     td.contentEditable = false;
     td.classList.remove('ws-editing');
@@ -4551,6 +4614,7 @@
     if (!fill) return;
     var cell = getCell(r, c);
     cell.raw = fill.raw;
+    delete cell.importedValue; // fill overwrote the cell
     var srcCell = srcCells[fill.srcIndex] || srcCells[0];
     if (srcCell) {
       cell.fmt = srcCell.fmt != null ? srcCell.fmt : null;
@@ -5287,6 +5351,7 @@
           pushUndo();
           const cell = getCell(grid.selection.r, grid.selection.c);
           cell.raw = formulaBar.value.trim();
+          delete cell.importedValue; // user edit via formula bar
           grid.dirty = true;
           recalcAll();
           renderGrid();
@@ -5408,6 +5473,7 @@
         for (var fr = rng.r1 + 1; fr <= rng.r2; fr++) {
           var tgt = getCell(fr, fc);
           tgt.raw = adjustFormulaRefs(src.raw || '', fr - rng.r1, 0);
+          delete tgt.importedValue; // fill-down overwrote the cell
           tgt.fmt = src.fmt;
           tgt.style = JSON.parse(JSON.stringify(src.style || {}));
         }
@@ -6955,6 +7021,7 @@
         pushUndo();
         var tgt = getCell(r, c);
         tgt.raw = String(o);
+        delete tgt.importedValue; // dropdown pick overwrote the cell
         delete tgt.formula;
         grid.dirty = true;
         recalcAll();
@@ -8125,6 +8192,7 @@
             var pctVal = parseFloat(numTest.replace('%', ''));
             if (!isNaN(pctVal)) { cell.raw = String(pctVal / 100); cell.fmt = 'percent'; }
             else cell.raw = clean;
+            delete cell.importedValue; // paste overwrote the cell
           } else {
             var numVal = Number(numTest);
             if (numTest !== '' && !isNaN(numVal)) {
