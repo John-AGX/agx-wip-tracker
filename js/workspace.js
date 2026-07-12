@@ -1388,6 +1388,20 @@
         }
       );
 
+      // Same-sheet RANGES: register `A1:B10` exactly like cross-sheet
+      // ranges BEFORE the bare-ref pass below — that pass rewrites each
+      // endpoint to its value ("SUM(C4:C19)" → "SUM(0:14)"), which broke
+      // every same-sheet range function (SUM/AVG/COUNT/VLOOKUP/…). The
+      // __XR token is underscore-bounded so the bare-ref regex leaves it
+      // alone; getRangeValues/getRangeCells/getRange2D resolve tokens
+      // first. grid.cells is the sheet under evaluation (recalcAll
+      // repoints it per sheet), so a pseudo-sheet wrapper is enough.
+      resolved = resolved.replace(/\b([A-Z]+\d+):([A-Z]+\d+)\b/gi, function (match, a1, a2) {
+        var s = parseAddr(a1.toUpperCase()), e = parseAddr(a2.toUpperCase());
+        if (!s || !e) return match;
+        return registerXRange({ cells: grid.cells }, s.r, s.c, e.r, e.c);
+      });
+
       // Replace cell references with their numeric values
       resolved = resolved.replace(/\b([A-Z]+)(\d+)\b/gi, function (match, col, row) {
         var ref = parseAddr(match.toUpperCase());
