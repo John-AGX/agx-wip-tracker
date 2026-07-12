@@ -7,6 +7,7 @@
 // Matrix / Routes is a later slice).
 
 const NEARBY_URL = 'https://places.googleapis.com/v1/places:searchNearby';
+const TEXT_URL = 'https://places.googleapis.com/v1/places:searchText';
 
 function apiKey() { return process.env.GEOCODING_API_KEY || process.env.GOOGLE_MAPS_API_KEY || null; }
 function hasKey() { return !!apiKey(); }
@@ -19,26 +20,13 @@ function haversineMiles(lat1, lng1, lat2, lng2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-// Nearest place of a Places(New) type. Returns {name,address,lat,lng,miles},
-// null (none found), or {error} (API/network). Never throws.
-// opts.take: how many distance-ranked results to pull (default 1).
-// opts.preferName: regex — return the NEAREST result whose name matches,
-// falling back to the overall nearest. Needed because Google's 'hospital'
-// type includes clinics/health centers; the safety card must point at a
-// real hospital/ER, not whatever clinic happens to be closest.
-async function nearest(lat, lng, includedType, opts) {
-  opts = opts || {};
+// Shared Places(New) POST. Returns { list } or { error }. Never throws.
+async function placesPost(url, body) {
   const key = apiKey();
-  if (key == null || lat == null || lng == null) return { error: 'no_key_or_coords' };
-  const body = {
-    includedTypes: [includedType],
-    maxResultCount: Math.min(20, opts.take || 1),
-    rankPreference: 'DISTANCE',
-    locationRestriction: { circle: { center: { latitude: lat, longitude: lng }, radius: 50000 } }
-  };
+  if (key == null) return { error: 'no_key' };
   let r;
   try {
-    r = await fetch(NEARBY_URL, {
+    r = await fetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -54,12 +42,10 @@ async function nearest(lat, lng, includedType, opts) {
     return { error: msg };
   }
   let j; try { j = await r.json(); } catch (e) { return { error: 'bad_json' }; }
-  const list = (j && j.places) || [];
-  let p = list[0];
-  if (opts.preferName) {
-    const hit = list.find((x) => x && x.displayName && opts.preferName.test(x.displayName.text || ''));
-    if (hit) p = hit;
-  }
+  return { list: (j && j.places) || [] };
+}
+
+function shape(p, lat, lng) {
   if (!p || !p.location) return null;
   const plat = p.location.latitude, plng = p.location.longitude;
   return {
@@ -70,15 +56,83 @@ async function nearest(lat, lng, includedType, opts) {
   };
 }
 
+// Nearest place of a Places(New) type. Returns {name,address,lat,lng,miles},
+// null (none found), or {error} (API/network). Never throws.
+// opts.take: how many distance-ranked results to pull (default 1).
+// opts.preferName: regex — return the NEAREST result whose name matches,
+// falling back to the overall nearest.
+async function nearest(lat, lng, includedType, opts) {
+  opts = opts || {};
+  if (lat == null || lng == null) return { error: 'no_coords' };
+  const out = await placesPost(NEARBY_URL, {
+    includedTypes: [includedType],
+    maxResultCount: Math.min(20, opts.take || 1),
+    rankPreference: 'DISTANCE',
+    locationRestriction: { circle: { center: { latitude: lat, longitude: lng }, radius: 50000 } }
+  });
+  if (out.error) return out;
+  let p = out.list[0];
+  if (opts.preferName) {
+    const hit = out.list.find((x) => x && x.displayName && opts.preferName.test(x.displayName.text || ''));
+    if (hit) p = hit;
+  }
+  return shape(p, lat, lng);
+}
+
+// ── "Nearest ER / hospital" triage ──────────────────────────────────
+// Google's 'hospital' place type is a grab bag: dialysis centers, clinics,
+// imaging labs, health centers all carry it. A jobsite safety card must
+// point at somewhere you'd actually drive a hurt crew member: a real
+// hospital, an ER, or an urgent care. Names that look like specialty /
+// outpatient facilities are excluded OUTRIGHT (no fallback to them).
+const HOSPITAL_POS = /(hospital|emergency|medical center|medical ctr|regional medical|urgent care|health system)/i;
+const HOSPITAL_NEG = /(dialysis|davita|fresenius|planned parenthood|surger|rehab|imaging|radiolog|dermatolog|oncolog|behavioral|psychiatric|hospice|nursing|assisted living|animal|veterinar|dental|orthodont|chiroprac|therapy|wellness|optometr|eye institute|eye center|foot|podiatr|fertility|weight loss|med spa)/i;
+
+function pickHospital(list) {
+  const nameOf = (p) => (p && p.displayName && p.displayName.text) || '';
+  return list.find((p) => HOSPITAL_POS.test(nameOf(p)) && !HOSPITAL_NEG.test(nameOf(p))) || null;
+}
+
+// Two-pass lookup: distance-ranked 'hospital' type scan filtered by name,
+// then a text search for an actual emergency room if the scan found only
+// specialty facilities. Returns shaped result, null, or {error}.
+async function nearestHospital(lat, lng) {
+  if (lat == null || lng == null) return { error: 'no_coords' };
+  const near = await placesPost(NEARBY_URL, {
+    includedTypes: ['hospital'],
+    maxResultCount: 20,
+    rankPreference: 'DISTANCE',
+    locationRestriction: { circle: { center: { latitude: lat, longitude: lng }, radius: 50000 } }
+  });
+  if (near.error) return near;
+  let p = pickHospital(near.list);
+
+  if (!p) {
+    // No credible hospital in the 20 nearest 'hospital'-typed places —
+    // ask for an ER by name instead (text search, still distance-ranked).
+    const txt = await placesPost(TEXT_URL, {
+      textQuery: 'hospital emergency room',
+      maxResultCount: 8,
+      rankPreference: 'DISTANCE',
+      locationBias: { circle: { center: { latitude: lat, longitude: lng }, radius: 50000 } }
+    });
+    if (!txt.error && txt.list.length) {
+      p = pickHospital(txt.list) || txt.list.find((x) => !HOSPITAL_NEG.test((x.displayName && x.displayName.text) || '')) || null;
+    }
+  }
+
+  // Last resort: nearest non-excluded place from the type scan. Never
+  // return an excluded name — "no result" beats "DaVita Dialysis".
+  if (!p) p = near.list.find((x) => !HOSPITAL_NEG.test((x.displayName && x.displayName.text) || '')) || null;
+  return shape(p, lat, lng);
+}
+
 async function nearbySafety(lat, lng) {
   const [hospital, fire] = await Promise.all([
-    nearest(lat, lng, 'hospital', {
-      take: 10,
-      preferName: /(hospital|medical center|emergency|regional medical|health system)/i
-    }),
+    nearestHospital(lat, lng),
     nearest(lat, lng, 'fire_station')
   ]);
   return { hospital, fire };
 }
 
-module.exports = { nearbySafety, nearest, haversineMiles, hasKey };
+module.exports = { nearbySafety, nearestHospital, nearest, haversineMiles, hasKey };
