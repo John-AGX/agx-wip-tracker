@@ -38,7 +38,7 @@
     // Browser tab title — refine the generic "Estimates | Project 86"
     // set by switchTab to the active subtab's specific label.
     if (typeof window.setPageTitle === 'function') {
-      var SUBTAB_TITLES = { leads: 'Leads', list: 'Estimates', clients: 'Clients', subs: 'Subs', users: 'Internal Users' };
+      var SUBTAB_TITLES = { leads: 'Leads', list: 'Estimates', clients: 'Clients', subs: 'Subs', assemblies: 'Assemblies', users: 'Internal Users' };
       window.setPageTitle(SUBTAB_TITLES[name] || 'Estimates');
     }
     if (name === 'leads') {
@@ -70,6 +70,12 @@
       // counts every time they reopen the tab.
       if (typeof renderSubsDirectory === 'function') renderSubsDirectory();
       if (window.p86Subs && typeof window.p86Subs.refresh === 'function') window.p86Subs.refresh();
+    }
+    else if (name === 'assemblies') {
+      // Assemblies — costed estimating recipes (js/assemblies.js).
+      if (window.p86Assemblies && typeof window.p86Assemblies.renderList === 'function') {
+        window.p86Assemblies.renderList();
+      }
     }
     else if (name === 'users') {
       // Internal Users directory — read-only coworker phonebook.

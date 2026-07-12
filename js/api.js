@@ -510,6 +510,27 @@
     importBatch: function(rows) { return post('/api/leads/import', { rows: rows }); }
   };
 
+  var assemblies = {
+    list: function(params) {
+      var qs = '';
+      if (params) {
+        var parts = [];
+        Object.keys(params).forEach(function(k) {
+          if (params[k] != null && params[k] !== '') {
+            parts.push(encodeURIComponent(k) + '=' + encodeURIComponent(params[k]));
+          }
+        });
+        if (parts.length) qs = '?' + parts.join('&');
+      }
+      return get('/api/assemblies' + qs);
+    },
+    get: function(id) { return get('/api/assemblies/' + encodeURIComponent(id)); },
+    create: function(payload) { return post('/api/assemblies', payload); },
+    update: function(id, payload) { return put('/api/assemblies/' + encodeURIComponent(id), payload); },
+    saveItems: function(id, items) { return put('/api/assemblies/' + encodeURIComponent(id) + '/items', { items: items }); },
+    remove: function(id) { return del('/api/assemblies/' + encodeURIComponent(id)); }
+  };
+
   var materials = {
     list: function(params) {
       var qs = '';
@@ -940,7 +961,7 @@
   window.p86Api = {
     get: get, put: put, post: post, del: del, patch: patch,
     fileFolders: fileFolders,
-    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, qbCosts: qbCosts, subs: subsApi, schedule: schedule, adminSms: adminSms, messages: messages, weather: weather, projects: projects, tasks: tasks, notes: notes, reminders: reminders, map: map, calendar: calendar, plans: plans, orgTags: orgTags, org: org, folderTemplates: folderTemplates, reports: reports, changeOrders: changeOrders, workflowItems: workflowItems, purchaseOrders: purchaseOrders, payApplications: payApplications, invoices: invoices, payments: payments, receipts: receipts, docImport: docImport, outlook: outlook, listViews: listViews,
+    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, assemblies: assemblies, qbCosts: qbCosts, subs: subsApi, schedule: schedule, adminSms: adminSms, messages: messages, weather: weather, projects: projects, tasks: tasks, notes: notes, reminders: reminders, map: map, calendar: calendar, plans: plans, orgTags: orgTags, org: org, folderTemplates: folderTemplates, reports: reports, changeOrders: changeOrders, workflowItems: workflowItems, purchaseOrders: purchaseOrders, payApplications: payApplications, invoices: invoices, payments: payments, receipts: receipts, docImport: docImport, outlook: outlook, listViews: listViews,
     isOffline: isOffline,
     isAuthenticated: function() { return !!getToken() && !isOffline(); }
   };

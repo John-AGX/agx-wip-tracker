@@ -69,7 +69,7 @@
   // /jobs/:id/job-wip transparently route to job-wip-report (the new
   // name for the WIP Report sub-tab inside a job).
   var LEGACY_JOB_SUB_REMAP = { 'job-wip': 'job-wip-report' };
-  var KNOWN_EST_SUBS = ['list', 'leads', 'clients', 'subs', 'users'];
+  var KNOWN_EST_SUBS = ['list', 'leads', 'clients', 'subs', 'assemblies', 'users'];
   // Canonical admin sub-tabs (per switchAdminSubTab in admin.js):
   //   users, roles, organization, agents, context, metrics, system.
   // The trailing legacy aliases (email / templates / jobs / materials /
@@ -110,6 +110,10 @@
     if (top === 'subs') {
       route.top = 'estimates'; route.estSub = 'subs';
       if (parts[1]) route.subId = parts[1];
+      return route;
+    }
+    if (top === 'assemblies') {
+      route.top = 'estimates'; route.estSub = 'assemblies';
       return route;
     }
     // /leads[/:id] — same pseudo-top-level treatment (IA-C). Leads reads
@@ -213,6 +217,7 @@
           ? '/subs/' + encodeURIComponent(route.subId)
           : '/subs';
       }
+      if (route.estSub === 'assemblies') return '/assemblies';
       // Leads surfaces at /leads[/:id] (IA-C) — first-class URL like
       // clients/subs above. parsePath still accepts the legacy
       // /estimates/leads/:id shape for old bookmarks.
@@ -420,6 +425,7 @@
         if (route.estSub === 'leads') virtual = 'leads';
         else if (route.estSub === 'clients') virtual = 'clients';
         else if (route.estSub === 'subs') virtual = 'subs';
+        else if (route.estSub === 'assemblies') virtual = 'assemblies';
         else if (route.estSub === 'users') virtual = 'users';
         else virtual = 'estimates';   // covers estSub='list' and undefined
         window.markVirtualTabActive(virtual);

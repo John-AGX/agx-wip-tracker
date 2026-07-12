@@ -644,6 +644,7 @@
                              shortcut. Internal Users remains popover/Admin-only. -->
                         <button class="tab-btn" data-tab="estimates" data-est-subtab="clients" data-virtual-tab="clients" data-p86-icon="id-card" data-cap="ESTIMATES_VIEW" title="Clients"><span class="app-nav-label">Clients</span></button>
                         <button class="tab-btn" data-tab="estimates" data-est-subtab="subs" data-virtual-tab="subs" data-p86-icon="subs" title="Subs / Vendors"><span class="app-nav-label">Subs / Vendors</span></button>
+                        <button class="tab-btn" data-tab="estimates" data-est-subtab="assemblies" data-virtual-tab="assemblies" data-p86-icon="estimates" data-cap="ESTIMATES_VIEW" title="Assemblies — costed recipes for estimating"><span class="app-nav-label">Assemblies</span></button>
                     </div>
                     <div class="app-nav-group">
                         <div class="app-nav-group-label">Company</div>
@@ -1460,6 +1461,7 @@
                         <button class="ws-right-tab" data-estimates-subtab="list" data-p86-icon="estimates" onclick="switchEstimatesSubTab('list')">Estimates</button>
                         <button class="ws-right-tab" data-estimates-subtab="clients" data-p86-icon="clients" onclick="switchEstimatesSubTab('clients')">Clients</button>
                         <button class="ws-right-tab" data-estimates-subtab="subs" data-p86-icon="subs" onclick="switchEstimatesSubTab('subs')">Subs</button>
+                        <button class="ws-right-tab" data-estimates-subtab="assemblies" data-p86-icon="estimates" onclick="switchEstimatesSubTab('assemblies')">Assemblies</button>
                         <button class="ws-right-tab" data-estimates-subtab="users" data-p86-icon="users" onclick="switchEstimatesSubTab('users')">Internal Users</button>
                     </div>
 
@@ -1715,6 +1717,21 @@
                     <!-- Subs sub-tab — first-class directory of subcontractors,
                          persisted server-side. Cross-job financials roll up via
                          the job_subs join table. -->
+                    <!-- Assemblies sub-tab — costed recipes for estimating.
+                         List + editor rendered by js/assemblies.js; the
+                         Materials drawer's 🧩 Assemblies mode inserts these
+                         into estimates. -->
+                    <div id="estimates-subtab-assemblies" class="estimates-subtab-content" style="display:none;">
+                        <div class="action-buttons">
+                            <button onclick="p86Assemblies.openEditor(null)" data-cap="ESTIMATES_EDIT" data-p86-icon="plus">New Assembly</button>
+                            <input id="assemblies-search" type="text" placeholder="Search assemblies…"
+                                   oninput="p86Assemblies.paintList()"
+                                   style="flex:1;max-width:320px;background:rgba(255,255,255,0.04);border:1px solid var(--border,#2a2f3a);border-radius:8px;padding:8px 12px;color:var(--text,#fff);font-size:13px;" />
+                            <span id="assemblies-summary" style="font-size:12px;color:var(--text-dim,#8a93a6);align-self:center;"></span>
+                        </div>
+                        <div id="assemblies-list" style="margin-top:12px;"></div>
+                    </div>
+
                     <div id="estimates-subtab-subs" class="estimates-subtab-content" style="display:none;">
                         <div class="action-buttons">
                             <button class="primary" onclick="window.p86Subs && window.p86Subs.openNew && window.p86Subs.openNew()">&#x1F477; New Sub</button>
@@ -3200,7 +3217,7 @@
     <script src="js/auth.js?v=19"></script>
     <script src="js/dialogs.js?v=2b"></script>
     <script src="js/geolocation.js?v=1"></script>
-    <script src="js/api.js?v=68"></script>
+    <script src="js/api.js?v=69"></script>
     <script src="js/header-weather.js?v=2"></script>
     <script src="js/account.js?v=7"></script>
     <script src="js/voice-input.js?v=11"></script>
@@ -3225,7 +3242,7 @@
         <div id="clientDashboard_body" style="padding:20px 22px;overflow-y:auto;flex:1;"></div>
       </div>
     </div>
-    <script src="js/clients.js?v=24"></script>
+    <script src="js/clients.js?v=25"></script>
     <script src="js/clients-dashboard.js?v=6"></script>
     <!-- Folder taxonomy — default folder structure per entity type
          (lead / estimate / job / client). Loads before subs.js and
@@ -3233,6 +3250,7 @@
          dropdown and the My Files tree. -->
     <script src="js/folder-taxonomy.js?v=2"></script>
     <script src="js/subs.js?v=12"></script>
+    <script src="js/assemblies.js?v=1"></script>
     <script src="js/job-audit.js?v=4c"></script>
     <script src="js/job-reports.js?v=1b"></script>
     <!-- Shared table enhancements (reorder / resize / freeze first column /
@@ -3338,13 +3356,13 @@
     <script src="js/rich-text.js?v=1"></script>
     <script src="js/estimates.js?v=53"></script>
     <script src="js/proposal.js?v=26"></script>
-    <script src="js/estimate-editor.js?v=73"></script>
+    <script src="js/estimate-editor.js?v=74"></script>
     <!-- Change Order editor — overlay opened from the job detail's
          Change Orders tab. Loads after pricing-pipeline (which it
          consumes via window.p86Pricing) and after api.js (which
          carries the window.p86Api.changeOrders wrapper). -->
     <script src="js/change-order-editor.js?v=6"></script>
-    <script src="js/materials-drawer.js?v=5"></script>
+    <script src="js/materials-drawer.js?v=6"></script>
     <script src="js/estimate-preview.js?v=15"></script>
     <script src="js/bt-export.js?v=6b"></script>
     <!-- Payload inline approval card (used by ai-panel.js). Must load
@@ -3365,7 +3383,7 @@
     <!-- URL router — pathname-based navigation. Loads last so all
          top-level nav functions (switchTab, editJob, etc.) exist
          before the router wraps them. -->
-    <script src="js/router.js?v=24"></script>
+    <script src="js/router.js?v=25"></script>
 
     <!-- Sidebar Recents — client-side recently-opened list. Loads after
          router.js + the entity-open modules so it can wrap editJob /

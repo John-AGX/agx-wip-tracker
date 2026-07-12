@@ -27,6 +27,8 @@
   var _lastResults = [];
   var _expandedRowId = null; // material_id of the row whose inline-add form is open
   var _activeSubgroup = 'materials'; // default filter chip
+  var _mode = 'materials';    // 'materials' | 'assemblies' — assemblies = costed recipes
+  var _lastAssemblies = [];   // assemblies-mode result cache
   var _favoritesOnly = false; // Phase 2 — Favorites filter chip toggle
   var _multiSelect = false;   // Phase 3 — multi-select mode toggle
   var _selectedIds = new Set(); // Phase 3 — material ids checked for bulk-add
@@ -211,6 +213,32 @@
     });
     chips.appendChild(favChip);
 
+    // Assemblies mode — costed recipes that explode into estimate lines.
+    // A mode switch, not another filter: while active the subgroup +
+    // favorites chips (materials-only concepts) dim out.
+    var asmChip = document.createElement('button');
+    asmChip.className = 'md-chip md-chip-asm';
+    asmChip.innerHTML = '&#x1F9E9; Assemblies';
+    asmChip.title = 'Costed recipes — insert a whole scope of work at once';
+    asmChip.addEventListener('click', function() {
+      _mode = _mode === 'assemblies' ? 'materials' : 'assemblies';
+      asmChip.classList.toggle('active', _mode === 'assemblies');
+      chips.querySelectorAll('.md-chip[data-subgroup], .md-chip-fav').forEach(function(c) {
+        c.style.opacity = _mode === 'assemblies' ? '0.35' : '';
+        c.style.pointerEvents = _mode === 'assemblies' ? 'none' : '';
+      });
+      var mb = root.querySelector('[data-md-multi]');
+      if (mb) mb.style.display = _mode === 'assemblies' ? 'none' : '';
+      _expandedRowId = null;
+      var input = root.querySelector('.md-search');
+      if (input) input.placeholder = _mode === 'assemblies'
+        ? 'Search assemblies by name, code, or trade…'
+        : 'Search description, SKU, or category…';
+      runSearch();
+      refreshTargetHint();
+    });
+    chips.appendChild(asmChip);
+
     _drawerEl = root;
     return root;
   }
@@ -224,6 +252,10 @@
                     window.estimateEditorAPI.activeAlternateName();
     if (!groupName) {
       hint.textContent = 'Adding to: — (no estimate open)';
+      return;
+    }
+    if (_mode === 'assemblies') {
+      hint.textContent = 'Adding to: ' + groupName + ' — exploded across sections by cost code';
       return;
     }
     var sectionLabel = SUBGROUP_TO_SECTION[_activeSubgroup] || 'Materials & Supplies';
@@ -273,6 +305,22 @@
     var resultsEl = _drawerEl.querySelector('.md-results');
     var q = (_drawerEl.querySelector('.md-search').value || '').trim();
     resultsEl.innerHTML = '<div class="md-empty">Loading…</div>';
+
+    if (_mode === 'assemblies') {
+      fetch('/api/assemblies' + (q ? '?q=' + encodeURIComponent(q) : ''), { credentials: 'include' })
+        .then(function(r) {
+          if (!r.ok) throw new Error('Assembly search failed (' + r.status + ')');
+          return r.json();
+        })
+        .then(function(payload) {
+          _lastAssemblies = Array.isArray(payload.assemblies) ? payload.assemblies : [];
+          renderAssemblyResults();
+        })
+        .catch(function(err) {
+          resultsEl.innerHTML = '<div class="md-empty md-error">' + escapeHTML(err.message) + '</div>';
+        });
+      return;
+    }
 
     // Phase 4 — empty-search default state shows what the PM has
     // recently put on an estimate (via the drawer or any other path
@@ -435,6 +483,157 @@
         submitAdd(material, form);
       });
     });
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // Assemblies mode — costed recipes. A row shows name/trade/unit cost
+  // per output unit; "+ Insert" expands a takeoff-qty form with an
+  // Exploded-lines (default) vs Single-line choice. Exploded = one
+  // estimate line per leaf item, routed to the Materials/Labor/GC/Subs
+  // section by cost code, each stamped sourceAssemblyId (+
+  // sourceMaterialId when the item is a catalog row).
+  // ──────────────────────────────────────────────────────────────────
+  function renderAssemblyResults() {
+    if (!_drawerEl) return;
+    var el = _drawerEl.querySelector('.md-results');
+    if (!_lastAssemblies.length) {
+      el.innerHTML = '<div class="md-empty">No assemblies yet. Build recipes on the Assemblies page (Directory &rarr; Assemblies), then insert them here.</div>';
+      return;
+    }
+    var html = _lastAssemblies.map(function(a) {
+      var expanded = _expandedRowId === ('a' + a.id);
+      var costTxt = a.incomplete
+        ? fmtMoney(a.unit_cost) + '+ <span title="Some items have no price yet">⚠</span>'
+        : fmtMoney(a.unit_cost);
+      var srcBadge = a.source && a.source !== 'manual'
+        ? '<span class="md-sku">' + escapeHTML(a.source) + '</span>' : '';
+      return '<div class="md-row' + (expanded ? ' expanded' : '') + '" data-aid="' + a.id + '">' +
+        '<div class="md-row-body">' +
+          '<div class="md-row-main">' +
+            '<div class="md-row-desc">&#x1F9E9; ' + escapeHTML(a.name) +
+              (a.code ? '<span class="md-sku">' + escapeHTML(a.code) + '</span>' : '') + srcBadge +
+            '</div>' +
+            '<div class="md-row-meta">' +
+              costTxt + ' / ' + escapeHTML(a.unit || 'EA') +
+              ' · ' + (a.item_count || 0) + ' item(s)' +
+              (a.trade ? ' · ' + escapeHTML(a.trade) : '') +
+            '</div>' +
+          '</div>' +
+          '<div class="md-row-actions">' +
+            '<button class="md-add-btn" data-asm-add="' + a.id + '">' + (expanded ? 'Cancel' : '+ Insert') + '</button>' +
+          '</div>' +
+          (expanded ? renderAssemblyForm(a) : '') +
+        '</div>' +
+      '</div>';
+    }).join('');
+    el.innerHTML = html;
+    el.querySelectorAll('[data-asm-add]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var key = 'a' + Number(btn.dataset.asmAdd);
+        _expandedRowId = _expandedRowId === key ? null : key;
+        renderAssemblyResults();
+        if (_expandedRowId === key) {
+          setTimeout(function() {
+            var qty = el.querySelector('.md-row.expanded .md-form-qty');
+            if (qty) qty.focus();
+          }, 10);
+        }
+      });
+    });
+    el.querySelectorAll('.md-asm-form').forEach(function(form) {
+      form.addEventListener('submit', function(ev) {
+        ev.preventDefault();
+        var aid = Number(form.dataset.formAid);
+        var asm = _lastAssemblies.find(function(x) { return x.id === aid; });
+        if (asm) submitAssemblyInsert(asm, form);
+      });
+    });
+  }
+
+  function renderAssemblyForm(a) {
+    return '<form class="md-form md-asm-form" data-form-aid="' + a.id + '">' +
+      '<div class="md-form-grid">' +
+        '<label><span>Takeoff qty (' + escapeHTML(a.unit || 'EA') + ')</span>' +
+          '<input class="md-form-qty" type="text" inputmode="decimal" required /></label>' +
+        '<label><span>Insert as</span>' +
+          '<select class="md-asm-mode">' +
+            '<option value="exploded" selected>Exploded lines</option>' +
+            '<option value="single">Single line</option>' +
+          '</select>' +
+        '</label>' +
+      '</div>' +
+      '<div class="md-form-actions">' +
+        '<button type="submit" class="md-form-submit">Insert into estimate</button>' +
+        '<span class="md-form-hint">Exploded: one line per item, sections by cost code</span>' +
+      '</div>' +
+    '</form>';
+  }
+
+  function submitAssemblyInsert(asm, form) {
+    if (!window.estimateEditorAPI || typeof window.estimateEditorAPI.applyBulkAddLineItems !== 'function') {
+      alert('Estimate editor isn\'t available — open an estimate first.');
+      return;
+    }
+    var takeoff = parseFloat(form.querySelector('.md-form-qty').value);
+    if (!isFinite(takeoff) || takeoff <= 0) {
+      form.querySelector('.md-form-qty').focus();
+      return;
+    }
+    var mode = form.querySelector('.md-asm-mode').value;
+    var hint = form.querySelector('.md-form-hint');
+    hint.textContent = 'Loading recipe…';
+    fetch('/api/assemblies/' + encodeURIComponent(asm.id), { credentials: 'include' })
+      .then(function(r) {
+        if (!r.ok) throw new Error('Could not load assembly (' + r.status + ')');
+        return r.json();
+      })
+      .then(function(detail) {
+        var flat = Array.isArray(detail.flat) ? detail.flat : [];
+        if (mode === 'single' || !flat.length) {
+          window.estimateEditorAPI.applyAddLineItem({
+            description: asm.name + ' — assembly',
+            qty: takeoff,
+            unit: asm.unit || 'EA',
+            unit_cost: (detail.assembly && detail.assembly.unit_cost) || asm.unit_cost || 0,
+            section_name: SUBGROUP_TO_SECTION[dominantCode(flat)] || 'Materials & Supplies',
+            source_assembly_id: asm.id
+          });
+        } else {
+          var lines = flat.map(function(f) {
+            return {
+              description: f.description,
+              qty: Math.round(takeoff * (f.qty_per_unit || 0) * 100) / 100,
+              unit: f.unit || 'EA',
+              unit_cost: f.unit_cost != null ? f.unit_cost : 0,
+              section_name: SUBGROUP_TO_SECTION[f.cost_code] || 'Materials & Supplies',
+              source_material_id: f.material_id || undefined,
+              source_assembly_id: asm.id
+            };
+          }).filter(function(l) { return l.qty > 0; });
+          window.estimateEditorAPI.applyBulkAddLineItems(lines);
+        }
+        hint.textContent = '✓ Inserted';
+        hint.style.color = 'var(--accent-success, #4ade80)';
+        _expandedRowId = null;
+        setTimeout(renderAssemblyResults, 400);
+      })
+      .catch(function(err) {
+        hint.textContent = 'Failed: ' + (err.message || 'unknown');
+        hint.style.color = 'var(--accent-danger, #f87171)';
+      });
+  }
+
+  // Which cost code carries the most $ in a flattened recipe — used to
+  // pick the section for single-line inserts.
+  function dominantCode(flat) {
+    var by = {};
+    (flat || []).forEach(function(f) {
+      var ext = (f.qty_per_unit || 0) * (f.unit_cost || 0);
+      by[f.cost_code || 'materials'] = (by[f.cost_code || 'materials'] || 0) + ext;
+    });
+    var best = 'materials', max = -1;
+    Object.keys(by).forEach(function(k) { if (by[k] > max) { max = by[k]; best = k; } });
+    return best;
   }
 
   function renderAddForm(m) {
@@ -689,7 +888,10 @@
     toggle: toggleDrawer,
     refresh: function() {
       refreshTargetHint();
-      if (_isOpen) renderResults();
+      if (_isOpen) {
+        if (_mode === 'assemblies') renderAssemblyResults();
+        else renderResults();
+      }
     }
   };
 })();

@@ -1919,6 +1919,63 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_material_purchases_org
       ON material_purchases(organization_id) WHERE organization_id IS NOT NULL;
 
+    -- ── ASSEMBLIES — costed recipes for estimating ──────────────────────
+    -- An assembly prices ONE OUTPUT UNIT of installed work ("6:12 shingle
+    -- roof, per SF") as a bill of items: catalog materials (live-priced
+    -- from the materials table), manual labor/sub/gc rates, and nested
+    -- child assemblies (sub-assemblies). Estimate lines inserted from an
+    -- assembly carry sourceAssemblyId so actuals can be compared per
+    -- assembly later. source: 'seed' (researched) | 'manual' | 'learned'.
+    CREATE TABLE IF NOT EXISTS assemblies (
+      id SERIAL PRIMARY KEY,
+      organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE,
+      code TEXT,                                 -- short handle, e.g. ROOF-SHNG-612
+      name TEXT NOT NULL,
+      description TEXT,
+      trade TEXT,                                -- roofing | stucco | paint | carpentry | ...
+      category TEXT,                             -- shares the materials category vocabulary
+      unit TEXT NOT NULL DEFAULT 'EA',           -- output unit: SF | LF | SQ | EA | ...
+      source TEXT NOT NULL DEFAULT 'manual',     -- 'seed' | 'manual' | 'learned'
+      is_hidden BOOLEAN DEFAULT FALSE,
+      notes TEXT,
+      created_by INTEGER REFERENCES users(id),
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_assemblies_org
+      ON assemblies(organization_id) WHERE organization_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_assemblies_trade ON assemblies(trade);
+
+    -- Recipe rows. kind decides which reference is live:
+    --   material  → material_id (unit_cost NULL = pull the catalog's
+    --               last_unit_price at read time, so HD imports reprice
+    --               every assembly automatically; non-NULL = frozen $)
+    --   labor|sub|gc → manual unit_cost + description (crew/sub rates)
+    --   assembly  → child_assembly_id (sub-assembly; cost = child's
+    --               resolved unit cost × qty_per_unit; cycle-guarded)
+    -- qty_per_unit = quantity consumed per 1 OUTPUT UNIT of the parent.
+    CREATE TABLE IF NOT EXISTS assembly_items (
+      id SERIAL PRIMARY KEY,
+      assembly_id INTEGER NOT NULL REFERENCES assemblies(id) ON DELETE CASCADE,
+      sort_order INTEGER DEFAULT 0,
+      kind TEXT NOT NULL DEFAULT 'material',     -- material | labor | sub | gc | assembly
+      material_id INTEGER REFERENCES materials(id) ON DELETE SET NULL,
+      child_assembly_id INTEGER REFERENCES assemblies(id) ON DELETE CASCADE,
+      description TEXT,                          -- display/fallback when no material link
+      qty_per_unit NUMERIC(12,4) NOT NULL DEFAULT 1,
+      unit TEXT,
+      unit_cost NUMERIC(12,2),                   -- NULL on material rows = live catalog price
+      cost_code TEXT,                            -- materials | labor | sub | gc (section routing)
+      waste_pct NUMERIC(5,2) DEFAULT 0,
+      notes TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_assembly_items_assembly ON assembly_items(assembly_id);
+    CREATE INDEX IF NOT EXISTS idx_assembly_items_material ON assembly_items(material_id)
+      WHERE material_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_assembly_items_child ON assembly_items(child_assembly_id)
+      WHERE child_assembly_id IS NOT NULL;
+
     -- Cost Inbox — field-captured cost receipts (photo + amount + cost code),
     -- attached to a JOB or a LEAD (lead = pre-sale / pursuit cost). Distinct
     -- from material_purchases (that's the Home-Depot CSV-history import). The

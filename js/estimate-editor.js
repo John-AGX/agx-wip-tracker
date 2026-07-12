@@ -2985,6 +2985,11 @@
     if (input.source_material_id != null) {
       newLine.sourceMaterialId = input.source_material_id;
     }
+    // Assemblies — lines exploded from a costed recipe carry the recipe
+    // id so estimated-vs-actual can roll up per assembly later.
+    if (input.source_assembly_id != null) {
+      newLine.sourceAssemblyId = input.source_assembly_id;
+    }
 
     if (sectionId) {
       // Same insertion logic as addEstimateLineFromEditor: walk forward to
