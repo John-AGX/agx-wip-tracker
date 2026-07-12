@@ -444,9 +444,24 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.10';
+const APP_VERSION = '1.11';
 
 const releases = [
+  {
+    version: '1.11',
+    date: '2026-07-12',
+    name: 'Fidelity',
+    summary: 'Excel files come into the Workspace looking exactly like Excel — and go back out identical.',
+    changes: [
+      { type: 'new', text: 'Full-fidelity Excel import — drop in an .xlsx and every fill, border, font, theme color, merged header, and exact column width arrives intact, including formatting on blank cells.' },
+      { type: 'new', text: 'Round-trip exports — export a workspace and the .xlsx matches the original file cell-for-cell: values, formulas with live results, styles, and bit-exact column widths.' },
+      { type: 'new', text: 'Hidden sheets now import as hidden tabs, so formulas and named ranges that read from them keep working.' },
+      { type: 'improved', text: 'Formulas filled down a column (shared formulas) now import with the right references on every row, and Excel\'s cached results display instantly while the grid recalculates.' },
+      { type: 'fixed', text: 'SUM, AVERAGE, COUNT and every other range formula computed 0 over same-sheet ranges — the engine now reads ranges correctly everywhere, including ranges from named ranges.' },
+      { type: 'fixed', text: 'Frozen panes silently un-froze after a reload; freeze state now survives.' },
+      { type: 'fixed', text: 'Duplicating a sheet dropped its row heights.' },
+    ],
+  },
   {
     version: '1.10',
     date: '2026-07-11',
