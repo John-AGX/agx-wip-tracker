@@ -1109,8 +1109,50 @@
     panel.style.display = 'none';
     syncWorkspaceRibbonBtn(false);
   }
+  // ── Real detached pop-out window (top-level OS window) ──────────────
+  // Clicking Workspace opens the sheet in a genuine browser popup window
+  // (via the standalone /workspace/:type/:id route — WS-POP-1/3 handle the
+  // single-live-copy coordination + save-on-close). It's a real window: not
+  // bound to any tab/surface, and minimizable with the OS title-bar buttons.
+  // Clicking Workspace again closes it (toggle). Same window NAME as the
+  // toolbar "Pop out" control, so the two share one window.
+  var _wsPopWin = null;      // reference to the live pop-out window
+  var _wsPopPoll = null;     // polls for the user closing it via the window X
+  function workspacePopoutTarget() {
+    var jid = (window.appState && appState.currentJobId) || null;
+    return jid ? { type: 'job', id: String(jid) } : null;
+  }
+  function stopWsPopPoll() { if (_wsPopPoll) { clearInterval(_wsPopPoll); _wsPopPoll = null; } }
+  function openWorkspacePopWindow() {
+    var t = workspacePopoutTarget();
+    if (!t) return false;
+    var href = '/workspace/' + t.type + '/' + encodeURIComponent(t.id);
+    var name = 'p86ws-' + t.type + '-' + t.id;   // shared with the toolbar Pop out
+    var w = Math.min((window.screen && screen.availWidth) || 1440, 1680);
+    var h = Math.min((window.screen && screen.availHeight) || 900, 1180);
+    _wsPopWin = window.open(href, name, 'popup,width=' + w + ',height=' + h);
+    if (!_wsPopWin) return false;   // blocked → caller falls back
+    try { _wsPopWin.focus(); } catch (e) {}
+    syncWorkspaceRibbonBtn(true);
+    stopWsPopPoll();
+    _wsPopPoll = setInterval(function () {
+      if (!_wsPopWin || _wsPopWin.closed) { stopWsPopPoll(); _wsPopWin = null; syncWorkspaceRibbonBtn(false); }
+    }, 800);
+    return true;
+  }
+  function closeWorkspacePopWindow() {
+    if (_wsPopWin && !_wsPopWin.closed) { try { _wsPopWin.close(); } catch (e) {} }
+    _wsPopWin = null;
+    stopWsPopPoll();
+    syncWorkspaceRibbonBtn(false);
+  }
   function toggleWorkspaceWindow() {
-    if (isWorkspaceWindowOpen()) hideWorkspaceWindow(); else showWorkspaceWindow();
+    if (_wsPopWin && !_wsPopWin.closed) { closeWorkspacePopWindow(); return; }
+    // Try the real detached window first; if the browser blocks the popup
+    // (or there's no job context), fall back to the in-page floating panel.
+    if (!openWorkspacePopWindow()) {
+      if (isWorkspaceWindowOpen()) hideWorkspaceWindow(); else showWorkspaceWindow();
+    }
   }
   // Exposed for the node-graph ribbon's Workspace toggle button (ui.js).
   window.p86WorkspaceToggle = toggleWorkspaceWindow;
