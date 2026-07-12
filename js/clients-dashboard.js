@@ -91,7 +91,7 @@
         (b.property && b.property.address ? '<span style="margin-left:auto;font-size:10px;text-transform:none;letter-spacing:0;color:var(--text-dim,#8a93a6);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:52%;">' + esc(b.property.address) + '</span>' : '') +
       '</div><div style="padding:4px 12px 10px;">' + rows + '</div></div>';
   }
-  function loadSafety(id) {
+  function loadSafety(id, mapCtx) {
     var host = document.getElementById('clientDoss_safety');
     if (!host) return;
     host.innerHTML = safetyShell('Finding nearest ER, fire & rescue…');
@@ -105,7 +105,37 @@
         host.innerHTML = safetyShell(msg); return;
       }
       host.innerHTML = safetyHtml(b);
+      renderSafetyMap(b, mapCtx);
     }).catch(function () { host.innerHTML = ''; });
+  }
+
+  // Drop property + safety pins on the dossier map. If the client has no
+  // plotted leads/jobs (no map yet), mount one anchored on the property —
+  // this is the "map + safety pins at the top of the dossier" view. Purely
+  // progressive: any failure leaves the dossier as-is.
+  function renderSafetyMap(b, ctx) {
+    try {
+      if (!window.p86EntitiesMap) return;
+      var pins = [];
+      if (b.property && b.property.lat != null) pins.push({ lat: b.property.lat, lng: b.property.lng, glyph: '⌂', color: '#4f46e5', title: b.property.address || 'Property' });
+      if (b.hospital && !b.hospital.error && b.hospital.lat != null) pins.push({ lat: b.hospital.lat, lng: b.hospital.lng, glyph: 'H', color: '#ef4444', title: (b.hospital.name || 'Hospital') + (b.hospital.miles != null ? ' · ' + b.hospital.miles + ' mi' : '') });
+      if (b.fire && !b.fire.error && b.fire.lat != null) pins.push({ lat: b.fire.lat, lng: b.fire.lng, glyph: 'FD', color: '#f59e0b', title: (b.fire.name || 'Fire / rescue') + (b.fire.miles != null ? ' · ' + b.fire.miles + ' mi' : '') });
+      if (!pins.length) return;
+      var mapEl = document.getElementById('clientDashboard_map');
+      if (!mapEl) {
+        var grid = document.getElementById('clientDoss_mapgrid');
+        if (!grid) return; // dossier was closed before safety arrived
+        grid.style.gridTemplateColumns = '2fr 1fr';
+        var col = document.createElement('div');
+        col.innerHTML = '<div style="font-size:13px;font-weight:600;color:#fff;margin-bottom:8px;">Map</div>' +
+          '<div id="clientDashboard_map" style="position:relative;height:300px;border:1px solid var(--border,#2a2f3a);border-radius:10px;overflow:hidden;"></div>';
+        grid.insertBefore(col, grid.firstChild);
+      }
+      window.p86EntitiesMap.render('clientDashboard_map', {
+        items: (ctx && ctx.items) || { leads: [], jobs: [] },
+        extraPins: pins
+      });
+    } catch (e) { /* map is a bonus layer — never break the dossier */ }
   }
 
   function render(host, d) {
@@ -154,7 +184,7 @@
     // Property-intel: nearest-safety block (filled async by loadSafety).
     html += '<div id="clientDoss_safety" style="margin-bottom:18px;"></div>';
 
-    html += '<div style="display:grid;grid-template-columns:' + (hasMap ? '2fr 1fr' : '1fr') + ';gap:16px;margin-bottom:18px;">';
+    html += '<div id="clientDoss_mapgrid" style="display:grid;grid-template-columns:' + (hasMap ? '2fr 1fr' : '1fr') + ';gap:16px;margin-bottom:18px;">';
     if (hasMap) html += '<div><div style="font-size:13px;font-weight:600;color:#fff;margin-bottom:8px;">Map</div><div id="clientDashboard_map" style="height:300px;border:1px solid var(--border,#2a2f3a);border-radius:10px;overflow:hidden;"></div></div>';
     html += '<div><div style="font-size:13px;font-weight:600;color:#fff;margin-bottom:8px;">Recent activity</div>' + actHtml + '</div></div>';
 
@@ -180,7 +210,7 @@
     html += '<div style="margin-top:14px;font-size:11px;color:var(--text-dim,#8a93a6);">Health is account-activity based; property-condition health (roof/permit age, tenant reviews) lands with the property-intel layer. Jobs link by explicit client link or client-name match.</div>';
     host.innerHTML = html;
     if (hasMap) { try { window.p86EntitiesMap.render('clientDashboard_map', { items: mapItems }); } catch (e) {} }
-    loadSafety(c.id);
+    loadSafety(c.id, { items: mapItems });
   }
 
   function openClientDashboard(id) {

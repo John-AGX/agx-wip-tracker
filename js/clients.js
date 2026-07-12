@@ -136,6 +136,33 @@
     } catch (e) { /* ignore */ }
   }
 
+  // ── Heat rollup (health-grid chips) ─────────────────────────────────
+  // One batched fetch decorates every row with the same 0-100 heat score
+  // the dossier gauge shows. null = not loaded yet; {} = loaded (possibly
+  // failed → rows show "—" instead of spinners forever).
+  var _heatMap = null;
+  var _heatLoading = false;
+  function ensureHeatRollup() {
+    if (_heatMap || _heatLoading) return;
+    if (!(window.p86Api && window.p86Api.clients && window.p86Api.clients.heatRollup)) { _heatMap = {}; return; }
+    _heatLoading = true;
+    window.p86Api.clients.heatRollup().then(function(res) {
+      _heatMap = (res && res.rollups) || {};
+      _heatLoading = false;
+      renderClientsList();
+    }).catch(function() { _heatMap = {}; _heatLoading = false; });
+  }
+  function heatChipHTML(c) {
+    if (!_heatMap) return '<span style="color:var(--text-dim,#555);font-size:11px;">…</span>';
+    var v = _heatMap[c.id];
+    if (!v) return '<span style="color:var(--text-dim,#555);font-size:11px;">—</span>';
+    var col = v.heat >= 70 ? '#f77066' : v.heat >= 40 ? '#f2a55c' : '#8a93a6';
+    var tip = v.openLeads + ' open lead(s) · $' + Math.round(v.pipelineValue || 0).toLocaleString() + ' pipeline · ' + v.jobCount + ' job(s)';
+    return '<span title="' + escapeAttr(tip) + '" style="display:inline-flex;align-items:center;gap:5px;padding:2px 9px;border-radius:11px;background:' + col + '1f;color:' + col + ';font-size:11px;font-weight:700;white-space:nowrap;">' +
+      '<span style="font-family:monospace;">' + v.heat + '</span>' +
+      '<span style="font-size:9px;text-transform:uppercase;letter-spacing:.5px;">' + v.heatLabel + '</span></span>';
+  }
+
   function clientRowHTML(c, opts) {
     opts = opts || {};
     var role = opts.role; // 'parent' | 'child' | 'flat'
@@ -185,6 +212,7 @@
       '<td data-col="name"><div style="display:flex;align-items:center;gap:8px;">' + nameCell + '</div></td>' +
       '<td data-col="contact">' + escapeHTML(contact) + '</td>' +
       '<td data-col="location">' + escapeHTML(location) + '</td>' +
+      '<td data-col="heat">' + heatChipHTML(c) + '</td>' +
       '<td data-col="actions" style="text-align:right;white-space:nowrap;">' +
         '<div style="display:inline-flex;gap:4px;">' + actions + '</div>' +
       '</td>' +
@@ -209,7 +237,13 @@
   // sorts are stable-feeling.
   function compareClients(a, b, key, dir) {
     var av, bv;
-    if (key === 'contact') {
+    if (key === 'heat') {
+      // Numeric; unknown rows sink to the bottom in both directions.
+      av = (_heatMap && _heatMap[a.id]) ? _heatMap[a.id].heat : -1;
+      bv = (_heatMap && _heatMap[b.id]) ? _heatMap[b.id].heat : -1;
+      if (av !== bv) return dir === 'desc' ? (bv - av) : (av - bv);
+      av = ''; bv = ''; // fall through to the name tiebreaker below
+    } else if (key === 'contact') {
       av = (([a.first_name, a.last_name].filter(Boolean).join(' ') || a.community_manager || a.email || '')).toLowerCase();
       bv = (([b.first_name, b.last_name].filter(Boolean).join(' ') || b.community_manager || b.email || '')).toLowerCase();
     } else if (key === 'location') {
@@ -312,6 +346,7 @@
 
     refreshMarketFilter();
     refreshStateFilter();
+    ensureHeatRollup();
 
     // Pre-compute role per client so the role filter is consistent with
     // the hierarchical badges shown on the row.
@@ -361,6 +396,7 @@
           clientsHeaderCell('Name', 'name') +
           clientsHeaderCell('Contact', 'contact') +
           clientsHeaderCell('Location', 'location') +
+          clientsHeaderCell('Heat', 'heat', { width: '84px' }) +
           '<th data-col="actions" style="text-align:right;width:140px;color:var(--text-dim,#888);font-size:10px;text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">Actions</th>' +
         '</tr></thead>' +
         '<tbody>';

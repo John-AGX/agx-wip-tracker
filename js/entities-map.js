@@ -241,6 +241,28 @@
     };
   }
 
+  // Teardrop pin with a short text glyph in the head — used by opts.extraPins
+  // (dossier safety pins: property ⌂ / hospital H / fire FD). Plain-text
+  // glyphs only (no emoji) so the SVG data URI renders identically everywhere.
+  function glyphPinIcon(maps, glyph, color) {
+    var label = String(glyph || '•').slice(0, 3);
+    var fs = label.length >= 3 ? 8 : (label.length === 2 ? 10 : 13);
+    var svg =
+      '<svg xmlns="http://www.w3.org/2000/svg" width="30" height="42" viewBox="0 0 30 42">' +
+        '<path d="M15 1 C7.3 1 1 7.3 1 15 c0 10.2 14 26 14 26 s14-15.8 14-26 C29 7.3 22.7 1 15 1 z" ' +
+          'fill="' + color + '" stroke="#ffffff" stroke-width="1.5"/>' +
+        '<circle cx="15" cy="15" r="9.5" fill="#ffffff"/>' +
+        '<text x="15" y="15" text-anchor="middle" dominant-baseline="central" ' +
+          'font-family="system-ui,Segoe UI,sans-serif" font-size="' + fs + '" font-weight="700" fill="' + color + '">' +
+          escapeHTML(label) + '</text>' +
+      '</svg>';
+    return {
+      url: 'data:image/svg+xml;utf8,' + encodeURIComponent(svg),
+      anchor: new maps.Point(15, 42),
+      scaledSize: new maps.Size(30, 42)
+    };
+  }
+
   function render(hostId, opts) {
     opts = opts || {};
     var host = (typeof hostId === 'string') ? document.getElementById(hostId) : hostId;
@@ -343,16 +365,29 @@
     var allItems = data.leads.concat(data.jobs);
     var total = allItems.length;
 
-    if (!total) {
+    // Extra non-entity pins (opts.extraPins: {lat,lng,glyph,color,title}) —
+    // e.g. the client dossier's property/hospital/fire safety pins. Always
+    // shown; not part of the lead/job filter chips. A map with ONLY extra
+    // pins is valid (client property with no plotted leads/jobs yet).
+    var extraPins = (Array.isArray(opts.extraPins) ? opts.extraPins : []).map(function (p) {
+      var c = usableCoords(p.lat, p.lng);
+      return c ? { lat: c.lat, lng: c.lng, glyph: p.glyph || '•', color: p.color || '#4f46e5', title: p.title || '' } : null;
+    }).filter(Boolean);
+
+    if (!total && !extraPins.length) {
       host.innerHTML = emptyHTML('No leads or jobs with mapped addresses yet. Save an address on a lead or job to plot it here.');
       return;
     }
+
+    // The chips + canvas anchor to the host via position:absolute — make
+    // sure the host is actually a positioned box.
+    try { if (getComputedStyle(host).position === 'static') host.style.position = 'relative'; } catch (e) {}
 
     // Chrome: filter chips + map canvas + recenter button. Canvas fills
     // the relative host via absolute inset so it always has a definite
     // box for the Maps SDK to measure.
     host.innerHTML =
-      (opts.only ? '' :
+      (opts.only || !total ? '' :
         '<div style="position:absolute;top:10px;left:10px;z-index:5;display:flex;gap:6px;">' +
         '<button type="button" data-emap-chip="lead" class="p86-emap-chip" ' +
           'style="font-size:11px;font-weight:600;padding:5px 10px;border-radius:14px;border:1px solid #4f8cff;background:#4f8cff;color:#fff;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,0.3);">Leads ' + data.leads.length + '</button>' +
@@ -366,8 +401,9 @@
     var canvas = host.querySelector('[data-emap-canvas]');
     var recenterBtn = host.querySelector('[data-emap-recenter]');
 
+    var first = allItems[0] || extraPins[0];
     var mapOpts = {
-      center: { lat: allItems[0].lat, lng: allItems[0].lng },
+      center: { lat: first.lat, lng: first.lng },
       zoom: 11,
       mapTypeControl: !!opts.satellite,          // org map: let the user flip satellite/hybrid/road
       streetViewControl: false,
@@ -491,6 +527,18 @@
       }
     }
 
+    // Extra pins mount once, outside rebuild(), so the lead/job filter
+    // chips can't clear them. Tooltip-only (no card popup).
+    extraPins.forEach(function (p) {
+      var icon = glyphPinIcon(maps, p.glyph, p.color);
+      makeMarker({ lat: p.lat, lng: p.lng }, {
+        title: p.title,
+        icon: icon,
+        content: advOK ? pinImg({ url: icon.url, w: 30, h: 42 }) : null,
+        zIndex: 5
+      });
+    });
+
     // (Re)build all markers from the currently-visible item set, grouping
     // co-located items into a single count-badged pin. Called on first
     // render and whenever a filter chip toggles.
@@ -545,10 +593,12 @@
       });
 
       // Fit only on the first paint — re-fitting on every chip toggle is
-      // jarring. After that, leave the user's pan/zoom alone.
+      // jarring. After that, leave the user's pan/zoom alone. Extra pins
+      // count toward the fit so safety pins are in view from the start.
+      extraPins.forEach(function (p) { bounds.extend({ lat: p.lat, lng: p.lng }); });
       if (!didFit) {
         didFit = true;
-        if (groups.length > 1) map.fitBounds(bounds, 48);
+        if (groups.length + extraPins.length > 1) map.fitBounds(bounds, 48);
         else map.setZoom(14);
       }
     }

@@ -163,6 +163,7 @@
 
   var clients = {
     list: function() { return get('/api/clients'); },
+    heatRollup: function() { return get('/api/clients/heat-rollup'); },
     get: function(id) { return get('/api/clients/' + encodeURIComponent(id)); },
     create: function(payload) { return post('/api/clients', payload); },
     update: function(id, payload) { return put('/api/clients/' + encodeURIComponent(id), payload); },

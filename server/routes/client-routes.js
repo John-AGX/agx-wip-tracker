@@ -28,6 +28,24 @@ function pickEditable(body) {
   return out;
 }
 
+// Numeric client "heat" (0-100): active pipeline + $ + recency + depth.
+// Shared by the single-client dashboard and the list-page heat rollup so
+// the chip on the row and the gauge in the dossier can never disagree.
+// Hot ≥70, Warm ≥40, else Cold.
+function computeClientHeat({ openLeads, pipelineValue, jobCount, margin, lastActivityMs }) {
+  let heat = 0;
+  heat += Math.min(40, openLeads * 20);                       // active pipeline
+  heat += Math.min(25, (pipelineValue / 20000) * 25);         // pipeline $
+  heat += Math.min(15, jobCount * 3);                         // relationship depth
+  if (lastActivityMs) {
+    const days = (Date.now() - lastActivityMs) / 86400000;
+    heat += days <= 30 ? 20 : days <= 90 ? 10 : days <= 180 ? 4 : 0;
+  }
+  if (margin != null) { if (margin >= 0.2) heat += 8; else if (margin < 0.15 && jobCount) heat -= 8; }
+  heat = Math.max(0, Math.min(100, Math.round(heat)));
+  return { heat, heatLabel: heat >= 70 ? 'Hot' : heat >= 40 ? 'Warm' : 'Cold' };
+}
+
 // GET /api/clients — list all clients with their parent linkage.
 // Anyone with ESTIMATES_VIEW can see the directory (estimates point at
 // clients, so the same audience needs to read the list).
@@ -41,6 +59,91 @@ router.get('/', requireAuth, requireCapability('ESTIMATES_VIEW'), async (req, re
     res.json({ clients: rows });
   } catch (e) {
     console.error('GET /api/clients error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// GET /api/clients/heat-rollup — batched heat scores for the whole client
+// directory (health-grid list chips). One request instead of N dashboard
+// calls. Mirrors the /:id/dashboard aggregation exactly: jobs link by
+// explicit client_id else client-name match, leads by client_id, recency
+// from jobs + leads + agent notes. MUST stay registered before '/:id'.
+router.get('/heat-rollup', requireAuth, requireCapability('ESTIMATES_VIEW'), async (req, res) => {
+  try {
+    const orgId = req.user.organization_id;
+    const [cq, jq, lq, qb] = await Promise.all([
+      pool.query('SELECT id, name, agent_notes FROM clients WHERE organization_id = $1 OR organization_id IS NULL', [orgId]),
+      pool.query('SELECT id, client_id, data, updated_at FROM jobs WHERE organization_id = $1 OR organization_id IS NULL', [orgId]),
+      pool.query(
+        `SELECT client_id, status, estimated_revenue_low, estimated_revenue_high, updated_at
+           FROM leads WHERE client_id IS NOT NULL AND (organization_id = $1 OR organization_id IS NULL)`, [orgId]),
+      pool.query(
+        `SELECT job_id, COALESCE(SUM(amount),0)::float AS total FROM qb_cost_lines
+          WHERE job_id IN (SELECT id FROM jobs WHERE organization_id = $1 OR organization_id IS NULL)
+          GROUP BY job_id`, [orgId]),
+    ]);
+
+    const num = (v) => { const n = Number(v); return isFinite(n) ? n : 0; };
+    const costByJob = {};
+    qb.rows.forEach((r) => { costByJob[r.job_id] = Number(r.total) || 0; });
+
+    // name → [clientIds] (a job with no client_id attaches to every client
+    // sharing the name, same as each of their dashboards would claim it).
+    const byName = {};
+    const agg = {};
+    cq.rows.forEach((c) => {
+      agg[c.id] = { openLeads: 0, pipelineValue: 0, jobCount: 0, contractValue: 0, costs: 0, lastActivityMs: 0 };
+      const key = (c.name || '').trim().toLowerCase();
+      if (key) (byName[key] = byName[key] || []).push(c.id);
+      const notes = Array.isArray(c.agent_notes) ? c.agent_notes : [];
+      notes.forEach((n) => {
+        const t = n && n.created_at ? new Date(n.created_at).getTime() : 0;
+        if (t > agg[c.id].lastActivityMs) agg[c.id].lastActivityMs = t;
+      });
+    });
+
+    jq.rows.forEach((j) => {
+      const d = j.data || {};
+      const owners = j.client_id
+        ? (agg[j.client_id] ? [j.client_id] : [])
+        : (byName[String(d.client || '').trim().toLowerCase()] || []);
+      if (!owners.length) return;
+      const contract = num(d.contractAmount);
+      const cost = (costByJob[j.id] != null) ? costByJob[j.id] : (num(d.qbCostsTotal) || num(d.estimatedCosts));
+      const t = j.updated_at ? new Date(j.updated_at).getTime() : 0;
+      owners.forEach((id) => {
+        const a = agg[id];
+        a.jobCount++; a.contractValue += contract; a.costs += cost;
+        if (t > a.lastActivityMs) a.lastActivityMs = t;
+      });
+    });
+
+    const OPEN = new Set(['new', 'in_progress', 'sent']);
+    lq.rows.forEach((l) => {
+      const a = agg[l.client_id];
+      if (!a) return;
+      if (OPEN.has(String(l.status || '').toLowerCase())) {
+        a.openLeads++;
+        a.pipelineValue += num(l.estimated_revenue_high) || num(l.estimated_revenue_low);
+      }
+      const t = l.updated_at ? new Date(l.updated_at).getTime() : 0;
+      if (t > a.lastActivityMs) a.lastActivityMs = t;
+    });
+
+    const rollups = {};
+    Object.keys(agg).forEach((id) => {
+      const a = agg[id];
+      const margin = a.contractValue > 0 ? (a.contractValue - a.costs) / a.contractValue : null;
+      const h = computeClientHeat({
+        openLeads: a.openLeads, pipelineValue: a.pipelineValue,
+        jobCount: a.jobCount, margin, lastActivityMs: a.lastActivityMs,
+      });
+      rollups[id] = { heat: h.heat, heatLabel: h.heatLabel, openLeads: a.openLeads, pipelineValue: a.pipelineValue, jobCount: a.jobCount };
+    });
+
+    res.json({ rollups });
+  } catch (e) {
+    console.error('GET /api/clients/heat-rollup error:', e);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -154,21 +257,10 @@ router.get('/:id/dashboard', requireAuth, requireCapability('ESTIMATES_VIEW'), a
     activity.sort((a, b) => new Date(b.when || 0) - new Date(a.when || 0));
     const activityTop = activity.slice(0, 8);
 
-    // Numeric client "heat" (0-100): active pipeline + $ + recency + depth.
-    // Modeled on the health-tier inputs (jobs / openLeads / margin) plus
-    // recency of the newest activity. Hot ≥70, Warm ≥40, else Cold.
-    let heat = 0;
-    heat += Math.min(40, openLeads * 20);                       // active pipeline
-    heat += Math.min(25, (pipelineValue / 20000) * 25);         // pipeline $
-    heat += Math.min(15, jobs.length * 3);                      // relationship depth
     const lastWhen = (activity.length && activity[0].when) ? new Date(activity[0].when).getTime() : 0;
-    if (lastWhen) {
-      const days = (Date.now() - lastWhen) / 86400000;
-      heat += days <= 30 ? 20 : days <= 90 ? 10 : days <= 180 ? 4 : 0;
-    }
-    if (margin != null) { if (margin >= 0.2) heat += 8; else if (margin < 0.15 && jobs.length) heat -= 8; }
-    heat = Math.max(0, Math.min(100, Math.round(heat)));
-    const heatLabel = heat >= 70 ? 'Hot' : heat >= 40 ? 'Warm' : 'Cold';
+    const { heat, heatLabel } = computeClientHeat({
+      openLeads, pipelineValue, jobCount: jobs.length, margin, lastActivityMs: lastWhen,
+    });
 
     res.json({
       client: {
