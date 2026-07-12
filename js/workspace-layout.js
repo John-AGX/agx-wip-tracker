@@ -87,10 +87,15 @@
 
   function injectWorkspaceCSS() {
     if (document.getElementById('ws-grid-css')) return;
+    // index.html already links workspace.css with the current ?v cache
+    // buster — injecting a second copy here (with a stale hardcoded
+    // version) made the OLD stylesheet load after the new one and win
+    // every cascade tie. Only inject when the page truly lacks it.
+    if (document.querySelector('link[href*="css/workspace.css"]')) return;
     var link = document.createElement('link');
     link.id = 'ws-grid-css';
     link.rel = 'stylesheet';
-    link.href = 'css/workspace.css?v=20';
+    link.href = 'css/workspace.css';
     document.head.appendChild(link);
   }
 
