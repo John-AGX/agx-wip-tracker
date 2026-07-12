@@ -21,12 +21,18 @@ function haversineMiles(lat1, lng1, lat2, lng2) {
 
 // Nearest place of a Places(New) type. Returns {name,address,lat,lng,miles},
 // null (none found), or {error} (API/network). Never throws.
-async function nearest(lat, lng, includedType) {
+// opts.take: how many distance-ranked results to pull (default 1).
+// opts.preferName: regex — return the NEAREST result whose name matches,
+// falling back to the overall nearest. Needed because Google's 'hospital'
+// type includes clinics/health centers; the safety card must point at a
+// real hospital/ER, not whatever clinic happens to be closest.
+async function nearest(lat, lng, includedType, opts) {
+  opts = opts || {};
   const key = apiKey();
   if (key == null || lat == null || lng == null) return { error: 'no_key_or_coords' };
   const body = {
     includedTypes: [includedType],
-    maxResultCount: 1,
+    maxResultCount: Math.min(20, opts.take || 1),
     rankPreference: 'DISTANCE',
     locationRestriction: { circle: { center: { latitude: lat, longitude: lng }, radius: 50000 } }
   };
@@ -48,7 +54,12 @@ async function nearest(lat, lng, includedType) {
     return { error: msg };
   }
   let j; try { j = await r.json(); } catch (e) { return { error: 'bad_json' }; }
-  const p = j && j.places && j.places[0];
+  const list = (j && j.places) || [];
+  let p = list[0];
+  if (opts.preferName) {
+    const hit = list.find((x) => x && x.displayName && opts.preferName.test(x.displayName.text || ''));
+    if (hit) p = hit;
+  }
   if (!p || !p.location) return null;
   const plat = p.location.latitude, plng = p.location.longitude;
   return {
@@ -61,7 +72,10 @@ async function nearest(lat, lng, includedType) {
 
 async function nearbySafety(lat, lng) {
   const [hospital, fire] = await Promise.all([
-    nearest(lat, lng, 'hospital'),
+    nearest(lat, lng, 'hospital', {
+      take: 10,
+      preferName: /(hospital|medical center|emergency|regional medical|health system)/i
+    }),
     nearest(lat, lng, 'fire_station')
   ]);
   return { hospital, fire };
