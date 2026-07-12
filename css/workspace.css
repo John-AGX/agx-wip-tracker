@@ -198,21 +198,16 @@
 }
 
 /* ── Excel-style Ribbon ─────────────────────────────────── */
-/* Single grouped toolbar row that mirrors Excel's Home tab. Each
-   .ws-ribbon-group is a column: controls on top, small uppercase
-   label underneath, separated from neighboring groups by a 1px
-   divider on the right edge. Lets the user scan the toolbar by
-   purpose (Font, Alignment, Number…) instead of one big flat
-   stripe of buttons. */
-/* Outlook-style ribbon — dark fixed strip, grouped sections with
-   small uppercase captions underneath, vertical 1px dividers
-   between groups. Buttons stay compact (icon-only or short label)
-   so the whole strip fits without wrapping. */
+/* Grouped toolbar row that mirrors Excel's Home tab: each
+   .ws-ribbon-group is a column of controls with a small regular-case
+   caption underneath (Excel says "Font", not "FONT"), and a short
+   centered vertical divider between groups. Icons are AGX heroicons
+   via p86Icon (see wsIco in js/workspace.js). */
 .ws-ribbon {
   display: flex;
   align-items: stretch;
   gap: 0;
-  padding: 6px 6px 0;
+  padding: 4px 4px 0;
   background: var(--surface2, #202027);
   border: 1px solid var(--border, #2a2a32);
   border-top: none;
@@ -227,37 +222,46 @@
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: space-between;
   flex: 0 0 auto;
-  padding: 0 6px;
-  /* Caption divider replaces the right-side line — Outlook draws
-     a faint vertical between groups via the .ws-ribbon-sep span /
-     the caption\'s top border. Drop the inter-group right border
-     and let the section caption + caption-top-border carry the
-     visual divide. */
-  border-right: 1px solid var(--border, #2a2a32);
+  padding: 0 8px;
+  position: relative;
   min-width: 0;
 }
-.ws-ribbon-group:last-child {
-  border-right: none;
+/* Excel draws a SHORT vertical divider between groups — inset from
+   the ribbon's top/bottom edges so the strip reads as one surface,
+   not a row of boxed cells. */
+.ws-ribbon-group::after {
+  content: '';
+  position: absolute;
+  right: 0;
+  top: 8px;
+  bottom: 8px;
+  width: 1px;
+  background: var(--border, #2a2a32);
+}
+.ws-ribbon-group:last-child::after {
+  display: none;
 }
 .ws-ribbon-controls {
   display: flex;
   align-items: center;
-  gap: 2px;
-  padding: 2px 0 6px;
+  gap: 1px;
+  padding: 2px 0 1px;
   flex-wrap: nowrap;
 }
+/* Group caption: regular case, quiet, centered — no rule above it. */
 .ws-ribbon-label {
-  font-size: 10px;
-  font-weight: 500;
-  text-transform: uppercase;
-  letter-spacing: 0.6px;
+  font-size: 10.5px;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0.1px;
   color: var(--text-dim, #8b90a5);
-  padding: 3px 4px 4px;
-  border-top: 1px solid var(--border, #2a2a32);
+  padding: 1px 4px 4px;
   white-space: nowrap;
   text-align: center;
   width: 100%;
+  user-select: none;
 }
 /* Spacer pushes the Editing group to the far right of the ribbon
    so secondary controls sit against the right edge — Outlook does
@@ -268,26 +272,86 @@
   min-width: 8px;
 }
 
-/* Excel-style flat ribbon buttons. The base .ws-btn rule ships with a
-   dark fill (var(--surface)) which fights the ribbon's surface2 bg —
-   buttons end up looking like dark lozenges instead of icons. Scope
-   a transparent override + brighter hover so the ribbon reads as a
-   row of icons that lift on interaction. */
+/* Excel-style flat ribbon buttons: fixed 28px squares, line icon
+   centered, no chrome at rest, soft square hover, Excel-green tint
+   for active/toggled states. The base .ws-btn rule ships with a dark
+   fill (var(--surface)) which fights the ribbon's surface2 bg —
+   scope a transparent override here. */
 .ws-ribbon .ws-btn {
   background: transparent;
-  border-color: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
   color: var(--text, #e4e6f0);
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  line-height: 1;
+}
+/* Heroicon sizing inside ribbon buttons — 17px reads like Excel's
+   small-button icons at this density. */
+.ws-ribbon .ws-btn .p86-icon,
+.ws-ribbon .ws-btn .ws-ribbon-ico {
+  width: 17px;
+  height: 17px;
+  display: block;
+  pointer-events: none;
+}
+/* Text-glyph buttons (Σ, ←.0, .0→) need room for 2-3 characters. */
+.ws-ribbon .ws-btn.ws-btn-txt {
+  width: auto;
+  min-width: 28px;
+  padding: 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+}
+/* Number-format quick buttons ($ % , ×) — slightly bolder so the
+   single characters read as icons, like Excel's $ button. */
+.ws-ribbon .ws-btn.ws-btn-fmt {
+  font-weight: 600;
+  font-size: 13px;
 }
 .ws-ribbon .ws-btn:hover {
-  background: rgba(255, 255, 255, 0.08);
-  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(128, 128, 128, 0.16);
+  border-color: transparent;
   color: var(--text, #e4e6f0);
 }
 .ws-ribbon .ws-btn:active,
 .ws-ribbon .ws-btn.ws-active {
-  background: rgba(79, 140, 255, 0.18);
-  border-color: rgba(79, 140, 255, 0.45);
-  color: var(--text, #fff);
+  background: rgba(16, 124, 65, 0.16);
+  border-color: rgba(16, 124, 65, 0.45);
+  color: var(--accent, #107C41);
+}
+/* Color split-buttons (fill / font color): icon on top, current-color
+   bar underneath — Excel's exact pattern. */
+.ws-ribbon .ws-color-trigger {
+  flex-direction: column;
+  gap: 1px;
+  height: 28px;
+  padding: 2px 0 3px;
+}
+.ws-ribbon .ws-color-trigger .ws-color-icon { line-height: 1; display: block; }
+.ws-ribbon .ws-color-trigger .p86-icon { width: 14px; height: 14px; }
+.ws-ribbon .ws-color-trigger .ws-color-icon-text { font-size: 12px; font-weight: 700; }
+.ws-ribbon .ws-color-trigger .ws-color-swatch {
+  width: 16px;
+  height: 3px;
+  border-radius: 1px;
+}
+/* Freeze select stays compact and chrome-less like the buttons. */
+.ws-ribbon .ws-select-compact {
+  height: 28px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--text, #e4e6f0);
+}
+.ws-ribbon .ws-select-compact:hover {
+  background: rgba(128, 128, 128, 0.16);
 }
 /* Save button keeps its accent so the primary action still pops. */
 .ws-ribbon .ws-btn.ws-btn-save {
@@ -1658,6 +1722,39 @@ body.p86-ws-popout #login-screen { display: none !important; }
   background: var(--surface2, #1a1d28);
 }
 #wsPopoutHost > * { min-height: 0; }
+/* Full-window layout: chrome rows keep their natural height, the
+   grid takes EVERYTHING else (the base .ws-grid-wrapper rule caps at
+   500px for the embedded job-page context — a hard cap makes no
+   sense when the spreadsheet owns the whole window). Sheet tabs +
+   status bar pin to the bottom as a result. */
+#wsPopoutHost .ws-toolbar,
+#wsPopoutHost .ws-ribbon,
+#wsPopoutHost .ws-link-panel,
+#wsPopoutHost .ws-workbook-inner-tabs,
+#wsPopoutHost .ws-sheet-tabs,
+#wsPopoutHost .ws-statusbar {
+  flex: 0 0 auto;
+}
+#wsPopoutHost .ws-grid-wrapper {
+  flex: 1 1 auto;
+  max-height: none;
+  min-height: 0;
+}
+/* Full-bleed window: drop the embedded-card rounding/borders. */
+#wsPopoutHost .ws-toolbar,
+#wsPopoutHost .ws-ribbon {
+  border-radius: 0;
+  border-left: none;
+  border-right: none;
+}
+
+/* Sheet-tab kind icons (workbook / QB costs / attachments) are now
+   inline heroicons — size them to the tab text and center them. */
+.ws-sheet-tab-icon .p86-icon {
+  width: 13px;
+  height: 13px;
+  vertical-align: -2px;
+}
 /* The Pop-out button is meaningless once you're already in the pop-out. */
 body.p86-ws-popout .ws-tb-popout { display: none !important; }
 .ws-tb-popout { text-decoration: none; }

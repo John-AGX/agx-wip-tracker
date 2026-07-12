@@ -3177,6 +3177,18 @@
 
   // ── Rendering ──────────────────────────────────────────────
 
+  // Ribbon icon helper — AGX heroicon/phosphor line icons via the
+  // global registry. Defensive: if agx-icons.js hasn't executed yet
+  // (script-order edge on a cold cache) fall back to the plain text
+  // glyph so the button never renders empty.
+  function wsIco(name, fallback) {
+    if (window.p86Icon) {
+      var svg = window.p86Icon(name, { class: 'ws-ribbon-ico' });
+      if (svg) return svg;
+    }
+    return fallback || '';
+  }
+
   function buildWorkspaceHTML() {
     return `
       <!-- Formula bar — Excel-style cell reference + formula input,
@@ -3201,12 +3213,12 @@
              only way to import / export / find on that side. -->
         <div class="ws-ribbon-group">
           <div class="ws-ribbon-controls">
-            <button class="ws-btn ws-btn-icon" id="wsImportXlsxBtn" title="Import .xlsx / .xls / .csv as new sheets">&#x1F4E5;</button>
+            <button class="ws-btn ws-btn-icon" id="wsImportXlsxBtn" title="Import .xlsx / .xls / .csv as new sheets">${wsIco('import', '&#x1F4E5;')}</button>
             <input type="file" id="wsImportXlsxInput" accept=".xlsx,.xls,.csv" style="display:none;" />
-            <button class="ws-btn ws-btn-icon" id="wsExportXlsxBtn" onclick="window.wsExportXlsx()" title="Export workbook to .xlsx (preserves formulas, merges, column widths, frozen panes)">&#x1F4E4;</button>
-            <button class="ws-btn ws-btn-icon" id="wsExportCsvBtn" onclick="window.wsExportCsv()" title="Export active sheet to .csv">&#x1F4DD;</button>
-            <button class="ws-btn ws-btn-icon" id="wsFindReplaceBtn" onclick="window.wsOpenFindReplace()" title="Find / Replace (Ctrl+F)">&#x1F50D;</button>
-            <a class="ws-btn ws-btn-icon ws-tb-popout" href="#" target="_blank" rel="noopener" title="Pop out to a separate window — drag it to another monitor (right-click → Open in new window)">&#x29C9;</a>
+            <button class="ws-btn ws-btn-icon" id="wsExportXlsxBtn" onclick="window.wsExportXlsx()" title="Export workbook to .xlsx (preserves formulas, merges, column widths, frozen panes)">${wsIco('exports', '&#x1F4E4;')}</button>
+            <button class="ws-btn ws-btn-icon" id="wsExportCsvBtn" onclick="window.wsExportCsv()" title="Export active sheet to .csv">${wsIco('document-text', '&#x1F4DD;')}</button>
+            <button class="ws-btn ws-btn-icon" id="wsFindReplaceBtn" onclick="window.wsOpenFindReplace()" title="Find / Replace (Ctrl+F)">${wsIco('magnifying-glass', '&#x1F50D;')}</button>
+            <a class="ws-btn ws-btn-icon ws-tb-popout" href="#" target="_blank" rel="noopener" title="Pop out to a separate window — drag it to another monitor (right-click → Open in new window)">${wsIco('popout', '&#x29C9;')}</a>
           </div>
           <div class="ws-ribbon-label">File</div>
         </div>
@@ -3214,8 +3226,8 @@
         <!-- History -->
         <div class="ws-ribbon-group">
           <div class="ws-ribbon-controls">
-            <button class="ws-btn ws-btn-icon" id="wsUndoBtn" title="Undo (Ctrl+Z)">&#x21A9;</button>
-            <button class="ws-btn ws-btn-icon" id="wsRedoBtn" title="Redo (Ctrl+Y)">&#x21AA;</button>
+            <button class="ws-btn ws-btn-icon" id="wsUndoBtn" title="Undo (Ctrl+Z)">${wsIco('restore', '&#x21A9;')}</button>
+            <button class="ws-btn ws-btn-icon" id="wsRedoBtn" title="Redo (Ctrl+Y)">${wsIco('redo', '&#x21AA;')}</button>
           </div>
           <div class="ws-ribbon-label">History</div>
         </div>
@@ -3223,13 +3235,13 @@
         <!-- Font -->
         <div class="ws-ribbon-group">
           <div class="ws-ribbon-controls">
-            <button class="ws-btn ws-fmt-toggle" id="wsBoldBtn" data-style="bold" title="Bold (Ctrl+B)"><b>B</b></button>
-            <button class="ws-btn ws-fmt-toggle" id="wsItalicBtn" data-style="italic" title="Italic (Ctrl+I)"><i>I</i></button>
-            <button class="ws-btn ws-fmt-toggle" id="wsUnderlineBtn" data-style="underline" title="Underline (Ctrl+U)"><u>U</u></button>
-            <button class="ws-btn ws-fmt-toggle" id="wsStrikeBtn" data-style="strikethrough" title="Strikethrough"><s>S</s></button>
+            <button class="ws-btn ws-fmt-toggle" id="wsBoldBtn" data-style="bold" title="Bold (Ctrl+B)">${wsIco('bold', '<b>B</b>')}</button>
+            <button class="ws-btn ws-fmt-toggle" id="wsItalicBtn" data-style="italic" title="Italic (Ctrl+I)">${wsIco('italic', '<i>I</i>')}</button>
+            <button class="ws-btn ws-fmt-toggle" id="wsUnderlineBtn" data-style="underline" title="Underline (Ctrl+U)">${wsIco('underline', '<u>U</u>')}</button>
+            <button class="ws-btn ws-fmt-toggle" id="wsStrikeBtn" data-style="strikethrough" title="Strikethrough">${wsIco('strikethrough', '<s>S</s>')}</button>
             <div class="ws-color-dropdown" id="wsFillDropdown">
               <button class="ws-btn ws-btn-icon ws-color-trigger" id="wsFillBtn" title="Fill color">
-                <span class="ws-color-icon">&#x25A0;</span>
+                <span class="ws-color-icon">${wsIco('paint-brush', '&#x25A0;')}</span>
                 <span class="ws-color-swatch" id="wsFillSwatch"></span>
               </button>
               <div class="ws-color-panel" id="wsFillPanel">
@@ -3258,12 +3270,12 @@
         <!-- Alignment -->
         <div class="ws-ribbon-group">
           <div class="ws-ribbon-controls">
-            <button class="ws-btn ws-fmt-align" data-align="left" title="Align left">&#x2190;</button>
-            <button class="ws-btn ws-fmt-align" data-align="center" title="Align center">&#x2194;</button>
-            <button class="ws-btn ws-fmt-align" data-align="right" title="Align right">&#x2192;</button>
-            <button class="ws-btn ws-fmt-toggle" id="wsWrapBtn" data-style="wrap" title="Wrap text">&#x21B5;</button>
-            <button class="ws-btn" id="wsMergeBtn" title="Merge cells">&#x1F500;</button>
-            <button class="ws-btn" id="wsUnmergeBtn" title="Unmerge cells">&#x2702;</button>
+            <button class="ws-btn ws-fmt-align" data-align="left" title="Align left">${wsIco('align-left', '&#x2190;')}</button>
+            <button class="ws-btn ws-fmt-align" data-align="center" title="Align center">${wsIco('align-center', '&#x2194;')}</button>
+            <button class="ws-btn ws-fmt-align" data-align="right" title="Align right">${wsIco('align-right', '&#x2192;')}</button>
+            <button class="ws-btn ws-fmt-toggle" id="wsWrapBtn" data-style="wrap" title="Wrap text">${wsIco('wrap-text', '&#x21B5;')}</button>
+            <button class="ws-btn ws-btn-icon" id="wsMergeBtn" title="Merge cells">${wsIco('merge-cells', '&#x1F500;')}</button>
+            <button class="ws-btn ws-btn-icon" id="wsUnmergeBtn" title="Unmerge cells">${wsIco('fullscreen', '&#x2702;')}</button>
           </div>
           <div class="ws-ribbon-label">Alignment</div>
         </div>
@@ -3274,9 +3286,9 @@
             <button class="ws-btn ws-btn-fmt" data-fmt="currency" title="Currency format">$</button>
             <button class="ws-btn ws-btn-fmt" data-fmt="percent" title="Percent format">%</button>
             <button class="ws-btn ws-btn-fmt" data-fmt="comma" title="Comma format (1,234.56)">,</button>
-            <button class="ws-btn ws-btn-icon" id="wsIncDecBtn" onclick="window.wsIncDecimal()" title="Increase decimal places">&larr;.0</button>
-            <button class="ws-btn ws-btn-icon" id="wsDecDecBtn" onclick="window.wsDecDecimal()" title="Decrease decimal places">.0&rarr;</button>
-            <button class="ws-btn ws-btn-icon" id="wsNumFmtBtn" onclick="window.wsOpenNumFmt()" title="More number formats (custom)">&#x1F522;</button>
+            <button class="ws-btn ws-btn-icon ws-btn-txt" id="wsIncDecBtn" onclick="window.wsIncDecimal()" title="Increase decimal places">&larr;.0</button>
+            <button class="ws-btn ws-btn-icon ws-btn-txt" id="wsDecDecBtn" onclick="window.wsDecDecimal()" title="Decrease decimal places">.0&rarr;</button>
+            <button class="ws-btn ws-btn-icon" id="wsNumFmtBtn" onclick="window.wsOpenNumFmt()" title="More number formats (custom)">${wsIco('hashtag', '&#x1F522;')}</button>
             <button class="ws-btn ws-btn-fmt" data-fmt="null" title="Clear number format">&times;</button>
           </div>
           <div class="ws-ribbon-label">Number</div>
@@ -3286,7 +3298,7 @@
         <div class="ws-ribbon-group">
           <div class="ws-ribbon-controls">
             <div class="ws-color-dropdown" id="wsBorderDropdown">
-              <button class="ws-btn ws-btn-icon" id="wsBorderBtn" title="Borders">&#x25A6;</button>
+              <button class="ws-btn ws-btn-icon" id="wsBorderBtn" title="Borders">${wsIco('borders', '&#x25A6;')}</button>
               <div class="ws-color-panel ws-border-panel" id="wsBorderPanel">
                 <button class="ws-border-preset" data-border="all" title="All borders">&#x25A6; All borders</button>
                 <button class="ws-border-preset" data-border="outside" title="Outside borders">&#x25A2; Outside</button>
@@ -3307,10 +3319,10 @@
         <div class="ws-ribbon-group">
           <div class="ws-ribbon-controls">
             <div class="ws-color-dropdown" id="wsStyleDropdown">
-              <button class="ws-btn ws-btn-icon" id="wsStyleBtn" title="Cell styles">&#x1F3A8;</button>
+              <button class="ws-btn ws-btn-icon" id="wsStyleBtn" title="Cell styles">${wsIco('swatch', '&#x1F3A8;')}</button>
               <div class="ws-color-panel ws-style-panel" id="wsStylePanel"></div>
             </div>
-            <button class="ws-btn ws-btn-icon" id="wsClearFmtBtn" title="Clear formatting">&#x2718;</button>
+            <button class="ws-btn ws-btn-icon" id="wsClearFmtBtn" title="Clear formatting">${wsIco('eraser', '&#x2718;')}</button>
           </div>
           <div class="ws-ribbon-label">Styles</div>
         </div>
@@ -3322,8 +3334,8 @@
              column headers. -->
         <div class="ws-ribbon-group">
           <div class="ws-ribbon-controls">
-            <button class="ws-btn ws-btn-icon" id="wsLinkBtn" title="Link cell to job field">&#x1F517;</button>
-            <button class="ws-btn ws-btn-icon" id="wsMakeTableBtn" onclick="window.wsMakeTable()" title="Convert selected range into a styled table">&#x1F5C2;</button>
+            <button class="ws-btn ws-btn-icon" id="wsLinkBtn" title="Link cell to job field">${wsIco('links', '&#x1F517;')}</button>
+            <button class="ws-btn ws-btn-icon" id="wsMakeTableBtn" onclick="window.wsMakeTable()" title="Convert selected range into a styled table">${wsIco('workspace', '&#x1F5C2;')}</button>
           </div>
           <div class="ws-ribbon-label">Cells</div>
         </div>
@@ -3332,11 +3344,11 @@
              named ranges (Phase 2 Excel-parity tools). -->
         <div class="ws-ribbon-group">
           <div class="ws-ribbon-controls">
-            <button class="ws-btn ws-btn-icon" id="wsDataValidationBtn" onclick="window.wsOpenDataValidation()" title="Data validation (dropdown list / rules)">&#x2714;&#xFE0F;</button>
-            <button class="ws-btn ws-btn-icon" id="wsAutoFilterBtn" onclick="window.wsToggleAutoFilter()" title="Toggle AutoFilter on the selected header row">&#x1F53D;</button>
-            <button class="ws-btn ws-btn-icon" id="wsCommentBtn" onclick="window.wsOpenComment()" title="Insert / edit cell comment (Shift+F2)">&#x1F4AC;</button>
-            <button class="ws-btn ws-btn-icon" id="wsHyperlinkBtn" onclick="window.wsOpenHyperlink()" title="Insert hyperlink (Ctrl+K)">&#x1F517;</button>
-            <button class="ws-btn ws-btn-icon" id="wsNamedRangeBtn" onclick="window.wsOpenNamedRanges()" title="Define / manage named ranges">&#x1F3F7;&#xFE0F;</button>
+            <button class="ws-btn ws-btn-icon" id="wsDataValidationBtn" onclick="window.wsOpenDataValidation()" title="Data validation (dropdown list / rules)">${wsIco('check-circle', '&#x2714;')}</button>
+            <button class="ws-btn ws-btn-icon" id="wsAutoFilterBtn" onclick="window.wsToggleAutoFilter()" title="Toggle AutoFilter on the selected header row">${wsIco('funnel', '&#x1F53D;')}</button>
+            <button class="ws-btn ws-btn-icon" id="wsCommentBtn" onclick="window.wsOpenComment()" title="Insert / edit cell comment (Shift+F2)">${wsIco('conversations', '&#x1F4AC;')}</button>
+            <button class="ws-btn ws-btn-icon" id="wsHyperlinkBtn" onclick="window.wsOpenHyperlink()" title="Insert hyperlink (Ctrl+K)">${wsIco('link', '&#x1F517;')}</button>
+            <button class="ws-btn ws-btn-icon" id="wsNamedRangeBtn" onclick="window.wsOpenNamedRanges()" title="Define / manage named ranges">${wsIco('tag', '&#x1F3F7;')}</button>
           </div>
           <div class="ws-ribbon-label">Data</div>
         </div>
@@ -3350,11 +3362,11 @@
         <!-- Editing -->
         <div class="ws-ribbon-group">
           <div class="ws-ribbon-controls">
-            <button class="ws-btn" id="wsAutoSumBtn" onclick="window.wsAutoSum()" title="AutoSum (Σ) — insert =SUM with auto-detected range">&#x03A3;</button>
-            <button class="ws-btn" id="wsSortAscBtn" onclick="window.wsSortAscHeader()" title="Sort range ascending">&#x2191;A</button>
-            <button class="ws-btn" id="wsSortDescBtn" onclick="window.wsSortDescHeader()" title="Sort range descending">&#x2193;Z</button>
-            <button class="ws-btn" id="wsClearContentsBtn" onclick="window.wsClearContents()" title="Clear contents (Delete)">&#x232B;</button>
-            <button class="ws-btn" id="wsFindBtn" onclick="window.wsOpenFindReplace()" title="Find &amp; Replace (Ctrl+F)">&#x1F50D;</button>
+            <button class="ws-btn ws-btn-txt" id="wsAutoSumBtn" onclick="window.wsAutoSum()" title="AutoSum (Σ) — insert =SUM with auto-detected range">&#x03A3;</button>
+            <button class="ws-btn ws-btn-icon" id="wsSortAscBtn" onclick="window.wsSortAscHeader()" title="Sort range ascending">${wsIco('sort-asc', '&#x2191;A')}</button>
+            <button class="ws-btn ws-btn-icon" id="wsSortDescBtn" onclick="window.wsSortDescHeader()" title="Sort range descending">${wsIco('sort-desc', '&#x2193;Z')}</button>
+            <button class="ws-btn ws-btn-icon" id="wsClearContentsBtn" onclick="window.wsClearContents()" title="Clear contents (Delete)">${wsIco('backspace', '&#x232B;')}</button>
+            <button class="ws-btn ws-btn-icon" id="wsFindBtn" onclick="window.wsOpenFindReplace()" title="Find &amp; Replace (Ctrl+F)">${wsIco('magnifying-glass', '&#x1F50D;')}</button>
             <select id="wsFreezeSelect" class="ws-select-compact" onchange="window.wsSetFreeze(this.value || null); this.value='';" title="Freeze panes">
               <option value="">&#x2744;</option>
               <option value="row">Top row</option>
@@ -3441,7 +3453,7 @@
         html += '<div class="ws-sheet-tab ws-workbook-tab' + (isActiveGroup ? ' active' : '') +
           '" data-workbook-group="' + s.workbookGroupId +
           '" title="' + escapeAttr(s.workbookGroupName || 'Workbook') + '">' +
-          '<span class="ws-sheet-tab-icon" aria-hidden="true">&#x1F4D2;</span> ' +
+          '<span class="ws-sheet-tab-icon" aria-hidden="true">' + wsIco('workspace', '&#x1F4D2;') + '</span> ' +
           '<span class="ws-sheet-tab-name">' + escapeHTML(s.workbookGroupName || 'Workbook') + '</span>' +
           '<span class="ws-workbook-tab-count">' + visibleSize + '</span>' +
         '</div>';
@@ -3455,10 +3467,10 @@
       var icon = '';
       var kindCls = '';
       if (s.kind === 'qb-costs') {
-        icon = '<span class="ws-sheet-tab-icon" aria-hidden="true">&#x1F4CB;</span> ';
+        icon = '<span class="ws-sheet-tab-icon" aria-hidden="true">' + wsIco('wip', '&#x1F4CB;') + '</span> ';
         kindCls = ' ws-sheet-tab-qb-costs';
       } else if (s.kind === 'attachments') {
-        icon = '<span class="ws-sheet-tab-icon" aria-hidden="true">&#x1F4CE;</span> ';
+        icon = '<span class="ws-sheet-tab-icon" aria-hidden="true">' + wsIco('attachments', '&#x1F4CE;') + '</span> ';
         kindCls = ' ws-sheet-tab-attachments';
       }
       // Phase 0 — sheets inherited from an estimate at the moment a

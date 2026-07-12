@@ -125,6 +125,31 @@ const MAP = {
   //   wx-cloud-snow    snow / sleet
   //   wx-cloud-fog     fog / mist / haze
   //   wx-cloud-warning severe / advisory / "warning"-labeled forecasts
+  // Workspace ribbon toolset (Excel-parity ribbon rework). Heroicons
+  // 24/outline text-editing + layout set; names mirror the tool, not
+  // the glyph, so the ribbon markup reads like a feature list.
+  'redo':            'heroicons/arrow-uturn-right',
+  'bold':            'heroicons/bold',
+  'italic':          'heroicons/italic',
+  'underline':       'heroicons/underline',
+  'strikethrough':   'heroicons/strikethrough',
+  'align-left':      'heroicons/bars-3-bottom-left',
+  'align-center':    'heroicons/bars-3',
+  'align-right':     'heroicons/bars-3-bottom-right',
+  'wrap-text':       'heroicons/arrow-uturn-down',
+  'merge-cells':     'heroicons/arrows-pointing-in',
+  'hashtag':         'heroicons/hashtag',
+  'swatch':          'heroicons/swatch',
+  'borders':         'heroicons/squares-2x2',
+  'tag':             'heroicons/tag',
+  'link':            'heroicons/link',
+  'backspace':       'heroicons/backspace',
+  'sort-asc':        'heroicons/bars-arrow-up',
+  'sort-desc':       'heroicons/bars-arrow-down',
+  'document-text':   'heroicons/document-text',
+  'popout':          'heroicons/arrow-top-right-on-square',
+  'paint-brush':     'heroicons/paint-brush',
+  'eraser':          'phosphor/eraser-light',
   'wx-sun':            'phosphor/sun-light',
   'wx-cloud-sun':      'phosphor/cloud-sun-light',
   'wx-cloud':          'phosphor/cloud-light',
