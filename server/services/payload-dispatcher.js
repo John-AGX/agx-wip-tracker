@@ -287,6 +287,22 @@ const PAYLOAD_OPS_SCHEMAS = Object.freeze({
     //           user stamped from ctx.
     allowedTopKeys: new Set(['op', 'fields']),
   },
+  assembly: {
+    // Costed estimating recipes (assemblies + assembly_items — relational,
+    // NOT appData JSONB). 86 owns this database; writes ride the normal
+    // approval flow.
+    // op 'create': fields { name (required), code?, trade?, category?,
+    //   unit? (output unit, default EA), description?, notes?, source? } +
+    //   items[] (full recipe rows).
+    // op 'update': entity_id = assembly id; fields (header changes) and/or
+    //   items[] (FULL REPLACE of the recipe rows).
+    // op 'delete': entity_id = assembly id. High-risk → always cards.
+    // Item row: { kind: material|labor|sub|gc|assembly, material_id?,
+    //   child_assembly_id?, description?, qty_per_unit (per 1 output unit),
+    //   unit?, unit_cost? (null on material rows = live catalog price),
+    //   cost_code?, waste_pct? }
+    allowedTopKeys: new Set(['op', 'fields', 'items']),
+  },
 });
 
 // Mirror of the client-side template registry (js/report-templates.js)
@@ -322,6 +338,20 @@ function validateOps(entityType, ops) {
     }
   }
   // Per-entity sanity:
+  if (entityType === 'assembly') {
+    if (ops.op && !['create', 'update', 'delete'].includes(ops.op)) {
+      throw new Error(`assembly op must be create | update | delete (got '${ops.op}')`);
+    }
+    if (ops.fields && typeof ops.fields !== 'object') {
+      throw new Error('assembly ops.fields must be an object of header fields');
+    }
+    if (ops.items && !Array.isArray(ops.items)) {
+      throw new Error('assembly ops.items must be an array of recipe rows');
+    }
+    if ((ops.op === 'create' || !ops.op) && !(ops.fields && ops.fields.name)) {
+      throw new Error('assembly create requires fields.name');
+    }
+  }
   if (entityType === 'client') {
     if (ops.fields && typeof ops.fields !== 'object') {
       throw new Error('client.ops.fields must be an object');
@@ -2587,6 +2617,81 @@ async function dispatchReminder(dbClient, target, refTable, ctx) {
   };
 }
 
+// ── assembly — costed estimating recipes (relational tables) ─────────
+// 86's write path for the assembly database. Reuses the shared service
+// (validation incl. the sub-assembly cycle guard) with THIS transaction's
+// client so the whole payload stays atomic.
+async function dispatchAssembly(dbClient, target, refTable, ctx) {
+  const asmSvc = require('./assemblies');
+  const ops = target.ops || {};
+  resolveRefsInOps(ops, refTable);
+  if (!ctx || !ctx.organizationId) {
+    throw new Error('assembly write requires an authenticated org context');
+  }
+  const orgId = ctx.organizationId;
+  const opType = ops.op || (target.entity_id ? 'update' : 'create');
+
+  if (opType === 'create') {
+    const fields = ops.fields || {};
+    let id;
+    try {
+      id = await asmSvc.createAssembly(dbClient, orgId, fields, ctx.userId || null);
+    } catch (ve) { throw new Error('assembly.create: ' + ve.message); }
+    if (Array.isArray(ops.items) && ops.items.length) {
+      const err = await asmSvc.replaceItems(dbClient, id, ops.items, orgId);
+      if (err) throw new Error('assembly.create items: ' + err);
+    }
+    if (isRef(target.entity_id)) refTable[target.entity_id] = id;
+    return {
+      entity_type: 'assembly', entity_id: id, op: 'create',
+      changes: [{ field: 'items', after: (ops.items || []).length + ' recipe row(s)' }],
+      summary: `Created assembly "${fields.name}" (${fields.unit || 'EA'}) with ${(ops.items || []).length} item(s)`,
+    };
+  }
+
+  const asmId = parseInt(target.entity_id, 10);
+  if (!isFinite(asmId)) throw new Error('assembly.' + opType + ' requires a numeric entity_id');
+  const row = await dbClient.query(
+    'SELECT id, name FROM assemblies WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+    [asmId, orgId]);
+  if (!row.rows.length) throw new Error('Assembly not found: ' + asmId);
+  const asmName = row.rows[0].name;
+
+  if (opType === 'update') {
+    const changes = [];
+    if (ops.fields && Object.keys(ops.fields).length) {
+      await asmSvc.updateHeader(dbClient, orgId, asmId, ops.fields);
+      changes.push({ field: 'header', after: Object.keys(ops.fields).join(', ') });
+    }
+    if (Array.isArray(ops.items)) {
+      const err = await asmSvc.replaceItems(dbClient, asmId, ops.items, orgId);
+      if (err) throw new Error('assembly.update items: ' + err);
+      changes.push({ field: 'items', after: ops.items.length + ' recipe row(s) (full replace)' });
+    }
+    return {
+      entity_type: 'assembly', entity_id: asmId, op: 'update', changes,
+      summary: `Updated assembly "${asmName}" (${changes.map((c) => c.field).join(' + ') || 'no-op'})`,
+    };
+  }
+
+  if (opType === 'delete') {
+    const parents = await dbClient.query(
+      `SELECT DISTINCT a.name FROM assembly_items ai JOIN assemblies a ON a.id = ai.assembly_id
+        WHERE ai.child_assembly_id = $1`, [asmId]);
+    if (parents.rows.length) {
+      throw new Error(`Cannot delete "${asmName}" — nested as a sub-assembly in: ` +
+        parents.rows.map((r) => r.name).join(', '));
+    }
+    await dbClient.query('DELETE FROM assemblies WHERE id = $1', [asmId]);
+    return {
+      entity_type: 'assembly', entity_id: asmId, op: 'delete', changes: [],
+      summary: `Deleted assembly "${asmName}"`,
+    };
+  }
+
+  throw new Error(`assembly: unsupported op '${opType}'`);
+}
+
 const DISPATCHERS = {
   client: dispatchClient,
   estimate: dispatchEstimate,
@@ -2599,6 +2704,7 @@ const DISPATCHERS = {
   task: dispatchTask,
   todo: dispatchTodo,
   reminder: dispatchReminder,
+  assembly: dispatchAssembly,
 };
 
 async function dispatchTarget(dbClient, target, refTable, ctx) {

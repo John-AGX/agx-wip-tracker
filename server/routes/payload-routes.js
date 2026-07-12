@@ -67,7 +67,7 @@ const router = express.Router();
 // Skeleton; refined as dispatchers come online.
 // ──────────────────────────────────────────────────────────────────
 const ALLOWED_ENTITY_TYPES = new Set([
-  'estimate', 'job', 'client', 'lead', 'schedule', 'system',
+  'estimate', 'job', 'client', 'lead', 'schedule', 'system', 'assembly',
 ]);
 
 // ──────────────────────────────────────────────────────────────────
@@ -256,6 +256,7 @@ const PAYLOAD_APPLY_CAP = {
   report:   ['JOBS_EDIT_ANY', 'JOBS_EDIT_OWN'],
   schedule: ['JOBS_VIEW_ALL'],
   system:   ['ROLES_MANAGE'],
+  assembly: ['ESTIMATES_EDIT'],
 };
 
 // Walk a payload's targets[] (regular + move source/dest + bulk) and

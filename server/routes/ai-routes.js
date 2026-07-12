@@ -363,6 +363,20 @@ const ESTIMATE_TOOLS = [
     }
   },
   {
+    name: 'read_assemblies',
+    description: 'Query Project 86\'s ASSEMBLIES — costed recipes that price ONE OUTPUT UNIT of installed work (e.g. "Exterior Repaint — Stucco, per SF" = primer + paint + painter hours + nested pressure-wash sub-assembly). **CALL THIS BEFORE PRICING ANY SCOPE OF WORK** — if a matching assembly exists, its resolved unit cost beats line-by-line guessing, and materials in it are live-priced from our purchase history. Without `id`: returns the index (id, code, name, trade, output unit, resolved cost/unit, item count). With `id`: full recipe (items incl. nested sub-assemblies) PLUS `flat` — leaf rows with effective qty per 1 output unit; multiply each flat row by the takeoff qty to build estimate line_adds (carry source_material_id and set source_assembly_id so actuals can roll up per assembly later). You are the owner of this database: when a recipe is missing or its rates look stale, say so and offer to draft the fix via scribe_write (entity_type "assembly").',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        q: { type: 'string', description: 'Free-text filter across name / code / trade, e.g. "stucco", "repaint", "fascia". Omit to list all.' },
+        id: { type: 'integer', description: 'Assembly id — returns the full recipe + flattened leaf rows for estimate insertion.' },
+        limit: { type: 'integer', minimum: 1, maximum: 100, description: 'Cap index rows. Default 30.' }
+      },
+      required: []
+    }
+  },
+  {
     name: 'read_purchase_history',
     description: 'Drill into the per-purchase log for a specific material (or by free-text query). Returns purchase_date, quantity, unit_price, store_number, job_name, and net_unit_price for individual receipts — the source rows that aggregate into read_materials\' last/avg/min/max stats. Use this to answer "what did we pay last time we bought X?", "is this material trending up in price?", "which jobs used this SKU recently?". Pair with read_materials: read_materials gets you the rolled-up summary, read_purchase_history gets you the receipt-level detail.',
     input_schema: {
@@ -660,6 +674,23 @@ const ESTIMATE_TOOLS = [
 // wire_nodes, assign_qb_line, set_phase_field, create_node, etc.
 // ──────────────────────────────────────────────────────────────────
 const JOB_TOOLS = [
+  {
+    // Job-side copy of read_assemblies (86 owns the assembly database on
+    // every surface — estimate chat, job chat, managed router). Handler is
+    // shared via execStaffTool.
+    name: 'read_assemblies',
+    description: 'Query Project 86\'s ASSEMBLIES — costed recipes pricing ONE OUTPUT UNIT of installed work (materials live-priced from purchase history + labor at production rates + nested sub-assemblies). Use when comparing job costs to standard pricing, scoping change orders, or answering "what should X cost per SF/LF". Without `id`: index with resolved cost/unit. With `id`: full recipe + `flat` leaf rows per 1 output unit. You own this database — flag stale rates and offer to draft fixes via scribe_write (entity_type "assembly").',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        q: { type: 'string', description: 'Free-text filter across name / code / trade. Omit to list all.' },
+        id: { type: 'integer', description: 'Assembly id — returns the full recipe + flattened leaf rows.' },
+        limit: { type: 'integer', minimum: 1, maximum: 100, description: 'Cap index rows. Default 30.' }
+      },
+      required: []
+    }
+  },
   {
     name: 'start_background_task',
     description:
@@ -1946,6 +1977,30 @@ async function buildEstimateContext(estimateId, includePhotos, aiPhaseOverride, 
       lines.push('');
     }
   } catch (e) { /* materials table may not exist yet on a fresh deploy */ }
+
+  // Assemblies snapshot — 86 OWNS the assembly database (costed recipes
+  // per output unit of installed work). Price whole scopes from recipes
+  // FIRST; fall back to line-by-line materials reads only when no recipe
+  // fits. Best-effort like the materials block above.
+  try {
+    const _asmOrgId = (organization && organization.id) || null;
+    const asmRes = await pool.query(
+      `SELECT COUNT(*)::int AS total,
+              array_agg(DISTINCT trade) FILTER (WHERE trade IS NOT NULL) AS trades
+         FROM assemblies
+        WHERE is_hidden = false AND ($1::int IS NULL OR organization_id = $1 OR organization_id IS NULL)`,
+      [_asmOrgId]
+    );
+    const totalAsm = asmRes.rows[0].total || 0;
+    if (totalAsm > 0) {
+      const trades = (asmRes.rows[0].trades || []).filter(Boolean);
+      lines.push('# Assemblies (costed recipes) — you own this database');
+      lines.push(`Project 86 has ${totalAsm} assemblies — recipes that price ONE OUTPUT UNIT of installed work (per SF/LF/SQ/EA). Trades covered: ${trades.join(', ') || '(untagged)'}.`);
+      lines.push('**Price scopes from assemblies FIRST**: call `read_assemblies` with a trade/scope keyword before line-by-line pricing. To put a recipe on this estimate, fetch it with `id`, multiply each `flat` row by the takeoff qty, and emit line_adds routed to the section matching each row\'s cost_code — carry source_material_id and set source_assembly_id.');
+      lines.push('When rates look stale or a recipe is missing, say so and offer to draft the create/update via `scribe_write` (entity_type "assembly") — the user approves in chat.');
+      lines.push('');
+    }
+  } catch (e) { /* assemblies table may not exist yet on a fresh deploy */ }
 
   // Attachments roll-up — ALWAYS rendered so the model has a
   // definitive signal of "I checked, here's what's attached" even
@@ -7545,7 +7600,7 @@ const PAYLOAD_TOOLS = [
             properties: {
               entity_type: {
                 type: 'string',
-                enum: ['estimate', 'job', 'lead', 'client', 'schedule', 'system', 'report', 'calendar_event', 'task', 'todo', 'reminder'],
+                enum: ['estimate', 'job', 'lead', 'client', 'schedule', 'system', 'report', 'calendar_event', 'task', 'todo', 'reminder', 'assembly'],
               },
               entity_id: {
                 type: 'string',
@@ -8894,6 +8949,51 @@ async function execStaffTool(name, input, ctx) {
       lines.push('');
       lines.push('Call read_attachment_text({attachment_id}) on any [id] above to read the full body.');
       return lines.join('\n');
+    }
+
+    case 'read_assemblies': {
+      // Costed estimating recipes — shared service with /api/assemblies
+      // and the payload dispatcher's 'assembly' write target.
+      const asmSvc = require('../services/assemblies');
+      let _asmOrgId = null;
+      try { _asmOrgId = await resolveOrgIdFromCtx(ctx); } catch (_) {}
+      const graph = await asmSvc.loadGraph(pool, _asmOrgId);
+      const wantId = input && input.id != null ? parseInt(input.id, 10) : null;
+      if (wantId != null && isFinite(wantId)) {
+        const a = graph.assemblies.get(wantId);
+        if (!a) return 'No assembly with id ' + wantId + '. Call read_assemblies with no id to list what exists.';
+        const cost = asmSvc.resolveCost(wantId, graph);
+        return JSON.stringify({
+          assembly: {
+            id: a.id, code: a.code, name: a.name, description: a.description,
+            trade: a.trade, unit: a.unit, source: a.source, notes: a.notes,
+            unit_cost: cost.unitCost, incomplete: cost.incomplete,
+          },
+          items: (graph.itemsBy.get(wantId) || []).map(asmSvc.shapeItem),
+          flat: asmSvc.flatten(wantId, graph, 1),
+          usage: 'flat rows are per 1 ' + (a.unit || 'unit') + ' of installed work. Line qty = takeoff × qty_per_unit. Route each line to the section matching its cost_code; carry source_material_id and set source_assembly_id=' + a.id + '.',
+        }, null, 1);
+      }
+      const q2 = (input && input.q || '').trim().toLowerCase();
+      const lim = Math.max(1, Math.min(100, Number(input && input.limit) || 30));
+      const rows = [];
+      for (const a of graph.assemblies.values()) {
+        if (a.is_hidden) continue;
+        if (q2 && !((a.name || '') + ' ' + (a.code || '') + ' ' + (a.trade || '')).toLowerCase().includes(q2)) continue;
+        const cost = asmSvc.resolveCost(a.id, graph);
+        rows.push({
+          id: a.id, code: a.code, name: a.name, trade: a.trade, unit: a.unit,
+          unit_cost: cost.unitCost, incomplete: cost.incomplete,
+          items: (graph.itemsBy.get(a.id) || []).length, source: a.source,
+        });
+        if (rows.length >= lim) break;
+      }
+      if (!rows.length) {
+        return q2
+          ? 'No assemblies matched "' + q2 + '". ' + graph.assemblies.size + ' exist — list all with no filter, or offer to draft a new recipe via scribe_write (entity_type "assembly").'
+          : 'No assemblies exist yet. Offer to draft the first recipes via scribe_write (entity_type "assembly").';
+      }
+      return JSON.stringify({ assemblies: rows, note: 'Call read_assemblies with an id for the full recipe + flat explode rows.' }, null, 1);
     }
 
     case 'read_materials': {
@@ -11324,6 +11424,7 @@ const AI_TOOL_CAPABILITY = new Map([
   ['read_past_estimate_lines', 'ESTIMATES_VIEW'],
   ['read_active_lines',        'ESTIMATES_VIEW'],
   ['read_materials',           'ESTIMATES_VIEW'],
+  ['read_assemblies',          'ESTIMATES_VIEW'],
   ['read_purchase_history',    'ESTIMATES_VIEW'],
   ['read_subs',                'ESTIMATES_VIEW'],
   ['read_clients',          ['ESTIMATES_VIEW', 'LEADS_VIEW']],
