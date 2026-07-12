@@ -320,7 +320,11 @@ router.get('/:id/nearby-safety', requireAuth, requireCapability('ESTIMATES_VIEW'
       hospital: safety.hospital, fire: safety.fire,
       generatedAt: new Date().toISOString()
     };
-    _safetyCache.set(cacheKey, { data: out, ts: Date.now() });
+    // Only cache lookups that actually found something. Caching error
+    // results (e.g. Places API not yet enabled on the key) would pin the
+    // failure for 7 days after the key is fixed.
+    const gotAny = (safety.hospital && !safety.hospital.error) || (safety.fire && !safety.fire.error);
+    if (gotAny) _safetyCache.set(cacheKey, { data: out, ts: Date.now() });
     res.json(out);
   } catch (e) {
     console.error('GET /api/clients/:id/nearby-safety error:', e);
