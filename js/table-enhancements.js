@@ -5,9 +5,11 @@
         instead of growing the page (max-height bounded to the screen).
      2. Reorder columns — drag a header left/right to move a column.
      3. Resize columns — drag the right edge of a header.
-     4. Freeze the first column — the Job # / Title column stays pinned
-        on the left while the rest of the table scrolls horizontally.
-        The frozen column is ALWAYS forced to index 0.
+     4. Pin a column — right-click a header → "Pin column" to freeze it on
+        the left while the rest scrolls horizontally. NOTHING is pinned by
+        default; a pin is user-set, forced to index 0, and persists per table
+        (layout.pinned). "Unpin column" clears it. (The REGISTRY `frozen` keys
+        are legacy defaults, now ignored — see effectiveFrozen.)
      5. Persist layout — column order + widths are saved per-table in
         localStorage (`p86_tablayout_<key>_v1`) and reapplied on render.
      6. Right-click a header → "Reset columns" to restore defaults.
@@ -145,7 +147,8 @@
       if (!o || typeof o !== 'object') return null;
       return {
         order: Array.isArray(o.order) ? o.order : null,
-        widths: (o.widths && typeof o.widths === 'object') ? o.widths : {}
+        widths: (o.widths && typeof o.widths === 'object') ? o.widths : {},
+        pinned: (typeof o.pinned === 'string' && o.pinned) ? o.pinned : null
       };
     } catch (e) { return null; }
   }
@@ -156,6 +159,21 @@
 
   function clearLayout(key) {
     try { localStorage.removeItem(lsKey(key)); } catch (e) {}
+  }
+
+  // The frozen (sticky-left) column is USER-CONTROLLED — nothing is pinned by
+  // default (the REGISTRY `frozen` keys are now just legacy defaults, ignored).
+  // A pin persists in the layout blob as layout.pinned. Right-click a header →
+  // Pin column. Returns the pinned data-col key, or null when nothing is pinned.
+  function effectiveFrozen(key) {
+    var layout = loadLayout(key);
+    return (layout && layout.pinned) ? layout.pinned : null;
+  }
+  function setPinned(key, col) {
+    var layout = loadLayout(key) || { order: null, widths: {} };
+    layout.pinned = col || null;
+    saveLayout(key, layout);
+    enhance(key);   // re-apply layout with the new pin (idempotent)
   }
 
   // ── DOM helpers ─────────────────────────────────────────────────
@@ -194,8 +212,8 @@
       def.forEach(function (c) { if (saved.indexOf(c) === -1) saved.push(c); });
       order = saved;
     }
-    var fr = REGISTRY[key].frozen;
-    var i = order.indexOf(fr);
+    var fr = effectiveFrozen(key);
+    var i = fr ? order.indexOf(fr) : -1;
     if (i > 0) { order.splice(i, 1); order.unshift(fr); }
     return order;
   }
@@ -409,7 +427,7 @@
       active.th.classList.remove('p86-th-dragging');
       var order = computeDropOrder(active.key, active.table, active.col, e.clientX);
       applyOrder(active.table, order);
-      applyFrozen(active.table, REGISTRY[active.key].frozen);
+      applyFrozen(active.table, effectiveFrozen(active.key));
       persistOrder(active.key, active.table, order);
     }
     cleanupMove();
@@ -439,8 +457,8 @@
       if (r && (r.left + r.width / 2) < clientX) idx = i + 1;
     }
     others.splice(idx, 0, col);
-    var fr = REGISTRY[key].frozen;
-    var fi = others.indexOf(fr);
+    var fr = effectiveFrozen(key);
+    var fi = fr ? others.indexOf(fr) : -1;
     if (fi > 0) { others.splice(fi, 1); others.unshift(fr); }
     return others;
   }
@@ -460,7 +478,7 @@
 
   // ── header wiring (resizer + drag + reset menu) ─────────────────
   function wireHeader(key, table) {
-    var frozen = REGISTRY[key].frozen;
+    var frozen = effectiveFrozen(key);
     var thead = table.tHead;
     if (!thead || !thead.rows.length) return;
 
@@ -473,7 +491,8 @@
       }, true);
       thead.addEventListener('contextmenu', function (e) {
         e.preventDefault();
-        showResetMenu(key, e.clientX, e.clientY);
+        var th = e.target && e.target.closest ? e.target.closest('th[data-col]') : null;
+        showResetMenu(key, e.clientX, e.clientY, th ? th.getAttribute('data-col') : null);
       });
     }
 
@@ -500,12 +519,26 @@
   }
 
   // ── reset menu ──────────────────────────────────────────────────
-  function showResetMenu(key, x, y) {
+  function showResetMenu(key, x, y, col) {
     hideResetMenu();
     menuEl = document.createElement('div');
     menuEl.className = 'p86-tbl-menu';
     menuEl.style.left = x + 'px';
     menuEl.style.top = y + 'px';
+    // Pin / Unpin the right-clicked column (only when a real column was hit).
+    // Nothing is pinned by default — this is the only way a column freezes.
+    if (col) {
+      var pinnedNow = effectiveFrozen(key);
+      var pinBtn = document.createElement('button');
+      pinBtn.type = 'button';
+      pinBtn.className = 'p86-tbl-menu-item';
+      pinBtn.textContent = (pinnedNow === col) ? 'Unpin column' : 'Pin column';
+      pinBtn.addEventListener('click', function () {
+        hideResetMenu();
+        setPinned(key, (pinnedNow === col) ? null : col);
+      });
+      menuEl.appendChild(pinBtn);
+    }
     var btn = document.createElement('button');
     btn.type = 'button';
     btn.className = 'p86-tbl-menu-item';
@@ -552,7 +585,7 @@
     var order = computeOrder(key, table);
     applyOrder(table, order);
     applyWidths(table, order, colWidths(key, table, order));
-    applyFrozen(table, reg.frozen);
+    applyFrozen(table, effectiveFrozen(key));
     wireHeader(key, table);
     setupScroll(table);
     installResizeHandler();
