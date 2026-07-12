@@ -7503,7 +7503,64 @@
     return candidate;
   }
 
+  // Server-side export (full style fidelity) — POSTs the live workbook
+  // model to /api/workspace/export-xlsx, where exceljs writes fonts,
+  // fills, borders, alignment and exact geometry that the SheetJS
+  // Community build (kept below as the OFFLINE fallback) cannot emit.
   window.wsExportXlsx = function() {
+    syncGridToActiveSheet();
+    var realSheets = workbook.sheets.filter(function(s) {
+      return !s.hidden && !s.pinned && (!s.kind || s.kind === 'grid');
+    });
+    if (!realSheets.length) {
+      alert('No grid sheets to export — add a sheet or import one first.');
+      return;
+    }
+    var entityLabel = workbook.entityType || 'workspace';
+    var idStr = workbook.entityId == null ? 'unknown' : String(workbook.entityId);
+    var filename = 'workspace-' + entityLabel + '-' + idStr + '-' + new Date().toISOString().slice(0, 10) + '.xlsx';
+    var status = document.getElementById('wsStatus');
+    if (status) status.textContent = 'Exporting…';
+
+    var headers = { 'Content-Type': 'application/json' };
+    var token = (window.p86Auth && window.p86Auth.getToken && window.p86Auth.getToken()) || localStorage.getItem('p86-auth-token');
+    if (token) headers['Authorization'] = 'Bearer ' + token;
+
+    fetch('/api/workspace/export-xlsx', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: headers,
+      body: JSON.stringify({
+        filename: filename,
+        activeSheetId: workbook.activeSheetId,
+        sheets: realSheets,
+        namedRanges: workbook.namedRanges || {}
+      })
+    }).then(function(r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.blob();
+    }).then(function(blob) {
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(function() { URL.revokeObjectURL(a.href); a.remove(); }, 2000);
+      if (status) {
+        status.textContent = '✓ Exported ' + realSheets.length + ' sheet(s)';
+        setTimeout(function() { status.textContent = 'Ready'; }, 2500);
+      }
+    }).catch(function(e) {
+      console.warn('[workspace] server export failed, falling back to client export:', e && e.message);
+      if (status) status.textContent = 'Ready';
+      wsExportXlsxClientFallback();
+    });
+  };
+
+  // Legacy client-side export via SheetJS — offline / server-error
+  // fallback only. Values + formulas + numFmts + geometry, NO styles
+  // (Community-build limitation — the server path carries the styles).
+  function wsExportXlsxClientFallback() {
     if (typeof XLSX === 'undefined') {
       alert('Excel library is still loading. Try again in a moment.');
       return;

@@ -121,6 +121,9 @@ app.use('/api/jobs/:jobId/reports', reportRoutes);
 // (buildings, phases, COs).
 app.use('/api/reports', reportsPolymorphicRoutes);
 app.use('/api/field-tools', fieldToolsRoutes);
+// Workspace ⇄ Excel fidelity — server-side xlsx export (exceljs writes
+// the styles the old client-side SheetJS Community exporter could not).
+app.use('/api/workspace', require('./routes/workspace-xlsx-routes'));
 // Payload DSL routes — file download, reject, apply (inline approval
 // card). Mounted before the broad /api/ai handler so /api/payloads
 // claims its namespace without ambiguity.
