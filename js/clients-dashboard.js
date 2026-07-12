@@ -213,9 +213,15 @@
     loadSafety(c.id, { items: mapItems });
   }
 
+  // The open dossier's client id — read by router.js so /clients/:id
+  // deep-links round-trip through the READ-ONLY dossier (the edit modal
+  // is transient and deliberately not URL-addressable).
+  var _openId = null;
+
   function openClientDashboard(id) {
     var host = document.getElementById('clientDashboard_body');
     if (!host) return;
+    _openId = id;
     host.innerHTML = '<div style="padding:40px;text-align:center;color:var(--text-dim,#8a93a6);">Loading client dashboard…</div>';
     show('clientDashboardModal');
     authedGet('/api/clients/' + encodeURIComponent(id) + '/dashboard').then(function (res) {
@@ -223,10 +229,11 @@
       render(host, res.body);
     }).catch(function (e) { host.innerHTML = '<div style="padding:30px;color:#f87171;">Error: ' + esc(e && e.message) + '</div>'; });
   }
-  function closeClientDashboard() { hide('clientDashboardModal'); }
-  function openClientDashboardEdit(id) { hide('clientDashboardModal'); if (typeof window.openEditClientModal === 'function') window.openEditClientModal(id); }
+  function closeClientDashboard() { _openId = null; hide('clientDashboardModal'); }
+  function openClientDashboardEdit(id) { closeClientDashboard(); if (typeof window.openEditClientModal === 'function') window.openEditClientModal(id); }
 
   window.openClientDashboard = openClientDashboard;
   window.closeClientDashboard = closeClientDashboard;
   window.openClientDashboardEdit = openClientDashboardEdit;
+  window.p86ClientDossier = { getOpenId: function () { return _openId; } };
 })();

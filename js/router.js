@@ -22,7 +22,10 @@
 //   /estimates/leads/:leadId          lead detail view open
 //   /estimates/edit/:estId            estimate editor open
 //   /clients                          clients directory (renders inside Estimates pane)
-//   /clients/:clientId                client editor modal open
+//   /clients/:clientId                client DOSSIER open (read-only view;
+//                                     the edit modal is transient and never
+//                                     serialized — a relaunch/session-restore
+//                                     must not reopen an edit form)
 //   /subs                             subs/vendors directory
 //   /subs/:subId                      sub editor modal open
 //   /schedule
@@ -293,13 +296,15 @@
         }
       }
       if (estSub === 'clients') {
-        // Client editor modal — openModal() adds .active to the modal
-        // shell, the open client's id is parked in the hidden input.
-        var clientModal = document.getElementById('clientEditorModal');
-        var clientOpen = clientModal && clientModal.classList.contains('active');
-        var clientIdInput = document.getElementById('clientEditor_id');
-        var cid = clientIdInput && clientIdInput.value ? clientIdInput.value : null;
-        if (clientOpen && cid) { route.estSub = 'clients'; route.clientId = cid; return route; }
+        // Client DOSSIER (read-only) is the deep-linkable state. The edit
+        // modal is intentionally NOT captured: serializing it meant a
+        // Chrome/PWA session restore reopened an edit form (Delete button,
+        // stale fields) the user never asked for.
+        var dossModal = document.getElementById('clientDashboardModal');
+        var dossOpen = dossModal && dossModal.classList.contains('active');
+        var cid = (window.p86ClientDossier && typeof window.p86ClientDossier.getOpenId === 'function')
+          ? window.p86ClientDossier.getOpenId() : null;
+        if (dossOpen && cid) { route.estSub = 'clients'; route.clientId = cid; return route; }
       }
       if (estSub === 'subs') {
         // Sub directory modal — built on the fly with id=subDirModal,
@@ -489,8 +494,9 @@
             origCloseLead();
           }
         } else if (route.top === 'estimates' && route.estSub === 'clients' && route.clientId &&
-                   typeof window.openEditClientModal === 'function') {
-          var origOpenClient = window.openEditClientModal.__p86RouterOrig || window.openEditClientModal;
+                   typeof window.openClientDashboard === 'function') {
+          // Deep-link replays into the read-only dossier, never the editor.
+          var origOpenClient = window.openClientDashboard.__p86RouterOrig || window.openClientDashboard;
           origOpenClient(route.clientId);
         } else if (route.top === 'estimates' && route.estSub === 'subs' && route.subId &&
                    window.p86Subs && typeof window.p86Subs.openEdit === 'function') {
@@ -563,6 +569,8 @@
       'openEditLeadModal',
       'closeLeadDetail',
       'openEditClientModal',
+      'openClientDashboard',
+      'closeClientDashboard',
       'showArchivedJobs',
       'openAgentConversation',
       'closeAgentConversation',
