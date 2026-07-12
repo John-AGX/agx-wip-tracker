@@ -86,7 +86,11 @@ async function nearest(lat, lng, includedType, opts) {
 // hospital, an ER, or an urgent care. Names that look like specialty /
 // outpatient facilities are excluded OUTRIGHT (no fallback to them).
 const HOSPITAL_POS = /(hospital|emergency|medical center|medical ctr|regional medical|urgent care|health system)/i;
-const HOSPITAL_NEG = /(dialysis|davita|fresenius|planned parenthood|surger|rehab|imaging|radiolog|dermatolog|oncolog|behavioral|psychiatric|hospice|nursing|assisted living|animal|veterinar|dental|orthodont|chiroprac|therapy|wellness|optometr|eye institute|eye center|foot|podiatr|fertility|weight loss|med spa)/i;
+// Two flavors of impostor: standalone specialty facilities (dialysis,
+// imaging, rehab) AND hospital-branded satellites that carry the hospital's
+// name but have no ER ("... Hospital Lab", "... Breast Care Center",
+// "... Primary Care and Hospitalists", "... Outpatient Center").
+const HOSPITAL_NEG = /(dialysis|davita|fresenius|planned parenthood|surger|rehab|imaging|radiolog|dermatolog|oncolog|cancer|behavioral|psychiatric|hospice|nursing|assisted living|animal|veterinar|dental|orthodont|chiroprac|therapy|wellness|optometr|eye institute|eye center|foot|podiatr|fertility|weight loss|med spa|hospitalist|primary care|family medicine|family practice|internal medicine|breast|outpatient|pharmacy|\blab\b|laborator|sleep center|wound)/i;
 
 function pickHospital(list) {
   const nameOf = (p) => (p && p.displayName && p.displayName.text) || '';
