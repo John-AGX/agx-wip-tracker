@@ -2293,6 +2293,14 @@
         cells: s.cells || {},
         colWidths: s.colWidths || {},
         rowHeights: s.rowHeights || {},
+        // Exact Excel geometry from xlsx import (S4) — without these in
+        // the hydrate whitelist a reload silently downgraded exports to
+        // px-converted widths.
+        colWch: s.colWch || {},
+        rowHpt: s.rowHpt || {},
+        // Frozen panes — was missing from this whitelist entirely, so
+        // freeze state never survived a reload.
+        frozen: s.frozen || null,
         links: s.links || {},
         merges: s.merges || [],
         tables: s.tables || [],
@@ -2593,6 +2601,11 @@
       cols: src.cols,
       cells: JSON.parse(JSON.stringify(src.cells)),
       colWidths: JSON.parse(JSON.stringify(src.colWidths)),
+      rowHeights: JSON.parse(JSON.stringify(src.rowHeights || {})),
+      // Exact Excel geometry (S4) — deep-copied so a resize on the copy
+      // can't mutate the original's stored units.
+      colWch: JSON.parse(JSON.stringify(src.colWch || {})),
+      rowHpt: JSON.parse(JSON.stringify(src.rowHpt || {})),
       links: JSON.parse(JSON.stringify(src.links)),
       merges: JSON.parse(JSON.stringify(src.merges))
     };
@@ -2614,12 +2627,64 @@
   }
 
   // ── xlsx / csv import ──────────────────────────────────────
-  // Parse a vendor xlsx with SheetJS and append each Excel sheet as a
-  // new tab in the workbook. Existing sheets are preserved.
+  // .xlsx files parse on the SERVER (exceljs — full style + exact theme
+  // color + shared-formula fidelity; S3 of the Excel-fidelity plan).
+  // .xls / .csv keep the legacy SheetJS client path (exceljs reads
+  // neither), and the SheetJS path doubles as the offline/server-error
+  // fallback for .xlsx (values + formulas survive; styles don't).
   // Imported as window.wsImportXlsxFile so the Attachments embed (and
   // any future drop targets) can reuse the same parser/import path
   // when the user drops an xlsx anywhere in the workspace UI.
   function handleXlsxImport(file) {
+    if (!file) return;
+    if (/\.xlsx$/i.test(file.name || '')) {
+      // Two-arg .then: the rejection handler covers ONLY the fetch/
+      // parse. An install failure must NOT fall through to the SheetJS
+      // path — the sheets may already be spliced in, and a second
+      // import would duplicate every tab as "Name (2)".
+      serverParseXlsx(file).then(function(parsed) {
+        try {
+          installImportedSheets(parsed.sheets || [], file.name, parsed.namedRanges || []);
+        } catch (err) {
+          console.error('xlsx install failed:', err);
+          var status = document.getElementById('wsStatus');
+          if (status) status.textContent = 'Ready';
+          alert('Import failed: ' + (err.message || err));
+        }
+      }, function(e) {
+        console.warn('[workspace] server import failed — falling back to SheetJS (no styles):', e && e.message);
+        legacySheetJSImport(file);
+      });
+      return;
+    }
+    legacySheetJSImport(file);
+  }
+
+  // POST the raw bytes to the server parser; resolves to
+  // { sheets: [agxSheetSansId…], namedRanges: [{name, ref}…] }.
+  function serverParseXlsx(file) {
+    var headers = { 'Content-Type': 'application/octet-stream' };
+    var token = (window.p86Auth && window.p86Auth.getToken && window.p86Auth.getToken()) || localStorage.getItem('p86-auth-token');
+    if (token) headers['Authorization'] = 'Bearer ' + token;
+    var status = document.getElementById('wsStatus');
+    if (status) status.textContent = 'Importing…';
+    return fetch('/api/workspace/import-xlsx', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: headers,
+      body: file
+    }).then(function(r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    }).catch(function(e) {
+      if (status) status.textContent = 'Ready';
+      throw e;
+    });
+  }
+
+  // Legacy SheetJS parse (.xls / .csv, and .xlsx fallback). Builds the
+  // same sheet-def shape the server returns, then shares the install.
+  function legacySheetJSImport(file) {
     if (typeof XLSX === 'undefined') {
       alert('Spreadsheet library still loading. Try again in a moment.');
       return;
@@ -2629,11 +2694,8 @@
       try {
         const data = new Uint8Array(e.target.result);
         // cellFormula:true gives us .f (formula string) on each cell;
-        // cellDates:true keeps dates as JS Date objects so we can render
-        // them sensibly.
-        // cellStyles: true asks SheetJS to return per-cell font/fill/
-        // alignment so we can preserve the look of the source xlsx —
-        // headers stay bold, totals keep their fills, etc.
+        // cellDates:true keeps dates as JS Date objects; cellStyles:true
+        // returns what little styling the Community build can read.
         const wb = XLSX.read(data, {
           type: 'array',
           cellFormula: true,
@@ -2644,116 +2706,150 @@
           alert('No sheets in that file.');
           return;
         }
-        // Sync current grid before mutating workbook
-        syncGridToActiveSheet();
-        const baseName = file.name.replace(/\.[^.]+$/, '');
-        let added = 0;
-        // Map source sheet name → new AGX sheet id, so workbook-level
-        // defined names (named ranges) can be re-linked after import.
-        const srcNameToSheetId = {};
-        // Multi-sheet xlsx imports are now grouped under one workbook
-        // entry — single tab in the bottom bar, with the inner sheets
-        // accessible via a secondary tab strip above the grid.
-        // Single-sheet xlsx → standalone tab as before (no group
-        // wrapper makes sense for a one-sheet file).
-        const isMulti = wb.SheetNames.length > 1;
-        const groupId = isMulti ? ('wbgrp_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6)) : null;
-        // Find the right insertion index — keep imported sheets
-        // grouped together at the end of editable tabs but before
-        // any pinned built-ins (Detailed Costs, Attachments).
-        let insertAt = workbook.sheets.findIndex(s => s.pinned);
-        if (insertAt === -1) insertAt = workbook.sheets.length;
+        const defs = [];
         wb.SheetNames.forEach(function(srcName) {
           const ws = wb.Sheets[srcName];
           if (!ws) return;
-          // Inside a workbook group, sheet names keep their original
-          // bare form (e.g. "W3 As Sold Budget") since the workbook
-          // name on the outer tab provides the parent context. For
-          // single-sheet imports keep the standalone naming.
-          let name = srcName;
-          if (workbook.sheets.some(s => s.name === name)) {
-            // Collision — append (n) until we find a free slot.
-            let collisionN = 2;
-            const stem = name;
-            while (workbook.sheets.some(s => s.name === name)) {
-              name = stem + ' (' + (collisionN++) + ')';
-            }
-          }
-          const sheet = importXlsxSheet(ws, name);
-          if (sheet) {
-            // Track origin so a future "delete imported workbook"
-            // action can find every sheet from a given file.
-            sheet.sourceFile = file.name;
-            sheet.sourceSheetName = srcName;
-            // Workbook grouping — both fields persist through save/
-            // load so the group survives reloads.
-            if (groupId) {
-              sheet.workbookGroupId = groupId;
-              sheet.workbookGroupName = baseName;
-            }
-            workbook.sheets.splice(insertAt, 0, sheet);
-            insertAt++;
-            added++;
-            srcNameToSheetId[srcName] = sheet.id;
-          }
+          const sheet = importXlsxSheet(ws, srcName);
+          if (sheet) defs.push(sheet);
         });
-        if (!added) {
-          alert('Nothing imported — sheets were empty.');
-          return;
-        }
-        // Switch to the first newly-added sheet so the user sees the
-        // result of their import.
-        const firstNew = workbook.sheets[workbook.sheets.length - added];
-        workbook.activeSheetId = firstNew.id;
-        loadSheetIntoGrid(firstNew);
-
-        // Import workbook-level defined names (named ranges) from the
-        // source file. Skips Excel built-ins (_xlnm.*), invalid names,
-        // and clashes with names already defined in this workbook.
+        const nrDefs = [];
         if (wb.Workbook && Array.isArray(wb.Workbook.Names)) {
-          if (!workbook.namedRanges) workbook.namedRanges = {};
           wb.Workbook.Names.forEach(function(dn) {
             if (!dn || !dn.Name || !dn.Ref) return;
-            if (/^_xlnm\./i.test(dn.Name)) return;
-            var nm = String(dn.Name);
-            if (validateRangeName(nm)) return;
-            if (workbook.namedRanges[nm.toUpperCase()]) return;
-            // Defined names may list multiple comma-separated areas —
-            // we only model a single rectangular ref, so take the first.
-            var ref = String(dn.Ref).split(',')[0].trim();
-            var sheetId = null, bare = ref;
-            var bang = ref.lastIndexOf('!');
-            if (bang !== -1) {
-              var sn = ref.slice(0, bang).replace(/^'|'$/g, '').replace(/''/g, "'");
-              bare = ref.slice(bang + 1);
-              if (srcNameToSheetId[sn]) sheetId = srcNameToSheetId[sn];
-              else { var sh = findSheetByName(sn); if (sh) sheetId = sh.id; }
-            } else if (typeof dn.Sheet === 'number' && wb.SheetNames[dn.Sheet]) {
-              var sn2 = wb.SheetNames[dn.Sheet];
-              if (srcNameToSheetId[sn2]) sheetId = srcNameToSheetId[sn2];
+            const def = { name: dn.Name, ref: dn.Ref };
+            if (typeof dn.Sheet === 'number' && wb.SheetNames[dn.Sheet]) {
+              def.sheetName = wb.SheetNames[dn.Sheet];
             }
-            bare = bare.replace(/\$/g, '');
-            var parts = bare.split(':');
-            var a = parseAddr(parts[0].toUpperCase());
-            if (!a) return;
-            workbook.namedRanges[nm.toUpperCase()] = {
-              name: nm, ref: bare, sheetId: sheetId, comment: ''
-            };
+            nrDefs.push(def);
           });
         }
-
-        workbook.dirty = true;
-        recalcAll();
-        renderGrid();
-        renderSheetTabs();
-        selectCell(0, 0);
-        saveWorkspace();
+        installImportedSheets(defs, file.name, nrDefs);
       } catch (err) {
         console.error('xlsx import failed:', err);
         alert('Import failed: ' + (err.message || err));
       }
     };
     reader.readAsArrayBuffer(file);
+  }
+
+  // Install parsed sheet defs into the workbook — the shared back half
+  // of both import paths. Handles ids, name collisions, workbook
+  // grouping, tab placement, named ranges, recalc, and save.
+  function installImportedSheets(sheetDefs, fileName, nrDefs) {
+    sheetDefs = (sheetDefs || []).filter(Boolean);
+    if (!sheetDefs.length) {
+      alert('Nothing imported — sheets were empty.');
+      return;
+    }
+    // Sync current grid before mutating workbook
+    syncGridToActiveSheet();
+    const baseName = String(fileName || 'import').replace(/\.[^.]+$/, '');
+    // Multi-sheet imports group under one workbook entry — single tab
+    // in the bottom bar, inner sheets on a secondary strip.
+    const groupId = sheetDefs.length > 1
+      ? ('wbgrp_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6))
+      : null;
+    // Keep imported sheets together at the end of editable tabs but
+    // before any pinned built-ins (Detailed Costs, Attachments).
+    let insertAt = workbook.sheets.findIndex(s => s.pinned);
+    if (insertAt === -1) insertAt = workbook.sheets.length;
+    // Map source sheet name → new AGX sheet id, so workbook-level
+    // defined names (named ranges) can be re-linked after install.
+    const srcNameToSheetId = {};
+    let added = 0;
+    sheetDefs.forEach(function(def) {
+      const srcName = def.sourceSheetName || def.name;
+      let name = def.name;
+      if (workbook.sheets.some(s => s.name === name)) {
+        // Collision — append (n) until we find a free slot.
+        let collisionN = 2;
+        const stem = name;
+        while (workbook.sheets.some(s => s.name === name)) {
+          name = stem + ' (' + (collisionN++) + ')';
+        }
+      }
+      const sheet = def;
+      sheet.id = sheet.id || newSheetId();
+      sheet.name = name;
+      sheet.kind = sheet.kind || 'grid';
+      sheet.rows = Math.max(sheet.rows || 0, MIN_ROWS);
+      sheet.cols = Math.max(sheet.cols || 0, MIN_COLS);
+      sheet.cells = sheet.cells || {};
+      sheet.colWidths = sheet.colWidths || {};
+      sheet.rowHeights = sheet.rowHeights || {};
+      sheet.links = sheet.links || {};
+      sheet.merges = sheet.merges || [];
+      sheet.tables = sheet.tables || [];
+      // Track origin so a future "delete imported workbook" action can
+      // find every sheet from a given file.
+      sheet.sourceFile = fileName;
+      sheet.sourceSheetName = srcName;
+      if (groupId) {
+        sheet.workbookGroupId = groupId;
+        sheet.workbookGroupName = baseName;
+      }
+      workbook.sheets.splice(insertAt, 0, sheet);
+      insertAt++;
+      added++;
+      srcNameToSheetId[srcName] = sheet.id;
+    });
+    // Switch to the first newly-added VISIBLE sheet so the user sees
+    // the result (hidden sheets import as hidden tabs — activating one
+    // would land the user on an invisible sheet).
+    const newSlice = workbook.sheets.slice(insertAt - added, insertAt);
+    const firstNew = newSlice.find(s => !s.hidden) || newSlice[0];
+    workbook.activeSheetId = firstNew.id;
+    loadSheetIntoGrid(firstNew);
+
+    // Workbook-level defined names (named ranges). Skips Excel
+    // built-ins (_xlnm.*), invalid names, and clashes with names
+    // already defined in this workbook.
+    (nrDefs || []).forEach(function(dn) {
+      if (!dn || !dn.name || !dn.ref) return;
+      if (/^_xlnm\./i.test(dn.name)) return;
+      var nm = String(dn.name);
+      if (validateRangeName(nm)) return;
+      if (!workbook.namedRanges) workbook.namedRanges = {};
+      if (workbook.namedRanges[nm.toUpperCase()]) return;
+      // Defined names may list multiple comma-separated areas — we
+      // only model a single rectangular ref, so take the first.
+      var ref = String(dn.ref).split(',')[0].trim();
+      var sheetId = null, bare = ref;
+      var bang = ref.lastIndexOf('!');
+      if (bang !== -1) {
+        var sn = ref.slice(0, bang).replace(/^'|'$/g, '').replace(/''/g, "'");
+        bare = ref.slice(bang + 1);
+        if (srcNameToSheetId[sn]) sheetId = srcNameToSheetId[sn];
+        else { var sh = findSheetByName(sn); if (sh) sheetId = sh.id; }
+        // A sheet-qualified name whose sheet didn't import must be
+        // DROPPED, not installed bare — a bare ref resolves against
+        // whatever sheet is active at eval time and yields plausible
+        // wrong numbers with no error.
+        if (!sheetId) return;
+      } else if (dn.sheetName && srcNameToSheetId[dn.sheetName]) {
+        sheetId = srcNameToSheetId[dn.sheetName];
+      }
+      bare = bare.replace(/\$/g, '');
+      var parts = bare.split(':');
+      var a = parseAddr(parts[0].toUpperCase());
+      if (!a) return;
+      workbook.namedRanges[nm.toUpperCase()] = {
+        name: nm, ref: bare, sheetId: sheetId, comment: ''
+      };
+    });
+
+    workbook.dirty = true;
+    recalcAll();
+    renderGrid();
+    renderSheetTabs();
+    selectCell(0, 0);
+    saveWorkspace();
+    var status = document.getElementById('wsStatus');
+    if (status) {
+      status.textContent = '✓ Imported ' + added + ' sheet(s)';
+      setTimeout(function() { status.textContent = 'Ready'; }, 2500);
+    }
   }
 
   // Convert one SheetJS worksheet object into an AGX sheet object.
@@ -2857,22 +2953,29 @@
         cells[ourAddr] = out;
       }
     }
-    // Pull column widths from xlsx if present
+    // Pull column widths from xlsx if present. colWch keeps Excel's
+    // native character units verbatim so export round-trips exactly
+    // (S4); px ≈ wch×7+5 is only the render approximation.
     const colWidths = {};
+    const colWch = {};
     if (ws['!cols']) {
       ws['!cols'].forEach(function(col, idx) {
         if (col && (col.wpx || col.wch)) {
-          colWidths[idx] = Math.max(60, Math.round(col.wpx || (col.wch * 7)));
+          colWidths[idx] = Math.max(24, Math.round(col.wpx || (col.wch * 7 + 5)));
+          if (typeof col.wch === 'number' && col.wch > 0) colWch[idx] = col.wch;
         }
       });
     }
     // Row heights — preserve any explicit per-row height the source
-    // xlsx had (Excel uses points; we use px ≈ pt × 1.333).
+    // xlsx had. rowHpt keeps Excel's native points verbatim (S4);
+    // px ≈ pt × 1.333 is the render approximation.
     const rowHeights = {};
+    const rowHpt = {};
     if (ws['!rows']) {
       ws['!rows'].forEach(function(row, idx) {
         if (row && (row.hpx || row.hpt)) {
-          rowHeights[idx] = Math.max(18, Math.round(row.hpx || (row.hpt * 1.333)));
+          rowHeights[idx] = Math.max(12, Math.round(row.hpx || (row.hpt * 1.333)));
+          if (typeof row.hpt === 'number' && row.hpt > 0) rowHpt[idx] = row.hpt;
         }
       });
     }
@@ -2888,7 +2991,9 @@
       cols: cols,
       cells: cells,
       colWidths: colWidths,
+      colWch: colWch,
       rowHeights: rowHeights,
+      rowHpt: rowHpt,
       links: {},
       merges: merges,
       tables: []
@@ -3626,6 +3731,15 @@
     if (typeof s.fontSize === 'number' && s.fontSize > 0) {
       st += 'font-size:' + s.fontSize + 'px;';
     }
+    // Font family + vertical alignment from the server xlsx import
+    // (S3). Quotes/angle brackets stripped so a hostile font name in a
+    // vendor file can't break out of the style attribute.
+    if (s.fontFamily) {
+      st += "font-family:'" + String(s.fontFamily).replace(/['"<>;]/g, '') + "';";
+    }
+    if (s.valign === 'top' || s.valign === 'middle' || s.valign === 'bottom') {
+      st += 'vertical-align:' + s.valign + ';';
+    }
     // Per-side borders from xlsx import. Each side overrides the
     // default grid border on that edge only — keeps the cell looking
     // like the source spreadsheet (heavy section dividers, thin row
@@ -4290,12 +4404,19 @@
   // ── Undo / Redo ────────────────────────────────────────────
 
   function snapshotState() {
+    // colWch/rowHpt live on the SHEET (exact Excel units, S4) — they
+    // must travel with undo or a column insert + Ctrl+Z leaves them
+    // shifted against the restored px widths and export writes the
+    // imported width onto the wrong column.
+    var sh = activeSheet();
     return {
       cells: JSON.parse(JSON.stringify(grid.cells)),
       links: JSON.parse(JSON.stringify(grid.links)),
       merges: JSON.parse(JSON.stringify(grid.merges)),
       rows: grid.rows, cols: grid.cols,
-      colWidths: JSON.parse(JSON.stringify(grid.colWidths))
+      colWidths: JSON.parse(JSON.stringify(grid.colWidths)),
+      colWch: JSON.parse(JSON.stringify((sh && sh.colWch) || {})),
+      rowHpt: JSON.parse(JSON.stringify((sh && sh.rowHpt) || {}))
     };
   }
 
@@ -4311,6 +4432,8 @@
     var s = grid.undoStack.pop();
     grid.cells = s.cells; grid.links = s.links; grid.merges = s.merges || [];
     grid.rows = s.rows; grid.cols = s.cols; grid.colWidths = s.colWidths;
+    var sh = activeSheet();
+    if (sh) { sh.colWch = s.colWch || {}; sh.rowHpt = s.rowHpt || {}; }
     recalcAll(); renderGrid();
     if (grid.selection) selectCell(grid.selection.r, grid.selection.c);
     saveWorkspace();
@@ -4322,6 +4445,8 @@
     var s = grid.redoStack.pop();
     grid.cells = s.cells; grid.links = s.links; grid.merges = s.merges || [];
     grid.rows = s.rows; grid.cols = s.cols; grid.colWidths = s.colWidths;
+    var sh = activeSheet();
+    if (sh) { sh.colWch = s.colWch || {}; sh.rowHpt = s.rowHpt || {}; }
     recalcAll(); renderGrid();
     if (grid.selection) selectCell(grid.selection.r, grid.selection.c);
     saveWorkspace();
@@ -4754,7 +4879,9 @@
     });
     grid.cells = newCells;
     grid.links = newLinks;
-    // Shift colWidths for column operations
+    // Shift colWidths for column operations — and the sheet's exact
+    // Excel widths (colWch, S4) the same way so export doesn't apply
+    // a stale imported width to the wrong column.
     if (axis === 'col') {
       var newW = {};
       Object.keys(grid.colWidths).forEach(function (k) {
@@ -4764,6 +4891,24 @@
         if (ci >= 0) newW[ci] = grid.colWidths[k];
       });
       grid.colWidths = newW;
+      var shWch = activeSheet();
+      if (shWch && shWch.colWch) {
+        var newWch = {};
+        Object.keys(shWch.colWch).forEach(function (k) {
+          var ci = parseInt(k);
+          if (delta < 0 && ci === position) return;
+          if (ci >= position) ci += delta;
+          if (ci >= 0) newWch[ci] = shWch.colWch[k];
+        });
+        shWch.colWch = newWch;
+      }
+    }
+    // Row structural ops don't remap rowHeights today (pre-existing);
+    // drop the exact imported points so export can't resurrect heights
+    // onto shifted rows while the px heights stay unshifted.
+    if (axis === 'row') {
+      var shHpt = activeSheet();
+      if (shHpt && shHpt.rowHpt) shHpt.rowHpt = {};
     }
   }
 
@@ -5619,6 +5764,28 @@
   }
   function hideResizeTip() { if (_resizeTip) _resizeTip.style.display = 'none'; }
 
+  // ── Exact-geometry invalidation (S4) ───────────────────────
+  // Imported sheets carry Excel's native units (sheet.colWch in
+  // characters, sheet.rowHpt in points) so export round-trips widths
+  // bit-exactly. The moment the user resizes in-app, px becomes the
+  // source of truth for that column/row — drop the stored Excel unit
+  // so export falls back to the canonical px conversion instead of
+  // resurrecting the stale imported size.
+  function dropColWch(c) {
+    var sh = activeSheet();
+    if (sh && sh.colWch) {
+      if (c == null) sh.colWch = {};
+      else delete sh.colWch[c];
+    }
+  }
+  function dropRowHpt(r) {
+    var sh = activeSheet();
+    if (sh && sh.rowHpt) {
+      if (r == null) sh.rowHpt = {};
+      else delete sh.rowHpt[r];
+    }
+  }
+
   function handleColResizeStart(e) {
     if (!e.target.classList.contains('ws-col-header')) return;
     const rect = e.target.getBoundingClientRect();
@@ -5656,6 +5823,7 @@
 
   function handleColResizeEnd() {
     if (resizing) {
+      dropColWch(resizing.col);
       resizing = null;
       document.body.style.cursor = '';
       hideResizeTip();
@@ -5731,6 +5899,7 @@
   }
   function handleRowResizeEnd() {
     if (rowResizing) {
+      dropRowHpt(rowResizing.row);
       rowResizing = null;
       document.body.style.cursor = '';
       hideResizeTip();
@@ -5765,6 +5934,7 @@
     } else {
       grid.rowHeights[r] = maxH;
     }
+    dropRowHpt(r);
     grid.dirty = true;
     renderGrid();
     saveWorkspace();
@@ -5774,6 +5944,7 @@
     for (let r = 0; r < grid.rows; r++) {
       autoFitRowSilent(r);
     }
+    dropRowHpt(null);
     grid.dirty = true;
     renderGrid();
     saveWorkspace();
@@ -5805,6 +5976,7 @@
       for (let r = 0; r < grid.rows; r++) out[r] = h;
       grid.rowHeights = out;
     }
+    dropRowHpt(null);
     grid.dirty = true;
     renderGrid();
     saveWorkspace();
@@ -5814,6 +5986,7 @@
     const h = Math.max(18, Number(height) || ROW_HEIGHT);
     if (h === ROW_HEIGHT) delete grid.rowHeights[r];
     else grid.rowHeights[r] = h;
+    dropRowHpt(r);
     grid.dirty = true;
     renderGrid();
     saveWorkspace();
@@ -5839,6 +6012,7 @@
       if (th && th.scrollWidth > maxW) maxW = th.scrollWidth;
     }
     grid.colWidths[c] = Math.max(60, Math.ceil(maxW + 12)); // 12px breathing room
+    dropColWch(c);
     grid.dirty = true;
     renderGrid();
     saveWorkspace();
@@ -5848,6 +6022,7 @@
     for (let c = 0; c < grid.cols; c++) {
       autoFitColumnSilent(c);
     }
+    dropColWch(null);
     grid.dirty = true;
     renderGrid();
     saveWorkspace();
@@ -5878,6 +6053,7 @@
       for (let c = 0; c < grid.cols; c++) out[c] = w;
       grid.colWidths = out;
     }
+    dropColWch(null);
     grid.dirty = true;
     renderGrid();
     saveWorkspace();
@@ -5887,6 +6063,7 @@
     const w = Math.max(40, Number(width) || COL_DEFAULT_WIDTH);
     if (w === COL_DEFAULT_WIDTH) delete grid.colWidths[c];
     else grid.colWidths[c] = w;
+    dropColWch(c);
     grid.dirty = true;
     renderGrid();
     saveWorkspace();
@@ -7390,36 +7567,40 @@
   };
 
   // ─────────────────────────────────────────────────────────────────
-  // Phase 1 — XLSX / CSV export
+  // XLSX round-trip — fidelity contract (S1–S4 of the Excel plan)
   //
-  // Round-trips the workbook out to Excel via SheetJS (the same lib
-  // that powers import). Closes the "data hostage" gap the audit
-  // flagged: PMs can now take their workspace into Excel desktop,
-  // hand it off to a sub or a homeowner, or attach it to an email
-  // without retyping.
+  // .xlsx import AND export run on the SERVER via exceljs
+  // (/api/workspace/import-xlsx, /api/workspace/export-xlsx), which
+  // reads and writes what SheetJS Community cannot. The SheetJS paths
+  // below survive only as (a) the .xls / .csv importer and (b) the
+  // offline/server-error export fallback.
   //
-  // What's preserved:
-  //   - Cell values + formulas (formulas as SheetJS `f`, values as `v`)
-  //   - Column widths (sheet.colWidths → ws['!cols'])
-  //   - Row heights (sheet.rowHeights → ws['!rows'])
-  //   - Merged ranges (sheet.merges → ws['!merges'])
-  //   - Frozen panes (sheet.frozen → ws['!freeze'])
-  //   - Number format hints (cell.fmt → SheetJS `z` format strings)
+  // Preserved on a full import → export round-trip:
+  //   - Values, formulas (with Excel's cached results), number formats
+  //   - Fonts (bold/italic/underline/strike, color, size, family)
+  //   - Fills (theme colors resolved EXACTLY from the file's own
+  //     xl/theme1.xml + spec tint math), per-side borders
+  //   - Alignment (horizontal, vertical, wrap), style-only blank cells
+  //   - Column widths / row heights in Excel's native units, bit-exact
+  //     (sheet.colWch chars / sheet.rowHpt points; a manual resize
+  //     in-app drops the stored unit for that column/row so px becomes
+  //     the source of truth — see dropColWch/dropRowHpt)
+  //   - Merges, frozen panes (1 row/col), autoFilter range, named ranges
   //
-  // What's NOT preserved (SheetJS Community Edition limitation):
-  //   - Full style fidelity (font color, fill color, borders) — SheetJS
-  //     writes a `s` style object but Excel desktop's adoption of these
-  //     is unreliable without the SheetJS Pro xlsx-style fork. Cell
-  //     formatting will largely come through as plain text unless the
-  //     user has the Pro fork loaded. The takeoff numbers + formulas
-  //     are the load-bearing content for an estimating workflow; style
-  //     drift on the round-trip is a known cosmetic gap, not a data loss.
+  // Hard limits (not modeled — dropped on import, absent on export):
+  //   - Charts, images, conditional formatting, data validation
+  //   - Fill patterns/gradients (approximated as solid fgColor)
+  //   - Diagonal borders, rich-text runs (flattened to plain text)
+  //   - Hidden rows/columns (hidden SHEETS import as hidden tabs so
+  //     formulas into them resolve, but are excluded from export)
+  //   - `$` anchors in formulas (stripped so the grid engine can
+  //     evaluate — values identical, anchors lost on re-export)
+  //   - Multi-row/col freeze depths collapse to 1 row / 1 col
   //
-  // What's deliberately skipped:
-  //   - Embedded sheets (QB Costs, Attachments) — those are live views
-  //     of server data, not authored sheets. Exporting them as static
-  //     bytes would be misleading.
-  //   - Hidden sheets — excluded so the export matches what's visible.
+  // What's deliberately skipped on export:
+  //   - Embedded sheets (QB Costs, Attachments) — live views of server
+  //     data, not authored sheets.
+  //   - Hidden sheets — the export matches what's visible.
   // ─────────────────────────────────────────────────────────────────
   function _buildSheetJSWorksheetFromAgxSheet(sheet) {
     if (typeof XLSX === 'undefined') return null;
@@ -8034,6 +8215,10 @@
           grid.rows = MIN_ROWS;
           grid.cols = MIN_COLS;
           grid.colWidths = {};
+          // Exact imported Excel geometry must clear too, or export
+          // resurrects the old vendor widths onto the wiped sheet.
+          dropColWch(null);
+          dropRowHpt(null);
           saveWorkspace();
           renderGrid();
           selectCell(0, 0);
