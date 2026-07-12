@@ -80,7 +80,12 @@
     var rows = '';
     if (b.hospital && !b.hospital.error) rows += safRow('✚', b.hospital.name, 'Nearest ER / hospital', b.hospital.miles, 'er');
     if (b.fire && !b.fire.error) rows += safRow('🚒', b.fire.name, 'Fire / rescue', b.fire.miles, 'fire');
-    if (!rows) return safetyShell('No nearby services found.');
+    if (!rows) {
+      // Distinguish an API/network problem from a genuinely empty result so a
+      // blocked Places key doesn't read as "there are no hospitals nearby".
+      var errd = (b.hospital && b.hospital.error) || (b.fire && b.fire.error);
+      return safetyShell(errd ? 'Nearby-services lookup unavailable right now.' : 'No nearby services found.');
+    }
     return '<div style="border:1px solid rgba(79,209,197,.25);border-radius:10px;overflow:hidden;">' +
       '<div style="display:flex;align-items:center;gap:8px;padding:9px 12px;font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:#4fd1c5;border-bottom:1px solid rgba(79,209,197,.18);">🛡️ Safety · nearest services' +
         (b.property && b.property.address ? '<span style="margin-left:auto;font-size:10px;text-transform:none;letter-spacing:0;color:var(--text-dim,#8a93a6);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:52%;">' + esc(b.property.address) + '</span>' : '') +
