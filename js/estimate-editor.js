@@ -1719,6 +1719,107 @@
   // the display order; drag-reorder lands in Phase B.
   // ──────────────────────────────────────────────────────────────────
 
+  // ── A1: assembly rollup lines — breakdown strip + actions ─────────
+  // A line inserted from an assembly carries sourceAssemblyId + an
+  // assemblyBreakdown snapshot (the recipe's flat leaf rows per 1 output
+  // unit). The strip below the row toggles a read-only component view;
+  // the parent line is the only thing the totals engine sees.
+  var _asmOpen = {}; // lineId → bool, survives re-renders within a session
+
+  var ASM_CODE_SECTION = {
+    materials: 'Materials & Supplies Costs',
+    labor: 'Direct Labor',
+    gc: 'General Conditions',
+    sub: 'Subcontractors Costs'
+  };
+
+  function renderAsmBreakdownStrip(line) {
+    var open = !!_asmOpen[line.id];
+    var n = line.assemblyBreakdown.length;
+    var html =
+      '<div class="ee-asm-strip" data-edit-gate-passthrough onclick="eeToggleAsmBreakdown(\'' + line.id + '\')" ' +
+        'style="display:flex;align-items:center;gap:7px;padding:3px 10px 3px 44px;font-size:10.5px;cursor:pointer;color:#7eb0ff;background:rgba(79,140,255,0.05);border-left:3px solid #4f8cff;">' +
+        '<span style="display:inline-block;transition:transform .12s;' + (open ? 'transform:rotate(90deg);' : '') + '">▶</span>' +
+        '🧩 Assembly · ' + n + ' component' + (n === 1 ? '' : 's') +
+        '<span style="color:var(--text-dim,#8a93a6);">— breakdown is informational; this line carries the price</span>' +
+      '</div>';
+    if (!open) return html;
+    var q = num(line.qty);
+    line.assemblyBreakdown.forEach(function (b) {
+      var bq = Math.round(q * num(b.qty_per_unit) * 100) / 100;
+      var uc = b.unit_cost != null ? num(b.unit_cost) : 0;
+      html +=
+        '<div data-edit-gate-passthrough style="display:flex;align-items:center;gap:8px;padding:3px 10px 3px 58px;font-size:11px;color:var(--text-dim,#8a93a6);background:rgba(255,255,255,0.015);">' +
+          '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(b.description || '(item)') +
+            '<span style="font-size:8.5px;padding:1px 5px;border-radius:7px;margin-left:6px;background:' + (b.cost_code === 'labor' ? 'rgba(242,165,92,0.13);color:#f2a55c' : 'rgba(79,209,197,0.13);color:#4fd1c5') + ';">' + escapeHTML(b.cost_code || '') + '</span>' +
+          '</span>' +
+          '<span style="font-family:monospace;flex:0 0 auto;">' + bq + ' ' + escapeHTML(b.unit || '') + '</span>' +
+          '<span style="font-family:monospace;flex:0 0 90px;text-align:right;">@ $' + uc.toFixed(2) + '</span>' +
+          '<span style="font-family:monospace;flex:0 0 90px;text-align:right;color:#cdd;">$' + (bq * uc).toFixed(2) + '</span>' +
+        '</div>';
+    });
+    html +=
+      '<div data-edit-gate-passthrough style="display:flex;gap:16px;padding:5px 10px 7px 58px;font-size:10.5px;background:rgba(255,255,255,0.015);border-bottom:1px solid rgba(255,255,255,0.05);">' +
+        '<span onclick="eeAsmRefresh(\'' + line.id + '\')" style="color:#4f8cff;cursor:pointer;">⟳ Refresh price from recipe</span>' +
+        '<span onclick="eeAsmExplode(\'' + line.id + '\')" style="color:#4f8cff;cursor:pointer;">⇣ Explode to editable lines</span>' +
+        '<span onclick="if(window.p86Assemblies)p86Assemblies.openEditor(' + num(line.sourceAssemblyId) + ')" style="color:#4f8cff;cursor:pointer;">✎ Open assembly</span>' +
+      '</div>';
+    return html;
+  }
+
+  window.eeToggleAsmBreakdown = function (lineId) {
+    _asmOpen[lineId] = !_asmOpen[lineId];
+    renderLineItems();
+  };
+
+  // Re-pull the recipe: new resolved unit cost + fresh component snapshot
+  // (material rows reprice from the live catalog).
+  window.eeAsmRefresh = function (lineId) {
+    var line = eeFindLine(lineId);
+    if (!line || !line.sourceAssemblyId) return;
+    fetch('/api/assemblies/' + encodeURIComponent(line.sourceAssemblyId), { credentials: 'include' })
+      .then(function (r) {
+        if (!r.ok) throw new Error(r.status === 404 ? 'That assembly no longer exists.' : 'Could not load recipe (' + r.status + ')');
+        return r.json();
+      })
+      .then(function (det) {
+        line.unitCost = num(det.assembly && det.assembly.unit_cost);
+        line.assemblyBreakdown = Array.isArray(det.flat) ? det.flat : line.assemblyBreakdown;
+        debouncedSave();
+        renderLineItems();
+        renderTotals();
+      })
+      .catch(function (e) { alert('Refresh failed: ' + (e.message || 'unknown')); });
+  };
+
+  // Convert the rollup line into raw editable lines (one per component,
+  // routed to the matching cost-code section). One-way — the rollup line
+  // is replaced.
+  window.eeAsmExplode = function (lineId) {
+    var line = eeFindLine(lineId);
+    if (!line || !Array.isArray(line.assemblyBreakdown)) return;
+    var doIt = function () {
+      var q = num(line.qty);
+      var specs = line.assemblyBreakdown.map(function (b) {
+        return {
+          description: b.description,
+          qty: Math.round(q * num(b.qty_per_unit) * 100) / 100,
+          unit: b.unit || 'EA',
+          unit_cost: b.unit_cost != null ? num(b.unit_cost) : 0,
+          section_name: ASM_CODE_SECTION[b.cost_code] || 'Materials & Supplies Costs',
+          source_material_id: b.material_id || undefined,
+          source_assembly_id: line.sourceAssemblyId
+        };
+      }).filter(function (s) { return s.qty > 0; });
+      var idx = appData.estimateLines.indexOf(line);
+      if (idx >= 0) appData.estimateLines.splice(idx, 1);
+      delete _asmOpen[lineId];
+      applyBulkAddLineItems(specs);
+    };
+    if (window.p86Confirm) window.p86Confirm('Explode "' + (line.description || 'assembly') + '" into ' + line.assemblyBreakdown.length + ' editable lines? The single rollup line is replaced.', doIt);
+    else if (confirm('Explode into editable lines?')) doIt();
+  };
+
   function renderLineItems() {
     var container = document.getElementById('ee-lines-container');
     if (!container) return;
@@ -1799,6 +1900,12 @@
         sectionStartIdx = i;
       } else {
         html += renderLineItemRow(line, lines, est);
+        // A1 — assembly rollup line: a slim strip under the row toggles the
+        // read-only component breakdown (display-only; the parent line IS
+        // the math, so nothing here double-counts).
+        if (line.sourceAssemblyId && Array.isArray(line.assemblyBreakdown) && line.assemblyBreakdown.length) {
+          html += renderAsmBreakdownStrip(line);
+        }
       }
     }
     if (currentSection != null) flushSectionSubtotal(lines.length);
@@ -2989,6 +3096,11 @@
     // id so estimated-vs-actual can roll up per assembly later.
     if (input.source_assembly_id != null) {
       newLine.sourceAssemblyId = input.source_assembly_id;
+    }
+    // A1 rollup lines additionally carry the component snapshot (flat
+    // leaf rows per 1 output unit) for the read-only breakdown strip.
+    if (Array.isArray(input.assembly_breakdown) && input.assembly_breakdown.length) {
+      newLine.assemblyBreakdown = input.assembly_breakdown;
     }
 
     if (sectionId) {

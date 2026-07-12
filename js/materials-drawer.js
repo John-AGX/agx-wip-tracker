@@ -29,6 +29,9 @@
   var _activeSubgroup = 'materials'; // default filter chip
   var _mode = 'materials';    // 'materials' | 'assemblies' — assemblies = costed recipes
   var _lastAssemblies = [];   // assemblies-mode result cache
+  var _stack = [];            // Scope Builder: [{a, qty, open, flat}] — assemblies staged for insert
+  var _asmInsertMode = 'rollup'; // 'rollup' (A1 line + breakdown) | 'exploded'
+  var _stackSaving = false;   // save-stack-as-assembly mini-form open
   var _favoritesOnly = false; // Phase 2 — Favorites filter chip toggle
   var _multiSelect = false;   // Phase 3 — multi-select mode toggle
   var _selectedIds = new Set(); // Phase 3 — material ids checked for bulk-add
@@ -236,6 +239,7 @@
         : 'Search description, SKU, or category…';
       runSearch();
       refreshTargetHint();
+      renderTray();
     });
     chips.appendChild(asmChip);
 
@@ -501,13 +505,13 @@
       return;
     }
     var html = _lastAssemblies.map(function(a) {
-      var expanded = _expandedRowId === ('a' + a.id);
+      var stacked = _stack.some(function(s) { return s.a.id === a.id; });
       var costTxt = a.incomplete
         ? fmtMoney(a.unit_cost) + '+ <span title="Some items have no price yet">⚠</span>'
         : fmtMoney(a.unit_cost);
       var srcBadge = a.source && a.source !== 'manual'
         ? '<span class="md-sku">' + escapeHTML(a.source) + '</span>' : '';
-      return '<div class="md-row' + (expanded ? ' expanded' : '') + '" data-aid="' + a.id + '">' +
+      return '<div class="md-row' + (stacked ? ' selected' : '') + '" data-aid="' + a.id + '">' +
         '<div class="md-row-body">' +
           '<div class="md-row-main">' +
             '<div class="md-row-desc">&#x1F9E9; ' + escapeHTML(a.name) +
@@ -520,107 +524,234 @@
             '</div>' +
           '</div>' +
           '<div class="md-row-actions">' +
-            '<button class="md-add-btn" data-asm-add="' + a.id + '">' + (expanded ? 'Cancel' : '+ Insert') + '</button>' +
+            (stacked
+              ? '<button class="md-add-btn" data-asm-unstack="' + a.id + '" style="opacity:.75;">✓ Stacked</button>'
+              : '<button class="md-add-btn" data-asm-stack="' + a.id + '">+ Stack</button>') +
           '</div>' +
-          (expanded ? renderAssemblyForm(a) : '') +
         '</div>' +
       '</div>';
     }).join('');
     el.innerHTML = html;
-    el.querySelectorAll('[data-asm-add]').forEach(function(btn) {
+    el.querySelectorAll('[data-asm-stack]').forEach(function(btn) {
       btn.addEventListener('click', function() {
-        var key = 'a' + Number(btn.dataset.asmAdd);
-        _expandedRowId = _expandedRowId === key ? null : key;
+        var a = _lastAssemblies.find(function(x) { return x.id === Number(btn.dataset.asmStack); });
+        if (!a) return;
+        _stack.push({ a: a, qty: '', open: false, flat: null });
         renderAssemblyResults();
-        if (_expandedRowId === key) {
-          setTimeout(function() {
-            var qty = el.querySelector('.md-row.expanded .md-form-qty');
-            if (qty) qty.focus();
-          }, 10);
-        }
+        renderTray();
+        setTimeout(function() {
+          var last = _drawerEl.querySelectorAll('.md-stack-qty');
+          if (last.length) last[last.length - 1].focus();
+        }, 10);
       });
     });
-    el.querySelectorAll('.md-asm-form').forEach(function(form) {
-      form.addEventListener('submit', function(ev) {
-        ev.preventDefault();
-        var aid = Number(form.dataset.formAid);
-        var asm = _lastAssemblies.find(function(x) { return x.id === aid; });
-        if (asm) submitAssemblyInsert(asm, form);
+    el.querySelectorAll('[data-asm-unstack]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        _stack = _stack.filter(function(s) { return s.a.id !== Number(btn.dataset.asmUnstack); });
+        renderAssemblyResults();
+        renderTray();
       });
     });
   }
 
-  function renderAssemblyForm(a) {
-    return '<form class="md-form md-asm-form" data-form-aid="' + a.id + '">' +
-      '<div class="md-form-grid">' +
-        '<label><span>Takeoff qty (' + escapeHTML(a.unit || 'EA') + ')</span>' +
-          '<input class="md-form-qty" type="text" inputmode="decimal" required /></label>' +
-        '<label><span>Insert as</span>' +
-          '<select class="md-asm-mode">' +
-            '<option value="exploded" selected>Exploded lines</option>' +
-            '<option value="single">Single line</option>' +
+  // ── Scope Builder stack — stage assemblies with takeoff quantities,
+  // then commit the whole scope in one action (A1 rollup lines by
+  // default), or save the stack itself as a NEW composite assembly
+  // whose items are the stacked recipes as nested sub-assemblies.
+  function stackTotal() {
+    var t = 0;
+    _stack.forEach(function(s) {
+      var q = parseFloat(s.qty);
+      if (isFinite(q) && q > 0) t += q * (Number(s.a.unit_cost) || 0);
+    });
+    return t;
+  }
+
+  function renderAsmStackTray(tray) {
+    if (!_stack.length) { tray.hidden = true; tray.innerHTML = ''; return; }
+    tray.hidden = false;
+    var groupName = window.estimateEditorAPI &&
+                    window.estimateEditorAPI.activeAlternateName &&
+                    window.estimateEditorAPI.activeAlternateName();
+    var rows = _stack.map(function(s, i) {
+      var q = parseFloat(s.qty);
+      var ext = (isFinite(q) && q > 0) ? fmtMoney(q * (Number(s.a.unit_cost) || 0)) : '—';
+      var prev = '';
+      if (s.open) {
+        prev = '<div style="padding:2px 8px 6px 26px;font-size:10px;color:var(--text-dim,#8a93a6);">' +
+          (s.flat === null ? 'Loading components…'
+            : (s.flat.length ? '↳ ' + s.flat.map(function(f) { return escapeHTML((f.description || '').slice(0, 32)); }).join(' · ') : '(no components)')) +
+        '</div>';
+      }
+      return '<div style="display:flex;align-items:center;gap:8px;padding:5px 8px;">' +
+          '<span data-stack-prev="' + i + '" style="cursor:pointer;color:#4fd1c5;font-size:10px;display:inline-block;transition:transform .12s;' + (s.open ? 'transform:rotate(90deg);' : '') + '">▶</span>' +
+          '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;font-weight:600;">🧩 ' + escapeHTML(s.a.name) + '</span>' +
+          '<input class="md-stack-qty" data-stack-qty="' + i + '" value="' + escapeHTML(String(s.qty)) + '" placeholder="qty" inputmode="decimal" ' +
+            'style="width:58px;text-align:right;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:6px;padding:3px 6px;color:inherit;font-family:monospace;font-size:11.5px;" />' +
+          '<span style="font-size:10px;color:var(--text-dim,#8a93a6);flex:0 0 24px;">' + escapeHTML(s.a.unit || 'EA') + '</span>' +
+          '<span style="font-family:monospace;font-size:11.5px;color:#4fd1c5;flex:0 0 70px;text-align:right;">' + ext + '</span>' +
+          '<span data-stack-x="' + i + '" style="cursor:pointer;color:var(--text-dim,#8a93a6);padding:0 2px;">✕</span>' +
+        '</div>' + prev;
+    }).join('');
+
+    var saveForm = '';
+    if (_stackSaving) {
+      saveForm =
+        '<div style="display:flex;gap:6px;align-items:center;padding:6px 8px;border-top:1px solid rgba(255,255,255,0.1);">' +
+          '<input data-stacksave-name placeholder="New assembly name…" style="flex:1;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:6px;padding:4px 7px;color:inherit;font-size:11.5px;" />' +
+          '<input data-stacksave-unit value="EA" title="Output unit — quantities above are per 1 of this" style="width:44px;text-align:center;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:6px;padding:4px;color:inherit;font-size:11.5px;" />' +
+          '<button class="md-tray-add" data-stacksave-go>Save</button>' +
+        '</div>';
+    }
+
+    tray.innerHTML =
+      '<div style="width:100%;">' +
+        '<div style="display:flex;align-items:center;justify-content:space-between;padding:4px 8px 2px;">' +
+          '<span style="font-size:10px;letter-spacing:.05em;text-transform:uppercase;color:var(--text-dim,#8a93a6);">Scope stack · ' + _stack.length + '</span>' +
+          '<span style="font-family:monospace;font-size:12px;font-weight:700;color:#4fd1c5;">' + fmtMoney(stackTotal()) + '</span>' +
+        '</div>' +
+        rows +
+        '<div style="display:flex;gap:6px;align-items:center;padding:7px 8px 4px;border-top:1px solid rgba(255,255,255,0.1);flex-wrap:wrap;">' +
+          '<select data-stack-mode style="background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:6px;padding:4px;color:inherit;font-size:10.5px;">' +
+            '<option value="rollup"' + (_asmInsertMode === 'rollup' ? ' selected' : '') + '>Assembly lines (drill-down)</option>' +
+            '<option value="exploded"' + (_asmInsertMode === 'exploded' ? ' selected' : '') + '>Exploded lines</option>' +
           '</select>' +
-        '</label>' +
-      '</div>' +
-      '<div class="md-form-actions">' +
-        '<button type="submit" class="md-form-submit">Insert into estimate</button>' +
-        '<span class="md-form-hint">Exploded: one line per item, sections by cost code</span>' +
-      '</div>' +
-    '</form>';
+          '<button class="md-tray-add" data-stack-insert' + (groupName ? '' : ' disabled') + '>Insert stack &rarr;</button>' +
+          '<button class="md-tray-clear" data-stack-save>💾 Save as assembly</button>' +
+          '<button class="md-tray-clear" data-stack-clear>Clear</button>' +
+        '</div>' +
+        saveForm +
+      '</div>';
+
+    tray.querySelectorAll('[data-stack-qty]').forEach(function(inp) {
+      inp.addEventListener('input', function() {
+        _stack[Number(inp.dataset.stackQty)].qty = inp.value;
+        // Update totals without full re-render (keeps focus).
+        var totEl = tray.querySelector('span[style*="font-weight:700"]');
+        if (totEl) totEl.textContent = fmtMoney(stackTotal());
+      });
+      inp.addEventListener('change', function() { renderAsmStackTray(tray); });
+    });
+    tray.querySelectorAll('[data-stack-x]').forEach(function(x) {
+      x.addEventListener('click', function() {
+        _stack.splice(Number(x.dataset.stackX), 1);
+        renderAssemblyResults();
+        renderTray();
+      });
+    });
+    tray.querySelectorAll('[data-stack-prev]').forEach(function(p) {
+      p.addEventListener('click', function() {
+        var s = _stack[Number(p.dataset.stackPrev)];
+        s.open = !s.open;
+        if (s.open && s.flat === null) {
+          fetch('/api/assemblies/' + encodeURIComponent(s.a.id), { credentials: 'include' })
+            .then(function(r) { return r.ok ? r.json() : { flat: [] }; })
+            .then(function(d) { s.flat = d.flat || []; renderTray(); });
+        }
+        renderTray();
+      });
+    });
+    var modeSel = tray.querySelector('[data-stack-mode]');
+    if (modeSel) modeSel.addEventListener('change', function() { _asmInsertMode = modeSel.value; });
+    var insBtn = tray.querySelector('[data-stack-insert]');
+    if (insBtn) insBtn.addEventListener('click', insertStack);
+    var saveBtn = tray.querySelector('[data-stack-save]');
+    if (saveBtn) saveBtn.addEventListener('click', function() {
+      _stackSaving = !_stackSaving;
+      renderTray();
+      if (_stackSaving) setTimeout(function() {
+        var n = tray.querySelector('[data-stacksave-name]');
+        if (n) n.focus();
+      }, 10);
+    });
+    var clearBtn = tray.querySelector('[data-stack-clear]');
+    if (clearBtn) clearBtn.addEventListener('click', function() {
+      _stack = []; _stackSaving = false;
+      renderAssemblyResults();
+      renderTray();
+    });
+    var saveGo = tray.querySelector('[data-stacksave-go]');
+    if (saveGo) saveGo.addEventListener('click', function() { saveStackAsAssembly(tray); });
   }
 
-  function submitAssemblyInsert(asm, form) {
+  // Commit every stacked assembly at once. Default = A1 rollup lines
+  // (one line each + component breakdown); 'exploded' = raw lines.
+  function insertStack() {
     if (!window.estimateEditorAPI || typeof window.estimateEditorAPI.applyBulkAddLineItems !== 'function') {
       alert('Estimate editor isn\'t available — open an estimate first.');
       return;
     }
-    var takeoff = parseFloat(form.querySelector('.md-form-qty').value);
-    if (!isFinite(takeoff) || takeoff <= 0) {
-      form.querySelector('.md-form-qty').focus();
-      return;
-    }
-    var mode = form.querySelector('.md-asm-mode').value;
-    var hint = form.querySelector('.md-form-hint');
-    hint.textContent = 'Loading recipe…';
-    fetch('/api/assemblies/' + encodeURIComponent(asm.id), { credentials: 'include' })
-      .then(function(r) {
-        if (!r.ok) throw new Error('Could not load assembly (' + r.status + ')');
-        return r.json();
-      })
-      .then(function(detail) {
-        var flat = Array.isArray(detail.flat) ? detail.flat : [];
-        if (mode === 'single' || !flat.length) {
-          window.estimateEditorAPI.applyAddLineItem({
-            description: asm.name + ' — assembly',
-            qty: takeoff,
-            unit: asm.unit || 'EA',
-            unit_cost: (detail.assembly && detail.assembly.unit_cost) || asm.unit_cost || 0,
-            section_name: SUBGROUP_TO_SECTION[dominantCode(flat)] || 'Materials & Supplies',
-            source_assembly_id: asm.id
-          });
-        } else {
-          var lines = flat.map(function(f) {
-            return {
-              description: f.description,
-              qty: Math.round(takeoff * (f.qty_per_unit || 0) * 100) / 100,
-              unit: f.unit || 'EA',
+    var ready = _stack.filter(function(s) { var q = parseFloat(s.qty); return isFinite(q) && q > 0; });
+    if (!ready.length) { alert('Give each stacked assembly a takeoff qty first.'); return; }
+    Promise.all(ready.map(function(s) {
+      return fetch('/api/assemblies/' + encodeURIComponent(s.a.id), { credentials: 'include' })
+        .then(function(r) { if (!r.ok) throw new Error(s.a.name + ': load failed'); return r.json(); })
+        .then(function(d) { return { s: s, d: d }; });
+    })).then(function(loaded) {
+      var specs = [];
+      loaded.forEach(function(x) {
+        var q = parseFloat(x.s.qty);
+        var flat = Array.isArray(x.d.flat) ? x.d.flat : [];
+        if (_asmInsertMode === 'exploded' && flat.length) {
+          flat.forEach(function(f) {
+            var lq = Math.round(q * (f.qty_per_unit || 0) * 100) / 100;
+            if (lq <= 0) return;
+            specs.push({
+              description: f.description, qty: lq, unit: f.unit || 'EA',
               unit_cost: f.unit_cost != null ? f.unit_cost : 0,
               section_name: SUBGROUP_TO_SECTION[f.cost_code] || 'Materials & Supplies',
               source_material_id: f.material_id || undefined,
-              source_assembly_id: asm.id
-            };
-          }).filter(function(l) { return l.qty > 0; });
-          window.estimateEditorAPI.applyBulkAddLineItems(lines);
+              source_assembly_id: x.s.a.id
+            });
+          });
+        } else {
+          specs.push({
+            description: x.s.a.name, qty: q, unit: x.s.a.unit || 'EA',
+            unit_cost: (x.d.assembly && x.d.assembly.unit_cost) || x.s.a.unit_cost || 0,
+            section_name: SUBGROUP_TO_SECTION[dominantCode(flat)] || 'Materials & Supplies',
+            source_assembly_id: x.s.a.id,
+            assembly_breakdown: flat
+          });
         }
-        hint.textContent = '✓ Inserted';
-        hint.style.color = 'var(--accent-success, #4ade80)';
-        _expandedRowId = null;
-        setTimeout(renderAssemblyResults, 400);
-      })
-      .catch(function(err) {
-        hint.textContent = 'Failed: ' + (err.message || 'unknown');
-        hint.style.color = 'var(--accent-danger, #f87171)';
       });
+      window.estimateEditorAPI.applyBulkAddLineItems(specs);
+      _stack = []; _stackSaving = false;
+      renderAssemblyResults();
+      renderTray();
+    }).catch(function(e) { alert('Insert failed: ' + (e.message || 'unknown')); });
+  }
+
+  // The composition flow: the stack becomes a NEW assembly whose items
+  // are the stacked recipes as nested sub-assemblies (qty_per_unit =
+  // each takeoff qty per 1 output unit of the new assembly).
+  function saveStackAsAssembly(tray) {
+    var name = (tray.querySelector('[data-stacksave-name]') || {}).value || '';
+    var unit = (tray.querySelector('[data-stacksave-unit]') || {}).value || 'EA';
+    if (!name.trim()) { alert('Name the new assembly first.'); return; }
+    var items = _stack.map(function(s) {
+      var q = parseFloat(s.qty);
+      return {
+        kind: 'assembly', child_assembly_id: s.a.id,
+        qty_per_unit: (isFinite(q) && q > 0) ? q : 1,
+        unit: s.a.unit || 'EA'
+      };
+    });
+    fetch('/api/assemblies', {
+      method: 'POST', credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name.trim(), unit: unit.trim() || 'EA', source: 'manual',
+        description: 'Composite — built from the Scope Builder stack', items: items })
+    }).then(function(r) { return r.json(); })
+      .then(function(res) {
+        if (res.error) throw new Error(res.error);
+        _stack = []; _stackSaving = false;
+        runSearch();
+        renderTray();
+        if (window.p86Assemblies && window.p86Assemblies.renderList) {
+          try { window.p86Assemblies.renderList(); } catch (e) {}
+        }
+      })
+      .catch(function(e) { alert('Save failed: ' + (e.message || 'unknown')); });
   }
 
   // Which cost code carries the most $ in a flattened recipe — used to
@@ -725,6 +856,8 @@
     if (!_drawerEl) return;
     var tray = _drawerEl.querySelector('[data-md-tray]');
     if (!tray) return;
+    // Assemblies mode — the tray is the Scope Builder stack.
+    if (_mode === 'assemblies') { renderAsmStackTray(tray); return; }
     if (!_multiSelect || _selectedIds.size === 0) {
       tray.hidden = true;
       tray.innerHTML = '';
