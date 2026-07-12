@@ -1736,12 +1736,14 @@
   function renderAsmBreakdownStrip(line) {
     var open = !!_asmOpen[line.id];
     var n = line.assemblyBreakdown.length;
+    // Footer of the fused .ee-asm-unit card (the wrapper carries the blue
+    // edge + tint) — reads as a caption of the line above, not a sibling row.
     var html =
       '<div class="ee-asm-strip" data-edit-gate-passthrough onclick="eeToggleAsmBreakdown(\'' + line.id + '\')" ' +
-        'style="display:flex;align-items:center;gap:7px;padding:3px 10px 3px 44px;font-size:10.5px;cursor:pointer;color:#7eb0ff;background:rgba(79,140,255,0.05);border-left:3px solid #4f8cff;">' +
-        '<span style="display:inline-block;transition:transform .12s;' + (open ? 'transform:rotate(90deg);' : '') + '">▶</span>' +
-        '🧩 Assembly · ' + n + ' component' + (n === 1 ? '' : 's') +
-        '<span style="color:var(--text-dim,#8a93a6);">— breakdown is informational; this line carries the price</span>' +
+        'style="display:flex;align-items:center;gap:7px;padding:2px 10px 4px 40px;font-size:10px;cursor:pointer;color:#7eb0ff;border-top:1px dashed rgba(79,140,255,0.25);">' +
+        '<span style="display:inline-block;transition:transform .12s;font-size:8px;' + (open ? 'transform:rotate(90deg);' : '') + '">▶</span>' +
+        '<span style="font-weight:700;letter-spacing:.04em;">🧩 ASSEMBLY</span>' +
+        '<span style="color:var(--text-dim,#8a93a6);">' + n + ' component' + (n === 1 ? '' : 's') + ' inside this price — click to inspect</span>' +
       '</div>';
     if (!open) return html;
     var q = num(line.qty);
@@ -1749,17 +1751,18 @@
       var bq = Math.round(q * num(b.qty_per_unit) * 100) / 100;
       var uc = b.unit_cost != null ? num(b.unit_cost) : 0;
       html +=
-        '<div data-edit-gate-passthrough style="display:flex;align-items:center;gap:8px;padding:3px 10px 3px 58px;font-size:11px;color:var(--text-dim,#8a93a6);background:rgba(255,255,255,0.015);">' +
+        '<div data-edit-gate-passthrough style="display:flex;align-items:center;gap:8px;padding:2px 10px 2px 52px;font-size:10.5px;font-style:italic;color:var(--text-dim,#8a93a6);opacity:.85;">' +
+          '<span style="color:#4f8cff;flex:0 0 auto;">↳</span>' +
           '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(b.description || '(item)') +
-            '<span style="font-size:8.5px;padding:1px 5px;border-radius:7px;margin-left:6px;background:' + (b.cost_code === 'labor' ? 'rgba(242,165,92,0.13);color:#f2a55c' : 'rgba(79,209,197,0.13);color:#4fd1c5') + ';">' + escapeHTML(b.cost_code || '') + '</span>' +
+            '<span style="font-size:8px;font-style:normal;padding:1px 5px;border-radius:7px;margin-left:6px;background:' + (b.cost_code === 'labor' ? 'rgba(242,165,92,0.13);color:#f2a55c' : 'rgba(79,209,197,0.13);color:#4fd1c5') + ';">' + escapeHTML(b.cost_code || '') + '</span>' +
           '</span>' +
-          '<span style="font-family:monospace;flex:0 0 auto;">' + bq + ' ' + escapeHTML(b.unit || '') + '</span>' +
-          '<span style="font-family:monospace;flex:0 0 90px;text-align:right;">@ $' + uc.toFixed(2) + '</span>' +
-          '<span style="font-family:monospace;flex:0 0 90px;text-align:right;color:#cdd;">$' + (bq * uc).toFixed(2) + '</span>' +
+          '<span style="font-family:monospace;font-style:normal;flex:0 0 auto;">' + bq + ' ' + escapeHTML(b.unit || '') + '</span>' +
+          '<span style="font-family:monospace;font-style:normal;flex:0 0 84px;text-align:right;">@ $' + uc.toFixed(2) + '</span>' +
+          '<span style="font-family:monospace;font-style:normal;flex:0 0 84px;text-align:right;">$' + (bq * uc).toFixed(2) + '</span>' +
         '</div>';
     });
     html +=
-      '<div data-edit-gate-passthrough style="display:flex;gap:16px;padding:5px 10px 7px 58px;font-size:10.5px;background:rgba(255,255,255,0.015);border-bottom:1px solid rgba(255,255,255,0.05);">' +
+      '<div data-edit-gate-passthrough style="display:flex;gap:16px;padding:4px 10px 6px 52px;font-size:10px;">' +
         '<span onclick="eeAsmRefresh(\'' + line.id + '\')" style="color:#4f8cff;cursor:pointer;">⟳ Refresh price from recipe</span>' +
         '<span onclick="eeAsmExplode(\'' + line.id + '\')" style="color:#4f8cff;cursor:pointer;">⇣ Explode to editable lines</span>' +
         '<span onclick="if(window.p86Assemblies)p86Assemblies.openEditor(' + num(line.sourceAssemblyId) + ')" style="color:#4f8cff;cursor:pointer;">✎ Open assembly</span>' +
@@ -1899,12 +1902,18 @@
         currentSection = line.description || 'Section';
         sectionStartIdx = i;
       } else {
-        html += renderLineItemRow(line, lines, est);
-        // A1 — assembly rollup line: a slim strip under the row toggles the
-        // read-only component breakdown (display-only; the parent line IS
-        // the math, so nothing here double-counts).
-        if (line.sourceAssemblyId && Array.isArray(line.assemblyBreakdown) && line.assemblyBreakdown.length) {
-          html += renderAsmBreakdownStrip(line);
+        // A1 — assembly rollup lines render FUSED with their breakdown
+        // strip inside one bordered card, so the informational component
+        // rows can never be mistaken for sibling line items (John deleted
+        // real lines thinking they were breakdown rows).
+        var isAsmLine = line.sourceAssemblyId && Array.isArray(line.assemblyBreakdown) && line.assemblyBreakdown.length;
+        if (isAsmLine) {
+          html += '<div class="ee-asm-unit" style="border:1px solid rgba(79,140,255,0.4);border-left:3px solid #4f8cff;border-radius:8px;margin:5px 6px;overflow:hidden;background:rgba(79,140,255,0.05);">' +
+            renderLineItemRow(line, lines, est) +
+            renderAsmBreakdownStrip(line) +
+          '</div>';
+        } else {
+          html += renderLineItemRow(line, lines, est);
         }
       }
     }
