@@ -51,6 +51,58 @@
     return '<div style="border:1px solid var(--border,#2a2f3a);border-radius:8px;overflow:hidden;"><table style="width:100%;border-collapse:collapse;font-size:12px;"><thead style="background:rgba(255,255,255,0.03);"><tr>' + th + '</tr></thead><tbody>' + rows.join('') + '</tbody></table></div>';
   }
 
+  // Lead heat gauge (0-100) — Hot ≥70 (red), Warm ≥40 (amber), else Cold.
+  function heatGauge(score, label) {
+    score = Math.max(0, Math.min(100, Number(score) || 0));
+    var col = score >= 70 ? '#f77066' : score >= 40 ? '#f2a55c' : '#8a93a6';
+    return '<div title="Lead heat score" style="width:52px;height:52px;border-radius:50%;flex:none;display:grid;place-items:center;position:relative;background:conic-gradient(' + col + ' ' + (score * 3.6) + 'deg,#232838 0);">' +
+      '<div style="position:absolute;inset:5px;border-radius:50%;background:var(--card-bg,#141419);"></div>' +
+      '<div style="position:relative;text-align:center;line-height:1;">' +
+        '<div style="font-family:monospace;font-size:15px;font-weight:800;color:' + col + ';">' + score + '</div>' +
+        '<div style="font-size:7px;letter-spacing:.1em;text-transform:uppercase;color:' + col + ';font-weight:700;margin-top:1px;">' + esc(label || '') + '</div>' +
+      '</div></div>';
+  }
+  // Property-intel SAFETY block — nearest hospital / fire, lazy-fetched.
+  function safetyShell(msg) {
+    return '<div style="border:1px solid rgba(79,209,197,.25);border-radius:10px;overflow:hidden;">' +
+      '<div style="display:flex;align-items:center;gap:8px;padding:9px 12px;font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:#4fd1c5;border-bottom:1px solid rgba(79,209,197,.18);">🛡️ Safety · nearest services</div>' +
+      '<div style="padding:12px;color:var(--text-dim,#8a93a6);font-size:12px;">' + esc(msg) + '</div></div>';
+  }
+  function safRow(icon, name, sub, miles, tone) {
+    var col = tone === 'er' ? '#f77066' : '#4fd1c5';
+    return '<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-top:1px solid var(--border,#23262e);">' +
+      '<span style="width:28px;height:28px;border-radius:8px;flex:none;display:grid;place-items:center;background:' + col + '1e;font-size:14px;">' + icon + '</span>' +
+      '<span style="flex:1;min-width:0;"><span style="font-size:12.5px;font-weight:600;color:#fff;">' + esc(name || '—') + '</span>' +
+        (sub ? '<br><span style="font-size:10.5px;color:var(--text-dim,#8a93a6);">' + esc(sub) + '</span>' : '') + '</span>' +
+      '<span style="font-family:monospace;font-size:13px;font-weight:700;color:' + col + ';white-space:nowrap;">' + (miles != null ? miles + ' mi' : '—') + '</span></div>';
+  }
+  function safetyHtml(b) {
+    var rows = '';
+    if (b.hospital && !b.hospital.error) rows += safRow('✚', b.hospital.name, 'Nearest ER / hospital', b.hospital.miles, 'er');
+    if (b.fire && !b.fire.error) rows += safRow('🚒', b.fire.name, 'Fire / rescue', b.fire.miles, 'fire');
+    if (!rows) return safetyShell('No nearby services found.');
+    return '<div style="border:1px solid rgba(79,209,197,.25);border-radius:10px;overflow:hidden;">' +
+      '<div style="display:flex;align-items:center;gap:8px;padding:9px 12px;font-size:11px;letter-spacing:.5px;text-transform:uppercase;color:#4fd1c5;border-bottom:1px solid rgba(79,209,197,.18);">🛡️ Safety · nearest services' +
+        (b.property && b.property.address ? '<span style="margin-left:auto;font-size:10px;text-transform:none;letter-spacing:0;color:var(--text-dim,#8a93a6);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:52%;">' + esc(b.property.address) + '</span>' : '') +
+      '</div><div style="padding:4px 12px 10px;">' + rows + '</div></div>';
+  }
+  function loadSafety(id) {
+    var host = document.getElementById('clientDoss_safety');
+    if (!host) return;
+    host.innerHTML = safetyShell('Finding nearest ER, fire & rescue…');
+    authedGet('/api/clients/' + encodeURIComponent(id) + '/nearby-safety').then(function (res) {
+      var b = (res && res.body) || {};
+      if (!res.ok) { host.innerHTML = ''; return; }
+      if (b.ok === false) {
+        var msg = b.reason === 'no_address' ? 'Add a property address to see nearby ER / fire.'
+          : b.reason === 'geocode_failed' ? 'Could not locate the property address.'
+          : 'Nearby services unavailable.';
+        host.innerHTML = safetyShell(msg); return;
+      }
+      host.innerHTML = safetyHtml(b);
+    }).catch(function () { host.innerHTML = ''; });
+  }
+
   function render(host, d) {
     var c = d.client || {}, s = d.summary || {}, jobs = d.jobs || [], leads = d.leads || [];
     var mapItems = {
@@ -67,6 +119,7 @@
     var html = '';
     html += '<div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:14px;">' +
       '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">' +
+        heatGauge(s.heat, s.heatLabel) +
         '<span style="font-size:20px;font-weight:700;color:#fff;">' + esc(c.name || 'Client') + '</span>' +
         (c.client_type ? '<span style="font-size:11px;color:var(--text-dim,#8a93a6);text-transform:uppercase;letter-spacing:.5px;">' + esc(c.client_type) + '</span>' : '') +
         '<span title="' + esc((s.health && s.health.reason) || '') + '" style="padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700;letter-spacing:.5px;background:' + h.c + '22;color:' + h.c + ';">● ' + h.l + '</span>' +
@@ -92,6 +145,9 @@
       card('Margin', pct(s.margin), (s.margin != null && s.margin < 0.15) ? '#f87171' : '#34d399') +
       card('Open Leads', (s.openLeads || 0), '#a78bfa', money(s.pipelineValue) + ' pipeline') +
     '</div>';
+
+    // Property-intel: nearest-safety block (filled async by loadSafety).
+    html += '<div id="clientDoss_safety" style="margin-bottom:18px;"></div>';
 
     html += '<div style="display:grid;grid-template-columns:' + (hasMap ? '2fr 1fr' : '1fr') + ';gap:16px;margin-bottom:18px;">';
     if (hasMap) html += '<div><div style="font-size:13px;font-weight:600;color:#fff;margin-bottom:8px;">Map</div><div id="clientDashboard_map" style="height:300px;border:1px solid var(--border,#2a2f3a);border-radius:10px;overflow:hidden;"></div></div>';
@@ -119,6 +175,7 @@
     html += '<div style="margin-top:14px;font-size:11px;color:var(--text-dim,#8a93a6);">Health is account-activity based; property-condition health (roof/permit age, tenant reviews) lands with the property-intel layer. Jobs link by explicit client link or client-name match.</div>';
     host.innerHTML = html;
     if (hasMap) { try { window.p86EntitiesMap.render('clientDashboard_map', { items: mapItems }); } catch (e) {} }
+    loadSafety(c.id);
   }
 
   function openClientDashboard(id) {

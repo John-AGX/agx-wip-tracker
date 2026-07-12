@@ -154,6 +154,22 @@ router.get('/:id/dashboard', requireAuth, requireCapability('ESTIMATES_VIEW'), a
     activity.sort((a, b) => new Date(b.when || 0) - new Date(a.when || 0));
     const activityTop = activity.slice(0, 8);
 
+    // Numeric client "heat" (0-100): active pipeline + $ + recency + depth.
+    // Modeled on the health-tier inputs (jobs / openLeads / margin) plus
+    // recency of the newest activity. Hot ≥70, Warm ≥40, else Cold.
+    let heat = 0;
+    heat += Math.min(40, openLeads * 20);                       // active pipeline
+    heat += Math.min(25, (pipelineValue / 20000) * 25);         // pipeline $
+    heat += Math.min(15, jobs.length * 3);                      // relationship depth
+    const lastWhen = (activity.length && activity[0].when) ? new Date(activity[0].when).getTime() : 0;
+    if (lastWhen) {
+      const days = (Date.now() - lastWhen) / 86400000;
+      heat += days <= 30 ? 20 : days <= 90 ? 10 : days <= 180 ? 4 : 0;
+    }
+    if (margin != null) { if (margin >= 0.2) heat += 8; else if (margin < 0.15 && jobs.length) heat -= 8; }
+    heat = Math.max(0, Math.min(100, Math.round(heat)));
+    const heatLabel = heat >= 70 ? 'Hot' : heat >= 40 ? 'Warm' : 'Cold';
+
     res.json({
       client: {
         id: client.id, name: client.name, client_type: client.client_type,
@@ -166,11 +182,56 @@ router.get('/:id/dashboard', requireAuth, requireCapability('ESTIMATES_VIEW'), a
       summary: {
         jobCount: jobs.length, contractValue, costs, revenue, margin,
         totalLeads: leads.length, openLeads, pipelineValue, health: { tier, reason },
+        heat, heatLabel,
       },
       jobs, leads, activity: activityTop,
     });
   } catch (e) {
     console.error('GET /api/clients/:id/dashboard error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── Property-intel: nearest safety services (Slice 1) ────────────────
+// Geocode the client's property address, then find the nearest hospital +
+// fire station via Google Places (New). Cached 7 days per (client, address)
+// so we don't re-hit Places/geocoding on every dossier open.
+const geocoder = require('../geocoder');
+const places = require('../places');
+const _safetyCache = new Map(); // key `${id}|${addr}` → { data, ts }
+const SAFETY_TTL = 7 * 86400000;
+
+router.get('/:id/nearby-safety', requireAuth, requireCapability('ESTIMATES_VIEW'), async (req, res) => {
+  try {
+    const orgId = req.user.organization_id;
+    const cr = await pool.query(
+      'SELECT id, property_address, address, city, state, zip FROM clients WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+      [req.params.id, orgId]
+    );
+    if (!cr.rows.length) return res.status(404).json({ error: 'Client not found' });
+    const c = cr.rows[0];
+    const addr = (c.property_address && c.property_address.trim())
+      || [c.address, c.city, c.state, c.zip].filter(Boolean).join(', ');
+    if (!addr) return res.json({ ok: false, reason: 'no_address' });
+
+    const cacheKey = req.params.id + '|' + addr;
+    const hit = _safetyCache.get(cacheKey);
+    if (hit && (Date.now() - hit.ts) < SAFETY_TTL) return res.json(hit.data);
+
+    const geo = await geocoder.geocodeAddress(addr);
+    if (!geo || geo.lat == null || geo.lng == null) return res.json({ ok: false, reason: 'geocode_failed', address: addr });
+
+    const safety = await places.nearbySafety(geo.lat, geo.lng);
+    const out = {
+      ok: true,
+      property: { address: addr, lat: geo.lat, lng: geo.lng },
+      hospital: safety.hospital, fire: safety.fire,
+      generatedAt: new Date().toISOString()
+    };
+    _safetyCache.set(cacheKey, { data: out, ts: Date.now() });
+    res.json(out);
+  } catch (e) {
+    console.error('GET /api/clients/:id/nearby-safety error:', e);
     res.status(500).json({ error: 'Server error' });
   }
 });
