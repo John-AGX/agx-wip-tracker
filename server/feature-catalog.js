@@ -457,6 +457,7 @@ const releases = [
       { type: 'new', text: 'Round-trip exports — export a workspace and the .xlsx matches the original file cell-for-cell: values, formulas with live results, styles, and bit-exact column widths.' },
       { type: 'new', text: 'Hidden sheets now import as hidden tabs, so formulas and named ranges that read from them keep working.' },
       { type: 'improved', text: 'Formulas filled down a column (shared formulas) now import with the right references on every row, and Excel\'s cached results display instantly while the grid recalculates.' },
+      { type: 'improved', text: 'The pop-out Workspace now fills its window, and the toolbar reads like Excel\'s ribbon — grouped captions, dividers, and crisp line icons in place of emoji.' },
       { type: 'fixed', text: 'SUM, AVERAGE, COUNT and every other range formula computed 0 over same-sheet ranges — the engine now reads ranges correctly everywhere, including ranges from named ranges.' },
       { type: 'fixed', text: 'Frozen panes silently un-froze after a reload; freeze state now survives.' },
       { type: 'fixed', text: 'Duplicating a sheet dropped its row heights.' },
