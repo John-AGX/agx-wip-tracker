@@ -339,6 +339,34 @@
       html += '</div>';
     });
 
+    // Usage + estimate drift — where this recipe is quoted, at what price
+    // vs today's resolved cost, with guarded one-click reprice.
+    if ((d.usage.estimates || []).length) {
+      html += '<div style="font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-dim,#9a9aa2);margin:16px 0 6px;">Quoted on estimates — inserted price vs today</div>' +
+        '<table style="width:100%;border-collapse:collapse;font-size:11.5px;">' +
+        '<tr style="color:var(--text-dim,#9a9aa2);font-size:9.5px;text-transform:uppercase;letter-spacing:.05em;">' +
+          '<th style="text-align:left;padding:3px 6px;width:26px;"></th><th style="text-align:left;padding:3px 6px;">Estimate</th>' +
+          '<th style="text-align:right;padding:3px 6px;">Quoted</th><th style="text-align:right;padding:3px 6px;">Inserted @</th>' +
+          '<th style="text-align:right;padding:3px 6px;">Today @</th><th style="text-align:right;padding:3px 6px;">Drift</th></tr>' +
+        d.usage.estimates.map(function (u) {
+          var driftCol = u.drift_pct == null ? 'var(--text-dim,#888)' : Math.abs(u.drift_pct) < 2 ? '#4ade80' : u.drift_pct > 0 ? '#f77066' : '#f2a55c';
+          var status = u.is_locked ? ' <span style="font-size:8.5px;padding:1px 5px;border-radius:7px;background:rgba(247,112,102,.14);color:#f77066;">LOCKED</span>'
+            : (u.approval_status ? ' <span style="font-size:8.5px;padding:1px 5px;border-radius:7px;background:rgba(242,165,92,.14);color:#f2a55c;">' + esc(String(u.approval_status).toUpperCase()) + '</span>' : '');
+          var rollupNote = u.rollup_count === 0 ? ' <span title="exploded lines only — never auto-repriced" style="font-size:8.5px;color:var(--text-dim,#888);">exploded</span>' : '';
+          return '<tr style="border-top:1px solid rgba(255,255,255,.05);">' +
+            '<td style="padding:3px 6px;">' + (u.refreshable ? '<input type="checkbox" data-asmt-est="' + esc(u.id) + '" />' : '') + '</td>' +
+            '<td style="padding:3px 6px;">' + esc(String(u.title).slice(0, 44)) + status + rollupNote + '</td>' +
+            '<td style="text-align:right;padding:3px 6px;font-family:Consolas,monospace;">$' + Number(u.quoted).toLocaleString(undefined, { maximumFractionDigits: 0 }) + '</td>' +
+            '<td style="text-align:right;padding:3px 6px;font-family:Consolas,monospace;">' + (u.inserted_unit_cost != null ? '$' + Number(u.inserted_unit_cost).toFixed(2) : '—') + '</td>' +
+            '<td style="text-align:right;padding:3px 6px;font-family:Consolas,monospace;">$' + (Number(d.assembly.unit_cost) || 0).toFixed(2) + '</td>' +
+            '<td style="text-align:right;padding:3px 6px;font-family:Consolas,monospace;color:' + driftCol + ';">' + (u.drift_pct != null ? (u.drift_pct > 0 ? '+' : '') + u.drift_pct + '%' : '—') + '</td></tr>';
+        }).join('') + '</table>' +
+        '<div style="display:flex;gap:8px;align-items:center;margin-top:7px;">' +
+          btn('⟳ Reprice selected from recipe', 'data-asmt-reprice') +
+          '<span style="font-size:10.5px;color:var(--text-dim,#9a9aa2);">Rollup lines only · locked (sold) estimates can\'t be selected · logged</span>' +
+        '</div>';
+    }
+
     html += '<div style="border:1px dashed rgba(167,139,250,.4);border-radius:10px;padding:9px 13px;font-size:11px;color:#a78bfa;margin:14px 0;">🔮 Flywheel suggestions land here (T4): observed GAL/SF + HR/SF from job receipts &amp; QB actuals vs these assumptions — evidence-backed, always human-approved, every verdict a training example.</div>';
 
     html += '<div style="font-size:10px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-dim,#9a9aa2);margin:14px 0 6px;">Tuning log</div>';
@@ -435,6 +463,20 @@
           .then(function () { toast('Tuned — logged with reason'); loadAsmDetail(det.assembly.id); })
           .catch(function (e) { toast('Save failed: ' + (e.message || 'unknown'), true); });
       });
+    });
+    var rp = el.querySelector('[data-asmt-reprice]');
+    if (rp) rp.addEventListener('click', function () {
+      var ids = Array.prototype.map.call(el.querySelectorAll('[data-asmt-est]:checked'), function (c) { return c.dataset.asmtEst; });
+      if (!ids.length) { toast('Check at least one estimate first', true); return; }
+      var det = _asmT.det;
+      cpost('/api/assemblies/' + det.assembly.id + '/refresh-estimates', { estimate_ids: ids, reason: 'Repriced from Tuning Center' })
+        .then(function (r) {
+          var ok = (r.results || []).filter(function (x) { return x.ok; }).length;
+          var skipped = (r.results || []).filter(function (x) { return !x.ok; });
+          toast(ok + ' estimate(s) repriced to $' + r.new_unit_cost + (skipped.length ? ' · ' + skipped.length + ' skipped' : ''));
+          loadAsmDetail(det.assembly.id);
+        })
+        .catch(function (e) { toast('Reprice failed: ' + (e.message || 'unknown'), true); });
     });
   }
 

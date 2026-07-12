@@ -176,18 +176,39 @@ router.get('/:id/tuning', requireAuth, requireCapability('ROLES_MANAGE'), async 
       return shaped;
     });
 
-    // Usage — estimates that quoted this assembly (JSONB scan, same
-    // pattern as /api/materials/recent).
-    let usage = { estimate_count: 0, quoted_total: 0 };
+    // Usage — every estimate that quoted this assembly, with the
+    // inserted price vs today's resolved cost (= per-estimate drift).
+    // Rollup lines (they carry assemblyBreakdown) are refreshable;
+    // exploded lines are line-level edited and never touched.
+    let usage = { estimate_count: 0, quoted_total: 0, estimates: [] };
     try {
       const uq = await pool.query(
-        `SELECT e.id, COALESCE(SUM((line->>'qty')::numeric * (line->>'unitCost')::numeric), 0) AS quoted
+        `SELECT e.id, e.data->>'title' AS title, e.is_locked, e.approval_status,
+                COALESCE(SUM((line->>'qty')::numeric * (line->>'unitCost')::numeric), 0) AS quoted,
+                COUNT(*)::int AS line_count,
+                COUNT(*) FILTER (WHERE line ? 'assemblyBreakdown')::int AS rollup_count,
+                AVG((line->>'unitCost')::numeric) FILTER (WHERE line ? 'assemblyBreakdown') AS rollup_unit_cost
            FROM estimates e, jsonb_array_elements(COALESCE(e.data->'lines', '[]'::jsonb)) AS line
           WHERE (e.organization_id = $1 OR e.organization_id IS NULL)
             AND (line->>'sourceAssemblyId')::int = $2
-          GROUP BY e.id`, [orgId, id]);
+          GROUP BY e.id, e.data->>'title', e.is_locked, e.approval_status
+          ORDER BY MAX(e.updated_at) DESC NULLS LAST`, [orgId, id]);
       usage.estimate_count = uq.rows.length;
       usage.quoted_total = uq.rows.reduce((s, r) => s + Number(r.quoted || 0), 0);
+      usage.estimates = uq.rows.map((r) => {
+        const ins = r.rollup_unit_cost != null ? Number(r.rollup_unit_cost) : null;
+        const cur = cost.unitCost;
+        return {
+          id: r.id, title: r.title || '(untitled)', is_locked: !!r.is_locked,
+          approval_status: r.approval_status || null,
+          quoted: Number(r.quoted || 0), line_count: r.line_count,
+          rollup_count: r.rollup_count,
+          inserted_unit_cost: ins,
+          drift_pct: (ins != null && ins > 0 && cur != null)
+            ? Math.round(((cur - ins) / ins) * 1000) / 10 : null,
+          refreshable: !r.is_locked && r.rollup_count > 0,
+        };
+      });
     } catch (e) { /* usage is best-effort */ }
 
     const log = await pool.query(
@@ -207,6 +228,61 @@ router.get('/:id/tuning', requireAuth, requireCapability('ROLES_MANAGE'), async 
     });
   } catch (e) {
     console.error('GET /api/assemblies/:id/tuning error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── POST /:id/refresh-estimates — reprice rollup lines from the recipe ─
+// Body: { estimate_ids: [], reason? }. For each selected estimate (org-
+// scoped, NOT locked): every line with sourceAssemblyId = :id AND an
+// assemblyBreakdown snapshot gets unitCost = today's resolved cost and a
+// fresh component snapshot. Exploded lines are line-level edited and are
+// never touched. Locked (sold) estimates are hard-skipped.
+router.post('/:id/refresh-estimates', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const ids = Array.isArray(req.body && req.body.estimate_ids) ? req.body.estimate_ids.map(String) : [];
+    if (!isFinite(id) || !ids.length) return res.status(400).json({ error: 'estimate_ids required' });
+    const orgId = req.user.organization_id;
+    const graph = await asm.loadGraph(pool, orgId);
+    const a = graph.assemblies.get(id);
+    if (!a) return res.status(404).json({ error: 'Assembly not found' });
+    const cost = asm.resolveCost(id, graph);
+    const flat = asm.flatten(id, graph, 1);
+
+    const results = [];
+    for (const estId of ids) {
+      const er = await pool.query(
+        `SELECT id, data, is_locked FROM estimates
+          WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)`, [estId, orgId]);
+      if (!er.rows.length) { results.push({ id: estId, ok: false, why: 'not found' }); continue; }
+      if (er.rows[0].is_locked) { results.push({ id: estId, ok: false, why: 'locked (sold)' }); continue; }
+      const blob = er.rows[0].data || {};
+      const lines = Array.isArray(blob.lines) ? blob.lines : [];
+      let touched = 0;
+      lines.forEach((l) => {
+        if (Number(l.sourceAssemblyId) === id && Array.isArray(l.assemblyBreakdown)) {
+          l.unitCost = cost.unitCost;
+          l.assemblyBreakdown = flat;
+          touched++;
+        }
+      });
+      if (!touched) { results.push({ id: estId, ok: false, why: 'no rollup lines' }); continue; }
+      blob.lines = lines;
+      await pool.query('UPDATE estimates SET data = $1, updated_at = NOW() WHERE id = $2', [JSON.stringify(blob), estId]);
+      results.push({ id: estId, ok: true, lines: touched, new_unit_cost: cost.unitCost });
+    }
+    const okCount = results.filter((r) => r.ok).length;
+    if (okCount) {
+      try {
+        await asm.logTuning(pool, orgId, id,
+          [{ field: 'refresh', new_value: okCount + ' estimate(s) repriced to $' + cost.unitCost + '/' + (a.unit || 'EA') }],
+          { userId: req.user.id, source: 'manual', reason: (req.body.reason || '').slice(0, 500) || null });
+      } catch (e) { /* log only */ }
+    }
+    res.json({ ok: true, results, new_unit_cost: cost.unitCost });
+  } catch (e) {
+    console.error('POST /api/assemblies/:id/refresh-estimates error:', e);
     res.status(500).json({ error: 'Server error' });
   }
 });
