@@ -3948,8 +3948,23 @@ function renderJobsMain() {
             if (_bldgs.length === 0 || _suppressMatrix) {
                 container.innerHTML = titleHTML + compactTable;
             } else {
-                container.innerHTML = titleHTML + '<div class="phase-matrix-host"></div>';
-                try { renderPhaseMatrixInto(container.querySelector('.phase-matrix-host'), jobId); } catch (e) {}
+                // Default surface = the building-first card editor; the wide
+                // Buildings×Phases matrix is one toggle away for power editing.
+                var _view = _allocView[jobId] || 'cards';
+                var _seg = function(v, label) {
+                    var on = _view === v;
+                    return '<button type="button" onclick="onAllocViewToggle(\'' + v + '\')" style="font-size:11px;font-weight:600;padding:3px 11px;border:0;cursor:pointer;background:' + (on ? 'var(--accent)' : 'transparent') + ';color:' + (on ? '#fff' : 'var(--text-dim)') + ';">' + label + '</button>';
+                };
+                var viewToggle =
+                    '<div style="display:flex;justify-content:flex-end;margin:0 0 8px;">' +
+                        '<div style="display:inline-flex;border:1px solid var(--border);border-radius:8px;overflow:hidden;">' + _seg('cards', 'Cards') + _seg('grid', 'Grid') + '</div>' +
+                    '</div>';
+                container.innerHTML = titleHTML + viewToggle + '<div class="phase-matrix-host"></div>';
+                var _host = container.querySelector('.phase-matrix-host');
+                try {
+                    if (_view === 'grid') renderPhaseMatrixInto(_host, jobId);
+                    else renderPhaseAllocEditorInto(_host, jobId);
+                } catch (e) {}
             }
         }
 
@@ -4031,12 +4046,20 @@ function renderJobsMain() {
             // Unassigned column carries no unit weight, so a units/levels split
             // sends the whole phase to buildings.
             var remaining = Math.max(0, 100 - manualSum);
+            // Explicit split preference (allocSplit: 'even'|'units'|'levels'),
+            // set from the allocation editor's segmented control. When absent the
+            // legacy auto behavior (units, then levels) applies.
+            var splitPref = null;
+            info.recs.forEach(function(r) { if (r.allocSplit) splitPref = r.allocSplit; });
             var weightFor = function(key) {
                 if (key === '__un__') return 0;
                 var b = buildings.find(function(x) { return x.id === key; });
                 if (!b) return 0;
                 var u = (b.units || []).length, l = (b.levels || []).length;
-                return u > 0 ? u : (l > 0 ? l : 0);
+                if (splitPref === 'even') return 0;              // 0 weight everywhere → even fallback below
+                if (splitPref === 'levels') return l > 0 ? l : 0;
+                if (splitPref === 'units') return u > 0 ? u : 0;
+                return u > 0 ? u : (l > 0 ? l : 0);              // auto default: units, then levels
             };
             var weights = {}, nonZero = [];
             autoKeys.forEach(function(k) { var w = weightFor(k); weights[k] = w; if (w > 0) nonZero.push(w); });
@@ -4046,8 +4069,11 @@ function renderJobsMain() {
                 autoKeys.forEach(function(k) { if (k !== '__un__' && weights[k] === 0) weights[k] = avgNZ; wSum += weights[k]; });
                 autoKeys.forEach(function(k) { out[k].pct = wSum > 0 ? remaining * weights[k] / wSum : 0; });
             } else {
-                var each = autoKeys.length ? remaining / autoKeys.length : 0;
-                autoKeys.forEach(function(k) { out[k].pct = each; });
+                // Even split — across BUILDINGS only; Unassigned never grabs a
+                // share (a phase's budget belongs on its buildings).
+                var evenKeys = autoKeys.filter(function(k) { return k !== '__un__'; });
+                var each = evenKeys.length ? remaining / evenKeys.length : 0;
+                autoKeys.forEach(function(k) { out[k].pct = (k === '__un__') ? 0 : each; });
             }
             return { targets: targets, shares: out };
         }
@@ -4219,6 +4245,228 @@ function renderJobsMain() {
                 '</div>';
         }
 
+        // ── Building-first phase allocation editor ──────────────────────────
+        // One card per phase. On a phase you tick the SET of buildings it
+        // touches (or "All") in one shot, choose how to split (Even / by Units /
+        // by Levels), and — if needed — override any building's share. This is
+        // the primary allocation surface; the wide Buildings×Phases matrix is
+        // still available via the Cards/Grid toggle. All writes go through the
+        // SAME primitives the matrix uses (spreadPhaseCore + commitMatrixChange
+        // for building coverage / split; the onPhaseMatrix* per-field handlers
+        // for total / % / %-done / mode), so the math + persistence are shared.
+        var _allocView = {}; // jobId -> 'cards' | 'grid' (default cards)
+
+        // Buildings a phase currently covers: it has an auto share, a positive
+        // manual %, or positive dollars on that (phase,building) record.
+        function allocCoveredSet(jobId, name) {
+            var out = {};
+            (appData.phases || []).filter(function(p) {
+                return p.jobId === jobId && (p.phase || 'Unnamed') === name && p.buildingId;
+            }).forEach(function(r) {
+                if (r.allocAuto === true || (r.allocPct != null && r.allocPct > 0) || phaseDollar(r) > 0) out[r.buildingId] = 1;
+            });
+            return out;
+        }
+
+        function renderPhaseAllocEditorInto(container, jobId) {
+            if (!container) return;
+            dedupePhaseRecords(jobId); // self-heal orphan-twin phase records before painting
+            var phases = (appData.phases || []).filter(function(p) { return p.jobId === jobId; });
+            var buildings = (appData.buildings || []).filter(function(b) { return b.jobId === jobId; }).slice().sort(_bldgNumSort);
+            var names = [];
+            phases.forEach(function(p) { var n = p.phase || 'Unnamed'; if (names.indexOf(n) === -1) names.push(n); });
+            names.sort();
+            if (!names.length || !buildings.length) { container.innerHTML = ''; return; }
+            var attr = function(s) { return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); };
+            var poAccr = (typeof getJobPOAccrued === 'function') ? getJobPOAccrued(jobId).byPhase : {};
+            var recCost = function(r) { return r ? (r.materials || 0) + (r.labor || 0) + (r.sub || 0) + (r.equipment || 0) : 0; };
+
+            var cards = names.map(function(name) {
+                var info = phaseAllocInfo(jobId, name);
+                var isPct = info.mode === 'pct';
+                var shares = isPct ? phasePctShares(jobId, name).shares : null;
+                var covered = allocCoveredSet(jobId, name);
+                var coveredCount = Object.keys(covered).length;
+                var rev = info.recs.reduce(function(s, r) { return s + phaseDollar(r); }, 0);
+                var cost = info.recs.reduce(function(s, r) { return s + recCost(r); }, 0);
+                var profit = rev - cost;
+                var avgPct = info.recs.length ? Math.round(info.recs.reduce(function(s, r) { return s + (r.pctComplete || 0); }, 0) / info.recs.length) : 0;
+                var splitPref = 'units'; info.recs.forEach(function(r) { if (r.allocSplit) splitPref = r.allocSplit; });
+
+                // Per-building share % (for the meter + share list).
+                function bldgPct(bid) {
+                    if (isPct) { var sh = shares[bid]; return sh ? (sh.pct || 0) : 0; }
+                    var r = info.recs.find(function(x) { return (x.buildingId || null) === bid; });
+                    return (info.sumDollars > 0 && r) ? (phaseDollar(r) / info.sumDollars * 100) : 0;
+                }
+                var bldgPctSum = 0; buildings.forEach(function(b) { if (covered[b.id]) bldgPctSum += bldgPct(b.id); });
+                var allocRounded = Math.round(bldgPctSum);
+                var hasBudget = ((info.total || 0) > 0) || (info.sumDollars > 0);
+                // Green ✓ requires an actual budget to allocate — a $0 phase with
+                // buildings ticked is 100% of nothing, not "fully allocated".
+                var meterOk = hasBudget && coveredCount > 0 && allocRounded >= 99 && allocRounded <= 101;
+                var meterColor = meterOk ? 'var(--green)' : ((coveredCount === 0 || !hasBudget) ? 'var(--text-dim)' : 'var(--orange,#e0a458)');
+                var meterText = coveredCount === 0 ? 'No buildings assigned'
+                    : (!hasBudget ? 'No budget set'
+                    : ('Allocated ' + allocRounded + '%' + (meterOk ? ' ✓' : ' ⚠')));
+
+                // ── Header: name + mode chip + accrued + Rev/Cost/Profit + %Done
+                var modeChip = '<button type="button" data-mx-phase="' + attr(name) + '" onclick="onPhaseMatrixModeToggle(this)" title="Toggle percent / dollar allocation for this phase" style="font-size:10px;font-weight:700;padding:1px 7px;border-radius:10px;border:1px solid var(--border);background:var(--overlay-light,rgba(255,255,255,0.05));color:var(--accent);cursor:pointer;">' + (isPct ? '%' : '$') + '</button>';
+                var accrChip = (poAccr[name] > 0) ? '<span title="Open PO commitment — accrued until billed/paid" style="font-size:10px;padding:1px 6px;border-radius:10px;background:rgba(224,164,88,0.15);color:var(--orange,#e0a458);white-space:nowrap;">&#9203; ' + formatCurrency(poAccr[name]) + '</span>' : '';
+                var header =
+                    '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:8px;">' +
+                        '<div style="display:flex;align-items:center;gap:7px;flex-wrap:wrap;">' +
+                            '<span style="font-size:14px;font-weight:700;color:var(--text);">' + escapeHTML(name) + '</span>' + modeChip + accrChip +
+                        '</div>' +
+                        '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:11.5px;font-family:monospace;">' +
+                            '<span style="color:var(--text-dim);">Rev <b style="color:var(--green);">' + formatCurrency(rev) + '</b></span>' +
+                            '<span style="color:var(--text-dim);">Cost <b style="color:var(--orange,#e0a458);">' + formatCurrency(cost) + '</b></span>' +
+                            '<span style="color:var(--text-dim);">Profit <b style="color:' + (profit >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(profit) + '</b></span>' +
+                            '<span style="display:inline-flex;align-items:center;gap:2px;color:var(--text-dim);">% Done <input type="number" min="0" max="100" step="5" value="' + (avgPct || '') + '" data-mx-phase="' + attr(name) + '" oninput="onPhaseMatrixPctDone(this)" onchange="onPhaseMatrixCommit(this)" title="Phase % complete — drives the WIP roll-up" style="width:44px;font-size:12px;padding:2px 4px;text-align:right;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--accent);font-weight:700;"/></span>' +
+                        '</div>' +
+                    '</div>';
+
+                // ── Budget row: editable total in % mode; sum read-out in $ mode
+                var budgetRow =
+                    '<div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:9px;">' +
+                        '<div style="display:flex;align-items:center;gap:6px;">' +
+                            '<span style="font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.4px;">Budget</span>' +
+                            (isPct
+                                ? '<input type="number" min="0" step="100" value="' + (info.total || '') + '" data-mx-phase="' + attr(name) + '" oninput="onPhaseMatrixTotal(this)" onchange="onPhaseMatrixCommit(this)" placeholder="total $" style="width:110px;font-size:13px;font-weight:700;padding:3px 6px;text-align:right;background:var(--bg);border:1px solid var(--accent);border-radius:5px;color:var(--accent);font-family:monospace;"/>'
+                                : '<span style="font-size:13px;font-weight:700;color:var(--accent);font-family:monospace;">' + formatCurrency(info.sumDollars) + '</span>') +
+                        '</div>' +
+                        '<div style="display:flex;align-items:center;gap:5px;">' +
+                            '<span style="font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.4px;">Split</span>' +
+                            ['even', 'units', 'levels'].map(function(sp) {
+                                var on = splitPref === sp;
+                                return '<button type="button" data-ap-phase="' + attr(name) + '" data-ap-split="' + sp + '" onclick="onAllocSplit(this)" ' + (isPct ? '' : 'disabled ') +
+                                    'title="Split the budget across the assigned buildings ' + (sp === 'even' ? 'evenly' : 'by each building\'s ' + sp) + '" ' +
+                                    'style="font-size:11px;font-weight:600;text-transform:capitalize;padding:3px 9px;border:1px solid ' + (on ? 'var(--accent)' : 'var(--border)') + ';border-radius:12px;cursor:' + (isPct ? 'pointer' : 'not-allowed') + ';background:' + (on ? 'var(--accent)' : 'transparent') + ';color:' + (on ? '#fff' : 'var(--text-dim)') + ';opacity:' + (isPct ? '1' : '.5') + ';">' + sp + '</button>';
+                            }).join('') +
+                        '</div>' +
+                    '</div>';
+
+                // ── Building multi-select chips (ticked = covered) + All / Clear
+                // Coverage changes re-split the budget (a %-mode operation), so
+                // in $ mode the chips + All/Clear are disabled — same as the
+                // Split buttons — to avoid silently flipping the phase to % and
+                // wiping hand-typed dollar amounts. Switch to % to re-assign.
+                var canAssign = isPct;
+                var allOn = coveredCount === buildings.length && buildings.length > 0;
+                var chips = buildings.map(function(b) {
+                    var on = !!covered[b.id];
+                    return '<button type="button" data-ap-phase="' + attr(name) + '" data-ap-bldg="' + attr(b.id) + '" onclick="onAllocToggleBldg(this)" ' + (canAssign ? '' : 'disabled ') +
+                        'title="' + (canAssign ? (on ? 'Remove from this phase' : 'Add to this phase') : 'Switch to % mode to change which buildings are on this phase') + '" ' +
+                        'style="font-size:11.5px;font-weight:600;padding:4px 10px;border-radius:14px;border:1px solid ' + (on ? 'var(--accent)' : 'var(--border)') + ';cursor:' + (canAssign ? 'pointer' : 'not-allowed') + ';white-space:nowrap;background:' + (on ? 'var(--accent)' : 'var(--overlay-light,rgba(255,255,255,0.04))') + ';color:' + (on ? '#fff' : 'var(--text-dim)') + ';opacity:' + (canAssign ? '1' : '.55') + ';">' +
+                        (on ? '✓ ' : '') + escapeHTML(b.name || 'Building') + '</button>';
+                }).join('');
+                var quickChips =
+                    '<button type="button" data-ap-phase="' + attr(name) + '" data-ap-which="all" onclick="onAllocAllBldgs(this)" ' + (canAssign ? '' : 'disabled ') + 'title="Assign every building" style="font-size:11px;font-weight:700;padding:4px 10px;border-radius:14px;border:1px dashed ' + (allOn ? 'var(--accent)' : 'var(--border)') + ';cursor:' + (canAssign ? 'pointer' : 'not-allowed') + ';background:transparent;color:' + (allOn ? 'var(--accent)' : 'var(--text-dim)') + ';opacity:' + (canAssign ? '1' : '.55') + ';">All</button>' +
+                    '<button type="button" data-ap-phase="' + attr(name) + '" data-ap-which="none" onclick="onAllocAllBldgs(this)" ' + (canAssign ? '' : 'disabled ') + 'title="Unassign all buildings" style="font-size:11px;font-weight:700;padding:4px 10px;border-radius:14px;border:1px dashed var(--border);cursor:' + (canAssign ? 'pointer' : 'not-allowed') + ';background:transparent;color:var(--text-dim);opacity:' + (canAssign ? '1' : '.55') + ';">Clear</button>';
+                var chipHint = canAssign ? '' : '<div style="font-size:10.5px;color:var(--text-dim);margin-top:5px;">Switch to <b>%</b> mode (chip above) to change which buildings are on this phase.</div>';
+                var chipRow =
+                    '<div style="margin-bottom:9px;">' +
+                        '<div style="font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.4px;margin-bottom:5px;">Buildings on this phase</div>' +
+                        '<div style="display:flex;flex-wrap:wrap;gap:6px;">' + chips + '<span style="width:1px;background:var(--border);margin:0 2px;"></span>' + quickChips + '</div>' + chipHint +
+                    '</div>';
+
+                // ── Per-building shares (covered only): % or $ input + read-out
+                var shareBldgs = buildings.filter(function(b) { return covered[b.id]; });
+                var shareRows = '';
+                if (shareBldgs.length) {
+                    shareRows = '<div style="display:flex;flex-wrap:wrap;gap:6px 14px;margin-bottom:9px;">' + shareBldgs.map(function(b) {
+                        var rec = info.recs.find(function(r) { return (r.buildingId || null) === b.id; });
+                        var d = phaseDollar(rec);
+                        var sh = isPct ? (shares[b.id] || { pct: 0, auto: true }) : { pct: bldgPct(b.id), auto: false };
+                        var input = isPct
+                            ? '<input type="number" min="0" max="100" step="1" value="' + (sh.pct != null ? Math.round(sh.pct * 10) / 10 : '') + '" data-mx-phase="' + attr(name) + '" data-mx-bldg="' + attr(b.id) + '" oninput="onPhaseMatrixPctCell(this)" onchange="onPhaseMatrixCommit(this)" title="' + (sh.auto ? 'Auto — type to override' : 'Manual override') + '" style="width:52px;font-size:12px;padding:2px 5px;text-align:right;background:var(--bg);border:1px ' + (sh.auto ? 'dashed' : 'solid') + ' var(--border);border-radius:4px;color:var(--text' + (sh.auto ? '-dim' : '') + ');"/><span style="font-size:10px;color:var(--text-dim);">%</span>'
+                            : '<input type="number" min="0" step="100" value="' + (d || '') + '" data-mx-phase="' + attr(name) + '" data-mx-bldg="' + attr(b.id) + '" oninput="onPhaseMatrixCell(this)" onchange="onPhaseMatrixCommit(this)" style="width:82px;font-size:12px;padding:2px 5px;text-align:right;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:monospace;"/>';
+                        return '<span style="display:inline-flex;align-items:center;gap:5px;padding:2px 0;">' +
+                            '<span style="font-size:12px;color:var(--text);min-width:0;">' + escapeHTML(b.name || 'Building') + '</span>' +
+                            input +
+                            '<span style="font-size:11px;color:var(--text-dim);font-family:monospace;">' + formatCurrency(d) + '</span>' +
+                        '</span>';
+                    }).join('') + '</div>';
+                }
+
+                // ── Allocation meter
+                var meter =
+                    '<div style="display:flex;align-items:center;gap:6px;font-size:11.5px;">' +
+                        '<span style="width:8px;height:8px;border-radius:50%;background:' + meterColor + ';display:inline-block;"></span>' +
+                        '<span style="color:' + meterColor + ';font-weight:600;">' + meterText + '</span>' +
+                        (isPct ? '' : '<span style="color:var(--text-dim);margin-left:4px;">(dollar mode — type each building\'s amount)</span>') +
+                    '</div>';
+
+                return '<div style="border:1px solid var(--border,#333);border-radius:12px;background:var(--card-bg,#141419);padding:12px 14px;margin-bottom:10px;">' +
+                    header + budgetRow + chipRow + shareRows + meter +
+                '</div>';
+            }).join('');
+
+            container.innerHTML = cards;
+        }
+
+        // Toggle one building in/out of a phase's covered set → re-spread across
+        // the resulting set (units/levels/even by the phase's split), then commit.
+        function onAllocToggleBldg(el) {
+            var name = el && el.getAttribute && el.getAttribute('data-ap-phase');
+            var bid = el && el.getAttribute && el.getAttribute('data-ap-bldg');
+            var jobId = (typeof appState !== 'undefined' && appState.currentJobId);
+            if (!name || !bid || !jobId) return;
+            // spreadPhaseCore re-splits (a %-mode op). Never run it on a $-mode
+            // phase — the chips are disabled there, but guard against any stray
+            // call so hand-typed dollar amounts can't be silently wiped.
+            if (phaseAllocInfo(jobId, name).mode !== 'pct') return;
+            var covered = allocCoveredSet(jobId, name);
+            if (covered[bid]) delete covered[bid]; else covered[bid] = 1;
+            spreadPhaseCore(jobId, name, Object.keys(covered));
+            commitMatrixChange(jobId, null); // null host → skip matrix; p86RerenderJobCards repaints the cards
+        }
+        window.onAllocToggleBldg = onAllocToggleBldg;
+
+        // All / Clear the phase's building coverage.
+        function onAllocAllBldgs(el) {
+            var name = el && el.getAttribute && el.getAttribute('data-ap-phase');
+            var which = el && el.getAttribute && el.getAttribute('data-ap-which');
+            var jobId = (typeof appState !== 'undefined' && appState.currentJobId);
+            if (!name || !jobId) return;
+            if (phaseAllocInfo(jobId, name).mode !== 'pct') return; // %-mode op only (see onAllocToggleBldg)
+            var buildings = (appData.buildings || []).filter(function(b) { return b.jobId === jobId; });
+            var targetIds = (which === 'none') ? [] : buildings.map(function(b) { return b.id; });
+            spreadPhaseCore(jobId, name, targetIds);
+            commitMatrixChange(jobId, null);
+        }
+        window.onAllocAllBldgs = onAllocAllBldgs;
+
+        // Change how a phase's budget splits across its buildings (even / units /
+        // levels). Stamp allocSplit on the phase's records, drop manual overrides
+        // by re-spreading over the current covered set, then commit.
+        function onAllocSplit(el) {
+            var name = el && el.getAttribute && el.getAttribute('data-ap-phase');
+            var split = el && el.getAttribute && el.getAttribute('data-ap-split');
+            var jobId = (typeof appState !== 'undefined' && appState.currentJobId);
+            if (!name || !split || !jobId) return;
+            if (phaseAllocInfo(jobId, name).mode !== 'pct') return; // %-mode op only (see onAllocToggleBldg)
+            (appData.phases || []).filter(function(p) { return p.jobId === jobId && (p.phase || 'Unnamed') === name; })
+                .forEach(function(r) { r.allocSplit = split; });
+            var covered = Object.keys(allocCoveredSet(jobId, name));
+            if (covered.length) spreadPhaseCore(jobId, name, covered); // re-weight the auto shares
+            commitMatrixChange(jobId, null);
+        }
+        window.onAllocSplit = onAllocSplit;
+
+        // Flip the phase surface between the card editor and the wide matrix
+        // grid. Repaint BOTH possible hosts: the node-graph inspector
+        // (#insp-phases, via p86RerenderJobCards) and the classic overview
+        // (#job-phases-cards, via renderJobPhases) — only one exists per route.
+        function onAllocViewToggle(which) {
+            var jobId = (typeof appState !== 'undefined' && appState.currentJobId);
+            if (!jobId) return;
+            _allocView[jobId] = which;
+            try { if (typeof p86RerenderJobCards === 'function') p86RerenderJobCards(jobId); } catch (e) {}
+            try { if (typeof renderJobPhases === 'function') renderJobPhases(jobId); } catch (e) {}
+        }
+        window.onAllocViewToggle = onAllocViewToggle;
+
         // Edit a matrix cell → find-or-create the (phase, building) record,
         // write its as-sold budget slice, persist, and live-update the totals.
         function onPhaseMatrixCell(input) {
@@ -4304,6 +4552,12 @@ function renderJobsMain() {
                 info.recs.forEach(function(r) { r.allocMode = 'dollar'; });
             }
             if (typeof saveData === 'function') saveData();
+            // Repaint BOTH hosts: the node-graph inspector (#insp-phases, via
+            // p86RerenderJobCards) and the classic overview (#job-phases-cards,
+            // via renderJobPhases). renderJobPhases alone was a no-op on the Site
+            // Map route (#job-phases-cards isn't mounted there), so the mode chip
+            // looked dead in the inspector — the card + matrix both live there.
+            try { if (typeof p86RerenderJobCards === 'function') p86RerenderJobCards(jobId); } catch (e) {}
             if (typeof renderJobPhases === 'function') renderJobPhases(jobId);
         }
         window.onPhaseMatrixModeToggle = onPhaseMatrixModeToggle;
