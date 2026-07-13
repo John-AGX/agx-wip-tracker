@@ -216,8 +216,23 @@ function renderJobsMain() {
             let totalAccrued = 0;
             const jobSubs = appData.subs.filter(s => s.jobId === jobId);
             const jobPct = job ? (job.pctComplete || 0) : 0;
+            // A PO is issued TO a sub — its commitment is already accrued by
+            // getJobPOAccrued (ordered × pct − billed), which getJobWIP adds
+            // alongside this. Counting the sub's own contract again here would
+            // double-count that commitment (overstating accrued/projected cost
+            // and understating displayed profit). Skip any sub that has a live
+            // PO linked by po.sub_id; the sub accrual then covers only subs that
+            // are contracted but not yet PO'd.
+            const poSubIds = {};
+            (appData.jobPurchaseOrders || []).forEach(function (po) {
+                if (po.job_id === jobId && po.sub_id
+                    && po.status !== 'draft' && po.status !== 'cancelled' && po.status !== 'void') {
+                    poSubIds[po.sub_id] = 1;
+                }
+            });
 
             jobSubs.forEach(sub => {
+                if (poSubIds[sub.id]) return;   // commitment already counted via PO accrual
                 const earned = (sub.contractAmt || 0) * (jobPct / 100);
                 const accrued = Math.max(0, earned - (sub.billedToDate || 0));
                 totalAccrued += accrued;
@@ -3746,7 +3761,30 @@ function renderJobsMain() {
                 if (!targetIds[w.toNode]) return;
                 var src = NG.findNode(w.fromNode);
                 if (!src || src.type !== 'co' || !src.data || !src.data.id) return;
-                var coEntry = appData.changeOrders.find(function(c) { return c.id === src.data.id; });
+                // Server COs live in appData.jobChangeOrders — money is in c.lines
+                // via the shared pricing pipeline, NOT a flat income field. (The old
+                // code read the dead appData.changeOrders relic, so every wired CO
+                // resolved to nothing and building-level CO income was always $0,
+                // never summing to the job's CO total.) Compute income/cost exactly
+                // like getJobCOTotals and expose them as co.income/co.estimatedCosts
+                // so the card consumer reads correctly. Fall back to the legacy
+                // relic for any pre-server CO that still carries flat fields.
+                var srv = (appData.jobChangeOrders || []).find(function(c) { return c.id === src.data.id; });
+                var coEntry;
+                if (srv) {
+                    var lines = Array.isArray(srv.lines) ? srv.lines : [];
+                    var income = 0, cost = 0;
+                    if (window.p86Pricing) {
+                        var per = window.p86Pricing.computeForLines(srv, lines);
+                        var markedUp = window.p86Pricing.targetMarginActive(srv)
+                            ? window.p86Pricing.applyTargetMargin(per.subtotal, srv) : per.markedUp;
+                        income = window.p86Pricing.applyFeesAndTax(markedUp, srv).total;
+                        cost = per.subtotal;
+                    }
+                    coEntry = Object.assign({}, srv, { income: income, estimatedCosts: cost });
+                } else {
+                    coEntry = (appData.changeOrders || []).find(function(c) { return c.id === src.data.id; });
+                }
                 if (!coEntry) return;
                 results.push({ co: coEntry, allocPct: w.allocPct != null ? w.allocPct : 100 });
             });
