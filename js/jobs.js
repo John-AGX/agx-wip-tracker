@@ -89,15 +89,19 @@ function renderJobsMain() {
             return distributeJobTotalAcrossBuildings(jobId, jobSubTotal, buildingId);
         }
 
-        // Auto-calculate building % complete from its phases (weighted by phaseBudget)
+        // Auto-calculate building % complete from its phases, weighted by
+        // phaseRevenue() — the SAME revenue basis every money surface uses.
+        // (Was weighted by phaseBudget only, which gave 0 weight to legacy
+        // phases carrying revenue in asSoldRevenue/asSoldPhaseBudget with
+        // phaseBudget=0 — skewing the weighted %.)
         function calcBuildingPctComplete(buildingId, jobId) {
             const bldgPhases = appData.phases.filter(p => p.jobId === jobId && p.buildingId === buildingId);
             if (bldgPhases.length === 0) return 0;
-            const totalBudget = bldgPhases.reduce((s, p) => s + (p.phaseBudget || 0), 0);
-            if (totalBudget > 0) {
-                return bldgPhases.reduce((s, p) => s + (p.pctComplete || 0) * (p.phaseBudget || 0), 0) / totalBudget;
+            const totalRev = bldgPhases.reduce((s, p) => s + phaseRevenue(p), 0);
+            if (totalRev > 0) {
+                return bldgPhases.reduce((s, p) => s + (p.pctComplete || 0) * phaseRevenue(p), 0) / totalRev;
             }
-            // Equal weight if no budgets set
+            // Equal weight if no revenue set
             return bldgPhases.reduce((s, p) => s + (p.pctComplete || 0), 0) / bldgPhases.length;
         }
 
@@ -113,12 +117,21 @@ function renderJobsMain() {
             const phases = appData.phases.filter(p => p.jobId === jobId);
             const linkedPhases = phases.filter(p => p.buildingId);
 
-            // 1. Building-weighted, but only if phases are actually attached
+            // 1. Building-weighted, but only if phases are actually attached.
+            //    Weight each building by the REVENUE of its own phases (the
+            //    basis the building cards + money surfaces use), NOT the raw
+            //    building.budget — which is 0 for every 'auto'-derived building
+            //    (budget comes from its phases), so the old code silently gave
+            //    those buildings zero weight and fell through to a flat average.
+            //    Kept node-graph-free (buildingId phase set) so it's correct on
+            //    the jobs-list hot path where the graph isn't loaded.
             if (buildings.length > 0 && linkedPhases.length > 0) {
-                const bldgData = buildings.map(b => ({
-                    budget: b.budget || 0,
-                    pct: calcBuildingPctComplete(b.id, jobId)
-                }));
+                const bldgData = buildings.map(b => {
+                    const revW = appData.phases
+                        .filter(p => p.jobId === jobId && p.buildingId === b.id)
+                        .reduce((s, p) => s + phaseRevenue(p), 0);
+                    return { budget: revW || (b.budget || 0), pct: calcBuildingPctComplete(b.id, jobId) };
+                });
                 const totalBudget = bldgData.reduce((s, d) => s + d.budget, 0);
                 if (totalBudget > 0) {
                     return bldgData.reduce((s, d) => s + d.pct * d.budget, 0) / totalBudget;
@@ -127,11 +140,11 @@ function renderJobsMain() {
             }
 
             // 2. Phase-weighted directly (covers both no-buildings and
-            //    buildings-but-phases-not-linked cases)
+            //    buildings-but-phases-not-linked cases) — revenue-weighted.
             if (phases.length > 0) {
-                const totalBudget = phases.reduce((s, p) => s + (p.phaseBudget || 0), 0);
-                if (totalBudget > 0) {
-                    return phases.reduce((s, p) => s + (p.pctComplete || 0) * (p.phaseBudget || 0), 0) / totalBudget;
+                const totalRev = phases.reduce((s, p) => s + phaseRevenue(p), 0);
+                if (totalRev > 0) {
+                    return phases.reduce((s, p) => s + (p.pctComplete || 0) * phaseRevenue(p), 0) / totalRev;
                 }
                 return phases.reduce((s, p) => s + (p.pctComplete || 0), 0) / phases.length;
             }
@@ -3917,7 +3930,10 @@ function renderJobsMain() {
         // the phase records: allocMode ('pct'|'dollar', synced across a phase's
         // records), phaseAllocTotal (phase total $ in % mode), allocPct (a
         // building's share 0-100), allocAuto (is that share auto-even-split).
-        function phaseDollar(r) { return r ? (r.asSoldRevenue || r.asSoldPhaseBudget || r.phaseBudget || 0) : 0; }
+        // Same revenue basis as phaseRevenue() — kept as a named alias so the
+        // allocation code reads clearly. ONE definition of the chain (was a
+        // byte-identical duplicate that could drift from phaseRevenue).
+        function phaseDollar(r) { return phaseRevenue(r); }
 
         function phaseAllocInfo(jobId, name) {
             var recs = (appData.phases || []).filter(function(p) { return p.jobId === jobId && (p.phase || 'Unnamed') === name; });
