@@ -1254,7 +1254,10 @@
       if (name == null) return;
       name = String(name).trim();
       if (!name) return;
-      var newAlt = { id: 'alt_' + Date.now(), name: name, isDefault: false, scope: '' };
+      // Groups are ADDITIVE scopes that sum into one proposal — a new group
+      // defaults EXCLUDED so adding it doesn't silently inflate the total until
+      // the estimator opts it in via the group strip toggle.
+      var newAlt = { id: 'alt_' + Date.now(), name: name, isDefault: false, scope: '', excludeFromTotal: true };
       est.alternates.push(newAlt);
       est.activeAlternateId = newAlt.id;
       // Auto-seed the four standard subgroups under the new group so the
@@ -1316,7 +1319,9 @@
       name = String(name).trim();
       if (!name) return;
       var srcAlt = getActiveAlternate();
-      var newAlt = { id: 'alt_' + Date.now(), name: name, isDefault: false, scope: (srcAlt && srcAlt.scope) || '' };
+      // Additive-scope model: a duplicated group also starts EXCLUDED from the
+      // total (opt it in via the strip) so it can't silently double the price.
+      var newAlt = { id: 'alt_' + Date.now(), name: name, isDefault: false, scope: (srcAlt && srcAlt.scope) || '', excludeFromTotal: true };
       est.alternates.push(newAlt);
       // Clone every line in the active alternate over to the new one. Section
       // headers are cloned too so the structure carries over intact.
@@ -1635,6 +1640,19 @@
     // green/gold accent happens on pencil click, not on blur.
   }
 
+  // Clear the target margin → back to bottom-up section/line markup pricing.
+  // Wired from the target-margin banner's "Clear target" button.
+  function clearEstimateTargetMargin() {
+    var est = getEstimate();
+    if (!est) return;
+    est.targetMargin = 0;
+    est.targetMarginLocked = false;
+    debouncedSave();
+    renderLineItems();
+    renderTotals();
+  }
+  window.clearEstimateTargetMargin = clearEstimateTargetMargin;
+
   // Partial refresh that updates every chip EXCEPT the margin input
   // (so the input doesn't lose focus while the user is typing). Used
   // by the margin-input handler to live-update the proposal total.
@@ -1873,6 +1891,15 @@
         '⚠ This group is <strong>excluded</strong> from the proposal total. Lines you edit here won\'t ship to the client. Toggle the group on in the strip above to include it.' +
       '</div>';
     }
+    // Target-margin banner: when a target drives pricing, the per-line/section
+    // markup controls are read-only — say so + offer a one-click way back to
+    // bottom-up markup pricing (clear the target).
+    if (eeTargetDrives(est)) {
+      bannerHtml += '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 12px;background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.30);border-radius:8px;margin-bottom:10px;font-size:12px;color:#fbbf24;">' +
+        '<span>&#x1F3AF; <strong>Target margin ' + (Math.round(Number(est.targetMargin || 0) * 10) / 10) + '%</strong> is driving every price — per-line &amp; section markups are read-only.</span>' +
+        '<button type="button" onclick="clearEstimateTargetMargin()" title="Price by section/line markups instead" style="margin-left:auto;font-size:11px;padding:3px 10px;border-radius:6px;border:1px solid rgba(251,191,36,0.5);background:transparent;color:#fbbf24;cursor:pointer;white-space:nowrap;">Clear target &rarr; markups</button>' +
+      '</div>';
+    }
     if (!lines.length) {
       container.innerHTML = bannerHtml + '<div style="padding:40px;text-align:center;color:var(--text-dim,#888);border:1px dashed var(--border,#333);border-radius:8px;">' +
         'No line items yet. Click <strong>+ Line Item</strong> or <strong>+ Subgroup</strong> to start.' +
@@ -1993,9 +2020,34 @@
     var clone = {}; for (var k in line) clone[k] = line[k]; clone.markup = '';
     return effectiveMarkupForLine(clone, getLines(), getEstimate());
   }
+  // Does the target margin drive the DISPLAY of the group currently being
+  // edited? Only when a target is set AND the active group is INCLUDED — an
+  // excluded group keeps its bottom-up markup (matching computeTotals, which
+  // skips the target for excluded groups) so the table reconciles with that
+  // group's breakdown/chip value.
+  function eeTargetDrives(est) {
+    if (!targetMarginActive(est)) return false;
+    var a = getActiveAlternate();
+    return !(a && a.excludeFromTotal);
+  }
+  // When a target margin is active it is the SINGLE pricing driver: every
+  // line in the group is marked up by ONE uniform factor so the line prices +
+  // section subtotals sum EXACTLY to the target-driven group total (the same
+  // number computeTotals derives via applyTargetMargin). factor = target
+  // marked-up total ÷ raw cost subtotal of the group.
+  function eeTargetFactor(est, lines) {
+    var sub = 0;
+    (lines || []).forEach(function(L) { if (L && L.section !== '__section_header__') sub += num(L.qty) * num(L.unitCost); });
+    if (sub <= 0) return 1;
+    var mk = applyTargetMargin(sub, est);
+    return (sub > 0 && isFinite(mk)) ? (mk / sub) : 1;
+  }
   function eeLineMath(line) {
+    var lines = getLines(), est = getEstimate();
     var ext = num(line.qty) * num(line.unitCost);
-    var m = effectiveMarkupForLine(line, getLines(), getEstimate());
+    var m = eeTargetDrives(est)
+      ? (eeTargetFactor(est, lines) - 1) * 100
+      : effectiveMarkupForLine(line, lines, est);
     return { ext: ext, client: ext * (1 + m / 100), markupEff: m };
   }
 
@@ -2033,6 +2085,7 @@
       if (String(lines[i].id) === String(id)) break;
     }
     var math = eeLineMath(line);
+    var _tmSheet = eeTargetDrives(getEstimate()); // target margin owns pricing → Markup is read-only
     var bd = document.createElement('div');
     bd.id = 'ee-line-sheet-backdrop';
     bd.className = 'ee-line-sheet-backdrop';
@@ -2053,8 +2106,10 @@
           '<label class="ee-sheet-field"><span>Unit Cost</span>' +
             '<input data-f="unitCost" type="text" inputmode="decimal" value="' + escapeHTML(line.unitCost == null ? '' : String(line.unitCost)) + '" /></label>' +
         '</div>' +
-        '<label class="ee-sheet-field"><span>Markup %</span>' +
-          '<input data-f="markup" type="text" inputmode="decimal" value="' + escapeHTML(line.markup == null ? '' : String(line.markup)) + '" placeholder="blank = section (' + escapeHTML(String(Math.round(eeInheritedMarkup(line) * 10) / 10)) + '%)" /></label>' +
+        '<label class="ee-sheet-field"><span>Markup %' + (_tmSheet ? ' &#x1F3AF;' : '') + '</span>' +
+          (_tmSheet
+            ? '<input data-f="markup" type="text" value="' + (Math.round(math.markupEff * 10) / 10) + '" readonly title="Driven by the target margin — set it on the Margin chip" style="opacity:.6;" /></label>'
+            : '<input data-f="markup" type="text" inputmode="decimal" value="' + escapeHTML(line.markup == null ? '' : String(line.markup)) + '" placeholder="blank = section (' + escapeHTML(String(Math.round(eeInheritedMarkup(line) * 10) / 10)) + '%)" /></label>') +
         '<div class="ee-sheet-readouts">' +
           '<div><span>Extension</span><strong data-ro="ext">' + fmtCurrency(math.ext) + '</strong></div>' +
           '<div class="accent"><span>Client price</span><strong data-ro="client">' + fmtCurrency(math.client) + '</strong></div>' +
@@ -2072,11 +2127,18 @@
     function recompute() {
       var q = num(sheet.querySelector('[data-f="qty"]').value);
       var uc = num(sheet.querySelector('[data-f="unitCost"]').value);
-      var mkRaw = sheet.querySelector('[data-f="markup"]').value;
       var ext = q * uc;
-      var mk = (mkRaw === '' || mkRaw == null) ? eeInheritedMarkup(eeFindLine(id) || line) : num(mkRaw);
+      var client;
+      if (_tmSheet) {
+        // Target margin drives price — same uniform factor as the desktop table.
+        client = ext * eeTargetFactor(getEstimate(), getLines());
+      } else {
+        var mkRaw = sheet.querySelector('[data-f="markup"]').value;
+        var mk = (mkRaw === '' || mkRaw == null) ? eeInheritedMarkup(eeFindLine(id) || line) : num(mkRaw);
+        client = ext * (1 + mk / 100);
+      }
       sheet.querySelector('[data-ro="ext"]').textContent = fmtCurrency(ext);
-      sheet.querySelector('[data-ro="client"]').textContent = fmtCurrency(ext * (1 + mk / 100));
+      sheet.querySelector('[data-ro="client"]').textContent = fmtCurrency(client);
     }
     sheet.querySelectorAll('input,textarea').forEach(function (el) {
       var f = el.getAttribute('data-f');
@@ -2148,6 +2210,37 @@
     var isDollar = mode === 'dollar';
     var prefix = isDollar ? '$' : '';
     var suffix = isDollar ? '' : '%';
+    // Section markup only applies in bottom-up mode. When a target margin is
+    // the driver it owns every price, so swap the markup pill + override for a
+    // static "driven by target margin" chip.
+    var tmA = eeTargetDrives(getEstimate());
+    var markupControlHTML = tmA
+      ? '<span title="A target margin is driving every price — edit it on the Margin chip. Clear the target to price by section markups." ' +
+          'style="display:inline-flex;align-items:center;gap:5px;background:rgba(251,191,36,0.10);border:1px dashed rgba(251,191,36,0.45);color:#fbbf24;padding:5px 10px;border-radius:14px;font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;">&#x1F3AF; Target margin</span>'
+      : (
+      // Section markup pill — number input + $/% toggle + override checkbox.
+      '<div style="display:inline-flex;align-items:center;gap:6px;background:rgba(0,0,0,0.18);padding:4px 10px;border-radius:14px;border:1px solid var(--border,#333);">' +
+        '<span style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.4px;font-weight:600;">Markup</span>' +
+        '<button type="button" onclick="toggleSectionMarkupMode(\'' + idAttr + '\')" ' +
+          'title="Switch between percentage and flat dollar markup" ' +
+          'style="background:rgba(79,140,255,0.18);color:#4f8cff;border:1px solid rgba(79,140,255,0.35);border-radius:4px;width:24px;height:24px;font-size:12px;font-weight:700;cursor:pointer;line-height:1;">' +
+          (isDollar ? '$' : '%') +
+        '</button>' +
+        (prefix ? '<span style="font-size:11px;color:var(--text-dim,#888);">' + prefix + '</span>' : '') +
+        '<input type="text" inputmode="decimal" placeholder="0" value="' + markupVal + '" ' +
+          'onchange="updateSectionMarkup(\'' + idAttr + '\', this.value)" ' +
+          'style="width:64px;padding:2px 4px;font-size:12px;background:transparent;border:1px solid transparent;border-radius:4px;color:var(--text,#fff);text-align:right;font-family:\'SF Mono\',monospace;" ' +
+          'onfocus="this.style.borderColor=\'var(--border,#333)\';" onblur="this.style.borderColor=\'transparent\';" />' +
+        (suffix ? '<span style="font-size:11px;color:var(--text-dim,#888);">' + suffix + '</span>' : '') +
+      '</div>' +
+      // Override checkbox — when on, per-line markups are ignored.
+      '<label title="Override per-line markups (use the section value for every line below)" ' +
+        'style="display:inline-flex;align-items:center;cursor:pointer;padding:0 4px;">' +
+        '<input type="checkbox" ' + (override ? 'checked' : '') + ' ' +
+          'onchange="toggleSectionOverride(\'' + idAttr + '\', this.checked)" ' +
+          'style="cursor:pointer;width:14px;height:14px;" />' +
+      '</label>'
+      );
     // Section header row — yellow/amber accent (matches the CO editor's
     // section row) so subgroups stand out clearly from line items. Soft
     // amber tint background instead of the old blue so it doesn't fight
@@ -2161,46 +2254,7 @@
         'oninput="updateSectionName(\'' + idAttr + '\', this.value)" ' +
         'style="flex:1;min-width:140px;font-size:13px;font-weight:700;background:transparent;border:1px solid transparent;border-radius:4px;padding:4px 8px;color:#fbbf24;text-transform:uppercase;letter-spacing:0.5px;" ' +
         'onfocus="this.style.borderColor=\'var(--border,#333)\';" onblur="this.style.borderColor=\'transparent\';" />' +
-      // Section markup pill — number input + $/% toggle + override checkbox.
-      // Slider was removed; the number input alone is the source of truth.
-      '<div style="display:inline-flex;align-items:center;gap:6px;background:rgba(0,0,0,0.18);padding:4px 10px;border-radius:14px;border:1px solid var(--border,#333);">' +
-        '<span style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.4px;font-weight:600;">Markup</span>' +
-        // $/% toggle — flips between percent (multiplier on each line) and
-        // dollar (flat add at section subtotal). Click switches.
-        '<button type="button" onclick="toggleSectionMarkupMode(\'' + idAttr + '\')" ' +
-          'title="Switch between percentage and flat dollar markup" ' +
-          'style="background:rgba(79,140,255,0.18);color:#4f8cff;border:1px solid rgba(79,140,255,0.35);border-radius:4px;width:24px;height:24px;font-size:12px;font-weight:700;cursor:pointer;line-height:1;">' +
-          (isDollar ? '$' : '%') +
-        '</button>' +
-        (prefix ? '<span style="font-size:11px;color:var(--text-dim,#888);">' + prefix + '</span>' : '') +
-        '<input type="text" inputmode="decimal" placeholder="0" value="' + markupVal + '" ' +
-          // type="text" inputmode="decimal" instead of type="number":
-          // the native number input has UX problems (wheel-scroll
-          // silently changes the value, mobile Safari cursor jump on
-          // reformat, step validation rejects partial decimals).
-          // inputmode="decimal" still gives mobile users the numeric
-          // keypad. JS parsing in updateSectionMarkup handles the
-          // string-shaped value.
-          // onchange (not oninput) — updateSectionMarkup re-renders the
-          // line items, which destroys this very input. With oninput,
-          // every keystroke nuked the input mid-typing and characters
-          // landed in unexpected positions / got dropped. onchange
-          // fires on blur, after the user is done typing.
-          'onchange="updateSectionMarkup(\'' + idAttr + '\', this.value)" ' +
-          'style="width:64px;padding:2px 4px;font-size:12px;background:transparent;border:1px solid transparent;border-radius:4px;color:var(--text,#fff);text-align:right;font-family:\'SF Mono\',monospace;" ' +
-          'onfocus="this.style.borderColor=\'var(--border,#333)\';" onblur="this.style.borderColor=\'transparent\';" />' +
-        (suffix ? '<span style="font-size:11px;color:var(--text-dim,#888);">' + suffix + '</span>' : '') +
-      '</div>' +
-      // Override checkbox — when on, per-line markups are ignored.
-      // In % mode the section's % is forced on every line; in $ mode
-      // each line's % drops to 0 (the section flat $ is added at the
-      // section subtotal regardless). Visible in both modes.
-      '<label title="Override per-line markups (use the section value for every line below)" ' +
-        'style="display:inline-flex;align-items:center;cursor:pointer;padding:0 4px;">' +
-        '<input type="checkbox" ' + (override ? 'checked' : '') + ' ' +
-          'onchange="toggleSectionOverride(\'' + idAttr + '\', this.checked)" ' +
-          'style="cursor:pointer;width:14px;height:14px;" />' +
-      '</label>' +
+      markupControlHTML +
       '<button class="ee-btn primary" onclick="addEstimateLineFromEditor(\'' + idAttr + '\')" title="Add a line under this section">&#x2795; Line Item</button>' +
       '<button class="ee-btn ee-icon-btn ghost" onclick="deleteSectionFromEditor(\'' + idAttr + '\')" title="Remove section header (lines stay)">&#x1F5D1;</button>' +
     '</div>';
@@ -2216,7 +2270,9 @@
     // section's flat $ shows up in the section subtotal row instead.
     // Override-on section: forced section %.
     // Otherwise: per-line override > section > est default.
-    var effective = effectiveMarkupForLine(line, allLines, est);
+    // When target margin is the driver, every line uses the one group factor.
+    var tmActive = eeTargetDrives(est);
+    var effective = tmActive ? (eeTargetFactor(est, allLines) - 1) * 100 : effectiveMarkupForLine(line, allLines, est);
     var clientPrice = ext * (1 + effective / 100);
     var inherited = sectionMarkupForLine(line, allLines, est);
     // Placeholder hint for the per-line markup field.
@@ -2298,6 +2354,16 @@
     // editable so you can click/Tab straight into any cell. Mobile keeps the
     // gate (and the tap-to-open bottom sheet).
     var _gated = eeLineIsMobile();
+    // Markup cell: a live input in bottom-up mode; a greyed read-out of the
+    // target-implied % when a target margin is the driver (you edit the target
+    // on the Margin chip, not per line).
+    var markupCellHTML = tmActive
+      ? '<div data-cell="markup" data-label="Markup %" title="Driven by the target margin — clear the target on the Margin chip to edit markups" style="flex:0 0 90px;padding:4px 6px;">' +
+          '<div style="width:100%;padding:6px 8px;font-size:12px;border:1px dashed var(--border,#333);border-radius:4px;text-align:right;font-family:\'SF Mono\',monospace;color:var(--text-dim,#888);background:rgba(251,191,36,0.06);">' +
+            (Math.round(effective * 10) / 10) + '%' +
+          '</div>' +
+        '</div>'
+      : input('markup', line.markup, { flex: '0 0 90px', type: 'number', align: 'right', mono: true, placeholder: markupPlaceholder, label: 'Markup %' });
     return '<div data-line-id="' + idAttr + '" ' +
         (_gated ? 'data-row-edit-gate data-editing="false" ' : '') +
         'ondragover="onLineDragOver(event)" ondragleave="onLineDragLeave(event)" ' +
@@ -2308,7 +2374,7 @@
       input('qty', line.qty, { flex: '0 0 70px', type: 'number', align: 'right', mono: true, label: 'Qty' }) +
       input('unit', line.unit, { flex: '0 0 70px', label: 'Unit' }) +
       input('unitCost', line.unitCost, { flex: '0 0 110px', type: 'number', align: 'right', mono: true, label: 'Unit Cost' }) +
-      input('markup', line.markup, { flex: '0 0 90px', type: 'number', align: 'right', mono: true, placeholder: markupPlaceholder, label: 'Markup %' }) +
+      markupCellHTML +
       readOnly(fmtCurrency(ext), '0 0 110px', null, 'ee-line-ext') +
       readOnly(fmtCurrency(clientPrice), '0 0 120px', null, 'ee-line-amount') +
       '<div data-cell="delete" data-edit-gate-passthrough style="flex:0 0 36px;text-align:center;padding-top:8px;">' +
@@ -2335,17 +2401,21 @@
   // the render walk AND the surgical live-update path so they never drift.
   function eeSectionSubtotal(lines, est, startIdx, endIdx) {
     var header = lines[startIdx];
+    // When target margin drives pricing, every line is marked up by the one
+    // group factor — the section markup + dollar-flat are ignored so the
+    // subtotals sum to the target total.
+    var tm = eeTargetDrives(est);
+    var f = tm ? eeTargetFactor(est, lines) : 1;
     var sum = 0, marked = 0;
     for (var i = startIdx + 1; i < endIdx; i++) {
       var L = lines[i];
       if (!L || L.section === '__section_header__') continue;
       var ext = num(L.qty) * num(L.unitCost);
       sum += ext;
-      var m = effectiveMarkupForLine(L, lines, est);
-      marked += ext * (1 + m / 100);
+      marked += tm ? (ext * f) : (ext * (1 + effectiveMarkupForLine(L, lines, est) / 100));
     }
-    // Dollar-mode section: tack on the flat $ once.
-    if (header && header.markupMode === 'dollar' && header.markup !== '' && header.markup != null) marked += num(header.markup);
+    // Dollar-mode section: tack on the flat $ once (bottom-up mode only).
+    if (!tm && header && header.markupMode === 'dollar' && header.markup !== '' && header.markup != null) marked += num(header.markup);
     return { sum: sum, marked: marked };
   }
   // Every section's subtotal in document order — matches the order of the
@@ -2369,14 +2439,28 @@
   function refreshLineDerived(lineId) {
     var container = document.getElementById('ee-lines-container');
     if (!container) return;
-    var line = (appData.estimateLines || []).find(function(l) { return l.id === lineId; });
-    if (line) {
-      var sel = (window.CSS && CSS.escape) ? CSS.escape(String(lineId)) : String(lineId);
-      var row = container.querySelector('[data-line-id="' + sel + '"]');
-      if (row) {
-        var m = eeLineMath(line);
-        var extCell = row.querySelector('.ee-line-ext'); if (extCell) extCell.textContent = fmtCurrency(m.ext);
-        var amtCell = row.querySelector('.ee-line-amount'); if (amtCell) amtCell.textContent = fmtCurrency(m.client);
+    var est = getEstimate();
+    var updateRow = function(row, line) {
+      if (!row || !line) return;
+      var m = eeLineMath(line);
+      var extCell = row.querySelector('.ee-line-ext'); if (extCell) extCell.textContent = fmtCurrency(m.ext);
+      var amtCell = row.querySelector('.ee-line-amount'); if (amtCell) amtCell.textContent = fmtCurrency(m.client);
+    };
+    if (eeTargetDrives(est)) {
+      // Target margin drives the WHOLE group via one factor, so editing any
+      // line re-prices EVERY line — update them all (textContent only, so the
+      // focused input node is untouched and Tab still works).
+      var byId = {};
+      (appData.estimateLines || []).forEach(function(l) { byId[l.id] = l; });
+      container.querySelectorAll('[data-line-id]').forEach(function(row) {
+        var L = byId[row.getAttribute('data-line-id')];
+        if (L && L.section !== '__section_header__') updateRow(row, L);
+      });
+    } else {
+      var line = (appData.estimateLines || []).find(function(l) { return l.id === lineId; });
+      if (line) {
+        var sel = (window.CSS && CSS.escape) ? CSS.escape(String(lineId)) : String(lineId);
+        updateRow(container.querySelector('[data-line-id="' + sel + '"]'), line);
       }
     }
     var subs = eeAllSectionSubtotals();
@@ -3470,7 +3554,10 @@
     }
     var copyFromActive = !!input.copy_from_active;
     var sourceAlt = copyFromActive ? getActiveAlternate() : null;
-    var newAlt = { id: 'alt_' + Date.now(), name: name, isDefault: false, scope: (sourceAlt && sourceAlt.scope) || '' };
+    // Additive-scope model: a new group defaults EXCLUDED from the total (same
+    // as the UI "+ Group") so it can't silently inflate the proposal. The
+    // caller can pass include:true to add it already-included.
+    var newAlt = { id: 'alt_' + Date.now(), name: name, isDefault: false, scope: (sourceAlt && sourceAlt.scope) || '', excludeFromTotal: !(input.include === true) };
     est.alternates.push(newAlt);
     if (copyFromActive && sourceAlt) {
       var sourceLines = (appData.estimateLines || []).filter(function(l) {
