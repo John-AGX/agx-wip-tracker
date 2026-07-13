@@ -1,0 +1,13 @@
+name = "p86-email-inbound"
+main = "src/worker.js"
+compatibility_date = "2024-09-23"
+compatibility_flags = ["nodejs_compat"]
+
+# The app endpoint the Worker posts parsed mail to. Override per-env if
+# you ever run a staging app.
+[vars]
+P86_INBOUND_URL = "https://project86.net/api/email-inbox/inbound-cf"
+
+# P86_INBOUND_SECRET is a SECRET, not a plain var — set it with:
+#   wrangler secret put P86_INBOUND_SECRET
+# and use the SAME value for the app's INBOUND_CF_SECRET (Railway).

@@ -41,10 +41,13 @@ const router = express.Router();
 function inboundDomain() {
   return process.env.INBOUND_EMAIL_DOMAIN || 'in.project86.net';
 }
-// The dropbox needs BOTH the webhook secret (to accept deliveries) and
-// the API key (to fetch bodies). Report configured only when both exist.
+// Configured when EITHER ingest path is wired: the Cloudflare Email
+// Worker (primary — just its shared secret) or the Resend webhook
+// (dormant alt — needs its signing secret + API key to fetch bodies).
 function dropboxConfigured() {
-  return !!process.env.RESEND_INBOUND_WEBHOOK_SECRET && !!process.env.RESEND_API_KEY;
+  const cf = !!process.env.INBOUND_CF_SECRET;
+  const resend = !!process.env.RESEND_INBOUND_WEBHOOK_SECRET && !!process.env.RESEND_API_KEY;
+  return cf || resend;
 }
 
 // ── Svix signature verification (Resend signs webhooks via svix) ────
@@ -215,10 +218,177 @@ async function fetchReceivedEmail(emailId) {
   }
 }
 
-// ── POST /api/email-inbox/inbound (svix-verified, raw body) ─────────
-// Exported separately; index.js mounts it raw, rate-limited, before
-// express.json. Always 200 on "not for us" outcomes so Resend doesn't
-// retry forever; non-2xx only for signature/config failures (retryable).
+// Constant-time compare of the Cloudflare Worker's shared secret.
+function verifyCfSecret(req) {
+  const secret = process.env.INBOUND_CF_SECRET || '';
+  if (!secret) return { ok: false, code: 503, error: 'INBOUND_CF_SECRET not configured' };
+  const given = req.get('x-p86-inbound-secret') || '';
+  const a = Buffer.from(String(given));
+  const b = Buffer.from(String(secret));
+  if (a.length !== b.length) return { ok: false, code: 401, error: 'bad secret' };
+  try { return crypto.timingSafeEqual(a, b) ? { ok: true } : { ok: false, code: 401, error: 'bad secret' }; }
+  catch (e) { return { ok: false, code: 401, error: 'bad secret' }; }
+}
+
+// ── Shared ingest core ──────────────────────────────────────────────
+// Both ingest paths (Cloudflare Email Worker — primary; Resend webhook —
+// dormant alt) parse a message into these fields and call this. It does
+// recipient→user match, dedupe, thread stitch, H2 entity link, insert,
+// and fires H3 triage. Returns a plain result the caller maps to HTTP.
+//   p = { envelopeRecipients:[str], headerRecipients:[str], fromRaw,
+//         subjectRaw, text, html, messageIdRaw, inReplyToRaw,
+//         referencesRaw, dedupeKey }
+// dedupeKey: a per-delivery unique token (CF: sha256 of the raw message;
+// Resend: its email_id). Stored in resend_email_id (the UNIQUE column)
+// and used as the ON CONFLICT guard against retry double-inserts.
+async function storeInboundMessage(p) {
+  const domain = inboundDomain().toLowerCase();
+  const envelopeList = toAddressList(p.envelopeRecipients);
+  const headerList = toAddressList(p.headerRecipients);
+  const scanOrder = envelopeList.concat(headerList);
+  let user = null, matchedAddress = null;
+  for (const addr of scanOrder) {
+    const at = addr.indexOf('@');
+    if (at < 0) continue;
+    if (addr.slice(at + 1) !== domain) continue;
+    const key = addr.slice(0, at).replace(/\+.*$/, '');
+    const r = await pool.query(
+      'SELECT id, organization_id, email FROM users WHERE LOWER(inbound_email_key) = $1 AND active = TRUE LIMIT 1',
+      [key.toLowerCase()]
+    );
+    if (r.rows.length) { user = r.rows[0]; matchedAddress = addr; break; }
+  }
+  if (!user) {
+    console.warn('[email-inbox] no active user match for:', scanOrder.join(', ') || '(no recipients)');
+    return { ignored: true, reason: 'no matching dropbox' };
+  }
+  // Direct-delivery = dropbox present in a HEADER recipient (to/cc/bcc),
+  // not only the envelope. Redirected mail carries the dropbox only in
+  // the envelope; direct-to-dropbox mail didn't transit the real inbox.
+  const matchedLocal = String(matchedAddress).slice(0, String(matchedAddress).indexOf('@')).replace(/\+.*$/, '').toLowerCase();
+  const deliveredDirect = headerList.some((a) => {
+    const at = a.indexOf('@');
+    return at > 0 && a.slice(at + 1) === domain && a.slice(0, at).replace(/\+.*$/, '').toLowerCase() === matchedLocal;
+  });
+
+  // Dedupe is PER-USER: the Cloudflare content-hash key is identical
+  // across recipients of the same message, so a global check would drop
+  // a second dropbox recipient's copy. Scope to this user.
+  const dedupeKey = p.dedupeKey ? String(p.dedupeKey).slice(0, 200) : null;
+  if (dedupeKey) {
+    const dup = await pool.query('SELECT id FROM inbound_emails WHERE user_id = $1 AND resend_email_id = $2 LIMIT 1', [user.id, dedupeKey]);
+    if (dup.rows.length) return { deduped: true };
+  }
+
+  const bodyText = String(p.text || '').slice(0, 500000);
+  const bodyHtml = String(p.html || '').slice(0, 1000000);
+  const subject = String(p.subjectRaw || '').trim() || '(no subject)';
+  // Normalize from the RAW subject so a truly subject-less mail yields ''
+  // (skips the subject-fallback stitch) instead of merging every
+  // subject-less mail under the literal '(no subject)'.
+  const subjectNorm = normalizeSubject(p.subjectRaw).slice(0, 500);
+  const fromEmail = extractEmail(p.fromRaw);
+  const fromName = extractName(p.fromRaw);
+  const messageId = normalizeMsgId(p.messageIdRaw || null);
+  const inReplyTo = normalizeMsgId(p.inReplyToRaw || null);
+  const referencesRaw = p.referencesRaw || '';
+
+  // Self-forward: ONLY when the mail is FROM the user's own address (they
+  // forwarded it) — recover the quoted original sender. A "FW:" subject
+  // is NOT sufficient (an outsider could inject a fake From: in the body).
+  const isSelfForward = !!(fromEmail && user.email && fromEmail === String(user.email).toLowerCase());
+  const origFrom = isSelfForward ? recoverForwardedSender(bodyText) : null;
+
+  // Thread stitch: real header chain first, else normalized subject within
+  // 90 days, else a fresh thread.
+  let threadId = null;
+  const chainIds = parseRefIds(referencesRaw);
+  if (inReplyTo) chainIds.push(inReplyTo);
+  if (chainIds.length) {
+    const r = await pool.query(
+      `SELECT thread_id FROM inbound_emails
+        WHERE user_id = $1 AND message_id = ANY($2)
+        ORDER BY received_at DESC LIMIT 1`,
+      [user.id, chainIds]
+    );
+    if (r.rows.length) threadId = r.rows[0].thread_id;
+  }
+  if (!threadId && subjectNorm) {
+    const r = await pool.query(
+      `SELECT thread_id FROM inbound_emails
+        WHERE user_id = $1 AND subject_norm = $2
+          AND received_at > NOW() - INTERVAL '90 days'
+        ORDER BY received_at DESC LIMIT 1`,
+      [user.id, subjectNorm]
+    );
+    if (r.rows.length) threadId = r.rows[0].thread_id;
+  }
+  if (!threadId) threadId = newId('th');
+
+  // H2: link the sender to a client/sub. Prefer the recovered orig on a
+  // self-forward (fromEmail there is the USER, not the real sender).
+  const ent = await resolveSenderEntity(user.organization_id,
+    origFrom ? [origFrom, fromEmail] : [fromEmail]);
+
+  const ins = await pool.query(
+    `INSERT INTO inbound_emails
+       (id, organization_id, user_id, thread_id, resend_email_id, message_id, in_reply_to,
+        references_ids, from_name, from_email, orig_from_email, to_email,
+        subject, subject_norm, body_text, body_html, is_forward_wrapper, delivered_direct,
+        entity_type, entity_id, entity_label)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+     ON CONFLICT (user_id, resend_email_id) WHERE resend_email_id IS NOT NULL DO NOTHING
+     RETURNING id`,
+    [newId('em'), user.organization_id, user.id, threadId, dedupeKey, messageId, inReplyTo,
+     String(referencesRaw).slice(0, 5000) || null, fromName || null, fromEmail || null,
+     origFrom, matchedAddress, subject, subjectNorm, bodyText, bodyHtml, isSelfForward, deliveredDirect,
+     ent ? ent.type : null, ent ? ent.id : null, ent ? ent.label : null]
+  );
+  if (!ins.rows.length) return { deduped: true };
+  // H3: fire-and-forget triage — extracts needs-reply + dates so the
+  // assistant can proactively propose reminders/calendar. Never throws
+  // into the caller.
+  try { require('../services/email-triage').triageInBackground(ins.rows[0].id); } catch (e) { /* still stored */ }
+  return { ok: true, thread_id: threadId, entity: ent || null };
+}
+
+// ── POST /api/email-inbox/inbound-cf — Cloudflare Email Worker (PRIMARY)
+// The Worker parses the raw MIME and POSTs clean JSON here with a shared
+// secret. Full body + headers arrive in-hand (no metadata-only fetch).
+// Mounted with express.json in index.js; shared-secret authed.
+//   body: { envelopeTo:[str]|str, from, to:[str]|str, cc, subject, text,
+//           html, messageId, inReplyTo, references, dedupeKey }
+async function inboundCfHandler(req, res) {
+  try {
+    const auth = verifyCfSecret(req);
+    if (!auth.ok) {
+      console.warn('[email-inbox] rejected CF inbound:', auth.error);
+      return res.status(auth.code).json({ error: auth.error });
+    }
+    const b = req.body || {};
+    const result = await storeInboundMessage({
+      envelopeRecipients: b.envelopeTo != null ? b.envelopeTo : b.to,
+      headerRecipients: [].concat(b.to || [], b.cc || [], b.bcc || []),
+      fromRaw: b.from,
+      subjectRaw: b.subject,
+      text: b.text,
+      html: b.html,
+      messageIdRaw: b.messageId,
+      inReplyToRaw: b.inReplyTo,
+      referencesRaw: b.references,
+      dedupeKey: b.dedupeKey,
+    });
+    res.json(result);
+  } catch (e) {
+    console.error('POST /api/email-inbox/inbound-cf error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+}
+
+// ── POST /api/email-inbox/inbound (Resend webhook — DORMANT alt) ─────
+// Kept working in case the deployment ever uses Resend inbound instead
+// of the Cloudflare Worker. svix-verified; the payload is metadata-only
+// so it fetches the body from the Received Emails API before storing.
 async function inboundHandler(req, res) {
   try {
     const sig = verifySvix(req);
@@ -232,129 +402,26 @@ async function inboundHandler(req, res) {
     if (evt.type && evt.type !== 'email.received') return res.json({ ignored: true, reason: 'event type' });
     const d = evt.data || evt;
 
-    // Recipient match: received_for (SMTP envelope — where a REDIRECTED
-    // message's dropbox address lives) FIRST, then parsed to/cc/bcc for
-    // plain forwards. Track whether the dropbox appeared as a real
-    // header recipient (to/cc) → the mail was addressed to the dropbox
-    // directly (didn't transit the user's inbox = lower trust).
-    const envelopeList = toAddressList(d.received_for);
-    const headerList = toAddressList(d.to).concat(toAddressList(d.cc)).concat(toAddressList(d.bcc));
-    const domain = inboundDomain().toLowerCase();
-    const scanOrder = envelopeList.concat(headerList);
-    let user = null, matchedAddress = null;
-    for (const addr of scanOrder) {
-      const at = addr.indexOf('@');
-      if (at < 0) continue;
-      const host = addr.slice(at + 1);
-      if (host !== domain) continue;
-      const key = addr.slice(0, at).replace(/\+.*$/, '');
-      const r = await pool.query(
-        'SELECT id, organization_id, email FROM users WHERE LOWER(inbound_email_key) = $1 AND active = TRUE LIMIT 1',
-        [key.toLowerCase()]
-      );
-      if (r.rows.length) { user = r.rows[0]; matchedAddress = addr; break; }
-    }
-    if (!user) {
-      console.warn('[email-inbox] no active user match for:', scanOrder.join(', ') || '(no recipients)');
-      return res.json({ ignored: true, reason: 'no matching dropbox' });
-    }
-    // Direct-delivery = dropbox present in header to/cc/bcc (not only the
-    // envelope). Redirected mail carries the dropbox ONLY in received_for.
-    const deliveredDirect = headerList.some((a) => {
-      const at = a.indexOf('@'); return at > 0 && a.slice(at + 1) === domain && a.slice(0, at).replace(/\+.*$/, '').toLowerCase() === String(matchedAddress).slice(0, String(matchedAddress).indexOf('@')).replace(/\+.*$/, '').toLowerCase();
-    });
-
     const resendEmailId = d.email_id ? String(d.email_id) : null;
-
-    // Dedupe on Resend's own id (always present, unique per delivery).
-    // The UNIQUE index makes the INSERT the real guard; this early check
-    // just skips the body fetch on an obvious retry.
     if (resendEmailId) {
       const dup = await pool.query('SELECT id FROM inbound_emails WHERE resend_email_id = $1 LIMIT 1', [resendEmailId]);
       if (dup.rows.length) return res.json({ ok: true, deduped: true });
     }
-
-    // Fetch the full message (body + real headers). Webhook alone has none.
     const full = await fetchReceivedEmail(resendEmailId);
     const headers = headerLookup(full && full.headers);
-    const fromRaw = (full && full.from) || d.from;
-    const subjectRaw = (full && full.subject != null ? full.subject : d.subject);
-    const bodyText = String((full && full.text) || '').slice(0, 500000);
-    const bodyHtml = String((full && full.html) || '').slice(0, 1000000);
-
-    const subject = String(subjectRaw || '').trim() || '(no subject)';
-    // Normalize from the RAW subject so a truly subject-less mail yields
-    // '' (skips the subject-fallback stitch) rather than merging every
-    // subject-less mail under the literal '(no subject)'.
-    const subjectNorm = normalizeSubject(subjectRaw).slice(0, 500);
-    const fromEmail = extractEmail(fromRaw);
-    const fromName = extractName(fromRaw);
-    const messageId = normalizeMsgId(headers['message-id'] || (full && full.message_id) || d.message_id || null);
-    const inReplyTo = normalizeMsgId(headers['in-reply-to'] || null);
-    const referencesRaw = headers['references'] || '';
-
-    // Self-forward detection: ONLY when the mail is FROM the user's own
-    // address (they forwarded it) — recover the quoted original sender.
-    // A subject starting "FW:" is NOT sufficient (an outsider could set
-    // it and inject a fake From: line in the body).
-    const isSelfForward = !!(fromEmail && user.email && fromEmail === String(user.email).toLowerCase());
-    const origFrom = isSelfForward ? recoverForwardedSender(bodyText) : null;
-
-    // Thread stitching: real header chain first, else normalized subject
-    // within 90 days, else a fresh thread.
-    let threadId = null;
-    const chainIds = parseRefIds(referencesRaw);
-    if (inReplyTo) chainIds.push(inReplyTo);
-    if (chainIds.length) {
-      const r = await pool.query(
-        `SELECT thread_id FROM inbound_emails
-          WHERE user_id = $1 AND message_id = ANY($2)
-          ORDER BY received_at DESC LIMIT 1`,
-        [user.id, chainIds]
-      );
-      if (r.rows.length) threadId = r.rows[0].thread_id;
-    }
-    if (!threadId && subjectNorm) {
-      const r = await pool.query(
-        `SELECT thread_id FROM inbound_emails
-          WHERE user_id = $1 AND subject_norm = $2
-            AND received_at > NOW() - INTERVAL '90 days'
-          ORDER BY received_at DESC LIMIT 1`,
-        [user.id, subjectNorm]
-      );
-      if (r.rows.length) threadId = r.rows[0].thread_id;
-    }
-    if (!threadId) threadId = newId('th');
-
-    // H2: link the sender to a client/sub. The real sender is fromEmail
-    // (or the recovered orig on a self-forward) — a self-forward's
-    // fromEmail is the USER, so prefer origFrom there.
-    const senderCandidates = origFrom ? [origFrom, fromEmail] : [fromEmail];
-    const ent = await resolveSenderEntity(user.organization_id, senderCandidates);
-
-    // INSERT ... ON CONFLICT closes the retry race the early SELECT can't.
-    const ins = await pool.query(
-      `INSERT INTO inbound_emails
-         (id, organization_id, user_id, thread_id, resend_email_id, message_id, in_reply_to,
-          references_ids, from_name, from_email, orig_from_email, to_email,
-          subject, subject_norm, body_text, body_html, is_forward_wrapper, delivered_direct,
-          entity_type, entity_id, entity_label)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
-       ON CONFLICT (resend_email_id) WHERE resend_email_id IS NOT NULL DO NOTHING
-       RETURNING id`,
-      [newId('em'), user.organization_id, user.id, threadId, resendEmailId, messageId, inReplyTo,
-       String(referencesRaw).slice(0, 5000) || null, fromName || null, fromEmail || null,
-       origFrom, matchedAddress, subject, subjectNorm, bodyText, bodyHtml, isSelfForward, deliveredDirect,
-       ent ? ent.type : null, ent ? ent.id : null, ent ? ent.label : null]
-    );
-    if (!ins.rows.length) return res.json({ ok: true, deduped: true });
-    res.json({ ok: true, thread_id: threadId, entity: ent || null });
-    // H3: triage this email in the background — extracts needs-reply +
-    // dates/commitments so the assistant can proactively propose
-    // reminders/calendar events. Fire-and-forget; never blocks or throws
-    // into the webhook (which has already responded).
-    try { require('../services/email-triage').triageInBackground(ins.rows[0].id); }
-    catch (e) { /* triage module unavailable — email still stored */ }
+    const result = await storeInboundMessage({
+      envelopeRecipients: d.received_for,
+      headerRecipients: toAddressList(d.to).concat(toAddressList(d.cc)).concat(toAddressList(d.bcc)),
+      fromRaw: (full && full.from) || d.from,
+      subjectRaw: (full && full.subject != null ? full.subject : d.subject),
+      text: (full && full.text) || '',
+      html: (full && full.html) || '',
+      messageIdRaw: headers['message-id'] || (full && full.message_id) || d.message_id || null,
+      inReplyToRaw: headers['in-reply-to'] || null,
+      referencesRaw: headers['references'] || '',
+      dedupeKey: resendEmailId,
+    });
+    res.json(result);
   } catch (e) {
     console.error('POST /api/email-inbox/inbound error:', e);
     res.status(500).json({ error: 'Server error' });
@@ -573,4 +640,6 @@ router.post('/triage-pending', requireAuth, async (req, res) => {
 
 module.exports = router;
 module.exports.inboundHandler = inboundHandler;
+module.exports.inboundCfHandler = inboundCfHandler;
+module.exports.storeInboundMessage = storeInboundMessage;
 module.exports.resolveSenderEntity = resolveSenderEntity;

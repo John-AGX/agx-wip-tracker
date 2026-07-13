@@ -139,8 +139,15 @@ app.use('/api/field-tools', fieldToolsRoutes);
 // Workspace ⇄ Excel fidelity — server-side xlsx export (exceljs writes
 // the styles the old client-side SheetJS Community exporter could not).
 app.use('/api/workspace', require('./routes/workspace-xlsx-routes'));
-// Email Dropbox reads + my-address (the inbound webhook itself is
-// mounted raw, above express.json).
+// Email Dropbox — the Cloudflare Email Worker POSTs parsed JSON here
+// (primary inbound path). Shared-secret authed inside the handler; JSON
+// body. The global `app.use('/api', ipGenericLimiter)` above already
+// rate-limits this path — do NOT add the limiter again here or each
+// email is double-counted against the per-IP budget.
+app.post('/api/email-inbox/inbound-cf',
+  express.json({ limit: '2mb' }),
+  emailInboxRoutes.inboundCfHandler);
+// Email Dropbox reads + my-address.
 app.use('/api/email-inbox', emailInboxRoutes);
 // Payload DSL routes — file download, reject, apply (inline approval
 // card). Mounted before the broad /api/ai handler so /api/payloads

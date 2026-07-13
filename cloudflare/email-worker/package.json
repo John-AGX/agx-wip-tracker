@@ -1,0 +1,17 @@
+{
+  "name": "p86-email-inbound",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Project 86 Cloudflare Email Worker — parses inbound MIME and posts it to the app dropbox endpoint.",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev"
+  },
+  "dependencies": {
+    "postal-mime": "^2.3.2"
+  },
+  "devDependencies": {
+    "wrangler": "^3.90.0"
+  }
+}

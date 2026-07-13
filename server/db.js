@@ -3775,13 +3775,16 @@ async function initSchema() {
       ON inbound_emails (user_id, received_at DESC);
     CREATE INDEX IF NOT EXISTS idx_inbound_emails_thread
       ON inbound_emails (user_id, thread_id, received_at);
-    -- Robust dedupe: Resend's email id is unique per delivery and always
-    -- present, unlike RFC Message-ID (which can be absent or degenerate).
-    -- UNIQUE so a concurrent webhook retry can't double-insert (INSERT
-    -- ... ON CONFLICT DO NOTHING closes the TOCTOU the SELECT-then-INSERT
-    -- left open).
-    CREATE UNIQUE INDEX IF NOT EXISTS uq_inbound_emails_resendid
-      ON inbound_emails (resend_email_id)
+    -- Per-delivery dedupe key (Resend: its email_id; Cloudflare Worker:
+    -- sha256 of the raw message + envelope recipient). UNIQUE closes the
+    -- retry TOCTOU. Scope MUST be (user_id, key), NOT the key alone: the
+    -- Cloudflare content-hash is identical across recipients of the same
+    -- message, so a global unique index would drop the 2nd recipient's
+    -- copy when one email is sent to two dropboxes. Drop the old
+    -- global-scoped index if a prior deploy created it.
+    DROP INDEX IF EXISTS uq_inbound_emails_resendid;
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_inbound_emails_user_dedupe
+      ON inbound_emails (user_id, resend_email_id)
       WHERE resend_email_id IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_inbound_emails_msgid
       ON inbound_emails (user_id, message_id)
