@@ -9428,7 +9428,7 @@ async function execStaffTool(name, input, ctx) {
         const r = await pool.query(
           `SELECT * FROM (
              SELECT from_name, from_email, orig_from_email, subject, body_text,
-                    is_forward_wrapper, delivered_direct, received_at
+                    is_forward_wrapper, delivered_direct, entity_type, entity_id, entity_label, received_at
                FROM inbound_emails
               WHERE user_id = $1 AND thread_id = $2
               ORDER BY received_at DESC LIMIT 100
@@ -9436,7 +9436,16 @@ async function execStaffTool(name, input, ctx) {
           [userId, threadId]
         );
         if (!r.rows.length) return 'No conversation with that thread id in your dropbox.';
-        const parts = ['Conversation: ' + (r.rows[r.rows.length - 1].subject || '(no subject)') + ' — ' + r.rows.length + ' message(s)', ''];
+        // Contextualize: name the directory entity this thread is from,
+        // so the assistant reads mail tied to who sent it (and can pull
+        // that client's jobs/leads with the other read tools).
+        const linked = r.rows.map((m) => m).find((m) => m.entity_type && m.entity_id);
+        const ctxLine = linked
+          ? 'Linked to ' + linked.entity_type + ' "' + (linked.entity_label || linked.entity_id) + '" (' + linked.entity_type + ' id ' + linked.entity_id + ') — use read_entity to pull their jobs/leads/details.'
+          : null;
+        const parts = ['Conversation: ' + (r.rows[r.rows.length - 1].subject || '(no subject)') + ' — ' + r.rows.length + ' message(s)'];
+        if (ctxLine) parts.push(ctxLine);
+        parts.push('');
         r.rows.forEach((m, i) => {
           const who = m.orig_from_email
             ? (m.from_email || 'unknown') + ' (originally from ' + m.orig_from_email + ')'
@@ -9463,7 +9472,9 @@ async function execStaffTool(name, input, ctx) {
         `SELECT thread_id, COUNT(*)::int AS n, MAX(received_at) AS last_at,
                 (ARRAY_AGG(subject ORDER BY received_at DESC))[1] AS subject,
                 (ARRAY_AGG(COALESCE(orig_from_email, from_email) ORDER BY received_at DESC))[1] AS last_from,
-                (ARRAY_AGG(LEFT(body_text, 160) ORDER BY received_at DESC))[1] AS preview
+                (ARRAY_AGG(LEFT(body_text, 160) ORDER BY received_at DESC))[1] AS preview,
+                (ARRAY_AGG(entity_type  ORDER BY (entity_type IS NULL), received_at DESC))[1] AS entity_type,
+                (ARRAY_AGG(entity_label ORDER BY (entity_label IS NULL), received_at DESC))[1] AS entity_label
            FROM inbound_emails WHERE ${where}
           GROUP BY thread_id ORDER BY last_at DESC LIMIT ${limit}`,
         params
@@ -9482,6 +9493,9 @@ async function execStaffTool(name, input, ctx) {
           ' · ' + t.n + ' msg' + (t.n === 1 ? '' : 's') + ' · ' + fmtWhen(t.last_at) + '\n';
         if (t.preview) block += '    ' + String(t.preview).replace(/\s+/g, ' ').trim();
         lines.push(wrapUserData('inbound_email', block));
+        // Entity label is directory-sourced (trusted), kept OUTSIDE the
+        // envelope so the assistant sees the real context tag.
+        if (t.entity_type && t.entity_label) lines.push('    ↳ ' + t.entity_type + ': ' + t.entity_label);
         lines.push('    [thread id: ' + t.thread_id + ']');
       });
       lines.push('\nTo read a conversation in full (or draft a reply), call read_email_inbox with its [thread id].');

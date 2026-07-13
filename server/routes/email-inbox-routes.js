@@ -157,6 +157,41 @@ function newId(prefix) {
   return prefix + '_' + Date.now().toString(36) + crypto.randomBytes(5).toString('hex');
 }
 
+// ── H2 context layer: match a sender address to a directory entity ──
+// Resolves the email's sender to the client (or sub) it came from, so
+// the hub can chip it and the assistant reads mail already tied to who
+// sent it. Org-scoped (with the legacy NULL-org allowance the rest of
+// the app uses). Client match wins over sub. Returns {type,id,label}
+// or null. `emails` = candidate sender addresses (from + recovered orig).
+async function resolveSenderEntity(orgId, emails) {
+  const list = (emails || []).filter(Boolean).map((e) => String(e).toLowerCase());
+  if (!list.length) return null;
+  // Clients: match personal, community-manager, or maintenance-manager
+  // email. Prefer an active client; then most-recently-updated.
+  try {
+    const c = await pool.query(
+      `SELECT id, name FROM clients
+        WHERE (organization_id = $1 OR organization_id IS NULL)
+          AND (LOWER(email) = ANY($2) OR LOWER(cm_email) = ANY($2) OR LOWER(mm_email) = ANY($2))
+        ORDER BY (COALESCE(activation_status,'active') = 'active') DESC, updated_at DESC NULLS LAST
+        LIMIT 1`,
+      [orgId, list]
+    );
+    if (c.rows.length) return { type: 'client', id: c.rows[0].id, label: c.rows[0].name || 'Client' };
+  } catch (e) { /* column/table drift — fall through to subs */ }
+  try {
+    const s = await pool.query(
+      `SELECT id, name FROM subs
+        WHERE (organization_id = $1 OR organization_id IS NULL)
+          AND (LOWER(email) = ANY($2) OR LOWER(payment_email) = ANY($2))
+        ORDER BY updated_at DESC NULLS LAST LIMIT 1`,
+      [orgId, list]
+    );
+    if (s.rows.length) return { type: 'sub', id: String(s.rows[0].id), label: s.rows[0].name || 'Sub' };
+  } catch (e) { /* subs shape drift — no match */ }
+  return null;
+}
+
 // ── Fetch the full message body + headers from the Received Emails API.
 // The webhook is metadata-only; this is where body_text/html + the real
 // RFC threading headers come from. Returns null on any failure (the
@@ -291,21 +326,29 @@ async function inboundHandler(req, res) {
     }
     if (!threadId) threadId = newId('th');
 
+    // H2: link the sender to a client/sub. The real sender is fromEmail
+    // (or the recovered orig on a self-forward) — a self-forward's
+    // fromEmail is the USER, so prefer origFrom there.
+    const senderCandidates = origFrom ? [origFrom, fromEmail] : [fromEmail];
+    const ent = await resolveSenderEntity(user.organization_id, senderCandidates);
+
     // INSERT ... ON CONFLICT closes the retry race the early SELECT can't.
     const ins = await pool.query(
       `INSERT INTO inbound_emails
          (id, organization_id, user_id, thread_id, resend_email_id, message_id, in_reply_to,
           references_ids, from_name, from_email, orig_from_email, to_email,
-          subject, subject_norm, body_text, body_html, is_forward_wrapper, delivered_direct)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+          subject, subject_norm, body_text, body_html, is_forward_wrapper, delivered_direct,
+          entity_type, entity_id, entity_label)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
        ON CONFLICT (resend_email_id) WHERE resend_email_id IS NOT NULL DO NOTHING
        RETURNING id`,
       [newId('em'), user.organization_id, user.id, threadId, resendEmailId, messageId, inReplyTo,
        String(referencesRaw).slice(0, 5000) || null, fromName || null, fromEmail || null,
-       origFrom, matchedAddress, subject, subjectNorm, bodyText, bodyHtml, isSelfForward, deliveredDirect]
+       origFrom, matchedAddress, subject, subjectNorm, bodyText, bodyHtml, isSelfForward, deliveredDirect,
+       ent ? ent.type : null, ent ? ent.id : null, ent ? ent.label : null]
     );
     if (!ins.rows.length) return res.json({ ok: true, deduped: true });
-    res.json({ ok: true, thread_id: threadId });
+    res.json({ ok: true, thread_id: threadId, entity: ent || null });
   } catch (e) {
     console.error('POST /api/email-inbox/inbound error:', e);
     res.status(500).json({ error: 'Server error' });
@@ -365,7 +408,11 @@ router.get('/threads', requireAuth, async (req, res) => {
               (ARRAY_AGG(subject ORDER BY received_at DESC))[1] AS subject,
               (ARRAY_AGG(COALESCE(orig_from_email, from_email) ORDER BY received_at DESC))[1] AS last_from,
               (ARRAY_AGG(LEFT(body_text, 200) ORDER BY received_at DESC))[1] AS preview,
-              BOOL_OR(delivered_direct) AS has_direct
+              BOOL_OR(delivered_direct) AS has_direct,
+              -- Thread-level entity: the most recent non-null link.
+              (ARRAY_AGG(entity_type  ORDER BY (entity_type IS NULL), received_at DESC))[1] AS entity_type,
+              (ARRAY_AGG(entity_id    ORDER BY (entity_id   IS NULL), received_at DESC))[1] AS entity_id,
+              (ARRAY_AGG(entity_label ORDER BY (entity_label IS NULL), received_at DESC))[1] AS entity_label
          FROM inbound_emails
         WHERE ${where}
         GROUP BY thread_id
@@ -402,5 +449,87 @@ router.get('/threads/:threadId', requireAuth, async (req, res) => {
   }
 });
 
+// ── GET /api/email-inbox/for-entity/:type/:id — threads linked to an
+// entity (the "Recent emails" section on a client/lead/sub page).
+// Owner-scoped: only the caller's own dropbox mail. For a lead/job we
+// resolve the underlying client (leads/jobs inherit their contact) and
+// match on that client entity.
+router.get('/for-entity/:type/:id', requireAuth, async (req, res) => {
+  try {
+    const type = String(req.params.type || '');
+    const id = String(req.params.id || '');
+    const limit = Math.max(1, Math.min(25, Number(req.query.limit) || 8));
+    // Resolve lead/job → their client so their emails surface there too.
+    // Org-scoped (legacy NULL-org allowance) so a foreign-tenant id can't
+    // resolve — no cross-org client_id disclosure or existence oracle.
+    const orgId = req.user.organization_id;
+    let match = { type, id };
+    try {
+      if (type === 'lead') {
+        const r = await pool.query(
+          'SELECT client_id FROM leads WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)', [id, orgId]);
+        if (r.rows[0] && r.rows[0].client_id) match = { type: 'client', id: String(r.rows[0].client_id) };
+        else return res.json({ threads: [] });
+      } else if (type === 'job') {
+        const r = await pool.query(
+          'SELECT client_id FROM jobs WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)', [id, orgId]);
+        if (r.rows[0] && r.rows[0].client_id) match = { type: 'client', id: String(r.rows[0].client_id) };
+        else return res.json({ threads: [] });
+      }
+    } catch (e) { /* leads/jobs shape drift — fall back to direct match */ }
+    const r = await pool.query(
+      `SELECT thread_id,
+              COUNT(*)::int AS message_count,
+              MAX(received_at) AS last_received_at,
+              (ARRAY_AGG(subject ORDER BY received_at DESC))[1] AS subject,
+              (ARRAY_AGG(COALESCE(orig_from_email, from_email) ORDER BY received_at DESC))[1] AS last_from,
+              (ARRAY_AGG(LEFT(body_text, 160) ORDER BY received_at DESC))[1] AS preview
+         FROM inbound_emails
+        WHERE user_id = $1 AND entity_type = $2 AND entity_id = $3
+        GROUP BY thread_id
+        ORDER BY last_received_at DESC
+        LIMIT ${limit}`,
+      [req.user.id, match.type, match.id]
+    );
+    res.json({ threads: r.rows, matched: match });
+  } catch (e) {
+    console.error('GET /api/email-inbox/for-entity error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── POST /api/email-inbox/backfill-entities — re-match unlinked mail ─
+// Sweeps the caller's own dropbox rows that have no entity link and
+// resolves them against the current directory (useful after the user
+// first connects their mail, or after adding a client). Bounded.
+router.post('/backfill-entities', requireAuth, async (req, res) => {
+  try {
+    const rows = await pool.query(
+      `SELECT id, organization_id, from_email, orig_from_email
+         FROM inbound_emails
+        WHERE user_id = $1 AND entity_type IS NULL
+        ORDER BY received_at DESC LIMIT 2000`,
+      [req.user.id]
+    );
+    let linked = 0;
+    for (const row of rows.rows) {
+      const ent = await resolveSenderEntity(row.organization_id,
+        [row.orig_from_email, row.from_email].filter(Boolean));
+      if (ent) {
+        await pool.query(
+          'UPDATE inbound_emails SET entity_type = $1, entity_id = $2, entity_label = $3 WHERE id = $4',
+          [ent.type, ent.id, ent.label, row.id]
+        );
+        linked++;
+      }
+    }
+    res.json({ ok: true, scanned: rows.rows.length, linked });
+  } catch (e) {
+    console.error('POST /api/email-inbox/backfill-entities error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 module.exports = router;
 module.exports.inboundHandler = inboundHandler;
+module.exports.resolveSenderEntity = resolveSenderEntity;

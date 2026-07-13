@@ -147,6 +147,7 @@ const MAP = {
   'sort-asc':        'heroicons/bars-arrow-up',
   'sort-desc':       'heroicons/bars-arrow-down',
   'document-text':   'heroicons/document-text',
+  'at-symbol':       'heroicons/at-symbol',   // Email Hub tab (distinct from Messages' envelope)
   'popout':          'heroicons/arrow-top-right-on-square',
   'paint-brush':     'heroicons/paint-brush',
   'eraser':          'phosphor/eraser-light',

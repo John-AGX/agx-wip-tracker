@@ -3746,6 +3746,16 @@ async function initSchema() {
     );
     ALTER TABLE inbound_emails ADD COLUMN IF NOT EXISTS resend_email_id TEXT;
     ALTER TABLE inbound_emails ADD COLUMN IF NOT EXISTS delivered_direct BOOLEAN NOT NULL DEFAULT FALSE;
+    -- H2 context layer: the email's sender matched to a directory entity
+    -- (client / sub) so the hub can show a chip and the assistant reads
+    -- mail already tied to who it's from. Resolved at insert (and by a
+    -- backfill sweep) from the sender address; NULL when no match.
+    ALTER TABLE inbound_emails ADD COLUMN IF NOT EXISTS entity_type  TEXT;
+    ALTER TABLE inbound_emails ADD COLUMN IF NOT EXISTS entity_id    TEXT;
+    ALTER TABLE inbound_emails ADD COLUMN IF NOT EXISTS entity_label TEXT;
+    CREATE INDEX IF NOT EXISTS idx_inbound_emails_entity
+      ON inbound_emails (entity_type, entity_id, received_at DESC)
+      WHERE entity_type IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_inbound_emails_owner
       ON inbound_emails (user_id, received_at DESC);
     CREATE INDEX IF NOT EXISTS idx_inbound_emails_thread

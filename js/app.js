@@ -1796,6 +1796,8 @@
                 if (typeof window.renderMyDayTab === 'function') window.renderMyDayTab();
             } else if (tabName === 'messages') {
                 if (typeof window.renderMessagesTab === 'function') window.renderMessagesTab();
+            } else if (tabName === 'email-hub') {
+                if (typeof window.renderEmailHubTab === 'function') window.renderEmailHubTab();
             } else if (tabName === 'plans') {
                 if (typeof window.renderPlansTab === 'function') window.renderPlansTab();
             } else if (tabName === 'estimates') {

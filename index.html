@@ -727,6 +727,7 @@
                         <button class="tab-btn" data-tab="my-day" data-p86-icon="sun" title="My Day"><span class="app-nav-label">My Day</span></button>
                         <button class="tab-btn" data-tab="my-tasks" data-p86-icon="check-circle" title="My Tasks"><span class="app-nav-label">My Tasks</span></button>
                         <button class="tab-btn" data-tab="messages" data-p86-icon="envelope" title="Messages"><span class="app-nav-label">Messages</span><span id="navMessagesBadge" style="display:none;margin-left:auto;background:#f87171;color:#fff;font-size:10px;font-weight:700;padding:1px 7px;border-radius:10px;line-height:1.5;"></span></button>
+                        <button class="tab-btn" data-tab="email-hub" data-p86-icon="at-symbol" title="Email — your forwarded inbox, readable by the assistant"><span class="app-nav-label">Email</span></button>
                         <button class="tab-btn" data-tab="plans" data-p86-icon="scale" title="Plans &amp; Takeoffs"><span class="app-nav-label">Plans</span></button>
                         <div class="app-nav-parent" data-accordion="myfiles">
                             <button class="tab-btn app-nav-parent-btn" data-tab="my-files" data-p86-icon="folder" title="My Files">
@@ -1382,6 +1383,7 @@
                      js/messaging.js (two-column inbox: thread list + thread
                      pane + "New message" recipient picker). -->
                 <div id="messages" class="tab-content"></div>
+                <div id="email-hub" class="tab-content"></div>
 
                 <!-- Plans & Takeoffs — scale-drawing documents (Bluebeam-style
                      calibrate + measure). Painted by renderPlansTab() in
@@ -3272,7 +3274,7 @@
     <script src="js/entity-card.js?v=6"></script>
     <!-- Lead/estimate context card mounted into #app-sidebar (uses p86EntityCard). -->
     <script src="js/entity-subnav.js?v=2"></script>
-    <script src="js/app.js?v=114"></script>
+    <script src="js/app.js?v=115"></script>
     <script src="js/search-clear.js?v=3"></script>
     <script src="js/sidebar-brand.js?v=2"></script>
     <!-- Guided tours engine + the Help & What's New center (patch
@@ -3282,6 +3284,7 @@
     <script src="js/help-center.js?v=1"></script>
     <script src="js/compliance-review-ui.js?v=3"></script>
     <script src="js/messaging.js?v=7"></script>
+    <script src="js/email-hub.js?v=3"></script>
     <script src="js/agent-tasks.js?v=10"></script>
     <script src="js/crew-chip.js?v=2"></script>
     <script src="js/file-explorer.js?v=7"></script>
@@ -3405,7 +3408,7 @@
     <!-- Project 86 inline-SVG icon helper. Provides window.p86Icon(name, opts)
          — 24 icons from Phosphor (MIT) + Heroicons (MIT). See
          scripts/build-agx-icons.js to regenerate. -->
-    <script src="js/agx-icons.js?v=24"></script>
+    <script src="js/agx-icons.js?v=25"></script>
 
     <!-- Edit-gate helper — section + row gates that block accidental
          input edits. Must load AFTER agx-icons.js because attachSection
