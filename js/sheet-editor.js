@@ -315,7 +315,48 @@
   function loadDoc(plan) {
     var pages = plan && plan.pages;
     var d = (Array.isArray(pages) && pages[0] && pages[0].kind === 'sheet-doc') ? pages[0] : defaultDoc(plan);
-    return toV3(toV2(d));
+    return healDoc(toV3(toV2(d)));
+  }
+  // Repair a structurally-incomplete doc so it always renders. Some older
+  // drawings were saved as skeletons — a sheet with no w/h, zero viewports,
+  // no layers — which make fitView divide by undefined (scale → NaN → blank
+  // canvas). Fill the gaps IN PLACE so the flat v2/v3 aliases stay intact,
+  // preserving any real entities the doc does carry.
+  function healDoc(doc) {
+    if (!doc) return doc;
+    var sh = doc.sheet || (doc.sheet = {});
+    // 1) Sheet dimensions — derive from the named size, else a sane default.
+    if (!(sh.w > 0) || !(sh.h > 0)) {
+      var sizeKey = SHEET_SIZES[sh.size] ? sh.size : (SHEET_SIZES[SETTINGS.sheetSize] ? SETTINGS.sheetSize : 'arch-d');
+      var sz = SHEET_SIZES[sizeKey];
+      sh.size = sizeKey;
+      sh.w = Math.round(sz.wIn * DPI);
+      sh.h = Math.round(sz.hIn * DPI);
+    }
+    if (sh.margin == null) sh.margin = Math.round(0.5 * DPI);
+    // 2) At least one viewport — an empty viewports array leaves the model
+    //    with no window (nothing to draw into, no scale). Push into the
+    //    existing (aliased) array so doc.sheet.viewports stays in sync.
+    if (!doc.viewports || !doc.viewports.length) {
+      if (!doc.viewports) doc.viewports = (doc.sheet.viewports = doc.sheet.viewports || []);
+      var pre = scalePreset(SETTINGS.scaleLabel);
+      var m = sh.margin + 14, tbH = Math.round(3 * DPI);
+      doc.viewports.push({
+        id: uid('VP'), label: 'PLAN',
+        x: m, y: m, w: Math.max(200, sh.w - m * 2), h: Math.max(150, sh.h - m * 2 - tbH - 16),
+        scale: { pixelsPerInch: DPI * pre.f, unit: pre.unit || 'ft', label: pre.label }
+      });
+    }
+    // 3) Every viewport needs a model window (v3); base ppi if it wasn't set.
+    (doc.viewports || []).forEach(vpWin);
+    if (doc.model && !(doc.model.ppi > 0)) doc.model.ppi = vpPpiSafe((doc.viewports || [])[0]);
+    // 4) At least one layer.
+    if (!doc.layers || !doc.layers.length) {
+      if (!doc.layers) doc.layers = [];
+      doc.layers.push({ id: 'L0', name: 'Default', color: '#1f2937', weight: 4, lineType: 'solid', visible: true, locked: false });
+      if (doc.model) doc.model.layers = doc.layers;
+    }
+    return doc;
   }
   // ── Model / paper-space data model — v2 (Option 2, Phase A) ──────
   // v2 separates the drawing (model.entities = real geometry) from the sheets
@@ -4568,6 +4609,6 @@
     // v3 migration internals — exposed for round-trip verification (the
     // migration must render pixel-identical: mToP(migrated, vp) === original
     // paper coords) and for external tooling.
-    _v3: { toV2: toV2, toV3: toV3, serializeDoc: serializeDoc, mToP: mToP, pToM: pToM }
+    _v3: { toV2: toV2, toV3: toV3, healDoc: healDoc, serializeDoc: serializeDoc, mToP: mToP, pToM: pToM }
   };
 })();
