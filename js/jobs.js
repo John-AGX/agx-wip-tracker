@@ -58,9 +58,11 @@ function renderJobsMain() {
             if (thisBldg && thisBldg.excludeFromSubDist) return 0;
             const buildings = appData.buildings.filter(b => b.jobId === jobId && !b.excludeFromSubDist);
             if (buildings.length === 0) return 0;
-            const totalBudget = buildings.reduce((sum, b) => sum + (b.budget || 0), 0);
+            // Weight by each building's phase-derived budget (the real budget in
+            // the derive-from-phases model), not the stale raw building.budget.
+            const totalBudget = buildings.reduce((sum, b) => sum + buildingEffectiveBudget(b, jobId).amount, 0);
             if (totalBudget > 0) {
-                const bldgPct = (thisBldg?.budget || 0) / totalBudget;
+                const bldgPct = (thisBldg ? buildingEffectiveBudget(thisBldg, jobId).amount : 0) / totalBudget;
                 return total * bldgPct;
             }
             return total / buildings.length;
@@ -3302,8 +3304,12 @@ function renderJobsMain() {
         // A building with no explicit budget derives one from its phases:
         // graph-wired phases (× allocation) plus phases assigned via
         // buildingId that aren't wired. Returns { amount, derived }.
+        // A building's budget is the SUM of the phase slices allocated to it —
+        // phases are the single source of truth (contract → phases → buildings).
+        // A legacy manually-entered `building.budget` is used ONLY as a fallback
+        // when no phase contributes, so it can no longer FIGHT the phase
+        // allocation (which was the source of the "Remaining −$X" mismatch reds).
         function buildingEffectiveBudget(building, jobId) {
-            if ((building.budget || 0) > 0) return { amount: building.budget, derived: false };
             var seen = {};
             var sum = 0;
             getPhasesWiredToBuilding(building.id).forEach(function(wp) {
@@ -3316,7 +3322,9 @@ function renderJobsMain() {
                 seen[p.id] = 1;
                 sum += phaseRevenue(p);
             });
-            return { amount: sum, derived: sum > 0 };
+            if (sum > 0) return { amount: sum, derived: true };
+            if ((building.budget || 0) > 0) return { amount: building.budget, derived: false }; // legacy fallback only
+            return { amount: 0, derived: true };
         }
 
         // ── Inline click-to-edit for the right-panel building/phase cards ──
@@ -3435,6 +3443,7 @@ function renderJobsMain() {
             if (!buildings.length) { container.innerHTML = ''; return; }
 
             const totalBudget = buildings.reduce((s, b) => s + buildingEffectiveBudget(b, jobId).amount, 0);
+            let totalSpent = 0;
 
             const rowsHTML = buildings.map(function(building) {
                 const wiredPhases = getPhasesWiredToBuilding(building.id);
@@ -3447,6 +3456,7 @@ function renderJobsMain() {
                 const bMat = building.materials || 0, bLab = building.labor || 0, bSub = building.sub || 0, bEquip = building.equipment || 0;
                 const bldgDirectCost = bMat + bLab + bSub + bEquip;
                 const buildingCost = phaseCost + bldgDirectCost;
+                totalSpent += buildingCost;
                 const eff = buildingEffectiveBudget(building, jobId);
                 const variance = eff.amount - buildingCost;
                 const bldgPct = totalBudget > 0 ? (eff.amount / totalBudget * 100).toFixed(1) : '—';
@@ -3556,7 +3566,29 @@ function renderJobsMain() {
                 return summaryRow + body;
             }).join('');
 
-            container.innerHTML =
+            // Section summary — building budgets are the READ-OUT of the phase
+            // allocation, so their sum reconciles against the job contract via
+            // the SAME getJobBudgetRecon the Phases strip uses (they can't
+            // disagree). When there's a gap, distribute it on the Phases card's
+            // "Auto-fill" strip.
+            var _recon = getJobBudgetRecon(jobId);
+            var _totalVar = totalBudget - totalSpent;
+            var _reconTxt = '';
+            if (_recon.contract > 0) {
+                var _rc = _recon.full ? 'var(--green)' : (_recon.over ? 'var(--red)' : 'var(--orange,#e0a458)');
+                var _rtxt = _recon.full ? '✓' : (_recon.over ? '(over by ' + formatCurrency(-_recon.gap) + ' ⚠)' : '(' + formatCurrency(_recon.gap) + ' unallocated)');
+                _reconTxt = ' <span style="color:var(--text-dim);">of</span> <b style="font-family:monospace;">' + formatCurrency(_recon.contract) + '</b> ' +
+                    '<span style="color:' + _rc + ';font-weight:600;">' + _rtxt + '</span>';
+            }
+            var summaryHTML =
+                '<div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin:0 0 8px;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--card-bg,#141419);font-size:11.5px;">' +
+                    '<span style="color:var(--text-dim);">' + buildings.length + ' buildings</span>' +
+                    '<span style="color:var(--text-dim);">Budget <b style="color:var(--accent);font-family:monospace;">' + formatCurrency(totalBudget) + '</b>' + _reconTxt + '</span>' +
+                    '<span style="color:var(--text-dim);">Spent <b style="color:var(--orange,#e0a458);font-family:monospace;">' + formatCurrency(totalSpent) + '</b></span>' +
+                    '<span style="color:var(--text-dim);">Var <b style="color:' + (_totalVar >= 0 ? 'var(--green)' : 'var(--red)') + ';font-family:monospace;">' + formatCurrency(_totalVar) + '</b></span>' +
+                    '<span style="color:var(--text-dim,#888);font-size:10.5px;margin-left:auto;">Budgets derive from each building\'s phase slices</span>' +
+                '</div>';
+            container.innerHTML = summaryHTML +
                 '<div class="p86-bldg-table-wrap">' +
                     '<table class="p86-bldg-table">' +
                         '<thead class="p86-bldg-thead"><tr>' +
@@ -3597,7 +3629,10 @@ function renderJobsMain() {
             if (type === 't1') {
                 var bldg = appData.buildings.find(function(b) { return b.id === d.id; });
                 if (!bldg) return '';
-                return '<span style="color:var(--text-dim);font-size:10px;">Budget: <b style="color:var(--accent);">' + formatCurrency(bldg.budget || 0) + '</b></span>';
+                // Phase-derived budget (matches the building card), not the stale
+                // raw building.budget which is now typically 0.
+                var _bb = buildingEffectiveBudget(bldg, bldg.jobId).amount;
+                return '<span style="color:var(--text-dim);font-size:10px;">Budget: <b style="color:var(--accent);">' + formatCurrency(_bb) + '</b></span>';
             }
             if (type === 'sub') {
                 var sub = appData.subs.find(function(s) { return s.id === d.id; });
@@ -3839,6 +3874,31 @@ function renderJobsMain() {
             });
             const totalProfit = totalRev - totalCost;
 
+            // Contract-reconciliation strip — measures what actually reaches
+            // BUILDINGS (the same number the Buildings summary shows), so the two
+            // can never disagree. One-click auto-fills the gap onto empty phases.
+            var _recon = getJobBudgetRecon(jobId);
+            var reconHTML = '';
+            if (_recon.contract > 0) {
+                var _pctA = Math.max(0, Math.min(100, Math.round(_recon.onBuildings / _recon.contract * 100)));
+                var _barCol = _recon.full ? 'var(--green)' : (_recon.over ? 'var(--red)' : 'var(--orange,#e0a458)');
+                var _state = _recon.full ? 'fully allocated ✓' : (_recon.over ? ('over by ' + formatCurrency(-_recon.gap) + ' ⚠') : (formatCurrency(_recon.gap) + ' unallocated'));
+                // A phase is "fillable" when nothing has landed on its buildings yet.
+                var _anyFillable = _recon.hasBuildings && groupKeys.some(function(n) { return getPhaseLandedOnBuildings(jobId, n) <= 0.5; });
+                var _fillBtn = (!_recon.full && !_recon.over && _anyFillable)
+                    ? '<button class="ee-btn" style="font-size:11px;padding:3px 10px;white-space:nowrap;background:var(--accent);color:#fff;border-color:var(--accent);" onclick="onDistributeContract(this)" title="Split the unallocated contract evenly across the phases that have not reached buildings yet, then spread each across its buildings by units/levels">&#9889; Auto-fill ' + formatCurrency(_recon.gap) + '</button>'
+                    : '';
+                var _unNote = (_recon.unassigned > 0.5) ? '<span style="font-size:10.5px;color:var(--orange,#e0a458);white-space:nowrap;" title="Phase budget parked on the job level, not yet on a building">' + formatCurrency(_recon.unassigned) + ' on Unassigned</span>' : '';
+                var _noBldgNote = (!_recon.hasBuildings) ? '<span style="font-size:10.5px;color:var(--text-dim);white-space:nowrap;">add buildings to allocate</span>' : '';
+                reconHTML =
+                    '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 8px;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--card-bg,#141419);">' +
+                        '<span style="font-size:11.5px;color:var(--text-dim);white-space:nowrap;">Contract <b style="color:var(--text);font-family:monospace;">' + formatCurrency(_recon.contract) + '</b></span>' +
+                        '<div style="flex:1;min-width:100px;height:7px;border-radius:4px;background:var(--overlay-light,rgba(255,255,255,0.07));overflow:hidden;"><div style="height:100%;width:' + _pctA + '%;background:' + _barCol + ';"></div></div>' +
+                        '<span style="font-size:11.5px;color:' + _barCol + ';font-weight:600;white-space:nowrap;">' + formatCurrency(_recon.onBuildings) + ' on buildings · ' + _state + '</span>' +
+                        _unNote + _noBldgNote + _fillBtn +
+                    '</div>';
+            }
+
             const titleHTML =
                 '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;gap:10px;flex-wrap:wrap;">' +
                     '<h3 style="font-size:13px;margin:0;">&#x1F4CB; Phases (' + groupKeys.length + ')</h3>' +
@@ -3846,7 +3906,7 @@ function renderJobsMain() {
                         '<div style="font-size:12px;color:var(--text-dim);">Rev: <b style="color:var(--green);">' + formatCurrency(totalRev) + '</b> &nbsp; Cost: <b>' + formatCurrency(totalCost) + '</b> &nbsp; Profit: <b style="color:' + (totalProfit >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(totalProfit) + '</b></div>' +
                         '<button class="ee-btn ghost" style="font-size:12px;padding:3px 10px;white-space:nowrap;" onclick="addJobLevelPhase(\'' + escapeHTML(jobId) + '\')">+ Phase</button>' +
                     '</div>' +
-                '</div>';
+                '</div>' + reconHTML;
 
             if (groupKeys.length === 0) {
                 container.innerHTML = titleHTML +
@@ -4466,6 +4526,82 @@ function renderJobsMain() {
             try { if (typeof renderJobPhases === 'function') renderJobPhases(jobId); } catch (e) {}
         }
         window.onAllocViewToggle = onAllocViewToggle;
+
+        // ── Contract → phase budget bridge + reconciliation ─────────────────
+        // The job carries a single CONTRACT number; the phases are where that
+        // money is budgeted (and then spreads to buildings). Nothing bridged the
+        // two, so freshly-imported jobs showed $0 everywhere. These helpers
+        // surface the gap ("$X of $Y allocated") and let the GC fill it in one
+        // click, then adjust each phase.
+        function getJobContractTotal(jobId) {
+            var job = (appData.jobs || []).find(function(j) { return j.id === jobId; });
+            return job ? (job.contractAmount || 0) : 0;
+        }
+        // Dollars of a phase that have actually LANDED on buildings (its
+        // building-assigned records only — money parked on the job-level
+        // "Unassigned" record does NOT count as reaching a building).
+        function getPhaseLandedOnBuildings(jobId, name) {
+            return (appData.phases || []).reduce(function(s, p) {
+                if (p.jobId === jobId && (p.phase || 'Unnamed') === name && p.buildingId) return s + phaseRevenue(p);
+                return s;
+            }, 0);
+        }
+        // ONE canonical reconciliation, so the Phases strip and the Buildings
+        // summary can never disagree: "allocated" = the budget that actually
+        // reaches buildings (= Σ buildingEffectiveBudget, the same figure the
+        // buildings table sums). The ±tolerance absorbs per-building cent
+        // rounding (bounded by ~$0.50/building) and can never mask a real gap —
+        // the smallest real shortfall is an unbudgeted phase (thousands).
+        function getJobBudgetRecon(jobId) {
+            var contract = getJobContractTotal(jobId);
+            var buildings = (appData.buildings || []).filter(function(b) { return b.jobId === jobId; });
+            var onBuildings = buildings.reduce(function(s, b) { return s + buildingEffectiveBudget(b, jobId).amount; }, 0);
+            var unassigned = (appData.phases || []).reduce(function(s, p) {
+                return (p.jobId === jobId && !p.buildingId) ? s + phaseRevenue(p) : s;
+            }, 0);
+            var gap = contract - onBuildings;
+            var tol = Math.max(1, buildings.length);
+            return {
+                contract: contract, onBuildings: onBuildings, unassigned: unassigned, gap: gap,
+                full: Math.abs(gap) <= tol, over: gap < -tol, hasBuildings: buildings.length > 0
+            };
+        }
+        // Even-fill the UNALLOCATED contract across the phases that haven't
+        // reached buildings yet, then spread each across all buildings
+        // (units/levels-weighted). Whole-dollar largest-remainder so the sums
+        // reconcile. Non-destructive to already-landed phases; a no-buildings
+        // job can't land anything, so it no-ops (the button is hidden there).
+        function distributeContractToPhases(jobId) {
+            var recon = getJobBudgetRecon(jobId);
+            if (recon.contract <= 0) return { ok: false, reason: 'no-contract' };
+            if (!recon.hasBuildings) return { ok: false, reason: 'no-buildings' };
+            var remaining = recon.gap;
+            if (remaining <= 0.5) return { ok: false, reason: 'fully-allocated' };
+            var names = [];
+            (appData.phases || []).forEach(function(p) { if (p.jobId === jobId) { var n = p.phase || 'Unnamed'; if (names.indexOf(n) === -1) names.push(n); } });
+            var fillable = names.filter(function(n) { return getPhaseLandedOnBuildings(jobId, n) <= 0.5; });
+            if (!fillable.length) return { ok: false, reason: 'no-fillable-phases' }; // under-allocated but every phase is on buildings → GC adjusts a phase
+            // Whole-dollar largest-remainder split so the per-phase budgets sum
+            // EXACTLY to the (rounded) remaining, no fractional drift.
+            var whole = Math.round(remaining);
+            var base = Math.floor(whole / fillable.length);
+            var extra = whole - base * fillable.length; // first `extra` phases get +$1
+            var bldgIds = (appData.buildings || []).filter(function(b) { return b.jobId === jobId; }).map(function(b) { return b.id; });
+            fillable.forEach(function(name, i) {
+                var share = base + (i < extra ? 1 : 0);
+                (appData.phases || []).filter(function(p) { return p.jobId === jobId && (p.phase || 'Unnamed') === name; })
+                    .forEach(function(r) { r.allocMode = 'pct'; r.phaseAllocTotal = share; });
+                spreadPhaseCore(jobId, name, bldgIds); // reads phaseAllocTotal (set above) as the amount
+            });
+            commitMatrixChange(jobId, null);
+            return { ok: true, filled: fillable.length, total: whole };
+        }
+        function onDistributeContract(el) {
+            var jobId = (typeof appState !== 'undefined' && appState.currentJobId);
+            if (!jobId) return;
+            distributeContractToPhases(jobId);
+        }
+        window.onDistributeContract = onDistributeContract;
 
         // Edit a matrix cell → find-or-create the (phase, building) record,
         // write its as-sold budget slice, persist, and live-update the totals.
