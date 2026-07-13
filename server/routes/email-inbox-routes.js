@@ -349,6 +349,12 @@ async function inboundHandler(req, res) {
     );
     if (!ins.rows.length) return res.json({ ok: true, deduped: true });
     res.json({ ok: true, thread_id: threadId, entity: ent || null });
+    // H3: triage this email in the background — extracts needs-reply +
+    // dates/commitments so the assistant can proactively propose
+    // reminders/calendar events. Fire-and-forget; never blocks or throws
+    // into the webhook (which has already responded).
+    try { require('../services/email-triage').triageInBackground(ins.rows[0].id); }
+    catch (e) { /* triage module unavailable — email still stored */ }
   } catch (e) {
     console.error('POST /api/email-inbox/inbound error:', e);
     res.status(500).json({ error: 'Server error' });
@@ -412,7 +418,14 @@ router.get('/threads', requireAuth, async (req, res) => {
               -- Thread-level entity: the most recent non-null link.
               (ARRAY_AGG(entity_type  ORDER BY (entity_type IS NULL), received_at DESC))[1] AS entity_type,
               (ARRAY_AGG(entity_id    ORDER BY (entity_id   IS NULL), received_at DESC))[1] AS entity_id,
-              (ARRAY_AGG(entity_label ORDER BY (entity_label IS NULL), received_at DESC))[1] AS entity_label
+              (ARRAY_AGG(entity_label ORDER BY (entity_label IS NULL), received_at DESC))[1] AS entity_label,
+              -- H3 triage: ALL fields from the newest message (the dropbox
+              -- is inbound-only, so a BOOL_OR needs_reply from an old
+              -- message could never clear after the client's follow-up).
+              (ARRAY_AGG(needs_reply    ORDER BY received_at DESC))[1] AS needs_reply,
+              (ARRAY_AGG(triage_summary ORDER BY received_at DESC))[1] AS triage_summary,
+              (ARRAY_AGG(triage_urgency ORDER BY received_at DESC))[1] AS triage_urgency,
+              (ARRAY_AGG(triage_actions ORDER BY received_at DESC))[1] AS triage_actions
          FROM inbound_emails
         WHERE ${where}
         GROUP BY thread_id
@@ -526,6 +539,34 @@ router.post('/backfill-entities', requireAuth, async (req, res) => {
     res.json({ ok: true, scanned: rows.rows.length, linked });
   } catch (e) {
     console.error('POST /api/email-inbox/backfill-entities error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── POST /api/email-inbox/triage-pending — catch-up sweep ───────────
+// Triages the caller's own recent un-triaged emails (in case a webhook-
+// fired triage was lost to a restart). Bounded; safe to call from the
+// hub on load. Runs sequentially to keep model concurrency sane.
+router.post('/triage-pending', requireAuth, async (req, res) => {
+  try {
+    // Recency floor: only triage recent mail (last 14 days) so a large
+    // historical backlog from before the feature existed isn't ground
+    // through 25 Haiku calls at a time on every hub load.
+    const rows = await pool.query(
+      `SELECT id FROM inbound_emails
+        WHERE user_id = $1 AND triaged_at IS NULL
+          AND received_at > NOW() - INTERVAL '14 days'
+        ORDER BY received_at DESC LIMIT 25`,
+      [req.user.id]
+    );
+    const triage = require('../services/email-triage');
+    let done = 0;
+    // Count only rows actually classified — a no-op (no API key, parse
+    // fail) must not report as work, or the client fires a pointless reload.
+    for (const row of rows.rows) { if (await triage.triageEmailById(row.id)) done++; }
+    res.json({ ok: true, triaged: done });
+  } catch (e) {
+    console.error('POST /api/email-inbox/triage-pending error:', e);
     res.status(500).json({ error: 'Server error' });
   }
 });

@@ -3756,6 +3756,21 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_inbound_emails_entity
       ON inbound_emails (entity_type, entity_id, received_at DESC)
       WHERE entity_type IS NOT NULL;
+    -- H3 triage: a cheap Haiku pass extracts what each email is asking,
+    -- whether it needs a reply, and any dates/commitments to turn into a
+    -- reminder or calendar event. Advisory only — the assistant PROPOSES
+    -- actions through the normal approval flow; nothing here auto-commits.
+    -- Fired async from the inbound handler (never blocks the webhook);
+    -- triaged_at NULL = not yet processed (a catch-up sweep can retry).
+    ALTER TABLE inbound_emails ADD COLUMN IF NOT EXISTS triaged_at     TIMESTAMPTZ;
+    ALTER TABLE inbound_emails ADD COLUMN IF NOT EXISTS needs_reply    BOOLEAN;
+    ALTER TABLE inbound_emails ADD COLUMN IF NOT EXISTS triage_urgency TEXT;   -- low | normal | high
+    ALTER TABLE inbound_emails ADD COLUMN IF NOT EXISTS triage_summary TEXT;
+    ALTER TABLE inbound_emails ADD COLUMN IF NOT EXISTS triage_actions JSONB;  -- [{type,title,when_text,when_iso}]
+    -- Catch-up sweep target: untriaged rows, newest first.
+    CREATE INDEX IF NOT EXISTS idx_inbound_emails_untriaged
+      ON inbound_emails (received_at DESC)
+      WHERE triaged_at IS NULL;
     CREATE INDEX IF NOT EXISTS idx_inbound_emails_owner
       ON inbound_emails (user_id, received_at DESC);
     CREATE INDEX IF NOT EXISTS idx_inbound_emails_thread

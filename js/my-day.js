@@ -99,6 +99,19 @@
       '#my-day .myday-chip{display:inline-block;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;padding:2px 6px;border-radius:4px;margin-left:6px;vertical-align:middle;}' +
       '#my-day .myday-empty{text-align:center;color:var(--text-dim,#8a8a9a);padding:56px 20px;}' +
       '#my-day .myday-empty .big{font-size:40px;margin-bottom:10px;}' +
+      // H4 email block
+      '#my-day .myday-email{border:1px solid var(--border,#2a2a3a);border-radius:10px;background:var(--card-bg,#141419);margin:8px 0 18px;overflow:hidden;}' +
+      '#my-day .myday-email-head{display:flex;align-items:center;gap:9px;padding:11px 14px;cursor:pointer;}' +
+      '#my-day .myday-email-head:hover{background:rgba(34,211,238,0.05);}' +
+      '#my-day .myday-email-ico{display:inline-flex;width:17px;height:17px;color:var(--accent,#22d3ee);}' +
+      '#my-day .myday-email-ico svg{width:17px;height:17px;}' +
+      '#my-day .myday-email-sum{flex:1;font-size:13.5px;font-weight:600;color:var(--text,#fff);}' +
+      '#my-day .myday-email-go{font-size:12px;color:var(--accent,#22d3ee);}' +
+      '#my-day .myday-email-row{display:flex;align-items:center;gap:9px;padding:8px 14px;border-top:1px solid var(--border,#23232b);cursor:pointer;font-size:12.5px;}' +
+      '#my-day .myday-email-row:hover{background:rgba(34,211,238,0.05);}' +
+      '#my-day .myday-email-dot{flex:0 0 6px;width:6px;height:6px;border-radius:50%;background:var(--accent,#22d3ee);}' +
+      '#my-day .myday-email-from{font-weight:600;color:var(--text,#e4e6f0);white-space:nowrap;max-width:38%;overflow:hidden;text-overflow:ellipsis;}' +
+      '#my-day .myday-email-subj{color:var(--text-dim,#9aa);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;}' +
       '#my-day .myday-err{color:#f87171;font-size:13px;padding:14px;}';
     var st = document.createElement('style');
     st.id = 'p86-myday-styles';
@@ -153,13 +166,21 @@
       ? window.p86Api.tasks.list({ assignee: 'me', exclude_done: 1, limit: 200 })
       : Promise.resolve({ tasks: [] })).catch(function () { return { tasks: [] }; });
 
-    Promise.all([pEvents, pSchedule, pTasks]).then(function (res) {
+    // H4 — email layer: the user's dropbox conversations, so the day
+    // starts with "what came in overnight / what needs a reply".
+    var pEmail = fetch('/api/email-inbox/threads?limit=50', { credentials: 'include' })
+      .then(function (r) { return r.ok ? r.json() : { threads: [] }; })
+      .catch(function () { return { threads: [] }; });
+
+    Promise.all([pEvents, pSchedule, pTasks, pEmail]).then(function (res) {
       var events = (res[0] && (res[0].events || res[0])) || [];
       var sched = (res[1] && (res[1].entries || res[1].schedule || res[1])) || [];
       var tasks = (res[2] && (res[2].tasks || res[2])) || [];
+      var emailThreads = (res[3] && res[3].threads) || [];
       if (!Array.isArray(events)) events = [];
       if (!Array.isArray(sched)) sched = [];
       if (!Array.isArray(tasks)) tasks = [];
+      if (!Array.isArray(emailThreads)) emailThreads = [];
 
       var today = todayISO();
 
@@ -185,15 +206,34 @@
         return dateOnly(t.due_date) <= today;
       }).sort(function (a, b) { return dateOnly(a.due_date) < dateOnly(b.due_date) ? -1 : 1; });
 
-      renderDay(body, evToday, schToday, tasksDue);
+      // Email summary: overnight (last ~18h) + threads that need a reply.
+      var cutoff = Date.now() - 18 * 3600 * 1000;
+      var overnight = emailThreads.filter(function (t) {
+        var d = new Date(t.last_received_at); return !isNaN(d.getTime()) && d.getTime() >= cutoff;
+      });
+      var needsReply = emailThreads.filter(function (t) { return t.needs_reply; });
+      var email = { total: emailThreads.length, overnight: overnight.length, needsReply: needsReply, top: needsReply.slice(0, 3) };
+
+      renderDay(body, evToday, schToday, tasksDue, email);
     }).catch(function (err) {
       body.innerHTML = '<div class="myday-err">Could not load your day: ' + esc(err && err.message || '') + '</div>';
     });
   }
 
-  function renderDay(body, events, sched, tasks) {
+  function renderDay(body, events, sched, tasks, email) {
+    email = email || { total: 0, overnight: 0, needsReply: [], top: [] };
+    var emailHtml = renderEmailBlock(email);
     var total = events.length + sched.length + tasks.length;
     if (!total) {
+      if (emailHtml) {
+        body.innerHTML = emailHtml +
+          '<div class="myday-empty" style="padding-top:8px;">' +
+            '<div style="font-size:15px;color:var(--text,#fff);margin-bottom:4px;">Nothing else on the books today.</div>' +
+            '<div>No events, field assignments, or tasks due.</div>' +
+          '</div>';
+        wireRows(body);
+        return;
+      }
       body.innerHTML =
         '<div class="myday-empty">' +
           '<div class="big">&#x2600;&#xFE0F;</div>' +
@@ -208,7 +248,8 @@
     if (events.length) bits.push(events.length + ' event' + (events.length === 1 ? '' : 's'));
     if (sched.length) bits.push(sched.length + ' field assignment' + (sched.length === 1 ? '' : 's'));
     if (tasks.length) bits.push(tasks.length + ' task' + (tasks.length === 1 ? '' : 's') + ' due');
-    var html = '<div class="myday-summary">' + esc(bits.join(' · ')) + '</div>';
+    // Email block leads the day (first-line-of-contact context).
+    var html = emailHtml + '<div class="myday-summary">' + esc(bits.join(' · ')) + '</div>';
 
     // Split events into timed vs all-day; timed sorted by start.
     var timed = events.filter(function (e) { return !e.all_day; })
@@ -284,7 +325,48 @@
     wireRows(body);
   }
 
+  // H4 — email block: a compact "what came in / what needs a reply"
+  // strip that leads the day. Empty when the dropbox has no mail (so it
+  // never nags before the pipe is set up). Rows + the header open the
+  // Email hub; each needs-reply row deep-opens that thread.
+  function renderEmailBlock(email) {
+    if (!email || !email.total) return '';
+    var reply = email.needsReply.length;
+    var parts = [];
+    if (email.overnight) parts.push(email.overnight + ' new');
+    parts.push(reply ? (reply + ' need' + (reply === 1 ? 's' : '') + ' a reply') : 'all caught up');
+    var at = window.p86Icon ? window.p86Icon('at-symbol') : '&#9993;';
+    var h = '<div class="myday-email">' +
+      '<div class="myday-email-head" data-email-open>' +
+        '<span class="myday-email-ico">' + at + '</span>' +
+        '<span class="myday-email-sum">Email — ' + esc(parts.join(' · ')) + '</span>' +
+        '<span class="myday-email-go">Open &rarr;</span>' +
+      '</div>';
+    email.top.forEach(function (t) {
+      h += '<div class="myday-email-row" data-email-thread="' + esc(t.thread_id) + '">' +
+        '<span class="myday-email-dot"></span>' +
+        '<span class="myday-email-from">' + esc(t.last_from || 'unknown') + '</span>' +
+        '<span class="myday-email-subj">' + esc(t.subject || '(no subject)') + '</span>' +
+      '</div>';
+    });
+    h += '</div>';
+    return h;
+  }
+
+  function openEmailHub() {
+    if (typeof window.switchTab === 'function') window.switchTab('email-hub');
+  }
+
   function wireRows(body) {
+    var head = body.querySelector('[data-email-open]');
+    if (head) head.addEventListener('click', openEmailHub);
+    body.querySelectorAll('[data-email-thread]').forEach(function (row) {
+      row.addEventListener('click', function () {
+        // Open the hub; a deep-link to the specific thread is a later
+        // refinement (the hub loads the list; the row is the entry point).
+        openEmailHub();
+      });
+    });
     body.querySelectorAll('.myday-card').forEach(function (card) {
       card.addEventListener('click', function () {
         var kind = card.getAttribute('data-kind');

@@ -73,6 +73,12 @@
       '.ehub-chip:not(.ehub-chip-static):hover{color:var(--text,#e4e6f0);border-color:var(--accent,#107C41);}',
       '.ehub-chip-static{cursor:default;}',
       '.ehub-count{font-size:10px;font-weight:700;background:var(--surface2,#202027);border-radius:9px;padding:0 6px;color:var(--text-dim,#b4b4bf);}',
+      '.ehub-row-chips{display:flex;flex-wrap:wrap;gap:5px;align-items:center;}',
+      '.ehub-dot{width:7px;height:7px;border-radius:50%;background:var(--accent,#107C41);flex:0 0 auto;}',
+      '.ehub-badge{font-size:10px;font-weight:700;padding:1px 7px;border-radius:9px;letter-spacing:.2px;}',
+      '.ehub-badge-reply{background:rgba(16,124,65,.16);color:var(--accent,#5ddb7e);border:1px solid rgba(16,124,65,.4);}',
+      '.ehub-badge-high{background:rgba(248,113,113,.14);color:#f87171;border:1px solid rgba(248,113,113,.4);}',
+      '.ehub-row-triage{color:var(--text,#d0d0d8);font-style:italic;}',
       '.ehub-empty{padding:40px 24px;text-align:center;color:var(--text-dim,#8b90a5);font-size:13px;line-height:1.6;}',
       '.ehub-thead{position:sticky;top:0;background:var(--bg,#101014);padding:16px 20px 12px;border-bottom:1px solid var(--border,#2a2a32);z-index:1;}',
       '.ehub-thead h3{margin:0 0 6px;font-size:16px;font-weight:700;}',
@@ -134,6 +140,16 @@
       t = setTimeout(function () { _state.q = searchEl.value.trim(); loadThreads(); }, 280);
     });
     loadThreads();
+    // Catch-up triage sweep: any emails whose background triage was lost
+    // to a restart get processed now; refresh the list once done so the
+    // needs-reply badges appear. Best-effort, fire-and-forget.
+    if (!_state.sweptOnce) {
+      _state.sweptOnce = true;
+      fetch('/api/email-inbox/triage-pending', { method: 'POST', credentials: 'include' })
+        .then(function (r) { return r.json(); })
+        .then(function (res) { if (res && res.triaged > 0) loadThreads(); })
+        .catch(function () {});
+    }
   }
 
   function loadThreads() {
@@ -168,15 +184,23 @@
             (nav ? ' data-entity-type="' + esc(th.entity_type) + '" data-entity-id="' + esc(th.entity_id) + '"' : '') +
             '>' + ico('clients', '') + esc(th.entity_label) + '</span>'
         : '';
+      // H3 triage chips: "needs reply" + an urgency dot for high.
+      var tri = '';
+      if (th.needs_reply) tri += '<span class="ehub-badge ehub-badge-reply">needs reply</span>';
+      if (th.triage_urgency === 'high') tri += '<span class="ehub-badge ehub-badge-high">high</span>';
+      var chips = chip + tri;
       return '<div class="ehub-row' + (th.thread_id === _state.activeThreadId ? ' active' : '') + '" data-thread="' + esc(th.thread_id) + '">' +
         '<div class="ehub-row-top">' +
+          (th.needs_reply ? '<span class="ehub-dot" title="Needs a reply"></span>' : '') +
           '<span class="ehub-row-from">' + esc(th.last_from || 'unknown') + '</span>' +
           (th.message_count > 1 ? '<span class="ehub-count">' + th.message_count + '</span>' : '') +
           '<span class="ehub-row-when">' + esc(fmtAgo(th.last_received_at)) + '</span>' +
         '</div>' +
         '<div class="ehub-row-subj">' + esc(th.subject || '(no subject)') + '</div>' +
-        (chip ? '<div>' + chip + '</div>' : '') +
-        (th.preview ? '<div class="ehub-row-prev">' + esc(String(th.preview).replace(/\s+/g, ' ').trim()) + '</div>' : '') +
+        (chips ? '<div class="ehub-row-chips">' + chips + '</div>' : '') +
+        (th.triage_summary
+          ? '<div class="ehub-row-prev ehub-row-triage">' + esc(th.triage_summary) + '</div>'
+          : (th.preview ? '<div class="ehub-row-prev">' + esc(String(th.preview).replace(/\s+/g, ' ').trim()) + '</div>' : '')) +
       '</div>';
     }).join('');
 
