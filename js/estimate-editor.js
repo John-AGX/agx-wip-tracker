@@ -419,6 +419,10 @@
     var actuallyClose = function() {
       _currentId = null;
       _saveState = 'idle';
+      // Hide the mobile docked "Proposal total" bar so it doesn't float over
+      // the estimates list / other pages after leaving the editor.
+      var _mtb = document.getElementById('ee-mobile-totalbar');
+      if (_mtb) _mtb.classList.remove('show');
       if (window.p86EntitySubnav) window.p86EntitySubnav.clearAll();
       var listView = document.getElementById('estimates-list-view');
       var editorView = document.getElementById('estimate-editor-view');
@@ -1241,31 +1245,37 @@
     var est = getEstimate();
     if (!est) return;
     if (!est.alternates) est.alternates = [];
-    var name = prompt('Name for the new group (e.g., "Deck 1", "Roof", "Phase 2"):', suggestNextAlternateName(est));
-    if (name == null) return;
-    name = name.trim();
-    if (!name) return;
-    var newAlt = { id: 'alt_' + Date.now(), name: name, isDefault: false, scope: '' };
-    est.alternates.push(newAlt);
-    est.activeAlternateId = newAlt.id;
-    // Auto-seed the four standard subgroups under the new group so the
-    // estimator can immediately drop line items into the right buckets.
-    STANDARD_SECTIONS_PRESET.forEach(function(s, idx) {
-      appData.estimateLines.push({
-        id: 's' + Date.now() + '_' + idx,
-        estimateId: est.id,
-        alternateId: newAlt.id,
-        section: '__section_header__',
-        description: s.name,
-        btCategory: s.btCategory,
-        markup: s.markup
+    // Native prompt() silently no-ops in the installed PWA — route through the
+    // in-app modal (with a plain prompt() fallback for the browser).
+    var ask = (typeof window.p86Prompt === 'function')
+      ? window.p86Prompt({ title: 'New group', message: 'Name for the new group (e.g. "Deck 1", "Roof", "Phase 2").', placeholder: 'Group name', defaultValue: suggestNextAlternateName(est) })
+      : Promise.resolve(prompt('Name for the new group:', suggestNextAlternateName(est)));
+    ask.then(function(name) {
+      if (name == null) return;
+      name = String(name).trim();
+      if (!name) return;
+      var newAlt = { id: 'alt_' + Date.now(), name: name, isDefault: false, scope: '' };
+      est.alternates.push(newAlt);
+      est.activeAlternateId = newAlt.id;
+      // Auto-seed the four standard subgroups under the new group so the
+      // estimator can immediately drop line items into the right buckets.
+      STANDARD_SECTIONS_PRESET.forEach(function(s, idx) {
+        appData.estimateLines.push({
+          id: 's' + Date.now() + '_' + idx,
+          estimateId: est.id,
+          alternateId: newAlt.id,
+          section: '__section_header__',
+          description: s.name,
+          btCategory: s.btCategory,
+          markup: s.markup
+        });
       });
+      debouncedSave();
+      renderAlternateTabs();
+      renderLineItems();
+      renderTotals();
+      renderScopePanel();
     });
-    debouncedSave();
-    renderAlternateTabs();
-    renderLineItems();
-    renderTotals();
-    renderScopePanel();
   }
 
   function suggestNextAlternateName(est) {
@@ -1281,42 +1291,50 @@
     var est = getEstimate();
     var a = getActiveAlternate();
     if (!est || !a) return;
-    var name = prompt('Rename group:', a.name);
-    if (name == null) return;
-    name = name.trim();
-    if (!name) return;
-    a.name = name;
-    debouncedSave();
-    renderAlternateTabs();
+    var ask = (typeof window.p86Prompt === 'function')
+      ? window.p86Prompt({ title: 'Rename group', message: 'Rename this group.', placeholder: 'Group name', defaultValue: a.name })
+      : Promise.resolve(prompt('Rename group:', a.name));
+    ask.then(function(name) {
+      if (name == null) return;
+      name = String(name).trim();
+      if (!name) return;
+      a.name = name;
+      debouncedSave();
+      renderAlternateTabs();
+    });
   }
 
   function duplicateActiveAlternate() {
     var est = getEstimate();
     var a = getActiveAlternate();
     if (!est || !a) return;
-    var name = prompt('Name for the duplicated group:', suggestNextAlternateName(est));
-    if (name == null) return;
-    name = name.trim();
-    if (!name) return;
-    var srcAlt = getActiveAlternate();
-    var newAlt = { id: 'alt_' + Date.now(), name: name, isDefault: false, scope: (srcAlt && srcAlt.scope) || '' };
-    est.alternates.push(newAlt);
-    // Clone every line in the active alternate over to the new one. Section
-    // headers are cloned too so the structure carries over intact.
-    var sourceLines = (appData.estimateLines || []).filter(function(l) {
-      return l.estimateId === est.id && l.alternateId === a.id;
+    var ask = (typeof window.p86Prompt === 'function')
+      ? window.p86Prompt({ title: 'Duplicate group', message: 'Name for the duplicated group.', placeholder: 'Group name', defaultValue: suggestNextAlternateName(est) })
+      : Promise.resolve(prompt('Name for the duplicated group:', suggestNextAlternateName(est)));
+    ask.then(function(name) {
+      if (name == null) return;
+      name = String(name).trim();
+      if (!name) return;
+      var srcAlt = getActiveAlternate();
+      var newAlt = { id: 'alt_' + Date.now(), name: name, isDefault: false, scope: (srcAlt && srcAlt.scope) || '' };
+      est.alternates.push(newAlt);
+      // Clone every line in the active alternate over to the new one. Section
+      // headers are cloned too so the structure carries over intact.
+      var sourceLines = (appData.estimateLines || []).filter(function(l) {
+        return l.estimateId === est.id && l.alternateId === a.id;
+      });
+      sourceLines.forEach(function(l, idx) {
+        var copy = Object.assign({}, l);
+        copy.id = (l.section === '__section_header__' ? 's' : 'l') + Date.now() + '_' + idx;
+        copy.alternateId = newAlt.id;
+        appData.estimateLines.push(copy);
+      });
+      est.activeAlternateId = newAlt.id;
+      debouncedSave();
+      renderAlternateTabs();
+      renderLineItems();
+      renderTotals();
     });
-    sourceLines.forEach(function(l, idx) {
-      var copy = Object.assign({}, l);
-      copy.id = (l.section === '__section_header__' ? 's' : 'l') + Date.now() + '_' + idx;
-      copy.alternateId = newAlt.id;
-      appData.estimateLines.push(copy);
-    });
-    est.activeAlternateId = newAlt.id;
-    debouncedSave();
-    renderAlternateTabs();
-    renderLineItems();
-    renderTotals();
   }
 
   function deleteActiveAlternate() {
@@ -1836,8 +1854,11 @@
       delete _asmOpen[lineId];
       applyBulkAddLineItems(specs);
     };
-    if (window.p86Confirm) window.p86Confirm('Explode "' + (line.description || 'assembly') + '" into ' + line.assemblyBreakdown.length + ' editable lines? The single rollup line is replaced.', doIt);
-    else if (confirm('Explode into editable lines?')) doIt();
+    // p86Confirm takes an options object and returns a Promise — the old
+    // (string, callback) call silently never fired doIt (dead button).
+    if (window.p86Confirm) {
+      window.p86Confirm({ title: 'Explode assembly', message: 'Explode "' + (line.description || 'assembly') + '" into ' + line.assemblyBreakdown.length + ' editable lines? The single rollup line is replaced.', confirmText: 'Explode', destructive: true }).then(function(ok) { if (ok) doIt(); });
+    } else if (confirm('Explode into editable lines?')) doIt();
   };
 
   function renderLineItems() {
@@ -1893,22 +1914,8 @@
     var sectionStartIdx = null;
     function flushSectionSubtotal(endIdx) {
       if (currentSection == null) return;
-      var header = lines[sectionStartIdx];
-      var sum = 0;
-      var marked = 0;
-      for (var i = sectionStartIdx + 1; i < endIdx; i++) {
-        var L = lines[i];
-        if (!L || L.section === '__section_header__') continue;
-        var ext = num(L.qty) * num(L.unitCost);
-        sum += ext;
-        var m = effectiveMarkupForLine(L, lines, est);
-        marked += ext * (1 + m / 100);
-      }
-      // Dollar-mode section: tack on the flat $ once.
-      if (header && header.markupMode === 'dollar' && header.markup !== '' && header.markup != null) {
-        marked += num(header.markup);
-      }
-      html += renderSectionSubtotal(sum, marked);
+      var st = eeSectionSubtotal(lines, est, sectionStartIdx, endIdx);
+      html += renderSectionSubtotal(st.sum, st.marked);
     }
 
     for (var i = 0; i < lines.length; i++) {
@@ -2286,8 +2293,13 @@
     // the user taps the row, which sets data-editing="true" and
     // restores the input chrome. Delete + drag handle stay clickable
     // via data-edit-gate-passthrough.
+    // The accidental-edit gate (tap-to-unlock, flat inputs) is for touch —
+    // on desktop the line table is a live spreadsheet grid: inputs always
+    // editable so you can click/Tab straight into any cell. Mobile keeps the
+    // gate (and the tap-to-open bottom sheet).
+    var _gated = eeLineIsMobile();
     return '<div data-line-id="' + idAttr + '" ' +
-        'data-row-edit-gate data-editing="false" ' +
+        (_gated ? 'data-row-edit-gate data-editing="false" ' : '') +
         'ondragover="onLineDragOver(event)" ondragleave="onLineDragLeave(event)" ' +
         'ondrop="onLineDrop(event, \'' + idAttr + '\')" ' +
         'style="display:flex;align-items:flex-start;border-bottom:1px solid var(--border,#333);">' +
@@ -2319,17 +2331,82 @@
     '</div>';
   }
 
+  // Single source for a section's subtotal (raw + marked-up). Used by BOTH
+  // the render walk AND the surgical live-update path so they never drift.
+  function eeSectionSubtotal(lines, est, startIdx, endIdx) {
+    var header = lines[startIdx];
+    var sum = 0, marked = 0;
+    for (var i = startIdx + 1; i < endIdx; i++) {
+      var L = lines[i];
+      if (!L || L.section === '__section_header__') continue;
+      var ext = num(L.qty) * num(L.unitCost);
+      sum += ext;
+      var m = effectiveMarkupForLine(L, lines, est);
+      marked += ext * (1 + m / 100);
+    }
+    // Dollar-mode section: tack on the flat $ once.
+    if (header && header.markupMode === 'dollar' && header.markup !== '' && header.markup != null) marked += num(header.markup);
+    return { sum: sum, marked: marked };
+  }
+  // Every section's subtotal in document order — matches the order of the
+  // .ee-section-total cells rendered by renderLineItems.
+  function eeAllSectionSubtotals() {
+    var lines = getLines(); var est = getEstimate();
+    var out = [], startIdx = null;
+    for (var i = 0; i < lines.length; i++) {
+      if (lines[i].section === '__section_header__') {
+        if (startIdx != null) out.push(eeSectionSubtotal(lines, est, startIdx, i));
+        startIdx = i;
+      }
+    }
+    if (startIdx != null) out.push(eeSectionSubtotal(lines, est, startIdx, lines.length));
+    return out;
+  }
+  // Surgically refresh one line's Ext + Marked-Up cells and every section
+  // subtotal WITHOUT rebuilding the table — so focus + Tab survive a commit
+  // (the whole point of spreadsheet-grade line entry). The totals strip is a
+  // separate container, so renderTotals() is safe to call alongside this.
+  function refreshLineDerived(lineId) {
+    var container = document.getElementById('ee-lines-container');
+    if (!container) return;
+    var line = (appData.estimateLines || []).find(function(l) { return l.id === lineId; });
+    if (line) {
+      var sel = (window.CSS && CSS.escape) ? CSS.escape(String(lineId)) : String(lineId);
+      var row = container.querySelector('[data-line-id="' + sel + '"]');
+      if (row) {
+        var m = eeLineMath(line);
+        var extCell = row.querySelector('.ee-line-ext'); if (extCell) extCell.textContent = fmtCurrency(m.ext);
+        var amtCell = row.querySelector('.ee-line-amount'); if (amtCell) amtCell.textContent = fmtCurrency(m.client);
+      }
+    }
+    var subs = eeAllSectionSubtotals();
+    var cells = container.querySelectorAll('.ee-section-total');
+    for (var i = 0; i < cells.length && i < subs.length; i++) {
+      cells[i].textContent = fmtCurrency(subs[i].marked);
+      if (cells[i].previousElementSibling) cells[i].previousElementSibling.textContent = fmtCurrency(subs[i].sum);
+    }
+  }
+
   // Inline-edit handlers wired via onchange. Each writes back to the
-  // estimateLines record, recomputes totals + re-renders so the section
-  // subtotals + the totals strip update.
+  // estimateLines record, then SURGICALLY updates the derived cells (this
+  // line + section subtotals + the totals strip) — no full table rebuild, so
+  // Tab-to-next-field and the cell you're aiming at survive the commit.
   function updateLineField(lineId, field, value) {
     var line = (appData.estimateLines || []).find(function(l) { return l.id === lineId; });
     if (!line) return;
-    if (field === 'qty' || field === 'unitCost') line[field] = num(value);
+    // Leave a cleared numeric field EMPTY (don't coerce to 0) so a
+    // clear-to-retype doesn't flash a 0 the user has to reselect.
+    if (field === 'qty' || field === 'unitCost') line[field] = (value === '' || value == null) ? '' : num(value);
     else if (field === 'markup') line.markup = (value === '' || value == null) ? '' : num(value);
     else line[field] = value;
     debouncedSave();
-    renderLineItems();
+    // Assembly rollup lines carry an expanded breakdown strip whose component
+    // qtys/costs derive from this line's qty — the surgical path can't refresh
+    // that strip, so fall back to a full render for them (they're rare and not
+    // part of the rapid tab-typing flow the fast path protects).
+    var isAsm = line.sourceAssemblyId && Array.isArray(line.assemblyBreakdown) && line.assemblyBreakdown.length;
+    if (isAsm) { renderLineItems(); renderTotals(); return; }
+    refreshLineDerived(lineId);
     renderTotals();
   }
 
@@ -2427,6 +2504,7 @@
         debouncedSave();
         renderLineItems();
         renderTotals();
+        eeFocusNewLine(newLine.id);
         return;
       }
     }
@@ -2434,6 +2512,24 @@
     debouncedSave();
     renderLineItems();
     renderTotals();
+    eeFocusNewLine(newLine.id);
+  }
+
+  // Scroll a freshly-added line into view and (on desktop) drop the cursor in
+  // its description, so adding a line doesn't mean hunting for it.
+  function eeFocusNewLine(lineId) {
+    setTimeout(function() {
+      var c = document.getElementById('ee-lines-container');
+      if (!c) return;
+      var sel = (window.CSS && CSS.escape) ? CSS.escape(String(lineId)) : String(lineId);
+      var row = c.querySelector('[data-line-id="' + sel + '"]');
+      if (!row) return;
+      try { row.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (e) { row.scrollIntoView(); }
+      if (!eeLineIsMobile()) {
+        var ta = row.querySelector('textarea');
+        if (ta) { try { ta.focus(); } catch (e) {} }
+      }
+    }, 30);
   }
 
   function addEstimateSectionFromEditor() {

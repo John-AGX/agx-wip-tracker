@@ -9146,8 +9146,13 @@ body.light-mode .p86-pv-tag-modal-chip {
    ~700px on a phone and were getting clipped by the table's overflow:hidden.
    Here we re-lay them as a 2-column grid with persistent labels so nothing is
    clipped or side-scrolled. Targets ONLY [data-row-edit-gate] line rows —
-   never section headers/subtotals. */
-@media (max-width: 760px) {
+   never section headers/subtotals.
+   Gated on (pointer:coarse) to MATCH the JS gate eeLineIsMobile() — the line
+   rows only carry data-row-edit-gate on touch devices now (desktop is an
+   always-live spreadsheet grid). A fine-pointer window under 760px (desktop
+   dragged narrow) keeps the horizontal-scroll desktop table instead of losing
+   both the card reflow AND the scroll safety (which clipped the delete col). */
+@media (max-width: 760px) and (pointer: coarse) {
   /* Mobile line-item cards. The desktop row is a 9-cell flex strip
      (~834px) that clips on a phone; below 760px we reflow each row into a
      compact stacked card. Cells are targeted by data-cell / .ee-line-*
