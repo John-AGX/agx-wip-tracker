@@ -1733,6 +1733,13 @@
     sub: 'Subcontractors Costs'
   };
 
+  var ASM_BUCKET_LABEL = {
+    materials: 'MATERIALS',
+    labor: 'LABOR',
+    gc: 'GENERAL CONDITIONS',
+    sub: 'SUBCONTRACTORS'
+  };
+
   function renderAsmBreakdownStrip(line) {
     var open = !!_asmOpen[line.id];
     var n = line.assemblyBreakdown.length;
@@ -1742,7 +1749,8 @@
       '<div class="ee-asm-strip" data-edit-gate-passthrough onclick="eeToggleAsmBreakdown(\'' + line.id + '\')" ' +
         'style="display:flex;align-items:center;gap:7px;padding:2px 10px 4px 40px;font-size:10px;cursor:pointer;color:#7eb0ff;border-top:1px dashed rgba(79,140,255,0.25);">' +
         '<span style="display:inline-block;transition:transform .12s;font-size:8px;' + (open ? 'transform:rotate(90deg);' : '') + '">▶</span>' +
-        '<span style="font-weight:700;letter-spacing:.04em;">🧩 ASSEMBLY</span>' +
+        '<span style="font-weight:700;letter-spacing:.04em;">🧩 ASSEMBLY' +
+          (line.assemblyBucket ? ' · ' + escapeHTML(ASM_BUCKET_LABEL[line.assemblyBucket] || String(line.assemblyBucket).toUpperCase()) : '') + '</span>' +
         '<span style="color:var(--text-dim,#8a93a6);">' + n + ' component' + (n === 1 ? '' : 's') + ' inside this price — click to inspect</span>' +
       '</div>';
     if (!open) return html;
@@ -1786,8 +1794,17 @@
         return r.json();
       })
       .then(function (det) {
-        line.unitCost = num(det.assembly && det.assembly.unit_cost);
-        line.assemblyBreakdown = Array.isArray(det.flat) ? det.flat : line.assemblyBreakdown;
+        var flat = Array.isArray(det.flat) ? det.flat : [];
+        if (line.assemblyBucket) {
+          // Split rollup line — reprice only this line's cost bucket.
+          var rows = flat.filter(function (f) { return (f.cost_code || 'materials') === line.assemblyBucket; });
+          line.unitCost = Math.round(rows.reduce(function (s, f) { return s + num(f.qty_per_unit) * num(f.unit_cost); }, 0) * 10000) / 10000;
+          line.assemblyBreakdown = rows;
+          if (!rows.length) alert('The recipe no longer has any ' + (ASM_BUCKET_LABEL[line.assemblyBucket] || line.assemblyBucket).toLowerCase() + ' components — this line is now $0.');
+        } else {
+          line.unitCost = num(det.assembly && det.assembly.unit_cost);
+          line.assemblyBreakdown = flat.length ? flat : line.assemblyBreakdown;
+        }
         debouncedSave();
         renderLineItems();
         renderTotals();
@@ -3110,6 +3127,11 @@
     // leaf rows per 1 output unit) for the read-only breakdown strip.
     if (Array.isArray(input.assembly_breakdown) && input.assembly_breakdown.length) {
       newLine.assemblyBreakdown = input.assembly_breakdown;
+    }
+    // Split rollup lines carry which cost bucket (materials|labor|gc|sub)
+    // this line represents — refresh recomputes only that bucket's cost.
+    if (input.assembly_bucket) {
+      newLine.assemblyBucket = String(input.assembly_bucket);
     }
 
     if (sectionId) {

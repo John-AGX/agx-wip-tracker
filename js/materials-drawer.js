@@ -59,6 +59,11 @@
     sub:       'Subcontractors'
   };
 
+  // Assembly rollup inserts split into one line per cost bucket, in this
+  // order, with these description suffixes.
+  var BUCKET_ORDER = ['materials', 'labor', 'gc', 'sub'];
+  var BUCKET_SUFFIX = { materials: 'Materials', labor: 'Labor', gc: 'GC', sub: 'Subs' };
+
   function fmtMoney(n) {
     if (n == null || isNaN(n)) return '—';
     return '$' + Number(n).toFixed(2);
@@ -704,13 +709,33 @@
               source_assembly_id: x.s.a.id
             });
           });
+        } else if (flat.length) {
+          // Split rollup: ONE line per cost bucket (materials/labor/gc/
+          // sub), each routed to its matching section and carrying only
+          // its slice of the breakdown — the estimate's section structure
+          // shows the cost mix instead of one blob line. Waste is already
+          // folded into each flat row's qty_per_unit.
+          BUCKET_ORDER.forEach(function(code) {
+            var rows = flat.filter(function(f) { return (f.cost_code || 'materials') === code; });
+            if (!rows.length) return;
+            var per = rows.reduce(function(s, f) { return s + (f.qty_per_unit || 0) * (f.unit_cost || 0); }, 0);
+            specs.push({
+              description: x.s.a.name + ' — ' + BUCKET_SUFFIX[code],
+              qty: q, unit: x.s.a.unit || 'EA',
+              unit_cost: Math.round(per * 10000) / 10000,
+              section_name: SUBGROUP_TO_SECTION[code] || 'Materials & Supplies',
+              source_assembly_id: x.s.a.id,
+              assembly_breakdown: rows,
+              assembly_bucket: code
+            });
+          });
         } else {
+          // Empty recipe — nothing to split, land a single plain line.
           specs.push({
             description: x.s.a.name, qty: q, unit: x.s.a.unit || 'EA',
             unit_cost: (x.d.assembly && x.d.assembly.unit_cost) || x.s.a.unit_cost || 0,
             section_name: SUBGROUP_TO_SECTION[dominantCode(flat)] || 'Materials & Supplies',
-            source_assembly_id: x.s.a.id,
-            assembly_breakdown: flat
+            source_assembly_id: x.s.a.id
           });
         }
       });

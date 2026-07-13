@@ -187,7 +187,8 @@ router.get('/:id/tuning', requireAuth, requireCapability('ROLES_MANAGE'), async 
                 COALESCE(SUM((line->>'qty')::numeric * (line->>'unitCost')::numeric), 0) AS quoted,
                 COUNT(*)::int AS line_count,
                 COUNT(*) FILTER (WHERE line ? 'assemblyBreakdown')::int AS rollup_count,
-                AVG((line->>'unitCost')::numeric) FILTER (WHERE line ? 'assemblyBreakdown') AS rollup_unit_cost
+                json_agg(json_build_object('bucket', line->>'assemblyBucket', 'uc', (line->>'unitCost')::numeric))
+                  FILTER (WHERE line ? 'assemblyBreakdown') AS rollup_lines
            FROM estimates e, jsonb_array_elements(COALESCE(e.data->'lines', '[]'::jsonb)) AS line
           WHERE (e.organization_id = $1 OR e.organization_id IS NULL)
             AND (line->>'sourceAssemblyId')::int = $2
@@ -196,7 +197,22 @@ router.get('/:id/tuning', requireAuth, requireCapability('ROLES_MANAGE'), async 
       usage.estimate_count = uq.rows.length;
       usage.quoted_total = uq.rows.reduce((s, r) => s + Number(r.quoted || 0), 0);
       usage.estimates = uq.rows.map((r) => {
-        const ins = r.rollup_unit_cost != null ? Number(r.rollup_unit_cost) : null;
+        // Inserted price per output unit. Legacy full-rollup lines: avg
+        // their unitCost. Split-bucket lines (assemblyBucket): avg per
+        // bucket then SUM the buckets — that reconstructs one full
+        // insert's unit cost even when the assembly was inserted as 4
+        // per-section lines (or inserted more than once).
+        const rl = Array.isArray(r.rollup_lines) ? r.rollup_lines : [];
+        let ins = null;
+        const full = rl.filter((x) => !x.bucket);
+        if (full.length) {
+          ins = full.reduce((s, x) => s + Number(x.uc || 0), 0) / full.length;
+        } else if (rl.length) {
+          const by = {};
+          rl.forEach((x) => { (by[x.bucket] = by[x.bucket] || []).push(Number(x.uc || 0)); });
+          ins = Object.keys(by).reduce((s, k) => s + by[k].reduce((a, b) => a + b, 0) / by[k].length, 0);
+        }
+        if (ins != null) ins = Math.round(ins * 10000) / 10000;
         const cur = cost.unitCost;
         return {
           id: r.id, title: r.title || '(untitled)', is_locked: !!r.is_locked,
@@ -249,6 +265,15 @@ router.post('/:id/refresh-estimates', requireAuth, requireCapability('ROLES_MANA
     if (!a) return res.status(404).json({ error: 'Assembly not found' });
     const cost = asm.resolveCost(id, graph);
     const flat = asm.flatten(id, graph, 1);
+    // Split rollup lines carry assemblyBucket — reprice each from its own
+    // bucket's slice of the recipe (waste already folded into qty_per_unit).
+    const bucketRows = {};
+    const bucketCost = {};
+    flat.forEach((f) => {
+      const code = f.cost_code || 'materials';
+      (bucketRows[code] = bucketRows[code] || []).push(f);
+      bucketCost[code] = (bucketCost[code] || 0) + (Number(f.qty_per_unit) || 0) * (Number(f.unit_cost) || 0);
+    });
 
     const results = [];
     for (const estId of ids) {
@@ -262,8 +287,13 @@ router.post('/:id/refresh-estimates', requireAuth, requireCapability('ROLES_MANA
       let touched = 0;
       lines.forEach((l) => {
         if (Number(l.sourceAssemblyId) === id && Array.isArray(l.assemblyBreakdown)) {
-          l.unitCost = cost.unitCost;
-          l.assemblyBreakdown = flat;
+          if (l.assemblyBucket) {
+            l.unitCost = Math.round((bucketCost[l.assemblyBucket] || 0) * 10000) / 10000;
+            l.assemblyBreakdown = bucketRows[l.assemblyBucket] || [];
+          } else {
+            l.unitCost = cost.unitCost;
+            l.assemblyBreakdown = flat;
+          }
           touched++;
         }
       });
