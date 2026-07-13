@@ -266,6 +266,15 @@
     for (var i = 0; i < SCALE_PRESETS.length; i++) if (SCALE_PRESETS[i].label === label) return SCALE_PRESETS[i];
     return SCALE_PRESETS[1];        // 1/4" = 1'-0"
   }
+  // Label for an arbitrary ppi (viewport wheel-zoom lands between presets):
+  // exact preset label when it matches, else a 1"=X' style readout.
+  function vpScaleLabel(ppi) {
+    for (var i = 0; i < SCALE_PRESETS.length; i++) {
+      if (Math.abs(DPI * SCALE_PRESETS[i].f - ppi) < 1e-6) return SCALE_PRESETS[i].label;
+    }
+    var ftPerIn = DPI / ppi / 12;
+    return '1" = ' + (Math.round(ftPerIn * 100) / 100) + '\'';
+  }
   var SETTINGS = loadSettings();
 
   // ── Document model ──────────────────────────────────────────────
@@ -306,7 +315,7 @@
   function loadDoc(plan) {
     var pages = plan && plan.pages;
     var d = (Array.isArray(pages) && pages[0] && pages[0].kind === 'sheet-doc') ? pages[0] : defaultDoc(plan);
-    return toV2(d);
+    return toV3(toV2(d));
   }
   // ── Model / paper-space data model — v2 (Option 2, Phase A) ──────
   // v2 separates the drawing (model.entities = real geometry) from the sheets
@@ -317,7 +326,7 @@
   // phases add the Model/Sheet UI + the viewport transform.
   function toV2(doc) {
     if (!doc) return doc;
-    if (doc.version === 2 && doc.model && doc.sheets) {
+    if (doc.version >= 2 && doc.model && doc.sheets) {
       // Saved v2 (flat aliases were stripped on save) — rebuild the aliases.
       var sh = null;
       for (var i = 0; i < doc.sheets.length; i++) { if (doc.sheets[i].id === doc.activeSheetId) { sh = doc.sheets[i]; break; } }
@@ -355,6 +364,118 @@
     doc.space = 'sheet';
     return doc;
   }
+  // ── v3: model-canonical coordinates (real CAD semantics) ─────────
+  // v3 stores ALL geometry in MODEL INCHES (Y-down internally; readouts are
+  // Y-up). Each viewport carries a window {cx, cy} — the model point at the
+  // CENTER of its paper rect — and its scale.pixelsPerInch maps model inches
+  // → paper px. Paper-anchored SIZES (lineWidth, fontPx, symbol size) stay in
+  // paper px, so lineweights and text heights print constant at any viewport
+  // scale (annotative behavior) and the shared draw primitives keep their
+  // pixel-space constants meaningful.
+  function vpPpiSafe(vp) { return (vp && vp.scale && vp.scale.pixelsPerInch) ? vp.scale.pixelsPerInch : DPI * 0.25 / 12; }
+  function vpWin(vp) {
+    if (!vp.window) {
+      // Defensive: a viewport without a window views its own paper rect 1:1.
+      var ppi = vpPpiSafe(vp);
+      vp.window = { cx: (vp.w / 2) / ppi, cy: (vp.h / 2) / ppi };
+    }
+    return vp.window;
+  }
+  // Model inches → paper px through a viewport's window (and back).
+  function mToP(pt, vp) {
+    var ppi = vpPpiSafe(vp), w = vpWin(vp);
+    return { x: vp.x + vp.w / 2 + (pt.x - w.cx) * ppi, y: vp.y + vp.h / 2 + (pt.y - w.cy) * ppi };
+  }
+  function pToM(pt, vp) {
+    var ppi = vpPpiSafe(vp), w = vpWin(vp);
+    return { x: w.cx + (pt.x - vp.x - vp.w / 2) / ppi, y: w.cy + (pt.y - vp.y - vp.h / 2) / ppi };
+  }
+  // Model space renders on a "virtual paper" plane at the doc's base scale so
+  // the draw primitives' pixel constants (arrowheads, labels) keep the same
+  // proportion to geometry they have on the sheet.
+  function mppi() { return (S && S.doc && S.doc.model && S.doc.model.ppi) || DPI * 0.25 / 12; }
+  function mToV(pt) { var k = mppi(); return { x: pt.x * k, y: pt.y * k }; }
+  function vToM(pt) { var k = mppi(); return { x: pt.x / k, y: pt.y / k }; }
+  // Model→plane for the CURRENT space: virtual plane in model view, the given
+  // (or active) viewport's paper mapping in sheet view.
+  function mToPlane(pt, vp) {
+    if (S && S.space === 'model') return mToV(pt);
+    return mToP(pt, vp || activeVp());
+  }
+  function activeVp() {
+    var vps = (S && S.doc && S.doc.viewports) || [];
+    if (S && S.activeVpId) { for (var i = 0; i < vps.length; i++) if (vps[i].id === S.activeVpId) return vps[i]; }
+    return vps[0] || { x: 0, y: 0, w: 100, h: 100, window: { cx: 0, cy: 0 } };
+  }
+  function vpById(id) {
+    var vps = (S && S.doc && S.doc.viewports) || [];
+    for (var i = 0; i < vps.length; i++) if (vps[i].id === id) return vps[i];
+    return null;
+  }
+  // Geometry-mapped shallow clone — what the renderer hands the (pixel-space)
+  // draw primitives. Sizes are already paper px, so only coordinates map.
+  function entOnPlane(raw, mapFn) {
+    var e = {};
+    for (var k in raw) { if (Object.prototype.hasOwnProperty.call(raw, k)) e[k] = raw[k]; }
+    if (raw.points) e.points = raw.points.map(function (p) { var m = mapFn(p); return { x: m.x, y: m.y }; });
+    if (raw.startX != null) {
+      var a = mapFn({ x: raw.startX, y: raw.startY }), b = mapFn({ x: raw.endX, y: raw.endY });
+      e.startX = a.x; e.startY = a.y; e.endX = b.x; e.endY = b.y;
+    }
+    if (raw.x != null) { var q = mapFn({ x: raw.x, y: raw.y }); e.x = q.x; e.y = q.y; }
+    return e;
+  }
+  // v2 → v3 migration. Each viewport's content converts from its paper px to
+  // model inches by its OWN scale, and lands in its OWN model region (running
+  // X offset + gap) — so multi-view sheets (plan over elevation) don't overlay
+  // once rendering goes tag-free. Windows are chosen so every sheet renders
+  // pixel-identical to v2. Round-trip invariant: mToP(migrated pt, vp) ===
+  // original paper pt.
+  function toV3(doc) {
+    if (!doc || !doc.model || !doc.sheets) return doc;
+    if (doc.version >= 3) {
+      // Saved v3 — just make sure every viewport has a window + base ppi set.
+      (doc.sheets || []).forEach(function (sh) { (sh.viewports || []).forEach(vpWin); });
+      if (!doc.model.ppi) doc.model.ppi = vpPpiSafe((doc.viewports || [])[0]);
+      return doc;
+    }
+    var offX = 0, byVp = {}, firstPpi = null;
+    (doc.sheets || []).forEach(function (sh) {
+      (sh.viewports || []).forEach(function (vp) {
+        var ppi = vpPpiSafe(vp);
+        if (firstPpi == null) firstPpi = ppi;
+        var rw = vp.w / ppi, rh = vp.h / ppi;
+        vp.window = { cx: offX + rw / 2, cy: rh / 2 };
+        // paper→model for this vp: m = p/ppi + o (o baked so vp.xy ↦ region origin)
+        byVp[vp.id] = { ppi: ppi, ox: offX - vp.x / ppi, oy: -vp.y / ppi };
+        offX += rw * 1.25;
+      });
+    });
+    var fallback = null;
+    for (var k in byVp) { if (Object.prototype.hasOwnProperty.call(byVp, k)) { fallback = byVp[k]; break; } }
+    if (!fallback) fallback = { ppi: DPI * 0.25 / 12, ox: 0, oy: 0 };
+    function mapPt(o, x, y) { return { x: x / o.ppi + o.ox, y: y / o.ppi + o.oy }; }
+    (doc.model.entities || []).forEach(function (e) {
+      if (!e) return;
+      var o = byVp[e.viewport] || fallback;
+      if (e.points) e.points.forEach(function (p) { var m = mapPt(o, p.x, p.y); p.x = m.x; p.y = m.y; });
+      if (e.startX != null) {
+        var a = mapPt(o, e.startX, e.startY), b = mapPt(o, e.endX, e.endY);
+        e.startX = a.x; e.startY = a.y; e.endX = b.x; e.endY = b.y;
+      }
+      if (e.x != null) { var q = mapPt(o, e.x, e.y); e.x = q.x; e.y = q.y; }
+    });
+    var u = doc.underlay;
+    if (u && u.x != null) {
+      var uo = byVp[u.viewport] || fallback;
+      var up = mapPt(uo, u.x, u.y);
+      u.x = up.x; u.y = up.y; u.w = u.w / uo.ppi; u.h = u.h / uo.ppi;
+    }
+    doc.model.ppi = firstPpi || DPI * 0.25 / 12;
+    doc.version = 3;
+    return doc;
+  }
+
   // Persist clean v2 — model + sheets are the source of truth; the flat working
   // aliases are rebuilt by toV2() on load, so strip them to avoid duplicating
   // the geometry in the blob. SAFE: only strip when the v2 structure provably
@@ -363,7 +484,7 @@
   function serializeDoc(doc) {
     var out = {};
     for (var k in doc) { if (Object.prototype.hasOwnProperty.call(doc, k)) out[k] = doc[k]; }
-    out.kind = 'sheet-doc'; out.version = 2;
+    out.kind = 'sheet-doc'; out.version = (doc.version >= 3) ? 3 : 2;
     // Heal a broken model⇄flat alias before stripping: the flat working arrays
     // are always the LIVE data (every editor mutation targets doc.entities),
     // while several sites (undo restore, filters) reassign the flat array
@@ -397,88 +518,89 @@
       ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, s.w, s.h);
       ctx.restore();
     }
-    // Model space is NOT paper — no white fill, no borders. The dark field +
-    // infinite grid + axes come from drawModelField(); geometry draws on top.
-    if (!opts.modelMode) {
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, s.w, s.h);
-      ctx.strokeStyle = '#1f2937';
-      ctx.lineWidth = 6;
-      ctx.strokeRect(s.margin, s.margin, s.w - s.margin * 2, s.h - s.margin * 2);
-      ctx.lineWidth = 2;
-      ctx.strokeRect(s.margin + 10, s.margin + 10, s.w - s.margin * 2 - 20, s.h - s.margin * 2 - 20);
-    } else if (opts.visible) {
-      drawModelField(ctx, doc, opts);
+    // ── Model space: the model plane itself (virtual paper = model × base
+    // ppi). One tag-free pass over ALL entities; no clip, no chrome.
+    if (opts.modelMode) {
+      if (opts.visible) drawModelField(ctx, doc, opts);
+      try { drawUnderlayMapped(ctx, mToV); } catch (err) { /* defensive */ }
+      drawDocEntities(ctx, doc, mToV, opts, true);
+      return;
     }
+
+    // ── Sheet space: white paper + borders, then every viewport WINDOWS into
+    // the model — each maps model inches → its paper rect at its own scale.
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, s.w, s.h);
+    ctx.strokeStyle = '#1f2937';
+    ctx.lineWidth = 6;
+    ctx.strokeRect(s.margin, s.margin, s.w - s.margin * 2, s.h - s.margin * 2);
+    ctx.lineWidth = 2;
+    ctx.strokeRect(s.margin + 10, s.margin + 10, s.w - s.margin * 2 - 20, s.h - s.margin * 2 - 20);
 
     (doc.viewports || []).forEach(function (vp) {
       ctx.save();
-      // Viewport frame + clip — sheet space only. In model space we draw the
-      // geometry free (no titleblock/viewport window), so skip the frame + clip.
-      if (!opts.modelMode) {
-        ctx.strokeStyle = '#94a3b8';
-        ctx.lineWidth = 1.5;
-        ctx.setLineDash([14, 8]);
+      ctx.strokeStyle = '#94a3b8';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([14, 8]);
+      ctx.strokeRect(vp.x, vp.y, vp.w, vp.h);
+      ctx.setLineDash([]);
+      // Activated viewport (MSPACE-style editing through the window) gets a
+      // solid heavy border so it's obvious pan/zoom now drive the window.
+      if (opts.editor && opts.activeVpId === vp.id) {
+        ctx.strokeStyle = '#4f8cff'; ctx.lineWidth = 4;
         ctx.strokeRect(vp.x, vp.y, vp.w, vp.h);
-        ctx.setLineDash([]);
-        // clip entities to the viewport frame
-        ctx.beginPath(); ctx.rect(vp.x, vp.y, vp.w, vp.h); ctx.clip();
       }
-      // Plan underlay (Tier 1) — drawn first so it sits behind grid + entities.
-      try { drawUnderlay(ctx, vp); } catch (err) { /* defensive */ }
-      // Editor-only faint reference grid (1 ft minor / 5 ft major), gated
-      // by zoom so it never turns into a solid fill when zoomed out. Model
-      // space gets the infinite field grid instead (drawModelField).
-      if (opts.grid && !opts.modelMode && vp.scale && vp.scale.pixelsPerInch) {
-        drawViewportGrid(ctx, vp, opts.viewScale || 1);
-      }
-      if (typeof prims().drawStroke === 'function') {
-        (doc.entities || []).forEach(function (raw) {
-          var e = opts.modelMode ? modelInk(raw) : raw;
-          if (!e || e.viewport !== vp.id || !e.tool) return;
-          var lyr = layerById(doc, e.layer);
-          if (lyr && lyr.visible === false) return;
-          // Hatch + symbol have their own renderers (not in drawStroke).
-          if (e.tool === 'hatch') { try { drawHatch(ctx, e); } catch (err) {} return; }
-          if (e.tool === 'symbol') { try { drawSymbol(ctx, e); } catch (err) {} return; }
-          if (e.tool === 'arc') { try { drawArc(ctx, e); } catch (err) {} return; }
-          if (e.tool === 'level') { try { drawLevel(ctx, e); } catch (err) {} return; }
-          if (e.tool === 'spotelev') { try { drawSpotElev(ctx, e); } catch (err) {} return; }
-          if (e.tool === 'refline') { if (opts.editor) { try { drawRefline(ctx, e); } catch (err) {} } return; }   // construction guide — editor only, never exported
-          // Dimension labels are derived live from the viewport scale, so
-          // they stay correct as geometry changes (auto-update). Write to the
-          // PERSISTED entity (raw) — in model mode `e` may be an ink clone,
-          // and DXF export reads measureLabel off the doc without a render.
-          if (e.tool === 'measure' && vp.scale && vp.scale.pixelsPerInch) {
-            var px = Math.hypot(e.endX - e.startX, e.endY - e.startY);
-            raw.measureInches = px / vp.scale.pixelsPerInch;
-            var mlbl = fmtLen(raw.measureInches);
-            if (e.dimKind === 'radius') mlbl = 'R ' + mlbl;
-            else if (e.dimKind === 'diameter') mlbl = '⌀ ' + mlbl;   // ⌀
-            raw.measureLabel = mlbl;
-            e.measureInches = raw.measureInches; e.measureLabel = mlbl;
-          }
-          try { prims().drawStroke(ctx, e); } catch (err) { /* defensive */ }
-        });
-      }
-      // Graphic scale bar is paper furniture — sheet space only.
-      if (!opts.modelMode) { try { drawScaleBar(ctx, vp); } catch (err) { /* defensive */ } }
+      // clip content to the viewport frame
+      ctx.beginPath(); ctx.rect(vp.x, vp.y, vp.w, vp.h); ctx.clip();
+      var map = function (p) { return mToP(p, vp); };
+      try { drawUnderlayMapped(ctx, map); } catch (err) { /* defensive */ }
+      // Editor-only faint reference grid on the MODEL lattice (so it always
+      // agrees with grid snap), mapped through this viewport's window.
+      if (opts.grid) drawViewportGrid(ctx, vp, opts.viewScale || 1);
+      drawDocEntities(ctx, doc, map, opts, false);
+      try { drawScaleBar(ctx, vp); } catch (err) { /* defensive */ }
       ctx.restore();
-      // label bar (outside clip) — sheet space only
-      if (!opts.modelMode) {
-        ctx.fillStyle = '#1f2937';
-        ctx.font = '700 ' + Math.round(DPI * 0.18) + 'px Arial, sans-serif';
-        ctx.textBaseline = 'bottom';
-        ctx.fillText(vp.label + '    ' + (vp.scale && vp.scale.label ? vp.scale.label : ''),
-          vp.x + 4, vp.y - 6);
-      }
+      // label bar (outside clip)
+      ctx.fillStyle = '#1f2937';
+      ctx.font = '700 ' + Math.round(DPI * 0.18) + 'px Arial, sans-serif';
+      ctx.textBaseline = 'bottom';
+      ctx.fillText(vp.label + '    ' + (vp.scale && vp.scale.label ? vp.scale.label : ''),
+        vp.x + 4, vp.y - 6);
     });
 
-    // North arrow + titleblock are sheet-space presentation — hidden in model space.
-    if (!opts.modelMode) {
-      drawNorthArrow(ctx, doc);
-      drawTitleblock(ctx, doc);
-    }
+    drawNorthArrow(ctx, doc);
+    drawTitleblock(ctx, doc);
+  }
+
+  // Shared entity pass: map every entity's MODEL geometry onto the target
+  // plane (a viewport's paper, or the model view's virtual paper) and hand the
+  // pixel-space clone to the draw primitives. Sizes stay paper px by design.
+  function drawDocEntities(ctx, doc, mapFn, opts, invertInk) {
+    if (typeof prims().drawStroke !== 'function') return;
+    (doc.entities || []).forEach(function (raw) {
+      if (!raw || !raw.tool) return;
+      var lyr = layerById(doc, raw.layer);
+      if (lyr && lyr.visible === false) return;
+      // Dimension labels derive live from MODEL geometry — v3 model units ARE
+      // inches, so the label is just the distance. Written to the persisted
+      // entity (DXF export reads it without a render pass).
+      if (raw.tool === 'measure') {
+        raw.measureInches = Math.hypot(raw.endX - raw.startX, raw.endY - raw.startY);
+        var mlbl = fmtLen(raw.measureInches);
+        if (raw.dimKind === 'radius') mlbl = 'R ' + mlbl;
+        else if (raw.dimKind === 'diameter') mlbl = '⌀ ' + mlbl;   // ⌀
+        raw.measureLabel = mlbl;
+      }
+      var e = entOnPlane(raw, mapFn);
+      if (invertInk && e.color) e.color = modelInkColor(e.color);
+      if (e.tool === 'hatch') { try { drawHatch(ctx, e); } catch (err) {} return; }
+      if (e.tool === 'symbol') { try { drawSymbol(ctx, e); } catch (err) {} return; }
+      if (e.tool === 'arc') { try { drawArc(ctx, e); } catch (err) {} return; }
+      if (e.tool === 'level') { try { drawLevel(ctx, e); } catch (err) {} return; }
+      if (e.tool === 'spotelev') { try { drawSpotElev(ctx, e, elevAtPoint(raw)); } catch (err) {} return; }
+      if (e.tool === 'refline') { if (opts.editor) { try { drawRefline(ctx, e); } catch (err) {} } return; }   // construction guide — editor only, never exported
+      try { prims().drawStroke(ctx, e); } catch (err) { /* defensive */ }
+    });
   }
 
   // Modern titleblock: a dark company band (logo + org name) over a clean
@@ -781,9 +903,13 @@
     return null;
   }
   function elevAtPoint(e) {
-    var vp = viewportOf(e), ppi = ppiOf(e), dat = datumForViewport(e.viewport);
-    if (dat) return dat.elevIn + (dat.y - e.y) / ppi;
-    return (vp ? (vp.y + vp.h - e.y) : 0) / ppi;     // fallback: above viewport floor
+    // v3: model units ARE inches (Y down) — height above datum is plain Δy.
+    var dat = datumForViewport(e.viewport);
+    if (dat) return dat.elevIn + (dat.y - e.y);
+    var vp = viewportOf(e);
+    if (!vp) return 0;
+    var ppi = vpPpiSafe(vp), w = vpWin(vp);
+    return (w.cy + (vp.h / 2) / ppi) - e.y;          // fallback: above the window floor
   }
   // Level/datum line: dash-dot horizontal line + a head bubble with the
   // elevation. Paper-true (fixed sheet px) so it prints to scale.
@@ -800,14 +926,16 @@
     ctx.restore();
   }
   // Spot elevation: a triangle pointer at the spot + the computed height.
-  function drawSpotElev(ctx, e) {
+  // The elevation label is computed by the caller from the MODEL entity (this
+  // function receives a plane-mapped clone whose coords are paper px).
+  function drawSpotElev(ctx, e, elevIn) {
     var s = Math.round(DPI * 0.12);
     ctx.save();
     ctx.strokeStyle = e.color || '#0ea5e9'; ctx.fillStyle = e.color || '#0ea5e9'; ctx.lineWidth = 2; ctx.lineJoin = 'round';
     ctx.beginPath(); ctx.moveTo(e.x, e.y); ctx.lineTo(e.x - s * 0.6, e.y - s); ctx.lineTo(e.x + s * 0.6, e.y - s); ctx.closePath(); ctx.stroke();
     ctx.beginPath(); ctx.arc(e.x, e.y, 2, 0, Math.PI * 2); ctx.fill();
     ctx.font = '700 ' + Math.round(DPI * 0.12) + 'px Arial, sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-    ctx.fillText('+' + fmtFeet(elevAtPoint(e)), e.x + s * 0.8, e.y - s);
+    ctx.fillText('+' + fmtFeet(elevIn != null ? elevIn : 0), e.x + s * 0.8, e.y - s);
     ctx.restore();
   }
   // Construction/reference line — faint dashed, screen-consistent weight.
@@ -835,95 +963,93 @@
   // Grid spacing in sheet-px. Fine / full-size scales (unit:'in') get an INCH grid
   // (1" minor / 12" major) so small parts are precise; architectural scales keep
   // the 1-ft grid (×5 major). Shared by the visual grid + grid-snap so they agree.
-  function gridStepPx(vp) {
-    if (!vp || !vp.scale || !vp.scale.pixelsPerInch) return 0;
-    return (vp.scale.unit === 'in')
-      ? vp.scale.pixelsPerInch * (SETTINGS.gridIn || 1)
-      : vp.scale.pixelsPerInch * 12 * (SETTINGS.gridFt || 1);
+  // Grid spacing in MODEL INCHES (v3 model units are real inches, so this is
+  // the whole story — no ppi). The vp only picks the unit family.
+  function gridStepIn(vp) {
+    return (vp && vp.scale && vp.scale.unit === 'in')
+      ? (SETTINGS.gridIn || 1)
+      : 12 * (SETTINGS.gridFt || 1);
   }
   function gridMajorMult(vp) { return (vp && vp.scale && vp.scale.unit === 'in') ? 12 : 5; }
+  // Sheet-space reference grid: the MODEL lattice (anchored at the model
+  // origin, same lattice grid-snap uses) mapped through the viewport window —
+  // grid lines and snapped points agree by construction.
   function drawViewportGrid(ctx, vp, viewScale) {
-    var step = gridStepPx(vp);                       // grid spacing, sheet px (unit-aware)
-    if (!step || step * viewScale < 7) return;       // too dense at this zoom
-    var x0 = vp.x, y0 = vp.y, x1 = vp.x + vp.w, y1 = vp.y + vp.h, x, y;
+    var stepIn = gridStepIn(vp), ppi = vpPpiSafe(vp);
+    if (!stepIn || stepIn * ppi * viewScale < 7) return;       // too dense at this zoom
+    var w = vpWin(vp);
+    var mx0 = w.cx - (vp.w / 2) / ppi, mx1 = w.cx + (vp.w / 2) / ppi;
+    var my0 = w.cy - (vp.h / 2) / ppi, my1 = w.cy + (vp.h / 2) / ppi;
+    var y0 = vp.y, y1 = vp.y + vp.h, x0 = vp.x, x1 = vp.x + vp.w, m, p;
     ctx.save();
-    ctx.strokeStyle = 'rgba(37,99,235,0.09)'; ctx.lineWidth = 1 / viewScale;
-    for (x = x0; x <= x1 + 0.5; x += step) { ctx.beginPath(); ctx.moveTo(x, y0); ctx.lineTo(x, y1); ctx.stroke(); }
-    for (y = y0; y <= y1 + 0.5; y += step) { ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x1, y); ctx.stroke(); }
-    var major = step * gridMajorMult(vp);
-    ctx.strokeStyle = 'rgba(37,99,235,0.20)'; ctx.lineWidth = 1.3 / viewScale;
-    for (x = x0; x <= x1 + 0.5; x += major) { ctx.beginPath(); ctx.moveTo(x, y0); ctx.lineTo(x, y1); ctx.stroke(); }
-    for (y = y0; y <= y1 + 0.5; y += major) { ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x1, y); ctx.stroke(); }
+    function lines(step, style, lw) {
+      ctx.strokeStyle = style; ctx.lineWidth = lw / viewScale;
+      for (m = Math.ceil(mx0 / step) * step; m <= mx1; m += step) {
+        p = mToP({ x: m, y: my0 }, vp);
+        ctx.beginPath(); ctx.moveTo(p.x, y0); ctx.lineTo(p.x, y1); ctx.stroke();
+      }
+      for (m = Math.ceil(my0 / step) * step; m <= my1; m += step) {
+        p = mToP({ x: mx0, y: m }, vp);
+        ctx.beginPath(); ctx.moveTo(x0, p.y); ctx.lineTo(x1, p.y); ctx.stroke();
+      }
+    }
+    lines(stepIn, 'rgba(37,99,235,0.09)', 1);
+    lines(stepIn * gridMajorMult(vp), 'rgba(37,99,235,0.20)', 1.3);
     ctx.restore();
   }
 
   // ── Model-space field — the environment behind the geometry ──────
-  // Infinite grid across the visible world rect, origin axes + a UCS icon at
-  // the drawing origin (bottom-left of the primary viewport → first-quadrant
-  // coordinates, Y up, like AutoCAD), and each sheet window as a faint dashed
-  // outline so you can see what will land on paper.
-  function modelOrigin(doc) {
-    var vp = (doc.viewports || [])[0];
-    if (!vp) { var s = doc.sheet || { h: 0 }; return { x: 0, y: s.h || 0 }; }
-    // Land the origin ON the grid-snap lattice (which anchors at vp.y): snap
-    // vp.h down to a whole number of grid steps. Otherwise the drawn field
-    // grid and the readout would sit a fraction of a step off every snapped
-    // point (vp.h is almost never an exact multiple of the step).
-    var step = gridStepPx(vp);
-    var h = (step > 0) ? Math.floor(vp.h / step) * step : vp.h;
-    return { x: vp.x, y: vp.y + (h > 0 ? h : vp.h) };
-  }
+  // Drawn on the virtual plane (model inches × base ppi). Infinite grid on
+  // the model lattice (anchored at the model origin — the same lattice grid
+  // snap uses), origin axes + UCS icon at (0,0), and every viewport's WINDOW
+  // as a dashed outline showing exactly which model region prints where.
   function drawModelField(ctx, doc, opts) {
-    var vis = opts.visible, vs = opts.viewScale || 1;
-    var vp = (doc.viewports || [])[0];
-    var org = modelOrigin(doc);
-    // Grid — same real-unit lattice grid-snap uses, but across the whole view.
-    var step = vp ? gridStepPx(vp) : 0;
+    var vis = opts.visible, vs = opts.viewScale || 1, k = mppi();
+    var vp0 = (doc.viewports || [])[0];
+    var step = gridStepIn(vp0) * k;                 // virtual-plane px per grid cell
     if (opts.grid && step && step * vs >= 7) {
-      var major = step * gridMajorMult(vp);
-      var gx0 = org.x + Math.floor((vis.x0 - org.x) / step) * step;
-      var gy0 = org.y + Math.floor((vis.y0 - org.y) / step) * step;
+      var major = step * gridMajorMult(vp0);
       var x, y;
       ctx.save();
       ctx.strokeStyle = 'rgba(120,140,170,0.10)'; ctx.lineWidth = 1 / vs;
-      for (x = gx0; x <= vis.x1; x += step) { ctx.beginPath(); ctx.moveTo(x, vis.y0); ctx.lineTo(x, vis.y1); ctx.stroke(); }
-      for (y = gy0; y <= vis.y1; y += step) { ctx.beginPath(); ctx.moveTo(vis.x0, y); ctx.lineTo(vis.x1, y); ctx.stroke(); }
-      var mx0 = org.x + Math.floor((vis.x0 - org.x) / major) * major;
-      var my0 = org.y + Math.floor((vis.y0 - org.y) / major) * major;
+      for (x = Math.floor(vis.x0 / step) * step; x <= vis.x1; x += step) { ctx.beginPath(); ctx.moveTo(x, vis.y0); ctx.lineTo(x, vis.y1); ctx.stroke(); }
+      for (y = Math.floor(vis.y0 / step) * step; y <= vis.y1; y += step) { ctx.beginPath(); ctx.moveTo(vis.x0, y); ctx.lineTo(vis.x1, y); ctx.stroke(); }
       ctx.strokeStyle = 'rgba(120,140,170,0.20)'; ctx.lineWidth = 1.3 / vs;
-      for (x = mx0; x <= vis.x1; x += major) { ctx.beginPath(); ctx.moveTo(x, vis.y0); ctx.lineTo(x, vis.y1); ctx.stroke(); }
-      for (y = my0; y <= vis.y1; y += major) { ctx.beginPath(); ctx.moveTo(vis.x0, y); ctx.lineTo(vis.x1, y); ctx.stroke(); }
+      for (x = Math.floor(vis.x0 / major) * major; x <= vis.x1; x += major) { ctx.beginPath(); ctx.moveTo(x, vis.y0); ctx.lineTo(x, vis.y1); ctx.stroke(); }
+      for (y = Math.floor(vis.y0 / major) * major; y <= vis.y1; y += major) { ctx.beginPath(); ctx.moveTo(vis.x0, y); ctx.lineTo(vis.x1, y); ctx.stroke(); }
       ctx.restore();
     }
-    // Origin axes — X red, Y green (screen-Y up = model +Y).
+    // Origin axes + UCS icon at the model origin (0,0).
     ctx.save();
     ctx.lineWidth = 1.4 / vs;
     ctx.strokeStyle = 'rgba(225,85,85,0.45)';
-    ctx.beginPath(); ctx.moveTo(vis.x0, org.y); ctx.lineTo(vis.x1, org.y); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(vis.x0, 0); ctx.lineTo(vis.x1, 0); ctx.stroke();
     ctx.strokeStyle = 'rgba(80,200,120,0.45)';
-    ctx.beginPath(); ctx.moveTo(org.x, vis.y0); ctx.lineTo(org.x, vis.y1); ctx.stroke();
-    // UCS icon at the origin.
+    ctx.beginPath(); ctx.moveTo(0, vis.y0); ctx.lineTo(0, vis.y1); ctx.stroke();
     var L = 46 / vs, ah = 7 / vs;
     ctx.lineWidth = 2 / vs; ctx.lineCap = 'round';
     ctx.strokeStyle = '#e15555'; ctx.fillStyle = '#e15555';
-    ctx.beginPath(); ctx.moveTo(org.x, org.y); ctx.lineTo(org.x + L, org.y); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(org.x + L, org.y); ctx.lineTo(org.x + L - ah, org.y - ah * 0.62); ctx.lineTo(org.x + L - ah, org.y + ah * 0.62); ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(L, 0); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(L, 0); ctx.lineTo(L - ah, -ah * 0.62); ctx.lineTo(L - ah, ah * 0.62); ctx.closePath(); ctx.fill();
     ctx.font = '700 ' + (11 / vs) + 'px Arial, sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
-    ctx.fillText('X', org.x + L + 4 / vs, org.y - 2 / vs);
+    ctx.fillText('X', L + 4 / vs, -2 / vs);
     ctx.strokeStyle = '#50c878'; ctx.fillStyle = '#50c878';
-    ctx.beginPath(); ctx.moveTo(org.x, org.y); ctx.lineTo(org.x, org.y - L); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(org.x, org.y - L); ctx.lineTo(org.x - ah * 0.62, org.y - L + ah); ctx.lineTo(org.x + ah * 0.62, org.y - L + ah); ctx.closePath(); ctx.fill();
-    ctx.fillText('Y', org.x + 4 / vs, org.y - L - 2 / vs);
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, -L); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(0, -L); ctx.lineTo(-ah * 0.62, -L + ah); ctx.lineTo(ah * 0.62, -L + ah); ctx.closePath(); ctx.fill();
+    ctx.fillText('Y', 4 / vs, -L - 2 / vs);
     ctx.restore();
-    // Sheet windows — what each viewport of the active sheet will print.
+    // Viewport windows — the model region each view of the active sheet prints.
     ctx.save();
     ctx.lineWidth = 1 / vs; ctx.setLineDash([10 / vs, 7 / vs]);
     ctx.strokeStyle = 'rgba(148,163,184,0.35)';
     ctx.fillStyle = 'rgba(148,163,184,0.55)';
     ctx.font = '600 ' + (10 / vs) + 'px Arial, sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
     (doc.viewports || []).forEach(function (v) {
-      ctx.strokeRect(v.x, v.y, v.w, v.h);
-      ctx.fillText((v.label || 'VIEW') + ' — sheet window', v.x + 2 / vs, v.y - 3 / vs);
+      var ppi = vpPpiSafe(v), w = vpWin(v);
+      var rx = (w.cx - (v.w / 2) / ppi) * k, ry = (w.cy - (v.h / 2) / ppi) * k;
+      var rw = (v.w / ppi) * k, rh = (v.h / ppi) * k;
+      ctx.strokeRect(rx, ry, rw, rh);
+      ctx.fillText((v.label || 'VIEW') + ' — sheet window', rx + 2 / vs, ry - 3 / vs);
     });
     ctx.restore();
   }
@@ -964,30 +1090,39 @@
   // Zoom-extents for model space: frame the drawing content (all entities on
   // the active sheet's viewports), falling back to the viewport rect when the
   // drawing is empty. AutoCAD's ZOOM E.
+  // Zoom-extents bbox of the WHOLE model (v3 = one model, all regions), in
+  // model inches; falls back to the primary viewport's window when empty.
   function contentBBox() {
     var mnx = Infinity, mny = Infinity, mxx = -Infinity, mxy = -Infinity, any = false;
-    var vpIds = {};
-    (S.doc.viewports || []).forEach(function (v) { vpIds[v.id] = 1; });
     (S.doc.entities || []).forEach(function (e) {
-      if (!e || !vpIds[e.viewport]) return;
+      if (!e) return;
       var bb = entBBox(e); if (!bb) return;
       any = true;
       if (bb.x < mnx) mnx = bb.x; if (bb.y < mny) mny = bb.y;
       if (bb.x + bb.w > mxx) mxx = bb.x + bb.w; if (bb.y + bb.h > mxy) mxy = bb.y + bb.h;
     });
+    var u = S.doc.underlay;
+    if (u && u.x != null) {
+      any = true;
+      mnx = Math.min(mnx, u.x); mny = Math.min(mny, u.y);
+      mxx = Math.max(mxx, u.x + u.w); mxy = Math.max(mxy, u.y + u.h);
+    }
     if (!any) {
       var vp = (S.doc.viewports || [])[0];
-      if (!vp) { var s = S.doc.sheet; return { x: 0, y: 0, w: s.w, h: s.h }; }
-      return { x: vp.x, y: vp.y, w: vp.w, h: vp.h };
+      if (!vp) return { x: 0, y: 0, w: 480, h: 360 };
+      var ppi = vpPpiSafe(vp), w = vpWin(vp);
+      return { x: w.cx - (vp.w / 2) / ppi, y: w.cy - (vp.h / 2) / ppi, w: vp.w / ppi, h: vp.h / ppi };
     }
     return { x: mnx, y: mny, w: Math.max(mxx - mnx, 10), h: Math.max(mxy - mny, 10) };
   }
   function fitModelView() {
     var cw = S.cssW || S.canvas.width, ch = S.cssH || S.canvas.height, pad = 60;
-    var bb = contentBBox();
-    var scale = Math.min((cw - pad * 2) / bb.w, (ch - pad * 2) / bb.h);
+    var k = mppi(), bb = contentBBox();
+    // Camera works on the virtual plane (model × base ppi).
+    var vb = { x: bb.x * k, y: bb.y * k, w: Math.max(bb.w * k, 1), h: Math.max(bb.h * k, 1) };
+    var scale = Math.min((cw - pad * 2) / vb.w, (ch - pad * 2) / vb.h);
     scale = Math.max(0.02, Math.min(scale, 20));
-    return { scale: scale, tx: (cw - bb.w * scale) / 2 - bb.x * scale, ty: (ch - bb.h * scale) / 2 - bb.y * scale };
+    return { scale: scale, tx: (cw - vb.w * scale) / 2 - vb.x * scale, ty: (ch - vb.h * scale) / 2 - vb.y * scale };
   }
   // The canvas cursor the active tool wants. With the CAD crosshair on we hide
   // the native cursor and draw our own crosshair + pickbox in repaint().
@@ -1419,20 +1554,29 @@
     pushUndo();
     var n = S.doc.viewports.length;
     var pre = scalePreset(SETTINGS.scaleLabel);
-    S.doc.viewports.push({
+    // The REAL multi-viewport capability: a new view windows the SAME model
+    // region as the primary viewport (at its own scale) — plan + detail views
+    // of one drawing, true CAD semantics.
+    var primary = S.doc.viewports[0];
+    var vp = {
       id: uid('VP'), label: VIEW_LABELS[Math.min(n, VIEW_LABELS.length - 1)],
       x: 0, y: 0, w: 100, h: 100,
       scale: { pixelsPerInch: DPI * pre.f, unit: 'ft', label: pre.label }
-    });
+    };
+    var pw = primary ? vpWin(primary) : { cx: 0, cy: 0 };
+    vp.window = { cx: pw.cx, cy: pw.cy };
+    S.doc.viewports.push(vp);
     layoutViewports(S.doc);
     buildLayers(); repaint();
+    setHint('New view added — it windows the same model as ' + (primary ? (primary.label || 'the plan') : 'the drawing') + '. Double-click inside it to pan/zoom its window.');
   }
   function setViewportScale(vpId, preset) {
     var vp = (S.doc.viewports || []).filter(function (v) { return v.id === vpId; })[0];
     if (!vp) return;
     pushUndo();
-    vp.scale = { pixelsPerInch: DPI * preset.f, unit: preset.unit || 'ft', label: preset.label };
-    buildLayers(); repaint();
+    vpWin(vp);                                          // keep the window center — this zooms about it
+    vp.scale = { pixelsPerInch: DPI * preset.f, unit: preset.unit || 'ft', label: preset.label, calibrated: vp.scale && vp.scale.calibrated };
+    markDirty(); buildLayers(); repaint();
   }
   function applySheetSize(key) {
     var sz = SHEET_SIZES[key]; if (!sz) return;
@@ -1776,8 +1920,8 @@
       var e = selectedEntity(); if (!e) return;
       var lenIn = parseLenIn(pLen.value); var ang = parseFloat(pAng.value);
       if (lenIn == null || !isFinite(ang)) return;
-      pushUndo(); var ppi = ppiOf(e), px = lenIn * ppi, rad = ang * Math.PI / 180;
-      e.endX = e.startX + px * Math.cos(rad); e.endY = e.startY - px * Math.sin(rad);
+      pushUndo(); var rad = ang * Math.PI / 180;   // model inches
+      e.endX = e.startX + lenIn * Math.cos(rad); e.endY = e.startY - lenIn * Math.sin(rad);
       repaint(); buildLayers();
     }
     if (pLen) pLen.onchange = applyLine;
@@ -1786,9 +1930,9 @@
     function applyRect() {
       var e = selectedEntity(); if (!e) return;
       var w = parseLenIn(pW.value), h = parseLenIn(pH.value); if (w == null || h == null) return;
-      pushUndo(); var ppi = ppiOf(e);
+      pushUndo();   // model inches
       var sx = Math.min(e.startX, e.endX), sy = Math.min(e.startY, e.endY);
-      e.startX = sx; e.startY = sy; e.endX = sx + Math.max(1, w * ppi); e.endY = sy + Math.max(1, h * ppi);
+      e.startX = sx; e.startY = sy; e.endX = sx + Math.max(0.1, w); e.endY = sy + Math.max(0.1, h);
       repaint(); buildLayers();
     }
     if (pW) pW.onchange = applyRect;
@@ -1796,7 +1940,7 @@
     var pR = host.querySelector('[data-prop-r]');
     if (pR) pR.onchange = function () {
       var e = selectedEntity(); if (!e) return; var r = parseLenIn(pR.value); if (r == null) return;
-      pushUndo(); var ppi = ppiOf(e), rpx = Math.max(1, r * ppi);
+      pushUndo(); var rpx = Math.max(0.1, r);   // model inches
       var cx = (e.startX + e.endX) / 2, cy = (e.startY + e.endY) / 2;
       e.startX = cx - rpx; e.endX = cx + rpx; e.startY = cy - rpx; e.endY = cy + rpx;
       repaint(); buildLayers();
@@ -1813,10 +1957,10 @@
         var dat = datumForViewport(e.viewport);
         e.elevIn = inches;
         // A second level repositions to the new elevation; the datum line itself just relabels.
-        if (dat && Math.abs(dat.y - e.startY) > 0.001) { var yy = dat.y - (inches - dat.elevIn) * ppiOf(e); e.startY = yy; e.endY = yy; }
+        if (dat && Math.abs(dat.y - e.startY) > 0.001) { var yy = dat.y - (inches - dat.elevIn); e.startY = yy; e.endY = yy; }
       } else if (e.tool === 'spotelev') {
         var dat2 = datumForViewport(e.viewport);
-        if (dat2) e.y = dat2.y - (inches - dat2.elevIn) * ppiOf(e);
+        if (dat2) e.y = dat2.y - (inches - dat2.elevIn);
       }
       repaint(); buildLayers();
     };
@@ -1917,8 +2061,35 @@
   }
 
   // ── Coordinate transforms ───────────────────────────────────────
+  // Three spaces: SCREEN (canvas css px) ⇄ PLANE (what the camera pans/zooms:
+  // paper in sheet space, virtual paper in model space) ⇄ MODEL (inches — the
+  // space every entity and every tool lives in).
   function toSheet(sx, sy) { return { x: (sx - S.view.tx) / S.view.scale, y: (sy - S.view.ty) / S.view.scale }; }
-  function toScreen(x, y) { return { x: x * S.view.scale + S.view.tx, y: y * S.view.scale + S.view.ty }; }
+  function toScreen(x, y) {
+    var p = mToPlane({ x: x, y: y });
+    return { x: p.x * S.view.scale + S.view.tx, y: p.y * S.view.scale + S.view.ty };
+  }
+  // Pointer context: plane point, the viewport under it (sheet space), and
+  // the MODEL point every tool consumes. With `latch` the ACTIVE viewport's
+  // mapping is used regardless of which frame the cursor is over — a drag or
+  // an in-progress tool must keep ONE screen→model mapping for its whole
+  // gesture, or crossing a viewport edge teleports geometry between the
+  // disjoint model regions.
+  function pointerCtx(lp, latch) {
+    var plane = toSheet(lp.x, lp.y);
+    if (S.space === 'model') return { plane: plane, vp: (S.doc.viewports || [])[0] || null, m: vToM(plane) };
+    var vp = latch ? activeVp() : vpAt(plane);
+    return { plane: plane, vp: vp, m: pToM(plane, vp || activeVp()) };
+  }
+  // Any multi-click tool state that must keep its screen→model mapping.
+  function toolInProgress() {
+    return !!(S.draft || S._stretch || S._dimcont || S._calib || S._poly || S._filletA || S._chamferA || S.inq);
+  }
+  // Convert a screen-px tolerance (snap radius, hit slop) into model inches.
+  function screenModelDist(px, vp) {
+    var ppi = (S.space === 'model') ? mppi() : vpPpiSafe(vp || activeVp());
+    return px / (S.view.scale * ppi);
+  }
   function localPt(e) {
     var r = S.canvas.getBoundingClientRect();
     var cx = e.touches ? e.touches[0].clientX : e.clientX;
@@ -1938,13 +2109,13 @@
   }
 
   // ── Snapping ────────────────────────────────────────────────────
-  // Collect endpoint / midpoint / center candidates from entities in the
-  // given viewport (sheet coords).
+  // Collect endpoint / midpoint / center candidates from entities (MODEL
+  // coords — v3 is one model, so candidates are tag-free; distance culling
+  // against the cursor keeps this cheap).
   function snapCandidates(vp, raw) {
     var out = [];
-    if (!vp) return out;
     (S.doc.entities || []).forEach(function (e) {
-      if (!e || e.viewport !== vp.id) return;
+      if (!e) return;
       if (e.startX != null) {
         out.push({ x: e.startX, y: e.startY, kind: 'end' });
         out.push({ x: e.endX, y: e.endY, kind: 'end' });
@@ -1979,7 +2150,7 @@
     // a small k even on a dense sheet — no more silent disable past 80 segs.
     var segs = segmentsInVp(vp);
     if (raw) {
-      var R = (SNAP_SCREEN / S.view.scale) * 1.5;
+      var R = screenModelDist(SNAP_SCREEN, vp) * 1.5;
       var near = [];
       for (var si = 0; si < segs.length; si++) { if (segNearPoint(segs[si], raw, R)) near.push(segs[si]); }
       for (var i = 0; i < near.length; i++) for (var j = i + 1; j < near.length; j++) {
@@ -1995,11 +2166,12 @@
     }
     return out;
   }
-  // Flatten drawable line segments in a viewport (for intersection snaps).
+  // Flatten drawable line segments (model coords, tag-free) for intersection
+  // snaps + trim/extend boundaries.
   function segmentsInVp(vp, excludeId) {
     var segs = [];
     (S.doc.entities || []).forEach(function (e) {
-      if (!e || e.viewport !== vp.id) return;
+      if (!e) return;
       if (excludeId && e.id === excludeId) return;
       if ((e.tool === 'line' || e.tool === 'refline' || e.tool === 'level') && e.startX != null) {
         segs.push({ a: { x: e.startX, y: e.startY }, b: { x: e.endX, y: e.endY } });
@@ -2048,7 +2220,7 @@
   var SNAP_RANK = { end: 6, intersect: 5, mid: 4, center: 4, quad: 4, node: 3, perp: 2, near: 1 };
   // Resolve the snapped sheet-point for a raw cursor sheet-point.
   function resolveSnap(raw, vp) {
-    var radiusSheet = SNAP_SCREEN / S.view.scale;
+    var radiusSheet = screenModelDist(SNAP_SCREEN, vp);   // snap radius in model inches
     var best = null, bestRank = -1, bestD = radiusSheet;
     var sn = S.snaps || {};
     function consider(c, d) {
@@ -2087,10 +2259,12 @@
       }
     }
     if (best) return best;
-    if (S.gridSnap && vp && vp.scale && vp.scale.pixelsPerInch) {
-      var step = gridStepPx(vp);   // grid spacing, sheet px (unit-aware: inch grid for fine scales)
-      var gx = Math.round((raw.x - vp.x) / step) * step + vp.x;
-      var gy = Math.round((raw.y - vp.y) / step) * step + vp.y;
+    if (S.gridSnap) {
+      // Model lattice anchored at the model origin — the drawn grids (sheet
+      // and model view) sit on this same lattice by construction.
+      var step = gridStepIn(vp);
+      var gx = Math.round(raw.x / step) * step;
+      var gy = Math.round(raw.y / step) * step;
       return { x: gx, y: gy, kind: 'grid' };
     }
     return { x: raw.x, y: raw.y, kind: null };
@@ -2123,23 +2297,22 @@
     var coords = S.overlay.querySelector('#p86-sb-coords');
     var snapEl = S.overlay.querySelector('#p86-sb-snap');
     if (coords) {
-      if (!vp) { coords.textContent = '(outside view)'; }
+      // v3: sheetPt IS model inches. Read out Y-up from the reference
+      // window's bottom-left (the hovered viewport in sheet space, the
+      // primary viewport in model space) so coordinates are positive,
+      // CAD-first-quadrant numbers.
+      var ovp = (S.space === 'model') ? ((S.doc.viewports || [])[0] || vp) : vp;
+      if (!ovp) { coords.textContent = 'x ' + fmtFeet(sheetPt.x) + '   y ' + fmtFeet(-sheetPt.y); }
       else {
-        // Model space reads out from the drawing origin, Y up (CAD first
-        // quadrant); paper space keeps the top-left viewport convention.
-        var rx, ry;
-        if (S.space === 'model') {
-          var org = modelOrigin(S.doc);
-          rx = realLen(sheetPt.x - org.x, vp); ry = realLen(org.y - sheetPt.y, vp);
-        } else {
-          rx = realLen(sheetPt.x - vp.x, vp); ry = realLen(sheetPt.y - vp.y, vp);
-        }
-        var txt = (rx != null) ? ('x ' + fmtFeet(rx) + '   y ' + fmtFeet(ry)) : '';
+        var oppi = vpPpiSafe(ovp), ow = vpWin(ovp);
+        var rx = sheetPt.x - (ow.cx - (ovp.w / 2) / oppi);
+        var ry = (ow.cy + (ovp.h / 2) / oppi) - sheetPt.y;
+        var txt = 'x ' + fmtFeet(rx) + '   y ' + fmtFeet(ry);
         if (S.draft && S.draft._anchor) {
           var a = S.draft._anchor;
-          var len = realLen(Math.hypot(sheetPt.x - a.x, sheetPt.y - a.y), vp);
+          var len = Math.hypot(sheetPt.x - a.x, sheetPt.y - a.y);
           var deg = Math.round(Math.atan2(-(sheetPt.y - a.y), sheetPt.x - a.x) * 180 / Math.PI);
-          if (len != null) txt += '    Δ ' + fmtFeet(len) + ' @ ' + deg + '°';
+          txt += '    Δ ' + fmtFeet(len) + ' @ ' + deg + '°';
         }
         coords.textContent = txt;
       }
@@ -2154,14 +2327,25 @@
     c.onmousedown = function (e) {
       e.preventDefault();
       var lp = localPt(e);
-      // Pan: middle button, space-pan, or pan tool
+      // Pan: middle button, space-pan, or pan tool. With a viewport ACTIVATED
+      // (MSPACE-style) the pan drives that viewport's WINDOW — the model slides
+      // inside the frame — instead of the paper camera.
       if (e.button === 1 || S.spaceDown || S.tool === 'pan') {
-        S.panning = { sx: lp.x, sy: lp.y, tx: S.view.tx, ty: S.view.ty };
+        // Resolve the ACTIVATED viewport by its own id — S.activeVpId follows
+        // the hover and must not decide MSPACE behavior.
+        var avp = (S.space === 'sheet' && S.vpActive) ? vpById(S.vpActive) : null;
+        if (avp) {
+          var w0 = vpWin(avp);
+          S.panning = { mode: 'window', vp: avp, sx: lp.x, sy: lp.y, cx0: w0.cx, cy0: w0.cy };
+        } else {
+          S.panning = { sx: lp.x, sy: lp.y, tx: S.view.tx, ty: S.view.ty };
+        }
         c.style.cursor = 'grabbing';
         return;
       }
-      var raw = toSheet(lp.x, lp.y);
-      var vp = vpAt(raw);
+      var pc = pointerCtx(lp, toolInProgress());
+      var raw = pc.m, vp = pc.vp;
+      if (vp && !toolInProgress()) S.activeVpId = vp.id;
       var pt = resolveSnap(raw, vp);
       if (S.draft && S.draft._anchor) pt = applyOrtho(S.draft._anchor, pt);
 
@@ -2194,8 +2378,16 @@
       var lp = localPt(e);
       S._offCanvas = false;
       if (S.panning) {
-        S.view.tx = S.panning.tx + (lp.x - S.panning.sx);
-        S.view.ty = S.panning.ty + (lp.y - S.panning.sy);
+        if (S.panning.mode === 'window') {
+          // Slide the activated viewport's window (model inches).
+          var pvp2 = S.panning.vp, pppi = vpPpiSafe(pvp2), pw = vpWin(pvp2);
+          pw.cx = S.panning.cx0 - (lp.x - S.panning.sx) / (S.view.scale * pppi);
+          pw.cy = S.panning.cy0 - (lp.y - S.panning.sy) / (S.view.scale * pppi);
+          markDirty();
+        } else {
+          S.view.tx = S.panning.tx + (lp.x - S.panning.sx);
+          S.view.ty = S.panning.ty + (lp.y - S.panning.sy);
+        }
         repaint();
         return;
       }
@@ -2204,8 +2396,8 @@
         var gent = selectedEntity();
         if (gent) {
           if (!S.gripDrag.pushed) { pushUndo(); S.gripDrag.pushed = true; }
-          var graw = toSheet(lp.x, lp.y);
-          var gvp = vpAt(graw);
+          var gpc = pointerCtx(lp, true);   // latched: one mapping per gesture
+          var graw = gpc.m, gvp = gpc.vp;
           var gpt = resolveSnap(graw, gvp);
           var ghs = entGripHandles(gent), gh = ghs[S.gripDrag.gi];
           if (gh) {
@@ -2228,7 +2420,7 @@
         var ents = selEntities();
         if (ents.length) {
           if (!S.moveDrag.pushed) { pushUndo(); S.moveDrag.pushed = true; }
-          var ds = toSheet(lp.x, lp.y);
+          var ds = pointerCtx(lp, true).m;   // latched: one mapping per gesture
           var ddx = ds.x - S.moveDrag.last.x, ddy = ds.y - S.moveDrag.last.y;
           ents.forEach(function (en) { translateEntity(en, ddx, ddy); });
           S.moveDrag.last = ds;
@@ -2239,13 +2431,17 @@
       }
       // Rubber-band box selection in progress.
       if (S.boxSel && (e.buttons & 1)) {
-        S.boxSel.last = toSheet(lp.x, lp.y);
+        S.boxSel.last = pointerCtx(lp, true).m;   // latched: one mapping per gesture
         S.hover = S.boxSel.last;              // keep the drawn crosshair on the pointer
         repaint();
         return;
       }
-      var raw = toSheet(lp.x, lp.y);
-      var vp = vpAt(raw);
+      var mpc = pointerCtx(lp, toolInProgress());
+      var raw = mpc.m, vp = mpc.vp;
+      // Hover-follow: the active mapping tracks the viewport under the cursor
+      // (crosshair/snap/preview overlays map through activeVp), EXCEPT while a
+      // tool is mid-gesture — then the mapping stays latched.
+      if (vp && S.space === 'sheet' && !toolInProgress()) S.activeVpId = vp.id;
       var pt = resolveSnap(raw, vp);
       if (S.draft && S.draft._anchor) pt = applyOrtho(S.draft._anchor, pt);
       S.hover = pt; S.snap = pt; S.hoverVp = vp;
@@ -2273,7 +2469,7 @@
         var b = S.boxSel; S.boxSel = null;
         var x0 = Math.min(b.start.x, b.last.x), x1 = Math.max(b.start.x, b.last.x);
         var y0 = Math.min(b.start.y, b.last.y), y1 = Math.max(b.start.y, b.last.y);
-        var click = ((x1 - x0) < 4 / S.view.scale && (y1 - y0) < 4 / S.view.scale);
+        var click = ((x1 - x0) < screenModelDist(4) && (y1 - y0) < screenModelDist(4));
         if (click) {
           if (!b.shift) { setSelection([]); buildLayers(); repaint(); }     // click empty = clear
         } else {
@@ -2286,15 +2482,51 @@
       }
       S.moveDrag = null; S.gripDrag = null;
     };
-    c.ondblclick = function () {
-      if ((S.tool === 'polyline' || S.tool === 'hatch' || S.tool === 'spline') && S.draft) commitPolyline();
+    c.ondblclick = function (e) {
+      if ((S.tool === 'polyline' || S.tool === 'hatch' || S.tool === 'spline') && S.draft) { commitPolyline(); return; }
+      // AutoCAD MSPACE: double-click inside a viewport activates it — pan/zoom
+      // then move the model within the frame. Double-click outside deactivates.
+      if (S.space !== 'sheet') return;
+      var plane = toSheet(localPt(e).x, localPt(e).y);
+      var hit = null;
+      (S.doc.viewports || []).forEach(function (v) {
+        if (plane.x >= v.x && plane.x <= v.x + v.w && plane.y >= v.y && plane.y <= v.y + v.h) hit = v;
+      });
+      if (hit && S.vpActive !== hit.id) {
+        S.vpActive = hit.id; S.activeVpId = hit.id;
+        setHint('Viewport "' + (hit.label || hit.id) + '" activated — wheel zooms and Space-drag pans the MODEL inside the frame. Double-click outside (or Esc) to release.');
+      } else {
+        S.vpActive = null;
+        setHint('Viewport released — pan/zoom move the paper again.');
+      }
+      repaint();
     };
     c.oncontextmenu = function (e) { e.preventDefault(); showContextMenu(e); };
     c.onwheel = function (e) {
       e.preventDefault();
       var lp = localPt(e);
-      var before = toSheet(lp.x, lp.y);
       var factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+      // Activated viewport → wheel zooms the MODEL inside the frame (changes
+      // the viewport's real scale), anchored on the model point under the
+      // cursor. Otherwise the paper/model camera zooms as before.
+      var avp = (S.space === 'sheet' && S.vpActive) ? vpById(S.vpActive) : null;
+      if (avp) {
+        var plane = toSheet(lp.x, lp.y);
+        if (plane.x >= avp.x && plane.x <= avp.x + avp.w && plane.y >= avp.y && plane.y <= avp.y + avp.h) {
+          var m = pToM(plane, avp);
+          var ppi0 = vpPpiSafe(avp);
+          var ppi1 = Math.max(0.05, Math.min(600, ppi0 * factor));
+          if (!avp.scale) avp.scale = { unit: 'ft' };
+          avp.scale.pixelsPerInch = ppi1;
+          avp.scale.label = vpScaleLabel(ppi1);
+          var w2 = vpWin(avp);
+          w2.cx = m.x - (plane.x - avp.x - avp.w / 2) / ppi1;
+          w2.cy = m.y - (plane.y - avp.y - avp.h / 2) / ppi1;
+          markDirty(); buildLayers(); refreshStatusBar(); repaint();
+          return;
+        }
+      }
+      var before = toSheet(lp.x, lp.y);
       S.view.scale = Math.max(0.02, Math.min(8, S.view.scale * factor));
       // keep cursor anchored
       S.view.tx = lp.x - before.x * S.view.scale;
@@ -2313,6 +2545,7 @@
         // the Select tool (CAD-style). Never closes the editor — that's the
         // Close button's job.
         S._filletA = null; S._chamferA = null; S._stretch = null; S._dimcont = null; S.inq = null; S.draft = null; S.boxSel = null; S._calib = null; S._poly = null; hideDyn();
+        S.vpActive = null;                    // release any activated viewport
         setSelection([]);
         if (S.tool !== 'select') setTool('select'); else { buildLayers(); repaint(); }
       }
@@ -2459,7 +2692,7 @@
     // Measure / inquiry — accumulate points; readout drawn in repaint. Never
     // becomes a printed entity. Enter/Esc clears.
     if (t === 'inquire') {
-      if (!S.inq) S.inq = { pts: [], vp: vp || vpAt(pt) };
+      if (!S.inq) S.inq = { pts: [], vp: vp || activeVp() };
       S.inq.pts.push({ x: pt.x, y: pt.y });
       repaint(); return;
     }
@@ -2470,16 +2703,17 @@
     // typed elevation. The first level in a viewport sets the datum; later
     // ones snap to the height implied by that datum + the viewport scale.
     if (t === 'level') {
-      var vpL = vp || vpAt(pt) || (S.doc.viewports[0] || {});
+      var vpL = vp || activeVp();
       var lv = newEntity('level', vpL);
-      var pad = 14;
-      lv.startX = (vpL.x || 0) + pad; lv.endX = (vpL.x || 0) + (vpL.w || 200) - pad;
+      // Span the viewport's model window (with a 6" margin each side).
+      var lppi = vpPpiSafe(vpL), lwn = vpWin(vpL);
+      lv.startX = lwn.cx - (vpL.w / 2) / lppi + 6; lv.endX = lwn.cx + (vpL.w / 2) / lppi - 6;
       promptText('Elevation (e.g. 10\', 0, 8\' 6")', function (txt) {
         if (txt == null) return;
         var p = prims().parseMeasurement ? prims().parseMeasurement(txt, 'ft') : null;
         lv.elevIn = p ? p.inches : ((parseFloat(txt) || 0) * 12);
         var dat = datumForViewport(vpL.id), yy = pt.y;
-        if (dat) { yy = dat.y - (lv.elevIn - dat.elevIn) * ppiOf(lv); }
+        if (dat) { yy = dat.y - (lv.elevIn - dat.elevIn); }   // model inches
         lv.startY = yy; lv.endY = yy;
         commitEntity(lv); repaint();
       });
@@ -2568,7 +2802,7 @@
       if (!S._poly) { S._poly = { cx: pt.x, cy: pt.y, vp: vp }; setHint('Polygon: click a vertex to set size + orientation.'); repaint(); return; }
       var pc = S._poly; S._poly = null;
       var R = Math.hypot(pt.x - pc.cx, pt.y - pc.cy);
-      if (R < 1) { repaint(); return; }
+      if (R < screenModelDist(2)) { repaint(); return; }
       var a0 = Math.atan2(pt.y - pc.cy, pt.x - pc.cx);
       promptText('Number of sides (3–24)', function (txt) {
         if (txt == null) { repaint(); return; }
@@ -2613,7 +2847,10 @@
       var cx = d.startX, cy = d.startY;
       d.startX = cx - r; d.startY = cy - r; d.endX = cx + r; d.endY = cy + r;
     } else { d.endX = pt.x; d.endY = pt.y; }
-    if (Math.abs(d.endX - d.startX) < 0.5 && Math.abs(d.endY - d.startY) < 0.5) { S.draft = null; hideDyn(); return; }
+    // Degenerate-shape guard: a double-click, not a real drag — measured in
+    // SCREEN px so fine scales (1:1, 4:1) can still commit sub-inch geometry.
+    var dgen = screenModelDist(2);
+    if (Math.abs(d.endX - d.startX) < dgen && Math.abs(d.endY - d.startY) < dgen) { S.draft = null; hideDyn(); return; }
     delete d._anchor; delete d._circle;
     if (d.tool === 'revcloud') {
       // Convert the drawn bbox into a scalloped closed polyline (reuses
@@ -2701,11 +2938,10 @@
   function updateDynLive() {
     var d = dynEl(); if (!d || !dynApplies()) { hideDyn(); return; }
     if (d.style.display === 'none') showDyn();
-    var a = S.draft._anchor, vp = vpAt(a) || S.hoverVp;
+    var a = S.draft._anchor;
     var h = S.hover ? applyOrtho(a, S.hover) : a;
-    var ppi = (vp && vp.scale && vp.scale.pixelsPerInch) ? vp.scale.pixelsPerInch : 1;
     var li = d.querySelector('[data-dyn-len]'), ai = d.querySelector('[data-dyn-ang]');
-    if (li) li.placeholder = fmtFeet(Math.hypot(h.x - a.x, h.y - a.y) / ppi);
+    if (li) li.placeholder = fmtFeet(Math.hypot(h.x - a.x, h.y - a.y));   // model units are inches
     if (ai) ai.placeholder = Math.round(Math.atan2(-(h.y - a.y), h.x - a.x) * 180 / Math.PI) + '°';
     positionDyn();
   }
@@ -2716,23 +2952,21 @@
     // Strip any stray comma (e.g. a fast-typed "10,45" before the field swap fired).
     var lenStr = (d.querySelector('[data-dyn-len]').value || '').replace(/,/g, '').trim();
     var angStr = (d.querySelector('[data-dyn-ang]').value || '').replace(/,/g, '').trim();
-    var vp = vpAt(a) || S.hoverVp || (S.doc.viewports && S.doc.viewports[0]);
-    var ppi = (vp && vp.scale && vp.scale.pixelsPerInch) ? vp.scale.pixelsPerInch : 1;
     // Direction: typed angle wins; else current (ortho-aware) cursor heading.
     var target = S.hover ? applyOrtho(a, S.hover) : { x: a.x + 1, y: a.y };
     var dirDeg = Math.atan2(-(target.y - a.y), target.x - a.x) * 180 / Math.PI;
     if (angStr !== '' && isFinite(parseFloat(angStr))) dirDeg = parseFloat(angStr);
-    // Length: typed (parsed) wins; else live cursor distance.
+    // Length in model inches: typed (parsed) wins; else live cursor distance.
     var lenIn;
     if (lenStr !== '') {
       var p = prims().parseMeasurement ? prims().parseMeasurement(lenStr, 'ft') : null;
       lenIn = p ? p.inches : (isFinite(parseFloat(lenStr)) ? parseFloat(lenStr) * 12 : null);
       if (lenIn == null) return;   // unparseable — leave the draft open
     } else {
-      lenIn = Math.hypot(target.x - a.x, target.y - a.y) / ppi;
+      lenIn = Math.hypot(target.x - a.x, target.y - a.y);
     }
-    var lenPx = lenIn * ppi, rad = dirDeg * Math.PI / 180;
-    var ex = a.x + lenPx * Math.cos(rad), ey = a.y - lenPx * Math.sin(rad);
+    var rad = dirDeg * Math.PI / 180;
+    var ex = a.x + lenIn * Math.cos(rad), ey = a.y - lenIn * Math.sin(rad);
     if (dr.tool === 'polyline') {
       dr.points.push({ x: ex, y: ey });
       dr._anchor = { x: ex, y: ey };
@@ -2771,16 +3005,18 @@
   function finalizeLeader(pt, vp) {
     var d = S.draft;
     d.endX = pt.x; d.endY = pt.y;
-    if (Math.abs(d.endX - d.startX) < 0.5 && Math.abs(d.endY - d.startY) < 0.5) { S.draft = null; return; }
+    var lgen = screenModelDist(2);
+    if (Math.abs(d.endX - d.startX) < lgen && Math.abs(d.endY - d.startY) < lgen) { S.draft = null; return; }
     delete d._anchor;
     pushUndo();
     S.doc.entities.push(d);          // the arrow
     S.draft = null;
-    var ex = pt.x, ey = pt.y, ppi = (vp && vp.scale ? vp.scale.pixelsPerInch : 2.5);
+    var ex = pt.x, ey = pt.y, ppi = vpPpiSafe(vp || activeVp());
     promptText('Leader text', function (txt) {
       if (txt) {
         var te = newEntity('text', vp);
-        te.x = ex + 6; te.y = ey - ppi * 9;
+        // Offsets in model inches; fontPx stays a PAPER size (annotative).
+        te.x = ex + 2; te.y = ey - 9;
         te.text = txt; te.fontPx = Math.round(ppi * 9);
         S.doc.entities.push(te); repaint();
       }
@@ -2802,7 +3038,7 @@
       var lyr = layerById(S.doc, e.layer);          // skip hidden + locked layers
       if (lyr && (lyr.visible === false || lyr.locked)) continue;
       var bb = entBBox(e);
-      var slop = 8 / S.view.scale;
+      var slop = screenModelDist(8);
       if (bb && raw.x >= bb.x - slop && raw.x <= bb.x + bb.w + slop && raw.y >= bb.y - slop && raw.y <= bb.y + bb.h + slop) return e.id;
     }
     return null;
@@ -2850,8 +3086,12 @@
       return { x: mnx, y: mny, w: Math.max.apply(null, xs) - mnx, h: Math.max.apply(null, ys) - mny };
     }
     if (e.x != null) {
-      if (e.tool === 'symbol') { var hs = (e.size || 40) / 2; return { x: e.x - hs, y: e.y - hs, w: hs * 2, h: hs * 2 }; }
-      var fp = e.fontPx || 24; return { x: e.x, y: e.y, w: Math.max(8, (e.text || '').length * fp * 0.55), h: fp };
+      // Symbol size + text fontPx are PAPER px (annotative) — convert to the
+      // model-inch extents the bbox consumers (hit test, window select,
+      // rotate/mirror pivots, zoom extents) now operate in.
+      var bppi = ppiOf(e);
+      if (e.tool === 'symbol') { var hs = (e.size || 40) / 2 / bppi; return { x: e.x - hs, y: e.y - hs, w: hs * 2, h: hs * 2 }; }
+      var fp = (e.fontPx || 24) / bppi; return { x: e.x, y: e.y, w: Math.max(2, (e.text || '').length * fp * 0.55), h: fp };
     }
     return null;
   }
@@ -2904,12 +3144,40 @@
   }
 
   // ── History (undo / redo) ───────────────────────────────────────
-  function snapshot() { return JSON.stringify({ entities: S.doc.entities, layers: S.doc.layers }); }
+  // Snapshots also carry the underlay rect + every viewport's window/scale:
+  // v3 calibrate (and viewport zoom via undo-tracked ops) mutate those
+  // together with the geometry — restoring only entities would desync the
+  // drawing from the traced plan.
+  function snapshot() {
+    var vps = {};
+    (S.doc.sheets || []).forEach(function (sh) {
+      (sh.viewports || []).forEach(function (v) {
+        vps[v.id] = { window: v.window ? { cx: v.window.cx, cy: v.window.cy } : null, scale: v.scale ? JSON.parse(JSON.stringify(v.scale)) : null };
+      });
+    });
+    return JSON.stringify({ entities: S.doc.entities, layers: S.doc.layers, underlay: S.doc.underlay || null, vps: vps });
+  }
   function pushUndo() { S._undo.push(snapshot()); if (S._undo.length > 60) S._undo.shift(); S._redo.length = 0; markDirty(); }
   function commitEntity(e) { pushUndo(); S.doc.entities.push(e); }
   function restoreSnap(json) {
     var o = JSON.parse(json);
     S.doc.entities = o.entities; S.doc.layers = o.layers;
+    if (o.underlay !== undefined) {
+      // Keep the loaded bitmap; only the placement rect is part of history.
+      if (o.underlay && S.doc.underlay) {
+        S.doc.underlay.x = o.underlay.x; S.doc.underlay.y = o.underlay.y;
+        S.doc.underlay.w = o.underlay.w; S.doc.underlay.h = o.underlay.h;
+      } else if (o.underlay) S.doc.underlay = o.underlay;
+    }
+    if (o.vps) {
+      (S.doc.sheets || []).forEach(function (sh) {
+        (sh.viewports || []).forEach(function (v) {
+          var sv = o.vps[v.id]; if (!sv) return;
+          if (sv.window) v.window = { cx: sv.window.cx, cy: sv.window.cy };
+          if (sv.scale) v.scale = sv.scale;
+        });
+      });
+    }
     // Re-point the v2 aliases — model.entities is what toV2 rebuilds from on
     // the next load, so a broken alias here means post-undo work silently
     // reverts on reload.
@@ -2934,7 +3202,9 @@
       '<input data-' + attr + ' value="' + esc(val) + '" style="width:100%;box-sizing:border-box;background:#1a1a2e;color:#fff;border:1px solid #444;border-radius:5px;padding:3px 5px;font-size:11px;" /></label>';
   }
   function propGeomHtml(e, ppi) {
-    if (!e || !ppi) return '';
+    // v3: geometry IS model inches — ppi only converts paper-anchored sizes
+    // (text height) to real units.
+    if (!e) return '';
     if (e.tool === 'level') {
       return '<div style="margin-top:7px;">' + propLbl('Elevation', 'prop-elev', fmtLen(e.elevIn || 0), false) + '</div>';
     }
@@ -2943,16 +3213,16 @@
     }
     if (e.tool === 'line' || e.tool === 'refline') {
       var dx = e.endX - e.startX, dy = e.endY - e.startY;
-      return '<div style="display:flex;gap:8px;margin-top:7px;">' + propLbl('Length', 'prop-len', fmtLen(Math.hypot(dx, dy) / ppi), true) + propLbl('Angle°', 'prop-ang', (Math.atan2(-dy, dx) * 180 / Math.PI).toFixed(1), true) + '</div>';
+      return '<div style="display:flex;gap:8px;margin-top:7px;">' + propLbl('Length', 'prop-len', fmtLen(Math.hypot(dx, dy)), true) + propLbl('Angle°', 'prop-ang', (Math.atan2(-dy, dx) * 180 / Math.PI).toFixed(1), true) + '</div>';
     }
     if (e.tool === 'rect') {
-      return '<div style="display:flex;gap:8px;margin-top:7px;">' + propLbl('Width', 'prop-w', fmtLen(Math.abs(e.endX - e.startX) / ppi), true) + propLbl('Height', 'prop-h', fmtLen(Math.abs(e.endY - e.startY) / ppi), true) + '</div>';
+      return '<div style="display:flex;gap:8px;margin-top:7px;">' + propLbl('Width', 'prop-w', fmtLen(Math.abs(e.endX - e.startX)), true) + propLbl('Height', 'prop-h', fmtLen(Math.abs(e.endY - e.startY)), true) + '</div>';
     }
     if (e.tool === 'ellipse') {
-      return '<div style="margin-top:7px;">' + propLbl('Radius', 'prop-r', fmtLen(Math.abs(e.endX - e.startX) / 2 / ppi), false) + '</div>';
+      return '<div style="margin-top:7px;">' + propLbl('Radius', 'prop-r', fmtLen(Math.abs(e.endX - e.startX) / 2), false) + '</div>';
     }
     if (e.tool === 'text') {
-      return '<div style="margin-top:7px;">' + propLbl('Text', 'prop-text', e.text || '', true) + '<div style="margin-top:6px;">' + propLbl('Text height', 'prop-th', fmtLen((e.fontPx || 24) / ppi), false) + '</div></div>';
+      return '<div style="margin-top:7px;">' + propLbl('Text', 'prop-text', e.text || '', true) + '<div style="margin-top:6px;">' + propLbl('Text height', 'prop-th', fmtLen((e.fontPx || 24) / (ppi || 1)), false) + '</div></div>';
     }
     return '';
   }
@@ -2996,7 +3266,7 @@
     var ents = selEntities(); if (!ents.length) return;
     pushUndo();
     var newIds = [];
-    ents.forEach(function (e) { var copy = JSON.parse(JSON.stringify(e)); copy.id = uid(copy.tool); translateEntity(copy, 14, 14); S.doc.entities.push(copy); newIds.push(copy.id); });
+    ents.forEach(function (e) { var copy = JSON.parse(JSON.stringify(e)); copy.id = uid(copy.tool); translateEntity(copy, 6, 6); S.doc.entities.push(copy); newIds.push(copy.id); });   // 6" model offset
     setSelection(newIds); buildLayers(); repaint();
   }
   // Uniform scale of the selection about its centre by a typed factor (Tier 4).
@@ -3044,7 +3314,7 @@
   function joinSel() {
     var lines = selEntities().filter(function (e) { return e.tool === 'line' && e.startX != null; });
     if (lines.length < 2) { setHint('Join: select 2+ connected lines.'); return; }
-    var tol = 2.5 / S.view.scale, pool = lines.slice();
+    var tol = screenModelDist(2.5), pool = lines.slice();
     var path = [{ x: pool[0].startX, y: pool[0].startY }, { x: pool[0].endX, y: pool[0].endY }];
     pool.splice(0, 1);
     var progress = true;
@@ -3213,7 +3483,7 @@
     var e = selEntities()[0]; if (!e) return;
     rows = Math.max(1, Math.min(40, rows | 0)); cols = Math.max(1, Math.min(40, cols | 0));
     if (rows * cols <= 1) return;
-    var ppi = ppiOf(e), dx = (colFt || 0) * 12 * ppi, dy = (rowFt || 0) * 12 * ppi;
+    var dx = (colFt || 0) * 12, dy = (rowFt || 0) * 12;   // model inches
     pushUndo();
     var last = e.id;
     for (var r = 0; r < rows; r++) for (var c = 0; c < cols; c++) {
@@ -3227,7 +3497,7 @@
   // Offset: a parallel copy of the selection at a real-world distance.
   function offsetOp(distFt, side) {
     var e = selEntities()[0]; if (!e) return;
-    var ppi = ppiOf(e), d = (distFt || 0) * 12 * ppi * (side < 0 ? -1 : 1);
+    var d = (distFt || 0) * 12 * (side < 0 ? -1 : 1);   // model inches
     if (!d) return;
     var copy = JSON.parse(JSON.stringify(e)); copy.id = uid(copy.tool);
     if (e.tool === 'line' && e.startX != null) {
@@ -3345,10 +3615,9 @@
   }
   // Nearest 'line' entity to a sheet point within tolerance → {entity, t}.
   function pickLineAt(pt, vp) {
-    var tol = 10 / S.view.scale, best = null, bestD = tol;
+    var tol = screenModelDist(10, vp), best = null, bestD = tol;   // model inches
     (S.doc.entities || []).forEach(function (e) {
       if (e.tool !== 'line' || e.startX == null) return;
-      if (vp && e.viewport !== vp.id) return;
       var ly = layerById(S.doc, e.layer);
       if (ly && (ly.visible === false || ly.locked)) return;
       var info = ptSegInfo(pt.x, pt.y, e.startX, e.startY, e.endX, e.endY);
@@ -3377,9 +3646,8 @@
   }
   // Nearest trim target near a point — a line OR a polyline segment.
   function pickTrimTarget(pt, vp) {
-    var tol = 10 / S.view.scale, best = null, bestD = tol;
+    var tol = screenModelDist(10, vp), best = null, bestD = tol;   // model inches
     (S.doc.entities || []).forEach(function (e) {
-      if (vp && e.viewport !== vp.id) return;
       var ly = layerById(S.doc, e.layer); if (ly && (ly.visible === false || ly.locked)) return;
       if ((e.tool === 'line' || e.tool === 'refline') && e.startX != null) {
         var i0 = ptSegInfo(pt.x, pt.y, e.startX, e.startY, e.endX, e.endY);
@@ -3581,7 +3849,7 @@
   function applyChamfer(A, B, ca, cb, dFt) {
     var I = lineLineIntersect(A.startX, A.startY, A.endX, A.endY, B.startX, B.startY, B.endX, B.endY);
     if (!I) { alert('Those lines are parallel — nothing to chamfer.'); return; }
-    var d = (dFt || 0) * 12 * ppiOf(A);
+    var d = (dFt || 0) * 12;   // model inches
     function dirToward(L, click) {
       var d1 = Math.hypot(click.x - L.startX, click.y - L.startY), d2 = Math.hypot(click.x - L.endX, click.y - L.endY);
       var end = (d1 < d2) ? { x: L.startX, y: L.startY } : { x: L.endX, y: L.endY };
@@ -3612,7 +3880,7 @@
   function applyFillet(A, B, ca, cb, rFt) {
     var I = lineLineIntersect(A.startX, A.startY, A.endX, A.endY, B.startX, B.startY, B.endX, B.endY);
     if (!I) { alert('Those lines are parallel — nothing to fillet.'); return; }
-    var r = (rFt || 0) * 12 * ppiOf(A);
+    var r = (rFt || 0) * 12;   // model inches
     function dirToward(L, click) {
       var d1 = Math.hypot(click.x - L.startX, click.y - L.startY), d2 = Math.hypot(click.x - L.endX, click.y - L.endY);
       var end = (d1 < d2) ? { x: L.startX, y: L.startY } : { x: L.endX, y: L.endY };
@@ -3655,11 +3923,15 @@
     for (var i = 0; i < vps.length; i++) { if (vps[i].id === u.viewport) { vp = vps[i]; break; } }
     if (!vp) vp = vps[0];
     if (!vp) return;
-    // Fit the plan inside its viewport frame, preserving aspect (letterbox).
-    var fit = Math.min(vp.w / u.natW, vp.h / u.natH);
+    // v3: the underlay lives in MODEL INCHES. Letterbox the plan into the
+    // viewport's model WINDOW (rect ÷ ppi, centered on the window) so a fresh
+    // import fills the frame exactly like it used to on paper.
+    var ppi = vpPpiSafe(vp), w = vpWin(vp);
+    var winW = vp.w / ppi, winH = vp.h / ppi;
+    var fit = Math.min(winW / u.natW, winH / u.natH);
     u.w = u.natW * fit; u.h = u.natH * fit;
-    u.x = vp.x + (vp.w - u.w) / 2;
-    u.y = vp.y + (vp.h - u.h) / 2;
+    u.x = w.cx - u.w / 2;
+    u.y = w.cy - u.h / 2;
   }
   function ensureUnderlay() {
     var u = S && S.doc && S.doc.underlay;
@@ -3708,17 +3980,18 @@
         .catch(fail);
     }
   }
-  // Drawn inside renderSheet's per-viewport clip, behind entities, under
-  // the same pan/zoom transform — so it tracks the drawing 1:1.
-  function drawUnderlay(ctx, vp) {
+  // Underlay lives in MODEL space (it's the traced plan) — mapped onto the
+  // target plane like entities, so every viewport window that covers it shows
+  // it, and the model view shows it true-size behind the geometry.
+  function drawUnderlayMapped(ctx, mapFn) {
     var u = S && S.doc && S.doc.underlay;
     if (!u || !S._underlayBmp || u.x == null) return;
-    var owner = u.viewport || (((S.doc.viewports || [])[0]) || {}).id;
-    if (owner !== vp.id) return;
+    var p0 = mapFn({ x: u.x, y: u.y });
+    var p1 = mapFn({ x: u.x + u.w, y: u.y + u.h });
     ctx.save();
     var op = (u.opacity == null) ? 0.6 : u.opacity;
     ctx.globalAlpha = Math.max(0.05, Math.min(1, op));
-    try { ctx.drawImage(S._underlayBmp, u.x, u.y, u.w, u.h); } catch (e) {}
+    try { ctx.drawImage(S._underlayBmp, p0.x, p0.y, p1.x - p0.x, p1.y - p0.y); } catch (e) {}
     ctx.restore();
   }
   function importUnderlay() {
@@ -3765,7 +4038,7 @@
   // Calibrate: two clicks a known distance apart → type the real length →
   // back-solve this viewport's pixelsPerInch so every measure/dim/area is true.
   function calibrateClick(pt, vp) {
-    vp = vp || vpAt(pt) || (S.doc.viewports || [])[0];
+    vp = vp || activeVp();
     if (!vp) return;
     if (!S._calib || S._calib.vpId !== vp.id) S._calib = { vpId: vp.id, pts: [] };
     S._calib.pts.push({ x: pt.x, y: pt.y });
@@ -3779,14 +4052,36 @@
       if (txt == null) { repaint(); return; }
       var inches = parseLenIn(txt);
       if (!inches || inches <= 0) { alert('Could not read that distance. Try e.g. 20\' or 24\' 6".'); return; }
+      // v3: geometry IS model inches, so calibration means the traced content
+      // is the wrong SIZE (drawn over an arbitrary-scale underlay). Scale the
+      // content inside this viewport's window + the underlay about the first
+      // picked point so the picked span measures the typed length; the window
+      // + ppi adjust inversely so the PAPER view doesn't move a pixel.
+      var r = inches / pxDist;
+      if (!isFinite(r) || r <= 0) return;
+      pushUndo();
+      var ppi = vpPpiSafe(vp), w = vpWin(vp);
+      var wx0 = w.cx - (vp.w / 2) / ppi, wx1 = w.cx + (vp.w / 2) / ppi;
+      var wy0 = w.cy - (vp.h / 2) / ppi, wy1 = w.cy + (vp.h / 2) / ppi;
+      function scalePt(p) { return { x: a.x + (p.x - a.x) * r, y: a.y + (p.y - a.y) * r }; }
+      (S.doc.entities || []).forEach(function (e2) {
+        if (!e2) return;
+        var bb = entBBox(e2); if (!bb) return;
+        var ccx = bb.x + bb.w / 2, ccy = bb.y + bb.h / 2;
+        if (ccx < wx0 || ccx > wx1 || ccy < wy0 || ccy > wy1) return;
+        transformEntity(e2, scalePt);
+      });
+      var u = S.doc.underlay;
+      if (u && u.x != null) { var up = scalePt({ x: u.x, y: u.y }); u.x = up.x; u.y = up.y; u.w *= r; u.h *= r; }
+      w.cx = a.x + (w.cx - a.x) * r; w.cy = a.y + (w.cy - a.y) * r;
       if (!vp.scale) vp.scale = { unit: 'ft' };
-      vp.scale.pixelsPerInch = pxDist / inches;
+      vp.scale.pixelsPerInch = ppi / r;
       vp.scale.calibrated = true;
       vp.scale.label = 'Calibrated · ' + fmtLen(inches) + ' ref';
       markDirty();
       if (typeof setTool === 'function') setTool('select');
-      repaint(); refreshStatusBar();
-      setHint('Scale calibrated — measurements are now true to the plan.');
+      repaint(); refreshStatusBar(); buildLayers();
+      setHint('Scale calibrated — the drawing is now true size (measurements + DXF are real units).');
     });
   }
 
@@ -3872,6 +4167,24 @@
       viewports: [{ id: uid('VP'), label: 'PLAN', x: 0, y: 0, w: 100, h: 100,
         scale: { pixelsPerInch: DPI * pre.f, unit: pre.unit || 'ft', label: pre.label } }]
     };
+    // Give the new sheet's viewport a FRESH model region (right of everything
+    // drawn or windowed so far) — sheets share one model but a new page
+    // starts with clean ground, laid out side-by-side CAD-style.
+    var maxX = 0;
+    (S.doc.sheets || []).forEach(function (sh2) {
+      (sh2.viewports || []).forEach(function (v) {
+        var p2 = vpPpiSafe(v), w2 = vpWin(v);
+        maxX = Math.max(maxX, w2.cx + (v.w / 2) / p2);
+      });
+    });
+    (S.doc.entities || []).forEach(function (e2) { var bb = e2 && entBBox(e2); if (bb) maxX = Math.max(maxX, bb.x + bb.w); });
+    var nvp = sheet.viewports[0], nppi = vpPpiSafe(nvp);
+    // Region sized from the final rect (layoutViewports runs after
+    // setActiveSheet) — approximate with the current sheet's drawable area.
+    var s2 = S.doc.sheet || sheet;
+    var estW = Math.max(200, (s2.w || 2000) - (s2.margin || 60) * 2 - 32) / nppi;
+    var estH = Math.max(150, (s2.h || 1500) - (s2.margin || 60) * 2 - Math.round(3 * DPI) - 32) / nppi;
+    nvp.window = { cx: maxX + estW * 0.25 + estW / 2, cy: estH / 2 };
     sheets.push(sheet);
     setActiveSheet(sheet.id);
     layoutViewports(S.doc);                              // position the new sheet's viewport within the page
@@ -3891,13 +4204,19 @@
     ctx.scale(S.view.scale, S.view.scale);
     renderSheet(ctx, S.doc, {
       paperShadow: true, grid: S.gridSnap, viewScale: S.view.scale, editor: true, modelMode: modelMode,
-      // World rect currently on screen — drawModelField clips its infinite
+      activeVpId: (!modelMode && S.vpActive) ? S.vpActive : null,
+      // Plane rect currently on screen — drawModelField clips its infinite
       // grid/axes to this so pan/zoom never runs off the lattice.
       visible: {
         x0: -S.view.tx / S.view.scale, y0: -S.view.ty / S.view.scale,
         x1: (vw - S.view.tx) / S.view.scale, y1: (vh - S.view.ty) / S.view.scale
       }
     });
+    // Overlays live in MODEL coords; the canvas is under the PLANE transform.
+    // pm() maps model → plane through the active context (virtual plane in
+    // model space, the active viewport's window in sheet space).
+    var ovVp = activeVp();
+    function pm(pt) { return modelMode ? mToV(pt) : mToP(pt, ovVp); }
     // draft preview
     if (S.draft) {
       var d = S.draft;
@@ -3906,16 +4225,17 @@
       ctx.lineWidth = (d.lineWidth || 3);
       if (d.tool === 'arc') {
         var pp = d.points.slice(); if (S.hover) pp.push(S.hover);
-        var sp = (pp.length >= 3) ? arcSamples(pp, 40) : pp;
+        var sp = ((pp.length >= 3) ? arcSamples(pp, 40) : pp).map(pm);
         if (sp.length) {
           ctx.beginPath(); ctx.moveTo(sp[0].x, sp[0].y);
           for (var ai = 1; ai < sp.length; ai++) ctx.lineTo(sp[ai].x, sp[ai].y);
           ctx.stroke();
         }
       } else if (d.points) {
-        ctx.beginPath(); ctx.moveTo(d.points[0].x, d.points[0].y);
-        for (var i = 1; i < d.points.length; i++) ctx.lineTo(d.points[i].x, d.points[i].y);
-        if (S.hover) ctx.lineTo(S.hover.x, S.hover.y);
+        var dp = d.points.map(pm);
+        ctx.beginPath(); ctx.moveTo(dp[0].x, dp[0].y);
+        for (var i = 1; i < dp.length; i++) ctx.lineTo(dp[i].x, dp[i].y);
+        if (S.hover) { var hp = pm(S.hover); ctx.lineTo(hp.x, hp.y); }
         ctx.stroke();
       } else if (S.hover) {
         var prev = { tool: d._circle ? 'ellipse' : (d.tool === 'refline' ? 'line' : (d.tool === 'revcloud' ? 'rect' : d.tool)), color: '#4f8cff', lineWidth: d.lineWidth || 3 };
@@ -3923,27 +4243,23 @@
           var r = Math.hypot(S.hover.x - d.startX, S.hover.y - d.startY);
           prev.startX = d.startX - r; prev.startY = d.startY - r; prev.endX = d.startX + r; prev.endY = d.startY + r;
         } else { prev.startX = d.startX; prev.startY = d.startY; prev.endX = S.hover.x; prev.endY = S.hover.y; }
-        // Live dimension label on the dim-tool preview.
+        // Live dimension label — model units ARE inches in v3.
         if (d.tool === 'measure') {
-          var pvp = vpAt(d._anchor || { x: d.startX, y: d.startY });
-          if (pvp && pvp.scale && pvp.scale.pixelsPerInch) {
-            var ppx = Math.hypot(prev.endX - prev.startX, prev.endY - prev.startY);
-            prev.measureInches = ppx / pvp.scale.pixelsPerInch;
-            prev.measureLabel = fmtLen(prev.measureInches);
-          }
+          prev.measureInches = Math.hypot(prev.endX - prev.startX, prev.endY - prev.startY);
+          prev.measureLabel = fmtLen(prev.measureInches);
         }
-        if (prims().drawStroke) { try { prims().drawStroke(ctx, prev); } catch (e) {} }
+        if (prims().drawStroke) { try { prims().drawStroke(ctx, entOnPlane(prev, pm)); } catch (e) {} }
       }
       ctx.restore();
     }
     // calibrate in progress — marker on the first point + rubber line to cursor
     if (S._calib && S._calib.pts && S._calib.pts.length) {
-      var ca0 = S._calib.pts[0];
+      var ca0 = pm(S._calib.pts[0]);
       ctx.save();
       ctx.strokeStyle = '#f59e0b'; ctx.fillStyle = '#f59e0b';
       ctx.lineWidth = 1.5 / S.view.scale;
       ctx.beginPath(); ctx.arc(ca0.x, ca0.y, 4 / S.view.scale, 0, Math.PI * 2); ctx.fill();
-      if (S.hover) { ctx.beginPath(); ctx.moveTo(ca0.x, ca0.y); ctx.lineTo(S.hover.x, S.hover.y); ctx.stroke(); }
+      if (S.hover) { var chv = pm(S.hover); ctx.beginPath(); ctx.moveTo(ca0.x, ca0.y); ctx.lineTo(chv.x, chv.y); ctx.stroke(); }
       ctx.restore();
     }
     // stretch in progress — crossing window (c2) + captured vertices + move vector
@@ -3952,35 +4268,44 @@
       ctx.save();
       ctx.strokeStyle = '#22c55e'; ctx.fillStyle = '#22c55e'; ctx.lineWidth = 1 / S.view.scale;
       if (stp.phase === 'c2' && stp.p1 && S.hover) {
+        var sa = pm(stp.p1), sb = pm(S.hover);
         ctx.setLineDash([6 / S.view.scale, 4 / S.view.scale]);
-        ctx.strokeRect(Math.min(stp.p1.x, S.hover.x), Math.min(stp.p1.y, S.hover.y), Math.abs(S.hover.x - stp.p1.x), Math.abs(S.hover.y - stp.p1.y));
+        ctx.strokeRect(Math.min(sa.x, sb.x), Math.min(sa.y, sb.y), Math.abs(sb.x - sa.x), Math.abs(sb.y - sa.y));
         ctx.setLineDash([]);
       }
       if (stp.verts) stp.verts.forEach(function (v) {
         var p = v.k === 's' ? { x: v.e.startX, y: v.e.startY } : v.k === 'e' ? { x: v.e.endX, y: v.e.endY } : v.k === 'p' ? v.e.points[v.i] : { x: v.e.x, y: v.e.y };
-        ctx.beginPath(); ctx.arc(p.x, p.y, 3 / S.view.scale, 0, Math.PI * 2); ctx.fill();
+        var pp2 = pm(p);
+        ctx.beginPath(); ctx.arc(pp2.x, pp2.y, 3 / S.view.scale, 0, Math.PI * 2); ctx.fill();
       });
-      if (stp.phase === 'dest' && stp.base && S.hover) { ctx.beginPath(); ctx.moveTo(stp.base.x, stp.base.y); ctx.lineTo(S.hover.x, S.hover.y); ctx.stroke(); }
+      if (stp.phase === 'dest' && stp.base && S.hover) { var ba = pm(stp.base), bh2 = pm(S.hover); ctx.beginPath(); ctx.moveTo(ba.x, ba.y); ctx.lineTo(bh2.x, bh2.y); ctx.stroke(); }
       ctx.restore();
     }
     // continuous-dim in progress — rubber line from the last point to the cursor
     if (S._dimcont && S._dimcont.last && S.hover) {
+      var dca = pm(S._dimcont.last), dcb = pm(S.hover);
       ctx.save(); ctx.strokeStyle = '#b45309'; ctx.lineWidth = 1 / S.view.scale;
       ctx.setLineDash([5 / S.view.scale, 4 / S.view.scale]);
-      ctx.beginPath(); ctx.moveTo(S._dimcont.last.x, S._dimcont.last.y); ctx.lineTo(S.hover.x, S.hover.y); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(dca.x, dca.y); ctx.lineTo(dcb.x, dcb.y); ctx.stroke();
       ctx.setLineDash([]); ctx.restore();
     }
     // selection highlight — every selected entity (dashed green box)
     if (S.selIds && S.selIds.length) {
       ctx.save(); ctx.strokeStyle = '#22c55e'; ctx.lineWidth = 1.5 / S.view.scale; ctx.setLineDash([6 / S.view.scale, 4 / S.view.scale]);
-      selEntities().forEach(function (sel) { var bb = entBBox(sel); if (bb) ctx.strokeRect(bb.x - 4, bb.y - 4, bb.w + 8, bb.h + 8); });
+      selEntities().forEach(function (sel) {
+        var bb = entBBox(sel); if (!bb) return;
+        var c0 = pm({ x: bb.x, y: bb.y }), c1 = pm({ x: bb.x + bb.w, y: bb.y + bb.h });
+        var x0 = Math.min(c0.x, c1.x), y0 = Math.min(c0.y, c1.y);
+        ctx.strokeRect(x0 - 4, y0 - 4, Math.abs(c1.x - c0.x) + 8, Math.abs(c1.y - c0.y) + 8);
+      });
       ctx.restore();
     }
     // rubber-band selection box (window = solid blue · crossing = dashed green)
     if (S.boxSel) {
       var b = S.boxSel, crossing = b.start.x > b.last.x;
-      var bx0 = Math.min(b.start.x, b.last.x), by0 = Math.min(b.start.y, b.last.y);
-      var bw = Math.abs(b.last.x - b.start.x), bh = Math.abs(b.last.y - b.start.y);
+      var pba = pm(b.start), pbb = pm(b.last);
+      var bx0 = Math.min(pba.x, pbb.x), by0 = Math.min(pba.y, pbb.y);
+      var bw = Math.abs(pbb.x - pba.x), bh = Math.abs(pbb.y - pba.y);
       ctx.save();
       ctx.strokeStyle = crossing ? '#22c55e' : '#4f8cff';
       ctx.fillStyle = crossing ? 'rgba(34,197,94,0.08)' : 'rgba(79,140,255,0.08)';
@@ -4013,8 +4338,8 @@
       idraw.forEach(function (p, i) { var s = toScreen(p.x, p.y); if (i === 0) ctx.moveTo(s.x, s.y); else ctx.lineTo(s.x, s.y); });
       ctx.stroke(); ctx.setLineDash([]);
       idraw.forEach(function (p) { var s = toScreen(p.x, p.y); ctx.fillStyle = '#22d3ee'; ctx.beginPath(); ctx.arc(s.x, s.y, 3, 0, Math.PI * 2); ctx.fill(); });
-      var ivp = S.inq.vp || vpAt(ipts[0]) || (S.doc.viewports && S.doc.viewports[0]);
-      var ippi = (ivp && ivp.scale && ivp.scale.pixelsPerInch) ? ivp.scale.pixelsPerInch : 1;
+      var ippi = 1;   // v3: model units ARE inches — no conversion
+
       var itotal = 0; for (var ii = 1; ii < idraw.length; ii++) itotal += Math.hypot(idraw[ii].x - idraw[ii - 1].x, idraw[ii].y - idraw[ii - 1].y);
       var iseg = 0, iang = 0;
       if (idraw.length >= 2) { var ia = idraw[idraw.length - 2], ib = idraw[idraw.length - 1]; iseg = Math.hypot(ib.x - ia.x, ib.y - ia.y); iang = Math.atan2(-(ib.y - ia.y), ib.x - ia.x) * 180 / Math.PI; }
@@ -4167,12 +4492,10 @@
       var sA = (midSpan <= ccwSpan) ? a1 : a3, eA = (midSpan <= ccwSpan) ? a3 : a1;   // DXF ARC is CCW start→end
       return g(0, 'ARC') + g(8, L) + g(10, n6(ux)) + g(20, n6(uy)) + g(30, 0) + g(40, n6(r)) + g(50, n6(sA)) + g(51, n6(eA));
     }
-    var vps = doc.viewports || [], offsets = {}, offX = 0;
-    vps.forEach(function (vp) { var ppi = vpPpi(vp); offsets[vp.id] = { x: offX, ppi: ppi, vp: vp }; offX += (vp.w / ppi) + 24; });
-    function omap(e, px, py) {
-      var o = offsets[e.viewport] || offsets[(vps[0] || {}).id] || { x: 0, ppi: DPI * 0.25 / 12, vp: { x: 0, y: 0, h: s.h } };
-      return { x: (px - o.vp.x) / o.ppi + o.x, y: (o.vp.y + o.vp.h - py) / o.ppi };
-    }
+    // v3: entity coordinates ARE model inches — emit them directly, flipping
+    // Y (DXF is Y-up). The old per-viewport offset/convert machinery is baked
+    // into the coordinates by the v3 migration.
+    function omap(e, px, py) { return { x: px, y: -py }; }
     function lyr(e) { var l = layerById(doc, e.layer); return nm(l && l.name); }
 
     var out = '';
@@ -4192,17 +4515,17 @@
         else if (e.tool === 'measure') { var a = omap(e, e.startX, e.startY), b = omap(e, e.endX, e.endY); out += lineDxf(L, a, b); if (e.measureLabel) out += textDxf(L, { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, 4, e.measureLabel); }
         else if (e.tool === 'rect') { var p1 = omap(e, e.startX, e.startY), p2 = omap(e, e.endX, e.startY), p3 = omap(e, e.endX, e.endY), p4 = omap(e, e.startX, e.endY); out += lineDxf(L, p1, p2) + lineDxf(L, p2, p3) + lineDxf(L, p3, p4) + lineDxf(L, p4, p1); }
         else if (e.tool === 'ellipse') {
+          // Radii are already model inches in v3.
           var cx = (e.startX + e.endX) / 2, cy = (e.startY + e.endY) / 2, rxp = Math.abs(e.endX - e.startX) / 2, ryp = Math.abs(e.endY - e.startY) / 2;
-          var o = offsets[e.viewport] || { ppi: DPI * 0.25 / 12 };
-          if (Math.abs(rxp - ryp) < 0.75) { out += circleDxf(L, omap(e, cx, cy), rxp / o.ppi); }
+          if (Math.abs(rxp - ryp) < 0.05) { out += circleDxf(L, omap(e, cx, cy), rxp); }
           else { var pts = []; for (var k = 0; k <= 48; k++) { var th = k / 48 * 2 * Math.PI; pts.push(omap(e, cx + rxp * Math.cos(th), cy + ryp * Math.sin(th))); } out += polyDxf(L, pts, true); }
         }
         else if (e.tool === 'arc' && e.points && e.points.length >= 3) { out += arcDxf(L, e.points.map(function (p) { return omap(e, p.x, p.y); })); }
         else if ((e.tool === 'polyline' || e.tool === 'mangle' || e.tool === 'hatch') && e.points && e.points.length) { out += polyDxf(L, e.points.map(function (p) { return omap(e, p.x, p.y); }), e.tool === 'hatch'); }
-        else if (e.tool === 'text' && e.x != null) { var ot = offsets[e.viewport] || { ppi: DPI * 0.25 / 12 }; out += textDxf(L, omap(e, e.x, e.y), (e.fontPx || 24) / ot.ppi, e.text || ''); }
-        else if (e.tool === 'symbol' && e.x != null) { var os = offsets[e.viewport] || { ppi: DPI * 0.25 / 12 }; out += circleDxf(L, omap(e, e.x, e.y), (e.size || 40) / 2 / os.ppi); }
+        else if (e.tool === 'text' && e.x != null) { out += textDxf(L, omap(e, e.x, e.y), (e.fontPx || 24) / ppiOf(e), e.text || ''); }
+        else if (e.tool === 'symbol' && e.x != null) { out += circleDxf(L, omap(e, e.x, e.y), (e.size || 40) / 2 / ppiOf(e)); }
         else if (e.tool === 'level') { var la = omap(e, e.startX, e.startY), lb = omap(e, e.endX, e.endY); out += lineDxf(L, la, lb) + textDxf(L, { x: Math.max(la.x, lb.x), y: la.y }, 5, fmtFeet(e.elevIn || 0)); }
-        else if (e.tool === 'spotelev' && e.x != null) { var oe = offsets[e.viewport] || { ppi: DPI * 0.25 / 12 }, sp = omap(e, e.x, e.y); out += circleDxf(L, sp, (DPI * 0.1) / oe.ppi) + textDxf(L, { x: sp.x, y: sp.y }, 5, '+' + fmtFeet(elevAtPoint(e))); }
+        else if (e.tool === 'spotelev' && e.x != null) { var sp = omap(e, e.x, e.y); out += circleDxf(L, sp, (DPI * 0.1) / ppiOf(e)) + textDxf(L, { x: sp.x, y: sp.y }, 5, '+' + fmtFeet(elevAtPoint(e))); }
       } catch (err) { /* skip a malformed entity, keep exporting */ }
     });
     out += g(0, 'ENDSEC') + g(0, 'EOF');
@@ -4241,6 +4564,10 @@
     defaultDoc: defaultDoc,
     buildDxf: buildDxf,
     SHEET_SIZES: SHEET_SIZES,
-    DPI: DPI
+    DPI: DPI,
+    // v3 migration internals — exposed for round-trip verification (the
+    // migration must render pixel-identical: mToP(migrated, vp) === original
+    // paper coords) and for external tooling.
+    _v3: { toV2: toV2, toV3: toV3, serializeDoc: serializeDoc, mToP: mToP, pToM: pToM }
   };
 })();
