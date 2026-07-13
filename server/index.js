@@ -97,6 +97,21 @@ process.on('unhandledRejection', (reason) => {
   console.error('[server] unhandledRejection:', reason && (reason.stack || reason.message) || reason);
 });
 
+const { ipGenericLimiter } = require('./rate-limit');
+
+// Email Dropbox inbound webhook (Resend) — mounted BEFORE express.json
+// because svix signature verification needs the RAW request bytes; the
+// global JSON parser would consume them. The event.received payload is
+// metadata-only (tiny), so cap the raw body at 256kb — no reason to
+// buffer megabytes on an unauthenticated endpoint. The per-IP limiter
+// runs AHEAD of the raw parser so a flood is rejected before any body
+// is buffered or any HMAC is computed.
+const emailInboxRoutes = require('./routes/email-inbox-routes');
+app.post('/api/email-inbox/inbound',
+  ipGenericLimiter,
+  express.raw({ type: () => true, limit: '256kb' }),
+  emailInboxRoutes.inboundHandler);
+
 // Middleware
 app.use(express.json({ limit: '10mb' }));
 app.use(cookieParser());
@@ -106,7 +121,6 @@ app.use(cookieParser());
 // of the /api routers; the per-route limiters (login, AI chat) still
 // apply independently on top of this. trust proxy=1 means req.ip is the
 // real client, so this is keyed per actual client IP.
-const { ipGenericLimiter } = require('./rate-limit');
 app.use('/api', ipGenericLimiter);
 
 // API routes
@@ -125,6 +139,9 @@ app.use('/api/field-tools', fieldToolsRoutes);
 // Workspace ⇄ Excel fidelity — server-side xlsx export (exceljs writes
 // the styles the old client-side SheetJS Community exporter could not).
 app.use('/api/workspace', require('./routes/workspace-xlsx-routes'));
+// Email Dropbox reads + my-address (the inbound webhook itself is
+// mounted raw, above express.json).
+app.use('/api/email-inbox', emailInboxRoutes);
 // Payload DSL routes — file download, reject, apply (inline approval
 // card). Mounted before the broad /api/ai handler so /api/payloads
 // claims its namespace without ambiguity.

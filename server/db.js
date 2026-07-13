@@ -3706,6 +3706,69 @@ async function initSchema() {
       WHERE entity_type IS NOT NULL;
 
     -- ───────────────────────────────────────────────────────────────
+    -- Email Dropbox — the Azure-free path for getting a user's email
+    -- in front of the assistant. Each user gets a private inbound
+    -- address (users.inbound_email_key @ INBOUND_EMAIL_DOMAIN); an
+    -- Outlook redirect/forward rule (or manual forwards) sends copies
+    -- there, Resend receives them and POSTs the parsed message to
+    -- /api/email-inbox/inbound, and rows land here.
+    --
+    -- Threading: thread_id groups a conversation. Stitching prefers
+    -- the RFC headers (message_id / in_reply_to / references survive
+    -- on REDIRECTED mail) and falls back to normalized-subject
+    -- matching for FW:-wrapped forwards, where orig_from_email carries
+    -- the real sender recovered from the quoted block.
+    --
+    -- STRICTLY personal: every read is scoped by user_id = the REAL
+    -- authenticated user (req.user.id) — like DMs and Outlook, the
+    -- dropbox is excluded from admin act-as by construction.
+    CREATE TABLE IF NOT EXISTS inbound_emails (
+      id               TEXT PRIMARY KEY,
+      organization_id  INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      user_id          INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      thread_id        TEXT NOT NULL,
+      resend_email_id  TEXT,               -- Resend's own email id — the robust dedupe key
+      message_id       TEXT,               -- RFC Message-ID (normalized <…@…> token)
+      in_reply_to      TEXT,
+      references_ids   TEXT,               -- raw References header
+      from_name        TEXT,
+      from_email       TEXT,
+      orig_from_email  TEXT,               -- real sender recovered from a self-forward
+      to_email         TEXT,               -- the dropbox address it arrived on
+      subject          TEXT,
+      subject_norm     TEXT,               -- lowercased, Re:/FW: prefixes stripped
+      body_text        TEXT,
+      body_html        TEXT,
+      is_forward_wrapper BOOLEAN NOT NULL DEFAULT FALSE,
+      delivered_direct BOOLEAN NOT NULL DEFAULT FALSE,  -- sent straight to the dropbox (didn't transit the user's real inbox) — lower trust
+      received_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    ALTER TABLE inbound_emails ADD COLUMN IF NOT EXISTS resend_email_id TEXT;
+    ALTER TABLE inbound_emails ADD COLUMN IF NOT EXISTS delivered_direct BOOLEAN NOT NULL DEFAULT FALSE;
+    CREATE INDEX IF NOT EXISTS idx_inbound_emails_owner
+      ON inbound_emails (user_id, received_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_inbound_emails_thread
+      ON inbound_emails (user_id, thread_id, received_at);
+    -- Robust dedupe: Resend's email id is unique per delivery and always
+    -- present, unlike RFC Message-ID (which can be absent or degenerate).
+    -- UNIQUE so a concurrent webhook retry can't double-insert (INSERT
+    -- ... ON CONFLICT DO NOTHING closes the TOCTOU the SELECT-then-INSERT
+    -- left open).
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_inbound_emails_resendid
+      ON inbound_emails (resend_email_id)
+      WHERE resend_email_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_inbound_emails_msgid
+      ON inbound_emails (user_id, message_id)
+      WHERE message_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_inbound_emails_subjnorm
+      ON inbound_emails (user_id, subject_norm, received_at)
+      WHERE subject_norm IS NOT NULL AND subject_norm <> '';
+    -- The user's private dropbox local-part (e.g. 'john-x7k2'). NULL
+    -- until first generated from My Account / the my-address endpoint.
+    ALTER TABLE users ADD COLUMN IF NOT EXISTS inbound_email_key TEXT UNIQUE;
+
+    -- ───────────────────────────────────────────────────────────────
     -- Plans & Takeoffs — first-class scale-drawing documents (the
     -- "dedicated home" for the Bluebeam-style markup tool). A plan is a
     -- drawing surface (blank gridded canvas / a photo / a PDF) plus its

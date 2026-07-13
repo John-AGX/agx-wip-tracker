@@ -200,6 +200,10 @@
           '<div id="p86-acct-outlook" style="font-size:13px;color:var(--text-dim,#888);">Checking…</div>' +
         '</div>' +
         '<div class="p86-acct-section">' +
+          '<div class="p86-acct-sectlabel">Email Dropbox</div>' +
+          '<div id="p86-acct-dropbox" style="font-size:13px;color:var(--text-dim,#888);">Checking…</div>' +
+        '</div>' +
+        '<div class="p86-acct-section">' +
           '<div class="p86-acct-sectlabel">Notifications</div>' +
           '<div id="p86-acct-prefs" style="display:flex;flex-direction:column;gap:14px;">' +
             '<div style="font-size:11px;color:var(--text-dim,#888);">Loading…</div>' +
@@ -215,6 +219,7 @@
     document.getElementById('p86-acct-save').addEventListener('click', function() { saveProfile(me); });
     document.getElementById('p86-acct-pwsave').addEventListener('click', changePassword);
     loadOutlook();
+    loadDropbox();
 
     // Load the full self row (phone / title / timezone / created / last-seen +
     // prefs) from the staff directory; match self by id or email.
@@ -393,6 +398,51 @@
         status.style.color = '#f87171';
       }
     });
+  }
+
+  // Email Dropbox — the Azure-free lane: a private forwarding address
+  // whose mail the assistant can read (works while Outlook consent is
+  // stuck in admin approval). Shows the address + copy button + a
+  // "last received" freshness line so the user can tell at a glance if
+  // their redirect rule ever goes quiet.
+  function loadDropbox() {
+    var el = document.getElementById('p86-acct-dropbox');
+    if (!el) return;
+    el.textContent = 'Checking…';
+    fetch('/api/email-inbox/my-address', { credentials: 'include' })
+      .then(function(r) { return r.json().then(function(b) { if (!r.ok) throw new Error(b.error || 'failed'); return b; }); })
+      .then(function(s) {
+        var last = s.last_received_at
+          ? 'Last email received ' + fmtAgo(s.last_received_at) + '.'
+          : 'No emails received yet.';
+        el.innerHTML =
+          '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
+            '<code id="p86-acct-dbx-addr" style="font-size:12.5px;background:var(--surface,#1a1a20);border:1px solid var(--border,#2a2a32);border-radius:6px;padding:4px 8px;user-select:all;">' + escapeHTML(s.address || '') + '</code>' +
+            '<button class="ee-btn" id="p86-acct-dbx-copy">Copy</button>' +
+          '</div>' +
+          '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:6px;line-height:1.5;">' +
+            escapeHTML(last) + '<br>' +
+            'Forward or redirect mail here and the assistant can read it — no Outlook connection needed. ' +
+            'Best setup: Outlook &rarr; Rules &rarr; new rule &rarr; &ldquo;Apply to all messages&rdquo; &rarr; <strong>Redirect to</strong> this address (redirect keeps the real sender + threading, and your inbox is untouched — copies stay unread).' +
+            (s.configured ? '' : '<br><span style="color:#fbbf24;">&#9888; Server inbound receiving isn\'t configured yet — emails sent here won\'t arrive until it is.</span>') +
+          '</div>';
+        var btn = document.getElementById('p86-acct-dbx-copy');
+        if (btn) btn.addEventListener('click', function() {
+          var addr = s.address || '';
+          (navigator.clipboard && navigator.clipboard.writeText
+            ? navigator.clipboard.writeText(addr)
+            : Promise.reject()
+          ).then(function() {
+            btn.textContent = '✓ Copied'; setTimeout(function() { btn.textContent = 'Copy'; }, 1600);
+          }).catch(function() {
+            var c = document.getElementById('p86-acct-dbx-addr');
+            if (c) { var rng = document.createRange(); rng.selectNodeContents(c); var sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(rng); }
+          });
+        });
+      })
+      .catch(function() {
+        el.innerHTML = '<span style="color:var(--text-dim,#888);">Email dropbox isn\'t available right now.</span>';
+      });
   }
 
   // Outlook connection — read-only mail link (Phase 4). Shows connect /

@@ -2422,6 +2422,7 @@ function customToolsFor(agentKey, opts) {
     const ASSISTANT_TOOL_NAMES = new Set([
       // Reads — entity resolution + her personal lanes
       'read_entity', 'search_entities', 'find_entities_near', 'read_outlook_mail', 'read_outlook_message',
+      'read_email_inbox',   // Email Dropbox — forwarded/redirected mail (Azure-free lane)
       'read_attachment_text', 'view_attachment_image',
       // Memory
       'remember', 'recall', 'list_memories', 'forget',
@@ -2506,6 +2507,7 @@ function customToolsFor(agentKey, opts) {
       'read_assemblies',       // costed estimating recipes — 86 OWNS this database
       'read_outlook_mail',     // the caller's own Outlook inbox (read-only list + previews)
       'read_outlook_message',  // one of the caller's own messages in full (read-only, to summarize/draft)
+      'read_email_inbox',      // the caller's Email Dropbox — forwarded/redirected mail (Azure-free lane)
       'search_reference_sheet',// live SharePoint reference data
       // ── Attachments (2) ──
       'read_attachment_text',  // read PDFs/Word the user uploads
