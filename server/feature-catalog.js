@@ -444,9 +444,23 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.11';
+const APP_VERSION = '1.12';
 
 const releases = [
+  {
+    version: '1.12',
+    date: '2026-07-13',
+    name: 'Inbox',
+    summary: 'Your email comes into the app, tied to the client it\'s from, triaged for what it needs — and the assistant reads it all in context.',
+    changes: [
+      { type: 'new', text: 'Email Dropbox — forward or redirect a copy of your inbox to a private address (from My Account → Email Dropbox) and it flows into Project 86. No Outlook connection required. Your real inbox is untouched.' },
+      { type: 'new', text: 'Email tab — an in-app inbox: conversations on the left, the full thread on the right, search, and a one-click "Ask the assistant about this" that hands the whole thread to 86.' },
+      { type: 'new', text: 'Every email is tied to who it\'s from — matched to your clients and subs — so the thread shows a client chip and the assistant reads mail already in context (it can pull that client\'s jobs and leads in one step).' },
+      { type: 'new', text: 'Triage — each email is read for what it\'s asking, whether it needs a reply, and any dates or commitments. Threads that need a reply get flagged, and the assistant proactively offers to set a reminder or add a calendar event (you approve before anything is created).' },
+      { type: 'new', text: 'My Day now leads with your email — what came in overnight and what needs a reply — so the day starts with your first line of contact.' },
+      { type: 'improved', text: 'The assistant can now answer "anything I need to reply to?", summarize a thread, and draft a reply in the context of the client it\'s from.' },
+    ],
+  },
   {
     version: '1.11',
     date: '2026-07-12',
