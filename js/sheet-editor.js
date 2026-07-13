@@ -249,7 +249,8 @@
     // Per-object-snap toggles (gated by the master osnap). nearest defaults off
     // because it overrides the precise snaps when on.
     snaps: { end: true, mid: true, center: true, intersect: true, perp: true, near: false, quad: true, node: true },
-    dimColor: '#b45309'
+    dimColor: '#b45309',
+    crosshair: true                // AutoCAD-style full-screen crosshair + pickbox
   };
   function loadSettings() {
     var s = {};
@@ -324,6 +325,10 @@
       if (!doc.model.entities) doc.model.entities = [];
       if (!doc.model.layers) doc.model.layers = [];
       if (!sh.viewports) sh.viewports = [];
+      // Rescue blobs saved with a broken alias (both flat + model present):
+      // the flat arrays were the live data, so prefer them over model.*.
+      if (Array.isArray(doc.entities) && doc.entities !== doc.model.entities) doc.model.entities = doc.entities;
+      if (Array.isArray(doc.layers) && doc.layers !== doc.model.layers) doc.model.layers = doc.layers;
       doc.entities = doc.model.entities;
       doc.layers = doc.model.layers;
       doc.viewports = sh.viewports;
@@ -359,7 +364,16 @@
     var out = {};
     for (var k in doc) { if (Object.prototype.hasOwnProperty.call(doc, k)) out[k] = doc[k]; }
     out.kind = 'sheet-doc'; out.version = 2;
-    if (out.model && out.model.entities === out.entities && Array.isArray(out.sheets) && out.sheets.length) {
+    // Heal a broken model⇄flat alias before stripping: the flat working arrays
+    // are always the LIVE data (every editor mutation targets doc.entities),
+    // while several sites (undo restore, filters) reassign the flat array
+    // without re-pointing model.*. toV2 rebuilds from model.* on load, so
+    // adopt the flat arrays as truth here — never save a stale model copy.
+    if (out.model && Array.isArray(out.entities)) {
+      out.model.entities = out.entities;
+      if (Array.isArray(out.layers)) out.model.layers = out.layers;
+    }
+    if (out.model && Array.isArray(out.sheets) && out.sheets.length) {
       delete out.entities; delete out.layers; delete out.viewports; delete out.sheet; delete out.titleblock;
     }
     return out;
@@ -383,15 +397,18 @@
       ctx.fillStyle = '#ffffff'; ctx.fillRect(0, 0, s.w, s.h);
       ctx.restore();
     }
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, s.w, s.h);
-    // Sheet chrome (paper border) — hidden in model space (chrome-free working view).
+    // Model space is NOT paper — no white fill, no borders. The dark field +
+    // infinite grid + axes come from drawModelField(); geometry draws on top.
     if (!opts.modelMode) {
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, s.w, s.h);
       ctx.strokeStyle = '#1f2937';
       ctx.lineWidth = 6;
       ctx.strokeRect(s.margin, s.margin, s.w - s.margin * 2, s.h - s.margin * 2);
       ctx.lineWidth = 2;
       ctx.strokeRect(s.margin + 10, s.margin + 10, s.w - s.margin * 2 - 20, s.h - s.margin * 2 - 20);
+    } else if (opts.visible) {
+      drawModelField(ctx, doc, opts);
     }
 
     (doc.viewports || []).forEach(function (vp) {
@@ -410,12 +427,14 @@
       // Plan underlay (Tier 1) — drawn first so it sits behind grid + entities.
       try { drawUnderlay(ctx, vp); } catch (err) { /* defensive */ }
       // Editor-only faint reference grid (1 ft minor / 5 ft major), gated
-      // by zoom so it never turns into a solid fill when zoomed out.
-      if (opts.grid && vp.scale && vp.scale.pixelsPerInch) {
+      // by zoom so it never turns into a solid fill when zoomed out. Model
+      // space gets the infinite field grid instead (drawModelField).
+      if (opts.grid && !opts.modelMode && vp.scale && vp.scale.pixelsPerInch) {
         drawViewportGrid(ctx, vp, opts.viewScale || 1);
       }
       if (typeof prims().drawStroke === 'function') {
-        (doc.entities || []).forEach(function (e) {
+        (doc.entities || []).forEach(function (raw) {
+          var e = opts.modelMode ? modelInk(raw) : raw;
           if (!e || e.viewport !== vp.id || !e.tool) return;
           var lyr = layerById(doc, e.layer);
           if (lyr && lyr.visible === false) return;
@@ -427,19 +446,23 @@
           if (e.tool === 'spotelev') { try { drawSpotElev(ctx, e); } catch (err) {} return; }
           if (e.tool === 'refline') { if (opts.editor) { try { drawRefline(ctx, e); } catch (err) {} } return; }   // construction guide — editor only, never exported
           // Dimension labels are derived live from the viewport scale, so
-          // they stay correct as geometry changes (auto-update).
+          // they stay correct as geometry changes (auto-update). Write to the
+          // PERSISTED entity (raw) — in model mode `e` may be an ink clone,
+          // and DXF export reads measureLabel off the doc without a render.
           if (e.tool === 'measure' && vp.scale && vp.scale.pixelsPerInch) {
             var px = Math.hypot(e.endX - e.startX, e.endY - e.startY);
-            e.measureInches = px / vp.scale.pixelsPerInch;
-            var mlbl = fmtLen(e.measureInches);
+            raw.measureInches = px / vp.scale.pixelsPerInch;
+            var mlbl = fmtLen(raw.measureInches);
             if (e.dimKind === 'radius') mlbl = 'R ' + mlbl;
             else if (e.dimKind === 'diameter') mlbl = '⌀ ' + mlbl;   // ⌀
-            e.measureLabel = mlbl;
+            raw.measureLabel = mlbl;
+            e.measureInches = raw.measureInches; e.measureLabel = mlbl;
           }
           try { prims().drawStroke(ctx, e); } catch (err) { /* defensive */ }
         });
       }
-      try { drawScaleBar(ctx, vp); } catch (err) { /* defensive */ }
+      // Graphic scale bar is paper furniture — sheet space only.
+      if (!opts.modelMode) { try { drawScaleBar(ctx, vp); } catch (err) { /* defensive */ } }
       ctx.restore();
       // label bar (outside clip) — sheet space only
       if (!opts.modelMode) {
@@ -834,10 +857,144 @@
     ctx.restore();
   }
 
+  // ── Model-space field — the environment behind the geometry ──────
+  // Infinite grid across the visible world rect, origin axes + a UCS icon at
+  // the drawing origin (bottom-left of the primary viewport → first-quadrant
+  // coordinates, Y up, like AutoCAD), and each sheet window as a faint dashed
+  // outline so you can see what will land on paper.
+  function modelOrigin(doc) {
+    var vp = (doc.viewports || [])[0];
+    if (!vp) { var s = doc.sheet || { h: 0 }; return { x: 0, y: s.h || 0 }; }
+    // Land the origin ON the grid-snap lattice (which anchors at vp.y): snap
+    // vp.h down to a whole number of grid steps. Otherwise the drawn field
+    // grid and the readout would sit a fraction of a step off every snapped
+    // point (vp.h is almost never an exact multiple of the step).
+    var step = gridStepPx(vp);
+    var h = (step > 0) ? Math.floor(vp.h / step) * step : vp.h;
+    return { x: vp.x, y: vp.y + (h > 0 ? h : vp.h) };
+  }
+  function drawModelField(ctx, doc, opts) {
+    var vis = opts.visible, vs = opts.viewScale || 1;
+    var vp = (doc.viewports || [])[0];
+    var org = modelOrigin(doc);
+    // Grid — same real-unit lattice grid-snap uses, but across the whole view.
+    var step = vp ? gridStepPx(vp) : 0;
+    if (opts.grid && step && step * vs >= 7) {
+      var major = step * gridMajorMult(vp);
+      var gx0 = org.x + Math.floor((vis.x0 - org.x) / step) * step;
+      var gy0 = org.y + Math.floor((vis.y0 - org.y) / step) * step;
+      var x, y;
+      ctx.save();
+      ctx.strokeStyle = 'rgba(120,140,170,0.10)'; ctx.lineWidth = 1 / vs;
+      for (x = gx0; x <= vis.x1; x += step) { ctx.beginPath(); ctx.moveTo(x, vis.y0); ctx.lineTo(x, vis.y1); ctx.stroke(); }
+      for (y = gy0; y <= vis.y1; y += step) { ctx.beginPath(); ctx.moveTo(vis.x0, y); ctx.lineTo(vis.x1, y); ctx.stroke(); }
+      var mx0 = org.x + Math.floor((vis.x0 - org.x) / major) * major;
+      var my0 = org.y + Math.floor((vis.y0 - org.y) / major) * major;
+      ctx.strokeStyle = 'rgba(120,140,170,0.20)'; ctx.lineWidth = 1.3 / vs;
+      for (x = mx0; x <= vis.x1; x += major) { ctx.beginPath(); ctx.moveTo(x, vis.y0); ctx.lineTo(x, vis.y1); ctx.stroke(); }
+      for (y = my0; y <= vis.y1; y += major) { ctx.beginPath(); ctx.moveTo(vis.x0, y); ctx.lineTo(vis.x1, y); ctx.stroke(); }
+      ctx.restore();
+    }
+    // Origin axes — X red, Y green (screen-Y up = model +Y).
+    ctx.save();
+    ctx.lineWidth = 1.4 / vs;
+    ctx.strokeStyle = 'rgba(225,85,85,0.45)';
+    ctx.beginPath(); ctx.moveTo(vis.x0, org.y); ctx.lineTo(vis.x1, org.y); ctx.stroke();
+    ctx.strokeStyle = 'rgba(80,200,120,0.45)';
+    ctx.beginPath(); ctx.moveTo(org.x, vis.y0); ctx.lineTo(org.x, vis.y1); ctx.stroke();
+    // UCS icon at the origin.
+    var L = 46 / vs, ah = 7 / vs;
+    ctx.lineWidth = 2 / vs; ctx.lineCap = 'round';
+    ctx.strokeStyle = '#e15555'; ctx.fillStyle = '#e15555';
+    ctx.beginPath(); ctx.moveTo(org.x, org.y); ctx.lineTo(org.x + L, org.y); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(org.x + L, org.y); ctx.lineTo(org.x + L - ah, org.y - ah * 0.62); ctx.lineTo(org.x + L - ah, org.y + ah * 0.62); ctx.closePath(); ctx.fill();
+    ctx.font = '700 ' + (11 / vs) + 'px Arial, sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
+    ctx.fillText('X', org.x + L + 4 / vs, org.y - 2 / vs);
+    ctx.strokeStyle = '#50c878'; ctx.fillStyle = '#50c878';
+    ctx.beginPath(); ctx.moveTo(org.x, org.y); ctx.lineTo(org.x, org.y - L); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(org.x, org.y - L); ctx.lineTo(org.x - ah * 0.62, org.y - L + ah); ctx.lineTo(org.x + ah * 0.62, org.y - L + ah); ctx.closePath(); ctx.fill();
+    ctx.fillText('Y', org.x + 4 / vs, org.y - L - 2 / vs);
+    ctx.restore();
+    // Sheet windows — what each viewport of the active sheet will print.
+    ctx.save();
+    ctx.lineWidth = 1 / vs; ctx.setLineDash([10 / vs, 7 / vs]);
+    ctx.strokeStyle = 'rgba(148,163,184,0.35)';
+    ctx.fillStyle = 'rgba(148,163,184,0.55)';
+    ctx.font = '600 ' + (10 / vs) + 'px Arial, sans-serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'bottom';
+    (doc.viewports || []).forEach(function (v) {
+      ctx.strokeRect(v.x, v.y, v.w, v.h);
+      ctx.fillText((v.label || 'VIEW') + ' — sheet window', v.x + 2 / vs, v.y - 3 / vs);
+    });
+    ctx.restore();
+  }
+  // Ink inversion for the dark model field: paper colors are picked for white
+  // sheets, so near-black strokes would vanish. Flip only very dark, low-
+  // saturation inks to a light drafting gray (AutoCAD's black↔white flip);
+  // real colors (dim amber, cyan, layer colors) pass through untouched.
+  var _inkCache = {};
+  function modelInkColor(c) {
+    var key = String(c || '');
+    if (_inkCache[key] !== undefined) return _inkCache[key];
+    var h = key.replace('#', '');
+    if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+    var out = key;
+    if (/^[0-9a-fA-F]{6}$/.test(h)) {
+      var r = parseInt(h.slice(0, 2), 16), g = parseInt(h.slice(2, 4), 16), b = parseInt(h.slice(4, 6), 16);
+      var lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+      var sat = (Math.max(r, g, b) - Math.min(r, g, b)) / 255;
+      if (lum < 0.30 && sat < 0.35) out = '#dde3ec';
+    }
+    _inkCache[key] = out;
+    return out;
+  }
+  function modelInk(e) {
+    if (!e || !e.color) return e;
+    var inv = modelInkColor(e.color);
+    if (inv === e.color) return e;
+    var c = {}; for (var k in e) { if (Object.prototype.hasOwnProperty.call(e, k)) c[k] = e[k]; }
+    c.color = inv;
+    return c;
+  }
+
   function fitView(doc, cw, ch) {
     var s = doc.sheet, pad = 40;
     var scale = Math.min((cw - pad * 2) / s.w, (ch - pad * 2) / s.h);
     return { scale: scale, tx: (cw - s.w * scale) / 2, ty: (ch - s.h * scale) / 2 };
+  }
+  // Zoom-extents for model space: frame the drawing content (all entities on
+  // the active sheet's viewports), falling back to the viewport rect when the
+  // drawing is empty. AutoCAD's ZOOM E.
+  function contentBBox() {
+    var mnx = Infinity, mny = Infinity, mxx = -Infinity, mxy = -Infinity, any = false;
+    var vpIds = {};
+    (S.doc.viewports || []).forEach(function (v) { vpIds[v.id] = 1; });
+    (S.doc.entities || []).forEach(function (e) {
+      if (!e || !vpIds[e.viewport]) return;
+      var bb = entBBox(e); if (!bb) return;
+      any = true;
+      if (bb.x < mnx) mnx = bb.x; if (bb.y < mny) mny = bb.y;
+      if (bb.x + bb.w > mxx) mxx = bb.x + bb.w; if (bb.y + bb.h > mxy) mxy = bb.y + bb.h;
+    });
+    if (!any) {
+      var vp = (S.doc.viewports || [])[0];
+      if (!vp) { var s = S.doc.sheet; return { x: 0, y: 0, w: s.w, h: s.h }; }
+      return { x: vp.x, y: vp.y, w: vp.w, h: vp.h };
+    }
+    return { x: mnx, y: mny, w: Math.max(mxx - mnx, 10), h: Math.max(mxy - mny, 10) };
+  }
+  function fitModelView() {
+    var cw = S.cssW || S.canvas.width, ch = S.cssH || S.canvas.height, pad = 60;
+    var bb = contentBBox();
+    var scale = Math.min((cw - pad * 2) / bb.w, (ch - pad * 2) / bb.h);
+    scale = Math.max(0.02, Math.min(scale, 20));
+    return { scale: scale, tx: (cw - bb.w * scale) / 2 - bb.x * scale, ty: (ch - bb.h * scale) / 2 - bb.y * scale };
+  }
+  // The canvas cursor the active tool wants. With the CAD crosshair on we hide
+  // the native cursor and draw our own crosshair + pickbox in repaint().
+  function baseCursor() {
+    if (S && S.tool === 'pan') return 'grab';
+    if (SETTINGS.crosshair !== false) return 'none';
+    return (S && S.tool === 'select') ? 'default' : 'crosshair';
   }
 
   // ── Editor ──────────────────────────────────────────────────────
@@ -858,7 +1015,6 @@
     ov.innerHTML =
       '<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;background:rgba(15,15,30,0.95);border:1px solid #2a2a3a;border-radius:10px;padding:8px 14px;">' +
         '<strong style="color:#fff;font-size:13px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">📐 ' + esc(plan.name || 'Shop drawing') + '</strong>' +
-        '<div id="p86-space-seg" title="Model = true-size working view (no titleblock) · sheet tabs = titleblocked pages · + adds a sheet · double-click a tab to rename" style="display:flex;gap:3px;align-items:center;margin-right:2px;max-width:48%;overflow-x:auto;"></div>' +
         '<button id="p86-sheet-settings" title="Editor settings &amp; defaults (units, scale, sheet size, grid, snaps)" style="background:rgba(255,255,255,0.06);color:#cbd5e1;border:1px solid #444;border-radius:6px;padding:6px 11px;font-size:13px;cursor:pointer;">⚙</button>' +
         '<button id="p86-sheet-shortcuts" title="Keyboard shortcuts (?)" style="background:rgba(255,255,255,0.06);color:#cbd5e1;border:1px solid #444;border-radius:6px;padding:6px 11px;font-size:13px;cursor:pointer;">⌨</button>' +
         '<button id="p86-sheet-underlay" title="Import a plan PDF/image as a scaled background to trace + measure over (takeoff)" style="background:rgba(79,140,255,0.14);color:#cbd5e1;border:1px solid #4f8cff;border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer;">⊞ Underlay</button>' +
@@ -881,13 +1037,17 @@
             '<input data-dyn-ang type="text" autocomplete="off" placeholder="" title="Type an angle in degrees — Enter to commit" style="width:52px;background:#1a1a2e;color:#fff;border:1px solid #444;border-radius:4px;padding:3px 6px;font-size:12px;font-weight:600;outline:none;" />' +
             '<span style="font-size:9px;color:#5b7a9a;font-weight:700;letter-spacing:.3px;padding-left:2px;">,&nbsp;⤏&nbsp;⏎</span>' +
           '</div>' +
-          '<div id="p86-sheet-hint" style="position:absolute;left:12px;bottom:10px;color:#64748b;font-size:11px;pointer-events:none;"></div>' +
+          '<div id="p86-sheet-hint" style="position:absolute;left:12px;bottom:38px;color:#64748b;font-size:11px;pointer-events:none;"></div>' +
+          // AutoCAD-style layout tabs — bottom-left of the drawing area:
+          // [ Model ][ A-1 ][ A-2 ]…[ + ]. Populated by buildSpaceTabs().
+          '<div id="p86-layout-tabs" title="Model = the drawing itself, true size · sheet tabs = titleblocked pages that print · + adds a sheet · double-click a tab to rename" style="position:absolute;left:0;bottom:0;display:flex;align-items:flex-end;gap:0;max-width:82%;overflow-x:auto;background:rgba(10,13,19,0.92);border-top:1px solid #2a2a3a;border-right:1px solid #2a2a3a;border-radius:0 8px 0 0;padding:0 4px 0 0;"></div>' +
         '</div>' +
         // right: layers
         '<div id="p86-sheet-layers" style="width:184px;flex:0 0 184px;background:rgba(15,15,30,0.95);border:1px solid #2a2a3a;border-radius:10px;padding:10px;overflow-y:auto;color:#e6e6e6;font-size:12px;"></div>' +
       '</div>' +
       // bottom status bar (AutoCAD-style): coords · tool · snap · zoom · mode toggles
       '<div style="display:flex;align-items:center;gap:14px;margin-top:8px;background:rgba(15,15,30,0.95);border:1px solid #2a2a3a;border-radius:8px;padding:5px 12px;font-size:11px;color:#9aa;font-variant-numeric:tabular-nums;">' +
+        '<span id="p86-sb-space" title="Toggle Model / Paper space (like AutoCAD\'s MODEL button)" style="cursor:pointer;font-weight:700;letter-spacing:.06em;padding:2px 9px;border-radius:5px;border:1px solid #3a3a4a;user-select:none;">PAPER</span>' +
         '<span id="p86-sb-coords" style="min-width:188px;color:#cbd5e1;">x —   y —</span>' +
         '<span id="p86-sb-snap" style="min-width:78px;color:#fbbf24;"></span>' +
         '<span id="p86-sb-view" style="color:#64748b;"></span>' +
@@ -903,7 +1063,10 @@
       doc: doc, plan: plan, onSave: opts.onSave,
       view: { scale: 1, tx: 0, ty: 0 },
       tool: 'select',
-      space: 'sheet',       // Phase B: 'sheet' = titleblocked paper (default) | 'model' = chrome-free true-size working view
+      // 'sheet' = titleblocked paper | 'model' = the drawing itself (dark
+      // infinite canvas, true size). Honors the space persisted on the doc —
+      // reopening lands where you left off, like AutoCAD's tab memory.
+      space: (doc.space === 'model') ? 'model' : 'sheet',
       ribbonTab: 'Draw',    // active AutoCAD-style ribbon tab
       activeLayer: (doc.layers[0] && doc.layers[0].id) || 'L0',
       draft: null,          // in-progress entity (sheet coords)
@@ -931,9 +1094,13 @@
     buildLayers();
     buildSpaceTabs();
     sizeCanvas(true);
+    if (S.space === 'model') S.view = fitModelView();   // reopened in model space → frame the drawing, not the paper
     wireInput();
-    S.canvas.style.cursor = 'default';     // default tool is Select
+    var sbSpace = ov.querySelector('#p86-sb-space');
+    if (sbSpace) sbSpace.onclick = function () { setSpace(S.space === 'model' ? 'sheet' : 'model'); };
+    S.canvas.style.cursor = baseCursor();
     repaint();
+    refreshStatusBar();
     ensureUnderlay();                       // load a persisted plan underlay, if any
     loadOrgBrand();
 
@@ -1107,7 +1274,12 @@
         var act = b.getAttribute('data-sheet-act'), k = b.getAttribute('data-sheet-akey');
         if (act === 'undo') return undo();
         if (act === 'redo') return redo();
-        if (act === 'fit') { sizeCanvas(true); repaint(); return; }
+        if (act === 'fit') {
+          // Fit = the paper in sheet space, zoom-extents in model space.
+          if (S.space === 'model') { sizeCanvas(false); S.view = fitModelView(); }
+          else sizeCanvas(true);
+          repaint(); return;
+        }
         if (act === 'export') { if (k === 'png') exportPng(); else if (k === 'pdf') exportPdf(); else if (k === 'dxf') exportDxf(); return; }
         if (act === 'edit') {
           if (!S.selIds.length) return;
@@ -1176,6 +1348,15 @@
     }
     var z = S.overlay.querySelector('#p86-sb-zoom');
     if (z) z.textContent = Math.round((S.view.scale || 1) * 100) + '%';
+    // MODEL / PAPER chip — AutoCAD's space button. Click toggles (wired in open()).
+    var sc = S.overlay.querySelector('#p86-sb-space');
+    if (sc) {
+      var isModel = S.space === 'model';
+      sc.textContent = isModel ? 'MODEL' : 'PAPER';
+      sc.style.color = isModel ? '#93c5fd' : '#9aa';
+      sc.style.background = isModel ? 'rgba(79,140,255,0.22)' : 'rgba(255,255,255,0.05)';
+      sc.style.borderColor = isModel ? '#4f8cff' : '#3a3a4a';
+    }
   }
   function setTool(t) {
     if (S.draft) S.draft = null;             // cancel any in-progress draft
@@ -1191,7 +1372,7 @@
       S._recentTools = (S._recentTools || []).filter(function (x) { return x !== t; });
       S._recentTools.unshift(t); S._recentTools = S._recentTools.slice(0, 5);
     }
-    S.canvas.style.cursor = (t === 'pan') ? 'grab' : (t === 'select' ? 'default' : 'crosshair');
+    S.canvas.style.cursor = baseCursor();
     refreshToolbar(); renderPicker(); updateHint(); repaint();
   }
   // Pattern / symbol picker shown when the hatch or symbol tool is active.
@@ -1465,6 +1646,7 @@
       '<select data-st="polarInc" style="' + selCss + '">' + [15, 30, 45, 90].map(function (d) { return opt(String(d), d + '°' + (d === 90 ? '  (ortho)' : ''), (SETTINGS.polarInc || 90) == d); }).join('') + '</select>' +
       cb('gridSnap', 'Snap to grid', SETTINGS.gridSnap !== false) +
       cb('osnap', 'Object snap (master)', SETTINGS.osnap !== false) +
+      cb('crosshair', 'CAD crosshair cursor (full-screen crosshair + pickbox)', SETTINGS.crosshair !== false) +
       '<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 14px;margin-top:2px;padding-left:4px;">' +
         [['end', 'Endpoint'], ['mid', 'Midpoint'], ['center', 'Center'], ['intersect', 'Intersection'], ['perp', 'Perpendicular'], ['near', 'Nearest'], ['quad', 'Quadrant'], ['node', 'Node']]
           .map(function (p) { return snapCb(p[0], p[1], SETTINGS.snaps && SETTINGS.snaps[p[0]] !== false); }).join('') +
@@ -1490,6 +1672,7 @@
       // Apply the live-affecting settings to the current session immediately.
       S.ortho = !!SETTINGS.ortho; S.gridSnap = SETTINGS.gridSnap !== false; S.objSnap = SETTINGS.osnap !== false;
       S.snaps = SETTINGS.snaps; S.polarInc = SETTINGS.polarInc || 90;
+      S.canvas.style.cursor = baseCursor();
       refreshStatusBar(); buildLayers(); repaint();
       close();
     };
@@ -1942,7 +2125,15 @@
     if (coords) {
       if (!vp) { coords.textContent = '(outside view)'; }
       else {
-        var rx = realLen(sheetPt.x - vp.x, vp), ry = realLen(sheetPt.y - vp.y, vp);
+        // Model space reads out from the drawing origin, Y up (CAD first
+        // quadrant); paper space keeps the top-left viewport convention.
+        var rx, ry;
+        if (S.space === 'model') {
+          var org = modelOrigin(S.doc);
+          rx = realLen(sheetPt.x - org.x, vp); ry = realLen(org.y - sheetPt.y, vp);
+        } else {
+          rx = realLen(sheetPt.x - vp.x, vp); ry = realLen(sheetPt.y - vp.y, vp);
+        }
         var txt = (rx != null) ? ('x ' + fmtFeet(rx) + '   y ' + fmtFeet(ry)) : '';
         if (S.draft && S.draft._anchor) {
           var a = S.draft._anchor;
@@ -2001,6 +2192,7 @@
     };
     c.onmousemove = function (e) {
       var lp = localPt(e);
+      S._offCanvas = false;
       if (S.panning) {
         S.view.tx = S.panning.tx + (lp.x - S.panning.sx);
         S.view.ty = S.panning.ty + (lp.y - S.panning.sy);
@@ -2040,6 +2232,7 @@
           var ddx = ds.x - S.moveDrag.last.x, ddy = ds.y - S.moveDrag.last.y;
           ents.forEach(function (en) { translateEntity(en, ddx, ddy); });
           S.moveDrag.last = ds;
+          S.hover = ds;                       // keep the drawn crosshair on the pointer
           repaint();
         }
         return;
@@ -2047,6 +2240,7 @@
       // Rubber-band box selection in progress.
       if (S.boxSel && (e.buttons & 1)) {
         S.boxSel.last = toSheet(lp.x, lp.y);
+        S.hover = S.boxSel.last;              // keep the drawn crosshair on the pointer
         repaint();
         return;
       }
@@ -2057,14 +2251,21 @@
       S.hover = pt; S.snap = pt; S.hoverVp = vp;
       // Grip hover affordance in the select tool.
       if (S.tool === 'select' && S.selectedId) {
-        S.canvas.style.cursor = gripAtScreen(lp) ? 'pointer' : 'default';
+        S.canvas.style.cursor = gripAtScreen(lp) ? 'pointer' : baseCursor();
       }
       updateReadout(pt, vp);
       if (dynApplies()) updateDynLive();
       repaint();
     };
+    c.onmouseleave = function () {
+      // Hide the drawn crosshair while the pointer is off-canvas — but KEEP
+      // S.hover: dynamic input derives the typed-length direction from it,
+      // and the pointer legitimately leaves the canvas to reach the dyn box.
+      S._offCanvas = true;
+      repaint();
+    };
     c.onmouseup = function () {
-      if (S.panning) { S.panning = null; S.canvas.style.cursor = (S.tool === 'pan') ? 'grab' : (S.tool === 'select' ? 'default' : 'crosshair'); }
+      if (S.panning) { S.panning = null; S.canvas.style.cursor = baseCursor(); }
       // A plain click on one member of a multi-selection (no drag) collapses to it.
       if (S.moveDrag && !S.moveDrag.pushed && S.moveDrag.group && S.moveDrag.hit) { setSelection([S.moveDrag.hit]); buildLayers(); repaint(); }
       // Finalize a rubber-band selection.
@@ -2142,7 +2343,7 @@
     };
     S.overlay.onkeyup = function (e) {
       if (e.key === 'Shift') S.shiftDown = false;
-      else if (e.key === ' ') { S.spaceDown = false; S.canvas.style.cursor = (S.tool === 'pan') ? 'grab' : (S.tool === 'select' ? 'default' : 'crosshair'); }
+      else if (e.key === ' ') { S.spaceDown = false; S.canvas.style.cursor = baseCursor(); }
     };
     // Dynamic-input keys: Enter commits the segment at the typed length/
     // angle; Esc cancels the draft. (stopPropagation so the canvas
@@ -2709,6 +2910,10 @@
   function restoreSnap(json) {
     var o = JSON.parse(json);
     S.doc.entities = o.entities; S.doc.layers = o.layers;
+    // Re-point the v2 aliases — model.entities is what toV2 rebuilds from on
+    // the next load, so a broken alias here means post-undo work silently
+    // reverts on reload.
+    if (S.doc.model) { S.doc.model.entities = S.doc.entities; S.doc.model.layers = S.doc.layers; }
     setSelection([]); buildLayers(); repaint(); markDirty();
   }
   function undo() {
@@ -3593,9 +3798,16 @@
   // migration + scaled viewport windows land in Phase C/D (multi-viewport).
   function setSpace(sp) {
     if (!S || (sp !== 'model' && sp !== 'sheet')) return;
+    if (S.space === sp) return;
+    // Each space keeps its own camera — toggling never loses your zoom.
+    if (S.space === 'model') S._viewModel = S.view; else S._viewSheet = S.view;
     S.space = sp;
-    setHint(sp === 'model' ? 'Model space — true-size working view (no titleblock).' : 'Sheet space — titleblocked sheet for printing.');
-    buildSpaceTabs(); repaint();
+    S.doc.space = sp;                                   // persisted — reopen lands here
+    markDirty();
+    if (sp === 'model') S.view = S._viewModel || fitModelView();
+    else S.view = S._viewSheet || fitView(S.doc, S.cssW || S.canvas.width, S.cssH || S.canvas.height);
+    setHint(sp === 'model' ? 'Model space — the drawing itself, true size. Dashed outline = what the sheet window prints.' : 'Paper space — titleblocked sheet for printing.');
+    buildSpaceTabs(); refreshStatusBar(); repaint();
   }
   // Phase C: space/sheet tab strip — [ Model ] [ A-1 ] [ A-2 ] … [ + ]. Each sheet
   // is a titleblocked page owning its own viewport id(s); entities tag to the active
@@ -3603,20 +3815,22 @@
   // content — no viewport-window transform needed, existing single-sheet drawings
   // unchanged. Switching re-points the flat aliases (doc.sheet/viewports/titleblock).
   function buildSpaceTabs() {
-    var host = S.overlay && S.overlay.querySelector('#p86-space-seg');
+    var host = S.overlay && S.overlay.querySelector('#p86-layout-tabs');
     if (!host) return;
     var sheets = S.doc.sheets || [];
+    // AutoCAD layout-tab anatomy: flat joined tabs on the bottom edge of the
+    // drawing area, active tab raised + blue top edge.
     function tab(id, label, on, title) {
-      return '<button data-space-tab="' + esc(id) + '" title="' + esc(title || '') + '" style="background:' + (on ? '#4f8cff' : 'rgba(255,255,255,0.06)') +
-        ';color:' + (on ? '#fff' : '#cbd5e1') + ';border:1px solid ' + (on ? '#4f8cff' : '#3a3a4a') +
-        ';border-radius:6px;padding:6px 11px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;flex:0 0 auto;">' + esc(label) + '</button>';
+      return '<button data-space-tab="' + esc(id) + '" title="' + esc(title || '') + '" style="background:' + (on ? '#232b38' : 'transparent') +
+        ';color:' + (on ? '#fff' : '#8b96ab') + ';border:0;border-right:1px solid #232733;border-top:2px solid ' + (on ? '#4f8cff' : 'transparent') +
+        ';padding:5px 14px 6px;font-size:11.5px;font-weight:' + (on ? '700' : '600') + ';cursor:pointer;white-space:nowrap;flex:0 0 auto;">' + esc(label) + '</button>';
     }
-    var html = tab('__model', '▦ Model', S.space === 'model', 'Model — true-size working view (no titleblock)');
+    var html = tab('__model', 'Model', S.space === 'model', 'Model space — the drawing itself, true size');
     sheets.forEach(function (sh) {
       var on = (S.space === 'sheet' && S.doc.activeSheetId === sh.id);
-      html += tab(sh.id, '▭ ' + (sh.name || sh.id), on, 'Sheet ' + (sh.name || '') + ' — double-click to rename');
+      html += tab(sh.id, sh.name || sh.id, on, 'Layout ' + (sh.name || '') + ' — double-click to rename');
     });
-    html += '<button data-add-sheet title="Add a new titleblocked sheet" style="background:rgba(34,197,94,0.14);color:#86efac;border:1px solid #22c55e;border-radius:6px;width:28px;height:30px;cursor:pointer;font-size:15px;line-height:1;flex:0 0 auto;">+</button>';
+    html += '<button data-add-sheet title="Add a new titleblocked sheet" style="background:transparent;color:#86efac;border:0;width:26px;padding:5px 0 6px;cursor:pointer;font-size:14px;line-height:1;flex:0 0 auto;">+</button>';
     host.innerHTML = html;
     host.querySelectorAll('[data-space-tab]').forEach(function (b) {
       var id = b.getAttribute('data-space-tab');
@@ -3636,9 +3850,12 @@
     S.doc.sheet = sh;                                   // re-point the flat aliases at the active sheet
     S.doc.viewports = sh.viewports || (sh.viewports = []);
     S.doc.titleblock = sh.titleblock || (sh.titleblock = {});
+    if (S.space === 'model') S._viewModel = S.view;     // leaving model → remember its camera
     S.space = 'sheet';
+    S.doc.space = 'sheet';
+    S._viewSheet = null;                                // new sheet → refit below
     setSelection([]);
-    buildSpaceTabs(); buildLayers(); sizeCanvas(true); repaint();
+    buildSpaceTabs(); buildLayers(); sizeCanvas(true); refreshStatusBar(); repaint();
   }
   function addSheet() {
     var sheets = S.doc.sheets || (S.doc.sheets = []);
@@ -3665,12 +3882,22 @@
   function repaint() {
     var ctx = S.ctx, c = S.canvas;
     var dpr = S.dpr || 1, vw = S.cssW || c.width, vh = S.cssH || c.height;
+    var modelMode = S.space === 'model';
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.fillStyle = '#11151c'; ctx.fillRect(0, 0, vw, vh);
+    // Model space = the dark drafting field; sheet space = desk around paper.
+    ctx.fillStyle = modelMode ? '#1e232b' : '#11151c'; ctx.fillRect(0, 0, vw, vh);
     ctx.save();
     ctx.translate(S.view.tx, S.view.ty);
     ctx.scale(S.view.scale, S.view.scale);
-    renderSheet(ctx, S.doc, { paperShadow: true, grid: S.gridSnap, viewScale: S.view.scale, editor: true, modelMode: S.space === 'model' });
+    renderSheet(ctx, S.doc, {
+      paperShadow: true, grid: S.gridSnap, viewScale: S.view.scale, editor: true, modelMode: modelMode,
+      // World rect currently on screen — drawModelField clips its infinite
+      // grid/axes to this so pan/zoom never runs off the lattice.
+      visible: {
+        x0: -S.view.tx / S.view.scale, y0: -S.view.ty / S.view.scale,
+        x1: (vw - S.view.tx) / S.view.scale, y1: (vh - S.view.ty) / S.view.scale
+      }
+    });
     // draft preview
     if (S.draft) {
       var d = S.draft;
@@ -3823,6 +4050,24 @@
       else if (sk === 'node') { ctx.beginPath(); ctx.arc(sp.x, sp.y, 5, 0, Math.PI * 2); ctx.moveTo(sp.x - 6, sp.y); ctx.lineTo(sp.x + 6, sp.y); ctx.moveTo(sp.x, sp.y - 6); ctx.lineTo(sp.x, sp.y + 6); ctx.stroke(); }   // ⊙
       else { ctx.strokeRect(sp.x - 5, sp.y - 5, 10, 10); }   // endpoint square
       ctx.restore();
+    }
+    // AutoCAD crosshair + pickbox (screen space). The native cursor is hidden
+    // (cursor:none) while this is on; panning shows the grab cursor instead.
+    if (SETTINGS.crosshair !== false && S.hover && !S._offCanvas && !S.panning && S.tool !== 'pan' && !S.spaceDown) {
+      var ch = toScreen(S.hover.x, S.hover.y);
+      if (ch.x >= -1 && ch.x <= vw + 1 && ch.y >= -1 && ch.y <= vh + 1) {
+        ctx.save();
+        ctx.strokeStyle = modelMode ? 'rgba(210,220,235,0.45)' : 'rgba(148,163,184,0.45)';
+        ctx.lineWidth = 1;
+        var px = Math.round(ch.x) + 0.5, py = Math.round(ch.y) + 0.5, pb = 4;
+        ctx.beginPath();
+        ctx.moveTo(0, py); ctx.lineTo(px - pb, py); ctx.moveTo(px + pb, py); ctx.lineTo(vw, py);
+        ctx.moveTo(px, 0); ctx.lineTo(px, py - pb); ctx.moveTo(px, py + pb); ctx.lineTo(px, vh);
+        ctx.stroke();
+        ctx.strokeStyle = modelMode ? 'rgba(230,238,248,0.9)' : 'rgba(203,213,225,0.9)';
+        ctx.strokeRect(px - pb, py - pb, pb * 2, pb * 2);
+        ctx.restore();
+      }
     }
   }
 
