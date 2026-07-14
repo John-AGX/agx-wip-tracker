@@ -300,17 +300,19 @@
   // full conversation and summarize / draft / schedule from it.
   function handToAssistant(threadId, subject) {
     var prompt = 'Read my email thread [' + threadId + '] ("' + subject + '") and give me a short summary — what it\'s asking, anything time-sensitive, and whether it needs a reply. If there\'s a date or a commitment, offer to add a reminder or calendar event.';
-    if (!(window.p86AI && window.p86AI.open)) {
+    // Open ask86, pre-seed the prompt, and SEND it automatically.
+    if (window.p86AI && window.p86AI.ask) {
+      window.p86AI.ask(prompt);
+    } else if (window.p86AI && window.p86AI.open) {
+      // Fallback for an older bundle without ask(): open + prefill (manual send).
+      window.p86AI.open({ entityType: 'ask86' });
+      setTimeout(function () {
+        var input = document.getElementById('ai-input');
+        if (input) { input.value = prompt; input.dispatchEvent(new Event('input')); input.focus(); }
+      }, 300);
+    } else {
       alert('Open the assistant (Ask 86) and ask about thread ' + threadId + '.');
-      return;
     }
-    // ask86 mode is entity-free (same as the header "Ask 86" button); no
-    // images, so open + prefill the input rather than openWithImages.
-    window.p86AI.open({ entityType: 'ask86' });
-    setTimeout(function () {
-      var input = document.getElementById('ai-input');
-      if (input) { input.value = prompt; input.dispatchEvent(new Event('input')); input.focus(); input.setSelectionRange(input.value.length, input.value.length); }
-    }, 300);
   }
 
   window.renderEmailHubTab = renderEmailHubTab;

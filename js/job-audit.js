@@ -348,11 +348,13 @@
           var prompt = btn.getAttribute('data-ai');
           modal.remove();
           if (typeof window.openJobAI === 'function') window.openJobAI();
-          // Stuff the prompt into the AI input after the panel renders
+          // Stuff the prompt into the AI input after the panel renders, then
+          // fire it automatically (openJobAI opened the job-mode panel).
           setTimeout(function() {
             var input = document.getElementById('ai-input');
-            if (input) input.value = prompt;
-            input?.focus();
+            if (input) { input.value = prompt; input.dispatchEvent(new Event('input')); }
+            if (window.p86AI && window.p86AI.send) window.p86AI.send();
+            else if (input) input.focus();
           }, 200);
         });
       });

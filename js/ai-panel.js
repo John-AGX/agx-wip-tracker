@@ -7109,23 +7109,49 @@
       };
     }
     open({ entityType: opts.entityType, entityId: opts.entityId });
-    if (opts.prefill) {
-      setTimeout(function() {
-        var input = document.getElementById('ai-input');
-        if (input) {
-          input.value = opts.prefill;
-          // Trigger auto-grow by dispatching an input event
-          input.dispatchEvent(new Event('input'));
-          input.focus();
-          input.setSelectionRange(input.value.length, input.value.length);
-        }
-      }, 260);
+    // opts.autoSend === true → fire the message after the images attach.
+    if (opts.prefill) _placePrompt(opts.prefill, opts.autoSend === true, 260);
+  }
+
+  // Fill the composer with `prompt` once it has mounted, then EITHER fire the
+  // real send path (autoSend) or just focus so the user can edit before send.
+  // Centralizes "hand a prompt to the assistant" for the Email hub, Help
+  // center, Job audit, and the PDF viewer so those buttons SEND the prompt
+  // instead of parking it in the box for a manual tap. (Skips the send if a
+  // turn is already streaming, or if the input never mounts.)
+  function _placePrompt(prompt, autoSend, delay) {
+    prompt = String(prompt == null ? '' : prompt);
+    if (!prompt.trim()) return;
+    var attempts = 0;
+    setTimeout(function place() {
+      var input = document.getElementById('ai-input');
+      if (!input) { if (attempts++ < 15) setTimeout(place, 60); return; }
+      input.value = prompt;
+      input.dispatchEvent(new Event('input')); // auto-grow
+      if (autoSend && !_streaming) { onSend(); return; } // send exactly like the ↑ button
+      input.focus();
+      try { input.setSelectionRange(input.value.length, input.value.length); } catch (_) {}
+    }, delay == null ? 300 : delay);
+  }
+
+  // Public: open the assistant (entity-free ask86 by default, or a given
+  // entity) with `prompt` pre-seeded and — unless {autoSend:false} — SENT
+  // automatically, so a hand-off reads the thread/doc immediately.
+  function ask(prompt, opts) {
+    opts = opts || {};
+    if (opts.entityType && opts.entityId != null) open({ entityType: opts.entityType, entityId: opts.entityId });
+    else open({ entityType: 'ask86' });
+    if (Array.isArray(opts.images) && opts.images.length) {
+      _pendingImages = { images: opts.images.slice(0, 12), note: opts.imagesNote || null };
     }
+    _placePrompt(prompt, opts.autoSend !== false, opts.delay);
   }
 
   window.p86AI = {
     open: open,
     openWithImages: openWithImages,
+    ask: ask,   // open + pre-seed + auto-send a prompt (hand-off buttons)
+    send: function () { try { onSend(); } catch (_) {} }, // fire the composer as the ↑ button does
     close: close,
     toggle: toggle,
     isOpen: function() { return _open; },

@@ -285,16 +285,13 @@
       if (askBtn) {
         var prompt = askBtn.getAttribute('data-ask') || '';
         close();
-        if (window.p86AI && typeof window.p86AI.open === 'function') {
+        if (window.p86AI && typeof window.p86AI.ask === 'function') {
+          window.p86AI.ask(prompt); // open ask86 + pre-seed + auto-send
+        } else if (window.p86AI && typeof window.p86AI.open === 'function') {
           window.p86AI.open({ entityType: 'ask86' });
           setTimeout(function () {
             var input = document.getElementById('ai-input');
-            if (input) {
-              input.value = prompt;
-              input.dispatchEvent(new Event('input'));
-              input.focus();
-              try { input.setSelectionRange(input.value.length, input.value.length); } catch (err) {}
-            }
+            if (input) { input.value = prompt; input.dispatchEvent(new Event('input')); input.focus(); }
           }, 300);
         }
         return;

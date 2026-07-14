@@ -194,7 +194,8 @@
       entityType: entityType,
       entityId: entityId,
       images: images,
-      prefill: prefill
+      prefill: prefill,
+      autoSend: true
     });
   }
 
