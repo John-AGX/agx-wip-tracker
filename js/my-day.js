@@ -207,8 +207,12 @@
       }).sort(function (a, b) { return dateOnly(a.due_date) < dateOnly(b.due_date) ? -1 : 1; });
 
       // Email summary: overnight (last ~18h) + threads that need a reply.
+      // Exclude threads whose newest message is my OWN captured reply — those
+      // aren't newly-arrived mail (their received_at is my send time), so they
+      // must not inflate the "N new" count.
       var cutoff = Date.now() - 18 * 3600 * 1000;
       var overnight = emailThreads.filter(function (t) {
+        if (t.last_direction === 'outbound') return false;
         var d = new Date(t.last_received_at); return !isNaN(d.getTime()) && d.getTime() >= cutoff;
       });
       var needsReply = emailThreads.filter(function (t) { return t.needs_reply; });
@@ -345,7 +349,9 @@
     email.top.forEach(function (t) {
       h += '<div class="myday-email-row" data-email-thread="' + esc(t.thread_id) + '">' +
         '<span class="myday-email-dot"></span>' +
-        '<span class="myday-email-from">' + esc(t.last_from || 'unknown') + '</span>' +
+        '<span class="myday-email-from">' + (t.last_direction === 'outbound'
+          ? ('You' + (t.entity_label ? ' → ' + esc(t.entity_label) : ''))
+          : esc(t.last_from || 'unknown')) + '</span>' +
         '<span class="myday-email-subj">' + esc(t.subject || '(no subject)') + '</span>' +
       '</div>';
     });

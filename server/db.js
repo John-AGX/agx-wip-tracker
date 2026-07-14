@@ -3746,6 +3746,12 @@ async function initSchema() {
     );
     ALTER TABLE inbound_emails ADD COLUMN IF NOT EXISTS resend_email_id TEXT;
     ALTER TABLE inbound_emails ADD COLUMN IF NOT EXISTS delivered_direct BOOLEAN NOT NULL DEFAULT FALSE;
+    -- direction: 'inbound' (mail others sent me — the default) or
+    -- 'outbound' (a copy of MY OWN reply, captured because I BCC'd/redirected
+    -- it to my dropbox). Outbound rows render as "You" in the thread, are
+    -- never triaged, and never drive a thread's needs-reply flag — they exist
+    -- purely to give the assistant BOTH sides of the conversation.
+    ALTER TABLE inbound_emails ADD COLUMN IF NOT EXISTS direction TEXT NOT NULL DEFAULT 'inbound';
     -- H2 context layer: the email's sender matched to a directory entity
     -- (client / sub) so the hub can show a chip and the assistant reads
     -- mail already tied to who it's from. Resolved at insert (and by a

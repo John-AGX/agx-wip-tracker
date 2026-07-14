@@ -3,6 +3,13 @@ main = "src/worker.js"
 compatibility_date = "2024-09-23"
 compatibility_flags = ["nodejs_compat"]
 
+# This is an EMAIL Worker — Email Routing invokes it directly via its email()
+# handler, so it never needs a public *.workers.dev HTTP route. Setting this to
+# false stops `wrangler deploy` from prompting to register a workers.dev
+# subdomain (and keeps the Worker off the public internet — it has no fetch()
+# handler anyway).
+workers_dev = false
+
 # The app endpoint the Worker posts parsed mail to. Override per-env if
 # you ever run a staging app.
 [vars]

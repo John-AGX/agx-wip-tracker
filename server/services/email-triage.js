@@ -117,12 +117,15 @@ async function classifyEmail(email) {
 async function triageEmailById(emailId) {
   try {
     const r = await pool.query(
-      `SELECT id, from_email, orig_from_email, subject, body_text, entity_type, entity_label, triaged_at
+      `SELECT id, from_email, orig_from_email, subject, body_text, entity_type, entity_label, triaged_at, direction
          FROM inbound_emails WHERE id = $1`,
       [emailId]
     );
     const row = r.rows[0];
     if (!row || row.triaged_at) return false;
+    // Never triage the owner's OWN captured replies — there's nothing to
+    // classify or nudge them about in a message they wrote.
+    if (row.direction === 'outbound') return false;
     const t = await classifyEmail(row);
     if (!t) return false; // leave triaged_at NULL so a sweep can retry
     const u = await pool.query(

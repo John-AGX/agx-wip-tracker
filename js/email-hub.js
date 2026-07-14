@@ -89,6 +89,10 @@
       '.ehub-msg-when{font-size:11px;color:var(--text-dim,#8b90a5);margin-left:auto;}',
       '.ehub-msg-fwd{font-size:10.5px;color:var(--text-dim,#8b90a5);background:var(--surface2,#202027);border-radius:8px;padding:1px 7px;}',
       '.ehub-msg-body{font-size:13px;line-height:1.55;white-space:pre-wrap;word-break:break-word;color:var(--text,#e4e6f0);}',
+      // My own captured reply — a subtle "sent" treatment so both sides of
+      // the conversation read at a glance.
+      '.ehub-msg-mine{background:rgba(16,124,65,0.06);border-left:2px solid var(--accent,#107C41);}',
+      '.ehub-msg-mine .ehub-msg-from{color:var(--accent,#5ddb7e);}',
       '.ehub-ask{padding:8px 15px;font-size:13px;font-weight:600;border-radius:8px;border:1px solid var(--accent,#107C41);background:rgba(16,124,65,0.14);color:var(--accent,#5ddb7e);cursor:pointer;display:inline-flex;align-items:center;gap:6px;}',
       '.ehub-ask:hover{background:rgba(16,124,65,0.24);}',
       '.ehub-ico{width:15px;height:15px;vertical-align:-2px;}',
@@ -184,7 +188,9 @@
             (nav ? ' data-entity-type="' + esc(th.entity_type) + '" data-entity-id="' + esc(th.entity_id) + '"' : '') +
             '>' + ico('clients', '') + esc(th.entity_label) + '</span>'
         : '';
-      // H3 triage chips: "needs reply" + an urgency dot for high.
+      // H3 triage chips: "needs reply" + an urgency dot for high. needs_reply
+      // now reflects the newest INBOUND message (server-side), so a captured
+      // reply of mine can't hide a client who is genuinely waiting.
       var tri = '';
       if (th.needs_reply) tri += '<span class="ehub-badge ehub-badge-reply">needs reply</span>';
       if (th.triage_urgency === 'high') tri += '<span class="ehub-badge ehub-badge-high">high</span>';
@@ -192,7 +198,9 @@
       return '<div class="ehub-row' + (th.thread_id === _state.activeThreadId ? ' active' : '') + '" data-thread="' + esc(th.thread_id) + '">' +
         '<div class="ehub-row-top">' +
           (th.needs_reply ? '<span class="ehub-dot" title="Needs a reply"></span>' : '') +
-          '<span class="ehub-row-from">' + esc(th.last_from || 'unknown') + '</span>' +
+          '<span class="ehub-row-from">' + (th.last_direction === 'outbound'
+            ? ('You' + (th.entity_label ? ' → ' + esc(th.entity_label) : ''))
+            : esc(th.last_from || 'unknown')) + '</span>' +
           (th.message_count > 1 ? '<span class="ehub-count">' + th.message_count + '</span>' : '') +
           '<span class="ehub-row-when">' + esc(fmtAgo(th.last_received_at)) + '</span>' +
         '</div>' +
@@ -245,13 +253,17 @@
           '</div>' +
         '</div>';
       var bodyHtml = msgs.map(function (m) {
-        var who = m.orig_from_email
-          ? esc(m.from_email || 'unknown') + ' <span class="ehub-msg-fwd">originally from ' + esc(m.orig_from_email) + '</span>'
-          : esc((m.from_name ? m.from_name + ' ' : '') + '<' + (m.from_email || 'unknown') + '>');
-        return '<div class="ehub-msg">' +
+        // Outbound = my own reply, captured via BCC → show it as "You".
+        var isMine = m.direction === 'outbound';
+        var who = isMine
+          ? 'You' + (m.entity_label ? ' <span class="ehub-msg-fwd">to ' + esc(m.entity_label) + '</span>' : '')
+          : (m.orig_from_email
+              ? esc(m.from_email || 'unknown') + ' <span class="ehub-msg-fwd">originally from ' + esc(m.orig_from_email) + '</span>'
+              : esc((m.from_name ? m.from_name + ' ' : '') + '<' + (m.from_email || 'unknown') + '>'));
+        return '<div class="ehub-msg' + (isMine ? ' ehub-msg-mine' : '') + '">' +
           '<div class="ehub-msg-hd">' +
             '<span class="ehub-msg-from">' + who + '</span>' +
-            (m.is_forward_wrapper ? '<span class="ehub-msg-fwd">forwarded copy</span>' : '') +
+            (!isMine && m.is_forward_wrapper ? '<span class="ehub-msg-fwd">forwarded copy</span>' : '') +
             '<span class="ehub-msg-when">' + esc(fmtWhen(m.received_at)) + '</span>' +
           '</div>' +
           '<div class="ehub-msg-body">' + esc(m.body_text || '(no text body)') + '</div>' +

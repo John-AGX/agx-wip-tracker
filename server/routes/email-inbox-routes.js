@@ -293,10 +293,38 @@ async function storeInboundMessage(p) {
   const inReplyTo = normalizeMsgId(p.inReplyToRaw || null);
   const referencesRaw = p.referencesRaw || '';
 
-  // Self-forward: ONLY when the mail is FROM the user's own address (they
-  // forwarded it) — recover the quoted original sender. A "FW:" subject
-  // is NOT sufficient (an outsider could inject a fake From: in the body).
-  const isSelfForward = !!(fromEmail && user.email && fromEmail === String(user.email).toLowerCase());
+  // Classify the message relative to the dropbox owner:
+  //   fromIsMe      — the mail is FROM the owner's own address.
+  //   isOutbound    — LOOKS like a copy of the owner's own reply: from their
+  //                   address, to a real external recipient, delivered
+  //                   envelope-only (the shape a BCC/redirect capture takes).
+  //                   This is a DISPLAY heuristic, NOT an authenticated signal —
+  //                   the From header is not cryptographically verified here, so
+  //                   anyone who knows the secret dropbox address could forge
+  //                   this shape. So downstream treats 'outbound' as UNTRUSTED:
+  //                   it may render the owner's own half of the thread for
+  //                   context, but it is NEVER presented to the assistant as the
+  //                   owner's verified words, and it NEVER suppresses a real
+  //                   inbound's needs-reply (that stays driven by inbound rows
+  //                   only — see the /threads + read_email_inbox aggregations).
+  //                   (`!deliveredDirect` only rules out a copy sent straight to
+  //                   the dropbox — a forward-into-dropbox — it is NOT a spoof
+  //                   defense.) Never triaged (nothing to nudge me about).
+  //   isSelfForward — from them with no captured-reply shape = they forwarded a
+  //                   received email INTO the dropbox to surface it; recover the
+  //                   quoted original sender (existing behavior). A "FW:" subject
+  //                   alone is NOT sufficient (an outsider could inject a fake
+  //                   From: in the body), so recovery stays gated on from-me.
+  const fromIsMe = !!(fromEmail && user.email && fromEmail === String(user.email).toLowerCase());
+  const externalRecipients = headerList.filter((a) => {
+    const at = a.indexOf('@');
+    if (at < 0) return false;
+    if (a.slice(at + 1) === domain) return false;                          // the dropbox itself
+    if (fromIsMe && a === String(user.email).toLowerCase()) return false;  // my own address
+    return true;
+  });
+  const isOutbound = fromIsMe && externalRecipients.length > 0 && !deliveredDirect;
+  const isSelfForward = fromIsMe && !isOutbound;
   const origFrom = isSelfForward ? recoverForwardedSender(bodyText) : null;
 
   // Thread stitch: real header chain first, else normalized subject within
@@ -325,31 +353,38 @@ async function storeInboundMessage(p) {
   }
   if (!threadId) threadId = newId('th');
 
-  // H2: link the sender to a client/sub. Prefer the recovered orig on a
-  // self-forward (fromEmail there is the USER, not the real sender).
+  // H2: link to a client/sub. For an OUTBOUND reply the counterpart is the
+  // RECIPIENT (I'm the sender), so match on who I wrote to. For a self-forward
+  // prefer the recovered original sender (fromEmail there is me, not the real
+  // sender). Otherwise match the sender.
   const ent = await resolveSenderEntity(user.organization_id,
-    origFrom ? [origFrom, fromEmail] : [fromEmail]);
+    isOutbound ? externalRecipients
+      : (origFrom ? [origFrom, fromEmail] : [fromEmail]));
 
   const ins = await pool.query(
     `INSERT INTO inbound_emails
        (id, organization_id, user_id, thread_id, resend_email_id, message_id, in_reply_to,
         references_ids, from_name, from_email, orig_from_email, to_email,
         subject, subject_norm, body_text, body_html, is_forward_wrapper, delivered_direct,
-        entity_type, entity_id, entity_label)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+        entity_type, entity_id, entity_label, direction)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
      ON CONFLICT (user_id, resend_email_id) WHERE resend_email_id IS NOT NULL DO NOTHING
      RETURNING id`,
     [newId('em'), user.organization_id, user.id, threadId, dedupeKey, messageId, inReplyTo,
      String(referencesRaw).slice(0, 5000) || null, fromName || null, fromEmail || null,
      origFrom, matchedAddress, subject, subjectNorm, bodyText, bodyHtml, isSelfForward, deliveredDirect,
-     ent ? ent.type : null, ent ? ent.id : null, ent ? ent.label : null]
+     ent ? ent.type : null, ent ? ent.id : null, ent ? ent.label : null,
+     isOutbound ? 'outbound' : 'inbound']
   );
   if (!ins.rows.length) return { deduped: true };
   // H3: fire-and-forget triage — extracts needs-reply + dates so the
-  // assistant can proactively propose reminders/calendar. Never throws
-  // into the caller.
-  try { require('../services/email-triage').triageInBackground(ins.rows[0].id); } catch (e) { /* still stored */ }
-  return { ok: true, thread_id: threadId, entity: ent || null };
+  // assistant can proactively propose reminders/calendar. Never throws into
+  // the caller. Skip MY OWN outbound replies: there's nothing to classify or
+  // nudge me about in a message I wrote (and it must never flag needs-reply).
+  if (!isOutbound) {
+    try { require('../services/email-triage').triageInBackground(ins.rows[0].id); } catch (e) { /* still stored */ }
+  }
+  return { ok: true, thread_id: threadId, entity: ent || null, direction: isOutbound ? 'outbound' : 'inbound' };
 }
 
 // ── POST /api/email-inbox/inbound-cf — Cloudflare Email Worker (PRIMARY)
@@ -451,7 +486,9 @@ router.get('/my-address', requireAuth, async (req, res) => {
       }
       if (!key) return res.status(500).json({ error: 'Could not allocate an address' });
     }
-    const last = await pool.query('SELECT MAX(received_at) AS last FROM inbound_emails WHERE user_id = $1', [req.user.id]);
+    // Freshness = last genuinely RECEIVED mail (so my own captured replies
+    // don't keep it looking "fresh" and mask a redirect rule that went quiet).
+    const last = await pool.query("SELECT MAX(received_at) AS last FROM inbound_emails WHERE user_id = $1 AND direction = 'inbound'", [req.user.id]);
     res.json({
       address: key + '@' + inboundDomain(),
       configured: dropboxConfigured(),
@@ -481,18 +518,22 @@ router.get('/threads', requireAuth, async (req, res) => {
               (ARRAY_AGG(subject ORDER BY received_at DESC))[1] AS subject,
               (ARRAY_AGG(COALESCE(orig_from_email, from_email) ORDER BY received_at DESC))[1] AS last_from,
               (ARRAY_AGG(LEFT(body_text, 200) ORDER BY received_at DESC))[1] AS preview,
+              -- Direction of the newest message: 'outbound' means I replied last.
+              (ARRAY_AGG(direction ORDER BY received_at DESC))[1] AS last_direction,
               BOOL_OR(delivered_direct) AS has_direct,
               -- Thread-level entity: the most recent non-null link.
               (ARRAY_AGG(entity_type  ORDER BY (entity_type IS NULL), received_at DESC))[1] AS entity_type,
               (ARRAY_AGG(entity_id    ORDER BY (entity_id   IS NULL), received_at DESC))[1] AS entity_id,
               (ARRAY_AGG(entity_label ORDER BY (entity_label IS NULL), received_at DESC))[1] AS entity_label,
-              -- H3 triage: ALL fields from the newest message (the dropbox
-              -- is inbound-only, so a BOOL_OR needs_reply from an old
-              -- message could never clear after the client's follow-up).
-              (ARRAY_AGG(needs_reply    ORDER BY received_at DESC))[1] AS needs_reply,
-              (ARRAY_AGG(triage_summary ORDER BY received_at DESC))[1] AS triage_summary,
-              (ARRAY_AGG(triage_urgency ORDER BY received_at DESC))[1] AS triage_urgency,
-              (ARRAY_AGG(triage_actions ORDER BY received_at DESC))[1] AS triage_actions
+              -- H3 triage: newest INBOUND message's fields. Filtered to
+              -- inbound so a trailing 'outbound' row (my captured reply — an
+              -- UNAUTHENTICATED, forgeable classification) can never suppress a
+              -- real client's needs-reply. A genuine reply the client answers
+              -- produces a newer inbound whose (re-triaged) needs_reply clears it.
+              (ARRAY_AGG(needs_reply    ORDER BY received_at DESC) FILTER (WHERE direction = 'inbound'))[1] AS needs_reply,
+              (ARRAY_AGG(triage_summary ORDER BY received_at DESC) FILTER (WHERE direction = 'inbound'))[1] AS triage_summary,
+              (ARRAY_AGG(triage_urgency ORDER BY received_at DESC) FILTER (WHERE direction = 'inbound'))[1] AS triage_urgency,
+              (ARRAY_AGG(triage_actions ORDER BY received_at DESC) FILTER (WHERE direction = 'inbound'))[1] AS triage_actions
          FROM inbound_emails
         WHERE ${where}
         GROUP BY thread_id
@@ -514,7 +555,8 @@ router.get('/threads/:threadId', requireAuth, async (req, res) => {
     const r = await pool.query(
       `SELECT * FROM (
          SELECT id, thread_id, from_name, from_email, orig_from_email, subject,
-                body_text, is_forward_wrapper, delivered_direct, received_at
+                body_text, is_forward_wrapper, delivered_direct, direction,
+                entity_label, received_at
            FROM inbound_emails
           WHERE user_id = $1 AND thread_id = $2
           ORDER BY received_at DESC LIMIT 100
@@ -563,7 +605,10 @@ router.get('/for-entity/:type/:id', requireAuth, async (req, res) => {
               MAX(received_at) AS last_received_at,
               (ARRAY_AGG(subject ORDER BY received_at DESC))[1] AS subject,
               (ARRAY_AGG(COALESCE(orig_from_email, from_email) ORDER BY received_at DESC))[1] AS last_from,
-              (ARRAY_AGG(LEFT(body_text, 160) ORDER BY received_at DESC))[1] AS preview
+              (ARRAY_AGG(LEFT(body_text, 160) ORDER BY received_at DESC))[1] AS preview,
+              -- 'outbound' newest = I replied last; the consumer should render
+              -- "You" rather than my own address in the sender slot.
+              (ARRAY_AGG(direction ORDER BY received_at DESC))[1] AS last_direction
          FROM inbound_emails
         WHERE user_id = $1 AND entity_type = $2 AND entity_id = $3
         GROUP BY thread_id
@@ -621,7 +666,7 @@ router.post('/triage-pending', requireAuth, async (req, res) => {
     // through 25 Haiku calls at a time on every hub load.
     const rows = await pool.query(
       `SELECT id FROM inbound_emails
-        WHERE user_id = $1 AND triaged_at IS NULL
+        WHERE user_id = $1 AND triaged_at IS NULL AND direction = 'inbound'
           AND received_at > NOW() - INTERVAL '14 days'
         ORDER BY received_at DESC LIMIT 25`,
       [req.user.id]
