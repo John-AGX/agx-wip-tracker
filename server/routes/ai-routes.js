@@ -7461,8 +7461,9 @@ const READ_TOOLS = [
   {
     name: 'read_outlook_message',
     description:
-      'Read ONE of the signed-in user\'s OWN Outlook messages IN FULL — the complete plain-text body plus sender, recipients, subject, received time, and link. Read-only. ' +
-      'Use after read_outlook_mail when the user wants you to summarize an email, explain what it needs, or DRAFT A REPLY to it — pass the message id from the inbox list. ' +
+      'Read ONE of the signed-in user\'s OWN LIVE Outlook messages IN FULL via Microsoft Graph — complete body plus sender, recipients, subject, received time, and link. Read-only; requires a CONNECTED Outlook mailbox. ' +
+      'Use ONLY after read_outlook_mail, with an opaque Microsoft Graph message id from that list. ' +
+      'Do NOT use this for an EMAIL DROPBOX thread id — anything starting with "th_" is a dropbox thread and must go to read_email_inbox (which needs no Outlook connection). ' +
       'Only the user who connected their own mailbox can read it — never anyone else\'s. ' +
       'NOTE: reading a message never sends anything. To actually send a reply you must use propose_outlook_reply, which asks the user to confirm before anything leaves their mailbox.',
     tier: 'auto',
@@ -7478,9 +7479,10 @@ const READ_TOOLS = [
   {
     name: 'read_email_inbox',
     description:
-      'Read the signed-in user\'s EMAIL DROPBOX — mail they redirect/forward from their real inbox so you can see it (works even while Outlook isn\'t connected). Read-only, strictly their own. ' +
+      'Read the signed-in user\'s in-app EMAIL DROPBOX — the PRIMARY way to read their email here. Where mail they redirect/forward from their real inbox lands; needs NO Outlook/Graph connection. Read-only, strictly their own. ' +
+      'ALWAYS use this for any email thread id that starts with "th_" (e.g. th_ab12cd… — the dropbox thread-id format) and for general "read/summarize my email/thread" requests. Prefer it over the read_outlook_* tools unless the user is specifically asking about their LIVE Outlook mailbox. ' +
       'Without thread_id: lists recent conversations (subject, sender, count, last received, preview) with [thread ids], each tagged with the linked client/sub and a triage read (⏎ needs reply + a one-line summary). With thread_id: the FULL conversation plus the triage summary and SUGGESTED FOLLOW-UPS (reminder/calendar/task) extracted from it. ' +
-      'Use for "what emails came in", "anything I need to reply to", "summarize the thread with [person]", "draft a reply to [subject]". When the triage suggests a follow-up (a date to calendar, a reply to remember), OFFER to create it using your reminder/calendar/task tools — which confirm with the user first; never create anything silently from an email. ' +
+      'Use for "what emails came in", "anything I need to reply to", "summarize the thread with [person]", "read/summarize thread [th_...]", "draft a reply to [subject]". When the triage suggests a follow-up (a date to calendar, a reply to remember), OFFER to create it using your reminder/calendar/task tools — which confirm with the user first; never create anything silently from an email. ' +
       'q filters by sender/subject/body text. If the dropbox is empty or not set up, say so and point them to My Account → Email Dropbox for the forwarding address + setup steps. ' +
       'NOTE: messages the user forwarded manually show the FORWARDER as sender; the real sender (when recoverable) is shown as "originally from".',
     tier: 'auto',
@@ -7488,7 +7490,7 @@ const READ_TOOLS = [
       type: 'object',
       additionalProperties: false,
       properties: {
-        thread_id: { type: 'string', description: 'Read one conversation in full (from the thread list).' },
+        thread_id: { type: 'string', description: 'Read one conversation in full — a dropbox thread id, which looks like "th_ab12cd…". Any "th_"-prefixed id belongs to THIS tool.' },
         q: { type: 'string', description: 'Filter threads by sender, subject, or body text.' },
         limit: { type: 'integer', minimum: 1, maximum: 50, description: 'How many threads to list (default 15).' },
       },
@@ -9394,10 +9396,16 @@ async function execStaffTool(name, input, ctx) {
       if (!userId || !orgId) return 'I could not identify your account, so I can\'t read that message.';
       const messageId = String((input && input.message_id) || '').trim();
       if (!messageId) return 'I need the message id (from your inbox list) to read it in full.';
+      // A "th_" id is an EMAIL DROPBOX thread id (from read_email_inbox), NOT an
+      // Outlook/Graph message id. Route it to the right tool instead of trying
+      // Graph and dead-ending the user at "connect Outlook".
+      if (/^th_/i.test(messageId)) {
+        return 'That id ("' + messageId.slice(0, 48) + '") is an Email Dropbox thread id, not an Outlook message id. Read it with read_email_inbox using thread_id="' + messageId + '" — the in-app dropbox needs no Outlook connection.';
+      }
       const outlookMail = require('../services/outlook-mail');
       const out = await outlookMail.readMessage(orgId, userId, messageId);
       if (!out.ok) {
-        if (out.error === 'not_connected') return 'Your Outlook isn\'t connected yet. Connect it from My Account, then ask me again.';
+        if (out.error === 'not_connected') return 'Outlook isn\'t connected. If the user asked about an Email Dropbox thread (a "th_..." id) or any forwarded/redirected mail, call read_email_inbox instead — it reads the in-app dropbox with no Outlook connection. Only if they specifically need their live Outlook mailbox, tell them to connect Outlook from My Account.';
         if (out.error === 'reauth') return 'Your Outlook connection expired — reconnect it from My Account, then ask me again.';
         if (out.error === 'unconfigured') return 'Outlook isn\'t set up on this server yet.';
         return 'Could not read that message right now (' + out.error + ').';
