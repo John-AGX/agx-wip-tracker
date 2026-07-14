@@ -1616,7 +1616,10 @@
 
                                 <div style="display:flex;flex-direction:column;gap:16px;">
                                     <div class="action-buttons" style="margin-bottom:0;">
-                                        <button class="ee-btn primary" onclick="addEstimateLineFromEditor()">+ Line Item</button>
+                                        <!-- The global "+ Line Item" was removed: a line added with no
+                                             section landed at the array end and silently booked as
+                                             Subcontractor cost. Every line is now born in a section via
+                                             the section header's own "+ Line Item". -->
                                         <!-- Add-Section dropdown — replaces the old "+ Subgroup" +
                                              "+ Standard Subgroups" pair. Click opens a small popover
                                              listing the four BT-aligned standard subgroups + a "Custom
@@ -3360,7 +3363,7 @@
     <script src="js/rich-text.js?v=1"></script>
     <script src="js/estimates.js?v=53"></script>
     <script src="js/proposal.js?v=26"></script>
-    <script src="js/estimate-editor.js?v=79"></script>
+    <script src="js/estimate-editor.js?v=80"></script>
     <!-- Change Order editor — overlay opened from the job detail's
          Change Orders tab. Loads after pricing-pipeline (which it
          consumes via window.p86Pricing) and after api.js (which

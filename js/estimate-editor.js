@@ -1902,7 +1902,7 @@
     }
     if (!lines.length) {
       container.innerHTML = bannerHtml + '<div style="padding:40px;text-align:center;color:var(--text-dim,#888);border:1px dashed var(--border,#333);border-radius:8px;">' +
-        'No line items yet. Click <strong>+ Line Item</strong> or <strong>+ Subgroup</strong> to start.' +
+        'No line items yet. Click <strong>+ Section</strong> to add a bucket (Materials, Labor, …), then <strong>+ Line Item</strong> inside it.' +
       '</div>';
       return;
     }
@@ -2562,6 +2562,13 @@
       unitCost: 0,
       markup: ''
     };
+    // No section given (legacy no-arg / stale-cached caller) → route to a real
+    // Materials section instead of appending at the array end where it silently
+    // books as Subcontractor cost. Every line is born in a section.
+    if (!sectionId) {
+      var _alt = getActiveAlternate();
+      if (_alt) sectionId = eeEnsureSectionByCategory(est, _alt, 'materials');
+    }
     if (sectionId) {
       var arr = appData.estimateLines;
       var startIdx = arr.findIndex(function(l) { return l.id === sectionId; });
@@ -3263,14 +3270,59 @@
   // Returns a short summary string the AI panel can echo back to the
   // server in the tool_result so Claude knows what landed.
   // ──────────────────────────────────────────────────────────────────
+  // Find-or-create a standard section (Materials/Labor/GC/Sub) by its stable
+  // btCategory in the active group, WITHOUT saving/rendering/alerting — safe to
+  // call inside an add loop. Returns the section header id (or null).
+  function eeEnsureSectionByCategory(est, alt, btCategory) {
+    var preset = STANDARD_SECTIONS_PRESET.find(function(p) { return p.btCategory === btCategory; });
+    var presetName = preset ? (preset.name || '').toLowerCase() : null;
+    var existing = (appData.estimateLines || []).find(function(l) {
+      if (l.estimateId !== est.id || l.alternateId !== alt.id || l.section !== '__section_header__') return false;
+      if (l.btCategory === btCategory) return true;
+      // A same-named header with NO btCategory (custom-add / AI / legacy) is the
+      // same bucket — adopt it (backfilled below) instead of making a twin.
+      return (!l.btCategory && presetName && (l.description || '').toLowerCase() === presetName);
+    });
+    if (existing) {
+      if (!existing.btCategory && preset) existing.btCategory = preset.btCategory;
+      return existing.id;
+    }
+    if (!preset) return null;
+    var hdr = {
+      id: 's' + Date.now() + '_' + Math.random().toString(36).slice(2, 5),
+      estimateId: est.id, alternateId: alt.id, section: '__section_header__',
+      description: preset.name, btCategory: preset.btCategory, markup: preset.markup
+    };
+    appData.estimateLines.push(hdr);
+    return hdr.id;
+  }
+  // Resolve which cost bucket a catalog/assembly line belongs in, deterministically.
+  function eeBtCatFor(input) {
+    if (input.bt_category) return String(input.bt_category);
+    if (input.assembly_bucket) return String(input.assembly_bucket);
+    if (input.section_name) {
+      var nm = String(input.section_name).toLowerCase();
+      var p = STANDARD_SECTIONS_PRESET.find(function(x) { return (x.name || '').toLowerCase() === nm; });
+      if (p) return p.btCategory;
+    }
+    return null;
+  }
+
   function applyAddLineItem(input) {
     var est = getEstimate();
     if (!est) throw new Error('No estimate open.');
     var alt = getActiveAlternate();
     if (!alt) throw new Error('No active alternate.');
 
+    // Route to a section DETERMINISTICALLY so a line can never orphan at the
+    // array end (where it silently booked as Subcontractor cost):
+    // 1) by stable btCategory (materials|labor|gc|sub) — find-or-create;
+    // 2) else a fuzzy match against a custom section name;
+    // 3) else default to Materials (never the array-end / sub trap).
     var sectionId = null;
-    if (input.section_name) {
+    var btCat = eeBtCatFor(input);
+    if (btCat) sectionId = eeEnsureSectionByCategory(est, alt, btCat);
+    if (!sectionId && input.section_name) {
       var needle = String(input.section_name).toLowerCase();
       var match = (appData.estimateLines || []).find(function(l) {
         return l.estimateId === est.id
@@ -3280,6 +3332,7 @@
       });
       if (match) sectionId = match.id;
     }
+    if (!sectionId) sectionId = eeEnsureSectionByCategory(est, alt, 'materials');
 
     var newLine = {
       id: 'l' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
@@ -3366,7 +3419,7 @@
       try {
         summaries.push(applyAddLineItem(Object.assign({ _silent: true }, spec || {})));
       } catch (e) {
-        errors.push((spec && spec.description) || 'unknown' + ': ' + (e.message || 'failed'));
+        errors.push(((spec && spec.description) || 'unknown') + ': ' + (e.message || 'failed'));
       }
     });
     // Single save + render after the whole batch lands.
