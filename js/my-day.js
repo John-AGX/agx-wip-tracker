@@ -80,39 +80,43 @@
   function ensureStyles() {
     if (document.getElementById('p86-myday-styles')) return;
     var css =
-      '#my-day .myday{max-width:760px;margin:0 auto;}' +
-      '#my-day .myday-head{display:flex;align-items:flex-end;gap:12px;margin-bottom:4px;}' +
-      '#my-day .myday-head h2{margin:0;font-size:24px;}' +
-      '#my-day .myday-date{color:var(--text-dim,#9aa);font-size:14px;flex:1;}' +
-      '#my-day .myday-refresh{background:transparent;border:1px solid var(--border,#2a2a3a);color:var(--text-dim,#9aa);border-radius:6px;padding:5px 10px;font-size:12px;cursor:pointer;}' +
-      '#my-day .myday-summary{color:var(--text-dim,#9aa);font-size:13px;margin:8px 0 18px;}' +
-      '#my-day .myday-sec{margin-bottom:22px;}' +
-      '#my-day .myday-sec-h{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#8a8a9a);margin:0 0 8px 2px;}' +
-      '#my-day .myday-card{display:flex;gap:12px;align-items:flex-start;padding:11px 14px;border:1px solid var(--border,#2a2a3a);border-radius:9px;background:var(--card-bg,#141419);margin-bottom:8px;cursor:pointer;transition:border-color .12s,background .12s;}' +
-      '#my-day .myday-card:hover{border-color:var(--accent,#22d3ee);background:rgba(34,211,238,0.05);}' +
-      '#my-day .myday-time{flex:0 0 76px;font-size:13px;font-weight:600;color:var(--text,#fff);padding-top:1px;}' +
-      '#my-day .myday-time small{display:block;font-size:10px;font-weight:500;color:var(--text-dim,#8a8a9a);}' +
-      '#my-day .myday-dot{flex:0 0 8px;width:8px;height:8px;border-radius:50%;margin-top:6px;}' +
-      '#my-day .myday-body{flex:1;min-width:0;}' +
-      '#my-day .myday-title{font-size:14px;font-weight:600;color:var(--text,#fff);}' +
-      '#my-day .myday-meta{font-size:12px;color:var(--text-dim,#8a8a9a);margin-top:2px;}' +
-      '#my-day .myday-chip{display:inline-block;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;padding:2px 6px;border-radius:4px;margin-left:6px;vertical-align:middle;}' +
-      '#my-day .myday-empty{text-align:center;color:var(--text-dim,#8a8a9a);padding:56px 20px;}' +
-      '#my-day .myday-empty .big{font-size:40px;margin-bottom:10px;}' +
+      '.myday{max-width:760px;margin:0 auto;}' +
+      // Embedded in the Summary "Today" column — fill the column, no centering.
+      '.myday-embed{max-width:none;margin:0;}' +
+      '.myday-embed .myday-sec{margin-bottom:14px;}' +
+      '.myday-embed .myday-sec:last-child{margin-bottom:0;}' +
+      '.myday .myday-head{display:flex;align-items:flex-end;gap:12px;margin-bottom:4px;}' +
+      '.myday .myday-head h2{margin:0;font-size:24px;}' +
+      '.myday .myday-date{color:var(--text-dim,#9aa);font-size:14px;flex:1;}' +
+      '.myday .myday-refresh{background:transparent;border:1px solid var(--border,#2a2a3a);color:var(--text-dim,#9aa);border-radius:6px;padding:5px 10px;font-size:12px;cursor:pointer;}' +
+      '.myday .myday-summary{color:var(--text-dim,#9aa);font-size:13px;margin:8px 0 18px;}' +
+      '.myday .myday-sec{margin-bottom:22px;}' +
+      '.myday .myday-sec-h{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:var(--text-dim,#8a8a9a);margin:0 0 8px 2px;}' +
+      '.myday .myday-card{display:flex;gap:12px;align-items:flex-start;padding:11px 14px;border:1px solid var(--border,#2a2a3a);border-radius:9px;background:var(--card-bg,#141419);margin-bottom:8px;cursor:pointer;transition:border-color .12s,background .12s;}' +
+      '.myday .myday-card:hover{border-color:var(--accent,#22d3ee);background:rgba(34,211,238,0.05);}' +
+      '.myday .myday-time{flex:0 0 76px;font-size:13px;font-weight:600;color:var(--text,#fff);padding-top:1px;}' +
+      '.myday .myday-time small{display:block;font-size:10px;font-weight:500;color:var(--text-dim,#8a8a9a);}' +
+      '.myday .myday-dot{flex:0 0 8px;width:8px;height:8px;border-radius:50%;margin-top:6px;}' +
+      '.myday .myday-body{flex:1;min-width:0;}' +
+      '.myday .myday-title{font-size:14px;font-weight:600;color:var(--text,#fff);}' +
+      '.myday .myday-meta{font-size:12px;color:var(--text-dim,#8a8a9a);margin-top:2px;}' +
+      '.myday .myday-chip{display:inline-block;font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:0.4px;padding:2px 6px;border-radius:4px;margin-left:6px;vertical-align:middle;}' +
+      '.myday .myday-empty{text-align:center;color:var(--text-dim,#8a8a9a);padding:56px 20px;}' +
+      '.myday .myday-empty .big{font-size:40px;margin-bottom:10px;}' +
       // H4 email block
-      '#my-day .myday-email{border:1px solid var(--border,#2a2a3a);border-radius:10px;background:var(--card-bg,#141419);margin:8px 0 18px;overflow:hidden;}' +
-      '#my-day .myday-email-head{display:flex;align-items:center;gap:9px;padding:11px 14px;cursor:pointer;}' +
-      '#my-day .myday-email-head:hover{background:rgba(34,211,238,0.05);}' +
-      '#my-day .myday-email-ico{display:inline-flex;width:17px;height:17px;color:var(--accent,#22d3ee);}' +
-      '#my-day .myday-email-ico svg{width:17px;height:17px;}' +
-      '#my-day .myday-email-sum{flex:1;font-size:13.5px;font-weight:600;color:var(--text,#fff);}' +
-      '#my-day .myday-email-go{font-size:12px;color:var(--accent,#22d3ee);}' +
-      '#my-day .myday-email-row{display:flex;align-items:center;gap:9px;padding:8px 14px;border-top:1px solid var(--border,#23232b);cursor:pointer;font-size:12.5px;}' +
-      '#my-day .myday-email-row:hover{background:rgba(34,211,238,0.05);}' +
-      '#my-day .myday-email-dot{flex:0 0 6px;width:6px;height:6px;border-radius:50%;background:var(--accent,#22d3ee);}' +
-      '#my-day .myday-email-from{font-weight:600;color:var(--text,#e4e6f0);white-space:nowrap;max-width:38%;overflow:hidden;text-overflow:ellipsis;}' +
-      '#my-day .myday-email-subj{color:var(--text-dim,#9aa);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;}' +
-      '#my-day .myday-err{color:#f87171;font-size:13px;padding:14px;}';
+      '.myday .myday-email{border:1px solid var(--border,#2a2a3a);border-radius:10px;background:var(--card-bg,#141419);margin:8px 0 18px;overflow:hidden;}' +
+      '.myday .myday-email-head{display:flex;align-items:center;gap:9px;padding:11px 14px;cursor:pointer;}' +
+      '.myday .myday-email-head:hover{background:rgba(34,211,238,0.05);}' +
+      '.myday .myday-email-ico{display:inline-flex;width:17px;height:17px;color:var(--accent,#22d3ee);}' +
+      '.myday .myday-email-ico svg{width:17px;height:17px;}' +
+      '.myday .myday-email-sum{flex:1;font-size:13.5px;font-weight:600;color:var(--text,#fff);}' +
+      '.myday .myday-email-go{font-size:12px;color:var(--accent,#22d3ee);}' +
+      '.myday .myday-email-row{display:flex;align-items:center;gap:9px;padding:8px 14px;border-top:1px solid var(--border,#23232b);cursor:pointer;font-size:12.5px;}' +
+      '.myday .myday-email-row:hover{background:rgba(34,211,238,0.05);}' +
+      '.myday .myday-email-dot{flex:0 0 6px;width:6px;height:6px;border-radius:50%;background:var(--accent,#22d3ee);}' +
+      '.myday .myday-email-from{font-weight:600;color:var(--text,#e4e6f0);white-space:nowrap;max-width:38%;overflow:hidden;text-overflow:ellipsis;}' +
+      '.myday .myday-email-subj{color:var(--text-dim,#9aa);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1;}' +
+      '.myday .myday-err{color:#f87171;font-size:13px;padding:14px;}';
     var st = document.createElement('style');
     st.id = 'p86-myday-styles';
     st.textContent = css;
@@ -145,9 +149,10 @@
     return 'evening';
   }
 
-  function loadDay() {
-    var body = document.getElementById('mydayBody');
+  function loadDay(body, opts) {
+    body = body || document.getElementById('mydayBody');
     if (!body) return;
+    opts = opts || {};
     if (!window.p86Api) { body.innerHTML = '<div class="myday-err">API unavailable.</div>'; return; }
     body.innerHTML = '<div class="myday-summary">Loading your day&hellip;</div>';
 
@@ -218,15 +223,16 @@
       var needsReply = emailThreads.filter(function (t) { return t.needs_reply; });
       var email = { total: emailThreads.length, overnight: overnight.length, needsReply: needsReply, top: needsReply.slice(0, 3) };
 
-      renderDay(body, evToday, schToday, tasksDue, email);
+      renderDay(body, evToday, schToday, tasksDue, email, opts);
     }).catch(function (err) {
       body.innerHTML = '<div class="myday-err">Could not load your day: ' + esc(err && err.message || '') + '</div>';
     });
   }
 
-  function renderDay(body, events, sched, tasks, email) {
+  function renderDay(body, events, sched, tasks, email, opts) {
+    opts = opts || {};
     email = email || { total: 0, overnight: 0, needsReply: [], top: [] };
-    var emailHtml = renderEmailBlock(email);
+    var emailHtml = (opts.showEmail === false) ? '' : renderEmailBlock(email);
     var total = events.length + sched.length + tasks.length;
     if (!total) {
       if (emailHtml) {
@@ -401,6 +407,22 @@
     return '<span class="myday-chip" style="background:rgba(34,211,238,0.14);color:#22d3ee;">&#128279; ' + esc(label) + '</span>';
   }
 
-  window.p86MyDay = { render: renderMyDayTab };
+  // Render the day itinerary (schedule + field work + tasks due) into an
+  // arbitrary host — used by the Summary "Today" module after My Day was
+  // merged into the dashboard. opts.showEmail=false omits the email block
+  // (Summary surfaces email in the Needs-you lane + Inbox instead).
+  function renderInto(hostEl, opts) {
+    if (!hostEl) return;
+    ensureStyles();
+    opts = opts || {};
+    hostEl.innerHTML =
+      '<div class="myday myday-embed">' +
+        '<div class="myday-embed-body"><div class="myday-summary">Loading your day&hellip;</div></div>' +
+      '</div>';
+    var body = hostEl.querySelector('.myday-embed-body');
+    loadDay(body, opts);
+  }
+
+  window.p86MyDay = { render: renderMyDayTab, renderInto: renderInto };
   window.renderMyDayTab = renderMyDayTab;
 })();

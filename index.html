@@ -724,7 +724,7 @@
                          window.myFiles.selectFolder hand-off in app.js. -->
                     <div class="app-nav-group">
                         <div class="app-nav-group-label">Workspace</div>
-                        <button class="tab-btn" data-tab="my-day" data-p86-icon="sun" title="My Day"><span class="app-nav-label">My Day</span></button>
+                        <!-- My Day merged into the Summary dashboard (2026-07); its tab redirects to Summary. -->
                         <button class="tab-btn" data-tab="my-tasks" data-p86-icon="check-circle" title="My Tasks"><span class="app-nav-label">My Tasks</span></button>
                         <button class="tab-btn" data-tab="messages" data-p86-icon="envelope" title="Messages"><span class="app-nav-label">Messages</span><span id="navMessagesBadge" style="display:none;margin-left:auto;background:#f87171;color:#fff;font-size:10px;font-weight:700;padding:1px 7px;border-radius:10px;line-height:1.5;"></span></button>
                         <button class="tab-btn" data-tab="email-hub" data-p86-icon="at-symbol" title="Email — your forwarded inbox, readable by the assistant"><span class="app-nav-label">Email</span></button>
@@ -3229,7 +3229,7 @@
     <script src="js/qb-costs-view.js?v=13"></script>
     <script src="js/insights.js?v=7"></script>
     <script src="js/schedule.js?v=49"></script>
-    <script src="js/my-day.js?v=6"></script>
+    <script src="js/my-day.js?v=7"></script>
     <!-- Shared entity card (job/lead/estimate Pulse card) — window.p86EntityCard.
          Loads before its callers (entities-map.js, workspace-layout.js). -->
     <script src="js/entity-card.js?v=6"></script>
@@ -3665,7 +3665,6 @@
         <div class="p86-mobile-more-section" data-more-section>Home</div>
         <div class="p86-mobile-more-grid" data-more-grid>
           <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('summary')"><span class="p86-mobile-more-icon" data-p86-icon="chart-bar"></span><span>Summary</span></button>
-          <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('my-day')"><span class="p86-mobile-more-icon" data-p86-icon="sun"></span><span>My Day</span></button>
         </div>
 
         <div class="p86-mobile-more-section" data-more-section>Workspace</div>

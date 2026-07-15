@@ -848,8 +848,17 @@
                     '</div>' +
                 '</div>' +
 
-                // Needs Attention row
-                '<div class="p86-cmd-sectlabel">Needs your attention</div>' +
+                // ── "Needs you now" lane — the actionable, ranked at-a-glance
+                // list (what to DO right now), fused across sources by
+                // renderSummaryNeedsYou(). Sits ABOVE the count tiles, which
+                // answer "how many" rather than "which ones, act now".
+                '<div class="p86-cmd-sectlabel">Needs you now</div>' +
+                '<div id="summary-needs" class="p86-needs">' +
+                    '<div class="p86-needs-loading">Checking what needs you…</div>' +
+                '</div>' +
+
+                // Count tiles — the "by the numbers" strip.
+                '<div class="p86-cmd-sectlabel">By the numbers</div>' +
                 '<div class="p86-cmd-attention">' +
                     attentionCard('Overdue Invoices', overdueInv,  '#f87171', "window.switchTab('jobs');",   'Past due, unpaid') +
                     attentionCard('Open Leads',       openLeads,   '#22d3ee', leadsClick,                   'New + working') +
@@ -908,21 +917,32 @@
                 '<div class="p86-cmd-workspace" data-seg="today">' +
                     // Col 1 (money) — combined leads + jobs map + sales pipeline.
                     '<div class="p86-cmd-col" data-seg-group="money">' +
-                        '<div class="p86-cmd-mod p86-cmd-mod--fill">' +
+                        // Half-height map (no --fill so the desktop flex-grow
+                        // doesn't re-expand it back to full column height).
+                        '<div class="p86-cmd-mod">' +
                             '<div class="p86-cmd-modhead"><span>Map</span></div>' +
-                            '<div id="summaryMapHost" class="p86-cmd-modbody" style="padding:0;min-height:420px;overflow:hidden;position:relative;"></div>' +
+                            '<div id="summaryMapHost" class="p86-cmd-modbody" style="padding:0;height:210px;min-height:210px;overflow:hidden;position:relative;"></div>' +
                         '</div>' +
                         // Sales pipeline renders its own header + card, so it
                         // sits as a bare host (no .p86-cmd-mod wrapper).
                         '<div id="summary-sales-host">' + renderSalesPipelineHTML(d, leadsClick, estsClick) + '</div>' +
                     '</div>' +
-                    // Col 2 (today) — assistant hub + this-week agenda.
+                    // Col 2 (today) — the "Today" itinerary (assistant snapshot +
+                    // My Day timeline) + this-week agenda.
                     '<div class="p86-cmd-col" data-seg-group="today">' +
                         '<div class="p86-cmd-mod p86-cmd-mod--fill">' +
-                            '<div class="p86-cmd-modhead"><span>Assistant Hub</span>' +
+                            '<div class="p86-cmd-modhead"><span>Today</span>' +
                                 '<button class="ee-btn ghost small" onclick="if(window.p86AI&amp;&amp;window.p86AI.open)window.p86AI.open({entityType:\'ask86\'});" style="font-size:11px;padding:2px 8px;">Ask 86 &rarr;</button>' +
                             '</div>' +
-                            '<div id="summary-assistant" class="p86-cmd-modbody">Loading your day&hellip;</div>' +
+                            '<div class="p86-cmd-modbody">' +
+                                // Assistant snapshot — task count-pills + reminders + quick-add
+                                // (renderSummaryAssistant, trimmed of its own task LIST / next-up,
+                                // which the itinerary below now owns).
+                                '<div id="summary-assistant">Loading your day&hellip;</div>' +
+                                // Today's itinerary — timed events + all-day/field work + tasks
+                                // due, ported from My Day via window.p86MyDay.renderInto().
+                                '<div id="summary-today-itinerary" style="margin-top:12px;"></div>' +
+                            '</div>' +
                         '</div>' +
                         '<div class="p86-cmd-mod">' +
                             '<div class="p86-cmd-modhead"><span>This Week’s Agenda</span>' +
@@ -961,6 +981,8 @@
             // so a missing module degrades to its loading/empty state.
             renderSummaryMap();
             renderSummaryAssistant();
+            renderSummaryTodayItinerary();
+            renderSummaryNeedsYou();
             renderSummaryNotes();
             paintSnapshotRow();
             fetchWorkflowAttentionCounts();
@@ -1240,8 +1262,132 @@
                 window.p86Maps && typeof window.p86Maps.ready === 'function') {
                 window.p86EntitiesMap.render('summaryMapHost');
             } else {
-                host.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;min-height:420px;color:var(--text-dim,#888);font-size:13px;text-align:center;padding:18px;">Map module not loaded.</div>';
+                host.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;min-height:210px;color:var(--text-dim,#888);font-size:13px;text-align:center;padding:18px;">Map module not loaded.</div>';
             }
+        }
+
+        // ── Today itinerary — ports My Day (events + field work + tasks due)
+        // into the Summary "Today" column via the reused p86MyDay.renderInto.
+        // Email is omitted here (it's promoted to the Needs-you lane below).
+        function renderSummaryTodayItinerary() {
+            var host = document.getElementById('summary-today-itinerary');
+            if (!host) return;
+            if (window.p86MyDay && typeof window.p86MyDay.renderInto === 'function') {
+                window.p86MyDay.renderInto(host, { showEmail: false });
+            } else {
+                host.innerHTML = '';
+            }
+        }
+
+        // ── "Needs you now" lane ──────────────────────────────────────
+        // The at-a-glance "what am I missing / act on these" list. Fuses the
+        // most time-sensitive actionable items across sources into one ranked
+        // list with per-row one-tap actions + an urgency signal (red = act
+        // now + pulse, amber = due soon). Each source degrades to empty.
+        function ensureNeedsStyles() {
+            if (document.getElementById('p86-needs-styles')) return;
+            var css =
+                '.p86-needs{display:flex;flex-direction:column;gap:6px;margin:0 0 6px;}' +
+                '.p86-needs-loading,.p86-needs-empty{font-size:12.5px;color:var(--text-dim,#8a8a9a);padding:10px 12px;border:1px dashed var(--border,#2a2a3a);border-radius:9px;}' +
+                '.p86-needs-empty{color:#34d399;border-style:solid;border-color:rgba(52,211,153,0.3);background:rgba(52,211,153,0.05);}' +
+                '.p86-needs-row{display:flex;align-items:center;gap:10px;padding:9px 12px;border:1px solid var(--border,#2a2a3a);border-left:3px solid var(--needs-c,#fbbf24);border-radius:9px;background:var(--card-bg,#141419);cursor:pointer;transition:background .12s,border-color .12s;}' +
+                '.p86-needs-row:hover{background:rgba(255,255,255,0.03);border-color:var(--needs-c,#fbbf24);}' +
+                '.p86-needs-crit{animation:p86NeedsPulse 2.2s ease-in-out infinite;}' +
+                '@keyframes p86NeedsPulse{0%,100%{box-shadow:0 0 0 0 rgba(248,113,113,0);}50%{box-shadow:0 0 11px 0 rgba(248,113,113,0.45);}}' +
+                '@media (prefers-reduced-motion:reduce){.p86-needs-crit{animation:none;}}' +
+                '.p86-needs-ico{display:inline-flex;width:16px;height:16px;color:var(--needs-c,#fbbf24);flex-shrink:0;}' +
+                '.p86-needs-ico svg{width:16px;height:16px;}' +
+                '.p86-needs-body{flex:1;min-width:0;display:flex;flex-direction:column;}' +
+                '.p86-needs-title{font-size:13px;font-weight:600;color:var(--text,#fff);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
+                '.p86-needs-sub{font-size:11.5px;color:var(--text-dim,#8a8a9a);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}' +
+                '.p86-needs-more{font-size:11.5px;color:var(--accent,#22d3ee);padding:4px 12px 2px;cursor:default;}';
+            var st = document.createElement('style');
+            st.id = 'p86-needs-styles';
+            st.textContent = css;
+            document.head.appendChild(st);
+        }
+        function renderSummaryNeedsYou() {
+            var host = document.getElementById('summary-needs');
+            if (!host) return;
+            ensureNeedsStyles();
+            var todayStr = (function () {
+                var dt = new Date(); dt.setHours(0, 0, 0, 0);
+                var m = String(dt.getMonth() + 1).padStart(2, '0');
+                var d = String(dt.getDate()).padStart(2, '0');
+                return dt.getFullYear() + '-' + m + '-' + d;
+            })();
+            var api = window.p86Api;
+            var emailP = fetch('/api/email-inbox/threads?limit=50', { credentials: 'include' })
+                .then(function (r) { return r.ok ? r.json() : { threads: [] }; })
+                .catch(function () { return { threads: [] }; });
+            var tasksP = (api && api.tasks && api.tasks.list)
+                ? api.tasks.list({ assignee: 'me', exclude_done: 1, limit: 200 })
+                    .then(function (r) { return (r && r.tasks) || []; }).catch(function () { return []; })
+                : Promise.resolve([]);
+            Promise.all([emailP, tasksP]).then(function (out) {
+                var threads = (out[0] && out[0].threads) || [];
+                var tasks = out[1] || [];
+                var items = [];
+                function q(s) { return String(s == null ? '' : s).replace(/'/g, "\\'"); }
+                // 1) Emails needing a reply (urgency from triage).
+                threads.forEach(function (t) {
+                    if (!t.needs_reply) return;
+                    var hi = (t.triage_urgency === 'high');
+                    items.push({
+                        sev: hi ? 2 : 1, color: hi ? '#f87171' : '#fbbf24', icon: 'at-symbol',
+                        title: t.entity_label || t.last_from || 'Email',
+                        sub: 'Needs a reply — ' + (t.subject || '(no subject)'),
+                        onclick: "window.switchTab('email-hub')"
+                    });
+                });
+                // 2) Overdue lead follow-ups (from appData; skip terminal statuses).
+                var leads = (window.appData && window.appData.leads) || [];
+                var TERMINAL = { sold: 1, lost: 1, no_opportunity: 1 };
+                leads.forEach(function (l) {
+                    if (!l || !l.next_followup_at || TERMINAL[l.status]) return;
+                    var d = String(l.next_followup_at).slice(0, 10);
+                    if (d >= todayStr) return;
+                    var days = Math.max(1, Math.round((new Date(todayStr) - new Date(d)) / 864e5));
+                    var hi = days >= 7;
+                    items.push({
+                        sev: hi ? 2 : 1, color: hi ? '#f87171' : '#fbbf24', icon: 'clients',
+                        title: l.title || l.property_name || 'Lead',
+                        sub: 'Follow-up ' + days + 'd overdue',
+                        onclick: "if(window.openEditLeadModal)window.openEditLeadModal('" + q(l.id) + "')"
+                    });
+                });
+                // 3) Overdue tasks.
+                tasks.forEach(function (t) {
+                    if (!t.due_date) return;
+                    var d = String(t.due_date).slice(0, 10);
+                    if (d >= todayStr) return;
+                    items.push({
+                        sev: 2, color: '#f87171', icon: 'reports',
+                        title: t.title || '(untitled task)', sub: 'Task overdue',
+                        onclick: "if(window.p86Tasks&&window.p86Tasks.openDetail)window.p86Tasks.openDetail('" + q(t.id) + "')"
+                    });
+                });
+                items.sort(function (a, b) { return b.sev - a.sev; });
+                if (!items.length) {
+                    host.innerHTML = '<div class="p86-needs-empty">&#10003; You\'re all caught up — nothing needs you right now.</div>';
+                    return;
+                }
+                var CAP = 7;
+                var html = items.slice(0, CAP).map(function (it) {
+                    var ic = (window.p86Icon && window.p86Icon(it.icon)) || '';
+                    return '<div class="p86-needs-row' + (it.sev === 2 ? ' p86-needs-crit' : '') + '" style="--needs-c:' + it.color + ';" onclick="' + it.onclick + '">' +
+                        '<span class="p86-needs-ico">' + ic + '</span>' +
+                        '<span class="p86-needs-body">' +
+                            '<span class="p86-needs-title">' + escapeHTML(it.title) + '</span>' +
+                            '<span class="p86-needs-sub">' + escapeHTML(it.sub) + '</span>' +
+                        '</span>' +
+                    '</div>';
+                }).join('');
+                if (items.length > CAP) html += '<div class="p86-needs-more">+' + (items.length - CAP) + ' more</div>';
+                host.innerHTML = html;
+            }).catch(function () {
+                host.innerHTML = '<div class="p86-needs-empty">Could not load your action items.</div>';
+            });
         }
 
         // ── AI Assistant Hub (Phase 1 — D4) ───────────────────────────
@@ -1338,15 +1484,10 @@
                         countPill('Upcoming', upcoming.length, '#34d399') +
                     '</div>';
 
-                // NEXT UP — the soonest upcoming appointment.
-                if (nextEv && nextEv.starts_at) {
-                    html += sectionLabel('Next up') +
-                        '<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:rgba(34,211,238,0.06);border:1px solid var(--border,#333);border-radius:8px;margin-bottom:12px;">' +
-                            '<span style="width:7px;height:7px;border-radius:50%;background:#22d3ee;flex-shrink:0;"></span>' +
-                            '<span style="flex:1;font-size:12px;color:var(--text,#fff);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(nextEv.title || '(untitled)') + '</span>' +
-                            '<span style="font-size:10.5px;color:#22d3ee;font-weight:600;flex-shrink:0;">' + escapeHTML(fmtWhenShort(nextEv.starts_at)) + '</span>' +
-                        '</div>';
-                }
+                // NEXT UP + MY TASKS moved to the Today itinerary below (which
+                // lists today's events/field work/tasks). The snapshot keeps just
+                // the summary + count pills + reminders + quick-add so the Today
+                // column doesn't double-list the same tasks/appointments.
 
                 // REMINDERS — pending, soonest first (top 3).
                 if (pendRems.length) {
@@ -1363,26 +1504,8 @@
                     html += '</div>';
                 }
 
-                // MY TASKS — short list, overdue first, then today, then upcoming.
-                var listed = overdue.concat(today).concat(upcoming).slice(0, 4);
-                if (listed.length) {
-                    html += sectionLabel('My tasks');
-                    html += '<div style="display:flex;flex-direction:column;gap:1px;background:var(--border,#222);border-radius:8px;overflow:hidden;margin-bottom:10px;">';
-                    listed.forEach(function(t) {
-                        var y = dueYmd(t);
-                        var dueLabel = '';
-                        if (y) {
-                            if (y < todayStr) dueLabel = '<span style="color:#f87171;">overdue</span>';
-                            else if (y === todayStr) dueLabel = '<span style="color:#22d3ee;">today</span>';
-                            else dueLabel = '<span style="color:var(--text-dim,#888);">' + escapeHTML(y.slice(5)) + '</span>';
-                        }
-                        html += '<button class="ee-btn" onclick="if(window.p86Tasks&amp;&amp;window.p86Tasks.openDetail)window.p86Tasks.openDetail(\'' + String(t.id).replace(/'/g, "\\'") + '\')" style="text-align:left;padding:7px 10px;background:var(--card-bg,#141419);border:none;cursor:pointer;display:flex;align-items:center;gap:8px;">' +
-                            '<span style="flex:1;font-size:12px;color:var(--text,#fff);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(t.title || '(untitled)') + '</span>' +
-                            (dueLabel ? '<span style="font-size:10px;font-weight:600;flex-shrink:0;">' + dueLabel + '</span>' : '') +
-                        '</button>';
-                    });
-                    html += '</div>';
-                }
+                // MY TASKS list moved to the Today itinerary below (renders the
+                // actual overdue/today tasks as time-ordered cards).
 
                 // Quick-add — reuses the tasks quick-capture modal.
                 html += '<button class="ee-btn primary" onclick="if(window.p86Tasks&amp;&amp;window.p86Tasks.openQuickAdd)window.p86Tasks.openQuickAdd()" style="width:100%;font-size:12px;padding:7px;">+ Quick add task</button>';
@@ -1620,7 +1743,9 @@
                     });
                     var html = '<div style="display:flex;flex-direction:column;gap:6px;">';
                     var DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
-                    for (var i = 0; i < 7; i++) {
+                    // Start at tomorrow (i=1): today lives in the "Today" itinerary
+                    // module above, so the week agenda avoids re-listing it.
+                    for (var i = 1; i < 7; i++) {
                         var dt = new Date(today.getTime() + i * 24 * 60 * 60 * 1000);
                         var k = ymd(dt);
                         var dayEntries = byDay[k] || [];
@@ -1799,7 +1924,8 @@
             } else if (tabName === 'my-tasks') {
                 if (typeof window.renderMyTasksTab === 'function') window.renderMyTasksTab();
             } else if (tabName === 'my-day') {
-                if (typeof window.renderMyDayTab === 'function') window.renderMyDayTab();
+                // My Day merged into the Summary dashboard — send there instead.
+                if (typeof window.switchTab === 'function') { window.switchTab('summary'); return; }
             } else if (tabName === 'messages') {
                 if (typeof window.renderMessagesTab === 'function') window.renderMessagesTab();
             } else if (tabName === 'email-hub') {
