@@ -300,16 +300,27 @@
         // re-dock the singleton 86 panel into a hidden host (drawer vanishes).
         var asmMain = document.getElementById('cc-asm-main');
         if (!asmMain || asmMain.offsetParent === null) return;
-        var targets = (e.detail && e.detail.affected_targets) || [];
+        var detail = e.detail || {};
+        var targets = detail.affected_targets || [];
+        var asmCreate = targets.find(function (t) {
+          var ty = t && (t.entity_type || t.type); return ty === 'assembly' && (t.op === 'create' || !t.op);
+        });
         var hitAssembly = targets.some(function (t) {
           var ty = t && (t.entity_type || t.type); return ty === 'assembly';
         });
         if (!hitAssembly) return;
-        // Don't clear handedId here — an unrelated assembly card must not
-        // retire the hint on a still-pending packet. loadResearchInbox retires
-        // it precisely: the handed packet leaves the unprocessed list only when
-        // the server consumed it (via source_research_id).
-        loadResearchInbox();      // a server-consumed packet drops from unprocessed
+        // Auto-link the handed packet to the assembly 86 just built from it.
+        // The server-side path (source_research_id in the op) handles direct
+        // emits; when 86 delegates to the Scribe the op field is lost, so we
+        // correlate here by the EXACT applied payload id referencing this
+        // packet ("research packet #<id>" in its title/summary). No blind
+        // "any assembly card" guess — that would mislink in the shared pane.
+        if (_asmR.handedId && asmCreate && detail.payload_id) {
+          tryAutoConsumeHanded(detail.payload_id, asmCreate.entity_id || asmCreate.id, _asmR.handedId);
+        }
+        // Don't clear handedId on unrelated cards — loadResearchInbox retires
+        // it precisely once the handed packet leaves the unprocessed list.
+        loadResearchInbox();      // a consumed packet drops from unprocessed
         loadAssemblyTuning();     // refresh health tiles + queue with the new recipe
       });
     }
@@ -429,21 +440,27 @@
       if (_asmR.mode === 'research') {
         // Load the auto-selected packet's detail so its row is not highlighted
         // over an empty detail pane (first entry + after consume/void).
-        if (_asmR.sel && (!_asmR.det || _asmR.det.id !== _asmR.sel)) loadPacketDetail(_asmR.sel);
+        if (_asmR.sel && (!_asmR.det || _asmR.det.id !== _asmR.sel)) loadPacketDetail(_asmR.sel, true);
         else paintAsmMain();
       }
     }).catch(function (e) {
       var ws = document.getElementById('cc-asm-ws'); if (ws) ws.innerHTML = errBox('research inbox', e);
     });
   }
-  function loadPacketDetail(id) {
+  // fromHeal guards against a refresh loop: a manual open of a stale row (packet
+  // consumed/deleted elsewhere) drops it from the list via a refresh; the
+  // auto-load that refresh triggers passes fromHeal, so a repeat 404 just shows
+  // the error instead of refreshing again.
+  function loadPacketDetail(id, fromHeal) {
     _asmR.sel = id; _asmR.det = null;
     if (_asmR.mode === 'research') paintAsmMain();
     cget('/api/assembly-research/' + id).then(function (d) {
       _asmR.det = (d && d.research) || null;
       if (_asmR.mode === 'research') paintAsmMain();
     }).catch(function (e) {
+      _asmR.sel = null; _asmR.det = null;
       var ws = document.getElementById('cc-asm-ws'); if (ws) ws.innerHTML = errBox('packet', e);
+      if (!fromHeal) loadResearchInbox();   // drop the now-stale row from the list
     });
   }
   function researchListHtml() {
@@ -556,7 +573,7 @@
     _asmR.handedId = id;
     var lines = [];
     lines.push('Build (or tune) assemblies from this web research packet. Draft each recipe as an approval card via scribe_write (entity_type "assembly"); link materials to our catalog where they exist; put the source URL in the tuning-log evidence/reason. Ask me before guessing at anything unclear.');
-    lines.push('IMPORTANT: on each assembly you CREATE from this packet, set the op field "source_research_id" to ' + id + ' so this packet auto-links to that assembly and clears from my inbox the moment I approve.');
+    lines.push('IMPORTANT for auto-filing: when you create the assembly, (a) set the op field "source_research_id" to ' + id + ', AND (b) include the exact text "research packet #' + id + '" in the payload title or summary. Either one lets this packet auto-link to the assembly and clear from my inbox the moment I approve.');
     lines.push('');
     lines.push('PACKET #' + p.id + (p.title ? ' — ' + p.title : '') + (p.trade ? ' [' + p.trade + ']' : ''));
     if (p.source_url) lines.push('Source: ' + p.source_url);
@@ -573,15 +590,41 @@
     try { window.p86AI.askDocked(lines.join('\n')); } catch (e) {}
     paintAsmMain(); // reflect the "handed" hint
   }
-  // Manual "✓ Built" — mark a packet consumed without a specific assembly link
-  // (the auto-path links server-side via source_research_id).
-  function consumePacket(id) {
-    cpost('/api/assembly-research/' + id + '/consume', {}).then(function () {
+  // Correlate an applied assembly card to the handed packet and consume it.
+  // Deterministic: match the EXACT applied payload id, then confirm it belongs
+  // to this packet (title/summary references "packet #<id>"). Never a blind
+  // "any assembly card" guess. Falls back silently to the manual ✓ Built.
+  function tryAutoConsumeHanded(payloadId, assemblyId, packetId) {
+    if (!payloadId || !packetId) return;
+    // Deterministic: fetch THIS payload by id (org-scoped). The list route
+    // ignores ?status and caps at the 15 most-recent, so it would miss the
+    // target in a busy org — /:id resolves it exactly.
+    cget('/api/payloads/' + encodeURIComponent(payloadId)).then(function (d) {
+      var pl = d && (d.payload || d);
+      if (!pl || pl.id !== payloadId) return;
+      var txt = String((pl.title || '') + ' ' + (pl.summary || ''));
+      // word-boundaried "packet #<id>" so #1 doesn't match #12
+      var re = new RegExp('packet\\s*#\\s*' + packetId + '(?!\\d)', 'i');
+      // Only if still handed (the direct-emit path consumes server-side and
+      // retires handedId first, so this won't double-fire there). The server
+      // /consume is status='unprocessed'-guarded, so a redundant call no-ops.
+      if (re.test(txt) && _asmR.handedId === packetId) {
+        consumePacket(packetId, (assemblyId != null && isFinite(assemblyId)) ? assemblyId : null, true);
+      }
+    }).catch(function () {});
+  }
+  // "✓ Built" — mark a packet consumed. assemblyId links it to the built
+  // recipe when known (auto-path); the manual button passes none. The server
+  // org-scopes the id (out-of-org/unknown → NULL) and guards status, so a
+  // redundant auto-path call can't clobber an authoritative link. silent
+  // suppresses toasts + failure noise on that auto-path.
+  function consumePacket(id, assemblyId, silent) {
+    cpost('/api/assembly-research/' + id + '/consume', (assemblyId != null) ? { assembly_id: assemblyId } : {}).then(function () {
       if (_asmR.handedId === id) _asmR.handedId = null;
       _asmR.sel = null; _asmR.det = null;
-      toast('Marked built');
+      if (!silent) toast('Marked built');
       loadResearchInbox();
-    }).catch(function (e) { toast('Failed: ' + (e.message || e), true); });
+    }).catch(function (e) { if (!silent) { toast('Failed: ' + (e.message || e), true); loadResearchInbox(); } });
   }
 
   function asmItemPerUnit(it) {

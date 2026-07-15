@@ -89,11 +89,14 @@ router.post('/:id/consume', requireAuth, requireCapability(CAP), async (req, res
     // planting a cross-tenant FK pointer or raising a generic 500 on the
     // FK violation. (The server-side auto-consume in dispatchAssembly is the
     // primary path; this covers the manual "✓ Built" button.)
+    // status='unprocessed' guard: this route must NEVER clobber a packet the
+    // in-txn dispatchAssembly path already consumed+linked to the exact source
+    // assembly — a redundant client consume just no-ops (404) instead.
     const r = await pool.query(
       `UPDATE assembly_research SET status = 'consumed',
          consumed_assembly_id = (SELECT id FROM assemblies WHERE id = $3 AND organization_id = $2),
          consumed_at = NOW()
-       WHERE id = $1 AND organization_id = $2 RETURNING *`,
+       WHERE id = $1 AND organization_id = $2 AND status = 'unprocessed' RETURNING *`,
       [id, req.user.organization_id, (asmId && isFinite(asmId)) ? asmId : null]
     );
     if (!r.rows.length) return res.status(404).json({ error: 'Not found' });
