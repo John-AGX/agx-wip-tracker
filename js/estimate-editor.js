@@ -2361,13 +2361,26 @@
     var isDollar = mode === 'dollar';
     var prefix = isDollar ? '$' : '';
     var suffix = isDollar ? '' : '%';
-    // Section markup only applies in bottom-up mode. When a target margin is
-    // the driver it owns every price, so swap the markup pill + override for a
-    // static "driven by target margin" chip.
+    // Section markup only applies in bottom-up mode. When a target margin is the
+    // driver it owns every price — so rather than a different-looking control we
+    // render the SAME Markup pill, just GREYED OUT + tagged with a target icon
+    // (per John), showing the target-implied % as a read-out. Mirrors how the
+    // per-line markup cell greys in place.
     var tmA = eeTargetDrives(getEstimate());
+    var tmEffMarkup = tmA ? (Math.round(((eeTargetFactor(getEstimate(), getLines()) - 1) * 100) * 10) / 10) : 0;
     var markupControlHTML = tmA
-      ? '<span title="A target margin is driving every price — edit it on the Margin chip. Clear the target to price by section markups." ' +
-          'style="display:inline-flex;align-items:center;gap:5px;background:rgba(251,191,36,0.10);border:1px dashed rgba(251,191,36,0.45);color:#fbbf24;padding:5px 10px;border-radius:14px;font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.4px;">&#x1F3AF; Target margin</span>'
+      ? '<div title="A target margin is driving every price — edit it on the Margin chip above. Clear the target to price by section markups." ' +
+          'style="display:inline-flex;align-items:center;gap:6px;background:rgba(0,0,0,0.18);padding:4px 10px;border-radius:14px;border:1px solid var(--border,#333);opacity:0.55;">' +
+          '<span style="display:inline-flex;color:#fbbf24;font-size:12px;line-height:1;" aria-label="Target margin">&#x1F3AF;</span>' +
+          '<span style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.4px;font-weight:600;">Markup</span>' +
+          '<span style="width:24px;height:24px;line-height:22px;text-align:center;font-size:12px;font-weight:700;color:var(--text-dim,#888);border:1px solid var(--border,#333);border-radius:4px;background:rgba(0,0,0,0.15);display:inline-block;">%</span>' +
+          '<input type="text" value="' + tmEffMarkup + '" readonly disabled tabindex="-1" ' +
+            'style="width:64px;padding:2px 4px;font-size:12px;background:transparent;border:1px solid transparent;border-radius:4px;color:var(--text-dim,#888);text-align:right;font-family:\'SF Mono\',monospace;cursor:not-allowed;" />' +
+          '<span style="font-size:11px;color:var(--text-dim,#888);">%</span>' +
+        '</div>' +
+        '<label title="Overrides are inactive while a target margin drives pricing" style="display:inline-flex;align-items:center;padding:0 4px;opacity:0.4;">' +
+          '<input type="checkbox" ' + (override ? 'checked' : '') + ' disabled tabindex="-1" style="cursor:not-allowed;width:14px;height:14px;" />' +
+        '</label>'
       : (
       // Section markup pill — number input + $/% toggle + override checkbox.
       '<div style="display:inline-flex;align-items:center;gap:6px;background:rgba(0,0,0,0.18);padding:4px 10px;border-radius:14px;border:1px solid var(--border,#333);">' +
