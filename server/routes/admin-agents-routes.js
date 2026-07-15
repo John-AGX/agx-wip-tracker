@@ -3773,7 +3773,7 @@ const REFRESH_INTERVAL_MS = 15 * 60 * 1000;
 // unnecessary resync costs ~$1.89. SharePoint refresh ticks every
 // 15 min, but the meaningful content rarely moves intra-day —
 // without a throttle we were burning $9–18/day on cache invalidation.
-const _lastSyncState = new Map(); // anthropic_agent_id → { hash, syncedAt }
+const _lastSyncState = new Map(); // anthropic_agent_id → { sysHash, toolsHash, toolsOk, syncedAt, size, hash(=sysHash; legacy) }
 
 // Re-sync only after at least this much wall-clock time AND a real
 // content change. Six hours captures any morning vs end-of-day
@@ -3817,32 +3817,55 @@ async function resyncDriftedAgents(force) {
           description: row.description, identity_body: row.identity_body
         };
         const composed = await aiInternals.composedAgentSystem(row.agent_key, baseline, org);
-        const newHash = _sha1(composed);
+        const model = modelForAgentKey(row.agent_key);
+        // The tool list is pushed on the same update as system+model (a partial
+        // PATCH — omitting a field leaves it unchanged). Build it BEFORE the
+        // drift decision so it can drive the trigger (below).
+        const toolList = [
+          ...builtinToolsetFor(row.agent_key),
+          ...customToolsFor(row.agent_key)
+        ];
+        // TWO-AXIS drift tracking. Historically drift was keyed ONLY on the
+        // composed system prompt, so a tool-ONLY change (a new tool, or an
+        // edited tool description) was byte-identical at the prompt level →
+        // the sweep saw "no drift" and skipped the agent FOREVER, leaving the
+        // added tool dark on the live agent until a manual /managed/sync-all.
+        // (That is exactly how read_email_inbox stayed off the assistant.) Now
+        // system(+model) and the tool list are hashed SEPARATELY so a tool
+        // change re-fires the push on its own; the <2% "noise" filter still
+        // suppresses SharePoint system-prompt jitter but never suppresses tools.
+        const sysHash = _sha1(composed + ' ' + (model || ''));
+        const toolsHash = _sha1(JSON.stringify(toolList));
         const prev = _lastSyncState.get(row.anthropic_agent_id);
 
         // Decision logic, in order:
-        //   1. Force=true (e.g. admin clicked Sync now): always push.
+        //   1. Force=true (admin clicked Sync now): always push.
         //   2. No prior sync this process: push (boot case).
-        //   3. Hash identical: skip (no content change at all).
+        //   3. System+tools both identical AND last tools push landed: skip.
         //   4. < 6 hours since last push: skip (throttle).
-        //   5. Tiny drift (<2% byte change): skip (whitespace noise).
-        //   6. Real drift, throttle window passed: push.
+        //   5. ONLY the system prompt moved, by <2% (whitespace noise): skip.
+        //   6. Real drift (system moved materially, the tool list changed, or a
+        //      prior tools push failed to land → toolsOk=false): push.
         if (!force && prev) {
-          if (prev.hash === newHash) continue;
+          const prevSys = prev.sysHash || prev.hash;   // tolerate the older {hash} shape
+          const sysSame = prevSys === sysHash;
+          const toolsSame = prev.toolsHash === toolsHash && prev.toolsOk !== false;
+          if (sysSame && toolsSame) continue;
           if (Date.now() - prev.syncedAt < MIN_RESYNC_INTERVAL_MS) {
             console.log('[reference-links] skipping resync of', row.anthropic_agent_id,
               '— throttled (last sync ' + Math.round((Date.now() - prev.syncedAt) / 60000) + 'min ago)');
             continue;
           }
-          // Crude drift magnitude: ratio of byte-length delta to the larger size.
-          // Sub-2% is almost certainly noise; bigger means content actually moved.
-          const sizeDelta = Math.abs(composed.length - (prev.size || composed.length));
-          const drift = composed.length ? sizeDelta / composed.length : 1;
-          if (drift < MIN_DRIFT_RATIO) {
-            // Same logical content; treat as the same sync to avoid a
-            // re-check next tick.
-            _lastSyncState.set(row.anthropic_agent_id, { hash: newHash, syncedAt: prev.syncedAt, size: composed.length });
-            continue;
+          // Suppress sub-2% byte jitter ONLY when the tool list is unchanged —
+          // i.e. the system prompt is the sole thing that moved. A tool change
+          // always pushes (its hash flips hard; byte-size of the prompt doesn't).
+          if (toolsSame) {
+            const sizeDelta = Math.abs(composed.length - (prev.size || composed.length));
+            const drift = composed.length ? sizeDelta / composed.length : 1;
+            if (drift < MIN_DRIFT_RATIO) {
+              _lastSyncState.set(row.anthropic_agent_id, { sysHash, toolsHash, toolsOk: true, hash: sysHash, syncedAt: prev.syncedAt, size: composed.length });
+              continue;
+            }
           }
         }
 
@@ -3852,53 +3875,32 @@ async function resyncDriftedAgents(force) {
           // admin's sync-all endpoint handles that.
           continue;
         }
-        // Push the code-default model alongside the system prompt so a
-        // model change in code (MODEL / AI_MODEL — e.g. the Opus 4.8
-        // switch) lands on the stored agent automatically on the next
-        // deploy boot. Without it the agent stays pinned to its
-        // create-time model until someone clicks "Sync all to
-        // Anthropic". Same update call — no extra version bump or cache
-        // cost beyond the system-prompt push already happening here.
-        const model = modelForAgentKey(row.agent_key);
-        // Push the code-default tool list too, for the same reason as the
-        // model: when new tools land in code (e.g. the payload conditional/
-        // bulk/move/attach ops, workspace + code_execution tools) they were
-        // NOT reaching the stored agent on deploy — boot-resync only pushed
-        // system + model, so the live agent stayed on its old tool_count
-        // (12) while code defined 18, leaving those tools dark in prod until
-        // someone clicked "Sync now". agents.update is a partial PATCH
-        // (omitting a field leaves it unchanged — proven by skills staying
-        // intact while never being pushed here), so adding `tools` self-
-        // heals tool drift without touching skills. Same toolList the manual
-        // /managed/:agentKey/sync endpoint builds.
-        const toolList = [
-          ...builtinToolsetFor(row.agent_key),
-          ...customToolsFor(row.agent_key)
-        ];
         const baseUpdate = Object.assign(
           { version: remote.version, system: composed },
           model ? { model } : {}
         );
-        // Defense-in-depth: a single malformed tool entry must never be
-        // able to block the system+model sync (that exact failure mode —
-        // a bare code_execution entry the Agents API 400s on — silently
-        // froze this sweep before). Try the full push WITH tools; if the
-        // API rejects the tools array, fall back to system+model only so
-        // prompt/model changes still land. The first attempt fails at
-        // request validation (no state change), so the CAS version is
-        // still valid for the retry → at most one real version bump.
+        // Defense-in-depth: a single malformed tool entry must never block the
+        // system+model sync (that failure mode — a bare code_execution entry the
+        // Agents API 400s on — silently froze this sweep before). Try the full
+        // push WITH tools; if the API rejects the tools array, fall back to
+        // system+model only so prompt/model changes still land. CRUCIAL: record
+        // toolsOk=false on that fallback so the NEXT eligible tick RETRIES the
+        // tools push (subject to the 6h throttle) instead of recording success
+        // and freezing tool drift forever.
+        let toolsOk = true;
         try {
           await anthropic.beta.agents.update(row.anthropic_agent_id,
             Object.assign({ tools: toolList }, baseUpdate));
         } catch (toolsErr) {
+          toolsOk = false;
           console.warn('[reference-links] tools push rejected for', row.anthropic_agent_id,
             '— retrying system+model only:', toolsErr && toolsErr.message);
           await anthropic.beta.agents.update(row.anthropic_agent_id, baseUpdate);
         }
-        _lastSyncState.set(row.anthropic_agent_id, { hash: newHash, syncedAt: Date.now(), size: composed.length });
+        _lastSyncState.set(row.anthropic_agent_id, { sysHash, toolsHash, toolsOk, hash: sysHash, syncedAt: Date.now(), size: composed.length });
         console.log('[reference-links] resynced agent', row.anthropic_agent_id,
-          '— composed system prompt drifted (' + composed.length + ' chars)' +
-          (force ? ' [forced]' : ''));
+          '— pushed system(' + composed.length + ' chars)+model+' + toolList.length + ' tools' +
+          (toolsOk ? '' : ' [tools push FELL BACK — will retry next tick]') + (force ? ' [forced]' : ''));
       } catch (e) {
         console.warn('[reference-links] resync failed for', row.anthropic_agent_id, ':', e && e.message);
       }
@@ -4385,12 +4387,12 @@ router.post('/managed/sync-all',
           tools: toolList
         });
 
-        // Record this manual sync against the throttle map so the
-        // 15-min background tick doesn't immediately re-sync if its
-        // drift detector also trips. Without this the admin's Sync
-        // button + the auto-resync could double-push and rebuild
-        // cache twice.
-        _lastSyncState.set(agentId, { hash: _sha1(composedSystem), syncedAt: Date.now(), size: composedSystem.length });
+        // Record this manual sync against the throttle map (same two-hash shape
+        // the background sweep uses) so the 15-min tick sees system+tools
+        // unchanged and doesn't immediately re-push. Without this the admin's
+        // Sync button + the auto-resync could double-push and rebuild cache.
+        const _syncSysHash = _sha1(composedSystem + ' ' + (model || ''));
+        _lastSyncState.set(agentId, { sysHash: _syncSysHash, toolsHash: _sha1(JSON.stringify(toolList)), toolsOk: true, hash: _syncSysHash, syncedAt: Date.now(), size: composedSystem.length });
 
         await pool.query(
           `UPDATE managed_agent_registry
