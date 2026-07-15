@@ -44,6 +44,12 @@
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
     });
   }
+  // Only allow http(s) in an href — blocks javascript:/data: schemes from
+  // research packets the Claude extension fills off arbitrary web pages.
+  function safeUrl(u) {
+    var s = String(u == null ? '' : u).trim();
+    return /^https?:\/\//i.test(s) ? s : '';
+  }
   function num(n) { return (Number(n) || 0).toLocaleString(); }
   function money(n) { return '$' + (Number(n) || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
   function tokK(n) { var v = Number(n) || 0; return v >= 1e6 ? (v / 1e6).toFixed(1) + 'M' : v >= 1e3 ? (v / 1e3).toFixed(0) + 'K' : String(v); }
@@ -218,6 +224,9 @@
   // with a reason and land in assembly_tuning_log (the flywheel's
   // training trail).
   var _asmT = { ov: null, sel: null, det: null, open: {} };
+  // Left-rail mode + research-inbox state. mode: 'tuning' (worst-first queue) |
+  // 'research' (packets the Claude extension / a paste dropped for 86 to build).
+  var _asmR = { mode: 'tuning', list: [], counts: {}, sel: null, det: null, handedId: null, addOpen: false };
 
   // Per-turn context handed to the docked 86 pane so it knows what John is
   // looking at. open_data_summary reaches 86 via renderPageContextBlock — no
@@ -276,6 +285,28 @@
       if (rf) rf.addEventListener('click', loadAssemblyTuning);
     }
     ensureAsmDock();
+    // One-time: when ANY assembly card is applied in the shared 86 pane,
+    // re-sync the cockpit. We do NOT consume packets here — the server
+    // consumes+links the source packet in-txn (via source_research_id on the
+    // create op), so it links to exactly the assembly it was built from
+    // rather than whichever card happens to land while a packet is handed.
+    if (!_asmR._listenerWired) {
+      _asmR._listenerWired = true;
+      document.addEventListener('p86:payload-applied', function (e) {
+        // Only act while the Assembly Studio cockpit is actually mounted —
+        // this document-level listener outlives the view, and assembly cards
+        // can be approved from other surfaces.
+        if (!document.getElementById('cc-asm-main')) return;
+        var targets = (e.detail && e.detail.affected_targets) || [];
+        var hitAssembly = targets.some(function (t) {
+          var ty = t && (t.entity_type || t.type); return ty === 'assembly';
+        });
+        if (!hitAssembly) return;
+        _asmR.handedId = null;    // hand-off hint is spent
+        loadResearchInbox();      // a server-consumed packet drops from unprocessed
+        loadAssemblyTuning();     // refresh health tiles + queue with the new recipe
+      });
+    }
     cget('/api/assemblies/tuning/overview').then(function (d) {
       _asmT.ov = d;
       if (!_asmT.sel && d.queue && d.queue.length) _asmT.sel = d.queue[0].id;
@@ -327,30 +358,212 @@
         '</div></div>';
     }).join('');
 
+    // Left-rail mode toggle: Tuning queue ⇄ Research inbox.
+    var modeBtn = function (m, label) {
+      var on = _asmR.mode === m;
+      return '<button data-asm-mode="' + m + '" style="border:1px solid ' + (on ? 'rgba(79,140,255,.5)' : 'var(--border,#33333a)') +
+        ';background:' + (on ? 'rgba(79,140,255,.12)' : 'transparent') + ';color:' + (on ? '#7eb0ff' : 'var(--text-dim,#9a9aa2)') +
+        ';border-radius:8px;padding:5px 12px;font-size:11px;font-weight:600;cursor:pointer;">' + label + '</button>';
+    };
+    var rCount = (_asmR.counts && _asmR.counts.unprocessed) || 0;
+    var leftCol, wsHtml;
+    if (_asmR.mode === 'research') {
+      leftCol = researchListHtml();
+      wsHtml = researchDetailHtml();
+    } else {
+      leftCol = '<div style="font-size:9.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-dim,#9a9aa2);padding:2px 6px 8px;">Tuning queue — worst first</div>' +
+        (queueHtml || '<div style="padding:12px;color:var(--text-dim,#888);font-size:12px;">No assemblies yet.</div>');
+      wsHtml = (_asmT.det ? asmWorkspaceHtml(_asmT.det) : '<div style="color:var(--text-dim,#888);font-size:12px;">Select an assembly from the queue.</div>');
+    }
     el.innerHTML =
-      '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;">' +
+      '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;">' +
         tile(s.total || 0, 'Assemblies') +
         tile(s.seed_untuned || 0, 'Seed — never tuned', s.seed_untuned ? '#f2a55c' : null) +
         tile(s.drift || 0, 'Price drift >10%', s.drift ? '#f77066' : null) +
         tile(s.unlinked_items || 0, 'Items not catalog-linked', s.unlinked_items ? '#a78bfa' : null) +
-        tile(s.suggestions || 0, 'Suggestions (flywheel — T4)', '#4fd1c5') +
+        tile(rCount, 'Research to build', rCount ? '#4fd1c5' : null) +
+      '</div>' +
+      '<div style="display:flex;gap:8px;margin-bottom:10px;">' +
+        modeBtn('tuning', '🔧 Tuning queue') +
+        modeBtn('research', '📥 Research inbox' + (rCount ? ' (' + rCount + ')' : '')) +
       '</div>' +
       '<div style="display:grid;grid-template-columns:290px 1fr;gap:12px;align-items:start;">' +
-        '<div style="background:var(--panel,#1c1c22);border:1px solid var(--border,#33333a);border-radius:10px;padding:8px;max-height:70vh;overflow:auto;">' +
-          '<div style="font-size:9.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-dim,#9a9aa2);padding:2px 6px 8px;">Tuning queue — worst first</div>' +
-          (queueHtml || '<div style="padding:12px;color:var(--text-dim,#888);font-size:12px;">No assemblies yet.</div>') +
-        '</div>' +
-        '<div id="cc-asm-ws" style="background:var(--panel,#1c1c22);border:1px solid var(--border,#33333a);border-radius:10px;padding:14px;min-height:200px;">' +
-          (_asmT.det ? asmWorkspaceHtml(_asmT.det) : '<div style="color:var(--text-dim,#888);font-size:12px;">Loading recipe…</div>') +
-        '</div>' +
+        '<div style="background:var(--panel,#1c1c22);border:1px solid var(--border,#33333a);border-radius:10px;padding:8px;max-height:66vh;overflow:auto;">' + leftCol + '</div>' +
+        '<div id="cc-asm-ws" style="background:var(--panel,#1c1c22);border:1px solid var(--border,#33333a);border-radius:10px;padding:14px;min-height:200px;">' + wsHtml + '</div>' +
       '</div>';
 
-    el.querySelectorAll('[data-asmt-sel]').forEach(function (r) {
-      r.addEventListener('click', function () { loadAsmDetail(Number(r.dataset.asmtSel)); });
+    el.querySelectorAll('[data-asm-mode]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        _asmR.mode = b.dataset.asmMode;
+        paintAsmMain();
+        if (_asmR.mode === 'research' && !_asmR.list.length) loadResearchInbox();
+      });
     });
     var rf = el.querySelector('[data-asmt-refresh]');
     if (rf) rf.addEventListener('click', loadAssemblyTuning);
+    if (_asmR.mode === 'research') { wireResearch(el); return; }
+    el.querySelectorAll('[data-asmt-sel]').forEach(function (r) {
+      r.addEventListener('click', function () { loadAsmDetail(Number(r.dataset.asmtSel)); });
+    });
     if (_asmT.det) wireAsmWorkspace(el);
+  }
+
+  // ── Research inbox — packets the Claude extension (or a paste) drops for 86
+  // to build/tune assemblies from. ──────────────────────────────────────────
+  function loadResearchInbox() {
+    cget('/api/assembly-research?status=unprocessed').then(function (d) {
+      _asmR.list = (d && d.research) || [];
+      _asmR.counts = (d && d.counts) || {};
+      if (!_asmR.sel && _asmR.list.length) _asmR.sel = _asmR.list[0].id;
+      if (_asmR.mode === 'research') paintAsmMain();
+    }).catch(function (e) {
+      var ws = document.getElementById('cc-asm-ws'); if (ws) ws.innerHTML = errBox('research inbox', e);
+    });
+  }
+  function loadPacketDetail(id) {
+    _asmR.sel = id; _asmR.det = null;
+    if (_asmR.mode === 'research') paintAsmMain();
+    cget('/api/assembly-research/' + id).then(function (d) {
+      _asmR.det = (d && d.research) || null;
+      if (_asmR.mode === 'research') paintAsmMain();
+    }).catch(function (e) {
+      var ws = document.getElementById('cc-asm-ws'); if (ws) ws.innerHTML = errBox('packet', e);
+    });
+  }
+  function researchListHtml() {
+    var rows = (_asmR.list || []).map(function (p) {
+      var sel = p.id === _asmR.sel;
+      return '<div data-asmr-sel="' + p.id + '" style="padding:8px 9px;border-radius:8px;cursor:pointer;margin-bottom:4px;border:1px solid ' +
+        (sel ? 'rgba(79,209,197,.4)' : 'transparent') + ';background:' + (sel ? 'rgba(79,209,197,.08)' : 'transparent') + ';">' +
+        '<div style="font-size:12px;font-weight:600;">📄 ' + esc(p.title || (p.trade ? p.trade + ' research' : 'Untitled packet')) + '</div>' +
+        '<div style="font-size:10px;color:var(--text-dim,#9a9aa2);margin-top:2px;">' +
+          (p.trade ? esc(p.trade) + ' · ' : '') + (p.finding_count || 0) + ' finding' + (p.finding_count === 1 ? '' : 's') +
+          (p.source_url ? ' · 🔗 source' : '') + '</div></div>';
+    }).join('');
+    return '<div style="display:flex;align-items:center;justify-content:space-between;padding:2px 6px 8px;">' +
+        '<span style="font-size:9.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-dim,#9a9aa2);">Research to build</span>' +
+        '<button data-asmr-add style="border:1px solid rgba(79,209,197,.4);background:rgba(79,209,197,.1);color:#4fd1c5;border-radius:6px;padding:3px 9px;font-size:11px;font-weight:600;cursor:pointer;">+ Add</button>' +
+      '</div>' +
+      (rows || '<div style="padding:12px;color:var(--text-dim,#888);font-size:12px;line-height:1.5;">Nothing to build yet. Drop web research here (or have the Claude extension fill it), then hand it to 86.</div>');
+  }
+  function researchDetailHtml() {
+    if (_asmR.addOpen) return researchAddFormHtml();
+    var p = _asmR.det;
+    if (!p) return '<div style="color:var(--text-dim,#888);font-size:12px;">Select a research packet, or + Add one.</div>';
+    var findings = Array.isArray(p.findings) ? p.findings : [];
+    var fRows = findings.map(function (f) {
+      return '<div style="border:1px solid var(--border,#33333a);border-radius:8px;padding:8px 10px;margin-bottom:6px;font-size:12px;">' +
+        '<div style="font-weight:600;">' + esc(f.component || f.material || 'component') + '</div>' +
+        '<div style="font-size:11px;color:var(--text-dim,#9a9aa2);font-family:Consolas,monospace;margin-top:2px;">' +
+          (f.price != null ? '$' + esc(String(f.price)) : '?') + '/' + esc(f.unit || 'ea') +
+          (f.qty_per_unit != null ? ' · qty/unit ' + esc(String(f.qty_per_unit)) : '') +
+          (f.waste_pct != null ? ' · waste ' + esc(String(f.waste_pct)) + '%' : '') + '</div>' +
+        (f.rationale ? '<div style="font-size:11px;color:var(--text-dim,#9a9aa2);margin-top:3px;">' + esc(f.rationale) + '</div>' : '') +
+        (safeUrl(f.source_url) ? '<div style="font-size:10px;margin-top:3px;"><a href="' + esc(safeUrl(f.source_url)) + '" target="_blank" rel="noopener" style="color:#7eb0ff;">🔗 source</a></div>' : '') +
+      '</div>';
+    }).join('');
+    return '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px;">' +
+        '<div style="font-size:15px;font-weight:700;">📄 ' + esc(p.title || 'Research packet') + '</div>' +
+        '<div style="display:flex;gap:6px;">' +
+          '<button data-asmr-hand="' + p.id + '" style="border:1px solid rgba(124,58,237,.5);background:rgba(124,58,237,.14);color:#a78bfa;border-radius:8px;padding:6px 12px;font-size:12px;font-weight:700;cursor:pointer;">🤖 Hand to 86</button>' +
+          '<button data-asmr-consume="' + p.id + '" title="Mark this packet as built" style="border:1px solid var(--border,#33333a);background:transparent;color:var(--text-dim,#9a9aa2);border-radius:8px;padding:6px 10px;font-size:12px;cursor:pointer;">✓ Built</button>' +
+          '<button data-asmr-void="' + p.id + '" title="Discard" style="border:1px solid var(--border,#33333a);background:transparent;color:#f77066;border-radius:8px;padding:6px 10px;font-size:12px;cursor:pointer;">✕</button>' +
+        '</div>' +
+      '</div>' +
+      '<div style="font-size:11px;color:var(--text-dim,#9a9aa2);margin-bottom:10px;">' +
+        (p.trade ? esc(p.trade) : 'no trade') + (p.scope ? ' · ' + esc(p.scope) : '') +
+        (safeUrl(p.source_url) ? ' · <a href="' + esc(safeUrl(p.source_url)) + '" target="_blank" rel="noopener" style="color:#7eb0ff;">🔗 source</a>' : '') +
+      '</div>' +
+      (findings.length ? '<div style="font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-dim,#9a9aa2);margin-bottom:6px;">Structured findings</div>' + fRows : '') +
+      (p.raw_text ? '<div style="font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-dim,#9a9aa2);margin:10px 0 4px;">Pasted research (86 parses this)</div>' +
+        '<pre style="white-space:pre-wrap;font-size:11px;line-height:1.5;color:var(--text,#e8e8ea);background:var(--bg,#15151a);border:1px solid var(--border,#33333a);border-radius:8px;padding:10px;max-height:280px;overflow:auto;">' + esc(p.raw_text) + '</pre>' : '') +
+      (_asmR.handedId === p.id ? '<div style="margin-top:10px;font-size:11px;color:#a78bfa;">Handed to 86 → approve its recipe card in the pane, then this packet marks itself built.</div>' : '');
+  }
+  function researchAddFormHtml() {
+    var inp = function (id, label, ph) {
+      return '<label style="display:block;margin-bottom:8px;"><span style="display:block;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-dim,#9a9aa2);margin-bottom:3px;">' + label + '</span>' +
+        '<input id="' + id + '" placeholder="' + (ph || '') + '" style="width:100%;box-sizing:border-box;padding:6px 8px;font-size:12px;background:var(--bg,#15151a);border:1px solid var(--border,#33333a);border-radius:6px;color:var(--text,#e8e8ea);" /></label>';
+    };
+    return '<div style="font-size:15px;font-weight:700;margin-bottom:10px;">📥 New research packet</div>' +
+      inp('asmr-title', 'Title', 'e.g. Stucco patch & repaint — Central FL') +
+      inp('asmr-trade', 'Trade', 'e.g. stucco, paint, roofing') +
+      inp('asmr-url', 'Source URL', 'https://…') +
+      '<label style="display:block;margin-bottom:10px;"><span style="display:block;font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:var(--text-dim,#9a9aa2);margin-bottom:3px;">Pasted research (freeform — 86 parses it)</span>' +
+        '<textarea id="asmr-raw" rows="9" placeholder="Paste the components, prices, units, waste %, labor/productivity rates, and where they came from. The Claude extension can fill this while browsing." style="width:100%;box-sizing:border-box;padding:8px;font-size:12px;line-height:1.5;background:var(--bg,#15151a);border:1px solid var(--border,#33333a);border-radius:6px;color:var(--text,#e8e8ea);resize:vertical;"></textarea></label>' +
+      '<div style="display:flex;gap:8px;">' +
+        '<button data-asmr-save style="border:0;background:#4f8cff;color:#fff;border-radius:8px;padding:7px 16px;font-size:12px;font-weight:700;cursor:pointer;">Save packet</button>' +
+        '<button data-asmr-cancel style="border:1px solid var(--border,#33333a);background:transparent;color:var(--text-dim,#9a9aa2);border-radius:8px;padding:7px 14px;font-size:12px;cursor:pointer;">Cancel</button>' +
+      '</div>';
+  }
+  function wireResearch(el) {
+    el.querySelectorAll('[data-asmr-sel]').forEach(function (r) {
+      r.addEventListener('click', function () { _asmR.addOpen = false; loadPacketDetail(Number(r.dataset.asmrSel)); });
+    });
+    var add = el.querySelector('[data-asmr-add]');
+    if (add) add.addEventListener('click', function () { _asmR.addOpen = true; paintAsmMain(); });
+    var cancel = el.querySelector('[data-asmr-cancel]');
+    if (cancel) cancel.addEventListener('click', function () { _asmR.addOpen = false; paintAsmMain(); });
+    var save = el.querySelector('[data-asmr-save]');
+    if (save) save.addEventListener('click', function () {
+      var body = {
+        title: (document.getElementById('asmr-title') || {}).value || '',
+        trade: (document.getElementById('asmr-trade') || {}).value || '',
+        source_url: (document.getElementById('asmr-url') || {}).value || '',
+        raw_text: (document.getElementById('asmr-raw') || {}).value || ''
+      };
+      if (!body.title && !body.raw_text) { toast('Add a title or paste some research first', true); return; }
+      cpost('/api/assembly-research', body).then(function (d) {
+        _asmR.addOpen = false;
+        toast('Research packet saved');
+        if (d && d.research) _asmR.sel = d.research.id;
+        loadResearchInbox();
+      }).catch(function (e) { toast('Save failed: ' + (e.message || e), true); });
+    });
+    var hand = el.querySelector('[data-asmr-hand]');
+    if (hand) hand.addEventListener('click', function () { handPacketTo86(Number(hand.dataset.asmrHand)); });
+    var consume = el.querySelector('[data-asmr-consume]');
+    if (consume) consume.addEventListener('click', function () { consumePacket(Number(consume.dataset.asmrConsume), null); });
+    var vd = el.querySelector('[data-asmr-void]');
+    if (vd) vd.addEventListener('click', function () {
+      var id = Number(vd.dataset.asmrVoid);
+      cpost('/api/assembly-research/' + id + '/void', {}).then(function () {
+        _asmR.sel = null; _asmR.det = null; toast('Packet discarded'); loadResearchInbox();
+      }).catch(function (e) { toast('Failed: ' + (e.message || e), true); });
+    });
+  }
+  // Hand a research packet to the docked 86 — inline the packet content in the
+  // prompt (small enough) so 86 builds it into approval cards without a fetch.
+  function handPacketTo86(id) {
+    var p = _asmR.det;
+    if (!p || p.id !== id) { toast('Open the packet first', true); return; }
+    if (!(window.p86AI && typeof window.p86AI.askDocked === 'function')) { toast('86 pane not ready', true); return; }
+    _asmR.handedId = id;
+    var lines = [];
+    lines.push('Build (or tune) assemblies from this web research packet. Draft each recipe as an approval card via scribe_write (entity_type "assembly"); link materials to our catalog where they exist; put the source URL in the tuning-log evidence/reason. Ask me before guessing at anything unclear.');
+    lines.push('IMPORTANT: on each assembly you CREATE from this packet, set the op field "source_research_id" to ' + id + ' so this packet auto-links to that assembly and clears from my inbox the moment I approve.');
+    lines.push('');
+    lines.push('PACKET #' + p.id + (p.title ? ' — ' + p.title : '') + (p.trade ? ' [' + p.trade + ']' : ''));
+    if (p.source_url) lines.push('Source: ' + p.source_url);
+    var findings = Array.isArray(p.findings) ? p.findings : [];
+    if (findings.length) {
+      lines.push('Structured findings:');
+      findings.forEach(function (f) {
+        lines.push('- ' + (f.component || f.material || 'component') + ': ' + (f.price != null ? '$' + f.price : '?') + '/' + (f.unit || 'ea') +
+          (f.qty_per_unit != null ? ', qty/unit ' + f.qty_per_unit : '') + (f.waste_pct != null ? ', waste ' + f.waste_pct + '%' : '') +
+          (f.rationale ? ' — ' + f.rationale : '') + (f.source_url ? ' (' + f.source_url + ')' : ''));
+      });
+    }
+    if (p.raw_text) { lines.push('Pasted research:'); lines.push(p.raw_text); }
+    try { window.p86AI.askDocked(lines.join('\n')); } catch (e) {}
+    paintAsmMain(); // reflect the "handed" hint
+  }
+  function consumePacket(id, assemblyId) {
+    cpost('/api/assembly-research/' + id + '/consume', assemblyId ? { assembly_id: assemblyId } : {}).then(function () {
+      if (_asmR.handedId === id) _asmR.handedId = null;
+      _asmR.sel = null; _asmR.det = null;
+      toast('Marked built');
+      loadResearchInbox();
+    }).catch(function (e) { toast('Failed: ' + (e.message || e), true); });
   }
 
   function asmItemPerUnit(it) {

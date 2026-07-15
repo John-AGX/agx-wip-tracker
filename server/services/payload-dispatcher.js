@@ -302,7 +302,11 @@ const PAYLOAD_OPS_SCHEMAS = Object.freeze({
     //   unit?, unit_cost? (null on material rows = live catalog price),
     //   cost_code?, waste_pct? }
     // 'reason' — the agent's stated why; lands in assembly_tuning_log.
-    allowedTopKeys: new Set(['op', 'fields', 'items', 'reason']),
+    // 'source_research_id' — (create only) the assembly_research packet this
+    //   recipe was built from; the dispatcher consumes+links that packet
+    //   in-txn so a shared-pane card links to exactly its source (no client
+    //   guessing about which of many cards a handed packet belongs to).
+    allowedTopKeys: new Set(['op', 'fields', 'items', 'reason', 'source_research_id']),
   },
 });
 
@@ -2652,6 +2656,19 @@ async function dispatchAssembly(dbClient, target, refTable, ctx) {
       await asmSvc.logTuning(dbClient, orgId, id,
         [{ field: 'created', new_value: (fields.name || '') + ' (' + ((ops.items || []).length) + ' items)' }], tuneOpts);
     } catch (e) { /* log only */ }
+    // If this assembly was built from a research-inbox packet, consume+link
+    // that packet in-txn — org-scoped, unprocessed-only — so it points at
+    // exactly the assembly 86 built from it. No client-side guessing about
+    // which of the shared pane's cards a handed packet belongs to.
+    const srcRid = parseInt(ops.source_research_id, 10);
+    if (Number.isFinite(srcRid) && srcRid > 0) {
+      try {
+        await dbClient.query(
+          `UPDATE assembly_research SET status = 'consumed', consumed_assembly_id = $1, consumed_at = NOW()
+             WHERE id = $2 AND organization_id = $3 AND status = 'unprocessed'`,
+          [id, srcRid, orgId]);
+      } catch (e) { /* best-effort link; never fail the build on the consume */ }
+    }
     if (isRef(target.entity_id)) refTable[target.entity_id] = id;
     return {
       entity_type: 'assembly', entity_id: id, op: 'create',

@@ -7224,6 +7224,15 @@
     _placePrompt(prompt, opts.autoSend !== false, opts.delay);
   }
 
+  // Seed + auto-send a prompt INTO the docked pane (Assembly Studio "Hand to
+  // 86"). Unlike ask(), it does NOT call open() — that would self-undock the
+  // panel. Falls back to a normal drawer ask when not docked.
+  function askDocked(prompt, opts) {
+    opts = opts || {};
+    if (!_isDocked) { ask(prompt, opts); return; }
+    _placePrompt(prompt, opts.autoSend !== false, opts.delay);
+  }
+
   window.p86AI = {
     open: open,
     openWithImages: openWithImages,
@@ -7237,6 +7246,7 @@
     // panel back to its drawer home — CALL IT before wiping the host container.
     dockInto: dockInto,
     setDockContext: setDockContext,
+    askDocked: askDocked,   // seed + send a prompt into the docked pane ("Hand to 86")
     undock: undock,
     isDocked: function() { return _isDocked; },
     // Re-render the AG header + notice when the editor's Plan/Build

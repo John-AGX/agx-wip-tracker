@@ -4041,10 +4041,49 @@ function childGroupsHtml(sel){
     var add=(t==='cost')
       ? "window.p86NgCostMenu&&window.p86NgCostMenu('"+sel.id+"',this)"
       : "window.p86NgSpawn&&window.p86NgSpawn('"+sel.id+"','"+t+"')";
-    var rows=list.length ? list.map(function(k){
-      return '<div class="ng-cg-row" onclick="event.stopPropagation();window.p86NgSelect&&window.p86NgSelect(\''+k.id+'\')" title="Open on canvas">'
-        +'<span class="ng-cg-ic">'+ngTypeIco(k.type)+'</span><span class="ng-cg-nm">'+luEsc(k.label||k.type)+'</span></div>';
-    }).join('') : '<div class="ng-cg-empty">None yet</div>';
+    var rows;
+    if(t==='t2' && sel.type==='t1' && list.length){
+      // Scope rows on a BUILDING inspector carry inline completion controls: a
+      // Units ⇄ % toggle + (units mode) a check-off cube strip against THIS
+      // building's unit count — so you set units on the building AND check them
+      // off per scope without leaving the map. Reuses the shared scope handlers
+      // (data-scope-mode-* / data-scope-cube-* resolve the scope→building wire).
+      var bUnits=(sel.units&&sel.units.length)?sel.units.length:0;
+      rows=list.map(function(k){
+        var w=E.wires().find(function(x){ return x.fromNode===k.id && x.toNode===sel.id; });
+        var isUnits=!!(w && w.trackMode==='units' && bUnits>0);
+        var uDone=w?Math.max(0,Math.min(w.unitsDone||0,bUnits)):0;
+        var wpc=w?(w.pctComplete||0):0;
+        var wpcColor=wpc>=100?'#34d399':wpc>=50?'#fbbf24':'#4f8cff';
+        var sel1="event.stopPropagation();window.p86NgSelect&&window.p86NgSelect('"+k.id+"')";
+        var r='<div class="ng-cg-row ng-cg-scope">'
+          +'<span class="ng-cg-ic" onclick="'+sel1+'">'+ngTypeIco(k.type)+'</span>'
+          +'<span class="ng-cg-nm" onclick="'+sel1+'" title="Open on canvas">'+luEsc(k.label||k.type)+'</span>';
+        if(bUnits>0){
+          r+='<span class="ng-scope-mode" data-scope-mode-phase="'+k.id+'" data-scope-mode-bldg="'+sel.id+'" title="'+(isUnits?'Tracking by units — switch to percent':'Switch to unit check-off')+'" style="cursor:pointer;flex:0 0 auto;color:'+(isUnits?'#34d399':'#8b90a5')+';font-size:12px;width:16px;text-align:center;">'+(isUnits?'▦':'%')+'</span>';
+        }
+        if(isUnits){
+          r+='<span title="Driven by the units checked off" style="flex:0 0 auto;color:'+wpcColor+';font-family:\'Courier New\',monospace;font-size:11px;min-width:34px;text-align:right;">'+Math.round(wpc)+'%</span>';
+        } else if(w){
+          r+='<span class="ng-wire-pct" data-wire-pct-phase="'+k.id+'" data-wire-pct-bldg="'+sel.id+'" title="Click to edit % complete" style="cursor:pointer;flex:0 0 auto;color:'+wpcColor+';font-family:\'Courier New\',monospace;font-size:11px;min-width:34px;text-align:right;">'+Math.round(wpc)+'%</span>';
+        }
+        r+='</div>';
+        if(isUnits){
+          r+='<div class="ng-scope-cubes" style="display:flex;flex-wrap:wrap;align-items:center;gap:3px;padding:2px 0 6px 26px;">';
+          for(var _c=0;_c<bUnits;_c++){
+            r+='<i class="ng-lu-cube ng-scope-cube'+(_c<uDone?' done':'')+'" data-scope-cube-phase="'+k.id+'" data-scope-cube-bldg="'+sel.id+'" data-scope-cube-idx="'+_c+'" title="'+(_c<uDone?('Unit '+(_c+1)+' done — tap to set '+(_c+1)):('Tap to mark '+(_c+1)+' unit'+(_c===0?'':'s')+' complete'))+'"></i>';
+          }
+          r+='<span style="margin-left:5px;color:#8b90a5;font-family:\'Courier New\',monospace;font-size:9px;">'+uDone+' / '+bUnits+'</span>';
+          r+='</div>';
+        }
+        return r;
+      }).join('');
+    } else {
+      rows=list.length ? list.map(function(k){
+        return '<div class="ng-cg-row" onclick="event.stopPropagation();window.p86NgSelect&&window.p86NgSelect(\''+k.id+'\')" title="Open on canvas">'
+          +'<span class="ng-cg-ic">'+ngTypeIco(k.type)+'</span><span class="ng-cg-nm">'+luEsc(k.label||k.type)+'</span></div>';
+      }).join('') : '<div class="ng-cg-empty">None yet</div>';
+    }
     return '<div class="ng-cg-group"><div class="ng-cg-head"><span class="ng-cg-lbl">'+label+' · '+list.length+'</span>'
       +'<button class="ng-cg-add" aria-label="Add '+label+'" onclick="event.stopPropagation();'+add+'">+</button></div>'+rows+'</div>';
   }).join('');
@@ -4233,7 +4272,7 @@ function scopeModeToggle(el){
     w.trackMode='units';
     if(w.unitsDone==null) w.unitsDone=Math.round((w.pctComplete||0)/100*cnt);
   }
-  if(E.saveGraph) E.saveGraph(); render();
+  if(E.saveGraph) E.saveGraph(); render(); if(typeof renderInspector==='function') renderInspector();
 }
 
 // Click cube #idx on a unit-mode scope wire → set unitsDone. Clicking the
@@ -4246,7 +4285,7 @@ function scopeUnitCubeSet(el){
   var b=E.findNode(bd); var cnt=(b&&b.units&&b.units.length)?b.units.length:0;
   var cur=Math.max(0,Math.min(w.unitsDone||0,cnt));
   w.unitsDone=(idx===cur-1)?idx:Math.min(idx+1,cnt);
-  if(E.saveGraph) E.saveGraph(); render();
+  if(E.saveGraph) E.saveGraph(); render(); if(typeof renderInspector==='function') renderInspector();
 }
 
 var ngOpenAddMenuFn=null;   // set inside initEvents (where openAddMenu is defined); used by the ribbon "+ Add" button wired in init()

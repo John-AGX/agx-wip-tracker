@@ -2001,6 +2001,32 @@ async function initSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_asm_tuning_assembly ON assembly_tuning_log(assembly_id, created_at DESC);
 
+    -- Assembly research inbox — staging for cost/recipe research the Claude
+    -- browser extension (or a user) gathers from the web, then hands to 86 to
+    -- build/tune assemblies from. Keeps 86's opus credits for the structured
+    -- build, not the browsing. status: 'unprocessed' (fresh) | 'consumed' (86
+    -- built from it) | 'void' (discarded). findings = structured components
+    -- ([{component, material, price, unit, qty_per_unit, waste_pct, source_url,
+    -- rationale}]); raw_text = freeform paste 86 can parse; source_url carried
+    -- into assembly_tuning_log.evidence when 86 builds. Org + user scoped.
+    CREATE TABLE IF NOT EXISTS assembly_research (
+      id SERIAL PRIMARY KEY,
+      organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE,
+      created_by INTEGER REFERENCES users(id),
+      status TEXT NOT NULL DEFAULT 'unprocessed',   -- unprocessed | consumed | void
+      title TEXT,
+      trade TEXT,
+      scope TEXT,
+      findings JSONB NOT NULL DEFAULT '[]'::jsonb,   -- structured components
+      raw_text TEXT,                                 -- freeform paste (86 parses)
+      source_url TEXT,
+      notes TEXT,
+      consumed_assembly_id INTEGER REFERENCES assemblies(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      consumed_at TIMESTAMPTZ
+    );
+    CREATE INDEX IF NOT EXISTS idx_asm_research_org ON assembly_research(organization_id, status, created_at DESC);
+
     -- Cost Inbox — field-captured cost receipts (photo + amount + cost code),
     -- attached to a JOB or a LEAD (lead = pre-sale / pursuit cost). Distinct
     -- from material_purchases (that's the Home-Depot CSV-history import). The
