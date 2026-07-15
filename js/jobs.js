@@ -438,11 +438,9 @@ function renderJobsMain() {
             const job = appData.jobs.find(j => j.id === jobId);
             if (!job) return;
             const w = getJobWIP(jobId);
-            document.getElementById('wipPctComplete').value = job.pctComplete || '';
-            document.getElementById('wipPctManual').checked = job.pctCompleteManual || false;
-            document.getElementById('wipInvoicedToDate').value = job.invoicedToDate || '';
-            document.getElementById('wipRevisedCostChanges').value = job.revisedCostChanges || '';
-            document.getElementById('wipNotes').value = job.notes || '';
+            // WIP inputs (% complete, invoiced-to-date, revised cost changes, notes) are
+            // now edited on the working Site Map / node graph — this tab is a read-only
+            // report. Only the calculated readouts below are populated.
 
             document.getElementById('wip-contract-income').textContent = formatCurrency(w.contractIncome);
             document.getElementById('wip-co-income').textContent = formatCurrency(w.coIncome);
@@ -490,48 +488,10 @@ function renderJobsMain() {
             } catch (e) { /* rollup is best-effort */ }
         }
 
-        function saveWipInputs() {
-            const job = appData.jobs.find(j => j.id === appState.currentJobId);
-            if (!job) return;
-            const newPct = parseFloat(document.getElementById('wipPctComplete').value) || 0;
-            const isManual = document.getElementById('wipPctManual').checked;
-            job.pctCompleteManual = isManual;
-
-            // If manual override and % increased, auto-distribute to buildings/phases
-            if (isManual && newPct > (job.pctComplete || 0)) {
-                distributeJobPctComplete(appState.currentJobId, newPct);
-            }
-
-            job.pctComplete = newPct;
-            job.invoicedToDate = parseFloat(document.getElementById('wipInvoicedToDate').value) || 0;
-            job.revisedCostChanges = parseFloat(document.getElementById('wipRevisedCostChanges').value) || 0;
-            job.notes = document.getElementById('wipNotes').value.trim();
-            job.updatedAt = new Date().toISOString();
-            saveData();
-            renderJobDetail(appState.currentJobId);
-        }
-
-        /** Distribute job-level % complete down to buildings and phases proportionally */
-        function distributeJobPctComplete(jobId, targetPct) {
-            const buildings = appData.buildings.filter(b => b.jobId === jobId);
-            const phases = appData.phases.filter(p => p.jobId === jobId);
-
-            if (buildings.length > 0) {
-                // Distribute to buildings, then each building distributes to its phases
-                buildings.forEach(b => {
-                    const bldgPhases = phases.filter(p => p.buildingId === b.id);
-                    if (bldgPhases.length > 0) {
-                        bldgPhases.forEach(p => {
-                            p.pctComplete = Math.min(100, Math.max(p.pctComplete || 0, targetPct));
-                        });
-                    }
-                });
-            } else if (phases.length > 0) {
-                phases.forEach(p => {
-                    p.pctComplete = Math.min(100, Math.max(p.pctComplete || 0, targetPct));
-                });
-            }
-        }
+        // The WIP Report Inputs card + its saveWipInputs()/distributeJobPctComplete()
+        // helpers were removed — % complete, invoiced-to-date, and revised cost changes
+        // are now edited on the working Site Map / node graph, which distributes % down
+        // to buildings/phases itself. The WIP tab is a read-only report.
 
         // ==================== CHANGE ORDERS ====================
         // ── Phase 4: server-backed CO list on the job detail ──

@@ -1661,10 +1661,9 @@
     labor: 'jobCostLabor',
     equipment: 'jobCostEquipment',
     generalConditions: 'jobCostGC',
-    sub: 'jobCostSub',
-    revisedCostChanges: 'wipRevisedCostChanges',
-    invoicedToDate: 'wipInvoicedToDate',
-    pctComplete: 'wipPctComplete'
+    sub: 'jobCostSub'
+    // revisedCostChanges / invoicedToDate / pctComplete no longer have DOM inputs
+    // on the job page — the WIP Report Inputs card was removed (Site Map drives them).
   };
 
   /** Show "← Cell A5" badges on inputs linked to workspace cells */
