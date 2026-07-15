@@ -1644,6 +1644,14 @@
       // Keep legacy flag in sync so older code paths that still read
       // it don't drift; targetMarginActive() ignores it now.
       est.targetMarginLocked = v > 0;
+      // Refresh the line grid too — crossing the 0 boundary (setting OR
+      // undoing a target) flips every per-line/section markup control
+      // between editable and read-only 🎯, toggles the target banner, and
+      // (while driving) re-prices each line off the new factor. The grid
+      // renders into #ee-lines-container, NOT #ee-totals where this input
+      // lives, so the caret stays put. Margin is 0–99 (≤2 digits) so this
+      // is at most a couple of rebuilds per edit.
+      renderLineItems();
       renderTotalsExceptMargin();
       debouncedSave();
     };
