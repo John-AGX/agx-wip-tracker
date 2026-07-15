@@ -29,10 +29,11 @@ const ROOT = path.resolve(__dirname, '..');
 const SRC = path.join(ROOT, 'images', 'project-86-icon.svg');
 const OUT_DIR = path.join(ROOT, 'images', 'pwa');
 
-// Theme background — matches the header gradient start in styles.css.
-// Used as the maskable padding color so the SVG floats on a uniform
-// dark surface inside whatever mask shape iOS / Android applies.
-const BG = '#0f172a';
+// Icon background — solid black (chosen so the cyan cube pops hardest;
+// John picked it over navy/white/graphite). Baked into every raster
+// icon below (including the "any" 192/512) so the black tile shows on
+// every launcher rather than being themed to white/grey by the OS.
+const BG = '#000000';
 
 const svgBuffer = fs.readFileSync(SRC);
 
@@ -52,12 +53,14 @@ async function render(name, size, opts) {
     .png()
     .toBuffer();
 
-  // opaque=true bakes in the dark theme background. Used for
-  // apple-touch-icon (iOS draws white behind transparent icons,
-  // which would put a cyan cube on glaring white — off-brand) and
-  // the maskable variant (needs solid bg so OS mask crops cleanly).
-  // The 192/512 "any" purpose icons stay transparent so Android
-  // launchers can apply their own theming.
+  // opaque=true bakes in the black background. Used for the OS home-screen
+  // icons — apple-touch-icon (iOS draws white behind transparent icons),
+  // icon-144 (Windows tile), and the maskable variant (Android/Samsung
+  // adaptive icon; needs a solid bg so the OS mask crops cleanly). Samsung
+  // One UI uses the maskable, so black here = a black home-screen tile.
+  // The 192/512 "any" icons stay TRANSPARENT on purpose: they double as
+  // the in-app mobile-nav logo and the email-header logo (brandLockupRow),
+  // which sit on light surfaces — a baked black square would wreck those.
   const opaque = !!(opts.maskable || opts.opaqueBg);
 
   const final = await sharp({
@@ -84,8 +87,8 @@ async function render(name, size, opts) {
   await render('favicon-32.png', 32);
   await render('icon-144.png', 144, { opaqueBg: true });        // Windows tile — needs solid bg
   await render('apple-touch-icon.png', 180, { opaqueBg: true }); // iOS — opaque or you get white bg
-  await render('icon-192.png', 192);                              // Android "any" — transparent OK
-  await render('icon-512.png', 512);                              // Android "any" — transparent OK
+  await render('icon-192.png', 192);                              // Android "any" — transparent (also in-app/email logo)
+  await render('icon-512.png', 512);                              // Android "any" — transparent
   await render('icon-maskable-512.png', 512, { maskable: true }); // Maskable — bg required, 70% safe-zone
   console.log('Done. Output in ' + path.relative(ROOT, OUT_DIR) + '/');
 })().catch((e) => {
