@@ -174,7 +174,8 @@
       folders: [],
       files: [],
       cur: null,            // current folder id (null = root)
-      view: 'grid',
+      // Default to LIST (John's preference); remember the user's last toggle.
+      view: (function () { try { return localStorage.getItem('p86fx-view') === 'grid' ? 'grid' : 'list'; } catch (e) { return 'list'; } })(),
       sort: 'name',
       query: '',
       sel: {},              // selected file ids
@@ -443,7 +444,7 @@
       tb.querySelectorAll('[data-act]').forEach(function (b) {
         b.onclick = function () {
           var act = b.getAttribute('data-act');
-          if (act === 'view') { S.view = S.view === 'grid' ? 'list' : 'grid'; render(); }
+          if (act === 'view') { S.view = S.view === 'grid' ? 'list' : 'grid'; try { localStorage.setItem('p86fx-view', S.view); } catch (e) {} render(); }
           else if (act === 'newfolder') doNewFolder();
           else if (act === 'upload') { var fi = host.querySelector('[data-fileinput]'); if (fi) fi.click(); }
         };
