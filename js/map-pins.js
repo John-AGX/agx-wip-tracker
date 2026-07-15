@@ -88,7 +88,15 @@
   // given name, nested (its own 0 0 24 24 viewBox scales cleanly) and
   // forced white. If the icon is unknown the pin still renders — just the
   // colored teardrop with a white outline.
-  function pinSvgString(color, iconName) {
+  //
+  // `glow` (optional) draws an urgency halo BEHIND the teardrop without
+  // touching its geometry: { color, pulse }. Because Google renders marker
+  // icons as <img src="data:svg">, an SVG <animate> (SMIL) inside the data
+  // URI still animates — so red pins can pulse even on the raster Summary
+  // map (no marker DOM element to CSS-animate there). The pin body stays in
+  // the same 0 0 24 34 space; only the outer canvas grows to fit the halo,
+  // and specForType() shifts the anchor to match (see below).
+  function pinSvgString(color, iconName, glow) {
     var glyph = '';
     if (typeof window.p86Icon === 'function') {
       var g = window.p86Icon(iconName);
@@ -98,25 +106,56 @@
           .replace(/currentColor/g, '#ffffff');
       }
     }
-    return '<svg xmlns="http://www.w3.org/2000/svg" width="28" height="40" viewBox="0 0 24 34">' +
+    var defs =
       '<defs><filter id="p" x="-30%" y="-30%" width="160%" height="160%">' +
         '<feDropShadow dx="0" dy="1" stdDeviation="1" flood-opacity="0.35"/>' +
-      '</filter></defs>' +
+      '</filter></defs>';
+    var body =
       '<path d="M12 1.2C6.0 1.2 1.2 6.0 1.2 12c0 8 10.8 21 10.8 21S22.8 20 22.8 12C22.8 6.0 18.0 1.2 12 1.2Z" ' +
         'fill="' + color + '" stroke="#ffffff" stroke-width="1.6" filter="url(#p)"/>' +
-      glyph +
+      glyph;
+    if (!glow) {
+      return '<svg xmlns="http://www.w3.org/2000/svg" width="28" height="40" viewBox="0 0 24 34">' +
+        defs + body + '</svg>';
+    }
+    // Glow variant: same pin path/geometry, larger canvas (viewBox padded by
+    // 8 on x, 6 on y) + a soft blurred halo around the teardrop head (~12,12).
+    // Red pulses via SMIL; amber is a steady halo.
+    var gc = glow.color || color;
+    var gdefs = '<filter id="gl" x="-80%" y="-80%" width="260%" height="260%">' +
+        '<feGaussianBlur stdDeviation="2.2"/></filter>';
+    var halo = glow.pulse
+      ? '<circle cx="12" cy="12" r="12" fill="' + gc + '" filter="url(#gl)" opacity="0.5">' +
+          '<animate attributeName="opacity" values="0.2;0.65;0.2" dur="1.4s" repeatCount="indefinite"/>' +
+          '<animate attributeName="r" values="10.5;13.5;10.5" dur="1.4s" repeatCount="indefinite"/>' +
+        '</circle>'
+      : '<circle cx="12" cy="12" r="12.5" fill="' + gc + '" filter="url(#gl)" opacity="0.4"/>';
+    return '<svg xmlns="http://www.w3.org/2000/svg" width="47" height="54" viewBox="-8 -6 40 46">' +
+      '<defs>' +
+        '<filter id="p" x="-30%" y="-30%" width="160%" height="160%">' +
+          '<feDropShadow dx="0" dy="1" stdDeviation="1" flood-opacity="0.35"/>' +
+        '</filter>' + gdefs +
+      '</defs>' +
+      halo + body +
     '</svg>';
   }
 
   // Google-Maps icon spec for a type key. `override` ({color, icon}) bypasses
   // the stored config — used by the admin live preview before saving.
+  // `override.glow` ({color, pulse}) adds the urgency halo (Summary map);
+  // when present the canvas + anchor grow to match the padded viewBox.
   function specForType(typeKey, override) {
-    var cfg = override || getConfig()[typeKey] || DEFAULTS.job;
-    var svg = pinSvgString(cfg.color, cfg.icon);
-    return {
-      url: 'data:image/svg+xml;utf8,' + encodeURIComponent(svg),
-      ax: 14, ay: 40, w: 28, h: 40  // anchor at the point (bottom-center)
-    };
+    var base = getConfig()[typeKey] || DEFAULTS.job;
+    var o = override || {};
+    var color = (typeof o.color === 'string' && o.color) ? o.color : base.color;
+    var icon = (typeof o.icon === 'string' && o.icon) ? o.icon : base.icon;
+    var glow = o.glow || null;
+    var svg = pinSvgString(color, icon, glow);
+    var url = 'data:image/svg+xml;utf8,' + encodeURIComponent(svg);
+    // Glow variant keeps the same on-screen pin size but a bigger canvas —
+    // tip lands at viewBox (12,33) → px (23.3, 45.9) in the 47×54 output.
+    if (glow) return { url: url, ax: 23.3, ay: 45.9, w: 47, h: 54 };
+    return { url: url, ax: 14, ay: 40, w: 28, h: 40 };  // anchor at the point (bottom-center)
   }
 
   function specForEntity(entity, kind) {

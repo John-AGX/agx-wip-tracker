@@ -203,9 +203,23 @@
   // Build the marker icon spec for a SINGLE entity via the shared
   // map-pins module (falls back to the default Google pin if it isn't
   // loaded).
-  function iconForItem(maps, item) {
-    if (window.p86MapPins && typeof window.p86MapPins.specForEntity === 'function') {
-      var spec = window.p86MapPins.specForEntity(item, item.kind === 'lead' ? 'lead' : 'job');
+  // urgency: 0 none · 1 amber (steady halo) · 2 red (pulsing halo). Only the
+  // Summary (dual-kind) map passes a non-zero tier; the type color/glyph are
+  // never repainted — the halo rides behind the existing teardrop.
+  function iconForItem(maps, item, urgency) {
+    var P = window.p86MapPins;
+    if (P && typeof P.specForEntity === 'function') {
+      var spec;
+      if (urgency && typeof P.specForType === 'function' && typeof P.typeForEntity === 'function') {
+        var tk = P.typeForEntity(item, item.kind === 'lead' ? 'lead' : 'job');
+        var base = (typeof P.getConfig === 'function' && P.getConfig()[tk]) || {};
+        spec = P.specForType(tk, {
+          color: base.color, icon: base.icon,
+          glow: { color: urgency === 2 ? '#f87171' : '#fbbf24', pulse: urgency === 2 }
+        });
+      } else {
+        spec = P.specForEntity(item, item.kind === 'lead' ? 'lead' : 'job');
+      }
       if (spec && spec.url) {
         return {
           url: spec.url,
@@ -273,7 +287,7 @@
       return;
     }
 
-    host.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;min-height:420px;color:var(--text-dim,#888);font-size:13px;">Loading map…</div>';
+    host.innerHTML = '<div style="display:flex;align-items:center;justify-content:center;height:100%;min-height:180px;color:var(--text-dim,#888);font-size:13px;">Loading map…</div>';
 
     // Data: prefer the caller-supplied dataset, else the org-scoped
     // endpoint, else (last resort) assemble from window.appData.
@@ -393,6 +407,9 @@
           'style="font-size:11px;font-weight:600;padding:5px 10px;border-radius:14px;border:1px solid #4f8cff;background:#4f8cff;color:#fff;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,0.3);">Leads ' + data.leads.length + '</button>' +
         '<button type="button" data-emap-chip="job" class="p86-emap-chip" ' +
           'style="font-size:11px;font-weight:600;padding:5px 10px;border-radius:14px;border:1px solid #94a3b8;background:#94a3b8;color:#fff;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,0.3);">Jobs ' + data.jobs.length + '</button>' +
+        (window.p86FilterDrawer ?
+          '<button type="button" data-emap-filter ' +
+            'style="font-size:11px;font-weight:600;padding:5px 10px;border-radius:14px;border:1px solid var(--border,#475569);background:#fff;color:#111;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,0.3);">⚙ Filter</button>' : '') +
         '</div>') +
       '<button type="button" data-emap-recenter ' +
         'style="position:absolute;bottom:24px;right:10px;z-index:5;display:none;font-size:11px;font-weight:600;padding:6px 10px;border-radius:6px;border:1px solid var(--border,#333);background:#fff;color:#111;cursor:pointer;box-shadow:0 1px 4px rgba(0,0,0,0.3);">\u{1F4CD} You</button>' +
@@ -482,6 +499,113 @@
     var didFit = false;
     var jobIndex = {}; // jobId → { pos, marker, item } for the sidebar fly-to
 
+    // ── Summary map: pin filters + urgency glow (dual-kind only) ─────────
+    // Single-kind maps (Job Map / Leads Map, opts.only set) keep their exact
+    // prior behavior — the extra join, filter drawer and glow are all gated
+    // behind ADVANCED_SUMMARY so those surfaces are untouched.
+    var ADVANCED_SUMMARY = !opts.only;
+    // /api/map/entities carries only id/title/status/lat/lng/kind/address, so
+    // join the richer rows (created_at, next_followup_at, client_id) from the
+    // already-loaded appData. Absent appData → maps degrade to no filter/glow.
+    var leadById = {}, jobById = {};
+    if (ADVANCED_SUMMARY) {
+      var _ad = window.appData || {};
+      (_ad.leads || []).forEach(function (l) { if (l && l.id != null) leadById[String(l.id)] = l; });
+      (_ad.jobs || []).forEach(function (j) { if (j && j.id != null) jobById[String(j.id)] = j; });
+    }
+    function _todayStr() {
+      var d = new Date(); d.setHours(0, 0, 0, 0);
+      return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    }
+    function _isTerminalLead(l) { return !!l && ['sold', 'lost', 'no_opportunity'].indexOf(l.status) !== -1; }
+    function _clientIdOf(rec) {
+      if (!rec) return null;
+      if (rec.client_id != null) return rec.client_id;
+      if (rec.data && rec.data.client_id != null) return rec.data.client_id;
+      return null;
+    }
+    function _isOverdueLead(it) {
+      if (it.kind !== 'lead') return false;
+      var l = leadById[String(it.id)];
+      if (!l || _isTerminalLead(l) || !l.next_followup_at) return false;
+      return String(l.next_followup_at).slice(0, 10) < _todayStr();
+    }
+    // Email needs-reply index, keyed "type:id" → 'high' | 'normal'. null until
+    // the /threads fetch resolves; a pin needs a reply if a thread targets it
+    // directly OR targets its client (entity_type 'client').
+    var needsReplyIndex = null;
+    function _needsReplyUrgency(it) {
+      if (!needsReplyIndex) return null;
+      var self = needsReplyIndex[it.kind + ':' + String(it.id)];
+      if (self) return self;
+      var cid = _clientIdOf(it.kind === 'lead' ? leadById[String(it.id)] : jobById[String(it.id)]);
+      if (cid != null) { var c = needsReplyIndex['client:' + String(cid)]; if (c) return c; }
+      return null;
+    }
+    // Per-pin urgency tier: max of (email needs-reply) and (overdue follow-up).
+    function itemUrgency(it) {
+      if (!ADVANCED_SUMMARY) return 0;
+      var tier = 0;
+      var nr = _needsReplyUrgency(it);
+      if (nr === 'high') tier = 2; else if (nr) tier = Math.max(tier, 1);
+      if (it.kind === 'lead') {
+        var l = leadById[String(it.id)];
+        if (l && !_isTerminalLead(l) && l.next_followup_at) {
+          var ds = String(l.next_followup_at).slice(0, 10);
+          if (ds < _todayStr()) {
+            var days = Math.round((Date.now() - new Date(ds).getTime()) / 864e5);
+            tier = Math.max(tier, days >= 7 ? 2 : 1);
+          }
+        }
+      }
+      return tier;
+    }
+    // Filter drawer state. mapFilter null = no active filter.
+    var mapFilter = null;
+    function _dateInRange(val, range) {
+      if (!range || (!range.from && !range.to)) return true;
+      if (!val) return false;
+      var d = String(val).slice(0, 10);
+      if (range.from && d < range.from) return false;
+      if (range.to && d > range.to) return false;
+      return true;
+    }
+    function matchesMapFilter(it) {
+      var f = mapFilter; if (!f) return true;
+      var FD = window.p86FilterDrawer;
+      var rec = it.kind === 'lead' ? leadById[String(it.id)] : jobById[String(it.id)];
+      // Lead status chips — apply to leads only (jobs carry free-text statuses).
+      if (f.status && f.status.length && it.kind === 'lead' && f.status.indexOf(it.status) < 0) return false;
+      // "Date entered" range against the joined created_at.
+      if (FD && f.created_at) {
+        var cr = FD.resolveDateRange(f.created_at);
+        if (cr.from || cr.to) {
+          var created = rec && (rec.created_at || (rec.data && rec.data.created_at));
+          if (!_dateInRange(created, cr)) return false;
+        }
+      }
+      // Flag chips.
+      if (f.flags && f.flags.length) {
+        if (f.flags.indexOf('overdue') >= 0 && !_isOverdueLead(it)) return false;
+        if (f.flags.indexOf('needs_reply') >= 0 && !_needsReplyUrgency(it)) return false;
+      }
+      return true;
+    }
+    function mapFilterFields() {
+      return [
+        { key: 'status', label: 'Lead status', type: 'chips', options: [
+          { v: 'new', label: 'New' }, { v: 'in_progress', label: 'In Progress' },
+          { v: 'sent', label: 'Sent' }, { v: 'sold', label: 'Sold' },
+          { v: 'lost', label: 'Lost' }, { v: 'no_opportunity', label: 'No Opportunity' }
+        ] },
+        { key: 'created_at', label: 'Date entered', type: 'daterange' },
+        { key: 'flags', label: 'Signals', type: 'chips', options: [
+          { v: 'overdue', label: 'Overdue follow-up' },
+          { v: 'needs_reply', label: 'Email reply needed' }
+        ] }
+      ];
+    }
+
     // ── Marker abstraction: AdvancedMarkerElement on the vector Job Map, classic
     // maps.Marker everywhere else. One creation/teardown/anchor path for both. ──
     function pinImg(spec) {
@@ -548,7 +672,7 @@
       markers = [];
       for (var jk in jobIndex) { if (Object.prototype.hasOwnProperty.call(jobIndex, jk)) delete jobIndex[jk]; }
 
-      var visible = allItems.filter(function (it) { return shown[it.kind]; });
+      var visible = allItems.filter(function (it) { return shown[it.kind] && matchesMapFilter(it); });
       var groups = groupByLocation(visible);
       var bounds = new maps.LatLngBounds();
 
@@ -557,7 +681,7 @@
         var marker;
         if (g.members.length === 1) {
           var item = g.members[0];
-          var sIcon = iconForItem(maps, item);
+          var sIcon = iconForItem(maps, item, itemUrgency(item));
           marker = makeMarker(pos, {
             title: item.title || '',
             icon: sIcon,
@@ -961,6 +1085,53 @@
         rebuild();
       });
     });
+
+    // ── Filter drawer (Summary map) + urgency needs-reply join ───────────
+    if (ADVANCED_SUMMARY) {
+      var filterBtn = host.querySelector('[data-emap-filter]');
+      var fields = mapFilterFields();
+      function syncFilterBadge() {
+        if (!filterBtn) return;
+        var n = (window.p86FilterDrawer && mapFilter)
+          ? window.p86FilterDrawer.countActive(fields, mapFilter) : 0;
+        filterBtn.textContent = n ? ('⚙ Filter (' + n + ')') : '⚙ Filter';
+        filterBtn.style.background = n ? '#4f8cff' : '#fff';
+        filterBtn.style.color = n ? '#fff' : '#111';
+        filterBtn.style.borderColor = n ? '#4f8cff' : 'var(--border,#475569)';
+      }
+      if (filterBtn && window.p86FilterDrawer) {
+        filterBtn.addEventListener('click', function () {
+          window.p86FilterDrawer.open({
+            title: 'Filter map',
+            fields: fields,
+            values: mapFilter || window.p86FilterDrawer.emptyValues(fields),
+            onApply: function (values) {
+              mapFilter = values; syncFilterBadge(); infoWindow.close(); rebuild();
+            },
+            onClear: function () {
+              mapFilter = null; syncFilterBadge(); infoWindow.close(); rebuild();
+            }
+          });
+        });
+      }
+      // Load the needs-reply index once, then repaint so urgent pins glow and
+      // the "Email reply needed" filter has data. Best-effort — errors leave
+      // the map exactly as first painted.
+      fetch('/api/email-inbox/threads?limit=100', { credentials: 'include' })
+        .then(function (r) { return r.ok ? r.json() : { threads: [] }; })
+        .then(function (d) {
+          var idx = {};
+          (d.threads || []).forEach(function (t) {
+            if (!t.needs_reply || !t.entity_type || t.entity_id == null) return;
+            var k = String(t.entity_type) + ':' + String(t.entity_id);
+            if (idx[k] === 'high') return;               // keep the strongest
+            idx[k] = (t.triage_urgency === 'high') ? 'high' : 'normal';
+          });
+          needsReplyIndex = idx;
+          try { rebuild(); } catch (e) {}
+        })
+        .catch(function () { needsReplyIndex = {}; });
+    }
 
     // ── "You are here" — best-effort geolocation. Degrades gracefully:
     // denied / unsupported / null → no marker, no button, pins stay.
