@@ -741,22 +741,48 @@ function getT2WeightedPct(t2n){
 // of revenue allocated to this T1 (allocPct × source.revenue for T2, allocPct ×
 // CO income for CO). Falls back to the T1's own pctComplete when no wires have
 // pct set. Once any wire has a pct, unset wires count as 0%.
+// Derived % complete for a UNIT-MODE scope wire = units-done ÷ the target
+// building's unit count. Returns null when the wire isn't unit-mode or the
+// target building has no units set (caller then falls back to wire.pctComplete).
+// Single source of the units→% math (used by the building rollup + the
+// updateT1Progress flush that keeps wire.pctComplete in sync for other readers).
+function wireUnitPct(w){
+  if(!w || w.trackMode !== 'units') return null;
+  var b = findNode(w.toNode);
+  var cnt = (b && b.units && b.units.length) ? b.units.length : 0;
+  if(cnt <= 0) return null;
+  var done = Math.max(0, Math.min(Number(w.unitsDone) || 0, cnt));
+  return Math.round(done / cnt * 1000) / 10;
+}
+
 function getT1WeightedPct(t1n){
   if(!t1n || t1n.type !== 't1') return (t1n && t1n.pctComplete) || 0;
-  // ST-2: a building with a level/unit breakdown is driven by units-done ÷ total
-  // (crews check off unit cubes on the Site Plan). Buildings with no units fall
-  // through to the phase/CO-weighted (or manually-set) pct below.
-  if(t1n.units && t1n.units.length){
-    var _ud=0; for(var _i=0;_i<t1n.units.length;_i++){ if(t1n.units[_i].done) _ud++; }
-    return _ud / t1n.units.length * 100;
-  }
-  // No units, but a level (floor) breakdown → drive by levels-done ÷ total
-  // (John: "units if present, else levels"). Each level carries its own `done`
-  // flag (a level auto-completes when all its units are done). A building with
-  // neither units nor levels falls through to the phase/CO-weighted pct below.
-  if(t1n.levels && t1n.levels.length){
-    var _ld=0; for(var _k=0;_k<t1n.levels.length;_k++){ if(t1n.levels[_k].done) _ld++; }
-    return _ld / t1n.levels.length * 100;
+  // When any incoming SCOPE (phase/CO) wire tracks completion by its own units
+  // (w.trackMode==='units'), the scopes drive this building's % — skip the
+  // building-level unit/level short-circuit and fall through to the
+  // revenue-weighted phase/CO branch (each such wire's pctComplete is the
+  // derived units-done ÷ building-units, flushed by updateT1Progress). Buildings
+  // whose scopes are all percent-mode keep the classic units→levels→wire cascade,
+  // so existing jobs are unchanged.
+  var scopesDriveByUnits = wires.some(function(w){
+    return w.toNode === t1n.id && wireUnitPct(w) != null;
+  });
+  if(!scopesDriveByUnits){
+    // ST-2: a building with a level/unit breakdown is driven by units-done ÷ total
+    // (crews check off unit cubes on the Site Plan). Buildings with no units fall
+    // through to the phase/CO-weighted (or manually-set) pct below.
+    if(t1n.units && t1n.units.length){
+      var _ud=0; for(var _i=0;_i<t1n.units.length;_i++){ if(t1n.units[_i].done) _ud++; }
+      return _ud / t1n.units.length * 100;
+    }
+    // No units, but a level (floor) breakdown → drive by levels-done ÷ total
+    // (John: "units if present, else levels"). Each level carries its own `done`
+    // flag (a level auto-completes when all its units are done). A building with
+    // neither units nor levels falls through to the phase/CO-weighted pct below.
+    if(t1n.levels && t1n.levels.length){
+      var _ld=0; for(var _k=0;_k<t1n.levels.length;_k++){ if(t1n.levels[_k].done) _ld++; }
+      return _ld / t1n.levels.length * 100;
+    }
   }
   var incoming = [];
   wires.forEach(function(w){
@@ -778,15 +804,18 @@ function getT1WeightedPct(t1n){
       rev = (r.src.revenue || 0);
     }
     var weight = ap * rev;
-    // Use wire-level pctComplete if set, otherwise fall back to source node's pctComplete
-    var pc = (r.w.pctComplete != null) ? r.w.pctComplete : (r.src.pctComplete || 0);
+    // Unit-mode wire → derive from units-done ÷ building units; else the wire's
+    // own pctComplete; else the source node's pctComplete.
+    var _uPc = wireUnitPct(r.w);
+    var pc = (_uPc != null) ? _uPc : ((r.w.pctComplete != null) ? r.w.pctComplete : (r.src.pctComplete || 0));
     sumPct += pc * weight; sumW += weight;
   });
   if(sumW === 0){
     var sW=0,sP=0;
     incoming.forEach(function(r){
       var ap = (r.w.allocPct != null) ? r.w.allocPct : 100;
-      var pc = (r.w.pctComplete != null) ? r.w.pctComplete : (r.src.pctComplete || 0);
+      var _uPc2 = wireUnitPct(r.w);
+      var pc = (_uPc2 != null) ? _uPc2 : ((r.w.pctComplete != null) ? r.w.pctComplete : (r.src.pctComplete || 0));
       sP += pc*ap; sW += ap;
     });
     return sW === 0 ? 0 : sP/sW;
@@ -1567,7 +1596,7 @@ return {
   getCOAllocWires:getCOAllocWires, rebalanceCOAllocations:rebalanceCOAllocations,
   getPhaseRevenueToBuilding:getPhaseRevenueToBuilding, getCOIncomeToParent:getCOIncomeToParent,
   getBuildingAllocatedRevenue:getBuildingAllocatedRevenue,
-  getT2WeightedPct:getT2WeightedPct, getT1WeightedPct:getT1WeightedPct,
+  getT2WeightedPct:getT2WeightedPct, getT1WeightedPct:getT1WeightedPct, wireUnitPct:wireUnitPct,
   getWIPWeightedPct:getWIPWeightedPct, getT2ShareToT1:getT2ShareToT1,
   fmtC:fmtC, fmtP:fmtP, fmtV:fmtV,
   saveGraph:saveGraph, loadGraph:loadGraph,

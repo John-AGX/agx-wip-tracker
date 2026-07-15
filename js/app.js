@@ -1780,6 +1780,12 @@
             // Clearing on exit guarantees at most one live copy; the console
             // re-renders fresh whenever its tab is reopened.
             if (tabName !== 'console') {
+                // Rescue the docked 86 panel (Assembly Studio) back to its
+                // drawer home BEFORE wiping the host, or the singleton dies
+                // with the console DOM. No-op unless currently docked.
+                if (window.p86AI && typeof window.p86AI.undock === 'function' && window.p86AI.isDocked && window.p86AI.isDocked()) {
+                    try { window.p86AI.undock(); } catch (e) {}
+                }
                 var ccHost = document.getElementById('consolePageHost');
                 if (ccHost && ccHost.firstChild) ccHost.innerHTML = '';
             }

@@ -162,9 +162,27 @@ function updateTierLabels(){
 // ── Auto-calculate T1 % complete from connected T2s ──
 function updateT1Progress(){
   var nodes=E.nodes(), wires=E.wires();
+  // Flush unit-mode scope wires: wire.pctComplete = units-done ÷ the building's
+  // unit count. Keeps the phase %, building %, WIP %, and earned-revenue rollups
+  // all consistent (every one reads wire.pctComplete). No-op for percent-mode
+  // wires (E.wireUnitPct returns null unless trackMode==='units' + building units).
+  wires.forEach(function(w){
+    var uPc = E.wireUnitPct(w);
+    if(uPc != null) w.pctComplete = uPc;
+  });
   nodes.forEach(function(n){
-    if(n.type!=='t1') return;
-    n.pctComplete = Math.round(E.getT1WeightedPct(n) * 10) / 10;
+    if(n.type==='t1'){
+      n.pctComplete = Math.round(E.getT1WeightedPct(n) * 10) / 10;
+    } else if(n.type==='t2' || n.type==='co'){
+      // Flush the scope (t2/CO) node's own pctComplete from its wire-weighted
+      // value too. pushToJob copies n.pctComplete into the appData.phases record,
+      // and the record-based rollups (jobs list, job header, building cards via
+      // calcBuildingPctComplete / calcJobPctComplete) read that record — so
+      // without this, a units-tracked scope (whose completion lives only on the
+      // wire) would show the correct % on the Site Map but a stale % in the
+      // list/header. Also repairs the same latent gap for percent-mode wires.
+      n.pctComplete = Math.round(E.getT2WeightedPct(n) * 10) / 10;
+    }
   });
 }
 
@@ -717,13 +735,39 @@ function renderNodes(){
             var wpcColor=wpc>=100?'#34d399':wpc>=50?'#fbbf24':'#4f8cff';
             var isLocked=!w._auto;
             var lockColor=isLocked?'#fbbf24':'#3a4570';
+            // Per-scope completion is tracked by UNITS (check off the building's
+            // units for THIS scope) or by PERCENT. Units mode is only offered when
+            // the target building has units set.
+            var uCnt=(b.units&&b.units.length)?b.units.length:0;
+            var isUnits=(w.trackMode==='units')&&uCnt>0;
+            var uDone=Math.max(0,Math.min(w.unitsDone||0,uCnt));
             h+='<div style="display:flex;justify-content:space-between;align-items:center;padding:2px 0;color:#6a7090;font-size:9px;gap:4px;">';
             h+='<span class="ng-alloc-lock" data-lock-co="'+n.id+'" data-lock-wire="'+w.toNode+'" title="'+(isLocked?'Unlock':'Lock')+' this allocation" style="cursor:pointer;font-size:10px;color:'+lockColor+';width:14px;text-align:center;">'+(isLocked?'\uD83D\uDD12':'\uD83D\uDD13')+'</span>';
             h+='<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+bname+'</span>';
             h+='<span class="ng-alloc-pct" data-alloc-phase="'+n.id+'" data-alloc-bldg="'+w.toNode+'" title="Click to edit allocation %" style="color:#fbbf24;cursor:pointer;font-family:\'Courier New\',monospace;min-width:42px;text-align:right;">'+pct.toFixed(1)+'%</span>';
-            h+='<span class="ng-wire-pct" data-wire-pct-phase="'+n.id+'" data-wire-pct-bldg="'+w.toNode+'" title="Click to edit % complete" style="color:'+wpcColor+';cursor:pointer;font-family:\'Courier New\',monospace;min-width:38px;text-align:right;border-left:1px dotted var(--ng-border2);padding-left:4px;">'+wpc.toFixed(0)+'%</span>';
+            // Units \u21C4 % toggle (only when the building has units).
+            if(uCnt>0){
+              h+='<span class="ng-scope-mode" data-scope-mode-phase="'+n.id+'" data-scope-mode-bldg="'+w.toNode+'" title="'+(isUnits?'Tracking by units \u2014 switch to percent':'Switch to unit check-off')+'" style="cursor:pointer;color:'+(isUnits?'#34d399':'#8b90a5')+';font-size:11px;line-height:1;width:14px;text-align:center;">'+(isUnits?'\u25A6':'%')+'</span>';
+            }
+            // % Cmp: editable percent chip, OR a read-only derived % in units mode.
+            if(isUnits){
+              h+='<span title="Driven by the units checked off below" style="color:'+wpcColor+';font-family:\'Courier New\',monospace;min-width:38px;text-align:right;border-left:1px dotted var(--ng-border2);padding-left:4px;opacity:0.85;">'+wpc.toFixed(0)+'%</span>';
+            } else {
+              h+='<span class="ng-wire-pct" data-wire-pct-phase="'+n.id+'" data-wire-pct-bldg="'+w.toNode+'" title="Click to edit % complete" style="color:'+wpcColor+';cursor:pointer;font-family:\'Courier New\',monospace;min-width:38px;text-align:right;border-left:1px dotted var(--ng-border2);padding-left:4px;">'+wpc.toFixed(0)+'%</span>';
+            }
             h+='<span class="ng-alloc-share" data-share-co="'+n.id+'" data-share-wire="'+w.toNode+'" data-share-income="'+phaseRev+'" title="Click to edit $ share" style="color:#34d399;cursor:pointer;font-family:\'Courier New\',monospace;min-width:64px;text-align:right;">'+E.fmtC(share)+'</span>';
             h+='</div>';
+            // Units check-off strip (units mode only): one cube per building unit,
+            // filled to unitsDone. Clicking cube #k sets the count to k (or clears
+            // the last-filled cube). This is the "check off units through the scope".
+            if(isUnits){
+              h+='<div class="ng-scope-cubes" style="display:flex;flex-wrap:wrap;align-items:center;gap:3px;padding:0 0 4px 18px;">';
+              for(var _c=0;_c<uCnt;_c++){
+                h+='<i class="ng-lu-cube ng-scope-cube'+(_c<uDone?' done':'')+'" data-scope-cube-phase="'+n.id+'" data-scope-cube-bldg="'+w.toNode+'" data-scope-cube-idx="'+_c+'" title="'+(_c<uDone?('Unit '+(_c+1)+' done \u2014 tap to set '+(_c+1)+' complete'):('Tap to mark '+(_c+1)+' unit'+(_c===0?'':'s')+' complete'))+'"></i>';
+              }
+              h+='<span style="margin-left:5px;color:#8b90a5;font-family:\'Courier New\',monospace;font-size:9px;">'+uDone+' / '+uCnt+'</span>';
+              h+='</div>';
+            }
           });
           var pctOk=Math.abs(totalPct-100)<0.01;
           var warnColor=pctOk?'#34d399':'#f87171';
@@ -3754,7 +3798,15 @@ function renderBuildingStructure(panel, sel){
   function lUnits(lid){ return un.filter(function(u){ return u.levelId===lid; }); }
   function bwUnits(){ return un.filter(function(u){ return !luById(lv, u.levelId); }); } // null OR orphaned level
   function lvlDone(L){ var lu=lUnits(L.id); return lu.length ? lu.every(function(u){return u.done;}) : !!L.done; }
-  function cubes(list){ return list.map(function(u){ return '<i class="ng-lu-cube'+(u.done?' done':'')+'" data-lu-act="unit-done" data-id="'+u.id+'" title="'+(u.done?'Done — tap to clear':'Tap to mark done')+'"></i>'; }).join(''); }
+  // When a SCOPE (phase) tracks THIS building by its own units, the building's
+  // cubes are just the count (the denominator) — check-off happens on each scope.
+  // Render the building cubes read-only + neutral so they aren't mistaken for the
+  // (now scope-driven) completion.
+  var scopesDrive = E.wires().some(function(w){ return w.toNode===sel.id && w.trackMode==='units' && sel.units && sel.units.length; });
+  function cubes(list){ return list.map(function(u){
+    if(scopesDrive) return '<i class="ng-lu-cube ng-lu-cube-ro" title="Completion is tracked per scope"></i>';
+    return '<i class="ng-lu-cube'+(u.done?' done':'')+'" data-lu-act="unit-done" data-id="'+u.id+'" title="'+(u.done?'Done — tap to clear':'Tap to mark done')+'"></i>';
+  }).join(''); }
   var totalUnits=un.length, doneUnits=un.filter(function(u){return u.done;}).length;
   var floorsDone=lv.filter(lvlDone).length;
 
@@ -3799,10 +3851,17 @@ function renderBuildingStructure(panel, sel){
       h+='<div class="ng-lu-ugroup"><div class="ng-lu-ghead"><span>'+(lv.length?'Building-wide':'Units')+' · '+bwu.length+' unit'+(bwu.length===1?'':'s')+'</span></div>'
         +'<div class="ng-lu-cubes">'+cubes(bwu)+'</div></div>';
     }
-    var pct=Math.round(doneUnits/totalUnits*100);
-    h+='<div class="ng-lu-barrow"><div class="ng-lu-bar"><i style="width:'+pct+'%"></i></div><span class="ng-lu-barlbl">'+doneUnits+' / '+totalUnits+' units</span></div>';
+    if(scopesDrive){
+      var sdPct=Math.round(E.getT1WeightedPct(sel)*10)/10;
+      h+='<div class="ng-lu-barrow"><div class="ng-lu-bar"><i style="width:'+sdPct+'%"></i></div><span class="ng-lu-barlbl">'+sdPct+'% · driven by scopes</span></div>';
+    } else {
+      var pct=Math.round(doneUnits/totalUnits*100);
+      h+='<div class="ng-lu-barrow"><div class="ng-lu-bar"><i style="width:'+pct+'%"></i></div><span class="ng-lu-barlbl">'+doneUnits+' / '+totalUnits+' units</span></div>';
+    }
   }
-  h+='<div class="ng-lu-legend"><span><i class="ng-lu-cube"></i>to do</span><span><i class="ng-lu-cube done"></i>done</span><span class="ng-lu-hint">tap a cube or floor to mark off</span></div>';
+  h+='<div class="ng-lu-legend">'+(scopesDrive
+    ? '<span class="ng-lu-hint">Completion is tracked per scope — check off units on each scope.</span>'
+    : '<span><i class="ng-lu-cube"></i>to do</span><span><i class="ng-lu-cube done"></i>done</span><span class="ng-lu-hint">tap a cube or floor to mark off</span>')+'</div>';
   el.innerHTML=h;
 }
 
@@ -4160,6 +4219,36 @@ function wirePctEdit(wpc){
   wpInp.addEventListener('mousedown',function(ev){ev.stopPropagation();});
 }
 
+// Toggle a scope→building wire between UNITS check-off and PERCENT tracking.
+// Switching to units seeds unitsDone from the current % so no progress is lost.
+function scopeModeToggle(el){
+  var ph=el.getAttribute('data-scope-mode-phase'), bd=el.getAttribute('data-scope-mode-bldg');
+  var w=E.wires().find(function(x){ return x.fromNode===ph && x.toNode===bd; });
+  if(!w) return;
+  if(w.trackMode==='units'){
+    w.trackMode='pct';
+  } else {
+    var b=E.findNode(bd); var cnt=(b&&b.units&&b.units.length)?b.units.length:0;
+    if(cnt<=0) return; // no units to track against
+    w.trackMode='units';
+    if(w.unitsDone==null) w.unitsDone=Math.round((w.pctComplete||0)/100*cnt);
+  }
+  if(E.saveGraph) E.saveGraph(); render();
+}
+
+// Click cube #idx on a unit-mode scope wire → set unitsDone. Clicking the
+// last-filled cube clears it (decrement); any other sets the count to idx+1.
+function scopeUnitCubeSet(el){
+  var ph=el.getAttribute('data-scope-cube-phase'), bd=el.getAttribute('data-scope-cube-bldg');
+  var idx=parseInt(el.getAttribute('data-scope-cube-idx'),10);
+  var w=E.wires().find(function(x){ return x.fromNode===ph && x.toNode===bd; });
+  if(!w || isNaN(idx)) return;
+  var b=E.findNode(bd); var cnt=(b&&b.units&&b.units.length)?b.units.length:0;
+  var cur=Math.max(0,Math.min(w.unitsDone||0,cnt));
+  w.unitsDone=(idx===cur-1)?idx:Math.min(idx+1,cnt);
+  if(E.saveGraph) E.saveGraph(); render();
+}
+
 var ngOpenAddMenuFn=null;   // set inside initEvents (where openAddMenu is defined); used by the ribbon "+ Add" button wired in init()
 function initEvents(){
   var SN=E.SNAP, z=function(){return E.zm();};
@@ -4186,6 +4275,10 @@ function initEvents(){
     if(iprc && !e.target.closest('input')){ e.preventDefault(); e.stopPropagation(); phaseRevEdit(iprc); return; }
     var iapc=e.target.closest('[data-alloc-phase]');
     if(iapc && !e.target.closest('input')){ e.preventDefault(); e.stopPropagation(); allocPctEdit(iapc); return; }
+    var ismode=e.target.closest('[data-scope-mode-phase]');
+    if(ismode){ e.preventDefault(); e.stopPropagation(); scopeModeToggle(ismode); return; }
+    var iscube=e.target.closest('[data-scope-cube-phase]');
+    if(iscube){ e.preventDefault(); e.stopPropagation(); scopeUnitCubeSet(iscube); return; }
     var iwpc=e.target.closest('[data-wire-pct-phase]');
     if(iwpc && !e.target.closest('input')){ e.preventDefault(); e.stopPropagation(); wirePctEdit(iwpc); return; }
     var ishareEl=e.target.closest('.ng-alloc-share');
@@ -4702,6 +4795,10 @@ function initEvents(){
     var shareEl=e.target.closest('.ng-alloc-share');
     if(shareEl && !e.target.closest('input')){ e.preventDefault(); e.stopPropagation(); allocShareEdit(shareEl); return; }
     // Click per-wire % complete → edit
+    var csmode=e.target.closest('[data-scope-mode-phase]');
+    if(csmode){ e.preventDefault(); e.stopPropagation(); scopeModeToggle(csmode); return; }
+    var cscube=e.target.closest('[data-scope-cube-phase]');
+    if(cscube){ e.preventDefault(); e.stopPropagation(); scopeUnitCubeSet(cscube); return; }
     var wpc=e.target.closest('[data-wire-pct-phase]');
     if(wpc && !e.target.closest('input')){ e.preventDefault(); e.stopPropagation(); wirePctEdit(wpc); return; }
     // PO → phase: unlink one phase from a PO. Removes the wire and

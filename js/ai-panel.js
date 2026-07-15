@@ -1553,6 +1553,9 @@
     // disconnected, like the panel and page aren't attached.
     void panel.offsetWidth; // force reflow on the off-screen state
     requestAnimationFrame(function() {
+      // Docked mode (Assembly Studio): the .p86-ai-docked CSS class owns
+      // positioning (fills the dock column, no fixed drawer / body shift).
+      if (_isDocked) return;
       panel.style.transform = 'translateX(0)';
       document.body.classList.add('p86-ai-open');
     });
@@ -1824,6 +1827,9 @@
   }
 
   function close() {
+    // Docked (Assembly Studio): "close" pops the panel back out to its
+    // drawer home rather than sliding a docked column off-screen.
+    if (_isDocked) { undock(); return; }
     var panel = document.getElementById('p86-ai-panel');
     if (panel) panel.style.transform = 'translateX(100%)';
     document.body.classList.remove('p86-ai-open');
@@ -1840,6 +1846,50 @@
   function toggle(estimateId) {
     if (_open) close();
     else open(estimateId);
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // Dock mode — Assembly Studio (and any future embedded surface) hosts
+  // the SAME singleton 86 panel inline instead of the fixed right-edge
+  // drawer, so all the tool / approval-card / streaming machinery is reused
+  // verbatim. Reparent the panel into a host element + a CSS class that
+  // neutralizes the drawer chrome. The host page MUST undock() before it
+  // wipes the host container (the console rebuilds #cc-assemblies on every
+  // load and clears #consolePageHost on leave) or the singleton is destroyed.
+  // ──────────────────────────────────────────────────────────────────
+  var _isDocked = false;
+  var _dockHostAgentKey = null;   // pins the chat to a host ('job' = 86)
+  var _dockContext = null;        // per-turn current_context override (selected assembly)
+  var _undockPanelStyle = null;   // saved drawer inline style, restored on undock
+  function dockInto(hostEl, opts) {
+    opts = opts || {};
+    if (!hostEl) return;
+    var panel = ensurePanel();
+    if (!_isDocked) _undockPanelStyle = panel.getAttribute('style') || '';
+    _dockHostAgentKey = opts.hostAgentKey || null;
+    _dockContext = opts.currentContext || null;
+    panel.classList.add('p86-ai-docked');
+    if (panel.parentNode !== hostEl) hostEl.appendChild(panel);
+    _isDocked = true;
+    // Open against the global 'ask86' surface (no entity gate); loads the 86
+    // thread + wires the composer. The docked CSS owns positioning.
+    open({ entityType: 'ask86' });
+    document.body.classList.remove('p86-ai-open'); // docked doesn't shift the page
+  }
+  function setDockContext(ctx) { _dockContext = ctx || null; }
+  function undock() {
+    if (!_isDocked) return;
+    _isDocked = false;
+    _dockHostAgentKey = null;
+    _dockContext = null;
+    var panel = document.getElementById('p86-ai-panel');
+    if (!panel) return;
+    panel.classList.remove('p86-ai-docked');
+    if (_undockPanelStyle != null) panel.setAttribute('style', _undockPanelStyle);
+    document.body.appendChild(panel);           // rescue the singleton back to body…
+    panel.style.transform = 'translateX(100%)'; // …closed, as a normal drawer
+    document.body.classList.remove('p86-ai-open');
+    _open = false;
   }
 
   // ──────────────────────────────────────────────────────────────────
@@ -2984,6 +3034,14 @@
       refreshUserLoc();
       if (_lastUserLoc) pageCtx.user_location = _lastUserLoc;
       body.current_context = pageCtx;
+    }
+    // Assembly Studio dock — pin this chat to 86 (host_agent_key, honored
+    // server-side only for admins) and carry the selected-assembly context so
+    // 86 knows what it's building/tuning, regardless of the page-context mode
+    // above. See dockInto().
+    if (_isDocked) {
+      if (_dockHostAgentKey) body.host_agent_key = _dockHostAgentKey;
+      if (_dockContext) body.current_context = Object.assign({}, body.current_context || {}, _dockContext);
     }
     // Combine one-shot images: pre-existing handoff (PDF viewer) + composer.
     var bodyImages = [];
@@ -7155,6 +7213,13 @@
     close: close,
     toggle: toggle,
     isOpen: function() { return _open; },
+    // Dock the singleton 86 panel inline into a host element (Assembly Studio).
+    // opts: { hostAgentKey:'job', currentContext:{...} }. undock() rescues the
+    // panel back to its drawer home — CALL IT before wiping the host container.
+    dockInto: dockInto,
+    setDockContext: setDockContext,
+    undock: undock,
+    isDocked: function() { return _isDocked; },
     // Re-render the AG header + notice when the editor's Plan/Build
     // pill flips. Cheap call (just two DOM text writes).
     refreshPhaseChip: function() { try { refreshModeSpecificUI(); } catch (e) {} }

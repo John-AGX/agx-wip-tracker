@@ -3715,6 +3715,29 @@
             #p86-ai-panel #ai-panel-resizer { display: none !important; }
         }
 
+        /* Assembly Studio dock — the SAME singleton 86 panel, reparented inline
+           into the cockpit's right column instead of the fixed right-edge
+           drawer (so all tool / approval-card / streaming machinery is reused).
+           Neutralize the drawer chrome; fill the host element (which sets the
+           height). js/ai-panel.js dockInto()/undock() manage the reparenting. */
+        #p86-ai-panel.p86-ai-docked {
+            position: relative !important;
+            top: auto !important; right: auto !important; bottom: auto !important; left: auto !important;
+            width: 100% !important;
+            max-width: none !important;
+            min-width: 0 !important;
+            height: 100% !important;
+            transform: none !important;
+            transition: none !important;
+            box-shadow: none !important;
+            border-left: none !important;
+            border: 1px solid var(--border, #33333a) !important;
+            border-radius: 12px !important;
+            z-index: 1 !important;
+            overflow: hidden;
+        }
+        #p86-ai-panel.p86-ai-docked #ai-panel-resizer { display: none !important; }
+
         /* PRINT STYLES */
         @media print {
             body {

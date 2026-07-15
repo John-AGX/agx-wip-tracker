@@ -250,7 +250,7 @@
          system fallback if the font is slow/unreachable (offline / PWA cold). -->
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;600;700;800&display=swap">
-    <link rel="stylesheet" href="css/styles.css?v=245">
+    <link rel="stylesheet" href="css/styles.css?v=246">
     <link rel="stylesheet" href="css/report-style-packs.css?v=4">
     <link rel="stylesheet" href="css/workspace-layout.css?v=66">
     <link rel="stylesheet" href="css/workspace.css?v=41">
@@ -755,7 +755,7 @@
                             </button>
                             <div class="app-nav-children" role="group" aria-label="Command Center sub-pages">
                                 <button class="tab-btn app-nav-child" data-tab="console" data-console-subtab="overview" data-virtual-tab="console-overview" data-p86-icon="insights" title="Overview"><span class="app-nav-label">Overview</span></button>
-                                <button class="tab-btn app-nav-child" data-tab="console" data-console-subtab="assemblies" data-virtual-tab="console-assemblies" data-p86-icon="wrench" title="Assembly Tuning — cost intelligence"><span class="app-nav-label">Assembly Tuning</span></button>
+                                <button class="tab-btn app-nav-child" data-tab="console" data-console-subtab="assemblies" data-virtual-tab="console-assemblies" data-p86-icon="wrench" title="Assembly Studio — build & tune the cost database with 86"><span class="app-nav-label">Assembly Studio</span></button>
                                 <button class="tab-btn app-nav-child" data-tab="console" data-console-subtab="metrics" data-virtual-tab="console-metrics" data-p86-icon="chart-bar" title="Metrics"><span class="app-nav-label">Metrics</span></button>
                                 <button class="tab-btn app-nav-child" data-tab="console" data-console-subtab="tenants" data-virtual-tab="console-tenants" data-p86-icon="clients" title="Tenants"><span class="app-nav-label">Tenants</span></button>
                                 <button class="tab-btn app-nav-child" data-tab="console" data-console-subtab="audit" data-virtual-tab="console-audit" data-p86-icon="detective" title="Audit"><span class="app-nav-label">Audit</span></button>
@@ -3235,7 +3235,7 @@
     <script src="js/entity-card.js?v=6"></script>
     <!-- Lead/estimate context card mounted into #app-sidebar (uses p86EntityCard). -->
     <script src="js/entity-subnav.js?v=2"></script>
-    <script src="js/app.js?v=115"></script>
+    <script src="js/app.js?v=116"></script>
     <script src="js/search-clear.js?v=3"></script>
     <script src="js/sidebar-brand.js?v=2"></script>
     <!-- Guided tours engine + the Help & What's New center (patch
@@ -3298,7 +3298,7 @@
     <script src="js/list-filter.js?v=1"></script>
     <script src="js/cost-inbox.js?v=17"></script>
     <script src="js/invoices.js?v=1"></script>
-    <script src="js/console.js?v=8"></script>
+    <script src="js/console.js?v=9"></script>
     <!-- Jobs Hub — cross-job index pages (Purchase Orders / Change Orders /
          RFIs / Submittals) for the Jobs sidebar dropdown. Uses p86Api +
          appData.jobs + editJob/switchJobSubTab at runtime. -->
@@ -3334,7 +3334,7 @@
          BEFORE ai-panel.js so window.PayloadArtifact exists when the
          panel mounts. -->
     <script src="js/payload-artifact.js?v=7"></script>
-    <script src="js/ai-panel.js?v=146"></script>
+    <script src="js/ai-panel.js?v=147"></script>
     <!-- Save-from-chat bridge (Workstream ③). Owns p86SaveCodeBlock /
          p86SaveResponse / p86SaveToPicker, called by inline onclick
          handlers in ai-panel.js renderMarkdown / renderBubble. Loads
@@ -3378,7 +3378,7 @@
     <script src="js/edit-gate.js?v=2"></script>
 
     <!-- Node Graph (Beta) -->
-    <link rel="stylesheet" href="nodegraph/nodegraph.css?v=167" />
+    <link rel="stylesheet" href="nodegraph/nodegraph.css?v=168" />
     <div id="nodeGraphTab">
       <!-- Workspace canvas toolbar — Outlook ribbon style. Each
            button is icon-on-top + label-below, buttons cluster into
@@ -3596,8 +3596,8 @@
         <button class="ng-mseg-btn" data-mseg="detail">Detail</button>
       </div>
     </div>
-    <script src="nodegraph/engine.js?v=107"></script>
-    <script src="nodegraph/ui.js?v=275"></script>
+    <script src="nodegraph/engine.js?v=108"></script>
+    <script src="nodegraph/ui.js?v=276"></script>
     <!-- Ribbon popovers (Layers / More) + layer visibility persistence.
          Loads after ui.js; only owns the popover chrome — the moved
          ribbon buttons stay wired by ui.js itself. -->

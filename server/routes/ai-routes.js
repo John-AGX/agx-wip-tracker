@@ -3148,11 +3148,17 @@ async function resolveHostKeyForUser(userId) {
   return hostKey;
 }
 
-async function resolveSessionForChat({ sessionId, currentContext, userId, organization }) {
+async function resolveSessionForChat({ sessionId, currentContext, userId, organization, hostOverride }) {
   // Host agent for this user's rolling thread. Computed once and used both to
   // resolve/mint the right host thread AND to avoid pinning a user onto a
   // wrong-host thread via an explicit sessionId. See resolveHostKeyForUser.
-  const hostKey = await resolveHostKeyForUser(userId);
+  // hostOverride (per-request, already capability-checked by the caller) lets a
+  // surface pin a chat to a specific host — e.g. the Assembly Studio dock pins
+  // to '86' so John (a system_admin who otherwise defaults to the Assistant)
+  // can have 86 build/tune the DB directly (86 can't write during an escalation).
+  const hostKey = (hostOverride === 'job' || hostOverride === 'assistant')
+    ? hostOverride
+    : await resolveHostKeyForUser(userId);
   if (sessionId) {
     const sid = parseInt(sessionId, 10);
     if (Number.isFinite(sid)) {
@@ -13737,11 +13743,19 @@ router.post('/86/chat', requireAuth, requireOrg, aiChatLimiter, aiChatHourlyLimi
     //   match (job/estimate/lead/intake) → user's "General" session.
     // Resolve BEFORE inserting the user message so the row gets keyed
     // by the session's own (entity_type, entity_id).
+    // Per-request host pin (Assembly Studio dock sends host_agent_key:'job' so
+    // 86 — not the Assistant — builds/tunes the DB directly). Only honored for
+    // admins (ROLES_MANAGE) so a non-admin can't pin themselves onto opus.
+    const _reqHostKey = req.body && req.body.host_agent_key;
+    const hostOverride = ((_reqHostKey === 'job' || _reqHostKey === 'assistant') && hasCapability(req.user, 'ROLES_MANAGE'))
+      ? _reqHostKey
+      : null;
     const session = await resolveSessionForChat({
       sessionId: explicitSessionId,
       currentContext,
       userId: req.user.id,
-      organization: req.organization
+      organization: req.organization,
+      hostOverride
     });
     // ai_messages.estimate_id is NOT NULL on the legacy schema. Older
     // general-session rows might still have entity_id=null in

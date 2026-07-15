@@ -1023,6 +1023,12 @@ body.light-mode .ng-topbar.ng-ribbon .ng-ribbon-btn:hover{
 .ng-lu-cube{display:inline-block;width:24px;height:24px;border-radius:5px;cursor:pointer;box-sizing:border-box;background:#131e30;border:1px solid rgba(255,255,255,.14);box-shadow:inset 0 -2px 3px rgba(0,0,0,.22)}
 .ng-lu-cube.done{background:#1e9e75;border-color:#2fbe8e;box-shadow:inset 0 2px 0 rgba(255,255,255,.22),inset 0 -3px 5px rgba(0,0,0,.3)}
 .ng-lu-cube:hover{border-color:#4f8cff}
+/* Read-only building cubes (completion is tracked per scope) + compact scope
+   check-off cubes rendered on the scope card's per-building rows. */
+.ng-lu-cube-ro{cursor:default;opacity:.4}
+.ng-lu-cube-ro:hover{border-color:rgba(255,255,255,.14)}
+.ng-scope-cube{width:15px;height:15px;border-radius:4px}
+.ng-scope-cubes .ng-lu-cube:hover{border-color:#4f8cff}
 .ng-lu-barrow{display:flex;align-items:center;gap:8px;margin-top:8px}
 .ng-lu-bar{flex:1;height:6px;border-radius:4px;background:#0e1626;overflow:hidden}
 .ng-lu-bar>i{display:block;height:100%;background:#1e9e75}

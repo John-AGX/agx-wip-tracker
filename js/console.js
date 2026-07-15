@@ -206,24 +206,81 @@
   // training trail).
   var _asmT = { ov: null, sel: null, det: null, open: {} };
 
+  // Per-turn context handed to the docked 86 pane so it knows what John is
+  // looking at. open_data_summary reaches 86 via renderPageContextBlock — no
+  // server context change needed. (Slice 3 adds a richer buildTurnContext branch.)
+  function asmDockContext(det) {
+    var a = det && det.assembly;
+    if (!a) {
+      return { entity_type: 'assembly', entity_id: '__global__', entity_label: 'Assembly Studio',
+        open_data_summary: 'Assembly Studio — the cost-assembly database builder/tuner. No assembly selected. You OWN this database: research, build, tune, and catalog-link recipes; every change lands as an approval card and is logged to assembly_tuning_log.' };
+    }
+    var cost = (a.unit_cost != null) ? ('$' + Number(a.unit_cost).toFixed(2) + '/' + (a.unit || 'EA')) : 'unpriced';
+    return {
+      entity_type: 'assembly', entity_id: a.id, entity_label: a.name,
+      open_data_summary: 'Assembly Studio — currently viewing assembly "' + a.name + '" (#' + a.id +
+        ', code ' + (a.code || '—') + ', trade ' + (a.trade || '—') + '), resolved cost ' + cost + ', ' +
+        ((det.items || []).length) + ' items' + (a.incomplete ? ' (has UNPRICED items)' : '') +
+        '. You OWN this database — tune/build/link via approval cards; cite sources in the tuning-log evidence.'
+    };
+  }
+
+  // Dock (or re-dock) the singleton 86 panel into the cockpit chat host,
+  // pinned to 86 so it builds the DB directly. Idempotent — skips if already
+  // docked into THIS host (survives sub-tab switches; re-docks after the
+  // console rebuilds the shell on re-entry).
+  function ensureAsmDock() {
+    var chatHost = document.getElementById('cc-asm-chat');
+    if (!chatHost || !(window.p86AI && typeof window.p86AI.dockInto === 'function')) return;
+    var panel = document.getElementById('p86-ai-panel');
+    if (!panel || panel.parentNode !== chatHost) {
+      try { window.p86AI.dockInto(chatHost, { hostAgentKey: 'job', currentContext: asmDockContext(_asmT.det) }); } catch (e) {}
+    }
+  }
+
   function loadAssemblyTuning() {
     var el = document.getElementById('cc-assemblies');
     if (!el) return;
-    el.innerHTML = sectionTitle('⚙ Assembly Tuning Center') + '<div style="color:var(--text-dim,#888);font-size:12px;padding:4px;">Loading…</div>';
+    // Build the cockpit shell ONCE so paint/refresh + assembly selection never
+    // wipe the docked 86 pane (paintAsmMain only rebuilds #cc-asm-main). The
+    // shell survives sub-tab switches; leaving the console wipes it (app.js
+    // undocks the 86 panel first), then this rebuilds it fresh.
+    if (!document.getElementById('cc-asm-main')) {
+      el.innerHTML =
+        sectionTitle('🧩 Assembly Studio — build & tune the cost database', ghostBtn('↻ Refresh', 'data-asmt-refresh')) +
+        '<div style="display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:12px;align-items:start;">' +
+          '<div id="cc-asm-main"><div style="color:var(--text-dim,#888);font-size:12px;padding:4px;">Loading…</div></div>' +
+          '<div style="display:flex;flex-direction:column;gap:8px;">' +
+            '<div style="display:flex;align-items:center;gap:8px;">' +
+              '<div style="font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--text-dim,#9a9aa2);">🤖 86 — DB builder</div>' +
+              '<span title="This chat is pinned to 86 (not the Assistant) so it can build/tune the DB directly" style="font-size:9px;font-weight:700;padding:2px 7px;border-radius:9px;background:rgba(124,58,237,.16);color:#a78bfa;">PINNED TO 86</span>' +
+            '</div>' +
+            '<div style="font-size:10px;color:var(--text-dim,#9a9aa2);line-height:1.5;">Ask 86 to research, build, tune, or catalog-link recipes. Changes arrive as approval cards you review right here.</div>' +
+            '<div id="cc-asm-chat" style="height:74vh;min-height:520px;"></div>' +
+          '</div>' +
+        '</div>';
+      var rf = el.querySelector('[data-asmt-refresh]');
+      if (rf) rf.addEventListener('click', loadAssemblyTuning);
+    }
+    ensureAsmDock();
     cget('/api/assemblies/tuning/overview').then(function (d) {
       _asmT.ov = d;
       if (!_asmT.sel && d.queue && d.queue.length) _asmT.sel = d.queue[0].id;
-      paintAsmTuning();
+      paintAsmMain();
       if (_asmT.sel) loadAsmDetail(_asmT.sel);
-    }).catch(function (e) { el.innerHTML = errBox('assembly tuning', e); });
+    }).catch(function (e) { var m = document.getElementById('cc-asm-main'); if (m) m.innerHTML = errBox('assembly tuning', e); });
   }
 
   function loadAsmDetail(id) {
     _asmT.sel = id; _asmT.det = null; _asmT.open = {};
-    paintAsmTuning();
+    paintAsmMain();
     cget('/api/assemblies/' + id + '/tuning').then(function (d) {
       _asmT.det = d;
-      paintAsmTuning();
+      paintAsmMain();
+      // Tell the docked 86 which assembly is on screen.
+      if (window.p86AI && typeof window.p86AI.setDockContext === 'function') {
+        try { window.p86AI.setDockContext(asmDockContext(d)); } catch (e) {}
+      }
     }).catch(function (e) {
       var ws = document.getElementById('cc-asm-ws');
       if (ws) ws.innerHTML = errBox('assembly detail', e);
@@ -239,8 +296,8 @@
     return f.join(' ');
   }
 
-  function paintAsmTuning() {
-    var el = document.getElementById('cc-assemblies');
+  function paintAsmMain() {
+    var el = document.getElementById('cc-asm-main');
     if (!el || !_asmT.ov) return;
     var s = _asmT.ov.stats || {};
     var tile = function (n, label, color) {
@@ -257,7 +314,7 @@
         '</div></div>';
     }).join('');
 
-    el.innerHTML = sectionTitle('⚙ Assembly Tuning Center', ghostBtn('↻ Refresh', 'data-asmt-refresh')) +
+    el.innerHTML =
       '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;">' +
         tile(s.total || 0, 'Assemblies') +
         tile(s.seed_untuned || 0, 'Seed — never tuned', s.seed_untuned ? '#f2a55c' : null) +
@@ -434,7 +491,7 @@
       r.addEventListener('click', function () {
         var i = Number(r.dataset.asmtRow);
         _asmT.open[i] = !_asmT.open[i];
-        paintAsmTuning();
+        paintAsmMain();
       });
     });
     el.querySelectorAll('[data-asmt-save]').forEach(function (b) {
