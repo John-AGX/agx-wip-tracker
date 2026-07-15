@@ -111,6 +111,16 @@ async function initSchema() {
     -- its org and set this field. Validated as a real IANA zone on save.
     ALTER TABLE organizations ADD COLUMN IF NOT EXISTS timezone TEXT NOT NULL DEFAULT 'America/New_York';
 
+    -- Per-org ingest token for the Assembly Studio research endpoint. Lets the
+    -- Claude browser extension / automation POST research packets headlessly
+    -- (Authorization: Bearer <token>) with NO cookie session — the token alone
+    -- resolves the org. Null until an admin generates one; rotatable; revoked
+    -- by rotation. Unique so a token maps to exactly one org. See
+    -- assembly-research-routes POST /ingest + /ingest-token.
+    ALTER TABLE organizations ADD COLUMN IF NOT EXISTS research_ingest_token TEXT;
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_org_research_ingest_token
+      ON organizations(research_ingest_token) WHERE research_ingest_token IS NOT NULL;
+
     -- ── SaaS commercialization scaffold ─────────────────────────────
     -- Subscription state per org. All additive + defaulted, so every
     -- existing row (AGX) becomes plan_key='internal' / status='active'

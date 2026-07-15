@@ -473,13 +473,17 @@
           (p.trade ? esc(p.trade) + ' · ' : '') + (p.finding_count || 0) + ' finding' + (p.finding_count === 1 ? '' : 's') +
           (p.source_url ? ' · 🔗 source' : '') + '</div></div>';
     }).join('');
-    return '<div style="display:flex;align-items:center;justify-content:space-between;padding:2px 6px 8px;">' +
+    return '<div style="display:flex;align-items:center;justify-content:space-between;gap:6px;padding:2px 6px 8px;">' +
         '<span style="font-size:9.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-dim,#9a9aa2);">Research to build</span>' +
-        '<button data-asmr-add style="border:1px solid rgba(79,209,197,.4);background:rgba(79,209,197,.1);color:#4fd1c5;border-radius:6px;padding:3px 9px;font-size:11px;font-weight:600;cursor:pointer;">+ Add</button>' +
+        '<div style="display:flex;gap:6px;">' +
+          '<button data-asmr-auto title="Headless ingest — post packets via API (no login)" style="border:1px solid var(--border,#33333a);background:transparent;color:var(--text-dim,#9a9aa2);border-radius:6px;padding:3px 8px;font-size:11px;cursor:pointer;">🔑</button>' +
+          '<button data-asmr-add style="border:1px solid rgba(79,209,197,.4);background:rgba(79,209,197,.1);color:#4fd1c5;border-radius:6px;padding:3px 9px;font-size:11px;font-weight:600;cursor:pointer;">+ Add</button>' +
+        '</div>' +
       '</div>' +
       (rows || '<div style="padding:12px;color:var(--text-dim,#888);font-size:12px;line-height:1.5;">Nothing to build yet. Drop web research here (or have the Claude extension fill it), then hand it to 86.</div>');
   }
   function researchDetailHtml() {
+    if (_asmR.autoOpen) return researchAutomationHtml();
     if (_asmR.addOpen) return researchAddFormHtml();
     var p = _asmR.det;
     if (!p) return '<div style="color:var(--text-dim,#888);font-size:12px;">Select a research packet, or + Add one.</div>';
@@ -528,12 +532,82 @@
         '<button data-asmr-cancel style="border:1px solid var(--border,#33333a);background:transparent;color:var(--text-dim,#9a9aa2);border-radius:8px;padding:7px 14px;font-size:12px;cursor:pointer;">Cancel</button>' +
       '</div>';
   }
+  // Headless ingest: per-org token so the Claude extension / automation can POST
+  // packets to /api/assembly-research/ingest with no login. Admin-only surface
+  // (the whole console is SYSTEM_ADMIN); token routes gate on ROLES_MANAGE.
+  function researchAutomationHtml() {
+    var url = location.origin + '/api/assembly-research/ingest';
+    var tok = _asmR.ingestToken;
+    var tokenBlock;
+    if (tok === undefined) {
+      tokenBlock = '<div style="font-size:12px;color:var(--text-dim,#9a9aa2);">Loading…</div>';
+    } else if (tok === false) {
+      // Load error — NOT "no token". Never offer the destructive Generate/Rotate
+      // here: rotating would revoke a token that may still be live.
+      tokenBlock = '<div style="font-size:12px;color:#f77066;margin-bottom:8px;">Couldn’t load the token — check your connection.</div>' +
+        '<button data-asmr-tok-retry style="border:1px solid var(--border,#33333a);background:transparent;color:var(--text-dim,#9a9aa2);border-radius:8px;padding:6px 14px;font-size:12px;cursor:pointer;">Retry</button>';
+    } else if (!tok) {
+      tokenBlock = '<div style="font-size:12px;color:var(--text-dim,#9a9aa2);margin-bottom:8px;">No token yet — generate one to enable headless posting.</div>' +
+        '<button data-asmr-tok-gen style="border:0;background:#4fd1c5;color:#0d0e12;border-radius:8px;padding:7px 16px;font-size:12px;font-weight:700;cursor:pointer;">Generate token</button>';
+    } else {
+      tokenBlock = '<div style="font-family:Consolas,monospace;font-size:12px;word-break:break-all;background:var(--bg,#15151a);border:1px solid var(--border,#33333a);border-radius:8px;padding:10px;color:#4fd1c5;margin-bottom:8px;">' + esc(tok) + '</div>' +
+        '<div style="display:flex;gap:8px;">' +
+          '<button data-asmr-tok-copy style="border:1px solid rgba(79,209,197,.4);background:rgba(79,209,197,.1);color:#4fd1c5;border-radius:8px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;">Copy</button>' +
+          '<button data-asmr-tok-gen title="Generates a new token and revokes this one" style="border:1px solid var(--border,#33333a);background:transparent;color:#f2a55c;border-radius:8px;padding:6px 12px;font-size:12px;cursor:pointer;">↻ Rotate</button>' +
+        '</div>';
+    }
+    var curl = 'curl -X POST ' + url + ' \\\n' +
+      '  -H "Authorization: Bearer ' + (tok || '<TOKEN>') + '" \\\n' +
+      '  -H "Content-Type: application/json" \\\n' +
+      '  -d \'{"title":"Stucco R&R — Central FL","trade":"stucco",' +
+      '"source_url":"https://…","raw_text":"components, prices, units, waste %, labor rates…"}\'';
+    return '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;">' +
+        '<div style="font-size:15px;font-weight:700;">🔑 Headless ingest</div>' +
+        '<button data-asmr-auto-close style="border:1px solid var(--border,#33333a);background:transparent;color:var(--text-dim,#9a9aa2);border-radius:8px;padding:6px 12px;font-size:12px;cursor:pointer;">← Back</button>' +
+      '</div>' +
+      '<div style="font-size:12px;color:var(--text-dim,#9a9aa2);line-height:1.6;margin-bottom:12px;">Point the Claude extension or any automation at this endpoint to drop research packets <b style="color:var(--text,#e8e8ea);">without a login</b> — each lands in this inbox for 86 to build. Treat the token like a password; rotating it revokes the old one.</div>' +
+      '<div style="font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-dim,#9a9aa2);margin-bottom:4px;">Endpoint</div>' +
+      '<div style="font-family:Consolas,monospace;font-size:12px;background:var(--bg,#15151a);border:1px solid var(--border,#33333a);border-radius:8px;padding:10px;color:var(--text,#e8e8ea);margin-bottom:12px;word-break:break-all;">POST ' + esc(url) + '</div>' +
+      '<div style="font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-dim,#9a9aa2);margin-bottom:4px;">Bearer token</div>' +
+      tokenBlock +
+      '<div style="font-size:9.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--text-dim,#9a9aa2);margin:14px 0 4px;">Example</div>' +
+      '<pre style="white-space:pre-wrap;font-size:11px;line-height:1.5;color:var(--text,#e8e8ea);background:var(--bg,#15151a);border:1px solid var(--border,#33333a);border-radius:8px;padding:10px;overflow:auto;">' + esc(curl) + '</pre>';
+  }
+  function loadIngestToken() {
+    _asmR.ingestToken = undefined;
+    var repaint = function () { if (_asmR.mode === 'research' && _asmR.autoOpen) paintAsmMain(); };
+    cget('/api/assembly-research/ingest-token').then(function (d) {
+      _asmR.ingestToken = (d && d.token) || null; repaint();   // null = confirmed no token
+    }).catch(function () { _asmR.ingestToken = false; repaint(); });  // false = load ERROR (≠ absent)
+  }
+  function rotateIngestToken() {
+    cpost('/api/assembly-research/ingest-token/rotate', {}).then(function (d) {
+      _asmR.ingestToken = (d && d.token) || null;
+      toast('New ingest token generated');
+      if (_asmR.mode === 'research' && _asmR.autoOpen) paintAsmMain();
+    }).catch(function (e) { toast('Failed: ' + (e.message || e), true); });
+  }
   function wireResearch(el) {
     el.querySelectorAll('[data-asmr-sel]').forEach(function (r) {
-      r.addEventListener('click', function () { _asmR.addOpen = false; loadPacketDetail(Number(r.dataset.asmrSel)); });
+      r.addEventListener('click', function () { _asmR.addOpen = false; _asmR.autoOpen = false; loadPacketDetail(Number(r.dataset.asmrSel)); });
     });
     var add = el.querySelector('[data-asmr-add]');
-    if (add) add.addEventListener('click', function () { _asmR.addOpen = true; paintAsmMain(); });
+    if (add) add.addEventListener('click', function () { _asmR.addOpen = true; _asmR.autoOpen = false; paintAsmMain(); });
+    var autoBtn = el.querySelector('[data-asmr-auto]');
+    if (autoBtn) autoBtn.addEventListener('click', function () { _asmR.autoOpen = true; _asmR.addOpen = false; paintAsmMain(); loadIngestToken(); });
+    var autoClose = el.querySelector('[data-asmr-auto-close]');
+    if (autoClose) autoClose.addEventListener('click', function () { _asmR.autoOpen = false; paintAsmMain(); });
+    var tokGen = el.querySelector('[data-asmr-tok-gen]');
+    if (tokGen) tokGen.addEventListener('click', rotateIngestToken);
+    var tokRetry = el.querySelector('[data-asmr-tok-retry]');
+    if (tokRetry) tokRetry.addEventListener('click', loadIngestToken);
+    var tokCopy = el.querySelector('[data-asmr-tok-copy]');
+    if (tokCopy) tokCopy.addEventListener('click', function () {
+      var t = _asmR.ingestToken; if (!t) return;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(t).then(function () { toast('Token copied'); }).catch(function () { toast('Copy failed', true); });
+      } else { toast('Copy not supported here', true); }
+    });
     var cancel = el.querySelector('[data-asmr-cancel]');
     if (cancel) cancel.addEventListener('click', function () { _asmR.addOpen = false; paintAsmMain(); });
     var save = el.querySelector('[data-asmr-save]');

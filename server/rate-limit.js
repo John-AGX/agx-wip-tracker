@@ -130,9 +130,36 @@ const aiChatHourlyLimiter = rateLimit({
   },
 });
 
+// 5. Assembly-research ingest — token-authed (no cookie), so per-IP like the
+// login throttle. Tight: this is a publicly-reachable write endpoint guarded
+// only by a bearer token, so the limiter blunts token brute-force + packet
+// spam. SYSTEM_ADMIN does NOT bypass here (there's no req.user pre-auth).
+const ingestLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,                     // 30 ingests per minute per TOKEN (else per IP)
+  standardHeaders: 'draft-7',
+  legacyHeaders: false,
+  // Key on the bearer token, not the IP: a leaked token driven from many source
+  // IPs must still hit ONE 30/min bucket. Tokenless requests fall back to IP
+  // (and the global 200/min per-IP guard still applies on top).
+  keyGenerator: function (req) {
+    const hdr = String((req.headers && req.headers.authorization) || '');
+    const m = /^bearer\s+(.+)$/i.exec(hdr);
+    const tok = (m && m[1].trim()) || String((req.headers && req.headers['x-ingest-token']) || '').trim();
+    return tok ? ('tok:' + tok) : ('ip:' + (req.ip || 'unknown'));
+  },
+  handler: function (req, res) {
+    const retryAfter = Math.ceil(res.getHeader('Retry-After') || 60);
+    console.warn('[rate-limit] research-ingest throttle for IP', req.ip,
+      '(retry in', retryAfter, 's)');
+    jsonHandler(res, retryAfter);
+  },
+});
+
 module.exports = {
   ipLoginLimiter,
   ipGenericLimiter,
   aiChatLimiter,
   aiChatHourlyLimiter,
+  ingestLimiter,
 };
