@@ -1001,8 +1001,24 @@
     // Flush pending edits so the total + workbook we snapshot are current.
     try { if (typeof window.saveEstimateNow === 'function') await window.saveEstimateNow(); } catch (e) {}
 
+    // Never mint a CONTRACT off the pricing-pipeline-missing fallback (bare
+    // cost, no markup) — that would silently underquote a signed contract.
+    if (!window.p86Pricing || !window.p86Pricing.computeForLines) {
+      if (typeof window.p86Toast === 'function') window.p86Toast('Pricing isn\'t ready yet — reopen the estimate and try again.');
+      return;
+    }
     var totals = (window.computeEstimateTotals ? window.computeEstimateTotals(est) : null);
     var contractAmt = (totals && totals.proposalTotal) || 0;
+    // The GROSS margin (pre-fee) this estimate was priced to — carried onto the
+    // job for cost/revenue tracking instead of an arbitrary hardcoded 50%.
+    var _convMargin = 0;
+    if (totals) {
+      if (window.p86Pricing && window.p86Pricing.targetMarginActive && window.p86Pricing.targetMarginActive(est)) {
+        _convMargin = Number(est.targetMargin) || 0;
+      } else if (totals.markedUp > 0) {
+        _convMargin = Math.round((totals.markedUp - totals.baseCost) / totals.markedUp * 1000) / 10;
+      }
+    }
 
     var clientName = '';
     var clientCache = (window.p86Clients && window.p86Clients.getCached && window.p86Clients.getCached()) || [];
@@ -1069,7 +1085,7 @@
       jobType: (lead && lead.project_type) || est.jobType || '', workType: '',
       market: (lead && lead.market) || est.market || '', status: 'New',
       // Estimate is the source of truth for estimated costs (its base cost).
-      contractAmount: contractAmt, estimatedCosts: (totals && typeof totals.baseCost === 'number' ? totals.baseCost : 0), targetMarginPct: 50,
+      contractAmount: contractAmt, estimatedCosts: (totals && typeof totals.baseCost === 'number' ? totals.baseCost : 0), targetMarginPct: _convMargin,
       pctComplete: 0, invoicedToDate: 0, revisedCostChanges: 0,
       notes: (lead && lead.notes) || '',
       lead_id: leadId || null, estimate_id: est.id || null,
