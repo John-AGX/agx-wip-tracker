@@ -1565,6 +1565,11 @@
                                          The element stays in the DOM because the sync code and
                                          open-handler still read/write it. -->
                                     <input id="ee-title" type="text" placeholder="Estimate title" style="display:none;" />
+                                    <!-- Sticky estimate identity — always tells you WHICH estimate you're
+                                         in while scrolling a long line list (the title input above is
+                                         hidden; it's edited on the Details tab). Populated by
+                                         renderEstimateIdentity(); truncates so it never crowds the chips. -->
+                                    <div id="ee-identity" style="min-width:0;max-width:320px;display:flex;flex-direction:column;justify-content:center;line-height:1.2;"></div>
                                     <!-- Job-action buttons (Create Job / Open job / Sync). flex:1 keeps
                                          the save indicator + icon cluster pinned right. -->
                                     <div id="ee-linked-chips" style="display:flex;gap:6px;flex-wrap:wrap;flex:1;min-width:0;"></div>
@@ -1599,15 +1604,15 @@
                                 </div>
                             </div>
 
-                            <!-- Line Items tab — two-column grid: line items on the left,
-                                 per-alternate scope of work + pricing breakdown on the right. -->
+                            <!-- Line Items tab — full-width line items + a pricing breakdown
+                                 card below. Scope of Work lives on its own Scope sub-tab (S5). -->
                             <div id="ee-tab-lines" class="ee-tab-content">
-                                <!-- Alternate tier strip — Good / Better / Best style. Each alternate
-                                     has its own line items + scope; tax/fees/round-up are estimate-wide. -->
+                                <!-- Group strip — e.g. Good / Better / Best, or additive scopes. Each
+                                     group has its own line items + scope; tax/fees/round-up are estimate-wide. -->
                                 <div id="ee-alternate-strip" style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap;">
                                     <div id="ee-alternate-tabs" style="display:flex;gap:6px;flex-wrap:wrap;flex:1;"></div>
                                     <div style="display:flex;gap:6px;">
-                                        <button class="ee-btn secondary" onclick="addAlternateFromEditor()" title="Add a new group (e.g., another deck, optional adds, a phase). Auto-seeds the four standard subgroups.">&#x2795; Group</button>
+                                        <button class="ee-btn secondary" onclick="addAlternateFromEditor()" title="Add a new group (e.g., another deck, optional adds, a phase). Auto-seeds the four standard sections.">&#x2795; Group</button>
                                         <button class="ee-btn ghost" onclick="duplicateActiveAlternate()" title="Copy this group's lines into a new group" id="ee-altDuplicateBtn">&#x2398; Duplicate</button>
                                         <button class="ee-btn ghost" onclick="renameActiveAlternate()" title="Rename this group" id="ee-altRenameBtn">&#x270F; Rename</button>
                                         <button class="ee-btn ee-icon-btn danger" onclick="deleteActiveAlternate()" title="Delete this group (cannot delete the last one)" id="ee-altDeleteBtn">&#x1F5D1;</button>
@@ -1630,12 +1635,13 @@
                                             <div id="ee-add-section-menu" class="ee-add-section-menu" hidden></div>
                                         </div>
                                         <button class="ee-btn ghost" onclick="window.MaterialsDrawer && window.MaterialsDrawer.toggle()" title="Search the materials catalog (real Project 86 purchase history) and drop lines into the active group">&#x1F9F1; Materials Catalog</button>
-                                        <button class="ee-btn ghost" onclick="window.openScopeModal && window.openScopeModal()" title="Open the scope of work as a quick-edit popup" style="margin-left:auto;">&#x1F4DD; Scope</button>
+                                        <!-- The quick-edit Scope popup button was retired (S5): Scope now has
+                                             ONE home, the "📝 Scope" sub-tab in the header nav. -->
                                     </div>
                                     <div id="ee-lines-container"></div>
                                     <div style="font-size:11px;color:var(--text-dim,#888);">Edits autosave on blur. Drag the &#x2630; handle to reorder. Per-line markup overrides the default.</div>
-                                    <!-- Pricing breakdown — moved below the line items now that scope
-                                         lives in its own modal/tab. Lets line items take the full width. -->
+                                    <!-- Pricing breakdown — below the line items so they take the full
+                                         width. Scope lives on its own Scope sub-tab. -->
                                     <div style="background:var(--card-bg,#141419);border:1px solid var(--border,#333);border-radius:10px;padding:12px 14px;max-width:520px;">
                                         <div style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:8px;">Pricing</div>
                                         <div id="ee-pricing-breakdown"></div>
@@ -1648,9 +1654,8 @@
                                 <div id="ee-details-form"></div>
                             </div>
 
-                            <!-- Scope tab — full-page version of the scope of work for the
-                                 active alternate. Same edits as the popup modal; both
-                                 read/write the same per-alternate scope text. -->
+                            <!-- Scope tab — the ONE home for the scope of work, bound to the
+                                 active group's per-group scope text (S5). -->
                             <div id="ee-tab-scope" class="ee-tab-content" style="display:none;">
                                 <div id="ee-scope-panel-page" style="background:var(--card-bg,#141419);border:1px solid var(--border,#333);border-radius:10px;padding:14px 16px;"></div>
                             </div>
@@ -2546,9 +2551,9 @@
                 </div>
 
                 <!-- Helper note replacing the old Scope textarea — scope now
-                     lives per-alternate on the right panel of the editor. -->
+                     lives per-group on the Scope tab of the editor. -->
                 <div style="font-size:11px;color:var(--text-dim,#aaa);padding:9px 12px;background:rgba(79,140,255,0.06);border:1px solid rgba(79,140,255,0.2);border-radius:6px;line-height:1.5;">
-                    <strong style="color:#4f8cff;">Scope &amp; line items</strong> get added in the editor after you create the estimate — each alternate (Good / Better / Best) carries its own scope text and lines.
+                    <strong style="color:#4f8cff;">Scope &amp; line items</strong> get added in the editor after you create the estimate — each group (e.g. Good / Better / Best) carries its own scope text and lines.
                 </div>
             </div>
             <div class="modal-footer">
@@ -2609,22 +2614,6 @@
     <!-- Lead editor modal — Phase 2. Mirrors BT's lead detail layout with
          a General tab for the form fields + a Proposals tab listing the
          estimates linked to this lead via estimate.lead_id. -->
-    <!-- Scope of Work modal — quick-access popup used while estimating
-         + working with the AI assistant. The same scope text is also
-         editable on the full Scope sub-tab; both paths bind to the
-         active alternate's scope. The AI assistant can open this
-         modal via window.openScopeModal() to surface the scope while
-         drafting changes. -->
-    <div id="ee-scope-modal" class="modal">
-      <div class="modal-content" style="max-width:920px;width:96%;max-height:88vh;overflow-y:auto;">
-        <div class="modal-header" style="display:flex;align-items:center;gap:10px;">
-          <span style="flex:1;">&#x1F4DD; Scope of Work</span>
-          <button class="ee-btn secondary" onclick="window.closeScopeModal && window.closeScopeModal()">Done</button>
-        </div>
-        <div id="ee-scope-panel-modal" style="padding:18px 20px;"></div>
-      </div>
-    </div>
-
     <div id="leadEditorModal" class="modal">
       <div class="modal-content" style="max-width:780px;max-height:88vh;overflow-y:auto;">
         <div class="modal-header" style="display:flex;align-items:center;gap:10px;">
@@ -3363,7 +3352,7 @@
     <script src="js/rich-text.js?v=1"></script>
     <script src="js/estimates.js?v=54"></script>
     <script src="js/proposal.js?v=26"></script>
-    <script src="js/estimate-editor.js?v=83"></script>
+    <script src="js/estimate-editor.js?v=84"></script>
     <!-- Change Order editor — overlay opened from the job detail's
          Change Orders tab. Loads after pricing-pipeline (which it
          consumes via window.p86Pricing) and after api.js (which

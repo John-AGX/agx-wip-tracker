@@ -335,14 +335,12 @@
   // in ensureAlternates). Changes write straight through to the
   // alternate.
   //
-  // Three host divs may exist depending on the user's path:
-  //   #ee-scope-panel        — legacy id (now unused but tolerated)
-  //   #ee-scope-panel-modal  — popup quick-access modal body
-  //   #ee-scope-panel-page   — full-page Scope sub-tab body
-  // Whichever is visible (or all of them) gets populated. Each
-  // textarea writes back to the same alt.scope so they stay in sync.
+  // Scope has ONE home: the full-page Scope sub-tab (#ee-scope-panel-page).
+  // The old quick-access modal + legacy right-panel host were retired (S5) so
+  // there is a single discoverable place to edit it. The AI writes scope
+  // directly via applyUpdateScope + this renderer, no modal required.
   function renderScopePanel() {
-    var hosts = ['ee-scope-panel', 'ee-scope-panel-modal', 'ee-scope-panel-page']
+    var hosts = ['ee-scope-panel-page']
       .map(function(id) { return document.getElementById(id); })
       .filter(Boolean);
     if (!hosts.length) return;
@@ -354,10 +352,10 @@
       pane.innerHTML =
         '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:8px;">' +
           '<div style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;">Scope of Work</div>' +
-          '<div style="font-size:11px;color:#4f8cff;font-weight:600;">' + escapeHTML(alt.name || 'Alternate') + '</div>' +
+          '<div style="font-size:11px;color:#4f8cff;font-weight:600;">' + escapeHTML(alt.name || 'Group') + '</div>' +
         '</div>' +
         '<div class="ee-scope-rt" id="ee-scope-host-' + i + '"></div>' +
-        '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:6px;">Saved per alternate. Rich text — used by the Preview tab and PDF/Buildertrend exports.</div>';
+        '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:6px;">Saved per group. Rich text — used by the Preview tab and PDF/Buildertrend exports.</div>';
       var host = pane.querySelector('#ee-scope-host-' + i);
       if (host && window.p86RichText && window.p86RichText.mount) {
         // Capture `alt` in the closure (NOT getActiveAlternate() at fire time) so a
@@ -365,7 +363,7 @@
         // right alternate. onChange mirrors into the other open scope editors.
         rts[i] = window.p86RichText.mount(host, {
           value: alt.scope || '',
-          placeholder: 'Bulleted scope, narrative, or whatever the proposal needs. This is per-alternate.',
+          placeholder: 'Bulleted scope, narrative, or whatever the proposal needs. This is per-group.',
           minHeight: 340,
           onChange: function(html) {
             alt.scope = html;
@@ -377,7 +375,7 @@
         // Fallback: plain textarea if the rich-text module didn't load.
         var ta = document.createElement('textarea');
         ta.rows = 18;
-        ta.placeholder = 'Bulleted scope, narrative, or whatever the proposal needs. This is per-alternate.';
+        ta.placeholder = 'Bulleted scope, narrative, or whatever the proposal needs. This is per-group.';
         ta.style.cssText = 'width:100%;resize:vertical;font-family:inherit;font-size:13px;line-height:1.55;padding:12px 14px;background:var(--card-bg,#141419);border:1px solid var(--border,#333);border-radius:8px;color:var(--text,#fff);';
         ta.value = (window.p86RichText && window.p86RichText.toPlainText) ? window.p86RichText.toPlainText(alt.scope || '') : (alt.scope || '');
         host.appendChild(ta);
@@ -386,23 +384,9 @@
     });
   }
 
-  // Open / close the Scope of Work modal. Exposed on window so the
-  // AI assistant (or any other code) can drive it programmatically.
-  function openScopeModal() {
-    var modal = document.getElementById('ee-scope-modal');
-    if (!modal) return;
-    renderScopePanel();
-    modal.classList.add('active');
-    // Focus the textarea on open so the user can start typing.
-    var ta = modal.querySelector('textarea');
-    if (ta) setTimeout(function() { ta.focus(); }, 0);
-  }
-  function closeScopeModal() {
-    var modal = document.getElementById('ee-scope-modal');
-    if (modal) modal.classList.remove('active');
-  }
-  window.openScopeModal = openScopeModal;
-  window.closeScopeModal = closeScopeModal;
+  // The Scope of Work quick-edit modal was retired (S5) — Scope now lives in
+  // exactly one place, the Scope sub-tab. The AI edits scope via
+  // applyUpdateScope, which re-renders that tab through renderScopePanel.
 
   function closeEstimateEditor() {
     if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; }
@@ -419,6 +403,8 @@
     var actuallyClose = function() {
       _currentId = null;
       _saveState = 'idle';
+      // Dismiss the Tax/Fees popover if it was left open (S3).
+      if (typeof eeCloseTaxFeesPopover === 'function') eeCloseTaxFeesPopover();
       // Hide the mobile docked "Proposal total" bar so it doesn't float over
       // the estimates list / other pages after leaving the editor.
       var _mtb = document.getElementById('ee-mobile-totalbar');
@@ -459,6 +445,9 @@
   }
 
   function switchEstimateEditorTab(name) {
+    // Leaving/switching tabs dismisses the Line-Items Tax/Fees popover so it
+    // can't float over another tab (flush-on-close still commits any edit).
+    if (typeof eeCloseTaxFeesPopover === 'function') eeCloseTaxFeesPopover();
     document.querySelectorAll('[data-ee-tab]').forEach(function(btn) {
       btn.classList.toggle('active', btn.dataset.eeTab === name);
     });
@@ -482,9 +471,9 @@
         // form (e.g., via the AI assistant) wouldn't appear here.
         renderDetailsForm();
       } else if (name === 'scope') {
-        // Re-render so the textarea reflects the active alternate's
-        // current scope. Both the page tab + the modal share the same
-        // populator — renderScopePanel walks all known hosts.
+        // Re-render so the editor reflects the active group's current scope.
+        // Scope has one home now — the full-page Scope sub-tab
+        // (#ee-scope-panel-page); the quick-edit modal was retired in S5.
         renderScopePanel();
       } else if (name === 'preview' && typeof window.renderEstimatePreview === 'function') {
         // Preview tab is rendered on demand by js/estimate-preview.js
@@ -1370,7 +1359,7 @@
       return l.estimateId === est.id && l.alternateId === a.id;
     }).length;
     var msg = lineCount
-      ? 'This will also remove ' + lineCount + ' line item' + (lineCount === 1 ? '' : 's') + ' / subgroup header' + (lineCount === 1 ? '' : 's') + '. This cannot be undone.'
+      ? 'This will also remove ' + lineCount + ' line item' + (lineCount === 1 ? '' : 's') + ' / section header' + (lineCount === 1 ? '' : 's') + '. This cannot be undone.'
       : 'This cannot be undone.';
     window.p86Confirm({
       title: 'Delete group "' + a.name + '"?',
@@ -1521,20 +1510,158 @@
     // markup to hit the target). When locked, the input is typeable
     // and bound to est.targetMargin via debounced save.
     var marginChipHTML = renderMarginChip(t, marginPct);
+    // Tax + Fees chip is a POPOVER TRIGGER — click it to edit tax %, flat fee,
+    // fee %, and round-up without leaving Line Items (S3). Keeps the standard
+    // .p86-totals-chip shape (label div then value div) so renderTotalsLive's
+    // setChipValue(i+2) still finds the value in children[1].
+    var tfPencil = (typeof window.p86Icon === 'function') ? window.p86Icon('edit') : '&#x270E;';
+    var taxFeesChip =
+      '<div id="ee-taxfees-chip" class="p86-totals-chip info" role="button" tabindex="0" title="Edit tax, fees & round-up" style="cursor:pointer;" ' +
+        'onclick="window.eeOpenTaxFeesPopover(event)" ' +
+        'onkeydown="if(event.key===\'Enter\'||event.key===\' \'){event.preventDefault();window.eeOpenTaxFeesPopover(event);}">' +
+        '<div class="p86-totals-chip-label" style="display:flex;align-items:center;gap:5px;">Tax + Fees ' +
+          '<span style="opacity:0.65;display:inline-flex;width:11px;height:11px;">' + tfPencil + '</span></div>' +
+        '<div class="p86-totals-chip-value">' + fmtCurrency(t.feeFlat + t.feePctAmount + t.taxAmount) + '</div>' +
+      '</div>';
     totalsEl.innerHTML =
       groupCountChip +
       chip('Subtotal', fmtCurrency(t.subtotal)) +
       chip('Markup', fmtCurrency(t.markupAmount), 'warn') +
-      chip('Tax + Fees', fmtCurrency(t.feeFlat + t.feePctAmount + t.taxAmount), 'info') +
+      taxFeesChip +
       chip('Proposal Total', fmtCurrency(t.total), 'accent') +
       marginChipHTML +
       chip('Lines', t.lineCount, 'dim');
     wireMarginChip();
+    // Surface WHICH estimate we're in, in the sticky header (S3).
+    renderEstimateIdentity();
     // Also refresh the detailed breakdown card under the line items.
     renderPricingBreakdown();
     // Keep the mobile docked grand-total bar in sync (no-op on desktop).
     updateMobileTotalBar();
   }
+
+  // Sticky-header identity — always tells the user WHICH estimate is open
+  // while they scroll a long line list. The title input lives (hidden) in
+  // the header and is edited on the Details tab; this is the read-only
+  // display. Truncates so it never crowds the linked-job chips. (S3)
+  function renderEstimateIdentity() {
+    var el = document.getElementById('ee-identity');
+    if (!el) return;
+    var est = getEstimate();
+    if (!est) { el.innerHTML = ''; return; }
+    var title = est.title || est.issue || est.nickName || 'Untitled estimate';
+    var sub = est.client || est.community || '';
+    var ell = 'white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:320px;';
+    el.innerHTML =
+      '<div title="' + escapeHTML(title) + '" style="font-size:13px;font-weight:700;color:var(--text,#fff);' + ell + '">' + escapeHTML(title) + '</div>' +
+      (sub ? '<div title="' + escapeHTML(sub) + '" style="font-size:11px;color:var(--text-dim,#888);' + ell + '">' + escapeHTML(sub) + '</div>' : '');
+  }
+
+  // ── Tax / Fees popover (S3) ────────────────────────────────────────────
+  // Opens from the Tax + Fees totals chip so the estimator can edit tax %,
+  // flat fee, fee %, and round-up without leaving Line Items. Writes the SAME
+  // est.* fields the Details-tab Pricing fieldset does, through the SAME
+  // save+recompute sequence (num → debouncedSave → renderLineItems →
+  // renderTotals), so both surfaces + the totals stay in lockstep. The
+  // popover lives on document.body (not inside #ee-totals) so renderTotals
+  // rebuilding the chip never destroys it.
+  function _eeTaxFeesPopField(label, id, value, step, ph) {
+    var v = (value === undefined || value === null) ? '' : String(value);
+    return '<div style="margin-bottom:10px;">' +
+      '<label style="display:block;font-size:11px;color:var(--text-dim,#888);margin-bottom:3px;">' + label + '</label>' +
+      '<input id="' + id + '" type="number" step="' + step + '" value="' + escapeHTML(v) + '" placeholder="' + escapeHTML(ph) + '" ' +
+        'style="width:100%;padding:6px 8px;font-size:13px;background:var(--bg,#0a0a0f);border:1px solid var(--border,#333);border-radius:6px;color:var(--text,#fff);box-sizing:border-box;" /></div>';
+  }
+  function eeOpenTaxFeesPopover(ev) {
+    if (ev && ev.stopPropagation) ev.stopPropagation();
+    // Toggle: a second click on the chip closes it.
+    if (document.getElementById('ee-taxfees-pop')) { eeCloseTaxFeesPopover(); return; }
+    var chipEl = document.getElementById('ee-taxfees-chip');
+    var est = getEstimate();
+    if (!chipEl || !est) return;
+    var pop = document.createElement('div');
+    pop.id = 'ee-taxfees-pop';
+    pop.style.cssText = 'position:fixed;z-index:200;background:var(--card-bg,#141419);border:1px solid var(--border,#333);' +
+      'border-radius:10px;box-shadow:0 12px 32px rgba(0,0,0,0.5);padding:14px 16px;width:280px;box-sizing:border-box;';
+    pop.innerHTML =
+      '<div style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;">' +
+        '<span>Tax &amp; Fees</span>' +
+        '<button type="button" onclick="window.eeCloseTaxFeesPopover()" aria-label="Close" style="background:transparent;border:0;color:var(--text-dim,#888);cursor:pointer;font-size:18px;line-height:1;padding:0;">&times;</button>' +
+      '</div>' +
+      _eeTaxFeesPopField('Tax %', 'ee-pop-taxPct', est.taxPct, '0.01', '0') +
+      _eeTaxFeesPopField('Flat Fee ($)', 'ee-pop-feeFlat', est.feeFlat, '0.01', '0') +
+      _eeTaxFeesPopField('Fee % of Marked-Up', 'ee-pop-feePct', est.feePct, '0.1', '0') +
+      _eeTaxFeesPopField('Round Up to Nearest ($)', 'ee-pop-roundTo', est.roundTo, '1', '0 = off') +
+      '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:2px;line-height:1.5;">Tax applies after fees. Round-up is the last step.</div>';
+    document.body.appendChild(pop);
+    // Anchor under the chip, clamped to the viewport.
+    var r = chipEl.getBoundingClientRect();
+    var top = r.bottom + 6;
+    var left = Math.min(r.left, window.innerWidth - 280 - 12);
+    if (left < 8) left = 8;
+    if (top + 240 > window.innerHeight) top = Math.max(8, r.top - 246);
+    pop.style.top = top + 'px';
+    pop.style.left = left + 'px';
+    // Wire the four inputs to the same field names + save/recompute sequence
+    // the Details-tab Pricing fieldset uses; mirror into those fields too.
+    var popMap = { 'ee-pop-taxPct': 'taxPct', 'ee-pop-feeFlat': 'feeFlat', 'ee-pop-feePct': 'feePct', 'ee-pop-roundTo': 'roundTo' };
+    Object.keys(popMap).forEach(function(id) {
+      var el = document.getElementById(id);
+      if (!el) return;
+      el.onchange = function() {
+        var e = getEstimate(); if (!e) return;
+        e[popMap[id]] = num(el.value);
+        debouncedSave();
+        renderLineItems();
+        renderTotals();
+        var mirror = document.getElementById(id.replace('ee-pop-', 'ee-'));
+        if (mirror) mirror.value = el.value;
+      };
+    });
+    setTimeout(function() {
+      document.addEventListener('mousedown', _eeTaxFeesOutside, true);
+      document.addEventListener('keydown', _eeTaxFeesEsc, true);
+    }, 0);
+    var first = document.getElementById('ee-pop-taxPct');
+    if (first) { try { first.focus(); first.select(); } catch (e) {} }
+  }
+  function _eeTaxFeesOutside(e) {
+    var pop = document.getElementById('ee-taxfees-pop');
+    if (!pop) { document.removeEventListener('mousedown', _eeTaxFeesOutside, true); return; }
+    var chip = document.getElementById('ee-taxfees-chip');
+    if (pop.contains(e.target) || (chip && chip.contains(e.target))) return;
+    eeCloseTaxFeesPopover();
+  }
+  function _eeTaxFeesEsc(e) { if (e.key === 'Escape') eeCloseTaxFeesPopover(); }
+  function eeCloseTaxFeesPopover() {
+    var pop = document.getElementById('ee-taxfees-pop');
+    if (pop) {
+      // Flush any focused-but-not-yet-blurred field into the estimate BEFORE
+      // we detach it. Dismissal runs on a capture-phase mousedown, which
+      // removes the input before its change event (that commits the value)
+      // can fire — without this flush a click-away silently drops the last
+      // edit. Idempotent: fields already committed via onchange are unchanged.
+      var est = getEstimate();
+      if (est) {
+        var popMap = { 'ee-pop-taxPct': 'taxPct', 'ee-pop-feeFlat': 'feeFlat', 'ee-pop-feePct': 'feePct', 'ee-pop-roundTo': 'roundTo' };
+        var changed = false;
+        Object.keys(popMap).forEach(function(id) {
+          var el = document.getElementById(id);
+          if (!el) return;
+          var v = num(el.value);
+          if (est[popMap[id]] !== v) { est[popMap[id]] = v; changed = true; }
+          var mirror = document.getElementById(id.replace('ee-pop-', 'ee-'));
+          if (mirror) mirror.value = el.value;
+        });
+        if (changed) { debouncedSave(); renderLineItems(); renderTotals(); }
+      }
+      pop.remove();
+    }
+    document.removeEventListener('mousedown', _eeTaxFeesOutside, true);
+    document.removeEventListener('keydown', _eeTaxFeesEsc, true);
+  }
+  window.eeOpenTaxFeesPopover = eeOpenTaxFeesPopover;
+  window.eeCloseTaxFeesPopover = eeCloseTaxFeesPopover;
 
   // The Margin chip — uses the global edit-gate pencil pattern (same
   // affordance as project/lead/job fieldsets). Two visual states
@@ -2679,8 +2806,8 @@
     // Native prompt() silently no-ops inside the installed PWA (it froze the
     // "+ Section › Custom" flow). Route through the in-app p86Prompt modal.
     var ask = (typeof window.p86Prompt === 'function')
-      ? window.p86Prompt({ title: 'New section', message: 'Name this section (subgroup).', placeholder: 'e.g. Sitework', defaultValue: '' })
-      : Promise.resolve(prompt('Subgroup name:', ''));
+      ? window.p86Prompt({ title: 'New section', message: 'Name this section.', placeholder: 'e.g. Sitework', defaultValue: '' })
+      : Promise.resolve(prompt('Section name:', ''));
     ask.then(function(name) {
       if (name == null) return;
       var newHeader = {
@@ -2702,7 +2829,7 @@
     var preview = line && line.description ? line.description : 'this line';
     window.p86Confirm({
       title: 'Delete line item?',
-      message: '"' + preview + '" will be removed from the active alternate. This cannot be undone.',
+      message: '"' + preview + '" will be removed from the active group. This cannot be undone.',
       confirmText: 'Delete',
       destructive: true
     }).then(function(ok) {
@@ -2770,7 +2897,7 @@
       added++;
     });
     if (!added) {
-      alert('All four standard subgroups are already present in this group.');
+      alert('All four standard sections are already present in this group.');
       return;
     }
     debouncedSave();
@@ -3015,7 +3142,7 @@
           field('Manager Email', 'ee-managerEmail', est.managerEmail, { type: 'email' }) +
           field('Manager Phone', 'ee-managerPhone', est.managerPhone, { type: 'tel' }) +
           '<div style="margin-bottom:12px;font-size:11px;color:var(--text-dim,#888);padding:8px 10px;background:rgba(79,140,255,0.06);border:1px solid var(--border,#333);border-radius:6px;line-height:1.5;">' +
-            '<strong style="color:#4f8cff;">Scope of Work</strong> moved to the <strong>Line Items</strong> tab so each alternate carries its own. Find it in the right panel under the active alternate.' +
+            '<strong style="color:#4f8cff;">Scope of Work</strong> lives on the <strong>Scope</strong> tab — each group carries its own.' +
           '</div>' +
         '</div>' +
       '</div>' +
@@ -3046,6 +3173,7 @@
         if (hdrTitle && hdrTitle.value !== titleDetailsEl.value) {
           hdrTitle.value = titleDetailsEl.value;
         }
+        renderEstimateIdentity();
         debouncedSave();
       };
     }
@@ -3061,6 +3189,7 @@
         if (detailsEl && detailsEl.value !== hdrTitleEl.value) {
           detailsEl.value = hdrTitleEl.value;
         }
+        renderEstimateIdentity();
       };
     }
 
@@ -3362,7 +3491,7 @@
     var est = getEstimate();
     if (!est) throw new Error('No estimate open.');
     var alt = getActiveAlternate();
-    if (!alt) throw new Error('No active alternate.');
+    if (!alt) throw new Error('No active group.');
 
     // Route to a section DETERMINISTICALLY so a line can never orphan at the
     // array end (where it silently booked as Subcontractor cost):
@@ -3486,7 +3615,7 @@
     var est = getEstimate();
     if (!est) throw new Error('No estimate open.');
     var alt = getActiveAlternate();
-    if (!alt) throw new Error('No active alternate.');
+    if (!alt) throw new Error('No active group.');
     var newHeader = {
       id: 's' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
       estimateId: est.id,
@@ -3505,7 +3634,7 @@
 
   function applyUpdateScope(input) {
     var alt = getActiveAlternate();
-    if (!alt) throw new Error('No active alternate.');
+    if (!alt) throw new Error('No active group.');
     var mode = input.mode === 'append' ? 'append' : 'replace';
     var newScope;
     if (mode === 'append' && alt.scope) {
@@ -3516,7 +3645,7 @@
     alt.scope = newScope;
     debouncedSave();
     renderScopePanel();
-    return 'Updated scope on alternate "' + alt.name + '" (' + mode + ', ' + newScope.length + ' chars)';
+    return 'Updated scope on group "' + alt.name + '" (' + mode + ', ' + newScope.length + ' chars)';
   }
 
   // Delete a single line item by id. Refuses to delete section headers
@@ -3693,7 +3822,7 @@
     renderLineItems();
     renderTotals();
     renderScopePanel();
-    return 'Created group "' + name + '" (' + (copyFromActive ? 'cloned from active' : 'seeded with 4 standard subgroups') + ') and switched focus to it.';
+    return 'Created group "' + name + '" (' + (copyFromActive ? 'cloned from active' : 'seeded with 4 standard sections') + ') and switched focus to it.';
   }
 
   function applyRenameGroup(input) {
