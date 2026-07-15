@@ -293,16 +293,22 @@
     if (!_asmR._listenerWired) {
       _asmR._listenerWired = true;
       document.addEventListener('p86:payload-applied', function (e) {
-        // Only act while the Assembly Studio cockpit is actually mounted —
-        // this document-level listener outlives the view, and assembly cards
-        // can be approved from other surfaces.
-        if (!document.getElementById('cc-asm-main')) return;
+        // Only act while Assembly Studio is the VISIBLE sub-tab — this
+        // document-level listener outlives the view, #cc-asm-main persists
+        // (display:none) under sibling sub-tabs, and assembly cards can be
+        // approved from the global 86 drawer. Acting on a hidden studio would
+        // re-dock the singleton 86 panel into a hidden host (drawer vanishes).
+        var asmMain = document.getElementById('cc-asm-main');
+        if (!asmMain || asmMain.offsetParent === null) return;
         var targets = (e.detail && e.detail.affected_targets) || [];
         var hitAssembly = targets.some(function (t) {
           var ty = t && (t.entity_type || t.type); return ty === 'assembly';
         });
         if (!hitAssembly) return;
-        _asmR.handedId = null;    // hand-off hint is spent
+        // Don't clear handedId here — an unrelated assembly card must not
+        // retire the hint on a still-pending packet. loadResearchInbox retires
+        // it precisely: the handed packet leaves the unprocessed list only when
+        // the server consumed it (via source_research_id).
         loadResearchInbox();      // a server-consumed packet drops from unprocessed
         loadAssemblyTuning();     // refresh health tiles + queue with the new recipe
       });
@@ -414,8 +420,18 @@
     cget('/api/assembly-research?status=unprocessed').then(function (d) {
       _asmR.list = (d && d.research) || [];
       _asmR.counts = (d && d.counts) || {};
+      // Retire the hand-off hint precisely: the handed packet is gone from the
+      // unprocessed list only once the server consumed it (source_research_id).
+      if (_asmR.handedId && !_asmR.list.some(function (p) { return p.id === _asmR.handedId; })) {
+        _asmR.handedId = null;
+      }
       if (!_asmR.sel && _asmR.list.length) _asmR.sel = _asmR.list[0].id;
-      if (_asmR.mode === 'research') paintAsmMain();
+      if (_asmR.mode === 'research') {
+        // Load the auto-selected packet's detail so its row is not highlighted
+        // over an empty detail pane (first entry + after consume/void).
+        if (_asmR.sel && (!_asmR.det || _asmR.det.id !== _asmR.sel)) loadPacketDetail(_asmR.sel);
+        else paintAsmMain();
+      }
     }).catch(function (e) {
       var ws = document.getElementById('cc-asm-ws'); if (ws) ws.innerHTML = errBox('research inbox', e);
     });
@@ -522,7 +538,7 @@
     var hand = el.querySelector('[data-asmr-hand]');
     if (hand) hand.addEventListener('click', function () { handPacketTo86(Number(hand.dataset.asmrHand)); });
     var consume = el.querySelector('[data-asmr-consume]');
-    if (consume) consume.addEventListener('click', function () { consumePacket(Number(consume.dataset.asmrConsume), null); });
+    if (consume) consume.addEventListener('click', function () { consumePacket(Number(consume.dataset.asmrConsume)); });
     var vd = el.querySelector('[data-asmr-void]');
     if (vd) vd.addEventListener('click', function () {
       var id = Number(vd.dataset.asmrVoid);
@@ -557,8 +573,10 @@
     try { window.p86AI.askDocked(lines.join('\n')); } catch (e) {}
     paintAsmMain(); // reflect the "handed" hint
   }
-  function consumePacket(id, assemblyId) {
-    cpost('/api/assembly-research/' + id + '/consume', assemblyId ? { assembly_id: assemblyId } : {}).then(function () {
+  // Manual "✓ Built" — mark a packet consumed without a specific assembly link
+  // (the auto-path links server-side via source_research_id).
+  function consumePacket(id) {
+    cpost('/api/assembly-research/' + id + '/consume', {}).then(function () {
       if (_asmR.handedId === id) _asmR.handedId = null;
       _asmR.sel = null; _asmR.det = null;
       toast('Marked built');

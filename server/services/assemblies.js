@@ -247,11 +247,11 @@ async function replaceItems(db, assemblyId, items, orgId, opts) {
   }
   await db.query('UPDATE assemblies SET updated_at = NOW() WHERE id = $1', [assemblyId]);
 
-  // Diff old→new into the tuning log (best-effort — a log failure must
-  // never fail the save itself).
+  // Diff old→new into the tuning log (best-effort — a log failure must never
+  // fail the save itself, nor poison a shared transaction).
   if (opts && (opts.userId || opts.source)) {
+    let entries = [];
     try {
-      const entries = [];
       const oldBy = new Map();
       oldItems.forEach((o) => oldBy.set(itemKey(o), o));
       const seenKeys = new Set();
@@ -276,14 +276,45 @@ async function replaceItems(db, assemblyId, items, orgId, opts) {
           entries.push({ item_desc: o.description || o.material_description || o.kind, field: 'items', new_value: '− removed' });
         }
       });
-      if (entries.length) await logTuning(db, orgId, assemblyId, entries, opts);
-    } catch (e) { /* tuning log is observability, not correctness */ }
+    } catch (e) { entries = []; /* diff building is pure-JS; ignore */ }
+    // Write the log OUTSIDE the diff try/catch. Inside a shared transaction
+    // (opts.inTxn — the payload dispatcher) a raw failure here would poison the
+    // txn and make the eventual COMMIT silently ROLLBACK the whole assembly
+    // write, so isolate it in a SAVEPOINT. In autocommit there is no open txn
+    // to poison, so a plain swallow is safe.
+    if (entries.length) {
+      if (opts.inTxn) {
+        await bestEffortInTxn(db, 'asm_log_items', () => logTuning(db, orgId, assemblyId, entries, opts));
+      } else {
+        try { await logTuning(db, orgId, assemblyId, entries, opts); } catch (e) { /* autocommit: nothing to poison */ }
+      }
+    }
   }
   return null;
+}
+
+// Run a best-effort side-write inside a SAVEPOINT so its failure rolls back
+// ONLY that write, never the outer transaction. The SAVEPOINT statement is
+// issued un-guarded on purpose: if it throws, the outer txn is ALREADY aborted
+// (25P02) and we must let it propagate so the caller surfaces it — silently
+// masking a poisoned txn is exactly what turns a failed side-write into a lost
+// COMMIT reported as success. Only call inside an open transaction. spName must
+// be a hardcoded literal (interpolated into SQL — never pass user input).
+async function bestEffortInTxn(db, spName, fn) {
+  await db.query('SAVEPOINT ' + spName);
+  try {
+    await fn();
+    await db.query('RELEASE SAVEPOINT ' + spName);
+  } catch (e) {
+    try {
+      await db.query('ROLLBACK TO SAVEPOINT ' + spName);
+      await db.query('RELEASE SAVEPOINT ' + spName);
+    } catch (e2) { /* connection gone; the outer apply will surface it */ }
+  }
 }
 
 module.exports = {
   KINDS, COST_CODES, SOURCES, KIND_DEFAULT_CODE, MAX_DEPTH,
   loadGraph, itemUnitCost, resolveCost, flatten, wouldCycle, shapeItem,
-  pickHeader, createAssembly, updateHeader, replaceItems, logTuning,
+  pickHeader, createAssembly, updateHeader, replaceItems, logTuning, bestEffortInTxn,
 };

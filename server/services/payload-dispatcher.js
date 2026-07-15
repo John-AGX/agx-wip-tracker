@@ -2640,6 +2640,10 @@ async function dispatchAssembly(dbClient, target, refTable, ctx) {
     userId: ctx.userId || null,
     source: (ctx.sourceAgent === 'scribe' || ctx.emittingAgentKey === 'scribe') ? 'scribe' : '86',
     reason: ops.reason ? String(ops.reason).slice(0, 500) : null,
+    // We always run inside applyPayload's BEGIN/COMMIT — tells assemblies.js to
+    // SAVEPOINT-isolate its best-effort tuning-log write so a log failure can't
+    // poison this transaction (and silently ROLLBACK the whole assembly).
+    inTxn: true,
   };
 
   if (opType === 'create') {
@@ -2652,22 +2656,23 @@ async function dispatchAssembly(dbClient, target, refTable, ctx) {
       const err = await asmSvc.replaceItems(dbClient, id, ops.items, orgId, tuneOpts);
       if (err) throw new Error('assembly.create items: ' + err);
     }
-    try {
-      await asmSvc.logTuning(dbClient, orgId, id,
-        [{ field: 'created', new_value: (fields.name || '') + ' (' + ((ops.items || []).length) + ' items)' }], tuneOpts);
-    } catch (e) { /* log only */ }
+    // Best-effort creation log — SAVEPOINT-isolated so a log failure can't
+    // poison the outer txn (which would silently ROLLBACK the assembly).
+    await asmSvc.bestEffortInTxn(dbClient, 'asm_log_create', () => asmSvc.logTuning(dbClient, orgId, id,
+      [{ field: 'created', new_value: (fields.name || '') + ' (' + ((ops.items || []).length) + ' items)' }], tuneOpts));
     // If this assembly was built from a research-inbox packet, consume+link
     // that packet in-txn — org-scoped, unprocessed-only — so it points at
     // exactly the assembly 86 built from it. No client-side guessing about
-    // which of the shared pane's cards a handed packet belongs to.
+    // which of the shared pane's cards a handed packet belongs to. Same
+    // SAVEPOINT isolation: a failed link (e.g. a lock timeout when two applies
+    // build from the same packet) degrades to skip-the-link, never poisoning
+    // the assembly create.
     const srcRid = parseInt(ops.source_research_id, 10);
     if (Number.isFinite(srcRid) && srcRid > 0) {
-      try {
-        await dbClient.query(
-          `UPDATE assembly_research SET status = 'consumed', consumed_assembly_id = $1, consumed_at = NOW()
-             WHERE id = $2 AND organization_id = $3 AND status = 'unprocessed'`,
-          [id, srcRid, orgId]);
-      } catch (e) { /* best-effort link; never fail the build on the consume */ }
+      await asmSvc.bestEffortInTxn(dbClient, 'link_src', () => dbClient.query(
+        `UPDATE assembly_research SET status = 'consumed', consumed_assembly_id = $1, consumed_at = NOW()
+           WHERE id = $2 AND organization_id = $3 AND status = 'unprocessed'`,
+        [id, srcRid, orgId]));
     }
     if (isRef(target.entity_id)) refTable[target.entity_id] = id;
     return {
