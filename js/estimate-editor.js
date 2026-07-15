@@ -2407,10 +2407,26 @@
     '</div>';
   }
 
+  // Per-section GROSS margin (pre-fee/tax) — John's Q4: a read-out next to each
+  // Section Subtotal so an estimator can see which scopes are thin. Margin, not
+  // markup: (marked − cost) ÷ marked. Empty section → no chip. Negative reads
+  // red as a real alarm. Shared by the render walk AND the surgical refresh so
+  // they never drift (same pattern as eeSectionSubtotal).
+  function eeSectionGm(sum, marked) {
+    if (!(marked > 0)) return { txt: '', color: 'var(--text-dim,#888)' };
+    var pct = (marked - sum) / marked * 100;
+    return {
+      txt: (Math.round(pct * 10) / 10).toFixed(1) + '% GM',
+      color: pct < 0 ? '#f87171' : 'var(--text-dim,#888)'
+    };
+  }
   function renderSectionSubtotal(rawSum, markedUp) {
+    var gm = eeSectionGm(rawSum, markedUp);
     return '<div style="display:flex;align-items:center;background:rgba(255,255,255,0.02);border-bottom:1px solid var(--border,#333);padding:6px 10px;">' +
       '<div style="flex:0 0 28px;"></div>' + // matches the drag-handle column
-      '<div style="flex:2 1 200px;font-size:11px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;font-weight:600;padding-left:8px;">Section Subtotal</div>' +
+      '<div style="flex:2 1 200px;font-size:11px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;font-weight:600;padding-left:8px;">Section Subtotal' +
+        '<span class="ee-section-gm" title="Gross margin for this section (pre-fee/tax)" style="text-transform:none;margin-left:8px;font-size:10px;font-weight:600;letter-spacing:0.3px;border-radius:4px;padding:' + (gm.txt ? '1px 6px' : '0') + ';background:' + (gm.txt ? 'rgba(255,255,255,0.05)' : 'transparent') + ';color:' + gm.color + ';">' + gm.txt + '</span>' +
+      '</div>' +
       '<div style="flex:0 0 70px;"></div>' +
       '<div style="flex:0 0 70px;"></div>' +
       '<div style="flex:0 0 110px;"></div>' +
@@ -2492,6 +2508,16 @@
     for (var i = 0; i < cells.length && i < subs.length; i++) {
       cells[i].textContent = fmtCurrency(subs[i].marked);
       if (cells[i].previousElementSibling) cells[i].previousElementSibling.textContent = fmtCurrency(subs[i].sum);
+    }
+    // Keep the per-section gross-margin readouts in sync too — same document
+    // order as .ee-section-total, so index-aligned with subs[].
+    var gmCells = container.querySelectorAll('.ee-section-gm');
+    for (var gi = 0; gi < gmCells.length && gi < subs.length; gi++) {
+      var g = eeSectionGm(subs[gi].sum, subs[gi].marked);
+      gmCells[gi].textContent = g.txt;
+      gmCells[gi].style.color = g.color;
+      gmCells[gi].style.background = g.txt ? 'rgba(255,255,255,0.05)' : 'transparent';
+      gmCells[gi].style.padding = g.txt ? '1px 6px' : '0';
     }
   }
 
