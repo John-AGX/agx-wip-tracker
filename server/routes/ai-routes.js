@@ -13744,10 +13744,12 @@ router.post('/86/chat', requireAuth, requireOrg, aiChatLimiter, aiChatHourlyLimi
     // Resolve BEFORE inserting the user message so the row gets keyed
     // by the session's own (entity_type, entity_id).
     // Per-request host pin (Assembly Studio dock sends host_agent_key:'job' so
-    // 86 — not the Assistant — builds/tunes the DB directly). Only honored for
-    // admins (ROLES_MANAGE) so a non-admin can't pin themselves onto opus.
+    // 86 — not the Assistant — builds/tunes the DB directly). Gated on
+    // SYSTEM_ADMIN to match the Assembly Studio surface (console.js isSystemAdmin)
+    // so a non-owner (incl. a mere org admin) can't pin their chat onto the
+    // 86/opus host + its broader toolset.
     const _reqHostKey = req.body && req.body.host_agent_key;
-    const hostOverride = ((_reqHostKey === 'job' || _reqHostKey === 'assistant') && hasCapability(req.user, 'ROLES_MANAGE'))
+    const hostOverride = ((_reqHostKey === 'job' || _reqHostKey === 'assistant') && hasCapability(req.user, 'SYSTEM_ADMIN'))
       ? _reqHostKey
       : null;
     const session = await resolveSessionForChat({

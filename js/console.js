@@ -71,6 +71,13 @@
 
   function renderConsoleInto(host) {
     if (!host) return;
+    // Rescue the docked 86 panel BEFORE any innerHTML wipe below — a console
+    // re-render (incl. same-tab re-entry via a Command Center child click)
+    // would otherwise destroy the reparented singleton. undock() moves it back
+    // to <body>; loadAssemblyTuning re-docks it when the studio view reopens.
+    if (window.p86AI && window.p86AI.isDocked && window.p86AI.isDocked()) {
+      try { window.p86AI.undock(); } catch (e) {}
+    }
     var user = window.p86Auth && window.p86Auth.getUser && window.p86Auth.getUser();
     if (!user) {
       // A cold new-tab load can render this pane before /api/auth/me
@@ -163,6 +170,12 @@
     document.querySelectorAll('[data-console-subtab]').forEach(function (btn) {
       btn.classList.toggle('active', btn.getAttribute('data-console-subtab') === view);
     });
+    // Leaving Assembly Studio for another Console sub-tab: pop the docked 86
+    // panel back out so it isn't stranded inside a hidden section. Returning
+    // re-docks it via loadAssemblyTuning -> ensureAsmDock.
+    if (view !== 'assemblies' && window.p86AI && window.p86AI.isDocked && window.p86AI.isDocked()) {
+      try { window.p86AI.undock(); } catch (e) {}
+    }
     document.querySelectorAll('#consolePageHost .cc-section').forEach(function (s) { s.style.display = 'none'; });
     target.style.display = 'block';
     loadConsoleView(view);

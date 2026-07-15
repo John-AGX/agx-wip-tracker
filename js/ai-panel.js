@@ -1461,6 +1461,12 @@
   //   open(estimateId)                       — legacy: opens for an estimate
   //   open({ entityType, entityId })         — explicit polymorphic form
   function open(arg) {
+    // Self-heal: a global open() request (crew chip, header "Ask 86", a
+    // deep-link) while the panel is docked in Assembly Studio pops it back out
+    // to the normal drawer first, so the global control always works and the
+    // rAF slide below isn't suppressed by the docked guard. dockInto's own
+    // internal open() sets _dockOpening to bypass this.
+    if (_isDocked && !_dockOpening) { try { undock(); } catch (e) {} }
     var entityType, entityId;
     if (typeof arg === 'string') {
       entityType = 'estimate';
@@ -1861,6 +1867,7 @@
   var _dockHostAgentKey = null;   // pins the chat to a host ('job' = 86)
   var _dockContext = null;        // per-turn current_context override (selected assembly)
   var _undockPanelStyle = null;   // saved drawer inline style, restored on undock
+  var _dockOpening = false;       // true only during dockInto's internal open()
   function dockInto(hostEl, opts) {
     opts = opts || {};
     if (!hostEl) return;
@@ -1872,16 +1879,28 @@
     if (panel.parentNode !== hostEl) hostEl.appendChild(panel);
     _isDocked = true;
     // Open against the global 'ask86' surface (no entity gate); loads the 86
-    // thread + wires the composer. The docked CSS owns positioning.
-    open({ entityType: 'ask86' });
+    // thread + wires the composer. The docked CSS owns positioning. The
+    // _dockOpening flag tells open() this is the internal dock open (so it
+    // doesn't self-undock — see open()).
+    _dockOpening = true;
+    try { open({ entityType: 'ask86' }); } finally { _dockOpening = false; }
     document.body.classList.remove('p86-ai-open'); // docked doesn't shift the page
   }
   function setDockContext(ctx) { _dockContext = ctx || null; }
   function undock() {
     if (!_isDocked) return;
+    // Clear docked state FIRST so this is safe even if the panel DOM was already
+    // destroyed (e.g. a host wipe that skipped undock) — a later open() then
+    // self-heals via ensurePanel() instead of early-returning forever.
     _isDocked = false;
     _dockHostAgentKey = null;
     _dockContext = null;
+    // Same teardown the normal close() does — abort any in-flight stream + stop
+    // the rolling-preset rotor + close the slash palette (docked close skips
+    // close()'s body, so do it here so nothing leaks).
+    if (_presetRotateTimer) { clearInterval(_presetRotateTimer); _presetRotateTimer = null; }
+    try { closeSlashPalette(); } catch (e) {}
+    if (_abortController) { try { _abortController.abort(); } catch (e) {} _abortController = null; }
     var panel = document.getElementById('p86-ai-panel');
     if (!panel) return;
     panel.classList.remove('p86-ai-docked');
