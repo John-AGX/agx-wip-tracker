@@ -23,7 +23,7 @@ router.get('/', requireAuth, requireCapability('ESTIMATES_VIEW'), async (req, re
     const systems = [];
     reg.systemsByTrade.forEach((map, tradeCode) => {
       [...map.values()].sort((a, b) => (a.sort_order - b.sort_order) || a.code.localeCompare(b.code))
-        .forEach((s) => systems.push({ trade_code: tradeCode, code: s.code, name: s.name, default_unit: s.default_unit || null, org: s.org }));
+        .forEach((s) => systems.push({ id: s.id, trade_code: tradeCode, code: s.code, name: s.name, default_unit: s.default_unit || null, org: s.org }));
     });
     res.json({ trades, systems });
   } catch (e) {

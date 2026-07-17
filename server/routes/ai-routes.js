@@ -364,7 +364,7 @@ const ESTIMATE_TOOLS = [
   },
   {
     name: 'read_assemblies',
-    description: 'Query Project 86\'s ASSEMBLIES — costed recipes that price ONE OUTPUT UNIT of installed work (e.g. "Exterior Repaint — Stucco, per SF" = primer + paint + painter hours + nested pressure-wash sub-assembly). **CALL THIS BEFORE PRICING ANY SCOPE OF WORK** — if a matching assembly exists, its resolved unit cost beats line-by-line guessing, and materials in it are live-priced from our purchase history. Without `id`: returns the index (id, code, name, trade, output unit, resolved cost/unit, item count). With `id`: full recipe (items incl. nested sub-assemblies) PLUS `flat` — leaf rows with effective qty per 1 output unit; multiply each flat row by the takeoff qty to build estimate line_adds (carry source_material_id and set source_assembly_id so actuals can roll up per assembly later). You are the owner of this database: when a recipe is missing or its rates look stale, say so and offer to draft the fix via scribe_write (entity_type "assembly").',
+    description: 'Query Project 86\'s ASSEMBLIES — costed recipes that price ONE OUTPUT UNIT of installed work (e.g. "Exterior Repaint — Stucco, per SF" = primer + paint + painter hours + nested pressure-wash sub-assembly). **CALL THIS BEFORE PRICING ANY SCOPE OF WORK** — if a matching assembly exists, its resolved unit cost beats line-by-line guessing, and materials in it are live-priced from our purchase history. Without `id`: returns the index (id, code, name, trade, output unit, resolved cost/unit, item count). With `id`: full recipe (items incl. nested sub-assemblies) PLUS `flat` — leaf rows with effective qty per 1 output unit; multiply each flat row by the takeoff qty to build estimate line_adds (carry source_material_id and set source_assembly_id so actuals can roll up per assembly later). You are the owner of this database: when a recipe is missing or its rates look stale, say so and offer to draft the fix via scribe_write (entity_type "assembly"). Codes follow the controlled TRADE-SYSTEM-VARIANT registry — call read_assembly_taxonomy for the valid Trades + Systems; when you draft an assembly, set trade + system (+ optional variant) and OMIT code (the server derives a compliant, unique one).',
     input_schema: {
       type: 'object',
       additionalProperties: false,
@@ -375,6 +375,11 @@ const ESTIMATE_TOOLS = [
       },
       required: []
     }
+  },
+  {
+    name: 'read_assembly_taxonomy',
+    description: 'List the controlled assembly-code registry — the valid Trades (e.g. ROOF Roofing, FENC Fencing) and the Systems within each (under ROOF: SHNG Shingle, TILE Tile …). CALL THIS BEFORE drafting a new assembly via scribe_write so you pick real values: set fields.trade = the trade CODE, fields.system = the system CODE (+ optional fields.variant like 612 or PRIV6) and OMIT code — the server builds TRADE-SYSTEM-VARIANT + guarantees uniqueness. If the trade/system you need is missing, tell the user to add it under Admin → Organization → Assembly Codes (or proceed with a trade only).',
+    input_schema: { type: 'object', additionalProperties: false, properties: {}, required: [] }
   },
   {
     name: 'read_purchase_history',
@@ -679,7 +684,7 @@ const JOB_TOOLS = [
     // every surface — estimate chat, job chat, managed router). Handler is
     // shared via execStaffTool.
     name: 'read_assemblies',
-    description: 'Query Project 86\'s ASSEMBLIES — costed recipes pricing ONE OUTPUT UNIT of installed work (materials live-priced from purchase history + labor at production rates + nested sub-assemblies). Use when comparing job costs to standard pricing, scoping change orders, or answering "what should X cost per SF/LF". Without `id`: index with resolved cost/unit. With `id`: full recipe + `flat` leaf rows per 1 output unit. You own this database — flag stale rates and offer to draft fixes via scribe_write (entity_type "assembly").',
+    description: 'Query Project 86\'s ASSEMBLIES — costed recipes pricing ONE OUTPUT UNIT of installed work (materials live-priced from purchase history + labor at production rates + nested sub-assemblies). Use when comparing job costs to standard pricing, scoping change orders, or answering "what should X cost per SF/LF". Without `id`: index with resolved cost/unit. With `id`: full recipe + `flat` leaf rows per 1 output unit. You own this database — flag stale rates and offer to draft fixes via scribe_write (entity_type "assembly"). Codes follow the controlled TRADE-SYSTEM-VARIANT registry — call read_assembly_taxonomy for valid Trades + Systems; when drafting an assembly, set trade + system (+ optional variant) and OMIT code (server derives it).',
     input_schema: {
       type: 'object',
       additionalProperties: false,
@@ -690,6 +695,11 @@ const JOB_TOOLS = [
       },
       required: []
     }
+  },
+  {
+    name: 'read_assembly_taxonomy',
+    description: 'List the controlled assembly-code registry — valid Trades (ROOF Roofing, FENC Fencing …) and the Systems within each (under ROOF: SHNG Shingle, TILE Tile …). Call BEFORE drafting a new assembly via scribe_write: set fields.trade = trade CODE, fields.system = system CODE (+ optional fields.variant) and OMIT code — the server builds TRADE-SYSTEM-VARIANT + enforces uniqueness. If the trade/system is missing, tell the user to add it under Admin → Organization → Assembly Codes.',
+    input_schema: { type: 'object', additionalProperties: false, properties: {}, required: [] }
   },
   {
     name: 'start_background_task',
@@ -9023,6 +9033,21 @@ async function execStaffTool(name, input, ctx) {
       return JSON.stringify({ assemblies: rows, note: 'Call read_assemblies with an id for the full recipe + flat explode rows.' }, null, 1);
     }
 
+    case 'read_assembly_taxonomy': {
+      // The controlled Trade + System registry behind the assembly code protocol.
+      const asmSvc = require('../services/assemblies');
+      let _txOrgId = null;
+      try { _txOrgId = await resolveOrgIdFromCtx(ctx); } catch (_) {}
+      const reg = await asmSvc.loadRegistry(pool, _txOrgId);
+      const trades = [...reg.trades.values()].map((t) => ({ code: t.code, name: t.name }));
+      const systems = [];
+      reg.systemsByTrade.forEach((m, tc) => { m.forEach((s) => systems.push({ trade_code: tc, code: s.code, name: s.name, default_unit: s.default_unit || null })); });
+      return JSON.stringify({
+        trades, systems,
+        note: 'When drafting an assembly via scribe_write, set fields.trade + fields.system (+ optional fields.variant) and OMIT code — the server derives TRADE-SYSTEM-VARIANT and enforces uniqueness. Missing a trade/system? Have the user add it in Admin → Organization → Assembly Codes.',
+      }, null, 1);
+    }
+
     case 'read_materials': {
       // Same query shape as the GET /api/materials endpoint that 86\'s
       // client-side applier hits — kept inline rather than HTTP-loop
@@ -11596,6 +11621,7 @@ const AI_TOOL_CAPABILITY = new Map([
   ['read_active_lines',        'ESTIMATES_VIEW'],
   ['read_materials',           'ESTIMATES_VIEW'],
   ['read_assemblies',          'ESTIMATES_VIEW'],
+  ['read_assembly_taxonomy',   'ESTIMATES_VIEW'],
   ['read_purchase_history',    'ESTIMATES_VIEW'],
   ['read_subs',                'ESTIMATES_VIEW'],
   ['read_clients',          ['ESTIMATES_VIEW', 'LEADS_VIEW']],

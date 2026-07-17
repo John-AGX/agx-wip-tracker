@@ -69,23 +69,23 @@ function parseCode(code) {
 // Merge global + org registry rows into lookup maps (org shadows global by code).
 async function loadRegistry(db, orgId) {
   const [tq, sq] = await Promise.all([
-    db.query(`SELECT organization_id, code, name, sort_order FROM assembly_trades
+    db.query(`SELECT id, organization_id, code, name, sort_order FROM assembly_trades
                WHERE (organization_id = $1 OR organization_id IS NULL) AND archived_at IS NULL`, [orgId]),
-    db.query(`SELECT organization_id, trade_code, code, name, default_unit, sort_order FROM assembly_systems
+    db.query(`SELECT id, organization_id, trade_code, code, name, default_unit, sort_order FROM assembly_systems
                WHERE (organization_id = $1 OR organization_id IS NULL) AND archived_at IS NULL`, [orgId]),
   ]);
   const globalFirst = (a, b) => (a.organization_id == null ? 0 : 1) - (b.organization_id == null ? 0 : 1);
   const trades = new Map();
   tq.rows.sort(globalFirst).forEach((r) => {
     const c = String(r.code).toUpperCase();
-    trades.set(c, { code: c, name: r.name, org: r.organization_id, sort_order: r.sort_order });
+    trades.set(c, { id: r.id, code: c, name: r.name, org: r.organization_id, sort_order: r.sort_order });
   });
   const systemsByTrade = new Map();
   sq.rows.sort(globalFirst).forEach((r) => {
     const tc = String(r.trade_code).toUpperCase();
     const c = String(r.code).toUpperCase();
     if (!systemsByTrade.has(tc)) systemsByTrade.set(tc, new Map());
-    systemsByTrade.get(tc).set(c, { code: c, name: r.name, default_unit: r.default_unit, org: r.organization_id, sort_order: r.sort_order });
+    systemsByTrade.get(tc).set(c, { id: r.id, code: c, name: r.name, default_unit: r.default_unit, org: r.organization_id, sort_order: r.sort_order });
   });
   return { trades, systemsByTrade };
 }

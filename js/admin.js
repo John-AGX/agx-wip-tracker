@@ -4808,7 +4808,8 @@
     { key: 'jobs',      label: '\u{1F4CB} Job Assignments', desc: 'PM / crew / role assignments per job for this org.' },
     { key: 'sms',       label: '\u{1F4F1} SMS',              desc: 'SMS scheduling-agent observability for this org (send log, delivery stats). Global Twilio provider config lives in System.' },
     { key: 'tags',      label: '\u{1F3F7} Tag Catalog',      desc: 'Curated master list of photo tags used across projects. Rename to propagate everywhere; merge to consolidate duplicates; archive to hide from autocomplete. New tags auto-add when a user types one on any photo.' },
-    { key: 'mappins',   label: '\u{1F4CD} Map Pins',          desc: 'Pin color + icon for each map marker type — Lead, Service job, Reno, Work order, Job, Project. Applies to the Jobs, Leads, and Projects maps for everyone in your org.' }
+    { key: 'mappins',   label: '\u{1F4CD} Map Pins',          desc: 'Pin color + icon for each map marker type — Lead, Service job, Reno, Work order, Job, Project. Applies to the Jobs, Leads, and Projects maps for everyone in your org.' },
+    { key: 'asmcodes',  label: '\u{1F9E9} Assembly Codes',     desc: 'The Trade + System vocabulary behind estimating assembly codes (TRADE-SYSTEM-VARIANT, e.g. ROOF-SHNG-612). Global seed rows are shared + read-only; add your own trades/systems here. They drive the code dropdowns on the /assemblies editor.' }
   ];
 
   var _orgActiveTab = (function() {
@@ -4914,6 +4915,11 @@
       // branding.map_pins + paints the per-type color/icon editor.
       bodyHTML = '<div id="admin-org-mappins-host"><div style="color:var(--text-dim,#888);font-style:italic;font-size:12px;padding:20px 0;">Loading map pins…</div></div>';
       setTimeout(renderOrgMapPins, 0);
+    }
+    else if (_orgActiveTab === 'asmcodes') {
+      // Assembly code registry (Trade + System vocabulary) — fetch + paint async.
+      bodyHTML = '<div id="admin-org-asmcodes-host"><div style="color:var(--text-dim,#888);font-style:italic;font-size:12px;padding:20px 0;">Loading assembly codes…</div></div>';
+      setTimeout(renderOrgAssemblyTaxonomy, 0);
     }
     else if (_orgActiveTab === 'templates' || _orgActiveTab === 'materials' || _orgActiveTab === 'sms') {
       // Phase F / G nested tabs — these render functions paint into
@@ -5420,6 +5426,140 @@
     return '<span style="display:inline-block;width:20px;height:20px;vertical-align:middle;margin-right:6px;">' +
       window.p86TagIcons.pinSvg(spec, { size: 20, stroke: 2 }) + '</span>';
   }
+
+  // ── Assembly Codes (Trade + System registry) ────────────────────────
+  var _asmCodesState = { loading: true, trades: [], systems: [], editTrade: null, editSystem: null, err: '' };
+
+  function renderOrgAssemblyTaxonomy() {
+    var host = document.getElementById('admin-org-asmcodes-host');
+    if (!host) return;
+    if (!window.p86Api || !window.p86Api.assemblyTaxonomy) {
+      host.innerHTML = '<div style="color:#e74c3c;padding:14px;">Assembly taxonomy API not available.</div>';
+      return;
+    }
+    _asmCodesState.loading = true; paintOrgAsmCodes();
+    window.p86Api.assemblyTaxonomy.list().then(function (r) {
+      _asmCodesState.trades = (r && r.trades) || [];
+      _asmCodesState.systems = (r && r.systems) || [];
+      _asmCodesState.loading = false; _asmCodesState.err = '';
+      paintOrgAsmCodes();
+    }).catch(function (e) {
+      host.innerHTML = '<div style="color:#e74c3c;padding:14px;">Failed to load assembly codes: ' + escapeHTML(e.message || e) + '</div>';
+    });
+  }
+
+  function asmMiniInput(label, id, ph, w) {
+    return '<label style="display:flex;flex-direction:column;gap:3px;font-size:9px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-dim,#888);">' + escapeHTML(label) +
+      '<input id="' + id + '" placeholder="' + escapeHTML(ph || '') + '" style="width:' + (w || 120) + 'px;padding:6px 8px;font-size:12px;background:var(--card-bg,#141419);border:1px solid var(--border,#333);border-radius:6px;color:var(--text,#fff);" /></label>';
+  }
+
+  function paintOrgAsmCodes() {
+    var host = document.getElementById('admin-org-asmcodes-host');
+    if (!host) return;
+    var st = _asmCodesState;
+    if (st.loading) { host.innerHTML = '<div style="color:var(--text-dim,#888);font-style:italic;padding:14px;">Loading assembly codes…</div>'; return; }
+    var trades = st.trades.slice().sort(function (a, b) { return String(a.name).localeCompare(String(b.name)); });
+    var sysByTrade = {};
+    st.systems.forEach(function (s) { var k = String(s.trade_code).toUpperCase(); (sysByTrade[k] = sysByTrade[k] || []).push(s); });
+
+    var html =
+      '<fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:14px;">' +
+        '<legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Assembly Codes</legend>' +
+        (st.err ? '<div style="color:#f87171;font-size:12px;margin-bottom:10px;">' + escapeHTML(st.err) + '</div>' : '') +
+        '<div style="font-size:12px;color:var(--text-dim,#8a93a6);margin-bottom:12px;">Codes are <b>TRADE-SYSTEM-VARIANT</b> (e.g. <code>ROOF-SHNG-612</code>). Grey <b>seed</b> rows are shared globally and read-only; add your own trades/systems here — they appear in the /assemblies editor dropdowns.</div>' +
+        '<div style="display:flex;gap:8px;align-items:flex-end;margin-bottom:14px;flex-wrap:wrap;padding:10px;background:rgba(255,255,255,0.02);border:1px solid var(--border,#2a2f3a);border-radius:8px;">' +
+          asmMiniInput('New trade code', 'asmNewTradeCode', 'e.g. SOLR', 100) +
+          asmMiniInput('Trade name', 'asmNewTradeName', 'e.g. Solar', 180) +
+          '<button class="ee-btn primary" onclick="window.adminAsmCodes.addTrade()" style="font-size:12px;">&#x2795; Add trade</button>' +
+        '</div>' +
+        (trades.length ? trades.map(function (t) { return asmTradeCardHTML(t, sysByTrade[String(t.code).toUpperCase()] || []); }).join('')
+          : '<div style="padding:20px;text-align:center;color:var(--text-dim,#888);font-style:italic;">No trades yet.</div>') +
+      '</fieldset>';
+    host.innerHTML = html;
+  }
+
+  function asmTradeCardHTML(t, systems) {
+    var st = _asmCodesState;
+    var isSeed = t.org == null;
+    var editing = st.editTrade === t.id && !isSeed;
+    var header = editing
+      ? '<input id="asmTradeName_' + t.id + '" value="' + escapeHTML(t.name) + '" style="padding:5px 8px;font-size:13px;background:var(--card-bg,#141419);border:1px solid var(--border,#333);border-radius:6px;color:var(--text,#fff);width:200px;" />' +
+        ' <button class="ee-btn primary" onclick="window.adminAsmCodes.saveTradeName(' + t.id + ')" style="font-size:11px;padding:4px 8px;">Save</button>' +
+        ' <button class="ee-btn secondary" onclick="window.adminAsmCodes.cancelEdit()" style="font-size:11px;padding:4px 8px;">Cancel</button>'
+      : '<strong style="color:var(--text,#fff);font-size:14px;">' + escapeHTML(t.name) + '</strong>' +
+        ' <span style="font-family:monospace;font-size:11px;color:var(--text-dim,#888);">' + escapeHTML(t.code) + '</span>' +
+        (isSeed
+          ? ' <span style="font-size:9px;text-transform:uppercase;letter-spacing:.5px;color:#8a93a6;background:rgba(255,255,255,0.06);padding:1px 6px;border-radius:8px;">seed</span>'
+          : ' <button class="ee-btn secondary" onclick="window.adminAsmCodes.beginEditTrade(' + t.id + ')" style="font-size:11px;padding:3px 8px;">Rename</button>' +
+            ' <button class="ee-btn secondary" onclick="window.adminAsmCodes.archiveTrade(' + t.id + ')" style="font-size:11px;padding:3px 8px;">Archive</button>');
+    var sysRows = systems.slice().sort(function (a, b) { return String(a.name).localeCompare(String(b.name)); }).map(asmSystemRowHTML).join('');
+    return '<div style="border:1px solid var(--border,#2a2f3a);border-radius:8px;margin-bottom:10px;overflow:hidden;">' +
+      '<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:rgba(255,255,255,0.03);flex-wrap:wrap;">' + header + '</div>' +
+      '<div style="padding:6px 12px 10px;">' +
+        (sysRows || '<div style="font-size:11px;color:var(--text-dim,#888);padding:4px 0;">No systems yet.</div>') +
+        '<div style="display:flex;gap:6px;align-items:flex-end;margin-top:8px;flex-wrap:wrap;">' +
+          asmMiniInput('System code', 'asmNewSysCode_' + escapeHTML(t.code), 'e.g. PV', 90) +
+          asmMiniInput('System name', 'asmNewSysName_' + escapeHTML(t.code), 'e.g. Panel', 150) +
+          asmMiniInput('Unit', 'asmNewSysUnit_' + escapeHTML(t.code), 'EA', 60) +
+          '<button class="ee-btn secondary" onclick="window.adminAsmCodes.addSystem(\'' + escapeHTML(t.code) + '\')" style="font-size:11px;padding:5px 9px;">+ Add system</button>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+  }
+
+  function asmSystemRowHTML(s) {
+    var st = _asmCodesState;
+    var isSeed = s.org == null;
+    var editing = st.editSystem === s.id && !isSeed;
+    if (editing) {
+      return '<div style="display:flex;gap:6px;align-items:center;padding:3px 0;">' +
+        '<input id="asmSysName_' + s.id + '" value="' + escapeHTML(s.name) + '" style="padding:4px 7px;font-size:12px;background:var(--card-bg,#141419);border:1px solid var(--border,#333);border-radius:6px;color:var(--text,#fff);width:150px;" />' +
+        '<input id="asmSysUnit_' + s.id + '" value="' + escapeHTML(s.default_unit || '') + '" placeholder="Unit" style="padding:4px 7px;font-size:12px;background:var(--card-bg,#141419);border:1px solid var(--border,#333);border-radius:6px;color:var(--text,#fff);width:56px;" />' +
+        '<button class="ee-btn primary" onclick="window.adminAsmCodes.saveSystem(' + s.id + ')" style="font-size:11px;padding:3px 8px;">Save</button>' +
+        '<button class="ee-btn secondary" onclick="window.adminAsmCodes.cancelEdit()" style="font-size:11px;padding:3px 8px;">Cancel</button>' +
+      '</div>';
+    }
+    return '<div style="display:flex;gap:8px;align-items:center;padding:3px 0;font-size:12px;">' +
+      '<span style="color:var(--text,#fff);">' + escapeHTML(s.name) + '</span>' +
+      '<span style="font-family:monospace;font-size:10px;color:var(--text-dim,#888);">' + escapeHTML(s.code) + '</span>' +
+      (s.default_unit ? '<span style="font-size:10px;color:#4fd1c5;">' + escapeHTML(s.default_unit) + '</span>' : '') +
+      (isSeed
+        ? '<span style="font-size:9px;text-transform:uppercase;color:#8a93a6;background:rgba(255,255,255,0.06);padding:1px 5px;border-radius:8px;">seed</span>'
+        : '<span style="margin-left:auto;"></span>' +
+          '<button class="ee-btn secondary" onclick="window.adminAsmCodes.beginEditSystem(' + s.id + ')" style="font-size:10px;padding:2px 7px;">Rename</button>' +
+          '<button class="ee-btn secondary" onclick="window.adminAsmCodes.archiveSystem(' + s.id + ')" style="font-size:10px;padding:2px 7px;">Archive</button>') +
+    '</div>';
+  }
+
+  (function () {
+    function reload() { renderOrgAssemblyTaxonomy(); }
+    function showErr(e) { _asmCodesState.err = (e && (e.error || e.message)) || 'Failed'; _asmCodesState.loading = false; paintOrgAsmCodes(); }
+    function done(p) { p.then(function (res) { if (res && res.error) return showErr(res); reload(); }).catch(showErr); }
+    function confirmThen(msg, fn) { if (window.p86Confirm) window.p86Confirm(msg, fn); else if (window.confirm(msg)) fn(); }
+    window.adminAsmCodes = {
+      addTrade: function () {
+        done(window.p86Api.assemblyTaxonomy.createTrade({
+          code: (document.getElementById('asmNewTradeCode') || {}).value || '',
+          name: (document.getElementById('asmNewTradeName') || {}).value || '',
+        }));
+      },
+      beginEditTrade: function (id) { _asmCodesState.editTrade = id; _asmCodesState.editSystem = null; paintOrgAsmCodes(); var el = document.getElementById('asmTradeName_' + id); if (el) el.focus(); },
+      cancelEdit: function () { _asmCodesState.editTrade = null; _asmCodesState.editSystem = null; paintOrgAsmCodes(); },
+      saveTradeName: function (id) { done(window.p86Api.assemblyTaxonomy.updateTrade(id, { name: (document.getElementById('asmTradeName_' + id) || {}).value || '' })); },
+      archiveTrade: function (id) { confirmThen('Archive this trade? Assemblies still using it must be reassigned first.', function () { done(window.p86Api.assemblyTaxonomy.updateTrade(id, { archived: true })); }); },
+      addSystem: function (tradeCode) {
+        done(window.p86Api.assemblyTaxonomy.createSystem({
+          trade_code: tradeCode,
+          code: (document.getElementById('asmNewSysCode_' + tradeCode) || {}).value || '',
+          name: (document.getElementById('asmNewSysName_' + tradeCode) || {}).value || '',
+          default_unit: (document.getElementById('asmNewSysUnit_' + tradeCode) || {}).value || '',
+        }));
+      },
+      beginEditSystem: function (id) { _asmCodesState.editSystem = id; _asmCodesState.editTrade = null; paintOrgAsmCodes(); },
+      saveSystem: function (id) { done(window.p86Api.assemblyTaxonomy.updateSystem(id, { name: (document.getElementById('asmSysName_' + id) || {}).value || '', default_unit: (document.getElementById('asmSysUnit_' + id) || {}).value || '' })); },
+      archiveSystem: function (id) { confirmThen('Archive this system? Assemblies still using it must be reassigned first.', function () { done(window.p86Api.assemblyTaxonomy.updateSystem(id, { archived: true })); }); },
+    };
+  })();
 
   // Public actions for the tag catalog (inline onclicks).
   window.adminTagCatalog = {
