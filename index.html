@@ -1039,7 +1039,7 @@
 
                         <div class="action-buttons">
                             <button onclick="openAddBuildingToJobModal()">&#x1F3D7; Add Building</button>
-                            <button onclick="openAddPhaseToJobModal()">&#x1F4CB; Add Phase</button>
+                            <button onclick="openAddPhaseToJobModal()">&#x1F4CB; Add Scope</button>
                             <button onclick="openAddSubToJobModal()">&#x1F477; Add Sub</button>
                         </div>
 
@@ -2186,7 +2186,7 @@
 
     <div id="addPhaseModal" class="modal">
         <div class="modal-content">
-            <div class="modal-header" id="phaseModalHeader">Add Phase Entry</div>
+            <div class="modal-header" id="phaseModalHeader">Add Scope</div>
             <!-- Single-building selector (hidden when phase is wired to multiple buildings) -->
             <div class="form-group" id="phaseBuildingWrap">
                 <label>Building</label>
@@ -2198,8 +2198,8 @@
                 <div id="phaseConnectedList" style="background:var(--surface);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:12px;"></div>
             </div>
             <div class="form-group">
-                <label>Phase</label>
-                <select id="phaseType" onchange="handleCustomSelectChange('phaseType', DEFAULT_PHASE_TYPES, 'p86-jobs-custom-phases', '-- Select Phase --')"></select>
+                <label>Scope</label>
+                <select id="phaseType" onchange="handleCustomSelectChange('phaseType', DEFAULT_PHASE_TYPES, 'p86-jobs-custom-phases', '-- Select Scope --')"></select>
             </div>
             <div class="form-row">
                 <div class="form-group">
@@ -3235,7 +3235,7 @@
     <script src="js/entity-card.js?v=6"></script>
     <!-- Lead/estimate context card mounted into #app-sidebar (uses p86EntityCard). -->
     <script src="js/entity-subnav.js?v=2"></script>
-    <script src="js/app.js?v=116"></script>
+    <script src="js/app.js?v=117"></script>
     <script src="js/search-clear.js?v=3"></script>
     <script src="js/sidebar-brand.js?v=2"></script>
     <!-- Guided tours engine + the Help & What's New center (patch
@@ -3312,7 +3312,7 @@
          estimate-preview + the upcoming change-order-editor. Loads
          BEFORE any of them so window.p86Pricing is ready. -->
     <script src="js/pricing-pipeline.js?v=1"></script>
-    <script src="js/jobs.js?v=166"></script>
+    <script src="js/jobs.js?v=167"></script>
     <script src="js/doc-import.js?v=2"></script>
     <script src="js/job-workflow-ui.js?v=5"></script>
     <!-- Reusable rich-text field (window.p86RichText) — shared WYSIWYG for

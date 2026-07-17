@@ -2886,7 +2886,7 @@ function renderJobsMain() {
             btnRow.innerHTML =
                 '<div class="jobs-action-icons">' +
                     '<button class="header-icon-btn" data-p86-icon="buildings" onclick="openAddBuildingToJobModal()" title="Add Building" aria-label="Add Building"></button>' +
-                    '<button class="header-icon-btn" data-p86-icon="phases" onclick="openAddPhaseToJobModal()" title="Add Phase" aria-label="Add Phase"></button>' +
+                    '<button class="header-icon-btn" data-p86-icon="phases" onclick="openAddPhaseToJobModal()" title="Add Scope" aria-label="Add Scope"></button>' +
                     '<button class="header-icon-btn" data-p86-icon="subs" onclick="openAddSubToJobModal()" title="Add Sub" aria-label="Add Sub"></button>' +
                     '<button class="header-icon-btn" data-p86-icon="add" onclick="openAddChangeOrderModal()" title="Add Change Order" aria-label="Add Change Order"></button>' +
                     '<button class="header-icon-btn" data-p86-icon="briefcase" onclick="openAddPOModal()" title="Add Purchase Order" aria-label="Add Purchase Order"></button>' +
@@ -5471,8 +5471,8 @@ function renderJobsMain() {
 
         function openAddPhaseToJobModal(preselectedBuildingId) {
             appState.editPhaseId = null;
-            document.getElementById('phaseModalHeader').textContent = 'Add Phase Entry';
-            document.getElementById('savePhaseBtn').innerHTML = '&#x1F4CB; Add Phase';
+            document.getElementById('phaseModalHeader').textContent = 'Add Scope';
+            document.getElementById('savePhaseBtn').innerHTML = '&#x1F4CB; Add Scope';
             document.getElementById('deletePhaseBtn').style.display = 'none';
 
             const buildings = appData.buildings.filter(b => b.jobId === appState.currentJobId);
@@ -5502,7 +5502,7 @@ function renderJobsMain() {
             if (!phase) return;
 
             appState.editPhaseId = phaseId;
-            document.getElementById('phaseModalHeader').textContent = 'Edit Phase Entry';
+            document.getElementById('phaseModalHeader').textContent = 'Edit Scope';
             document.getElementById('savePhaseBtn').innerHTML = '&#x1F4BE; Save Changes';
             document.getElementById('deletePhaseBtn').style.display = 'inline-block';
 

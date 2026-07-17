@@ -226,7 +226,7 @@
         }
 
         function populatePhaseTypeSelect() {
-            populateCustomSelect('phaseType', DEFAULT_PHASE_TYPES, 'p86-jobs-custom-phases', '-- Select Phase --');
+            populateCustomSelect('phaseType', DEFAULT_PHASE_TYPES, 'p86-jobs-custom-phases', '-- Select Scope --');
         }
         function populateSubTradeSelect() {
             populateCustomSelect('subTrade', DEFAULT_SUB_TRADES, 'p86-jobs-custom-trades', '-- Select Trade --');
