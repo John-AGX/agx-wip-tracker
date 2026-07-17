@@ -357,6 +357,66 @@
     return f.join(' ');
   }
 
+  // ── Research targets — coverage gaps the DB already knows about (seed-never-
+  // tuned / items not catalog-linked / price drift), each turned into a
+  // copy-ready web-research brief for the Claude extension. Derived entirely
+  // from the tuning overview already in _asmT.ov — no new server call. ────────
+  function asmTargets() {
+    return ((_asmT.ov && _asmT.ov.queue) || []).filter(function (q) {
+      return q.flags && (q.flags.seed_untuned || q.flags.unlinked_items || q.flags.drift_items);
+    });
+  }
+  function briefFor(q) {
+    var why = [];
+    if (q.flags.seed_untuned) why.push('seeded but never tuned against real prices');
+    if (q.flags.unlinked_items) why.push(q.flags.unlinked_items + ' item(s) not linked to our materials catalog');
+    if (q.flags.drift_items) why.push(q.flags.drift_items + ' item(s) with price drift over 10%');
+    return 'Research current pricing for the assembly "' + q.name + '" in AGX’s market (Central Florida). ' +
+      'This recipe is ' + (why.join('; ') || 'in need of verification') + '. ' +
+      'Find the current material unit price (with unit) for each component, confirm the labor/productivity rate, ' +
+      'and capture a source URL for every figure. Return the findings as components with price, unit and source ' +
+      'so they can be dropped into the Assembly Studio research inbox for 86 to build/tune.';
+  }
+  function targetsLeftHtml() {
+    var n = asmTargets().length;
+    return '<div style="font-size:9.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-dim,#9a9aa2);padding:2px 6px 8px;">Coverage gaps → research</div>' +
+      '<div style="font-size:12px;color:var(--text-dim,#9a9aa2);line-height:1.6;padding:0 6px 12px;">Recipes the database knows are weak. Copy a brief and hand it to the Claude extension to research on the web — it posts findings back to the inbox.</div>' +
+      (n ? '<button data-asmtgt-copyall style="width:100%;box-sizing:border-box;border:1px solid rgba(79,209,197,.4);background:rgba(79,209,197,.1);color:#4fd1c5;border-radius:8px;padding:7px 12px;font-size:12px;font-weight:600;cursor:pointer;">📋 Copy all ' + n + ' brief' + (n === 1 ? '' : 's') + '</button>' : '');
+  }
+  function targetsDetailHtml() {
+    var targets = asmTargets();
+    if (!targets.length) return '<div style="color:var(--text-dim,#888);font-size:12px;line-height:1.6;">🎉 No coverage gaps — every recipe is tuned and catalog-linked. New gaps show up here as you add seed recipes or as catalog prices drift.</div>';
+    return targets.map(function (q) {
+      return '<div style="border:1px solid var(--border,#33333a);border-radius:10px;padding:14px;margin-bottom:10px;">' +
+        '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;">' +
+          '<div style="font-size:14px;font-weight:700;">🧩 ' + esc(q.name) + '</div>' +
+          '<button data-asmtgt-copy="' + q.id + '" style="border:1px solid rgba(79,209,197,.4);background:rgba(79,209,197,.1);color:#4fd1c5;border-radius:8px;padding:5px 12px;font-size:12px;font-weight:600;cursor:pointer;flex:none;">📋 Copy brief</button>' +
+        '</div>' +
+        '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px;">' + asmFlags(q) + '</div>' +
+        '<div style="font-size:12px;line-height:1.6;color:var(--text-dim,#9a9aa2);background:var(--bg,#15151a);border:1px solid var(--border,#33333a);border-radius:8px;padding:10px;">' + esc(briefFor(q)) + '</div>' +
+      '</div>';
+    }).join('');
+  }
+  function copyText(t, okMsg) {
+    if (!t) return;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(t).then(function () { toast(okMsg || 'Copied'); }).catch(function () { toast('Copy failed', true); });
+    } else { toast('Copy not supported here', true); }
+  }
+  function wireTargets(el) {
+    el.querySelectorAll('[data-asmtgt-copy]').forEach(function (b) {
+      b.addEventListener('click', function () {
+        var q = asmTargets().filter(function (x) { return x.id === Number(b.dataset.asmtgtCopy); })[0];
+        if (q) copyText(briefFor(q), 'Brief copied — paste it to the Claude extension');
+      });
+    });
+    var all = el.querySelector('[data-asmtgt-copyall]');
+    if (all) all.addEventListener('click', function () {
+      var txt = asmTargets().map(function (q, i) { return (i + 1) + '. ' + briefFor(q); }).join('\n\n');
+      copyText(txt, 'All briefs copied');
+    });
+  }
+
   function paintAsmMain() {
     var el = document.getElementById('cc-asm-main');
     if (!el || !_asmT.ov) return;
@@ -383,10 +443,14 @@
         ';border-radius:8px;padding:5px 12px;font-size:11px;font-weight:600;cursor:pointer;">' + label + '</button>';
     };
     var rCount = (_asmR.counts && _asmR.counts.unprocessed) || 0;
+    var tgtCount = asmTargets().length;
     var leftCol, wsHtml;
     if (_asmR.mode === 'research') {
       leftCol = researchListHtml();
       wsHtml = researchDetailHtml();
+    } else if (_asmR.mode === 'targets') {
+      leftCol = targetsLeftHtml();
+      wsHtml = targetsDetailHtml();
     } else {
       leftCol = '<div style="font-size:9.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--text-dim,#9a9aa2);padding:2px 6px 8px;">Tuning queue — worst first</div>' +
         (queueHtml || '<div style="padding:12px;color:var(--text-dim,#888);font-size:12px;">No assemblies yet.</div>');
@@ -403,6 +467,7 @@
       '<div style="display:flex;gap:8px;margin-bottom:10px;">' +
         modeBtn('tuning', '🔧 Tuning queue') +
         modeBtn('research', '📥 Research inbox' + (rCount ? ' (' + rCount + ')' : '')) +
+        modeBtn('targets', '🎯 Targets' + (tgtCount ? ' (' + tgtCount + ')' : '')) +
       '</div>' +
       '<div style="display:grid;grid-template-columns:290px 1fr;gap:12px;align-items:start;">' +
         '<div style="background:var(--panel,#1c1c22);border:1px solid var(--border,#33333a);border-radius:10px;padding:8px;max-height:66vh;overflow:auto;">' + leftCol + '</div>' +
@@ -419,6 +484,7 @@
     var rf = el.querySelector('[data-asmt-refresh]');
     if (rf) rf.addEventListener('click', loadAssemblyTuning);
     if (_asmR.mode === 'research') { wireResearch(el); return; }
+    if (_asmR.mode === 'targets') { wireTargets(el); return; }
     el.querySelectorAll('[data-asmt-sel]').forEach(function (r) {
       r.addEventListener('click', function () { loadAsmDetail(Number(r.dataset.asmtSel)); });
     });
