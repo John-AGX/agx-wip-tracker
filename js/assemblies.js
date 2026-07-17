@@ -19,6 +19,51 @@
   var _list = [];          // last-fetched assemblies (list shape w/ unit_cost)
   var _editing = null;     // { header, items } while the editor overlay is open
   var _matTimer = null;    // material-search debounce
+  var _taxonomy = null;    // { trades:[{code,name}], systems:[{trade_code,code,name,default_unit}] }
+  var _collapsed = {};     // trade code → collapsed in the tree
+
+  function up(s) { return String(s == null ? '' : s).trim().toUpperCase(); }
+
+  // Client mirror of the server's normalizeCode (TRADE-SYSTEM-VARIANT).
+  function clientCode(t, s, v) {
+    var vv = up(v).replace(/[^A-Z0-9/]/g, '').slice(0, 10);
+    return [up(t).replace(/[^A-Z0-9]/g, ''), up(s).replace(/[^A-Z0-9]/g, ''), vv].filter(Boolean).join('-');
+  }
+
+  // Load the code registry once (cached). Refreshed on tab re-render.
+  function ensureTaxonomy() {
+    if (_taxonomy) return Promise.resolve(_taxonomy);
+    if (!window.p86Api || !window.p86Api.assemblyTaxonomy) { _taxonomy = { trades: [], systems: [] }; return Promise.resolve(_taxonomy); }
+    return window.p86Api.assemblyTaxonomy.list().then(function (res) {
+      _taxonomy = { trades: res.trades || [], systems: res.systems || [] };
+      return _taxonomy;
+    }).catch(function () { _taxonomy = { trades: [], systems: [] }; return _taxonomy; });
+  }
+  function tradeName(code) { var t = ((_taxonomy && _taxonomy.trades) || []).find(function (x) { return up(x.code) === up(code); }); return t ? t.name : (code || 'Unclassified'); }
+  function systemName(trade, code) { if (!code) return null; var s = ((_taxonomy && _taxonomy.systems) || []).find(function (x) { return up(x.trade_code) === up(trade) && up(x.code) === up(code); }); return s ? s.name : code; }
+
+  // Dropdown option builders. Preserve an unlisted current value so editing a
+  // legacy/free-text row doesn't silently drop its trade/system.
+  function tradeOptions(selected) {
+    var trades = (_taxonomy && _taxonomy.trades) || [];
+    var opts = '<option value="">— trade —</option>';
+    var found = trades.some(function (t) { return up(t.code) === up(selected); });
+    if (selected && !found) opts += '<option value="' + esc(selected) + '" selected>' + esc(selected) + ' (unlisted)</option>';
+    trades.forEach(function (t) { opts += '<option value="' + esc(t.code) + '"' + (up(selected) === up(t.code) ? ' selected' : '') + '>' + esc(t.name) + ' (' + esc(t.code) + ')</option>'; });
+    return opts;
+  }
+  function systemOptions(trade, selected) {
+    var systems = ((_taxonomy && _taxonomy.systems) || []).filter(function (s) { return up(s.trade_code) === up(trade); });
+    var opts = '<option value="">— system —</option>';
+    var found = systems.some(function (s) { return up(s.code) === up(selected); });
+    if (selected && !found) opts += '<option value="' + esc(selected) + '" selected>' + esc(selected) + ' (unlisted)</option>';
+    systems.forEach(function (s) { opts += '<option value="' + esc(s.code) + '"' + (up(selected) === up(s.code) ? ' selected' : '') + '>' + esc(s.name) + ' (' + esc(s.code) + ')</option>'; });
+    return opts;
+  }
+  function selWrap(label, id, inner) {
+    return '<label style="display:flex;flex-direction:column;gap:4px;font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-dim,#8a93a6);">' + esc(label) +
+      '<select id="' + id + '" style="background:rgba(255,255,255,0.04);border:1px solid var(--border,#2a2f3a);border-radius:6px;padding:7px 9px;color:var(--text,#fff);font-size:13px;">' + inner + '</select></label>';
+  }
 
   function esc(s) {
     if (s == null) return '';
@@ -32,54 +77,100 @@
     var host = document.getElementById('assemblies-list');
     if (!host) return;
     host.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);text-align:center;">Loading assemblies…</div>';
-    window.p86Api.assemblies.list().then(function (res) {
-      _list = res.assemblies || [];
+    Promise.all([window.p86Api.assemblies.list(), ensureTaxonomy()]).then(function (r) {
+      _list = (r[0] && r[0].assemblies) || [];
       paintList();
     }).catch(function (err) {
       host.innerHTML = '<div style="padding:20px;color:#e74c3c;text-align:center;">Failed to load: ' + esc(err.message) + '</div>';
     });
   }
 
-  function paintList() {
-    var host = document.getElementById('assemblies-list');
-    if (!host) return;
-    var q = (document.getElementById('assemblies-search') || { value: '' }).value.trim().toLowerCase();
-    var rows = _list.filter(function (a) {
-      if (!q) return true;
-      return ((a.name || '') + ' ' + (a.code || '') + ' ' + (a.trade || '')).toLowerCase().indexOf(q) !== -1;
-    });
-    var summary = document.getElementById('assemblies-summary');
-    if (summary) summary.textContent = rows.length + ' of ' + _list.length + ' assemblies';
-    if (!rows.length) {
-      host.innerHTML = '<div style="padding:28px;color:var(--text-dim,#888);text-align:center;">' +
-        (_list.length ? 'No matches.' : 'No assemblies yet. Build your first recipe — it becomes insertable on any estimate via the Materials drawer\'s 🧩 Assemblies tab.') + '</div>';
-      return;
-    }
-    var html = '<table class="dense-table"><thead><tr>' +
-      '<th style="text-align:left;">Assembly</th>' +
-      '<th style="text-align:left;width:110px;">Trade</th>' +
-      '<th style="text-align:right;width:130px;">Cost / unit</th>' +
-      '<th style="text-align:right;width:70px;">Items</th>' +
-      '<th style="text-align:left;width:80px;">Source</th>' +
-      '<th style="width:90px;"></th>' +
-    '</tr></thead><tbody>' +
-    rows.map(function (a) {
+  function emptyMsg() {
+    return '<div style="padding:28px;color:var(--text-dim,#888);text-align:center;">' +
+      (_list.length ? 'No matches.' : 'No assemblies yet. Build your first recipe — it becomes insertable on any estimate via the Materials drawer\'s 🧩 Assemblies tab.') + '</div>';
+  }
+
+  // Rows for a set of assemblies (shared by search-flat + tree sub-groups).
+  function assemblyRows(rows) {
+    return rows.map(function (a) {
       var warn = a.incomplete ? ' <span title="Some items have no price yet" style="color:#fbbf24;">⚠</span>' : '';
       return '<tr style="cursor:pointer;" onclick="p86Assemblies.openEditor(' + a.id + ')">' +
         '<td><strong style="color:var(--text,#fff);">' + esc(a.name) + '</strong>' +
-          (a.code ? ' <span style="font-family:monospace;font-size:10px;color:var(--text-dim,#888);">' + esc(a.code) + '</span>' : '') +
+          (a.code ? ' <span style="font-family:monospace;font-size:10px;color:var(--text-dim,#888);">' + esc(a.code) + '</span>' : ' <span style="font-size:10px;color:#fbbf24;">unclassified</span>') +
           (a.description ? '<div style="font-size:11px;color:var(--text-dim,#8a93a6);">' + esc(String(a.description).slice(0, 90)) + '</div>' : '') +
         '</td>' +
-        '<td>' + esc(a.trade || '—') + '</td>' +
         '<td style="text-align:right;font-family:monospace;color:#4fd1c5;">' + money(a.unit_cost) + ' / ' + esc(a.unit || 'EA') + warn + '</td>' +
         '<td style="text-align:right;font-family:monospace;">' + (a.item_count || 0) + '</td>' +
         '<td><span style="padding:1px 7px;border-radius:9px;font-size:10px;text-transform:uppercase;background:rgba(79,140,255,0.12);color:#4f8cff;">' + esc(a.source || 'manual') + '</span></td>' +
         '<td style="text-align:right;">' +
           '<button class="ee-btn ee-icon-btn ghost" onclick="event.stopPropagation();p86Assemblies.remove(' + a.id + ')" title="Delete">&#x1F5D1;</button>' +
         '</td></tr>';
-    }).join('') + '</tbody></table>';
+    }).join('');
+  }
+  function assemblyTable(rows, showHead) {
+    var head = showHead ? '<thead><tr>' +
+      '<th style="text-align:left;">Assembly</th>' +
+      '<th style="text-align:right;width:130px;">Cost / unit</th>' +
+      '<th style="text-align:right;width:60px;">Items</th>' +
+      '<th style="text-align:left;width:80px;">Source</th>' +
+      '<th style="width:50px;"></th></tr></thead>' : '';
+    return '<table class="dense-table" style="width:100%;">' + head + '<tbody>' + assemblyRows(rows) + '</tbody></table>';
+  }
+
+  function paintList() {
+    var host = document.getElementById('assemblies-list');
+    if (!host) return;
+    var q = (document.getElementById('assemblies-search') || { value: '' }).value.trim().toLowerCase();
+    var summary = document.getElementById('assemblies-summary');
+
+    // Search → flat filtered table (search shouldn't fight the tree).
+    if (q) {
+      var rows = _list.filter(function (a) {
+        return ((a.name || '') + ' ' + (a.code || '') + ' ' + (a.trade || '') + ' ' + (a.system || '') + ' ' + (a.variant || '')).toLowerCase().indexOf(q) !== -1;
+      });
+      if (summary) summary.textContent = rows.length + ' of ' + _list.length + ' assemblies';
+      host.innerHTML = rows.length ? assemblyTable(rows, true) : emptyMsg();
+      return;
+    }
+    if (summary) summary.textContent = _list.length + ' assemblies';
+    if (!_list.length) { host.innerHTML = emptyMsg(); return; }
+
+    // Tree: Trade → System.
+    var byTrade = {};
+    _list.forEach(function (a) {
+      var tc = up(a.trade) || '(UNCLASSIFIED)';
+      (byTrade[tc] = byTrade[tc] || []).push(a);
+    });
+    var tradeCodes = Object.keys(byTrade).sort(function (x, y) { return tradeName(x).localeCompare(tradeName(y)); });
+    var html = '';
+    tradeCodes.forEach(function (tc) {
+      var group = byTrade[tc];
+      var collapsed = !!_collapsed[tc];
+      html += '<div style="margin-bottom:6px;">' +
+        '<div onclick="p86Assemblies.toggleGroup(\'' + esc(tc) + '\')" style="cursor:pointer;display:flex;align-items:center;gap:8px;padding:8px 10px;background:rgba(255,255,255,0.03);border:1px solid var(--border,#2a2f3a);border-radius:8px;">' +
+          '<span style="width:12px;color:var(--text-dim,#8a93a6);">' + (collapsed ? '▸' : '▾') + '</span>' +
+          '<strong style="color:var(--text,#fff);">' + esc(tradeName(tc)) + '</strong>' +
+          (tc !== '(UNCLASSIFIED)' ? ' <span style="font-family:monospace;font-size:10px;color:var(--text-dim,#888);">' + esc(tc) + '</span>' : '') +
+          '<span style="margin-left:auto;font-size:11px;color:var(--text-dim,#8a93a6);">' + group.length + '</span>' +
+        '</div>';
+      if (!collapsed) {
+        var bySys = {};
+        group.forEach(function (a) { var sc = up(a.system) || ''; (bySys[sc] = bySys[sc] || []).push(a); });
+        var sysCodes = Object.keys(bySys).sort();
+        html += '<div style="padding:2px 0 4px 14px;">';
+        sysCodes.forEach(function (sc) {
+          var sysRows = bySys[sc].slice().sort(function (x, y) { return (x.name || '').localeCompare(y.name || ''); });
+          var sname = sc ? systemName(tc, sc) : 'General';
+          html += '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-dim,#8a93a6);padding:6px 4px 2px;">' + esc(sname) + (sc ? ' · ' + esc(sc) : '') + '</div>' + assemblyTable(sysRows, false);
+        });
+        html += '</div>';
+      }
+      html += '</div>';
+    });
     host.innerHTML = html;
   }
+
+  function toggleGroup(tc) { _collapsed[tc] = !_collapsed[tc]; paintList(); }
 
   // ── Editor overlay ─────────────────────────────────────────────────
   function ensureOverlay() {
@@ -98,14 +189,17 @@
     overlay.style.display = 'block';
     overlay.innerHTML = '<div style="max-width:940px;margin:0 auto;background:var(--card-bg,#141419);border:1px solid var(--border,#2a2f3a);border-radius:12px;padding:24px;color:var(--text-dim,#8a93a6);">Loading…</div>';
     if (id == null) {
-      _editing = {
-        header: { id: null, name: '', code: '', trade: '', unit: 'SF', description: '', source: 'manual' },
-        items: [], unitCost: 0
-      };
-      paintEditor();
+      ensureTaxonomy().then(function () {
+        _editing = {
+          header: { id: null, name: '', code: '', trade: '', system: '', variant: '', unit: 'SF', description: '', source: 'manual' },
+          items: [], unitCost: 0
+        };
+        paintEditor();
+      });
       return;
     }
-    window.p86Api.assemblies.get(id).then(function (res) {
+    Promise.all([window.p86Api.assemblies.get(id), ensureTaxonomy()]).then(function (r) {
+      var res = r[0];
       _editing = {
         header: res.assembly,
         items: (res.items || []).map(function (it) { return Object.assign({}, it); }),
@@ -156,12 +250,14 @@
             '<button class="ee-btn ghost" onclick="p86Assemblies.closeEditor()">✕</button>' +
           '</div>' +
         '</div>' +
-        '<div style="padding:16px 20px;display:grid;grid-template-columns:2fr 1fr 1fr 90px;gap:10px;">' +
+        '<div style="padding:16px 20px 4px;display:grid;grid-template-columns:2fr 1fr 1fr 1fr 80px;gap:10px;">' +
           fld('Name *', 'asmEd_name', h.name) +
-          fld('Code', 'asmEd_code', h.code) +
-          fld('Trade', 'asmEd_trade', h.trade) +
+          selWrap('Trade', 'asmEd_trade', tradeOptions(h.trade)) +
+          selWrap('System', 'asmEd_system', systemOptions(h.trade, h.system)) +
+          fld('Variant', 'asmEd_variant', h.variant) +
           fld('Unit', 'asmEd_unit', h.unit || 'SF') +
         '</div>' +
+        '<div style="padding:0 20px 10px;font-size:11px;color:var(--text-dim,#8a93a6);">Code: <span id="asmEd_codePreview" style="font-family:monospace;color:#4fd1c5;font-size:13px;">' + (esc(clientCode(h.trade, h.system, h.variant)) || '—') + '</span> <span style="opacity:.7;">· auto-derived from Trade · System · Variant (kept unique)</span></div>' +
         '<div style="padding:0 20px 12px;">' + fld('Description', 'asmEd_desc', h.description) + '</div>' +
         '<div style="padding:0 20px 8px;font-size:11px;color:var(--text-dim,#8a93a6);">Every quantity below is <b>per 1 ' + esc(h.unit || 'unit') + '</b> of installed work. Material rows with a blank unit cost pull the LIVE catalog price.</div>' +
         '<div style="padding:0 20px 14px;" id="asmEd_items">' + itemsTableHtml() + '</div>' +
@@ -175,6 +271,33 @@
       '</div>';
     overlay.innerHTML = html;
     wireItemRows();
+    wireHeaderFields();
+  }
+
+  // Trade/System/Variant → live code preview + system-list refresh + unit prefill.
+  function wireHeaderFields() {
+    var overlay = ensureOverlay();
+    var tradeEl = overlay.querySelector('#asmEd_trade');
+    var sysEl = overlay.querySelector('#asmEd_system');
+    var varEl = overlay.querySelector('#asmEd_variant');
+    var unitEl = overlay.querySelector('#asmEd_unit');
+    function recompute() {
+      var prev = overlay.querySelector('#asmEd_codePreview');
+      if (prev) prev.textContent = clientCode(tradeEl && tradeEl.value, sysEl && sysEl.value, varEl && varEl.value) || '—';
+    }
+    if (tradeEl) tradeEl.addEventListener('change', function () {
+      _editing.header.trade = tradeEl.value;
+      _editing.header.system = '';
+      if (sysEl) sysEl.innerHTML = systemOptions(tradeEl.value, '');  // stable element, fresh options
+      recompute();
+    });
+    if (sysEl) sysEl.addEventListener('change', function () {
+      _editing.header.system = sysEl.value;
+      var s = ((_taxonomy && _taxonomy.systems) || []).find(function (x) { return up(x.trade_code) === up(tradeEl && tradeEl.value) && up(x.code) === up(sysEl.value); });
+      if (s && s.default_unit && unitEl && (!unitEl.value.trim() || unitEl.value === 'SF')) unitEl.value = s.default_unit;
+      recompute();
+    });
+    if (varEl) varEl.addEventListener('input', function () { _editing.header.variant = varEl.value; recompute(); });
   }
 
   function fld(label, id, val) {
@@ -320,8 +443,9 @@
     if (!_editing) return;
     var h = {
       name: (document.getElementById('asmEd_name') || {}).value || '',
-      code: (document.getElementById('asmEd_code') || {}).value || '',
       trade: (document.getElementById('asmEd_trade') || {}).value || '',
+      system: (document.getElementById('asmEd_system') || {}).value || '',
+      variant: (document.getElementById('asmEd_variant') || {}).value || '',
       unit: (document.getElementById('asmEd_unit') || {}).value || 'EA',
       description: (document.getElementById('asmEd_desc') || {}).value || ''
     };
@@ -371,6 +495,7 @@
     closeEditor: closeEditor,
     addItem: addItem,
     removeItem: removeItem,
+    toggleGroup: toggleGroup,
     save: save,
     remove: remove
   };
