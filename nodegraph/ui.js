@@ -170,6 +170,18 @@ function updateT1Progress(){
     var uPc = E.wireUnitPct(w);
     if(uPc != null) w.pctComplete = uPc;
   });
+  // Phase-driven scopes: a scope with a phases[] breakdown derives its % from the
+  // weighted completion of its phases (E.scopePctFromPhases). Flush that onto its
+  // outgoing scope→building wires so every wire.pctComplete reader (building %,
+  // earned revenue, the scope-row display) stays consistent — overriding any
+  // stale unit/manual value left on those wires.
+  nodes.forEach(function(n){
+    if(n.type!=='t2') return;
+    var sp = E.scopePctFromPhases(n);
+    if(sp==null) return;
+    sp = Math.round(sp*10)/10;
+    wires.forEach(function(w){ if(w.fromNode===n.id) w.pctComplete = sp; });
+  });
   nodes.forEach(function(n){
     if(n.type==='t1'){
       n.pctComplete = Math.round(E.getT1WeightedPct(n) * 10) / 10;
@@ -2610,7 +2622,7 @@ var CREATE_MODAL={
 };
 // Open the same overview-panel modal used to create entities; on save (modal closes
 // with a new entry present), invoke cb(newEntry). On cancel, cb(null).
-function openEntityCreateModal(type, cb){
+function openEntityCreateModal(type, cb, preselectId){
   // Sub gets a special path: open the GLOBAL directory modal
   // (agxSubs.openNew) so the new sub lives in appData.subsDirectory
   // (and is server-persisted) instead of being duplicated as an
@@ -2655,7 +2667,11 @@ function openEntityCreateModal(type, cb){
   // Snapshot existing IDs so we can detect the new entry after save
   var before={};
   getJobEntries(type).forEach(function(e){ before[e.id]=1; });
-  fn();
+  // Preselect the building the scope is being spawned under, so the "Create New
+  // Scope" modal doesn't open on "-- Select Building --" and save a scope with
+  // no building link (the "added scope doesn't show under the building" bug).
+  // Openers that don't take a preselect simply ignore the arg.
+  fn(preselectId);
   // The app toggles modals via the .active CLASS (openModal/closeModal), NOT inline
   // style.display — so detect the real OPEN→CLOSE transition on class changes. fn()
   // opens synchronously, so seed wasOpen from the current (already-open) state; the
@@ -3791,6 +3807,59 @@ function luApply(bn, act, id){
   else if(act==='del-unit'){ U=luById(bn.units,id); if(U) bn.units=bn.units.filter(function(x){ return x.id!==id; }); }
 }
 
+// ── Scope → PHASES (nested completion breakdown) ─────────────────────────────
+// A scope (t2) can be broken into weighted phases (Demo, Putback, …). Each phase
+// carries a weight (share of the scope, default 1 = equal) and a % complete; the
+// scope's % = E.scopePctFromPhases(node) rolls up to the building/job unchanged.
+// Which scopes are expanded on the building card (transient — NOT persisted).
+var ngOpenScopes={};
+function scopePhasesHtml(k){
+  var ph=Array.isArray(k.phases)?k.phases:[];
+  var h='<div class="ng-ph-editor" style="padding:2px 0 8px 26px;">';
+  if(!ph.length){
+    h+='<div style="color:#8b90a5;font-size:11px;line-height:1.5;padding:2px 0 6px;">Break this scope into steps (e.g. Demo, Putback). Each carries a weight and a % that roll up to the scope — and up to the building.</div>';
+  } else {
+    ph.forEach(function(p){
+      var pc=Number(p.pct); pc=(!(pc>=0))?0:(pc>100?100:pc);
+      var col=pc>=100?'#34d399':pc>=50?'#fbbf24':'#4f8cff';
+      var wt=(Number(p.weight)>0)?Number(p.weight):1;
+      h+='<div class="ng-ph-row" style="display:flex;align-items:center;gap:6px;padding:2px 0;">'
+        +'<button data-ph-act="ph-done" data-scope="'+k.id+'" data-ph="'+p.id+'" title="'+(pc>=100?'Complete — tap to clear':'Mark complete')+'" style="flex:0 0 auto;border:0;background:transparent;cursor:pointer;color:'+(pc>=100?'#34d399':'#8b90a5')+';font-size:13px;width:16px;line-height:1;">'+(pc>=100?'✓':'○')+'</button>'
+        +'<span data-ph-act="ph-rename" data-scope="'+k.id+'" data-ph="'+p.id+'" title="Rename" style="flex:1 1 auto;min-width:0;cursor:pointer;font-size:12px;color:#d6d9e6;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+luEsc(p.name||'Phase')+'</span>'
+        +'<span data-ph-act="ph-weight" data-scope="'+k.id+'" data-ph="'+p.id+'" title="Weight — this phase’s share of the scope" style="cursor:pointer;flex:0 0 auto;color:#8b90a5;font-size:9px;font-family:\'Courier New\',monospace;">w'+wt+'</span>'
+        +'<span data-ph-act="ph-pct" data-scope="'+k.id+'" data-ph="'+p.id+'" title="Set % complete" style="cursor:pointer;flex:0 0 auto;color:'+col+';font-family:\'Courier New\',monospace;font-size:11px;min-width:34px;text-align:right;">'+Math.round(pc)+'%</span>'
+        +'<button data-ph-act="ph-del" data-scope="'+k.id+'" data-ph="'+p.id+'" title="Remove phase" style="flex:0 0 auto;border:0;background:transparent;cursor:pointer;color:#6b6f82;font-size:12px;width:14px;line-height:1;">×</button>'
+        +'</div>';
+    });
+  }
+  h+='<button data-ph-act="ph-add" data-scope="'+k.id+'" style="margin-top:4px;border:1px dashed #3a3f52;background:transparent;color:#a78bfa;border-radius:6px;padding:3px 10px;font-size:11px;cursor:pointer;">+ Add phase</button>';
+  h+='</div>';
+  return h;
+}
+function phApply(sc, act, phId){
+  if(!sc) return;
+  if(!Array.isArray(sc.phases)) sc.phases=[];
+  var ph=sc.phases, p, nm, v;
+  function byId(id){ return ph.filter(function(x){ return x.id===id; })[0]; }
+  if(act==='ph-toggle'){ ngOpenScopes[sc.id]=!ngOpenScopes[sc.id]; return; }
+  if(act==='ph-add'){
+    nm=prompt('Phase name (e.g. Demo, Putback):',''); if(nm==null) return;
+    nm=nm.trim()||('Phase '+(ph.length+1));
+    ph.push({ id:luUid('ph'), name:nm, weight:1, pct:0 });
+    ngOpenScopes[sc.id]=true;
+    // A scope with phases is phase-driven — take its wire off unit-mode so the
+    // phase math (not building units) drives its %.
+    E.wires().forEach(function(w){ if(w.fromNode===sc.id && w.trackMode==='units') w.trackMode='percent'; });
+    return;
+  }
+  p=byId(phId); if(!p) return;
+  if(act==='ph-done'){ p.pct=(Number(p.pct)>=100)?0:100; }
+  else if(act==='ph-pct'){ v=prompt('% complete for "'+(p.name||'phase')+'" (0–100):', Math.round(Number(p.pct)||0)); if(v==null) return; v=parseFloat(v); if(!isNaN(v)) p.pct=Math.max(0,Math.min(100,v)); }
+  else if(act==='ph-weight'){ v=prompt('Weight for "'+(p.name||'phase')+'" (relative share of the scope; default 1):', (Number(p.weight)>0?Number(p.weight):1)); if(v==null) return; v=parseFloat(v); if(!isNaN(v)&&v>0) p.weight=v; } // reject 0/negative — a 0 would render as 'w1' but contribute nothing (displayed≠effective)
+  else if(act==='ph-rename'){ nm=prompt('Phase name:', p.name||''); if(nm&&nm.trim()) p.name=nm.trim(); }
+  else if(act==='ph-del'){ sc.phases=ph.filter(function(x){ return x.id!==phId; }); }
+}
+
 function renderBuildingStructure(panel, sel){
   var el=panel.querySelector('.ng-sp-struct'); if(!el) return;
   if(!sel.levels) sel.levels=[]; if(!sel.units) sel.units=[];
@@ -3963,7 +4032,8 @@ function spawnChildNode(parentId, childType){
     showDataPicker(childType, function(entry, focused){
       if(focused) return;
       if(entry){ var nn=E.addNode(childType, px, py, entryLabel(childType,entry), entry); if(nn){ autoWireFromData(nn, entry); wireToParent(nn); } }
-      else openEntityCreateModal(childType, function(ne){ if(ne){ var n2=E.addNode(childType, px, py, entryLabel(childType,ne), ne); if(n2){ autoWireFromData(n2, ne); wireToParent(n2); } } });
+      else { var _bn=bId?E.findNode(bId):null, _preBId=(_bn&&_bn.data&&_bn.data.id)||null; // preselect the owning building (appData id, NOT graph node id) so a scope spawned from a building attaches to it
+        openEntityCreateModal(childType, function(ne){ if(ne){ var n2=E.addNode(childType, px, py, entryLabel(childType,ne), ne); if(n2){ autoWireFromData(n2, ne); wireToParent(n2); } } }, _preBId); }
     });
   } else {
     var d=E.DEFS[childType]||{}, label=d.label||childType;
@@ -4051,21 +4121,29 @@ function childGroupsHtml(sel){
       var bUnits=(sel.units&&sel.units.length)?sel.units.length:0;
       rows=list.map(function(k){
         var w=E.wires().find(function(x){ return x.fromNode===k.id && x.toNode===sel.id; });
-        var isUnits=!!(w && w.trackMode==='units' && bUnits>0);
+        var phList=Array.isArray(k.phases)?k.phases:[];
+        var hasPh=phList.length>0;
+        var isUnits=!hasPh && !!(w && w.trackMode==='units' && bUnits>0);
         var uDone=w?Math.max(0,Math.min(w.unitsDone||0,bUnits)):0;
-        var wpc=w?(w.pctComplete||0):0;
+        var wpc=hasPh ? (E.scopePctFromPhases(k)||0) : (w?(w.pctComplete||0):0);
         var wpcColor=wpc>=100?'#34d399':wpc>=50?'#fbbf24':'#4f8cff';
         var sel1="event.stopPropagation();window.p86NgSelect&&window.p86NgSelect('"+k.id+"')";
+        var open=!!ngOpenScopes[k.id];
         var r='<div class="ng-cg-row ng-cg-scope">'
+          +'<span class="ng-cg-cvt" data-ph-act="ph-toggle" data-scope="'+k.id+'" title="'+(hasPh?(phList.length+' phase'+(phList.length===1?'':'s')+' — expand'):'Break into phases')+'" style="cursor:pointer;flex:0 0 auto;width:14px;text-align:center;color:'+(hasPh?'#a78bfa':'#6b6f82')+';font-size:10px;">'+(open?'▾':'▸')+'</span>'
           +'<span class="ng-cg-ic" onclick="'+sel1+'">'+ngTypeIco(k.type)+'</span>'
           +'<span class="ng-cg-nm" onclick="'+sel1+'" title="Open on canvas">'+luEsc(k.label||k.type)+'</span>';
-        if(bUnits>0){
-          r+='<span class="ng-scope-mode" data-scope-mode-phase="'+k.id+'" data-scope-mode-bldg="'+sel.id+'" title="'+(isUnits?'Tracking by units — switch to percent':'Switch to unit check-off')+'" style="cursor:pointer;flex:0 0 auto;color:'+(isUnits?'#34d399':'#8b90a5')+';font-size:12px;width:16px;text-align:center;">'+(isUnits?'▦':'%')+'</span>';
-        }
-        if(isUnits){
-          r+='<span title="Driven by the units checked off" style="flex:0 0 auto;color:'+wpcColor+';font-family:\'Courier New\',monospace;font-size:11px;min-width:34px;text-align:right;">'+Math.round(wpc)+'%</span>';
-        } else if(w){
-          r+='<span class="ng-wire-pct" data-wire-pct-phase="'+k.id+'" data-wire-pct-bldg="'+sel.id+'" title="Click to edit % complete" style="cursor:pointer;flex:0 0 auto;color:'+wpcColor+';font-family:\'Courier New\',monospace;font-size:11px;min-width:34px;text-align:right;">'+Math.round(wpc)+'%</span>';
+        if(hasPh){
+          r+='<span title="Rolled up from '+phList.length+' weighted phase'+(phList.length===1?'':'s')+'" style="flex:0 0 auto;color:'+wpcColor+';font-family:\'Courier New\',monospace;font-size:11px;min-width:34px;text-align:right;">'+Math.round(wpc)+'%</span>';
+        } else {
+          if(bUnits>0){
+            r+='<span class="ng-scope-mode" data-scope-mode-phase="'+k.id+'" data-scope-mode-bldg="'+sel.id+'" title="'+(isUnits?'Tracking by units — switch to percent':'Switch to unit check-off')+'" style="cursor:pointer;flex:0 0 auto;color:'+(isUnits?'#34d399':'#8b90a5')+';font-size:12px;width:16px;text-align:center;">'+(isUnits?'▦':'%')+'</span>';
+          }
+          if(isUnits){
+            r+='<span title="Driven by the units checked off" style="flex:0 0 auto;color:'+wpcColor+';font-family:\'Courier New\',monospace;font-size:11px;min-width:34px;text-align:right;">'+Math.round(wpc)+'%</span>';
+          } else if(w){
+            r+='<span class="ng-wire-pct" data-wire-pct-phase="'+k.id+'" data-wire-pct-bldg="'+sel.id+'" title="Click to edit % complete" style="cursor:pointer;flex:0 0 auto;color:'+wpcColor+';font-family:\'Courier New\',monospace;font-size:11px;min-width:34px;text-align:right;">'+Math.round(wpc)+'%</span>';
+          }
         }
         r+='</div>';
         if(isUnits){
@@ -4076,6 +4154,7 @@ function childGroupsHtml(sel){
           r+='<span style="margin-left:5px;color:#8b90a5;font-family:\'Courier New\',monospace;font-size:9px;">'+uDone+' / '+bUnits+'</span>';
           r+='</div>';
         }
+        if(open) r+=scopePhasesHtml(k);
         return r;
       }).join('');
     } else {
@@ -4308,6 +4387,11 @@ function initEvents(){
     if(jchip && !e.target.closest('input')){ e.preventDefault(); e.stopPropagation(); jobFieldEdit(jchip); return; }
     var luEl=e.target.closest('[data-lu-act]');
     if(luEl){ e.preventDefault(); e.stopPropagation(); var bn=selN&&E.findNode(selN); if(!bn||bn.type!=='t1') return; luApply(bn, luEl.getAttribute('data-lu-act'), luEl.getAttribute('data-id')); if(E.saveGraph) E.saveGraph(); renderInspector(); return; }
+    // Scope → nested phases (Demo/Putback…): mark off / weight / add from the
+    // building card. updateT1Progress flushes the phase-derived % up to the
+    // scope, building, and job before we re-render.
+    var phEl=e.target.closest('[data-ph-act]');
+    if(phEl){ e.preventDefault(); e.stopPropagation(); var scN=E.findNode(phEl.getAttribute('data-scope')); if(scN){ phApply(scN, phEl.getAttribute('data-ph-act'), phEl.getAttribute('data-ph')); updateT1Progress(); if(E.saveGraph) E.saveGraph(); } renderInspector(); return; }
     var ipe=e.target.closest('[data-prog-edit]');
     if(ipe && !e.target.closest('input')){ e.preventDefault(); e.stopPropagation(); progChipEdit(ipe); return; }
     var iprc=e.target.closest('[data-phase-rev]');
@@ -6730,7 +6814,21 @@ function positionGraphTab(){
   var tab=document.getElementById('nodeGraphTab');
   if(!tab||!tab.classList.contains('active')) return;
   var header=document.querySelector('header');
-  tab.style.top=(header&&header.offsetHeight>0)?(header.offsetHeight+'px'):'0px';
+  var top=(header&&header.offsetHeight>0)?header.offsetHeight:0;
+  // Keep the job metrics strip (#jh-strip-detached — the Total Income / Costs /
+  // % Complete / Revenue / Profit / Margin chips that sit just below the header
+  // in the page flow) VISIBLE above the Site Map, instead of being covered by
+  // this fixed overlay. Start the map at the strip's bottom edge. Only while the
+  // header is showing — Maximize hides the header for a full-bleed map, and the
+  // strip goes with it.
+  if(top>0){
+    var strip=document.getElementById('jh-strip-detached');
+    if(strip && strip.offsetParent!==null && strip.offsetHeight>0){
+      var sb=strip.getBoundingClientRect().bottom;
+      if(sb>top) top=sb;
+    }
+  }
+  tab.style.top=Math.round(top)+'px';
   var _appSb=document.getElementById('app-sidebar');
   tab.style.left=(_appSb&&_appSb.offsetParent!==null&&_appSb.offsetWidth>0)?(_appSb.offsetWidth+'px'):'0';
 }
@@ -6859,7 +6957,7 @@ window.openNodeGraph=function(jid){
   }
   if(jid && jid!==E.job()){
     E.job(jid);
-    _spOrigin=null; _spOriginGraph=null; _spOriginJob=null; _geoPhotos=[]; _geoPhotosJob=null; _geocoding=false; _fannedSet={}; // drop geo caches + fan state: avoid cross-job staleness
+    _spOrigin=null; _spOriginGraph=null; _spOriginJob=null; _geoPhotos=[]; _geoPhotosJob=null; _geocoding=false; _fannedSet={}; ngOpenScopes={}; // drop geo caches + fan state + scope-expand state: avoid cross-job staleness (node ids collide across jobs)
     E.setNodes([]); E.setWires([]); E.setNid(1);
     if(E.setMeasurements) E.setMeasurements([]); // drop survey measurements too, so a fresh job (populate path) never inherits the previous job's
     if(!E.loadGraph()){ populate(); }

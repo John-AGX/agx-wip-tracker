@@ -3540,9 +3540,15 @@ function renderJobsMain() {
                 _reconTxt = ' <span style="color:var(--text-dim);">of</span> <b style="font-family:monospace;">' + formatCurrency(_recon.contract) + '</b> ' +
                     '<span style="color:' + _rc + ';font-weight:600;">' + _rtxt + '</span>';
             }
+            // Total unit count across all buildings (units live on each building's
+            // structure, synced onto the record) — a quick at-a-glance tally under
+            // the building count.
+            var _totalUnits = buildings.reduce(function (s, b) { return s + ((b.units && b.units.length) || 0); }, 0);
             var summaryHTML =
                 '<div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin:0 0 8px;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--card-bg,#141419);font-size:11.5px;">' +
-                    '<span style="color:var(--text-dim);">' + buildings.length + ' buildings</span>' +
+                    '<span style="color:var(--text-dim);display:inline-flex;flex-direction:column;line-height:1.25;">' + buildings.length + ' buildings' +
+                        '<span style="font-size:9.5px;color:var(--text-dim,#888);">' + _totalUnits + ' unit' + (_totalUnits === 1 ? '' : 's') + ' total</span>' +
+                    '</span>' +
                     '<span style="color:var(--text-dim);">Budget <b style="color:var(--accent);font-family:monospace;">' + formatCurrency(totalBudget) + '</b>' + _reconTxt + '</span>' +
                     '<span style="color:var(--text-dim);">Spent <b style="color:var(--orange,#e0a458);font-family:monospace;">' + formatCurrency(totalSpent) + '</b></span>' +
                     '<span style="color:var(--text-dim);">Var <b style="color:' + (_totalVar >= 0 ? 'var(--green)' : 'var(--red)') + ';font-family:monospace;">' + formatCurrency(_totalVar) + '</b></span>' +

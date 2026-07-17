@@ -720,8 +720,34 @@ function getBuildingAllocatedRevenue(t1n){
 // Falls back to the node's own pctComplete when NO wires have been set at all.
 // Once any wire has a pct, unset wires count as 0% so partial progress
 // is reflected proportionally across all allocations.
+// A scope (t2) can break its completion into weighted PHASES — node.phases[] =
+// [{id,name,weight,pct}] (e.g. a Gutter scope → Demo + Putback). The scope's %
+// is the weight-weighted average of its phases' % (weights default equal). When
+// a scope has no phase breakdown this returns null and the caller keeps the
+// existing units/wire/manual % — so pre-phase jobs are unchanged. This is the
+// single source of the phase→scope math (used by the updateT1Progress flush,
+// which then carries it up to the building/job/WIP rollups unchanged).
+function scopePctFromPhases(n){
+  if(!n || n.type !== 't2') return null;
+  var ph = n.phases;
+  if(!Array.isArray(ph) || !ph.length) return null;
+  var wSum = 0, acc = 0, i;
+  for(i=0;i<ph.length;i++){
+    var w = Number(ph[i].weight); if(!(w > 0)) w = 0;
+    var pc = Number(ph[i].pct); if(!(pc >= 0)) pc = 0; if(pc > 100) pc = 100;
+    wSum += w; acc += w * pc;
+  }
+  if(wSum <= 0){ // all weights zero → fall back to a plain average
+    var s = 0; for(i=0;i<ph.length;i++){ var p2 = Number(ph[i].pct)||0; s += (p2<0?0:(p2>100?100:p2)); }
+    return s / ph.length;
+  }
+  return acc / wSum;
+}
+
 function getT2WeightedPct(t2n){
   if(!t2n || (t2n.type !== 't2' && t2n.type !== 'co')) return (t2n && t2n.pctComplete) || 0;
+  // Phase-driven scope: its own phase breakdown is authoritative over wires.
+  if(t2n.type === 't2'){ var _sp = scopePctFromPhases(t2n); if(_sp != null) return _sp; }
   var aw = (t2n.type === 'co') ? getCOAllocWires(t2n.id) : getPhaseAllocWires(t2n.id);
   if(!aw.length) return t2n.pctComplete || 0;
   var anyPct = aw.some(function(w){ return w.pctComplete != null; });
@@ -804,18 +830,21 @@ function getT1WeightedPct(t1n){
       rev = (r.src.revenue || 0);
     }
     var weight = ap * rev;
-    // Unit-mode wire → derive from units-done ÷ building units; else the wire's
-    // own pctComplete; else the source node's pctComplete.
+    // Phase-driven scope → its weighted phase % (authoritative over the wire);
+    // else unit-mode wire → units-done ÷ building units; else the wire's own
+    // pctComplete; else the source node's pctComplete.
+    var _sp = (r.src.type === 't2') ? scopePctFromPhases(r.src) : null;
     var _uPc = wireUnitPct(r.w);
-    var pc = (_uPc != null) ? _uPc : ((r.w.pctComplete != null) ? r.w.pctComplete : (r.src.pctComplete || 0));
+    var pc = (_sp != null) ? _sp : ((_uPc != null) ? _uPc : ((r.w.pctComplete != null) ? r.w.pctComplete : (r.src.pctComplete || 0)));
     sumPct += pc * weight; sumW += weight;
   });
   if(sumW === 0){
     var sW=0,sP=0;
     incoming.forEach(function(r){
       var ap = (r.w.allocPct != null) ? r.w.allocPct : 100;
+      var _sp2 = (r.src.type === 't2') ? scopePctFromPhases(r.src) : null;
       var _uPc2 = wireUnitPct(r.w);
-      var pc = (_uPc2 != null) ? _uPc2 : ((r.w.pctComplete != null) ? r.w.pctComplete : (r.src.pctComplete || 0));
+      var pc = (_sp2 != null) ? _sp2 : ((_uPc2 != null) ? _uPc2 : ((r.w.pctComplete != null) ? r.w.pctComplete : (r.src.pctComplete || 0)));
       sP += pc*ap; sW += ap;
     });
     return sW === 0 ? 0 : sP/sW;
@@ -1036,6 +1065,7 @@ function buildGraphState(){
         levels: (n.type==='t1' && n.levels && n.levels.length) ? n.levels : null, // L/U Phase 1: floors (additive; flat buildings have none)
         units:  (n.type==='t1' && n.units  && n.units.length)  ? n.units  : null, // L/U Phase 1: units, each optionally on a level (unit.levelId)
         heightM: (n.type==='t1' && isFinite(n.heightM) && n.heightM>0) ? n.heightM : null, // 3D extrusion override in meters (additive; levels-derived when absent)
+        phases: (n.type==='t2' && Array.isArray(n.phases) && n.phases.length) ? n.phases : null, // Scope→nested-phases: per-scope weighted % breakdown (additive; scopes w/o phases have none)
         dataId: n.data ? n.data.id : null
       };
     }),
@@ -1267,7 +1297,8 @@ function restoreSnapshot(){
       polygon:sn.polygon||null, // traced building footprint (guard so pre-polygon snapshots restore fine)
       levels:sn.levels||[], // L/U Phase 1: floors (guard so pre-L/U snapshots restore fine)
       units:sn.units||[],   // L/U Phase 1: units, each optionally on a level (unit.levelId)
-      heightM:sn.heightM||null // 3D extrusion override (guard so pre-height snapshots restore fine)
+      heightM:sn.heightM||null, // 3D extrusion override (guard so pre-height snapshots restore fine)
+      phases:sn.phases||null // Scope→nested-phases breakdown (guard so pre-phases snapshots restore fine)
     });
   });
   // Persist the restore as the new auto-save state too, so the user
@@ -1343,6 +1374,7 @@ function loadGraph(){
       levels:sn.levels||[], // L/U Phase 1: floors (guard so pre-L/U graphs load fine)
       units:sn.units||[],   // L/U Phase 1: units, each optionally on a level (unit.levelId)
       heightM:sn.heightM||null, // 3D extrusion override (guard so pre-height graphs load fine)
+      phases:sn.phases||null, // Scope→nested-phases breakdown (guard so pre-phases graphs load fine)
     };
     nodes.push(n);
   });
@@ -1597,6 +1629,7 @@ return {
   getPhaseRevenueToBuilding:getPhaseRevenueToBuilding, getCOIncomeToParent:getCOIncomeToParent,
   getBuildingAllocatedRevenue:getBuildingAllocatedRevenue,
   getT2WeightedPct:getT2WeightedPct, getT1WeightedPct:getT1WeightedPct, wireUnitPct:wireUnitPct,
+  scopePctFromPhases:scopePctFromPhases,
   getWIPWeightedPct:getWIPWeightedPct, getT2ShareToT1:getT2ShareToT1,
   fmtC:fmtC, fmtP:fmtP, fmtV:fmtV,
   saveGraph:saveGraph, loadGraph:loadGraph,
