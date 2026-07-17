@@ -24,7 +24,8 @@ router.get('/', requireAuth, requireCapability('ESTIMATES_VIEW'), async (req, re
       const cost = asm.resolveCost(a.id, graph);
       out.push({
         id: a.id, code: a.code, name: a.name, description: a.description,
-        trade: a.trade, category: a.category, unit: a.unit, source: a.source,
+        trade: a.trade, system: a.system, variant: a.variant,
+        category: a.category, unit: a.unit, source: a.source,
         is_hidden: a.is_hidden, notes: a.notes, updated_at: a.updated_at,
         item_count: (graph.itemsBy.get(a.id) || []).length,
         unit_cost: cost.unitCost, incomplete: cost.incomplete, cycle: cost.cycle,
@@ -34,6 +35,19 @@ router.get('/', requireAuth, requireCapability('ESTIMATES_VIEW'), async (req, re
     res.json({ assemblies: out });
   } catch (e) {
     console.error('GET /api/assemblies error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── GET /api/assemblies/suggest-code — canonical code for parts + availability
+// (must be declared before /:id so it isn't captured as an id).
+router.get('/suggest-code', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req, res) => {
+  try {
+    const header = { trade: req.query.trade, system: req.query.system, variant: req.query.variant };
+    const v = await asm.validateAgainstRegistry(pool, req.user.organization_id, header, {});
+    res.json({ code: v.code || null, available: !!v.ok, error: v.ok ? null : v.error });
+  } catch (e) {
+    console.error('GET /api/assemblies/suggest-code error:', e);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -50,7 +64,8 @@ router.get('/:id', requireAuth, requireCapability('ESTIMATES_VIEW'), async (req,
     res.json({
       assembly: {
         id: a.id, code: a.code, name: a.name, description: a.description,
-        trade: a.trade, category: a.category, unit: a.unit, source: a.source,
+        trade: a.trade, system: a.system, variant: a.variant,
+        category: a.category, unit: a.unit, source: a.source,
         is_hidden: a.is_hidden, notes: a.notes, updated_at: a.updated_at,
         unit_cost: cost.unitCost, incomplete: cost.incomplete, cycle: cost.cycle,
       },
@@ -346,7 +361,12 @@ router.post('/', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req, r
 router.put('/:id', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req, res) => {
   try {
     const id = parseInt(req.params.id, 10);
-    const count = await asm.updateHeader(pool, req.user.organization_id, id, req.body || {});
+    let count;
+    try {
+      count = await asm.updateHeader(pool, req.user.organization_id, id, req.body || {});
+    } catch (ve) {
+      return res.status(400).json({ error: ve.message });
+    }
     if (!count) return res.status(404).json({ error: 'Assembly not found' });
     res.json({ ok: true });
   } catch (e) {

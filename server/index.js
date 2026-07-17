@@ -31,6 +31,7 @@ const aiSessionsRoutes = require('./routes/ai-sessions-routes');
 const materialRoutes = require('./routes/material-routes');
 const assemblyRoutes = require('./routes/assembly-routes');
 const assemblyResearchRoutes = require('./routes/assembly-research-routes');
+const assemblyTaxonomyRoutes = require('./routes/assembly-taxonomy-routes');
 const qbCostRoutes = require('./routes/qb-cost-routes');
 const subRoutes = require('./routes/sub-routes');
 const subPortalRoutes = require('./routes/sub-portal-routes');
@@ -231,6 +232,7 @@ app.use('/api/ai', aiRoutes);
 app.use('/api/materials', materialRoutes);
 app.use('/api/assemblies', assemblyRoutes);
 app.use('/api/assembly-research', assemblyResearchRoutes);
+app.use('/api/assembly-taxonomy', assemblyTaxonomyRoutes);
 app.use('/api/qb-costs', qbCostRoutes);
 app.use('/api/subs', subRoutes);
 // Sub portal routes — mounted at /api so the file can register both

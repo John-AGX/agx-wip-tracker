@@ -2037,6 +2037,54 @@ async function initSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_asm_research_org ON assembly_research(organization_id, status, created_at DESC);
 
+    -- ── ASSEMBLY CODE PROTOCOL ────────────────────────────────────────
+    -- Codes follow TRADE-SYSTEM-VARIANT (e.g. ROOF-SHNG-612). The code is
+    -- DERIVED from these structured columns + kept in sync; the trade column
+    -- now holds a Trade-registry code (was free text). VARIANT/SYSTEM optional.
+    ALTER TABLE assemblies ADD COLUMN IF NOT EXISTS system  TEXT;  -- System-registry code, e.g. SHNG
+    ALTER TABLE assemblies ADD COLUMN IF NOT EXISTS variant TEXT;  -- optional spec, ^[A-Z0-9/]{0,10}$
+
+    -- Controlled code registry. organization_id NULL = global seed (shared
+    -- across tenants); an org row shadows a global of the same code. Systems
+    -- reference a trade BY CODE (not FK id) so an org system can hang off a
+    -- global trade. COALESCE(org,0) buckets globals so two globals can't clash.
+    CREATE TABLE IF NOT EXISTS assembly_trades (
+      id BIGSERIAL PRIMARY KEY,
+      organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE,
+      code TEXT NOT NULL,                        -- ROOF, FENC, DECK …
+      name TEXT NOT NULL,                        -- Roofing, Fencing, Decking
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      archived_at TIMESTAMPTZ,
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_asm_trades_code_uq
+      ON assembly_trades (COALESCE(organization_id, 0), UPPER(code));
+    CREATE INDEX IF NOT EXISTS idx_asm_trades_org
+      ON assembly_trades (organization_id) WHERE archived_at IS NULL;
+
+    CREATE TABLE IF NOT EXISTS assembly_systems (
+      id BIGSERIAL PRIMARY KEY,
+      organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE,
+      trade_code TEXT NOT NULL,                  -- FK-by-value into assembly_trades.code
+      code TEXT NOT NULL,                        -- SHNG, WD, PT …
+      name TEXT NOT NULL,                        -- Shingle, Wood, Pressure-treated
+      default_unit TEXT,                         -- prefills the editor's Unit (SQ/LF/SF/EA)
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      archived_at TIMESTAMPTZ,
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_asm_systems_code_uq
+      ON assembly_systems (COALESCE(organization_id, 0), UPPER(trade_code), UPPER(code));
+    CREATE INDEX IF NOT EXISTS idx_asm_systems_trade
+      ON assembly_systems (COALESCE(organization_id, 0), UPPER(trade_code)) WHERE archived_at IS NULL;
+    -- NOTE: the assemblies unique-code index is built in init() AFTER the JS
+    -- backfill de-dupes existing rows (see backfillAssemblyTaxonomy) — building
+    -- it here would brick boot if two legacy rows already share a code.
+
     -- Cost Inbox — field-captured cost receipts (photo + amount + cost code),
     -- attached to a JOB or a LEAD (lead = pre-sale / pursuit cost). Distinct
     -- from material_purchases (that's the Home-Depot CSV-history import). The
@@ -4687,6 +4735,28 @@ async function init() {
     await require('./services/file-folders').backfill();
   } catch (e) {
     console.error('[init] file-folders backfill failed (non-fatal):', e && e.message);
+  }
+  // Assembly code protocol: seed the global taxonomy + normalize/de-dupe
+  // existing codes, THEN build the per-org unique-code index. Order matters —
+  // the index must come after the de-dup pass. Idempotent (no-op on reboot).
+  try {
+    await require('./services/assemblies').backfillAssemblyTaxonomy(pool);
+    // Guarded so a residual duplicate can't brick boot; the next backfill pass
+    // resolves it and the index builds on a later boot.
+    await pool.query(`
+      DO $asm_code_uq$
+      BEGIN
+        BEGIN
+          CREATE UNIQUE INDEX IF NOT EXISTS idx_assemblies_code_uq
+            ON assemblies (COALESCE(organization_id, 0), UPPER(code))
+            WHERE code IS NOT NULL AND code <> '';
+        EXCEPTION WHEN unique_violation THEN
+          RAISE WARNING 'assemblies code uniqueness not enforced yet — duplicate codes remain';
+        END;
+      END
+      $asm_code_uq$;`);
+  } catch (e) {
+    console.error('[init] assembly taxonomy backfill failed (non-fatal):', e && e.message);
   }
 }
 

@@ -11,14 +11,249 @@ const SOURCES = new Set(['seed', 'manual', 'learned']);
 const MAX_DEPTH = 4;
 const KIND_DEFAULT_CODE = { material: 'materials', labor: 'labor', sub: 'sub', gc: 'gc' };
 
+// ── Assembly code protocol: TRADE-SYSTEM-VARIANT (uppercase, derived from
+// structured columns). VARIANT is optional; SYSTEM is optional (a bare TRADE
+// code is valid). Codes are unique per org (COALESCE(org,0), UPPER(code)).
+const VARIANT_RE = /^[A-Z0-9/]{0,10}$/;
+const CODE_RE = /^[A-Z0-9]+(-[A-Z0-9]+)?(-[A-Z0-9/]{1,10})?$/;
+// Free-text trade → registry code, for backfilling legacy hand-typed trades.
+const TRADE_ALIASES = {
+  roofing: 'ROOF', roof: 'ROOF', fencing: 'FENC', fence: 'FENC', decking: 'DECK', deck: 'DECK',
+  stucco: 'STUC', paint: 'PAINT', painting: 'PAINT', carpentry: 'CARP', framing: 'CARP', carpenter: 'CARP',
+  concrete: 'CONC', flatwork: 'CONC', drywall: 'DRYW', sheetrock: 'DRYW', siding: 'SIDG',
+  gutters: 'GUTR', gutter: 'GUTR', windows: 'WIND', window: 'WIND', doors: 'DOOR', door: 'DOOR',
+  electrical: 'ELEC', electric: 'ELEC', plumbing: 'PLMB', plumb: 'PLMB', hvac: 'HVAC', mechanical: 'HVAC',
+  demolition: 'DEMO', demo: 'DEMO', 'general conditions': 'GEN', general: 'GEN', gc: 'GEN',
+};
+// Starter global taxonomy (organization_id NULL = shared across tenants).
+const GLOBAL_TAXONOMY = [
+  { code: 'ROOF', name: 'Roofing', systems: [{ code: 'SHNG', name: 'Shingle', unit: 'SQ' }, { code: 'TILE', name: 'Tile', unit: 'SQ' }, { code: 'METAL', name: 'Metal', unit: 'SQ' }, { code: 'TPO', name: 'Flat / TPO', unit: 'SQ' }] },
+  { code: 'FENC', name: 'Fencing', systems: [{ code: 'WD', name: 'Wood', unit: 'LF' }, { code: 'VNYL', name: 'Vinyl', unit: 'LF' }, { code: 'ALUM', name: 'Aluminum', unit: 'LF' }, { code: 'CHAIN', name: 'Chain-link', unit: 'LF' }] },
+  { code: 'DECK', name: 'Decking', systems: [{ code: 'PT', name: 'Pressure-treated', unit: 'SF' }, { code: 'COMP', name: 'Composite', unit: 'SF' }, { code: 'PVC', name: 'PVC', unit: 'SF' }] },
+  { code: 'STUC', name: 'Stucco', systems: [{ code: 'STD', name: 'Standard 3-coat', unit: 'SF' }, { code: '1CT', name: 'One-coat', unit: 'SF' }, { code: 'REPR', name: 'Repair', unit: 'SF' }] },
+  { code: 'PAINT', name: 'Painting', systems: [{ code: 'EXT', name: 'Exterior', unit: 'SF' }, { code: 'INT', name: 'Interior', unit: 'SF' }] },
+  { code: 'CARP', name: 'Carpentry', systems: [{ code: 'FRAM', name: 'Framing', unit: 'SF' }, { code: 'TRIM', name: 'Trim / Finish', unit: 'LF' }] },
+  { code: 'CONC', name: 'Concrete', systems: [{ code: 'SLAB', name: 'Slab', unit: 'SF' }, { code: 'FTG', name: 'Footing', unit: 'LF' }, { code: 'DRVW', name: 'Driveway', unit: 'SF' }] },
+  { code: 'DRYW', name: 'Drywall', systems: [{ code: 'HANG', name: 'Hang & Finish', unit: 'SF' }, { code: 'REPR', name: 'Repair', unit: 'SF' }] },
+  { code: 'SIDG', name: 'Siding', systems: [{ code: 'VNYL', name: 'Vinyl', unit: 'SF' }, { code: 'HARD', name: 'Fiber-cement', unit: 'SF' }] },
+  { code: 'GUTR', name: 'Gutters', systems: [{ code: '5K', name: '5" K-style', unit: 'LF' }, { code: '6K', name: '6" K-style', unit: 'LF' }] },
+  { code: 'WIND', name: 'Windows', systems: [{ code: 'VNYL', name: 'Vinyl', unit: 'EA' }, { code: 'IMPCT', name: 'Impact', unit: 'EA' }] },
+  { code: 'DOOR', name: 'Doors', systems: [{ code: 'EXT', name: 'Exterior', unit: 'EA' }, { code: 'INT', name: 'Interior', unit: 'EA' }] },
+  { code: 'ELEC', name: 'Electrical', systems: [] },
+  { code: 'PLMB', name: 'Plumbing', systems: [] },
+  { code: 'HVAC', name: 'HVAC', systems: [] },
+  { code: 'DEMO', name: 'Demolition', systems: [] },
+  { code: 'GEN', name: 'General Conditions', systems: [{ code: 'MOB', name: 'Mobilization', unit: 'EA' }, { code: 'DUMP', name: 'Debris / Dumpster', unit: 'EA' }, { code: 'PERM', name: 'Permits', unit: 'EA' }] },
+];
+
 const num = (v) => { const n = Number(v); return isFinite(n) ? n : 0; };
+
+// Segment normalizers + code (de)composition.
+function normalizeSeg(v) { return String(v == null ? '' : v).trim().toUpperCase().replace(/[^A-Z0-9]/g, ''); }
+function normalizeVariant(v) { return String(v == null ? '' : v).trim().toUpperCase().replace(/[^A-Z0-9/]/g, '').slice(0, 10); }
+function normalizeCode(parts) {
+  const t = normalizeSeg(parts && parts.trade);
+  const s = normalizeSeg(parts && parts.system);
+  const v = normalizeVariant(parts && parts.variant);
+  return [t, s, v].filter(Boolean).join('-');
+}
+function parseCode(code) {
+  const parts = String(code || '').trim().toUpperCase().split('-').filter(Boolean);
+  return {
+    trade: parts[0] ? normalizeSeg(parts[0]) : null,
+    system: parts[1] ? normalizeSeg(parts[1]) : null,
+    variant: parts[2] ? normalizeVariant(parts[2]) : null,
+  };
+}
+
+// Merge global + org registry rows into lookup maps (org shadows global by code).
+async function loadRegistry(db, orgId) {
+  const [tq, sq] = await Promise.all([
+    db.query(`SELECT organization_id, code, name, sort_order FROM assembly_trades
+               WHERE (organization_id = $1 OR organization_id IS NULL) AND archived_at IS NULL`, [orgId]),
+    db.query(`SELECT organization_id, trade_code, code, name, default_unit, sort_order FROM assembly_systems
+               WHERE (organization_id = $1 OR organization_id IS NULL) AND archived_at IS NULL`, [orgId]),
+  ]);
+  const globalFirst = (a, b) => (a.organization_id == null ? 0 : 1) - (b.organization_id == null ? 0 : 1);
+  const trades = new Map();
+  tq.rows.sort(globalFirst).forEach((r) => {
+    const c = String(r.code).toUpperCase();
+    trades.set(c, { code: c, name: r.name, org: r.organization_id, sort_order: r.sort_order });
+  });
+  const systemsByTrade = new Map();
+  sq.rows.sort(globalFirst).forEach((r) => {
+    const tc = String(r.trade_code).toUpperCase();
+    const c = String(r.code).toUpperCase();
+    if (!systemsByTrade.has(tc)) systemsByTrade.set(tc, new Map());
+    systemsByTrade.get(tc).set(c, { code: c, name: r.name, default_unit: r.default_unit, org: r.organization_id, sort_order: r.sort_order });
+  });
+  return { trades, systemsByTrade };
+}
+
+// Validate a header's trade/system/variant (+ optional raw code) against the
+// registry and compute the canonical, unique code. Lenient for legacy rows:
+// no trade at all → keep the raw code as-is (unclassified). Returns
+// { ok, code, trade, system, variant, error }. Reused by every write path.
+async function validateAgainstRegistry(db, orgId, header, opts) {
+  opts = opts || {};
+  let trade = normalizeSeg(header.trade);
+  let system = normalizeSeg(header.system);
+  let variant = normalizeVariant(header.variant);
+  const rawCode = header.code != null ? String(header.code).trim() : '';
+  const explicitTrade = !!trade;
+  if (!trade && !system && !variant && rawCode) {
+    const p = parseCode(rawCode);
+    trade = p.trade || ''; system = p.system || ''; variant = p.variant || '';
+  }
+  if (!trade) {
+    return { ok: true, code: rawCode || null, trade: null, system: system || null, variant: variant || null, legacy: true };
+  }
+  const reg = await loadRegistry(db, orgId);
+  if (!reg.trades.get(trade)) {
+    // Try the free-text alias map (e.g. "Roofing" → ROOF) before giving up.
+    const aliased = TRADE_ALIASES[String(header.trade || '').trim().toLowerCase()];
+    if (aliased && reg.trades.get(aliased)) {
+      trade = aliased;
+    } else {
+      // Unknown trade → LENIENT legacy: keep the row saveable (store the
+      // normalized trade so it still groups; keep the raw code or null). The
+      // dropdown editor + 86-via-taxonomy only ever emit registry codes, so
+      // this only catches the old free-text editor, direct API callers, and
+      // genuinely-new trades (which the taxonomy manager can formalize later).
+      return { ok: true, code: rawCode || null, trade: explicitTrade ? (trade || null) : null, system: null, variant: null, legacy: true };
+    }
+  }
+  if (system) {
+    const sysMap = reg.systemsByTrade.get(trade) || new Map();
+    if (!sysMap.get(system)) {
+      const valid = [...sysMap.keys()].sort();
+      return { ok: false, error: `Unknown system "${system}" for trade ${trade}. Valid systems: ${valid.length ? valid.join(', ') : '(none yet — add one under Admin → Assembly Codes)'}` };
+    }
+  }
+  if (variant && !VARIANT_RE.test(variant)) {
+    return { ok: false, error: `Variant "${variant}" may only contain A–Z, 0–9 and "/" (max 10 chars).` };
+  }
+  const code = normalizeCode({ trade, system, variant });
+  const dup = await db.query(
+    `SELECT id FROM assemblies WHERE COALESCE(organization_id,0)=COALESCE($1,0) AND UPPER(code)=UPPER($2) AND id <> $3 LIMIT 1`,
+    [orgId, code, opts.selfId || 0]);
+  if (dup.rows.length) {
+    return { ok: false, error: `Code ${code} is already used by assembly #${dup.rows[0].id}. Change the variant to make it unique.` };
+  }
+  return { ok: true, code, trade, system: system || null, variant: variant || null };
+}
+
+// Idempotent seed of the global (NULL-org) taxonomy. NOT-EXISTS guards make it
+// safe on every boot and across racing instances.
+async function seedGlobalTaxonomy(db) {
+  for (let ti = 0; ti < GLOBAL_TAXONOMY.length; ti++) {
+    const t = GLOBAL_TAXONOMY[ti];
+    await db.query(
+      `INSERT INTO assembly_trades (organization_id, code, name, sort_order)
+       SELECT NULL, $1, $2, $3
+        WHERE NOT EXISTS (SELECT 1 FROM assembly_trades WHERE organization_id IS NULL AND UPPER(code)=UPPER($1))`,
+      [t.code, t.name, ti]);
+    const systems = t.systems || [];
+    for (let si = 0; si < systems.length; si++) {
+      const s = systems[si];
+      await db.query(
+        `INSERT INTO assembly_systems (organization_id, trade_code, code, name, default_unit, sort_order)
+         SELECT NULL, $1, $2, $3, $4, $5
+          WHERE NOT EXISTS (SELECT 1 FROM assembly_systems WHERE organization_id IS NULL AND UPPER(trade_code)=UPPER($1) AND UPPER(code)=UPPER($2))`,
+        [t.code, s.code, s.name, s.unit || null, si]);
+    }
+  }
+}
+
+// One-time (idempotent) migration of existing rows into the code protocol.
+// Runs at boot BEFORE the assemblies unique-code index is built. No-op on the
+// second boot (everything already normalized + de-duped).
+async function backfillAssemblyTaxonomy(db) {
+  await seedGlobalTaxonomy(db);
+
+  // 1) Map free-text `trade` → a registry code (per org).
+  const distinct = await db.query(
+    `SELECT DISTINCT organization_id, trade FROM assemblies WHERE trade IS NOT NULL AND trade <> ''`);
+  for (const row of distinct.rows) {
+    const orgId = row.organization_id;
+    const raw = String(row.trade);
+    const asCode = normalizeSeg(raw);
+    const reg = await loadRegistry(db, orgId);
+    if (asCode && reg.trades.get(asCode)) {
+      if (raw !== asCode) {
+        await db.query(`UPDATE assemblies SET trade=$1 WHERE trade=$2 AND organization_id IS NOT DISTINCT FROM $3`, [asCode, raw, orgId]);
+      }
+      continue;
+    }
+    let code = TRADE_ALIASES[raw.trim().toLowerCase()];
+    if (!code) {
+      code = (normalizeSeg(raw).slice(0, 6)) || 'MISC';
+      await db.query(
+        `INSERT INTO assembly_trades (organization_id, code, name, sort_order)
+         SELECT $1, $2, $3, 900
+          WHERE NOT EXISTS (SELECT 1 FROM assembly_trades WHERE COALESCE(organization_id,0)=COALESCE($1,0) AND UPPER(code)=UPPER($2))`,
+        [orgId, code, raw.slice(0, 60)]);
+    }
+    await db.query(`UPDATE assemblies SET trade=$1 WHERE trade=$2 AND organization_id IS NOT DISTINCT FROM $3`, [code, raw, orgId]);
+  }
+
+  // 2) Parse conforming hand-typed codes into system/variant (never rewrite the code).
+  const coded = await db.query(
+    `SELECT id, code, trade, system, variant FROM assemblies WHERE code IS NOT NULL AND code <> ''`);
+  for (const a of coded.rows) {
+    if (a.system != null && a.variant != null) continue;
+    if (!CODE_RE.test(String(a.code).toUpperCase())) continue;
+    const p = parseCode(a.code);
+    const sets = [], vals = [];
+    if ((a.trade == null || a.trade === '') && p.trade) { sets.push('trade'); vals.push(p.trade); }
+    if (a.system == null && p.system) { sets.push('system'); vals.push(p.system); }
+    if (a.variant == null && p.variant) { sets.push('variant'); vals.push(p.variant); }
+    if (sets.length) {
+      const setSql = sets.map((k, i) => `${k}=$${i + 1}`).join(', ');
+      await db.query(`UPDATE assemblies SET ${setSql} WHERE id=$${sets.length + 1}`, [...vals, a.id]);
+    }
+  }
+
+  // 3) Generate a code for rows missing one (only when trade is a known code).
+  const missing = await db.query(
+    `SELECT id, organization_id, trade, system, variant FROM assemblies WHERE code IS NULL OR code=''`);
+  for (const a of missing.rows) {
+    const trade = normalizeSeg(a.trade);
+    if (!trade) continue;
+    const reg = await loadRegistry(db, a.organization_id);
+    if (!reg.trades.get(trade)) continue; // unclassified — leave NULL
+    const code = normalizeCode({ trade, system: a.system, variant: a.variant });
+    if (code) await db.query(`UPDATE assemblies SET code=$1 WHERE id=$2`, [code, a.id]);
+  }
+
+  // 4) De-dup so the unique index can build: keep the lowest id, suffix the rest.
+  const dupes = await db.query(
+    `SELECT COALESCE(organization_id,0) AS bucket, UPPER(code) AS uc, array_agg(id ORDER BY id) AS ids
+       FROM assemblies WHERE code IS NOT NULL AND code <> ''
+      GROUP BY 1, 2 HAVING COUNT(*) > 1`);
+  for (const g of dupes.rows) {
+    const rest = g.ids.slice(1);
+    let n = 2;
+    for (const id of rest) {
+      let candidate;
+      for (; ; n++) {
+        candidate = g.uc + '-' + n;
+        const t = await db.query(
+          `SELECT 1 FROM assemblies WHERE COALESCE(organization_id,0)=$1 AND UPPER(code)=UPPER($2) LIMIT 1`, [g.bucket, candidate]);
+        if (!t.rows.length) break;
+      }
+      await db.query(`UPDATE assemblies SET code=$1 WHERE id=$2`, [candidate, id]);
+      n++;
+    }
+  }
+}
 
 // Pulls every assembly + item for the org so list costing and nested
 // resolution never N+1. Material prices ride along for live pricing.
 async function loadGraph(db, orgId) {
   const [aq, iq] = await Promise.all([
     db.query(
-      `SELECT id, code, name, description, trade, category, unit, source, is_hidden, notes, updated_at
+      `SELECT id, code, name, description, trade, system, variant, category, unit, source, is_hidden, notes, updated_at
          FROM assemblies WHERE organization_id = $1 OR organization_id IS NULL`, [orgId]),
     db.query(
       `SELECT ai.*, m.description AS material_description, m.unit AS material_unit,
@@ -161,7 +396,7 @@ async function logTuning(db, orgId, assemblyId, entries, opts) {
 // Header field whitelist for create/update.
 function pickHeader(body) {
   const out = {};
-  ['code', 'name', 'description', 'trade', 'category', 'unit', 'notes'].forEach((k) => {
+  ['code', 'name', 'description', 'trade', 'system', 'variant', 'category', 'unit', 'notes'].forEach((k) => {
     if (body[k] !== undefined) out[k] = body[k] === null ? null : String(body[k]).slice(0, 500);
   });
   if (body.source !== undefined && SOURCES.has(body.source)) out.source = body.source;
@@ -169,30 +404,55 @@ function pickHeader(body) {
   return out;
 }
 
-// Insert a new assembly header. Returns the new id.
+// Insert a new assembly header. Returns the new id. Validates the code
+// protocol (trade/system/variant → canonical unique code) and throws on a
+// registry/uniqueness violation with an actionable message.
 async function createAssembly(db, orgId, header, createdBy) {
   const h = pickHeader(header || {});
   if (!h.name || !String(h.name).trim()) throw new Error('name is required');
+  const v = await validateAgainstRegistry(db, orgId, h, {});
+  if (!v.ok) throw new Error(v.error);
   const r = await db.query(
-    `INSERT INTO assemblies (organization_id, code, name, description, trade, category, unit, source, notes, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING id`,
-    [orgId, h.code || null, h.name.trim(), h.description || null,
-     h.trade || null, h.category || null, h.unit || 'EA', h.source || 'manual',
+    `INSERT INTO assemblies (organization_id, code, name, description, trade, system, variant, category, unit, source, notes, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
+    [orgId, v.code || null, h.name.trim(), h.description || null,
+     v.trade || (h.trade || null), v.system || null, v.variant || null,
+     h.category || null, h.unit || 'EA', h.source || 'manual',
      h.notes || null, createdBy || null]
   );
   return r.rows[0].id;
 }
 
-// Update header fields (whitelisted). Returns rowCount.
+// Update header fields (whitelisted). Returns rowCount. When any code segment
+// (trade/system/variant/code) changes, re-validates against the registry and
+// writes the recomputed canonical code; throws on a violation.
 async function updateHeader(db, orgId, assemblyId, header) {
   const h = pickHeader(header || {});
   const keys = Object.keys(h);
   if (!keys.length) return 1;
-  const sets = keys.map((k, i) => `${k} = $${i + 1}`).join(', ');
-  const vals = keys.map((k) => h[k]);
+  const finalH = Object.assign({}, h);
+  if (['trade', 'system', 'variant', 'code'].some((k) => k in h)) {
+    const cur = await db.query(
+      `SELECT trade, system, variant, code FROM assemblies WHERE id=$1 AND (organization_id=$2 OR organization_id IS NULL)`,
+      [assemblyId, orgId]);
+    if (!cur.rows.length) return 0;
+    const c = cur.rows[0];
+    const merged = {
+      trade: ('trade' in h) ? h.trade : c.trade,
+      system: ('system' in h) ? h.system : c.system,
+      variant: ('variant' in h) ? h.variant : c.variant,
+      code: ('code' in h) ? h.code : c.code,
+    };
+    const v = await validateAgainstRegistry(db, orgId, merged, { selfId: assemblyId });
+    if (!v.ok) throw new Error(v.error);
+    finalH.trade = v.trade; finalH.system = v.system; finalH.variant = v.variant; finalH.code = v.code;
+  }
+  const fkeys = Object.keys(finalH);
+  const sets = fkeys.map((k, i) => `${k} = $${i + 1}`).join(', ');
+  const vals = fkeys.map((k) => finalH[k]);
   const r = await db.query(
     `UPDATE assemblies SET ${sets}, updated_at = NOW()
-      WHERE id = $${keys.length + 1} AND (organization_id = $${keys.length + 2} OR organization_id IS NULL)`,
+      WHERE id = $${fkeys.length + 1} AND (organization_id = $${fkeys.length + 2} OR organization_id IS NULL)`,
     [...vals, assemblyId, orgId]
   );
   return r.rowCount;
@@ -317,4 +577,7 @@ module.exports = {
   KINDS, COST_CODES, SOURCES, KIND_DEFAULT_CODE, MAX_DEPTH,
   loadGraph, itemUnitCost, resolveCost, flatten, wouldCycle, shapeItem,
   pickHeader, createAssembly, updateHeader, replaceItems, logTuning, bestEffortInTxn,
+  // Code protocol
+  normalizeCode, parseCode, loadRegistry, validateAgainstRegistry,
+  seedGlobalTaxonomy, backfillAssemblyTaxonomy,
 };

@@ -528,7 +528,22 @@
     create: function(payload) { return post('/api/assemblies', payload); },
     update: function(id, payload) { return put('/api/assemblies/' + encodeURIComponent(id), payload); },
     saveItems: function(id, items) { return put('/api/assemblies/' + encodeURIComponent(id) + '/items', { items: items }); },
-    remove: function(id) { return del('/api/assemblies/' + encodeURIComponent(id)); }
+    remove: function(id) { return del('/api/assemblies/' + encodeURIComponent(id)); },
+    // Canonical code + availability for a set of TRADE/SYSTEM/VARIANT parts.
+    suggestCode: function(parts) {
+      var qs = [];
+      ['trade', 'system', 'variant'].forEach(function(k) { if (parts && parts[k]) qs.push(k + '=' + encodeURIComponent(parts[k])); });
+      return get('/api/assemblies/suggest-code' + (qs.length ? '?' + qs.join('&') : ''));
+    }
+  };
+
+  // Assembly code registry (Trades + Systems). GET is view-gated; writes edit-gated.
+  var assemblyTaxonomy = {
+    list: function() { return get('/api/assembly-taxonomy'); },
+    createTrade: function(payload) { return post('/api/assembly-taxonomy/trades', payload); },
+    updateTrade: function(id, payload) { return patch('/api/assembly-taxonomy/trades/' + encodeURIComponent(id), payload); },
+    createSystem: function(payload) { return post('/api/assembly-taxonomy/systems', payload); },
+    updateSystem: function(id, payload) { return patch('/api/assembly-taxonomy/systems/' + encodeURIComponent(id), payload); }
   };
 
   var materials = {
@@ -961,7 +976,7 @@
   window.p86Api = {
     get: get, put: put, post: post, del: del, patch: patch,
     fileFolders: fileFolders,
-    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, assemblies: assemblies, qbCosts: qbCosts, subs: subsApi, schedule: schedule, adminSms: adminSms, messages: messages, weather: weather, projects: projects, tasks: tasks, notes: notes, reminders: reminders, map: map, calendar: calendar, plans: plans, orgTags: orgTags, org: org, folderTemplates: folderTemplates, reports: reports, changeOrders: changeOrders, workflowItems: workflowItems, purchaseOrders: purchaseOrders, payApplications: payApplications, invoices: invoices, payments: payments, receipts: receipts, docImport: docImport, outlook: outlook, listViews: listViews,
+    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, assemblies: assemblies, assemblyTaxonomy: assemblyTaxonomy, qbCosts: qbCosts, subs: subsApi, schedule: schedule, adminSms: adminSms, messages: messages, weather: weather, projects: projects, tasks: tasks, notes: notes, reminders: reminders, map: map, calendar: calendar, plans: plans, orgTags: orgTags, org: org, folderTemplates: folderTemplates, reports: reports, changeOrders: changeOrders, workflowItems: workflowItems, purchaseOrders: purchaseOrders, payApplications: payApplications, invoices: invoices, payments: payments, receipts: receipts, docImport: docImport, outlook: outlook, listViews: listViews,
     isOffline: isOffline,
     isAuthenticated: function() { return !!getToken() && !isOffline(); }
   };
