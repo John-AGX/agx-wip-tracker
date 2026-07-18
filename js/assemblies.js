@@ -80,6 +80,11 @@
     if (s == null) return '';
     return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
+  // PWA-safe notice — native alert() silently no-ops in the installed app.
+  function notify(msg) {
+    if (window.p86Confirm) { try { window.p86Confirm({ title: 'Assemblies', message: msg, confirmText: 'OK' }); return; } catch (e) {} }
+    alert(msg);
+  }
   function money(n) { return (n == null || isNaN(n)) ? '—' : '$' + Number(n).toFixed(2); }
   function num(v) { var n = parseFloat(v); return isFinite(n) ? n : 0; }
 
@@ -202,8 +207,8 @@
     if (id == null) {
       ensureTaxonomy().then(function () {
         _editing = {
-          header: { id: null, name: '', code: '', trade: '', system: '', variant: '', unit: 'SF', description: '', source: 'manual' },
-          items: [], unitCost: 0
+          header: { id: null, name: '', code: '', trade: '', system: '', variant: '', unit: 'SF', description: '', source: 'manual', params: null },
+          items: [], unitCost: 0, previewScope: {}
         };
         paintEditor();
       });
@@ -214,7 +219,8 @@
       _editing = {
         header: res.assembly,
         items: (res.items || []).map(function (it) { return Object.assign({}, it); }),
-        unitCost: res.assembly.unit_cost
+        unitCost: res.assembly.unit_cost,
+        previewScope: {}
       };
       paintEditor();
     }).catch(function (err) {
@@ -270,8 +276,10 @@
         '</div>' +
         '<div style="padding:0 20px 10px;font-size:11px;color:var(--text-dim,#8a93a6);">Code: <span id="asmEd_codePreview" style="font-family:monospace;color:#4fd1c5;font-size:13px;">' + (esc(clientCode(h.trade, h.system, h.variant)) || '—') + '</span> <span style="opacity:.7;">· auto-derived from Trade · System · Variant (kept unique)</span></div>' +
         '<div style="padding:0 20px 12px;">' + fld('Description', 'asmEd_desc', h.description) + '</div>' +
-        '<div style="padding:0 20px 8px;font-size:11px;color:var(--text-dim,#8a93a6);">Every quantity below is <b>per 1 ' + esc(h.unit || 'unit') + '</b> of installed work. Material rows with a blank unit cost pull the LIVE catalog price.</div>' +
+        '<div style="padding:0 20px 12px;" id="asmEd_params">' + paramsHtml() + '</div>' +
+        '<div style="padding:0 20px 8px;font-size:11px;color:var(--text-dim,#8a93a6);">Every quantity below is <b>per 1 ' + esc(h.unit || 'unit') + '</b> of installed work — or start it with <b style="color:#fbbf24;">=</b> for a formula that computes the TOTAL from the dimensions (e.g. <span style="font-family:monospace;">=ceil(Q/8)+1</span>; Q = the takeoff qty). Material rows with a blank unit cost pull the LIVE catalog price.</div>' +
         '<div style="padding:0 20px 14px;" id="asmEd_items">' + itemsTableHtml() + '</div>' +
+        '<div style="padding:0 20px 12px;" id="asmEd_preview">' + previewBarHtml() + '</div>' +
         '<div style="padding:0 20px 20px;display:flex;gap:8px;flex-wrap:wrap;">' +
           '<button class="ee-btn ghost" onclick="p86Assemblies.addItem(\'material\')">+ Material</button>' +
           '<button class="ee-btn ghost" onclick="p86Assemblies.addItem(\'labor\')">+ Labor</button>' +
@@ -283,6 +291,183 @@
     overlay.innerHTML = html;
     wireItemRows();
     wireHeaderFields();
+    wireParams();
+    wirePreviewBar();
+  }
+
+  // ── Parametric layer (S0) ──────────────────────────────────────────
+  // Declared geometry params — [{key,label,unit,default}]. Q is reserved
+  // (always the takeoff qty in the output unit).
+  function headerParams() {
+    var p = _editing && _editing.header && _editing.header.params;
+    return Array.isArray(p) ? p : [];
+  }
+  function paramKeys() { return ['Q'].concat(headerParams().map(function (d) { return d.key; })); }
+
+  function paramsHtml() {
+    var ps = headerParams();
+    var chips = ps.map(function (d, i) {
+      return '<span style="display:inline-flex;align-items:center;gap:6px;background:rgba(251,191,36,0.10);border:1px solid rgba(251,191,36,0.35);border-radius:14px;padding:3px 10px;font-size:11.5px;color:#fbbf24;">' +
+        '<b style="font-family:monospace;">' + esc(d.key) + '</b> ' + esc(d.label || d.key) +
+        (d.unit ? ' <span style="opacity:.7;">(' + esc(d.unit) + ')</span>' : '') +
+        ' <span style="opacity:.7;">= ' + esc(String(d.default)) + '</span>' +
+        '<span data-param-x="' + i + '" style="cursor:pointer;opacity:.7;">✕</span>' +
+      '</span>';
+    }).join(' ');
+    return '<div style="border:1px dashed rgba(251,191,36,0.35);border-radius:8px;padding:9px 12px;">' +
+      '<div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">' +
+        '<span style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:#fbbf24;">Parameters</span>' +
+        (chips || '<span style="font-size:11px;color:var(--text-dim,#8a93a6);">None — add dimensions (height, spacing…) that quantity formulas can use. Q (takeoff qty) is always available.</span>') +
+        '<button class="ee-btn ghost" data-param-add style="margin-left:auto;font-size:11px;padding:3px 9px;">+ Parameter</button>' +
+      '</div>' +
+      '<div data-param-form style="display:none;gap:6px;align-items:flex-end;margin-top:8px;flex-wrap:wrap;">' +
+        miniFld('Key (e.g. H)', 'asmEd_pkey', '', '70px') +
+        miniFld('Label', 'asmEd_plabel', '', '150px') +
+        miniFld('Unit', 'asmEd_punit', '', '60px') +
+        miniFld('Default', 'asmEd_pdefault', '', '70px') +
+        '<button class="ee-btn secondary" data-param-go style="font-size:11px;padding:5px 12px;">Add</button>' +
+      '</div>' +
+    '</div>';
+  }
+  function miniFld(label, id, val, w) {
+    return '<label style="display:flex;flex-direction:column;gap:3px;font-size:9.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-dim,#8a93a6);">' + esc(label) +
+      '<input id="' + id + '" value="' + esc(val || '') + '" style="width:' + w + ';background:rgba(255,255,255,0.04);border:1px solid var(--border,#2a2f3a);border-radius:6px;padding:5px 7px;color:var(--text,#fff);font-size:12px;" /></label>';
+  }
+  function wireParams() {
+    var box = document.getElementById('asmEd_params');
+    if (!box) return;
+    var addBtn = box.querySelector('[data-param-add]');
+    if (addBtn) addBtn.addEventListener('click', function () {
+      var f = box.querySelector('[data-param-form]');
+      if (f) { f.style.display = f.style.display === 'none' ? 'flex' : 'none'; var k = box.querySelector('#asmEd_pkey'); if (k) k.focus(); }
+    });
+    var goBtn = box.querySelector('[data-param-go]');
+    if (goBtn) goBtn.addEventListener('click', function () {
+      var key = ((box.querySelector('#asmEd_pkey') || {}).value || '').trim();
+      if (!/^[A-Za-z][A-Za-z0-9_]{0,15}$/.test(key)) { notify('Parameter key: letters/digits/underscore, starting with a letter (e.g. H, S, coats).'); return; }
+      if (key.toUpperCase() === 'Q') { notify('Q is reserved — it is always the takeoff quantity.'); return; }
+      var ps = headerParams();
+      if (ps.some(function (d) { return d.key.toUpperCase() === key.toUpperCase(); })) { notify('Parameter "' + key + '" already exists.'); return; }
+      if (ps.length >= 12) { notify('At most 12 parameters per assembly.'); return; }
+      ps = ps.concat([{
+        key: key,
+        label: ((box.querySelector('#asmEd_plabel') || {}).value || key).trim().slice(0, 40) || key,
+        unit: ((box.querySelector('#asmEd_punit') || {}).value || '').trim().slice(0, 10),
+        default: num((box.querySelector('#asmEd_pdefault') || {}).value) || 0
+      }]);
+      _editing.header.params = ps;
+      repaintParams();
+    });
+    box.querySelectorAll('[data-param-x]').forEach(function (x) {
+      x.addEventListener('click', function () {
+        var i = Number(x.dataset.paramX);
+        var ps = headerParams().slice();
+        var removed = ps.splice(i, 1)[0];
+        // Refuse if any formula still references the param — a silent removal
+        // would turn those rows into save-time validation errors. FAIL CLOSED:
+        // an unparseable formula (idents() can't see into it) or a missing
+        // engine also blocks the removal.
+        if (!window.p86Formula) { notify('Formula engine not loaded — refresh the page before editing parameters.'); return; }
+        var used = _editing.items.some(function (it) {
+          if (!it.qty_formula) return false;
+          var ids = window.p86Formula.idents(it.qty_formula);
+          if (!ids.length && window.p86Formula.validate(it.qty_formula, paramKeys())) return true;   // unparseable — can't prove it's unused
+          return ids.some(function (k) { return k.toUpperCase() === removed.key.toUpperCase(); });
+        });
+        if (used) { notify('"' + removed.key + '" is used by a quantity formula (or a formula couldn\'t be checked) — update those rows first.'); return; }
+        _editing.header.params = ps.length ? ps : null;
+        repaintParams();
+      });
+    });
+  }
+  function repaintParams() {
+    var box = document.getElementById('asmEd_params');
+    if (box) { box.innerHTML = paramsHtml(); wireParams(); }
+    // Re-render items too: a just-declared param clears any stale red
+    // "unknown parameter" styling on formula cells (not mid-typing here).
+    repaintItems();
+    repaintPreviewBar();
+  }
+
+  // Live parametric preview — client-side mirror of the server's explode
+  // (leaf items + one level of sub-assembly cost from the list cache),
+  // using the SAME p86Formula engine, at typed sample values.
+  function previewBarHtml() {
+    var hasFormulas = _editing.items.some(function (it) { return it.qty_formula; });
+    if (!hasFormulas && !headerParams().length) return '';
+    var scope = previewScope();
+    var r = computeParametric(scope);
+    var inputs = Object.keys(scope).map(function (k) {
+      var d = headerParams().find(function (x) { return x.key === k; });
+      return '<label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--text-dim,#8a93a6);">' +
+        '<b style="font-family:monospace;color:#fbbf24;">' + esc(k) + '</b>' + (d && d.unit ? ' <span style="opacity:.7;">' + esc(d.unit) + '</span>' : (k === 'Q' ? ' <span style="opacity:.7;">' + esc(_editing.header.unit || 'unit') + '</span>' : '')) +
+        '<input data-prevp="' + esc(k) + '" value="' + esc(String(scope[k])) + '" inputmode="decimal" style="width:62px;text-align:right;background:rgba(255,255,255,0.05);border:1px solid var(--border,#2a2f3a);border-radius:6px;padding:4px 6px;color:var(--text,#fff);font-family:monospace;font-size:12px;" />' +
+      '</label>';
+    }).join('');
+    var errHtml = '<div data-prev-errors style="' + (r.errors.length ? 'margin-top:6px;' : '') + 'font-size:11px;color:#f87171;">' + r.errors.map(function (e2) { return '⚠ ' + esc(e2); }).join('<br>') + '</div>';
+    return '<div style="border:1px solid rgba(251,191,36,0.35);border-radius:8px;padding:9px 12px;background:rgba(251,191,36,0.04);">' +
+      '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">' +
+        '<span style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:#fbbf24;" title="Exact totals at these sample dimensions — nested sub-assemblies price at their per-unit cost">Parametric preview</span>' +
+        inputs +
+        '<span data-prev-total style="margin-left:auto;font-family:monospace;font-size:14px;font-weight:700;color:#4fd1c5;">' + money(r.total) + (r.incomplete ? ' <span title="Some items have no price yet" style="color:#fbbf24;font-size:11px;">⚠</span>' : '') + '</span>' +
+      '</div>' + errHtml +
+    '</div>';
+  }
+  function previewScope() {
+    var scope = { Q: 100 };
+    headerParams().forEach(function (d) { scope[d.key] = d.default; });
+    var saved = (_editing && _editing.previewScope) || {};
+    Object.keys(saved).forEach(function (k) { if (scope[k] !== undefined && isFinite(Number(saved[k]))) scope[k] = Number(saved[k]); });
+    return scope;
+  }
+  function computeParametric(scope) {
+    var total = 0, incomplete = false, errors = [];
+    _editing.items.forEach(function (it) {
+      var qty;
+      if (it.qty_formula) {
+        if (!window.p86Formula) { errors.push('Formula engine not loaded'); return; }
+        var r = window.p86Formula.evaluate(it.qty_formula, scope);
+        if (!r.ok) { errors.push((it.description || it.kind) + ': ' + r.error); return; }
+        qty = Math.max(0, r.value);
+      } else {
+        qty = num(it.qty_per_unit) * scope.Q;
+      }
+      qty *= (1 + num(it.waste_pct) / 100);
+      var uc;
+      if (it.kind === 'assembly') {
+        var child = _list.find(function (a) { return a.id === Number(it.child_assembly_id); });
+        uc = child ? num(child.unit_cost) : null;
+      } else {
+        uc = (it.unit_cost != null && it.unit_cost !== '') ? num(it.unit_cost)
+          : (it.live_unit_cost != null ? num(it.live_unit_cost) : null);
+      }
+      if (uc == null) { incomplete = true; return; }
+      total += qty * uc;
+    });
+    return { total: Math.round(total * 100) / 100, incomplete: incomplete, errors: errors };
+  }
+  function wirePreviewBar() {
+    var box = document.getElementById('asmEd_preview');
+    if (!box) return;
+    box.querySelectorAll('[data-prevp]').forEach(function (inp) {
+      // 'input' + targeted total/error update — a full repaint on 'change'
+      // would eat focus while tabbing between the sample inputs.
+      inp.addEventListener('input', function () {
+        _editing.previewScope[inp.dataset.prevp] = inp.value;
+        var r = computeParametric(previewScope());
+        var tot = box.querySelector('[data-prev-total]');
+        if (tot) tot.innerHTML = money(r.total) + (r.incomplete ? ' <span title="Some items have no price yet" style="color:#fbbf24;font-size:11px;">⚠</span>' : '');
+        var errBox = box.querySelector('[data-prev-errors]');
+        if (errBox) {
+          errBox.style.marginTop = r.errors.length ? '6px' : '0';
+          errBox.innerHTML = r.errors.map(function (e2) { return '⚠ ' + esc(e2); }).join('<br>');
+        }
+      });
+    });
+  }
+  function repaintPreviewBar() {
+    var box = document.getElementById('asmEd_preview');
+    if (box) { box.innerHTML = previewBarHtml(); wirePreviewBar(); }
   }
 
   // Trade/System/Variant → live code preview + system-list refresh + unit prefill.
@@ -360,7 +545,7 @@
           KINDS.map(function (k) { return '<option value="' + k.v + '"' + (it.kind === k.v ? ' selected' : '') + '>' + k.label + '</option>'; }).join('') +
         '</select></td>' +
         '<td>' + itemCell + '</td>' +
-        '<td><input data-f="qty_per_unit" data-i="' + i + '" value="' + esc(it.qty_per_unit != null ? it.qty_per_unit : 1) + '" inputmode="decimal" style="width:100%;text-align:right;background:rgba(255,255,255,0.04);border:1px solid var(--border,#2a2f3a);border-radius:6px;padding:5px;color:var(--text,#fff);font-family:monospace;" /></td>' +
+        '<td><input data-f="qty_per_unit" data-i="' + i + '" value="' + esc(it.qty_formula ? ('=' + it.qty_formula) : (it.qty_per_unit != null ? it.qty_per_unit : 1)) + '" title="' + (it.qty_formula ? 'Formula — computes the TOTAL from the parameters at insert time' : 'Per 1 output unit; start with = for a formula') + '" style="width:100%;text-align:right;background:rgba(255,255,255,0.04);border:1px solid ' + (it.qty_formula ? 'rgba(251,191,36,0.55)' : 'var(--border,#2a2f3a)') + ';border-radius:6px;padding:5px;color:' + (it.qty_formula ? '#fbbf24' : 'var(--text,#fff)') + ';font-family:monospace;" /></td>' +
         '<td><input data-f="unit" data-i="' + i + '" value="' + esc(it.unit || '') + '" style="width:100%;background:rgba(255,255,255,0.04);border:1px solid var(--border,#2a2f3a);border-radius:6px;padding:5px;color:var(--text,#fff);" /></td>' +
         '<td><input data-f="unit_cost" data-i="' + i + '" value="' + esc(it.unit_cost != null && it.unit_cost !== '' ? it.unit_cost : '') + '" placeholder="' + esc(costPlaceholder) + '" inputmode="decimal" style="width:100%;text-align:right;background:rgba(255,255,255,0.04);border:1px solid var(--border,#2a2f3a);border-radius:6px;padding:5px;color:var(--text,#fff);font-family:monospace;" /></td>' +
         '<td><input data-f="waste_pct" data-i="' + i + '" value="' + esc(it.waste_pct || 0) + '" inputmode="decimal" style="width:100%;text-align:right;background:rgba(255,255,255,0.04);border:1px solid var(--border,#2a2f3a);border-radius:6px;padding:5px;color:var(--text,#fff);font-family:monospace;" /></td>' +
@@ -378,6 +563,35 @@
         var f = el.dataset.f;
         var it = _editing.items[i];
         if (!it) return;
+        if (f === 'qty_per_unit') {
+          // "=..." = a quantity FORMULA (total from params); plain number =
+          // the per-unit qty. Style inline — no repaint mid-typing (focus).
+          var v = String(el.value).trim();
+          if (v.charAt(0) === '=') {
+            it.qty_formula = v.slice(1).trim();
+            el.style.borderColor = 'rgba(251,191,36,0.55)'; el.style.color = '#fbbf24';
+            if (window.p86Formula && it.qty_formula) {
+              var ferr = window.p86Formula.validate(it.qty_formula, paramKeys());
+              el.title = ferr ? ('⚠ ' + ferr) : 'Formula — computes the TOTAL from the parameters at insert time';
+              el.style.borderColor = ferr ? 'rgba(248,113,113,0.7)' : 'rgba(251,191,36,0.55)';
+            }
+          } else {
+            // Deleting just the "=" of a formula must not let parseFloat
+            // mangle the leftover text into a bogus per-unit qty — restore
+            // the formula unless the field now holds a real number.
+            if (it.qty_formula && !isFinite(parseFloat(v))) {
+              el.value = '=' + it.qty_formula;
+              refreshCostPreview();
+              return;
+            }
+            it.qty_formula = null;
+            it.qty_per_unit = v;
+            el.style.borderColor = ''; el.style.color = ''; el.title = 'Per 1 output unit; start with = for a formula';
+          }
+          refreshCostPreview();
+          repaintPreviewBar();
+          return;
+        }
         it[f] = el.value;
         if (f === 'kind') {
           // Kind flip resets the cross-kind references + default cost code.
@@ -403,7 +617,12 @@
   function refreshCostPreview() {
     var el = document.getElementById('asmEd_cost');
     var unitEl = document.getElementById('asmEd_unit');
-    if (el) el.textContent = money(previewCost()) + ' / ' + ((unitEl && unitEl.value) || _editing.header.unit || 'EA');
+    if (!el) return;
+    // Formula rows contribute their per-unit APPROXIMATION here — flag it so
+    // the header $/unit isn't read as the parametric price.
+    var hasF = _editing.items.some(function (it) { return it.qty_formula; });
+    el.textContent = money(previewCost()) + ' / ' + ((unitEl && unitEl.value) || _editing.header.unit || 'EA') + (hasF ? ' ·ƒ' : '');
+    el.title = hasF ? 'Linear approximation — formula rows price exactly in the Parametric preview below and at insert time' : '';
   }
 
   // Inline catalog search under a material row — pick links material_id
@@ -466,13 +685,15 @@
       unit: (document.getElementById('asmEd_unit') || {}).value || 'EA',
       description: (document.getElementById('asmEd_desc') || {}).value || ''
     };
-    if (!h.name.trim()) { alert('Name is required.'); return; }
+    if (!h.name.trim()) { notify('Name is required.'); return; }
+    h.params = headerParams().length ? headerParams() : null;
     var items = _editing.items.map(function (it) {
       return {
         kind: it.kind, material_id: it.material_id, child_assembly_id: it.child_assembly_id,
         description: it.description, qty_per_unit: num(it.qty_per_unit) || 1,
         unit: it.unit, unit_cost: (it.unit_cost === '' || it.unit_cost == null) ? null : num(it.unit_cost),
-        cost_code: it.cost_code, waste_pct: num(it.waste_pct) || 0
+        cost_code: it.cost_code, waste_pct: num(it.waste_pct) || 0,
+        qty_formula: (it.qty_formula && String(it.qty_formula).trim()) ? String(it.qty_formula).trim() : null
       };
     });
     var p = _editing.header.id == null
@@ -486,7 +707,7 @@
       renderList();
       if (window.MaterialsDrawer && window.MaterialsDrawer.refresh) window.MaterialsDrawer.refresh();
     }).catch(function (err) {
-      alert('Save failed: ' + (err.message || 'unknown'));
+      notify('Save failed: ' + (err.message || 'unknown'));
     });
   }
 

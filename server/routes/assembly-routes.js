@@ -22,13 +22,19 @@ router.get('/', requireAuth, requireCapability('ESTIMATES_VIEW'), async (req, re
       if (a.is_hidden && !showHidden) continue;
       if (q && !((a.name || '') + ' ' + (a.code || '') + ' ' + (a.trade || '')).toLowerCase().includes(q)) continue;
       const cost = asm.resolveCost(a.id, graph);
+      const pdefs = asm.paramDefs(a);
+      const aItems = graph.itemsBy.get(a.id) || [];
       out.push({
         id: a.id, code: a.code, name: a.name, description: a.description,
         trade: a.trade, system: a.system, variant: a.variant,
         category: a.category, unit: a.unit, source: a.source,
         is_hidden: a.is_hidden, notes: a.notes, updated_at: a.updated_at,
-        item_count: (graph.itemsBy.get(a.id) || []).length,
+        item_count: aItems.length,
         unit_cost: cost.unitCost, incomplete: cost.incomplete, cycle: cost.cycle,
+        params: pdefs.length ? pdefs : null,
+        // Formula-only recipes (no declared params, formulas on Q alone)
+        // must ALSO route through the parametric insert path.
+        has_formulas: aItems.some((it) => !!it.qty_formula),
       });
     }
     out.sort((x, y) => (x.trade || '').localeCompare(y.trade || '') || (x.name || '').localeCompare(y.name || ''));
@@ -68,6 +74,7 @@ router.get('/:id', requireAuth, requireCapability('ESTIMATES_VIEW'), async (req,
         category: a.category, unit: a.unit, source: a.source,
         is_hidden: a.is_hidden, notes: a.notes, updated_at: a.updated_at,
         unit_cost: cost.unitCost, incomplete: cost.incomplete, cycle: cost.cycle,
+        params: (function () { const p = asm.paramDefs(a); return p.length ? p : null; })(),
       },
       items: (graph.itemsBy.get(id) || []).map(asm.shapeItem),
       // Leaf rows per 1 output unit — the estimate drawer multiplies these
@@ -76,6 +83,40 @@ router.get('/:id', requireAuth, requireCapability('ESTIMATES_VIEW'), async (req,
     });
   } catch (e) {
     console.error('GET /api/assemblies/:id error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── POST /api/assemblies/:id/explode — parametric quantities (S0) ────
+// Body: { params: { Q: 100, H: 6, ... } }. Q = takeoff qty in the output
+// unit; declared params default from the assembly. Returns FINAL leaf rows
+// (qty already computed — nothing left to multiply), the priced total, and
+// any formula errors (never silently $0).
+router.post('/:id/explode', requireAuth, requireCapability('ESTIMATES_VIEW'), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!isFinite(id)) return res.status(400).json({ error: 'Bad id' });
+    const graph = await asm.loadGraph(pool, req.user.organization_id);
+    const a = graph.assemblies.get(id);
+    if (!a) return res.status(404).json({ error: 'Assembly not found' });
+    const scope = asm.paramScope(a, (req.body && req.body.params) || {});
+    const r = asm.explodeParametric(id, graph, scope);
+    let total = 0, incomplete = false;
+    r.rows.forEach((row) => {
+      if (row.unit_cost == null) incomplete = true;
+      else total += row.qty * row.unit_cost;
+    });
+    res.json({
+      ok: true,
+      rows: r.rows,
+      errors: r.errors,
+      warnings: r.warnings || [],
+      total: Math.round(total * 100) / 100,
+      incomplete,
+      params_used: scope,
+    });
+  } catch (e) {
+    console.error('POST /api/assemblies/:id/explode error:', e);
     res.status(500).json({ error: 'Server error' });
   }
 });
@@ -302,6 +343,10 @@ router.post('/:id/refresh-estimates', requireAuth, requireCapability('ROLES_MANA
       let touched = 0;
       lines.forEach((l) => {
         if (Number(l.sourceAssemblyId) === id && Array.isArray(l.assemblyBreakdown)) {
+          // Parametric inserts (assemblyParams) were computed from typed
+          // dimensions — per-unit repricing would be WRONG for them. Skip;
+          // reprice by re-inserting with the same params.
+          if (l.assemblyParams) return;
           if (l.assemblyBucket) {
             l.unitCost = Math.round((bucketCost[l.assemblyBucket] || 0) * 10000) / 10000;
             l.assemblyBreakdown = bucketRows[l.assemblyBucket] || [];
@@ -343,7 +388,12 @@ router.post('/', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req, r
     }
     if (Array.isArray(req.body.items) && req.body.items.length) {
       const err = await asm.replaceItems(pool, id, req.body.items, req.user.organization_id);
-      if (err) return res.status(400).json({ error: err, id });
+      if (err) {
+        // Atomic create: a rejected recipe must not strand a header-only
+        // assembly (its unique code would then block every retry).
+        try { await pool.query('DELETE FROM assemblies WHERE id = $1', [id]); } catch (e2) { /* best effort */ }
+        return res.status(400).json({ error: err });
+      }
     }
     try {
       await asm.logTuning(pool, req.user.organization_id, id,

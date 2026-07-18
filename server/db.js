@@ -1991,6 +1991,15 @@ async function initSchema() {
     -- themselves from purchase history; rates need a written reason.
     ALTER TABLE assembly_items ADD COLUMN IF NOT EXISTS rationale TEXT;
 
+    -- S0 parametric layer. params = declared geometry knobs
+    -- [{key,label,unit,default,min,max}] (Q is reserved: the takeoff qty in
+    -- the output unit, always in scope). qty_formula (when present) computes
+    -- an item's TOTAL quantity from the params — it supersedes
+    -- qty_per_unit × Q for that row (ceil(Q/8)+1 posts, height-driven
+    -- pickets — the step functions per-unit math can't express).
+    ALTER TABLE assemblies ADD COLUMN IF NOT EXISTS params JSONB;
+    ALTER TABLE assembly_items ADD COLUMN IF NOT EXISTS qty_formula TEXT;
+
     -- Every recipe change is evidence: old→new per field, who/why, and
     -- an evidence blob (for flywheel suggestions: the observed data that
     -- justified it). This log doubles as training data for the model

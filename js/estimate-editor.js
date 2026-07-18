@@ -3558,6 +3558,11 @@
     if (input.assembly_bucket) {
       newLine.assemblyBucket = String(input.assembly_bucket);
     }
+    // Parametric inserts (S0) carry the param values the quantities were
+    // computed from — the per-unit refresh path must skip these.
+    if (input.assembly_params && typeof input.assembly_params === 'object') {
+      newLine.assemblyParams = input.assembly_params;
+    }
 
     if (sectionId) {
       // Same insertion logic as addEstimateLineFromEditor: walk forward to

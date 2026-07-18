@@ -29,8 +29,147 @@ const TRADE_ALIASES = {
 // Central-FL library (Trades → Systems → Variants) is the generated seed
 // module; edit that file to grow the catalog.
 const GLOBAL_TAXONOMY = require('./assembly-taxonomy-seed');
+// S0 parametric layer — the SAME formula engine the browser previews with
+// (js/assembly-formula.js is UMD), so a formula can never price differently
+// server-side than the editor showed.
+const formulaEngine = require('../../js/assembly-formula');
 
 const num = (v) => { const n = Number(v); return isFinite(n) ? n : 0; };
+
+// ── Parametric helpers ───────────────────────────────────────────────
+const MAX_PARAMS = 12;
+const PARAM_KEY_RE = /^[A-Za-z][A-Za-z0-9_]{0,15}$/;
+
+// assemblies.params arrives as a JSONB value (array) or a JSON string —
+// normalize to a clean array of {key,label,unit,default,min,max} or [].
+function paramDefs(assembly) {
+  let p = assembly && assembly.params;
+  if (typeof p === 'string') { try { p = JSON.parse(p); } catch (e) { p = null; } }
+  if (!Array.isArray(p)) return [];
+  return p.filter((d) => d && PARAM_KEY_RE.test(String(d.key || ''))).map((d) => ({
+    key: String(d.key), label: d.label != null ? String(d.label) : String(d.key),
+    unit: d.unit != null ? String(d.unit) : '',
+    default: num(d.default),
+    min: d.min != null && isFinite(Number(d.min)) ? Number(d.min) : null,
+    max: d.max != null && isFinite(Number(d.max)) ? Number(d.max) : null,
+  }));
+}
+
+// Validate + normalize a client-supplied params declaration. Returns
+// { ok, params } or { ok:false, error }. Q is reserved (always in scope).
+function normalizeParams(raw) {
+  if (raw == null) return { ok: true, params: null };
+  let p = raw;
+  if (typeof p === 'string') { try { p = JSON.parse(p); } catch (e) { return { ok: false, error: 'params must be a JSON array' }; } }
+  if (!Array.isArray(p)) return { ok: false, error: 'params must be an array' };
+  if (p.length > MAX_PARAMS) return { ok: false, error: `At most ${MAX_PARAMS} parameters per assembly` };
+  const seen = new Set();
+  const out = [];
+  for (const d of p) {
+    const key = String((d && d.key) || '').trim();
+    if (!PARAM_KEY_RE.test(key)) return { ok: false, error: `Bad parameter key "${key}" — letters/digits/underscore, starting with a letter (max 16 chars)` };
+    if (key.toUpperCase() === 'Q') return { ok: false, error: 'Q is reserved — it is always the takeoff quantity in the output unit' };
+    if (seen.has(key.toUpperCase())) return { ok: false, error: `Duplicate parameter "${key}"` };
+    seen.add(key.toUpperCase());
+    const def = Number(d.default);
+    const entry = {
+      key,
+      label: String(d.label != null ? d.label : key).slice(0, 40),
+      unit: String(d.unit != null ? d.unit : '').slice(0, 10),
+      default: isFinite(def) ? def : 0,
+    };
+    if (d.min != null && isFinite(Number(d.min))) entry.min = Number(d.min);
+    if (d.max != null && isFinite(Number(d.max))) entry.max = Number(d.max);
+    out.push(entry);
+  }
+  return { ok: true, params: out.length ? out : null };
+}
+
+// The evaluation scope for an assembly: Q (takeoff qty in the output unit)
+// + declared params at their defaults, overridden by caller-supplied values.
+function paramScope(assembly, overrides) {
+  const defs = paramDefs(assembly);
+  const scope = { Q: 1 };
+  defs.forEach((d) => { scope[d.key] = d.default; });
+  if (overrides && typeof overrides === 'object') {
+    const byUpper = {};
+    Object.keys(scope).forEach((k) => { byUpper[k.toUpperCase()] = k; });
+    Object.keys(overrides).forEach((k) => {
+      const canon = byUpper[String(k).toUpperCase()];
+      const raw = overrides[k];
+      // Blank / null / boolean = "not provided" → keep the default.
+      // Number('') === 0 would silently zero-price a cleared input.
+      if (!canon || raw === '' || raw == null || typeof raw === 'boolean') return;
+      const v = Number(raw);
+      if (isFinite(v)) scope[canon] = v;
+    });
+  }
+  // Clamp declared bounds (authoring guardrails, not hard validation).
+  defs.forEach((d) => {
+    if (d.min != null && scope[d.key] < d.min) scope[d.key] = d.min;
+    if (d.max != null && scope[d.key] > d.max) scope[d.key] = d.max;
+  });
+  return scope;
+}
+
+// Parametric explode: FINAL leaf rows for a given param scope (vs flatten's
+// per-1-output-unit rows). Formulas evaluate at the ROOT level only — an
+// item's qty_formula computes its TOTAL quantity in the root scope, and a
+// formula on a sub-assembly item sets how many child-units to flatten
+// (ceil(Q/8)+1 of a "post" child). INSIDE a nested child, formulas fall back
+// to the linear qty_per_unit × parent count with a warning: a nested formula
+// would be an absolute total, so flattening the child twice (or ×N) would
+// double-count it, and the child's own params aren't in the root scope.
+function explodeParametric(id, graph, scope, _st) {
+  const st = _st || {
+    out: [], errors: [], warnings: [], warned: new Set(),
+    mult: num(scope.Q), depth: 0, seen: new Set(),
+  };
+  const aName = ((graph.assemblies.get(id) || {}).name) || ('#' + id);
+  if (st.seen.has(id) || st.depth > MAX_DEPTH) {
+    if (!st.warned.has('depth:' + id)) {
+      st.warned.add('depth:' + id);
+      st.warnings.push('Nested assembly "' + aName + '" was skipped (cycle or nesting too deep) — its cost is NOT included.');
+    }
+    return { rows: st.out, errors: st.errors, warnings: st.warnings };
+  }
+  st.seen.add(id);
+  const items = graph.itemsBy.get(id) || [];
+  for (const it of items) {
+    const desc = it.description || it.material_description || it.kind;
+    let base;
+    if (it.qty_formula && st.depth === 0) {
+      const r = formulaEngine.evaluate(it.qty_formula, scope);
+      if (!r.ok) { st.errors.push({ item: desc, formula: it.qty_formula, error: r.error }); continue; }
+      base = Math.max(0, r.value);
+    } else {
+      if (it.qty_formula && !st.warned.has('nested:' + id)) {
+        st.warned.add('nested:' + id);
+        st.warnings.push('Formulas inside nested "' + aName + '" only apply when it is inserted directly — its per-unit quantities were used here.');
+      }
+      base = num(it.qty_per_unit) * st.mult;
+    }
+    const eff = base * (1 + num(it.waste_pct) / 100);
+    if (it.kind === 'assembly' && it.child_assembly_id) {
+      explodeParametric(it.child_assembly_id, graph, scope, {
+        out: st.out, errors: st.errors, warnings: st.warnings, warned: st.warned,
+        mult: eff, depth: st.depth + 1, seen: new Set(st.seen),
+      });
+    } else {
+      st.out.push({
+        kind: it.kind,
+        material_id: it.material_id,
+        description: desc,
+        unit: it.unit || it.material_unit || 'EA',
+        qty: Math.round(eff * 10000) / 10000,
+        unit_cost: itemUnitCost(it),
+        cost_code: (COST_CODES.has(it.cost_code) ? it.cost_code : KIND_DEFAULT_CODE[it.kind]) || 'materials',
+        formula: it.qty_formula || null,
+      });
+    }
+  }
+  return { rows: st.out, errors: st.errors, warnings: st.warnings };
+}
 
 // Segment normalizers + code (de)composition.
 function normalizeSeg(v) { return String(v == null ? '' : v).trim().toUpperCase().replace(/[^A-Z0-9]/g, ''); }
@@ -282,7 +421,7 @@ async function backfillAssemblyTaxonomy(db) {
 async function loadGraph(db, orgId) {
   const [aq, iq] = await Promise.all([
     db.query(
-      `SELECT id, code, name, description, trade, system, variant, category, unit, source, is_hidden, notes, updated_at
+      `SELECT id, code, name, description, trade, system, variant, category, unit, source, is_hidden, notes, params, updated_at
          FROM assemblies WHERE organization_id = $1 OR organization_id IS NULL`, [orgId]),
     db.query(
       `SELECT ai.*, m.description AS material_description, m.unit AS material_unit,
@@ -394,6 +533,7 @@ function shapeItem(it) {
     cost_code: it.cost_code || KIND_DEFAULT_CODE[it.kind] || 'materials',
     waste_pct: num(it.waste_pct), notes: it.notes || '',
     rationale: it.rationale || '',
+    qty_formula: it.qty_formula || null,
   };
 }
 
@@ -441,13 +581,16 @@ async function createAssembly(db, orgId, header, createdBy) {
   if (!h.name || !String(h.name).trim()) throw new Error('name is required');
   const v = await validateAgainstRegistry(db, orgId, h, {});
   if (!v.ok) throw new Error(v.error);
+  // params rides outside pickHeader (it's structured, not a string field).
+  const pn = normalizeParams(header && header.params !== undefined ? header.params : null);
+  if (!pn.ok) throw new Error(pn.error);
   const r = await db.query(
-    `INSERT INTO assemblies (organization_id, code, name, description, trade, system, variant, category, unit, source, notes, created_by)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
+    `INSERT INTO assemblies (organization_id, code, name, description, trade, system, variant, category, unit, source, notes, params, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
     [orgId, v.code || null, h.name.trim(), h.description || null,
      v.trade || (h.trade || null), v.system || null, v.variant || null,
      h.category || null, h.unit || 'EA', h.source || 'manual',
-     h.notes || null, createdBy || null]
+     h.notes || null, pn.params ? JSON.stringify(pn.params) : null, createdBy || null]
   );
   return r.rows[0].id;
 }
@@ -457,6 +600,23 @@ async function createAssembly(db, orgId, header, createdBy) {
 // writes the recomputed canonical code; throws on a violation.
 async function updateHeader(db, orgId, assemblyId, header) {
   const h = pickHeader(header || {});
+  // params is structured — validated + stored as JSON, never via the
+  // string-slicing whitelist. Explicit null clears the declaration.
+  if (header && header.params !== undefined) {
+    const pn = normalizeParams(header.params);
+    if (!pn.ok) throw new Error(pn.error);
+    // Persisted formulas must stay valid against the NEW declaration —
+    // dropping a param a saved formula references would break every explode.
+    const fkeysNew = ['Q'].concat((pn.params || []).map((d) => d.key));
+    const fr = await db.query(
+      `SELECT description, qty_formula FROM assembly_items WHERE assembly_id = $1 AND qty_formula IS NOT NULL`,
+      [assemblyId]);
+    for (const row of fr.rows) {
+      const ferr = formulaEngine.validate(row.qty_formula, fkeysNew);
+      if (ferr) throw new Error(`That parameter change breaks the formula on "${row.description || 'an item'}": ${ferr}`);
+    }
+    h.params = pn.params ? JSON.stringify(pn.params) : null;
+  }
   const keys = Object.keys(h);
   if (!keys.length) return 1;
   const finalH = Object.assign({}, h);
@@ -495,9 +655,16 @@ async function replaceItems(db, assemblyId, items, orgId, opts) {
   const graph = await loadGraph(db, orgId);
   if (!graph.assemblies.get(assemblyId)) return 'Assembly not found';
   const oldItems = (graph.itemsBy.get(assemblyId) || []).slice();
+  // Formula rows must parse and reference only declared params (+ Q) — a
+  // typo saved today is a $0 line at explode time.
+  const declaredKeys = ['Q'].concat(paramDefs(graph.assemblies.get(assemblyId)).map((d) => d.key));
   for (const it of items) {
     const kind = String(it.kind || 'material');
     if (!KINDS.has(kind)) return `Bad kind "${kind}"`;
+    if (it.qty_formula != null && String(it.qty_formula).trim() !== '') {
+      const ferr = formulaEngine.validate(String(it.qty_formula), declaredKeys);
+      if (ferr) return `Formula "${String(it.qty_formula).slice(0, 60)}": ${ferr}`;
+    }
     if (kind === 'assembly') {
       const cid = parseInt(it.child_assembly_id, 10);
       if (!isFinite(cid) || !graph.assemblies.get(cid)) return 'child_assembly_id missing or not in your org';
@@ -519,8 +686,8 @@ async function replaceItems(db, assemblyId, items, orgId, opts) {
     await db.query(
       `INSERT INTO assembly_items
         (assembly_id, sort_order, kind, material_id, child_assembly_id, description,
-         qty_per_unit, unit, unit_cost, cost_code, waste_pct, notes, rationale)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
+         qty_per_unit, unit, unit_cost, cost_code, waste_pct, notes, rationale, qty_formula)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
       [assemblyId, sort++, kind,
        kind === 'material' && it.material_id != null ? parseInt(it.material_id, 10) : null,
        kind === 'assembly' ? parseInt(it.child_assembly_id, 10) : null,
@@ -531,7 +698,8 @@ async function replaceItems(db, assemblyId, items, orgId, opts) {
        COST_CODES.has(it.cost_code) ? it.cost_code : (KIND_DEFAULT_CODE[kind] || 'materials'),
        num(it.waste_pct) || 0,
        it.notes != null ? String(it.notes).slice(0, 500) : null,
-       it.rationale != null ? String(it.rationale).slice(0, 2000) : null]
+       it.rationale != null ? String(it.rationale).slice(0, 2000) : null,
+       it.qty_formula != null && String(it.qty_formula).trim() !== '' ? String(it.qty_formula).slice(0, 200) : null]
     );
   }
   await db.query('UPDATE assemblies SET updated_at = NOW() WHERE id = $1', [assemblyId]);
@@ -553,7 +721,8 @@ async function replaceItems(db, assemblyId, items, orgId, opts) {
           entries.push({ item_desc: desc, field: 'items', new_value: '+ added' });
           return;
         }
-        [['qty_per_unit', num], ['unit_cost', (v) => (v == null || v === '' ? null : num(v))], ['waste_pct', num]].forEach(([f, cast]) => {
+        [['qty_per_unit', num], ['unit_cost', (v) => (v == null || v === '' ? null : num(v))], ['waste_pct', num],
+         ['qty_formula', (v) => (v == null || String(v).trim() === '' ? null : String(v).trim())]].forEach(([f, cast]) => {
           const ov = cast(o[f]); const nv = cast(n[f]);
           if (String(ov) !== String(nv)) entries.push({ item_desc: desc, field: f, old_value: ov, new_value: nv });
         });
@@ -606,6 +775,8 @@ module.exports = {
   KINDS, COST_CODES, SOURCES, KIND_DEFAULT_CODE, MAX_DEPTH,
   loadGraph, itemUnitCost, resolveCost, flatten, wouldCycle, shapeItem,
   pickHeader, createAssembly, updateHeader, replaceItems, logTuning, bestEffortInTxn,
+  // Parametric layer (S0)
+  paramDefs, normalizeParams, paramScope, explodeParametric,
   // Code protocol
   normalizeCode, parseCode, loadRegistry, validateAgainstRegistry,
   seedGlobalTaxonomy, backfillAssemblyTaxonomy,

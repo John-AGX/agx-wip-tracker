@@ -529,6 +529,9 @@
     update: function(id, payload) { return put('/api/assemblies/' + encodeURIComponent(id), payload); },
     saveItems: function(id, items) { return put('/api/assemblies/' + encodeURIComponent(id) + '/items', { items: items }); },
     remove: function(id) { return del('/api/assemblies/' + encodeURIComponent(id)); },
+    // Parametric explode (S0): { params: { Q, H, ... } } → FINAL leaf rows
+    // (qty already computed) + priced total + formula errors.
+    explode: function(id, params) { return post('/api/assemblies/' + encodeURIComponent(id) + '/explode', { params: params || {} }); },
     // Canonical code + availability for a set of TRADE/SYSTEM/VARIANT parts.
     suggestCode: function(parts) {
       var qs = [];

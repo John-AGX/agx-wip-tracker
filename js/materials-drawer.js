@@ -567,9 +567,63 @@
     var t = 0;
     _stack.forEach(function(s) {
       var q = parseFloat(s.qty);
-      if (isFinite(q) && q > 0) t += q * (Number(s.a.unit_cost) || 0);
+      if (!isFinite(q) || q <= 0) return;
+      // Parametric assemblies: use the server-computed total for the typed
+      // dimensions when we have it (formulas are non-linear — q × unit_cost
+      // would misprice ceil()/step rows); the linear estimate is the interim.
+      if (isParametric(s.a) && s.paramTotal != null) t += Number(s.paramTotal) || 0;
+      else t += q * (Number(s.a.unit_cost) || 0);
     });
     return t;
+  }
+
+  // An assembly routes through the parametric path when it declares params
+  // OR carries any quantity formula (formula-only recipes still need the
+  // server explode — q × per-unit would misprice their step functions).
+  function isParametric(a) {
+    return !!(a && ((Array.isArray(a.params) && a.params.length) || a.has_formulas));
+  }
+
+  // PWA-safe notice — native alert() silently no-ops in the installed app.
+  function mdNotify(msg) {
+    if (window.p86Confirm) { try { window.p86Confirm({ title: 'Assemblies', message: msg, confirmText: 'OK' }); return; } catch (e) {} }
+    alert(msg);
+  }
+
+  // Debounced parametric repricing for one stacked row — POSTs the typed
+  // Q + params to /explode and caches the priced total on the row. The
+  // timer AND a generation token live on the row: another row's typing
+  // must not cancel this one, and a stale response must not land after
+  // the inputs changed again.
+  function repriceParametric(s, tray) {
+    if (!isParametric(s.a)) return;
+    s._priceGen = (s._priceGen || 0) + 1;
+    var gen = s._priceGen;
+    if (s._priceTimer) clearTimeout(s._priceTimer);
+    var q = parseFloat(s.qty);
+    if (!isFinite(q) || q <= 0) { s.paramTotal = null; s.paramErrors = null; return; }
+    s._priceTimer = setTimeout(function() {
+      var params = { Q: q };
+      Object.keys(s.params || {}).forEach(function(k) {
+        var v = parseFloat(s.params[k]);
+        if (isFinite(v)) params[k] = v;          // blank/junk → server falls back to the default
+      });
+      fetch('/api/assemblies/' + encodeURIComponent(s.a.id) + '/explode', {
+        method: 'POST', credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ params: params })
+      }).then(function(r) { return r.ok ? r.json() : null; })
+        .then(function(d) {
+          if (!d || !d.ok || gen !== s._priceGen) return;   // superseded — drop
+          s.paramTotal = d.total;
+          var issues = (d.errors || []).concat((d.warnings || []).map(function(w) { return { item: '', error: w }; }));
+          s.paramErrors = issues.length ? issues : null;
+          var totEl = tray && tray.querySelector('span[style*="font-weight:700"]');
+          if (totEl) totEl.textContent = fmtMoney(stackTotal());
+          var extEl = tray && tray.querySelector('[data-stack-ext="' + s.a.id + '"]');
+          if (extEl) extEl.textContent = fmtMoney(d.total);
+        }).catch(function() {});
+    }, 300);
   }
 
   function renderAsmStackTray(tray) {
@@ -588,20 +642,39 @@
             : (s.flat.length ? '↳ ' + s.flat.map(function(f) { return escapeHTML((f.description || '').slice(0, 32)); }).join(' · ') : '(no components)')) +
         '</div>';
       }
+      // Parametric assemblies expose their declared dimension knobs inline;
+      // the ext total then comes from the server explode (debounced).
+      var paramRow = '';
+      if (isParametric(s.a)) {
+        if (s.paramTotal != null) ext = fmtMoney(s.paramTotal);
+        paramRow = '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:0 8px 5px 26px;">' +
+          (Array.isArray(s.a.params) ? s.a.params : []).map(function(d) {
+            var v = (s.params && s.params[d.key] != null) ? s.params[d.key] : d.default;
+            return '<label title="' + escapeHTML(d.label || d.key) + '" style="display:flex;align-items:center;gap:3px;font-size:10px;color:#fbbf24;">' +
+              '<b style="font-family:monospace;">' + escapeHTML(d.key) + '</b>' + (d.unit ? '<span style="opacity:.7;">' + escapeHTML(d.unit) + '</span>' : '') +
+              '<input data-stack-param="' + i + ':' + escapeHTML(d.key) + '" value="' + escapeHTML(String(v)) + '" inputmode="decimal" ' +
+                'style="width:46px;text-align:right;background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.35);border-radius:5px;padding:2px 4px;color:inherit;font-family:monospace;font-size:10.5px;" />' +
+            '</label>';
+          }).join('') +
+          (s.paramErrors ? '<span style="font-size:10px;color:#f87171;" title="' + escapeHTML(s.paramErrors.map(function(e2){ return e2.item + ': ' + e2.error; }).join('\n')) + '">⚠ formula error</span>' : '') +
+        '</div>';
+      }
       return '<div style="display:flex;align-items:center;gap:8px;padding:5px 8px;">' +
           '<span data-stack-prev="' + i + '" style="cursor:pointer;color:#4fd1c5;font-size:10px;display:inline-block;transition:transform .12s;' + (s.open ? 'transform:rotate(90deg);' : '') + '">▶</span>' +
-          '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;font-weight:600;">🧩 ' + escapeHTML(s.a.name) + '</span>' +
+          '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11.5px;font-weight:600;">🧩 ' + escapeHTML(s.a.name) + (isParametric(s.a) ? ' <span title="Parametric — quantities computed from formulas at the typed dimensions" style="color:#fbbf24;font-size:10px;">ƒ</span>' : '') + '</span>' +
           '<input class="md-stack-qty" data-stack-qty="' + i + '" value="' + escapeHTML(String(s.qty)) + '" placeholder="qty" inputmode="decimal" ' +
             'style="width:58px;text-align:right;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:6px;padding:3px 6px;color:inherit;font-family:monospace;font-size:11.5px;" />' +
           '<span style="font-size:10px;color:var(--text-dim,#8a93a6);flex:0 0 24px;">' + escapeHTML(s.a.unit || 'EA') + '</span>' +
-          '<span style="font-family:monospace;font-size:11.5px;color:#4fd1c5;flex:0 0 70px;text-align:right;">' + ext + '</span>' +
+          '<span data-stack-ext="' + s.a.id + '" style="font-family:monospace;font-size:11.5px;color:#4fd1c5;flex:0 0 70px;text-align:right;">' + ext + '</span>' +
           '<span data-stack-x="' + i + '" style="cursor:pointer;color:var(--text-dim,#8a93a6);padding:0 2px;">✕</span>' +
-        '</div>' + prev;
+        '</div>' + paramRow + prev;
     }).join('');
 
     var saveForm = '';
     if (_stackSaving) {
-      saveForm =
+      var paramNote = _stack.some(function(s) { return isParametric(s.a); })
+        ? '<div style="padding:4px 8px 0;font-size:10px;color:#fbbf24;">⚠ Typed dimensions don\'t carry into a composite — parametric children nest at their per-unit quantities.</div>' : '';
+      saveForm = paramNote +
         '<div style="display:flex;gap:6px;align-items:center;padding:6px 8px;border-top:1px solid rgba(255,255,255,0.1);">' +
           '<input data-stacksave-name placeholder="New assembly name…" style="flex:1;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:6px;padding:4px 7px;color:inherit;font-size:11.5px;" />' +
           '<input data-stacksave-unit value="EA" title="Output unit — quantities above are per 1 of this" style="width:44px;text-align:center;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.15);border-radius:6px;padding:4px;color:inherit;font-size:11.5px;" />' +
@@ -630,12 +703,27 @@
 
     tray.querySelectorAll('[data-stack-qty]').forEach(function(inp) {
       inp.addEventListener('input', function() {
-        _stack[Number(inp.dataset.stackQty)].qty = inp.value;
+        var s = _stack[Number(inp.dataset.stackQty)];
+        s.qty = inp.value;
         // Update totals without full re-render (keeps focus).
         var totEl = tray.querySelector('span[style*="font-weight:700"]');
         if (totEl) totEl.textContent = fmtMoney(stackTotal());
+        repriceParametric(s, tray);
       });
       inp.addEventListener('change', function() { renderAsmStackTray(tray); });
+    });
+    tray.querySelectorAll('[data-stack-param]').forEach(function(inp) {
+      inp.addEventListener('input', function() {
+        var parts = String(inp.dataset.stackParam).split(':');
+        var s = _stack[Number(parts[0])];
+        if (!s) return;
+        if (!s.params) s.params = {};
+        // A cleared field means "back to the default" — storing '' would
+        // coerce to 0 downstream and zero-price the dimension.
+        if (String(inp.value).trim() === '') delete s.params[parts[1]];
+        else s.params[parts[1]] = inp.value;
+        repriceParametric(s, tray);
+      });
     });
     tray.querySelectorAll('[data-stack-x]').forEach(function(x) {
       x.addEventListener('click', function() {
@@ -689,6 +777,26 @@
     var ready = _stack.filter(function(s) { var q = parseFloat(s.qty); return isFinite(q) && q > 0; });
     if (!ready.length) { alert('Give each stacked assembly a takeoff qty first.'); return; }
     Promise.all(ready.map(function(s) {
+      // Parametric assemblies insert from the server explode — FINAL
+      // quantities computed from the typed dimensions, never q × per-unit.
+      if (isParametric(s.a)) {
+        var params = { Q: parseFloat(s.qty) };
+        Object.keys(s.params || {}).forEach(function(k) {
+          var pv = parseFloat(s.params[k]);
+          if (isFinite(pv)) params[k] = pv;
+        });
+        return fetch('/api/assemblies/' + encodeURIComponent(s.a.id) + '/explode', {
+          method: 'POST', credentials: 'include',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ params: params })
+        }).then(function(r) { if (!r.ok) throw new Error(s.a.name + ': explode failed'); return r.json(); })
+          .then(function(d) {
+            if (d.errors && d.errors.length) {
+              throw new Error(s.a.name + ' has formula errors: ' + d.errors.map(function(e2) { return e2.item + ' — ' + e2.error; }).join('; '));
+            }
+            return { s: s, p: d, params: d.params_used || params };
+          });
+      }
       return fetch('/api/assemblies/' + encodeURIComponent(s.a.id), { credentials: 'include' })
         .then(function(r) { if (!r.ok) throw new Error(s.a.name + ': load failed'); return r.json(); })
         .then(function(d) { return { s: s, d: d }; });
@@ -696,6 +804,40 @@
       var specs = [];
       loaded.forEach(function(x) {
         var q = parseFloat(x.s.qty);
+        // ── Parametric branch: rows already carry final quantities ──
+        if (x.p) {
+          var prows = Array.isArray(x.p.rows) ? x.p.rows : [];
+          if (_asmInsertMode === 'exploded') {
+            prows.forEach(function(f) {
+              if (!(f.qty > 0)) return;
+              specs.push({
+                description: f.description, qty: Math.round(f.qty * 100) / 100, unit: f.unit || 'EA',
+                unit_cost: f.unit_cost != null ? f.unit_cost : 0,
+                section_name: SUBGROUP_TO_SECTION[f.cost_code] || 'Materials & Supplies',
+                source_material_id: f.material_id || undefined,
+                source_assembly_id: x.s.a.id,
+                assembly_params: x.params
+              });
+            });
+          } else {
+            BUCKET_ORDER.forEach(function(code) {
+              var rows = prows.filter(function(f) { return (f.cost_code || 'materials') === code; });
+              if (!rows.length) return;
+              var bucketTotal = rows.reduce(function(sum, f) { return sum + (f.qty || 0) * (f.unit_cost || 0); }, 0);
+              specs.push({
+                description: x.s.a.name + ' — ' + BUCKET_SUFFIX[code],
+                qty: q, unit: x.s.a.unit || 'EA',
+                unit_cost: Math.round((bucketTotal / q) * 1e6) / 1e6,   // 6dp — 4dp drifts the ext at large Q
+                section_name: SUBGROUP_TO_SECTION[code] || 'Materials & Supplies',
+                source_assembly_id: x.s.a.id,
+                assembly_breakdown: rows,
+                assembly_bucket: code,
+                assembly_params: x.params
+              });
+            });
+          }
+          return;
+        }
         var flat = Array.isArray(x.d.flat) ? x.d.flat : [];
         if (_asmInsertMode === 'exploded' && flat.length) {
           flat.forEach(function(f) {
@@ -743,7 +885,7 @@
       _stack = []; _stackSaving = false;
       renderAssemblyResults();
       renderTray();
-    }).catch(function(e) { alert('Insert failed: ' + (e.message || 'unknown')); });
+    }).catch(function(e) { mdNotify('Insert failed: ' + (e.message || 'unknown')); });
   }
 
   // The composition flow: the stack becomes a NEW assembly whose items
