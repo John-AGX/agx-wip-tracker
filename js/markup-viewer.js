@@ -1856,13 +1856,19 @@
     } else if (s.tool === 'mangle') {
       drawMangle(ctx, s);
     } else if (s.tool === 'text') {
+      // Sheet-editor notes may be multi-line; photo-markup text never
+      // carries \n, so single-line strokes render exactly as before.
       ctx.font = 'bold ' + (s.fontPx || 24) + 'px Arial,sans-serif';
       ctx.textBaseline = 'top';
       ctx.lineWidth = Math.max(2, (s.fontPx || 24) / 12);
-      ctx.strokeStyle = '#000';
-      ctx.strokeText(s.text, s.x, s.y);
-      ctx.fillStyle = s.color;
-      ctx.fillText(s.text, s.x, s.y);
+      var tLines = String(s.text == null ? '' : s.text).split('\n');
+      var tLh = Math.round((s.fontPx || 24) * 1.25);
+      for (var tli = 0; tli < tLines.length; tli++) {
+        ctx.strokeStyle = '#000';
+        ctx.strokeText(tLines[tli], s.x, s.y + tli * tLh);
+        ctx.fillStyle = s.color;
+        ctx.fillText(tLines[tli], s.x, s.y + tli * tLh);
+      }
     } else if (s.tool === 'sticker') {
       var def = stickerDef(s.kind);
       if (def) def.draw(ctx, s.x, s.y, s.size || 48, s.color || '#ef4444', s.label);

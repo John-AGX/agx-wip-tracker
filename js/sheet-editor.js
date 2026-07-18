@@ -54,6 +54,7 @@
     { key: 'chamfer',  glyph: '◣', name: 'Chamfer',    group: 'Modify',   label: 'Chamfer — click two lines, then enter a setback distance (0 = sharp corner)' },
     { key: 'polararray', glyph: '❋', name: 'Polar array', group: 'Modify', label: 'Polar array — select objects first, then click a center point and enter the count to array them around it' },
     { key: 'stretch',  glyph: '⇲', name: 'Stretch',    group: 'Modify',   label: 'Stretch — click two corners of a crossing window (vertices inside move, the rest stays), then click a base + destination point' },
+    { key: 'mirror2',  glyph: '⋈', name: 'Mirror 2-pt', group: 'Modify',  label: 'Mirror (two-point) — select objects first, then click two points on the mirror line; mirrored COPIES are created (originals kept)' },
     { key: 'dim',      glyph: '↔', name: 'Dimension',  group: 'Annotate', label: 'Dimension (aligned — click two points; auto-labels real length along the line at the viewport scale)' },
     { key: 'dimradius',glyph: 'R', name: 'Radius dim',  group: 'Annotate', label: 'Radius dimension — click a circle / ellipse; labels its radius (R …)' },
     { key: 'dimdia',   glyph: '⌀', name: 'Diameter dim',group: 'Annotate', label: 'Diameter dimension — click a circle / ellipse; labels its diameter (⌀ …)' },
@@ -63,17 +64,20 @@
     { key: 'revcloud', glyph: '☁', name: 'Rev cloud',  group: 'Annotate', label: 'Revision cloud — click two opposite corners; drawn as a scalloped cloud around that box' },
     { key: 'text',     glyph: 'T', name: 'Text',       group: 'Annotate', label: 'Text (click to place)' },
     { key: 'hatch',    glyph: '▨', name: 'Hatch',      group: 'Annotate', label: 'Hatch fill (click a closed region; pick a material pattern) — double-click / Enter to close' },
+    { key: 'wipeout',  glyph: '▩', name: 'Wipeout',    group: 'Annotate', label: 'Wipeout — opaque paper-white mask; click a region over underlay/linework you want blanked out (dims & labels stay readable on top). Double-click / Enter to close.' },
     { key: 'symbol',   glyph: '✱', name: 'Symbol',     group: 'Annotate', label: 'Symbol / block (north arrow, sprinkler head, post, tree, callout)' },
     { key: 'level',    glyph: '↧', name: 'Level',      group: 'Annotate', label: 'Level / elevation line — horizontal datum at a set elevation (e.g. 10\') with a head marker. Prints. The first one sets the datum.' },
     { key: 'spotelev', glyph: '⌖', name: 'Spot elev',  group: 'Annotate', label: 'Spot elevation — click any point to tag its height above the level datum. Prints.' },
     { key: 'refline',  glyph: '┈', name: 'Ref line',   group: 'Annotate', label: 'Reference line (construction guide — snaps & trims to, but is NOT printed or exported)' },
     { key: 'inquire',  glyph: '⊾', name: 'Measure',    group: 'View',     label: 'Measure / inquiry — click points for distance, angle, running total & enclosed area. Does NOT print. Enter/Esc clears.' },
     { key: 'calibrate',glyph: '📐', name: 'Calibrate',  group: 'View',     label: 'Calibrate scale — click two points a known distance apart on the plan underlay, then type the real length (e.g. 20\'). Sets this viewport\'s scale so every measurement reads true.' },
-    { key: 'pan',      glyph: '✋', name: 'Pan',        group: 'View',     label: 'Pan (or hold Space / middle-drag)' }
+    { key: 'pan',      glyph: '✋', name: 'Pan',        group: 'View',     label: 'Pan (or hold Space / middle-drag)' },
+    { key: 'zoomwin',  glyph: '⌕', name: 'Zoom win',   group: 'View',     label: 'Zoom window — click two corners of the area to fill the screen (Z)' }
   ];
   // Non-tool buttons (edit ops + history/util) shown in the drawer, grouped.
   var EDIT_ITEMS = [
     { key: 'rotate',  act: 'edit', glyph: '⟳', name: 'Rotate 90°', group: 'Modify', label: 'Rotate selection 90°' },
+    { key: 'rotateA', act: 'edit', glyph: '∠', name: 'Rotate ∠',  group: 'Modify', label: 'Rotate selection by a typed angle about its center (clockwise; negative = counter-clockwise)' },
     { key: 'mirrorH', act: 'edit', glyph: '⇆', name: 'Mirror H',   group: 'Modify', label: 'Mirror selection (horizontal)' },
     { key: 'mirrorV', act: 'edit', glyph: '⇅', name: 'Mirror V',   group: 'Modify', label: 'Mirror selection (vertical)' },
     { key: 'dup',     act: 'edit', glyph: '⧉', name: 'Duplicate',  group: 'Modify', label: 'Duplicate selection (Ctrl+D)' },
@@ -99,19 +103,19 @@
     ] },
     { tab: 'Modify', panels: [
       { title: 'Modify', items: ['trim', 'extend', 'fillet', 'chamfer', 'break'] },
-      { title: 'Arrange', items: ['edit:dup', 'edit:offset', 'edit:scale', 'edit:rotate', 'edit:mirrorH', 'edit:mirrorV', 'stretch'] },
+      { title: 'Arrange', items: ['edit:dup', 'edit:offset', 'edit:scale', 'edit:rotate', 'edit:rotateA', 'edit:mirrorH', 'edit:mirrorV', 'mirror2', 'stretch'] },
       { title: 'Array', items: ['polararray', 'edit:array'] },
       { title: 'Combine', items: ['edit:explode', 'edit:join'] }
     ] },
     { tab: 'Annotate', panels: [
       { title: 'Dimensions', items: ['dim', 'dimcont', 'dimradius', 'dimdia', 'angle'] },
       { title: 'Text & Notes', items: ['text', 'leader', 'revcloud'] },
-      { title: 'Fills & Symbols', items: ['hatch', 'symbol'] },
+      { title: 'Fills & Symbols', items: ['hatch', 'wipeout', 'symbol'] },
       { title: 'Levels', items: ['level', 'spotelev', 'refline'] }
     ] },
     { tab: 'View', panels: [
       { title: 'Measure', items: ['inquire', 'calibrate'] },
-      { title: 'Navigate', items: ['pan', 'edit:fit'] },
+      { title: 'Navigate', items: ['pan', 'zoomwin', 'edit:fit'] },
       { title: 'Snaps', items: ['snap:ortho', 'snap:grid', 'snap:osnap'] },
       { title: 'History', items: ['edit:undo', 'edit:redo'] }
     ] },
@@ -161,6 +165,10 @@
     calibrate: '<rect x="3" y="9" width="18" height="6" rx="1"/><path d="M7 9v3M15 9v3"/><path d="M9 15l3 4 3-4"/>',
     pan: '<path d="M12 3v18M3 12h18M12 3l-2.5 2.5M12 3l2.5 2.5M12 21l-2.5-2.5M12 21l2.5-2.5M3 12l2.5-2.5M3 12l2.5 2.5M21 12l-2.5-2.5M21 12l2.5 2.5"/>',
     rotate: '<path d="M20 12a8 8 0 1 1-2.3-5.6"/><path d="M18 3v4h-4"/>',
+    rotateA: '<path d="M5 19h13M5 19L16 8"/><path d="M5 19a10 10 0 0 1 3-7.5"/><path d="M17 4l2 2-2 2"/>',
+    mirror2: '<path d="M12 3v18" stroke-dasharray="3 2"/><path d="M4 8h4v8H4z"/><path d="M16 8h4v8h-4z" stroke-dasharray="2 2"/>',
+    wipeout: '<rect x="4" y="4" width="16" height="16" rx="1"/><path d="M4 13l9-9M9 20l11-11" opacity="0.35"/><rect x="8" y="8" width="8" height="8" fill="currentColor" stroke="none" opacity="0.8"/>',
+    zoomwin: '<circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5 5"/><rect x="7.5" y="7.5" width="6" height="6" stroke-dasharray="2 1.6"/>',
     mirrorH: '<path d="M12 3v18" stroke-dasharray="3 2"/><path d="M9 8L3 12l6 4zM15 8l6 4-6 4z"/>',
     mirrorV: '<path d="M3 12h18" stroke-dasharray="3 2"/><path d="M8 9L12 3l4 6zM8 15l4 6 4-6z"/>',
     dup: '<rect x="8" y="8" width="12" height="12" rx="1.5"/><path d="M4 16V4h12"/>',
@@ -190,7 +198,7 @@
     s: 'select', l: 'line', p: 'polyline', r: 'rect', c: 'circle', a: 'arc',
     x: 'trim', e: 'extend', f: 'fillet',
     d: 'dim', g: 'angle', k: 'leader', t: 'text', h: 'hatch', y: 'symbol',
-    m: 'inquire', v: 'pan'
+    m: 'inquire', v: 'pan', z: 'zoomwin', w: 'wipeout'
   };
 
   var HATCH_PATTERNS = [
@@ -201,7 +209,7 @@
   var SYMBOLS = [
     { key: 'north', label: 'North' }, { key: 'head', label: 'Head' },
     { key: 'post', label: 'Post' }, { key: 'tree', label: 'Tree' },
-    { key: 'callout', label: 'Callout' }
+    { key: 'callout', label: 'Callout' }, { key: 'revdelta', label: 'Rev Δ' }
   ];
   // Architectural + civil scales. f = paper-inches per real-inch; the
   // viewport's pixelsPerInch (sheet px per real inch) = DPI * f.
@@ -634,6 +642,7 @@
       }
       var e = entOnPlane(raw, mapFn);
       if (invertInk && e.color) e.color = modelInkColor(e.color);
+      if (e.tool === 'wipeout') { try { drawWipeout(ctx, e, opts, invertInk); } catch (err) {} return; }
       if (e.tool === 'hatch') { try { drawHatch(ctx, e); } catch (err) {} return; }
       if (e.tool === 'symbol') { try { drawSymbol(ctx, e); } catch (err) {} return; }
       if (e.tool === 'arc') { try { drawArc(ctx, e); } catch (err) {} return; }
@@ -910,6 +919,12 @@
       ctx.beginPath(); ctx.arc(0, 0, r * 0.7, 0, Math.PI * 2); ctx.stroke();
       ctx.fillStyle = col; ctx.font = '700 ' + Math.round(s * 0.5) + 'px Arial, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       ctx.fillText(String(e.label != null ? e.label : '?'), 0, 1);
+    } else if (e.kind === 'revdelta') {
+      // Numbered revision-delta triangle — pairs with the rev cloud and the
+      // titleblock revision strip so reissued sheets are traceable.
+      ctx.beginPath(); ctx.moveTo(0, -r * 0.9); ctx.lineTo(-r * 0.82, r * 0.55); ctx.lineTo(r * 0.82, r * 0.55); ctx.closePath(); ctx.stroke();
+      ctx.fillStyle = col; ctx.font = '700 ' + Math.round(s * 0.4) + 'px Arial, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillText(String(e.label != null ? e.label : '?'), 0, r * 0.15);
     }
     ctx.restore();
   }
@@ -997,6 +1012,23 @@
     ctx.save();
     ctx.strokeStyle = 'rgba(34,211,238,0.6)'; ctx.lineWidth = 1.4 / sc; ctx.setLineDash([10 / sc, 7 / sc]);
     ctx.beginPath(); ctx.moveTo(e.startX, e.startY); ctx.lineTo(e.endX, e.endY); ctx.stroke();
+    ctx.restore();
+  }
+  // Wipeout: an opaque paper mask — blanks the underlay + earlier linework
+  // beneath it so dims/labels drawn later stay readable. Paper-white on the
+  // sheet; the model-field bg when ink-inverted in model space. The dashed
+  // outline is EDITOR-ONLY (finds the mask; never prints/exports).
+  function drawWipeout(ctx, e, opts, invertInk) {
+    if (!e.points || e.points.length < 2) return;
+    ctx.save();
+    ctx.beginPath(); ctx.moveTo(e.points[0].x, e.points[0].y);
+    for (var i = 1; i < e.points.length; i++) ctx.lineTo(e.points[i].x, e.points[i].y);
+    ctx.closePath();
+    if (e.points.length >= 3) { ctx.fillStyle = invertInk ? '#1e232b' : '#ffffff'; ctx.fill(); }
+    if (opts && opts.editor) {
+      ctx.strokeStyle = 'rgba(148,163,184,0.55)'; ctx.lineWidth = 1; ctx.setLineDash([6, 5]);
+      ctx.stroke();
+    }
     ctx.restore();
   }
   function drawArc(ctx, e) {
@@ -1472,6 +1504,7 @@
         if (act === 'edit') {
           if (!S.selIds.length) return;
           if (k === 'rotate') rotate90();
+          else if (k === 'rotateA') rotateBy();
           else if (k === 'mirrorH') mirror(true);
           else if (k === 'mirrorV') mirror(false);
           else if (k === 'dup') duplicateSelected();
@@ -1552,6 +1585,7 @@
     S.inq = null;                            // clear any measure/inquiry path
     S._calib = null;                         // cancel any in-progress calibration
     S._poly = null;                          // cancel any in-progress polygon
+    S._mir = null; S._zw = null;             // cancel pending mirror-line / zoom-window first points
     hideDyn();
     S.tool = t;
     // Track last/recent drawing commands for Enter-repeat + the right-click menu.
@@ -1782,6 +1816,7 @@
       ['S', 'Select'], ['L', 'Line'], ['P', 'Polyline'], ['R', 'Rectangle'], ['C', 'Circle'], ['A', 'Arc'],
       ['X', 'Trim'], ['E', 'Extend'], ['F', 'Fillet'],
       ['D', 'Dimension'], ['G', 'Angle dim'], ['K', 'Leader'], ['T', 'Text'], ['H', 'Hatch'], ['Y', 'Symbol'], ['V', 'Pan'],
+      ['M', 'Measure'], ['Z', 'Zoom window'], ['W', 'Wipeout'],
       ['Edit & view', ''],
       ['Ctrl+Z', 'Undo'], ['Ctrl+Y / Ctrl+Shift+Z', 'Redo'], ['Ctrl+D', 'Duplicate selection'],
       ['Del / Backspace', 'Delete selection'], ['Enter', 'Finish polyline / hatch'], ['Esc', 'Cancel current action'],
@@ -2153,7 +2188,7 @@
   }
   // Any multi-click tool state that must keep its screen→model mapping.
   function toolInProgress() {
-    return !!(S.draft || S._stretch || S._dimcont || S._calib || S._poly || S._filletA || S._chamferA || S.inq);
+    return !!(S.draft || S._stretch || S._dimcont || S._calib || S._poly || S._filletA || S._chamferA || S.inq || S._mir || S._zw);
   }
   // Convert a screen-px tolerance (snap radius, hit slop) into model inches.
   function screenModelDist(px, vp) {
@@ -2450,6 +2485,12 @@
         if (grip) { S.gripDrag = { gi: grip.gi, type: grip.type, last: raw, pushed: false }; return; }
         var hit = hitTest(raw);
         if (hit && e.shiftKey) { selectAt(raw, true); return; }     // toggle in/out of set
+        if (hit && e.altKey) {
+          // Alt-click cycles through the overlapping stack under the cursor.
+          var cyc = selectAt(raw, false, true);
+          if (cyc) S.moveDrag = { last: raw, pushed: false, hit: cyc, group: false };
+          return;
+        }
         if (hit && isSelected(hit)) {
           // Clicked an already-selected entity → arm a group move-drag; a plain
           // click (no movement) collapses the selection to just this entity.
@@ -2577,7 +2618,7 @@
       S.moveDrag = null; S.gripDrag = null;
     };
     c.ondblclick = function (e) {
-      if ((S.tool === 'polyline' || S.tool === 'hatch' || S.tool === 'spline') && S.draft) { commitPolyline(); return; }
+      if ((S.tool === 'polyline' || S.tool === 'hatch' || S.tool === 'spline' || S.tool === 'wipeout') && S.draft) { commitPolyline(); return; }
       // AutoCAD MSPACE: double-click inside a viewport activates it — pan/zoom
       // then move the model within the frame. Double-click outside deactivates.
       if (S.space !== 'sheet') return;
@@ -2650,13 +2691,13 @@
         // Cancel whatever's in progress, clear the selection, and fall back to
         // the Select tool (CAD-style). Never closes the editor — that's the
         // Close button's job.
-        S._filletA = null; S._chamferA = null; S._stretch = null; S._dimcont = null; S.inq = null; S.draft = null; S.boxSel = null; S._calib = null; S._poly = null; hideDyn();
+        S._filletA = null; S._chamferA = null; S._stretch = null; S._dimcont = null; S.inq = null; S.draft = null; S.boxSel = null; S._calib = null; S._poly = null; S._mir = null; S._zw = null; hideDyn();
         S.vpActive = null;                    // release any activated viewport
         setSelection([]);
         if (S.tool !== 'select') setTool('select'); else { buildLayers(); repaint(); }
       }
       else if (e.key === 'Enter') {
-        if ((S.tool === 'polyline' || S.tool === 'hatch' || S.tool === 'spline') && S.draft) commitPolyline();
+        if ((S.tool === 'polyline' || S.tool === 'hatch' || S.tool === 'spline' || S.tool === 'wipeout') && S.draft) commitPolyline();
         else if (S.tool === 'inquire' && S.inq) { S.inq = null; repaint(); }
         else if (S.tool === 'dimcont' && S._dimcont) { e.preventDefault(); S._dimcont = null; setHint('Continuous dimension finished.'); repaint(); }
         else if (!S.draft && S._lastTool) { e.preventDefault(); setTool(S._lastTool); }   // AutoCAD: Enter repeats the last command
@@ -2725,7 +2766,7 @@
   // Cancel everything in progress + drop to Select (shared by Esc + menu).
   function cancelAll() {
     if (!S) return;
-    S._filletA = null; S._chamferA = null; S._stretch = null; S._dimcont = null; S.inq = null; S.draft = null; S.boxSel = null; S._calib = null; S._poly = null; hideDyn();
+    S._filletA = null; S._chamferA = null; S._stretch = null; S._dimcont = null; S.inq = null; S.draft = null; S.boxSel = null; S._calib = null; S._poly = null; S._mir = null; S._zw = null; hideDyn();
     setSelection([]);
     if (S.tool !== 'select') setTool('select'); else { buildLayers(); repaint(); }
   }
@@ -2748,7 +2789,39 @@
       items.push({ sep: 1 });
       items.push({ label: '⧉ Duplicate', act: duplicateSelected });
       items.push({ label: '⟳ Rotate 90°', act: rotate90 });
+      items.push({ label: '∠ Rotate…', act: rotateBy });
       items.push({ label: '⌫ Delete', act: deleteSelected });
+    }
+    if (S.selIds && S.selIds.length === 1) {
+      // Select-similar: same tool (+ same symbol kind) on the same layer —
+      // one click turns a symbol into a takeoff count.
+      var simE = selectedEntity();
+      if (simE) items.push({ label: '⧈ Select similar', act: function () {
+        var t0 = simE.tool, k0 = simE.kind || null, l0 = simE.layer;
+        // Scope to geometry visible through THIS sheet's viewports — a
+        // model-wide grab would let a follow-up delete/rotate hit invisible
+        // geometry on other sheets. Model space stays model-wide.
+        var inView = function (x) {
+          if (S.space === 'model') return true;
+          var bb = entBBox(x); if (!bb) return false;
+          var vps = S.doc.viewports || [];
+          for (var vi = 0; vi < vps.length; vi++) {
+            var vv = vps[vi], vppi = vpPpiSafe(vv), vw = vpWin(vv);
+            var hw = (vv.w / 2) / vppi, hh = (vv.h / 2) / vppi;
+            if (bb.x <= vw.cx + hw && bb.x + bb.w >= vw.cx - hw && bb.y <= vw.cy + hh && bb.y + bb.h >= vw.cy - hh) return true;
+          }
+          return false;
+        };
+        var ids = S.doc.entities.filter(function (x) {
+          if (!x || x.tool !== t0 || x.layer !== l0) return false;
+          if (t0 === 'symbol' && (x.kind || null) !== k0) return false;
+          var xl = layerById(S.doc, x.layer);
+          if (xl && (xl.visible === false || xl.locked)) return false;
+          return inView(x);
+        }).map(function (x) { return x.id; });
+        setSelection(ids); buildLayers(); repaint();
+        setHint('Selected ' + ids.length + ' similar object' + (ids.length === 1 ? '' : 's') + (t0 === 'symbol' && k0 ? ' (' + k0 + ')' : '') + '.');
+      } });
     }
     var recents = (S._recentTools || []).filter(function (tk) { return tk !== S._lastTool; });
     if (recents.length) {
@@ -2766,6 +2839,10 @@
       menu.appendChild(b);
     });
     document.body.appendChild(menu);
+    // Re-clamp against the REAL menu height (items vary with selection state
+    // — the pre-paint estimate can leave the bottom items off-screen).
+    var mh = menu.offsetHeight;
+    menu.style.top = Math.max(4, Math.min(e.clientY, window.innerHeight - mh - 4)) + 'px';
     setTimeout(function () { document.addEventListener('mousedown', ctxOutside, true); }, 0);
   }
 
@@ -2796,9 +2873,25 @@
     if (t === 'dimradius') { dimCircleClick(pt, vp, 'radius'); return; }
     if (t === 'dimdia') { dimCircleClick(pt, vp, 'diameter'); return; }
     if (t === 'dimcont') { dimContClick(pt, vp); return; }
+    if (t === 'mirror2') { mirror2Click(pt); return; }
+    if (t === 'zoomwin') { zoomWinClick(pt, vp); return; }
     // Measure / inquiry — accumulate points; readout drawn in repaint. Never
     // becomes a printed entity. Enter/Esc clears.
     if (t === 'inquire') {
+      // Object pick: clicking ON a drawn shape reads its size / perimeter /
+      // area directly — no corner re-clicking. Empty space (or a chain in
+      // progress) falls through to the classic point-chain readout.
+      // CRITICAL gate: when the click resolved to a precise OSNAP point
+      // (endpoint/mid/center/…), the user is starting a chain FROM that
+      // point — "measure corner A to corner B" must still work. Only an
+      // un-snapped click on an entity body triggers the object readout.
+      var ptSnap = { end: 1, mid: 1, intersect: 1, quad: 1, node: 1, center: 1 };
+      if ((!S.inq || !S.inq.pts.length) && !ptSnap[pt.kind]) {
+        var oid = hitTest(pt);
+        var oe = oid && S.doc.entities.filter(function (x) { return x.id === oid; })[0];
+        var info = oe && objectInquiry(oe);
+        if (info) { setHint(info); repaint(); return; }
+      }
       if (!S.inq) S.inq = { pts: [], vp: vp || activeVp() };
       S.inq.pts.push({ x: pt.x, y: pt.y });
       repaint(); return;
@@ -2896,12 +2989,32 @@
       }
       repaint(); return;
     }
+    // Wipeout — click a region like a hatch; commits an opaque paper mask.
+    if (t === 'wipeout') {
+      if (!S.draft) {
+        var we = newEntity('wipeout', vp);
+        we.points = [{ x: pt.x, y: pt.y }]; we._anchor = { x: pt.x, y: pt.y };
+        S.draft = we;
+        setHint('Wipeout: click the region corners — double-click / Enter to close.');
+      } else {
+        S.draft.points.push({ x: pt.x, y: pt.y });
+        S.draft._anchor = { x: pt.x, y: pt.y };
+      }
+      repaint(); return;
+    }
     // Symbol — single click places the chosen block.
     if (t === 'symbol') {
       var se = newEntity('symbol', vp);
       se.kind = S.symbolKind; se.x = pt.x; se.y = pt.y; se.rotation = 0;
       se.size = Math.round((vp && vp.scale ? vp.scale.pixelsPerInch : 2.5) * 18);  // ~1.5 ft
       if (se.kind === 'callout') se.label = String(S._calloutNum++);
+      if (se.kind === 'revdelta') {
+        // Drafting practice: every delta placed while the sheet is at rev N
+        // reads "N" (deltas mark WHAT changed in the current revision, they
+        // are not a running counter). '1' before any revision is logged.
+        var tbRevs = (S.doc.titleblock && S.doc.titleblock.revisions && S.doc.titleblock.revisions.length) || 0;
+        se.label = String(Math.max(1, tbRevs));
+      }
       commitEntity(se); repaint(); return;
     }
     if (t === 'polygon') {
@@ -2970,6 +3083,9 @@
   }
   function commitPolyline() {
     var d = S.draft;
+    // A wipeout is a REGION — fewer than 3 points is a degenerate sliver
+    // that would fill nothing; silently discard it.
+    if (d && d.tool === 'wipeout' && (!d.points || d.points.length < 3)) { S.draft = null; hideDyn(); repaint(); return; }
     if (d && d.points && d.points.length >= 2) {
       delete d._anchor;
       // Spline → resample into a smooth Catmull-Rom polyline (existing render).
@@ -3109,6 +3225,35 @@
     setTimeout(function () { try { input.focus(); input.select(); } catch (e) {} }, 0);
     ov.addEventListener('click', function (e) { if (e.target === ov) done(null); });
   }
+  // Multi-line variant — paragraph note blocks. Enter = newline; Ctrl+Enter
+  // or OK commits; Esc cancels (cb(null), same contract as promptText).
+  function promptTextArea(title, cb, initial) {
+    var ov = document.createElement('div');
+    ov.style.cssText = 'position:fixed;inset:0;z-index:5400;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;padding:20px;';
+    var box = document.createElement('div');
+    box.style.cssText = 'background:#141419;border:1px solid #353545;border-radius:12px;padding:18px 20px;max-width:440px;width:100%;color:#e6e6e6;box-shadow:0 16px 48px rgba(0,0,0,0.6);';
+    box.innerHTML = '<div style="font-size:14px;font-weight:700;color:#fff;margin-bottom:10px;">' + esc(title) + '</div>' +
+      '<textarea data-pt-input rows="4" style="width:100%;box-sizing:border-box;background:#1a1a2e;color:#fff;border:1px solid #444;border-radius:6px;padding:8px 10px;font-size:13px;outline:none;resize:vertical;font-family:inherit;">' + esc(initial || '') + '</textarea>' +
+      '<div style="display:flex;align-items:center;gap:8px;margin-top:12px;">' +
+        '<span style="flex:1;font-size:10.5px;color:#64748b;">Enter = OK · Shift+Enter = new line</span>' +
+        '<button data-pt-cancel style="padding:8px 16px;background:rgba(255,255,255,0.06);color:#ddd;border:1px solid #444;border-radius:6px;cursor:pointer;font-weight:600;">Cancel</button>' +
+        '<button data-pt-ok style="padding:8px 16px;background:#4f8cff;color:#fff;border:1px solid #4f8cff;border-radius:6px;cursor:pointer;font-weight:700;">OK</button>' +
+      '</div>';
+    ov.appendChild(box); document.body.appendChild(ov);
+    var input = box.querySelector('[data-pt-input]');
+    function done(val) { if (ov.parentNode) ov.parentNode.removeChild(ov); cb(val); }
+    box.querySelector('[data-pt-cancel]').onclick = function () { done(null); };
+    box.querySelector('[data-pt-ok]').onclick = function () { done(input.value); };
+    input.onkeydown = function (e) {
+      // Muscle-memory: plain Enter commits while the note is single-line
+      // (matching the old prompt); Shift+Enter always inserts a newline,
+      // and once a newline exists plain Enter keeps adding lines.
+      if (e.key === 'Enter' && !e.shiftKey && (e.ctrlKey || e.metaKey || input.value.indexOf('\n') === -1)) { e.preventDefault(); done(input.value); }
+      else if (e.key === 'Escape') { e.preventDefault(); done(null); }
+    };
+    setTimeout(function () { try { input.focus(); } catch (e) {} }, 0);
+    ov.addEventListener('click', function (e) { if (e.target === ov) done(null); });
+  }
   function finalizeLeader(pt, vp) {
     var d = S.draft;
     d.endX = pt.x; d.endY = pt.y;
@@ -3131,10 +3276,10 @@
     repaint();
   }
   function placeText(pt, vp) {
-    promptText('Text', function (txt) {
-      if (!txt) return;
+    promptTextArea('Text — multi-line notes supported', function (txt) {
+      if (!txt || !txt.trim()) return;
       var e = newEntity('text', vp);
-      e.x = pt.x; e.y = pt.y; e.text = txt; e.fontPx = Math.round((vp && vp.scale ? vp.scale.pixelsPerInch : 2.5) * 9);
+      e.x = pt.x; e.y = pt.y; e.text = txt.replace(/\s+$/, ''); e.fontPx = Math.round((vp && vp.scale ? vp.scale.pixelsPerInch : 2.5) * 9);
       commitEntity(e); repaint();
     });
   }
@@ -3149,9 +3294,25 @@
     } else if (e.tool === 'rect' && e.startX != null) {
       var c = [{ x: e.startX, y: e.startY }, { x: e.endX, y: e.startY }, { x: e.endX, y: e.endY }, { x: e.startX, y: e.endY }];
       for (var k = 0; k < 4; k++) segs.push({ a: c[k], b: c[(k + 1) % 4] });
-    } else if ((e.tool === 'polyline' || e.tool === 'mangle' || e.tool === 'hatch') && e.points && e.points.length > 1) {
+    } else if ((e.tool === 'polyline' || e.tool === 'mangle' || e.tool === 'hatch' || e.tool === 'wipeout') && e.points && e.points.length > 1) {
       for (var p = 1; p < e.points.length; p++) segs.push({ a: e.points[p - 1], b: e.points[p] });
-      if (e.tool === 'hatch' && e.points.length > 2) segs.push({ a: e.points[e.points.length - 1], b: e.points[0] });
+      if ((e.tool === 'hatch' || e.tool === 'wipeout') && e.points.length > 2) segs.push({ a: e.points[e.points.length - 1], b: e.points[0] });
+      // Angle dims: the drawn vertex arc + its label sit off the two legs —
+      // sample the (annotative-radius) arc so clicking it selects the dim.
+      if (e.tool === 'mangle' && e.points.length >= 3) {
+        var mv = e.points[1];
+        var mr = Math.max(16, (e.lineWidth || 4) * 5) / ppiOf(e);
+        var ma1 = Math.atan2(e.points[0].y - mv.y, e.points[0].x - mv.x);
+        var ma2 = Math.atan2(e.points[2].y - mv.y, e.points[2].x - mv.x);
+        if (ma2 < ma1) ma2 += 2 * Math.PI;
+        var mprev = null;
+        for (var mi = 0; mi <= 8; mi++) {
+          var mth = ma1 + (ma2 - ma1) * (mi / 8);
+          var mp = { x: mv.x + mr * Math.cos(mth), y: mv.y + mr * Math.sin(mth) };
+          if (mprev) segs.push({ a: mprev, b: mp });
+          mprev = mp;
+        }
+      }
     } else if (e.tool === 'arc' && e.points && e.points.length >= 3) {
       var sa = arcSamples(e.points, 40);
       for (var q = 1; q < sa.length; q++) segs.push({ a: sa[q - 1], b: sa[q] });
@@ -3177,44 +3338,72 @@
   // tracing dense underlays. Entities that flatten to segments get a
   // true distance-to-geometry test; compact ones (text/symbol)
   // keep the bbox behavior.
+  function entHitAt(e, raw, slop, interiorOk) {
+    var bb = entBBox(e);
+    if (!bb || raw.x < bb.x - slop || raw.x > bb.x + bb.w + slop || raw.y < bb.y - slop || raw.y > bb.y + bb.h + slop) return false;
+    var segs = entSegments(e);
+    if (!segs.length) return true;                   // compact entity — bbox is the test
+    for (var s = 0; s < segs.length; s++) { if (segNearPoint(segs[s], raw, slop)) return true; }
+    // Filled hatch/wipeout: clicking anywhere inside the region selects it.
+    if ((e.tool === 'hatch' || e.tool === 'wipeout') && e.points && e.points.length > 2 && pointInPoly(raw, e.points)) return true;
+    // Already-SELECTED closed shapes accept interior clicks so the
+    // select-then-drag-from-inside motion still works; UNSELECTED ones
+    // require an edge hit (that's the dense-underlay fix).
+    if ((e.tool === 'rect' || e.tool === 'ellipse') && e.startX != null && (interiorOk || isSelected(e.id))) {
+      if (e.tool === 'rect') {
+        return raw.x >= Math.min(e.startX, e.endX) && raw.x <= Math.max(e.startX, e.endX) &&
+               raw.y >= Math.min(e.startY, e.endY) && raw.y <= Math.max(e.startY, e.endY);
+      }
+      var hcx = (e.startX + e.endX) / 2, hcy = (e.startY + e.endY) / 2;
+      var hrx = Math.abs(e.endX - e.startX) / 2 + slop, hry = Math.abs(e.endY - e.startY) / 2 + slop;
+      return hrx > 0 && hry > 0 && (Math.pow((raw.x - hcx) / hrx, 2) + Math.pow((raw.y - hcy) / hry, 2) <= 1);
+    }
+    return false;
+  }
   function hitTest(raw) {
     var slop = screenModelDist(8);
     for (var i = S.doc.entities.length - 1; i >= 0; i--) {
       var e = S.doc.entities[i];
       var lyr = layerById(S.doc, e.layer);          // skip hidden + locked layers
       if (lyr && (lyr.visible === false || lyr.locked)) continue;
-      var bb = entBBox(e);
-      if (!bb || raw.x < bb.x - slop || raw.x > bb.x + bb.w + slop || raw.y < bb.y - slop || raw.y > bb.y + bb.h + slop) continue;
-      var segs = entSegments(e);
-      if (!segs.length) return e.id;                 // compact entity — bbox is the test
-      var hit = false;
-      for (var s = 0; s < segs.length; s++) { if (segNearPoint(segs[s], raw, slop)) { hit = true; break; } }
-      // Filled hatch: clicking anywhere inside the region also selects it.
-      if (!hit && e.tool === 'hatch' && e.points && e.points.length > 2 && pointInPoly(raw, e.points)) hit = true;
-      // Already-SELECTED closed shapes accept interior clicks so the
-      // select-then-drag-from-inside motion still works; UNSELECTED ones
-      // require an edge hit (that's the dense-underlay fix).
-      if (!hit && (e.tool === 'rect' || e.tool === 'ellipse') && e.startX != null && isSelected(e.id)) {
-        if (e.tool === 'rect') {
-          hit = raw.x >= Math.min(e.startX, e.endX) && raw.x <= Math.max(e.startX, e.endX) &&
-                raw.y >= Math.min(e.startY, e.endY) && raw.y <= Math.max(e.startY, e.endY);
-        } else {
-          var hcx = (e.startX + e.endX) / 2, hcy = (e.startY + e.endY) / 2;
-          var hrx = Math.abs(e.endX - e.startX) / 2 + slop, hry = Math.abs(e.endY - e.startY) / 2 + slop;
-          hit = hrx > 0 && hry > 0 && (Math.pow((raw.x - hcx) / hrx, 2) + Math.pow((raw.y - hcy) / hry, 2) <= 1);
-        }
-      }
-      if (hit) return e.id;
+      if (entHitAt(e, raw, slop)) return e.id;
     }
     return null;
+  }
+  // Every selectable entity under the point, topmost first — feeds Alt-click
+  // selection cycling through overlapping stacks (dim over polyline over hatch).
+  function hitTestAll(raw) {
+    var slop = screenModelDist(8), out = [];
+    for (var i = S.doc.entities.length - 1; i >= 0; i--) {
+      var e = S.doc.entities[i];
+      var lyr = layerById(S.doc, e.layer);
+      if (lyr && (lyr.visible === false || lyr.locked)) continue;
+      // interiorOk=true: Alt-click is the deliberate disambiguation gesture,
+      // so closed-shape interiors count regardless of selection state —
+      // otherwise the cycle stack changes size as the selection walks it.
+      if (entHitAt(e, raw, slop, true)) out.push(e.id);
+    }
+    return out;
   }
   // ── Selection set helpers (multi-select) ──
   function isSelected(id) { return S.selIds.indexOf(id) >= 0; }
   function selEntities() { return S.doc.entities.filter(function (e) { return S.selIds.indexOf(e.id) >= 0; }); }
   function setSelection(ids) { S.selIds = (ids || []).slice(); S.selectedId = (S.selIds.length === 1) ? S.selIds[0] : null; }
-  // Click-select (or shift-toggle) at a point.
-  function selectAt(raw, additive) {
-    var hit = hitTest(raw);
+  // Click-select (or shift-toggle) at a point. cycle=true (Alt-click) walks
+  // the stack of overlapping entities under the cursor, topmost first.
+  function selectAt(raw, additive, cycle) {
+    var hit;
+    if (cycle && !additive) {
+      var stack = hitTestAll(raw);
+      if (!stack.length) hit = null;
+      else {
+        var cur = (S.selIds.length === 1) ? stack.indexOf(S.selIds[0]) : -1;
+        hit = stack[(cur + 1) % stack.length];
+        if (stack.length > 1) setHint('Alt-click: ' + ((cur + 1) % stack.length + 1) + ' of ' + stack.length + ' overlapping objects — Alt-click again for the next.');
+      }
+    } else {
+      hit = hitTest(raw);
+    }
     if (additive) {
       if (hit) { var i = S.selIds.indexOf(hit); if (i >= 0) S.selIds.splice(i, 1); else S.selIds.push(hit); }
     } else {
@@ -3260,7 +3449,11 @@
       // rotate/mirror pivots, zoom extents) now operate in.
       var bppi = ppiOf(e);
       if (e.tool === 'symbol') { var hs = (e.size || 40) / 2 / bppi; return { x: e.x - hs, y: e.y - hs, w: hs * 2, h: hs * 2 }; }
-      var fp = (e.fontPx || 24) / bppi; return { x: e.x, y: e.y, w: Math.max(2, (e.text || '').length * fp * 0.55), h: fp };
+      // Text may be multi-line — width from the longest line, height × lines.
+      var fp = (e.fontPx || 24) / bppi;
+      var tls = String(e.text == null ? '' : e.text).split('\n');
+      var tmax = 0; for (var ti = 0; ti < tls.length; ti++) tmax = Math.max(tmax, tls[ti].length);
+      return { x: e.x, y: e.y, w: Math.max(2, tmax * fp * 0.55), h: fp * (1 + (tls.length - 1) * 1.25) };
     }
     return null;
   }
@@ -3391,7 +3584,14 @@
       return '<div style="margin-top:7px;">' + propLbl('Radius', 'prop-r', fmtLen(Math.abs(e.endX - e.startX) / 2), false) + '</div>';
     }
     if (e.tool === 'text') {
-      return '<div style="margin-top:7px;">' + propLbl('Text', 'prop-text', e.text || '', true) + '<div style="margin-top:6px;">' + propLbl('Text height', 'prop-th', fmtLen((e.fontPx || 24) / (ppi || 1)), false) + '</div></div>';
+      // Textarea, not an input — a single-line input silently flattens
+      // multi-line notes on the next edit. The data-prop-text onchange
+      // wiring works unchanged (textarea .value preserves \n).
+      return '<div style="margin-top:7px;">' +
+        '<label style="font-size:10px;color:#9aa;display:flex;flex-direction:column;gap:2px;">Text' +
+          '<textarea data-prop-text rows="3" style="width:100%;box-sizing:border-box;background:#1a1a2e;color:#fff;border:1px solid #444;border-radius:5px;padding:3px 5px;font-size:11px;resize:vertical;font-family:inherit;">' + esc(e.text || '') + '</textarea>' +
+        '</label>' +
+        '<div style="margin-top:6px;">' + propLbl('Text height', 'prop-th', fmtLen((e.fontPx || 24) / (ppi || 1)), false) + '</div></div>';
     }
     return '';
   }
@@ -3430,6 +3630,146 @@
     var gb = groupBBox(ents), cx = gb.x + gb.w / 2, cy = gb.y + gb.h / 2;
     ents.forEach(function (e) { transformEntity(e, function (p) { return { x: horiz ? (2 * cx - p.x) : p.x, y: horiz ? p.y : (2 * cy - p.y) }; }); });
     repaint();
+  }
+  // Rect/ellipse store only two AXIS-ALIGNED corners — a non-axis-preserving
+  // transform (arbitrary rotate / slanted mirror) cannot be represented in
+  // that form: the shape silently distorts and a circle can collapse to a
+  // zero-width sliver. Convert to a closed polyline first (the revcloud
+  // pattern — polylines are first-class for render/snaps/hit-test/DXF).
+  // Circles are rotation/reflection-invariant, so callers move their CENTER
+  // instead and keep them native.
+  function polygonizeCornerShape(e) {
+    if (e.startX == null) return;
+    if (e.tool === 'rect') {
+      e.points = [
+        { x: e.startX, y: e.startY }, { x: e.endX, y: e.startY },
+        { x: e.endX, y: e.endY }, { x: e.startX, y: e.endY },
+        { x: e.startX, y: e.startY }
+      ];
+    } else if (e.tool === 'ellipse') {
+      var pcx = (e.startX + e.endX) / 2, pcy = (e.startY + e.endY) / 2;
+      var prx = Math.abs(e.endX - e.startX) / 2, pry = Math.abs(e.endY - e.startY) / 2;
+      e.points = [];
+      for (var pi = 0; pi <= 48; pi++) { var pth = pi / 48 * 2 * Math.PI; e.points.push({ x: pcx + prx * Math.cos(pth), y: pcy + pry * Math.sin(pth) }); }
+    } else return;
+    e.tool = 'polyline';
+    delete e.startX; delete e.startY; delete e.endX; delete e.endY;
+  }
+  function isCircle(e) {
+    return e.tool === 'ellipse' && e.startX != null &&
+      Math.abs(Math.abs(e.endX - e.startX) - Math.abs(e.endY - e.startY)) < 0.01;
+  }
+  // Move a circle's bbox so its center lands at fn(center) — radius unchanged.
+  function moveCircleCenter(e, fn) {
+    var mcx = (e.startX + e.endX) / 2, mcy = (e.startY + e.endY) / 2;
+    var mr = Math.abs(e.endX - e.startX) / 2;
+    var nc = fn({ x: mcx, y: mcy });
+    e.startX = nc.x - mr; e.startY = nc.y - mr; e.endX = nc.x + mr; e.endY = nc.y + mr;
+  }
+  // Rotate the selection by a typed angle about its center. Positive = the
+  // same direction as the Rotate 90° button (screen-clockwise, Y-down math).
+  function rotateBy() {
+    var ents = selEntities(); if (!ents.length) return;
+    promptText('Rotate by degrees (clockwise; negative = counter-clockwise)', function (txt) {
+      if (txt == null) return;
+      var deg = parseFloat(txt);
+      if (!isFinite(deg) || deg === 0) return;
+      pushUndo();
+      var gb = groupBBox(selEntities()), cx = gb.x + gb.w / 2, cy = gb.y + gb.h / 2;
+      var th = deg * Math.PI / 180, co = Math.cos(th), si = Math.sin(th);
+      var rot = function (p) { var dx = p.x - cx, dy = p.y - cy; return { x: cx + dx * co - dy * si, y: cy + dx * si + dy * co }; };
+      var exact = (deg % 90 === 0);   // 90° multiples keep axis-aligned shapes axis-aligned
+      selEntities().forEach(function (e) {
+        if (!exact) {
+          if (isCircle(e)) { moveCircleCenter(e, rot); return; }
+          if (e.tool === 'rect' || e.tool === 'ellipse') polygonizeCornerShape(e);
+        }
+        transformEntity(e, rot);
+        if (e.tool === 'symbol') e.rotation = (((e.rotation || 0) + deg) % 360 + 360) % 360;
+      });
+      repaint();
+    }, '45');
+  }
+  // Two-point mirror with keep-copy: select objects, then click two points on
+  // the mirror line — mirrored COPIES are created (originals kept). The
+  // left-hand/right-hand building layout move.
+  function mirror2Click(pt) {
+    if (!S.selIds.length) { setHint('Mirror 2-pt: select objects first, then click two points on the mirror line.'); return; }
+    if (!S._mir) { S._mir = { a: { x: pt.x, y: pt.y } }; setHint('Mirror 2-pt: click the second point of the mirror line.'); repaint(); return; }
+    var ma = S._mir.a, mb = { x: pt.x, y: pt.y }; S._mir = null;
+    var mdx = mb.x - ma.x, mdy = mb.y - ma.y, mL2 = mdx * mdx + mdy * mdy;
+    if (mL2 < 1e-9) { setHint('Mirror 2-pt: those two points coincide — click two distinct points.'); return; }
+    function refl(p) {
+      var tt = ((p.x - ma.x) * mdx + (p.y - ma.y) * mdy) / mL2;
+      var fx = ma.x + tt * mdx, fy = ma.y + tt * mdy;
+      return { x: 2 * fx - p.x, y: 2 * fy - p.y };
+    }
+    pushUndo();
+    var newIds = [];
+    selEntities().forEach(function (e) {
+      var copy = JSON.parse(JSON.stringify(e)); copy.id = uid(copy.tool);
+      if (isCircle(copy)) {
+        // Reflection preserves a circle exactly — just reflect its center.
+        moveCircleCenter(copy, refl);
+      } else {
+        // A hand-clicked mirror line is never exactly axis-aligned, and a
+        // slanted reflection of a corner-stored rect/ellipse is not
+        // representable in that form — polygonize first (axis mirrors have
+        // their own Mirror H/V buttons that keep shapes native).
+        if (copy.tool === 'rect' || copy.tool === 'ellipse') polygonizeCornerShape(copy);
+        transformEntity(copy, refl);
+      }
+      S.doc.entities.push(copy); newIds.push(copy.id);
+    });
+    setSelection(newIds); buildLayers(); repaint();
+    setTool('select');
+    setHint('Mirrored ' + newIds.length + ' object' + (newIds.length === 1 ? '' : 's') + ' — originals kept.');
+  }
+  // Zoom window — two clicks frame that area on screen. Camera-only; the
+  // clicks arrive in model coords, so map back to the current plane first.
+  function zoomWinClick(pt, vp) {
+    var plane = (S.space === 'model') ? mToV(pt) : mToP(pt, vp || activeVp());
+    if (!S._zw) { S._zw = { a: plane }; setHint('Zoom window: click the opposite corner.'); return; }
+    var za = S._zw.a, zb = plane; S._zw = null;
+    var zx = Math.min(za.x, zb.x), zy = Math.min(za.y, zb.y), zw = Math.abs(zb.x - za.x), zh = Math.abs(zb.y - za.y);
+    if (zw < 2 || zh < 2) { setTool('select'); setHint('Zoom window: those corners are too close — drag a larger box.'); return; }
+    var cw = S.cssW || S.canvas.width, ch = S.cssH || S.canvas.height;
+    var zs = Math.max(0.02, Math.min(8, Math.min(cw / zw, ch / zh) * 0.92));
+    S.view.scale = zs;
+    S.view.tx = cw / 2 - (zx + zw / 2) * zs;
+    S.view.ty = ch / 2 - (zy + zh / 2) * zs;
+    setTool('select');
+    repaint();
+  }
+  // One-click size/perimeter/area readout for a drawn shape (Measure tool).
+  // Model units ARE inches; areas read in SF.
+  function objectInquiry(e) {
+    function sf(a) { return (a / 144).toLocaleString('en-US', { maximumFractionDigits: 1 }) + ' SF'; }
+    if (e.tool === 'rect' && e.startX != null) {
+      var rw = Math.abs(e.endX - e.startX), rh = Math.abs(e.endY - e.startY);
+      return 'Rectangle ' + fmtLen(rw) + ' × ' + fmtLen(rh) + ' · Perimeter ' + fmtLen(2 * (rw + rh)) + ' · Area ' + sf(rw * rh);
+    }
+    if (e.tool === 'ellipse' && e.startX != null) {
+      var erx = Math.abs(e.endX - e.startX) / 2, ery = Math.abs(e.endY - e.startY) / 2;
+      var eper = Math.PI * (3 * (erx + ery) - Math.sqrt((3 * erx + ery) * (erx + 3 * ery)));   // Ramanujan
+      return (Math.abs(erx - ery) < 0.01 ? 'Circle ⌀ ' + fmtLen(erx * 2) : 'Ellipse ' + fmtLen(erx * 2) + ' × ' + fmtLen(ery * 2)) +
+        ' · Perimeter ' + fmtLen(eper) + ' · Area ' + sf(Math.PI * erx * ery);
+    }
+    if ((e.tool === 'polyline' || e.tool === 'hatch' || e.tool === 'wipeout') && e.points && e.points.length > 2) {
+      var arr = e.points, per = 0;
+      for (var i = 1; i < arr.length; i++) per += Math.hypot(arr[i].x - arr[i - 1].x, arr[i].y - arr[i - 1].y);
+      var gap = Math.hypot(arr[0].x - arr[arr.length - 1].x, arr[0].y - arr[arr.length - 1].y);
+      var closed = (e.tool !== 'polyline') || gap < 1;
+      if (closed) {
+        if (e.tool !== 'polyline') per += gap;                       // hatch/wipeout close implicitly
+        var area = 0;
+        for (var j = 0, k = arr.length - 1; j < arr.length; k = j++) area += (arr[k].x + arr[j].x) * (arr[k].y - arr[j].y);
+        return 'Closed shape · Perimeter ' + fmtLen(per) + ' · Area ' + sf(Math.abs(area) / 2);
+      }
+      return 'Polyline · Length ' + fmtLen(per);
+    }
+    if (e.tool === 'line' && e.startX != null) return 'Line · Length ' + fmtLen(Math.hypot(e.endX - e.startX, e.endY - e.startY));
+    return null;
   }
   function duplicateSelected() {
     var ents = selEntities(); if (!ents.length) return;
@@ -4749,8 +5089,14 @@
           else { var pts = []; for (var k = 0; k <= 48; k++) { var th = k / 48 * 2 * Math.PI; pts.push(omap(e, cx + rxp * Math.cos(th), cy + ryp * Math.sin(th))); } out += polyDxf(L, pts, true); }
         }
         else if (e.tool === 'arc' && e.points && e.points.length >= 3) { out += arcDxf(L, e.points.map(function (p) { return omap(e, p.x, p.y); })); }
-        else if ((e.tool === 'polyline' || e.tool === 'mangle' || e.tool === 'hatch') && e.points && e.points.length) { out += polyDxf(L, e.points.map(function (p) { return omap(e, p.x, p.y); }), e.tool === 'hatch'); }
-        else if (e.tool === 'text' && e.x != null) { out += textDxf(L, omap(e, e.x, e.y), (e.fontPx || 24) / ppiOf(e), e.text || ''); }
+        else if ((e.tool === 'polyline' || e.tool === 'mangle' || e.tool === 'hatch' || e.tool === 'wipeout') && e.points && e.points.length) { out += polyDxf(L, e.points.map(function (p) { return omap(e, p.x, p.y); }), e.tool === 'hatch' || e.tool === 'wipeout'); }
+        else if (e.tool === 'text' && e.x != null) {
+          // Multi-line notes → one DXF TEXT per line, stacked at the canvas's
+          // 1.25× line height (R12 has no MTEXT).
+          var tdxH = (e.fontPx || 24) / ppiOf(e);
+          var tdxLines = String(e.text || '').split('\n');
+          for (var tdi = 0; tdi < tdxLines.length; tdi++) out += textDxf(L, omap(e, e.x, e.y + tdi * tdxH * 1.25), tdxH, tdxLines[tdi]);
+        }
         else if (e.tool === 'symbol' && e.x != null) { out += circleDxf(L, omap(e, e.x, e.y), (e.size || 40) / 2 / ppiOf(e)); }
         else if (e.tool === 'level') { var la = omap(e, e.startX, e.startY), lb = omap(e, e.endX, e.endY); out += lineDxf(L, la, lb) + textDxf(L, { x: Math.max(la.x, lb.x), y: la.y }, 5, fmtFeet(e.elevIn || 0)); }
         else if (e.tool === 'spotelev' && e.x != null) { var sp = omap(e, e.x, e.y); out += circleDxf(L, sp, (DPI * 0.1) / ppiOf(e)) + textDxf(L, { x: sp.x, y: sp.y }, 5, '+' + fmtFeet(elevAtPoint(e))); }
