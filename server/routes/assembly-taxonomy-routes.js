@@ -25,7 +25,13 @@ router.get('/', requireAuth, requireCapability('ESTIMATES_VIEW'), async (req, re
       [...map.values()].sort((a, b) => (a.sort_order - b.sort_order) || a.code.localeCompare(b.code))
         .forEach((s) => systems.push({ id: s.id, trade_code: tradeCode, code: s.code, name: s.name, default_unit: s.default_unit || null, org: s.org }));
     });
-    res.json({ trades, systems });
+    const variants = [];
+    (reg.variantsBySystem || new Map()).forEach((map, key) => {
+      const [tradeCode, systemCode] = key.split('|');
+      [...map.values()].sort((a, b) => (a.sort_order - b.sort_order) || a.code.localeCompare(b.code))
+        .forEach((v) => variants.push({ id: v.id, trade_code: tradeCode, system_code: systemCode, code: v.code, name: v.name, note: v.note || null, org: v.org }));
+    });
+    res.json({ trades, systems, variants });
   } catch (e) {
     console.error('GET /api/assembly-taxonomy error:', e);
     res.status(500).json({ error: 'Server error' });
@@ -139,6 +145,67 @@ router.patch('/systems/:id', requireAuth, requireCapability('ESTIMATES_EDIT'), a
     res.json({ ok: true });
   } catch (e) {
     console.error('PATCH /api/assembly-taxonomy/systems/:id error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── POST /variants — create an org-scoped variant under a trade+system ─
+router.post('/variants', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req, res) => {
+  try {
+    const tradeCode = seg(req.body && req.body.trade_code);
+    const systemCode = seg(req.body && req.body.system_code);
+    const code = String((req.body && req.body.code) || '').trim().toUpperCase().replace(/[^A-Z0-9/]/g, '').slice(0, 10);
+    const name = String((req.body && req.body.name) || '').trim().slice(0, 80);
+    const note = req.body && req.body.note ? String(req.body.note).trim().slice(0, 200) : null;
+    if (!tradeCode || !systemCode || !code) return res.status(400).json({ error: 'trade_code, system_code and code are required' });
+    if (!name) return res.status(400).json({ error: 'A name is required' });
+    const reg = await asm.loadRegistry(pool, req.user.organization_id);
+    const sysMap = reg.systemsByTrade.get(tradeCode);
+    if (!sysMap || !sysMap.get(systemCode)) return res.status(400).json({ error: `Unknown system ${tradeCode}-${systemCode}` });
+    const dup = await pool.query(
+      `SELECT 1 FROM assembly_variants WHERE COALESCE(organization_id,0)=COALESCE($1,0) AND UPPER(trade_code)=UPPER($2) AND UPPER(system_code)=UPPER($3) AND UPPER(code)=UPPER($4)`,
+      [req.user.organization_id, tradeCode, systemCode, code]);
+    if (dup.rows.length) return res.status(409).json({ error: `Variant ${tradeCode}-${systemCode}-${code} already exists` });
+    const sort = Number.isFinite(+(req.body && req.body.sort_order)) ? +req.body.sort_order : 500;
+    const r = await pool.query(
+      `INSERT INTO assembly_variants (organization_id, trade_code, system_code, code, name, note, sort_order, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id`,
+      [req.user.organization_id, tradeCode, systemCode, code, name, note, sort, req.user.id]);
+    res.json({ ok: true, id: r.rows[0].id, code });
+  } catch (e) {
+    console.error('POST /api/assembly-taxonomy/variants error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── PATCH /variants/:id — rename / note / re-sort / archive (org only) ─
+router.patch('/variants/:id', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const cur = await pool.query(
+      `SELECT id, trade_code, system_code, code FROM assembly_variants WHERE id=$1 AND organization_id=$2`, [id, req.user.organization_id]);
+    if (!cur.rows.length) return res.status(404).json({ error: 'Variant not found (global seeds are read-only)' });
+    const b = req.body || {};
+    if (b.archived === true) {
+      const used = await pool.query(
+        `SELECT COUNT(*)::int c FROM assemblies WHERE (organization_id=$1 OR organization_id IS NULL) AND is_hidden=FALSE
+           AND UPPER(trade)=UPPER($2) AND UPPER(system)=UPPER($3) AND UPPER(COALESCE(variant,''))=UPPER($4)`,
+        [req.user.organization_id, cur.rows[0].trade_code, cur.rows[0].system_code, cur.rows[0].code]);
+      if (used.rows[0].c > 0) return res.status(409).json({ error: `${used.rows[0].c} assembly(ies) still use this variant.` });
+    }
+    const sets = [], vals = [];
+    if (b.name !== undefined) { sets.push('name'); vals.push(String(b.name).trim().slice(0, 80)); }
+    if (b.note !== undefined) { sets.push('note'); vals.push(b.note ? String(b.note).trim().slice(0, 200) : null); }
+    if (b.sort_order !== undefined && Number.isFinite(+b.sort_order)) { sets.push('sort_order'); vals.push(+b.sort_order); }
+    if (b.archived !== undefined) { sets.push('archived_at'); vals.push(b.archived ? new Date() : null); }
+    if (!sets.length) return res.json({ ok: true });
+    const setSql = sets.map((k, i) => `${k}=$${i + 1}`).join(', ');
+    await pool.query(
+      `UPDATE assembly_variants SET ${setSql}, updated_at=NOW() WHERE id=$${sets.length + 1} AND organization_id=$${sets.length + 2}`,
+      [...vals, id, req.user.organization_id]);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('PATCH /api/assembly-taxonomy/variants/:id error:', e);
     res.status(500).json({ error: 'Server error' });
   }
 });

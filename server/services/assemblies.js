@@ -25,26 +25,10 @@ const TRADE_ALIASES = {
   electrical: 'ELEC', electric: 'ELEC', plumbing: 'PLMB', plumb: 'PLMB', hvac: 'HVAC', mechanical: 'HVAC',
   demolition: 'DEMO', demo: 'DEMO', 'general conditions': 'GEN', general: 'GEN', gc: 'GEN',
 };
-// Starter global taxonomy (organization_id NULL = shared across tenants).
-const GLOBAL_TAXONOMY = [
-  { code: 'ROOF', name: 'Roofing', systems: [{ code: 'SHNG', name: 'Shingle', unit: 'SQ' }, { code: 'TILE', name: 'Tile', unit: 'SQ' }, { code: 'METAL', name: 'Metal', unit: 'SQ' }, { code: 'TPO', name: 'Flat / TPO', unit: 'SQ' }] },
-  { code: 'FENC', name: 'Fencing', systems: [{ code: 'WD', name: 'Wood', unit: 'LF' }, { code: 'VNYL', name: 'Vinyl', unit: 'LF' }, { code: 'ALUM', name: 'Aluminum', unit: 'LF' }, { code: 'CHAIN', name: 'Chain-link', unit: 'LF' }] },
-  { code: 'DECK', name: 'Decking', systems: [{ code: 'PT', name: 'Pressure-treated', unit: 'SF' }, { code: 'COMP', name: 'Composite', unit: 'SF' }, { code: 'PVC', name: 'PVC', unit: 'SF' }] },
-  { code: 'STUC', name: 'Stucco', systems: [{ code: 'STD', name: 'Standard 3-coat', unit: 'SF' }, { code: '1CT', name: 'One-coat', unit: 'SF' }, { code: 'REPR', name: 'Repair', unit: 'SF' }] },
-  { code: 'PAINT', name: 'Painting', systems: [{ code: 'EXT', name: 'Exterior', unit: 'SF' }, { code: 'INT', name: 'Interior', unit: 'SF' }] },
-  { code: 'CARP', name: 'Carpentry', systems: [{ code: 'FRAM', name: 'Framing', unit: 'SF' }, { code: 'TRIM', name: 'Trim / Finish', unit: 'LF' }] },
-  { code: 'CONC', name: 'Concrete', systems: [{ code: 'SLAB', name: 'Slab', unit: 'SF' }, { code: 'FTG', name: 'Footing', unit: 'LF' }, { code: 'DRVW', name: 'Driveway', unit: 'SF' }] },
-  { code: 'DRYW', name: 'Drywall', systems: [{ code: 'HANG', name: 'Hang & Finish', unit: 'SF' }, { code: 'REPR', name: 'Repair', unit: 'SF' }] },
-  { code: 'SIDG', name: 'Siding', systems: [{ code: 'VNYL', name: 'Vinyl', unit: 'SF' }, { code: 'HARD', name: 'Fiber-cement', unit: 'SF' }] },
-  { code: 'GUTR', name: 'Gutters', systems: [{ code: '5K', name: '5" K-style', unit: 'LF' }, { code: '6K', name: '6" K-style', unit: 'LF' }] },
-  { code: 'WIND', name: 'Windows', systems: [{ code: 'VNYL', name: 'Vinyl', unit: 'EA' }, { code: 'IMPCT', name: 'Impact', unit: 'EA' }] },
-  { code: 'DOOR', name: 'Doors', systems: [{ code: 'EXT', name: 'Exterior', unit: 'EA' }, { code: 'INT', name: 'Interior', unit: 'EA' }] },
-  { code: 'ELEC', name: 'Electrical', systems: [] },
-  { code: 'PLMB', name: 'Plumbing', systems: [] },
-  { code: 'HVAC', name: 'HVAC', systems: [] },
-  { code: 'DEMO', name: 'Demolition', systems: [] },
-  { code: 'GEN', name: 'General Conditions', systems: [{ code: 'MOB', name: 'Mobilization', unit: 'EA' }, { code: 'DUMP', name: 'Debris / Dumpster', unit: 'EA' }, { code: 'PERM', name: 'Permits', unit: 'EA' }] },
-];
+// Global taxonomy (organization_id NULL = shared across tenants). The full
+// Central-FL library (Trades → Systems → Variants) is the generated seed
+// module; edit that file to grow the catalog.
+const GLOBAL_TAXONOMY = require('./assembly-taxonomy-seed');
 
 const num = (v) => { const n = Number(v); return isFinite(n) ? n : 0; };
 
@@ -68,10 +52,12 @@ function parseCode(code) {
 
 // Merge global + org registry rows into lookup maps (org shadows global by code).
 async function loadRegistry(db, orgId) {
-  const [tq, sq] = await Promise.all([
+  const [tq, sq, vq] = await Promise.all([
     db.query(`SELECT id, organization_id, code, name, sort_order FROM assembly_trades
                WHERE (organization_id = $1 OR organization_id IS NULL) AND archived_at IS NULL`, [orgId]),
     db.query(`SELECT id, organization_id, trade_code, code, name, default_unit, sort_order FROM assembly_systems
+               WHERE (organization_id = $1 OR organization_id IS NULL) AND archived_at IS NULL`, [orgId]),
+    db.query(`SELECT id, organization_id, trade_code, system_code, code, name, note, sort_order FROM assembly_variants
                WHERE (organization_id = $1 OR organization_id IS NULL) AND archived_at IS NULL`, [orgId]),
   ]);
   const globalFirst = (a, b) => (a.organization_id == null ? 0 : 1) - (b.organization_id == null ? 0 : 1);
@@ -87,7 +73,14 @@ async function loadRegistry(db, orgId) {
     if (!systemsByTrade.has(tc)) systemsByTrade.set(tc, new Map());
     systemsByTrade.get(tc).set(c, { id: r.id, code: c, name: r.name, default_unit: r.default_unit, org: r.organization_id, sort_order: r.sort_order });
   });
-  return { trades, systemsByTrade };
+  const variantsBySystem = new Map(); // "TRADE|SYSTEM" → Map(varCode → row)
+  vq.rows.sort(globalFirst).forEach((r) => {
+    const key = String(r.trade_code).toUpperCase() + '|' + String(r.system_code).toUpperCase();
+    const c = String(r.code).toUpperCase();
+    if (!variantsBySystem.has(key)) variantsBySystem.set(key, new Map());
+    variantsBySystem.get(key).set(c, { id: r.id, code: c, name: r.name, note: r.note, org: r.organization_id, sort_order: r.sort_order });
+  });
+  return { trades, systemsByTrade, variantsBySystem };
 }
 
 // Validate a header's trade/system/variant (+ optional raw code) against the
@@ -143,8 +136,12 @@ async function validateAgainstRegistry(db, orgId, header, opts) {
   return { ok: true, code, trade, system: system || null, variant: variant || null };
 }
 
-// Idempotent seed of the global (NULL-org) taxonomy. NOT-EXISTS guards make it
-// safe on every boot and across racing instances.
+// Idempotent seed of the global (NULL-org) taxonomy — trades, systems, and the
+// variant catalog. NOT-EXISTS guards make it safe on every boot / racing boots.
+// It also RECONCILES: for a trade the library covers, any GLOBAL system/variant
+// whose code isn't in the library is archived — so the tiny starter set is
+// superseded by this library rather than shown alongside it. Org-added rows are
+// never touched (this only reconciles organization_id IS NULL rows).
 async function seedGlobalTaxonomy(db) {
   for (let ti = 0; ti < GLOBAL_TAXONOMY.length; ti++) {
     const t = GLOBAL_TAXONOMY[ti];
@@ -154,6 +151,7 @@ async function seedGlobalTaxonomy(db) {
         WHERE NOT EXISTS (SELECT 1 FROM assembly_trades WHERE organization_id IS NULL AND UPPER(code)=UPPER($1))`,
       [t.code, t.name, ti]);
     const systems = t.systems || [];
+    const sysCodes = systems.map((s) => String(s.code).toUpperCase());
     for (let si = 0; si < systems.length; si++) {
       const s = systems[si];
       await db.query(
@@ -161,6 +159,37 @@ async function seedGlobalTaxonomy(db) {
          SELECT NULL, $1, $2, $3, $4, $5
           WHERE NOT EXISTS (SELECT 1 FROM assembly_systems WHERE organization_id IS NULL AND UPPER(trade_code)=UPPER($1) AND UPPER(code)=UPPER($2))`,
         [t.code, s.code, s.name, s.unit || null, si]);
+      const variants = s.variants || [];
+      const varCodes = variants.map((v) => String(v.code).toUpperCase());
+      for (let vi = 0; vi < variants.length; vi++) {
+        const v = variants[vi];
+        await db.query(
+          `INSERT INTO assembly_variants (organization_id, trade_code, system_code, code, name, note, sort_order)
+           SELECT NULL, $1, $2, $3, $4, $5, $6
+            WHERE NOT EXISTS (SELECT 1 FROM assembly_variants WHERE organization_id IS NULL AND UPPER(trade_code)=UPPER($1) AND UPPER(system_code)=UPPER($2) AND UPPER(code)=UPPER($3))`,
+          [t.code, s.code, v.code, v.name, v.note || null, vi]);
+      }
+      // Reconcile variants under a kept system.
+      if (varCodes.length) {
+        await db.query(
+          `UPDATE assembly_variants SET archived_at=NOW()
+            WHERE organization_id IS NULL AND UPPER(trade_code)=UPPER($1) AND UPPER(system_code)=UPPER($2)
+              AND UPPER(code) <> ALL($3::text[]) AND archived_at IS NULL`,
+          [t.code, s.code, varCodes]);
+      }
+    }
+    // Reconcile: archive global systems (+ their variants) under this trade that the library dropped.
+    if (sysCodes.length) {
+      await db.query(
+        `UPDATE assembly_systems SET archived_at=NOW()
+          WHERE organization_id IS NULL AND UPPER(trade_code)=UPPER($1)
+            AND UPPER(code) <> ALL($2::text[]) AND archived_at IS NULL`,
+        [t.code, sysCodes]);
+      await db.query(
+        `UPDATE assembly_variants SET archived_at=NOW()
+          WHERE organization_id IS NULL AND UPPER(trade_code)=UPPER($1)
+            AND UPPER(system_code) <> ALL($2::text[]) AND archived_at IS NULL`,
+        [t.code, sysCodes]);
     }
   }
 }

@@ -9040,11 +9040,16 @@ async function execStaffTool(name, input, ctx) {
       try { _txOrgId = await resolveOrgIdFromCtx(ctx); } catch (_) {}
       const reg = await asmSvc.loadRegistry(pool, _txOrgId);
       const trades = [...reg.trades.values()].map((t) => ({ code: t.code, name: t.name }));
+      const vbs = reg.variantsBySystem || new Map();
       const systems = [];
-      reg.systemsByTrade.forEach((m, tc) => { m.forEach((s) => systems.push({ trade_code: tc, code: s.code, name: s.name, default_unit: s.default_unit || null })); });
+      reg.systemsByTrade.forEach((m, tc) => { m.forEach((s) => {
+        const vmap = vbs.get(tc + '|' + s.code);
+        const variants = vmap ? [...vmap.values()].map((v) => ({ code: v.code, name: v.name })) : [];
+        systems.push({ trade_code: tc, code: s.code, name: s.name, default_unit: s.default_unit || null, variants });
+      }); });
       return JSON.stringify({
         trades, systems,
-        note: 'When drafting an assembly via scribe_write, set fields.trade + fields.system (+ optional fields.variant) and OMIT code — the server derives TRADE-SYSTEM-VARIANT and enforces uniqueness. Missing a trade/system? Have the user add it in Admin → Organization → Assembly Codes.',
+        note: 'When drafting an assembly via scribe_write, set fields.trade + fields.system + (optionally) fields.variant — use a cataloged variant code from the matching system when one fits, or your own short spec — and OMIT code (the server derives TRADE-SYSTEM-VARIANT and enforces uniqueness). Missing a trade/system/variant? Have the user add it in Admin → Organization → Assembly Codes.',
       }, null, 1);
     }
 

@@ -543,7 +543,9 @@
     createTrade: function(payload) { return post('/api/assembly-taxonomy/trades', payload); },
     updateTrade: function(id, payload) { return patch('/api/assembly-taxonomy/trades/' + encodeURIComponent(id), payload); },
     createSystem: function(payload) { return post('/api/assembly-taxonomy/systems', payload); },
-    updateSystem: function(id, payload) { return patch('/api/assembly-taxonomy/systems/' + encodeURIComponent(id), payload); }
+    updateSystem: function(id, payload) { return patch('/api/assembly-taxonomy/systems/' + encodeURIComponent(id), payload); },
+    createVariant: function(payload) { return post('/api/assembly-taxonomy/variants', payload); },
+    updateVariant: function(id, payload) { return patch('/api/assembly-taxonomy/variants/' + encodeURIComponent(id), payload); }
   };
 
   var materials = {

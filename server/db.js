@@ -2081,6 +2081,28 @@ async function initSchema() {
       ON assembly_systems (COALESCE(organization_id, 0), UPPER(trade_code), UPPER(code));
     CREATE INDEX IF NOT EXISTS idx_asm_systems_trade
       ON assembly_systems (COALESCE(organization_id, 0), UPPER(trade_code)) WHERE archived_at IS NULL;
+
+    -- Third catalog tier: the common VARIANTS per system (3-tab, 24ga, 6ft…).
+    -- A picklist only — the assemblies.variant field stays free-text-capable,
+    -- so one-offs are always allowed. Scoped to trade_code + system_code by CODE.
+    CREATE TABLE IF NOT EXISTS assembly_variants (
+      id BIGSERIAL PRIMARY KEY,
+      organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE,  -- NULL = global seed
+      trade_code  TEXT NOT NULL,
+      system_code TEXT NOT NULL,
+      code TEXT NOT NULL,                        -- 3TAB, 24GA, 6FT …
+      name TEXT NOT NULL,                        -- 3-tab, 24ga snap-lock …
+      note TEXT,                                 -- "when you'd quote it"
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      archived_at TIMESTAMPTZ,
+      created_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_asm_variants_code_uq
+      ON assembly_variants (COALESCE(organization_id, 0), UPPER(trade_code), UPPER(system_code), UPPER(code));
+    CREATE INDEX IF NOT EXISTS idx_asm_variants_sys
+      ON assembly_variants (COALESCE(organization_id, 0), UPPER(trade_code), UPPER(system_code)) WHERE archived_at IS NULL;
     -- NOTE: the assemblies unique-code index is built in init() AFTER the JS
     -- backfill de-dupes existing rows (see backfillAssemblyTaxonomy) — building
     -- it here would brick boot if two legacy rows already share a code.

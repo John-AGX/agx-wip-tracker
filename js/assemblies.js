@@ -33,11 +33,11 @@
   // Load the code registry once (cached). Refreshed on tab re-render.
   function ensureTaxonomy() {
     if (_taxonomy) return Promise.resolve(_taxonomy);
-    if (!window.p86Api || !window.p86Api.assemblyTaxonomy) { _taxonomy = { trades: [], systems: [] }; return Promise.resolve(_taxonomy); }
+    if (!window.p86Api || !window.p86Api.assemblyTaxonomy) { _taxonomy = { trades: [], systems: [], variants: [] }; return Promise.resolve(_taxonomy); }
     return window.p86Api.assemblyTaxonomy.list().then(function (res) {
-      _taxonomy = { trades: res.trades || [], systems: res.systems || [] };
+      _taxonomy = { trades: res.trades || [], systems: res.systems || [], variants: res.variants || [] };
       return _taxonomy;
-    }).catch(function () { _taxonomy = { trades: [], systems: [] }; return _taxonomy; });
+    }).catch(function () { _taxonomy = { trades: [], systems: [], variants: [] }; return _taxonomy; });
   }
   function tradeName(code) { var t = ((_taxonomy && _taxonomy.trades) || []).find(function (x) { return up(x.code) === up(code); }); return t ? t.name : (code || 'Unclassified'); }
   function systemName(trade, code) { if (!code) return null; var s = ((_taxonomy && _taxonomy.systems) || []).find(function (x) { return up(x.trade_code) === up(trade) && up(x.code) === up(code); }); return s ? s.name : code; }
@@ -63,6 +63,17 @@
   function selWrap(label, id, inner) {
     return '<label style="display:flex;flex-direction:column;gap:4px;font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-dim,#8a93a6);">' + esc(label) +
       '<select id="' + id + '" style="background:rgba(255,255,255,0.04);border:1px solid var(--border,#2a2f3a);border-radius:6px;padding:7px 9px;color:var(--text,#fff);font-size:13px;">' + inner + '</select></label>';
+  }
+  // Cataloged variants for a trade+system — datalist <option>s (pick or type).
+  function variantOptions(trade, system) {
+    var vs = ((_taxonomy && _taxonomy.variants) || []).filter(function (v) { return up(v.trade_code) === up(trade) && up(v.system_code) === up(system); });
+    return vs.map(function (v) { return '<option value="' + esc(v.code) + '">' + esc(v.name) + (v.note ? ' — ' + esc(v.note) : '') + '</option>'; }).join('');
+  }
+  // Variant field = free-text input backed by a datalist of cataloged variants.
+  function variantField(trade, system, val) {
+    return '<label style="display:flex;flex-direction:column;gap:4px;font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-dim,#8a93a6);">Variant' +
+      '<input id="asmEd_variant" list="asmEd_variantlist" autocomplete="off" placeholder="pick or type" value="' + esc(val || '') + '" style="background:rgba(255,255,255,0.04);border:1px solid var(--border,#2a2f3a);border-radius:6px;padding:7px 9px;color:var(--text,#fff);font-size:13px;" />' +
+      '<datalist id="asmEd_variantlist">' + variantOptions(trade, system) + '</datalist></label>';
   }
 
   function esc(s) {
@@ -254,7 +265,7 @@
           fld('Name *', 'asmEd_name', h.name) +
           selWrap('Trade', 'asmEd_trade', tradeOptions(h.trade)) +
           selWrap('System', 'asmEd_system', systemOptions(h.trade, h.system)) +
-          fld('Variant', 'asmEd_variant', h.variant) +
+          variantField(h.trade, h.system, h.variant) +
           fld('Unit', 'asmEd_unit', h.unit || 'SF') +
         '</div>' +
         '<div style="padding:0 20px 10px;font-size:11px;color:var(--text-dim,#8a93a6);">Code: <span id="asmEd_codePreview" style="font-family:monospace;color:#4fd1c5;font-size:13px;">' + (esc(clientCode(h.trade, h.system, h.variant)) || '—') + '</span> <span style="opacity:.7;">· auto-derived from Trade · System · Variant (kept unique)</span></div>' +
@@ -285,16 +296,22 @@
       var prev = overlay.querySelector('#asmEd_codePreview');
       if (prev) prev.textContent = clientCode(tradeEl && tradeEl.value, sysEl && sysEl.value, varEl && varEl.value) || '—';
     }
+    function rebuildVariantList() {
+      var dl = overlay.querySelector('#asmEd_variantlist');
+      if (dl) dl.innerHTML = variantOptions(tradeEl && tradeEl.value, sysEl && sysEl.value);
+    }
     if (tradeEl) tradeEl.addEventListener('change', function () {
       _editing.header.trade = tradeEl.value;
       _editing.header.system = '';
       if (sysEl) sysEl.innerHTML = systemOptions(tradeEl.value, '');  // stable element, fresh options
+      rebuildVariantList();
       recompute();
     });
     if (sysEl) sysEl.addEventListener('change', function () {
       _editing.header.system = sysEl.value;
       var s = ((_taxonomy && _taxonomy.systems) || []).find(function (x) { return up(x.trade_code) === up(tradeEl && tradeEl.value) && up(x.code) === up(sysEl.value); });
       if (s && s.default_unit && unitEl && (!unitEl.value.trim() || unitEl.value === 'SF')) unitEl.value = s.default_unit;
+      rebuildVariantList();
       recompute();
     });
     if (varEl) varEl.addEventListener('input', function () { _editing.header.variant = varEl.value; recompute(); });

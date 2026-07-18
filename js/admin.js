@@ -5428,7 +5428,7 @@
   }
 
   // ── Assembly Codes (Trade + System registry) ────────────────────────
-  var _asmCodesState = { loading: true, trades: [], systems: [], editTrade: null, editSystem: null, err: '' };
+  var _asmCodesState = { loading: true, trades: [], systems: [], variants: [], editTrade: null, editSystem: null, editVariant: null, expandSys: {}, err: '' };
 
   function renderOrgAssemblyTaxonomy() {
     var host = document.getElementById('admin-org-asmcodes-host');
@@ -5441,6 +5441,7 @@
     window.p86Api.assemblyTaxonomy.list().then(function (r) {
       _asmCodesState.trades = (r && r.trades) || [];
       _asmCodesState.systems = (r && r.systems) || [];
+      _asmCodesState.variants = (r && r.variants) || [];
       _asmCodesState.loading = false; _asmCodesState.err = '';
       paintOrgAsmCodes();
     }).catch(function (e) {
@@ -5461,12 +5462,15 @@
     var trades = st.trades.slice().sort(function (a, b) { return String(a.name).localeCompare(String(b.name)); });
     var sysByTrade = {};
     st.systems.forEach(function (s) { var k = String(s.trade_code).toUpperCase(); (sysByTrade[k] = sysByTrade[k] || []).push(s); });
+    var varBySys = {};
+    st.variants.forEach(function (v) { var k = String(v.trade_code).toUpperCase() + '_' + String(v.system_code).toUpperCase(); (varBySys[k] = varBySys[k] || []).push(v); });
+    _asmCodesState._varBySys = varBySys;
 
     var html =
       '<fieldset style="border:1px solid var(--border,#333);border-radius:8px;padding:14px;">' +
         '<legend style="font-size:11px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;padding:0 6px;">Assembly Codes</legend>' +
         (st.err ? '<div style="color:#f87171;font-size:12px;margin-bottom:10px;">' + escapeHTML(st.err) + '</div>' : '') +
-        '<div style="font-size:12px;color:var(--text-dim,#8a93a6);margin-bottom:12px;">Codes are <b>TRADE-SYSTEM-VARIANT</b> (e.g. <code>ROOF-SHNG-612</code>). Grey <b>seed</b> rows are shared globally and read-only; add your own trades/systems here — they appear in the /assemblies editor dropdowns.</div>' +
+        '<div style="font-size:12px;color:var(--text-dim,#8a93a6);margin-bottom:12px;">Codes are <b>TRADE-SYSTEM-VARIANT</b> (e.g. <code>ROOF-SHNG-612</code>). Grey <b>seed</b> rows are shared globally and read-only; add your own trades, systems, and variants here — they appear in the /assemblies editor dropdowns. Expand a system to see + manage its variant picklist.</div>' +
         '<div style="display:flex;gap:8px;align-items:flex-end;margin-bottom:14px;flex-wrap:wrap;padding:10px;background:rgba(255,255,255,0.02);border:1px solid var(--border,#2a2f3a);border-radius:8px;">' +
           asmMiniInput('New trade code', 'asmNewTradeCode', 'e.g. SOLR', 100) +
           asmMiniInput('Trade name', 'asmNewTradeName', 'e.g. Solar', 180) +
@@ -5492,7 +5496,7 @@
           ? ' <span style="font-size:9px;text-transform:uppercase;letter-spacing:.5px;color:#8a93a6;background:rgba(255,255,255,0.06);padding:1px 6px;border-radius:8px;">seed</span>'
           : ' <button class="ee-btn secondary" onclick="window.adminAsmCodes.beginEditTrade(' + t.id + ')" style="font-size:11px;padding:3px 8px;">Rename</button>' +
             ' <button class="ee-btn secondary" onclick="window.adminAsmCodes.archiveTrade(' + t.id + ')" style="font-size:11px;padding:3px 8px;">Archive</button>');
-    var sysRows = systems.slice().sort(function (a, b) { return String(a.name).localeCompare(String(b.name)); }).map(asmSystemRowHTML).join('');
+    var sysRows = systems.slice().sort(function (a, b) { return String(a.name).localeCompare(String(b.name)); }).map(asmSystemBlockHTML).join('');
     return '<div style="border:1px solid var(--border,#2a2f3a);border-radius:8px;margin-bottom:10px;overflow:hidden;">' +
       '<div style="display:flex;align-items:center;gap:8px;padding:8px 12px;background:rgba(255,255,255,0.03);flex-wrap:wrap;">' + header + '</div>' +
       '<div style="padding:6px 12px 10px;">' +
@@ -5507,7 +5511,7 @@
     '</div>';
   }
 
-  function asmSystemRowHTML(s) {
+  function asmSystemRowHTML(s, extra) {
     var st = _asmCodesState;
     var isSeed = s.org == null;
     var editing = st.editSystem === s.id && !isSeed;
@@ -5523,11 +5527,60 @@
       '<span style="color:var(--text,#fff);">' + escapeHTML(s.name) + '</span>' +
       '<span style="font-family:monospace;font-size:10px;color:var(--text-dim,#888);">' + escapeHTML(s.code) + '</span>' +
       (s.default_unit ? '<span style="font-size:10px;color:#4fd1c5;">' + escapeHTML(s.default_unit) + '</span>' : '') +
+      (extra || '') +
       (isSeed
         ? '<span style="font-size:9px;text-transform:uppercase;color:#8a93a6;background:rgba(255,255,255,0.06);padding:1px 5px;border-radius:8px;">seed</span>'
         : '<span style="margin-left:auto;"></span>' +
           '<button class="ee-btn secondary" onclick="window.adminAsmCodes.beginEditSystem(' + s.id + ')" style="font-size:10px;padding:2px 7px;">Rename</button>' +
           '<button class="ee-btn secondary" onclick="window.adminAsmCodes.archiveSystem(' + s.id + ')" style="font-size:10px;padding:2px 7px;">Archive</button>') +
+    '</div>';
+  }
+
+  // System row + its expandable variant picklist.
+  function asmSystemBlockHTML(s) {
+    var st = _asmCodesState;
+    var key = String(s.trade_code).toUpperCase() + '_' + String(s.code).toUpperCase();
+    var variants = (st._varBySys && st._varBySys[key]) || [];
+    var expanded = !!st.expandSys[key];
+    var toggle = '<span onclick="window.adminAsmCodes.toggleSysVariants(\'' + key + '\')" style="cursor:pointer;font-size:10px;color:var(--accent,#4f8cff);white-space:nowrap;">' +
+      (expanded ? '▾' : '▸') + ' ' + variants.length + ' variant' + (variants.length === 1 ? '' : 's') + '</span>';
+    var body = '';
+    if (expanded) {
+      var rows = variants.slice().sort(function (a, b) { return String(a.name).localeCompare(String(b.name)); }).map(asmVariantRowHTML).join('');
+      body = '<div style="padding:4px 0 4px 14px;border-left:2px solid var(--border,#2a2f3a);margin:2px 0 6px 4px;">' +
+        (rows || '<div style="font-size:11px;color:var(--text-dim,#888);padding:2px 0;">No variants yet.</div>') +
+        '<div style="display:flex;gap:5px;align-items:flex-end;margin-top:6px;flex-wrap:wrap;">' +
+          asmMiniInput('Variant code', 'asmNewVarCode_' + key, 'e.g. 612', 80) +
+          asmMiniInput('Name', 'asmNewVarName_' + key, 'e.g. 6:12 pitch', 140) +
+          asmMiniInput('Note', 'asmNewVarNote_' + key, 'optional', 140) +
+          '<button class="ee-btn secondary" onclick="window.adminAsmCodes.addVariant(\'' + escapeHTML(s.trade_code) + '\',\'' + escapeHTML(s.code) + '\')" style="font-size:10px;padding:4px 8px;">+ Add</button>' +
+        '</div>' +
+      '</div>';
+    }
+    return '<div style="padding:1px 0;">' + asmSystemRowHTML(s, toggle) + body + '</div>';
+  }
+
+  function asmVariantRowHTML(v) {
+    var st = _asmCodesState;
+    var isSeed = v.org == null;
+    var editing = st.editVariant === v.id && !isSeed;
+    if (editing) {
+      return '<div style="display:flex;gap:5px;align-items:center;padding:2px 0;">' +
+        '<input id="asmVarName_' + v.id + '" value="' + escapeHTML(v.name) + '" style="padding:3px 6px;font-size:11.5px;background:var(--card-bg,#141419);border:1px solid var(--border,#333);border-radius:5px;color:var(--text,#fff);width:130px;" />' +
+        '<input id="asmVarNote_' + v.id + '" value="' + escapeHTML(v.note || '') + '" placeholder="note" style="padding:3px 6px;font-size:11.5px;background:var(--card-bg,#141419);border:1px solid var(--border,#333);border-radius:5px;color:var(--text,#fff);width:150px;" />' +
+        '<button class="ee-btn primary" onclick="window.adminAsmCodes.saveVariant(' + v.id + ')" style="font-size:10px;padding:2px 7px;">Save</button>' +
+        '<button class="ee-btn secondary" onclick="window.adminAsmCodes.cancelEdit()" style="font-size:10px;padding:2px 7px;">Cancel</button>' +
+      '</div>';
+    }
+    return '<div style="display:flex;gap:6px;align-items:baseline;padding:2px 0;font-size:11.5px;">' +
+      '<span style="font-family:monospace;font-size:10px;color:var(--accent,#4f8cff);min-width:60px;">' + escapeHTML(v.code) + '</span>' +
+      '<span style="color:var(--text,#fff);">' + escapeHTML(v.name) + '</span>' +
+      (v.note ? '<span style="color:var(--text-dim,#888);">— ' + escapeHTML(v.note) + '</span>' : '') +
+      (isSeed
+        ? '<span style="margin-left:auto;font-size:8px;text-transform:uppercase;color:#8a93a6;">seed</span>'
+        : '<span style="margin-left:auto;"></span>' +
+          '<button class="ee-btn secondary" onclick="window.adminAsmCodes.beginEditVariant(' + v.id + ')" style="font-size:9px;padding:1px 6px;">Rename</button>' +
+          '<button class="ee-btn secondary" onclick="window.adminAsmCodes.archiveVariant(' + v.id + ')" style="font-size:9px;padding:1px 6px;">Archive</button>') +
     '</div>';
   }
 
@@ -5543,8 +5596,8 @@
           name: (document.getElementById('asmNewTradeName') || {}).value || '',
         }));
       },
-      beginEditTrade: function (id) { _asmCodesState.editTrade = id; _asmCodesState.editSystem = null; paintOrgAsmCodes(); var el = document.getElementById('asmTradeName_' + id); if (el) el.focus(); },
-      cancelEdit: function () { _asmCodesState.editTrade = null; _asmCodesState.editSystem = null; paintOrgAsmCodes(); },
+      beginEditTrade: function (id) { _asmCodesState.editTrade = id; _asmCodesState.editSystem = null; _asmCodesState.editVariant = null; paintOrgAsmCodes(); var el = document.getElementById('asmTradeName_' + id); if (el) el.focus(); },
+      cancelEdit: function () { _asmCodesState.editTrade = null; _asmCodesState.editSystem = null; _asmCodesState.editVariant = null; paintOrgAsmCodes(); },
       saveTradeName: function (id) { done(window.p86Api.assemblyTaxonomy.updateTrade(id, { name: (document.getElementById('asmTradeName_' + id) || {}).value || '' })); },
       archiveTrade: function (id) { confirmThen('Archive this trade? Assemblies still using it must be reassigned first.', function () { done(window.p86Api.assemblyTaxonomy.updateTrade(id, { archived: true })); }); },
       addSystem: function (tradeCode) {
@@ -5555,9 +5608,22 @@
           default_unit: (document.getElementById('asmNewSysUnit_' + tradeCode) || {}).value || '',
         }));
       },
-      beginEditSystem: function (id) { _asmCodesState.editSystem = id; _asmCodesState.editTrade = null; paintOrgAsmCodes(); },
+      beginEditSystem: function (id) { _asmCodesState.editSystem = id; _asmCodesState.editTrade = null; _asmCodesState.editVariant = null; paintOrgAsmCodes(); },
       saveSystem: function (id) { done(window.p86Api.assemblyTaxonomy.updateSystem(id, { name: (document.getElementById('asmSysName_' + id) || {}).value || '', default_unit: (document.getElementById('asmSysUnit_' + id) || {}).value || '' })); },
       archiveSystem: function (id) { confirmThen('Archive this system? Assemblies still using it must be reassigned first.', function () { done(window.p86Api.assemblyTaxonomy.updateSystem(id, { archived: true })); }); },
+      toggleSysVariants: function (key) { _asmCodesState.expandSys[key] = !_asmCodesState.expandSys[key]; paintOrgAsmCodes(); },
+      addVariant: function (tradeCode, systemCode) {
+        var k = String(tradeCode).toUpperCase() + '_' + String(systemCode).toUpperCase();
+        done(window.p86Api.assemblyTaxonomy.createVariant({
+          trade_code: tradeCode, system_code: systemCode,
+          code: (document.getElementById('asmNewVarCode_' + k) || {}).value || '',
+          name: (document.getElementById('asmNewVarName_' + k) || {}).value || '',
+          note: (document.getElementById('asmNewVarNote_' + k) || {}).value || '',
+        }));
+      },
+      beginEditVariant: function (id) { _asmCodesState.editVariant = id; _asmCodesState.editTrade = null; _asmCodesState.editSystem = null; paintOrgAsmCodes(); },
+      saveVariant: function (id) { done(window.p86Api.assemblyTaxonomy.updateVariant(id, { name: (document.getElementById('asmVarName_' + id) || {}).value || '', note: (document.getElementById('asmVarNote_' + id) || {}).value || '' })); },
+      archiveVariant: function (id) { confirmThen('Archive this variant?', function () { done(window.p86Api.assemblyTaxonomy.updateVariant(id, { archived: true })); }); },
     };
   })();
 
