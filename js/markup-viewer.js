@@ -2256,6 +2256,9 @@
     if (sum.angles.length) rows.push(['Angles', sum.angles.map(function(d) { return (Math.round(d * 10) / 10) + '°'; }).join(', ')]);
     if (!rows.length) { panel.style.display = 'none'; return; }
     panel.style.display = '';
+    // Quantify is offered whenever there's a real quantity to drive Q with —
+    // linear/area need scale; count doesn't.
+    var canQuantify = (sum.hasLen && isCalibrated()) || (sum.hasArea && isCalibrated()) || sum.count > 0;
     panel.innerHTML =
       '<div style="font-weight:700;color:#fff;margin-bottom:6px;">\u{1F4D0} Takeoff totals</div>' +
       rows.map(function(r) {
@@ -2263,7 +2266,282 @@
           '<span style="color:#9aa;">' + escapeHTML(r[0]) + '</span>' +
           '<strong style="color:#fff;">' + escapeHTML(r[1]) + '</strong></div>';
       }).join('') +
-      (isCalibrated() ? '' : '<div style="margin-top:6px;color:#fca5a5;font-size:10.5px;">Set scale to total LF / SF</div>');
+      (isCalibrated() ? '' : '<div style="margin-top:6px;color:#fca5a5;font-size:10.5px;">Set scale to total LF / SF</div>') +
+      (canQuantify
+        ? '<button id="p86-mk-quantify-btn" style="margin-top:8px;width:100%;box-sizing:border-box;background:rgba(251,191,36,0.14);color:#fbbf24;border:1px solid #fbbf24;border-radius:7px;padding:6px 8px;font-size:11.5px;font-weight:700;cursor:pointer;">\u{1F9E9} Quantify with assembly</button>'
+        : '');
+    var qbtn = panel.querySelector('#p86-mk-quantify-btn');
+    if (qbtn) qbtn.onclick = function() { openQuantifyPanel(overlay); };
+  }
+
+  // ── Draw-to-quantify (PA-S1) ─────────────────────────────────────
+  // Turn a live takeoff total into a parametric assembly explode: the
+  // measured LF / SF / Count becomes Q, the assembly's formulas compute
+  // the real part quantities + price, shown right on the plan. Reuses the
+  // S0 /api/assemblies/:id/explode endpoint (js/assembly-formula.js money
+  // math), so a takeoff prices identically to a Scope-Builder insert.
+  var _qState = null;   // { assemblies, sel, qSource, params, result, loading }
+  var _qGen = 0;        // monotonic explode token — unique ACROSS panel open/close cycles
+
+  function currentOverlay() { return document.getElementById('p86-markup-overlay'); }
+  function qMoney(n) { return (n == null || isNaN(n)) ? '—' : '$' + Number(n).toFixed(2); }
+
+  // The takeoff quantities available to drive Q, in the assembly's units.
+  function quantifySources() {
+    var sum = measureSummary();
+    var out = [];
+    if (sum.hasLen && isCalibrated()) out.push({ key: 'lf', label: 'Linear', unit: 'LF', value: Math.round(sum.lf * 100) / 100 });
+    if (sum.hasArea && isCalibrated()) out.push({ key: 'sf', label: 'Area', unit: 'SF', value: Math.round(sum.sf * 100) / 100 });
+    if (sum.count > 0) out.push({ key: 'count', label: 'Count', unit: 'EA', value: sum.count });
+    return out;
+  }
+
+  function openQuantifyPanel(overlay) {
+    overlay = overlay || currentOverlay();
+    if (!overlay) return;
+    var srcs = quantifySources();
+    if (!srcs.length) { alert('Take off a measurement first (LF / SF / Count).'); return; }
+    _qState = { assemblies: null, sel: null, qSource: srcs[0].key, params: {}, result: null, loading: true, error: null };
+    var st = _qState;   // this session — identity-check async callbacks against it
+    ensureQuantifyModal(overlay);
+    renderQuantify();
+    // Load parametric/formula assemblies once.
+    if (window.p86Api && window.p86Api.assemblies && window.p86Api.assemblies.list) {
+      window.p86Api.assemblies.list().then(function(res) {
+        if (_qState !== st) return;   // closed or reopened while in flight
+        var all = (res && res.assemblies) || [];
+        _qState.assemblies = all.filter(function(a) {
+          return (Array.isArray(a.params) && a.params.length) || a.has_formulas;
+        });
+        // Auto-pick an assembly whose output unit matches the takeoff source.
+        var src = quantifySources().filter(function(s) { return s.key === _qState.qSource; })[0] || srcs[0];
+        var match = _qState.assemblies.filter(function(a) { return String(a.unit || '').toUpperCase() === src.unit; })[0];
+        _qState.sel = match || _qState.assemblies[0] || null;
+        _qState.loading = false;
+        renderQuantify();
+        runQuantifyExplode();
+      }).catch(function(e) {
+        if (_qState !== st) return;
+        _qState.loading = false; _qState.error = (e && e.message) || 'Failed to load assemblies';
+        renderQuantify();
+      });
+    } else {
+      _qState.loading = false; _qState.error = 'Assemblies API unavailable';
+      renderQuantify();
+    }
+  }
+
+  function ensureQuantifyModal(overlay) {
+    var m = overlay.querySelector('#p86-mk-quantify');
+    if (m) return m;
+    m = document.createElement('div');
+    m.id = 'p86-mk-quantify';
+    m.style.cssText = 'position:absolute;right:18px;bottom:18px;width:320px;max-height:80%;overflow-y:auto;background:rgba(15,15,30,0.98);border:1px solid #fbbf24;border-radius:12px;padding:12px 14px;box-shadow:0 10px 34px rgba(0,0,0,0.6);z-index:5060;font-size:12px;color:#e6e6e6;';
+    m.addEventListener('mousedown', function(ev) { ev.stopPropagation(); });
+    m.addEventListener('click', function(ev) { ev.stopPropagation(); });
+    // Mount into the SAME positioned ancestor the takeoff panel uses so the
+    // absolute bottom-right anchor resolves the same way (and it visually
+    // replaces the totals panel it sits on top of).
+    var mp = overlay.querySelector('#p86-mk-measure-panel');
+    (mp && mp.parentNode ? mp.parentNode : overlay).appendChild(m);
+    return m;
+  }
+
+  function closeQuantify() {
+    var m = currentOverlay() && currentOverlay().querySelector('#p86-mk-quantify');
+    if (m && m.parentNode) m.parentNode.removeChild(m);
+    if (_qState && _qState._t) clearTimeout(_qState._t);   // kill a pending debounce so it can't fire on a null state
+    _qState = null;
+  }
+
+  function qDebounce(fn, ms) {
+    return function() {
+      if (_qState) { if (_qState._t) clearTimeout(_qState._t); _qState._t = setTimeout(fn, ms); }
+    };
+  }
+
+  // Explode the selected assembly at the measured Q (+ typed dims). A
+  // generation token drops stale responses when inputs change fast.
+  function runQuantifyExplode() {
+    if (!_qState || !_qState.sel) return;
+    var src = quantifySources().filter(function(s) { return s.key === _qState.qSource; })[0];
+    if (!src) { _qState.result = null; renderQuantify(); return; }
+    var gen = ++_qGen;   // globally unique — a stale response can never match after a later dispatch
+    _qState.busy = true;
+    var params = { Q: src.value };
+    Object.keys(_qState.params).forEach(function(k) {
+      var v = parseFloat(_qState.params[k]);
+      if (isFinite(v)) params[k] = v;
+    });
+    window.p86Api.assemblies.explode(_qState.sel.id, params).then(function(d) {
+      if (!_qState || gen !== _qGen) return;   // superseded (or panel closed)
+      _qState.busy = false;
+      _qState.result = (d && d.ok) ? d : null;
+      _qState.error = (d && d.ok) ? null : ((d && d.error) || 'Explode failed');
+      renderQuantify();
+    }).catch(function(e) {
+      if (!_qState || gen !== _qGen) return;
+      _qState.busy = false; _qState.error = (e && e.message) || 'Explode failed'; _qState.result = null;
+      renderQuantify();
+    });
+  }
+
+  function renderQuantify() {
+    var overlay = currentOverlay();
+    var m = overlay && overlay.querySelector('#p86-mk-quantify');
+    if (!m) return;
+    // Snapshot the focused dimension input BEFORE the innerHTML teardown so
+    // typing survives a debounced explode result.
+    var ae = document.activeElement;
+    var focusKey = (ae && ae.getAttribute) ? ae.getAttribute('data-q-param') : null;
+    var caret = null;
+    if (focusKey) { try { caret = ae.selectionStart; } catch (e) { caret = null; } }
+    var srcs = quantifySources();
+    var head = '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">' +
+      '<span style="font-weight:800;color:#fbbf24;font-size:13px;">\u{1F9E9} Quantify</span>' +
+      '<button data-q-close style="margin-left:auto;background:transparent;border:0;color:#9aa;cursor:pointer;font-size:15px;">✕</button>' +
+    '</div>';
+
+    if (_qState.loading) { m.innerHTML = head + '<div style="color:#9aa;padding:8px 0;">Loading assemblies…</div>'; wireQuantify(m); return; }
+    if (!_qState.assemblies || !_qState.assemblies.length) {
+      m.innerHTML = head + '<div style="color:#9aa;padding:8px 0;line-height:1.5;">No parametric assemblies yet. Build one in <b>Estimates → Assemblies</b> (add parameters or a <span style="font-family:monospace;color:#fbbf24;">=formula</span> quantity), then quantify a takeoff against it here.</div>';
+      wireQuantify(m); return;
+    }
+
+    // Q-source selector (which takeoff total drives Q).
+    var srcSel = '<div style="margin-bottom:8px;"><div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:#8a93a6;margin-bottom:3px;">Quantity from takeoff</div>' +
+      '<div style="display:flex;gap:6px;flex-wrap:wrap;">' +
+      srcs.map(function(s) {
+        var on = s.key === _qState.qSource;
+        return '<button data-q-src="' + s.key + '" style="flex:1;min-width:80px;padding:5px 7px;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;' +
+          (on ? 'background:rgba(251,191,36,0.16);color:#fbbf24;border:1px solid #fbbf24;' : 'background:rgba(255,255,255,0.05);color:#ddd;border:1px solid #444;') + '">' +
+          escapeHTML(s.label) + ' <span style="font-family:monospace;">' + escapeHTML(String(s.value)) + '</span> ' + escapeHTML(s.unit) + '</button>';
+      }).join('') + '</div></div>';
+
+    // Assembly picker.
+    var asmSel = '<div style="margin-bottom:8px;"><div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:#8a93a6;margin-bottom:3px;">Assembly</div>' +
+      '<select data-q-asm style="width:100%;box-sizing:border-box;background:#1a1a2e;color:#fff;border:1px solid #444;border-radius:6px;padding:6px 7px;font-size:12px;">' +
+      _qState.assemblies.map(function(a) {
+        return '<option value="' + a.id + '"' + (_qState.sel && a.id === _qState.sel.id ? ' selected' : '') + '>' +
+          escapeHTML(a.name) + ' (' + escapeHTML(a.unit || 'EA') + ')</option>';
+      }).join('') + '</select>' +
+      (function() {
+        // Warn when the selected assembly's output unit doesn't match the
+        // takeoff driving Q (e.g. an SF assembly quantified off an LF run).
+        var s0 = srcs.filter(function(s) { return s.key === _qState.qSource; })[0];
+        var au = _qState.sel ? String(_qState.sel.unit || '').toUpperCase() : '';
+        return (s0 && au && au !== s0.unit)
+          ? '<div style="margin-top:3px;font-size:10px;color:#fbbf24;">⚠ Unit mismatch: Q is ' + escapeHTML(s0.unit) + ' but this assembly is priced per ' + escapeHTML(au) + '.</div>'
+          : '';
+      })() + '</div>';
+
+    // Dimension params (beyond Q).
+    var paramInputs = '';
+    if (_qState.sel && Array.isArray(_qState.sel.params) && _qState.sel.params.length) {
+      paramInputs = '<div style="margin-bottom:8px;display:flex;gap:8px;flex-wrap:wrap;">' +
+        _qState.sel.params.map(function(d) {
+          var v = (_qState.params[d.key] != null) ? _qState.params[d.key] : d.default;
+          return '<label title="' + escapeHTML(d.label || d.key) + '" style="display:flex;align-items:center;gap:4px;font-size:11px;color:#fbbf24;">' +
+            '<b style="font-family:monospace;">' + escapeHTML(d.key) + '</b>' + (d.unit ? '<span style="opacity:.7;">' + escapeHTML(d.unit) + '</span>' : '') +
+            '<input data-q-param="' + escapeHTML(d.key) + '" value="' + escapeHTML(String(v)) + '" inputmode="decimal" style="width:52px;text-align:right;background:rgba(251,191,36,0.08);border:1px solid rgba(251,191,36,0.35);border-radius:5px;padding:3px 5px;color:#fff;font-family:monospace;font-size:11px;" /></label>';
+        }).join('') + '</div>';
+    }
+
+    // Result breakdown.
+    var body = '';
+    if (_qState.error) {
+      body = '<div style="color:#f87171;padding:6px 0;">⚠ ' + escapeHTML(_qState.error) + '</div>';
+    } else if (_qState.result) {
+      var r = _qState.result;
+      // Show the SAME rounded numbers the total sums from, so line items
+      // always tie out to the displayed Total (don't mix server rounded-
+      // sum with independently-rounded rows).
+      var shownTotal = 0;
+      var rowsHtml = (r.rows || []).map(function(row) {
+        var priced = row.unit_cost != null;
+        var extNum = priced ? Math.round(row.qty * row.unit_cost * 100) / 100 : null;
+        if (priced) shownTotal += extNum;
+        var ext = priced ? qMoney(extNum) : '<span style="color:#fbbf24;">no price</span>';
+        return '<tr>' +
+          '<td style="padding:2px 4px;color:#e6e6e6;">' + escapeHTML(row.description || '') + '</td>' +
+          '<td style="padding:2px 4px;text-align:right;font-family:monospace;color:#cbd5e1;">' + escapeHTML(String(Math.round(row.qty * 100) / 100)) + '</td>' +
+          '<td style="padding:2px 4px;color:#8a93a6;font-size:10px;">' + escapeHTML(row.unit || '') + '</td>' +
+          '<td style="padding:2px 4px;text-align:right;font-family:monospace;color:#4fd1c5;">' + ext + '</td>' +
+        '</tr>';
+      }).join('');
+      var issues = (r.errors || []).map(function(e2) { return (e2.item ? e2.item + ': ' : '') + e2.error; })
+        .concat(r.warnings || []);
+      body =
+        '<div style="border-top:1px solid #333;margin-top:4px;padding-top:6px;">' +
+          '<table style="width:100%;border-collapse:collapse;font-size:11px;"><tbody>' + rowsHtml + '</tbody></table>' +
+          (issues.length ? '<div style="margin-top:6px;font-size:10.5px;color:#fbbf24;">' + issues.map(function(x) { return '⚠ ' + escapeHTML(x); }).join('<br>') + '</div>' : '') +
+          '<div style="display:flex;align-items:center;justify-content:space-between;margin-top:8px;padding-top:6px;border-top:1px solid #333;">' +
+            '<span style="font-weight:700;color:#fff;">Total' + (_qState.busy ? ' …' : '') + '</span>' +
+            '<span style="font-family:monospace;font-size:15px;font-weight:800;color:#4fd1c5;">' + qMoney(Math.round(shownTotal * 100) / 100) + (r.incomplete ? ' <span title="Some items have no price yet" style="color:#fbbf24;font-size:11px;">⚠</span>' : '') + '</span>' +
+          '</div>' +
+          '<button data-q-copy style="margin-top:8px;width:100%;box-sizing:border-box;background:rgba(255,255,255,0.06);color:#ddd;border:1px solid #444;border-radius:6px;padding:6px;font-size:11px;cursor:pointer;">\u{1F4CB} Copy takeoff</button>' +
+        '</div>';
+    } else if (_qState.busy) {
+      body = '<div style="color:#9aa;padding:6px 0;">Computing…</div>';
+    }
+
+    m.innerHTML = head + srcSel + asmSel + paramInputs + body;
+    wireQuantify(m);
+    // Restore focus + caret to a dimension input the user was typing into
+    // (the full-innerHTML rebuild on an explode result would drop it).
+    if (focusKey) {
+      var re = m.querySelector('[data-q-param="' + focusKey + '"]');
+      if (re) { try { re.focus(); if (caret != null) re.setSelectionRange(caret, caret); } catch (e) {} }
+    }
+  }
+
+  function wireQuantify(m) {
+    var close = m.querySelector('[data-q-close]');
+    if (close) close.onclick = closeQuantify;
+    m.querySelectorAll('[data-q-src]').forEach(function(b) {
+      b.onclick = function() {
+        _qState.qSource = b.dataset.qSrc;
+        _qState.result = null; _qState.error = null; _qState.busy = true;   // don't show the prior source's rows while recomputing
+        renderQuantify(); runQuantifyExplode();
+      };
+    });
+    var asm = m.querySelector('[data-q-asm]');
+    if (asm) asm.onchange = function() {
+      _qState.sel = _qState.assemblies.filter(function(a) { return a.id === Number(asm.value); })[0] || null;
+      _qState.params = {};   // fresh dims per assembly
+      _qState.result = null; _qState.error = null; _qState.busy = true;      // don't show the prior assembly's rows while recomputing
+      renderQuantify(); runQuantifyExplode();
+    };
+    m.querySelectorAll('[data-q-param]').forEach(function(inp) {
+      inp.oninput = function() {
+        var k = inp.dataset.qParam;
+        if (String(inp.value).trim() === '') delete _qState.params[k];
+        else _qState.params[k] = inp.value;
+        (qDebounce(runQuantifyExplode, 280))();
+      };
+    });
+    var copy = m.querySelector('[data-q-copy]');
+    if (copy) copy.onclick = function() { copyQuantifyText(copy); };
+  }
+
+  function copyQuantifyText(btn) {
+    if (!_qState || !_qState.result) return;
+    var src = quantifySources().filter(function(s) { return s.key === _qState.qSource; })[0];
+    var r = _qState.result;
+    var lines = [], shown = 0;
+    lines.push((_qState.sel.name) + ' — ' + (src ? src.value + ' ' + src.unit : ''));
+    (r.rows || []).forEach(function(row) {
+      var priced = row.unit_cost != null;
+      var extNum = priced ? Math.round(row.qty * row.unit_cost * 100) / 100 : null;
+      if (priced) shown += extNum;
+      lines.push('  ' + (Math.round(row.qty * 100) / 100) + ' ' + (row.unit || '') + '  ' + (row.description || '') + '  ' + (priced ? qMoney(extNum) : '(no price)'));
+    });
+    lines.push('Total: ' + qMoney(Math.round(shown * 100) / 100));
+    var text = lines.join('\n');
+    var done = function() { btn.textContent = '✓ Copied'; setTimeout(function() { btn.textContent = '\u{1F4CB} Copy takeoff'; }, 1400); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done).catch(function() { alert(text); });
+    } else { alert(text); }
   }
 
   // Architectural-style dimension line — line between the two
@@ -2664,6 +2942,8 @@
   }
 
   function closeOverlay() {
+    if (_qState && _qState._t) clearTimeout(_qState._t);   // a pending quantify debounce would fire on a null state
+    _qState = null;
     var overlay = document.getElementById('p86-markup-overlay');
     if (overlay) overlay.remove();
     state = null;
