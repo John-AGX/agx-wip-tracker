@@ -2301,10 +2301,30 @@
     if (!overlay) return;
     var srcs = quantifySources();
     if (!srcs.length) { alert('Take off a measurement first (LF / SF / Count).'); return; }
-    _qState = { assemblies: null, sel: null, qSource: srcs[0].key, params: {}, result: null, loading: true, error: null };
+    _qState = {
+      assemblies: null, sel: null, qSource: srcs[0].key, params: {}, result: null, loading: true, error: null,
+      // Estimate-append bridge (S1b).
+      estimates: null, estTarget: null, estMode: 'rollup', adding: false, addMsg: null,
+    };
     var st = _qState;   // this session — identity-check async callbacks against it
     ensureQuantifyModal(overlay);
     renderQuantify();
+    // Load estimates the takeoff can append to (skip locked/sold). Default the
+    // target to the estimate this attachment belongs to, if any.
+    if (window.p86Api && window.p86Api.estimates && window.p86Api.estimates.list) {
+      window.p86Api.estimates.list().then(function(res) {
+        if (_qState !== st) return;
+        var all = ((res && res.estimates) || []).filter(function(e) { return !e.is_locked; });
+        _qState.estimates = all;
+        var ownEnt = state && state.saveTarget;
+        if (ownEnt && ownEnt.entityType === 'estimate' && all.some(function(e) { return String(e.id) === String(ownEnt.entityId); })) {
+          _qState.estTarget = String(ownEnt.entityId);
+        } else if (all.length) {
+          _qState.estTarget = String(all[0].id);
+        }
+        renderQuantify();
+      }).catch(function() { if (_qState === st) { _qState.estimates = []; renderQuantify(); } });
+    } else { _qState.estimates = []; }
     // Load parametric/formula assemblies once.
     if (window.p86Api && window.p86Api.assemblies && window.p86Api.assemblies.list) {
       window.p86Api.assemblies.list().then(function(res) {
@@ -2480,6 +2500,7 @@
             '<span style="font-family:monospace;font-size:15px;font-weight:800;color:#4fd1c5;">' + qMoney(Math.round(shownTotal * 100) / 100) + (r.incomplete ? ' <span title="Some items have no price yet" style="color:#fbbf24;font-size:11px;">⚠</span>' : '') + '</span>' +
           '</div>' +
           '<button data-q-copy style="margin-top:8px;width:100%;box-sizing:border-box;background:rgba(255,255,255,0.06);color:#ddd;border:1px solid #444;border-radius:6px;padding:6px;font-size:11px;cursor:pointer;">\u{1F4CB} Copy takeoff</button>' +
+          quantifyEstimateBlock(r) +
         '</div>';
     } else if (_qState.busy) {
       body = '<div style="color:#9aa;padding:6px 0;">Computing…</div>';
@@ -2495,9 +2516,99 @@
     }
   }
 
+  // "Add to estimate" bridge (S1b) — server appends the exploded lines into
+  // a linked estimate's blob with the editor's section routing.
+  function quantifyEstimateBlock(r) {
+    if (r && r.incomplete) {
+      return '<div style="margin-top:8px;padding-top:8px;border-top:1px solid #333;font-size:10.5px;color:#fbbf24;">Price the ⚠ items before adding to an estimate.</div>';
+    }
+    if (!_qState.estimates) {
+      return '<div style="margin-top:8px;padding-top:8px;border-top:1px solid #333;font-size:10.5px;color:#9aa;">Loading estimates…</div>';
+    }
+    if (!_qState.estimates.length) {
+      return '<div style="margin-top:8px;padding-top:8px;border-top:1px solid #333;font-size:10.5px;color:#9aa;">No editable estimates to add to.</div>';
+    }
+    var opts = _qState.estimates.map(function(e) {
+      var label = (e.title || e.name || ('Estimate ' + e.id));
+      return '<option value="' + escapeHTML(String(e.id)) + '"' + (String(e.id) === String(_qState.estTarget) ? ' selected' : '') + '>' + escapeHTML(String(label).slice(0, 48)) + '</option>';
+    }).join('');
+    return '<div style="margin-top:8px;padding-top:8px;border-top:1px solid #333;">' +
+      '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:#8a93a6;margin-bottom:4px;">Add to estimate</div>' +
+      '<select data-q-est style="width:100%;box-sizing:border-box;background:#1a1a2e;color:#fff;border:1px solid #444;border-radius:6px;padding:5px 7px;font-size:12px;margin-bottom:6px;">' + opts + '</select>' +
+      '<div style="display:flex;gap:6px;align-items:center;">' +
+        '<select data-q-mode style="background:#1a1a2e;color:#fff;border:1px solid #444;border-radius:6px;padding:5px;font-size:10.5px;">' +
+          '<option value="rollup"' + (_qState.estMode === 'rollup' ? ' selected' : '') + '>Rollup lines</option>' +
+          '<option value="exploded"' + (_qState.estMode === 'exploded' ? ' selected' : '') + '>Exploded lines</option>' +
+        '</select>' +
+        '<button data-q-add' + (_qState.adding ? ' disabled' : '') + ' style="flex:1;background:rgba(34,197,94,0.16);color:#86efac;border:1px solid #22c55e;border-radius:6px;padding:6px;font-size:11px;font-weight:700;cursor:pointer;' + (_qState.adding ? 'opacity:.6;' : '') + '">' + (_qState.adding ? 'Adding…' : '➕ Add to estimate') + '</button>' +
+      '</div>' +
+      (_qState.addMsg ? '<div style="margin-top:6px;font-size:10.5px;color:' + (_qState.addMsg.ok ? '#86efac' : '#f87171') + ';">' + escapeHTML(_qState.addMsg.text) + '</div>' : '') +
+    '</div>';
+  }
+
+  function quantifyAddToEstimate() {
+    if (!_qState || !_qState.result || _qState.adding) return;
+    if (!_qState.estTarget) { _qState.addMsg = { ok: false, text: 'Pick an estimate first.' }; renderQuantify(); return; }
+    var src = quantifySources().filter(function(s) { return s.key === _qState.qSource; })[0];
+    if (!src) return;
+    var params = { Q: src.value };
+    Object.keys(_qState.params).forEach(function(k) { var v = parseFloat(_qState.params[k]); if (isFinite(v)) params[k] = v; });
+    _qState.adding = true; _qState.addMsg = null; renderQuantify();
+    var st = _qState;   // guard against close/reopen mid-request
+    var estId = _qState.estTarget;
+    window.p86Api.estimates.appendAssembly(estId, { assembly_id: _qState.sel.id, params: params, mode: _qState.estMode })
+      .then(function(d) {
+        if (_qState !== st) return;
+        _qState.adding = false;
+        if (d && d.ok) {
+          var estName = (_qState.estimates.filter(function(e) { return String(e.id) === String(estId); })[0] || {});
+          estName = estName.title || estName.name || ('Estimate ' + estId);
+          _qState.addMsg = { ok: true, text: '✓ Added ' + d.added + ' line' + (d.added === 1 ? '' : 's') + ' to "' + String(estName).slice(0, 32) + '"' + (d.created_alternate ? ' (new Base group)' : '') + '.' };
+          mergeAppendIntoAppData(estId, d);
+        } else {
+          _qState.addMsg = { ok: false, text: '⚠ ' + ((d && d.error) || 'Add failed') };
+        }
+        renderQuantify();
+      }).catch(function(e) {
+        if (_qState !== st) return;
+        _qState.adding = false;
+        _qState.addMsg = { ok: false, text: '⚠ ' + ((e && e.message) || 'Add failed') };
+        renderQuantify();
+      });
+  }
+
+  // Merge the server's fresh line set for this estimate into the client's
+  // in-memory appData so the offline-first bulk-save preserves (not clobbers)
+  // the append, then trigger a push to reconverge the server against any
+  // stale in-flight bulk-save.
+  function mergeAppendIntoAppData(estId, d) {
+    var ad = window.appData;
+    if (!ad || !Array.isArray(ad.estimateLines) || !Array.isArray(d.lines)) return;
+    var e = (ad.estimates || []).filter(function(x) { return String(x.id) === String(estId); })[0];
+    // Only meaningful when this estimate is in the client's portfolio (that's
+    // what the bulk-save ships); merging lines for an absent estimate is inert.
+    ad.estimateLines = ad.estimateLines.filter(function(l) { return String(l.estimateId) !== String(estId); }).concat(d.lines);
+    if (e) {
+      if (Array.isArray(d.alternates)) e.alternates = d.alternates;
+      if (d.active_alternate_id) e.activeAlternateId = d.active_alternate_id;
+    }
+    if (window.p86Data && typeof window.p86Data.pushToServer === 'function') { try { window.p86Data.pushToServer(); } catch (err) {} }
+    // If the estimate editor happens to be open on this estimate, refresh it.
+    if (window.estimateEditorAPI && typeof window.estimateEditorAPI.rerender === 'function'
+        && window.estimateEditorAPI.currentId && String(window.estimateEditorAPI.currentId()) === String(estId)) {
+      try { window.estimateEditorAPI.rerender(); } catch (err2) {}
+    }
+  }
+
   function wireQuantify(m) {
     var close = m.querySelector('[data-q-close]');
     if (close) close.onclick = closeQuantify;
+    var estSel = m.querySelector('[data-q-est]');
+    if (estSel) estSel.onchange = function() { _qState.estTarget = estSel.value; _qState.addMsg = null; };
+    var modeSel = m.querySelector('[data-q-mode]');
+    if (modeSel) modeSel.onchange = function() { _qState.estMode = modeSel.value; };
+    var addBtn = m.querySelector('[data-q-add]');
+    if (addBtn) addBtn.onclick = quantifyAddToEstimate;
     m.querySelectorAll('[data-q-src]').forEach(function(b) {
       b.onclick = function() {
         _qState.qSource = b.dataset.qSrc;

@@ -156,12 +156,20 @@ function explodeParametric(id, graph, scope, _st) {
         mult: eff, depth: st.depth + 1, seen: new Set(st.seen),
       });
     } else {
+      const rowQty = Math.round(eff * 10000) / 10000;
+      // qty_per_unit = the row's quantity PER 1 output unit (Q). The estimate
+      // editor's breakdown consumers (explode / refresh-display) multiply
+      // line.qty × qty_per_unit; a parametric rollup line's qty IS Q, so
+      // Q × (qty/Q) reconstructs the absolute qty. Carrying both shapes keeps
+      // those consumers correct without special-casing parametric rows.
+      const rootQ = num(scope.Q);
       st.out.push({
         kind: it.kind,
         material_id: it.material_id,
         description: desc,
         unit: it.unit || it.material_unit || 'EA',
-        qty: Math.round(eff * 10000) / 10000,
+        qty: rowQty,
+        qty_per_unit: rootQ > 0 ? Math.round((rowQty / rootQ) * 1e6) / 1e6 : rowQty,
         unit_cost: itemUnitCost(it),
         cost_code: (COST_CODES.has(it.cost_code) ? it.cost_code : KIND_DEFAULT_CODE[it.kind]) || 'materials',
         formula: it.qty_formula || null,

@@ -2,8 +2,96 @@ const express = require('express');
 const { pool } = require('../db');
 const { requireAuth, requireRole, requireCapability, getAttributedUserId } = require('../auth');
 const { geocodeAddress } = require('../geocoder');
+const asm = require('../services/assemblies');
+const estLines = require('../services/estimate-lines');
 
 const router = express.Router();
+
+const enum2 = (v) => { const n = Number(v); return isFinite(n) ? n : 0; };
+
+// POST /api/estimates/:id/append-assembly — append a parametric assembly's
+// exploded quantities as estimate lines (the takeoff Quantify "Add to
+// estimate" bridge). Body: { assembly_id, params:{Q,...}, mode?:'rollup'|
+// 'exploded', alternate_id? }. Org-scoped, ESTIMATES_EDIT, lock-aware.
+router.post('/:id/append-assembly', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req, res) => {
+  try {
+    const estId = req.params.id;
+    const b = req.body || {};
+    const assemblyId = parseInt(b.assembly_id, 10);
+    if (!isFinite(assemblyId)) return res.status(400).json({ error: 'assembly_id required' });
+    const mode = b.mode === 'exploded' ? 'exploded' : 'rollup';
+    const orgId = req.user.organization_id;
+
+    // Explode at the takeoff quantity — refuse a broken recipe rather than
+    // append $0 / partial lines. (Assembly load is org-scoped + read-only,
+    // so do it before opening the row-locked txn.)
+    const graph = await asm.loadGraph(pool, orgId);
+    const a = graph.assemblies.get(assemblyId);
+    if (!a) return res.status(404).json({ error: 'Assembly not found' });
+    const scope = asm.paramScope(a, b.params || {});
+    const Q = enum2(scope.Q);
+    if (!(Q > 0)) return res.status(400).json({ error: 'Takeoff quantity (Q) must be greater than zero' });
+    const ex = asm.explodeParametric(assemblyId, graph, scope);
+    if (ex.errors && ex.errors.length) {
+      return res.status(400).json({ error: 'Formula error: ' + ex.errors.map((e2) => (e2.item ? e2.item + ' — ' : '') + e2.error).join('; '), errors: ex.errors });
+    }
+    if (!ex.rows.length) return res.status(400).json({ error: 'Assembly has no items to add' });
+    // Match the client's incomplete gate — don't quietly append an
+    // understated cost for an assembly with an unpriced item.
+    if (ex.rows.some((row) => row.unit_cost == null)) {
+      return res.status(400).json({ error: 'Assembly has unpriced items — price them before adding to an estimate.' });
+    }
+
+    // Read-modify-write under a row lock so two simultaneous appends to the
+    // same estimate serialize instead of one silently overwriting the other.
+    const client = await pool.connect();
+    let plan, lines, alternates, activeAlternateId;
+    try {
+      await client.query('BEGIN');
+      const er = await client.query(
+        'SELECT id, data, is_locked FROM estimates WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL) FOR UPDATE',
+        [estId, orgId]);
+      if (!er.rowCount) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Estimate not found' }); }
+      if (er.rows[0].is_locked) { await client.query('ROLLBACK'); return res.status(409).json({ error: 'Estimate is locked (sold). Unlock it to edit.' }); }
+
+      const data = er.rows[0].data || {};
+      plan = estLines.applyAssemblyToEstimateData(data, {
+        estId: estId, assembly: a, rows: ex.rows, scope: scope, mode: mode, alternatePref: b.alternate_id || null,
+      });
+      if (!plan.added) { await client.query('ROLLBACK'); return res.status(400).json({ error: 'Nothing to add (all items priced at zero or empty)' }); }
+
+      // Strip computed/column-mirror fields so the JSONB-diff gate behaves
+      // like bulk-save (these are re-derived on read).
+      delete data.__totals; delete data.updated_at; delete data.created_at; delete data.owner_id;
+      await client.query(
+        'UPDATE estimates SET data = $1, updated_at = NOW() WHERE id = $2 AND (organization_id = $3 OR organization_id IS NULL)',
+        [JSON.stringify(data), estId, orgId]);
+      await client.query('COMMIT');
+
+      // The estimate's FRESH line set + alternates — the client merges these
+      // into its in-memory copy so its offline bulk-save preserves (not
+      // clobbers) the append.
+      lines = (data.lines || []).filter((l) => l.estimateId === estId);
+      alternates = data.alternates || [];
+      activeAlternateId = data.activeAlternateId || null;
+    } catch (e) {
+      try { await client.query('ROLLBACK'); } catch (_) {}
+      throw e;
+    } finally {
+      client.release();
+    }
+
+    res.json({
+      ok: true, added: plan.added, mode,
+      alternate_id: plan.altId, alternate_name: plan.altName, created_alternate: plan.createdAlt,
+      total: Math.round(ex.rows.reduce((s, r) => s + (r.unit_cost != null ? r.qty * r.unit_cost : 0), 0) * 100) / 100,
+      lines: lines, alternates: alternates, active_alternate_id: activeAlternateId,
+    });
+  } catch (e) {
+    console.error('POST /api/estimates/:id/append-assembly error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
 
 // ── Estimate geocoding (for the Estimates map view) ─────────────────
 // Estimates store their address as a single free-form propertyAddr string

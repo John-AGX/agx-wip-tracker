@@ -132,7 +132,10 @@
     send: function(id, payload) { return post('/api/estimates/' + encodeURIComponent(id) + '/send', payload || {}); },
     approve: function(id, payload) { return post('/api/estimates/' + encodeURIComponent(id) + '/approve', payload || {}); },
     decline: function(id, reason) { return post('/api/estimates/' + encodeURIComponent(id) + '/decline', { reason: reason || '' }); },
-    lock: function(id, locked) { return put('/api/estimates/' + encodeURIComponent(id) + '/lock', { locked: !!locked }); }
+    lock: function(id, locked) { return put('/api/estimates/' + encodeURIComponent(id) + '/lock', { locked: !!locked }); },
+    // Append a parametric assembly's exploded quantities as lines (the
+    // takeoff Quantify → estimate bridge). body: {assembly_id, params, mode?}.
+    appendAssembly: function(id, payload) { return post('/api/estimates/' + encodeURIComponent(id) + '/append-assembly', payload || {}); }
   };
 
   var users = {

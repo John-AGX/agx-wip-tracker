@@ -1975,6 +1975,15 @@
   window.eeAsmRefresh = function (lineId) {
     var line = eeFindLine(lineId);
     if (!line || !line.sourceAssemblyId) return;
+    // Parametric lines (added from Plans & Takeoffs with typed dimensions)
+    // have formula-driven quantities — per-unit repricing would lose the
+    // formula (and zero the line when qty_per_unit is 0). The server's bulk
+    // refresh already skips these; mirror it here. Re-add from the takeoff
+    // to reprice with the same measurements.
+    if (line.assemblyParams) {
+      alert('This line was quantified from typed dimensions (a parametric assembly), so its quantities come from formulas — per-unit repricing would be wrong.\n\nTo reprice, re-add it from Plans & Takeoffs with the same measurements.');
+      return;
+    }
     fetch('/api/assemblies/' + encodeURIComponent(line.sourceAssemblyId), { credentials: 'include' })
       .then(function (r) {
         if (!r.ok) throw new Error(r.status === 404 ? 'That assembly no longer exists.' : 'Could not load recipe (' + r.status + ')');
