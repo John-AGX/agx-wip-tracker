@@ -74,6 +74,14 @@ function sanitizePages(raw) {
         });
       }
       if (Array.isArray(pg.sheets)) out.sheets = pg.sheets.slice(0, 50);
+      if (Array.isArray(pg.blocks)) {
+        // Named block definitions (W3) — cap count AND each def's entity list
+        // so defs can't smuggle geometry past the per-sheet entity budget.
+        out.blocks = pg.blocks.slice(0, 200).map(function (bk) {
+          bk = bk || {};
+          return Object.assign({}, bk, { entities: Array.isArray(bk.entities) ? bk.entities.slice(0, 20000) : [] });
+        });
+      }
       if (pg.activeSheetId != null) out.activeSheetId = String(pg.activeSheetId);
       if (pg.space === 'sheet' || pg.space === 'model') out.space = pg.space;
       if (pg.underlay && typeof pg.underlay === 'object') out.underlay = pg.underlay;

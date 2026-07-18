@@ -56,6 +56,7 @@
     { key: 'stretch',  glyph: '⇲', name: 'Stretch',    group: 'Modify',   label: 'Stretch — click two corners of a crossing window (vertices inside move, the rest stays), then click a base + destination point' },
     { key: 'mirror2',  glyph: '⋈', name: 'Mirror 2-pt', group: 'Modify',  label: 'Mirror (two-point) — select objects first, then click two points on the mirror line; mirrored COPIES are created (originals kept)' },
     { key: 'arraypath', glyph: '⁝', name: 'Array path', group: 'Modify',  label: 'Array along path — select objects first, then click the path (line / polyline / arc), then type the real spacing (e.g. 8\'). Copies land at true spacing along the run — fence posts, sprinkler heads, plantings.' },
+    { key: 'insertblock', glyph: '⧈', name: 'Insert blk', group: 'Draw',  label: 'Insert block — pick a saved block definition, then click to stamp copies (Esc to stop). Make one first with Make block.' },
     { key: 'dim',      glyph: '↔', name: 'Dimension',  group: 'Annotate', label: 'Dimension (aligned — click two points; auto-labels real length along the line at the viewport scale)' },
     { key: 'dimradius',glyph: 'R', name: 'Radius dim',  group: 'Annotate', label: 'Radius dimension — click a circle / ellipse; labels its radius (R …)' },
     { key: 'dimdia',   glyph: '⌀', name: 'Diameter dim',group: 'Annotate', label: 'Diameter dimension — click a circle / ellipse; labels its diameter (⌀ …)' },
@@ -79,6 +80,7 @@
   var EDIT_ITEMS = [
     { key: 'rotate',  act: 'edit', glyph: '⟳', name: 'Rotate 90°', group: 'Modify', label: 'Rotate selection 90°' },
     { key: 'rotateA', act: 'edit', glyph: '∠', name: 'Rotate ∠',  group: 'Modify', label: 'Rotate selection by a typed angle about its center (clockwise; negative = counter-clockwise)' },
+    { key: 'blockdef', act: 'edit', glyph: '⧇', name: 'Make block', group: 'Modify', label: 'Capture the selection as a named BLOCK — reusable, insertable, countable. Explode an instance to edit its geometry.' },
     { key: 'mirrorH', act: 'edit', glyph: '⇆', name: 'Mirror H',   group: 'Modify', label: 'Mirror selection (horizontal)' },
     { key: 'mirrorV', act: 'edit', glyph: '⇅', name: 'Mirror V',   group: 'Modify', label: 'Mirror selection (vertical)' },
     { key: 'dup',     act: 'edit', glyph: '⧉', name: 'Duplicate',  group: 'Modify', label: 'Duplicate selection (Ctrl+D)' },
@@ -106,7 +108,8 @@
       { title: 'Modify', items: ['trim', 'extend', 'fillet', 'chamfer', 'break'] },
       { title: 'Arrange', items: ['edit:dup', 'edit:offset', 'edit:scale', 'edit:rotate', 'edit:rotateA', 'edit:mirrorH', 'edit:mirrorV', 'mirror2', 'stretch'] },
       { title: 'Array', items: ['polararray', 'edit:array', 'arraypath'] },
-      { title: 'Combine', items: ['edit:explode', 'edit:join'] }
+      { title: 'Combine', items: ['edit:explode', 'edit:join'] },
+      { title: 'Blocks', items: ['edit:blockdef', 'insertblock'] }
     ] },
     { tab: 'Annotate', panels: [
       { title: 'Dimensions', items: ['dim', 'dimcont', 'dimradius', 'dimdia', 'angle'] },
@@ -171,6 +174,8 @@
     wipeout: '<rect x="4" y="4" width="16" height="16" rx="1"/><path d="M4 13l9-9M9 20l11-11" opacity="0.35"/><rect x="8" y="8" width="8" height="8" fill="currentColor" stroke="none" opacity="0.8"/>',
     zoomwin: '<circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5 5"/><rect x="7.5" y="7.5" width="6" height="6" stroke-dasharray="2 1.6"/>',
     arraypath: '<path d="M3 17c4-8 10-8 18-10"/><circle cx="4.5" cy="16" r="1.6"/><circle cx="9.5" cy="11.5" r="1.6"/><circle cx="15" cy="8.8" r="1.6"/><circle cx="20" cy="7" r="1.6"/>',
+    blockdef: '<rect x="4" y="4" width="16" height="16" rx="1.5"/><path d="M9 4v16M4 9h16" opacity="0.5"/><path d="M12 8l4 4-4 4-4-4z"/>',
+    insertblock: '<rect x="10" y="10" width="10" height="10" rx="1"/><path d="M4 10V4h6"/><path d="M4 4l6 6"/><path d="M7 4H4v3"/>',
     mirrorH: '<path d="M12 3v18" stroke-dasharray="3 2"/><path d="M9 8L3 12l6 4zM15 8l6 4-6 4z"/>',
     mirrorV: '<path d="M3 12h18" stroke-dasharray="3 2"/><path d="M8 9L12 3l4 6zM8 15l4 6 4-6z"/>',
     dup: '<rect x="8" y="8" width="12" height="12" rx="1.5"/><path d="M4 16V4h12"/>',
@@ -633,6 +638,24 @@
       if (!raw || !raw.tool) return;
       var lyr = layerById(doc, raw.layer);
       if (lyr && lyr.visible === false) return;
+      // Block instance: expand the definition into positioned transient clones
+      // and render each through the same pipeline (nested blockrefs recurse
+      // inside blockInstEntities with a depth cap, so no cycle risk here).
+      if (raw.tool === 'blockref') {
+        blockInstEntities(doc, raw).forEach(function (bi) {
+          // Children honor their OWN layer's visibility — hiding a layer must
+          // hide it inside instances too, or prints diverge from the panel.
+          var blyr = layerById(doc, bi.layer);
+          if (blyr && blyr.visible === false) return;
+          drawOneDocEntity(ctx, doc, bi, mapFn, opts, invertInk);
+        });
+        return;
+      }
+      drawOneDocEntity(ctx, doc, raw, mapFn, opts, invertInk);
+    });
+  }
+  function drawOneDocEntity(ctx, doc, raw, mapFn, opts, invertInk) {
+    {
       // Dimension labels derive live from MODEL geometry — v3 model units ARE
       // inches, so the label is just the distance. Written to the persisted
       // entity (DXF export reads it without a render pass).
@@ -653,7 +676,7 @@
       if (e.tool === 'spotelev') { try { drawSpotElev(ctx, e, elevAtPoint(raw)); } catch (err) {} return; }
       if (e.tool === 'refline') { if (opts.editor) { try { drawRefline(ctx, e); } catch (err) {} } return; }   // construction guide — editor only, never exported
       try { prims().drawStroke(ctx, e); } catch (err) { /* defensive */ }
-    });
+    }
   }
 
   // Modern titleblock: a dark company band (logo + org name) over a clean
@@ -1253,6 +1276,7 @@
         '<button id="p86-sheet-shortcuts" title="Keyboard shortcuts (?)" style="background:rgba(255,255,255,0.06);color:#cbd5e1;border:1px solid #444;border-radius:6px;padding:6px 11px;font-size:13px;cursor:pointer;">⌨</button>' +
         '<button id="p86-sheet-history" title="Version history — reopen an earlier save of this drawing" style="background:rgba(255,255,255,0.06);color:#cbd5e1;border:1px solid #444;border-radius:6px;padding:6px 11px;font-size:13px;cursor:pointer;">⏱</button>' +
         '<button id="p86-sheet-underlay" title="Import a plan PDF/image as a scaled background to trace + measure over (takeoff)" style="background:rgba(79,140,255,0.14);color:#cbd5e1;border:1px solid #4f8cff;border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer;">⊞ Underlay</button>' +
+        '<button id="p86-sheet-dxfin" title="Import a .dxf CAD file — lines, polylines, circles, arcs, text and blocks become editable entities on this drawing" style="background:rgba(255,255,255,0.06);color:#cbd5e1;border:1px solid #444;border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer;">⇩ DXF</button>' +
         // PNG / PDF / DXF now live in the ribbon's Output tab.
         '<button id="p86-sheet-cancel" style="background:rgba(255,255,255,0.06);color:#aaa;border:1px solid #444;border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;">Close</button>' +
         '<button id="p86-sheet-save" style="background:#4f8cff;color:#fff;border:0;border-radius:6px;padding:6px 16px;font-size:12px;font-weight:700;cursor:pointer;">Save</button>' +
@@ -1293,6 +1317,7 @@
     document.body.appendChild(ov);
 
     var canvas = ov.querySelector('#p86-sheet-canvas');
+    BLOCK_INST_CACHE = {};   // stale entries from a previously opened drawing must not survive
     S = {
       overlay: ov, canvas: canvas, ctx: canvas.getContext('2d'),
       doc: doc, plan: plan, onSave: opts.onSave,
@@ -1520,6 +1545,7 @@
           if (!S.selIds.length) return;
           if (k === 'rotate') rotate90();
           else if (k === 'rotateA') rotateBy();
+          else if (k === 'blockdef') makeBlockDef();
           else if (k === 'mirrorH') mirror(true);
           else if (k === 'mirrorV') mirror(false);
           else if (k === 'dup') duplicateSelected();
@@ -1628,6 +1654,13 @@
       el.style.display = 'flex';
       el.innerHTML = SYMBOLS.map(function (p) { return btn(p.key === S.symbolKind, p.key, p.label); }).join('');
       el.querySelectorAll('[data-pick]').forEach(function (b) { b.onclick = function () { S.symbolKind = b.getAttribute('data-pick'); renderPicker(); }; });
+    } else if (S.tool === 'insertblock') {
+      var blks = S.doc.blocks || [];
+      el.style.display = 'flex';
+      el.innerHTML = blks.length
+        ? blks.map(function (bk) { return btn(bk.id === S.blockId, bk.id, bk.name || 'Block'); }).join('')
+        : '<span style="font-size:11px;color:#9aa;padding:4px 6px;">No blocks yet — select objects and use Make block first.</span>';
+      el.querySelectorAll('[data-pick]').forEach(function (b) { b.onclick = function () { S.blockId = b.getAttribute('data-pick'); renderPicker(); }; });
     } else {
       el.style.display = 'none';
     }
@@ -1942,18 +1975,24 @@
     var selEnt = S.selectedId ? selectedEntity() : null;
     var selPpi = selEnt ? ppiOf(selEnt) : 1;
     if (selEnt) {
-      var TOOL_NAMES = { line: 'Line', polyline: 'Polyline', rect: 'Rectangle', ellipse: 'Circle', text: 'Text', measure: 'Dimension', mangle: 'Angle', arrow: 'Leader', hatch: 'Hatch', symbol: 'Symbol' };
+      var TOOL_NAMES = { line: 'Line', polyline: 'Polyline', rect: 'Rectangle', ellipse: 'Circle', text: 'Text', measure: 'Dimension', mangle: 'Angle', arrow: 'Leader', hatch: 'Hatch', symbol: 'Symbol', blockref: 'Block' };
+      var selName = TOOL_NAMES[selEnt.tool] || selEnt.tool;
+      // Blockref children carry the DEFINITION's colors — the ref's own
+      // color/weight are dead knobs, so name the block and hide them.
+      var selIsBlock = selEnt.tool === 'blockref';
+      if (selIsBlock) { var selBd = blockDefById(S.doc, selEnt.blockId); if (selBd && selBd.name) selName = 'Block: ' + selBd.name; }
       html += '<div style="border:1px solid #4f8cff;background:rgba(79,140,255,0.08);border-radius:8px;padding:8px 9px;margin-bottom:12px;">' +
-        '<div style="font-weight:700;color:#fff;margin-bottom:6px;display:flex;align-items:center;gap:6px;">⛶ ' + esc(TOOL_NAMES[selEnt.tool] || selEnt.tool) +
+        '<div style="font-weight:700;color:#fff;margin-bottom:6px;display:flex;align-items:center;gap:6px;">⛶ ' + esc(selName) +
           '<button data-prop-del style="margin-left:auto;background:transparent;border:0;color:#f87171;cursor:pointer;font-size:12px;">✕ Delete</button></div>' +
         '<label style="display:block;font-size:10px;color:#9aa;margin-bottom:2px;">Layer</label>' +
         '<select data-prop-layer style="width:100%;box-sizing:border-box;background:#1a1a2e;color:#fff;border:1px solid #444;border-radius:5px;padding:4px 6px;font-size:11px;">' +
           (S.doc.layers || []).map(function (l) { return '<option value="' + esc(l.id) + '"' + (l.id === selEnt.layer ? ' selected' : '') + '>' + esc(l.name) + '</option>'; }).join('') +
         '</select>' +
+        (selIsBlock ? '' :
         '<div style="display:flex;align-items:center;gap:12px;margin-top:7px;">' +
           '<label style="font-size:10.5px;color:#9aa;display:flex;align-items:center;gap:5px;">Color <input type="color" data-prop-color value="' + esc(toHex6(selEnt.color)) + '" style="width:30px;height:22px;border:0;background:transparent;cursor:pointer;padding:0;" /></label>' +
           '<label style="font-size:10.5px;color:#9aa;display:flex;align-items:center;gap:5px;">Weight <input type="number" data-prop-weight value="' + (selEnt.lineWidth || 2) + '" min="1" max="24" step="1" style="width:46px;background:#1a1a2e;color:#fff;border:1px solid #444;border-radius:5px;padding:3px 5px;font-size:11px;" /></label>' +
-        '</div>' +
+        '</div>') +
         propGeomHtml(selEnt, selPpi) +
         '<div style="margin-top:6px;font-size:9.5px;color:#64748b;">Drag body to move · drag grips to reshape · ⟳ rotate · ⇆⇅ mirror · Ctrl+D dup</div>' +
       '</div>';
@@ -2013,7 +2052,7 @@
       pushUndo();
       e.layer = propLayer.value;
       var l = layerById(S.doc, e.layer);
-      if (e.tool !== 'measure') { e.color = l.color; e.lineWidth = l.weight || e.lineWidth; e.lineType = l.lineType || 'solid'; }
+      if (e.tool !== 'measure' && e.tool !== 'blockref') { e.color = l.color; e.lineWidth = l.weight || e.lineWidth; e.lineType = l.lineType || 'solid'; }
       buildLayers(); repaint();
     };
     var propColor = host.querySelector('[data-prop-color]');
@@ -2173,6 +2212,12 @@
         pushUndo();
         var fallback = S.doc.layers.filter(function (l) { return l.id !== id; })[0];
         (S.doc.entities || []).forEach(function (en) { if (en.layer === id) { en.layer = fallback.id; en.color = fallback.color; } });
+        // Block definitions carry layer ids too — left dangling, their
+        // children's visibility would silently key off the first layer.
+        (S.doc.blocks || []).forEach(function (bk) {
+          (bk.entities || []).forEach(function (en) { if (en.layer === id) { en.layer = fallback.id; en.color = fallback.color; } });
+        });
+        BLOCK_INST_CACHE = {};   // def contents changed — pose keys can't see that
         S.doc.layers = S.doc.layers.filter(function (l) { return l.id !== id; });
         if (S.activeLayer === id) S.activeLayer = fallback.id;
         buildLayers(); repaint();
@@ -2244,8 +2289,13 @@
   // against the cursor keeps this cheap).
   function snapCandidates(vp, raw) {
     var out = [];
-    (S.doc.entities || []).forEach(function (e) {
+    function addEnt(e) {
       if (!e) return;
+      if (e.tool === 'blockref') {
+        out.push({ x: e.x, y: e.y, kind: 'node' });          // insertion point stays acquirable
+        blockInstEntities(S.doc, e).forEach(addEnt);         // clones are plain entities — normal branches apply
+        return;
+      }
       if (e.startX != null) {
         out.push({ x: e.startX, y: e.startY, kind: 'end' });
         out.push({ x: e.endX, y: e.endY, kind: 'end' });
@@ -2290,7 +2340,8 @@
         // Symbol / text insertion points = node snaps.
         out.push({ x: e.x, y: e.y, kind: 'node' });
       }
-    });
+    }
+    (S.doc.entities || []).forEach(addEnt);
     // Intersection snaps (line × line / polyline / rect edges). When we know
     // the cursor (raw) we only pair segments NEAR it, so this stays O(k²) on
     // a small k even on a dense sheet — no more silent disable past 80 segs.
@@ -2334,6 +2385,10 @@
       } else if (e.tool === 'ellipse' && e.startX != null) {
         var ex0 = (e.startX + e.endX) / 2, ey0 = (e.startY + e.endY) / 2, rxe = Math.abs(e.endX - e.startX) / 2, rye = Math.abs(e.endY - e.startY) / 2, prev = null;
         for (var ai2 = 0; ai2 <= 48; ai2++) { var th2 = ai2 / 48 * 2 * Math.PI, p2 = { x: ex0 + rxe * Math.cos(th2), y: ey0 + rye * Math.sin(th2) }; if (prev) segs.push({ a: prev, b: p2 }); prev = p2; }
+      } else if (e.tool === 'blockref') {
+        // Block geometry is a real snap/trim/extend boundary — entSegments
+        // already expands instances (rotation, nesting, depth cap).
+        segs.push.apply(segs, entSegments(e));
       }
     });
     return segs;
@@ -2831,7 +2886,7 @@
       // one click turns a symbol into a takeoff count.
       var simE = selectedEntity();
       if (simE) items.push({ label: '⧈ Select similar', act: function () {
-        var t0 = simE.tool, k0 = simE.kind || null, l0 = simE.layer;
+        var t0 = simE.tool, k0 = simE.kind || null, l0 = simE.layer, b0 = simE.blockId || null;
         // Scope to geometry visible through THIS sheet's viewports — a
         // model-wide grab would let a follow-up delete/rotate hit invisible
         // geometry on other sheets. Model space stays model-wide.
@@ -2849,12 +2904,15 @@
         var ids = S.doc.entities.filter(function (x) {
           if (!x || x.tool !== t0 || x.layer !== l0) return false;
           if (t0 === 'symbol' && (x.kind || null) !== k0) return false;
+          if (t0 === 'blockref' && (x.blockId || null) !== b0) return false;   // count ONE block type, not all blocks on the layer
           var xl = layerById(S.doc, x.layer);
           if (xl && (xl.visible === false || xl.locked)) return false;
           return inView(x);
         }).map(function (x) { return x.id; });
         setSelection(ids); buildLayers(); repaint();
-        setHint('Selected ' + ids.length + ' similar object' + (ids.length === 1 ? '' : 's') + (t0 === 'symbol' && k0 ? ' (' + k0 + ')' : '') + '.');
+        var simLbl = (t0 === 'symbol' && k0) ? ' (' + k0 + ')'
+          : (t0 === 'blockref' && b0) ? ' (' + (((blockDefById(S.doc, b0) || {}).name) || 'block') + ')' : '';
+        setHint('Selected ' + ids.length + ' similar object' + (ids.length === 1 ? '' : 's') + simLbl + '.');
       } });
     }
     var recents = (S._recentTools || []).filter(function (tk) { return tk !== S._lastTool; });
@@ -2934,6 +2992,9 @@
     // Block drawing onto a locked layer.
     var actL = layerById(S.doc, S.activeLayer);
     if (actL && actL.locked) { setHint('Layer "' + actL.name + '" is locked — unlock it (🔓) to draw.'); return; }
+    // Insert block is a CREATE tool — it must sit below the locked-layer
+    // guard or stamped instances land unselectable on the locked layer.
+    if (t === 'insertblock') { insertBlockClick(pt, vp); return; }
     // Level / elevation line — a horizontal datum across the viewport at a
     // typed elevation. The first level in a viewport sets the datum; later
     // ones snap to the height implied by that datum + the viewport scale.
@@ -3340,6 +3401,13 @@
   function entSegments(e) {
     var segs = [];
     if (!e) return segs;
+    if (e.tool === 'blockref') {
+      // Flatten the instance — clicking any drawn stroke selects the block.
+      blockInstEntities(S ? S.doc : null, e).forEach(function (bi) {
+        segs.push.apply(segs, entSegments(bi));
+      });
+      return segs;
+    }
     if (e.tool === 'measure' && e.dimExt && e.startX != null) {
       // Offset dims render OFF the measured points on witness lines — hit
       // the DRAWN geometry (offset dim line + witness lines), not the
@@ -3427,6 +3495,16 @@
       var hrx = Math.abs(e.endX - e.startX) / 2 + slop, hry = Math.abs(e.endY - e.startY) / 2 + slop;
       return hrx > 0 && hry > 0 && (Math.pow((raw.x - hcx) / hrx, 2) + Math.pow((raw.y - hcy) / hry, 2) <= 1);
     }
+    if (e.tool === 'blockref') {
+      // Segment test above covered stroked children; compact children
+      // (text/symbol) have no segments — accept a click on their bboxes.
+      var kids = blockInstEntities(S.doc, e);
+      for (var kb = 0; kb < kids.length; kb++) {
+        if (entSegments(kids[kb]).length) continue;
+        var cb = entBBox(kids[kb]);
+        if (cb && raw.x >= cb.x - slop && raw.x <= cb.x + cb.w + slop && raw.y >= cb.y - slop && raw.y <= cb.y + cb.h + slop) return true;
+      }
+    }
     return false;
   }
   function hitTest(raw) {
@@ -3502,6 +3580,18 @@
     return out;
   }
   function entBBox(e) {
+    if (e.tool === 'blockref') {
+      // Union of the positioned definition geometry — the instance's real
+      // footprint (hit-test broadphase, window select, zoom extents).
+      var bu = null;
+      blockInstEntities(S ? S.doc : null, e).forEach(function (bi) {
+        var b = entBBox(bi); if (!b) return;
+        if (!bu) { bu = { x: b.x, y: b.y, w: b.w, h: b.h }; return; }
+        var bx2 = Math.max(bu.x + bu.w, b.x + b.w), by2 = Math.max(bu.y + bu.h, b.y + b.h);
+        bu.x = Math.min(bu.x, b.x); bu.y = Math.min(bu.y, b.y); bu.w = bx2 - bu.x; bu.h = by2 - bu.y;
+      });
+      return bu || { x: e.x - 1, y: e.y - 1, w: 2, h: 2 };   // missing definition — still selectable/deletable
+    }
     if (e.startX != null) {
       var b0 = { x: Math.min(e.startX, e.endX), y: Math.min(e.startY, e.endY), w: Math.abs(e.endX - e.startX), h: Math.abs(e.endY - e.startY) };
       if (e.tool === 'measure' && e.dimExt) {
@@ -3698,7 +3788,7 @@
     var gb = groupBBox(ents), cx = gb.x + gb.w / 2, cy = gb.y + gb.h / 2;
     ents.forEach(function (e) {
       transformEntity(e, function (p) { return { x: cx - (p.y - cy), y: cy + (p.x - cx) }; });
-      if (e.tool === 'symbol') e.rotation = ((e.rotation || 0) + 90) % 360;
+      if (e.tool === 'symbol' || e.tool === 'blockref') e.rotation = ((e.rotation || 0) + 90) % 360;
     });
     repaint();
   }
@@ -3706,8 +3796,23 @@
     var ents = selEntities(); if (!ents.length) return;
     pushUndo();
     var gb = groupBBox(ents), cx = gb.x + gb.w / 2, cy = gb.y + gb.h / 2;
-    ents.forEach(function (e) { transformEntity(e, function (p) { return { x: horiz ? (2 * cx - p.x) : p.x, y: horiz ? p.y : (2 * cy - p.y) }; }); });
-    repaint();
+    // A blockref can't represent a reflection ({x,y,rotation} has no flip
+    // stamp) — moving only its insertion point would leave the contents
+    // un-mirrored (wrong door swings). Explode instances to real entities
+    // first so the mirror is truthful; the undo above reverses the explode.
+    var work = [];
+    ents.forEach(function (e) {
+      if (e.tool === 'blockref') {
+        var ex = blockInstFresh(e);
+        if (!ex.length) { work.push(e); return; }       // missing definition — leave as-is
+        var at = S.doc.entities.indexOf(e);
+        S.doc.entities.splice.apply(S.doc.entities, [at, 1].concat(ex));
+        work.push.apply(work, ex);
+      } else work.push(e);
+    });
+    work.forEach(function (e) { transformEntity(e, function (p) { return { x: horiz ? (2 * cx - p.x) : p.x, y: horiz ? p.y : (2 * cy - p.y) }; }); });
+    setSelection(work.map(function (e) { return e.id; }));
+    buildLayers(); repaint();
   }
   // Rect/ellipse store only two AXIS-ALIGNED corners — a non-axis-preserving
   // transform (arbitrary rotate / slanted mirror) cannot be represented in
@@ -3744,6 +3849,111 @@
     var nc = fn({ x: mcx, y: mcy });
     e.startX = nc.x - mr; e.startY = nc.y - mr; e.endX = nc.x + mr; e.endY = nc.y + mr;
   }
+  // ── Blocks (W3) ─────────────────────────────────────────────────
+  // A block definition = named entity list stored RELATIVE to its insertion
+  // point (doc.blocks). A 'blockref' entity is {x,y,rotation,blockId} — every
+  // render/hit/export path expands it into positioned transient clones via
+  // blockInstEntities, so the definition itself is drawn nowhere.
+  function blockDefById(doc, id) {
+    var bs = (doc && doc.blocks) || [];
+    for (var i = 0; i < bs.length; i++) if (bs[i].id === id) return bs[i];
+    return null;
+  }
+  // Per-instance expansion memo — render/hit/snap paths expand every visible
+  // instance per frame, so cache by pose. Callers treat the clones as
+  // READ-ONLY; the paths that mutate them (explode, mirror) deep-clone first.
+  // Keyed off the entity itself, never stored on it (serializeDoc copies all
+  // doc keys). doc.blocks.length is in the key because definitions are
+  // add-only. Reset on editor open.
+  var BLOCK_INST_CACHE = {};
+  // Positioned transient clones of a blockref's definition (model coords).
+  // Depth-capped: a definition that (indirectly) contains its own instance
+  // can never hang render/hit/export. Clone ids are derived from the ref id
+  // so per-frame identity is stable but never collides with real entities.
+  function blockInstEntities(doc, ref, depth) {
+    depth = depth || 0;
+    var def = blockDefById(doc, ref.blockId);
+    if (!def || depth > 3) return [];
+    var ck = null;
+    if (!depth && ref.id) {
+      ck = ref.blockId + '|' + ref.x + '|' + ref.y + '|' + (ref.rotation || 0) + '|' + (ref.viewport || '') + '|' + (((doc && doc.blocks) || []).length);
+      var hit = BLOCK_INST_CACHE[ref.id];
+      if (hit && hit.k === ck) return hit.ents;
+    }
+    var rot = ((ref.rotation || 0) % 360 + 360) % 360;
+    var th = rot * Math.PI / 180, co = Math.cos(th), si = Math.sin(th);
+    var xf = function (p) { return { x: ref.x + p.x * co - p.y * si, y: ref.y + p.x * si + p.y * co }; };
+    var exact = (rot % 90 === 0);   // 90° multiples keep corner-stored shapes axis-aligned
+    var out = [];
+    (def.entities || []).forEach(function (de, di) {
+      var c = JSON.parse(JSON.stringify(de));
+      c.id = ref.id + ':' + di;
+      c._blockOwner = ref.id;
+      if (ref.viewport) c.viewport = ref.viewport;   // instance's home viewport drives annotative sizing
+      if (c.tool === 'blockref') {
+        var np = xf({ x: c.x, y: c.y });
+        c.x = np.x; c.y = np.y; c.rotation = ((c.rotation || 0) + rot) % 360;
+        out.push.apply(out, blockInstEntities(doc, c, depth + 1));
+        return;
+      }
+      if (!exact && isCircle(c)) moveCircleCenter(c, xf);
+      else {
+        if (!exact && (c.tool === 'rect' || c.tool === 'ellipse')) polygonizeCornerShape(c);
+        transformEntity(c, xf);
+      }
+      if (c.tool === 'symbol') c.rotation = (((c.rotation || 0) + rot) % 360 + 360) % 360;
+      out.push(c);
+    });
+    if (ck) BLOCK_INST_CACHE[ref.id] = { k: ck, ents: out };
+    return out;
+  }
+  // Fresh deep-cloned expansion with REAL entity ids — for paths that mutate
+  // the result or push it into the doc (explode, mirror). Never returns
+  // cache-owned objects.
+  function blockInstFresh(ref) {
+    return JSON.parse(JSON.stringify(blockInstEntities(S.doc, ref))).map(function (c) {
+      c.id = uid(c.tool); delete c._blockOwner;
+      return c;
+    });
+  }
+  // Capture the current selection as a named block definition. Geometry is
+  // stored relative to the selection's bbox center (= the insertion point);
+  // the originals stay in place untouched.
+  function makeBlockDef() {
+    var ents = selEntities(); if (!ents.length) return;
+    // The server persists at most 200 defs per sheet — refuse up front rather
+    // than let the 201st silently vanish on save.
+    if (((S.doc.blocks || []).length) >= 200) { setHint('Block limit reached (200 per drawing) — this drawing can\'t hold more definitions.'); return; }
+    promptText('Block name (e.g. Door 36", Parking stall, North arrow)', function (name) {
+      if (name == null) return;
+      name = String(name).trim(); if (!name) return;
+      var gb = groupBBox(ents), bcx = gb.x + gb.w / 2, bcy = gb.y + gb.h / 2;
+      var defEnts = ents.map(function (e) {
+        var c = JSON.parse(JSON.stringify(e));
+        translateEntity(c, -bcx, -bcy);
+        delete c._anchor; delete c._circle; delete c.viewport;   // definition is viewport-agnostic
+        return c;
+      });
+      if (!S.doc.blocks) S.doc.blocks = [];
+      S.doc.blocks.push({ id: uid('blk'), name: name.slice(0, 60), entities: defEnts });
+      markDirty();
+      setHint('Block “' + name + '” saved (' + defEnts.length + ' object' + (defEnts.length === 1 ? '' : 's') + ') — stamp copies with Insert blk.');
+    });
+  }
+  // Insert-block tool click: stamp an instance of the picked definition at
+  // the point. Stays armed for repeat stamping (Esc / tool switch to stop).
+  function insertBlockClick(pt, vp) {
+    var blks = S.doc.blocks || [];
+    if (!blks.length) { setHint('Insert block: no blocks yet — select objects and use Make block first.'); return; }
+    if (!S.blockId || !blockDefById(S.doc, S.blockId)) S.blockId = blks[0].id;
+    var e = newEntity('blockref', vp);
+    e.blockId = S.blockId; e.x = pt.x; e.y = pt.y; e.rotation = 0;
+    commitEntity(e);
+    buildLayers(); repaint();
+    var bd = blockDefById(S.doc, S.blockId);
+    setHint('Placed “' + ((bd && bd.name) || 'block') + '” — click to place another, Esc to stop.');
+  }
+
   // Rotate the selection by a typed angle about its center. Positive = the
   // same direction as the Rotate 90° button (screen-clockwise, Y-down math).
   function rotateBy() {
@@ -3763,7 +3973,7 @@
           if (e.tool === 'rect' || e.tool === 'ellipse') polygonizeCornerShape(e);
         }
         transformEntity(e, rot);
-        if (e.tool === 'symbol') e.rotation = (((e.rotation || 0) + deg) % 360 + 360) % 360;
+        if (e.tool === 'symbol' || e.tool === 'blockref') e.rotation = (((e.rotation || 0) + deg) % 360 + 360) % 360;
       });
       repaint();
     }, '45');
@@ -3785,6 +3995,19 @@
     pushUndo();
     var newIds = [];
     selEntities().forEach(function (e) {
+      if (e.tool === 'blockref') {
+        // Reflected COPIES of the instance's real geometry — a blockref can't
+        // carry a flip, so the copy is exploded (the original stays a block).
+        blockInstFresh(e).forEach(function (c) {
+          if (isCircle(c)) moveCircleCenter(c, refl);
+          else {
+            if (c.tool === 'rect' || c.tool === 'ellipse') polygonizeCornerShape(c);
+            transformEntity(c, refl);
+          }
+          S.doc.entities.push(c); newIds.push(c.id);
+        });
+        return;
+      }
       var copy = JSON.parse(JSON.stringify(e)); copy.id = uid(copy.tool);
       if (isCircle(copy)) {
         // Reflection preserves a circle exactly — just reflect its center.
@@ -3858,6 +4081,9 @@
     var pe = pid && S.doc.entities.filter(function (x) { return x.id === pid; })[0];
     var psegs = pe ? entSegments(pe) : [];
     if (!pe || !psegs.length) { setHint('Array path: click a line, polyline, or arc to array along.'); return; }
+    // A block instance flattens to segments in DEFINITION order — meaningless
+    // as one continuous run for spacing math.
+    if (pe.tool === 'blockref') { setHint('Array path: click a line, polyline, or arc — not a block instance (Explode it first).'); return; }
     promptText('Spacing along the path (e.g. 8\', 6\' 6", 96")', function (txt) {
       if (txt == null) return;
       var spacing = parseLenIn(txt);
@@ -3923,8 +4149,23 @@
       translateEntity(c, -ccx, -ccy);      // store center-relative
       return c;
     });
+    // Carry the block definitions any copied blockref needs (recursively for
+    // nested refs) — without them a paste into ANOTHER drawing would deposit
+    // an invisible ghost instance that resolves to nothing.
+    var blkDefs = [], blkSeen = {};
+    var collectDefs = function (list) {
+      (list || []).forEach(function (en) {
+        if (!en || en.tool !== 'blockref' || !en.blockId || blkSeen[en.blockId]) return;
+        var bd = blockDefById(S.doc, en.blockId);
+        if (!bd) return;
+        blkSeen[en.blockId] = 1;
+        blkDefs.push(JSON.parse(JSON.stringify(bd)));
+        collectDefs(bd.entities);
+      });
+    };
+    collectDefs(ents);
     try {
-      localStorage.setItem(CLIP_KEY, JSON.stringify(payload));
+      localStorage.setItem(CLIP_KEY, JSON.stringify({ ents: payload, blocks: blkDefs }));
       setHint('Copied ' + payload.length + ' object' + (payload.length === 1 ? '' : 's') + ' — Ctrl+V in any drawing, then click to place.');
     } catch (e2) { setHint('Copy failed — browser storage is full or blocked.'); }
   }
@@ -3932,14 +4173,36 @@
     if (S.draft) { setHint('Finish (Enter) or cancel (Esc) the in-progress shape before pasting.'); return; }
     var payload = null;
     try { payload = JSON.parse(localStorage.getItem(CLIP_KEY) || 'null'); } catch (e2) {}
-    if (!payload || !payload.length) { setHint('Clipboard is empty — select objects and Ctrl+C first.'); return; }
-    S._paste = { ents: payload };
-    setHint('Paste: click where the ' + payload.length + ' object' + (payload.length === 1 ? '' : 's') + ' should land (Esc cancels).');
+    // Accept both the current {ents, blocks} shape and the legacy bare array.
+    var pents = payload && (payload.ents || (payload.length ? payload : null));
+    if (!pents || !pents.length) { setHint('Clipboard is empty — select objects and Ctrl+C first.'); return; }
+    S._paste = { ents: pents, blocks: (payload && payload.blocks) || [] };
+    setHint('Paste: click where the ' + pents.length + ' object' + (pents.length === 1 ? '' : 's') + ' should land (Esc cancels).');
   }
   function placeClipboardAt(pt) {
     var pd = S._paste; S._paste = null;
     if (!pd || !pd.ents || !pd.ents.length) return;
+    // Merge carried block definitions (cross-drawing paste). Ids are uid()-
+    // generated, so an existing id means the same def — keep the target's.
+    // Cap check BEFORE any mutation: defs past 200 would be silently dropped
+    // by the server on save, ghosting every pasted instance after reload.
+    var defsToAdd = (pd.blocks || []).filter(function (bd) { return bd && bd.id && !blockDefById(S.doc, bd.id); });
+    if (defsToAdd.length && ((S.doc.blocks || []).length + defsToAdd.length) > 200) {
+      setHint('Paste needs ' + defsToAdd.length + ' block definition' + (defsToAdd.length === 1 ? '' : 's') + ' but this drawing is at the 200-block limit — nothing pasted.');
+      return;
+    }
     pushUndo();
+    defsToAdd.forEach(function (bd) {
+      var defCopy = JSON.parse(JSON.stringify(bd));
+      // Remap def-entity layers that don't exist in THIS drawing — layerById's
+      // first-layer fallback would silently drive their visibility otherwise.
+      (defCopy.entities || []).forEach(function (en) {
+        var known = (S.doc.layers || []).some(function (l) { return l.id === en.layer; });
+        if (!known) en.layer = S.activeLayer;
+      });
+      if (!S.doc.blocks) S.doc.blocks = [];
+      S.doc.blocks.push(defCopy);
+    });
     var newIds = [];
     pd.ents.forEach(function (src) {
       var c = JSON.parse(JSON.stringify(src));
@@ -3966,8 +4229,22 @@
       if (f === 1) return;
       pushUndo();
       var gb = groupBBox(ents), cx = gb.x + gb.w / 2, cy = gb.y + gb.h / 2;
-      ents.forEach(function (e) { transformEntity(e, function (p) { return { x: cx + (p.x - cx) * f, y: cy + (p.y - cy) * f }; }); });
-      repaint();
+      // A blockref has no scale stamp — transformEntity would only displace
+      // its insertion point, leaving the contents full-size. Explode first
+      // (same representational gap as mirror).
+      var work = [];
+      ents.forEach(function (e) {
+        if (e.tool === 'blockref') {
+          var ex = blockInstFresh(e);
+          if (!ex.length) { work.push(e); return; }     // missing definition — leave as-is
+          var at = S.doc.entities.indexOf(e);
+          S.doc.entities.splice.apply(S.doc.entities, [at, 1].concat(ex));
+          work.push.apply(work, ex);
+        } else work.push(e);
+      });
+      work.forEach(function (e) { transformEntity(e, function (p) { return { x: cx + (p.x - cx) * f, y: cy + (p.y - cy) * f }; }); });
+      setSelection(work.map(function (e) { return e.id; }));
+      buildLayers(); repaint();
     });
   }
   // Explode a rect / polyline into individual line segments (Tier 4).
@@ -3976,6 +4253,17 @@
     var added = [], removed = {};
     ents.forEach(function (e) {
       var segs = [];
+      if (e.tool === 'blockref') {
+        // Explode an instance back to editable entities (positioned copies of
+        // the definition — the definition itself stays in the block library).
+        // Missing definition → leave the instance alone rather than deleting
+        // it as a side effect of exploding something else in the selection.
+        var inst = blockInstFresh(e);
+        if (!inst.length) return;
+        removed[e.id] = 1;
+        inst.forEach(function (bi) { added.push(bi); });
+        return;
+      }
       if (e.tool === 'rect' && e.startX != null) {
         var c = [{ x: e.startX, y: e.startY }, { x: e.endX, y: e.startY }, { x: e.endX, y: e.endY }, { x: e.startX, y: e.endY }];
         for (var k = 0; k < 4; k++) segs.push([c[k], c[(k + 1) % 4]]);
@@ -3990,7 +4278,7 @@
         added.push(ln);
       });
     });
-    if (!added.length) { setHint('Explode: select a rectangle or polyline.'); return; }
+    if (!added.length) { setHint('Explode: select a rectangle, polyline, or block instance.'); return; }
     pushUndo();
     S.doc.entities = S.doc.entities.filter(function (e) { return !removed[e.id]; });
     added.forEach(function (a) { S.doc.entities.push(a); });
@@ -4066,7 +4354,7 @@
             var dx = p.x - cx, dy = p.y - cy;
             return { x: cx + dx * ca - dy * sa, y: cy + dx * sa + dy * ca };
           });
-          if (copy.tool === 'symbol') copy.rotation = ((copy.rotation || 0) + ang * 180 / Math.PI) % 360;
+          if (copy.tool === 'symbol' || copy.tool === 'blockref') copy.rotation = ((copy.rotation || 0) + ang * 180 / Math.PI) % 360;
           S.doc.entities.push(copy); newIds.push(copy.id);
         });
       }
@@ -5262,7 +5550,14 @@
     layers.forEach(function (l) { out += g(0, 'LAYER') + g(2, nm(l.name)) + g(70, 0) + g(62, 7) + g(6, 'CONTINUOUS'); });
     out += g(0, 'ENDTAB') + g(0, 'ENDSEC');
     out += g(0, 'SECTION') + g(2, 'ENTITIES');
+    // Block instances export as their flattened definition geometry — plain
+    // entities every CAD app reads (INSERT/BLOCKS round-trip is import-only).
+    var dxfEnts = [];
     (doc.entities || []).forEach(function (e) {
+      if (e && e.tool === 'blockref') dxfEnts.push.apply(dxfEnts, blockInstEntities(doc, e));
+      else dxfEnts.push(e);
+    });
+    dxfEnts.forEach(function (e) {
       if (!e || !e.tool) return;
       if (e.tool === 'refline') return;   // construction guide — never exported
       var L = lyr(e);
@@ -5285,7 +5580,17 @@
           }
           var a = omap(e, mA.x, mA.y), b = omap(e, mB.x, mB.y);
           out += lineDxf(L, a, b);
-          if (e.measureLabel) out += textDxf(L, { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, 4, e.measureLabel);
+          // Derive the label here rather than trusting the render-side write —
+          // a dim inside a never-rendered block pose (hidden layer) would
+          // otherwise export its lines with no text.
+          var mlab = e.measureLabel;
+          if (!mlab) {
+            var mIn2 = Math.hypot(e.endX - e.startX, e.endY - e.startY);
+            mlab = fmtLen(mIn2);
+            if (e.dimKind === 'radius') mlab = 'R ' + mlab;
+            else if (e.dimKind === 'diameter') mlab = '⌀ ' + mlab;
+          }
+          if (mlab) out += textDxf(L, { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, 4, mlab);
         }
         else if (e.tool === 'rect') { var p1 = omap(e, e.startX, e.startY), p2 = omap(e, e.endX, e.startY), p3 = omap(e, e.endX, e.endY), p4 = omap(e, e.startX, e.endY); out += lineDxf(L, p1, p2) + lineDxf(L, p2, p3) + lineDxf(L, p3, p4) + lineDxf(L, p4, p1); }
         else if (e.tool === 'ellipse') {
@@ -5311,6 +5616,363 @@
     out += g(0, 'ENDSEC') + g(0, 'EOF');
     return out;
   }
+
+  // ── DXF import (W3) ─────────────────────────────────────────────
+  // R12-subset reader: LINE, CIRCLE, ARC, (LW)POLYLINE, TEXT/MTEXT, POINT,
+  // plus LAYER table colors and BLOCKS/INSERT (flattened with scale+rotation,
+  // depth-capped). Unsupported types (SPLINE, ELLIPSE, DIMENSION, HATCH…)
+  // are counted and reported, never silently dropped. DXF is Y-up — Y is
+  // negated into the editor's Y-down model plane; $INSUNITS converts to the
+  // model's canonical inches.
+  function importDxfFile() {
+    var inp = document.createElement('input');
+    inp.type = 'file'; inp.accept = '.dxf';
+    inp.style.display = 'none';
+    inp.onchange = function () {
+      var file = inp.files && inp.files[0];
+      if (inp.parentNode) inp.parentNode.removeChild(inp);
+      if (!file) return;
+      var rd = new FileReader();
+      rd.onload = function () {
+        // setHint, not alert() — native dialogs silently no-op in the installed PWA.
+        try { applyDxfImport(String(rd.result || '')); }
+        catch (err) { setHint('⚠ DXF import failed: ' + (err && err.message ? err.message : err)); }
+      };
+      rd.onerror = function () { setHint('⚠ DXF import failed: could not read the file.'); };
+      rd.readAsText(file);
+    };
+    document.body.appendChild(inp); inp.click();
+  }
+  function parseDxf(text) {
+    var lines = text.split(/\r\n|\r|\n/);
+    var pairs = [];
+    for (var i = 0; i + 1 < lines.length; i += 2) {
+      var rawCode = lines[i].trim();
+      // Group codes are bare integers — anything else in the code slot (blank
+      // line, name, or a SHIFTED float value like "1.5" after a desync) means
+      // mis-pairing: resync by one line. parseInt alone would accept "1.5"
+      // and cascade the desync through the rest of the file.
+      if (!/^-?\d+$/.test(rawCode)) { i--; continue; }
+      pairs.push([parseInt(rawCode, 10), lines[i + 1].trim()]);
+    }
+    var res = { units: 0, layers: {}, blocks: {}, ents: [], skipped: {} };
+    var n = pairs.length, p = 0;
+    function num(v) { var f = parseFloat(v); return isFinite(f) ? f : 0; }
+    // Parse one entity starting AT pairs[p] (a code-0 pair); advances p past
+    // it. Returns a raw DXF-space entity or null (unsupported → counted).
+    function parseEntity() {
+      var type = pairs[p][1].toUpperCase(); p++;
+      var e = { t: null, layer: '0' };
+      var pts = [], text1 = '', text3 = '', d = {};
+      while (p < n && pairs[p][0] !== 0) {
+        var c = pairs[p][0], v = pairs[p][1];
+        if (c === 8) e.layer = v;
+        else if (c === 10) pts.push({ x: num(v), y: 0 });
+        else if (c === 20) { if (pts.length) pts[pts.length - 1].y = num(v); }
+        else if (c === 1) text1 += v;
+        else if (c === 3) text3 += v;
+        else if (c === 42 && type === 'LWPOLYLINE') { if (num(v)) e.bulges = (e.bulges || 0) + 1; }   // per-vertex arc bulge — counted so straightening is reported (42 stays yscale for INSERT)
+        else d[c] = num(v);
+        p++;
+      }
+      if (type === 'LINE') { if (pts.length >= 1) { e.t = 'line'; e.a = pts[0]; e.b = { x: d[11] || 0, y: d[21] || 0 }; return e; } }
+      else if (type === 'CIRCLE') { if (pts.length >= 1 && d[40] > 0) { e.t = 'circle'; e.c = pts[0]; e.r = d[40]; return e; } }
+      else if (type === 'ARC') { if (pts.length >= 1 && d[40] > 0) { e.t = 'arc'; e.c = pts[0]; e.r = d[40]; e.a1 = d[50] || 0; e.a2 = d[51] || 0; return e; } }
+      else if (type === 'LWPOLYLINE') { if (pts.length >= 2) { e.t = 'pline'; e.pts = pts; e.closed = ((d[70] || 0) & 1) === 1; return e; } }
+      else if (type === 'POLYLINE') {
+        // vertices follow as VERTEX entities until SEQEND
+        var vps = [], closed = ((d[70] || 0) & 1) === 1;
+        while (p < n && pairs[p][0] === 0 && (pairs[p][1].toUpperCase() === 'VERTEX' || pairs[p][1].toUpperCase() === 'SEQEND')) {
+          var isEnd = pairs[p][1].toUpperCase() === 'SEQEND'; p++;
+          var vx = null, vy = 0;
+          while (p < n && pairs[p][0] !== 0) {
+            if (pairs[p][0] === 10) vx = num(pairs[p][1]);
+            else if (pairs[p][0] === 20) vy = num(pairs[p][1]);
+            else if (pairs[p][0] === 42 && num(pairs[p][1])) e.bulges = (e.bulges || 0) + 1;
+            p++;
+          }
+          if (isEnd) break;
+          if (vx != null) vps.push({ x: vx, y: vy });
+        }
+        if (vps.length >= 2) { e.t = 'pline'; e.pts = vps; e.closed = closed; return e; }
+      }
+      else if (type === 'TEXT' || type === 'MTEXT') {
+        var str = (text1 || '') + '';
+        if (type === 'MTEXT') str = (text3 + text1);
+        // minimal MTEXT de-formatting: \P = newline, \S keeps its CONTENT
+        // (stacked fractions), then strip {…} group braces and inline
+        // \f/\H/\C… codes — content survives, styling doesn't.
+        str = str.replace(/\\P/g, '\n').replace(/\\S([^;\\]*);/g, '$1').replace(/[{}]/g, '').replace(/\\[A-Za-z][^;\\]*;/g, '');
+        if (pts.length >= 1 && str) { e.t = 'text'; e.p = pts[0]; e.h = d[40] || 0.15; e.str = str; e.mt = (type === 'MTEXT'); return e; }
+      }
+      else if (type === 'INSERT') {
+        e.t = 'insert'; e.p = pts[0] || { x: 0, y: 0 };
+        e.sx = (d[41] != null ? d[41] : 1) || 1; e.sy = (d[42] != null ? d[42] : 1) || 1;
+        e.rot = d[50] || 0;
+        return e;   // name attached by caller from code-2 capture
+      }
+      else if (type === 'POINT' || type === 'VERTEX' || type === 'SEQEND' || type === 'VIEWPORT' || type === 'ATTRIB' || type === 'ATTDEF') { return null; }   // structural / no-geometry — not worth reporting
+      res.skipped[type] = (res.skipped[type] || 0) + 1;
+      return null;
+    }
+    // Walk sections. A handler must stop at the NEXT section's [0,SECTION]
+    // header too (missing ENDSEC in truncated/hand-edited files) — matching
+    // only its own markers would swallow that whole section unparsed.
+    function secBreak() {
+      if (p >= n || pairs[p][0] !== 0) return false;
+      var sv = pairs[p][1].toUpperCase();
+      return sv === 'ENDSEC' || sv === 'SECTION';
+    }
+    while (p < n) {
+      if (pairs[p][0] === 0 && pairs[p][1].toUpperCase() === 'SECTION') {
+        p++;
+        // Consume the name pair only if it IS one — a nameless SECTION whose
+        // next pair is the following section's header must not swallow it.
+        var sec = '';
+        if (p < n && pairs[p][0] === 2) { sec = pairs[p][1].toUpperCase(); p++; }
+        if (sec === 'HEADER') {
+          while (p < n && !secBreak()) {
+            if (pairs[p][0] === 9 && pairs[p][1] === '$INSUNITS') {
+              var q = p + 1;
+              while (q < n && pairs[q][0] !== 9 && pairs[q][0] !== 0) { if (pairs[q][0] === 70) res.units = parseInt(pairs[q][1], 10) || 0; q++; }
+            }
+            p++;
+          }
+        } else if (sec === 'TABLES') {
+          while (p < n && !secBreak()) {
+            if (pairs[p][0] === 0 && pairs[p][1].toUpperCase() === 'LAYER') {
+              p++;
+              var lname = null, laci = 7;
+              while (p < n && pairs[p][0] !== 0) {
+                if (pairs[p][0] === 2) lname = pairs[p][1];
+                else if (pairs[p][0] === 62) laci = Math.abs(parseInt(pairs[p][1], 10) || 7);
+                p++;
+              }
+              if (lname) res.layers[lname] = laci;
+              continue;
+            }
+            p++;
+          }
+        } else if (sec === 'BLOCKS') {
+          while (p < n && !secBreak()) {
+            if (pairs[p][0] === 0 && pairs[p][1].toUpperCase() === 'BLOCK') {
+              p++;
+              var bname = null, bx = 0, by = 0;
+              while (p < n && pairs[p][0] !== 0) {
+                if (pairs[p][0] === 2 && bname == null) bname = pairs[p][1];
+                else if (pairs[p][0] === 10) bx = num(pairs[p][1]);
+                else if (pairs[p][0] === 20) by = num(pairs[p][1]);
+                p++;
+              }
+              var bents = [];
+              while (p < n && pairs[p][0] === 0 && pairs[p][1].toUpperCase() !== 'ENDBLK' && !secBreak()) {
+                var isIns = pairs[p][1].toUpperCase() === 'INSERT';
+                var insName = null;
+                if (isIns) { for (var s2 = p + 1; s2 < n && pairs[s2][0] !== 0; s2++) if (pairs[s2][0] === 2) { insName = pairs[s2][1]; break; } }
+                var be = parseEntity();
+                if (be) { if (isIns) be.name = insName; bents.push(be); }
+              }
+              if (p < n && pairs[p][0] === 0 && pairs[p][1].toUpperCase() === 'ENDBLK') { p++; while (p < n && pairs[p][0] !== 0) p++; }
+              if (bname && bname.charAt(0) !== '*') res.blocks[bname] = { base: { x: bx, y: by }, ents: bents };
+              continue;
+            }
+            p++;
+          }
+        } else if (sec === 'ENTITIES') {
+          while (p < n && !secBreak()) {
+            if (pairs[p][0] === 0) {
+              var topIns = pairs[p][1].toUpperCase() === 'INSERT';
+              var topName = null;
+              if (topIns) { for (var s3 = p + 1; s3 < n && pairs[s3][0] !== 0; s3++) if (pairs[s3][0] === 2) { topName = pairs[s3][1]; break; } }
+              var te = parseEntity();
+              if (te) { if (topIns) te.name = topName; res.ents.push(te); }
+              continue;
+            }
+            p++;
+          }
+        }
+        // Handler stopped on the NEXT section's header (missing ENDSEC) —
+        // reprocess that pair instead of skipping it with the p++ below.
+        if (p < n && pairs[p][0] === 0 && pairs[p][1].toUpperCase() === 'SECTION') continue;
+      }
+      p++;
+    }
+    return res;
+  }
+  function applyDxfImport(text) {
+    var dxf = parseDxf(text);
+    // Flatten INSERTs into plain raw entities (DXF space). p' = ins + R·S·(p − base).
+    // BREADTH caps alongside the depth cap: a block containing N inserts of
+    // itself expands N^depth times — without a global budget a tiny hostile
+    // file freezes the tab before the entity cap is ever consulted. Both
+    // counters are needed: the insert budget stops pure-insert cycles where
+    // `flat` never grows; the flat cap stops geometry blow-up.
+    var flat = [], skippedInserts = 0, deepInserts = 0, expandedInserts = 0, flatOverflow = false;
+    function xfRaw(e, fn, sAvg) {
+      var c = JSON.parse(JSON.stringify(e));
+      if (c.t === 'line') { c.a = fn(c.a); c.b = fn(c.b); }
+      else if (c.t === 'circle' || c.t === 'arc') { c.c = fn(c.c); c.r = c.r * sAvg; }
+      else if (c.t === 'pline') { c.pts = c.pts.map(fn); }
+      else if (c.t === 'text') { c.p = fn(c.p); c.h = c.h * sAvg; }
+      return c;
+    }
+    function flatten(e, depth) {
+      if (e.t !== 'insert') {
+        if (flat.length >= 40000) { flatOverflow = true; return; }   // conversion trims to the 20k room anyway
+        flat.push(e); return;
+      }
+      var def = e.name && dxf.blocks[e.name];
+      if (!def) { skippedInserts++; return; }
+      if (depth > 4 || ++expandedInserts > 5000) { deepInserts++; return; }
+      var th = (e.rot || 0) * Math.PI / 180, co = Math.cos(th), si = Math.sin(th);
+      var sx = e.sx || 1, sy = e.sy || 1, sAvg = (Math.abs(sx) + Math.abs(sy)) / 2;
+      var fn = function (pp) {
+        var lx = (pp.x - def.base.x) * sx, ly = (pp.y - def.base.y) * sy;
+        return { x: e.p.x + lx * co - ly * si, y: e.p.y + lx * si + ly * co };
+      };
+      def.ents.forEach(function (de) {
+        if (de.t === 'insert') {
+          var ni = JSON.parse(JSON.stringify(de));
+          ni.p = fn(ni.p);
+          // A single-axis mirror flips the sense of the child's own rotation:
+          // S(sx,sy)·R(θ) = R(−θ)·S(sx,sy) when sx·sy < 0.
+          var childRot = (sx * sy < 0) ? -(ni.rot || 0) : (ni.rot || 0);
+          ni.rot = childRot + (e.rot || 0);
+          ni.sx = (ni.sx || 1) * sx; ni.sy = (ni.sy || 1) * sy;
+          flatten(ni, depth + 1);
+        } else {
+          var ce = xfRaw(de, fn, sAvg);
+          if (ce.t === 'arc') {
+            // Reflection maps angle θ → 180−θ (sx<0) or −θ (sy<0) and
+            // reverses the CCW sweep (so a1/a2 swap); both negative is a
+            // plain 180° turn. Exact for uniform mirrors — the common case.
+            var na1 = ce.a1 || 0, na2 = ce.a2 || 0, nt;
+            if (sx < 0 && sy < 0) { na1 += 180; na2 += 180; }
+            else if (sx < 0) { nt = na1; na1 = 180 - na2; na2 = 180 - nt; }
+            else if (sy < 0) { nt = na1; na1 = -na2; na2 = -nt; }
+            ce.a1 = na1 + (e.rot || 0); ce.a2 = na2 + (e.rot || 0);
+          }
+          flatten(ce, depth + 1);
+        }
+      });
+    }
+    dxf.ents.forEach(function (e) { flatten(e, 0); });
+    if (!flat.length) {
+      var skTypes = Object.keys(dxf.skipped);
+      setHint('⚠ No importable entities found in that DXF.' + (skTypes.length ? ' Unsupported types present: ' + skTypes.join(', ') + '.' : ''));
+      return;
+    }
+    // Undo point BEFORE any doc mutation — layer creation happens during
+    // conversion, and a snapshot taken after it would strand the imported
+    // layers on Ctrl+Z.
+    pushUndo();
+    // Unit conversion → model inches. 0 = unitless: assume inches but say so.
+    var UNIT_K = { 1: 1, 2: 12, 4: 1 / 25.4, 5: 1 / 2.54, 6: 39.3700787402 };
+    var k = UNIT_K[dxf.units] || 1;
+    var unitNote = dxf.units === 0 ? ' (unitless file — read as inches)'
+      : UNIT_K[dxf.units] ? '' : ' (unsupported units code ' + dxf.units + ' — read as inches)';
+    // DXF layer name → doc layer id (match by name, else create; ACI → hex).
+    var ACI = { 1: '#ef4444', 2: '#ca8a04', 3: '#16a34a', 4: '#0891b2', 5: '#2563eb', 6: '#c026d3', 7: '#1f2937', 8: '#6b7280', 9: '#9ca3af' };
+    var layerMap = {}, newLayers = 0, createdLayers = [];
+    function docLayerFor(name) {
+      name = name || '0';
+      if (layerMap[name]) return layerMap[name];
+      var existing = (S.doc.layers || []).filter(function (l) { return (l.name || '').toLowerCase() === name.toLowerCase(); })[0];
+      if (existing) { layerMap[name] = existing; return existing; }
+      var nl = { id: uid('L'), name: name.slice(0, 40), color: ACI[dxf.layers[name]] || '#1f2937', weight: 3, visible: true, locked: false };
+      if (!S.doc.layers) S.doc.layers = [];
+      S.doc.layers.push(nl); newLayers++; createdLayers.push(nl);
+      layerMap[name] = nl;
+      return nl;
+    }
+    // Convert raw (DXF Y-up) → editor entities (model inches, Y-down).
+    var vp = activeVp();
+    function M(pp) { return { x: pp.x * k, y: -pp.y * k }; }
+    var out = [];
+    function base(tool, rawL) {
+      var dl = docLayerFor(rawL);
+      return { id: uid(tool), tool: tool, viewport: vp.id, layer: dl.id, color: dl.color, lineWidth: 3, lineType: 'solid' };
+    }
+    flat.forEach(function (e) {
+      if (e.t === 'line') {
+        var a = M(e.a), b = M(e.b), ln = base('line', e.layer);
+        ln.startX = a.x; ln.startY = a.y; ln.endX = b.x; ln.endY = b.y; out.push(ln);
+      } else if (e.t === 'circle') {
+        var cc = M(e.c), cr = e.r * k, el = base('ellipse', e.layer);
+        el.startX = cc.x - cr; el.startY = cc.y - cr; el.endX = cc.x + cr; el.endY = cc.y + cr; out.push(el);
+      } else if (e.t === 'arc') {
+        // 3 points through the arc — CCW in DXF space; the Y-flip maps them
+        // to the same curve with correct orientation automatically. A full
+        // circle (a1 == a2) would put start and end on the SAME point — a
+        // degenerate 3-point arc — so it imports as a circle instead.
+        var span = ((e.a2 - e.a1) % 360 + 360) % 360;
+        if (span === 0) {
+          var fcc = M(e.c), fcr = e.r * k, fce = base('ellipse', e.layer);
+          fce.startX = fcc.x - fcr; fce.startY = fcc.y - fcr; fce.endX = fcc.x + fcr; fce.endY = fcc.y + fcr;
+          out.push(fce);
+        } else {
+          var AP = function (deg) { var r0 = deg * Math.PI / 180; return M({ x: e.c.x + e.r * Math.cos(r0), y: e.c.y + e.r * Math.sin(r0) }); };
+          var ar = base('arc', e.layer);
+          ar.points = [AP(e.a1), AP(e.a1 + span / 2), AP(e.a1 + span)]; out.push(ar);
+        }
+      } else if (e.t === 'pline') {
+        var pl = base('polyline', e.layer);
+        pl.points = e.pts.map(M);
+        if (e.closed && pl.points.length > 2) pl.points.push({ x: pl.points[0].x, y: pl.points[0].y });
+        out.push(pl);
+      } else if (e.t === 'text') {
+        var tp = M(e.p), tx = base('text', e.layer);
+        // TEXT anchors at the BASELINE (shift up one height for the canvas's
+        // top-anchored draw); MTEXT already anchors at its top-left.
+        tx.x = tp.x; tx.y = e.mt ? tp.y : (tp.y - e.h * k);
+        tx.fontPx = Math.max(8, Math.min(96, e.h * k * ppiOf({ viewport: vp.id })));
+        tx.text = e.str; out.push(tx);
+      }
+    });
+    // Cap: the server persists at most 20k entities per sheet — never import
+    // past it (the overflow would be silently dropped on save).
+    var room = 20000 - (S.doc.entities || []).length;
+    var trimmed = 0;
+    if (out.length > room) { trimmed = out.length - Math.max(0, room); out = out.slice(0, Math.max(0, room)); }
+    if (!out.length) {
+      // Bail: unwind the layers the conversion created and the undo entry the
+      // import pushed — the doc must come out of a failed import untouched.
+      createdLayers.forEach(function (nl) {
+        var li = S.doc.layers.indexOf(nl);
+        if (li >= 0) S.doc.layers.splice(li, 1);
+      });
+      S._undo.pop();
+      setHint('⚠ This drawing is at the 20,000-entity cap — nothing was imported.');
+      return;
+    }
+    // Center the imported footprint on the active viewport's model window.
+    var mnx = Infinity, mny = Infinity, mxx = -Infinity, mxy = -Infinity;
+    out.forEach(function (e) {
+      var bb = entBBox(e); if (!bb) return;
+      mnx = Math.min(mnx, bb.x); mny = Math.min(mny, bb.y); mxx = Math.max(mxx, bb.x + bb.w); mxy = Math.max(mxy, bb.y + bb.h);
+    });
+    if (mnx < Infinity && vp.window) {
+      var dx = vp.window.cx - (mnx + mxx) / 2, dy = vp.window.cy - (mny + mxy) / 2;
+      out.forEach(function (e) { translateEntity(e, dx, dy); });
+    }
+    out.forEach(function (e) { S.doc.entities.push(e); });
+    // Selecting thousands of entities makes every repaint run the selection-
+    // highlight pass over all of them — leave huge imports unselected.
+    setSelection(out.length > 500 ? [] : out.map(function (e) { return e.id; }));
+    buildLayers(); repaint(); markDirty();
+    var bulged = 0;
+    flat.forEach(function (fe) { if (fe && fe.t === 'pline' && fe.bulges) bulged += fe.bulges; });
+    var msg = 'DXF imported: ' + out.length + ' entities' +
+      (newLayers ? ', ' + newLayers + ' new layer' + (newLayers === 1 ? '' : 's') : '') + unitNote + '.';
+    var skKeys = Object.keys(dxf.skipped);
+    if (skKeys.length) msg += ' Skipped unsupported: ' + skKeys.map(function (t) { return t + '×' + dxf.skipped[t]; }).join(', ') + '.';
+    if (bulged) msg += ' ' + bulged + ' polyline arc segment' + (bulged === 1 ? '' : 's') + ' straightened.';
+    if (skippedInserts) msg += ' ' + skippedInserts + ' block insert' + (skippedInserts === 1 ? '' : 's') + ' had no definition.';
+    if (deepInserts || flatOverflow) msg += ' ⚠ Block expansion truncated — excessive or circular block nesting.';
+    if (trimmed) msg += ' ⚠ ' + trimmed + ' entities over the 20k cap were NOT imported.';
+    setHint(msg);
+  }
+
   // ── Version history (⏱) — restore points kept server-side ────────
   // Snapshots are taken automatically on save (throttled to >=10 min);
   // restoring snapshots the current state first, so a restore is itself
@@ -5404,6 +6066,7 @@
         var setBtn = S.overlay.querySelector('#p86-sheet-settings'); if (setBtn) setBtn.onclick = openSettingsModal;
         var scBtn = S.overlay.querySelector('#p86-sheet-shortcuts'); if (scBtn) scBtn.onclick = openShortcuts;
         var ulBtn = S.overlay.querySelector('#p86-sheet-underlay'); if (ulBtn) ulBtn.onclick = importUnderlay;
+        var dxfInBtn = S.overlay.querySelector('#p86-sheet-dxfin'); if (dxfInBtn) dxfInBtn.onclick = importDxfFile;
         // Space/sheet tab strip self-wires in buildSpaceTabs() (called from open()).
       }
     },
