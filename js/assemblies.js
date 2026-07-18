@@ -277,7 +277,7 @@
         '<div style="padding:0 20px 10px;font-size:11px;color:var(--text-dim,#8a93a6);">Code: <span id="asmEd_codePreview" style="font-family:monospace;color:#4fd1c5;font-size:13px;">' + (esc(clientCode(h.trade, h.system, h.variant)) || '—') + '</span> <span style="opacity:.7;">· auto-derived from Trade · System · Variant (kept unique)</span></div>' +
         '<div style="padding:0 20px 12px;">' + fld('Description', 'asmEd_desc', h.description) + '</div>' +
         '<div style="padding:0 20px 12px;" id="asmEd_params">' + paramsHtml() + '</div>' +
-        '<div style="padding:0 20px 8px;font-size:11px;color:var(--text-dim,#8a93a6);">Every quantity below is <b>per 1 ' + esc(h.unit || 'unit') + '</b> of installed work — or start it with <b style="color:#fbbf24;">=</b> for a formula that computes the TOTAL from the dimensions (e.g. <span style="font-family:monospace;">=ceil(Q/8)+1</span>; Q = the takeoff qty). Material rows with a blank unit cost pull the LIVE catalog price.</div>' +
+        '<div style="padding:0 20px 8px;font-size:11px;color:var(--text-dim,#8a93a6);">Every quantity below is <b>per 1 <span id="asmEd_unitLabel">' + esc(h.unit || 'unit') + '</span></b> of installed work — or start it with <b style="color:#fbbf24;">=</b> for a formula that computes the TOTAL from the dimensions (e.g. <span style="font-family:monospace;">=ceil(Q/8)+1</span>; Q = the takeoff qty). Material rows with a blank unit cost pull the LIVE catalog price.</div>' +
         '<div style="padding:0 20px 14px;" id="asmEd_items">' + itemsTableHtml() + '</div>' +
         '<div style="padding:0 20px 12px;" id="asmEd_preview">' + previewBarHtml() + '</div>' +
         '<div style="padding:0 20px 20px;display:flex;gap:8px;flex-wrap:wrap;">' +
@@ -485,6 +485,19 @@
       var dl = overlay.querySelector('#asmEd_variantlist');
       if (dl) dl.innerHTML = variantOptions(tradeEl && tradeEl.value, sysEl && sysEl.value);
     }
+    // Unit drives the "per 1 <unit>" helper + the parametric preview's Q label
+    // (both read _editing.header.unit / the rendered span). Without this sync
+    // they stay frozen at the paint-time unit until save — the header $/unit
+    // reads the live DOM, so they visibly disagree. Keep all three in step.
+    function syncUnit() {
+      var u = (unitEl && unitEl.value) || '';
+      _editing.header.unit = u;
+      var lbl = overlay.querySelector('#asmEd_unitLabel');
+      if (lbl) lbl.textContent = u || 'unit';
+      refreshCostPreview();
+      repaintPreviewBar();
+    }
+    if (unitEl) unitEl.addEventListener('input', syncUnit);
     if (tradeEl) tradeEl.addEventListener('change', function () {
       _editing.header.trade = tradeEl.value;
       _editing.header.system = '';
@@ -495,7 +508,7 @@
     if (sysEl) sysEl.addEventListener('change', function () {
       _editing.header.system = sysEl.value;
       var s = ((_taxonomy && _taxonomy.systems) || []).find(function (x) { return up(x.trade_code) === up(tradeEl && tradeEl.value) && up(x.code) === up(sysEl.value); });
-      if (s && s.default_unit && unitEl && (!unitEl.value.trim() || unitEl.value === 'SF')) unitEl.value = s.default_unit;
+      if (s && s.default_unit && unitEl && (!unitEl.value.trim() || unitEl.value === 'SF')) { unitEl.value = s.default_unit; syncUnit(); }
       rebuildVariantList();
       recompute();
     });
@@ -604,6 +617,11 @@
           matSearch(el, i);
         }
         refreshCostPreview();
+        // Unit cost / unit / waste / kind all move the parametric total — the
+        // preview bar is a separate DOM subtree, so re-rendering it here can't
+        // steal focus from the row being edited. (The qty/formula branch above
+        // already repaints; this covers every other field.)
+        repaintPreviewBar();
       });
     });
   }
