@@ -1810,6 +1810,11 @@
     ctx.lineWidth = s.lineWidth;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
+    // Sheet-editor layers can carry a dashed linetype (e.g. the Hidden
+    // layer). Geometry tools only — text outlines and dimension strings
+    // must stay solid even on a dashed layer. Photo-markup strokes never
+    // set lineType, so this is inert for the markup viewer itself.
+    if (s.lineType === 'dashed' && (s.tool === 'line' || s.tool === 'polyline' || s.tool === 'rect' || s.tool === 'ellipse' || s.tool === 'draw')) ctx.setLineDash([10, 6]);
     if ((s.tool === 'draw' || s.tool === 'polyline') && s.points && s.points.length > 1) {
       ctx.beginPath();
       ctx.moveTo(s.points[0].x, s.points[0].y);

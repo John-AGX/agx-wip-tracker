@@ -935,6 +935,18 @@
     for (var i = 0; i <= n; i++) { var a = a1 + sweep * (i / n); out.push({ x: ux + r * Math.cos(a), y: uy + r * Math.sin(a) }); }
     return out;
   }
+  // Circumcenter of a 3-point arc (null when collinear). Feeds the arc
+  // center osnap — arcs are points-based, so the generic candidate pass
+  // never computes this.
+  function arcCenter(pts) {
+    if (!pts || pts.length < 3) return null;
+    var ax = pts[0].x, ay = pts[0].y, bx = pts[1].x, by = pts[1].y, cx = pts[2].x, cy = pts[2].y;
+    var d = 2 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by));
+    if (Math.abs(d) < 1e-6) return null;
+    var ux = ((ax * ax + ay * ay) * (by - cy) + (bx * bx + by * by) * (cy - ay) + (cx * cx + cy * cy) * (ay - by)) / d;
+    var uy = ((ax * ax + ay * ay) * (cx - bx) + (bx * bx + by * by) * (ax - cx) + (cx * cx + cy * cy) * (bx - ax)) / d;
+    return { x: ux, y: uy, r: Math.hypot(ax - ux, ay - uy) };
+  }
   // ── Elevations / levels ─────────────────────────────────────────
   // The first 'level' entity in a viewport is the datum; spot elevations are
   // measured from it using the viewport's real scale (Y-up: higher = taller).
@@ -1908,12 +1920,17 @@
       '<button data-vp-add title="Add view (Plan / Elevation / Section)" style="background:rgba(34,197,94,0.15);color:#86efac;border:1px solid #22c55e;border-radius:5px;width:22px;height:22px;cursor:pointer;font-size:14px;line-height:1;">+</button>' +
     '</div>';
     html += (S.doc.viewports || []).map(function (vp) {
+      var lk = vpScaleLocked(vp);
+      var lkTitle = lk
+        ? ('Scale locked' + (vp.scale && vp.scale.calibrated ? ' (calibrated)' : '') + ' — wheel zoom can’t change it. Click to unlock.')
+        : 'Scale unlocked — click to lock it against accidental wheel rescale.';
       return '<div style="border:1px solid #333;border-radius:6px;padding:5px 6px;margin-bottom:5px;">' +
         '<div style="display:flex;align-items:center;gap:4px;">' +
           '<span data-vp-name="' + esc(vp.id) + '" title="Double-click to rename" style="flex:1;color:#cbd5e1;font-size:11.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(vp.label) + '</span>' +
+          '<button data-vp-lock="' + esc(vp.id) + '" title="' + esc(lkTitle) + '" style="background:transparent;border:0;cursor:pointer;font-size:11px;width:16px;color:' + (lk ? '#fbbf24' : '#64748b') + ';">' + (lk ? '🔒' : '🔓') + '</button>' +
           ((S.doc.viewports.length > 1) ? '<button data-vp-del="' + esc(vp.id) + '" title="Delete view" style="background:transparent;border:0;color:#f87171;cursor:pointer;font-size:11px;width:14px;">✕</button>' : '') +
         '</div>' +
-        '<select data-vp-scale="' + esc(vp.id) + '" style="width:100%;box-sizing:border-box;background:#1a1a2e;color:#9aa;border:1px solid #444;border-radius:5px;padding:3px 5px;font-size:10.5px;margin-top:3px;">' +
+        '<select data-vp-scale="' + esc(vp.id) + '"' + (lk ? ' disabled title="Scale locked — unlock (🔒) to change it"' : '') + ' style="width:100%;box-sizing:border-box;background:#1a1a2e;color:#9aa;border:1px solid #444;border-radius:5px;padding:3px 5px;font-size:10.5px;margin-top:3px;' + (lk ? 'opacity:0.55;' : '') + '">' +
           SCALE_PRESETS.map(function (p) {
             var sel = (vp.scale && Math.abs(vp.scale.pixelsPerInch - DPI * p.f) < 1e-6) ? ' selected' : '';
             return '<option value="' + esc(p.label) + '"' + sel + '>' + esc(p.label) + '</option>';
@@ -1946,7 +1963,7 @@
       pushUndo();
       e.layer = propLayer.value;
       var l = layerById(S.doc, e.layer);
-      if (e.tool !== 'measure') { e.color = l.color; e.lineWidth = l.weight || e.lineWidth; }
+      if (e.tool !== 'measure') { e.color = l.color; e.lineWidth = l.weight || e.lineWidth; e.lineType = l.lineType || 'solid'; }
       buildLayers(); repaint();
     };
     var propColor = host.querySelector('[data-prop-color]');
@@ -2031,6 +2048,18 @@
       sel.onchange = function () {
         var preset = SCALE_PRESETS.filter(function (p) { return p.label === sel.value; })[0];
         if (preset) setViewportScale(sel.getAttribute('data-vp-scale'), preset);
+      };
+    });
+    host.querySelectorAll('[data-vp-lock]').forEach(function (b) {
+      b.onclick = function () {
+        var vp = S.doc.viewports.filter(function (v) { return v.id === b.getAttribute('data-vp-lock'); })[0];
+        if (!vp) return;
+        // Explicit toggle overrides the calibrated-default in both directions.
+        // Deliberately NOT undoable (no pushUndo, lockScale excluded from
+        // snapshots): Ctrl+Z must never silently re-unlock a calibrated
+        // scale guard as a side effect of undoing geometry.
+        vp.lockScale = !vpScaleLocked(vp);
+        markDirty(); buildLayers(); refreshStatusBar();
       };
     });
     host.querySelector('[data-layer-add]').onclick = function () {
@@ -2148,6 +2177,14 @@
     }
     return vps[0] || null;
   }
+  // Scale lock: an explicit vp.lockScale wins; otherwise a CALIBRATED
+  // viewport defaults to locked — one wheel nudge must never silently
+  // rewrite a scale the takeoff numbers depend on.
+  function vpScaleLocked(vp) {
+    if (!vp) return false;
+    if (vp.lockScale != null) return !!vp.lockScale;
+    return !!(vp.scale && vp.scale.calibrated);
+  }
 
   // ── Snapping ────────────────────────────────────────────────────
   // Collect endpoint / midpoint / center candidates from entities (MODEL
@@ -2172,6 +2209,22 @@
           var qrx = Math.abs(e.endX - e.startX) / 2, qry = Math.abs(e.endY - e.startY) / 2;
           out.push({ x: qcx + qrx, y: qcy, kind: 'quad' }); out.push({ x: qcx - qrx, y: qcy, kind: 'quad' });
           out.push({ x: qcx, y: qcy + qry, kind: 'quad' }); out.push({ x: qcx, y: qcy - qry, kind: 'quad' });
+        }
+      } else if (e.tool === 'arc' && e.points && e.points.length >= 3) {
+        // Arcs are points-based, so the generic branch below would emit
+        // CHORD midpoints (off the curve) and no center at all. Emit the
+        // real endpoints, the circumcenter, and the true on-arc midpoint.
+        out.push({ x: e.points[0].x, y: e.points[0].y, kind: 'end' });
+        out.push({ x: e.points[2].x, y: e.points[2].y, kind: 'end' });
+        out.push({ x: e.points[1].x, y: e.points[1].y, kind: 'node' });   // the through-point IS on the arc — keep it acquirable
+        var ac = arcCenter(e.points);
+        if (ac) {
+          out.push({ x: ac.x, y: ac.y, kind: 'center' });
+          var am = arcSamples(e.points, 2);            // n=2 → index 1 = true arc midpoint
+          if (am.length >= 2) out.push({ x: am[1].x, y: am[1].y, kind: 'mid' });
+        } else {
+          // Collinear (degenerate arc renders as a line) — chord mid is correct.
+          out.push({ x: (e.points[0].x + e.points[2].x) / 2, y: (e.points[0].y + e.points[2].y) / 2, kind: 'mid' });
         }
       } else if (e.points && e.points.length) {
         e.points.forEach(function (p, i) {
@@ -2554,17 +2607,29 @@
       if (avp) {
         var plane = toSheet(lp.x, lp.y);
         if (plane.x >= avp.x && plane.x <= avp.x + avp.w && plane.y >= avp.y && plane.y <= avp.y + avp.h) {
-          var m = pToM(plane, avp);
-          var ppi0 = vpPpiSafe(avp);
-          var ppi1 = Math.max(0.05, Math.min(600, ppi0 * factor));
-          if (!avp.scale) avp.scale = { unit: 'ft' };
-          avp.scale.pixelsPerInch = ppi1;
-          avp.scale.label = vpScaleLabel(ppi1);
-          var w2 = vpWin(avp);
-          w2.cx = m.x - (plane.x - avp.x - avp.w / 2) / ppi1;
-          w2.cy = m.y - (plane.y - avp.y - avp.h / 2) / ppi1;
-          markDirty(); buildLayers(); refreshStatusBar(); repaint();
-          return;
+          // Calibrated/locked viewport: wheel must NOT rewrite the scale —
+          // that silently corrupts every measurement on the view. Don't go
+          // dead either: fall through so the wheel zooms the PAPER camera
+          // instead (hint throttled so it doesn't re-fire every tick).
+          if (vpScaleLocked(avp)) {
+            var _lhNow = Date.now();
+            if (!S._lockHintT || _lhNow - S._lockHintT > 1500) {
+              S._lockHintT = _lhNow;
+              setHint('Viewport scale is locked' + (avp.scale && avp.scale.calibrated ? ' (calibrated)' : '') + ' — wheel zooms the paper; click its 🔒 in Views to unlock.');
+            }
+          } else {
+            var m = pToM(plane, avp);
+            var ppi0 = vpPpiSafe(avp);
+            var ppi1 = Math.max(0.05, Math.min(600, ppi0 * factor));
+            if (!avp.scale) avp.scale = { unit: 'ft' };
+            avp.scale.pixelsPerInch = ppi1;
+            avp.scale.label = vpScaleLabel(ppi1);
+            var w2 = vpWin(avp);
+            w2.cx = m.x - (plane.x - avp.x - avp.w / 2) / ppi1;
+            w2.cy = m.y - (plane.y - avp.y - avp.h / 2) / ppi1;
+            markDirty(); buildLayers(); refreshStatusBar(); repaint();
+            return;
+          }
         }
       }
       var before = toSheet(lp.x, lp.y);
@@ -2707,7 +2772,8 @@
   function newEntity(tool, vp) {
     var l = layerById(S.doc, S.activeLayer);
     return { id: uid(tool), tool: tool, viewport: vp ? vp.id : (S.doc.viewports[0] || {}).id,
-      layer: S.activeLayer, color: l.color, lineWidth: l.weight || 3 };
+      layer: S.activeLayer, color: l.color, lineWidth: l.weight || 3,
+      lineType: l.lineType || 'solid' };   // dormant-fix: the Hidden layer's dashes never reached drawn geometry
   }
   // Dimensions prefer the "Dimensions" layer (amber) if one exists.
   function dimLayerId() {
@@ -3072,15 +3138,73 @@
       commitEntity(e); repaint();
     });
   }
+  // Flatten ONE entity into line segments for precise hit-testing (same
+  // shape cases as segmentsInVp, but per-entity — the doc-wide version
+  // can't say which segment belongs to whom).
+  function entSegments(e) {
+    var segs = [];
+    if (!e) return segs;
+    if ((e.tool === 'line' || e.tool === 'refline' || e.tool === 'level' || e.tool === 'measure' || e.tool === 'arrow') && e.startX != null) {
+      segs.push({ a: { x: e.startX, y: e.startY }, b: { x: e.endX, y: e.endY } });   // 'arrow' = a leader's committed entity — a two-point segment like the rest
+    } else if (e.tool === 'rect' && e.startX != null) {
+      var c = [{ x: e.startX, y: e.startY }, { x: e.endX, y: e.startY }, { x: e.endX, y: e.endY }, { x: e.startX, y: e.endY }];
+      for (var k = 0; k < 4; k++) segs.push({ a: c[k], b: c[(k + 1) % 4] });
+    } else if ((e.tool === 'polyline' || e.tool === 'mangle' || e.tool === 'hatch') && e.points && e.points.length > 1) {
+      for (var p = 1; p < e.points.length; p++) segs.push({ a: e.points[p - 1], b: e.points[p] });
+      if (e.tool === 'hatch' && e.points.length > 2) segs.push({ a: e.points[e.points.length - 1], b: e.points[0] });
+    } else if (e.tool === 'arc' && e.points && e.points.length >= 3) {
+      var sa = arcSamples(e.points, 40);
+      for (var q = 1; q < sa.length; q++) segs.push({ a: sa[q - 1], b: sa[q] });
+    } else if (e.tool === 'ellipse' && e.startX != null) {
+      var ex0 = (e.startX + e.endX) / 2, ey0 = (e.startY + e.endY) / 2, rxe = Math.abs(e.endX - e.startX) / 2, rye = Math.abs(e.endY - e.startY) / 2, prev = null;
+      for (var ai = 0; ai <= 40; ai++) { var th = ai / 40 * 2 * Math.PI, pt = { x: ex0 + rxe * Math.cos(th), y: ey0 + rye * Math.sin(th) }; if (prev) segs.push({ a: prev, b: pt }); prev = pt; }
+    }
+    return segs;
+  }
+  // Point inside a closed polygon (ray cast) — filled hatches select from
+  // anywhere inside, not just their edges.
+  function pointInPoly(pt, pts) {
+    var inside = false;
+    for (var i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+      var xi = pts[i].x, yi = pts[i].y, xj = pts[j].x, yj = pts[j].y;
+      if ((yi > pt.y) !== (yj > pt.y) && pt.x < (xj - xi) * (pt.y - yi) / (yj - yi) + xi) inside = !inside;
+    }
+    return inside;
+  }
   // Topmost selectable entity id under a sheet point (or null).
+  // Bbox is only the BROADPHASE — the old bbox-only test selected long
+  // diagonals and big hatches from empty space, a daily hazard when
+  // tracing dense underlays. Entities that flatten to segments get a
+  // true distance-to-geometry test; compact ones (text/symbol)
+  // keep the bbox behavior.
   function hitTest(raw) {
+    var slop = screenModelDist(8);
     for (var i = S.doc.entities.length - 1; i >= 0; i--) {
       var e = S.doc.entities[i];
       var lyr = layerById(S.doc, e.layer);          // skip hidden + locked layers
       if (lyr && (lyr.visible === false || lyr.locked)) continue;
       var bb = entBBox(e);
-      var slop = screenModelDist(8);
-      if (bb && raw.x >= bb.x - slop && raw.x <= bb.x + bb.w + slop && raw.y >= bb.y - slop && raw.y <= bb.y + bb.h + slop) return e.id;
+      if (!bb || raw.x < bb.x - slop || raw.x > bb.x + bb.w + slop || raw.y < bb.y - slop || raw.y > bb.y + bb.h + slop) continue;
+      var segs = entSegments(e);
+      if (!segs.length) return e.id;                 // compact entity — bbox is the test
+      var hit = false;
+      for (var s = 0; s < segs.length; s++) { if (segNearPoint(segs[s], raw, slop)) { hit = true; break; } }
+      // Filled hatch: clicking anywhere inside the region also selects it.
+      if (!hit && e.tool === 'hatch' && e.points && e.points.length > 2 && pointInPoly(raw, e.points)) hit = true;
+      // Already-SELECTED closed shapes accept interior clicks so the
+      // select-then-drag-from-inside motion still works; UNSELECTED ones
+      // require an edge hit (that's the dense-underlay fix).
+      if (!hit && (e.tool === 'rect' || e.tool === 'ellipse') && e.startX != null && isSelected(e.id)) {
+        if (e.tool === 'rect') {
+          hit = raw.x >= Math.min(e.startX, e.endX) && raw.x <= Math.max(e.startX, e.endX) &&
+                raw.y >= Math.min(e.startY, e.endY) && raw.y <= Math.max(e.startY, e.endY);
+        } else {
+          var hcx = (e.startX + e.endX) / 2, hcy = (e.startY + e.endY) / 2;
+          var hrx = Math.abs(e.endX - e.startX) / 2 + slop, hry = Math.abs(e.endY - e.startY) / 2 + slop;
+          hit = hrx > 0 && hry > 0 && (Math.pow((raw.x - hcx) / hrx, 2) + Math.pow((raw.y - hcy) / hry, 2) <= 1);
+        }
+      }
+      if (hit) return e.id;
     }
     return null;
   }
@@ -3122,7 +3246,11 @@
   function entBBox(e) {
     if (e.startX != null) return { x: Math.min(e.startX, e.endX), y: Math.min(e.startY, e.endY), w: Math.abs(e.endX - e.startX), h: Math.abs(e.endY - e.startY) };
     if (e.points && e.points.length) {
-      var xs = e.points.map(function (p) { return p.x; }), ys = e.points.map(function (p) { return p.y; });
+      // Arcs: bound the SAMPLED curve, not the 3 control points — a major
+      // (>180°) arc bulges up to a full radius outside its control bbox,
+      // which under-stated hit-test, window select, and zoom extents.
+      var bp = (e.tool === 'arc' && e.points.length >= 3) ? arcSamples(e.points, 24) : e.points;
+      var xs = bp.map(function (p) { return p.x; }), ys = bp.map(function (p) { return p.y; });
       var mnx = Math.min.apply(null, xs), mny = Math.min.apply(null, ys);
       return { x: mnx, y: mny, w: Math.max.apply(null, xs) - mnx, h: Math.max.apply(null, ys) - mny };
     }
@@ -3469,7 +3597,24 @@
   function dimCircleClick(pt, vp, kind) {
     var id = hitTest(pt);
     var e = id && S.doc.entities.filter(function (x) { return x.id === id; })[0];
-    if (!e || e.tool !== 'ellipse' || e.startX == null) { setHint((kind === 'diameter' ? 'Diameter' : 'Radius') + ' dim: click a circle or ellipse.'); return; }
+    if (e && (e.tool !== 'ellipse' || e.startX == null)) e = null;
+    if (!e) {
+      // The tightened hitTest only accepts EDGE clicks — but for a dim pick,
+      // clicking anywhere inside the circle is the natural gesture. Scan
+      // topmost-first for an ellipse whose (padded) interior holds the point.
+      var pad = screenModelDist(8);
+      for (var ci = S.doc.entities.length - 1; ci >= 0; ci--) {
+        var c = S.doc.entities[ci];
+        if (!c || c.tool !== 'ellipse' || c.startX == null) continue;
+        var clyr = layerById(S.doc, c.layer);
+        if (clyr && (clyr.visible === false || clyr.locked)) continue;
+        var ccx = (c.startX + c.endX) / 2, ccy = (c.startY + c.endY) / 2;
+        var crx = Math.abs(c.endX - c.startX) / 2 + pad, cry = Math.abs(c.endY - c.startY) / 2 + pad;
+        if (crx <= 0 || cry <= 0) continue;
+        if (Math.pow((pt.x - ccx) / crx, 2) + Math.pow((pt.y - ccy) / cry, 2) <= 1) { e = c; break; }
+      }
+    }
+    if (!e) { setHint((kind === 'diameter' ? 'Diameter' : 'Radius') + ' dim: click a circle or ellipse.'); return; }
     var cx = (e.startX + e.endX) / 2, cy = (e.startY + e.endY) / 2;
     var rx = Math.abs(e.endX - e.startX) / 2, ry = Math.abs(e.endY - e.startY) / 2;
     var ang = Math.atan2(pt.y - cy, pt.x - cx);
@@ -4037,6 +4182,7 @@
   }
   function importUnderlay() {
     if (!S) return;
+    var S0 = S;   // identity-captured: the page prompt + upload are async — the editor may close or reopen on another plan mid-flight
     var inp = document.createElement('input');
     inp.type = 'file'; inp.accept = 'application/pdf,image/*'; inp.style.display = 'none';
     inp.onchange = function () {
@@ -4044,6 +4190,33 @@
       if (inp.parentNode) inp.parentNode.removeChild(inp);
       if (!file) return;
       var isPdf = /pdf/i.test(file.type) || /\.pdf$/i.test(file.name);
+      // Plan sets arrive as multi-page PDFs — peek at the page count locally
+      // (before any upload) and ask which sheet to trace. Import used to
+      // hardcode page 0, so only sheet 1 of a set was ever usable.
+      if (isPdf && window.pdfjsLib && file.arrayBuffer) {
+        file.arrayBuffer()
+          .then(function (buf) { return window.pdfjsLib.getDocument({ data: buf }).promise; })
+          .then(function (pdf) {
+            var n = pdf.numPages || 1;
+            try { pdf.destroy(); } catch (e2) {}
+            if (n <= 1) { finishUnderlayImport(file, true, 0); return; }
+            promptText('PDF page to trace (1–' + n + ')', function (txt) {
+              if (txt == null) return;               // Cancel/Esc/backdrop — abort the import entirely
+              var pg = parseInt(txt, 10);
+              if (isNaN(pg)) pg = 1;
+              pg = Math.max(1, Math.min(n, pg));
+              finishUnderlayImport(file, true, pg - 1);
+            }, '1');
+          })
+          .catch(function () { finishUnderlayImport(file, true, 0); });   // unreadable locally — old behavior
+      } else {
+        finishUnderlayImport(file, isPdf, 0);
+      }
+    };
+    document.body.appendChild(inp);
+    inp.click();
+    function finishUnderlayImport(file, isPdf, page) {
+      if (!S || S !== S0) return;   // editor closed or reopened on another plan during the async prompt — don't touch the wrong doc
       var plan = S.plan || {};
       var et, eid;
       if (plan.entity_type && plan.entity_id) { et = plan.entity_type; eid = plan.entity_id; }
@@ -4052,10 +4225,11 @@
       if (!window.p86Api || !p86Api.attachments || !p86Api.attachments.upload) { alert('Upload API unavailable — refresh the page.'); return; }
       setHint('Uploading underlay…');
       p86Api.attachments.upload(et, eid, file, { skip_geo: true }).then(function (res) {
+        if (!S || S !== S0) return;   // editor closed during the upload
         var att = (res && (res.attachment || res)) || {};
         if (!att.id) throw new Error('upload returned no attachment id');
         S.doc.underlay = {
-          attachmentId: att.id, kind: isPdf ? 'pdf' : 'image', page: 0,
+          attachmentId: att.id, kind: isPdf ? 'pdf' : 'image', page: page || 0,
           viewport: (((S.doc.viewports || [])[0]) || {}).id || 'VP1', opacity: 0.6,
           name: file.name || ''
         };
@@ -4072,9 +4246,7 @@
         alert('Underlay upload failed: ' + (e && e.message ? e.message : e));
         setHint('');
       });
-    };
-    document.body.appendChild(inp);
-    inp.click();
+    }
   }
   // Calibrate: two clicks a known distance apart → type the real length →
   // back-solve this viewport's pixelsPerInch so every measure/dim/area is true.
@@ -4466,16 +4638,31 @@
   // ── Export (D6) ─────────────────────────────────────────────────
   // Render the whole sheet at full paper resolution (line weights are
   // paper-true at scale 1) into an offscreen canvas.
-  function renderFullSheet() {
+  function renderFullSheet(mult) {
+    mult = Math.max(1, mult || 1);
     var s = S.doc.sheet;
     var off = document.createElement('canvas');
-    off.width = s.w; off.height = s.h;
-    renderSheet(off.getContext('2d'), S.doc);
+    off.width = Math.round(s.w * mult); off.height = Math.round(s.h * mult);
+    var ctx = off.getContext('2d');
+    if (mult !== 1) ctx.scale(mult, mult);
+    renderSheet(ctx, S.doc);
     return off;
+  }
+  // Export raster at 2× (240 DPI) so dim text prints crisp on Arch D —
+  // 120 DPI reads visibly soft on a full-size sheet. Oversized-canvas
+  // platforms (older iOS Safari) return a blank/empty data URL instead
+  // of throwing, so validate and fall back to 1×.
+  function sheetDataUrl() {
+    var url = null;
+    try { url = renderFullSheet(2).toDataURL('image/png'); } catch (e) { url = null; }
+    if (!url || url.length < 2000) {
+      url = renderFullSheet(1).toDataURL('image/png');
+    }
+    return url;
   }
   function exportPng() {
     try {
-      var url = renderFullSheet().toDataURL('image/png');
+      var url = sheetDataUrl();
       var a = document.createElement('a');
       a.href = url;
       a.download = (String(S.plan && S.plan.name || 'sheet').replace(/[^a-z0-9._-]+/gi, '_')) + '.png';
@@ -4489,7 +4676,7 @@
     var s = S.doc.sheet;
     var sz = SHEET_SIZES[s.size] || { wIn: s.w / DPI, hIn: s.h / DPI };
     var url;
-    try { url = renderFullSheet().toDataURL('image/png'); }
+    try { url = sheetDataUrl(); }
     catch (e) { alert('PDF export failed: ' + (e && e.message ? e.message : 'unknown')); return; }
     var w = window.open('', '_blank');
     if (!w) { alert('Pop-up blocked — allow pop-ups for this site to print / save as PDF.'); return; }
