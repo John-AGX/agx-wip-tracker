@@ -55,6 +55,7 @@
     { key: 'polararray', glyph: '❋', name: 'Polar array', group: 'Modify', label: 'Polar array — select objects first, then click a center point and enter the count to array them around it' },
     { key: 'stretch',  glyph: '⇲', name: 'Stretch',    group: 'Modify',   label: 'Stretch — click two corners of a crossing window (vertices inside move, the rest stays), then click a base + destination point' },
     { key: 'mirror2',  glyph: '⋈', name: 'Mirror 2-pt', group: 'Modify',  label: 'Mirror (two-point) — select objects first, then click two points on the mirror line; mirrored COPIES are created (originals kept)' },
+    { key: 'arraypath', glyph: '⁝', name: 'Array path', group: 'Modify',  label: 'Array along path — select objects first, then click the path (line / polyline / arc), then type the real spacing (e.g. 8\'). Copies land at true spacing along the run — fence posts, sprinkler heads, plantings.' },
     { key: 'dim',      glyph: '↔', name: 'Dimension',  group: 'Annotate', label: 'Dimension (aligned — click two points; auto-labels real length along the line at the viewport scale)' },
     { key: 'dimradius',glyph: 'R', name: 'Radius dim',  group: 'Annotate', label: 'Radius dimension — click a circle / ellipse; labels its radius (R …)' },
     { key: 'dimdia',   glyph: '⌀', name: 'Diameter dim',group: 'Annotate', label: 'Diameter dimension — click a circle / ellipse; labels its diameter (⌀ …)' },
@@ -104,7 +105,7 @@
     { tab: 'Modify', panels: [
       { title: 'Modify', items: ['trim', 'extend', 'fillet', 'chamfer', 'break'] },
       { title: 'Arrange', items: ['edit:dup', 'edit:offset', 'edit:scale', 'edit:rotate', 'edit:rotateA', 'edit:mirrorH', 'edit:mirrorV', 'mirror2', 'stretch'] },
-      { title: 'Array', items: ['polararray', 'edit:array'] },
+      { title: 'Array', items: ['polararray', 'edit:array', 'arraypath'] },
       { title: 'Combine', items: ['edit:explode', 'edit:join'] }
     ] },
     { tab: 'Annotate', panels: [
@@ -169,6 +170,7 @@
     mirror2: '<path d="M12 3v18" stroke-dasharray="3 2"/><path d="M4 8h4v8H4z"/><path d="M16 8h4v8h-4z" stroke-dasharray="2 2"/>',
     wipeout: '<rect x="4" y="4" width="16" height="16" rx="1"/><path d="M4 13l9-9M9 20l11-11" opacity="0.35"/><rect x="8" y="8" width="8" height="8" fill="currentColor" stroke="none" opacity="0.8"/>',
     zoomwin: '<circle cx="10.5" cy="10.5" r="6"/><path d="M15 15l5 5"/><rect x="7.5" y="7.5" width="6" height="6" stroke-dasharray="2 1.6"/>',
+    arraypath: '<path d="M3 17c4-8 10-8 18-10"/><circle cx="4.5" cy="16" r="1.6"/><circle cx="9.5" cy="11.5" r="1.6"/><circle cx="15" cy="8.8" r="1.6"/><circle cx="20" cy="7" r="1.6"/>',
     mirrorH: '<path d="M12 3v18" stroke-dasharray="3 2"/><path d="M9 8L3 12l6 4zM15 8l6 4-6 4z"/>',
     mirrorV: '<path d="M3 12h18" stroke-dasharray="3 2"/><path d="M8 9L12 3l4 6zM8 15l4 6 4-6z"/>',
     dup: '<rect x="8" y="8" width="12" height="12" rx="1.5"/><path d="M4 16V4h12"/>',
@@ -209,7 +211,8 @@
   var SYMBOLS = [
     { key: 'north', label: 'North' }, { key: 'head', label: 'Head' },
     { key: 'post', label: 'Post' }, { key: 'tree', label: 'Tree' },
-    { key: 'callout', label: 'Callout' }, { key: 'revdelta', label: 'Rev Δ' }
+    { key: 'callout', label: 'Callout' }, { key: 'revdelta', label: 'Rev Δ' },
+    { key: 'detailmark', label: 'Detail' }
   ];
   // Architectural + civil scales. f = paper-inches per real-inch; the
   // viewport's pixelsPerInch (sheet px per real inch) = DPI * f.
@@ -925,6 +928,17 @@
       ctx.beginPath(); ctx.moveTo(0, -r * 0.9); ctx.lineTo(-r * 0.82, r * 0.55); ctx.lineTo(r * 0.82, r * 0.55); ctx.closePath(); ctx.stroke();
       ctx.fillStyle = col; ctx.font = '700 ' + Math.round(s * 0.4) + 'px Arial, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
       ctx.fillText(String(e.label != null ? e.label : '?'), 0, r * 0.15);
+    } else if (e.kind === 'detailmark') {
+      // Section/detail callout bubble: detail number over the sheet it lives
+      // on ("3" / "A-2") — the standard "see 3/A-2" cross-reference, so a
+      // multi-sheet set can be navigated on paper.
+      ctx.beginPath(); ctx.arc(0, 0, r * 0.85, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(-r * 0.85, 0); ctx.lineTo(r * 0.85, 0); ctx.stroke();
+      ctx.fillStyle = col; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.font = '700 ' + Math.round(s * 0.34) + 'px Arial, sans-serif';
+      ctx.fillText(String(e.label != null ? e.label : '?'), 0, -r * 0.42);
+      ctx.font = '700 ' + Math.round(s * 0.26) + 'px Arial, sans-serif';
+      ctx.fillText(String(e.sheetRef || '—'), 0, r * 0.42);
     }
     ctx.restore();
   }
@@ -1237,6 +1251,7 @@
         '<strong style="color:#fff;font-size:13px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">📐 ' + esc(plan.name || 'Shop drawing') + '</strong>' +
         '<button id="p86-sheet-settings" title="Editor settings &amp; defaults (units, scale, sheet size, grid, snaps)" style="background:rgba(255,255,255,0.06);color:#cbd5e1;border:1px solid #444;border-radius:6px;padding:6px 11px;font-size:13px;cursor:pointer;">⚙</button>' +
         '<button id="p86-sheet-shortcuts" title="Keyboard shortcuts (?)" style="background:rgba(255,255,255,0.06);color:#cbd5e1;border:1px solid #444;border-radius:6px;padding:6px 11px;font-size:13px;cursor:pointer;">⌨</button>' +
+        '<button id="p86-sheet-history" title="Version history — reopen an earlier save of this drawing" style="background:rgba(255,255,255,0.06);color:#cbd5e1;border:1px solid #444;border-radius:6px;padding:6px 11px;font-size:13px;cursor:pointer;">⏱</button>' +
         '<button id="p86-sheet-underlay" title="Import a plan PDF/image as a scaled background to trace + measure over (takeoff)" style="background:rgba(79,140,255,0.14);color:#cbd5e1;border:1px solid #4f8cff;border-radius:6px;padding:6px 12px;font-size:12px;cursor:pointer;">⊞ Underlay</button>' +
         // PNG / PDF / DXF now live in the ribbon's Output tab.
         '<button id="p86-sheet-cancel" style="background:rgba(255,255,255,0.06);color:#aaa;border:1px solid #444;border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;">Close</button>' +
@@ -1585,7 +1600,7 @@
     S.inq = null;                            // clear any measure/inquiry path
     S._calib = null;                         // cancel any in-progress calibration
     S._poly = null;                          // cancel any in-progress polygon
-    S._mir = null; S._zw = null;             // cancel pending mirror-line / zoom-window first points
+    S._mir = null; S._zw = null; S._paste = null;   // cancel pending mirror/zoom first points + armed paste
     hideDyn();
     S.tool = t;
     // Track last/recent drawing commands for Enter-repeat + the right-click menu.
@@ -2188,6 +2203,8 @@
   }
   // Any multi-click tool state that must keep its screen→model mapping.
   function toolInProgress() {
+    // NB: S._paste is deliberately NOT in this predicate — the placing click
+    // must map through the viewport under the CURSOR, not a latched one.
     return !!(S.draft || S._stretch || S._dimcont || S._calib || S._poly || S._filletA || S._chamferA || S.inq || S._mir || S._zw);
   }
   // Convert a screen-px tolerance (snap radius, hit slop) into model inches.
@@ -2478,6 +2495,15 @@
       var pt = resolveSnap(raw, vp);
       if (S.draft && S.draft._anchor) pt = applyOrtho(S.draft._anchor, pt);
 
+      // Pending paste (Ctrl+V armed): a LEFT click PLACES the clipboard —
+      // regardless of the active tool — centered on the (snapped) point.
+      // Right-click cancels the armed paste (AutoCAD-style) and falls
+      // through to the context menu.
+      if (S._paste) {
+        if (e.button !== 0) { S._paste = null; setHint('Paste cancelled.'); return; }
+        placeClipboardAt(pt); return;
+      }
+
       if (S.tool === 'select') {
         // Grip-drag: if the cursor is on a grip of the (single) selection,
         // reshape that point (or move the whole entity for a 'move' grip).
@@ -2691,7 +2717,7 @@
         // Cancel whatever's in progress, clear the selection, and fall back to
         // the Select tool (CAD-style). Never closes the editor — that's the
         // Close button's job.
-        S._filletA = null; S._chamferA = null; S._stretch = null; S._dimcont = null; S.inq = null; S.draft = null; S.boxSel = null; S._calib = null; S._poly = null; S._mir = null; S._zw = null; hideDyn();
+        S._filletA = null; S._chamferA = null; S._stretch = null; S._dimcont = null; S.inq = null; S.draft = null; S.boxSel = null; S._calib = null; S._poly = null; S._mir = null; S._zw = null; S._paste = null; hideDyn();
         S.vpActive = null;                    // release any activated viewport
         setSelection([]);
         if (S.tool !== 'select') setTool('select'); else { buildLayers(); repaint(); }
@@ -2705,6 +2731,14 @@
       else if ((e.key === 'z' || e.key === 'Z') && (e.ctrlKey || e.metaKey)) { e.preventDefault(); if (e.shiftKey) redo(); else undo(); }
       else if ((e.key === 'y' || e.key === 'Y') && (e.ctrlKey || e.metaKey)) { e.preventDefault(); redo(); }
       else if ((e.key === 'd' || e.key === 'D') && (e.ctrlKey || e.metaKey)) { e.preventDefault(); duplicateSelected(); }
+      else if ((e.key === 'c' || e.key === 'C') && (e.ctrlKey || e.metaKey)) {
+        // Yield to native copy when the user has highlighted TEXT somewhere
+        // in the overlay — a non-collapsed selection means they're copying
+        // text, not entities.
+        var txtSel = window.getSelection ? window.getSelection() : null;
+        if (!(txtSel && !txtSel.isCollapsed) && S.selIds.length) { e.preventDefault(); copySelectionToClipboard(); }
+      }
+      else if ((e.key === 'v' || e.key === 'V') && (e.ctrlKey || e.metaKey)) { e.preventDefault(); armPaste(); }
       else if ((e.key === 'Delete' || e.key === 'Backspace') && S.selIds.length) { deleteSelected(); }
       else if (e.key === '?' || (e.key === '/' && e.shiftKey)) { e.preventDefault(); openShortcuts(); }
       else if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key && e.key.length === 1 && /[a-z]/i.test(e.key)) {
@@ -2766,7 +2800,7 @@
   // Cancel everything in progress + drop to Select (shared by Esc + menu).
   function cancelAll() {
     if (!S) return;
-    S._filletA = null; S._chamferA = null; S._stretch = null; S._dimcont = null; S.inq = null; S.draft = null; S.boxSel = null; S._calib = null; S._poly = null; S._mir = null; S._zw = null; hideDyn();
+    S._filletA = null; S._chamferA = null; S._stretch = null; S._dimcont = null; S.inq = null; S.draft = null; S.boxSel = null; S._calib = null; S._poly = null; S._mir = null; S._zw = null; S._paste = null; hideDyn();
     setSelection([]);
     if (S.tool !== 'select') setTool('select'); else { buildLayers(); repaint(); }
   }
@@ -2875,6 +2909,7 @@
     if (t === 'dimcont') { dimContClick(pt, vp); return; }
     if (t === 'mirror2') { mirror2Click(pt); return; }
     if (t === 'zoomwin') { zoomWinClick(pt, vp); return; }
+    if (t === 'arraypath') { arrayPathClick(pt); return; }
     // Measure / inquiry — accumulate points; readout drawn in repaint. Never
     // becomes a printed entity. Enter/Esc clears.
     if (t === 'inquire') {
@@ -2934,6 +2969,7 @@
         de.layer = dimLayerId();
         var dl = layerById(S.doc, de.layer);
         de.color = dl.color; de.lineWidth = dl.weight || 2;
+        de.dimExt = true;   // witness/extension lines — dim string sits OFF the geometry
         de.startX = pt.x; de.startY = pt.y; de.endX = pt.x; de.endY = pt.y;
         de._anchor = { x: pt.x, y: pt.y };
         S.draft = de;
@@ -3014,6 +3050,21 @@
         // are not a running counter). '1' before any revision is logged.
         var tbRevs = (S.doc.titleblock && S.doc.titleblock.revisions && S.doc.titleblock.revisions.length) || 0;
         se.label = String(Math.max(1, tbRevs));
+      }
+      if (se.kind === 'detailmark') {
+        // Two quick fields: detail number + the sheet it lives on. Committed
+        // inside the prompt chain (Cancel on either aborts the placement).
+        se.size = Math.round(se.size * 1.35);   // the two-line bubble needs a touch more room
+        promptText('Detail number (e.g. 3)', function (dn) {
+          if (dn == null) { repaint(); return; }
+          se.label = (dn.trim() || '?').slice(0, 6);
+          promptText('On sheet (e.g. A-2)', function (sh) {
+            if (sh == null) { repaint(); return; }
+            se.sheetRef = (sh.trim() || '—').slice(0, 10);
+            commitEntity(se); repaint();
+          }, 'A-1');
+        }, '1');
+        return;
       }
       commitEntity(se); repaint(); return;
     }
@@ -3289,6 +3340,24 @@
   function entSegments(e) {
     var segs = [];
     if (!e) return segs;
+    if (e.tool === 'measure' && e.dimExt && e.startX != null) {
+      // Offset dims render OFF the measured points on witness lines — hit
+      // the DRAWN geometry (offset dim line + witness lines), not the
+      // invisible raw span (which would steal clicks from the measured
+      // object while the visible dim line stayed unselectable).
+      var mdx = e.endX - e.startX, mdy = e.endY - e.startY;
+      var mlen = Math.hypot(mdx, mdy);
+      if (mlen > 1e-9) {
+        var mppi2 = ppiOf(e);
+        var moff = (e.dimOffPx != null ? e.dimOffPx : 18) / mppi2;
+        var mgap = 3 / mppi2, mover = 5 / mppi2;
+        var mux = mdx / mlen, muy = mdy / mlen, mnx = -muy, mny = mux;
+        segs.push({ a: { x: e.startX + mnx * moff, y: e.startY + mny * moff }, b: { x: e.endX + mnx * moff, y: e.endY + mny * moff } });
+        segs.push({ a: { x: e.startX + mnx * mgap, y: e.startY + mny * mgap }, b: { x: e.startX + mnx * (moff + mover), y: e.startY + mny * (moff + mover) } });
+        segs.push({ a: { x: e.endX + mnx * mgap, y: e.endY + mny * mgap }, b: { x: e.endX + mnx * (moff + mover), y: e.endY + mny * (moff + mover) } });
+      }
+      return segs;
+    }
     if ((e.tool === 'line' || e.tool === 'refline' || e.tool === 'level' || e.tool === 'measure' || e.tool === 'arrow') && e.startX != null) {
       segs.push({ a: { x: e.startX, y: e.startY }, b: { x: e.endX, y: e.endY } });   // 'arrow' = a leader's committed entity — a two-point segment like the rest
     } else if (e.tool === 'rect' && e.startX != null) {
@@ -3433,7 +3502,16 @@
     return out;
   }
   function entBBox(e) {
-    if (e.startX != null) return { x: Math.min(e.startX, e.endX), y: Math.min(e.startY, e.endY), w: Math.abs(e.endX - e.startX), h: Math.abs(e.endY - e.startY) };
+    if (e.startX != null) {
+      var b0 = { x: Math.min(e.startX, e.endX), y: Math.min(e.startY, e.endY), w: Math.abs(e.endX - e.startX), h: Math.abs(e.endY - e.startY) };
+      if (e.tool === 'measure' && e.dimExt) {
+        // Offset dims draw up to (offset + overshoot) OFF the raw span —
+        // inflate so the broadphase covers the drawn line at any pose.
+        var mi = ((e.dimOffPx != null ? e.dimOffPx : 18) + 5) / ppiOf(e);
+        b0 = { x: b0.x - mi, y: b0.y - mi, w: b0.w + 2 * mi, h: b0.h + 2 * mi };
+      }
+      return b0;
+    }
     if (e.points && e.points.length) {
       // Arcs: bound the SAMPLED curve, not the 3 control points — a major
       // (>180°) arc bulges up to a full radius outside its control bbox,
@@ -3771,12 +3849,112 @@
     if (e.tool === 'line' && e.startX != null) return 'Line · Length ' + fmtLen(Math.hypot(e.endX - e.startX, e.endY - e.startY));
     return null;
   }
+  // Array along path: copies of the selection at true spacing along a
+  // clicked line/polyline/arc — a site-plan sketch becomes a count takeoff
+  // (fence posts every 8', sprinkler heads, plantings).
+  function arrayPathClick(pt) {
+    if (!S.selIds.length) { setHint('Array path: select the objects to array first, then click the path.'); return; }
+    var pid = hitTest(pt);
+    var pe = pid && S.doc.entities.filter(function (x) { return x.id === pid; })[0];
+    var psegs = pe ? entSegments(pe) : [];
+    if (!pe || !psegs.length) { setHint('Array path: click a line, polyline, or arc to array along.'); return; }
+    promptText('Spacing along the path (e.g. 8\', 6\' 6", 96")', function (txt) {
+      if (txt == null) return;
+      var spacing = parseLenIn(txt);
+      if (!spacing || spacing <= 0) { alert('Could not read that spacing — try e.g. 8\' or 96".'); return; }
+      // Source set = the selection minus the path itself (arraying the path
+      // along the path would double it up pointlessly).
+      var src = selEntities().filter(function (x) { return x.id !== pe.id; });
+      if (!src.length) { setHint('Array path: the selection only contained the path itself — select the objects to copy.'); return; }
+      var gb = groupBBox(src), scx = gb.x + gb.w / 2, scy = gb.y + gb.h / 2;
+      // Sample points every `spacing` inches along the flattened path,
+      // including the start; cap the total so a tiny spacing on a long
+      // run can't flood the drawing.
+      var total = 0;
+      psegs.forEach(function (sg) { total += Math.hypot(sg.b.x - sg.a.x, sg.b.y - sg.a.y); });
+      if (total < 1) { setHint('Array path: that path has no length to array along — nothing placed.'); setTool('select'); return; }
+      var count = Math.floor(total / spacing) + 1;
+      var CAP = 200;
+      var capped = count > CAP;
+      if (capped) count = CAP;
+      pushUndo();
+      var newIds = [], si = 0, segStart = 0;
+      for (var n = 0; n < count; n++) {
+        var d = n * spacing;
+        while (si < psegs.length - 1 && d > segStart + Math.hypot(psegs[si].b.x - psegs[si].a.x, psegs[si].b.y - psegs[si].a.y)) {
+          segStart += Math.hypot(psegs[si].b.x - psegs[si].a.x, psegs[si].b.y - psegs[si].a.y);
+          si++;
+        }
+        var sg2 = psegs[si];
+        var segLen = Math.hypot(sg2.b.x - sg2.a.x, sg2.b.y - sg2.a.y);
+        if (segLen < 1e-9) continue;
+        var t2 = Math.min(1, (d - segStart) / segLen);
+        var sx = sg2.a.x + (sg2.b.x - sg2.a.x) * t2, sy = sg2.a.y + (sg2.b.y - sg2.a.y) * t2;
+        src.forEach(function (e0) {
+          var c = JSON.parse(JSON.stringify(e0)); c.id = uid(c.tool);
+          translateEntity(c, sx - scx, sy - scy);
+          S.doc.entities.push(c); newIds.push(c.id);
+        });
+      }
+      setSelection(newIds); buildLayers(); setTool('select'); repaint();
+      setHint('Arrayed ' + count + ' placement' + (count === 1 ? '' : 's') + ' along ' + fmtLen(total) + (capped ? ' (capped at ' + CAP + ' — use a larger spacing for more)' : '') + '.');
+    }, '8\'');
+  }
   function duplicateSelected() {
     var ents = selEntities(); if (!ents.length) return;
     pushUndo();
     var newIds = [];
     ents.forEach(function (e) { var copy = JSON.parse(JSON.stringify(e)); copy.id = uid(copy.tool); translateEntity(copy, 6, 6); S.doc.entities.push(copy); newIds.push(copy.id); });   // 6" model offset
     setSelection(newIds); buildLayers(); repaint();
+  }
+  // ── Clipboard across sheets/drawings (Ctrl+C / Ctrl+V) ──────────
+  // localStorage carries the JSON, so a copied detail/note block pastes
+  // into ANY open drawing — the standard-detail reuse motion. Geometry is
+  // stored relative to the selection's bbox center; paste re-centers it
+  // on the clicked point. Layer ids are kept when the target drawing has
+  // them, else entities land on the active layer.
+  var CLIP_KEY = 'p86-cad-clipboard';
+  function copySelectionToClipboard() {
+    var ents = selEntities(); if (!ents.length) return;
+    var gb = groupBBox(ents), ccx = gb.x + gb.w / 2, ccy = gb.y + gb.h / 2;
+    var payload = ents.map(function (e) {
+      var c = JSON.parse(JSON.stringify(e));
+      delete c.id;
+      translateEntity(c, -ccx, -ccy);      // store center-relative
+      return c;
+    });
+    try {
+      localStorage.setItem(CLIP_KEY, JSON.stringify(payload));
+      setHint('Copied ' + payload.length + ' object' + (payload.length === 1 ? '' : 's') + ' — Ctrl+V in any drawing, then click to place.');
+    } catch (e2) { setHint('Copy failed — browser storage is full or blocked.'); }
+  }
+  function armPaste() {
+    if (S.draft) { setHint('Finish (Enter) or cancel (Esc) the in-progress shape before pasting.'); return; }
+    var payload = null;
+    try { payload = JSON.parse(localStorage.getItem(CLIP_KEY) || 'null'); } catch (e2) {}
+    if (!payload || !payload.length) { setHint('Clipboard is empty — select objects and Ctrl+C first.'); return; }
+    S._paste = { ents: payload };
+    setHint('Paste: click where the ' + payload.length + ' object' + (payload.length === 1 ? '' : 's') + ' should land (Esc cancels).');
+  }
+  function placeClipboardAt(pt) {
+    var pd = S._paste; S._paste = null;
+    if (!pd || !pd.ents || !pd.ents.length) return;
+    pushUndo();
+    var newIds = [];
+    pd.ents.forEach(function (src) {
+      var c = JSON.parse(JSON.stringify(src));
+      c.id = uid(c.tool || 'ent');
+      translateEntity(c, pt.x, pt.y);      // center-relative → absolute
+      // Land on the active layer when the source layer id is missing here —
+      // or exists but is HIDDEN/LOCKED (a "paste did nothing" trap: the id
+      // spaces collide across drawings via the seeded L0/L1/L2).
+      var tl = layerById(S.doc, c.layer);
+      if (!tl || tl.visible === false || tl.locked) c.layer = S.activeLayer;
+      c.viewport = (activeVp() || (S.doc.viewports || [])[0] || {}).id || c.viewport;
+      S.doc.entities.push(c); newIds.push(c.id);
+    });
+    setSelection(newIds); markDirty(); buildLayers(); repaint();
+    setHint('Pasted ' + newIds.length + ' object' + (newIds.length === 1 ? '' : 's') + '.');
   }
   // Uniform scale of the selection about its centre by a typed factor (Tier 4).
   function scaleSel() {
@@ -3971,6 +4149,7 @@
     if (!S._dimcont) { S._dimcont = { last: { x: pt.x, y: pt.y }, vp: vp }; setHint('Continuous dim: click the next point (Enter / Esc to finish).'); repaint(); return; }
     var dm = newEntity('measure', S._dimcont.vp || vp);
     dm.layer = dimLayerId(); dm.color = layerById(S.doc, dm.layer).color; dm.lineWidth = 2;
+    dm.dimExt = true;   // chain spans get witness lines too (consistent side per span direction)
     dm.startX = S._dimcont.last.x; dm.startY = S._dimcont.last.y; dm.endX = pt.x; dm.endY = pt.y;
     commitEntity(dm);
     S._dimcont.last = { x: pt.x, y: pt.y };
@@ -4964,7 +5143,16 @@
     if (!S || !S._dirty) return;
     if (S._autosaveT) { clearTimeout(S._autosaveT); S._autosaveT = null; }
     if (typeof S.onSave === 'function') {
-      try { S.onSave(serializeDoc(S.doc), {}); S._dirty = false; setHint('Saved.'); }
+      try {
+        // Track the in-flight save so version operations can drain it
+        // instead of racing it (a late-landing PATCH would silently
+        // overwrite a restore). Rejection re-marks dirty for retry.
+        var sSnap = S;
+        S._saveP = Promise.resolve(S.onSave(serializeDoc(S.doc), {}))
+          .catch(function () { if (S === sSnap) S._dirty = true; })
+          .then(function () { if (S === sSnap) S._saveP = null; });
+        S._dirty = false; setHint('Saved.');
+      }
       catch (e) { /* keep dirty; a later edit / close will retry */ }
     }
   }
@@ -5080,7 +5268,25 @@
       var L = lyr(e);
       try {
         if (e.tool === 'line' || e.tool === 'arrow') { out += lineDxf(L, omap(e, e.startX, e.startY), omap(e, e.endX, e.endY)); }
-        else if (e.tool === 'measure') { var a = omap(e, e.startX, e.startY), b = omap(e, e.endX, e.endY); out += lineDxf(L, a, b); if (e.measureLabel) out += textDxf(L, { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, 4, e.measureLabel); }
+        else if (e.tool === 'measure') {
+          // dimExt dims export at their DRAWN position (offset + witness
+          // lines), matching PDF/PNG/screen instead of sitting on the geometry.
+          var mA = { x: e.startX, y: e.startY }, mB = { x: e.endX, y: e.endY };
+          if (e.dimExt) {
+            var ddx = mB.x - mA.x, ddy = mB.y - mA.y, dln = Math.hypot(ddx, ddy);
+            if (dln > 1e-9) {
+              var dppi = ppiOf(e);
+              var dof = (e.dimOffPx != null ? e.dimOffPx : 18) / dppi, dgp = 3 / dppi, dov = 5 / dppi;
+              var dnx = -(ddy / dln), dny = ddx / dln;
+              out += lineDxf(L, omap(e, mA.x + dnx * dgp, mA.y + dny * dgp), omap(e, mA.x + dnx * (dof + dov), mA.y + dny * (dof + dov)));
+              out += lineDxf(L, omap(e, mB.x + dnx * dgp, mB.y + dny * dgp), omap(e, mB.x + dnx * (dof + dov), mB.y + dny * (dof + dov)));
+              mA = { x: mA.x + dnx * dof, y: mA.y + dny * dof }; mB = { x: mB.x + dnx * dof, y: mB.y + dny * dof };
+            }
+          }
+          var a = omap(e, mA.x, mA.y), b = omap(e, mB.x, mB.y);
+          out += lineDxf(L, a, b);
+          if (e.measureLabel) out += textDxf(L, { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, 4, e.measureLabel);
+        }
         else if (e.tool === 'rect') { var p1 = omap(e, e.startX, e.startY), p2 = omap(e, e.endX, e.startY), p3 = omap(e, e.endX, e.endY), p4 = omap(e, e.startX, e.endY); out += lineDxf(L, p1, p2) + lineDxf(L, p2, p3) + lineDxf(L, p3, p4) + lineDxf(L, p4, p1); }
         else if (e.tool === 'ellipse') {
           // Radii are already model inches in v3.
@@ -5105,6 +5311,71 @@
     out += g(0, 'ENDSEC') + g(0, 'EOF');
     return out;
   }
+  // ── Version history (⏱) — restore points kept server-side ────────
+  // Snapshots are taken automatically on save (throttled to >=10 min);
+  // restoring snapshots the current state first, so a restore is itself
+  // always reversible via another restore.
+  function openHistoryModal() {
+    if (!S || !S.plan || !S.plan.id) { alert('Version history needs a saved plan — save this drawing first.'); return; }
+    if (!window.p86Api || !p86Api.plans || !p86Api.plans.versions) { alert('Version API unavailable — refresh the page.'); return; }
+    if (S._dirty) saveSilent();                            // flush-only — save() is save-AND-CLOSE and would tear the editor down
+    var planId = S.plan.id;
+    var ov = document.createElement('div');
+    ov.style.cssText = 'position:fixed;inset:0;z-index:5400;background:rgba(0,0,0,0.6);display:flex;align-items:center;justify-content:center;padding:20px;';
+    var box = document.createElement('div');
+    box.style.cssText = 'background:#141419;border:1px solid #353545;border-radius:12px;padding:18px 20px;max-width:460px;width:100%;max-height:70vh;overflow-y:auto;color:#e6e6e6;box-shadow:0 16px 48px rgba(0,0,0,0.6);';
+    box.innerHTML = '<div style="font-size:14px;font-weight:700;color:#fff;margin-bottom:4px;">Version history</div>' +
+      '<div style="font-size:11px;color:#64748b;margin-bottom:12px;">Restore points are kept automatically as you save (up to 30). Restoring keeps a snapshot of the current drawing too.</div>' +
+      '<div data-vh-list style="display:flex;flex-direction:column;gap:6px;"><div style="color:#9aa;font-size:12px;">Loading…</div></div>' +
+      '<div style="display:flex;justify-content:flex-end;margin-top:14px;">' +
+        '<button data-vh-close style="padding:8px 16px;background:rgba(255,255,255,0.06);color:#ddd;border:1px solid #444;border-radius:6px;cursor:pointer;font-weight:600;">Close</button>' +
+      '</div>';
+    ov.appendChild(box); document.body.appendChild(ov);
+    function closeVh() { if (ov.parentNode) ov.parentNode.removeChild(ov); }
+    box.querySelector('[data-vh-close]').onclick = closeVh;
+    ov.addEventListener('click', function (e) { if (e.target === ov) closeVh(); });
+    p86Api.plans.versions(planId).then(function (res) {
+      var list = (res && res.versions) || [];
+      var host = box.querySelector('[data-vh-list]');
+      if (!list.length) { host.innerHTML = '<div style="color:#9aa;font-size:12px;">No restore points yet — they accumulate as you save (at most one every 10 minutes).</div>'; return; }
+      host.innerHTML = list.map(function (v) {
+        var when = v.created_at ? new Date(v.created_at).toLocaleString() : '?';
+        return '<div style="display:flex;align-items:center;gap:8px;border:1px solid #333;border-radius:7px;padding:7px 9px;">' +
+          '<div style="flex:1;min-width:0;">' +
+            '<div style="font-size:12px;color:#e6e6e6;">' + esc(when) + '</div>' +
+            '<div style="font-size:10.5px;color:#64748b;">' + (v.created_by_name ? esc(v.created_by_name) + ' · ' : '') + (v.page_count || 0) + ' page' + ((v.page_count || 0) === 1 ? '' : 's') + '</div>' +
+          '</div>' +
+          '<button data-vh-restore="' + v.id + '" style="background:rgba(79,140,255,0.14);color:#93c5fd;border:1px solid #4f8cff;border-radius:6px;padding:5px 12px;font-size:11.5px;cursor:pointer;font-weight:600;">Restore</button>' +
+        '</div>';
+      }).join('');
+      host.querySelectorAll('[data-vh-restore]').forEach(function (b) {
+        b.onclick = function () {
+          b.disabled = true; b.textContent = 'Restoring…';
+          // Serialize against the autosave: cancel any pending timer and
+          // DRAIN the in-flight save promise first — a late-landing PATCH
+          // would silently overwrite the restore with pre-restore content.
+          if (S && S._autosaveT) { clearTimeout(S._autosaveT); S._autosaveT = null; }
+          Promise.resolve(S && S._saveP)
+            .then(function () { return p86Api.plans.restoreVersion(planId, b.getAttribute('data-vh-restore')); })
+            .then(function () { return p86Api.plans.get(planId); })
+            .then(function (r2) {
+              var fresh = (r2 && (r2.plan || r2)) || null;
+              if (!fresh) throw new Error('could not re-fetch the plan');
+              closeVh();
+              if (!S) return;
+              var o = Object.assign({}, S._openOpts || {}, { plan: fresh });
+              S._dirty = false;   // CRITICAL: close() flushes dirty docs — must not overwrite the restore with the pre-restore state
+              window.p86SheetEditor.open(o);
+              setTimeout(function () { if (S) setHint('Version restored — the previous state was snapshotted too.'); }, 100);
+            })
+            .catch(function (e2) { alert('Restore failed: ' + (e2 && e2.message ? e2.message : e2)); b.disabled = false; b.textContent = 'Restore'; });
+        };
+      });
+    }).catch(function () {
+      var host = box.querySelector('[data-vh-list]');
+      if (host) host.innerHTML = '<div style="color:#fca5a5;font-size:12px;">Could not load versions — try again.</div>';
+    });
+  }
   function exportDxf() {
     try {
       var dxf = buildDxf(S.doc);
@@ -5123,8 +5394,10 @@
     open: function (opts) {
       open(opts);
       if (S) {
+        S._openOpts = opts;   // stashed so a version-restore can reopen the SAME plan with the SAME onSave wiring
         S.overlay.querySelector('#p86-sheet-cancel').onclick = close;
         S.overlay.querySelector('#p86-sheet-save').onclick = save;
+        var histBtn = S.overlay.querySelector('#p86-sheet-history'); if (histBtn) histBtn.onclick = openHistoryModal;
         var pdfBtn = S.overlay.querySelector('#p86-sheet-pdf'); if (pdfBtn) pdfBtn.onclick = exportPdf;
         var pngBtn = S.overlay.querySelector('#p86-sheet-png'); if (pngBtn) pngBtn.onclick = exportPng;
         var dxfBtn = S.overlay.querySelector('#p86-sheet-dxf'); if (dxfBtn) dxfBtn.onclick = exportDxf;

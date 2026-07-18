@@ -53,7 +53,7 @@ function sanitizePages(raw) {
     // markup {page,calibration,strokes} pages — pass them through (with
     // light size caps) instead of coercing, which would strip the doc.
     if (pg.kind === 'sheet-doc') {
-      return {
+      const out = {
         kind: 'sheet-doc',
         version: Number.isFinite(pg.version) ? (pg.version | 0) : 1,
         sheet: (pg.sheet && typeof pg.sheet === 'object') ? pg.sheet : {},
@@ -62,6 +62,22 @@ function sanitizePages(raw) {
         viewports: Array.isArray(pg.viewports) ? pg.viewports.slice(0, 50) : [],
         entities: Array.isArray(pg.entities) ? pg.entities.slice(0, 20000) : []
       };
+      // CRITICAL: v2/v3 docs store the drawing under model/sheets (serializeDoc
+      // DELETES the flat entities/layers/viewports above before sending) —
+      // dropping these fields silently gutted every saved CAD sheet: the plan
+      // reloaded EMPTY. Pass them through with the same size caps.
+      // Pass model through WHOLE (caps only, no field whitelist) — a
+      // whitelist here is exactly what caused the data loss.
+      if (pg.model && typeof pg.model === 'object') {
+        out.model = Object.assign({}, pg.model, {
+          entities: Array.isArray(pg.model.entities) ? pg.model.entities.slice(0, 20000) : []
+        });
+      }
+      if (Array.isArray(pg.sheets)) out.sheets = pg.sheets.slice(0, 50);
+      if (pg.activeSheetId != null) out.activeSheetId = String(pg.activeSheetId);
+      if (pg.space === 'sheet' || pg.space === 'model') out.space = pg.space;
+      if (pg.underlay && typeof pg.underlay === 'object') out.underlay = pg.underlay;
+      return out;
     }
     return {
       page: Number.isFinite(pg.page) ? (pg.page | 0) : i,
@@ -222,6 +238,32 @@ router.patch('/:id', requireAuth, requireCapability('ESTIMATES_EDIT'), async (re
     if (!orgId) return res.status(404).json({ error: 'Plan not found' });
     const body = req.body || {};
 
+    // Version snapshot: when drawing content is about to be overwritten,
+    // keep a restore point of the CURRENT row. Throttled (>=10 min since
+    // the last snapshot) so the 2.5s autosave doesn't flood; last 30 kept.
+    // Best-effort — a snapshot failure must never block the save itself.
+    if (Object.prototype.hasOwnProperty.call(body, 'pages')) {
+      try {
+        const ins = await pool.query(
+          'INSERT INTO plan_versions (plan_id, organization_id, name, pages, totals, created_by) ' +
+          'SELECT p.id, p.organization_id, p.name, p.pages, p.totals, $3 FROM plans p ' +
+          ' WHERE p.id = $1 AND p.organization_id = $2 ' +
+          "   AND NOT EXISTS (SELECT 1 FROM plan_versions v WHERE v.plan_id = p.id " +
+          "        AND v.created_at > NOW() - INTERVAL '10 minutes')",
+          [req.params.id, orgId, (req.user && req.user.id) || null]
+        );
+        // Prune only when a snapshot was actually taken (skips the two extra
+        // statements on every throttled autosave) and stay org-scoped.
+        if (ins.rowCount > 0) {
+          await pool.query(
+            'DELETE FROM plan_versions WHERE plan_id = $1 AND organization_id = $2 AND id NOT IN ' +
+            ' (SELECT id FROM plan_versions WHERE plan_id = $1 ORDER BY created_at DESC LIMIT 30)',
+            [req.params.id, orgId]
+          );
+        }
+      } catch (ve) { console.warn('plan_versions snapshot failed (non-fatal):', ve.message); }
+    }
+
     const sets = [];
     const params = [];
     let pn = 1;
@@ -281,6 +323,65 @@ router.delete('/:id', requireAuth, requireCapability('ESTIMATES_EDIT'), async (r
     res.json({ ok: true, archived: true });
   } catch (e) {
     console.error('DELETE /api/plans/:id error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ──────────────────────────────────────────────────────────────────
+// GET /api/plans/:id/versions — restore points, newest first (meta only;
+// the pages payload stays server-side until a restore).
+router.get('/:id/versions', requireAuth, requireCapability('ESTIMATES_VIEW'), async (req, res) => {
+  try {
+    const orgId = callerOrgId(req);
+    if (!orgId) return res.json({ versions: [] });
+    const { rows } = await pool.query(
+      'SELECT v.id, v.name, v.created_at, u.name AS created_by_name, ' +
+      '       jsonb_array_length(v.pages) AS page_count ' +
+      '  FROM plan_versions v ' +
+      '  LEFT JOIN users u ON u.id = v.created_by ' +
+      ' WHERE v.plan_id = $1 AND v.organization_id = $2 ' +
+      ' ORDER BY v.created_at DESC LIMIT 50',
+      [req.params.id, orgId]
+    );
+    res.json({ versions: rows });
+  } catch (e) {
+    console.error('GET /api/plans/:id/versions error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// POST /api/plans/:id/versions/:vid/restore — write a restore point back
+// onto the plan. The CURRENT content is snapshotted first (unthrottled),
+// so a restore is itself always undoable via another restore.
+router.post('/:id/versions/:vid/restore', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req, res) => {
+  try {
+    const orgId = callerOrgId(req);
+    if (!orgId) return res.status(404).json({ error: 'Plan not found' });
+    const vid = parseInt(req.params.vid, 10);
+    if (!Number.isFinite(vid)) return res.status(400).json({ error: 'Bad version id' });
+
+    // Safety snapshot of what's about to be replaced — gated on the target
+    // version actually existing, so a bad vid can't litter orphan snapshots.
+    await pool.query(
+      'INSERT INTO plan_versions (plan_id, organization_id, name, pages, totals, created_by) ' +
+      'SELECT p.id, p.organization_id, p.name, p.pages, p.totals, $3 FROM plans p ' +
+      ' WHERE p.id = $1 AND p.organization_id = $2 ' +
+      '   AND EXISTS (SELECT 1 FROM plan_versions v WHERE v.id = $4 AND v.plan_id = p.id AND v.organization_id = p.organization_id)',
+      [req.params.id, orgId, (req.user && req.user.id) || null, vid]
+    );
+
+    const { rows } = await pool.query(
+      'UPDATE plans p SET pages = v.pages, totals = COALESCE(v.totals, p.totals), updated_at = NOW() ' +
+      '  FROM plan_versions v ' +
+      ' WHERE p.id = $1 AND p.organization_id = $2 ' +
+      '   AND v.id = $3 AND v.plan_id = p.id AND v.organization_id = p.organization_id ' +
+      ' RETURNING p.id',
+      [req.params.id, orgId, vid]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Version not found' });
+    res.json({ ok: true, restored: vid });
+  } catch (e) {
+    console.error('POST /api/plans/:id/versions/:vid/restore error:', e);
     res.status(500).json({ error: 'Server error' });
   }
 });

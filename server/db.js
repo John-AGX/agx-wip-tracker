@@ -3935,6 +3935,24 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_plans_entity
       ON plans(entity_type, entity_id, updated_at DESC)
       WHERE entity_type IS NOT NULL AND archived_at IS NULL;
+
+    -- Version history: restore points for a plan's drawing content. Plans
+    -- are contract/submittal documents, yet the 2.5s autosave overwrites
+    -- the only copy — snapshots (throttled to >=10 min apart, last 30 kept,
+    -- pruned in plans-routes) give resubmittal history + corruption
+    -- recovery. Rows cascade away with their plan.
+    CREATE TABLE IF NOT EXISTS plan_versions (
+      id                  BIGSERIAL PRIMARY KEY,
+      plan_id             TEXT NOT NULL REFERENCES plans(id) ON DELETE CASCADE,
+      organization_id     INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      name                TEXT,
+      pages               JSONB NOT NULL DEFAULT '[]'::jsonb,
+      totals              JSONB,
+      created_by          INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_plan_versions_plan
+      ON plan_versions(plan_id, created_at DESC);
   `);
 
   // ── Performance indexes: 86's read-tool surface (2026-05-23) ──────

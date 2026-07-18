@@ -913,7 +913,9 @@
     get: function(id) { return get('/api/plans/' + encodeURIComponent(id)); },
     create: function(payload) { return post('/api/plans', payload); },
     update: function(id, payload) { return patch('/api/plans/' + encodeURIComponent(id), payload); },
-    remove: function(id) { return del('/api/plans/' + encodeURIComponent(id)); }
+    remove: function(id) { return del('/api/plans/' + encodeURIComponent(id)); },
+    versions: function(id) { return get('/api/plans/' + encodeURIComponent(id) + '/versions'); },
+    restoreVersion: function(id, vid) { return post('/api/plans/' + encodeURIComponent(id) + '/versions/' + encodeURIComponent(vid) + '/restore', {}); }
   };
 
   // Per-job weather lookup for the schedule. Server geocodes the job's

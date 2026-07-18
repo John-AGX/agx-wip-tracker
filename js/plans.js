@@ -186,7 +186,9 @@
       window.p86SheetEditor.open({
         plan: plan,
         onSave: function (doc, totals) {
-          api().plans.update(plan.id, { pages: [doc], totals: totals || {} })
+          // Return the promise — the editor tracks it so a version restore
+          // can DRAIN an in-flight save instead of racing it.
+          return api().plans.update(plan.id, { pages: [doc], totals: totals || {} })
             .then(function () { loadList(); })
             .catch(function (err) { toast('Save failed: ' + (err && err.message ? err.message : 'error')); });
         }

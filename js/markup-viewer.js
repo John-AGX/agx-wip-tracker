@@ -2277,6 +2277,31 @@
     var dx = x2 - x1, dy = y2 - y1;
     var len = Math.sqrt(dx * dx + dy * dy);
     if (len < 1) return;
+    // Sheet-editor dims carry dimExt: the dim string sits OFF the measured
+    // geometry on witness/extension lines (gap at the object, overshoot past
+    // the dim line) — the shop-drawing convention. Everything below operates
+    // on the OFFSET endpoints via plain local reassignment (pure translation,
+    // so dx/dy/len are unchanged). Photo-markup measures and legacy dims
+    // never set dimExt and render exactly as before.
+    if (s.dimExt) {
+      var uxE = dx / len, uyE = dy / len;
+      var nxE = -uyE, nyE = uxE;                             // perpendicular (90° CCW)
+      var offE = (s.dimOffPx != null) ? s.dimOffPx : 18;     // paper px — annotative
+      var gapE = 3, overE = 5;
+      ctx.save();
+      ctx.strokeStyle = s.color;
+      ctx.lineWidth = Math.max(1, (s.lineWidth || 4) * 0.5);
+      ctx.lineCap = 'butt';
+      ctx.beginPath();
+      ctx.moveTo(x1 + nxE * gapE, y1 + nyE * gapE);
+      ctx.lineTo(x1 + nxE * (offE + overE), y1 + nyE * (offE + overE));
+      ctx.moveTo(x2 + nxE * gapE, y2 + nyE * gapE);
+      ctx.lineTo(x2 + nxE * (offE + overE), y2 + nyE * (offE + overE));
+      ctx.stroke();
+      ctx.restore();
+      x1 += nxE * offE; y1 += nyE * offE;
+      x2 += nxE * offE; y2 += nyE * offE;
+    }
     // Auto-scale: text height proportional to line length, clamped
     // so short lines still read and long ones don't dominate the
     // photo. 6% of line length keeps the label subtle (a 1000px
