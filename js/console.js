@@ -124,6 +124,7 @@
         // (anthropic/email/btmapping/settings) mount the existing
         // host-parameterized admin.js renderers — single source of truth.
         '<div id="cc-overview"  class="cc-section" style="display:none;"></div>' +
+        '<div id="cc-docs"      class="cc-section" style="display:none;"></div>' +
         '<div id="cc-assemblies" class="cc-section" style="display:none;"></div>' +
         '<div id="cc-metrics"   class="cc-section" style="display:none;"></div>' +
         '<div id="cc-tenants"   class="cc-section" style="display:none;"></div>' +
@@ -141,12 +142,13 @@
   }
 
   // The platform sub-views, in sidebar order.
-  var CONSOLE_VIEWS = ['overview', 'assemblies', 'metrics', 'tenants', 'audit', 'anthropic', 'email', 'btmapping', 'settings', 'danger'];
+  var CONSOLE_VIEWS = ['overview', 'docs', 'assemblies', 'metrics', 'tenants', 'audit', 'anthropic', 'email', 'btmapping', 'settings', 'danger'];
 
   // Each view's loader. The system-service views mount the existing
   // host-parameterized admin.js renderers (re-runs fresh each visit).
   function loadConsoleView(view) {
     if (view === 'overview') return loadOverview();
+    if (view === 'docs') return loadDocs();
     if (view === 'assemblies') return loadAssemblyTuning();
     if (view === 'metrics') return loadMetrics();
     if (view === 'tenants') return loadTenants();
@@ -215,6 +217,20 @@
   }
   function errBox(where, e) {
     return '<div style="padding:14px;color:var(--danger,#e66);font-size:12.5px;">Couldn\'t load ' + esc(where) + ': ' + esc((e && e.message) || e) + '</div>';
+  }
+
+  // ── How it works — internal design documentation (js/console-docs.js) ──
+  function loadDocs() {
+    var el = document.getElementById('cc-docs');
+    if (!el) return;
+    el.innerHTML = sectionTitle('📖 How Project 86 works — design documentation');
+    var pane = document.createElement('div');
+    el.appendChild(pane);
+    if (window.p86Docs && typeof window.p86Docs.renderInto === 'function') {
+      window.p86Docs.renderInto(pane);
+    } else {
+      pane.innerHTML = '<div style="padding:16px;color:var(--text-dim,#888);font-size:12.5px;">Documentation module (console-docs.js) not loaded — check the script tag + cache-buster.</div>';
+    }
   }
 
   // ── Assembly Tuning Center — Cost Intelligence ─────────────────────
