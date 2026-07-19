@@ -14,7 +14,7 @@
 (function () {
   'use strict';
 
-  var VIEWS = ['purchase-orders', 'change-orders', 'rfis', 'submittals'];
+  var VIEWS = ['purchase-orders', 'bills', 'change-orders', 'rfis', 'submittals'];
   var DEFAULT_VIEW = 'change-orders';
   var _view = null;
 
@@ -37,6 +37,7 @@
   // sub-tabs keeps your filters.
   var _state = {
     'purchase-orders': { status: 'open', job: '', q: '' },
+    bills:             { status: 'open', job: '', q: '' },
     'change-orders':   { status: 'open', job: '', q: '' },
     rfis:              { status: 'open', job: '', q: '' },
     submittals:        { status: 'open', job: '', q: '' }
@@ -109,6 +110,13 @@
     work_complete: ['closed', 'approved'],
     closed: []
   };
+  // Mirrors server/routes/bill-routes.js ALLOWED_TRANSITIONS.
+  var BILL_TRANSITIONS = {
+    open: ['approved', 'void', 'paid'],
+    approved: ['paid', 'open', 'void'],
+    paid: ['approved', 'open'],
+    void: ['open']
+  };
 
   // ── Status badges ──────────────────────────────────────────────────
   var STATUS_COLOR = {
@@ -116,7 +124,8 @@
     open: '#4f8cff', answered: '#34d399', closed: '#8b90a5',
     submitted: '#4f8cff', revise_resubmit: '#fbbf24', rejected: '#f87171',
     pending: '#fbbf24', sent: '#60a5fa', received: '#34d399',
-    issued: '#4f8cff', work_complete: '#2dd4bf'
+    issued: '#4f8cff', work_complete: '#2dd4bf',
+    paid: '#34d399', void: '#8b90a5'
   };
   function poLineTotal(l) {
     if (!l || l.section === '__section_header__') return 0;
@@ -168,6 +177,7 @@
     var host = document.getElementById('jobshub-' + view);
     if (!host) return;
     if (view === 'purchase-orders') return renderPO(host);
+    if (view === 'bills')           return renderBills(host);
     if (view === 'change-orders')   return renderCO(host);
     if (view === 'rfis')            return renderWorkflow(host, 'rfi', 'RFIs');
     if (view === 'submittals')      return renderWorkflow(host, 'submittal', 'Submittals');
@@ -585,6 +595,234 @@
     });
   }
 
+  // ── Bills (Accounts Payable) ───────────────────────────────────────
+  // A Bill is a vendor's invoice recorded against a job and (usually) a
+  // Purchase Order — the money AGX owes. Rows open a lightweight editor
+  // (PO context + editable fields + attach the invoice PDF). Amounts here
+  // are the canonical source for the PO %-billed rollup once S3 repoints
+  // it — the same unified store the PO editor writes to.
+  var LIEN_OPTS = [
+    { v: 'none', label: 'No waiver' },
+    { v: 'conditional', label: 'Conditional' },
+    { v: 'unconditional', label: 'Unconditional' }
+  ];
+  function billVendor(r) {
+    return r.sub_name || (r.data && r.data.vendor) || '';
+  }
+  function renderBills(host) {
+    buildView(host, {
+      key: 'bills',
+      enhanceKey: 'jobshubBills',
+      title: 'Bills',
+      createKind: 'bill',
+      viewsPage: 'bills',
+      bulk: {
+        idAttr: 'data-bill-id',
+        statusOptions: ['open', 'approved', 'paid', 'void'],
+        transitions: BILL_TRANSITIONS,
+        setStatus: function (id, v) { return window.p86Api.bills.setStatus(id, v); },
+        remove: function (id) { return window.p86Api.bills.remove(id); }
+      },
+      onRow: function (tr) {
+        var id = tr.getAttribute('data-bill-id');
+        if (id) openBillEditor(id, function () { if (typeof window.p86JobsHubRefresh === 'function') window.p86JobsHubRefresh(); });
+      },
+      statusOptions: [
+        { v: 'open', label: 'Open (unpaid)' }, { v: 'all', label: 'All' },
+        { v: 'approved', label: 'Approved — ready to pay' }, { v: 'paid', label: 'Paid' }, { v: 'void', label: 'Void' }
+      ],
+      fetch: function (st) {
+        return window.p86Api.bills.listAll({ status: st.status, job: st.job })
+          .then(function (r) { return (r && r.bills) || []; });
+      },
+      matches: function (r, q) {
+        return [r.bill_number, r.po_number, r.job_title, r.job_number, r.sub_name].filter(Boolean).join(' ').toLowerCase().indexOf(q) !== -1;
+      },
+      tableHTML: function (rows) {
+        return '<div class="p86-tbl-scroll"><table class="leads-table jobshub-table"><thead><tr>' +
+          '<th data-col="bill">Bill #</th><th data-col="job">Job</th><th data-col="vendor">Vendor</th><th data-col="po">PO #</th><th class="num" data-col="amount">Amount</th><th data-col="status">Status</th><th data-col="due">Due</th>' +
+          '</tr></thead><tbody>' +
+          rows.map(function (r) {
+            var overdue = r.due_date && r.status !== 'paid' && r.status !== 'void' && new Date(r.due_date).getTime() < Date.now();
+            return '<tr data-job-id="' + esc(r.job_id) + '" data-bill-id="' + esc(r.id) + '">' +
+              '<td data-col="bill"><strong>' + esc(r.bill_number || '—') + '</strong></td>' +
+              '<td data-col="job">' + esc(jobLabelFromRow(r)) + '</td>' +
+              '<td data-col="vendor">' + esc(billVendor(r) || '—') + '</td>' +
+              '<td data-col="po">' + esc(r.po_number || '—') + '</td>' +
+              '<td class="num" data-col="amount">' + money(r.amount) + '</td>' +
+              '<td data-col="status">' + statusBadge(r.status) + '</td>' +
+              '<td data-col="due"' + (overdue ? ' style="color:#f87171;font-weight:600;"' : '') + '>' + esc(fmtDate(r.due_date)) + '</td>' +
+            '</tr>';
+          }).join('') + '</tbody></table></div>';
+      }
+    });
+  }
+
+  // ── Bill editor (PO context + editable fields + attach the invoice) ─
+  // Exposed as window.p86Bills.open so the PO editor + doc-import can reuse it.
+  function openBillEditor(billId, onSaved) {
+    var overlay = document.createElement('div');
+    overlay.className = 'jobshub-modal-overlay';
+    overlay.innerHTML =
+      '<div class="jobshub-modal jobshub-modal-wide" role="dialog" aria-modal="true">' +
+        '<div class="jobshub-modal-head"><span id="jh-bill-head">Bill</span>' +
+          '<button class="jobshub-modal-x" type="button" aria-label="Close">✕</button></div>' +
+        '<div class="jobshub-modal-body"><div class="jobshub-loading">Loading…</div></div>' +
+        '<div class="jobshub-modal-foot" style="display:none;"></div>' +
+      '</div>';
+    document.body.appendChild(overlay);
+    function close() { if (overlay.parentNode) overlay.parentNode.removeChild(overlay); }
+    overlay.addEventListener('click', function (e) { if (e.target === overlay) close(); });
+    overlay.querySelector('.jobshub-modal-x').addEventListener('click', close);
+    var body = overlay.querySelector('.jobshub-modal-body');
+    var foot = overlay.querySelector('.jobshub-modal-foot');
+    var bill = null;
+    var jobPOs = [];   // POs on this bill's job, for the link picker
+    var subs = [];
+
+    function reloadPOsAndSubs(jobId) {
+      var pP = window.p86Api.purchaseOrders.listForJob(jobId).then(function (r) { jobPOs = (r && r.purchase_orders) || []; }).catch(function () { jobPOs = []; });
+      var pS = (window.p86Api.subs ? window.p86Api.subs.list().then(function (r) { subs = (r && r.subs) || (Array.isArray(r) ? r : []); }).catch(function () { subs = []; }) : Promise.resolve());
+      return Promise.all([pP, pS]);
+    }
+
+    function render() {
+      var d = bill.data || {};
+      var subName = function (id) { var s = subs.find(function (x) { return String(x.id) === String(id); }); return s ? (s.name || '') : ''; };
+      var poOpts = '<option value="">— No PO (manual bill) —</option>' + jobPOs.map(function (p) {
+        var vn = p.sub_name || subName(p.sub_id);
+        var label = (p.po_number || 'PO') + (vn ? ' — ' + vn : '') + (p.title ? ' · ' + p.title : '');
+        return '<option value="' + esc(p.id) + '" data-sub="' + esc(p.sub_id || '') + '"' + (String(p.id) === String(bill.po_id) ? ' selected' : '') + '>' + esc(label) + '</option>';
+      }).join('');
+      var subOpts = '<option value="">— Vendor from PO / none —</option>' + subs.map(function (s) {
+        return '<option value="' + esc(s.id) + '"' + (String(s.id) === String(bill.sub_id) ? ' selected' : '') + '>' + esc(s.name || s.id) + '</option>';
+      }).join('');
+      var lienOpts = LIEN_OPTS.map(function (o) { return '<option value="' + o.v + '"' + ((d.lienWaiver || 'none') === o.v ? ' selected' : '') + '>' + o.label + '</option>'; }).join('');
+      overlay.querySelector('#jh-bill-head').innerHTML = esc(bill.bill_number || 'Bill') + ' &nbsp; ' + statusBadge(bill.status);
+      body.innerHTML =
+        '<div class="jobshub-hint-note">' + esc(jobLabelFromRow(bill)) + '</div>' +
+        field('Linked Purchase Order', '<select id="jh-be-po" class="jobshub-input">' + poOpts + '</select>') +
+        '<div class="jobshub-field-row">' +
+          field('Vendor invoice #', '<input id="jh-be-num" type="text" class="jobshub-input" value="' + esc(bill.bill_number || '') + '" placeholder="Vendor\'s invoice number">') +
+          field('Amount', '<input id="jh-be-amt" type="number" step="0.01" min="0" class="jobshub-input" value="' + esc(bill.amount != null ? bill.amount : '') + '">') +
+        '</div>' +
+        '<div class="jobshub-field-row">' +
+          field('Bill date', '<input id="jh-be-bdate" type="date" class="jobshub-input" value="' + esc((bill.bill_date || '').slice(0, 10)) + '">') +
+          field('Due date', '<input id="jh-be-ddate" type="date" class="jobshub-input" value="' + esc((bill.due_date || '').slice(0, 10)) + '">') +
+        '</div>' +
+        '<div class="jobshub-field-row">' +
+          field('Vendor', '<select id="jh-be-sub" class="jobshub-input">' + subOpts + '</select>') +
+          field('Lien waiver', '<select id="jh-be-lien" class="jobshub-input">' + lienOpts + '</select>') +
+        '</div>' +
+        field('Description / notes', '<textarea id="jh-be-desc" class="jobshub-input" rows="2" placeholder="What this bill covers">' + esc(d.description || '') + '</textarea>') +
+        '<div class="jobshub-field"><span class="jobshub-field-label">Invoice document</span><div id="jh-be-atts"><div class="jobshub-loading">Loading attachments…</div></div>' +
+          '<div style="margin-top:6px;"><input id="jh-be-file" type="file" accept="application/pdf,image/*" style="font-size:12px;"><button id="jh-be-upload" class="ee-btn" type="button" style="margin-left:6px;">Attach invoice</button></div></div>';
+      // Auto-fill vendor when the linked PO changes.
+      var poSel = body.querySelector('#jh-be-po');
+      if (poSel) poSel.addEventListener('change', function () {
+        var opt = poSel.options[poSel.selectedIndex];
+        var subId = opt ? opt.getAttribute('data-sub') : '';
+        var subSel = body.querySelector('#jh-be-sub');
+        if (subId && subSel && !subSel.value) subSel.value = subId;
+      });
+      loadAttachments();
+      renderFoot();
+    }
+
+    function loadAttachments() {
+      var wrap = body.querySelector('#jh-be-atts');
+      if (!wrap) return;
+      window.p86Api.attachments.list('bill', bill.id).then(function (r) {
+        var atts = (r && r.attachments) || (Array.isArray(r) ? r : []);
+        if (!atts.length) { wrap.innerHTML = '<div style="color:var(--text-dim,#888);font-size:12px;">No invoice attached yet.</div>'; return; }
+        wrap.innerHTML = atts.map(function (a) {
+          var url = a.url || ('/api/attachments/file/' + encodeURIComponent(a.id));
+          return '<div style="display:flex;align-items:center;gap:8px;font-size:12px;padding:2px 0;">' +
+            '<a href="' + esc(url) + '" target="_blank" rel="noopener" style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(a.filename || a.original_name || 'file') + '</a>' +
+            '<a href="#" data-del-att="' + esc(a.id) + '" title="Remove" style="color:#f87171;text-decoration:none;">✕</a></div>';
+        }).join('');
+        wrap.querySelectorAll('[data-del-att]').forEach(function (x) {
+          x.addEventListener('click', function (e) {
+            e.preventDefault();
+            window.p86Api.attachments.remove(x.getAttribute('data-del-att')).then(loadAttachments).catch(function () {});
+          });
+        });
+      }).catch(function () { wrap.innerHTML = '<div style="color:#f87171;font-size:12px;">Could not load attachments.</div>'; });
+    }
+
+    function renderFoot() {
+      var trans = BILL_TRANSITIONS[bill.status] || [];
+      var LABELS = { approved: 'Approve', paid: 'Mark paid', void: 'Void', open: 'Reopen' };
+      var stBtns = trans.map(function (s) {
+        return '<button class="ee-btn jh-be-status" data-status="' + s + '" type="button"' + (s === 'void' ? ' style="color:#f87171;"' : '') + '>' + (LABELS[s] || s) + '</button>';
+      }).join('');
+      foot.style.display = '';
+      foot.innerHTML =
+        '<button class="ee-btn jh-be-del" type="button" style="color:#f87171;">Delete</button>' +
+        '<span style="flex:1 1 auto"></span>' + stBtns +
+        '<button class="ee-btn jobshub-cancel" type="button">Close</button>' +
+        '<button class="ee-btn primary jh-be-save" type="button">Save</button>';
+      foot.querySelector('.jobshub-cancel').addEventListener('click', close);
+      foot.querySelector('.jh-be-save').addEventListener('click', save);
+      foot.querySelector('.jh-be-del').addEventListener('click', del);
+      foot.querySelectorAll('.jh-be-status').forEach(function (b) {
+        b.addEventListener('click', function () { setStatus(b.getAttribute('data-status')); });
+      });
+    }
+
+    function collect() {
+      var v = function (id) { var el = body.querySelector('#' + id); return el ? String(el.value || '').trim() : ''; };
+      return {
+        po_id: v('jh-be-po') || null,
+        sub_id: v('jh-be-sub') || null,
+        bill_number: v('jh-be-num'),
+        amount: v('jh-be-amt'),
+        bill_date: v('jh-be-bdate') || null,
+        due_date: v('jh-be-ddate') || null,
+        data: { description: v('jh-be-desc'), lienWaiver: v('jh-be-lien') || 'none' }
+      };
+    }
+    function save() {
+      var btn = foot.querySelector('.jh-be-save'); btn.disabled = true; btn.textContent = 'Saving…';
+      window.p86Api.bills.update(bill.id, collect())
+        .then(function (r) { bill = (r && r.bill) || bill; close(); if (typeof onSaved === 'function') onSaved(); })
+        .catch(function (e) { btn.disabled = false; btn.textContent = 'Save'; alert('Could not save: ' + ((e && e.message) || 'error')); });
+    }
+    function setStatus(s) {
+      window.p86Api.bills.setStatus(bill.id, s)
+        .then(function (r) { bill = (r && r.bill) || bill; render(); if (typeof onSaved === 'function') onSaved(); })
+        .catch(function (e) { alert('Could not change status: ' + ((e && e.message) || 'error')); });
+    }
+    function del() {
+      bulkConfirm({ title: 'Delete bill', message: 'Delete this bill? This cannot be undone.', confirmLabel: 'Delete', danger: true }).then(function (ok) {
+        if (!ok) return;
+        window.p86Api.bills.remove(bill.id).then(function () { close(); if (typeof onSaved === 'function') onSaved(); })
+          .catch(function (e) { alert('Could not delete: ' + ((e && e.message) || 'error')); });
+      });
+    }
+
+    // Wire the upload button once (delegated so it survives re-render).
+    overlay.addEventListener('click', function (e) {
+      if (!e.target || e.target.id !== 'jh-be-upload') return;
+      var fileEl = body.querySelector('#jh-be-file');
+      var file = fileEl && fileEl.files && fileEl.files[0];
+      if (!file) { alert('Pick a PDF or image first.'); return; }
+      e.target.disabled = true; e.target.textContent = 'Uploading…';
+      window.p86Api.attachments.upload('bill', bill.id, file, { geo: false })
+        .then(function () { if (fileEl) fileEl.value = ''; loadAttachments(); })
+        .catch(function (err) { alert('Upload failed: ' + ((err && err.message) || 'error')); })
+        .then(function () { var b = body.querySelector('#jh-be-upload'); if (b) { b.disabled = false; b.textContent = 'Attach invoice'; } });
+    });
+
+    window.p86Api.bills.get(billId).then(function (r) {
+      bill = r && r.bill;
+      if (!bill) { body.innerHTML = '<div class="jobshub-error">Bill not found.</div>'; return; }
+      return reloadPOsAndSubs(bill.job_id).then(render);
+    }).catch(function (e) {
+      body.innerHTML = '<div class="jobshub-error">Could not load bill: ' + esc((e && e.message) || 'error') + '</div>';
+    });
+  }
+
   // ── Create modal (required job picker + entity fields) ─────────────
   function jobPickerOptions() {
     var jobs = jobsList().slice();
@@ -604,7 +842,8 @@
     co:        { title: 'New Change Order',   requiredLabel: 'Title' },
     rfi:       { title: 'New RFI',            requiredLabel: 'Subject' },
     submittal: { title: 'New Submittal',      requiredLabel: 'Subject' },
-    po:        { title: 'New Purchase Order', requiredLabel: 'Title' }
+    po:        { title: 'New Purchase Order', requiredLabel: 'Title' },
+    bill:      { title: 'New Bill',           requiredLabel: 'Amount' }
   };
 
   function fieldsHTML(kind) {
@@ -616,6 +855,20 @@
           field('', '<label class="jobshub-inline-check"><input id="jh-cr-materials" type="checkbox"> Materials only</label>') +
         '</div>' +
         '<div class="jobshub-hint-note">The scope-of-work contract is seeded from your org template — add line items &amp; details in the editor that opens.</div>';
+    }
+    if (kind === 'bill') {
+      return field('Purchase Order (link the bill to a PO)', '<select id="jh-cr-po" class="jobshub-input"><option value="">— Pick a job first —</option></select>') +
+        '<div class="jobshub-field-row">' +
+          field('Amount', '<input id="jh-cr-amount" type="number" step="0.01" min="0" class="jobshub-input" placeholder="0.00">', true) +
+          field('Vendor invoice # (optional)', '<input id="jh-cr-billnum" type="text" class="jobshub-input" placeholder="Vendor\'s invoice number">') +
+        '</div>' +
+        field('Vendor (optional — inherited from PO)', '<select id="jh-cr-sub" class="jobshub-input"><option value="">— Select sub —</option></select>') +
+        '<div class="jobshub-field-row">' +
+          field('Bill date (optional)', '<input id="jh-cr-bdate" type="date" class="jobshub-input">') +
+          field('Due date (optional)', '<input id="jh-cr-ddate" type="date" class="jobshub-input">') +
+        '</div>' +
+        field('Description (optional)', '<textarea id="jh-cr-desc" class="jobshub-input" rows="2" placeholder="What this bill covers"></textarea>') +
+        '<div class="jobshub-hint-note">Attach the invoice PDF after creating — the editor opens automatically.</div>';
     }
     if (kind === 'co') {
       return field('Title', '<input id="jh-cr-title" type="text" class="jobshub-input" placeholder="e.g. Framing and Decking">', true) +
@@ -678,6 +931,41 @@
         }
       }).catch(function () {});
     }
+    // Bill create: populate the vendor picker, and repopulate the PO picker
+    // whenever the job changes (a bill links a PO on its own job). Picking a
+    // PO auto-fills the vendor from that PO.
+    if (kind === 'bill' && window.p86Api) {
+      if (window.p86Api.subs) {
+        window.p86Api.subs.list().then(function (r) {
+          var subs = (r && r.subs) || (Array.isArray(r) ? r : []);
+          var sel = overlay.querySelector('#jh-cr-sub');
+          if (sel) sel.innerHTML = '<option value="">— Select sub —</option>' + subs.map(function (s) {
+            return '<option value="' + esc(s.id) + '">' + esc(s.name || s.id) + '</option>';
+          }).join('');
+        }).catch(function () {});
+      }
+      var jobSel = overlay.querySelector('#jh-cr-job');
+      var poSel = overlay.querySelector('#jh-cr-po');
+      function loadPOsForJob(jobId) {
+        if (!poSel) return;
+        if (!jobId) { poSel.innerHTML = '<option value="">— Pick a job first —</option>'; return; }
+        poSel.innerHTML = '<option value="">Loading POs…</option>';
+        window.p86Api.purchaseOrders.listForJob(jobId).then(function (r) {
+          var pos = (r && r.purchase_orders) || [];
+          poSel.innerHTML = '<option value="">— No PO (manual bill) —</option>' + pos.map(function (p) {
+            var label = (p.po_number || 'PO') + (p.sub_name ? ' — ' + p.sub_name : '') + (p.title ? ' · ' + p.title : '');
+            return '<option value="' + esc(p.id) + '" data-sub="' + esc(p.sub_id || '') + '">' + esc(label) + '</option>';
+          }).join('');
+        }).catch(function () { poSel.innerHTML = '<option value="">— No PO (manual bill) —</option>'; });
+      }
+      if (jobSel) jobSel.addEventListener('change', function () { loadPOsForJob(jobSel.value); });
+      if (poSel) poSel.addEventListener('change', function () {
+        var opt = poSel.options[poSel.selectedIndex];
+        var subId = opt ? opt.getAttribute('data-sub') : '';
+        var subSel = overlay.querySelector('#jh-cr-sub');
+        if (subId && subSel && !subSel.value) subSel.value = subId;
+      });
+    }
     var firstInput = overlay.querySelector('#jh-cr-job');
     if (firstInput) firstInput.focus();
   }
@@ -687,6 +975,31 @@
   function submitCreate(kind, close, onSaved, saveBtn) {
     var jobId = val('jh-cr-job');
     if (!jobId) { alert('Please pick a job first.'); return; }
+
+    if (kind === 'bill') {
+      var amt = val('jh-cr-amount');
+      if (!amt || Number(amt) <= 0) { alert('Please enter the bill amount.'); return; }
+      saveBtn.disabled = true; saveBtn.textContent = 'Creating…';
+      var billPayload = {
+        po_id: val('jh-cr-po') || null,
+        sub_id: val('jh-cr-sub') || null,
+        amount: amt,
+        bill_number: val('jh-cr-billnum') || null,
+        bill_date: val('jh-cr-bdate') || null,
+        due_date: val('jh-cr-ddate') || null,
+        data: { description: val('jh-cr-desc') }
+      };
+      window.p86Api.bills.create(jobId, billPayload)
+        .then(function (res) {
+          close();
+          if (typeof onSaved === 'function') onSaved();
+          var id = res && res.bill && res.bill.id;
+          if (id) openBillEditor(id, function () { if (typeof onSaved === 'function') onSaved(); });
+        })
+        .catch(function (err) { saveBtn.disabled = false; saveBtn.textContent = 'Create'; alert('Could not create the bill: ' + ((err && err.message) || 'error')); });
+      return;
+    }
+
     var titleKind = (kind === 'co' || kind === 'po');
     var required = titleKind ? val('jh-cr-title') : val('jh-cr-subject');
     if (!required) { alert('Please enter a ' + (titleKind ? 'title' : 'subject') + '.'); return; }
@@ -789,4 +1102,8 @@
 
   window.p86JobsHub = { renderJobsHubInto: renderJobsHubInto, switchJobsHubSubTab: switchJobsHubSubTab };
   window.switchJobsHubSubTab = switchJobsHubSubTab;
+  // Bill editor exposed for reuse (PO editor "Bills" section in S3,
+  // doc-import OCR-to-bill in S4). open(id, onSaved) — onSaved fires after
+  // any save / status change / delete.
+  window.p86Bills = { open: openBillEditor };
 })();

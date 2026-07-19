@@ -387,8 +387,8 @@
                         window.switchConsoleSubTab(consoleSub);
                     }
                     // Jobs hub accordion children carry data-jobshub-subtab
-                    // (purchase-orders / change-orders / rfis / submittals) —
-                    // same pattern as data-console-subtab.
+                    // (purchase-orders / bills / change-orders / rfis /
+                    // submittals) — same pattern as data-console-subtab.
                     const jobshubSub = btn.getAttribute('data-jobshub-subtab');
                     if (jobshubSub && typeof window.switchJobsHubSubTab === 'function') {
                         window.switchJobsHubSubTab(jobshubSub);
