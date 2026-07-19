@@ -775,9 +775,11 @@
         html +=
           '<tr class="p86-co-section-row" data-line-id="' + escapeAttr(l.id) + '">' +
             '<td colspan="3">' +
-              '<input class="p86-co-section-label" type="text" data-line-field="label" value="' + escapeAttr(l.label || '') + '" placeholder="Section name" />' +
-              '<label class="p86-co-sec-override" title="Ignore per-line markups — the section markup drives every line in it" style="font-size:10px;color:var(--text-dim,#8a93a6);margin-left:10px;white-space:nowrap;">' +
-                '<input type="checkbox" data-line-field="overrideLineMarkups"' + (l.overrideLineMarkups ? ' checked' : '') + ' style="vertical-align:middle;margin-right:3px;" />override lines</label>' +
+              '<div style="display:flex;align-items:center;gap:12px;">' +
+                '<input class="p86-co-section-label" type="text" data-line-field="label" value="' + escapeAttr(l.label || '') + '" placeholder="Section name" style="flex:1;min-width:0;" />' +
+                '<label class="p86-co-sec-override" title="Ignore per-line markups — the section markup drives every line in it" style="display:inline-flex;align-items:center;gap:4px;font-size:10px;font-weight:400;text-transform:none;letter-spacing:normal;color:var(--text-dim,#8a93a6);white-space:nowrap;cursor:pointer;">' +
+                  '<input type="checkbox" data-line-field="overrideLineMarkups"' + (l.overrideLineMarkups ? ' checked' : '') + ' style="margin:0;" />override lines</label>' +
+              '</div>' +
             '</td>' +
             '<td class="markup" style="white-space:nowrap;">' +
               '<button type="button" class="p86-co-sec-mode" data-sec-mode="' + escapeAttr(l.id) + '" title="Toggle percent markup / flat dollar add" style="min-width:24px;padding:2px 6px;font-size:11px;font-weight:700;border-radius:5px;border:1px solid rgba(255,255,255,0.18);background:rgba(255,255,255,0.06);color:inherit;cursor:pointer;vertical-align:middle;">' + (dollar ? '$' : '%') + '</button> ' +
@@ -840,6 +842,19 @@
           if (isHeaderRow) { paintTotals(); }   // child ext cells refresh on next paint
           else { paintLineExt(tr); paintTotals(); }
         });
+        // Decimal fields commit on 'input' but keep the prior value when the
+        // text is unparseable. On blur, reconcile the field's display back to
+        // the stored value so a malformed entry (e.g. "15.0.0") can't sit
+        // there looking edited while the priced value silently stayed old.
+        if (['qty', 'unitCost', 'markup'].indexOf(input.getAttribute('data-line-field')) !== -1) {
+          input.addEventListener('blur', function() {
+            var line = (_state.co.lines || []).find(function(x) { return String(x.id) === String(lineId); });
+            if (!line) return;
+            var f = input.getAttribute('data-line-field');
+            var stored = line[f];
+            input.value = (stored === '' || stored == null) ? '' : String(stored);
+          });
+        }
       });
       var del = tr.querySelector('[data-line-del]');
       if (del) del.addEventListener('click', function() {
