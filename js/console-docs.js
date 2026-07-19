@@ -50,6 +50,32 @@
       '</svg></div>';
   }
 
+  // ── The parametric / drawing-driven data-flow diagram ───────────────
+  function paramFlowDiagram() {
+    var box = function (x, y, w, title, sub, fill, stroke) {
+      return '<rect x="' + x + '" y="' + y + '" width="' + w + '" height="46" rx="8" fill="' + fill + '" stroke="' + stroke + '" stroke-width="1"/>' +
+        '<text x="' + (x + w / 2) + '" y="' + (y + 20) + '" text-anchor="middle" font-size="12" font-weight="600" fill="#e8e8ea">' + title + '</text>' +
+        '<text x="' + (x + w / 2) + '" y="' + (y + 35) + '" text-anchor="middle" font-size="10" fill="#9a9aa2">' + sub + '</text>';
+    };
+    var arrow = function (x1, y1, x2, y2) {
+      return '<line x1="' + x1 + '" y1="' + y1 + '" x2="' + x2 + '" y2="' + y2 + '" stroke="#5b5b66" stroke-width="1.5" marker-end="url(#p86docArr2)"/>';
+    };
+    return '<div class="p86doc-diagram"><svg viewBox="0 0 680 250" width="100%" role="img" aria-label="Parametric assembly data flow">' +
+      '<defs><marker id="p86docArr2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">' +
+      '<path d="M2 1L8 5L2 9" fill="none" stroke="#5b5b66" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>' +
+      box(14, 12, 156, 'Draw a shape', 'geometry → Q', 'rgba(79,140,255,0.12)', '#4f8cff') +
+      box(14, 100, 156, 'Measure a takeoff', 'LF / SF / count → Q', 'rgba(79,140,255,0.12)', '#4f8cff') +
+      box(14, 188, 156, 'Type a quantity', 'Scope Builder → Q', 'rgba(79,140,255,0.12)', '#4f8cff') +
+      box(268, 100, 150, 'explode()', 'Q + params + formula', 'rgba(124,58,237,0.14)', '#a78bfa') +
+      box(510, 12, 156, 'Priced BOM', 'live catalog $', 'rgba(52,211,153,0.10)', '#34d399') +
+      box(510, 100, 156, 'Rollup by bucket', 'materials/labor/gc/sub', 'rgba(255,255,255,0.05)', '#5b5b66') +
+      box(510, 188, 156, 'Estimate lines', 'idempotent placementKey', 'rgba(251,191,36,0.10)', '#fbbf24') +
+      arrow(170, 35, 268, 112) + arrow(170, 123, 268, 123) + arrow(170, 211, 268, 134) +
+      arrow(418, 112, 510, 40) + arrow(418, 123, 510, 123) +
+      arrow(588, 146, 588, 188) +
+      '</svg></div>';
+  }
+
   // ────────────────────────────────────────────────────────────────────
   var ARTICLES = [
     {
@@ -199,6 +225,150 @@
               ['86 write path', code('server/services/payload-dispatcher.js → dispatchAssembly')],
               ['86 read tools', code('server/routes/ai-routes.js (read_assemblies, read_assembly_taxonomy)')]
             ])
+        }
+      ]
+    },
+    {
+      id: 'parametric-assemblies',
+      title: 'Parametric assemblies & drawing-driven estimating',
+      category: 'Estimating',
+      icon: '📐',
+      updated: '2026-07-19',
+      summary: 'Assemblies whose quantity comes from a formula and a drawing — measure or draw the work, and the parts and price compute themselves.',
+      sections: [
+        {
+          h: 'From “one unit” to “your quantity”',
+          html:
+            '<p>A base <b>assembly</b> prices <b>one installed output unit</b> of work (see <i>Assemblies &amp; the code protocol</i>). The <b>parametric layer</b> adds the missing half: instead of you supplying the takeoff quantity by hand, a <b>formula</b> computes each item’s quantity from the job’s real dimensions — and those dimensions can come straight off a <b>drawing</b>.</p>' +
+            '<p>That is the idea John calls <b>Revit-lite</b>: <b>draw</b> the fence, <b>measure</b> the wall, or <b>type</b> the run — and the parts and price fall out. One pricing engine sits behind all three; only the way you supply the takeoff quantity <code>Q</code> differs.</p>' +
+            paramFlowDiagram()
+        },
+        {
+          h: 'Q and the parameters',
+          html:
+            '<p><b>' + code('Q') + ' is reserved</b> — it is always the <b>takeoff quantity in the assembly’s output unit</b> (100 LF of fence, 850 SF of stucco, 6 EA of posts). Every parametric recipe can rely on it without declaring it.</p>' +
+            '<p>On top of Q you declare up to <b>12 parameters</b> — geometry knobs like height, post spacing, or number of coats:</p>' +
+            table(['field', 'meaning'], [
+              [code('key'), 'the identifier used in formulas (letter-led, ≤16 chars; ' + code('Q') + ' is rejected)'],
+              [code('label') + ' / ' + code('unit'), 'human labels for the input'],
+              [code('default'), 'the value used when the input is left blank'],
+              [code('min') + ' / ' + code('max'), 'optional clamp (an authoring guardrail)']
+            ]) +
+            '<p>Each recipe item then carries a <b>' + code('qty_formula') + '</b> — an expression that computes that item’s <b>total</b> quantity from Q and the params. The canonical idiom is <code>ceil(Q/S)+1</code> (“a post every S feet, plus the end post”).</p>' +
+            callout('note', 'Formula total vs per-unit',
+              '<p>A formula computes the <b>absolute total</b> (already scaled by Q). A plain item without a formula keeps ' + code('qty_per_unit') + ' — its quantity <i>per one output unit</i> — and is multiplied by Q at explode time. A recipe can mix both.</p>')
+        },
+        {
+          h: 'One formula engine, both sides',
+          html:
+            '<p>Formulas run through a single shared evaluator, ' + code('js/assembly-formula.js') + ', loaded <b>both</b> in the browser (' + code('window.p86Formula') + ', for live previews) and on the server (' + code('require') + ', for the real explode). Same code — so a formula can <b>never</b> compute a different number in the two places money is shown.</p>' +
+            '<p>It supports <code>+ − × ÷</code>, parentheses, unary minus, and seven functions — <code>ceil floor round abs sqrt min max</code> — over Q and the params. It is a hand-written parser: <b>no</b> ' + code('eval') + ', no ' + code('Function()') + '; unknown names and prototype tricks (' + code('constructor') + ', ' + code('__proto__') + ') resolve to an error, not to code.</p>' +
+            callout('key', 'The float-noise snap — the parametric money bug',
+              '<p>IEEE math makes <code>0.1×3×10 = 3.0000000000000004</code>, so a naïve <code>ceil()</code> would over-count by one and silently <b>over-order material</b>. Inside <code>ceil</code>/<code>floor</code>/<code>round</code> the engine first <b>snaps</b> any value within 1e-9 of an integer to that integer. Since <code>ceil(Q/S)</code> is the canonical quantity idiom, this guard is load-bearing.</p>') +
+            callout('warn', 'Blank is absent, not zero',
+              '<p>A blank, null, or boolean input is treated as <b>not supplied</b> (the recipe’s ' + code('default') + ' is used), never coerced to 0. ' + code('Number("")===0') + ' would silently zero-price a cleared dimension — so the engine refuses it instead.</p>')
+        },
+        {
+          h: 'Explode: Q + params → priced parts',
+          html:
+            '<p>' + code('POST /api/assemblies/:id/explode') + ' with a scope ' + code('{Q, H, …}') + ' returns the final <b>priced leaf rows</b>. The server builds the scope (Q + param defaults, your values overlaid, then clamped), evaluates every formula, applies waste, and recurses into nested sub-assemblies (cycle- and depth-guarded at 4 levels).</p>' +
+            '<p>Two shapes come out, chosen by <b>mode</b>:</p>' +
+            table(['mode', 'result'], [
+              [code('rollup') + ' (default)', 'one line per cost bucket — Materials / Labor / GC / Subs — each carrying its leaf breakdown'],
+              [code('exploded'), 'one line per individual leaf item']
+            ]) +
+            callout('key', 'Never a silent $0',
+              '<p>A material row with a blank ' + code('unit_cost') + ' prices from the <b>live catalog</b> (last purchase price). If nothing prices it, the row comes back <b>unpriced</b> and the response is flagged ' + code('incomplete') + ' — surfaced as “no price”, never counted as zero. A formula error omits that one row and reports the error rather than pricing it $0.</p>') +
+            callout('note', 'Formulas fire at the root only',
+              '<p>A ' + code('qty_formula') + ' drives quantity only when the assembly is inserted <b>directly</b>. The same item reached <i>inside</i> a nested sub-assembly falls back to its linear per-unit quantity (with a warning) — a nested formula is an absolute total that would double-count across the parent’s N copies.</p>')
+        },
+        {
+          h: 'Where you drive it',
+          html:
+            '<p>Four surfaces feed Q into the same explode. The first three are the desk / field flows; the fourth is Revit-lite (its own section below).</p>' +
+            table(['surface', 'where', 'how Q arrives'], [
+              ['<b>Recipe preview</b>', '/assemblies editor', 'a sample Q=100 + typed dims — a live “Parametric preview” bar so the author sees exact cost before saving'],
+              ['<b>Scope Builder</b>', 'estimate → Materials drawer → 🧩', 'stack recipes and type Q + dimensions; a debounced server reprice shows the true total, then Insert'],
+              ['<b>Quantify</b>', 'Plans &amp; Takeoffs / photo markup', 'measure a run (LF), region (SF), or count (EA); the measurement becomes Q'],
+              ['<b>Revit-lite</b>', 'CAD sheet editor', 'draw a shape and its own geometry becomes Q']
+            ]) +
+            callout('note', 'Interim vs true price',
+              '<p>Before the first explode returns, a surface may show a quick <b>linear</b> estimate (q × per-unit). It snaps to the exact formula-computed total the moment the server responds. The recipe editor’s header “$/unit” chip is always linear and marks itself with a ' + code('·ƒ') + ' when formulas are present — read the preview bar, not the chip, for the parametric price.</p>')
+        },
+        {
+          h: 'Revit-lite — draw the work',
+          html:
+            '<p>In the CAD sheet editor, select a drawn object — line, rectangle, polyline, ellipse, hatch, wipeout, or symbol — and a <b>🧩 Assembly</b> picker appears in the Properties inspector. Pick a parametric assembly and its <b>geometry drives Q</b>:</p>' +
+            table(['output unit', 'Q comes from'], [
+              [code('LF'), 'the object’s length ÷ 12 (model inches → feet)'],
+              [code('SF') + ' / ' + code('SQ'), 'the closed shape’s area (shoelace ÷ 144; SQ also ÷ 100 for roofing squares)'],
+              [code('EA'), '1 per placement (array-copy for N)'],
+              [code('other'), 'SY / CY / CF / HR… → <b>warned, never priced</b> (a 2D drawing can’t supply them)']
+            ]) +
+            '<p>The binding is a tiny ' + code('{id, name, unit, mode, params}') + ' object stored right on the drawn entity. It <b>persists with the drawing</b>, is <b>undoable</b>, and is carried automatically by duplicate / array / mirror. A priced <b>Bill of Materials</b> renders live under the picker, and reshaping the object with a grip <b>re-prices</b> it from the new size.</p>' +
+            callout('key', 'Live price, never frozen on the drawing',
+              '<p>Only the lightweight binding is saved — <b>never</b> the dollars. The BOM is re-fetched from the catalog every session (cache-first within a session, with a monotonic token so a stale response can’t paint the wrong assembly’s parts). So a catalog price change always reflects.</p>')
+        },
+        {
+          h: 'Push a drawing into an estimate',
+          html:
+            '<p>A whole-drawing <b>🧩 Bill of Materials</b> rollup sums every bound object (grouped by assembly), and <b>Push to estimate</b> sends it into an editable estimate. The server <b>re-explodes</b> each placement itself — the client’s numbers are never trusted — under a row lock, refuses a locked (sold) estimate, and refuses to append a partial / unpriced cost.</p>' +
+            '<p>The critical property is <b>idempotency</b>. Each placement carries a stable ' + code('placement_key') + ' = ' + code('plan:object:assembly') + '. On the server, a key that is already present <b>deletes that placement’s prior lines before re-inserting</b> — so:</p>' +
+            table(['action', 'estimate lines'], [
+              ['first push', 'inserted'],
+              ['<b>re-push the same drawing</b>', '<b>replaced — never doubled</b>'],
+              ['resize an object, push again', 'that placement re-priced in place'],
+              ['add a second object, push', 'added alongside; the first untouched']
+            ]) +
+            callout('key', 'Why this matters',
+              '<p>The append endpoint is otherwise append-only, so without the key, pushing a drawing twice would duplicate the entire thing. The ' + code('placement_key') + ' makes a push a <b>clean re-sync</b> — you can push after every edit and the estimate stays correct. (The Quantify / desk flows carry no key, so they stay plain append, unchanged.)</p>') +
+            callout('note', 'Offline-safe merge',
+              '<p>The app is offline-first — a save ships the whole portfolio. After each append the client splices the server’s fresh lines into its in-memory copy and reconverges, so a pending background save preserves the push instead of clobbering it.</p>')
+        },
+        {
+          h: 'Money-correctness invariants',
+          html:
+            '<ul>' +
+            '<li><b>One math, both sides</b> — the same ' + code('js/assembly-formula.js') + ' runs in the preview and the server explode; the price you see is the price you get.</li>' +
+            '<li><b>Never a silent $0</b> — unpriced items surface as ' + code('incomplete') + '; formula errors omit-and-report; a push refuses partial cost.</li>' +
+            '<li><b>Blank ≠ 0</b> — a cleared dimension uses the recipe default, never zero.</li>' +
+            '<li><b>Live catalog pricing</b> — material rows reprice from purchase history; dollars are never frozen onto a drawing.</li>' +
+            '<li><b>Server is the source of truth</b> — on push the server re-explodes, so a stale or tampered client can’t inject a wrong price.</li>' +
+            '<li><b>Unknown units warn</b> — a unit a 2D drawing can’t measure (SY / CY / HR…) is refused, never defaulted to 1.</li>' +
+            '<li><b>Idempotent push</b> — ' + code('placement_key') + ' makes a re-push a replace, not a duplicate.</li>' +
+            '</ul>'
+        },
+        {
+          h: 'Data model & where the code lives',
+          html:
+            table(['field', 'on', 'holds'], [
+              [code('params'), code('assemblies'), 'the ' + code('{key,label,unit,default,min,max}') + ' declaration (JSONB)'],
+              [code('qty_formula'), code('assembly_items'), 'the per-item quantity expression (else ' + code('qty_per_unit') + ')'],
+              [code('sourceAssemblyId') + ' + ' + code('assemblyParams'), 'estimate line', 'which assembly + the scope it priced at (lets a line re-price and skips the per-unit refresh)'],
+              [code('sourcePlacement'), 'estimate line', 'the ' + code('plan:object:assembly') + ' key that makes a re-push replace it']
+            ]) +
+            table(['layer', 'file'], [
+              ['Shared formula engine (browser + server)', code('js/assembly-formula.js')],
+              ['Params · explode · pricing', code('server/services/assemblies.js')],
+              ['Explode / create / items REST', code('server/routes/assembly-routes.js')],
+              ['Estimate line routing + placementKey idempotency', code('server/services/estimate-lines.js')],
+              ['append-assembly + bulk-save', code('server/routes/estimate-routes.js')],
+              ['Recipe editor + preview bar', code('js/assemblies.js')],
+              ['Scope Builder (stack &amp; type Q)', code('js/materials-drawer.js')],
+              ['Quantify (measure → Q)', code('js/markup-viewer.js')],
+              ['Revit-lite (draw → Q, BOM, push)', code('js/sheet-editor.js')]
+            ])
+        },
+        {
+          h: 'Where it goes next',
+          html:
+            '<p>Shipped today: parametric recipes (S0), Quantify takeoffs (S1 / S1b), and Revit-lite drawing binding + rollup + idempotent push (RL-0…RL-2).</p>' +
+            '<ul>' +
+            '<li><b>RL-3</b> — a place-first “Place assembly” ribbon tool (draw <i>as</i> the assembly) + on-canvas name / $ badges.</li>' +
+            '<li><b>RL-4</b> — a batch-explode endpoint and a running $ summary on the plan list row.</li>' +
+            '</ul>' +
+            callout('note', 'The tiers above Revit-lite',
+              '<p>Tier 2 would be 2.5D (height-aware); Tier 3 is true 3D BIM, which means <b>integrating</b> an existing engine (OpenCascade / web-ifc), never writing one. For estimating, ~95% of the value already lands at this 2D tier — the drawing’s footprint is what prices the work.</p>')
         }
       ]
     }
