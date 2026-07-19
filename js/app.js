@@ -1923,6 +1923,15 @@
                 if (ccHost && ccHost.firstChild) ccHost.innerHTML = '';
             }
 
+            // Leaving the Assembly Studio: the build/tune Studio sub-tab docks
+            // the singleton 86 panel; pop it back to its drawer before the
+            // pane re-renders on re-entry, same rescue as the Command Center.
+            if (tabName !== 'assembly-studio') {
+                if (window.p86AI && typeof window.p86AI.undock === 'function' && window.p86AI.isDocked && window.p86AI.isDocked()) {
+                    try { window.p86AI.undock(); } catch (e) {}
+                }
+            }
+
             if (tabName === 'summary') {
                 renderSummaryDashboard();
             } else if (tabName === 'my-files') {

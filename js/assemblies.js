@@ -96,8 +96,17 @@
   // original estimates host working unchanged. Only one surface is visible
   // at a time, so a shared module-level prefix is safe.
   var _hostPrefix = 'assemblies';
-  function renderList(prefix) {
+  var _filterFn = null;   // when set, paintList shows only matching rows (e.g. parametric)
+  // A recipe is "parametric" if it declares params or carries any qty_formula
+  // (the exact pair the /:id/explode parametric-insert path keys on — see
+  // assembly-routes.js GET '/'). Used by the Assembly Studio → Parametric tab.
+  function isParametric(a) { return !!((a.params && a.params.length) || a.has_formulas); }
+  function renderList(prefix, opts) {
     if (prefix) _hostPrefix = String(prefix);
+    // Reset the view filter only on a deliberate view switch (a prefix or
+    // opts were passed). A bare renderList() — the post-save/delete refresh —
+    // preserves whatever filter the current view set (e.g. Parametric).
+    if (prefix || opts) _filterFn = (opts && opts.parametricOnly) ? isParametric : null;
     var host = document.getElementById(_hostPrefix + '-list');
     if (!host) return;
     host.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);text-align:center;">Loading assemblies…</div>';
@@ -146,22 +155,31 @@
     if (!host) return;
     var q = (document.getElementById(_hostPrefix + '-search') || { value: '' }).value.trim().toLowerCase();
     var summary = document.getElementById(_hostPrefix + '-summary');
+    // Apply any active view filter (e.g. Parametric) BEFORE search/tree so
+    // both the summary count and the grouping reflect the visible subset.
+    var list = _filterFn ? _list.filter(_filterFn) : _list;
+    var noun = _filterFn ? 'parametric assemblies' : 'assemblies';
 
     // Search → flat filtered table (search shouldn't fight the tree).
     if (q) {
-      var rows = _list.filter(function (a) {
+      var rows = list.filter(function (a) {
         return ((a.name || '') + ' ' + (a.code || '') + ' ' + (a.trade || '') + ' ' + (a.system || '') + ' ' + (a.variant || '')).toLowerCase().indexOf(q) !== -1;
       });
-      if (summary) summary.textContent = rows.length + ' of ' + _list.length + ' assemblies';
+      if (summary) summary.textContent = rows.length + ' of ' + list.length + ' ' + noun;
       host.innerHTML = rows.length ? assemblyTable(rows, true) : emptyMsg();
       return;
     }
-    if (summary) summary.textContent = _list.length + ' assemblies';
-    if (!_list.length) { host.innerHTML = emptyMsg(); return; }
+    if (summary) summary.textContent = list.length + ' ' + noun;
+    if (!list.length) {
+      host.innerHTML = _filterFn
+        ? '<div style="padding:28px;color:var(--text-dim,#888);text-align:center;">No parametric recipes yet. Add parameters or a quantity formula to an assembly and it appears here — then it drives quantities from geometry on the plan.</div>'
+        : emptyMsg();
+      return;
+    }
 
     // Tree: Trade → System.
     var byTrade = {};
-    _list.forEach(function (a) {
+    list.forEach(function (a) {
       var tc = up(a.trade) || '(UNCLASSIFIED)';
       (byTrade[tc] = byTrade[tc] || []).push(a);
     });

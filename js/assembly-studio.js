@@ -69,6 +69,15 @@
 
   function switchSubTab(view) {
     if (VIEWS.indexOf(view) < 0) view = DEFAULT_VIEW;
+    // Leaving the Studio sub-tab: pop the docked 86 panel back to its drawer
+    // BEFORE its host (#cc-asm-chat) goes display:none — the panel is a
+    // page-wide singleton and would vanish inside a hidden host otherwise
+    // (mirrors console.js switchConsoleSubTab).
+    var prev = _view;
+    if (prev === 'studio' && view !== 'studio' && window.p86AI &&
+        typeof window.p86AI.isDocked === 'function' && window.p86AI.isDocked()) {
+      try { window.p86AI.undock(); } catch (e) {}
+    }
     _view = view;
     try { sessionStorage.setItem('p86_asmstudio_tab', view); } catch (e) {}
     // If the pane isn't built yet (sub-tab clicked before the tab opened),
@@ -97,13 +106,55 @@
     // Studio / Codes / Parametric are filled in by their own slices — until
     // then, a clear placeholder so the home reads as complete.
     if (view === 'studio') {
-      host.innerHTML = isAdmin()
-        ? placeholder('Studio — build & tune with 86', 'The build/tune cockpit (86 docked + research inbox + tuning center) is moving here from the Command Center. Coming next in this build.')
-        : placeholder('Studio', 'The build & tune workbench is available to platform admins.');
+      if (!isAdmin()) { host.innerHTML = placeholder('Studio', 'The build &amp; tune workbench is available to platform admins.'); return; }
+      // Host the shared build/tune cockpit (86 docked + research inbox +
+      // tuning center) from console.js. It targets #cc-assemblies; provide
+      // it once, then let loadAssemblyStudio (idempotent) rebuild + re-dock.
+      if (!document.getElementById('cc-assemblies')) {
+        host.innerHTML = '<div id="cc-assemblies" class="cc-section" style="display:block;"></div>';
+      }
+      if (window.p86Console && typeof window.p86Console.loadAssemblyStudio === 'function') {
+        window.p86Console.loadAssemblyStudio();
+      } else {
+        host.innerHTML = placeholder('Studio', 'The build &amp; tune module is still loading — try again in a moment.');
+      }
     } else if (view === 'codes') {
-      host.innerHTML = placeholder('Assembly Codes', 'The Trade · System · Variant code registry is moving here from Admin → Organization. Coming next in this build.');
+      // Reuse the Trade · System · Variant taxonomy manager (formerly under
+      // Admin → Organization). admin.js exposes renderOrgAssemblyTaxonomy and
+      // it mounts into #admin-org-asmcodes-host using a singleton state, so
+      // this is the ONLY live host now (the admin entry was removed). Any
+      // signed-in user with ESTIMATES_VIEW can browse; write actions inside
+      // the manager are gated server-side (ESTIMATES_EDIT).
+      if (!document.getElementById('admin-org-asmcodes-host')) {
+        host.innerHTML = '<div id="admin-org-asmcodes-host"></div>';
+      }
+      if (typeof window.renderOrgAssemblyTaxonomy === 'function') {
+        window.renderOrgAssemblyTaxonomy();
+      } else {
+        host.innerHTML = placeholder('Assembly Codes', 'The Trade · System · Variant code manager is still loading — try again in a moment.');
+      }
     } else if (view === 'parametric') {
-      host.innerHTML = placeholder('Parametric assemblies', 'Formula-driven recipes + draw-to-quantify. Coming next in this build.');
+      // Parametric recipes = declared params or a qty formula. Reuse the
+      // assemblies list, filtered to that subset (own host prefix so its
+      // search box is independent of the Assemblies tab), and link out to
+      // Plans & Takeoffs where draw-to-quantify actually lives (it's welded
+      // to the CAD overlay — we don't re-host it here).
+      host.innerHTML =
+        '<div style="display:flex;align-items:flex-start;gap:16px;flex-wrap:wrap;margin-bottom:14px;">' +
+          '<div style="flex:1;min-width:260px;font-size:13px;color:var(--text-dim,#8a93a6);line-height:1.5;max-width:660px;">' +
+            'Parametric recipes price from <strong style="color:var(--text,#fff);">geometry</strong> — declare parameters (span, height, pitch…) or a quantity formula and one recipe covers every size. Draw a shape on a plan and its measurements drive the takeoff.' +
+          '</div>' +
+          '<button onclick="switchTab(\'plans\')" data-p86-icon="map" style="white-space:nowrap;align-self:flex-start;">Draw to quantify →</button>' +
+        '</div>' +
+        '<div class="action-buttons">' +
+          '<input id="asmstudio-param-search" type="text" placeholder="Search parametric recipes…" oninput="p86Assemblies.paintList()" ' +
+            'style="flex:1;max-width:320px;background:rgba(255,255,255,0.04);border:1px solid var(--border,#2a2f3a);border-radius:8px;padding:8px 12px;color:var(--text,#fff);font-size:13px;" />' +
+          '<span id="asmstudio-param-summary" style="font-size:12px;color:var(--text-dim,#8a93a6);align-self:center;"></span>' +
+        '</div>' +
+        '<div id="asmstudio-param-list" style="margin-top:12px;"></div>';
+      if (window.p86Assemblies && typeof window.p86Assemblies.renderList === 'function') {
+        window.p86Assemblies.renderList('asmstudio-param', { parametricOnly: true });
+      }
     }
   }
 

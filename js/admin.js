@@ -4808,8 +4808,10 @@
     { key: 'jobs',      label: '\u{1F4CB} Job Assignments', desc: 'PM / crew / role assignments per job for this org.' },
     { key: 'sms',       label: '\u{1F4F1} SMS',              desc: 'SMS scheduling-agent observability for this org (send log, delivery stats). Global Twilio provider config lives in System.' },
     { key: 'tags',      label: '\u{1F3F7} Tag Catalog',      desc: 'Curated master list of photo tags used across projects. Rename to propagate everywhere; merge to consolidate duplicates; archive to hide from autocomplete. New tags auto-add when a user types one on any photo.' },
-    { key: 'mappins',   label: '\u{1F4CD} Map Pins',          desc: 'Pin color + icon for each map marker type — Lead, Service job, Reno, Work order, Job, Project. Applies to the Jobs, Leads, and Projects maps for everyone in your org.' },
-    { key: 'asmcodes',  label: '\u{1F9E9} Assembly Codes',     desc: 'The Trade + System vocabulary behind estimating assembly codes (TRADE-SYSTEM-VARIANT, e.g. ROOF-SHNG-612). Global seed rows are shared + read-only; add your own trades/systems here. They drive the code dropdowns on the /assemblies editor.' }
+    { key: 'mappins',   label: '\u{1F4CD} Map Pins',          desc: 'Pin color + icon for each map marker type — Lead, Service job, Reno, Work order, Job, Project. Applies to the Jobs, Leads, and Projects maps for everyone in your org.' }
+    // Assembly Codes moved to the top-level Assembly Studio → Codes
+    // (js/assembly-studio.js). renderOrgAssemblyTaxonomy is exposed on
+    // window and mounts into the Studio's #admin-org-asmcodes-host.
   ];
 
   var _orgActiveTab = (function() {
@@ -4837,6 +4839,11 @@
     });
   }
   window.renderAdminOrganization = renderAdminOrganization;
+  // Exposed so the top-level Assembly Studio → Codes sub-tab can mount the
+  // same Trade·System·Variant taxonomy manager into its own host. Uses the
+  // singleton _asmCodesState, so render it in ONE host at a time (the admin
+  // Organization entry was removed to guarantee that).
+  window.renderOrgAssemblyTaxonomy = renderOrgAssemblyTaxonomy;
 
   // Sync any in-flight edits on the currently-rendered tab into the
   // in-memory drafts before swapping tabs, so unsaved changes survive

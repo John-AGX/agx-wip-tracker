@@ -775,7 +775,6 @@
                             <div class="app-nav-children" role="group" aria-label="Command Center sub-pages">
                                 <button class="tab-btn app-nav-child" data-tab="console" data-console-subtab="overview" data-virtual-tab="console-overview" data-p86-icon="insights" title="Overview"><span class="app-nav-label">Overview</span></button>
                                 <button class="tab-btn app-nav-child" data-tab="console" data-console-subtab="docs" data-virtual-tab="console-docs" data-p86-icon="academic-cap" title="How Project 86 works — internal design documentation"><span class="app-nav-label">How it works</span></button>
-                                <button class="tab-btn app-nav-child" data-tab="console" data-console-subtab="assemblies" data-virtual-tab="console-assemblies" data-p86-icon="wrench" title="Assembly Studio — build & tune the cost database with 86"><span class="app-nav-label">Assembly Studio</span></button>
                                 <button class="tab-btn app-nav-child" data-tab="console" data-console-subtab="metrics" data-virtual-tab="console-metrics" data-p86-icon="chart-bar" title="Metrics"><span class="app-nav-label">Metrics</span></button>
                                 <button class="tab-btn app-nav-child" data-tab="console" data-console-subtab="tenants" data-virtual-tab="console-tenants" data-p86-icon="clients" title="Tenants"><span class="app-nav-label">Tenants</span></button>
                                 <button class="tab-btn app-nav-child" data-tab="console" data-console-subtab="audit" data-virtual-tab="console-audit" data-p86-icon="detective" title="Audit"><span class="app-nav-label">Audit</span></button>
@@ -3221,7 +3220,7 @@
          BEFORE admin.js so window.p86EmailBlocks is available at the
          time renderTemplateEditor() runs its mount call. -->
     <script src="js/email-block-editor.js?v=6"></script>
-    <script src="js/admin.js?v=121"></script>
+    <script src="js/admin.js?v=122"></script>
     <!-- Act-as / disguise mode: persistent "Acting as NAME — Exit" banner +
          window.p86ActAs(userId). Self-contained; re-fetches /api/auth/me. -->
     <script src="js/actas.js?v=1"></script>
@@ -3240,7 +3239,7 @@
          dropdown and the My Files tree. -->
     <script src="js/folder-taxonomy.js?v=2"></script>
     <script src="js/subs.js?v=12"></script>
-    <script src="js/assemblies.js?v=6"></script>
+    <script src="js/assemblies.js?v=7"></script>
     <script src="js/job-audit.js?v=4d"></script>
     <script src="js/job-reports.js?v=1b"></script>
     <!-- Shared table enhancements (reorder / resize / freeze first column /
@@ -3261,7 +3260,7 @@
     <script src="js/entity-card.js?v=6"></script>
     <!-- Lead/estimate context card mounted into #app-sidebar (uses p86EntityCard). -->
     <script src="js/entity-subnav.js?v=2"></script>
-    <script src="js/app.js?v=120"></script>
+    <script src="js/app.js?v=121"></script>
     <script src="js/search-clear.js?v=3"></script>
     <script src="js/sidebar-brand.js?v=2"></script>
     <!-- Guided tours engine + the Help & What's New center (patch
@@ -3325,12 +3324,12 @@
     <script src="js/cost-inbox.js?v=17"></script>
     <script src="js/invoices.js?v=1"></script>
     <script src="js/console-docs.js?v=2"></script>
-    <script src="js/console.js?v=15"></script>
+    <script src="js/console.js?v=16"></script>
     <!-- Jobs Hub — cross-job index pages (Purchase Orders / Change Orders /
          RFIs / Submittals) for the Jobs sidebar dropdown. Uses p86Api +
          appData.jobs + editJob/switchJobSubTab at runtime. -->
     <script src="js/jobs-hub.js?v=19"></script>
-    <script src="js/assembly-studio.js?v=1"></script>
+    <script src="js/assembly-studio.js?v=2"></script>
     <!-- Purchase Order editor — full-window overlay opened from the Jobs
          hub Purchase Orders list. Uses p86Api.purchaseOrders + subs. -->
     <script src="js/purchase-order-import.js?v=1"></script>

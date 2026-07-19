@@ -125,7 +125,10 @@
         // host-parameterized admin.js renderers — single source of truth.
         '<div id="cc-overview"  class="cc-section" style="display:none;"></div>' +
         '<div id="cc-docs"      class="cc-section" style="display:none;"></div>' +
-        '<div id="cc-assemblies" class="cc-section" style="display:none;"></div>' +
+        // Assembly Studio moved OUT of the Command Center to its own
+        // top-level home (js/assembly-studio.js). loadAssemblyTuning stays
+        // here as the shared renderer and mounts into the new pane's
+        // #cc-assemblies host, exposed as window.p86Console.loadAssemblyStudio.
         '<div id="cc-metrics"   class="cc-section" style="display:none;"></div>' +
         '<div id="cc-tenants"   class="cc-section" style="display:none;"></div>' +
         '<div id="cc-audit"     class="cc-section" style="display:none;"></div>' +
@@ -142,14 +145,13 @@
   }
 
   // The platform sub-views, in sidebar order.
-  var CONSOLE_VIEWS = ['overview', 'docs', 'assemblies', 'metrics', 'tenants', 'audit', 'anthropic', 'email', 'btmapping', 'settings', 'danger'];
+  var CONSOLE_VIEWS = ['overview', 'docs', 'metrics', 'tenants', 'audit', 'anthropic', 'email', 'btmapping', 'settings', 'danger'];
 
   // Each view's loader. The system-service views mount the existing
   // host-parameterized admin.js renderers (re-runs fresh each visit).
   function loadConsoleView(view) {
     if (view === 'overview') return loadOverview();
     if (view === 'docs') return loadDocs();
-    if (view === 'assemblies') return loadAssemblyTuning();
     if (view === 'metrics') return loadMetrics();
     if (view === 'tenants') return loadTenants();
     if (view === 'audit') return loadAudit();
@@ -1174,4 +1176,10 @@
 
   window.renderConsoleInto = renderConsoleInto;
   window.switchConsoleSubTab = switchConsoleSubTab;
+  // Assembly Studio build/tune cockpit — shared renderer for the new
+  // top-level Assembly Studio home (js/assembly-studio.js). It mounts into
+  // a #cc-assemblies host that the new pane provides, keeping the docked-86
+  // + research-inbox + tuning-center machinery + this closure's state.
+  window.p86Console = window.p86Console || {};
+  window.p86Console.loadAssemblyStudio = loadAssemblyTuning;
 })();
