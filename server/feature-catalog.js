@@ -444,9 +444,22 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.13';
+const APP_VERSION = '1.14';
 
 const releases = [
+  {
+    version: '1.14',
+    date: '2026-07-19',
+    name: 'Assembly Studio',
+    summary: 'Everything about your cost assemblies now lives in one place on the main menu — browse and build recipes, manage codes, and tune with 86, all under Assembly Studio.',
+    changes: [
+      { type: 'new', text: 'Assembly Studio — a new top-level section in the main menu (under Sales) that gathers every assembly tool into one home: Assemblies, Studio, Codes, and Parametric. No more hunting across Estimates, the Command Center, and Admin.' },
+      { type: 'new', text: 'Assemblies — browse and build your costed recipes, grouped in a Trade → System tree with live catalog pricing, right where you\'d expect them.' },
+      { type: 'improved', text: 'Assembly Codes moved here — the Trade · System · Variant code manager is now Assembly Studio → Codes (it used to be tucked under Admin → Organization), so any estimator can manage the taxonomy without admin access.' },
+      { type: 'new', text: 'Parametric — a dedicated view for formula-driven recipes (the ones that price from geometry), with a shortcut over to Plans & Takeoffs to draw a shape and let its measurements drive the quantity.' },
+      { type: 'new', text: 'Studio — the build-and-tune workbench with 86 docked alongside (for platform admins) now lives inside Assembly Studio instead of the Command Center.' },
+    ],
+  },
   {
     version: '1.13',
     date: '2026-07-19',
