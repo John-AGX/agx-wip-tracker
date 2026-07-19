@@ -1413,7 +1413,7 @@
       if (!S) return;
       var all = (res && res.assemblies) || [];
       S._asmCache = all.filter(function (a) { return (Array.isArray(a.params) && a.params.length) || a.has_formulas; });
-      if (S.selectedId) buildLayers();      // a selected object can now show its picker/BOM
+      buildLayers(); repaint();   // the always-on Place-assembly card + BOM rollup + canvas badges now have their catalog
     }).catch(function () { S._asmCache = []; });
   }
   // Which logo this sheet stamps: titleblock.logoUrl picks one from the org
@@ -1650,6 +1650,8 @@
     S._mir = null; S._zw = null; S._paste = null;   // cancel pending mirror/zoom first points + armed paste
     hideDyn();
     S.tool = t;
+    // RL-3: switching to Select ends place-first mode (the natural "done placing" gesture).
+    if (t === 'select' && S._placeAsm) { S._placeAsm = null; if (S.overlay && S.overlay.querySelector('#p86-sheet-layers')) buildLayers(); }
     // Track last/recent drawing commands for Enter-repeat + the right-click menu.
     if (t && t !== 'select' && t !== 'pan' && t !== 'calibrate') {
       S._lastTool = t;
@@ -1983,7 +1985,7 @@
   function buildLayers() {
     var host = S.overlay.querySelector('#p86-sheet-layers');
     // ── Sheet section ──
-    var html = '';
+    var html = placeAsmHtml();   // RL-3: place-first arm control pinned to the top
     // ── Multi-selection summary (2+ objects) ──
     if (S.selIds && S.selIds.length > 1) {
       html += '<div style="border:1px solid #4f8cff;background:rgba(79,140,255,0.08);border-radius:8px;padding:8px 9px;margin-bottom:12px;">' +
@@ -2094,6 +2096,28 @@
       buildLayers(); repaint();
     };
     if (selEnt && selEnt.assembly) renderBom(selEnt);
+    // RL-3: arm/disarm place-first mode + jump to the natural draw tool for the unit.
+    var asmPlace = host.querySelector('[data-asm-place]');
+    if (asmPlace) asmPlace.onchange = function () {
+      var id = asmPlace.value;
+      if (!id) { S._placeAsm = null; setHint('Place assembly: off.'); buildLayers(); repaint(); return; }
+      var a = (S._asmCache || []).filter(function (x) { return String(x.id) === String(id); })[0];
+      if (!a) return;
+      var kind = asmUnitKind(a.unit);
+      if (kind === 'UNK') {
+        // An unmeasurable unit (SY/CY/HR…) can never drive a placement — refuse to
+        // arm it, so drawing can't produce a permanently unpriceable binding.
+        S._placeAsm = null;
+        setHint('“' + (a.unit || '?') + '” can’t be measured from a 2D drawing — pick an LF / SF / EA assembly.');
+        buildLayers(); repaint(); return;
+      }
+      S._placeAsm = { id: a.id, name: a.name, unit: a.unit || 'EA' };
+      var tool = (kind === 'SF' || kind === 'SQ') ? 'rect' : (kind === 'EA' ? 'symbol' : 'line');
+      setTool(tool);   // setTool won't disarm (tool ≠ select); repaints + updates the toolbar
+      buildLayers();
+      setHint('Placing ' + a.name + ' — draw ' + (tool === 'line' ? 'a line (length → LF)' : tool === 'rect' ? 'a box (area → SF)' : 'a symbol (count → EA)') + '. Pick Select or “— off —” to stop.');
+      repaint();
+    };
     // RL-2: Bill of Materials rollup — estimate picker + guarded push.
     var asmEst = host.querySelector('[data-asm-est]');
     if (asmEst) asmEst.onchange = function () { S._pushEstId = asmEst.value; S._pushMsg = null; };
@@ -3734,7 +3758,18 @@
     return JSON.stringify({ entities: S.doc.entities, layers: S.doc.layers, underlay: S.doc.underlay || null, vps: vps });
   }
   function pushUndo() { S._undo.push(snapshot()); if (S._undo.length > 60) S._undo.shift(); S._redo.length = 0; markDirty(); }
-  function commitEntity(e) { pushUndo(); S.doc.entities.push(e); }
+  function commitEntity(e) {
+    // RL-3 place-first: a freshly drawn bindable shape inherits the armed
+    // assembly, so drawing IS placing. Copies (dup/array/mirror) already carry
+    // their binding via deep-clone and never reach here, so no double-bind.
+    var placed = false;
+    if (S._placeAsm && ASM_BINDABLE[e.tool] && !e.assembly) {
+      e.assembly = { id: S._placeAsm.id, name: S._placeAsm.name, unit: S._placeAsm.unit || 'EA', mode: 'rollup', params: {} };
+      placed = true;
+    }
+    pushUndo(); S.doc.entities.push(e);
+    if (placed) buildLayers();   // refresh the drawing rollup so the new placement + its $ show
+  }
   function restoreSnap(json) {
     var o = JSON.parse(json);
     S.doc.entities = o.entities; S.doc.layers = o.layers;
@@ -4331,9 +4366,44 @@
       }).catch(function () {}).then(function () {
         if (S) delete S._bomInflight[p.key];
         done++;
-        if (done === missing.length && S) buildLayers();
+        if (done === missing.length && S) { buildLayers(); repaint(); }   // repaint refreshes the on-canvas badge $ once the async price lands
       });
     });
+  }
+  // RL-3 place-first: the armed-assembly card at the top of the rail. Pick an
+  // assembly here, then just draw — every bindable shape you draw inherits it
+  // and prices itself. '' when no parametric assemblies are loaded yet.
+  function placeAsmHtml() {
+    var cat = S._asmCache || [];
+    if (!cat.length) return '';
+    var armed = S._placeAsm;
+    var opts = '<option value="">— off —</option>' + cat.map(function (a) {
+      return '<option value="' + esc(String(a.id)) + '"' + (armed && String(armed.id) === String(a.id) ? ' selected' : '') + '>' + esc(a.name) + ' (' + esc(a.unit || 'EA') + ')</option>';
+    }).join('');
+    var hint = armed
+      ? '<div style="margin-top:5px;font-size:9.5px;color:#86efac;line-height:1.35;">▶ Placing <b>' + esc(armed.name) + '</b> — draw a shape; it auto-tags &amp; prices. Pick “— off —” or the Select tool to stop.</div>'
+      : '<div style="margin-top:5px;font-size:9.5px;color:#64748b;line-height:1.35;">Pick an assembly, then draw — each shape is tagged &amp; priced from its own geometry.</div>';
+    return '<div style="border:1px solid ' + (armed ? '#22c55e' : '#3a3a4a') + ';background:' + (armed ? 'rgba(34,197,94,0.08)' : 'rgba(255,255,255,0.03)') + ';border-radius:8px;padding:8px 9px;margin-bottom:12px;">' +
+      '<div style="font-weight:700;color:#fff;margin-bottom:5px;font-size:12px;">\u{1F9E9} Place assembly</div>' +
+      '<select data-asm-place style="width:100%;box-sizing:border-box;background:#1a1a2e;color:#fff;border:1px solid ' + (armed ? '#22c55e' : '#444') + ';border-radius:5px;padding:4px 6px;font-size:11px;">' + opts + '</select>' +
+      hint +
+    '</div>';
+  }
+  // A bound entity's on-canvas badge text: {name, money, warn}. money = live $
+  // from the shared explode cache, '…' while pricing, '—' on error; warn when
+  // the shape can't supply the assembly's unit.
+  function entBadgeText(e) {
+    var a = e && e.assembly; if (!a) return null;
+    var dq = deriveQ(e, a.unit);
+    if (!dq) return { name: a.name || 'Assembly', money: null, warn: true };
+    var params = {};
+    Object.keys(a.params || {}).forEach(function (k) { var v = parseFloat(a.params[k]); if (isFinite(v)) params[k] = v; });
+    var pt = placementTotal({ key: bomKey(a.id, dq.q, params) });
+    if (!pt) return { name: a.name || 'Assembly', money: '…', warn: false };
+    if (pt.error) return { name: a.name || 'Assembly', money: '—', warn: false };
+    // A partially-priced placement (some un-costed items) is understated — flag it
+    // with ⚠ so the badge never presents an incomplete total as a final price.
+    return { name: a.name || 'Assembly', money: asmMoney(pt.total) + (pt.priced ? '' : ' ⚠'), warn: false };
   }
   // The Bill of Materials section HTML (shown when the drawing has ≥1 binding).
   function bomRollupHtml() {
@@ -5718,6 +5788,42 @@
         var gp = toScreen(g.x, g.y);
         ctx.fillStyle = '#22c55e'; ctx.strokeStyle = '#0b0e14'; ctx.lineWidth = 1;
         ctx.fillRect(gp.x - 4, gp.y - 4, 8, 8); ctx.strokeRect(gp.x - 4, gp.y - 4, 8, 8);
+      });
+      ctx.restore();
+    }
+    // RL-3: on-canvas assembly badges (screen space) — every bound object shows
+    // its assembly name + live $ (from the shared explode cache) at its top edge.
+    // Skipped while panning / mid-draft / box-selecting to keep those frames cheap.
+    if (S._asmCache && S._asmCache.length && !S.panning && !S.draft && !S.boxSel) {
+      var badgeModel = (S.space === 'model');
+      ctx.save();
+      ctx.font = '600 10px Arial, sans-serif'; ctx.textBaseline = 'top';
+      (S.doc.entities || []).forEach(function (be) {
+        if (!be.assembly) return;
+        var bly = layerById(S.doc, be.layer); if (bly && bly.visible === false) return;   // hidden shapes carry no badge
+        var bbb = entBBox(be); if (!bbb) return;
+        var bctr = { x: bbb.x + bbb.w / 2, y: bbb.y }, bpl;
+        if (badgeModel) { bpl = mToV(bctr); }
+        else {
+          // Project through the entity's OWN viewport (not the active one) and only
+          // badge where the shape actually renders — inside that viewport's frame.
+          var bvp = vpById(be.viewport) || activeVp(); if (!bvp) return;
+          bpl = mToP(bctr, bvp);
+          if (bpl.x < bvp.x || bpl.x > bvp.x + bvp.w || bpl.y < bvp.y || bpl.y > bvp.y + bvp.h) return;
+        }
+        var bScr = { x: bpl.x * S.view.scale + S.view.tx, y: bpl.y * S.view.scale + S.view.ty };
+        if (bScr.x < -80 || bScr.x > vw + 80 || bScr.y < -24 || bScr.y > vh + 24) return;
+        var bi = entBadgeText(be); if (!bi) return;
+        var bnm = bi.name.length > 16 ? bi.name.slice(0, 15) + '…' : bi.name;
+        var blabel = '\u{1F9E9} ' + bnm + (bi.money ? '  ' + bi.money : (bi.warn ? '  ⚠' : ''));
+        var bwid = ctx.measureText(blabel).width + 12;
+        var bxx = Math.round(bScr.x - bwid / 2), byy = Math.round(bScr.y - 20);
+        ctx.fillStyle = 'rgba(8,12,20,0.86)';
+        ctx.strokeStyle = bi.warn ? '#fbbf24' : '#a78bfa';
+        ctx.lineWidth = 1;
+        ctx.fillRect(bxx, byy, bwid, 15); ctx.strokeRect(bxx, byy, bwid, 15);
+        ctx.fillStyle = '#e6e6ea'; ctx.textAlign = 'left';
+        ctx.fillText(blabel, bxx + 6, byy + 3);
       });
       ctx.restore();
     }
