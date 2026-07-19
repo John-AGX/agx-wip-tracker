@@ -427,6 +427,33 @@
     setScopeTemplate: function(template) { return put('/api/purchase-orders/scope-template', { template: template }); }
   };
 
+  // Vendor Bills (Accounts Payable) — the bill against a purchase order.
+  // Unified store: the Bills tab and the PO editor both read/write here.
+  var bills = {
+    listForJob: function(jobId) {
+      return get('/api/jobs/' + encodeURIComponent(jobId) + '/bills');
+    },
+    listAll: function(opts) {
+      opts = opts || {};
+      var qs = [];
+      if (opts.status) qs.push('status=' + encodeURIComponent(opts.status));
+      if (opts.job) qs.push('job=' + encodeURIComponent(opts.job));
+      if (opts.po) qs.push('po=' + encodeURIComponent(opts.po));
+      if (opts.limit) qs.push('limit=' + encodeURIComponent(opts.limit));
+      return get('/api/bills' + (qs.length ? '?' + qs.join('&') : ''));
+    },
+    get: function(id) { return get('/api/bills/' + encodeURIComponent(id)); },
+    create: function(jobId, payload) {
+      return post('/api/jobs/' + encodeURIComponent(jobId) + '/bills', payload || {});
+    },
+    update: function(id, payload) { return put('/api/bills/' + encodeURIComponent(id), payload || {}); },
+    setStatus: function(id, status) {
+      return post('/api/bills/' + encodeURIComponent(id) + '/status', { status: status });
+    },
+    remove: function(id) { return del('/api/bills/' + encodeURIComponent(id)); },
+    apAging: function() { return get('/api/bills/ap-aging'); }
+  };
+
   // Polymorphic reports (Phase 2) — projects (and future leads /
   // estimates) share the legacy job_reports table via entity_type +
   // entity_id columns. The legacy /api/jobs/:jobId/reports route
@@ -986,7 +1013,7 @@
   window.p86Api = {
     get: get, put: put, post: post, del: del, patch: patch,
     fileFolders: fileFolders,
-    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, assemblies: assemblies, assemblyTaxonomy: assemblyTaxonomy, qbCosts: qbCosts, subs: subsApi, schedule: schedule, adminSms: adminSms, messages: messages, weather: weather, projects: projects, tasks: tasks, notes: notes, reminders: reminders, map: map, calendar: calendar, plans: plans, orgTags: orgTags, org: org, folderTemplates: folderTemplates, reports: reports, changeOrders: changeOrders, workflowItems: workflowItems, purchaseOrders: purchaseOrders, payApplications: payApplications, invoices: invoices, payments: payments, receipts: receipts, docImport: docImport, outlook: outlook, listViews: listViews,
+    jobs: jobs, estimates: estimates, users: users, roles: roles, clients: clients, leads: leads, settings: settings, attachments: attachments, ai: ai, materials: materials, assemblies: assemblies, assemblyTaxonomy: assemblyTaxonomy, qbCosts: qbCosts, subs: subsApi, schedule: schedule, adminSms: adminSms, messages: messages, weather: weather, projects: projects, tasks: tasks, notes: notes, reminders: reminders, map: map, calendar: calendar, plans: plans, orgTags: orgTags, org: org, folderTemplates: folderTemplates, reports: reports, changeOrders: changeOrders, workflowItems: workflowItems, purchaseOrders: purchaseOrders, bills: bills, payApplications: payApplications, invoices: invoices, payments: payments, receipts: receipts, docImport: docImport, outlook: outlook, listViews: listViews,
     isOffline: isOffline,
     isAuthenticated: function() { return !!getToken() && !isOffline(); }
   };

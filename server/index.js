@@ -165,6 +165,10 @@ app.use('/api', changeOrderRoutes);
 // (/api/jobs/:jobId/purchase-orders + /api/purchase-orders/*).
 const purchaseOrderRoutes = require('./routes/purchase-order-routes');
 app.use('/api', purchaseOrderRoutes);
+// Vendor Bills (Accounts Payable) — the bill side of a purchase order;
+// /api/jobs/:jobId/bills + /api/bills/* mirror the PO route family.
+const billRoutes = require('./routes/bill-routes');
+app.use('/api', billRoutes);
 // Applications for Payment — AIA G702/G703 billing
 // (/api/jobs/:jobId/pay-applications + /api/pay-applications/*).
 const payApplicationRoutes = require('./routes/pay-application-routes');

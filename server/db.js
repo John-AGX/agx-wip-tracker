@@ -736,6 +736,33 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_job_purchase_orders_job ON job_purchase_orders(job_id);
     CREATE INDEX IF NOT EXISTS idx_job_purchase_orders_org ON job_purchase_orders(organization_id, status, created_at DESC) WHERE organization_id IS NOT NULL;
 
+    -- Vendor Bills (Accounts Payable). A Bill = a vendor's invoice recorded
+    -- against a job and (usually) a PO — the money AGX OWES a sub/supplier.
+    -- Mirror image of the invoices table (AR). Promotes the per-PO data.bills[]
+    -- into a first-class entity linked by po_id, so one billed-to-date number
+    -- feeds both the Bills tab and the PO's %-billed / job accrual.
+    CREATE TABLE IF NOT EXISTS job_vendor_bills (
+      id TEXT PRIMARY KEY,
+      job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+      organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE,
+      owner_id INTEGER REFERENCES users(id),
+      po_id TEXT,                                 -- links job_purchase_orders.id (loose; a bill may be PO-less)
+      sub_id TEXT,                                -- vendor (subs.id, loose) — usually inherited from the PO
+      status TEXT NOT NULL DEFAULT 'open',        -- open | approved | paid | void
+      bill_number TEXT,                           -- the vendor's invoice number
+      amount NUMERIC(14,2) NOT NULL DEFAULT 0,    -- bill total (canonical for the %-billed rollup)
+      bill_date DATE,
+      due_date DATE,
+      data JSONB NOT NULL DEFAULT '{}'::jsonb,     -- { description, lienWaiver, lines[], notes, attachmentId }
+      approved_at TIMESTAMPTZ,
+      approved_by INTEGER REFERENCES users(id),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_job_vendor_bills_job ON job_vendor_bills(job_id);
+    CREATE INDEX IF NOT EXISTS idx_job_vendor_bills_po ON job_vendor_bills(po_id) WHERE po_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_job_vendor_bills_org ON job_vendor_bills(organization_id, status, updated_at DESC) WHERE organization_id IS NOT NULL;
+
     -- AIA-style Applications for Payment (G702 certificate + G703 continuation).
     -- One row per pay application on a job. data JSONB holds the frozen
     -- Schedule-of-Values snapshot for that period:
@@ -1267,7 +1294,7 @@ async function initSchema() {
     END $$;
     ALTER TABLE attachments
       ADD CONSTRAINT attachments_entity_type_check
-      CHECK (entity_type IN ('lead', 'estimate', 'client', 'job', 'sub', 'user', 'org', 'project', 'task'));
+      CHECK (entity_type IN ('lead', 'estimate', 'client', 'job', 'sub', 'user', 'org', 'project', 'task', 'purchase_order', 'bill'));
 
     -- Folder grouping (Phase 3). Free-text folder name per attachment;
     -- 'general' is the default catch-all. Users can move files into
@@ -4806,6 +4833,29 @@ async function init() {
       $asm_code_uq$;`);
   } catch (e) {
     console.error('[init] assembly taxonomy backfill failed (non-fatal):', e && e.message);
+  }
+  // Vendor Bills: promote each PO's embedded data.bills[] into a first-class
+  // job_vendor_bills row (linked by po_id). Deterministic id + ON CONFLICT makes
+  // it idempotent (no-op on reboot). The PO editor keeps reading data.bills[]
+  // until the unify slice repoints it, so no double-count in the interim.
+  try {
+    await pool.query(`
+      INSERT INTO job_vendor_bills
+        (id, job_id, organization_id, owner_id, po_id, sub_id, status, bill_number, amount, bill_date, data)
+      SELECT
+        'billmig_' || po.id || '_' || COALESCE(NULLIF(elem->>'id',''), ord::text),
+        po.job_id, po.organization_id, po.owner_id, po.id, po.sub_id, 'open', NULL,
+        COALESCE((NULLIF(elem->>'amount','') )::numeric, 0),
+        CASE WHEN elem->>'date' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}' THEN (left(elem->>'date',10))::date ELSE NULL END,
+        jsonb_build_object('description', COALESCE(elem->>'description',''),
+                           'lienWaiver', COALESCE(elem->>'lienWaiver','none'),
+                           'migratedFrom', 'po', 'lines', '[]'::jsonb)
+      FROM job_purchase_orders po,
+           LATERAL jsonb_array_elements(COALESCE(po.data->'bills','[]'::jsonb)) WITH ORDINALITY AS t(elem, ord)
+      WHERE jsonb_typeof(po.data->'bills') = 'array'
+      ON CONFLICT (id) DO NOTHING;`);
+  } catch (e) {
+    console.error('[init] vendor-bills migration failed (non-fatal):', e && e.message);
   }
 }
 
