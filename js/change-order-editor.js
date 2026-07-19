@@ -569,18 +569,22 @@
     });
     var addSection = overlay.querySelector('[data-co-add-section]');
     if (addSection) addSection.addEventListener('click', function() {
-      var label = window.prompt('Section header label', 'Materials');
-      if (label == null) return;
+      // Inline — add a blank section and focus its name field (no popup),
+      // matching the estimate editor's flow.
       if (!Array.isArray(_state.co.lines)) _state.co.lines = [];
+      var id = newLineId();
       _state.co.lines.push({
-        id: newLineId(),
+        id: id,
         section: '__section_header__',
-        label: label,
+        label: '',
         markup: '', markupMode: 'percent'
       });
       markDirty();
       paintLines();
       paintTotals();
+      var row = document.querySelector('#p86CoLineTable tr[data-line-id="' + id + '"]');
+      var nameInput = row && row.querySelector('[data-line-field="label"]');
+      if (nameInput) { nameInput.focus(); }
     });
     var addCatalog = overlay.querySelector('[data-co-add-catalog]');
     if (addCatalog) addCatalog.addEventListener('click', openCatalogDrawer);
@@ -645,6 +649,104 @@
   }
 
   // ── Line table ─────────────────────────────────────────────────
+  // ── Assembly rollup rows (fused breakdown + reprice / explode) ──────
+  // Mirrors the estimate editor: a CO line inserted from an assembly
+  // carries sourceAssemblyId + assemblyBreakdown (leaf rows per 1 output
+  // unit) + assemblyBucket. The strip below the row is a read-only
+  // component view; the totals engine only ever sees the parent line.
+  var _coAsmOpen = {};   // lineId → bool (persists across re-paints this session)
+  var CO_BUCKET_LABEL = { materials: 'MATERIALS', labor: 'LABOR', gc: 'GENERAL CONDITIONS', sub: 'SUBCONTRACTORS' };
+  function isCoAsmLine(l) {
+    return !!(l && l.sourceAssemblyId != null && Array.isArray(l.assemblyBreakdown) && l.assemblyBreakdown.length);
+  }
+  function coAsmStripHTML(line) {
+    var open = !!_coAsmOpen[line.id];
+    var n = line.assemblyBreakdown.length;
+    var head =
+      '<div class="p86-co-asm-head" data-asm-toggle="' + escapeAttr(line.id) + '" style="display:flex;align-items:center;gap:7px;padding:3px 8px;font-size:10px;cursor:pointer;color:#7eb0ff;">' +
+        '<span style="font-size:8px;transition:transform .12s;' + (open ? 'transform:rotate(90deg);' : '') + '">&#9654;</span>' +
+        '<span style="font-weight:700;letter-spacing:.04em;">&#129513; ASSEMBLY' +
+          (line.assemblyBucket ? ' &middot; ' + escapeHTML(CO_BUCKET_LABEL[line.assemblyBucket] || String(line.assemblyBucket).toUpperCase()) : '') + '</span>' +
+        '<span style="color:var(--text-dim,#8a93a6);">' + n + ' component' + (n === 1 ? '' : 's') + ' inside this price — click to inspect</span>' +
+      '</div>';
+    if (!open) return head;
+    var q = coNum(line.qty);
+    var body = '';
+    line.assemblyBreakdown.forEach(function (b) {
+      var bq = Math.round(q * coNum(b.qty_per_unit) * 100) / 100;
+      var uc = b.unit_cost != null ? coNum(b.unit_cost) : 0;
+      body +=
+        '<div style="display:flex;align-items:center;gap:8px;padding:2px 8px 2px 24px;font-size:10.5px;font-style:italic;color:var(--text-dim,#8a93a6);opacity:.9;">' +
+          '<span style="color:#4f8cff;">&#8627;</span>' +
+          '<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + escapeHTML(b.description || '(item)') +
+            '<span style="font-size:8px;font-style:normal;padding:1px 5px;border-radius:7px;margin-left:6px;background:' + (b.cost_code === 'labor' ? 'rgba(242,165,92,.13);color:#f2a55c' : 'rgba(79,209,197,.13);color:#4fd1c5') + ';">' + escapeHTML(b.cost_code || '') + '</span>' +
+          '</span>' +
+          '<span style="font-family:monospace;font-style:normal;">' + bq + ' ' + escapeHTML(b.unit || '') + '</span>' +
+          '<span style="font-family:monospace;font-style:normal;width:82px;text-align:right;">@ $' + uc.toFixed(2) + '</span>' +
+          '<span style="font-family:monospace;font-style:normal;width:82px;text-align:right;">$' + (bq * uc).toFixed(2) + '</span>' +
+        '</div>';
+    });
+    var acts =
+      '<div style="display:flex;flex-wrap:wrap;gap:16px;padding:4px 8px 6px 24px;font-size:10px;">' +
+        '<span data-asm-refresh="' + escapeAttr(line.id) + '" style="color:#4f8cff;cursor:pointer;">&#10227; Reprice from recipe</span>' +
+        '<span data-asm-explode="' + escapeAttr(line.id) + '" style="color:#4f8cff;cursor:pointer;">&#8675; Explode to editable lines</span>' +
+        (line.sourceAssemblyId != null ? '<span data-asm-open="' + escapeAttr(line.sourceAssemblyId) + '" style="color:#4f8cff;cursor:pointer;">&#9998; Open assembly</span>' : '') +
+      '</div>';
+    return head + body + acts;
+  }
+  // Re-pull the recipe → new resolved unit cost + fresh component snapshot.
+  function coAsmRefresh(lineId) {
+    var line = (_state.co.lines || []).find(function (x) { return String(x.id) === String(lineId); });
+    if (!line || line.sourceAssemblyId == null) return;
+    if (line.assemblyParams) {
+      alert('This line was quantified from typed dimensions (a parametric assembly), so its quantities come from formulas — per-unit repricing would be wrong.\n\nTo reprice, re-add it from Plans & Takeoffs with the same measurements.');
+      return;
+    }
+    fetch('/api/assemblies/' + encodeURIComponent(line.sourceAssemblyId), { credentials: 'include' })
+      .then(function (r) { if (!r.ok) throw new Error(r.status === 404 ? 'That assembly no longer exists.' : 'Could not load recipe (' + r.status + ')'); return r.json(); })
+      .then(function (det) {
+        var flat = Array.isArray(det.flat) ? det.flat : [];
+        if (line.assemblyBucket) {
+          var rows = flat.filter(function (f) { return (f.cost_code || 'materials') === line.assemblyBucket; });
+          line.unitCost = Math.round(rows.reduce(function (s, f) { return s + coNum(f.qty_per_unit) * coNum(f.unit_cost); }, 0) * 10000) / 10000;
+          line.assemblyBreakdown = rows;
+          if (!rows.length) alert('The recipe no longer has any ' + (CO_BUCKET_LABEL[line.assemblyBucket] || line.assemblyBucket).toLowerCase() + ' components — this line is now $0.');
+        } else {
+          line.unitCost = coNum(det.assembly && det.assembly.unit_cost);
+          line.assemblyBreakdown = flat.length ? flat : line.assemblyBreakdown;
+        }
+        markDirty(); paintLines(); paintTotals();
+      })
+      .catch(function (e) { alert('Reprice failed: ' + (e.message || 'unknown')); });
+  }
+  // Convert the rollup line into raw editable lines (one per component,
+  // routed to the matching cost-code section). One-way — replaces the rollup.
+  function coAsmExplode(lineId) {
+    var line = (_state.co.lines || []).find(function (x) { return String(x.id) === String(lineId); });
+    if (!line || !Array.isArray(line.assemblyBreakdown)) return;
+    var doIt = function () {
+      var q = coNum(line.qty);
+      var specs = line.assemblyBreakdown.map(function (b) {
+        return {
+          description: b.description,
+          qty: Math.round(q * coNum(b.qty_per_unit) * 100) / 100,
+          unit: b.unit || 'ea',
+          unit_cost: b.unit_cost != null ? coNum(b.unit_cost) : 0,
+          cost_code: b.cost_code || 'materials',
+          source_material_id: b.material_id || undefined,
+          source_assembly_id: line.sourceAssemblyId
+        };
+      }).filter(function (s) { return s.qty > 0; });
+      var idx = _state.co.lines.indexOf(line);
+      if (idx >= 0) _state.co.lines.splice(idx, 1);
+      delete _coAsmOpen[lineId];
+      coApplyBulkAddLineItems(specs);
+    };
+    if (window.p86Confirm) {
+      window.p86Confirm({ title: 'Explode assembly', message: 'Explode "' + (line.description || 'assembly') + '" into ' + line.assemblyBreakdown.length + ' editable lines? The single rollup line is replaced.', confirmText: 'Explode', destructive: true }).then(function (ok) { if (ok) doIt(); });
+    } else if (confirm('Explode into editable lines?')) doIt();
+  }
+
   function paintLines() {
     var host = document.getElementById('p86CoLineTable');
     if (!host) return;
@@ -666,10 +768,21 @@
       '</tr></thead><tbody>';
     lines.forEach(function(l) {
       if (l.section === '__section_header__') {
+        // Section header: name + optional $/% markup mode toggle + an
+        // "override lines" checkbox (both drive the shared p86Pricing
+        // engine, which already understands markupMode/overrideLineMarkups).
+        var dollar = l.markupMode === 'dollar';
         html +=
           '<tr class="p86-co-section-row" data-line-id="' + escapeAttr(l.id) + '">' +
-            '<td colspan="3"><input class="p86-co-section-label" type="text" data-line-field="label" value="' + escapeAttr(l.label || '') + '" placeholder="Section name" /></td>' +
-            '<td><input class="p86-co-section-markup" type="number" step="0.1" data-line-field="markup" value="' + escapeAttr(l.markup == null ? '' : l.markup) + '" placeholder="Section %" /></td>' +
+            '<td colspan="3">' +
+              '<input class="p86-co-section-label" type="text" data-line-field="label" value="' + escapeAttr(l.label || '') + '" placeholder="Section name" />' +
+              '<label class="p86-co-sec-override" title="Ignore per-line markups — the section markup drives every line in it" style="font-size:10px;color:var(--text-dim,#8a93a6);margin-left:10px;white-space:nowrap;">' +
+                '<input type="checkbox" data-line-field="overrideLineMarkups"' + (l.overrideLineMarkups ? ' checked' : '') + ' style="vertical-align:middle;margin-right:3px;" />override lines</label>' +
+            '</td>' +
+            '<td class="markup" style="white-space:nowrap;">' +
+              '<button type="button" class="p86-co-sec-mode" data-sec-mode="' + escapeAttr(l.id) + '" title="Toggle percent markup / flat dollar add" style="min-width:24px;padding:2px 6px;font-size:11px;font-weight:700;border-radius:5px;border:1px solid rgba(255,255,255,0.18);background:rgba(255,255,255,0.06);color:inherit;cursor:pointer;vertical-align:middle;">' + (dollar ? '$' : '%') + '</button> ' +
+              '<input class="p86-co-section-markup" type="text" inputmode="decimal" data-line-field="markup" value="' + escapeAttr(l.markup == null ? '' : l.markup) + '" placeholder="' + (dollar ? 'Section $' : 'Section %') + '" />' +
+            '</td>' +
             '<td class="ext"></td>' +
             '<td class="del"><button type="button" class="p86-co-line-del" data-line-del title="Delete section">&times;</button></td>' +
           '</tr>';
@@ -678,43 +791,54 @@
         var m = window.p86Pricing.effectiveMarkupForLine(l, lineList, _state.co);
         var ext = (parseFloat(l.qty) || 0) * (parseFloat(l.unitCost) || 0);
         var marked = ext * (1 + m / 100);
+        var asm = isCoAsmLine(l);
         html +=
-          '<tr class="p86-co-line-row" data-line-id="' + escapeAttr(l.id) + '">' +
-            '<td><input type="number" step="0.01" data-line-field="qty" value="' + escapeAttr(l.qty == null ? '' : l.qty) + '" /></td>' +
-            '<td><input type="number" step="0.01" data-line-field="unitCost" value="' + escapeAttr(l.unitCost == null ? '' : l.unitCost) + '" /></td>' +
-            '<td><input type="text" data-line-field="description" value="' + escapeAttr(l.description || '') + '" placeholder="Line description" /></td>' +
-            '<td><input type="number" step="0.1" data-line-field="markup" value="' + escapeAttr(l.markup == null ? '' : l.markup) + '" placeholder="' + m.toFixed(1) + '" /></td>' +
+          '<tr class="p86-co-line-row' + (asm ? ' p86-co-asm-line' : '') + '" data-line-id="' + escapeAttr(l.id) + '">' +
+            '<td><input type="text" inputmode="decimal" data-line-field="qty" value="' + escapeAttr(l.qty == null ? '' : l.qty) + '" /></td>' +
+            '<td><input type="text" inputmode="decimal" data-line-field="unitCost" value="' + escapeAttr(l.unitCost == null ? '' : l.unitCost) + '" /></td>' +
+            '<td>' + (asm ? '<span title="From assembly" style="color:#7eb0ff;margin-right:3px;">&#129513;</span>' : '') +
+              '<input type="text" data-line-field="description" value="' + escapeAttr(l.description || '') + '" placeholder="Line description"' + (asm ? ' style="width:calc(100% - 22px);"' : '') + ' /></td>' +
+            '<td><input type="text" inputmode="decimal" data-line-field="markup" value="' + escapeAttr(l.markup == null ? '' : l.markup) + '" placeholder="' + m.toFixed(1) + '" /></td>' +
             '<td class="ext">' + escapeHTML(fmtCurrency(marked)) + '</td>' +
             '<td class="del"><button type="button" class="p86-co-line-del" data-line-del title="Delete line">&times;</button></td>' +
           '</tr>';
+        if (asm) {
+          html += '<tr class="p86-co-asm-strip-row" data-asm-strip-for="' + escapeAttr(l.id) + '">' +
+            '<td colspan="6" style="padding:0;border-top:1px dashed rgba(79,140,255,.25);background:rgba(79,140,255,.05);">' + coAsmStripHTML(l) + '</td></tr>';
+        }
       }
     });
     html += '</tbody></table>';
     host.innerHTML = html;
 
-    // Wire each row's inputs + delete button. Delegated per-row keeps
-    // re-paint cheap (full repaint on every keystroke would steal
-    // focus from the input being typed in).
+    // Wire each row's fields + delete. Line edits update surgically (no
+    // table rebuild → focus/caret survive); section-header changes that
+    // shift multiple child lines' markup re-render the table.
     host.querySelectorAll('tr[data-line-id]').forEach(function(tr) {
       var lineId = tr.getAttribute('data-line-id');
+      var isHeaderRow = tr.classList.contains('p86-co-section-row');
       tr.querySelectorAll('[data-line-field]').forEach(function(input) {
         input.addEventListener('input', function() {
           var line = (_state.co.lines || []).find(function(x) { return String(x.id) === String(lineId); });
           if (!line) return;
           var f = input.getAttribute('data-line-field');
+          if (input.type === 'checkbox') {
+            line[f] = input.checked;
+            markDirty(); paintLines(); paintTotals();   // affects every child line's markup
+            return;
+          }
           var v = input.value;
-          if (['qty', 'unitCost'].indexOf(f) !== -1) {
-            line[f] = v === '' ? '' : Number(v);
-          } else if (f === 'markup') {
-            line[f] = v === '' ? '' : Number(v);
+          if (['qty', 'unitCost', 'markup'].indexOf(f) !== -1) {
+            // inputmode=decimal text field: keep the prior value while a
+            // partial entry ("1.", "-") is unparseable, blank stays blank.
+            var nv = Number(v);
+            line[f] = v === '' ? '' : (isNaN(nv) ? line[f] : nv);
           } else {
             line[f] = v;
           }
           markDirty();
-          // Repaint the row's marked-up cell + totals; leave the rest
-          // of the table alone so focus stays where it is.
-          paintLineExt(tr);
-          paintTotals();
+          if (isHeaderRow) { paintTotals(); }   // child ext cells refresh on next paint
+          else { paintLineExt(tr); paintTotals(); }
         });
       });
       var del = tr.querySelector('[data-line-del]');
@@ -724,6 +848,29 @@
         paintLines();
         paintTotals();
       });
+    });
+
+    // Section $/% mode toggle.
+    host.querySelectorAll('[data-sec-mode]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var line = (_state.co.lines || []).find(function(x) { return String(x.id) === String(btn.getAttribute('data-sec-mode')); });
+        if (!line) return;
+        line.markupMode = (line.markupMode === 'dollar') ? 'percent' : 'dollar';
+        markDirty(); paintLines(); paintTotals();
+      });
+    });
+    // Assembly rollup strip: toggle / reprice / explode / open.
+    host.querySelectorAll('[data-asm-toggle]').forEach(function(el) {
+      el.addEventListener('click', function() { var id = el.getAttribute('data-asm-toggle'); _coAsmOpen[id] = !_coAsmOpen[id]; paintLines(); });
+    });
+    host.querySelectorAll('[data-asm-refresh]').forEach(function(el) {
+      el.addEventListener('click', function() { coAsmRefresh(el.getAttribute('data-asm-refresh')); });
+    });
+    host.querySelectorAll('[data-asm-explode]').forEach(function(el) {
+      el.addEventListener('click', function() { coAsmExplode(el.getAttribute('data-asm-explode')); });
+    });
+    host.querySelectorAll('[data-asm-open]').forEach(function(el) {
+      el.addEventListener('click', function() { var id = Number(el.getAttribute('data-asm-open')); if (window.p86Assemblies && window.p86Assemblies.openEditor) window.p86Assemblies.openEditor(id); });
     });
   }
 
