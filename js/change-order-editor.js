@@ -114,7 +114,11 @@
     // pointed at a torn-down CO (falls back to the estimate editor).
     if (window.p86ActiveLineTarget === coLineTarget) {
       try { delete window.p86ActiveLineTarget; } catch (e) { window.p86ActiveLineTarget = null; }
-      try { if (window.MaterialsDrawer && window.MaterialsDrawer.close) window.MaterialsDrawer.close(); } catch (e) {}
+      try {
+        if (window.MaterialsDrawer && window.MaterialsDrawer.close) window.MaterialsDrawer.close();
+        // Clear any CO-staged scope so it can't bleed into the next estimate.
+        if (window.MaterialsDrawer && window.MaterialsDrawer.reset) window.MaterialsDrawer.reset();
+      } catch (e) {}
     }
     _state.co = null;
     _state.dirty = false;
@@ -309,6 +313,9 @@
     if (!window.MaterialsDrawer || typeof window.MaterialsDrawer.open !== 'function') {
       alert('The catalog is still loading — try again in a moment.'); return;
     }
+    // Start from a clean drawer so a scope staged for a prior target (e.g.
+    // an estimate) can't bleed into this change order.
+    if (typeof window.MaterialsDrawer.reset === 'function') window.MaterialsDrawer.reset();
     window.p86ActiveLineTarget = coLineTarget;
     window.MaterialsDrawer.open();
   }

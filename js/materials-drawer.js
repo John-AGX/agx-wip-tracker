@@ -309,6 +309,30 @@
     _expandedRowId = null;
   }
 
+  // Clear the drawer's transient staging/selection state (mode, the
+  // staged assembly Scope Builder stack, multi-select). The drawer is a
+  // page-lifetime singleton shared across targets, so a scope staged for
+  // one target (e.g. a Change Order) must not survive to the next target
+  // (an estimate) where "Insert stack" would drop the wrong lines. The CO
+  // editor calls this when it claims AND releases the drawer, covering
+  // both handoff directions without changing the estimate's own behavior.
+  function resetSession() {
+    _mode = 'materials';
+    _stack = [];
+    if (_selectedIds && _selectedIds.clear) _selectedIds.clear();
+    _multiSelect = false;
+    _confirming = false;
+    _stackSaving = false;
+    _expandedRowId = null;
+    if (_isOpen && _drawerEl) {
+      var mc = _drawerEl.querySelector('[data-md-multi]');
+      if (mc) { mc.setAttribute('aria-pressed', 'false'); mc.classList.remove('active'); }
+      refreshTargetHint();
+      renderTray();
+      renderResults();
+    }
+  }
+
   function toggleDrawer() {
     if (_isOpen) closeDrawer(); else openDrawer();
   }
@@ -1199,6 +1223,7 @@
     open:   openDrawer,
     close:  closeDrawer,
     toggle: toggleDrawer,
+    reset:  resetSession,
     refresh: function() {
       refreshTargetHint();
       if (_isOpen) {
