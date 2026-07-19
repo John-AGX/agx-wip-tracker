@@ -333,9 +333,25 @@
       jobs.map(function (j) { return '<option value="' + esc(j.id) + '"' + (j.id === it.jobId ? ' selected' : '') + '>' + esc(jobLabel(j.id)) + '</option>'; }).join('') +
     '</select>';
 
+    // Invoices become vendor Bills (AP) — offer to link the bill to a PO on
+    // the matched job (vendor is then inherited from the PO).
+    var poSel = '';
+    if (state.entityType === 'invoice') {
+      var jobPOs = ((window.appData && window.appData.jobPurchaseOrders) || []).filter(function (p) { return p.job_id === it.jobId; });
+      poSel =
+        '<div style="font-size:10.5px;color:var(--text-dim,#8b8b96);text-transform:uppercase;letter-spacing:.4px;">PO</div>' +
+        '<select data-di-f="poId" data-di-id="' + it.id + '" style="' + fieldCss(false) + 'min-width:200px;"' + (it.jobId ? '' : ' disabled') + '>' +
+          '<option value="">' + (it.jobId ? '— No PO (manual bill) —' : '— pick a job first —') + '</option>' +
+          jobPOs.map(function (p) {
+            var lbl = (p.po_number || 'PO') + (p.sub_name ? ' — ' + p.sub_name : '') + (p.title ? ' · ' + p.title : '');
+            return '<option value="' + esc(p.id) + '" data-sub="' + esc(p.sub_id || '') + '"' + (String(p.id) === String(it.poId) ? ' selected' : '') + '>' + esc(lbl) + '</option>';
+          }).join('') +
+        '</select>';
+    }
     var meta =
       '<div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;align-items:center;">' +
         '<div style="font-size:10.5px;color:var(--text-dim,#8b8b96);text-transform:uppercase;letter-spacing:.4px;">Job</div>' + jobSel +
+        poSel +
         field(it, 'number', e.number, ENTITIES[state.entityType].label.split(' ')[0] + ' #', 120) +
         field(it, 'vendor', e.vendor, 'Vendor', 160) +
         field(it, 'date', e.date, 'Date', 120) +
@@ -408,7 +424,8 @@
       inp.onchange = function () {
         var it = findItem(inp.getAttribute('data-di-id')); if (!it) return;
         var k = inp.getAttribute('data-di-f');
-        if (k === 'jobId') { it.jobId = inp.value; render(); return; }
+        if (k === 'jobId') { it.jobId = inp.value; it.poId = ''; it.subId = ''; render(); return; }
+        if (k === 'poId') { it.poId = inp.value; var opt = inp.options[inp.selectedIndex]; it.subId = (opt && opt.getAttribute('data-sub')) || ''; return; }
         it.extracted[k] = inp.value;
       };
     });
@@ -496,8 +513,15 @@
     if (t === 'co') {
       return { co_number: e.number || undefined, status: 'approved', title: e.title || 'Imported change order', vendorName: e.vendor || null, date: e.date || null, defaultMarkup: 0, lines: lines };
     }
-    // invoice
-    return { job_id: it.jobId, invoice_number: e.number || undefined, issue_date: e.date || null, due_date: e.due_date || null, notes: e.vendor ? ('Vendor: ' + e.vendor) : '', lines: lines };
+    // invoice → a vendor Bill (Accounts Payable), optionally PO-linked. job_id
+    // is passed separately to api.bills.create, so it's not in the payload.
+    var billAmount = (e.total != null && num(e.total) > 0) ? num(e.total)
+      : lines.reduce(function (s, l) { return s + (num(l.amount) || 0); }, 0);
+    return {
+      po_id: it.poId || null, sub_id: it.subId || null, amount: billAmount,
+      bill_number: e.number || null, bill_date: e.date || null, due_date: e.due_date || null,
+      data: { description: e.title || (e.vendor ? ('Invoice — ' + e.vendor) : 'Vendor invoice'), vendor: e.vendor || '', lines: lines, source: 'ocr' }
+    };
   }
 
   function createOne(it) {
@@ -505,16 +529,17 @@
     var p;
     if (t === 'po') p = api.purchaseOrders.create(it.jobId, payload);
     else if (t === 'co') p = api.changeOrders.create(it.jobId, payload);
-    else p = api.invoices.create(payload);
+    else p = api.bills.create(it.jobId, payload);   // invoice → vendor Bill (AP)
     return p.then(function (res) {
-      var rec = res && (res.purchase_order || res.change_order || res.invoice);
+      var rec = res && (res.purchase_order || res.change_order || res.bill);
       it.status = 'done';
-      it.createdNumber = rec && (rec.po_number || rec.co_number || rec.invoice_number) || '';
+      it.createdNumber = rec && (rec.po_number || rec.co_number || rec.bill_number) || '';
       // Push into the live caches so the job metrics reflect it without a reload.
       try {
         if (t === 'po' && rec) { window.appData.jobPurchaseOrders = (window.appData.jobPurchaseOrders || []).concat(rec); }
         if (t === 'co' && rec) { window.appData.jobChangeOrders = (window.appData.jobChangeOrders || []).concat(rec); }
-        if (t === 'invoice' && rec) { window.appData.invoices = (window.appData.invoices || []).concat(rec); }
+        // Bill → refresh the unified rollup store so %-billed / accrued update.
+        if (t === 'invoice' && rec && typeof window.loadBillsForJob === 'function') { window.loadBillsForJob(it.jobId); }
       } catch (_) {}
     }).catch(function (err) {
       it.status = 'error';
