@@ -4853,7 +4853,17 @@ async function init() {
       FROM job_purchase_orders po,
            LATERAL jsonb_array_elements(COALESCE(po.data->'bills','[]'::jsonb)) WITH ORDINALITY AS t(elem, ord)
       WHERE jsonb_typeof(po.data->'bills') = 'array'
+        AND COALESCE(po.data->>'billsMigrated','') <> 'true'
       ON CONFLICT (id) DO NOTHING;`);
+    // Mark every PO whose bills we've promoted so this never re-runs for it.
+    // Without this the migration re-inserts on EVERY boot (ON CONFLICT skips
+    // only rows that still exist) — so deleting a promoted bill would
+    // resurrect it from the frozen data.bills[] on the next deploy/restart.
+    await pool.query(`
+      UPDATE job_purchase_orders
+         SET data = jsonb_set(COALESCE(data, '{}'::jsonb), '{billsMigrated}', 'true'::jsonb)
+       WHERE jsonb_typeof(data->'bills') = 'array'
+         AND COALESCE(data->>'billsMigrated','') <> 'true';`);
   } catch (e) {
     console.error('[init] vendor-bills migration failed (non-fatal):', e && e.message);
   }

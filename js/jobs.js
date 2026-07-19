@@ -777,6 +777,52 @@ function renderJobsMain() {
         // shows — NOT the legacy appData.purchaseOrders. Rows open the
         // dedicated PO editor (window.p86PurchaseOrders).
         var _poFetchInflight = {};
+        // Vendor Bills (Accounts Payable) store — the unified source the PO
+        // %-billed rollup reads (Bills S3). Mirrors the jobPurchaseOrders store:
+        // boot-loaded whole (appData.jobVendorBills + appData._billsAllLoaded)
+        // and refreshable per-job. poRowBilled sums from here; it falls back to
+        // the PO's frozen embedded data.bills[] only until the store loads for
+        // that job (the migration copied those into the table, so no drift).
+        var _billFetchInflight = {};
+        var _billsLoadedJobs = Object.create(null);
+        function loadBillsForJob(jobId) {
+            if (!jobId || !window.p86Api || !window.p86Api.bills) return Promise.resolve([]);
+            if (_billFetchInflight[jobId]) return _billFetchInflight[jobId];
+            _billFetchInflight[jobId] = window.p86Api.bills.listForJob(jobId)
+                .then(function(r) {
+                    var list = (r && r.bills) || [];
+                    if (!Array.isArray(appData.jobVendorBills)) appData.jobVendorBills = [];
+                    appData.jobVendorBills = appData.jobVendorBills
+                        .filter(function(b) { return b.job_id !== jobId; })
+                        .concat(list);
+                    _billsLoadedJobs[jobId] = true;
+                    delete _billFetchInflight[jobId];
+                    return list;
+                })
+                .catch(function(e) {
+                    delete _billFetchInflight[jobId];
+                    console.warn('loadBillsForJob failed:', e);
+                    return [];
+                });
+            return _billFetchInflight[jobId];
+        }
+        window.loadBillsForJob = loadBillsForJob;
+        // Boot hydration for the whole-org bills snapshot (called once from
+        // app.js). MERGES rather than blind-replaces: a job whose bills a fast
+        // per-job loadBillsForJob already pulled (its uncapped /jobs/:id/bills
+        // fetch is authoritative) is preserved, not clobbered by a possibly-
+        // truncated boot snapshot. ok=false (fetch failed OR hit the server row
+        // cap) leaves _billsAllLoaded false so poRowBilled falls back to the
+        // embedded (migrated) data.bills[] for jobs not individually loaded —
+        // never silently zeroing billed and over-stating accrued.
+        window.hydrateBillsStore = function(bills, ok) {
+            bills = Array.isArray(bills) ? bills : [];
+            var existing = Array.isArray(appData.jobVendorBills) ? appData.jobVendorBills : [];
+            var kept = existing.filter(function(b) { return _billsLoadedJobs[b.job_id]; });
+            var incoming = bills.filter(function(b) { return !_billsLoadedJobs[b.job_id]; });
+            appData.jobVendorBills = kept.concat(incoming);
+            appData._billsAllLoaded = !!ok;
+        };
         function loadPurchaseOrdersForJob(jobId) {
             if (!jobId || !window.p86Api || !window.p86Api.purchaseOrders) return Promise.resolve([]);
             if (_poFetchInflight[jobId]) return _poFetchInflight[jobId];
@@ -809,7 +855,20 @@ function renderJobsMain() {
             }, 0);
         }
         function poRowBilled(po) {
-            return (Array.isArray(po && po.bills) ? po.bills : []).reduce(function(s, b) {
+            if (!po) return 0;
+            // Unified store (Bills S3): sum the job_vendor_bills rows linked to
+            // this PO, excluding void. Read the store once it's loaded (boot-load
+            // set _billsAllLoaded, or a per-job loadBillsForJob). Until then fall
+            // back to the PO's frozen embedded data.bills[] — the migration copied
+            // those into the table, so the number is identical, just pre-fetch.
+            var loaded = appData._billsAllLoaded || _billsLoadedJobs[po.job_id];
+            if (loaded && Array.isArray(appData.jobVendorBills)) {
+                return appData.jobVendorBills.reduce(function(s, b) {
+                    if (b.po_id !== po.id || b.status === 'void') return s;
+                    return s + (parseFloat(b.amount) || 0);
+                }, 0);
+            }
+            return (Array.isArray(po.bills) ? po.bills : []).reduce(function(s, b) {
                 return s + (parseFloat(b.amount) || 0);
             }, 0);
         }
@@ -862,7 +921,10 @@ function renderJobsMain() {
             mount.style.cssText = 'margin-top:4px;';
             container.appendChild(mount);
             paintJobPurchaseOrdersInto(mount, jobId);
-            loadPurchaseOrdersForJob(jobId).then(function() {
+            // Load POs + their bills together so the accrued tile nets out
+            // billed against earned on first paint (billed comes from the
+            // unified bills store — Bills S3).
+            Promise.all([loadPurchaseOrdersForJob(jobId), loadBillsForJob(jobId)]).then(function() {
                 paintJobPurchaseOrdersInto(mount, jobId);
                 // POs feed ACCRUED cost — now that they've loaded, refresh the
                 // accrued tile + the phase matrix (per-phase accrued chip).

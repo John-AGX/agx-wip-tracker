@@ -2529,7 +2529,12 @@
                 // Total Income (contract + CO) on the jobs list + job tiles without
                 // waiting for a per-job fetch — no "contract only" flash. Rows carry
                 // data.lines, so getJobCOTotals can price each from its line items.
-                window.p86Api.changeOrders.listAll().catch(function() { return { change_orders: [] }; })
+                window.p86Api.changeOrders.listAll().catch(function() { return { change_orders: [] }; }),
+                // All vendor bills at boot so the PO %-billed / outstanding and
+                // ACCRUED (earned − billed) net out live on the jobs list + tiles
+                // without a per-job fetch. poRowBilled reads appData.jobVendorBills
+                // once appData._billsAllLoaded is set (Bills S3).
+                window.p86Api.bills.listAll({ status: 'all', limit: 50000 }).catch(function() { return { bills: [], _failed: true }; })
             ]).then(function(results) {
                 hydrateFromServerJobs(results[0].jobs);
                 hydrateFromServerEstimates(results[1].estimates);
@@ -2538,6 +2543,21 @@
                 appData.knownTrades = (results[3] && results[3].trades) || [];
                 appData.jobPurchaseOrders = (results[4] && results[4].purchase_orders) || [];
                 appData.jobChangeOrders = (results[5] && results[5].change_orders) || [];
+                // Hydrate the org-wide bills snapshot into the cost-rollup store.
+                // Trust it globally only if the fetch SUCCEEDED and was NOT
+                // truncated by the server row cap (50000). On failure/truncation
+                // keep per-job loads authoritative — poRowBilled then falls back
+                // to each PO's embedded (migrated) bills rather than zeroing
+                // billed and over-stating ACCRUED (accrued = earned − billed).
+                var _billsRes = results[6] || {};
+                var _billsList = (_billsRes && _billsRes.bills) || [];
+                var _billsOk = !_billsRes._failed && _billsList.length < 50000;
+                if (typeof window.hydrateBillsStore === 'function') {
+                    window.hydrateBillsStore(_billsList, _billsOk);
+                } else {
+                    appData.jobVendorBills = _billsList;
+                    appData._billsAllLoaded = _billsOk;
+                }
                 writeToLocalStorage();
                 _serverLoadComplete = true;
                 _serverLoadInFlight = false;

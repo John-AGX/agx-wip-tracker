@@ -109,6 +109,15 @@
     // Final flush — carry the import extraction (if any) so the server logs
     // extraction-vs-final for the training flywheel.
     if (_po && (hadTimer || _pendingPOExtraction)) saveNow(!!_pendingPOExtraction);
+    // Discard freshly-added bills the user never filled in — a $0 blank row
+    // would otherwise orphan on the Bills tab / AP aging.
+    if (_po && Array.isArray(_po._billRows) && window.p86Api && window.p86Api.bills) {
+      _po._billRows.forEach(function (b) {
+        if (b && b._ephemeral && num(b.amount) === 0 && !String(b.description || '').trim()) {
+          window.p86Api.bills.remove(b.id).catch(function () {});
+        }
+      });
+    }
     var ov = document.getElementById('po-editor-overlay');
     if (ov) ov.style.display = 'none';
     _po = null;
@@ -239,19 +248,29 @@
     '</div>';
   }
 
-  // ── Bills & Lien Waivers (data.bills[]) + % billed / outstanding ────
-  function billsTotal(po) { return ((po && po.bills) || []).reduce(function (s, b) { return s + num(b.amount); }, 0); }
+  // ── Bills & Lien Waivers + % billed / outstanding ──────────────────
+  // Bills S3: these are first-class job_vendor_bills rows (the same store the
+  // Bills tab + the job cost rollup read), NOT the PO's embedded data.bills[].
+  // _po._billRows holds the live rows (loaded on open). The PO no longer
+  // persists data.bills[] (saveNow drops it), so an unedited migrated PO keeps
+  // its frozen copy purely for the rollup's pre-fetch fallback, and editing the
+  // PO clears it.
+  function billsTotal() {
+    return (_po && Array.isArray(_po._billRows) ? _po._billRows : []).reduce(function (s, b) {
+      return b && b.status === 'void' ? s : s + num(b.amount);
+    }, 0);
+  }
   var LIEN_OPTS = [
     { v: 'none', label: 'No waiver', c: '#94a3b8' },
     { v: 'conditional', label: 'Conditional', c: '#fbbf24' },
     { v: 'unconditional', label: 'Unconditional', c: '#34d399' }
   ];
   function paymentsSectionHTML(locked) {
-    var total = poTotal(_po), billed = billsTotal(_po), outstanding = total - billed;
+    var total = poTotal(_po), billed = billsTotal(), outstanding = total - billed;
     var pct = total > 0 ? Math.round(billed / total * 100) : 0;
-    var bills = _po.bills || [];
+    var bills = (_po._billRows || []).filter(function (b) { return b && b.status !== 'void'; });
     var rows = bills.length
-      ? bills.map(function (b, i) { return billRowHTML(b, i, locked); }).join('')
+      ? bills.map(function (b) { return billRowHTML(b, locked); }).join('')
       : '<tr><td colspan="5" class="po-ed-empty">No bills yet.</td></tr>';
     return '<div class="po-ed-sec">' +
       '<div class="po-ed-sec-title">Bills &amp; Lien Waivers</div>' +
@@ -269,20 +288,21 @@
       (locked ? '' : '<button class="ee-btn po-ed-addrow" id="po-ed-addbill">+ Add bill</button>') +
     '</div>';
   }
-  function billRowHTML(b, i, locked) {
+  function billRowHTML(b, locked) {
     var dis = locked ? ' disabled' : '';
-    return '<tr data-bill="' + i + '">' +
-      '<td><input class="po-ed-cell" data-bf="date" type="date" value="' + escAttr(b.date || '') + '"' + dis + '></td>' +
+    var bd = (b.bill_date || '').slice(0, 10);
+    return '<tr data-bill-id="' + escAttr(b.id) + '">' +
+      '<td><input class="po-ed-cell" data-bf="bill_date" type="date" value="' + escAttr(bd) + '"' + dis + '></td>' +
       '<td><input class="po-ed-cell" data-bf="description" value="' + escAttr(b.description || '') + '" placeholder="Sub invoice / draw"' + dis + '></td>' +
       '<td class="num"><input class="po-ed-cell num" data-bf="amount" type="number" step="0.01" value="' + escAttr(b.amount != null ? b.amount : '') + '"' + dis + '></td>' +
       '<td><select class="po-ed-cell" data-bf="lienWaiver"' + dis + '>' +
         LIEN_OPTS.map(function (o) { return '<option value="' + o.v + '"' + ((b.lienWaiver || 'none') === o.v ? ' selected' : '') + '>' + o.label + '</option>'; }).join('') +
       '</select></td>' +
-      '<td>' + (locked ? '' : '<button class="po-ed-delbill" data-bill="' + i + '" title="Remove">✕</button>') + '</td>' +
+      '<td>' + (locked ? '' : '<button class="po-ed-delbill" data-bill-id="' + escAttr(b.id) + '" title="Remove">✕</button>') + '</td>' +
     '</tr>';
   }
   function recomputePay() {
-    var total = poTotal(_po), billed = billsTotal(_po);
+    var total = poTotal(_po), billed = billsTotal();
     var pct = total > 0 ? Math.round(billed / total * 100) : 0;
     var set = function (id, v) { var el = document.getElementById(id); if (el) el.textContent = v; };
     set('po-ed-pt', money(total)); set('po-ed-pb', money(billed));
@@ -405,6 +425,7 @@
 
     // Read-only sections load regardless of lock state.
     loadAttachments();
+    loadBills();
     loadLinkedRfis(locked);
 
     if (locked) return;
@@ -425,13 +446,27 @@
 
     wireLineInputs();
 
-    // Bills & lien waivers
+    // Bills & lien waivers — each row is a live job_vendor_bills record
+    // (Bills S3), not embedded PO data. Add = create a real bill linked to
+    // this PO (vendor inherited); edits/deletes hit the bills API directly.
     var addBill = byId('po-ed-addbill');
     if (addBill) addBill.addEventListener('click', function () {
-      if (!Array.isArray(_po.bills)) _po.bills = [];
-      _po.bills.push({ id: 'bill_' + Math.random().toString(36).slice(2, 8), date: new Date().toISOString().slice(0, 10), description: '', amount: '', lienWaiver: 'none' });
-      reRenderBills();
-      queueSave();
+      if (!window.p86Api || !window.p86Api.bills || !_po.job_id) return;
+      addBill.disabled = true;
+      window.p86Api.bills.create(_po.job_id, {
+        po_id: _po.id, sub_id: _po.sub_id || null, amount: 0,
+        bill_date: new Date().toISOString().slice(0, 10),
+        data: { description: '', lienWaiver: 'none' }
+      }).then(function (r) {
+        addBill.disabled = false;
+        var row = r && r.bill;
+        if (!row) return;
+        row._ephemeral = true;   // discard on close if never filled in
+        if (!Array.isArray(_po._billRows)) _po._billRows = [];
+        _po._billRows.push(row);
+        reRenderBills();
+        syncBillsToStore();
+      }).catch(function () { addBill.disabled = false; });
     });
     wireBillInputs();
 
@@ -447,6 +482,21 @@
     });
   }
 
+  // Mirror the editor's live bill rows into the shared cost-rollup store
+  // (appData.jobVendorBills) so getJobPOAccrued / poRowBilled reflect edits
+  // without a refetch. Boot already set _billsAllLoaded, so the rollup trusts
+  // the store; we replace just this PO's rows.
+  function syncBillsToStore() {
+    if (!_po || !window.appData) return;
+    var store = window.appData.jobVendorBills;
+    if (!Array.isArray(store)) store = [];
+    window.appData.jobVendorBills = store
+      .filter(function (b) { return b.po_id !== _po.id; })
+      .concat(_po._billRows || []);
+  }
+  function findBillRow(id) {
+    return (_po._billRows || []).filter(function (b) { return String(b.id) === String(id); })[0] || null;
+  }
   function wireBillInputs() {
     var body = document.getElementById('po-ed-bills');
     if (!body) return;
@@ -457,29 +507,62 @@
     });
     body.querySelectorAll('.po-ed-delbill').forEach(function (btn) {
       btn.addEventListener('click', function () {
-        var i = parseInt(btn.getAttribute('data-bill'), 10);
-        if (_po.bills) { _po.bills.splice(i, 1); reRenderBills(); queueSave(); }
+        var id = btn.getAttribute('data-bill-id');
+        if (!id || !window.p86Api || !window.p86Api.bills) return;
+        window.p86Api.bills.remove(id).then(function () {
+          _po._billRows = (_po._billRows || []).filter(function (b) { return String(b.id) !== String(id); });
+          reRenderBills();
+          syncBillsToStore();
+        }).catch(function () {});
       });
     });
   }
+  var _billSaveTimers = {};
   function updateBillCell(inp) {
     var tr = inp.closest('tr'); if (!tr) return;
-    var i = parseInt(tr.getAttribute('data-bill'), 10);
+    var id = tr.getAttribute('data-bill-id');
     var f = inp.getAttribute('data-bf');
-    if (!_po.bills || !_po.bills[i]) return;
-    _po.bills[i][f] = inp.value;
+    var row = findBillRow(id);
+    if (!row) return;
+    row[f] = inp.value;                 // bill_date | description | amount | lienWaiver
+    // Any real content means it's no longer a throwaway just-added row.
+    if ((f === 'amount' && num(inp.value) > 0) || (f === 'description' && String(inp.value || '').trim())) row._ephemeral = false;
     if (f === 'amount') recomputePay();
-    queueSave();
+    syncBillsToStore();
+    // Debounce the PUT per bill so keystrokes don't spam the API.
+    if (_billSaveTimers[id]) clearTimeout(_billSaveTimers[id]);
+    _billSaveTimers[id] = setTimeout(function () {
+      delete _billSaveTimers[id];
+      if (!window.p86Api || !window.p86Api.bills) return;
+      window.p86Api.bills.update(id, {
+        amount: row.amount,
+        bill_date: row.bill_date || null,
+        data: { description: row.description || '', lienWaiver: row.lienWaiver || 'none' }
+      }).catch(function () {});
+    }, 600);
   }
   function reRenderBills() {
     var body = document.getElementById('po-ed-bills');
     if (!body) return;
-    var bills = _po.bills || [];
+    var bills = (_po._billRows || []).filter(function (b) { return b && b.status !== 'void'; });
     body.innerHTML = bills.length
-      ? bills.map(function (b, i) { return billRowHTML(b, i, false); }).join('')
+      ? bills.map(function (b) { return billRowHTML(b, false); }).join('')
       : '<tr><td colspan="5" class="po-ed-empty">No bills yet.</td></tr>';
     wireBillInputs();
     recomputePay();
+  }
+  // Load this PO's live bills (status:'all' so paid ones still count toward
+  // billed; void excluded) and paint the section. Also mirror into the
+  // rollup store so the accrued tile is consistent with what's shown.
+  function loadBills() {
+    if (!_po || !window.p86Api || !window.p86Api.bills) return;
+    var poId = _po.id;
+    window.p86Api.bills.listAll({ po: poId, status: 'all' }).then(function (r) {
+      if (!_po || _po.id !== poId) return;   // editor moved on
+      _po._billRows = ((r && r.bills) || []).filter(function (b) { return b && b.status !== 'void'; });
+      reRenderBills();
+      syncBillsToStore();
+    }).catch(function () {});
   }
 
   function bindInput(id, setter) {
@@ -636,10 +719,16 @@
   function saveNow(withExtraction) {
     _saveTimer = null;
     if (!_po || !window.p86Api || !window.p86Api.purchaseOrders) return Promise.resolve();
+    // Bills S3: the PO no longer stores bills in its data blob — they're
+    // first-class job_vendor_bills rows. Deliberately OMIT `bills` from the
+    // payload: the PO PUT full-replaces data, so leaving it out lets a PO edit
+    // clear the frozen data.bills[] (and the billsMigrated flag), which makes
+    // the boot migration skip this PO (no array to promote) — closing the
+    // "deleted migrated bill resurrects on restart" hole.
     var payload = {
       title: _po.title || '', scope: _po.scope || '', internalNotes: _po.internalNotes || '',
       scheduledCompletion: _po.scheduledCompletion || '', materialsOnly: !!_po.materialsOnly,
-      lines: _po.lines || [], bills: _po.bills || [], linkedRfiIds: _po.linkedRfiIds || [],
+      lines: _po.lines || [], linkedRfiIds: _po.linkedRfiIds || [],
       phaseName: _po.phaseName || null,
       sub_id: _po.sub_id || null
     };

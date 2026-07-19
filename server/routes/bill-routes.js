@@ -68,7 +68,9 @@ function cleanData(body) {
   const data = { ...(body || {}) };
   ['id', 'job_id', 'owner_id', 'po_id', 'sub_id', 'status', 'bill_number', 'amount',
    'bill_date', 'due_date', 'approved_at', 'approved_by', 'created_at', 'updated_at'].forEach((k) => delete data[k]);
-  if (!Array.isArray(data.lines)) data.lines = [];
+  // Do NOT force lines:[] here — the PUT merges this blob (data || $1), so an
+  // injected empty lines would clobber a bill's real data.lines (e.g. future
+  // OCR line items). Callers that need lines pass them explicitly.
   return data;
 }
 
@@ -117,7 +119,9 @@ router.get('/bills', requireAuth, async (req, res) => {
     if (statusQ === 'open') where.push("b.status IN ('open','approved')");
     else if (statusQ === 'unpaid') where.push("b.status <> 'paid' AND b.status <> 'void'");
     else if (statusQ && statusQ !== 'all' && STATUS_VALUES.includes(statusQ)) { where.push('b.status = $' + (pn++)); params.push(statusQ); }
-    const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 300));
+    // Cap generously: the client boot-load pulls the whole org's bills into
+    // the cost-rollup store, so a low cap would silently truncate "billed".
+    const limit = Math.min(50000, Math.max(1, parseInt(req.query.limit, 10) || 300));
     const { rows } = await pool.query(
       `SELECT ${SELECT_COLS}, j.data->>'jobNumber' AS job_number, j.data->>'title' AS job_title,
               po.po_number AS po_number, s.name AS sub_name
@@ -258,7 +262,7 @@ router.put('/bills/:id', requireAuth, requireCapability('ESTIMATES_EDIT'), async
     const data = cleanData(b.data || b);
     const { rows } = await pool.query(
       `UPDATE job_vendor_bills SET
-          data = $1::jsonb,
+          data = COALESCE(data, '{}'::jsonb) || $1::jsonb,
           amount = CASE WHEN $2::boolean THEN $3 ELSE amount END,
           bill_number = CASE WHEN $4::boolean THEN $5 ELSE bill_number END,
           bill_date = CASE WHEN $6::boolean THEN $7 ELSE bill_date END,

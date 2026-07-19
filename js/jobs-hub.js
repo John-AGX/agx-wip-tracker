@@ -187,6 +187,13 @@
   var _currentRefetch = null;
   window.p86JobsHubRefresh = function () { if (typeof _currentRefetch === 'function') _currentRefetch(); };
 
+  // After a bill create/edit/void/delete from the Bills tab, refresh the shared
+  // cost-rollup store (appData.jobVendorBills) for that job so getJobPOAccrued /
+  // the jobs-list accrued tiles reflect it without a full reload (Bills S3).
+  function refreshBillRollup(jobId) {
+    if (jobId && typeof window.loadBillsForJob === 'function') window.loadBillsForJob(jobId);
+  }
+
   // ── Shared list scaffold ───────────────────────────────────────────
   function jobFilterHTML(selected) {
     var jobs = jobsList().slice().sort(function (a, b) {
@@ -274,6 +281,18 @@
       all.checked = boxes.length > 0 && checked === boxes.length;
       all.indeterminate = checked > 0 && checked < boxes.length;
     }
+    // After a Bills-tab bulk status/delete, refresh the shared cost-rollup
+    // store (appData.jobVendorBills) for each affected job so getJobPOAccrued /
+    // the jobs-list tiles reflect it — the single-bill paths do this too.
+    function bulkRefreshBillStore(ids) {
+      if (cfg.key !== 'bills' || typeof window.loadBillsForJob !== 'function') return;
+      var jset = {};
+      (ids || []).forEach(function (id) {
+        var r = (_rows || []).filter(function (x) { return String(x.id) === String(id); })[0];
+        if (r && r.job_id) jset[r.job_id] = true;
+      });
+      Object.keys(jset).forEach(function (j) { window.loadBillsForJob(j); });
+    }
     function updateBulkBar() {
       var bar = host.querySelector('#jh-bulkbar');
       if (!bar || !cfg.bulk) return;
@@ -288,6 +307,7 @@
             .then(function (res) {
               var okc = res.filter(Boolean).length, fail = res.length - okc;
               if (typeof window.p86Toast === 'function') window.p86Toast('Status set on ' + okc + (fail ? ', ' + fail + ' failed' : '') + '.', fail ? 'error' : 'success');
+              bulkRefreshBillStore(ids);
               _selected.clear(); refetch();
             });
         });
@@ -300,6 +320,7 @@
             .then(function (res) {
               var okc = res.filter(Boolean).length, fail = res.length - okc;
               if (typeof window.p86Toast === 'function') window.p86Toast('Deleted ' + okc + (fail ? ', ' + fail + ' failed (locked or no access)' : '') + '.', fail ? 'error' : 'success');
+              bulkRefreshBillStore(ids);
               _selected.clear(); refetch();
             });
         });
@@ -785,18 +806,19 @@
     function save() {
       var btn = foot.querySelector('.jh-be-save'); btn.disabled = true; btn.textContent = 'Saving…';
       window.p86Api.bills.update(bill.id, collect())
-        .then(function (r) { bill = (r && r.bill) || bill; close(); if (typeof onSaved === 'function') onSaved(); })
+        .then(function (r) { bill = (r && r.bill) || bill; refreshBillRollup(bill.job_id); close(); if (typeof onSaved === 'function') onSaved(); })
         .catch(function (e) { btn.disabled = false; btn.textContent = 'Save'; alert('Could not save: ' + ((e && e.message) || 'error')); });
     }
     function setStatus(s) {
       window.p86Api.bills.setStatus(bill.id, s)
-        .then(function (r) { bill = (r && r.bill) || bill; render(); if (typeof onSaved === 'function') onSaved(); })
+        .then(function (r) { bill = (r && r.bill) || bill; refreshBillRollup(bill.job_id); render(); if (typeof onSaved === 'function') onSaved(); })
         .catch(function (e) { alert('Could not change status: ' + ((e && e.message) || 'error')); });
     }
     function del() {
       bulkConfirm({ title: 'Delete bill', message: 'Delete this bill? This cannot be undone.', confirmLabel: 'Delete', danger: true }).then(function (ok) {
         if (!ok) return;
-        window.p86Api.bills.remove(bill.id).then(function () { close(); if (typeof onSaved === 'function') onSaved(); })
+        var jid = bill.job_id;
+        window.p86Api.bills.remove(bill.id).then(function () { refreshBillRollup(jid); close(); if (typeof onSaved === 'function') onSaved(); })
           .catch(function (e) { alert('Could not delete: ' + ((e && e.message) || 'error')); });
       });
     }
@@ -992,6 +1014,7 @@
       window.p86Api.bills.create(jobId, billPayload)
         .then(function (res) {
           close();
+          refreshBillRollup(jobId);
           if (typeof onSaved === 'function') onSaved();
           var id = res && res.bill && res.bill.id;
           if (id) openBillEditor(id, function () { if (typeof onSaved === 'function') onSaved(); });
