@@ -83,7 +83,7 @@
   // TAB_TITLES key); the URL slug for it is '/files' — friendlier and
   // matches the header icon's purpose. parsePath/serializeRoute do the
   // translation.
-  var KNOWN_TOP_TABS = ['summary', 'my-files', 'field-tools', 'jobs', 'jobshub', 'estimates', 'schedule', 'plans', 'insights', 'admin', 'projects', 'orgmap', 'orgleadsmap', 'console', 'cost-inbox', 'invoices', 'my-day', 'my-tasks', 'messages'];
+  var KNOWN_TOP_TABS = ['summary', 'my-files', 'field-tools', 'jobs', 'jobshub', 'estimates', 'schedule', 'plans', 'assembly-studio', 'insights', 'admin', 'projects', 'orgmap', 'orgleadsmap', 'console', 'cost-inbox', 'invoices', 'my-day', 'my-tasks', 'messages'];
 
   // ── URL <-> route object ──────────────────────────────────────
   function parsePath(pathname) {
@@ -113,7 +113,10 @@
       return route;
     }
     if (top === 'assemblies') {
-      route.top = 'estimates'; route.estSub = 'assemblies';
+      // /assemblies now lands on the consolidated Assembly Studio home
+      // (moved off the Estimates sub-tab). The pane defaults to the
+      // Assemblies sub-tab.
+      route.top = 'assembly-studio';
       return route;
     }
     // /leads[/:id] — same pseudo-top-level treatment (IA-C). Leads reads
@@ -203,6 +206,8 @@
       if (route.archived) return '/jobs/archived';
       return '/jobs';
     }
+    // Assembly Studio keeps the bookmarkable /assemblies URL.
+    if (route.top === 'assembly-studio') return '/assemblies';
     if (route.top === 'estimates') {
       // Clients and subs surface as their own root paths even though
       // the UI lives under #estimates — keeps URLs aligned with how

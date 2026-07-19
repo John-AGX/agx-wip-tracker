@@ -730,7 +730,23 @@
                         <button class="tab-btn" data-tab="messages" data-p86-icon="envelope" title="Messages"><span class="app-nav-label">Messages</span><span id="navMessagesBadge" style="display:none;margin-left:auto;background:#f87171;color:#fff;font-size:10px;font-weight:700;padding:1px 7px;border-radius:10px;line-height:1.5;"></span></button>
                         <button class="tab-btn" data-tab="email-hub" data-p86-icon="at-symbol" title="Email — your forwarded inbox, readable by the assistant"><span class="app-nav-label">Email</span></button>
                         <button class="tab-btn" data-tab="plans" data-p86-icon="scale" title="Plans &amp; Takeoffs"><span class="app-nav-label">Plans</span></button>
-                        <button class="tab-btn" data-tab="estimates" data-est-subtab="assemblies" data-virtual-tab="assemblies" data-p86-icon="estimates" data-cap="ESTIMATES_VIEW" title="Assemblies — costed recipes for estimating"><span class="app-nav-label">Assemblies</span></button>
+                        <!-- Assembly Studio — the consolidated home for the
+                             cost-assembly system (replaces the old flat
+                             "Assemblies" row + the Command Center studio +
+                             the Admin taxonomy). Accordion visible to
+                             ESTIMATES_VIEW; the Studio child is admin-only. -->
+                        <div class="app-nav-parent" data-accordion="asmstudio" data-cap="ESTIMATES_VIEW">
+                            <button class="tab-btn app-nav-parent-btn" data-tab="assembly-studio" data-asmstudio-subtab="assemblies" data-virtual-tab="asmstudio-assemblies" data-p86-icon="cube" title="Assembly Studio — AGX's cost-assembly database">
+                                <span class="app-nav-label">Assembly Studio</span>
+                                <span class="app-nav-caret" role="button" tabindex="0" aria-label="Toggle Assembly Studio sub-pages" aria-expanded="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" width="12" height="12" aria-hidden="true"><polyline points="9 18 15 12 9 6"></polyline></svg></span>
+                            </button>
+                            <div class="app-nav-children" role="group" aria-label="Assembly Studio sub-pages">
+                                <button class="tab-btn app-nav-child" data-tab="assembly-studio" data-asmstudio-subtab="assemblies" data-virtual-tab="asmstudio-assemblies" data-p86-icon="cube" title="Assemblies — costed recipes"><span class="app-nav-label">Assemblies</span></button>
+                                <button class="tab-btn app-nav-child" data-tab="assembly-studio" data-asmstudio-subtab="studio" data-virtual-tab="asmstudio-studio" data-p86-icon="wrench" data-cap="SYSTEM_ADMIN" title="Studio — build &amp; tune with 86"><span class="app-nav-label">Studio</span></button>
+                                <button class="tab-btn app-nav-child" data-tab="assembly-studio" data-asmstudio-subtab="codes" data-virtual-tab="asmstudio-codes" data-p86-icon="tag" title="Codes — Trade · System · Variant taxonomy"><span class="app-nav-label">Codes</span></button>
+                                <button class="tab-btn app-nav-child" data-tab="assembly-studio" data-asmstudio-subtab="parametric" data-virtual-tab="asmstudio-parametric" data-p86-icon="scale" title="Parametric — formula-driven recipes"><span class="app-nav-label">Parametric</span></button>
+                            </div>
+                        </div>
                         <div class="app-nav-parent" data-accordion="myfiles">
                             <button class="tab-btn app-nav-parent-btn" data-tab="my-files" data-p86-icon="folder" title="My Files">
                                 <span class="app-nav-label">My Files</span>
@@ -1361,6 +1377,12 @@
                      calibrate + measure). Painted by renderPlansTab() in
                      js/plans.js. -->
                 <div id="plans" class="tab-content"></div>
+                <!-- Assembly Studio — the consolidated home for AGX's
+                     cost-assembly system (Assemblies / Studio / Codes /
+                     Parametric). Built by js/assembly-studio.js into
+                     #asmStudioPageHost when switchTab('assembly-studio')
+                     runs (same pattern as #jobshub). -->
+                <div id="assembly-studio" class="tab-content"><div id="asmStudioPageHost"></div></div>
 
                 <!-- IA-B: Projects as a true top-level page. switchTab('projects')
                      mounts js/projects.js renderProjectsInto() here — the same
@@ -1436,7 +1458,6 @@
                         <button class="ws-right-tab" data-estimates-subtab="list" data-p86-icon="estimates" onclick="switchEstimatesSubTab('list')">Estimates</button>
                         <button class="ws-right-tab" data-estimates-subtab="clients" data-p86-icon="clients" onclick="switchEstimatesSubTab('clients')">Clients</button>
                         <button class="ws-right-tab" data-estimates-subtab="subs" data-p86-icon="subs" onclick="switchEstimatesSubTab('subs')">Subs</button>
-                        <button class="ws-right-tab" data-estimates-subtab="assemblies" data-p86-icon="estimates" onclick="switchEstimatesSubTab('assemblies')">Assemblies</button>
                         <button class="ws-right-tab" data-estimates-subtab="users" data-p86-icon="users" onclick="switchEstimatesSubTab('users')">Internal Users</button>
                     </div>
 
@@ -3218,7 +3239,7 @@
          dropdown and the My Files tree. -->
     <script src="js/folder-taxonomy.js?v=2"></script>
     <script src="js/subs.js?v=12"></script>
-    <script src="js/assemblies.js?v=5"></script>
+    <script src="js/assemblies.js?v=6"></script>
     <script src="js/job-audit.js?v=4d"></script>
     <script src="js/job-reports.js?v=1b"></script>
     <!-- Shared table enhancements (reorder / resize / freeze first column /
@@ -3239,7 +3260,7 @@
     <script src="js/entity-card.js?v=6"></script>
     <!-- Lead/estimate context card mounted into #app-sidebar (uses p86EntityCard). -->
     <script src="js/entity-subnav.js?v=2"></script>
-    <script src="js/app.js?v=119"></script>
+    <script src="js/app.js?v=120"></script>
     <script src="js/search-clear.js?v=3"></script>
     <script src="js/sidebar-brand.js?v=2"></script>
     <!-- Guided tours engine + the Help & What's New center (patch
@@ -3308,6 +3329,7 @@
          RFIs / Submittals) for the Jobs sidebar dropdown. Uses p86Api +
          appData.jobs + editJob/switchJobSubTab at runtime. -->
     <script src="js/jobs-hub.js?v=19"></script>
+    <script src="js/assembly-studio.js?v=1"></script>
     <!-- Purchase Order editor — full-window overlay opened from the Jobs
          hub Purchase Orders list. Uses p86Api.purchaseOrders + subs. -->
     <script src="js/purchase-order-import.js?v=1"></script>
@@ -3353,7 +3375,7 @@
     <!-- URL router — pathname-based navigation. Loads last so all
          top-level nav functions (switchTab, editJob, etc.) exist
          before the router wraps them. -->
-    <script src="js/router.js?v=25"></script>
+    <script src="js/router.js?v=26"></script>
 
     <!-- Sidebar Recents — client-side recently-opened list. Loads after
          router.js + the entity-open modules so it can wrap editJob /

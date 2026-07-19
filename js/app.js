@@ -393,6 +393,13 @@
                     if (jobshubSub && typeof window.switchJobsHubSubTab === 'function') {
                         window.switchJobsHubSubTab(jobshubSub);
                     }
+                    // Assembly Studio accordion children carry
+                    // data-asmstudio-subtab (assemblies / studio / codes /
+                    // parametric) — same pattern as data-jobshub-subtab.
+                    const asmStudioSub = btn.getAttribute('data-asmstudio-subtab');
+                    if (asmStudioSub && typeof window.switchAsmStudioSubTab === 'function') {
+                        window.switchAsmStudioSubTab(asmStudioSub);
+                    }
                     // My Files accordion children carry data-myfiles-folder
                     // (e.g. __projects__, __tools__, __printouts__) — same
                     // pattern as data-admin-subtab. After switchTab routes us
@@ -1804,6 +1811,7 @@
             'my-day':   'My Day',
             messages:   'Messages',
             plans:      'Plans & Takeoffs',
+            'assembly-studio': 'Assembly Studio',
             insights:   'Insights',
             admin:      'Admin',
             projects:   'Projects',
@@ -2000,6 +2008,16 @@
                     window.p86JobsHub.renderJobsHubInto(jhHost);
                 } else if (jhHost) {
                     jhHost.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);">Jobs hub module not loaded.</div>';
+                }
+            } else if (tabName === 'assembly-studio') {
+                // Assembly Studio — the consolidated cost-assembly home
+                // (Assemblies / Studio / Codes / Parametric). Same bootstrap
+                // as jobshub: build the pane on open, sub-tabs via sidebar.
+                var asHost = document.getElementById('asmStudioPageHost');
+                if (asHost && window.p86AsmStudio && typeof window.p86AsmStudio.render === 'function') {
+                    window.p86AsmStudio.render(asHost);
+                } else if (asHost) {
+                    asHost.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);">Assembly Studio module not loaded.</div>';
                 }
             } else if (tabName === 'schedule') {
                 if (typeof window.renderSchedule === 'function') window.renderSchedule();

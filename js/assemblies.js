@@ -89,8 +89,16 @@
   function num(v) { var n = parseFloat(v); return isFinite(n) ? n : 0; }
 
   // ── List view ───────────────────────────────────────────────────────
-  function renderList() {
-    var host = document.getElementById('assemblies-list');
+  // The list can render into more than one host (the classic Estimates →
+  // Assemblies pane and the new Assembly Studio pane). renderList(prefix)
+  // sets the active host prefix; the three ids are `${prefix}-list`,
+  // `${prefix}-search`, `${prefix}-summary`. Default 'assemblies' keeps the
+  // original estimates host working unchanged. Only one surface is visible
+  // at a time, so a shared module-level prefix is safe.
+  var _hostPrefix = 'assemblies';
+  function renderList(prefix) {
+    if (prefix) _hostPrefix = String(prefix);
+    var host = document.getElementById(_hostPrefix + '-list');
     if (!host) return;
     host.innerHTML = '<div style="padding:20px;color:var(--text-dim,#888);text-align:center;">Loading assemblies…</div>';
     Promise.all([window.p86Api.assemblies.list(), ensureTaxonomy()]).then(function (r) {
@@ -134,10 +142,10 @@
   }
 
   function paintList() {
-    var host = document.getElementById('assemblies-list');
+    var host = document.getElementById(_hostPrefix + '-list');
     if (!host) return;
-    var q = (document.getElementById('assemblies-search') || { value: '' }).value.trim().toLowerCase();
-    var summary = document.getElementById('assemblies-summary');
+    var q = (document.getElementById(_hostPrefix + '-search') || { value: '' }).value.trim().toLowerCase();
+    var summary = document.getElementById(_hostPrefix + '-summary');
 
     // Search → flat filtered table (search shouldn't fight the tree).
     if (q) {
