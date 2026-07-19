@@ -444,9 +444,22 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.12';
+const APP_VERSION = '1.13';
 
 const releases = [
+  {
+    version: '1.13',
+    date: '2026-07-19',
+    name: 'Payables',
+    summary: 'Vendor bills get their own home — recorded against a job and its PO, so what you\'ve been billed and what you still owe is one number everywhere.',
+    changes: [
+      { type: 'new', text: 'Bills tab — a new page under Jobs (beside Purchase Orders) listing every vendor bill across your jobs: bill #, job, vendor, PO, amount, status, and due date, with filters, search, and saved views.' },
+      { type: 'new', text: 'Link a bill to its Purchase Order — pick the job, pick the PO, and the vendor fills in automatically. Attach the invoice PDF right on the bill, and move it through Open → Approved → Paid (or Void).' },
+      { type: 'new', text: 'Read an invoice straight into a bill — in Bulk Document Import, the "Invoices" tab now scans a vendor invoice, pulls the amount and line items, matches it to a job, lets you pick the PO it pays against, and creates the bill for you.' },
+      { type: 'improved', text: 'One source of truth for "billed" — the Bills tab and a PO\'s "Bills & Lien Waivers" now read and write the same record, so a bill entered in either place instantly updates the PO\'s % billed, the job\'s outstanding, and the accrued-cost rollup. No more two numbers that disagree.' },
+      { type: 'improved', text: 'Assembly Codes — assemblies now carry a consistent Trade · System · Variant code (like ROOF-SHNG-612), managed from Admin → Organization → Assembly Codes, so your estimating library stays organized and findable as it grows.' },
+    ],
+  },
   {
     version: '1.12',
     date: '2026-07-13',
