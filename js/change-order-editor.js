@@ -303,6 +303,7 @@
   }
   // The 4-method contract the Materials Drawer talks to (targetApi()).
   var coLineTarget = {
+    noun: 'change order',
     getOpenId: function () { return _state.co ? _state.co.id : null; },
     activeAlternateName: function () { return _state.co ? (_state.co.title || 'This change order') : null; },
     applyAddLineItem: coApplyAddLineItem,

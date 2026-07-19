@@ -49,6 +49,12 @@
   function targetApi() {
     return window.p86ActiveLineTarget || window['estimateEditorAPI'] || null;
   }
+  // Human noun for the active target, so button/hint copy reads "Add to
+  // change order" in a CO and "Add to estimate" in an estimate.
+  function targetNoun() {
+    var t = targetApi();
+    return (t && t.noun) || 'estimate';
+  }
 
   // Subgroup chips — the catalog's agx_subgroup column holds these
   // values. Defaults to 'materials' since that's 95%+ of catalog rows
@@ -273,7 +279,7 @@
                     targetApi().activeAlternateName &&
                     targetApi().activeAlternateName();
     if (!groupName) {
-      hint.textContent = 'Adding to: — (no estimate open)';
+      hint.textContent = 'Adding to: — (no ' + targetNoun() + ' open)';
       return;
     }
     if (_mode === 'assemblies') {
@@ -993,7 +999,7 @@
         '</label>' +
       '</div>' +
       '<div class="md-form-actions">' +
-        '<button type="submit" class="md-form-submit">Add to estimate</button>' +
+        '<button type="submit" class="md-form-submit">Add to ' + escapeHTML(targetNoun()) + '</button>' +
         '<span class="md-form-hint">' + escapeHTML(sectionLabel) + ' on the active group</span>' +
       '</div>' +
     '</form>';
@@ -1075,7 +1081,7 @@
     tray.innerHTML =
       '<div class="md-tray-info">' +
         '<strong>' + _selectedIds.size + '</strong> selected' +
-        (groupName ? ' · ' + escapeHTML(groupName) + ' → ' + escapeHTML(sectionLabel) : ' · (no estimate open)') +
+        (groupName ? ' · ' + escapeHTML(groupName) + ' → ' + escapeHTML(sectionLabel) : ' · (no ' + escapeHTML(targetNoun()) + ' open)') +
       '</div>' +
       '<div class="md-tray-actions">' +
         '<button class="md-tray-clear" data-tray-clear>Clear</button>' +
