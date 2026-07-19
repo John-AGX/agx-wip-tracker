@@ -57,6 +57,7 @@ router.post('/:id/append-assembly', requireAuth, requireCapability('ESTIMATES_ED
       const data = er.rows[0].data || {};
       plan = estLines.applyAssemblyToEstimateData(data, {
         estId: estId, assembly: a, rows: ex.rows, scope: scope, mode: mode, alternatePref: b.alternate_id || null,
+        placementKey: (typeof b.placement_key === 'string' && b.placement_key) ? b.placement_key.slice(0, 200) : null,
       });
       if (!plan.added) { await client.query('ROLLBACK'); return res.status(400).json({ error: 'Nothing to add (all items priced at zero or empty)' }); }
 

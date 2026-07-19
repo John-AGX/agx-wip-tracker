@@ -122,6 +122,19 @@ function applyAssemblyToEstimateData(data, params) {
   }
   const altName = ((data.alternates.find((x) => x && x.id === altId) || {}).name) || 'Base';
 
+  // RL-2 placement idempotency: when a stable placementKey is supplied (a drawn
+  // object being pushed from the CAD sheet), a re-push REPLACES that placement's
+  // prior lines instead of appending duplicates — delete any line in the target
+  // alternate carrying this sourcePlacement first, then re-insert. Absent a key
+  // (the Quantify takeoff flow) this is a plain append, unchanged.
+  const placementKey = (typeof params.placementKey === 'string' && params.placementKey) ? params.placementKey : null;
+  let removed = 0;
+  if (placementKey) {
+    const before = data.lines.length;
+    data.lines = data.lines.filter((l) => !(l && String(l.estimateId) === String(estId) && l.alternateId === altId && l.sourcePlacement === placementKey));
+    removed = before - data.lines.length;
+  }
+
   const specs = buildAssemblySpecs(assembly, rows, scope, mode);
   specs.forEach((spec, i) => {
     const headerId = ensureSectionByCategory(data.lines, estId, altId, spec.cost_code, stamp + '_' + i);
@@ -133,13 +146,14 @@ function applyAssemblyToEstimateData(data, params) {
       sourceAssemblyId: spec.sourceAssemblyId,
       assemblyParams: spec.assemblyParams,
     };
+    if (placementKey) line.sourcePlacement = placementKey;
     if (Array.isArray(spec.assemblyBreakdown) && spec.assemblyBreakdown.length) line.assemblyBreakdown = spec.assemblyBreakdown;
     if (spec.assemblyBucket) line.assemblyBucket = spec.assemblyBucket;
     if (headerId) insertLineAfterHeader(data.lines, headerId, estId, altId, line);
     else data.lines.push(line);
   });
 
-  return { added: specs.length, altId, altName, createdAlt };
+  return { added: specs.length, removed, altId, altName, createdAlt };
 }
 
 module.exports = {

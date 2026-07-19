@@ -1350,6 +1350,9 @@
       _asmCache: null,      // RL-1: parametric assembly catalog (loaded once per open)
       _bomCache: {},        // RL-1: per-placement priced-explode cache, keyed (id:Q:paramsHash)
       _bomGen: 0,           // RL-1: monotonic explode token — drops stale async responses
+      _bomInflight: {},     // RL-2: in-flight rollup explode keys (dedupe the prime fetch)
+      _estCache: null,      // RL-2: editable estimates (push-to-estimate target picker)
+      _pushEstId: null, _pushBusy: false, _pushMsg: null,   // RL-2: push-to-estimate state
       _undo: [], _redo: []  // history stacks (JSON snapshots of entities+layers)
     };
 
@@ -1367,6 +1370,7 @@
     ensureUnderlay();                       // load a persisted plan underlay, if any
     loadOrgBrand();
     loadAsmCatalog();                       // RL-1: parametric assemblies you can drop onto objects
+    loadEstCatalog();                       // RL-2: editable estimates you can push the drawing's BOM to
 
     ov.focus();
     window.addEventListener('resize', onResize);
@@ -2062,6 +2066,7 @@
       '</div>';
     }).join('');
     html += '<div style="margin-top:10px;font-size:10.5px;color:#64748b;line-height:1.4;">Click = draw on it · dbl-click name = rename · swatch = color · 🔒 = lock · ✕ = delete.</div>';
+    html += bomRollupHtml();   // RL-2: whole-drawing Bill of Materials + push-to-estimate
     host.innerHTML = html;
     // Properties wiring (selected object)
     var propLayer = host.querySelector('[data-prop-layer]');
@@ -2089,6 +2094,11 @@
       buildLayers(); repaint();
     };
     if (selEnt && selEnt.assembly) renderBom(selEnt);
+    // RL-2: Bill of Materials rollup — estimate picker + guarded push.
+    var asmEst = host.querySelector('[data-asm-est]');
+    if (asmEst) asmEst.onchange = function () { S._pushEstId = asmEst.value; S._pushMsg = null; };
+    var asmPush = host.querySelector('[data-asm-push]');
+    if (asmPush) asmPush.onclick = pushDrawingToEstimate;
     var propWeight = host.querySelector('[data-prop-weight]');
     if (propWeight) propWeight.onchange = function () { var e = selectedEntity(); if (!e) return; pushUndo(); e.lineWidth = Math.max(1, Math.min(24, parseInt(propWeight.value, 10) || 2)); repaint(); };
     var propDel = host.querySelector('[data-prop-del]');
@@ -4244,7 +4254,7 @@
     }
     var params = {};
     Object.keys(e.assembly.params || {}).forEach(function (k2) { var v = parseFloat(e.assembly.params[k2]); if (isFinite(v)) params[k2] = v; });
-    var key = e.assembly.id + ':' + (Math.round(dq.q * 10000) / 10000) + ':' + bomParamsHash(params);
+    var key = bomKey(e.assembly.id, dq.q, params);
     S._bomCache = S._bomCache || {};
     if (S._bomCache[key]) { paintBom(box, S._bomCache[key], dq); return; }   // sync cache hit (token already bumped ↑)
     box.innerHTML = '<div style="color:#9aa;font-size:10.5px;padding:4px 0;">Pricing…</div>';
@@ -4264,6 +4274,176 @@
         if (box2 && cur && cur.id === eid && cur.assembly && String(cur.assembly.id) === String(aid)) paintBom(box2, S._bomCache[key], dq);
       }).catch(function () { /* transient — leave the "Pricing…" note */ });
     }, 200);
+  }
+
+  // ── RL-2: whole-drawing Bill of Materials rollup + guarded push-to-estimate ──
+  function bomKey(aid, q, params) { return aid + ':' + (Math.round(q * 10000) / 10000) + ':' + bomParamsHash(params); }
+  // Load the editable-estimate list once per open (for the push target picker).
+  function loadEstCatalog() {
+    if (!S || !window.p86Api || !window.p86Api.estimates || !window.p86Api.estimates.list) return;
+    window.p86Api.estimates.list().then(function (res) {
+      if (!S) return;
+      var all = (res && res.estimates) || (Array.isArray(res) ? res : []);
+      S._estCache = all.filter(function (e) { return !e.is_locked; });
+      // Default the push target to the estimate this drawing is already linked to.
+      if (S._pushEstId == null && S.plan && S.plan.entity_type === 'estimate' && S.plan.entity_id != null) S._pushEstId = S.plan.entity_id;
+      buildLayers();
+    }).catch(function () { S._estCache = []; });
+  }
+  // Every drawn object carrying an assembly binding, with its geometry-derived Q.
+  function collectBoundPlacements() {
+    var out = [];
+    (S.doc.entities || []).forEach(function (e) {
+      if (!e || !e.assembly || !e.assembly.id) return;
+      var dq = deriveQ(e, e.assembly.unit);
+      if (!dq) { out.push({ eid: e.id, e: e, name: e.assembly.name, unit: e.assembly.unit, dq: null }); return; }
+      var params = {};
+      Object.keys(e.assembly.params || {}).forEach(function (k) { var v = parseFloat(e.assembly.params[k]); if (isFinite(v)) params[k] = v; });
+      out.push({ eid: e.id, e: e, aid: e.assembly.id, name: e.assembly.name, unit: e.assembly.unit, dq: dq, params: params, key: bomKey(e.assembly.id, dq.q, params) });
+    });
+    return out;
+  }
+  // Priced total of one placement from the shared explode cache (null = not yet priced).
+  function placementTotal(p) {
+    if (!p.key) return null;
+    var d = S._bomCache && S._bomCache[p.key];
+    if (!d) return null;
+    if (d.error) return { total: 0, priced: false, error: d.error };
+    var t = 0, priced = true;
+    (d.rows || []).forEach(function (row) { if (row.unit_cost != null) t += Math.round(row.qty * row.unit_cost * 100) / 100; else priced = false; });
+    return { total: Math.round(t * 100) / 100, priced: priced };
+  }
+  // Fetch any un-cached placement prices in parallel, then re-render ONCE.
+  // Guarded by _bomCache (hit) + _bomInflight (pending) so it can't loop.
+  function primeRollup(placements) {
+    S._bomCache = S._bomCache || {}; S._bomInflight = S._bomInflight || {};
+    var missing = [];
+    placements.forEach(function (p) { if (p.key && !S._bomCache[p.key] && !S._bomInflight[p.key]) missing.push(p); });
+    if (!missing.length) return;
+    if (!window.p86Api || !window.p86Api.assemblies || !window.p86Api.assemblies.explode) return;
+    var done = 0;
+    missing.forEach(function (p) {
+      S._bomInflight[p.key] = true;
+      var expParams = { Q: p.dq.q };
+      Object.keys(p.params).forEach(function (k) { expParams[k] = p.params[k]; });
+      window.p86Api.assemblies.explode(p.aid, expParams).then(function (d) {
+        if (S) S._bomCache[p.key] = (d && d.ok) ? d : { rows: [], total: 0, error: (d && d.error) || 'Explode failed' };
+      }).catch(function () {}).then(function () {
+        if (S) delete S._bomInflight[p.key];
+        done++;
+        if (done === missing.length && S) buildLayers();
+      });
+    });
+  }
+  // The Bill of Materials section HTML (shown when the drawing has ≥1 binding).
+  function bomRollupHtml() {
+    var placements = collectBoundPlacements();
+    if (!placements.length) return '';
+    primeRollup(placements);
+    var groups = {}, grand = 0, anyPending = false, anyWarn = false;
+    placements.forEach(function (p) {
+      if (!p.dq) { anyWarn = true; return; }
+      var gk = p.aid + '|' + p.name;   // by assembly id — distinct assemblies sharing a name stay separate
+      var g = groups[gk] || (groups[gk] = { name: p.name, count: 0, total: 0, priced: true });
+      g.count++;
+      var pt = placementTotal(p);
+      if (!pt) { anyPending = true; g.priced = false; return; }
+      g.total += pt.total; grand += pt.total; if (!pt.priced) g.priced = false;
+    });
+    var rowsHtml = Object.keys(groups).map(function (n) {
+      var g = groups[n];
+      return '<div style="display:flex;justify-content:space-between;gap:6px;padding:2px 0;font-size:10.5px;">' +
+        '<span style="color:#cbd5e1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">' + esc(g.name) + ' <span style="color:#64748b;">×' + g.count + '</span></span>' +
+        '<span style="font-family:monospace;color:#4fd1c5;">' + (g.priced ? asmMoney(g.total) : '…') + '</span>' +
+      '</div>';
+    }).join('');
+    var estCache = Array.isArray(S._estCache) ? S._estCache : null;
+    var pushBlock;
+    if (estCache === null) pushBlock = '<div style="font-size:10px;color:#64748b;margin-top:6px;">Loading estimates…</div>';
+    else if (!estCache.length) pushBlock = '<div style="font-size:10px;color:#64748b;margin-top:6px;">No editable estimates to push to.</div>';
+    else {
+      var estOpts = estCache.map(function (e) {
+        var label = e.title || e.name || ('Estimate ' + e.id);
+        return '<option value="' + esc(String(e.id)) + '"' + (String(e.id) === String(S._pushEstId) ? ' selected' : '') + '>' + esc(String(label).slice(0, 40)) + '</option>';
+      }).join('');
+      pushBlock =
+        '<select data-asm-est style="width:100%;box-sizing:border-box;background:#1a1a2e;color:#fff;border:1px solid #444;border-radius:5px;padding:4px 6px;font-size:10.5px;margin-top:7px;">' + estOpts + '</select>' +
+        '<button data-asm-push' + (S._pushBusy ? ' disabled' : '') + ' style="width:100%;box-sizing:border-box;margin-top:5px;background:rgba(34,197,94,0.15);color:#86efac;border:1px solid #22c55e;border-radius:5px;padding:6px;font-size:11px;font-weight:700;cursor:' + (S._pushBusy ? 'default' : 'pointer') + ';opacity:' + (S._pushBusy ? '0.6' : '1') + ';">' + (S._pushBusy ? 'Pushing…' : '➕ Push to estimate') + '</button>' +
+        (S._pushMsg ? '<div style="font-size:10px;margin-top:5px;line-height:1.35;color:' + (S._pushMsg.ok ? '#86efac' : '#fbbf24') + ';">' + esc(S._pushMsg.text) + '</div>' : '');
+    }
+    return '<div style="margin:12px 0 8px;border-top:1px solid #2a2a3a;padding-top:10px;">' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:5px;">' +
+        '<span style="font-weight:700;color:#fff;">\u{1F9E9} Bill of Materials</span>' +
+        '<span style="font-family:monospace;color:#4fd1c5;font-size:13px;font-weight:700;">' + (anyPending ? '…' : asmMoney(grand)) + '</span>' +
+      '</div>' +
+      rowsHtml +
+      (anyWarn ? '<div style="font-size:9.5px;color:#fbbf24;margin-top:3px;">⚠ Some tagged shapes can’t supply their unit — not counted.</div>' : '') +
+      pushBlock +
+    '</div>';
+  }
+  // Splice the server's fresh line set for this estimate into appData WITHOUT
+  // pushing — keeps the offline-first store current after EACH append so a
+  // bulk-save firing mid-chain can't ship stale pre-push lines and clobber the
+  // server's just-appended ones.
+  function applyLinesToAppData(estId, d) {
+    var ad = window.appData;
+    if (!ad || !Array.isArray(ad.estimateLines) || !Array.isArray(d.lines)) return;
+    ad.estimateLines = ad.estimateLines.filter(function (l) { return String(l.estimateId) !== String(estId); }).concat(d.lines);
+    var e = (ad.estimates || []).filter(function (x) { return String(x.id) === String(estId); })[0];
+    if (e) { if (Array.isArray(d.alternates)) e.alternates = d.alternates; if (d.active_alternate_id) e.activeAlternateId = d.active_alternate_id; }
+  }
+  // Reconverge the server against local appData + refresh an open estimate editor.
+  function reconvergeEstimate(estId) {
+    if (window.p86Data && typeof window.p86Data.pushToServer === 'function') { try { window.p86Data.pushToServer(); } catch (err) {} }
+    if (window.estimateEditorAPI && typeof window.estimateEditorAPI.rerender === 'function' && window.estimateEditorAPI.currentId && String(window.estimateEditorAPI.currentId()) === String(estId)) { try { window.estimateEditorAPI.rerender(); } catch (e2) {} }
+  }
+  // Sync EVERY priced placement to the chosen estimate. Idempotency is SERVER-side:
+  // each placement sends a stable placement_key so a re-push REPLACES its prior
+  // lines instead of duplicating them (and a resized placement re-prices cleanly).
+  // Sequential appends serialize via the server row lock; appData is kept current
+  // after each so a mid-chain bulk-save can't clobber the appends.
+  function pushDrawingToEstimate() {
+    if (S._pushBusy) return;
+    var estId = S._pushEstId || (S._estCache && S._estCache[0] && S._estCache[0].id);
+    if (estId == null) { S._pushMsg = { ok: false, text: 'Pick an estimate first.' }; buildLayers(); return; }
+    var todo = collectBoundPlacements().filter(function (p) { return p.dq; });
+    if (!todo.length) { S._pushMsg = { ok: false, text: 'No priced placements to push.' }; buildLayers(); return; }
+    S._pushBusy = true; S._pushMsg = { ok: true, text: 'Syncing ' + todo.length + '…' }; buildLayers();
+    var planKey = (S.plan && S.plan.id != null) ? String(S.plan.id) : 'draft';
+    var added = 0;
+    var chain = Promise.resolve();
+    todo.forEach(function (p) {
+      chain = chain.then(function () {
+        var expParams = { Q: p.dq.q };
+        Object.keys(p.params).forEach(function (k) { expParams[k] = p.params[k]; });
+        return window.p86Api.estimates.appendAssembly(estId, {
+          assembly_id: p.aid, params: expParams, mode: 'rollup', placement_key: planKey + ':' + p.eid + ':' + p.aid
+        }).then(function (d) {
+          if (!(d && d.ok)) throw new Error((d && d.error) || 'Append failed');
+          added += (d.added || 0);
+          applyLinesToAppData(estId, d);   // keep appData current per-append (no clobber window)
+        });
+      });
+    });
+    chain.then(function () {
+      if (!S) return;
+      S._pushBusy = false;
+      // Link the drawing to this estimate ONLY if it isn't already linked to
+      // something (never clobber an existing job / lead / project link).
+      if (S.plan && S.plan.id != null && !S.plan.entity_type) {
+        S.plan.entity_type = 'estimate'; S.plan.entity_id = estId;
+        if (window.p86Api.plans && window.p86Api.plans.update) { try { window.p86Api.plans.update(S.plan.id, { entity_type: 'estimate', entity_id: estId }); } catch (e) {} }
+      }
+      reconvergeEstimate(estId);
+      S._pushMsg = { ok: true, text: '✓ Synced ' + todo.length + ' placement' + (todo.length === 1 ? '' : 's') + ' → ' + added + ' line' + (added === 1 ? '' : 's') + '.' };
+      buildLayers();
+    }).catch(function (err) {
+      if (!S) return;
+      S._pushBusy = false;
+      reconvergeEstimate(estId);   // keep whatever succeeded
+      S._pushMsg = { ok: false, text: '⚠ ' + ((err && err.message) || 'Sync failed') };
+      buildLayers();
+    });
   }
 
   // Array along path: copies of the selection at true spacing along a
