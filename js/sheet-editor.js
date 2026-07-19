@@ -1347,6 +1347,9 @@
       hatchPattern: 'earth',
       symbolKind: 'north',
       _calloutNum: 1,
+      _asmCache: null,      // RL-1: parametric assembly catalog (loaded once per open)
+      _bomCache: {},        // RL-1: per-placement priced-explode cache, keyed (id:Q:paramsHash)
+      _bomGen: 0,           // RL-1: monotonic explode token — drops stale async responses
       _undo: [], _redo: []  // history stacks (JSON snapshots of entities+layers)
     };
 
@@ -1363,6 +1366,7 @@
     refreshStatusBar();
     ensureUnderlay();                       // load a persisted plan underlay, if any
     loadOrgBrand();
+    loadAsmCatalog();                       // RL-1: parametric assemblies you can drop onto objects
 
     ov.focus();
     window.addEventListener('resize', onResize);
@@ -1394,6 +1398,19 @@
       repaint();
       if (S._orgLogos.length) loadChosenLogo();
     }).catch(function () { /* no org branding — titleblock just omits it */ });
+  }
+  // RL-1 (Revit-lite): load the PARAMETRIC assembly catalog once per open, so a
+  // drawn object can be tagged with an assembly whose quantity comes from the
+  // object's own geometry. Filter matches the Quantify panel (params or a
+  // =formula qty). Fixed-qty recipes are excluded — they have nothing Q drives.
+  function loadAsmCatalog() {
+    if (!S || !window.p86Api || !window.p86Api.assemblies || !window.p86Api.assemblies.list) return;
+    window.p86Api.assemblies.list().then(function (res) {
+      if (!S) return;
+      var all = (res && res.assemblies) || [];
+      S._asmCache = all.filter(function (a) { return (Array.isArray(a.params) && a.params.length) || a.has_formulas; });
+      if (S.selectedId) buildLayers();      // a selected object can now show its picker/BOM
+    }).catch(function () { S._asmCache = []; });
   }
   // Which logo this sheet stamps: titleblock.logoUrl picks one from the org
   // library; if unset/missing, fall back to the org Primary (proxy default).
@@ -1994,6 +2011,7 @@
           '<label style="font-size:10.5px;color:#9aa;display:flex;align-items:center;gap:5px;">Weight <input type="number" data-prop-weight value="' + (selEnt.lineWidth || 2) + '" min="1" max="24" step="1" style="width:46px;background:#1a1a2e;color:#fff;border:1px solid #444;border-radius:5px;padding:3px 5px;font-size:11px;" /></label>' +
         '</div>') +
         propGeomHtml(selEnt, selPpi) +
+        asmPropHtml(selEnt) +
         '<div style="margin-top:6px;font-size:9.5px;color:#64748b;">Drag body to move · drag grips to reshape · ⟳ rotate · ⇆⇅ mirror · Ctrl+D dup</div>' +
       '</div>';
     }
@@ -2057,6 +2075,20 @@
     };
     var propColor = host.querySelector('[data-prop-color]');
     if (propColor) propColor.onchange = function () { var e = selectedEntity(); if (!e) return; pushUndo(); e.color = propColor.value; repaint(); };
+    // RL-1: bind/unbind a parametric assembly, then live-price it from the geometry.
+    var asmPick = host.querySelector('[data-asm-pick]');
+    if (asmPick) asmPick.onchange = function () {
+      var e = selectedEntity(); if (!e) return;
+      pushUndo();
+      var id = asmPick.value;
+      if (!id) { delete e.assembly; }
+      else {
+        var a = (S._asmCache || []).filter(function (x) { return String(x.id) === String(id); })[0];
+        if (a) e.assembly = { id: a.id, name: a.name, unit: a.unit || 'EA', mode: 'rollup', params: {} };
+      }
+      buildLayers(); repaint();
+    };
+    if (selEnt && selEnt.assembly) renderBom(selEnt);
     var propWeight = host.querySelector('[data-prop-weight]');
     if (propWeight) propWeight.onchange = function () { var e = selectedEntity(); if (!e) return; pushUndo(); e.lineWidth = Math.max(1, Math.min(24, parseInt(propWeight.value, 10) || 2)); repaint(); };
     var propDel = host.querySelector('[data-prop-del]');
@@ -2696,7 +2728,11 @@
           buildLayers(); repaint();
         }
       }
+      // RL-1: a grip reshape changes the object's geometry → its assembly Q/price
+      // is stale; rebuild the inspector so renderBom re-prices from the new size.
+      var _gripEnded = !!S.gripDrag;
       S.moveDrag = null; S.gripDrag = null;
+      if (_gripEnded) { var _se = S.selectedId ? selectedEntity() : null; if (_se && _se.assembly) buildLayers(); }
     };
     c.ondblclick = function (e) {
       if ((S.tool === 'polyline' || S.tool === 'hatch' || S.tool === 'spline' || S.tool === 'wipeout') && S.draft) { commitPolyline(); return; }
@@ -4072,6 +4108,164 @@
     if (e.tool === 'line' && e.startX != null) return 'Line · Length ' + fmtLen(Math.hypot(e.endX - e.startX, e.endY - e.startY));
     return null;
   }
+
+  // ── RL-1: Revit-lite — bind a parametric assembly to a drawn object ─────────
+  // Assemblies are priced per LF / SF / EA. Free-text units are normalized to
+  // one of those three (plus SQ = roofing squares = 100 SF) so the geometry
+  // measure that drives Q is unambiguous.
+  var ASM_BINDABLE = { line: 1, polyline: 1, rect: 1, ellipse: 1, hatch: 1, wipeout: 1, symbol: 1 };
+  function asmUnitKind(unit) {
+    var u = String(unit == null ? '' : unit).trim().toUpperCase().replace(/[.\s]/g, '');
+    if (u === 'LF' || u === 'LNFT' || u === 'LINFT' || u === 'FT' || u === "'" || u === 'LINEARFEET' || u === 'LINEARFOOT') return 'LF';
+    if (u === 'SF' || u === 'SQFT' || u === 'FT2' || u === 'SFT' || u === 'SQUAREFEET' || u === 'SQUAREFOOT') return 'SF';
+    if (u === 'SQ' || u === 'SQUARE' || u === 'SQUARES' || u === 'SQS' || u === 'ROOFINGSQUARE') return 'SQ';  // 100 SF
+    if (u === '' || u === 'EA' || u === 'EACH' || u === 'CT' || u === 'CNT' || u === 'COUNT' || u === 'UNIT' || u === 'UNITS' ||
+        u === 'PC' || u === 'PCS' || u === 'PIECE' || u === 'PIECES' || u === 'LS' || u === 'LUMPSUM') return 'EA';   // one per placement
+    return 'UNK';   // SY/CY/CF/BF/GAL/TON/HR… — NOT derivable from 2D geometry; never silently price as 1
+  }
+  // Total linear inches of an entity (mirrors objectInquiry's perimeter math).
+  function entLinearInches(e) {
+    if (e.tool === 'line' && e.startX != null) return Math.hypot(e.endX - e.startX, e.endY - e.startY);
+    if (e.tool === 'rect' && e.startX != null) return 2 * (Math.abs(e.endX - e.startX) + Math.abs(e.endY - e.startY));
+    if (e.tool === 'ellipse' && e.startX != null) {
+      var rx = Math.abs(e.endX - e.startX) / 2, ry = Math.abs(e.endY - e.startY) / 2;
+      return Math.PI * (3 * (rx + ry) - Math.sqrt((3 * rx + ry) * (rx + 3 * ry)));   // Ramanujan
+    }
+    if ((e.tool === 'polyline' || e.tool === 'hatch' || e.tool === 'wipeout') && e.points && e.points.length > 1) {
+      var arr = e.points, per = 0, i;
+      for (i = 1; i < arr.length; i++) per += Math.hypot(arr[i].x - arr[i - 1].x, arr[i].y - arr[i - 1].y);
+      if (e.tool !== 'polyline' && arr.length > 2) per += Math.hypot(arr[0].x - arr[arr.length - 1].x, arr[0].y - arr[arr.length - 1].y);
+      return per;
+    }
+    return 0;
+  }
+  // Square inches of a CLOSED entity, or null when it can't supply an area.
+  function entAreaSqIn(e) {
+    if (e.tool === 'rect' && e.startX != null) return Math.abs(e.endX - e.startX) * Math.abs(e.endY - e.startY);
+    if (e.tool === 'ellipse' && e.startX != null) return Math.PI * (Math.abs(e.endX - e.startX) / 2) * (Math.abs(e.endY - e.startY) / 2);
+    if ((e.tool === 'polyline' || e.tool === 'hatch' || e.tool === 'wipeout') && e.points && e.points.length > 2) {
+      var arr = e.points;
+      var gap = Math.hypot(arr[0].x - arr[arr.length - 1].x, arr[0].y - arr[arr.length - 1].y);
+      var closed = (e.tool !== 'polyline') || gap < 1;   // hatch/wipeout close implicitly; polyline must return near start
+      if (!closed) return null;
+      var area = 0;
+      for (var j = 0, k = arr.length - 1; j < arr.length; k = j++) area += (arr[k].x + arr[j].x) * (arr[k].y - arr[j].y);
+      return Math.abs(area) / 2;
+    }
+    return null;
+  }
+  // The takeoff quantity Q an object contributes to an assembly, plus a human
+  // label of what drove it. null = this shape can't supply the assembly's unit.
+  function deriveQ(e, unit) {
+    var kind = asmUnitKind(unit);
+    if (kind === 'EA') return { q: 1, sourceLabel: '1 EA (per placement)' };
+    if (kind === 'LF') {
+      var li = entLinearInches(e);
+      if (!(li > 0)) return null;
+      var ft = Math.round(li / 12 * 100) / 100;
+      return { q: ft, sourceLabel: ft + ' LF (from length)' };
+    }
+    if (kind !== 'SF' && kind !== 'SQ') return null;   // UNK unit — can't derive Q from 2D geometry
+    var a = entAreaSqIn(e);            // SF or SQ
+    if (a == null || !(a > 0)) return null;
+    var sfv = a / 144;
+    if (kind === 'SQ') { var sq = Math.round(sfv / 100 * 1000) / 1000; return { q: sq, sourceLabel: sq + ' SQ (' + (Math.round(sfv * 10) / 10) + ' SF area)' }; }
+    var sfr = Math.round(sfv * 100) / 100;
+    return { q: sfr, sourceLabel: sfr + ' SF (from area)' };
+  }
+  function asmMoney(n) { return '$' + (Number(n) || 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+  function bomParamsHash(p) { return Object.keys(p || {}).sort().map(function (k) { return k + '=' + p[k]; }).join(','); }
+
+  // The assembly picker + BOM slot shown in the Properties inspector for a
+  // single bindable object. Returns '' when there's nothing to offer.
+  function asmPropHtml(e) {
+    if (!e || !ASM_BINDABLE[e.tool]) return '';
+    var cache = Array.isArray(S._asmCache) ? S._asmCache : [];
+    var bound = e.assembly || null;
+    if (!cache.length && !bound) return '';   // catalog not loaded / no parametric assemblies
+    var opts = '<option value="">— none —</option>' + cache.map(function (a) {
+      return '<option value="' + esc(String(a.id)) + '"' + (bound && String(bound.id) === String(a.id) ? ' selected' : '') + '>' + esc(a.name) + ' (' + esc(a.unit || 'EA') + ')</option>';
+    }).join('');
+    if (bound && !cache.some(function (a) { return String(a.id) === String(bound.id); })) {
+      opts += '<option value="' + esc(String(bound.id)) + '" selected>' + esc(bound.name) + ' (' + esc(bound.unit || 'EA') + ')</option>';
+    }
+    return '<div style="margin-top:8px;border-top:1px solid #333;padding-top:7px;">' +
+      '<label style="display:block;font-size:10px;color:#fbbf24;font-weight:700;margin-bottom:3px;">\u{1F9E9} Assembly</label>' +
+      '<select data-asm-pick style="width:100%;box-sizing:border-box;background:#1a1a2e;color:#fff;border:1px solid #4a4a5a;border-radius:5px;padding:4px 6px;font-size:11px;">' + opts + '</select>' +
+      (bound ? '<div data-asm-bom style="margin-top:5px;"></div>' : '') +
+    '</div>';
+  }
+  function paintBom(box, d, dq) {
+    if (!box) return;
+    if (d && d.error) { box.innerHTML = '<div style="color:#f87171;font-size:10.5px;padding:4px 0;">⚠ ' + esc(d.error) + '</div>'; return; }
+    var rows = (d && d.rows) || [];
+    if (!rows.length) { box.innerHTML = '<div style="color:#9aa;font-size:10.5px;padding:4px 0;">No priced parts.</div>'; return; }
+    var shown = 0;
+    var rowsHtml = rows.map(function (row) {
+      var priced = row.unit_cost != null;
+      var ext = priced ? Math.round(row.qty * row.unit_cost * 100) / 100 : null;
+      if (priced) shown += ext;
+      return '<tr>' +
+        '<td style="padding:1px 3px;color:#cbd5e1;">' + esc(row.description || '') + '</td>' +
+        '<td style="padding:1px 3px;text-align:right;font-family:monospace;color:#9aa;">' + esc(String(Math.round(row.qty * 100) / 100)) + '</td>' +
+        '<td style="padding:1px 3px;text-align:right;font-family:monospace;color:#4fd1c5;">' + (priced ? asmMoney(ext) : '<span style="color:#fbbf24;">—</span>') + '</td>' +
+      '</tr>';
+    }).join('');
+    box.innerHTML =
+      '<div style="font-size:9.5px;color:#8a93a6;margin:2px 0 3px;">Q = ' + esc(dq.sourceLabel) + '</div>' +
+      '<table style="width:100%;border-collapse:collapse;font-size:10px;"><tbody>' + rowsHtml + '</tbody></table>' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-top:4px;padding-top:4px;border-top:1px solid #333;">' +
+        '<span style="color:#fff;font-size:10.5px;font-weight:700;">Total</span>' +
+        '<span style="font-family:monospace;color:#4fd1c5;font-size:12px;font-weight:700;">' + asmMoney(Math.round(shown * 100) / 100) + ((d && d.incomplete) ? ' <span title="Some items have no price yet" style="color:#fbbf24;">⚠</span>' : '') + '</span>' +
+      '</div>';
+  }
+  // Fill the [data-asm-bom] slot for a bound object. Cache-first: a hit paints
+  // synchronously (buildLayers rebuilds the whole rail on every selection, so a
+  // network round-trip per render would flicker + race); a miss debounces the
+  // /explode call behind a monotonic token and re-queries the slot after await
+  // (the selection may have moved). Prices stay LIVE — never persisted.
+  function renderBom(e) {
+    var host = S.overlay && S.overlay.querySelector('#p86-sheet-layers');
+    var box = host && host.querySelector('[data-asm-bom]');
+    if (!box || !e || !e.assembly) return;
+    // Every render supersedes any in-flight explode: bump the token + drop the
+    // pending timer UP FRONT, so even a synchronous cache-hit render (e.g. a
+    // rapid rebind back to an already-priced assembly) can't be overwritten by a
+    // stale response armed a moment ago.
+    if (S._bomTimer) { clearTimeout(S._bomTimer); S._bomTimer = null; }
+    var gen = S._bomGen = (S._bomGen || 0) + 1;
+    var dq = deriveQ(e, e.assembly.unit);
+    if (!dq) {
+      var k = asmUnitKind(e.assembly.unit);
+      box.innerHTML = (k === 'UNK')
+        ? '<div style="color:#fbbf24;font-size:10px;padding:4px 0;line-height:1.4;">Unit “' + esc(String(e.assembly.unit || '')) + '” can’t be measured from the drawing — use LF, SF, or EA.</div>'
+        : '<div style="color:#fbbf24;font-size:10px;padding:4px 0;line-height:1.4;">This shape can’t supply ' + esc(k) + ' — bind a ' + (k === 'LF' ? 'line/polyline' : 'closed area') + '.</div>';
+      return;
+    }
+    var params = {};
+    Object.keys(e.assembly.params || {}).forEach(function (k2) { var v = parseFloat(e.assembly.params[k2]); if (isFinite(v)) params[k2] = v; });
+    var key = e.assembly.id + ':' + (Math.round(dq.q * 10000) / 10000) + ':' + bomParamsHash(params);
+    S._bomCache = S._bomCache || {};
+    if (S._bomCache[key]) { paintBom(box, S._bomCache[key], dq); return; }   // sync cache hit (token already bumped ↑)
+    box.innerHTML = '<div style="color:#9aa;font-size:10.5px;padding:4px 0;">Pricing…</div>';
+    var eid = e.id, aid = e.assembly.id;
+    var expParams = { Q: dq.q };
+    Object.keys(params).forEach(function (k2) { expParams[k2] = params[k2]; });
+    S._bomTimer = setTimeout(function () {
+      // Guard BEFORE the network call: no POST after close/supersede.
+      if (!S || gen !== S._bomGen || !window.p86Api || !window.p86Api.assemblies || !window.p86Api.assemblies.explode) return;
+      window.p86Api.assemblies.explode(aid, expParams).then(function (d) {
+        if (!S || gen !== S._bomGen) return;   // superseded
+        S._bomCache[key] = (d && d.ok) ? d : { rows: [], total: 0, error: (d && d.error) || 'Explode failed' };
+        var host2 = S.overlay && S.overlay.querySelector('#p86-sheet-layers');
+        var box2 = host2 && host2.querySelector('[data-asm-bom]');
+        var cur = S.selectedId ? selectedEntity() : null;
+        // Paint only if the current selection is STILL this entity bound to THIS assembly.
+        if (box2 && cur && cur.id === eid && cur.assembly && String(cur.assembly.id) === String(aid)) paintBom(box2, S._bomCache[key], dq);
+      }).catch(function () { /* transient — leave the "Pricing…" note */ });
+    }, 200);
+  }
+
   // Array along path: copies of the selection at true spacing along a
   // clicked line/polyline/arc — a site-plan sketch becomes a count takeoff
   // (fence posts every 8', sprinkler heads, plantings).
