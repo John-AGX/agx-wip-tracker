@@ -9,7 +9,7 @@
 //   - "Already on estimate" indicator (computed client-side from
 //     appData.estimateLines)
 //   - Inline single-add form per row → calls
-//     window.estimateEditorAPI.applyAddLineItem (same code path
+//     targetApi().applyAddLineItem (same code path
 //     86 hits via propose_add_line_item)
 //
 // Phases 2-4 layer on favorites, recently-used, bulk, polish.
@@ -36,6 +36,19 @@
   var _multiSelect = false;   // Phase 3 — multi-select mode toggle
   var _selectedIds = new Set(); // Phase 3 — material ids checked for bulk-add
   var _confirming = false;    // Phase 3 — true while the confirm grid is showing
+
+  // ── Insert target ──────────────────────────────────────────────────
+  // The drawer inserts catalog + assembly lines into whichever editor is
+  // "active". The estimate editor is the default target; the Change Order
+  // editor registers window.p86ActiveLineTarget while it's open so this
+  // SAME drawer (catalog + 🧩 assemblies + explode) drives a CO's lines.
+  // Both expose the same contract: getOpenId, activeAlternateName,
+  // applyAddLineItem, applyBulkAddLineItems. Bracket notation on the
+  // estimate global here so the file-wide targetApi() →
+  // targetApi() rename doesn't make this line recurse.
+  function targetApi() {
+    return window.p86ActiveLineTarget || window['estimateEditorAPI'] || null;
+  }
 
   // Subgroup chips — the catalog's agx_subgroup column holds these
   // values. Defaults to 'materials' since that's 95%+ of catalog rows
@@ -93,9 +106,9 @@
   // normalized description.
   // ──────────────────────────────────────────────────────────────────
   function findOnEstimate(material) {
-    if (!window.appData || !window.estimateEditorAPI) return null;
-    var openId = window.estimateEditorAPI.getOpenId &&
-      window.estimateEditorAPI.getOpenId();
+    if (!window.appData || !targetApi()) return null;
+    var openId = targetApi().getOpenId &&
+      targetApi().getOpenId();
     if (!openId) return null;
     var lines = (window.appData.estimateLines || []).filter(function(l) {
       return l.estimateId === openId && l.section !== '__section_header__';
@@ -256,9 +269,9 @@
     if (!_drawerEl) return;
     var hint = _drawerEl.querySelector('[data-md-target-hint]');
     if (!hint) return;
-    var groupName = window.estimateEditorAPI &&
-                    window.estimateEditorAPI.activeAlternateName &&
-                    window.estimateEditorAPI.activeAlternateName();
+    var groupName = targetApi() &&
+                    targetApi().activeAlternateName &&
+                    targetApi().activeAlternateName();
     if (!groupName) {
       hint.textContent = 'Adding to: — (no estimate open)';
       return;
@@ -629,9 +642,9 @@
   function renderAsmStackTray(tray) {
     if (!_stack.length) { tray.hidden = true; tray.innerHTML = ''; return; }
     tray.hidden = false;
-    var groupName = window.estimateEditorAPI &&
-                    window.estimateEditorAPI.activeAlternateName &&
-                    window.estimateEditorAPI.activeAlternateName();
+    var groupName = targetApi() &&
+                    targetApi().activeAlternateName &&
+                    targetApi().activeAlternateName();
     var rows = _stack.map(function(s, i) {
       var q = parseFloat(s.qty);
       var ext = (isFinite(q) && q > 0) ? fmtMoney(q * (Number(s.a.unit_cost) || 0)) : '—';
@@ -770,7 +783,7 @@
   // Commit every stacked assembly at once. Default = A1 rollup lines
   // (one line each + component breakdown); 'exploded' = raw lines.
   function insertStack() {
-    if (!window.estimateEditorAPI || typeof window.estimateEditorAPI.applyBulkAddLineItems !== 'function') {
+    if (!targetApi() || typeof targetApi().applyBulkAddLineItems !== 'function') {
       alert('Estimate editor isn\'t available — open an estimate first.');
       return;
     }
@@ -881,7 +894,7 @@
           });
         }
       });
-      window.estimateEditorAPI.applyBulkAddLineItems(specs);
+      targetApi().applyBulkAddLineItems(specs);
       _stack = []; _stackSaving = false;
       renderAssemblyResults();
       renderTray();
@@ -963,7 +976,7 @@
   }
 
   function submitAdd(material, form) {
-    if (!window.estimateEditorAPI || typeof window.estimateEditorAPI.applyAddLineItem !== 'function') {
+    if (!targetApi() || typeof targetApi().applyAddLineItem !== 'function') {
       alert('Estimate editor isn\'t available — open an estimate first.');
       return;
     }
@@ -978,7 +991,7 @@
     var sectionName = form.querySelector('.md-form-section-select').value;
 
     try {
-      var result = window.estimateEditorAPI.applyAddLineItem({
+      var result = targetApi().applyAddLineItem({
         description: material.description,
         qty: qty,
         unit: unit,
@@ -1031,9 +1044,9 @@
       return;
     }
     tray.hidden = false;
-    var groupName = window.estimateEditorAPI &&
-                    window.estimateEditorAPI.activeAlternateName &&
-                    window.estimateEditorAPI.activeAlternateName();
+    var groupName = targetApi() &&
+                    targetApi().activeAlternateName &&
+                    targetApi().activeAlternateName();
     var sectionLabel = SUBGROUP_TO_SECTION[_activeSubgroup] || 'Materials & Supplies';
     tray.innerHTML =
       '<div class="md-tray-info">' +
@@ -1097,7 +1110,7 @@
   }
 
   function submitBulkAdd() {
-    if (!window.estimateEditorAPI || typeof window.estimateEditorAPI.applyBulkAddLineItems !== 'function') {
+    if (!targetApi() || typeof targetApi().applyBulkAddLineItems !== 'function') {
       alert('Estimate editor isn\'t available — open an estimate first.');
       return;
     }
@@ -1131,7 +1144,7 @@
       return;
     }
     try {
-      window.estimateEditorAPI.applyBulkAddLineItems(lines);
+      targetApi().applyBulkAddLineItems(lines);
       _selectedIds.clear();
       _confirming = false;
       _multiSelect = false;

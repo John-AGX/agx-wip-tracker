@@ -110,6 +110,12 @@
     var overlay = document.getElementById('co-editor-overlay');
     if (overlay) overlay.remove();
     document.body.style.overflow = '';
+    // Release the drawer target + close the drawer so it doesn't linger
+    // pointed at a torn-down CO (falls back to the estimate editor).
+    if (window.p86ActiveLineTarget === coLineTarget) {
+      try { delete window.p86ActiveLineTarget; } catch (e) { window.p86ActiveLineTarget = null; }
+      try { if (window.MaterialsDrawer && window.MaterialsDrawer.close) window.MaterialsDrawer.close(); } catch (e) {}
+    }
     _state.co = null;
     _state.dirty = false;
     _state.saving = false;
@@ -196,6 +202,115 @@
       marginPct: marginPct,
       lineCount: lineCount
     };
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // Line-target adapter — lets the shared Materials Drawer (catalog +
+  // 🧩 assemblies + explode) insert lines into THIS change order exactly
+  // as it does for the estimate editor. The drawer already does the
+  // assembly explode client-side and hands us line "specs"; we translate
+  // each spec into a CO line and route it into a CO section by cost
+  // bucket. No server change, no pricing-model change — every added line
+  // is still a plain qty×unitCost CO line the shared p86Pricing consumes.
+  // ──────────────────────────────────────────────────────────────────
+  var CO_BUCKET_SECTION = {
+    materials: 'Materials',
+    labor: 'Labor',
+    gc: 'General Conditions',
+    sub: 'Subcontractor Costs'
+  };
+  function coNum(v) { return (window.p86Pricing && window.p86Pricing.num) ? window.p86Pricing.num(v) : (parseFloat(v) || 0); }
+  // Which cost bucket a drawer spec belongs in (materials|labor|gc|sub).
+  // Prefer an explicit bucket/cost-code; else infer from the drawer's
+  // section_name by keyword (the drawer uses its own section labels like
+  // "Direct Labor", so an exact-label match against ours would misroute).
+  var CO_BUCKETS = ['materials', 'labor', 'gc', 'sub'];
+  function coBucketFor(input) {
+    var v = input.bt_category || input.assembly_bucket || input.cost_code;
+    if (v) { v = String(v).toLowerCase(); if (CO_BUCKETS.indexOf(v) !== -1) return v; }
+    var nm = String(input.section_name || '').toLowerCase();
+    if (nm) {
+      if (/labor/.test(nm)) return 'labor';
+      if (/general\s*cond|\bgc\b/.test(nm)) return 'gc';
+      if (/\bsub/.test(nm)) return 'sub';
+      if (/material|supplies/.test(nm)) return 'materials';
+    }
+    return null;
+  }
+  // Find-or-create the section header for a bucket; returns its line id.
+  // CO headers key off `label`; we also stamp `btCategory` so a later
+  // add re-uses the same section deterministically (like the estimate).
+  function coEnsureSection(bucket) {
+    var lines = _state.co.lines = (Array.isArray(_state.co.lines) ? _state.co.lines : []);
+    var label = CO_BUCKET_SECTION[bucket] || CO_BUCKET_SECTION.materials;
+    var hdr = lines.find(function (l) {
+      return l.section === '__section_header__' &&
+        (l.btCategory === bucket || String(l.label || '').toLowerCase() === label.toLowerCase());
+    });
+    if (hdr) { if (!hdr.btCategory) hdr.btCategory = bucket; return hdr.id; }
+    var id = newLineId();
+    lines.push({ id: id, section: '__section_header__', label: label, btCategory: bucket, markup: '', markupMode: 'percent' });
+    return id;
+  }
+  // Translate one drawer spec → a CO line, inserted inside its section
+  // (right before the next section header, mirroring the estimate).
+  function coApplyAddLineItem(input) {
+    if (!_state.co) throw new Error('No change order open.');
+    var lines = _state.co.lines = (Array.isArray(_state.co.lines) ? _state.co.lines : []);
+    var bucket = coBucketFor(input) || 'materials';
+    var sectionId = coEnsureSection(bucket);
+    var line = {
+      id: newLineId(),
+      qty: coNum(input.qty),
+      unitCost: coNum(input.unit_cost),
+      description: input.description || '',
+      unit: input.unit || 'ea',
+      markup: (input.markup_pct == null || input.markup_pct === '') ? '' : Number(input.markup_pct),
+      markupMode: 'percent'
+    };
+    if (input.source_material_id != null) line.sourceMaterialId = input.source_material_id;
+    if (input.source_assembly_id != null) line.sourceAssemblyId = input.source_assembly_id;
+    if (Array.isArray(input.assembly_breakdown) && input.assembly_breakdown.length) line.assemblyBreakdown = input.assembly_breakdown;
+    if (input.assembly_bucket) line.assemblyBucket = String(input.assembly_bucket);
+    if (input.assembly_params && typeof input.assembly_params === 'object') line.assemblyParams = input.assembly_params;
+    // Insert just before the next section header so the line is "born in"
+    // its section (never appended to the array end).
+    var startIdx = lines.findIndex(function (l) { return l.id === sectionId; });
+    if (startIdx >= 0) {
+      var insertAt = lines.length;
+      for (var j = startIdx + 1; j < lines.length; j++) {
+        if (lines[j].section === '__section_header__') { insertAt = j; break; }
+      }
+      lines.splice(insertAt, 0, line);
+    } else {
+      lines.push(line);
+    }
+    if (!input._silent) { markDirty(); paintLines(); paintTotals(); }
+    return 'Added: "' + line.description + '" — qty ' + line.qty + ' @ $' + line.unitCost.toFixed(2);
+  }
+  function coApplyBulkAddLineItems(specs) {
+    if (!Array.isArray(specs) || !specs.length) return [];
+    var out = [];
+    specs.forEach(function (s) {
+      try { out.push(coApplyAddLineItem(Object.assign({ _silent: true }, s || {}))); } catch (e) {}
+    });
+    markDirty(); paintLines(); paintTotals();
+    return out;
+  }
+  // The 4-method contract the Materials Drawer talks to (targetApi()).
+  var coLineTarget = {
+    getOpenId: function () { return _state.co ? _state.co.id : null; },
+    activeAlternateName: function () { return _state.co ? (_state.co.title || 'This change order') : null; },
+    applyAddLineItem: coApplyAddLineItem,
+    applyBulkAddLineItems: coApplyBulkAddLineItems
+  };
+  // Open the shared catalog/assemblies drawer pointed at THIS change order.
+  function openCatalogDrawer() {
+    if (!window.MaterialsDrawer || typeof window.MaterialsDrawer.open !== 'function') {
+      alert('The catalog is still loading — try again in a moment.'); return;
+    }
+    window.p86ActiveLineTarget = coLineTarget;
+    window.MaterialsDrawer.open();
   }
 
   // ──────────────────────────────────────────────────────────────────
@@ -303,6 +418,9 @@
     overlay.innerHTML = renderShell();
     document.body.appendChild(overlay);
     document.body.style.overflow = 'hidden';
+    // Claim the shared Materials Drawer's insert target so catalog +
+    // assembly adds land in THIS change order (cleared on close()).
+    window.p86ActiveLineTarget = coLineTarget;
 
     overlay.addEventListener('click', function(e) {
       // Close on backdrop click (NOT on inner content)
@@ -404,6 +522,7 @@
           '<section class="p86-co-lines">' +
             '<div class="p86-co-lines-toolbar">' +
               '<button class="ee-btn primary" data-co-add-line>+ Add Line</button>' +
+              '<button class="ee-btn secondary" data-co-add-catalog title="Add materials from the catalog or explode a costed assembly into lines">+ Catalog / Assemblies</button>' +
               '<button class="ee-btn secondary" data-co-add-section>+ Section Header</button>' +
               '<button class="ee-btn ghost" data-co-preview title="Preview the customer-facing PDF">Preview PDF</button>' +
             '</div>' +
@@ -455,6 +574,8 @@
       paintLines();
       paintTotals();
     });
+    var addCatalog = overlay.querySelector('[data-co-add-catalog]');
+    if (addCatalog) addCatalog.addEventListener('click', openCatalogDrawer);
     var previewBtn = overlay.querySelector('[data-co-preview]');
     if (previewBtn) previewBtn.addEventListener('click', openCoCustomerDoc);
   }
