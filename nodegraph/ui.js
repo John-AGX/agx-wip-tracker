@@ -2795,9 +2795,9 @@ function buildSidebar(){
       // a segment click on a unit-less level jumps it straight to seg×20.
       if(_act==='unit-pop'){ openLuPctPop(bn,'unit',_lid,luEl); return; }
       if(_act==='lvl-pop'){ openLuPctPop(bn,'level',_lid,luEl); return; }
-      if(_act==='lvl-seg'){ luSetPct(bn,'level',_lid,(parseInt(luEl.getAttribute('data-seg'),10)||0)*20); if(E.saveGraph) E.saveGraph(); renderBuildingMetrics(); return; }
+      if(_act==='lvl-seg'){ luSetPct(bn,'level',_lid,(parseInt(luEl.getAttribute('data-seg'),10)||0)*20); if(E.saveGraph) E.saveGraph(); luRefresh(); return; }
       luApply(bn, _act, _lid);
-      if(E.saveGraph) E.saveGraph(); renderBuildingMetrics();
+      if(E.saveGraph) E.saveGraph(); luRefresh();
       return;
     }
     if(e.target.closest('.ng-sidebar-toggle')){
@@ -3790,6 +3790,10 @@ function luSetPct(bn, kind, id, pct){
   if(kind==='unit'){ var U=luById(bn.units,id); if(U){ U.pct=pct; U.done=pct>=100; } }
   else if(kind==='level'){ var L=luById(bn.levels,id); if(L){ L.pct=pct; L.done=pct>=100; } }
 }
+// The building card renders in two places — the floating .ng-sp-bldg panel and the
+// right Inspector. Refresh whichever is mounted so an L/U edit is reflected wherever
+// the user is looking. (Both are idempotent re-renders; neither calls the other.)
+function luRefresh(){ if(typeof renderBuildingMetrics==='function') renderBuildingMetrics(); if(typeof renderInspector==='function') renderInspector(); }
 // Read-first % editor — a small popover of quick chips + a type-in, anchored to
 // the cube / level the user tapped. Replaces prompt() so the card stays calm.
 var _luPop=null;
@@ -3808,7 +3812,7 @@ function openLuPctPop(bn, kind, id, anchorEl){
   var r=anchorEl.getBoundingClientRect();
   p.style.left=Math.max(8,Math.min(r.left, window.innerWidth-184))+'px';
   p.style.top=Math.min(r.bottom+6, window.innerHeight-120)+'px';
-  function apply(v){ luSetPct(bn, kind, id, v); if(E.saveGraph) E.saveGraph(); closeLuPop(); renderBuildingMetrics(); }
+  function apply(v){ luSetPct(bn, kind, id, v); if(E.saveGraph) E.saveGraph(); closeLuPop(); luRefresh(); }
   p.querySelectorAll('.ng-lu-pchip').forEach(function(b){ b.onclick=function(){ apply(+b.getAttribute('data-v')); }; });
   var inp=p.querySelector('.ng-lu-pin');
   p.querySelector('.ng-lu-pset').onclick=function(){ apply(parseFloat(inp.value)); };
@@ -4442,7 +4446,12 @@ function initEvents(){
     var jchip=e.target.closest('[data-job-edit]');
     if(jchip && !e.target.closest('input')){ e.preventDefault(); e.stopPropagation(); jobFieldEdit(jchip); return; }
     var luEl=e.target.closest('[data-lu-act]');
-    if(luEl){ e.preventDefault(); e.stopPropagation(); var bn=selN&&E.findNode(selN); if(!bn||bn.type!=='t1') return; luApply(bn, luEl.getAttribute('data-lu-act'), luEl.getAttribute('data-id')); if(E.saveGraph) E.saveGraph(); renderInspector(); return; }
+    if(luEl){ e.preventDefault(); e.stopPropagation(); var bn=selN&&E.findNode(selN); if(!bn||bn.type!=='t1') return;
+      var _a=luEl.getAttribute('data-lu-act'), _i=luEl.getAttribute('data-id');
+      if(_a==='unit-pop'){ openLuPctPop(bn,'unit',_i,luEl); return; }
+      if(_a==='lvl-pop'){ openLuPctPop(bn,'level',_i,luEl); return; }
+      if(_a==='lvl-seg'){ luSetPct(bn,'level',_i,(parseInt(luEl.getAttribute('data-seg'),10)||0)*20); if(E.saveGraph) E.saveGraph(); luRefresh(); return; }
+      luApply(bn, _a, _i); if(E.saveGraph) E.saveGraph(); luRefresh(); return; }
     // Scope → nested phases (Demo/Putback…): mark off / weight / add from the
     // building card. updateT1Progress flushes the phase-derived % up to the
     // scope, building, and job before we re-render.
