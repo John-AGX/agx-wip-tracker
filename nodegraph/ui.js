@@ -3109,7 +3109,7 @@ function renderInspector(){
   if(sel && sel.type==='t1'){
     if(hdr) hdr.innerHTML='<span class="ng-insp-ic">'+ngIco('buildings')+'</span> '+luEsc(sel.label||'Building')+'<span class="ng-insp-type">Building</span>'
       +'<button class="ng-insp-cards" onclick="event.stopPropagation();window.p86NcBldgToggle&&window.p86NcBldgToggle(\''+sel.id+'\')" title="Open this building as nested cards on the map">Cards</button>';
-    body.innerHTML='<div class="ng-insp-sec">'+buildingKpiGridHtml(sel)+'</div><div class="ng-sp-struct"></div>';
+    body.innerHTML='<div class="ng-insp-sec">'+buildingKpiGridHtml(sel)+'</div>'+buildingRevBreakdownHtml(sel)+'<div class="ng-sp-struct"></div>';
     renderBuildingStructure(body, sel);
   } else if(sel && sel.type!=='wip'){
     var d=E.DEFS[sel.type]||{}, iType=d.itemType||'';
@@ -3767,6 +3767,78 @@ function buildingKpiGridHtml(sel){
       +'<div class="ng-kpi-cell"><span class="ng-kpi-k">Profit</span><span class="ng-kpi-v '+cls(gp)+'">'+E.fmtC(gp)+'</span></div>'
       +'<div class="ng-kpi-cell"><span class="ng-kpi-k">Margin</span><span class="ng-kpi-v '+cls(margin)+'">'+margin.toFixed(0)+'%</span></div>'
     +'</div></div>';
+}
+
+// Split a building's allocated revenue into ORIGINAL CONTRACT (connected scopes/
+// phases, incl. wireless matrix scopes) vs CHANGE ORDERS (connected COs), so a
+// building reads its as-sold revenue separately from its CO revenue. DISPLAY-ONLY:
+// coRev = Σ getCOIncomeToParent (exact), contractRev = total − coRev (so the split
+// always reconciles to the Revenue tile / getBuildingAllocatedRevenue). Contract
+// detail rows come from the same summands the engine adds; any residual (e.g. a
+// matrix-formula nuance) folds into an "Other contract allocation" reconciling row.
+function buildingRevSources(sel){
+  var contract=[], cos=[], coRev=0, wiredPh={};
+  E.wires().forEach(function(w){
+    if(w.toNode!==sel.id) return;
+    var src=E.findNode(w.fromNode); if(!src) return;
+    if(src.type==='t2'){
+      if(src.data && src.data.id) wiredPh[src.data.id]=1;
+      contract.push({ name:(src.label||'Scope').split(' › ')[0].trim(), rev:E.getPhaseRevenueToBuilding(src, sel.id), pct:src.pctComplete||0 });
+    } else if(src.type==='co'){
+      var cr=E.getCOIncomeToParent(src, sel.id); coRev+=cr;
+      cos.push({ name:(src.label||'CO').split(' › ')[0].trim(), rev:cr, pct:src.pctComplete||0 });
+    }
+  });
+  // Wireless matrix-allocated scopes (contract revenue with no t2 node/wire) —
+  // same union getBuildingAllocatedRevenue sums; mirror childGroupsHtml's filter.
+  if(sel.data && sel.data.id && window.appData && Array.isArray(window.appData.phases)){
+    var bId=sel.data.id, jid=(window.appState&&window.appState.currentJobId)||null;
+    window.appData.phases.forEach(function(p){
+      if(!p || p.jobId!==jid || p.buildingId!==bId || wiredPh[p.id]) return;
+      contract.push({ name:(p.phase||'Scope'), rev:(p.asSoldRevenue||p.asSoldPhaseBudget||p.phaseBudget||0), pct:Math.max(0,Math.min(100,p.pctComplete||0)), matrix:true });
+    });
+  }
+  var totalRev=E.getBuildingAllocatedRevenue(sel);
+  var contractRev=totalRev-coRev;
+  var cSum=contract.reduce(function(a,c){ return a+(c.rev||0); }, 0);
+  var gap=contractRev-cSum;
+  if(Math.round(gap)>=1 || Math.round(gap)<=-1){ contract.push({ name:'Other contract allocation', rev:gap, pct:0, other:true }); }
+  return { contract:contract, cos:cos, contractRev:contractRev, coRev:coRev, totalRev:totalRev };
+}
+
+// Two-section revenue breakdown for the building inspector: Original contract on
+// top, a SEPARATE Change Orders block below it (only when a CO is allocated to
+// this building). Returns '' when nothing is allocated yet.
+function buildingRevBreakdownHtml(sel){
+  if(!sel || sel.type!=='t1') return '';
+  var s=buildingRevSources(sel);
+  if(!s.contract.length && !s.cos.length) return '';
+  var row=function(c, color){
+    return '<div style="display:flex;align-items:center;gap:6px;padding:2px 0 2px 8px;font-size:11px;color:var(--ng-textdim,#8b90a5);">'
+      +'<span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'+luEsc(c.name)+(c.matrix?' <span style="font-size:8px;color:#6b6f82;">matrix</span>':'')+'</span>'
+      +'<span style="font-family:\'Courier New\',monospace;color:'+(color||'#4f8cff')+';">'+E.fmtC(c.rev)+'</span>'
+      +'</div>';
+  };
+  var secHdr=function(title, amount, color){
+    return '<div style="display:flex;align-items:center;padding:3px 0 1px;font-size:9px;text-transform:uppercase;letter-spacing:0.5px;color:'+(color||'#6a7090')+';font-weight:700;">'
+      +'<span style="flex:1;">'+title+'</span>'
+      +'<span style="font-family:\'Courier New\',monospace;">'+E.fmtC(amount)+'</span></div>';
+  };
+  var h='<div class="ng-insp-sec ng-bld-revbreak" style="padding-top:4px;">';
+  h+='<div style="font-size:9px;text-transform:uppercase;letter-spacing:0.5px;color:#8b90a5;font-weight:600;margin-bottom:1px;">Revenue allocation</div>';
+  h+=secHdr('Original contract', s.contractRev, '#4f8cff');
+  h+=s.contract.map(function(c){ return row(c, '#4f8cff'); }).join('');
+  if(s.cos.length){
+    h+='<div style="margin-top:3px;padding-top:3px;border-top:1px dashed var(--ng-border2);">';
+    h+=secHdr('Change Orders', s.coRev, '#fbbf24');
+    h+=s.cos.map(function(c){ return row(c, '#fbbf24'); }).join('');
+    h+='</div>';
+  }
+  h+='<div style="display:flex;align-items:center;padding:4px 0 1px;margin-top:3px;border-top:1px solid var(--ng-border2);font-size:11px;font-weight:700;color:#c8cbe0;">'
+    +'<span style="flex:1;">Total revenue</span>'
+    +'<span style="font-family:\'Courier New\',monospace;color:#34d399;">'+E.fmtC(s.totalRev)+'</span></div>';
+  h+='</div>';
+  return h;
 }
 
 // ── L/U Phase 1: building Levels & Units ───────────────────────────────────
