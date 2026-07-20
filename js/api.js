@@ -596,6 +596,11 @@
       return get('/api/materials' + qs);
     },
     update: function(id, payload) { return put('/api/materials/' + encodeURIComponent(id), payload); },
+    // Create ONE material inline (Assembly Cost Library). Estimator-facing:
+    // when a recipe row has no catalog material, create one with a researched
+    // placeholder price + rationale, then link it. Idempotent on the natural
+    // key server-side (returns the existing row on collision).
+    create: function(payload) { return post('/api/materials', payload); },
     importBatch: function(payload) { return post('/api/materials/import', payload); },
     categories: function() { return get('/api/materials/meta/categories'); },
     recategorize: function() { return post('/api/materials/recategorize', {}); }

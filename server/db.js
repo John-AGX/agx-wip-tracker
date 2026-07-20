@@ -1879,6 +1879,27 @@ async function initSchema() {
       END IF;
     END
     $migrate_materials_org$;
+    -- Researched-pricing provenance (Assembly Cost Library linkage plan).
+    -- A material's price can start as an estimator/Claude RESEARCHED
+    -- placeholder and later be SUPERSEDED by real purchase actuals. These
+    -- columns mark that provenance; the resolver still reads last_unit_price
+    -- LIVE (itemUnitCost in services/assemblies.js), so an assembly reprices
+    -- automatically when the first real purchase recomputes the aggregate.
+    -- Additive only — no pricing math changes.
+    ALTER TABLE materials ADD COLUMN IF NOT EXISTS price_basis TEXT;           -- researched | purchased | manual | catalog (NULL = legacy)
+    ALTER TABLE materials ADD COLUMN IF NOT EXISTS price_rationale TEXT;       -- the WHY behind a researched price
+    ALTER TABLE materials ADD COLUMN IF NOT EXISTS price_source_url TEXT;      -- optional research source link
+    ALTER TABLE materials ADD COLUMN IF NOT EXISTS researched_price NUMERIC(10, 2); -- immutable snapshot of the original guess (survives supersession)
+    ALTER TABLE materials ADD COLUMN IF NOT EXISTS researched_at TIMESTAMPTZ;
+    ALTER TABLE materials ADD COLUMN IF NOT EXISTS researched_by INTEGER REFERENCES users(id);
+    ALTER TABLE materials ADD COLUMN IF NOT EXISTS needs_pricing BOOLEAN DEFAULT FALSE; -- created without a price yet
+    ALTER TABLE materials ADD COLUMN IF NOT EXISTS size_nominal TEXT;         -- structured size token (2X8, 5K, 60MM) for variant sibling resolution
+    -- Backfill provenance for pre-existing rows: purchased if we have history,
+    -- else catalog. Idempotent (only fills NULLs; never overwrites a
+    -- researched/purchased flag once set).
+    UPDATE materials
+       SET price_basis = CASE WHEN COALESCE(purchase_count, 0) > 0 THEN 'purchased' ELSE 'catalog' END
+     WHERE price_basis IS NULL;
     CREATE INDEX IF NOT EXISTS idx_materials_org
       ON materials(organization_id) WHERE organization_id IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_materials_subgroup ON materials(agx_subgroup);

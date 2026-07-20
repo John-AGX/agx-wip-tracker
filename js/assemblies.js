@@ -572,7 +572,7 @@
       } else if (it.kind === 'material') {
         itemCell = '<div style="position:relative;">' +
           '<input data-f="description" data-i="' + i + '" data-matsearch="1" placeholder="Search catalog…" value="' + esc(it.description || it.material_description || '') + '" style="width:100%;background:rgba(255,255,255,0.04);border:1px solid ' + (it.material_id ? 'rgba(79,209,197,.4)' : 'var(--border,#2a2f3a)') + ';border-radius:6px;padding:5px 7px;color:var(--text,#fff);" />' +
-          (it.material_id ? '<span title="Linked to catalog — live-priced" style="position:absolute;right:6px;top:5px;font-size:10px;color:#4fd1c5;">&#x1F517;</span>' : '') +
+          (it.material_id ? '<span title="' + (it.live_price_basis === 'researched' ? 'Linked — RESEARCHED placeholder price (a real purchase supersedes it)' : 'Linked to catalog — live-priced') + '" style="position:absolute;right:6px;top:5px;font-size:10px;color:' + (it.live_price_basis === 'researched' ? '#fbbf24' : '#4fd1c5') + ';">&#x1F517;</span>' : '') +
           '<div class="asm-mat-results" data-mati="' + i + '" style="display:none;position:absolute;left:0;right:0;top:100%;z-index:10;background:#1b1f2a;border:1px solid var(--border,#2a2f3a);border-radius:6px;max-height:180px;overflow:auto;"></div>' +
         '</div>';
       } else {
@@ -669,36 +669,104 @@
     el.title = hasF ? 'Linear approximation — formula rows price exactly in the Parametric preview below and at insert time' : '';
   }
 
-  // Inline catalog search under a material row — pick links material_id
-  // so the row live-prices from the catalog.
+  // Inline catalog search under a material row. A pick links material_id so
+  // the row live-prices from the catalog. A persistent "Create researched
+  // material" footer (shown on BOTH match and zero-match states) lets an
+  // estimator mint a material with a researched placeholder price + rationale
+  // and link it in one step — no more dead-end when nothing in the catalog
+  // matches. The researched price lives on the MATERIAL (never frozen onto
+  // the recipe row), so a real purchase supersedes it automatically.
+  function linkPickedMaterial(i, m) {
+    var it = _editing.items[i];
+    if (!it) return;
+    it.material_id = m.id;
+    it.description = m.description;
+    it.unit = it.unit || m.unit || 'ea';
+    // Researched materials carry their price in last_unit_price (== researched_price).
+    it.live_unit_cost = (m.last_unit_price != null ? m.last_unit_price : (m.researched_price != null ? m.researched_price : null));
+    it.live_price_basis = m.price_basis || null;
+    repaintItems();
+  }
+
+  function matResultRow(m) {
+    var rsch = m.price_basis === 'researched'
+      ? ' <span title="Researched placeholder price" style="color:#fbbf24;font-size:9px;font-weight:600;">RSCH</span>' : '';
+    return '<div data-pick="' + m.id + '" style="padding:6px 9px;cursor:pointer;font-size:12px;border-bottom:1px solid rgba(255,255,255,0.05);">' +
+      esc(m.description) + ' <span style="color:#4fd1c5;font-family:monospace;">' + money(m.last_unit_price) + '/' + esc(m.unit || 'ea') + '</span>' + rsch + '</div>';
+  }
+
+  function createFooterHtml(q) {
+    return '<div data-create="1" style="padding:7px 9px;cursor:pointer;font-size:12px;background:rgba(251,191,36,0.08);border-top:1px solid rgba(251,191,36,0.25);color:#fbbf24;font-weight:600;">' +
+      '➕ Create “' + esc(q) + '” as a researched material</div>';
+  }
+
+  // Compact create form rendered INSIDE the results box. Marks the box
+  // data-creating so the debounced search won't clobber it mid-entry.
+  function showCreateForm(box, i, q) {
+    box.dataset.creating = '1';
+    var it = _editing.items[i] || {};
+    var subgroup = it.cost_code || 'materials';
+    box.innerHTML =
+      '<div style="padding:10px;background:#1b1f2a;">' +
+        '<div style="font-size:11px;color:#fbbf24;font-weight:600;margin-bottom:8px;">New researched material</div>' +
+        '<input id="asmMC_desc" value="' + esc(q) + '" placeholder="Description" style="width:100%;margin-bottom:6px;background:rgba(255,255,255,0.05);border:1px solid var(--border,#2a2f3a);border-radius:5px;padding:6px;color:var(--text,#fff);font-size:12px;" />' +
+        '<div style="display:flex;gap:6px;margin-bottom:6px;">' +
+          '<input id="asmMC_unit" value="' + esc(it.unit || '') + '" placeholder="Unit (ea/LF/SF)" style="flex:1;min-width:0;background:rgba(255,255,255,0.05);border:1px solid var(--border,#2a2f3a);border-radius:5px;padding:6px;color:var(--text,#fff);font-size:12px;" />' +
+          '<input id="asmMC_price" inputmode="decimal" placeholder="$/unit" style="width:78px;text-align:right;background:rgba(255,255,255,0.05);border:1px solid var(--border,#2a2f3a);border-radius:5px;padding:6px;color:var(--text,#fff);font-size:12px;font-family:monospace;" />' +
+          '<select id="asmMC_sub" style="background:rgba(255,255,255,0.05);border:1px solid var(--border,#2a2f3a);border-radius:5px;padding:6px;color:var(--text,#fff);font-size:12px;">' +
+            ['materials', 'labor', 'gc', 'sub'].map(function (s) { return '<option value="' + s + '"' + (s === subgroup ? ' selected' : '') + '>' + s + '</option>'; }).join('') +
+          '</select>' +
+        '</div>' +
+        '<textarea id="asmMC_why" rows="2" placeholder="Pricing rationale (where the number came from) — required" style="width:100%;margin-bottom:8px;background:rgba(255,255,255,0.05);border:1px solid var(--border,#2a2f3a);border-radius:5px;padding:6px;color:var(--text,#fff);font-size:12px;resize:vertical;"></textarea>' +
+        '<div style="display:flex;gap:6px;justify-content:flex-end;">' +
+          '<button type="button" data-mc="cancel" class="ee-btn ghost" style="font-size:11px;">Cancel</button>' +
+          '<button type="button" data-mc="save" class="ee-btn primary" style="font-size:11px;">Create &amp; link</button>' +
+        '</div>' +
+      '</div>';
+    box.style.display = 'block';
+    box.querySelector('[data-mc="cancel"]').addEventListener('click', function () { delete box.dataset.creating; box.style.display = 'none'; });
+    box.querySelector('[data-mc="save"]').addEventListener('click', function () {
+      var desc = ((document.getElementById('asmMC_desc') || {}).value || '').trim();
+      var why = ((document.getElementById('asmMC_why') || {}).value || '').trim();
+      var priceRaw = (document.getElementById('asmMC_price') || {}).value || '';
+      if (!desc) { notify('Description is required.'); return; }
+      if (!why) { notify('Add a short pricing rationale — this is a researched price.'); return; }
+      var payload = {
+        description: desc,
+        unit: (document.getElementById('asmMC_unit') || {}).value || '',
+        agx_subgroup: (document.getElementById('asmMC_sub') || {}).value || 'materials',
+        price_rationale: why
+      };
+      if (String(priceRaw).trim() !== '') payload.last_unit_price = priceRaw;
+      window.p86Api.materials.create(payload).then(function (res) {
+        if (!res || res.error || !res.material) throw new Error((res && res.error) || 'create failed');
+        delete box.dataset.creating;
+        linkPickedMaterial(i, res.material);
+      }).catch(function (err) { notify('Couldn’t create material: ' + (err.message || 'unknown')); });
+    });
+  }
+
   function matSearch(inputEl, i) {
     if (_matTimer) clearTimeout(_matTimer);
     var box = inputEl.parentElement.querySelector('.asm-mat-results');
     _matTimer = setTimeout(function () {
+      if (!box || box.dataset.creating) return; // don't clobber an open create form
       var q = inputEl.value.trim();
-      if (q.length < 2) { if (box) box.style.display = 'none'; return; }
+      if (q.length < 2) { box.style.display = 'none'; return; }
       window.p86Api.materials.list({ q: q, limit: 8 }).then(function (res) {
+        if (!box || box.dataset.creating) return;
         var mats = res.materials || [];
-        if (!box) return;
-        if (!mats.length) { box.style.display = 'none'; return; }
-        box.innerHTML = mats.map(function (m) {
-          return '<div data-pick="' + m.id + '" style="padding:6px 9px;cursor:pointer;font-size:12px;border-bottom:1px solid rgba(255,255,255,0.05);">' +
-            esc(m.description) + ' <span style="color:#4fd1c5;font-family:monospace;">' + money(m.last_unit_price) + '/' + esc(m.unit || 'ea') + '</span></div>';
-        }).join('');
+        box.innerHTML = mats.map(matResultRow).join('') + createFooterHtml(q);
         box.style.display = 'block';
         box.querySelectorAll('[data-pick]').forEach(function (row) {
           row.addEventListener('mousedown', function (ev) {
             ev.preventDefault();
             var m = mats.find(function (x) { return x.id === Number(row.dataset.pick); });
-            var it = _editing.items[i];
-            it.material_id = m.id;
-            it.description = m.description;
-            it.unit = it.unit || m.unit || 'ea';
-            it.live_unit_cost = m.last_unit_price;
-            box.style.display = 'none';
-            repaintItems();
+            if (m) { box.style.display = 'none'; linkPickedMaterial(i, m); }
           });
         });
+        var cf = box.querySelector('[data-create]');
+        if (cf) cf.addEventListener('mousedown', function (ev) { ev.preventDefault(); showCreateForm(box, i, q); });
       });
     }, 220);
   }
