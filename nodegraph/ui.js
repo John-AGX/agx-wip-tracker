@@ -4165,6 +4165,19 @@ function childGroupsHtml(sel){
     var key=((E.DEFS[k.type]||{}).cat==='cost')?'cost':k.type;
     (wired[key]=wired[key]||[]).push(k);
   });
+  // Scopes allocated to THIS building via the phase matrix (appData.phases keyed
+  // by buildingId) have no t2 node/wire, so the wire-only list above misses them
+  // (this is the "SCOPES · 0 but the matrix shows phases" bug). Surface them next
+  // to wired scopes — DISPLAY only, deduped by phase-record id. The building's
+  // revenue/budget rollup (buildingEffectiveBudget) already sums this exact union,
+  // so showing the list double-counts nothing. Join: the t1 node's linked appData
+  // building id (sel.data.id) === phase.buildingId.
+  var mxScopes=[];
+  if(sel.type==='t1' && sel.data && sel.data.id && window.appData && Array.isArray(window.appData.phases)){
+    var _bId=sel.data.id, _jid=(window.appState&&window.appState.currentJobId)||null;
+    var _wiredPh={}; (wired['t2']||[]).forEach(function(k){ if(k&&k.data&&k.data.id) _wiredPh[k.data.id]=1; });
+    mxScopes=window.appData.phases.filter(function(p){ return p && p.jobId===_jid && p.buildingId===_bId && !_wiredPh[p.id]; });
+  }
   var groups=kids.map(function(t){
     var list=wired[t]||[];
     var label=(t==='cost')?'Costs':((SPAWN_LABEL[t]||t)+'s');
@@ -4172,7 +4185,7 @@ function childGroupsHtml(sel){
       ? "window.p86NgCostMenu&&window.p86NgCostMenu('"+sel.id+"',this)"
       : "window.p86NgSpawn&&window.p86NgSpawn('"+sel.id+"','"+t+"')";
     var rows;
-    if(t==='t2' && sel.type==='t1' && list.length){
+    if(t==='t2' && sel.type==='t1' && (list.length || mxScopes.length)){
       // Scope rows on a BUILDING inspector carry inline completion controls: a
       // Units ⇄ % toggle + (units mode) a check-off cube strip against THIS
       // building's unit count — so you set units on the building AND check them
@@ -4217,13 +4230,29 @@ function childGroupsHtml(sel){
         if(open) r+=scopePhasesHtml(k);
         return r;
       }).join('');
+      // Matrix-allocated scopes (no node/wire) appended as read-only rows; tap
+      // opens the existing phase editor. No inline unit/% controls — there is no
+      // wire to mutate, and these are display-only here.
+      rows+=mxScopes.map(function(p){
+        var _rev=(p.asSoldRevenue||p.asSoldPhaseBudget||p.phaseBudget||0);
+        var _pc=Math.max(0,Math.min(100,Math.round(p.pctComplete||0)));
+        var _pcc=_pc>=100?'#34d399':_pc>=50?'#fbbf24':'#4f8cff';
+        return '<div class="ng-cg-row ng-cg-scope ng-cg-matrix" onclick="event.stopPropagation();window.editPhase&&window.editPhase(\''+p.id+'\')" title="Allocated via the phase matrix — tap to edit">'
+          +'<span class="ng-cg-cvt" style="flex:0 0 auto;width:14px;"></span>'
+          +'<span class="ng-cg-ic">'+ngTypeIco('t2')+'</span>'
+          +'<span class="ng-cg-nm">'+luEsc(p.phase||'Scope')+'</span>'
+          +'<span class="ng-cg-mx-badge">matrix</span>'
+          +(_rev?'<span style="flex:0 0 auto;color:#8b90a5;font-family:\'Courier New\',monospace;font-size:10px;">$'+Math.round(_rev).toLocaleString()+'</span>':'')
+          +'<span style="flex:0 0 auto;color:'+_pcc+';font-family:\'Courier New\',monospace;font-size:11px;min-width:34px;text-align:right;">'+_pc+'%</span>'
+          +'</div>';
+      }).join('');
     } else {
       rows=list.length ? list.map(function(k){
         return '<div class="ng-cg-row" onclick="event.stopPropagation();window.p86NgSelect&&window.p86NgSelect(\''+k.id+'\')" title="Open on canvas">'
           +'<span class="ng-cg-ic">'+ngTypeIco(k.type)+'</span><span class="ng-cg-nm">'+luEsc(k.label||k.type)+'</span></div>';
       }).join('') : '<div class="ng-cg-empty">None yet</div>';
     }
-    return '<div class="ng-cg-group"><div class="ng-cg-head"><span class="ng-cg-lbl">'+label+' · '+list.length+'</span>'
+    return '<div class="ng-cg-group"><div class="ng-cg-head"><span class="ng-cg-lbl">'+label+' · '+(list.length+(t==='t2'?mxScopes.length:0))+'</span>'
       +'<button class="ng-cg-add" aria-label="Add '+label+'" onclick="event.stopPropagation();'+add+'">+</button></div>'+rows+'</div>';
   }).join('');
   return '<div class="ng-cg">'+groups+'</div>';
