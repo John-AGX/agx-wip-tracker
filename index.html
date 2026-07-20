@@ -3462,6 +3462,10 @@
         <!-- Map-tool cluster -->
         <div class="ng-ribbon-group">
           <div class="ng-ribbon-group-buttons">
+            <button class="ng-tbtn ng-ribbon-btn ng-basemap-btn" id="ngBasemapBtn" title="Satellite / Map — switch the basemap between satellite imagery and a street/road map (for locations with poor satellite coverage). Buildings + measurements ride on top either way.">
+              <span class="ng-ribbon-icon" data-p86-icon="map"></span>
+              <span class="ng-ribbon-label">Map view</span>
+            </button>
             <button class="ng-tbtn ng-ribbon-btn ng-geoplace-btn" id="ngGeoPlaceBtn" title="Place on map — select a building, click Place, then tap its real spot on the satellite imagery">
               <span class="ng-ribbon-icon" data-p86-icon="map-pin"></span>
               <span class="ng-ribbon-label">Place</span>
@@ -3516,11 +3520,6 @@
           <button type="button" class="ng-pop-check" data-ngl="nodes">Node chips</button>
           <button type="button" class="ng-pop-check" data-ngl="minimap">Minimap</button>
           <button type="button" class="ng-pop-check" data-ngl="help">Shortcut bar</button>
-          <div class="ng-pop-title">Basemap</div>
-          <button class="ng-tbtn ng-ribbon-btn ng-basemap-btn" id="ngBasemapBtn" title="Map view — switch the basemap from satellite imagery to a street/road map. Useful for locations with no or poor satellite coverage; toggle back for satellite.">
-            <span class="ng-ribbon-icon" data-p86-icon="map"></span>
-            <span class="ng-ribbon-label">Map view</span>
-          </button>
         </div>
         <!-- More popover: the lower-frequency ribbon tools, re-homed as menu rows -->
         <div id="ngMorePop" class="ng-pop" hidden>
@@ -3624,7 +3623,7 @@
       </div>
     </div>
     <script src="nodegraph/engine.js?v=112"></script>
-    <script src="nodegraph/ui.js?v=283"></script>
+    <script src="nodegraph/ui.js?v=284"></script>
     <!-- Ribbon popovers (Layers / More) + layer visibility persistence.
          Loads after ui.js; only owns the popover chrome — the moved
          ribbon buttons stay wired by ui.js itself. -->

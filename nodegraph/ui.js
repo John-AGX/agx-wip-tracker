@@ -6324,7 +6324,15 @@ function init(){
   // can still place/trace buildings on the map view.
   var basemapBtn=tab.querySelector('.ng-basemap-btn');
   if(basemapBtn){
-    var _syncBasemapBtn=function(){ basemapBtn.classList.toggle('ng-on', _spBasemapType==='roadmap'); };
+    var _syncBasemapBtn=function(){
+      var on = _spBasemapType==='roadmap';
+      basemapBtn.classList.toggle('ng-on', on);
+      // Label reflects the CURRENT basemap so the button reads as a live toggle:
+      // showing satellite → "Map view" (click to switch to roadmap); showing the
+      // road map → "Satellite" (click to switch back).
+      var _lbl = basemapBtn.querySelector('.ng-ribbon-label');
+      if(_lbl) _lbl.textContent = on ? 'Satellite' : 'Map view';
+    };
     _syncBasemapBtn();
     basemapBtn.addEventListener('click', function(){
       _spBasemapType = (_spBasemapType==='roadmap') ? 'satellite' : 'roadmap';
