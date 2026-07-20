@@ -3676,6 +3676,7 @@
     if (!mount || !jobId) return;
     opts = opts || {};
     var title = opts.title || 'Weather at this job';
+    var compact = !!opts.compact;   // side-rail mode: a small vertical day list instead of the wide strip
     mount.innerHTML =
       '<div class="sch-job-wx-widget">' +
         '<div class="sch-job-wx-header">' +
@@ -3695,14 +3696,14 @@
     }
     window.p86Api.weather.jobs([jobId]).then(function(res) {
       var w = res && res.weather && res.weather[jobId];
-      paintJobWeatherBody(body, w);
+      paintJobWeatherBody(body, w, compact);
     }).catch(function(err) {
       body.innerHTML = '<div class="sch-job-wx-empty">Weather unavailable: ' +
         escapeHTML((err && err.message) || 'unknown') + '</div>';
     });
   }
 
-  function paintJobWeatherBody(body, w) {
+  function paintJobWeatherBody(body, w, compact) {
     if (!body) return;
     if (!w) {
       body.innerHTML = '<div class="sch-job-wx-empty">No forecast data.</div>';
@@ -3728,6 +3729,28 @@
     }
     if (w.status !== 'ok' || !Array.isArray(w.days) || !w.days.length) {
       body.innerHTML = '<div class="sch-job-wx-empty">No forecast data.</div>';
+      return;
+    }
+    // Compact side-rail mode: a small vertical day list (day · icon · hi/lo ·
+    // rain%). Inline-styled so it needs no CSS; risk color still rides the icon.
+    if (compact) {
+      var vrows = w.days.map(function(d) {
+        var vIconClass = 'sch-job-wx-icon sch-wx-' + d.risk;
+        var vIcon = weatherIconSVG(d);
+        var vDate = (function() { var dd = parseISODate(d.date); if (!dd) return d.date; return DOW_LABELS[dd.getDay()] + ' ' + (dd.getMonth() + 1) + '/' + dd.getDate(); })();
+        var vHi = (d.tempHigh != null) ? d.tempHigh + '°' : '—';
+        var vLo = (d.tempLow != null) ? d.tempLow + '°' : '';
+        var vPrecip = d.precipPct ? d.precipPct + '%' : '';
+        return '<div title="' + escapeAttr((d.summary || '') + (d.tempHigh != null ? ' · ' + d.tempHigh + '°' : '') + (d.tempLow != null ? ' / ' + d.tempLow + '°' : '')) + '" ' +
+                'style="display:flex;align-items:center;gap:7px;padding:4px 2px;border-bottom:1px solid var(--overlay-light,rgba(255,255,255,0.05));font-size:11px;">' +
+          '<span style="width:52px;flex:0 0 auto;color:var(--text-dim,#9aa);font-weight:600;">' + escapeHTML(vDate) + '</span>' +
+          '<span class="' + vIconClass + '" style="width:18px;height:18px;flex:0 0 auto;display:inline-flex;align-items:center;justify-content:center;">' + vIcon + '</span>' +
+          '<span style="flex:1;color:var(--text,#eee);"><b>' + escapeHTML(vHi) + '</b>' + (vLo ? ' <span style="color:var(--text-dim,#888);">' + escapeHTML(vLo) + '</span>' : '') + '</span>' +
+          '<span style="flex:0 0 auto;color:var(--text-dim,#9aa);">' + escapeHTML(vPrecip) + '</span>' +
+        '</div>';
+      }).join('');
+      var vAddr = w.address ? '<div class="sch-job-wx-addr" style="margin-top:5px;font-size:10px;">' + (window.p86Icon ? window.p86Icon('map-pin') + ' ' : '') + escapeHTML(w.address) + '</div>' : '';
+      body.innerHTML = vrows + vAddr;
       return;
     }
     // Day cards — rendered as a horizontal strip. Each card carries

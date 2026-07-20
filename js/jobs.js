@@ -2917,6 +2917,57 @@ function renderJobsMain() {
         // critical path. ensureNGCloudSynced already handles the
         // re-render after async cloud sync if the numbers shift.
         var _ngComputedThisSession = {};
+        // Compact Bills (Accounts Payable) summary for the overview dashboard.
+        // Same records + fields as the Jobs-hub Bills tab (p86Api.bills.listAll),
+        // rendered in the shared PO/Invoices section style. Hidden when the job
+        // has no bills. Rows open the shared bill editor.
+        function renderJobBillsSummaryInto(host, jobId) {
+            if (!host) return;
+            var section = document.createElement('div');
+            section.style.cssText = 'margin-top:14px;';
+            section.id = 'job-overview-bills';
+            section.innerHTML = '<div style="font-size:12px;color:var(--text-dim);padding:4px 0;">Loading bills…</div>';
+            host.appendChild(section);
+            if (!window.p86Api || !window.p86Api.bills || !window.p86Api.bills.listAll) { section.innerHTML = ''; return; }
+            window.p86Api.bills.listAll({ job: jobId }).then(function(r) {
+                var bills = (r && r.bills) || [];
+                if (!bills.length) { section.innerHTML = ''; return; }   // nothing owed yet — don't clutter
+                var total = 0, paid = 0;
+                bills.forEach(function(b) { var a = parseFloat(b.amount) || 0; total += a; if (b.status === 'paid') paid += a; });
+                var rows = bills.map(function(b) {
+                    var vendor = b.sub_name || (b.data && b.data.vendor) || '';
+                    var due = b.due_date ? String(b.due_date).slice(0, 10) : '';
+                    var overdue = b.due_date && b.status !== 'paid' && b.status !== 'void' && new Date(b.due_date).getTime() < Date.now();
+                    return '<tr class="overview-row" data-bill-id="' + escapeHTML(String(b.id)) + '" style="cursor:pointer;border-bottom:1px solid var(--overlay-light,rgba(255,255,255,0.04));" title="Click to open bill">' +
+                        '<td style="white-space:nowrap;padding:6px 10px;"><strong style="color:var(--text,#fff);font-size:13px;">' + escapeHTML(b.bill_number || '—') + '</strong></td>' +
+                        '<td style="padding:6px 10px;font-size:12px;color:var(--text-dim,#aaa);">' + escapeHTML(vendor || '—') + '</td>' +
+                        '<td style="padding:6px 10px;font-size:11px;color:var(--text-dim,#888);">' + escapeHTML(b.po_number || '—') + '</td>' +
+                        '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-family:\'SF Mono\',monospace;font-size:13px;font-weight:600;color:var(--accent);">' + formatCurrency(parseFloat(b.amount) || 0) + '</td>' +
+                        '<td style="white-space:nowrap;padding:6px 10px;"><span style="font-size:10px;padding:2px 8px;border-radius:10px;background:rgba(79,140,255,0.1);color:var(--text-dim);font-weight:600;">' + escapeHTML(b.status || 'open') + '</span></td>' +
+                        '<td style="white-space:nowrap;padding:6px 10px;font-size:11px;' + (overdue ? 'color:#f87171;font-weight:600;' : 'color:var(--text-dim,#888);') + '">' + escapeHTML(due) + '</td>' +
+                    '</tr>';
+                }).join('');
+                section.innerHTML =
+                    '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">' +
+                        '<h3 style="font-size:13px;margin:0;">&#x1F9FE; Bills (' + bills.length + ')</h3>' +
+                        '<div style="font-size:12px;color:var(--text-dim);">Total: <b>' + formatCurrency(total) + '</b> &nbsp; Paid: <b style="color:var(--green);">' + formatCurrency(paid) + '</b> &nbsp; Outstanding: <b style="color:var(--yellow);">' + formatCurrency(total - paid) + '</b></div>' +
+                    '</div>' +
+                    '<div style="border:1px solid var(--border,#333);border-radius:10px;overflow-x:auto;background:var(--card-bg,#141419);">' +
+                        '<table style="width:100%;border-collapse:collapse;table-layout:auto;">' +
+                            '<thead style="background:var(--overlay-light,rgba(255,255,255,0.02));border-bottom:1px solid var(--border,#333);"><tr>' +
+                                thCell('Bill #', 'left') + thCell('Vendor', 'left') + thCell('PO #', 'left') + thCell('Amount', 'right') + thCell('Status', 'left') + thCell('Due', 'left') +
+                            '</tr></thead><tbody>' + rows + '</tbody>' +
+                        '</table>' +
+                    '</div>';
+                section.querySelectorAll('[data-bill-id]').forEach(function(tr) {
+                    tr.onclick = function() {
+                        var id = tr.getAttribute('data-bill-id');
+                        if (window.p86Bills && window.p86Bills.open) window.p86Bills.open(id, function() { renderJobOverview(jobId); });
+                    };
+                });
+            }).catch(function() { section.innerHTML = ''; });
+        }
+
         function renderJobOverview(jobId) {
             const container = document.getElementById('job-overview');
             if (!container) return;
@@ -3001,6 +3052,26 @@ function renderJobsMain() {
             })();
             container.appendChild(btnRow);
 
+            // ── Dashboard grid ──
+            // Two columns: a wide LEFT column for the money/work summary
+            // (buildings · scope · POs · COs · bills · subs · invoices) and a
+            // narrow RIGHT rail for the compact weather + projects/tasks/files.
+            // Collapses to one column on narrow screens. This is the "reads like
+            // a summary dashboard" layout.
+            (function ensureDashStyle() {
+                if (document.getElementById('job-overview-dash-style')) return;
+                var st = document.createElement('style');
+                st.id = 'job-overview-dash-style';
+                st.textContent = '.job-overview-dash{display:grid;grid-template-columns:minmax(0,1fr) 300px;gap:16px;align-items:start;}.job-overview-dash>.dash-col{min-width:0;}.job-overview-dash .dash-side{display:flex;flex-direction:column;gap:12px;}@media(max-width:900px){.job-overview-dash{grid-template-columns:1fr;}}';
+                document.head.appendChild(st);
+            })();
+            var dash = document.createElement('div');
+            dash.className = 'job-overview-dash';
+            var dashMain = document.createElement('div'); dashMain.className = 'dash-col dash-main';
+            var dashSide = document.createElement('div'); dashSide.className = 'dash-col dash-side';
+            dash.appendChild(dashMain); dash.appendChild(dashSide);
+            container.appendChild(dash);
+
             // ── Weather widget ──
             // 7-day NWS forecast for the job's address. Self-contained:
             // schedule.js owns the fetch + render. We just give it a
@@ -3009,10 +3080,9 @@ function renderJobsMain() {
             // explains why the data isn't there.
             if (window.p86Weather && typeof window.p86Weather.renderJobWidget === 'function') {
                 var wxMount = document.createElement('div');
-                wxMount.style.cssText = 'margin:0 0 14px 0;';
                 wxMount.id = 'job-overview-weather';
-                container.appendChild(wxMount);
-                window.p86Weather.renderJobWidget(wxMount, jobId);
+                dashSide.appendChild(wxMount);
+                window.p86Weather.renderJobWidget(wxMount, jobId, { compact: true, title: 'Weather' });
             }
 
             // ── Linked Projects panel ──
@@ -3025,7 +3095,7 @@ function renderJobsMain() {
                 projWrap.innerHTML =
                     '<legend style="font-size:10px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.6px;padding:0 5px;">&#x1F4F8; Projects</legend>' +
                     '<div id="job-overview-projects-host"></div>';
-                container.appendChild(projWrap);
+                dashSide.appendChild(projWrap);
                 var projHost = projWrap.querySelector('#job-overview-projects-host');
                 if (projHost) {
                     window.renderLinkedProjectsPanel(projHost, { kind: 'job', id: jobId });
@@ -3041,7 +3111,7 @@ function renderJobsMain() {
                 taskWrap.innerHTML =
                     '<legend style="font-size:10px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.6px;padding:0 5px;">&#x2705; Tasks</legend>' +
                     '<div id="job-overview-tasks-host"></div>';
-                container.appendChild(taskWrap);
+                dashSide.appendChild(taskWrap);
                 var taskHost = taskWrap.querySelector('#job-overview-tasks-host');
                 if (taskHost) {
                     var jobLabel = (jobObj && ((jobObj.jobNumber ? jobObj.jobNumber + ' — ' : '') + (jobObj.title || ''))) || ('Job ' + jobId);
@@ -3058,7 +3128,7 @@ function renderJobsMain() {
                 fileWrap.innerHTML =
                     '<legend style="font-size:10px;font-weight:700;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.6px;padding:0 5px;">&#x1F4C1; Files</legend>' +
                     '<div id="job-overview-files-host"></div>';
-                container.appendChild(fileWrap);
+                dashSide.appendChild(fileWrap);
                 var fileHost = fileWrap.querySelector('#job-overview-files-host');
                 if (fileHost) {
                     window.p86Explorer.mount(fileHost, { entityType: 'job', entityId: String(jobId), canEdit: true, embedded: true });
@@ -3081,7 +3151,7 @@ function renderJobsMain() {
                     var wxBody = document.getElementById('schJobWxBody-' + healJobId);
                     if (wxBody && /Loading forecast/i.test(wxBody.textContent || '') && window.p86Weather && window.p86Weather.renderJobWidget) {
                         var wxm = document.getElementById('job-overview-weather');
-                        if (wxm) { try { window.p86Weather.renderJobWidget(wxm, healJobId); } catch (e) {} }
+                        if (wxm) { try { window.p86Weather.renderJobWidget(wxm, healJobId, { compact: true, title: 'Weather' }); } catch (e) {} }
                     }
                     var pjHost = document.getElementById('job-overview-projects-host');
                     if (pjHost && /Loading projects/i.test(pjHost.textContent || '') && typeof window.renderLinkedProjectsPanel === 'function') {
@@ -3103,7 +3173,7 @@ function renderJobsMain() {
             if (buildings.length > 0) {
                 const bldgSection = document.createElement('div');
                 bldgSection.id = 'job-buildings-content';
-                container.appendChild(bldgSection);
+                dashMain.appendChild(bldgSection);
                 renderJobBuildings(jobId);
             }
 
@@ -3114,7 +3184,7 @@ function renderJobsMain() {
                 // moments earlier — their in-flight fetches then paint detached
                 // nodes and the panels stay stuck on "Loading…". Only jobs with
                 // zero buildings hit this branch, which is why it looked random.
-                container.insertAdjacentHTML('beforeend', '<div style="text-align:center;padding:30px;color:var(--text-dim);font-size:13px;">No buildings or phases yet. Use the buttons above to get started.</div>');
+                dashMain.insertAdjacentHTML('beforeend', '<div style="text-align:center;padding:30px;color:var(--text-dim);font-size:13px;">No buildings or phases yet. Use the buttons above to get started.</div>');
             }
 
             // ── Phases summary (grouped, expandable, with node connections) ──
@@ -3123,7 +3193,15 @@ function renderJobsMain() {
             phSection.style.cssText = 'margin-top:14px;';
             phSection.id = 'job-overview-phases';
             renderOverviewPhasesInto(phSection, jobId, jobPhases);
-            container.appendChild(phSection);
+            dashMain.appendChild(phSection);
+
+            // ── Purchase Orders + Change Orders + Bills (money, server-backed) ──
+            // The job_purchase_orders / job_change_orders / job_vendor_bills
+            // entities — the same records the dedicated subtabs + Jobs hub use —
+            // grouped at the top of the summary right under buildings + scope.
+            renderJobPurchaseOrdersInto(dashMain, jobId);
+            renderJobChangeOrdersInto(dashMain, jobId);
+            renderJobBillsSummaryInto(dashMain, jobId);
 
             // ── Subcontractors summary (cards with expandable connections) ──
             const jobSubs = appData.subs.filter(s => s.jobId === jobId);
@@ -3132,16 +3210,8 @@ function renderJobsMain() {
                 subsSection.style.cssText = 'margin-top:14px;';
                 subsSection.id = 'job-overview-subs';
                 renderOverviewSubsInto(subsSection, jobId, jobSubs);
-                container.appendChild(subsSection);
+                dashMain.appendChild(subsSection);
             }
-
-            // ── Change Orders + Purchase Orders (server-backed) ──
-            // Renders the job_change_orders / job_purchase_orders entities —
-            // the same records the dedicated subtabs + Jobs hub use. The old
-            // localStorage CO/PO summary blocks were removed so the overview
-            // no longer shows stale pre-migration data.
-            renderJobChangeOrdersInto(container, jobId);
-            renderJobPurchaseOrdersInto(container, jobId);
 
             // ── Invoices summary ──
             const invs = appData.invoices.filter(i => i.jobId === jobId);
@@ -3181,7 +3251,7 @@ function renderJobsMain() {
                             '<tbody>' + invRows + '</tbody>' +
                         '</table>' +
                     '</div>';
-                container.appendChild(invSection);
+                dashMain.appendChild(invSection);
             }
         }
 
