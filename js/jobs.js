@@ -3955,6 +3955,14 @@ function renderJobsMain() {
 
         function renderOverviewPhasesInto(container, jobId, phases) {
             container.innerHTML = '';
+            // Self-heal: drop any empty "Unassigned" phase remnants left by the
+            // create-then-split flow, and mirror the removal into the list we render.
+            var _pruned = pruneEmptyUnassignedPhases(jobId);
+            if (_pruned.length) {
+                var _rm = {}; _pruned.forEach(function(id) { _rm[id] = 1; });
+                phases = (phases || []).filter(function(p) { return !_rm[p.id]; });
+                if (typeof saveData === 'function') saveData();
+            }
             const phaseGroups = {};
             phases.forEach(p => {
                 var key = p.phase || 'Unnamed';
@@ -4155,6 +4163,29 @@ function renderJobsMain() {
             return { recs: recs, mode: mode, total: total, sumDollars: sumD };
         }
 
+        // Remove the empty "Unassigned" phase remnant left behind when a phase
+        // created at the job level is fully split to buildings via the matrix. The
+        // phase keeps one buildingId:null "Unassigned bucket" record; once its value
+        // moves onto buildings that bucket sits at $0 and clutters the dropdown as a
+        // "Job-level (unassigned)" row. Prune ONLY buckets that are TRULY empty (no $,
+        // no %, no cost) AND whose phase name is allocated to at least one building —
+        // so a genuine job-level phase (no building siblings) or one carrying any
+        // value is never touched. Returns the removed record ids.
+        function pruneEmptyUnassignedPhases(jobId) {
+            if (!appData || !Array.isArray(appData.phases)) return [];
+            var hasBldg = {};
+            appData.phases.forEach(function(p) { if (p && p.jobId === jobId && p.buildingId) hasBldg[p.phase || 'Unnamed'] = 1; });
+            var removed = [];
+            appData.phases = appData.phases.filter(function(p) {
+                if (!p || p.jobId !== jobId || p.buildingId) return true;          // keep other jobs + building-assigned
+                var money = (p.asSoldRevenue || 0) + (p.asSoldPhaseBudget || 0) + (p.phaseBudget || 0) + (p.coPhaseBudget || 0)
+                          + (p.materials || 0) + (p.labor || 0) + (p.sub || 0) + (p.equipment || 0);
+                var empty = money === 0 && !(Number(p.pctComplete) > 0);
+                if (empty && hasBldg[p.phase || 'Unnamed']) { removed.push(p.id); return false; }  // empty remnant → drop
+                return true;
+            });
+            return removed;
+        }
         function phaseRecFor(jobId, name, bid) {
             var rec = appData.phases.find(function(p) { return p.jobId === jobId && (p.phase || 'Unnamed') === name && (p.buildingId || null) === (bid || null); });
             if (!rec) {
@@ -4725,6 +4756,9 @@ function renderJobsMain() {
             // REVENUE, not just its budget. The graph's WIP roll-up weights each
             // phase by revenue — leaving this at 0 was why the job % never totaled.
             rec.asSoldRevenue = val;
+            // If this edit emptied the "Unassigned" bucket while buildings hold the
+            // phase, drop the remnant so it never lingers as a $0 job-level row.
+            pruneEmptyUnassignedPhases(jobId);
             if (typeof saveData === 'function') saveData();
             recomputePhaseMatrixTotals(input, jobId);
         }
