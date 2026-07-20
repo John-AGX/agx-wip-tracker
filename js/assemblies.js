@@ -135,7 +135,8 @@
         '<td style="text-align:right;font-family:monospace;color:#4fd1c5;">' + money(a.unit_cost) + ' / ' + esc(a.unit || 'EA') + warn + '</td>' +
         '<td style="text-align:right;font-family:monospace;">' + (a.item_count || 0) + '</td>' +
         '<td><span style="padding:1px 7px;border-radius:9px;font-size:10px;text-transform:uppercase;background:rgba(79,140,255,0.12);color:#4f8cff;">' + esc(a.source || 'manual') + '</span></td>' +
-        '<td style="text-align:right;">' +
+        '<td style="text-align:right;white-space:nowrap;">' +
+          '<button class="ee-btn ee-icon-btn ghost" onclick="event.stopPropagation();p86Assemblies.openSpinVariants(' + a.id + ')" title="Spin size variants (2x6 → 2x8 …)">&#x1F9EC;</button>' +
           '<button class="ee-btn ee-icon-btn ghost" onclick="event.stopPropagation();p86Assemblies.remove(' + a.id + ')" title="Delete">&#x1F5D1;</button>' +
         '</td></tr>';
     }).join('');
@@ -974,6 +975,109 @@
     }).catch(function (err) { if (btn) { btn.disabled = false; btn.textContent = 'Create & link'; } notify('Couldn’t create + link: ' + (err.message || 'unknown')); });
   }
 
+  // ── S5: Spin variant family ───────────────────────────────────────────
+  // Clone this recipe into size siblings — pick the row whose MATERIAL changes
+  // by size, enter the target sizes, and each becomes a new assembly (variant =
+  // the size, so the code carries it) with the sized material swapped, or a
+  // researched sized material auto-created for you to price. "The different types."
+  var _spin = null;
+  function spinOverlay() {
+    var el = document.getElementById('assemblySpinOverlay');
+    if (el) return el;
+    el = document.createElement('div');
+    el.id = 'assemblySpinOverlay';
+    el.style.cssText = 'display:none;position:fixed;inset:0;z-index:1220;background:rgba(8,10,16,0.72);overflow:auto;padding:6vh 16px;';
+    el.addEventListener('mousedown', function (ev) { if (ev.target === el) closeSpin(); });
+    document.body.appendChild(el);
+    return el;
+  }
+  function closeSpin() { var el = document.getElementById('assemblySpinOverlay'); if (el) el.style.display = 'none'; }
+  function spinShell(body) {
+    return '<div style="max-width:560px;margin:0 auto;background:var(--card-bg,#141419);border:1px solid var(--border,#2a2f3a);border-radius:12px;overflow:hidden;">' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border,#2a2f3a);">' +
+        '<div style="font-size:16px;font-weight:600;color:var(--text,#fff);">🧬 Spin variant family</div>' +
+        '<button class="ee-btn ghost" onclick="p86Assemblies.closeSpin()">Close</button>' +
+      '</div>' + body + '</div>';
+  }
+  function openSpinVariants(id) {
+    var ov = spinOverlay();
+    ov.style.display = 'block';
+    ov.innerHTML = spinShell('<div style="padding:36px;text-align:center;color:var(--text-dim,#8a93a6);">Loading recipe…</div>');
+    window.p86Api.assemblies.get(id).then(function (r) {
+      var matRows = (r.items || []).filter(function (it) { return it.kind === 'material'; });
+      _spin = { base: r.assembly, matRows: matRows, sizedItemId: (matRows[0] && matRows[0].id) || null, sizes: [] };
+      paintSpin();
+    }).catch(function (err) {
+      ov.innerHTML = spinShell('<div style="padding:24px;color:#f87171;">Couldn’t load: ' + esc(err.message || 'unknown') + '</div>');
+    });
+  }
+  function paintSpin() {
+    var ov = document.getElementById('assemblySpinOverlay');
+    if (!ov || !_spin) return;
+    var b = _spin.base;
+    var matOpts = _spin.matRows.map(function (it) {
+      return '<option value="' + it.id + '"' + (it.id === _spin.sizedItemId ? ' selected' : '') + '>' + esc((it.description || 'material').slice(0, 50)) + '</option>';
+    }).join('');
+    var sizeChips = _spin.sizes.map(function (s, i) {
+      return '<span style="display:inline-flex;align-items:center;gap:4px;background:rgba(79,140,255,0.12);color:#4f8cff;border-radius:6px;padding:2px 8px;font-size:12px;font-family:monospace;margin:2px 4px 2px 0;">' + esc(s) +
+        ' <span style="cursor:pointer;" onclick="p86Assemblies.spinRmSize(' + i + ')">✕</span></span>';
+    }).join('');
+    var preview = _spin.sizes.length ? _spin.sizes.map(function (s) {
+      return '<div style="font-size:12px;color:var(--text-dim,#8a93a6);padding:2px 0;">' + esc(b.name) + ' — <b style="color:var(--text,#fff);font-family:monospace;">' + esc(s) + '</b></div>';
+    }).join('') : '<div style="font-size:12px;color:var(--text-dim,#888);">Add sizes to preview the variants.</div>';
+    ov.innerHTML = spinShell(
+      '<div style="padding:18px 20px;">' +
+        '<div style="font-size:13px;color:var(--text,#fff);margin-bottom:2px;">' + esc(b.name) + ' <span style="font-family:monospace;font-size:11px;color:var(--text-dim,#888);">' + esc(b.code || '') + '</span></div>' +
+        '<div style="font-size:12px;color:var(--text-dim,#8a93a6);margin-bottom:14px;">Each size becomes its own assembly with the sized material swapped. If no catalog match exists, a researched sized material is created for you to price.</div>' +
+        (_spin.matRows.length ?
+          '<label style="display:block;font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-dim,#888);margin-bottom:4px;">Which material changes by size?</label>' +
+          '<select id="spin-sized" onchange="p86Assemblies.spinSetSized(this.value)" style="width:100%;background:rgba(255,255,255,0.04);border:1px solid var(--border,#2a2f3a);border-radius:6px;padding:7px;color:var(--text,#fff);font-size:12px;margin-bottom:14px;">' + matOpts + '</select>'
+          : '<div style="font-size:12px;color:#fbbf24;margin-bottom:14px;">This recipe has no linked material rows — variants will clone without a material swap.</div>') +
+        '<label style="display:block;font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-dim,#888);margin-bottom:4px;">Target sizes</label>' +
+        '<div style="display:flex;gap:6px;margin-bottom:8px;">' +
+          '<input id="spin-size-in" placeholder="e.g. 2X8" onkeydown="if(event.key===\'Enter\'){event.preventDefault();p86Assemblies.spinAddSize();}" style="flex:1;background:rgba(255,255,255,0.04);border:1px solid var(--border,#2a2f3a);border-radius:6px;padding:7px;color:var(--text,#fff);font-size:12px;font-family:monospace;" />' +
+          '<button class="ee-btn" onclick="p86Assemblies.spinAddSize()">Add</button>' +
+        '</div>' +
+        '<div style="margin-bottom:14px;">' + sizeChips + '</div>' +
+        '<div style="background:rgba(255,255,255,0.02);border:1px solid var(--border,#2a2f3a);border-radius:8px;padding:10px 12px;margin-bottom:16px;">' +
+          '<div style="font-size:10px;text-transform:uppercase;letter-spacing:.5px;color:var(--text-dim,#888);margin-bottom:6px;">Will create</div>' + preview +
+        '</div>' +
+        '<div id="spin-result"></div>' +
+        '<div style="display:flex;gap:8px;justify-content:flex-end;">' +
+          '<button class="ee-btn ghost" onclick="p86Assemblies.closeSpin()">Cancel</button>' +
+          '<button class="ee-btn primary" onclick="p86Assemblies.spinCommit(this)"' + (_spin.sizes.length ? '' : ' disabled') + '>Spin ' + _spin.sizes.length + ' variant' + (_spin.sizes.length === 1 ? '' : 's') + '</button>' +
+        '</div>' +
+      '</div>');
+  }
+  function spinSetSized(v) { if (_spin) _spin.sizedItemId = Number(v); }
+  function spinAddSize() {
+    var el = document.getElementById('spin-size-in');
+    if (!el || !_spin) return;
+    var v = String(el.value || '').trim().toUpperCase();
+    if (v && _spin.sizes.indexOf(v) === -1) _spin.sizes.push(v);
+    el.value = '';
+    paintSpin();
+    var f = document.getElementById('spin-size-in'); if (f) f.focus();
+  }
+  function spinRmSize(i) { if (_spin) { _spin.sizes.splice(i, 1); paintSpin(); } }
+  function spinCommit(btn) {
+    if (!_spin || !_spin.sizes.length) return;
+    if (btn) { btn.disabled = true; btn.textContent = 'Spinning…'; }
+    var body = { sized_item_id: _spin.sizedItemId, variants: _spin.sizes.map(function (s) { return { variant: s, target_size: s }; }) };
+    window.p86Api.assemblies.spinVariants(_spin.base.id, body).then(function (r) {
+      if (r && r.error) throw new Error(r.error);
+      var res = document.getElementById('spin-result');
+      if (res) {
+        res.innerHTML = (r.results || []).map(function (x) {
+          if (x.ok) return '<div style="font-size:12px;color:#4fd1c5;padding:2px 0;">✓ ' + esc(x.code || x.variant) + (x.incomplete ? ' <span style="color:#fbbf24;">— needs pricing</span>' : ' — ' + money(x.unit_cost)) + (x.sized_material && x.sized_material.created ? ' <span style="color:#fbbf24;">(new material)</span>' : '') + '</div>';
+          return '<div style="font-size:12px;color:#f87171;padding:2px 0;">✕ ' + esc(x.variant || '') + ' — ' + esc(x.error || 'failed') + '</div>';
+        }).join('') + '<div style="font-size:11px;color:var(--text-dim,#888);margin-top:8px;padding-top:8px;border-top:1px solid var(--border,#2a2f3a);">' + (r.created || 0) + ' created' + (r.failed ? ', ' + r.failed + ' failed' : '') + '. New sized materials show ⚠ until you price them (Fix links or the editor).</div>';
+      }
+      if (window.p86Assemblies) window.p86Assemblies.renderList();
+      if (btn) { btn.disabled = false; btn.textContent = 'Spin variants'; }
+    }).catch(function (err) { if (btn) { btn.disabled = false; btn.textContent = 'Spin variants'; } notify('Spin failed: ' + (err.message || 'unknown')); });
+  }
+
   window.p86Assemblies = {
     renderList: renderList,
     paintList: paintList,
@@ -990,6 +1094,12 @@
     laCreate: laCreate,
     laCreateCancel: laCreateCancel,
     laCreateSave: laCreateSave,
-    editFromAudit: editFromAudit
+    editFromAudit: editFromAudit,
+    openSpinVariants: openSpinVariants,
+    closeSpin: closeSpin,
+    spinSetSized: spinSetSized,
+    spinAddSize: spinAddSize,
+    spinRmSize: spinRmSize,
+    spinCommit: spinCommit
   };
 })();

@@ -572,7 +572,12 @@
     // by assembly, each with fuzzy catalog suggestions.
     linkAudit: function() { return get('/api/assemblies/link-audit'); },
     // Link ONE recipe row to a catalog material by item id (targeted, org-safe).
-    linkItem: function(id, itemId, materialId) { return post('/api/assemblies/' + encodeURIComponent(id) + '/link-item', { item_id: itemId, material_id: materialId }); }
+    linkItem: function(id, itemId, materialId) { return post('/api/assemblies/' + encodeURIComponent(id) + '/link-item', { item_id: itemId, material_id: materialId }); },
+    // S5 — clone a base into SIZE variants (swap/auto-create the sized material).
+    // body: { sized_item_id, variants: [{ variant, target_size, name? }] }
+    spinVariants: function(id, body) { return post('/api/assemblies/' + encodeURIComponent(id) + '/spin-variants', body || {}); },
+    // S5 — bulk-create many assemblies through the validation funnel (per-row ok/error).
+    bulkCreate: function(assemblies) { return post('/api/assemblies/bulk', { assemblies: assemblies || [] }); }
   };
 
   // Assembly code registry (Trades + Systems). GET is view-gated; writes edit-gated.

@@ -8,8 +8,20 @@ const express = require('express');
 const { pool } = require('../db');
 const { requireAuth, requireCapability } = require('../auth');
 const asm = require('../services/assemblies');
+const matSvc = require('../services/materials'); // createResearchedMaterial + findSizedSibling (variant spin)
 
 const router = express.Router();
+
+// Swap a size token in a material description for variant auto-create
+// (e.g. "2x6 PT board", "2X6" → "2X8" ⇒ "2x8 PT board"; append if absent).
+function sizedSwapDescription(desc, oldSize, newSize) {
+  var d = String(desc || '');
+  if (oldSize) {
+    var re = new RegExp(String(oldSize).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+    if (re.test(d)) return d.replace(re, newSize);
+  }
+  return (d + ' ' + newSize).trim();
+}
 
 // ── GET /api/assemblies — list with resolved unit costs ──────────────
 router.get('/', requireAuth, requireCapability('ESTIMATES_VIEW'), async (req, res) => {
@@ -137,6 +149,128 @@ router.post('/:id/link-item', requireAuth, requireCapability('ESTIMATES_EDIT'), 
     res.json({ ok: true, unit_cost: cost.unitCost, incomplete: cost.incomplete });
   } catch (e) {
     console.error('POST /api/assemblies/:id/link-item error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── POST /api/assemblies/bulk — create many assemblies at once, each through
+// the SAME validation funnel (createAssembly + replaceItems). Each row is its
+// OWN transaction so one failure can't roll back the rest — returns per-row
+// { ok, id, code, unit_cost, incomplete } or { ok:false, error }. Body:
+// { assemblies: [{ header, items }] }. The vehicle for loading a whole cluster
+// (e.g. Cluster A re-roof) fast. (Declared before /:id.)
+router.post('/bulk', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req, res) => {
+  try {
+    const orgId = req.user.organization_id;
+    const rows = (req.body && Array.isArray(req.body.assemblies)) ? req.body.assemblies : null;
+    if (!rows || !rows.length) return res.status(400).json({ error: 'assemblies[] is required' });
+    if (rows.length > 200) return res.status(400).json({ error: 'Too many at once (max 200)' });
+    const results = [];
+    for (const row of rows) {
+      const name = (row && row.header && row.header.name) || null;
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        const id = await asm.createAssembly(client, orgId, row.header || {}, req.user.id);
+        const err = await asm.replaceItems(client, id, Array.isArray(row.items) ? row.items : [], orgId);
+        if (err) { await client.query('ROLLBACK'); results.push({ ok: false, name, error: err }); continue; }
+        await client.query('COMMIT');
+        results.push({ ok: true, id, name });
+      } catch (e) {
+        try { await client.query('ROLLBACK'); } catch (_) {}
+        results.push({ ok: false, name, error: e.message || 'create failed' });
+      } finally { client.release(); }
+    }
+    // Reprice every created assembly in a single graph pass.
+    const graph = await asm.loadGraph(pool, orgId);
+    results.forEach((r) => {
+      if (r.ok && r.id) { const c = asm.resolveCost(r.id, graph); const a = graph.assemblies.get(r.id); r.code = a ? a.code : null; r.unit_cost = c.unitCost; r.incomplete = c.incomplete; }
+    });
+    res.json({ ok: true, results, created: results.filter((r) => r.ok).length, failed: results.filter((r) => !r.ok).length });
+  } catch (e) {
+    console.error('POST /api/assemblies/bulk error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── POST /api/assemblies/:id/spin-variants — clone a base assembly into one or
+// more SIZE variants, re-linking the sized material row per target. The base
+// stays read-only. Body: { sized_item_id, variants: [{ variant, target_size, name? }] }.
+// Per variant (own txn): copy header (new variant → new canonical code) + items;
+// on the sized row, findSizedSibling(target_size) → swap material_id, else
+// auto-create a researched sized material (no price yet → the variant reads
+// incomplete until priced — never a silent $0) and link it. Returns per-variant
+// { ok, id, code, unit_cost, incomplete, sized_material } or { ok:false, error }.
+router.post('/:id/spin-variants', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req, res) => {
+  try {
+    const baseId = parseInt(req.params.id, 10);
+    const sizedItemId = parseInt((req.body && req.body.sized_item_id), 10);
+    const variants = (req.body && Array.isArray(req.body.variants)) ? req.body.variants : null;
+    if (!isFinite(baseId) || !variants || !variants.length) return res.status(400).json({ error: 'variants[] is required' });
+    if (variants.length > 50) return res.status(400).json({ error: 'Too many variants at once (max 50)' });
+    const orgId = req.user.organization_id;
+    const graph = await asm.loadGraph(pool, orgId);
+    const base = graph.assemblies.get(baseId);
+    if (!base) return res.status(404).json({ error: 'Base assembly not found' });
+    const baseItems = graph.itemsBy.get(baseId) || [];
+    const sizedRow = isFinite(sizedItemId) ? baseItems.find((it) => it.id === sizedItemId) : null;
+    let baseSizedMaterial = null;
+    if (sizedRow && sizedRow.material_id) {
+      const mq = await pool.query('SELECT * FROM materials WHERE id=$1', [sizedRow.material_id]);
+      baseSizedMaterial = mq.rows[0] || null;
+    }
+    const results = [];
+    for (const v of variants) {
+      const variantCode = String((v && (v.variant || v.target_size)) || '').trim();
+      const targetSize = String((v && (v.target_size || v.variant)) || '').trim();
+      if (!variantCode) { results.push({ ok: false, error: 'variant is required' }); continue; }
+      const client = await pool.connect();
+      try {
+        await client.query('BEGIN');
+        let sizedMaterialId = sizedRow ? sizedRow.material_id : null;
+        let sizedMaterialNote = null;
+        if (sizedRow && baseSizedMaterial) {
+          const sib = await matSvc.findSizedSibling(client, orgId, baseSizedMaterial, targetSize);
+          if (sib) { sizedMaterialId = sib.id; sizedMaterialNote = { id: sib.id, description: sib.description, created: false }; }
+          else {
+            const swappedDesc = sizedSwapDescription(baseSizedMaterial.description, baseSizedMaterial.size_nominal, targetSize);
+            const cr = await matSvc.createResearchedMaterial(client, orgId, {
+              description: swappedDesc, unit: baseSizedMaterial.unit, agx_subgroup: baseSizedMaterial.agx_subgroup,
+              size_nominal: targetSize,
+              price_rationale: 'Auto-created for the ' + variantCode + ' variant of ' + base.name + ' — set a real price.'
+            }, req.user.id);
+            if (cr.material) { sizedMaterialId = cr.material.id; sizedMaterialNote = { id: cr.material.id, description: cr.material.description, created: cr.created }; }
+          }
+        }
+        const header = {
+          name: (v.name && String(v.name).trim()) || (base.name + ' — ' + variantCode),
+          trade: base.trade, system: base.system, variant: variantCode,
+          unit: base.unit, description: base.description, source: 'manual', params: base.params
+        };
+        const newId = await asm.createAssembly(client, orgId, header, req.user.id);
+        const items = baseItems.map((it) => ({
+          kind: it.kind,
+          material_id: (sizedRow && it.id === sizedRow.id) ? sizedMaterialId : it.material_id,
+          child_assembly_id: it.child_assembly_id, description: it.description,
+          qty_per_unit: it.qty_per_unit, unit: it.unit, unit_cost: it.unit_cost,
+          cost_code: it.cost_code, waste_pct: it.waste_pct, qty_formula: it.qty_formula, rationale: it.rationale
+        }));
+        const err = await asm.replaceItems(client, newId, items, orgId);
+        if (err) { await client.query('ROLLBACK'); results.push({ ok: false, variant: variantCode, error: err }); continue; }
+        await client.query('COMMIT');
+        results.push({ ok: true, id: newId, variant: variantCode, sized_material: sizedMaterialNote });
+      } catch (e) {
+        try { await client.query('ROLLBACK'); } catch (_) {}
+        results.push({ ok: false, variant: variantCode, error: e.message || 'spin failed' });
+      } finally { client.release(); }
+    }
+    const g2 = await asm.loadGraph(pool, orgId);
+    results.forEach((r) => {
+      if (r.ok && r.id) { const c = asm.resolveCost(r.id, g2); const a = g2.assemblies.get(r.id); r.code = a ? a.code : null; r.unit_cost = c.unitCost; r.incomplete = c.incomplete; }
+    });
+    res.json({ ok: true, results, created: results.filter((r) => r.ok).length, failed: results.filter((r) => !r.ok).length });
+  } catch (e) {
+    console.error('POST /api/assemblies/:id/spin-variants error:', e);
     res.status(500).json({ error: 'Server error' });
   }
 });

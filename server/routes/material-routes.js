@@ -14,6 +14,8 @@ const { pool } = require('../db');
 const { requireAuth, requireCapability } = require('../auth');
 // Training flywheel — admin normalization overrides become examples (PUT /:id).
 const { captureExample, TASKS } = require('../services/training-capture');
+// Shared create-researched-material helper (also used by assembly variant-spin).
+const matSvc = require('../services/materials');
 
 const router = express.Router();
 
@@ -311,66 +313,11 @@ router.get('/', requireAuth, requireCapability('ESTIMATES_VIEW'), async (req, re
 // ──────────────────────────────────────────────────────────────────
 router.post('/', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req, res) => {
   try {
-    const b = req.body || {};
-    const description = String(b.description || '').trim();
-    if (!description) return res.status(400).json({ error: 'A material description is required.' });
-    const vendor = (String(b.vendor || 'home_depot').trim().toLowerCase()) || 'home_depot';
-    const rawDescription = (String(b.raw_description || description).trim()) || description;
-    const unit = b.unit != null && String(b.unit).trim() !== '' ? String(b.unit).trim() : null;
-    const SUBGROUPS = ['materials', 'labor', 'gc', 'sub'];
-    const subgroup = SUBGROUPS.includes(String(b.agx_subgroup || '').toLowerCase())
-      ? String(b.agx_subgroup).toLowerCase() : 'materials';
-    const category = b.category != null && String(b.category).trim() !== '' ? String(b.category).trim() : null;
-    const sizeNominal = b.size_nominal != null && String(b.size_nominal).trim() !== '' ? String(b.size_nominal).trim().toUpperCase() : null;
-    const rationale = b.price_rationale != null && String(b.price_rationale).trim() !== '' ? String(b.price_rationale).trim() : null;
-    const sourceUrl = b.price_source_url != null && String(b.price_source_url).trim() !== '' ? String(b.price_source_url).trim() : null;
-    const notesVal = b.notes != null && String(b.notes).trim() !== '' ? String(b.notes).trim() : null;
-
-    // Parse + guard the researched price: finite and >= 0, else it's a
-    // "no price yet" row (needs_pricing) rather than a bogus $0.
-    let price = null;
-    if (b.last_unit_price != null && b.last_unit_price !== '') {
-      const n = Number(b.last_unit_price);
-      if (!Number.isFinite(n) || n < 0) return res.status(400).json({ error: 'Price must be a number of 0 or more.' });
-      price = Math.round(n * 100) / 100;
-    }
-    const hasPrice = price != null;
-    const priceBasis = hasPrice ? 'researched' : 'catalog';
-    const orgId = req.user.organization_id;
-
-    const ins = await pool.query(
-      `INSERT INTO materials
-         (organization_id, vendor, raw_description, description, unit, agx_subgroup, category,
-          last_unit_price, researched_price, price_basis, price_rationale, price_source_url,
-          researched_at, researched_by, needs_pricing, size_nominal, manual_override, notes)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, NOW(), $13, $14, $15, true, $16)
-       ON CONFLICT (organization_id, vendor, lower(raw_description)) DO NOTHING
-       RETURNING id`,
-      [orgId, vendor, rawDescription, description, unit, subgroup, category,
-       price, hasPrice ? price : null, priceBasis, rationale, sourceUrl,
-       req.user.id, !hasPrice, sizeNominal, notesVal]
-    );
-
-    let material, created;
-    if (ins.rows[0]) {
-      created = true;
-      const got = await pool.query('SELECT * FROM materials WHERE id = $1', [ins.rows[0].id]);
-      material = got.rows[0];
-    } else {
-      // Collision — return the existing row so the editor links to it.
-      created = false;
-      const got = await pool.query(
-        `SELECT * FROM materials
-          WHERE (organization_id = $1 OR organization_id IS NULL)
-            AND vendor = $2 AND lower(raw_description) = lower($3)
-          ORDER BY organization_id NULLS LAST LIMIT 1`,
-        [orgId, vendor, rawDescription]
-      );
-      material = got.rows[0] || null;
-    }
+    const { material, created } = await matSvc.createResearchedMaterial(pool, req.user.organization_id, req.body || {}, req.user.id);
     if (!material) return res.status(500).json({ error: 'Could not create the material.' });
     res.json({ ok: true, created, material });
   } catch (e) {
+    if (e && e.status === 400) return res.status(400).json({ error: e.message });
     console.error('POST /api/materials error:', e);
     res.status(500).json({ error: e.message || 'Server error' });
   }
