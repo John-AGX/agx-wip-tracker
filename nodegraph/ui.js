@@ -3793,7 +3793,7 @@ function luSetPct(bn, kind, id, pct){
 // The building card renders in two places — the floating .ng-sp-bldg panel and the
 // right Inspector. Refresh whichever is mounted so an L/U edit is reflected wherever
 // the user is looking. (Both are idempotent re-renders; neither calls the other.)
-function luRefresh(){ if(typeof renderBuildingMetrics==='function') renderBuildingMetrics(); if(typeof renderInspector==='function') renderInspector(); }
+function luRefresh(){ if(typeof renderBuildingMetrics==='function') renderBuildingMetrics(); if(typeof renderInspector==='function') renderInspector(); if(typeof renderSidebarMetrics==='function') renderSidebarMetrics(); }
 // Read-first % editor — a small popover of quick chips + a type-in, anchored to
 // the cube / level the user tapped. Replaces prompt() so the card stays calm.
 var _luPop=null;
@@ -3826,10 +3826,11 @@ function openLuPctPop(bn, kind, id, anchorEl){
 function applyScopePct(p, v){
   if(!p) return;
   p.pctComplete = Math.max(0, Math.min(100, Math.round(Number(v)||0)));
-  if(typeof window.saveData==='function') window.saveData();
-  if(typeof updateT1Progress==='function') updateT1Progress();
-  if(E.saveGraph) E.saveGraph();
-  luRefresh();
+  if(typeof updateT1Progress==='function') updateT1Progress();       // flush building %
+  if(typeof pushToJobSilent==='function') pushToJobSilent();          // flush job pct/revenue cache
+  if(typeof window.saveData==='function') window.saveData();          // persist appData (phase pct + job cache)
+  if(E.saveGraph) E.saveGraph();                                      // persist graph nodes
+  luRefresh();                                                        // repaint card + inspector + top strip
 }
 window.p86NgScopePct = function(phaseId, anchorEl){
   var p = (window.appData && Array.isArray(window.appData.phases)) ? window.appData.phases.find(function(x){ return x && x.id===phaseId; }) : null;
