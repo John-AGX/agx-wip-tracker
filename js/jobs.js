@@ -266,6 +266,21 @@ function renderJobsMain() {
             return { phaseCost, buildingCost, jobCost, total: phaseCost + buildingCost + jobCost };
         }
 
+        // Sub/PO bills the sub has invoiced you (the unified job_vendor_bills AP
+        // store) are INCURRED cost — they roll into ACTUAL. Excludes draft/void/
+        // cancelled/rejected (not real invoices yet). Billed is already netted out
+        // of accrued (getJobPOAccrued = earned − billed), so a billed dollar moves
+        // from accrued → actual, never sits in both.
+        function getJobBilledCost(jobId) {
+            var DEAD = { draft: 1, void: 1, cancelled: 1, canceled: 1, rejected: 1 };
+            return (appData.jobVendorBills || []).reduce(function(s, b) {
+                if (!b || (b.job_id !== jobId && b.jobId !== jobId)) return s;
+                if (DEAD[b.status]) return s;
+                return s + (Number(b.amount) || 0);
+            }, 0);
+        }
+        window.getJobBilledCost = getJobBilledCost;
+
         // ==================== WIP CALCULATIONS ====================
         function getJobCOTotals(jobId) {
             // Change orders are server-backed and live in appData.jobChangeOrders
@@ -351,7 +366,14 @@ function renderJobsMain() {
             // and it's added exactly once regardless of graph topology. Unlinked QB
             // is excluded (John's rule). Stateless — correct on the jobs list +
             // unopened jobs. (No double-count: ngActualCosts carries no QB.)
-            const actualCosts = baseActualCosts + qbActualCosts;
+            // + sub/PO bills (job_vendor_bills): what the sub has BILLED you is
+            // incurred cost, so it rolls into ACTUAL — not left stranded once it
+            // clears accrued (getJobPOAccrued nets billed out, so no double-count).
+            // No QB link on bills, so a cost entered as BOTH a P86 bill and a linked
+            // QB line would count twice — subs bill via Bills, QB carries materials,
+            // so they don't overlap in practice.
+            const billedCost = (typeof getJobBilledCost === 'function') ? getJobBilledCost(jobId) : 0;
+            const actualCosts = baseActualCosts + qbActualCosts + billedCost;
             const contractIncome = job.contractAmount || 0;
             const estimatedCosts = job.estimatedCosts || 0;
             const totalIncome = contractIncome + co.income;
@@ -392,10 +414,10 @@ function renderJobsMain() {
                 : totalIncome - revenueEarned;
             const remainingCosts = revisedEstCosts - actualCosts;
             // Accrued (committed) cost = sub earned-but-unbilled + open PO
-            // commitments (ordered − billed, via getJobPOAccrued). Made a
-            // first-class metric here so EVERY surface (tiles, jobs list, WIP
-            // report) reflects it — distinct from actual (QB), into which it
-            // rolls as bills get paid. Projected = actual + accrued.
+            // commitments (ordered − billed, via getJobPOAccrued). Once a sub BILLS,
+            // that dollar leaves accrued and lands in ACTUAL (getJobBilledCost, folded
+            // into actualCosts above) — the two never overlap. Projected = actual +
+            // accrued = the full committed cost.
             const poAccrued = (typeof getJobPOAccrued === 'function') ? (getJobPOAccrued(jobId).total || 0) : 0;
             const accruedCosts = getJobAccruedCosts(jobId) + poAccrued;
             const projectedCost = actualCosts + accruedCosts;
@@ -428,7 +450,7 @@ function renderJobsMain() {
                 displayProfit, displayMargin,
                 qbActualCosts, qbCostLineCount, qbCostsAsOf,
                 invoiced, unbilled, backlog, remainingCosts,
-                accruedCosts, poAccrued, projectedCost, projectedProfit
+                accruedCosts, poAccrued, billedCost, projectedCost, projectedProfit
             };
         }
         // Exposed for js/job-audit.js (R8 margin-drift + R10 underbilled rules).
