@@ -51,6 +51,7 @@
         '<div class="asmstudio-section" id="asmstudio-section-assemblies" style="display:none;">' +
           '<div class="action-buttons">' +
             (canEdit() ? '<button onclick="p86Assemblies.openEditor(null)" data-p86-icon="plus">New Assembly</button>' : '') +
+            (canEdit() ? '<button onclick="p86Assemblies.openLinkAudit()" class="ghost" title="Link every recipe row to a catalog material">🔗 Fix links</button>' : '') +
             '<input id="asmstudio-asm-search" type="text" placeholder="Search assemblies…" oninput="p86Assemblies.paintList()" ' +
               'style="flex:1;max-width:320px;background:rgba(255,255,255,0.04);border:1px solid var(--border,#2a2f3a);border-radius:8px;padding:8px 12px;color:var(--text,#fff);font-size:13px;" />' +
             '<span id="asmstudio-asm-summary" style="font-size:12px;color:var(--text-dim,#8a93a6);align-self:center;"></span>' +

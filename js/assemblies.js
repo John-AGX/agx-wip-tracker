@@ -838,6 +838,142 @@
     }
   }
 
+  // ── S4: Fix-links worklist ───────────────────────────────────────────
+  // Every recipe row with no catalog material linked, grouped by assembly,
+  // each with fuzzy catalog suggestions. One-click link (or create-researched
+  // + link) to drive the library to zero unlinked rows. Body-level overlay,
+  // host-agnostic like the editor. Linking uses the targeted /link-item route.
+  var _laData = null;
+  function laOverlay() {
+    var el = document.getElementById('assemblyLinkAuditOverlay');
+    if (el) return el;
+    el = document.createElement('div');
+    el.id = 'assemblyLinkAuditOverlay';
+    el.style.cssText = 'display:none;position:fixed;inset:0;z-index:1210;background:rgba(8,10,16,0.72);overflow:auto;padding:4vh 16px;';
+    el.addEventListener('mousedown', function (ev) { if (ev.target === el) closeLinkAudit(); });
+    document.body.appendChild(el);
+    return el;
+  }
+  function closeLinkAudit() { var el = document.getElementById('assemblyLinkAuditOverlay'); if (el) el.style.display = 'none'; }
+  function laShell(body) {
+    return '<div style="max-width:840px;margin:0 auto;background:var(--card-bg,#141419);border:1px solid var(--border,#2a2f3a);border-radius:12px;overflow:hidden;">' +
+      '<div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--border,#2a2f3a);">' +
+        '<div style="font-size:16px;font-weight:600;color:var(--text,#fff);">🔗 Fix links</div>' +
+        '<button class="ee-btn ghost" onclick="p86Assemblies.closeLinkAudit()">Close</button>' +
+      '</div>' + body + '</div>';
+  }
+  function openLinkAudit() {
+    var ov = laOverlay();
+    ov.style.display = 'block';
+    ov.innerHTML = laShell('<div style="padding:40px;text-align:center;color:var(--text-dim,#8a93a6);">Scanning recipes…</div>');
+    window.p86Api.assemblies.linkAudit().then(function (r) {
+      _laData = r || { assemblies: [], totals: {} };
+      paintLinkAudit();
+    }).catch(function (err) {
+      ov.innerHTML = laShell('<div style="padding:30px;color:#f87171;">Couldn’t load: ' + esc(err.message || 'unknown') + '</div>');
+    });
+  }
+  function paintLinkAudit() {
+    var ov = document.getElementById('assemblyLinkAuditOverlay');
+    if (!ov) return;
+    var d = _laData || { assemblies: [], totals: {} };
+    var t = d.totals || {};
+    if (!d.assemblies.length) {
+      ov.innerHTML = laShell('<div style="padding:40px;text-align:center;color:#4fd1c5;">✓ Every material row is linked. Nothing to fix.</div>');
+      return;
+    }
+    var head = '<div style="padding:12px 20px;font-size:13px;color:var(--text-dim,#8a93a6);border-bottom:1px solid var(--border,#2a2f3a);">' +
+      '<b style="color:#fbbf24;">' + (t.unlinked_rows || 0) + '</b> unlinked material rows across <b>' + (t.assemblies_with_gaps || 0) + '</b> recipes. Click a suggestion to link it, or create a researched material.</div>';
+    ov.innerHTML = laShell(head + '<div style="max-height:64vh;overflow:auto;padding:8px 12px;">' + d.assemblies.map(laAssemblyCard).join('') + '</div>');
+  }
+  function laAssemblyCard(a) {
+    return '<div class="la-card" data-asm="' + a.id + '" style="border:1px solid var(--border,#2a2f3a);border-radius:9px;margin:8px 0;overflow:hidden;">' +
+      '<div style="display:flex;align-items:center;gap:10px;padding:9px 12px;background:rgba(255,255,255,0.02);">' +
+        '<strong style="color:var(--text,#fff);font-size:13px;">' + esc(a.name) + '</strong>' +
+        (a.code ? '<span style="font-family:monospace;font-size:10px;color:var(--text-dim,#888);">' + esc(a.code) + '</span>' : '') +
+        '<span class="la-cost" style="margin-left:auto;font-family:monospace;font-size:12px;color:' + (a.incomplete ? '#fbbf24' : '#4fd1c5') + ';">' + money(a.unit_cost) + '/' + esc(a.unit || 'EA') + (a.incomplete ? ' ⚠' : '') + '</span>' +
+        '<button class="ee-btn ghost" style="font-size:11px;" onclick="p86Assemblies.editFromAudit(' + a.id + ')">Open</button>' +
+      '</div><div class="la-gaps">' + a.gaps.map(function (g) { return laGapRow(a, g); }).join('') + '</div></div>';
+  }
+  function laGapRow(a, g) {
+    var sugg = (g.suggestions || []).map(function (s) {
+      var rsch = s.price_basis === 'researched' ? ' ·R' : '';
+      return '<button class="la-sugg" onclick="p86Assemblies.laLink(' + a.id + ',' + g.item_id + ',' + s.id + ',this)" ' +
+        'style="border:1px solid var(--border,#2a2f3a);background:rgba(79,140,255,0.08);color:var(--text,#fff);border-radius:6px;padding:3px 8px;font-size:11px;cursor:pointer;margin:2px 4px 2px 0;">' +
+        esc(String(s.description).slice(0, 40)) + ' <span style="color:#4fd1c5;font-family:monospace;">' + money(s.last_unit_price) + '/' + esc(s.unit || 'ea') + rsch + '</span></button>';
+    }).join('');
+    return '<div class="la-gap" data-item="' + g.item_id + '" style="padding:8px 12px;border-top:1px dashed var(--border,#2a2f3a);">' +
+      '<div style="font-size:12px;color:var(--text,#fff);margin-bottom:5px;">' + esc(g.description || '(no description)') +
+        ' <span style="font-size:9px;text-transform:uppercase;color:var(--text-dim,#888);">' + esc(g.cost_code) + '</span></div>' +
+      '<div class="la-actions">' + (sugg || '<span style="font-size:11px;color:var(--text-dim,#888);">no catalog matches — </span>') +
+        '<button onclick="p86Assemblies.laCreate(' + a.id + ',' + g.item_id + ',this)" style="border:1px solid rgba(251,191,36,0.35);background:rgba(251,191,36,0.08);color:#fbbf24;border-radius:6px;padding:3px 8px;font-size:11px;cursor:pointer;font-weight:600;">➕ Create researched</button>' +
+      '</div></div>';
+  }
+  function laMarkLinked(gapEl, res) {
+    if (!gapEl) return;
+    var card = gapEl.closest('.la-card');
+    gapEl.style.opacity = '0.55';
+    var act = gapEl.querySelector('.la-actions');
+    if (act) act.innerHTML = '<span style="color:#4fd1c5;font-size:11px;">✓ linked</span>';
+    if (card && res) {
+      var costEl = card.querySelector('.la-cost');
+      var a = _laData.assemblies.find(function (x) { return x.id === Number(card.dataset.asm); });
+      var unit = a ? a.unit : 'EA';
+      if (costEl) { costEl.textContent = money(res.unit_cost) + '/' + (unit || 'EA') + (res.incomplete ? ' ⚠' : ''); costEl.style.color = res.incomplete ? '#fbbf24' : '#4fd1c5'; }
+    }
+  }
+  function laLink(asmId, itemId, materialId, btn) {
+    if (btn) { btn.disabled = true; btn.textContent = 'linking…'; }
+    window.p86Api.assemblies.linkItem(asmId, itemId, materialId).then(function (res) {
+      if (res && res.error) throw new Error(res.error);
+      laMarkLinked(btn ? btn.closest('.la-gap') : null, res);
+    }).catch(function (err) { if (btn) { btn.disabled = false; } notify('Link failed: ' + (err.message || 'unknown')); });
+  }
+  function editFromAudit(id) { closeLinkAudit(); openEditor(id); }
+  function laCreate(asmId, itemId) {
+    var gapEl = document.querySelector('.la-gap[data-item="' + itemId + '"]');
+    if (!gapEl) return;
+    var a = _laData.assemblies.find(function (x) { return x.id === asmId; });
+    var g = a && a.gaps.find(function (x) { return x.item_id === itemId; });
+    var prefill = (g && g.description) || '';
+    var act = gapEl.querySelector('.la-actions');
+    act.innerHTML =
+      '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">' +
+        '<input id="la-mc-desc" value="' + esc(prefill) + '" placeholder="Description" style="flex:1;min-width:150px;background:rgba(255,255,255,0.05);border:1px solid var(--border,#2a2f3a);border-radius:5px;padding:5px;color:var(--text,#fff);font-size:11px;" />' +
+        '<input id="la-mc-unit" placeholder="unit" style="width:52px;background:rgba(255,255,255,0.05);border:1px solid var(--border,#2a2f3a);border-radius:5px;padding:5px;color:var(--text,#fff);font-size:11px;" />' +
+        '<input id="la-mc-price" inputmode="decimal" placeholder="$/unit" style="width:62px;text-align:right;background:rgba(255,255,255,0.05);border:1px solid var(--border,#2a2f3a);border-radius:5px;padding:5px;color:var(--text,#fff);font-size:11px;font-family:monospace;" />' +
+      '</div>' +
+      '<input id="la-mc-why" placeholder="Pricing rationale — required" style="width:100%;margin-top:5px;background:rgba(255,255,255,0.05);border:1px solid var(--border,#2a2f3a);border-radius:5px;padding:5px;color:var(--text,#fff);font-size:11px;" />' +
+      '<div style="display:flex;gap:6px;justify-content:flex-end;margin-top:5px;">' +
+        '<button class="ee-btn ghost" style="font-size:11px;" onclick="p86Assemblies.laCreateCancel(' + asmId + ',' + itemId + ')">Cancel</button>' +
+        '<button class="ee-btn primary" style="font-size:11px;" onclick="p86Assemblies.laCreateSave(' + asmId + ',' + itemId + ',this)">Create &amp; link</button>' +
+      '</div>';
+  }
+  function laCreateCancel(asmId, itemId) {
+    var a = _laData.assemblies.find(function (x) { return x.id === asmId; });
+    var g = a && a.gaps.find(function (x) { return x.item_id === itemId; });
+    var gapEl = document.querySelector('.la-gap[data-item="' + itemId + '"]');
+    if (gapEl && a && g) gapEl.outerHTML = laGapRow(a, g);
+  }
+  function laCreateSave(asmId, itemId, btn) {
+    var desc = ((document.getElementById('la-mc-desc') || {}).value || '').trim();
+    var why = ((document.getElementById('la-mc-why') || {}).value || '').trim();
+    var price = (document.getElementById('la-mc-price') || {}).value || '';
+    var unit = (document.getElementById('la-mc-unit') || {}).value || '';
+    if (!desc) { notify('Description is required.'); return; }
+    if (!why) { notify('Add a pricing rationale — this is a researched price.'); return; }
+    if (btn) { btn.disabled = true; btn.textContent = 'creating…'; }
+    var payload = { description: desc, unit: unit, price_rationale: why };
+    if (String(price).trim() !== '') payload.last_unit_price = price;
+    window.p86Api.materials.create(payload).then(function (res) {
+      if (!res || res.error || !res.material) throw new Error((res && res.error) || 'create failed');
+      return window.p86Api.assemblies.linkItem(asmId, itemId, res.material.id);
+    }).then(function (linkRes) {
+      if (linkRes && linkRes.error) throw new Error(linkRes.error);
+      laMarkLinked(document.querySelector('.la-gap[data-item="' + itemId + '"]'), linkRes);
+    }).catch(function (err) { if (btn) { btn.disabled = false; btn.textContent = 'Create & link'; } notify('Couldn’t create + link: ' + (err.message || 'unknown')); });
+  }
+
   window.p86Assemblies = {
     renderList: renderList,
     paintList: paintList,
@@ -847,6 +983,13 @@
     removeItem: removeItem,
     toggleGroup: toggleGroup,
     save: save,
-    remove: remove
+    remove: remove,
+    openLinkAudit: openLinkAudit,
+    closeLinkAudit: closeLinkAudit,
+    laLink: laLink,
+    laCreate: laCreate,
+    laCreateCancel: laCreateCancel,
+    laCreateSave: laCreateSave,
+    editFromAudit: editFromAudit
   };
 })();

@@ -58,6 +58,89 @@ router.get('/suggest-code', requireAuth, requireCapability('ESTIMATES_EDIT'), as
   }
 });
 
+// ── GET /api/assemblies/link-audit — every recipe row with NO catalog
+// material linked (kind='material' && material_id IS NULL), grouped by
+// assembly, each with up to 5 fuzzy-matched catalog suggestions. The
+// worklist for driving the library to zero unlinked rows. Read-only.
+// (Declared before /:id so it isn't captured as an id.)
+router.get('/link-audit', requireAuth, requireCapability('ESTIMATES_VIEW'), async (req, res) => {
+  try {
+    const orgId = req.user.organization_id;
+    const graph = await asm.loadGraph(pool, orgId);
+    // Load the org catalog ONCE for in-JS fuzzy suggestions (no N queries).
+    const mq = await pool.query(
+      `SELECT id, description, unit, last_unit_price, agx_subgroup, price_basis
+         FROM materials
+        WHERE (organization_id = $1 OR organization_id IS NULL) AND is_hidden = false`, [orgId]);
+    const catalog = mq.rows;
+    const tokenize = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter((w) => w.length > 2);
+    const catTokens = catalog.map((m) => ({ m, t: new Set(tokenize(m.description)) }));
+    function suggest(desc) {
+      const qt = tokenize(desc);
+      if (!qt.length) return [];
+      return catTokens.map((c) => {
+        let hits = 0; qt.forEach((w) => { if (c.t.has(w)) hits++; });
+        return { m: c.m, score: hits };
+      }).filter((x) => x.score > 0)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 5)
+        .map((x) => ({ id: x.m.id, description: x.m.description, unit: x.m.unit, last_unit_price: x.m.last_unit_price, price_basis: x.m.price_basis }));
+    }
+    const out = [];
+    let unlinkedRows = 0;
+    for (const a of graph.assemblies.values()) {
+      if (a.is_hidden) continue;
+      const items = graph.itemsBy.get(a.id) || [];
+      const gaps = items.filter((it) => it.kind === 'material' && it.material_id == null)
+        .map((it) => {
+          unlinkedRows++;
+          const desc = it.description || '';
+          return { item_id: it.id, description: desc, cost_code: it.cost_code || 'materials', suggestions: suggest(desc) };
+        });
+      if (!gaps.length) continue;
+      const cost = asm.resolveCost(a.id, graph);
+      out.push({ id: a.id, code: a.code, name: a.name, unit: a.unit, unit_cost: cost.unitCost, incomplete: cost.incomplete, gaps });
+    }
+    out.sort((x, y) => y.gaps.length - x.gaps.length);
+    res.json({ assemblies: out, totals: { assemblies_with_gaps: out.length, unlinked_rows: unlinkedRows } });
+  } catch (e) {
+    console.error('GET /api/assemblies/link-audit error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── POST /api/assemblies/:id/link-item — link ONE recipe row to a catalog
+// material by item id. Targeted single-row UPDATE (no full-replace race);
+// org-verified on BOTH the item's assembly and the material. Returns the
+// repriced unit cost so the worklist can show the before→after delta.
+router.post('/:id/link-item', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const itemId = parseInt((req.body && req.body.item_id), 10);
+    const materialId = parseInt((req.body && req.body.material_id), 10);
+    if (!isFinite(id) || !isFinite(itemId) || !isFinite(materialId)) {
+      return res.status(400).json({ error: 'id, item_id and material_id are required' });
+    }
+    const orgId = req.user.organization_id;
+    const aq = await pool.query('SELECT 1 FROM assemblies WHERE id=$1 AND (organization_id=$2 OR organization_id IS NULL)', [id, orgId]);
+    if (!aq.rows.length) return res.status(404).json({ error: 'Assembly not found' });
+    const mq = await pool.query('SELECT 1 FROM materials WHERE id=$1 AND (organization_id=$2 OR organization_id IS NULL)', [materialId, orgId]);
+    if (!mq.rows.length) return res.status(400).json({ error: 'material_id not in your catalog' });
+    // Only a material-kind row that belongs to this assembly can be linked.
+    const upd = await pool.query(
+      `UPDATE assembly_items SET material_id=$1 WHERE id=$2 AND assembly_id=$3 AND kind='material' RETURNING id`,
+      [materialId, itemId, id]);
+    if (!upd.rows.length) return res.status(404).json({ error: 'Recipe row not found (or not a material row)' });
+    await pool.query('UPDATE assemblies SET updated_at=NOW() WHERE id=$1', [id]);
+    const graph = await asm.loadGraph(pool, orgId);
+    const cost = asm.resolveCost(id, graph);
+    res.json({ ok: true, unit_cost: cost.unitCost, incomplete: cost.incomplete });
+  } catch (e) {
+    console.error('POST /api/assemblies/:id/link-item error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // ── GET /api/assemblies/:id — full recipe + resolved + flattened ─────
 router.get('/:id', requireAuth, requireCapability('ESTIMATES_VIEW'), async (req, res) => {
   try {

@@ -567,7 +567,12 @@
       var qs = [];
       ['trade', 'system', 'variant'].forEach(function(k) { if (parts && parts[k]) qs.push(k + '=' + encodeURIComponent(parts[k])); });
       return get('/api/assemblies/suggest-code' + (qs.length ? '?' + qs.join('&') : ''));
-    }
+    },
+    // S4 remediation — every recipe row with no catalog material linked, grouped
+    // by assembly, each with fuzzy catalog suggestions.
+    linkAudit: function() { return get('/api/assemblies/link-audit'); },
+    // Link ONE recipe row to a catalog material by item id (targeted, org-safe).
+    linkItem: function(id, itemId, materialId) { return post('/api/assemblies/' + encodeURIComponent(id) + '/link-item', { item_id: itemId, material_id: materialId }); }
   };
 
   // Assembly code registry (Trades + Systems). GET is view-gated; writes edit-gated.
