@@ -3819,6 +3819,41 @@ function openLuPctPop(bn, kind, id, anchorEl){
   inp.onkeydown=function(ev){ if(ev.key==='Enter'){ apply(parseFloat(inp.value)); } };
   setTimeout(function(){ document.addEventListener('mousedown', _luPopOutside, true); inp.focus(); inp.select(); }, 0);
 }
+// Set a matrix-allocated scope's % complete from the building card. Writes the
+// appData.phases record's pctComplete, persists appData (saveData) + flushes the
+// graph rollup (updateT1Progress carries the new scope % up to the building %/job),
+// persists the graph, then re-renders whichever card is showing.
+function applyScopePct(p, v){
+  if(!p) return;
+  p.pctComplete = Math.max(0, Math.min(100, Math.round(Number(v)||0)));
+  if(typeof window.saveData==='function') window.saveData();
+  if(typeof updateT1Progress==='function') updateT1Progress();
+  if(E.saveGraph) E.saveGraph();
+  luRefresh();
+}
+window.p86NgScopePct = function(phaseId, anchorEl){
+  var p = (window.appData && Array.isArray(window.appData.phases)) ? window.appData.phases.find(function(x){ return x && x.id===phaseId; }) : null;
+  if(p) openScopePctPop(p, anchorEl);
+};
+// Reuses the read-first % popover (same .ng-lu-pop chrome as the level/unit editor).
+function openScopePctPop(p, anchorEl){
+  closeLuPop();
+  var cur=Math.round(Number(p.pctComplete)||0);
+  var el=document.createElement('div'); el.className='ng-lu-pop';
+  var chips=[0,25,50,75,100].map(function(v){ return '<button class="ng-lu-pchip'+(v===cur?' on':'')+'" data-v="'+v+'">'+v+'</button>'; }).join('');
+  el.innerHTML='<div class="ng-lu-pchips">'+chips+'</div>'
+    +'<div class="ng-lu-prow"><input class="ng-lu-pin" type="number" min="0" max="100" step="5" value="'+cur+'" aria-label="Scope percent complete"/><span>%</span><button class="ng-lu-pset">Set</button></div>';
+  document.body.appendChild(el); _luPop=el;
+  var r=anchorEl.getBoundingClientRect();
+  el.style.left=Math.max(8,Math.min(r.left-120, window.innerWidth-184))+'px';
+  el.style.top=Math.min(r.bottom+6, window.innerHeight-120)+'px';
+  function ap(v){ closeLuPop(); applyScopePct(p, v); }
+  el.querySelectorAll('.ng-lu-pchip').forEach(function(b){ b.onclick=function(){ ap(+b.getAttribute('data-v')); }; });
+  var inp=el.querySelector('.ng-lu-pin');
+  el.querySelector('.ng-lu-pset').onclick=function(){ ap(parseFloat(inp.value)); };
+  inp.onkeydown=function(ev){ if(ev.key==='Enter'){ ap(parseFloat(inp.value)); } };
+  setTimeout(function(){ document.addEventListener('mousedown', _luPopOutside, true); inp.focus(); inp.select(); }, 0);
+}
 function luApply(bn, act, id){
   if(!bn.levels) bn.levels=[]; if(!bn.units) bn.units=[];
   var nm, n, L, U;
@@ -4237,13 +4272,15 @@ function childGroupsHtml(sel){
         var _rev=(p.asSoldRevenue||p.asSoldPhaseBudget||p.phaseBudget||0);
         var _pc=Math.max(0,Math.min(100,Math.round(p.pctComplete||0)));
         var _pcc=_pc>=100?'#34d399':_pc>=50?'#fbbf24':'#4f8cff';
-        return '<div class="ng-cg-row ng-cg-scope ng-cg-matrix" onclick="event.stopPropagation();window.editPhase&&window.editPhase(\''+p.id+'\')" title="Allocated via the phase matrix — tap to edit">'
+        var _eid=luEsc(p.id);
+        var _edit="event.stopPropagation();window.editPhase&&window.editPhase('"+_eid+"')";
+        return '<div class="ng-cg-row ng-cg-scope ng-cg-matrix" title="Allocated via the phase matrix">'
           +'<span class="ng-cg-cvt" style="flex:0 0 auto;width:14px;"></span>'
-          +'<span class="ng-cg-ic">'+ngTypeIco('t2')+'</span>'
-          +'<span class="ng-cg-nm">'+luEsc(p.phase||'Scope')+'</span>'
+          +'<span class="ng-cg-ic" onclick="'+_edit+'">'+ngTypeIco('t2')+'</span>'
+          +'<span class="ng-cg-nm" onclick="'+_edit+'" title="Edit scope">'+luEsc(p.phase||'Scope')+'</span>'
           +'<span class="ng-cg-mx-badge">matrix</span>'
           +(_rev?'<span style="flex:0 0 auto;color:#8b90a5;font-family:\'Courier New\',monospace;font-size:10px;">$'+Math.round(_rev).toLocaleString()+'</span>':'')
-          +'<span style="flex:0 0 auto;color:'+_pcc+';font-family:\'Courier New\',monospace;font-size:11px;min-width:34px;text-align:right;">'+_pc+'%</span>'
+          +'<span class="ng-mx-pct" onclick="event.stopPropagation();window.p86NgScopePct&&window.p86NgScopePct(\''+_eid+'\',this)" title="Tap to set % complete" style="cursor:pointer;flex:0 0 auto;color:'+_pcc+';font-family:\'Courier New\',monospace;font-size:11px;min-width:34px;text-align:right;">'+_pc+'%</span>'
           +'</div>';
       }).join('');
     } else {

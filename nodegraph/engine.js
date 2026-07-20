@@ -703,6 +703,34 @@ function getCOIncomeToParent(coNode, parentId){
 }
 
 // Total phase-allocated revenue landing on a T1 building (phases + COs).
+// Revenue basis IDENTICAL to jobs.js phaseRevenue(): legacy rows carry a dead
+// asSoldRevenue:0 with the real number in asSoldPhaseBudget, so this MUST be a
+// truthy chain (not a null-check chain) or the fold silently reads $0.
+function matrixPhaseRevenue(p){
+  return (p && (p.asSoldRevenue || p.asSoldPhaseBudget || p.phaseBudget)) || 0;
+}
+// Scopes allocated to a building via the phase-allocation MATRIX (appData.phases
+// keyed by buildingId) have NO t2 node and NO wire, so the wire-only rollups miss
+// them. Return this T1's matrix phases, DEDUPED against any wired t2 scope on the
+// same building (wired t2 node's phase id === node.data.id) so a phase that is
+// BOTH wired and matrix-tagged is never counted twice. Engine is a plain global
+// script — guard appData like the rest of this file. Join = t1 node's linked appData
+// building id (t1n.data.id === phase.buildingId); buildingId is globally unique so
+// no jobId filter is needed (and one keyed on currentJobId would wrongly zero
+// off-screen recomputes).
+function matrixPhasesForT1(t1n){
+  if(!t1n || t1n.type !== 't1') return [];
+  if(typeof appData === 'undefined' || !appData || !Array.isArray(appData.phases)) return [];
+  var bId = (t1n.data && t1n.data.id) || t1n.dataId;
+  if(!bId) return [];
+  var wiredPh = {};
+  wires.forEach(function(w){
+    if(w.toNode !== t1n.id) return;
+    var src = findNode(w.fromNode);
+    if(src && src.type === 't2'){ var pid = (src.data && src.data.id) || src.dataId; if(pid) wiredPh[pid] = 1; }
+  });
+  return appData.phases.filter(function(p){ return p && p.buildingId === bId && !wiredPh[p.id]; });
+}
 function getBuildingAllocatedRevenue(t1n){
   if(!t1n || t1n.type !== 't1') return 0;
   var total = 0;
@@ -712,6 +740,12 @@ function getBuildingAllocatedRevenue(t1n){
     if(src && src.type === 't2') total += getPhaseRevenueToBuilding(src, t1n.id);
     else if(src && src.type === 'co') total += getCOIncomeToParent(src, t1n.id);
   });
+  // + matrix-allocated scopes (no t2 node/wire): full phaseRevenue, allocated 100%
+  // to this one building. Deduped vs wired t2 inside matrixPhasesForT1. This is what
+  // makes a matrix-built building's Revenue tile stop reading $0. The job's revenue
+  // dollars are contract×%, so this only feeds the building tile + rollup WEIGHT —
+  // never a second job-level dollar total (no double-count).
+  matrixPhasesForT1(t1n).forEach(function(p){ total += matrixPhaseRevenue(p); });
   return total;
 }
 
@@ -790,69 +824,68 @@ function getT1WeightedPct(t1n){
   // derived units-done ÷ building-units, flushed by updateT1Progress). Buildings
   // whose scopes are all percent-mode keep the classic units→levels→wire cascade,
   // so existing jobs are unchanged.
-  var scopesDriveByUnits = wires.some(function(w){
-    return w.toNode === t1n.id && wireUnitPct(w) != null;
-  });
-  if(!scopesDriveByUnits){
-    // ST-2: a building with a level/unit breakdown is driven by units-done ÷ total
-    // (crews check off unit cubes on the Site Plan). Buildings with no units fall
-    // through to the phase/CO-weighted (or manually-set) pct below.
-    // Each unit carries a `pct` (0-100); a bare `done:true` from before the
-    // percent model reads as 100. Building % = the plain average of unit %s, so a
-    // half-done unit contributes 50, not 0. (Was: count of done ÷ total.)
-    function _uPct(u){ var p=(u&&u.pct!=null)?Number(u.pct):(u&&u.done?100:0); return (p>=0)?(p>100?100:p):0; }
-    if(t1n.units && t1n.units.length){
-      var _us=0; for(var _i=0;_i<t1n.units.length;_i++){ _us+=_uPct(t1n.units[_i]); }
-      return _us / t1n.units.length;
-    }
-    // No units, but a level (floor) breakdown → average the level %s. A level's %
-    // is its own `pct` (or 100 when the legacy `done` flag is set). A building with
-    // neither units nor levels falls through to the phase/CO-weighted pct below.
-    if(t1n.levels && t1n.levels.length){
-      var _ls=0; for(var _k=0;_k<t1n.levels.length;_k++){ var _L=t1n.levels[_k]; _ls+=((_L.pct!=null)?Math.max(0,Math.min(100,Number(_L.pct))):(_L.done?100:0)); }
-      return _ls / t1n.levels.length;
-    }
-  }
+  // SCOPES-FIRST (John's model, 2026-07-19): a building's % is the revenue-weighted
+  // average of its SCOPES' % — wired t2/CO scopes PLUS matrix-allocated phases
+  // (appData.phases by buildingId, no node/wire). Scopes OUTRANK units/levels: a
+  // scope-tracked building rolls up from Stucco/Siding/Paint, not from a floor
+  // average (which halved a 20% level to 10% on a 2-floor building). Units/levels
+  // remain the fallback ONLY for buildings that have no scopes at all.
   var incoming = [];
   wires.forEach(function(w){
     if(w.toNode !== t1n.id) return;
     var src = findNode(w.fromNode);
     if(src && (src.type === 't2' || src.type === 'co')) incoming.push({w:w, src:src});
   });
-  // No phase/CO wires feed this building — fall back to its own manually-set
-  // pct (matches the doc-comment; returning 0 here made updateT1Progress wipe
-  // hand-entered building % on every render).
-  if(!incoming.length) return t1n.pctComplete || 0;
-  var sumW = 0, sumPct = 0;
-  incoming.forEach(function(r){
-    var ap = (r.w.allocPct != null) ? r.w.allocPct : 100;
-    var rev;
-    if(r.src.type === 'co'){
-      _comp = {}; rev = getOutput(r.src, 0);
-    } else {
-      rev = (r.src.revenue || 0);
-    }
-    var weight = ap * rev;
-    // Phase-driven scope → its weighted phase % (authoritative over the wire);
-    // else unit-mode wire → units-done ÷ building units; else the wire's own
-    // pctComplete; else the source node's pctComplete.
-    var _sp = (r.src.type === 't2') ? scopePctFromPhases(r.src) : null;
-    var _uPc = wireUnitPct(r.w);
-    var pc = (_sp != null) ? _sp : ((_uPc != null) ? _uPc : ((r.w.pctComplete != null) ? r.w.pctComplete : (r.src.pctComplete || 0)));
-    sumPct += pc * weight; sumW += weight;
-  });
-  if(sumW === 0){
-    var sW=0,sP=0;
+  var mxPhases = matrixPhasesForT1(t1n);
+  if(incoming.length || mxPhases.length){
+    var sumW = 0, sumPct = 0;
     incoming.forEach(function(r){
       var ap = (r.w.allocPct != null) ? r.w.allocPct : 100;
-      var _sp2 = (r.src.type === 't2') ? scopePctFromPhases(r.src) : null;
-      var _uPc2 = wireUnitPct(r.w);
-      var pc = (_sp2 != null) ? _sp2 : ((_uPc2 != null) ? _uPc2 : ((r.w.pctComplete != null) ? r.w.pctComplete : (r.src.pctComplete || 0)));
-      sP += pc*ap; sW += ap;
+      var rev;
+      if(r.src.type === 'co'){ _comp = {}; rev = getOutput(r.src, 0); }
+      else { rev = (r.src.revenue || 0); }
+      var weight = ap * rev;
+      // Phase-driven scope → its weighted phase %; else unit-mode wire → units-done ÷
+      // building units; else the wire's own pctComplete; else the source's pctComplete.
+      var _sp = (r.src.type === 't2') ? scopePctFromPhases(r.src) : null;
+      var _uPc = wireUnitPct(r.w);
+      var pc = (_sp != null) ? _sp : ((_uPc != null) ? _uPc : ((r.w.pctComplete != null) ? r.w.pctComplete : (r.src.pctComplete || 0)));
+      sumPct += pc * weight; sumW += weight;
     });
-    return sW === 0 ? 0 : sP/sW;
+    // Matrix scopes: 100% allocated to this one building; pct = the phase record's own %.
+    mxPhases.forEach(function(p){
+      var weight = 100 * matrixPhaseRevenue(p);
+      var pc = (p.pctComplete != null) ? Math.max(0, Math.min(100, Number(p.pctComplete))) : 0;
+      sumPct += pc * weight; sumW += weight;
+    });
+    if(sumW === 0){
+      // Zero-revenue fallback: plain average of every contributing scope pct, so a
+      // revenue-less scope still reports progress instead of snapping to 0.
+      var sW=0,sP=0;
+      incoming.forEach(function(r){
+        var ap = (r.w.allocPct != null) ? r.w.allocPct : 100;
+        var _sp2 = (r.src.type === 't2') ? scopePctFromPhases(r.src) : null;
+        var _uPc2 = wireUnitPct(r.w);
+        var pc = (_sp2 != null) ? _sp2 : ((_uPc2 != null) ? _uPc2 : ((r.w.pctComplete != null) ? r.w.pctComplete : (r.src.pctComplete || 0)));
+        sP += pc*ap; sW += ap;
+      });
+      mxPhases.forEach(function(p){ var pc=(p.pctComplete!=null)?Math.max(0,Math.min(100,Number(p.pctComplete))):0; sP += pc*100; sW += 100; });
+      return sW === 0 ? 0 : sP/sW;
+    }
+    return sumPct / sumW;
   }
-  return sumPct / sumW;
+  // No scopes → the building's own unit/level breakdown drives it, then its manual pct.
+  // Each unit/level carries a `pct` (0-100); a bare `done:true` reads as 100.
+  function _uPct(u){ var p=(u&&u.pct!=null)?Number(u.pct):(u&&u.done?100:0); return (p>=0)?(p>100?100:p):0; }
+  if(t1n.units && t1n.units.length){
+    var _us=0; for(var _i=0;_i<t1n.units.length;_i++){ _us+=_uPct(t1n.units[_i]); }
+    return _us / t1n.units.length;
+  }
+  if(t1n.levels && t1n.levels.length){
+    var _ls=0; for(var _k=0;_k<t1n.levels.length;_k++){ var _L=t1n.levels[_k]; _ls+=((_L.pct!=null)?Math.max(0,Math.min(100,Number(_L.pct))):(_L.done?100:0)); }
+    return _ls / t1n.levels.length;
+  }
+  return t1n.pctComplete || 0;
 }
 
 // Revenue-weighted pctComplete for a WIP node, rolled up from connected
