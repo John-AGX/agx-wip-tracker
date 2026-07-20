@@ -2790,7 +2790,13 @@ function buildSidebar(){
     if(luEl){
       e.preventDefault(); e.stopPropagation();
       var bn=selN&&E.findNode(selN); if(!bn||bn.type!=='t1') return;
-      luApply(bn, luEl.getAttribute('data-lu-act'), luEl.getAttribute('data-id'));
+      var _act=luEl.getAttribute('data-lu-act'), _lid=luEl.getAttribute('data-id');
+      // Percent editing is read-first: a cube / level-% opens a small % popover;
+      // a segment click on a unit-less level jumps it straight to seg×20.
+      if(_act==='unit-pop'){ openLuPctPop(bn,'unit',_lid,luEl); return; }
+      if(_act==='lvl-pop'){ openLuPctPop(bn,'level',_lid,luEl); return; }
+      if(_act==='lvl-seg'){ luSetPct(bn,'level',_lid,(parseInt(luEl.getAttribute('data-seg'),10)||0)*20); if(E.saveGraph) E.saveGraph(); renderBuildingMetrics(); return; }
+      luApply(bn, _act, _lid);
       if(E.saveGraph) E.saveGraph(); renderBuildingMetrics();
       return;
     }
@@ -3777,14 +3783,46 @@ function luById(arr,id){ if(!arr) return null; for(var i=0;i<arr.length;i++){ if
 // optional) and each carries a `done` flag. Levels are set by total; units by a
 // building-wide total OR per-level count. Marking off toggles `done`; a level with
 // units auto-completes when all its units are done.
+// Set a unit's or level's completion %. `done` is kept in sync (100 = done) so
+// legacy readers + the checkmark controls still agree.
+function luSetPct(bn, kind, id, pct){
+  pct=Math.max(0,Math.min(100,Math.round(Number(pct)||0)));
+  if(kind==='unit'){ var U=luById(bn.units,id); if(U){ U.pct=pct; U.done=pct>=100; } }
+  else if(kind==='level'){ var L=luById(bn.levels,id); if(L){ L.pct=pct; L.done=pct>=100; } }
+}
+// Read-first % editor — a small popover of quick chips + a type-in, anchored to
+// the cube / level the user tapped. Replaces prompt() so the card stays calm.
+var _luPop=null;
+function _luPopOutside(ev){ if(_luPop && !_luPop.contains(ev.target)) closeLuPop(); }
+function closeLuPop(){ if(_luPop){ _luPop.remove(); _luPop=null; document.removeEventListener('mousedown', _luPopOutside, true); } }
+function openLuPctPop(bn, kind, id, anchorEl){
+  closeLuPop();
+  var node = kind==='unit' ? luById(bn.units,id) : luById(bn.levels,id);
+  if(!node) return;
+  var cur=Math.round((node.pct!=null)?node.pct:(node.done?100:0));
+  var p=document.createElement('div'); p.className='ng-lu-pop';
+  var chips=[0,25,50,75,100].map(function(v){ return '<button class="ng-lu-pchip'+(v===cur?' on':'')+'" data-v="'+v+'">'+v+'</button>'; }).join('');
+  p.innerHTML='<div class="ng-lu-pchips">'+chips+'</div>'
+    +'<div class="ng-lu-prow"><input class="ng-lu-pin" type="number" min="0" max="100" step="5" value="'+cur+'" aria-label="Percent complete"/><span>%</span><button class="ng-lu-pset">Set</button></div>';
+  document.body.appendChild(p); _luPop=p;
+  var r=anchorEl.getBoundingClientRect();
+  p.style.left=Math.max(8,Math.min(r.left, window.innerWidth-184))+'px';
+  p.style.top=Math.min(r.bottom+6, window.innerHeight-120)+'px';
+  function apply(v){ luSetPct(bn, kind, id, v); if(E.saveGraph) E.saveGraph(); closeLuPop(); renderBuildingMetrics(); }
+  p.querySelectorAll('.ng-lu-pchip').forEach(function(b){ b.onclick=function(){ apply(+b.getAttribute('data-v')); }; });
+  var inp=p.querySelector('.ng-lu-pin');
+  p.querySelector('.ng-lu-pset').onclick=function(){ apply(parseFloat(inp.value)); };
+  inp.onkeydown=function(ev){ if(ev.key==='Enter'){ apply(parseFloat(inp.value)); } };
+  setTimeout(function(){ document.addEventListener('mousedown', _luPopOutside, true); inp.focus(); inp.select(); }, 0);
+}
 function luApply(bn, act, id){
   if(!bn.levels) bn.levels=[]; if(!bn.units) bn.units=[];
   var nm, n, L, U;
   function lUnits(lid){ return bn.units.filter(function(u){ return u.levelId===lid; }); }
   function bwUnits(){ return bn.units.filter(function(u){ return u.levelId==null; }); }
-  function addUnit(lid){ bn.units.push({id:luUid('un'), name:'Unit '+(bn.units.length+1), levelId:lid, done:false}); }
+  function addUnit(lid){ bn.units.push({id:luUid('un'), name:'Unit '+(bn.units.length+1), levelId:lid, done:false, pct:0}); }
   function setLevels(cnt){ cnt=Math.max(0, cnt|0);
-    while(bn.levels.length<cnt) bn.levels.push({id:luUid('lv'), name:'Level '+(bn.levels.length+1), done:false});
+    while(bn.levels.length<cnt) bn.levels.push({id:luUid('lv'), name:'Level '+(bn.levels.length+1), done:false, pct:0});
     while(bn.levels.length>cnt){ var last=bn.levels.pop(); bn.units.forEach(function(u){ if(u.levelId===last.id) u.levelId=null; }); } }
   function setCount(lid, cnt){ cnt=Math.max(0, cnt|0); var cur=lUnits(lid).length;
     while(cur<cnt){ addUnit(lid); cur++; }
@@ -3797,13 +3835,13 @@ function luApply(bn, act, id){
   else if(act==='lvl-dec') setLevels(bn.levels.length-1);
   else if(act==='lvl-set'){ n=parseInt(prompt('How many levels (floors)?', bn.levels.length||1),10); if(!isNaN(n)) setLevels(n); }
   else if(act==='rename-level'){ L=luById(bn.levels,id); if(L){ nm=prompt('Level name:', L.name); if(nm&&nm.trim()) L.name=nm.trim(); } }
-  else if(act==='lvl-done'){ L=luById(bn.levels,id); if(L){ var lu=lUnits(id); if(lu.length){ var allD=lu.every(function(u){return u.done;}); lu.forEach(function(u){ u.done=!allD; }); } else { L.done=!L.done; } } }
+  else if(act==='lvl-done'){ L=luById(bn.levels,id); if(L){ var lu=lUnits(id); if(lu.length){ var allD=lu.every(function(u){return u.done;}); lu.forEach(function(u){ u.done=!allD; u.pct=u.done?100:0; }); } else { L.done=!L.done; L.pct=L.done?100:0; } } }
   // ── Units ──
   else if(act==='unit-inc') addUnit(null);
   else if(act==='unit-dec') setBW(bwUnits().length-1);
   else if(act==='unit-set'){ n=parseInt(prompt('How many building-wide units?', bwUnits().length),10); if(!isNaN(n)) setBW(n); }
   else if(act==='lvl-unit-set'){ n=parseInt(prompt('How many units on this level?', lUnits(id).length),10); if(!isNaN(n)) setCount(id, n); }
-  else if(act==='unit-done'){ U=luById(bn.units,id); if(U) U.done=!U.done; }
+  else if(act==='unit-done'){ U=luById(bn.units,id); if(U){ U.done=!U.done; U.pct=U.done?100:0; } }
   else if(act==='del-unit'){ U=luById(bn.units,id); if(U) bn.units=bn.units.filter(function(x){ return x.id!==id; }); }
 }
 
@@ -3860,52 +3898,70 @@ function phApply(sc, act, phId){
   else if(act==='ph-del'){ sc.phases=ph.filter(function(x){ return x.id!==phId; }); }
 }
 
+// Instrument-panel building structure (read-first): levels render as a boombox
+// graphic-EQ stack (segmented bars, click a segment or the % to set completion);
+// units render as thermometer cubes (bottom-up fill = %, tap to set). All the
+// same data + rollup as before — just a calmer, at-a-glance look.
 function renderBuildingStructure(panel, sel){
   var el=panel.querySelector('.ng-sp-struct'); if(!el) return;
   if(!sel.levels) sel.levels=[]; if(!sel.units) sel.units=[];
   var lv=sel.levels, un=sel.units;
+  function uPct(u){ var p=(u&&u.pct!=null)?Number(u.pct):(u&&u.done?100:0); return (p>=0)?(p>100?100:Math.round(p)):0; }
   function lUnits(lid){ return un.filter(function(u){ return u.levelId===lid; }); }
   function bwUnits(){ return un.filter(function(u){ return !luById(lv, u.levelId); }); } // null OR orphaned level
-  function lvlDone(L){ var lu=lUnits(L.id); return lu.length ? lu.every(function(u){return u.done;}) : !!L.done; }
+  // A level's % is the average of its units', or its own typed pct when it has none.
+  function lPct(L){ var lu=lUnits(L.id); if(lu.length){ var s=0; lu.forEach(function(u){ s+=uPct(u); }); return Math.round(s/lu.length); } return (L.pct!=null)?Math.max(0,Math.min(100,Math.round(L.pct))):(L.done?100:0); }
+  function col(p){ return p>=70?'#1e9e75':p>=40?'#e0a13a':p>0?'#d1594a':''; } // green / amber / red / empty
   // When a SCOPE (phase) tracks THIS building by its own units, the building's
-  // cubes are just the count (the denominator) — check-off happens on each scope.
-  // Render the building cubes read-only + neutral so they aren't mistaken for the
-  // (now scope-driven) completion.
+  // cubes are just the count (the denominator) — completion is set per scope, so
+  // render them read-only + neutral so they aren't mistaken for editable progress.
   var scopesDrive = E.wires().some(function(w){ return w.toNode===sel.id && w.trackMode==='units' && sel.units && sel.units.length; });
-  function cubes(list){ return list.map(function(u){
-    if(scopesDrive) return '<i class="ng-lu-cube ng-lu-cube-ro" title="Completion is tracked per scope"></i>';
-    return '<i class="ng-lu-cube'+(u.done?' done':'')+'" data-lu-act="unit-done" data-id="'+u.id+'" title="'+(u.done?'Done — tap to clear':'Tap to mark done')+'"></i>';
+  var totalUnits=un.length; var uSum=0; un.forEach(function(u){ uSum+=uPct(u); }); var bldPct=totalUnits?Math.round(uSum/totalUnits):0;
+
+  // A segmented EQ bar. `editable` levels get per-segment quick-set (seg×20).
+  function eqBar(p, editable, lid){
+    var c=col(p), lit=Math.round(p/20), seg='';
+    for(var s=1;s<=5;s++){ var on=s<=lit;
+      seg+='<i class="ng-eq-seg'+(on?' on':'')+'"'+(editable?' data-lu-act="lvl-seg" data-id="'+lid+'" data-seg="'+s+'"':'')
+         +(on&&c?(' style="background:'+c+';"'):'')+'></i>';
+    }
+    return '<div class="ng-eq-bar'+(editable?' ed':'')+'">'+seg+'</div>';
+  }
+  // A thermometer cube — fill height = pct. Tap opens the % popover.
+  function cubes(list){ return list.map(function(u){ var p=uPct(u), c=col(p);
+    if(scopesDrive) return '<span class="ng-th-cube ng-lu-cube-ro" title="Completion is tracked per scope"></span>';
+    return '<span class="ng-th-cube" data-lu-act="unit-pop" data-id="'+u.id+'" title="'+p+'% — tap to set">'
+      +'<i style="height:'+p+'%;'+(c?('background:'+c+';'):'')+'"></i></span>';
   }).join(''); }
-  var totalUnits=un.length, doneUnits=un.filter(function(u){return u.done;}).length;
-  var floorsDone=lv.filter(lvlDone).length;
 
   var h='<div class="ng-sp-struct-head"><span class="ng-sp-struct-ttl">Structure</span>'
       +'<span class="ng-lu-sum">'+lv.length+' level'+(lv.length===1?'':'s')+' · '+totalUnits+' unit'+(totalUnits===1?'':'s')+'</span></div>';
 
-  // ── Levels ──
+  // ── Levels (boombox EQ stack) ──
   h+='<div class="ng-lu-sec-head"><span class="ng-lu-sec-lbl">Levels</span>'
-    +'<span class="ng-lu-stepper">total<button class="ng-lu-step" data-lu-act="lvl-dec" title="Remove top level">−</button>'
+    +'<span class="ng-lu-stepper"><button class="ng-lu-step" data-lu-act="lvl-dec" title="Remove top level">−</button>'
     +'<button class="ng-lu-num" data-lu-act="lvl-set" title="Set number of levels">'+lv.length+'</button>'
     +'<button class="ng-lu-step" data-lu-act="lvl-inc" title="Add a level">+</button></span></div>';
   if(!lv.length){
     h+='<div class="ng-sp-struct-empty">No floors yet. Set how many levels this building has.</div>';
   } else {
-    h+='<div class="ng-lu-chipstack">';
-    lv.slice().reverse().forEach(function(L){
-      var lu=lUnits(L.id), done=lvlDone(L), hasU=lu.length>0, luDone=lu.filter(function(u){return u.done;}).length;
-      h+='<div class="ng-lu-chip'+(done?' done':'')+'">'
-        +'<span class="ng-lu-chip-nm" data-lu-act="rename-level" data-id="'+L.id+'" title="Rename">'+luEsc(L.name)+'</span>'
-        +(hasU?'<span class="ng-lu-chip-prog">'+luDone+' / '+lu.length+'</span>':'')
-        +'<button class="ng-lu-mark" data-lu-act="lvl-done" data-id="'+L.id+'" title="'+(hasU?'Mark all units on this floor':'Mark floor complete')+'">'+(done?'✓':'○')+'</button>'
+    h+='<div class="ng-eq-stack">';
+    lv.slice().reverse().forEach(function(L){ var lu=lUnits(L.id), hasU=lu.length>0, p=lPct(L);
+      h+='<div class="ng-eq-row">'
+        +'<span class="ng-eq-nm" data-lu-act="rename-level" data-id="'+L.id+'" title="Rename">'+luEsc(L.name)+'</span>'
+        + eqBar(p, !hasU && !scopesDrive, L.id)
+        +(hasU
+          ? '<span class="ng-eq-pct">'+lu.filter(function(u){return uPct(u)>=100;}).length+'/'+lu.length+'</span>'
+          : '<span class="ng-eq-pct'+(scopesDrive?'':' ed')+'"'+(scopesDrive?'':' data-lu-act="lvl-pop" data-id="'+L.id+'" title="Set exact %"')+'>'+p+'%</span>')
         +'</div>';
     });
-    h+='</div><div class="ng-lu-progline">'+floorsDone+' of '+lv.length+' floors complete</div>';
+    h+='</div>';
   }
 
-  // ── Units ──
+  // ── Units (thermometer cubes) ──
   var bwu=bwUnits();
   h+='<div class="ng-lu-sec-head" style="margin-top:14px"><span class="ng-lu-sec-lbl">Units</span>'
-    +'<span class="ng-lu-stepper">total<button class="ng-lu-step" data-lu-act="unit-dec" title="Remove a building-wide unit">−</button>'
+    +'<span class="ng-lu-stepper"><button class="ng-lu-step" data-lu-act="unit-dec" title="Remove a building-wide unit">−</button>'
     +'<button class="ng-lu-num" data-lu-act="unit-set" title="Set building-wide unit count">'+bwu.length+'</button>'
     +'<button class="ng-lu-step" data-lu-act="unit-inc" title="Add a building-wide unit">+</button></span></div>';
   if(!totalUnits){
@@ -3914,23 +3970,23 @@ function renderBuildingStructure(panel, sel){
     lv.forEach(function(L){ var lu=lUnits(L.id);
       h+='<div class="ng-lu-ugroup"><div class="ng-lu-ghead"><span>'+luEsc(L.name)+' · '+lu.length+' unit'+(lu.length===1?'':'s')+'</span>'
         +'<button class="ng-lu-mini" data-lu-act="lvl-unit-set" data-id="'+L.id+'" title="Set units on this level">+ units</button></div>'
-        +'<div class="ng-lu-cubes">'+(lu.length?cubes(lu):'<span class="ng-lu-none">none</span>')+'</div></div>';
+        +'<div class="ng-th-cubes">'+(lu.length?cubes(lu):'<span class="ng-lu-none">none</span>')+'</div></div>';
     });
     if(bwu.length){
       h+='<div class="ng-lu-ugroup"><div class="ng-lu-ghead"><span>'+(lv.length?'Building-wide':'Units')+' · '+bwu.length+' unit'+(bwu.length===1?'':'s')+'</span></div>'
-        +'<div class="ng-lu-cubes">'+cubes(bwu)+'</div></div>';
+        +'<div class="ng-th-cubes">'+cubes(bwu)+'</div></div>';
     }
     if(scopesDrive){
       var sdPct=Math.round(E.getT1WeightedPct(sel)*10)/10;
       h+='<div class="ng-lu-barrow"><div class="ng-lu-bar"><i style="width:'+sdPct+'%"></i></div><span class="ng-lu-barlbl">'+sdPct+'% · driven by scopes</span></div>';
     } else {
-      var pct=Math.round(doneUnits/totalUnits*100);
-      h+='<div class="ng-lu-barrow"><div class="ng-lu-bar"><i style="width:'+pct+'%"></i></div><span class="ng-lu-barlbl">'+doneUnits+' / '+totalUnits+' units</span></div>';
+      h+='<div class="ng-lu-barrow"><div class="ng-lu-bar"><i style="width:'+bldPct+'%;'+(col(bldPct)?('background:'+col(bldPct)+';'):'')+'"></i></div>'
+        +'<span class="ng-lu-barlbl"'+(col(bldPct)?(' style="color:'+col(bldPct)+';"'):'')+'>'+bldPct+'% complete</span></div>';
     }
   }
   h+='<div class="ng-lu-legend">'+(scopesDrive
-    ? '<span class="ng-lu-hint">Completion is tracked per scope — check off units on each scope.</span>'
-    : '<span><i class="ng-lu-cube"></i>to do</span><span><i class="ng-lu-cube done"></i>done</span><span class="ng-lu-hint">tap a cube or floor to mark off</span>')+'</div>';
+    ? '<span class="ng-lu-hint">Completion is tracked per scope — set % on each scope.</span>'
+    : '<span class="ng-lu-hint"><i class="ng-th-mini"><i style="height:100%;background:#1e9e75;"></i></i>tap a unit or level to set its %</span>')+'</div>';
   el.innerHTML=h;
 }
 

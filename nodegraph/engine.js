@@ -797,17 +797,20 @@ function getT1WeightedPct(t1n){
     // ST-2: a building with a level/unit breakdown is driven by units-done ÷ total
     // (crews check off unit cubes on the Site Plan). Buildings with no units fall
     // through to the phase/CO-weighted (or manually-set) pct below.
+    // Each unit carries a `pct` (0-100); a bare `done:true` from before the
+    // percent model reads as 100. Building % = the plain average of unit %s, so a
+    // half-done unit contributes 50, not 0. (Was: count of done ÷ total.)
+    function _uPct(u){ var p=(u&&u.pct!=null)?Number(u.pct):(u&&u.done?100:0); return (p>=0)?(p>100?100:p):0; }
     if(t1n.units && t1n.units.length){
-      var _ud=0; for(var _i=0;_i<t1n.units.length;_i++){ if(t1n.units[_i].done) _ud++; }
-      return _ud / t1n.units.length * 100;
+      var _us=0; for(var _i=0;_i<t1n.units.length;_i++){ _us+=_uPct(t1n.units[_i]); }
+      return _us / t1n.units.length;
     }
-    // No units, but a level (floor) breakdown → drive by levels-done ÷ total
-    // (John: "units if present, else levels"). Each level carries its own `done`
-    // flag (a level auto-completes when all its units are done). A building with
+    // No units, but a level (floor) breakdown → average the level %s. A level's %
+    // is its own `pct` (or 100 when the legacy `done` flag is set). A building with
     // neither units nor levels falls through to the phase/CO-weighted pct below.
     if(t1n.levels && t1n.levels.length){
-      var _ld=0; for(var _k=0;_k<t1n.levels.length;_k++){ if(t1n.levels[_k].done) _ld++; }
-      return _ld / t1n.levels.length * 100;
+      var _ls=0; for(var _k=0;_k<t1n.levels.length;_k++){ var _L=t1n.levels[_k]; _ls+=((_L.pct!=null)?Math.max(0,Math.min(100,Number(_L.pct))):(_L.done?100:0)); }
+      return _ls / t1n.levels.length;
     }
   }
   var incoming = [];

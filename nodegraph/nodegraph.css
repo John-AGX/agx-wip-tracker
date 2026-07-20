@@ -1037,6 +1037,39 @@ body.light-mode .ng-topbar.ng-ribbon .ng-ribbon-btn:hover{
 .ng-lu-legend span{display:flex;align-items:center;gap:5px}
 .ng-lu-legend .ng-lu-cube{width:13px;height:13px;cursor:default}
 .ng-lu-hint{margin-left:auto}
+.ng-lu-legend .ng-th-mini{display:inline-block}
+/* Instrument-panel building card — boombox EQ level stack + thermometer units */
+.ng-eq-stack{display:flex;flex-direction:column;gap:5px}
+.ng-eq-row{display:flex;align-items:center;gap:9px}
+.ng-eq-nm{width:62px;flex:0 0 auto;font-size:12px;color:#aeb6c8;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ng-eq-nm:hover{color:#dbe6ff}
+.ng-eq-bar{flex:1;display:flex;gap:3px;height:15px}
+.ng-eq-seg{flex:1;border-radius:2px;background:rgba(255,255,255,.08)}
+.ng-eq-bar.ed .ng-eq-seg{cursor:pointer}
+.ng-eq-bar.ed:hover .ng-eq-seg{outline:1px solid rgba(255,255,255,.14)}
+.ng-eq-bar.ed .ng-eq-seg:hover{outline:1px solid rgba(255,255,255,.4)}
+.ng-eq-pct{width:44px;flex:0 0 auto;text-align:right;font-size:11px;color:#8b93a5;font-variant-numeric:tabular-nums}
+.ng-eq-pct.ed{cursor:pointer}
+.ng-eq-pct.ed:hover{color:#dbe6ff}
+.ng-th-cubes{display:flex;flex-wrap:wrap;gap:4px}
+.ng-th-cube{position:relative;width:22px;height:22px;border-radius:4px;overflow:hidden;box-sizing:border-box;background:#131e30;border:1px solid rgba(255,255,255,.12);cursor:pointer}
+.ng-th-cube>i{position:absolute;left:0;right:0;bottom:0;display:block;background:#1e9e75;transition:height .12s ease}
+.ng-th-cube:hover{border-color:#4f8cff}
+.ng-th-cube.ng-lu-cube-ro{cursor:default;opacity:.4}
+.ng-th-cube.ng-lu-cube-ro:hover{border-color:rgba(255,255,255,.12)}
+.ng-th-mini{position:relative;width:11px;height:11px;border-radius:3px;overflow:hidden;background:rgba(255,255,255,.1);flex:0 0 auto}
+.ng-th-mini>i{position:absolute;left:0;right:0;bottom:0;display:block}
+/* % popover (read-first editor) */
+.ng-lu-pop{position:fixed;z-index:9000;width:168px;padding:8px;background:#1a2130;border:1px solid rgba(255,255,255,.14);border-radius:9px;box-shadow:0 8px 24px rgba(0,0,0,.5)}
+.ng-lu-pchips{display:flex;gap:4px;margin-bottom:7px}
+.ng-lu-pchip{flex:1;padding:5px 0;font-size:11px;background:#131a27;border:1px solid rgba(255,255,255,.14);color:#c7cede;border-radius:5px;cursor:pointer;font-variant-numeric:tabular-nums}
+.ng-lu-pchip:hover{border-color:#4f8cff}
+.ng-lu-pchip.on{background:#1e9e75;border-color:#2fbe8e;color:#fff}
+.ng-lu-prow{display:flex;align-items:center;gap:5px}
+.ng-lu-pin{width:52px;padding:4px 6px;font-size:12px;background:#131a27;border:1px solid rgba(255,255,255,.16);color:#eaeef6;border-radius:5px}
+.ng-lu-prow>span{font-size:12px;color:#8b93a5}
+.ng-lu-pset{margin-left:auto;padding:5px 12px;font-size:11px;font-weight:600;background:#4f8cff;border:0;color:#fff;border-radius:5px;cursor:pointer}
+.ng-lu-pset:hover{background:#3d7bef}
 /* RS-B: per-type grouped child lists in the node inspector */
 .ng-cg{margin-top:12px;border-top:1px solid var(--ng-border);padding-top:10px}
 .ng-cg-group{margin-bottom:10px}
