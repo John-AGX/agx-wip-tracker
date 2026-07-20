@@ -838,7 +838,7 @@ function getT1WeightedPct(t1n){
   });
   var mxPhases = matrixPhasesForT1(t1n);
   if(incoming.length || mxPhases.length){
-    var sumW = 0, sumPct = 0;
+    var sumW = 0, sumPct = 0, anyMarked = false;
     incoming.forEach(function(r){
       var ap = (r.w.allocPct != null) ? r.w.allocPct : 100;
       var rev;
@@ -850,29 +850,37 @@ function getT1WeightedPct(t1n){
       var _sp = (r.src.type === 't2') ? scopePctFromPhases(r.src) : null;
       var _uPc = wireUnitPct(r.w);
       var pc = (_sp != null) ? _sp : ((_uPc != null) ? _uPc : ((r.w.pctComplete != null) ? r.w.pctComplete : (r.src.pctComplete || 0)));
+      if(pc > 0) anyMarked = true;
       sumPct += pc * weight; sumW += weight;
     });
     // Matrix scopes: 100% allocated to this one building; pct = the phase record's own %.
     mxPhases.forEach(function(p){
       var weight = 100 * matrixPhaseRevenue(p);
       var pc = (p.pctComplete != null) ? Math.max(0, Math.min(100, Number(p.pctComplete))) : 0;
+      if(pc > 0) anyMarked = true;
       sumPct += pc * weight; sumW += weight;
     });
-    if(sumW === 0){
-      // Zero-revenue fallback: plain average of every contributing scope pct, so a
-      // revenue-less scope still reports progress instead of snapping to 0.
-      var sW=0,sP=0;
-      incoming.forEach(function(r){
-        var ap = (r.w.allocPct != null) ? r.w.allocPct : 100;
-        var _sp2 = (r.src.type === 't2') ? scopePctFromPhases(r.src) : null;
-        var _uPc2 = wireUnitPct(r.w);
-        var pc = (_sp2 != null) ? _sp2 : ((_uPc2 != null) ? _uPc2 : ((r.w.pctComplete != null) ? r.w.pctComplete : (r.src.pctComplete || 0)));
-        sP += pc*ap; sW += ap;
-      });
-      mxPhases.forEach(function(p){ var pc=(p.pctComplete!=null)?Math.max(0,Math.min(100,Number(p.pctComplete))):0; sP += pc*100; sW += 100; });
-      return sW === 0 ? 0 : sP/sW;
+    // No-crater transition guard: if NOT ONE scope has been marked yet, the scopes
+    // carry no signal — don't force the building to 0% and wipe its prior progress.
+    // Fall through to the building's own units/levels/manual % below. The instant any
+    // scope is marked (>0), scopes take over and drive the roll-up. Once a scope is
+    // marked, an unmarked sibling correctly counts as 0 in the weighted average.
+    if(anyMarked){
+      if(sumW === 0){
+        // Zero-revenue fallback: plain average of every contributing scope pct.
+        var sW=0,sP=0;
+        incoming.forEach(function(r){
+          var ap = (r.w.allocPct != null) ? r.w.allocPct : 100;
+          var _sp2 = (r.src.type === 't2') ? scopePctFromPhases(r.src) : null;
+          var _uPc2 = wireUnitPct(r.w);
+          var pc = (_sp2 != null) ? _sp2 : ((_uPc2 != null) ? _uPc2 : ((r.w.pctComplete != null) ? r.w.pctComplete : (r.src.pctComplete || 0)));
+          sP += pc*ap; sW += ap;
+        });
+        mxPhases.forEach(function(p){ var pc=(p.pctComplete!=null)?Math.max(0,Math.min(100,Number(p.pctComplete))):0; sP += pc*100; sW += 100; });
+        return sW === 0 ? 0 : sP/sW;
+      }
+      return sumPct / sumW;
     }
-    return sumPct / sumW;
   }
   // No scopes → the building's own unit/level breakdown drives it, then its manual pct.
   // Each unit/level carries a `pct` (0-100); a bare `done:true` reads as 100.
