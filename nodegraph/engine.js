@@ -718,10 +718,30 @@ function matrixPhaseRevenue(p){
 // building id (t1n.data.id === phase.buildingId); buildingId is globally unique so
 // no jobId filter is needed (and one keyed on currentJobId would wrongly zero
 // off-screen recomputes).
+// A building node's appData building id. Nodes created by the appData sync carry
+// the whole record as `data` (ui.js addNode('t1',…,b)), but a building TRACED on
+// the satellite map is spawned label-only (ui.js trace-to-create, addNode('t1',
+// x, y, 'B'+n)) and has no data at all. Such a node resolved to no phases, so
+// every money rollup read $0 for it — and the building then vanished entirely
+// from the AIA schedule of values while the grand total quietly under-billed by
+// its share (Fairways: B1 traced, $28,251 of phases, absent from the G703).
+// Fall back to matching a live building record by name within this job.
+function t1BuildingId(t1n){
+  if(!t1n || t1n.type !== 't1') return null;
+  var direct = (t1n.data && t1n.data.id) || t1n.dataId;
+  if(direct) return direct;
+  if(typeof appData === 'undefined' || !appData || !Array.isArray(appData.buildings)) return null;
+  var nm = String(t1n.label || '').split(' › ')[0].split(' > ')[0].trim().toLowerCase();
+  if(!nm) return null;
+  var hit = appData.buildings.find(function(b){
+    return b && b.jobId === jobId && String(b.name || '').trim().toLowerCase() === nm;
+  });
+  return hit ? hit.id : null;
+}
 function matrixPhasesForT1(t1n){
   if(!t1n || t1n.type !== 't1') return [];
   if(typeof appData === 'undefined' || !appData || !Array.isArray(appData.phases)) return [];
-  var bId = (t1n.data && t1n.data.id) || t1n.dataId;
+  var bId = t1BuildingId(t1n);
   if(!bId) return [];
   var wiredPh = {};
   wires.forEach(function(w){

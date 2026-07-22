@@ -170,24 +170,44 @@
         }
       }
     });
+    // Completeness pass — once ANY scope×building line exists, a building that
+    // produced none would silently vanish from the schedule (Tier 2 below only
+    // runs when Tier 1 found nothing at all). Append a visible $0 line so an
+    // unpriced building is something you can see and fill in, never an omission.
+    if (lines.length) {
+      var seenB = {};
+      lines.forEach(function (l) { if (l.buildingId) seenB[l.buildingId] = 1; });
+      t1s.forEach(function (t1) {
+        if (seenB[t1.id]) return;
+        var bp0 = 0; try { bp0 = NG.getT1WeightedPct(t1); } catch (e) { bp0 = num(t1.pctComplete); }
+        lines.push({ id: 'ln_bld0_' + t1.id, nodeId: t1.id, buildingId: t1.id,
+          buildingName: baseName(t1, 'Building'), description: baseName(t1, 'Building'),
+          type: 'phase', scheduledValue: 0, pctComplete: round2(num(bp0)),
+          stored: 0, retainagePct: null, previous: 0 });
+      });
+    }
     // Tier 2 — phases carry no revenue (common while the node-graph cost model
     // is still being wired: revenue lives on the job, not distributed to phase
     // nodes). Fall back to buildings that DO carry an allocated/derived budget,
     // one SOV line per building.
     if (!lines.length) {
+      // Emit a line for EVERY building, including ones that derive $0. Skipping
+      // them used to drop a building off the schedule of values entirely with no
+      // warning, and the grand total then under-billed by that building's share
+      // (Fairways: B1 was traced on the map so its node had no appData link, and
+      // the G703 came out $28,251 light across 9 of 10 buildings). A visible $0
+      // line the user can price is honest; a missing line is invisible money.
       t1s.forEach(function (t1) {
         var rev = 0;
         try { rev = NG.getBuildingAllocatedRevenue(t1) || 0; } catch (e) {}
         if (rev <= 0.005) rev = num(t1.revenue);
-        if (rev > 0.005) {
-          var bp = 0; try { bp = NG.getT1WeightedPct(t1); } catch (e) { bp = num(t1.pctComplete); }
-          var uD = 0, uT = 0;
-          if (t1.units && t1.units.length) { uT = t1.units.length; t1.units.forEach(function (u) { if (u.done) uD++; }); }
-          lines.push({ id: 'ln_bld_' + t1.id, nodeId: t1.id, buildingId: t1.id,
-            buildingName: baseName(t1, 'Building'), description: baseName(t1, 'Building'),
-            type: 'phase', scheduledValue: round2(rev), pctComplete: round2(num(bp)),
-            stored: 0, retainagePct: null, previous: 0, unitsDone: uD || undefined, unitsTotal: uT || undefined });
-        }
+        var bp = 0; try { bp = NG.getT1WeightedPct(t1); } catch (e) { bp = num(t1.pctComplete); }
+        var uD = 0, uT = 0;
+        if (t1.units && t1.units.length) { uT = t1.units.length; t1.units.forEach(function (u) { if (u.done) uD++; }); }
+        lines.push({ id: 'ln_bld_' + t1.id, nodeId: t1.id, buildingId: t1.id,
+          buildingName: baseName(t1, 'Building'), description: baseName(t1, 'Building'),
+          type: 'phase', scheduledValue: round2(rev), pctComplete: round2(num(bp)),
+          stored: 0, retainagePct: null, previous: 0, unitsDone: uD || undefined, unitsTotal: uT || undefined });
       });
     }
     // Tier 3 — nothing in the graph carries revenue yet. Seed a single Base
