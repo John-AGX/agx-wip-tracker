@@ -3127,6 +3127,7 @@ function renderInspector(){
     refreshInspMetrics();   // always repaint tiles (job-detail build is keyed; numbers settle late)
     refreshInspKpis();      // + KPI ribbon / attention band (same late-settle reason)
     refreshInspAccSums();   // + section rollup summaries
+    refreshInspContractAlloc();  // + the scope×building contract matrix (AIA SOV shape)
   }
   // Hybrid inline-spawn (RS-A + RS-B): a single "+ Add" button (prepended) + per-type
   // grouped child lists (appended) so children can be spawned + browsed inline.
@@ -3261,6 +3262,9 @@ function renderInspectorJobDetail(body){
     // + Subs start collapsed (their number is in the header). The #insp-* ids stay
     // INSIDE each body so the existing section renderers keep targeting them.
     '<div class="ng-insp-acc ng-open" id="acc-buildings"><button class="ng-insp-acc-hdr" data-acc-toggle="buildings"><span class="acc-dot" style="background:#4f8cff"></span><span class="acc-t">Buildings</span><span class="acc-sum" id="accsum-buildings"></span><span class="acc-chev"></span></button><div class="ng-insp-acc-body"><div class="ng-insp-sec" id="insp-buildings"></div></div></div>'+
+    // Contract allocation matrix (scopes × buildings) — the source of truth the
+    // AIA G703 bills from; filled by refreshInspContractAlloc().
+    '<div class="ng-insp-acc ng-open" id="acc-contract-alloc"><button class="ng-insp-acc-hdr" data-acc-toggle="contract-alloc"><span class="acc-dot" style="background:#34d399"></span><span class="acc-t">Contract allocation</span><span class="acc-sum" id="accsum-contract-alloc"></span><span class="acc-chev"></span></button><div class="ng-insp-acc-body"><div class="ng-insp-sec" id="ng-insp-contract-alloc"></div></div></div>'+
     '<div class="ng-insp-acc ng-open" id="acc-phases"><button class="ng-insp-acc-hdr" data-acc-toggle="phases"><span class="acc-dot" style="background:#a78bfa"></span><span class="acc-t">Phases</span><span class="acc-sum" id="accsum-phases"></span><span class="acc-chev"></span></button><div class="ng-insp-acc-body"><div class="ng-insp-sec" id="insp-phases"></div></div></div>'+
     '<div class="ng-insp-acc" id="acc-jobcosts"><button class="ng-insp-acc-hdr" data-acc-toggle="jobcosts"><span class="acc-dot" style="background:#f2a55c"></span><span class="acc-t">Job Costs</span><span class="acc-sum" id="accsum-jobcosts"></span><span class="acc-chev"></span></button><div class="ng-insp-acc-body"><div class="ng-insp-sec" id="insp-jobcosts"></div></div></div>'+
     '<div class="ng-insp-acc" id="acc-subs"><button class="ng-insp-acc-hdr" data-acc-toggle="subs"><span class="acc-dot" style="background:#35d0a5"></span><span class="acc-t">Subcontractors</span><span class="acc-sum" id="accsum-subs"></span><span class="acc-chev"></span></button><div class="ng-insp-acc-body"><div class="ng-insp-sec" id="insp-subs"></div><div id="insp-subs-totals"></div></div></div>'+
@@ -4631,6 +4635,84 @@ function contractSeed(mode, opts){
   if(E.saveGraph) E.saveGraph();
   render();
 }
+
+// ── Contract allocation MATRIX — scopes × buildings ─────────────────────────
+// This is the shape the AIA G703 bills from. deriveSOV (js/pay-applications.js)
+// emits ONE schedule-of-values line per scope×building that carries revenue, so
+// "Building 5 - Exterior Painting" and "Building 5 - Vinyl siding replacement"
+// come out as separate scheduled-value rows — the Waterside G703 format. A cell
+// is that scope's allocation % to that building (the existing t2→t1 wire
+// allocPct); the row total is the scope's revenue. A building's revenue is the
+// sum of its cells, so the Site Plan and the AIA read from ONE source of truth.
+function ensureScopeWire(scopeId, bldgId){
+  var w=E.wires().find(function(x){ return x.fromNode===scopeId && x.toNode===bldgId; });
+  if(w) return w;
+  w={ fromNode:scopeId, fromPort:0, toNode:bldgId, toPort:0, allocPct:0 };
+  E.wires().push(w);
+  return w;
+}
+// Cell edit = make sure the scope→building wire exists, then reuse the existing
+// wire %-editor verbatim.
+function matrixCellEdit(el){
+  ensureScopeWire(el.getAttribute('data-alloc-phase'), el.getAttribute('data-alloc-bldg'));
+  allocPctEdit(el);
+}
+function matrixEvenSplit(){
+  var blds=ngBuildings(); if(!blds.length) return;
+  (E.nodes()||[]).filter(function(n){ return n.type==='t2'; }).forEach(function(s){
+    blds.forEach(function(b){ ensureScopeWire(s.id,b.id).allocPct=100/blds.length; });
+  });
+  if(E.saveGraph) E.saveGraph();
+  render();
+}
+function contractMatrixHtml(){
+  var jc=ngJobContract(), blds=ngBuildings();
+  var scopes=(E.nodes()||[]).filter(function(n){ return n.type==='t2'; });
+  if(!blds.length) return '<div style="padding:8px 0;font-size:11px;color:#8b90a5;">Add buildings on the Site Plan to allocate the contract.</div>';
+  var h='<div style="font-size:10.5px;color:#8b90a5;margin-bottom:6px;line-height:1.45;">Split the contract into scopes, then allocate each scope across the buildings. Every cell becomes one AIA schedule-of-values line (“Building 5 - Exterior Painting”).</div>';
+  h+='<div style="display:flex;align-items:center;gap:6px;margin-bottom:5px;font-size:11px;"><span style="flex:1;color:#8b90a5;">Job contract</span>'
+    +'<span style="font-family:\'Courier New\',monospace;color:#34d399;font-weight:700;">'+E.fmtC(jc)+'</span></div>';
+  if(!scopes.length) h+='<div style="padding:6px 0;font-size:11px;color:#fbbf24;">No scopes yet — add one (Exterior Painting, Vinyl siding…) with “+ Add” on the Site Plan, then set its revenue here.</div>';
+  h+='<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:11px;">'
+    +'<thead><tr style="color:#8b90a5;font-size:9px;text-transform:uppercase;letter-spacing:.5px;">'
+    +'<th style="text-align:left;padding:3px 4px;">Scope</th><th style="text-align:right;padding:3px 4px;">Revenue</th>';
+  blds.forEach(function(b){ h+='<th style="text-align:right;padding:3px 4px;">'+luEsc(String(b.label||'Bldg').split(' › ')[0])+'</th>'; });
+  h+='<th style="text-align:right;padding:3px 4px;">Σ</th></tr></thead><tbody>';
+  var colTot={}; blds.forEach(function(b){ colTot[b.id]=0; });
+  var revTot=0;
+  scopes.forEach(function(s){
+    var sRev=Number(s.revenue||0); revTot+=sRev;
+    h+='<tr style="border-top:1px solid var(--ng-border2);">'
+      +'<td style="padding:3px 4px;color:var(--ng-text,#c8cbe0);">'+luEsc(String(s.label||'Scope').split(' › ')[0])+'</td>'
+      +'<td style="padding:3px 4px;text-align:right;"><span class="ng-phase-rev" data-phase-rev="'+luEsc(s.id)+'" title="Click to edit this scope’s revenue" style="cursor:pointer;font-family:\'Courier New\',monospace;color:#34d399;">'+E.fmtC(sRev)+'</span></td>';
+    var rowPct=0;
+    blds.forEach(function(b){
+      var w=E.wires().find(function(x){ return x.fromNode===s.id && x.toNode===b.id; });
+      var pct=(w && w.allocPct!=null)?Number(w.allocPct):0; rowPct+=pct;
+      var cell=sRev*pct/100; colTot[b.id]+=cell;
+      h+='<td style="padding:3px 4px;text-align:right;">'
+        +'<span class="ng-mx-cell" data-alloc-phase="'+luEsc(s.id)+'" data-alloc-bldg="'+luEsc(b.id)+'" title="Click to set this scope’s % to this building" style="cursor:pointer;font-family:\'Courier New\',monospace;color:#fbbf24;">'+pct.toFixed(1)+'%</span>'
+        +'<div style="font-size:9px;color:#6b6f82;font-family:\'Courier New\',monospace;">'+E.fmtC(cell)+'</div></td>';
+    });
+    var rOk=Math.abs(rowPct-100)<0.01;
+    h+='<td style="padding:3px 4px;text-align:right;font-family:\'Courier New\',monospace;color:'+(rOk?'#34d399':'#f87171')+';">'+rowPct.toFixed(0)+'%'+(rOk?' ✓':' ⚠')+'</td></tr>';
+  });
+  var tOk=Math.abs(revTot-jc)<0.01;
+  h+='<tr style="border-top:2px solid var(--ng-border2);font-weight:700;color:#c8cbe0;">'
+    +'<td style="padding:4px;">Total</td>'
+    +'<td style="padding:4px;text-align:right;font-family:\'Courier New\',monospace;color:'+(tOk?'#34d399':'#f87171')+';">'+E.fmtC(revTot)+(tOk?' ✓':' ⚠')+'</td>';
+  blds.forEach(function(b){ h+='<td style="padding:4px;text-align:right;font-family:\'Courier New\',monospace;color:#4f8cff;">'+E.fmtC(colTot[b.id])+'</td>'; });
+  h+='<td></td></tr></tbody></table></div>';
+  if(!tOk) h+='<div style="font-size:10px;color:#f87171;padding:3px 0;">Scope revenue '+E.fmtC(revTot)+' doesn’t match the job contract '+E.fmtC(jc)+'.</div>';
+  var fixed=blds.filter(function(b){ return b.contractPct!=null; });
+  if(fixed.length) h+='<div style="font-size:10px;color:#fbbf24;padding:3px 0;">'+fixed.length+' building(s) are on a fixed % share, which overrides this matrix — the AIA and the Site Plan would disagree. <span data-contract-seed="clear" style="cursor:pointer;text-decoration:underline;">Clear fixed shares</span></div>';
+  h+='<div style="display:flex;gap:6px;justify-content:flex-end;padding-top:6px;"><button class="ee-btn ghost" style="font-size:11px;" data-mx-act="even">Even split</button></div>';
+  return h;
+}
+function refreshInspContractAlloc(){
+  var host=document.getElementById('ng-insp-contract-alloc');
+  if(host) host.innerHTML=contractMatrixHtml();
+}
 function wirePctEdit(wpc){
   var wpPhId=wpc.getAttribute('data-wire-pct-phase');
   var wpBId=wpc.getAttribute('data-wire-pct-bldg');
@@ -4721,6 +4803,12 @@ function initEvents(){
     if(ipe && !e.target.closest('input')){ e.preventDefault(); e.stopPropagation(); progChipEdit(ipe); return; }
     var iprc=e.target.closest('[data-phase-rev]');
     if(iprc && !e.target.closest('input')){ e.preventDefault(); e.stopPropagation(); phaseRevEdit(iprc); return; }
+    // Contract matrix cell — must precede the generic [data-alloc-phase] case
+    // below, since a matrix cell carries the same attrs but may have no wire yet.
+    var imx=e.target.closest('.ng-mx-cell');
+    if(imx && !e.target.closest('input')){ e.preventDefault(); e.stopPropagation(); matrixCellEdit(imx); return; }
+    var imxa=e.target.closest('[data-mx-act]');
+    if(imxa){ e.preventDefault(); e.stopPropagation(); matrixEvenSplit(); return; }
     var iapc=e.target.closest('[data-alloc-phase]');
     if(iapc && !e.target.closest('input')){ e.preventDefault(); e.stopPropagation(); allocPctEdit(iapc); return; }
     var ismode=e.target.closest('[data-scope-mode-phase]');

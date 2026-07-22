@@ -902,6 +902,18 @@
       logo: location.origin + '/images/logo-color.png'
     };
   }
+  // Description as it must read on the issued G703: "Building 5 - Exterior
+  // Painting". On screen the table groups by building so the description column
+  // carries just the scope, but the printed/exported sheet is one flat list —
+  // without the building prefix five buildings' painting lines are five
+  // identical rows. Skips the prefix for ungrouped ("General") and per-building
+  // lines where the building IS the description (Tier 2).
+  function sovDesc(l) {
+    var b = String((l && l.buildingName) || '').trim();
+    var d = String((l && l.description) || '').trim();
+    if (!b || b === 'General' || b === d) return d;
+    return b + ' - ' + d;
+  }
   // Per-line G703 columns (D+E = G; F is a memo breakdown of stored inside G).
   function g703Row(l, app) {
     var C = num(l.scheduledValue), D = num(l.previous), G = lineG(l);
@@ -919,7 +931,7 @@
       tot.C += r.C; tot.D += r.D; tot.E += r.E; tot.F += r.F; tot.G += r.G; tot.I += r.I; tot.bal += r.bal;
       rows += '<tr>' +
         '<td class="c">' + idx + '</td>' +
-        '<td>' + esc(l.description || '') + (l.type === 'co' ? ' <em>(CO)</em>' : '') + '</td>' +
+        '<td>' + esc(sovDesc(l)) + (l.type === 'co' ? ' <em>(CO)</em>' : '') + '</td>' +
         '<td class="n">' + fmtC(r.C) + '</td><td class="n">' + fmtC(r.D) + '</td><td class="n">' + fmtC(r.E) + '</td>' +
         '<td class="n">' + fmtC(r.F) + '</td><td class="n b">' + fmtC(r.G) + '</td><td class="c">' + fmtPct(r.pctG) + '</td>' +
         '<td class="n">' + fmtC(r.bal) + '</td><td class="n">' + fmtC(r.I) + '</td>' +
@@ -1031,7 +1043,7 @@
       lines.forEach(function (l, i) {
         var r = g703Row(l, app);
         tot.C += r.C; tot.D += r.D; tot.E += r.E; tot.F += r.F; tot.G += r.G; tot.bal += r.bal; tot.I += r.I;
-        aoa.push([i + 1, (l.description || '') + (l.type === 'co' ? ' (CO)' : ''),
+        aoa.push([i + 1, sovDesc(l) + (l.type === 'co' ? ' (CO)' : ''),
           num(r.C), num(r.D), num(r.E), num(r.F), num(r.G), Math.round(r.pctG * 10) / 10, num(r.bal), num(r.I)]);
       });
       aoa.push(['', 'GRAND TOTAL', num(tot.C), num(tot.D), num(tot.E), num(tot.F), num(tot.G),
