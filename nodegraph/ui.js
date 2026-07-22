@@ -4647,9 +4647,26 @@ function contractSeed(mode, opts){
 function ensureScopeWire(scopeId, bldgId){
   var w=E.wires().find(function(x){ return x.fromNode===scopeId && x.toNode===bldgId; });
   if(w) return w;
-  w={ fromNode:scopeId, fromPort:0, toNode:bldgId, toPort:0, allocPct:0 };
+  w={ fromNode:scopeId, fromPort:0, toNode:bldgId, toPort:0, allocPct:0, _mx:true };
   E.wires().push(w);
   return w;
+}
+// Drop matrix-created wires the user never actually gave a share to. A leftover
+// 0%-alloc wire is NOT harmless: allocPctEdit commits on blur, so opening a cell
+// and clicking away writes allocPct 0. getT1WeightedPct then sees an incoming
+// scope, flips anyMarked true the moment that scope reads >0%, but weights it
+// ap*rev = 0 — sumW lands at 0 and the building craters to 0% instead of falling
+// back to its own units/levels. Only wires this matrix created (_mx) and still at
+// zero are removed; hand-built 0% wires are left alone.
+function pruneEmptyMatrixWires(){
+  if(editingId) return;            // never yank a wire out from under an open editor
+  var ws=E.wires(), removed=false;
+  for(var i=ws.length-1;i>=0;i--){
+    if(!ws[i]._mx) continue;
+    if(Number(ws[i].allocPct)>0) delete ws[i]._mx;   // earned a real share — a normal wire now
+    else { ws.splice(i,1); removed=true; }
+  }
+  if(removed && E.saveGraph) setTimeout(function(){ E.saveGraph(); },0);  // defer: avoid re-entrant save mid-render
 }
 // Cell edit = make sure the scope→building wire exists, then reuse the existing
 // wire %-editor verbatim.
@@ -4710,6 +4727,7 @@ function contractMatrixHtml(){
   return h;
 }
 function refreshInspContractAlloc(){
+  pruneEmptyMatrixWires();
   var host=document.getElementById('ng-insp-contract-alloc');
   if(host) host.innerHTML=contractMatrixHtml();
 }
