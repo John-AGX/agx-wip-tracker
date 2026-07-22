@@ -3800,6 +3800,17 @@ function buildingRevSources(sel){
   }
   var totalRev=E.getBuildingAllocatedRevenue(sel);
   var contractRev=totalRev-coRev;
+  // ALLOCATION MODE (contractPct set): this building's contract is its SHARE of the
+  // one job-level contract — the engine no longer counts its scope rows toward the
+  // contract — so show a single clear allocation row instead of scope rows.
+  if(sel.contractPct!=null){
+    var hadScopes=contract.length>0;
+    return {
+      contract:[{ name:'Contract allocation ('+Number(sel.contractPct).toFixed(1)+'% of job)', rev:contractRev, pct:0, alloc:true }],
+      cos:cos, contractRev:contractRev, coRev:coRev, totalRev:totalRev,
+      allocMode:true, scopesPresent:hadScopes
+    };
+  }
   var cSum=contract.reduce(function(a,c){ return a+(c.rev||0); }, 0);
   var gap=contractRev-cSum;
   if(Math.round(gap)>=1 || Math.round(gap)<=-1){ contract.push({ name:'Other contract allocation', rev:gap, pct:0, other:true }); }
@@ -3824,10 +3835,26 @@ function buildingRevBreakdownHtml(sel){
       +'<span style="flex:1;">'+title+'</span>'
       +'<span style="font-family:\'Courier New\',monospace;">'+E.fmtC(amount)+'</span></div>';
   };
+  // Allocation-mode row carries click-to-edit % and $ chips so a building can be
+  // re-shared without leaving its inspector (the job-level panel allocates the set).
+  var jc=ngJobContract();
+  var allocRow=function(c){
+    return '<div style="display:flex;align-items:center;gap:6px;padding:2px 0 2px 8px;font-size:11px;color:var(--ng-textdim,#8b90a5);">'
+      +'<span style="flex:1;">Share of job contract</span>'
+      +'<span class="ng-contract-pct" data-contract-bldg="'+luEsc(sel.id)+'" title="Click to edit this building’s % of the job contract" style="cursor:pointer;font-family:\'Courier New\',monospace;color:#fbbf24;min-width:46px;text-align:right;">'+Number(sel.contractPct).toFixed(1)+'%</span>'
+      +'<span class="ng-contract-share" data-contract-bldg="'+luEsc(sel.id)+'" data-contract-total="'+jc+'" title="Click to enter this building’s contract dollars" style="cursor:pointer;font-family:\'Courier New\',monospace;color:#4f8cff;min-width:66px;text-align:right;">'+E.fmtC(c.rev)+'</span>'
+      +'</div>';
+  };
   var h='<div class="ng-insp-sec ng-bld-revbreak" style="padding-top:4px;">';
-  h+='<div style="font-size:9px;text-transform:uppercase;letter-spacing:0.5px;color:#8b90a5;font-weight:600;margin-bottom:1px;">Revenue allocation</div>';
+  h+='<div style="display:flex;align-items:center;font-size:9px;text-transform:uppercase;letter-spacing:0.5px;color:#8b90a5;font-weight:600;margin-bottom:1px;">'
+    +'<span style="flex:1;">Revenue allocation</span>'
+    + (s.allocMode ? '' : (jc>0 ? '<span class="ng-contract-start" data-contract-bldg="'+luEsc(sel.id)+'" title="Give this building a share of the job contract" style="cursor:pointer;color:#4f8cff;font-weight:700;">+ allocate share</span>' : ''))
+    +'</div>';
   h+=secHdr('Original contract', s.contractRev, '#4f8cff');
-  h+=s.contract.map(function(c){ return row(c, '#4f8cff'); }).join('');
+  h+=s.allocMode ? s.contract.map(allocRow).join('') : s.contract.map(function(c){ return row(c, '#4f8cff'); }).join('');
+  if(s.allocMode && s.scopesPresent){
+    h+='<div style="padding:1px 0 2px 8px;font-size:9px;font-style:italic;color:#6b6f82;">Contract set by allocation — scopes drive % complete only.</div>';
+  }
   if(s.cos.length){
     h+='<div style="margin-top:3px;padding-top:3px;border-top:1px dashed var(--ng-border2);">';
     h+=secHdr('Change Orders', s.coRev, '#fbbf24');
@@ -4510,6 +4537,100 @@ function allocShareEdit(shareEl){
   });
   shInp.addEventListener('mousedown',function(ev){ev.stopPropagation();});
 }
+
+// ── Job contract → per-building allocation ──────────────────────────────────
+// The job's contract is ONE job-level number (the WIP node's contractAmount).
+// A building's share of it lives on the building node as contractPct (%), which
+// the engine turns into that building's contract revenue (replacing its scope
+// sum) — see getBuildingAllocatedRevenue. These mirror allocPctEdit/allocShareEdit
+// but resolve a NODE instead of a wire (there is no job→building contract wire).
+function ngJobContract(){
+  var w=(E.nodes()||[]).find(function(n){ return n.type==='wip'; });
+  return (w && w.jobFields && Number(w.jobFields.contractAmount)) || 0;
+}
+function ngBuildings(){ return (E.nodes()||[]).filter(function(n){ return n.type==='t1'; }); }
+function contractPctEdit(el){
+  var bId=el.getAttribute('data-contract-bldg');
+  var b=E.findNode(bId); if(!b || b.type!=='t1') return;
+  editingId=bId;
+  var inp=document.createElement('input');
+  inp.type='number'; inp.step='0.1'; inp.min=0; inp.max=100;
+  inp.value=Number(b.contractPct||0).toFixed(1);
+  inp.className='ng-wip-chip-input';
+  el.textContent=''; el.appendChild(inp);
+  setTimeout(function(){ inp.focus(); inp.select(); }, 0);
+  var done=false;
+  function finish(){
+    if(done) return; done=true;
+    b.contractPct=Math.max(0,Math.min(100,parseFloat(inp.value)||0));
+    editingId=null;
+    if(E.saveGraph) E.saveGraph();
+    render();
+  }
+  inp.addEventListener('blur',finish);
+  inp.addEventListener('keydown',function(ev){
+    if(ev.key==='Enter'){ev.preventDefault();inp.blur();}
+    else if(ev.key==='Escape'){ev.preventDefault();done=true;editingId=null;render();}
+  });
+  inp.addEventListener('mousedown',function(ev){ev.stopPropagation();});
+}
+function contractShareEdit(el){
+  var bId=el.getAttribute('data-contract-bldg');
+  var jc=parseFloat(el.getAttribute('data-contract-total'))||0;
+  var b=E.findNode(bId); if(!b || b.type!=='t1' || jc<=0) return;   // no contract → nothing to share
+  editingId=bId;
+  var inp=document.createElement('input');
+  inp.type='number'; inp.step='0.01'; inp.min=0;
+  inp.value=((Number(b.contractPct||0))/100*jc).toFixed(2);
+  inp.className='ng-wip-chip-input';
+  el.textContent=''; el.appendChild(inp);
+  setTimeout(function(){ inp.focus(); inp.select(); }, 0);
+  var done=false;
+  function finish(){
+    if(done) return; done=true;
+    var dollarVal=Math.max(0,parseFloat(inp.value)||0);
+    b.contractPct=Math.min(100,(dollarVal/jc)*100);   // $ → % against the job contract
+    editingId=null;
+    if(E.saveGraph) E.saveGraph();
+    render();
+  }
+  inp.addEventListener('blur',finish);
+  inp.addEventListener('keydown',function(ev){
+    if(ev.key==='Enter'){ev.preventDefault();inp.blur();}
+    else if(ev.key==='Escape'){ev.preventDefault();done=true;editingId=null;render();}
+  });
+  inp.addEventListener('mousedown',function(ev){ev.stopPropagation();});
+}
+// Put a building INTO allocation mode (0% to start), then open its % editor.
+function contractStart(el){
+  var b=E.findNode(el.getAttribute('data-contract-bldg'));
+  if(!b || b.type!=='t1') return;
+  if(b.contractPct==null) b.contractPct=0;
+  if(E.saveGraph) E.saveGraph();
+  render();
+}
+// Seed / rebalance the whole set. 'even' = 100/n · 'units' = by unit count
+// (falls back to even when no units) · 'rebalance' = scale to sum 100 ·
+// 'clear' = back to legacy scope-driven revenue.
+function contractSeed(mode, opts){
+  var bs=ngBuildings(); if(!bs.length) return;
+  var onlyBlank=!!(opts && opts.onlyBlank);
+  var targets=onlyBlank ? bs.filter(function(b){ return b.contractPct==null; }) : bs;
+  if(mode==='clear'){ bs.forEach(function(b){ b.contractPct=null; }); }
+  else if(mode==='rebalance'){
+    var cur=bs.filter(function(b){ return b.contractPct!=null; });
+    var sum=cur.reduce(function(a,b){ return a+(Number(b.contractPct)||0); },0);
+    if(sum>0) cur.forEach(function(b){ b.contractPct=(Number(b.contractPct)||0)*100/sum; });
+  } else if(mode==='units'){
+    var tot=bs.reduce(function(a,b){ return a+((b.units&&b.units.length)||0); },0);
+    if(tot>0) targets.forEach(function(b){ b.contractPct=((b.units&&b.units.length)||0)/tot*100; });
+    else targets.forEach(function(b){ b.contractPct=100/bs.length; });   // no units → even
+  } else { // 'even'
+    targets.forEach(function(b){ b.contractPct=100/bs.length; });
+  }
+  if(E.saveGraph) E.saveGraph();
+  render();
+}
 function wirePctEdit(wpc){
   var wpPhId=wpc.getAttribute('data-wire-pct-phase');
   var wpBId=wpc.getAttribute('data-wire-pct-bldg');
@@ -4612,6 +4733,15 @@ function initEvents(){
     if(ishareEl && !e.target.closest('input')){ e.preventDefault(); e.stopPropagation(); allocShareEdit(ishareEl); return; }
     var ilockEl=e.target.closest('.ng-alloc-lock');
     if(ilockEl){ e.preventDefault(); e.stopPropagation(); allocLockToggle(ilockEl); return; }
+    // Job contract → building allocation (node-scoped, not wire-scoped).
+    var icpct=e.target.closest('.ng-contract-pct');
+    if(icpct && !e.target.closest('input')){ e.preventDefault(); e.stopPropagation(); contractPctEdit(icpct); return; }
+    var icsh=e.target.closest('.ng-contract-share');
+    if(icsh && !e.target.closest('input')){ e.preventDefault(); e.stopPropagation(); contractShareEdit(icsh); return; }
+    var icst=e.target.closest('.ng-contract-start');
+    if(icst){ e.preventDefault(); e.stopPropagation(); contractStart(icst); return; }
+    var icseed=e.target.closest('[data-contract-seed]');
+    if(icseed){ e.preventDefault(); e.stopPropagation(); contractSeed(icseed.getAttribute('data-contract-seed')); return; }
     // Slice 3b — line-item add / delete (cost/invoice). render() rebuilds the table.
     var iadd=e.target.closest('.ng-add-sub');
     if(iadd){ e.preventDefault(); e.stopPropagation(); lineItemAdd(E.findNode(iadd.getAttribute('data-node'))); render(); return; }

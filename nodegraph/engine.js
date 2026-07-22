@@ -731,22 +731,36 @@ function matrixPhasesForT1(t1n){
   });
   return appData.phases.filter(function(p){ return p && p.buildingId === bId && !wiredPh[p.id]; });
 }
+// The job's contract dollars are ONE job-level number — the WIP node's synced
+// jobFields.contractAmount (pushToJob copies job.contractAmount onto it every
+// render). A building may carry its SHARE of that contract as t1.contractPct
+// (a percent; the "Allocate contract to buildings" panel edits it).
+function wipContractAmount(){
+  var wip = nodes.find(function(n){ return n.type === 'wip'; });
+  return (wip && wip.jobFields && Number(wip.jobFields.contractAmount)) || 0;
+}
 function getBuildingAllocatedRevenue(t1n){
   if(!t1n || t1n.type !== 't1') return 0;
-  var total = 0;
+  var scopePortion = 0, coPortion = 0;
   wires.forEach(function(w){
     if(w.toNode !== t1n.id) return;
     var src = findNode(w.fromNode);
-    if(src && src.type === 't2') total += getPhaseRevenueToBuilding(src, t1n.id);
-    else if(src && src.type === 'co') total += getCOIncomeToParent(src, t1n.id);
+    if(src && src.type === 't2') scopePortion += getPhaseRevenueToBuilding(src, t1n.id);
+    else if(src && src.type === 'co') coPortion += getCOIncomeToParent(src, t1n.id);
   });
   // + matrix-allocated scopes (no t2 node/wire): full phaseRevenue, allocated 100%
-  // to this one building. Deduped vs wired t2 inside matrixPhasesForT1. This is what
-  // makes a matrix-built building's Revenue tile stop reading $0. The job's revenue
-  // dollars are contract×%, so this only feeds the building tile + rollup WEIGHT —
-  // never a second job-level dollar total (no double-count).
-  matrixPhasesForT1(t1n).forEach(function(p){ total += matrixPhaseRevenue(p); });
-  return total;
+  // to this one building. Deduped vs wired t2 inside matrixPhasesForT1. This only
+  // feeds the building tile + rollup WEIGHT — never a second job-level dollar total.
+  matrixPhasesForT1(t1n).forEach(function(p){ scopePortion += matrixPhaseRevenue(p); });
+  // ALLOCATION MODE (contractPct set): the building's contract = its share of the
+  // job contract, REPLACING the scope/matrix contract sum. LEGACY MODE
+  // (contractPct null): the scope/matrix sum, byte-identical to before. CO revenue
+  // adds on top in BOTH modes. The job total (WIP = contract + CO) never sums
+  // building revenue, so re-slicing the contract can't double-count at the job level.
+  var contractPortion = (t1n.contractPct != null)
+    ? wipContractAmount() * (Number(t1n.contractPct) / 100)
+    : scopePortion;
+  return contractPortion + coPortion;
 }
 
 // Weighted-average pctComplete across a T2/CO node's outgoing T1 wires.
@@ -1109,6 +1123,7 @@ function buildGraphState(){
         levels: (n.type==='t1' && n.levels && n.levels.length) ? n.levels : null, // L/U Phase 1: floors (additive; flat buildings have none)
         units:  (n.type==='t1' && n.units  && n.units.length)  ? n.units  : null, // L/U Phase 1: units, each optionally on a level (unit.levelId)
         heightM: (n.type==='t1' && isFinite(n.heightM) && n.heightM>0) ? n.heightM : null, // 3D extrusion override in meters (additive; levels-derived when absent)
+        contractPct: (n.type==='t1' && n.contractPct!=null) ? n.contractPct : null, // building's SHARE of the job contract (%) — allocation mode (additive, no GRAPH_VER bump)
         phases: (n.type==='t2' && Array.isArray(n.phases) && n.phases.length) ? n.phases : null, // Scope→nested-phases: per-scope weighted % breakdown (additive; scopes w/o phases have none)
         dataId: n.data ? n.data.id : null
       };
@@ -1333,6 +1348,7 @@ function restoreSnapshot(){
       pctComplete:sn.pctComplete||0,
       budget:sn.budget||0,
       revenue:sn.revenue||0,
+      contractPct:(sn.contractPct!=null?sn.contractPct:null), // building's share of the job contract (%) — allocation mode
       jobFields:sn.jobFields||{},
       _coRevApplied:sn._coRevApplied||0,
       allocTarget:sn.allocTarget||null,
@@ -1409,6 +1425,7 @@ function loadGraph(){
       pctComplete:sn.pctComplete||0,
       budget:sn.budget||0,
       revenue: (sn.revenue!=null ? sn.revenue : (data.asSoldRevenue||0)),
+      contractPct:(sn.contractPct!=null?sn.contractPct:null), // building's share of the job contract (%) — allocation mode
       jobFields:sn.jobFields||{},
       _coRevApplied:sn._coRevApplied||0,
       allocTarget:sn.allocTarget||null,
