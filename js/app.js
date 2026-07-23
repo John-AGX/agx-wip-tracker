@@ -2665,6 +2665,18 @@
 
         function pushToServer() {
             if (!window.p86Api || !window.p86Api.isAuthenticated()) return Promise.resolve();
+            // THE guard lives here, at the single chokepoint, not only in
+            // saveData(). flushPendingSave() (pagehide/beforeunload/visibility)
+            // and p86Data.pushToServer() in markup-viewer.js / sheet-editor.js
+            // all call this directly, so a guard in saveData alone left three
+            // ways to push the stale localStorage cache over good server data.
+            // Until a GET has actually succeeded, memory is a cache, and this
+            // is a FULL BULK REPLACE across jobs/buildings/phases/COs/subs/POs/
+            // invoices — one stale push reverts every one of them.
+            if (!_serverLoadOk) {
+                console.warn('pushToServer skipped: no successful server load yet (memory is the localStorage cache).');
+                return Promise.resolve();
+            }
             // Only push jobs the current user can edit. _canEdit comes from the
             // server on each GET. Read-only jobs (e.g. another PM's job that this
             // user can view but not modify) are filtered out so PMs scrolling the
