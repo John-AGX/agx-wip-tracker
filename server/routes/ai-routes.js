@@ -30,6 +30,9 @@ const { logContextLoad } = require('../services/context-registry');
 // COs/POs/invoices live in their own tables; this reads them and derives CO
 // money through the same pricing pipeline the browser uses.
 const jobMoney = require('../services/money/change-order-totals');
+// Job WIP, ported from the browser's getJobWIP — QB actuals, vendor bills,
+// PO/sub accrual and the display figures the job card shows.
+const jobWip = require('../services/money/job-wip');
 // Timezone helpers — render reminder remind_at instants in the acting
 // user's local zone (the time IS the point of a reminder).
 const { resolveTz, formatInTz } = require('../timezone');
@@ -1279,7 +1282,7 @@ const JOB_TOOLS = [
   {
     name: 'read_wip_summary',
     description:
-      'Company-wide WIP roll-up. Returns per-job financial summary (contract value, costs, % complete, revenue earned, JTD profit/margin, backlog, invoiced, unbilled) PLUS portfolio totals. Use this for "what\'s under contract right now", "show me our biggest jobs by remaining backlog", "any margin red flags", "what\'s our total billed-to-date". This is the AGGREGATE rollup — replaces the need to fan out per-job WIP reads. Filter by status (e.g. "In Progress" excludes Completed/Archived). The numbers match what the PM sees on the WIP page tiles — same `computeJobWIP` formula. Auto-tier.',
+      'Company-wide WIP roll-up. Returns per-job financial summary (contract value, costs, % complete, revenue earned, JTD profit/margin, backlog, invoiced, unbilled) PLUS portfolio totals. Use this for "what\'s under contract right now", "show me our biggest jobs by remaining backlog", "any margin red flags", "what\'s our total billed-to-date". This is the AGGREGATE rollup — replaces the need to fan out per-job WIP reads. Filter by status (e.g. "In Progress" excludes Completed/Archived). Costs include linked QuickBooks actuals and vendor bills; accrued adds open PO and sub commitments. Auto-tier.',
     input_schema: {
       type: 'object',
       additionalProperties: false,
@@ -4915,54 +4918,28 @@ function pct(n) {
 // Mirrors getJobWIP() in js/wip.js so the AI sees the same numbers the
 // PM sees on the workspace. Pulled into the server so the assistant
 // doesn't have to recompute (and risk drifting from) the UI's math.
-function computeJobWIP(job, jobBuildings, jobPhases, jobChangeOrders, jobSubs, jobInvoices) {
-  const co = (jobChangeOrders || []).reduce((acc, c) => {
-    acc.income += Number(c.income || c.contractAmount || 0);
-    acc.costs += Number(c.costs || c.estimatedCosts || 0);
-    return acc;
-  }, { income: 0, costs: 0 });
-
-  // Sum of sub-level + phase-level + building-level actual costs is the
-  // same calc wip.js does in getJobTotalCost(). Subs at level=='phase'
-  // / 'building' / 'job' all roll up. Use the override if present.
-  let actualCosts = 0;
-  if (job.ngActualCosts != null) {
-    actualCosts = Number(job.ngActualCosts);
-  } else {
-    actualCosts = (jobSubs || []).reduce((sum, s) => sum + Number(s.amount || 0), 0);
-  }
-
-  const contractIncome = Number(job.contractAmount || 0);
-  const estimatedCosts = Number(job.estimatedCosts || 0);
-  const totalIncome = contractIncome + co.income;
-  const totalEstCosts = estimatedCosts + co.costs;
-  const revisedCostChanges = Number(job.revisedCostChanges || 0);
-  const revisedEstCosts = totalEstCosts + revisedCostChanges;
-  const asSoldProfit = contractIncome - estimatedCosts;
-  const asSoldMargin = contractIncome > 0 ? (asSoldProfit / contractIncome * 100) : 0;
-  const revisedProfit = totalIncome - revisedEstCosts;
-  const revisedMargin = totalIncome > 0 ? (revisedProfit / totalIncome * 100) : 0;
-  const pctComplete = Number(job.pctComplete || 0);
-  const revenueEarned = totalIncome * (pctComplete / 100);
-  const jtdProfit = revenueEarned - actualCosts;
-  const jtdMargin = revenueEarned > 0 ? (jtdProfit / revenueEarned * 100) : 0;
-  // Invoiced-to-date. This used to read job.invoicedToDate unconditionally
-  // and ignore jobInvoices entirely, so the WIP block reported "$0 invoiced"
-  // on jobs whose "# Invoices" block in the same context listed real AR
-  // invoices — the two halves of one snapshot disagreed. Real invoices now
-  // win; the hand-typed scalar remains the fallback for jobs with none.
-  const invoiced = jobMoney.invoicedToDate(jobInvoices, job);
-  const unbilled = revenueEarned - invoiced;
-  const backlog = totalIncome - revenueEarned;
-  const remainingCosts = revisedEstCosts - actualCosts;
-
-  return {
-    contractIncome, estimatedCosts, coIncome: co.income, coCosts: co.costs,
-    totalIncome, totalEstCosts, revisedCostChanges, revisedEstCosts,
-    asSoldProfit, asSoldMargin, revisedProfit, revisedMargin,
-    pctComplete, revenueEarned, actualCosts, jtdProfit, jtdMargin,
-    invoiced, unbilled, backlog, remainingCosts
-  };
+// Job WIP now lives in services/money/job-wip.js — a real port of the
+// browser's getJobWIP. The version that used to sit here claimed to mirror
+// it but omitted QB actuals, vendor bills, PO/sub accrual, projected cost,
+// and the displayProfit/displayMargin the job card actually shows, so the
+// AI quoted margins from a formula no screen uses.
+//
+// This adapter keeps the old positional signature for the two call sites.
+// `extra` carries the table-backed inputs (qbCostLines, vendorBills,
+// purchaseOrders) from jobWip.loadWipInputs; without it the QB/bill/accrual
+// terms are simply zero rather than wrong.
+function computeJobWIP(job, jobBuildings, jobPhases, jobChangeOrders, jobSubs, jobInvoices, extra) {
+  const e = extra || {};
+  return jobWip.computeJobWIP(job, {
+    buildings: jobBuildings,
+    phases: jobPhases,
+    subs: jobSubs,
+    changeOrders: jobChangeOrders,
+    invoices: jobInvoices,
+    qbCostLines: e.qbCostLines,
+    vendorBills: e.vendorBills,
+    purchaseOrders: e.purchaseOrders,
+  });
 }
 
 // clientContext is optional; if provided, the client passed extra
@@ -5102,7 +5079,10 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
   const invoices = await jobMoney.invoicesForJob(pool, jobId, job.invoices);
   void jobsRes; // future use if cross-job analysis is needed
 
-  const wip = computeJobWIP(job, buildings, phases, changeOrders, subs, invoices);
+  // QB cost lines, vendor bills and POs live in their own tables — the WIP
+  // math needs all three for actual + accrued cost.
+  const _wipInputs = (await jobWip.loadWipInputs(pool, [jobId])).get(jobId) || {};
+  const wip = computeJobWIP(job, buildings, phases, changeOrders, subs, invoices, _wipInputs);
 
   const lines = [];
   // Job entity in focus this turn. Snapshot follows. For any write,
@@ -6485,8 +6465,12 @@ async function execClientDirectoryTool(name, input, ctx) {
       // buildJobContext was fixed to read the real rows, this rollup started
       // contradicting the per-job context inside the same conversation.
       // Batched: one query for the whole org, not one per job inside map().
-      const coByJob = await jobMoney.changeOrdersForJobs(pool, r.rows.map(x => x.id));
-      const invByJob = await jobMoney.invoicesForJobs(pool, r.rows.map(x => x.id));
+      const _allJobIds = r.rows.map(x => x.id);
+      const coByJob = await jobMoney.changeOrdersForJobs(pool, _allJobIds);
+      const invByJob = await jobMoney.invoicesForJobs(pool, _allJobIds);
+      // Three more batched queries for the whole org — QB lines, vendor bills,
+      // POs — rather than three per job inside the map below.
+      const wipInputsByJob = await jobWip.loadWipInputs(pool, _allJobIds);
       const allJobs = r.rows.map(row => {
         const d = row.data || {};
         const buildings = Array.isArray(d.buildings) ? d.buildings : [];
@@ -6494,7 +6478,8 @@ async function execClientDirectoryTool(name, input, ctx) {
         const changeOrders = coByJob.get(row.id) || (Array.isArray(d.changeOrders) ? d.changeOrders : []);
         const subs = Array.isArray(d.subs) ? d.subs : [];
         const invoices = invByJob.get(row.id) || (Array.isArray(d.invoices) ? d.invoices : []);
-        const wip = computeJobWIP(d, buildings, phases, changeOrders, subs, invoices);
+        const wip = computeJobWIP(d, buildings, phases, changeOrders, subs, invoices,
+          wipInputsByJob.get(row.id));
         return {
           id: row.id,
           jobNumber: d.jobNumber || null,
