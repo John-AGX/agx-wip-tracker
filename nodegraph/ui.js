@@ -4665,23 +4665,64 @@ function refreshInspContractAlloc(){
   pruneEmptyMatrixWires();
   var host=document.getElementById('ng-insp-contract-alloc');
   if(!host) return;
-  // THE allocation surface is the shared Scopes×Buildings matrix in js/jobs.js.
-  // It reads and writes appData.phases — the same (scope,building) records the
-  // building roll-ups and the AIA schedule of values bill from. Mounting it here
-  // rather than keeping a second node-graph-local matrix is the whole point: one
-  // source of truth for allocated revenue. (A parallel model is exactly what put
-  // Fairways' B1 $28,251 off the G703.)
-  if(typeof window.renderPhaseMatrixInto==='function'){
-    try{ window.renderPhaseMatrixInto(host, E.job()); }catch(e){ host.innerHTML=''; }
+  host.innerHTML=contractAllocHtml();
+}
+// Compact Scopes×Buildings board for the ~340px Site Plan inspector. Reads
+// appData.phases — the (scope,building) records the building roll-ups and the
+// AIA schedule of values bill from — so it shows the SAME dollars as the
+// full-width grid on the Jobs page without being a second model. (The wide
+// renderPhaseMatrixInto is built for a 14-column table and collides with itself
+// at this width, which is why this stays its own compact layout.)
+function contractAllocHtml(){
+  var jid=E.job();
+  if(typeof appData==='undefined' || !appData) return '';
+  var blds=(appData.buildings||[]).filter(function(b){ return b.jobId===jid; });
+  var rows=(appData.phases||[]).filter(function(p){ return p.jobId===jid; });
+  var pRev=function(p){ return Number((p&&(p.asSoldRevenue||p.asSoldPhaseBudget||p.phaseBudget))||0); };
+  var names=[]; rows.forEach(function(p){ var n=p.phase||'Unnamed'; if(names.indexOf(n)<0) names.push(n); });
+  names.sort();
+  var jc=ngJobContract();
+  if(!names.length || !blds.length){
+    return '<div style="padding:8px 0;font-size:11px;color:#8b90a5;line-height:1.5;">Nothing to allocate yet — '
+      +blds.length+' building'+(blds.length===1?'':'s')+', '+names.length+' scope'+(names.length===1?'':'s')+'.<br>'
+      +'Add a building and a scope; every scope×building cell becomes one AIA schedule-of-values line.</div>';
   }
-  // The matrix paints nothing until the job has both scopes and buildings.
-  if(!host.innerHTML){
-    var nB=(typeof appData!=='undefined'&&appData.buildings)?appData.buildings.filter(function(b){return b.jobId===E.job();}).length:0;
-    var nS=(typeof appData!=='undefined'&&appData.phases)?Object.keys((appData.phases||[]).filter(function(p){return p.jobId===E.job();}).reduce(function(a,p){a[p.phase||'Unnamed']=1;return a;},{})).length:0;
-    host.innerHTML='<div style="padding:8px 0;font-size:11px;color:#8b90a5;line-height:1.5;">'
-      +'Nothing to allocate yet — this job has '+nB+' building'+(nB===1?'':'s')+' and '+nS+' scope'+(nS===1?'':'s')+'.<br>'
-      +'Add a building and a scope, then every scope×building cell becomes one AIA schedule-of-values line.</div>';
-  }
+  var h='<div style="font-size:10.5px;color:#8b90a5;margin-bottom:6px;line-height:1.45;">Each scope×building cell is one AIA schedule-of-values line (“B5 - Exterior Painting”). Edit in the full grid on the job’s Scopes section.</div>'
+   +'<div style="display:flex;align-items:center;gap:6px;margin-bottom:5px;font-size:11px;"><span style="flex:1;color:#8b90a5;">Job contract</span>'
+   +'<span style="font-family:\'Courier New\',monospace;color:#34d399;font-weight:700;">'+E.fmtC(jc)+'</span></div>'
+   +'<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:11px;">'
+   +'<thead><tr style="color:#8b90a5;font-size:9px;text-transform:uppercase;letter-spacing:.5px;">'
+   +'<th style="text-align:left;padding:3px 4px;">Scope</th><th style="text-align:right;padding:3px 4px;">Revenue</th>';
+  blds.forEach(function(b){ h+='<th style="text-align:right;padding:3px 4px;">'+luEsc(b.name||'Bldg')+'</th>'; });
+  h+='</tr></thead><tbody>';
+  var colTot={}; blds.forEach(function(b){ colTot[b.id]=0; });
+  var grand=0, unTot=0;
+  names.forEach(function(nm){
+    var recs=rows.filter(function(p){ return (p.phase||'Unnamed')===nm; });
+    var rowTot=recs.reduce(function(a,p){ return a+pRev(p); },0); grand+=rowTot;
+    unTot+=recs.filter(function(p){ return !p.buildingId; }).reduce(function(a,p){ return a+pRev(p); },0);
+    h+='<tr style="border-top:1px solid var(--ng-border2);">'
+      +'<td style="padding:3px 4px;color:var(--ng-text,#c8cbe0);white-space:nowrap;">'+luEsc(nm)+'</td>'
+      +'<td style="padding:3px 4px;text-align:right;font-family:\'Courier New\',monospace;color:#34d399;">'+E.fmtC(rowTot)+'</td>';
+    blds.forEach(function(b){
+      var v=recs.filter(function(p){ return p.buildingId===b.id; }).reduce(function(a,p){ return a+pRev(p); },0);
+      colTot[b.id]+=v;
+      var pct=rowTot>0?(v/rowTot*100):0;
+      h+='<td style="padding:3px 4px;text-align:right;">'
+        +'<span style="font-family:\'Courier New\',monospace;color:'+(v>0?'#fbbf24':'#4a4f63')+';">'+pct.toFixed(1)+'%</span>'
+        +'<div style="font-size:9px;color:#6b6f82;font-family:\'Courier New\',monospace;">'+E.fmtC(v)+'</div></td>';
+    });
+    h+='</tr>';
+  });
+  var tOk=Math.abs(grand-jc)<0.5;
+  h+='<tr style="border-top:2px solid var(--ng-border2);font-weight:700;color:#c8cbe0;">'
+    +'<td style="padding:4px;">Total</td>'
+    +'<td style="padding:4px;text-align:right;font-family:\'Courier New\',monospace;color:'+(tOk?'#34d399':'#f87171')+';">'+E.fmtC(grand)+(tOk?' ✓':' ⚠')+'</td>';
+  blds.forEach(function(b){ h+='<td style="padding:4px;text-align:right;font-family:\'Courier New\',monospace;color:#4f8cff;">'+E.fmtC(colTot[b.id])+'</td>'; });
+  h+='</tr></tbody></table></div>';
+  if(!tOk) h+='<div style="font-size:10px;color:'+(grand<jc?'#f87171':'#fbbf24')+';padding:3px 0;">Allocated '+E.fmtC(grand)+' vs job contract '+E.fmtC(jc)+' — '+E.fmtC(Math.abs(jc-grand))+(grand<jc?' unallocated.':' over.')+'</div>';
+  if(unTot>0.5) h+='<div style="font-size:10px;color:#fbbf24;padding:3px 0;">'+E.fmtC(unTot)+' is not assigned to any building — it will not appear on the AIA as a building line.</div>';
+  return h;
 }
 function wirePctEdit(wpc){
   var wpPhId=wpc.getAttribute('data-wire-pct-phase');
