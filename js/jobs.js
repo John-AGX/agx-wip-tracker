@@ -5650,13 +5650,17 @@ function renderJobsMain() {
             if (!appState.editBuildingId) return;
             const bldgId = appState.editBuildingId;
             const phases = appData.phases.filter(p => p.buildingId === bldgId);
+            // Capture the name BEFORE the record goes — the graph cleanup needs it
+            // to find nodes that carry no data link (see _deleteBuildingConfirmed).
+            const bldgRec = appData.buildings.find(b => b.id === bldgId);
+            const bldgName = bldgRec ? String(bldgRec.name || '').trim() : '';
             _confirmDelete('building', {
                 message: phases.length
                     ? 'This building has ' + phases.length + ' scope record(s). Delete the building AND all of them?'
                     : 'Delete this building?'
-            }).then(function (ok) { if (ok) _deleteBuildingConfirmed(bldgId, phases); });
+            }).then(function (ok) { if (ok) _deleteBuildingConfirmed(bldgId, phases, bldgName); });
         }
-        function _deleteBuildingConfirmed(bldgId, phases) {
+        function _deleteBuildingConfirmed(bldgId, phases, bldgName) {
             if (phases.length) appData.phases = appData.phases.filter(p => p.buildingId !== bldgId);
             appData.buildings = appData.buildings.filter(b => b.id !== bldgId);
             appState.editBuildingId = null;
@@ -5670,8 +5674,19 @@ function renderJobsMain() {
                     const phaseIds = phases.map(p => p.id);
                     const ngNodes = NG.nodes();
                     const ngWires = NG.wires();
+                    // Match the building node by data.id OR by name. A building
+                    // TRACED on the satellite map is spawned label-only and has no
+                    // `data` at all, so an id-only match never found it: the record
+                    // was deleted, the footprint stayed on the map, and the orphan
+                    // self-heal in nodegraph/ui.js then recreated the record from
+                    // that surviving node — the building "came back instantly".
+                    const wantName = String(bldgName || '').trim().toLowerCase();
+                    const nodeName = n => String(n.label || '').split(' › ')[0].split(' > ')[0].trim().toLowerCase();
                     const nodeIdsToRemove = ngNodes.filter(n =>
-                        (n.type === 't1' && n.data && n.data.id === bldgId) ||
+                        (n.type === 't1' && (
+                            (n.data && n.data.id === bldgId) ||
+                            (!(n.data && n.data.id) && wantName && nodeName(n) === wantName)
+                        )) ||
                         (n.type === 't2' && n.data && phaseIds.indexOf(n.data.id) !== -1)
                     ).map(n => n.id);
                     if (nodeIdsToRemove.length) {
@@ -5750,6 +5765,28 @@ function renderJobsMain() {
             });
         }
 
+        // Rename the building's site-plan node so the graph->appData sync (which
+        // copies node.label onto building.name on every run) carries the new name
+        // instead of reverting to the old one. Traced nodes have no data link, so
+        // fall back to matching on the previous name.
+        function _renameBuildingNode(bldgId, priorName, newName) {
+            if (!newName || newName === priorName) return;
+            if (typeof NG === 'undefined' || !NG.nodes) return;
+            try {
+                var want = String(priorName || '').trim().toLowerCase();
+                var base = function (n) { return String(n.label || '').split(' › ')[0].split(' > ')[0].trim(); };
+                var node = NG.nodes().find(function (n) {
+                    if (n.type !== 't1') return false;
+                    if (n.data && n.data.id) return n.data.id === bldgId;
+                    return want && base(n).toLowerCase() === want;
+                });
+                if (!node) return;
+                // Preserve any " › suffix" the label carries after the base name.
+                var rest = String(node.label || '').slice(base(node).length);
+                node.label = newName + rest;
+                if (NG.saveGraph) NG.saveGraph();
+            } catch (e) {}
+        }
         function saveBuilding() {
             const hoursWeek = parseFloat(document.getElementById('buildingHoursWeek').value) || 0;
             const hoursTotal = (parseFloat(document.getElementById('buildingHoursTotal').value) || 0) + hoursWeek;
@@ -5778,7 +5815,14 @@ function renderJobsMain() {
             if (appState.editBuildingId) {
                 const idx = appData.buildings.findIndex(b => b.id === appState.editBuildingId);
                 if (idx !== -1) {
+                    const priorName = String(appData.buildings[idx].name || '').trim();
                     Object.assign(appData.buildings[idx], formData);
+                    // Carry the rename onto the graph node. The site-plan sync
+                    // copies node.label -> building.name on EVERY run, so without
+                    // this the node's old label overwrites the new name on the next
+                    // sync and the rename silently reverts. Matched by data.id, or
+                    // by the OLD name for traced nodes, which carry no data link.
+                    _renameBuildingNode(appState.editBuildingId, priorName, String(formData.name || '').trim());
                 }
                 appState.editBuildingId = null;
             } else {
