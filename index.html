@@ -3220,28 +3220,28 @@
          BEFORE admin.js so window.p86EmailBlocks is available at the
          time renderTemplateEditor() runs its mount call. -->
     <script src="js/email-block-editor.js?v=6"></script>
-    <script src="js/admin.js?v=122"></script>
+    <script src="js/admin.js?v=123"></script>
     <!-- Act-as / disguise mode: persistent "Acting as NAME — Exit" banner +
          window.p86ActAs(userId). Self-contained; re-fetches /api/auth/me. -->
     <script src="js/actas.js?v=1"></script>
-    <script src="js/admin-context-registry.js?v=4"></script>
-    <script src="js/field-tools.js?v=11"></script>
+    <script src="js/admin-context-registry.js?v=5"></script>
+    <script src="js/field-tools.js?v=12"></script>
     <div id="clientDashboardModal" class="modal">
       <div class="modal-content" style="max-width:1120px;width:96vw;max-height:92vh;display:flex;flex-direction:column;">
         <div id="clientDashboard_body" style="padding:20px 22px;overflow-y:auto;flex:1;"></div>
       </div>
     </div>
-    <script src="js/clients.js?v=25"></script>
+    <script src="js/clients.js?v=26"></script>
     <script src="js/clients-dashboard.js?v=6"></script>
     <!-- Folder taxonomy — default folder structure per entity type
          (lead / estimate / job / client). Loads before subs.js and
          my-files.js, which merge it with live folders for the grant
          dropdown and the My Files tree. -->
     <script src="js/folder-taxonomy.js?v=2"></script>
-    <script src="js/subs.js?v=12"></script>
+    <script src="js/subs.js?v=13"></script>
     <script src="js/assemblies.js?v=10"></script>
     <script src="js/job-audit.js?v=4d"></script>
-    <script src="js/job-reports.js?v=1b"></script>
+    <script src="js/job-reports.js?v=2b"></script>
     <!-- Shared table enhancements (reorder / resize / freeze first column /
          internal scroll / persisted layout) for the Jobs, Estimates and
          Leads lists. Loads BEFORE those renderers so window.p86Tables is
@@ -3249,9 +3249,9 @@
     <script src="js/table-enhancements.js?v=14"></script>
     <script src="js/bulk-ribbon.js?v=1"></script>
     <script src="js/job-finalize.js?v=3"></script>
-    <script src="js/leads.js?v=74"></script>
-    <script src="js/job-costs-import.js?v=6"></script>
-    <script src="js/qb-costs-view.js?v=13"></script>
+    <script src="js/leads.js?v=75"></script>
+    <script src="js/job-costs-import.js?v=7"></script>
+    <script src="js/qb-costs-view.js?v=14"></script>
     <script src="js/insights.js?v=7"></script>
     <script src="js/schedule.js?v=50"></script>
     <script src="js/my-day.js?v=7"></script>
@@ -3268,13 +3268,13 @@
          window.openHelpOverlay — must load after app.js. -->
     <script src="js/guide.js?v=2"></script>
     <script src="js/help-center.js?v=2"></script>
-    <script src="js/compliance-review-ui.js?v=3"></script>
+    <script src="js/compliance-review-ui.js?v=4"></script>
     <script src="js/messaging.js?v=7"></script>
     <script src="js/email-hub.js?v=7"></script>
     <script src="js/agent-tasks.js?v=11"></script>
     <script src="js/crew-chip.js?v=2"></script>
     <script src="js/file-explorer.js?v=8"></script>
-    <script src="js/my-files.js?v=22"></script>
+    <script src="js/my-files.js?v=23"></script>
     <!-- Tasks / To-Do UI. Loads after my-files.js (reuses window.p86Toast)
          and after api.js/auth.js (p86Api.tasks + p86Auth). -->
     <script src="js/tasks.js?v=7"></script>
@@ -3321,14 +3321,14 @@
     <script src="js/projects.js?v=68"></script>
     <script src="js/receipt-scanner.js?v=2"></script>
     <script src="js/list-filter.js?v=1"></script>
-    <script src="js/cost-inbox.js?v=17"></script>
+    <script src="js/cost-inbox.js?v=18"></script>
     <script src="js/invoices.js?v=1"></script>
     <script src="js/console-docs.js?v=2"></script>
     <script src="js/console.js?v=16"></script>
     <!-- Jobs Hub — cross-job index pages (Purchase Orders / Change Orders /
          RFIs / Submittals) for the Jobs sidebar dropdown. Uses p86Api +
          appData.jobs + editJob/switchJobSubTab at runtime. -->
-    <script src="js/jobs-hub.js?v=19"></script>
+    <script src="js/jobs-hub.js?v=20"></script>
     <script src="js/assembly-studio.js?v=3"></script>
     <!-- Purchase Order editor — full-window overlay opened from the Jobs
          hub Purchase Orders list. Uses p86Api.purchaseOrders + subs. -->
@@ -3339,21 +3339,21 @@
          estimate-preview + the upcoming change-order-editor. Loads
          BEFORE any of them so window.p86Pricing is ready. -->
     <script src="js/pricing-pipeline.js?v=2"></script>
-    <script src="js/jobs.js?v=177"></script>
+    <script src="js/jobs.js?v=178"></script>
     <script src="js/doc-import.js?v=3"></script>
-    <script src="js/job-workflow-ui.js?v=5"></script>
+    <script src="js/job-workflow-ui.js?v=6"></script>
     <!-- Reusable rich-text field (window.p86RichText) — shared WYSIWYG for
          Scope / Terms / notes / proposals / reports. Load before the editors
          that mount it. -->
     <script src="js/rich-text.js?v=1"></script>
-    <script src="js/estimates.js?v=54"></script>
+    <script src="js/estimates.js?v=55"></script>
     <script src="js/proposal.js?v=26"></script>
     <script src="js/estimate-editor.js?v=87"></script>
     <!-- Change Order editor — overlay opened from the job detail's
          Change Orders tab. Loads after pricing-pipeline (which it
          consumes via window.p86Pricing) and after api.js (which
          carries the window.p86Api.changeOrders wrapper). -->
-    <script src="js/change-order-editor.js?v=11"></script>
+    <script src="js/change-order-editor.js?v=12"></script>
     <script src="js/materials-drawer.js?v=12"></script>
     <script src="js/estimate-preview.js?v=15"></script>
     <script src="js/bt-export.js?v=6b"></script>
@@ -3369,7 +3369,7 @@
     <script src="js/save-from-chat.js?v=1"></script>
     <script src="js/tab-slider.js?v=1b"></script>
 
-    <script src="js/workspace.js?v=52"></script>
+    <script src="js/workspace.js?v=53"></script>
     <script src="js/workspace-layout.js?v=99"></script>
 
     <!-- URL router — pathname-based navigation. Loads last so all

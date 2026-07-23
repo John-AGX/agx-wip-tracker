@@ -1,3 +1,19 @@
+// Promise confirm. Native confirm() returns undefined inside an installed PWA,
+// so every `if (!confirm(x)) return` guard silently did nothing there: the
+// dialog never appeared and the action never ran. Uses the in-app overlay when
+// present, native only as a fallback.
+function p86Ask(message, opts) {
+  opts = opts || {};
+  if (typeof window.p86Confirm === 'function') {
+    return window.p86Confirm({
+      title: opts.title || 'Confirm', message: message,
+      confirmLabel: opts.confirmLabel || 'Confirm', confirmText: opts.confirmLabel || 'Confirm',
+      cancelLabel: 'Cancel', cancelText: 'Cancel',
+      danger: opts.danger !== false, destructive: opts.danger !== false
+    });
+  }
+  return Promise.resolve(window.confirm(message));
+}
 // Project 86 Admin module — users management UI.
 // Backed by /api/auth/users (list/create/update) and the password-reset endpoint.
 (function() {
@@ -404,11 +420,11 @@
       });
   }
 
-  function revokeJobAccess(userId) {
+  async function revokeJobAccess(userId) {
     if (!_currentSharingJobId) return;
     var u = _currentSharingShares.find(function(x) { return x.user_id === userId; });
     var name = u ? u.name : 'this user';
-    if (!confirm('Revoke ' + name + "'s access to this job?")) return;
+    if (!(await p86Ask('Revoke ' + name + "'s access to this job?"))) return;
     window.p86Api.jobs.revokeAccess(_currentSharingJobId, userId)
       .then(function() {
         renderJobSharing(_currentSharingJobId);
@@ -627,10 +643,10 @@
       .catch(function(err) { alert('Update failed: ' + (err.message || '')); });
   }
 
-  function revokeAdminJobAccess(userId) {
+  async function revokeAdminJobAccess(userId) {
     if (!_currentSharingJobId) return;
     var u = _currentSharingShares.find(function(x) { return x.user_id === userId; });
-    if (!confirm('Revoke ' + (u ? u.name : 'this user') + "'s access?")) return;
+    if (!(await p86Ask('Revoke ' + (u ? u.name : 'this user') + "'s access?"))) return;
     window.p86Api.jobs.revokeAccess(_currentSharingJobId, userId)
       .then(function() {
         refreshShareManager(_currentSharingJobId);
@@ -710,8 +726,8 @@
     }).catch(function() { /* leave default */ });
   }
 
-  function recategorizeMaterials() {
-    if (!confirm('Re-run category mapping across all materials that haven\'t been manually edited? Curated rows are preserved.')) return;
+  async function recategorizeMaterials() {
+    if (!(await p86Ask('Re-run category mapping across all materials that haven\'t been manually edited? Curated rows are preserved.'))) return;
     window.p86Api.materials.recategorize().then(function(res) {
       var statusEl = document.getElementById('mat-import-status');
       if (statusEl) {
@@ -2267,7 +2283,7 @@
     if (!c.name) { alert('Campaign needs a name.'); return; }
     if (!c.subject) { alert('Campaign needs a subject.'); return; }
     if (!c.body) { alert('Campaign needs a body.'); return; }
-    saveDraftSilent().then(function(id) {
+    saveDraftSilent().then(async function(id) {
       if (!thenSend) {
         alert('Draft saved.');
         _campaignsView = 'list';
@@ -2277,7 +2293,7 @@
       // Confirm before firing.
       var sched = c.scheduled_at;
       var label = sched ? 'schedule send for ' + new Date(sched).toLocaleString() : 'send now';
-      if (!confirm('Ready to ' + label + '? This will resolve the recipient list and queue all emails.')) return;
+      if (!(await p86Ask('Ready to ' + label + '? This will resolve the recipient list and queue all emails.'))) return;
       return window.p86Api.post('/api/email/campaigns/' + encodeURIComponent(id) + '/send',
         sched ? { scheduled_at: sched } : {}
       ).then(function(r) {
@@ -2295,8 +2311,8 @@
   }
   window.saveCampaign = saveCampaign;
 
-  function cancelCampaign(id) {
-    if (!confirm('Cancel this campaign? Any queued recipients will be dropped.')) return;
+  async function cancelCampaign(id) {
+    if (!(await p86Ask('Cancel this campaign? Any queued recipients will be dropped.'))) return;
     window.p86Api.post('/api/email/campaigns/' + encodeURIComponent(id) + '/cancel', {}).then(function() {
       _campaignsView = 'list';
       renderCampaignsHost();
@@ -2304,8 +2320,8 @@
   }
   window.cancelCampaign = cancelCampaign;
 
-  function deleteCampaign(id) {
-    if (!confirm('Archive this campaign? It will be hidden from the list (history is preserved).')) return;
+  async function deleteCampaign(id) {
+    if (!(await p86Ask('Archive this campaign? It will be hidden from the list (history is preserved).'))) return;
     window.p86Api.del('/api/email/campaigns/' + encodeURIComponent(id)).then(function() {
       loadCampaignsList();
     }).catch(function(err) { alert('Archive failed: ' + (err.message || '')); });
@@ -3229,7 +3245,7 @@
   // the editor so the admin can tweak the entire template — header,
   // footer, signature, links, everything — without losing the variable
   // bindings. Doesn't save until they click Save override.
-  function loadDefaultIntoEditor() {
+  async function loadDefaultIntoEditor() {
     if (!_templateDetail) return;
     var src = _templateDetail.defaultSource;
     if (!src) {
@@ -3237,7 +3253,7 @@
       if (statusEl0) statusEl0.innerHTML = '<span style="color:#fbbf24;">No default source available for this template.</span>';
       return;
     }
-    if (!confirm('Load the default template source into the editor?\n\nThis replaces whatever is in the Subject + body fields with the baked-in source. Nothing is saved until you click Save.')) return;
+    if (!(await p86Ask('Load the default template source into the editor?\n\nThis replaces whatever is in the Subject + body fields with the baked-in source. Nothing is saved until you click Save.'))) return;
     var subjectEl = document.getElementById('email-tpl-subject');
     if (subjectEl) subjectEl.value = src.subject || '';
     // Prefer the block-based default if the source ships blocks;
@@ -3281,9 +3297,9 @@
     });
   }
 
-  function resetTemplate() {
+  async function resetTemplate() {
     if (!_templateActiveKey) return;
-    if (!confirm('Revert this template to the baked-in default? Your override will be discarded.')) return;
+    if (!(await p86Ask('Revert this template to the baked-in default? Your override will be discarded.'))) return;
     var status = document.getElementById('email-tpl-status');
     if (status) status.innerHTML = '<span style="color:#60a5fa;">Reverting…</span>';
     window.p86Api.del('/api/email/templates/' + encodeURIComponent(_templateActiveKey)).then(function() {
@@ -3465,10 +3481,10 @@
     });
   };
 
-  window.deleteMemoryRow = function(idx) {
+  window.deleteMemoryRow = async function(idx) {
     var row = _memoryRows[idx];
     if (!row) return;
-    if (!confirm('Archive memory entry "' + (row.name || '(unnamed)') + '"? This soft-deletes it - the row stays in the DB with archived_at set, so a future "show archived" view could restore it.')) return;
+    if (!(await p86Ask('Archive memory entry "' + (row.name || '(unnamed)') + '"? This soft-deletes it - the row stays in the DB with archived_at set, so a future "show archived" view could restore it.'))) return;
     // New rows that haven't been saved yet can just drop from the local array.
     if (row._isNew || row.id == null) {
       _memoryRows.splice(idx, 1);
@@ -4134,11 +4150,11 @@
     renderTemplatesForm();
   }
 
-  function deleteSkill(idx) {
+  async function deleteSkill(idx) {
     if (!_skillsDraft || !Array.isArray(_skillsDraft.skills)) return;
     var skill = _skillsDraft.skills[idx];
     if (!skill) return;
-    if (!confirm('Remove skill pack "' + (skill.name || '(unnamed)') + '"?')) return;
+    if (!(await p86Ask('Remove skill pack "' + (skill.name || '(unnamed)') + '"?'))) return;
     syncTopLevelDraftFromInputs();
     syncBTMappingFromInputs();
     syncSkillsFromInputs();
@@ -4180,9 +4196,9 @@
     if (rows.length) rows[rows.length - 1].focus();
   }
 
-  function deleteExclusion(idx) {
+  async function deleteExclusion(idx) {
     if (!_templateDraft || !Array.isArray(_templateDraft.exclusions)) return;
-    if (!confirm('Remove exclusion ' + (idx + 1) + '?')) return;
+    if (!(await p86Ask('Remove exclusion ' + (idx + 1) + '?'))) return;
     syncTopLevelDraftFromInputs();
     _templateDraft.exclusions.splice(idx, 1);
     renderTemplatesForm();
@@ -4391,10 +4407,10 @@
     });
   }
 
-  function deleteAdminRole(name) {
+  async function deleteAdminRole(name) {
     var role = _rolesCache.find(function(r) { return r.name === name; });
     if (!role) return;
-    if (!confirm('Delete role "' + role.label + '"? Will fail if any user is still assigned to it.')) return;
+    if (!(await p86Ask('Delete role "' + role.label + '"? Will fail if any user is still assigned to it.'))) return;
     window.p86Api.roles.remove(name).then(function() {
       renderAdminRoles();
     }).catch(function(err) {
@@ -4598,9 +4614,9 @@
 
   // Wipe this org's OCR accuracy history (receipt_ocr_feedback). Server-side is
   // admin-gated (ROLES_MANAGE) + org-scoped. Receipts + their photos are NOT touched.
-  function resetAdminOcrStats(btn) {
+  async function resetAdminOcrStats(btn) {
     if (!(window.p86Api && window.p86Api.receipts && window.p86Api.receipts.resetOcrStats)) return;
-    if (!confirm('Reset OCR accuracy?\n\nThis clears the AI read-accuracy history for your org so the stats start fresh. Your receipts and photos are NOT affected.')) return;
+    if (!(await p86Ask('Reset OCR accuracy?\n\nThis clears the AI read-accuracy history for your org so the stats start fresh. Your receipts and photos are NOT affected.'))) return;
     var note = document.getElementById('admin-ocr-note');
     if (btn) { btn.disabled = true; btn.textContent = 'Resetting…'; }
     window.p86Api.receipts.resetOcrStats().then(function(r) {
@@ -4709,13 +4725,13 @@
     }
   }
 
-  function deleteAdminUser(userId) {
+  async function deleteAdminUser(userId) {
     var u = _users.find(function(x) { return x.id === userId; });
     if (!u) return;
     var msg = 'Delete user "' + u.name + '" (' + u.email + ')? This cannot be undone.\n\n' +
               'If they own any jobs, the delete will fail and you should deactivate them ' +
               '(uncheck Active in Edit) instead, or reassign their jobs first.';
-    if (!confirm(msg)) return;
+    if (!(await p86Ask(msg))) return;
     window.p86Api.users.remove(userId)
       .then(function() {
         renderAdminUsers();
@@ -5228,11 +5244,11 @@
       // Wire kill buttons. Each click confirms, then POSTs to /audit/kill
       // and refreshes the modal.
       body.querySelectorAll('[data-kill-agent]').forEach(function(btn) {
-        btn.addEventListener('click', function() {
+        btn.addEventListener('click', async function() {
           var agentKey = btn.getAttribute('data-kill-agent');
           var orgId = btn.getAttribute('data-kill-org');
           if (!agentKey || !orgId) { alert('Missing agent_key or organization_id'); return; }
-          if (!confirm('Archive the Anthropic agent for ' + agentKey + '/' + orgId + ' and delete the local registry row?\n\nThis stops it from billing immediately. Cannot be undone.')) return;
+          if (!(await p86Ask('Archive the Anthropic agent for ' + agentKey + '/' + orgId + ' and delete the local registry row?\n\nThis stops it from billing immediately. Cannot be undone.'))) return;
           btn.disabled = true;
           btn.textContent = 'Killing…';
           window.p86Api.post('/api/admin/agents/managed/audit/kill', {
@@ -5872,8 +5888,8 @@
     });
   };
 
-  window.archiveMcpServer = function(serverId, name) {
-    if (!confirm('Archive MCP connector "' + name + '"? It will no longer register with the managed agent.')) return;
+  window.archiveMcpServer = async function(serverId, name) {
+    if (!(await p86Ask('Archive MCP connector "' + name + '"? It will no longer register with the managed agent.'))) return;
     var orgId = _orgDraft && _orgDraft.id;
     window.p86Api.del('/api/admin/organizations/' + orgId + '/mcp-servers/' + serverId)
       .then(function() { loadOrgMcpServers(); })
@@ -5952,8 +5968,8 @@
   }
   window.refreshOrgKB = refreshOrgKB;
 
-  function deleteOrgKBFile(attachmentId) {
-    if (!confirm('Remove this file from the company knowledge base?')) return;
+  async function deleteOrgKBFile(attachmentId) {
+    if (!(await p86Ask('Remove this file from the company knowledge base?'))) return;
     window.p86Api.attachments.remove(attachmentId).then(function() {
       refreshOrgKB();
     }).catch(function(err) {
@@ -6113,10 +6129,10 @@
     attachOrgHandlers();
   };
 
-  window.deleteOrgPack = function(idx) {
+  window.deleteOrgPack = async function(idx) {
     var pack = _orgPacksDraft && _orgPacksDraft[idx];
     if (!pack) return;
-    if (!confirm('Delete skill pack "' + (pack.name || '(unnamed)') + '"?\n\nSoft-deletes — sets archived_at on the row. Name becomes available for re-use immediately.')) return;
+    if (!(await p86Ask('Delete skill pack "' + (pack.name || '(unnamed)') + '"?\n\nSoft-deletes — sets archived_at on the row. Name becomes available for re-use immediately.'))) return;
     if (!pack.id) {
       // Never-saved row — just remove from draft
       _orgPacksDraft.splice(idx, 1);
@@ -6564,8 +6580,8 @@
     };
   };
 
-  window.archiveOrg = function(id, slug) {
-    if (!confirm('Archive organization "' + slug + '"?\n\nSoft-archives (sets archived_at). Users in that org won\'t be able to access their data via the chat surfaces. Data stays in the DB.')) return;
+  window.archiveOrg = async function(id, slug) {
+    if (!(await p86Ask('Archive organization "' + slug + '"?\n\nSoft-archives (sets archived_at). Users in that org won\'t be able to access their data via the chat surfaces. Data stays in the DB.'))) return;
     window.p86Api.del('/api/admin/organizations/' + id).then(function() {
       renderSystemOrganizations(document.getElementById('system-section-host'));
     }).catch(function(err) {
@@ -6951,8 +6967,8 @@
       if (l) openReferenceLinkEditor(l);
     });
   }
-  function deleteReferenceLink(id) {
-    if (!confirm('Delete this reference link? Agents will stop seeing this sheet on the next turn.')) return;
+  async function deleteReferenceLink(id) {
+    if (!(await p86Ask('Delete this reference link? Agents will stop seeing this sheet on the next turn.'))) return;
     window.p86Api.del('/api/admin/agents/reference-links/' + encodeURIComponent(id)).then(function() {
       renderReferenceLinksView();
     }).catch(function(err) {
@@ -7833,8 +7849,8 @@
     }).catch(function(err) { alert('Failed: ' + (err.message || 'unknown')); });
   }
 
-  function restoreSkillsVersion(id) {
-    if (!confirm('Restore version ' + id + '? Current state will be auto-snapshotted before applying.')) return;
+  async function restoreSkillsVersion(id) {
+    if (!(await p86Ask('Restore version ' + id + '? Current state will be auto-snapshotted before applying.'))) return;
     window.p86Api.post('/api/admin/agents/skills/versions/' + encodeURIComponent(id) + '/restore', {}).then(function() {
       alert('Restored. Reloading skills view.');
       switchAgentsView('skills');
@@ -7981,8 +7997,8 @@
     });
   };
 
-  window.detachAgentSkill = function(agentKey, skillId) {
-    if (!confirm('Detach this skill from ' + agentKey + '?\n\nThe native skill itself stays in Anthropic — this just removes the assignment. Re-attach anytime via the picker.')) return;
+  window.detachAgentSkill = async function(agentKey, skillId) {
+    if (!(await p86Ask('Detach this skill from ' + agentKey + '?\n\nThe native skill itself stays in Anthropic — this just removes the assignment. Re-attach anytime via the picker.'))) return;
     window.p86Api.del('/api/admin/agents/' + encodeURIComponent(agentKey) + '/native-skills/' + encodeURIComponent(skillId)).then(function() {
       loadOneAgentSkillCard(agentKey);
     }).catch(function(err) {
@@ -8105,8 +8121,8 @@
   // Push the current local agent definition to Anthropic as a new
   // version of the SAME agent id. Same agent_id, version increments —
   // unlike Bootstrap which creates a brand-new agent every time.
-  window.syncManagedAgent = function(agentKey) {
-    if (!confirm('Push local config for "' + agentKey + '" to Anthropic as a new version?\n\nUses beta.agents.update — same anthropic_agent_id, version increments. Existing sessions stay on their current version; new sessions pick up the new config.')) return;
+  window.syncManagedAgent = async function(agentKey) {
+    if (!(await p86Ask('Push local config for "' + agentKey + '" to Anthropic as a new version?\n\nUses beta.agents.update — same anthropic_agent_id, version increments. Existing sessions stay on their current version; new sessions pick up the new config.'))) return;
     window.p86Api.post('/api/admin/agents/managed/' + encodeURIComponent(agentKey) + '/sync', {}).then(function(resp) {
       alert('✓ Synced ' + agentKey + ' → v' + (resp.previous_version || '?') + ' → v' + (resp.new_version || '?') + '\nTools: ' + (resp.tool_count || 0) + ', Skills: ' + (resp.skill_count || 0));
       loadManagedAgents();
@@ -8115,8 +8131,8 @@
     });
   };
 
-  window.deleteStaleAgentRow = function(agentKey) {
-    if (!confirm('Delete the local registry row for "' + agentKey + '"?\n\nThis only removes the Project 86-side row in managed_agent_registry. The Anthropic-side agent (if any) is unaffected — you can leave it archived or delete it separately in the Anthropic console.')) return;
+  window.deleteStaleAgentRow = async function(agentKey) {
+    if (!(await p86Ask('Delete the local registry row for "' + agentKey + '"?\n\nThis only removes the Project 86-side row in managed_agent_registry. The Anthropic-side agent (if any) is unaffected — you can leave it archived or delete it separately in the Anthropic console.'))) return;
     window.p86Api.del('/api/admin/agents/managed/' + encodeURIComponent(agentKey)).then(function() {
       loadManagedAgents();
     }).catch(function(err) {
@@ -8127,8 +8143,8 @@
   // Bulk sync — every registered agent gets pushed in one round-trip.
   // Per-agent failures don't abort the rest; the summary alert shows
   // the result per agent.
-  window.syncAllManagedAgents = function() {
-    if (!confirm('Push local config to Anthropic for EVERY registered agent?\n\nEach agent gets a new version (beta.agents.update). Per-agent failures don\'t abort the rest. Existing sessions on the old versions keep working.')) return;
+  window.syncAllManagedAgents = async function() {
+    if (!(await p86Ask('Push local config to Anthropic for EVERY registered agent?\n\nEach agent gets a new version (beta.agents.update). Per-agent failures don\'t abort the rest. Existing sessions on the old versions keep working.'))) return;
     window.p86Api.post('/api/admin/agents/managed/sync-all', {}).then(function(resp) {
       var summary = (resp && resp.summary) || [];
       if (!summary.length) {
@@ -8146,9 +8162,9 @@
     });
   };
 
-  function bootstrapManagedAgents(key) {
+  async function bootstrapManagedAgents(key) {
     var label = (key === 'all') ? 'every unregistered Project 86 agent' : key;
-    if (!confirm('Register ' + label + ' as Anthropic-side managed Agent(s)?\n\nIdempotent — agents already in the registry stay as-is. Each registration consumes a beta.agents.create call. The chat path is unaffected; this just creates the Agent records that a future v2 chat endpoint will reference.\n\nNeeds ANTHROPIC_API_KEY set on the server.')) return;
+    if (!(await p86Ask('Register ' + label + ' as Anthropic-side managed Agent(s)?\n\nIdempotent — agents already in the registry stay as-is. Each registration consumes a beta.agents.create call. The chat path is unaffected; this just creates the Agent records that a future v2 chat endpoint will reference.\n\nNeeds ANTHROPIC_API_KEY set on the server.'))) return;
     window.p86Api.post('/api/admin/agents/managed/bootstrap?key=' + encodeURIComponent(key), {}).then(function(resp) {
       var summary = (resp && resp.summary) || [];
       var msg = summary.map(function(s) {
@@ -8232,10 +8248,10 @@
 
   // Delete handler — confirm, DELETE, re-list. Decoded id back from
   // the URI-encoded inline-onclick value.
-  window.deleteNativeSkill = function(encId, encName) {
+  window.deleteNativeSkill = async function(encId, encName) {
     var id = decodeURIComponent(encId);
     var name = decodeURIComponent(encName);
-    if (!confirm('Delete native Skill "' + name + '" (' + id + ')?\n\nThis removes the skill from Anthropic. Any agent registered with this skill_id will lose access on next bootstrap. Local skill packs (if any) keep their bodies — the next time you mirror them, a fresh native skill is created.')) return;
+    if (!(await p86Ask('Delete native Skill "' + name + '" (' + id + ')?\n\nThis removes the skill from Anthropic. Any agent registered with this skill_id will lose access on next bootstrap. Local skill packs (if any) keep their bodies — the next time you mirror them, a fresh native skill is created.'))) return;
     window.p86Api.del('/api/admin/anthropic/skills/' + encodeURIComponent(id)).then(function() {
       loadAnthropicSkills();
     }).catch(function(err) {
@@ -8389,8 +8405,8 @@
   // beta.skills API. Mirrors the body so it's visible on the
   // Anthropic side; runtime cutover (chat actually loading skills
   // on-demand) is a separate workstream and stays unchanged for now.
-  function syncAllSkillsToAnthropic() {
-    if (!confirm('Mirror every local pack to Anthropic Skills?\n\nUploads each pack as a SKILL.md via beta.skills.create. Already-mirrored packs are skipped. The chat path is unchanged — this just makes the packs visible in Anthropic\'s native Skills system.\n\nNeeds ANTHROPIC_API_KEY set on the server.')) return;
+  async function syncAllSkillsToAnthropic() {
+    if (!(await p86Ask('Mirror every local pack to Anthropic Skills?\n\nUploads each pack as a SKILL.md via beta.skills.create. Already-mirrored packs are skipped. The chat path is unchanged — this just makes the packs visible in Anthropic\'s native Skills system.\n\nNeeds ANTHROPIC_API_KEY set on the server.'))) return;
     var statusEl = document.getElementById('agents-skills-status');
     if (statusEl) { statusEl.textContent = 'Syncing all packs to Anthropic…'; statusEl.style.color = 'var(--text-dim,#888)'; }
     window.p86Api.post('/api/admin/agents/skills/sync-all-to-anthropic', {}).then(function(resp) {
@@ -8414,8 +8430,8 @@
     });
   }
 
-  function unsyncSkillFromAnthropic(idx) {
-    if (!confirm('Delete the Anthropic-side mirror for this pack?\n\nThe local pack stays. The next time you click Mirror, a fresh copy goes up — useful when the body has changed and you want to refresh the mirror.')) return;
+  async function unsyncSkillFromAnthropic(idx) {
+    if (!(await p86Ask('Delete the Anthropic-side mirror for this pack?\n\nThe local pack stays. The next time you click Mirror, a fresh copy goes up — useful when the body has changed and you want to refresh the mirror.'))) return;
     window.p86Api.post('/api/admin/agents/skills/' + encodeURIComponent(idx) + '/unsync-from-anthropic', {}).then(function(resp) {
       if (resp.delete_error) {
         alert('Local link cleared.\n\nNote: Anthropic-side delete also reported: ' + resp.delete_error);
@@ -8445,8 +8461,8 @@
   // agent on Anthropic's side keeps serving the OLD skill list until
   // someone manually clicks Bootstrap. Shown in the Skills view
   // header so the user sees "attach → click sync → done."
-  window.syncManagedAgentsAfterSkillEdit = function() {
-    if (!confirm('Push attach/detach changes to Anthropic now?\n\nThis re-registers all three managed agents (job, cra, staff) with their current skill + tool lists. Takes a few seconds. Existing in-flight chats keep their current agent version; new turns bind to the updated one.')) return;
+  window.syncManagedAgentsAfterSkillEdit = async function() {
+    if (!(await p86Ask('Push attach/detach changes to Anthropic now?\n\nThis re-registers all three managed agents (job, cra, staff) with their current skill + tool lists. Takes a few seconds. Existing in-flight chats keep their current agent version; new turns bind to the updated one.'))) return;
     var btn = event && event.target && event.target.closest('button');
     if (btn) { btn.disabled = true; var prev = btn.textContent; btn.textContent = 'Syncing…'; btn.dataset.prev = prev; }
     window.p86Api.post('/api/admin/agents/managed/sync-all', {}).then(function(resp) {
@@ -8471,10 +8487,10 @@
   // Sequential, ~10-30s per eval; UI shows a per-row pass/fail
   // summary as the response lands. If an eval fails, the admin can
   // restore an earlier version via History.
-  function runAllEvals() {
+  async function runAllEvals() {
     var host = document.getElementById('agents-skills-eval-results');
     if (!host) return;
-    if (!confirm('Run every defined eval against the currently saved skill packs?\n\nEach eval makes a real Anthropic API call (no caching across evals). With 5 evals this typically costs $0.10-$0.50 and takes 30-90 seconds.')) return;
+    if (!(await p86Ask('Run every defined eval against the currently saved skill packs?\n\nEach eval makes a real Anthropic API call (no caching across evals). With 5 evals this typically costs $0.10-$0.50 and takes 30-90 seconds.'))) return;
     host.innerHTML = '<div style="color:var(--text-dim,#888);font-style:italic;font-size:12px;padding:14px 0;">Running all evals (this may take a minute)…</div>';
     window.p86Api.post('/api/admin/agents/skills/run-all-evals', {}).then(function(resp) {
       var summary = (resp && resp.summary) || [];
@@ -8776,8 +8792,8 @@
     renderAdminAgents();
   }
 
-  function deleteEval(id) {
-    if (!confirm('Delete this eval fixture? Its run history will also be removed.')) return;
+  async function deleteEval(id) {
+    if (!(await p86Ask('Delete this eval fixture? Its run history will also be removed.'))) return;
     window.p86Api.del('/api/admin/agents/evals/' + encodeURIComponent(id)).then(function() {
       _agentsEvalId = null;
       renderAdminAgents();

@@ -1,3 +1,19 @@
+// Promise confirm. Native confirm() returns undefined inside an installed PWA,
+// so every `if (!confirm(x)) return` guard silently did nothing there: the
+// dialog never appeared and the action never ran. Uses the in-app overlay when
+// present, native only as a fallback.
+function p86Ask(message, opts) {
+  opts = opts || {};
+  if (typeof window.p86Confirm === 'function') {
+    return window.p86Confirm({
+      title: opts.title || 'Confirm', message: message,
+      confirmLabel: opts.confirmLabel || 'Confirm', confirmText: opts.confirmLabel || 'Confirm',
+      cancelLabel: 'Cancel', cancelText: 'Cancel',
+      danger: opts.danger !== false, destructive: opts.danger !== false
+    });
+  }
+  return Promise.resolve(window.confirm(message));
+}
 // My Files — per-user personal file folder.
 //
 // Each authenticated user gets their own attachments bucket
@@ -1234,9 +1250,9 @@
     '</div>';
   }
 
-  function deletePrintout(id) {
+  async function deletePrintout(id) {
     if (!id) return;
-    if (!confirm('Delete this printout? This cannot be undone.')) return;
+    if (!(await p86Ask('Delete this printout? This cannot be undone.'))) return;
     window.p86Api.del('/api/field-tools/runs/' + encodeURIComponent(id))
       .then(fetchPrintouts)
       .then(function() {

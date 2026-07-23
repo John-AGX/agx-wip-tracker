@@ -1,3 +1,19 @@
+// Promise confirm. Native confirm() returns undefined inside an installed PWA,
+// so every `if (!confirm(x)) return` guard silently did nothing there: the
+// dialog never appeared and the action never ran. Uses the in-app overlay when
+// present, native only as a fallback.
+function p86Ask(message, opts) {
+  opts = opts || {};
+  if (typeof window.p86Confirm === 'function') {
+    return window.p86Confirm({
+      title: opts.title || 'Confirm', message: message,
+      confirmLabel: opts.confirmLabel || 'Confirm', confirmText: opts.confirmLabel || 'Confirm',
+      cancelLabel: 'Cancel', cancelText: 'Cancel',
+      danger: opts.danger !== false, destructive: opts.danger !== false
+    });
+  }
+  return Promise.resolve(window.confirm(message));
+}
 // Project 86 Clients module — directory rendered on the Estimates tab.
 //
 // First pass: read-only list with parent/child grouping (HOA-style hierarchies
@@ -993,9 +1009,9 @@
     });
   }
 
-  function deleteClientNote(clientId, noteId) {
+  async function deleteClientNote(clientId, noteId) {
     if (!clientId || !noteId) return;
-    if (!confirm('Delete this note? Cannot be undone.')) return;
+    if (!(await p86Ask('Delete this note? Cannot be undone.'))) return;
     window.p86Api.clients.deleteNote(clientId, noteId).then(function() {
       renderAgentNotesPanel(clientId);
     }).catch(function(err) {
@@ -1045,7 +1061,7 @@
     });
   }
 
-  function deleteClientFromEditor() {
+  async function deleteClientFromEditor() {
     var id = document.getElementById('clientEditor_id').value;
     if (!id) return;
     var c = _clients.find(function(x) { return x.id === id; });
@@ -1057,7 +1073,7 @@
              ' will become top-level (parent link cleared).';
     }
     msg += '\n\nThis cannot be undone.';
-    if (!confirm(msg)) return;
+    if (!(await p86Ask(msg))) return;
     window.p86Api.clients.remove(id).then(function() {
       closeModal('clientEditorModal');
       reloadClientsCache();
@@ -1169,7 +1185,7 @@
     evt.target.value = '';
 
     var reader = new FileReader();
-    reader.onload = function(e) {
+    reader.onload = async function(e) {
       var rows;
       try {
         rows = parseBTWorkbook(e.target.result);
@@ -1181,9 +1197,10 @@
         alert('No client rows found in that file. Is it the right export?');
         return;
       }
-      if (!confirm('Found ' + rows.length + ' client rows. Import them now?\n\n' +
+      if (!(await p86Ask('Found ' + rows.length + ' client rows. Import them now?\n\n' +
                    'Existing clients (matched by name, case-insensitive) will be updated. ' +
-                   'New clients will be created. Parents are auto-created from Company Name when needed.')) {
+                   'New clients will be created. Parents are auto-created from Company Name when needed.',
+                   { confirmLabel: 'Import', danger: false }))) {
         return;
       }
       window.p86Api.clients.importBatch(rows).then(function(res) {

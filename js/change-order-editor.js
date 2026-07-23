@@ -1,3 +1,19 @@
+// Promise confirm. Native confirm() returns undefined inside an installed PWA,
+// so every `if (!confirm(x)) return` guard silently did nothing there: the
+// dialog never appeared and the action never ran. Uses the in-app overlay when
+// present, native only as a fallback.
+function p86Ask(message, opts) {
+  opts = opts || {};
+  if (typeof window.p86Confirm === 'function') {
+    return window.p86Confirm({
+      title: opts.title || 'Confirm', message: message,
+      confirmLabel: opts.confirmLabel || 'Confirm', confirmText: opts.confirmLabel || 'Confirm',
+      cancelLabel: 'Cancel', cancelText: 'Cancel',
+      danger: opts.danger !== false, destructive: opts.danger !== false
+    });
+  }
+  return Promise.resolve(window.confirm(message));
+}
 // Change Order editor — full-screen overlay for building a job-scoped
 // Change Order with line items, target-margin math, and an approval
 // lifecycle that gates WIP impact.
@@ -968,10 +984,10 @@
     if (btn) btn.onclick = unlockCo;
   }
 
-  function unlockCo() {
+  async function unlockCo() {
     var co = _state.co;
     if (!co || !window.p86Api.changeOrders.lock) return;
-    if (!confirm('Unlock this approved change order for editing? It stays Approved but becomes editable until re-locked.')) return;
+    if (!(await p86Ask('Unlock this approved change order for editing? It stays Approved but becomes editable until re-locked.'))) return;
     window.p86Api.changeOrders.lock(co.id, false).then(function () {
       _state.co.is_locked = false;
       applyCoLockState();

@@ -1,3 +1,19 @@
+// Promise confirm. Native confirm() returns undefined inside an installed PWA,
+// so every `if (!confirm(x)) return` guard silently did nothing there: the
+// dialog never appeared and the action never ran. Uses the in-app overlay when
+// present, native only as a fallback.
+function p86Ask(message, opts) {
+  opts = opts || {};
+  if (typeof window.p86Confirm === 'function') {
+    return window.p86Confirm({
+      title: opts.title || 'Confirm', message: message,
+      confirmLabel: opts.confirmLabel || 'Confirm', confirmText: opts.confirmLabel || 'Confirm',
+      cancelLabel: 'Cancel', cancelText: 'Cancel',
+      danger: opts.danger !== false, destructive: opts.danger !== false
+    });
+  }
+  return Promise.resolve(window.confirm(message));
+}
 // Cost Inbox — receipt capture (photo + amount + cost code), job/lead-linked.
 // Ported from John's AppSpace "Cost Inbox", streamlined + skinned in the P86
 // dark theme. Backed by /api/receipts (server/routes/receipt-routes.js) +
@@ -355,9 +371,9 @@
         });
       });
       pop.querySelectorAll('button[data-del]').forEach(function (b) {
-        b.addEventListener('click', function (e) {
+        b.addEventListener('click', async function (e) {
           e.stopPropagation(); var id = b.getAttribute('data-del');
-          if (!confirm('Delete this saved view?')) return;
+          if (!(await p86Ask('Delete this saved view?'))) return;
           window.p86Api.listViews.remove(id).then(function () { if (_activeViewId === id) _activeViewId = null; return loadViews(); }).then(function () { closePopover(); updateViewsBtn(); });
         });
       });

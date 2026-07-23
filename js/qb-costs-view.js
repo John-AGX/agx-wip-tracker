@@ -1,3 +1,19 @@
+// Promise confirm. Native confirm() returns undefined inside an installed PWA,
+// so every `if (!confirm(x)) return` guard silently did nothing there: the
+// dialog never appeared and the action never ran. Uses the in-app overlay when
+// present, native only as a fallback.
+function p86Ask(message, opts) {
+  opts = opts || {};
+  if (typeof window.p86Confirm === 'function') {
+    return window.p86Confirm({
+      title: opts.title || 'Confirm', message: message,
+      confirmLabel: opts.confirmLabel || 'Confirm', confirmText: opts.confirmLabel || 'Confirm',
+      cancelLabel: 'Cancel', cancelText: 'Cancel',
+      danger: opts.danger !== false, destructive: opts.danger !== false
+    });
+  }
+  return Promise.resolve(window.confirm(message));
+}
 // QB Costs (Detailed) sub-tab — Phase 2.
 //
 // Renders the imported QuickBooks job-cost lines (server-persisted in
@@ -948,12 +964,12 @@
 
   // Bulk-unlink: clear linked_node_id on every selected line. Same
   // server endpoint as bulk-link, just with nodeId=null.
-  function bulkUnlink() {
+  async function bulkUnlink() {
     var ids = _state.selected ? Array.from(_state.selected) : [];
     if (!ids.length) return;
     var dbIds = ids.filter(function(id) { return id.indexOf('sheet:') !== 0; });
     if (!dbIds.length) return;
-    if (!confirm('Unlink ' + dbIds.length + ' selected line' + (dbIds.length === 1 ? '' : 's') + ' from their nodes?')) return;
+    if (!(await p86Ask('Unlink ' + dbIds.length + ' selected line' + (dbIds.length === 1 ? '' : 's') + ' from their nodes?'))) return;
     applyBulkLink(dbIds, null);
   }
 
@@ -994,11 +1010,11 @@
 
   // Orphan cleanup: ask the server to null out every linked_node_id
   // on this job that points at a node not in the current graph.
-  function cleanOrphans() {
+  async function cleanOrphans() {
     if (!_state.jobId) return;
     var nodes = getNodesForJob(_state.jobId);
     var validNodeIds = nodes.map(function(n) { return n.id; });
-    if (!confirm('Clear linked_node_id on every line pointing at a deleted node? This is one-way (you\'ll need to reassign manually).')) return;
+    if (!(await p86Ask('Clear linked_node_id on every line pointing at a deleted node? This is one-way (you\'ll need to reassign manually).'))) return;
     if (window.p86Api && window.p86Api.isAuthenticated && window.p86Api.isAuthenticated()) {
       window.p86Api.qbCosts.cleanupOrphans(_state.jobId, validNodeIds).then(function(res) {
         // Refresh from server so the local cache reflects the cleared links.

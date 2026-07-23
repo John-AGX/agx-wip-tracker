@@ -1,3 +1,19 @@
+// Promise confirm. Native confirm() returns undefined inside an installed PWA,
+// so every `if (!confirm(x)) return` guard silently did nothing there: the
+// dialog never appeared and the action never ran. Uses the in-app overlay when
+// present, native only as a fallback.
+function p86Ask(message, opts) {
+  opts = opts || {};
+  if (typeof window.p86Confirm === 'function') {
+    return window.p86Confirm({
+      title: opts.title || 'Confirm', message: message,
+      confirmLabel: opts.confirmLabel || 'Confirm', confirmText: opts.confirmLabel || 'Confirm',
+      cancelLabel: 'Cancel', cancelText: 'Cancel',
+      danger: opts.danger !== false, destructive: opts.danger !== false
+    });
+  }
+  return Promise.resolve(window.confirm(message));
+}
 // ============================================================
 // Project 86 — Workspace Spreadsheet Engine (v3)
 // v3 fix: click-to-select uses mousedown + preventDefault
@@ -2461,7 +2477,7 @@
     return sheet.id;
   }
 
-  function deleteSheet(sheetId) {
+  async function deleteSheet(sheetId) {
     const sheet = workbook.sheets.find(s => s.id === sheetId);
     if (sheet && sheet.pinned) {
       alert('"' + sheet.name + '" is a built-in view and cannot be deleted.');
@@ -2475,7 +2491,7 @@
     }
     const idx = workbook.sheets.findIndex(s => s.id === sheetId);
     if (idx === -1) return;
-    if (!confirm('Delete sheet "' + sheet.name + '"? This cannot be undone.')) return;
+    if (!(await p86Ask('Delete sheet "' + sheet.name + '"? This cannot be undone.'))) return;
     workbook.sheets.splice(idx, 1);
     if (workbook.activeSheetId === sheetId) {
       // Pick the previous non-pinned sheet so we don't land on a
@@ -3535,8 +3551,8 @@
           } });
         }
         items.push('---');
-        items.push({ label: 'Delete entire workbook (' + groupSheets.length + ' sheets)', action: function() {
-          if (!confirm('Delete the entire "' + groupName + '" workbook? All ' + groupSheets.length + ' sheets will be removed. This cannot be undone.')) return;
+        items.push({ label: 'Delete entire workbook (' + groupSheets.length + ' sheets)', action: async function() {
+          if (!(await p86Ask('Delete the entire "' + groupName + '" workbook? All ' + groupSheets.length + ' sheets will be removed. This cannot be undone.'))) return;
           // Remove sheets in reverse so splice indices stay valid.
           var ids = groupSheets.map(function(s) { return s.id; });
           ids.forEach(function(id) {

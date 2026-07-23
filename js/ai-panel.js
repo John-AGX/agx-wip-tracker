@@ -1,3 +1,19 @@
+// Promise confirm. Native confirm() returns undefined inside an installed PWA,
+// so every `if (!confirm(x)) return` guard silently did nothing there: the
+// dialog never appeared and the action never ran. Uses the in-app overlay when
+// present, native only as a fallback.
+function p86Ask(message, opts) {
+  opts = opts || {};
+  if (typeof window.p86Confirm === 'function') {
+    return window.p86Confirm({
+      title: opts.title || 'Confirm', message: message,
+      confirmLabel: opts.confirmLabel || 'Confirm', confirmText: opts.confirmLabel || 'Confirm',
+      cancelLabel: 'Cancel', cancelText: 'Cancel',
+      danger: opts.danger !== false, destructive: opts.danger !== false
+    });
+  }
+  return Promise.resolve(window.confirm(message));
+}
 // AI assistant panel — slide-in right rail for the unified 86 agent.
 // Same panel renders on every surface (estimate / job / intake /
 // client / ask86); a current_context object on each chat request
@@ -2403,10 +2419,10 @@
     });
   }
 
-  function deleteSession(sessionId) {
+  async function deleteSession(sessionId) {
     var row = _sessionList.find(function(s) { return s.id === sessionId; });
     var label = row && row.label || ('Session ' + sessionId);
-    if (!confirm('Permanently delete "' + label + '"? This removes the Anthropic-side session too. Your local message history stays.')) return;
+    if (!(await p86Ask('Permanently delete "' + label + '"? This removes the Anthropic-side session too. Your local message history stays.'))) return;
     window.p86Api.del('/api/ai/sessions/' + sessionId).then(function() {
       _sessionList = _sessionList.filter(function(s) { return s.id !== sessionId; });
       if (_currentSessionId === sessionId) _currentSessionId = null;

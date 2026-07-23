@@ -1,3 +1,19 @@
+// Promise confirm. Native confirm() returns undefined inside an installed PWA,
+// so every `if (!confirm(x)) return` guard silently did nothing there: the
+// dialog never appeared and the action never ran. Uses the in-app overlay when
+// present, native only as a fallback.
+function p86Ask(message, opts) {
+  opts = opts || {};
+  if (typeof window.p86Confirm === 'function') {
+    return window.p86Confirm({
+      title: opts.title || 'Confirm', message: message,
+      confirmLabel: opts.confirmLabel || 'Confirm', confirmText: opts.confirmLabel || 'Confirm',
+      cancelLabel: 'Cancel', cancelText: 'Cancel',
+      danger: opts.danger !== false, destructive: opts.danger !== false
+    });
+  }
+  return Promise.resolve(window.confirm(message));
+}
 // Project 86 — Jobs Hub
 // =====================
 // Cross-job index pages reached from the sidebar "Jobs" dropdown:
@@ -392,7 +408,7 @@
           });
         });
         pop.querySelectorAll('[data-def]').forEach(function (a) { a.addEventListener('click', function (e) { e.preventDefault(); e.stopPropagation(); window.p86Api.listViews.update(a.getAttribute('data-def'), { is_default: true }).then(function () { close(); if (typeof window.p86Toast === 'function') window.p86Toast('Default view set', 'success'); }); }); });
-        pop.querySelectorAll('[data-del]').forEach(function (a) { a.addEventListener('click', function (e) { e.preventDefault(); e.stopPropagation(); if (!confirm('Delete this saved view?')) return; window.p86Api.listViews.remove(a.getAttribute('data-del')).then(close); }); });
+        pop.querySelectorAll('[data-del]').forEach(function (a) { a.addEventListener('click', async function (e) { e.preventDefault(); e.stopPropagation(); if (!(await p86Ask('Delete this saved view?'))) return; window.p86Api.listViews.remove(a.getAttribute('data-del')).then(close); }); });
         pop.querySelector('.jhv-save').addEventListener('click', function () {
           var name = prompt('Name this view:'); if (name == null) return; name = String(name).trim(); if (!name) return;
           window.p86Api.listViews.create({ page: cfg.viewsPage, name: name, config: { filters: { status: st.status, job: st.job, q: st.q } }, is_default: false })

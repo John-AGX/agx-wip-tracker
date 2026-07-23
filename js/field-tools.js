@@ -1,3 +1,19 @@
+// Promise confirm. Native confirm() returns undefined inside an installed PWA,
+// so every `if (!confirm(x)) return` guard silently did nothing there: the
+// dialog never appeared and the action never ran. Uses the in-app overlay when
+// present, native only as a fallback.
+function p86Ask(message, opts) {
+  opts = opts || {};
+  if (typeof window.p86Confirm === 'function') {
+    return window.p86Confirm({
+      title: opts.title || 'Confirm', message: message,
+      confirmLabel: opts.confirmLabel || 'Confirm', confirmText: opts.confirmLabel || 'Confirm',
+      cancelLabel: 'Cancel', cancelText: 'Cancel',
+      danger: opts.danger !== false, destructive: opts.danger !== false
+    });
+  }
+  return Promise.resolve(window.confirm(message));
+}
 // Field Tools — UI for the "Tools" tab. Lists every saved field tool
 // (calculators, lookups, forms), renders the selected one in a
 // sandboxed iframe modal, and supports add/edit/delete via a small
@@ -551,9 +567,9 @@
     window.openFieldToolComposer(id);
   };
 
-  window.deleteFieldTool = function(id, name) {
+  window.deleteFieldTool = async function(id, name) {
     if (!id) return;
-    if (!confirm('Delete field tool "' + name + '"?\n\nThis is irreversible.')) return;
+    if (!(await p86Ask('Delete field tool "' + name + '"?\n\nThis is irreversible.'))) return;
     window.p86Api.del('/api/field-tools/' + encodeURIComponent(id)).then(function() {
       loadList();
     }).catch(function(err) {
@@ -603,8 +619,8 @@
           b.onclick = function() { act(b, 'post', '/api/field-tools/catalog/' + encodeURIComponent(b.getAttribute('data-add')) + '/add'); };
         });
         list.querySelectorAll('[data-remove]').forEach(function(b) {
-          b.onclick = function() {
-            if (!confirm('Remove this system tool from your field-tools list?')) return;
+          b.onclick = async function() {
+            if (!(await p86Ask('Remove this system tool from your field-tools list?'))) return;
             act(b, 'del', '/api/field-tools/catalog/' + encodeURIComponent(b.getAttribute('data-remove')));
           };
         });

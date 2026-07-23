@@ -1,3 +1,19 @@
+// Promise confirm. Native confirm() returns undefined inside an installed PWA,
+// so every `if (!confirm(x)) return` guard silently did nothing there: the
+// dialog never appeared and the action never ran. Uses the in-app overlay when
+// present, native only as a fallback.
+function p86Ask(message, opts) {
+  opts = opts || {};
+  if (typeof window.p86Confirm === 'function') {
+    return window.p86Confirm({
+      title: opts.title || 'Confirm', message: message,
+      confirmLabel: opts.confirmLabel || 'Confirm', confirmText: opts.confirmLabel || 'Confirm',
+      cancelLabel: 'Cancel', cancelText: 'Cancel',
+      danger: opts.danger !== false, destructive: opts.danger !== false
+    });
+  }
+  return Promise.resolve(window.confirm(message));
+}
 // Sort state for the estimates list. Click a column header to toggle
 // direction; clicking a different header switches to it (descending for
 // numerics/dates, ascending for text — same convention as the Leads
@@ -412,7 +428,7 @@ function estimatesOpenViews(anchor) {
         sp.addEventListener('click', function() { var id = sp.parentNode.getAttribute('data-view'); var v = _estViews.find(function(x) { return x.id === id; }); if (v) { close(); applyEstView(v); } });
     });
     pop.querySelectorAll('[data-def]').forEach(function(a) { a.addEventListener('click', function(e) { e.preventDefault(); e.stopPropagation(); window.p86Api.listViews.update(a.getAttribute('data-def'), { is_default: true }).then(estLoadViews).then(function() { close(); if (typeof window.p86Toast === 'function') window.p86Toast('Default view set', 'success'); }); }); });
-    pop.querySelectorAll('[data-del]').forEach(function(a) { a.addEventListener('click', function(e) { e.preventDefault(); e.stopPropagation(); if (!confirm('Delete this saved view?')) return; var id = a.getAttribute('data-del'); window.p86Api.listViews.remove(id).then(function() { if (_estActiveViewId === id) _estActiveViewId = null; return estLoadViews(); }).then(close); }); });
+    pop.querySelectorAll('[data-del]').forEach(function(a) { a.addEventListener('click', async function(e) { e.preventDefault(); e.stopPropagation(); if (!(await p86Ask('Delete this saved view?'))) return; var id = a.getAttribute('data-del'); window.p86Api.listViews.remove(id).then(function() { if (_estActiveViewId === id) _estActiveViewId = null; return estLoadViews(); }).then(close); }); });
     var sv = pop.querySelector('#est-save-view');
     if (sv) sv.addEventListener('click', function() {
         var name = prompt('Name this view:'); if (name == null) return; name = String(name).trim(); if (!name) return;

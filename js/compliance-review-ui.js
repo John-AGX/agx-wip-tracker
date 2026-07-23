@@ -1,3 +1,19 @@
+// Promise confirm. Native confirm() returns undefined inside an installed PWA,
+// so every `if (!confirm(x)) return` guard silently did nothing there: the
+// dialog never appeared and the action never ran. Uses the in-app overlay when
+// present, native only as a fallback.
+function p86Ask(message, opts) {
+  opts = opts || {};
+  if (typeof window.p86Confirm === 'function') {
+    return window.p86Confirm({
+      title: opts.title || 'Confirm', message: message,
+      confirmLabel: opts.confirmLabel || 'Confirm', confirmText: opts.confirmLabel || 'Confirm',
+      cancelLabel: 'Cancel', cancelText: 'Cancel',
+      danger: opts.danger !== false, destructive: opts.danger !== false
+    });
+  }
+  return Promise.resolve(window.confirm(message));
+}
 // Wave 3 — Compliance review drawer.
 //
 // Opens from the Summary "Certs Expiring" attention card. Shows
@@ -212,10 +228,10 @@
       });
     });
     body.querySelectorAll('[data-cmp-archive]').forEach(function(btn) {
-      btn.addEventListener('click', function(e) {
+      btn.addEventListener('click', async function(e) {
         e.stopPropagation();
         var id = btn.getAttribute('data-cmp-archive');
-        if (!confirm('Archive this compliance item?')) return;
+        if (!(await p86Ask('Archive this compliance item?'))) return;
         window.p86Api.post('/api/compliance-items/' + encodeURIComponent(id) + '/archive', {})
           .then(function() { STATE.expandedId = null; load(); })
           .catch(function(err) { alert('Archive failed: ' + (err && err.message || err)); });

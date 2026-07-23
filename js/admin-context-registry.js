@@ -1,3 +1,19 @@
+// Promise confirm. Native confirm() returns undefined inside an installed PWA,
+// so every `if (!confirm(x)) return` guard silently did nothing there: the
+// dialog never appeared and the action never ran. Uses the in-app overlay when
+// present, native only as a fallback.
+function p86Ask(message, opts) {
+  opts = opts || {};
+  if (typeof window.p86Confirm === 'function') {
+    return window.p86Confirm({
+      title: opts.title || 'Confirm', message: message,
+      confirmLabel: opts.confirmLabel || 'Confirm', confirmText: opts.confirmLabel || 'Confirm',
+      cancelLabel: 'Cancel', cancelText: 'Cancel',
+      danger: opts.danger !== false, destructive: opts.danger !== false
+    });
+  }
+  return Promise.resolve(window.confirm(message));
+}
 // Wave 1.B — Context Registry admin page.
 //
 // Reads the four /api/admin/context-registry/* endpoints (server side
@@ -204,11 +220,11 @@
 
     // Archive buttons on dormant memories.
     host.querySelectorAll('[data-archive-memory]').forEach(function(btn) {
-      btn.addEventListener('click', function(e) {
+      btn.addEventListener('click', async function(e) {
         e.stopPropagation();
         var id = btn.getAttribute('data-archive-memory');
         var topic = btn.getAttribute('data-archive-topic');
-        if (!confirm('Archive memory "' + topic + '"? It stops surfacing on recall.')) return;
+        if (!(await p86Ask('Archive memory "' + topic + '"? It stops surfacing on recall.'))) return;
         btn.disabled = true; btn.textContent = '…';
         window.p86Api.post('/api/admin/context-registry/memory/' + encodeURIComponent(id) + '/archive', {})
           .then(function() { loadAll(); })

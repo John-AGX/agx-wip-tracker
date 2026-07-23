@@ -1,3 +1,19 @@
+// Promise confirm. Native confirm() returns undefined inside an installed PWA,
+// so every `if (!confirm(x)) return` guard silently did nothing there: the
+// dialog never appeared and the action never ran. Uses the in-app overlay when
+// present, native only as a fallback.
+function p86Ask(message, opts) {
+  opts = opts || {};
+  if (typeof window.p86Confirm === 'function') {
+    return window.p86Confirm({
+      title: opts.title || 'Confirm', message: message,
+      confirmLabel: opts.confirmLabel || 'Confirm', confirmText: opts.confirmLabel || 'Confirm',
+      cancelLabel: 'Cancel', cancelText: 'Cancel',
+      danger: opts.danger !== false, destructive: opts.danger !== false
+    });
+  }
+  return Promise.resolve(window.confirm(message));
+}
 function renderJobsMain() {
             renderJobsTable();
             calculateJobsSummary();
@@ -1429,7 +1445,7 @@ function renderJobsMain() {
             setTimeout(function() { document.addEventListener('mousedown', onOut, true); }, 0);
             pop.querySelectorAll('.jv-apply').forEach(function(sp) { sp.addEventListener('click', function() { var id = sp.parentNode.getAttribute('data-view'); var v = _jobsViews.find(function(x) { return x.id === id; }); if (v) { close(); applyJobsView(v); } }); });
             pop.querySelectorAll('[data-def]').forEach(function(a) { a.addEventListener('click', function(e) { e.preventDefault(); e.stopPropagation(); window.p86Api.listViews.update(a.getAttribute('data-def'), { is_default: true }).then(jobsLoadViews).then(function() { close(); if (typeof window.p86Toast === 'function') window.p86Toast('Default view set', 'success'); }); }); });
-            pop.querySelectorAll('[data-del]').forEach(function(a) { a.addEventListener('click', function(e) { e.preventDefault(); e.stopPropagation(); if (!confirm('Delete this saved view?')) return; var id = a.getAttribute('data-del'); window.p86Api.listViews.remove(id).then(function() { if (_jobsActiveViewId === id) _jobsActiveViewId = null; return jobsLoadViews(); }).then(close); }); });
+            pop.querySelectorAll('[data-del]').forEach(function(a) { a.addEventListener('click', async function(e) { e.preventDefault(); e.stopPropagation(); if (!(await p86Ask('Delete this saved view?'))) return; var id = a.getAttribute('data-del'); window.p86Api.listViews.remove(id).then(function() { if (_jobsActiveViewId === id) _jobsActiveViewId = null; return jobsLoadViews(); }).then(close); }); });
             var sv = pop.querySelector('#jobs-save-view');
             if (sv) sv.addEventListener('click', function() {
                 var name = prompt('Name this view:'); if (name == null) return; name = String(name).trim(); if (!name) return;
@@ -3315,7 +3331,16 @@ function renderJobsMain() {
             const accrued = getJobAccruedCosts(jobId);
             const buildings = appData.buildings.filter(b => b.jobId === jobId);
             const phases = appData.phases.filter(p => p.jobId === jobId);
-            const cos = appData.changeOrders.filter(c => c.jobId === jobId);
+            // Change orders are server-backed in appData.jobChangeOrders (keyed
+            // job_id). appData.changeOrders is a dead localStorage relic that is
+            // always empty, so every snapshot recorded an EMPTY changeOrders
+            // detail list. The headline figures were unaffected — getJobWIP takes
+            // coIncome from getJobCOTotals, which reads the right store — but the
+            // per-CO breakdown captured for history was missing entirely.
+            const cos = (appData.jobChangeOrders || []).filter(function (c) {
+                return c && c.job_id === jobId && (c.status === 'approved' || c.status === 'applied');
+            });
+            const legacyCos = (appData.changeOrders || []).filter(c => c.jobId === jobId);
             const subs = appData.subs.filter(s => s.jobId === jobId);
             const pos = (appData.purchaseOrders || []).filter(p => p.jobId === jobId);
 
@@ -3347,8 +3372,19 @@ function renderJobsMain() {
                     return { id:p.id, name:p.phase, pctComplete:p.pctComplete||0, revenue:phaseRevenue(p), cost:pCost, buildingId:p.buildingId };
                 }),
                 changeOrders: cos.map(function(c) {
+                    // No flat income field on a server CO — money comes from its
+                    // lines through the shared pricing pipeline, the same one
+                    // getJobCOTotals sums, so the detail reconciles to the headline.
+                    var sell = 0, cost = 0;
+                    try { sell = (typeof coSellAmount === 'function') ? (coSellAmount(c) || 0) : 0; } catch (e) {}
+                    try {
+                        if (window.p86Pricing) cost = window.p86Pricing.computeForLines(c, c.lines || []).subtotal || 0;
+                    } catch (e) {}
+                    return { id:c.id, coNumber:c.co_number, income:Math.round(sell*100)/100,
+                             estimatedCosts:Math.round(cost*100)/100, pctComplete:0, status:c.status };
+                }).concat(legacyCos.map(function(c) {
                     return { id:c.id, coNumber:c.coNumber, income:c.income||0, estimatedCosts:c.estimatedCosts||0, pctComplete:c.pctComplete||0 };
-                }),
+                })),
                 subs: subs.map(function(s) {
                     return { id:s.id, name:s.name, contractAmt:s.contractAmt||0, billedToDate:s.billedToDate||0, accruedAmt:s.accruedAmt||0 };
                 }),

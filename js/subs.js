@@ -1,3 +1,19 @@
+// Promise confirm. Native confirm() returns undefined inside an installed PWA,
+// so every `if (!confirm(x)) return` guard silently did nothing there: the
+// dialog never appeared and the action never ran. Uses the in-app overlay when
+// present, native only as a fallback.
+function p86Ask(message, opts) {
+  opts = opts || {};
+  if (typeof window.p86Confirm === 'function') {
+    return window.p86Confirm({
+      title: opts.title || 'Confirm', message: message,
+      confirmLabel: opts.confirmLabel || 'Confirm', confirmText: opts.confirmLabel || 'Confirm',
+      cancelLabel: 'Cancel', cancelText: 'Cancel',
+      danger: opts.danger !== false, destructive: opts.danger !== false
+    });
+  }
+  return Promise.resolve(window.confirm(message));
+}
 // Subcontractor directory + per-job assignment UI.
 //
 // Phase B: directory sub-tab next to Clients on the Estimates page —
@@ -123,7 +139,7 @@
         });
       });
       pop.querySelectorAll('[data-def]').forEach(function(a) { a.addEventListener('click', function(e) { e.preventDefault(); e.stopPropagation(); window.p86Api.listViews.update(a.getAttribute('data-def'), { is_default: true }).then(function() { close(); }); }); });
-      pop.querySelectorAll('[data-del]').forEach(function(a) { a.addEventListener('click', function(e) { e.preventDefault(); e.stopPropagation(); if (!confirm('Delete this saved view?')) return; window.p86Api.listViews.remove(a.getAttribute('data-del')).then(close); }); });
+      pop.querySelectorAll('[data-del]').forEach(function(a) { a.addEventListener('click', async function(e) { e.preventDefault(); e.stopPropagation(); if (!(await p86Ask('Delete this saved view?'))) return; window.p86Api.listViews.remove(a.getAttribute('data-del')).then(close); }); });
       pop.querySelector('.sv-save').addEventListener('click', function() {
         var name = prompt('Name this view:'); if (name == null) return; name = String(name).trim(); if (!name) return;
         window.p86Api.listViews.create({ page: 'subs', name: name, config: { filters: { trade: _state.trade, status: _state.status, search: _state.search, drawer: _state.drawer } }, is_default: false })
@@ -514,9 +530,9 @@
     // Remove — DELETE the cert row + its attachment, then re-mount the
     // section so the row resets to its empty state.
     rootEl.querySelectorAll('[data-cert-remove]').forEach(function(btn) {
-      btn.addEventListener('click', function() {
+      btn.addEventListener('click', async function() {
         var key = btn.getAttribute('data-cert-remove');
-        if (!confirm('Remove this certificate?')) return;
+        if (!(await p86Ask('Remove this certificate?'))) return;
         window.p86Api.subs.certs.remove(subId, key).then(function() {
           mountCertificates(rootEl, subId);
         }).catch(function(err) {
@@ -1422,8 +1438,8 @@
     });
   }
 
-  function deleteFromModal(modal) {
-    if (!confirm('Delete this sub from the directory? Only allowed if it has no job assignments.')) return;
+  async function deleteFromModal(modal) {
+    if (!(await p86Ask('Delete this sub from the directory? Only allowed if it has no job assignments.'))) return;
     window.p86Api.subs.remove(_editingId).then(function() {
       modal.remove();
       return refresh();

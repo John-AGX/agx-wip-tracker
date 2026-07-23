@@ -1,3 +1,19 @@
+// Promise confirm. Native confirm() returns undefined inside an installed PWA,
+// so every `if (!confirm(x)) return` guard silently did nothing there: the
+// dialog never appeared and the action never ran. Uses the in-app overlay when
+// present, native only as a fallback.
+function p86Ask(message, opts) {
+  opts = opts || {};
+  if (typeof window.p86Confirm === 'function') {
+    return window.p86Confirm({
+      title: opts.title || 'Confirm', message: message,
+      confirmLabel: opts.confirmLabel || 'Confirm', confirmText: opts.confirmLabel || 'Confirm',
+      cancelLabel: 'Cancel', cancelText: 'Cancel',
+      danger: opts.danger !== false, destructive: opts.danger !== false
+    });
+  }
+  return Promise.resolve(window.confirm(message));
+}
 // Project 86 — Job Reports module
 //
 // Drives the "Reports" sub-tab inside a job. Two view modes:
@@ -161,8 +177,8 @@
       var deleteBtn = tr.querySelector('[data-action="delete"]');
       if (openBtn)   openBtn.onclick   = function() { _openReport(rid); };
       if (printBtn)  printBtn.onclick  = function() { _printReport(rid); };
-      if (deleteBtn) deleteBtn.onclick = function() {
-        if (!confirm('Delete this report? This cannot be undone.')) return;
+      if (deleteBtn) deleteBtn.onclick = async function() {
+        if (!(await p86Ask('Delete this report? This cannot be undone.'))) return;
         _deleteReport(_state.jobId, rid).then(function() {
           _state.reports = _state.reports.filter(function(r) { return r.id !== rid; });
           _paint();
@@ -314,8 +330,8 @@
       var deleteSec    = secEl.querySelector('[data-action="delete-section"]');
       var labelInput   = secEl.querySelector('.rpt-section-label');
       if (addPhotos)  addPhotos.onclick  = function() { _openPhotoPicker(sid); };
-      if (deleteSec)  deleteSec.onclick  = function() {
-        if (!confirm('Delete this section and its photo selections?')) return;
+      if (deleteSec)  deleteSec.onclick  = async function() {
+        if (!(await p86Ask('Delete this section and its photo selections?'))) return;
         _state.editingReport.sections = _state.editingReport.sections.filter(function(s) { return s.id !== sid; });
         _paint();
       };

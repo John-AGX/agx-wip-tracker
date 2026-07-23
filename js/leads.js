@@ -1,3 +1,19 @@
+// Promise confirm. Native confirm() returns undefined inside an installed PWA,
+// so every `if (!confirm(x)) return` guard silently did nothing there: the
+// dialog never appeared and the action never ran. Uses the in-app overlay when
+// present, native only as a fallback.
+function p86Ask(message, opts) {
+  opts = opts || {};
+  if (typeof window.p86Confirm === 'function') {
+    return window.p86Confirm({
+      title: opts.title || 'Confirm', message: message,
+      confirmLabel: opts.confirmLabel || 'Confirm', confirmText: opts.confirmLabel || 'Confirm',
+      cancelLabel: 'Cancel', cancelText: 'Cancel',
+      danger: opts.danger !== false, destructive: opts.danger !== false
+    });
+  }
+  return Promise.resolve(window.confirm(message));
+}
 // Project 86 Leads module — sales pipeline rendered on the Estimates tab.
 //
 // Phase 1: list + create/edit/delete with the General fields. Status pipeline
@@ -458,7 +474,7 @@
       sp.addEventListener('click', function() { var id = sp.parentNode.getAttribute('data-view'); var v = _leadsViews.find(function(x) { return x.id === id; }); if (v) { close(); applyLeadsView(v); } });
     });
     pop.querySelectorAll('[data-def]').forEach(function(a) { a.addEventListener('click', function(e) { e.preventDefault(); e.stopPropagation(); window.p86Api.listViews.update(a.getAttribute('data-def'), { is_default: true }).then(leadsLoadViews).then(function() { close(); if (typeof window.p86Toast === 'function') window.p86Toast('Default view set', 'success'); }); }); });
-    pop.querySelectorAll('[data-del]').forEach(function(a) { a.addEventListener('click', function(e) { e.preventDefault(); e.stopPropagation(); if (!confirm('Delete this saved view?')) return; var id = a.getAttribute('data-del'); window.p86Api.listViews.remove(id).then(function() { if (_leadsActiveViewId === id) _leadsActiveViewId = null; return leadsLoadViews(); }).then(close); }); });
+    pop.querySelectorAll('[data-del]').forEach(function(a) { a.addEventListener('click', async function(e) { e.preventDefault(); e.stopPropagation(); if (!(await p86Ask('Delete this saved view?'))) return; var id = a.getAttribute('data-del'); window.p86Api.listViews.remove(id).then(function() { if (_leadsActiveViewId === id) _leadsActiveViewId = null; return leadsLoadViews(); }).then(close); }); });
     // Column chooser: toggle visible columns (never allow zero).
     pop.querySelectorAll('.lc-box').forEach(function(cb) {
       cb.addEventListener('change', function() {
@@ -2596,7 +2612,7 @@
     });
   }
 
-  function deleteLeadFromEditor() {
+  async function deleteLeadFromEditor() {
     var id = document.getElementById('leadEditor_id').value;
     if (!id) return;
     var l = _leads.find(function(x) { return x.id === id; });
@@ -2613,7 +2629,7 @@
              (linkedEstimates.length === 1 ? '' : 's') + ':\n  - ' +
              linkedEstimates.map(function(e) { return e.title || '(untitled)'; }).join('\n  - ');
     }
-    if (!confirm(msg)) return;
+    if (!(await p86Ask(msg))) return;
 
     // Delete the linked estimates in parallel first; if any fail, abort the
     // lead delete so the cache stays consistent. 404s are treated as success
@@ -2777,7 +2793,7 @@
     evt.target.value = ''; // reset so re-picking the same file fires onchange
 
     var reader = new FileReader();
-    reader.onload = function(e) {
+    reader.onload = async function(e) {
       var rows;
       try {
         rows = parseBTLeadsWorkbook(e.target.result);
@@ -2789,9 +2805,10 @@
         alert('No lead rows found in that file. Is it the right export?');
         return;
       }
-      if (!confirm('Found ' + rows.length + ' lead row(s). Import them now?\n\n' +
+      if (!(await p86Ask('Found ' + rows.length + ' lead row(s). Import them now?\n\n' +
                    'Existing leads (matched by title, case-insensitive) will be skipped. ' +
-                   'Clients are matched by name against the directory; unmatched leads import without a client link.')) {
+                   'Clients are matched by name against the directory; unmatched leads import without a client link.',
+                   { confirmLabel: 'Import', danger: false }))) {
         return;
       }
       window.p86Api.leads.importBatch(rows).then(function(res) {
@@ -2906,7 +2923,7 @@
 
     setPdfStatus('Reading PDF…');
     var reader = new FileReader();
-    reader.onload = function(e) {
+    reader.onload = async function(e) {
       var typedArray = new Uint8Array(e.target.result);
       window.pdfjsLib.getDocument({ data: typedArray }).promise.then(function(pdf) {
         return renderPdfPagesToBase64(pdf);

@@ -1,3 +1,19 @@
+// Promise confirm. Native confirm() returns undefined inside an installed PWA,
+// so every `if (!confirm(x)) return` guard silently did nothing there: the
+// dialog never appeared and the action never ran. Uses the in-app overlay when
+// present, native only as a fallback.
+function p86Ask(message, opts) {
+  opts = opts || {};
+  if (typeof window.p86Confirm === 'function') {
+    return window.p86Confirm({
+      title: opts.title || 'Confirm', message: message,
+      confirmLabel: opts.confirmLabel || 'Confirm', confirmText: opts.confirmLabel || 'Confirm',
+      cancelLabel: 'Cancel', cancelText: 'Cancel',
+      danger: opts.danger !== false, destructive: opts.danger !== false
+    });
+  }
+  return Promise.resolve(window.confirm(message));
+}
 // Project 86 QuickBooks weekly Detailed Job Costs importer.
 //
 // Drops a QB "Project costs detail" xlsx into Project 86, parses
@@ -513,7 +529,7 @@
   }
 
   // ─── Commit: write sheets to each matched job's workspace ────────
-  function commitQBCostsImport() {
+  async function commitQBCostsImport() {
     if (!_lastParse) return;
     var m = matchJobs(_lastParse.jobs);
     if (!m.matched.length) return;
@@ -525,7 +541,7 @@
     if (overwriteCount > 0) {
       var msg = overwriteCount + ' job' + (overwriteCount === 1 ? '' : 's') +
         ' already have a "QB Costs ' + _lastParse.reportDate + '" sheet. Overwrite?';
-      if (!confirm(msg)) return;
+      if (!(await p86Ask(msg))) return;
     }
 
     var allWs;
