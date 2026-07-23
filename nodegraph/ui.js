@@ -3794,24 +3794,34 @@ function buildingKpiGridHtml(sel){
 // detail rows come from the same summands the engine adds; any residual (e.g. a
 // matrix-formula nuance) folds into an "Other contract allocation" reconciling row.
 function buildingRevSources(sel){
-  var contract=[], cos=[], coRev=0, wiredPh={};
+  var contract=[], cos=[], coRev=0;
+  // COs still come from wires. Scopes do NOT — see below.
   E.wires().forEach(function(w){
     if(w.toNode!==sel.id) return;
     var src=E.findNode(w.fromNode); if(!src) return;
-    if(src.type==='t2'){
-      if(src.data && src.data.id) wiredPh[src.data.id]=1;
-      contract.push({ name:(src.label||'Scope').split(' › ')[0].trim(), rev:E.getPhaseRevenueToBuilding(src, sel.id), pct:src.pctComplete||0 });
-    } else if(src.type==='co'){
+    if(src.type==='co'){
       var cr=E.getCOIncomeToParent(src, sel.id); coRev+=cr;
       cos.push({ name:(src.label||'CO').split(' › ')[0].trim(), rev:cr, pct:src.pctComplete||0 });
     }
   });
-  // Wireless matrix-allocated scopes (contract revenue with no t2 node/wire) —
-  // same union getBuildingAllocatedRevenue sums; mirror childGroupsHtml's filter.
+  // SCOPE REVENUE IS MATRIX-ONLY, and lists EVERY matrix row for this building.
+  //
+  // This used to also walk t2 scope WIRES and then dedupe the matrix rows against
+  // them by phase id. Both halves are now wrong, because the engine moved on:
+  // getBuildingAllocatedRevenue sums matrixPhasesForT1 alone (engine.js) and that
+  // function deliberately dropped its own wire exclusion — "Wiring is retired, so
+  // the exclusion would now silently drop a scope's revenue."
+  //
+  // The display did not follow, which is what John saw on B2: a wire-era "Gutters
+  // $9,200" row that contributes NOTHING to the total (its phase link no longer
+  // matches any matrix row, so the dedupe missed it), sitting above the real
+  // matrix rows — and then a "-$9,200 Other contract allocation" plug generated
+  // purely to cancel it back to the correct total. Two phantom rows around a
+  // total that was right all along.
   if(sel.data && sel.data.id && window.appData && Array.isArray(window.appData.phases)){
-    var bId=sel.data.id, jid=(window.appState&&window.appState.currentJobId)||null;
+    var bId=sel.data.id;
     window.appData.phases.forEach(function(p){
-      if(!p || p.jobId!==jid || p.buildingId!==bId || wiredPh[p.id]) return;
+      if(!p || p.buildingId!==bId) return;   // buildingId is globally unique — same join the engine uses
       contract.push({ name:(p.phase||'Scope'), rev:(p.asSoldRevenue||p.asSoldPhaseBudget||p.phaseBudget||0), pct:Math.max(0,Math.min(100,p.pctComplete||0)), matrix:true });
     });
   }
@@ -4330,11 +4340,20 @@ function childGroupsHtml(sel){
   // revenue/budget rollup (buildingEffectiveBudget) already sums this exact union,
   // so showing the list double-counts nothing. Join: the t1 node's linked appData
   // building id (sel.data.id) === phase.buildingId.
+  // Matrix is the ONLY source of a building's scopes — every appData.phases row
+  // for it, with no wire dedupe, mirroring both the engine (matrixPhasesForT1)
+  // and buildingRevSources. The old version filtered out any matrix row whose
+  // phase id matched a wired t2 node, and separately listed the wired nodes; when
+  // a stale node's phase link no longer matched (the common case now that wiring
+  // is retired) the SAME scope appeared twice — John's "SCOPES · 3" showing
+  // Gutters, Gutters(matrix), Paint for a building with two scopes.
   var mxScopes=[];
   if(sel.type==='t1' && sel.data && sel.data.id && window.appData && Array.isArray(window.appData.phases)){
-    var _bId=sel.data.id, _jid=(window.appState&&window.appState.currentJobId)||null;
-    var _wiredPh={}; (wired['t2']||[]).forEach(function(k){ if(k&&k.data&&k.data.id) _wiredPh[k.data.id]=1; });
-    mxScopes=window.appData.phases.filter(function(p){ return p && p.jobId===_jid && p.buildingId===_bId && !_wiredPh[p.id]; });
+    var _bId=sel.data.id;
+    mxScopes=window.appData.phases.filter(function(p){ return p && p.buildingId===_bId; });
+    // Wired t2 scope nodes are legacy and retired — the matrix rows above already
+    // carry their dollars, so listing them again is the duplicate.
+    if(wired['t2']) wired['t2']=[];
   }
   var groups=kids.map(function(t){
     var list=wired[t]||[];
