@@ -759,9 +759,16 @@ async function dispatchClient(dbClient, target, refTable, ctx) {
       if (!parent.rows.length) throw new Error(`parent_client_id does not exist: ${parentId}`);
     }
 
-    const cols = ['id'];
-    const vals = [id];
+    // Stamp the applier's org. Without it the row lands organization_id
+    // NULL, and every org-scoped read uses `OR organization_id IS NULL`
+    // to keep pre-tenancy rows visible — so an AI-created client would be
+    // readable, editable, and deletable by every tenant until the boot-time
+    // backfill happened to claim it. Taken from ctx, never from fields, so
+    // a payload can't nominate someone else's org.
+    const cols = ['id', 'organization_id'];
+    const vals = [id, (ctx && ctx.organizationId) || null];
     for (const k of Object.keys(fields)) {
+      if (k === 'organization_id' || k === 'id') continue;
       cols.push(k);
       vals.push(fields[k]);
     }
@@ -1023,9 +1030,11 @@ async function dispatchEstimate(dbClient, target, refTable, ctx) {
     if (ops.groups) applyEstimateGroups(blob, ops.groups);
     if (ops.line_adds) applyLineAdds(blob, ops.line_adds);
 
+    // organization_id must be stamped here — a NULL-org estimate is visible
+    // to every tenant through the `OR organization_id IS NULL` read predicate.
     await dbClient.query(
-      `INSERT INTO estimates (id, owner_id, data) VALUES ($1, $2, $3)`,
-      [id, ctx.userId || null, JSON.stringify(blob)]
+      `INSERT INTO estimates (id, organization_id, owner_id, data) VALUES ($1, $2, $3, $4)`,
+      [id, (ctx && ctx.organizationId) || null, ctx.userId || null, JSON.stringify(blob)]
     );
     if (isRef(target.entity_id)) refTable[target.entity_id] = id;
     return {
@@ -1040,8 +1049,14 @@ async function dispatchEstimate(dbClient, target, refTable, ctx) {
   if (opType === 'update') {
     const id = resolveRef(target.entity_id, refTable);
     if (!id) throw new Error('estimate.update requires entity_id');
-    const r = await dbClient.query('SELECT data FROM estimates WHERE id = $1', [id]);
+    const r = await dbClient.query('SELECT data, is_locked FROM estimates WHERE id = $1', [id]);
     if (!r.rows.length) throw new Error(`Estimate not found: ${id}`);
+    // A locked estimate has been sold — its total became the job's contract
+    // amount at conversion. Editing the lines afterwards silently decouples
+    // the contract from the estimate it came from. An admin unlocks to edit.
+    if (r.rows[0].is_locked) {
+      throw new Error(`Cannot edit a locked (sold) estimate: ${id} — an admin must unlock it first.`);
+    }
     const data = r.rows[0].data || {};
 
     const changes = [];
@@ -1529,28 +1544,39 @@ async function dispatchJob(dbClient, target, refTable, ctx) {
 
   if (Array.isArray(ops.change_orders) && ops.change_orders.length) {
     await applyRecordOps(ops.change_orders, 'co_id', {
+      // jobId is passed on update/delete too: without it, an op inside a
+      // payload targeting job A could reach job B's CO by id alone.
       create: (fields) => jobFin.createChangeOrder(dbClient, { jobId: id, orgId, ownerId, fields }),
-      update: (rid, fields) => jobFin.updateChangeOrder(dbClient, { id: rid, orgId, fields }),
-      remove: (rid) => jobFin.deleteChangeOrder(dbClient, { id: rid, orgId }),
+      update: (rid, fields) => jobFin.updateChangeOrder(dbClient, { id: rid, orgId, jobId: id, fields }),
+      remove: (rid) => jobFin.deleteChangeOrder(dbClient, { id: rid, orgId, jobId: id }),
     }, 'change_orders');
     changes.push(`${ops.change_orders.length} CO op(s)`);
   }
   if (Array.isArray(ops.purchase_orders) && ops.purchase_orders.length) {
     await applyRecordOps(ops.purchase_orders, 'po_id', {
       create: (fields) => jobFin.createPurchaseOrder(dbClient, { jobId: id, orgId, ownerId, fields }),
-      update: (rid, fields) => jobFin.updatePurchaseOrder(dbClient, { id: rid, orgId, fields }),
-      remove: (rid) => jobFin.deletePurchaseOrder(dbClient, { id: rid, orgId }),
+      update: (rid, fields) => jobFin.updatePurchaseOrder(dbClient, { id: rid, orgId, jobId: id, fields }),
+      remove: (rid) => jobFin.deletePurchaseOrder(dbClient, { id: rid, orgId, jobId: id }),
     }, 'purchase_orders');
     changes.push(`${ops.purchase_orders.length} PO op(s)`);
   }
   if (Array.isArray(ops.invoices) && ops.invoices.length) {
     await applyRecordOps(ops.invoices, 'invoice_id', {
-      // An invoice can name its own job; default to the one being dispatched.
-      create: (fields) => jobFin.createInvoice(dbClient, {
-        jobId: (fields && fields.job_id) || id, orgId, ownerId, fields,
-      }),
-      update: (rid, fields) => jobFin.updateInvoice(dbClient, { id: rid, orgId, fields }),
-      remove: (rid) => jobFin.deleteInvoice(dbClient, { id: rid, orgId }),
+      // An invoice op inside a JOB payload belongs to THAT job. Honouring a
+      // fields.job_id override would let a payload for job A create or move
+      // an invoice onto job B — and GET /jobs/:jobId/invoices filters on
+      // job_id alone, with no org predicate, so the invoice would surface
+      // there. The dispatched job wins; a mismatched job_id is refused.
+      create: (fields) => {
+        if (fields && fields.job_id && fields.job_id !== id) {
+          throw new Error(
+            `invoice create: fields.job_id (${fields.job_id}) does not match the job this ` +
+            `payload targets (${id}). Emit a separate target for the other job.`);
+        }
+        return jobFin.createInvoice(dbClient, { jobId: id, orgId, ownerId, fields });
+      },
+      update: (rid, fields) => jobFin.updateInvoice(dbClient, { id: rid, orgId, jobId: id, fields }),
+      remove: (rid) => jobFin.deleteInvoice(dbClient, { id: rid, orgId, jobId: id }),
     }, 'invoices');
     changes.push(`${ops.invoices.length} invoice op(s)`);
   }
@@ -1739,8 +1765,11 @@ async function dispatchLead(dbClient, target, refTable, ctx) {
     if (!fields.title) throw new Error('lead.create requires fields.title');
     const id = (target.entity_id && !isRef(target.entity_id)) ? target.entity_id : newLeadId();
 
-    const cols = ['id', 'created_by'];
-    const vals = [id, ctx.userId || null];
+    // organization_id from ctx — a NULL-org lead is readable by every tenant
+    // through the `OR organization_id IS NULL` predicate. LEAD_EDITABLE_FIELDS
+    // already excludes it, so this cannot be overridden from the payload.
+    const cols = ['id', 'created_by', 'organization_id'];
+    const vals = [id, ctx.userId || null, (ctx && ctx.organizationId) || null];
     if (!fields.status) fields.status = 'new';
     for (const k of Object.keys(fields)) {
       if (!LEAD_EDITABLE_FIELDS.has(k)) continue;
@@ -1867,14 +1896,18 @@ async function dispatchSchedule(dbClient, target, refTable, ctx) {
       if (!startDate) throw new Error('schedule.create requires startDate');
       await dbClient.query(
         `INSERT INTO schedule_entries
-           (id, job_id, start_date, days, crew, includes_weekends, status, notes, created_by)
-         VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9)`,
+           (id, job_id, start_date, days, crew, includes_weekends, status, notes, created_by, organization_id)
+         VALUES ($1, $2, $3, $4, $5::jsonb, $6, $7, $8, $9, $10)`,
         [
           id, jobId, startDate, days, JSON.stringify(crew),
           !!(b.includesWeekends || b.includes_weekends),
           b.status || 'planned',
           b.notes || null,
           ctx.userId || null,
+          // Same NULL-org visibility problem as clients/leads/estimates: this
+          // dispatcher's own update/delete predicate is `OR organization_id
+          // IS NULL`, so an unstamped entry is editable by any tenant.
+          (ctx && ctx.organizationId) || null,
         ]
       );
       if (isRef(b.entry_id)) refTable[b.entry_id] = id;

@@ -265,6 +265,9 @@
           if (s === 'applied') return { label: 'Applied', color: '#34d399' };
           if (s === 'rejected') return { label: 'Rejected', color: '#8b90a5' };
           if (s === 'apply_failed' || s === 'failed') return { label: 'Failed', color: '#f87171' };
+          // In-flight apply claim — NOT awaiting review, which is what the
+          // fallback below would have called it.
+          if (s === 'applying') return { label: 'Applying…', color: '#60a5fa' };
           return { label: 'Awaiting review', color: '#fbbf24' };
         };
         host.innerHTML =

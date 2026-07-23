@@ -3389,11 +3389,20 @@ async function initSchema() {
       ON payloads (expires_at)
       WHERE status = 'ready';
     -- 'applying' is the in-flight claim POST /payloads/:id/apply takes so
-    -- two applies of one payload can't both run. It only ever exists while
-    -- a request is open, so any row still holding it at boot belongs to a
-    -- process that died mid-apply. Release them — otherwise the payload is
-    -- wedged out of the ready list forever with no way back.
-    UPDATE payloads SET status = 'ready' WHERE status = 'applying';
+    -- two applies of one payload can't both run. A row still holding it long
+    -- after any plausible apply belongs to a process that died mid-flight;
+    -- release those, or the payload is wedged out of the ready list forever.
+    --
+    -- AGE-GATED deliberately: boots overlap during a rolling deploy, so an
+    -- unconditional reset here would free a claim held by an apply still
+    -- running on the outgoing instance — re-enabling the exact double-apply
+    -- the claim exists to prevent. Gated on claimed_at (when the claim was
+    -- taken), NOT created_at — a week-old payload claimed one second ago is
+    -- young. No apply runs for 15 minutes.
+    ALTER TABLE payloads ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMPTZ;
+    UPDATE payloads SET status = 'ready', claimed_at = NULL
+     WHERE status = 'applying'
+       AND (claimed_at IS NULL OR claimed_at < NOW() - INTERVAL '15 minutes');
 
     CREATE INDEX IF NOT EXISTS idx_payloads_targets_gin
       ON payloads USING gin (targets jsonb_path_ops);

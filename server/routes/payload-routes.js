@@ -349,6 +349,28 @@ router.post('/:id/apply', requireAuth, requireOrg, async (req, res) => {
     const denial = await denyPayloadApply(req.user, payload);
     if (denial) return res.status(403).json({ error: denial });
 
+    // Claim the payload atomically before dispatching. The status==='ready'
+    // check above and the status='applied' write further down are separate
+    // statements, so two applies of the SAME payload — a double-click, a
+    // retried request, a reopened stream replaying the tool call — both read
+    // 'ready' and both dispatch, creating every record in it twice. The
+    // dispatcher's advisory locks serialize those two applies but do not
+    // collapse them. A conditional UPDATE lets exactly one caller through.
+    //
+    // Dry runs deliberately do not claim: they roll back and the row must
+    // stay droppable for the real run.
+    if (!dryRun) {
+      const claim = await pool.query(
+        `UPDATE payloads SET status = 'applying', claimed_at = NOW() WHERE id = $1 AND status = 'ready' RETURNING id`,
+        [payload.id]
+      );
+      if (!claim.rowCount) {
+        return res.status(409).json({
+          error: 'This payload is already being applied (or is no longer ready).',
+        });
+      }
+    }
+
     // Hand to the dispatcher. Throws on validation errors / dispatch
     // failures — we map to the right status code below.
     let result;
@@ -379,7 +401,7 @@ router.post('/:id/apply', requireAuth, requireOrg, async (req, res) => {
                 SET status = 'failed',
                     apply_error = $1,
                     apply_error_detail = $2::jsonb
-              WHERE id = $3 AND status = 'ready'`,
+              WHERE id = $3 AND status = 'applying'`,
             [msg.slice(0, 1000), isStructured ? JSON.stringify(err.detail) : null, payload.id]
           );
         } catch (_) {}
@@ -394,22 +416,34 @@ router.post('/:id/apply', requireAuth, requireOrg, async (req, res) => {
     // (Wave 1.C before/after audit) is captured on real applies so the
     // row carries everything an "undo last payload" needs.
     if (!dryRun) {
-      await pool.query(
-        `UPDATE payloads
-            SET status = 'applied',
-                applied_at = NOW(),
-                apply_summary = $1,
-                apply_changeset = $2::jsonb
-          WHERE id = $3`,
-        [
-          result.apply_summary,
-          (Array.isArray(result.apply_changeset) && result.apply_changeset.length)
-            ? JSON.stringify(result.apply_changeset) : null,
-          payload.id,
-        ]
-      );
+      // The dispatcher has already COMMITTED. If this bookkeeping throws, the
+      // row would be stranded in 'applying' — invisible in the ready list and
+      // re-appliable after a boot reset, duplicating every record it wrote.
+      // 'applied' is the truthful terminal state either way, so a failure here
+      // must never propagate; log it loudly and keep going.
+      try {
+        await pool.query(
+          `UPDATE payloads
+              SET status = 'applied',
+                  applied_at = NOW(),
+                  apply_summary = $1,
+                  apply_changeset = $2::jsonb
+            WHERE id = $3`,
+          [
+            result.apply_summary,
+            (Array.isArray(result.apply_changeset) && result.apply_changeset.length)
+              ? JSON.stringify(result.apply_changeset) : null,
+            payload.id,
+          ]
+        );
+      } catch (bookErr) {
+        console.error('[payloads] APPLIED BUT STATUS WRITE FAILED for', payload.id, bookErr);
+        try {
+          await pool.query(`UPDATE payloads SET status = 'applied', applied_at = NOW() WHERE id = $1`, [payload.id]);
+        } catch (_) { /* last resort; the boot sweep will not free it while young */ }
+      }
       // Approval = a positive training example (deduped by payload id).
-      capturePayloadVerdict(orgId, payload, true, result.apply_summary);
+      try { capturePayloadVerdict(orgId, payload, true, result.apply_summary); } catch (_) {}
     }
 
     res.json({
@@ -479,6 +513,16 @@ async function applyPayloadForUser(user, payloadId) {
   if (payload.expires_at && new Date(payload.expires_at) < new Date()) return { ok: false, error: 'Payload expired' };
   const denial = await denyPayloadApply(user, payload);
   if (denial) return { ok: false, error: denial };
+  // Same atomic claim as POST /:id/apply — this approve-in-chat path is a
+  // second door to the same dispatcher, and "yes" arriving twice (a repeated
+  // approval, a replayed tool call) would otherwise apply the payload twice.
+  const claim = await pool.query(
+    `UPDATE payloads SET status = 'applying', claimed_at = NOW() WHERE id = $1 AND status = 'ready' RETURNING id`,
+    [payload.id]
+  );
+  if (!claim.rowCount) {
+    return { ok: false, error: 'This payload is already being applied (or is no longer ready).' };
+  }
   let result;
   try {
     result = await dispatcher.applyPayload(payload, {
@@ -493,24 +537,31 @@ async function applyPayloadForUser(user, payloadId) {
     try {
       await pool.query(
         `UPDATE payloads SET status = 'failed', apply_error = $1, apply_error_detail = $2::jsonb
-          WHERE id = $3 AND status = 'ready'`,
+          WHERE id = $3 AND status = 'applying'`,
         [msg.slice(0, 1000), isStructured ? JSON.stringify(err.detail) : null, payload.id]
       );
     } catch (_) {}
     return { ok: false, error: msg };
   }
-  await pool.query(
-    `UPDATE payloads
-        SET status = 'applied', applied_at = NOW(), apply_summary = $1, apply_changeset = $2::jsonb
-      WHERE id = $3`,
-    [
-      result.apply_summary,
-      (Array.isArray(result.apply_changeset) && result.apply_changeset.length)
-        ? JSON.stringify(result.apply_changeset) : null,
-      payload.id,
-    ]
-  );
-  capturePayloadVerdict(orgId, payload, true, result.apply_summary);
+  // Same rule as the REST door: the dispatcher already committed, so this
+  // bookkeeping must never leave the row stranded in 'applying'.
+  try {
+    await pool.query(
+      `UPDATE payloads
+          SET status = 'applied', applied_at = NOW(), apply_summary = $1, apply_changeset = $2::jsonb
+        WHERE id = $3`,
+      [
+        result.apply_summary,
+        (Array.isArray(result.apply_changeset) && result.apply_changeset.length)
+          ? JSON.stringify(result.apply_changeset) : null,
+        payload.id,
+      ]
+    );
+  } catch (bookErr) {
+    console.error('[payloads] APPLIED BUT STATUS WRITE FAILED for', payload.id, bookErr);
+    try { await pool.query(`UPDATE payloads SET status = 'applied', applied_at = NOW() WHERE id = $1`, [payload.id]); } catch (_) {}
+  }
+  try { capturePayloadVerdict(orgId, payload, true, result.apply_summary); } catch (_) {}
   return { ok: true, apply_summary: result.apply_summary, affected_targets: result.affected_targets };
 }
 

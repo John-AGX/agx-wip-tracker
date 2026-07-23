@@ -54,34 +54,96 @@ function changeOrderMoney(rec) {
  * job — old pre-server COs carried flat income/estimatedCosts fields and
  * are still the truth for jobs that never migrated.
  */
+function shapeChangeOrderRow(r) {
+  const d = r.data || {};
+  const counted = COUNTED_STATUSES.has(r.status);
+  const m = changeOrderMoney(d);
+  return {
+    id: r.id,
+    status: r.status,
+    coNumber: r.co_number,
+    linked_node_id: r.linked_node_id,
+    description: d.title || d.description || '',
+    lineCount: Array.isArray(d.lines) ? d.lines.length : 0,
+    // Only approved/applied COs move the contract — an unapproved one
+    // must not inflate the WIP. Its own value still rides along so the
+    // model can see what's pending.
+    income: counted ? m.income : 0,
+    costs: counted ? m.costs : 0,
+    proposedIncome: m.income,
+    proposedCosts: m.costs,
+    counted,
+  };
+}
+
+// The fallback is deliberately all-or-nothing: table rows win outright and
+// legacy blob rows are NOT merged in. Merging would double-count any CO
+// that exists in both stores, and the two carry money in incompatible
+// shapes (flat income vs derived-from-lines) with no reliable key to
+// dedupe on. When a job holds both, the hidden count is reported on the
+// returned array so callers can say so out loud instead of silently
+// dropping records.
+function withLegacyFallback(rows, legacyBlobArray) {
+  const legacy = Array.isArray(legacyBlobArray) ? legacyBlobArray : [];
+  if (!rows.length) return legacy;
+  const out = rows.map(shapeChangeOrderRow);
+  if (legacy.length) {
+    Object.defineProperty(out, 'legacyHiddenCount', {
+      value: legacy.length, enumerable: false,
+    });
+  }
+  return out;
+}
+
 async function changeOrdersForJob(db, jobId, legacyBlobArray) {
   const { rows } = await db.query(
     `SELECT id, job_id, status, co_number, linked_node_id, data
        FROM job_change_orders WHERE job_id = $1 ORDER BY created_at ASC`,
     [jobId]
   );
-  if (!rows.length) return Array.isArray(legacyBlobArray) ? legacyBlobArray : [];
-  return rows.map((r) => {
-    const d = r.data || {};
-    const counted = COUNTED_STATUSES.has(r.status);
-    const m = changeOrderMoney(d);
-    return {
-      id: r.id,
-      status: r.status,
-      coNumber: r.co_number,
-      linked_node_id: r.linked_node_id,
-      description: d.title || d.description || '',
-      lineCount: Array.isArray(d.lines) ? d.lines.length : 0,
-      // Only approved/applied COs move the contract — an unapproved one
-      // must not inflate the WIP. Its own value still rides along so the
-      // model can see what's pending.
-      income: counted ? m.income : 0,
-      costs: counted ? m.costs : 0,
-      proposedIncome: m.income,
-      proposedCosts: m.costs,
-      counted,
-    };
-  });
+  return withLegacyFallback(rows, legacyBlobArray);
+}
+
+/**
+ * Batched form for callers that loop every job in the org (the company-wide
+ * WIP rollup). One query instead of N — the per-job form inside a map()
+ * would put a round trip in the loop.
+ *
+ * Returns a Map of jobId -> shaped rows. Jobs with no table rows are absent
+ * from the map; the caller applies its own legacy blob fallback.
+ */
+async function changeOrdersForJobs(db, jobIds) {
+  const out = new Map();
+  const ids = (jobIds || []).filter(Boolean);
+  if (!ids.length) return out;
+  const { rows } = await db.query(
+    `SELECT id, job_id, status, co_number, linked_node_id, data
+       FROM job_change_orders WHERE job_id = ANY($1) ORDER BY created_at ASC`,
+    [ids]
+  );
+  for (const r of rows) {
+    if (!out.has(r.job_id)) out.set(r.job_id, []);
+    out.get(r.job_id).push(shapeChangeOrderRow(r));
+  }
+  return out;
+}
+
+/** Same batching for invoices — the WIP rollup needs invoiced-to-date. */
+async function invoicesForJobs(db, jobIds) {
+  const out = new Map();
+  const ids = (jobIds || []).filter(Boolean);
+  if (!ids.length) return out;
+  const { rows } = await db.query(
+    `SELECT id, job_id, status, invoice_number, issue_date, due_date, total, amount_paid
+       FROM invoices WHERE job_id = ANY($1)
+      ORDER BY issue_date ASC NULLS LAST, created_at ASC`,
+    [ids]
+  );
+  for (const r of rows) {
+    if (!out.has(r.job_id)) out.set(r.job_id, tagFromTable([]));
+    out.get(r.job_id).push(shapeInvoiceRow(r));
+  }
+  return out;
 }
 
 // A PO is a cost document — no markup, no margin. Its value is the plain
@@ -114,21 +176,34 @@ async function purchaseOrdersForJob(db, jobId, legacyBlobArray) {
       title: d.title || '',
       amount: purchaseOrderMoney(d),
       // Only a PO that's been issued is a real commitment; a draft isn't.
-      committed: r.status !== 'draft' && r.status !== 'closed',
+      // A CLOSED PO still counts — the work was committed and the cost is
+      // real, so excluding it understated the ordered total.
+      //
+      // NOTE this is NOT the ACCRUED figure on the job tile. getJobPOAccrued
+      // is progress-weighted and net of billings (ordered × pct − billed);
+      // this is total ordered face value excluding drafts. Do not reconcile
+      // the two, and do not add this to actual costs.
+      committed: r.status !== 'draft',
     };
   });
 }
 
 // Invoices carry their money in real columns — already derived and stored
 // by services/job-financials.js. Nothing to recompute.
-async function invoicesForJob(db, jobId, legacyBlobArray) {
-  const { rows } = await db.query(
-    `SELECT id, status, invoice_number, issue_date, due_date, total, amount_paid
-       FROM invoices WHERE job_id = $1 ORDER BY issue_date ASC NULLS LAST, created_at ASC`,
-    [jobId]
-  );
-  if (!rows.length) return Array.isArray(legacyBlobArray) ? legacyBlobArray : [];
-  return rows.map((r) => ({
+// Marks an array as having come from a real table rather than a legacy blob
+// fallback. Non-enumerable so it survives .map/spread/length/JSON untouched.
+function tagFromTable(arr) {
+  Object.defineProperty(arr, 'fromTable', { value: true, enumerable: false });
+  return arr;
+}
+
+// An invoice counts as billed once it has actually gone out. 'draft' has not
+// been issued to the owner and 'void' never was — matching the AR aging
+// predicate in invoice-routes.js rather than inventing a second rule.
+const BILLED_STATUSES = new Set(['sent', 'partial', 'paid', 'overdue']);
+
+function shapeInvoiceRow(r) {
+  return {
     id: r.id,
     status: r.status,
     number: r.invoice_number,
@@ -137,13 +212,47 @@ async function invoicesForJob(db, jobId, legacyBlobArray) {
     amount: num(r.total),
     amountPaid: num(r.amount_paid),
     openBalance: num(r.total) - num(r.amount_paid),
-  }));
+  };
+}
+
+async function invoicesForJob(db, jobId, legacyBlobArray) {
+  const { rows } = await db.query(
+    `SELECT id, status, invoice_number, issue_date, due_date, total, amount_paid
+       FROM invoices WHERE job_id = $1 ORDER BY issue_date ASC NULLS LAST, created_at ASC`,
+    [jobId]
+  );
+  if (!rows.length) return Array.isArray(legacyBlobArray) ? legacyBlobArray : [];
+  return tagFromTable(rows.map(shapeInvoiceRow));
+}
+
+/**
+ * Invoiced-to-date for the WIP math.
+ *
+ * ONLY rows that came from the `invoices` table may drive this number. The
+ * legacy fallback array is jobs.data.invoices — the OLD PER-JOB VENDOR
+ * INVOICE LIST, which js/jobs.js saveInvoice() still writes and which the
+ * bulk save round-trips. Those are accounts PAYABLE. Their field happens to
+ * be named `amount` and their statuses ('Draft'/'Sent'/'Paid') never equal
+ * 'void', so summing them here would silently report what AGX OWES as what
+ * AGX HAS BILLED — on exactly the legacy jobs the fallback exists for.
+ *
+ * So: untagged array => keep the hand-typed scalar the browser also shows.
+ */
+function invoicedToDate(invoiceRows, job) {
+  if (!Array.isArray(invoiceRows) || !invoiceRows.fromTable) {
+    return num(job && job.invoicedToDate);
+  }
+  return invoiceRows.reduce(
+    (s, i) => s + (BILLED_STATUSES.has(i.status) ? num(i.amount) : 0), 0);
 }
 
 module.exports = {
   changeOrderMoney,
   purchaseOrderMoney,
   changeOrdersForJob,
+  changeOrdersForJobs,
   purchaseOrdersForJob,
   invoicesForJob,
+  invoicesForJobs,
+  invoicedToDate,
 };

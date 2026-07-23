@@ -5577,31 +5577,25 @@ function renderJobsMain() {
             updateCOBreakdownTotals(appState.editBuildingId);
         }
 
+        // This used to push a flat {income, estimatedCosts} record into
+        // appData.changeOrders — the dead localStorage relic that js/jobs.js
+        // itself documents as legacy (see getJobCOTotals). Real change orders
+        // live in job_change_orders and carry their money in line items, so
+        // every CO created here saved "successfully", never appeared in the
+        // Change Orders tab, and contributed nothing to the contract. It also
+        // used native prompt(), which silently no-ops in the installed PWA.
+        //
+        // Rather than fabricate line items to fit the old flat shape, the
+        // button now points at the surface that actually works. Allocating a
+        // real CO's money across buildings is a genuine feature port and is
+        // NOT implemented here — it needs the CO editor's line model.
         function addCOFromBuildingModal() {
             if (!appState.editBuildingId) return;
-            const desc = prompt('CO description:');
-            if (!desc || !desc.trim()) return;
-            const incomeStr = prompt('Income (budget addition) $:', '0');
-            const costStr = prompt('Estimated cost $:', '0');
-            const co = {
-                id: 'co' + Date.now(),
-                jobId: appState.currentJobId,
-                coNumber: '',
-                description: desc.trim(),
-                income: parseFloat(incomeStr) || 0,
-                estimatedCosts: parseFloat(costStr) || 0,
-                date: new Date().toISOString().split('T')[0],
-                notes: '',
-                allocationType: 'building',
-                allocations: [{
-                    buildingId: appState.editBuildingId,
-                    income: parseFloat(incomeStr) || 0,
-                    estimatedCosts: parseFloat(costStr) || 0
-                }]
-            };
-            appData.changeOrders.push(co);
-            if (typeof saveData === 'function') saveData();
-            renderBuildingCOBreakdown(appState.editBuildingId);
+            const msg = 'Change orders are created in the Change Orders tab, where their line ' +
+                        'items drive the price. This panel shows legacy building allocations only.';
+            if (typeof window.p86Toast === 'function') window.p86Toast(msg);
+            else if (typeof window.p86Confirm === 'function') window.p86Confirm({ title: 'Create a change order', message: msg, okText: 'OK' });
+            else console.warn('[jobs] ' + msg);
         }
 
         function removeCOFromBreakdown(coId) {

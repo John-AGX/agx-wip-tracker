@@ -145,6 +145,50 @@ async function orgScopeTemplate(db, orgId) {
 // body so they can't be smuggled in through the JSONB side.
 // ────────────────────────────────────────────────────────────────────
 
+// ────────────────────────────────────────────────────────────────────
+// Shape guards.
+//
+// CO and PO money is derived from lines[], never asserted. An agent that
+// sends a flat `income` / `estimated_costs` / `amount` — which the
+// emit_payload_file description used to invite — would otherwise get a
+// record that saves cleanly and is worth $0, because nothing reads those
+// keys. Bouncing the call is strictly better: the error text reaches the
+// model as a tool result and tells it the correct shape, and no line item
+// gets fabricated inside a money record to make the number come out right.
+// ────────────────────────────────────────────────────────────────────
+
+function rejectFlatMoney(body, kind) {
+  const b = body || {};
+  const flat = ['income', 'estimated_costs', 'estimatedCosts', 'costs', 'amount', 'total',
+                'subtotal', 'contractAmount', 'proposedIncome', 'proposedCosts']
+    .filter((k) => b[k] != null && b[k] !== '');
+  if (!flat.length) return;
+  throw new Error(
+    `${kind}: ${flat.join('/')} cannot be set directly — money is derived from lines[]. ` +
+    'Send fields.lines = [{description, qty, ' +
+    (kind === 'invoice' ? 'unitPrice' : 'unitCost') +
+    (kind === 'change_order' ? ', markup' : '') + '}] instead' +
+    (kind === 'change_order'
+      ? ' (income = lines through markup → target-margin → fees → tax; cost = the raw line subtotal).'
+      : '.')
+  );
+}
+
+// A PO's status column is a lifecycle with transition rules
+// (draft → issued → approved → work_complete → closed, enforced by
+// POST /purchase-orders/:id/status). cleanPoData strips `status` out of
+// the blob, so a payload that set it was silently ignored — the PO stayed
+// a draft while the model reported it issued. Say so instead.
+function rejectPoStatus(body) {
+  if (body && body.status != null && body.status !== '') {
+    throw new Error(
+      'purchase_order: status cannot be set through a payload — POs are created as ' +
+      'draft and move through draft → issued → approved → work_complete → closed ' +
+      'via the PO status endpoint, which enforces the allowed transitions.'
+    );
+  }
+}
+
 function cleanCoData(body) {
   const data = { ...(body || {}) };
   ['id', 'job_id', 'owner_id', 'status', 'co_number', 'approved_at', 'approved_by',
@@ -167,11 +211,17 @@ function cleanPoData(body) {
   return data;
 }
 
-// A line's amount: explicit `amount`, else qty × unitPrice.
+// A line's amount: explicit `amount`, else qty × unit price.
+// Accepts unitCost as an alias for unitPrice. COs and POs price on
+// `unitCost`, invoices on `unitPrice`; without the alias an invoice authored
+// with the CO/PO key silently totalled $0 — the exact silent-zero failure
+// the flat-money guard exists to prevent. purchaseOrderMoney normalizes the
+// same way.
 function lineAmount(l) {
   if (!l) return 0;
   if (l.amount != null && l.amount !== '') return num(l.amount);
-  return num(l.qty || 1) * num(l.unitPrice);
+  const unit = (l.unitPrice != null && l.unitPrice !== '') ? l.unitPrice : l.unitCost;
+  return num(l.qty || 1) * num(unit);
 }
 
 // Recompute an invoice's money from its lines + tax + retainage.
@@ -211,6 +261,7 @@ const PO_RETURNING = `id, job_id, organization_id, owner_id, sub_id, status, po_
 async function createChangeOrder(db, { jobId, orgId, ownerId, fields }) {
   await assertJobInOrg(db, jobId, orgId);
   const body = fields || {};
+  rejectFlatMoney(body, 'change_order');
   const id = genId('co');
   const coNumber = (body.co_number && String(body.co_number).trim()) || await nextCoNumber(db, jobId);
   const data = cleanCoData(body);
@@ -226,15 +277,20 @@ async function createChangeOrder(db, { jobId, orgId, ownerId, fields }) {
 // `merge` is what separates an agent's partial op from the UI's PUT: the
 // dispatcher sends only the fields it wants changed, the REST route
 // replaces the blob wholesale.
-async function updateChangeOrder(db, { id, orgId, fields, merge = true }) {
+async function updateChangeOrder(db, { id, orgId, jobId, fields, merge = true }) {
   if (!id) throw new Error('change_order update requires co_id');
+  rejectFlatMoney(fields, 'change_order');
+  // jobId, when supplied, pins the record to the job the payload targets.
+  // Without it an update op inside a payload for job A could reach job B's
+  // CO by id — same org, so the org predicate alone lets it through.
   const existing = await db.query(
     `SELECT co.status, co.is_locked, co.data FROM job_change_orders co
        JOIN jobs j ON j.id = co.job_id
-      WHERE co.id = $1 AND (j.organization_id = $2 OR j.organization_id IS NULL)`,
-    [id, orgId == null ? null : orgId]
+      WHERE co.id = $1 AND (j.organization_id = $2 OR j.organization_id IS NULL)
+        AND ($3::text IS NULL OR co.job_id = $3)`,
+    [id, orgId == null ? null : orgId, jobId || null]
   );
-  if (!existing.rowCount) throw new Error(`Change order not found: ${id}`);
+  if (!existing.rowCount) throw new Error(`Change order not found on this job: ${id}`);
   const cur = existing.rows[0];
   // Applied COs are immutable on the data side — they've already fed the
   // WIP and changing the lines would create reporting drift.
@@ -255,15 +311,16 @@ async function updateChangeOrder(db, { id, orgId, fields, merge = true }) {
   return rows[0];
 }
 
-async function deleteChangeOrder(db, { id, orgId }) {
+async function deleteChangeOrder(db, { id, orgId, jobId }) {
   if (!id) throw new Error('change_order delete requires co_id');
   const { rows } = await db.query(
     `SELECT co.status FROM job_change_orders co
        JOIN jobs j ON j.id = co.job_id
-      WHERE co.id = $1 AND (j.organization_id = $2 OR j.organization_id IS NULL)`,
-    [id, orgId == null ? null : orgId]
+      WHERE co.id = $1 AND (j.organization_id = $2 OR j.organization_id IS NULL)
+        AND ($3::text IS NULL OR co.job_id = $3)`,
+    [id, orgId == null ? null : orgId, jobId || null]
   );
-  if (!rows.length) throw new Error(`Change order not found: ${id}`);
+  if (!rows.length) throw new Error(`Change order not found on this job: ${id}`);
   // Applied COs are blocked because their lines are already in the WIP —
   // deleting would silently drop revenue from the rollup.
   if (rows[0].status === 'applied') throw new Error(`Cannot delete an applied change order: ${id}`);
@@ -276,6 +333,8 @@ async function deleteChangeOrder(db, { id, orgId }) {
 async function createPurchaseOrder(db, { jobId, orgId, ownerId, fields }) {
   await assertJobInOrg(db, jobId, orgId);
   const body = fields || {};
+  rejectFlatMoney(body, 'purchase_order');
+  rejectPoStatus(body);
   const id = genId('po');
   const poNumber = (body.po_number && String(body.po_number).trim()) || await nextPoNumber(db, orgId);
   const subId = body.sub_id || null;
@@ -290,15 +349,18 @@ async function createPurchaseOrder(db, { jobId, orgId, ownerId, fields }) {
   return rows[0];
 }
 
-async function updatePurchaseOrder(db, { id, orgId, fields, merge = true }) {
+async function updatePurchaseOrder(db, { id, orgId, jobId, fields, merge = true }) {
   if (!id) throw new Error('purchase_order update requires po_id');
+  rejectFlatMoney(fields, 'purchase_order');
+  rejectPoStatus(fields);
   const existing = await db.query(
     `SELECT po.status, po.data FROM job_purchase_orders po
        JOIN jobs j ON j.id = po.job_id
-      WHERE po.id = $1 AND (j.organization_id = $2 OR j.organization_id IS NULL)`,
-    [id, orgId == null ? null : orgId]
+      WHERE po.id = $1 AND (j.organization_id = $2 OR j.organization_id IS NULL)
+        AND ($3::text IS NULL OR po.job_id = $3)`,
+    [id, orgId == null ? null : orgId, jobId || null]
   );
-  if (!existing.rowCount) throw new Error(`Purchase order not found: ${id}`);
+  if (!existing.rowCount) throw new Error(`Purchase order not found on this job: ${id}`);
   if (existing.rows[0].status === 'closed') {
     throw new Error(`Cannot edit a closed purchase order: ${id}`);
   }
@@ -323,15 +385,16 @@ async function updatePurchaseOrder(db, { id, orgId, fields, merge = true }) {
   return rows[0];
 }
 
-async function deletePurchaseOrder(db, { id, orgId }) {
+async function deletePurchaseOrder(db, { id, orgId, jobId }) {
   if (!id) throw new Error('purchase_order delete requires po_id');
   const { rows } = await db.query(
     `SELECT po.status FROM job_purchase_orders po
        JOIN jobs j ON j.id = po.job_id
-      WHERE po.id = $1 AND (j.organization_id = $2 OR j.organization_id IS NULL)`,
-    [id, orgId == null ? null : orgId]
+      WHERE po.id = $1 AND (j.organization_id = $2 OR j.organization_id IS NULL)
+        AND ($3::text IS NULL OR po.job_id = $3)`,
+    [id, orgId == null ? null : orgId, jobId || null]
   );
-  if (!rows.length) throw new Error(`Purchase order not found: ${id}`);
+  if (!rows.length) throw new Error(`Purchase order not found on this job: ${id}`);
   if (rows[0].status === 'closed') throw new Error(`Cannot delete a closed purchase order: ${id}`);
   await db.query('DELETE FROM job_purchase_orders WHERE id = $1', [id]);
   return { id };
@@ -349,6 +412,7 @@ const INV_RETURNING = `id, organization_id, owner_id, job_id, client_id, pay_app
 
 async function createInvoice(db, { jobId, orgId, ownerId, fields }) {
   const b = fields || {};
+  rejectFlatMoney(b, 'invoice');
   if (jobId) await assertJobInOrg(db, jobId, orgId);
   const data = {
     lines: Array.isArray(b.lines) ? b.lines : [],
@@ -374,15 +438,24 @@ async function createInvoice(db, { jobId, orgId, ownerId, fields }) {
   return rows[0];
 }
 
-async function updateInvoice(db, { id, orgId, fields, merge = true }) {
+async function updateInvoice(db, { id, orgId, jobId, fields, merge = true }) {
   if (!id) throw new Error('invoice update requires invoice_id');
+  rejectFlatMoney(fields, 'invoice');
+  // Same job pinning as CO/PO: a payload targeting job A must not reach an
+  // invoice on job B just because they share an org.
   const existing = await db.query(
     `SELECT * FROM invoices
-      WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)`,
-    [id, orgId == null ? null : orgId]
+      WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)
+        AND ($3::text IS NULL OR job_id = $3)`,
+    [id, orgId == null ? null : orgId, jobId || null]
   );
-  if (!existing.rowCount) throw new Error(`Invoice not found: ${id}`);
+  if (!existing.rowCount) throw new Error(`Invoice not found on this job: ${id}`);
   const cur = existing.rows[0];
+  // Re-pointing an invoice at a job is a tenancy move: the per-job read
+  // (GET /jobs/:jobId/invoices) filters on job_id ALONE, with no org
+  // predicate, so an invoice pushed onto another tenant's job becomes
+  // readable there. Validate the destination before allowing it.
+  if (fields && fields.job_id) await assertJobInOrg(db, fields.job_id, orgId);
   // A paid or voided invoice is a closed book — payments are already
   // applied against its total.
   if (cur.status === 'paid' || cur.status === 'void') {
@@ -398,6 +471,13 @@ async function updateInvoice(db, { id, orgId, fields, merge = true }) {
   const taxPct = b.tax_pct !== undefined ? b.tax_pct : cur.tax_pct;
   const retain = b.retainage_amount !== undefined ? b.retainage_amount : cur.retainage_amount;
   const t = computeInvoiceTotals(data, taxPct, retain);
+  // Changing the total changes what "fully paid" means. Without this, an
+  // invoice at status 'partial' whose total is edited down to at-or-below
+  // what's already been paid stays 'partial' forever and keeps showing an
+  // open balance in AR aging. Mirrors what PUT /invoices/:id does.
+  const paid = num(cur.amount_paid);
+  let status = cur.status;
+  if (paid > 0) status = paid >= t.total ? 'paid' : 'partial';
   const { rows } = await db.query(
     `UPDATE invoices
         SET job_id = COALESCE($2, job_id),
@@ -407,27 +487,35 @@ async function updateInvoice(db, { id, orgId, fields, merge = true }) {
             terms = COALESCE($6, terms),
             subtotal = $7, tax_pct = $8, tax_amount = $9,
             retainage_amount = $10, total = $11,
+            status = $13,
             data = $12::jsonb, updated_at = NOW()
       WHERE id = $1
       RETURNING ${INV_RETURNING}`,
     [id, b.job_id || null, b.client_id != null ? String(b.client_id) : null,
      b.issue_date || null, b.due_date || null, b.terms || null,
      t.subtotal, num(taxPct), t.taxAmount, t.retainageAmount, t.total,
-     JSON.stringify(data)]
+     JSON.stringify(data), status]
   );
   return rows[0];
 }
 
-async function deleteInvoice(db, { id, orgId }) {
+async function deleteInvoice(db, { id, orgId, jobId }) {
   if (!id) throw new Error('invoice delete requires invoice_id');
   const { rows } = await db.query(
     `SELECT status, amount_paid FROM invoices
-      WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)`,
-    [id, orgId == null ? null : orgId]
+      WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)
+        AND ($3::text IS NULL OR job_id = $3)`,
+    [id, orgId == null ? null : orgId, jobId || null]
   );
-  if (!rows.length) throw new Error(`Invoice not found: ${id}`);
+  if (!rows.length) throw new Error(`Invoice not found on this job: ${id}`);
   if (num(rows[0].amount_paid) > 0) {
     throw new Error(`Cannot delete an invoice with payments applied: ${id} — void it instead`);
+  }
+  // An invoice marked paid by hand can carry amount_paid 0, so the check
+  // above misses it. DELETE /invoices/:id blocks on status too; match it,
+  // or the AI path becomes the way around the REST guard.
+  if (rows[0].status === 'paid') {
+    throw new Error(`Cannot delete a paid invoice: ${id} — void it instead`);
   }
   await db.query('DELETE FROM invoices WHERE id = $1', [id]);
   return { id };

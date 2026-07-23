@@ -235,6 +235,10 @@ router.get('/metrics',
         COUNT(*) FILTER (WHERE status = 'applied')::int            AS applied,
         COUNT(*) FILTER (WHERE status = 'rejected')::int           AS rejected,
         COUNT(*) FILTER (WHERE status = 'ready')::int              AS ready,
+        -- 'applying' is the in-flight apply claim. Without its own bucket it
+        -- inflated the total while appearing in none of the others, so the
+        -- funnel silently failed to add up.
+        COUNT(*) FILTER (WHERE status = 'applying')::int           AS applying,
         COUNT(*) FILTER (WHERE status IN ('apply_failed','failed'))::int AS failed
       FROM payloads
       WHERE organization_id = $1
@@ -2100,6 +2104,12 @@ const AGENT_SYSTEM_BASELINE = {
     '     - Put a line under a section with `section: "Materials & Supplies Costs"` (literal name) or `btCategory: "materials"|"labor"|"sub"|"gc"` (auto-routes).\n' +
     '     - `groups` = ALTERNATES (Base, Alt 1…); only add a group for an ADDITIONAL alternate beyond Base. `sections` = explicit subgroup headers (rarely needed; groups auto-seed the 4 standard ones).',
     '  • job: `{field_updates?, phase_updates?, node_values?, wire_updates?, qb_assignments?, change_orders?, purchase_orders?, invoices?, notes?, graph?}`',
+    '     - change_orders / purchase_orders / invoices are array ops: `{op:\'create\'|\'update\'|\'delete\', co_id?|po_id?|invoice_id?, fields:{...}}`. They write the REAL `job_change_orders` / `job_purchase_orders` / `invoices` tables.',
+    '     - **MONEY COMES FROM `fields.lines[]`, NEVER A FLAT AMOUNT.** Sending `income`, `estimated_costs`, `costs`, `amount`, `total`, or `subtotal` is REJECTED and aborts the whole payload. A record created with no lines is worth $0.',
+    '     - change_orders fields: `{title, lines:[{description, qty, unitCost, markup?}], scope?, terms?, co_number? (create only), defaultMarkup?, targetMargin?, feeFlat?, feePct?, taxPct?, roundTo?, notes?, building_id?}`. Income = lines through markup → target-margin → fees → tax (exactly the CO editor\'s math); cost = the raw line subtotal.',
+    '     - purchase_orders fields: `{title, sub_id?, lines:[{description, qty, unitCost}], scope?, materialsOnly?, scheduledCompletion?, po_number? (create only)}`. Do NOT send `status` — POs are always created as draft and advance through draft → issued → approved → work_complete → closed via the PO status endpoint; sending it is rejected.',
+    '     - invoices fields: `{lines:[{description, qty, unitPrice, taxable?}], invoice_number?, client_id?, issue_date?, due_date?, terms?, tax_pct?, retainage_amount?, notes?, billTo?}`. subtotal/tax/total are always derived. An invoice op inside a job payload belongs to THAT job — do not pass a different `job_id`.',
+    '     - A CO or PO you create is a DRAFT: its money does NOT enter the contract or committed cost until a human approves it in the CO/PO editor.',
     '  • lead: `{op:\'create\'|\'update\', fields, notes?}`',
     '  • schedule: `{blocks: [{op, entry_id?, jobId, startDate, days, crew, ...}]}`',
     '  • system: `{skill_pack_ops?, field_tool_ops?, link_ops?}`. link_ops includes `{op:\'attach_files\', attachment_ids:[...], target_entity_type, target_entity_id}`.',

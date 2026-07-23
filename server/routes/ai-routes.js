@@ -5315,7 +5315,9 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
 
   // Change orders — the most-overlooked profit lever
   if (changeOrders.length) {
-    lines.push('# Change orders (' + changeOrders.length + ')');
+    const hiddenCOs = changeOrders.legacyHiddenCount || 0;
+    lines.push('# Change orders (' + changeOrders.length + ')'
+      + (hiddenCOs ? ' — plus ' + hiddenCOs + ' legacy blob CO(s) not shown and NOT in the totals' : ''));
     changeOrders.forEach((c, i) => {
       const label = c.coNumber || ('CO ' + (i + 1));
       // proposedIncome/Costs are every CO's own value; income/costs are zero
@@ -6328,9 +6330,12 @@ async function execClientDirectoryTool(name, input, ctx) {
         } else {
           parentId = 'client_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
           await cli.query(
-            `INSERT INTO clients (id, name, company_name, client_type)
-             VALUES ($1, $2, $2, 'Property Mgmt')`,
-            [parentId, input.new_parent_name]
+            // organization_id stamped — this INSERT was missed by the
+            // org-stamping pass, leaving a NULL-org parent company every
+            // tenant could read, rename, and delete.
+            `INSERT INTO clients (id, name, company_name, client_type, organization_id)
+             VALUES ($1, $2, $2, 'Property Mgmt', $3)`,
+            [parentId, input.new_parent_name, _cdRequireOrg('create client records')]
           );
         }
         await cli.query(
@@ -6638,12 +6643,25 @@ async function execClientDirectoryTool(name, input, ctx) {
 // (attach_business_card_to_client, add_client_note). Falls through to
 // the stateless executor for everything else.
 async function execClientDirectoryToolWithCtx(name, input, ctx) {
+  // The two client MUTATORS below live out here (they need ctx.userId), which
+  // is why the org-scoping pass over execClientDirectoryTool's switch missed
+  // them. Both looked their target up by bare id and then wrote — a note onto,
+  // or a business card attached to, any tenant's client. Resolve the org once
+  // and gate both, exactly as the switch does.
+  let _wcOrgId = null;
+  try { _wcOrgId = await resolveOrgIdFromCtx(ctx); } catch (_) { _wcOrgId = null; }
+  const _wcRequireOrg = () => {
+    if (!_wcOrgId) throw new Error('Cannot modify client records without a signed-in user context.');
+    return _wcOrgId;
+  };
   if (name === 'add_client_note') {
     if (!input.client_id || !input.body) throw new Error('client_id and body are required');
     const body = String(input.body).trim();
     if (!body) throw new Error('body is empty');
     if (body.length > 2000) throw new Error('note body cannot exceed 2000 chars');
-    const exists = await pool.query('SELECT id, name FROM clients WHERE id = $1', [input.client_id]);
+    const exists = await pool.query(
+      'SELECT id, name FROM clients WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+      [input.client_id, _wcRequireOrg()]);
     if (!exists.rows.length) throw new Error('client_id not found');
     const note = {
       id: 'note_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8),
@@ -6666,7 +6684,9 @@ async function execClientDirectoryToolWithCtx(name, input, ctx) {
   }
   const userId = ctx && ctx.userId;
   if (!userId) throw new Error('userId required for attach_business_card_to_client');
-  const exists = await pool.query('SELECT id, name FROM clients WHERE id = $1', [input.client_id]);
+  const exists = await pool.query(
+    'SELECT id, name FROM clients WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)',
+    [input.client_id, _wcRequireOrg()]);
   if (!exists.rows.length) throw new Error('client_id not found');
   const picked = consumePendingClientImage(userId, input.image_index);
   if (!picked) throw new Error('No pending business-card image found. The user may have uploaded then sent it more than 30 minutes ago, or the image was already attached.');
@@ -6732,11 +6752,23 @@ async function buildClientDirectoryContext(organization) {
   // cost, the model needs them to honor durable facts).
   const PARENT_RECENCY_CAP = 50;
 
+  // ORG-SCOPED. This query had no organization predicate, so the directory
+  // snapshot rendered EVERY tenant's clients — ids, contacts, addresses and
+  // agent_notes — straight into 86's per-turn prompt. The org has always
+  // been passed in; it just wasn't used. NULL-org rows stay visible, matching
+  // the rest of the tenancy model. Fails closed: no org, no directory.
+  const _cdCtxOrg = (organization && organization.id) || null;
+  if (!_cdCtxOrg) {
+    return { system: '# Clients\n(no organization context — client directory withheld)\n' };
+  }
   const { rows } = await pool.query(
     `SELECT id, name, short_name, parent_client_id, client_type, company_name, community_name,
             community_manager, cm_email, cm_phone, market, property_address,
             city, state, zip, email, phone, agent_notes, updated_at
-     FROM clients ORDER BY COALESCE(parent_client_id, id), name`
+     FROM clients
+     WHERE (organization_id = $1 OR organization_id IS NULL)
+     ORDER BY COALESCE(parent_client_id, id), name`,
+    [_cdCtxOrg]
   );
   const byId = new Map(rows.map(r => [r.id, r]));
   const allParents = rows.filter(r => !r.parent_client_id);
@@ -7547,22 +7579,13 @@ const PAYLOAD_TOOLS = [
       'client: {op,fields,notes}. ' +
       'estimate: {op,scope,field_updates,sections,groups,line_adds,line_edits,line_deletes}. ' +
       'job: {field_updates,phase_updates,node_values,wire_updates,qb_assignments,change_orders,purchase_orders,invoices,notes,graph} ' +
-      '— note change_orders/purchase_orders/invoices are array ops with ' +
-      '{op:create|update|delete, *_id?, fields:{...}} that write the real ' +
-      'job_change_orders / job_purchase_orders / invoices tables. ' +
-      'MONEY ON A CO AND A PO COMES FROM ITS LINE ITEMS, NOT A FLAT AMOUNT: ' +
-      'change_orders fields = {title, lines:[{description, qty, unitCost, ' +
-      'markup?}], scope?, terms?, co_number?, defaultMarkup?, targetMargin?, ' +
-      'feeFlat?, feePct?, taxPct?, roundTo?} — the CO\'s income is derived ' +
-      'from lines through markup -> target-margin -> fees -> tax, exactly as ' +
-      'the CO editor computes it, and its cost is the raw line subtotal. ' +
-      'purchase_orders fields = {title, sub_id?, lines:[{description, qty, ' +
-      'unitCost}], scope?, materialsOnly?, scheduledCompletion?, po_number?, ' +
-      'status?}. invoices fields = {lines:[{description, qty, unitPrice, ' +
-      'taxable?}], client_id?, issue_date?, due_date?, terms?, tax_pct?, ' +
-      'retainage_amount?, notes?} — subtotal/tax/total are always derived ' +
-      'from the lines and cannot be asserted directly. ' +
-      'A CO or PO created with no lines is worth $0. ' +
+      // NOTE: this description is HARD-TRUNCATED at 1024 chars by the
+      // managed-agents API (toCustomToolParam in admin-agents-routing).
+      // The full per-entity contract lives in the Scribe's system baseline,
+      // which is not truncated — keep this line short and put detail there.
+      '— change_orders/purchase_orders/invoices are array ops ' +
+      '{op:create|update|delete, *_id?, fields} writing the REAL tables; ' +
+      'their money comes from fields.lines[], never a flat amount. ' +
       'lead: {op,fields,notes}. ' +
       'schedule: {blocks} — array of {op:create|update|delete, entry_id?, ' +
       'jobId, startDate, days, crew, includesWeekends, status, notes} for ' +
