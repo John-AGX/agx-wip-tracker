@@ -4665,7 +4665,23 @@ function refreshInspContractAlloc(){
   pruneEmptyMatrixWires();
   var host=document.getElementById('ng-insp-contract-alloc');
   if(!host) return;
+  ensureCOsThenRepaint(E.job());
   host.innerHTML=contractAllocHtml();
+}
+// Change orders load per-job on demand and the inspector paints before that
+// resolves, so the CO section rendered empty on first open even though the job
+// had an approved CO. Kick the fetch once per job and repaint when it lands.
+// loadChangeOrdersForJob already dedups in-flight requests; _coKicked keeps a
+// job with genuinely no COs from repainting forever.
+var _coKicked={};
+function ensureCOsThenRepaint(jid){
+  if(!jid || _coKicked[jid]) return;
+  _coKicked[jid]=1;
+  if(typeof window.loadChangeOrdersForJob!=='function') return;
+  try{
+    var p=window.loadChangeOrdersForJob(jid);
+    if(p && p.then) p.then(function(){ try{ refreshInspContractAlloc(); }catch(e){} });
+  }catch(e){}
 }
 // Compact Scopes×Buildings board for the ~340px Site Plan inspector. Reads
 // appData.phases — the (scope,building) records the building roll-ups and the
