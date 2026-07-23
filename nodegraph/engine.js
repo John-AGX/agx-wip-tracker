@@ -743,13 +743,12 @@ function matrixPhasesForT1(t1n){
   if(typeof appData === 'undefined' || !appData || !Array.isArray(appData.phases)) return [];
   var bId = t1BuildingId(t1n);
   if(!bId) return [];
-  var wiredPh = {};
-  wires.forEach(function(w){
-    if(w.toNode !== t1n.id) return;
-    var src = findNode(w.fromNode);
-    if(src && src.type === 't2'){ var pid = (src.data && src.data.id) || src.dataId; if(pid) wiredPh[pid] = 1; }
-  });
-  return appData.phases.filter(function(p){ return p && p.buildingId === bId && !wiredPh[p.id]; });
+  // Every (scope,building) record for this building, full stop. This used to
+  // exclude records whose scope also had a t2→t1 WIRE, so the wire could supply
+  // that scope's dollars instead — a split that only made sense while both
+  // models were live. Wiring is retired, so the exclusion would now silently
+  // drop a scope's revenue instead of deduplicating it.
+  return appData.phases.filter(function(p){ return p && p.buildingId === bId; });
 }
 // The job's contract dollars are ONE job-level number — the WIP node's synced
 // jobFields.contractAmount (pushToJob copies job.contractAmount onto it every
@@ -759,28 +758,23 @@ function wipContractAmount(){
   var wip = nodes.find(function(n){ return n.type === 'wip'; });
   return (wip && wip.jobFields && Number(wip.jobFields.contractAmount)) || 0;
 }
+// A building's allocated revenue = the sum of its (scope,building) records.
+// ONE source of truth: the same appData.phases rows the allocation card, the
+// Jobs grid and the AIA schedule of values all read.
+//
+// This previously ALSO added a wire portion (t2→t1 allocPct × the t2 node's
+// revenue) and a CO wire portion, and could be overridden by a per-building
+// contractPct. Those described a second, parallel allocation that drifted from
+// the matrix and then double-counted against it: on Fairways the wired Gutters
+// scope added $9,200 to every building on top of its matrix value, reporting a
+// $332,133 job against a $240,133 contract — the whole $92,000 scope twice.
+// Measured before removal: no job anywhere had a CO→building wire, and no
+// building had contractPct set, so only the double-count changes.
 function getBuildingAllocatedRevenue(t1n){
   if(!t1n || t1n.type !== 't1') return 0;
-  var scopePortion = 0, coPortion = 0;
-  wires.forEach(function(w){
-    if(w.toNode !== t1n.id) return;
-    var src = findNode(w.fromNode);
-    if(src && src.type === 't2') scopePortion += getPhaseRevenueToBuilding(src, t1n.id);
-    else if(src && src.type === 'co') coPortion += getCOIncomeToParent(src, t1n.id);
-  });
-  // + matrix-allocated scopes (no t2 node/wire): full phaseRevenue, allocated 100%
-  // to this one building. Deduped vs wired t2 inside matrixPhasesForT1. This only
-  // feeds the building tile + rollup WEIGHT — never a second job-level dollar total.
-  matrixPhasesForT1(t1n).forEach(function(p){ scopePortion += matrixPhaseRevenue(p); });
-  // ALLOCATION MODE (contractPct set): the building's contract = its share of the
-  // job contract, REPLACING the scope/matrix contract sum. LEGACY MODE
-  // (contractPct null): the scope/matrix sum, byte-identical to before. CO revenue
-  // adds on top in BOTH modes. The job total (WIP = contract + CO) never sums
-  // building revenue, so re-slicing the contract can't double-count at the job level.
-  var contractPortion = (t1n.contractPct != null)
-    ? wipContractAmount() * (Number(t1n.contractPct) / 100)
-    : scopePortion;
-  return contractPortion + coPortion;
+  var total = 0;
+  matrixPhasesForT1(t1n).forEach(function(p){ total += matrixPhaseRevenue(p); });
+  return total;
 }
 
 // Weighted-average pctComplete across a T2/CO node's outgoing T1 wires.
