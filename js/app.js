@@ -2524,6 +2524,46 @@
         // succeeded. Complete-but-not-ok means we are running on the localStorage
         // cache, which must never be pushed back as authoritative.
         var _serverLoadOk = false;
+        // Per-job signature of what we last LOADED or successfully PUSHED, so a
+        // save can ship only the jobs this client actually changed instead of
+        // rewriting every job from its cache. See the dirty filter in
+        // pushToServer for why that mattered.
+        var _jobBaseline = {};
+        var _estimatesBaseline = null;
+        // Drop server-injected/per-save hints so they can't register as changes.
+        function _stripPrivate(o) {
+            if (!o || typeof o !== 'object') return o;
+            var out = {};
+            Object.keys(o).forEach(function(k) { if (k.charAt(0) !== '_') out[k] = o[k]; });
+            return out;
+        }
+        function jobSliceSig(jobId) {
+            var j = (appData.jobs || []).find(function(x) { return x.id === jobId; });
+            if (!j) return '';
+            var pick = function(arr) {
+                return (arr || []).filter(function(r) { return r && r.jobId === jobId; });
+            };
+            try {
+                return JSON.stringify([
+                    _stripPrivate(j), pick(appData.buildings), pick(appData.phases),
+                    pick(appData.changeOrders), pick(appData.subs),
+                    pick(appData.purchaseOrders), pick(appData.invoices)
+                ]);
+            } catch (e) {
+                // Never let a serialize failure mark a job CLEAN and skip its save.
+                return 'unserializable:' + Date.now() + ':' + Math.random();
+            }
+        }
+        function estimatesSig() {
+            try { return JSON.stringify([appData.estimates, appData.estimateLines]); }
+            catch (e) { return 'unserializable:' + Date.now() + ':' + Math.random(); }
+        }
+        function _estimatesDirty() { return _estimatesBaseline !== estimatesSig(); }
+        function rebuildBaselines() {
+            _jobBaseline = {};
+            (appData.jobs || []).forEach(function(j) { _jobBaseline[j.id] = jobSliceSig(j.id); });
+            _estimatesBaseline = estimatesSig();
+        }
         window.p86DataReady = function() { return _serverLoadComplete; };
         window.p86DataLoading = function() { return _serverLoadInFlight; };
 
@@ -2594,6 +2634,7 @@
                 _serverLoadComplete = true;
                 _serverLoadOk = true;   // a real GET landed — safe to push from here
                 _serverLoadInFlight = false;
+                rebuildBaselines();     // this IS the server's state — nothing is dirty yet
                 // Re-render whatever's visible. Each renderer no-ops if
                 // its DOM target isn't present, so calling them all is
                 // safe regardless of which tab the user is on.
@@ -2682,6 +2723,22 @@
             // user can view but not modify) are filtered out so PMs scrolling the
             // list don't accidentally overwrite each other's data.
             var editableJobs = appData.jobs.filter(function(j) { return j._canEdit !== false; });
+            // ...and of those, only the ones THIS client actually changed.
+            //
+            // Every save used to ship every editable job, so a session that had
+            // merely opened the app would rewrite all 22 jobs from its cache on
+            // its next save — clobbering another user's work on jobs it never
+            // touched. That is how a corrected scope split and a deleted building
+            // kept coming back while this client's own memory was clean: a second
+            // session, editing nothing, was replaying its stale snapshot.
+            //
+            // A job is dirty when its slice differs from what we last loaded or
+            // successfully pushed. New jobs have no baseline and always count.
+            var dirty = editableJobs.filter(function(j) {
+                return _jobBaseline[j.id] !== jobSliceSig(j.id);
+            });
+            if (!dirty.length && !_estimatesDirty()) return Promise.resolve();
+            editableJobs = dirty;
             var editableIds = {};
             editableJobs.forEach(function(j) { editableIds[j.id] = true; });
 
@@ -2704,12 +2761,19 @@
             };
 
             notifyPushStatus('saving');
+            var pushedIds = editableJobs.map(function(j) { return j.id; });
+            var estimatesGo = appData.estimates.length && _estimatesDirty();
             _activePush = Promise.all([
                 editableJobs.length ? window.p86Api.jobs.bulkSave(jobsPayload) : Promise.resolve(),
-                appData.estimates.length ? window.p86Api.estimates.bulkSave(estimatesPayload) : Promise.resolve()
+                estimatesGo ? window.p86Api.estimates.bulkSave(estimatesPayload) : Promise.resolve()
             ]).then(function(r) {
                 _pushRetryCount = 0;
                 _activePush = null;
+                // What we just sent is now the server's state — re-baseline the
+                // jobs we pushed so they stop counting as dirty. Jobs we did NOT
+                // push keep their old baseline and stay out of future payloads.
+                pushedIds.forEach(function(id) { _jobBaseline[id] = jobSliceSig(id); });
+                if (estimatesGo) _estimatesBaseline = estimatesSig();
                 notifyPushStatus('saved');
                 return r;
             }).catch(function(err) {
