@@ -4136,23 +4136,15 @@ function renderJobsMain() {
             if (_bldgs.length === 0 || _suppressMatrix) {
                 container.innerHTML = titleHTML + compactTable;
             } else {
-                // Default surface = the building-first card editor; the wide
-                // Buildings×Phases matrix is one toggle away for power editing.
-                var _view = _allocView[jobId] || 'cards';
-                var _seg = function(v, label) {
-                    var on = _view === v;
-                    return '<button type="button" onclick="onAllocViewToggle(\'' + v + '\')" style="font-size:11px;font-weight:600;padding:3px 11px;border:0;cursor:pointer;background:' + (on ? 'var(--accent)' : 'transparent') + ';color:' + (on ? '#fff' : 'var(--text-dim)') + ';">' + label + '</button>';
-                };
-                var viewToggle =
-                    '<div style="display:flex;justify-content:flex-end;margin:0 0 8px;">' +
-                        '<div style="display:inline-flex;border:1px solid var(--border);border-radius:8px;overflow:hidden;">' + _seg('cards', 'Cards') + _seg('grid', 'Grid') + '</div>' +
-                    '</div>';
-                container.innerHTML = titleHTML + viewToggle + '<div class="phase-matrix-host"></div>';
+                // ONE allocation surface: the Scopes×Buildings matrix. The old
+                // per-scope card editor (Cards view) is retired — it duplicated
+                // the matrix's controls (building coverage, Even/Units/Levels
+                // split, per-building override) through the same primitives, and
+                // two editors for the same money invited them to drift. Coverage
+                // is now the matrix's tick-scopes + tick-buildings → Link action.
+                container.innerHTML = titleHTML + '<div class="phase-matrix-host"></div>';
                 var _host = container.querySelector('.phase-matrix-host');
-                try {
-                    if (_view === 'grid') renderPhaseMatrixInto(_host, jobId);
-                    else renderPhaseAllocEditorInto(_host, jobId);
-                } catch (e) {}
+                try { renderPhaseMatrixInto(_host, jobId); } catch (e) {}
             }
         }
 
@@ -4366,10 +4358,10 @@ function renderJobsMain() {
             var allPhasesTicked = names.length > 0 && selPhaseCount === names.length;
 
             var head = '<tr><th style="text-align:left;padding:5px 8px;font-size:11px;color:var(--text-dim);' + stickL + '">' +
-                '<label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;" title="Select all / no phases">' +
-                    '<input type="checkbox"' + (allPhasesTicked ? ' checked' : '') + ' onchange="onMxTogglePhaseAll(this)" style="cursor:pointer;margin:0;"/>Phase</label></th>';
+                '<label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;" title="Select all / no scopes">' +
+                    '<input type="checkbox"' + (allPhasesTicked ? ' checked' : '') + ' onchange="onMxTogglePhaseAll(this)" style="cursor:pointer;margin:0;"/>Scope</label></th>';
             cols.forEach(function(c) { head += '<th style="text-align:right;padding:5px 8px;font-size:11px;color:var(--text-dim);white-space:nowrap;">' +
-                '<label style="display:inline-flex;align-items:center;gap:3px;cursor:pointer;justify-content:flex-end;" title="Tick buildings to link the selected phases to (leave all unticked = every building)">' +
+                '<label style="display:inline-flex;align-items:center;gap:3px;cursor:pointer;justify-content:flex-end;" title="Tick buildings to link the selected scopes to (leave all unticked = every building)">' +
                     '<input type="checkbox"' + (_mxSel[c.id] ? ' checked' : '') + ' data-mx-bcol="' + attr(c.id) + '" onchange="onMxToggleBldgSel(this)" style="cursor:pointer;margin:0;"/>' +
                     escapeHTML(c.name) +
                 '</label></th>'; });
@@ -4414,15 +4406,15 @@ function renderJobsMain() {
                 var pcost = info.recs.reduce(function(s, r) { return s + recCost(r); }, 0); grandCost += pcost;
                 var pprofit = rowTot - pcost;
                 var avgPct = info.recs.length ? Math.round(info.recs.reduce(function(s, r) { return s + (r.pctComplete || 0); }, 0) / info.recs.length) : 0;
-                var modeChip = '<button type="button" data-mx-phase="' + attr(name) + '" onclick="onPhaseMatrixModeToggle(this)" title="Toggle percent / dollar allocation for this phase" style="margin-left:6px;font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;border:1px solid var(--border);background:var(--overlay-light,rgba(255,255,255,0.05));color:var(--accent);cursor:pointer;">' + (isPct ? '%' : '$') + '</button>';
+                var modeChip = '<button type="button" data-mx-phase="' + attr(name) + '" onclick="onPhaseMatrixModeToggle(this)" title="Toggle percent / dollar allocation for this scope" style="margin-left:6px;font-size:10px;font-weight:700;padding:1px 6px;border-radius:10px;border:1px solid var(--border);background:var(--overlay-light,rgba(255,255,255,0.05));color:var(--accent);cursor:pointer;">' + (isPct ? '%' : '$') + '</button>';
                 var accrChip = (poAccr[name] > 0) ? '<span title="Open PO commitment — accrued until billed/paid" style="margin-left:6px;font-size:10px;padding:1px 6px;border-radius:10px;background:rgba(224,164,88,0.15);color:var(--orange,#e0a458);white-space:nowrap;">&#9203; ' + formatCurrency(poAccr[name]) + '</span>' : '';
                 var totalCell = isPct
                     ? '<td style="text-align:right;padding:3px 4px;"><input type="number" min="0" step="100" value="' + (info.total || '') + '" data-mx-phase="' + attr(name) + '" oninput="onPhaseMatrixTotal(this)" onchange="onPhaseMatrixCommit(this)" placeholder="total $" style="width:90px;font-size:12.5px;font-weight:700;padding:3px 5px;text-align:right;background:var(--bg);border:1px solid var(--accent);border-radius:4px;color:var(--accent);font-family:monospace;"/></td>'
                     : '<td data-mx-rowtot="' + attr(name) + '" style="text-align:right;padding:4px 8px;font-size:12.5px;font-weight:700;color:var(--accent);font-family:monospace;">' + formatCurrency(rowTot) + '</td>';
                 var costCell = '<td style="text-align:right;padding:4px 8px;font-size:12px;font-family:monospace;color:var(--orange,#e0a458);border-left:1px solid var(--border);">' + formatCurrency(pcost) + '</td>';
                 var profitCell = '<td style="text-align:right;padding:4px 8px;font-size:12px;font-family:monospace;color:' + (pprofit >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(pprofit) + '</td>';
-                var doneCell = '<td style="text-align:right;padding:3px 4px;"><span style="display:inline-flex;align-items:center;gap:1px;justify-content:flex-end;"><input type="number" min="0" max="100" step="5" value="' + (avgPct || '') + '" data-mx-phase="' + attr(name) + '" oninput="onPhaseMatrixPctDone(this)" onchange="onPhaseMatrixCommit(this)" title="Phase % complete — drives the WIP roll-up" style="width:46px;font-size:12px;padding:3px 4px;text-align:right;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--accent);font-weight:700;"/><span style="font-size:10px;color:var(--text-dim);">%</span></span></td>';
-                var phaseChk = '<input type="checkbox"' + (_mxPhaseSel[name] ? ' checked' : '') + ' data-mx-prow="' + attr(name) + '" onchange="onMxTogglePhaseSel(this)" title="Select this phase to link to buildings" style="cursor:pointer;margin:0 6px 0 0;vertical-align:middle;"/>';
+                var doneCell = '<td style="text-align:right;padding:3px 4px;"><span style="display:inline-flex;align-items:center;gap:1px;justify-content:flex-end;"><input type="number" min="0" max="100" step="5" value="' + (avgPct || '') + '" data-mx-phase="' + attr(name) + '" oninput="onPhaseMatrixPctDone(this)" onchange="onPhaseMatrixCommit(this)" title="Scope % complete — drives the WIP roll-up" style="width:46px;font-size:12px;padding:3px 4px;text-align:right;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--accent);font-weight:700;"/><span style="font-size:10px;color:var(--text-dim);">%</span></span></td>';
+                var phaseChk = '<input type="checkbox"' + (_mxPhaseSel[name] ? ' checked' : '') + ' data-mx-prow="' + attr(name) + '" onchange="onMxTogglePhaseSel(this)" title="Select this scope to link to buildings" style="cursor:pointer;margin:0 6px 0 0;vertical-align:middle;"/>';
                 var pCellStick = _mxPhaseSel[name] ? stickLSel : stickL;
                 return '<tr>' +
                     '<td style="text-align:left;padding:4px 8px;font-size:12.5px;font-weight:600;color:var(--text);white-space:nowrap;' + pCellStick + '">' + phaseChk + escapeHTML(name) + modeChip + accrChip + '</td>' +
@@ -4444,11 +4436,11 @@ function renderJobsMain() {
 
             var linkTarget = selBldgCount ? (selBldgCount + ' building' + (selBldgCount === 1 ? '' : 's')) : 'all buildings';
             var actionZone = selPhaseCount
-                ? '<button type="button" onclick="onPhaseMatrixLinkSelected(this)" title="Distribute each selected phase across ' + (selBldgCount ? 'the selected buildings' : 'every building') + ', split by units/levels" style="font-size:11px;font-weight:700;padding:5px 12px;border-radius:8px;border:1px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer;white-space:nowrap;">&#128279; Link ' + selPhaseCount + ' phase' + (selPhaseCount === 1 ? '' : 's') + ' &rarr; ' + linkTarget + '</button>'
-                : '<span style="font-size:11px;color:var(--text-dim);">Tick <b>phases</b> (left) + <b>buildings</b> (headers), then <b>Link</b> — each phase splits across the buildings by units/levels. Untick all buildings to link to every one. Type any cell to override; the [% / $] chip toggles a row.</span>';
+                ? '<button type="button" onclick="onPhaseMatrixLinkSelected(this)" title="Distribute each selected scope across ' + (selBldgCount ? 'the selected buildings' : 'every building') + ', split by units/levels" style="font-size:11px;font-weight:700;padding:5px 12px;border-radius:8px;border:1px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer;white-space:nowrap;">&#128279; Link ' + selPhaseCount + ' scope' + (selPhaseCount === 1 ? '' : 's') + ' &rarr; ' + linkTarget + '</button>'
+                : '<span style="font-size:11px;color:var(--text-dim);">Tick <b>scopes</b> (left) + <b>buildings</b> (headers), then <b>Link</b> — each scope splits across the buildings by units/levels. Untick all buildings to link to every one. Type any cell to override; the [% / $] chip toggles a row.</span>';
             container.innerHTML =
                 '<div style="display:flex;justify-content:space-between;align-items:center;margin:2px 0 6px;gap:8px;flex-wrap:wrap;">' +
-                    '<h4 style="font-size:12px;margin:0;color:var(--text-dim);text-transform:uppercase;letter-spacing:.5px;">Buildings &times; Phases</h4>' +
+                    '<h4 style="font-size:12px;margin:0;color:var(--text-dim);text-transform:uppercase;letter-spacing:.5px;">Scopes &times; Buildings</h4>' +
                     actionZone +
                 '</div>' +
                 '<div style="border:1px solid var(--border,#333);border-radius:10px;overflow-x:auto;background:var(--card-bg,#141419);margin-bottom:12px;">' +
@@ -4522,7 +4514,7 @@ function renderJobsMain() {
                     : ('Allocated ' + allocRounded + '%' + (meterOk ? ' ✓' : ' ⚠')));
 
                 // ── Header: name + mode chip + accrued + Rev/Cost/Profit + %Done
-                var modeChip = '<button type="button" data-mx-phase="' + attr(name) + '" onclick="onPhaseMatrixModeToggle(this)" title="Toggle percent / dollar allocation for this phase" style="font-size:10px;font-weight:700;padding:1px 7px;border-radius:10px;border:1px solid var(--border);background:var(--overlay-light,rgba(255,255,255,0.05));color:var(--accent);cursor:pointer;">' + (isPct ? '%' : '$') + '</button>';
+                var modeChip = '<button type="button" data-mx-phase="' + attr(name) + '" onclick="onPhaseMatrixModeToggle(this)" title="Toggle percent / dollar allocation for this scope" style="font-size:10px;font-weight:700;padding:1px 7px;border-radius:10px;border:1px solid var(--border);background:var(--overlay-light,rgba(255,255,255,0.05));color:var(--accent);cursor:pointer;">' + (isPct ? '%' : '$') + '</button>';
                 var accrChip = (poAccr[name] > 0) ? '<span title="Open PO commitment — accrued until billed/paid" style="font-size:10px;padding:1px 6px;border-radius:10px;background:rgba(224,164,88,0.15);color:var(--orange,#e0a458);white-space:nowrap;">&#9203; ' + formatCurrency(poAccr[name]) + '</span>' : '';
                 var header =
                     '<div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:8px;">' +
@@ -4533,7 +4525,7 @@ function renderJobsMain() {
                             '<span style="color:var(--text-dim);">Rev <b style="color:var(--green);">' + formatCurrency(rev) + '</b></span>' +
                             '<span style="color:var(--text-dim);">Cost <b style="color:var(--orange,#e0a458);">' + formatCurrency(cost) + '</b></span>' +
                             '<span style="color:var(--text-dim);">Profit <b style="color:' + (profit >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(profit) + '</b></span>' +
-                            '<span style="display:inline-flex;align-items:center;gap:2px;color:var(--text-dim);">% Done <input type="number" min="0" max="100" step="5" value="' + (avgPct || '') + '" data-mx-phase="' + attr(name) + '" oninput="onPhaseMatrixPctDone(this)" onchange="onPhaseMatrixCommit(this)" title="Phase % complete — drives the WIP roll-up" style="width:44px;font-size:12px;padding:2px 4px;text-align:right;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--accent);font-weight:700;"/></span>' +
+                            '<span style="display:inline-flex;align-items:center;gap:2px;color:var(--text-dim);">% Done <input type="number" min="0" max="100" step="5" value="' + (avgPct || '') + '" data-mx-phase="' + attr(name) + '" oninput="onPhaseMatrixPctDone(this)" onchange="onPhaseMatrixCommit(this)" title="Scope % complete — drives the WIP roll-up" style="width:44px;font-size:12px;padding:2px 4px;text-align:right;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--accent);font-weight:700;"/></span>' +
                         '</div>' +
                     '</div>';
 
@@ -4992,6 +4984,9 @@ function renderJobsMain() {
             commitMatrixChange(jobId, host);
         }
         window.onPhaseMatrixLinkSelected = onPhaseMatrixLinkSelected;
+        // Exposed so the Site Plan's Contract allocation card can mount the SAME
+        // matrix instead of keeping a second, node-graph-local allocation model.
+        window.renderPhaseMatrixInto = renderPhaseMatrixInto;
 
         function recomputePhaseMatrixTotals(input, jobId) {
             var table = input.closest('table'); if (!table) return;
