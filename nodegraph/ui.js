@@ -4661,6 +4661,54 @@ function pruneEmptyMatrixWires(){
   }
   if(removed && E.saveGraph) setTimeout(function(){ E.saveGraph(); },0);  // defer: avoid re-entrant save mid-render
 }
+// Click-to-edit on the card. Both write through the exported jobs.js helpers
+// (setScopeTotal / setScopeBuildingPct), which run the grid's own primitives —
+// this card never computes allocation dollars itself.
+function scopeChipEdit(el, opts){
+  var jid=E.job(); if(!jid) return;
+  editingId='sc:'+(opts.key||'');
+  var inp=document.createElement('input');
+  inp.type='number'; inp.min=0; inp.step=opts.step; if(opts.max!=null) inp.max=opts.max;
+  inp.value=opts.value; inp.className='ng-wip-chip-input';
+  el.textContent=''; el.appendChild(inp);
+  setTimeout(function(){ inp.focus(); inp.select(); },0);
+  var done=false;
+  function finish(){
+    if(done) return; done=true; editingId=null;
+    var v=parseFloat(inp.value); if(!isFinite(v)||v<0) v=0;
+    try{ opts.commit(v); }catch(e){}
+    render();
+  }
+  inp.addEventListener('blur',finish);
+  inp.addEventListener('keydown',function(ev){
+    if(ev.key==='Enter'){ ev.preventDefault(); inp.blur(); }
+    else if(ev.key==='Escape'){ ev.preventDefault(); done=true; editingId=null; refreshInspContractAlloc(); }
+  });
+  inp.addEventListener('mousedown',function(ev){ ev.stopPropagation(); });
+}
+function scopeTotalEdit(el){
+  var nm=el.getAttribute('data-sc-name'); if(!nm) return;
+  var jid=E.job();
+  var cur=(appData.phases||[]).filter(function(p){ return p.jobId===jid && (p.phase||'Unnamed')===nm; })
+    .reduce(function(a,p){ return a+Number(p.asSoldRevenue||p.asSoldPhaseBudget||p.phaseBudget||0); },0);
+  scopeChipEdit(el,{ key:nm, step:100, value:Math.round(cur),
+    commit:function(v){ if(typeof window.setScopeTotal==='function') window.setScopeTotal(jid, nm, v); } });
+}
+function scopePctEdit(el){
+  var nm=el.getAttribute('data-sc-name'), bid=el.getAttribute('data-sc-bldg');
+  if(!nm||!bid) return;
+  var jid=E.job();
+  var pRev=function(p){ return Number(p.asSoldRevenue||p.asSoldPhaseBudget||p.phaseBudget||0); };
+  var recs=(appData.phases||[]).filter(function(p){ return p.jobId===jid && (p.phase||'Unnamed')===nm; });
+  var tot=recs.reduce(function(a,p){ return a+pRev(p); },0);
+  var mine=recs.filter(function(p){ return p.buildingId===bid; }).reduce(function(a,p){ return a+pRev(p); },0);
+  scopeChipEdit(el,{ key:nm+'|'+bid, step:0.1, max:100, value:(tot>0?(mine/tot*100):0).toFixed(1),
+    commit:function(v){ if(typeof window.setScopeBuildingPct==='function') window.setScopeBuildingPct(jid, nm, bid, v); } });
+}
+function scopeAdd(kind){
+  var fn = kind==='building' ? window.openAddBuildingToJobModal : window.openAddPhaseToJobModal;
+  if(typeof fn==='function'){ try{ fn(); }catch(e){} }
+}
 function refreshInspContractAlloc(){
   pruneEmptyMatrixWires();
   var host=document.getElementById('ng-insp-contract-alloc');
@@ -4716,7 +4764,8 @@ function contractAllocHtml(){
    +'<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:11px;">'
    +'<thead><tr style="color:#8b90a5;font-size:9px;text-transform:uppercase;letter-spacing:.5px;">'
    +'<th style="text-align:left;padding:3px 4px;">Scope</th><th style="text-align:right;padding:3px 4px;">Revenue</th>';
-  blds.forEach(function(b){ h+='<th style="text-align:right;padding:3px 4px;">'+luEsc(b.name||'Bldg')+'</th>'; });
+  blds.forEach(function(b){
+    h+='<th style="text-align:right;padding:3px 4px;white-space:nowrap;">'+luEsc(b.name||'Bldg')+bldgGeoFlag(b)+'</th>'; });
   h+='</tr></thead><tbody>';
   var colTot={}; blds.forEach(function(b){ colTot[b.id]=0; });
   var grand=0, unTot=0;
@@ -4726,13 +4775,13 @@ function contractAllocHtml(){
     unTot+=recs.filter(function(p){ return !p.buildingId; }).reduce(function(a,p){ return a+pRev(p); },0);
     h+='<tr style="border-top:1px solid var(--ng-border2);">'
       +'<td style="padding:3px 4px;color:var(--ng-text,#c8cbe0);white-space:nowrap;">'+luEsc(nm)+'</td>'
-      +'<td style="padding:3px 4px;text-align:right;font-family:\'Courier New\',monospace;color:#34d399;">'+E.fmtC(rowTot)+'</td>';
+      +'<td style="padding:3px 4px;text-align:right;"><span class="ng-sc-total" data-sc-name="'+luEsc(nm)+'" title="Click to set this scope’s total revenue" style="cursor:pointer;font-family:\'Courier New\',monospace;color:#34d399;">'+E.fmtC(rowTot)+'</span></td>';
     blds.forEach(function(b){
       var v=recs.filter(function(p){ return p.buildingId===b.id; }).reduce(function(a,p){ return a+pRev(p); },0);
       colTot[b.id]+=v;
       var pct=rowTot>0?(v/rowTot*100):0;
       h+='<td style="padding:3px 4px;text-align:right;">'
-        +'<span style="font-family:\'Courier New\',monospace;color:'+(v>0?'#fbbf24':'#4a4f63')+';">'+pct.toFixed(1)+'%</span>'
+        +'<span class="ng-sc-pct" data-sc-name="'+luEsc(nm)+'" data-sc-bldg="'+luEsc(b.id)+'" title="Click to set this scope’s % to '+luEsc(b.name||'this building')+'" style="cursor:pointer;font-family:\'Courier New\',monospace;color:'+(v>0?'#fbbf24':'#4a4f63')+';">'+pct.toFixed(1)+'%</span>'
         +'<div style="font-size:9px;color:#6b6f82;font-family:\'Courier New\',monospace;">'+E.fmtC(v)+'</div></td>';
     });
     h+='</tr>';
@@ -4745,8 +4794,37 @@ function contractAllocHtml(){
   h+='</tr></tbody></table></div>';
   if(!tOk) h+='<div style="font-size:10px;color:'+(grand<jc?'#f87171':'#fbbf24')+';padding:3px 0;">Allocated '+E.fmtC(grand)+' vs job contract '+E.fmtC(jc)+' — '+E.fmtC(Math.abs(jc-grand))+(grand<jc?' unallocated.':' over.')+'</div>';
   if(unTot>0.5) h+='<div style="font-size:10px;color:#fbbf24;padding:3px 0;">'+E.fmtC(unTot)+' is not assigned to any building — it will not appear on the AIA as a building line.</div>';
+  var noGeo=blds.filter(function(b){ return bldgMapState(b)==='none'; }).length;
+  if(noGeo) h+='<div style="font-size:10px;color:#fbbf24;padding:3px 0;">'+noGeo+' building'+(noGeo===1?'':'s')+' not on the map yet — trace a footprint or drop a pin so costs and photos have a place to land.</div>';
   h+=coAllocHtml(jid, blds);
+  h+='<div style="display:flex;gap:6px;justify-content:flex-end;padding-top:8px;">'
+    +'<button class="ee-btn ghost" style="font-size:11px;" data-sc-add="scope">+ Scope</button>'
+    +'<button class="ee-btn ghost" style="font-size:11px;" data-sc-add="building">+ Building</button></div>';
   return h;
+}
+// Is this building on the map? A traced footprint (n.polygon, ≥3 verts) beats a
+// dropped pin (n.geoLatLng); neither means nothing anchors its costs or photos.
+// Resolved through the SAME name-fallback that rescued Fairways' B1, so a
+// building traced on the map without an appData link still matches.
+function bldgMapState(b){
+  if(!b) return 'none';
+  var nm=String(b.name||'').trim().toLowerCase();
+  var n=(E.nodes()||[]).find(function(x){
+    if(x.type!=='t1') return false;
+    var did=(x.data&&x.data.id)||x.dataId;
+    if(did) return did===b.id;
+    return String(x.label||'').split(' › ')[0].trim().toLowerCase()===nm;
+  });
+  if(!n) return 'none';
+  if(n.polygon && n.polygon.length>=3) return 'poly';
+  if(n.geoLatLng) return 'pin';
+  return 'none';
+}
+function bldgGeoFlag(b){
+  var st=bldgMapState(b);
+  if(st==='poly') return '';
+  if(st==='pin') return ' <span title="Pinned but not traced — draw its footprint for area-driven quantities" style="color:#8b90a5;">📍</span>';
+  return ' <span title="Not on the map — trace a footprint or drop a pin" style="color:#fbbf24;">⚠</span>';
 }
 // Change orders allocate on the SAME grid, but stay their own section: a CO is
 // additive to the contract, not a slice of it (the G702 splits them out as
@@ -4881,6 +4959,14 @@ function initEvents(){
     if(ipe && !e.target.closest('input')){ e.preventDefault(); e.stopPropagation(); progChipEdit(ipe); return; }
     var iprc=e.target.closest('[data-phase-rev]');
     if(iprc && !e.target.closest('input')){ e.preventDefault(); e.stopPropagation(); phaseRevEdit(iprc); return; }
+    // Contract allocation card (scopes × buildings) — its own attrs, so it can
+    // never collide with the legacy wire-scoped [data-alloc-phase] case below.
+    var isct=e.target.closest('.ng-sc-total');
+    if(isct && !e.target.closest('input')){ e.preventDefault(); e.stopPropagation(); scopeTotalEdit(isct); return; }
+    var iscp=e.target.closest('.ng-sc-pct');
+    if(iscp && !e.target.closest('input')){ e.preventDefault(); e.stopPropagation(); scopePctEdit(iscp); return; }
+    var isca=e.target.closest('[data-sc-add]');
+    if(isca){ e.preventDefault(); e.stopPropagation(); scopeAdd(isca.getAttribute('data-sc-add')); return; }
     var iapc=e.target.closest('[data-alloc-phase]');
     if(iapc && !e.target.closest('input')){ e.preventDefault(); e.stopPropagation(); allocPctEdit(iapc); return; }
     var ismode=e.target.closest('[data-scope-mode-phase]');

@@ -4868,6 +4868,38 @@ function renderJobsMain() {
         }
         window.onPhaseMatrixTotal = onPhaseMatrixTotal;
 
+        // Programmatic equivalents of the grid's inline handlers, for allocation
+        // surfaces that aren't the grid (the Site Plan's Contract allocation
+        // card). They run the SAME primitives and persistence — a second
+        // implementation of allocation math is precisely what this rework exists
+        // to delete, so nothing here recomputes dollars on its own.
+        function setScopeTotal(jobId, name, amount) {
+            if (!jobId || !name) return false;
+            var recs = (appData.phases || []).filter(function(p) { return p.jobId === jobId && (p.phase || 'Unnamed') === name; });
+            if (!recs.length) return false;
+            var val = Number(amount); if (!isFinite(val) || val < 0) val = 0;
+            recs.forEach(function(r) { r.allocMode = 'pct'; r.phaseAllocTotal = val; });
+            recomputePhasePctAllocation(jobId, name);   // largest-remainder → cells sum exactly
+            pruneEmptyUnassignedPhases(jobId);
+            if (typeof saveData === 'function') saveData();
+            return true;
+        }
+        window.setScopeTotal = setScopeTotal;
+        function setScopeBuildingPct(jobId, name, bldgId, pct) {
+            if (!jobId || !name) return false;
+            var v = Number(pct); if (!isFinite(v) || v < 0) v = 0; if (v > 100) v = 100;
+            var rec = phaseRecFor(jobId, name, bldgId || null);
+            rec.allocMode = 'pct'; rec.allocPct = v; rec.allocAuto = false;
+            recomputePhasePctAllocation(jobId, name);
+            pruneEmptyUnassignedPhases(jobId);
+            if (typeof saveData === 'function') saveData();
+            return true;
+        }
+        window.setScopeBuildingPct = setScopeBuildingPct;
+        // Exposed for the allocation card's "+ Scope" / "+ Building" actions.
+        window.openAddPhaseToJobModal = openAddPhaseToJobModal;
+        window.openAddBuildingToJobModal = openAddBuildingToJobModal;
+
         // % -Done cell (oninput): set every record of the phase to this % complete
         // (a phase progresses as a unit); the graph sync + WIP roll-up run on commit.
         function onPhaseMatrixPctDone(input) {
