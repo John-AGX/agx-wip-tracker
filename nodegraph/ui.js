@@ -4774,8 +4774,12 @@ function contractAllocHtml(){
 // through a graph CO-node wired to it — the same getCOIncomeToParent path the
 // AIA bills from — so an unwired CO is revenue that lands on no building line.
 function coAllocHtml(jid, blds){
-  var cos=(appData.jobChangeOrders||[]).filter(function(c){
+  var src=(appData.jobChangeOrders||[]);
+  var cos=src.filter(function(c){
     return c && c.job_id===jid && (c.status==='approved' || c.status==='applied'); });
+  try{ window.__coDbg={ jid:jid, srcLen:src.length, match:cos.length, blds:(blds||[]).length,
+    sameArray:(src===((window.appData||{}).jobChangeOrders)),
+    rows:src.map(function(c){ return (c&&c.job_id)+':'+(c&&c.status); }) }; }catch(e){}
   if(!cos.length) return '';
   var sellOf=function(c){ return (typeof window.coSellAmount==='function') ? Number(window.coSellAmount(c)||0) : 0; };
   var nodeFor=function(c){
