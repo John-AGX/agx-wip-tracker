@@ -282,6 +282,23 @@ function renderJobsMain() {
         window.getJobBilledCost = getJobBilledCost;
 
         // ==================== WIP CALCULATIONS ====================
+        // Sell price of ONE change order. There is no flat co.income field —
+        // money lives in c.lines run through the shared pricing pipeline
+        // (markup -> optional target margin -> fees + tax), exactly as the CO
+        // editor totals it. Named + exported so any surface needing a per-CO
+        // amount (the Site Plan's contract allocation board) uses this identical
+        // math instead of re-summing lines and drifting.
+        function coSellAmount(c) {
+            const lines = Array.isArray(c && c.lines) ? c.lines : [];
+            if (!window.p86Pricing || !lines.length) return 0;
+            const per = window.p86Pricing.computeForLines(c, lines);
+            let markedUp = per.markedUp;
+            if (window.p86Pricing.targetMarginActive(c)) {
+                markedUp = window.p86Pricing.applyTargetMargin(per.subtotal, c);
+            }
+            return window.p86Pricing.applyFeesAndTax(markedUp, c).total;
+        }
+        window.coSellAmount = coSellAmount;
         function getJobCOTotals(jobId) {
             // Change orders are server-backed and live in appData.jobChangeOrders
             // (loaded per-job on demand + boot-loaded in app.js). A CO adds to the
@@ -298,11 +315,7 @@ function renderJobsMain() {
                 server.forEach(c => {
                     const lines = Array.isArray(c.lines) ? c.lines : [];
                     const per = window.p86Pricing.computeForLines(c, lines);
-                    let markedUp = per.markedUp;
-                    if (window.p86Pricing.targetMarginActive(c)) {
-                        markedUp = window.p86Pricing.applyTargetMargin(per.subtotal, c);
-                    }
-                    const sell = window.p86Pricing.applyFeesAndTax(markedUp, c).total;
+                    const sell = coSellAmount(c);
                     income += sell;
                     costs += per.subtotal; // raw line cost (before markup/fee/tax)
                     // A CO linked to a graph node already has its lines folded into

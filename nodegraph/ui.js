@@ -4722,6 +4722,50 @@ function contractAllocHtml(){
   h+='</tr></tbody></table></div>';
   if(!tOk) h+='<div style="font-size:10px;color:'+(grand<jc?'#f87171':'#fbbf24')+';padding:3px 0;">Allocated '+E.fmtC(grand)+' vs job contract '+E.fmtC(jc)+' — '+E.fmtC(Math.abs(jc-grand))+(grand<jc?' unallocated.':' over.')+'</div>';
   if(unTot>0.5) h+='<div style="font-size:10px;color:#fbbf24;padding:3px 0;">'+E.fmtC(unTot)+' is not assigned to any building — it will not appear on the AIA as a building line.</div>';
+  h+=coAllocHtml(jid, blds);
+  return h;
+}
+// Change orders allocate on the SAME grid, but stay their own section: a CO is
+// additive to the contract, not a slice of it (the G702 splits them out as
+// "Net change by Change Orders", and the real Waterside G703 carries CO values
+// in the CHANGES columns, not Original Scheduled Value). A CO reaches a building
+// through a graph CO-node wired to it — the same getCOIncomeToParent path the
+// AIA bills from — so an unwired CO is revenue that lands on no building line.
+function coAllocHtml(jid, blds){
+  var cos=(appData.jobChangeOrders||[]).filter(function(c){
+    return c && c.job_id===jid && (c.status==='approved' || c.status==='applied'); });
+  if(!cos.length) return '';
+  var sellOf=function(c){ return (typeof window.coSellAmount==='function') ? Number(window.coSellAmount(c)||0) : 0; };
+  var nodeFor=function(c){
+    var n=c.linked_node_id ? E.findNode(c.linked_node_id) : null;
+    if(n && n.type==='co') return n;
+    return (E.nodes()||[]).find(function(x){ return x.type==='co' && x.data && x.data.id===c.id; }) || null;
+  };
+  var h='<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--ng-border2);">'
+   +'<div style="font-size:9px;color:#8b90a5;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px;">Change orders</div>'
+   +'<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:11px;"><tbody>';
+  var coGrand=0, unlinked=0;
+  cos.forEach(function(c){
+    var sell=sellOf(c); coGrand+=sell;
+    var node=nodeFor(c);
+    h+='<tr style="border-top:1px solid var(--ng-border2);">'
+      +'<td style="padding:3px 4px;color:var(--ng-text,#c8cbe0);white-space:nowrap;">'+luEsc(c.co_number||'CO')+'</td>'
+      +'<td style="padding:3px 4px;text-align:right;font-family:\'Courier New\',monospace;color:#e879a6;">'+E.fmtC(sell)+'</td>';
+    var placed=0;
+    blds.forEach(function(b){
+      var v=0;
+      if(node){ try{ v=Number(E.getCOIncomeToParent(node, b.id))||0; }catch(e){ v=0; } }
+      placed+=v;
+      h+='<td style="padding:3px 4px;text-align:right;font-family:\'Courier New\',monospace;color:'+(v>0?'#e879a6':'#4a4f63')+';font-size:9px;">'+(v>0?E.fmtC(v):'—')+'</td>';
+    });
+    h+='</tr>';
+    if(sell-placed>0.5) unlinked+=(sell-placed);
+  });
+  h+='</tbody></table></div>';
+  var jc=ngJobContract();
+  h+='<div style="display:flex;align-items:center;gap:6px;margin-top:5px;font-size:11px;"><span style="flex:1;color:#8b90a5;">Contract + change orders</span>'
+    +'<span style="font-family:\'Courier New\',monospace;color:#34d399;font-weight:700;">'+E.fmtC(jc+coGrand)+'</span></div>';
+  if(unlinked>0.5) h+='<div style="font-size:10px;color:#f87171;padding:3px 0;">'+E.fmtC(unlinked)+' of change-order revenue is not allocated to any building — it will not appear on the AIA as a building line. Add the CO to the Site Plan and wire it to the buildings it covers.</div>';
   return h;
 }
 function wirePctEdit(wpc){
