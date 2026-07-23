@@ -108,67 +108,70 @@
     var s = String((n && n.label) || fallback || '');
     return s.split(' › ')[0].split(' > ')[0].trim() || fallback || '';
   }
+  // Natural order so B2 sorts before B10 (plain string sort puts B10 first).
+  function bldgSort(a, b) {
+    var na = String(a.name || ''), nb = String(b.name || '');
+    var ma = na.match(/\d+/), mb = nb.match(/\d+/);
+    if (ma && mb && na.replace(/\d+/, '') === nb.replace(/\d+/, '')) return (+ma[0]) - (+mb[0]);
+    return na.localeCompare(nb);
+  }
+  // Schedule of values, derived from the ALLOCATION MATRIX (appData.phases) —
+  // one record per (scope, building), which is precisely the G703's shape.
+  // This used to read the node graph, which forced two constraints that are now
+  // gone: it required the Site Plan to be open for that exact job (NG.job() ===
+  // jobId, else "notloaded"), and it took a scope's dollars from a t2→t1 wire —
+  // a parallel model that drifted from the matrix and double-counted against it.
   function deriveSOV(jobId) {
-    var NG = window.NG;
-    if (!NG || typeof NG.nodes !== 'function') return { ok: false, reason: 'engine', lines: [] };
-    if (NG.job() !== jobId) return { ok: false, reason: 'notloaded', lines: [] };
-    var nodes = NG.nodes() || [], wires = NG.wires() || [];
-    var t1s = nodes.filter(function (n) { return n.type === 't1'; });
-    var t2s = nodes.filter(function (n) { return n.type === 't2'; });
-    var cos = nodes.filter(function (n) { return n.type === 'co'; });
+    var app = window.appData || {};
+    var phases = (app.phases || []).filter(function (p) { return p && p.jobId === jobId; });
+    var buildings = (app.buildings || []).filter(function (b) { return b && b.jobId === jobId; }).slice().sort(bldgSort);
     var lines = [];
-    // Phase → building lines (one per allocation with revenue)
-    t2s.forEach(function (t2) {
-      var placed = false;
-      t1s.forEach(function (t1) {
-        var rev = 0;
-        try { rev = NG.getPhaseRevenueToBuilding(t2, t1.id) || 0; } catch (e) {}
-        if (rev > 0.005) {
-          placed = true;
-          lines.push({ id: 'ln_' + t2.id + '__' + t1.id, nodeId: t2.id, buildingId: t1.id,
-            buildingName: baseName(t1, 'Building'), description: baseName(t2, 'Phase'),
-            type: 'phase', scheduledValue: round2(rev), pctComplete: round2(num(t2.pctComplete)),
-            stored: 0, retainagePct: null, previous: 0 });
-        }
+    var pRev = function (p) { return num(p.asSoldRevenue || p.asSoldPhaseBudget || p.phaseBudget); };
+    // Tier 1 — one line per scope × building, ordered scope-major then
+    // building-minor: every building's Exterior Painting together, then every
+    // building's Vinyl siding. That is the order the real Waterside G703 uses.
+    var scopeNames = [];
+    phases.forEach(function (p) { var n = p.phase || 'Unnamed'; if (scopeNames.indexOf(n) === -1) scopeNames.push(n); });
+    scopeNames.sort();
+    scopeNames.forEach(function (name) {
+      var recs = phases.filter(function (p) { return (p.phase || 'Unnamed') === name; });
+      buildings.forEach(function (b) {
+        var mine = recs.filter(function (p) { return p.buildingId === b.id; });
+        var rev = mine.reduce(function (s, p) { return s + pRev(p); }, 0);
+        if (rev <= 0.005) return;
+        var pct = mine.length ? mine.reduce(function (s, p) { return s + num(p.pctComplete); }, 0) / mine.length : 0;
+        lines.push({ id: 'ln_' + name + '__' + b.id, nodeId: (mine[0] && mine[0].id) || null, buildingId: b.id,
+          buildingName: b.name || 'Building', description: name,
+          type: 'phase', scheduledValue: round2(rev), pctComplete: round2(pct),
+          stored: 0, retainagePct: null, previous: 0 });
       });
-      if (!placed) {
-        var rev2 = num(t2.revenue);
-        if (rev2 > 0.005) {
-          lines.push({ id: 'ln_' + t2.id + '__gen', nodeId: t2.id, buildingId: '__gen',
-            buildingName: 'General', description: baseName(t2, 'Phase'), type: 'phase',
-            scheduledValue: round2(rev2), pctComplete: round2(num(t2.pctComplete)),
-            stored: 0, retainagePct: null, previous: 0 });
-        }
+      // Scope dollars parked on no building — billable, and shown rather than
+      // dropped so the schedule still reconciles to the contract.
+      var un = recs.filter(function (p) { return !p.buildingId; });
+      var unRev = un.reduce(function (s, p) { return s + pRev(p); }, 0);
+      if (unRev > 0.005) {
+        lines.push({ id: 'ln_' + name + '__gen', nodeId: (un[0] && un[0].id) || null, buildingId: '__gen',
+          buildingName: 'General', description: name, type: 'phase',
+          scheduledValue: round2(unRev),
+          pctComplete: round2(un.reduce(function (s, p) { return s + num(p.pctComplete); }, 0) / un.length),
+          stored: 0, retainagePct: null, previous: 0 });
       }
     });
-    // CO → parent lines
-    cos.forEach(function (co) {
-      var outW = wires.filter(function (w) { return w.fromNode === co.id; });
-      var placed = false;
-      outW.forEach(function (w) {
-        var tgt = nodes.find(function (n) { return n.id === w.toNode; });
-        if (tgt && tgt.type === 't1') {
-          var inc = 0;
-          try { inc = NG.getCOIncomeToParent(co, tgt.id) || 0; } catch (e) {}
-          if (inc > 0.005) {
-            placed = true;
-            lines.push({ id: 'ln_' + co.id + '__' + tgt.id, nodeId: co.id, buildingId: tgt.id,
-              buildingName: baseName(tgt, 'Building'), description: 'CO: ' + baseName(co, 'Change Order'),
-              type: 'co', scheduledValue: round2(inc), pctComplete: round2(num(co.pctComplete)),
-              stored: 0, retainagePct: null, previous: 0 });
-          }
-        }
-      });
-      if (!placed) {
-        var inc2 = 0;
-        try { if (NG.resetComp) NG.resetComp(); inc2 = num(NG.getOutput ? NG.getOutput(co, 0) : 0); } catch (e) {}
-        if (inc2 > 0.005) {
-          lines.push({ id: 'ln_' + co.id + '__gen', nodeId: co.id, buildingId: '__gen',
-            buildingName: 'General', description: 'CO: ' + baseName(co, 'Change Order'), type: 'co',
-            scheduledValue: round2(inc2), pctComplete: round2(num(co.pctComplete)),
-            stored: 0, retainagePct: null, previous: 0 });
-        }
-      }
+    // Change orders — approved/applied only, priced through coSellAmount (the
+    // same pipeline getJobCOTotals sums). They carry no building allocation yet,
+    // so they bill at job level; that lands per-building once a CO becomes a
+    // scope in the matrix. computeSummary already routes type==='co' to G702
+    // line 2 "Net change by Change Orders", never line 1 Original Contract Sum.
+    var cos = (app.jobChangeOrders || []).filter(function (c) {
+      return c && c.job_id === jobId && (c.status === 'approved' || c.status === 'applied');
+    });
+    cos.forEach(function (c) {
+      var sell = (typeof window.coSellAmount === 'function') ? num(window.coSellAmount(c)) : 0;
+      if (sell <= 0.005) return;
+      lines.push({ id: 'ln_co_' + c.id, nodeId: null, buildingId: '__gen', buildingName: 'General',
+        description: String(c.co_number || 'CO') + ' - ' + String(c.title || 'Change Order'),
+        type: 'co', scheduledValue: round2(sell), pctComplete: 0,
+        stored: 0, retainagePct: null, previous: 0 });
     });
     // Completeness pass — once ANY scope×building line exists, a building that
     // produced none would silently vanish from the schedule (Tier 2 below only
@@ -177,12 +180,11 @@
     if (lines.length) {
       var seenB = {};
       lines.forEach(function (l) { if (l.buildingId) seenB[l.buildingId] = 1; });
-      t1s.forEach(function (t1) {
-        if (seenB[t1.id]) return;
-        var bp0 = 0; try { bp0 = NG.getT1WeightedPct(t1); } catch (e) { bp0 = num(t1.pctComplete); }
-        lines.push({ id: 'ln_bld0_' + t1.id, nodeId: t1.id, buildingId: t1.id,
-          buildingName: baseName(t1, 'Building'), description: baseName(t1, 'Building'),
-          type: 'phase', scheduledValue: 0, pctComplete: round2(num(bp0)),
+      buildings.forEach(function (b) {
+        if (seenB[b.id]) return;
+        lines.push({ id: 'ln_bld0_' + b.id, nodeId: null, buildingId: b.id,
+          buildingName: b.name || 'Building', description: b.name || 'Building',
+          type: 'phase', scheduledValue: 0, pctComplete: 0,
           stored: 0, retainagePct: null, previous: 0 });
       });
     }
@@ -197,16 +199,14 @@
       // (Fairways: B1 was traced on the map so its node had no appData link, and
       // the G703 came out $28,251 light across 9 of 10 buildings). A visible $0
       // line the user can price is honest; a missing line is invisible money.
-      t1s.forEach(function (t1) {
-        var rev = 0;
-        try { rev = NG.getBuildingAllocatedRevenue(t1) || 0; } catch (e) {}
-        if (rev <= 0.005) rev = num(t1.revenue);
-        var bp = 0; try { bp = NG.getT1WeightedPct(t1); } catch (e) { bp = num(t1.pctComplete); }
+      buildings.forEach(function (b) {
+        var rev = phases.filter(function (p) { return p.buildingId === b.id; })
+                        .reduce(function (s, p) { return s + pRev(p); }, 0);
         var uD = 0, uT = 0;
-        if (t1.units && t1.units.length) { uT = t1.units.length; t1.units.forEach(function (u) { if (u.done) uD++; }); }
-        lines.push({ id: 'ln_bld_' + t1.id, nodeId: t1.id, buildingId: t1.id,
-          buildingName: baseName(t1, 'Building'), description: baseName(t1, 'Building'),
-          type: 'phase', scheduledValue: round2(rev), pctComplete: round2(num(bp)),
+        if (b.units && b.units.length) { uT = b.units.length; b.units.forEach(function (u) { if (u.done) uD++; }); }
+        lines.push({ id: 'ln_bld_' + b.id, nodeId: null, buildingId: b.id,
+          buildingName: b.name || 'Building', description: b.name || 'Building',
+          type: 'phase', scheduledValue: round2(rev), pctComplete: 0,
           stored: 0, retainagePct: null, previous: 0, unitsDone: uD || undefined, unitsTotal: uT || undefined });
       });
     }
@@ -793,24 +793,26 @@
   // phases). Manual (hand-added) lines are left alone.
   function pullProgress(app) {
     if (!appEditable(app)) return;
-    var NG = window.NG;
-    if (!NG || typeof NG.nodes !== 'function' || NG.job() !== _st.jobId) {
-      toast('Open the Site Plan for this job to pull progress.', true); return;
-    }
-    var nodes = NG.nodes() || [], changed = 0;
+    // Read progress from the allocation records themselves. This used to walk
+    // the node graph and demanded the Site Plan be open for this exact job; the
+    // (scope,building) records carry pctComplete directly, so a pay app can now
+    // pull progress from anywhere.
+    var jobId = _st.jobId;
+    var phases = ((window.appData || {}).phases || []).filter(function (p) { return p && p.jobId === jobId; });
+    var changed = 0;
     (app.lines || []).forEach(function (l) {
-      if (!l.nodeId) return; // manual line — skip
-      var node = nodes.find(function (n) { return n.id === l.nodeId; });
-      if (!node) return;
-      var pct = null;
-      try {
-        if (node.type === 't1') pct = NG.getT1WeightedPct(node);
-        else if (node.type === 't2') pct = NG.getT2WeightedPct(node);
-        else pct = node.pctComplete;
-      } catch (e) {}
-      if (pct != null && isFinite(pct)) { l.pctComplete = clamp(round2(pct), 0, 100); changed++; }
+      if (l.manual || l.type === 'co' || !l.buildingId || l.buildingId === '__gen') return;
+      var mine = phases.filter(function (p) {
+        return (p.phase || 'Unnamed') === l.description && p.buildingId === l.buildingId;
+      });
+      // A per-building line (Tier 2) has no scope in its description — average
+      // every scope on that building instead.
+      if (!mine.length) mine = phases.filter(function (p) { return p.buildingId === l.buildingId; });
+      if (!mine.length) return;
+      var pct = mine.reduce(function (s, p) { return s + num(p.pctComplete); }, 0) / mine.length;
+      if (isFinite(pct)) { l.pctComplete = clamp(round2(pct), 0, 100); changed++; }
     });
-    if (!changed) { toast('No Site-Plan-linked lines to update.'); return; }
+    if (!changed) { toast('No allocated lines to update.'); return; }
     _st.dirty = true; paint(); scheduleSave();
     toast('Pulled % complete from Site Plan progress (' + changed + ' line' + (changed > 1 ? 's' : '') + ').');
   }
