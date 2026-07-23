@@ -894,113 +894,15 @@ const JOB_TOOLS = [
       required: ['line_id', 'node_id', 'rationale']
     }
   },
-  {
-    name: 'set_co_field',
-    description:
-      'Update a single field on a change order (CO) record. Use when an audit shows a CO has $0 cost but should have a real number ' +
-      '(common cause of inflated revised margin), when income needs adjusting after the GC accepts/rejects a partial, or when the ' +
-      'description / co_number needs cleanup. One field per call so each shows as its own approval card; chain calls if multiple ' +
-      'fields need updates on the same CO.\n' +
-      'co_id is the changeOrders[].id from the # Change orders block. ' +
-      'Only allowed fields: income (CO revenue), estimatedCosts (CO cost — note the field name uses "estimatedCosts", NOT "costs"), ' +
-      'description, notes, coNumber, date (YYYY-MM-DD).',
-    input_schema: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        co_id: { type: 'string', description: 'changeOrders[].id from the # Change orders block.' },
-        field: {
-          type: 'string',
-          enum: ['income', 'estimatedCosts', 'description', 'notes', 'coNumber', 'date'],
-          description: 'Which field to set.'
-        },
-        value: {
-          type: ['string', 'number'],
-          description: 'New value. Numbers for income / estimatedCosts (dollars, not cents), strings for description / notes / coNumber / date.'
-        },
-        rationale: { type: 'string', description: 'One short sentence — why this change.' }
-      },
-      required: ['co_id', 'field', 'value', 'rationale']
-    }
-  },
-  {
-    name: 'create_po',
-    description: 'Create a PO on the active job. Required: vendor + amount. Preferred: poNumber, description, date. subId auto-resolves from vendor name against the subs directory.',
-    input_schema: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        vendor:        { type: 'string', description: 'Vendor / sub name. Used as the display label and for sub-directory matching.' },
-        amount:        { type: 'number', description: 'PO amount in dollars (not cents). The committed dollar value at issue.' },
-        poNumber:      { type: 'string', description: 'PO number string (e.g. "PO-1042"). Often blank when the PM hasn\'t numbered it yet.' },
-        description:   { type: 'string', description: 'Scope summary — what this PO covers.' },
-        billedToDate:  { type: 'number', description: 'Optional — already-invoiced amount against this PO. Default 0.' },
-        date:          { type: 'string', description: 'Issue date (YYYY-MM-DD). Defaults to today if omitted.' },
-        status:        { type: 'string', enum: ['Open', 'Closed', 'Pending'], description: 'PO status. Default "Open".' },
-        notes:         { type: 'string', description: 'Free-form notes.' },
-        rationale:     { type: 'string', description: 'One short sentence — why this PO needs to exist.' }
-      },
-      required: ['vendor', 'amount', 'rationale']
-    }
-  },
-  {
-    name: 'set_po_field',
-    description:
-      'Update a single field on an existing purchase order. One field per call so each shows as its own approval card. ' +
-      'po_id is the purchaseOrders[].id from the # Purchase orders block. ' +
-      'Allowed: vendor, amount, poNumber, description, billedToDate (already-invoiced amount), date, status (Open/Closed/Pending), notes.',
-    input_schema: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        po_id:     { type: 'string', description: 'purchaseOrders[].id from the # Purchase orders block.' },
-        field:     { type: 'string', enum: ['vendor', 'amount', 'poNumber', 'description', 'billedToDate', 'date', 'status', 'notes'] },
-        value:     { type: ['string', 'number'], description: 'Numbers for amount / billedToDate; strings for the rest.' },
-        rationale: { type: 'string', description: 'One short sentence — why this change.' }
-      },
-      required: ['po_id', 'field', 'value', 'rationale']
-    }
-  },
-  {
-    name: 'create_invoice',
-    description:
-      'Create a new invoice on the active job. Use when QB shows a vendor invoice that hasn\'t been logged into Project 86 yet, when the user dictates one ("Acme sent us $12,400 for Apr 15"), or when the playbook\'s chain rule (PO → Invoice → QB-line) requires a missing invoice node. ' +
-      'Required: vendor + amount. Strongly preferred: invNumber, date, status. dueDate defaults to date+30 days when omitted.',
-    input_schema: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        vendor:      { type: 'string', description: 'Vendor name on the invoice.' },
-        amount:      { type: 'number', description: 'Invoice amount in dollars.' },
-        invNumber:   { type: 'string', description: 'Invoice number from the document.' },
-        description: { type: 'string', description: 'What the invoice covers.' },
-        date:        { type: 'string', description: 'Invoice date (YYYY-MM-DD). Defaults to today.' },
-        dueDate:     { type: 'string', description: 'Due date (YYYY-MM-DD). Defaults to date + 30 days.' },
-        status:      { type: 'string', enum: ['Draft', 'Pending', 'Paid', 'Overdue'], description: 'Default "Draft".' },
-        notes:       { type: 'string' },
-        rationale:   { type: 'string', description: 'One short sentence — why log this invoice.' }
-      },
-      required: ['vendor', 'amount', 'rationale']
-    }
-  },
-  {
-    name: 'set_invoice_field',
-    description:
-      'Update a single field on an existing invoice. One field per call. ' +
-      'inv_id is the invoices[].id from the # Invoices block. ' +
-      'Allowed: vendor, amount, invNumber, description, date, dueDate, status (Draft/Pending/Paid/Overdue), notes.',
-    input_schema: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        inv_id:    { type: 'string', description: 'invoices[].id from the # Invoices block.' },
-        field:     { type: 'string', enum: ['vendor', 'amount', 'invNumber', 'description', 'date', 'dueDate', 'status', 'notes'] },
-        value:     { type: ['string', 'number'] },
-        rationale: { type: 'string', description: 'One short sentence — why this change.' }
-      },
-      required: ['inv_id', 'field', 'value', 'rationale']
-    }
-  },
+  // NOTE: set_co_field / create_po / set_po_field / create_invoice /
+  // set_invoice_field were removed here. They wrote change orders,
+  // purchase orders, and invoices into the appData.* localStorage blobs,
+  // which stopped being the record of truth when job_change_orders,
+  // job_purchase_orders, and invoices landed. ROUTER_TOOL_NAMES never
+  // registered them on the managed agent, so 86 could not call them; the
+  // payload path (emit_payload_file -> job ops change_orders /
+  // purchase_orders / invoices) is the supported way to write all three
+  // and lands in the real tables.
   {
     name: 'assign_qb_lines_bulk',
     description:
@@ -5044,7 +4946,12 @@ function computeJobWIP(job, jobBuildings, jobPhases, jobChangeOrders, jobSubs, j
   const revenueEarned = totalIncome * (pctComplete / 100);
   const jtdProfit = revenueEarned - actualCosts;
   const jtdMargin = revenueEarned > 0 ? (jtdProfit / revenueEarned * 100) : 0;
-  const invoiced = Number(job.invoicedToDate || 0);
+  // Invoiced-to-date. This used to read job.invoicedToDate unconditionally
+  // and ignore jobInvoices entirely, so the WIP block reported "$0 invoiced"
+  // on jobs whose "# Invoices" block in the same context listed real AR
+  // invoices — the two halves of one snapshot disagreed. Real invoices now
+  // win; the hand-typed scalar remains the fallback for jobs with none.
+  const invoiced = jobMoney.invoicedToDate(jobInvoices, job);
   const unbilled = revenueEarned - invoiced;
   const backlog = totalIncome - revenueEarned;
   const remainingCosts = revisedEstCosts - actualCosts;
@@ -6279,14 +6186,27 @@ async function execClientDirectoryTool(name, input, ctx) {
   // case rather than leak the full cross-org roster.
   let _cdOrgId = null;
   try { _cdOrgId = await resolveOrgIdFromCtx(ctx); } catch (_) { _cdOrgId = null; }
+  // P0-1 (extended) — the READ handlers below failed closed without an org,
+  // but the WRITERS did not: every mutating client-directory tool looked its
+  // target up with a bare `WHERE id = $1` and then wrote. An approved call
+  // naming another tenant's client id reached it, and delete_client deleted
+  // the row outright. Every gating SELECT is now org-scoped (NULL-org rows
+  // stay reachable, matching the rest of the tenancy model) and the writers
+  // refuse to run at all without a resolved org.
+  const _cdRequireOrg = (what) => {
+    if (!_cdOrgId) throw new Error('Cannot ' + what + ' without a signed-in user context.');
+    return _cdOrgId;
+  };
   switch (name) {
     case 'create_property': {
       if (!input.name || !input.parent_client_id) throw new Error('name and parent_client_id are required');
-      const parent = await pool.query('SELECT id, name FROM clients WHERE id = $1', [input.parent_client_id]);
+      const parent = await pool.query('SELECT id, name FROM clients WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)', [input.parent_client_id, _cdRequireOrg('modify client records')]);
       if (!parent.rows.length) throw new Error('parent_client_id not found');
       const id = 'client_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
-      const cols = ['id', 'parent_client_id', 'name', 'client_type'];
-      const vals = [id, input.parent_client_id, input.name, 'Property'];
+      // Stamp the org — an unstamped client is NULL-org, which every tenant
+      // can read through the `OR organization_id IS NULL` predicate.
+      const cols = ['id', 'parent_client_id', 'name', 'client_type', 'organization_id'];
+      const vals = [id, input.parent_client_id, input.name, 'Property', _cdOrgId];
       for (const k of ['community_name', 'property_address', 'city', 'state', 'zip', 'community_manager', 'cm_email', 'cm_phone', 'market']) {
         if (input[k]) { cols.push(k); vals.push(input[k]); }
       }
@@ -6298,15 +6218,16 @@ async function execClientDirectoryTool(name, input, ctx) {
       if (!input.name) throw new Error('name is required');
       const id = 'client_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
       await pool.query(
-        `INSERT INTO clients (id, name, company_name, client_type, notes)
-         VALUES ($1, $2, $3, 'Property Mgmt', $4)`,
-        [id, input.name, input.company_name || input.name, input.notes || null]
+        `INSERT INTO clients (id, name, company_name, client_type, notes, organization_id)
+         VALUES ($1, $2, $3, 'Property Mgmt', $4, $5)`,
+        [id, input.name, input.company_name || input.name, input.notes || null,
+         _cdRequireOrg('create client records')]
       );
       return `Created parent company "${input.name}" (id=${id}).`;
     }
     case 'update_client_field': {
       if (!input.client_id || !input.fields || typeof input.fields !== 'object') throw new Error('client_id and fields are required');
-      const exists = await pool.query('SELECT id, name FROM clients WHERE id = $1', [input.client_id]);
+      const exists = await pool.query('SELECT id, name FROM clients WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)', [input.client_id, _cdRequireOrg('modify client records')]);
       if (!exists.rows.length) throw new Error('client_id not found');
       const sets = [];
       const params = [];
@@ -6324,28 +6245,28 @@ async function execClientDirectoryTool(name, input, ctx) {
       return `Updated ${Object.keys(input.fields).join(', ')} on ${exists.rows[0].name}.`;
     }
     case 'link_property_to_parent': {
-      const child = await pool.query('SELECT id, name, parent_client_id FROM clients WHERE id = $1', [input.property_client_id]);
+      const child = await pool.query('SELECT id, name, parent_client_id FROM clients WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)', [input.property_client_id, _cdRequireOrg('modify client records')]);
       if (!child.rows.length) throw new Error('property_client_id not found');
       if (child.rows[0].parent_client_id) throw new Error('Property already has a parent — use change_property_parent instead.');
-      const parent = await pool.query('SELECT id, name FROM clients WHERE id = $1', [input.parent_client_id]);
+      const parent = await pool.query('SELECT id, name FROM clients WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)', [input.parent_client_id, _cdRequireOrg('modify client records')]);
       if (!parent.rows.length) throw new Error('parent_client_id not found');
       if (input.property_client_id === input.parent_client_id) throw new Error('A client cannot be its own parent.');
       await pool.query('UPDATE clients SET parent_client_id = $1, updated_at = NOW() WHERE id = $2', [input.parent_client_id, input.property_client_id]);
       return `Linked "${child.rows[0].name}" under "${parent.rows[0].name}".`;
     }
     case 'rename_client': {
-      const r = await pool.query('SELECT name FROM clients WHERE id = $1', [input.client_id]);
+      const r = await pool.query('SELECT name FROM clients WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)', [input.client_id, _cdRequireOrg('modify client records')]);
       if (!r.rows.length) throw new Error('client_id not found');
       await pool.query('UPDATE clients SET name = $1, updated_at = NOW() WHERE id = $2', [input.new_name, input.client_id]);
       return `Renamed "${r.rows[0].name}" to "${input.new_name}".`;
     }
     case 'change_property_parent': {
-      const child = await pool.query('SELECT id, name FROM clients WHERE id = $1', [input.property_client_id]);
+      const child = await pool.query('SELECT id, name FROM clients WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)', [input.property_client_id, _cdRequireOrg('modify client records')]);
       if (!child.rows.length) throw new Error('property_client_id not found');
       const newParentId = input.new_parent_client_id || null;
       if (newParentId) {
         if (newParentId === input.property_client_id) throw new Error('A client cannot be its own parent.');
-        const p = await pool.query('SELECT id FROM clients WHERE id = $1', [newParentId]);
+        const p = await pool.query('SELECT id FROM clients WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)', [newParentId, _cdRequireOrg('modify client records')]);
         if (!p.rows.length) throw new Error('new_parent_client_id not found');
       }
       await pool.query('UPDATE clients SET parent_client_id = $1, updated_at = NOW() WHERE id = $2', [newParentId, input.property_client_id]);
@@ -6354,8 +6275,8 @@ async function execClientDirectoryTool(name, input, ctx) {
         : `Detached "${child.rows[0].name}" from its parent.`;
     }
     case 'merge_clients': {
-      const keep = await pool.query('SELECT * FROM clients WHERE id = $1', [input.keep_client_id]);
-      const from = await pool.query('SELECT * FROM clients WHERE id = $1', [input.merge_from_client_id]);
+      const keep = await pool.query('SELECT * FROM clients WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)', [input.keep_client_id, _cdRequireOrg('modify client records')]);
+      const from = await pool.query('SELECT * FROM clients WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)', [input.merge_from_client_id, _cdRequireOrg('modify client records')]);
       if (!keep.rows.length) throw new Error('keep_client_id not found');
       if (!from.rows.length) throw new Error('merge_from_client_id not found');
       if (input.keep_client_id === input.merge_from_client_id) throw new Error('keep and merge_from are the same client.');
@@ -6384,7 +6305,7 @@ async function execClientDirectoryTool(name, input, ctx) {
         await cli.query('UPDATE clients SET parent_client_id = $1 WHERE parent_client_id = $2', [input.keep_client_id, input.merge_from_client_id]);
         // Move leads/estimates that pointed at merge_from to keep (estimates store client_id in JSONB; skip for now)
         await cli.query('UPDATE leads SET client_id = $1 WHERE client_id = $2', [input.keep_client_id, input.merge_from_client_id]);
-        await cli.query('DELETE FROM clients WHERE id = $1', [input.merge_from_client_id]);
+        await cli.query('DELETE FROM clients WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)', [input.merge_from_client_id, _cdRequireOrg('modify client records')]);
         await cli.query('COMMIT');
       } catch (e) {
         await cli.query('ROLLBACK');
@@ -6395,14 +6316,14 @@ async function execClientDirectoryTool(name, input, ctx) {
       return `Merged "${f.name}" into "${k.name}".`;
     }
     case 'split_client_into_parent_and_property': {
-      const orig = await pool.query('SELECT * FROM clients WHERE id = $1', [input.client_id]);
+      const orig = await pool.query('SELECT * FROM clients WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)', [input.client_id, _cdRequireOrg('modify client records')]);
       if (!orig.rows.length) throw new Error('client_id not found');
       const cli = await pool.connect();
       try {
         await cli.query('BEGIN');
         let parentId = input.existing_parent_id;
         if (parentId) {
-          const p = await cli.query('SELECT id FROM clients WHERE id = $1', [parentId]);
+          const p = await cli.query('SELECT id FROM clients WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)', [parentId, _cdRequireOrg('modify client records')]);
           if (!p.rows.length) throw new Error('existing_parent_id not found');
         } else {
           parentId = 'client_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
@@ -6427,7 +6348,7 @@ async function execClientDirectoryTool(name, input, ctx) {
       return `Split "${orig.rows[0].name}" → parent "${input.new_parent_name}" + property "${input.new_property_name}".`;
     }
     case 'delete_client': {
-      const r = await pool.query('SELECT name FROM clients WHERE id = $1', [input.client_id]);
+      const r = await pool.query('SELECT name FROM clients WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)', [input.client_id, _cdRequireOrg('modify client records')]);
       if (!r.rows.length) throw new Error('client_id not found');
       // Audit finding B7 (revised): leads.client_id has ON DELETE SET NULL
       // (FK cascades correctly), but estimates.data->>'clientId' and
@@ -6459,7 +6380,7 @@ async function execClientDirectoryTool(name, input, ctx) {
         jobClearedCount = jr.rowCount;
         // Now safe to delete the client row — leads.client_id FK and
         // clients.parent_client_id self-FK both have ON DELETE SET NULL.
-        await dbClient.query('DELETE FROM clients WHERE id = $1', [input.client_id]);
+        await dbClient.query('DELETE FROM clients WHERE id = $1 AND (organization_id = $2 OR organization_id IS NULL)', [input.client_id, _cdRequireOrg('modify client records')]);
         await dbClient.query('COMMIT');
       } catch (e) {
         try { await dbClient.query('ROLLBACK'); } catch (_) {}
@@ -6553,13 +6474,21 @@ async function execClientDirectoryTool(name, input, ctx) {
         'ORDER BY j.updated_at DESC NULLS LAST',
         [_cdOrgId]
       );
+      // Change orders and invoices live in their own tables, NOT the jobs
+      // blob. Reading d.changeOrders here booked $0 of CO revenue into every
+      // job's WIP and into the portfolio totals below — and once
+      // buildJobContext was fixed to read the real rows, this rollup started
+      // contradicting the per-job context inside the same conversation.
+      // Batched: one query for the whole org, not one per job inside map().
+      const coByJob = await jobMoney.changeOrdersForJobs(pool, r.rows.map(x => x.id));
+      const invByJob = await jobMoney.invoicesForJobs(pool, r.rows.map(x => x.id));
       const allJobs = r.rows.map(row => {
         const d = row.data || {};
         const buildings = Array.isArray(d.buildings) ? d.buildings : [];
         const phases = Array.isArray(d.phases) ? d.phases : [];
-        const changeOrders = Array.isArray(d.changeOrders) ? d.changeOrders : [];
+        const changeOrders = coByJob.get(row.id) || (Array.isArray(d.changeOrders) ? d.changeOrders : []);
         const subs = Array.isArray(d.subs) ? d.subs : [];
-        const invoices = Array.isArray(d.invoices) ? d.invoices : [];
+        const invoices = invByJob.get(row.id) || (Array.isArray(d.invoices) ? d.invoices : []);
         const wip = computeJobWIP(d, buildings, phases, changeOrders, subs, invoices);
         return {
           id: row.id,
@@ -7535,6 +7464,25 @@ const READ_TOOLS = [
       },
     },
   },
+  {
+    name: 'draft_email_reply',
+    description:
+      'Write a proposed REPLY into an Email Dropbox thread\'s draft box, where the user reads it, edits it, and copies it into their own mail client. ' +
+      'THIS DOES NOT SEND ANYTHING. P86 has no outbound mail — sending stays off until the Outlook/Azure link is finished. NEVER tell the user you sent, or will send, an email; say you drafted it and it is waiting on that email. ' +
+      'Use after read_email_inbox whenever they ask you to "draft a reply", "write back", or "respond to [thread]". ALWAYS read the thread first so the reply answers what was actually asked and uses the right names/dates. ' +
+      'Write it in the user\'s voice — direct, professional, no filler, ready to send as-is. PLAIN TEXT only: no markdown, no subject line, no "I hope this email finds you well". Include a normal greeting and sign-off. ' +
+      'Overwrites any previous draft on that thread. After saving, tell them in ONE line what you drafted and flag anything you had to assume.',
+    tier: 'auto',
+    input_schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        thread_id: { type: 'string', description: 'The dropbox thread id to draft for — a "th_…" id from read_email_inbox.' },
+        body: { type: 'string', description: 'The full reply text, ready to paste into a mail client.' },
+      },
+      required: ['thread_id', 'body'],
+    },
+  },
 ];
 
 // Wave 3 — workflow + compliance read tools. Auto-tier so 86 can
@@ -7600,9 +7548,21 @@ const PAYLOAD_TOOLS = [
       'estimate: {op,scope,field_updates,sections,groups,line_adds,line_edits,line_deletes}. ' +
       'job: {field_updates,phase_updates,node_values,wire_updates,qb_assignments,change_orders,purchase_orders,invoices,notes,graph} ' +
       '— note change_orders/purchase_orders/invoices are array ops with ' +
-      '{op:create|update|delete, *_id?, fields:{...}}; use op:create to ' +
-      'open a brand-new change order on a job (fields: description, income, ' +
-      'estimated_costs, building_id?, co_number?, notes?). ' +
+      '{op:create|update|delete, *_id?, fields:{...}} that write the real ' +
+      'job_change_orders / job_purchase_orders / invoices tables. ' +
+      'MONEY ON A CO AND A PO COMES FROM ITS LINE ITEMS, NOT A FLAT AMOUNT: ' +
+      'change_orders fields = {title, lines:[{description, qty, unitCost, ' +
+      'markup?}], scope?, terms?, co_number?, defaultMarkup?, targetMargin?, ' +
+      'feeFlat?, feePct?, taxPct?, roundTo?} — the CO\'s income is derived ' +
+      'from lines through markup -> target-margin -> fees -> tax, exactly as ' +
+      'the CO editor computes it, and its cost is the raw line subtotal. ' +
+      'purchase_orders fields = {title, sub_id?, lines:[{description, qty, ' +
+      'unitCost}], scope?, materialsOnly?, scheduledCompletion?, po_number?, ' +
+      'status?}. invoices fields = {lines:[{description, qty, unitPrice, ' +
+      'taxable?}], client_id?, issue_date?, due_date?, terms?, tax_pct?, ' +
+      'retainage_amount?, notes?} — subtotal/tax/total are always derived ' +
+      'from the lines and cannot be asserted directly. ' +
+      'A CO or PO created with no lines is worth $0. ' +
       'lead: {op,fields,notes}. ' +
       'schedule: {blocks} — array of {op:create|update|delete, entry_id?, ' +
       'jobId, startDate, days, crew, includesWeekends, status, notes} for ' +
@@ -9483,6 +9443,40 @@ async function execStaffTool(name, input, ctx) {
       return parts.join('\n');
     }
 
+    case 'draft_email_reply': {
+      // Write the proposed reply into the thread's draft box on the Email tab.
+      // NEVER SENDS — P86 has no outbound mail lane until the Outlook/Azure
+      // link lands. Owner-scoped: the thread must already hold a message of
+      // the caller's, so a foreign/guessed thread id can't seed a row.
+      const userId = (ctx && ctx.userId) || null;
+      if (!userId) return 'I could not identify your account, so I can\'t save a draft.';
+      const threadId = String((input && input.thread_id) || '').trim();
+      const draftBody = String((input && input.body) || '').trim();
+      if (!threadId) return 'I need the thread id (a "th_…" id from read_email_inbox) to save the draft against.';
+      if (!draftBody) return 'The draft came through empty, so nothing was saved.';
+      const own = await pool.query(
+        `SELECT organization_id, subject FROM inbound_emails
+          WHERE user_id = $1 AND thread_id = $2 ORDER BY received_at DESC LIMIT 1`,
+        [userId, threadId]
+      );
+      if (!own.rows.length) {
+        return 'I could not find thread "' + threadId.slice(0, 40) + '" in your email dropbox, so there is nothing to draft against.';
+      }
+      await pool.query(
+        `INSERT INTO email_thread_state
+           (id, organization_id, user_id, thread_id, draft_text, draft_source, draft_updated_at)
+         VALUES ($1, $2, $3, $4, $5, 'assistant', NOW())
+         ON CONFLICT (user_id, thread_id) DO UPDATE
+           SET draft_text = EXCLUDED.draft_text, draft_source = 'assistant',
+               draft_updated_at = NOW(), updated_at = NOW()`,
+        ['ets_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8),
+         own.rows[0].organization_id, userId, threadId, draftBody.slice(0, 20000)]
+      );
+      return 'Draft saved on "' + (own.rows[0].subject || '(no subject)') +
+             '" — it\'s waiting in the Assistant draft box on that email in the Email tab. ' +
+             'Nothing was sent; copy it into your mail client when you\'re ready.';
+    }
+
     case 'read_email_inbox': {
       // The caller's OWN email dropbox — inbound_emails rows scoped by
       // ctx.userId (the real user; act-as never reaches here with the
@@ -10971,6 +10965,13 @@ async function execProposeCreateLead(input, userId) {
   const t = String(input.title || '').trim();
   if (!t) throw new Error('title is required');
 
+  // Both rows this creates must carry the creator's org. Unstamped, they
+  // land organization_id NULL — and every org-scoped read keeps NULL-org
+  // rows visible so pre-tenancy data still works, so an AI-captured lead
+  // and its client would show up in every tenant's list.
+  const _org = await pool.query('SELECT organization_id FROM users WHERE id = $1', [userId]);
+  const orgId = _org.rows.length ? _org.rows[0].organization_id : null;
+
   // Resolve client_id: existing wins over new_client; if neither, we
   // create the lead with NULL client_id (allowed but flagged in the
   // summary so the user knows to backfill).
@@ -10981,10 +10982,10 @@ async function execProposeCreateLead(input, userId) {
     const newClientId = 'client_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
     await pool.query(
       `INSERT INTO clients
-         (id, name, parent_client_id, client_type, email, phone, property_address)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+         (id, name, parent_client_id, client_type, email, phone, property_address, organization_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
       [newClientId, nc.name, nc.parent_client_id || null, nc.client_type || null,
-       nc.email || null, nc.phone || null, nc.address || null]
+       nc.email || null, nc.phone || null, nc.address || null, orgId]
     );
     clientId = newClientId;
     createdClientNote = ' (created new client "' + nc.name + '" id=' + newClientId + ')';
@@ -11011,7 +11012,8 @@ async function execProposeCreateLead(input, userId) {
     property_name: input.property_name || null,
     gate_code: input.gate_code || null,
     market: input.market || null,
-    notes: input.notes || null
+    notes: input.notes || null,
+    organization_id: orgId
   };
   const cols = Object.keys(f);
   const vals = cols.map(k => f[k]);
@@ -13184,6 +13186,7 @@ const ALLOWED_AUTO_TIER_TOOLS = new Set([
   // Email Dropbox — the caller's own forwarded/redirected mail (the
   // Azure-free lane). Pure read.
   'read_email_inbox',
+  'draft_email_reply',
   // Project 86 Payload DSL — 86's ONE write primitive. Validates +
   // INSERTs a payloads row inline so the file artifact appears in
   // chat immediately. Auto-tier because the commit gate is the user

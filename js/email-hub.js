@@ -39,9 +39,18 @@
   function ico(name, fallback) {
     return (window.p86Icon && window.p86Icon(name, { class: 'ehub-ico' })) || (fallback || '');
   }
-  function api(path) {
-    return fetch(path, { credentials: 'include' }).then(function (r) {
+  function api(path, opts) {
+    var o = opts || {};
+    o.credentials = 'include';
+    if (o.body && !o.headers) o.headers = { 'Content-Type': 'application/json' };
+    return fetch(path, o).then(function (r) {
       return r.json().then(function (b) { if (!r.ok) throw new Error(b.error || ('HTTP ' + r.status)); return b; });
+    });
+  }
+  // Persist the drafted reply for a thread. DRAFT ONLY — P86 never sends it.
+  function saveDraft(threadId, text, source) {
+    return api('/api/email-inbox/threads/' + encodeURIComponent(threadId) + '/draft', {
+      method: 'PUT', body: JSON.stringify({ draft_text: text, source: source || 'user' })
     });
   }
 
@@ -78,6 +87,27 @@
       '.ehub-badge{font-size:10px;font-weight:700;padding:1px 7px;border-radius:9px;letter-spacing:.2px;}',
       '.ehub-badge-reply{background:rgba(16,124,65,.16);color:var(--accent,#5ddb7e);border:1px solid rgba(16,124,65,.4);}',
       '.ehub-badge-high{background:rgba(248,113,113,.14);color:#f87171;border:1px solid rgba(248,113,113,.4);}',
+      '.ehub-badge-done{background:rgba(120,130,150,.14);color:#9aa4b8;border:1px solid rgba(120,130,150,.34);}',
+      '.ehub-badge-draft{background:rgba(127,119,221,.16);color:#a89ee6;border:1px solid rgba(127,119,221,.4);}',
+      // Assistant draft box — the reply we settle on lands here; John copies
+      // it into his real mail client. P86 never sends from this panel.
+      '.ehub-draft{margin:18px 0 8px;padding:12px 14px;border:1px solid rgba(127,119,221,.34);border-radius:10px;background:rgba(127,119,221,.06);}',
+      '.ehub-draft.is-handled{border-color:rgba(120,130,150,.3);background:rgba(120,130,150,.06);}',
+      '.ehub-draft-hd{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:8px;}',
+      '.ehub-draft-ttl{font-size:12px;font-weight:700;letter-spacing:.02em;color:#a89ee6;display:flex;align-items:center;gap:5px;}',
+      '.ehub-draft-when{font-size:10.5px;color:var(--text-dim,#8b93a5);}',
+      '.ehub-draft-note{margin-left:auto;font-size:10.5px;color:var(--text-dim,#8b93a5);font-style:italic;}',
+      '.ehub-draft-ta{width:100%;box-sizing:border-box;resize:vertical;min-height:110px;padding:10px 12px;font:13px/1.55 inherit;',
+        'background:var(--surface,#131a27);border:1px solid rgba(255,255,255,.14);border-radius:8px;color:var(--text,#e4e6f0);white-space:pre-wrap;}',
+      '.ehub-draft-ta:focus{outline:none;border-color:#7f77dd;}',
+      '.ehub-draft-actions{display:flex;align-items:center;gap:8px;margin-top:9px;flex-wrap:wrap;}',
+      '.ehub-dbtn{padding:6px 12px;font-size:12px;font-weight:600;border-radius:7px;cursor:pointer;',
+        'background:var(--surface2,#1a2130);border:1px solid rgba(255,255,255,.16);color:var(--text,#e4e6f0);display:inline-flex;align-items:center;gap:5px;}',
+      '.ehub-dbtn:hover{border-color:#7f77dd;}',
+      '.ehub-dbtn-primary{margin-left:auto;background:#4f8cff;border-color:#4f8cff;color:#fff;}',
+      '.ehub-dbtn-primary:hover{background:#3d7bef;border-color:#3d7bef;}',
+      '.ehub-dbtn:disabled{opacity:.55;cursor:default;}',
+      '.ehub-draft-saved{font-size:11px;color:var(--accent,#5ddb7e);}',
       '.ehub-row-triage{color:var(--text,#d0d0d8);font-style:italic;}',
       '.ehub-empty{padding:40px 24px;text-align:center;color:var(--text-dim,#8b90a5);font-size:13px;line-height:1.6;}',
       '.ehub-thead{position:sticky;top:0;background:var(--bg,#101014);padding:16px 20px 12px;border-bottom:1px solid var(--border,#2a2a32);z-index:1;}',
@@ -191,9 +221,16 @@
       // H3 triage chips: "needs reply" + an urgency dot for high. needs_reply
       // now reflects the newest INBOUND message (server-side), so a captured
       // reply of mine can't hide a client who is genuinely waiting.
+      // "Handled" = I marked it replied AFTER the newest inbound message. A
+      // later message in the same thread (the next forward stitches back into
+      // it) is newer than the stamp, so the thread re-raises itself.
+      var handled = !!(th.replied_at && th.last_inbound_at &&
+                       new Date(th.replied_at) >= new Date(th.last_inbound_at));
       var tri = '';
-      if (th.needs_reply) tri += '<span class="ehub-badge ehub-badge-reply">needs reply</span>';
-      if (th.triage_urgency === 'high') tri += '<span class="ehub-badge ehub-badge-high">high</span>';
+      if (th.needs_reply && !handled) tri += '<span class="ehub-badge ehub-badge-reply">needs reply</span>';
+      if (handled) tri += '<span class="ehub-badge ehub-badge-done">replied</span>';
+      else if (th.has_draft) tri += '<span class="ehub-badge ehub-badge-draft">draft ready</span>';
+      if (th.triage_urgency === 'high' && !handled) tri += '<span class="ehub-badge ehub-badge-high">high</span>';
       var chips = chip + tri;
       return '<div class="ehub-row' + (th.thread_id === _state.activeThreadId ? ' active' : '') + '" data-thread="' + esc(th.thread_id) + '">' +
         '<div class="ehub-row-top">' +
@@ -269,11 +306,74 @@
           '<div class="ehub-msg-body">' + esc(m.body_text || '(no text body)') + '</div>' +
         '</div>';
       }).join('');
-      pane.innerHTML = head + bodyHtml;
+      // ── Assistant draft + handled state ──────────────────────────────
+      // The reply we settle on lands HERE, not in an outbox: John edits it,
+      // copies it into his real mail client, and marks the thread replied.
+      // P86 never sends (send stays off until the Azure/Outlook link is done).
+      var st = (res && res.state) || {};
+      var lastInbound = null;
+      for (var _i = msgs.length - 1; _i >= 0; _i--) {
+        if (msgs[_i].direction !== 'outbound') { lastInbound = msgs[_i].received_at; break; }
+      }
+      var isHandled = !!(st.replied_at && lastInbound && new Date(st.replied_at) >= new Date(lastInbound));
+      var draftHtml =
+        '<div class="ehub-draft' + (isHandled ? ' is-handled' : '') + '">' +
+          '<div class="ehub-draft-hd">' +
+            '<span class="ehub-draft-ttl">' + ico('sparkle', '') + ' Assistant draft</span>' +
+            (st.draft_updated_at
+              ? '<span class="ehub-draft-when">' + (st.draft_source === 'assistant' ? 'written ' : 'edited ') + esc(fmtAgo(st.draft_updated_at)) + '</span>'
+              : '') +
+            '<span class="ehub-draft-note">Copy into your mail client — P86 does not send.</span>' +
+          '</div>' +
+          '<textarea class="ehub-draft-ta" data-draft rows="7" placeholder="Nothing drafted yet — hit “Draft a reply” and the assistant will write one here.">' +
+            esc(st.draft_text || '') + '</textarea>' +
+          '<div class="ehub-draft-actions">' +
+            '<button class="ehub-dbtn" data-draft-ask>' + ico('sparkle', '') + ' Draft a reply</button>' +
+            '<button class="ehub-dbtn" data-draft-copy>Copy</button>' +
+            '<span class="ehub-draft-saved" data-draft-saved></span>' +
+            '<button class="ehub-dbtn ehub-dbtn-primary" data-replied>' +
+              (isHandled ? '&#10003; Replied — undo' : 'Mark replied') + '</button>' +
+          '</div>' +
+        '</div>';
+      pane.innerHTML = head + bodyHtml + draftHtml;
       var backBtn = pane.querySelector('[data-back]');
       if (backBtn) backBtn.addEventListener('click', function () { if (body) body.classList.remove('show-thread'); });
       var askBtn = pane.querySelector('[data-ask]');
       if (askBtn) askBtn.addEventListener('click', function () { handToAssistant(threadId, subject); });
+
+      var ta = pane.querySelector('[data-draft]');
+      var savedEl = pane.querySelector('[data-draft-saved]');
+      function flashSaved(txt) { if (savedEl) { savedEl.textContent = txt; setTimeout(function () { if (savedEl) savedEl.textContent = ''; }, 1800); } }
+      // Debounced autosave of hand-edits so a tweak is never lost on navigate.
+      if (ta) {
+        var tTimer = null;
+        ta.addEventListener('input', function () {
+          clearTimeout(tTimer);
+          tTimer = setTimeout(function () {
+            saveDraft(threadId, ta.value, 'user').then(function () { flashSaved('Saved'); }).catch(function () {});
+          }, 700);
+        });
+      }
+      var copyBtn = pane.querySelector('[data-draft-copy]');
+      if (copyBtn) copyBtn.addEventListener('click', function () {
+        var txt = ta ? ta.value : '';
+        if (!txt) { flashSaved('Nothing to copy'); return; }
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(txt).then(function () { flashSaved('Copied'); }).catch(function () { flashSaved('Copy failed'); });
+        } else { try { ta.select(); document.execCommand('copy'); flashSaved('Copied'); } catch (e) { flashSaved('Copy failed'); } }
+      });
+      var draftAskBtn = pane.querySelector('[data-draft-ask]');
+      if (draftAskBtn) draftAskBtn.addEventListener('click', function () { askForDraft(threadId, subject); });
+      var repliedBtn = pane.querySelector('[data-replied]');
+      if (repliedBtn) repliedBtn.addEventListener('click', function () {
+        repliedBtn.disabled = true;
+        api('/api/email-inbox/threads/' + encodeURIComponent(threadId) + '/replied', {
+          method: 'POST', body: JSON.stringify({ replied: !isHandled })
+        }).then(function () {
+          loadThreads();            // drop (or restore) it in the list
+          openThread(threadId);     // repaint the thread with the new state
+        }).catch(function () { repliedBtn.disabled = false; });
+      });
     }).catch(function (e) {
       pane.innerHTML = '<div class="ehub-empty">Could not load that conversation.<br>' + esc(e.message || '') + '</div>';
     });
@@ -299,8 +399,24 @@
   // read_email_inbox tool, so naming the thread id lets her pull the
   // full conversation and summarize / draft / schedule from it.
   function handToAssistant(threadId, subject) {
-    var prompt = 'Read my email thread [' + threadId + '] ("' + subject + '") and give me a short summary — what it\'s asking, anything time-sensitive, and whether it needs a reply. If there\'s a date or a commitment, offer to add a reminder or calendar event.';
-    // Open ask86, pre-seed the prompt, and SEND it automatically.
+    seedAssistant('Read my email thread [' + threadId + '] ("' + subject + '") and give me a short summary — what it\'s asking, anything time-sensitive, and whether it needs a reply. If there\'s a date or a commitment, offer to add a reminder or calendar event.', threadId);
+  }
+
+  // Ask the assistant to WRITE the reply and drop it straight into this
+  // thread's draft box (draft_email_reply tool). She never sends — John
+  // copies the finished text into his own mail client.
+  function askForDraft(threadId, subject) {
+    seedAssistant(
+      'Draft my reply to email thread [' + threadId + '] ("' + subject + '"). ' +
+      'Read the thread first, then write the reply in my voice — direct, professional, no fluff, ready to send as-is. ' +
+      'Save it with the draft_email_reply tool using thread_id "' + threadId + '" so it lands in the draft box on that email. ' +
+      'Do NOT send anything. Then tell me in one line what you drafted and flag anything you had to assume.',
+      threadId);
+  }
+
+  // Open ask86, pre-seed the prompt, and SEND it automatically. Re-opens the
+  // thread when the panel closes so an assistant-written draft shows up.
+  function seedAssistant(prompt, threadId) {
     if (window.p86AI && window.p86AI.ask) {
       window.p86AI.ask(prompt);
     } else if (window.p86AI && window.p86AI.open) {
@@ -312,6 +428,14 @@
       }, 300);
     } else {
       alert('Open the assistant (Ask 86) and ask about thread ' + threadId + '.');
+      return;
+    }
+    // The assistant writes the draft server-side; refresh the thread a few
+    // times so it appears without John having to reopen the email.
+    if (threadId) {
+      [6000, 14000, 25000].forEach(function (ms) {
+        setTimeout(function () { if (_state.activeThreadId === threadId) openThread(threadId); }, ms);
+      });
     }
   }
 

@@ -2423,6 +2423,7 @@ function customToolsFor(agentKey, opts) {
       // Reads — entity resolution + her personal lanes
       'read_entity', 'search_entities', 'find_entities_near', 'read_outlook_mail', 'read_outlook_message',
       'read_email_inbox',   // Email Dropbox — forwarded/redirected mail (Azure-free lane)
+      'draft_email_reply',  // …and write the proposed reply into that thread's draft box (never sends)
       'read_attachment_text', 'view_attachment_image',
       // Memory
       'remember', 'recall', 'list_memories', 'forget',

@@ -506,13 +506,19 @@ router.get('/threads', requireAuth, async (req, res) => {
     const limit = Math.max(1, Math.min(50, Number(req.query.limit) || 20));
     const q = String(req.query.q || '').trim();
     const params = [req.user.id];
-    let where = 'user_id = $1';
+    let where = 'e.user_id = $1';
     if (q) {
       params.push('%' + q + '%');
-      where += ` AND (subject ILIKE $2 OR from_email ILIKE $2 OR COALESCE(orig_from_email, '') ILIKE $2 OR body_text ILIKE $2)`;
+      where += ` AND (e.subject ILIKE $2 OR e.from_email ILIKE $2 OR COALESCE(e.orig_from_email, '') ILIKE $2 OR e.body_text ILIKE $2)`;
     }
     const r = await pool.query(
-      `SELECT thread_id,
+      `SELECT e.thread_id,
+              -- Per-thread working state (draft + handled). last_inbound_at lets the
+              -- client decide "handled": replied_at >= last_inbound_at. A NEWER inbound
+              -- (the next forward, which stitches into this same thread) re-raises it.
+              MAX(received_at) FILTER (WHERE direction = 'inbound') AS last_inbound_at,
+              s.replied_at,
+              (COALESCE(s.draft_text, '') <> '') AS has_draft,
               COUNT(*)::int AS message_count,
               MAX(received_at) AS last_received_at,
               (ARRAY_AGG(subject ORDER BY received_at DESC))[1] AS subject,
@@ -534,9 +540,11 @@ router.get('/threads', requireAuth, async (req, res) => {
               (ARRAY_AGG(triage_summary ORDER BY received_at DESC) FILTER (WHERE direction = 'inbound'))[1] AS triage_summary,
               (ARRAY_AGG(triage_urgency ORDER BY received_at DESC) FILTER (WHERE direction = 'inbound'))[1] AS triage_urgency,
               (ARRAY_AGG(triage_actions ORDER BY received_at DESC) FILTER (WHERE direction = 'inbound'))[1] AS triage_actions
-         FROM inbound_emails
+         FROM inbound_emails e
+         LEFT JOIN email_thread_state s
+                ON s.user_id = e.user_id AND s.thread_id = e.thread_id
         WHERE ${where}
-        GROUP BY thread_id
+        GROUP BY e.thread_id, s.replied_at, s.draft_text
         ORDER BY last_received_at DESC
         LIMIT ${limit}`,
       params
@@ -564,9 +572,80 @@ router.get('/threads/:threadId', requireAuth, async (req, res) => {
       [req.user.id, req.params.threadId]
     );
     if (!r.rows.length) return res.status(404).json({ error: 'Thread not found' });
-    res.json({ messages: r.rows });
+    // Per-thread working state: the drafted reply + handled stamp.
+    const s = await pool.query(
+      `SELECT draft_text, draft_source, draft_updated_at, notes, replied_at
+         FROM email_thread_state WHERE user_id = $1 AND thread_id = $2`,
+      [req.user.id, req.params.threadId]
+    );
+    res.json({ messages: r.rows, state: s.rows[0] || null });
   } catch (e) {
     console.error('GET /api/email-inbox/threads/:threadId error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Upsert the per-thread state. Owner-scoped by (user_id, thread_id) — the
+// thread must already contain a message of the caller's, so a foreign thread
+// id can't seed a row. DRAFT ONLY: P86 never sends this; John copies it into
+// his real mail client (send stays off until the Azure/Outlook link lands).
+async function upsertThreadState(userId, orgId, threadId, patch) {
+  const own = await pool.query(
+    'SELECT 1 FROM inbound_emails WHERE user_id = $1 AND thread_id = $2 LIMIT 1',
+    [userId, threadId]
+  );
+  if (!own.rows.length) return null;
+  const sets = [], vals = [newId('ets'), orgId, userId, threadId];
+  let i = vals.length;
+  const cols = ['id', 'organization_id', 'user_id', 'thread_id'];
+  for (const [col, val] of Object.entries(patch)) {
+    cols.push(col); vals.push(val); i++; sets.push(`${col} = EXCLUDED.${col}`);
+  }
+  const ph = vals.map((_, n) => '$' + (n + 1)).join(', ');
+  sets.push('updated_at = NOW()');
+  const r = await pool.query(
+    `INSERT INTO email_thread_state (${cols.join(', ')}) VALUES (${ph})
+     ON CONFLICT (user_id, thread_id) DO UPDATE SET ${sets.join(', ')}
+     RETURNING draft_text, draft_source, draft_updated_at, notes, replied_at`,
+    vals
+  );
+  return r.rows[0];
+}
+
+// ── PUT /api/email-inbox/threads/:threadId/draft — save the drafted reply ──
+// body: { draft_text, notes?, source? }  source: 'assistant' | 'user'
+router.put('/threads/:threadId/draft', requireAuth, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const patch = {};
+    if (b.draft_text !== undefined) {
+      patch.draft_text = String(b.draft_text || '').slice(0, 20000);
+      patch.draft_source = (b.source === 'assistant') ? 'assistant' : 'user';
+      patch.draft_updated_at = new Date();
+    }
+    if (b.notes !== undefined) patch.notes = String(b.notes || '').slice(0, 20000);
+    if (!Object.keys(patch).length) return res.status(400).json({ error: 'Nothing to save' });
+    const state = await upsertThreadState(req.user.id, req.user.organization_id, req.params.threadId, patch);
+    if (!state) return res.status(404).json({ error: 'Thread not found' });
+    res.json({ ok: true, state });
+  } catch (e) {
+    console.error('PUT /api/email-inbox/threads/:threadId/draft error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── POST /api/email-inbox/threads/:threadId/replied — mark / un-mark handled ──
+// body: { replied: true|false }. Marking stamps NOW(); the thread stays off the
+// needs-reply list only while replied_at >= the newest inbound message.
+router.post('/threads/:threadId/replied', requireAuth, async (req, res) => {
+  try {
+    const on = (req.body || {}).replied !== false;
+    const state = await upsertThreadState(req.user.id, req.user.organization_id, req.params.threadId,
+      { replied_at: on ? new Date() : null });
+    if (!state) return res.status(404).json({ error: 'Thread not found' });
+    res.json({ ok: true, state });
+  } catch (e) {
+    console.error('POST /api/email-inbox/threads/:threadId/replied error:', e);
     res.status(500).json({ error: 'Server error' });
   }
 });

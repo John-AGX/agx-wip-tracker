@@ -3388,6 +3388,13 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_payloads_expiry
       ON payloads (expires_at)
       WHERE status = 'ready';
+    -- 'applying' is the in-flight claim POST /payloads/:id/apply takes so
+    -- two applies of one payload can't both run. It only ever exists while
+    -- a request is open, so any row still holding it at boot belongs to a
+    -- process that died mid-apply. Release them — otherwise the payload is
+    -- wedged out of the ready list forever with no way back.
+    UPDATE payloads SET status = 'ready' WHERE status = 'applying';
+
     CREATE INDEX IF NOT EXISTS idx_payloads_targets_gin
       ON payloads USING gin (targets jsonb_path_ops);
     CREATE INDEX IF NOT EXISTS idx_payloads_source
@@ -3964,6 +3971,35 @@ async function initSchema() {
     -- The user's private dropbox local-part (e.g. 'john-x7k2'). NULL
     -- until first generated from My Account / the my-address endpoint.
     ALTER TABLE users ADD COLUMN IF NOT EXISTS inbound_email_key TEXT UNIQUE;
+
+    -- ───────────────────────────────────────────────────────────────
+    -- Per-thread working state for the Email Hub. Threads are DERIVED
+    -- (thread_id lives on each message), so anything the user owns about a
+    -- conversation — the reply we drafted, side notes, and whether it's been
+    -- handled — lives here, one row per (user, thread).
+    --   draft_text  the proposed reply. The assistant writes it; John edits +
+    --               copies it into his real mail client. P86 NEVER SENDS from
+    --               here (send stays off until the Azure/Outlook link is done).
+    --   replied_at  stamped by the explicit "Mark replied" button. A thread is
+    --               "handled" only while replied_at >= the newest INBOUND
+    --               message, so the next forward in the thread (which stitches
+    --               back into the SAME thread — see normalizeSubject/90-day
+    --               stitch in email-inbox-routes) automatically re-raises it.
+    CREATE TABLE IF NOT EXISTS email_thread_state (
+      id               TEXT PRIMARY KEY,
+      organization_id  INTEGER NOT NULL REFERENCES organizations(id) ON DELETE CASCADE,
+      user_id          INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      thread_id        TEXT NOT NULL,
+      draft_text       TEXT,
+      draft_source     TEXT,             -- 'assistant' | 'user'
+      draft_updated_at TIMESTAMPTZ,
+      notes            TEXT,
+      replied_at       TIMESTAMPTZ,
+      updated_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_email_thread_state
+      ON email_thread_state (user_id, thread_id);
 
     -- ───────────────────────────────────────────────────────────────
     -- Plans & Takeoffs — first-class scale-drawing documents (the
