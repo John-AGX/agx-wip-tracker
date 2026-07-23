@@ -1092,6 +1092,16 @@ function getNestedChildren(id){
   E.wires().forEach(function(w){ if(w.toNode!==id) return; var k=E.findNode(w.fromNode); if(k && !seen[k.id]){ seen[k.id]=1; ks.push(k); } });
   return ks;
 }
+// RENDER-ONLY child list: getNestedChildren minus the types retired from the
+// Site Plan (scopes + cost buckets). Used by every card/dock renderer so a
+// retired node cannot reappear inside an expanded card or a floating panel.
+// Deliberately NOT used by the wire traversals (E.getOutput, the reparent
+// cycle guard) — those must still see the whole graph so money is unchanged.
+function visibleNestedChildren(id){
+  return getNestedChildren(id).filter(function(k){
+    return !(E.spNodeRetired && E.spNodeRetired(k.type));
+  });
+}
 function ncNodePct(n){
   if(n.type==='t1') return (E.getT1WeightedPct?E.getT1WeightedPct(n):(n.pctComplete||0));
   var d=E.DEFS[n.type]||{}; return d.hasProg ? (n.pctComplete||0) : null;
@@ -1099,7 +1109,7 @@ function ncNodePct(n){
 function ncNodeVal(n){ try{ return (typeof E.getOutput==='function') ? E.getOutput(n,0) : null; }catch(e){ return null; } }
 function nestedCardHtml(n, depth, seen){
   if(seen[n.id]) return ''; seen[n.id]=1;    // cycle guard
-  var d=E.DEFS[n.type]||{}, kids=getNestedChildren(n.id);
+  var d=E.DEFS[n.type]||{}, kids=visibleNestedChildren(n.id);
   var typ=(d.cat==='cost')?'cost':n.type, coll=!!n._ncColl, pct=ncNodePct(n), val=ncNodeVal(n);
   var h='<div class="ng-ncard ng-nc-'+typ+(coll?' ng-nc-coll':'')+(n.type!=='t1'?' ng-nc-drag':'')+'" data-nc="'+n.id+'"'+(n.type!=='t1'?' draggable="true"':'')+'>';
   h+='<div class="ng-nc-h" data-nc-sel="'+n.id+'">';
@@ -1163,14 +1173,17 @@ function renderBldgDocks(){
   if(!window._p86NcDefault || !sitePlan){ [].forEach.call(area.querySelectorAll('.ng-dock'), function(e){ e.remove(); }); var _sv=document.getElementById('ngDockWires'); if(_sv) _sv.innerHTML=''; return; }
   var t1s=E.nodes().filter(function(n){ return n.type==='t1'; }), live={};
   t1s.forEach(function(b){
-    getNestedChildren(b.id).forEach(function(k, idx){   // one card per scope / CO / direct cost
+    // Scopes + cost buckets are retired from the Site Plan (E.spNodeRetired).
+    // This is the DEFAULT render path — in "Cards" mode children never reach
+    // renderNodes, they become docked cards here, so the gate lives in both.
+    visibleNestedChildren(b.id).forEach(function(k, idx){   // one card per CO / sub / PO
       live[k.id]=1;
       var el=document.getElementById('ngDock-'+k.id);
       if(!el){ el=document.createElement('div'); el.id='ngDock-'+k.id; area.appendChild(el); ncAttachDnd(el); }
       el._bldg=b.id;                                     // the building this card wires to (for layout)
       if(!k._ncDockOff) k._ncDockOff={x:88, y:-72+idx*66};  // spawn near the building, then placeable
       var d=E.DEFS[k.type]||{}, typ=(d.cat==='cost')?'cost':k.type;
-      var open=!!k._ncDockOpen, subs=getNestedChildren(k.id), seen={}, pct=ncNodePct(k), val=ncNodeVal(k);
+      var open=!!k._ncDockOpen, subs=visibleNestedChildren(k.id), seen={}, pct=ncNodePct(k), val=ncNodeVal(k);
       el.className='ng-dock ng-nc-'+typ+(open?' ng-dock-open':'');
       var sum='';
       if(val!=null && !isNaN(val)) sum+=E.fmtC(val);
@@ -4162,12 +4175,18 @@ function addCostToBuilding(bId, clientX, clientY){
 // spawns + wires the child straight in — no floating node library needed. This
 // generalizes addCostToBuilding to ANY parent node.
 // What each parent type may spawn. 'cost' is a group → the concrete cost buckets.
+// Scope ('t2') and the cost buckets ('cost' → mat/labor/gc/burden/other) are
+// RETIRED — they no longer render on the Site Plan, so offering to create one
+// would spawn a node the user can never see. Scope allocation lives in the
+// scope × building matrix (appData.phases) and costs bucket by cost_code.
+// The t2 row is kept so a legacy scope node that still exists on an old job
+// can be drilled into without the menu throwing.
 var SPAWN_CHILDREN={
-  t1:['t2','sub','po','cost','co'],   // Building
-  t2:['sub','po','cost','co'],        // Scope / Phase
-  sub:['po','cost'],
+  t1:['sub','po','co'],               // Building
+  t2:['sub','po','co'],               // Scope / Phase (legacy nodes only)
+  sub:['po'],
   po:['inv'],
-  co:['cost']
+  co:[]                               // was ['cost'] — empty means the menu no-ops
 };
 var COST_BUCKETS=['mat','labor','gc','burden','other'];
 var SPAWN_LABEL={ t2:'Scope', sub:'Sub', po:'PO', co:'CO', inv:'Invoice', mat:'Materials', labor:'Labor', gc:'Gen Cond', burden:'Burden', other:'Other' };

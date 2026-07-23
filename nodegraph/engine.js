@@ -109,7 +109,28 @@ var _spFocusSet = null;
 function setSitePlanFocusSet(s){ _spFocusSet = (s && typeof s === 'object') ? s : null; }
 // Is this node visible in site-plan mode right now? Gates BOTH renderNodes
 // (ui.js) and drawWires (below) so node + wire visibility never diverge.
+// RETIRED ON THE SITE PLAN (John, 2026-07-23): "i dont want any of the scope
+// nodes showing on the map, nor cost buckets."
+//
+// Scopes (t2) and cost buckets (cat:'cost' — Materials/Labor/Gen Cond/Burden/
+// Other) are the node-graph's parallel copy of a model that already exists:
+// appData.phases IS the scope x building matrix, and cost_code is the real
+// bucket vocabulary. Building polygons stay — they are map GEOMETRY, not nodes.
+//
+// This is VISIBILITY ONLY. The node objects and every wire stay alive, so
+// E.getOutput and everything downstream of it (ngActualCosts, ngRevenueEarned,
+// ngBacklog, and the server-side WIP that reads them off the jobs blob) return
+// exactly the same numbers as before. Retiring the DATA would move real money
+// on live jobs and belongs to the money-spine slice, not here.
+function spNodeRetired(type){
+  if (type === 't2') return true;
+  var _d = DEFS[type];
+  return !!(_d && _d.cat === 'cost');
+}
 function spNodeVisible(type, id){
+  // Checked FIRST, ahead of the drill-in focus set — a retired type must not
+  // reappear just because the user drilled into its building.
+  if (spNodeRetired(type)) return false;
   // Site Plan (satellite OR abstract): the WIP hub + its shared/site-cost chips live
   // in the sidebar metrics panel, never on the canvas. WIP data is now read from the
   // job (getJobWIP), so the hub node is purely vestigial here — hidden unconditionally.
@@ -1696,7 +1717,7 @@ return {
   canConn:canConn, addNode:addNode, findNode:findNode,
   cleanMode:getCleanMode, setCleanMode:setCleanMode, firstCompatPort:firstCompatPort,
   viewMode:getViewMode, setViewMode:setViewMode, sitePlanVisible:sitePlanVisible, budgetFootprint:budgetFootprint, spBuildingFootprint:spBuildingFootprint,
-  spNodeVisible:spNodeVisible, setSitePlanFocusSet:setSitePlanFocusSet,
+  spNodeVisible:spNodeVisible, spNodeRetired:spNodeRetired, setSitePlanFocusSet:setSitePlanFocusSet,
   spMapZoom:spMapZoom, spGraphToLatLng:spGraphToLatLng, spLatLngToGraph:spLatLngToGraph, setNodeGeo:setNodeGeo, setNodePolygon:setNodePolygon,
   getOutput:getOutput, getActual:getActual, getAccrued:getAccrued, resetComp:resetComp,
   getPhaseAllocWires:getPhaseAllocWires, rebalancePhaseAllocations:rebalancePhaseAllocations,
