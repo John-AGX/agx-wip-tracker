@@ -198,7 +198,15 @@ router.post('/:id/reject', requireAuth, requireOrg, async (req, res) => {
         WHERE id = $1
           AND organization_id = $2
           AND (user_id = $3 OR user_id IS NULL)
-          AND status IN ('ready', 'rejected')
+          -- 'applying' with a STALE claim is included so a card can never wedge.
+          -- Approve 409s on a live claim and Reject used to 404 on any 'applying'
+          -- row, which left an abandoned apply (process restart mid-flight) as a
+          -- card the user could neither approve nor dismiss. A claim younger than
+          -- 5 minutes is still treated as live and stays un-rejectable, so this
+          -- cannot cancel an apply that is genuinely running.
+          AND (status IN ('ready', 'rejected')
+               OR (status = 'applying'
+                   AND (claimed_at IS NULL OR claimed_at < NOW() - INTERVAL '5 minutes')))
         RETURNING id, status, targets, title, summary, rationale, emitting_agent_key`,
       [req.params.id, orgId, userId]
     );
@@ -361,7 +369,23 @@ router.post('/:id/apply', requireAuth, requireOrg, async (req, res) => {
     // stay droppable for the real run.
     if (!dryRun) {
       const claim = await pool.query(
-        `UPDATE payloads SET status = 'applying', claimed_at = NOW() WHERE id = $1 AND status = 'ready' RETURNING id`,
+        // SELF-HEALING CLAIM. Taking the claim only from 'ready' meant that any
+        // apply which never reached a terminal status — the process restarting
+        // mid-flight (every deploy does this), a dropped connection, a killed
+        // request — stranded the row in 'applying'. From there Approve 409s and
+        // Reject 404s (it only accepts ready/rejected), so the card is WEDGED:
+        // the user cannot approve it and cannot dismiss it either.
+        //
+        // Re-claiming a stale claim fixes that without weakening the guard the
+        // claim exists for: genuine double-applies (a double-click, a replayed
+        // tool call) land seconds apart and still collide, while an abandoned
+        // claim frees itself after 5 minutes. No apply legitimately runs that long.
+        `UPDATE payloads SET status = 'applying', claimed_at = NOW()
+          WHERE id = $1
+            AND (status = 'ready'
+                 OR (status = 'applying'
+                     AND (claimed_at IS NULL OR claimed_at < NOW() - INTERVAL '5 minutes')))
+          RETURNING id`,
         [payload.id]
       );
       if (!claim.rowCount) {
@@ -517,7 +541,14 @@ async function applyPayloadForUser(user, payloadId) {
   // second door to the same dispatcher, and "yes" arriving twice (a repeated
   // approval, a replayed tool call) would otherwise apply the payload twice.
   const claim = await pool.query(
-    `UPDATE payloads SET status = 'applying', claimed_at = NOW() WHERE id = $1 AND status = 'ready' RETURNING id`,
+    // Same self-healing claim as the REST door — a claim abandoned by a restart
+    // must not wedge the card. See the comment there.
+    `UPDATE payloads SET status = 'applying', claimed_at = NOW()
+      WHERE id = $1
+        AND (status = 'ready'
+             OR (status = 'applying'
+                 AND (claimed_at IS NULL OR claimed_at < NOW() - INTERVAL '5 minutes')))
+      RETURNING id`,
     [payload.id]
   );
   if (!claim.rowCount) {
