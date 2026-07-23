@@ -2520,6 +2520,10 @@
         // editor during the ~100ms server-load window.
         var _serverLoadInFlight = false;
         var _serverLoadComplete = false;
+        // Distinct from _serverLoadComplete: TRUE only after a GET that actually
+        // succeeded. Complete-but-not-ok means we are running on the localStorage
+        // cache, which must never be pushed back as authoritative.
+        var _serverLoadOk = false;
         window.p86DataReady = function() { return _serverLoadComplete; };
         window.p86DataLoading = function() { return _serverLoadInFlight; };
 
@@ -2535,6 +2539,7 @@
             var authed = window.p86Api && window.p86Api.isAuthenticated();
             if (!authed) {
                 _serverLoadComplete = true;
+                _serverLoadOk = true;   // local-only mode: no server state to clobber
                 return Promise.resolve();
             }
             _serverLoadInFlight = true;
@@ -2587,6 +2592,7 @@
                 }
                 writeToLocalStorage();
                 _serverLoadComplete = true;
+                _serverLoadOk = true;   // a real GET landed — safe to push from here
                 _serverLoadInFlight = false;
                 // Re-render whatever's visible. Each renderer no-ops if
                 // its DOM target isn't present, so calling them all is
@@ -2599,7 +2605,15 @@
             }).catch(function(err) {
                 _serverLoadInFlight = false;
                 _serverLoadComplete = true; // mark complete so UI doesn't hang waiting
-                console.warn('Server load failed, staying on localStorage cache:', err.message);
+                // ...but do NOT set _serverLoadOk. "Complete" only unblocks
+                // rendering; it must never authorize a push. When the boot GET
+                // fails (a 502 mid-deploy, a network blip) memory is the stale
+                // localStorage cache, and pushing it as a full bulk replace
+                // overwrites whatever is actually on the server. That is exactly
+                // how a corrected Fairways scope split got reverted during a
+                // deploy window.
+                console.warn('Server load failed, staying on localStorage cache (pushes disabled until a good load):', err.message);
+                notifyPushStatus('failed', err);
             });
         }
 
@@ -2644,7 +2658,7 @@
             // to an even split repeatedly by exactly this, because a boot pushed
             // localStorage's old copy back over it. The server is the source of
             // truth; localStorage is only a paint accelerator.
-            if (!_serverLoadComplete || _serverLoadInFlight) return;
+            if (!_serverLoadOk || _serverLoadInFlight) return;
             if (_serverPushTimer) clearTimeout(_serverPushTimer);
             _serverPushTimer = setTimeout(function() { pushToServer(); }, 600);
         }
