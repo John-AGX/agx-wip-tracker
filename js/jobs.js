@@ -4727,15 +4727,32 @@ function renderJobsMain() {
         // (units/levels-weighted). Whole-dollar largest-remainder so the sums
         // reconcile. Non-destructive to already-landed phases; a no-buildings
         // job can't land anything, so it no-ops (the button is hidden there).
+        // Every dollar a scope already carries, wherever it sits: spread across
+        // buildings OR parked on the job-level Unassigned record. A scope with a
+        // hand-entered job-level budget is NOT an empty scope.
+        function getPhaseBudgetTotal(jobId, name) {
+            return (appData.phases || []).reduce(function(s, p) {
+                if (p.jobId === jobId && (p.phase || 'Unnamed') === name) return s + phaseRevenue(p);
+                return s;
+            }, 0);
+        }
         function distributeContractToPhases(jobId) {
             var recon = getJobBudgetRecon(jobId);
             if (recon.contract <= 0) return { ok: false, reason: 'no-contract' };
             if (!recon.hasBuildings) return { ok: false, reason: 'no-buildings' };
-            var remaining = recon.gap;
-            if (remaining <= 0.5) return { ok: false, reason: 'fully-allocated' };
             var names = [];
             (appData.phases || []).forEach(function(p) { if (p.jobId === jobId) { var n = p.phase || 'Unnamed'; if (names.indexOf(n) === -1) names.push(n); } });
-            var fillable = names.filter(function(n) { return getPhaseLandedOnBuildings(jobId, n) <= 0.5; });
+            // Fill only what NO scope has claimed yet, and only into scopes that
+            // are genuinely empty. Previously this used recon.gap (= contract −
+            // onBuildings, which ignores the `unassigned` figure recon computes
+            // but never subtracts) and treated "not yet on a building" as empty
+            // — so a scope budgeted at the job level looked unclaimed twice over
+            // and got overwritten by the even split. On Fairways that turned a
+            // hand-entered Gutters $92,000 into $120,067/$120,066.
+            var claimed = names.reduce(function(s, n) { return s + getPhaseBudgetTotal(jobId, n); }, 0);
+            var remaining = recon.contract - claimed;
+            if (remaining <= 0.5) return { ok: false, reason: 'fully-allocated' };
+            var fillable = names.filter(function(n) { return getPhaseBudgetTotal(jobId, n) <= 0.5; });
             if (!fillable.length) return { ok: false, reason: 'no-fillable-phases' }; // under-allocated but every phase is on buildings → GC adjusts a phase
             // Whole-dollar largest-remainder split so the per-phase budgets sum
             // EXACTLY to the (rounded) remaining, no fractional drift.
