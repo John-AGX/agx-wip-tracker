@@ -13,12 +13,18 @@ function renderJobsMain() {
             var msg = opts.message || ('Delete this ' + label + '?' +
                 (opts.note ? '\n\n' + opts.note : ''));
             if (typeof window.p86Confirm === 'function') {
+                // Two p86Confirm impls ship (dialogs.js + app.js) with different
+                // option names — pass both spellings so the Delete label and the
+                // danger styling apply whichever one is live.
                 return window.p86Confirm({
                     title: opts.title || ('Delete ' + label),
                     message: msg,
                     confirmLabel: opts.confirmLabel || 'Delete',
+                    confirmText: opts.confirmLabel || 'Delete',
                     cancelLabel: opts.cancelLabel || 'Cancel',
-                    danger: opts.danger !== false
+                    cancelText: opts.cancelLabel || 'Cancel',
+                    danger: opts.danger !== false,
+                    destructive: opts.danger !== false
                 });
             }
             return Promise.resolve(window.confirm(msg));
@@ -5400,10 +5406,19 @@ function renderJobsMain() {
             el.style.color = remaining < 0 ? 'var(--red)' : remaining === 0 ? 'var(--green)' : 'var(--yellow)';
         }
 
+        // p86Prompt, not native prompt() — the native one no-ops in an installed
+        // PWA, so "add scope" did nothing there.
         function addPhaseFromBuildingModal() {
             if (!appState.editBuildingId) return;
-            const phaseName = prompt('Phase name (e.g., Electrical, Plumbing):');
-            if (!phaseName || !phaseName.trim()) return;
+            var ask = (typeof window.p86Prompt === 'function')
+                ? window.p86Prompt({ title: 'Add scope', message: 'Scope name', placeholder: 'e.g. Paint, Gutters, Roofing' })
+                : Promise.resolve(window.prompt('Scope name (e.g. Paint, Gutters):'));
+            Promise.resolve(ask).then(function (phaseName) {
+                if (!phaseName || !String(phaseName).trim()) return;
+                _addPhaseFromBuildingConfirmed(String(phaseName).trim());
+            });
+        }
+        function _addPhaseFromBuildingConfirmed(phaseName) {
             const phase = {
                 id: 'p' + Date.now(),
                 jobId: appState.currentJobId,
@@ -5420,6 +5435,7 @@ function renderJobsMain() {
                 notes: ''
             };
             appData.phases.push(phase);
+            if (typeof saveData === 'function') saveData();   // was never persisted on its own
             renderBuildingPhaseBreakdown(appState.editBuildingId);
         }
 
@@ -5488,9 +5504,11 @@ function renderJobsMain() {
         window.addJobLevelPhase = addJobLevelPhase;
 
         function removePhaseFromBreakdown(phaseId) {
-            if (!confirm('Delete this phase?')) return;
-            appData.phases = appData.phases.filter(p => p.id !== phaseId);
-            renderBuildingPhaseBreakdown(appState.editBuildingId);
+            _confirmDelete('scope', { message: 'Remove this scope from the building?' }).then(function (ok) {
+                if (!ok) return;
+                appData.phases = appData.phases.filter(p => p.id !== phaseId);
+                renderBuildingPhaseBreakdown(appState.editBuildingId);
+            });
         }
 
         function cosForBuilding(buildingId) {
@@ -5587,22 +5605,29 @@ function renderJobsMain() {
         }
 
         function removeCOFromBreakdown(coId) {
-            if (!confirm('Delete this change order?')) return;
-            appData.changeOrders = appData.changeOrders.filter(c => c.id !== coId);
-            if (typeof saveData === 'function') saveData();
-            renderBuildingCOBreakdown(appState.editBuildingId);
+            _confirmDelete('change order').then(function (ok) {
+                if (!ok) return;
+                appData.changeOrders = appData.changeOrders.filter(c => c.id !== coId);
+                if (typeof saveData === 'function') saveData();
+                renderBuildingCOBreakdown(appState.editBuildingId);
+            });
         }
 
+        // NOTE: gated on _confirmDelete, not native confirm(). Native dialogs
+        // silently return undefined inside an installed PWA, so `if (!confirm())
+        // return` made this a no-op there — the button appeared to do nothing.
         function deleteBuilding() {
             if (!appState.editBuildingId) return;
             const bldgId = appState.editBuildingId;
             const phases = appData.phases.filter(p => p.buildingId === bldgId);
-            if (phases.length > 0) {
-                if (!confirm('This building has ' + phases.length + ' phase(s). Delete the building AND all its phases?')) return;
-                appData.phases = appData.phases.filter(p => p.buildingId !== bldgId);
-            } else {
-                if (!confirm('Delete this building?')) return;
-            }
+            _confirmDelete('building', {
+                message: phases.length
+                    ? 'This building has ' + phases.length + ' scope record(s). Delete the building AND all of them?'
+                    : 'Delete this building?'
+            }).then(function (ok) { if (ok) _deleteBuildingConfirmed(bldgId, phases); });
+        }
+        function _deleteBuildingConfirmed(bldgId, phases) {
+            if (phases.length) appData.phases = appData.phases.filter(p => p.buildingId !== bldgId);
             appData.buildings = appData.buildings.filter(b => b.id !== bldgId);
             appState.editBuildingId = null;
             saveData();
@@ -5862,8 +5887,12 @@ function renderJobsMain() {
 
         function deletePhase() {
             if (!appState.editPhaseId) return;
-            if (!confirm('Delete this phase entry? This cannot be undone.')) return;
+            _confirmDelete('scope entry', { message: 'Delete this scope entry? This cannot be undone.' })
+                .then(function (ok) { if (ok) _deletePhaseConfirmed(); });
+        }
+        function _deletePhaseConfirmed() {
             const phaseId = appState.editPhaseId;
+            if (!phaseId) return;
             appData.phases = appData.phases.filter(p => p.id !== phaseId);
             appState.editPhaseId = null;
             saveData();
@@ -6005,7 +6034,11 @@ function renderJobsMain() {
             const jobId = appState.currentJobId;
             const phases = (appData.phases || []).filter(p => p.jobId === jobId && (p.phase || 'Unnamed').trim().toLowerCase() === key);
             if (!phases.length) return;
-            if (!confirm('Delete ' + phases.length + ' phase record(s) in this group? This cannot be undone.')) return;
+            _confirmDelete('scope', {
+                message: 'Delete this scope and its ' + phases.length + ' allocation record(s)? This cannot be undone.'
+            }).then(function (ok) { if (ok) _deletePhaseGroupConfirmed(jobId, phases); });
+        }
+        function _deletePhaseGroupConfirmed(jobId, phases) {
             const ids = phases.map(p => p.id);
             appData.phases = appData.phases.filter(p => ids.indexOf(p.id) === -1);
             saveData();
@@ -6272,10 +6305,12 @@ function renderJobsMain() {
         }
 
         function deleteSub(subId) {
-            if (!confirm('Delete this subcontractor?')) return;
-            appData.subs = appData.subs.filter(s => s.id !== subId);
-            saveData();
-            renderJobDetail(appState.currentJobId);
+            _confirmDelete('subcontractor').then(function (ok) {
+                if (!ok) return;
+                appData.subs = appData.subs.filter(s => s.id !== subId);
+                saveData();
+                renderJobDetail(appState.currentJobId);
+            });
         }
 
         function showArchivedJobs() {
@@ -6366,7 +6401,10 @@ function renderJobsMain() {
         }
 
         function deleteArchivedJob(jobId) {
-            if (!confirm('Permanently delete this job and all its data? This cannot be undone.')) return;
+            _confirmDelete('job', { message: 'Permanently delete this job and all its data? This cannot be undone.' })
+                .then(function (ok) { if (ok) _deleteArchivedJobConfirmed(jobId); });
+        }
+        function _deleteArchivedJobConfirmed(jobId) {
             appData.jobs = appData.jobs.filter(function(j) { return j.id !== jobId; });
             appData.buildings = appData.buildings.filter(function(b) { return b.jobId !== jobId; });
             appData.phases = appData.phases.filter(function(p) { return p.jobId !== jobId; });
