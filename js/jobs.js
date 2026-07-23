@@ -3796,8 +3796,16 @@ function renderJobsMain() {
             return icons[type] || '';
         }
 
+        // RETIRED with the node/wiring model. Wiring no longer exists, so
+        // "Site Plan Connections" and its "Not placed on graph yet" placeholder
+        // are meaningless — a scope's relationship to a building is now the
+        // allocation matrix, not a wire. Returns nothing so every caller
+        // (phase rows, subs table) simply stops drawing the section.
         function renderConnectionList(conns) {
-            if (!conns.length) return '<div style="font-size:11px;color:var(--text-dim);font-style:italic;">Not placed on graph yet</div>';
+            return '';
+        }
+        function _retiredRenderConnectionList(conns) {
+            if (!conns.length) return '';
             var html = '<div style="display:flex;flex-direction:column;gap:3px;">';
             conns.forEach(function(c, ci) {
                 // Collect all connected items (targets and sources)
@@ -3988,7 +3996,17 @@ function renderJobsMain() {
             return renderConnectionList(conns);
         }
 
+        // RETIRED: the "Phases (N)" card. It listed each scope with per-building
+        // instance rows carrying node-graph wiring state ("Not placed on graph
+        // yet"), duplicating revenue/cost/profit the Scopes × Buildings
+        // allocation matrix already shows per scope AND per building. One
+        // allocation surface, and the tier is called Scopes now, not Phases.
+        // Kept as a clearing no-op so its several call sites stay harmless.
         function renderOverviewPhasesInto(container, jobId, phases) {
+            if (container) container.innerHTML = '';
+            pruneEmptyUnassignedPhases(jobId);   // keep the self-heal this used to run
+        }
+        function _retiredRenderOverviewPhasesInto(container, jobId, phases) {
             container.innerHTML = '';
             // Self-heal: drop any empty "Unassigned" phase remnants left by the
             // create-then-split flow, and mirror the removal into the list we render.
@@ -4301,19 +4319,38 @@ function renderJobsMain() {
             if (info.mode !== 'pct') return;
             var total = info.total || 0;
             var res = phasePctShares(jobId, name);
-            res.targets.forEach(function(bid) {
+            // Whole-dollar LARGEST REMAINDER, so the cells sum EXACTLY to what
+            // the percentages describe. Rounding each cell on its own drifts —
+            // a $92,000 Gutters row spread over 10 buildings landed as $92,003 —
+            // and a scope that cannot reconcile to its own total can never
+            // reconcile to the contract. distributeContractToPhases already uses
+            // this technique for the same reason.
+            var plan = res.targets.map(function(bid) {
                 var key = bid || '__un__';
                 var share = res.shares[key] || { pct: 0, auto: true };
-                var pct = share.pct || 0;
-                var dollars = Math.round(total * pct / 100);
-                var rec = info.recs.find(function(r) { return (r.buildingId || null) === (bid || null); });
-                if (!rec && dollars === 0) return; // don't materialize empty cells
-                rec = rec || phaseRecFor(jobId, name, bid);
+                var exact = total * (share.pct || 0) / 100;
+                return { bid: bid, share: share, exact: exact, base: Math.floor(exact), dollars: 0 };
+            });
+            var assigned = plan.reduce(function(s, p) { return s + p.base; }, 0);
+            var exactSum = plan.reduce(function(s, p) { return s + p.exact; }, 0);
+            // Distribute only the ROUNDING difference. Deliberately measured
+            // against the shares' own sum, not `total`: when the percentages
+            // intentionally leave the phase under-allocated, forcing the cells up
+            // to `total` would invent money the user never allocated.
+            var rem = Math.round(exactSum) - assigned;
+            plan.forEach(function(p) { p.dollars = p.base; });
+            plan.slice()
+                .sort(function(a, b) { return (b.exact - b.base) - (a.exact - a.base); })
+                .forEach(function(p, i) { if (i < rem) p.dollars += 1; });
+            plan.forEach(function(p) {
+                var rec = info.recs.find(function(r) { return (r.buildingId || null) === (p.bid || null); });
+                if (!rec && p.dollars === 0) return; // don't materialize empty cells
+                rec = rec || phaseRecFor(jobId, name, p.bid);
                 rec.allocMode = 'pct';
                 rec.phaseAllocTotal = total;
-                if (share.auto) { rec.allocAuto = true; }
-                else { rec.allocPct = pct; rec.allocAuto = false; }
-                setPhaseDollar(rec, dollars);
+                if (p.share.auto) { rec.allocAuto = true; }
+                else { rec.allocPct = p.share.pct || 0; rec.allocAuto = false; }
+                setPhaseDollar(rec, p.dollars);
             });
         }
 
