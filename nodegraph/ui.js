@@ -4673,38 +4673,19 @@ function refreshInspContractAlloc(){
 // had an approved CO. Kick the fetch once per job and repaint when it lands.
 // loadChangeOrdersForJob already dedups in-flight requests; _coKicked keeps a
 // job with genuinely no COs from repainting forever.
-// appData.jobChangeOrders is populated from three places that race the first
-// inspector paint: a localStorage seed, the boot bulk-load (which REASSIGNS the
-// array, so an already-fetched job can go back to empty), and this per-job
-// fetch. Any single one-shot guard loses that race — an early resolve burns the
-// flag, the bulk-load then clobbers the array, and the card keeps painting with
-// no CO section while the console plainly shows the CO is there.
-// So: never latch. Re-fetch whenever this job has nothing cached (the loader
-// dedups in-flight requests, so repeat calls are free), and run a short
-// self-heal watchdog once per job to repaint after the late writers settle.
-var _coWatch={};
+// Change orders are cached per job and can be absent when the inspector first
+// paints (they load on demand). Fetch them when this job has none cached and
+// repaint once they land. Deliberately not latched: loadChangeOrdersForJob
+// already dedups in-flight requests, so a call made before jobs.js published
+// the loader simply retries on the next render instead of disabling itself.
 function ensureCOsThenRepaint(jid){
-  if(!jid) return;
+  if(!jid || typeof window.loadChangeOrdersForJob!=='function') return;
   var count=function(){ return (appData.jobChangeOrders||[]).filter(function(c){ return c && c.job_id===jid; }).length; };
-  var repaint=function(){ try{ refreshInspContractAlloc(); }catch(e){} };
-  if(!count() && typeof window.loadChangeOrdersForJob==='function'){
-    try{
-      var p=window.loadChangeOrdersForJob(jid);
-      if(p && p.then) p.then(function(){ if(count()) repaint(); });
-    }catch(e){}
-  }
-  if(_coWatch[jid]) return;
-  _coWatch[jid]=1;
-  // Two passes: one after the boot bulk-load typically lands, one well after.
-  // Each only repaints when the section is actually missing, so a card that
-  // already shows its COs is never rebuilt out from under the user.
-  [1200, 4000].forEach(function(ms){
-    setTimeout(function(){
-      var host=document.getElementById('ng-insp-contract-alloc');
-      if(!host || E.job()!==jid) return;
-      if(count() && (host.innerText||'').indexOf('Change orders')<0) repaint();
-    }, ms);
-  });
+  if(count()) return;
+  try{
+    var p=window.loadChangeOrdersForJob(jid);
+    if(p && p.then) p.then(function(){ if(count()){ try{ refreshInspContractAlloc(); }catch(e){} } });
+  }catch(e){}
 }
 // Exposed so a late-arriving data load (or a console check) can repaint the card
 // without waiting for the next inspector render.
@@ -4774,12 +4755,8 @@ function contractAllocHtml(){
 // through a graph CO-node wired to it — the same getCOIncomeToParent path the
 // AIA bills from — so an unwired CO is revenue that lands on no building line.
 function coAllocHtml(jid, blds){
-  var src=(appData.jobChangeOrders||[]);
-  var cos=src.filter(function(c){
+  var cos=(appData.jobChangeOrders||[]).filter(function(c){
     return c && c.job_id===jid && (c.status==='approved' || c.status==='applied'); });
-  try{ window.__coDbg={ jid:jid, srcLen:src.length, match:cos.length, blds:(blds||[]).length,
-    sameArray:(src===((window.appData||{}).jobChangeOrders)),
-    rows:src.map(function(c){ return (c&&c.job_id)+':'+(c&&c.status); }) }; }catch(e){}
   if(!cos.length) return '';
   var sellOf=function(c){ return (typeof window.coSellAmount==='function') ? Number(window.coSellAmount(c)||0) : 0; };
   var nodeFor=function(c){
