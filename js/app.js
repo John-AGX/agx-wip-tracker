@@ -2693,11 +2693,37 @@
             return _activePush;
         }
 
+        // Send any debounced push NOW instead of waiting out the 600ms window.
+        //
+        // saveData() writes localStorage immediately but defers the server push.
+        // A navigation inside that window dropped the push silently: localStorage
+        // (and therefore the UI, which is seeded from it on boot) kept showing the
+        // edit, so it looked saved and even survived a reload — until the server
+        // copy won and the change vanished. That is how a hand-entered scope
+        // budget on Fairways reverted to an even split more than once.
+        function flushPendingSave() {
+            if (!_serverPushTimer) return _activePush || Promise.resolve();
+            clearTimeout(_serverPushTimer);
+            _serverPushTimer = null;
+            return pushToServer();
+        }
+        // Cover every way a page can go away: pagehide fires on navigation and
+        // bfcache, visibilitychange catches mobile backgrounding (where pagehide
+        // is unreliable), and beforeunload catches desktop close. Firing the same
+        // flush from all three is harmless — with no timer pending it is a no-op.
+        window.addEventListener('pagehide', function() { try { flushPendingSave(); } catch (e) {} });
+        window.addEventListener('beforeunload', function() { try { flushPendingSave(); } catch (e) {} });
+        document.addEventListener('visibilitychange', function() {
+            if (document.visibilityState === 'hidden') { try { flushPendingSave(); } catch (e) {} }
+        });
+
         // Expose for explicit triggers (e.g. the import-from-browser button)
         window.p86Data = {
             pushToServer: pushToServer,
+            flushPendingSave: flushPendingSave,
             reloadFromServer: loadData
         };
+        window.p86FlushSave = flushPendingSave;
 
         // ==================== SEED DATA ====================
         function seedDataIfNeeded() {
