@@ -4673,16 +4673,29 @@ function refreshInspContractAlloc(){
 // had an approved CO. Kick the fetch once per job and repaint when it lands.
 // loadChangeOrdersForJob already dedups in-flight requests; _coKicked keeps a
 // job with genuinely no COs from repainting forever.
-var _coKicked={};
+var _coSeen={};
 function ensureCOsThenRepaint(jid){
-  if(!jid || _coKicked[jid]) return;
-  _coKicked[jid]=1;
+  if(!jid) return;
+  // Already cached for this job → coAllocHtml renders them, nothing to fetch.
+  var have=(appData.jobChangeOrders||[]).filter(function(c){ return c && c.job_id===jid; }).length;
+  if(have>0 || _coSeen[jid]) return;
+  // Do NOT burn the retry flag before the call: if jobs.js hasn't published the
+  // loader yet, an early return here would permanently block the fetch and the
+  // card would keep showing its first (CO-less) paint forever — which is exactly
+  // what it did. The flag is set only once a fetch actually resolves.
   if(typeof window.loadChangeOrdersForJob!=='function') return;
   try{
     var p=window.loadChangeOrdersForJob(jid);
-    if(p && p.then) p.then(function(){ try{ refreshInspContractAlloc(); }catch(e){} });
+    if(p && p.then) p.then(function(){
+      _coSeen[jid]=1;
+      var now=(appData.jobChangeOrders||[]).filter(function(c){ return c && c.job_id===jid; }).length;
+      if(now>0){ try{ refreshInspContractAlloc(); }catch(e){} }
+    });
   }catch(e){}
 }
+// Exposed so a late-arriving data load (or a console check) can repaint the card
+// without waiting for the next inspector render.
+window.refreshInspContractAlloc = refreshInspContractAlloc;
 // Compact Scopes×Buildings board for the ~340px Site Plan inspector. Reads
 // appData.phases — the (scope,building) records the building roll-ups and the
 // AIA schedule of values bill from — so it shows the SAME dollars as the
