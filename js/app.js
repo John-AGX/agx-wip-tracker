@@ -2636,6 +2636,15 @@
         function saveData() {
             writeToLocalStorage();
             if (!window.p86Api || !window.p86Api.isAuthenticated()) return;
+            // NEVER push before the server load has landed. Boot seeds appData
+            // from localStorage for a fast first paint, so until the GET returns,
+            // memory is a CACHE — not user intent. Pushing in that window sends a
+            // stale snapshot as a full bulk replace and silently overwrites newer
+            // server data: a hand-entered Gutters budget on Fairways was reverted
+            // to an even split repeatedly by exactly this, because a boot pushed
+            // localStorage's old copy back over it. The server is the source of
+            // truth; localStorage is only a paint accelerator.
+            if (!_serverLoadComplete || _serverLoadInFlight) return;
             if (_serverPushTimer) clearTimeout(_serverPushTimer);
             _serverPushTimer = setTimeout(function() { pushToServer(); }, 600);
         }
