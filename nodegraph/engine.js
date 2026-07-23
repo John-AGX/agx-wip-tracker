@@ -1718,6 +1718,12 @@ return {
   cleanMode:getCleanMode, setCleanMode:setCleanMode, firstCompatPort:firstCompatPort,
   viewMode:getViewMode, setViewMode:setViewMode, sitePlanVisible:sitePlanVisible, budgetFootprint:budgetFootprint, spBuildingFootprint:spBuildingFootprint,
   spNodeVisible:spNodeVisible, spNodeRetired:spNodeRetired, setSitePlanFocusSet:setSitePlanFocusSet,
+  // Exported so the INSPECTOR resolves a building's appData id the same way the
+  // MONEY does. The card used sel.data.id alone, which is null on a traced or
+  // unlinked t1 — the engine still found its phases by name, so the total was
+  // right while the card listed no scopes and folded the whole amount into the
+  // "Other contract allocation" plug.
+  t1BuildingId:t1BuildingId,
   spMapZoom:spMapZoom, spGraphToLatLng:spGraphToLatLng, spLatLngToGraph:spLatLngToGraph, setNodeGeo:setNodeGeo, setNodePolygon:setNodePolygon,
   getOutput:getOutput, getActual:getActual, getAccrued:getAccrued, resetComp:resetComp,
   getPhaseAllocWires:getPhaseAllocWires, rebalancePhaseAllocations:rebalancePhaseAllocations,

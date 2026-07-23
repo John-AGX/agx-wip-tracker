@@ -3818,8 +3818,8 @@ function buildingRevSources(sel){
   // matrix rows — and then a "-$9,200 Other contract allocation" plug generated
   // purely to cancel it back to the correct total. Two phantom rows around a
   // total that was right all along.
-  if(sel.data && sel.data.id && window.appData && Array.isArray(window.appData.phases)){
-    var bId=sel.data.id;
+  var bId = (E.t1BuildingId ? E.t1BuildingId(sel) : (sel.data && sel.data.id));
+  if(bId && window.appData && Array.isArray(window.appData.phases)){
     window.appData.phases.forEach(function(p){
       if(!p || p.buildingId!==bId) return;   // buildingId is globally unique — same join the engine uses
       contract.push({ name:(p.phase||'Scope'), rev:(p.asSoldRevenue||p.asSoldPhaseBudget||p.phaseBudget||0), pct:Math.max(0,Math.min(100,p.pctComplete||0)), matrix:true });
@@ -3838,9 +3838,19 @@ function buildingRevSources(sel){
       allocMode:true, scopesPresent:hadScopes
     };
   }
+  // ADDITIVE, not subtractive. contractRev used to be totalRev − coRev, where
+  // totalRev is matrix-only but coRev comes from WIRES. CO revenue is not in the
+  // matrix (phases carry no origin flag yet), so on any building with a wired CO
+  // that subtraction removed dollars the total never contained — understating
+  // Original Contract and re-manufacturing the very "Other contract allocation"
+  // plug row this change set out to delete.
+  //
+  // Sum what is actually listed instead: contract = the matrix rows, total =
+  // contract + CO. The reconciling row now only appears if the listed rows
+  // genuinely fail to account for the money, which is what it was for.
   var cSum=contract.reduce(function(a,c){ return a+(c.rev||0); }, 0);
-  var gap=contractRev-cSum;
-  if(Math.round(gap)>=1 || Math.round(gap)<=-1){ contract.push({ name:'Other contract allocation', rev:gap, pct:0, other:true }); }
+  contractRev=cSum;
+  totalRev=contractRev+coRev;
   return { contract:contract, cos:cos, contractRev:contractRev, coRev:coRev, totalRev:totalRev };
 }
 
@@ -3952,6 +3962,19 @@ function openLuPctPop(bn, kind, id, anchorEl){
 function applyScopePct(p, v){
   if(!p) return;
   p.pctComplete = Math.max(0, Math.min(100, Math.round(Number(v)||0)));
+  // MIRROR ONTO THE LINKED t2 NODE FIRST, or the write is thrown away.
+  // updateT1Progress() below recomputes each t2 node's pctComplete from its
+  // WIRES (never from this record), and pushToJobSilent() then runs pushToJob's
+  // t2→phase sync `phase.pctComplete = n.pctComplete||0` — which overwrites the
+  // number just typed with the node's stale value, and saveData persists the
+  // revert. render() re-runs both every frame, so nothing written here survives
+  // a repaint either. Same fix the Jobs-page editor already uses (js/jobs.js:
+  // "if (field === 'pctComplete') { n.pct = val; n.pctComplete = val; }").
+  try{
+    E.nodes().forEach(function(n){
+      if(n.type==='t2' && n.data && n.data.id===p.id) n.pctComplete = p.pctComplete;
+    });
+  }catch(e){}
   if(typeof updateT1Progress==='function') updateT1Progress();       // flush building %
   if(typeof pushToJobSilent==='function') pushToJobSilent();          // flush job pct/revenue cache
   if(typeof window.saveData==='function') window.saveData();          // persist appData (phase pct + job cache)
@@ -4328,6 +4351,14 @@ window.p86NgCostMenu=function(pid, anchor){
 // into that bucket. Rows select + reveal the child on the canvas.
 function childGroupsHtml(sel){
   var kids=SPAWN_CHILDREN[sel.type]; if(!kids || !kids.length) return '';
+  // Scopes are no longer SPAWNABLE on a building (removed from SPAWN_CHILDREN
+  // when scope nodes were retired) — but a building must still LIST its scopes,
+  // which now come from the matrix. Because this group list is derived from
+  // SPAWN_CHILDREN, dropping 't2' there silently deleted the whole "Scopes"
+  // SECTION from the inspector, not just its "+" button — taking the matrix
+  // rows and the only per-scope % control with it. Re-add it for display,
+  // on a COPY (never mutate the shared SPAWN_CHILDREN array).
+  if(sel.type==='t1' && kids.indexOf('t2')<0) kids=['t2'].concat(kids);
   var wired={};
   E.wires().forEach(function(w){ if(w.toNode!==sel.id) return; var k=E.findNode(w.fromNode); if(!k) return;
     var key=((E.DEFS[k.type]||{}).cat==='cost')?'cost':k.type;
@@ -4348,8 +4379,8 @@ function childGroupsHtml(sel){
   // is retired) the SAME scope appeared twice — John's "SCOPES · 3" showing
   // Gutters, Gutters(matrix), Paint for a building with two scopes.
   var mxScopes=[];
-  if(sel.type==='t1' && sel.data && sel.data.id && window.appData && Array.isArray(window.appData.phases)){
-    var _bId=sel.data.id;
+  var _bId=(sel.type==='t1' && E.t1BuildingId) ? E.t1BuildingId(sel) : (sel.data && sel.data.id);
+  if(sel.type==='t1' && _bId && window.appData && Array.isArray(window.appData.phases)){
     mxScopes=window.appData.phases.filter(function(p){ return p && p.buildingId===_bId; });
     // Wired t2 scope nodes are legacy and retired — the matrix rows above already
     // carry their dollars, so listing them again is the duplicate.
@@ -4431,8 +4462,12 @@ function childGroupsHtml(sel){
           +'<span class="ng-cg-ic">'+ngTypeIco(k.type)+'</span><span class="ng-cg-nm">'+luEsc(k.label||k.type)+'</span></div>';
       }).join('') : '<div class="ng-cg-empty">None yet</div>';
     }
+    // No "+" on a building's Scopes group — scopes are allocated in the matrix,
+    // not spawned here. Every other group keeps its add button.
+    var canAdd = !(t==='t2' && sel.type==='t1');
     return '<div class="ng-cg-group"><div class="ng-cg-head"><span class="ng-cg-lbl">'+label+' · '+(list.length+(t==='t2'?mxScopes.length:0))+'</span>'
-      +'<button class="ng-cg-add" aria-label="Add '+label+'" onclick="event.stopPropagation();'+add+'">+</button></div>'+rows+'</div>';
+      +(canAdd ? '<button class="ng-cg-add" aria-label="Add '+label+'" onclick="event.stopPropagation();'+add+'">+</button>' : '')
+      +'</div>'+rows+'</div>';
   }).join('');
   return '<div class="ng-cg">'+groups+'</div>';
 }

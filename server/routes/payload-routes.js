@@ -60,6 +60,26 @@ function capturePayloadVerdict(orgId, payload, accepted, applySummary) {
   });
 }
 
+// STALE_CLAIM_MS — how long an 'applying' claim may sit before another caller
+// may take it over. Genuine double-applies (a double-click, a replayed tool
+// call) land seconds apart and still collide; an apply abandoned by a process
+// restart frees itself. No apply legitimately runs this long.
+const STALE_CLAIM_MS = 5 * 60 * 1000;
+
+// May this caller attempt an apply? 'ready' always; 'applying' only once its
+// claim has gone stale. Both apply doors gate on this BEFORE the conditional
+// UPDATE — without it the pre-check 409s an 'applying' row and the stale-claim
+// branch in the UPDATE is unreachable, which is exactly the bug that left cards
+// wedged: Approve 409'd and Reject 404'd, so neither button could move them.
+// The UPDATE remains the atomic arbiter — this only decides whether to try.
+function claimable(payload) {
+  if (!payload) return false;
+  if (payload.status === 'ready') return true;
+  if (payload.status !== 'applying') return false;
+  if (!payload.claimed_at) return true;                       // claimed before the column existed
+  return (Date.now() - new Date(payload.claimed_at).getTime()) > STALE_CLAIM_MS;
+}
+
 const router = express.Router();
 
 // ──────────────────────────────────────────────────────────────────
@@ -330,7 +350,7 @@ router.post('/:id/apply', requireAuth, requireOrg, async (req, res) => {
     const r = await pool.query(
       `SELECT id, organization_id, user_id, source, emitting_agent_key,
               filename, file_content, targets, title, summary, rationale,
-              status, expires_at
+              status, expires_at, claimed_at
          FROM payloads
         WHERE id = $1
           AND organization_id = $2
@@ -340,9 +360,11 @@ router.post('/:id/apply', requireAuth, requireOrg, async (req, res) => {
     if (!r.rows.length) return res.status(404).json({ error: 'Not found' });
     const payload = r.rows[0];
 
-    if (payload.status !== 'ready') {
+    if (!claimable(payload)) {
       return res.status(409).json({
-        error: 'Payload not in ready state',
+        error: payload.status === 'applying'
+          ? 'This payload is already being applied.'
+          : 'Payload not in ready state',
         status: payload.status,
       });
     }
@@ -452,7 +474,7 @@ router.post('/:id/apply', requireAuth, requireOrg, async (req, res) => {
                   applied_at = NOW(),
                   apply_summary = $1,
                   apply_changeset = $2::jsonb
-            WHERE id = $3`,
+            WHERE id = $3 AND status = 'applying'`,
           [
             result.apply_summary,
             (Array.isArray(result.apply_changeset) && result.apply_changeset.length)
@@ -463,7 +485,7 @@ router.post('/:id/apply', requireAuth, requireOrg, async (req, res) => {
       } catch (bookErr) {
         console.error('[payloads] APPLIED BUT STATUS WRITE FAILED for', payload.id, bookErr);
         try {
-          await pool.query(`UPDATE payloads SET status = 'applied', applied_at = NOW() WHERE id = $1`, [payload.id]);
+          await pool.query(`UPDATE payloads SET status = 'applied', applied_at = NOW() WHERE id = $1 AND status = 'applying'`, [payload.id]);
         } catch (_) { /* last resort; the boot sweep will not free it while young */ }
       }
       // Approval = a positive training example (deduped by payload id).
@@ -526,14 +548,14 @@ async function applyPayloadForUser(user, payloadId) {
   const r = await pool.query(
     `SELECT id, organization_id, user_id, source, emitting_agent_key,
             filename, file_content, targets, title, summary, rationale,
-            status, expires_at
+            status, expires_at, claimed_at
        FROM payloads
       WHERE id = $1 AND organization_id = $2 AND (user_id = $3 OR user_id IS NULL)`,
     [payloadId, orgId, userId]
   );
   if (!r.rows.length) return { ok: false, error: 'Payload not found' };
   const payload = r.rows[0];
-  if (payload.status !== 'ready') return { ok: false, error: 'Payload not in ready state (' + payload.status + ')' };
+  if (!claimable(payload)) return { ok: false, error: 'Payload not in ready state (' + payload.status + ')' };
   if (payload.expires_at && new Date(payload.expires_at) < new Date()) return { ok: false, error: 'Payload expired' };
   const denial = await denyPayloadApply(user, payload);
   if (denial) return { ok: false, error: denial };
@@ -580,7 +602,7 @@ async function applyPayloadForUser(user, payloadId) {
     await pool.query(
       `UPDATE payloads
           SET status = 'applied', applied_at = NOW(), apply_summary = $1, apply_changeset = $2::jsonb
-        WHERE id = $3`,
+        WHERE id = $3 AND status = 'applying'`,
       [
         result.apply_summary,
         (Array.isArray(result.apply_changeset) && result.apply_changeset.length)
@@ -590,7 +612,7 @@ async function applyPayloadForUser(user, payloadId) {
     );
   } catch (bookErr) {
     console.error('[payloads] APPLIED BUT STATUS WRITE FAILED for', payload.id, bookErr);
-    try { await pool.query(`UPDATE payloads SET status = 'applied', applied_at = NOW() WHERE id = $1`, [payload.id]); } catch (_) {}
+    try { await pool.query(`UPDATE payloads SET status = 'applied', applied_at = NOW() WHERE id = $1 AND status = 'applying'`, [payload.id]); } catch (_) {}
   }
   try { capturePayloadVerdict(orgId, payload, true, result.apply_summary); } catch (_) {}
   return { ok: true, apply_summary: result.apply_summary, affected_targets: result.affected_targets };
