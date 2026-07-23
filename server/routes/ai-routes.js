@@ -27,6 +27,9 @@ const { aiChatLimiter, aiChatHourlyLimiter } = require('../rate-limit');
 // Wave 1.B context registry — fire-and-forget event logger for
 // memory recalls, entity reads, and any other layer we observe.
 const { logContextLoad } = require('../services/context-registry');
+// COs/POs/invoices live in their own tables; this reads them and derives CO
+// money through the same pricing pipeline the browser uses.
+const jobMoney = require('../services/money/change-order-totals');
 // Timezone helpers — render reminder remind_at instants in the acting
 // user's local zone (the time IS the point of a reminder).
 const { resolveTz, formatInTz } = require('../timezone');
@@ -5180,10 +5183,16 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
   // job-local arrays first.
   const buildings = Array.isArray(job.buildings) ? job.buildings : [];
   const phases = Array.isArray(job.phases) ? job.phases : [];
-  const changeOrders = Array.isArray(job.changeOrders) ? job.changeOrders : [];
   const subs = Array.isArray(job.subs) ? job.subs : [];
-  const purchaseOrders = Array.isArray(job.purchaseOrders) ? job.purchaseOrders : [];
-  const invoices = Array.isArray(job.invoices) ? job.invoices : [];
+  // Change orders, purchase orders, and invoices are NOT in the job blob —
+  // they have their own tables. Reading job.changeOrders here is what made
+  // this block print "(none recorded)" on jobs holding approved COs, and
+  // fed computeJobWIP $0 of CO revenue. money/change-order-totals.js reads
+  // the real rows and derives CO money through the shared pricing pipeline,
+  // falling back to the blob array only for un-migrated legacy jobs.
+  const changeOrders = await jobMoney.changeOrdersForJob(pool, jobId, job.changeOrders);
+  const purchaseOrders = await jobMoney.purchaseOrdersForJob(pool, jobId, job.purchaseOrders);
+  const invoices = await jobMoney.invoicesForJob(pool, jobId, job.invoices);
   void jobsRes; // future use if cross-job analysis is needed
 
   const wip = computeJobWIP(job, buildings, phases, changeOrders, subs, invoices);
@@ -5401,13 +5410,19 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
   if (changeOrders.length) {
     lines.push('# Change orders (' + changeOrders.length + ')');
     changeOrders.forEach((c, i) => {
-      const num = i + 1;
-      const inc = fmtMoney(c.income || c.contractAmount || 0);
-      const cost = fmtMoney(c.costs || c.estimatedCosts || 0);
+      const label = c.coNumber || ('CO ' + (i + 1));
+      // proposedIncome/Costs are every CO's own value; income/costs are zero
+      // until approved. Print the former and flag the latter, so a draft CO
+      // reads as "pending" rather than as a $0 change order.
+      const inc = fmtMoney(c.proposedIncome != null ? c.proposedIncome : (c.income || c.contractAmount || 0));
+      const cost = fmtMoney(c.proposedCosts != null ? c.proposedCosts : (c.costs || c.estimatedCosts || 0));
       const desc = c.description || c.title || '(no description)';
+      const pending = c.counted === false
+        ? ' — NOT in the contract totals above (status ' + (c.status || 'draft') + ')'
+        : '';
       // PROMPT-INJECTION DEFENSE (P1-5): CO descriptions are free text,
       // often pasted from external correspondence.
-      lines.push('- CO ' + num + ': ' + wrapUserData('job.change_order', desc) + ' — income ' + inc + ', cost ' + cost + (c.status ? ' [' + c.status + ']' : ''));
+      lines.push('- ' + label + ': ' + wrapUserData('job.change_order', desc) + ' — income ' + inc + ', cost ' + cost + (c.status ? ' [' + c.status + ']' : '') + pending);
     });
     lines.push('');
   } else {
@@ -5484,7 +5499,15 @@ async function buildJobContext(jobId, clientContext, aiPhase, organization, opts
   }
 
   if (purchaseOrders.length) {
-    lines.push('# Purchase orders: ' + purchaseOrders.length);
+    const poCommitted = purchaseOrders.reduce((s, p) => s + (p.committed ? Number(p.amount || 0) : 0), 0);
+    lines.push('# Purchase orders (' + purchaseOrders.length + ') — committed ' + fmtMoney(poCommitted));
+    purchaseOrders.slice(0, 12).forEach((p, i) => {
+      const label = p.poNumber || ('PO ' + (i + 1));
+      const who = p.subName ? ' — ' + wrapUserData('job.purchase_order', p.subName) : '';
+      const what = p.title ? ' ' + wrapUserData('job.purchase_order', p.title) : '';
+      lines.push('- ' + label + who + what + ' — ' + fmtMoney(p.amount || 0) + (p.status ? ' [' + p.status + ']' : ''));
+    });
+    if (purchaseOrders.length > 12) lines.push('- …and ' + (purchaseOrders.length - 12) + ' more');
     lines.push('');
   }
 

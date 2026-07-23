@@ -25,6 +25,7 @@
 const express = require('express');
 const { pool } = require('../db');
 const { requireAuth, requireCapability } = require('../auth');
+const jobFin = require('../services/job-financials');
 
 const router = express.Router();
 
@@ -35,38 +36,12 @@ function num(v) { const n = Number(v); return isFinite(n) ? n : 0; }
 function round2(n) { return Math.round(num(n) * 100) / 100; }
 function genId(p) { return p + '_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8); }
 
-// A line's amount: explicit `amount`, else qty × unitPrice.
-function lineAmount(l) {
-  if (!l) return 0;
-  if (l.amount != null && l.amount !== '') return num(l.amount);
-  return num(l.qty || 1) * num(l.unitPrice);
-}
-// Recompute an invoice's money from its lines + tax + retainage.
-function computeTotals(data, taxPct, retainageAmount) {
-  const lines = Array.isArray(data.lines) ? data.lines : [];
-  let subtotal = 0, taxable = 0;
-  lines.forEach(l => { const a = lineAmount(l); subtotal += a; if (l.taxable) taxable += a; });
-  const taxAmount = round2(taxable * num(taxPct) / 100);
-  const retain = round2(num(retainageAmount));
-  const total = round2(subtotal + taxAmount - retain);
-  return { subtotal: round2(subtotal), taxAmount, retainageAmount: retain, total };
-}
-
-// Next invoice number — org-wide sequential (INV-####), mirrors PO numbering.
-async function nextInvoiceNumber(orgId) {
-  const { rows } = await pool.query(
-    `SELECT invoice_number FROM invoices
-      WHERE (organization_id = $1 OR ($1 IS NULL AND organization_id IS NULL))
-        AND invoice_number ~ '^INV-[0-9]+$'`,
-    [orgId]
-  );
-  let maxN = 0;
-  for (const r of rows) {
-    const n = parseInt(String(r.invoice_number).slice(4), 10);
-    if (!isNaN(n) && n > maxN) maxN = n;
-  }
-  return 'INV-' + String(maxN + 1).padStart(4, '0');
-}
+// A line's amount, the invoice totals, and the INV-#### sequence all live in
+// services/job-financials.js — the AI payload dispatcher creates invoices
+// through that same module, so a total it derives matches this one exactly.
+const lineAmount = jobFin.lineAmount;
+const computeTotals = jobFin.computeInvoiceTotals;
+const nextInvoiceNumber = (orgId) => jobFin.nextInvoiceNumber(pool, orgId);
 
 function shapeInvoice(r) {
   if (!r) return null;

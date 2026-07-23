@@ -24,6 +24,7 @@ const express = require('express');
 const { pool } = require('../db');
 const { requireAuth, requireCapability, hasCapability } = require('../auth');
 const { captureExample, TASKS } = require('../services/training-capture');
+const jobFin = require('../services/job-financials');
 
 function _norm(v) { return v == null ? '' : String(v).trim().toLowerCase(); }
 
@@ -44,55 +45,17 @@ const ALLOWED_TRANSITIONS = {
 // Built-in default scope-of-work template. Seeded into a new PO's scope
 // when the org hasn't set its own (organizations.settings.po_scope_template).
 // AGX's standard subcontract agreement — editable per-org in the Command
-// Center / org settings. Intentionally plain text so it renders in a
-// textarea and in print; the org can paste richer/exact legal language.
-const DEFAULT_SCOPE_TEMPLATE =
-`ATTACHMENT A — SCOPE OF WORK
+// Center / org settings. The text lives in services/job-financials.js so a
+// PO the AI creates is seeded from the same default as one made in the UI.
+const DEFAULT_SCOPE_TEMPLATE = jobFin.DEFAULT_SCOPE_TEMPLATE;
 
-[Describe the job-specific scope here.]
-
-
-TERMS & CONDITIONS
-
-This Purchase Order / Subcontract Agreement ("Agreement") is entered into between Parsky LLC, dba AG Exteriors ("AGX", "Contractor") and the Subcontractor named above ("Subcontractor").
-
-1. INVOICING & PAYMENTS. Payment terms are Net 30 from approved invoice. AGX retains ten percent (10%) retainage from each payment, released upon final completion and owner acceptance.
-
-2. PERFORMANCE TIME & LIQUIDATED DAMAGES. Subcontractor shall complete the work by the scheduled completion date. Time is of the essence.
-
-3. CHANGES & CHANGE ORDERS. No extra work shall be performed and no additional payment shall be due without a written, executed Change Order signed by AGX prior to the work.
-
-4. INDEMNIFICATION. Subcontractor shall indemnify, defend, and hold harmless AGX and the Owner from claims arising out of Subcontractor's work.
-
-5. INSURANCE. Subcontractor shall maintain: Commercial General Liability of not less than $1,000,000, naming AGX as additional insured; Workers' Compensation of not less than $500,000; and Automobile Liability of not less than $500,000.
-
-6. WARRANTY. Subcontractor warrants its work for one (1) year from the date of the Owner's final acceptance.
-
-7. EXECUTION & ADDITIONAL OBLIGATIONS. Subcontractor shall provide required submittals and a schedule of values, maintain a clean site (a $25/day fine applies for failure to clean up), observe a no-smoking policy ($25 fine per violation), and comply with all OSHA and safety requirements.
-
-8. DISPUTE RESOLUTION. Disputes shall be resolved by binding arbitration administered by the American Arbitration Association (AAA).
-
-9. ENTIRE AGREEMENT. This Agreement, including the Scope of Work above, constitutes the entire agreement between the parties.`;
 
 // ── helpers ─────────────────────────────────────────────────────────
 
 // Next PO number — org-wide sequential (Buildertrend numbers POs across the
 // company, e.g. "PO-0002"), unlike CO numbers which are per-job. Picks the
 // highest numeric suffix on existing PO-#### rows in the org and adds 1.
-async function nextPoNumber(orgId) {
-  const { rows } = await pool.query(
-    `SELECT po_number FROM job_purchase_orders
-      WHERE (organization_id = $1 OR organization_id IS NULL)
-        AND po_number ~ '^PO-[0-9]+$'`,
-    [orgId]
-  );
-  let maxN = 0;
-  for (const r of rows) {
-    const n = parseInt(String(r.po_number).slice(3), 10);
-    if (!isNaN(n) && n > maxN) maxN = n;
-  }
-  return 'PO-' + String(maxN + 1).padStart(4, '0');
-}
+const nextPoNumber = (orgId) => jobFin.nextPoNumber(pool, orgId);
 
 function shapeRow(r) {
   return {
@@ -112,27 +75,9 @@ function shapeRow(r) {
 
 // Strip canonical column fields out of an incoming data blob so they can't
 // be smuggled in via the JSONB body.
-function cleanData(body) {
-  const data = { ...(body || {}) };
-  ['id', 'job_id', 'owner_id', 'sub_id', 'status', 'po_number',
-   'approved_at', 'approved_by', 'created_at', 'updated_at',
-   'extraction'].forEach(k => delete data[k]); // 'extraction' is a training artifact, not PO data
-  if (!Array.isArray(data.lines)) data.lines = [];
-  return data;
-}
+const cleanData = jobFin.cleanPoData;
 
-async function orgScopeTemplate(orgId) {
-  try {
-    const { rows } = await pool.query(
-      "SELECT settings->>'po_scope_template' AS tpl FROM organizations WHERE id = $1",
-      [orgId]
-    );
-    const tpl = rows.length ? rows[0].tpl : null;
-    return (tpl && String(tpl).trim()) ? tpl : DEFAULT_SCOPE_TEMPLATE;
-  } catch (e) {
-    return DEFAULT_SCOPE_TEMPLATE;
-  }
-}
+const orgScopeTemplate = (orgId) => jobFin.orgScopeTemplate(pool, orgId);
 
 // ── per-job list ────────────────────────────────────────────────────
 router.get('/jobs/:jobId/purchase-orders', requireAuth, async (req, res) => {

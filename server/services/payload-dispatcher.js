@@ -16,6 +16,9 @@
 
 const { pool } = require('../db');
 const { resolveTz, localWallClockToInstant, DEFAULT_TZ } = require('../timezone');
+// Change orders / purchase orders / invoices live in their own tables; this
+// is the same write layer the REST routes use, taking our transaction client.
+const jobFin = require('./job-financials');
 
 // ──────────────────────────────────────────────────────────────────
 // Wave 1.C — PayloadValidationError carries the structured shape
@@ -1490,45 +1493,65 @@ async function dispatchJob(dbClient, target, refTable, ctx) {
 
   // Change orders / purchase orders / invoices — array op pattern with
   // {op:'create'|'update'|'delete', *_id?, fields}.
-  function applyArrayOps(arrName, items, idKey, displayName) {
-    if (!Array.isArray(data[arrName])) data[arrName] = [];
+  //
+  // These are REAL TABLES — job_change_orders, job_purchase_orders,
+  // invoices — not arrays on the job blob. They used to be written into
+  // data.changeOrders / .purchaseOrders / .invoices here, which no
+  // reader has consulted since those tables landed: every CO, PO, and
+  // invoice an agent created was silently lost. Everything now routes
+  // through services/job-financials.js, which gets THIS transaction's
+  // client so the records commit or roll back with the rest of the
+  // payload, and which enforces the same numbering, field stripping,
+  // and applied/locked/closed guards as the REST routes.
+  const orgId = (ctx && ctx.organizationId) != null ? ctx.organizationId : null;
+  const ownerId = (ctx && ctx.userId) || null;
+
+  async function applyRecordOps(items, idKey, svc, displayName) {
     for (const op of items) {
-      if (!op || !op.op) throw new Error(`${arrName}[].op required`);
+      if (!op || !op.op) throw new Error(`${displayName}[].op required`);
       if (op.op === 'create') {
-        const idVal = op[idKey] || (arrName.slice(0, 2) + '_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8));
-        const row = Object.assign({ id: idVal, jobId: id }, op.fields || {});
-        row[idKey] = idVal;
-        data[arrName].push(row);
-        if (isRef(op[idKey])) refTable[op[idKey]] = idVal;
+        const row = await svc.create(op.fields || {});
+        // Let later ops in the same payload point at what we just made.
+        if (isRef(op[idKey])) refTable[op[idKey]] = row.id;
       } else if (op.op === 'update') {
         const idVal = resolveRef(op[idKey], refTable);
-        if (!idVal) throw new Error(`${arrName}[].update requires ${idKey}`);
-        const idx = data[arrName].findIndex((x) => x.id === idVal || x[idKey] === idVal);
-        if (idx < 0) throw new Error(`${displayName} ${idVal} not found on job ${id}`);
-        Object.assign(data[arrName][idx], op.fields || {});
+        if (!idVal) throw new Error(`${displayName}[].update requires ${idKey}`);
+        await svc.update(idVal, op.fields || {});
       } else if (op.op === 'delete') {
         const idVal = resolveRef(op[idKey], refTable);
-        const before = data[arrName].length;
-        data[arrName] = data[arrName].filter((x) => x.id !== idVal && x[idKey] !== idVal);
-        if (data[arrName].length === before) {
-          throw new Error(`${displayName} ${idVal} not found on job ${id} for delete`);
-        }
+        if (!idVal) throw new Error(`${displayName}[].delete requires ${idKey}`);
+        await svc.remove(idVal);
       } else {
-        throw new Error(`${arrName}[].op must be create|update|delete, got: ${op.op}`);
+        throw new Error(`${displayName}[].op must be create|update|delete, got: ${op.op}`);
       }
     }
   }
 
   if (Array.isArray(ops.change_orders) && ops.change_orders.length) {
-    applyArrayOps('changeOrders', ops.change_orders, 'co_id', 'change_order');
+    await applyRecordOps(ops.change_orders, 'co_id', {
+      create: (fields) => jobFin.createChangeOrder(dbClient, { jobId: id, orgId, ownerId, fields }),
+      update: (rid, fields) => jobFin.updateChangeOrder(dbClient, { id: rid, orgId, fields }),
+      remove: (rid) => jobFin.deleteChangeOrder(dbClient, { id: rid, orgId }),
+    }, 'change_orders');
     changes.push(`${ops.change_orders.length} CO op(s)`);
   }
   if (Array.isArray(ops.purchase_orders) && ops.purchase_orders.length) {
-    applyArrayOps('purchaseOrders', ops.purchase_orders, 'po_id', 'purchase_order');
+    await applyRecordOps(ops.purchase_orders, 'po_id', {
+      create: (fields) => jobFin.createPurchaseOrder(dbClient, { jobId: id, orgId, ownerId, fields }),
+      update: (rid, fields) => jobFin.updatePurchaseOrder(dbClient, { id: rid, orgId, fields }),
+      remove: (rid) => jobFin.deletePurchaseOrder(dbClient, { id: rid, orgId }),
+    }, 'purchase_orders');
     changes.push(`${ops.purchase_orders.length} PO op(s)`);
   }
   if (Array.isArray(ops.invoices) && ops.invoices.length) {
-    applyArrayOps('invoices', ops.invoices, 'invoice_id', 'invoice');
+    await applyRecordOps(ops.invoices, 'invoice_id', {
+      // An invoice can name its own job; default to the one being dispatched.
+      create: (fields) => jobFin.createInvoice(dbClient, {
+        jobId: (fields && fields.job_id) || id, orgId, ownerId, fields,
+      }),
+      update: (rid, fields) => jobFin.updateInvoice(dbClient, { id: rid, orgId, fields }),
+      remove: (rid) => jobFin.deleteInvoice(dbClient, { id: rid, orgId }),
+    }, 'invoices');
     changes.push(`${ops.invoices.length} invoice op(s)`);
   }
 

@@ -23,6 +23,7 @@ const { pool } = require('../db');
 const { requireAuth, requireCapability, hasCapability } = require('../auth');
 const { assertEntityInOrg } = require('../org-access');
 const { sanitizeRichText } = require('../util/rich-text');
+const jobFin = require('../services/job-financials');
 
 const router = express.Router();
 
@@ -43,18 +44,9 @@ const ALLOWED_TRANSITIONS = {
 // numeric suffix on existing 'CO-N' rows and adds 1. We don't worry
 // about gaps (deleted COs leave holes) because PMs treat CO-N as a
 // label, not a sequence guarantee.
-async function nextCoNumber(jobId) {
-  const { rows } = await pool.query(
-    `SELECT co_number FROM job_change_orders WHERE job_id = $1 AND co_number ~ '^CO-[0-9]+$'`,
-    [jobId]
-  );
-  let maxN = 0;
-  for (const r of rows) {
-    const n = parseInt(String(r.co_number).slice(3), 10);
-    if (!isNaN(n) && n > maxN) maxN = n;
-  }
-  return 'CO-' + (maxN + 1);
-}
+// Lives in services/job-financials.js so the AI payload dispatcher — which
+// writes COs inside its own transaction — numbers them the same way.
+const nextCoNumber = (jobId) => jobFin.nextCoNumber(pool, jobId);
 
 // Helper — read a row and shape it into the response object. The
 // canonical columns ride alongside the data blob; we spread data

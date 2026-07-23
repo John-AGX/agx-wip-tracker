@@ -157,7 +157,7 @@
     };
   }
 
-  window.p86Pricing = {
+  var api = {
     num: num,
     sectionHeaderFor: sectionHeaderFor,
     sectionMarkupForLine: sectionMarkupForLine,
@@ -167,4 +167,13 @@
     applyTargetMargin: applyTargetMargin,
     applyFeesAndTax: applyFeesAndTax
   };
+
+  // Dual-target. The browser gets window.p86Pricing from the script tag;
+  // the server gets the very same object via require(). This file has no
+  // DOM dependency, so there is no reason for a server-derived total and
+  // the number on screen to be computed by different code — the drift
+  // this module was written to end (see the header) applies just as much
+  // across the client/server line as it did across two editors.
+  if (typeof window !== 'undefined') window.p86Pricing = api;
+  if (typeof module !== 'undefined' && module.exports) module.exports = api;
 })();
