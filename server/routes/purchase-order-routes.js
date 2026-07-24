@@ -84,14 +84,19 @@ router.get('/jobs/:jobId/purchase-orders', requireAuth, async (req, res) => {
   try {
     const { rows } = await pool.query(
       `SELECT po.id, po.job_id, po.owner_id, po.sub_id, po.status, po.po_number,
-              po.data, po.approved_at, po.approved_by, po.created_at, po.updated_at
+              po.data, po.approved_at, po.approved_by, po.created_at, po.updated_at,
+              s.name AS sub_name
          FROM job_purchase_orders po
          JOIN jobs j ON j.id = po.job_id
+         LEFT JOIN subs s ON s.id = po.sub_id
         WHERE po.job_id = $1 AND (j.organization_id = $2 OR j.organization_id IS NULL)
         ORDER BY po.updated_at DESC`,
       [req.params.jobId, req.user.organization_id]
     );
-    res.json({ purchase_orders: rows.map(shapeRow) });
+    // Include sub_name (resolved from the subs join) so the per-job PO list shows
+    // the subcontractor — the hub list + single-GET already join; this one didn't,
+    // so the per-job tab rendered SUB "—" for every PO.
+    res.json({ purchase_orders: rows.map(r => Object.assign(shapeRow(r), { sub_name: r.sub_name })) });
   } catch (e) {
     console.error('GET /api/jobs/:jobId/purchase-orders error:', e);
     res.status(500).json({ error: 'Server error' });
