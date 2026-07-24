@@ -1222,6 +1222,14 @@ function saveGraphToCloud(state){
       body: JSON.stringify(state)
     }).then(function(r){
       if (!r.ok) {
+        if (r.status === 409) {
+          // Server data-loss guard refused a footprint-wiping write — a
+          // fresh-open seed racing over drawn geometry. This is the guard
+          // WORKING: the cloud copy is safe and untouched. Don't flash a
+          // save error; the real graph renders on the next cloud sync.
+          console.warn('[nodegraph] cloud save blocked by footprint guard (409) — server footprints are protected; the local seed was not persisted.');
+          return;
+        }
         console.warn('[nodegraph] cloud save failed:', r.status);
         if (typeof window.ngMarkSaved === 'function') window.ngMarkSaved('error');
       }

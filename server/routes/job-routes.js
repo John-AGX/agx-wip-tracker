@@ -678,15 +678,48 @@ router.get('/:id/graph', requireAuth, async (req, res) => {
   }
 });
 
+// Count building nodes carrying real geometry — a traced footprint
+// polygon or a geo-anchor. Feeds the data-loss guard below.
+function graphGeomCount(g) {
+  if (!g || !Array.isArray(g.nodes)) return 0;
+  let c = 0;
+  for (const n of g.nodes) {
+    if ((Array.isArray(n.polygon) && n.polygon.length > 0) ||
+        (n.geoLatLng && typeof n.geoLatLng === 'object')) c++;
+  }
+  return c;
+}
+
 router.put('/:id/graph', requireAuth, async (req, res) => {
   try {
     if (!(await canEdit(req.user.id, req.user.role, req.params.id))) {
       return res.status(403).json({ error: 'No edit access' });
     }
+    const incoming = req.body || {};
+    // ── Data-loss guard ──────────────────────────────────────────────
+    // The Site Map re-seeds a default (footprint-less) graph on open. If
+    // the cloud load blips or a job was converted from a lead with an
+    // empty survey graph, that bare seed can PUT here and wipe real drawn
+    // footprints. Refuse any write that would take a graph WITH footprints
+    // down to ZERO: a legit auto-save always re-sends the buildings'
+    // geometry, so only a seed clobber ever trips this. An intentional
+    // "clear everything" passes ?force=1.
+    if (graphGeomCount(incoming) === 0 && req.query.force !== '1') {
+      const { rows } = await pool.query('SELECT data FROM node_graphs WHERE job_id = $1', [req.params.id]);
+      const existingGeom = rows.length ? graphGeomCount(rows[0].data) : 0;
+      if (existingGeom > 0) {
+        console.warn('[graph-guard] blocked footprint-wipe on job ' + req.params.id + ' (existing=' + existingGeom + ', incoming=0)');
+        return res.status(409).json({
+          error: 'geometry_wipe_blocked',
+          existingGeom,
+          message: 'Refusing to overwrite ' + existingGeom + ' saved building footprint(s) with a graph that has none. Pass force=1 to override.'
+        });
+      }
+    }
     await pool.query(
       `INSERT INTO node_graphs (job_id, data) VALUES ($1, $2)
        ON CONFLICT (job_id) DO UPDATE SET data = $2, updated_at = NOW()`,
-      [req.params.id, JSON.stringify(req.body)]
+      [req.params.id, JSON.stringify(incoming)]
     );
     res.json({ ok: true });
   } catch (e) {
