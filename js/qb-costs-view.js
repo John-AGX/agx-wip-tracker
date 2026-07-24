@@ -239,7 +239,51 @@ function p86Ask(message, opts) {
     return panel;
   }
 
+  // ── Freshness ────────────────────────────────────────────────
+  // appData.qbCostLines is hydrated ONCE at boot (app.js). A job whose
+  // QB costs were imported AFTER this tab booted — or imported on
+  // another device — is entirely missing from that snapshot, so the
+  // view (and the cost buckets, and getJobWIP) render $0 until a full
+  // reload. This was the RV2013 "costs didn't import" report: the lines
+  // WERE in the DB, the in-memory cache just never refreshed.
+  //
+  // renderJobQBCosts (the public mount, called by the tab router +
+  // workspace embed) now pulls this job's lines fresh from the server,
+  // splices them into appData.qbCostLines (replacing this job's slice),
+  // then paints. Internal re-renders (filter/search/link → reRender)
+  // call paintJobQBCosts directly and never re-fetch.
+  function refreshLinesForJob(jobId, done) {
+    if (!(window.p86Api && p86Api.qbCosts && typeof p86Api.qbCosts.list === 'function')) {
+      done && done(false); return;
+    }
+    p86Api.qbCosts.list(jobId).then(function (res) {
+      // Filter to this job defensively — the server already scopes by
+      // ?jobId=, but this keeps the splice correct even if that changes.
+      var fresh = ((res && res.lines) || []).filter(function (l) { return (l.job_id || l.jobId) === jobId; });
+      var app = window.appData || (window.appData = {});
+      var prev = app.qbCostLines || [];
+      var before = prev.filter(function (l) { return (l.job_id || l.jobId) === jobId; }).length;
+      var others = prev.filter(function (l) { return (l.job_id || l.jobId) !== jobId; });
+      app.qbCostLines = others.concat(fresh);
+      done && done(fresh.length !== before || fresh.length > 0, fresh.length);
+    }).catch(function () { done && done(false); });
+  }
+
+  // Public mount: refresh this job's QB lines from the server, then paint.
+  // Paints immediately with whatever is cached (fast first frame), and
+  // repaints once the fresh pull lands. Also nudges the WIP recompute so
+  // the job's Actual Costs reflect any newly-arrived lines.
   function renderJobQBCosts(jobId, customTarget) {
+    paintJobQBCosts(jobId, customTarget);
+    refreshLinesForJob(jobId, function (changed) {
+      if (!changed) return;
+      // Repaint into the same target the mount used.
+      paintJobQBCosts(jobId, (_state.jobId === jobId ? _state.embedTarget : customTarget) || customTarget || null);
+      if (typeof window.ngRecomputeIfJob === 'function') { try { window.ngRecomputeIfJob(jobId); } catch (e) {} }
+    });
+  }
+
+  function paintJobQBCosts(jobId, customTarget) {
     var panel = ensurePanel(jobId, customTarget);
     if (!panel) return;
     _state.jobId = jobId;
@@ -667,7 +711,7 @@ function p86Ask(message, opts) {
   // re-render would erase the workspace UI, so we feed the same target
   // back through every re-render.
   function reRender() {
-    if (_state.jobId) renderJobQBCosts(_state.jobId, _state.embedTarget || null);
+    if (_state.jobId) paintJobQBCosts(_state.jobId, _state.embedTarget || null);
   }
   function filterByCategory(cat) {
     _state.filterCategory = (_state.filterCategory === cat) ? '' : cat;
@@ -1048,6 +1092,7 @@ function p86Ask(message, opts) {
     openGroupLinkPicker: openGroupLinkPicker,
     bulkUnlink: bulkUnlink,
     cleanOrphans: cleanOrphans,
-    unlinkLine: unlinkLine
+    unlinkLine: unlinkLine,
+    currentJobId: function () { return _state.jobId || null; }
   };
 })();

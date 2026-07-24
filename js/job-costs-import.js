@@ -623,6 +623,24 @@ function p86Ask(message, opts) {
             console.log('[qb-costs] server upsert: +' + (res.body.inserted || 0) +
               ' new, ' + (res.body.updated || 0) + ' updated, ' +
               (res.body.skipped || 0) + ' skipped');
+            // Refresh the in-memory cache from the server so the QB view,
+            // cost buckets, and job rollups reflect this import WITHOUT a
+            // full reload. appData.qbCostLines is otherwise a boot-only
+            // snapshot — the root cause of "the costs didn't import" when
+            // they were in fact in the DB (RV2013). A batch touches many
+            // jobs, so refresh the whole list.
+            if (window.p86Api && p86Api.qbCosts && typeof p86Api.qbCosts.list === 'function') {
+              p86Api.qbCosts.list().then(function(all) {
+                if (all && Array.isArray(all.lines)) window.appData.qbCostLines = all.lines;
+                if (typeof renderJobsMain === 'function') renderJobsMain();
+                // Repaint the QB view if it's currently open on a job.
+                if (typeof window.renderJobQBCosts === 'function' &&
+                    window.qbCostsView && window.qbCostsView.currentJobId &&
+                    window.qbCostsView.currentJobId()) {
+                  window.renderJobQBCosts(window.qbCostsView.currentJobId());
+                }
+              }).catch(function() {});
+            }
           }
         }).catch(function(err) {
           console.warn('[qb-costs] server import error:', err && err.message);
