@@ -463,7 +463,16 @@ function renderJobsMain() {
             // still uses the engine's weighted-pct value (revenueEarned above).
             const jtdProfit = revenueEarned - actualCosts;
             const jtdMargin = revenueEarned > 0 ? (jtdProfit / revenueEarned * 100) : 0;
-            const invoiced = job.invoicedToDate || 0;
+            // Invoiced-to-date = the sum of this job's AR (customer) invoices in a
+            // BILLED status (sent/partial/paid/overdue — draft/void don't count),
+            // mirroring the server (change-order-totals.invoicedToDate). Falls back
+            // to the legacy job.invoicedToDate scalar only when no AR invoices exist.
+            const _billedInvStatus = { sent: 1, partial: 1, paid: 1, overdue: 1 };
+            const _arForJob = (window.appData && Array.isArray(appData.arInvoices))
+                ? appData.arInvoices.filter(i => (i.job_id || i.jobId) === jobId) : [];
+            const invoiced = _arForJob.length
+                ? _arForJob.reduce((s, i) => s + (_billedInvStatus[i.status] ? (Number(i.total) || 0) : 0), 0)
+                : (job.invoicedToDate || 0);
             const unbilled = revenueEarned - invoiced;
             const backlog = (job.ngBacklog != null)
                 ? job.ngBacklog

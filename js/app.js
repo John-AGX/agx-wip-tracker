@@ -2615,7 +2615,11 @@
                 // ACCRUED (earned − billed) net out live on the jobs list + tiles
                 // without a per-job fetch. poRowBilled reads appData.jobVendorBills
                 // once appData._billsAllLoaded is set (Bills S3).
-                window.p86Api.bills.listAll({ status: 'all', limit: 50000 }).catch(function() { return { bills: [], _failed: true }; })
+                window.p86Api.bills.listAll({ status: 'all', limit: 50000 }).catch(function() { return { bills: [], _failed: true }; }),
+                // All AR (customer) invoices at boot so getJobWIP computes the real
+                // "Invoiced / Unbilled" figures per job (billed statuses = sent/
+                // partial/paid/overdue) instead of the stale job.invoicedToDate scalar.
+                window.p86Api.invoices.list().catch(function() { return { invoices: [] }; })
             ]).then(function(results) {
                 hydrateFromServerJobs(results[0].jobs);
                 hydrateFromServerEstimates(results[1].estimates);
@@ -2624,6 +2628,7 @@
                 appData.knownTrades = (results[3] && results[3].trades) || [];
                 appData.jobPurchaseOrders = (results[4] && results[4].purchase_orders) || [];
                 appData.jobChangeOrders = (results[5] && results[5].change_orders) || [];
+                appData.arInvoices = (results[7] && results[7].invoices) || [];
                 // Hydrate the org-wide bills snapshot into the cost-rollup store.
                 // Trust it globally only if the fetch SUCCEEDED and was NOT
                 // truncated by the server row cap (50000). On failure/truncation

@@ -243,7 +243,7 @@ function invoicedToDate(invoiceRows, job) {
     return num(job && job.invoicedToDate);
   }
   return invoiceRows.reduce(
-    (s, i) => s + (BILLED_STATUSES.has(i.status) ? num(i.amount) : 0), 0);
+    (s, i) => s + (BILLED_STATUSES.has(i.status) ? num(i.total != null ? i.total : i.amount) : 0), 0);
 }
 
 module.exports = {
