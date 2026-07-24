@@ -149,12 +149,21 @@ async function invoicesForJobs(db, jobIds) {
 // A PO is a cost document — no markup, no margin. Its value is the plain
 // extension of its lines.
 function purchaseOrderMoney(rec) {
-  const lines = Array.isArray(rec && rec.lines) ? rec.lines : [];
-  return lines.reduce((sum, l) => {
+  rec = rec || {};
+  const lines = Array.isArray(rec.lines) ? rec.lines : [];
+  const linesTotal = lines.reduce((sum, l) => {
     if (!l || l.section === '__section_header__') return sum;
     if (l.amount != null && l.amount !== '') return sum + num(l.amount);
     return sum + num(l.qty) * num(l.unitCost != null ? l.unitCost : l.unitPrice);
   }, 0);
+  // Locked PO with revisions: committed value = frozen baseline + APPROVED
+  // addendum deltas (pending ones are proposed only). Legacy POs (no
+  // baselineTotal) use the raw line sum. Mirrors js/jobs.js poRowTotal +
+  // job-financials.poEffectiveTotal.
+  if (rec.baselineTotal == null) return linesTotal;
+  const approvedAdd = (Array.isArray(rec.addendums) ? rec.addendums : [])
+    .reduce((s, a) => s + (a && a.status === 'approved' ? num(a.delta) : 0), 0);
+  return num(rec.baselineTotal) + approvedAdd;
 }
 
 async function purchaseOrdersForJob(db, jobId, legacyBlobArray) {

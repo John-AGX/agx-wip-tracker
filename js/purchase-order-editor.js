@@ -52,6 +52,23 @@
   function poTotal(po) {
     return ((po && po.lines) || []).reduce(function (s, l) { return s + lineTotal(l); }, 0);
   }
+  // Committed (approved) total = frozen baseline + APPROVED addendum deltas.
+  // Legacy / never-locked POs (no baselineTotal) = the raw line sum. Mirrors
+  // server poEffectiveTotal + js/jobs.js poRowTotal.
+  function poApprovedAddSum(po) {
+    return (((po && po.addendums) || [])).reduce(function (s, a) {
+      return s + (a && a.status === 'approved' ? num(a.delta) : 0);
+    }, 0);
+  }
+  function poCommittedTotal(po) {
+    if (!po || po.baselineTotal == null) return poTotal(po);
+    return num(po.baselineTotal) + poApprovedAddSum(po);
+  }
+  // The unapproved price change while revising = current lines − approved total.
+  function poPendingDelta(po) {
+    if (!po || po.baselineTotal == null) return 0;
+    return Math.round((poTotal(po) - (num(po.baselineTotal) + poApprovedAddSum(po))) * 100) / 100;
+  }
 
   function loadSubs(cb) {
     if (_subsCache) { cb(_subsCache); return; }
@@ -135,7 +152,10 @@
     var ov = document.getElementById('po-editor-overlay');
     if (!ov || !_po) return;
     var st = _po.status || 'draft';
-    var locked = (st === 'closed');
+    // A PO is read-only when closed OR when it's locked (sent/approved). A locked
+    // contract is revised only via Unlock → edit → addendum.
+    var locked = (st === 'closed') || !!_po.is_locked;
+    var canUnlock = !!_po.is_locked && st !== 'closed';
     var step = NEXT_STEP[st];
     var jobLabel = (_po.job_number ? _po.job_number + ' — ' : '') + (_po.job_title || '');
 
@@ -151,6 +171,7 @@
             '<span class="po-ed-saved" id="po-ed-saved"></span>' +
             (st === 'draft' ? '<button class="ee-btn" id="po-ed-import" title="Prefill this PO from a Buildertrend Purchase Order PDF export">&#x2913; Import PDF</button>' : '') +
             (step && !locked ? '<button class="ee-btn primary" id="po-ed-step">' + esc(step.label) + '</button>' : '') +
+            (canUnlock ? '<button class="ee-btn" id="po-ed-unlock" title="Unlock to revise the price — the change is recorded as an addendum">&#x1F513; Unlock to revise</button>' : '') +
             '<button class="ee-btn" id="po-ed-print">Print</button>' +
             '<button class="ee-btn" id="po-ed-close">Close</button>' +
           '</div>' +
@@ -158,6 +179,7 @@
         '<div class="po-ed-body">' +
           generalSectionHTML(locked) +
           lineItemsSectionHTML(locked) +
+          addendumsSectionHTML(locked) +
           paymentsSectionHTML(locked) +
           scopeSectionHTML(locked) +
           attachmentsSectionHTML() +
@@ -222,6 +244,44 @@
     '</tr>';
   }
 
+  // Addendums = the audit trail of price changes after the PO was first
+  // sent/approved. Only shown once a baseline is frozen; a legacy/draft PO (no
+  // baselineTotal) renders nothing, so nothing changes for existing POs.
+  function addendumsSectionHTML(locked) {
+    if (!_po || _po.baselineTotal == null) return '';
+    var adds = Array.isArray(_po.addendums) ? _po.addendums : [];
+    var revising = !locked && !!_po.revising;
+    var pending = poPendingDelta(_po);
+    var rows =
+      '<div class="po-ed-add-row"><span>Original PO' +
+        (_po.acceptance && _po.acceptance.date ? ' <em class="po-ed-hint">(' + esc(_po.acceptance.date) + ')</em>' : '') +
+      '</span><strong>' + money(_po.baselineTotal) + '</strong></div>';
+    adds.forEach(function (a, i) {
+      var badge = a.status === 'approved'
+        ? '<span style="color:#34d399;">&#x2713; approved' + (a.approvedAt ? ' ' + esc(String(a.approvedAt).slice(0, 10)) : '') + '</span>'
+        : '<span style="color:#fbbf24;">&#x23F3; pending' + (locked ? ' <button class="po-ed-add-approvebtn ee-btn" data-add-id="' + escAttr(a.id) + '" style="font-size:11px;padding:2px 8px;">Approve</button>' : '') + '</span>';
+      rows += '<div class="po-ed-add-row"><span>Addendum ' + (a.seq || (i + 1)) +
+        (a.reason ? ' — ' + esc(a.reason) : '') + ' ' + badge + '</span>' +
+        '<strong>' + (num(a.delta) >= 0 ? '+' : '') + money(a.delta) + '</strong></div>';
+    });
+    rows += '<div class="po-ed-add-row po-ed-add-total"><span>Committed total</span><strong>' + money(poCommittedTotal(_po)) + '</strong></div>';
+    var revisingHtml = '';
+    if (revising) {
+      // Buttons always show while revising — the Line Items "Total" footer
+      // updates live as you type; the server measures the exact delta on submit
+      // (and rejects a no-op change). Committed shown for reference.
+      revisingHtml =
+        '<div class="po-ed-add-pending">Revising — edit the line items, then record the change as an addendum. ' +
+          'Committed now: <strong>' + money(poCommittedTotal(_po)) + '</strong>' +
+          (Math.abs(pending) >= 0.005 ? ' · pending change <strong>' + (pending >= 0 ? '+' : '') + money(pending) + '</strong>' : '') + '. ' +
+          '<button class="ee-btn primary" id="po-ed-add-approve">Approve addendum (e-sign)</button> ' +
+          '<button class="ee-btn" id="po-ed-add-submit">Send for approval</button>' +
+        '</div>';
+    }
+    return '<div class="po-ed-sec"><div class="po-ed-sec-title">Addendums</div>' +
+      '<div class="po-ed-addendums">' + rows + '</div>' + revisingHtml + '</div>';
+  }
+
   function scopeSectionHTML(locked) {
     return '<div class="po-ed-sec">' +
       '<div class="po-ed-sec-title">Scope of Work &amp; Terms</div>' +
@@ -266,7 +326,9 @@
     { v: 'unconditional', label: 'Unconditional', c: '#34d399' }
   ];
   function paymentsSectionHTML(locked) {
-    var total = poTotal(_po), billed = billsTotal(), outstanding = total - billed;
+    // %-billed is measured against the COMMITTED total (baseline + approved
+    // addendums), not the raw lines — a pending revision shouldn't move it.
+    var total = poCommittedTotal(_po), billed = billsTotal(), outstanding = total - billed;
     var pct = total > 0 ? Math.round(billed / total * 100) : 0;
     var bills = (_po._billRows || []).filter(function (b) { return b && b.status !== 'void'; });
     var rows = bills.length
@@ -388,6 +450,14 @@
     var printBtn = byId('po-ed-print'); if (printBtn) printBtn.addEventListener('click', printPO);
     var stepBtn = byId('po-ed-step'); if (stepBtn) stepBtn.addEventListener('click', advanceStatus);
     var importBtn = byId('po-ed-import'); if (importBtn) importBtn.addEventListener('click', importFromPdf);
+    // Lock / addendum controls.
+    var unlockBtn = byId('po-ed-unlock'); if (unlockBtn) unlockBtn.addEventListener('click', doUnlock);
+    var addApprove = byId('po-ed-add-approve'); if (addApprove) addApprove.addEventListener('click', function () { submitAddendum(true); });
+    var addSubmit = byId('po-ed-add-submit'); if (addSubmit) addSubmit.addEventListener('click', function () { submitAddendum(false); });
+    var ovEl = document.getElementById('po-editor-overlay');
+    if (ovEl) ovEl.querySelectorAll('.po-ed-add-approvebtn').forEach(function (b) {
+      b.addEventListener('click', function () { approvePendingAddendum(b.getAttribute('data-add-id')); });
+    });
 
     // Sub picker — populate from cache.
     var subSel = byId('po-f-sub');
@@ -776,6 +846,60 @@
       .catch(function (e) { alert('Could not update status: ' + ((e && e.message) || 'error')); });
   }
 
+  // ── lock / addendum actions ─────────────────────────────────────────
+  // Update _po from a status/unlock/addendum response while keeping the display
+  // bits the response doesn't carry: the live bill rows + the resolved sub_name.
+  function applyServerPO(r) {
+    var po = (r && r.purchase_order) || null;
+    if (!po) return false;
+    if (!Array.isArray(po.lines)) po.lines = [];
+    po._billRows = _po ? _po._billRows : po._billRows;
+    if (!po.sub_name) {
+      if (_po && _po.sub_name) po.sub_name = _po.sub_name;
+      else if (_subsCache) { var s = _subsCache.find(function (x) { return String(x.id) === String(po.sub_id); }); po.sub_name = s ? s.name : ''; }
+    }
+    _po = po;
+    return true;
+  }
+  function doUnlock() {
+    if (!_po || !(window.p86Api && window.p86Api.purchaseOrders.unlock)) return;
+    if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; }
+    var poId = _po.id;
+    saveNow()
+      .then(function () { return window.p86Api.purchaseOrders.unlock(poId); })
+      .then(function (r) { applyServerPO(r); render(); if (typeof window.p86JobsHubRefresh === 'function') window.p86JobsHubRefresh(); })
+      .catch(function (e) { alert('Could not unlock: ' + ((e && e.message) || 'error')); });
+  }
+  // Record the pending price change as an addendum + re-lock. approve=true signs
+  // it now (manual / sub e-sign); false submits it for the sub's approval.
+  function submitAddendum(approve) {
+    if (!_po) return;
+    if (Math.abs(poPendingDelta(_po)) < 0.005) { alert('Change a line item first — there is no price change to record as an addendum.'); return; }
+    var reason = window.prompt('Describe this addendum (what changed and why):', '');
+    if (reason === null) return;
+    var acceptance = null;
+    if (approve) {
+      var nm = window.prompt('Record subcontractor acceptance of this addendum (e-sign).\n\nSubcontractor name:', _po.sub_name || '');
+      if (nm === null) return;
+      acceptance = { name: nm, date: new Date().toISOString().slice(0, 10) };
+    }
+    if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; }
+    var poId = _po.id;
+    // Flush the edited lines FIRST so the server measures the delta from them.
+    saveNow()
+      .then(function () { return window.p86Api.purchaseOrders.addendum(poId, { reason: reason, approve: !!approve, acceptance: acceptance }); })
+      .then(function (r) { applyServerPO(r); render(); if (typeof window.p86JobsHubRefresh === 'function') window.p86JobsHubRefresh(); })
+      .catch(function (e) { alert('Could not record the addendum: ' + ((e && e.message) || 'error')); });
+  }
+  function approvePendingAddendum(addId) {
+    if (!_po || !addId) return;
+    var nm = window.prompt('Record subcontractor acceptance of this addendum (e-sign).\n\nSubcontractor name:', _po.sub_name || '');
+    if (nm === null) return;
+    window.p86Api.purchaseOrders.addendum(_po.id, { addendumId: addId, approve: true, acceptance: { name: nm, date: new Date().toISOString().slice(0, 10) } })
+      .then(function (r) { applyServerPO(r); render(); if (typeof window.p86JobsHubRefresh === 'function') window.p86JobsHubRefresh(); })
+      .catch(function (e) { alert('Could not approve the addendum: ' + ((e && e.message) || 'error')); });
+  }
+
   // ── print ───────────────────────────────────────────────────────────
   function printPO() {
     var w = window.open('', '_blank');
@@ -801,7 +925,18 @@
       '<div class="meta">Scheduled completion: ' + esc(_po.scheduledCompletion || '') + (_po.materialsOnly ? ' &nbsp;·&nbsp; Materials only' : '') + '</div>' +
       '<h2>Line Items</h2><table><thead><tr><th>Item</th><th>Cost type</th><th style="text-align:right">Unit cost</th><th style="text-align:right">Qty</th><th>Unit</th><th style="text-align:right">Total</th></tr></thead>' +
       '<tbody>' + rowsHtml + '</tbody></table>' +
-      '<p class="tot">Total: ' + money(poTotal(_po)) + '</p>' +
+      '<p class="tot">Total: ' + money(poCommittedTotal(_po)) + '</p>' +
+      // Addendum trail (only once a baseline is frozen + at least one approved).
+      ((_po.baselineTotal != null && (Array.isArray(_po.addendums) ? _po.addendums : []).some(function (x) { return x.status === 'approved'; }))
+        ? '<h2>Addendums</h2><table><tbody>' +
+            '<tr><td>Original PO' + (a && a.date ? ' (' + esc(a.date) + ')' : '') + '</td><td style="text-align:right">' + money(_po.baselineTotal) + '</td></tr>' +
+            _po.addendums.filter(function (x) { return x.status === 'approved'; }).map(function (x) {
+              return '<tr><td>Addendum ' + esc(x.seq || '') + (x.reason ? ' — ' + esc(x.reason) : '') + (x.approvedAt ? ' (' + esc(String(x.approvedAt).slice(0, 10)) + ')' : '') + '</td>' +
+                '<td style="text-align:right">' + (num(x.delta) >= 0 ? '+' : '') + money(x.delta) + '</td></tr>';
+            }).join('') +
+            '<tr><td><strong>New total</strong></td><td style="text-align:right"><strong>' + money(poCommittedTotal(_po)) + '</strong></td></tr>' +
+          '</tbody></table>'
+        : '') +
       '<h2>Scope of Work &amp; Terms</h2><pre>' + esc(_po.scope || '') + '</pre>' +
       (a && a.accepted ? '<h2>Acceptance</h2><div class="meta">Accepted by ' + esc(a.name || '') + ' on ' + esc(a.date || '') + '</div>' : '') +
       '</body></html>'

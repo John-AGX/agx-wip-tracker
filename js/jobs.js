@@ -936,10 +936,21 @@ function renderJobsMain() {
         // (qty * unitCost, skipping section headers) so the number matches
         // the hub + editor. Billed = sum of recorded bills.
         function poRowTotal(po) {
-            return (Array.isArray(po && po.lines) ? po.lines : []).reduce(function(s, l) {
+            po = po || {};
+            var linesTotal = (Array.isArray(po.lines) ? po.lines : []).reduce(function(s, l) {
                 if (!l || l.section === '__section_header__') return s;
                 return s + (parseFloat(l.qty) || 0) * (parseFloat(l.unitCost) || 0);
             }, 0);
+            // Committed PO total = frozen approved baseline + APPROVED addendum
+            // deltas. A pending (unapproved) addendum is proposed only and does NOT
+            // move the committed number (accrued, %-billed, the list). Legacy POs
+            // (never locked, no baselineTotal) fall back to the raw line sum, so
+            // existing POs read exactly as before. Mirrors server poEffectiveTotal.
+            if (po.baselineTotal == null) return linesTotal;
+            var approvedAdd = (Array.isArray(po.addendums) ? po.addendums : []).reduce(function(s, a) {
+                return s + (a && a.status === 'approved' ? (parseFloat(a.delta) || 0) : 0);
+            }, 0);
+            return (parseFloat(po.baselineTotal) || 0) + approvedAdd;
         }
         function poRowBilled(po) {
             if (!po) return 0;

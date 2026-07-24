@@ -2696,6 +2696,12 @@
         .po-ed-delrow:hover { background: rgba(248, 113, 113, 0.15); color: #f87171; }
         .po-ed-addrow { margin-top: 8px; }
         .po-ed-accepted { border-color: #34d39955; }
+        .po-ed-addendums { display: flex; flex-direction: column; gap: 2px; }
+        .po-ed-add-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 5px 0; border-top: 1px solid var(--border, #333); font-size: 12.5px; }
+        .po-ed-add-row:first-child { border-top: none; }
+        .po-ed-add-row strong { font-variant-numeric: tabular-nums; }
+        .po-ed-add-total { border-top: 2px solid var(--border, #444); font-weight: 700; padding-top: 7px; margin-top: 2px; }
+        .po-ed-add-pending { margin-top: 10px; padding: 9px 12px; border-radius: 8px; background: rgba(251,191,36,0.10); border: 1px solid rgba(251,191,36,0.35); font-size: 12px; line-height: 1.7; }
         .po-ed-pay-summary { display: flex; flex-wrap: wrap; gap: 18px 24px; margin-bottom: 8px; }
         .po-ed-stat { display: flex; flex-direction: column; gap: 2px; }
         .po-ed-stat span { font-size: 10.5px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .3px; }
