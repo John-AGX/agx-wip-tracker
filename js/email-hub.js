@@ -335,7 +335,9 @@
               (isHandled ? '&#10003; Replied — undo' : 'Mark replied') + '</button>' +
           '</div>' +
         '</div>';
-      pane.innerHTML = head + bodyHtml + draftHtml;
+      // Draft sits at the TOP of the thread (right under the header) so it's the
+      // first thing John sees — grab it without scrolling past the conversation.
+      pane.innerHTML = head + draftHtml + bodyHtml;
       var backBtn = pane.querySelector('[data-back]');
       if (backBtn) backBtn.addEventListener('click', function () { if (body) body.classList.remove('show-thread'); });
       var askBtn = pane.querySelector('[data-ask]');
