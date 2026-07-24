@@ -3355,8 +3355,16 @@ function renderJobLevelCostsInto(host){
       _qbTotal+=a; _qbCount++;
     });
   }
-  var h='<div class="ng-insp-sublabel" style="display:flex;align-items:center;justify-content:space-between;gap:8px;">'+
-    '<span>Job-Level Costs</span>'+
+  // Lead with the canonical COST BUCKETS — every actual cost (QB + bills +
+  // receipts + manual) grouped into Materials/Labor/Subs/Equipment/GC. Read-only
+  // rollup; unlike the node list below it shows ALL of the job's QB, not just
+  // node-linked lines. The node-based list stays beneath during node retirement.
+  var h='';
+  if(window.p86CostBuckets && _jid){
+    h+='<div id="ng-cost-buckets" style="margin-bottom:10px;"></div>';
+  }
+  h+='<div class="ng-insp-sublabel" style="display:flex;align-items:center;justify-content:space-between;gap:8px;">'+
+    '<span>Job-Level Cost Nodes</span>'+
     '<span style="font-size:9px;color:#6a7090;font-weight:500;text-transform:none;letter-spacing:0;">counts on the job total</span>'+
   '</div>';
   if(_qbTotal>0){
@@ -3389,6 +3397,9 @@ function renderJobLevelCostsInto(host){
     h+='<div style="font-size:10px;color:#6a7090;padding:2px 2px 4px;line-height:1.4;">None yet. Add one above, then link QuickBooks costs to it in the job’s Detailed sub-tab.</div>';
   }
   host.innerHTML=h;
+  if(window.p86CostBuckets && _jid){
+    try{ window.p86CostBuckets.renderJobInto(document.getElementById('ng-cost-buckets'), _jid); }catch(e){}
+  }
   host.querySelectorAll('[data-jlc-add]').forEach(function(b){
     b.addEventListener('click', function(e){ e.stopPropagation(); addJobLevelCostNode(b.getAttribute('data-jlc-add')); });
   });
