@@ -66,6 +66,7 @@ function shapeRow(r) {
     sub_id: r.sub_id,
     status: r.status,
     po_number: r.po_number,
+    is_locked: !!r.is_locked,
     approved_at: r.approved_at,
     approved_by: r.approved_by,
     created_at: r.created_at,
@@ -84,7 +85,7 @@ router.get('/jobs/:jobId/purchase-orders', requireAuth, async (req, res) => {
   try {
     const { rows } = await pool.query(
       `SELECT po.id, po.job_id, po.owner_id, po.sub_id, po.status, po.po_number,
-              po.data, po.approved_at, po.approved_by, po.created_at, po.updated_at,
+              po.data, po.is_locked, po.approved_at, po.approved_by, po.created_at, po.updated_at,
               s.name AS sub_name
          FROM job_purchase_orders po
          JOIN jobs j ON j.id = po.job_id
@@ -122,7 +123,7 @@ router.get('/purchase-orders', requireAuth, async (req, res) => {
     const limit = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 300));
     const { rows } = await pool.query(
       `SELECT po.id, po.job_id, po.owner_id, po.sub_id, po.status, po.po_number,
-              po.data, po.approved_at, po.approved_by, po.created_at, po.updated_at,
+              po.data, po.is_locked, po.approved_at, po.approved_by, po.created_at, po.updated_at,
               j.data->>'jobNumber' AS job_number,
               j.data->>'title'     AS job_title,
               s.name AS sub_name
@@ -177,7 +178,7 @@ router.get('/purchase-orders/:id', requireAuth, async (req, res) => {
   try {
     const { rows } = await pool.query(
       `SELECT po.id, po.job_id, po.owner_id, po.sub_id, po.status, po.po_number,
-              po.data, po.approved_at, po.approved_by, po.created_at, po.updated_at,
+              po.data, po.is_locked, po.approved_at, po.approved_by, po.created_at, po.updated_at,
               j.data->>'jobNumber' AS job_number,
               j.data->>'title'     AS job_title,
               s.name AS sub_name
@@ -248,7 +249,7 @@ router.put('/purchase-orders/:id', requireAuth, requireCapability('ESTIMATES_EDI
   try {
     const id = req.params.id;
     const existing = await pool.query(
-      `SELECT po.status,
+      `SELECT po.status, po.is_locked, po.data,
               j.data->>'jobNumber' AS job_number,
               j.data->>'title'     AS job_title
          FROM job_purchase_orders po
@@ -260,8 +261,23 @@ router.put('/purchase-orders/:id', requireAuth, requireCapability('ESTIMATES_EDI
     if (existing.rows[0].status === 'closed') {
       return res.status(409).json({ error: 'Cannot edit a closed purchase order' });
     }
-    const data = cleanData(req.body);
-    const subProvided = req.body && Object.prototype.hasOwnProperty.call(req.body, 'sub_id');
+    const existingData = existing.rows[0].data || {};
+    const locked = !!existing.rows[0].is_locked;
+    const clean = cleanData(req.body);
+    // MERGE onto the existing blob so server-owned keys (acceptance/e-sign,
+    // addendums, baselineTotal, revising) survive a body that omits them — this
+    // is the e-sign-wipe fix. When the PO is LOCKED, its contract fields (lines,
+    // scope, title, sub, etc.) are frozen; only internal notes may change until
+    // it's unlocked to revise (which then flows through an addendum).
+    let data;
+    if (locked) {
+      data = { ...existingData };
+      if (Object.prototype.hasOwnProperty.call(clean, 'internalNotes')) data.internalNotes = clean.internalNotes;
+    } else {
+      data = { ...existingData, ...clean };
+    }
+    // sub_id is a contract field — frozen while locked.
+    const subProvided = !locked && req.body && Object.prototype.hasOwnProperty.call(req.body, 'sub_id');
     const subId = subProvided ? (req.body.sub_id || null) : undefined;
 
     const { rows } = await pool.query(
@@ -273,7 +289,7 @@ router.put('/purchase-orders/:id', requireAuth, requireCapability('ESTIMATES_EDI
                   OR ($2::boolean AND sub_id IS DISTINCT FROM $3) THEN NOW()
                 ELSE updated_at END
         WHERE id = $4
-        RETURNING id, job_id, owner_id, sub_id, status, po_number, data,
+        RETURNING id, job_id, owner_id, sub_id, status, po_number, data, is_locked,
                   approved_at, approved_by, created_at, updated_at`,
       [JSON.stringify(data), !!subProvided, subId === undefined ? null : subId, id]
     );
@@ -342,19 +358,31 @@ router.post('/purchase-orders/:id/status', requireAuth, requireCapability('ESTIM
       return res.status(409).json({ error: 'Transition not allowed: ' + current + ' -> ' + next });
     }
 
-    // Only the 'approved' transition touches data (the acceptance merge) —
-    // and only when the caller actually sent an acceptance. Every other
-    // transition updates status/timestamps alone, so a status POST can
-    // never clobber a concurrently-saved data blob (or forge an e-sign
-    // block on the bulk path, which sends no acceptance).
+    // Lock the PO once it leaves draft (sent to the sub = issued, or approved) —
+    // its price is now committed and can only change via an addendum. `draft` is
+    // the only freely-editable status; reverting to it unlocks + clears the frozen
+    // baseline. The status POST is preceded by a save-flush client-side, and we
+    // read cur.data fresh above, so writing the merged data here can't clobber.
+    const curData = cur.rows[0].data || {};
+    const newLocked = next !== 'draft';
+    const newData = { ...curData };
+    delete newData.revising; // leaving revise mode on any transition
+    if (newLocked && newData.baselineTotal == null) {
+      // Freeze the approved baseline the first time it locks — Σ current lines.
+      newData.baselineTotal = (Array.isArray(newData.lines) ? newData.lines : []).reduce((s, l) => {
+        if (!l || l.section === '__section_header__') return s;
+        return s + (Number(l.qty) || 0) * (Number(l.unitCost) || 0);
+      }, 0);
+    } else if (!newLocked) {
+      // Back to a clean editable draft — the total reverts to Σ lines.
+      delete newData.baselineTotal;
+    }
     let approvedAt = null, approvedBy = null;
-    let newData = null;
     if (next === 'approved') {
       approvedAt = new Date();
       approvedBy = req.user.id;
       const acc = req.body.acceptance;
       if (acc) {
-        newData = { ...(cur.rows[0].data || {}) };
         newData.acceptance = {
           name: acc.name ? String(acc.name).slice(0, 200) : '',
           date: acc.date || new Date().toISOString().slice(0, 10),
@@ -366,14 +394,15 @@ router.post('/purchase-orders/:id/status', requireAuth, requireCapability('ESTIM
     const { rows } = await pool.query(
       `UPDATE job_purchase_orders
           SET status = $1,
-              data = CASE WHEN $2::boolean THEN $3::jsonb ELSE data END,
+              is_locked = $2,
+              data = $3::jsonb,
               approved_at = COALESCE($4, approved_at),
               approved_by = COALESCE($5, approved_by),
               updated_at = NOW()
         WHERE id = $6
-        RETURNING id, job_id, owner_id, sub_id, status, po_number, data,
+        RETURNING id, job_id, owner_id, sub_id, status, po_number, data, is_locked,
                   approved_at, approved_by, created_at, updated_at`,
-      [next, newData !== null, newData !== null ? JSON.stringify(newData) : null, approvedAt, approvedBy, id]
+      [next, newLocked, JSON.stringify(newData), approvedAt, approvedBy, id]
     );
     res.json({
       purchase_order: Object.assign(shapeRow(rows[0]), {
@@ -382,6 +411,127 @@ router.post('/purchase-orders/:id/status', requireAuth, requireCapability('ESTIM
     });
   } catch (e) {
     console.error('POST /api/purchase-orders/:id/status error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// Σ raw line items (skips section headers). The frozen baseline + each addendum
+// delta are measured against this. Mirrors js/jobs.js poRowTotal's raw sum.
+function rawLinesTotal(data) {
+  return (Array.isArray(data && data.lines) ? data.lines : []).reduce((s, l) => {
+    if (!l || l.section === '__section_header__') return s;
+    return s + (Number(l.qty) || 0) * (Number(l.unitCost) || 0);
+  }, 0);
+}
+function approvedAddSum(data) {
+  return (Array.isArray(data && data.addendums) ? data.addendums : [])
+    .reduce((s, a) => s + (a && a.status === 'approved' ? (Number(a.delta) || 0) : 0), 0);
+}
+
+// ── unlock to revise (admin) ────────────────────────────────────────
+// A locked PO's price is frozen; unlocking lets the line items be edited again,
+// after which a price change is recorded as an addendum (POST /addendum).
+router.post('/purchase-orders/:id/unlock', requireAuth, requireCapability('JOBS_EDIT_ANY'), async (req, res) => {
+  try {
+    const id = req.params.id;
+    const cur = await pool.query(
+      `SELECT po.data, po.status,
+              j.data->>'jobNumber' AS job_number, j.data->>'title' AS job_title
+         FROM job_purchase_orders po JOIN jobs j ON j.id = po.job_id
+        WHERE po.id = $1 AND (j.organization_id = $2 OR j.organization_id IS NULL)`,
+      [id, req.user.organization_id]);
+    if (!cur.rowCount) return res.status(404).json({ error: 'Not found' });
+    if (cur.rows[0].status === 'closed') return res.status(409).json({ error: 'Cannot unlock a closed purchase order' });
+    const data = { ...(cur.rows[0].data || {}), revising: true };
+    const { rows } = await pool.query(
+      `UPDATE job_purchase_orders SET is_locked = false, data = $1::jsonb, updated_at = NOW()
+        WHERE id = $2
+        RETURNING id, job_id, owner_id, sub_id, status, po_number, data, is_locked,
+                  approved_at, approved_by, created_at, updated_at`,
+      [JSON.stringify(data), id]);
+    res.json({ purchase_order: Object.assign(shapeRow(rows[0]), {
+      job_number: cur.rows[0].job_number, job_title: cur.rows[0].job_title }) });
+  } catch (e) {
+    console.error('POST /api/purchase-orders/:id/unlock error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── record a price-change addendum + re-lock ────────────────────────
+// Body: { reason?, approve?: bool, acceptance?: {name,date}, addendumId?: string }
+//  - addendumId + approve:true  → approve an existing PENDING addendum.
+//  - otherwise                  → capture the current price delta vs the approved
+//    total as a new addendum (status approved when approve:true / manual sign,
+//    else pending = sent for approval) and re-lock the PO.
+router.post('/purchase-orders/:id/addendum', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req, res) => {
+  try {
+    const id = req.params.id;
+    const cur = await pool.query(
+      `SELECT po.data,
+              j.data->>'jobNumber' AS job_number, j.data->>'title' AS job_title,
+              COALESCE((SELECT SUM(amount) FROM job_vendor_bills b
+                          WHERE b.po_id = po.id AND b.status <> 'void'), 0) AS billed
+         FROM job_purchase_orders po JOIN jobs j ON j.id = po.job_id
+        WHERE po.id = $1 AND (j.organization_id = $2 OR j.organization_id IS NULL)`,
+      [id, req.user.organization_id]);
+    if (!cur.rowCount) return res.status(404).json({ error: 'Not found' });
+    const data = { ...(cur.rows[0].data || {}) };
+    if (data.baselineTotal == null) {
+      return res.status(400).json({ error: 'This PO has no committed baseline yet — issue or approve it first.' });
+    }
+    const billed = Number(cur.rows[0].billed) || 0;
+    const acc = req.body && req.body.acceptance;
+    const acceptance = acc ? { name: acc.name ? String(acc.name).slice(0, 200) : '', date: acc.date || new Date().toISOString().slice(0, 10), accepted: true } : null;
+    const addendums = Array.isArray(data.addendums) ? data.addendums.slice() : [];
+
+    // (a) approve an existing pending addendum
+    if (req.body && req.body.addendumId && req.body.approve) {
+      const idx = addendums.findIndex(a => a && a.id === req.body.addendumId);
+      if (idx < 0) return res.status(404).json({ error: 'Addendum not found' });
+      const prospective = (Number(data.baselineTotal) || 0) + approvedAddSum(data) + (Number(addendums[idx].delta) || 0);
+      if (prospective < billed - 0.005) {
+        return res.status(409).json({ error: `Approving this addendum would drop the PO total to ${prospective.toFixed(2)} below the ${billed.toFixed(2)} already billed.` });
+      }
+      addendums[idx] = { ...addendums[idx], status: 'approved', approvedAt: new Date().toISOString(), approvedBy: req.user.id };
+      if (acceptance) addendums[idx].acceptance = acceptance;
+      data.addendums = addendums;
+    } else {
+      // (b) capture the current price change as a new addendum
+      const approvedTotal = (Number(data.baselineTotal) || 0) + approvedAddSum(data);
+      const linesTotal = rawLinesTotal(data);
+      const delta = Math.round((linesTotal - approvedTotal) * 100) / 100;
+      if (Math.abs(delta) < 0.005) {
+        return res.status(400).json({ error: 'No price change to record — the line items still total the current approved amount.' });
+      }
+      const willApprove = !!(req.body && req.body.approve);
+      if (willApprove && linesTotal < billed - 0.005) {
+        return res.status(409).json({ error: `This revision (${linesTotal.toFixed(2)}) is below the ${billed.toFixed(2)} already billed against this PO.` });
+      }
+      const seq = addendums.length + 1;
+      addendums.push({
+        id: 'add_' + Date.now().toString(36) + '_' + Math.round(Number(String(id).replace(/\D/g, '').slice(-4) || 0)).toString(36),
+        seq, delta, reason: req.body && req.body.reason ? String(req.body.reason).slice(0, 2000) : '',
+        status: willApprove ? 'approved' : 'pending',
+        createdAt: new Date().toISOString(), createdBy: req.user.id,
+        approvedAt: willApprove ? new Date().toISOString() : null,
+        acceptance: (willApprove && acceptance) ? acceptance : null
+      });
+      data.addendums = addendums;
+    }
+    delete data.revising;
+
+    // Re-lock in every case — a submitted/approved addendum means the price is
+    // committed again (pending ones await the sub, approved ones are final).
+    const { rows } = await pool.query(
+      `UPDATE job_purchase_orders SET is_locked = true, data = $1::jsonb, updated_at = NOW()
+        WHERE id = $2
+        RETURNING id, job_id, owner_id, sub_id, status, po_number, data, is_locked,
+                  approved_at, approved_by, created_at, updated_at`,
+      [JSON.stringify(data), id]);
+    res.json({ purchase_order: Object.assign(shapeRow(rows[0]), {
+      job_number: cur.rows[0].job_number, job_title: cur.rows[0].job_title }) });
+  } catch (e) {
+    console.error('POST /api/purchase-orders/:id/addendum error:', e);
     res.status(500).json({ error: 'Server error' });
   }
 });

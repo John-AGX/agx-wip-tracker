@@ -205,10 +205,31 @@ function cleanCoData(body) {
 function cleanPoData(body) {
   const data = { ...(body || {}) };
   ['id', 'job_id', 'organization_id', 'owner_id', 'sub_id', 'status', 'po_number',
-   'approved_at', 'approved_by', 'created_at', 'updated_at',
+   'approved_at', 'approved_by', 'created_at', 'updated_at', 'is_locked',
+   // Server-owned lock/addendum/e-sign fields — never settable via a raw PUT
+   // body (the route merges them from the existing row + the /status,/addendum
+   // endpoints own them). Stripping them here is the e-sign-wipe fix.
+   'baselineTotal', 'addendums', 'acceptance', 'revising',
    'extraction'].forEach(k => delete data[k]); // 'extraction' is a training artifact, not PO data
   if (!Array.isArray(data.lines)) data.lines = [];
   return data;
+}
+
+// The committed PO total = its frozen approved baseline + every APPROVED
+// addendum's delta. A PO that's never been locked (no baselineTotal) falls back
+// to the raw line-items sum — byte-identical to the pre-addendum behaviour, so
+// existing POs are unaffected. Pending (unapproved) addendums are proposed only
+// and do NOT move the committed total. Mirrors js/jobs.js poRowTotal.
+function poEffectiveTotal(po) {
+  po = po || {};
+  const linesTotal = (Array.isArray(po.lines) ? po.lines : []).reduce((s, l) => {
+    if (!l || l.section === '__section_header__') return s;
+    return s + (Number(l.qty) || 0) * (Number(l.unitCost) || 0);
+  }, 0);
+  if (po.baselineTotal == null) return linesTotal;
+  const approvedAdd = (Array.isArray(po.addendums) ? po.addendums : [])
+    .reduce((s, a) => s + (a && a.status === 'approved' ? (Number(a.delta) || 0) : 0), 0);
+  return (Number(po.baselineTotal) || 0) + approvedAdd;
 }
 
 // A line's amount: explicit `amount`, else qty × unit price.
@@ -524,7 +545,7 @@ async function deleteInvoice(db, { id, orgId, jobId }) {
 module.exports = {
   DEFAULT_SCOPE_TEMPLATE,
   nextCoNumber, nextPoNumber, nextInvoiceNumber, orgScopeTemplate,
-  cleanCoData, cleanPoData, lineAmount, computeInvoiceTotals,
+  cleanCoData, cleanPoData, poEffectiveTotal, lineAmount, computeInvoiceTotals,
   createChangeOrder, updateChangeOrder, deleteChangeOrder,
   createPurchaseOrder, updatePurchaseOrder, deletePurchaseOrder,
   createInvoice, updateInvoice, deleteInvoice,

@@ -427,6 +427,12 @@
     setStatus: function(id, status, acceptance) {
       return post('/api/purchase-orders/' + encodeURIComponent(id) + '/status', { status: status, acceptance: acceptance });
     },
+    // Unlock a locked PO to revise its line items (a price change then flows
+    // through addendum()).
+    unlock: function(id) { return post('/api/purchase-orders/' + encodeURIComponent(id) + '/unlock', {}); },
+    // Record a price-change addendum (or approve a pending one) + re-lock.
+    // payload = { reason?, approve?, acceptance?, addendumId? }.
+    addendum: function(id, payload) { return post('/api/purchase-orders/' + encodeURIComponent(id) + '/addendum', payload || {}); },
     remove: function(id) { return del('/api/purchase-orders/' + encodeURIComponent(id)); },
     getScopeTemplate: function() { return get('/api/purchase-orders/scope-template'); },
     setScopeTemplate: function(template) { return put('/api/purchase-orders/scope-template', { template: template }); }

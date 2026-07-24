@@ -728,6 +728,7 @@ async function initSchema() {
       status TEXT NOT NULL DEFAULT 'draft',
       po_number TEXT,
       data JSONB NOT NULL DEFAULT '{}'::jsonb,
+      is_locked BOOLEAN NOT NULL DEFAULT false,
       approved_at TIMESTAMPTZ,
       approved_by INTEGER REFERENCES users(id),
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -735,6 +736,10 @@ async function initSchema() {
     );
     CREATE INDEX IF NOT EXISTS idx_job_purchase_orders_job ON job_purchase_orders(job_id);
     CREATE INDEX IF NOT EXISTS idx_job_purchase_orders_org ON job_purchase_orders(organization_id, status, created_at DESC) WHERE organization_id IS NOT NULL;
+    -- PO lock (mirrors job_change_orders.is_locked): a PO locks when sent/approved
+    -- so its price can't silently change; a locked PO is revised only via an
+    -- addendum (data.addendums[] + data.baselineTotal). Idempotent for upgrades.
+    ALTER TABLE job_purchase_orders ADD COLUMN IF NOT EXISTS is_locked BOOLEAN NOT NULL DEFAULT false;
 
     -- Vendor Bills (Accounts Payable). A Bill = a vendor's invoice recorded
     -- against a job and (usually) a PO — the money AGX OWES a sub/supplier.
