@@ -2155,6 +2155,15 @@ function p86Ask(message, opts) {
       newJob.id = newId;
       // Keep local caches consistent so the immediate editJob() opens cleanly.
       if (window.appData && Array.isArray(window.appData.jobs)) window.appData.jobs.push(newJob);
+      // Seed the job's scopes from the estimate's section breakdown (Paint,
+      // Gutters, …) so the job opens contract-driven and scope-first. Buildings
+      // and per-building allocation come after. saveData persists the new rows.
+      try {
+        if (chosen && typeof window.seedJobScopesFromEstimate === 'function') {
+          var _n = window.seedJobScopesFromEstimate(newId, chosen.id);
+          if (_n && typeof window.saveData === 'function') window.saveData();
+        }
+      } catch (e) { /* seeding is best-effort; never block the conversion */ }
       l.job_id = newId;
       l.status = 'sold';
       // Mirror the server-side lock + sold-stamp on the local estimate so the

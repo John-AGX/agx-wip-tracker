@@ -1099,6 +1099,14 @@
       if (window.appData && Array.isArray(window.appData.jobs) && !window.appData.jobs.some(function(j){ return j.id === newId; })) {
         window.appData.jobs.push(newJob);
       }
+      // Seed the job's scopes from this estimate's section breakdown so it opens
+      // scope-first and contract-driven; buildings + allocation come after.
+      try {
+        if (typeof window.seedJobScopesFromEstimate === 'function') {
+          var _seeded = window.seedJobScopesFromEstimate(newId, est.id);
+          if (_seeded && typeof window.saveData === 'function') window.saveData();
+        }
+      } catch (e) {}
       est.job_id = newId;
       if (lead) { lead.job_id = newId; lead.status = 'sold'; }
       if (typeof renderHeaderChips === 'function') renderHeaderChips();

@@ -98,6 +98,53 @@ function computeEstimateTotals(est) {
     };
 }
 
+// Seed a converted job's SCOPE so it opens contract-driven, before any
+// buildings exist. John's target model is a scope breakdown (Paint, Gutters, …)
+// carried from the estimate — but AGX estimates are organized by COST CATEGORY
+// (Materials, Labor, General Conditions, Subcontractors), not by scope: lines
+// carry no scope tag (verified — `section` is always a cost-category header or
+// null, `btCategory` is effectively empty). There is nothing scope-shaped to
+// group on, so grouping the sections would create scopes named "Direct Labor",
+// which is exactly wrong.
+//
+// So we seed ONE job-level scope = the whole estimate total (the contract),
+// named "Base Contract". The job opens with its money present as a single
+// scope; the estimator renames/splits it into Paint, Gutters, … and allocates
+// to buildings from the matrix. True per-scope seeding needs a scope dimension
+// added to the estimating model (a scope tag per line) — tracked as a follow-up.
+//
+// Returns the number of scopes created (0 if it declined — no estimate, no
+// pricing, no contract, or the job already has scopes).
+function seedJobScopesFromEstimate(jobId, estimateId) {
+    if (!jobId || !estimateId) return 0;
+    if (!window.appData || !Array.isArray(appData.phases)) return 0;
+    // Never clobber a job that already carries scopes.
+    if (appData.phases.some(function(p) { return p && p.jobId === jobId; })) return 0;
+    var est = (appData.estimates || []).find(function(e) { return e.id === estimateId; });
+    if (!est) return 0;
+
+    var num = function(v) { var n = Number(v); return isFinite(n) ? n : 0; };
+    var contract = Math.round(num(computeEstimateTotals(est).proposalTotal));
+    if (contract <= 0) return 0;
+
+    appData.phases.push({
+        id: 'p' + Date.now(),
+        jobId: jobId,
+        buildingId: null,              // job-level; allocate to buildings later
+        phase: 'Base Contract',        // rename/split into Paint, Gutters, …
+        workScope: 'in-house',
+        locked: false,
+        pctComplete: 0,
+        materials: 0, labor: 0, sub: 0, equipment: 0,
+        asSoldRevenue: contract, asSoldPhaseBudget: contract, phaseBudget: contract,
+        coPhaseBudget: 0,
+        hoursWeek: 0, hoursTotal: 0, rate: 40,
+        notes: '', dateAdded: new Date().toISOString()
+    });
+    return 1;
+}
+window.seedJobScopesFromEstimate = seedJobScopesFromEstimate;
+
 function compareEstimates(a, b, key, dir) {
     var av, bv;
     var ta = a.__totals || {};
