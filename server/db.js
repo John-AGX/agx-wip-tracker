@@ -740,6 +740,13 @@ async function initSchema() {
     -- so its price can't silently change; a locked PO is revised only via an
     -- addendum (data.addendums[] + data.baselineTotal). Idempotent for upgrades.
     ALTER TABLE job_purchase_orders ADD COLUMN IF NOT EXISTS is_locked BOOLEAN NOT NULL DEFAULT false;
+    -- Lock legacy issued/approved/work_complete/closed POs that predate the lock
+    -- feature. Guarded to only touch POs never seen by it (no frozen baseline,
+    -- not mid-revision) so it's idempotent AND never re-locks a PO someone
+    -- intentionally unlocked. baselineTotal is frozen lazily on unlock.
+    UPDATE job_purchase_orders SET is_locked = true
+     WHERE status <> 'draft' AND is_locked = false
+       AND NOT (data ? 'baselineTotal') AND NOT (data ? 'revising');
 
     -- Vendor Bills (Accounts Payable). A Bill = a vendor's invoice recorded
     -- against a job and (usually) a PO — the money AGX OWES a sub/supplier.

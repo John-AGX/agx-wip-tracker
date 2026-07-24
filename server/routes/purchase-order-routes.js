@@ -443,6 +443,9 @@ router.post('/purchase-orders/:id/unlock', requireAuth, requireCapability('JOBS_
     if (!cur.rowCount) return res.status(404).json({ error: 'Not found' });
     if (cur.rows[0].status === 'closed') return res.status(409).json({ error: 'Cannot unlock a closed purchase order' });
     const data = { ...(cur.rows[0].data || {}), revising: true };
+    // Legacy PO locked by the backfill without a frozen baseline: freeze it now
+    // (= Σ current lines) so a revision can be measured as an addendum.
+    if (data.baselineTotal == null) data.baselineTotal = rawLinesTotal(data);
     const { rows } = await pool.query(
       `UPDATE job_purchase_orders SET is_locked = false, data = $1::jsonb, updated_at = NOW()
         WHERE id = $2
