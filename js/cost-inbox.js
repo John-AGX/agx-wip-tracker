@@ -819,6 +819,8 @@ function p86Ask(message, opts) {
 
   // ── Capture / edit form (camera-first) ────────────────────────────
   var _pendingFile = null; // a freshly-picked photo File, uploaded on save
+  var _rawPhotoFile = null; // the ORIGINAL uncropped photo — kept so "Adjust crop" can re-warp it
+  var _lastCorners = null;  // last crop corners (AI or hand-adjusted), normalized 0..1 — seeds the review box
 
   function openReceiptModal(receipt) {
     _pendingFile = null;
@@ -848,6 +850,10 @@ function p86Ask(message, opts) {
                 (existingThumb ? '<img src="' + esc(existingThumb) + '" alt="receipt" />' : '<span class="ci-photo-cta"><svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg><br/>Take / upload receipt</span>') +
               '</div>' +
             '</label>' +
+            // Adjust crop — sits OUTSIDE the label so it doesn't reopen the camera.
+            // The photo is auto-cropped from the AI's corners; this lets you nudge
+            // them when it gets it wrong. Hidden until a photo is captured.
+            '<button type="button" class="ci-btn ci-adjust-crop" id="ciAdjustCrop" style="display:none;width:100%;margin-top:6px;font-size:12px;">Adjust crop</button>' +
             // Link to job / lead / category
             '<div class="ci-field">' +
               '<label>Link to</label>' +
@@ -962,7 +968,9 @@ function p86Ask(message, opts) {
       photoInput.addEventListener('change', function () {
         var f = photoInput.files && photoInput.files[0];
         if (!f) return;
-        _pendingFile = f;
+        _pendingFile = f; _rawPhotoFile = f; _lastCorners = null;
+        var _adjBtn = modal.querySelector('#ciAdjustCrop');
+        if (_adjBtn && window.p86ReceiptCrop) _adjBtn.style.display = '';
         var inner = modal.querySelector('#ciPhotoInner');
         var url = URL.createObjectURL(f);
         inner.innerHTML = '<img src="' + esc(url) + '" alt="receipt" />';
@@ -998,6 +1006,7 @@ function p86Ask(message, opts) {
             // Scan: AI gave the receipt's corners → crop + flatten + clean it,
             // and make the cleaned image the one we store + show.
             if (resp.corners && window.p86ReceiptScanner && window.p86ReceiptScanner.scanFromCorners) {
+              _lastCorners = resp.corners;   // seed the "Adjust crop" box with the AI's corners
               tag.textContent = 'Scanning…';
               window.p86ReceiptScanner.scanFromCorners(f, resp.corners, function (scanned) {
                 if (tag.parentNode) tag.remove();
@@ -1015,7 +1024,25 @@ function p86Ask(message, opts) {
         });
       });
 
-      function close() { modal.remove(); _pendingFile = null; }
+      // Adjust crop → open the review box (seeded with the AI's corners), drag,
+      // then re-warp the ORIGINAL via the existing scanner. Sibling of the label,
+      // so this never reopens the camera.
+      var adjBtn = modal.querySelector('#ciAdjustCrop');
+      if (adjBtn) adjBtn.addEventListener('click', function (e) {
+        e.preventDefault(); e.stopPropagation();
+        if (!_rawPhotoFile || !window.p86ReceiptCrop) return;
+        window.p86ReceiptCrop.open(_rawPhotoFile, { seedCorners: _lastCorners }, function (res) {
+          if (!res) return;
+          var file = dataUrlToFile(res.dataUrl, 'receipt.jpg');
+          if (!file) return;
+          _pendingFile = file;
+          _lastCorners = res.corners || _lastCorners;
+          var innerEl = modal.querySelector('#ciPhotoInner');
+          if (innerEl) innerEl.innerHTML = '<img src="' + esc(res.dataUrl) + '" alt="receipt" />';
+        });
+      });
+
+      function close() { modal.remove(); _pendingFile = null; _rawPhotoFile = null; _lastCorners = null; }
       modal.querySelector('#ciCancel').addEventListener('click', close);
       modal.addEventListener('click', function (e) { if (e.target === modal) close(); });
 
