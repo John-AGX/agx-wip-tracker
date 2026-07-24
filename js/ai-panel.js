@@ -1217,6 +1217,16 @@ function p86Ask(message, opts) {
                 ' onfocus="this.style.borderColor=\'rgba(79,140,255,0.35)\';this.style.background=\'rgba(255,255,255,0.05)\'"' +
                 ' onblur="this.style.borderColor=\'rgba(255,255,255,0.06)\';this.style.background=\'rgba(255,255,255,0.03)\'" />' +
             '</div>' +
+            // Group-by toggle: organize the session list under the job / lead /
+            // estimate each chat belongs to (default), or fall back to a flat
+            // recency list. Sessions already carry entity_type/entity_id; the
+            // entity NAME is resolved client-side from appData.
+            '<div style="padding:0 12px 6px 12px;display:flex;gap:4px;">' +
+              '<button id="ai-grpmode-entity" type="button" data-grpmode="entity" class="ai-grpmode-btn" ' +
+                'style="flex:1;font-size:10.5px;padding:4px 8px;border-radius:6px;cursor:pointer;border:1px solid rgba(255,255,255,0.08);background:transparent;color:rgba(255,255,255,0.5);">By entity</button>' +
+              '<button id="ai-grpmode-date" type="button" data-grpmode="date" class="ai-grpmode-btn" ' +
+                'style="flex:1;font-size:10.5px;padding:4px 8px;border-radius:6px;cursor:pointer;border:1px solid rgba(255,255,255,0.08);background:transparent;color:rgba(255,255,255,0.5);">By date</button>' +
+            '</div>' +
             // Scrollable region containing the Chats list (existing
             // sessions). Flex:1 + overflow live here so it scrolls as
             // one column.
@@ -1236,6 +1246,14 @@ function p86Ask(message, opts) {
     panel.querySelector('#ai-clear').onclick = clearConversation;
     panel.querySelector('#ai-send').onclick = onSend;
     panel.querySelector('#ai-sidebar-new').onclick = sidebarStartNewChat;
+    // Group-by toggle (By entity / By date): persist the choice + re-render the
+    // list from the cached rows (no refetch).
+    Array.from(panel.querySelectorAll('.ai-grpmode-btn')).forEach(function(btn) {
+      btn.onclick = function() {
+        setSessionGroupMode(btn.getAttribute('data-grpmode'));
+        renderSessionList(_sessionList);
+      };
+    });
     // Dismissible intro — remember the choice; /help brings it back.
     var noticeDismiss = panel.querySelector('#ai-notice-dismiss');
     if (noticeDismiss) noticeDismiss.onclick = function () {
@@ -2172,28 +2190,104 @@ function p86Ask(message, opts) {
     }
   }
 
+  // Grouping mode: 'entity' (default) organizes sessions under the job / lead /
+  // estimate each belongs to; 'date' is the flat recency list.
+  function getSessionGroupMode() {
+    try { return localStorage.getItem('p86-ai-session-groupmode') === 'date' ? 'date' : 'entity'; } catch (e) { return 'entity'; }
+  }
+  function setSessionGroupMode(m) {
+    try { localStorage.setItem('p86-ai-session-groupmode', m === 'date' ? 'date' : 'entity'); } catch (e) {}
+  }
+
+  // Resolve an entity_id to a human name via appData (already loaded on the
+  // client). Falls back to the type when the record isn't found.
+  function entityDisplayName(type, id) {
+    var A = window.appData || {};
+    var find = function(arr) { return (Array.isArray(arr) ? arr : []).find(function(x) { return x && String(x.id) === String(id); }); };
+    var r;
+    switch (String(type || '')) {
+      // Return null (not the bare type) on a miss so the caller can keep
+      // distinct entities apart — otherwise two unresolved jobs both render
+      // "Job" and collapse into one look-alike header.
+      case 'job':
+        r = find(A.jobs);
+        return r ? ((r.jobNumber ? r.jobNumber + ' · ' : '') + (r.title || r.jobName || 'Job')) : null;
+      case 'estimate':
+        r = find(A.estimates);
+        return r ? (r.name || r.client || r.title || 'Estimate') : null;
+      case 'lead':
+        r = find(A.leads);
+        return r ? (r.title || r.property_name || r.street_address || 'Lead') : null;
+      case 'client':
+        r = find(A.clients);
+        return r ? (r.name || r.company_name || 'Client') : null;
+      default:
+        return null;
+    }
+  }
+
+  // Group sessions by the entity they belong to. Pinned float first; the
+  // personal / rolling thread and any un-anchored chats fall into "Personal".
+  // Each entity group is sorted internally by recency; groups are ordered by
+  // their most-recent activity so the entity you're working in floats up.
+  function bucketSessionsByEntity(rows) {
+    var pinned = [];
+    var byKey = {}; // key -> { key, type, id, label, icon, items, recent }
+    var personal = { key: 'personal', type: 'general', id: null, label: 'Personal', icon: '💬', items: [], recent: 0 };
+    rows.forEach(function(r) {
+      if (r.pinned) { pinned.push(r); return; }
+      var t = String(r.entity_type || '');
+      var anchored = (t === 'job' || t === 'estimate' || t === 'lead' || t === 'client') && r.entity_id;
+      var when = new Date(r.last_used_at).getTime() || 0;
+      if (!anchored) { personal.items.push(r); if (when > personal.recent) personal.recent = when; return; }
+      var key = t + ':' + r.entity_id;
+      if (!byKey[key]) {
+        // On a name miss (entity not in appData yet, or deleted) keep the
+        // fallback DISTINCT with a short id so two unresolved entities don't
+        // share one header. Resolves to the real name on the next render once
+        // appData is loaded.
+        var nm = entityDisplayName(t, r.entity_id)
+          || (t.charAt(0).toUpperCase() + t.slice(1) + ' · ' + String(r.entity_id).slice(-5));
+        byKey[key] = { key: key, type: t, id: r.entity_id, label: nm, icon: entityIcon(t), items: [], recent: 0 };
+      }
+      byKey[key].items.push(r);
+      if (when > byKey[key].recent) byKey[key].recent = when;
+    });
+    var entityGroups = Object.keys(byKey).map(function(k) { return byKey[k]; })
+      .sort(function(a, b) { return b.recent - a.recent; });
+    return { pinned: pinned, entityGroups: entityGroups, personal: personal };
+  }
+
   function renderSessionList(rows) {
     var host = document.getElementById('ai-sidebar-list');
     if (!host) return;
+    var _grpMode = getSessionGroupMode();
+    // Reflect the active toggle button — done BEFORE the empty-list early
+    // return so the persisted mode shows even on a zero-session first paint.
+    (function() {
+      var eb = document.getElementById('ai-grpmode-entity'), db = document.getElementById('ai-grpmode-date');
+      [eb, db].forEach(function(b) { if (b) { b.style.background = 'transparent'; b.style.color = 'rgba(255,255,255,0.5)'; b.style.borderColor = 'rgba(255,255,255,0.08)'; } });
+      var on = _grpMode === 'date' ? db : eb;
+      if (on) { on.style.background = 'rgba(79,140,255,0.14)'; on.style.color = '#9bbcff'; on.style.borderColor = 'rgba(79,140,255,0.3)'; }
+    })();
     if (!rows.length) {
       host.innerHTML = '<div style="padding:18px 14px;color:rgba(255,255,255,0.4);font-size:11.5px;line-height:1.5;">No sessions yet. Click <strong style="color:rgba(255,255,255,0.7);">+ New chat</strong> to start one, or just send a message — a session will be created automatically.</div>';
       return;
     }
-    var groups = bucketSessions(rows);
+    var groups = _grpMode === 'date' ? bucketSessions(rows) : null;
     var html = '';
-    function renderGroup(label, items, key) {
+    function renderGroup(label, items, key, icon) {
       if (!items.length) return;
-      // Each recency group is a collapsible section: clickable header
-      // (caret + label + count) over a body wrapper that hides on
-      // collapse. State persists in localStorage (default open) via the
-      // same helpers the Payloads / Recipes sections use, so the user
-      // can fold away big buckets and scan what's there without an
-      // endless scroll.
+      // Each group is a collapsible section: clickable header (caret + optional
+      // entity icon + label + count) over a body wrapper that hides on collapse.
+      // State persists in localStorage (default open) via the same helpers the
+      // Payloads / Recipes sections use.
       var grpOpen = getPanelSectionOpen('chats-' + key);
       html += '<div class="ai-grp-header" data-grp="' + key + '" style="padding:10px 12px 4px 12px;display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none;">' +
         '<span class="p86-caret" style="font-size:9px;opacity:0.5;transition:transform 0.15s;display:inline-block;transform:' + (grpOpen ? 'rotate(0deg)' : 'rotate(-90deg)') + ';">&#x25BC;</span>' +
-        '<span style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:rgba(255,255,255,0.32);">' + escapeHTML(label) + '</span>' +
-        '<span style="font-size:10px;color:rgba(255,255,255,0.26);">' + items.length + '</span>' +
+        (icon ? '<span style="font-size:12px;line-height:1;opacity:0.75;">' + icon + '</span>' : '') +
+        '<span style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:rgba(255,255,255,0.32);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escapeHTML(label) + '</span>' +
+        '<span style="font-size:10px;color:rgba(255,255,255,0.26);flex-shrink:0;">' + items.length + '</span>' +
       '</div>';
       html += '<div class="ai-grp-body" data-grp-body="' + key + '" style="' + (grpOpen ? '' : 'display:none;') + '">';
       items.forEach(function(r) {
@@ -2244,11 +2338,18 @@ function p86Ask(message, opts) {
       });
       html += '</div>';
     }
-    renderGroup('Pinned', groups.pinned, 'pinned');
-    renderGroup('Today', groups.today, 'today');
-    renderGroup('Yesterday', groups.yesterday, 'yesterday');
-    renderGroup('This week', groups.week, 'week');
-    renderGroup('Earlier', groups.earlier, 'earlier');
+    if (_grpMode === 'entity') {
+      var eg = bucketSessionsByEntity(rows);
+      renderGroup('Pinned', eg.pinned, 'pinned', '⭐');
+      eg.entityGroups.forEach(function(g) { renderGroup(g.label, g.items, g.key, g.icon); });
+      renderGroup('Personal', eg.personal.items, 'personal', '💬');
+    } else {
+      renderGroup('Pinned', groups.pinned, 'pinned');
+      renderGroup('Today', groups.today, 'today');
+      renderGroup('Yesterday', groups.yesterday, 'yesterday');
+      renderGroup('This week', groups.week, 'week');
+      renderGroup('Earlier', groups.earlier, 'earlier');
+    }
     host.innerHTML = html;
 
     // Wire collapsible group headers. Clicking toggles the body's
@@ -2921,6 +3022,16 @@ function p86Ask(message, opts) {
     var input = document.getElementById('ai-input');
     var text = (input && input.value || '').trim();
     if (!text) return;
+    // Don't send while a composer upload is still in flight. A doc has no
+    // client-side render, so a slow xlsx stays 'processing' until its upload
+    // resolves; sending now would skip it (status!=='ready') AND clear the
+    // composer, orphaning it — so the file never reaches the agent, the exact
+    // bug the fresh-upload path fixes. Hold the send until the upload settles;
+    // the text stays in the box so the user just presses send again.
+    if (_pendingComposer.some(function(e) { return e.status === 'processing'; })) {
+      if (typeof window.p86Toast === 'function') window.p86Toast('Attachment still uploading — one moment, then send again.');
+      return;
+    }
     // Slash command typed inline (e.g. "/help", "/web roof felt"). A
     // utility runs and stops here; a prompt command expands its template
     // and falls through to send. Plain text passes through untouched.
@@ -3007,10 +3118,19 @@ function p86Ask(message, opts) {
     // subsequent turns will see them via the system-prompt context.
     var composerImages = [];
     var composerNotes = [];
+    var freshAttachmentIds = [];
     _pendingComposer.forEach(function(e) {
       if (e.status !== 'ready') return;
       composerImages = composerImages.concat(e.base64Images || []);
       composerNotes.push((e.kind === 'pdf' ? 'PDF: ' : 'Image: ') + e.filename + (e.viewUrl ? ' [stored]' : ''));
+      // Only docs with NO inline representation (xlsx/csv/docx — no
+      // base64Images) need surfacing: images and PDF pages already ride inline
+      // as vision this turn, so the agent sees them. A doc otherwise reaches
+      // the agent only via the deduped entity manifest, so it's the one that
+      // goes missing when uploaded mid-chat.
+      if (e.attachmentId && !(e.base64Images && e.base64Images.length)) {
+        freshAttachmentIds.push(String(e.attachmentId));
+      }
     });
 
     var photoCount = countCurrentPhotos();
@@ -3100,6 +3220,7 @@ function p86Ask(message, opts) {
         bodyImages = bodyImages.concat(autoImages);
       }
       if (bodyImages.length) body.additional_images = bodyImages.slice(0, 18);
+      if (freshAttachmentIds.length) body.fresh_attachment_ids = freshAttachmentIds.slice(0, 12);
       // Pin the active sidebar session, if any. Without it the server
       // auto-resolves from current_context — fine for the very first
       // turn but undesirable after the user has explicitly picked a

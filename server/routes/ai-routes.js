@@ -13683,6 +13683,17 @@ router.post('/86/chat', requireAuth, requireOrg, aiChatLimiter, aiChatHourlyLimi
   const additionalImages = Array.isArray(req.body && req.body.additional_images)
     ? req.body.additional_images.slice(0, 12)
     : [];
+  // Files the user dropped in the composer THIS turn. Non-image docs (xlsx /
+  // csv / docx) don't ride inline as vision blocks — they persist as
+  // attachments and the agent only learns they exist through the entity
+  // attachment manifest, which the managed session sends once and then DEDUPES.
+  // So a file uploaded mid-conversation is invisible on the very turn it's
+  // uploaded (the "+88 new tokens, answered from stale cache, asked me to
+  // upload the file I just uploaded" bug). We surface them explicitly in this
+  // turn's user message below.
+  const freshAttachmentIds = Array.isArray(req.body && req.body.fresh_attachment_ids)
+    ? req.body.fresh_attachment_ids.filter(Boolean).map(String).slice(0, 12)
+    : [];
 
   setSSEHeaders(res);
   // Serialize turns per user — reject a concurrent turn while one is in
@@ -13784,9 +13795,41 @@ router.post('/86/chat', requireAuth, requireOrg, aiChatLimiter, aiChatHourlyLimi
     // The 15-min refresh tick re-syncs the agent only when content
     // changes (see syncAgentIfReferenceChanged).
     const pageBlock = renderPageContextBlock(currentContext);
+    // Surface files the user uploaded THIS turn, so a doc dropped mid-chat is
+    // visible on the turn it arrives regardless of the deduped entity manifest.
+    // Rides in the per-turn user message (never deduped). Org+owner scoped.
+    let freshUploadBlock = '';
+    if (freshAttachmentIds.length) {
+      try {
+        const fr = await pool.query(
+          `SELECT id, filename, mime_type, size_bytes,
+                  (extracted_text IS NOT NULL AND length(extracted_text) > 0) AS has_text
+             FROM attachments
+            WHERE id = ANY($1::text[]) AND uploaded_by = $2`,
+          [freshAttachmentIds, req.user.id]
+        );
+        if (fr.rows.length) {
+          const items = fr.rows.map(r => {
+            const isImg = r.mime_type && r.mime_type.startsWith('image/');
+            const how = isImg
+              ? `view_attachment_image({attachment_id:"${r.id}"})`
+              : `read_attachment_text({attachment_id:"${r.id}"})`;
+            const sz = r.size_bytes ? ', ' + Math.round(r.size_bytes / 1024) + ' KB' : '';
+            const warn = (!isImg && !r.has_text) ? ' [no extractable text yet]' : '';
+            return `- ${r.filename || '(unnamed)'} (${r.mime_type || 'file'}${sz}, id: ${r.id}) → read with ${how}${warn}`;
+          }).join('\n');
+          freshUploadBlock =
+            '<just_uploaded>\nThe user attached these file(s) with THIS message. READ them before answering — do not ask the user to upload what they already sent, and do not answer from other attachments (e.g. receipts) instead:\n' +
+            items + '\n</just_uploaded>';
+        }
+      } catch (e) {
+        console.warn('[86/chat] fresh-upload surface failed (non-fatal):', e && e.message);
+      }
+    }
     const turnTextParts = [];
     if (turnContextText) turnTextParts.push('<turn_context>\n' + turnContextText + '\n</turn_context>');
     if (pageBlock) turnTextParts.push(pageBlock);
+    if (freshUploadBlock) turnTextParts.push(freshUploadBlock);
     turnTextParts.push(userMessage);
     const turnText = turnTextParts.join('\n\n');
 
