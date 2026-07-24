@@ -119,6 +119,13 @@ function renderJobsMain() {
         // phases carrying revenue in asSoldRevenue/asSoldPhaseBudget with
         // phaseBudget=0 — skewing the weighted %.)
         function calcBuildingPctComplete(buildingId, jobId) {
+            // Units/levels-aware, graph-free (window.p86Progress). A scope cell's
+            // % is its manual entry, else the building's units/levels, else its
+            // own stored %. The old body read only phase.pctComplete and so
+            // showed 0% on buildings whose progress was tracked by units-done —
+            // the same blind spot that would have zeroed earned revenue at
+            // node-graph retirement.
+            if (window.p86Progress) return window.p86Progress.buildingPct(buildingId, jobId);
             const bldgPhases = appData.phases.filter(p => p.jobId === jobId && p.buildingId === buildingId);
             if (bldgPhases.length === 0) return 0;
             const totalRev = bldgPhases.reduce((s, p) => s + phaseRevenue(p), 0);
@@ -421,7 +428,13 @@ function renderJobsMain() {
             // (income vs revised cost). Distinct from JTD.
             const revisedProfit = totalIncome - revisedEstCosts;
             const revisedMargin = totalIncome > 0 ? (revisedProfit / totalIncome * 100) : 0;
-            const pctComplete = job.pctComplete || 0;
+            // Units/levels-aware, graph-free job % when the job has scopes; else
+            // the stored value. Drives coEarned + the headline consistently with
+            // scope-level earned below.
+            const _hasScopes = (appData.phases || []).some(p => p.jobId === jobId);
+            const pctComplete = (window.p86Progress && _hasScopes)
+                ? window.p86Progress.jobPct(jobId)
+                : (job.pctComplete || 0);
             // Prefer the engine's computed values when the node graph has
             // already pushed them — they use unrounded weighted pct and
             // match the watch-node displays. Fall back to local formula
@@ -433,9 +446,16 @@ function renderJobsMain() {
             // → Margin, not just the Total Income headline. The no-graph fallback
             // already folds ALL CO income in via totalIncome, so it needs nothing.
             const coEarned = (co.unlinkedIncome || 0) * (pctComplete / 100);
-            const revenueEarned = (job.ngRevenueEarned != null)
-                ? job.ngRevenueEarned + coEarned
-                : totalIncome * (pctComplete / 100);
+            // Earned = Σ each scope cell's revenue × its % (p86Progress,
+            // graph-free) + the unlinked-CO earned share. Replaces the node
+            // graph's ngRevenueEarned; reflects real units-done rather than the
+            // graph's (often stale) wire percentages. Falls back to the graph
+            // value / contract×pct only when the job has no scopes at all.
+            const revenueEarned = (window.p86Progress && _hasScopes)
+                ? window.p86Progress.jobEarnedRevenue(jobId) + coEarned
+                : (job.ngRevenueEarned != null
+                    ? job.ngRevenueEarned + coEarned
+                    : totalIncome * (pctComplete / 100));
             // Recompute JTD from the QB-inclusive actual cost. Do NOT prefer the
             // engine's ngJtdProfit/ngJtdMargin — those are computed from the graph's
             // MANUAL cost only (QB excluded), so they'd overstate profit. Revenue
