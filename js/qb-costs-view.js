@@ -111,6 +111,8 @@ function p86Ask(message, opts) {
       memo: l.memo || '',
       amount: Number(l.amount || 0),
       linkedNodeId: l.linked_node_id || l.linkedNodeId || null,
+      bucket: l.bucket || null,
+      buildingId: l.building_id || l.buildingId || null,
       reportDate: l.report_date || l.reportDate || null,
       sourceFile: l.source_file || l.sourceFile || null
     };
@@ -335,12 +337,9 @@ function p86Ask(message, opts) {
     if (_state.filterTxnType) {
       lines = lines.filter(function(l) { return (l.txnType || '(no type)') === _state.filterTxnType; });
     }
-    if (_state.filterStatus === 'linked') {
-      lines = lines.filter(function(l) { return !!l.linkedNodeId && validNodeIds[l.linkedNodeId]; });
-    } else if (_state.filterStatus === 'unlinked') {
-      lines = lines.filter(function(l) { return !l.linkedNodeId; });
-    } else if (_state.filterStatus === 'orphan') {
-      lines = lines.filter(function(l) { return !!l.linkedNodeId && !validNodeIds[l.linkedNodeId]; });
+    if (_state.filterStatus && _state.filterStatus.indexOf('bucket:') === 0) {
+      var wantBucket = _state.filterStatus.slice(7);
+      lines = lines.filter(function(l) { return effBucket(l) === wantBucket; });
     }
     if (_state.search) {
       var q = _state.search.toLowerCase();
@@ -394,17 +393,7 @@ function p86Ask(message, opts) {
       summaryHtml = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:14px;">' +
         statCard('Total', fmtMoney(totalAll), '#34d399') +
         statCard('Lines', allLines.length, '#4f8cff') +
-        statCard('Unlinked', unlinked, unlinked > 0 ? '#fbbf24' : '#34d399') +
         statCard('Vendors', Object.keys(byVendor).length, '#a78bfa') +
-        // Surface orphans only when there are any — keeps the row
-        // tight in the common (clean) case.
-        (orphan > 0
-          ? '<div style="background:var(--card-bg,#141419);border:1px solid rgba(248,113,113,0.4);border-radius:8px;padding:10px 12px;cursor:pointer;" ' +
-            'onclick="window.qbCostsView.cleanOrphans()" title="Click to null out the broken links in one batch.">' +
-            '<div style="font-size:10px;color:#f87171;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Orphan links</div>' +
-            '<div style="font-size:16px;font-weight:700;color:#f87171;">' + orphan + ' &middot; clean &rarr;</div>' +
-            '</div>'
-          : '') +
       '</div>';
 
       // Group-link palettes: account + vendor + txn-type. Each chip
@@ -458,12 +447,10 @@ function p86Ask(message, opts) {
 
       filterBarHtml = '<div class="action-buttons" style="margin-bottom:8px;flex-wrap:wrap;">' +
         '<select onchange="window.qbCostsView.setStatusFilter(this.value)" style="width:auto;min-width:140px;">' +
-          '<option value="">All lines</option>' +
-          '<option value="linked"' + (_state.filterStatus === 'linked' ? ' selected' : '') + '>Linked to node</option>' +
-          '<option value="unlinked"' + (_state.filterStatus === 'unlinked' ? ' selected' : '') + '>Unlinked</option>' +
-          (orphan > 0
-            ? '<option value="orphan"' + (_state.filterStatus === 'orphan' ? ' selected' : '') + '>Orphan links (' + orphan + ')</option>'
-            : '') +
+          '<option value="">All buckets</option>' +
+          canonBuckets().map(function (b) {
+            return '<option value="bucket:' + b.code + '"' + (_state.filterStatus === 'bucket:' + b.code ? ' selected' : '') + '>' + escapeHTML(b.label) + '</option>';
+          }).join('') +
         '</select>' +
         activeFilterChips +
         '<input type="text" placeholder="Search vendor, memo, account, num…" oninput="window.qbCostsView.setSearch(this.value)" value="' + escapeAttr(_state.search) + '" style="margin-left:auto;min-width:240px;" />' +
@@ -481,34 +468,16 @@ function p86Ask(message, opts) {
     var selCount = selectionSize();
     var canGroupLink = !!(_state.filterCategory || _state.filterVendor);
     var bulkBarHtml = '';
-    if (allLines.length && (selCount > 0 || canGroupLink)) {
+    if (allLines.length && selCount > 0) {
       var selSum = lines.reduce(function(s, l) { return isSelected(l.id) ? s + l.amount : s; }, 0);
-      var groupLabel = _state.filterCategory ? ('all in "' + _state.filterCategory + '"')
-                     : _state.filterVendor ? ('all from "' + _state.filterVendor + '"')
-                     : '';
+      var bulkBucketOpts = '<option value="">Assign bucket…</option>' +
+        canonBuckets().map(function (b) { return '<option value="' + b.code + '">' + escapeHTML(b.label) + '</option>'; }).join('');
       bulkBarHtml = '<div style="background:rgba(34,211,238,0.08);border:1px solid rgba(34,211,238,0.3);border-radius:8px;padding:8px 12px;margin-bottom:10px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">' +
-        (selCount > 0
-          ? '<span style="font-size:12px;color:var(--text,#fff);font-weight:600;">' +
-              selCount + ' selected &middot; ' + fmtMoney(selSum) +
-            '</span>' +
-            '<button class="ee-btn primary" style="font-size:11px;padding:4px 12px;" ' +
-              'onclick="window.qbCostsView.openBulkLinkPicker()">' +
-              '&#x1F517; Link selected to node' +
-            '</button>' +
-            '<button class="ee-btn secondary" style="font-size:11px;padding:4px 12px;" ' +
-              'onclick="window.qbCostsView.bulkUnlink()">' +
-              '&times; Unlink selected' +
-            '</button>' +
-            '<button class="ee-btn secondary" style="font-size:11px;padding:4px 10px;" ' +
-              'onclick="window.qbCostsView.clearSelection()">Clear</button>'
-          : '') +
-        (canGroupLink && selCount === 0
-          ? '<span style="font-size:12px;color:var(--text-dim,#aaa);">Group action: ' + lines.length + ' line' + (lines.length === 1 ? '' : 's') + ' &middot; ' + fmtMoney(filterTotal) + '</span>' +
-            '<button class="ee-btn primary" style="font-size:11px;padding:4px 12px;" ' +
-              'onclick="window.qbCostsView.openGroupLinkPicker()">' +
-              '&#x1F517; Link ' + escapeHTML(groupLabel) + ' to node' +
-            '</button>'
-          : '') +
+        '<span style="font-size:12px;color:var(--text,#fff);font-weight:600;">' + selCount + ' selected &middot; ' + fmtMoney(selSum) + '</span>' +
+        '<select title="Set the cost bucket for every selected line" style="font-size:11px;padding:4px 8px;" ' +
+          'onchange="window.qbCostsView.bulkSetBucket(this.value); this.selectedIndex=0;">' + bulkBucketOpts + '</select>' +
+        '<button class="ee-btn secondary" style="font-size:11px;padding:4px 10px;" ' +
+          'onclick="window.qbCostsView.clearSelection()">Clear</button>' +
       '</div>';
     }
 
@@ -546,16 +515,17 @@ function p86Ask(message, opts) {
               th('Class') +
               th('Memo') +
               sortTh('Amount', 'amount', 'right') +
-              th('Linked Node') +
+              th('Bucket') +
+              th('Building') +
             '</tr>' +
           '</thead><tbody>' +
-            lines.map(function(l) { return renderRow(l, nodes, validNodeIds); }).join('') +
+            lines.map(function(l) { return renderRow(l); }).join('') +
           '</tbody>' +
         '</table>' +
       '</div>';
     }
 
-    panel.innerHTML = headerHtml + summaryHtml + filterBarHtml + bulkBarHtml + tableHtml;
+    panel.innerHTML = headerHtml + bucketStripHtml(jobId) + summaryHtml + filterBarHtml + bulkBarHtml + tableHtml;
 
     // Apply indeterminate state on master checkbox after render.
     var master = panel.querySelector('#qbcSelectAll');
@@ -587,32 +557,119 @@ function p86Ask(message, opts) {
     return '<th style="padding:8px 10px;text-align:' + (align || 'left') + ';font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;font-weight:700;">' + label + '</th>';
   }
 
-  function renderRow(l, nodes, validNodeIds) {
-    var linkedNode = l.linkedNodeId ? nodes.find(function(n) { return n.id === l.linkedNodeId; }) : null;
-    var isOrphan = !!l.linkedNodeId && validNodeIds && !validNodeIds[l.linkedNodeId];
-    var statusCell;
-    if (linkedNode) {
-      statusCell =
-        '<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:10px;background:rgba(52,211,153,0.12);color:#34d399;font-size:11px;font-weight:600;">' +
-          '&#x2713; ' + escapeHTML(linkedNode.label || linkedNode.type) +
-        '</span>' +
-        ' <button class="ee-btn-icon ghost" style="font-size:10px;padding:2px 6px;margin-left:4px;" ' +
-          'onclick="window.qbCostsView.unlinkLine(\'' + escapeAttr(l.id) + '\')" title="Unlink">&times;</button>';
-    } else if (isOrphan) {
-      // Linked to a node that no longer exists — surface as orphan
-      // with a one-click "fix" that re-opens the picker.
-      statusCell =
-        '<span style="display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:10px;background:rgba(248,113,113,0.12);color:#f87171;font-size:11px;font-weight:600;" title="Linked node no longer exists in the graph">' +
-          '&#x26A0; orphan' +
-        '</span>' +
-        ' <button class="ee-btn secondary" style="font-size:11px;padding:3px 10px;margin-left:4px;" ' +
-          'onclick="window.qbCostsView.openLinkPicker(\'' + escapeAttr(l.id) + '\')">Re-assign &rarr;</button>';
-    } else {
-      statusCell =
-        '<button class="ee-btn secondary" style="font-size:11px;padding:3px 10px;" ' +
-          'onclick="window.qbCostsView.openLinkPicker(\'' + escapeAttr(l.id) + '\')">Assign &rarr;</button>';
+  // ── Cost-bucket rollup + per-line assignment (node retirement) ──
+  // QB lines auto-bucket by their account (js/cost-buckets.js); each row
+  // can override the bucket and attribute itself to a building. Replaces
+  // the retired "link to a graph node" flow.
+  function canonBuckets() { return (window.p86CostBuckets && p86CostBuckets.CANON) || []; }
+  function jobBuildingsList(jobId) {
+    return ((window.appData && appData.buildings) || []).filter(function (b) { return b && b.jobId === jobId; });
+  }
+  function effBucket(l) {
+    if (window.p86CostBuckets) {
+      return p86CostBuckets.effectiveBucket({ bucket: l.bucket, account: l.account, account_type: l.accountType });
     }
+    return l.bucket || 'other';
+  }
+  // Compact rollup of this job's actual cost by canonical bucket.
+  function bucketStripHtml(jobId) {
+    if (!window.p86CostBuckets) return '';
+    var roll;
+    try { roll = p86CostBuckets.getJobCostBuckets(jobId); } catch (e) { return ''; }
+    if (!roll || !roll.grand) return '';
+    var cells = roll.buckets.filter(function (b) { return b.total || b.lines; }).map(function (b) {
+      return '<div style="display:flex;align-items:center;gap:6px;padding:6px 10px;background:var(--card-bg,#141419);border:1px solid var(--border,#333);border-radius:8px;">' +
+        '<span style="width:8px;height:8px;border-radius:2px;background:' + b.color + ';flex:none;"></span>' +
+        '<span style="font-size:11px;color:var(--text-dim,#888);">' + escapeHTML(b.label) + '</span>' +
+        '<strong style="font-size:13px;margin-left:auto;font-family:monospace;">' + fmtMoney(b.total) + '</strong>' +
+        '</div>';
+    }).join('');
+    return '<div style="margin-bottom:14px;">' +
+      '<div style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">Cost buckets &middot; ' + fmtMoney(roll.grand) + ' actual</div>' +
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;">' + cells + '</div>' +
+      '</div>';
+  }
+  function bucketSelectHtml(l) {
+    var eff = effBucket(l);
+    var opts = canonBuckets().map(function (b) {
+      return '<option value="' + b.code + '"' + (b.code === eff ? ' selected' : '') + '>' + escapeHTML(b.label) + '</option>';
+    }).join('');
+    var dim = l.bucket ? '' : 'opacity:0.7;';
+    return '<select title="' + (l.bucket ? 'Manual override — pick the account\'s bucket to reset' : 'Auto-mapped from the QB account') + '" ' +
+      'style="font-size:11px;padding:2px 4px;max-width:135px;' + dim + '" ' +
+      'onchange="window.qbCostsView.setLineBucket(\'' + escapeAttr(l.id) + '\', this.value)">' + opts + '</select>';
+  }
+  function buildingSelectHtml(l, jobId) {
+    var blds = jobBuildingsList(jobId);
+    if (!blds.length) return '<span style="font-size:11px;color:var(--text-dim,#666);">—</span>';
+    var opts = '<option value=""' + (!l.buildingId ? ' selected' : '') + '>Job level</option>' +
+      blds.map(function (b) {
+        return '<option value="' + escapeAttr(b.id) + '"' + (l.buildingId === b.id ? ' selected' : '') + '>' +
+          escapeHTML(b.name || b.label || b.id) + '</option>';
+      }).join('');
+    return '<select title="Attribute this cost to a building" style="font-size:11px;padding:2px 4px;max-width:120px;" ' +
+      'onchange="window.qbCostsView.setLineBuilding(\'' + escapeAttr(l.id) + '\', this.value)">' + opts + '</select>';
+  }
+  // Persist a bucket override. If the pick equals the account's auto-map,
+  // store null (back to auto). Optimistic; reverts on server failure.
+  function setLineBucket(id, code) {
+    var lines = (window.appData && appData.qbCostLines) || [];
+    var row = lines.find(function (x) { return x.id === id; });
+    if (!row) return;
+    var auto = window.p86CostBuckets ? p86CostBuckets.bucketFor(row.account || row.account_type) : null;
+    var store = (code === auto) ? null : code;
+    var prev = row.bucket;
+    row.bucket = store;
+    reRender();
+    if (window.ngRecomputeIfJob && _state.jobId) window.ngRecomputeIfJob(_state.jobId);
+    if (window.p86Api && p86Api.qbCosts) {
+      p86Api.qbCosts.update(id, { bucket: store }).catch(function (e) {
+        row.bucket = prev; reRender();
+        alert('Bucket change failed: ' + (e && e.message || 'server error'));
+      });
+    }
+  }
+  function setLineBuilding(id, buildingId) {
+    var lines = (window.appData && appData.qbCostLines) || [];
+    var row = lines.find(function (x) { return x.id === id; });
+    if (!row) return;
+    var prev = row.building_id;
+    row.building_id = buildingId || null;
+    reRender();
+    if (window.ngRecomputeIfJob && _state.jobId) window.ngRecomputeIfJob(_state.jobId);
+    if (window.p86Api && p86Api.qbCosts) {
+      p86Api.qbCosts.update(id, { buildingId: buildingId || null }).catch(function (e) {
+        row.building_id = prev; reRender();
+        alert('Building change failed: ' + (e && e.message || 'server error'));
+      });
+    }
+  }
+  // Bulk bucket override on every selected DB-backed line.
+  function bulkSetBucket(code) {
+    if (!code) return;
+    var ids = _state.selected
+      ? Array.from(_state.selected).filter(function (id) { return id.indexOf('sheet:') !== 0; })
+      : [];
+    if (!ids.length) return;
+    var lines = (window.appData && appData.qbCostLines) || [];
+    var prior = [];
+    ids.forEach(function (id) {
+      var r = lines.find(function (x) { return x.id === id; });
+      if (r) { prior.push({ id: id, prev: r.bucket }); r.bucket = code; }
+    });
+    clearSelection();
+    reRender();
+    if (window.ngRecomputeIfJob && _state.jobId) window.ngRecomputeIfJob(_state.jobId);
+    if (window.p86Api && p86Api.qbCosts && p86Api.qbCosts.bulkAssign) {
+      p86Api.qbCosts.bulkAssign(ids, { bucket: code }).catch(function (e) {
+        prior.forEach(function (p) { var r = lines.find(function (x) { return x.id === p.id; }); if (r) r.bucket = p.prev; });
+        reRender();
+        alert('Bulk bucket assign failed: ' + (e && e.message || 'server error'));
+      });
+    }
+  }
 
+  function renderRow(l) {
     var checked = isSelected(l.id);
     var rowBg = checked ? 'background:rgba(34,211,238,0.06);' : '';
     return '<tr style="border-bottom:1px solid var(--border,#333);' + rowBg + '">' +
@@ -628,7 +685,8 @@ function p86Ask(message, opts) {
       td(l.klass || '', { dim: true, size: 12 }) +
       td(l.memo || '', { dim: true, size: 12, truncate: 60 }) +
       td(fmtMoney(l.amount), { mono: true, weight: 600, align: 'right', cls: 'qb-line-amount' }) +
-      '<td style="padding:6px 10px;">' + statusCell + '</td>' +
+      '<td style="padding:6px 10px;">' + bucketSelectHtml(l) + '</td>' +
+      '<td style="padding:6px 10px;">' + buildingSelectHtml(l, _state.jobId) + '</td>' +
     '</tr>';
   }
 
@@ -755,11 +813,9 @@ function p86Ask(message, opts) {
       if (_state.filterCategory && (l.account || '(uncategorized)') !== _state.filterCategory) return false;
       if (_state.filterVendor && (l.vendor || '(no vendor)') !== _state.filterVendor) return false;
       if (_state.filterTxnType && (l.txnType || '(no type)') !== _state.filterTxnType) return false;
-      var nodes = getNodesForJob(_state.jobId);
-      var validNodeIds = nodes.reduce(function(s, n) { s[n.id] = true; return s; }, {});
-      if (_state.filterStatus === 'linked')   return !!l.linkedNodeId && validNodeIds[l.linkedNodeId];
-      if (_state.filterStatus === 'unlinked') return !l.linkedNodeId;
-      if (_state.filterStatus === 'orphan')   return !!l.linkedNodeId && !validNodeIds[l.linkedNodeId];
+      if (_state.filterStatus && _state.filterStatus.indexOf('bucket:') === 0) {
+        return effBucket(l) === _state.filterStatus.slice(7);
+      }
       return true;
     });
     if (checked) {
@@ -1093,6 +1149,9 @@ function p86Ask(message, opts) {
     bulkUnlink: bulkUnlink,
     cleanOrphans: cleanOrphans,
     unlinkLine: unlinkLine,
+    setLineBucket: setLineBucket,
+    setLineBuilding: setLineBuilding,
+    bulkSetBucket: bulkSetBucket,
     currentJobId: function () { return _state.jobId || null; }
   };
 })();
