@@ -103,7 +103,7 @@
     // Attach an estimate to an existing job (backfill / re-sync costs).
     // payload: { estimate_id, contractAmount?, estimatedCosts?, workbook? }
     linkEstimate: function(jobId, payload) { return post('/api/jobs/' + encodeURIComponent(jobId) + '/link-estimate', payload); },
-    bulkSave: function(appData) { return put('/api/jobs/bulk/save', { appData: appData }); },
+    bulkSave: function(appData, baseVersions) { return put('/api/jobs/bulk/save', { appData: appData, baseVersions: baseVersions || undefined }); },
     remove: function(id) { return del('/api/jobs/' + encodeURIComponent(id)); },
     reassignOwner: function(id, ownerId, notify) {
       // notify=true asks the server to email the new owner via the

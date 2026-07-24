@@ -2530,6 +2530,11 @@
         // pushToServer for why that mattered.
         var _jobBaseline = {};
         var _estimatesBaseline = null;
+        // Per-job server version (updated_at ISO) this client last loaded or
+        // pushed — the BASE for optimistic concurrency. Sent with each save; the
+        // server rejects (conflicts) any job whose row is newer, so a second
+        // user's concurrent edit is never silently overwritten.
+        var _jobVersion = {};
         // Drop server-injected/per-save hints so they can't register as changes.
         function _stripPrivate(o) {
             if (!o || typeof o !== 'object') return o;
@@ -2561,7 +2566,11 @@
         function _estimatesDirty() { return _estimatesBaseline !== estimatesSig(); }
         function rebuildBaselines() {
             _jobBaseline = {};
-            (appData.jobs || []).forEach(function(j) { _jobBaseline[j.id] = jobSliceSig(j.id); });
+            (appData.jobs || []).forEach(function(j) {
+                _jobBaseline[j.id] = jobSliceSig(j.id);
+                // Capture the server version the moment we're in sync with it.
+                if (j._updatedAt) _jobVersion[j.id] = j._updatedAt;
+            });
             _estimatesBaseline = estimatesSig();
         }
         window.p86DataReady = function() { return _serverLoadComplete; };
@@ -2704,6 +2713,30 @@
             _serverPushTimer = setTimeout(function() { pushToServer(); }, 600);
         }
 
+        // A save conflict = the server rejected our write because someone else
+        // changed that job since we loaded it. We must NOT overwrite (that is the
+        // silent cross-user clobber this whole mechanism prevents). Tell the user
+        // plainly, then converge on the server's version so the client stops
+        // resending a stale base. Debounced so a burst reloads once.
+        var _conflictReloadPending = false;
+        function handleSaveConflicts(conflicts) {
+            try {
+                var names = conflicts.map(function(c) {
+                    var j = (appData.jobs || []).find(function(x) { return x.id === c.id; });
+                    return (j && (j.title || j.name)) || c.id;
+                });
+                var msg = (names.length === 1 ? ('“' + names[0] + '” was') : (names.length + ' jobs were')) +
+                    ' changed by someone else — your latest edit ' + (names.length === 1 ? 'to it was' : 'to them was') +
+                    ' NOT saved. Reloading the current version…';
+                if (window.p86Toast) { try { window.p86Toast(msg, 'error'); } catch (e) {} }
+                console.warn('[save-conflict]', names.join(', '));
+                if (!_conflictReloadPending) {
+                    _conflictReloadPending = true;
+                    setTimeout(function() { _conflictReloadPending = false; try { loadData(); } catch (e) {} }, 1200);
+                }
+            } catch (e) {}
+        }
+
         function pushToServer() {
             if (!window.p86Api || !window.p86Api.isAuthenticated()) return Promise.resolve();
             // THE guard lives here, at the single chokepoint, not only in
@@ -2762,18 +2795,31 @@
 
             notifyPushStatus('saving');
             var pushedIds = editableJobs.map(function(j) { return j.id; });
+            // Base version per pushed job for optimistic concurrency.
+            var baseVersions = {};
+            pushedIds.forEach(function(id) { if (_jobVersion[id]) baseVersions[id] = _jobVersion[id]; });
             var estimatesGo = appData.estimates.length && _estimatesDirty();
             _activePush = Promise.all([
-                editableJobs.length ? window.p86Api.jobs.bulkSave(jobsPayload) : Promise.resolve(),
+                editableJobs.length ? window.p86Api.jobs.bulkSave(jobsPayload, baseVersions) : Promise.resolve(),
                 estimatesGo ? window.p86Api.estimates.bulkSave(estimatesPayload) : Promise.resolve()
             ]).then(function(r) {
                 _pushRetryCount = 0;
                 _activePush = null;
-                // What we just sent is now the server's state — re-baseline the
-                // jobs we pushed so they stop counting as dirty. Jobs we did NOT
-                // push keep their old baseline and stay out of future payloads.
-                pushedIds.forEach(function(id) { _jobBaseline[id] = jobSliceSig(id); });
+                var jobsResp = (r && r[0]) || {};
+                var conflicts = (jobsResp.conflicts && jobsResp.conflicts.length) ? jobsResp.conflicts : null;
+                // Advance the base version for every job the server actually
+                // accepted, so this client doesn't false-conflict on its next save.
+                if (jobsResp.versions) {
+                    Object.keys(jobsResp.versions).forEach(function(id) { _jobVersion[id] = jobsResp.versions[id]; });
+                }
+                // Re-baseline the jobs we pushed EXCEPT any the server rejected as
+                // conflicts — those weren't written, so they stay dirty and their
+                // base version stays put (a conflict never advances the version).
+                var rejected = {};
+                if (conflicts) conflicts.forEach(function(c) { rejected[c.id] = 1; });
+                pushedIds.forEach(function(id) { if (!rejected[id]) _jobBaseline[id] = jobSliceSig(id); });
                 if (estimatesGo) _estimatesBaseline = estimatesSig();
+                if (conflicts) { handleSaveConflicts(conflicts); }
                 notifyPushStatus('saved');
                 return r;
             }).catch(function(err) {

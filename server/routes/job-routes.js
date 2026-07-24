@@ -86,6 +86,8 @@ router.get('/', requireAuth, async (req, res) => {
       // geocode_* columns power the Jobs map view (filled lazily by the
       // weather route's ensureGeocode).
       return { ...j.data, id: j.id, owner_id: j.owner_id, _canEdit: canEdit,
+        // Base version for optimistic concurrency on bulk save (millisecond ISO).
+        _updatedAt: j.updated_at ? new Date(j.updated_at).toISOString() : null,
         geocode_lat: j.geocode_lat, geocode_lng: j.geocode_lng, geocode_address: j.geocode_address };
     });
     res.json({ jobs: result });
@@ -543,8 +545,17 @@ router.delete('/:id/access/:userId', requireAuth, async (req, res) => {
 // PUT /api/jobs/bulk/save
 router.put('/bulk/save', requireAuth, requireRole('admin', 'pm'), async (req, res) => {
   try {
-    const { appData } = req.body;
+    const { appData, baseVersions } = req.body;
     if (!appData || !appData.jobs) return res.status(400).json({ error: 'Invalid appData' });
+    // Optimistic concurrency (opt-in, backward-compatible): the client MAY send
+    // baseVersions = { jobId: updatedAtISO } — the updated_at it loaded for each
+    // job. A job whose server row is now NEWER than that base was changed by
+    // someone else since the client loaded it, so we must NOT overwrite it (that
+    // is the silent cross-user clobber). We skip it and report it as a conflict.
+    // A client that sends no baseVersions writes exactly as before.
+    const bv = (baseVersions && typeof baseVersions === 'object') ? baseVersions : {};
+    const conflicts = [];
+    const versions = {};
 
     const client = await pool.connect();
     let saved = 0;
@@ -555,8 +566,10 @@ router.put('/bulk/save', requireAuth, requireRole('admin', 'pm'), async (req, re
         // Defense in depth: even if the client sends jobs the user can't edit,
         // we re-check here. Admins can edit anything; PMs need ownership or
         // explicit job_access edit grant; corporate is read-only.
+        // FOR UPDATE locks the row for the txn so the version check below cannot
+        // race a concurrent write between the read and the UPDATE.
         const existing = await client.query(
-          'SELECT owner_id FROM jobs WHERE id = $1', [job.id]
+          'SELECT owner_id, updated_at FROM jobs WHERE id = $1 FOR UPDATE', [job.id]
         );
         if (existing.rows.length) {
           let canEdit = false;
@@ -571,6 +584,19 @@ router.put('/bulk/save', requireAuth, requireRole('admin', 'pm'), async (req, re
             canEdit = access.rows.length > 0 && access.rows[0].access_level === 'edit';
           }
           if (!canEdit) { skipped++; continue; }
+          // Version guard: only when the client provided a base for this job.
+          // Compare at millisecond ISO precision (both sides serialize a JS Date
+          // the same way), so no sub-millisecond mismatch. If they differ, the
+          // row moved on since the client loaded it — record a conflict, skip.
+          var base = bv[job.id];
+          if (base) {
+            var serverTs = existing.rows[0].updated_at
+              ? new Date(existing.rows[0].updated_at).toISOString() : null;
+            if (serverTs && serverTs !== base) {
+              conflicts.push({ id: job.id, serverUpdatedAt: serverTs });
+              continue;
+            }
+          }
         }
         const jobBlob = {
           ...job,
@@ -595,11 +621,15 @@ router.put('/bulk/save', requireAuth, requireRole('admin', 'pm'), async (req, re
         const ownerId = (isAdminish(req.user) && job.owner_id) ? job.owner_id : req.user.id;
         const isNewJob = !existing.rows.length;
         const priorOwnerId = isNewJob ? null : existing.rows[0].owner_id;
-        await client.query(
+        const up = await client.query(
           `INSERT INTO jobs (id, owner_id, data) VALUES ($1, $2, $3)
-           ON CONFLICT (id) DO UPDATE SET data = $3, updated_at = NOW()`,
+           ON CONFLICT (id) DO UPDATE SET data = $3, updated_at = NOW()
+           RETURNING updated_at`,
           [job.id, ownerId, JSON.stringify(jobBlob)]
         );
+        // Hand back the new version so the client can advance its base and not
+        // false-conflict on its own next save.
+        if (up.rows[0]) versions[job.id] = new Date(up.rows[0].updated_at).toISOString();
         // Notify the owner when the saving client opted in via the
         // _notify flag on this specific job. Only fires on creation
         // OR explicit reassignment — silent for routine field edits.
@@ -629,7 +659,7 @@ router.put('/bulk/save', requireAuth, requireRole('admin', 'pm'), async (req, re
     } finally {
       client.release();
     }
-    res.json({ ok: true, count: saved, skipped: skipped });
+    res.json({ ok: true, count: saved, skipped: skipped, conflicts: conflicts, versions: versions });
   } catch (e) {
     res.status(500).json({ error: 'Server error' });
   }
