@@ -1296,6 +1296,8 @@ function renderNestedOverlay(){
 window.p86NestedRefresh=renderNestedOverlay;
 // Nested-card interactions (collapse / delete / select) — delegated once at module load.
 document.addEventListener('click', function(e){
+  var coa=e.target.closest('[data-co-alloc]');
+  if(coa){ e.stopPropagation(); openCoAllocEditor(coa.getAttribute('data-co-alloc')); return; }
   var cb=e.target.closest('[data-nc-coll]');
   if(cb){ e.stopPropagation(); var n=E.findNode(cb.getAttribute('data-nc-coll')); if(n){ n._ncColl=!n._ncColl; ncRefreshOpen(); } return; }
   var dtg=e.target.closest('[data-nc-dock-toggle]');
@@ -3775,7 +3777,11 @@ function inspectorSubHtml(sel){
 // progress bar, then a tight 4-cell row (Revenue · Cost · Profit · Margin). Replaces the
 // old 8-tile sprawl; Rev.Earned/Accrued/Budget fold into Cost (act+acc) + the drill-downs.
 function buildingKpiGridHtml(sel){
-  var bRev=E.getBuildingAllocatedRevenue(sel);
+  // Revenue = contract (matrix) + allocated CO, so this headline tile matches
+  // the "Total revenue" the breakdown below it shows. getBuildingAllocatedRevenue
+  // is contract-only; buildingRevSources supplies the additive CO share.
+  var _coRev=0; try{ _coRev=Number(buildingRevSources(sel).coRev)||0; }catch(e){}
+  var bRev=E.getBuildingAllocatedRevenue(sel)+_coRev;
   var pct=E.getT1WeightedPct(sel);
   var revEarned=bRev*(pct/100);
   var act=E.getActual(sel), acc=E.getAccrued(sel), cost=act+acc;
@@ -3806,15 +3812,20 @@ function buildingKpiGridHtml(sel){
 // matrix-formula nuance) folds into an "Other contract allocation" reconciling row.
 function buildingRevSources(sel){
   var contract=[], cos=[], coRev=0;
-  // COs still come from wires. Scopes do NOT — see below.
-  E.wires().forEach(function(w){
-    if(w.toNode!==sel.id) return;
-    var src=E.findNode(w.fromNode); if(!src) return;
-    if(src.type==='co'){
-      var cr=E.getCOIncomeToParent(src, sel.id); coRev+=cr;
-      cos.push({ name:(src.label||'CO').split(' › ')[0].trim(), rev:cr, pct:src.pctComplete||0 });
-    }
-  });
+  // CO revenue on a building = its share of each approved CO's priced total,
+  // from the CO's stored buildingAllocations (NOT a wire walk — that's retired).
+  // The building id the allocation keys on is the appData building id.
+  var _bIdCO=(E.t1BuildingId ? E.t1BuildingId(sel) : (sel.data && sel.data.id));
+  if(_bIdCO){
+    var jidCO=(window.appState&&window.appState.currentJobId)||null;
+    (appData.jobChangeOrders||[]).forEach(function(c){
+      if(!c || (c.status!=='approved' && c.status!=='applied')) return;
+      if(jidCO && c.job_id!==jidCO) return;
+      var v=Number(coBuildingShares(c).byBuilding[_bIdCO])||0;
+      // Math.abs so a deductive (credit) CO's negative share still shows.
+      if(Math.abs(v)>0.5){ coRev+=v; cos.push({ name:(c.co_number||'CO'), rev:v, pct:0, coId:c.id }); }
+    });
+  }
   // SCOPE REVENUE IS MATRIX-ONLY, and lists EVERY matrix row for this building.
   //
   // This used to also walk t2 scope WIRES and then dedupe the matrix rows against
@@ -3836,8 +3847,10 @@ function buildingRevSources(sel){
       contract.push({ name:(p.phase||'Scope'), rev:(p.asSoldRevenue||p.asSoldPhaseBudget||p.phaseBudget||0), pct:Math.max(0,Math.min(100,p.pctComplete||0)), matrix:true });
     });
   }
-  var totalRev=E.getBuildingAllocatedRevenue(sel);
-  var contractRev=totalRev-coRev;
+  // getBuildingAllocatedRevenue is CONTRACT-ONLY (matrix, no CO). CO revenue is
+  // separate (coRev, from buildingAllocations) and ADDITIVE — never subtracted.
+  var matrixTotal=E.getBuildingAllocatedRevenue(sel);
+  var contractRev=matrixTotal;
   // ALLOCATION MODE (contractPct set): this building's contract is its SHARE of the
   // one job-level contract — the engine no longer counts its scope rows toward the
   // contract — so show a single clear allocation row instead of scope rows.
@@ -3845,7 +3858,7 @@ function buildingRevSources(sel){
     var hadScopes=contract.length>0;
     return {
       contract:[{ name:'Contract allocation ('+Number(sel.contractPct).toFixed(1)+'% of job)', rev:contractRev, pct:0, alloc:true }],
-      cos:cos, contractRev:contractRev, coRev:coRev, totalRev:totalRev,
+      cos:cos, contractRev:contractRev, coRev:coRev, totalRev:contractRev+coRev,
       allocMode:true, scopesPresent:hadScopes
     };
   }
@@ -4910,49 +4923,193 @@ function bldgGeoFlag(b){
   if(st==='pin') return ' <span title="Pinned but not traced — draw its footprint for area-driven quantities" style="color:#8b90a5;">📍</span>';
   return ' <span title="Not on the map — trace a footprint or drop a pin" style="color:#fbbf24;">⚠</span>';
 }
-// Change orders allocate on the SAME grid, but stay their own section: a CO is
-// additive to the contract, not a slice of it (the G702 splits them out as
-// "Net change by Change Orders", and the real Waterside G703 carries CO values
-// in the CHANGES columns, not Original Scheduled Value). A CO reaches a building
-// through a graph CO-node wired to it — the same getCOIncomeToParent path the
-// AIA bills from — so an unwired CO is revenue that lands on no building line.
+// ── Change-order → building allocation ─────────────────────────────────────
+// A CO is ADDITIVE to the contract, not a slice of it — the G702 splits COs out
+// as "Net change by Change Orders" and the real Waterside G703 carries CO values
+// in the CHANGES columns, not Original Scheduled Value.
+//
+// A CO's dollars stay priced from its line items (coSellAmount). Its split
+// across buildings lives on the CO itself as data.buildingAllocations =
+// [{buildingId, pct}] — a distribution key, NOT a second copy of the money. This
+// replaced the retired flow where a CO reached a building through a wired CO
+// node (getCOIncomeToParent). The remainder (100% − Σpct) is CO revenue that
+// lands on no building line, surfaced so it can't silently miss the AIA.
+function coBuildingShares(c){
+  var sell = (typeof window.coSellAmount==='function') ? Number(window.coSellAmount(c)||0) : 0;
+  var allocs = Array.isArray(c && c.buildingAllocations) ? c.buildingAllocations : [];
+  // Only count shares to buildings that STILL EXIST on this CO's job. A share
+  // pointed at a deleted building is money that lands on no line — it must fall
+  // into `unallocated` (and trip the banner), not silently disappear from both
+  // the placed total and the warning.
+  var live = {};
+  (appData.buildings||[]).forEach(function(b){ if(b && b.jobId===(c&&c.job_id)) live[b.id]=1; });
+  var byB = {}, placed = 0;
+  allocs.forEach(function(a){
+    if(!a || !a.buildingId || !live[a.buildingId]) return;
+    var pct = Math.max(0, Math.min(100, Number(a.pct)||0));
+    if(pct<=0) return;
+    var amt = sell * pct/100;
+    byB[a.buildingId] = (byB[a.buildingId]||0) + amt;
+    placed += amt;
+  });
+  // Signed remainder so a deductive (credit) CO's unallocated portion still
+  // trips the banner; displays gate on Math.abs.
+  return { sell:sell, byBuilding:byB, placed:placed, unallocated:(sell - placed) };
+}
+
 function coAllocHtml(jid, blds){
   var cos=(appData.jobChangeOrders||[]).filter(function(c){
     return c && c.job_id===jid && (c.status==='approved' || c.status==='applied'); });
   if(!cos.length) return '';
-  var sellOf=function(c){ return (typeof window.coSellAmount==='function') ? Number(window.coSellAmount(c)||0) : 0; };
-  var nodeFor=function(c){
-    var n=c.linked_node_id ? E.findNode(c.linked_node_id) : null;
-    if(n && n.type==='co') return n;
-    return (E.nodes()||[]).find(function(x){ return x.type==='co' && x.data && x.data.id===c.id; }) || null;
-  };
   var h='<div style="margin-top:10px;padding-top:8px;border-top:1px solid var(--ng-border2);">'
    +'<div style="font-size:9px;color:#8b90a5;text-transform:uppercase;letter-spacing:.5px;margin-bottom:5px;">Change orders</div>'
    +'<div style="overflow-x:auto;"><table style="width:100%;border-collapse:collapse;font-size:11px;"><tbody>';
   var coGrand=0, unlinked=0;
   cos.forEach(function(c){
-    var sell=sellOf(c); coGrand+=sell;
-    var node=nodeFor(c);
-    h+='<tr style="border-top:1px solid var(--ng-border2);">'
-      +'<td style="padding:3px 4px;color:var(--ng-text,#c8cbe0);white-space:nowrap;">'+luEsc(c.co_number||'CO')+'</td>'
-      +'<td style="padding:3px 4px;text-align:right;font-family:\'Courier New\',monospace;color:#e879a6;">'+E.fmtC(sell)+'</td>';
-    var placed=0;
+    var sh=coBuildingShares(c); coGrand+=sh.sell;
+    // The whole CO row is a click-target that opens its allocation editor —
+    // John's replacement for "add it to the Site Plan and wire it".
+    h+='<tr data-co-alloc="'+luEsc(c.id)+'" style="border-top:1px solid var(--ng-border2);cursor:pointer;" title="Allocate this change order across buildings">'
+      +'<td style="padding:3px 4px;color:var(--ng-text,#c8cbe0);white-space:nowrap;">'+luEsc(c.co_number||'CO')
+        +' <span style="color:#4f8cff;font-size:9px;">✎ allocate</span></td>'
+      +'<td style="padding:3px 4px;text-align:right;font-family:\'Courier New\',monospace;color:#e879a6;">'+E.fmtC(sh.sell)+'</td>';
     blds.forEach(function(b){
-      var v=0;
-      if(node){ try{ v=Number(E.getCOIncomeToParent(node, b.id))||0; }catch(e){ v=0; } }
-      placed+=v;
+      var v=Number(sh.byBuilding[b.id])||0;
       h+='<td style="padding:3px 4px;text-align:right;font-family:\'Courier New\',monospace;color:'+(v>0?'#e879a6':'#4a4f63')+';font-size:9px;">'+(v>0?E.fmtC(v):'—')+'</td>';
     });
     h+='</tr>';
-    if(sell-placed>0.5) unlinked+=(sell-placed);
+    if(Math.abs(sh.unallocated)>0.5) unlinked+=sh.unallocated;
   });
   h+='</tbody></table></div>';
   var jc=ngJobContract();
   h+='<div style="display:flex;align-items:center;gap:6px;margin-top:5px;font-size:11px;"><span style="flex:1;color:#8b90a5;">Contract + change orders</span>'
     +'<span style="font-family:\'Courier New\',monospace;color:#34d399;font-weight:700;">'+E.fmtC(jc+coGrand)+'</span></div>';
-  if(unlinked>0.5) h+='<div style="font-size:10px;color:#f87171;padding:3px 0;">'+E.fmtC(unlinked)+' of change-order revenue is not allocated to any building — it will not appear on the AIA as a building line. Add the CO to the Site Plan and wire it to the buildings it covers.</div>';
-  return h;
+  if(Math.abs(unlinked)>0.5) h+='<div style="font-size:10px;color:#f87171;padding:3px 0;">'+E.fmtC(unlinked)+' of change-order revenue is not allocated to any building — it will not appear on the AIA as a building line. Click a change order above to allocate it.</div>';
+  return h+'</div>';
 }
+
+// The allocation editor — a self-contained overlay (NOT the node inspector,
+// which is node-driven and a CO is no longer a node). Percent-only: the CO's
+// dollar total stays priced from its lines, so a stored percent keeps flowing
+// when the lines change. Mirrors the building-first phase editor's ergonomics.
+function openCoAllocEditor(coId){
+  var c=(appData.jobChangeOrders||[]).find(function(x){ return x && x.id===coId; });
+  if(!c){ return; }
+  var frozen = (c.status==='applied') || c.is_locked;
+  var jid=c.job_id;
+  var buildings=(appData.buildings||[]).filter(function(b){ return b.jobId===jid; });
+  var sell=(typeof window.coSellAmount==='function') ? Number(window.coSellAmount(c)||0) : 0;
+  var uW=function(b){ return (b.units&&b.units.length)?b.units.length:0; };
+  var lW=function(b){ return (b.levels&&b.levels.length)?b.levels.length:0; };
+
+  // Local state seeded from the CO's stored allocation. A building already in
+  // buildingAllocations is on+manual at its stored pct; others start off.
+  var st={}; buildings.forEach(function(b){ st[b.id]={on:false,pct:0,manual:false}; });
+  var seeded=Array.isArray(c.buildingAllocations)?c.buildingAllocations:[];
+  seeded.forEach(function(a){ if(a && st[a.buildingId]){ st[a.buildingId]={on:true,pct:Math.max(0,Math.min(100,Number(a.pct)||0)),manual:true}; } });
+  var hadAny=seeded.length>0;
+  // A never-allocated CO opens with all buildings on, units-split — the "assign
+  // to N buildings in one shot" default; the user clears what doesn't apply.
+  if(!hadAny){ buildings.forEach(function(b){ st[b.id].on=true; }); }
+  var split='units';
+
+  function recompute(){
+    var on=buildings.filter(function(b){ return st[b.id].on; });
+    var manualSum=0, autoIds=[];
+    on.forEach(function(b){ if(st[b.id].manual) manualSum+=st[b.id].pct; else autoIds.push(b.id); });
+    var remain=Math.max(0,100-manualSum), wsum=0, w={};
+    autoIds.forEach(function(id){ var b=buildings.find(function(x){return x.id===id;}); var wt=split==='even'?1:(split==='levels'?lW(b):uW(b)); w[id]=wt; wsum+=wt; });
+    if(split!=='even'&&wsum===0){ autoIds.forEach(function(id){ w[id]=1; wsum+=1; }); }
+    autoIds.forEach(function(id){ st[id].pct=wsum>0?remain*(w[id]/wsum):0; });
+  }
+  function totalPct(){ return buildings.reduce(function(s,b){ return s+(st[b.id].on?st[b.id].pct:0); },0); }
+
+  var ov=document.createElement('div');
+  ov.className='co-alloc-ov';
+  ov.style.cssText='position:fixed;inset:0;z-index:1000;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:20px;';
+  function close(){ if(ov.parentNode) ov.parentNode.removeChild(ov); document.removeEventListener('keydown',onKey,true); }
+  function onKey(e){ if(e.key==='Escape'){ e.preventDefault(); close(); } }
+  document.addEventListener('keydown',onKey,true);
+  ov.addEventListener('mousedown',function(e){ if(e.target===ov) close(); });
+
+  function body(){
+    recompute();
+    var chips=buildings.map(function(b){
+      return '<div class="cae-chip'+(st[b.id].on?' on':'')+'" data-cae-chip="'+b.id+'"><span class="cae-tick">'+(st[b.id].on?'✓':'')+'</span>'+luEsc(b.name||'Building')+' <span class="cae-u">'+uW(b)+'u</span></div>';
+    }).join('') || '<div style="color:#8b90a5;font-size:12px;padding:4px 0;">This job has no buildings yet — add buildings first.</div>';
+    var rows=buildings.map(function(b){
+      var on=st[b.id].on, pct=Math.round(st[b.id].pct*10)/10, amt=sell*(on?st[b.id].pct:0)/100;
+      return '<div class="cae-line'+(on?'':' off')+'"><span class="cae-nm">'+luEsc(b.name||'Building')+'</span>'
+        +(on?'<span class="cae-pin"><input data-cae-in="'+b.id+'" value="'+pct+'">%</span>':'<span style="color:#4a4f63;width:66px;text-align:right;">—</span>')
+        +'<span class="cae-amt">'+(on?E.fmtC(amt):'—')+'</span></div>';
+    }).join('');
+    // Gate Save on the SAME tolerance the server uses (0.01% of rounding per
+    // allocated row) so the UI never shows "✓ 100%" and lets you Save a total
+    // the server then 422s. A manual 50.02+50.02 across 2 buildings is 100.04%
+    // and must read as over, not a green check.
+    var _onN=buildings.filter(function(b){ return st[b.id].on && st[b.id].pct>0.001; }).length;
+    var _tol=0.01*_onN+0.001;
+    var tp=totalPct(), ok=Math.abs(tp-100)<_tol, over=tp>100+_tol, un=Math.max(0,sell*(100-tp)/100);
+    return ''
+      +'<div class="cae-hd"><span class="cae-badge">'+luEsc(c.co_number||'CO')+'</span>'
+        +'<span class="cae-title">'+luEsc((c.title||c.description||'Change order')).slice(0,60)+'</span>'
+        +'<span class="cae-total">'+E.fmtC(sell)+'</span></div>'
+      +'<div class="cae-sub">Priced from its line items. Stores a <b>%</b> per building, so this flows through when the CO\'s lines change.</div>'
+      +(frozen?'<div class="cae-frozen">This change order is '+(c.is_locked?'locked':'applied')+' — unlock it to change its allocation.</div>':'')
+      +'<div class="cae-field"><span class="cae-lbl">Split</span><span class="cae-seg" id="caeSplit">'
+        +'<button data-split="even" class="'+(split==='even'?'on':'')+'">Even</button>'
+        +'<button data-split="units" class="'+(split==='units'?'on':'')+'">Units</button>'
+        +'<button data-split="levels" class="'+(split==='levels'?'on':'')+'">Levels</button></span>'
+        +'<span style="margin-left:auto;display:flex;gap:8px;"><button class="cae-link" id="caeAll">All</button><button class="cae-link" id="caeClear">Clear</button></span></div>'
+      +'<div class="cae-chips">'+chips+'</div>'
+      +'<div class="cae-tbl">'+rows+'</div>'
+      +'<div class="cae-meter"><div class="cae-bar"><i style="width:'+Math.min(100,tp)+'%"></i></div>'
+        +'<span class="cae-mlbl '+(ok?'ok':'warn')+'">Allocated '+(Math.round(tp*10)/10)+'%'+(ok?' ✓':(over?' ⚠ over 100%':''))+'</span></div>'
+      +(un>0.5&&!over?'<div class="cae-un">'+E.fmtC(un)+' will stay unallocated (on no building line)</div>':'')
+      +'<div class="cae-foot"><button class="cae-btn ghost" id="caeCancel">Cancel</button>'
+        +'<button class="cae-btn primary" id="caeSave"'+((frozen||over)?' disabled':'')+'>Save allocation</button></div>';
+  }
+  function paint(){
+    ov.innerHTML='<div class="co-alloc-modal">'+body()+'</div>';
+    var m=ov.firstChild;
+    [].forEach.call(m.querySelectorAll('[data-cae-chip]'),function(el){ if(frozen) return; el.onclick=function(){ var id=el.getAttribute('data-cae-chip'); st[id].on=!st[id].on; if(!st[id].on){st[id].manual=false;st[id].pct=0;} paint(); }; });
+    [].forEach.call(m.querySelectorAll('[data-cae-in]'),function(inp){ if(frozen){inp.disabled=true;return;} inp.onchange=function(){ var id=inp.getAttribute('data-cae-in'); st[id].manual=true; st[id].pct=Math.max(0,Math.min(100,parseFloat(inp.value)||0)); paint(); }; });
+    var sp=m.querySelector('#caeSplit'); if(sp&&!frozen) sp.onclick=function(e){ var b=e.target.closest('button'); if(!b) return; split=b.dataset.split; buildings.forEach(function(x){ st[x.id].manual=false; }); paint(); };
+    var al=m.querySelector('#caeAll'); if(al&&!frozen) al.onclick=function(){ buildings.forEach(function(b){ st[b.id].on=true; st[b.id].manual=false; }); paint(); };
+    var cl=m.querySelector('#caeClear'); if(cl&&!frozen) cl.onclick=function(){ buildings.forEach(function(b){ st[b.id].on=false; st[b.id].manual=false; st[b.id].pct=0; }); paint(); };
+    var cc=m.querySelector('#caeCancel'); if(cc) cc.onclick=close;
+    var sv=m.querySelector('#caeSave'); if(sv) sv.onclick=save;
+  }
+  function save(){
+    recompute();
+    var picked=buildings.filter(function(b){ return st[b.id].on && st[b.id].pct>0.001; });
+    // Largest-remainder rounding to 2dp: round each share down to hundredths,
+    // then hand the leftover hundredths to the biggest fractional parts. The
+    // stored pcts sum to EXACTLY round2(Σ raw) — no drift. Without this, six
+    // equal buildings each round 16.6667→16.67 and the set sums to 100.02,
+    // which the server's ≤100 guard rejects on a perfectly valid even split.
+    var raw=picked.map(function(b){ return st[b.id].pct; });
+    var target=Math.round(raw.reduce(function(s,v){return s+v;},0)*100); // hundredths
+    var floors=raw.map(function(v){ return Math.floor(v*100); });
+    var used=floors.reduce(function(s,v){return s+v;},0);
+    var order=raw.map(function(v,i){ return {i:i, frac:v*100-floors[i]}; }).sort(function(a,b){ return b.frac-a.frac; });
+    for(var k=0; k<order.length && used<target; k++){ floors[order[k].i]+=1; used+=1; }
+    var allocations=picked.map(function(b,i){ return { buildingId:b.id, pct:floors[i]/100 }; });
+    var sv=ov.querySelector('#caeSave'); if(sv){ sv.disabled=true; sv.textContent='Saving…'; }
+    p86Api.changeOrders.setAllocations(c.id, allocations).then(function(){
+      c.buildingAllocations=allocations;   // reflect on the in-memory record
+      try{ localStorage.setItem('p86-jobs-jobchangeorders', JSON.stringify(appData.jobChangeOrders||[])); }catch(e){}
+      close();
+      if(typeof render==='function') render();
+      if(typeof window.p86RerenderJobCards==='function') try{ window.p86RerenderJobCards(jid); }catch(e){}
+    }).catch(function(err){
+      if(sv){ sv.disabled=false; sv.textContent='✗ '+((err&&err.message)||'Save failed'); }
+    });
+  }
+  paint();
+  document.body.appendChild(ov);
+}
+window.openCoAllocEditor=openCoAllocEditor;
 function wirePctEdit(wpc){
   var wpPhId=wpc.getAttribute('data-wire-pct-phase');
   var wpBId=wpc.getAttribute('data-wire-pct-bldg');

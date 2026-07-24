@@ -158,20 +158,47 @@
       }
     });
     // Change orders — approved/applied only, priced through coSellAmount (the
-    // same pipeline getJobCOTotals sums). They carry no building allocation yet,
-    // so they bill at job level; that lands per-building once a CO becomes a
-    // scope in the matrix. computeSummary already routes type==='co' to G702
-    // line 2 "Net change by Change Orders", never line 1 Original Contract Sum.
+    // same pipeline getJobCOTotals sums). A CO now carries a per-building split
+    // in data.buildingAllocations (percent per building); we bill each allocated
+    // share as its OWN per-building line so it lands in the G703 CHANGES columns
+    // against that building, and any unallocated remainder as a job-level
+    // "General" line. computeSummary routes every type==='co' line to G702 line 2
+    // "Net change by Change Orders", never line 1 Original Contract Sum, so the
+    // split into building lines does not blur the contract-vs-CO separation.
+    var bldgById = {}; buildings.forEach(function (b) { bldgById[b.id] = b; });
     var cos = (app.jobChangeOrders || []).filter(function (c) {
       return c && c.job_id === jobId && (c.status === 'approved' || c.status === 'applied');
     });
     cos.forEach(function (c) {
       var sell = (typeof window.coSellAmount === 'function') ? num(window.coSellAmount(c)) : 0;
-      if (sell <= 0.005) return;
-      lines.push({ id: 'ln_co_' + c.id, nodeId: null, buildingId: '__gen', buildingName: 'General',
-        description: String(c.co_number || 'CO') + ' - ' + String(c.title || 'Change Order'),
-        type: 'co', scheduledValue: round2(sell), pctComplete: 0,
-        stored: 0, retainagePct: null, previous: 0 });
+      // Math.abs so a deductive (credit) CO still bills; a true $0 CO is skipped.
+      if (Math.abs(sell) <= 0.005) return;
+      var desc = String(c.co_number || 'CO') + ' — ' + String(c.title || 'Change Order');
+      var allocs = Array.isArray(c.buildingAllocations) ? c.buildingAllocations : [];
+      var placed = 0;
+      allocs.forEach(function (a) {
+        // Only a building that still exists on this job; a share pointed at a
+        // deleted building falls into the remainder below, never vanishes.
+        if (!a || !a.buildingId || !bldgById[a.buildingId]) return;
+        var pct = Math.max(0, Math.min(100, num(a.pct)));
+        if (pct <= 0) return;
+        // Accumulate the ROUNDED share (what the line actually bills), so the
+        // remainder below absorbs the per-line 2dp residue and the emitted lines
+        // sum EXACTLY to round2(sell) — no penny created or lost on G702 line 2.
+        var amt = round2(sell * pct / 100);
+        placed += amt;
+        lines.push({ id: 'ln_co_' + c.id + '__' + a.buildingId, nodeId: null, buildingId: a.buildingId,
+          buildingName: bldgById[a.buildingId].name || 'Building', description: desc,
+          type: 'co', scheduledValue: amt, pctComplete: 0,
+          stored: 0, retainagePct: null, previous: 0 });
+      });
+      var remainder = round2(sell) - placed;
+      if (Math.abs(remainder) > 0.005) {
+        lines.push({ id: 'ln_co_' + c.id, nodeId: null, buildingId: '__gen', buildingName: 'General',
+          description: desc + (Math.abs(placed) > 0.005 ? ' (unallocated)' : ''),
+          type: 'co', scheduledValue: round2(remainder), pctComplete: 0,
+          stored: 0, retainagePct: null, previous: 0 });
+      }
     });
     // Completeness pass — once ANY scope×building line exists, a building that
     // produced none would silently vanish from the schedule (Tier 2 below only

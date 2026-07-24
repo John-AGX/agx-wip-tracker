@@ -453,6 +453,70 @@ router.put('/change-orders/:id/lock', requireAuth, requireCapability('ESTIMATES_
   }
 });
 
+// POST /api/change-orders/:id/allocations — set how this CO's revenue is
+// split across the job's buildings. Body: { buildingAllocations: [{buildingId,
+// pct}] } where pct is 0..100 and the set need not sum to 100 (the remainder
+// is CO revenue that lands on no building line — surfaced as unallocated).
+//
+// A DEDICATED endpoint on purpose: it read-modify-writes ONLY
+// data.buildingAllocations, so it can never clobber the CO's line items the way
+// a full-blob PUT from a stale client cache could. The CO's dollar total stays
+// priced from its lines; this only stores the distribution key. Org-scoped
+// through the job join; an applied CO is frozen (its lines are already in the
+// WIP), and a locked one must be unlocked first — same guards as the editor.
+router.post('/change-orders/:id/allocations', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req, res) => {
+  try {
+    const id = req.params.id;
+    const existing = await pool.query(
+      `SELECT co.status, co.is_locked, co.data FROM job_change_orders co
+         JOIN jobs j ON j.id = co.job_id
+        WHERE co.id = $1 AND (j.organization_id = $2 OR j.organization_id IS NULL)`,
+      [id, req.user.organization_id]
+    );
+    if (!existing.rowCount) return res.status(404).json({ error: 'Not found' });
+    const cur = existing.rows[0];
+    if (cur.status === 'applied') return res.status(409).json({ error: 'Cannot re-allocate an applied change order' });
+    if (cur.is_locked) return res.status(409).json({ error: 'Cannot re-allocate a locked change order. Unlock it first.' });
+
+    // Sanitize: keep only well-formed rows, clamp pct to 0..100, drop zero/empty,
+    // and dedupe by buildingId keeping the last. A CO cannot over-allocate past
+    // 100% — the endpoint rejects a set that sums beyond it rather than storing
+    // a distribution that would bill more than the CO is worth.
+    const raw = Array.isArray(req.body && req.body.buildingAllocations) ? req.body.buildingAllocations : [];
+    const byBldg = new Map();
+    for (const a of raw) {
+      if (!a || !a.buildingId) continue;
+      const pct = Math.max(0, Math.min(100, Number(a.pct) || 0));
+      if (pct <= 0) continue;
+      byBldg.set(String(a.buildingId), pct);
+    }
+    const allocations = Array.from(byBldg, ([buildingId, pct]) => ({ buildingId, pct }));
+    // Tolerance absorbs 2-decimal per-row rounding on the client (N rows can
+    // each carry up to 0.01% of rounding), so a legitimate 100% split across
+    // many buildings is never rejected as "over".
+    const sum = allocations.reduce((s, a) => s + a.pct, 0);
+    if (sum > 100 + 0.01 * allocations.length + 0.001) {
+      return res.status(422).json({ error: `Building allocations sum to ${sum.toFixed(2)}% — cannot exceed 100%.` });
+    }
+
+    const data = (cur.data && typeof cur.data === 'object') ? cur.data : {};
+    data.buildingAllocations = allocations;
+    const { rows } = await pool.query(
+      `UPDATE job_change_orders
+          SET data = $1::jsonb,
+              updated_at = CASE WHEN data IS DISTINCT FROM $1::jsonb THEN NOW() ELSE updated_at END
+        WHERE id = $2
+        RETURNING id, job_id, owner_id, status, co_number, data, approved_at,
+                  approved_by, linked_node_id, is_locked, created_at, updated_at`,
+      [JSON.stringify(data), id]
+    );
+    res.json({ change_order: shapeRow(rows[0]) });
+  } catch (e) {
+    console.error('POST /api/change-orders/:id/allocations error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // POST /api/change-orders/:id/link-node — wire CO to a nodegraph CO node.
 // Body: { node_id }. The node must exist in the job's graph and be of
 // type 'co'. Pass node_id: null to unlink.

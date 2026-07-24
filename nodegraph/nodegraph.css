@@ -1240,3 +1240,53 @@ body.light-mode .ng-pop-check:hover{background:rgba(15,23,42,.05);}
 body.light-mode .ng-im{background:#fff;border-color:#e2e8f0;}
 .ng-insp-home{display:inline-flex;align-items:center;gap:5px;margin:0 0 10px;padding:5px 11px;background:transparent;border:1px solid var(--ng-border,#262b33);border-radius:8px;color:var(--text-dim,#8b929e);font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;}
 .ng-insp-home:hover{color:var(--text,#e8eaed);border-color:#4f8cff;background:rgba(79,140,255,.08);}
+
+/* ── Change-order → building allocation editor (overlay) ───────────────── */
+.co-alloc-modal{width:440px;max-width:calc(100vw - 40px);max-height:calc(100vh - 40px);overflow-y:auto;
+  background:var(--ng-input,#131318);border:1px solid var(--ng-border2,#26262e);border-radius:12px;
+  box-shadow:0 24px 60px rgba(0,0,0,.55);font-family:'Segoe UI',system-ui,sans-serif;color:var(--ng-text,#f0f0f3)}
+.cae-hd{display:flex;align-items:baseline;gap:9px;padding:14px 15px 5px}
+.cae-badge{font-size:9.5px;font-weight:700;letter-spacing:.04em;padding:2px 7px;border-radius:5px;
+  background:rgba(251,191,36,.16);color:#fbbf24;border:1px solid rgba(251,191,36,.30)}
+.cae-title{font-weight:600;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.cae-total{margin-left:auto;font-family:'Courier New',monospace;color:#fbbf24;font-size:14px;font-weight:600}
+.cae-sub{font-size:11px;color:var(--ng-dim2,#6b6b78);padding:0 15px 12px}
+.cae-sub b{color:var(--ng-dim,#9a9aa6)}
+.cae-frozen{margin:0 15px 10px;font-size:11px;color:#fbbf24;background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.25);border-radius:7px;padding:7px 10px}
+.cae-field{display:flex;align-items:center;gap:8px;padding:10px 15px;border-top:1px solid var(--ng-border2,#26262e);flex-wrap:wrap}
+.cae-lbl{font-size:10.5px;color:var(--ng-dim,#9a9aa6);text-transform:uppercase;letter-spacing:.04em}
+.cae-seg{display:inline-flex;border:1px solid var(--ng-border,#33333d);border-radius:7px;overflow:hidden}
+.cae-seg button{background:transparent;border:0;color:var(--ng-dim,#9a9aa6);font-family:inherit;font-size:11px;padding:5px 11px;cursor:pointer;border-right:1px solid var(--ng-border,#33333d)}
+.cae-seg button:last-child{border-right:0}
+.cae-seg button.on{background:#4f8cff;color:#fff}
+.cae-link{background:transparent;border:0;color:#4f8cff;font-size:11px;cursor:pointer;font-family:inherit;padding:2px 4px}
+.cae-link:hover{text-decoration:underline}
+.cae-chips{display:flex;flex-wrap:wrap;gap:7px;padding:11px 15px 4px}
+.cae-chip{display:inline-flex;align-items:center;gap:7px;padding:6px 10px;border-radius:8px;cursor:pointer;
+  border:1px solid var(--ng-border,#33333d);background:var(--ng-surface2,#16161b);color:var(--ng-dim,#9a9aa6);font-size:12px;transition:all .12s;user-select:none}
+.cae-chip:hover{border-color:var(--ng-dim2,#6b6b78);color:var(--ng-text,#f0f0f3)}
+.cae-chip.on{border-color:#fbbf24;background:rgba(251,191,36,.12);color:var(--ng-text,#f0f0f3)}
+.cae-tick{width:14px;height:14px;border-radius:4px;border:1.5px solid var(--ng-dim2,#6b6b78);display:inline-flex;align-items:center;justify-content:center;font-size:9px}
+.cae-chip.on .cae-tick{background:#fbbf24;border-color:#fbbf24;color:#1a1400}
+.cae-u{font-size:10px;color:var(--ng-dim2,#6b6b78)}
+.cae-tbl{padding:4px 15px 6px}
+.cae-line{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--ng-border2,#26262e)}
+.cae-line:last-child{border-bottom:0}
+.cae-line.off{opacity:.4}
+.cae-nm{flex:1;font-size:12.5px}
+.cae-pin{width:66px;text-align:right;color:var(--ng-dim,#9a9aa6);font-size:12px}
+.cae-pin input{width:46px;background:var(--ng-input,#131318);border:1px solid var(--ng-border,#33333d);border-radius:5px;color:var(--ng-text,#f0f0f3);font-family:'Courier New',monospace;font-size:12px;padding:3px 6px;text-align:right;margin-right:2px}
+.cae-amt{width:84px;text-align:right;font-family:'Courier New',monospace;color:#fbbf24;font-size:12.5px}
+.cae-line.off .cae-amt{color:var(--ng-dim2,#6b6b78)}
+.cae-meter{display:flex;align-items:center;gap:10px;padding:11px 15px}
+.cae-bar{flex:1;height:7px;border-radius:4px;background:var(--ng-surface2,#16161b);overflow:hidden}
+.cae-bar>i{display:block;height:100%;background:#fbbf24;transition:width .18s}
+.cae-mlbl{font-size:12px;font-weight:600}
+.cae-mlbl.ok{color:#34d399}.cae-mlbl.warn{color:#f87171}
+.cae-un{font-size:10.5px;color:#f87171;padding:0 15px 6px}
+.cae-foot{display:flex;justify-content:flex-end;gap:8px;padding:12px 15px 15px;border-top:1px solid var(--ng-border2,#26262e)}
+.cae-btn{font-family:inherit;font-size:12px;padding:7px 15px;border-radius:8px;cursor:pointer;border:1px solid var(--ng-border,#33333d)}
+.cae-btn.ghost{background:transparent;color:var(--ng-dim,#9a9aa6)}
+.cae-btn.ghost:hover{color:var(--ng-text,#f0f0f3);border-color:var(--ng-dim2,#6b6b78)}
+.cae-btn.primary{background:#4f8cff;border-color:#4f8cff;color:#fff;font-weight:600}
+.cae-btn.primary:disabled{opacity:.5;cursor:not-allowed}

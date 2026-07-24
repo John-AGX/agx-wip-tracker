@@ -318,6 +318,11 @@
     linkNode: function(id, nodeId) {
       return post('/api/change-orders/' + encodeURIComponent(id) + '/link-node', { node_id: nodeId });
     },
+    // Set the CO's per-building revenue split. allocations = [{buildingId, pct}].
+    // Writes only data.buildingAllocations server-side; never touches the lines.
+    setAllocations: function(id, allocations) {
+      return post('/api/change-orders/' + encodeURIComponent(id) + '/allocations', { buildingAllocations: allocations || [] });
+    },
     remove: function(id) {
       return del('/api/change-orders/' + encodeURIComponent(id));
     },

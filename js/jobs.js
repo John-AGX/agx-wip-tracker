@@ -3532,6 +3532,9 @@ function renderJobsMain() {
                 var arrow = document.getElementById(id + '-arrow'); if (arrow) arrow.textContent = '▼';
             });
         }
+        // Exposed so the Site-Plan CO allocation editor (nodegraph/ui.js) can
+        // repaint the classic job-overview building cards after it saves.
+        window.p86RerenderJobCards = p86RerenderJobCards;
         function p86CommitInline(span, rawStr) {
             var ent = span.getAttribute('data-inl-ent'),
                 id = span.getAttribute('data-inl-id'),
@@ -3660,7 +3663,10 @@ function renderJobsMain() {
                         '<td class="p86-bldg-cell p86-bldg-cell-num accent">' +
                             formatCurrency(eff.amount) +
                             (eff.derived ? '<span class="p86-bldg-co-tag" title="No explicit building budget — derived from this building\'s phase revenue">auto</span>' : '') +
-                            (building.coBudget ? '<span class="p86-bldg-co-tag">+' + formatCurrency(building.coBudget) + '</span>' : '') +
+                            // Legacy building.coBudget "+$X" tag retired: CO→building
+                            // revenue now lives in the CO's buildingAllocations and
+                            // renders in the building card's Change Orders block, so
+                            // this stale wire-era scalar would double-display.
                         '</td>' +
                         '<td class="p86-bldg-cell p86-bldg-cell-num accent">' +
                             formatCurrency(buildingCost) +
