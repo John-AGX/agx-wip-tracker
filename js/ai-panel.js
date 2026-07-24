@@ -1147,6 +1147,10 @@ function p86Ask(message, opts) {
       // Wrapped in a column so messages + presets + input live together
       // as the right pane of the row layout.
       '<div id="ai-content" style="flex:1;display:flex;flex-direction:column;min-width:0;min-height:0;">' +
+      // Per-entity digest card — a compact snapshot of the job / lead / estimate
+      // this chat is about (contract, profit, % complete, status), from the same
+      // rollups the workspace header uses. The "you\'re chatting about THIS" card.
+      '<div id="ai-entity-digest" style="flex-shrink:0;"></div>' +
       '<div id="ai-messages" style="flex:1;overflow-y:auto;overflow-x:hidden;min-width:0;padding:22px 20px;display:flex;flex-direction:column;gap:20px;font-size:13px;color:var(--text,#e6e6e6);"></div>' +
       // Pending approvals — Scribe drafts from DETACHED/background runs.
       // Inline cards only render during a live turn's SSE stream, so
@@ -1603,6 +1607,7 @@ function p86Ask(message, opts) {
     // Photos toggle and proposal cards only make sense on the estimate
     // side. Hide / disable them when running against a job.
     refreshModeSpecificUI();
+    renderPanelDigest();   // entity snapshot at the top of the chat
     setTimeout(function() {
       var inp = document.getElementById('ai-input');
       if (inp) inp.focus();
@@ -2697,6 +2702,57 @@ function p86Ask(message, opts) {
         }
       });
     });
+  }
+
+  // Per-entity digest card at the top of the chat — a compact snapshot of the
+  // job / lead / estimate this session is about, from the SAME client rollups
+  // the workspace header uses (getJobWIP etc.). Only shown on an entity surface;
+  // the general / ask86 / staff / intake modes get nothing. Reuses the shared
+  // p86EntityCard component so it matches the cards elsewhere in the app.
+  function renderPanelDigest() {
+    var host = document.getElementById('ai-entity-digest');
+    if (!host) return;
+    var type = _entityType, id = _entityId;
+    if (!id || id === '__global__' || (type !== 'job' && type !== 'estimate' && type !== 'lead')
+        || !window.p86EntityCard || typeof window.p86EntityCard.render !== 'function') {
+      host.innerHTML = ''; return;
+    }
+    var A = window.appData || {};
+    var EC = window.p86EntityCard;
+    var sm = function(n) { return (typeof formatCurrency === 'function') ? formatCurrency(n) : ('$' + Math.round(n || 0).toLocaleString()); };
+    var vm = null;
+    if (type === 'job') {
+      var job = (A.jobs || []).find(function(j) { return j && String(j.id) === String(id); });
+      if (!job) { host.innerHTML = ''; return; }
+      var w = (typeof window.getJobWIP === 'function') ? (window.getJobWIP(id) || {}) : {};
+      var contract = (w.contractIncome != null) ? w.contractIncome
+                   : (w.totalIncome != null) ? w.totalIncome
+                   : (Number(job.contractAmount) || 0);
+      var profit = (w.displayProfit != null) ? w.displayProfit : 0;
+      var stats = [
+        { label: 'Contract', value: sm(contract) },
+        { label: 'Profit', value: (profit < 0 ? '-' : '+') + sm(Math.abs(profit)), tone: profit < 0 ? 'neg' : 'pos' }
+      ];
+      if (w.coIncome) stats.push({ label: 'COs', value: sm(w.coIncome) });
+      vm = { kind: 'job', status: { label: job.status || 'In Progress', color: (EC.jobStatusColor ? EC.jobStatusColor(job.status) : null) },
+        number: job.jobNumber || '', title: job.title || job.name || '', subtitle: job.client || '',
+        ring: { pct: (w.pctComplete || 0) }, stats: stats };
+    } else if (type === 'estimate') {
+      var est = (A.estimates || []).find(function(e) { return e && String(e.id) === String(id); });
+      if (!est) { host.innerHTML = ''; return; }
+      vm = { kind: 'estimate', status: { label: est.status || 'Draft', color: (EC.estimateStatusColor ? EC.estimateStatusColor(est.status) : null) },
+        title: est.name || est.client || 'Estimate', subtitle: est.client || '' };
+    } else {
+      var lead = (A.leads || []).find(function(l) { return l && String(l.id) === String(id); });
+      if (!lead) { host.innerHTML = ''; return; }
+      vm = { kind: 'lead', status: { label: lead.status || 'New', color: (EC.leadStatusColor ? EC.leadStatusColor(lead.status) : null) },
+        title: lead.title || lead.property_name || 'Lead', subtitle: lead.street_address || lead.city || '',
+        ring: (lead.confidence != null ? { pct: Number(lead.confidence) || 0 } : null) };
+    }
+    if (!vm) { host.innerHTML = ''; return; }
+    try {
+      host.innerHTML = '<div style="padding:10px 12px 0 12px;">' + EC.render(vm, { compact: true }) + '</div>';
+    } catch (e) { host.innerHTML = ''; }
   }
 
   function renderMessages() {
