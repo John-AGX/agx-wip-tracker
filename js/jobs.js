@@ -378,16 +378,18 @@ function renderJobsMain() {
             // nodegraph/ui.js) — use it as-is. With no graph yet, add QB onto the
             // manual cost total here. Counted exactly once either way (the engine
             // no longer folds QB per-node).
-            // ACTUAL cost counts ONLY QuickBooks lines LINKED to a cost node
-            // (linked_node_id). Unlinked QB is excluded entirely — John's rule:
-            // "if a cost from QuickBooks isn't linked, don't show it in actual
-            // costs." Link a cost to a node (Site Map / cost inbox) to make it
-            // count. qbActualCosts/qbCostLineCount reflect the LINKED set only.
+            // ACTUAL cost = the QuickBooks import total (node retirement). Every QB
+            // line for the job counts, whether or not it's linked to a graph node —
+            // the old "only linked QB counts" rule is retired (it left $263K on
+            // RV2000 and $188K on RV2001 reading as $0 because their lines were never
+            // node-linked). QB is the cost spine: `js/cost-buckets.js` groups these
+            // same lines by account into the canonical buckets, and this figure
+            // reconciles to that QB portion. qbActualCosts/qbCostLineCount now reflect
+            // the FULL set of QB lines for the job.
             let qbActualCosts = 0, qbCostLineCount = 0, qbCostsAsOf = null;
             try {
                 const qbLines = (window.appData && Array.isArray(appData.qbCostLines))
-                    ? appData.qbCostLines.filter(l => (l.job_id || l.jobId) === jobId
-                        && (l.linked_node_id != null || l.linkedNodeId != null)) : [];
+                    ? appData.qbCostLines.filter(l => (l.job_id || l.jobId) === jobId) : [];
                 qbCostLineCount = qbLines.length;
                 qbLines.forEach(l => {
                     qbActualCosts += Number(l.amount || 0);
@@ -395,27 +397,19 @@ function renderJobsMain() {
                     if (d && (!qbCostsAsOf || String(d) > String(qbCostsAsOf))) qbCostsAsOf = String(d).slice(0, 10);
                 });
             } catch (e) {}
-            // Graph's MANUAL/wired cost only. ngActualCosts explicitly EXCLUDES QB
-            // — the ui.js assembly is `getOutput(wipNode,1) + jobMat/Lab/Equip/GC`
-            // and cost-node getActual/getOutput return `items || n.value` (no QB);
-            // "QB is folded in by getJobWIP, NOT here." Falls back to the phase/
-            // building manual total before the graph has computed.
+            // Graph's MANUAL/wired cost — the fallback when a job has NO QB lines yet
+            // (ngActualCosts explicitly excludes QB; falls back to the phase/building
+            // manual total before the graph has computed).
             const baseActualCosts = (job.ngActualCosts != null) ? job.ngActualCosts : getJobTotalCost(jobId).total;
-            // ACTUAL = manual/wired graph cost + every LINKED QB line for the job.
-            // qbActualCosts is summed at the JOB level (all lines with a
-            // linked_node_id, above), so linked QB totals no matter which tier the
-            // line is linked to — job, building, phase, or a specific cost node —
-            // and it's added exactly once regardless of graph topology. Unlinked QB
-            // is excluded (John's rule). Stateless — correct on the jobs list +
-            // unopened jobs. (No double-count: ngActualCosts carries no QB.)
-            // + sub/PO bills (job_vendor_bills): what the sub has BILLED you is
-            // incurred cost, so it rolls into ACTUAL — not left stranded once it
-            // clears accrued (getJobPOAccrued nets billed out, so no double-count).
-            // No QB link on bills, so a cost entered as BOTH a P86 bill and a linked
-            // QB line would count twice — subs bill via Bills, QB carries materials,
-            // so they don't overlap in practice.
             const billedCost = (typeof getJobBilledCost === 'function') ? getJobBilledCost(jobId) : 0;
-            const actualCosts = baseActualCosts + qbActualCosts + billedCost;
+            // When the job has QB lines, the QB total IS the actual cost (it REPLACES
+            // the graph/manual base — QB is the source of truth, so a stale manual
+            // cost-node placeholder doesn't add on top). With no QB, fall back to the
+            // graph/manual base. Sub/PO bills (job_vendor_bills) are incurred cost and
+            // add in either case — subs bill via Bills, QB carries materials/labor, so
+            // in practice they don't overlap. (Per-source attribution + any bucket
+            // override lives in the cost-buckets view.)
+            const actualCosts = (qbActualCosts > 0 ? qbActualCosts : baseActualCosts) + billedCost;
             const contractIncome = job.contractAmount || 0;
             const estimatedCosts = job.estimatedCosts || 0;
             const totalIncome = contractIncome + co.income;
@@ -2925,10 +2919,11 @@ function renderJobsMain() {
             document.getElementById('job-summary-totalincome').textContent = formatCurrency(w.totalIncome);
             document.getElementById('job-summary-income-breakdown').textContent = coInfo;
             document.getElementById('job-summary-cost').textContent = formatCurrency(w.actualCosts);
-            // QuickBooks imported actuals — surfaced under the Actual Costs chip so
-            // a QB cost import is visibly reflected on the overview. It reads off
-            // its own figure (w.qbActualCosts) and does NOT change the WIP actual
-            // above (QB lines flow into that only once attributed to cost nodes).
+            // QuickBooks imported actuals — surfaced under the Actual Costs chip as
+            // an "as of <date>" provenance line. QB is now the cost spine: every QB
+            // line for the job flows into the Actual Costs figure above (w.qbActualCosts
+            // == that figure when QB is present), so this restates the same number
+            // with its import date, no longer a separate/excluded total.
             var _qbNote = document.getElementById('job-summary-cost-note');
             if (_qbNote) {
                 if (w.qbActualCosts > 0) {

@@ -231,7 +231,7 @@ router.patch('/:id',
   requireAuth, requireCapability('JOBS_EDIT_ANY'),
   async (req, res) => {
     try {
-      const { linkedNodeId, memo } = req.body || {};
+      const { linkedNodeId, memo, bucket, buildingId } = req.body || {};
       const sets = [];
       const vals = [];
       let i = 1;
@@ -242,6 +242,15 @@ router.patch('/:id',
       if (memo !== undefined) {
         sets.push(`memo = $${i++}`);
         vals.push(memo || null);
+      }
+      // Cost-bucket model: manual bucket override + building attribution.
+      if (bucket !== undefined) {
+        sets.push(`bucket = $${i++}`);
+        vals.push(bucket || null);
+      }
+      if (buildingId !== undefined) {
+        sets.push(`building_id = $${i++}`);
+        vals.push(buildingId || null);
       }
       if (!sets.length) return res.status(400).json({ error: 'nothing to update' });
       sets.push(`updated_at = NOW()`);
@@ -290,6 +299,45 @@ router.post('/bulk-link',
       res.json({ ok: true, updated: result.rowCount });
     } catch (e) {
       console.error('POST /api/qb-costs/bulk-link error:', e);
+      res.status(500).json({ error: 'Server error' });
+    }
+  }
+);
+
+// ──────────────────────────────────────────────────────────────────
+// POST /api/qb-costs/bulk-assign
+// Body: { ids: [...], bucket?: 'materials'|…|null, buildingId?: '…'|null }
+// Cost-bucket model (node retirement): set a manual bucket override
+// and/or a building attribution on every line in `ids`. Pass a field as
+// null to clear it; omit a field to leave it untouched. Returns count.
+// ──────────────────────────────────────────────────────────────────
+router.post('/bulk-assign',
+  requireAuth, requireCapability('JOBS_EDIT_ANY'),
+  async (req, res) => {
+    try {
+      const { ids, bucket, buildingId } = req.body || {};
+      if (!Array.isArray(ids) || !ids.length) {
+        return res.status(400).json({ error: 'ids array is required' });
+      }
+      if (ids.length > 1000) {
+        return res.status(400).json({ error: 'bulk-assign cap is 1000 lines per call' });
+      }
+      const sets = [];
+      const vals = [];
+      let i = 1;
+      if (bucket !== undefined) { sets.push(`bucket = $${i++}`); vals.push(bucket || null); }
+      if (buildingId !== undefined) { sets.push(`building_id = $${i++}`); vals.push(buildingId || null); }
+      if (!sets.length) return res.status(400).json({ error: 'nothing to assign (bucket or buildingId required)' });
+      sets.push(`updated_at = NOW()`);
+      vals.push(ids);
+      // SAFE: column list is a fixed whitelist (bucket / building_id); ids passed as a param array.
+      const result = await pool.query(
+        `UPDATE qb_cost_lines SET ${sets.join(', ')} WHERE id = ANY($${i}::text[]) RETURNING id`,
+        vals
+      );
+      res.json({ ok: true, updated: result.rowCount });
+    } catch (e) {
+      console.error('POST /api/qb-costs/bulk-assign error:', e);
       res.status(500).json({ error: 'Server error' });
     }
   }

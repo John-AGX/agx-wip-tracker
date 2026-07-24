@@ -138,12 +138,12 @@ function computeJobWIP(job, deps) {
 
   const co = coTotals(d.changeOrders);
 
-  // ACTUAL counts ONLY QuickBooks lines LINKED to a cost node. Unlinked QB is
-  // excluded entirely — John's rule: "if a cost from QuickBooks isn't linked,
-  // don't show it in actual costs."
+  // ACTUAL cost = the QuickBooks import total (node retirement). Every QB line
+  // for the job counts, linked or not — the old "only linked QB counts" rule is
+  // retired (it left six-figure job costs reading as $0 when their lines were
+  // never node-linked). QB is the cost spine. Mirrors js/jobs.js getJobWIP.
   let qbActualCosts = 0, qbCostLineCount = 0, qbCostsAsOf = null;
   for (const l of (d.qbCostLines || [])) {
-    if (l.linked_node_id == null && l.linkedNodeId == null) continue;
     qbCostLineCount++;
     qbActualCosts += num(l.amount);
     const when = l.report_date || l.reportDate;
@@ -152,13 +152,14 @@ function computeJobWIP(job, deps) {
     }
   }
 
-  // ngActualCosts explicitly EXCLUDES QB (the engine no longer folds it in
-  // per-node), so QB is added exactly once here regardless of graph topology.
+  // Graph/manual base — the fallback when a job has NO QB lines yet.
   const baseActualCosts = job.ngActualCosts != null
     ? num(job.ngActualCosts)
     : totalManualCost(job, phases, buildings);
   const billedCost = billedCostOf(vendorBills);
-  const actualCosts = baseActualCosts + qbActualCosts + billedCost;
+  // QB total REPLACES the graph/manual base when present (QB is the source of
+  // truth); bills add in either case. Mirrors js/jobs.js getJobWIP.
+  const actualCosts = (qbActualCosts > 0 ? qbActualCosts : baseActualCosts) + billedCost;
 
   const contractIncome = num(job.contractAmount);
   const estimatedCosts = num(job.estimatedCosts);

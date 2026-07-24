@@ -1821,6 +1821,14 @@ async function initSchema() {
     CREATE INDEX IF NOT EXISTS idx_qb_cost_lines_date ON qb_cost_lines(txn_date);
     CREATE INDEX IF NOT EXISTS idx_qb_cost_lines_account ON qb_cost_lines(account);
     CREATE INDEX IF NOT EXISTS idx_qb_cost_lines_linked_node ON qb_cost_lines(linked_node_id);
+    -- Cost-bucket model (node retirement): a QB line auto-buckets by its
+    -- account on read (js/cost-buckets.js bucketFor). The bucket column is
+    -- an optional MANUAL override of that mapping; building_id optionally
+    -- attributes the line to one building so per-building buckets fill.
+    -- Both nullable: null = auto-bucket by account, job-level (no building).
+    ALTER TABLE qb_cost_lines ADD COLUMN IF NOT EXISTS bucket TEXT;
+    ALTER TABLE qb_cost_lines ADD COLUMN IF NOT EXISTS building_id TEXT;
+    CREATE INDEX IF NOT EXISTS idx_qb_cost_lines_building ON qb_cost_lines(building_id);
 
     CREATE TABLE IF NOT EXISTS materials (
       id SERIAL PRIMARY KEY,

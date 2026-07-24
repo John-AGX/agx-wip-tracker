@@ -635,6 +635,15 @@
     // Atomic bulk link. ids = array of qb_cost_lines.id; nodeId can
     // be null to clear the link.
     bulkLink: function(ids, nodeId) { return post('/api/qb-costs/bulk-link', { ids: ids, linkedNodeId: nodeId || null }); },
+    // Cost-bucket model: bulk-set a manual bucket override and/or building
+    // attribution. opts = { bucket?, buildingId? }; pass a field as null to
+    // clear it, omit to leave untouched. (Single-line uses update() above.)
+    bulkAssign: function(ids, opts) {
+      var body = { ids: ids };
+      if (opts && 'bucket' in opts) body.bucket = opts.bucket;
+      if (opts && 'buildingId' in opts) body.buildingId = opts.buildingId;
+      return post('/api/qb-costs/bulk-assign', body);
+    },
     // Null out linked_node_id for any line on this job that points
     // at a node not in the current valid set. Driven from the QB
     // Costs view "Clean orphans" button.

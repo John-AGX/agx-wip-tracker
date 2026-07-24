@@ -49,6 +49,15 @@
     return 'other';
   }
 
+  // The bucket a line actually lands in: a valid MANUAL override
+  // (l.bucket, set from the QB view) wins; otherwise auto-map its QB
+  // account. Keeps auto-bucketing the default while letting the user
+  // correct a mis-mapped line without editing QuickBooks.
+  function effectiveBucket(l) {
+    if (l && l.bucket && CODES.indexOf(l.bucket) !== -1) return l.bucket;
+    return bucketFor(l && (l.account || l.account_type));
+  }
+
   function num(v) { var n = Number(v); return isFinite(n) ? n : 0; }
   function fmt(n) {
     n = Math.round(num(n));
@@ -69,7 +78,7 @@
     // QB `account` name (e.g. "Direct Labor", "Materials & Supplies - COGS").
     (app.qbCostLines || []).forEach(function (l) {
       if (!l || (l.job_id || l.jobId) !== jobId) return;
-      var b = acc[bucketFor(l.account || l.account_type)];
+      var b = acc[effectiveBucket(l)];
       var a = num(l.amount);
       b.qb += a; b.total += a; b.lines++;
     });
@@ -128,7 +137,7 @@
       });
     }
     var linkMatch = function (r) { return r && (r.building_id || r.buildingId) === buildingId; };
-    (app.qbCostLines || []).filter(linkMatch).forEach(function (l) { var b = acc[bucketFor(l.account)]; b.total += num(l.amount); b.lines++; });
+    (app.qbCostLines || []).filter(linkMatch).forEach(function (l) { var b = acc[effectiveBucket(l)]; b.total += num(l.amount); b.lines++; });
     (app.receipts || []).filter(linkMatch).forEach(function (r) { var b = acc[bucketFor(r.cost_code || r.category)]; b.total += num(r.amount || r.total); b.lines++; });
     var buckets = CANON.map(function (b) { return acc[b.code]; });
     return { buckets: buckets, grand: buckets.reduce(function (s, b) { return s + b.total; }, 0) };
@@ -170,6 +179,7 @@
   window.p86CostBuckets = {
     CANON: CANON, CODES: CODES,
     bucketFor: bucketFor,
+    effectiveBucket: effectiveBucket,
     getJobCostBuckets: getJobCostBuckets,
     getBuildingCostBuckets: getBuildingCostBuckets,
     renderJobInto: renderJobInto
