@@ -1334,7 +1334,10 @@ function renderJobsMain() {
             if (!tbody) return;
             tbody.innerHTML = '<tr><td colspan="8" style="padding:10px;color:var(--text-dim);">Loading invoices…</td></tr>';
             if (!(window.p86Api && window.p86Api.bills && window.p86Api.bills.listAll)) { tbody.innerHTML = ''; return; }
-            window.p86Api.bills.listAll({ job: jobId }).then(function(r) {
+            // status:'all' — the bills list server-side defaults to 'open' (open +
+            // approved only), which would drop a bill the moment it's marked paid.
+            // The invoices ledger must keep paid/void records visible.
+            window.p86Api.bills.listAll({ job: jobId, status: 'all' }).then(function(r) {
                 const bills = (r && r.bills) || [];
                 tbody.innerHTML = '';
                 let totalAmt = 0;
