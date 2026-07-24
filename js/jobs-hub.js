@@ -931,7 +931,7 @@ function p86Ask(message, opts) {
     return '<label class="jobshub-field"><span class="jobshub-field-label">' + esc(label) + (required ? ' <span style="color:#f87171;">*</span>' : '') + '</span>' + control + '</label>';
   }
 
-  function openCreateModal(kind, onSaved) {
+  function openCreateModal(kind, onSaved, presetJobId) {
     var meta = KIND_META[kind] || KIND_META.co;
     var jobs = jobsList();
     var overlay = document.createElement('div');
@@ -997,6 +997,9 @@ function p86Ask(message, opts) {
         }).catch(function () { poSel.innerHTML = '<option value="">— No PO (manual bill) —</option>'; });
       }
       if (jobSel) jobSel.addEventListener('change', function () { loadPOsForJob(jobSel.value); });
+      // Job-scoped create (from the per-job Invoices tab): preselect + lock the
+      // job and load its POs immediately so the picker isn't needed.
+      if (presetJobId && jobSel) { jobSel.value = presetJobId; jobSel.disabled = true; loadPOsForJob(presetJobId); }
       if (poSel) poSel.addEventListener('change', function () {
         var opt = poSel.options[poSel.selectedIndex];
         var subId = opt ? opt.getAttribute('data-sub') : '';
@@ -1144,5 +1147,9 @@ function p86Ask(message, opts) {
   // Bill editor exposed for reuse (PO editor "Bills" section in S3,
   // doc-import OCR-to-bill in S4). open(id, onSaved) — onSaved fires after
   // any save / status change / delete.
-  window.p86Bills = { open: openBillEditor };
+  window.p86Bills = {
+    open: openBillEditor,
+    // Job-scoped "add a vendor invoice/bill" — used by the per-job Invoices tab.
+    createForJob: function (jobId, onSaved) { openCreateModal('bill', onSaved, jobId); }
+  };
 })();

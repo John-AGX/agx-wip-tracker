@@ -1250,19 +1250,16 @@ function renderJobsMain() {
             };
         }
 
+        // "Add Invoice" now creates a vendor BILL scoped to this job (the same
+        // record type the OCR + Bills surface use), via the shared bill create
+        // modal. The legacy addInvModal (appData.invoices) is retired.
         function openAddInvoiceModal() {
-            document.getElementById('invModalHeader').textContent = 'Add Invoice';
-            document.getElementById('invSaveBtn').innerHTML = '&#x1F4B3; Add Invoice';
-            document.getElementById('invNumber').value = '';
-            document.getElementById('invDate').value = new Date().toISOString().split('T')[0];
-            document.getElementById('invDueDate').value = '';
-            document.getElementById('invVendor').value = '';
-            document.getElementById('invDescription').value = '';
-            document.getElementById('invAmount').value = '';
-            document.getElementById('invStatus').value = 'Draft';
-            document.getElementById('invNotes').value = '';
-            appState.editInvId = null;
-            openModal('addInvModal');
+            const jobId = appState.currentJobId;
+            if (window.p86Bills && window.p86Bills.createForJob) {
+                window.p86Bills.createForJob(jobId, function() { renderInvoices(jobId); });
+            } else {
+                alert('Bills module not loaded — reload and try again.');
+            }
         }
 
         function saveInvoice() {
@@ -1317,30 +1314,57 @@ function renderJobsMain() {
             });
         }
 
+        // The per-job "Invoices" tab shows this job's VENDOR INVOICES — i.e. the
+        // bills (job_vendor_bills), the same records the Bulk Doc Import OCR
+        // creates and the Bills surface manages. (The legacy localStorage
+        // appData.invoices store is retired; nothing writes to it.) Reads the
+        // real server bills so an OCR'd invoice appears here per job.
         function renderInvoices(jobId) {
-            const invs = appData.invoices.filter(inv => inv.jobId === jobId);
             const tbody = document.querySelector('#inv-table tbody');
-            tbody.innerHTML = '';
-            let totalAmt = 0;
-            invs.forEach((inv, idx) => {
-                totalAmt += inv.amount || 0;
-                const statusColor = inv.status === 'Paid' ? 'var(--green)' : inv.status === 'Sent' ? 'var(--yellow)' : 'var(--text-dim)';
-                const row = document.createElement('tr');
-                row.innerHTML = `
-                    <td>${escapeHTML(inv.invNumber) || 'INV-' + (idx + 1)}</td>
-                    <td>${escapeHTML(inv.vendor)}</td>
-                    <td>${escapeHTML(inv.description)}${inv.notes ? '<br><span style="font-size: 11px; color: var(--text-dim);">' + escapeHTML(inv.notes) + '</span>' : ''}</td>
-                    <td style="text-align: right;">${formatCurrency(inv.amount)}</td>
-                    <td><span style="color: ${statusColor}; font-weight: 600; font-size: 12px;">${escapeHTML(inv.status)}</span></td>
-                    <td>${escapeHTML(inv.date) || '—'}</td>
-                    <td>${escapeHTML(inv.dueDate) || '—'}</td>
-                    <td>
-                        <button class="ee-btn secondary" onclick="event.stopPropagation(); editInvoice('${escapeHTML(inv.id)}')">&#x270F;&#xFE0F; Edit</button>
-                        <button class="ee-btn ee-icon-btn danger" onclick="event.stopPropagation(); deleteInvoice('${escapeHTML(inv.id)}')" title="Delete">&#x1F5D1;</button>
-                    </td>`;
-                tbody.appendChild(row);
-            });
-            document.getElementById('inv-total-amount').textContent = formatCurrency(totalAmt);
+            const totalEl = document.getElementById('inv-total-amount');
+            if (!tbody) return;
+            tbody.innerHTML = '<tr><td colspan="8" style="padding:10px;color:var(--text-dim);">Loading invoices…</td></tr>';
+            if (!(window.p86Api && window.p86Api.bills && window.p86Api.bills.listAll)) { tbody.innerHTML = ''; return; }
+            window.p86Api.bills.listAll({ job: jobId }).then(function(r) {
+                const bills = (r && r.bills) || [];
+                tbody.innerHTML = '';
+                let totalAmt = 0;
+                if (!bills.length) {
+                    tbody.innerHTML = '<tr><td colspan="8" style="padding:16px;color:var(--text-dim);text-align:center;">No vendor invoices yet. Upload one via Bulk Doc Import (OCR) or click “Add Invoice”.</td></tr>';
+                }
+                bills.forEach(function(b) {
+                    const amt = parseFloat(b.amount) || 0; totalAmt += amt;
+                    const vendor = b.sub_name || (b.data && b.data.vendor) || '';
+                    const desc = (b.data && b.data.description) || '';
+                    const status = b.status || 'open';
+                    const statusColor = status === 'paid' ? 'var(--green)' : status === 'approved' ? 'var(--yellow)' : status === 'void' ? 'var(--text-dim)' : 'var(--text,#fff)';
+                    const bdate = b.bill_date ? String(b.bill_date).slice(0, 10) : '';
+                    const ddate = b.due_date ? String(b.due_date).slice(0, 10) : '';
+                    const overdue = ddate && status !== 'paid' && status !== 'void' && new Date(ddate).getTime() < Date.now();
+                    const poNote = b.po_number ? '<br><span style="font-size:11px;color:var(--text-dim);">PO ' + escapeHTML(b.po_number) + '</span>' : '';
+                    const row = document.createElement('tr');
+                    row.setAttribute('data-bill-id', String(b.id));
+                    row.style.cursor = 'pointer';
+                    row.innerHTML =
+                        '<td><strong>' + (escapeHTML(b.bill_number) || '—') + '</strong></td>' +
+                        '<td>' + (escapeHTML(vendor) || '—') + '</td>' +
+                        '<td>' + escapeHTML(desc) + poNote + '</td>' +
+                        '<td style="text-align:right;font-family:\'SF Mono\',monospace;">' + formatCurrency(amt) + '</td>' +
+                        '<td><span style="color:' + statusColor + ';font-weight:600;font-size:12px;">' + escapeHTML(status) + '</span></td>' +
+                        '<td>' + (bdate || '—') + '</td>' +
+                        '<td' + (overdue ? ' style="color:#f87171;font-weight:600;"' : '') + '>' + (ddate || '—') + '</td>' +
+                        '<td><button class="ee-btn secondary" data-open-bill="' + escapeHTML(String(b.id)) + '">&#x270F;&#xFE0F; Open</button></td>';
+                    tbody.appendChild(row);
+                });
+                // Open the bill editor on row / button click.
+                tbody.querySelectorAll('[data-bill-id]').forEach(function(tr) {
+                    tr.addEventListener('click', function() {
+                        const id = tr.getAttribute('data-bill-id');
+                        if (window.p86Bills && window.p86Bills.open) window.p86Bills.open(id, function() { renderInvoices(jobId); });
+                    });
+                });
+                if (totalEl) totalEl.textContent = formatCurrency(totalAmt);
+            }).catch(function() { tbody.innerHTML = ''; });
         }
 
         // Apply the same status + type filters renderJobsTable uses,
