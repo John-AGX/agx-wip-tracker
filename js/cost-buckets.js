@@ -76,10 +76,18 @@
 
     // QuickBooks cost lines — the actual-cost source of truth. Grouped by the
     // QB `account` name (e.g. "Direct Labor", "Materials & Supplies - COGS").
+    // QB lines by bucket — EXCEPT Subcontractors. Subcontractor cost is tracked
+    // on the PO + invoicing (job_vendor_bills) side; QB's "Subcontractors" lines
+    // are for MATCHING only, so they do NOT roll into the bucket totals (else subs
+    // double-count against the bills). qbSubMatch carries the QB sub figure for
+    // reconciliation against what's actually been billed.
+    var qbSubMatch = 0;
     (app.qbCostLines || []).forEach(function (l) {
       if (!l || (l.job_id || l.jobId) !== jobId) return;
-      var b = acc[effectiveBucket(l)];
+      var code = effectiveBucket(l);
       var a = num(l.amount);
+      if (code === 'subs') { qbSubMatch += a; return; }
+      var b = acc[code];
       b.qb += a; b.total += a; b.lines++;
     });
 
@@ -115,7 +123,9 @@
 
     var buckets = CANON.map(function (b) { return acc[b.code]; });
     var grand = buckets.reduce(function (s, b) { return s + b.total; }, 0);
-    return { buckets: buckets, grand: grand };
+    // billedSubs = the Subcontractors bucket total (bills only, QB subs excluded).
+    var billedSubs = acc['subs'].total;
+    return { buckets: buckets, grand: grand, qbSubMatch: qbSubMatch, billedSubs: billedSubs };
   }
 
   // Cost attributed to ONE building: its manual cost fields, plus any QB line /

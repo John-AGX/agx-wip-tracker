@@ -386,30 +386,37 @@ function renderJobsMain() {
             // same lines by account into the canonical buckets, and this figure
             // reconciles to that QB portion. qbActualCosts/qbCostLineCount now reflect
             // the FULL set of QB lines for the job.
-            let qbActualCosts = 0, qbCostLineCount = 0, qbCostsAsOf = null;
+            // QB is the cost spine for materials/labor/GC/equipment. Subcontractor
+            // cost is tracked on the PO + invoicing (job_vendor_bills) side, so QB's
+            // "Subcontractors" lines are for MATCHING only — they do NOT roll into
+            // actual cost (else subs double-count against the bills). qbSubMatch is
+            // returned so the QB view can reconcile QB subs vs what's been billed.
+            let qbActualCosts = 0, qbCostLineCount = 0, qbCostsAsOf = null, qbSubMatch = 0;
             try {
                 const qbLines = (window.appData && Array.isArray(appData.qbCostLines))
                     ? appData.qbCostLines.filter(l => (l.job_id || l.jobId) === jobId) : [];
                 qbCostLineCount = qbLines.length;
+                const isSub = (l) => (window.p86CostBuckets
+                    ? p86CostBuckets.effectiveBucket({ bucket: l.bucket, account: l.account, account_type: l.account_type }) === 'subs'
+                    : /\bsub|subcontract/i.test(String(l.account || l.account_type || '')));
                 qbLines.forEach(l => {
-                    qbActualCosts += Number(l.amount || 0);
+                    const amt = Number(l.amount || 0);
+                    if (isSub(l)) { qbSubMatch += amt; return; }  // matching only, not cost
+                    qbActualCosts += amt;
                     const d = l.report_date || l.reportDate;
                     if (d && (!qbCostsAsOf || String(d) > String(qbCostsAsOf))) qbCostsAsOf = String(d).slice(0, 10);
                 });
             } catch (e) {}
+            const hasQB = qbCostLineCount > 0;
             // Graph's MANUAL/wired cost — the fallback when a job has NO QB lines yet
             // (ngActualCosts explicitly excludes QB; falls back to the phase/building
             // manual total before the graph has computed).
             const baseActualCosts = (job.ngActualCosts != null) ? job.ngActualCosts : getJobTotalCost(jobId).total;
             const billedCost = (typeof getJobBilledCost === 'function') ? getJobBilledCost(jobId) : 0;
-            // When the job has QB lines, the QB total IS the actual cost (it REPLACES
-            // the graph/manual base — QB is the source of truth, so a stale manual
-            // cost-node placeholder doesn't add on top). With no QB, fall back to the
-            // graph/manual base. Sub/PO bills (job_vendor_bills) are incurred cost and
-            // add in either case — subs bill via Bills, QB carries materials/labor, so
-            // in practice they don't overlap. (Per-source attribution + any bucket
-            // override lives in the cost-buckets view.)
-            const actualCosts = (qbActualCosts > 0 ? qbActualCosts : baseActualCosts) + billedCost;
+            // QB non-sub total REPLACES the graph/manual base when QB exists (QB is
+            // the source of truth for materials/labor/GC). Subcontractor cost comes
+            // from billed (PO/invoicing). No QB → graph/manual base + billed.
+            const actualCosts = (hasQB ? qbActualCosts : baseActualCosts) + billedCost;
             const contractIncome = job.contractAmount || 0;
             const estimatedCosts = job.estimatedCosts || 0;
             const totalIncome = contractIncome + co.income;
@@ -497,7 +504,7 @@ function renderJobsMain() {
                 asSoldProfit, asSoldMargin, revisedProfit, revisedMargin,
                 pctComplete, revenueEarned, actualCosts, jtdProfit, jtdMargin,
                 displayProfit, displayMargin,
-                qbActualCosts, qbCostLineCount, qbCostsAsOf,
+                qbActualCosts, qbCostLineCount, qbCostsAsOf, qbSubMatch,
                 invoiced, unbilled, backlog, remainingCosts,
                 accruedCosts, poAccrued, billedCost, projectedCost, projectedProfit
             };

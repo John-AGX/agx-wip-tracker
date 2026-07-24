@@ -578,15 +578,32 @@ function p86Ask(message, opts) {
     try { roll = p86CostBuckets.getJobCostBuckets(jobId); } catch (e) { return ''; }
     if (!roll || !roll.grand) return '';
     var cells = roll.buckets.filter(function (b) { return b.total || b.lines; }).map(function (b) {
+      var sub = b.code === 'subs';
       return '<div style="display:flex;align-items:center;gap:6px;padding:6px 10px;background:var(--card-bg,#141419);border:1px solid var(--border,#333);border-radius:8px;">' +
         '<span style="width:8px;height:8px;border-radius:2px;background:' + b.color + ';flex:none;"></span>' +
-        '<span style="font-size:11px;color:var(--text-dim,#888);">' + escapeHTML(b.label) + '</span>' +
+        '<span style="font-size:11px;color:var(--text-dim,#888);">' + escapeHTML(b.label) + (sub ? ' <span style="opacity:.7;">(POs/bills)</span>' : '') + '</span>' +
         '<strong style="font-size:13px;margin-left:auto;font-family:monospace;">' + fmtMoney(b.total) + '</strong>' +
         '</div>';
     }).join('');
+    // Subcontractor reconciliation: QB subs are match-only (cost comes from
+    // POs/invoicing). Surface QB-recorded vs P86-invoiced so a gap is visible.
+    var subRow = '';
+    var qbSub = roll.qbSubMatch || 0;
+    if (qbSub > 0) {
+      var billed = roll.billedSubs || 0;
+      var diff = Math.round(qbSub - billed);
+      var flag = Math.abs(diff) < 1
+        ? '<span style="color:#35d0a5;font-weight:600;">&#x2713; matched</span>'
+        : '<span style="color:#e0a458;font-weight:600;">&#x26A0; ' + fmtMoney(Math.abs(diff)) + (diff > 0 ? ' in QB not yet invoiced in P86' : ' invoiced beyond QB') + '</span>';
+      subRow = '<div style="margin-top:8px;font-size:11px;color:var(--text-dim,#888);display:flex;gap:10px;flex-wrap:wrap;align-items:center;">' +
+        '<span>Subcontractors &mdash; QB recorded <strong>' + fmtMoney(qbSub) + '</strong> &middot; P86 invoiced <strong>' + fmtMoney(billed) + '</strong> (POs/bills)</span>' +
+        flag +
+        '</div>';
+    }
     return '<div style="margin-bottom:14px;">' +
-      '<div style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">Cost buckets &middot; ' + fmtMoney(roll.grand) + ' actual</div>' +
+      '<div style="font-size:10px;color:var(--text-dim,#888);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">Cost buckets &middot; ' + fmtMoney(roll.grand) + ' actual <span style="text-transform:none;opacity:.7;">(subs from POs/invoicing; QB subs are match-only)</span></div>' +
       '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;">' + cells + '</div>' +
+      subRow +
       '</div>';
   }
   function bucketSelectHtml(l) {

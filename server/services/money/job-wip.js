@@ -138,28 +138,35 @@ function computeJobWIP(job, deps) {
 
   const co = coTotals(d.changeOrders);
 
-  // ACTUAL cost = the QuickBooks import total (node retirement). Every QB line
-  // for the job counts, linked or not — the old "only linked QB counts" rule is
-  // retired (it left six-figure job costs reading as $0 when their lines were
-  // never node-linked). QB is the cost spine. Mirrors js/jobs.js getJobWIP.
-  let qbActualCosts = 0, qbCostLineCount = 0, qbCostsAsOf = null;
+  // ACTUAL cost = QB import for materials/labor/GC/equipment (node retirement:
+  // every line counts, linked or not — the old "only linked QB counts" rule is
+  // retired). Subcontractor cost lives on the PO + invoicing (vendor bills) side,
+  // so QB "Subcontractors" lines are MATCH-ONLY and excluded from cost (else subs
+  // double-count against the bills). Mirrors js/jobs.js getJobWIP.
+  const isSubLine = (l) => l.bucket
+    ? l.bucket === 'subs'
+    : /\bsub|subcontract/i.test(String(l.account || l.account_type || ''));
+  let qbActualCosts = 0, qbCostLineCount = 0, qbCostsAsOf = null, qbSubMatch = 0;
   for (const l of (d.qbCostLines || [])) {
     qbCostLineCount++;
-    qbActualCosts += num(l.amount);
+    const amt = num(l.amount);
+    if (isSubLine(l)) { qbSubMatch += amt; continue; }
+    qbActualCosts += amt;
     const when = l.report_date || l.reportDate;
     if (when && (!qbCostsAsOf || String(when) > String(qbCostsAsOf))) {
       qbCostsAsOf = String(when).slice(0, 10);
     }
   }
+  const hasQB = qbCostLineCount > 0;
 
   // Graph/manual base — the fallback when a job has NO QB lines yet.
   const baseActualCosts = job.ngActualCosts != null
     ? num(job.ngActualCosts)
     : totalManualCost(job, phases, buildings);
   const billedCost = billedCostOf(vendorBills);
-  // QB total REPLACES the graph/manual base when present (QB is the source of
-  // truth); bills add in either case. Mirrors js/jobs.js getJobWIP.
-  const actualCosts = (qbActualCosts > 0 ? qbActualCosts : baseActualCosts) + billedCost;
+  // QB non-sub total REPLACES the graph/manual base when QB exists; subcontractor
+  // cost comes from billed (PO/invoicing). Mirrors js/jobs.js getJobWIP.
+  const actualCosts = (hasQB ? qbActualCosts : baseActualCosts) + billedCost;
 
   const contractIncome = num(job.contractAmount);
   const estimatedCosts = num(job.estimatedCosts);
@@ -216,7 +223,7 @@ function computeJobWIP(job, deps) {
     asSoldProfit, asSoldMargin, revisedProfit, revisedMargin,
     pctComplete, revenueEarned, actualCosts, jtdProfit, jtdMargin,
     displayProfit, displayMargin,
-    qbActualCosts, qbCostLineCount, qbCostsAsOf,
+    qbActualCosts, qbCostLineCount, qbCostsAsOf, qbSubMatch,
     invoiced, unbilled, backlog, remainingCosts,
     accruedCosts, poAccrued, billedCost, projectedCost, projectedProfit,
   };
@@ -238,7 +245,7 @@ async function loadWipInputs(db, jobIds) {
   };
   const [qb, bills, pos] = await Promise.all([
     db.query(
-      `SELECT job_id, amount, linked_node_id, report_date
+      `SELECT job_id, amount, linked_node_id, report_date, account, account_type, bucket
          FROM qb_cost_lines WHERE job_id = ANY($1)`, [ids]),
     db.query(
       `SELECT job_id, po_id, amount, status
