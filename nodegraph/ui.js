@@ -3874,7 +3874,11 @@ function buildingRevSources(sel){
   // genuinely fail to account for the money, which is what it was for.
   var cSum=contract.reduce(function(a,c){ return a+(c.rev||0); }, 0);
   contractRev=cSum;
-  totalRev=contractRev+coRev;
+  // `var` — totalRev was never declared (only used as an object key elsewhere),
+  // so in strict mode this line threw "totalRev is not defined", which aborted
+  // buildingRevBreakdownHtml → the whole building card failed to render and the
+  // inspector fell back to showing the job detail.
+  var totalRev=contractRev+coRev;
   return { contract:contract, cos:cos, contractRev:contractRev, coRev:coRev, totalRev:totalRev };
 }
 
