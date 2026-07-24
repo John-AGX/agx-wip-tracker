@@ -391,7 +391,7 @@ function p86Ask(message, opts) {
     var summaryHtml = '';
     if (allLines.length) {
       summaryHtml = '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:14px;">' +
-        statCard('Total', fmtMoney(totalAll), '#34d399') +
+        statCard('QB lines total', fmtMoney(totalAll), '#34d399') +
         statCard('Lines', allLines.length, '#4f8cff') +
         statCard('Vendors', Object.keys(byVendor).length, '#a78bfa') +
       '</div>';
