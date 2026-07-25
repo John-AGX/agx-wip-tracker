@@ -2831,6 +2831,15 @@ async function initSchema() {
     -- migration, no data rewrite needed.
     ALTER TABLE ai_sessions ADD COLUMN IF NOT EXISTS session_kind TEXT NOT NULL DEFAULT 'legacy_partitioned';
     ALTER TABLE ai_sessions ADD COLUMN IF NOT EXISTS last_compacted_at TIMESTAMPTZ;
+    -- lineage_root (session/memory architecture, slice 3b). A 'deal_thread'
+    -- session is keyed on the lead→estimate→job LINEAGE root (see
+    -- resolveLineageRoot / deal-memory.js) so the deal's thread follows it
+    -- across stages. NULL for user_thread + legacy rows. Additive; only the
+    -- FLAG_DEAL_THREADS resolver path reads/writes it.
+    ALTER TABLE ai_sessions ADD COLUMN IF NOT EXISTS lineage_root TEXT;
+    CREATE INDEX IF NOT EXISTS idx_ai_sessions_deal_thread
+      ON ai_sessions(user_id, lineage_root, last_used_at DESC)
+      WHERE session_kind = 'deal_thread' AND archived_at IS NULL;
     -- Fast lookup of "the user-thread for this user" — used by the
     -- new resolveSessionForChat path. archived_at filter so
     -- abandoned threads (manual delete, stuck-session recovery)

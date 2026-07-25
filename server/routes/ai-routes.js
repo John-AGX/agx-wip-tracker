@@ -2498,6 +2498,15 @@ const FLAG_AGENT_MODE_47 = (process.env.AGENT_MODE_47 || '').toLowerCase() === '
 const FLAG_UNIFIED_USER_THREAD =
   (process.env.UNIFIED_86_USER_THREAD || 'on').toLowerCase() !== 'off';
 
+// Deal threads (session/memory architecture, slice 3b). DEFAULT OFF — this is a
+// live session-routing change, so it ships dark and is enabled per-deploy
+// (DEAL_THREADS=on) once verified. When on, a chat opened on a deal surface
+// (lead/estimate/job) resolves/mints ONE session per lead→estimate→job lineage;
+// when off, resolveSessionForChat behaves exactly as today.
+const FLAG_DEAL_THREADS = (process.env.DEAL_THREADS || 'off').toLowerCase() === 'on';
+const DEAL_SURFACES = new Set(['lead', 'estimate', 'job']);
+const { resolveLineageRoot: _resolveLineageRoot } = require('../services/deal-memory');
+
 // Three of our four context builders return `system` as an array of
 // TextBlockParam objects (with cache_control on the first block);
 // buildJobContext returns it as a plain string. The v2 path embeds
@@ -3227,6 +3236,53 @@ async function resolveSessionForChat({ sessionId, currentContext, userId, organi
     }
   }
 
+  // Deal threads (slice 3b) — behind FLAG_DEAL_THREADS (default OFF; dark on
+  // deploy). When on, a chat opened on a DEAL surface (lead/estimate/job)
+  // resolves/mints ONE session per lead→estimate→job LINEAGE, keyed on the
+  // lineage_root, on the 'job' (Opus) host — so the deal's thread follows it
+  // across stages. A non-deal surface (ask86, schedule, dashboard) falls through
+  // to the personal user_thread below. Best-effort: any failure falls through to
+  // the existing path rather than 500 the chat.
+  if (FLAG_DEAL_THREADS) {
+    const dctxType = currentContext && currentContext.entity_type;
+    const dctxId   = currentContext && currentContext.entity_id;
+    if (dctxType && dctxId && DEAL_SURFACES.has(dctxType)) {
+      try {
+        const resolved = await _resolveLineageRoot(pool, dctxType, String(dctxId));
+        if (resolved && resolved.lineage_root) {
+          const dt = await pool.query(
+            `SELECT * FROM ai_sessions
+               WHERE user_id = $1 AND session_kind = 'deal_thread'
+                 AND lineage_root = $2 AND archived_at IS NULL
+               ORDER BY last_used_at DESC
+               LIMIT 1`,
+            [userId, resolved.lineage_root]
+          );
+          if (dt.rows.length) return dt.rows[0];
+          // Mint the deal thread. entity_type/entity_id = the CURRENT stage so
+          // the ai_messages.estimate_id NOT NULL keying is satisfied; lineage_root
+          // is the durable deal key the resolver looks up next time.
+          const fresh = await createFreshAiSession({
+            agentKey: 'job',
+            entityType: dctxType,
+            entityId: String(dctxId),
+            userId, organization,
+            sessionKind: 'deal_thread',
+            lineageRoot: resolved.lineage_root
+          });
+          const dealLbl = 'Deal · ' + String(resolved.lineage_root);
+          await pool.query(`UPDATE ai_sessions SET label = COALESCE(label, $2) WHERE id = $1`, [fresh.id, dealLbl]);
+          if (!fresh.label) fresh.label = dealLbl;
+          fresh._freshlyCreated = true;
+          return fresh;
+        }
+      } catch (e) {
+        console.warn('[resolve-session] deal-thread resolve failed; falling back:', e && e.message);
+        // fall through to the personal/unified path — never block the chat
+      }
+    }
+  }
+
   // Unified-86 Phase 4b — when the user-thread flag is on, every chat
   // turn lands on the user's single rolling Anthropic session
   // regardless of which panel they're on. entity_type / entity_id
@@ -3352,7 +3408,7 @@ function autoLabelFromContext(entityType, entityId, ctx) {
   return (cap + ' ' + entityId).slice(0, 200);
 }
 
-async function createFreshAiSession({ agentKey, entityType, entityId, userId, organization, sessionKind }) {
+async function createFreshAiSession({ agentKey, entityType, entityId, userId, organization, sessionKind, lineageRoot }) {
   const adminAgents = require('./admin-agents-routes');
   const env = await adminAgents.ensureManagedEnvironment();
   // Per-org Anthropic agent — ensureManagedAgent looks up by
@@ -3364,13 +3420,18 @@ async function createFreshAiSession({ agentKey, entityType, entityId, userId, or
   // Phase 4a — session_kind discriminates user-thread vs legacy
   // partitioned. Defaults to 'legacy_partitioned' so existing
   // callers preserve today's behavior; the new resolveSessionForChat
-  // user-thread path passes 'user_thread' explicitly.
-  const kind = sessionKind === 'user_thread' ? 'user_thread' : 'legacy_partitioned';
+  // user-thread path passes 'user_thread' explicitly. Slice 3b adds
+  // 'deal_thread' (one rolling session per lead→estimate→job lineage).
+  const kind = (sessionKind === 'user_thread' || sessionKind === 'deal_thread')
+    ? sessionKind
+    : 'legacy_partitioned';
   // Title varies by kind so Anthropic-side debugging is easier — a
   // user-thread is one rolling Anthropic session across every panel,
   // so the title shouldn't pin to a single entity.
   const title = kind === 'user_thread'
     ? 'Project 86 · ' + organization.slug + ' / user ' + userId + ' (rolling)'
+    : kind === 'deal_thread'
+    ? 'Project 86 deal · ' + organization.slug + ' / lineage ' + (lineageRoot || entityId) + ' (user ' + userId + ')'
     : 'Project 86 ' + agentKey + ' · ' + organization.slug + ' / ' + entityType + ' / ' + (entityId || 'global') + ' (user ' + userId + ')';
 
   const created = await anthropic.beta.sessions.create({
@@ -3382,10 +3443,10 @@ async function createFreshAiSession({ agentKey, entityType, entityId, userId, or
   try {
     const inserted = await pool.query(
       `INSERT INTO ai_sessions
-         (agent_key, entity_type, entity_id, user_id, anthropic_session_id, anthropic_agent_id, session_kind)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+         (agent_key, entity_type, entity_id, user_id, anthropic_session_id, anthropic_agent_id, session_kind, lineage_root)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING *`,
-      [agentKey, entityType, entityId, userId, created.id, agent.anthropic_agent_id, kind]
+      [agentKey, entityType, entityId, userId, created.id, agent.anthropic_agent_id, kind, (kind === 'deal_thread' ? (lineageRoot || null) : null)]
     );
     return inserted.rows[0];
   } catch (e) {
