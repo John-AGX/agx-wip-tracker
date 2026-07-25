@@ -125,7 +125,7 @@
     if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; }
     // Final flush — carry the import extraction (if any) so the server logs
     // extraction-vs-final for the training flywheel.
-    if (_po && (hadTimer || _pendingPOExtraction)) saveNow(!!_pendingPOExtraction);
+    var saveFlush = (_po && (hadTimer || _pendingPOExtraction)) ? saveNow(!!_pendingPOExtraction) : null;
     // Discard freshly-added bills the user never filled in — a $0 blank row
     // would otherwise orphan on the Bills tab / AP aging.
     if (_po && Array.isArray(_po._billRows) && window.p86Api && window.p86Api.bills) {
@@ -138,8 +138,10 @@
     var ov = document.getElementById('po-editor-overlay');
     if (ov) ov.style.display = 'none';
     _po = null;
-    // The hub list underneath may show stale title/sub/status — refresh it.
-    if (typeof window.p86JobsHubRefresh === 'function') window.p86JobsHubRefresh();
+    // Refresh the list AFTER the final save lands — else the re-fetch races the
+    // in-flight PUT and re-renders the stale title/sub/status the user just changed.
+    var _hub = function () { if (typeof window.p86JobsHubRefresh === 'function') window.p86JobsHubRefresh(); };
+    Promise.resolve(saveFlush).then(_hub, _hub);
   }
   window.addEventListener('keydown', function (e) {
     if (e.key === 'Escape') {
@@ -202,8 +204,6 @@
           '<input id="po-f-title" type="text" class="po-ed-input" value="' + escAttr(_po.title || '') + '" placeholder="e.g. Framing and Decking"' + dis + '></label>' +
         '<label class="po-ed-field"><span>Subcontractor</span>' +
           '<select id="po-f-sub" class="po-ed-input"' + dis + '><option value="">— Select sub —</option></select></label>' +
-        '<label class="po-ed-field"><span>Phase</span>' +
-          '<select id="po-f-phase" class="po-ed-input"' + dis + '><option value="">— Job-level —</option></select></label>' +
         '<label class="po-ed-field"><span>Scheduled completion</span>' +
           '<input id="po-f-sched" type="date" class="po-ed-input" value="' + escAttr(_po.scheduledCompletion || '') + '"' + dis + '></label>' +
         '<label class="po-ed-field po-ed-check"><input id="po-f-materials" type="checkbox"' + (_po.materialsOnly ? ' checked' : '') + dis + '> <span>Materials only</span></label>' +
@@ -267,16 +267,19 @@
     rows += '<div class="po-ed-add-row po-ed-add-total"><span>Committed total</span><strong>' + money(poCommittedTotal(_po)) + '</strong></div>';
     var revisingHtml = '';
     if (revising) {
-      // Buttons always show while revising — the Line Items "Total" footer
-      // updates live as you type; the server measures the exact delta on submit
-      // (and rejects a no-op change). Committed shown for reference.
-      revisingHtml =
-        '<div class="po-ed-add-pending">Revising — edit the line items, then record the change as an addendum. ' +
-          'Committed now: <strong>' + money(poCommittedTotal(_po)) + '</strong>' +
-          (Math.abs(pending) >= 0.005 ? ' · pending change <strong>' + (pending >= 0 ? '+' : '') + money(pending) + '</strong>' : '') + '. ' +
-          '<button class="ee-btn primary" id="po-ed-add-approve">Approve addendum (e-sign)</button> ' +
-          '<button class="ee-btn" id="po-ed-add-submit">Send for approval</button>' +
-        '</div>';
+      // With a PRICE change, the revision must go through an addendum (e-sign).
+      // With NO price change (edited only title/sub/notes/allocation), just
+      // re-lock — no addendum needed. The Line Items "Total" footer updates
+      // live; the server measures the exact delta and enforces this split.
+      revisingHtml = (Math.abs(pending) >= 0.005)
+        ? ('<div class="po-ed-add-pending">Revising — the price changed. Committed now: <strong>' + money(poCommittedTotal(_po)) +
+            '</strong> · pending change <strong>' + (pending >= 0 ? '+' : '') + money(pending) + '</strong>. Record it as an addendum: ' +
+            '<button class="ee-btn primary" id="po-ed-add-approve">Approve addendum (e-sign)</button> ' +
+            '<button class="ee-btn" id="po-ed-add-submit">Send for approval</button>' +
+          '</div>')
+        : ('<div class="po-ed-add-pending">Revising — make your edits (title, sub, notes), then re-lock. No price change, so no addendum needed. ' +
+            '<button class="ee-btn primary" id="po-ed-relock">Re-lock</button>' +
+          '</div>');
     }
     return '<div class="po-ed-sec"><div class="po-ed-sec-title">Addendums</div>' +
       '<div class="po-ed-addendums">' + rows + '</div>' + revisingHtml + '</div>';
@@ -454,6 +457,7 @@
     var unlockBtn = byId('po-ed-unlock'); if (unlockBtn) unlockBtn.addEventListener('click', doUnlock);
     var addApprove = byId('po-ed-add-approve'); if (addApprove) addApprove.addEventListener('click', function () { submitAddendum(true); });
     var addSubmit = byId('po-ed-add-submit'); if (addSubmit) addSubmit.addEventListener('click', function () { submitAddendum(false); });
+    var relockBtn = byId('po-ed-relock'); if (relockBtn) relockBtn.addEventListener('click', submitRelock);
     var ovEl = document.getElementById('po-editor-overlay');
     if (ovEl) ovEl.querySelectorAll('.po-ed-add-approvebtn').forEach(function (b) {
       b.addEventListener('click', function () { approvePendingAddendum(b.getAttribute('data-add-id')); });
@@ -483,22 +487,6 @@
           });
         }
       });
-    }
-
-    // Phase picker — attribute the PO's committed cost to a specific phase so it
-    // lands on that phase's accrued (else job-level). Explicit link beats the
-    // name-match heuristic in getJobPOAccrued.
-    var phaseSel = byId('po-f-phase');
-    if (phaseSel) {
-      var _phNames = [];
-      ((window.appData && window.appData.phases) || []).forEach(function (p) {
-        if (p.jobId === _po.job_id) { var n = (p.phase || '').trim(); if (n && _phNames.indexOf(n) === -1) _phNames.push(n); }
-      });
-      _phNames.sort();
-      phaseSel.innerHTML = '<option value="">— Job-level —</option>' + _phNames.map(function (n) {
-        return '<option value="' + escAttr(n) + '"' + (n === _po.phaseName ? ' selected' : '') + '>' + esc(n) + '</option>';
-      }).join('');
-      phaseSel.addEventListener('change', function () { _po.phaseName = phaseSel.value || null; queueSave(); });
     }
 
     // Read-only sections load regardless of lock state.
@@ -807,7 +795,6 @@
       title: _po.title || '', scope: _po.scope || '', internalNotes: _po.internalNotes || '',
       scheduledCompletion: _po.scheduledCompletion || '', materialsOnly: !!_po.materialsOnly,
       lines: _po.lines || [], linkedRfiIds: _po.linkedRfiIds || [],
-      phaseName: _po.phaseName || null,
       sub_id: _po.sub_id || null
     };
     // Carry the PDF extraction once (close-flush) so the server logs
@@ -898,6 +885,23 @@
       .then(function () { return window.p86Api.purchaseOrders.addendum(poId, { reason: reason, approve: !!approve, acceptance: acceptance }); })
       .then(function (r) { applyServerPO(r); render(); if (typeof window.p86JobsHubRefresh === 'function') window.p86JobsHubRefresh(); })
       .catch(function (e) { alert('Could not record the addendum: ' + ((e && e.message) || 'error')); });
+  }
+  // Re-lock a revised PO that had NO price change (edited only title/sub/notes/
+  // allocation). The server refuses if the lines total drifted from the
+  // committed total — a real price change must go through an addendum (e-sign).
+  function submitRelock() {
+    if (!_po || !(window.p86Api && window.p86Api.purchaseOrders && window.p86Api.purchaseOrders.relock)) return;
+    if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer = null; }
+    var poId = _po.id;
+    saveNow()
+      .then(function () { return window.p86Api.purchaseOrders.relock(poId); })
+      .then(function (r) { applyServerPO(r); render(); if (typeof window.p86JobsHubRefresh === 'function') window.p86JobsHubRefresh(); })
+      .catch(function (e) {
+        var msg = (e && e.message) || 'error';
+        alert(/price|addendum|delta/i.test(msg)
+          ? 'The PO price changed — record it as an addendum (e-sign) instead of a plain re-lock.'
+          : ('Could not re-lock: ' + msg));
+      });
   }
   function approvePendingAddendum(addId) {
     if (!_po || !addId) return;

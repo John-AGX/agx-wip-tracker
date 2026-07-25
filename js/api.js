@@ -430,6 +430,9 @@
     // Unlock a locked PO to revise its line items (a price change then flows
     // through addendum()).
     unlock: function(id) { return post('/api/purchase-orders/' + encodeURIComponent(id) + '/unlock', {}); },
+    // Re-lock a revised PO with NO price change (edited only non-price fields).
+    // Server 409s if the lines total drifted — that must go through addendum().
+    relock: function(id) { return post('/api/purchase-orders/' + encodeURIComponent(id) + '/relock', {}); },
     // Record a price-change addendum (or approve a pending one) + re-lock.
     // payload = { reason?, approve?, acceptance?, addendumId? }.
     addendum: function(id, payload) { return post('/api/purchase-orders/' + encodeURIComponent(id) + '/addendum', payload || {}); },

@@ -507,6 +507,45 @@ router.post('/purchase-orders/:id/unlock', requireAuth, requireCapability('JOBS_
   }
 });
 
+// ── re-lock (no price change) ───────────────────────────────────────
+// Re-freeze a PO that was unlocked to revise but whose PRICE didn't change
+// (only title/sub/notes/allocation edited). Clears `revising`. Refuses if the
+// current lines total drifted from the committed baseline — a real price
+// change must go through /addendum (which e-signs the delta). Mirrors the
+// client's poPendingDelta (null baseline ⇒ nothing to reconcile).
+router.post('/purchase-orders/:id/relock', requireAuth, requireCapability('JOBS_EDIT_ANY'), async (req, res) => {
+  try {
+    const id = req.params.id;
+    const cur = await pool.query(
+      `SELECT po.data, po.status,
+              j.data->>'jobNumber' AS job_number, j.data->>'title' AS job_title
+         FROM job_purchase_orders po JOIN jobs j ON j.id = po.job_id
+        WHERE po.id = $1 AND (j.organization_id = $2 OR j.organization_id IS NULL)`,
+      [id, req.user.organization_id]);
+    if (!cur.rowCount) return res.status(404).json({ error: 'Not found' });
+    if (cur.rows[0].status === 'closed') return res.status(409).json({ error: 'Cannot re-lock a closed purchase order' });
+    const data = cur.rows[0].data || {};
+    const pending = (data.baselineTotal == null) ? 0
+      : Math.round((rawLinesTotal(data) - (Number(data.baselineTotal) + approvedAddSum(data))) * 100) / 100;
+    if (Math.abs(pending) >= 0.005) {
+      return res.status(409).json({ error: 'price_changed: record the price change as an addendum (e-sign), not a plain re-lock.' });
+    }
+    const newData = { ...data };
+    delete newData.revising;
+    const { rows } = await pool.query(
+      `UPDATE job_purchase_orders SET is_locked = true, data = $1::jsonb, updated_at = NOW()
+        WHERE id = $2
+        RETURNING id, job_id, owner_id, sub_id, status, po_number, data, is_locked,
+                  approved_at, approved_by, created_at, updated_at`,
+      [JSON.stringify(newData), id]);
+    res.json({ purchase_order: Object.assign(shapeRow(rows[0]), {
+      job_number: cur.rows[0].job_number, job_title: cur.rows[0].job_title }) });
+  } catch (e) {
+    console.error('POST /api/purchase-orders/:id/relock error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
 // ── record a price-change addendum + re-lock ────────────────────────
 // Body: { reason?, approve?: bool, acceptance?: {name,date}, addendumId?: string }
 //  - addendumId + approve:true  → approve an existing PENDING addendum.
