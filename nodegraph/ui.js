@@ -3825,7 +3825,10 @@ function _ensureBldgSubsStyles(){
     +'.ng-bldg-sub-row{display:flex;align-items:center;gap:8px;padding:3px 0;font-size:13px;color:#c7ccd6;}'
     +'.ng-bldg-sub-nm{font-weight:600;}'
     +'.ng-bldg-sub-po{font-family:\'Courier New\',monospace;font-size:11px;color:#6a7090;}'
-    +'.ng-bldg-sub-st{margin-left:auto;font-size:10px;text-transform:uppercase;letter-spacing:.03em;padding:1px 7px;border-radius:10px;background:rgba(90,169,222,.15);color:#5aa9de;}';
+    +'.ng-bldg-sub-x{margin-left:auto;background:none;border:none;color:#6a7090;font-size:16px;line-height:1;cursor:pointer;padding:0 2px;}'
+    +'.ng-bldg-sub-x:hover{color:#e8836b;}'
+    +'.ng-bldg-sub-empty{font-size:12.5px;color:#6a7090;padding:2px 0;}'
+    +'.ng-bldg-alloc-sel{margin-top:8px;width:100%;background:#0e1626;color:#c7ccd6;border:1px solid #2a303b;border-radius:7px;padding:6px 8px;font-size:12.5px;cursor:pointer;}';
   document.head.appendChild(st);
 }
 function buildingSubsHtml(sel){
@@ -3840,17 +3843,41 @@ function fillBuildingSubs(sel){
     var jobId=E.job(); if(!jobId)return;
     loadJobPOsCached(jobId).then(function(pos){
       var el=document.querySelector('.ng-bldg-subs[data-bldg-subs="'+bId+'"]'); if(!el)return;
-      var rows=_subsForBuilding(pos,bId);
-      if(!rows.length){ el.style.display='none'; el.innerHTML=''; return; }
+      var withSub=(pos||[]).filter(function(po){ return po.sub_id||(po.data&&po.data.sub_id); });
+      var onB=withSub.filter(function(po){ return _poBuildingIds(po).indexOf(bId)!==-1; });
+      var avail=withSub.filter(function(po){ return _poBuildingIds(po).indexOf(bId)===-1; });
+      if(!onB.length && !avail.length){ el.style.display='none'; el.innerHTML=''; return; } // nothing to allocate
       _ensureBldgSubsStyles();
-      el.innerHTML='<div class="ng-bs-h">Subs on this building</div>'
-        +rows.map(function(r){
-          return '<div class="ng-bldg-sub-row"><span class="ng-bldg-sub-nm">'+luEsc(r.name)+'</span>'
-            +(r.po?'<span class="ng-bldg-sub-po">'+luEsc(r.po)+'</span>':'')
-            +(r.status?'<span class="ng-bldg-sub-st">'+luEsc(r.status)+'</span>':'')+'</div>';
-        }).join('');
+      var rows = onB.length ? onB.map(function(po){
+        var sid=po.sub_id||(po.data&&po.data.sub_id); var nm=_subNameById(sid)||'Sub';
+        return '<div class="ng-bldg-sub-row"><span class="ng-bldg-sub-nm">'+luEsc(nm)+'</span>'
+          +(po.po_number?'<span class="ng-bldg-sub-po">'+luEsc(po.po_number)+'</span>':'')
+          +'<button class="ng-bldg-sub-x" title="Remove this sub from the building" data-unalloc="'+luEsc(po.id)+'">×</button></div>';
+      }).join('') : '<div class="ng-bldg-sub-empty">No subs allocated yet.</div>';
+      var picker = avail.length ? ('<select class="ng-bldg-alloc-sel"><option value="">+ Allocate a sub (PO)…</option>'
+        + avail.map(function(po){ var sid=po.sub_id||(po.data&&po.data.sub_id); return '<option value="'+luEsc(po.id)+'">'+luEsc(_subNameById(sid)||'Sub')+(po.po_number?(' · '+luEsc(po.po_number)):'')+'</option>'; }).join('')
+        + '</select>') : '';
+      el.innerHTML='<div class="ng-bs-h">Subs on this building</div>'+rows+picker;
       el.style.display='';
+      el.querySelectorAll('[data-unalloc]').forEach(function(b){ b.addEventListener('click', function(){ _allocPoBuilding(b.getAttribute('data-unalloc'), bId, false, sel); }); });
+      var pk=el.querySelector('.ng-bldg-alloc-sel'); if(pk) pk.addEventListener('change', function(){ if(pk.value) _allocPoBuilding(pk.value, bId, true, sel); });
     });
+  }catch(e){}
+}
+// Allocate/de-allocate a PO to a building from the Site Plan inspector — the
+// PO carries buildingIds; a PUT with just buildingIds merges (server keeps the
+// rest). Busts the PO cache + re-renders the section.
+function _allocPoBuilding(poId, bId, add, sel){
+  try{
+    var pos=(_bldgPoCache&&_bldgPoCache.pos)||[];
+    var po=pos.find(function(p){return p.id===poId;}); if(!po)return;
+    var cur=_poBuildingIds(po).slice(), i=cur.indexOf(bId);
+    if(add && i===-1) cur.push(bId); else if(!add && i!==-1) cur.splice(i,1); else return;
+    var tok=null; try{tok=localStorage.getItem('p86-auth-token');}catch(e){}
+    var H={'Content-Type':'application/json'}; if(tok)H['Authorization']='Bearer '+tok;
+    fetch('/api/purchase-orders/'+encodeURIComponent(poId),{method:'PUT',headers:H,credentials:'include',body:JSON.stringify({buildingIds:cur})})
+      .then(function(){ _bldgPoCache=null; fillBuildingSubs(sel); })
+      .catch(function(){ _bldgPoCache=null; fillBuildingSubs(sel); });
   }catch(e){}
 }
 function buildingKpiGridHtml(sel){
