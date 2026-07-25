@@ -2826,6 +2826,44 @@ async function initSchema() {
       ON ai_sessions(user_id, last_used_at DESC)
       WHERE session_kind = 'user_thread' AND archived_at IS NULL;
 
+    -- ── Deal memory (session/memory architecture, slice 2). One durable row
+    -- per lead→estimate→job LINEAGE, keyed on the lineage ROOT (the lead id
+    -- when a lead exists anywhere in the chain, else the estimate/job id — see
+    -- resolveLineageRoot). This is the deal-thread's always-in-context "core
+    -- memory": it survives compaction and re-grounds a cold thread, so no deal
+    -- fact ever lives only in raw conversation turns.
+    --
+    -- Two sub-blocks with SINGLE-WRITER ownership:
+    --   numbers  — contract / CO / committed-PO / stage / %complete / dates,
+    --              written DETERMINISTICALLY from the money layer (computeJobWIP
+    --              + estimate-totals). The model READS it, NEVER writes it —
+    --              LLM prose must not own a money number.
+    --   notes    — append-only decisions/constraints, model-authored via Scribe
+    --              + Critic (slice 4). [] until then.
+    -- lineage_root is a raw entity id (lead/estimate/job). Collision-safe as a
+    -- PK because those id spaces don't overlap by construction: lead ids are
+    -- 'lead_…', estimate ids 'e…', job ids 'j…'. root_type records which kind it
+    -- is so a reader never has to infer it from the prefix.
+    CREATE TABLE IF NOT EXISTS deal_memory (
+      lineage_root    TEXT PRIMARY KEY,            -- lead id (preferred) / estimate id / job id
+      root_type       TEXT NOT NULL,               -- 'lead' | 'estimate' | 'job'
+      organization_id INTEGER REFERENCES organizations(id) ON DELETE CASCADE,
+      numbers         JSONB NOT NULL DEFAULT '{}'::jsonb,   -- rollup-written; model never writes
+      numbers_stage   TEXT,                         -- stage the numbers reflect: 'lead'|'estimate'|'job'
+      numbers_at      TIMESTAMPTZ,                  -- last deterministic recompute
+      notes           JSONB NOT NULL DEFAULT '[]'::jsonb,   -- append-only [{id,at,by,text,superseded_by}] (slice 4)
+      created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_deal_memory_org
+      ON deal_memory(organization_id) WHERE organization_id IS NOT NULL;
+
+    -- Lineage resolution walks estimates.data->>'lead_id' to find the deal root
+    -- from any stage. Without this expression index every lead-scoped resolve
+    -- sequential-scans the estimates table (gap G10).
+    CREATE INDEX IF NOT EXISTS idx_estimates_lead_id
+      ON estimates ((data->>'lead_id'));
+
     -- Backfill labels for pre-sidebar rows so the sidebar UI doesn't
     -- show blank labels on existing sessions. "General" for the
     -- catch-all (entity_type='86' historically meant the global
