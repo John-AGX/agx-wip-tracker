@@ -3677,8 +3677,63 @@ function renderJobsMain() {
             if (!isNaN(na) && !isNaN(nb) && na !== nb) return na - nb;
             return String(a.name || '').localeCompare(String(b.name || ''));
         }
+        // ── Buildings "Money line" crew derivation ─────────────────────────
+        // The crew a building shows is DERIVED from the POs allocated to it
+        // (po.data.buildingIds + sub_id), not the manual building.workScope —
+        // assign a sub's PO to a building and its chip flips automatically.
+        // Mirrors the Site-Plan inspector's proven fetch (loadJobPOsCached).
+        var _jbPoCache = null; // { jobId, at, pos }
+        function _jbLoadJobPOs(jobId) {
+            if (_jbPoCache && _jbPoCache.jobId === jobId && (Date.now() - _jbPoCache.at) < 20000) return Promise.resolve(_jbPoCache.pos);
+            var tok = null; try { tok = localStorage.getItem('p86-auth-token'); } catch (e) {}
+            var H = {}; if (tok) H['Authorization'] = 'Bearer ' + tok;
+            return fetch('/api/jobs/' + encodeURIComponent(jobId) + '/purchase-orders', { headers: H, credentials: 'include' })
+                .then(function (r) { return r.ok ? r.json() : null; })
+                .then(function (j) { var pos = (j && (j.purchase_orders || j.data || j)) || []; if (!Array.isArray(pos)) pos = []; _jbPoCache = { jobId: jobId, at: Date.now(), pos: pos }; return pos; })
+                .catch(function () { return []; });
+        }
+        function _jbPoBuildingIds(po) { var b = po.buildingIds || (po.data && po.data.buildingIds); return Array.isArray(b) ? b : []; }
+        function _jbSubName(id) {
+            var dir = (typeof appData !== 'undefined' && appData.subsDirectory) || [];
+            var inl = (typeof appData !== 'undefined' && appData.subs) || [];
+            var s = dir.find(function (x) { return String(x.id) === String(id); }) || inl.find(function (x) { return String(x.id) === String(id); });
+            return s ? (s.name || s.id) : null;
+        }
+        var _JB_PO_DEAD = { draft: 1, void: 1, cancelled: 1, canceled: 1, rejected: 1 };
+        function _jbInitials(name) {
+            var parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+            if (!parts.length) return '?';
+            return (parts[0][0] + (parts.length > 1 ? parts[parts.length - 1][0] : '')).toUpperCase();
+        }
+        // Async, additive: money is already rendered; a failed fetch just leaves
+        // the "In-house" default in place. Never touches the money numbers.
+        function fillBuildingCrew(jobId, root) {
+            try {
+                var spans = (root || document).querySelectorAll('[data-bldg-crew]');
+                if (!spans.length) return;
+                _jbLoadJobPOs(jobId).then(function (pos) {
+                    var active = (pos || []).filter(function (po) { return !_JB_PO_DEAD[String(po.status || '').toLowerCase()]; });
+                    spans.forEach(function (span) {
+                        var bId = span.getAttribute('data-bldg-crew');
+                        var seen = {}, names = [];
+                        active.forEach(function (po) {
+                            if (_jbPoBuildingIds(po).indexOf(bId) === -1) return;
+                            var sid = po.sub_id || (po.data && po.data.sub_id); if (!sid || seen[sid]) return; seen[sid] = 1;
+                            var nm = _jbSubName(sid); if (nm) names.push(nm);
+                        });
+                        if (!names.length) return; // keep the In-house default
+                        var label = names.length === 1 ? names[0] : (names.length + ' subs');
+                        var av = names.length === 1 ? _jbInitials(names[0]) : String(names.length);
+                        span.innerHTML = '<span class="p86-mline-av">' + escapeHTML(av) + '</span><span class="nm">' + escapeHTML(label) + '</span>';
+                        span.setAttribute('title', names.join(' · '));
+                    });
+                });
+            } catch (e) {}
+        }
+
         function renderJobBuildings(jobId, hostId) {
             const buildings = appData.buildings.filter(b => b.jobId === jobId).slice().sort(_bldgNumSort);
+            const _hostKey = (hostId || 'job-buildings-content').replace(/\W/g, '_');
             const container = document.getElementById(hostId || 'job-buildings-content');
             if (!container) return;   // host may be absent (e.g. node-graph inspector passes its own id)
             if (!buildings.length) { container.innerHTML = ''; return; }
@@ -3702,62 +3757,42 @@ function renderJobsMain() {
                 const variance = eff.amount - buildingCost;
                 const bldgPct = totalBudget > 0 ? (eff.amount / totalBudget * 100).toFixed(1) : '—';
                 const pctComplete = calcBuildingPctComplete(building.id, jobId).toFixed(1);
-                const scope = building.workScope || 'in-house';
-                // Scope chip color modifier: 'in-house' (accent blue) / 'sub'
-                // (purple) / 'both' (yellow). Painted via CSS class so light
-                // mode + theme tweaks just work.
-                const scopeMod = scope === 'sub' ? 'scope-sub' : scope === 'both' ? 'scope-both' : 'scope-inhouse';
-
                 const cosWired = getCOsConnectedTo('t1', building.id);
-                const uid = 'bldg-grp-' + building.id.replace(/\W/g, '_');
+                const uid = 'bldg-grp-' + _hostKey + '-' + building.id.replace(/\W/g, '_');
                 const ARROW_RIGHT = '\u25B6';
                 const ARROW_DOWN = '\u25BC';
                 const arrowId = uid + '-arrow';
-                const varMod = variance >= 0 ? 'positive' : 'negative';
-                const summaryRow =
-                    '<tr class="p86-bldg-row" ' +
-                        'onclick="(function(){var d=document.getElementById(\'' + uid + '\');var a=document.getElementById(\'' + arrowId + '\');var closed=d.style.display===\'none\';d.style.display=closed?\'table-row\':\'none\';a.textContent=closed?\'' + ARROW_DOWN + '\':\'' + ARROW_RIGHT + '\';})()">' +
-                        '<td class="p86-bldg-cell p86-bldg-cell-name">' +
-                            '<span id="' + arrowId + '" class="p86-bldg-arrow">' + ARROW_RIGHT + '</span> ' +
-                            '<strong class="p86-bldg-name">' + escapeHTML(building.name) + '</strong>' +
-                            (building.address ? '<span class="p86-bldg-addr">' + escapeHTML(building.address) + '</span>' : '') +
-                            // The map-pin icon opens this building's address in Google Maps.
-                            // stopPropagation so it doesn't also toggle the row.
-                            (building.address && window.p86MapLink && window.p86MapLink.url(building.address)
-                              ? ' <a href="' + window.p86MapLink.url(building.address).replace(/&/g, '&amp;') +
-                                  '" target="_blank" rel="noopener" onclick="event.stopPropagation();" ' +
-                                  'title="Open in Google Maps" style="text-decoration:none;margin-left:4px;">' + (window.p86Icon ? window.p86Icon('map-pin') : '') + '</a>'
-                              : '') +
-                        '</td>' +
-                        '<td class="p86-bldg-cell p86-bldg-cell-num accent">' +
-                            formatCurrency(eff.amount) +
-                            (eff.derived ? '<span class="p86-bldg-co-tag" title="No explicit building budget — derived from this building\'s phase revenue">auto</span>' : '') +
-                            // Legacy building.coBudget "+$X" tag retired: CO→building
-                            // revenue now lives in the CO's buildingAllocations and
-                            // renders in the building card's Change Orders block, so
-                            // this stale wire-era scalar would double-display.
-                        '</td>' +
-                        '<td class="p86-bldg-cell p86-bldg-cell-num accent">' +
-                            formatCurrency(buildingCost) +
-                        '</td>' +
-                        '<td class="p86-bldg-cell p86-bldg-cell-num ' + varMod + '">' +
-                            formatCurrency(variance) +
-                        '</td>' +
-                        '<td class="p86-bldg-cell p86-bldg-cell-num pct">' +
-                            pctComplete + '%' +
-                        '</td>' +
-                        '<td class="p86-bldg-cell p86-bldg-cell-num dim">' +
-                            bldgPct + '%' +
-                        '</td>' +
-                        '<td class="p86-bldg-cell">' +
-                            '<span class="p86-bldg-scope ' + scopeMod + '">' + escapeHTML(scope) + '</span>' +
-                        '</td>' +
-                        '<td class="p86-bldg-cell p86-bldg-cell-actions">' +
-                            '<button class="ee-btn ghost p86-bldg-edit-btn" onclick="event.stopPropagation();editBuilding(\'' + escapeHTML(building.id) + '\')">&#x270F;&#xFE0F; Edit</button>' +
-                        '</td>' +
-                    '</tr>';
-
-                let body = '<tr id="' + uid + '" class="p86-bldg-body"><td colspan="8">';
+                // Money line (Variant B): budget is the hero; Spent / Left / % ride
+                // below as a caption; progress is a 2px hairline; the crew chip is
+                // derived from allocated-PO subs (fillBuildingCrew), not workScope.
+                const compPct = parseFloat(pctComplete) || 0;
+                const spentPct = eff.amount > 0 ? (buildingCost / eff.amount * 100) : 0;
+                const paceFlag = (eff.amount > 0 && buildingCost > 0 && spentPct > compPct + 5)
+                    ? ' <span class="p86-mline-pace" title="Spend is running ahead of progress">spend ' + spentPct.toFixed(0) + '%</span>' : '';
+                const mapPin = (building.address && window.p86MapLink && window.p86MapLink.url(building.address))
+                    ? ' <a href="' + window.p86MapLink.url(building.address).replace(/&/g, '&amp;') + '" target="_blank" rel="noopener" onclick="event.stopPropagation();" title="Open in Google Maps" style="text-decoration:none;margin-left:2px;">' + (window.p86Icon ? window.p86Icon('map-pin') : '') + '</a>'
+                    : '';
+                let body =
+                    '<div class="p86-mline" onclick="(function(){var d=document.getElementById(\'' + uid + '\');var a=document.getElementById(\'' + arrowId + '\');var closed=d.style.display===\'none\';d.style.display=closed?\'block\':\'none\';a.textContent=closed?\'' + ARROW_DOWN + '\':\'' + ARROW_RIGHT + '\';})()">' +
+                        '<div class="p86-mline-top">' +
+                            '<div class="p86-mline-id">' +
+                                '<span id="' + arrowId + '" class="p86-mline-arrow">' + ARROW_RIGHT + '</span>' +
+                                '<span class="p86-mline-name">' + escapeHTML(building.name) + '</span>' + mapPin +
+                            '</div>' +
+                            '<div class="p86-mline-hero">' +
+                                '<div class="hv">' + formatCurrency(eff.amount) + '</div>' +
+                                '<div class="hk">budget' + (eff.derived ? '<span class="auto" title="No explicit building budget — derived from this building\'s scope revenue">auto</span>' : '') + '</div>' +
+                            '</div>' +
+                        '</div>' +
+                        '<div class="p86-mline-sub">' +
+                            '<span class="p86-mline-crew" data-bldg-crew="' + escapeHTML(building.id) + '"><span class="p86-mline-inhouse"></span>In-house</span>' +
+                            '<span class="s">Spent <b>' + formatCurrency(buildingCost) + '</b></span>' +
+                            '<span class="s">Left <b class="' + (variance >= 0 ? 'pos' : 'neg') + '">' + formatCurrency(variance) + '</b></span>' +
+                            '<span class="s">' + pctComplete + '% done' + paceFlag + '</span>' +
+                            '<span class="p86-mline-of">' + bldgPct + '% of job</span>' +
+                        '</div>' +
+                        '<div class="p86-mline-track"><i style="width:' + Math.max(0, Math.min(100, compPct)) + '%"></i></div>' +
+                        '<div id="' + uid + '" class="p86-mline-body" style="display:none">';
 
                 // Cost breakdown
                 // Building cost buckets are computed from wired phases/cost nodes
@@ -3770,10 +3805,10 @@ function renderJobsMain() {
                     ((building.hoursTotal || building.rate) ? '<span class="p86-bldg-cost-meta">' + (building.hoursTotal || 0) + 'hrs' + (building.hoursWeek ? ' (' + building.hoursWeek + '/wk)' : '') + ' @ ' + formatCurrency(building.rate || 40) + '/hr</span>' : '') +
                     '</div>';
 
-                // Phases (from node graph wiring)
-                body += '<div class="p86-bldg-section-head">PHASES (' + wiredPhases.length + ')</div>';
+                // Scopes (from node graph wiring)
+                body += '<div class="p86-bldg-section-head">SCOPES (' + wiredPhases.length + ')</div>';
                 if (wiredPhases.length === 0) {
-                    body += '<div class="p86-bldg-section-empty">No phases wired to this building on the Site Plan</div>';
+                    body += '<div class="p86-bldg-section-empty">No scopes wired to this building on the Site Plan</div>';
                 } else {
                     body += '<div class="p86-bldg-chip-list">';
                     wiredPhases.forEach(function(wp) {
@@ -3788,7 +3823,7 @@ function renderJobsMain() {
                     });
                     body += '</div>';
                 }
-                body += '<button class="p86-bldg-add-phase-btn" onclick="event.stopPropagation();openAddPhaseToJobModal(\'' + escapeHTML(building.id) + '\')">+ Phase</button>';
+                body += '<button class="p86-bldg-add-phase-btn" onclick="event.stopPropagation();openAddPhaseToJobModal(\'' + escapeHTML(building.id) + '\')">+ Scope</button>';
 
                 // Change Orders wired to this building
                 body += '<div class="p86-bldg-section-head">CHANGE ORDERS (' + cosWired.length + ')</div>';
@@ -3806,8 +3841,11 @@ function renderJobsMain() {
                     body += '</div>';
                 }
 
-                body += '</td></tr>';
-                return summaryRow + body;
+                // Edit lives in the expanded body now — the row itself stays clean
+                // (this is what retired the always-visible "Edit" column).
+                body += '<div style="margin-top:10px;"><button class="p86-mline-edit" onclick="event.stopPropagation();editBuilding(\'' + escapeHTML(building.id) + '\')">&#x270F;&#xFE0F; Edit building</button></div>';
+                body += '</div></div>';   // close .p86-mline-body + .p86-mline
+                return body;
             }).join('');
 
             // Section summary — building budgets are the READ-OUT of the phase
@@ -3817,43 +3855,29 @@ function renderJobsMain() {
             // "Auto-fill" strip.
             var _recon = getJobBudgetRecon(jobId);
             var _totalVar = totalBudget - totalSpent;
-            var _reconTxt = '';
+            // Compact allocation strip: Allocated / Unallocated / Spent / Remaining.
+            var _unallocVal = '—', _unallocCls = '';
             if (_recon.contract > 0) {
-                var _rc = _recon.full ? 'var(--green)' : (_recon.over ? 'var(--red)' : 'var(--orange,#e0a458)');
-                var _rtxt = _recon.full ? '✓' : (_recon.over ? '(over by ' + formatCurrency(-_recon.gap) + ' ⚠)' : '(' + formatCurrency(_recon.gap) + ' unallocated)');
-                _reconTxt = ' <span style="color:var(--text-dim);">of</span> <b style="font-family:monospace;">' + formatCurrency(_recon.contract) + '</b> ' +
-                    '<span style="color:' + _rc + ';font-weight:600;">' + _rtxt + '</span>';
+                if (_recon.full) { _unallocVal = formatCurrency(0); _unallocCls = ''; }
+                else if (_recon.over) { _unallocVal = 'over ' + formatCurrency(-_recon.gap); _unallocCls = 'neg'; }
+                else { _unallocVal = formatCurrency(_recon.gap); _unallocCls = 'warn'; }
             }
-            // Total unit count across all buildings (units live on each building's
-            // structure, synced onto the record) — a quick at-a-glance tally under
-            // the building count.
             var _totalUnits = buildings.reduce(function (s, b) { return s + ((b.units && b.units.length) || 0); }, 0);
-            var summaryHTML =
-                '<div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin:0 0 8px;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--card-bg,#141419);font-size:11.5px;">' +
-                    '<span style="color:var(--text-dim);display:inline-flex;flex-direction:column;line-height:1.25;">' + buildings.length + ' buildings' +
-                        '<span style="font-size:9.5px;color:var(--text-dim,#888);">' + _totalUnits + ' unit' + (_totalUnits === 1 ? '' : 's') + ' total</span>' +
-                    '</span>' +
-                    '<span style="color:var(--text-dim);">Budget <b style="color:var(--accent);font-family:monospace;">' + formatCurrency(totalBudget) + '</b>' + _reconTxt + '</span>' +
-                    '<span style="color:var(--text-dim);">Spent <b style="color:var(--orange,#e0a458);font-family:monospace;">' + formatCurrency(totalSpent) + '</b></span>' +
-                    '<span style="color:var(--text-dim);">Var <b style="color:' + (_totalVar >= 0 ? 'var(--green)' : 'var(--red)') + ';font-family:monospace;">' + formatCurrency(_totalVar) + '</b></span>' +
-                    '<span style="color:var(--text-dim,#888);font-size:10.5px;margin-left:auto;">Budgets derive from each building\'s phase slices</span>' +
-                '</div>';
-            container.innerHTML = summaryHTML +
-                '<div class="p86-bldg-table-wrap">' +
-                    '<table class="p86-bldg-table">' +
-                        '<thead class="p86-bldg-thead"><tr>' +
-                            thCell('Building', 'left') +
-                            thCell('Budget', 'right') +
-                            thCell('Spent', 'right') +
-                            thCell('Var', 'right') +
-                            thCell('%', 'right') +
-                            thCell('Of Job', 'right') +
-                            thCell('Scope', 'left') +
-                            thCell('', 'right') +
-                        '</tr></thead>' +
-                        '<tbody>' + rowsHTML + '</tbody>' +
-                    '</table>' +
-                '</div>';
+            var stripHTML =
+                '<div class="p86-mline-strip">' +
+                    '<div class="st"><div class="k">Allocated</div><div class="v">' + formatCurrency(totalBudget) + '</div></div>' +
+                    '<div class="st"><div class="k">' + (_recon.contract > 0 ? 'Unallocated' : 'Budget') + '</div><div class="v ' + _unallocCls + '">' + _unallocVal + '</div></div>' +
+                    '<div class="st"><div class="k">Spent</div><div class="v">' + formatCurrency(totalSpent) + '</div></div>' +
+                    '<div class="st"><div class="k">Remaining</div><div class="v ' + (_totalVar >= 0 ? 'pos' : 'neg') + '">' + formatCurrency(_totalVar) + '</div></div>' +
+                '</div>' +
+                '<div class="p86-mline-strip-note">' + buildings.length + ' building' + (buildings.length === 1 ? '' : 's') +
+                    (_totalUnits ? (' · ' + _totalUnits + ' unit' + (_totalUnits === 1 ? '' : 's')) : '') +
+                    (_recon.contract > 0 ? (' · of ' + formatCurrency(_recon.contract) + ' contract') : '') +
+                    ' · budgets derive from each building’s scope slices</div>';
+            container.innerHTML = stripHTML + '<div class="p86-mline-list">' + rowsHTML + '</div>';
+            // Crew chips are DERIVED from allocated-PO subs, filled async after the
+            // money (which is already in the DOM). Never blocks or alters numbers.
+            fillBuildingCrew(jobId, container);
         }
 
         // Shared <th> renderer used by renderJobBuildings AND a handful
