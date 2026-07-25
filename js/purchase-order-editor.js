@@ -474,6 +474,14 @@
         var cur = byId('po-ed-sub-current');
         if (cur) cur.innerHTML = _po.sub_name ? 'Assigned: <strong>' + esc(_po.sub_name) + '</strong>' : '';
         queueSave();
+        // Sub-access permissions popup — assigning a sub to a form prompts to
+        // grant them job + folder access (reusable window.p86SubAccessPrompt).
+        if (_po.sub_id && _po.job_id && typeof window.p86SubAccessPrompt === 'function') {
+          window.p86SubAccessPrompt({
+            subId: _po.sub_id, subName: _po.sub_name,
+            jobId: _po.job_id, jobName: _po.job_title || _po.job_name || ''
+          });
+        }
       });
     }
 

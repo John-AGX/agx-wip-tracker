@@ -30,6 +30,7 @@ const { pool } = require('../db');
 const { requireAuth, requireCapability } = require('../auth');
 const { sendForEvent } = require('../email');
 const fileFolders = require('../services/file-folders');
+const { defaultFoldersForEntity } = require('../folder-taxonomy');
 
 const router = express.Router();
 
@@ -857,6 +858,94 @@ router.delete('/:subId/attachment-grants/:grantId',
       res.json({ ok: true });
     } catch (e) {
       console.error('DELETE /api/subs/:subId/attachment-grants/:grantId error:', e);
+      res.status(500).json({ error: 'Server error: ' + e.message });
+    }
+  }
+);
+
+// GET /api/subs/:subId/job-access/:jobId — the sub's access to ONE job:
+// whether they're assigned + which of the job's folders they can see, plus
+// the full job folder taxonomy so the permissions panel renders every
+// checkbox. Powers window.p86SubAccessPrompt.
+router.get('/:subId/job-access/:jobId',
+  requireAuth, requireCapability('JOBS_VIEW_ALL'),
+  async (req, res) => {
+    try {
+      const { subId, jobId } = req.params;
+      const js = await pool.query(
+        'SELECT 1 FROM job_subs WHERE job_id = $1 AND sub_id = $2 LIMIT 1', [jobId, subId]);
+      const gr = await pool.query(
+        `SELECT folder FROM attachment_folder_grants
+          WHERE sub_id = $1 AND entity_type = 'job' AND entity_id = $2`, [subId, jobId]);
+      res.json({
+        hasJob: js.rowCount > 0,
+        granted: gr.rows.map(r => r.folder),
+        available: ['general'].concat(defaultFoldersForEntity('job'))
+      });
+    } catch (e) {
+      console.error('GET /api/subs/:subId/job-access/:jobId error:', e);
+      res.status(500).json({ error: 'Server error' });
+    }
+  }
+);
+
+// POST /api/subs/:subId/job-access — set the sub's access to a job in one
+// shot (the permissions panel's Save). Body: { jobId, folders: [...] }.
+// Reconciles: ensures a job-level job_subs assignment when they get any
+// folder, GRANTS each wanted folder they lack, and REVOKES this job's folder
+// grants that aren't wanted. folders:[] leaves them with no visible folders.
+router.post('/:subId/job-access',
+  requireAuth, requireCapability('JOBS_EDIT_ANY'),
+  async (req, res) => {
+    try {
+      const subId = req.params.subId;
+      const jobId = String((req.body && req.body.jobId) || '').trim();
+      if (!jobId) return res.status(400).json({ error: 'jobId is required' });
+      const subR = await pool.query('SELECT id FROM subs WHERE id = $1', [subId]);
+      if (!subR.rows.length) return res.status(404).json({ error: 'Sub not found' });
+
+      const wantSet = new Set();
+      (Array.isArray(req.body.folders) ? req.body.folders : []).forEach((f) => {
+        const v = sanitizeFolder(f); if (v) wantSet.add(v);
+      });
+
+      // (a) job-level assignment so the job surfaces in their portal
+      if (wantSet.size) {
+        await pool.query(
+          `INSERT INTO job_subs (id, job_id, sub_id, level, building_id, phase_id,
+                                 contract_amt, billed_to_date, status, notes)
+           VALUES ($1,$2,$3,'job',NULL,NULL,0,0,'active',NULL)
+           ON CONFLICT (job_id, sub_id) DO NOTHING`,
+          [genId('jsub'), jobId, subId]);
+      }
+
+      // (b) reconcile this job's folder grants to the wanted set
+      const existing = await pool.query(
+        `SELECT id, folder FROM attachment_folder_grants
+          WHERE sub_id = $1 AND entity_type = 'job' AND entity_id = $2`, [subId, jobId]);
+      const haveMap = new Map(existing.rows.map((r) => [r.folder, r.id]));
+      for (const folder of wantSet) {
+        if (haveMap.has(folder)) continue;
+        let folderId = null;
+        try { const leaf = await fileFolders.ensureFolderChain('job', jobId, folder); if (leaf && leaf.id) folderId = leaf.id; } catch (e) { /* folder_id NULL still resolves via string match */ }
+        await pool.query(
+          `INSERT INTO attachment_folder_grants (id, sub_id, entity_type, entity_id, folder, folder_id, granted_by)
+           VALUES ($1,$2,'job',$3,$4,$5,$6)
+           ON CONFLICT (sub_id, entity_type, entity_id, folder) DO UPDATE
+             SET granted_at = NOW(), granted_by = EXCLUDED.granted_by,
+                 folder_id = COALESCE(EXCLUDED.folder_id, attachment_folder_grants.folder_id)`,
+          [genId('afg'), subId, jobId, folder, folderId, (req.user && req.user.id) || null]);
+      }
+      for (const [folder, id] of haveMap) {
+        if (!wantSet.has(folder)) await pool.query('DELETE FROM attachment_folder_grants WHERE id = $1', [id]);
+      }
+
+      const after = await pool.query(
+        `SELECT folder FROM attachment_folder_grants
+          WHERE sub_id = $1 AND entity_type = 'job' AND entity_id = $2`, [subId, jobId]);
+      res.json({ ok: true, granted: after.rows.map((r) => r.folder) });
+    } catch (e) {
+      console.error('POST /api/subs/:subId/job-access error:', e);
       res.status(500).json({ error: 'Server error: ' + e.message });
     }
   }
