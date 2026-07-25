@@ -13949,7 +13949,11 @@ router.post('/86/chat', requireAuth, requireOrg, aiChatLimiter, aiChatHourlyLimi
     if (pageBlock) turnTextParts.push(pageBlock);
     if (freshUploadBlock) turnTextParts.push(freshUploadBlock);
     turnTextParts.push(userMessage);
-    const turnText = turnTextParts.join('\n\n');
+    // let (not const): rebuilt below after the fresh-session today-digest
+    // mutates turnContextText. Without the rebuild that mutation reaches only
+    // the handoff-forward path (onCustomToolUse), never the main 86 turn. (The
+    // dedup-marker block below is a SEPARATE, still-inert path — see its note.)
+    let turnText = turnTextParts.join('\n\n');
 
     // Compose inline vision content: entity photos (cascaded from
     // buildXContext.photoBlocks) plus any photos the user uploaded
@@ -13960,7 +13964,9 @@ router.post('/86/chat', requireAuth, requireOrg, aiChatLimiter, aiChatHourlyLimi
       .filter(Boolean);
     const inlineImageBlocks = [...extraPhotoBlocks, ...uploadedBlocks].slice(0, 18);
 
-    const userContent = inlineImageBlocks.length
+    // let (not const): rebuilt below alongside turnText after the today-digest
+    // mutates turnContextText.
+    let userContent = inlineImageBlocks.length
       ? [...inlineImageBlocks, { type: 'text', text: turnText }]
       : [{ type: 'text', text: turnText }];
 
@@ -13999,6 +14005,17 @@ router.post('/86/chat', requireAuth, requireOrg, aiChatLimiter, aiChatHourlyLimi
     // (new id) automatically gets the full snapshot again. 15-min TTL forces a
     // periodic full re-send as a compaction hedge. Volatile layers (available
     // tools, applied/failed payloads, acting_user) still ride every turn.
+    //
+    // ⚠ CURRENTLY INERT — DO NOT "FIX" WITHOUT SLICE 5. `turnCtx` below is
+    // const-scoped to the context-build try higher up (see buildTurnContext
+    // call), so this reference is out of scope: `et` throws a ReferenceError
+    // that the catch swallows, and the marker never applies. This is deliberate
+    // for now — activating it (hoist `turnCtx` to a handler-scope `let`, assign
+    // inside the try) arms the "work from that snapshot" instruction on the
+    // MAIN turn, which needs the slice-5 post-compaction re-assert guard first:
+    // otherwise a compaction inside the 15-min TTL can leave the referenced
+    // snapshot no longer in history and 86 works from something it can't see.
+    // Wire this ON in slice 5, not before.
     try {
       const et = turnCtx && turnCtx.entityText;
       if (et && et.length > 400 && cctxEntityType && cctxEntityId && turnContextText) {
@@ -14026,6 +14043,32 @@ router.post('/86/chat', requireAuth, requireOrg, aiChatLimiter, aiChatHourlyLimi
         const digest = await buildTodayDigest(req.user.id);
         if (digest) turnContextText = turnContextText ? (digest + '\n\n' + turnContextText) : digest;
       } catch (_) { /* never blocks the chat */ }
+    }
+
+    // Rebuild the outgoing turn AFTER the today-digest mutated turnContextText.
+    // The first assembly (before session resolution) froze turnText/userContent
+    // from the pre-digest snapshot, so without this rebuild the fresh-session
+    // day digest reached only the handoff-forward path (onCustomToolUse), never
+    // the main 86 turn — it was silently dead on the primary send. Photos
+    // (inlineImageBlocks) and uploadedBlocks are unaffected, so only the text
+    // half is reassembled here.
+    //
+    // NOTE: the dedup-marker block above does NOT mutate turnContextText today —
+    // it reads `turnCtx`, which is const-scoped to the context-build try higher
+    // up and out of scope there, so it throws a swallowed ReferenceError and the
+    // marker never applies. The dedup stays intentionally inert until slice 5
+    // (post-compaction re-assert) lands the staleness guard; only then hoist
+    // `turnCtx` to activate it. See the dedup block's own note.
+    {
+      const _parts = [];
+      if (turnContextText) _parts.push('<turn_context>\n' + turnContextText + '\n</turn_context>');
+      if (pageBlock) _parts.push(pageBlock);
+      if (freshUploadBlock) _parts.push(freshUploadBlock);
+      _parts.push(userMessage);
+      turnText = _parts.join('\n\n');
+      userContent = inlineImageBlocks.length
+        ? [...inlineImageBlocks, { type: 'text', text: turnText }]
+        : [{ type: 'text', text: turnText }];
     }
 
     // Persist the user's message under the resolved session's keys.
