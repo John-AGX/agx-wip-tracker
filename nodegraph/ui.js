@@ -3130,8 +3130,9 @@ function renderInspector(){
   if(sel && sel.type==='t1'){
     if(hdr) hdr.innerHTML='<span class="ng-insp-ic">'+ngIco('buildings')+'</span> '+luEsc(sel.label||'Building')+'<span class="ng-insp-type">Building</span>'
       +'<button class="ng-insp-cards" onclick="event.stopPropagation();window.p86NcBldgToggle&&window.p86NcBldgToggle(\''+sel.id+'\')" title="Open this building as nested cards on the map">Cards</button>';
-    body.innerHTML='<div class="ng-insp-sec">'+buildingKpiGridHtml(sel)+'</div>'+buildingRevBreakdownHtml(sel)+'<div class="ng-sp-struct"></div>';
+    body.innerHTML='<div class="ng-insp-sec">'+buildingKpiGridHtml(sel)+'</div>'+buildingRevBreakdownHtml(sel)+buildingSubsHtml(sel)+'<div class="ng-sp-struct"></div>';
     renderBuildingStructure(body, sel);
+    fillBuildingSubs(sel);
   } else if(sel && sel.type!=='wip'){
     var d=E.DEFS[sel.type]||{}, iType=d.itemType||'';
     if(hdr) hdr.innerHTML='<span class="ng-insp-ic">'+ngTypeIco(sel.type)+'</span> '+luEsc(sel.label||d.label||'Node')+'<span class="ng-insp-type">'+luEsc(d.label||sel.type)+'</span>';
@@ -3782,6 +3783,76 @@ function inspectorSubHtml(sel){
 // Condensed, professional building metric strip: a lead % Complete (editable) with a
 // progress bar, then a tight 4-cell row (Revenue · Cost · Profit · Margin). Replaces the
 // old 8-tile sprawl; Rev.Earned/Accrued/Budget fold into Cost (act+acc) + the drill-downs.
+// #3b: "Subs on this building" — the subs working this building, derived
+// from the POs whose buildingIds include it (the PO-driven sub↔building
+// link). POs are first-class rows (not graph nodes) so we fetch them
+// (cached ~20s) and fill async; the section stays hidden until subs exist.
+var _bldgPoCache = null; // { jobId, at, pos }
+function loadJobPOsCached(jobId){
+  if(_bldgPoCache && _bldgPoCache.jobId===jobId && (Date.now()-_bldgPoCache.at)<20000){
+    return Promise.resolve(_bldgPoCache.pos);
+  }
+  var tok=null; try{ tok=localStorage.getItem('p86-auth-token'); }catch(e){}
+  var H={}; if(tok) H['Authorization']='Bearer '+tok;
+  return fetch('/api/jobs/'+encodeURIComponent(jobId)+'/purchase-orders',{headers:H,credentials:'include'})
+    .then(function(r){ return r.ok?r.json():null; })
+    .then(function(j){ var pos=(j&&(j.purchase_orders||j.data||j))||[]; if(!Array.isArray(pos))pos=[]; _bldgPoCache={jobId:jobId,at:Date.now(),pos:pos}; return pos; })
+    .catch(function(){ return []; });
+}
+function _poBuildingIds(po){ var b=po.buildingIds||(po.data&&po.data.buildingIds); return Array.isArray(b)?b:[]; }
+function _subNameById(id){
+  var dir=(typeof appData!=='undefined'&&appData.subsDirectory)||[];
+  var inl=(typeof appData!=='undefined'&&appData.subs)||[];
+  var s=dir.find(function(x){return String(x.id)===String(id);})||inl.find(function(x){return String(x.id)===String(id);});
+  return s?(s.name||s.id):null;
+}
+function _subsForBuilding(pos, bId){
+  var seen={}, out=[];
+  (pos||[]).forEach(function(po){
+    if(_poBuildingIds(po).indexOf(bId)===-1) return;
+    var sid=po.sub_id||(po.data&&po.data.sub_id); if(!sid||seen[sid])return; seen[sid]=1;
+    var nm=_subNameById(sid); if(!nm)return;
+    out.push({name:nm, po:po.po_number||'', status:po.status||''});
+  });
+  return out;
+}
+function _ensureBldgSubsStyles(){
+  if(document.getElementById('ng-bldg-subs-css'))return;
+  var st=document.createElement('style'); st.id='ng-bldg-subs-css';
+  st.textContent=
+    '.ng-bldg-subs{padding:10px 14px;border-top:1px solid var(--ng-border2,#232a36);}'
+    +'.ng-bldg-subs .ng-bs-h{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#6a7090;font-weight:600;margin-bottom:6px;}'
+    +'.ng-bldg-sub-row{display:flex;align-items:center;gap:8px;padding:3px 0;font-size:13px;color:#c7ccd6;}'
+    +'.ng-bldg-sub-nm{font-weight:600;}'
+    +'.ng-bldg-sub-po{font-family:\'Courier New\',monospace;font-size:11px;color:#6a7090;}'
+    +'.ng-bldg-sub-st{margin-left:auto;font-size:10px;text-transform:uppercase;letter-spacing:.03em;padding:1px 7px;border-radius:10px;background:rgba(90,169,222,.15);color:#5aa9de;}';
+  document.head.appendChild(st);
+}
+function buildingSubsHtml(sel){
+  var bId=(sel&&sel.data&&sel.data.id)||(sel&&sel.dataId)||'';
+  if(!bId) return '';
+  return '<div class="ng-insp-sec ng-bldg-subs" data-bldg-subs="'+luEsc(bId)+'" style="display:none"></div>';
+}
+function fillBuildingSubs(sel){
+  try{
+    if(!sel||sel.type!=='t1')return;
+    var bId=(sel.data&&sel.data.id)||sel.dataId; if(!bId)return;
+    var jobId=E.job(); if(!jobId)return;
+    loadJobPOsCached(jobId).then(function(pos){
+      var el=document.querySelector('.ng-bldg-subs[data-bldg-subs="'+bId+'"]'); if(!el)return;
+      var rows=_subsForBuilding(pos,bId);
+      if(!rows.length){ el.style.display='none'; el.innerHTML=''; return; }
+      _ensureBldgSubsStyles();
+      el.innerHTML='<div class="ng-bs-h">Subs on this building</div>'
+        +rows.map(function(r){
+          return '<div class="ng-bldg-sub-row"><span class="ng-bldg-sub-nm">'+luEsc(r.name)+'</span>'
+            +(r.po?'<span class="ng-bldg-sub-po">'+luEsc(r.po)+'</span>':'')
+            +(r.status?'<span class="ng-bldg-sub-st">'+luEsc(r.status)+'</span>':'')+'</div>';
+        }).join('');
+      el.style.display='';
+    });
+  }catch(e){}
+}
 function buildingKpiGridHtml(sel){
   // Revenue = contract (matrix) + allocated CO, so this headline tile matches
   // the "Total revenue" the breakdown below it shows. getBuildingAllocatedRevenue
