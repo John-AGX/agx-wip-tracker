@@ -192,6 +192,18 @@
     wire(locked);
   }
 
+  function ensurePoBldgStyles() {
+    if (document.getElementById('po-ed-bldgs-css')) return;
+    var st = document.createElement('style'); st.id = 'po-ed-bldgs-css';
+    st.textContent =
+      '.po-ed-bldgs{display:flex;flex-wrap:wrap;gap:6px;padding:2px 0;}'
+      + '.po-ed-bldgs-empty{font-size:12.5px;color:#7a828f;}'
+      + '.po-ed-bchip{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;padding:5px 10px;border:1px solid #d7dae0;border-radius:20px;cursor:pointer;user-select:none;background:#fff;color:#374151;}'
+      + '.po-ed-bchip.on{background:#eaf2f8;border-color:#2c6e9b;color:#2c6e9b;font-weight:600;}'
+      + '.po-ed-bchip input{margin:0;width:14px;height:14px;accent-color:#2c6e9b;cursor:pointer;}';
+    document.head.appendChild(st);
+  }
+
   function generalSectionHTML(locked) {
     var dis = locked ? ' disabled' : '';
     var subName = _po.sub_name || '';
@@ -204,6 +216,8 @@
           '<select id="po-f-sub" class="po-ed-input"' + dis + '><option value="">— Select sub —</option></select></label>' +
         '<label class="po-ed-field"><span>Phase</span>' +
           '<select id="po-f-phase" class="po-ed-input"' + dis + '><option value="">— Job-level —</option></select></label>' +
+        '<label class="po-ed-field po-ed-field-wide"><span>Buildings covered</span>' +
+          '<div id="po-f-buildings" class="po-ed-bldgs"' + (locked ? ' data-locked="1"' : '') + '></div></label>' +
         '<label class="po-ed-field"><span>Scheduled completion</span>' +
           '<input id="po-f-sched" type="date" class="po-ed-input" value="' + escAttr(_po.scheduledCompletion || '') + '"' + dis + '></label>' +
         '<label class="po-ed-field po-ed-check"><input id="po-f-materials" type="checkbox"' + (_po.materialsOnly ? ' checked' : '') + dis + '> <span>Materials only</span></label>' +
@@ -499,6 +513,34 @@
         return '<option value="' + escAttr(n) + '"' + (n === _po.phaseName ? ' selected' : '') + '>' + esc(n) + '</option>';
       }).join('');
       phaseSel.addEventListener('change', function () { _po.phaseName = phaseSel.value || null; queueSave(); });
+    }
+
+    // Buildings covered — which building(s) this PO's scope is on. Assigning a
+    // sub to this PO then covers those buildings (PO-driven sub↔building link).
+    var bWrap = byId('po-f-buildings');
+    if (bWrap) {
+      ensurePoBldgStyles();
+      var jobBldgs = ((window.appData && window.appData.buildings) || []).filter(function (b) { return b.jobId === _po.job_id; });
+      if (!Array.isArray(_po.buildingIds)) {
+        _po.buildingIds = (_po.data && Array.isArray(_po.data.buildingIds)) ? _po.data.buildingIds.slice() : [];
+      }
+      if (!jobBldgs.length) {
+        bWrap.innerHTML = '<span class="po-ed-bldgs-empty">No buildings on this job — this PO covers the whole job.</span>';
+      } else {
+        var lk = bWrap.getAttribute('data-locked') === '1';
+        bWrap.innerHTML = jobBldgs.map(function (b) {
+          var on = _po.buildingIds.indexOf(b.id) !== -1;
+          return '<label class="po-ed-bchip' + (on ? ' on' : '') + '"><input type="checkbox" data-bldg="' + escAttr(b.id) + '"' + (on ? ' checked' : '') + (lk ? ' disabled' : '') + '>' + esc(b.name || 'Building') + '</label>';
+        }).join('');
+        if (!lk) bWrap.addEventListener('change', function (e) {
+          var cb = e.target.closest('input[data-bldg]'); if (!cb) return;
+          var id = cb.getAttribute('data-bldg'), i = _po.buildingIds.indexOf(id);
+          if (cb.checked && i === -1) _po.buildingIds.push(id);
+          else if (!cb.checked && i !== -1) _po.buildingIds.splice(i, 1);
+          var lbl = cb.closest('.po-ed-bchip'); if (lbl) lbl.classList.toggle('on', cb.checked);
+          queueSave();
+        });
+      }
     }
 
     // Read-only sections load regardless of lock state.
@@ -808,6 +850,7 @@
       scheduledCompletion: _po.scheduledCompletion || '', materialsOnly: !!_po.materialsOnly,
       lines: _po.lines || [], linkedRfiIds: _po.linkedRfiIds || [],
       phaseName: _po.phaseName || null,
+      buildingIds: Array.isArray(_po.buildingIds) ? _po.buildingIds : [],
       sub_id: _po.sub_id || null
     };
     // Carry the PDF extraction once (close-flush) so the server logs
