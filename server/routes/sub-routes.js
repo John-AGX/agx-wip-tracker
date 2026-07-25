@@ -30,7 +30,7 @@ const { pool } = require('../db');
 const { requireAuth, requireCapability } = require('../auth');
 const { sendForEvent } = require('../email');
 const fileFolders = require('../services/file-folders');
-const { defaultFoldersForEntity } = require('../folder-taxonomy');
+const { defaultFoldersForEntity, sanitizeFolderPath } = require('../folder-taxonomy');
 
 const router = express.Router();
 
@@ -906,7 +906,7 @@ router.post('/:subId/job-access',
 
       const wantSet = new Set();
       (Array.isArray(req.body.folders) ? req.body.folders : []).forEach((f) => {
-        const v = sanitizeFolder(f); if (v) wantSet.add(v);
+        const v = sanitizeFolderPath(f); if (v) wantSet.add(v); // path-safe: keeps plans/current etc.
       });
 
       // (a) job-level assignment so the job surfaces in their portal
