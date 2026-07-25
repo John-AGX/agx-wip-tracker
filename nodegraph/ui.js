@@ -273,6 +273,11 @@ function renderNodes(){
     var _slim = sitePlan && _spSatellite && n.type!=='t1'; // Slice 4: slim at-a-glance chip on the satellite map
     if(sitePlan && window._p86NcDefault && n.type!=='t1') return; // NC-5: children live in the building's docked card stack, not as fanned nodes
     if(sitePlan && !E.spNodeVisible(n.type, n.id)) return; // site-plan: buildings + WIP hub, or a drilled-in building's subgraph
+    // Clean Site Map (satellite): a building with no traced footprint isn't a map object — no
+    // floating seed card (it's managed in the right panel). And a sub is a data relationship
+    // (auto-assigned via its scope), never a floating node on the map.
+    if(sitePlan && _spSatellite && n.type==='t1' && !(n.polygon && n.polygon.length>=3)) return;
+    if(sitePlan && _spSatellite && n.type==='sub') return;
     if(editingId===n.id) return;
     // Watches are never collapsed — always show the flashy KPI
     if(n.type==='watch') n.collapsed=false;
@@ -1177,6 +1182,7 @@ function renderBldgDocks(){
     // This is the DEFAULT render path — in "Cards" mode children never reach
     // renderNodes, they become docked cards here, so the gate lives in both.
     visibleNestedChildren(b.id).forEach(function(k, idx){   // one card per CO / sub / PO
+      if(k.type==='sub') return; // subs are a data relationship (auto-assigned via scope), not a docked map card
       live[k.id]=1;
       var el=document.getElementById('ngDock-'+k.id);
       if(!el){ el=document.createElement('div'); el.id='ngDock-'+k.id; area.appendChild(el); ncAttachDnd(el); }
