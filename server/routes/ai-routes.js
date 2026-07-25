@@ -2505,7 +2505,7 @@ const FLAG_UNIFIED_USER_THREAD =
 // when off, resolveSessionForChat behaves exactly as today.
 const FLAG_DEAL_THREADS = (process.env.DEAL_THREADS || 'off').toLowerCase() === 'on';
 const DEAL_SURFACES = new Set(['lead', 'estimate', 'job']);
-const { resolveLineageRoot: _resolveLineageRoot } = require('../services/deal-memory');
+const dealMemory = require('../services/deal-memory');
 
 // Three of our four context builders return `system` as an array of
 // TextBlockParam objects (with cache_control on the first block);
@@ -3248,7 +3248,7 @@ async function resolveSessionForChat({ sessionId, currentContext, userId, organi
     const dctxId   = currentContext && currentContext.entity_id;
     if (dctxType && dctxId && DEAL_SURFACES.has(dctxType)) {
       try {
-        const resolved = await _resolveLineageRoot(pool, dctxType, String(dctxId));
+        const resolved = await dealMemory.resolveLineageRoot(pool, dctxType, String(dctxId));
         if (resolved && resolved.lineage_root) {
           const dt = await pool.query(
             `SELECT * FROM ai_sessions
@@ -14104,6 +14104,21 @@ router.post('/86/chat', requireAuth, requireOrg, aiChatLimiter, aiChatHourlyLimi
         const digest = await buildTodayDigest(req.user.id);
         if (digest) turnContextText = turnContextText ? (digest + '\n\n' + turnContextText) : digest;
       } catch (_) { /* never blocks the chat */ }
+    }
+
+    // Deal-memory block (slice 2b) — a DEAL THREAD opens already knowing the
+    // deal's deterministic money + where it sits lead→estimate→job. Refresh the
+    // numbers (best-effort, on the pool — never a tx client, per the deal-memory
+    // contract) and prepend the block so the rebuild below carries it to the main
+    // turn. Naturally dark: only deal_thread sessions exist, and only when
+    // FLAG_DEAL_THREADS is on. The model READS these numbers; it must not
+    // recompute them.
+    if (session.session_kind === 'deal_thread') {
+      try {
+        const dm = await dealMemory.refreshDealNumbers(pool, session.entity_type, sessionEntityId);
+        const block = dealMemory.renderDealBlock(dm);
+        if (block) turnContextText = turnContextText ? (block + '\n\n' + turnContextText) : block;
+      } catch (_) { /* deal-memory injection is best-effort — never blocks the chat */ }
     }
 
     // Rebuild the outgoing turn AFTER the today-digest mutated turnContextText.

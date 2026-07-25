@@ -179,7 +179,44 @@ async function refreshDealNumbers(db, entityType, entityId) {
               updated_at      = NOW()`,
     [resolved.lineage_root, resolved.root_type, resolved.organization_id, JSON.stringify(numbers), resolved.stage]
   );
-  return { lineage_root: resolved.lineage_root, stage: resolved.stage, numbers };
+  // Return the full resolved lineage + numbers so a caller can render the deal
+  // block without re-resolving.
+  return { ...resolved, numbers };
 }
 
-module.exports = { resolveLineageRoot, computeNumbers, refreshDealNumbers };
+function _fmtMoney(n) { const v = Number(n) || 0; return '$' + Math.round(v).toLocaleString(); }
+
+// Compact, injection-ready deal-memory block for a deal thread's turn context
+// (slice 2b). The DETERMINISTIC numbers + the lineage arc, so 86 opens a deal
+// thread already knowing the deal's money and where it sits lead→estimate→job.
+// The model READS these numbers; it must not recompute them. `res` is the object
+// refreshDealNumbers returns ({ lineage_root, stage, leadId, estimateId, jobId,
+// numbers }). Returns '' when there's nothing to show.
+function renderDealBlock(res) {
+  if (!res || !res.lineage_root) return '';
+  const n = res.numbers || {};
+  const L = [];
+  L.push('<deal_memory>');
+  L.push('# Deal (deterministic — read these numbers, do not recompute)');
+  const arc = [];
+  if (res.leadId) arc.push('lead ' + res.leadId);
+  if (res.estimateId) arc.push('estimate ' + res.estimateId);
+  if (res.jobId) arc.push('job ' + res.jobId);
+  if (arc.length) L.push('- Lineage: ' + arc.join(' → '));
+  if (n.stage === 'job') {
+    L.push('- Stage JOB · contract ' + _fmtMoney(n.contract) + ' · ' + (Number(n.pctComplete) || 0) + '% complete'
+      + (n.wipPending ? ' · full WIP (CO income / actuals / margin) — pull with read tools if needed' : ''));
+  } else if (n.stage === 'estimate') {
+    L.push('- Stage ESTIMATE · proposal total ' + _fmtMoney(n.proposalTotal)
+      + ' · base cost ' + _fmtMoney(n.baseCost) + ' · blended markup ' + (n.blendedMarkupPct || 0) + '%');
+  } else if (n.stage === 'lead') {
+    const lo = n.estRevenueLow, hi = n.estRevenueHigh;
+    L.push('- Stage LEAD · est. revenue ' + _fmtMoney(lo)
+      + (String(lo) !== String(hi) ? ' – ' + _fmtMoney(hi) : '')
+      + ' · confidence ' + (n.confidence || 0) + '% · status ' + (n.status || '—'));
+  }
+  L.push('</deal_memory>');
+  return L.join('\n');
+}
+
+module.exports = { resolveLineageRoot, computeNumbers, refreshDealNumbers, renderDealBlock };
