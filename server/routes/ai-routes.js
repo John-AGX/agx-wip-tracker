@@ -14092,8 +14092,8 @@ router.post('/86/chat', requireAuth, requireOrg, aiChatLimiter, aiChatHourlyLimi
       : sessionEntityId;
     const userMsgId = 'aim_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8);
     await pool.query(
-      `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, photos_included, inline_image_blocks)
-       VALUES ($1, $2, $3, $4, 'user', $5, $6, $7::jsonb)`,
+      `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, photos_included, inline_image_blocks, session_id)
+       VALUES ($1, $2, $3, $4, 'user', $5, $6, $7::jsonb, $8)`,
       [
         userMsgId,
         turnEntityType,
@@ -14105,7 +14105,8 @@ router.post('/86/chat', requireAuth, requireOrg, aiChatLimiter, aiChatHourlyLimi
         // and leaking the prompts into the target's own 86 history. The 86 session
         // belongs to the real admin; keep req.user.id.
         req.user.id, userMessage, additionalImages.length,
-        uploadedBlocks.length ? JSON.stringify(uploadedBlocks) : null
+        uploadedBlocks.length ? JSON.stringify(uploadedBlocks) : null,
+        session.id  // slice 3a-1 dual-write: stamp the thread link; legacy keys still drive reads
       ]
     );
 
@@ -14173,8 +14174,8 @@ router.post('/86/chat', requireAuth, requireOrg, aiChatLimiter, aiChatHourlyLimi
           `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, model,
                                     input_tokens, output_tokens,
                                     cache_creation_input_tokens, cache_read_input_tokens,
-                                    tool_use_count, tool_uses, output_files)
-           VALUES ($1, $2, $3, $4, 'assistant', $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+                                    tool_use_count, tool_uses, output_files, session_id)
+           VALUES ($1, $2, $3, $4, 'assistant', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
           [aMsgId, turnEntityType, turnEntityId, req.user.id, text || '', MODEL,
            (usage && usage.input_tokens) || null,
            (usage && usage.output_tokens) || null,
@@ -14182,7 +14183,8 @@ router.post('/86/chat', requireAuth, requireOrg, aiChatLimiter, aiChatHourlyLimi
            (usage && usage.cache_read_input_tokens) || null,
            toolUseCount,
            toolUses ? JSON.stringify(toolUses) : null,
-           outputFiles ? JSON.stringify(outputFiles) : null]
+           outputFiles ? JSON.stringify(outputFiles) : null,
+           session.id]  // slice 3a-1 dual-write
         );
 
         // Background auto-label: on the very first exchange (the
@@ -14353,15 +14355,16 @@ router.post('/86/chat/continue', requireAuth, requireOrg, aiChatLimiter, aiChatH
       }));
       await pool.query(
         `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, model,
-                                  tool_use_count, tool_uses)
-         VALUES ($1, $2, $3, $4, 'user', $5, $6, $7, $8)`,
+                                  tool_use_count, tool_uses, session_id)
+         VALUES ($1, $2, $3, $4, 'user', $5, $6, $7, $8, $9)`,
         [continueMsgId, session.entity_type, sessionEntityId, req.user.id,
          '[tool_results: ' + approvalSummary.map(a =>
            (a.approved ? '✓ ' : '✗ ') + a.name +
            (a.applied_summary ? ' — ' + a.applied_summary.slice(0, 80) : '')
          ).join(' | ') + ']',
          MODEL, approvalSummary.length,
-         JSON.stringify(approvalSummary)]
+         JSON.stringify(approvalSummary),
+         session.id]  // slice 3a-1 dual-write
       );
     } catch (e) {
       console.warn('[/86/chat/continue] approval trace insert failed:', e.message);
@@ -14385,8 +14388,8 @@ router.post('/86/chat/continue', requireAuth, requireOrg, aiChatLimiter, aiChatH
           `INSERT INTO ai_messages (id, entity_type, estimate_id, user_id, role, content, model,
                                     input_tokens, output_tokens,
                                     cache_creation_input_tokens, cache_read_input_tokens,
-                                    tool_use_count, tool_uses, output_files)
-           VALUES ($1, $2, $3, $4, 'assistant', $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+                                    tool_use_count, tool_uses, output_files, session_id)
+           VALUES ($1, $2, $3, $4, 'assistant', $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
           [aMsgId, session.entity_type, sessionEntityId, req.user.id, text || '', MODEL,
            (usage && usage.input_tokens) || null,
            (usage && usage.output_tokens) || null,
@@ -14394,7 +14397,8 @@ router.post('/86/chat/continue', requireAuth, requireOrg, aiChatLimiter, aiChatH
            (usage && usage.cache_read_input_tokens) || null,
            toolUseCount,
            toolUses ? JSON.stringify(toolUses) : null,
-           outputFiles ? JSON.stringify(outputFiles) : null]
+           outputFiles ? JSON.stringify(outputFiles) : null,
+           session.id]  // slice 3a-1 dual-write
         );
       }
     });

@@ -1485,6 +1485,19 @@ async function initSchema() {
     -- event for the same files in real time.
     ALTER TABLE ai_messages ADD COLUMN IF NOT EXISTS output_files JSONB;
 
+    -- session_id (session/memory architecture, slice 3a-1). ai_messages has
+    -- always been keyed by (user_id, entity_type, estimate_id); per-thread
+    -- history/hydration/recovery/forensics cannot follow a THREAD without a
+    -- direct session link. This is the DUAL-WRITE phase: the column is added
+    -- and stamped on new inserts from the /86/chat paths that hold a resolved
+    -- session, while the legacy keys keep driving every READ unchanged. A later
+    -- slice (3a-2) backfills historical rows and flips hydration/recovery/
+    -- forensics onto session_id. Nullable + no default → additive, zero
+    -- read-path change, safe on the live table.
+    ALTER TABLE ai_messages ADD COLUMN IF NOT EXISTS session_id BIGINT REFERENCES ai_sessions(id) ON DELETE SET NULL;
+    CREATE INDEX IF NOT EXISTS idx_ai_messages_session
+      ON ai_messages(session_id, created_at) WHERE session_id IS NOT NULL;
+
     -- Materials catalog — Project 86's purchase history (Home Depot to start;
     -- vendor column makes Lowe's / Sherwin Williams / etc. a config
     -- addition later, not a schema change). One row per unique
