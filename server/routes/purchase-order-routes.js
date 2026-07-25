@@ -25,8 +25,50 @@ const { pool } = require('../db');
 const { requireAuth, requireCapability, hasCapability } = require('../auth');
 const { captureExample, TASKS } = require('../services/training-capture');
 const jobFin = require('../services/job-financials');
+const fileFolders = require('../services/file-folders');
 
 function _norm(v) { return v == null ? '' : String(v).trim().toLowerCase(); }
+
+// ── #4: PO-driven sub access ────────────────────────────────────────
+// When a PO is ISSUED to a sub (or a sub is re-assigned on an already-
+// issued PO), the sub auto-gains (a) a job-level job_subs assignment and
+// (b) view/upload access to the JOB's folders — so the job they're
+// working shows up in their portal. Granted at ISSUE, never on a draft,
+// so shopping a PO around can't leak access. Idempotent + best-effort:
+// safe to call from multiple hooks, and it never blocks the PO write.
+const PO_ACTIVE_STATUS = new Set(['issued', 'approved', 'work_complete', 'closed']);
+async function syncSubAccessForPO(poRow, userId) {
+  try {
+    if (!poRow || !poRow.sub_id || !poRow.job_id) return;
+    if (!PO_ACTIVE_STATUS.has(String(poRow.status || ''))) return;
+    const subId = poRow.sub_id, jobId = poRow.job_id;
+    // (a) idempotent job-level assignment (building/phase stay node-driven)
+    await pool.query(
+      `INSERT INTO job_subs (id, job_id, sub_id, level, building_id, phase_id,
+                             contract_amt, billed_to_date, status, notes)
+       VALUES ($1, $2, $3, 'job', NULL, NULL, 0, 0, 'active', NULL)
+       ON CONFLICT (job_id, sub_id) DO NOTHING`,
+      ['jsub_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8), jobId, subId]
+    );
+    // (b) job folder grant — this row is what surfaces the job in the sub portal
+    let folderId = null;
+    try {
+      const leaf = await fileFolders.ensureFolderChain('job', jobId, 'general');
+      if (leaf && leaf.id) folderId = leaf.id;
+    } catch (e) { /* folder_id NULL still resolves via the string match */ }
+    await pool.query(
+      `INSERT INTO attachment_folder_grants
+         (id, sub_id, entity_type, entity_id, folder, folder_id, granted_by)
+       VALUES ($1, $2, 'job', $3, 'general', $4, $5)
+       ON CONFLICT (sub_id, entity_type, entity_id, folder) DO UPDATE
+         SET granted_at = NOW(), granted_by = EXCLUDED.granted_by,
+             folder_id = COALESCE(EXCLUDED.folder_id, attachment_folder_grants.folder_id)`,
+      ['afg_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8), subId, jobId, folderId, userId || null]
+    );
+  } catch (e) {
+    console.warn('[po sub-access] auto-grant failed (non-fatal):', e && e.message);
+  }
+}
 
 const router = express.Router();
 
@@ -293,6 +335,9 @@ router.put('/purchase-orders/:id', requireAuth, requireCapability('ESTIMATES_EDI
                   approved_at, approved_by, created_at, updated_at`,
       [JSON.stringify(data), !!subProvided, subId === undefined ? null : subId, id]
     );
+    // #4: re-assigning a sub on an already-issued PO auto-grants access
+    // (no-op while the PO is still a draft — see syncSubAccessForPO).
+    if (rows[0]) syncSubAccessForPO(rows[0], req.user.id);
 
     // Training flywheel: when this save carries the PDF extraction (from the
     // Buildertrend PO importer's close-flush), log extraction-vs-final ONCE.
@@ -404,6 +449,8 @@ router.post('/purchase-orders/:id/status', requireAuth, requireCapability('ESTIM
                   approved_at, approved_by, created_at, updated_at`,
       [next, newLocked, JSON.stringify(newData), approvedAt, approvedBy, id]
     );
+    // #4: issuing/approving a PO auto-grants the assigned sub job + folder access.
+    if (rows[0]) syncSubAccessForPO(rows[0], req.user.id);
     res.json({
       purchase_order: Object.assign(shapeRow(rows[0]), {
         job_number: cur.rows[0].job_number, job_title: cur.rows[0].job_title
