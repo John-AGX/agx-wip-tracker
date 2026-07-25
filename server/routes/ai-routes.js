@@ -2631,6 +2631,114 @@ async function buildTodayDigest(userId) {
 // server restart just re-sends full snapshots once. Capped at 500 entries.
 const _entityCtxSent = new Map();
 
+// ── Lead context (deal-thread lineage stage 1). Before this, a chat opened
+// on a bare LEAD shipped an EMPTY <turn_context> — buildTurnContext had no
+// 'lead' branch and no lead builder existed. This is the switch-time DIGEST
+// for the earliest deal stage: a COMPACT snapshot (the escalationLean
+// pattern) — identity + pipeline headline + linked estimates + attachment
+// manifest + capped, injection-wrapped notes — then 86 pulls detail via its
+// read tools. Photos ride as vision blocks (cap 12). Org-scoped on
+// leads.organization_id (leads carry the column directly; OR-IS-NULL keeps
+// it a no-op for single-org AGX). Returns { system:string, photoBlocks }.
+async function buildLeadContext(leadId, organization) {
+  const _orgId = organization && organization.id;
+  const lRes = _orgId != null
+    ? await pool.query(
+        `SELECT l.*, u.name AS salesperson_name
+           FROM leads l
+           LEFT JOIN users u ON u.id = l.salesperson_id
+          WHERE l.id = $1 AND (l.organization_id = $2 OR l.organization_id IS NULL)`,
+        [leadId, _orgId])
+    : await pool.query(
+        `SELECT l.*, u.name AS salesperson_name
+           FROM leads l LEFT JOIN users u ON u.id = l.salesperson_id
+          WHERE l.id = $1`,
+        [leadId]);
+  if (!lRes.rows.length) throw new Error('Lead not found');
+  const lead = lRes.rows[0];
+
+  const lines = [];
+  lines.push('# Lead: ' + (lead.title || lead.id) + ' [' + lead.id + ']');
+  const addr = [lead.street_address, lead.city, lead.state, lead.zip].filter(Boolean).join(', ');
+  if (addr) lines.push('- Address: ' + addr);
+  if (lead.status) lines.push('- Status: ' + lead.status);
+  if (lead.salesperson_name) lines.push('- Salesperson: ' + lead.salesperson_name);
+  if (lead.source) lines.push('- Source: ' + lead.source);
+  if (lead.project_type) lines.push('- Project type: ' + lead.project_type);
+  if (lead.confidence != null && lead.confidence > 0) lines.push('- Confidence: ' + lead.confidence + '%');
+  if (lead.projected_sale_date) lines.push('- Projected sale date: ' + String(lead.projected_sale_date).slice(0, 10));
+  if (lead.estimated_revenue_low || lead.estimated_revenue_high) {
+    const lo = lead.estimated_revenue_low || lead.estimated_revenue_high;
+    const hi = lead.estimated_revenue_high || lead.estimated_revenue_low;
+    lines.push('- Estimated revenue: ' + fmtMoney(lo) + (String(lo) !== String(hi) ? ' – ' + fmtMoney(hi) : ''));
+  }
+  if (lead.market) lines.push('- Market: ' + lead.market);
+  if (lead.gate_code) lines.push('- Gate code: ' + lead.gate_code);
+
+  // Linked estimate(s) — the next lineage stage. estimates.data->>'lead_id'.
+  // LIMIT bounds the rows materialized per turn; count(*) OVER() keeps the
+  // total accurate without a second query. The proper expression index on
+  // (data->>'lead_id') lands with the lineage resolver (slice 2/3, gap G10).
+  try {
+    const est = await pool.query(
+      `SELECT id, data->>'title' AS title, data->>'status' AS status, count(*) OVER() AS _total
+         FROM estimates WHERE data->>'lead_id' = $1 LIMIT 8`,
+      [leadId]);
+    if (est.rows.length) {
+      const total = Number(est.rows[0]._total) || est.rows.length;
+      lines.push('');
+      lines.push('# Linked estimate' + (total === 1 ? '' : 's') + ' (' + total + ')');
+      est.rows.forEach(function(e) {
+        lines.push('- ' + (e.title || e.id) + ' [' + e.id + ']' + (e.status ? ' · ' + e.status : ''));
+      });
+    }
+  } catch (_) { /* linked-estimate lookup is best-effort */ }
+
+  // Attachments — photos to the vision pipeline (cap 12), docs to a manifest
+  // the model reads on demand. Same partition rule buildEstimateContext uses.
+  let photoBlocks = [];
+  try {
+    const atts = await pool.query(
+      `SELECT * FROM attachments WHERE entity_type='lead' AND entity_id=$1
+         ORDER BY position, uploaded_at`,
+      [leadId]);
+    const photoRows = atts.rows.filter(a => a.mime_type && a.mime_type.startsWith('image/') && a.thumb_key);
+    const docRows = atts.rows.filter(a => !(a.mime_type && a.mime_type.startsWith('image/') && a.thumb_key));
+    if (photoRows.length) {
+      lines.push('');
+      lines.push('# Photos (' + photoRows.length + ')' + (photoRows.length > 12 ? ' — first 12 attached as images' : ' — attached as images'));
+      for (const p of photoRows.slice(0, 12)) {
+        const block = await loadPhotoAsBlock(p);
+        if (block) photoBlocks.push(block);
+      }
+    }
+    if (docRows.length) {
+      lines.push('');
+      lines.push('# Documents (' + docRows.length + ') — read on demand with read_attachment_text({attachment_id})');
+      docRows.slice(0, 12).forEach(function(d) {
+        lines.push('- ' + (d.filename || '(unnamed)') + ' (' + (d.mime_type || 'file') + ', id: ' + d.id + ')');
+      });
+    }
+  } catch (_) { /* attachment lookup is best-effort */ }
+
+  // Notes — often the BT-imported SOW summary + POC. Capped per-turn and
+  // injection-wrapped (external source). Full notes via read_entity.
+  if (lead.notes && String(lead.notes).trim()) {
+    lines.push('');
+    lines.push('# Lead notes (BT SOW summary + POC — read_entity{entity_type:"lead"} for full)');
+    const _n = lead.notes.length > 1200
+      ? lead.notes.slice(0, 1200) + ' …[truncated]'
+      : lead.notes;
+    lines.push(wrapUserData('leads.notes', _n));
+  }
+
+  lines.push('');
+  lines.push('# Detail on demand — pull with your read tools ONLY if your analysis needs it');
+  lines.push('- Full lead record, survey graph, every linked estimate: read_entity { entity_type:"lead", id:"' + leadId + '" }');
+
+  return { system: lines.join('\n'), photoBlocks: photoBlocks };
+}
+
 async function buildTurnContext({ entityType, entityId, clientContext, aiPhase, userId, organization }) {
   let turnContextText = '';
   let photoBlocks = [];
@@ -2640,6 +2748,10 @@ async function buildTurnContext({ entityType, entityId, clientContext, aiPhase, 
     if (Array.isArray(ctx.photoBlocks)) photoBlocks = ctx.photoBlocks;
   } else if (entityType === 'job' && entityId) {
     const ctx = await buildJobContext(entityId, clientContext, aiPhase, organization);
+    turnContextText = ctxDynamicText(ctx.system);
+    if (Array.isArray(ctx.photoBlocks)) photoBlocks = ctx.photoBlocks;
+  } else if (entityType === 'lead' && entityId) {
+    const ctx = await buildLeadContext(entityId, organization);
     turnContextText = ctxDynamicText(ctx.system);
     if (Array.isArray(ctx.photoBlocks)) photoBlocks = ctx.photoBlocks;
   } else if (entityType === 'intake') {
@@ -13773,6 +13885,12 @@ router.post('/86/chat', requireAuth, requireOrg, aiChatLimiter, aiChatHourlyLimi
           await attachBase64PhotosToEntity('job', cctxEntityId, additionalImages, req.user.id, 'chat-photo');
         } else if (cctxEntityType === 'estimate' && cctxEntityId) {
           await attachBase64PhotosToEntity('estimate', cctxEntityId, additionalImages, req.user.id, 'chat-photo');
+        } else if (cctxEntityType === 'lead' && cctxEntityId) {
+          // Deal photos captured at the lead (survey/walkthrough) stage
+          // persist to the lead's attachments so they carry into the
+          // estimate + job via the lineage inheritance chain. The helper
+          // already supports 'lead' (the intake propose-create flow uses it).
+          await attachBase64PhotosToEntity('lead', cctxEntityId, additionalImages, req.user.id, 'chat-photo');
         } else if (cctxEntityType === 'intake') {
           // Intake uses the per-user staging bucket — photos move to
           // the new lead's attachments on propose_create_lead approval.
