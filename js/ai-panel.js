@@ -1965,9 +1965,16 @@ function p86Ask(message, opts) {
     // for entity-bound sessions — that's why the UI looked like a
     // fresh chat after refresh / sidebar-click.
     var url = messagesApiBase() + '/messages';
-    if (_currentSessionId != null) {
-      url += '?session_id=' + encodeURIComponent(_currentSessionId);
+    var _qs = [];
+    if (_currentSessionId != null) _qs.push('session_id=' + encodeURIComponent(_currentSessionId));
+    // Pass the surface context too — when deal threads are on and this is a
+    // deal surface, the server returns the DEAL thread's own conversation
+    // (loaded by session_id) instead of the legacy entity/user history.
+    if (_entityType && _entityId) {
+      _qs.push('entity_type=' + encodeURIComponent(_entityType));
+      _qs.push('entity_id=' + encodeURIComponent(_entityId));
     }
+    if (_qs.length) url += '?' + _qs.join('&');
     fetch(url, { headers: authHeaders() })
       .then(function(r) { return r.json(); })
       .then(function(res) {

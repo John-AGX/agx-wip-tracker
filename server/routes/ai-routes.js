@@ -13776,6 +13776,40 @@ router.get('/subtasks', requireAuth, (req, res) => res.json({ subtasks: [], reti
 
 router.get('/86/messages', requireAuth, async (req, res) => {
   try {
+    // Deal-thread history (slice 3a-2). When deal threads are on and the caller
+    // is on a deal surface, show the DEAL thread's OWN conversation — loaded by
+    // session_id (the cross-stage key stamped in 3a-1) rather than the legacy
+    // entity keys, so lead→estimate→job turns all appear in one thread. Gated on
+    // the flag + a deal surface, so it's byte-identical (falls through below)
+    // when off or on any other surface. Best-effort: any failure falls through.
+    const q = req.query || {};
+    if (FLAG_DEAL_THREADS && q.entity_type && DEAL_SURFACES.has(q.entity_type) && q.entity_id) {
+      try {
+        const resolved = await dealMemory.resolveLineageRoot(pool, q.entity_type, String(q.entity_id));
+        if (resolved && resolved.lineage_root) {
+          const dt = await pool.query(
+            `SELECT id FROM ai_sessions
+               WHERE user_id = $1 AND session_kind = 'deal_thread'
+                 AND lineage_root = $2 AND archived_at IS NULL
+               ORDER BY last_used_at DESC LIMIT 1`,
+            [req.user.id, resolved.lineage_root]
+          );
+          if (dt.rows.length) {
+            const mr = await pool.query(
+              `SELECT id, role, content, output_files, created_at
+                 FROM ai_messages WHERE session_id = $1 ORDER BY created_at ASC`,
+              [dt.rows[0].id]
+            );
+            return res.json({ messages: mr.rows, deal_thread_id: dt.rows[0].id });
+          }
+          // No deal thread minted yet for this lineage — it's a fresh per-deal
+          // conversation; return empty rather than the legacy entity history.
+          return res.json({ messages: [], deal_thread_pending: true });
+        }
+      } catch (e) {
+        console.warn('[86/messages] deal-thread history load failed; falling back:', e && e.message);
+      }
+    }
     // Multi-session: when the sidebar passes ?session_id=N, return
     // that session's history (keyed by its own entity_type+entity_id).
     // Without session_id we fall back to the legacy "all entity_type='86'
