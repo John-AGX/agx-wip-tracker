@@ -87,7 +87,7 @@ const router = express.Router();
 // Skeleton; refined as dispatchers come online.
 // ──────────────────────────────────────────────────────────────────
 const ALLOWED_ENTITY_TYPES = new Set([
-  'estimate', 'job', 'client', 'lead', 'schedule', 'system', 'assembly',
+  'estimate', 'job', 'client', 'lead', 'schedule', 'system', 'assembly', 'deal_memory',
 ]);
 
 // ──────────────────────────────────────────────────────────────────

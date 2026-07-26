@@ -192,9 +192,16 @@ async function refreshDealNumbers(db, entityType, entityId) {
               updated_at      = NOW()`,
     [resolved.lineage_root, resolved.root_type, resolved.organization_id, JSON.stringify(numbers), resolved.stage]
   );
-  // Return the full resolved lineage + numbers so a caller can render the deal
-  // block without re-resolving.
-  return { ...resolved, numbers };
+  // Read the notes back so the caller can render them in the deal block (slice
+  // 4). Notes are written only by the deal_memory payload dispatcher, never here.
+  let notes = [];
+  try {
+    const nr = await db.query('SELECT notes FROM deal_memory WHERE lineage_root = $1', [resolved.lineage_root]);
+    if (nr.rows.length && Array.isArray(nr.rows[0].notes)) notes = nr.rows[0].notes;
+  } catch (_) { /* notes are best-effort in the block */ }
+  // Return the full resolved lineage + numbers + notes so a caller can render
+  // the deal block without re-resolving.
+  return { ...resolved, numbers, notes };
 }
 
 function _fmtMoney(n) {
@@ -223,6 +230,9 @@ function renderDealBlock(res) {
   if (res.estimateId) arc.push('estimate ' + res.estimateId);
   if (res.jobId) arc.push('job ' + res.jobId);
   if (arc.length) L.push('- Lineage: ' + arc.join(' → '));
+  // The durable deal key — target this as entity_id when recording a deal note
+  // (emit_payload_file { entity_type:'deal_memory', entity_id: <this> }).
+  L.push('- Deal key: ' + res.lineage_root);
   if (n.stage === 'job') {
     L.push('- Stage JOB · contract ' + _fmtMoney(n.contract)
       + (n.coIncome ? ' · +CO ' + _fmtMoney(n.coIncome) + ' → total ' + _fmtMoney(n.totalContract) : '')
@@ -237,6 +247,14 @@ function renderDealBlock(res) {
       + (String(lo) !== String(hi) ? ' – ' + _fmtMoney(hi) : '')
       + ' · confidence ' + (n.confidence || 0) + '% · status ' + (n.status || '—'));
   }
+  // Durable notes (slice 4) — model-recorded decisions/constraints in prose that
+  // persist across the lineage and survive compaction. Superseded ones are hidden.
+  const activeNotes = (res.notes || []).filter(function (nt) { return nt && !nt.superseded_by; });
+  if (activeNotes.length) {
+    L.push('# Deal notes (durable decisions/constraints — prose, no numbers)');
+    activeNotes.forEach(function (nt) { L.push('- [' + nt.id + '] ' + nt.text); });
+  }
+  L.push('# Record a durable deal decision/constraint (survives compaction): emit_payload_file { entity_type:"deal_memory", entity_id:"' + res.lineage_root + '", ops:{ note_adds:[{text:"…"}] } } — PROSE only, no $ or numbers. Supersede a stale one with note_supersedes:[{id}].');
   L.push('</deal_memory>');
   return L.join('\n');
 }

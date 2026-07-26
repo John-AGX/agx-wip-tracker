@@ -174,6 +174,23 @@ const TASK_KINDS = new Set(['todo', 'punch', 'follow_up']);
 const TASK_STATUSES = new Set(['open', 'in_progress', 'blocked', 'done']);
 const TASK_PRIORITIES = new Set(['low', 'normal', 'high', 'urgent']);
 
+// Deal-memory notes (slice 4) — the deterministic Critic's bounds. A note is a
+// short PROSE decision/constraint. It must never carry a money figure — a dollar
+// amount is the deterministic rollup's job (the numbers sub-block), not model
+// prose. This is the no-LLM-owns-a-number rule enforced at the write layer.
+const NOTE_TEXT_CAP = 500;       // chars per note
+const NOTES_TOTAL_CAP = 4000;    // ~1k tokens across ACTIVE (non-superseded) notes
+// Money/number detector for note prose — strict on the no-numbers-in-a-note rule
+// but tuned to avoid over-blocking the identifiers that pepper construction
+// notes. Rejects: $-prefixed ($190); magnitude-suffixed (190k / 3 million / 500
+// dollars — NOT bare 'm'/'mm', which collide with metric specs); comma-grouped
+// thousands (3,000); and bare 6+-digit integers (≥$100k — a size that no unit /
+// lot / zip / year uses). Deliberately PASSES ≤5-digit bare numbers (unit 3253,
+// zip 33684, year 2026, small counts). A bare 4–5-digit dollar amount can slip,
+// but that requires 86 to disobey the explicit "prose, no numbers" instruction
+// AND drop the $/comma — a bounded, rare context-pollution edge, not corruption.
+const MONEY_RE = /(\$\s*\d)|(\b\d[\d,]*\.?\d*\s*(k|million|thousand|dollars?|usd)\b)|(\b\d{1,3}(,\d{3})+\b)|(\b\d{6,}\b)/i;
+
 const PAYLOAD_OPS_SCHEMAS = Object.freeze({
   client: {
     // op: 'create' | 'update' (default 'update' if entity_id set, else 'create')
@@ -311,6 +328,15 @@ const PAYLOAD_OPS_SCHEMAS = Object.freeze({
     //   guessing about which of many cards a handed packet belongs to).
     allowedTopKeys: new Set(['op', 'fields', 'items', 'reason', 'source_research_id']),
   },
+  deal_memory: {
+    // Deal-thread durable memory (slice 4). The model appends DECISIONS /
+    // CONSTRAINTS as PROSE ('client waived the flashing CO'); it never touches
+    // 'numbers' (the deterministic rollup owns those). entity_id = the
+    // lineage_root shown in the <deal_memory> block. The absent 'numbers' key
+    // IS the ownership lint — the grammar structurally denies the model any
+    // path to the money column.
+    allowedTopKeys: new Set(['note_adds', 'note_supersedes']),
+  },
 });
 
 // Mirror of the client-side template registry (js/report-templates.js)
@@ -346,6 +372,39 @@ function validateOps(entityType, ops) {
     }
   }
   // Per-entity sanity:
+  if (entityType === 'deal_memory') {
+    // Emit-time deterministic Critic — shape + the no-money rule. (id-existence
+    // and the total cap need the DB row, so they run at apply time in the
+    // dispatcher.)
+    if (ops.note_adds != null && !Array.isArray(ops.note_adds)) {
+      throw new Error('deal_memory.ops.note_adds must be an array');
+    }
+    if (ops.note_supersedes != null && !Array.isArray(ops.note_supersedes)) {
+      throw new Error('deal_memory.ops.note_supersedes must be an array');
+    }
+    (ops.note_adds || []).forEach((n, i) => {
+      const text = (n && typeof n === 'object') ? n.text : n;
+      if (!text || !String(text).trim()) {
+        throw new PayloadValidationError(`deal_memory.note_adds[${i}].text is required`,
+          { code: 'missing_field', field_path: `note_adds[${i}].text` });
+      }
+      if (String(text).length > NOTE_TEXT_CAP) {
+        throw new PayloadValidationError(`deal_memory.note_adds[${i}].text exceeds ${NOTE_TEXT_CAP} chars`,
+          { code: 'note_too_long', field_path: `note_adds[${i}].text` });
+      }
+      if (MONEY_RE.test(String(text))) {
+        throw new PayloadValidationError(
+          `deal_memory.note_adds[${i}].text contains a money figure — notes hold decisions/constraints in PROSE, never numbers. A dollar amount is the deterministic rollup's job (the numbers sub-block), not model prose. Rephrase without the figure (e.g. "client imposed a hard price cap" not "hard cap $190k").`,
+          { code: 'money_in_note', field_path: `note_adds[${i}].text`, received: String(text) });
+      }
+    });
+    (ops.note_supersedes || []).forEach((s, i) => {
+      if (!s || !s.id) {
+        throw new PayloadValidationError(`deal_memory.note_supersedes[${i}].id is required`,
+          { code: 'missing_field', field_path: `note_supersedes[${i}].id` });
+      }
+    });
+  }
   if (entityType === 'assembly') {
     if (ops.op && !['create', 'update', 'delete'].includes(ops.op)) {
       throw new Error(`assembly op must be create | update | delete (got '${ops.op}')`);
@@ -2781,6 +2840,101 @@ async function dispatchAssembly(dbClient, target, refTable, ctx) {
   throw new Error(`assembly: unsupported op '${opType}'`);
 }
 
+// Deal-memory notes (slice 4) — the APPLY-TIME Critic + append-only writer.
+// entity_id = the lineage_root. Only the notes column is ever written; numbers
+// stay owned by refreshDealNumbers (single-writer). The row is guaranteed to
+// exist because refreshDealNumbers runs on every deal-thread turn before 86 can
+// emit this op.
+async function dispatchDealMemory(dbClient, target, refTable, ctx) {
+  const ops = target.ops || {};
+  resolveRefsInOps(ops, refTable);
+  // Fail CLOSED on missing org context (matches dispatchReminder) — an authed
+  // org is required before we touch any deal's memory.
+  if (!ctx || !ctx.organizationId) {
+    throw new Error('deal_memory write requires an authenticated org context');
+  }
+  const root = target.entity_id;
+  if (!root || isRef(root)) {
+    throw new Error('deal_memory requires a concrete entity_id (the lineage_root from the <deal_memory> block)');
+  }
+  const r = await dbClient.query(
+    'SELECT organization_id, notes FROM deal_memory WHERE lineage_root = $1 FOR UPDATE', [root]
+  );
+  if (!r.rows.length) {
+    // Structured so 86 self-corrects: it must target the "Deal key" from the
+    // <deal_memory> block, and the row seeds on the first deal-thread turn.
+    throw new PayloadValidationError(
+      `deal_memory row not found for lineage_root ${root} — target the "Deal key" shown in the <deal_memory> block (the deal thread seeds its row on the first turn)`,
+      { code: 'deal_memory_not_seeded', received: root });
+  }
+  // Tolerant org guard — deal_memory is keyed on lineage_root, so assertTargetOrg
+  // (which keys on id) can't be reused. Skip when the row has no org (legacy).
+  const rowOrg = r.rows[0].organization_id;
+  if (rowOrg != null && ctx && ctx.organizationId && rowOrg !== ctx.organizationId) {
+    throw new Error(`deal_memory not found for lineage_root ${root}`);
+  }
+  let notes = Array.isArray(r.rows[0].notes) ? r.rows[0].notes.slice() : [];
+  const by = (ctx && ctx.sourceAgent) || '86';
+  const now = new Date().toISOString();
+
+  // (a) validate supersede ids exist BEFORE any mutation.
+  const supersedeIds = new Set((ops.note_supersedes || []).map((s) => s.id));
+  for (const id of supersedeIds) {
+    if (!notes.find((n) => n && n.id === id)) {
+      throw new PayloadValidationError(`deal_memory.note_supersedes: unknown note id '${id}'`,
+        { code: 'missing_supersede_id', received: id });
+    }
+  }
+  // (b) append new notes (append-only) — apply-time no-money re-check (defense in depth).
+  const added = [], newAddIds = [];
+  for (const n of (ops.note_adds || [])) {
+    const text = String((typeof n === 'object' ? n.text : n)).slice(0, NOTE_TEXT_CAP);
+    if (MONEY_RE.test(text)) {
+      throw new PayloadValidationError('deal_memory note contains a money figure', { code: 'money_in_note', received: text });
+    }
+    const note = { id: newNoteId(), at: now, by, text, superseded_by: null };
+    notes.push(note); added.push(note); newAddIds.push(note.id);
+  }
+  // (c) link supersede → replacement (first added note, else a marker).
+  const replacementId = newAddIds[0] || null;
+  for (const nn of notes) {
+    if (nn && supersedeIds.has(nn.id) && !nn.superseded_by) nn.superseded_by = replacementId || 'superseded';
+  }
+  // (d) deterministic total-cap eviction — drop already-superseded first, then
+  // oldest active, until ACTIVE text is under the cap. Never evict a note added
+  // in THIS op (a single huge op may exceed the cap by design rather than drop
+  // its own writes).
+  // (d) active-text cap — evict the oldest ACTIVE note (never one added in THIS
+  // op) until active text is under cap. Superseded notes don't count toward
+  // activeLen, so they are NOT eviction targets here; that guarantees every
+  // iteration reduces activeLen and the cap actually holds.
+  const activeLen = () => notes.filter((n) => n && !n.superseded_by).reduce((s, n) => s + (n.text || '').length, 0);
+  let guard = 0;
+  while (activeLen() > NOTES_TOTAL_CAP && guard++ < 500) {
+    const victim = notes.find((n) => n && !n.superseded_by && !newAddIds.includes(n.id));
+    if (!victim) break;  // only just-added active notes left — a single huge op may exceed the cap by design
+    notes = notes.filter((n) => n !== victim);
+  }
+  // (e) bound total array growth — drop the oldest SUPERSEDED note first (the
+  // audit tail) once the row gets large, so superseded notes can't accumulate
+  // unbounded on a long-lived deal.
+  const MAX_TOTAL_NOTES = 200;
+  guard = 0;
+  while (notes.length > MAX_TOTAL_NOTES && guard++ < 500) {
+    const victim = notes.find((n) => n && n.superseded_by) || notes.find((n) => n && !newAddIds.includes(n.id));
+    if (!victim) break;
+    notes = notes.filter((n) => n !== victim);
+  }
+
+  await dbClient.query('UPDATE deal_memory SET notes = $1::jsonb, updated_at = NOW() WHERE lineage_root = $2',
+    [JSON.stringify(notes), root]);
+  return {
+    entity_type: 'deal_memory', entity_id: root, op: 'notes',
+    notes_added: added.length, notes_superseded: supersedeIds.size,
+    summary: `Deal memory ${root}: +${added.length} note(s)` + (supersedeIds.size ? `, superseded ${supersedeIds.size}` : ''),
+  };
+}
+
 const DISPATCHERS = {
   client: dispatchClient,
   estimate: dispatchEstimate,
@@ -2794,6 +2948,7 @@ const DISPATCHERS = {
   todo: dispatchTodo,
   reminder: dispatchReminder,
   assembly: dispatchAssembly,
+  deal_memory: dispatchDealMemory,
 };
 
 async function dispatchTarget(dbClient, target, refTable, ctx) {
