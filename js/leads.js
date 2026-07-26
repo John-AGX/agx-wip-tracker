@@ -421,21 +421,28 @@ function p86Ask(message, opts) {
     FD.open({
       title: 'Filter Leads', fields: fields,
       values: _leadsDrawer || FD.emptyValues(fields),
-      onApply: function(v) { _leadsDrawer = v; _leadsActiveViewId = null; updateLeadsFilterBtn(); updateLeadsViewsBtn(); renderLeadsList(); },
-      onClear: function() { _leadsDrawer = null; _leadsActiveViewId = null; updateLeadsFilterBtn(); updateLeadsViewsBtn(); renderLeadsList(); }
+      onApply: function(v) { _leadsDrawer = v; setLeadsActiveView(null); updateLeadsFilterBtn(); updateLeadsViewsBtn(); renderLeadsList(); },
+      onClear: function() { _leadsDrawer = null; setLeadsActiveView(null); updateLeadsFilterBtn(); updateLeadsViewsBtn(); renderLeadsList(); }
     });
   };
+  var LEADS_VIEW_KEY = 'p86_leads_active_view';
+  // Mirror the active-view id to localStorage so the last-applied view is
+  // restored on refresh (server persists the views; which one is ACTIVE was
+  // memory-only, so only a default view survived a reload before).
+  function setLeadsActiveView(id) { _leadsActiveViewId = id; try { if (id) localStorage.setItem(LEADS_VIEW_KEY, id); else localStorage.removeItem(LEADS_VIEW_KEY); } catch (e) {} }
   function leadsLoadViews() {
     if (!(window.p86Api && window.p86Api.listViews)) return Promise.resolve();
     return window.p86Api.listViews.list('leads').then(function(r) {
       _leadsViews = (r && r.views) || [];
       var def = _leadsViews.find(function(v) { return v.is_default; });
-      if (def && !_leadsDrawer && !_leadsActiveViewId) applyLeadsView(def);
+      var stored = null; try { stored = localStorage.getItem(LEADS_VIEW_KEY); } catch (e) {}
+      var target = (stored && _leadsViews.find(function(v) { return v.id === stored; })) || def;
+      if (target && !_leadsDrawer && !_leadsActiveViewId) applyLeadsView(target);
       updateLeadsViewsBtn();
     }).catch(function() { _leadsViews = []; });
   }
   function applyLeadsView(v) {
-    _leadsActiveViewId = v.id;
+    setLeadsActiveView(v.id);
     var cfg = v.config || {};
     _leadsDrawer = (cfg.filters && Object.keys(cfg.filters).length) ? cfg.filters : null;
     _leadCols = (Array.isArray(cfg.columns) && cfg.columns.length) ? cfg.columns.slice() : null;
@@ -474,24 +481,24 @@ function p86Ask(message, opts) {
       sp.addEventListener('click', function() { var id = sp.parentNode.getAttribute('data-view'); var v = _leadsViews.find(function(x) { return x.id === id; }); if (v) { close(); applyLeadsView(v); } });
     });
     pop.querySelectorAll('[data-def]').forEach(function(a) { a.addEventListener('click', function(e) { e.preventDefault(); e.stopPropagation(); window.p86Api.listViews.update(a.getAttribute('data-def'), { is_default: true }).then(leadsLoadViews).then(function() { close(); if (typeof window.p86Toast === 'function') window.p86Toast('Default view set', 'success'); }); }); });
-    pop.querySelectorAll('[data-del]').forEach(function(a) { a.addEventListener('click', async function(e) { e.preventDefault(); e.stopPropagation(); if (!(await p86Ask('Delete this saved view?'))) return; var id = a.getAttribute('data-del'); window.p86Api.listViews.remove(id).then(function() { if (_leadsActiveViewId === id) _leadsActiveViewId = null; return leadsLoadViews(); }).then(close); }); });
+    pop.querySelectorAll('[data-del]').forEach(function(a) { a.addEventListener('click', async function(e) { e.preventDefault(); e.stopPropagation(); if (!(await p86Ask('Delete this saved view?'))) return; var id = a.getAttribute('data-del'); window.p86Api.listViews.remove(id).then(function() { if (_leadsActiveViewId === id) setLeadsActiveView(null); return leadsLoadViews(); }).then(close); }); });
     // Column chooser: toggle visible columns (never allow zero).
     pop.querySelectorAll('.lc-box').forEach(function(cb) {
       cb.addEventListener('change', function() {
         var set = []; pop.querySelectorAll('.lc-box').forEach(function(x) { if (x.checked) set.push(x.getAttribute('data-key')); });
         if (!set.length) { cb.checked = true; return; }
-        _leadCols = set; _leadsActiveViewId = null; persistLeadCols(); updateLeadsViewsBtn(); renderLeadsList();
+        _leadCols = set; setLeadsActiveView(null); persistLeadCols(); updateLeadsViewsBtn(); renderLeadsList();
       });
     });
     var lcAll = pop.querySelector('#lc-all');
-    if (lcAll) lcAll.addEventListener('click', function(e) { e.preventDefault(); _leadCols = leadAllColKeys(); _leadsActiveViewId = null; persistLeadCols(); updateLeadsViewsBtn(); renderLeadsList(); pop.querySelectorAll('.lc-box').forEach(function(x) { x.checked = true; }); });
+    if (lcAll) lcAll.addEventListener('click', function(e) { e.preventDefault(); _leadCols = leadAllColKeys(); setLeadsActiveView(null); persistLeadCols(); updateLeadsViewsBtn(); renderLeadsList(); pop.querySelectorAll('.lc-box').forEach(function(x) { x.checked = true; }); });
     var lcReset = pop.querySelector('#lc-reset');
-    if (lcReset) lcReset.addEventListener('click', function(e) { e.preventDefault(); _leadCols = LEADS_DEFAULT_COLS.slice(); _leadsActiveViewId = null; persistLeadCols(); updateLeadsViewsBtn(); renderLeadsList(); pop.querySelectorAll('.lc-box').forEach(function(x) { x.checked = LEADS_DEFAULT_COLS.indexOf(x.getAttribute('data-key')) >= 0; }); });
+    if (lcReset) lcReset.addEventListener('click', function(e) { e.preventDefault(); _leadCols = LEADS_DEFAULT_COLS.slice(); setLeadsActiveView(null); persistLeadCols(); updateLeadsViewsBtn(); renderLeadsList(); pop.querySelectorAll('.lc-box').forEach(function(x) { x.checked = LEADS_DEFAULT_COLS.indexOf(x.getAttribute('data-key')) >= 0; }); });
     var sv = pop.querySelector('#leads-save-view');
     if (sv) sv.addEventListener('click', function() {
       var name = prompt('Name this view:'); if (name == null) return; name = String(name).trim(); if (!name) return;
       window.p86Api.listViews.create({ page: 'leads', name: name, config: { filters: _leadsDrawer || {}, columns: _leadCols || LEADS_DEFAULT_COLS }, is_default: false })
-        .then(function(res) { _leadsActiveViewId = (res && res.view && res.view.id) || null; return leadsLoadViews(); })
+        .then(function(res) { setLeadsActiveView((res && res.view && res.view.id) || null); return leadsLoadViews(); })
         .then(function() { close(); if (typeof window.p86Toast === 'function') window.p86Toast('View saved', 'success'); })
         .catch(function() { if (typeof window.p86Toast === 'function') window.p86Toast('Could not save view', 'error'); });
     });

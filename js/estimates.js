@@ -431,21 +431,26 @@ function estimatesOpenFilter() {
     FD.open({
         title: 'Filter Estimates', fields: fields,
         values: _estDrawer || FD.emptyValues(fields),
-        onApply: function(v) { _estDrawer = v; _estActiveViewId = null; updateEstFilterBtn(); updateEstViewsBtn(); renderEstimatesList(); },
-        onClear: function() { _estDrawer = null; _estActiveViewId = null; updateEstFilterBtn(); updateEstViewsBtn(); renderEstimatesList(); }
+        onApply: function(v) { _estDrawer = v; setEstActiveView(null); updateEstFilterBtn(); updateEstViewsBtn(); renderEstimatesList(); },
+        onClear: function() { _estDrawer = null; setEstActiveView(null); updateEstFilterBtn(); updateEstViewsBtn(); renderEstimatesList(); }
     });
 }
+var EST_VIEW_KEY = 'p86_estimates_active_view';
+function setEstActiveView(id) { _estActiveViewId = id; try { if (id) localStorage.setItem(EST_VIEW_KEY, id); else localStorage.removeItem(EST_VIEW_KEY); } catch (e) {} }
 function estLoadViews() {
     if (!(window.p86Api && window.p86Api.listViews)) return Promise.resolve();
     return window.p86Api.listViews.list('estimates').then(function(r) {
         _estViews = (r && r.views) || [];
         var def = _estViews.find(function(v) { return v.is_default; });
-        if (def && !_estDrawer && !_estActiveViewId) applyEstView(def);
+        // Restore the last-applied view first; fall back to the default.
+        var stored = null; try { stored = localStorage.getItem(EST_VIEW_KEY); } catch (e) {}
+        var target = (stored && _estViews.find(function(v) { return v.id === stored; })) || def;
+        if (target && !_estDrawer && !_estActiveViewId) applyEstView(target);
         updateEstViewsBtn();
     }).catch(function() { _estViews = []; });
 }
 function applyEstView(v) {
-    _estActiveViewId = v.id;
+    setEstActiveView(v.id);
     var cfg = v.config || {};
     _estDrawer = (cfg.filters && Object.keys(cfg.filters).length) ? cfg.filters : null;
     updateEstFilterBtn(); updateEstViewsBtn(); renderEstimatesList();
@@ -475,12 +480,12 @@ function estimatesOpenViews(anchor) {
         sp.addEventListener('click', function() { var id = sp.parentNode.getAttribute('data-view'); var v = _estViews.find(function(x) { return x.id === id; }); if (v) { close(); applyEstView(v); } });
     });
     pop.querySelectorAll('[data-def]').forEach(function(a) { a.addEventListener('click', function(e) { e.preventDefault(); e.stopPropagation(); window.p86Api.listViews.update(a.getAttribute('data-def'), { is_default: true }).then(estLoadViews).then(function() { close(); if (typeof window.p86Toast === 'function') window.p86Toast('Default view set', 'success'); }); }); });
-    pop.querySelectorAll('[data-del]').forEach(function(a) { a.addEventListener('click', async function(e) { e.preventDefault(); e.stopPropagation(); if (!(await p86Ask('Delete this saved view?'))) return; var id = a.getAttribute('data-del'); window.p86Api.listViews.remove(id).then(function() { if (_estActiveViewId === id) _estActiveViewId = null; return estLoadViews(); }).then(close); }); });
+    pop.querySelectorAll('[data-del]').forEach(function(a) { a.addEventListener('click', async function(e) { e.preventDefault(); e.stopPropagation(); if (!(await p86Ask('Delete this saved view?'))) return; var id = a.getAttribute('data-del'); window.p86Api.listViews.remove(id).then(function() { if (_estActiveViewId === id) setEstActiveView(null); return estLoadViews(); }).then(close); }); });
     var sv = pop.querySelector('#est-save-view');
     if (sv) sv.addEventListener('click', function() {
         var name = prompt('Name this view:'); if (name == null) return; name = String(name).trim(); if (!name) return;
         window.p86Api.listViews.create({ page: 'estimates', name: name, config: { filters: _estDrawer || {} }, is_default: false })
-            .then(function(res) { _estActiveViewId = (res && res.view && res.view.id) || null; return estLoadViews(); })
+            .then(function(res) { setEstActiveView((res && res.view && res.view.id) || null); return estLoadViews(); })
             .then(function() { close(); if (typeof window.p86Toast === 'function') window.p86Toast('View saved', 'success'); })
             .catch(function() { if (typeof window.p86Toast === 'function') window.p86Toast('Could not save view', 'error'); });
     });

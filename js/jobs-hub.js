@@ -229,6 +229,9 @@ function p86Ask(message, opts) {
 
   function buildView(host, cfg) {
     var st = _state[cfg.key];
+    // Per-list key so the last-applied saved view is restored on refresh
+    // (hub view state lives in _state, which resets on reload).
+    var HUBVK = cfg.viewsPage ? ('p86_hub_' + cfg.viewsPage + '_active_view') : null;
     host.innerHTML =
       '<div class="jobshub-head">' +
         '<div class="jobshub-title">' + esc(cfg.title) + '</div>' +
@@ -403,16 +406,17 @@ function p86Ask(message, opts) {
             if (!v) return;
             var f = (v.config && v.config.filters) || {};
             st.status = f.status || 'open'; st.job = f.job || ''; st.q = f.q || '';
+            try { if (HUBVK) localStorage.setItem(HUBVK, v.id); } catch (e) {}
             close();
             buildView(host, cfg);   // rebuild so the selects reflect the preset
           });
         });
         pop.querySelectorAll('[data-def]').forEach(function (a) { a.addEventListener('click', function (e) { e.preventDefault(); e.stopPropagation(); window.p86Api.listViews.update(a.getAttribute('data-def'), { is_default: true }).then(function () { close(); if (typeof window.p86Toast === 'function') window.p86Toast('Default view set', 'success'); }); }); });
-        pop.querySelectorAll('[data-del]').forEach(function (a) { a.addEventListener('click', async function (e) { e.preventDefault(); e.stopPropagation(); if (!(await p86Ask('Delete this saved view?'))) return; window.p86Api.listViews.remove(a.getAttribute('data-del')).then(close); }); });
+        pop.querySelectorAll('[data-del]').forEach(function (a) { a.addEventListener('click', async function (e) { e.preventDefault(); e.stopPropagation(); if (!(await p86Ask('Delete this saved view?'))) return; var delId = a.getAttribute('data-del'); window.p86Api.listViews.remove(delId).then(function () { try { if (HUBVK && localStorage.getItem(HUBVK) === delId) localStorage.removeItem(HUBVK); } catch (e2) {} close(); }); }); });
         pop.querySelector('.jhv-save').addEventListener('click', function () {
           var name = prompt('Name this view:'); if (name == null) return; name = String(name).trim(); if (!name) return;
           window.p86Api.listViews.create({ page: cfg.viewsPage, name: name, config: { filters: { status: st.status, job: st.job, q: st.q } }, is_default: false })
-            .then(function () { close(); if (typeof window.p86Toast === 'function') window.p86Toast('View saved', 'success'); })
+            .then(function (res) { try { if (HUBVK && res && res.view) localStorage.setItem(HUBVK, res.view.id); } catch (e) {} close(); if (typeof window.p86Toast === 'function') window.p86Toast('View saved', 'success'); })
             .catch(function () { if (typeof window.p86Toast === 'function') window.p86Toast('Could not save view', 'error'); });
         });
       });
@@ -457,13 +461,30 @@ function p86Ask(message, opts) {
     var statusEl = host.querySelector('#jh-status');
     var newBtn = host.querySelector('#jh-new');
     if (searchEl) searchEl.addEventListener('input', function () { st.q = searchEl.value; repaint(); });
-    if (jobEl) jobEl.addEventListener('change', function () { st.job = jobEl.value; refetch(); });
-    if (statusEl) statusEl.addEventListener('change', function () { st.status = statusEl.value; refetch(); });
+    if (jobEl) jobEl.addEventListener('change', function () { st.job = jobEl.value; try { if (HUBVK) localStorage.removeItem(HUBVK); } catch (e) {} refetch(); });
+    if (statusEl) statusEl.addEventListener('change', function () { st.status = statusEl.value; try { if (HUBVK) localStorage.removeItem(HUBVK); } catch (e) {} refetch(); });
     if (newBtn) newBtn.addEventListener('click', function () { openCreateModal(cfg.createKind, refetch); });
     var viewsBtn = host.querySelector('#jh-views');
     if (viewsBtn) viewsBtn.addEventListener('click', function () { openViewsPopover(viewsBtn); });
     if (typeof cfg.wireExtra === 'function') cfg.wireExtra(host);
     refetch();
+    // Restore the last-applied (or default) saved view once per page load —
+    // hub filters live in _state (memory) and reset on refresh, so re-apply
+    // from the server + localStorage so a saved view survives a reload.
+    if (HUBVK && !st._viewInit && window.p86Api && window.p86Api.listViews) {
+      st._viewInit = true;
+      window.p86Api.listViews.list(cfg.viewsPage).then(function (r) {
+        var views = (r && r.views) || [];
+        var stored = null; try { stored = localStorage.getItem(HUBVK); } catch (e) {}
+        var v = (stored && views.find(function (x) { return x.id === stored; })) || views.find(function (x) { return x.is_default; });
+        if (!v) return;
+        var f = (v.config && v.config.filters) || {};
+        var ns = f.status || st.status, nj = f.job || '', nq = f.q || '';
+        if (ns === st.status && nj === st.job && nq === st.q) return;   // already matches
+        st.status = ns; st.job = nj; st.q = nq;
+        buildView(host, cfg);   // rebuild so inputs + list reflect the view
+      }).catch(function () {});
+    }
   }
 
   function wireRows(listEl, cfg) {

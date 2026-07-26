@@ -223,8 +223,8 @@ function p86Ask(message, opts) {
       title: 'Filter',
       fields: fields,
       values: _drawer || window.p86FilterDrawer.emptyValues(fields),
-      onApply: function (v) { _drawer = v; updateFilterUI(); renderList(); },
-      onClear: function () { _drawer = null; updateFilterUI(); renderList(); }
+      onApply: function (v) { _drawer = v; setCiActiveView(null); updateFilterUI(); renderList(); },
+      onClear: function () { _drawer = null; setCiActiveView(null); updateFilterUI(); renderList(); }
     });
   }
   // "Filter (N)" badge + removable active-filter chips above the list.
@@ -317,19 +317,29 @@ function p86Ask(message, opts) {
       cb.addEventListener('change', function () {
         var set = allColKeys().filter(function (k) { var el = pop.querySelector('input[data-col="' + k + '"]'); return el && el.checked; });
         if (!set.length) { cb.checked = true; return; } // never hide every column
-        _cols = set; _activeViewId = null; persistCols(); updateViewsBtn(); renderList();
+        _cols = set; setCiActiveView(null); persistCols(); updateViewsBtn(); renderList();
       });
     });
     var rb = pop.querySelector('#ciColsReset');
-    if (rb) rb.addEventListener('click', function () { _cols = DEFAULT_COLS.slice(); _activeViewId = null; persistCols(); closePopover(); updateViewsBtn(); renderList(); });
+    if (rb) rb.addEventListener('click', function () { _cols = DEFAULT_COLS.slice(); setCiActiveView(null); persistCols(); closePopover(); updateViewsBtn(); renderList(); });
   }
   function loadViews() {
     if (!(window.p86Api && window.p86Api.listViews)) return Promise.resolve();
     return window.p86Api.listViews.list('cost_inbox').then(function (r) { _views = (r && r.views) || []; }).catch(function () { _views = []; });
   }
-  function applyDefaultView() { var def = _views.find(function (v) { return v.is_default; }); if (def) applyView(def, true); }
+  // Remember the last-applied saved view across refreshes. Views persist
+  // server-side, but which one is ACTIVE lived only in memory, so a refresh
+  // dropped back to the default (or unfiltered) unless the view was the default.
+  var CI_VIEW_KEY = 'p86_cost_inbox_active_view';
+  function setCiActiveView(id) { _activeViewId = id; try { if (id) localStorage.setItem(CI_VIEW_KEY, id); else localStorage.removeItem(CI_VIEW_KEY); } catch (e) {} }
+  function applyDefaultView() {
+    // Restore the last-applied view first; fall back to the default.
+    var stored = null; try { stored = localStorage.getItem(CI_VIEW_KEY); } catch (e) {}
+    var target = (stored && _views.find(function (v) { return v.id === stored; })) || _views.find(function (v) { return v.is_default; });
+    if (target && !_drawer && !_activeViewId) applyView(target, true);
+  }
   function applyView(v, silent) {
-    _activeViewId = v.id;
+    setCiActiveView(v.id);
     var cfg = v.config || {};
     _cols = (Array.isArray(cfg.columns) && cfg.columns.length) ? cfg.columns.slice() : allColKeys();
     _drawer = (cfg.filters && Object.keys(cfg.filters).length) ? cfg.filters : null;
@@ -374,7 +384,7 @@ function p86Ask(message, opts) {
         b.addEventListener('click', async function (e) {
           e.stopPropagation(); var id = b.getAttribute('data-del');
           if (!(await p86Ask('Delete this saved view?'))) return;
-          window.p86Api.listViews.remove(id).then(function () { if (_activeViewId === id) _activeViewId = null; return loadViews(); }).then(function () { closePopover(); updateViewsBtn(); });
+          window.p86Api.listViews.remove(id).then(function () { if (_activeViewId === id) setCiActiveView(null); return loadViews(); }).then(function () { closePopover(); updateViewsBtn(); });
         });
       });
       var sv = pop.querySelector('#ciSaveView');
@@ -382,7 +392,7 @@ function p86Ask(message, opts) {
         var name = window.prompt('Name this view (saves the current columns + filters):', '');
         if (name == null) return; name = String(name).trim(); if (!name) return;
         window.p86Api.listViews.create({ page: 'cost_inbox', name: name, config: { columns: _cols || allColKeys(), filters: _drawer || {} }, is_default: false })
-          .then(function (r) { _activeViewId = (r && r.view && r.view.id) || null; return loadViews(); })
+          .then(function (r) { setCiActiveView((r && r.view && r.view.id) || null); return loadViews(); })
           .then(function () { closePopover(); updateViewsBtn(); toast('View saved', 'success'); })
           .catch(function (e) { toast('Could not save view: ' + (e && e.message || 'error'), 'error'); });
       });

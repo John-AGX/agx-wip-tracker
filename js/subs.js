@@ -97,9 +97,39 @@ function p86Ask(message, opts) {
     FD.open({
       title: 'Filter Subs', fields: fields,
       values: _state.drawer || FD.emptyValues(fields),
-      onApply: function(v) { _state.drawer = v; updateSubsFilterBtn(); renderDirectory(); },
-      onClear: function() { _state.drawer = null; updateSubsFilterBtn(); renderDirectory(); }
+      onApply: function(v) { _state.drawer = v; setSubsActiveView(null); updateSubsFilterBtn(); renderDirectory(); },
+      onClear: function() { _state.drawer = null; setSubsActiveView(null); updateSubsFilterBtn(); renderDirectory(); }
     });
+  }
+
+  // Which saved view is currently applied. Views persist server-side, but which
+  // one is ACTIVE lived only in memory — so a refresh reverted to the default
+  // (or nothing) even after the user applied a non-default view. Mirror the id
+  // into localStorage so loadViews can restore it. (Mirrors js/jobs.js.)
+  var SUBS_VIEW_KEY = 'p86_subs_active_view';
+  var _activeViewId = null, _viewsLoaded = false;
+  function setSubsActiveView(id) { _activeViewId = id; try { if (id) localStorage.setItem(SUBS_VIEW_KEY, id); else localStorage.removeItem(SUBS_VIEW_KEY); } catch (e) {} }
+  // Load saved views once and restore the last-applied one (or the default).
+  function loadViews() {
+    if (!(window.p86Api && window.p86Api.listViews)) return Promise.resolve();
+    return window.p86Api.listViews.list('subs').then(function(r) {
+      var views = (r && r.views) || [];
+      var def = views.find(function(v) { return v.is_default; });
+      // Restore the last-applied view first; fall back to the default.
+      var stored = null; try { stored = localStorage.getItem(SUBS_VIEW_KEY); } catch (e) {}
+      var target = (stored && views.find(function(v) { return v.id === stored; })) || def;
+      if (target && !_state.drawer && !_activeViewId) {
+        var f = (target.config && target.config.filters) || {};
+        _state.trade = f.trade || ''; _state.status = ('status' in f) ? f.status : 'active'; _state.search = f.search || '';
+        _state.drawer = f.drawer || null;
+        setSubsActiveView(target.id);
+        var tEl = document.getElementById('subs-filter-trade'); if (tEl) tEl.value = _state.trade;
+        var sEl = document.getElementById('subs-filter-status'); if (sEl) sEl.value = _state.status;
+        var qEl = document.getElementById('subs-search'); if (qEl) qEl.value = _state.search;
+        renderDirectory();
+      }
+      updateSubsFilterBtn();
+    }).catch(function() {});
   }
   function openViews(anchor) {
     var existing = document.getElementById('subs-views-pop');
@@ -132,6 +162,7 @@ function p86Ask(message, opts) {
           var f = (v.config && v.config.filters) || {};
           _state.trade = f.trade || ''; _state.status = ('status' in f) ? f.status : 'active'; _state.search = f.search || '';
           _state.drawer = f.drawer || null;
+          setSubsActiveView(v.id);
           var tEl = document.getElementById('subs-filter-trade'); if (tEl) tEl.value = _state.trade;
           var sEl = document.getElementById('subs-filter-status'); if (sEl) sEl.value = _state.status;
           var qEl = document.getElementById('subs-search'); if (qEl) qEl.value = _state.search;
@@ -139,11 +170,11 @@ function p86Ask(message, opts) {
         });
       });
       pop.querySelectorAll('[data-def]').forEach(function(a) { a.addEventListener('click', function(e) { e.preventDefault(); e.stopPropagation(); window.p86Api.listViews.update(a.getAttribute('data-def'), { is_default: true }).then(function() { close(); }); }); });
-      pop.querySelectorAll('[data-del]').forEach(function(a) { a.addEventListener('click', async function(e) { e.preventDefault(); e.stopPropagation(); if (!(await p86Ask('Delete this saved view?'))) return; window.p86Api.listViews.remove(a.getAttribute('data-del')).then(close); }); });
+      pop.querySelectorAll('[data-del]').forEach(function(a) { a.addEventListener('click', async function(e) { e.preventDefault(); e.stopPropagation(); if (!(await p86Ask('Delete this saved view?'))) return; var id = a.getAttribute('data-del'); window.p86Api.listViews.remove(id).then(function() { if (_activeViewId === id) setSubsActiveView(null); close(); }); }); });
       pop.querySelector('.sv-save').addEventListener('click', function() {
         var name = prompt('Name this view:'); if (name == null) return; name = String(name).trim(); if (!name) return;
         window.p86Api.listViews.create({ page: 'subs', name: name, config: { filters: { trade: _state.trade, status: _state.status, search: _state.search, drawer: _state.drawer } }, is_default: false })
-          .then(function() { close(); })
+          .then(function(res) { setSubsActiveView(res && res.view && res.view.id ? res.view.id : null); close(); })
           .catch(function() { alert('Could not save view.'); });
       });
     });
@@ -1459,6 +1490,7 @@ function p86Ask(message, opts) {
       appData.subsDirectory = r.subs || [];
       appData.knownTrades = r.trades || appData.knownTrades || [];
       renderDirectory();
+      if (!_viewsLoaded) { _viewsLoaded = true; return loadViews(); }
     }).catch(function(err) {
       console.warn('[subs] refresh failed:', err && err.message);
       renderDirectory();
@@ -1467,6 +1499,7 @@ function p86Ask(message, opts) {
 
   function setFilter(key, val) {
     _state[key] = val || '';
+    setSubsActiveView(null);
     renderDirectory();
   }
 
