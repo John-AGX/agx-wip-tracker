@@ -3180,6 +3180,13 @@ var _inspJobKey=null, _inspFilesHandle=null;
 // render (not gated by the job-detail build key) so late-settling node-graph
 // numbers (pctComplete / revenue / profit) land instead of freezing at $0.
 function refreshInspMetrics(){
+  // Repaint the Scopes panel alongside the tiles. renderInspectorJobDetail is
+  // KEYED (builds #insp-phases once, at first paint), but a job-level scope's %
+  // derives from building units that often load AFTER that paint — so without
+  // this the rows freeze at the stale stored % (e.g. 100% while the units say
+  // 29%). Cheap (a couple of rows); guard against clobbering a focused inline
+  // input mid-edit. Before the tiles-host early-return so it fires regardless.
+  try{ if(typeof window.renderOverviewPhasesInto==='function'){ var _ipx=document.getElementById('insp-phases'); if(_ipx && !_ipx.querySelector('input:focus')) window.renderOverviewPhasesInto(_ipx, E.job()); } }catch(e){}
   var host=document.getElementById('ng-insp-metrics'); if(!host) return;
   var jid=E.job();
   var w=(typeof window.getJobWIP==='function')?(window.getJobWIP(jid)||{}):{};
