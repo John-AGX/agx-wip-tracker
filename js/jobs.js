@@ -6297,7 +6297,7 @@ function renderJobsMain() {
             const list = document.getElementById('managePhasesList');
             const phases = (appData.phases || []).filter(p => p.jobId === jobId);
             if (!phases.length) {
-                list.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-dim);">No phases for this job yet.</div>';
+                list.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-dim);">No scopes for this job yet.</div>';
                 return;
             }
             // Group by phase name (case-insensitive)

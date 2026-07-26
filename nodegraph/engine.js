@@ -180,7 +180,7 @@ function createDataEntry(type, label){
 
   if(type === 't2'){
     id = 'p' + Date.now();
-    entry = { id:id, jobId:jobId, buildingId:'', phase:label||'New Phase', workScope:'in-house', locked:false, pctComplete:0, materials:0, labor:0, sub:0, equipment:0, phaseBudget:0, asSoldRevenue:0, hoursWeek:0, hoursTotal:0, rate:40, notes:'', dateAdded:ts };
+    entry = { id:id, jobId:jobId, buildingId:'', phase:label||'New Scope', workScope:'in-house', locked:false, pctComplete:0, materials:0, labor:0, sub:0, equipment:0, phaseBudget:0, asSoldRevenue:0, hoursWeek:0, hoursTotal:0, rate:40, notes:'', dateAdded:ts };
     appData.phases.push(entry);
     if(typeof saveData === 'function') saveData();
     return entry;
