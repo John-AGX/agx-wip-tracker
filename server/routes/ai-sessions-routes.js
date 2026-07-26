@@ -49,15 +49,28 @@ router.get('/', requireAuth, async (req, res) => {
     // automatically server-side when context approaches the 150K
     // token trigger; surfacing last_compacted_at lets us monitor
     // whether long-lived rolling sessions are actually compacting.
+    // Deal-thread dashboard (slice 3b-2): also expose lineage_root, the deal
+    // money digest (LEFT JOIN deal_memory), and a last-message snippet (LATERAL,
+    // indexed by idx_ai_messages_session). All NULL for non-deal rows — additive,
+    // nothing else that reads this list breaks.
     const r = await pool.query(
-      `SELECT id, anthropic_session_id, label, summary, entity_type, entity_id,
-              pinned, turn_count, total_cost_usd, effort_override,
-              created_at, last_used_at, archived_at,
-              session_kind, last_compacted_at
-         FROM ai_sessions
-        WHERE user_id = $1
-          AND ($2::boolean OR archived_at IS NULL)
-        ORDER BY pinned DESC, last_used_at DESC
+      `SELECT s.id, s.anthropic_session_id, s.label, s.summary, s.entity_type, s.entity_id,
+              s.pinned, s.turn_count, s.total_cost_usd, s.effort_override,
+              s.created_at, s.last_used_at, s.archived_at,
+              s.session_kind, s.last_compacted_at, s.lineage_root,
+              dm.numbers       AS deal_numbers,
+              dm.numbers_stage AS deal_stage,
+              substr(lm.content, 1, 120) AS last_snippet
+         FROM ai_sessions s
+         LEFT JOIN deal_memory dm ON dm.lineage_root = s.lineage_root
+         LEFT JOIN LATERAL (
+            SELECT content FROM ai_messages m
+             WHERE m.session_id = s.id
+             ORDER BY m.created_at DESC LIMIT 1
+         ) lm ON true
+        WHERE s.user_id = $1
+          AND ($2::boolean OR s.archived_at IS NULL)
+        ORDER BY s.pinned DESC, s.last_used_at DESC
         LIMIT $3`,
       [req.user.id, includeArchived, limit]
     );

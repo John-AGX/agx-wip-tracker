@@ -2185,6 +2185,9 @@ function p86Ask(message, opts) {
       pinned: [], today: [], yesterday: [], week: [], earlier: []
     };
     rows.forEach(function(r) {
+      // Deal threads render in their own Deals group (top of the sidebar) — skip
+      // them here so they don't also appear as flat date rows.
+      if (r.session_kind === 'deal_thread') return;
       if (r.pinned) { groups.pinned.push(r); return; }
       var t = new Date(r.last_used_at).getTime();
       if (!Number.isFinite(t)) { groups.earlier.push(r); return; }
@@ -2250,9 +2253,13 @@ function p86Ask(message, opts) {
   // their most-recent activity so the entity you're working in floats up.
   function bucketSessionsByEntity(rows) {
     var pinned = [];
+    var deals = [];  // deal_thread sessions — their own group at the top of the sidebar
     var byKey = {}; // key -> { key, type, id, label, icon, items, recent }
     var personal = { key: 'personal', type: 'general', id: null, label: 'Personal', icon: '💬', items: [], recent: 0 };
     rows.forEach(function(r) {
+      // Deal threads outrank pin/entity bucketing — a deal must render ONCE, as a
+      // deal card, never also as a plain entity row.
+      if (r.session_kind === 'deal_thread') { deals.push(r); return; }
       if (r.pinned) { pinned.push(r); return; }
       var t = String(r.entity_type || '');
       var anchored = (t === 'job' || t === 'estimate' || t === 'lead' || t === 'client') && r.entity_id;
@@ -2273,7 +2280,41 @@ function p86Ask(message, opts) {
     });
     var entityGroups = Object.keys(byKey).map(function(k) { return byKey[k]; })
       .sort(function(a, b) { return b.recent - a.recent; });
-    return { pinned: pinned, entityGroups: entityGroups, personal: personal };
+    deals.sort(function(a, b) { return (new Date(b.last_used_at).getTime() || 0) - (new Date(a.last_used_at).getTime() || 0); });
+    return { pinned: pinned, deals: deals, entityGroups: entityGroups, personal: personal };
+  }
+
+  // A deal-thread card: lineage chips (🌱→💰→📋 lit up to the current stage),
+  // the readable deal name, the money digest from deal_memory.numbers, and a
+  // last-message snippet — reusing the .ai-session-row class so the existing
+  // click / context-menu wiring binds automatically.
+  function renderDealCard(r) {
+    var n = r.deal_numbers || {};
+    var stage = n.stage || r.deal_stage || 'lead';
+    var order = ['lead', 'estimate', 'job'];
+    var si = order.indexOf(stage); if (si < 0) si = 0;
+    var chip = function(t) {
+      var lit = order.indexOf(t) <= si;
+      return '<span style="opacity:' + (lit ? '1' : '0.28') + ';filter:' + (lit ? 'none' : 'grayscale(1)') + ';">' + entityIcon(t) + '</span>';
+    };
+    var chips = chip('lead') + '<span style="opacity:0.3;">→</span>' + chip('estimate') + '<span style="opacity:0.3;">→</span>' + chip('job');
+    var name = String(r.label || ('Deal ' + r.id)).replace(/^Deal\s*·\s*/, '');
+    var sm = function(v) { return (typeof formatCurrency === 'function') ? formatCurrency(v) : ('$' + Math.round(Number(v) || 0).toLocaleString()); };
+    var money = '';
+    if (stage === 'job') money = sm(n.totalContract != null ? n.totalContract : n.contract) + (n.coIncome ? ' · +CO ' + sm(n.coIncome) : '') + ' · ' + (Number(n.pctComplete) || 0) + '%';
+    else if (stage === 'estimate') money = sm(n.proposalTotal) + (n.blendedMarkupPct ? ' · ' + n.blendedMarkupPct + '% mkup' : '');
+    else money = sm(n.estRevenueLow) + (String(n.estRevenueLow) !== String(n.estRevenueHigh) ? '–' + sm(n.estRevenueHigh) : '') + (n.confidence ? ' · ' + n.confidence + '% conf' : '');
+    var snippet = r.last_snippet ? '<div style="font-size:11px;color:rgba(255,255,255,0.42);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:3px;">' + escapeHTML(String(r.last_snippet).slice(0, 90)) + '</div>' : '';
+    var active = (_currentSessionId === r.id);
+    return '<div data-session-id="' + r.id + '" class="ai-session-row" data-active="' + (active ? '1' : '0') + '" ' +
+      'style="margin:3px 6px;padding:9px 11px;border-radius:10px;cursor:pointer;border:1px solid rgba(79,140,255,0.18);background:' + (active ? 'rgba(79,140,255,0.14)' : 'rgba(79,140,255,0.05)') + ';">' +
+        '<div style="display:flex;align-items:center;gap:6px;font-size:14px;line-height:1;">' + chips +
+          '<span style="flex:1;min-width:0;font-size:12.5px;font-weight:600;color:rgba(255,255,255,0.92);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' + escapeHTML(name) + '</span>' +
+          '<span style="font-size:10px;color:rgba(255,255,255,0.35);flex-shrink:0;">' + escapeHTML(relativeTime(r.last_used_at)) + '</span>' +
+        '</div>' +
+        '<div style="font-size:11.5px;color:#9bbcff;margin-top:4px;font-variant-numeric:tabular-nums;">' + escapeHTML(money) + '</div>' +
+        snippet +
+      '</div>';
   }
 
   function renderSessionList(rows) {
@@ -2356,12 +2397,30 @@ function p86Ask(message, opts) {
       });
       html += '</div>';
     }
+    // Deals — a lineage-grouped group of deal_thread cards, pinned to the top of
+    // the sidebar in both grouping modes. Naturally empty (dark) when deal
+    // threads are off.
+    function renderDealsGroup(deals) {
+      if (!deals.length) return;
+      var grpOpen = getPanelSectionOpen('chats-deals');
+      html += '<div class="ai-grp-header" data-grp="deals" style="padding:10px 12px 4px 12px;display:flex;align-items:center;gap:6px;cursor:pointer;user-select:none;">' +
+        '<span class="p86-caret" style="font-size:9px;opacity:0.5;transition:transform 0.15s;display:inline-block;transform:' + (grpOpen ? 'rotate(0deg)' : 'rotate(-90deg)') + ';">&#x25BC;</span>' +
+        '<span style="font-size:12px;line-height:1;opacity:0.75;">🤝</span>' +
+        '<span style="font-size:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.06em;color:rgba(255,255,255,0.32);">Deals</span>' +
+        '<span style="font-size:10px;color:rgba(255,255,255,0.26);flex-shrink:0;">' + deals.length + '</span>' +
+      '</div>';
+      html += '<div class="ai-grp-body" data-grp-body="deals" style="' + (grpOpen ? '' : 'display:none;') + '">';
+      deals.forEach(function(r) { html += renderDealCard(r); });
+      html += '</div>';
+    }
     if (_grpMode === 'entity') {
       var eg = bucketSessionsByEntity(rows);
+      renderDealsGroup(eg.deals);
       renderGroup('Pinned', eg.pinned, 'pinned', '⭐');
       eg.entityGroups.forEach(function(g) { renderGroup(g.label, g.items, g.key, g.icon); });
       renderGroup('Personal', eg.personal.items, 'personal', '💬');
     } else {
+      renderDealsGroup(rows.filter(function(r) { return r.session_kind === 'deal_thread'; }));
       renderGroup('Pinned', groups.pinned, 'pinned');
       renderGroup('Today', groups.today, 'today');
       renderGroup('Yesterday', groups.yesterday, 'yesterday');

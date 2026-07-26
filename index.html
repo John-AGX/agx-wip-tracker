@@ -622,6 +622,7 @@
                                 <button class="tab-btn app-nav-child" data-tab="assembly-studio" data-asmstudio-subtab="studio" data-virtual-tab="asmstudio-studio" data-p86-icon="wrench" data-cap="SYSTEM_ADMIN" title="Studio — build &amp; tune with 86"><span class="app-nav-label">Studio</span></button>
                                 <button class="tab-btn app-nav-child" data-tab="assembly-studio" data-asmstudio-subtab="codes" data-virtual-tab="asmstudio-codes" data-p86-icon="tag" title="Codes — Trade · System · Variant taxonomy"><span class="app-nav-label">Codes</span></button>
                                 <button class="tab-btn app-nav-child" data-tab="assembly-studio" data-asmstudio-subtab="parametric" data-virtual-tab="asmstudio-parametric" data-p86-icon="scale" title="Parametric — formula-driven recipes"><span class="app-nav-label">Parametric</span></button>
+                                <button class="tab-btn app-nav-child" data-tab="assembly-studio" data-asmstudio-subtab="consolidate" data-virtual-tab="asmstudio-consolidate" data-p86-icon="materials" data-cap="ESTIMATES_EDIT" title="Consolidate — fold catalog likes into standard parts"><span class="app-nav-label">Consolidate</span></button>
                             </div>
                         </div>
                     </div>
@@ -3330,7 +3331,8 @@
          RFIs / Submittals) for the Jobs sidebar dropdown. Uses p86Api +
          appData.jobs + editJob/switchJobSubTab at runtime. -->
     <script src="js/jobs-hub.js?v=21"></script>
-    <script src="js/assembly-studio.js?v=3"></script>
+    <script src="js/assembly-studio.js?v=4"></script>
+    <script src="js/materials-consolidate.js?v=1"></script>
     <!-- Purchase Order editor — full-window overlay opened from the Jobs
          hub Purchase Orders list. Uses p86Api.purchaseOrders + subs. -->
     <script src="js/purchase-order-import.js?v=1"></script>
@@ -3364,7 +3366,7 @@
          BEFORE ai-panel.js so window.PayloadArtifact exists when the
          panel mounts. -->
     <script src="js/payload-artifact.js?v=7"></script>
-    <script src="js/ai-panel.js?v=153"></script>
+    <script src="js/ai-panel.js?v=154"></script>
     <!-- Save-from-chat bridge (Workstream ③). Owns p86SaveCodeBlock /
          p86SaveResponse / p86SaveToPicker, called by inline onclick
          handlers in ai-panel.js renderMarkdown / renderBubble. Loads
