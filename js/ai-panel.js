@@ -1967,12 +1967,18 @@ function p86Ask(message, opts) {
     var url = messagesApiBase() + '/messages';
     var _qs = [];
     if (_currentSessionId != null) _qs.push('session_id=' + encodeURIComponent(_currentSessionId));
-    // Pass the surface context too — when deal threads are on and this is a
-    // deal surface, the server returns the DEAL thread's own conversation
-    // (loaded by session_id) instead of the legacy entity/user history.
-    if (_entityType && _entityId) {
-      _qs.push('entity_type=' + encodeURIComponent(_entityType));
-      _qs.push('entity_id=' + encodeURIComponent(_entityId));
+    // Pass the PAGE-derived surface context (the same signal the send uses to
+    // route) so the server returns the DEAL thread's own conversation on a deal
+    // surface. Prefer the page context over the panel's own _entityType, which
+    // can be 'ask86' (top-bar open) even while the user is on a job/estimate/lead
+    // page — that mismatch is why the send routed to the deal thread but history
+    // still loaded the global thread.
+    var _pc = (typeof getCurrentPageContext === 'function') ? getCurrentPageContext() : null;
+    var _et = (_pc && _pc.entity_type) || _entityType;
+    var _eid = (_pc && _pc.entity_id) || _entityId;
+    if (_et && _eid) {
+      _qs.push('entity_type=' + encodeURIComponent(_et));
+      _qs.push('entity_id=' + encodeURIComponent(_eid));
     }
     if (_qs.length) url += '?' + _qs.join('&');
     fetch(url, { headers: authHeaders() })
