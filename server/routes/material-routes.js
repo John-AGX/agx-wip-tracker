@@ -571,6 +571,96 @@ router.get('/consolidation-candidates', requireAuth, requireCapability('ESTIMATE
   }
 });
 
+// POST /api/materials/consolidate — fold catalog "likes" into ONE canonical
+// "part". MONEY-SAFE: mints a researched material (createResearchedMaterial
+// writes NO material_purchases row), hides the member SKUs (reversible — never
+// deleted), and re-points any assembly recipe rows onto the new part so no
+// recipe is left pointing at a hidden material. Org-owned members ONLY — a
+// shared/global (organization_id IS NULL) row is never mutated (that would leak
+// across orgs). Single transaction; rolls back on any failure.
+router.post('/consolidate', requireAuth, requireCapability('ESTIMATES_EDIT'), async (req, res) => {
+  const orgId = req.user.organization_id;
+  const userId = req.user.id;
+  const b = req.body || {};
+  const name = String(b.name || '').trim();
+  const unit = (b.unit != null && String(b.unit).trim() !== '') ? String(b.unit).trim() : null;
+  const category = (b.category != null && String(b.category).trim() !== '') ? String(b.category).trim() : null;
+  let blended = null;
+  if (b.blendedPrice != null && b.blendedPrice !== '') {
+    const n = Number(b.blendedPrice);
+    if (!Number.isFinite(n) || n < 0) return res.status(400).json({ error: 'Price must be a number of 0 or more.' });
+    blended = Math.round(n * 100) / 100;
+  }
+  const memberIds = Array.isArray(b.memberIds)
+    ? b.memberIds.map((x) => parseInt(x, 10)).filter((x) => Number.isFinite(x)) : [];
+  if (!name) return res.status(400).json({ error: 'A part name is required.' });
+  if (!memberIds.length) return res.status(400).json({ error: 'Select at least one catalog SKU to consolidate.' });
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    // Load ONLY this org's members (strict organization_id — never a shared/
+    // global row). Any selected id that isn't an org-owned material fails loud.
+    const mem = await client.query(
+      `SELECT id, agx_subgroup FROM materials WHERE id = ANY($1::int[]) AND organization_id = $2`,
+      [memberIds, orgId]
+    );
+    const foundIds = mem.rows.map((r) => r.id);
+    const missing = memberIds.filter((id) => foundIds.indexOf(id) === -1);
+    if (missing.length) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Some selected SKUs aren\'t in your catalog (shared or removed items can\'t be consolidated).', missing: missing });
+    }
+    // Canonical part lives in its own vendor namespace ('agx_standard') so it
+    // never collides with a real home_depot purchase row; createResearchedMaterial
+    // is idempotent on (org, vendor, lower(raw_description)).
+    const subCt = {};
+    mem.rows.forEach((r) => { const s = r.agx_subgroup || 'materials'; subCt[s] = (subCt[s] || 0) + 1; });
+    const subgroup = Object.keys(subCt).sort((a, c) => subCt[c] - subCt[a])[0] || 'materials';
+    const mk = await matSvc.createResearchedMaterial(client, orgId, {
+      description: name,
+      raw_description: name,
+      vendor: 'agx_standard',
+      unit: unit,
+      category: category,
+      agx_subgroup: subgroup,
+      last_unit_price: blended,
+      price_rationale: 'AGX standard part — buy-count-weighted blend of ' + memberIds.length + ' purchased SKU' + (memberIds.length === 1 ? '' : 's') + '.',
+      notes: 'Consolidated part (Materials Consolidation).'
+    }, userId);
+    const part = mk.material;
+    if (!part || !part.id) { await client.query('ROLLBACK'); return res.status(500).json({ error: 'Could not create the canonical part.' }); }
+    const newId = part.id;
+    const foldIds = memberIds.filter((id) => id !== newId);          // never fold a part into itself
+    let repointed = 0;
+    if (foldIds.length) {
+      // Re-point recipe rows members -> canonical part (keeps every recipe on a
+      // visible, priced material instead of a soon-to-be-hidden one).
+      const rp = await client.query(
+        `UPDATE assembly_items SET material_id = $1 WHERE material_id = ANY($2::int[])`,
+        [newId, foldIds]
+      );
+      repointed = rp.rowCount || 0;
+      // Hide the folded members (reversible; record where they went).
+      await client.query(
+        `UPDATE materials
+            SET is_hidden = true, manual_override = true,
+                notes = CONCAT(COALESCE(notes || ' | ', ''), $3)
+          WHERE id = ANY($2::int[]) AND organization_id = $1`,
+        [orgId, foldIds, '→ consolidated into #' + newId + ' (' + name + ')']
+      );
+    }
+    await client.query('COMMIT');
+    res.json({ material: part, created: mk.created, memberCount: foldIds.length, repointed: repointed });
+  } catch (e) {
+    try { await client.query('ROLLBACK'); } catch (e2) {}
+    console.error('POST /api/materials/consolidate error:', e);
+    res.status(e.status || 500).json({ error: e.message || 'Server error' });
+  } finally {
+    client.release();
+  }
+});
+
 // PUT /api/materials/:id — admin can fix description, subgroup, hidden,
 // notes. Sets manual_override so subsequent re-imports don't clobber.
 router.put('/:id', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
