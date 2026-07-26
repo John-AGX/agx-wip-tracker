@@ -1406,6 +1406,11 @@ function renderJobsMain() {
         // rows visible summed to $1.2M.
         // ── Shared filter drawer + saved views (mirrors Cost Inbox/Leads/Estimates)
         let _jobsDrawer = null, _jobsViews = [], _jobsActiveViewId = null, _jobsViewsLoaded = false;
+        // Remember the last-applied saved view across refreshes. Views persist
+        // server-side, but which one is ACTIVE lived only in memory, so a
+        // refresh dropped back to unfiltered unless the view was the default.
+        var JOBS_VIEW_KEY = 'p86_jobs_active_view';
+        function rememberJobsView(id) { try { if (id) localStorage.setItem(JOBS_VIEW_KEY, id); else localStorage.removeItem(JOBS_VIEW_KEY); } catch (e) {} }
         function jobsDistinct(accessor) {
             var seen = {}, out = [];
             (appData.jobs || []).forEach(function(j) { var v = accessor(j); if (v == null || v === '') return; v = String(v); if (seen[v]) return; seen[v] = true; out.push(v); });
@@ -1478,8 +1483,8 @@ function renderJobsMain() {
             FD.open({
                 title: 'Filter Jobs', fields: fields,
                 values: _jobsDrawer || FD.emptyValues(fields),
-                onApply: function(v) { _jobsDrawer = v; _jobsActiveViewId = null; updateJobsFilterBtn(); updateJobsViewsBtn(); jobsRerender(); },
-                onClear: function() { _jobsDrawer = null; _jobsActiveViewId = null; updateJobsFilterBtn(); updateJobsViewsBtn(); jobsRerender(); }
+                onApply: function(v) { _jobsDrawer = v; _jobsActiveViewId = null; rememberJobsView(null); updateJobsFilterBtn(); updateJobsViewsBtn(); jobsRerender(); },
+                onClear: function() { _jobsDrawer = null; _jobsActiveViewId = null; rememberJobsView(null); updateJobsFilterBtn(); updateJobsViewsBtn(); jobsRerender(); }
             });
         };
         function jobsLoadViews() {
@@ -1487,12 +1492,16 @@ function renderJobsMain() {
             return window.p86Api.listViews.list('jobs').then(function(r) {
                 _jobsViews = (r && r.views) || [];
                 var def = _jobsViews.find(function(v) { return v.is_default; });
-                if (def && !_jobsDrawer && !_jobsActiveViewId) { _jobsActiveViewId = def.id; var cfg = def.config || {}; _jobsDrawer = (cfg.filters && Object.keys(cfg.filters).length) ? cfg.filters : null; jobsRerender(); }
+                // Restore the last-applied view first; fall back to the default.
+                var stored = null; try { stored = localStorage.getItem(JOBS_VIEW_KEY); } catch (e) {}
+                var target = (stored && _jobsViews.find(function(v) { return v.id === stored; })) || def;
+                if (target && !_jobsDrawer && !_jobsActiveViewId) { _jobsActiveViewId = target.id; var cfg = target.config || {}; _jobsDrawer = (cfg.filters && Object.keys(cfg.filters).length) ? cfg.filters : null; jobsRerender(); }
                 updateJobsFilterBtn(); updateJobsViewsBtn();
             }).catch(function() { _jobsViews = []; });
         }
         function applyJobsView(v) {
             _jobsActiveViewId = v.id;
+            rememberJobsView(v.id);
             var cfg = v.config || {};
             _jobsDrawer = (cfg.filters && Object.keys(cfg.filters).length) ? cfg.filters : null;
             updateJobsFilterBtn(); updateJobsViewsBtn(); jobsRerender();
@@ -1520,12 +1529,12 @@ function renderJobsMain() {
             setTimeout(function() { document.addEventListener('mousedown', onOut, true); }, 0);
             pop.querySelectorAll('.jv-apply').forEach(function(sp) { sp.addEventListener('click', function() { var id = sp.parentNode.getAttribute('data-view'); var v = _jobsViews.find(function(x) { return x.id === id; }); if (v) { close(); applyJobsView(v); } }); });
             pop.querySelectorAll('[data-def]').forEach(function(a) { a.addEventListener('click', function(e) { e.preventDefault(); e.stopPropagation(); window.p86Api.listViews.update(a.getAttribute('data-def'), { is_default: true }).then(jobsLoadViews).then(function() { close(); if (typeof window.p86Toast === 'function') window.p86Toast('Default view set', 'success'); }); }); });
-            pop.querySelectorAll('[data-del]').forEach(function(a) { a.addEventListener('click', async function(e) { e.preventDefault(); e.stopPropagation(); if (!(await p86Ask('Delete this saved view?'))) return; var id = a.getAttribute('data-del'); window.p86Api.listViews.remove(id).then(function() { if (_jobsActiveViewId === id) _jobsActiveViewId = null; return jobsLoadViews(); }).then(close); }); });
+            pop.querySelectorAll('[data-del]').forEach(function(a) { a.addEventListener('click', async function(e) { e.preventDefault(); e.stopPropagation(); if (!(await p86Ask('Delete this saved view?'))) return; var id = a.getAttribute('data-del'); window.p86Api.listViews.remove(id).then(function() { if (_jobsActiveViewId === id) { _jobsActiveViewId = null; rememberJobsView(null); } return jobsLoadViews(); }).then(close); }); });
             var sv = pop.querySelector('#jobs-save-view');
             if (sv) sv.addEventListener('click', function() {
                 var name = prompt('Name this view:'); if (name == null) return; name = String(name).trim(); if (!name) return;
                 window.p86Api.listViews.create({ page: 'jobs', name: name, config: { filters: _jobsDrawer || {} }, is_default: false })
-                    .then(function(res) { _jobsActiveViewId = (res && res.view && res.view.id) || null; return jobsLoadViews(); })
+                    .then(function(res) { _jobsActiveViewId = (res && res.view && res.view.id) || null; rememberJobsView(_jobsActiveViewId); return jobsLoadViews(); })
                     .then(function() { close(); if (typeof window.p86Toast === 'function') window.p86Toast('View saved', 'success'); })
                     .catch(function() { if (typeof window.p86Toast === 'function') window.p86Toast('Could not save view', 'error'); });
             });
