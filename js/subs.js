@@ -840,7 +840,9 @@ function p86Ask(message, opts) {
           var j = jobById[g.entity_id];
           return (j.jobNumber ? '[' + j.jobNumber + '] ' : '') + (j.title || j.name || j.id);
         }
-        return g.entity_type + ' / ' + g.entity_id;
+        // Resolve lead / estimate / client (and jobs not in the local map) to
+        // a human name; fall back to the category word, never the raw id.
+        return (window.entityDisplayName && window.entityDisplayName(g.entity_type, g.entity_id)) || g.entity_type;
       }
 
       var rows = grants.length

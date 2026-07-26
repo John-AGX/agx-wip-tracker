@@ -7404,7 +7404,7 @@ function p86Ask(message, opts) {
         var totalTok = (Number(c.input_tokens) || 0) + (Number(c.output_tokens) || 0);
         html += '<tr style="cursor:pointer;" onclick="openAgentConversation(\'' + escapeAttr(c.key) + '\')">' +
           '<td>' + escapeHTML(agentLabel) + '</td>' +
-          '<td>' + escapeHTML(c.entity_title || c.entity_id || '') + '</td>' +
+          '<td>' + escapeHTML(c.entity_title || (window.entityDisplayName && window.entityDisplayName(c.entity_type, c.entity_id)) || '') + '</td>' +
           '<td>' + escapeHTML(c.user_email || c.user_name || ('user ' + c.user_id)) + '</td>' +
           '<td style="text-align:right;">' + c.turns + '</td>' +
           '<td style="text-align:right;">' + c.tool_uses + '</td>' +
@@ -7442,7 +7442,7 @@ function p86Ask(message, opts) {
       var header = '<div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;">' +
           '<button class="ee-btn secondary" onclick="closeAgentConversation()">&larr; Back to list</button>' +
           '<div style="flex:1;">' +
-            '<div style="font-size:14px;font-weight:600;color:var(--text,#fff);">' + escapeHTML(c.entity_title || c.entity_id || '') + '</div>' +
+            '<div style="font-size:14px;font-weight:600;color:var(--text,#fff);">' + escapeHTML(c.entity_title || (window.entityDisplayName && window.entityDisplayName(c.entity_type, c.entity_id)) || '') + '</div>' +
             '<div style="font-size:11px;color:var(--text-dim,#888);">' + escapeHTML(c.entity_type) + ' &middot; ' + escapeHTML(c.user_email || ('user ' + c.user_id)) + ' &middot; ' + (c.messages || []).length + ' messages</div>' +
           '</div>' +
           '<button class="ee-btn" onclick="openReplayDialog(\'' + escapeAttr(key) + '\')" style="background:linear-gradient(135deg,#8b5cf6,#4f8cff);color:#fff;border:none;font-weight:600;">&#x1F501; Replay last turn</button>' +

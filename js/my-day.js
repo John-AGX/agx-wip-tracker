@@ -70,10 +70,10 @@
       if (String(j.id) === String(jobId)) {
         var d = j.data || j;
         var num = d.jobNumber ? '[' + d.jobNumber + '] ' : '';
-        return num + (d.title || d.name || ('Job ' + jobId));
+        return num + (d.title || d.name || 'Job');
       }
     }
-    return 'Job ' + jobId;
+    return (window.entityDisplayName && window.entityDisplayName('job', jobId)) || 'Job';
   }
 
   // ── One-time styles ────────────────────────────────────────────────

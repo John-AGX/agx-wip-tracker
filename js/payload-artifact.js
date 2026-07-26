@@ -125,8 +125,15 @@
       const head =
         '#' + (i + 1) + ' ' +
         (t.entity_type || '?') +
-        (t.entity_id ? (' ' + t.entity_id) : ' (new)') +
-        (t.entity_display ? '\n    ' + t.entity_display : '');
+        // Show the human name (supplied, else resolved) on its own line; on an
+        // existing target with no resolvable name, show nothing — never the raw id.
+        (t.entity_id
+          ? (t.entity_display
+              ? '\n    ' + t.entity_display
+              : ((window.entityDisplayName && window.entityDisplayName(t.entity_type, t.entity_id))
+                  ? '\n    ' + window.entityDisplayName(t.entity_type, t.entity_id)
+                  : ''))
+          : ' (new)');
       const opKeys = t.ops && typeof t.ops === 'object' ? Object.keys(t.ops) : [];
       const opSummary = opKeys.length
         ? opKeys.map((k) => '    • ' + k).join('\n')
@@ -155,8 +162,12 @@
         return cs.map((c, i) => {
           if (typeof c === 'string') return '• ' + c;
           const head = (c.entity_type || c.type || '?') +
-                       (c.entity_id ? (' ' + c.entity_id) : '') +
-                       (c.entity_display ? (' — ' + c.entity_display) : '');
+                       // human name only (supplied or resolved) — never the raw id
+                       (c.entity_display
+                         ? (' — ' + c.entity_display)
+                         : ((c.entity_id && window.entityDisplayName && window.entityDisplayName(c.entity_type, c.entity_id))
+                             ? (' — ' + window.entityDisplayName(c.entity_type, c.entity_id))
+                             : ''));
           const detail = c.summary || c.label || c.description ||
                          (c.changes ? JSON.stringify(c.changes) : JSON.stringify(c));
           return '#' + (i + 1) + ' ' + head + '\n    ' + String(detail).slice(0, 400);

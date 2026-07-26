@@ -185,7 +185,7 @@
         }
         var html = '';
         rows.forEach(function(u) {
-          var nm = u.name || u.email || ('User ' + u.id);
+          var nm = u.name || u.email || 'User';
           html += '<button class="msg-recip-row" data-uid="' + escapeAttr(u.id) + '" data-uname="' + escapeAttr(nm) + '" ' +
             'style="display:flex;align-items:center;gap:10px;width:100%;text-align:left;padding:10px 14px;background:transparent;border:none;border-bottom:1px solid var(--border,#222);color:var(--text,#fff);cursor:pointer;">' +
             '<span style="width:28px;height:28px;border-radius:50%;background:var(--msg-chip, rgba(34,211,238,0.18));color:var(--accent,#22d3ee);font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;">' + escapeHTML(initials(nm)) + '</span>' +

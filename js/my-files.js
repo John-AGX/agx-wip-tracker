@@ -988,8 +988,8 @@ function p86Ask(message, opts) {
       idEl.innerHTML = pool.map(function(item) {
         var label;
         if (t === 'job') label = (item.jobNumber ? '[' + item.jobNumber + '] ' : '') + (item.title || item.name || item.id);
-        else if (t === 'estimate') label = item.title || ('Estimate ' + item.id);
-        else label = item.title || item.name || ('Lead ' + item.id);
+        else if (t === 'estimate') label = item.title || item.name || item.client || 'Estimate';
+        else label = item.title || item.property_name || item.street_address || 'Lead';
         return '<option value="' + t + '::' + escapeAttr(item.id) + '">' + escapeHTML(label) + '</option>';
       }).join('') || '<option value="">No ' + t + 's available</option>';
     }

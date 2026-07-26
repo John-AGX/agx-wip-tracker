@@ -45,8 +45,19 @@ console.log('[sms-routes] mounted at /api/sms (Twilio inbound webhook)');
 // Times aren't on schedule_entries today (it's a date-level model);
 // we omit them rather than fabricate. If the model gains a time
 // column later, the formatter picks it up here.
+// Human label for a job in an outbound crew SMS — jobNumber + title when
+// available, never the raw jobs.id. `job` is jobs.data from the LEFT JOIN,
+// so job.jobNumber is on hand; we used to fall through to the raw id.
+function jobLabelForSms(job) {
+  if (job) {
+    const t = job.title || job.name || '';
+    if (job.jobNumber) return job.jobNumber + (t ? ' — ' + t : '');
+    if (t) return t;
+  }
+  return 'your job';
+}
 function formatEntryShort(entry, job) {
-  const title = (job && (job.title || job.name)) || ('Job ' + (entry.job_id || ''));
+  const title = jobLabelForSms(job);
   const note = entry.notes ? ' — ' + String(entry.notes).slice(0, 60) : '';
   return title + note;
 }
@@ -148,7 +159,7 @@ async function replyWeek(userId) {
     const day = await entriesForUserOnDate(userId, iso);
     if (!day.length) continue;
     const head = shortDate(iso);
-    const titles = day.map(function(e) { return (e.job && (e.job.title || e.job.name)) || e.jobId; });
+    const titles = day.map(function(e) { return jobLabelForSms(e.job); });
     lines.push(head + ': ' + titles.join(', '));
   }
   if (!lines.length) return 'AGX: nothing on your schedule for the next 7 days.';
@@ -162,7 +173,7 @@ function replyAddress(todayEntries, n) {
   const idx = (n && n > 0) ? (n - 1) : 0;
   const e = todayEntries[idx];
   if (!e) return 'Only ' + todayEntries.length + ' job(s) today. Try ADDRESS 1..' + todayEntries.length + '.';
-  const title = (e.job && (e.job.title || e.job.name)) || e.jobId;
+  const title = jobLabelForSms(e.job);
   const addr = (e.job && e.job.address) || '(no address on file)';
   return title + '\n' + addr;
 }

@@ -281,7 +281,7 @@
             '<button class="p86-modal-close" data-close>&times;</button></div>' +
           '<div style="padding:16px;">' +
             (hasLink
-              ? '<div style="margin-bottom:10px;"><span class="p86-task-linkchip">Linked: ' + esc(linkLabel || (prefill.entity_type + ' ' + prefill.entity_id)) + '</span></div>'
+              ? '<div style="margin-bottom:10px;"><span class="p86-task-linkchip">Linked: ' + esc(linkLabel || (window.entityDisplayName && window.entityDisplayName(prefill.entity_type, prefill.entity_id)) || prefill.entity_type) + '</span></div>'
               : '<div class="p86-field"><span>Link to <span style="font-weight:400;color:var(--muted,#9ca3af);">(optional — client, job, lead, or project)</span></span>' +
                   '<div class="p86-task-linkpick">' +
                     '<select id="qaLinkType" class="p86-task-select">' +
@@ -421,7 +421,7 @@
             '<label style="display:flex;flex-direction:column;gap:3px;font-size:12px;">Assignee' +
               assigneeSelectHTML('tdAssignee', task.assignee_user_id) + '</label>' +
           '</div>' +
-          (task.entity_type ? '<div style="margin-top:10px;"><span class="p86-task-linkchip">Linked: ' + esc(task.linked_label || (task.entity_type + ' ' + task.entity_id)) + '</span></div>' : '') +
+          (task.entity_type ? '<div style="margin-top:10px;"><span class="p86-task-linkchip">Linked: ' + esc(task.linked_label || (window.entityDisplayName && window.entityDisplayName(task.entity_type, task.entity_id)) || task.entity_type) + '</span></div>' : '') +
           // Location pin — geotag from the device, or type/clear coords manually.
           '<div class="p86-field" style="margin-top:12px;"><span>Location pin</span>' +
             '<div style="display:flex;gap:6px;flex-wrap:wrap;">' +

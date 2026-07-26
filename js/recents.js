@@ -141,7 +141,7 @@
     section.removeAttribute('hidden');
     listEl.innerHTML = list.map(function (r) {
       var icon = ICONS[r.type] || 'estimates';
-      var label = r.name || (NOUNS[r.type] || 'Item') + ' ' + r.id;
+      var label = r.name || (window.entityDisplayName && window.entityDisplayName(r.type, r.id)) || (NOUNS[r.type] || 'Item');
       var safe = esc(label);
       return '<button class="sidebar-recent-item" type="button" ' +
         'data-type="' + esc(r.type) + '" data-id="' + esc(r.id) + '" ' +

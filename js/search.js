@@ -86,7 +86,7 @@
       html += '<div class="sidebar-search-group-label">' + esc(GROUP_LABELS[type] || type) + '</div>';
       rows.forEach(function (r) {
         var icon = ICONS[r.type] || 'estimates';
-        var name = esc(r.name || (r.type + ' ' + r.id));
+        var name = esc(r.name || (window.entityDisplayName && window.entityDisplayName(r.type, r.id)) || r.type);
         var sub = r.sub ? '<span class="sidebar-search-item-sub">' + esc(r.sub) + '</span>' : '';
         html += '<button class="sidebar-search-item" type="button" role="option" ' +
           'data-idx="' + flatIdx + '" data-type="' + esc(r.type) + '" data-id="' + esc(r.id) + '" ' +

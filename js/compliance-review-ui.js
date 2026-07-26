@@ -169,7 +169,10 @@ function p86Ask(message, opts) {
     html += '<div class="cmp-row-icon" style="font-size:18px;">' + tm.glyph + '</div>';
     html += '<div class="cmp-row-body">';
     html += '<div style="font-size:13px;font-weight:600;color:var(--text,#fff);">' + esc(it.title) + '</div>';
-    html += '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:2px;">' + esc(tm.label) + ' · ' + esc(it.entity_type) + ':' + esc(it.entity_id) + (metaSnippet ? ' · ' + esc(metaSnippet) : '') + '</div>';
+    // Resolve the linked entity to its human name (job# · title / lead title
+    // / …); show only the category word on a miss — never the raw entity_id.
+    var cmpEntity = (window.entityDisplayName && window.entityDisplayName(it.entity_type, it.entity_id)) || it.entity_type;
+    html += '<div style="font-size:10px;color:var(--text-dim,#888);margin-top:2px;">' + esc(tm.label) + ' · ' + esc(cmpEntity) + (metaSnippet ? ' · ' + esc(metaSnippet) : '') + '</div>';
     html += '</div>';
     html += '<div class="cmp-row-date" style="font-size:11px;color:var(--text-dim,#aaa);text-align:right;">' + esc(fmtDate(it.expiration_date)) + '</div>';
     html += '<div class="cmp-row-days" style="font-size:11px;text-align:right;color:' + (it._days_left < 0 ? '#f87171' : '#fbbf24') + ';font-weight:600;">' + esc(days_str) + '</div>';

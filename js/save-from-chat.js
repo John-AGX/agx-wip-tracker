@@ -117,7 +117,7 @@
     }
     function map(rows, labelFn) {
       return (rows || []).map(function (row) {
-        return { id: row.id, label: String(labelFn(row) || ('#' + row.id)).slice(0, 80) };
+        return { id: row.id, label: String(labelFn(row) || 'Untitled').slice(0, 80) };
       }).filter(function (e) { return e.id != null; });
     }
     var p;

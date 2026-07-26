@@ -13390,6 +13390,13 @@ const ALLOWED_AUTO_TIER_TOOLS = new Set([
   // 86's existing read tools (already routed to execStaffTool below)
   'read_materials',
   'read_purchase_history',
+  // Costed estimating recipes + the Trade/System code registry (86 OWNS
+  // the assembly database). Registered on the estimate + job toolsets but
+  // were MISSING here — so every read_assemblies call fell through to
+  // {tier:'approval'} → an approval card → the generic "User approved.
+  // Change applied." string instead of the recipe. Pure reads, auto-tier.
+  'read_assemblies',
+  'read_assembly_taxonomy',
   'read_subs',
   'read_lead_pipeline',
   'read_clients',
@@ -13822,14 +13829,28 @@ router.get('/86/messages', requireAuth, async (req, res) => {
     // rows" query so any caller that hasn't migrated still works.
     const sessionId = req.query && (req.query.session_id || req.query.sessionId);
     if (sessionId) {
-      const sid = parseInt(sessionId, 10);
-      if (!Number.isFinite(sid)) return res.status(400).json({ error: 'invalid session_id' });
+      // Session ids are BIGINT — keep the id a string (parseInt corrupts
+      // values past 2^53). Postgres casts the string param to bigint.
+      const sid = String(sessionId);
+      if (!/^\d+$/.test(sid)) return res.status(400).json({ error: 'invalid session_id' });
       const sr = await pool.query(
-        `SELECT entity_type, entity_id FROM ai_sessions WHERE id = $1 AND user_id = $2`,
+        `SELECT entity_type, entity_id, session_kind FROM ai_sessions WHERE id = $1 AND user_id = $2`,
         [sid, req.user.id]
       );
       if (!sr.rows.length) return res.status(404).json({ error: 'session not found' });
       const s = sr.rows[0];
+      // Deal threads span lead→estimate→job — their turns are unified by
+      // session_id, not one entity key. When the sidebar clicks a deal card
+      // it passes only session_id (no deal-surface entity_type), so load by
+      // session_id here or the cross-stage history would come back empty.
+      if (s.session_kind === 'deal_thread') {
+        const dmr = await pool.query(
+          `SELECT id, role, content, output_files, created_at
+             FROM ai_messages WHERE session_id = $1 ORDER BY created_at ASC`,
+          [sid]
+        );
+        return res.json({ messages: dmr.rows, deal_thread_id: sid });
+      }
       const mr = await pool.query(
         `SELECT id, role, content, output_files, created_at
            FROM ai_messages

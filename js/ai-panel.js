@@ -2084,6 +2084,12 @@ function p86Ask(message, opts) {
   var _currentSessionId = null;
   var _sessionList = [];
   var _sessionListLoaded = false;
+  // Session ids are BIGINT — node-postgres serializes them as strings
+  // ("202"), so a strict === against a number (e.g. a parseInt'd
+  // data-attribute) never matches and every row click / active-highlight
+  // silently no-ops. Compare ids as strings everywhere via this helper.
+  // null is never equal to a real id (a null current session matches nothing).
+  function sameSession(a, b) { return a != null && b != null && String(a) === String(b); }
 
   // Sidebar lives as a true left-rail column inside the panel's flex
   // body. Open animates the column's width from 0 → 260px; close goes
@@ -2246,6 +2252,20 @@ function p86Ask(message, opts) {
         return null;
     }
   }
+  // Reusable across the app (compliance list, subs grants, task chips, file
+  // pickers, etc.) so no user-facing surface has to hand-roll an entity→name
+  // lookup and leak a raw id on a miss.
+  window.entityDisplayName = entityDisplayName;
+  // True ONLY for actual system-id shapes — a lead_/job_/est_/client_ prefix,
+  // a single-letter+digits db id (j…/e…/c…), or a trailing _base36 token.
+  // Deliberately NOT bare long numbers (FL parcel #s) or letter-dash-number
+  // names ("C-3 Wing"), which are legitimate human titles — so it keeps raw
+  // ids off forward-facing surfaces without over-suppressing real names.
+  function looksLikeSystemId(s) {
+    s = String(s || '');
+    return /^(lead|job|est|estimate|client)_/i.test(s) || /^[a-z]\d{6,}$/i.test(s) || /_[a-z0-9]{5,}$/i.test(s);
+  }
+  window.p86LooksLikeSystemId = looksLikeSystemId;
 
   // Group sessions by the entity they belong to. Pinned float first; the
   // personal / rolling thread and any un-anchored chats fall into "Personal".
@@ -2298,14 +2318,27 @@ function p86Ask(message, opts) {
       return '<span style="opacity:' + (lit ? '1' : '0.28') + ';filter:' + (lit ? 'none' : 'grayscale(1)') + ';">' + entityIcon(t) + '</span>';
     };
     var chips = chip('lead') + '<span style="opacity:0.3;">→</span>' + chip('estimate') + '<span style="opacity:0.3;">→</span>' + chip('job');
-    var name = String(r.label || ('Deal ' + r.id)).replace(/^Deal\s*·\s*/, '');
+    // Forward-facing name: resolve a human title from live appData by the
+    // deal's stage (job# · title → estimate name → lead title). A deal card
+    // is a client/user-facing surface — it must NEVER render a raw lineage
+    // /system id (lead_…, j…, e…); those stay internal. Falls back to the
+    // stored label only when it's already human; a name miss resolves on
+    // the next render once appData is loaded.
+    var title = entityDisplayName('job', n.jobId)
+             || entityDisplayName('estimate', n.estimateId)
+             || entityDisplayName('lead', n.leadId || r.lineage_root);
+    // Even a resolved title is suppressed if a name column literally holds an
+    // id-shaped string — a raw id must never reach this card by any path.
+    if (title && looksLikeSystemId(title)) title = null;
+    var stored = String(r.label || '').replace(/^Deal\s*·\s*/, '').trim();
+    var name = title || (stored && !looksLikeSystemId(stored) ? stored : 'Deal');
     var sm = function(v) { return (typeof formatCurrency === 'function') ? formatCurrency(v) : ('$' + Math.round(Number(v) || 0).toLocaleString()); };
     var money = '';
     if (stage === 'job') money = sm(n.totalContract != null ? n.totalContract : n.contract) + (n.coIncome ? ' · +CO ' + sm(n.coIncome) : '') + ' · ' + (Number(n.pctComplete) || 0) + '%';
     else if (stage === 'estimate') money = sm(n.proposalTotal) + (n.blendedMarkupPct ? ' · ' + n.blendedMarkupPct + '% mkup' : '');
     else money = sm(n.estRevenueLow) + (String(n.estRevenueLow) !== String(n.estRevenueHigh) ? '–' + sm(n.estRevenueHigh) : '') + (n.confidence ? ' · ' + n.confidence + '% conf' : '');
     var snippet = r.last_snippet ? '<div style="font-size:11px;color:rgba(255,255,255,0.42);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:3px;">' + escapeHTML(String(r.last_snippet).slice(0, 90)) + '</div>' : '';
-    var active = (_currentSessionId === r.id);
+    var active = sameSession(_currentSessionId, r.id);
     return '<div data-session-id="' + r.id + '" class="ai-session-row" data-active="' + (active ? '1' : '0') + '" ' +
       'style="margin:3px 6px;padding:9px 11px;border-radius:10px;cursor:pointer;border:1px solid rgba(79,140,255,0.18);background:' + (active ? 'rgba(79,140,255,0.14)' : 'rgba(79,140,255,0.05)') + ';">' +
         '<div style="display:flex;align-items:center;gap:6px;font-size:14px;line-height:1;">' + chips +
@@ -2350,7 +2383,7 @@ function p86Ask(message, opts) {
       '</div>';
       html += '<div class="ai-grp-body" data-grp-body="' + key + '" style="' + (grpOpen ? '' : 'display:none;') + '">';
       items.forEach(function(r) {
-        var active = (_currentSessionId === r.id);
+        var active = sameSession(_currentSessionId, r.id);
         // Active row: subtle accent (no harsh left bar). Hover: faint
         // tint that matches the rest of the panel's hover language.
         var rowStyle =
@@ -2447,13 +2480,15 @@ function p86Ask(message, opts) {
     // don't re-bind on every render.
     Array.from(host.querySelectorAll('.ai-session-row')).forEach(function(row) {
       row.onclick = function() {
-        var sid = parseInt(row.getAttribute('data-session-id'), 10);
-        if (Number.isFinite(sid)) pickSession(sid);
+        // Keep the id a string — it's a BIGINT ("202"); parseInt +
+        // Number.isFinite silently dropped it, no-op'ing the click.
+        var sid = row.getAttribute('data-session-id');
+        if (sid) pickSession(sid);
       };
       row.oncontextmenu = function(e) {
         e.preventDefault();
-        var sid = parseInt(row.getAttribute('data-session-id'), 10);
-        if (Number.isFinite(sid)) openSessionMenu(sid, e.clientX, e.clientY);
+        var sid = row.getAttribute('data-session-id');
+        if (sid) openSessionMenu(sid, e.clientX, e.clientY);
       };
     });
   }
@@ -2461,7 +2496,7 @@ function p86Ask(message, opts) {
   // Resolve a session row to its entity_id + entity_type so we can
   // re-render the panel header (and the messages key for history).
   function pickSession(sessionId) {
-    var row = _sessionList.find(function(s) { return s.id === sessionId; });
+    var row = _sessionList.find(function(s) { return sameSession(s.id, sessionId); });
     if (!row) return;
     _currentSessionId = sessionId;
     // Re-render the session list so the new active row gets highlighted.
@@ -2527,7 +2562,7 @@ function p86Ask(message, opts) {
   }
 
   function openSessionMenu(sessionId, x, y) {
-    var row = _sessionList.find(function(s) { return s.id === sessionId; });
+    var row = _sessionList.find(function(s) { return sameSession(s.id, sessionId); });
     if (!row) return;
     // Strip any previous menu instance.
     var prev = document.getElementById('ai-session-context-menu');
@@ -2562,7 +2597,7 @@ function p86Ask(message, opts) {
   }
 
   function renameSession(sessionId) {
-    var row = _sessionList.find(function(s) { return s.id === sessionId; });
+    var row = _sessionList.find(function(s) { return sameSession(s.id, sessionId); });
     if (!row) return;
     var next = prompt('Rename session:', row.label || '');
     if (next == null) return;
@@ -2572,7 +2607,7 @@ function p86Ask(message, opts) {
       if (resp && resp.session) {
         Object.assign(row, resp.session);
         renderSessionList(_sessionList);
-        if (_currentSessionId === sessionId) {
+        if (sameSession(_currentSessionId, sessionId)) {
           var titleEl = document.querySelector('#p86-ai-panel .p86-ai-title');
           if (titleEl) titleEl.textContent = row.label;
         }
@@ -2584,7 +2619,7 @@ function p86Ask(message, opts) {
 
   function togglePin(sessionId, pin) {
     window.p86Api.patch('/api/ai/sessions/' + sessionId, { pinned: !!pin }).then(function(resp) {
-      var row = _sessionList.find(function(s) { return s.id === sessionId; });
+      var row = _sessionList.find(function(s) { return sameSession(s.id, sessionId); });
       if (row && resp && resp.session) Object.assign(row, resp.session);
       renderSessionList(_sessionList);
     });
@@ -2598,12 +2633,12 @@ function p86Ask(message, opts) {
   }
 
   async function deleteSession(sessionId) {
-    var row = _sessionList.find(function(s) { return s.id === sessionId; });
+    var row = _sessionList.find(function(s) { return sameSession(s.id, sessionId); });
     var label = row && row.label || ('Session ' + sessionId);
     if (!(await p86Ask('Permanently delete "' + label + '"? This removes the Anthropic-side session too. Your local message history stays.'))) return;
     window.p86Api.del('/api/ai/sessions/' + sessionId).then(function() {
       _sessionList = _sessionList.filter(function(s) { return s.id !== sessionId; });
-      if (_currentSessionId === sessionId) _currentSessionId = null;
+      if (sameSession(_currentSessionId, sessionId)) _currentSessionId = null;
       renderSessionList(_sessionList);
     }).catch(function(err) {
       alert('Delete failed: ' + (err && err.message || 'unknown'));
@@ -2661,8 +2696,8 @@ function p86Ask(message, opts) {
       host.innerHTML = html;
       Array.from(host.querySelectorAll('.ai-session-row')).forEach(function(row) {
         row.onclick = function() {
-          var sid = parseInt(row.getAttribute('data-session-id'), 10);
-          if (Number.isFinite(sid)) pickSession(sid);
+          var sid = row.getAttribute('data-session-id');
+          if (sid) pickSession(sid);
         };
       });
     }).catch(function() { /* leave list as-is on transient failures */ });
@@ -2690,7 +2725,7 @@ function p86Ask(message, opts) {
         String(s.entity_id) === String(entityId);
     });
     if (match) {
-      if (_currentSessionId !== match.id) {
+      if (!sameSession(_currentSessionId, match.id)) {
         _currentSessionId = match.id;
         showSessionSwitchToast(match.label || (entityType + ' ' + entityId));
         renderSessionList(_sessionList);
@@ -2718,7 +2753,7 @@ function p86Ask(message, opts) {
       return !s.archived_at && s.entity_type === 'general';
     });
     if (general) {
-      if (_currentSessionId !== general.id) {
+      if (!sameSession(_currentSessionId, general.id)) {
         _currentSessionId = general.id;
         showSessionSwitchToast('General');
         renderSessionList(_sessionList);
@@ -2991,6 +3026,8 @@ function p86Ask(message, opts) {
     read_skill_packs:             'Loading skill packs…',
     read_materials:               'Searching the catalog…',
     read_purchase_history:        'Checking purchase history…',
+    read_assemblies:              'Pulling the recipe…',
+    read_assembly_taxonomy:       'Reading the code registry…',
     read_subs:                    'Looking up subs…',
     read_lead_pipeline:           'Pulling the pipeline…',
     read_clients:                 'Reading the directory…',
@@ -3426,7 +3463,7 @@ function p86Ask(message, opts) {
               crewEmit('agent', { agent: _activeAgentKey });
             }
             var resolvedId = payload.session_resolved.db_session_id;
-            if (resolvedId != null && resolvedId !== _currentSessionId) {
+            if (resolvedId != null && !sameSession(resolvedId, _currentSessionId)) {
               var prev = _currentSessionId;
               _currentSessionId = resolvedId;
               // Refresh the sidebar list so the new session row
@@ -3771,6 +3808,11 @@ function p86Ask(message, opts) {
     // Estimate-side reads
     read_past_estimates: true,
     read_past_estimate_lines: true,
+    // Assembly database (costed recipes + Trade/System taxonomy). 86 owns
+    // these; without them here the reader renders as an approval card and
+    // the recipe never comes back (the "price drift can't be read" bug).
+    read_assemblies: true,
+    read_assembly_taxonomy: true,
     // Client-directory + cross-surface reads (now exposed on Ask 86 too)
     read_clients: true,
     read_leads: true,
@@ -4397,6 +4439,15 @@ function p86Ask(message, opts) {
     // tool_result via the regular auto-apply chip handler.
     if (tu.name === 'navigate') {
       return Promise.resolve(_navigate(tu.input));
+    }
+    // Assembly-database reads are pure server-side lookups — route them
+    // straight to the unified executor from ANY surface (job dock, ask86,
+    // estimate editor) BEFORE mode-specific dispatch. Otherwise job mode
+    // hits applyJobTool's "Unknown job tool" throw and the other modes
+    // fall through to the "server applies on continue" return '' path —
+    // either way 86 never gets the recipe. Mirrors the navigate early-out.
+    if (tu.name === 'read_assemblies' || tu.name === 'read_assembly_taxonomy') {
+      return execAutoTierTool(tu.name, tu.input || {});
     }
     // Server-applied job→client links — same shape regardless of
     // which surface the user is on. The server applies the mutation
