@@ -444,6 +444,100 @@ router.get('/favorites', requireAuth, requireCapability('ESTIMATES_VIEW'), async
   }
 });
 
+// ──────────────────────────────────────────────────────────────────
+// Materials Consolidation — group catalog "likes" (the same real product
+// wearing different HD descriptions) so an estimator can mint ONE canonical
+// "part" with a buy-count-weighted blended price + a clean unit. This is the
+// READ-ONLY suggestion pass (Slice 1); POST /consolidate (Slice 3) does the
+// write. Heuristic + human-ratified: dimensioned lumber clusters HIGH-conf by
+// dimension|length|treatment (four "2x4x8 stud" descriptions → one part);
+// everything else clusters MEDIUM by a normalized significant-token signature.
+// ──────────────────────────────────────────────────────────────────
+const _NOISE = new Set(['gc', 'wshld', 'weathershield', '2p', 'ea', 'ft', 'lf', 'pc', 'pk', 'pcs', 'the', 'and', 'for', 'with', 'in', 'sng', 'prem', 'premium', 'prime', 'grade', 'each']);
+const _STUD_INCH = { '92': 8, '93': 8, '96': 8, '104': 9, '105': 9, '108': 9, '116': 10, '117': 10, '120': 10 };
+function _dimOf(s) { const m = String(s || '').match(/\b([1-9])\s*[xX]\s*([0-9]{1,2})\b/); return m ? (m[1] + 'x' + m[2]) : null; }
+function _treatOf(s) {
+  const u = String(s || '').toUpperCase();
+  if (/\bP\.?T\b|TREAT|GROUND CONTACT|\bGC\b|WEATHERSHIELD|WSHLD|PRESSURE/.test(u)) return 'PT';
+  if (/STUD|\bKD\b|WHITEWOOD|\bWW\b|#2|PRIME|\bSYP\b|SPRUCE|\bFIR\b/.test(u)) return 'STD';
+  return '';
+}
+function _lenFtOf(s) {
+  const u = String(s || '').toUpperCase();
+  let m = u.match(/\b([0-9]{1,2})\s*(?:FT|')\b/) || u.match(/-([0-9]{1,2})\b(?!\s*\/)/);
+  if (m) { const n = parseInt(m[1], 10); if (n >= 2 && n <= 28) return n; }
+  const im = u.match(/\b(9[0-9]|1[0-1][0-9]|12[0-9])\b/);
+  if (im) { const inch = parseInt(im[1], 10); if (_STUD_INCH[String(inch)]) return _STUD_INCH[String(inch)]; if (inch >= 36) return Math.round(inch / 12); }
+  return null;
+}
+function _sigTokens(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/)
+    .filter((w) => w.length > 1 && !_NOISE.has(w)).sort();
+}
+function _clusterKey(m) {
+  const raw = (m.raw_description || m.description || '');
+  const dim = _dimOf(raw);
+  if (dim) { const t = _treatOf(raw); const L = _lenFtOf(raw); return { key: 'LUM|' + dim + '|' + (L || '?') + '|' + (t || '?'), conf: 'high', dim: dim, len: L, treat: t }; }
+  const sig = _sigTokens(raw).slice(0, 6).join(' ');
+  return { key: 'TOK|' + sig, conf: 'medium', dim: null, len: null, treat: '' };
+}
+router.get('/consolidation-candidates', requireAuth, requireCapability('ESTIMATES_VIEW'), async (req, res) => {
+  try {
+    const orgId = req.user.organization_id;
+    const { rows } = await pool.query(
+      `SELECT id, description, raw_description, unit, category, agx_subgroup,
+              last_unit_price, avg_unit_price, purchase_count, price_basis, size_nominal
+         FROM materials
+        WHERE (organization_id = $1 OR organization_id IS NULL) AND is_hidden = false`,
+      [orgId]
+    );
+    const groups = new Map();
+    for (const m of rows) {
+      const ck = _clusterKey(m);
+      if (!groups.has(ck.key)) groups.set(ck.key, { meta: ck, members: [] });
+      groups.get(ck.key).members.push(m);
+    }
+    const candidates = [];
+    for (const g of groups.values()) {
+      if (g.members.length < 2) continue;                       // a group of 1 isn't a consolidation
+      let wsum = 0, psum = 0, buys = 0; const unitCt = {}, catCt = {};
+      for (const m of g.members) {
+        const price = Number(m.avg_unit_price != null ? m.avg_unit_price : m.last_unit_price);
+        const w = Math.max(Number(m.purchase_count) || 0, 1);
+        if (Number.isFinite(price) && price >= 0) { wsum += w; psum += price * w; }
+        buys += Number(m.purchase_count) || 0;
+        const u = (m.unit || 'ea'); unitCt[u] = (unitCt[u] || 0) + w;
+        if (m.category) catCt[m.category] = (catCt[m.category] || 0) + 1;
+      }
+      const blended = wsum > 0 ? Math.round(psum / wsum * 100) / 100 : null;
+      const suggestedUnit = Object.keys(unitCt).sort((a, b) => unitCt[b] - unitCt[a])[0] || 'ea';
+      const category = Object.keys(catCt).sort((a, b) => catCt[b] - catCt[a])[0] || null;
+      let suggestedName;
+      if (g.meta.dim) {
+        const treatLabel = g.meta.treat === 'PT' ? 'PT' : (g.meta.treat === 'STD' ? 'Stud' : '');
+        suggestedName = (g.meta.dim.replace('x', '×')) + (g.meta.len ? ('×' + g.meta.len) : '') + (treatLabel ? (' ' + treatLabel) : '');
+      } else {
+        const top = g.members.slice().sort((a, b) => (b.purchase_count || 0) - (a.purchase_count || 0))[0];
+        suggestedName = String(top.description || top.raw_description || '').slice(0, 60);
+      }
+      candidates.push({
+        key: g.meta.key, confidence: g.meta.conf, suggestedName: suggestedName,
+        suggestedUnit: suggestedUnit, blendedPrice: blended, totalBuys: buys, category: category,
+        members: g.members.map((m) => ({
+          id: m.id, description: m.description, raw_description: m.raw_description,
+          unit: m.unit, last_unit_price: m.last_unit_price, avg_unit_price: m.avg_unit_price,
+          purchase_count: m.purchase_count, price_basis: m.price_basis
+        }))
+      });
+    }
+    candidates.sort((a, b) => (b.totalBuys - a.totalBuys) || (b.members.length - a.members.length));
+    res.json({ scanned: rows.length, groupCount: candidates.length, candidates: candidates.slice(0, 80) });
+  } catch (e) {
+    console.error('GET /api/materials/consolidation-candidates error:', e);
+    res.status(500).json({ error: e.message || 'Server error' });
+  }
+});
+
 // PUT /api/materials/:id — admin can fix description, subgroup, hidden,
 // notes. Sets manual_override so subsequent re-imports don't clobber.
 router.put('/:id', requireAuth, requireCapability('ROLES_MANAGE'), async (req, res) => {
