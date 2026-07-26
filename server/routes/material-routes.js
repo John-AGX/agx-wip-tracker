@@ -645,7 +645,7 @@ router.post('/consolidate', requireAuth, requireCapability('ESTIMATES_EDIT'), as
       await client.query(
         `UPDATE materials
             SET is_hidden = true, manual_override = true,
-                notes = CONCAT(COALESCE(notes || ' | ', ''), $3)
+                notes = COALESCE(notes || ' | ', '') || $3::text
           WHERE id = ANY($2::int[]) AND organization_id = $1`,
         [orgId, foldIds, '→ consolidated into #' + newId + ' (' + name + ')']
       );
