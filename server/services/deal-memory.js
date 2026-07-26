@@ -39,6 +39,7 @@
 const { computeEstimateTotals } = require('./money/estimate-totals');
 
 function num(v) { const n = Number(v); return isFinite(n) ? n : 0; }
+function round2(n) { return Math.round(num(n) * 100) / 100; }
 
 async function resolveLineageRoot(db, entityType, entityId) {
   if (!entityType || !entityId) return null;
@@ -124,9 +125,21 @@ async function computeNumbers(db, resolved) {
     const r = await db.query('SELECT data FROM jobs WHERE id = $1', [resolved.jobId]);
     const j = r.rows.length ? (r.rows[0].data || {}) : {};
     out.jobId = resolved.jobId;
-    out.contract = num(j.contractAmount);
+    out.contract = round2(j.contractAmount);
     out.pctComplete = num(j.pctComplete);
-    out.wipPending = true; // full WIP (CO income, actual costs, margin) — slice 2b
+    // CO income — a cheap sum of the job's change orders (table + legacy blob
+    // fallback), so the deal shows the CO-adjusted total. Full WIP (actual
+    // costs, margin) still pulls via read tools. Best-effort.
+    try {
+      const cot = require('./money/change-order-totals');
+      const cos = await cot.changeOrdersForJob(db, resolved.jobId, j.changeOrders);
+      const coIncome = (cos || []).reduce(function (s, c) { return s + num(c.income); }, 0);
+      if (coIncome) {
+        out.coIncome = round2(coIncome);
+        out.totalContract = round2(out.contract + coIncome);
+      }
+    } catch (_) { /* CO enrichment is best-effort */ }
+    out.wipPending = true; // actual costs + margin still deferred (read tools)
   } else if (resolved.stage === 'estimate' && resolved.estimateId) {
     const r = await db.query('SELECT data FROM estimates WHERE id = $1', [resolved.estimateId]);
     const blob = r.rows.length ? (r.rows[0].data || {}) : {};
@@ -184,7 +197,14 @@ async function refreshDealNumbers(db, entityType, entityId) {
   return { ...resolved, numbers };
 }
 
-function _fmtMoney(n) { const v = Number(n) || 0; return '$' + Math.round(v).toLocaleString(); }
+function _fmtMoney(n) {
+  const v = Number(n) || 0;
+  // Cents only when there's a fractional part — a contract of $56,217.45 shows
+  // its cents, but a round $150,000 stays clean.
+  return Number.isInteger(v)
+    ? '$' + v.toLocaleString()
+    : '$' + v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
 
 // Compact, injection-ready deal-memory block for a deal thread's turn context
 // (slice 2b). The DETERMINISTIC numbers + the lineage arc, so 86 opens a deal
@@ -204,8 +224,10 @@ function renderDealBlock(res) {
   if (res.jobId) arc.push('job ' + res.jobId);
   if (arc.length) L.push('- Lineage: ' + arc.join(' → '));
   if (n.stage === 'job') {
-    L.push('- Stage JOB · contract ' + _fmtMoney(n.contract) + ' · ' + (Number(n.pctComplete) || 0) + '% complete'
-      + (n.wipPending ? ' · full WIP (CO income / actuals / margin) — pull with read tools if needed' : ''));
+    L.push('- Stage JOB · contract ' + _fmtMoney(n.contract)
+      + (n.coIncome ? ' · +CO ' + _fmtMoney(n.coIncome) + ' → total ' + _fmtMoney(n.totalContract) : '')
+      + ' · ' + (Number(n.pctComplete) || 0) + '% complete'
+      + (n.wipPending ? ' · actual costs + margin: pull with read tools if needed' : ''));
   } else if (n.stage === 'estimate') {
     L.push('- Stage ESTIMATE · proposal total ' + _fmtMoney(n.proposalTotal)
       + ' · base cost ' + _fmtMoney(n.baseCost) + ' · blended markup ' + (n.blendedMarkupPct || 0) + '%');
