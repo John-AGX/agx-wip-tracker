@@ -455,7 +455,25 @@ router.get('/favorites', requireAuth, requireCapability('ESTIMATES_VIEW'), async
 // ──────────────────────────────────────────────────────────────────
 const _NOISE = new Set(['gc', 'wshld', 'weathershield', '2p', 'ea', 'ft', 'lf', 'pc', 'pk', 'pcs', 'the', 'and', 'for', 'with', 'in', 'sng', 'prem', 'premium', 'prime', 'grade', 'each']);
 const _STUD_INCH = { '92': 8, '93': 8, '96': 8, '104': 9, '105': 9, '108': 9, '116': 10, '117': 10, '120': 10 };
-function _dimOf(s) { const m = String(s || '').match(/\b([1-9])\s*[xX]\s*([0-9]{1,2})\b/); return m ? (m[1] + 'x' + m[2]) : null; }
+// Canonical dimensional-lumber / sheet-good nominals, thin x wide orientation
+// ONLY (real callouts are 2x4, never 4x2). A dimension NOT in this set is
+// almost always a fastener/hardware spec (1/4 x 2 lag screw, 4 x 3/8 roller)
+// that must NOT masquerade as lumber.
+const _LUMBER_DIMS = new Set([
+  '1x2', '1x3', '1x4', '1x6', '1x8', '1x10', '1x12',
+  '2x2', '2x3', '2x4', '2x6', '2x8', '2x10', '2x12',
+  '4x4', '4x6', '6x6', '6x8', '8x8',
+  '4x8', '4x9', '4x10', '4x12'          // sheet goods
+]);
+const _SHEET_DIMS = new Set(['4x8', '4x9', '4x10', '4x12']);
+const _WOOD_RE = /LUMBER|BOARD|STUD|PLYWOOD|\bOSB\b|SUBFLOOR|SHEATH|\bPLY\b|\bMDF\b|\bRTD\b|\bP\.?T\b|PINE|CEDAR|\bFIR\b|SPRUCE|\bSPF\b|\bSYP\b|WHITEWOOD|TIMBER|FURRING|PICKET|\bLVL\b/;
+function _dimOf(s) {
+  // first number NOT preceded by a digit or slash (rejects 1/4 -> 4), second
+  // number NOT followed by a slash or digit (rejects 4 X 3/8) -> only whole
+  // NxM callouts survive; fastener fractions are filtered out.
+  const m = String(s || '').match(/(?:^|[^0-9\/])([1-9])\s*[xX]\s*([0-9]{1,2})(?![0-9\/])/);
+  return m ? (m[1] + 'x' + m[2]) : null;
+}
 function _treatOf(s) {
   const u = String(s || '').toUpperCase();
   if (/\bP\.?T\b|TREAT|GROUND CONTACT|\bGC\b|WEATHERSHIELD|WSHLD|PRESSURE/.test(u)) return 'PT';
@@ -470,6 +488,7 @@ function _lenFtOf(s) {
   if (im) { const inch = parseInt(im[1], 10); if (_STUD_INCH[String(inch)]) return _STUD_INCH[String(inch)]; if (inch >= 36) return Math.round(inch / 12); }
   return null;
 }
+function _thickOf(s) { const m = String(s || '').match(/(?:^|\s)(\d{1,2}\/\d{1,2})(?=\s|"|IN\b)/i); return m ? m[1] : ''; }
 function _sigTokens(s) {
   return String(s || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/)
     .filter((w) => w.length > 1 && !_NOISE.has(w)).sort();
@@ -477,7 +496,18 @@ function _sigTokens(s) {
 function _clusterKey(m) {
   const raw = (m.raw_description || m.description || '');
   const dim = _dimOf(raw);
-  if (dim) { const t = _treatOf(raw); const L = _lenFtOf(raw); return { key: 'LUM|' + dim + '|' + (L || '?') + '|' + (t || '?'), conf: 'high', dim: dim, len: L, treat: t }; }
+  if (dim && _LUMBER_DIMS.has(dim)) {
+    const t = _treatOf(raw);
+    const wood = _WOOD_RE.test(raw.toUpperCase());
+    if (t || wood) {                                   // real wood context required to earn "high"
+      if (_SHEET_DIMS.has(dim)) {                       // sheets differ by THICKNESS, not length
+        const th = _thickOf(raw);
+        return { key: 'SHT|' + dim + '|' + (th || '?'), conf: 'high', dim: dim, len: null, treat: '', thick: th, sheet: true };
+      }
+      const L = _lenFtOf(raw);
+      return { key: 'LUM|' + dim + '|' + (L || '?') + '|' + (t || '?'), conf: 'high', dim: dim, len: L, treat: t };
+    }
+  }
   const sig = _sigTokens(raw).slice(0, 6).join(' ');
   return { key: 'TOK|' + sig, conf: 'medium', dim: null, len: null, treat: '' };
 }
@@ -513,7 +543,9 @@ router.get('/consolidation-candidates', requireAuth, requireCapability('ESTIMATE
       const suggestedUnit = Object.keys(unitCt).sort((a, b) => unitCt[b] - unitCt[a])[0] || 'ea';
       const category = Object.keys(catCt).sort((a, b) => catCt[b] - catCt[a])[0] || null;
       let suggestedName;
-      if (g.meta.dim) {
+      if (g.meta.sheet) {
+        suggestedName = (g.meta.thick && g.meta.thick !== '?' ? (g.meta.thick + '" ') : '') + g.meta.dim.replace('x', '×');
+      } else if (g.meta.dim) {
         const treatLabel = g.meta.treat === 'PT' ? 'PT' : (g.meta.treat === 'STD' ? 'Stud' : '');
         suggestedName = (g.meta.dim.replace('x', '×')) + (g.meta.len ? ('×' + g.meta.len) : '') + (treatLabel ? (' ' + treatLabel) : '');
       } else {
@@ -530,7 +562,8 @@ router.get('/consolidation-candidates', requireAuth, requireCapability('ESTIMATE
         }))
       });
     }
-    candidates.sort((a, b) => (b.totalBuys - a.totalBuys) || (b.members.length - a.members.length));
+    const cw = (g) => (g.confidence === 'high' ? 1 : 0);        // high-confidence lumber/sheets lead
+    candidates.sort((a, b) => (cw(b) - cw(a)) || (b.totalBuys - a.totalBuys) || (b.members.length - a.members.length));
     res.json({ scanned: rows.length, groupCount: candidates.length, candidates: candidates.slice(0, 80) });
   } catch (e) {
     console.error('GET /api/materials/consolidation-candidates error:', e);
