@@ -444,9 +444,20 @@ const features = [
 //             'new' | 'improved' | 'fixed' and `tour` (optional) is a
 //             client-side guided-tour id (js/guide.js registry) that
 //             renders a "Show me" button on that row.
-const APP_VERSION = '1.14';
+const APP_VERSION = '1.15';
 
 const releases = [
+  {
+    version: '1.15',
+    date: '2026-07-26',
+    name: 'Standard Parts',
+    summary: 'Your purchase history, folded into reusable parts — the same product bought under a dozen Home Depot names becomes one standard part priced from what you\'ve actually paid.',
+    changes: [
+      { type: 'new', text: 'Consolidate — a new view in Assembly Studio that scans your material catalog and groups the "likes" together. A 2x4-8 stud bought as "2x4-96 KD-HT", "2x4-8 Stud", and "2x4-92 5/8 Whitewood Stud" is really one part — review the group, drop anything that doesn\'t belong, name it, and create the standard part in one click.' },
+      { type: 'new', text: 'Prices come from your own receipts — each standard part is priced as a blend of what you actually paid, weighted by how often you bought each version, so estimates ground in real numbers instead of guesses.' },
+      { type: 'improved', text: 'Creating a part is safe and reversible — the original catalog lines are hidden (never deleted), your purchase history is untouched, and any recipe that used an old line is re-pointed to the new part automatically.' },
+    ],
+  },
   {
     version: '1.14',
     date: '2026-07-19',
