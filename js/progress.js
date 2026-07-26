@@ -46,18 +46,43 @@
     return collectionPct(b.levels);
   }
 
-  // THE per-cell completion %. Manual entry wins; else the building's
-  // units/levels; else the cell's own stored %. `buildings` optional (a lookup
+  // The job's aggregate units/levels-done %, weighted by unit count (an 8-unit
+  // building counts more than a 4-unit one), or null when NO building on the job
+  // tracks units/levels. This is the authoritative completion for a job-level
+  // scope, which spans every building.
+  function jobUnitPct(jobId) {
+    var blds = jobBuildings(jobId);
+    var sum = 0, n = 0;
+    for (var i = 0; i < blds.length; i++) {
+      var b = blds[i];
+      var coll = (b.units && b.units.length) ? b.units
+        : ((b.levels && b.levels.length) ? b.levels : null);
+      if (!coll) continue;
+      for (var j = 0; j < coll.length; j++) { sum += itemPct(coll[j]); n++; }
+    }
+    return n > 0 ? sum / n : null;
+  }
+
+  // THE per-cell completion %. For a per-building cell: manual entry wins, else
+  // the building's units/levels, else the cell's own stored %. For a JOB-LEVEL
+  // scope (no buildingId — it spans every building): the job's aggregate unit
+  // progress is authoritative when the buildings track units, because a single
+  // job-level % (even a manually-typed one) can't express a per-building reality
+  // and goes stale the instant an unstarted building is added; only when nothing
+  // tracks units does the stored/manual % stand. `buildings` optional (a lookup
   // to avoid re-scanning); falls back to appData.
   function scopeCellPct(phase, buildings) {
     if (!phase) return 0;
-    if (phase.pctCompleteManual) return clampPct(phase.pctComplete);
     if (phase.buildingId) {
+      if (phase.pctCompleteManual) return clampPct(phase.pctComplete);
       var b = (buildings || (window.appData && appData.buildings) || [])
         .find(function (x) { return x && x.id === phase.buildingId; });
       var up = buildingUnitPct(b);
       if (up != null) return up;
+      return clampPct(phase.pctComplete);
     }
+    var ju = jobUnitPct(phase.jobId);
+    if (ju != null) return ju;
     return clampPct(phase.pctComplete);
   }
 
@@ -77,13 +102,19 @@
     }, 0);
   }
 
-  // Revenue-weighted % complete for a building (its scope cells).
+  // Revenue-weighted % complete for a building (its scope cells). When NO scope
+  // cell targets this building — scopes live only at the job level — fall back to
+  // the building's own units/levels so its card reflects real field progress
+  // instead of a flat 0.
   function buildingPct(buildingId, jobId) {
     var blds = jobBuildings(jobId);
     var cells = jobPhases(jobId).filter(function (p) { return p.buildingId === buildingId; });
     var rev = cells.reduce(function (s, p) { return s + phaseRevenue(p); }, 0);
     if (rev > 0) return cells.reduce(function (s, p) { return s + scopeCellPct(p, blds) * phaseRevenue(p); }, 0) / rev;
-    return cells.length ? cells.reduce(function (s, p) { return s + scopeCellPct(p, blds); }, 0) / cells.length : 0;
+    if (cells.length) return cells.reduce(function (s, p) { return s + scopeCellPct(p, blds); }, 0) / cells.length;
+    var b = blds.find(function (x) { return x && x.id === buildingId; });
+    var up = buildingUnitPct(b);
+    return up != null ? up : 0;
   }
 
   // Revenue-weighted job % = earned ÷ total scope revenue.

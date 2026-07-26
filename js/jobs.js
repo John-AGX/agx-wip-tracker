@@ -4271,16 +4271,29 @@ function renderJobsMain() {
             var phaseGroups = {};
             phases.forEach(function (p) { var key = p.phase || 'Unnamed'; (phaseGroups[key] = phaseGroups[key] || []).push(p); });
             var groupKeys = Object.keys(phaseGroups).sort();
+            // A scope cell's % is UNITS-AWARE (window.p86Progress.scopeCellPct: manual
+            // entry wins, else the building's units/levels-done, else stored %) — the
+            // same source the map/cards/job % now use. Raw phase.pctComplete alone
+            // showed a units-tracked scope at its stale stored value (e.g. 100% on a
+            // 27%-complete job). Falls back to the raw field only if p86Progress is
+            // unavailable.
+            var _cellPct = function (r) {
+                return (window.p86Progress ? window.p86Progress.scopeCellPct(r) : (r.pctComplete || 0));
+            };
             var totalRev = 0, totalCost = 0, _wPct = 0;
             groupKeys.forEach(function (k) {
                 phaseGroups[k].forEach(function (r) {
                     var rv = phaseRevenue(r);
                     totalRev += rv; totalCost += (r.materials || 0) + (r.labor || 0) + (r.sub || 0) + (r.equipment || 0);
-                    _wPct += rv * (r.pctComplete || 0);
+                    _wPct += rv * _cellPct(r);
                 });
             });
             var totalProfit = totalRev - totalCost;
-            var jobPct = totalRev > 0 ? Math.round(_wPct / totalRev) : 0;
+            // Job Avg % = revenue-weighted units-aware roll-up = window.p86Progress.jobPct
+            // (matches the KPI ribbon + jobs list). Fallback to the local weighted calc.
+            var jobPct = (window.p86Progress && (appData.phases || []).some(function (p) { return p.jobId === jobId; }))
+                ? Math.round(window.p86Progress.jobPct(jobId))
+                : (totalRev > 0 ? Math.round(_wPct / totalRev) : 0);
 
             // Compact stat strip. Contract mode when there's a contract to
             // reconcile against, else Revenue / Cost / Profit.
@@ -4333,7 +4346,13 @@ function renderJobsMain() {
                 var pl = phaseGroups[phaseName];
                 var revTotal = pl.reduce(function (s, p) { return s + phaseRevenue(p); }, 0);
                 var costTotal = pl.reduce(function (s, p) { return s + (p.materials || 0) + (p.labor || 0) + (p.sub || 0) + (p.equipment || 0); }, 0);
-                var avgPct = Math.round(pl.reduce(function (s, p) { return s + (p.pctComplete || 0); }, 0) / pl.length);
+                // Row % = revenue-weighted units-aware roll-up of the scope's cells
+                // (via _cellPct → p86Progress.scopeCellPct), matching the strip + map.
+                // Plain-average raw pctComplete showed a units-tracked scope stuck at
+                // its stale stored value (e.g. 100% while its buildings were 29% done).
+                var avgPct = revTotal > 0
+                    ? Math.round(pl.reduce(function (s, p) { return s + _cellPct(p) * phaseRevenue(p); }, 0) / revTotal)
+                    : Math.round(pl.reduce(function (s, p) { return s + _cellPct(p); }, 0) / pl.length);
                 var repId = pl[0].id;
                 var chips = '';
                 if (pl.some(function (p) { return p.locked === true; })) chips += '<span class="p86-sc-chip lock">&#128274; Locked</span>';

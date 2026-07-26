@@ -884,12 +884,22 @@ function getT1WeightedPct(t1n){
   // value here (Fairways B1: 100% done on the job page, 75% on the map). Only when
   // the building has matrix scope rows; otherwise fall through to the legacy
   // wire/units cascade below so brand-new / wired buildings are unchanged.
+  // Delegate when the building has scope CELLS (matrix rows) OR tracks its own
+  // units/levels — buildingPct handles both (cell roll-up, else units fallback),
+  // so a job whose scopes live only at the job level still shows real per-building
+  // progress here instead of a stale wire/raw value. Wire-only buildings (no cells,
+  // no units) still fall through to the legacy cascade below, unchanged.
   try {
     if (typeof window !== 'undefined' && window.p86Progress) {
       var _bId = t1BuildingId(t1n);
-      if (_bId && typeof appData !== 'undefined' && Array.isArray(appData.phases) &&
-          appData.phases.some(function(p){ return p && p.buildingId === _bId; })) {
-        return window.p86Progress.buildingPct(_bId, jobId);
+      if (_bId && typeof appData !== 'undefined' && Array.isArray(appData.phases)) {
+        var _hasCell = appData.phases.some(function(p){ return p && p.buildingId === _bId; });
+        var _b = (Array.isArray(appData.buildings) ? appData.buildings : [])
+          .find(function(x){ return x && x.id === _bId; });
+        var _hasUnits = !!(_b && ((_b.units && _b.units.length) || (_b.levels && _b.levels.length)));
+        if (_hasCell || _hasUnits) {
+          return window.p86Progress.buildingPct(_bId, jobId);
+        }
       }
     }
   } catch (e) {}
