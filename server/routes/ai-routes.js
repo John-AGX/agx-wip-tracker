@@ -3198,7 +3198,15 @@ async function resolveSessionForChat({ sessionId, currentContext, userId, organi
   const hostKey = (hostOverride === 'job' || hostOverride === 'assistant')
     ? hostOverride
     : await resolveHostKeyForUser(userId);
-  if (sessionId) {
+  // On a DEAL surface (deal threads on), the surface is a stronger routing
+  // signal than a pinned sidebar session — the chat always sends the current
+  // user_thread's id, which would otherwise short-circuit below and the
+  // deal-thread branch would never run. Skip the explicit-sessionId honor so
+  // the deal-thread branch resolves this deal by lineage. (Explicit deal_thread
+  // resume from the sidebar is slice 3b-2.)
+  const _onDealSurface = FLAG_DEAL_THREADS && currentContext
+    && DEAL_SURFACES.has(currentContext.entity_type) && !!currentContext.entity_id;
+  if (sessionId && !_onDealSurface) {
     const sid = parseInt(sessionId, 10);
     if (Number.isFinite(sid)) {
       const r = await pool.query(
