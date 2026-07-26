@@ -1867,7 +1867,7 @@ function postOrbitData(){
       nodeId: n.id,
       path: n.polygon.map(function(v){ return { lat:Number(v.lat), lng:Number(v.lng) }; }),
       label: n.label||'Building',
-      pct: Math.round(n.pctComplete||0),
+      pct: Math.round((E&&E.getT1WeightedPct)?E.getT1WeightedPct(n):(n.pctComplete||0)),
       // Per-building 3D height: an explicit override (set from the 3D card's
       // stepper, persisted on the node) wins over the levels-derived estimate.
       heightM: (isFinite(n.heightM) && n.heightM>0) ? n.heightM : ((n.levels && n.levels.length) ? n.levels.length*3.2 : 8),
@@ -2010,13 +2010,13 @@ function renderPolygons(){
     _polyLayer.appendChild(lbl);
     var kpi=document.createElementNS(_SVGNS,'text');
     kpi.setAttribute('x', cx); kpi.setAttribute('y', cy+7); kpi.setAttribute('class','ng-poly-kpi');
-    // % complete: use the scope-driven building % (window.p86Progress) so the
-    // polygon label AGREES with the money-line card + inspector, which read the
-    // same source. n.pctComplete is a stored mirror that can go stale; fall back
-    // to it only if p86Progress is unavailable.
-    var _bpct = n.pctComplete||0;
-    try { if(window.p86Progress && n.data && n.data.id!=null){ var _v=Number(window.p86Progress.buildingPct(n.data.id, E.job())); if(isFinite(_v)) _bpct=_v; } }catch(e){}
-    kpi.textContent=Math.round(_bpct)+'% complete';
+    // % complete: use the scope-driven building % so the polygon label AGREES with
+    // the money-line card + inspector — all now route through the unified
+    // getT1WeightedPct → window.p86Progress. getT1WeightedPct resolves the building
+    // even for a TRACED node with no data.id (name-fallback), unlike a direct
+    // p86Progress.buildingPct(n.data.id,…) call which zeroes on B1. n.pctComplete
+    // is a stale mirror kept only as the last-ditch fallback.
+    kpi.textContent=Math.round((E&&E.getT1WeightedPct)?E.getT1WeightedPct(n):(n.pctComplete||0))+'% complete';
     _polyLayer.appendChild(kpi);
     // Footprint area (sq ft) under the % — computed from the traced lat/lng path.
     var _fa=measureStats(n.polygon);

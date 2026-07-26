@@ -866,6 +866,24 @@ function wireUnitPct(w){
 
 function getT1WeightedPct(t1n){
   if(!t1n || t1n.type !== 't1') return (t1n && t1n.pctComplete) || 0;
+  // UNIFIED % (2026-07-24): the site map, building cards and the job page must
+  // show the SAME building %. Delegate to the job page's roll-up
+  // (window.p86Progress.buildingPct) — it's matrix-only + units-aware (a non-manual
+  // scope cell is driven by the building's units/levels-done) and revenue-weighted
+  // with the null-check basis. This fixes the divergence where a building whose
+  // units were checked off read the right % on the job page but a stale raw-pct
+  // value here (Fairways B1: 100% done on the job page, 75% on the map). Only when
+  // the building has matrix scope rows; otherwise fall through to the legacy
+  // wire/units cascade below so brand-new / wired buildings are unchanged.
+  try {
+    if (typeof window !== 'undefined' && window.p86Progress) {
+      var _bId = t1BuildingId(t1n);
+      if (_bId && typeof appData !== 'undefined' && Array.isArray(appData.phases) &&
+          appData.phases.some(function(p){ return p && p.buildingId === _bId; })) {
+        return window.p86Progress.buildingPct(_bId, jobId);
+      }
+    }
+  } catch (e) {}
   // When any incoming SCOPE (phase/CO) wire tracks completion by its own units
   // (w.trackMode==='units'), the scopes drive this building's % — skip the
   // building-level unit/level short-circuit and fall through to the
@@ -951,6 +969,15 @@ function getT1WeightedPct(t1n){
 // signaling the caller to fall back to the manually-entered WIP pct.
 function getWIPWeightedPct(wipn){
   if(!wipn || wipn.type !== 'wip') return null;
+  // UNIFIED % (2026-07-24): job % = the job page's revenue-weighted, units-aware
+  // roll-up (window.p86Progress.jobPct) so the WIP node card + the stored
+  // job.pctComplete this feeds (pushToJob) match the KPI ribbon and the jobs list.
+  try {
+    if (typeof window !== 'undefined' && window.p86Progress && typeof appData !== 'undefined' &&
+        Array.isArray(appData.phases) && appData.phases.some(function(p){ return p && p.jobId === jobId; })) {
+      return window.p86Progress.jobPct(jobId);
+    }
+  } catch (e) {}
   var rollup = [];
   var anySrcPct = false;
   wires.forEach(function(w){

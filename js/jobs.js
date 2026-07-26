@@ -144,6 +144,13 @@ function renderJobsMain() {
         // phases were rolling up to 0%, then overwriting the correct stored
         // value on every Jobs main render because pctCompleteManual was false.
         function calcJobPctComplete(jobId) {
+            // UNIFIED % (2026-07-24): the stored job.pctComplete this writes is what
+            // the jobs-list % SORT + progress-range FILTER read, while the displayed
+            // number comes from window.p86Progress.jobPct (via getJobWIP). Return the
+            // same value so sort/filter can't disagree with the number on screen.
+            if (window.p86Progress && (appData.phases || []).some(p => p.jobId === jobId)) {
+                return window.p86Progress.jobPct(jobId);
+            }
             const buildings = appData.buildings.filter(b => b.jobId === jobId);
             const phases = appData.phases.filter(p => p.jobId === jobId);
             const linkedPhases = phases.filter(p => p.buildingId);
