@@ -2010,7 +2010,13 @@ function renderPolygons(){
     _polyLayer.appendChild(lbl);
     var kpi=document.createElementNS(_SVGNS,'text');
     kpi.setAttribute('x', cx); kpi.setAttribute('y', cy+7); kpi.setAttribute('class','ng-poly-kpi');
-    kpi.textContent=Math.round(n.pctComplete||0)+'% complete';
+    // % complete: use the scope-driven building % (window.p86Progress) so the
+    // polygon label AGREES with the money-line card + inspector, which read the
+    // same source. n.pctComplete is a stored mirror that can go stale; fall back
+    // to it only if p86Progress is unavailable.
+    var _bpct = n.pctComplete||0;
+    try { if(window.p86Progress && n.data && n.data.id!=null){ var _v=Number(window.p86Progress.buildingPct(n.data.id, E.job())); if(isFinite(_v)) _bpct=_v; } }catch(e){}
+    kpi.textContent=Math.round(_bpct)+'% complete';
     _polyLayer.appendChild(kpi);
     // Footprint area (sq ft) under the % — computed from the traced lat/lng path.
     var _fa=measureStats(n.polygon);
