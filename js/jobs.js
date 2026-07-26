@@ -4143,6 +4143,87 @@ function renderJobsMain() {
         // allocation matrix already shows per scope AND per building. One
         // allocation surface, and the tier is called Scopes now, not Phases.
         // Kept as a clearing no-op so its several call sites stay harmless.
+        // ── Scope delete guard (scope rework, Slice 2) ─────────────────────
+        // Confirmed decisions: row/Manage trash deletes the whole named scope
+        // GROUP; LOCKED = hard-block (offer Unlock & delete); CO-LINKED =
+        // hard-block (must remove/reallocate the CO link in Change Orders first —
+        // no silent auto-move, so no phantom money); revenue = a warn-confirm.
+        // CO linkage reads the LIVE store appData.jobChangeOrders (allocations[]
+        // with phaseId) + the phase.coPhaseBudget field.
+        function _scopeGuardCheck(jobId, phases) {
+            var ids = phases.map(function (p) { return p.id; });
+            var lockBlocked = phases.some(function (p) { return p.locked === true; });
+            var coHit = false, coAmt = 0;
+            (appData.jobChangeOrders || []).forEach(function (c) {
+                if ((c.job_id || c.jobId) !== jobId) return;
+                (c.allocations || []).forEach(function (a) { if (a.phaseId && ids.indexOf(a.phaseId) !== -1) { coHit = true; coAmt += (a.income || 0); } });
+            });
+            var coBudget = phases.reduce(function (s, p) { return s + (p.coPhaseBudget || 0); }, 0);
+            var coBlocked = coHit || coBudget > 0.5;
+            var rev = phases.reduce(function (s, p) { return s + phaseRevenue(p); }, 0);
+            var lines = [];
+            if (lockBlocked) lines.push({ c: 'block', t: 'Scope is locked', s: 'Locked scopes are protected. "Unlock & delete" clears the lock, then removes it.' });
+            if (coBlocked) lines.push({ c: 'block', t: 'Change-order dollars are allocated here', s: formatCurrency(coHit ? coAmt : coBudget) + ' of CO revenue points at this scope. Remove or reallocate the CO link in Change Orders first — deleting now would leave it dangling (phantom money).' });
+            if (!coBlocked && !lockBlocked && rev > 0.5) lines.push({ c: 'warn', t: 'Reduces contract reconciliation', s: formatCurrency(rev) + ' of as-sold revenue drops off — the Unallocated figure rises by this amount.' });
+            if (!lines.length) lines.push({ c: 'ok', t: 'Safe to delete', s: 'Nothing references this scope.' });
+            return { coBlocked: coBlocked, lockBlocked: lockBlocked, lines: lines };
+        }
+        function _rerenderScopeHosts(jobId) {
+            ['insp-phases', 'job-overview-phases'].forEach(function (hid) {
+                var h = document.getElementById(hid);
+                if (h) { try { renderOverviewPhasesInto(h, jobId, (appData.phases || []).filter(function (p) { return p.jobId === jobId; })); } catch (e) {} }
+            });
+        }
+        // Guarded delete of a scope GROUP (by name key). Reuses the existing
+        // _deletePhaseGroupConfirmed for the actual removal + graph cleanup.
+        function _scopeDeleteFlow(jobId, key) {
+            var phases = (appData.phases || []).filter(function (p) { return p.jobId === jobId && (p.phase || 'Unnamed').trim().toLowerCase() === key; });
+            if (!phases.length) return;
+            var name = phases[0].phase || 'Unnamed';
+            var g = _scopeGuardCheck(jobId, phases);
+            var lineHTML = g.lines.map(function (l) {
+                var col = l.c === 'block' ? 'var(--red)' : (l.c === 'warn' ? 'var(--orange,#e0a458)' : 'var(--green)');
+                var bg = l.c === 'block' ? 'rgba(239,68,68,.10)' : (l.c === 'warn' ? 'rgba(224,164,88,.10)' : 'rgba(52,211,153,.08)');
+                var ic = l.c === 'block' ? '&#9888;' : (l.c === 'warn' ? '&#9679;' : '&#10003;');
+                return '<div style="display:flex;gap:9px;align-items:flex-start;padding:9px 11px;border-radius:9px;font-size:12px;background:' + bg + ';border:1px solid ' + col + ';margin-bottom:8px;">' +
+                    '<span style="color:' + col + ';font-size:14px;line-height:1.1;">' + ic + '</span>' +
+                    '<span><b style="display:block;color:var(--text);margin-bottom:1px;">' + l.t + '</b><span style="color:var(--text-dim);">' + l.s + '</span></span>' +
+                    '</div>';
+            }).join('');
+            var actionHTML = g.coBlocked ? ''
+                : (g.lockBlocked
+                    ? '<button class="p86-dialog-btn p86-dialog-btn-primary" data-unlockdel style="background:var(--red);border-color:var(--red);">Unlock &amp; delete</button>'
+                    : '<button class="p86-dialog-btn p86-dialog-btn-primary" data-del style="background:var(--red);border-color:var(--red);">Delete scope</button>');
+            var back = document.createElement('div');
+            back.style.cssText = 'position:fixed;inset:0;z-index:2147483200;background:rgba(6,9,17,.62);display:flex;align-items:center;justify-content:center;padding:16px;';
+            back.innerHTML =
+                '<div class="modal-content" style="width:min(440px,96vw);">' +
+                    '<div class="p86-dialog-title">Delete scope · ' + escapeHTML(name) + '</div>' +
+                    '<div style="margin:12px 0 4px;">' + lineHTML + '</div>' +
+                    '<div class="p86-dialog-actions" style="margin-top:14px;">' +
+                        '<button class="p86-dialog-btn" data-cancel>Cancel</button>' + actionHTML +
+                    '</div>' +
+                '</div>';
+            document.body.appendChild(back);
+            function close() { if (back.parentNode) back.parentNode.removeChild(back); }
+            back.addEventListener('click', function (e) { if (e.target === back) close(); });
+            back.querySelector('[data-cancel]').addEventListener('click', close);
+            function doDelete() { close(); _deletePhaseGroupConfirmed(jobId, phases); _rerenderScopeHosts(jobId); }
+            var dl = back.querySelector('[data-del]'); if (dl) dl.addEventListener('click', doDelete);
+            var ud = back.querySelector('[data-unlockdel]'); if (ud) ud.addEventListener('click', function () {
+                phases.forEach(function (p) { p.locked = false; });
+                if (typeof saveData === 'function') saveData();
+                doDelete();
+            });
+        }
+        // Row/Manage trash entry point (pass the representative phase id so we
+        // never have to escape the scope name into an onclick).
+        window.p86ScopeDelete = function (jobId, repId) {
+            var p = (appData.phases || []).find(function (x) { return x.id === repId; });
+            if (!p) return;
+            _scopeDeleteFlow(jobId, (p.phase || 'Unnamed').trim().toLowerCase());
+        };
+
         // Toggle List/Matrix within a re-lit scope panel (scoped to the panel
         // the clicked button lives in, so it works in any host).
         window.p86ScopeViewSet = function (btn, view) {
@@ -4220,6 +4301,7 @@ function renderJobsMain() {
                     '<h3>Scopes (' + groupKeys.length + ')</h3>' +
                     '<span class="sp"></span>' +
                     (_showMatrix ? '<div class="p86-sc-seg"><button class="on" data-scv="list" onclick="p86ScopeViewSet(this,\'list\')">List</button><button data-scv="matrix" onclick="p86ScopeViewSet(this,\'matrix\')">Matrix</button></div>' : '') +
+                    (groupKeys.length ? '<button class="ee-btn ghost" style="font-size:12px;padding:3px 10px;white-space:nowrap;" onclick="openManagePhasesModal()">Manage</button>' : '') +
                     '<button class="ee-btn ghost" style="font-size:12px;padding:3px 10px;white-space:nowrap;" onclick="addJobLevelPhase(\'' + escapeHTML(jobId) + '\')">+ Add scope</button>' +
                 '</div>';
 
@@ -4245,6 +4327,7 @@ function renderJobsMain() {
                     '<div class="p86-sc-top">' +
                         '<div class="p86-sc-nm"><div class="n">' + escapeHTML(phaseName) + '</div>' + (chips ? '<div class="p86-sc-chips">' + chips + '</div>' : '') + '</div>' +
                         '<button class="p86-sc-icon" title="Edit scope" onclick="editPhase(\'' + escapeHTML(repId) + '\')">&#x270F;&#xFE0F;</button>' +
+                        '<button class="p86-sc-icon del" title="Delete scope" onclick="p86ScopeDelete(\'' + escapeHTML(jobId) + '\',\'' + escapeHTML(repId) + '\')">&#128465;</button>' +
                     '</div>' +
                     '<div class="p86-sc-btm">' +
                         '<div class="p86-sc-rev">' + formatCurrency(revTotal) + '<small>cost ' + formatCurrency(costTotal) + '</small></div>' +
@@ -6319,12 +6402,10 @@ function renderJobsMain() {
         }
 
         function deletePhaseGroup(key) {
-            const jobId = appState.currentJobId;
-            const phases = (appData.phases || []).filter(p => p.jobId === jobId && (p.phase || 'Unnamed').trim().toLowerCase() === key);
-            if (!phases.length) return;
-            _confirmDelete('scope', {
-                message: 'Delete this scope and its ' + phases.length + ' allocation record(s)? This cannot be undone.'
-            }).then(function (ok) { if (ok) _deletePhaseGroupConfirmed(jobId, phases); });
+            // Route ALL scope-group deletes through the guarded flow (lock / CO
+            // hard-block + reallocation guidance + revenue warn). Used by the
+            // scope-list trash AND the Manage-scopes modal trash.
+            _scopeDeleteFlow(appState.currentJobId, key);
         }
         function _deletePhaseGroupConfirmed(jobId, phases) {
             const ids = phases.map(p => p.id);
