@@ -1390,10 +1390,34 @@
             width: 14px;
             height: 14px;
         }
-        /* When a child is the active page, give the (possibly collapsed)
-           parent a subtle "contains current page" cue. */
+        /* When a child is the active page, the section parent reads as
+           "selected" with the SAME accent Assembly Studio's parent gets —
+           blue icon, bold label, left rail, and pill — so every nav group
+           (Jobs, Leads, Estimates, Admin…) looks alike when one of its pages
+           is open, not just the two parents that happen to carry a
+           data-virtual-tab. :has() reads the active child directly, so it
+           works on a deep-link refresh where the JS `has-active-child` toggle
+           may not have run; .has-active-child stays as the pre-:has() cue. */
         .app-nav-parent.has-active-child > .app-nav-parent-btn {
             color: var(--text);
+        }
+        .app-nav-parent:has(.app-nav-child.active) > .app-nav-parent-btn {
+            color: var(--text);
+            font-weight: 600;
+            background: var(--surface2);
+        }
+        .app-nav-parent:has(.app-nav-child.active) > .app-nav-parent-btn::before {
+            content: "";
+            position: absolute;
+            left: 0;
+            top: 6px;
+            bottom: 6px;
+            width: 3px;
+            border-radius: 0 3px 3px 0;
+            background: var(--accent, #4f8cff);
+        }
+        .app-nav-parent:has(.app-nav-child.active) > .app-nav-parent-btn .p86-icon {
+            color: var(--accent, #4f8cff);
         }
         /* Collapsed rail — no room for nested labels or the caret; show
            only the parent icon. Expanding the sidebar restores the tree. */
