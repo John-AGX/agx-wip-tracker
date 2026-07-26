@@ -3841,7 +3841,7 @@ function renderJobsMain() {
                     cosWired.forEach(function(item) {
                         const c = item.co;
                         body += '<div class="p86-bldg-co-row" onclick="event.stopPropagation();editCO(\'' + escapeHTML(c.id) + '\')">' +
-                            '<span><b>' + escapeHTML(c.coNumber || 'CO') + '</b> ' + escapeHTML((c.description || '').substring(0, 60)) + '</span>' +
+                            '<span><b>' + escapeHTML(c.co_number || c.coNumber || 'CO') + '</b> ' + escapeHTML((c.description || '').substring(0, 60)) + '</span>' +
                             '<span class="p86-bldg-co-row-meta">Inc: <b>' + formatCurrency((c.income || 0) * item.allocPct / 100) + '</b> (' + fmtAllocPct(item.allocPct) + '%)</span>' +
                             '</div>';
                     });

@@ -754,10 +754,19 @@ function t1BuildingId(t1n){
   if(typeof appData === 'undefined' || !appData || !Array.isArray(appData.buildings)) return null;
   var nm = String(t1n.label || '').split(' › ')[0].split(' > ')[0].trim().toLowerCase();
   if(!nm) return null;
-  var hit = appData.buildings.find(function(b){
+  var hits = appData.buildings.filter(function(b){
     return b && b.jobId === jobId && String(b.name || '').trim().toLowerCase() === nm;
   });
-  return hit ? hit.id : null;
+  // Ambiguity guard: two buildings sharing a name must NOT silently cross-link
+  // (the old .find() took the first, mixing their revenue/geo). Only an
+  // unambiguous match resolves.
+  if(hits.length !== 1) return null;
+  var hit = hits[0];
+  // Lazy backfill (Fix 3): link this traced node to the building record so future
+  // reads resolve DIRECTLY by id — retiring the fragile name match — and it
+  // persists on the next saveGraph. Only in the unambiguous case above.
+  try { if(!t1n.data) t1n.data = {}; if(t1n.data.id == null) t1n.data.id = hit.id; } catch(e){}
+  return hit.id;
 }
 function matrixPhasesForT1(t1n){
   if(!t1n || t1n.type !== 't1') return [];
