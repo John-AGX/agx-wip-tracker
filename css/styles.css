@@ -35,6 +35,10 @@
                27+ inline styles as the var(--card-bg, #141419) fallback;
                defining it here lets light mode override that fallback. */
             --card-bg: #141419;
+            /* Elevated panel surface (filter drawer, columns popover). Was
+               only ever the #12141f literal fallback -> stayed dark in light
+               mode. Define it per-theme so those surfaces follow the theme. */
+            --panel-bg: #12141f;
             --bg-dark: #0b0b0e;
             --shadow: rgba(0,0,0,0.3);
             --overlay-light: rgba(255,255,255,0.06);
@@ -79,6 +83,9 @@
                inputs that hardcoded var(--card-bg, #141419) become
                readable instead of falling back to the dark literal. */
             --card-bg: #ffffff;
+            /* Light drawer/popover — white to match the white-on-white
+               reference (hairline borders separate the inputs). */
+            --panel-bg: #ffffff;
             --bg-dark: #e5e7eb;
             --shadow: rgba(0,0,0,0.1);
             --overlay-light: rgba(0,0,0,0.04);
