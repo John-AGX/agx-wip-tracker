@@ -3278,7 +3278,13 @@ async function resolveSessionForChat({ sessionId, currentContext, userId, organi
             sessionKind: 'deal_thread',
             lineageRoot: resolved.lineage_root
           });
-          const dealLbl = 'Deal · ' + String(resolved.lineage_root);
+          // Readable sidebar label from the surface the user is on (the client
+          // sends entity_label in current_context), falling back to the raw
+          // lineage id. No extra query — only runs once, at mint.
+          const dealNm = (currentContext && currentContext.entity_label)
+            ? String(currentContext.entity_label).slice(0, 80)
+            : String(resolved.lineage_root);
+          const dealLbl = 'Deal · ' + dealNm;
           await pool.query(`UPDATE ai_sessions SET label = COALESCE(label, $2) WHERE id = $1`, [fresh.id, dealLbl]);
           if (!fresh.label) fresh.label = dealLbl;
           fresh._freshlyCreated = true;
