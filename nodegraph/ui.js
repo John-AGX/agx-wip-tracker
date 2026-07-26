@@ -3180,13 +3180,24 @@ var _inspJobKey=null, _inspFilesHandle=null;
 // render (not gated by the job-detail build key) so late-settling node-graph
 // numbers (pctComplete / revenue / profit) land instead of freezing at $0.
 function refreshInspMetrics(){
-  // Repaint the Scopes panel alongside the tiles. renderInspectorJobDetail is
-  // KEYED (builds #insp-phases once, at first paint), but a job-level scope's %
-  // derives from building units that often load AFTER that paint — so without
-  // this the rows freeze at the stale stored % (e.g. 100% while the units say
-  // 29%). Cheap (a couple of rows); guard against clobbering a focused inline
-  // input mid-edit. Before the tiles-host early-return so it fires regardless.
-  try{ if(typeof window.renderOverviewPhasesInto==='function'){ var _ipx=document.getElementById('insp-phases'); if(_ipx && !_ipx.querySelector('input:focus')) window.renderOverviewPhasesInto(_ipx, E.job()); } }catch(e){}
+  // Repaint the Scopes panel + Building cards alongside the tiles.
+  // renderInspectorJobDetail is KEYED (builds #insp-phases / #insp-buildings once,
+  // at first paint), but a building's % (and a job-level scope's %) derive from
+  // building units that often load AFTER that paint — so without this they freeze
+  // at the stale first value (e.g. 0.0% / 100% while the units say 100% / 29%).
+  // Before the tiles-host early-return so it fires regardless of that host.
+  try{
+    var _jid=E.job();
+    // Scopes: cheap (a couple of rows); only skip if an inline input is focused.
+    if(typeof window.renderOverviewPhasesInto==='function'){ var _ipx=document.getElementById('insp-phases'); if(_ipx && !_ipx.querySelector('input:focus')) window.renderOverviewPhasesInto(_ipx, _jid); }
+    // Building cards: skip if a money-line drill-down is expanded (a full rebuild
+    // would collapse it) or an input is focused — by then the data has settled.
+    if(typeof window.renderJobBuildings==='function'){
+      var _ibx=document.getElementById('insp-buildings');
+      var _expanded=_ibx && Array.prototype.some.call(_ibx.querySelectorAll('.p86-mline-body'),function(b){return b.style.display && b.style.display!=='none';});
+      if(_ibx && !_expanded && !_ibx.querySelector('input:focus')) window.renderJobBuildings(_jid,'insp-buildings');
+    }
+  }catch(e){}
   var host=document.getElementById('ng-insp-metrics'); if(!host) return;
   var jid=E.job();
   var w=(typeof window.getJobWIP==='function')?(window.getJobWIP(jid)||{}):{};
