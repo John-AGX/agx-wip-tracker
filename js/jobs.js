@@ -4143,9 +4143,129 @@ function renderJobsMain() {
         // allocation matrix already shows per scope AND per building. One
         // allocation surface, and the tier is called Scopes now, not Phases.
         // Kept as a clearing no-op so its several call sites stay harmless.
+        // RE-LIT (scope rework, Slice 1): a lean Scopes panel — reconciliation
+        // strip + a scope list (name · Rev · Cost · Profit · %, with a per-row
+        // Edit pencil) + the ONE Scopes × Buildings allocation matrix. Written
+        // fresh (per John's decision) — it deliberately OMITS the retired
+        // per-building instance rows that duplicated the matrix. Data model stays
+        // `phase`; labels read "Scope". Delete + Manage land guarded in Slice 2.
         function renderOverviewPhasesInto(container, jobId, phases) {
-            if (container) container.innerHTML = '';
-            pruneEmptyUnassignedPhases(jobId);   // keep the self-heal this used to run
+            if (!container) return;
+            // Self-heal: drop empty "Unassigned" remnants + mirror into our list.
+            var _pruned = pruneEmptyUnassignedPhases(jobId);
+            if (_pruned && _pruned.length) {
+                var _rm = {}; _pruned.forEach(function (id) { _rm[id] = 1; });
+                phases = (phases || []).filter(function (p) { return !_rm[p.id]; });
+                if (typeof saveData === 'function') saveData();
+            }
+            if (!phases) phases = (appData.phases || []).filter(function (p) { return p.jobId === jobId; });
+
+            var phaseGroups = {};
+            phases.forEach(function (p) {
+                var key = p.phase || 'Unnamed';
+                if (!phaseGroups[key]) phaseGroups[key] = [];
+                phaseGroups[key].push(p);
+            });
+            var groupKeys = Object.keys(phaseGroups).sort();
+            var totalRev = 0, totalCost = 0;
+            groupKeys.forEach(function (k) {
+                phaseGroups[k].forEach(function (r) {
+                    totalRev += phaseRevenue(r);
+                    totalCost += (r.materials || 0) + (r.labor || 0) + (r.sub || 0) + (r.equipment || 0);
+                });
+            });
+            var totalProfit = totalRev - totalCost;
+
+            // Contract-reconciliation strip (behavior unchanged from the prior card).
+            var _recon = getJobBudgetRecon(jobId);
+            var reconHTML = '';
+            if (_recon.contract > 0) {
+                var _pctA = Math.max(0, Math.min(100, Math.round(_recon.onBuildings / _recon.contract * 100)));
+                var _barCol = _recon.full ? 'var(--green)' : (_recon.over ? 'var(--red)' : 'var(--orange,#e0a458)');
+                var _state = _recon.full ? 'fully allocated ✓' : (_recon.over ? ('over by ' + formatCurrency(-_recon.gap) + ' ⚠') : (formatCurrency(_recon.gap) + ' unallocated'));
+                var _anyFillable = _recon.hasBuildings && groupKeys.some(function (n) { return getPhaseLandedOnBuildings(jobId, n) <= 0.5; });
+                var _fillBtn = (!_recon.full && !_recon.over && _anyFillable)
+                    ? '<button class="ee-btn" style="font-size:11px;padding:3px 10px;white-space:nowrap;background:var(--accent);color:#fff;border-color:var(--accent);" onclick="onDistributeContract(this)" title="Split the unallocated contract evenly across scopes that have not reached buildings yet, then spread each across its buildings by units/levels">&#9889; Auto-fill ' + formatCurrency(_recon.gap) + '</button>'
+                    : '';
+                var _unNote = (_recon.unassigned > 0.5) ? '<span style="font-size:10.5px;color:var(--orange,#e0a458);white-space:nowrap;" title="Scope budget parked on the job level, not yet on a building">' + formatCurrency(_recon.unassigned) + ' on Unassigned</span>' : '';
+                var _noBldgNote = (!_recon.hasBuildings) ? '<span style="font-size:10.5px;color:var(--text-dim);white-space:nowrap;">add buildings to allocate</span>' : '';
+                reconHTML =
+                    '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0 0 8px;padding:7px 10px;border:1px solid var(--border);border-radius:8px;background:var(--card-bg,#141419);">' +
+                        '<span style="font-size:11.5px;color:var(--text-dim);white-space:nowrap;">Contract <b style="color:var(--text);font-family:monospace;">' + formatCurrency(_recon.contract) + '</b></span>' +
+                        '<div style="flex:1;min-width:100px;height:7px;border-radius:4px;background:var(--overlay-light,rgba(255,255,255,0.07));overflow:hidden;"><div style="height:100%;width:' + _pctA + '%;background:' + _barCol + ';"></div></div>' +
+                        '<span style="font-size:11.5px;color:' + _barCol + ';font-weight:600;white-space:nowrap;">' + formatCurrency(_recon.onBuildings) + ' on buildings · ' + _state + '</span>' +
+                        _unNote + _noBldgNote + _fillBtn +
+                    '</div>';
+            }
+
+            var titleHTML =
+                '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;gap:10px;flex-wrap:wrap;">' +
+                    '<h3 style="font-size:13px;margin:0;">Scopes (' + groupKeys.length + ')</h3>' +
+                    '<div style="display:flex;align-items:center;gap:10px;">' +
+                        '<div style="font-size:12px;color:var(--text-dim);">Rev: <b style="color:var(--green);">' + formatCurrency(totalRev) + '</b> &nbsp; Cost: <b>' + formatCurrency(totalCost) + '</b> &nbsp; Profit: <b style="color:' + (totalProfit >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(totalProfit) + '</b></div>' +
+                        '<button class="ee-btn ghost" style="font-size:12px;padding:3px 10px;white-space:nowrap;" onclick="addJobLevelPhase(\'' + escapeHTML(jobId) + '\')">+ Add scope</button>' +
+                    '</div>' +
+                '</div>' + reconHTML;
+
+            if (groupKeys.length === 0) {
+                container.innerHTML = titleHTML +
+                    '<div style="padding:12px;text-align:center;color:var(--text-dim);font-size:12px;">No scopes yet. Click <b>+ Add scope</b> above to create one, or split the seeded Base Contract.</div>';
+                return;
+            }
+
+            // Lean scope rows: one per scope name (no per-building instance rows —
+            // that breakdown is the matrix's job). Pencil opens the editor.
+            var rowsHTML = groupKeys.map(function (phaseName) {
+                var phaseList = phaseGroups[phaseName];
+                var revTotal = phaseList.reduce(function (s, p) { return s + phaseRevenue(p); }, 0);
+                var costTotal = phaseList.reduce(function (s, p) { return s + (p.materials || 0) + (p.labor || 0) + (p.sub || 0) + (p.equipment || 0); }, 0);
+                var profitTotal = revTotal - costTotal;
+                var avgPct = Math.round(phaseList.reduce(function (s, p) { return s + (p.pctComplete || 0); }, 0) / phaseList.length);
+                var repId = phaseList[0].id;                       // representative record for quick-edit
+                var anyLocked = phaseList.some(function (p) { return p.locked === true; });
+                return '<tr class="ph-row" style="border-bottom:1px solid var(--overlay-light,rgba(255,255,255,0.04));">' +
+                    '<td style="white-space:nowrap;padding:6px 10px;">' +
+                        (anyLocked ? '<span title="Locked" style="color:var(--purple,#b48be0);margin-right:5px;">&#128274;</span>' : '') +
+                        '<strong style="color:var(--text,#fff);font-size:13px;">' + escapeHTML(phaseName) + '</strong>' +
+                    '</td>' +
+                    '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-size:12px;color:var(--text-dim,#aaa);">' + phaseList.length + '</td>' +
+                    '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-family:\'SF Mono\',monospace;font-size:13px;color:var(--green);font-weight:600;">' + formatCurrency(revTotal) + '</td>' +
+                    '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-family:\'SF Mono\',monospace;font-size:13px;color:var(--orange);font-weight:600;">' + formatCurrency(costTotal) + '</td>' +
+                    '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-family:\'SF Mono\',monospace;font-size:13px;font-weight:600;color:' + (profitTotal >= 0 ? 'var(--green)' : 'var(--red)') + ';">' + formatCurrency(profitTotal) + '</td>' +
+                    '<td class="num" style="text-align:right;white-space:nowrap;padding:6px 10px;font-family:\'SF Mono\',monospace;font-size:13px;font-weight:700;color:var(--accent);">' + avgPct + '%</td>' +
+                    '<td style="text-align:right;white-space:nowrap;padding:6px 10px;">' +
+                        '<button class="ee-btn ghost" title="Edit scope" style="font-size:12px;padding:2px 8px;" onclick="editPhase(\'' + escapeHTML(repId) + '\')">&#x270F;&#xFE0F;</button>' +
+                    '</td>' +
+                '</tr>';
+            }).join('');
+
+            var scopeTable =
+                '<div style="border:1px solid var(--border,#333);border-radius:10px;overflow-x:auto;background:var(--card-bg,#141419);">' +
+                    '<table style="width:100%;border-collapse:collapse;table-layout:auto;">' +
+                        '<thead style="background:var(--overlay-light,rgba(255,255,255,0.02));border-bottom:1px solid var(--border,#333);"><tr>' +
+                            thCell('Scope', 'left') + thCell('Instances', 'right') + thCell('Revenue', 'right') +
+                            thCell('Cost', 'right') + thCell('Profit', 'right') + thCell('Avg %', 'right') + thCell('', 'right') +
+                        '</tr></thead>' +
+                        '<tbody>' + rowsHTML + '</tbody>' +
+                    '</table>' +
+                '</div>';
+
+            // The wide Scopes × Buildings matrix must render in ONE surface only.
+            // On the Site-Plan route the classic overview (#job-overview-phases) is
+            // still mounted behind the map overlay and would render a second copy,
+            // so any background host gets just the scope list (no matrix).
+            var _bldgs = (appData.buildings || []).filter(function (b) { return b.jobId === jobId; });
+            var _ng = document.getElementById('nodeGraphTab');
+            var _onMap = !!_ng || /job-site-map/i.test((location && location.pathname) || '');
+            var _suppressMatrix = _onMap && !(_ng && _ng.contains(container));
+            if (_bldgs.length === 0 || _suppressMatrix) {
+                container.innerHTML = titleHTML + scopeTable;
+            } else {
+                container.innerHTML = titleHTML + scopeTable +
+                    '<div style="margin-top:10px;"></div><div class="phase-matrix-host"></div>';
+                var _host = container.querySelector('.phase-matrix-host');
+                try { renderPhaseMatrixInto(_host, jobId); } catch (e) {}
+            }
         }
         function _retiredRenderOverviewPhasesInto(container, jobId, phases) {
             container.innerHTML = '';
