@@ -14,7 +14,7 @@
 (function () {
   'use strict';
 
-  var VIEWS = ['assemblies', 'studio', 'codes', 'parametric'];
+  var VIEWS = ['assemblies', 'studio', 'codes', 'parametric', 'consolidate'];
   var DEFAULT_VIEW = 'assemblies';
   var _view = null;
   var _built = false;
@@ -61,6 +61,7 @@
         '<div class="asmstudio-section" id="asmstudio-section-studio" style="display:none;"></div>' +
         '<div class="asmstudio-section" id="asmstudio-section-codes" style="display:none;"></div>' +
         '<div class="asmstudio-section" id="asmstudio-section-parametric" style="display:none;"></div>' +
+        '<div class="asmstudio-section" id="asmstudio-section-consolidate" style="display:none;"></div>' +
       '</div>';
     _built = true;
     var persisted = null;
@@ -155,6 +156,15 @@
         '<div id="asmstudio-param-list" style="margin-top:12px;"></div>';
       if (window.p86Assemblies && typeof window.p86Assemblies.renderList === 'function') {
         window.p86Assemblies.renderList('asmstudio-param', { parametricOnly: true });
+      }
+    } else if (view === 'consolidate') {
+      // Materials Consolidation — fold catalog "likes" into canonical parts.
+      // Self-contained panel (js/materials-consolidate.js); it fetches its own
+      // candidates and owns its markup, so we just hand it the section host.
+      if (window.p86Consolidate && typeof window.p86Consolidate.render === 'function') {
+        window.p86Consolidate.render('asmstudio-section-consolidate');
+      } else {
+        host.innerHTML = placeholder('Consolidate', 'The consolidation panel is still loading — try again in a moment.');
       }
     }
   }
