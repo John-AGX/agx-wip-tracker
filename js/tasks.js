@@ -150,7 +150,7 @@
       // List
       '.p86-task-list{display:flex;flex-direction:column;gap:2px;}' +
       '.p86-task-item{display:flex;align-items:flex-start;gap:10px;padding:9px 8px;border-radius:8px;border:1px solid transparent;cursor:default;}' +
-      '.p86-task-item:hover{background:var(--hover,#f8fafc);}' +
+      '.p86-task-item:hover{background:var(--hover,var(--surface2,#202027));}' +
       '.p86-task-check{flex:0 0 auto;width:20px;height:20px;margin-top:1px;border-radius:999px;border:1.6px solid var(--border-strong,#cbd5e1);background:transparent;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;padding:0;color:#fff;transition:background .12s;}' +
       '.p86-task-check.done{background:#16a34a;border-color:#16a34a;}' +
       '.p86-task-check.done::after{content:"";width:5px;height:9px;border:solid #fff;border-width:0 2px 2px 0;transform:rotate(45deg);margin-top:-2px;}' +
@@ -200,7 +200,7 @@
       // Appointments subsection (entity-page calendar events)
       '.p86-appt-list{display:flex;flex-direction:column;gap:2px;}' +
       '.p86-appt-row{display:flex;align-items:flex-start;gap:10px;width:100%;text-align:left;padding:9px 8px;border-radius:8px;border:1px solid transparent;background:transparent;color:inherit;font:inherit;cursor:pointer;}' +
-      '.p86-appt-row:hover{background:var(--hover,#f8fafc);}' +
+      '.p86-appt-row:hover{background:var(--hover,var(--surface2,#202027));}' +
       '.p86-appt-dot{flex:0 0 auto;width:7px;height:7px;border-radius:999px;margin-top:7px;background:#22d3ee;}' +
       '.p86-appt-row.tentative .p86-appt-dot{background:#f59e0b;}' +
       '.p86-appt-row.canceled .p86-appt-dot{background:#9ca3af;}' +
