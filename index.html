@@ -3358,7 +3358,7 @@
          Change Orders tab. Loads after pricing-pipeline (which it
          consumes via window.p86Pricing) and after api.js (which
          carries the window.p86Api.changeOrders wrapper). -->
-    <script src="js/change-order-editor.js?v=12"></script>
+    <script src="js/change-order-editor.js?v=13"></script>
     <script src="js/materials-drawer.js?v=12"></script>
     <script src="js/estimate-preview.js?v=15"></script>
     <script src="js/bt-export.js?v=6b"></script>
@@ -3366,7 +3366,7 @@
          BEFORE ai-panel.js so window.PayloadArtifact exists when the
          panel mounts. -->
     <script src="js/payload-artifact.js?v=8"></script>
-    <script src="js/ai-panel.js?v=156"></script>
+    <script src="js/ai-panel.js?v=157"></script>
     <!-- Save-from-chat bridge (Workstream ③). Owns p86SaveCodeBlock /
          p86SaveResponse / p86SaveToPicker, called by inline onclick
          handlers in ai-panel.js renderMarkdown / renderBubble. Loads
@@ -3427,7 +3427,7 @@
         </button>
         <span class="ng-ribbon-sep"></span>
         <!-- "+ Add" — opens the searchable node-type menu (replaces the old left palette) -->
-        <button class="ng-tbtn ng-ribbon-btn ng-add-node-btn" title="Add a node — building, scope, cost, sub, PO, invoice, change order…">
+        <button class="ng-tbtn ng-ribbon-btn ng-add-node-btn" title="Add — building, scope, cost, sub, PO, invoice, change order…">
           <span class="ng-ribbon-icon">+</span>
           <span class="ng-ribbon-label">Add</span>
         </button>
@@ -3441,7 +3441,7 @@
             </span>
           </div>
           <!-- Row 2: subtitle -->
-          <span class="ng-topbar-sub">Visual Cost Flow Editor</span>
+          <span class="ng-topbar-sub">Buildings · scopes · costs on the map</span>
         </div>
         <span class="ng-topbar-spacer"></span>
         <!-- ── Sleek ribbon (2026-07-04) ─────────────────────────────
@@ -3489,19 +3489,19 @@
         <!-- Panels + overflow cluster -->
         <div class="ng-ribbon-group">
           <div class="ng-ribbon-group-buttons">
-            <button class="ng-tbtn ng-ribbon-btn" id="ngLayersBtn" title="Layers — toggle photo pins, task pins, wires, node chips, minimap">
+            <button class="ng-tbtn ng-ribbon-btn" id="ngLayersBtn" title="Layers — toggle photo pins, task pins, minimap">
               <span class="ng-ribbon-icon" data-p86-icon="eye"></span>
               <span class="ng-ribbon-label">Layers</span>
             </button>
-            <button class="ng-tbtn ng-ribbon-btn ng-audit-btn" id="ngAuditBtn" title="Audit — connectivity + completeness check (orphan nodes, missing %complete, unlinked QB lines, margin drift)">
+            <button class="ng-tbtn ng-ribbon-btn ng-audit-btn" id="ngAuditBtn" title="Audit — completeness check (orphaned items, missing %complete, unlinked QB lines, margin drift)">
               <span class="ng-ribbon-icon" data-p86-icon="magnifying-glass"></span>
               <span class="ng-ribbon-label">Audit<span id="ngAuditBadge" style="display:none;margin-left:3px;font-size:9px;padding:1px 5px;border-radius:8px;background:rgba(248,113,113,0.25);color:#f87171;font-weight:700;"></span></span>
             </button>
-            <button class="ng-tbtn ng-ribbon-btn ng-ai-btn" id="ngAskAIBtn" title="Ask 86 — open the chat scoped to this job. Use for audit fixups, cost-link checks, sub/PO/phase wiring, or any "talk through the graph and approve" workflow.">
+            <button class="ng-tbtn ng-ribbon-btn ng-ai-btn" id="ngAskAIBtn" title="Ask 86 — open the chat scoped to this job. Use for audit fixups, cost-link checks, sub/PO/scope allocation, or any "talk through the site plan and approve" workflow.">
               <span class="ng-ribbon-icon" data-p86-icon="sparkle"></span>
               <span class="ng-ribbon-label">86</span>
             </button>
-            <button class="ng-tbtn ng-ribbon-btn" id="ngMoreBtn" title="More — graph ops, layout checkpoints, view modes">
+            <button class="ng-tbtn ng-ribbon-btn" id="ngMoreBtn" title="More — layout, checkpoints, view modes">
               <span class="ng-ribbon-icon">&#x22EF;</span>
               <span class="ng-ribbon-label">More</span>
             </button>
@@ -3521,23 +3521,21 @@
             <span class="ng-ribbon-label">Task pins</span>
           </button>
           <div class="ng-pop-title">Canvas</div>
-          <button type="button" class="ng-pop-check" data-ngl="wires">Wires</button>
-          <button type="button" class="ng-pop-check" data-ngl="nodes">Node chips</button>
           <button type="button" class="ng-pop-check" data-ngl="minimap">Minimap</button>
           <button type="button" class="ng-pop-check" data-ngl="help">Shortcut bar</button>
         </div>
         <!-- More popover: the lower-frequency ribbon tools, re-homed as menu rows -->
         <div id="ngMorePop" class="ng-pop" hidden>
           <div class="ng-pop-title">Graph</div>
-          <button class="ng-tbtn ng-ribbon-btn ng-collapse-all-btn" title="Collapse all nodes">
+          <button class="ng-tbtn ng-ribbon-btn ng-collapse-all-btn" title="Collapse all">
             <span class="ng-ribbon-icon" data-p86-icon="collapse"></span>
             <span class="ng-ribbon-label">Collapse all</span>
           </button>
-          <button class="ng-tbtn ng-ribbon-btn ng-expand-all-btn" title="Expand all nodes">
+          <button class="ng-tbtn ng-ribbon-btn ng-expand-all-btn" title="Expand all">
             <span class="ng-ribbon-icon" data-p86-icon="expand"></span>
             <span class="ng-ribbon-label">Expand all</span>
           </button>
-          <button class="ng-tbtn ng-ribbon-btn ng-arrange-btn" title="Arrange — auto-layout the full tree, or only the selected node's children if one is selected">
+          <button class="ng-tbtn ng-ribbon-btn ng-arrange-btn" title="Arrange — auto-layout the buildings, or only the selected item's children if one is selected">
             <span class="ng-ribbon-icon" data-p86-icon="sparkle"></span>
             <span class="ng-ribbon-label">Arrange</span>
           </button>
@@ -3545,13 +3543,13 @@
             <span class="ng-ribbon-icon">&#x2B1A;</span>
             <span class="ng-ribbon-label">Frame</span>
           </button>
-          <button class="ng-tbtn ng-ribbon-btn ng-sync-btn" title="Sync — add missing nodes from job data without moving existing ones">
+          <button class="ng-tbtn ng-ribbon-btn ng-sync-btn" title="Sync — add missing items from job data without moving existing ones">
             <span class="ng-ribbon-icon" data-p86-icon="refresh"></span>
-            <span class="ng-ribbon-label">Sync nodes</span>
+            <span class="ng-ribbon-label">Sync</span>
           </button>
-          <button class="ng-tbtn ng-ribbon-btn ng-reset-btn" title="Reset — delete graph and rebuild from scratch">
+          <button class="ng-tbtn ng-ribbon-btn ng-reset-btn" title="Reset — rebuild from job data">
             <span class="ng-ribbon-icon" data-p86-icon="reset"></span>
-            <span class="ng-ribbon-label">Reset graph</span>
+            <span class="ng-ribbon-label">Reset</span>
           </button>
           <div class="ng-pop-title">Layout</div>
           <button class="ng-tbtn ng-ribbon-btn ng-snapshot-save-btn" id="ngSnapshotSaveBtn" title="Save Layout — checkpoint the current layout so you can restore to it later">
@@ -3575,11 +3573,11 @@
             <span class="ng-ribbon-icon" data-p86-icon="target"></span>
             <span class="ng-ribbon-label">Focus workspace</span>
           </button>
-          <button class="ng-tbtn ng-ribbon-btn ng-siteplan-btn" id="ngSitePlanBtn" title="Site Plan (beta) — spatial view of this job: buildings as blocks around the central WIP node (toggle)">
+          <button class="ng-tbtn ng-ribbon-btn ng-siteplan-btn" id="ngSitePlanBtn" title="Site Plan — spatial view of this job: buildings on the satellite map (toggle)">
             <span class="ng-ribbon-icon" data-p86-icon="map-pin"></span>
             <span class="ng-ribbon-label">Site Plan</span>
           </button>
-          <button class="ng-tbtn ng-ribbon-btn ng-sat-btn" id="ngSatelliteBtn" title="Satellite (beta) — drop a real satellite basemap under the site plan, centered on the job address (toggle)">
+          <button class="ng-tbtn ng-ribbon-btn ng-sat-btn" id="ngSatelliteBtn" title="Satellite — real satellite basemap under the site plan, centered on the job address (toggle)">
             <span class="ng-ribbon-icon" data-p86-icon="globe"></span>
             <span class="ng-ribbon-label">Satellite</span>
           </button>
@@ -3609,7 +3607,7 @@
           <!-- Re-open tab for the collapsed Inspector (RS-B): slim edge pill on the
                canvas's right edge, shown only when #nodeGraphTab.ng-insp-collapsed. -->
           <button type="button" class="ng-insp-reopen" title="Show editing panel" aria-label="Show inspector">&#8249;&nbsp;Details</button>
-          <div class="ng-help">Drag port &#x2192; port &nbsp;|&nbsp; Scroll zoom &nbsp;|&nbsp; Ctrl + right-click = fit all &nbsp;|&nbsp; Right-click wire = delete &nbsp;|&nbsp; Del = remove node</div>
+          <div class="ng-help">Scroll zoom &nbsp;|&nbsp; Ctrl + right-click = fit all</div>
         </div>
         <div class="ng-inspector">
           <div class="ng-inspector-resize" title="Drag to resize"></div>

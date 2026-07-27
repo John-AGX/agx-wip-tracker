@@ -535,11 +535,13 @@ function p86Ask(message, opts) {
                 '<input type="number" step="1" data-field="roundTo" value="' + escapeAttr(co.roundTo || 0) + '" />' +
               '</label>' +
             '</div>' +
-            // Linked-node chip
+            // Legacy link chip — shown only for old COs still carrying a
+            // node link. New COs allocate to buildings (CO→building), so no
+            // chip appears; the retired "drop a CO node" guidance is gone.
             '<div class="p86-co-link-chip" id="p86CoLinkChip">' +
               (co.linked_node_id
-                ? '<span class="p86-co-link-on">⛓ Wired to node ' + escapeHTML(co.linked_node_id) + '</span>'
-                : '<span class="p86-co-link-off">Not on graph yet — drop a CO node and link this CO from there</span>') +
+                ? '<span class="p86-co-link-on">⛓ Linked (legacy)</span>'
+                : '') +
             '</div>' +
           '</aside>' +
           // Line table
@@ -1015,9 +1017,9 @@ function p86Ask(message, opts) {
     menu.className = 'p86-co-status-menu';
     menu.innerHTML = allowed.map(function(next) {
       var msg = '';
-      if (next === 'approved') msg = '<small>Copies lines to the linked node and impacts WIP.</small>';
+      if (next === 'approved') msg = '<small>Applies the CO to the job and impacts WIP.</small>';
       else if (next === 'applied') msg = '<small>Marks the CO as consumed by the field. Locks edits.</small>';
-      else if (next === 'draft') msg = '<small>Returns to editable state. Linked-node items remain in place; re-approve to refresh them.</small>';
+      else if (next === 'draft') msg = '<small>Returns to editable state; re-approve to re-apply.</small>';
       var label = next === 'draft' ? 'Move back to Draft'
                 : next === 'approved' ? 'Approve (signed by customer)'
                 : 'Mark as Applied';

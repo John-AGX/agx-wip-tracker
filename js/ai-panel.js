@@ -4142,16 +4142,14 @@ function p86Ask(message, opts) {
       localStorage.setItem('p86-ai-trust:job', JSON.stringify(map));
     } catch (e) {}
   }
-  // The four job-side tools available for trust toggling, with friendly
-  // labels for the popover.
+  // The job-side tools available for trust toggling, with friendly labels
+  // for the popover. (The node/wire tools — create_node, delete_node,
+  // set_node_value, wire_nodes — were retired with the node-graph money
+  // model, replaced by the emit_payload_file primitive.)
   var TRUSTABLE_TOOLS = [
-    { name: 'create_node',            label: 'Create a new graph node (t1/t2/cost-bucket/etc.)' },
-    { name: 'delete_node',            label: 'Remove a graph node + its wires (data preserved)' },
-    { name: 'set_phase_pct_complete', label: 'Set phase % complete' },
-    { name: 'set_phase_field',        label: 'Set phase $ field (materials/labor/sub/equip)' },
-    { name: 'set_node_value',         label: 'Set cost node value (mat/labor/gc/other/sub)' },
-    { name: 'wire_nodes',             label: 'Wire two graph nodes' },
-    { name: 'assign_qb_line',         label: 'Assign QB line to a node' }
+    { name: 'set_phase_pct_complete', label: 'Set scope % complete' },
+    { name: 'set_phase_field',        label: 'Set scope $ field (materials/labor/sub/equip)' },
+    { name: 'assign_qb_line',         label: 'Assign QB line' }
   ];
 
   function openTrustPopover(anchorBtn) {
