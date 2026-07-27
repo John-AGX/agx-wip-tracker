@@ -1144,12 +1144,12 @@ async function dispatchEstimate(dbClient, target, refTable, ctx) {
       changes.push(`+${ops.line_adds.length} line(s)`);
     }
     if (Array.isArray(ops.line_edits) && ops.line_edits.length) {
-      applyLineEdits(data, ops.line_edits);
-      changes.push(`~${ops.line_edits.length} line(s)`);
+      const n = applyLineEdits(data, ops.line_edits);
+      changes.push(`~${n} line(s)`);
     }
     if (Array.isArray(ops.line_deletes) && ops.line_deletes.length) {
-      applyLineDeletes(data, ops.line_deletes);
-      changes.push(`-${ops.line_deletes.length} line(s)`);
+      const n = applyLineDeletes(data, ops.line_deletes);
+      changes.push(`-${n} line(s)`);
     }
 
     // Strip computed/runtime fields that should never persist.
@@ -1485,10 +1485,19 @@ function normalizeLineFieldKey(k) {
 
 function applyLineEdits(data, lineEdits) {
   const lines = ensureArray(data, 'lines');
+  let edited = 0;
   for (const edit of lineEdits) {
     const idx = lines.findIndex((l) => l.id === edit.line_id);
     if (idx < 0) throw new Error(`line_id not found: ${edit.line_id}`);
-    const f = edit.fields || {};
+    // The Scribe emits edits FLAT ({line_id, markup, unitCost, description, …});
+    // an earlier shape nested them under `fields`. Accept BOTH: use `fields`
+    // when present, else the edit's own top-level keys. line_id/op/fields/
+    // subgroup_id are control keys (not editable line fields), so they're
+    // excluded — a reprice/rename edit must not silently move the line's scope.
+    const CONTROL = new Set(['line_id', 'op', 'fields', 'subgroup_id']);
+    const f = (edit.fields && typeof edit.fields === 'object')
+      ? edit.fields
+      : Object.fromEntries(Object.entries(edit).filter(([k]) => !CONTROL.has(k)));
     for (const k of Object.keys(f)) {
       // Skip blocked keys; let typed fields coerce gently.
       if (k === 'id' || k === 'estimateId') continue;
@@ -1504,13 +1513,20 @@ function applyLineEdits(data, lineEdits) {
         lines[idx][targetKey] = f[k];
       }
     }
+    edited++;
   }
+  return edited;
 }
 
 function applyLineDeletes(data, lineDeletes) {
   const lines = ensureArray(data, 'lines');
-  const ids = new Set(lineDeletes);
+  // The Scribe emits deletes as objects [{line_id:'…'}]; accept bare id strings
+  // too. Return the count ACTUALLY removed (not the request length) so the apply
+  // summary can't report a phantom deletion.
+  const ids = new Set(lineDeletes.map((d) => (typeof d === 'string' ? d : (d && (d.line_id || d.id)))).filter(Boolean));
+  const before = lines.length;
   data.lines = lines.filter((l) => !ids.has(l.id));
+  return before - data.lines.length;
 }
 
 // ──────────────────────────────────────────────────────────────────
