@@ -233,7 +233,45 @@
       'body.light-mode .p86lw-sub,body.light-mode .p86lw-grpname,body.light-mode .p86lw-lbl .l2,body.light-mode .p86lw-foot{color:#6b6b76;}',
       'body.light-mode .p86lw-amt{color:#44444a;}',
       'body.light-mode .p86lw-del .l1{color:#a33;}',
-      'body.light-mode .p86lw-view{border-color:rgba(0,0,0,0.18);color:#44444a;}'
+      'body.light-mode .p86lw-view{border-color:rgba(0,0,0,0.18);color:#44444a;}',
+      // ── Slice 2: the "document" pane (estimate rendered + rows highlighted) ──
+      '#p86-live-pane{position:fixed;left:300px;bottom:24px;width:560px;max-width:calc(100vw - 320px);',
+      'max-height:82vh;z-index:99997;font-family:inherit;color:#e7e7ea;pointer-events:none;}',
+      '#p86-live-pane .p86lp-card{pointer-events:auto;display:flex;flex-direction:column;max-height:82vh;',
+      'background:#16161c;border:1px solid rgba(255,255,255,0.10);border-radius:16px;',
+      'box-shadow:0 18px 60px rgba(0,0,0,0.5);overflow:hidden;transform:translateY(10px);opacity:0;',
+      'transition:transform .24s ease,opacity .24s ease;}',
+      '#p86-live-pane .p86lp-card.in{transform:none;opacity:1;}',
+      '.p86lp-head{display:flex;align-items:center;gap:10px;padding:13px 15px;border-bottom:1px solid rgba(255,255,255,0.08);flex:none;}',
+      '.p86lp-av{width:26px;height:26px;border-radius:50%;background:#378add;color:#fff;font-size:12px;font-weight:600;',
+      'display:flex;align-items:center;justify-content:center;flex:none;}',
+      '.p86lp-ttl{font-size:14px;font-weight:600;line-height:1.2;} .p86lp-sub{font-size:11px;color:#9a9aa5;margin-top:1px;}',
+      '.p86lp-x{margin-left:auto;background:none;border:none;color:#9a9aa5;cursor:pointer;font-size:17px;line-height:1;padding:2px 5px;}',
+      '.p86lp-x:hover{color:#e7e7ea;}',
+      '.p86lp-body{overflow-y:auto;padding:6px 4px 10px;}',
+      '.p86lp-sec{font-size:11px;font-weight:500;color:#9a9aa5;padding:9px 14px 5px;}',
+      '.p86lp-row{display:grid;grid-template-columns:1fr 44px 30px 74px 84px;align-items:center;gap:6px;',
+      'padding:7px 12px;font-size:12px;border-radius:8px;color:#c9c9d2;margin:2px 8px;}',
+      '.p86lp-row .r-d{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;}',
+      '.p86lp-row span:not(.r-d){text-align:right;font-variant-numeric:tabular-nums;}',
+      '.p86lp-row.add{background:rgba(29,158,117,0.14);color:#d6f5e9;}',
+      '.p86lp-row.edit{background:rgba(186,117,23,0.15);}',
+      '.p86lp-del{display:flex;align-items:center;gap:7px;padding:6px 12px;margin:2px 8px;border-radius:8px;',
+      'background:rgba(226,75,74,0.13);color:#e88;font-size:12px;}',
+      '.p86lp-del .r-d{text-decoration:line-through;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
+      '.p86lp-card .chg{opacity:0;transform:translateX(-7px);transition:opacity .25s ease,transform .25s ease;}',
+      '.p86lp-card .chg.on{opacity:1;transform:none;}',
+      '.p86lp-tag{font-size:9px;font-weight:600;padding:1px 6px;border-radius:9px;margin-left:7px;}',
+      '.p86lp-tag.tadd{background:#1d9e75;color:#04241a;} .p86lp-tag.tedit{background:#d98a1f;color:#3a2405;}',
+      '.p86lp-was{color:#9a9aa5;text-decoration:line-through;margin-right:5px;}',
+      '.p86lp-foot{display:flex;align-items:center;gap:10px;padding:10px 15px;border-top:1px solid rgba(255,255,255,0.08);',
+      'font-size:11px;color:#9a9aa5;flex:none;}',
+      'body.light-mode #p86-live-pane{color:#1a1a1f;}',
+      'body.light-mode #p86-live-pane .p86lp-card{background:#fff;border-color:rgba(0,0,0,0.10);box-shadow:0 18px 60px rgba(0,0,0,0.16);}',
+      'body.light-mode .p86lp-head,body.light-mode .p86lp-foot{border-color:rgba(0,0,0,0.08);}',
+      'body.light-mode .p86lp-sub,body.light-mode .p86lp-sec,body.light-mode .p86lp-foot{color:#6b6b76;}',
+      'body.light-mode .p86lp-row{color:#33333a;} body.light-mode .p86lp-row.add{color:#0f6e56;}',
+      '@media (max-width:900px){#p86-live-pane{left:8px;right:8px;bottom:8px;width:auto;max-width:none;}}'
     ].join('');
     var st = document.createElement('style');
     st.id = 'p86lw-style';
@@ -361,9 +399,116 @@
   function dismiss() {
     if (collapseTimer) clearTimeout(collapseTimer);
     if (root) { root.remove(); root = null; }
+    dismissPane();
   }
 
   // ── event wiring ─────────────────────────────────────────────────────────
+  // ── Slice 2: the estimate "document" pane ────────────────────────────────
+  // Renders the whole estimate (from the after-snapshot) read-only and
+  // highlights the changed rows IN PLACE — the "watch Scribe work on the doc"
+  // surface. Deletes (absent from `after`) are listed under a Removed group.
+  var paneRoot = null, paneTimer = null;
+  function ensurePane() {
+    ensureStyle();
+    if (paneRoot && document.body.contains(paneRoot)) return;
+    paneRoot = document.createElement('div');
+    paneRoot.id = 'p86-live-pane';
+    paneRoot.innerHTML = '<div class="p86lp-card"></div>';
+    document.body.appendChild(paneRoot);
+  }
+  function dismissPane() {
+    if (paneTimer) clearTimeout(paneTimer);
+    if (paneRoot) { paneRoot.remove(); paneRoot = null; }
+  }
+  function showEstimatePane(entry, diff) {
+    ensurePane();
+    var before = entry.before, after = entry.after;
+    var bl = getLines(before), al = getLines(after);
+    var bById = Object.create(null);
+    bl.forEach(function (l) { if (l && l.id != null) bById[l.id] = l; });
+    var aIds = Object.create(null);
+    al.forEach(function (l) { if (l && l.id != null) aIds[l.id] = true; });
+    var name = entityName('estimate', entry.id, before, after);
+
+    var rows = '';
+    al.forEach(function (l) {
+      if (isHeaderLine(l)) { rows += '<div class="p86lp-sec">' + esc(l.description || '') + '</div>'; return; }
+      var b = bById[l.id];
+      var isAdd = !b;
+      var changes = (b && !isAdd) ? lineFieldChanges(b, l) : [];
+      var isEdit = !isAdd && changes.length > 0;
+      var cls = isAdd ? 'add' : (isEdit ? 'edit' : '');
+      var chg = (isAdd || isEdit) ? ' chg' : '';
+      var tag = isAdd ? '<span class="p86lp-tag tadd">new</span>'
+                      : (isEdit ? '<span class="p86lp-tag tedit">edited</span>' : '');
+      var c = lineCost(l);
+      var ucCell = (num(l.unitCost) == null) ? '' : usd(num(l.unitCost));
+      if (isEdit && b && num(b.unitCost) !== num(l.unitCost)) {
+        ucCell = '<span class="p86lp-was">' + usd(num(b.unitCost)) + '</span>' + usd(num(l.unitCost));
+      }
+      rows += '<div class="p86lp-row ' + cls + chg + '">' +
+        '<span class="r-d">' + esc(l.description || '') + tag + '</span>' +
+        '<span>' + (l.qty == null || l.qty === '' ? '' : esc(l.qty)) + '</span>' +
+        '<span>' + esc(l.unit || '') + '</span>' +
+        '<span>' + ucCell + '</span>' +
+        '<span>' + (c != null ? usd(c) : '') + '</span>' +
+        '</div>';
+    });
+    var dels = bl.filter(function (l) { return l && !isHeaderLine(l) && l.id != null && !aIds[l.id]; });
+    if (dels.length) {
+      rows += '<div class="p86lp-sec">Removed</div>';
+      dels.forEach(function (l) {
+        rows += '<div class="p86lp-del chg"><span style="font-weight:700">−</span>' +
+          '<span class="r-d">' + esc(l.description || 'line') + '</span>' +
+          '<span style="margin-left:auto;font-variant-numeric:tabular-nums">' +
+          (lineCost(l) != null ? usd(lineCost(l)) : '') + '</span></div>';
+      });
+    }
+
+    var summ = [];
+    var nAdd = diff.ops.filter(function (o) { return o.kind === 'add'; }).length;
+    var nEdit = diff.ops.filter(function (o) { return o.kind === 'edit'; }).length;
+    if (nAdd) summ.push('+' + nAdd + ' added');
+    if (nEdit) summ.push(nEdit + ' edited');
+    if (dels.length) summ.push('−' + dels.length + ' removed');
+    var imp = diff.impact || 0;
+    var impHtml = imp ? '<span style="margin-left:auto;font-weight:600;color:' +
+      (imp > 0 ? '#1d9e75' : '#e24b4a') + '">' + (imp > 0 ? '+' : '−') + usd(Math.abs(imp)) + '</span>' : '';
+
+    var card = paneRoot.querySelector('.p86lp-card');
+    card.innerHTML =
+      '<div class="p86lp-head"><span class="p86lp-av">S</span>' +
+      '<div><div class="p86lp-ttl">Scribe <span class="p86lp-verb">is writing</span></div>' +
+      '<div class="p86lp-sub">' + esc(name) + '</div></div>' +
+      '<span class="p86lw-dot" style="margin-left:4px"></span>' +
+      '<button class="p86lp-x" title="Dismiss">×</button></div>' +
+      '<div class="p86lp-body">' + rows + '</div>' +
+      '<div class="p86lp-foot">' + esc(summ.join(' · ')) +
+      ' <button class="p86lw-view" data-open="' + esc(entry.id) + '">Open estimate</button>' + impHtml + '</div>';
+
+    card.querySelector('.p86lp-x').addEventListener('click', dismissPane);
+    var ob = card.querySelector('.p86lw-view[data-open]');
+    if (ob) ob.addEventListener('click', function () {
+      try {
+        if (window.openEstimate) window.openEstimate(entry.id);
+        else if (window.router && window.router.navigate) window.router.navigate('estimate/' + entry.id);
+      } catch (e) { console.warn('[live-writer] open failed', e); }
+    });
+
+    requestAnimationFrame(function () { card.classList.add('in'); });
+    var chgEls = card.querySelectorAll('.chg');
+    var i = 0;
+    (function reveal() {
+      if (i < chgEls.length) { chgEls[i].classList.add('on'); i++; setTimeout(reveal, STAGGER_MS); }
+      else {
+        var v = card.querySelector('.p86lp-verb'); if (v) v.textContent = 'wrote';
+        var d = card.querySelector('.p86lp-head .p86lw-dot'); if (d) { d.style.animation = 'none'; d.style.background = '#1d9e75'; }
+        if (paneTimer) clearTimeout(paneTimer);
+        paneTimer = setTimeout(dismissPane, COLLAPSE_MS + 8000);
+      }
+    })();
+  }
+
   // Render a changeset array; returns true if anything was shown. Dedupes by
   // payload id so the client event and the poller can't double-render one apply.
   function renderChangeset(cs, payloadId) {
@@ -372,9 +517,13 @@
     var groups = cs.map(diffEntry).filter(function (g) { return g && g.ops && g.ops.length; });
     if (!groups.length) return false;
     if (payloadId) _shown[payloadId] = true;
-    var meta = {};
-    if (groups.length === 1 && cs.length === 1 && cs[0].entity_type === 'estimate') meta.estimateId = cs[0].id;
-    show(groups, meta);
+    // A single estimate write gets the rich document pane (Slice 2); anything
+    // else (multi-entity, non-estimate field edits) gets the compact strip.
+    if (cs.length === 1 && cs[0].entity_type === 'estimate' && cs[0].after && getLines(cs[0].after).length) {
+      showEstimatePane(cs[0], groups[0]);
+    } else {
+      show(groups, {});
+    }
     return true;
   }
 
@@ -451,10 +600,7 @@
   // ── public API (also handy for manual verification) ──────────────────────
   window.p86LiveWriter = {
     /* Render straight from an apply_changeset array (bypasses the event). */
-    render: function (changeset, meta) {
-      var groups = (changeset || []).map(diffEntry).filter(function (g) { return g && g.ops && g.ops.length; });
-      if (groups.length) show(groups, meta || {});
-    },
+    render: function (changeset) { return renderChangeset(changeset, null); },
     dismiss: dismiss,
     _diffEntry: diffEntry
   };
