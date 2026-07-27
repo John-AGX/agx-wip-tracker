@@ -418,7 +418,8 @@
           var dr = await fetch('/api/payloads/' + encodeURIComponent(p.id), { credentials: 'include', headers: authHeaders() });
           if (!dr.ok) continue;
           var det = await dr.json();
-          var cs = det.apply_changeset;
+          // GET /:id nests the row under .payload (res.json({ payload: row }))
+          var cs = (det && det.payload) ? det.payload.apply_changeset : (det && det.apply_changeset);
           delete _shown[p.id];            // let renderChangeset re-claim + actually render
           renderChangeset(cs, p.id);
         } catch (_) {}
