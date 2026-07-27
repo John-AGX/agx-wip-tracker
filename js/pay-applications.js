@@ -174,7 +174,19 @@
       // Math.abs so a deductive (credit) CO still bills; a true $0 CO is skipped.
       if (Math.abs(sell) <= 0.005) return;
       var desc = String(c.co_number || 'CO') + ' — ' + String(c.title || 'Change Order');
-      var allocs = Array.isArray(c.buildingAllocations) ? c.buildingAllocations : [];
+      // Rider CO: its split mirrors the ridden scope (stores no buildingAllocations
+      // of its own) — derive per-building shares via coCompletion so it still bills
+      // as per-building CHANGES lines. Standalone/legacy read stored allocations.
+      var _mode = (c.completionMode || (c.data && c.data.completionMode)) || '';
+      var allocs;
+      if (_mode === 'rider' && typeof window.coCompletion === 'function') {
+        var _comp = window.coCompletion(c, c.job_id);
+        allocs = (_comp && _comp.byBuilding) ? Object.keys(_comp.byBuilding).map(function (bid) {
+          return { buildingId: bid, pct: sell !== 0 ? (_comp.byBuilding[bid].share / sell * 100) : 0 };
+        }) : [];
+      } else {
+        allocs = Array.isArray(c.buildingAllocations) ? c.buildingAllocations : [];
+      }
       var placed = 0;
       allocs.forEach(function (a) {
         // Only a building that still exists on this job; a share pointed at a

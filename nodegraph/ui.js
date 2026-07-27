@@ -5068,6 +5068,16 @@ function bldgGeoFlag(b){
 // lands on no building line, surfaced so it can't silently miss the AIA.
 function coBuildingShares(c){
   var sell = (typeof window.coSellAmount==='function') ? Number(window.coSellAmount(c)||0) : 0;
+  // Rider mode: the money split mirrors the ridden scope EXACTLY — derive it from
+  // coCompletion (which reads the scope's per-building revenue). A rider stores no
+  // buildingAllocations of its own, so without this it would read as unallocated.
+  var _mode = (c && (c.completionMode || (c.data && c.data.completionMode))) || '';
+  if (_mode === 'rider' && typeof window.coCompletion === 'function') {
+    var _comp = window.coCompletion(c, c && c.job_id);
+    var _rb = {}, _rp = 0;
+    if (_comp && _comp.byBuilding) Object.keys(_comp.byBuilding).forEach(function(bid){ var s = Number(_comp.byBuilding[bid].share) || 0; if (s) { _rb[bid] = s; _rp += s; } });
+    return { sell: sell, byBuilding: _rb, placed: _rp, unallocated: (sell - _rp) };
+  }
   var allocs = Array.isArray(c && c.buildingAllocations) ? c.buildingAllocations : [];
   // Only count shares to buildings that STILL EXIST on this CO's job. A share
   // pointed at a deleted building is money that lands on no line — it must fall
@@ -5138,15 +5148,41 @@ function openCoAllocEditor(coId){
   var lW=function(b){ return (b.levels&&b.levels.length)?b.levels.length:0; };
 
   // Local state seeded from the CO's stored allocation. A building already in
-  // buildingAllocations is on+manual at its stored pct; others start off.
-  var st={}; buildings.forEach(function(b){ st[b.id]={on:false,pct:0,manual:false}; });
+  // buildingAllocations is on+manual at its stored money pct AND its stored
+  // completion pct (`done`, standalone mode); others start off.
+  var st={}; buildings.forEach(function(b){ st[b.id]={on:false,pct:0,manual:false,done:0}; });
   var seeded=Array.isArray(c.buildingAllocations)?c.buildingAllocations:[];
-  seeded.forEach(function(a){ if(a && st[a.buildingId]){ st[a.buildingId]={on:true,pct:Math.max(0,Math.min(100,Number(a.pct)||0)),manual:true}; } });
+  seeded.forEach(function(a){ if(a && st[a.buildingId]){ st[a.buildingId]={on:true,pct:Math.max(0,Math.min(100,Number(a.pct)||0)),manual:true,done:Math.max(0,Math.min(100,Number(a.pctComplete)||0))}; } });
   var hadAny=seeded.length>0;
   // A never-allocated CO opens with all buildings on, units-split — the "assign
   // to N buildings in one shot" default; the user clears what doesn't apply.
   if(!hadAny){ buildings.forEach(function(b){ st[b.id].on=true; }); }
   var split='units';
+  // Completion SOURCE (the CO's mini-P&L earn basis): 'rider' rides a scope,
+  // 'standalone' tracks its own per-building %s. Default to the saved mode.
+  var coMode=(c.data&&c.data.completionMode)||c.completionMode||'standalone';
+  var riderScope=(c.data&&c.data.riderScopeName)||c.riderScopeName||'';
+  var scopeNames=(function(){ var m={}; (appData.phases||[]).forEach(function(p){ if(p.jobId===jid){ m[p.phase||'Unnamed']=1; } }); return Object.keys(m).sort(); })();
+  if(coMode==='rider'&&!riderScope&&scopeNames.length) riderScope=scopeNames[0];
+
+  // The CO's completion/earned per the CURRENT editor state (live), for the P&L
+  // strip. Rider derives from the scope; standalone from the live st shares.
+  function liveComp(){
+    if(typeof window.coCompletion!=='function') return null;
+    if(coMode==='rider') return window.coCompletion({id:c.id,lines:c.lines,data:{completionMode:'rider',riderScopeName:riderScope}}, jid);
+    recompute();
+    var allocs=buildings.filter(function(b){ return st[b.id].on && st[b.id].pct>0.001; }).map(function(b){ return {buildingId:b.id,pct:st[b.id].pct,pctComplete:st[b.id].done}; });
+    return window.coCompletion({id:c.id,lines:c.lines,data:{completionMode:'standalone',buildingAllocations:allocs}}, jid);
+  }
+  function pnlStrip(comp){
+    if(!comp) return '';
+    return '<div class="cae-pnl" style="display:flex;gap:12px;flex-wrap:wrap;margin:6px 0;padding:8px 10px;border:1px solid var(--ng-border2,#333);border-radius:8px;font-size:11px;">'
+      +'<span style="color:#8b90a5;">Revenue <b style="color:#34d399;">'+E.fmtC(comp.sell)+'</b></span>'
+      +'<span style="color:#8b90a5;">Cost <b style="color:#e879a6;">'+E.fmtC(comp.cost)+'</b></span>'
+      +'<span style="color:#8b90a5;">Profit <b style="color:'+((comp.profit>=0)?'#34d399':'#f87171')+';">'+E.fmtC(comp.profit)+'</b></span>'
+      +'<span style="color:#8b90a5;">% Complete <b style="color:#c8cbe0;">'+Math.round(comp.weightedPct)+'%</b></span>'
+      +'<span style="color:#8b90a5;">Earned <b style="color:#4f8cff;">'+E.fmtC(comp.earned)+'</b></span></div>';
+  }
 
   function recompute(){
     var on=buildings.filter(function(b){ return st[b.id].on; });
@@ -5168,47 +5204,80 @@ function openCoAllocEditor(coId){
   ov.addEventListener('mousedown',function(e){ if(e.target===ov) close(); });
 
   function body(){
-    recompute();
-    var chips=buildings.map(function(b){
-      return '<div class="cae-chip'+(st[b.id].on?' on':'')+'" data-cae-chip="'+b.id+'"><span class="cae-tick">'+(st[b.id].on?'✓':'')+'</span>'+luEsc(b.name||'Building')+' <span class="cae-u">'+uW(b)+'u</span></div>';
-    }).join('') || '<div style="color:#8b90a5;font-size:12px;padding:4px 0;">This job has no buildings yet — add buildings first.</div>';
-    var rows=buildings.map(function(b){
-      var on=st[b.id].on, pct=Math.round(st[b.id].pct*10)/10, amt=sell*(on?st[b.id].pct:0)/100;
-      return '<div class="cae-line'+(on?'':' off')+'"><span class="cae-nm">'+luEsc(b.name||'Building')+'</span>'
-        +(on?'<span class="cae-pin"><input data-cae-in="'+b.id+'" value="'+pct+'">%</span>':'<span style="color:#4a4f63;width:66px;text-align:right;">—</span>')
-        +'<span class="cae-amt">'+(on?E.fmtC(amt):'—')+'</span></div>';
-    }).join('');
-    // Gate Save on the SAME tolerance the server uses (0.01% of rounding per
-    // allocated row) so the UI never shows "✓ 100%" and lets you Save a total
-    // the server then 422s. A manual 50.02+50.02 across 2 buildings is 100.04%
-    // and must read as over, not a green check.
-    var _onN=buildings.filter(function(b){ return st[b.id].on && st[b.id].pct>0.001; }).length;
-    var _tol=0.01*_onN+0.001;
-    var tp=totalPct(), ok=Math.abs(tp-100)<_tol, over=tp>100+_tol, un=Math.max(0,sell*(100-tp)/100);
-    return ''
-      +'<div class="cae-hd"><span class="cae-badge">'+luEsc(c.co_number||'CO')+'</span>'
-        +'<span class="cae-title">'+luEsc((c.title||c.description||'Change order')).slice(0,60)+'</span>'
-        +'<span class="cae-total">'+E.fmtC(sell)+'</span></div>'
-      +'<div class="cae-sub">Priced from its line items. Stores a <b>%</b> per building, so this flows through when the CO\'s lines change.</div>'
-      +(frozen
-          ? '<div class="cae-frozen">This change order has been applied (billed) — its building allocation can\'t be changed.</div>'
-          : (!hadAny ? '<div class="cae-frozen" style="color:#f4c152;border-color:#b45309;background:rgba(180,83,9,.12);">Not allocated yet — the split below is a <b>suggestion</b>. Click <b>Save allocation</b> to apply it.</div>' : ''))
-      +'<div class="cae-field"><span class="cae-lbl">Split</span><span class="cae-seg" id="caeSplit">'
+    var comp=liveComp();
+    var isRider=(coMode==='rider');
+    var over=false;
+    var modeSeg='<div class="cae-field"><span class="cae-lbl">Earns</span><span class="cae-seg" id="caeMode">'
+      +'<button data-mode="rider" class="'+(isRider?'on':'')+'"'+(frozen?' disabled':'')+'>Rides a scope</button>'
+      +'<button data-mode="standalone" class="'+(!isRider?'on':'')+'"'+(frozen?' disabled':'')+'>Its own scope</button></span></div>';
+
+    var mid='';
+    if(isRider){
+      var opts=scopeNames.map(function(n){ return '<option value="'+luEsc(n)+'"'+(n===riderScope?' selected':'')+'>'+luEsc(n)+'</option>'; }).join('');
+      var pick=scopeNames.length
+        ? '<div class="cae-field"><span class="cae-lbl">Scope</span><select id="caeRider"'+(frozen?' disabled':'')+' style="flex:1;background:var(--ng-panel,#1a1a22);color:var(--ng-text,#c8cbe0);border:1px solid var(--ng-border2,#333);border-radius:6px;padding:5px 8px;">'+opts+'</select></div>'
+        : '<div class="cae-frozen" style="color:#f4c152;border-color:#b45309;background:rgba(180,83,9,.12);">This job has no scopes yet — add a scope to ride.</div>';
+      var preview='';
+      if(comp){
+        preview=buildings.filter(function(b){ return comp.byBuilding[b.id]; }).map(function(b){
+          var d=comp.byBuilding[b.id];
+          return '<div class="cae-line"><span class="cae-nm">'+luEsc(b.name||'Building')+'</span>'
+            +'<span style="width:118px;text-align:right;color:#8b90a5;font-size:11px;">'+E.fmtC(d.share)+' @ '+Math.round(d.pct)+'%</span>'
+            +'<span class="cae-amt">'+E.fmtC(d.earned)+'</span></div>';
+        }).join('') || '<div style="color:#8b90a5;font-size:12px;padding:4px 0;"><b>'+luEsc(riderScope||'That scope')+'</b> isn\'t split per building yet — the CO earns at the scope\'s overall %.</div>';
+      }
+      mid=pick
+        +'<div class="cae-sub" style="margin:4px 0 2px;">Money mirrors <b>'+luEsc(riderScope||'the scope')+'</b>\'s per-building split; % follows its completion — it flows through as the scope progresses.</div>'
+        +'<div class="cae-tbl">'+preview+'</div>';
+    } else {
+      recompute();
+      var chips=buildings.map(function(b){
+        return '<div class="cae-chip'+(st[b.id].on?' on':'')+'" data-cae-chip="'+b.id+'"><span class="cae-tick">'+(st[b.id].on?'✓':'')+'</span>'+luEsc(b.name||'Building')+' <span class="cae-u">'+uW(b)+'u</span></div>';
+      }).join('') || '<div style="color:#8b90a5;font-size:12px;padding:4px 0;">This job has no buildings yet — add buildings first.</div>';
+      var rows=buildings.map(function(b){
+        var on=st[b.id].on, pct=Math.round(st[b.id].pct*10)/10, amt=sell*(on?st[b.id].pct:0)/100, done=Math.round(st[b.id].done);
+        return '<div class="cae-line'+(on?'':' off')+'"><span class="cae-nm">'+luEsc(b.name||'Building')+'</span>'
+          +(on?'<span class="cae-pin"><input data-cae-in="'+b.id+'" value="'+pct+'" title="money share of the CO">%</span>':'<span style="color:#4a4f63;width:66px;text-align:right;">—</span>')
+          +(on?'<span class="cae-pin" style="margin-left:6px;"><input data-cae-done="'+b.id+'" value="'+done+'" title="% complete" style="width:40px;">%<span style="font-size:9px;color:#8b90a5;margin-left:2px;">done</span></span>':'')
+          +'<span class="cae-amt">'+(on?E.fmtC(amt):'—')+'</span></div>';
+      }).join('');
+      // Gate Save on the SAME tolerance the server uses (0.01%/row) so the UI
+      // never shows "✓ 100%" then 422s on save.
+      var _onN=buildings.filter(function(b){ return st[b.id].on && st[b.id].pct>0.001; }).length;
+      var _tol=0.01*_onN+0.001;
+      var tp=totalPct(), ok=Math.abs(tp-100)<_tol, un=Math.max(0,sell*(100-tp)/100);
+      over=tp>100+_tol;
+      mid='<div class="cae-field"><span class="cae-lbl">Split</span><span class="cae-seg" id="caeSplit">'
         +'<button data-split="even" class="'+(split==='even'?'on':'')+'">Even</button>'
         +'<button data-split="units" class="'+(split==='units'?'on':'')+'">Units</button>'
         +'<button data-split="levels" class="'+(split==='levels'?'on':'')+'">Levels</button></span>'
         +'<span style="margin-left:auto;display:flex;gap:8px;"><button class="cae-link" id="caeAll">All</button><button class="cae-link" id="caeClear">Clear</button></span></div>'
-      +'<div class="cae-chips">'+chips+'</div>'
-      +'<div class="cae-tbl">'+rows+'</div>'
-      +'<div class="cae-meter"><div class="cae-bar"><i style="width:'+Math.min(100,tp)+'%"></i></div>'
-        +'<span class="cae-mlbl '+(ok?'ok':'warn')+'">Allocated '+(Math.round(tp*10)/10)+'%'+(ok?' ✓':(over?' ⚠ over 100%':''))+'</span></div>'
-      +(un>0.5&&!over?'<div class="cae-un">'+E.fmtC(un)+' will stay unallocated (on no building line)</div>':'')
+        +'<div class="cae-chips">'+chips+'</div>'
+        +'<div class="cae-tbl">'+rows+'</div>'
+        +'<div class="cae-meter"><div class="cae-bar"><i style="width:'+Math.min(100,tp)+'%"></i></div>'
+          +'<span class="cae-mlbl '+(ok?'ok':'warn')+'">Allocated '+(Math.round(tp*10)/10)+'%'+(ok?' ✓':(over?' ⚠ over 100%':''))+'</span></div>'
+        +(un>0.5&&!over?'<div class="cae-un">'+E.fmtC(un)+' will stay unallocated (on no building line)</div>':'');
+    }
+
+    var saveDisabled = frozen || (isRider ? !scopeNames.length : over);
+    return ''
+      +'<div class="cae-hd"><span class="cae-badge">'+luEsc(c.co_number||'CO')+'</span>'
+        +'<span class="cae-title">'+luEsc((c.title||c.description||'Change order')).slice(0,60)+'</span>'
+        +'<span class="cae-total">'+E.fmtC(sell)+'</span></div>'
+      +'<div class="cae-sub">A change order as a mini-P&L — choose how it EARNS below.</div>'
+      +(frozen?'<div class="cae-frozen">This change order has been applied (billed) — it can\'t be changed.</div>':'')
+      +modeSeg
+      +pnlStrip(comp)
+      +mid
       +'<div class="cae-foot"><button class="cae-btn ghost" id="caeCancel">Cancel</button>'
-        +'<button class="cae-btn primary" id="caeSave"'+((frozen||over)?' disabled':'')+'>Save allocation</button></div>';
+        +'<button class="cae-btn primary" id="caeSave"'+(saveDisabled?' disabled':'')+'>Save</button></div>';
   }
   function paint(){
     ov.innerHTML='<div class="co-alloc-modal">'+body()+'</div>';
     var m=ov.firstChild;
+    var mm=m.querySelector('#caeMode'); if(mm&&!frozen) mm.onclick=function(e){ var b=e.target.closest('button'); if(!b) return; coMode=b.dataset.mode; if(coMode==='rider'&&!riderScope&&scopeNames.length) riderScope=scopeNames[0]; paint(); };
+    var rs=m.querySelector('#caeRider'); if(rs&&!frozen) rs.onchange=function(){ riderScope=rs.value; paint(); };
+    [].forEach.call(m.querySelectorAll('[data-cae-done]'),function(inp){ if(frozen){inp.disabled=true;return;} inp.onchange=function(){ var id=inp.getAttribute('data-cae-done'); st[id].done=Math.max(0,Math.min(100,parseFloat(inp.value)||0)); paint(); }; });
     [].forEach.call(m.querySelectorAll('[data-cae-chip]'),function(el){ if(frozen) return; el.onclick=function(){ var id=el.getAttribute('data-cae-chip'); st[id].on=!st[id].on; if(!st[id].on){st[id].manual=false;st[id].pct=0;} paint(); }; });
     [].forEach.call(m.querySelectorAll('[data-cae-in]'),function(inp){ if(frozen){inp.disabled=true;return;} inp.onchange=function(){ var id=inp.getAttribute('data-cae-in'); st[id].manual=true; st[id].pct=Math.max(0,Math.min(100,parseFloat(inp.value)||0)); paint(); }; });
     var sp=m.querySelector('#caeSplit'); if(sp&&!frozen) sp.onclick=function(e){ var b=e.target.closest('button'); if(!b) return; split=b.dataset.split; buildings.forEach(function(x){ st[x.id].manual=false; }); paint(); };
@@ -5218,23 +5287,31 @@ function openCoAllocEditor(coId){
     var sv=m.querySelector('#caeSave'); if(sv) sv.onclick=save;
   }
   function save(){
-    recompute();
-    var picked=buildings.filter(function(b){ return st[b.id].on && st[b.id].pct>0.001; });
-    // Largest-remainder rounding to 2dp: round each share down to hundredths,
-    // then hand the leftover hundredths to the biggest fractional parts. The
-    // stored pcts sum to EXACTLY round2(Σ raw) — no drift. Without this, six
-    // equal buildings each round 16.6667→16.67 and the set sums to 100.02,
-    // which the server's ≤100 guard rejects on a perfectly valid even split.
-    var raw=picked.map(function(b){ return st[b.id].pct; });
-    var target=Math.round(raw.reduce(function(s,v){return s+v;},0)*100); // hundredths
-    var floors=raw.map(function(v){ return Math.floor(v*100); });
-    var used=floors.reduce(function(s,v){return s+v;},0);
-    var order=raw.map(function(v,i){ return {i:i, frac:v*100-floors[i]}; }).sort(function(a,b){ return b.frac-a.frac; });
-    for(var k=0; k<order.length && used<target; k++){ floors[order[k].i]+=1; used+=1; }
-    var allocations=picked.map(function(b,i){ return { buildingId:b.id, pct:floors[i]/100 }; });
+    var opts={ completionMode: coMode, riderScopeName: (coMode==='rider' ? riderScope : '') };
+    var allocations=[];
+    if(coMode!=='rider'){
+      // Standalone: store the per-building money split (largest-remainder to 2dp
+      // so it sums EXACTLY — the server's ≤100 guard rejects drift) + each
+      // building's own % complete.
+      recompute();
+      var picked=buildings.filter(function(b){ return st[b.id].on && st[b.id].pct>0.001; });
+      var raw=picked.map(function(b){ return st[b.id].pct; });
+      var target=Math.round(raw.reduce(function(s,v){return s+v;},0)*100);
+      var floors=raw.map(function(v){ return Math.floor(v*100); });
+      var used=floors.reduce(function(s,v){return s+v;},0);
+      var order=raw.map(function(v,i){ return {i:i, frac:v*100-floors[i]}; }).sort(function(a,b){ return b.frac-a.frac; });
+      for(var k=0; k<order.length && used<target; k++){ floors[order[k].i]+=1; used+=1; }
+      allocations=picked.map(function(b,i){ return { buildingId:b.id, pct:floors[i]/100, pctComplete:Math.max(0,Math.min(100,Math.round(st[b.id].done))) }; });
+    }
+    // Rider: money + %s derive from the scope, so no manual allocations are stored.
     var sv=ov.querySelector('#caeSave'); if(sv){ sv.disabled=true; sv.textContent='Saving…'; }
-    p86Api.changeOrders.setAllocations(c.id, allocations).then(function(){
-      c.buildingAllocations=allocations;   // reflect on the in-memory record
+    p86Api.changeOrders.setAllocations(c.id, allocations, opts).then(function(){
+      // Reflect on the in-memory record (both top-level and in data — shapeRow
+      // spreads data, so future reloads see them top-level too).
+      c.buildingAllocations=allocations;
+      c.completionMode=opts.completionMode; c.riderScopeName=opts.riderScopeName;
+      if(!c.data||typeof c.data!=='object') c.data={};
+      c.data.buildingAllocations=allocations; c.data.completionMode=opts.completionMode; c.data.riderScopeName=opts.riderScopeName;
       try{ localStorage.setItem('p86-jobs-jobchangeorders', JSON.stringify(appData.jobChangeOrders||[])); }catch(e){}
       close();
       if(typeof render==='function') render();
