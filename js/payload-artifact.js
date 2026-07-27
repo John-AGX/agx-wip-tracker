@@ -213,6 +213,11 @@
           payload_id: payload.id,
           apply_summary: body.apply_summary,
           affected_targets: body.affected_targets || [],
+          // Feed the Live Writer surface (live-writer.js): the before/after
+          // row snapshots the dispatcher captured drive the color-coded diff.
+          apply_changeset: body.apply_changeset || [],
+          title: payload.title || '',
+          emitting_agent_key: payload.emitting_agent_key || payload.source || '',
         },
       }));
       // Retire the action buttons — the change is committed.
