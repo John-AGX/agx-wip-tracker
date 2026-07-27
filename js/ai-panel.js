@@ -3512,6 +3512,17 @@ function p86Ask(message, opts) {
           crewEmit('tool', { name: payload.tool_started.name });
           var label = TOOL_VERBS[payload.tool_started.name] || (payload.tool_started.name + '…');
           brainYoga.override(label, true);
+          // Live Writer (Slice 2b): a write tool kicking off = Scribe composing.
+          // Show the "composing…" state now; the diff pane/strip supersedes it
+          // when the write lands (tool_applied render or the poller). No latency
+          // change — this is just the existing SSE event driving a UI affordance.
+          try {
+            var _tn = payload.tool_started.name;
+            if ((_tn === 'scribe_write' || _tn === 'emit_payload_file') &&
+                window.p86LiveWriter && window.p86LiveWriter.startComposing) {
+              window.p86LiveWriter.startComposing('drafting your change');
+            }
+          } catch (_e) {}
           scrollToBottom();
         } else if (payload.tool_applied) {
           crewEmit('tool_done', { name: payload.tool_applied.name });

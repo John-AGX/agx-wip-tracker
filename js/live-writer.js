@@ -402,6 +402,34 @@
     dismissPane();
   }
 
+  // ── Slice 2b: "Scribe is composing…" pending state ───────────────────────
+  // Fires on the existing tool_started SSE event (a scribe/write tool kicking
+  // off) — BEFORE the draft lands — so you watch it happen while 86 keeps
+  // talking. No server/turn change, no latency: the real diff pane/strip
+  // supersedes this the moment the write commits (clearComposing in render).
+  var composingTimer = null, _composing = false;
+  function startComposing(label) {
+    ensureRoot();
+    _composing = true;
+    root.classList.remove('p86lw-collapsed');
+    var card = root.querySelector('.p86lw-card');
+    card.innerHTML =
+      '<div class="p86lw-head"><span class="p86lw-av">S</span>' +
+      '<div><div class="p86lw-ttl">Scribe <span style="color:#378add">is composing…</span></div>' +
+      '<div class="p86lw-sub">' + esc(label || 'drafting your change') + '</div></div>' +
+      '<span class="p86lw-dot"></span><button class="p86lw-x" title="Dismiss">×</button></div>' +
+      '<div class="p86lw-body" style="padding:12px 12px 14px;color:#9a9aa5;font-size:12px;line-height:1.5;">' +
+      'Drafting the change — the diff appears here the moment it lands.</div>';
+    card.querySelector('.p86lw-x').addEventListener('click', dismiss);
+    requestAnimationFrame(function () { card.classList.add('p86lw-in'); });
+    if (composingTimer) clearTimeout(composingTimer);
+    composingTimer = setTimeout(function () { if (_composing) dismiss(); }, 45000);
+  }
+  function clearComposing() {
+    if (composingTimer) { clearTimeout(composingTimer); composingTimer = null; }
+    if (_composing) { _composing = false; if (root) { root.remove(); root = null; } }
+  }
+
   // ── event wiring ─────────────────────────────────────────────────────────
   // ── Slice 2: the estimate "document" pane ────────────────────────────────
   // Renders the whole estimate (from the after-snapshot) read-only and
@@ -514,6 +542,7 @@
   function renderChangeset(cs, payloadId) {
     if (payloadId && _shown[payloadId]) return false;
     if (!Array.isArray(cs) || !cs.length) return false;
+    clearComposing(); // the real diff supersedes any "composing…" pending state
     var groups = cs.map(diffEntry).filter(function (g) { return g && g.ops && g.ops.length; });
     if (!groups.length) return false;
     if (payloadId) _shown[payloadId] = true;
@@ -601,6 +630,8 @@
   window.p86LiveWriter = {
     /* Render straight from an apply_changeset array (bypasses the event). */
     render: function (changeset) { return renderChangeset(changeset, null); },
+    /* Show the "Scribe is composing…" pending state (called from the SSE hook). */
+    startComposing: startComposing,
     dismiss: dismiss,
     _diffEntry: diffEntry
   };
