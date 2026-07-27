@@ -318,10 +318,16 @@
     linkNode: function(id, nodeId) {
       return post('/api/change-orders/' + encodeURIComponent(id) + '/link-node', { node_id: nodeId });
     },
-    // Set the CO's per-building revenue split. allocations = [{buildingId, pct}].
-    // Writes only data.buildingAllocations server-side; never touches the lines.
-    setAllocations: function(id, allocations) {
-      return post('/api/change-orders/' + encodeURIComponent(id) + '/allocations', { buildingAllocations: allocations || [] });
+    // Set the CO's per-building revenue split + completion source.
+    // allocations = [{buildingId, pct, pctComplete}]; opts = {completionMode, riderScopeName}.
+    // Writes only data.buildingAllocations + data.completionMode/riderScopeName; never the lines.
+    setAllocations: function(id, allocations, opts) {
+      opts = opts || {};
+      return post('/api/change-orders/' + encodeURIComponent(id) + '/allocations', {
+        buildingAllocations: allocations || [],
+        completionMode: opts.completionMode || '',
+        riderScopeName: opts.riderScopeName || ''
+      });
     },
     remove: function(id) {
       return del('/api/change-orders/' + encodeURIComponent(id));

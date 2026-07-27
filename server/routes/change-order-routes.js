@@ -483,19 +483,21 @@ router.post('/change-orders/:id/allocations', requireAuth, requireCapability('ES
     // would move dollars between AIA lines that have already been billed.
     if (cur.status === 'applied') return res.status(409).json({ error: 'Cannot re-allocate an applied change order' });
 
-    // Sanitize: keep only well-formed rows, clamp pct to 0..100, drop zero/empty,
-    // and dedupe by buildingId keeping the last. A CO cannot over-allocate past
-    // 100% — the endpoint rejects a set that sums beyond it rather than storing
-    // a distribution that would bill more than the CO is worth.
+    // Sanitize: keep only well-formed rows, clamp pct + pctComplete to 0..100,
+    // drop zero-money rows, dedupe by buildingId keeping the last. pctComplete is
+    // the standalone-mode per-building COMPLETION (0 when absent) — it rides
+    // alongside the money share, never affects it. A CO cannot over-allocate past
+    // 100% — the endpoint rejects a set that sums beyond it.
     const raw = Array.isArray(req.body && req.body.buildingAllocations) ? req.body.buildingAllocations : [];
     const byBldg = new Map();
     for (const a of raw) {
       if (!a || !a.buildingId) continue;
       const pct = Math.max(0, Math.min(100, Number(a.pct) || 0));
       if (pct <= 0) continue;
-      byBldg.set(String(a.buildingId), pct);
+      const pctComplete = Math.max(0, Math.min(100, Number(a.pctComplete) || 0));
+      byBldg.set(String(a.buildingId), { pct, pctComplete });
     }
-    const allocations = Array.from(byBldg, ([buildingId, pct]) => ({ buildingId, pct }));
+    const allocations = Array.from(byBldg, ([buildingId, v]) => ({ buildingId, pct: v.pct, pctComplete: v.pctComplete }));
     // Tolerance absorbs 2-decimal per-row rounding on the client (N rows can
     // each carry up to 0.01% of rounding), so a legitimate 100% split across
     // many buildings is never rejected as "over".
@@ -504,8 +506,18 @@ router.post('/change-orders/:id/allocations', requireAuth, requireCapability('ES
       return res.status(422).json({ error: `Building allocations sum to ${sum.toFixed(2)}% — cannot exceed 100%.` });
     }
 
+    // Completion source: 'rider' (rides a scope by name; money mirrors that
+    // scope's split, so allocations may be empty) | 'standalone' (own per-building
+    // %s above) | '' (legacy → earns at the job's overall %). Stored on the CO.
+    const modeRaw = (req.body && req.body.completionMode) || '';
+    const completionMode = (modeRaw === 'rider' || modeRaw === 'standalone') ? modeRaw : '';
+    const riderScopeName = (completionMode === 'rider' && req.body && typeof req.body.riderScopeName === 'string')
+      ? req.body.riderScopeName.slice(0, 120) : '';
+
     const data = (cur.data && typeof cur.data === 'object') ? cur.data : {};
     data.buildingAllocations = allocations;
+    data.completionMode = completionMode;
+    data.riderScopeName = riderScopeName;
     const { rows } = await pool.query(
       `UPDATE job_change_orders
           SET data = $1::jsonb,

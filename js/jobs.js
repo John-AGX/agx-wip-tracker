@@ -335,6 +335,81 @@ function renderJobsMain() {
             return window.p86Pricing.applyFeesAndTax(markedUp, c).total;
         }
         window.coSellAmount = coSellAmount;
+
+        // A change order as a mini-P&L with a COMPLETION SOURCE. Every CO carries
+        // revenue (coSellAmount) + cost (raw line subtotal) → profit; this adds how
+        // it EARNS, per `data.completionMode`:
+        //  • 'rider' — the CO rides an existing scope (data.riderScopeName). Its
+        //    money mirrors that scope's per-building revenue split EXACTLY, and its
+        //    % per building = that scope's cell % (p86Progress.scopeCellPct). So it
+        //    earns in lockstep with the scope, building by building (earned = sell ×
+        //    the scope's revenue-weighted % complete).
+        //  • 'standalone' — the CO is its own scope: each building on
+        //    data.buildingAllocations carries a money share (pct) AND its own %
+        //    complete (pctComplete). Earned = Σ share$ × pctComplete.
+        //  • (none) — legacy: earns at the job's overall % (prior behavior), so
+        //    nothing changes until a mode is chosen.
+        // Returns { mode, scopeName?, sell, cost, profit, byBuilding:{bid:{share,pct,earned}},
+        //           earned, placed, unallocated, weightedPct }.
+        function coCompletion(co, jobId) {
+            function clampPct(v) { v = Number(v) || 0; return v < 0 ? 0 : (v > 100 ? 100 : v); }
+            var sell = coSellAmount(co);
+            var lines = Array.isArray(co && co.lines) ? co.lines : [];
+            var cost = (window.p86Pricing && lines.length) ? ((window.p86Pricing.computeForLines(co, lines) || {}).subtotal || 0) : 0;
+            var mode = (co && (co.completionMode || (co.data && co.data.completionMode))) || '';
+            var byB = {}, earned = 0, placed = 0;
+
+            if (mode === 'rider') {
+                var scopeName = (co && (co.riderScopeName || (co.data && co.data.riderScopeName))) || '';
+                var cells = (appData.phases || []).filter(function (p) { return p.jobId === jobId && (p.phase || 'Unnamed') === scopeName; });
+                var perB = cells.filter(function (p) { return p.buildingId; });
+                if (perB.length) {
+                    // Per-building scope: inherit its revenue split + %s EXACTLY.
+                    var scopeRev = perB.reduce(function (s, p) { return s + phaseRevenue(p); }, 0);
+                    perB.forEach(function (p) {
+                        var cpct = window.p86Progress ? window.p86Progress.scopeCellPct(p) : (p.pctComplete || 0);
+                        var share = scopeRev > 0 ? sell * (phaseRevenue(p) / scopeRev) : (sell / perB.length);
+                        var e = share * cpct / 100;
+                        byB[p.buildingId] = { share: share, pct: cpct, earned: e };
+                        earned += e; placed += share;
+                    });
+                } else if (cells.length) {
+                    // Job-level scope (no per-building split to inherit yet) — earn at
+                    // its overall %; no per-building breakdown until it's split.
+                    var cpct0 = window.p86Progress ? window.p86Progress.scopeCellPct(cells[0]) : (cells[0].pctComplete || 0);
+                    earned = sell * cpct0 / 100;
+                }
+                return { mode: 'rider', scopeName: scopeName, sell: sell, cost: cost, profit: sell - cost,
+                    byBuilding: byB, earned: earned, placed: placed, unallocated: sell - placed,
+                    weightedPct: sell > 0 ? earned / sell * 100 : 0 };
+            }
+
+            if (mode === 'standalone') {
+                var allocs = Array.isArray(co && co.buildingAllocations) ? co.buildingAllocations
+                    : ((co && co.data && Array.isArray(co.data.buildingAllocations)) ? co.data.buildingAllocations : []);
+                var live = {}; (appData.buildings || []).forEach(function (b) { if (b && b.jobId === jobId) live[b.id] = 1; });
+                allocs.forEach(function (a) {
+                    if (!a || !a.buildingId || !live[a.buildingId]) return;
+                    var share = sell * clampPct(a.pct) / 100;
+                    var cpct = clampPct(a.pctComplete);
+                    var e = share * cpct / 100;
+                    byB[a.buildingId] = { share: share, pct: cpct, earned: e };
+                    earned += e; placed += share;
+                });
+                return { mode: 'standalone', sell: sell, cost: cost, profit: sell - cost,
+                    byBuilding: byB, earned: earned, placed: placed, unallocated: sell - placed,
+                    weightedPct: sell > 0 ? earned / sell * 100 : 0 };
+            }
+
+            // Legacy: earn at the job's overall % — matches the pctComplete getJobWIP uses.
+            var _hasScopes = (appData.phases || []).some(function (p) { return p.jobId === jobId; });
+            var _job = (appData.jobs || []).find(function (j) { return j.id === jobId; });
+            var jp = (window.p86Progress && _hasScopes) ? window.p86Progress.jobPct(jobId) : ((_job && _job.pctComplete) || 0);
+            return { mode: 'legacy', sell: sell, cost: cost, profit: sell - cost,
+                byBuilding: {}, earned: sell * jp / 100, placed: 0, unallocated: sell, weightedPct: jp };
+        }
+        window.coCompletion = coCompletion;
+
         function getJobCOTotals(jobId) {
             // Change orders are server-backed and live in appData.jobChangeOrders
             // (loaded per-job on demand + boot-loaded in app.js). A CO adds to the
@@ -453,7 +528,18 @@ function renderJobsMain() {
             // here so an applied CO flows through to Revenue Earned → Gross Profit
             // → Margin, not just the Total Income headline. The no-graph fallback
             // already folds ALL CO income in via totalIncome, so it needs nothing.
-            const coEarned = (co.unlinkedIncome || 0) * (pctComplete / 100);
+            // Per-CO earned, by each CO's completion mode (rider → its scope's %;
+            // standalone → its per-building %s; legacy → job %), summed over UNLINKED
+            // COs — a graph-linked CO's earned already lives in ngRevenueEarned.
+            // coCompletion(legacy) returns sell×jobPct so this stays byte-identical to
+            // the old `unlinkedIncome × pctComplete` until a CO is given a mode.
+            let coEarned = 0;
+            (appData.jobChangeOrders || []).forEach(c => {
+                if (!c || c.job_id !== jobId) return;
+                if (c.status !== 'approved' && c.status !== 'applied') return;
+                if (c.linked_node_id) return;
+                coEarned += coCompletion(c, jobId).earned || 0;
+            });
             // Earned = Σ each scope cell's revenue × its % (p86Progress,
             // graph-free) + the unlinked-CO earned share. Replaces the node
             // graph's ngRevenueEarned; reflects real units-done rather than the
