@@ -4334,6 +4334,21 @@ function renderJobsMain() {
                     '<button class="ee-btn ghost" style="font-size:12px;padding:3px 10px;white-space:nowrap;" onclick="addJobLevelPhase(\'' + escapeHTML(jobId) + '\')">+ Add scope</button>' +
                 '</div>';
 
+            // A JOB-LEVEL scope (no buildingId) can't let a building drive its own
+            // % — the buildings have no scope of their own. When such scopes coexist
+            // with buildings, offer a one-click split into per-building scope cells
+            // (the Saddlebrook Cluster 9 shape: revenue split by units, % seeded from
+            // each building's current progress).
+            var _jlNames = {};
+            (appData.phases || []).forEach(function (p) { if (p.jobId === jobId && !p.buildingId) _jlNames[p.phase || 'Unnamed'] = 1; });
+            var _jlCount = Object.keys(_jlNames).length;
+            var fixBannerHTML = (_bldgs.length && _jlCount)
+                ? '<div class="p86-sc-fixbanner" style="margin:6px 0;padding:8px 10px;border:1px solid #b45309;background:rgba(180,83,9,.12);border-radius:8px;font-size:12px;line-height:1.4;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">'
+                    + '<span>&#9888; ' + _jlCount + ' scope' + (_jlCount > 1 ? 's aren’t' : ' isn’t') + ' split per building, so the buildings can’t track their own %.</span>'
+                    + '<button class="ee-btn" style="font-size:12px;padding:3px 10px;white-space:nowrap;" onclick="p86SplitJobLevelScopes(\'' + escapeHTML(jobId) + '\')">Split across ' + _bldgs.length + ' building' + (_bldgs.length > 1 ? 's' : '') + '</button>'
+                    + '</div>'
+                : '';
+
             if (groupKeys.length === 0) {
                 container.innerHTML = '<div class="p86-scope-panel">' + stripHTML + headHTML +
                     '<div class="p86-sc-list"><div class="p86-sc-empty">No scopes yet. Click <b>+ Add scope</b> to create one, or split the seeded Base Contract.</div></div>' +
@@ -4374,7 +4389,7 @@ function renderJobsMain() {
 
             var listHTML = '<div class="p86-sc-list-wrap"><div class="p86-sc-list">' + rowsHTML + '</div></div>';
             var matrixHTML = _showMatrix ? '<div class="p86-sc-matrix-wrap" style="display:none;margin-top:2px;"><div class="phase-matrix-host"></div></div>' : '';
-            container.innerHTML = '<div class="p86-scope-panel">' + stripHTML + headHTML + listHTML + matrixHTML + '</div>';
+            container.innerHTML = '<div class="p86-scope-panel">' + stripHTML + headHTML + fixBannerHTML + listHTML + matrixHTML + '</div>';
             if (_showMatrix) {
                 var _host = container.querySelector('.phase-matrix-host');
                 try { renderPhaseMatrixInto(_host, jobId); } catch (e) {}
@@ -5228,6 +5243,87 @@ function renderJobsMain() {
             try { if (typeof ensureNGComputed === 'function') ensureNGComputed(jobId); } catch (e) {}
             try { if (typeof p86RerenderJobCards === 'function') p86RerenderJobCards(jobId); } catch (e) {}
             try { if (typeof renderJobPhases === 'function') renderJobPhases(jobId); } catch (e) {}
+        }
+
+        // Convert a job's JOB-LEVEL scopes (no buildingId) into per-building scope
+        // cells — the Saddlebrook Cluster 9 shape where each building carries its own
+        // scope % (the source of truth). Revenue is split across the buildings weighted
+        // by unit count (whole dollars, largest-remainder → sums EXACTLY to the scope
+        // total); each new cell's % is seeded from the building's current unit progress
+        // so nothing visually regresses. Fixes a job whose buildings all read a flat 0%
+        // because their scopes lived only at the job level.
+        function p86SplitJobLevelScopes(jobId) {
+            var buildings = (appData.buildings || []).filter(function (b) { return b.jobId === jobId; });
+            var jobLevel = (appData.phases || []).filter(function (p) { return p.jobId === jobId && !p.buildingId; });
+            if (!buildings.length) { if (window.p86Toast) p86Toast('Add buildings to this job first — nothing to split across.', 'error'); return; }
+            if (!jobLevel.length) { if (window.p86Toast) p86Toast('No job-level scopes to split.', 'info'); return; }
+            var nm = {}; jobLevel.forEach(function (p) { nm[p.phase || 'Unnamed'] = 1; });
+            var nNames = Object.keys(nm).length;
+            var msg = 'Split ' + nNames + ' scope' + (nNames > 1 ? 's' : '') + ' across ' + buildings.length +
+                ' buildings? Each building gets its own scope cell — revenue split by unit count, % seeded from each building’s current progress. You can fine-tune per-building %s afterward.';
+            var run = function () { _p86DoSplitJobLevelScopes(jobId, buildings, jobLevel, nNames); };
+            if (typeof window.p86Confirm === 'function') {
+                window.p86Confirm({ title: 'Split scopes to buildings', message: msg, confirmText: 'Split' }).then(function (ok) { if (ok) run(); });
+            } else if (window.confirm(msg)) { run(); }
+        }
+        window.p86SplitJobLevelScopes = p86SplitJobLevelScopes;
+
+        function _p86DoSplitJobLevelScopes(jobId, buildings, jobLevel, nNames) {
+            function clampPct(v) { v = Number(v) || 0; return v < 0 ? 0 : (v > 100 ? 100 : v); }
+            function unitPct(b) {
+                var up = (window.p86Progress && window.p86Progress.buildingUnitPct) ? window.p86Progress.buildingUnitPct(b) : null;
+                return up == null ? 0 : clampPct(Math.round(up));
+            }
+            // Whole-dollar split weighted by `weights`, largest-remainder so the parts
+            // sum EXACTLY to `total` (no penny drift against the contract).
+            function splitLR(total, weights) {
+                var W = weights.reduce(function (a, b) { return a + b; }, 0) || 1;
+                var raw = weights.map(function (w) { return total * w / W; });
+                var floors = raw.map(function (r) { return Math.floor(r); });
+                var used = floors.reduce(function (a, b) { return a + b; }, 0);
+                var rem = Math.round(total - used);
+                var idx = raw.map(function (r, i) { return { i: i, f: r - Math.floor(r) }; }).sort(function (a, b) { return b.f - a.f; });
+                var res = floors.slice();
+                for (var k = 0; k < rem && res.length; k++) { res[idx[k % res.length].i] += 1; }
+                return res;
+            }
+            var weights = buildings.map(function (b) {
+                return (b.units && b.units.length) ? b.units.length : ((b.levels && b.levels.length) ? b.levels.length : 1);
+            });
+            jobLevel.forEach(function (js) {
+                var name = js.phase || 'Unnamed';
+                var total = phaseRevenue(js) || js.phaseAllocTotal || 0;
+                var slices = splitLR(total, weights);
+                buildings.forEach(function (b, i) {
+                    var rec = phaseRecFor(jobId, name, b.id);   // find-or-create the per-building cell
+                    rec.workScope = js.workScope || 'in-house';
+                    rec.allocMode = 'pct'; rec.allocAuto = true; rec.allocPct = null;
+                    rec.allocSplit = js.allocSplit || 'units'; rec.phaseAllocTotal = total;
+                    setPhaseDollar(rec, slices[i]);            // asSoldRevenue / asSoldPhaseBudget / phaseBudget
+                    rec.pctComplete = unitPct(b);              // seed the % from current field progress
+                    rec.locked = false;
+                });
+            });
+            // Drop the job-level records — their money now lives on the per-building cells.
+            var kill = {}; jobLevel.forEach(function (p) { kill[p.id] = 1; });
+            appData.phases = (appData.phases || []).filter(function (p) { return !kill[p.id]; });
+            // Best-effort: remove the now-orphaned job-level scope nodes from the graph.
+            try {
+                if (typeof NG !== 'undefined' && NG.nodes && NG.removeNode) {
+                    NG.nodes().slice().forEach(function (n) { if (n.type === 't2' && n.data && kill[n.data.id]) NG.removeNode(n.id); });
+                }
+            } catch (e) {}
+            if (typeof dedupePhaseRecords === 'function') { try { dedupePhaseRecords(jobId); } catch (e) {} }
+            if (typeof commitMatrixChange === 'function') commitMatrixChange(jobId);
+            else if (typeof saveData === 'function') saveData();
+            // Repaint the visible scope panels so the split shows immediately.
+            try {
+                ['insp-phases', 'job-overview-phases'].forEach(function (id) {
+                    var el = document.getElementById(id);
+                    if (el && typeof renderOverviewPhasesInto === 'function') renderOverviewPhasesInto(el, jobId);
+                });
+            } catch (e) {}
+            if (window.p86Toast) p86Toast('Split ' + (nNames || '') + ' scope' + (nNames > 1 ? 's' : '') + ' across ' + buildings.length + ' buildings.', 'success');
         }
 
         // Single-phase spread — kept for programmatic use (el carries data-mx-phase
