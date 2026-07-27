@@ -20,9 +20,12 @@
   'use strict';
   if (window.p86LiveWriter) return;
 
-  var COLLAPSE_MS = 8000;   // auto-collapse to a pill after this idle
+  var COLLAPSE_MS = 14000;  // auto-collapse to a pill after this idle
   var STAGGER_MS = 180;     // per-op reveal delay for the "writing" feel
   var MAX_OPS = 24;         // cap rendered rows (rest summarized)
+  var POLL_MS = 5000;       // how often to sweep for server-side/pre-approved applies
+  var _shown = Object.create(null);  // payload_id → true, so we render each apply once
+  var _baselineTs = 0;      // ignore applies that predate page load
 
   // ── tiny helpers ────────────────────────────────────────────────────────
   function esc(s) {
@@ -361,24 +364,88 @@
   }
 
   // ── event wiring ─────────────────────────────────────────────────────────
+  // Render a changeset array; returns true if anything was shown. Dedupes by
+  // payload id so the client event and the poller can't double-render one apply.
+  function renderChangeset(cs, payloadId) {
+    if (payloadId && _shown[payloadId]) return false;
+    if (!Array.isArray(cs) || !cs.length) return false;
+    var groups = cs.map(diffEntry).filter(function (g) { return g && g.ops && g.ops.length; });
+    if (!groups.length) return false;
+    if (payloadId) _shown[payloadId] = true;
+    var meta = {};
+    if (groups.length === 1 && cs.length === 1 && cs[0].entity_type === 'estimate') meta.estimateId = cs[0].id;
+    show(groups, meta);
+    return true;
+  }
+
+  // Client-initiated applies (Approve click / low-risk auto-apply) arrive here.
   function onApplied(ev) {
     try {
       var d = ev && ev.detail;
       if (!d) return;
-      var cs = d.apply_changeset;
-      if (!Array.isArray(cs) || !cs.length) return; // legacy/empty — nothing to show
-      var groups = cs.map(diffEntry).filter(function (g) { return g && g.ops && g.ops.length; });
-      if (!groups.length) return;
-      var meta = {};
-      // if a single estimate target, remember its id so "Open" works
-      if (groups.length === 1 && cs.length === 1 && cs[0].entity_type === 'estimate') meta.estimateId = cs[0].id;
-      show(groups, meta);
+      renderChangeset(d.apply_changeset, d.payload_id);
     } catch (e) {
       console.warn('[live-writer] render failed:', e);
     }
   }
-
   document.addEventListener('p86:payload-applied', onApplied);
+
+  // ── poller ────────────────────────────────────────────────────────────────
+  // Server-side / pre-approved applies (86 "just does it") never fire the client
+  // event above, so sweep the payloads feed for freshly-applied rows and surface
+  // them too — this is what makes the coworker's autonomous writes VISIBLE.
+  function authHeaders() {
+    try { var t = localStorage.getItem('p86-auth-token'); return t ? { Authorization: 'Bearer ' + t } : {}; }
+    catch (_) { return {}; }
+  }
+  async function pollApplies() {
+    if (document.hidden) return;
+    try {
+      var r = await fetch('/api/payloads/?limit=8', { credentials: 'include', headers: authHeaders() });
+      if (!r.ok) return;
+      var j = await r.json();
+      var rows = j.payloads || j.rows || j || [];
+      var fresh = rows.filter(function (p) {
+        return p && p.status === 'applied' && p.applied_at &&
+               Date.parse(p.applied_at) > _baselineTs && !_shown[p.id];
+      }).sort(function (a, b) { return Date.parse(a.applied_at) - Date.parse(b.applied_at); });
+      for (var i = 0; i < fresh.length; i++) {
+        var p = fresh[i];
+        var ts = Date.parse(p.applied_at);
+        if (ts > _baselineTs) _baselineTs = ts;
+        _shown[p.id] = true; // claim it up-front so a slow detail fetch can't double-fire
+        try {
+          var dr = await fetch('/api/payloads/' + encodeURIComponent(p.id), { credentials: 'include', headers: authHeaders() });
+          if (!dr.ok) continue;
+          var det = await dr.json();
+          var cs = det.apply_changeset;
+          delete _shown[p.id];            // let renderChangeset re-claim + actually render
+          renderChangeset(cs, p.id);
+        } catch (_) {}
+      }
+    } catch (_) {}
+  }
+  // Establish a baseline (applies before now = history, don't replay) then start
+  // sweeping. Retry until an authenticated fetch succeeds so we never replay old
+  // applies as if they were live.
+  var _pollStarted = false;
+  async function initPoll() {
+    if (_pollStarted) return;
+    try {
+      var r = await fetch('/api/payloads/?limit=8', { credentials: 'include', headers: authHeaders() });
+      if (!r.ok) { setTimeout(initPoll, 6000); return; }
+      var j = await r.json();
+      var rows = j.payloads || j.rows || j || [];
+      rows.forEach(function (p) {
+        if (p.applied_at) { var ts = Date.parse(p.applied_at); if (ts > _baselineTs) _baselineTs = ts; }
+        if (p.status !== 'ready') _shown[p.id] = true; // terminal already — never a "live" write
+      });
+      _pollStarted = true;
+      setInterval(pollApplies, POLL_MS);
+    } catch (_) { setTimeout(initPoll, 6000); }
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', initPoll);
+  else initPoll();
 
   // ── public API (also handy for manual verification) ──────────────────────
   window.p86LiveWriter = {

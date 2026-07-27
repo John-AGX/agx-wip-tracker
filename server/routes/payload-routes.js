@@ -150,7 +150,7 @@ router.get('/:id', requireAuth, requireOrg, async (req, res) => {
     const r = await pool.query(
       `SELECT id, source, emitting_agent_key, filename, file_content, targets,
               title, summary, rationale, template_id, status, applied_at,
-              apply_summary, apply_error, apply_error_detail,
+              apply_summary, apply_changeset, apply_error, apply_error_detail,
               created_at, expires_at, session_id,
               parent_message_id, user_id
          FROM payloads
