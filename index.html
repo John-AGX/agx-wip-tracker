@@ -1321,7 +1321,7 @@
                                     <thead>
                                         <tr>
                                             <th>Building</th>
-                                            <th>Phase</th>
+                                            <th>Scope</th>
                                             <th style="text-align: right;">Hours This Week</th>
                                             <th style="text-align: right;">Total Hours</th>
                                             <th style="text-align: right;">Avg Rate</th>
@@ -2125,12 +2125,12 @@
             <div id="buildingBudgetHint" style="font-size: 12px; color: var(--text-dim); margin-top: -12px; margin-bottom: 16px;"></div>
             <div id="buildingPhaseBreakdown" style="display:none; border:1px solid var(--border); border-radius:8px; padding:12px; margin-bottom:16px; background:var(--surface);">
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-                    <h4 style="font-size:13px; color:var(--text-dim); text-transform:uppercase; margin:0;">Phase Budget Breakdown</h4>
+                    <h4 style="font-size:13px; color:var(--text-dim); text-transform:uppercase; margin:0;">Scope Budget Breakdown</h4>
                     <span id="bldgPhaseRemaining" style="font-size:12px; font-weight:600;"></span>
                 </div>
                 <div id="bldgPhaseRows"></div>
                 <div style="display:flex; gap:8px; margin-top:8px;">
-                    <button type="button" class="ee-btn secondary" id="bldgAddPhaseBtn" onclick="addPhaseFromBuildingModal()">+ Add Phase</button>
+                    <button type="button" class="ee-btn secondary" id="bldgAddPhaseBtn" onclick="addPhaseFromBuildingModal()">+ Add Scope</button>
                 </div>
             </div>
             <div id="buildingCOBreakdown" style="display:none; border:1px solid var(--border); border-radius:8px; padding:12px; margin-bottom:16px; background:var(--surface);">
@@ -3221,7 +3221,7 @@
          BEFORE admin.js so window.p86EmailBlocks is available at the
          time renderTemplateEditor() runs its mount call. -->
     <script src="js/email-block-editor.js?v=6"></script>
-    <script src="js/admin.js?v=124"></script>
+    <script src="js/admin.js?v=125"></script>
     <!-- Act-as / disguise mode: persistent "Acting as NAME — Exit" banner +
          window.p86ActAs(userId). Self-contained; re-fetches /api/auth/me. -->
     <script src="js/actas.js?v=1"></script>
@@ -3252,7 +3252,7 @@
     <script src="js/job-finalize.js?v=3"></script>
     <script src="js/leads.js?v=76"></script>
     <script src="js/job-costs-import.js?v=8"></script>
-    <script src="js/qb-costs-view.js?v=18"></script>
+    <script src="js/qb-costs-view.js?v=19"></script>
     <script src="js/insights.js?v=7"></script>
     <script src="js/schedule.js?v=50"></script>
     <script src="js/my-day.js?v=8"></script>
@@ -3344,7 +3344,7 @@
          BEFORE any of them so window.p86Pricing is ready. -->
     <script src="js/pricing-pipeline.js?v=2"></script>
     <script src="js/progress.js?v=3"></script>
-    <script src="js/jobs.js?v=196"></script>
+    <script src="js/jobs.js?v=197"></script>
     <script src="js/doc-import.js?v=3"></script>
     <script src="js/job-workflow-ui.js?v=6"></script>
     <!-- Reusable rich-text field (window.p86RichText) — shared WYSIWYG for
@@ -3366,7 +3366,7 @@
          BEFORE ai-panel.js so window.PayloadArtifact exists when the
          panel mounts. -->
     <script src="js/payload-artifact.js?v=8"></script>
-    <script src="js/ai-panel.js?v=155"></script>
+    <script src="js/ai-panel.js?v=156"></script>
     <!-- Save-from-chat bridge (Workstream ③). Owns p86SaveCodeBlock /
          p86SaveResponse / p86SaveToPicker, called by inline onclick
          handlers in ai-panel.js renderMarkdown / renderBubble. Loads
@@ -3374,13 +3374,13 @@
     <script src="js/save-from-chat.js?v=2"></script>
     <script src="js/tab-slider.js?v=1b"></script>
 
-    <script src="js/workspace.js?v=53"></script>
+    <script src="js/workspace.js?v=54"></script>
     <script src="js/workspace-layout.js?v=99"></script>
 
     <!-- URL router — pathname-based navigation. Loads last so all
          top-level nav functions (switchTab, editJob, etc.) exist
          before the router wraps them. -->
-    <script src="js/router.js?v=26"></script>
+    <script src="js/router.js?v=27"></script>
 
     <!-- Sidebar Recents — client-side recently-opened list. Loads after
          router.js + the entity-open modules so it can wrap editJob /
@@ -3720,7 +3720,7 @@
         <div class="p86-mobile-more-grid" data-more-grid>
           <button type="button" class="p86-mobile-more-tile" data-cap="ESTIMATES_VIEW" onclick="p86MoreGo('estimates',{estSub:'clients',virtual:'clients'})"><span class="p86-mobile-more-icon" data-p86-icon="id-card"></span><span>Clients</span></button>
           <button type="button" class="p86-mobile-more-tile" onclick="p86MoreGo('estimates',{estSub:'subs',virtual:'subs'})"><span class="p86-mobile-more-icon" data-p86-icon="subs"></span><span>Subs</span></button>
-          <button type="button" class="p86-mobile-more-tile" data-cap="ESTIMATES_VIEW" onclick="p86MoreGo('estimates',{estSub:'assemblies',virtual:'assemblies'})"><span class="p86-mobile-more-icon" data-p86-icon="estimates"></span><span>Assemblies</span></button>
+          <button type="button" class="p86-mobile-more-tile" data-cap="ESTIMATES_VIEW" onclick="p86MoreGo('assembly-studio')"><span class="p86-mobile-more-icon" data-p86-icon="estimates"></span><span>Assemblies</span></button>
         </div>
 
         <div class="p86-mobile-more-section" data-more-section>Company</div>

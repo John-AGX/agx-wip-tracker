@@ -888,7 +888,7 @@ function p86Ask(message, opts) {
     }
 
     var TYPE_LABEL = {
-      t1: 'Building (T1)', t2: 'Phase (T2)', sub: 'Subcontractor',
+      t1: 'Building (T1)', t2: 'Scope (T2)', sub: 'Subcontractor',
       co:  'Change Order', po:  'Purchase Order', inv: 'Invoice',
       labor:  'Labor', burden: 'Direct Burden', mat: 'Materials',
       gc: 'General Conditions', other:  'Other Cost', watch: 'Watch'

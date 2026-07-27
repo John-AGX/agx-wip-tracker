@@ -4297,7 +4297,7 @@ function p86Ask(message, opts) {
       // Phases (grouped by building)
       var phases = appData.phases.filter(function (p) { return p.jobId === grid.jobId; });
       if (phases.length > 0) {
-        html += '<details class="ws-link-level"><summary class="ws-link-level-header">Phases</summary>';
+        html += '<details class="ws-link-level"><summary class="ws-link-level-header">Scopes</summary>';
         var phasesByBldg = {};
         phases.forEach(function (p) {
           var bldg = appData.buildings.find(function (b) { return b.id === p.buildingId; });

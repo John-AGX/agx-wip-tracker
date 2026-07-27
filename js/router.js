@@ -77,13 +77,13 @@
   // ORG_REDIRECTS folds them into the Organization tab on replay.
   var KNOWN_ADMIN_SUBS = [
     'users', 'roles', 'organization', 'agents', 'context', 'metrics', 'system',
-    'email', 'templates', 'jobs', 'materials', 'sms'
+    'email', 'templates', 'jobs', 'materials', 'sms', 'ocr-inbox'
   ];
   // 'my-files' is the internal tab id (matches the pane element id and
   // TAB_TITLES key); the URL slug for it is '/files' — friendlier and
   // matches the header icon's purpose. parsePath/serializeRoute do the
   // translation.
-  var KNOWN_TOP_TABS = ['summary', 'my-files', 'field-tools', 'jobs', 'jobshub', 'estimates', 'schedule', 'plans', 'assembly-studio', 'insights', 'admin', 'projects', 'orgmap', 'orgleadsmap', 'console', 'cost-inbox', 'invoices', 'my-day', 'my-tasks', 'messages'];
+  var KNOWN_TOP_TABS = ['summary', 'my-files', 'field-tools', 'jobs', 'jobshub', 'estimates', 'schedule', 'plans', 'assembly-studio', 'insights', 'admin', 'projects', 'orgmap', 'orgleadsmap', 'console', 'cost-inbox', 'invoices', 'my-day', 'my-tasks', 'messages', 'email-hub'];
 
   // ── URL <-> route object ──────────────────────────────────────
   function parsePath(pathname) {

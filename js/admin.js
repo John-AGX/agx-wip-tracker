@@ -4782,7 +4782,7 @@ function p86Ask(message, opts) {
   window.moveExclusion = moveExclusion;
 
   // ==================== ADMIN AGENTS ====================
-  // Observability surface for 86 (all surfaces) + CoS.
+  // Observability surface for 86 (all surfaces).
   // Three sub-views:
   //   1. Metrics — last 7d / 30d aggregate per agent (turns, tokens,
   //      cost, tool uses, model mix).
@@ -8462,7 +8462,7 @@ function p86Ask(message, opts) {
   // someone manually clicks Bootstrap. Shown in the Skills view
   // header so the user sees "attach → click sync → done."
   window.syncManagedAgentsAfterSkillEdit = async function() {
-    if (!(await p86Ask('Push attach/detach changes to Anthropic now?\n\nThis re-registers all three managed agents (job, cra, staff) with their current skill + tool lists. Takes a few seconds. Existing in-flight chats keep their current agent version; new turns bind to the updated one.'))) return;
+    if (!(await p86Ask('Push attach/detach changes to Anthropic now?\n\nThis re-registers all three managed agents (86, Assistant, Scribe) with their current skill + tool lists. Takes a few seconds. Existing in-flight chats keep their current agent version; new turns bind to the updated one.'))) return;
     var btn = event && event.target && event.target.closest('button');
     if (btn) { btn.disabled = true; var prev = btn.textContent; btn.textContent = 'Syncing…'; btn.dataset.prev = prev; }
     window.p86Api.post('/api/admin/agents/managed/sync-all', {}).then(function(resp) {

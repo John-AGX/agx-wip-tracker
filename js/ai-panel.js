@@ -2877,7 +2877,7 @@ function p86Ask(message, opts) {
           : '';
       };
       if (isAsk86Mode()) hint = '<strong style="color:var(--text,#fff);">' + hintIcon('dna') + 'Ask 86</strong><br>Talk to 86 directly. I can create leads, update clients, audit conversations, push skill-pack changes, and search the web — and I have the live reference sheets (job numbers, WIP, etc.).<br><span style="font-size:11px;opacity:0.7;">For per-line edits on a specific estimate or job, open that entity\'s AI panel.</span>';
-      else if (isJobMode()) hint = '<strong style="color:var(--text,#fff);">' + hintIcon('dna') + '86 · Lead Agent</strong><br>Pick a preset below or ask anything about this job.<br><span style="font-size:11px;opacity:0.7;">I see contract, costs, COs, %complete, billing — plus the Site Plan wiring and QuickBooks cost lines.</span>';
+      else if (isJobMode()) hint = '<strong style="color:var(--text,#fff);">' + hintIcon('dna') + '86 · Lead Agent</strong><br>Pick a preset below or ask anything about this job.<br><span style="font-size:11px;opacity:0.7;">I see contract, costs, COs, %complete, billing — plus the Site Plan scopes and QuickBooks cost lines.</span>';
       else if (isClientMode()) hint = '<strong style="color:var(--text,#fff);">' + hintIcon('chart-pie') + '86 · Client Directory</strong><br>Tap <strong>Run full audit</strong> to clean up the directory in one pass — I\'ll split parent+property compounds, link unparented entries, merge dupes, and surface anything ambiguous for you.<br><span style="font-size:11px;opacity:0.7;">Hierarchy: parent management company → property/community → CAM contact.</span>';
       else if (isStaffMode()) hint = '<strong style="color:var(--text,#fff);">' + hintIcon('briefcase') + '86 · Admin</strong><br>Cross-agent metrics, recent conversations, skill-pack curation. Ask about usage patterns or propose skill-pack edits.<br><span style="font-size:11px;opacity:0.7;">Same brain as the rest of 86 — admin context just narrows the snapshot.</span>';
       else hint = '<strong style="color:var(--text,#fff);">' + hintIcon('dna') + '86 · Estimator</strong><br>Pick a preset or describe what you need. I can read the estimate, scope, client, and photos — and propose adds, edits, deletes, and pricing changes for you to approve.<br><span style="font-size:11px;opacity:0.7;">Try "tighten this estimate" or "build my line items".</span>';
@@ -5550,7 +5550,7 @@ function p86Ask(message, opts) {
         fmtList('Buildings with no phases (will read 0%)', emptyBldgs, function(b) {
           return '[' + b.id + '] ' + (b.name || '(unnamed)');
         });
-        fmtList('Phases with no budget (equal-weighted in rollup)', noBudget, function(p) {
+        fmtList('Scopes with no budget (equal-weighted in rollup)', noBudget, function(p) {
           return '[' + p.id + '] ' + (p.phase || '(unnamed)') + ' (buildingId=' + (p.buildingId || '∅') + ')';
         });
         return ao.join('\n');
@@ -6303,7 +6303,7 @@ function p86Ask(message, opts) {
         '</div>';
     } else if (tu.name === 'create_node') {
       var typeLabels = {
-        t1: 'Building (T1)', t2: 'Phase (T2)',
+        t1: 'Building (T1)', t2: 'Scope (T2)',
         labor: 'Labor', mat: 'Materials', gc: 'Gen. Conditions',
         other: 'Other', burden: 'Direct Burden',
         sub: 'Subcontractor', po: 'Purchase Order', inv: 'Invoice',

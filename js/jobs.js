@@ -5646,9 +5646,9 @@ function renderJobsMain() {
             back.style.cssText = 'position:fixed;inset:0;z-index:2147483200;background:rgba(6,9,17,.6);display:flex;align-items:center;justify-content:center;padding:16px;';
             back.innerHTML =
                 '<div class="modal-content" style="width:min(430px,96vw);">' +
-                    '<div class="p86-dialog-title">Add job-level phase</div>' +
-                    '<div class="p86-dialog-message">Create a phase on the job and set its total. You then split it across buildings in the breakdown.</div>' +
-                    '<label style="display:block;font-size:12px;margin:10px 0 4px;">Phase name</label>' +
+                    '<div class="p86-dialog-title">Add job-level scope</div>' +
+                    '<div class="p86-dialog-message">Create a scope on the job and set its total. You then split it across buildings in the breakdown.</div>' +
+                    '<label style="display:block;font-size:12px;margin:10px 0 4px;">Scope name</label>' +
                     '<input class="p86-dialog-input" id="jlpName" type="text" placeholder="e.g. Roofing, Framing, Sitework" />' +
                     '<div style="display:flex;gap:10px;">' +
                         '<div style="flex:1;"><label style="display:block;font-size:12px;margin:12px 0 4px;">Budget / cost ($)</label>' +
@@ -5658,7 +5658,7 @@ function renderJobsMain() {
                     '</div>' +
                     '<div class="p86-dialog-actions" style="margin-top:16px;">' +
                         '<button class="p86-dialog-btn" data-cancel>Cancel</button>' +
-                        '<button class="p86-dialog-btn p86-dialog-btn-primary" data-create>Add phase</button>' +
+                        '<button class="p86-dialog-btn p86-dialog-btn-primary" data-create>Add scope</button>' +
                     '</div>' +
                 '</div>';
             document.body.appendChild(back);
@@ -5693,7 +5693,7 @@ function renderJobsMain() {
                 // Re-render the overview Phases section (Site Plan right panel).
                 var host = document.getElementById('insp-phases');
                 if (host) { try { renderOverviewPhasesInto(host, jobId, appData.phases.filter(function(p) { return p.jobId === jobId; })); } catch (e) {} }
-                if (typeof window.p86Toast === 'function') window.p86Toast('Phase "' + name + '" added at the job level', 'success');
+                if (typeof window.p86Toast === 'function') window.p86Toast('Scope "' + name + '" added at the job level', 'success');
             });
             setTimeout(function() { var i = back.querySelector('#jlpName'); if (i) i.focus(); }, 0);
         }
@@ -6364,7 +6364,7 @@ function renderJobsMain() {
                     }
                     if (existingBudgetTotal + asSoldRevenue > bldg.budget * 1.001) {
                         const remaining = bldg.budget - existingBudgetTotal;
-                        alert('Phase revenue cannot exceed building budget (' + formatCurrency(bldg.budget) + '). Currently ' + formatCurrency(existingBudgetTotal) + ' allocated. Remaining: ' + formatCurrency(remaining));
+                        alert('Scope revenue cannot exceed building budget (' + formatCurrency(bldg.budget) + '). Currently ' + formatCurrency(existingBudgetTotal) + ' allocated. Remaining: ' + formatCurrency(remaining));
                         return;
                     }
                 }
