@@ -13851,6 +13851,21 @@ router.get('/86/messages', requireAuth, async (req, res) => {
         );
         return res.json({ messages: dmr.rows, deal_thread_id: sid });
       }
+      // user_thread turns are unified by session_id (dual-written since slice
+      // 3a-1), NOT by the session's static entity tuple. Loading by the tuple
+      // collapsed every "+ New chat" (all keyed general/NULL) into one shared
+      // bucket, so a brand-new chat rendered unrelated older "general" turns and
+      // two same-tuple threads cross-rendered. Load STRICTLY by session_id — no
+      // tuple fallback: a 0-row result means a genuinely-new chat and must
+      // render empty, not resurrect the shared bucket.
+      if (s.session_kind === 'user_thread') {
+        const umr = await pool.query(
+          `SELECT id, role, content, output_files, created_at
+             FROM ai_messages WHERE session_id = $1 ORDER BY created_at ASC`,
+          [sid]
+        );
+        return res.json({ messages: umr.rows });
+      }
       const mr = await pool.query(
         `SELECT id, role, content, output_files, created_at
            FROM ai_messages
