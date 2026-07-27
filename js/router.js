@@ -77,7 +77,7 @@
   // ORG_REDIRECTS folds them into the Organization tab on replay.
   var KNOWN_ADMIN_SUBS = [
     'users', 'roles', 'organization', 'agents', 'context', 'metrics', 'system',
-    'email', 'templates', 'jobs', 'materials', 'sms', 'ocr-inbox'
+    'email', 'templates', 'jobs', 'materials', 'sms', 'ocr-inbox', 'compliance'
   ];
   // 'my-files' is the internal tab id (matches the pane element id and
   // TAB_TITLES key); the URL slug for it is '/files' — friendlier and
@@ -450,7 +450,7 @@
           users: 'admin-users', roles: 'admin-roles',
           organization: 'admin-organization', agents: 'admin-agents',
           context: 'admin-context', metrics: 'admin-metrics',
-          system: 'admin-system',
+          system: 'admin-system', 'ocr-inbox': 'admin-ocr-inbox', compliance: 'admin-compliance',
           templates: 'admin-organization', materials: 'admin-organization',
           jobs: 'admin-organization', sms: 'admin-organization',
           email: 'admin-organization', 'email-templates': 'admin-organization'

@@ -2248,6 +2248,12 @@ function p86Ask(message, opts) {
       case 'client':
         r = find(A.clients);
         return r ? (r.name || r.company_name || 'Client') : null;
+      case 'sub':
+        r = find(A.subs);
+        return r ? (r.name || r.company_name || r.company || 'Sub') : null;
+      case 'user':
+        r = find(A.users);
+        return r ? (r.name || r.full_name || r.email || 'User') : null;
       default:
         return null;
     }

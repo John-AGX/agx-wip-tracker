@@ -130,6 +130,7 @@
         // here as the shared renderer and mounts into the new pane's
         // #cc-assemblies host, exposed as window.p86Console.loadAssemblyStudio.
         '<div id="cc-metrics"   class="cc-section" style="display:none;"></div>' +
+        '<div id="cc-forensics" class="cc-section" style="display:none;"></div>' +
         '<div id="cc-tenants"   class="cc-section" style="display:none;"></div>' +
         '<div id="cc-audit"     class="cc-section" style="display:none;"></div>' +
         '<div id="cc-anthropic" class="cc-section" style="display:none;"></div>' +
@@ -145,7 +146,7 @@
   }
 
   // The platform sub-views, in sidebar order.
-  var CONSOLE_VIEWS = ['overview', 'docs', 'metrics', 'tenants', 'audit', 'anthropic', 'email', 'btmapping', 'settings', 'danger'];
+  var CONSOLE_VIEWS = ['overview', 'docs', 'metrics', 'forensics', 'tenants', 'audit', 'anthropic', 'email', 'btmapping', 'settings', 'danger'];
 
   // Each view's loader. The system-service views mount the existing
   // host-parameterized admin.js renderers (re-runs fresh each visit).
@@ -153,6 +154,7 @@
     if (view === 'overview') return loadOverview();
     if (view === 'docs') return loadDocs();
     if (view === 'metrics') return loadMetrics();
+    if (view === 'forensics') return loadForensics();
     if (view === 'tenants') return loadTenants();
     if (view === 'audit') return loadAudit();
     if (view === 'anthropic') return mountSystem('cc-anthropic', 'cc-anthropic-host', '🌐 Anthropic resources', window.renderSystemAnthropic);
@@ -1038,6 +1040,103 @@
         '<div style="font-size:10.5px;color:var(--text-dim,#777);margin:6px 2px 0;">Cost is estimated from token counts at Opus 4.8 list rates — directional, not billed totals.</div>';
       wire();
     }).catch(function (e) { el.innerHTML = sectionTitle('Cross-org AI activity') + errBox('metrics', e); });
+  }
+
+  // ── Usage forensics — where the tokens went (attributes spend by surface,
+  // conversation, background job + watch, for a time window). Complements
+  // the cross-org metrics view with a per-consumer breakdown.
+  var _fxHrs = 48;
+  function loadForensics() {
+    var el = document.getElementById('cc-forensics');
+    if (!el) return;
+    // tokens-in = fresh input + cache-create + cache-read (bigint cols arrive as strings)
+    function tin(r) { return (Number(r.input_tokens) || 0) + (Number(r.cache_creation) || 0) + (Number(r.cache_read) || 0); }
+    function presets() {
+      return '<span style="font-size:11.5px;">' +
+        [[24, '24h'], [48, '48h'], [168, '7d']].map(function (p) {
+          return '<a href="#" data-fx-hrs="' + p[0] + '" style="color:' + (_fxHrs === p[0] ? 'var(--accent,#7c9cff)' : 'var(--text-dim,#888)') + ';text-decoration:none;margin-left:9px;">' + p[1] + '</a>';
+        }).join('') + '</span>';
+    }
+    function wire() {
+      el.querySelectorAll('[data-fx-hrs]').forEach(function (a) {
+        a.addEventListener('click', function (ev) { ev.preventDefault(); _fxHrs = Number(a.getAttribute('data-fx-hrs')) || 48; loadForensics(); });
+      });
+    }
+    var thead = function (cols) {
+      return '<tr style="font-size:11px;color:var(--text-dim,#9a9aa2);text-transform:uppercase;letter-spacing:.03em;">' +
+        cols.map(function (c) { return '<th style="padding:8px 10px;text-align:' + (c[1] || 'left') + ';">' + esc(c[0]) + '</th>'; }).join('') + '</tr>';
+    };
+    var table = function (headCols, bodyRows, emptyMsg, span) {
+      var body = bodyRows || ('<tr><td colspan="' + span + '" style="padding:14px;color:var(--text-dim,#888);">' + esc(emptyMsg) + '</td></tr>');
+      return panel('<table style="width:100%;border-collapse:collapse;font-size:12.5px;">' + thead(headCols) + body + '</table>');
+    };
+    var grpTitle = function (t) { return '<div style="font-size:12px;font-weight:600;color:var(--text-dim,#9a9aa2);margin:14px 2px 6px;">' + esc(t) + '</div>'; };
+
+    el.innerHTML = sectionTitle('Usage forensics', presets()) + '<div style="color:var(--text-dim,#888);font-size:12px;padding:4px;">Loading…</div>';
+    wire();
+    var to = new Date();
+    var from = new Date(to.getTime() - _fxHrs * 3600 * 1000);
+    cget('/api/admin/console/usage-forensics?from=' + encodeURIComponent(from.toISOString()) + '&to=' + encodeURIComponent(to.toISOString())).then(function (d) {
+      d = d || {};
+      var g = d.grand || {};
+      var cards = '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:6px;">' +
+        card('Everything · tokens in', tokK(g.everything_total_in), 'input + cache, all sources') +
+        card('Chat', tokK(g.chat_total_in), tokK(g.chat_output) + ' out') +
+        card('Agent jobs', tokK(g.agent_jobs_total_in), 'background') +
+        card('Watches', tokK(g.watches_total_in)) +
+        card('Subtasks', tokK(g.subtasks_total_in)) +
+        card('Replays', tokK(g.replays_in)) +
+        '</div>';
+
+      var surf = (d.bySurface || []).map(function (r) {
+        return '<tr><td style="padding:7px 10px;">' + esc(r.entity_type || '—') + '</td>' +
+          '<td style="padding:7px 10px;text-align:right;">' + num(r.turns) + '</td>' +
+          '<td style="padding:7px 10px;text-align:right;">' + num(r.conversations) + '</td>' +
+          '<td style="padding:7px 10px;text-align:right;">' + tokK(tin(r)) + ' / ' + tokK(r.output_tokens) + '</td></tr>';
+      }).join('');
+      var surfTable = table([['Surface'], ['Turns', 'right'], ['Convos', 'right'], ['Tokens in/out', 'right']], surf, 'No chat activity in this window.', 4);
+
+      var conv = (d.topConversations || []).map(function (r) {
+        var label = (r.entity_type || '') + (r.entity_id ? ' · ' + r.entity_id : '');
+        return '<tr><td style="padding:7px 10px;">' + esc(label || '—') + '</td>' +
+          '<td style="padding:7px 10px;">' + esc(r.user_name || ('user ' + (r.user_id == null ? '—' : r.user_id))) + '</td>' +
+          '<td style="padding:7px 10px;text-align:right;">' + num(r.turns) + '</td>' +
+          '<td style="padding:7px 10px;text-align:right;">' + num(r.tool_uses) + '</td>' +
+          '<td style="padding:7px 10px;text-align:right;">' + tokK(r.total_in) + ' / ' + tokK(r.output_tokens) + '</td>' +
+          '<td style="padding:7px 10px;text-align:right;color:var(--text-dim,#888);">' + esc(ago(r.last_turn)) + '</td></tr>';
+      }).join('');
+      var convTable = table([['Surface · entity'], ['User'], ['Turns', 'right'], ['Tools', 'right'], ['Tokens in/out', 'right'], ['Last', 'right']], conv, 'No conversations.', 6);
+
+      var jobs = (d.agentJobs || []).map(function (r) {
+        return '<tr><td style="padding:7px 10px;">' + esc(r.title || ('job ' + r.id)) + '</td>' +
+          '<td style="padding:7px 10px;">' + esc(r.agent_key || '—') + '</td>' +
+          '<td style="padding:7px 10px;">' + esc(r.status || '—') + '</td>' +
+          '<td style="padding:7px 10px;text-align:right;">' + tokK(r.total_in) + ' / ' + tokK(r.output_tokens) + '</td></tr>';
+      }).join('');
+      var jobTable = table([['Background job'], ['Agent'], ['Status'], ['Tokens in/out', 'right']], jobs, 'No background jobs.', 4);
+
+      var out = cards +
+        grpTitle('By surface') + surfTable +
+        grpTitle('Top conversations') + convTable +
+        grpTitle('Background agent jobs') + jobTable;
+
+      if ((d.watchRuns || []).length) {
+        var watch = d.watchRuns.map(function (r) {
+          return '<tr><td style="padding:7px 10px;">' + esc(r.name || ('watch ' + r.watch_id)) + '</td>' +
+            '<td style="padding:7px 10px;text-align:right;">' + num(r.runs) + '</td>' +
+            '<td style="padding:7px 10px;text-align:right;">' + tokK(tin(r)) + ' / ' + tokK(r.output_tokens) + '</td></tr>';
+        }).join('');
+        out += grpTitle('Watches') + table([['Watch'], ['Runs', 'right'], ['Tokens in/out', 'right']], watch, '', 3);
+      }
+
+      var unl = (d.unlogged || []).reduce(function (a, r) { return a + (Number(r.turns_without_usage) || 0); }, 0);
+      out += '<div style="font-size:10.5px;color:var(--text-dim,#777);margin:10px 2px 0;">Window ' + esc(_fxHrs) + 'h · tokens-in = fresh input + cache create + cache read.' +
+        (unl ? ' ' + num(unl) + ' assistant turns had no usage recorded (undercount).' : '') + '</div>';
+
+      el.innerHTML = sectionTitle('Usage forensics', presets() +
+        '<span style="font-size:11.5px;color:var(--text-dim,#888);">total in ' + tokK(g.everything_total_in) + '</span>') + out;
+      wire();
+    }).catch(function (e) { el.innerHTML = sectionTitle('Usage forensics') + errBox('usage forensics', e); });
   }
 
   function loadTenants() {

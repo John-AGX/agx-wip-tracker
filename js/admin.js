@@ -1155,6 +1155,7 @@ function p86Ask(message, opts) {
     else if (name === 'organization') renderAdminOrganization();
     else if (name === 'system') renderAdminSystem();
     else if (name === 'ocr-inbox') renderAdminOcrInbox();
+    else if (name === 'compliance') renderAdminCompliance();
     // Persist nav state so a refresh lands back on this admin sub-tab.
     if (typeof window.p86NavSave === 'function') window.p86NavSave();
   }
@@ -4564,6 +4565,98 @@ function p86Ask(message, opts) {
   // ── Cost Inbox · OCR accuracy (admin) ──────────────────────────────
   // Reads /api/receipts/ocr/stats and paints metric cards: total samples + the
   // AI's per-field hit-rate. Amount is the field worth watching (error-prone).
+  // Compliance — full filterable list of COI / license / lien-waiver / WC-cert
+  // records (GET /api/compliance-items). The Summary "Certs Expiring" card
+  // stays the fast triage; this is the browse-everything surface.
+  var COMPLIANCE_TYPE_META = {
+    client_coi:  { label: 'Client COI',   glyph: '🏢' },
+    license:     { label: 'License',      glyph: '🎫' },
+    lien_waiver: { label: 'Lien Waiver',  glyph: '📜' },
+    wc_cert:     { label: 'Workers Comp', glyph: '🦺' },
+    other:       { label: 'Other',        glyph: '📄' }
+  };
+  var _complianceFilter = { type: '', status: '', entity_type: '' };
+  function renderAdminCompliance() {
+    if (!isAdmin()) return;
+    var host = document.getElementById('admin-compliance-content');
+    if (!host) return;
+    var esc = function (s) { return (typeof escapeHTML === 'function') ? escapeHTML(String(s == null ? '' : s)) : String(s == null ? '' : s); };
+    function fmtDate(d) { if (!d) return '—'; var dt = new Date(d); return isNaN(dt) ? '—' : dt.toLocaleDateString(); }
+    function daysLeft(exp) { if (!exp) return null; var dt = new Date(exp); if (isNaN(dt)) return null; return Math.round((dt.getTime() - Date.now()) / 86400000); }
+    function expiryCell(exp) {
+      if (!exp) return '<span style="color:var(--text-dim,#888);">no expiry</span>';
+      var dl = daysLeft(exp);
+      var color = dl == null ? 'var(--text-dim,#888)' : dl < 0 ? '#ff6b6b' : dl <= 30 ? '#f0a020' : 'var(--text,#ddd)';
+      var tail = dl == null ? '' : dl < 0 ? ' · ' + Math.abs(dl) + 'd ago' : ' · ' + dl + 'd';
+      return '<span style="color:' + color + ';">' + esc(fmtDate(exp)) + tail + '</span>';
+    }
+    function statusPill(s) {
+      var c = s === 'active' ? '#34c77b' : s === 'expired' ? '#ff6b6b' : s === 'pending' ? '#f0a020' : '#888';
+      return '<span style="font-size:10px;text-transform:uppercase;letter-spacing:.04em;padding:2px 8px;border-radius:9px;background:' + c + '22;color:' + c + ';">' + esc(s || '—') + '</span>';
+    }
+    function entityName(it) {
+      var n = (window.entityDisplayName && window.entityDisplayName(it.entity_type, it.entity_id));
+      return n || (it.entity_type || '—');
+    }
+    function bar() {
+      function sel(id, label, val, opts) {
+        return '<label style="font-size:11px;color:var(--text-dim,#888);display:flex;align-items:center;gap:5px;">' + label +
+          '<select id="' + id + '" style="font-size:12px;padding:4px 8px;border-radius:6px;background:var(--card-bg,#141419);color:var(--text,#fff);border:1px solid var(--border,#333);">' +
+          opts.map(function (o) { return '<option value="' + o[0] + '"' + (val === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('') +
+          '</select></label>';
+      }
+      return '<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:12px;">' +
+        sel('cmpFilterType', 'Type', _complianceFilter.type, [['', 'All'], ['client_coi', 'Client COI'], ['license', 'License'], ['lien_waiver', 'Lien Waiver'], ['wc_cert', 'Workers Comp'], ['other', 'Other']]) +
+        sel('cmpFilterEntity', 'For', _complianceFilter.entity_type, [['', 'All'], ['sub', 'Subs'], ['client', 'Clients'], ['job', 'Jobs'], ['user', 'Staff']]) +
+        sel('cmpFilterStatus', 'Status', _complianceFilter.status, [['', 'All'], ['active', 'Active'], ['pending', 'Pending'], ['expired', 'Expired']]) +
+        '<button class="secondary" id="cmpRefresh" style="font-size:12px;">Refresh</button>' +
+        '</div>';
+    }
+    function tableFor(items) {
+      var hasFilter = _complianceFilter.type || _complianceFilter.status || _complianceFilter.entity_type;
+      if (!items.length) return '<div style="padding:18px 4px;color:var(--text-dim,#888);font-size:13px;">No compliance records' + (hasFilter ? ' match these filters.' : ' yet.') + '</div>';
+      var head = '<tr style="font-size:11px;color:var(--text-dim,#9a9aa2);text-transform:uppercase;letter-spacing:.03em;">' +
+        '<th style="padding:8px 10px;text-align:left;">Type</th>' +
+        '<th style="padding:8px 10px;text-align:left;">For</th>' +
+        '<th style="padding:8px 10px;text-align:left;">Title</th>' +
+        '<th style="padding:8px 10px;text-align:left;">Status</th>' +
+        '<th style="padding:8px 10px;text-align:left;">Expires</th></tr>';
+      var rows = items.map(function (it) {
+        var tm = COMPLIANCE_TYPE_META[it.type] || { label: it.type || 'Other', glyph: '📄' };
+        return '<tr style="border-top:1px solid var(--border,#2a2a30);">' +
+          '<td style="padding:7px 10px;white-space:nowrap;">' + tm.glyph + ' ' + esc(tm.label) + '</td>' +
+          '<td style="padding:7px 10px;">' + esc(entityName(it)) + '</td>' +
+          '<td style="padding:7px 10px;">' + esc(it.title || '—') + '</td>' +
+          '<td style="padding:7px 10px;">' + statusPill(it.status) + '</td>' +
+          '<td style="padding:7px 10px;white-space:nowrap;">' + expiryCell(it.expiration_date) + '</td></tr>';
+      }).join('');
+      return '<div style="background:var(--card-bg,#141419);border:1px solid var(--border,#333);border-radius:10px;overflow-x:auto;">' +
+        '<table style="width:100%;border-collapse:collapse;font-size:12.5px;">' + head + rows + '</table></div>' +
+        '<div style="font-size:10.5px;color:var(--text-dim,#777);margin:6px 2px 0;">' + items.length + ' record' + (items.length === 1 ? '' : 's') + ' · soonest-expiring first.</div>';
+    }
+    function wireBar() {
+      var t = document.getElementById('cmpFilterType'), st = document.getElementById('cmpFilterStatus'), en = document.getElementById('cmpFilterEntity'), rf = document.getElementById('cmpRefresh');
+      if (t) t.onchange = function () { _complianceFilter.type = t.value; renderAdminCompliance(); };
+      if (st) st.onchange = function () { _complianceFilter.status = st.value; renderAdminCompliance(); };
+      if (en) en.onchange = function () { _complianceFilter.entity_type = en.value; renderAdminCompliance(); };
+      if (rf) rf.onclick = function () { renderAdminCompliance(); };
+    }
+    host.innerHTML = '<div style="color:var(--text-dim,#888);font-size:13px;padding:8px 0;">Loading…</div>';
+    var qs = [];
+    if (_complianceFilter.type) qs.push('type=' + encodeURIComponent(_complianceFilter.type));
+    if (_complianceFilter.status) qs.push('status=' + encodeURIComponent(_complianceFilter.status));
+    if (_complianceFilter.entity_type) qs.push('entity_type=' + encodeURIComponent(_complianceFilter.entity_type));
+    var path = '/api/compliance-items' + (qs.length ? '?' + qs.join('&') : '');
+    window.p86Api.get(path).then(function (r) {
+      host.innerHTML = bar() + tableFor((r && r.items) || []);
+      wireBar();
+    }).catch(function (e) {
+      host.innerHTML = bar() + '<div style="padding:14px;color:#ff6b6b;font-size:12.5px;">Couldn\'t load compliance items: ' + esc((e && e.message) || String(e)) + '</div>';
+      wireBar();
+    });
+  }
+  window.renderAdminCompliance = renderAdminCompliance;
+
   function renderAdminOcrInbox() {
     if (!isAdmin()) return;
     try { renderAdminCostCategories(); } catch (e) { /* categories card is independent of OCR stats */ }

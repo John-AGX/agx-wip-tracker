@@ -720,6 +720,7 @@
                                 <button class="tab-btn app-nav-child" data-tab="admin" data-admin-subtab="context" data-virtual-tab="admin-context" data-p86-icon="academic-cap" title="Context"><span class="app-nav-label">Context</span></button>
                                 <button class="tab-btn app-nav-child" data-tab="admin" data-admin-subtab="metrics" data-virtual-tab="admin-metrics" data-p86-icon="insights" title="Metrics"><span class="app-nav-label">Metrics</span></button>
                                 <button class="tab-btn app-nav-child" data-tab="admin" data-admin-subtab="ocr-inbox" data-p86-icon="chart-bar" title="OCR"><span class="app-nav-label">OCR</span></button>
+                                <button class="tab-btn app-nav-child" data-tab="admin" data-admin-subtab="compliance" data-virtual-tab="admin-compliance" data-p86-icon="id-card" title="Compliance — COI / license / lien-waiver / WC-cert tracking"><span class="app-nav-label">Compliance</span></button>
                                 <!-- ⚙ System retired → top-level ⚙ Command Center -->
                             </div>
                         </div>
@@ -777,6 +778,7 @@
                                 <button class="tab-btn app-nav-child" data-tab="console" data-console-subtab="overview" data-virtual-tab="console-overview" data-p86-icon="insights" title="Overview"><span class="app-nav-label">Overview</span></button>
                                 <button class="tab-btn app-nav-child" data-tab="console" data-console-subtab="docs" data-virtual-tab="console-docs" data-p86-icon="academic-cap" title="How Project 86 works — internal design documentation"><span class="app-nav-label">How it works</span></button>
                                 <button class="tab-btn app-nav-child" data-tab="console" data-console-subtab="metrics" data-virtual-tab="console-metrics" data-p86-icon="chart-bar" title="Metrics"><span class="app-nav-label">Metrics</span></button>
+                                <button class="tab-btn app-nav-child" data-tab="console" data-console-subtab="forensics" data-virtual-tab="console-forensics" data-p86-icon="detective" title="Usage forensics — where the tokens went"><span class="app-nav-label">Usage forensics</span></button>
                                 <button class="tab-btn app-nav-child" data-tab="console" data-console-subtab="tenants" data-virtual-tab="console-tenants" data-p86-icon="clients" title="Tenants"><span class="app-nav-label">Tenants</span></button>
                                 <button class="tab-btn app-nav-child" data-tab="console" data-console-subtab="audit" data-virtual-tab="console-audit" data-p86-icon="detective" title="Audit"><span class="app-nav-label">Audit</span></button>
                                 <button class="tab-btn app-nav-child" data-tab="console" data-console-subtab="anthropic" data-virtual-tab="console-anthropic" data-p86-icon="dna" title="Anthropic"><span class="app-nav-label">Anthropic</span></button>
@@ -1832,6 +1834,8 @@
                         <button class="ws-right-tab" data-admin-subtab="metrics" data-p86-icon="insights" onclick="switchAdminSubTab('metrics')">Metrics</button>
                         <!-- Cost Inbox OCR accuracy stats -->
                         <button class="ws-right-tab" data-admin-subtab="ocr-inbox" data-p86-icon="chart-bar" onclick="switchAdminSubTab('ocr-inbox')">OCR</button>
+                        <!-- Compliance — COI / license / lien-waiver / WC-cert full list -->
+                        <button class="ws-right-tab" data-admin-subtab="compliance" data-p86-icon="id-card" onclick="switchAdminSubTab('compliance')">Compliance</button>
 
                         <!-- ⚙ System sub-tab retired — its cross-tenant surface
                              (tenants, cross-org metrics, audit, Anthropic
@@ -1902,6 +1906,14 @@
                                 <tbody id="admin-metrics-jobs-tbody"></tbody>
                             </table>
                         </div>
+                    </div>
+
+                    <!-- Compliance · COI / license / lien-waiver / WC-cert full list -->
+                    <div id="admin-subtab-compliance" class="admin-subtab-content" style="display:none;">
+                        <p style="margin:0 0 14px 0;color:var(--text-dim,#888);font-size:12px;">
+                            Every compliance record — insurance (COI), licenses, lien waivers, and workers-comp certs across clients, subs, jobs, and staff. The <strong>Summary</strong> page's &ldquo;Certs Expiring&rdquo; card is the fast triage; this is the full, filterable list.
+                        </p>
+                        <div id="admin-compliance-content"></div>
                     </div>
 
                     <!-- Cost Inbox · OCR accuracy sub-tab -->
@@ -3221,7 +3233,7 @@
          BEFORE admin.js so window.p86EmailBlocks is available at the
          time renderTemplateEditor() runs its mount call. -->
     <script src="js/email-block-editor.js?v=6"></script>
-    <script src="js/admin.js?v=125"></script>
+    <script src="js/admin.js?v=126"></script>
     <!-- Act-as / disguise mode: persistent "Acting as NAME — Exit" banner +
          window.p86ActAs(userId). Self-contained; re-fetches /api/auth/me. -->
     <script src="js/actas.js?v=1"></script>
@@ -3326,7 +3338,7 @@
     <script src="js/cost-inbox.js?v=20"></script>
     <script src="js/invoices.js?v=2"></script>
     <script src="js/console-docs.js?v=2"></script>
-    <script src="js/console.js?v=16"></script>
+    <script src="js/console.js?v=17"></script>
     <!-- Jobs Hub — cross-job index pages (Purchase Orders / Change Orders /
          RFIs / Submittals) for the Jobs sidebar dropdown. Uses p86Api +
          appData.jobs + editJob/switchJobSubTab at runtime. -->
@@ -3366,7 +3378,7 @@
          BEFORE ai-panel.js so window.PayloadArtifact exists when the
          panel mounts. -->
     <script src="js/payload-artifact.js?v=8"></script>
-    <script src="js/ai-panel.js?v=157"></script>
+    <script src="js/ai-panel.js?v=158"></script>
     <!-- Save-from-chat bridge (Workstream ③). Owns p86SaveCodeBlock /
          p86SaveResponse / p86SaveToPicker, called by inline onclick
          handlers in ai-panel.js renderMarkdown / renderBubble. Loads
@@ -3380,7 +3392,7 @@
     <!-- URL router — pathname-based navigation. Loads last so all
          top-level nav functions (switchTab, editJob, etc.) exist
          before the router wraps them. -->
-    <script src="js/router.js?v=27"></script>
+    <script src="js/router.js?v=28"></script>
 
     <!-- Sidebar Recents — client-side recently-opened list. Loads after
          router.js + the entity-open modules so it can wrap editJob /
