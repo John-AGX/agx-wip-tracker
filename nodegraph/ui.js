@@ -5127,7 +5127,10 @@ function coAllocHtml(jid, blds){
 function openCoAllocEditor(coId){
   var c=(appData.jobChangeOrders||[]).find(function(x){ return x && x.id===coId; });
   if(!c){ return; }
-  var frozen = (c.status==='applied') || c.is_locked;
+  // Allocation is a billing-distribution key, not the money — the approval lock
+  // (is_locked) must NOT freeze it, or an approved CO (which auto-locks) could
+  // never be allocated. Only an APPLIED (already-billed) CO is frozen here.
+  var frozen = (c.status==='applied');
   var jid=c.job_id;
   var buildings=(appData.buildings||[]).filter(function(b){ return b.jobId===jid; });
   var sell=(typeof window.coSellAmount==='function') ? Number(window.coSellAmount(c)||0) : 0;
@@ -5187,7 +5190,9 @@ function openCoAllocEditor(coId){
         +'<span class="cae-title">'+luEsc((c.title||c.description||'Change order')).slice(0,60)+'</span>'
         +'<span class="cae-total">'+E.fmtC(sell)+'</span></div>'
       +'<div class="cae-sub">Priced from its line items. Stores a <b>%</b> per building, so this flows through when the CO\'s lines change.</div>'
-      +(frozen?'<div class="cae-frozen">This change order is '+(c.is_locked?'locked':'applied')+' — unlock it to change its allocation.</div>':'')
+      +(frozen
+          ? '<div class="cae-frozen">This change order has been applied (billed) — its building allocation can\'t be changed.</div>'
+          : (!hadAny ? '<div class="cae-frozen" style="color:#f4c152;border-color:#b45309;background:rgba(180,83,9,.12);">Not allocated yet — the split below is a <b>suggestion</b>. Click <b>Save allocation</b> to apply it.</div>' : ''))
       +'<div class="cae-field"><span class="cae-lbl">Split</span><span class="cae-seg" id="caeSplit">'
         +'<button data-split="even" class="'+(split==='even'?'on':'')+'">Even</button>'
         +'<button data-split="units" class="'+(split==='units'?'on':'')+'">Units</button>'

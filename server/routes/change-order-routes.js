@@ -475,8 +475,13 @@ router.post('/change-orders/:id/allocations', requireAuth, requireCapability('ES
     );
     if (!existing.rowCount) return res.status(404).json({ error: 'Not found' });
     const cur = existing.rows[0];
+    // A CO's building allocation is a BILLING-DISTRIBUTION key, not the money — it
+    // touches no contract rollup, so the approval money-lock (is_locked) must NOT
+    // block it. COs auto-lock on approval, and allocation is normally done AFTER
+    // approval, so blocking on is_locked made the feature unusable for approved
+    // COs. Only an APPLIED (already-billed) CO is off-limits: re-allocating it
+    // would move dollars between AIA lines that have already been billed.
     if (cur.status === 'applied') return res.status(409).json({ error: 'Cannot re-allocate an applied change order' });
-    if (cur.is_locked) return res.status(409).json({ error: 'Cannot re-allocate a locked change order. Unlock it first.' });
 
     // Sanitize: keep only well-formed rows, clamp pct to 0..100, drop zero/empty,
     // and dedupe by buildingId keeping the last. A CO cannot over-allocate past
