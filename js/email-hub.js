@@ -281,7 +281,12 @@
       '.ehub-sub{font-size:12px;color:var(--text-dim,#8b90a5);}',
       '.ehub-search{flex:1;min-width:170px;max-width:340px;margin-left:auto;position:relative;}',
       '.ehub-search input{width:100%;box-sizing:border-box;padding:7px 11px;border-radius:8px;border:1px solid var(--border,#2a2a32);background:var(--input-bg,#101014);color:var(--text,#e4e6f0);font-size:13px;}',
-      '.ehub-tool{background:none;border:1px solid var(--border,#2a2a32);border-radius:7px;color:var(--text-dim,#9aa0b4);cursor:pointer;padding:5px 9px;font-size:12px;display:inline-flex;align-items:center;gap:5px;}',
+      // width:auto is NOT cosmetic — styles.css has a global
+      // `input, select, textarea { width: 100% }`, so the <select>s that
+      // wear .ehub-tool (the Move-to pickers) would otherwise stretch to
+      // fill their bar. Same trap as .ehub-pick below.
+      '.ehub-tool{background:none;border:1px solid var(--border,#2a2a32);border-radius:7px;color:var(--text-dim,#9aa0b4);cursor:pointer;padding:5px 9px;font-size:12px;display:inline-flex;align-items:center;gap:5px;width:auto;}',
+      'select.ehub-tool{max-width:150px;}',
       '.ehub-tool:hover{color:var(--text,#e4e6f0);border-color:var(--accent,#107C41);}',
       '.ehub-tool.on{color:var(--accent,#5ddb7e);border-color:rgba(16,124,65,.5);}',
 
@@ -337,7 +342,13 @@
       '.ehub-star{background:none;border:none;cursor:pointer;font-size:14px;line-height:1;color:#4a4f60;padding:0 1px;flex:0 0 auto;}',
       '.ehub-star.on{color:#f0b429;}',
       '.ehub-star:hover{color:#f0b429;}',
-      '.ehub-pick{flex:0 0 auto;margin-top:8px;accent-color:var(--accent,#107C41);cursor:pointer;}',
+      // The explicit width/height matters: styles.css:2221 has a global
+      // `input, select, textarea { width: 100% }`, and a bare class with no
+      // width loses to it — the row checkbox stretched to the full column,
+      // squeezing .ehub-row-main to 0px so every sender/subject/preview
+      // (all overflow:hidden) clipped to nothing. Same fix the codebase
+      // already uses at .ci-td-check input.
+      '.ehub-pick{flex:0 0 14px;width:14px;height:14px;margin-top:8px;accent-color:var(--accent,#107C41);cursor:pointer;}',
       '.ehub-clip{font-size:11px;color:var(--text-dim,#7f8498);}',
       // compact density
       '.ehub-list.compact .ehub-row{padding:5px 10px 5px 9px;align-items:center;}',
@@ -604,9 +615,13 @@
       });
       el.addEventListener('contextmenu', function (e) { e.preventDefault(); folderMenu(e, fid); });
 
-      // Drop a conversation onto a folder to file it.
+      // Drop a conversation onto a folder to file it, or a folder onto a
+      // folder to re-nest it. preventDefault on dragover is what MAKES a
+      // drop legal — without it for the 'folder' kind, the folder-drop
+      // handler below could never fire at all.
       el.addEventListener('dragover', function (e) {
-        if (_dragKind !== 'threads') return;
+        if (_dragKind !== 'threads' && _dragKind !== 'folder') return;
+        if (_dragKind === 'folder' && _dragFolderId === fid) return;   // no self-drop
         e.preventDefault(); el.classList.add('drop');
       });
       el.addEventListener('dragleave', function () { el.classList.remove('drop'); });
