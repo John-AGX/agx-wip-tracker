@@ -134,22 +134,42 @@ router.post('/reorder', requireAuth, async (req, res) => {
 });
 
 // ── POST /api/email-folders/move-messages ───────────────────────────
-// The move-message endpoint. Body: { ids: [messageId, ...], folder_id }.
-// folder_id null re-files to the caller's Inbox rather than orphaning the
-// mail. Only the caller's OWN messages move (user_id = req.user.id), and
-// the target must be their folder or an org-shared one in their org.
+// The move-message endpoint. Body: { ids: [messageId, ...] and/or
+// thread_ids: [...], folder_id }. folder_id null re-files to the caller's
+// Inbox rather than orphaning the mail. Only the caller's OWN messages
+// move (user_id = req.user.id), and the target must be their folder or an
+// org-shared one in their org. Moving by thread moves the whole
+// conversation — see the service comment.
 router.post('/move-messages', requireAuth, async (req, res) => {
   try {
     const orgId = callerOrgId(req);
     if (!orgId) return res.status(400).json({ error: 'No organization for caller' });
     const b = req.body || {};
     const ids = Array.isArray(b.ids) ? b.ids : (b.id ? [b.id] : []);
+    const threadIds = Array.isArray(b.thread_ids) ? b.thread_ids : (b.thread_id ? [b.thread_id] : []);
     const result = await ef.moveMessages(
-      { orgId: orgId, userId: req.user.id }, ids, b.folder_id || null
+      { orgId: orgId, userId: req.user.id }, ids, b.folder_id || null, { threadIds: threadIds }
     );
     res.json(Object.assign({ ok: true }, result));
   } catch (e) {
     fail(res, e, 'Could not move messages');
+  }
+});
+
+// ── POST /api/email-folders/:id/mark-all-read ───────────────────────
+// Body: { read?: true } — false marks the folder unread instead. Drives
+// the rail's right-click "Mark all read". Only the caller's own mail,
+// even when the folder is org-shared. Declared before PATCH/DELETE /:id
+// but on its own sub-path, so there is no route shadowing.
+router.post('/:id/mark-all-read', requireAuth, async (req, res) => {
+  try {
+    const orgId = callerOrgId(req);
+    if (!orgId) return res.status(400).json({ error: 'No organization for caller' });
+    const read = (req.body || {}).read !== false;
+    const updated = await ef.markFolderRead({ orgId: orgId, userId: req.user.id }, req.params.id, read);
+    res.json({ ok: true, updated: updated, read: read });
+  } catch (e) {
+    fail(res, e, 'Could not mark the folder read');
   }
 });
 

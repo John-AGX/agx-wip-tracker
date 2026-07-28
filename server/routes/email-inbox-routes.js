@@ -513,16 +513,40 @@ router.get('/my-address', requireAuth, async (req, res) => {
 });
 
 // ── GET /api/email-inbox/threads — the caller's conversations ───────
+// E2 adds the folder filter + the state the three-pane list renders
+// (unread count, star, attachment clip, priority stripe).
+//
+// FOLDER SEMANTICS: ?folder_id filters the MESSAGES and then groups, so
+// Archive shows a conversation's archived messages rather than the whole
+// conversation because one message happens to be archived. That keeps the
+// list consistent with the rail's per-folder counts. The Inbox also sweeps
+// in folder_id IS NULL, so a message that somehow slipped past the inbound
+// stamp before a backfill ran is still visible rather than invisible.
 router.get('/threads', requireAuth, async (req, res) => {
   try {
-    const limit = Math.max(1, Math.min(50, Number(req.query.limit) || 20));
+    const limit = Math.max(1, Math.min(200, Number(req.query.limit) || 20));
     const q = String(req.query.q || '').trim();
     const params = [req.user.id];
     let where = 'e.user_id = $1';
     if (q) {
       params.push('%' + q + '%');
-      where += ` AND (e.subject ILIKE $2 OR e.from_email ILIKE $2 OR COALESCE(e.orig_from_email, '') ILIKE $2 OR e.body_text ILIKE $2)`;
+      const p = '$' + params.length;
+      where += ` AND (e.subject ILIKE ${p} OR e.from_email ILIKE ${p} OR COALESCE(e.orig_from_email, '') ILIKE ${p} OR e.body_text ILIKE ${p})`;
     }
+    if (req.query.folder_id) {
+      // Owner-gate the folder id before it reaches the query. One from
+      // another user or org resolves to nothing, so this is not an
+      // existence oracle — it just returns an empty list.
+      const folder = await require('../services/email-folders')
+        .getFolderForFiling(req.user.organization_id, req.user.id, String(req.query.folder_id));
+      if (!folder) return res.json({ threads: [] });
+      params.push(folder.id);
+      where += (folder.system && folder.slug === 'inbox')
+        ? ` AND (e.folder_id = $${params.length} OR e.folder_id IS NULL)`
+        : ` AND e.folder_id = $${params.length}`;
+    }
+    if (String(req.query.unread || '') === '1') where += ' AND e.is_read = FALSE';
+    if (String(req.query.starred || '') === '1') where += ' AND e.is_starred = TRUE';
     const r = await pool.query(
       `SELECT e.thread_id,
               -- Per-thread working state (draft + handled). last_inbound_at lets the
@@ -551,7 +575,20 @@ router.get('/threads', requireAuth, async (req, res) => {
               (ARRAY_AGG(needs_reply    ORDER BY received_at DESC) FILTER (WHERE direction = 'inbound'))[1] AS needs_reply,
               (ARRAY_AGG(triage_summary ORDER BY received_at DESC) FILTER (WHERE direction = 'inbound'))[1] AS triage_summary,
               (ARRAY_AGG(triage_urgency ORDER BY received_at DESC) FILTER (WHERE direction = 'inbound'))[1] AS triage_urgency,
-              (ARRAY_AGG(triage_actions ORDER BY received_at DESC) FILTER (WHERE direction = 'inbound'))[1] AS triage_actions
+              (ARRAY_AGG(triage_actions ORDER BY received_at DESC) FILTER (WHERE direction = 'inbound'))[1] AS triage_actions,
+              -- E2 list state. unread_count drives the bold row + the rail
+              -- badge; star/pin/attachment are thread-level ORs (a thread is
+              -- starred if any of its messages is).
+              (COUNT(*) FILTER (WHERE is_read = FALSE))::int AS unread_count,
+              BOOL_OR(is_starred)      AS is_starred,
+              BOOL_OR(is_pinned)       AS is_pinned,
+              BOOL_OR(has_attachments) AS has_attachments,
+              -- The folder the newest message sits in — the list needs it to
+              -- grey out "move here" for the folder you are already reading.
+              (ARRAY_AGG(e.folder_id ORDER BY received_at DESC))[1] AS folder_id,
+              -- E5 writes ai_priority; until then the stripe falls back to the
+              -- H3 triage_urgency above. Inbound-only for the same reason.
+              (ARRAY_AGG(ai_priority ORDER BY received_at DESC) FILTER (WHERE direction = 'inbound'))[1] AS ai_priority
          FROM inbound_emails e
          LEFT JOIN email_thread_state s
                 ON s.user_id = e.user_id AND s.thread_id = e.thread_id
@@ -573,10 +610,17 @@ router.get('/threads', requireAuth, async (req, res) => {
 router.get('/threads/:threadId', requireAuth, async (req, res) => {
   try {
     const r = await pool.query(
+      // body_html is served alongside body_text so the E2 reading pane can
+      // render the real message. It is UNTRUSTED third-party HTML — the
+      // client sanitizes it and renders it inside a sandboxed iframe with
+      // remote images blocked (tracking pixels). Never inject it directly.
       `SELECT * FROM (
          SELECT id, thread_id, from_name, from_email, orig_from_email, subject,
-                body_text, is_forward_wrapper, delivered_direct, direction,
-                entity_label, received_at
+                body_text, body_html, is_forward_wrapper, delivered_direct, direction,
+                entity_type, entity_id, entity_label, received_at,
+                folder_id, is_read, is_starred, is_pinned, has_attachments,
+                snoozed_until, due_at, ai_category, ai_priority, ai_summary,
+                needs_reply, triage_summary, triage_urgency
            FROM inbound_emails
           WHERE user_id = $1 AND thread_id = $2
           ORDER BY received_at DESC LIMIT 100
@@ -593,6 +637,60 @@ router.get('/threads/:threadId', requireAuth, async (req, res) => {
     res.json({ messages: r.rows, state: s.rows[0] || null });
   } catch (e) {
     console.error('GET /api/email-inbox/threads/:threadId error:', e);
+    res.status(500).json({ error: 'Server error' });
+  }
+});
+
+// ── POST /api/email-inbox/messages/state — E2 read / star / pin ─────
+// Body: { message_ids?: [...], thread_ids?: [...], is_read?, is_starred?,
+//         is_pinned?, snoozed_until?, due_at? }
+// Addressable by message OR by thread (the list works in threads, the
+// reading pane in messages). Every write is scoped user_id = req.user.id,
+// so ids belonging to anyone else simply match nothing — a forged id is a
+// silent no-op, never a cross-mailbox write.
+router.post('/messages/state', requireAuth, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const msgIds = (Array.isArray(b.message_ids) ? b.message_ids : (b.message_id ? [b.message_id] : []))
+      .filter((x) => typeof x === 'string' && x).slice(0, 1000);
+    const threadIds = (Array.isArray(b.thread_ids) ? b.thread_ids : (b.thread_id ? [b.thread_id] : []))
+      .filter((x) => typeof x === 'string' && x).slice(0, 1000);
+    if (!msgIds.length && !threadIds.length) {
+      return res.status(400).json({ error: 'message_ids[] or thread_ids[] is required' });
+    }
+
+    const sets = [];
+    const params = [req.user.id];
+    const boolCol = (key) => {
+      if (b[key] === undefined) return;
+      params.push(!!b[key]);
+      sets.push(key + ' = $' + params.length);
+    };
+    ['is_read', 'is_starred', 'is_pinned'].forEach(boolCol);
+    // Timestamps: a value sets it, null clears it. Anything unparseable is
+    // rejected rather than silently stored as NULL.
+    ['snoozed_until', 'due_at'].forEach((key) => {
+      if (b[key] === undefined) return;
+      if (b[key] === null || b[key] === '') { sets.push(key + ' = NULL'); return; }
+      const d = new Date(b[key]);
+      if (isNaN(d.getTime())) return;
+      params.push(d);
+      sets.push(key + ' = $' + params.length);
+    });
+    if (!sets.length) return res.status(400).json({ error: 'Nothing to set' });
+
+    const scope = [];
+    if (msgIds.length) { params.push(msgIds); scope.push('id = ANY($' + params.length + '::text[])'); }
+    if (threadIds.length) { params.push(threadIds); scope.push('thread_id = ANY($' + params.length + '::text[])'); }
+
+    const r = await pool.query(
+      'UPDATE inbound_emails SET ' + sets.join(', ') +
+      ' WHERE user_id = $1 AND (' + scope.join(' OR ') + ')',
+      params
+    );
+    res.json({ ok: true, updated: r.rowCount });
+  } catch (e) {
+    console.error('POST /api/email-inbox/messages/state error:', e);
     res.status(500).json({ error: 'Server error' });
   }
 });

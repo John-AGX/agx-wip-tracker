@@ -591,16 +591,27 @@ async function deleteFolder(owner, folderId, opts) {
 // belonging to someone else simply doesn't match. The target must be the
 // caller's own folder or an org-shared one in their org; folderId null
 // unfiles to the owner's Inbox rather than leaving mail orphaned.
+//
+// Addressable by message id OR thread id: the list works in conversations,
+// the reading pane in messages. Moving BY THREAD moves every message of
+// that conversation — what "archive this conversation" means in any mail
+// client, even if one of its messages happened to sit elsewhere.
 // Returns { moved, folder_id }.
 async function moveMessages(owner, messageIds, folderId, opts) {
   opts = opts || {};
   const run = q(opts.client);
   const org = Number(owner.orgId);
   const uid = Number(owner.userId);
-  const ids = (Array.isArray(messageIds) ? messageIds : [])
-    .filter(function (x) { return typeof x === 'string' && x; })
-    .slice(0, 1000);
-  if (!ids.length) { const e = new Error('ids[] is required'); e.status = 400; throw e; }
+  const clean = function (v) {
+    return (Array.isArray(v) ? v : [])
+      .filter(function (x) { return typeof x === 'string' && x; })
+      .slice(0, 1000);
+  };
+  const ids = clean(messageIds);
+  const threadIds = clean(opts.threadIds);
+  if (!ids.length && !threadIds.length) {
+    const e = new Error('ids[] or thread_ids[] is required'); e.status = 400; throw e;
+  }
 
   let targetId = folderId || null;
   if (targetId) {
@@ -616,12 +627,39 @@ async function moveMessages(owner, messageIds, folderId, opts) {
     if (!targetId) { const e = new Error('Inbox folder is missing'); e.status = 500; throw e; }
   }
 
+  const params = [targetId, uid];
+  const scope = [];
+  if (ids.length) { params.push(ids); scope.push('id = ANY($' + params.length + '::text[])'); }
+  if (threadIds.length) { params.push(threadIds); scope.push('thread_id = ANY($' + params.length + '::text[])'); }
   const r = await run(
-    `UPDATE inbound_emails SET folder_id = $1
-      WHERE user_id = $2 AND id = ANY($3::text[])`,
-    [targetId, uid, ids]
+    'UPDATE inbound_emails SET folder_id = $1' +
+    ' WHERE user_id = $2 AND (' + scope.join(' OR ') + ')',
+    params
   );
   return { moved: r.rowCount, folder_id: targetId };
+}
+
+// Mark every message in a folder read (the rail's "Mark all read"). Only
+// the caller's own mail, even when the folder is org-shared. The Inbox
+// also sweeps unfiled mail, mirroring the list's folder semantics.
+// Returns the count flipped.
+async function markFolderRead(owner, folderId, isRead, opts) {
+  opts = opts || {};
+  const run = q(opts.client);
+  const org = Number(owner.orgId);
+  const uid = Number(owner.userId);
+  const folder = await getFolderForFiling(org, uid, folderId, { client: opts.client });
+  if (!folder) { const e = new Error('Folder not found'); e.status = 404; throw e; }
+  const read = isRead !== false;
+  const scope = (folder.system && folder.slug === 'inbox')
+    ? '(folder_id = $3 OR folder_id IS NULL)'
+    : 'folder_id = $3';
+  const r = await run(
+    'UPDATE inbound_emails SET is_read = $1' +
+    ' WHERE user_id = $2 AND ' + scope + ' AND is_read <> $1',
+    [read, uid, folder.id]
+  );
+  return r.rowCount;
 }
 
 // ── Backfill (idempotent; boot-time + an on-demand route) ───────────
@@ -727,6 +765,7 @@ module.exports = {
   styleFolder,
   deleteFolder,
   moveMessages,
+  markFolderRead,
   backfill,
   fileNewMessage,
 };
